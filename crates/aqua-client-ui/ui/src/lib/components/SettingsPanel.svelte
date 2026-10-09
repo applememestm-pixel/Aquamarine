@@ -65,12 +65,58 @@
     ],
   ];
   const SECTIONS = GROUPS.flat().filter((x) => x.id !== "profile" && x.id !== "shortcuts") as (Item & { id: Sec })[];
-  const sectionTitle = $derived(GROUPS.flat().find((x) => x.id === section)?.label ?? "Settings");
+  const sectionItem = $derived(GROUPS.flat().find((x) => x.id === section));
+  const sectionTitle = $derived(sectionItem?.label ?? "Settings");
+
+  // ---- Phone layout (<= 720px): Telegram-style list of tiles; tapping one
+  //      opens that section full-screen with  ‹ [icon] Title  on top. The
+  //      system Back button steps back out (section -> list -> closed).
+  const isPhone = () => typeof window !== "undefined" && window.matchMedia("(max-width: 720px)").matches;
+  let detail = $state(false);
+  function enterDetail() {
+    if (!isPhone() || detail) return;
+    detail = true;
+    try { history.pushState({ aquaSettings: "detail" }, ""); } catch { /* ignore */ }
+  }
+  function backToList() {
+    if (history.state?.aquaSettings === "detail") history.back(); // popstate handler clears `detail`
+    else detail = false;
+  }
+  function closeAll() {
+    const depth = history.state?.aquaSettings === "detail" ? 2 : history.state?.aquaSettings === "list" ? 1 : 0;
+    detail = false;
+    closeSettings();
+    if (depth) { try { history.go(-depth); } catch { /* ignore */ } }
+  }
+  $effect(() => {
+    if (!$settingsOpen) { detail = false; return; }
+    if (isPhone() && !history.state?.aquaSettings) {
+      try { history.pushState({ aquaSettings: "list" }, ""); } catch { /* ignore */ }
+    }
+  });
+  // Mark the body so App's chat Back handler leaves the chat alone while
+  // settings are on top (set/cleared in an effect, i.e. after this event).
+  $effect(() => {
+    const on = $settingsOpen;
+    document.body.classList.toggle("settings-open", on);
+    return () => document.body.classList.remove("settings-open");
+  });
+  onMount(() => {
+    const onPop = () => {
+      if (!$settingsOpen) return;
+      const st = history.state?.aquaSettings;
+      if (st === "list") detail = false;
+      else if (!st) { detail = false; closeSettings(); }
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  });
 
   function openItem(it: Item) {
-    if (it.id === "profile") { closeSettings(); openProfile(); return; }
-    if (it.id === "shortcuts") { closeSettings(); shortcutsOpen.set(true); return; }
+    if (it.id === "profile") { closeAll(); openProfile(); return; }
+    if (it.id === "shortcuts") { closeAll(); shortcutsOpen.set(true); return; }
     section = it.id;
+    enterDetail();
   }
 
   // ---- Privacy ----
@@ -105,6 +151,7 @@
     if (want && SECTIONS.some((x) => x.id === want)) {
       section = want as Sec;
       settingsSection.set(null);
+      queueMicrotask(enterDetail);
     }
   });
 
@@ -269,13 +316,17 @@
     role="button"
     tabindex="-1"
     aria-label={$t("Close settings")}
-    onclick={(e) => { if ((e.target as HTMLElement).classList.contains("backdrop")) closeSettings(); }}
-    onkeydown={(e) => { if (e.key === "Escape" || e.key === "Enter") closeSettings(); }}
+    onclick={(e) => { if ((e.target as HTMLElement).classList.contains("backdrop")) closeAll(); }}
+    onkeydown={(e) => { if (e.key === "Escape" || e.key === "Enter") closeAll(); }}
   >
-    <div class="sheet" role="dialog" aria-modal="true" tabindex="-1">
+    <div class="sheet" class:detail role="dialog" aria-modal="true" tabindex="-1">
       <div class="layout">
         <nav class="nav">
-          <button class="me-card" onclick={() => { closeSettings(); openProfile(); }} title={$t("Edit profile")}>
+          <div class="list-head phone-only">
+            <h2>{$t("Settings")}</h2>
+            <button class="close" onclick={closeAll} title={$t("Close")}>×</button>
+          </div>
+          <button class="me-card" onclick={() => { closeAll(); openProfile(); }} title={$t("Edit profile")}>
             <span class="me-ava" style:background={`linear-gradient(135deg, ${$profile.banner_a}, ${$profile.banner_b})`}>
               {#if $profile.avatar_url}<img src={$profile.avatar_url} alt="" />{:else}{($profile.display_name !== "You" ? $profile.display_name : $info?.username ?? "?").charAt(0).toUpperCase()}{/if}
             </span>
@@ -301,8 +352,14 @@
 
         <div class="content">
           <div class="head">
-            <h2>{$t(sectionTitle)}</h2>
-            <button class="close" onclick={closeSettings} title={$t("Close (Esc)")}>×</button>
+            <button class="back phone-only" onclick={backToList} aria-label={$t("Back")}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <div class="head-title">
+              {#if sectionItem}<span class="tile" style:background={sectionItem.color}>{@html sectionItem.icon}</span>{/if}
+              <h2>{$t(sectionTitle)}</h2>
+            </div>
+            <button class="close" onclick={closeAll} title={$t("Close (Esc)")}>×</button>
           </div>
 
       {#if section === "ghost"}
@@ -724,7 +781,7 @@
       </div>
 
       <div class="foot">
-        <button class="done" onclick={closeSettings}>{$t("Done")}</button>
+        <button class="done" onclick={closeAll}>{$t("Done")}</button>
       </div>
     </div>
   </div>
@@ -844,6 +901,44 @@
     padding: 14px 18px; border-bottom: 1px solid var(--border);
   }
   .head h2 { margin: 0; font-size: 15.5px; font-weight: 700; letter-spacing: -0.01em; }
+  .head-title { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+  .head-title h2 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .phone-only { display: none; }
+  .back {
+    width: 36px; height: 36px; margin-left: -8px; flex-shrink: 0;
+    background: transparent; border: none; border-radius: 10px;
+    color: var(--accent); cursor: pointer; align-items: center; justify-content: center;
+  }
+  .back svg { width: 24px; height: 24px; }
+  .back:hover { background: var(--bg-hover); }
+  .list-head { align-items: center; justify-content: space-between; padding: 2px 4px 0; }
+  .list-head h2 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }
+
+  /* ---- Phone: one screen at a time (list, or the open section) ---- */
+  @media (max-width: 720px) {
+    .backdrop { padding: 0; background: var(--bg-shell); backdrop-filter: none; }
+    .sheet {
+      width: 100vw; height: 100%; border: none; border-radius: 0; box-shadow: none;
+      padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+               env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+      box-sizing: border-box;
+    }
+    .layout { grid-template-columns: 1fr; }
+    .nav { border-right: none; padding: 12px 12px 20px; }
+    .nav-item { padding: 11px 14px; font-size: 15.5px; }
+    .nav-item + .nav-item::before { left: 56px; }
+    .nav-item.active { background: transparent; }
+    .nav-item.active .nav-lbl { color: var(--fg); font-weight: 500; }
+    .tile { width: 30px; height: 30px; }
+    .phone-only { display: flex; }
+    .sheet:not(.detail) .content { display: none; }
+    .sheet.detail .nav { display: none; }
+    .foot { display: none; }
+    .head { padding: 10px 12px; gap: 6px; }
+    .head h2 { font-size: 17px; }
+    .head .close { display: none; }
+    .content { padding-bottom: 24px; }
+  }
   .close {
     width: 30px; height: 30px;
     background: transparent; border: 1px solid var(--border);

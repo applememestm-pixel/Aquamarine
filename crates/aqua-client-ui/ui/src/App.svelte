@@ -158,6 +158,8 @@
     };
     // Phone Back button / back gesture: leave the open chat for the list.
     const onPop = () => {
+      // Settings on top handle Back themselves (section -> list -> closed).
+      if (document.body.classList.contains("settings-open")) return;
       if (document.body.classList.contains("chat-open")) backToList(true);
     };
     window.addEventListener("popstate", onPop);
