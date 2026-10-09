@@ -10,6 +10,12 @@ for /f "usebackq tokens=1,* delims==" %%a in (`powershell -NoProfile -ExecutionP
 if defined _AQ_ERR goto :err
 if not defined ANDROID_HOME goto :nosdk
 set "ANDROID_SDK_ROOT=%ANDROID_HOME%"
+rem Rust -> Android linkers (same as the .cargo\config.toml patch-project.ps1 writes)
+set "_AQ_NDKBIN=%NDK_HOME%\toolchains\llvm\prebuilt\windows-x86_64\bin"
+set "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=%_AQ_NDKBIN%\aarch64-linux-android24-clang.cmd"
+set "CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER=%_AQ_NDKBIN%\armv7a-linux-androideabi24-clang.cmd"
+set "CARGO_TARGET_I686_LINUX_ANDROID_LINKER=%_AQ_NDKBIN%\i686-linux-android24-clang.cmd"
+set "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=%_AQ_NDKBIN%\x86_64-linux-android24-clang.cmd"
 set "PATH=%JAVA_HOME%\bin;%ANDROID_HOME%\platform-tools;%USERPROFILE%\.cargo\bin;%PATH%"
 echo [env] ANDROID_HOME = %ANDROID_HOME%
 echo [env] NDK_HOME     = %NDK_HOME%
