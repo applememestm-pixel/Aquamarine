@@ -1,0 +1,39 @@
+[package]
+name        = "aqua-client-core"
+version     = { workspace = true }
+edition     = { workspace = true }
+license     = { workspace = true }
+description = "Aquamarine client-side logic (encrypted vault, session store, prekey rotation, transport client)."
+
+[dependencies]
+aqua-core = { path = "../aqua-core" }
+
+# Storage
+rusqlite = { workspace = true }
+
+# Crypto (re-exported from aqua-core for the vault at-rest layer)
+chacha20poly1305 = { workspace = true }
+rand_core        = { workspace = true }
+zeroize          = { workspace = true }
+
+# Async / IO / logging
+tokio               = { workspace = true }
+futures-util        = { workspace = true }
+tracing             = { workspace = true }
+
+# HTTP / WebSocket
+reqwest           = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "socks"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+tokio-socks       = "0.5"
+
+# Serialization / errors
+serde       = { workspace = true }
+serde_bytes = { workspace = true }
+serde_json  = { workspace = true }
+bincode     = { workspace = true }
+base64      = { workspace = true }
+thiserror   = { workspace = true }
+anyhow      = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

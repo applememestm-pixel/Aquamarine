@@ -1,0 +1,60 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/aqua-core",
+    "crates/aqua-server",
+    "crates/aqua-client-core",
+]
+# aqua-client-ui is a Tauri 2 project. Its build.rs invokes tauri-build
+# which needs a bundled frontend to exist at compile time. Rather than
+# gluing that into `cargo build --workspace`, we keep it standalone —
+# build it explicitly with `cargo tauri dev` / `cargo tauri build` from
+# inside `crates/aqua-client-ui/`.
+exclude = [
+    "crates/aqua-client-ui",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.75"
+authors = ["Aquamarine contributors"]
+repository = "https://github.com/vladstalker2027/aquamarine"
+
+[workspace.dependencies]
+# --- Cryptography ------------------------------------------------------------
+# All primitives are pure-Rust and independently audited / widely used.
+x25519-dalek     = { version = "2.0", default-features = false, features = ["static_secrets", "zeroize"] }
+ed25519-dalek    = { version = "2.1", default-features = false, features = ["rand_core", "zeroize"] }
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc", "rand_core"] }
+hkdf             = { version = "0.12", default-features = false }
+hmac             = { version = "0.12", default-features = false }
+sha2             = { version = "0.10", default-features = false }
+rand_core        = { version = "0.6",  default-features = false, features = ["getrandom"] }
+zeroize          = { version = "1.8",  features = ["derive"] }
+subtle           = { version = "2.6",  default-features = false }
+
+# --- Serialization -----------------------------------------------------------
+serde       = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
+serde_json  = "1"
+bincode     = "1.3"
+base64      = "0.22"
+
+# --- Errors ------------------------------------------------------------------
+thiserror = "2"
+anyhow    = "1"
+
+# --- Async / server ----------------------------------------------------------
+tokio               = { version = "1", features = ["full"] }
+axum                = { version = "0.7", features = ["ws"] }
+tower               = "0.5"
+tracing             = "0.1"
+tracing-subscriber  = { version = "0.3", features = ["env-filter"] }
+futures-util        = "0.3"
+uuid                = { version = "1", features = ["v4", "serde"] }
+dashmap             = "6"
+
+# --- Storage -----------------------------------------------------------------
+rusqlite            = { version = "0.32", features = ["bundled"] }

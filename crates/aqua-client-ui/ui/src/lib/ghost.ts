@@ -1,0 +1,50 @@
+/**
+ * AyuGram-style "ghost" and history options, plus the block list. Kept on
+ * this device; the Rust side gets the parts it enforces (keep deleted /
+ * edit history / drop blocked people) via `set_local_prefs`.
+ */
+import { writable, get } from "svelte/store";
+import { api } from "./tauri";
+
+export interface GhostPrefs {
+  /** Don't tell people you've read their messages. */
+  noReadReceipts: boolean;
+  /** Don't send "typing…". */
+  noTyping: boolean;
+  /** Keep messages after the sender deletes them. */
+  keepDeleted: boolean;
+  /** Keep previous versions of edited messages. */
+  keepEdits: boolean;
+  /** Mark messages you read while in ghost mode as read once you leave it. */
+  sendReadLater: boolean;
+}
+
+const DEF: GhostPrefs = { noReadReceipts: false, noTyping: false, keepDeleted: true, keepEdits: true, sendReadLater: false };
+
+function persisted<T>(key: string, init: T) {
+  let v = init;
+  try { const raw = localStorage.getItem(key); if (raw) v = { ...init, ...JSON.parse(raw) }; } catch { /* ignore */ }
+  const s = writable<T>(v);
+  s.subscribe((x) => { try { localStorage.setItem(key, JSON.stringify(x)); } catch { /* ignore */ } });
+  return s;
+}
+
+export const ghost = persisted<GhostPrefs>("aqua.ghost.v1", DEF);
+
+let blockedInit: string[] = [];
+try { blockedInit = JSON.parse(localStorage.getItem("aqua.blocked.v1") ?? "[]"); } catch { /* ignore */ }
+export const blocked = writable<Set<string>>(new Set(blockedInit));
+blocked.subscribe((b) => { try { localStorage.setItem("aqua.blocked.v1", JSON.stringify([...b])); } catch { /* ignore */ } });
+
+export function isBlocked(u: string): boolean { return get(blocked).has(u); }
+export function setBlocked(u: string, on: boolean) {
+  blocked.update((b) => { const n = new Set(b); if (on) n.add(u); else n.delete(u); return n; });
+}
+
+/** Push the Rust-enforced parts. Call on boot and on every change. */
+export function syncLocalPrefs() {
+  const g = get(ghost);
+  void api.setLocalPrefs(g.keepDeleted, g.keepEdits, [...get(blocked)]).catch(() => {});
+}
+ghost.subscribe(() => syncLocalPrefs());
+blocked.subscribe(() => syncLocalPrefs());

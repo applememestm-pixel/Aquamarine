@@ -1,0 +1,480 @@
+<title>Aquamarine</title>
+<meta name="description" content="Aquamarine — an open, end-to-end encrypted desktop messenger. Your keys, your server." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" />
+<style>
+  /* ---- Aquamarine landing — single dark "neo" world, by choice.
+         Layout: fixed glass nav · aurora hero with a live chat mockup ·
+         feature grid · per-platform download rack · self-host · footer. ---- */
+  :root {
+    /* Color — pulled straight from the app's Aquamarine palette */
+    --void:      #06070C;
+    --ink:       #0C0F17;   /* raised surface */
+    --ink-2:     #121622;   /* card */
+    --line:      rgba(255,255,255,0.08);
+    --line-str:  rgba(255,255,255,0.16);
+    --fg:        #EAF0F6;
+    --fg-muted:  #9BA6B6;
+    --fg-dim:    #67707F;
+    --accent:    #00E5C7;   /* teal */
+    --accent-2:  #7B5CFF;   /* violet */
+    --accent-soft: rgba(0,229,199,0.12);
+    --accent-glow: rgba(0,229,199,0.45);
+    --violet-glow: rgba(123,92,255,0.40);
+    --good:      #37E29A;
+
+    /* Type */
+    --display: "Sora", system-ui, sans-serif;
+    --body:    "IBM Plex Sans", system-ui, sans-serif;
+    --mono:    "JetBrains Mono", ui-monospace, monospace;
+
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background:
+      radial-gradient(1100px 620px at 12% -8%, rgba(0,229,199,0.10), transparent 58%),
+      radial-gradient(1000px 640px at 92% 4%, rgba(123,92,255,0.12), transparent 56%),
+      var(--void);
+    color: var(--fg);
+    font-family: var(--body);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+  a { color: inherit; text-decoration: none; }
+  h1, h2, h3 { font-family: var(--display); font-weight: 700; letter-spacing: -0.02em; text-wrap: balance; margin: 0; }
+  p { margin: 0; }
+
+  .wrap { width: min(1120px, 100%); margin: 0 auto; padding-inline: 24px; }
+
+  /* ---------- Nav ---------- */
+  nav {
+    position: sticky; top: env(safe-area-inset-top, 0px); z-index: 50;
+    backdrop-filter: blur(14px);
+    background: color-mix(in srgb, var(--void) 72%, transparent);
+    border-bottom: 1px solid var(--line);
+  }
+  .nav-in { display: flex; align-items: center; gap: 20px; height: 64px; }
+  .brand { display: flex; align-items: center; gap: 11px; font-family: var(--display); font-weight: 700; font-size: 18px; }
+  .logo {
+    width: 34px; height: 34px; border-radius: 10px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    display: grid; place-items: center; color: #04060b; font-weight: 800; font-size: 19px;
+    box-shadow: 0 0 22px -4px var(--accent-glow);
+  }
+  .nav-links { display: flex; gap: 26px; margin-left: auto; font-size: 14.5px; color: var(--fg-muted); }
+  .nav-links a:hover { color: var(--fg); }
+  .nav-cta {
+    padding: 8px 16px; border-radius: 10px; font-size: 14px; font-weight: 600;
+    background: var(--accent-soft); color: var(--accent);
+    border: 1px solid rgba(0,229,199,0.28);
+  }
+  .nav-cta:hover { background: rgba(0,229,199,0.2); }
+  @media (max-width: 720px) { .nav-links { display: none; } }
+
+  /* ---------- Hero ---------- */
+  .hero { padding-block: 86px 72px; display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 54px; align-items: center; }
+  @media (max-width: 900px) { .hero { grid-template-columns: 1fr; gap: 40px; padding-block: 58px 44px; } }
+
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--accent); background: var(--accent-soft);
+    border: 1px solid rgba(0,229,199,0.22); border-radius: 999px; padding: 5px 12px;
+  }
+  .hero h1 { font-size: clamp(38px, 6vw, 64px); line-height: 1.02; margin: 20px 0 0; }
+  .hero h1 .grad {
+    background: linear-gradient(110deg, var(--accent), var(--accent-2));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .hero .lede { margin-top: 20px; font-size: 18px; color: var(--fg-muted); max-width: 42ch; }
+  .hero-actions { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 30px; align-items: center; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 10px;
+    padding: 13px 22px; border-radius: 13px; font-weight: 600; font-size: 15px;
+    cursor: pointer; border: 1px solid transparent; transition: transform .14s ease, box-shadow .14s ease;
+  }
+  .btn-primary {
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: #04060b; box-shadow: 0 14px 34px -12px var(--accent-glow);
+  }
+  .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 18px 40px -12px var(--accent-glow); }
+  .btn-ghost { background: transparent; border-color: var(--line-str); color: var(--fg); }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+  .btn small { font-weight: 400; opacity: .72; font-size: 12.5px; }
+  .os-note { font-size: 13px; color: var(--fg-dim); }
+  .os-note b { color: var(--fg-muted); font-weight: 600; }
+
+  .trust { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 30px; font-size: 13px; color: var(--fg-dim); }
+  .trust span { display: inline-flex; align-items: center; gap: 7px; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent-glow); }
+
+  /* ---------- Hero chat mockup ---------- */
+  .mock {
+    position: relative; border-radius: 22px; overflow: hidden;
+    border: 1px solid var(--line-str);
+    background:
+      radial-gradient(600px 300px at 80% -10%, rgba(123,92,255,0.18), transparent 60%),
+      linear-gradient(170deg, var(--ink), var(--void));
+    box-shadow: 0 40px 90px -36px rgba(0,0,0,0.8), 0 0 60px -30px var(--violet-glow);
+  }
+  .mock-bar { display: flex; align-items: center; gap: 12px; padding: 13px 16px; border-bottom: 1px solid var(--line); }
+  .mock-ava { width: 36px; height: 36px; border-radius: 11px; background: linear-gradient(135deg, #7B5CFF, #00E5C7); flex-shrink: 0; }
+  .mock-name { font-weight: 600; font-size: 14.5px; }
+  .mock-sub { font-size: 12px; color: var(--accent); display: flex; align-items: center; gap: 6px; }
+  .mock-lock { margin-left: auto; font-size: 11px; color: var(--fg-dim); display: inline-flex; gap: 6px; align-items: center; }
+  .mock-body { padding: 20px 16px 22px; display: flex; flex-direction: column; gap: 12px; }
+  .bubble { max-width: 78%; padding: 10px 13px; border-radius: 15px; font-size: 14px; line-height: 1.45; }
+  .b-in  { align-self: flex-start; background: var(--ink-2); border: 1px solid var(--line); border-bottom-left-radius: 5px; }
+  .b-out { align-self: flex-end; color: #04060b; border-bottom-right-radius: 5px;
+           background: linear-gradient(135deg, var(--accent), #35ecd3); box-shadow: 0 8px 20px -10px var(--accent-glow); }
+  .b-meta { display: block; font-size: 10.5px; opacity: .6; margin-top: 4px; text-align: right; }
+  .react { display: inline-flex; gap: 4px; align-items: center; margin-top: 2px; font-size: 12px;
+           background: var(--accent-soft); border: 1px solid rgba(0,229,199,0.25); color: var(--accent);
+           border-radius: 999px; padding: 2px 8px; align-self: flex-start; }
+  .fpr { margin: 4px 16px 16px; padding: 10px 12px; border: 1px dashed var(--line-str); border-radius: 12px;
+         font-family: var(--mono); font-size: 11.5px; color: var(--fg-muted); line-height: 1.5; }
+  .fpr b { color: var(--accent); font-weight: 600; }
+
+  /* ---------- Section frame ---------- */
+  section.band { padding-block: 72px; }
+  .sec-head { max-width: 60ch; margin-bottom: 42px; }
+  .sec-head .eyebrow { margin-bottom: 14px; }
+  .sec-head h2 { font-size: clamp(27px, 3.4vw, 38px); }
+  .sec-head p { margin-top: 14px; color: var(--fg-muted); font-size: 16.5px; }
+
+  /* ---------- Features ---------- */
+  .feat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  @media (max-width: 860px) { .feat-grid { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 560px) { .feat-grid { grid-template-columns: 1fr; } }
+  .card {
+    background: linear-gradient(180deg, var(--ink-2), var(--ink));
+    border: 1px solid var(--line); border-radius: 18px; padding: 24px;
+    transition: border-color .16s ease, transform .16s ease;
+  }
+  .card:hover { border-color: var(--line-str); transform: translateY(-3px); }
+  .ficon {
+    width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; margin-bottom: 16px;
+    background: var(--accent-soft); border: 1px solid rgba(0,229,199,0.22); color: var(--accent);
+  }
+  .ficon svg { width: 21px; height: 21px; }
+  .card h3 { font-size: 17.5px; }
+  .card p { margin-top: 8px; color: var(--fg-muted); font-size: 14.5px; }
+
+  /* ---------- Downloads ---------- */
+  .dl-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  @media (max-width: 860px) { .dl-grid { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 480px) { .dl-grid { grid-template-columns: 1fr; } }
+  .dl {
+    position: relative; display: flex; flex-direction: column; gap: 4px;
+    background: linear-gradient(180deg, var(--ink-2), var(--ink));
+    border: 1px solid var(--line); border-radius: 18px; padding: 22px;
+  }
+  .dl.rec { border-color: rgba(0,229,199,0.5); box-shadow: 0 0 0 1px rgba(0,229,199,0.18), 0 22px 46px -26px var(--accent-glow); }
+  .dl-plat { display: flex; align-items: center; gap: 10px; }
+  .dl-plat svg { width: 26px; height: 26px; color: var(--fg); flex-shrink: 0; }
+  .dl-plat h3 { font-size: 17px; }
+  .dl-sub { font-size: 12.5px; color: var(--fg-dim); }
+  .dl-file { font-family: var(--mono); font-size: 11px; color: var(--fg-muted); margin-top: 8px; word-break: break-all; }
+  .dl-btn {
+    margin-top: 16px; text-align: center; padding: 10px 14px; border-radius: 11px;
+    font-weight: 600; font-size: 14px; background: var(--accent-soft); color: var(--accent);
+    border: 1px solid rgba(0,229,199,0.3);
+  }
+  .dl-btn:hover { background: rgba(0,229,199,0.2); }
+  .dl.rec .dl-btn { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #04060b; border-color: transparent; }
+  .tag {
+    position: absolute; top: 16px; right: 16px; font-size: 10px; font-weight: 700; letter-spacing: .05em;
+    text-transform: uppercase; padding: 3px 8px; border-radius: 999px;
+  }
+  .tag.rec  { background: var(--accent); color: #04060b; }
+  .tag.beta { background: rgba(123,92,255,0.18); color: #b7a3ff; border: 1px solid rgba(123,92,255,0.4); }
+  .dl-foot { margin-top: 22px; font-size: 13.5px; color: var(--fg-dim); }
+  .dl-foot a { color: var(--accent); }
+  .dl-foot a:hover { text-decoration: underline; }
+
+  /* ---------- Self-host ---------- */
+  .host { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: center; }
+  @media (max-width: 820px) { .host { grid-template-columns: 1fr; gap: 28px; } }
+  .steps { display: flex; flex-direction: column; gap: 18px; margin-top: 6px; }
+  .step { display: flex; gap: 14px; }
+  .step-n { flex-shrink: 0; width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center;
+            font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--accent);
+            background: var(--accent-soft); border: 1px solid rgba(0,229,199,0.25); }
+  .step h3 { font-size: 15.5px; font-family: var(--body); font-weight: 600; }
+  .step p { font-size: 14px; color: var(--fg-muted); margin-top: 2px; }
+  .code {
+    background: #04060b; border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px;
+    font-family: var(--mono); font-size: 13px; line-height: 1.8; overflow-x: auto; color: var(--fg-muted);
+  }
+  .code .c { color: var(--fg-dim); }
+  .code .p { color: var(--accent); }
+  .code .v { color: #b7a3ff; }
+
+  /* ---------- Privacy note ---------- */
+  .note {
+    display: flex; gap: 16px; align-items: flex-start;
+    background: linear-gradient(135deg, rgba(123,92,255,0.08), rgba(0,229,199,0.05));
+    border: 1px solid var(--line); border-radius: 18px; padding: 24px 26px;
+  }
+  .note svg { width: 24px; height: 24px; color: var(--accent); flex-shrink: 0; margin-top: 2px; }
+  .note h3 { font-size: 17px; }
+  .note p { margin-top: 7px; color: var(--fg-muted); font-size: 14.5px; max-width: 72ch; }
+
+  /* ---------- Footer ---------- */
+  footer { border-top: 1px solid var(--line); padding-block: 36px 48px; margin-top: 40px; }
+  .foot-in { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; }
+  .foot-in .brand { font-size: 16px; }
+  .foot-links { margin-left: auto; display: flex; gap: 22px; font-size: 13.5px; color: var(--fg-dim); }
+  .foot-links a:hover { color: var(--fg); }
+  .foot-copy { width: 100%; font-size: 12.5px; color: var(--fg-dim); margin-top: 6px; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .aura { animation: drift 16s ease-in-out infinite alternate; }
+    @keyframes drift { to { transform: translate(18px, -14px) scale(1.06); } }
+  }
+  .aura { position: absolute; inset: -20% -10% auto -10%; height: 520px; z-index: -1; pointer-events: none;
+          background: radial-gradient(600px 300px at 30% 30%, rgba(0,229,199,0.12), transparent 60%),
+                      radial-gradient(520px 280px at 72% 20%, rgba(123,92,255,0.14), transparent 60%);
+          filter: blur(8px); }
+</style>
+
+<nav>
+  <div class="wrap nav-in">
+    <a class="brand" href="#top"><span class="logo">A</span> Aquamarine</a>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#download">Download</a>
+      <a href="#selfhost">Self-host</a>
+      <a href="#repo-link" id="nav-gh">Source</a>
+    </div>
+    <a class="nav-cta" href="#download">Get the app</a>
+  </div>
+</nav>
+
+<div id="top"></div>
+<header class="wrap hero">
+  <div class="aura"></div>
+  <div>
+    <span class="eyebrow"><span class="dot"></span> Open · End-to-end encrypted</span>
+    <h1>Your words. Your keys.<br><span class="grad">Your server.</span></h1>
+    <p class="lede">A desktop messenger that feels like Discord met Telegram — stickers, polls, calls and themes — with Signal-grade encryption and no company in the middle.</p>
+    <div class="hero-actions">
+      <a class="btn btn-primary" id="hero-dl" href="#download">Download for your device</a>
+      <a class="btn btn-ghost" href="#selfhost">Run your own server</a>
+    </div>
+    <p class="os-note" id="os-note"></p>
+    <div class="trust">
+      <span><span class="dot"></span> X3DH · Double Ratchet</span>
+      <span><span class="dot"></span> Connect by address — host it yourself</span>
+      <span><span class="dot"></span> No ads, no economy, no tracking</span>
+    </div>
+  </div>
+
+  <div class="mock" aria-hidden="true">
+    <div class="mock-bar">
+      <div class="mock-ava"></div>
+      <div>
+        <div class="mock-name">Roma</div>
+        <div class="mock-sub">● online</div>
+      </div>
+      <div class="mock-lock">🔒 encrypted</div>
+    </div>
+    <div class="mock-body">
+      <div class="bubble b-in">перенёс всё лучшее из старого мессенджера 🎉</div>
+      <div class="bubble b-out">красиво вышло. стикеры и кастом-эмодзи тоже?<span class="b-meta">20:14 ✓✓</span></div>
+      <div class="react">🔥 2</div>
+      <div class="bubble b-in">ага, и темы, и звонки с демонстрацией экрана<span class="b-meta">20:15</span></div>
+    </div>
+    <div class="fpr">
+      <b>session fingerprint</b><br>
+      harbor · velvet · cobalt · ripple · ember · quartz
+    </div>
+  </div>
+</header>
+
+<section class="band" id="features">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow">What's inside</span>
+      <h2>A full messenger — nothing you'd have to give up privacy for.</h2>
+      <p>Everything worth keeping from the apps you already use, rebuilt so the keys never leave your machine.</p>
+    </div>
+    <div class="feat-grid" id="feat-grid"></div>
+  </div>
+</section>
+
+<section class="band" id="download">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow">Download</span>
+      <h2>Pick your platform.</h2>
+      <p>Native builds for every desktop, plus an Android client. Signed releases, no store account required.</p>
+    </div>
+    <div class="dl-grid" id="dl-grid"></div>
+    <p class="dl-foot">Prefer to build it yourself? Everything is open source — <a href="#selfhost">compile from source</a> in a few commands. Checksums ship with every release.</p>
+  </div>
+</section>
+
+<section class="band" id="selfhost">
+  <div class="wrap host">
+    <div>
+      <div class="sec-head" style="margin-bottom:24px">
+        <span class="eyebrow">Self-host</span>
+        <h2>Own the relay.</h2>
+        <p>Aquamarine talks to any server by address. Run the relay on your own box and your messages never touch infrastructure you don't control.</p>
+      </div>
+      <div class="steps">
+        <div class="step"><div class="step-n">1</div><div><h3>Start the relay</h3><p>One Rust binary. Point it at a port and open it to your friends.</p></div></div>
+        <div class="step"><div class="step-n">2</div><div><h3>Share the address</h3><p>Everyone enters the same server URL on the login screen — a LAN IP or a public host.</p></div></div>
+        <div class="step"><div class="step-n">3</div><div><h3>Chat end-to-end</h3><p>The relay only forwards sealed envelopes. It can't read a thing.</p></div></div>
+      </div>
+    </div>
+    <div class="code"><span class="c"># clone & run the relay</span>
+git clone <span class="v">&lt;your-repo&gt;</span> aquamarine
+<span class="p">cd</span> aquamarine
+<span class="p">cargo</span> run -p aqua-server
+
+<span class="c"># build the desktop client</span>
+<span class="p">cd</span> crates/aqua-client-ui
+<span class="p">cargo</span> tauri build
+
+<span class="c"># build the Android client</span>
+<span class="p">cargo</span> tauri android build</div>
+  </div>
+</section>
+
+<section class="band" style="padding-top:0">
+  <div class="wrap">
+    <div class="note">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2 4 6v6c0 5 3.4 8.3 8 10 4.6-1.7 8-5 8-10V6l-8-4Z"/></svg>
+      <div>
+        <h3>Why there's no "web version"</h3>
+        <p>A browser tab can't hold your keys safely — any page you load could be swapped for a malicious one, and your private keys would live inside it. So Aquamarine stays a native app: keys are generated and sealed on your device, in an encrypted vault. This page is only a front door. It's where you get the app, never where you sign in.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-in">
+      <a class="brand" href="#top"><span class="logo">A</span> Aquamarine</a>
+      <div class="foot-links">
+        <a href="#features">Features</a>
+        <a href="#download">Download</a>
+        <a href="#selfhost">Self-host</a>
+        <a href="#repo-link" id="foot-gh">Source</a>
+      </div>
+      <div class="foot-copy">Open-source, end-to-end encrypted. Built for people who'd rather run their own server.</div>
+    </div>
+  </div>
+</footer>
+
+<script>
+  /* =======================================================================
+     Release wiring
+     -----------------------------------------------------------------------
+     Buttons download straight from this site's own ./downloads/ folder.
+     `build-all.bat` drops the built installers there under exactly these
+     names, so the site just works once you've run the build — nothing to
+     edit per release. Bump VERSION to update the label. REPO only powers
+     the "Source" links.
+     ======================================================================= */
+  const REPO = "https://github.com/vladstalker2027/aquamarine";
+  const VERSION = "0.1.0";
+  // On GitHub Pages the installers come from the latest GitHub Release
+  // (release.yml uploads them under these exact names); anywhere else the
+  // site serves its own ./downloads/ folder filled by build-all.
+  const DIR = location.hostname.endsWith("github.io")
+    ? REPO + "/releases/latest/download/"
+    : "downloads/";
+
+  const PLATFORMS = [
+    { key: "windows", label: "Windows", sub: "10 / 11 · 64-bit",
+      file: "Aquamarine-Setup.exe", href: DIR + "Aquamarine-Setup.exe", status: "ready",
+      icon: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 5.5 10.5 4.4v7.1H3V5.5Zm0 13L10.5 19.6v-7H3v6ZM11.5 4.3 21 3v8.5h-9.5V4.3Zm0 15.4L21 21v-8.5h-9.5v7.2Z"/></svg>' },
+    { key: "macos", label: "macOS", sub: "Apple Silicon & Intel",
+      file: "Aquamarine.dmg", href: DIR + "Aquamarine.dmg", status: "ready",
+      icon: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.3 12.7c0-2 1.6-2.9 1.7-3-1-1.4-2.4-1.6-2.9-1.6-1.2-.1-2.4.7-3 .7-.6 0-1.6-.7-2.6-.7-1.3 0-2.6.8-3.2 2-1.4 2.4-.4 6 1 8 .6 1 1.4 2.1 2.4 2 1-.1 1.3-.6 2.5-.6s1.5.6 2.6.6c1 0 1.7-1 2.4-2 .7-1.1 1-2.1 1-2.2 0 0-2-.8-2-3.4ZM14.6 6.3c.5-.7.9-1.6.8-2.6-.8 0-1.8.5-2.4 1.2-.5.6-1 1.5-.8 2.4.9.1 1.8-.4 2.4-1Z"/></svg>' },
+    { key: "linux", label: "Linux", sub: "AppImage · .deb",
+      file: "Aquamarine.AppImage", href: DIR + "Aquamarine.AppImage", status: "ready",
+      icon: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2c-1.7 0-3 1.4-3 3.1 0 1 .1 1.9.1 2.7 0 .8-.6 1.4-1.2 2.3C7 11.3 6 12.8 6 14.6c0 .5.1 1 .3 1.4-.5.4-.9 1-.9 1.7 0 .4.1.7.1 1 0 .9 1.3 1.6 3.2 1.9.6.1 1.3.4 2 .4h.6c.7 0 1.4-.3 2-.4 1.9-.3 3.2-1 3.2-1.9 0-.3.1-.6.1-1 0-.7-.4-1.3-.9-1.7.2-.4.3-.9.3-1.4 0-1.8-1-3.3-1.9-4.5-.6-.9-1.2-1.5-1.2-2.3 0-.8.1-1.7.1-2.7C15 3.4 13.7 2 12 2Zm-1.2 3c.4 0 .7.4.7.9s-.3.9-.7.9-.7-.4-.7-.9.3-.9.7-.9Zm2.4 0c.4 0 .7.4.7.9s-.3.9-.7.9-.7-.4-.7-.9.3-.9.7-.9Z"/></svg>' },
+    { key: "android", label: "Android", sub: "7.0+ · .apk",
+      file: "Aquamarine.apk", href: DIR + "Aquamarine.apk", status: "beta",
+      icon: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 9v7a1 1 0 0 0 1 1h1v3a1 1 0 0 0 2 0v-3h4v3a1 1 0 0 0 2 0v-3h1a1 1 0 0 0 1-1V9H6Zm-2 0a1 1 0 0 0-1 1v4a1 1 0 0 0 2 0v-4a1 1 0 0 0-1-1Zm16 0a1 1 0 0 0-1 1v4a1 1 0 0 0 2 0v-4a1 1 0 0 0-1-1ZM7.3 8c.1-1.9 1.3-3.5 3-4.3l-.9-1.6a.3.3 0 0 1 .5-.3l.9 1.7a6 6 0 0 1 4.4 0l.9-1.7a.3.3 0 0 1 .5.3l-.9 1.6c1.7.8 2.9 2.4 3 4.3H7.3Zm2.2-2.4a.6.6 0 1 0 0-1.2.6.6 0 0 0 0 1.2Zm5 0a.6.6 0 1 0 0-1.2.6.6 0 0 0 0 1.2Z"/></svg>' },
+  ];
+
+  const FEATURES = [
+    { t: "Signal-grade encryption", d: "X3DH key agreement and the Double Ratchet. Every message is sealed to the recipient; the server only ever sees ciphertext.",
+      i: '<path d="M12 2 4 6v6c0 5 3.4 8.3 8 10 4.6-1.7 8-5 8-10V6l-8-4Z"/><path d="m9 12 2 2 4-4"/>' },
+    { t: "Open & self-hostable", d: "No gatekeeper. Connect to any relay by address, or run your own on a Raspberry Pi. The protocol is yours to inspect.",
+      i: '<rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/>' },
+    { t: "Stickers & custom emoji", d: "Import Telegram sticker and premium-emoji packs — no Premium needed — and drop custom emoji inline, right in the text.",
+      i: '<circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 9h.01M15 9h.01"/>' },
+    { t: "Polls, replies & reactions", d: "Quote-reply with the snippet carried along, react across peers, run quick polls — the group chat toolkit, 1-to-1 and end-to-end.",
+      i: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/>' },
+    { t: "Calls with screen-share", d: "Discord-style voice and video over WebRTC, with live screen-sharing and clean mid-call renegotiation.",
+      i: '<path d="M15 10l5-3v10l-5-3"/><rect x="3" y="6" width="12" height="12" rx="2"/>' },
+    { t: "Make it yours", d: "A full theme editor — every colour, custom fonts from your system folders, chat wallpapers, a background media player that follows you between chats.",
+      i: '<circle cx="13.5" cy="6.5" r="2.5"/><circle cx="6.5" cy="12" r="2.5"/><circle cx="17" cy="14" r="2.5"/><path d="M8 18a4 4 0 0 0 8 0"/>' },
+  ];
+
+  const svg = (inner, stroke = true) =>
+    `<svg viewBox="0 0 24 24" fill="${stroke ? "none" : "currentColor"}" ${stroke ? 'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"' : ""}>${inner}</svg>`;
+
+  // Features
+  document.getElementById("feat-grid").innerHTML = FEATURES.map((f) => `
+    <div class="card">
+      <div class="ficon">${svg(f.i)}</div>
+      <h3>${f.t}</h3>
+      <p>${f.d}</p>
+    </div>`).join("");
+
+  // OS detection → recommended platform
+  function detectOS() {
+    const p = (navigator.userAgentData?.platform || navigator.platform || navigator.userAgent || "").toLowerCase();
+    const ua = navigator.userAgent.toLowerCase();
+    if (/android/.test(ua)) return "android";
+    if (/win/.test(p)) return "windows";
+    if (/mac/.test(p)) return "macos";
+    if (/linux/.test(p) && !/android/.test(ua)) return "linux";
+    return "windows";
+  }
+  const rec = detectOS();
+
+  // Download cards (recommended first)
+  const ordered = [...PLATFORMS].sort((a, b) => (a.key === rec ? -1 : b.key === rec ? 1 : 0));
+  document.getElementById("dl-grid").innerHTML = ordered.map((p) => {
+    const isRec = p.key === rec;
+    const tag = isRec ? '<span class="tag rec">Recommended</span>'
+      : p.status === "beta" ? '<span class="tag beta">Beta</span>' : "";
+    return `
+    <div class="dl ${isRec ? "rec" : ""}">
+      ${tag}
+      <div class="dl-plat">${p.icon}<div><h3>${p.label}</h3><div class="dl-sub">${p.sub}</div></div></div>
+      <div class="dl-file">${p.file}</div>
+      <a class="dl-btn" href="${p.href}" download>Download</a>
+    </div>`;
+  }).join("");
+
+  // Hero CTA + OS note
+  const recPlat = PLATFORMS.find((p) => p.key === rec);
+  const heroBtn = document.getElementById("hero-dl");
+  heroBtn.href = recPlat.href;
+  heroBtn.setAttribute("download", "");
+  heroBtn.innerHTML = `Download for ${recPlat.label} <small>${VERSION}</small>`;
+  document.getElementById("os-note").innerHTML =
+    `Detected <b>${recPlat.label}</b> — other platforms are in the <a href="#download" style="color:var(--accent)">download</a> section.`;
+
+  // Source links
+  for (const id of ["nav-gh", "foot-gh"]) {
+    const el = document.getElementById(id);
+    el.href = REPO; el.target = "_blank"; el.rel = "noopener";
+  }
+</script>

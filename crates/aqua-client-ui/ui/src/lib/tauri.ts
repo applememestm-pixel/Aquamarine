@@ -1,0 +1,194 @@
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+
+/**
+ * Turn a local file path into a URL the webview can load directly through
+ * Tauri's asset protocol — streamed from disk, no IPC and no base64. This
+ * is the fast path for inline media (images, video, audio, stickers);
+ * `read_media_bytes` stays as a fallback for odd cases.
+ */
+export function assetUrl(path: string | null | undefined): string {
+  if (!path) return "";
+  try { return convertFileSrc(path); } catch { return ""; }
+}
+import type {
+  AttachResult,
+  BotInfo,
+  ChatMessage,
+  ChatSummary,
+  DirProfile,
+  DownloadResult,
+  FingerprintView,
+  Group,
+  InitInfo,
+  LocalMediaList,
+  Activity,
+  SendResult,
+  StickerImportReport,
+} from "./types";
+
+export interface IncomingPayload {
+  peer_id: string;
+  text: string;
+  time: string;
+  is_new_chat: boolean;
+}
+
+export const api = {
+  initApp:            (): Promise<InitInfo>                                        => invoke("init_app"),
+  completeRegistration: (username: string, email: string | null): Promise<InitInfo> => invoke("complete_registration", { username, email }),
+  logOut:             (): Promise<InitInfo>                                        => invoke("log_out"),
+  listChats:          (): Promise<ChatSummary[]>                                   => invoke("list_chats"),
+  getMessages:        (peer_id: string): Promise<ChatMessage[]>                    => invoke("get_messages", { peerId: peer_id }),
+  sendMessage:        (peer_id: string, text: string): Promise<SendResult>        => invoke("send_message", { peerId: peer_id, text }),
+  verifyFingerprint:  (peer_id: string): Promise<FingerprintView>                  => invoke("verify_fingerprint", { peerId: peer_id }),
+  sessionFingerprint: (): Promise<string>                                          => invoke("session_fingerprint"),
+  connectToServer:    (server_url: string, username: string): Promise<InitInfo>    => invoke("connect_to_server", { serverUrl: server_url, username }),
+  setNetworkProxy:    (url: string): Promise<InitInfo>                             => invoke("set_network_proxy", { url }),
+
+  // Email registration + user directory
+  requestEmailCode:   (server_url: string, email: string): Promise<string | null>  => invoke("request_email_code", { serverUrl: server_url, email }),
+  verifyEmailCode:    (server_url: string, email: string, code: string): Promise<string> => invoke("verify_email_code", { serverUrl: server_url, email, code }),
+  registerAccount:    (server_url: string, username: string, ticket: string, display_name: string, about: string, phone: string, password?: string): Promise<void> => invoke("register_account", { serverUrl: server_url, username, ticket, displayName: display_name, about, phone, password: password || null }),
+  loginAccount:       (server_url: string, ticket: string, password: string): Promise<string> => invoke("login_account", { serverUrl: server_url, ticket, password }),
+  registerUsername:   (ticket: string, username: string, display_name: string, about: string, phone: string): Promise<void> => invoke("register_username", { ticket, username, displayName: display_name, about, phone }),
+  searchDirectory:    (query: string): Promise<DirProfile[]>                        => invoke("search_directory", { query }),
+  fetchDirectoryProfile: (username: string): Promise<DirProfile | null>            => invoke("fetch_directory_profile", { username }),
+  publishProfile:     (display_name: string, about: string, phone: string): Promise<void> => invoke("publish_profile", { displayName: display_name, about, phone }),
+  publishProfileFull: (display_name: string, about: string, phone: string, extra: Record<string, unknown>): Promise<void> =>
+    invoke("publish_profile_full", { displayName: display_name, about, phone, extra }),
+  // Public avatar / banner (stored on the server, visible to everyone).
+  setProfileImage:      (kind: "avatar" | "banner", path: string): Promise<{ ver: number; path: string }> => invoke("set_profile_image", { kind, path }),
+  setProfileImageBytes: (kind: "avatar" | "banner", mime: string, bytes: number[]): Promise<{ ver: number; path: string }> => invoke("set_profile_image_bytes", { kind, mime, bytes }),
+  clearProfileImage:    (kind: "avatar" | "banner"): Promise<void> => invoke("clear_profile_image", { kind }),
+  profileMediaPath:     (username: string, kind: "avatar" | "banner", ver: number): Promise<string | null> => invoke("profile_media_path", { username, kind, ver }),
+
+  // Media library management
+  addMediaFiles:      (target: "gifs" | "stickers" | "emoji", pack: string | null, paths: string[]): Promise<number> => invoke("add_media_files", { target, pack, paths }),
+  deleteMediaItem:    (path: string): Promise<void> => invoke("delete_media_item", { path }),
+
+  // Rich presence (what you're playing / listening to / watching)
+  setActivityDetection: (enabled: boolean): Promise<void> => invoke("set_activity_detection", { enabled }),
+  currentActivity:      (): Promise<Activity[]> => invoke("current_activity"),
+
+  // Bots
+  startBotChat:       (bot_username: string, first_message: string): Promise<ChatSummary> => invoke("start_bot_chat", { botUsername: bot_username, firstMessage: first_message }),
+  createBot:          (username: string, display_name: string): Promise<BotInfo>       => invoke("create_bot", { username, displayName: display_name }),
+  listBots:           (): Promise<BotInfo[]>                                           => invoke("list_bots"),
+  startChatWith:      (peer_username: string, first_message: string): Promise<ChatSummary> => invoke("start_chat_with", { peerUsername: peer_username, firstMessage: first_message }),
+
+  // Groups / supergroups / channels
+  listGroups:         (): Promise<Group[]>                                             => invoke("list_groups"),
+  createGroup:        (kind: string, title: string, description: string, members: string[]): Promise<Group> => invoke("create_group", { kind, title, description, members }),
+  updateGroup:        (group: Group): Promise<Group>                                   => invoke("update_group", { group }),
+  leaveGroup:         (gid: string): Promise<void>                                     => invoke("leave_group", { gid }),
+  setPhotoPrivacy:    (everybody: boolean, allow: string[], deny: string[]): Promise<void> => invoke("set_photo_privacy", { everybody, allow, deny }),
+  setLocalPrefs:      (keepDeleted: boolean, keepEdits: boolean, blocked: string[]): Promise<void> => invoke("set_local_prefs", { keepDeleted, keepEdits, blocked }),
+  deleteGroupMessageOf: (gid: string, author: string, text: string): Promise<void>    => invoke("delete_group_message_of", { gid, author, text }),
+  groupControlTo:     (gid: string, to: string, body: string): Promise<void>         => invoke("group_control_to", { gid, to, body }),
+  groupControl:       (gid: string, body: string): Promise<void>                       => invoke("group_control", { gid, body }),
+  groupSetMyTag:      (gid: string, tag: string): Promise<void>                        => invoke("group_set_my_tag", { gid, tag }),
+  groupRequestJoin:   (gid: string, admin: string, title: string, note: string): Promise<void> => invoke("group_request_join", { gid, admin, title, note }),
+  groupSend:          (gid: string, body: string): Promise<SendResult>                 => invoke("group_send", { gid, body }),
+
+  // Edit / delete (local store mutation; relay the control separately)
+  editMessage:        (peer_id: string, old_text: string, new_text: string): Promise<void> => invoke("edit_message", { peerId: peer_id, oldText: old_text, newText: new_text }),
+  deleteMessage:      (peer_id: string, text: string): Promise<void>                    => invoke("delete_message", { peerId: peer_id, text }),
+  attachFile:         (peer_id: string, file_path: string): Promise<AttachResult>  => invoke("attach_file", { peerId: peer_id, filePath: file_path }),
+  downloadFile:       (peer_id: string, message_id: string): Promise<DownloadResult> => invoke("download_file", { peerId: peer_id, messageId: message_id }),
+  sendCallSignal:     (peer_id: string, signal: object): Promise<void> =>
+    invoke("send_call_signal", { peerId: peer_id, signalJson: JSON.stringify(signal) }),
+  // Raw control payload over the E2EE session, never shown as a bubble
+  // (poll votes, read receipts).
+  sendControl:        (peer_id: string, payload: string): Promise<void> =>
+    invoke("send_control", { peerId: peer_id, payload }),
+
+  // Local media (stickers + GIFs)
+  sendSticker:        (peer_id: string, path: string): Promise<AttachResult>       => invoke("send_sticker", { peerId: peer_id, path }),
+  sendGif:            (peer_id: string, path: string): Promise<AttachResult>       => invoke("send_gif", { peerId: peer_id, path }),
+  listLocalMedia:     (): Promise<LocalMediaList>                                  => invoke("list_local_media"),
+  readMediaBytes:     (path: string): Promise<number[]>                            => invoke("read_media_bytes", { path }),
+  readUserFont:       (path: string): Promise<number[]>                            => invoke("read_user_font", { path }),
+  readUserImage:      (path: string): Promise<number[]>                            => invoke("read_user_image", { path }),
+  copyFileTo:         (source: string, dest: string): Promise<void>                => invoke("copy_file_to", { source, dest }),
+
+  // Voice & video messages (recorded in-browser → bytes sent to Rust → encrypted via attach pipeline)
+  sendVoiceMessage:   (peer_id: string, name: string, mime: string, bytes: number[]): Promise<AttachResult> => invoke("send_voice_message", { peerId: peer_id, name, mime, bytes }),
+  sendCircleVideo:    (peer_id: string, name: string, mime: string, bytes: number[]): Promise<AttachResult> => invoke("send_circle_video",  { peerId: peer_id, name, mime, bytes }),
+  sendEditedImage:    (peer_id: string, name: string, mime: string, bytes: number[]): Promise<AttachResult> => invoke("send_edited_image",  { peerId: peer_id, name, mime, bytes }),
+
+  // Sticker editor: save a user-created sticker PNG into the local
+  // stickers library at <data_dir>/stickers/<pack>/<name>.png.
+  saveSticker:        (pack: string, name: string, bytes: number[]): Promise<string> => invoke("save_sticker",       { pack, name, bytes }),
+  // Import a Telegram sticker pack (link / @name / short name) using a
+  // Telegram bot token. Downloads straight from the Telegram Bot API into
+  // the local stickers library; never touches our own relay.
+  importTelegramStickers: (bot_token: string, pack_ref: string): Promise<StickerImportReport> =>
+    invoke("import_telegram_stickers", { botToken: bot_token, packRef: pack_ref }),
+};
+
+export interface CallSignal {
+  type: "offer" | "answer" | "ice" | "reject" | "hangup" | "media" | "restart";
+  sdp?: string;
+  candidate?: RTCIceCandidateInit;
+  /** reject: "busy" when the callee is already in a call. */
+  reason?: string;
+  /** media: the sender's live media state. */
+  muted?: boolean;
+  deaf?: boolean;
+  cam?: boolean;
+  screen?: boolean;
+  screenAudio?: boolean;
+  label?: string;
+}
+
+export interface CallSignalEvent {
+  from: string;
+  signal: CallSignal;
+}
+
+export interface PollVoteEvent { from: string; vote: { poll: string; options?: number[]; option?: number; at?: number }; gid?: string }
+
+/** Send a control payload to a chat: 1:1 over the session, groups via fan-out. */
+export function sendChatControl(chatId: string, payload: string): Promise<void> {
+  return chatId.startsWith("grp_") ? api.groupControl(chatId, payload) : api.sendControl(chatId, payload);
+}
+
+export const events = {
+  onIncoming:        (fn: (p: IncomingPayload) => void)   => listen<IncomingPayload>("aqua://incoming", (e) => fn(e.payload)),
+  onChatsUpdated:    (fn: () => void)                      => listen("aqua://chats_updated", () => fn()),
+  onDisconnected:    (fn: () => void)                      => listen("aqua://disconnected", () => fn()),
+  onTransportError:  (fn: (msg: string) => void)           => listen<string>("aqua://transport_error", (e) => fn(e.payload)),
+  onCallSignal:      (fn: (p: CallSignalEvent) => void)    => listen<CallSignalEvent>("aqua://call_signal", (e) => fn(e.payload)),
+  onPollVote:        (fn: (p: PollVoteEvent) => void) => listen<PollVoteEvent>("aqua://poll_vote", (e) => fn(e.payload)),
+  onPollClose:       (fn: (p: { from: string; close: { poll: string }; gid?: string }) => void) =>
+    listen<{ from: string; close: { poll: string }; gid?: string }>("aqua://poll_close", (e) => fn(e.payload)),
+  onSeen:            (fn: (p: { from: string }) => void)   => listen<{ from: string }>("aqua://seen", (e) => fn(e.payload)),
+  onPresence:        (fn: (p: { from: string; presence: import("./presence").Presence }) => void) =>
+    listen<{ from: string; presence: import("./presence").Presence }>("aqua://presence", (e) => fn(e.payload)),
+  onActivity:        (fn: (a: Activity[]) => void) => listen<Activity[]>("aqua://activity", (e) => fn(e.payload)),
+  onReaction:        (fn: (p: { from: string; react: { key: string; emoji: string; add: boolean }; gid?: string }) => void) =>
+    listen<{ from: string; react: { key: string; emoji: string; add: boolean }; gid?: string }>("aqua://reaction", (e) => fn(e.payload)),
+  onGroupsUpdated:   (fn: () => void)                      => listen("aqua://groups_updated", () => fn()),
+  onGroupJoinRequest: (fn: (p: { gid: string; from: string }) => void) => listen<{ gid: string; from: string }>("aqua://group_join_request", (e) => fn(e.payload)),
+  onGroupCall:       (fn: (p: { from: string; gid: string; signal: Record<string, unknown> }) => void) =>
+    listen<{ from: string; gid: string; signal: Record<string, unknown> }>("aqua://gcall", (e) => fn(e.payload)),
+  onTyping:          (fn: (p: { from: string; gid?: string }) => void)   => listen<{ from: string; gid?: string }>("aqua://typing", (e) => fn(e.payload)),
+};
+
+/**
+ * Convert a raw byte array (as returned by `readMediaBytes`) to a
+ * `data:` URL for inline rendering. The backend already caps file size
+ * (~20 MB) so we can safely base64-encode in one go.
+ */
+export function bytesToDataUrl(bytes: number[], mime: string): string {
+  // Fast path for small blobs — build a binary string in chunks of
+  // 32KB to avoid blowing out the call-stack on `apply(null, bytes)`.
+  const CHUNK = 0x8000;
+  const parts: string[] = [];
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    parts.push(String.fromCharCode.apply(null, bytes.slice(i, i + CHUNK) as unknown as number[]));
+  }
+  const b64 = btoa(parts.join(""));
+  return `data:${mime};base64,${b64}`;
+}

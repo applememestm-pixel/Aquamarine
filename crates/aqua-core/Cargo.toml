@@ -1,0 +1,27 @@
+[package]
+name        = "aqua-core"
+version     = { workspace = true }
+edition     = { workspace = true }
+license     = { workspace = true }
+rust-version = { workspace = true }
+description = "Aquamarine E2EE core: X3DH + Double Ratchet, wire types, crypto primitives."
+
+[dependencies]
+x25519-dalek     = { workspace = true }
+ed25519-dalek    = { workspace = true }
+chacha20poly1305 = { workspace = true }
+hkdf             = { workspace = true }
+hmac             = { workspace = true }
+sha2             = { workspace = true }
+rand_core        = { workspace = true }
+zeroize          = { workspace = true }
+subtle           = { workspace = true }
+
+serde       = { workspace = true }
+serde_bytes = { workspace = true }
+serde_json  = { workspace = true }
+bincode     = { workspace = true }
+base64      = { workspace = true }
+hex         = "0.4"
+
+thiserror = { workspace = true }

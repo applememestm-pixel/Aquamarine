@@ -1,0 +1,171 @@
+name: release
+
+# Builds the desktop client (Tauri) and the relay server for Windows, macOS
+# and Linux. Tauri can't cross-compile, so each OS builds on its own runner.
+# Artifacts are uploaded for every run; on a v* tag they're attached to the
+# GitHub Release.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------- desktop
+  desktop:
+    name: desktop (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows-x64
+            rust-target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            name: macos-arm64
+            rust-target: aarch64-apple-darwin
+          - os: macos-13
+            name: macos-x64
+            rust-target: x86_64-apple-darwin
+          - os: ubuntu-22.04
+            name: linux-x64
+            rust-target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux deps (GTK / WebKitGTK)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libgtk-3-dev build-essential curl wget file
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/aqua-client-ui -> target
+          shared-key: tauri-${{ matrix.name }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crates/aqua-client-ui/ui/package-lock.json
+
+      - name: Build frontend
+        working-directory: crates/aqua-client-ui/ui
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version '^2' --locked
+
+      - name: Build Tauri bundles
+        working-directory: crates/aqua-client-ui
+        run: cargo tauri build --target ${{ matrix.rust-target }}
+
+      - name: Collect bundles
+        shell: bash
+        run: |
+          mkdir -p dist
+          base="crates/aqua-client-ui/target/${{ matrix.rust-target }}/release"
+          # Windows: NSIS + MSI
+          find "$base/bundle" -type f \( -name '*-setup.exe' -o -name '*.msi' \) -exec cp {} dist/ \; 2>/dev/null || true
+          # macOS: DMG (+ zipped .app)
+          find "$base/bundle" -type f -name '*.dmg' -exec cp {} dist/ \; 2>/dev/null || true
+          # Linux: AppImage + deb + rpm
+          find "$base/bundle" -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) -exec cp {} dist/ \; 2>/dev/null || true
+          # Stable copies so the website can link releases/latest/download/<name>
+          shopt -s nullglob
+          for f in dist/*-setup.exe; do cp "$f" dist/Aquamarine-Setup.exe; done
+          for f in dist/*.AppImage; do [ "$f" != dist/Aquamarine.AppImage ] && cp "$f" dist/Aquamarine.AppImage; done
+          for f in dist/*.dmg; do
+            if [ "${{ matrix.name }}" = macos-arm64 ]; then cp "$f" dist/Aquamarine.dmg
+            else cp "$f" dist/Aquamarine-Intel.dmg; fi
+          done
+          ls -la dist || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aquamarine-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: warn
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+
+  # ---------------------------------------------------------------- server
+  server:
+    name: server (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows-x64
+            rust-target: x86_64-pc-windows-msvc
+            ext: .exe
+          - os: macos-latest
+            name: macos-arm64
+            rust-target: aarch64-apple-darwin
+            ext: ""
+          - os: ubuntu-22.04
+            name: linux-x64
+            rust-target: x86_64-unknown-linux-gnu
+            ext: ""
+          - os: ubuntu-22.04
+            name: linux-arm64
+            rust-target: aarch64-unknown-linux-gnu
+            ext: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      - name: ARM64 Linux cross-linker
+        if: matrix.name == 'linux-arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          mkdir -p .cargo
+          printf '[target.aarch64-unknown-linux-gnu]\nlinker = "aarch64-linux-gnu-gcc"\n' >> .cargo/config.toml
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: server-${{ matrix.name }}
+
+      - name: Build server
+        run: cargo build --release -p aqua-server --target ${{ matrix.rust-target }}
+
+      - name: Collect
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.rust-target }}/release/aqua-server${{ matrix.ext }}" \
+             "dist/aqua-server-${{ matrix.name }}${{ matrix.ext }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aqua-server-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*

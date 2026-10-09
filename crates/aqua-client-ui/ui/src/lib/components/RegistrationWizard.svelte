@@ -1,0 +1,478 @@
+<script module lang="ts">
+  import { writable } from "svelte/store";
+  export const wizardOpen = writable<boolean>(false);
+  /** Set once the user explicitly skips, so the entry gate stops
+   *  reopening the window for the rest of the session. */
+  export const registrationDismissed = writable<boolean>(false);
+  export function openRegistration() { wizardOpen.set(true); }
+  export function closeRegistration() { wizardOpen.set(false); }
+</script>
+
+<script lang="ts">
+  import { t, tr } from "../i18n";
+  import { api } from "../tauri";
+  import { info, chats } from "../stores";
+  import { profile as localProfile, updateProfile } from "../profile";
+  import { connect } from "../stores";
+  import { showToast } from "./Toast.svelte";
+  import { icons } from "../icons";
+
+  const DEFAULT_SERVER = "http://127.0.0.1:7777";
+
+  // The self-hosted relay speaks plain HTTP by default. A loopback/LAN
+  // address typed with https:// can never connect (TLS handshake fails), so
+  // downgrade it automatically — that's almost always a typo, not a real
+  // TLS server on a private IP.
+  function normalizeServer(raw: string): string {
+    let u = raw.trim().replace(/\/+$/, "");
+    const m = u.match(/^https:\/\/(.+)$/i);
+    if (m) {
+      const host = m[1].split(/[:/]/)[0];
+      const isLocal =
+        host === "localhost" || host === "127.0.0.1" || host === "::1" ||
+        host.startsWith("192.168.") || host.startsWith("10.") ||
+        /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host);
+      if (isLocal) u = "http://" + m[1];
+    }
+    return u;
+  }
+
+  // One-click re-entry for an already-registered account on this device.
+  async function continueAs() {
+    const i = $info;
+    if (!i?.username) return;
+    busy = true;
+    error = null;
+    try {
+      const err = await connect(normalizeServer(i.server_url || serverUrl), i.username);
+      if (!err) {
+        try { chats.set(await api.listChats()); } catch { /* non-fatal */ }
+        closeRegistration();
+      } else if (/not regist|different identity/i.test(err)) {
+        error = `@${i.username} isn't registered on this server (or it was claimed from another device / before a reset). Register below to set it up fresh.`;
+      } else {
+        error = `Could not reach the server — is it running at this address?  (${err})`;
+      }
+    } catch (e) {
+      error = `Could not sign in: ${e}`;
+    } finally {
+      busy = false;
+    }
+  }
+
+  // Steps: 1 email → 2 code → 3 username+profile → done
+  let step = $state<1 | 2 | 3>(1);
+  let serverUrl = $state(DEFAULT_SERVER);
+  let email = $state("");
+  let code = $state("");
+  let devCode = $state<string | null>(null);
+  let ticket = $state("");
+  let username = $state("");
+  let displayName = $state("");
+  let about = $state("");
+  let phone = $state("");
+  let busy = $state(false);
+  let error = $state<string | null>(null);
+  /** Discord / Spotify style: create an account, or sign in to one. */
+  let mode = $state<"signup" | "signin">("signup");
+  let password = $state("");
+  let password2 = $state("");
+  let showPw = $state(false);
+  const pwScore = $derived(
+    (password.length >= 8 ? 1 : 0) + (password.length >= 12 ? 1 : 0) +
+    (/[A-ZА-Я]/.test(password) && /[a-zа-я]/.test(password) ? 1 : 0) + (/\d/.test(password) ? 1 : 0) + (/[^\w\s]/.test(password) ? 1 : 0),
+  );
+
+  async function sendCode() {
+    error = null;
+    if (!email.includes("@")) { error = tr("Enter a valid email"); return; }
+    if (password.length < 8) { error = tr("Password must be at least 8 characters"); return; }
+    if (mode === "signup" && password !== password2) { error = tr("Passwords don't match"); return; }
+    serverUrl = normalizeServer(serverUrl); // fix https→http for local relays, reflect it
+    busy = true;
+    try {
+      devCode = await api.requestEmailCode(serverUrl.trim(), email.trim());
+      step = 2;
+      if (devCode) code = devCode; // prefill in dev mode for convenience
+      startResendCooldown();
+    } catch (e) {
+      error = `Could not send code: ${e}`;
+    } finally {
+      busy = false;
+    }
+  }
+
+  // Resend code with a 45-second cooldown.
+  let resendIn = $state(0);
+  let resendTimer: ReturnType<typeof setInterval> | null = null;
+  function startResendCooldown() {
+    resendIn = 45;
+    if (resendTimer) clearInterval(resendTimer);
+    resendTimer = setInterval(() => {
+      resendIn -= 1;
+      if (resendIn <= 0 && resendTimer) { clearInterval(resendTimer); resendTimer = null; }
+    }, 1000);
+  }
+  async function resendCode() {
+    if (resendIn > 0 || busy) return;
+    error = null;
+    busy = true;
+    try {
+      devCode = await api.requestEmailCode(serverUrl.trim(), email.trim());
+      if (devCode) code = devCode;
+      startResendCooldown();
+    } catch (e) {
+      error = `Could not resend: ${e}`;
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function checkCode() {
+    error = null;
+    if (code.trim().length < 4) { error = "Enter the 6-digit code"; return; }
+    busy = true;
+    try {
+      ticket = await api.verifyEmailCode(serverUrl.trim(), email.trim(), code.trim());
+      if (mode === "signin") { await finishSignIn(); return; }
+      step = 3;
+    } catch (e) {
+      error = `Wrong or expired code: ${e}`;
+    } finally {
+      busy = false;
+    }
+  }
+
+  /** Existing account → move it to this device, connect, done. */
+  async function finishSignIn() {
+    try {
+      const u = await api.loginAccount(serverUrl.trim(), ticket, password);
+      const err = await connect(serverUrl.trim(), u);
+      if (err) { error = err; return; }
+      try { info.set(await api.completeRegistration(u, email.trim() || null)); } catch { /* non-fatal */ }
+      try { chats.set(await api.listChats()); } catch { /* non-fatal */ }
+      showToast(tr("Signed in as @{u}", { u }));
+      closeRegistration();
+    } catch (e) {
+      const m = String(e);
+      error = /wrong email or password/i.test(m) ? tr("Wrong email or password") : tr("Could not sign in: {e}", { e: m });
+      step = 1;
+    }
+  }
+
+  async function finish() {
+    error = null;
+    const u = username.trim().toLowerCase();
+    if (!/^[a-z0-9_.]{3,32}$/.test(u)) {
+      error = "Username: 3–32 chars, a-z 0-9 _ . only";
+      return;
+    }
+    busy = true;
+    try {
+      // 1. Register the account FIRST (HTTP sign-in + directory write). The
+      //    server now requires a registered username before it will accept a
+      //    bundle upload or a WebSocket, so this must precede connect.
+      await api.registerAccount(serverUrl.trim(), u, ticket, displayName.trim(), about.trim(), phone.trim(), password);
+      // 2. Connect (signs in + opens WS + uploads bundle), which also
+      //    saves the auto-reconnect hints.
+      const err = await connect(serverUrl.trim(), u);
+      if (err) { error = err; busy = false; return; }
+      // 3. Mirror into the local profile store so the sidebar + profile
+      //    modal reflect it immediately.
+      updateProfile({
+        display_name: displayName.trim() || u,
+        about: about.trim() || "An Aquamarine user.",
+        phone: phone.trim(),
+      });
+      // 4. Publish profile to the directory (idempotent with register,
+      //    but covers the display-name-only edit path).
+      try { await api.publishProfile(displayName.trim() || u, about.trim(), phone.trim()); } catch { /* non-fatal */ }
+      // 5. Persist the account record — this is what flips the entry gate
+      //    off permanently on this device. Refresh the info store so the
+      //    gate ($info.registered) closes immediately.
+      try { info.set(await api.completeRegistration(u, email.trim() || null)); } catch { /* non-fatal */ }
+      try { chats.set(await api.listChats()); } catch { /* non-fatal */ }
+      showToast(`Registered as @${u}`);
+      closeRegistration();
+    } catch (e) {
+      error = `Registration failed: ${e}`;
+    } finally {
+      busy = false;
+    }
+  }
+
+  function skipForNow() {
+    // Fallback: no registration this session. Don't nag again until next
+    // launch.
+    registrationDismissed.set(true);
+    closeRegistration();
+  }
+</script>
+
+{#if $wizardOpen}
+  <div class="backdrop">
+    <div class="sheet login" role="dialog" aria-modal="true" tabindex="-1">
+      <aside class="hero">
+        <div class="logo-lg">A</div>
+        <h1 class="hero-title">{$t("Aquamarine")}</h1>
+        <p class="hero-tag">{$t("An open, end-to-end encrypted messenger. Your keys never leave this device.")}</p>
+        <ul class="hero-feat">
+          <li>{@html icons.lock}<span>{$t("X3DH · Double Ratchet encryption")}</span></li>
+          <li><span class="hf-ic">⌁</span><span>{$t("Connect to any server by address — host your own")}</span></li>
+          <li><span class="hf-ic">✦</span><span>{$t("Stickers, polls, calls, themes — all yours")}</span></li>
+        </ul>
+      </aside>
+
+      <div class="panel">
+      <div class="steps">
+        <span class="dot" class:active={step >= 1} class:done={step > 1}>1</span>
+        <span class="bar" class:done={step > 1}></span>
+        <span class="dot" class:active={step >= 2} class:done={step > 2}>2</span>
+        <span class="bar" class:done={step > 2}></span>
+        <span class="dot" class:active={step >= 3}>3</span>
+      </div>
+
+      {#if error}<div class="err">{error}</div>{/if}
+
+      {#if step === 1 && $info?.registered && $info?.username}
+        <div class="continue-box">
+          <div class="cb-label">{$t("Already registered on this device")}</div>
+          <button class="continue-btn" onclick={continueAs} disabled={busy}>
+            {busy ? "Signing in…" : `Continue as @${$info.username}`}
+          </button>
+          <div class="cb-or"><span>{$t("or register / log in below")}</span></div>
+        </div>
+      {/if}
+
+      {#if step === 1}
+        <div class="mode-tabs">
+          <button class:on={mode === "signup"} onclick={() => { mode = "signup"; error = null; }}>{$t("Create account")}</button>
+          <button class:on={mode === "signin"} onclick={() => { mode = "signin"; error = null; }}>{$t("Sign in")}</button>
+        </div>
+        <div class="form">
+          <label class="field">
+            <span>{$t("Server")}</span>
+            <input bind:value={serverUrl} placeholder={DEFAULT_SERVER} />
+          </label>
+          <label class="field">
+            <span>{$t("Email")}</span>
+            <input bind:value={email} type="email" autocomplete="email" placeholder={$t("you@example.com")} />
+          </label>
+          <label class="field">
+            <span>{$t("Password")}</span>
+            <div class="pw">
+              <input bind:value={password} type={showPw ? "text" : "password"} autocomplete={mode === "signup" ? "new-password" : "current-password"}
+                     placeholder={mode === "signup" ? $t("At least 8 characters") : ""} onkeydown={(e) => e.key === "Enter" && mode === "signin" && sendCode()} />
+              <button class="pw-eye" type="button" onclick={() => (showPw = !showPw)} title={showPw ? $t("Hide") : $t("Show")}>{showPw ? "◉" : "◎"}</button>
+            </div>
+            {#if mode === "signup" && password}
+              <span class="pw-meter"><i style:width="{pwScore * 20}%" class:ok={pwScore >= 3}></i></span>
+            {/if}
+          </label>
+          {#if mode === "signup"}
+            <label class="field">
+              <span>{$t("Repeat password")}</span>
+              <input bind:value={password2} type={showPw ? "text" : "password"} autocomplete="new-password" onkeydown={(e) => e.key === "Enter" && sendCode()} />
+            </label>
+          {/if}
+          <p class="note">{$t("We'll send a 6-digit verification code. In dev mode the code appears on the next screen automatically.")}</p>
+          <div class="actions">
+            <button class="ghost" onclick={skipForNow}>{$t("Skip")}</button>
+            <button class="primary" onclick={sendCode} disabled={busy}>{$t(busy ? "Sending…" : "Send code")}</button>
+          </div>
+        </div>
+      {:else if step === 2}
+        <div class="form">
+          <label class="field">
+            <span>{$t("Verification code")}</span>
+            <input bind:value={code} placeholder="123456" maxlength="6" class="code-input" onkeydown={(e) => e.key === "Enter" && checkCode()} />
+          </label>
+          {#if devCode}
+            <p class="note dev">{$t("Dev mode — your code is")} <b>{devCode}</b> {$t("(also printed in the server console).")}</p>
+          {:else}
+            <p class="note">Check your inbox at {email}.</p>
+          {/if}
+          <button class="resend" onclick={resendCode} disabled={resendIn > 0 || busy}>
+            {resendIn > 0 ? `Resend code in ${resendIn}s` : "Resend code"}
+          </button>
+          <div class="actions">
+            <button class="ghost" onclick={() => (step = 1)}>{$t("Back")}</button>
+            <button class="primary" onclick={checkCode} disabled={busy}>{$t(busy ? "Verifying…" : "Verify")}</button>
+          </div>
+        </div>
+      {:else}
+        <div class="form">
+          <label class="field">
+            <span>@username *</span>
+            <input bind:value={username} placeholder={$t("ivan2027")} oninput={() => (username = username.toLowerCase())} />
+          </label>
+          <label class="field">
+            <span>{$t("Display name")}</span>
+            <input bind:value={displayName} placeholder="Иван Иванов" />
+          </label>
+          <label class="field">
+            <span>{$t("About")}</span>
+            <textarea bind:value={about} rows="2" placeholder={$t("A little about you…")}></textarea>
+          </label>
+          <label class="field">
+            <span>{$t("Phone (optional)")}</span>
+            <input bind:value={phone} placeholder="+7 999 123-45-67" />
+          </label>
+          <div class="actions">
+            <button class="ghost" onclick={() => (step = 2)}>{$t("Back")}</button>
+            <button class="primary" onclick={finish} disabled={busy}>{$t(busy ? "Registering…" : "Finish")}</button>
+          </div>
+        </div>
+      {/if}
+      </div>
+    </div>
+  </div>
+{/if}
+
+<style>
+  .mode-tabs { display: flex; gap: 4px; background: var(--bg-input); border-radius: 12px; padding: 4px; margin-bottom: 14px; }
+  .mode-tabs button { flex: 1; border: none; background: none; color: var(--fg-muted); font: inherit; font-weight: 700; font-size: 13.5px; padding: 9px; border-radius: 9px; cursor: pointer; }
+  .mode-tabs button.on { background: var(--bg-shell); color: var(--accent); box-shadow: 0 0 0 1px var(--border-strong), 0 4px 14px -6px var(--accent-glow); }
+  .pw { position: relative; display: flex; }
+  .pw input { flex: 1; padding-right: 38px; }
+  .pw-eye { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--fg-dim); font-size: 16px; cursor: pointer; }
+  .pw-meter { display: block; height: 4px; border-radius: 4px; background: var(--bg-input); overflow: hidden; margin-top: 6px; }
+  .pw-meter i { display: block; height: 100%; background: #ff6b6b; transition: width 0.2s, background 0.2s; }
+  .pw-meter i.ok { background: var(--accent); }
+  .backdrop {
+    position: fixed; inset: 0;
+    background:
+      radial-gradient(1000px 600px at 15% 0%, var(--accent-glow), transparent 55%),
+      radial-gradient(900px 600px at 90% 100%, var(--accent-2-glow, rgba(123,92,255,0.35)), transparent 55%),
+      var(--bg-void, #06070C);
+    display: grid; place-items: center;
+    z-index: 140;
+    padding: 20px;
+  }
+  .sheet {
+    width: min(460px, 94vw);
+    background: var(--bg-shell);
+    border: 1px solid var(--border-strong);
+    border-radius: 20px;
+    box-shadow: 0 40px 100px -20px rgba(0,0,0,0.75);
+    padding: 26px;
+    animation: slide-up 0.24s ease-out;
+  }
+  /* Two-pane login: brand hero + the form panel. */
+  .sheet.login {
+    width: min(820px, 96vw);
+    padding: 0;
+    display: grid;
+    grid-template-columns: 1fr 1.1fr;
+    overflow: hidden;
+  }
+  .hero {
+    padding: 34px 30px;
+    background:
+      radial-gradient(600px 400px at 20% 0%, var(--accent-soft), transparent 60%),
+      linear-gradient(160deg, color-mix(in srgb, var(--accent) 12%, var(--bg-list)), var(--bg-list));
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+  }
+  .logo-lg {
+    width: 56px; height: 56px; border-radius: 16px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    display: grid; place-items: center;
+    font-weight: 800; font-size: 26px; color: #06070C;
+    box-shadow: 0 0 30px -4px var(--accent-glow);
+    margin-bottom: 18px;
+  }
+  .hero-title { margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -0.02em; }
+  .hero-tag { margin: 8px 0 22px; font-size: 13px; color: var(--fg-muted); line-height: 1.55; }
+  .hero-feat { list-style: none; margin: auto 0 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+  .hero-feat li { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--fg); }
+  .hero-feat :global(svg) { width: 16px; height: 16px; color: var(--accent); flex-shrink: 0; }
+  .hf-ic { width: 16px; text-align: center; color: var(--accent); flex-shrink: 0; }
+  .panel { padding: 26px; display: flex; flex-direction: column; overflow-y: auto; }
+  @media (max-width: 680px) {
+    .sheet.login { grid-template-columns: 1fr; }
+    .hero { display: none; }
+  }
+  @keyframes slide-up { from { opacity: 0; transform: translateY(12px);} to { opacity: 1; transform: translateY(0);} }
+
+  .brand-row { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
+  .logo {
+    width: 48px; height: 48px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    display: grid; place-items: center;
+    font-weight: 800; font-size: 22px; color: #06070C;
+    box-shadow: 0 0 24px -4px var(--accent-glow);
+    flex-shrink: 0;
+  }
+  .brand-row h2 { margin: 0; font-size: 18px; font-weight: 800; letter-spacing: -0.01em; }
+  .sub { margin: 2px 0 0; font-size: 12.5px; color: var(--fg-muted); line-height: 1.4; }
+
+  .steps { display: flex; align-items: center; justify-content: center; gap: 4px; margin-bottom: 18px; }
+  .dot {
+    width: 26px; height: 26px; border-radius: 50%;
+    display: grid; place-items: center;
+    background: var(--bg-input); border: 1px solid var(--border);
+    font-size: 12px; font-weight: 700; color: var(--fg-dim);
+  }
+  .dot.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .dot.done { background: var(--accent); border-color: var(--accent); color: #06070C; }
+  .bar { width: 40px; height: 2px; background: var(--border); }
+  .bar.done { background: var(--accent); }
+
+  .err {
+    background: rgba(255,77,109,0.12);
+    border: 1px solid rgba(255,77,109,0.3);
+    color: #ff9fb0;
+    padding: 8px 12px; border-radius: 10px;
+    font-size: 12.5px; margin-bottom: 12px;
+  }
+
+  .continue-box { margin-bottom: 14px; }
+  .cb-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-dim); margin-bottom: 8px; }
+  .continue-btn {
+    width: 100%; padding: 12px 16px; border-radius: 12px; border: none; cursor: pointer;
+    font-size: 14.5px; font-weight: 700; color: #06070C;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    box-shadow: 0 6px 16px -4px var(--accent-glow);
+  }
+  .continue-btn:hover:not(:disabled) { transform: translateY(-1px); }
+  .continue-btn:disabled { opacity: 0.5; cursor: default; }
+  .cb-or { display: flex; align-items: center; gap: 10px; margin: 14px 0 2px; color: var(--fg-dim); font-size: 11.5px; }
+  .cb-or::before, .cb-or::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+
+  .form { display: flex; flex-direction: column; gap: 12px; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field span { font-size: 11px; font-weight: 700; color: var(--fg-dim); text-transform: uppercase; letter-spacing: 0.06em; }
+  .field input, .field textarea {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--fg);
+    font-family: inherit;
+    font-size: 14px;
+    padding: 9px 12px;
+    outline: none;
+    resize: vertical;
+  }
+  .field input:focus, .field textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .code-input { font-family: var(--font-mono); font-size: 22px; letter-spacing: 0.3em; text-align: center; }
+  .note { font-size: 11.5px; color: var(--fg-dim); line-height: 1.5; margin: 0; }
+  .resend {
+    align-self: flex-start;
+    background: transparent; border: none;
+    color: var(--accent); font-size: 12px; font-weight: 600;
+    cursor: pointer; padding: 0;
+  }
+  .resend:disabled { color: var(--fg-dim); cursor: not-allowed; }
+  .note.dev { color: var(--accent); }
+  .note.dev b { font-family: var(--font-mono); }
+
+  .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
+  .ghost, .primary { padding: 9px 18px; border-radius: 10px; font-size: 13px; font-weight: 700; cursor: pointer; border: none; }
+  .ghost { background: transparent; border: 1px solid var(--border); color: var(--fg-muted); }
+  .ghost:hover { color: var(--fg); border-color: var(--border-strong); }
+  .primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070C; box-shadow: 0 6px 16px -4px var(--accent-glow); }
+  .primary:hover:not(:disabled) { transform: translateY(-1px); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+</style>

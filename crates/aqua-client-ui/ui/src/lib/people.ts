@@ -1,0 +1,253 @@
+/**
+ * Public profile cards of other people (and the publishing of ours).
+ *
+ * Cards live on the server directory (name, bio, extras) with the avatar
+ * and banner images next to them, so everyone sees the same picture.
+ * Fetched lazily, cached here (and the images on disk by the backend),
+ * refreshed when a peer's presence says their profile version moved.
+ */
+import { writable, derived, get } from "svelte/store";
+import { api, assetUrl } from "./tauri";
+import { profile, updateProfile, type Profile } from "./profile";
+import { info } from "./stores";
+import { broadcastPresence } from "./presence";
+import { privacy, isPublic, photoAcl, contactSet } from "./privacy";
+
+export interface PeerCard {
+  username: string;
+  display_name: string;
+  about: string;
+  phone: string;
+  is_bot: boolean;
+  extra: Record<string, unknown>;
+  avatar_ver: number;
+  banner_ver: number;
+  /** Asset URLs of the cached images ("" when none). */
+  avatar: string;
+  banner: string;
+  /** When we last fetched (ms). */
+  fetched: number;
+  /** Highest profile version we've seen announced in presence. */
+  pv: number;
+}
+
+const KEY = "aqua.peerCards.v1";
+function load(): Record<string, PeerCard> {
+  try { return JSON.parse(localStorage.getItem(KEY) ?? "{}"); } catch { return {}; }
+}
+export const peerCards = writable<Record<string, PeerCard>>(load());
+peerCards.subscribe((v) => { try { localStorage.setItem(KEY, JSON.stringify(v)); } catch { /* ignore */ } });
+
+/** username → avatar URL, including ourselves. */
+export const avatars = derived([peerCards, profile, info], ([cards, me, i]) => {
+  const out: Record<string, string> = {};
+  for (const [u, c] of Object.entries(cards)) if (c.avatar) out[u] = c.avatar;
+  if (i?.username && me.avatar_url) out[i.username] = me.avatar_url;
+  return out;
+});
+
+export interface ClanInfo { text: string; badge: string; color: string; gid?: string; title?: string; owner?: string }
+
+function asClan(v: unknown): ClanInfo | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  const text = typeof o.text === "string" ? o.text.slice(0, 4) : "";
+  if (!text) return null;
+  return {
+    text,
+    badge: typeof o.badge === "string" ? o.badge : "star",
+    color: typeof o.color === "string" && /^#[0-9a-fA-F]{3,8}$/.test(o.color) ? o.color : "",
+    gid: typeof o.gid === "string" ? o.gid : undefined,
+    title: typeof o.title === "string" ? o.title.slice(0, 64) : undefined,
+    owner: typeof o.owner === "string" ? o.owner : undefined,
+  };
+}
+
+/** username → the server tag they wear (Discord-style), including ours. */
+export const clans = derived([peerCards, profile, info], ([cards, me, i]) => {
+  const out: Record<string, ClanInfo> = {};
+  for (const [u, c] of Object.entries(cards)) { const t = asClan(c.extra?.clan); if (t) out[u] = t; }
+  const mine = asClan(me.clan);
+  if (i?.username && mine) out[i.username] = mine;
+  return out;
+});
+
+export function str(v: unknown): string { return typeof v === "string" ? v : ""; }
+
+const inflight = new Map<string, Promise<void>>();
+const STALE_MS = 10 * 60_000;
+
+function skip(u: string): boolean {
+  return !u || u.startsWith("grp_") || u.startsWith("__") || u === get(info)?.username;
+}
+
+/** Fetch (or refresh) one person's public card + images. */
+export function refreshPeer(username: string, force = false): Promise<void> {
+  if (skip(username) || !get(info)?.connected) return Promise.resolve();
+  const cur = get(peerCards)[username];
+  if (!force && cur && Date.now() - cur.fetched < STALE_MS) return Promise.resolve();
+  const running = inflight.get(username);
+  if (running) return running;
+  const job = (async () => {
+    try {
+      const card = await api.fetchDirectoryProfile(username);
+      if (!card) {
+        peerCards.update((m) => ({ ...m, [username]: { ...(m[username] ?? blank(username)), fetched: Date.now() } }));
+        return;
+      }
+      const av = card.avatar_ver ?? 0, bv = card.banner_ver ?? 0;
+      let avatar = cur && cur.avatar_ver === av ? cur.avatar : "";
+      let banner = cur && cur.banner_ver === bv ? cur.banner : "";
+      if (av && !avatar) avatar = assetUrl(await api.profileMediaPath(username, "avatar", av).catch(() => null));
+      if (bv && !banner) banner = assetUrl(await api.profileMediaPath(username, "banner", bv).catch(() => null));
+      peerCards.update((m) => ({
+        ...m,
+        [username]: {
+          username,
+          display_name: card.display_name,
+          about: card.about,
+          phone: card.phone,
+          is_bot: card.is_bot,
+          extra: (card.extra ?? {}) as Record<string, unknown>,
+          avatar_ver: av, banner_ver: bv,
+          avatar: av ? avatar : "", banner: bv ? banner : "",
+          fetched: Date.now(),
+          pv: m[username]?.pv ?? 0,
+        },
+      }));
+    } catch { /* offline — keep the cached card */ }
+    finally { inflight.delete(username); }
+  })();
+  inflight.set(username, job);
+  return job;
+}
+
+function blank(username: string): PeerCard {
+  return { username, display_name: "", about: "", phone: "", is_bot: false, extra: {}, avatar_ver: 0, banner_ver: 0, avatar: "", banner: "", fetched: 0, pv: 0 };
+}
+
+/** A peer announced profile version `pv` — refetch if it's new. */
+export function notePeerProfileVersion(username: string, pv: number | undefined) {
+  if (!pv) return;
+  const cur = get(peerCards)[username];
+  if (cur && cur.pv >= pv) return;
+  peerCards.update((m) => ({ ...m, [username]: { ...(m[username] ?? blank(username)), pv } }));
+  void refreshPeer(username, true);
+}
+
+// ---------------------------------------------------------------------------
+// Our own public profile
+// ---------------------------------------------------------------------------
+
+function myExtra(p: Profile): Record<string, unknown> {
+  return {
+    banner_a: p.banner_a, banner_b: p.banner_b,
+    status: p.status ?? "", pronouns: p.pronouns ?? "",
+    // Restricted fields stay off the public card; allowed peers get them
+    // over E2EE presence instead (presence.ts `pp`).
+    birthday: isPublic("birthday") ? (p.birthday ?? "") : "", favourite_music: p.favourite_music ?? "",
+    avatar_emoji: p.avatar_emoji ?? "",
+    clan: p.clan ?? null,
+  };
+}
+
+/** Push our card (name, bio, extras) to the server and tell peers. */
+export async function publishMyProfile(): Promise<void> {
+  const p = get(profile);
+  await api.publishProfileFull(
+    p.display_name,
+    isPublic("bio") ? p.about : "",
+    isPublic("phone") ? p.phone : "",
+    myExtra(p),
+  );
+  updateProfile({ pv: Date.now() });
+  broadcastPresence();
+}
+
+/** Upload a new avatar / banner from a picked file. */
+export async function setMyImage(kind: "avatar" | "banner", path: string): Promise<void> {
+  const r = await api.setProfileImage(kind, path);
+  applyMyImage(kind, r);
+}
+
+export async function setMyImageBytes(kind: "avatar" | "banner", mime: string, bytes: number[]): Promise<void> {
+  const r = await api.setProfileImageBytes(kind, mime, bytes);
+  applyMyImage(kind, r);
+}
+
+function applyMyImage(kind: "avatar" | "banner", r: { ver: number; path: string }) {
+  const url = assetUrl(r.path) + `?v=${r.ver}`;
+  if (kind === "avatar") updateProfile({ avatar_ver: r.ver, avatar_url: url });
+  else updateProfile({ banner_ver: r.ver, banner_url: url });
+  updateProfile({ pv: Date.now() });
+  broadcastPresence();
+}
+
+export async function clearMyImage(kind: "avatar" | "banner"): Promise<void> {
+  await api.clearProfileImage(kind);
+  if (kind === "avatar") updateProfile({ avatar_ver: 0, avatar_url: "" });
+  else updateProfile({ banner_ver: 0, banner_url: "" });
+  updateProfile({ pv: Date.now() });
+  broadcastPresence();
+}
+
+function dataUrlToBytes(url: string): { mime: string; bytes: number[] } | null {
+  const m = /^data:([^;,]+);base64,(.*)$/.exec(url);
+  if (!m) return null;
+  const bin = atob(m[2]);
+  const bytes = new Array<number>(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return { mime: m[1], bytes };
+}
+
+/** On connect: publish our card, and migrate an old local-only avatar
+ *  (a data: URL from before avatars lived on the server) up to it. */
+export async function syncMyProfileOnConnect(): Promise<void> {
+  const p = get(profile);
+  try {
+    if (p.avatar_url?.startsWith("data:") && !p.avatar_ver) {
+      const d = dataUrlToBytes(p.avatar_url);
+      if (d) await setMyImageBytes("avatar", d.mime, d.bytes);
+    }
+    await publishMyProfile();
+    await syncPhotoPrivacy();
+  } catch (e) {
+    console.warn("profile sync", e);
+  }
+}
+
+/** Push the profile-photo allow / deny list to the server. */
+export async function syncPhotoPrivacy(): Promise<void> {
+  const acl = photoAcl();
+  await api.setPhotoPrivacy(acl.everybody, acl.allow, acl.deny);
+}
+
+// Re-apply privacy whenever the rules (or who counts as a contact) change:
+// republish the public card, the photo list, and per-peer presence.
+let privTimer: ReturnType<typeof setTimeout> | null = null;
+let rulesSig = "", contactsSig = "";
+let pending = { publish: false, photo: false };
+function onPrivacyChanged() {
+  // The chat list refreshes on every message, so only act when the rules or
+  // the actual set of contacts moved.
+  const rules = get(privacy);
+  const rs = JSON.stringify(rules);
+  const cs = [...get(contactSet)].sort().join(",");
+  const rulesMoved = rulesSig !== "" && rs !== rulesSig;
+  const contactsMoved = contactsSig !== "" && cs !== contactsSig && rules.photo.who === "contacts";
+  rulesSig = rs; contactsSig = cs;
+  if (!rulesMoved && !contactsMoved) return;
+  if (rulesMoved) pending.publish = true;
+  pending.photo = true;
+  if (privTimer) clearTimeout(privTimer);
+  privTimer = setTimeout(async () => {
+    privTimer = null;
+    const job = pending;
+    pending = { publish: false, photo: false };
+    if (!get(info)?.connected) { if (job.publish) broadcastPresence(); return; }
+    if (job.publish) { try { await publishMyProfile(); } catch (e) { console.warn("publish after privacy change", e); } }
+    if (job.photo) { try { await syncPhotoPrivacy(); } catch (e) { console.warn("photo privacy", e); } }
+  }, 700);
+}
+privacy.subscribe(onPrivacyChanged);
+contactSet.subscribe(onPrivacyChanged);

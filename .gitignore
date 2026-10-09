@@ -1,0 +1,47 @@
+# Rust
+/target
+**/*.rs.bk
+# NB: Cargo.lock IS committed — this workspace ships a binary (aqua-server).
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Local state / test data
+/data
+/.aqua-dev
+
+# Frontend build output / deps
+**/node_modules/
+crates/aqua-client-ui/ui/dist/
+crates/aqua-client-ui/gen/
+
+# Runtime data written next to the binaries
+*.sqlite
+*.sqlite-*
+aqua-admin.json
+proxy.txt
+/.data-*
+/Aquamarine-apps/
+
+# Built installers dropped into the site
+site/downloads/*.exe
+site/downloads/*.msi
+site/downloads/*.dmg
+site/downloads/*.AppImage
+site/downloads/*.deb
+site/downloads/*.rpm
+
+# Nested cargo targets (the Tauri crate has its own)
+**/target/

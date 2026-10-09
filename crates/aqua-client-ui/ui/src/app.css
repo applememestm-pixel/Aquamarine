@@ -1,0 +1,204 @@
+/* Layout: three-column shell (rail | chat list | active chat); single column below 720px, toggled by body class */
+
+:root {
+  /* Height of our custom title bar (0 on narrow / mobile layouts). */
+  --tb-h: 32px;
+  --bg-void:        #06070C;
+  --bg-shell:       #0C0F17;
+  --bg-rail:        #08090F;
+  --bg-list:        #10131C;
+  --bg-surface:     #171C28;
+  --bg-surface-2:   #1E2434;
+  --bg-hover:       rgba(255,255,255,0.035);
+  --bg-active:      rgba(0,229,199,0.08);
+  --bg-input:       #131824;
+  --bg-bubble-in:   #1A2030;
+
+  --border:         rgba(255,255,255,0.055);
+  --border-strong:  rgba(255,255,255,0.11);
+
+  --fg:             #E6EBF5;
+  --fg-muted:       #8892A6;
+  --fg-dim:         #5C6478;
+
+  --accent:         #00E5C7;
+  --accent-strong:  #35F0D6;
+  --accent-glow:    rgba(0,229,199,0.40);
+  --accent-soft:    rgba(0,229,199,0.14);
+  --accent-2:       #7B5CFF;
+  --accent-2-glow:  rgba(123,92,255,0.35);
+
+  --online:         #35D399;
+  --danger:         #FF4D6D;
+
+  --font-ui:   "Onest", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --shadow-lift:   0 1px 0 rgba(255,255,255,0.04) inset, 0 8px 24px -8px rgba(0,0,0,0.4);
+  --shadow-accent: 0 0 0 1px var(--accent-soft), 0 8px 32px -8px var(--accent-glow);
+
+  color-scheme: dark;
+}
+
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg-void);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+}
+#app { height: 100%; }
+
+/* Ambient — two soft orbs breathing in the void */
+body::before, body::after {
+  content: '';
+  position: fixed;
+  width: 60vmax; height: 60vmax;
+  pointer-events: none;
+  z-index: 0;
+  filter: blur(100px);
+  will-change: transform;
+}
+body::before {
+  inset: -25% -10% auto auto;
+  background: radial-gradient(circle, var(--accent-glow) 0%, transparent 60%);
+  opacity: 0.32;
+  animation: drift-1 24s ease-in-out infinite alternate;
+}
+body::after {
+  inset: auto auto -25% -20%;
+  background: radial-gradient(circle, var(--accent-2-glow) 0%, transparent 60%);
+  opacity: 0.28;
+  animation: drift-2 28s ease-in-out infinite alternate;
+}
+@keyframes drift-1 { to { transform: translate(3%, -4%) scale(1.1); } }
+@keyframes drift-2 { to { transform: translate(-3%, 3%) scale(1.08); } }
+
+/* App shell */
+.app {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 68px 340px 1fr;
+  /* Row 2 holds the Discord-style user panel under the rail + list. */
+  grid-template-rows: minmax(0, 1fr) auto;
+  height: 100%;
+  background: var(--bg-shell);
+  overflow: hidden;
+  border-top: 1px solid var(--border-strong);
+}
+@media (max-width: 960px) {
+  .app { grid-template-columns: 68px 300px 1fr; }
+}
+@media (max-width: 720px) {
+  .app { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr); }
+  .app > .main-pane { grid-column: 1 !important; grid-row: 1 !important; }
+  /* Single column: show either the chat list or the open conversation. */
+  body.chat-open .list { display: none; }
+  body:not(.chat-open) .main-pane { display: none; }
+  /* The side rail becomes a bottom tab bar (styled in NavRail.svelte);
+     it's hidden while a chat is open to maximise the conversation. */
+  body.chat-open .rail { display: none; }
+  /* Keep the chat list clear of the fixed bottom bar. */
+  .list { padding-bottom: 64px; }
+}
+
+/* Scrollbars — thin, themed, rounded, hover-reveal. */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--fg-dim) 55%, transparent);
+  border-radius: 8px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  transition: background 0.15s ease;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--accent) 70%, transparent);
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-corner { background: transparent; }
+/* Firefox */
+* { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--fg-dim) 55%, transparent) transparent; }
+
+/* ---- Suppress Chromium/webview chrome ----
+   No text caret/selection on UI chrome, no native image drag ghost,
+   no tap-highlight, no overscroll bounce/navigation. Inputs & message
+   text keep selection via the opt-in rule below. */
+* {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-drag: none;
+}
+html, body, #app {
+  overscroll-behavior: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+img, video { -webkit-user-drag: none; user-drag: none; }
+/* Re-enable selection where it's actually useful. */
+input, textarea, .bubble, .art-md, .msg-col, [contenteditable],
+.selectable, pre, code {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Focus */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+button:focus-visible { outline-offset: 0; box-shadow: 0 0 0 2px var(--accent); }
+button { font-family: inherit; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001s !important;
+    transition-duration: 0.001s !important;
+  }
+}
+
+/* Small utility for reused Svelte components — keeps per-component CSS lean */
+.avatar {
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  color: rgba(6,7,12,0.85);
+  background: var(--gradient, linear-gradient(135deg, #666, #999));
+  flex-shrink: 0;
+  position: relative;
+  letter-spacing: -0.02em;
+}
+/* A profile photo sits on top of the letter + gradient fallback. */
+.avatar > .ava-img {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.avatar.sz-44 { width: 44px; height: 44px; font-size: 15px; }
+.avatar.sz-40 { width: 40px; height: 40px; font-size: 14px; }
+.avatar.sz-34 { width: 34px; height: 34px; font-size: 13px; }
+.avatar.online::after {
+  content: '';
+  position: absolute;
+  right: -1px; bottom: -1px;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: var(--online);
+  border: 2.5px solid var(--bg-list);
+}
+
+.verified-badge {
+  width: 13px; height: 13px;
+  color: var(--accent);
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 4px var(--accent-glow));
+}
+
+@media (max-width: 720px) { :root { --tb-h: 0px; } }

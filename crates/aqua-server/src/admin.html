@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Aquamarine · Relay admin</title>
+<style>
+  :root{
+    --bg-void:#06070C; --bg-shell:#0C0F17; --bg-surface:#171C28; --bg-input:#10131C;
+    --bg-hover:#1b2130; --border:#222838; --border-strong:#2e3647;
+    --fg:#eef1f7; --fg-muted:#aab2c5; --fg-dim:#6b7488;
+    --accent:#00E5C7; --accent-2:#7B5CFF; --accent-glow:rgba(0,229,199,.45);
+    --accent-soft:rgba(0,229,199,.12); --danger:#ff5d73;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; font-family:"Segoe UI",system-ui,sans-serif; color:var(--fg);
+    background:
+      radial-gradient(1100px 600px at 12% -5%,var(--accent-glow),transparent 55%),
+      radial-gradient(900px 600px at 95% 105%,rgba(123,92,255,.3),transparent 55%),
+      var(--bg-void);
+    min-height:100vh; padding:28px 18px;
+  }
+  .wrap{max-width:820px;margin:0 auto}
+  .brand{display:flex;align-items:center;gap:12px;margin-bottom:22px}
+  .logo{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;
+    font-weight:900;color:#06070C;background:linear-gradient(135deg,var(--accent),var(--accent-2));
+    box-shadow:0 0 22px -4px var(--accent-glow)}
+  .brand h1{font-size:19px;margin:0;font-weight:800;letter-spacing:-.01em}
+  .brand span{font-size:12.5px;color:var(--fg-muted)}
+  .card{background:var(--bg-shell);border:1px solid var(--border-strong);border-radius:16px;
+    padding:18px 20px;margin-bottom:16px;box-shadow:0 24px 60px -30px #000}
+  .card h2{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:var(--accent);margin:0 0 14px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px}
+  .stat{background:var(--bg-surface);border:1px solid var(--border);border-radius:12px;padding:13px 14px}
+  .stat .n{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums}
+  .stat .l{font-size:11.5px;color:var(--fg-muted);margin-top:3px}
+  label{display:block;font-size:12px;color:var(--fg-muted);margin:0 0 6px;font-weight:600}
+  input,textarea{width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:10px;
+    color:var(--fg);font:inherit;font-size:14px;padding:10px 12px;outline:none}
+  input:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  textarea{min-height:92px;resize:vertical;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+  .btn{border:none;border-radius:10px;padding:10px 18px;font:inherit;font-weight:800;font-size:14px;cursor:pointer;
+    background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#06070C}
+  .btn.ghost{background:var(--bg-input);color:var(--fg);border:1px solid var(--border)}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .toggle{display:flex;align-items:center;gap:12px;justify-content:space-between;
+    background:var(--bg-surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px;cursor:pointer}
+  .toggle .t{font-weight:700;font-size:14px}
+  .toggle .s{font-size:12px;color:var(--fg-muted);margin-top:2px}
+  .sw{width:42px;height:24px;border-radius:100px;background:var(--border-strong);position:relative;flex-shrink:0;transition:.15s}
+  .sw::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:var(--fg-dim);transition:.15s}
+  .sw.on{background:var(--accent-soft)} .sw.on::after{transform:translateX(18px);background:var(--accent)}
+  .note{font-size:12.5px;color:var(--fg-dim);line-height:1.5;margin-top:10px}
+  .ok{color:var(--accent)} .err{color:var(--danger)}
+  .hide{display:none}
+  .gate{max-width:380px;margin:12vh auto 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">
+    <div class="logo">A</div>
+    <div><h1>Aquamarine relay</h1><span id="host"></span></div>
+  </div>
+
+  <!-- Token gate -->
+  <div id="gate" class="card gate">
+    <h2>Admin sign-in</h2>
+    <label>Admin token (<code>AQUA_ADMIN_TOKEN</code>)</label>
+    <input id="tok" type="password" placeholder="paste the token" />
+    <div class="row" style="margin-top:12px">
+      <button class="btn" onclick="signIn()">Unlock</button>
+      <span id="gateMsg" class="note"></span>
+    </div>
+  </div>
+
+  <!-- Dashboard -->
+  <div id="dash" class="hide">
+    <div class="card">
+      <h2>Live</h2>
+      <div class="grid" id="stats"></div>
+      <div class="note" id="mode"></div>
+    </div>
+
+    <div class="card">
+      <h2>Access control</h2>
+      <div class="toggle" onclick="toggleInvite()">
+        <div><div class="t">Invite-only (solo mode)</div>
+          <div class="s">Only emails on the list below may register. Off = open relay.</div></div>
+        <div id="sw" class="sw"></div>
+      </div>
+      <div style="margin-top:14px">
+        <label>Allowed emails — one per line</label>
+        <textarea id="allow" placeholder="alice@example.com&#10;bob@example.com"></textarea>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" onclick="saveCfg()">Save access policy</button>
+        <button class="btn ghost" onclick="refresh()">Refresh</button>
+        <span id="cfgMsg" class="note"></span>
+      </div>
+      <div class="note">
+        E2EE is unchanged — the relay only forwards encrypted envelopes. This list just controls who may
+        create an account on <b>this</b> relay.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  let TOKEN = localStorage.getItem("aqua.admin.token") || "";
+  let inviteOnly = false;
+  $("host").textContent = location.host;
+
+  async function api(path, opts = {}) {
+    const r = await fetch(path, {
+      ...opts,
+      headers: { "Authorization": "Bearer " + TOKEN, "Content-Type": "application/json", ...(opts.headers||{}) },
+    });
+    if (r.status === 401) throw new Error("bad token");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  }
+  function human(n){ if(n<1024)return n+" B"; if(n<1048576)return (n/1024).toFixed(1)+" KB";
+    if(n<1073741824)return (n/1048576).toFixed(1)+" MB"; return (n/1073741824).toFixed(2)+" GB"; }
+  function dur(s){ const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);
+    return (d?d+"d ":"")+(h?h+"h ":"")+m+"m"; }
+
+  async function signIn(){
+    TOKEN = $("tok").value.trim();
+    try{ await refresh(); localStorage.setItem("aqua.admin.token", TOKEN);
+      $("gate").classList.add("hide"); $("dash").classList.remove("hide"); }
+    catch(e){ $("gateMsg").className="note err"; $("gateMsg").textContent =
+      e.message==="bad token" ? "Wrong token." : "Can't reach the relay."; }
+  }
+
+  async function refresh(){
+    const s = await api("/v1/admin/stats");
+    $("stats").innerHTML = [
+      ["Accounts", s.users],["Online now", s.online],["Bots", s.bots],
+      ["Blobs", s.blobs],["Storage", human(s.blob_bytes)],["Uptime", dur(s.uptime_secs)],
+    ].map(([l,n])=>`<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
+    $("mode").innerHTML = "Registration: <b>"+(s.require_registration?"required (email)":"open")+"</b>"+
+      " · Access: <b class='"+(s.invite_only?"ok":"")+"'>"+(s.invite_only?"invite-only":"open")+"</b>";
+    inviteOnly = s.invite_only;
+    $("sw").className = "sw" + (inviteOnly?" on":"");
+    $("allow").value = (s.allow||[]).join("\n");
+  }
+  function toggleInvite(){ inviteOnly=!inviteOnly; $("sw").className="sw"+(inviteOnly?" on":""); }
+
+  async function saveCfg(){
+    const allow = $("allow").value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+    try{ await api("/v1/admin/config",{method:"POST",body:JSON.stringify({invite_only:inviteOnly,allow})});
+      $("cfgMsg").className="note ok"; $("cfgMsg").textContent="Saved."; refresh(); }
+    catch(e){ $("cfgMsg").className="note err"; $("cfgMsg").textContent="Failed: "+e.message; }
+  }
+
+  if (TOKEN) { $("tok").value = TOKEN; signIn(); }
+</script>
+</body>
+</html>
