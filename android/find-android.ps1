@@ -69,3 +69,12 @@ Write-Output "NDK_HOME=$ndk"
 Write-Output "JAVA_HOME=$java"
 $studioExe = $studios | ForEach-Object { Join-Path $_ 'bin\studio64.exe' } | Where-Object { Test-Path $_ } | Select-Object -First 1
 if ($studioExe) { Write-Output "AQ_STUDIO=$studioExe" }
+
+# ---- LAN address for the phone to reach the dev server (skip VPN / virtual adapters)
+$skip = 'Radmin|Hiddify|VPN|TAP|TUN|Wintun|WireGuard|ZeroTier|Tailscale|Hamachi|Virtual|vEthernet|Hyper-V|VMware|VirtualBox|Loopback|WSL|Docker|Bluetooth'
+$lan = Get-NetIPConfiguration | Where-Object {
+    $_.NetAdapter.Status -eq 'Up' -and $_.IPv4DefaultGateway -and
+    ($_.InterfaceAlias + ' ' + $_.InterfaceDescription) -notmatch $skip
+  } | ForEach-Object { $_.IPv4Address.IPAddress } |
+  Where-Object { $_ -match '^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)' } | Select-Object -First 1
+if ($lan) { Write-Output "AQ_LAN_IP=$lan" }
