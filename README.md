@@ -4,8 +4,8 @@
 
 **End-to-end encrypted messenger — Telegram's chats and channels meet Discord's servers and calls.**
 
-[**Website**](https://vladstalker2027.github.io/aquamarine/) ·
-[**Download**](https://github.com/vladstalker2027/aquamarine/releases/latest) ·
+[**Website**](https://applememestm-pixel.github.io/aquamarine/) ·
+[**Download**](https://github.com/applememestm-pixel/aquamarine/releases/latest) ·
 [Progress log](PROGRESS.md) ·
 [Network plan](docs/NETWORK_PLAN.md)
 
@@ -34,7 +34,7 @@ Rust · Tauri 2 · Svelte 5 · axum
 
 ## Download
 
-Grab the latest build from [**Releases**](https://github.com/vladstalker2027/aquamarine/releases/latest):
+Grab the latest build from [**Releases**](https://github.com/applememestm-pixel/aquamarine/releases/latest):
 
 | Platform | Client | Relay server |
 |---|---|---|

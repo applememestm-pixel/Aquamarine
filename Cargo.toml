@@ -20,7 +20,7 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 rust-version = "1.75"
 authors = ["Aquamarine contributors"]
-repository = "https://github.com/vladstalker2027/aquamarine"
+repository = "https://github.com/applememestm-pixel/aquamarine"
 
 [workspace.dependencies]
 # --- Cryptography ------------------------------------------------------------
