@@ -17,11 +17,15 @@ if errorlevel 1 (
   cargo install tauri-cli --version "^2" --locked || goto :fail
 )
 
-echo [*] Frontend dependencies...
-pushd ui
-call npm ci
-if errorlevel 1 (popd & goto :fail)
-popd
+if exist "ui\node_modules\.bin\vite.cmd" (
+  echo [*] Frontend dependencies already installed.
+) else (
+  echo [*] Frontend dependencies...
+  pushd ui
+  call npm install
+  if errorlevel 1 (popd & goto :fail)
+  popd
+)
 
 if not exist "gen\android\app\build.gradle.kts" (
   echo [*] Generating the Android Studio project...
