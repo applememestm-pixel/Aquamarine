@@ -38,7 +38,7 @@ Grab the latest build from [**Releases**](https://github.com/applememestm-pixel/
 
 | Platform | Client | Relay server |
 |---|---|---|
-| Windows 10/11 x64 | `Aquamarine-Setup.exe` / `.msi` | `aqua-server-windows-x64.exe` |
+| Windows 10/11 x64 | `Aquamarine-Setup.exe` | `aqua-server-windows-x64.exe` |
 | macOS Apple Silicon | `Aquamarine.dmg` | `aqua-server-macos-arm64` |
 | macOS Intel | `Aquamarine-Intel.dmg` | — |
 | Linux x64 | `Aquamarine.AppImage` / `.deb` / `.rpm` | `aqua-server-linux-x64` |
