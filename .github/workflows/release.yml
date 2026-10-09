@@ -185,7 +185,7 @@ jobs:
           "$bt/apksigner" sign --ks ks.jks --ks-pass "pass:$KS_PASS" --key-pass "pass:${KS_PASS}" \
             --ks-key-alias "$KS_ALIAS" --out dist/Aquamarine.apk aligned.apk
           "$bt/apksigner" verify dist/Aquamarine.apk
-          rm -f ks.jks
+          rm -f ks.jks dist/*.idsig
           ls -la dist
 
       - uses: actions/upload-artifact@v4
@@ -249,15 +249,27 @@ jobs:
           printf 'CODE_SIGNING_ALLOWED = NO\nCODE_SIGNING_REQUIRED = NO\nCODE_SIGN_IDENTITY =\nDEVELOPMENT_TEAM =\n' > "$RUNNER_TEMP/nosign.xcconfig"
           export XCODE_XCCONFIG_FILE="$RUNNER_TEMP/nosign.xcconfig"
           # The archive step succeeds unsigned; only the final export needs a
-          # certificate, so its failure is expected here.
-          cargo tauri ios build --target aarch64 --ci || echo "export step failed (expected without signing)"
+          # certificate, so its failure is expected here. Keep the log for
+          # the packaging step's diagnostics.
+          set +e
+          cargo tauri ios build --target aarch64 --ci > "$RUNNER_TEMP/ios.log" 2>&1
+          echo "tauri ios build exit code: $?"
+          tail -120 "$RUNNER_TEMP/ios.log"
+          exit 0
 
       - name: Package .ipa
         run: |
           set -e
-          app=$(find crates/aqua-client-ui/gen/apple -path '*.xcarchive/Products/Applications/*.app' -maxdepth 8 -type d | head -1)
-          [ -n "$app" ] || app=$(find crates/aqua-client-ui/gen/apple crates/aqua-client-ui/target -name '*.app' -type d -path '*iphoneos*' | head -1)
-          [ -n "$app" ] || { echo "no .app produced"; exit 1; }
+          app=$(find crates/aqua-client-ui "$HOME/Library/Developer/Xcode/Archives" -type d -path '*.xcarchive/Products/Applications/*.app' 2>/dev/null | head -1)
+          [ -n "$app" ] || app=$(find crates/aqua-client-ui "$HOME/Library/Developer/Xcode/DerivedData" -type d -name '*.app' -path '*iphoneos*' 2>/dev/null | head -1)
+          if [ -z "$app" ]; then
+            # Surface the cause as annotations (readable without the raw log).
+            enc() { sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}'; }
+            echo "::error title=iOS build errors::$(grep -iE 'error|failed|cannot|not found' "$RUNNER_TEMP/ios.log" | grep -v '^warning' | tail -30 | enc)"
+            echo "::error title=iOS build log tail::$(tail -40 "$RUNNER_TEMP/ios.log" | enc)"
+            echo "::error title=gen/apple tree::$(find crates/aqua-client-ui/gen/apple -maxdepth 3 2>/dev/null | head -60 | enc)"
+            exit 1
+          fi
           echo "app: $app"
           mkdir -p dist/Payload && cp -R "$app" dist/Payload/
           (cd dist && zip -qry Aquamarine-iOS-unsigned.ipa Payload && rm -rf Payload)
