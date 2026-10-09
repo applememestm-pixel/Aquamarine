@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Aquamarine uses the microphone for voice calls and voice messages.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>Aquamarine uses the camera for video calls and video messages.</string>
+  <key>NSPhotoLibraryUsageDescription</key>
+  <string>Aquamarine lets you send photos and videos from your library.</string>
+  <key>UIFileSharingEnabled</key>
+  <true/>
+  <key>LSSupportsOpeningDocumentsInPlace</key>
+  <true/>
+</dict>
+</plist>

@@ -1419,7 +1419,7 @@
       }}
       title={$activeChat.id === "__saved__" ? "" : isGroup ? "Info & settings" : "Profile & privacy"}
     >
-      <button class="back-btn" onclick={backToList} title={$t("Back")} aria-label={$t("Back to chats")}>
+      <button class="back-btn" onclick={() => backToList()} title={$t("Back")} aria-label={$t("Back to chats")}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
       </button>
       {#if isGroup && activeGroup}
@@ -2132,6 +2132,15 @@
   .back-btn:hover { background: var(--bg-hover); color: var(--fg); }
   .back-btn svg { width: 22px; height: 22px; }
   @media (max-width: 720px) { .back-btn { display: inline-flex; } }
+  /* Phone header: one line of status, compact action buttons. */
+  @media (max-width: 720px) {
+    .chat-header { gap: 6px; padding-left: 4px; padding-right: 6px; }
+    .peer-status { flex-wrap: nowrap; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .chat-header .peer-status .e2ee, .chat-header .peer-status .sep { display: none !important; }
+    .chat-actions { gap: 0; }
+    .chat-actions .icon-btn { width: 34px; height: 34px; }
+    .kbds { display: none; }
+  }
 
   .peer-info { flex: 1; min-width: 0; }
   .peer-name {

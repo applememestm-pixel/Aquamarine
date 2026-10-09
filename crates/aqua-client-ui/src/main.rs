@@ -3,7 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    if let Err(e) = aqua_client_ui::run() {
+    if let Err(e) = aqua_client_ui_lib::run() {
         eprintln!("aquamarine: {e:?}");
         std::process::exit(1);
     }

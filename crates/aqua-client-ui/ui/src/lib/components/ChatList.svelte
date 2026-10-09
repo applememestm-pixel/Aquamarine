@@ -733,4 +733,5 @@
     50%      { opacity: 0.5; transform: scale(0.85); }
   }
   .verified-badge :global(svg) { width: 13px; height: 13px; color: var(--accent); filter: drop-shadow(0 0 4px var(--accent-glow)); }
+  @media (max-width: 720px) { .search-kbd { display: none; } }
 </style>

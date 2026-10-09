@@ -12,6 +12,14 @@ pub mod activity;
 use anyhow::Result;
 use tauri::Manager;
 
+/// Android / iOS entry point (desktop starts from `main.rs`).
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn mobile_main() {
+    if let Err(e) = run() {
+        eprintln!("aquamarine: {e:?}");
+    }
+}
+
 pub fn run() -> Result<()> {
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::default().build())

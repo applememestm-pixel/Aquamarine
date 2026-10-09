@@ -826,6 +826,20 @@ fn clear_account_file(dir: &std::path::Path) {
 // delete the file to close the window where it was readable in two
 // places.
 
+// Phones have no `keyring` backend we can rely on; the app sandbox is
+// private to us, so the vault key lives in the `master.key` file there.
+#[cfg(any(target_os = "android", target_os = "ios", aqua_mobilecheck))]
+mod keyring {
+    #[derive(Debug)]
+    pub enum Error { NoEntry, Unsupported }
+    pub struct Entry;
+    impl Entry {
+        pub fn new(_service: &str, _user: &str) -> Result<Entry, Error> { Err(Error::Unsupported) }
+        pub fn get_password(&self) -> Result<String, Error> { Err(Error::NoEntry) }
+        pub fn set_password(&self, _v: &str) -> Result<(), Error> { Err(Error::Unsupported) }
+    }
+}
+
 const KEYRING_SERVICE: &str = "app.aquamarine.desktop";
 const KEYRING_USER:    &str = "vault-master-key";
 

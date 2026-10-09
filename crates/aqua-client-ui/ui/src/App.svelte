@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { bootstrap, activeTab, info, activeId } from "./lib/stores";
+  import { bootstrap, activeTab, info, activeId, backToList } from "./lib/stores";
   import { openRegistration, closeRegistration, registrationDismissed } from "./lib/components/RegistrationWizard.svelte";
   import { initTheme } from "./lib/theme";
   import NavRail from "./lib/components/NavRail.svelte";
@@ -156,6 +156,11 @@
         if (mm !== el && !mm.paused) { try { mm.pause(); } catch { /* ignore */ } }
       });
     };
+    // Phone Back button / back gesture: leave the open chat for the list.
+    const onPop = () => {
+      if (document.body.classList.contains("chat-open")) backToList(true);
+    };
+    window.addEventListener("popstate", onPop);
     document.addEventListener("keydown", onKey);
     document.addEventListener("contextmenu", onCtx);
     document.addEventListener("auxclick", onAux);
@@ -165,6 +170,7 @@
     window.addEventListener("dragover", onDragOver);
     return () => {
       stopShortcuts();
+      window.removeEventListener("popstate", onPop);
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("contextmenu", onCtx);
       document.removeEventListener("auxclick", onAux);

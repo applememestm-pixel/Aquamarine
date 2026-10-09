@@ -224,13 +224,25 @@ export async function selectChat(id: string) {
   chats.update((cs) => cs.map((c) => (c.id === id ? { ...c, unread: 0 } : c)));
   // On a phone-width layout this switches the single column from the chat
   // list to the open conversation (see the <=720px rules in app.css).
-  try { document.body.classList.add("chat-open"); } catch { /* ignore */ }
+  try {
+    const wasOpen = document.body.classList.contains("chat-open");
+    document.body.classList.add("chat-open");
+    // Give the phone's system Back button something to pop: one history
+    // entry per "list → chat" step (see the popstate hook in App.svelte).
+    if (!wasOpen && window.matchMedia("(max-width: 720px)").matches) {
+      history.pushState({ aquaChat: true }, "");
+    }
+  } catch { /* ignore */ }
   await loadActiveMessages();
 }
 
-/** Mobile: go back from an open chat to the chat list. */
-export function backToList() {
-  try { document.body.classList.remove("chat-open"); } catch { /* ignore */ }
+/** Mobile: go back from an open chat to the chat list. `fromHistory` is
+ *  set when the system Back button already popped our history entry. */
+export function backToList(fromHistory = false) {
+  try {
+    document.body.classList.remove("chat-open");
+    if (!fromHistory && history.state?.aquaChat) history.back();
+  } catch { /* ignore */ }
 }
 
 export async function loadActiveMessages() {

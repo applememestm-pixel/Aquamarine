@@ -179,8 +179,8 @@
       justify-content: space-around;
       position: fixed;
       left: 0; right: 0; bottom: 0;
-      height: 60px;
-      padding: 0 4px;
+      height: calc(60px + env(safe-area-inset-bottom, 0px));
+      padding: 0 4px env(safe-area-inset-bottom, 0px);
       border-right: none;
       border-top: 1px solid var(--border-strong);
       gap: 0;

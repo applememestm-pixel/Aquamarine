@@ -105,6 +105,174 @@ jobs:
         with:
           files: dist/*
 
+  # ---------------------------------------------------------------- android
+  android:
+    name: mobile (android)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Android NDK
+        run: echo "NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/aqua-client-ui -> target
+          shared-key: tauri-android
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crates/aqua-client-ui/ui/package-lock.json
+
+      - name: Frontend deps
+        working-directory: crates/aqua-client-ui/ui
+        run: npm ci
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version '^2' --locked
+
+      - name: Generate Android project
+        working-directory: crates/aqua-client-ui
+        run: |
+          cargo tauri android init --ci
+          # Calls need mic + camera; notifications; legacy Downloads write.
+          m=gen/android/app/src/main/AndroidManifest.xml
+          perms='<uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <application'
+          sed -i "0,/<application/s##${perms}#" "$m"
+          grep -n 'permission' "$m"
+
+      - name: Build APK
+        working-directory: crates/aqua-client-ui
+        run: cargo tauri android build --apk --target aarch64 --target armv7 --ci
+
+      - name: Sign APK
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -e
+          apk=$(find crates/aqua-client-ui/gen/android -name '*universal*release*.apk' | head -1)
+          [ -n "$apk" ] || apk=$(find crates/aqua-client-ui/gen/android -name '*release*.apk' | head -1)
+          echo "unsigned: $apk"
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > ks.jks
+          else
+            # No signing secrets yet: throwaway key. Works, but each build has
+            # a different key, so updates need uninstall → install.
+            echo "::warning::ANDROID_KEYSTORE_B64 not set — signing with a throwaway key"
+            KS_PASS=aquamarine; KS_ALIAS=aquamarine
+            keytool -genkeypair -keystore ks.jks -storepass "$KS_PASS" -keypass "$KS_PASS" \
+              -alias "$KS_ALIAS" -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Aquamarine, O=Aquamarine, C=RU"
+          fi
+          bt=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          "$bt/zipalign" -f -p 4 "$apk" aligned.apk
+          mkdir -p dist
+          "$bt/apksigner" sign --ks ks.jks --ks-pass "pass:$KS_PASS" --key-pass "pass:${KS_PASS}" \
+            --ks-key-alias "$KS_ALIAS" --out dist/Aquamarine.apk aligned.apk
+          "$bt/apksigner" verify dist/Aquamarine.apk
+          rm -f ks.jks
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aquamarine-android
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+
+  # ---------------------------------------------------------------- ios
+  # Unsigned .ipa for sideloading (AltStore / SideStore / Sideloadly re-sign it
+  # with your Apple ID). App Store / TestFlight needs a paid Apple developer
+  # account and signing secrets — not set up yet, so this job is best-effort.
+  ios:
+    name: mobile (ios, unsigned)
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/aqua-client-ui -> target
+          shared-key: tauri-ios
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crates/aqua-client-ui/ui/package-lock.json
+
+      - name: Frontend deps
+        working-directory: crates/aqua-client-ui/ui
+        run: npm ci
+
+      - name: Tools
+        run: |
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          cargo install tauri-cli --version '^2' --locked
+
+      - name: Generate Xcode project
+        working-directory: crates/aqua-client-ui
+        env:
+          APPLE_DEVELOPMENT_TEAM: "0000000000"
+        run: cargo tauri ios init --ci
+
+      - name: Build (no code signing)
+        working-directory: crates/aqua-client-ui
+        env:
+          APPLE_DEVELOPMENT_TEAM: "0000000000"
+        run: |
+          printf 'CODE_SIGNING_ALLOWED = NO\nCODE_SIGNING_REQUIRED = NO\nCODE_SIGN_IDENTITY =\nDEVELOPMENT_TEAM =\n' > "$RUNNER_TEMP/nosign.xcconfig"
+          export XCODE_XCCONFIG_FILE="$RUNNER_TEMP/nosign.xcconfig"
+          # The archive step succeeds unsigned; only the final export needs a
+          # certificate, so its failure is expected here.
+          cargo tauri ios build --target aarch64 --ci || echo "export step failed (expected without signing)"
+
+      - name: Package .ipa
+        run: |
+          set -e
+          app=$(find crates/aqua-client-ui/gen/apple -path '*.xcarchive/Products/Applications/*.app' -maxdepth 8 -type d | head -1)
+          [ -n "$app" ] || app=$(find crates/aqua-client-ui/gen/apple crates/aqua-client-ui/target -name '*.app' -type d -path '*iphoneos*' | head -1)
+          [ -n "$app" ] || { echo "no .app produced"; exit 1; }
+          echo "app: $app"
+          mkdir -p dist/Payload && cp -R "$app" dist/Payload/
+          (cd dist && zip -qry Aquamarine-iOS-unsigned.ipa Payload && rm -rf Payload)
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aquamarine-ios
+          path: dist/*.ipa
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.ipa
+
   # ---------------------------------------------------------------- server
   server:
     name: server (${{ matrix.name }})

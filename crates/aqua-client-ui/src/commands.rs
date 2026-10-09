@@ -1240,9 +1240,7 @@ pub fn read_media_bytes(
         let s = state.lock().map_err(|e| e.to_string())?;
         s.data_dir.clone()
     };
-    let downloads = dirs::download_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("Aquamarine");
+    let downloads = downloads_dir(&data_dir);
     let candidate = PathBuf::from(&path);
     // Preferred: files inside our own dirs (stickers/gifs/voice/circles/
     // images/saved-media/downloads cache). Those are always allowed.
@@ -1271,6 +1269,31 @@ pub fn read_media_bytes(
         return Err("file too large to inline".into());
     }
     std::fs::read(&candidate).map_err(|e| format!("read: {e}"))
+}
+
+/// Where saved files go: `Downloads/Aquamarine` on desktop, the shared
+/// `Download/Aquamarine` folder on Android (falls back to the app's own
+/// storage if that isn't writable), the app's Documents on iOS.
+pub(crate) fn downloads_dir(data_dir: &std::path::Path) -> PathBuf {
+    #[cfg(target_os = "android")]
+    {
+        let shared = PathBuf::from("/storage/emulated/0/Download/Aquamarine");
+        if std::fs::create_dir_all(&shared).is_ok() {
+            return shared;
+        }
+        return data_dir.join("downloads");
+    }
+    #[cfg(target_os = "ios")]
+    {
+        return data_dir.join("Downloads");
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let _ = data_dir;
+        dirs::download_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("Aquamarine")
+    }
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -1326,9 +1349,11 @@ pub async fn download_file(
         .map_err(|e| format!("decrypt_file: {e}"))?;
 
     // Save to Downloads/Aquamarine.
-    let base = dirs::download_dir()
-        .unwrap_or_else(|| std::env::temp_dir())
-        .join("Aquamarine");
+    let data_dir = {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        s.data_dir.clone()
+    };
+    let base = downloads_dir(&data_dir);
     std::fs::create_dir_all(&base).map_err(|e| format!("mkdir: {e}"))?;
     let save_path = pick_unique_path(&base, &envelope.filename);
     std::fs::write(&save_path, &plaintext).map_err(|e| format!("write: {e}"))?;

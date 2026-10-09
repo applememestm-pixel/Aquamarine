@@ -43,6 +43,8 @@ Grab the latest build from [**Releases**](https://github.com/applememestm-pixel/
 | macOS Intel | `Aquamarine-Intel.dmg` | — |
 | Linux x64 | `Aquamarine.AppImage` / `.deb` / `.rpm` | `aqua-server-linux-x64` |
 | Linux ARM64 (Raspberry Pi…) | — | `aqua-server-linux-arm64` |
+| Android 7+ (beta) | `Aquamarine.apk` | — |
+| iOS (beta, sideload) | `Aquamarine-iOS-unsigned.ipa` → install with AltStore / SideStore | — |
 
 Releases are built by [`release.yml`](.github/workflows/release.yml) on every `v*` tag.
 
@@ -101,7 +103,8 @@ docs/                 design notes, network plan
 ## Roadmap
 
 - [x] E2EE 1:1, groups, channels, calls, media, admin panel, multi-platform builds
-- [ ] Android / iOS
+- [x] Android / iOS builds (beta)
+- [ ] App Store / Play Store releases
 - [ ] Server federation: shared mode, replication, coordinator election ([plan](docs/NETWORK_PLAN.md))
 - [ ] Own mesh / DHT between relays
 

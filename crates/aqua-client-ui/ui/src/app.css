@@ -105,7 +105,15 @@ body::after {
      it's hidden while a chat is open to maximise the conversation. */
   body.chat-open .rail { display: none; }
   /* Keep the chat list clear of the fixed bottom bar. */
-  .list { padding-bottom: 64px; }
+  .list { padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px)); }
+  /* Phones draw edge-to-edge: keep content out from under the status bar,
+     the notch and the gesture bar. */
+  body {
+    box-sizing: border-box;
+    padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+             0 env(safe-area-inset-left, 0px);
+  }
+  body.chat-open .main-pane { padding-bottom: env(safe-area-inset-bottom, 0px); }
 }
 
 /* Scrollbars — thin, themed, rounded, hover-reveal. */
