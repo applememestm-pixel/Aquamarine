@@ -1,24 +1,23 @@
 @echo off
-rem Finds Android SDK / NDK / Java (Android Studio defaults) for the other scripts.
-if not defined ANDROID_HOME if exist "%LOCALAPPDATA%\Android\Sdk" set "ANDROID_HOME=%LOCALAPPDATA%\Android\Sdk"
-if not defined ANDROID_HOME (
-  echo [!] Android SDK not found. Install Android Studio and finish its first-run setup.
-  exit /b 1
+rem Finds Android SDK / NDK / Java wherever they are (any drive, Android
+rem Studio's own SDK setting). Pass "install" to install a missing NDK.
+set "_AQ_ERR="
+set "_AQ_FLAG="
+if /i "%~1"=="install" set "_AQ_FLAG=-InstallNdk"
+for /f "usebackq tokens=1,* delims==" %%a in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0find-android.ps1" %_AQ_FLAG%`) do (
+  if /i "%%a"=="ERROR" (set "_AQ_ERR=%%b") else (set "%%a=%%b")
 )
-if not defined NDK_HOME for /f "delims=" %%d in ('dir /b /ad /o:n "%ANDROID_HOME%\ndk" 2^>nul') do set "NDK_HOME=%ANDROID_HOME%\ndk\%%d"
-if not defined NDK_HOME (
-  echo [!] Android NDK not found.
-  echo     Android Studio - Settings - Languages and Frameworks - Android SDK - SDK Tools
-  echo     - tick "NDK Side by side" - Apply. Then run this again.
-  exit /b 1
-)
-if not defined JAVA_HOME if exist "%ProgramFiles%\Android\Android Studio\jbr\bin\java.exe" set "JAVA_HOME=%ProgramFiles%\Android\Android Studio\jbr"
-if not defined JAVA_HOME (
-  echo [!] Java not found. Install Android Studio into the default folder or set JAVA_HOME.
-  exit /b 1
-)
+if defined _AQ_ERR goto :err
+if not defined ANDROID_HOME goto :nosdk
+set "ANDROID_SDK_ROOT=%ANDROID_HOME%"
 set "PATH=%JAVA_HOME%\bin;%ANDROID_HOME%\platform-tools;%USERPROFILE%\.cargo\bin;%PATH%"
 echo [env] ANDROID_HOME = %ANDROID_HOME%
 echo [env] NDK_HOME     = %NDK_HOME%
 echo [env] JAVA_HOME    = %JAVA_HOME%
 exit /b 0
+
+:nosdk
+set "_AQ_ERR=Could not detect the Android SDK."
+:err
+echo [!] %_AQ_ERR%
+exit /b 1

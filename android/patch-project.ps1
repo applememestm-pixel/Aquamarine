@@ -38,4 +38,11 @@ Get-ChildItem -Path (Join-Path $proj 'buildSrc') -Recurse -Filter BuildTask.kt |
     Write-Host '[patch] BuildTask now uses cargo'
   }
 }
+# 4. Tell Gradle / Android Studio where the SDK is.
+if ($env:ANDROID_HOME) {
+  $lp = Join-Path $proj 'local.properties'
+  $sdkEsc = $env:ANDROID_HOME.Replace('\', '\\').Replace(':', '\:')
+  [IO.File]::WriteAllText($lp, "sdk.dir=$sdkEsc`n")
+  Write-Host "[patch] local.properties -> $($env:ANDROID_HOME)"
+}
 Write-Host '[patch] done'

@@ -3,7 +3,7 @@ rem One-time setup: Rust Android targets, Tauri CLI, frontend deps and the
 rem Android Studio project in crates\aqua-client-ui\gen\android.
 setlocal
 cd /d "%~dp0..\crates\aqua-client-ui" || goto :fail
-call "%~dp0env.bat" || goto :fail
+call "%~dp0env.bat" install || goto :fail
 
 where rustup >nul 2>nul || (echo [!] Rust not found - install from https://rustup.rs & goto :fail)
 where npm >nul 2>nul || (echo [!] Node.js not found - install from https://nodejs.org & goto :fail)

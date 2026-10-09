@@ -3,7 +3,7 @@ rem Builds an installable APK into android\out\Aquamarine-debug.apk
 rem (debug-signed: installs on any phone, no keystore needed).
 setlocal
 cd /d "%~dp0..\crates\aqua-client-ui" || goto :fail
-call "%~dp0env.bat" || goto :fail
+call "%~dp0env.bat" install || goto :fail
 if not exist "gen\android\app\build.gradle.kts" (
   call "%~dp01-setup.bat" || goto :fail
 )
