@@ -17,7 +17,10 @@
   import { showToast } from "./Toast.svelte";
   import { icons } from "../icons";
 
-  const DEFAULT_SERVER = "http://127.0.0.1:7777";
+  // On Android, 127.0.0.1 is the phone itself. The emulator reaches the PC's
+  // relay at 10.0.2.2; a real phone needs the PC's LAN IP or a public relay.
+  const IS_ANDROID = typeof navigator !== "undefined" && /android/i.test(navigator.userAgent);
+  const DEFAULT_SERVER = IS_ANDROID ? "http://10.0.2.2:7777" : "http://127.0.0.1:7777";
 
   // The self-hosted relay speaks plain HTTP by default. A loopback/LAN
   // address typed with https:// can never connect (TLS handshake fails), so
@@ -25,6 +28,7 @@
   // TLS server on a private IP.
   function normalizeServer(raw: string): string {
     let u = raw.trim().replace(/\/+$/, "");
+    if (IS_ANDROID) u = u.replace(/^(https?:\/\/)(127\.0\.0\.1|localhost)(?=[:/]|$)/i, "$110.0.2.2");
     const m = u.match(/^https:\/\/(.+)$/i);
     if (m) {
       const host = m[1].split(/[:/]/)[0];
