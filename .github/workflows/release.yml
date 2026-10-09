@@ -27,7 +27,7 @@ jobs:
           - os: macos-latest
             name: macos-arm64
             rust-target: aarch64-apple-darwin
-          - os: macos-13
+          - os: macos-15-intel
             name: macos-x64
             rust-target: x86_64-apple-darwin
           - os: ubuntu-22.04
