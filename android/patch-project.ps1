@@ -38,7 +38,25 @@ Get-ChildItem -Path (Join-Path $proj 'buildSrc') -Recurse -Filter BuildTask.kt |
     Write-Host '[patch] BuildTask now uses cargo'
   }
 }
-# 4. Tell Gradle / Android Studio where the SDK is.
+# 4. Android Studio default build variant: "universal" with only the ABIs that
+#    matter (phones = arm64, emulator = x86_64) instead of the alphabetical
+#    first one ("arm" = 32-bit only, which no modern phone/emulator wants).
+$gp = Join-Path $proj 'gradle.properties'
+$g = [IO.File]::ReadAllText($gp)
+if ($g -notmatch '(?m)^abiList=') {
+  $g = $g.TrimEnd() + "`n`n# Aquamarine: ABIs built when running from Android Studio`nabiList=arm64-v8a,x86_64`narchList=arm64,x86_64`ntargetList=aarch64,x86_64`n"
+  [IO.File]::WriteAllText($gp, $g)
+  Write-Host '[patch] Studio builds arm64 + x86_64'
+}
+$bg = Join-Path $app 'build.gradle.kts'
+$b = [IO.File]::ReadAllText($bg)
+if ($b -notmatch 'aquamarine-default-variant') {
+  $b = $b.TrimEnd() + "`n`n// aquamarine-default-variant`nandroid {`n    productFlavors {`n        getByName(`"universal`") { isDefault = true }`n    }`n}`n"
+  [IO.File]::WriteAllText($bg, $b)
+  Write-Host '[patch] default build variant: universalDebug'
+}
+
+# 5. Tell Gradle / Android Studio where the SDK is.
 if ($env:ANDROID_HOME) {
   $lp = Join-Path $proj 'local.properties'
   $sdkEsc = $env:ANDROID_HOME.Replace('\', '\\').Replace(':', '\:')
