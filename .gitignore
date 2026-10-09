@@ -45,3 +45,6 @@ site/downloads/*.rpm
 
 # Nested cargo targets (the Tauri crate has its own)
 **/target/
+
+# Per-PC NDK linker paths written by android/patch-project.ps1
+crates/aqua-client-ui/.cargo/
