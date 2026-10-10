@@ -1362,16 +1362,13 @@ pub fn read_media_bytes(
     std::fs::read(&candidate).map_err(|e| format!("read: {e}"))
 }
 
-/// Where saved files go: `Downloads/Aquamarine` on desktop, the shared
-/// `Download/Aquamarine` folder on Android (falls back to the app's own
-/// storage if that isn't writable), the app's Documents on iOS.
+/// Where received files go: `Downloads/Aquamarine` on desktop; on phones
+/// the app's own storage. (Android's shared Download folder is not reliably
+/// writable without MediaStore, and the webview's asset protocol can only
+/// show files inside the app dirs — media saved there never appeared.)
 pub(crate) fn downloads_dir(data_dir: &std::path::Path) -> PathBuf {
     #[cfg(target_os = "android")]
     {
-        let shared = PathBuf::from("/storage/emulated/0/Download/Aquamarine");
-        if std::fs::create_dir_all(&shared).is_ok() {
-            return shared;
-        }
         return data_dir.join("downloads");
     }
     #[cfg(target_os = "ios")]

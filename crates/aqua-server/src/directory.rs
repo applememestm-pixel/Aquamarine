@@ -70,6 +70,8 @@ pub struct Directory {
     dev_codes: bool,
     /// When Some, verification codes are sent via real SMTP.
     smtp: Option<SmtpConfig>,
+    /// Last few dev-mode codes (email, code, unix secs) for the admin panel.
+    recent: Mutex<std::collections::VecDeque<(String, String, u64)>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -224,7 +226,7 @@ impl Directory {
     pub fn open_memory() -> Self {
         let db = Connection::open_in_memory().expect("in-memory sqlite");
         Self::init_schema(&db).expect("init schema");
-        Self { db: Mutex::new(db), dev_codes: true, smtp: None }
+        Self { db: Mutex::new(db), dev_codes: true, smtp: None, recent: Mutex::new(Default::default()) }
     }
 
     fn init_schema(db: &Connection) -> rusqlite::Result<()> {
@@ -293,7 +295,7 @@ impl Directory {
         let forced = std::env::var("AQUA_DEV_CODES").ok().map(|v| v != "0");
         let dev_codes = forced.unwrap_or(smtp.is_none());
         tracing::info!(%path, dev_codes, smtp = smtp.is_some(), "user directory opened");
-        Ok(Self { db: Mutex::new(db), dev_codes, smtp })
+        Ok(Self { db: Mutex::new(db), dev_codes, smtp, recent: Mutex::new(Default::default()) })
     }
 
     // ---- email verification ----
@@ -355,6 +357,10 @@ impl Directory {
     fn send_email_code(&self, email: &str, code: &str) {
         let Some(cfg) = self.smtp.clone() else {
             tracing::warn!(%email, %code, "📧 EMAIL VERIFICATION CODE (dev mode — no real mail sent)");
+            if let Ok(mut r) = self.recent.lock() {
+                r.push_front((email.to_string(), code.to_string(), now_secs()));
+                r.truncate(20);
+            }
             return;
         };
         let email = email.to_string();
@@ -367,6 +373,16 @@ impl Directory {
                 tracing::info!(%email, "verification code emailed");
             }
         });
+    }
+
+    /// Recent dev-mode codes, newest first (admin panel).
+    pub fn recent_codes(&self) -> Vec<(String, String, u64)> {
+        self.recent.lock().map(|r| r.iter().cloned().collect()).unwrap_or_default()
+    }
+
+    /// True when codes are shown instead of mailed.
+    pub fn dev_codes(&self) -> bool {
+        self.dev_codes
     }
 
     // ---- registration ----

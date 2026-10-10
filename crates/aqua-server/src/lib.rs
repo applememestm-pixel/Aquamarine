@@ -856,6 +856,14 @@ fn admin_authed(state: &AppState, headers: &axum::http::HeaderMap) -> Result<(),
 
 #[derive(serde::Serialize)]
 struct AdminStats {
+    /// Address the relay listens on (AQUA_LISTEN).
+    listen: String,
+    /// This machine's LAN address, for phones on the same Wi-Fi.
+    lan_ip: Option<String>,
+    /// Codes are shown here instead of e-mailed.
+    dev_codes: bool,
+    /// Recent dev-mode verification codes, newest first.
+    codes: Vec<RecentCode>,
     users: usize,
     bots: usize,
     online: usize,
@@ -865,6 +873,22 @@ struct AdminStats {
     require_registration: bool,
     invite_only: bool,
     allow: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+struct RecentCode {
+    email: String,
+    code: String,
+    at: u64,
+}
+
+/// Primary LAN IPv4 of this machine (no packets are sent: connecting a UDP
+/// socket only asks the OS which interface would be used).
+pub fn lan_ip() -> Option<String> {
+    let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect("8.8.8.8:80").ok()?;
+    let ip = sock.local_addr().ok()?.ip();
+    if ip.is_loopback() || ip.is_unspecified() { None } else { Some(ip.to_string()) }
 }
 
 async fn admin_stats(
@@ -888,6 +912,15 @@ async fn admin_stats(
         .unwrap_or(0);
     let cfg = state.admin.read().map(|c| c.clone()).unwrap_or_default();
     Ok(Json(AdminStats {
+        listen: std::env::var("AQUA_LISTEN").unwrap_or_else(|_| "127.0.0.1:7777".into()),
+        lan_ip: lan_ip(),
+        dev_codes: state.directory.dev_codes(),
+        codes: state
+            .directory
+            .recent_codes()
+            .into_iter()
+            .map(|(email, code, at)| RecentCode { email, code, at })
+            .collect(),
         users: users as usize,
         bots: bots as usize,
         online,
