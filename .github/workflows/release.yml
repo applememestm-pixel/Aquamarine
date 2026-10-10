@@ -148,11 +148,13 @@ jobs:
           cargo tauri android init --ci
           # Calls need mic + camera; notifications; legacy Downloads write.
           m=gen/android/app/src/main/AndroidManifest.xml
-          perms='<uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <application'
+          perms='<uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />\n    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <application'
           sed -i "0,/<application/s##${perms}#" "$m"
           grep -n 'permission' "$m"
           # Launcher icon
           cp -r icons/android/* gen/android/app/src/main/res/
+          # MainActivity asking for Android 17 local-network access
+          cp ../../android/MainActivity.kt "$(find gen/android/app/src/main/java -name MainActivity.kt | head -1)"
 
       - name: Build APK
         working-directory: crates/aqua-client-ui

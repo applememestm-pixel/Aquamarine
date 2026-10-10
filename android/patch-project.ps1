@@ -11,6 +11,7 @@ $m = Join-Path $app 'src\main\AndroidManifest.xml'
 $x = [IO.File]::ReadAllText($m)
 if ($x -notmatch 'RECORD_AUDIO') {
   $perms = @(
+    '<uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />',
     '<uses-permission android:name="android.permission.RECORD_AUDIO" />',
     '<uses-permission android:name="android.permission.CAMERA" />',
     '<uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />',
@@ -21,6 +22,20 @@ if ($x -notmatch 'RECORD_AUDIO') {
   $x = ([regex]'<application').Replace($x, "$perms`n    <application", 1)
   [IO.File]::WriteAllText($m, $x)
   Write-Host '[patch] permissions added to AndroidManifest.xml'
+}
+
+# 1b. Android 17 local-network permission for projects patched before it existed.
+$x = [IO.File]::ReadAllText($m)
+if ($x -notmatch 'ACCESS_LOCAL_NETWORK') {
+  $x = ([regex]'<uses-permission android:name="android.permission.RECORD_AUDIO" />').Replace($x, "<uses-permission android:name=`"android.permission.ACCESS_LOCAL_NETWORK`" />`n    <uses-permission android:name=`"android.permission.RECORD_AUDIO`" />", 1)
+  [IO.File]::WriteAllText($m, $x)
+  Write-Host '[patch] ACCESS_LOCAL_NETWORK added'
+}
+# 1c. MainActivity that asks for local-network access on Android 17+.
+$ma = Get-ChildItem -Path (Join-Path $app 'src\main\java') -Recurse -Filter MainActivity.kt | Select-Object -First 1
+if ($ma) {
+  Copy-Item (Join-Path $PSScriptRoot 'MainActivity.kt') $ma.FullName -Force
+  Write-Host '[patch] MainActivity requests local network access'
 }
 
 # 2. App icon.
