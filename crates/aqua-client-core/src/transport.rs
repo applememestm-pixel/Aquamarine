@@ -59,15 +59,35 @@ fn http_client() -> Result<reqwest::Client, TransportError> {
         .user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION")));
     if let Some(p) = proxy() {
         b = b.proxy(reqwest::Proxy::all(&p).map_err(TransportError::Http)?);
+    } else {
+        // Direct unless the user set a proxy in Settings: never pick one up
+        // from the environment (VPN clients like to set HTTP(S)_PROXY).
+        b = b.no_proxy();
     }
     Ok(b.build()?)
+}
+
+/// "error sending request" alone says nothing; append the causes
+/// (connection refused / timed out / permission denied …).
+fn error_chain(e: &reqwest::Error) -> String {
+    let mut out = e.to_string();
+    let mut src = std::error::Error::source(e);
+    while let Some(s) = src {
+        let msg = s.to_string();
+        if !out.contains(&msg) {
+            out.push_str(": ");
+            out.push_str(&msg);
+        }
+        src = s.source();
+    }
+    out
 }
 
 // ---------- Errors --------------------------------------------------------
 
 #[derive(Debug, Error)]
 pub enum TransportError {
-    #[error("HTTP: {0}")]
+    #[error("HTTP: {}", error_chain(.0))]
     Http(#[from] reqwest::Error),
     #[error("WebSocket: {0}")]
     Ws(#[from] tokio_tungstenite::tungstenite::Error),
