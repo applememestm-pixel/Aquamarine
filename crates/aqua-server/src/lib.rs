@@ -433,7 +433,7 @@ async fn deliver(state: &AppState, msg: RelayMessage) {
 /// Sanity cap on blob size accepted by the server. Larger blobs should
 /// be broken into chunks by the client. Matches
 /// `aqua_core::file_transfer::MAX_FILE_SIZE` plus AEAD tag headroom.
-const BLOB_LIMIT: usize = 64 * 1024 * 1024;
+const BLOB_LIMIT: usize = 210 * 1024 * 1024;
 
 async fn upload_blob(
     State(state): State<AppState>,

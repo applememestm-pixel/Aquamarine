@@ -32,7 +32,7 @@ use crate::crypto::{aead_decrypt, aead_encrypt, AEAD_KEY_LEN, AEAD_NONCE_LEN};
 
 /// Client-side sanity cap. Files larger than this are refused; a real
 /// deployment would swap the single-blob path for chunked upload.
-pub const MAX_FILE_SIZE: u64 = 50 * 1024 * 1024; // 50 MiB
+pub const MAX_FILE_SIZE: u64 = 200 * 1024 * 1024; // 200 MiB (phone videos)
 
 /// Magic prefix carried by every file-offer message. Lets the receiver
 /// distinguish a regular text message from a serialized envelope

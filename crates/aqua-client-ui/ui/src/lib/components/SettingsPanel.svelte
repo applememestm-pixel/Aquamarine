@@ -73,6 +73,15 @@
   //      system Back button steps back out (section -> list -> closed).
   const isPhone = () => typeof window !== "undefined" && window.matchMedia("(max-width: 720px)").matches;
   let detail = $state(false);
+  // Phones have no keyboard shortcuts — hide that row there.
+  let phone = $state(isPhone());
+  onMount(() => {
+    const mq = window.matchMedia("(max-width: 720px)");
+    const on = () => { phone = mq.matches; };
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  });
+  const TOUCH = typeof navigator !== "undefined" && /android|iphone|ipad/i.test(navigator.userAgent);
   function enterDetail() {
     if (!isPhone() || detail) return;
     detail = true;
@@ -338,7 +347,7 @@
           </button>
           {#each GROUPS as g, gi}
             <div class="nav-group">
-              {#each g as it}
+              {#each g.filter((x) => !(x.id === "shortcuts" && (phone || TOUCH))) as it}
                 <button class="nav-item" class:active={section === it.id} onclick={() => openItem(it)}>
                   <span class="tile" style:background={it.color}>{@html it.icon}</span>
                   <span class="nav-lbl">{$t(it.label)}</span>
@@ -933,7 +942,7 @@
     .phone-only { display: flex; }
     .sheet:not(.detail) .content { display: none; }
     .sheet.detail .nav { display: none; }
-    .foot { display: none; }
+    .sheet .foot { display: none; }
     .head { padding: 10px 12px; gap: 6px; }
     .head h2 { font-size: 17px; }
     .head .close { display: none; }

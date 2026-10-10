@@ -530,9 +530,21 @@ async fn upload_profile_image(
 #[tauri::command]
 pub async fn set_profile_image(
     state: State<'_, StdMutex<AppState>>,
+    app: AppHandle,
     kind: String,
     path: String,
 ) -> Result<ProfileImageResult, String> {
+    if is_uri_pick(&path) {
+        let bytes = read_picked_bytes(&app, &path)?;
+        if bytes.len() > 8 * 1024 * 1024 {
+            return Err("image too large (max 8 MB)".into());
+        }
+        let mime = infer::get(&bytes)
+            .map(|k| k.mime_type())
+            .filter(|m| matches!(*m, "image/png" | "image/jpeg" | "image/webp" | "image/gif"))
+            .ok_or("pick a PNG, JPG, WEBP or GIF image")?;
+        return upload_profile_image(state, kind, mime.to_string(), bytes).await;
+    }
     let mime = image_mime_for(&path).ok_or("pick a PNG, JPG, WEBP or GIF image")?;
     let md = std::fs::metadata(&path).map_err(|e| format!("stat: {e}"))?;
     if md.len() > 8 * 1024 * 1024 {
@@ -1011,6 +1023,61 @@ pub async fn send_gif(
     attach_file_impl(state, app, peer_id, file_path, Some("gif".into()), None).await
 }
 
+// ---------- Picked files on phones -----------------------------------------
+//
+// On Android the file picker hands back `content://…` URIs, not paths, so
+// std::fs can't open them. Read those through the fs plugin (which resolves
+// them with Android's ContentResolver) and, where the rest of the pipeline
+// wants a real file, copy the bytes into <data_dir>/picked/ under a name
+// whose extension matches the sniffed content type.
+
+fn is_uri_pick(path: &str) -> bool {
+    path.starts_with("content://") || path.starts_with("file://")
+}
+
+/// Bytes of a user-picked file: plain paths via std::fs, URIs via the fs plugin.
+pub(crate) fn read_picked_bytes(app: &AppHandle, path: &str) -> Result<Vec<u8>, String> {
+    if !is_uri_pick(path) {
+        return std::fs::read(path).map_err(|e| format!("read {path}: {e}"));
+    }
+    use tauri_plugin_fs::FsExt;
+    let url = tauri::Url::parse(path).map_err(|e| format!("bad file URI: {e}"))?;
+    if url.scheme() == "file" {
+        if let Ok(p) = url.to_file_path() {
+            return std::fs::read(&p).map_err(|e| format!("read {}: {e}", p.display()));
+        }
+    }
+    app.fs()
+        .read(tauri_plugin_fs::FilePath::Url(url))
+        .map_err(|e| format!("read picked file: {e}"))
+}
+
+/// A real local path for a picked file (copies URI picks into the app dir).
+fn materialize_picked(app: &AppHandle, data_dir: &std::path::Path, path: &str) -> Result<String, String> {
+    if !is_uri_pick(path) {
+        return Ok(path.to_string());
+    }
+    let bytes = read_picked_bytes(app, path)?;
+    let kind = infer::get(&bytes);
+    let ext = kind.map(|k| k.extension()).unwrap_or("bin");
+    let stem = match kind.map(|k| k.matcher_type()) {
+        Some(infer::MatcherType::Video) => "video",
+        Some(infer::MatcherType::Image) => "photo",
+        Some(infer::MatcherType::Audio) => "audio",
+        _ => "file",
+    };
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let dir = data_dir.join("picked");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
+    let dest = pick_unique_path(&dir, &format!("{stem}-{secs}.{ext}"));
+    std::fs::write(&dest, &bytes).map_err(|e| format!("write: {e}"))?;
+    Ok(dest.display().to_string())
+}
+
+
 /// Shared implementation for attach_file / send_sticker / send_gif.
 /// `category` becomes the inline-render hint on both ends.
 async fn attach_file_impl(
@@ -1021,8 +1088,22 @@ async fn attach_file_impl(
     category: Option<String>,
     mime_override: Option<String>,
 ) -> Result<AttachResult, String> {
-    // 1. Read the file from disk.
+    // 1. Read the file from disk (phone picks arrive as content:// URIs).
+    let file_path = if is_uri_pick(&file_path) {
+        let data_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.clone() };
+        materialize_picked(&app, &data_dir, &file_path)?
+    } else {
+        file_path
+    };
     let path = PathBuf::from(&file_path);
+    let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    if size > aqua_core::MAX_FILE_SIZE {
+        return Err(format!(
+            "file is too large: {} MB (limit {} MB)",
+            size / (1024 * 1024),
+            aqua_core::MAX_FILE_SIZE / (1024 * 1024)
+        ));
+    }
     let bytes = std::fs::read(&path).map_err(|e| format!("read {file_path}: {e}"))?;
     let filename = path.file_name()
         .and_then(|s| s.to_str())
@@ -1192,7 +1273,17 @@ pub fn copy_file_to(source: String, dest: String) -> Result<(), String> {
 /// hostile frontend can't exfiltrate arbitrary files via this
 /// command.
 #[tauri::command]
-pub fn read_user_image(path: String) -> Result<Vec<u8>, String> {
+pub fn read_user_image(app: AppHandle, path: String) -> Result<Vec<u8>, String> {
+    if is_uri_pick(&path) {
+        let bytes = read_picked_bytes(&app, &path)?;
+        if bytes.len() > 8 * 1024 * 1024 {
+            return Err("image too large (max 8 MB)".into());
+        }
+        if !infer::is_image(&bytes) {
+            return Err("not an image file".into());
+        }
+        return Ok(bytes);
+    }
     let p = PathBuf::from(&path);
     let ext = p.extension()
         .and_then(|s| s.to_str())

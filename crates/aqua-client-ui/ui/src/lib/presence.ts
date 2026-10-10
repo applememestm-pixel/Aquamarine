@@ -6,7 +6,7 @@
  * public card (avatar / banner / bio) from the server.
  */
 
-import { writable, get } from "svelte/store";
+import { writable, readable, get } from "svelte/store";
 import { profile } from "./profile";
 import { chats } from "./stores";
 import { api, events } from "./tauri";
@@ -29,13 +29,45 @@ export interface Presence {
   nc?: boolean;
   nv?: boolean;
   ni?: boolean;
+  /** Local receive time (ms) — not sent; used to expire stale "online". */
+  at?: number;
 }
 
 /** peerId -> their last-known presence. */
 export const peerPresence = writable<Record<string, Presence>>({});
 
 export function setPeerPresence(peer: string, p: Presence) {
-  peerPresence.update((m) => ({ ...m, [peer]: p }));
+  peerPresence.update((m) => ({ ...m, [peer]: { ...p, at: Date.now() } }));
+}
+
+/** Peers re-announce presence every HEARTBEAT; silence for longer than
+ *  STALE means they closed the app / lost the connection. */
+const HEARTBEAT_MS = 90_000;
+const STALE_MS = 4 * 60_000;
+/** Ticks every 30 s so "online" dots expire without other UI activity. */
+export const presenceNow = readable(Date.now(), (set) => {
+  const t = setInterval(() => set(Date.now()), 30_000);
+  return () => clearInterval(t);
+});
+
+/** Effective status of a peer: "online" | "idle" | "dnd" | "offline". */
+export function peerStatus(p: Presence | undefined, now = Date.now()): string {
+  if (!p || !p.at || now - p.at > STALE_MS) return "offline";
+  return p.online && p.online !== "invisible" ? p.online : "offline";
+}
+
+/** Should this chat show the green "online" dot? Real people: only what
+ *  their (privacy-filtered) presence says — so ghost / invisible works.
+ *  Bots keep their static flag; Saved Messages never shows one. */
+export function chatOnline(
+  c: { id: string; online: boolean; live: boolean; has_lock: boolean },
+  map: Record<string, Presence>,
+  now = Date.now(),
+): boolean {
+  if (c.id === "__saved__") return false;
+  const person = c.live && c.has_lock && !c.id.startsWith("grp_");
+  if (!person) return c.online;
+  return peerStatus(map[c.id], now) !== "offline";
 }
 
 function persisted<T>(key: string, init: T) {
@@ -119,6 +151,18 @@ export function initPresence() {
   });
   let first = true;
   myOnline.subscribe(() => { if (first) { first = false; return; } broadcastPresence(); });
+  // Keep peers' "online" fresh (they expire it after STALE_MS of silence),
+  // and say goodbye when the window closes.
+  setInterval(() => broadcastPresence(), HEARTBEAT_MS);
+  window.addEventListener("beforeunload", () => broadcastOffline());
+}
+
+/** Best-effort "I'm gone" to every live chat (app closing). */
+export function broadcastOffline() {
+  const off = (peer: string) => "[status:v1]" + JSON.stringify({ ...myPresence(peer), online: "offline", activity: [], listening: null });
+  for (const c of get(chats)) {
+    if (c.live && !c.id.startsWith("grp_") && c.id !== "__saved__") void api.sendControl(c.id, off(c.id)).catch(() => {});
+  }
 }
 
 /** Human line for an activity: "Playing Dota 2", "Listening to Spotify". */

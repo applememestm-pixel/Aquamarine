@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { chatOnline, presenceNow } from "../presence";
   import { t, tr } from "../i18n";
   import { avatars, peerCards, clans } from "../people";
   import ClanTag from "./ClanTag.svelte";
@@ -298,7 +299,7 @@
         onclick={() => selectChat(c.id)}
         oncontextmenu={(e) => openCtx(e, c.id)}
       >
-        <div class="avatar sz-44" class:online={c.online} style="--gradient: {c.gradient}">
+        <div class="avatar sz-44" class:online={chatOnline(c, $peerPresence, $presenceNow)} style="--gradient: {c.gradient}">
           {c.letter}
           {#if $avatars[c.id]}<img class="ava-img" src={$avatars[c.id]} alt="" loading="lazy" />{/if}
         </div>

@@ -38,6 +38,7 @@ pub fn run() -> Result<()> {
             commands::spawn_activity_watcher(app.handle().clone());
             Ok(())
         })
+        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             commands::init_app,

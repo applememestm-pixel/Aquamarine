@@ -816,4 +816,8 @@ export const RU: Record<string, string> = {
   "Saved — applies on the next connect.": "Сохранено — применится при следующем подключении.",
   "Direct connection — proxy off.": "Прямое подключение — прокси выключен.",
   "Could not set proxy: {e}": "Не удалось задать прокси: {e}",
+  "away": "отошёл",
+  "do not disturb": "не беспокоить",
+  "Send failed": "Не отправилось",
+  "File sent": "Файл отправлен",
 };

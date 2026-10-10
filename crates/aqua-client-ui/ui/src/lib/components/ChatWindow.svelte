@@ -26,7 +26,7 @@
   import { backToList } from "../stores";
   import { events } from "../tauri";
   import { pollStates, castVote, retractVote, applyRemoteVote, closePoll, viewPoll, ME as POLL_ME, type PollView } from "../polls";
-  import { peerPresence, setPeerPresence, broadcastPresenceTo, activityVerb } from "../presence";
+  import { peerPresence, setPeerPresence, broadcastPresenceTo, activityVerb, chatOnline, peerStatus, presenceNow } from "../presence";
   import { notePeerProfileVersion, avatars, clans } from "../people";
   import ClanTag from "./ClanTag.svelte";
   import { keepOnScreen } from "../actions";
@@ -441,22 +441,24 @@
     }
     let ok = 0;
     let fail = 0;
+    let lastErr = "";
     for (const p of paths) {
       try {
         await api.attachFile(peerId, p);
         ok++;
       } catch (e) {
         console.error("attach failed for", p, e);
+        lastErr = String(e);
         fail++;
       }
     }
     await loadActiveMessages();
     if (fail === 0) {
-      showToast(ok === 1 ? "File sent" : `${ok} files sent`);
+      showToast(ok === 1 ? tr("File sent") : `${ok} files sent`);
     } else if (ok === 0) {
-      showToast(`Send failed (${fail})`);
+      showToast(`${tr("Send failed")}: ${lastErr}`, 6000);
     } else {
-      showToast(`${ok} sent · ${fail} failed`);
+      showToast(`${ok} sent · ${fail} failed — ${lastErr}`, 6000);
     }
   }
 
@@ -1427,7 +1429,7 @@
           {$activeChat.letter}
         </button>
       {:else}
-        <div class="avatar sz-40" class:online={$activeChat.online} style="--gradient: {$activeChat.gradient}">
+        <div class="avatar sz-40" class:online={chatOnline($activeChat, $peerPresence, $presenceNow)} style="--gradient: {$activeChat.gradient}">
           {$activeChat.letter}
           {#if $avatars[$activeChat.id]}<img class="ava-img" src={$avatars[$activeChat.id]} alt="" />{/if}
         </div>
@@ -1474,8 +1476,9 @@
             {@const a = $peerPresence[$activeChat.id].activity![0]}
             <span class="activity-ind" title={a.details ? `${a.details}${a.state ? " — " + a.state : ""}` : a.name}>{activityVerb(a)} <b>{a.name}</b>{#if a.details}: {a.details}{/if}</span>
             <span class="sep">·</span>
-          {:else if $activeChat.online}
-            <span><span class="dot"></span>{$t("online")}</span>
+          {:else if chatOnline($activeChat, $peerPresence, $presenceNow)}
+            {@const st = peerStatus($peerPresence[$activeChat.id], $presenceNow)}
+            <span><span class="dot"></span>{$t(st === "idle" ? "away" : st === "dnd" ? "do not disturb" : "online")}</span>
             <span class="sep">·</span>
           {/if}
           {#if $activeChat.live && !$activeChat.has_lock}
