@@ -254,7 +254,12 @@ jobs:
           # certificate, so its failure is expected here. Keep the log for
           # the packaging step's diagnostics.
           set +e
-          cargo tauri ios build --target aarch64 --ci > "$RUNNER_TEMP/ios.log" 2>&1
+          # Args after `--` go straight to xcodebuild and beat the project's
+          # automatic-signing settings ("No Accounts" / "No profiles").
+          cargo tauri ios build --target aarch64 --ci -- \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= \
+            CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= \
+            > "$RUNNER_TEMP/ios.log" 2>&1
           echo "tauri ios build exit code: $?"
           tail -120 "$RUNNER_TEMP/ios.log"
           exit 0
