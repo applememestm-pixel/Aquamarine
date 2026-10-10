@@ -88,6 +88,18 @@
   .ok{color:var(--accent)} .err{color:var(--danger)}
   .hide{display:none!important}
   .gate{max-width:400px;margin:14vh auto 0}
+  .fields{display:grid;grid-template-columns:1fr 92px;gap:10px}
+  .fields .full{grid-column:1 / -1}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .chip{border:1px solid var(--border-strong);background:var(--bg-input);color:var(--fg-muted);border-radius:100px;
+    padding:6px 12px;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer}
+  .chip:hover{color:var(--accent);border-color:var(--accent)}
+  .mstate{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:11px;background:var(--bg-surface);border:1px solid var(--border);margin-bottom:12px;font-size:13px}
+  .mstate .d{width:9px;height:9px;border-radius:50%;background:var(--fg-dim);flex-shrink:0}
+  .mstate.on .d{background:var(--accent);box-shadow:0 0 10px var(--accent)}
+  .mstate b{color:var(--fg)}
+  input:disabled{opacity:.55}
+  a{color:var(--accent)}
   .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);opacity:0;transition:.2s;
     background:var(--bg-surface);border:1px solid var(--border-strong);padding:9px 14px;border-radius:10px;font-size:13px;font-weight:600}
   .toast.on{opacity:1;transform:translateX(-50%)}
@@ -147,6 +159,35 @@
         <div class="card">
           <h2>Email codes <span class="hint" id="codesHint"></span></h2>
           <div class="codes" id="codes"></div>
+        </div>
+
+        <div class="card">
+          <h2>Email delivery</h2>
+          <div class="mstate" id="mState"><span class="d"></span><span id="mStateText">…</span></div>
+          <div class="chips" id="mPresets">
+            <button class="chip" onclick="preset('smtp.gmail.com',587)">Gmail</button>
+            <button class="chip" onclick="preset('smtp.yandex.ru',465)">Яндекс</button>
+            <button class="chip" onclick="preset('smtp.mail.ru',465)">Mail.ru</button>
+          </div>
+          <div class="fields">
+            <div><label>SMTP server</label><input id="mHost" placeholder="smtp.gmail.com" /></div>
+            <div><label>Port</label><input id="mPort" type="number" placeholder="587" /></div>
+            <div class="full"><label>Login (your mailbox)</label><input id="mUser" type="email" placeholder="you@gmail.com" autocomplete="off" /></div>
+            <div class="full"><label>App password</label><input id="mPass" type="password" autocomplete="new-password" placeholder="" /></div>
+            <div class="full"><label>Send as (optional)</label><input id="mFrom" placeholder="same as login" /></div>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <button class="btn" onclick="saveMail(true)">Save &amp; send real codes</button>
+            <button class="btn ghost" id="mOff" onclick="saveMail(false)">Back to dev mode</button>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <input id="mTo" type="email" placeholder="send a test to…" style="flex:1;min-width:180px" />
+            <button class="btn ghost" onclick="testMail()">Send test</button>
+          </div>
+          <div class="note" id="mMsg"></div>
+          <div class="note">Gmail: turn on 2-Step Verification, then create an <b>app password</b> at
+            <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">myaccount.google.com/apppasswords</a>
+            and paste it above (not your normal password). The settings are saved in <b>aqua-smtp.json</b> next to the server.</div>
         </div>
       </div>
     </div>
@@ -241,9 +282,57 @@
     catch(e){ $("cfgMsg").className="note err"; $("cfgMsg").textContent="Failed: "+e.message; }
   }
 
+  // ---- e-mail delivery ----
+  let mailLoaded = false;
+  function preset(host, port){ $("mHost").value = host; $("mPort").value = port; }
+  function mailMsg(t, cls){ $("mMsg").className = "note " + (cls||""); $("mMsg").textContent = t; }
+  function showMail(m){
+    const on = !!m.host && !m.dev_codes;
+    $("mState").className = "mstate" + (on ? " on" : "");
+    $("mStateText").innerHTML = m.source === "none"
+      ? "<b>Dev mode</b> — codes appear in the list above, no mail is sent"
+      : (m.dev_codes ? `Mail is set up (<b>${esc(m.host)}</b>) but dev mode is forced by AQUA_DEV_CODES=1`
+                     : `Sending real codes from <b>${esc(m.from || m.user)}</b> via ${esc(m.host)}`);
+    const env = m.source === "env";
+    for (const id of ["mHost","mPort","mUser","mPass","mFrom"]) $(id).disabled = env;
+    $("mOff").disabled = env || m.source === "none";
+    if (env) mailMsg("Set by AQUA_SMTP_* environment variables — change them there.");
+    if (!mailLoaded || env) {
+      $("mHost").value = m.host || ""; $("mPort").value = m.host ? m.port : "";
+      $("mUser").value = m.user || ""; $("mFrom").value = m.from && m.from !== m.user ? m.from : "";
+      $("mPass").placeholder = m.has_password ? "•••••••• saved — leave empty to keep" : "16-letter app password";
+      if (!$("mTo").value && m.user) $("mTo").value = m.user;
+      mailLoaded = true;
+    }
+  }
+  async function loadMail(){ try { showMail(await api("/v1/admin/smtp")); } catch {} }
+  async function saveMail(enabled){
+    const body = { enabled, host: $("mHost").value.trim(), port: +$("mPort").value || 0,
+                   user: $("mUser").value.trim(), from: $("mFrom").value.trim(), pass: $("mPass").value };
+    try {
+      const r = await fetch("/v1/admin/smtp", { method: "POST", body: JSON.stringify(body),
+        headers: { "Authorization": "Bearer " + TOKEN, "Content-Type": "application/json" } });
+      if (!r.ok) throw new Error(await r.text() || ("HTTP " + r.status));
+      $("mPass").value = ""; mailLoaded = false; showMail(await r.json());
+      mailMsg(enabled ? "Saved. New sign-ups now get real e-mails — send a test to check." : "Back to dev mode.", "ok");
+      refresh();
+    } catch(e){ mailMsg("Not saved: " + e.message, "err"); }
+  }
+  async function testMail(){
+    const to = $("mTo").value.trim();
+    if (!to) { mailMsg("Type an address to send the test to.", "err"); return; }
+    mailMsg("Sending…");
+    try {
+      const r = await fetch("/v1/admin/smtp/test", { method: "POST", body: JSON.stringify({ to }),
+        headers: { "Authorization": "Bearer " + TOKEN, "Content-Type": "application/json" } });
+      if (!r.ok) throw new Error(await r.text() || ("HTTP " + r.status));
+      mailMsg("Sent to " + to + " — check the inbox (and spam).", "ok");
+    } catch(e){ mailMsg("Failed: " + e.message, "err"); }
+  }
+
   async function tick(){
     if (!TOKEN) { $("gate").classList.remove("hide"); pill("", "locked"); return; }
-    try { await refresh(); }
+    try { await refresh(); if (!mailLoaded) loadMail(); }
     catch(e){
       if (e.message === "bad token") { $("dash").classList.add("hide"); $("gate").classList.remove("hide"); pill("", "locked"); }
       else pill("down", "server not reachable");

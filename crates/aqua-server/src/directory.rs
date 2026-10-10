@@ -41,9 +41,10 @@ const CODE_TTL_SECS: u64 = 10 * 60;
 /// A verification ticket is valid for this long.
 const TICKET_TTL_SECS: u64 = 30 * 60;
 
-/// SMTP delivery config, read from env. All four must be set to enable
-/// real e-mail; otherwise the server stays in dev-code mode.
-#[derive(Clone)]
+/// SMTP delivery config. Comes from the AQUA_SMTP_* env vars, or from
+/// `aqua-smtp.json` (written by the admin panel). Without it the server stays
+/// in dev-code mode (codes shown in the console / admin panel).
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct SmtpConfig {
     pub host: String,
     pub user: String,
@@ -51,6 +52,9 @@ pub struct SmtpConfig {
     pub from: String,
     pub port: u16,
 }
+
+/// Where the admin panel keeps the SMTP settings (next to aqua-admin.json).
+pub const SMTP_FILE: &str = "aqua-smtp.json";
 
 impl SmtpConfig {
     fn from_env() -> Option<Self> {
@@ -62,14 +66,27 @@ impl SmtpConfig {
             .and_then(|p| p.parse().ok()).unwrap_or(587);
         Some(Self { host, user, pass, from, port })
     }
+
+    fn from_file() -> Option<Self> {
+        let raw = std::fs::read_to_string(SMTP_FILE).ok()?;
+        serde_json::from_str(&raw).ok()
+    }
+
+    /// `From:` header: show "Aquamarine" as the sender name.
+    fn from_header(&self) -> String {
+        if self.from.contains('<') { self.from.clone() } else { format!("Aquamarine <{}>", self.from) }
+    }
 }
 
 pub struct Directory {
     db: Mutex<Connection>,
-    /// When true, codes are returned in the API response + logged (dev).
-    dev_codes: bool,
+    /// AQUA_DEV_CODES: Some(true) forces dev mode even with SMTP, Some(false)
+    /// forbids it. None = dev mode exactly when no SMTP is configured.
+    dev_forced: Option<bool>,
     /// When Some, verification codes are sent via real SMTP.
-    smtp: Option<SmtpConfig>,
+    smtp: std::sync::RwLock<Option<SmtpConfig>>,
+    /// "env" | "file" | "none" — where the SMTP settings came from.
+    smtp_source: std::sync::RwLock<&'static str>,
     /// Last few dev-mode codes (email, code, unix secs) for the admin panel.
     recent: Mutex<std::collections::VecDeque<(String, String, u64)>>,
 }
@@ -226,7 +243,13 @@ impl Directory {
     pub fn open_memory() -> Self {
         let db = Connection::open_in_memory().expect("in-memory sqlite");
         Self::init_schema(&db).expect("init schema");
-        Self { db: Mutex::new(db), dev_codes: true, smtp: None, recent: Mutex::new(Default::default()) }
+        Self {
+            db: Mutex::new(db),
+            dev_forced: Some(true),
+            smtp: std::sync::RwLock::new(None),
+            smtp_source: std::sync::RwLock::new("none"),
+            recent: Mutex::new(Default::default()),
+        }
     }
 
     fn init_schema(db: &Connection) -> rusqlite::Result<()> {
@@ -289,13 +312,26 @@ impl Directory {
         let path = std::env::var("AQUA_DIR_DB").unwrap_or_else(|_| "aqua-directory.sqlite".into());
         let db = Connection::open(&path)?;
         Self::init_schema(&db)?;
-        let smtp = SmtpConfig::from_env();
+        // SMTP: env vars win, else the admin panel's aqua-smtp.json.
+        let (smtp, source) = match SmtpConfig::from_env() {
+            Some(c) => (Some(c), "env"),
+            None => match SmtpConfig::from_file() {
+                Some(c) => (Some(c), "file"),
+                None => (None, "none"),
+            },
+        };
         // Dev mode (code returned in API + logged) is on unless real
         // SMTP is configured. AQUA_DEV_CODES=1 forces it on even then.
-        let forced = std::env::var("AQUA_DEV_CODES").ok().map(|v| v != "0");
-        let dev_codes = forced.unwrap_or(smtp.is_none());
+        let dev_forced = std::env::var("AQUA_DEV_CODES").ok().map(|v| v != "0");
+        let dev_codes = dev_forced.unwrap_or(smtp.is_none());
         tracing::info!(%path, dev_codes, smtp = smtp.is_some(), "user directory opened");
-        Ok(Self { db: Mutex::new(db), dev_codes, smtp, recent: Mutex::new(Default::default()) })
+        Ok(Self {
+            db: Mutex::new(db),
+            dev_forced,
+            smtp: std::sync::RwLock::new(smtp),
+            smtp_source: std::sync::RwLock::new(source),
+            recent: Mutex::new(Default::default()),
+        })
     }
 
     // ---- email verification ----
@@ -321,7 +357,7 @@ impl Directory {
             )?;
         }
         self.send_email_code(&email, &code);
-        Ok(if self.dev_codes { Some(code) } else { None })
+        Ok(if self.dev_codes() { Some(code) } else { None })
     }
 
     /// Check a code; on success mint + store a one-time ticket.
@@ -355,7 +391,8 @@ impl Directory {
     /// Deliver the verification code. Real SMTP when configured,
     /// otherwise a dev log line.
     fn send_email_code(&self, email: &str, code: &str) {
-        let Some(cfg) = self.smtp.clone() else {
+        let cfg = self.smtp.read().ok().and_then(|c| c.clone());
+        let Some(cfg) = cfg else {
             tracing::warn!(%email, %code, "📧 EMAIL VERIFICATION CODE (dev mode — no real mail sent)");
             if let Ok(mut r) = self.recent.lock() {
                 r.push_front((email.to_string(), code.to_string(), now_secs()));
@@ -382,7 +419,35 @@ impl Directory {
 
     /// True when codes are shown instead of mailed.
     pub fn dev_codes(&self) -> bool {
-        self.dev_codes
+        let has_smtp = self.smtp.read().map(|c| c.is_some()).unwrap_or(false);
+        self.dev_forced.unwrap_or(!has_smtp)
+    }
+
+    /// Current SMTP settings (password included — callers must not leak it)
+    /// and where they came from.
+    pub fn smtp(&self) -> (Option<SmtpConfig>, &'static str) {
+        let c = self.smtp.read().ok().and_then(|c| c.clone());
+        let src = self.smtp_source.read().map(|s| *s).unwrap_or("none");
+        (c, src)
+    }
+
+    /// Replace the SMTP settings at runtime (admin panel) and persist them.
+    /// `None` switches back to dev mode and deletes the file.
+    pub fn set_smtp(&self, cfg: Option<SmtpConfig>) -> anyhow::Result<()> {
+        match &cfg {
+            Some(c) => std::fs::write(SMTP_FILE, serde_json::to_string_pretty(c)?)?,
+            None => { let _ = std::fs::remove_file(SMTP_FILE); }
+        }
+        if let Ok(mut s) = self.smtp_source.write() { *s = if cfg.is_some() { "file" } else { "none" }; }
+        if let Ok(mut s) = self.smtp.write() { *s = cfg; }
+        Ok(())
+    }
+
+    /// Send a sample code e-mail with the current settings (admin "Send test").
+    pub async fn send_test_email(&self, to: &str) -> anyhow::Result<()> {
+        let cfg = self.smtp.read().ok().and_then(|c| c.clone())
+            .ok_or_else(|| anyhow::anyhow!("e-mail delivery is not configured"))?;
+        send_smtp(&cfg, to.trim(), "123456").await
     }
 
     // ---- registration ----
@@ -827,28 +892,63 @@ impl Directory {
 }
 
 /// Send a verification code via SMTP using lettre.
+/// The verification e-mail (plain text + HTML), ready to send.
+fn build_code_email(cfg: &SmtpConfig, to: &str, code: &str) -> anyhow::Result<lettre::Message> {
+    use lettre::message::{Message, MultiPart};
+    let text = format!(
+        "Aquamarine\n\n\
+         Ваш код подтверждения: {code}\n\
+         Your verification code: {code}\n\n\
+         Код действует 10 минут. Если вы его не запрашивали, просто проигнорируйте это письмо.\n\
+         It expires in 10 minutes. If you didn't request it, ignore this email."
+    );
+    let spaced: String = code.chars().map(|c| c.to_string()).collect::<Vec<_>>().join("&#8202;");
+    let html = format!(r#"<!doctype html><html><body style="margin:0;padding:0;background:#06070C">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#06070C;padding:32px 12px;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif">
+<tr><td align="center">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:440px;background:#0C0F17;border:1px solid #2b3346;border-radius:18px">
+<tr><td style="padding:28px 28px 8px">
+<table role="presentation" cellpadding="0" cellspacing="0"><tr>
+<td style="width:40px;height:40px;border-radius:12px;background:#00E5C7;background-image:linear-gradient(135deg,#00E5C7,#7B5CFF);color:#06070C;font-weight:900;font-size:19px;text-align:center;vertical-align:middle">A</td>
+<td style="padding-left:12px;color:#eef1f7;font-size:18px;font-weight:800">Aquamarine</td></tr></table>
+</td></tr>
+<tr><td style="padding:14px 28px 0;color:#eef1f7;font-size:16px;font-weight:700">Ваш код подтверждения</td></tr>
+<tr><td style="padding:2px 28px 0;color:#6b7488;font-size:13px">Your verification code</td></tr>
+<tr><td style="padding:18px 28px">
+<div style="background:#141926;border:1px solid #1f2535;border-radius:14px;padding:18px;text-align:center;font-family:Consolas,Menlo,monospace;font-size:34px;font-weight:800;letter-spacing:8px;color:#00E5C7">{spaced}</div>
+</td></tr>
+<tr><td style="padding:0 28px 26px;color:#aab2c5;font-size:13px;line-height:1.55">
+Код действует 10 минут. Если вы его не запрашивали — просто проигнорируйте письмо.<br>
+<span style="color:#6b7488">It expires in 10 minutes. If you didn't request it, ignore this email.</span>
+</td></tr>
+</table>
+<div style="color:#6b7488;font-size:11px;padding-top:14px">Aquamarine · end-to-end encrypted messenger</div>
+</td></tr></table></body></html>"#);
+    Ok(Message::builder()
+        .from(cfg.from_header().parse()?)
+        .to(to.parse()?)
+        .subject(format!("{code} — код Aquamarine"))
+        .multipart(MultiPart::alternative_plain_html(text, html))?)
+}
+
 async fn send_smtp(cfg: &SmtpConfig, to: &str, code: &str) -> anyhow::Result<()> {
     use lettre::{
-        message::{header::ContentType, Message},
         transport::smtp::authentication::Credentials,
         AsyncSmtpTransport, AsyncTransport, Tokio1Executor,
     };
-    let body = format!(
-        "Your Aquamarine verification code is: {code}\n\n\
-         It expires in 10 minutes. If you didn't request this, ignore this email."
-    );
-    let email = Message::builder()
-        .from(cfg.from.parse()?)
-        .to(to.parse()?)
-        .subject("Aquamarine verification code")
-        .header(ContentType::TEXT_PLAIN)
-        .body(body)?;
+    let email = build_code_email(cfg, to, code)?;
     let creds = Credentials::new(cfg.user.clone(), cfg.pass.clone());
-    let mailer: AsyncSmtpTransport<Tokio1Executor> =
+    // 465 = implicit TLS (SSL); anything else (587) = STARTTLS.
+    let builder = if cfg.port == 465 {
+        AsyncSmtpTransport::<Tokio1Executor>::relay(&cfg.host)?
+    } else {
         AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&cfg.host)?
-            .port(cfg.port)
-            .credentials(creds)
-            .build();
+    };
+    let mailer: AsyncSmtpTransport<Tokio1Executor> = builder
+        .port(cfg.port)
+        .credentials(creds)
+        .timeout(Some(std::time::Duration::from_secs(20)))
+        .build();
     mailer.send(email).await?;
     Ok(())
 }
@@ -858,6 +958,18 @@ mod tests {
     use super::*;
 
     fn dir() -> Directory { Directory::open_memory() }
+
+    #[test]
+    fn code_email_builds() {
+        let cfg = SmtpConfig { host: "smtp.example.com".into(), user: "me@example.com".into(),
+            pass: "x".into(), from: "me@example.com".into(), port: 587 };
+        let m = build_code_email(&cfg, "you@example.com", "042517").unwrap();
+        let raw = String::from_utf8(m.formatted()).unwrap();
+        assert!(raw.contains("From: Aquamarine <me@example.com>"));
+        assert!(raw.contains("multipart/alternative"));
+        assert!(raw.contains("042517"));
+        if let Ok(p) = std::env::var("AQUA_DUMP_EMAIL") { std::fs::write(p, raw).unwrap(); }
+    }
 
     #[test]
     fn full_registration_flow() {

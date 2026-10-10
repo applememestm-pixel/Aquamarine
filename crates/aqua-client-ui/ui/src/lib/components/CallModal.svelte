@@ -88,8 +88,7 @@
     tuneSdp, orderCodecs, tuneSendParameters, displayMediaOptions, screenVideoConstraints,
     micConstraints, cameraConstraints, targetVideoKbps, kbpsForFrame, qualityLabel, RES_LABEL,
     SDP_VIDEO_MAX_KBPS, SDP_VIDEO_START_KBPS, SDP_VIDEO_MIN_KBPS,
-    type ResPreset, type FpsPreset, type ContentHint, type SdpTuning, type SenderTuning,
-  } from "../rtcQuality";
+    type ResPreset, type FpsPreset, type ContentHint, type SdpTuning, type SenderTuning, captureScreenOrCamera } from "../rtcQuality";
 
   // ---------------------------------------------------------------------------
   // Media layout. Every call negotiates the same four m-lines up front, so
@@ -692,7 +691,8 @@
     if (screenStream) return changeStreamQuality(cfg);
     if (!pc || !tx[T_SCR] || tx[T_SCR].receiver.track.kind !== "video") { showToast(tr("Your contact's app is too old for screen share — ask them to update")); return; }
     try {
-      const s = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions(cfg.res, cfg.fps, cfg.audio));
+      const { stream: s, camera } = await captureScreenOrCamera(displayMediaOptions(cfg.res, cfg.fps, cfg.audio), cfg.fps);
+      if (camera) showToast(tr("Phones can't share the screen — streaming your camera instead"), 4000);
       const v = s.getVideoTracks()[0];
       try { v.contentHint = cfg.hint === "detail" ? "detail" : "motion"; } catch { /* ignore */ }
       await tx[T_SCR].sender.replaceTrack(v);
@@ -700,7 +700,7 @@
       if (a && tx[T_SCRA]) {
         try { a.contentHint = "music"; } catch { /* ignore */ }
         await tx[T_SCRA].sender.replaceTrack(a);
-      } else if (cfg.audio) {
+      } else if (cfg.audio && !camera) {
         showToast(tr("No system audio — on Windows it's only available when sharing a whole screen"), 5000);
       }
       v.onended = () => void stopScreen();

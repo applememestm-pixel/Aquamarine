@@ -27,7 +27,7 @@ if not defined EXE (
 )
 
 set "AQUA_LISTEN=0.0.0.0:7777"
-set "AQUA_DEV_CODES=1"
+rem Codes are shown (dev mode) until e-mail delivery is set up in the panel.
 set "AQUA_OPEN_PANEL=1"
 set "RUST_LOG=info"
 cls

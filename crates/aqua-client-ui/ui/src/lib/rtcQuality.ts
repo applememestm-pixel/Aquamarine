@@ -313,3 +313,24 @@ export function tuneSendParameters(p: RTCRtpSendParameters, t: SenderTuning): RT
 export function qualityLabel(res: ResPreset, fps: number): string {
   return res === "source" ? `Source ${fps}fps` : `${res}p${fps}`;
 }
+
+/** Phones' webviews have no screen capture (getDisplayMedia). */
+export function canCaptureScreen(): boolean {
+  return typeof navigator !== "undefined" && typeof navigator.mediaDevices?.getDisplayMedia === "function";
+}
+
+/** Screen share where possible; on phones stream the (rear) camera instead.
+ *  `camera` tells the caller which one it got. */
+export async function captureScreenOrCamera(
+  screen: DisplayMediaStreamOptions,
+  fps = 30,
+): Promise<{ stream: MediaStream; camera: boolean }> {
+  if (canCaptureScreen()) {
+    return { stream: await navigator.mediaDevices.getDisplayMedia(screen), camera: false };
+  }
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: fps } },
+    audio: false,
+  });
+  return { stream, camera: true };
+}

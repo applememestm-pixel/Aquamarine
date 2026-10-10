@@ -955,6 +955,96 @@ async fn admin_set_config(
     Ok(Json(clean))
 }
 
+// ---- E-mail delivery (SMTP) settings from the admin panel ----
+
+#[derive(serde::Serialize)]
+struct SmtpView {
+    /// "env" | "file" | "none"
+    source: &'static str,
+    host: String,
+    port: u16,
+    user: String,
+    from: String,
+    /// Never send the password back — only whether one is stored.
+    has_password: bool,
+    dev_codes: bool,
+}
+
+#[derive(Deserialize)]
+struct SmtpUpdate {
+    /// false = turn real e-mail off (back to dev codes).
+    enabled: bool,
+    #[serde(default)] host: String,
+    #[serde(default)] port: u16,
+    #[serde(default)] user: String,
+    #[serde(default)] from: String,
+    /// Empty = keep the stored password.
+    #[serde(default)] pass: String,
+}
+
+#[derive(Deserialize)]
+struct SmtpTest { to: String }
+
+fn smtp_view(state: &AppState) -> SmtpView {
+    let (cfg, source) = state.directory.smtp();
+    let dev = state.directory.dev_codes();
+    match cfg {
+        Some(c) => SmtpView { source, host: c.host, port: c.port, user: c.user, from: c.from, has_password: !c.pass.is_empty(), dev_codes: dev },
+        None => SmtpView { source, host: String::new(), port: 587, user: String::new(), from: String::new(), has_password: false, dev_codes: dev },
+    }
+}
+
+async fn admin_get_smtp(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<SmtpView>, StatusCode> {
+    admin_authed(&state, &headers)?;
+    Ok(Json(smtp_view(&state)))
+}
+
+async fn admin_set_smtp(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(u): Json<SmtpUpdate>,
+) -> Result<Json<SmtpView>, (StatusCode, String)> {
+    admin_authed(&state, &headers).map_err(|c| (c, String::new()))?;
+    let (current, source) = state.directory.smtp();
+    if source == "env" {
+        return Err((StatusCode::CONFLICT, "SMTP is set by AQUA_SMTP_* environment variables; change them there".into()));
+    }
+    let next = if !u.enabled {
+        None
+    } else {
+        let pass = if u.pass.is_empty() { current.map(|c| c.pass).unwrap_or_default() } else { u.pass };
+        let user = u.user.trim().to_string();
+        if u.host.trim().is_empty() || user.is_empty() || pass.is_empty() {
+            return Err((StatusCode::BAD_REQUEST, "server, login and password are required".into()));
+        }
+        let from = if u.from.trim().is_empty() { user.clone() } else { u.from.trim().to_string() };
+        Some(directory::SmtpConfig {
+            host: u.host.trim().to_string(),
+            port: if u.port == 0 { 587 } else { u.port },
+            user,
+            pass,
+            from,
+        })
+    };
+    state.directory.set_smtp(next).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(smtp_view(&state)))
+}
+
+async fn admin_test_smtp(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(t): Json<SmtpTest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    admin_authed(&state, &headers).map_err(|c| (c, String::new()))?;
+    match state.directory.send_test_email(&t.to).await {
+        Ok(()) => Ok(Json(serde_json::json!({ "ok": true }))),
+        Err(e) => Err((StatusCode::BAD_GATEWAY, format!("{e:#}"))),
+    }
+}
+
 async fn admin_page(State(state): State<AppState>) -> impl IntoResponse {
     if std::env::var("AQUA_ADMIN_TOKEN").unwrap_or_default().is_empty() {
         let _ = state;
@@ -979,6 +1069,8 @@ pub fn app(state: AppState) -> Router {
         .route("/admin", get(admin_page))
         .route("/v1/admin/stats", get(admin_stats))
         .route("/v1/admin/config", post(admin_set_config))
+        .route("/v1/admin/smtp", get(admin_get_smtp).post(admin_set_smtp))
+        .route("/v1/admin/smtp/test", post(admin_test_smtp))
         .route("/v1/auth/challenge", post(auth::challenge))
         .route("/v1/auth/verify",    post(auth::verify))
         .route("/v1/auth/email/request", post(email_request))

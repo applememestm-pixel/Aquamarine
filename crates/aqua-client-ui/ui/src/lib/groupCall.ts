@@ -11,6 +11,7 @@
  *
  * Channels: only admins send audio/video; subscribers join as listeners.
  */
+import { captureScreenOrCamera } from "./rtcQuality";
 import { writable, get } from "svelte/store";
 import { api, events } from "./tauri";
 import { info } from "./stores";
@@ -242,7 +243,8 @@ export async function toggleGroupScreen() {
   if (!s || s.listener) return;
   if (s.screen) { await replaceVideo(null); patch((n) => { n.screen = false; }); return; }
   try {
-    const d = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 30 }, width: { ideal: 1920 } }, audio: false });
+    const { stream: d, camera } = await captureScreenOrCamera({ video: { frameRate: { ideal: 30 }, width: { ideal: 1920 } }, audio: false });
+    if (camera) showToast(tr("Phones can't share the screen — streaming your camera instead"), 4000);
     const tr0 = d.getVideoTracks()[0];
     tr0.onended = () => { if (get(groupCall)?.screen) void toggleGroupScreen(); };
     await replaceVideo(tr0);

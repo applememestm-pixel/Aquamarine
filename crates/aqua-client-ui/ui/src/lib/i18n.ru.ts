@@ -820,4 +820,5 @@ export const RU: Record<string, string> = {
   "do not disturb": "не беспокоить",
   "Send failed": "Не отправилось",
   "File sent": "Файл отправлен",
+  "Phones can't share the screen — streaming your camera instead": "На телефоне нельзя показать экран — транслируется камера",
 };
