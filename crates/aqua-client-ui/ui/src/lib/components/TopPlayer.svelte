@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { streamable } from "../media";
   // Persistent background audio bar. Mounted once in App.svelte, so the
   // single <audio> element survives chat/tab switches and keeps playing.
   // The expanded MusicPlayer sheet is driven by this SAME element (passed
@@ -58,6 +59,7 @@
 
   // When the track changes, load + autoplay. Identity (not src) is compared
   // so re-playing the same file / a duplicate queue entry restarts it.
+  let playSrc = $state("");
   let lastTrack: object | null = null;
   let lastSrc = "";
   $effect(() => {
@@ -68,9 +70,11 @@
       lastTrack = tr;
       lastSrc = tr.src;
       current = 0;
-      // Defer so the <audio src> binding has updated.
-      queueMicrotask(() => {
-        if (!audio) return;
+      // Local files stream over loopback HTTP (lib/media.ts::streamUrl) —
+      // the asset protocol would load the whole file at once.
+      void streamable(tr.src).then((u) => {
+        if (!audio || $nowPlaying !== tr) return;
+        if (playSrc !== u) { playSrc = u; audio.src = u; }
         if (sameSrc) { try { audio.currentTime = 0; } catch { /* ignore */ } }
         audio.defaultPlaybackRate = speed;
         audio.playbackRate = speed;
@@ -141,7 +145,7 @@
   <div class="top-player">
     <audio
       bind:this={audio}
-      src={$nowPlaying.src}
+      src={playSrc || undefined}
       preload="metadata"
       ontimeupdate={onTime}
       onloadedmetadata={onMeta}

@@ -12,6 +12,15 @@
   let { src, kind = "audio", onExpand = undefined }:
     { src: string; kind?: "audio" | "voice" | "video"; onExpand?: (() => void) | undefined } = $props();
 
+  import { streamable } from "../media";
+  // Local files stream over loopback HTTP (see lib/media.ts::streamUrl).
+  let playSrc = $state("");
+  $effect(() => {
+    const s = src;
+    playSrc = "";
+    void streamable(s).then((u) => { if (src === s) playSrc = u; });
+  });
+
   let media = $state<HTMLMediaElement | null>(null);
   let playing = $state(false);
   let current = $state(0);
@@ -119,7 +128,7 @@
     <!-- svelte-ignore a11y_media_has_caption -->
     <video
       bind:this={media}
-      {src}
+      src={playSrc || undefined}
       class="video-el"
       preload="metadata"
       ontimeupdate={onTime}
@@ -138,7 +147,7 @@
   {:else}
     <audio
       bind:this={media}
-      {src}
+      src={playSrc || undefined}
       preload="metadata"
       ontimeupdate={onTime}
       onloadedmetadata={onMeta}

@@ -7,6 +7,7 @@
 </script>
 
 <script lang="ts">
+  import { streamSrc } from "../media";
   import { t } from "../i18n";
   import { activeChat } from "../stores";
   import { api, assetUrl } from "../tauri";
@@ -116,7 +117,7 @@
               {@const u = e.saved_at ? thumb(e.saved_at, e.mime) : null}
               <button class="sm-cell" onclick={() => u && openLightbox({ url: u, kind: isVideo(e) ? "video" : "image", name: e.name })}>
                 {#if u}
-                  {#if isVideo(e)}<video src={u} muted></video>{:else}<img src={u} alt={e.name} />{/if}
+                  {#if isVideo(e)}<video use:streamSrc={u} muted preload="metadata"></video>{:else}<img src={u} alt={e.name} />{/if}
                   {#if isVideo(e)}<span class="sm-playmark">▶</span>{/if}
                 {:else}
                   <div class="sm-ph"></div>

@@ -58,9 +58,38 @@ export function mediaPath(m: ArticleMedia): Promise<string> {
   return p;
 }
 
+const streams = new Map<string, Promise<string>>();
+
+/**
+ * Loopback-HTTP URL for playing a local video / audio file. Tauri's asset
+ * protocol loads a whole file into memory per request (and on Linux pushes
+ * it through the UI thread), which froze the app on big videos; the Rust
+ * media server streams with real range requests instead. Falls back to the
+ * asset URL if the server can't be used.
+ */
+export function streamUrl(path: string): Promise<string> {
+  let p = streams.get(path);
+  if (!p) {
+    p = api.mediaStreamUrl(path).catch(() => assetUrl(path));
+    streams.set(path, p);
+  }
+  return p;
+}
+
+const ASSET_URL = /^(?:asset:\/\/localhost\/|https?:\/\/asset\.localhost\/)(.+)$/;
+
+/** Turn an asset: URL of a video / audio file into a streaming URL. */
+export async function streamable(url: string): Promise<string> {
+  const m = ASSET_URL.exec(url);
+  if (!m) return url;
+  let path = "";
+  try { path = decodeURIComponent(m[1]); } catch { return url; }
+  return /\.(mp4|m4v|webm|mov|mkv|avi|ogv|mp3|m4a|aac|wav|ogg|oga|opus|flac|weba)$/i.test(path) ? streamUrl(path) : url;
+}
+
 /** Playable URL of an article video / track. */
 export async function mediaUrl(m: ArticleMedia): Promise<string> {
-  return assetUrl(await mediaPath(m));
+  return streamUrl(await mediaPath(m));
 }
 
 export function fmtDuration(sec: number | null | undefined): string {
@@ -74,4 +103,22 @@ export function fmtSize(n: number | null | undefined): string {
   if (!n) return "";
   if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
   return `${(n / 1024 / 1024).toFixed(n < 100 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+/**
+ * `<video use:streamSrc={url}>` — like `src={url}`, but an asset: URL of a
+ * local video / audio file is swapped for its loopback streaming URL first.
+ * A `#t=…` fragment is kept.
+ */
+export function streamSrc(node: HTMLMediaElement, url: string) {
+  let cur = "";
+  const apply = (u: string) => {
+    cur = u;
+    const hash = u.indexOf("#");
+    const base = hash >= 0 ? u.slice(0, hash) : u;
+    const frag = hash >= 0 ? u.slice(hash) : "";
+    void streamable(base).then((s) => { if (cur === u) node.src = s + frag; });
+  };
+  apply(url);
+  return { update: apply, destroy() { cur = ""; } };
 }

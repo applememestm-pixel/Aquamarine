@@ -1523,7 +1523,7 @@ pub async fn upload_attachment(
     // Saved Messages never leave this device.
     if peer_id == crate::state::SAVED_MESSAGES_ID {
         let cid = format!("local-{}", crate::state::uuid_like());
-        std::fs::copy(&path, cache.join(format!("{cid}.{ext}"))).map_err(|e| format!("copy: {e}"))?;
+        tokio::fs::copy(&path, cache.join(format!("{cid}.{ext}"))).await.map_err(|e| format!("copy: {e}"))?;
         return Ok(crate::state::ArticleMedia {
             kind: kind.into(), cid, key_b64: String::new(), nonce_b64: String::new(),
             name, size, mime, poster: None, duration: None,

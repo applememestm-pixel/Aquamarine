@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { streamSrc } from "../media";
   import { t } from "../i18n";
   import { onMount } from "svelte";
   import { chats, activeTab, selectChat } from "../stores";
@@ -183,7 +184,7 @@
                 {#if url && isImage}
                   <img src={url} alt="" loading="lazy" />
                 {:else if url && isVideo}
-                  <video src={url + "#t=0.5"} muted preload="metadata"></video>
+                  <video use:streamSrc={url + "#t=0.5"} muted preload="metadata"></video>
                   <span class="vplay"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
                 {:else}
                   {iconFor(e)}

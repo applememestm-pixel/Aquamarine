@@ -9,6 +9,7 @@ pub mod commands;
 pub mod media;
 pub mod activity;
 pub mod web;
+pub mod media_server;
 
 use anyhow::Result;
 use tauri::Manager;
@@ -64,6 +65,7 @@ pub fn run() -> Result<()> {
             commands::upload_attachment,
             commands::fetch_attachment,
             commands::allow_media_preview,
+            media_server::media_stream_url,
             web::cache_remote_media,
             web::telegraph_page,
             web::open_external,

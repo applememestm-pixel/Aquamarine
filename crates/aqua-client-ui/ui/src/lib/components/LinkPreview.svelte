@@ -14,6 +14,7 @@
    * "Instant View" button that opens them in the in-app reader.
    */
   import { api, assetUrl } from "../tauri";
+  import { streamUrl } from "../media";
   import { settings } from "../theme";
   import { t } from "../i18n";
   import { openTelegraph, openLink } from "../reader";
@@ -29,6 +30,13 @@
   let ytPlaying = $state(false);
   let video = $state<"idle" | "loading" | "ready" | "error">("idle");
   let videoPath = $state<string | null>(null);
+  // Played over the loopback media server (lib/media.ts::streamUrl).
+  let videoSrc = $state("");
+  $effect(() => {
+    const vp = videoPath;
+    videoSrc = "";
+    if (vp) void streamUrl(vp).then((u) => { if (videoPath === vp) videoSrc = u; });
+  });
   let videoErr = $state("");
 
   function load(u: string): Promise<Preview | null> {
@@ -111,7 +119,7 @@
       <div class="lp-media">
         {#if video === "ready" && videoPath}
           <!-- svelte-ignore a11y_media_has_caption -->
-          <video src={assetUrl(videoPath)} controls preload="metadata" playsinline></video>
+          <video src={videoSrc || undefined} controls preload="metadata" playsinline></video>
           <button class="lp-ext" onclick={() => videoPath && openLightbox({ url: assetUrl(videoPath), kind: "video", path: videoPath, name: p?.title ?? undefined })}>{$t("Full screen")} ⤢</button>
         {:else}
           <button class="lp-thumb vid" onclick={fetchVideo} disabled={video === "loading"}>

@@ -5,6 +5,30 @@ resume. Newest entries at the top.
 
 ---
 
+## 2026-10-12 — Session 46: freeze when adding a video to an article
+
+**Symptom (Arch, WebKitGTK):** picking a large video in the article
+composer froze the whole window — nothing clickable, the v0 tile never got
+a poster.
+
+**Cause:** local media was played/probed through Tauri's asset protocol.
+A request without `Range` makes it read the *entire* file into memory, and
+on Linux custom-scheme responses go through the GTK main thread; the
+poster probe (`probeMedia`) hit exactly that.
+
+**Fix:** `src/media_server.rs` — a loopback HTTP server (tiny_http,
+`127.0.0.1:<random port>`, 4 workers). `media_stream_url(path)` registers a
+video/audio file under a random 128-bit token and returns
+`http://127.0.0.1:<port>/m/<token>.<ext>`; only registered files are
+served, GET/HEAD with real `Range` support (206/416) and CORS `*` (so the
+canvas poster grab isn't tainted). CSP `media-src` allows
+`http://127.0.0.1:*`.
+Frontend: `lib/media.ts` → `streamUrl(path)`, `streamable(assetUrl)`,
+`mediaUrl()` now streams, `use:streamSrc` action. Switched: composer probe
++ preview, MediaPlayer (lightbox), TopPlayer (music queue), LinkPreview
+video, circle videos, shared-media / files thumbnails, carousel videos.
+Saved-Messages attachment copy uses `tokio::fs::copy`.
+
 ## 2026-10-12 — Session 45: article reader perf, videos in carousels, music attached to articles
 
 - **Reader lag**: article photos are data: URLs; every `<img src>` / CSS

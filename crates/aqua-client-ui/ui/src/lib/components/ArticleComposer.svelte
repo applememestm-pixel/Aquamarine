@@ -21,7 +21,7 @@
    * preview, and a per-chat draft that survives closing the window.
    */
   import { onMount, tick } from "svelte";
-  import { api, assetUrl, bytesToDataUrl } from "../tauri";
+  import { api, bytesToDataUrl } from "../tauri";
   import type { ArticleMedia } from "../types";
   import { loadActiveMessages, chats } from "../stores";
   import { showToast } from "./Toast.svelte";
@@ -33,7 +33,7 @@
   import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
   import { parseBlocks, wordCount, parseGalleryRefs, galleryLine, GALLERY_LINE, type GalleryRef } from "../markup";
   import { shrinkImage, dataUrlBytes, probeMedia } from "../imageTools";
-  import { fmtDuration } from "../media";
+  import { fmtDuration, streamUrl } from "../media";
   import Markup from "./Markup.svelte";
 
   const MAX_PHOTOS = 40;
@@ -83,7 +83,7 @@
           title = d.title ?? ""; subtitle = d.subtitle ?? ""; body = d.body ?? "";
           coverDataUrl = d.cover ?? null; images = Array.isArray(d.images) ? d.images : [];
           media = Array.isArray(d.media) ? d.media : [];
-          for (const m of media) if (m.path) void api.allowMediaPreview(m.path).catch(() => {});
+          for (const m of media) if (m.path) void localUrl(m.path);
         }
       } catch { /* no draft */ }
       void tick().then(() => ta?.focus());
@@ -258,6 +258,14 @@
   const extOf = (p: string) => (p.split(/[\\/]/).pop() ?? "").split(".").pop()?.toLowerCase() ?? "";
   const nameOf = (p: string) => p.split(/[\\/]/).pop() ?? p;
 
+  /** Streaming URLs of local files (path → URL), for previews. */
+  let localUrls = $state<Record<string, string>>({});
+  async function localUrl(path: string): Promise<string> {
+    const u = await streamUrl(path);
+    if (localUrls[path] !== u) localUrls = { ...localUrls, [path]: u };
+    return u;
+  }
+
   /** Videos / tracks picked from disk → pending media (uploaded on publish). */
   async function addMediaFiles(paths: string[], kind: "video" | "audio"): Promise<number[]> {
     const room = MAX_MEDIA - media.length;
@@ -268,8 +276,10 @@
       media = [...media, item];
       const i = media.length - 1;
       out.push(i);
-      // Poster + duration in the background (needs asset access to the file).
-      void api.allowMediaPreview(path).then(() => probeMedia(assetUrl(path), kind)).then((r) => {
+      // Poster + duration in the background. Streamed over the loopback media
+      // server: through the asset protocol the webview pulled the whole file
+      // in at once and the window froze on big videos.
+      void localUrl(path).then((u) => probeMedia(u, kind)).then((r) => {
         const cur = media[i];
         if (cur && cur.path === path) media[i] = { ...cur, poster: r.poster, duration: r.duration };
       }).catch(() => {});
@@ -384,7 +394,7 @@
   let previewMedia = $derived(media.map((m): ArticleMedia => m.ref ?? {
     kind: m.kind, cid: "local-preview", key_b64: "", nonce_b64: "", name: m.name, size: 0, mime: null, poster: m.poster, duration: m.duration,
   }));
-  let previewLocal = $derived(Object.fromEntries(media.map((m, i) => [i, m.path ? assetUrl(m.path) : ""]).filter(([, u]) => u)));
+  let previewLocal = $derived(Object.fromEntries(media.map((m, i) => [i, m.path ? localUrls[m.path] ?? "" : ""]).filter(([, u]) => u)));
   let bytes = $derived(images.reduce((n, u) => n + dataUrlBytes(u), 0) + (coverDataUrl ? dataUrlBytes(coverDataUrl) : 0) + body.length * 2);
   let blocks = $derived(parseBlocks(body, "article"));
   let words = $derived(wordCount(blocks));

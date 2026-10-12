@@ -43,7 +43,7 @@
   import Carousel, { type CarouselItem } from "./Carousel.svelte";
   import ArticleMusic from "./ArticleMusic.svelte";
   import { hasMarkup, linksIn, excerptOf, parseBlocks, wordCount } from "../markup";
-  import { objectUrl, mediaUrl } from "../media";
+  import { objectUrl, mediaUrl, streamSrc } from "../media";
   import { openArticleReader } from "../reader";
   import { shortcutsOpen } from "../shortcuts";
   import { openGroupPanel } from "./GroupPanel.svelte";
@@ -1767,7 +1767,7 @@
                   <div class="circle-wrap">
                     {#if url}
                       <!-- svelte-ignore a11y_media_has_caption -->
-                      <video class="circle-vid" src={url} loop playsinline autoplay muted
+                      <video class="circle-vid" use:streamSrc={url} loop playsinline autoplay muted
                         onclick={(e) => { const v = e.currentTarget as HTMLVideoElement; v.muted = !v.muted; }}
                         title={$t("Click to toggle sound")}></video>
                     {:else}

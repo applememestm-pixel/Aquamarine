@@ -55,6 +55,7 @@ export function probeMedia(url: string, kind: "video" | "audio", ms = 8000): Pro
     const timer = setTimeout(() => finish({ duration: isFinite(el.duration) ? el.duration : undefined }), ms);
     el.preload = "metadata";
     el.muted = true;
+    el.crossOrigin = "anonymous"; // loopback media server sends CORS headers
     el.onerror = () => finish({});
     el.onloadedmetadata = () => {
       const duration = isFinite(el.duration) ? el.duration : undefined;
