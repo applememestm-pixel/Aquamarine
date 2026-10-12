@@ -72,7 +72,8 @@ Put it behind any TLS reverse proxy (Caddy, nginx) for `wss://`.
 ## Build from source
 
 Requirements: Rust stable, Node.js 22+, Tauri CLI (`cargo install tauri-cli --version '^2'`).
-Linux also needs `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf`.
+Linux also needs `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf`
+(Arch: `sudo pacman -S --needed rustup nodejs npm base-devel webkit2gtk-4.1 libappindicator-gtk3 librsvg patchelf`).
 
 ```bash
 # everything at once → ../Aquamarine-apps

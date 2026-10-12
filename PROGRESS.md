@@ -5,6 +5,40 @@ resume. Newest entries at the top.
 
 ---
 
+## 2026-10-12 — Session 43: v0.1.1 — moved to Arch Linux; Linux client fixes, iOS build, SMTP
+
+- **Linux client (WebKitGTK)** — the dev machine is now Arch, and the Linux
+  build behaved very differently from Windows (WebView2):
+  - *Lag*: the ambient orbs (`body::before/after`, 60vmax, `blur(100px)`,
+    animated forever) and every `backdrop-filter` are repainted on the CPU by
+    WebKitGTK each frame. `main.ts` tags WebKitGTK (Linux UA without
+    Chrome/Android) with `html.wk-lowfx`; `app.css` drops the blur, the drift
+    and backdrop blurs there. Other platforms unchanged. Confirmed smooth on Arch.
+  - *Mic test `NotAllowedError`*: WebKitGTK denies permission requests nobody
+    answers → `Builder::on_permission_request` grants mic / camera / screen /
+    notifications / clipboard-read (Linux only).
+  - *Calls*: WebKitGTK ships with WebRTC off → `linux_webview::configure`
+    enables WebRTC, media streams and MSE on the main webview
+    (`webkit2gtk` crate, `v2_38`).
+  - `tools/aquamarine.sh` launcher sets `WEBKIT_DISABLE_DMABUF_RENDERER=1`
+    (blank/flickering window on NVIDIA + Wayland otherwise).
+- **iOS CI finally produces an .ipa** (6 MB, unsigned, for AltStore/SideStore):
+  signing is switched off inside the generated `project.pbxproj`; the
+  `cargo tauri ios build -- KEY=VALUE` args were removed (Tauri forwards them
+  to `cargo build`, which failed); packaging now rejects an empty `.app`
+  (it once shipped a 300-byte .ipa while the job stayed green).
+- **Relay SMTP**: app passwords are pasted as `abcd efgh ijkl mnop`; spaces are
+  stripped before AUTH (Gmail answered 535 BadCredentials). Note: VPNs often
+  block outbound 587/465 — route the SMTP host around the tunnel.
+- **Linux/macOS scripts**: `.sh` versions of every Windows `.bat`/`.ps1`
+  (root, `tools/`, `android/`). `android/env.sh` finds a *Linux* SDK/NDK/JDK
+  (prefers JDK 17–21; installs SDK+NDK into `~/Android/Sdk` if missing);
+  `patch-project.sh` rewrites Windows paths left in `gen/android`.
+  `build-all.sh` runs `npm ci` (and reinstalls Windows-made `node_modules`).
+- Version → 0.1.1 (client, site label).
+
+---
+
 ## 2026-10-08 — Session 42: cross-platform builds, server admin panel, proxy ("connect through a server")
 
 - **Build on all platforms** — `.github/workflows/release.yml`: a matrix that
