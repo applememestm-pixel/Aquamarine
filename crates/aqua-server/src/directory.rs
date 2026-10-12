@@ -937,7 +937,10 @@ async fn send_smtp(cfg: &SmtpConfig, to: &str, code: &str) -> anyhow::Result<()>
         AsyncSmtpTransport, AsyncTransport, Tokio1Executor,
     };
     let email = build_code_email(cfg, to, code)?;
-    let creds = Credentials::new(cfg.user.clone(), cfg.pass.clone());
+    // Gmail shows app passwords as "abcd efgh ijkl mnop" and people paste them
+    // like that; the real password has no spaces (Gmail answers 535 otherwise).
+    let pass: String = cfg.pass.chars().filter(|c| !c.is_whitespace()).collect();
+    let creds = Credentials::new(cfg.user.trim().to_string(), pass);
     // 465 = implicit TLS (SSL); anything else (587) = STARTTLS.
     let builder = if cfg.port == 465 {
         AsyncSmtpTransport::<Tokio1Executor>::relay(&cfg.host)?
