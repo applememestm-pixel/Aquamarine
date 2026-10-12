@@ -243,6 +243,25 @@ jobs:
           APPLE_DEVELOPMENT_TEAM: "0000000000"
         run: cargo tauri ios init --ci
 
+      # Tauri doesn't forward signing overrides to xcodebuild, and the
+      # generated project uses automatic signing — which needs an Apple
+      # account ("No Accounts" / "No profiles"). Turn signing off in the
+      # project itself; AltStore / SideStore re-sign the .ipa anyway.
+      - name: Disable code signing in the Xcode project
+        working-directory: crates/aqua-client-ui/gen/apple
+        run: |
+          pbx=$(ls -d *.xcodeproj)/project.pbxproj
+          perl -0pi -e '
+            s/^\s*CODE_SIGNING_(?:ALLOWED|REQUIRED) = [^;]*;\n//mg;
+            s/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/g;
+            s/("?CODE_SIGN_IDENTITY(?:\[sdk=iphoneos\*\])?"?) = [^;]*;/$1 = "";/g;
+            s/DEVELOPMENT_TEAM = [^;]*;/DEVELOPMENT_TEAM = "";/g;
+            s/(PROVISIONING_PROFILE_SPECIFIER|PROVISIONING_PROFILE) = [^;]*;/$1 = "";/g;
+            s/(buildSettings = \{\n)/$1\t\t\t\tCODE_SIGNING_ALLOWED = NO;\n\t\t\t\tCODE_SIGNING_REQUIRED = NO;\n/g;
+          ' "$pbx"
+          sed -i '' 's/DevelopmentTeam = [^;]*;/DevelopmentTeam = "";/; s/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/' "$pbx"
+          grep -nE 'CODE_SIGN|DEVELOPMENT_TEAM|ProvisioningStyle' "$pbx" | head -40
+
       - name: Build (no code signing)
         working-directory: crates/aqua-client-ui
         env:
