@@ -1,4 +1,9 @@
 <script lang="ts">
+  import { hasMarkup, plainText } from "../markup";
+  /** Chat-list line without formatting markers (spoilers stay hidden). */
+  function previewText(p: string): string {
+    return p && hasMarkup(p) ? plainText(p).replace(/\s*\n\s*/g, " ") : p;
+  }
   import { chatOnline, presenceNow } from "../presence";
   import { t, tr } from "../i18n";
   import { avatars, peerCards, clans } from "../people";
@@ -322,7 +327,7 @@
             {:else}
               <span class="chat-preview">
                 {#if c.has_lock}<span class="lock-mini">{@html icons.lock}</span>{/if}
-                {#if c.preview_by_me}<span class="me-prefix">{$t("you:")}</span>{/if}{c.preview}
+                {#if c.preview_by_me}<span class="me-prefix">{$t("you:")}</span>{/if}{previewText(c.preview)}
               </span>
             {/if}
             {#if c.unread > 0 && c.id !== $activeId}

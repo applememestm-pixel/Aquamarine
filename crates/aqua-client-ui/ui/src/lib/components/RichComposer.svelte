@@ -7,6 +7,8 @@
    * Parent API (bind:this): focus(), blur(), insert(text).
    */
   import { mediaKind, tgsSnapshot } from "./AnimatedMedia.svelte";
+  import { askInput } from "./InputPrompt.svelte";
+  import { tr } from "../i18n";
 
   interface Props {
     value: string;
@@ -186,7 +188,110 @@
     savedRange = sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
   }
 
+  // ---- Telegram-style formatting of the selected text -------------------
+  type Fmt = "b" | "i" | "u" | "s" | "spoiler" | "code" | "link" | "quote" | "clear";
+  const MARK: Record<string, [string, string]> = {
+    b: ["**", "**"], i: ["__", "__"], u: ["++", "++"], s: ["~~", "~~"], spoiler: ["||", "||"], code: ["`", "`"],
+  };
+  let fmtBar = $state<{ x: number; y: number; below: boolean } | null>(null);
+  /** Mount on <body>: an ancestor with backdrop-filter would otherwise
+   *  become the containing block of a position:fixed popup. */
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return { destroy() { node.remove(); } };
+  }
+
+  function selectionInside(): Range | null {
+    const sel = getSelection();
+    if (!el || !sel || !sel.rangeCount || sel.isCollapsed) return null;
+    const r = sel.getRangeAt(0);
+    return el.contains(r.commonAncestorContainer) ? r : null;
+  }
+  function selectedText(r: Range): string {
+    const holder = document.createElement("div");
+    holder.appendChild(r.cloneContents());
+    return serialize(holder);
+  }
+  function placeBar() {
+    const r = selectionInside();
+    if (!r || document.activeElement !== el) { fmtBar = null; return; }
+    const rect = r.getBoundingClientRect();
+    if (!rect.width && !rect.height) { fmtBar = null; return; }
+    const below = rect.top < 60;
+    fmtBar = { x: Math.max(150, Math.min(window.innerWidth - 150, rect.left + rect.width / 2)), y: below ? rect.bottom + 8 : rect.top - 8, below };
+  }
+
+  /** Wrap / unwrap the selection with Telegram markers (or prefix lines). */
+  export function format(kind: Fmt) {
+    const r = selectionInside() ?? (savedRange && el?.contains(savedRange.commonAncestorContainer) && !savedRange.collapsed ? savedRange : null);
+    if (!r) return;
+    const text = selectedText(r);
+    const apply = (out: string) => {
+      el?.focus();
+      const sel = getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(r);
+      insert(out);
+      fmtBar = null;
+    };
+    if (kind === "link") {
+      const saved = r.cloneRange();
+      askInput({
+        title: tr("Add a link"),
+        fields: [{ label: "URL", placeholder: "https://", monospace: true }],
+        submitLabel: tr("Insert"),
+        onSubmit: async ([url]) => {
+          let u = url.trim();
+          if (!u) return tr("Enter a link");
+          if (!/^(https?:|mailto:)/i.test(u)) u = "https://" + u;
+          el?.focus();
+          const sel = getSelection();
+          sel?.removeAllRanges();
+          sel?.addRange(saved);
+          insert(`[${text.replace(/[\[\]]/g, "")}](${u})`);
+          return null;
+        },
+      });
+      return;
+    }
+    if (kind === "clear") {
+      apply(text.replace(/\*\*|__|\+\+|~~|\|\||`/g, "").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/^>\s?/gm, ""));
+      return;
+    }
+    if (kind === "quote") {
+      const all = text.split("\n").every((l) => /^>\s?/.test(l));
+      apply(all ? text.replace(/^>\s?/gm, "") : text.split("\n").map((l) => "> " + l).join("\n"));
+      return;
+    }
+    const [a, b] = MARK[kind];
+    // Toggle: already wrapped → unwrap.
+    if (text.length >= a.length + b.length && text.startsWith(a) && text.endsWith(b)) apply(text.slice(a.length, text.length - b.length));
+    else {
+      // Keep spaces outside the markers ("word " → "**word** ").
+      const lead = text.match(/^\s*/)?.[0] ?? "";
+      const trail = text.match(/\s*$/)?.[0] ?? "";
+      const core = text.slice(lead.length, text.length - trail.length);
+      if (!core) return;
+      apply(lead + a + core + b + trail);
+    }
+  }
+
   function onKey(e: KeyboardEvent) {
+    const ctrl = e.ctrlKey || e.metaKey;
+    if (ctrl && !e.altKey) {
+      const c = e.code;
+      const map: Record<string, Fmt | undefined> = e.shiftKey
+        ? { KeyX: "s", KeyP: "spoiler", KeyM: "code", KeyN: "clear", Period: "quote" }
+        : { KeyB: "b", KeyI: "i", KeyU: "u", KeyK: "link" };
+      const k = map[c];
+      if (k) {
+        // No selection: Ctrl+B / I / U must not fall through to the
+        // browser's own rich-text commands (they'd add <b> tags).
+        e.preventDefault();
+        if (selectionInside()) { e.stopPropagation(); format(k); }
+        return;
+      }
+    }
     onkeydown?.(e);
     if (e.defaultPrevented) return;
     if (e.key === "Enter" && !e.isComposing) {
@@ -218,7 +323,24 @@
   }
 </script>
 
-<svelte:document onselectionchange={rememberRange} />
+<svelte:document onselectionchange={() => { rememberRange(); placeBar(); }} />
+<svelte:window onscroll={() => (fmtBar = null)} onresize={() => (fmtBar = null)} />
+
+{#if fmtBar}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div use:portal class="fmt-bar" class:below={fmtBar.below} style={`left:${fmtBar.x}px; top:${fmtBar.y}px;`} onmousedown={(e) => e.preventDefault()}>
+    <button title={tr("Bold") + " (Ctrl+B)"} onclick={() => format("b")}><b>B</b></button>
+    <button title={tr("Italic") + " (Ctrl+I)"} onclick={() => format("i")}><i>I</i></button>
+    <button title={tr("Underline") + " (Ctrl+U)"} onclick={() => format("u")}><u>U</u></button>
+    <button title={tr("Strikethrough") + " (Ctrl+Shift+X)"} onclick={() => format("s")}><s>S</s></button>
+    <button title={tr("Spoiler") + " (Ctrl+Shift+P)"} onclick={() => format("spoiler")} class="sp">▒</button>
+    <button title={tr("Monospace") + " (Ctrl+Shift+M)"} onclick={() => format("code")} class="mono">&lt;/&gt;</button>
+    <button title={tr("Quote") + " (Ctrl+Shift+.)"} onclick={() => format("quote")}>❝</button>
+    <button title={tr("Link") + " (Ctrl+K)"} onclick={() => format("link")}>🔗</button>
+    <span class="fsep"></span>
+    <button title={tr("Clear formatting") + " (Ctrl+Shift+N)"} onclick={() => format("clear")}>⌫</button>
+  </div>
+{/if}
 
 <div
   bind:this={el}
@@ -273,4 +395,26 @@
     user-select: all;
   }
   .rich :global(.ce img), .rich :global(.ce video) { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .fmt-bar {
+    position: fixed; z-index: 260;
+    transform: translate(-50%, -100%);
+    display: flex; align-items: center; gap: 2px;
+    padding: 4px;
+    background: var(--bg-surface-2, var(--bg-list));
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    box-shadow: 0 10px 28px -8px rgba(0, 0, 0, 0.55);
+    animation: fmt-in 0.12s ease-out;
+  }
+  .fmt-bar.below { transform: translate(-50%, 0); }
+  @keyframes fmt-in { from { opacity: 0; margin-top: 4px; } to { opacity: 1; margin-top: 0; } }
+  .fmt-bar button {
+    min-width: 28px; height: 28px; padding: 0 6px;
+    border: none; border-radius: 7px; background: transparent;
+    color: var(--fg); font-size: 13.5px; cursor: pointer;
+  }
+  .fmt-bar button:hover { background: var(--bg-hover); color: var(--accent); }
+  .fmt-bar .mono { font-family: var(--font-mono); font-size: 11.5px; }
+  .fmt-bar .sp { color: var(--fg-dim); }
+  .fsep { width: 1px; height: 18px; background: var(--border-strong); margin: 0 2px; }
 </style>

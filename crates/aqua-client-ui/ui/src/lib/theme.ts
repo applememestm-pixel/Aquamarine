@@ -98,6 +98,7 @@ export interface Settings {
   // Behaviour
   enterToSend: boolean;       // Enter sends (true) vs newline (false)
   autoDownloadMedia: boolean; // auto-fetch inline media on receive
+  linkPreviews: boolean;      // fetch previews for links (and videos behind them)
   // Notifications
   notifySound: boolean;       // play a chime on incoming message
   notifyDesktop: boolean;     // OS desktop notification on incoming
@@ -117,6 +118,7 @@ const DEFAULTS: Settings = {
   wallpaper: "aurora",
   enterToSend: true,
   autoDownloadMedia: true,
+  linkPreviews: true,
   notifySound: true,
   notifyDesktop: false,
 };

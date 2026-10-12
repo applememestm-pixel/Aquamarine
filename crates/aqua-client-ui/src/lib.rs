@@ -8,6 +8,7 @@ pub mod state;
 pub mod commands;
 pub mod media;
 pub mod activity;
+pub mod web;
 
 use anyhow::Result;
 use tauri::Manager;
@@ -55,6 +56,10 @@ pub fn run() -> Result<()> {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            web::link_preview,
+            web::cache_remote_media,
+            web::telegraph_page,
+            web::open_external,
             commands::init_app,
             commands::complete_registration,
             commands::log_out,

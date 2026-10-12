@@ -295,7 +295,7 @@
     }
   }
 
-  function toggle(key: "enterToSend" | "autoDownloadMedia" | "notifySound" | "notifyDesktop") {
+  function toggle(key: "enterToSend" | "autoDownloadMedia" | "linkPreviews" | "notifySound" | "notifyDesktop") {
     settings.update((s) => ({ ...s, [key]: !s[key] }));
   }
   async function enableDesktopNotifications() {
@@ -308,7 +308,7 @@
 
   function reset() {
     settings.set({ mode: "dark", palette: "aqua", density: "comfortable", fontScale: 1, wallpaper: "aurora",
-      enterToSend: true, autoDownloadMedia: true, notifySound: true, notifyDesktop: false,
+      enterToSend: true, autoDownloadMedia: true, linkPreviews: true, notifySound: true, notifyDesktop: false,
       customColors: {}, customFontName: undefined, customFontData: undefined });
   }
 
@@ -572,6 +572,13 @@
             <div class="tr-sub">{$t("Fetch images / voice / video automatically on receive")}</div>
           </div>
           <span class="switch" class:on={$settings.autoDownloadMedia}></span>
+        </button>
+        <button class="toggle-row" onclick={() => toggle("linkPreviews")}>
+          <div class="tr-text">
+            <div class="tr-title">{$t("Link previews")}</div>
+            <div class="tr-sub">{$t("Show a card for links; videos behind links load and play in the chat. The site sees your IP (or your proxy's).")}</div>
+          </div>
+          <span class="switch" class:on={$settings.linkPreviews}></span>
         </button>
       </section>
       {/if}

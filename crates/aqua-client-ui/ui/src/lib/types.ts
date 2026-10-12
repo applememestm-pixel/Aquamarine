@@ -43,8 +43,11 @@ export type MessageKind =
     } }
   | { type: "article";         content: {
       title: string;
-      body: string;             // markdown
+      body: string;             // markdown (see lib/markup.ts)
       cover_data_url: string | null;
+      /** Photos for [[gallery:…]] carousels (data: URLs). */
+      images?: string[];
+      subtitle?: string | null;
     } }
   | { type: "poll";            content: {
       id: string;

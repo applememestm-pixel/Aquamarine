@@ -1,5 +1,5 @@
 <script module lang="ts">
-  import { writable, get as getStore } from "svelte/store";
+  import { writable } from "svelte/store";
 
   interface ComposerState {
     peerId: string;
@@ -15,79 +15,337 @@
 </script>
 
 <script lang="ts">
-  import { onMount } from "svelte";
+  /**
+   * Article editor — Telegraph-style: title / subtitle / cover, a formatting
+   * toolbar (and the same shortcuts as Telegram), photo carousels, live
+   * preview, and a per-chat draft that survives closing the window.
+   */
+  import { onMount, tick } from "svelte";
   import { api, bytesToDataUrl } from "../tauri";
   import { loadActiveMessages, chats } from "../stores";
   import { showToast } from "./Toast.svelte";
   import { cropImage } from "./ImageCropper.svelte";
+  import { askInput, promptOpen } from "./InputPrompt.svelte";
+  import { gallery } from "./Lightbox.svelte";
+  import { get as getStore } from "svelte/store";
   import { t, tr } from "../i18n";
   import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+  import { parseBlocks, wordCount } from "../markup";
+  import { shrinkImage, dataUrlBytes } from "../imageTools";
+  import Markup from "./Markup.svelte";
+
+  const MAX_PHOTOS = 40;
+  const WARN_BYTES = 10 * 1024 * 1024;
+  const MAX_BYTES = 24 * 1024 * 1024;
+  const GALLERY = /^\[\[gallery:([\d,\s]+)(?:\|(.*))?\]\]$/;
 
   let title = $state("");
+  let subtitle = $state("");
   let body = $state("");
   let coverDataUrl = $state<string | null>(null);
+  let images = $state<string[]>([]);
   let preview = $state(false);
   let sending = $state(false);
+  let adding = $state(0);
+  let ta: HTMLTextAreaElement | undefined = $state();
 
-  // Reset state when the composer opens for a new peer.
+  // ---------------------------------------------------------------- drafts
+  const draftKey = (peer: string) => `aqua.articleDraft.${peer}`;
   let prevPeer = "";
   $effect(() => {
     const s = $articleState;
     if (s && s.peerId !== prevPeer) {
       prevPeer = s.peerId;
-      title = "";
-      body = "";
-      coverDataUrl = null;
-      preview = false;
-      sending = false;
+      preview = false; sending = false;
+      title = ""; subtitle = ""; body = ""; coverDataUrl = null; images = [];
+      try {
+        const d = JSON.parse(localStorage.getItem(draftKey(s.peerId)) ?? "null");
+        if (d) {
+          title = d.title ?? ""; subtitle = d.subtitle ?? ""; body = d.body ?? "";
+          coverDataUrl = d.cover ?? null; images = Array.isArray(d.images) ? d.images : [];
+        }
+      } catch { /* no draft */ }
+      void tick().then(() => ta?.focus());
     } else if (!s) {
       prevPeer = "";
     }
   });
+  let saveTimer: ReturnType<typeof setTimeout> | null = null;
+  $effect(() => {
+    const s = $articleState;
+    const snap = { title, subtitle, body, cover: coverDataUrl, images };
+    if (!s) return;
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      const empty = !snap.title && !snap.subtitle && !snap.body && !snap.cover && !snap.images.length;
+      try {
+        if (empty) localStorage.removeItem(draftKey(s.peerId));
+        else localStorage.setItem(draftKey(s.peerId), JSON.stringify(snap));
+      } catch {
+        // Photos can exceed the storage quota: keep the text at least.
+        try { localStorage.setItem(draftKey(s.peerId), JSON.stringify({ ...snap, images: [], cover: null })); } catch { /* ignore */ }
+      }
+    }, 500);
+  });
+  function dropDraft(peer: string) { try { localStorage.removeItem(draftKey(peer)); } catch { /* ignore */ } }
+
+  // ---------------------------------------------------------------- editing
+  /** Replace the selection, keeping the textarea's undo history. */
+  function replaceSel(text: string, selectFrom?: number, selectTo?: number) {
+    if (!ta) return;
+    ta.focus();
+    const start = ta.selectionStart;
+    const ok = document.execCommand?.("insertText", false, text);
+    if (!ok) {
+      ta.setRangeText(text, ta.selectionStart, ta.selectionEnd, "end");
+      body = ta.value;
+    }
+    if (selectFrom != null) ta.setSelectionRange(start + selectFrom, start + (selectTo ?? selectFrom));
+  }
+
+  function wrap(before: string, after = before, placeholder = "") {
+    if (!ta) return;
+    const sel = ta.value.slice(ta.selectionStart, ta.selectionEnd);
+    // Toggle off when the selection is already wrapped.
+    const s = ta.selectionStart, e = ta.selectionEnd;
+    if (sel && ta.value.slice(s - before.length, s) === before && ta.value.slice(e, e + after.length) === after) {
+      ta.setSelectionRange(s - before.length, e + after.length);
+      replaceSel(sel, 0, sel.length);
+      return;
+    }
+    if (sel && /^\s|\s$/.test(sel)) {
+      // "word " → "**word** " (markers next to spaces don't parse).
+      const lead = sel.match(/^\s*/)?.[0] ?? "";
+      const trail = sel.match(/\s*$/)?.[0] ?? "";
+      const core = sel.slice(lead.length, sel.length - trail.length);
+      if (!core) return;
+      replaceSel(lead + before + core + after + trail, lead.length + before.length, lead.length + before.length + core.length);
+      return;
+    }
+    const inner = sel || placeholder;
+    replaceSel(before + inner + after, before.length, before.length + inner.length);
+  }
+
+  /** Select whole lines touched by the selection. */
+  function selectLines() {
+    if (!ta) return;
+    const v = ta.value;
+    const s = v.lastIndexOf("\n", ta.selectionStart - 1) + 1;
+    let e = v.indexOf("\n", ta.selectionEnd);
+    if (e < 0) e = v.length;
+    ta.setSelectionRange(s, e);
+  }
+
+  function prefixLines(make: (i: number) => string, strip: RegExp) {
+    if (!ta) return;
+    selectLines();
+    const lines = ta.value.slice(ta.selectionStart, ta.selectionEnd).split("\n");
+    const all = lines.every((l) => strip.test(l));
+    const out = lines.map((l, i) => (all ? l.replace(strip, "") : make(i) + l.replace(strip, ""))).join("\n");
+    replaceSel(out, 0, out.length);
+  }
+
+  /** Put a block on its own line(s). */
+  function insertBlock(text: string) {
+    if (!ta) return;
+    const v = ta.value;
+    const s = ta.selectionStart;
+    const needNlBefore = s > 0 && v[s - 1] !== "\n";
+    const needNlAfter = ta.selectionEnd < v.length && v[ta.selectionEnd] !== "\n";
+    replaceSel((needNlBefore ? "\n" : "") + text + (needNlAfter ? "\n" : "\n"));
+  }
+
+  function addLink() {
+    if (!ta) return;
+    const s = ta.selectionStart, e = ta.selectionEnd;
+    const sel = ta.value.slice(s, e);
+    askInput({
+      title: tr("Add a link"),
+      fields: [
+        { label: tr("Text"), value: sel, placeholder: tr("Link text") },
+        { label: "URL", placeholder: "https://", monospace: true },
+      ],
+      submitLabel: tr("Insert"),
+      onSubmit: async ([text, url]) => {
+        let u = url.trim();
+        if (!u) return tr("Enter a link");
+        if (!/^(https?:|mailto:)/i.test(u)) u = "https://" + u;
+        const label = text.trim() || u;
+        ta?.focus();
+        ta?.setSelectionRange(s, e);
+        replaceSel(`[${label}](${u})`);
+        return null;
+      },
+    });
+  }
+
+  type Tool = { key: string; label: string; title: string; run: () => void; sep?: boolean };
+  const tools: Tool[] = [
+    { key: "b", label: "B", title: "Bold (Ctrl+B)", run: () => wrap("**", "**", tr("bold")) },
+    { key: "i", label: "I", title: "Italic (Ctrl+I)", run: () => wrap("__", "__", tr("italic")) },
+    { key: "u", label: "U", title: "Underline (Ctrl+U)", run: () => wrap("++", "++", tr("underline")) },
+    { key: "s", label: "S", title: "Strikethrough (Ctrl+Shift+X)", run: () => wrap("~~", "~~", tr("strikethrough")) },
+    { key: "sp", label: "▒", title: "Spoiler (Ctrl+Shift+P)", run: () => wrap("||", "||", tr("spoiler")) },
+    { key: "c", label: "</>", title: "Monospace (Ctrl+Shift+M)", run: () => wrap("`", "`", "code") },
+    { key: "a", label: "🔗", title: "Link (Ctrl+K)", run: addLink, sep: true },
+    { key: "h1", label: "H1", title: "Heading", run: () => prefixLines(() => "# ", /^#{1,3}\s+/) },
+    { key: "h2", label: "H2", title: "Subheading", run: () => prefixLines(() => "## ", /^#{1,3}\s+/) },
+    { key: "q", label: "❝", title: "Quote", run: () => prefixLines(() => "> ", /^>\s?/) },
+    { key: "pq", label: "“ ”", title: "Pull quote", run: () => prefixLines(() => ">> ", /^>>\s?/) },
+    { key: "ul", label: "•", title: "Bulleted list", run: () => prefixLines(() => "- ", /^[-*•]\s+/) },
+    { key: "ol", label: "1.", title: "Numbered list", run: () => prefixLines((i) => `${i + 1}. `, /^\d+[.)]\s+/) },
+    { key: "pre", label: "{ }", title: "Code block", run: () => { const sel = ta ? ta.value.slice(ta.selectionStart, ta.selectionEnd) : ""; insertBlock("```\n" + (sel || "code") + "\n```"); } },
+    { key: "hr", label: "—", title: "Divider", run: () => insertBlock("---") },
+  ];
+
+  function onKey(e: KeyboardEvent) {
+    const ctrl = e.ctrlKey || e.metaKey;
+    if (!ctrl) return;
+    const k = e.key.toLowerCase();
+    const fire = (key: string) => { e.preventDefault(); tools.find((x) => x.key === key)?.run(); };
+    if (k === "enter") { e.preventDefault(); void send(); }
+    else if (!e.shiftKey && k === "b") fire("b");
+    else if (!e.shiftKey && k === "i") fire("i");
+    else if (!e.shiftKey && k === "u") fire("u");
+    else if (!e.shiftKey && k === "k") fire("a");
+    else if (e.shiftKey && k === "x") fire("s");
+    else if (e.shiftKey && k === "p") fire("sp");
+    else if (e.shiftKey && k === "m") fire("c");
+  }
+
+  // ---------------------------------------------------------------- photos
+  async function addBlobs(blobs: Blob[]): Promise<number[]> {
+    const room = MAX_PHOTOS - images.length;
+    if (room <= 0) { showToast(tr("Up to {n} photos per article", { n: MAX_PHOTOS })); return []; }
+    if (blobs.length > room) showToast(tr("Up to {n} photos per article", { n: MAX_PHOTOS }));
+    const added: number[] = [];
+    adding += Math.min(room, blobs.length);
+    for (const b of blobs.slice(0, room)) {
+      try {
+        const url = await shrinkImage(b);
+        images = [...images, url];
+        added.push(images.length - 1);
+      } catch (e) {
+        showToast(tr("Could not add a photo: {e}", { e: String(e) }));
+      } finally {
+        adding--;
+      }
+    }
+    return added;
+  }
+
+  async function pickPhotos() {
+    try {
+      const res = await openFileDialog({
+        multiple: true, directory: false, title: tr("Pick photos for a carousel"),
+        filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp", "avif"] }],
+      });
+      const paths = Array.isArray(res) ? res : res ? [res] : [];
+      if (!paths.length) return;
+      const blobs: Blob[] = [];
+      for (const p of paths) {
+        const bytes = await api.readUserImage(p);
+        blobs.push(new Blob([new Uint8Array(bytes)]));
+      }
+      const idx = await addBlobs(blobs);
+      if (idx.length) insertBlock(`[[gallery:${idx.join(",")}]]`);
+    } catch (e) {
+      showToast(tr("Could not add a photo: {e}", { e: String(e) }));
+    }
+  }
+
+  async function onPaste(e: ClipboardEvent) {
+    const files = [...(e.clipboardData?.files ?? [])].filter((f) => f.type.startsWith("image/"));
+    if (!files.length) return;
+    e.preventDefault();
+    const idx = await addBlobs(files);
+    if (idx.length) insertBlock(`[[gallery:${idx.join(",")}]]`);
+  }
+
+  function rewriteGalleries(map: (idx: number[]) => number[]) {
+    body = body.split("\n").flatMap((line) => {
+      const m = GALLERY.exec(line.trim());
+      if (!m) return [line];
+      const idx = map(m[1].split(",").map((x) => parseInt(x.trim(), 10)).filter(Number.isFinite));
+      return idx.length ? [`[[gallery:${idx.join(",")}${m[2] != null ? "|" + m[2] : ""}]]`] : [];
+    }).join("\n");
+  }
+  function removeImage(r: number) {
+    images = images.filter((_, i) => i !== r);
+    rewriteGalleries((idx) => idx.filter((i) => i !== r).map((i) => (i > r ? i - 1 : i)));
+  }
+  function moveImage(r: number, d: -1 | 1) {
+    const to = r + d;
+    if (to < 0 || to >= images.length) return;
+    const next = [...images];
+    [next[r], next[to]] = [next[to], next[r]];
+    images = next;
+    rewriteGalleries((idx) => idx.map((i) => (i === r ? to : i === to ? r : i)));
+  }
 
   async function pickCover() {
     try {
       const result = await openFileDialog({
-        multiple: false, directory: false, title: "Pick a cover image",
+        multiple: false, directory: false, title: tr("Pick a cover image"),
         filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] }],
       });
       const path = Array.isArray(result) ? (result[0] ?? null) : result;
       if (!path) return;
       const bytes = await api.readUserImage(path);
-      // Frame + shrink the cover (it travels inside the message itself, so
-      // a raw multi-megabyte photo would make the article huge).
       const src = URL.createObjectURL(new Blob([new Uint8Array(bytes)]));
       const blob = await cropImage(src, { aspect: 16 / 9, outWidth: 1280, title: $t("Position the cover") });
       URL.revokeObjectURL(src);
       if (!blob) return;
-      coverDataUrl = bytesToDataUrl(Array.from(new Uint8Array(await blob.arrayBuffer())), "image/webp");
+      coverDataUrl = bytesToDataUrl(Array.from(new Uint8Array(await blob.arrayBuffer())), blob.type || "image/webp");
     } catch (e) {
       showToast(`Could not load cover: ${e}`);
     }
   }
-  function removeCover() { coverDataUrl = null; }
+
+  // ---------------------------------------------------------------- publish
+  let used = $derived.by(() => {
+    const s = new Set<number>();
+    for (const line of body.split("\n")) {
+      const m = GALLERY.exec(line.trim());
+      if (m) m[1].split(",").forEach((x) => s.add(parseInt(x.trim(), 10)));
+    }
+    return s;
+  });
+  let bytes = $derived(images.reduce((n, u) => n + dataUrlBytes(u), 0) + (coverDataUrl ? dataUrlBytes(coverDataUrl) : 0) + body.length * 2);
+  let blocks = $derived(parseBlocks(body, "article"));
+  let words = $derived(wordCount(blocks));
+  let readMin = $derived(Math.max(1, Math.round(words / 200)));
+
+  function mb(n: number) { return `${(n / 1024 / 1024).toFixed(1)} MB`; }
 
   async function send() {
     const s = $articleState;
-    if (!s) return;
+    if (!s || sending) return;
     if (!title.trim()) { showToast(tr("Give the article a title first")); return; }
-    if (!body.trim())  { showToast(tr("Write something first")); return; }
+    if (!body.trim() && images.length === 0) { showToast(tr("Write something first")); return; }
+    if (bytes > MAX_BYTES) { showToast(tr("The article is too big ({size}) — remove some photos", { size: mb(bytes) }), 6000); return; }
     const chat = $chats.find((c) => c.id === s.peerId);
     if (chat && !chat.live && !s.peerId.startsWith("grp_") && s.peerId !== "__saved__") {
       showToast(tr("This chat isn't connected yet — start a real chat first"));
       return;
     }
+    // Photos that aren't in any carousel go at the end, so nothing is lost.
+    const orphans = images.map((_, i) => i).filter((i) => !used.has(i));
+    const finalBody = body.trim() + (orphans.length ? `\n\n[[gallery:${orphans.join(",")}]]` : "");
     sending = true;
     const payload = JSON.stringify({
       title: title.trim(),
-      body: body.trim(),
+      subtitle: subtitle.trim() || null,
+      body: finalBody,
       cover_data_url: coverDataUrl,
+      images,
     });
     const envelope = `[article:v1]${payload}`;
     try {
-      // Groups and channels fan out to every member; 1:1 uses the session.
       if (s.peerId.startsWith("grp_")) await api.groupSend(s.peerId, envelope);
       else await api.sendMessage(s.peerId, envelope);
+      dropDraft(s.peerId);
+      title = ""; subtitle = ""; body = ""; coverDataUrl = null; images = [];
       await loadActiveMessages();
       chats.set(await api.listChats());
       closeArticleComposer();
@@ -100,55 +358,15 @@
   }
 
   onMount(() => {
+    // Capture phase: decide before a nested dialog closes itself on the same Esc.
     const h = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeArticleComposer();
-      else if ((e.metaKey || e.ctrlKey) && e.key === "Enter") void send();
+      if (!$articleState || e.key !== "Escape") return;
+      if (getStore(promptOpen) || getStore(gallery) || document.querySelector('div.backdrop[role="presentation"]')) return;
+      closeArticleComposer();
     };
-    window.addEventListener("keydown", h);
-    return () => window.removeEventListener("keydown", h);
+    window.addEventListener("keydown", h, true);
+    return () => window.removeEventListener("keydown", h, true);
   });
-
-  // Simple markdown-ish rendering for the live preview: headings,
-  // bold, italic, inline code, links, paragraph breaks. Not a full
-  // parser — just enough to make the preview feel like the real
-  // thing before send.
-  function renderMarkdown(src: string): string {
-    const escape = (s: string) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] ?? c));
-    const lines = escape(src).split(/\r?\n/);
-    const out: string[] = [];
-    let inList = false;
-    for (const raw of lines) {
-      const line = raw.trimEnd();
-      if (/^#\s/.test(line)) {
-        if (inList) { out.push("</ul>"); inList = false; }
-        out.push(`<h2>${line.slice(2)}</h2>`);
-      } else if (/^##\s/.test(line)) {
-        if (inList) { out.push("</ul>"); inList = false; }
-        out.push(`<h3>${line.slice(3)}</h3>`);
-      } else if (/^-\s/.test(line) || /^\*\s/.test(line)) {
-        if (!inList) { out.push("<ul>"); inList = true; }
-        out.push(`<li>${inline(line.slice(2))}</li>`);
-      } else if (line === "") {
-        if (inList) { out.push("</ul>"); inList = false; }
-        out.push("");
-      } else {
-        if (inList) { out.push("</ul>"); inList = false; }
-        out.push(`<p>${inline(line)}</p>`);
-      }
-    }
-    if (inList) out.push("</ul>");
-    return out.join("\n");
-  }
-  function inline(s: string): string {
-    return s
-      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-      .replace(/\*(.+?)\*/g, "<em>$1</em>")
-      .replace(/`([^`]+)`/g, "<code>$1</code>")
-      .replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g, `<a href="$2" target="_blank" rel="noopener">$1</a>`);
-  }
-
-  let words = $derived(body.trim().split(/\s+/).filter(Boolean).length);
-  let readMin = $derived(Math.max(1, Math.round(words / 220)));
 </script>
 
 {#if $articleState}
@@ -158,7 +376,7 @@
     tabindex="-1"
     aria-label={$t("Close composer")}
     onclick={(e) => { if ((e.target as HTMLElement).classList.contains("backdrop")) closeArticleComposer(); }}
-    onkeydown={(e) => { if (e.key === "Escape") closeArticleComposer(); }}
+    onkeydown={() => {}}
   >
     <div class="sheet" role="dialog" aria-modal="true" tabindex="-1">
       <div class="head">
@@ -167,7 +385,7 @@
           <button class:active={!preview} onclick={() => (preview = false)}>{$t("Edit")}</button>
           <button class:active={preview}  onclick={() => (preview = true)}>{$t("Preview")}</button>
         </div>
-        <button class="close" onclick={closeArticleComposer} title={$t("Close (Esc)")}>×</button>
+        <button class="close" onclick={closeArticleComposer} title={$t("Close (Esc) — the draft is kept")}>×</button>
       </div>
 
       {#if !preview}
@@ -175,46 +393,80 @@
           <div class="cover-row">
             {#if coverDataUrl}
               <div class="cover" style={`background-image: url(${coverDataUrl});`}>
-                <button class="cover-remove" onclick={removeCover} title={$t("Remove cover")}>×</button>
+                <button class="cover-remove" onclick={() => (coverDataUrl = null)} title={$t("Remove cover")}>×</button>
+                <button class="cover-change" onclick={pickCover}>{$t("Change")}</button>
               </div>
             {:else}
               <button class="cover-pick" onclick={pickCover}>+ {$t("Add cover image")}</button>
             {/if}
           </div>
-          <input
-            class="title-input"
-            bind:value={title}
-            placeholder={$t("Title")}
-            maxlength="140"
-          />
+          <input class="title-input" bind:value={title} placeholder={$t("Title")} maxlength="140" />
+          <input class="sub-input" bind:value={subtitle} placeholder={$t("Subtitle (optional)")} maxlength="240" />
+
+          <div class="toolbar" role="toolbar" aria-label={$t("Formatting")}>
+            {#each tools as tl (tl.key)}
+              {#if tl.sep}<span class="tsep"></span>{/if}
+              <button class="tool t-{tl.key}" title={$t(tl.title)} onmousedown={(e) => e.preventDefault()} onclick={tl.run}>{tl.label}</button>
+            {/each}
+            <span class="tsep"></span>
+            <button class="tool photos" title={$t("Add photos — they become a swipeable carousel")} onmousedown={(e) => e.preventDefault()} onclick={pickPhotos}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.5"/><path d="m21 15-5-5L5 19"/></svg>
+              {$t("Photos")}
+            </button>
+          </div>
+
           <textarea
+            bind:this={ta}
             class="body-input"
             bind:value={body}
-            placeholder="Write your article in Markdown…&#10;&#10;# Heading&#10;**bold**, *italic*, `code`, [links](https://example.com)&#10;- bulleted lists"
+            onkeydown={onKey}
+            onpaste={onPaste}
+            placeholder={$t("Tell your story… Select text and use the toolbar, or type **bold**, __italic__, > quote, # heading. Paste or add photos to make a carousel.")}
           ></textarea>
-          <div class="footnote">
-            {words} word{words === 1 ? "" : "s"} · ≈{readMin} min read ·
-            <code>**bold**</code> <code>*italic*</code> <code>`code`</code> <code># heading</code>
-          </div>
+
+          {#if images.length || adding}
+            <div class="tray">
+              <div class="tray-head">
+                <span>{$t("Photos")} · {images.length}{adding ? ` (+${adding}…)` : ""}</span>
+                <span class="tray-hint">{$t("Click a photo to put it into the text")}</span>
+              </div>
+              <div class="tray-list">
+                {#each images as src, i (src.length + ":" + i)}
+                  <div class="ph" class:orphan={!used.has(i)}>
+                    <button class="ph-img" onclick={() => insertBlock(`[[gallery:${i}]]`)} title={$t("Insert into the text")}><img {src} alt="" /></button>
+                    <span class="ph-n">{i}</span>
+                    <button class="ph-x" onclick={() => removeImage(i)} title={$t("Remove")}>×</button>
+                    <div class="ph-move">
+                      <button onclick={() => moveImage(i, -1)} disabled={i === 0} aria-label="←">‹</button>
+                      <button onclick={() => moveImage(i, 1)} disabled={i === images.length - 1} aria-label="→">›</button>
+                    </div>
+                  </div>
+                {/each}
+                {#each Array(adding) as _, k (k)}<div class="ph loading"></div>{/each}
+              </div>
+            </div>
+          {/if}
         </div>
       {:else}
         <div class="preview">
-          {#if coverDataUrl}
-            <div class="pv-cover" style={`background-image: url(${coverDataUrl});`}></div>
-          {/if}
+          {#if coverDataUrl}<div class="pv-cover" style={`background-image: url(${coverDataUrl});`}></div>{/if}
           <article class="article-prose">
             <h1>{title || $t("Untitled")}</h1>
-            <div class="pv-meta">{words} word{words === 1 ? "" : "s"} · ≈{readMin} min read</div>
-            {@html renderMarkdown(body)}
+            {#if subtitle}<p class="pv-sub">{subtitle}</p>{/if}
+            <div class="pv-meta">{$t("{n} min read", { n: readMin })}{images.length ? ` · ${$t("{n} photos", { n: images.length })}` : ""}</div>
+            <Markup {blocks} {images} mode="article" />
           </article>
         </div>
       {/if}
 
       <div class="foot">
-        <span class="hint">{$t("Ctrl + Enter to publish · Esc to cancel")}</span>
+        <span class="hint" class:warn={bytes > WARN_BYTES}>
+          {$t("{n} words", { n: words })} · ≈{readMin} {$t("min")} · {mb(bytes)}
+          <span class="kb">· Ctrl+Enter — {$t("publish")}</span>
+        </span>
         <div>
           <button class="btn-ghost" onclick={closeArticleComposer} disabled={sending}>{$t("Cancel")}</button>
-          <button class="btn-primary" onclick={send} disabled={sending} title={!title.trim() ? $t("Add a title") : !body.trim() ? $t("Write the text") : ""}>
+          <button class="btn-primary" onclick={send} disabled={sending || adding > 0}>
             {sending ? $t("Publishing…") : $t("Publish")}
           </button>
         </div>
@@ -230,11 +482,11 @@
     backdrop-filter: blur(4px);
     display: grid; place-items: center;
     z-index: 125;
-    padding: 20px;
+    padding: calc(var(--tb-h, 0px) + 12px) 20px 20px;
   }
   .sheet {
-    width: min(680px, 94vw);
-    max-height: 94vh;
+    width: min(760px, 96vw);
+    height: min(900px, calc(100vh - var(--tb-h, 0px) - 32px));
     display: flex; flex-direction: column;
     background: var(--bg-shell);
     border: 1px solid var(--border);
@@ -243,156 +495,93 @@
     overflow: hidden;
     animation: slide-up 0.22s ease-out;
   }
-  @keyframes slide-up {
-    from { opacity: 0; transform: translateY(12px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
+  @keyframes slide-up { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
   .head {
     padding: 12px 18px;
-    display: grid;
-    grid-template-columns: 1fr auto auto;
-    gap: 12px;
-    align-items: center;
+    display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center;
     border-bottom: 1px solid var(--border);
   }
   .head h2 { margin: 0; font-size: 15.5px; font-weight: 700; }
-  .segmented {
-    display: flex;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 3px;
-    gap: 2px;
-  }
-  .segmented button {
-    background: transparent; border: none;
-    padding: 5px 12px;
-    border-radius: 7px;
-    color: var(--fg-muted);
-    font-weight: 600;
-    font-size: 12.5px;
-    cursor: pointer;
-  }
+  .segmented { display: flex; background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; padding: 3px; gap: 2px; }
+  .segmented button { background: transparent; border: none; padding: 5px 12px; border-radius: 7px; color: var(--fg-muted); font-weight: 600; font-size: 12.5px; cursor: pointer; }
   .segmented button.active { background: var(--accent-soft); color: var(--accent); }
   .close { width: 30px; height: 30px; background: transparent; border: 1px solid var(--border); border-radius: 8px; color: var(--fg-dim); font-size: 18px; cursor: pointer; }
 
-  .body {
-    padding: 18px;
-    display: flex; flex-direction: column; gap: 10px;
-    overflow-y: auto;
-  }
+  .body { flex: 1; min-height: 0; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
   .cover-row { display: flex; }
-  .cover {
-    width: 100%;
-    aspect-ratio: 16 / 7;
-    border-radius: 12px;
-    background-size: cover;
-    background-position: center;
-    position: relative;
-  }
-  .cover-remove {
-    position: absolute; top: 8px; right: 8px;
-    width: 28px; height: 28px;
-    background: rgba(0,0,0,0.5);
-    border: none; border-radius: 50%;
-    color: #fff; font-size: 16px; cursor: pointer;
-  }
-  .cover-pick {
-    width: 100%;
-    padding: 20px;
-    background: var(--bg-input);
-    border: 1px dashed var(--border-strong);
-    border-radius: 12px;
-    color: var(--fg-dim);
-    font-size: 13px;
-    cursor: pointer;
-  }
+  .cover { width: 100%; aspect-ratio: 16 / 6; border-radius: 12px; background-size: cover; background-position: center; position: relative; flex-shrink: 0; }
+  .cover-remove { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; background: rgba(0,0,0,0.55); border: none; border-radius: 50%; color: #fff; font-size: 16px; cursor: pointer; }
+  .cover-change { position: absolute; bottom: 8px; right: 8px; padding: 4px 10px; background: rgba(0,0,0,0.55); border: none; border-radius: 8px; color: #fff; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .cover-pick { width: 100%; padding: 14px; background: var(--bg-input); border: 1px dashed var(--border-strong); border-radius: 12px; color: var(--fg-dim); font-size: 13px; cursor: pointer; }
   .cover-pick:hover { color: var(--accent); border-color: var(--accent); }
 
-  .title-input {
-    background: transparent;
-    border: none;
-    outline: none;
-    font-family: inherit;
-    font-size: 24px;
-    font-weight: 800;
-    color: var(--fg);
-    padding: 4px 0;
-    letter-spacing: -0.01em;
-    border-bottom: 1px solid var(--border);
+  .title-input, .sub-input { background: transparent; border: none; outline: none; font-family: inherit; color: var(--fg); padding: 4px 0; }
+  .title-input { font-size: 24px; font-weight: 800; letter-spacing: -0.01em; }
+  .sub-input { font-size: 15px; color: var(--fg-muted); border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  .title-input::placeholder, .sub-input::placeholder { color: var(--fg-dim); }
+  .sub-input:focus { border-bottom-color: var(--accent); }
+
+  .toolbar {
+    position: sticky; top: -16px; z-index: 2;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 3px;
+    padding: 5px; border-radius: 10px;
+    background: var(--bg-list); border: 1px solid var(--border);
   }
-  .title-input:focus { border-bottom-color: var(--accent); }
-  .title-input::placeholder { color: var(--fg-dim); }
+  .tool {
+    min-width: 30px; height: 28px; padding: 0 7px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+    border: none; border-radius: 7px; background: transparent;
+    color: var(--fg-muted); font-size: 13px; font-weight: 700; cursor: pointer;
+  }
+  .tool:hover { background: var(--bg-hover); color: var(--fg); }
+  .tool svg { width: 16px; height: 16px; }
+  .t-i { font-style: italic; font-family: Georgia, serif; }
+  .t-u { text-decoration: underline; }
+  .t-s { text-decoration: line-through; }
+  .t-c, .t-pre { font-family: var(--font-mono); font-size: 11.5px; }
+  .tool.photos { color: var(--accent); }
+  .tsep { width: 1px; height: 18px; background: var(--border-strong); margin: 0 3px; }
 
   .body-input {
-    flex: 1;
-    min-height: 240px;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    outline: none;
-    color: var(--fg);
-    font-family: var(--font-mono);
-    font-size: 13.5px;
-    line-height: 1.6;
-    padding: 12px 14px;
-    resize: vertical;
+    flex: 1; min-height: 260px;
+    background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; outline: none;
+    color: var(--fg); font-family: inherit; font-size: 14.5px; line-height: 1.6;
+    padding: 12px 14px; resize: none;
   }
   .body-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-  .footnote { font-size: 11.5px; color: var(--fg-dim); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-  .footnote code { font-family: var(--font-mono); background: var(--bg-input); padding: 2px 6px; border-radius: 4px; color: var(--accent); }
 
-  .preview {
-    overflow-y: auto;
-    background: var(--bg-shell);
-  }
-  .pv-cover {
-    width: 100%;
-    aspect-ratio: 16 / 7;
-    background-size: cover;
-    background-position: center;
-  }
-  .article-prose {
-    max-width: 640px;
-    margin: 0 auto;
-    padding: 28px 32px;
-    color: var(--fg);
-    font-size: 15.5px;
-    line-height: 1.7;
-  }
+  .tray { border: 1px solid var(--border); border-radius: 10px; padding: 8px; background: var(--bg-list); }
+  .tray-head { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 700; color: var(--fg-muted); margin-bottom: 6px; }
+  .tray-hint { font-weight: 500; color: var(--fg-dim); }
+  .tray-list { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; }
+  .ph { position: relative; flex: 0 0 96px; height: 72px; border-radius: 8px; overflow: hidden; background: var(--bg-input); }
+  .ph.orphan { outline: 2px dashed var(--border-strong); outline-offset: -2px; }
+  .ph.loading { background: linear-gradient(90deg, var(--bg-input), var(--bg-hover), var(--bg-input)); }
+  .ph-img { all: unset; cursor: pointer; display: block; width: 100%; height: 100%; }
+  .ph-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .ph-n { position: absolute; left: 4px; top: 4px; padding: 0 5px; border-radius: 6px; background: rgba(0,0,0,0.6); color: #fff; font-size: 10.5px; font-weight: 700; }
+  .ph-x { position: absolute; right: 3px; top: 3px; width: 20px; height: 20px; border-radius: 50%; border: none; background: rgba(0,0,0,0.6); color: #fff; cursor: pointer; font-size: 13px; line-height: 1; }
+  .ph-move { position: absolute; left: 0; right: 0; bottom: 0; display: flex; justify-content: space-between; opacity: 0; transition: opacity 0.15s; }
+  .ph:hover .ph-move { opacity: 1; }
+  .ph-move button { border: none; background: rgba(0,0,0,0.6); color: #fff; width: 22px; height: 20px; cursor: pointer; font-weight: 700; }
+  .ph-move button:disabled { opacity: 0.3; cursor: default; }
+
+  .preview { flex: 1; overflow-y: auto; background: var(--bg-shell); }
+  .pv-cover { width: 100%; aspect-ratio: 16 / 7; background-size: cover; background-position: center; }
+  .article-prose { max-width: 660px; margin: 0 auto; padding: 26px 28px; color: var(--fg); font-size: 16px; line-height: 1.65; }
   .article-prose h1 { font-size: 28px; font-weight: 800; margin: 0 0 6px; letter-spacing: -0.02em; }
-  .article-prose h2 { font-size: 20px; margin: 24px 0 6px; }
-  .article-prose h3 { font-size: 16.5px; margin: 20px 0 4px; }
-  .article-prose p  { margin: 0 0 12px; }
-  .article-prose ul { margin: 0 0 12px; padding-left: 22px; }
-  .article-prose li { margin-bottom: 4px; }
-  .article-prose code { font-family: var(--font-mono); background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-size: 0.92em; }
-  .article-prose a { color: var(--accent); text-decoration: underline; text-decoration-color: var(--accent-soft); }
+  .pv-sub { font-size: 17px; color: var(--fg-muted); margin: 0 0 6px; }
   .pv-meta { font-size: 12.5px; color: var(--fg-dim); margin-bottom: 20px; }
 
-  .foot {
-    padding: 12px 18px;
-    display: flex; justify-content: space-between; align-items: center; gap: 10px;
-    border-top: 1px solid var(--border);
-    background: var(--bg-list);
-  }
-  .hint { font-size: 11px; color: var(--fg-dim); }
+  .foot { padding: 12px 18px; display: flex; justify-content: space-between; align-items: center; gap: 10px; border-top: 1px solid var(--border); background: var(--bg-list); }
+  .hint { font-size: 11.5px; color: var(--fg-dim); }
+  .hint.warn { color: var(--warning, #f5a524); }
   .foot > div { display: flex; gap: 10px; }
-  .btn-ghost, .btn-primary {
-    padding: 8px 18px;
-    border-radius: 10px;
-    font-size: 13px;
-    font-weight: 700;
-    cursor: pointer;
-    border: none;
-  }
+  .btn-ghost, .btn-primary { padding: 8px 18px; border-radius: 10px; font-size: 13px; font-weight: 700; cursor: pointer; border: none; }
   .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--fg-muted); }
   .btn-ghost:hover:not(:disabled) { color: var(--fg); border-color: var(--border-strong); }
-  .btn-primary {
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    color: #06070C;
-    box-shadow: 0 6px 16px -4px var(--accent-glow);
-  }
+  .btn-primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070C; box-shadow: 0 6px 16px -4px var(--accent-glow); }
   .btn-primary:hover:not(:disabled) { transform: translateY(-1px); }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
+  @media (max-width: 640px) { .kb { display: none; } }
 </style>

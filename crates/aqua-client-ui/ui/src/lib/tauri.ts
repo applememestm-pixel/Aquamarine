@@ -27,6 +27,32 @@ import type {
   StickerImportReport,
 } from "./types";
 
+export interface LinkPreview {
+  url: string;
+  kind: "page" | "image" | "video" | "youtube" | "telegraph";
+  site: string | null;
+  title: string | null;
+  description: string | null;
+  image_path: string | null;
+  video_url: string | null;
+  video_mime: string | null;
+  video_size: number | null;
+  youtube_id: string | null;
+  telegraph_path: string | null;
+}
+export interface CachedMedia { path: string; mime: string; size: number }
+export interface TelegraphPage {
+  path: string;
+  url: string;
+  title: string;
+  description?: string;
+  author_name?: string;
+  author_url?: string;
+  image_url?: string;
+  views?: number;
+  content?: import("./markup").TgNode[];
+}
+
 export interface IncomingPayload {
   peer_id: string;
   text: string;
@@ -110,6 +136,11 @@ export const api = {
   readMediaBytes:     (path: string): Promise<number[]>                            => invoke("read_media_bytes", { path }),
   readUserFont:       (path: string): Promise<number[]>                            => invoke("read_user_font", { path }),
   readUserImage:      (path: string): Promise<number[]>                            => invoke("read_user_image", { path }),
+  // Open web: link previews, cached remote media, Telegraph pages, external links.
+  linkPreview:        (url: string): Promise<LinkPreview>                           => invoke("link_preview", { url }),
+  cacheRemoteMedia:   (url: string, max_mb?: number): Promise<CachedMedia>         => invoke("cache_remote_media", { url, maxMb: max_mb ?? null }),
+  telegraphPage:      (path: string): Promise<TelegraphPage>                        => invoke("telegraph_page", { path }),
+  openExternal:       (url: string): Promise<void>                                  => invoke("open_external", { url }),
   copyFileTo:         (source: string, dest: string): Promise<void>                => invoke("copy_file_to", { source, dest }),
 
   // Voice & video messages (recorded in-browser → bytes sent to Rust → encrypted via attach pipeline)

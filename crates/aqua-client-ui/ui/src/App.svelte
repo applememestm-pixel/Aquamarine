@@ -18,6 +18,7 @@
   import ProfileModal from "./lib/components/ProfileModal.svelte";
   import PhotoEditor from "./lib/components/PhotoEditor.svelte";
   import ArticleComposer from "./lib/components/ArticleComposer.svelte";
+  import ArticleReader from "./lib/components/ArticleReader.svelte";
   import CircleRecorder from "./lib/components/CircleRecorder.svelte";
   import StickerEditor from "./lib/components/StickerEditor.svelte";
   import RegistrationWizard from "./lib/components/RegistrationWizard.svelte";
@@ -215,6 +216,7 @@
 <ProfileModal />
 <PhotoEditor />
 <ArticleComposer />
+<ArticleReader />
 <CircleRecorder />
 <StickerEditor />
 <RegistrationWizard />

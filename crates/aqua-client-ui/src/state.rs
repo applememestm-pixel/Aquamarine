@@ -119,6 +119,13 @@ pub enum MessageKind {
         title: String,
         body: String,
         cover_data_url: Option<String>,
+        /// Photos for `[[gallery:…]]` carousels in the body (data: URLs).
+        /// Added in v0.1.1; older senders simply don't have it.
+        #[serde(default)]
+        images: Vec<String>,
+        /// Optional subtitle / lead line under the title.
+        #[serde(default)]
+        subtitle: Option<String>,
     },
     /// A poll — Telegram-style. Travels as a plain-text payload tagged
     /// `[poll:v1]{json}` so it syncs through the normal E2EE message path
@@ -1037,12 +1044,19 @@ pub fn classify_kind(text: &str) -> MessageKind {
             body: String,
             #[serde(default)]
             cover_data_url: Option<String>,
+            #[serde(default)]
+            images: Vec<String>,
+            #[serde(default)]
+            subtitle: Option<String>,
         }
         if let Ok(a) = serde_json::from_str::<ArticleWire>(json_part.trim_start()) {
             return MessageKind::Article {
                 title: a.title,
                 body: a.body,
                 cover_data_url: a.cover_data_url,
+                // Only inline images are accepted (no remote fetches).
+                images: a.images.into_iter().filter(|u| u.starts_with("data:image/")).take(60).collect(),
+                subtitle: a.subtitle.filter(|s| !s.trim().is_empty()),
             };
         }
     }
@@ -1174,6 +1188,30 @@ pub fn uuid_like() -> String {
 
 #[cfg(test)]
 mod group_rule_tests {
+
+    #[test]
+    fn article_v1_with_and_without_photos() {
+        // Old senders: no images / subtitle.
+        let old = classify_kind(r#"[article:v1]{"title":"T","body":"B","cover_data_url":null}"#);
+        match old {
+            MessageKind::Article { title, images, subtitle, .. } => {
+                assert_eq!(title, "T");
+                assert!(images.is_empty());
+                assert!(subtitle.is_none());
+            }
+            other => panic!("not an article: {other:?}"),
+        }
+        // New: photos for carousels; remote URLs are dropped.
+        let new = classify_kind(r#"[article:v1]{"title":"T","subtitle":"S","body":"[[gallery:0,1]]","cover_data_url":null,"images":["data:image/webp;base64,AAA","https://evil.example/x.png","data:image/jpeg;base64,BBB"]}"#);
+        match new {
+            MessageKind::Article { images, subtitle, .. } => {
+                assert_eq!(images, vec!["data:image/webp;base64,AAA".to_string(), "data:image/jpeg;base64,BBB".to_string()]);
+                assert_eq!(subtitle.as_deref(), Some("S"));
+            }
+            other => panic!("not an article: {other:?}"),
+        }
+    }
+
     use super::*;
 
     fn member(u: &str, role: &str) -> GroupMember {

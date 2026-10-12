@@ -46,6 +46,13 @@ export const SHORTCUTS: ShortcutDoc[] = [
   { group: "Chat", keys: "Ctrl+E", what: "Emoji, stickers & GIFs" },
   { group: "Chat", keys: "Ctrl+End", what: "Jump to the latest message" },
   { group: "Chat", keys: "Ctrl+Shift+C", what: "Call this chat" },
+  { group: "Formatting", keys: "Ctrl+B / Ctrl+I / Ctrl+U", what: "Bold / italic / underline (select text first)" },
+  { group: "Formatting", keys: "Ctrl+Shift+X", what: "Strikethrough" },
+  { group: "Formatting", keys: "Ctrl+Shift+P", what: "Spoiler" },
+  { group: "Formatting", keys: "Ctrl+Shift+M", what: "Monospace" },
+  { group: "Formatting", keys: "Ctrl+K", what: "Add a link" },
+  { group: "Formatting", keys: "Ctrl+Shift+N", what: "Clear formatting" },
+  { group: "Chat", keys: "/", what: "Commands: /article, /poll, /gif, /call…" },
   { group: "Calls", keys: "Ctrl+Shift+M", what: "Mute / unmute" },
   { group: "Calls", keys: "Ctrl+Shift+D", what: "Deafen / undeafen" },
   { group: "App", keys: "Ctrl+,", what: "Settings" },
@@ -73,10 +80,23 @@ function moveChat(delta: number) {
   void selectChat(next.id);
 }
 
+/** Text selected in a text field — formatting shortcuts win then. */
+function formattingSelection(): boolean {
+  if (!isEditable(document.activeElement)) return false;
+  const el = document.activeElement as HTMLInputElement | HTMLTextAreaElement;
+  if ("selectionStart" in el && typeof el.selectionStart === "number" && el.tagName !== "DIV") return el.selectionStart !== el.selectionEnd;
+  const s = getSelection();
+  return !!s && !s.isCollapsed;
+}
+
 function onKeyDown(e: KeyboardEvent) {
   const ctrl = e.ctrlKey || e.metaKey;
   const code = e.code;
   let handled = true;
+
+  // Telegram formatting keys (Ctrl+K link, Ctrl+Shift+M/X/P/N) on selected
+  // text belong to the text field, not to the app-wide shortcuts.
+  if (ctrl && formattingSelection() && (code === "KeyK" || (e.shiftKey && ["KeyM", "KeyX", "KeyP", "KeyN"].includes(code)))) return;
 
   if ((ctrl && (e.key === "/" || code === "Slash")) || e.key === "F1") {
     shortcutsOpen.update((v) => !v);

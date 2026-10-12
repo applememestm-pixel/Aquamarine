@@ -38,33 +38,16 @@
   import { mutedChats, setMuted } from "../chatPrefs";
   import { insertToComposer } from "../composerBus";
   import { groupMap } from "../groups";
+  import Markup from "./Markup.svelte";
+  import LinkPreview from "./LinkPreview.svelte";
+  import Carousel from "./Carousel.svelte";
+  import { hasMarkup, linksIn, plainText, excerptOf } from "../markup";
+  import { openArticleReader } from "../reader";
+  import { shortcutsOpen } from "../shortcuts";
   import { openGroupPanel } from "./GroupPanel.svelte";
   import { reactions, toggleMyReaction, applyPeerReaction, reactionChips, hashContent, pins, pinMessage, unpinMessage, pinnedId } from "../messageMeta";
   import { openNewChatDialog } from "../newChat";
 
-  // Lightweight markdown → HTML for article bodies in the chat view.
-  // Same subset as ArticleComposer.svelte.
-  function renderArticleBody(src: string): string {
-    const escape = (s: string) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] ?? c));
-    const lines = escape(src).split(/\r?\n/);
-    const out: string[] = [];
-    let inList = false;
-    const inline = (t: string) => t
-      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-      .replace(/\*(.+?)\*/g, "<em>$1</em>")
-      .replace(/`([^`]+)`/g, "<code>$1</code>")
-      .replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g, `<a href="$2" target="_blank" rel="noopener">$1</a>`);
-    for (const raw of lines) {
-      const line = raw.trimEnd();
-      if (/^#\s/.test(line))       { if (inList) { out.push("</ul>"); inList = false; } out.push(`<h3>${line.slice(2)}</h3>`); }
-      else if (/^##\s/.test(line)) { if (inList) { out.push("</ul>"); inList = false; } out.push(`<h4>${line.slice(3)}</h4>`); }
-      else if (/^[-*]\s/.test(line)) { if (!inList) { out.push("<ul>"); inList = true; } out.push(`<li>${inline(line.slice(2))}</li>`); }
-      else if (line === "") { if (inList) { out.push("</ul>"); inList = false; } }
-      else { if (inList) { out.push("</ul>"); inList = false; } out.push(`<p>${inline(line)}</p>`); }
-    }
-    if (inList) out.push("</ul>");
-    return out.join("\n");
-  }
   import { contacts, getContact } from "../contacts";
   import type { ChatMessage } from "../types";
 
@@ -749,7 +732,62 @@
     document.querySelector(`[data-msg-id="${CSS.escape(row.id)}"]`)?.scrollIntoView({ block: "nearest" });
   }
 
+  // ---- "/" commands (Telegram-style) ------------------------------------
+  interface SlashCmd { cmd: string; desc: string; run: () => void }
+  function replaceText(v: string) { text = v; queueMicrotask(() => composerEl?.focus()); }
+  function sendNow(v: string) { text = v; void submit(); }
+  let slashCmds = $derived.by((): SlashCmd[] => [
+    { cmd: "article", desc: $t("Write an article with photos"), run: () => { text = ""; if ($activeChat) openArticleComposer($activeChat.id); } },
+    { cmd: "poll", desc: $t("Create a poll or quiz"), run: () => {
+      text = "";
+      if (!canSendKind(activeGroup, myUsername, "poll")) { showToast(tr("Only admins can create polls here")); return; }
+      openPollComposer();
+    } },
+    { cmd: "file", desc: $t("Send photos, videos or files"), run: () => { text = ""; void pickAndSendFile(); } },
+    { cmd: "gif", desc: $t("Emoji, stickers & GIFs"), run: () => { text = ""; if ($activeChat) openMediaPicker($activeChat.id); } },
+    { cmd: "sticker", desc: $t("Emoji, stickers & GIFs"), run: () => { text = ""; if ($activeChat) openMediaPicker($activeChat.id); } },
+    { cmd: "video", desc: $t("Record a round video message"), run: () => { text = ""; if ($activeChat) openCircleRecorder($activeChat.id); } },
+    { cmd: "call", desc: $t("Voice call"), run: () => { text = ""; if (isGroup && activeGroup) void joinGroupCall(activeGroup.id); else startVoiceCall(); } },
+    { cmd: "search", desc: $t("Search in this chat"), run: () => { text = ""; openSearch(); } },
+    { cmd: "dice", desc: $t("Roll a die"), run: () => sendNow(`🎲 ${1 + Math.floor(Math.random() * 6)}`) },
+    { cmd: "coin", desc: $t("Flip a coin"), run: () => sendNow(`🪙 ${Math.random() < 0.5 ? $t("Heads") : $t("Tails")}`) },
+    { cmd: "shrug", desc: "¯\\_(ツ)_/¯", run: () => replaceText("¯\\_(ツ)_/¯ ") },
+    { cmd: "tableflip", desc: "(╯°□°)╯︵ ┻━┻", run: () => replaceText("(╯°□°)╯︵ ┻━┻ ") },
+    { cmd: "unflip", desc: "┬─┬ノ( º _ ºノ)", run: () => replaceText("┬─┬ノ( º _ ºノ) ") },
+    { cmd: "lenny", desc: "( ͡° ͜ʖ ͡°)", run: () => replaceText("( ͡° ͜ʖ ͡°) ") },
+    { cmd: "spoiler", desc: $t("Hidden text: ||like this||"), run: () => replaceText("||") },
+    { cmd: "help", desc: $t("Keyboard shortcuts and formatting"), run: () => { text = ""; shortcutsOpen.set(true); } },
+  ]);
+  let slashIdx = $state(0);
+  let slashHidden = $state("");
+  let slashMatches = $derived.by(() => {
+    const m = /^\/([\p{L}\w]*)$/u.exec(text);
+    if (!m || $activeChat?.live !== true || slashHidden === text) return [];
+    const q = m[1].toLowerCase();
+    return slashCmds.filter((c) => c.cmd.startsWith(q));
+  });
+  $effect(() => { void slashMatches.length; slashIdx = 0; });
+  function runSlash(c: SlashCmd) { slashHidden = ""; c.run(); }
+  /** Returns true when the key was used by the command popup. */
+  function slashKey(e: KeyboardEvent): boolean {
+    if (!slashMatches.length) return false;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const n = slashMatches.length;
+      slashIdx = (slashIdx + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+      return true;
+    }
+    if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      runSlash(slashMatches[Math.min(slashIdx, slashMatches.length - 1)]);
+      return true;
+    }
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); slashHidden = text; return true; }
+    return false;
+  }
+
   function onKey(e: KeyboardEvent) {
+    if (slashKey(e)) return;
     const ctrl = e.ctrlKey || e.metaKey;
     if (e.key === "ArrowUp" && !ctrl && !e.shiftKey && !e.altKey && text.length === 0 && !editTarget) {
       // Telegram: ↑ in an empty box edits your last message.
@@ -1397,6 +1435,18 @@
   {/if}
 {/snippet}
 
+{#snippet msgBody(str: string)}
+  {#if hasMarkup(str)}
+    <Markup src={str} resolveEmoji={(k) => emojiMap[k]} compact />
+    {#if $settings.linkPreviews}
+      {@const link = linksIn(str)[0]}
+      {#if link}<LinkPreview url={link} />{/if}
+    {/if}
+  {:else}
+    {@render richText(str)}
+  {/if}
+{/snippet}
+
 {#snippet richText(str: string)}
   {#each richParts(str) as part}
     {#if part.t === "text"}{part.v}{:else if emojiMap[part.key]}<span class="inline-emoji" title={ceFallback(part.key)}><AnimatedMedia src={emojiMap[part.key].url} mime={emojiMap[part.key].mime} alt={ceFallback(part.key)} play="auto" /></span>{:else}{ceFallback(part.key)}{/if}
@@ -1763,16 +1813,27 @@
                 {/if}
               {:else if m.kind.type === "article"}
                 {@const art = m.kind.content}
-                {@const words = art.body.trim().split(/\s+/).filter(Boolean).length}
-                {@const readMin = Math.max(1, Math.round(words / 220))}
+                {@const imgs = art.images ?? []}
+                {@const excerpt = excerptOf(art.body)}
+                {@const words = plainText(art.body, "article").split(/\s+/).filter(Boolean).length}
+                {@const readMin = Math.max(1, Math.round(words / 200))}
+                {@const openIt = () => openArticleReader(art, { author: m.outgoing ? $t("You") : m.from, time: m.time })}
                 <div class="bubble article-bubble">
                   {#if art.cover_data_url}
-                    <div class="art-cover" style={`background-image: url(${art.cover_data_url});`}></div>
+                    <button class="art-cover" style={`background-image: url(${art.cover_data_url});`} onclick={openIt} aria-label={$t("Read article")}></button>
+                  {:else if imgs.length}
+                    <div class="art-carousel"><Carousel srcs={imgs} aspect={16 / 10} onopen={(i) => openGallery(imgs.map((url) => ({ url, kind: "image" as const })), i)} /></div>
                   {/if}
-                  <div class="art-body">
-                    <div class="art-tag">📰 Article · ≈{readMin} min read</div>
+                  <!-- svelte-ignore a11y_click_events_have_key_events -->
+                  <!-- svelte-ignore a11y_no_static_element_interactions -->
+                  <div class="art-body" onclick={openIt}>
+                    <div class="art-tag">📰 {$t("Article")} · {$t("{n} min read", { n: readMin })}{imgs.length ? ` · ${$t("{n} photos", { n: imgs.length })}` : ""}</div>
                     <h3 class="art-title">{art.title}</h3>
-                    <div class="art-md">{@html renderArticleBody(art.body)}</div>
+                    {#if art.subtitle}<div class="art-sub">{art.subtitle}</div>{/if}
+                    {#if excerpt}<p class="art-excerpt">{excerpt}</p>{/if}
+                  </div>
+                  <div class="art-foot">
+                    <button class="art-read" onclick={openIt}>⚡ {$t("Read article")}</button>
                     <span class="bubble-meta inline-meta">
                       {m.time}
                       {@render statusTick(m.outgoing)}
@@ -1844,7 +1905,7 @@
                     <span class="rq-author">{m.kind.content.quoted_author}</span>
                     <span class="rq-text">{@render richText(m.kind.content.quoted_text)}</span>
                   </div>
-                  {@render richText(m.kind.content.text)}
+                  {@render msgBody(m.kind.content.text)}
                   <span class="bubble-meta">
                     {@render msgFlags(m)}
                     {m.time}
@@ -1853,7 +1914,7 @@
                 </div>
               {:else if m.kind.type === "text"}
                 <div class="bubble">
-                  {@render richText(m.kind.content.text)}
+                  {@render msgBody(m.kind.content.text)}
                   <span class="bubble-meta">
                     {@render msgFlags(m)}
                     {m.time}
@@ -2041,6 +2102,17 @@
         onclick={() => { if ($pickerState.open) closeMediaPicker(); else if (liveChat && $activeChat) openMediaPicker($activeChat.id); }}
       >{@html icons.sticker}</button>
       <div class="input-wrap">
+        {#if slashMatches.length}
+          <div class="slash-pop" role="listbox" aria-label={$t("Commands")}>
+            {#each slashMatches as c, i (c.cmd)}
+              <button class="slash-item" class:on={i === slashIdx} role="option" aria-selected={i === slashIdx}
+                onmousedown={(e) => e.preventDefault()} onmouseenter={() => (slashIdx = i)} onclick={() => runSlash(c)}>
+                <span class="slash-cmd">/{c.cmd}</span>
+                <span class="slash-desc">{c.desc}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
         <RichComposer
           bind:this={composerEl}
           bind:value={text}
@@ -2649,52 +2721,61 @@
   .media-sub { font-variant-numeric: tabular-nums; flex-shrink: 0; }
   .inline-meta { float: none; margin-left: 4px; padding: 0; }
 
-  /* Article bubble — Telegra.ph-style card. */
+  /* "/" command popup */
+  .input-wrap { position: relative; }
+  .slash-pop {
+    position: absolute; left: -6px; right: -6px; bottom: calc(100% + 10px); z-index: 30;
+    max-height: 300px; overflow-y: auto;
+    padding: 5px;
+    background: var(--bg-surface-2, var(--bg-list));
+    border: 1px solid var(--border-strong);
+    border-radius: 12px;
+    box-shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.55);
+  }
+  .slash-item {
+    width: 100%; display: flex; align-items: baseline; gap: 12px;
+    padding: 7px 10px; border: none; border-radius: 8px;
+    background: transparent; color: var(--fg); text-align: left; cursor: pointer;
+  }
+  .slash-item.on { background: var(--accent-soft); }
+  .slash-cmd { font-weight: 700; color: var(--accent); font-family: var(--font-mono); font-size: 13px; min-width: 96px; }
+  .slash-desc { font-size: 12.5px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* Article bubble — Telegra.ph-style card; opens the full-screen reader. */
   .bubble.article-bubble {
     padding: 0;
     overflow: hidden;
-    max-width: 480px;
-    min-width: 320px;
+    width: min(440px, 100%);
     display: block;
   }
   .art-cover {
+    all: unset; cursor: pointer; display: block;
     width: 100%;
     aspect-ratio: 16 / 7;
     background-size: cover;
     background-position: center;
     border-bottom: 1px solid var(--border);
   }
-  .art-body {
-    padding: 14px 16px;
-  }
+  .art-carousel { padding: 6px 6px 0; }
+  .art-carousel :global(.stage) { border-radius: 10px; }
+  .art-body { padding: 12px 14px 4px; cursor: pointer; }
   .art-tag {
-    font-size: 11px;
-    font-weight: 700;
-    color: var(--accent);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    margin-bottom: 6px;
+    font-size: 11px; font-weight: 700; color: var(--accent);
+    text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px;
   }
-  .art-title {
-    margin: 0 0 10px;
-    font-size: 18px;
-    font-weight: 800;
-    letter-spacing: -0.01em;
-    line-height: 1.25;
+  .art-title { margin: 0 0 4px; font-size: 18px; font-weight: 800; letter-spacing: -0.01em; line-height: 1.25; }
+  .art-sub { font-size: 13.5px; color: var(--fg-muted); margin-bottom: 4px; }
+  .art-excerpt {
+    margin: 4px 0 0; font-size: 13px; line-height: 1.5; color: var(--fg-muted);
+    display: -webkit-box; -webkit-line-clamp: 4; line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
   }
-  .art-md {
-    font-size: 13.5px;
-    line-height: 1.6;
-    color: var(--fg);
+  .art-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px 10px 14px; }
+  .art-read {
+    padding: 6px 12px; border-radius: 8px; border: none; cursor: pointer;
+    background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent);
+    font-weight: 800; font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase;
   }
-  .art-md :global(h3) { font-size: 15px; margin: 14px 0 4px; font-weight: 700; }
-  .art-md :global(h4) { font-size: 13.5px; margin: 12px 0 3px; font-weight: 700; color: var(--fg-muted); }
-  .art-md :global(p) { margin: 0 0 8px; }
-  .art-md :global(ul) { margin: 0 0 8px; padding-left: 20px; }
-  .art-md :global(li) { margin-bottom: 2px; }
-  .art-md :global(code) { font-family: var(--font-mono); background: var(--bg-input); padding: 1px 5px; border-radius: 4px; font-size: 0.9em; }
-  .art-md :global(a) { color: var(--accent); text-decoration: underline; text-decoration-color: var(--accent-soft); }
-  .art-md :global(strong) { font-weight: 700; }
+  .art-read:hover { background: color-mix(in srgb, var(--accent) 26%, transparent); }
 
   /* Voice-recording bar — shown above the composer while mic is live. */
   .rec-bar {

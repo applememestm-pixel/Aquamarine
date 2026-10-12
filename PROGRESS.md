@@ -5,6 +5,46 @@ resume. Newest entries at the top.
 
 ---
 
+## 2026-10-12 — Session 44: Telegraph-style articles, carousels, Telegram formatting, / commands, link & video previews
+
+- **Formatting everywhere** (`lib/markup.ts` → `Markup.svelte`, no `{@html}`):
+  `**bold**`, `__italic__`, `++underline++`, `~~strike~~`, `||spoiler||`,
+  `` `code` ``, ```` ```lang ```` blocks, `> quote`, `[text](url)`, bare links,
+  `@mentions` (open the profile), `#hashtags`, custom emoji. Articles add
+  `# / ##` headings, lists, `---`, `>> pull quote`, `*italic*` and
+  `[[gallery:0,1,2|caption]]`. Escapes only where a marker could start
+  (`\**`), so `¯\_(ツ)_/¯` survives. Plain messages keep the old fast path.
+- **Composer**: floating format bar on selected text + Telegram keys
+  (Ctrl+B/I/U, Ctrl+Shift+X/P/M/N, Ctrl+Shift+., Ctrl+K). `shortcuts.ts`
+  yields those keys to text fields when text is selected. The bar is
+  portalled to `<body>` (the composer's `backdrop-filter` traps `position:fixed`).
+- **`/` commands**: /article /poll /file /gif /sticker /video /call /search
+  /dice /coin /shrug /tableflip /unflip /lenny /spoiler /help — ↑↓, Enter/Tab, Esc.
+- **Articles v2** (still `[article:v1]`, new optional `images[]` + `subtitle`;
+  old clients ignore them, Rust keeps only `data:image/…`, ≤60): toolbar,
+  photo tray (reorder / remove with index remap, orphans appended), paste
+  images, per-chat draft in localStorage, size guard (warn 10 MB, max 24 MB),
+  photos shrunk to 1600 px WebP (JPEG on WebKit, which can't encode WebP).
+- **Carousel.svelte**: swipe / drag, arrows, keys, dots or counter, thumbnails;
+  click → gallery viewer. Used in the chat card, the reader and Telegraph pages.
+- **Reader (Instant View)** `ArticleReader.svelte` + `lib/reader.ts`: full
+  screen, progress bar, A−/A+ (Ctrl ±), Esc. Article bubble is now a card
+  (cover or carousel, title, subtitle, excerpt, «Читать статью»).
+- **Telegraph**: telegra.ph / graph.org links open in the reader via
+  `api.telegra.ph/getPage` (`web::telegraph_page`); nodes → blocks, runs of
+  figures merge into one carousel, YouTube embeds become preview cards.
+- **Link previews** (`web.rs`, through the Settings proxy): OpenGraph/Twitter
+  meta (head only, ≤768 KB), YouTube via oEmbed + thumbnail and an inline
+  youtube-nocookie player (CSP `frame-src`), direct video links / `og:video`
+  files downloaded to `<data>/webcache` (auto ≤60 MB when auto-download is on,
+  button otherwise, ≤500 MB) and played inline; images too. Toggle:
+  Settings → Behaviour → Link previews. `open_external` opens other links in
+  the system browser. `transport::http_client()` is now `pub`.
+- Verified: cargo tests (web parsers, article wire compat), svelte-check
+  0 errors, rendered `ui/dist` in headless Chromium with a mocked Tauri bridge
+  (formatting, quote, code, previews, YouTube iframe, inline video, carousel
+  swipe, spoiler, external link, / menu, format bar, composer, both readers).
+
 ## 2026-10-12 — Session 43: v0.1.1 — moved to Arch Linux; Linux client fixes, iOS build, SMTP
 
 - **Linux client (WebKitGTK)** — the dev machine is now Arch, and the Linux

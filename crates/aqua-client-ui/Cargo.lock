@@ -123,6 +123,7 @@ dependencies = [
  "hex",
  "infer",
  "keyring",
+ "reqwest 0.12.28",
  "serde",
  "serde_bytes",
  "serde_json",

@@ -54,7 +54,7 @@ pub fn proxy() -> Option<String> {
 }
 
 /// A reqwest client that honours the configured proxy.
-fn http_client() -> Result<reqwest::Client, TransportError> {
+pub fn http_client() -> Result<reqwest::Client, TransportError> {
     let mut b = reqwest::Client::builder()
         .user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION")));
     if let Some(p) = proxy() {
