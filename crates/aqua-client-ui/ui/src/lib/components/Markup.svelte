@@ -3,14 +3,16 @@
    * Renders formatted text (lib/markup.ts) — chat messages, articles and
    * Telegraph pages. Plain Svelte elements only (no {@html}).
    */
-  import { parseBlocks, type Block, type Inline, type Mode } from "../markup";
+  import { parseBlocks, type Block, type Inline, type Mode, type GalleryRef } from "../markup";
+  import type { ArticleMedia } from "../types";
+  import { objectUrl, mediaUrl, fmtDuration } from "../media";
   import { openLink } from "../reader";
   import { openProfile } from "./ProfileModal.svelte";
   import { openGallery } from "./Lightbox.svelte";
   import { showToast } from "./Toast.svelte";
   import { tr } from "../i18n";
   import AnimatedMedia from "./AnimatedMedia.svelte";
-  import Carousel from "./Carousel.svelte";
+  import Carousel, { type CarouselItem } from "./Carousel.svelte";
   import LinkPreview from "./LinkPreview.svelte";
 
   interface Props {
@@ -20,12 +22,36 @@
     mode?: Mode;
     /** Display URLs for gallery blocks (indexes from the article). */
     images?: string[];
+    /** Article videos referenced as `v<N>` in galleries. */
+    media?: ArticleMedia[];
+    /** Composer preview: local files not uploaded yet (index → path URL). */
+    localMedia?: Record<number, string>;
     /** Custom emoji lookup ("pack/file" → media). */
     resolveEmoji?: (key: string) => { url: string; mime: string } | undefined;
     /** Small bubbles: tighter spacing, no thumbnails under carousels. */
     compact?: boolean;
   }
-  let { src = "", blocks, mode = "message", images = [], resolveEmoji, compact = false }: Props = $props();
+  let { src = "", blocks, mode = "message", images = [], media = [], localMedia = {}, resolveEmoji, compact = false }: Props = $props();
+
+  /** data: URLs → blob: URLs once (re-parsing them on every render lags). */
+  let imgs = $derived(images.map((u) => objectUrl(u)));
+
+  function slideItems(refs: GalleryRef[]): CarouselItem[] {
+    return refs.flatMap((r): CarouselItem[] => {
+      if (r.kind === "image") return [{ kind: "image", src: imgs[r.i] ?? "" }];
+      const m = media[r.i];
+      if (!m || m.kind !== "video") return [];
+      const local = localMedia[r.i];
+      const label = [m.name.replace(/\.[a-z0-9]{2,5}$/i, ""), fmtDuration(m.duration)].filter(Boolean).join(" · ");
+      return [{
+        kind: "video",
+        poster: m.poster ? objectUrl(m.poster) : undefined,
+        src: local,
+        resolve: local ? undefined : () => mediaUrl(m),
+        label,
+      }];
+    });
+  }
 
   let tree = $derived(blocks ?? parseBlocks(src, mode));
 
@@ -46,9 +72,11 @@
   async function copyPre(text: string) {
     try { await navigator.clipboard.writeText(text); showToast(tr("Copied")); } catch { /* ignore */ }
   }
-  function openPhotos(idx: number[], i: number) {
-    const items = idx.map((k) => images[k]).filter(Boolean).map((url) => ({ url, kind: "image" as const }));
-    if (items.length) openGallery(items, Math.min(i, items.length - 1));
+  /** Clicked slide `i` of a carousel: open its photos full screen. */
+  function openPhotos(items: CarouselItem[], i: number) {
+    const photos = items.filter((x) => x.kind === "image" && x.src);
+    const at = photos.indexOf(items[i]);
+    if (photos.length) openGallery(photos.map((x) => ({ url: x.src!, kind: "image" as const })), Math.max(0, at));
   }
 </script>
 
@@ -82,8 +110,9 @@
     {:else if b.t === "hr"}
       <hr class="mk-hr" />
     {:else if b.t === "gallery"}
+      {@const items = slideItems(b.items)}
       <figure class="mk-fig">
-        <Carousel srcs={b.idx.map((i) => images[i] ?? "")} aspect={compact ? 16 / 10 : 4 / 3} thumbs={!compact && b.idx.length > 1} onopen={(i) => openPhotos(b.idx, i)} />
+        <Carousel {items} aspect={compact ? 16 / 10 : 4 / 3} thumbs={!compact && items.length > 1} onopen={(i) => openPhotos(items, i)} />
         {#if b.caption}<figcaption>{@render inl(b.caption)}</figcaption>{/if}
       </figure>
     {:else if b.t === "video" || b.t === "embed"}
@@ -103,6 +132,8 @@
   .mk.msg { display: inline; }
   .mk.msg .mk-p { display: inline; }
   .mk-p { margin: 0; white-space: pre-wrap; }
+  /* Long articles: skip layout / paint of what's far off screen. */
+  .article > :global(*) { content-visibility: auto; contain-intrinsic-size: auto 120px; }
   .article .mk-p { margin: 0 0 0.85em; white-space: normal; }
   .mk-h1 { font-size: 1.3em; font-weight: 800; margin: 1.1em 0 0.4em; letter-spacing: -0.01em; line-height: 1.25; }
   .mk-h2 { font-size: 1.1em; font-weight: 700; margin: 1em 0 0.35em; color: var(--fg-muted); }

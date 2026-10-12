@@ -86,6 +86,48 @@ pub struct LocalPrefs {
     pub blocked: std::collections::HashSet<String>,
 }
 
+/// A video or audio file attached to an article. Same crypto as a normal
+/// file offer: the blob sits encrypted on the relay, the key travels only
+/// inside the (E2EE) article message.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArticleMedia {
+    /// "video" | "audio"
+    pub kind: String,
+    pub cid: String,
+    #[serde(default)]
+    pub key_b64: String,
+    #[serde(default)]
+    pub nonce_b64: String,
+    pub name: String,
+    #[serde(default)]
+    pub size: u64,
+    #[serde(default)]
+    pub mime: Option<String>,
+    /// Small still frame for videos (data:image/…).
+    #[serde(default)]
+    pub poster: Option<String>,
+    /// Seconds, when the sender knew it.
+    #[serde(default)]
+    pub duration: Option<f64>,
+}
+
+impl ArticleMedia {
+    /// Only well-formed references survive parsing (no remote URLs, no
+    /// path tricks in the CID).
+    pub fn sane(mut self) -> Option<Self> {
+        if self.kind != "video" && self.kind != "audio" { return None; }
+        let cid_ok = (self.cid.len() == 64 && self.cid.chars().all(|c| c.is_ascii_hexdigit()))
+            || (self.cid.starts_with("local-") && self.cid.len() <= 64
+                && self.cid.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+        if !cid_ok { return None; }
+        if self.poster.as_deref().is_some_and(|p| !p.starts_with("data:image/") || p.len() > 400_000) {
+            self.poster = None;
+        }
+        // `name` stays byte-exact: it is the AEAD associated data of the blob.
+        Some(self)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "content", rename_all = "snake_case")]
 pub enum MessageKind {
@@ -126,6 +168,10 @@ pub enum MessageKind {
         /// Optional subtitle / lead line under the title.
         #[serde(default)]
         subtitle: Option<String>,
+        /// Videos (in carousels as `v<N>`) and music (the article's
+        /// playlist): encrypted blobs on the relay, referenced by CID + key.
+        #[serde(default)]
+        media: Vec<ArticleMedia>,
     },
     /// A poll — Telegram-style. Travels as a plain-text payload tagged
     /// `[poll:v1]{json}` so it syncs through the normal E2EE message path
@@ -1048,6 +1094,8 @@ pub fn classify_kind(text: &str) -> MessageKind {
             images: Vec<String>,
             #[serde(default)]
             subtitle: Option<String>,
+            #[serde(default)]
+            media: Vec<ArticleMedia>,
         }
         if let Ok(a) = serde_json::from_str::<ArticleWire>(json_part.trim_start()) {
             return MessageKind::Article {
@@ -1057,6 +1105,7 @@ pub fn classify_kind(text: &str) -> MessageKind {
                 // Only inline images are accepted (no remote fetches).
                 images: a.images.into_iter().filter(|u| u.starts_with("data:image/")).take(60).collect(),
                 subtitle: a.subtitle.filter(|s| !s.trim().is_empty()),
+                media: a.media.into_iter().filter_map(ArticleMedia::sane).take(40).collect(),
             };
         }
     }
@@ -1188,6 +1237,28 @@ pub fn uuid_like() -> String {
 
 #[cfg(test)]
 mod group_rule_tests {
+
+    #[test]
+    fn article_media_refs_are_sanitised() {
+        let hex = "a".repeat(64);
+        let txt = format!(r#"[article:v1]{{"title":"T","body":"[[gallery:0,v0]]","cover_data_url":null,"media":[
+            {{"kind":"video","cid":"{hex}","key_b64":"k","nonce_b64":"n","name":"clip.mp4","size":5,"poster":"data:image/jpeg;base64,AA"}},
+            {{"kind":"audio","cid":"local-abc-123","name":"song.mp3"}},
+            {{"kind":"video","cid":"../../etc/passwd","name":"x.mp4"}},
+            {{"kind":"exe","cid":"{hex}","name":"x.exe"}},
+            {{"kind":"video","cid":"{hex}","name":"y.mp4","poster":"https://tracker.example/p.png"}}
+        ]}}"#);
+        match classify_kind(&txt) {
+            MessageKind::Article { media, .. } => {
+                assert_eq!(media.len(), 3);
+                assert_eq!(media[0].kind, "video");
+                assert!(media[0].poster.is_some());
+                assert_eq!(media[1].cid, "local-abc-123");
+                assert!(media[2].poster.is_none(), "remote poster must be dropped");
+            }
+            other => panic!("not an article: {other:?}"),
+        }
+    }
 
     #[test]
     fn article_v1_with_and_without_photos() {

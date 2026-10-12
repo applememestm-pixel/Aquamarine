@@ -48,6 +48,8 @@ export type MessageKind =
       /** Photos for [[gallery:…]] carousels (data: URLs). */
       images?: string[];
       subtitle?: string | null;
+      /** Videos (`v<N>` in carousels) and music (the playlist). */
+      media?: ArticleMedia[];
     } }
   | { type: "poll";            content: {
       id: string;
@@ -67,6 +69,19 @@ export type MessageKind =
     } }
   | { type: "system";          content: { text: string } }
   | { type: "date_separator";  content: { label: string } };
+
+/** A video / track attached to an article (encrypted blob on the relay). */
+export interface ArticleMedia {
+  kind: "video" | "audio";
+  cid: string;
+  key_b64: string;
+  nonce_b64: string;
+  name: string;
+  size: number;
+  mime: string | null;
+  poster?: string | null;
+  duration?: number | null;
+}
 
 /** Mirrors `InitInfo` in the Rust backend. */
 export interface InitInfo {

@@ -21,7 +21,8 @@
    * preview, and a per-chat draft that survives closing the window.
    */
   import { onMount, tick } from "svelte";
-  import { api, bytesToDataUrl } from "../tauri";
+  import { api, assetUrl, bytesToDataUrl } from "../tauri";
+  import type { ArticleMedia } from "../types";
   import { loadActiveMessages, chats } from "../stores";
   import { showToast } from "./Toast.svelte";
   import { cropImage } from "./ImageCropper.svelte";
@@ -30,20 +31,38 @@
   import { get as getStore } from "svelte/store";
   import { t, tr } from "../i18n";
   import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
-  import { parseBlocks, wordCount } from "../markup";
-  import { shrinkImage, dataUrlBytes } from "../imageTools";
+  import { parseBlocks, wordCount, parseGalleryRefs, galleryLine, GALLERY_LINE, type GalleryRef } from "../markup";
+  import { shrinkImage, dataUrlBytes, probeMedia } from "../imageTools";
+  import { fmtDuration } from "../media";
   import Markup from "./Markup.svelte";
 
   const MAX_PHOTOS = 40;
   const WARN_BYTES = 10 * 1024 * 1024;
   const MAX_BYTES = 24 * 1024 * 1024;
-  const GALLERY = /^\[\[gallery:([\d,\s]+)(?:\|(.*))?\]\]$/;
+  const GALLERY = GALLERY_LINE;
+  const MAX_MEDIA = 30;
+  const VIDEO_EXT = ["mp4", "m4v", "webm", "mov", "mkv"];
+  const AUDIO_EXT = ["mp3", "m4a", "aac", "ogg", "oga", "opus", "flac", "wav", "weba"];
+  const IMAGE_EXT = ["png", "jpg", "jpeg", "webp", "gif", "bmp", "avif"];
+
+  /** A video / track in the composer: a local file until publish uploads it. */
+  interface PendingMedia {
+    kind: "video" | "audio";
+    name: string;
+    path?: string;
+    poster?: string;
+    duration?: number;
+    /** Set once uploaded (or when restored from a draft). */
+    ref?: ArticleMedia;
+  }
 
   let title = $state("");
   let subtitle = $state("");
   let body = $state("");
   let coverDataUrl = $state<string | null>(null);
   let images = $state<string[]>([]);
+  let media = $state<PendingMedia[]>([]);
+  let uploading = $state("");
   let preview = $state(false);
   let sending = $state(false);
   let adding = $state(0);
@@ -57,12 +76,14 @@
     if (s && s.peerId !== prevPeer) {
       prevPeer = s.peerId;
       preview = false; sending = false;
-      title = ""; subtitle = ""; body = ""; coverDataUrl = null; images = [];
+      title = ""; subtitle = ""; body = ""; coverDataUrl = null; images = []; media = [];
       try {
         const d = JSON.parse(localStorage.getItem(draftKey(s.peerId)) ?? "null");
         if (d) {
           title = d.title ?? ""; subtitle = d.subtitle ?? ""; body = d.body ?? "";
           coverDataUrl = d.cover ?? null; images = Array.isArray(d.images) ? d.images : [];
+          media = Array.isArray(d.media) ? d.media : [];
+          for (const m of media) if (m.path) void api.allowMediaPreview(m.path).catch(() => {});
         }
       } catch { /* no draft */ }
       void tick().then(() => ta?.focus());
@@ -73,11 +94,11 @@
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   $effect(() => {
     const s = $articleState;
-    const snap = { title, subtitle, body, cover: coverDataUrl, images };
+    const snap = { title, subtitle, body, cover: coverDataUrl, images, media };
     if (!s) return;
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
-      const empty = !snap.title && !snap.subtitle && !snap.body && !snap.cover && !snap.images.length;
+      const empty = !snap.title && !snap.subtitle && !snap.body && !snap.cover && !snap.images.length && !snap.media.length;
       try {
         if (empty) localStorage.removeItem(draftKey(s.peerId));
         else localStorage.setItem(draftKey(s.peerId), JSON.stringify(snap));
@@ -234,23 +255,62 @@
     return added;
   }
 
+  const extOf = (p: string) => (p.split(/[\\/]/).pop() ?? "").split(".").pop()?.toLowerCase() ?? "";
+  const nameOf = (p: string) => p.split(/[\\/]/).pop() ?? p;
+
+  /** Videos / tracks picked from disk → pending media (uploaded on publish). */
+  async function addMediaFiles(paths: string[], kind: "video" | "audio"): Promise<number[]> {
+    const room = MAX_MEDIA - media.length;
+    if (room <= 0) { showToast(tr("Up to {n} videos and tracks per article", { n: MAX_MEDIA })); return []; }
+    const out: number[] = [];
+    for (const path of paths.slice(0, room)) {
+      const item: PendingMedia = { kind, name: nameOf(path), path };
+      media = [...media, item];
+      const i = media.length - 1;
+      out.push(i);
+      // Poster + duration in the background (needs asset access to the file).
+      void api.allowMediaPreview(path).then(() => probeMedia(assetUrl(path), kind)).then((r) => {
+        const cur = media[i];
+        if (cur && cur.path === path) media[i] = { ...cur, poster: r.poster, duration: r.duration };
+      }).catch(() => {});
+    }
+    return out;
+  }
+
+  /** Photos and videos in one go — they become one carousel, in pick order. */
   async function pickPhotos() {
     try {
       const res = await openFileDialog({
-        multiple: true, directory: false, title: tr("Pick photos for a carousel"),
-        filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp", "avif"] }],
+        multiple: true, directory: false, title: tr("Pick photos and videos for a carousel"),
+        filters: [{ name: tr("Photos and videos"), extensions: [...IMAGE_EXT, ...VIDEO_EXT] }],
       });
       const paths = Array.isArray(res) ? res : res ? [res] : [];
       if (!paths.length) return;
-      const blobs: Blob[] = [];
+      const refs: GalleryRef[] = [];
       for (const p of paths) {
-        const bytes = await api.readUserImage(p);
-        blobs.push(new Blob([new Uint8Array(bytes)]));
+        if (VIDEO_EXT.includes(extOf(p))) {
+          for (const i of await addMediaFiles([p], "video")) refs.push({ kind: "video", i });
+        } else {
+          const bytes = await api.readUserImage(p);
+          for (const i of await addBlobs([new Blob([new Uint8Array(bytes)])])) refs.push({ kind: "image", i });
+        }
       }
-      const idx = await addBlobs(blobs);
-      if (idx.length) insertBlock(`[[gallery:${idx.join(",")}]]`);
+      if (refs.length) insertBlock(galleryLine(refs));
     } catch (e) {
       showToast(tr("Could not add a photo: {e}", { e: String(e) }));
+    }
+  }
+
+  async function pickMusic() {
+    try {
+      const res = await openFileDialog({
+        multiple: true, directory: false, title: tr("Pick music for the article"),
+        filters: [{ name: tr("Music"), extensions: AUDIO_EXT }],
+      });
+      const paths = Array.isArray(res) ? res : res ? [res] : [];
+      if (paths.length) await addMediaFiles(paths, "audio");
+    } catch (e) {
+      showToast(String(e));
     }
   }
 
@@ -262,17 +322,19 @@
     if (idx.length) insertBlock(`[[gallery:${idx.join(",")}]]`);
   }
 
-  function rewriteGalleries(map: (idx: number[]) => number[]) {
+  function rewriteGalleries(map: (refs: GalleryRef[]) => GalleryRef[]) {
     body = body.split("\n").flatMap((line) => {
       const m = GALLERY.exec(line.trim());
       if (!m) return [line];
-      const idx = map(m[1].split(",").map((x) => parseInt(x.trim(), 10)).filter(Number.isFinite));
-      return idx.length ? [`[[gallery:${idx.join(",")}${m[2] != null ? "|" + m[2] : ""}]]`] : [];
+      const refs = map(parseGalleryRefs(m[1]));
+      return refs.length ? [galleryLine(refs, m[2] ?? null)] : [];
     }).join("\n");
   }
   function removeImage(r: number) {
     images = images.filter((_, i) => i !== r);
-    rewriteGalleries((idx) => idx.filter((i) => i !== r).map((i) => (i > r ? i - 1 : i)));
+    rewriteGalleries((refs) => refs
+      .filter((x) => !(x.kind === "image" && x.i === r))
+      .map((x) => (x.kind === "image" && x.i > r ? { ...x, i: x.i - 1 } : x)));
   }
   function moveImage(r: number, d: -1 | 1) {
     const to = r + d;
@@ -280,7 +342,13 @@
     const next = [...images];
     [next[r], next[to]] = [next[to], next[r]];
     images = next;
-    rewriteGalleries((idx) => idx.map((i) => (i === r ? to : i === to ? r : i)));
+    rewriteGalleries((refs) => refs.map((x) => (x.kind !== "image" ? x : x.i === r ? { ...x, i: to } : x.i === to ? { ...x, i: r } : x)));
+  }
+  function removeMedia(r: number) {
+    media = media.filter((_, i) => i !== r);
+    rewriteGalleries((refs) => refs
+      .filter((x) => !(x.kind === "video" && x.i === r))
+      .map((x) => (x.kind === "video" && x.i > r ? { ...x, i: x.i - 1 } : x)));
   }
 
   async function pickCover() {
@@ -303,14 +371,20 @@
   }
 
   // ---------------------------------------------------------------- publish
-  let used = $derived.by(() => {
-    const s = new Set<number>();
+  let usedRefs = $derived.by(() => {
+    const s = new Set<string>();
     for (const line of body.split("\n")) {
       const m = GALLERY.exec(line.trim());
-      if (m) m[1].split(",").forEach((x) => s.add(parseInt(x.trim(), 10)));
+      if (m) for (const r of parseGalleryRefs(m[1])) s.add(r.kind + r.i);
     }
     return s;
   });
+  let used = $derived(new Set([...usedRefs].filter((k) => k.startsWith("image")).map((k) => parseInt(k.slice(5), 10))));
+  /** What the preview shows for media that isn't uploaded yet. */
+  let previewMedia = $derived(media.map((m): ArticleMedia => m.ref ?? {
+    kind: m.kind, cid: "local-preview", key_b64: "", nonce_b64: "", name: m.name, size: 0, mime: null, poster: m.poster, duration: m.duration,
+  }));
+  let previewLocal = $derived(Object.fromEntries(media.map((m, i) => [i, m.path ? assetUrl(m.path) : ""]).filter(([, u]) => u)));
   let bytes = $derived(images.reduce((n, u) => n + dataUrlBytes(u), 0) + (coverDataUrl ? dataUrlBytes(coverDataUrl) : 0) + body.length * 2);
   let blocks = $derived(parseBlocks(body, "article"));
   let words = $derived(wordCount(blocks));
@@ -329,23 +403,48 @@
       showToast(tr("This chat isn't connected yet — start a real chat first"));
       return;
     }
-    // Photos that aren't in any carousel go at the end, so nothing is lost.
-    const orphans = images.map((_, i) => i).filter((i) => !used.has(i));
-    const finalBody = body.trim() + (orphans.length ? `\n\n[[gallery:${orphans.join(",")}]]` : "");
+    // Photos / videos that aren't in any carousel go at the end, so nothing is lost.
+    const orphans: GalleryRef[] = [
+      ...images.map((_, i) => ({ kind: "image" as const, i })).filter((r) => !usedRefs.has("image" + r.i)),
+      ...media.map((m, i) => ({ kind: m.kind, i })).filter((r) => r.kind === "video" && !usedRefs.has("video" + r.i)) as GalleryRef[],
+    ];
+    const finalBody = body.trim() + (orphans.length ? `\n\n${galleryLine(orphans)}` : "");
     sending = true;
+    // Videos and music go up as encrypted files first; the article only
+    // carries their keys.
+    const refs: ArticleMedia[] = [];
+    try {
+      for (let i = 0; i < media.length; i++) {
+        const m = media[i];
+        if (!m.ref) {
+          uploading = tr("Uploading {what} {i} of {n}…", { what: m.kind === "video" ? tr("video") : tr("track"), i: i + 1, n: media.length });
+          if (!m.path) throw new Error(tr("{name}: the file is missing", { name: m.name }));
+          const ref = await api.uploadAttachment(s.peerId, m.path);
+          media[i] = { ...m, ref: { ...ref, poster: m.poster ?? null, duration: m.duration ?? null } };
+        }
+        refs.push(media[i].ref!);
+      }
+    } catch (e) {
+      uploading = "";
+      sending = false;
+      showToast(tr("Could not upload: {e}", { e: String(e) }), 7000);
+      return;
+    }
+    uploading = "";
     const payload = JSON.stringify({
       title: title.trim(),
       subtitle: subtitle.trim() || null,
       body: finalBody,
       cover_data_url: coverDataUrl,
       images,
+      media: refs,
     });
     const envelope = `[article:v1]${payload}`;
     try {
       if (s.peerId.startsWith("grp_")) await api.groupSend(s.peerId, envelope);
       else await api.sendMessage(s.peerId, envelope);
       dropDraft(s.peerId);
-      title = ""; subtitle = ""; body = ""; coverDataUrl = null; images = [];
+      title = ""; subtitle = ""; body = ""; coverDataUrl = null; images = []; media = [];
       await loadActiveMessages();
       chats.set(await api.listChats());
       closeArticleComposer();
@@ -409,9 +508,13 @@
               <button class="tool t-{tl.key}" title={$t(tl.title)} onmousedown={(e) => e.preventDefault()} onclick={tl.run}>{tl.label}</button>
             {/each}
             <span class="tsep"></span>
-            <button class="tool photos" title={$t("Add photos — they become a swipeable carousel")} onmousedown={(e) => e.preventDefault()} onclick={pickPhotos}>
+            <button class="tool photos" title={$t("Add photos and videos — they become a swipeable carousel")} onmousedown={(e) => e.preventDefault()} onclick={pickPhotos}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.5"/><path d="m21 15-5-5L5 19"/></svg>
-              {$t("Photos")}
+              {$t("Photo / video")}
+            </button>
+            <button class="tool photos" title={$t("Attach music — it plays while people read")} onmousedown={(e) => e.preventDefault()} onclick={pickMusic}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+              {$t("Music")}
             </button>
           </div>
 
@@ -424,10 +527,10 @@
             placeholder={$t("Tell your story… Select text and use the toolbar, or type **bold**, __italic__, > quote, # heading. Paste or add photos to make a carousel.")}
           ></textarea>
 
-          {#if images.length || adding}
+          {#if images.length || adding || media.length}
             <div class="tray">
               <div class="tray-head">
-                <span>{$t("Photos")} · {images.length}{adding ? ` (+${adding}…)` : ""}</span>
+                <span>{$t("Attachments")} · {images.length + media.length}{adding ? ` (+${adding}…)` : ""}</span>
                 <span class="tray-hint">{$t("Click a photo to put it into the text")}</span>
               </div>
               <div class="tray-list">
@@ -443,6 +546,24 @@
                   </div>
                 {/each}
                 {#each Array(adding) as _, k (k)}<div class="ph loading"></div>{/each}
+                {#each media as m, i (m.name + ":" + i)}
+                  {#if m.kind === "video"}
+                    <div class="ph vid" class:orphan={!usedRefs.has("video" + i)}>
+                      <button class="ph-img" onclick={() => insertBlock(galleryLine([{ kind: "video", i }]))} title={$t("Insert into the text")}>
+                        {#if m.poster}<img src={m.poster} alt="" />{:else}<span class="ph-icon">🎬</span>{/if}
+                        <span class="ph-play">▶</span>
+                      </button>
+                      <span class="ph-n">v{i}{m.duration ? " · " + fmtDuration(m.duration) : ""}</span>
+                      <button class="ph-x" onclick={() => removeMedia(i)} title={$t("Remove")}>×</button>
+                    </div>
+                  {:else}
+                    <div class="ph aud" title={m.name}>
+                      <span class="ph-icon">🎵</span>
+                      <span class="aud-name">{m.name}</span>
+                      <button class="ph-x" onclick={() => removeMedia(i)} title={$t("Remove")}>×</button>
+                    </div>
+                  {/if}
+                {/each}
               </div>
             </div>
           {/if}
@@ -454,14 +575,17 @@
             <h1>{title || $t("Untitled")}</h1>
             {#if subtitle}<p class="pv-sub">{subtitle}</p>{/if}
             <div class="pv-meta">{$t("{n} min read", { n: readMin })}{images.length ? ` · ${$t("{n} photos", { n: images.length })}` : ""}</div>
-            <Markup {blocks} {images} mode="article" />
+            {#if media.some((m) => m.kind === "audio")}
+              <div class="pv-music">🎵 {media.filter((m) => m.kind === "audio").map((m) => m.name).join(" · ")}</div>
+            {/if}
+            <Markup {blocks} {images} media={previewMedia} localMedia={previewLocal} mode="article" />
           </article>
         </div>
       {/if}
 
       <div class="foot">
         <span class="hint" class:warn={bytes > WARN_BYTES}>
-          {$t("{n} words", { n: words })} · ≈{readMin} {$t("min")} · {mb(bytes)}
+          {#if uploading}<b class="up">{uploading}</b>{:else}{$t("{n} words", { n: words })} · ≈{readMin} {$t("min")} · {mb(bytes)}{#if media.length} · 🎬🎵 {media.length}{/if}{/if}
           <span class="kb">· Ctrl+Enter — {$t("publish")}</span>
         </span>
         <div>
@@ -561,6 +685,13 @@
   .ph-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .ph-n { position: absolute; left: 4px; top: 4px; padding: 0 5px; border-radius: 6px; background: rgba(0,0,0,0.6); color: #fff; font-size: 10.5px; font-weight: 700; }
   .ph-x { position: absolute; right: 3px; top: 3px; width: 20px; height: 20px; border-radius: 50%; border: none; background: rgba(0,0,0,0.6); color: #fff; cursor: pointer; font-size: 13px; line-height: 1; }
+  .ph.vid .ph-play { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-size: 18px; text-shadow: 0 0 6px #000; pointer-events: none; }
+  .ph-icon { display: grid; place-items: center; width: 100%; height: 100%; font-size: 26px; }
+  .ph.aud { flex-basis: 150px; display: flex; align-items: center; gap: 6px; padding: 0 26px 0 8px; }
+  .ph.aud .ph-icon { width: auto; height: auto; font-size: 20px; }
+  .aud-name { font-size: 11.5px; color: var(--fg-muted); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; word-break: break-all; }
+  .pv-music { font-size: 13px; color: var(--fg-muted); padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 14px; }
+  .up { color: var(--accent); font-weight: 700; }
   .ph-move { position: absolute; left: 0; right: 0; bottom: 0; display: flex; justify-content: space-between; opacity: 0; transition: opacity 0.15s; }
   .ph:hover .ph-move { opacity: 1; }
   .ph-move button { border: none; background: rgba(0,0,0,0.6); color: #fff; width: 22px; height: 20px; cursor: pointer; font-weight: 700; }

@@ -46,6 +46,10 @@ pub fn run() -> Result<()> {
                 .or_else(|| app.path().app_data_dir().ok())
                 .unwrap_or_else(|| std::env::temp_dir().join("aquamarine-dev"));
             tracing::info!(path = %data_dir.display(), "aquamarine data directory");
+            // Cached media (web previews, article videos / music) is played
+            // through the asset protocol — also when AQUA_DATA_DIR points
+            // outside the default scope (test clients on another drive).
+            let _ = app.asset_protocol_scope().allow_directory(&data_dir, true);
             let state = state::AppState::boot(data_dir)?;
             app.manage(state);
             commands::spawn_activity_watcher(app.handle().clone());
@@ -57,6 +61,9 @@ pub fn run() -> Result<()> {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             web::link_preview,
+            commands::upload_attachment,
+            commands::fetch_attachment,
+            commands::allow_media_preview,
             web::cache_remote_media,
             web::telegraph_page,
             web::open_external,

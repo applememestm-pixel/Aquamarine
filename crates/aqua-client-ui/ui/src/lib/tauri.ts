@@ -12,6 +12,7 @@ export function assetUrl(path: string | null | undefined): string {
   try { return convertFileSrc(path); } catch { return ""; }
 }
 import type {
+  ArticleMedia,
   AttachResult,
   BotInfo,
   ChatMessage,
@@ -141,6 +142,9 @@ export const api = {
   cacheRemoteMedia:   (url: string, max_mb?: number): Promise<CachedMedia>         => invoke("cache_remote_media", { url, maxMb: max_mb ?? null }),
   telegraphPage:      (path: string): Promise<TelegraphPage>                        => invoke("telegraph_page", { path }),
   openExternal:       (url: string): Promise<void>                                  => invoke("open_external", { url }),
+  uploadAttachment:   (peer_id: string, file_path: string): Promise<ArticleMedia>    => invoke("upload_attachment", { peerId: peer_id, filePath: file_path }),
+  fetchAttachment:    (media: ArticleMedia): Promise<string>                         => invoke("fetch_attachment", { media }),
+  allowMediaPreview:  (path: string): Promise<void>                                  => invoke("allow_media_preview", { path }),
   copyFileTo:         (source: string, dest: string): Promise<void>                => invoke("copy_file_to", { source, dest }),
 
   // Voice & video messages (recorded in-browser → bytes sent to Rust → encrypted via attach pipeline)

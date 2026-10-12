@@ -12,6 +12,7 @@ export interface ReaderArticle {
   body: string;
   cover_data_url: string | null;
   images?: string[];
+  media?: import("./types").ArticleMedia[];
 }
 
 export type ReaderState =

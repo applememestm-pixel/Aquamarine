@@ -5,6 +5,35 @@ resume. Newest entries at the top.
 
 ---
 
+## 2026-10-12 — Session 45: article reader perf, videos in carousels, music attached to articles
+
+- **Reader lag**: article photos are data: URLs; every `<img src>` / CSS
+  `url()` re-parsed and re-decoded the whole string on each render. Now
+  `lib/media.ts::objectUrl()` turns them into blob: URLs once (memoised).
+  Carousels render only the current slide ±1, thumbnails lazy/async;
+  `content-visibility:auto` on article blocks; scroll progress via rAF;
+  the chat behind the reader gets `visibility:hidden` (`body.reader-open`);
+  no entry animation on WebKitGTK.
+- **Videos in carousels**: `[[gallery:0,v0,1]]` — `vN` = article `media[N]`.
+  Videos/music are uploaded like file offers (encrypted blob on the relay,
+  `commands::upload_attachment`) and the article carries `media[]`
+  `{kind, cid, key_b64, nonce_b64, name, size, mime, poster, duration}`;
+  receivers download+decrypt once into `<data>/media-cache`
+  (`fetch_attachment`). Rust keeps only sane refs (hex CID / `local-…`,
+  data:image posters). Saved Messages stay local (`local-` CIDs). Carousel
+  slides: poster + ▶ → loads and plays in place, pauses on swipe, ⤢ full screen.
+- **Music**: `ArticleMusic.svelte` playlist in the chat card and at the top
+  of the reader; plays through the app-wide player (keeps playing after the
+  reader closes); click a playing track to pause.
+- Composer: «Фото / видео» (one carousel in pick order), «Музыка»; posters
+  and durations probed locally (`imageTools::probeMedia`,
+  `allow_media_preview` adds the picked file to the asset scope); uploads
+  happen on publish with progress; drafts keep paths; orphans appended.
+  The data dir is added to the asset scope at start (test clients on other drives).
+- Verified in the mocked-bridge harness: mixed carousel, poster frame (WebM;
+  headless Chromium lacks H.264), music queue → top player, reader hides the
+  chat, composer publish payload.
+
 ## 2026-10-12 — Session 44: Telegraph-style articles, carousels, Telegram formatting, / commands, link & video previews
 
 - **Formatting everywhere** (`lib/markup.ts` → `Markup.svelte`, no `{@html}`):

@@ -40,8 +40,10 @@
   import { groupMap } from "../groups";
   import Markup from "./Markup.svelte";
   import LinkPreview from "./LinkPreview.svelte";
-  import Carousel from "./Carousel.svelte";
-  import { hasMarkup, linksIn, plainText, excerptOf } from "../markup";
+  import Carousel, { type CarouselItem } from "./Carousel.svelte";
+  import ArticleMusic from "./ArticleMusic.svelte";
+  import { hasMarkup, linksIn, excerptOf, parseBlocks, wordCount } from "../markup";
+  import { objectUrl, mediaUrl } from "../media";
   import { openArticleReader } from "../reader";
   import { shortcutsOpen } from "../shortcuts";
   import { openGroupPanel } from "./GroupPanel.svelte";
@@ -730,6 +732,51 @@
     const row = list[kbReplyIdx];
     replyTarget = { author: authorOf(row), text: snippetOf(row).slice(0, 180) };
     document.querySelector(`[data-msg-id="${CSS.escape(row.id)}"]`)?.scrollIntoView({ block: "nearest" });
+  }
+
+  // ---- Article card in the chat ------------------------------------------
+  type ArticleContent = Extract<ChatMessage["kind"], { type: "article" }>["content"];
+  const cardCache = new WeakMap<object, ReturnType<typeof buildCard>>();
+  function buildCard(art: ArticleContent) {
+    const images = art.images ?? [];
+    const media = art.media ?? [];
+    const blocks = parseBlocks(art.body, "article");
+    // Slides in reading order: every photo / video the galleries show.
+    const seen = new Set<string>();
+    const slides: CarouselItem[] = [];
+    for (const b of blocks) {
+      if (b.t !== "gallery") continue;
+      for (const r of b.items) {
+        const key = r.kind + r.i;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (r.kind === "image" && images[r.i]) slides.push({ kind: "image", src: objectUrl(images[r.i]) });
+        else if (r.kind === "video" && media[r.i]?.kind === "video") {
+          const mv = media[r.i];
+          slides.push({ kind: "video", poster: mv.poster ? objectUrl(mv.poster) : undefined, resolve: () => mediaUrl(mv), label: mv.name.replace(/\.[a-z0-9]{2,5}$/i, "") });
+        }
+      }
+    }
+    if (!slides.length) images.forEach((u) => slides.push({ kind: "image", src: objectUrl(u) }));
+    const words = wordCount(blocks);
+    return {
+      slides,
+      photos: images.length,
+      videos: media.filter((x) => x.kind === "video").length,
+      tracks: media.filter((x) => x.kind === "audio"),
+      excerpt: excerptOf(art.body),
+      readMin: Math.max(1, Math.round(words / 200)),
+    };
+  }
+  function articleCard(art: ArticleContent) {
+    let c = cardCache.get(art);
+    if (!c) { c = buildCard(art); cardCache.set(art, c); }
+    return c;
+  }
+  function openCardPhotos(slides: CarouselItem[], i: number) {
+    const photos = slides.filter((x) => x.kind === "image" && x.src);
+    const at = photos.indexOf(slides[i]);
+    if (photos.length) openGallery(photos.map((x) => ({ url: x.src!, kind: "image" as const })), Math.max(0, at));
   }
 
   // ---- "/" commands (Telegram-style) ------------------------------------
@@ -1813,25 +1860,25 @@
                 {/if}
               {:else if m.kind.type === "article"}
                 {@const art = m.kind.content}
-                {@const imgs = art.images ?? []}
-                {@const excerpt = excerptOf(art.body)}
-                {@const words = plainText(art.body, "article").split(/\s+/).filter(Boolean).length}
-                {@const readMin = Math.max(1, Math.round(words / 200))}
+                {@const card = articleCard(art)}
                 {@const openIt = () => openArticleReader(art, { author: m.outgoing ? $t("You") : m.from, time: m.time })}
                 <div class="bubble article-bubble">
                   {#if art.cover_data_url}
-                    <button class="art-cover" style={`background-image: url(${art.cover_data_url});`} onclick={openIt} aria-label={$t("Read article")}></button>
-                  {:else if imgs.length}
-                    <div class="art-carousel"><Carousel srcs={imgs} aspect={16 / 10} onopen={(i) => openGallery(imgs.map((url) => ({ url, kind: "image" as const })), i)} /></div>
+                    <button class="art-cover" style={`background-image: url(${objectUrl(art.cover_data_url)});`} onclick={openIt} aria-label={$t("Read article")}></button>
+                  {:else if card.slides.length}
+                    <div class="art-carousel"><Carousel items={card.slides} aspect={16 / 10} onopen={(i) => openCardPhotos(card.slides, i)} /></div>
                   {/if}
                   <!-- svelte-ignore a11y_click_events_have_key_events -->
                   <!-- svelte-ignore a11y_no_static_element_interactions -->
                   <div class="art-body" onclick={openIt}>
-                    <div class="art-tag">📰 {$t("Article")} · {$t("{n} min read", { n: readMin })}{imgs.length ? ` · ${$t("{n} photos", { n: imgs.length })}` : ""}</div>
+                    <div class="art-tag">📰 {$t("Article")} · {$t("{n} min read", { n: card.readMin })}{card.photos ? ` · ${$t("{n} photos", { n: card.photos })}` : ""}{card.videos ? ` · ${$t("{n} videos", { n: card.videos })}` : ""}</div>
                     <h3 class="art-title">{art.title}</h3>
                     {#if art.subtitle}<div class="art-sub">{art.subtitle}</div>{/if}
-                    {#if excerpt}<p class="art-excerpt">{excerpt}</p>{/if}
+                    {#if card.excerpt}<p class="art-excerpt">{card.excerpt}</p>{/if}
                   </div>
+                  {#if card.tracks.length}
+                    <div class="art-music"><ArticleMusic tracks={card.tracks} title={art.title} cover={art.cover_data_url ? objectUrl(art.cover_data_url) : undefined} compact /></div>
+                  {/if}
                   <div class="art-foot">
                     <button class="art-read" onclick={openIt}>⚡ {$t("Read article")}</button>
                     <span class="bubble-meta inline-meta">
@@ -2769,6 +2816,7 @@
     margin: 4px 0 0; font-size: 13px; line-height: 1.5; color: var(--fg-muted);
     display: -webkit-box; -webkit-line-clamp: 4; line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
   }
+  .art-music { padding: 0 8px; }
   .art-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px 10px 14px; }
   .art-read {
     padding: 6px 12px; border-radius: 8px; border: none; cursor: pointer;

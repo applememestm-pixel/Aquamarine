@@ -1462,6 +1462,149 @@ pub async fn download_file(
     Ok(DownloadResult { saved_path: saved_str })
 }
 
+// ---- Article media (videos in carousels, music playlists) ---------------
+
+fn media_cache_dir(data_dir: &std::path::Path) -> PathBuf {
+    data_dir.join("media-cache")
+}
+
+fn media_ext(mime: Option<&str>, name: &str) -> String {
+    let from_name = std::path::Path::new(name).extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
+    if let Some(e) = from_name.filter(|e| e.len() <= 5 && e.chars().all(|c| c.is_ascii_alphanumeric())) {
+        return e;
+    }
+    match mime.unwrap_or("") {
+        "video/mp4" => "mp4", "video/webm" => "webm", "video/quicktime" => "mov", "video/x-matroska" => "mkv",
+        "audio/mpeg" => "mp3", "audio/mp4" => "m4a", "audio/ogg" => "ogg", "audio/flac" => "flac",
+        "audio/wav" => "wav", "audio/opus" => "opus", "audio/webm" => "weba", "audio/aac" => "aac",
+        _ => "bin",
+    }.into()
+}
+
+fn cached_media(dir: &std::path::Path, cid: &str) -> Option<PathBuf> {
+    let rd = std::fs::read_dir(dir).ok()?;
+    for e in rd.flatten() {
+        let n = e.file_name().to_string_lossy().to_string();
+        if n.starts_with(cid) && n[cid.len()..].starts_with('.') && !n.ends_with(".part") {
+            return Some(e.path());
+        }
+    }
+    None
+}
+
+/// Encrypt + upload a video / audio file for an article and return its
+/// reference (CID + key). The plaintext is kept in the local media cache so
+/// the sender plays it without downloading it back.
+#[tauri::command]
+pub async fn upload_attachment(
+    state: State<'_, StdMutex<AppState>>,
+    app: AppHandle,
+    peer_id: String,
+    file_path: String,
+) -> Result<crate::state::ArticleMedia, String> {
+    let data_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.clone() };
+    let file_path = if is_uri_pick(&file_path) { materialize_picked(&app, &data_dir, &file_path)? } else { file_path };
+    let path = PathBuf::from(&file_path);
+    let size = std::fs::metadata(&path).map(|m| m.len()).map_err(|e| format!("{file_path}: {e}"))?;
+    if size > aqua_core::MAX_FILE_SIZE {
+        return Err(format!("file is too large: {} MB (limit {} MB)", size / (1024 * 1024), aqua_core::MAX_FILE_SIZE / (1024 * 1024)));
+    }
+    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("media").to_string();
+    let mime = mime_from_extension(&path);
+    let kind = match mime.as_deref() {
+        Some(m) if m.starts_with("video/") => "video",
+        Some(m) if m.starts_with("audio/") => "audio",
+        _ => return Err(format!("{name}: not a video or audio file")),
+    };
+    let cache = media_cache_dir(&data_dir);
+    std::fs::create_dir_all(&cache).map_err(|e| format!("mkdir: {e}"))?;
+    let ext = media_ext(mime.as_deref(), &name);
+
+    // Saved Messages never leave this device.
+    if peer_id == crate::state::SAVED_MESSAGES_ID {
+        let cid = format!("local-{}", crate::state::uuid_like());
+        std::fs::copy(&path, cache.join(format!("{cid}.{ext}"))).map_err(|e| format!("copy: {e}"))?;
+        return Ok(crate::state::ArticleMedia {
+            kind: kind.into(), cid, key_b64: String::new(), nonce_b64: String::new(),
+            name, size, mime, poster: None, duration: None,
+        });
+    }
+
+    let bytes = tokio::fs::read(&path).await.map_err(|e| format!("read {file_path}: {e}"))?;
+    let (envelope, ciphertext) = encrypt_file_with_category(&bytes, &name, mime.clone(), Some(kind.into()))
+        .map_err(|e| format!("encrypt_file: {e}"))?;
+    let transport = {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        s.transport.clone().ok_or("not connected")?
+    };
+    transport.upload_blob(&envelope.cid, ciphertext).await.map_err(|e| format!("upload_blob: {e}"))?;
+    let _ = tokio::fs::write(cache.join(format!("{}.{ext}", envelope.cid)), &bytes).await;
+    Ok(crate::state::ArticleMedia {
+        kind: kind.into(),
+        cid: envelope.cid.clone(),
+        key_b64: URL_SAFE_NO_PAD.encode(envelope.key),
+        nonce_b64: URL_SAFE_NO_PAD.encode(envelope.nonce),
+        name,
+        size,
+        mime,
+        poster: None,
+        duration: None,
+    })
+}
+
+/// Let the webview preview a media file the user just picked (for posters
+/// and the composer preview) even when it lives outside the default asset
+/// scope, e.g. on another drive.
+#[tauri::command]
+pub fn allow_media_preview(app: AppHandle, path: String) -> Result<(), String> {
+    let p = PathBuf::from(&path);
+    let mime = mime_from_extension(&p).unwrap_or_default();
+    if !(mime.starts_with("video/") || mime.starts_with("audio/") || mime.starts_with("image/")) {
+        return Err("not a media file".into());
+    }
+    app.asset_protocol_scope().allow_file(&p).map_err(|e| e.to_string())
+}
+
+/// Local path of an article video / track: from the cache, or downloaded
+/// from the relay and decrypted on first use.
+#[tauri::command]
+pub async fn fetch_attachment(
+    state: State<'_, StdMutex<AppState>>,
+    media: crate::state::ArticleMedia,
+) -> Result<String, String> {
+    let media = media.sane().ok_or("bad media reference")?;
+    let data_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.clone() };
+    let cache = media_cache_dir(&data_dir);
+    std::fs::create_dir_all(&cache).map_err(|e| format!("mkdir: {e}"))?;
+    if let Some(p) = cached_media(&cache, &media.cid) {
+        return Ok(p.to_string_lossy().into());
+    }
+    if media.cid.starts_with("local-") {
+        return Err("this file only exists on the device it was added on".into());
+    }
+    let key: [u8; 32] = URL_SAFE_NO_PAD.decode(&media.key_b64).map_err(|e| format!("bad key: {e}"))?
+        .try_into().map_err(|_| "bad key length".to_string())?;
+    let nonce: [u8; 12] = URL_SAFE_NO_PAD.decode(&media.nonce_b64).map_err(|e| format!("bad nonce: {e}"))?
+        .try_into().map_err(|_| "bad nonce length".to_string())?;
+    let envelope = FileEnvelope {
+        cid: media.cid.clone(), key, nonce,
+        filename: media.name.clone(), size: media.size,
+        mime: media.mime.clone(), category: Some(media.kind.clone()),
+    };
+    let transport = {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        s.transport.clone().ok_or("not connected")?
+    };
+    let ciphertext = transport.download_blob(&media.cid).await.map_err(|e| format!("download_blob: {e}"))?;
+    let plain = decrypt_file(&envelope, &ciphertext).map_err(|e| format!("decrypt_file: {e}"))?;
+    let ext = media_ext(media.mime.as_deref(), &media.name);
+    let out = cache.join(format!("{}.{ext}", media.cid));
+    let part = cache.join(format!("{}.{ext}.part", media.cid));
+    tokio::fs::write(&part, &plain).await.map_err(|e| format!("write: {e}"))?;
+    tokio::fs::rename(&part, &out).await.map_err(|e| format!("rename: {e}"))?;
+    Ok(out.to_string_lossy().into())
+}
+
 fn mime_from_extension(path: &std::path::Path) -> Option<String> {
     let ext = path.extension()?.to_str()?.to_lowercase();
     Some(match ext.as_str() {

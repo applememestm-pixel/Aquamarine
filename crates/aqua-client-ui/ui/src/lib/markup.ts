@@ -29,14 +29,32 @@ export type Block =
   | { t: "pre"; v: string; lang?: string }
   | { t: "ul" | "ol"; items: Inline[][]; start?: number }
   | { t: "hr" }
-  /** Photo carousel; `idx` points into the images list given to the renderer. */
-  | { t: "gallery"; idx: number[]; caption?: Inline[] }
+  /** Carousel of photos (index into the images list) and videos (`v<N>`:
+   *  index into the article's media list). */
+  | { t: "gallery"; items: GalleryRef[]; caption?: Inline[] }
   /** A video file (Telegraph) — played after it is cached locally. */
   | { t: "video"; url: string; caption?: Inline[] }
   /** Any link shown as a rich preview card (YouTube embeds in Telegraph). */
   | { t: "embed"; url: string; caption?: Inline[] };
 
 export type Mode = "message" | "article";
+
+export interface GalleryRef { kind: "image" | "video"; i: number }
+
+/** `0, 1, v0` → refs; the inverse of {@link galleryLine}. */
+export function parseGalleryRefs(list: string): GalleryRef[] {
+  const out: GalleryRef[] = [];
+  for (const raw of list.split(",")) {
+    const x = raw.trim().toLowerCase();
+    const m = /^(v?)(\d{1,3})$/.exec(x);
+    if (m) out.push({ kind: m[1] ? "video" : "image", i: parseInt(m[2], 10) });
+  }
+  return out;
+}
+export function galleryLine(refs: GalleryRef[], caption?: string | null): string {
+  return `[[gallery:${refs.map((r) => (r.kind === "video" ? "v" : "") + r.i).join(",")}${caption != null ? "|" + caption : ""}]]`;
+}
+export const GALLERY_LINE = /^\[\[gallery:([\dvV,\s]+)(?:\|(.*))?\]\]$/;
 
 const PAIRS: [string, "b" | "i" | "u" | "s" | "spoiler"][] = [
   ["**", "b"], ["__", "i"], ["++", "u"], ["~~", "s"], ["||", "spoiler"],
@@ -149,7 +167,7 @@ export function parseInline(s: string, mode: Mode = "message"): Inline[] {
   return out;
 }
 
-const GALLERY = /^\[\[gallery:([\d,\s]+)(?:\|(.*))?\]\]$/;
+const GALLERY = GALLERY_LINE;
 
 export function parseBlocks(src: string, mode: Mode = "message"): Block[] {
   const lines = src.replace(/\r\n?/g, "\n").split("\n");
@@ -207,8 +225,8 @@ export function parseBlocks(src: string, mode: Mode = "message"): Block[] {
       const g = GALLERY.exec(trimmed);
       if (g) {
         flushPara();
-        const idx = g[1].split(",").map((x) => parseInt(x.trim(), 10)).filter((n) => Number.isFinite(n) && n >= 0);
-        if (idx.length) out.push({ t: "gallery", idx, caption: g[2]?.trim() ? parseInline(g[2].trim(), mode) : undefined });
+        const items = parseGalleryRefs(g[1]);
+        if (items.length) out.push({ t: "gallery", items, caption: g[2]?.trim() ? parseInline(g[2].trim(), mode) : undefined });
         i++; continue;
       }
       const h = /^(#{1,3})\s+(.+)$/.exec(trimmed);
@@ -355,10 +373,10 @@ export function telegraphToBlocks(nodes: TgNode[], images: string[]): Block[] {
     return inlineText(c).trim() ? c : undefined;
   };
   const pushImage = (src: string, cap?: Inline[]) => {
-    const idx = images.push(tgUrl(src)) - 1;
+    const ref: GalleryRef = { kind: "image", i: images.push(tgUrl(src)) - 1 };
     const last = out[out.length - 1];
-    if (last && last.t === "gallery" && !last.caption && !cap) last.idx.push(idx);
-    else out.push({ t: "gallery", idx: [idx], caption: cap });
+    if (last && last.t === "gallery" && !last.caption && !cap) last.items.push(ref);
+    else out.push({ t: "gallery", items: [ref], caption: cap });
   };
   for (const n of nodes) {
     if (typeof n === "string") { if (n.trim()) out.push({ t: "p", c: tgInline([n]) }); continue; }

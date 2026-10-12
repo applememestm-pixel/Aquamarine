@@ -9,11 +9,15 @@
   import { parseBlocks, telegraphToBlocks, wordCount, type Block } from "../markup";
   import { t } from "../i18n";
   import Markup from "./Markup.svelte";
+  import ArticleMusic from "./ArticleMusic.svelte";
+  import { objectUrl } from "../media";
+  import type { ArticleMedia } from "../types";
   import { gallery } from "./Lightbox.svelte";
   import { get as getStore } from "svelte/store";
 
   let blocks = $state<Block[]>([]);
   let images = $state<string[]>([]);
+  let media = $state<ArticleMedia[]>([]);
   let title = $state("");
   let subtitle = $state("");
   let cover = $state("");
@@ -41,15 +45,16 @@
   $effect(() => {
     const st = $reader;
     const my = ++token;
-    blocks = []; images = []; error = ""; progress = 0; views = null;
+    blocks = []; images = []; media = []; error = ""; progress = 0; views = null;
     title = subtitle = cover = author = authorUrl = when = extUrl = "";
     if (scroller) scroller.scrollTop = 0;
     if (!st) return;
     if (st.kind === "article") {
       const a = st.article;
-      title = a.title; subtitle = a.subtitle ?? ""; cover = a.cover_data_url ?? "";
+      title = a.title; subtitle = a.subtitle ?? ""; cover = objectUrl(a.cover_data_url);
       author = st.author ?? ""; when = st.time ?? "";
       images = a.images ?? [];
+      media = a.media ?? [];
       blocks = parseBlocks(a.body, "article");
       return;
     }
@@ -89,12 +94,27 @@
 
   let words = $derived(wordCount(blocks));
   let readMin = $derived(Math.max(1, Math.round(words / 200)));
-  let photos = $derived(blocks.reduce((n, b) => n + (b.t === "gallery" ? b.idx.length : 0), 0));
+  let photos = $derived(blocks.reduce((n, b) => n + (b.t === "gallery" ? b.items.filter((x) => x.kind === "image").length : 0), 0));
+  let videos = $derived(media.filter((m) => m.kind === "video").length);
+  let tracks = $derived(media.filter((m) => m.kind === "audio"));
 
+  // While the reader covers the window, stop painting the chat behind it
+  // (WebKitGTK keeps repainting hidden layers otherwise).
+  $effect(() => {
+    const open = !!$reader;
+    document.body.classList.toggle("reader-open", open);
+    return () => document.body.classList.remove("reader-open");
+  });
+
+  let raf = 0;
   function onScroll() {
-    if (!scroller) return;
-    const max = scroller.scrollHeight - scroller.clientHeight;
-    progress = max > 0 ? Math.min(1, scroller.scrollTop / max) : 1;
+    if (raf) return;
+    raf = requestAnimationFrame(() => {
+      raf = 0;
+      if (!scroller) return;
+      const max = scroller.scrollHeight - scroller.clientHeight;
+      progress = max > 0 ? Math.min(1, scroller.scrollTop / max) : 1;
+    });
   }
 
   onMount(() => {
@@ -150,9 +170,11 @@
             {#if when}<span>{when}</span><span class="sep">·</span>{/if}
             <span>{$t("{n} min read", { n: readMin })}</span>
             {#if photos > 0}<span class="sep">·</span><span>{$t("{n} photos", { n: photos })}</span>{/if}
+            {#if videos > 0}<span class="sep">·</span><span>{$t("{n} videos", { n: videos })}</span>{/if}
             {#if views != null}<span class="sep">·</span><span>👁 {views}</span>{/if}
           </div>
-          <Markup {blocks} {images} mode="article" />
+          {#if tracks.length}<ArticleMusic {tracks} {title} cover={cover || undefined} />{/if}
+          <Markup {blocks} {images} {media} mode="article" />
         </article>
         <div class="end">
           <button class="btn ghost" onclick={closeReader}>{$t("Back to chat")}</button>
@@ -169,6 +191,8 @@
     background: var(--bg-shell);
     animation: rd-in 0.18s ease-out;
   }
+  :global(body.reader-open .app) { visibility: hidden; }
+  :global(html.wk-lowfx) .reader { animation: none; }
   @keyframes rd-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
   .bar {
     position: relative;
@@ -192,7 +216,7 @@
   .progress {
     position: absolute; left: 0; right: 0; bottom: -1px; height: 2px;
     background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    transform-origin: left; transition: transform 0.08s linear;
+    transform-origin: left; will-change: transform;
   }
   .scroll { flex: 1; overflow-y: auto; }
   .cover { width: 100%; max-width: 980px; margin: 0 auto; aspect-ratio: 16 / 7; background-size: cover; background-position: center; }
