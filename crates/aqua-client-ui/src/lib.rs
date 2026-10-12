@@ -21,7 +21,19 @@ pub fn mobile_main() {
 }
 
 pub fn run() -> Result<()> {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // WebKitGTK denies camera / mic / screen capture unless the app answers
+    // its permission request ("Mic test failed: NotAllowedError" on Linux).
+    // The webview only ever shows our own UI, so grant what calls need.
+    #[cfg(target_os = "linux")]
+    let builder = builder.on_permission_request(|_, kind| {
+        use tauri::webview::{PermissionKind as K, PermissionResponse as R};
+        match kind {
+            K::Microphone | K::Camera | K::DisplayCapture | K::Notifications | K::ClipboardRead => R::Allow,
+            _ => R::Default,
+        }
+    });
+    builder
         .plugin(tauri_plugin_log::Builder::default().build())
         .setup(|app| {
             // Priority: AQUA_DATA_DIR env var > OS app-data dir > temp dir.
@@ -36,6 +48,8 @@ pub fn run() -> Result<()> {
             let state = state::AppState::boot(data_dir)?;
             app.manage(state);
             commands::spawn_activity_watcher(app.handle().clone());
+            #[cfg(target_os = "linux")]
+            linux_webview::configure(app);
             Ok(())
         })
         .plugin(tauri_plugin_fs::init())
@@ -106,4 +120,28 @@ pub fn run() -> Result<()> {
         .run(tauri::generate_context!())
         .map_err(anyhow::Error::from)?;
     Ok(())
+}
+
+/// WebKitGTK ships with WebRTC switched off; calls need it (plus media
+/// streams for getUserMedia and MSE for in-app media playback).
+#[cfg(target_os = "linux")]
+mod linux_webview {
+    use tauri::Manager;
+
+    pub fn configure(app: &tauri::App) {
+        let Some(win) = app.get_webview_window("main") else { return };
+        let res = win.with_webview(|wv| {
+            use webkit2gtk::{SettingsExt, WebViewExt};
+            let view = wv.inner();
+            if let Some(s) = WebViewExt::settings(&view) {
+                s.set_enable_webrtc(true);
+                s.set_enable_media_stream(true);
+                s.set_enable_mediasource(true);
+                s.set_media_playback_requires_user_gesture(false);
+            }
+        });
+        if let Err(e) = res {
+            tracing::warn!("could not configure the WebKitGTK webview: {e}");
+        }
+    }
 }

@@ -76,6 +76,21 @@ body::after {
   opacity: 0.28;
   animation: drift-2 28s ease-in-out infinite alternate;
 }
+/* WebKitGTK (Linux): a 100px blur over a 60vmax layer, animated forever, is
+   repainted on the CPU every frame and makes the whole UI lag. The gradient
+   alone is already soft; drop the blur, the drift and backdrop blurs there. */
+html.wk-lowfx body::before,
+html.wk-lowfx body::after {
+  filter: none;
+  animation: none;
+  will-change: auto;
+}
+html.wk-lowfx *,
+html.wk-lowfx *::before,
+html.wk-lowfx *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
 @keyframes drift-1 { to { transform: translate(3%, -4%) scale(1.1); } }
 @keyframes drift-2 { to { transform: translate(-3%, 3%) scale(1.08); } }
 
