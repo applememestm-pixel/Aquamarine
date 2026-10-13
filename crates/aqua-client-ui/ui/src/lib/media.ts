@@ -160,3 +160,25 @@ export function mediaErrorText(el: HTMLMediaElement): string {
   }
   return el.error?.message || "Playback failed";
 }
+
+const stills = new Map<string, Promise<string>>();
+/** First frame of a GIF as a still image (for "Autoplay GIFs" off). */
+export function gifStill(url: string): Promise<string> {
+  let p = stills.get(url);
+  if (!p) {
+    p = (async () => {
+      try {
+        const bmp = await createImageBitmap(await (await fetch(url)).blob());
+        const c = document.createElement("canvas");
+        c.width = bmp.width; c.height = bmp.height;
+        c.getContext("2d")?.drawImage(bmp, 0, 0);
+        bmp.close?.();
+        return await new Promise<string>((res) => c.toBlob((b) => res(b ? URL.createObjectURL(b) : url), "image/png"));
+      } catch {
+        return url;
+      }
+    })();
+    stills.set(url, p);
+  }
+  return p;
+}

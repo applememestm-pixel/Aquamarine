@@ -83,6 +83,7 @@
 </script>
 
 <script lang="ts">
+  import { settings } from "../theme";
   import { mediaSupport } from "../media";
   /**
    * One element for every kind of sticker / emoji / GIF we show: static
@@ -103,7 +104,9 @@
     fit?: "contain" | "cover";
     class?: string;
   }
-  let { src, mime = null, alt = "", play = "auto", fit = "contain", class: klass = "" }: Props = $props();
+  let { src, mime = null, alt = "", play: playProp = "auto", fit = "contain", class: klass = "" }: Props = $props();
+  // "Animated stickers & emoji" off → they play on hover only.
+  const play = $derived(playProp === "auto" && !$settings.autoplayStickers ? "hover" : playProp);
 
   const kind = $derived(mediaKind(src, mime));
   let box: HTMLDivElement | undefined = $state();

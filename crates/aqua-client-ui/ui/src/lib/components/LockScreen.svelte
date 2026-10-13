@@ -100,7 +100,7 @@
     position: fixed; inset: var(--tb-h, 0px) 0 0 0; z-index: 390; display: grid; place-items: center;
     background:
       radial-gradient(900px 500px at 20% 0%, var(--accent-glow), transparent 60%),
-      radial-gradient(800px 500px at 90% 100%, rgba(123, 92, 255, 0.25), transparent 60%),
+      radial-gradient(800px 500px at 90% 100%, color-mix(in srgb, var(--accent-2) 25%, transparent), transparent 60%),
       var(--bg-void, #06070c);
   }
   .card {

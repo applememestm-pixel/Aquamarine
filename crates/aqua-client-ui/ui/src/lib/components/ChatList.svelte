@@ -489,7 +489,7 @@
   }
   @keyframes plus-pulse {
     0%, 100% { box-shadow: 0 4px 14px -6px var(--accent-glow), 0 0 0 0 var(--accent-glow); }
-    50%      { box-shadow: 0 4px 14px -6px var(--accent-glow), 0 0 0 6px rgba(0, 229, 199, 0); }
+    50%      { box-shadow: 0 4px 14px -6px var(--accent-glow), 0 0 0 6px color-mix(in srgb, var(--accent) 0%, transparent); }
   }
 
   /* "Start chat with …" row shown at the top of the list when the
@@ -540,8 +540,8 @@
     margin: 4px 6px 8px;
     border-radius: 10px;
     cursor: pointer;
-    background: linear-gradient(135deg, rgba(0,229,199,0.08), rgba(123,92,255,0.06));
-    border: 1px dashed rgba(0, 229, 199, 0.35);
+    background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 8%, transparent), color-mix(in srgb, var(--accent-2) 6%, transparent));
+    border: 1px dashed color-mix(in srgb, var(--accent) 35%, transparent);
     text-align: left;
     color: var(--fg);
     width: calc(100% - 12px);
@@ -549,7 +549,7 @@
     align-items: center;
   }
   .start-row:hover {
-    background: linear-gradient(135deg, rgba(0,229,199,0.14), rgba(123,92,255,0.10));
+    background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 14%, transparent), color-mix(in srgb, var(--accent-2) 10%, transparent));
     border-style: solid;
   }
   .start-icon {
@@ -581,13 +581,13 @@
     cursor: pointer; flex-shrink: 0; white-space: nowrap;
   }
   .folder-tab:hover { color: var(--fg); background: var(--bg-hover); }
-  .folder-tab.active { color: var(--accent); background: var(--accent-soft); border-color: rgba(0,229,199,0.25); }
+  .folder-tab.active { color: var(--accent); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 25%, transparent); }
   .ft-count {
     font-size: 10px; font-variant-numeric: tabular-nums;
     background: var(--bg-input); color: var(--fg-dim);
     border-radius: 100px; padding: 0 5px;
   }
-  .folder-tab.active .ft-count { background: rgba(0,229,199,0.2); color: var(--accent); }
+  .folder-tab.active .ft-count { background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent); }
   .folder-edit {
     flex-shrink: 0;
     padding: 5px 10px; border-radius: 100px;

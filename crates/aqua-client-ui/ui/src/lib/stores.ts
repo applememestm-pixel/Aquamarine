@@ -3,30 +3,13 @@ import type { ChatMessage, ChatSummary, InitInfo } from "./types";
 import { api, events } from "./tauri";
 import { contacts, contactMatches, displayName, saveContact } from "./contacts";
 import { settings } from "./theme";
+import { playSound, soundFor } from "./sounds";
 
 /** Play a short chime + optional desktop notification for an incoming
  *  message, honouring the user's notification settings. */
 function notifyIncoming(peerId: string, text: string) {
   const s = get(settings);
-  if (s.notifySound) {
-    try {
-      // Tiny synthesized "ding" via WebAudio — no asset file needed.
-      const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
-      if (Ctx) {
-        const ctx = new Ctx();
-        const o = ctx.createOscillator();
-        const g = ctx.createGain();
-        o.type = "sine";
-        o.frequency.value = 880;
-        g.gain.setValueAtTime(0.0001, ctx.currentTime);
-        g.gain.exponentialRampToValueAtTime(0.12, ctx.currentTime + 0.01);
-        g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.25);
-        o.connect(g); g.connect(ctx.destination);
-        o.start(); o.stop(ctx.currentTime + 0.26);
-        setTimeout(() => ctx.close().catch(() => {}), 400);
-      }
-    } catch { /* ignore */ }
-  }
+  if (s.notifySound) void playSound(soundFor(peerId));
   if (s.notifyDesktop && "Notification" in window && Notification.permission === "granted") {
     try {
       const name = displayName(peerId, peerId);

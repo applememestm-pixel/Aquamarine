@@ -275,7 +275,7 @@
     flex-shrink: 0;
   }
   .tab:hover { color: var(--fg); background: var(--bg-hover); }
-  .tab.active { color: var(--accent); background: var(--accent-soft); border-color: rgba(0,229,199,0.25); }
+  .tab.active { color: var(--accent); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 25%, transparent); }
 
   .list { flex: 1; overflow-y: auto; padding: 6px; }
   .status, .empty { padding: 40px 22px; text-align: center; color: var(--fg-dim); font-size: 12.5px; }

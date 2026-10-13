@@ -347,7 +347,7 @@
     position: fixed; inset: 0;
     background:
       radial-gradient(1000px 600px at 15% 0%, var(--accent-glow), transparent 55%),
-      radial-gradient(900px 600px at 90% 100%, var(--accent-2-glow, rgba(123,92,255,0.35)), transparent 55%),
+      radial-gradient(900px 600px at 90% 100%, var(--accent-2-glow, color-mix(in srgb, var(--accent-2) 35%, transparent)), transparent 55%),
       var(--bg-void, #06070C);
     display: grid; place-items: center;
     z-index: 140;

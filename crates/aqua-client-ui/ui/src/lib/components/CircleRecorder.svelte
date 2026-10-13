@@ -264,7 +264,7 @@
     border-radius: 50%;
     overflow: hidden;
     background: #000;
-    box-shadow: 0 0 0 4px rgba(0,229,199,0.3), 0 0 40px -4px var(--accent-glow);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 30%, transparent), 0 0 40px -4px var(--accent-glow);
   }
   .circle video {
     width: 100%; height: 100%;

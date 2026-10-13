@@ -4,6 +4,7 @@
   import { askConfirm } from "./Confirm.svelte";
   import { askSend, VIDEO_RE, type SendMode } from "./SendDialog.svelte";
   import { shrinkImage } from "../imageTools";
+  import { applyThemeFromPath } from "../themeShare";
   import { openFileDialog } from "../dialog";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { icons } from "../icons";
@@ -47,7 +48,7 @@
   import Carousel, { type CarouselItem } from "./Carousel.svelte";
   import ArticleMusic from "./ArticleMusic.svelte";
   import { hasMarkup, linksIn, excerptOf, parseBlocks, wordCount } from "../markup";
-  import { objectUrl, mediaUrl, streamSrc } from "../media";
+  import { objectUrl, mediaUrl, streamSrc, gifStill } from "../media";
   import { openArticleReader } from "../reader";
   import { shortcutsOpen } from "../shortcuts";
   import { openGroupPanel } from "./GroupPanel.svelte";
@@ -470,6 +471,14 @@
     } else {
       showToast(`${ok} sent · ${fail} failed — ${lastErr}`, 6000);
     }
+  }
+
+  async function applyThemeFile(path: string | null | undefined) {
+    if (!path) return;
+    try {
+      const name = await applyThemeFromPath(path);
+      showToast(tr("Theme “{name}” applied", { name }));
+    } catch (e) { showToast(String(e), 6000); }
   }
 
   /** "As photo": like Telegram, re-encode to ≤ 2560 px (GIFs stay as they are). */
@@ -1033,6 +1042,8 @@
   // Fine-grained: only rows whose membership changes re-render (a new Set
   // per pointer move re-rendered every message → jerky drag-select).
   const selected = new SvelteSet<string>();
+  /** GIFs the user started while "Autoplay GIFs" is off. */
+  const gifPlaying = new SvelteSet<string>();
   // Custom (non-Chromium) context menu.
   let menu = $state<{ open: boolean; x: number; y: number; row: Row | null }>({ open: false, x: 0, y: 0, row: null });
 
@@ -1854,9 +1865,17 @@
                 {:else if rk === "gif" || rk === "image"}
                   <div class="bubble media-bubble">
                     {#if url}
-                      <button class="media-img-btn" onclick={() => openInGallery(content.saved_at)} title={$t("Open")}>
-                        <img class="media-img" src={url} alt={content.name} />
-                      </button>
+                      {#if rk === "gif" && !$settings.autoplayGifs && !gifPlaying.has(m.id)}
+                        <!-- Autoplay off: a still frame until clicked. -->
+                        <button class="media-img-btn gif-still" onclick={() => gifPlaying.add(m.id)} title={$t("Play GIF")}>
+                          {#await gifStill(url) then still}<img class="media-img" src={still} alt={content.name} />{/await}
+                          <span class="gif-badge">GIF ▶</span>
+                        </button>
+                      {:else}
+                        <button class="media-img-btn" onclick={() => openInGallery(content.saved_at)} title={$t("Open")}>
+                          <img class="media-img" src={url} alt={content.name} />
+                        </button>
+                      {/if}
                     {:else}
                       <div class="media-placeholder" style="aspect-ratio: 4/3;"></div>
                     {/if}
@@ -1873,7 +1892,7 @@
                   <div class="circle-wrap">
                     {#if url}
                       <!-- svelte-ignore a11y_media_has_caption -->
-                      <video class="circle-vid" use:streamSrc={url} loop playsinline autoplay muted
+                      <video class="circle-vid" use:streamSrc={url} loop playsinline autoplay={$settings.autoplayVideos} muted
                         onclick={(e) => { const v = e.currentTarget as HTMLVideoElement; v.muted = !v.muted; }}
                         title={$t("Click to toggle sound")}></video>
                     {:else}
@@ -1946,7 +1965,12 @@
                         {fmtSize(content.size)}
                         {#if content.mime}· {content.mime}{/if}
                       </div>
-                      {#if content.saved_at}
+                      {#if content.saved_at && /\.aquatheme$/i.test(content.name)}
+                        <div class="file-btns">
+                          <button class="file-dl primary" onclick={() => applyThemeFile(content.saved_at)}>🎨 {$t("Apply theme")}</button>
+                          <button class="file-dl" onclick={() => saveFileAs(content.saved_at, content.name)}>{$t("Save as…")}</button>
+                        </div>
+                      {:else if content.saved_at}
                         <button class="file-dl" onclick={() => saveFileAs(content.saved_at, content.name)}>
                           {$t("Save as…")}
                         </button>
@@ -2325,8 +2349,8 @@
     flex-direction: column;
     min-width: 0;
     background:
-      radial-gradient(1200px 500px at 80% -20%, rgba(0,229,199,0.04), transparent),
-      radial-gradient(900px 400px at 10% 110%, rgba(123,92,255,0.04), transparent),
+      radial-gradient(1200px 500px at 80% -20%, color-mix(in srgb, var(--accent) 4%, transparent), transparent),
+      radial-gradient(900px 400px at 10% 110%, color-mix(in srgb, var(--accent-2) 4%, transparent), transparent),
       var(--bg-shell);
   }
   .empty {
@@ -2551,8 +2575,8 @@
     margin: 12px 20px;
     font-size: 12px;
     color: var(--fg-muted);
-    background: rgba(0,229,199,0.06);
-    border: 1px solid rgba(0,229,199,0.12);
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 12%, transparent);
     border-radius: 100px;
   }
   .sys :global(svg) { width: 12px; height: 12px; color: var(--accent); }
@@ -2596,7 +2620,7 @@
   .bubble {
     background: var(--bg-bubble-in);
     padding: 8px 12px;
-    border-radius: 4px 14px 14px 14px;
+    border-radius: 4px var(--bubble-r, 14px) var(--bubble-r, 14px) var(--bubble-r, 14px);
     max-width: 620px;
     word-wrap: break-word;
     overflow-wrap: break-word;
@@ -2611,20 +2635,20 @@
     from { opacity: 0; transform: translateY(4px); }
     to   { opacity: 1; transform: translateY(0); }
   }
-  .msg:not(.first) .bubble { border-top-left-radius: 14px; }
+  .msg:not(.first) .bubble { border-top-left-radius: var(--bubble-r, 14px); }
 
   .msg.out { grid-template-columns: 1fr; }
   .msg.out .msg-avatar { grid-column: 2; }
   .msg.out .msg-col { grid-column: 1; align-items: flex-end; }
   .msg.out .bubble {
     background:
-      linear-gradient(135deg, rgba(0,229,199,0.16), rgba(123,92,255,0.14)),
+      linear-gradient(135deg, color-mix(in srgb, var(--accent) 16%, transparent), color-mix(in srgb, var(--accent-2) 14%, transparent)),
       var(--bg-bubble-in);
-    border: 1px solid rgba(0,229,199,0.22);
-    border-radius: 14px 4px 14px 14px;
+    border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+    border-radius: var(--bubble-r, 14px) 4px var(--bubble-r, 14px) var(--bubble-r, 14px);
     color: var(--fg);
   }
-  .msg.out:not(.first) .bubble { border-top-right-radius: 14px; }
+  .msg.out:not(.first) .bubble { border-top-right-radius: var(--bubble-r, 14px); }
 
   .bubble-meta {
     display: inline-flex;
@@ -2651,10 +2675,10 @@
     color: #C7D6F0;
     max-width: 560px;
     line-height: 1.5;
-    box-shadow: inset 0 0 0 1px rgba(0,229,199,0.06), 0 8px 24px -8px rgba(0,0,0,0.5);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 6%, transparent), 0 8px 24px -8px rgba(0,0,0,0.5);
   }
   .bubble.code pre { margin: 0; white-space: pre; overflow-x: auto; }
-  .msg.out .bubble.code { border-color: rgba(0,229,199,0.22); }
+  .msg.out .bubble.code { border-color: color-mix(in srgb, var(--accent) 22%, transparent); }
 
   /* File bubble */
   .bubble.file-bubble {
@@ -2680,7 +2704,7 @@
     display: grid; place-items: center;
     width: 40px; height: 40px;
     border-radius: 10px;
-    background: rgba(0,229,199,0.1);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
     color: var(--accent);
   }
   .file-icon :global(svg) { width: 20px; height: 20px; }
@@ -2713,7 +2737,7 @@
     transition: all 0.12s ease;
   }
   .file-dl:hover {
-    background: rgba(0,229,199,0.22);
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
     box-shadow: 0 0 10px -2px var(--accent-glow);
   }
   .file-saved {
@@ -2729,7 +2753,7 @@
     outline: 2px dashed var(--accent);
     outline-offset: -8px;
     background:
-      radial-gradient(600px 300px at 50% 50%, rgba(0,229,199,0.08), transparent),
+      radial-gradient(600px 300px at 50% 50%, color-mix(in srgb, var(--accent) 8%, transparent), transparent),
       var(--bg-shell);
   }
   .drop-hint {
@@ -2740,8 +2764,8 @@
     z-index: 10;
   }
   .drop-hint-inner {
-    background: rgba(0, 229, 199, 0.12);
-    border: 1px solid rgba(0, 229, 199, 0.3);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
     color: var(--fg);
     padding: 14px 24px;
     border-radius: 14px;
@@ -2771,7 +2795,7 @@
     border-radius: 50%;
     object-fit: cover;
     background: #000;
-    box-shadow: 0 0 0 3px rgba(0,229,199,0.2), 0 10px 24px -6px rgba(0,0,0,0.5);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent), 0 10px 24px -6px rgba(0,0,0,0.5);
   }
   .circle-placeholder {
     width: 220px; height: 220px;
@@ -2791,14 +2815,14 @@
   }
   .msg.out .sticker-wrap { align-items: flex-end; }
   .sticker-img {
-    width: 128px;
-    height: 128px;
+    width: var(--sticker-size, 128px);
+    height: var(--sticker-size, 128px);
     object-fit: contain;
     display: block;
     filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.35));
   }
   .sticker-placeholder {
-    width: 128px; height: 128px;
+    width: var(--sticker-size, 128px); height: var(--sticker-size, 128px);
     border-radius: 14px;
     background: linear-gradient(90deg, var(--bg-input), var(--bg-hover), var(--bg-input));
     background-size: 200% 100%;
@@ -2818,6 +2842,14 @@
     gap: 4px;
   }
   .msg.out .sticker-meta { color: var(--accent); opacity: 0.85; }
+  .gif-still { position: relative; }
+  .file-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+  .file-dl.primary { background: var(--accent); color: #06070c; border-color: transparent; }
+  .gif-badge {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    padding: 6px 12px; border-radius: 999px;
+    background: rgba(0, 0, 0, 0.6); color: #fff; font-size: 12px; font-weight: 800; letter-spacing: 0.04em;
+  }
   .sticker-meta :global(svg) { width: 12px; height: 12px; }
 
   /* Media bubble — images, GIFs, videos. */
@@ -2827,7 +2859,7 @@
     display: flex;
     flex-direction: column;
     gap: 0;
-    max-width: 360px;
+    max-width: var(--media-max, 360px);
     min-width: 180px;
   }
   .media-img-btn {
@@ -3319,8 +3351,8 @@
     margin: 0 20px 10px;
     padding: 12px 16px;
     border-radius: 12px;
-    background: linear-gradient(135deg, rgba(0,229,199,0.10), rgba(123,92,255,0.08));
-    border: 1px solid rgba(0, 229, 199, 0.3);
+    background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, transparent), color-mix(in srgb, var(--accent-2) 8%, transparent));
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
     color: var(--fg);
   }
   .nlb-title {

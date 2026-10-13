@@ -99,11 +99,11 @@
     color: var(--accent);
     font-weight: 500;
     padding: 4px 10px;
-    background: rgba(0,229,199,0.06);
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
     border-radius: 6px;
     text-align: center;
   }
-  .word:nth-child(even) { color: var(--accent-2); background: rgba(123,92,255,0.06); }
+  .word:nth-child(even) { color: var(--accent-2); background: color-mix(in srgb, var(--accent-2) 6%, transparent); }
   .fp-instruction {
     font-size: 12.5px;
     color: var(--fg-muted);

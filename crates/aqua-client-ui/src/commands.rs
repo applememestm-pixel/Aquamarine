@@ -536,8 +536,8 @@ pub async fn set_profile_image(
 ) -> Result<ProfileImageResult, String> {
     if is_uri_pick(&path) {
         let bytes = read_picked_bytes(&app, &path)?;
-        if bytes.len() > 8 * 1024 * 1024 {
-            return Err("image too large (max 8 MB)".into());
+        if bytes.len() > 40 * 1024 * 1024 {
+            return Err("image too large (max 40 MB)".into());
         }
         let mime = infer::get(&bytes)
             .map(|k| k.mime_type())
@@ -1333,8 +1333,8 @@ pub fn copy_file_to(source: String, dest: String) -> Result<(), String> {
 pub fn read_user_image(app: AppHandle, path: String) -> Result<Vec<u8>, String> {
     if is_uri_pick(&path) {
         let bytes = read_picked_bytes(&app, &path)?;
-        if bytes.len() > 8 * 1024 * 1024 {
-            return Err("image too large (max 8 MB)".into());
+        if bytes.len() > 40 * 1024 * 1024 {
+            return Err("image too large (max 40 MB)".into());
         }
         if !infer::is_image(&bytes) {
             return Err("not an image file".into());
@@ -1350,8 +1350,8 @@ pub fn read_user_image(app: AppHandle, path: String) -> Result<Vec<u8>, String> 
         return Err(format!("not an image file ({ext})"));
     }
     let md = std::fs::metadata(&p).map_err(|e| format!("stat: {e}"))?;
-    if md.len() > 8 * 1024 * 1024 {
-        return Err("image too large (max 8 MB)".into());
+    if md.len() > 40 * 1024 * 1024 {
+        return Err("image too large (max 40 MB)".into());
     }
     std::fs::read(&p).map_err(|e| format!("read: {e}"))
 }

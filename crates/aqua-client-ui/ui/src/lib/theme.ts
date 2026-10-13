@@ -52,13 +52,53 @@ export interface Wallpaper {
 
 export const WALLPAPERS: Wallpaper[] = [
   { id: "none",      name: "Default",    css: "" },
-  { id: "aurora",    name: "Aurora",     css: "radial-gradient(1200px 500px at 20% 10%, rgba(0,229,199,0.14), transparent 60%), radial-gradient(900px 420px at 85% 90%, rgba(123,92,255,0.14), transparent 60%), #0C0F17" },
+  { id: "aurora",    name: "Aurora",     css: "radial-gradient(1200px 500px at 20% 10%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 60%), radial-gradient(900px 420px at 85% 90%, color-mix(in srgb, var(--accent-2) 14%, transparent), transparent 60%), var(--bg-shell)" },
   { id: "sunrise",   name: "Sunrise",    css: "radial-gradient(1000px 500px at 15% 90%, rgba(255,124,172,0.17), transparent 60%), radial-gradient(900px 420px at 85% 10%, rgba(255,176,103,0.14), transparent 60%), #15121A" },
   { id: "ocean",     name: "Ocean",      css: "linear-gradient(135deg, #0a2a3a 0%, #0f1b2d 50%, #0a1420 100%)" },
   { id: "forest",    name: "Forest",     css: "radial-gradient(900px 500px at 20% 10%, rgba(46,204,113,0.14), transparent 60%), radial-gradient(900px 420px at 85% 90%, rgba(26,188,156,0.12), transparent 60%), #0D1715" },
   { id: "midnight",  name: "Midnight",   css: "linear-gradient(135deg, #0F0A26 0%, #1A1240 50%, #0A0820 100%)" },
   { id: "parchment", name: "Parchment",  css: "radial-gradient(1000px 500px at 50% 0%, #faf6ea, #f0e9d2 70%, #e9e0c0)" },
   { id: "stars",     name: "Stars",      css: "radial-gradient(2px 2px at 20% 30%, rgba(255,255,255,0.4), transparent 2px), radial-gradient(1.5px 1.5px at 70% 60%, rgba(255,255,255,0.3), transparent 2px), radial-gradient(2px 2px at 40% 80%, rgba(255,255,255,0.4), transparent 2px), radial-gradient(1.5px 1.5px at 85% 20%, rgba(255,255,255,0.3), transparent 2px), linear-gradient(180deg, #0A0E1A, #06080F)" },
+];
+
+/**
+ * Complete themes (surfaces + text + accents), à la editor themes.
+ * Picking one sets the mode too; the theme editor and transparency still
+ * apply on top.
+ */
+export interface ThemePreset {
+  id: string;
+  name: string;
+  mode: "dark" | "light";
+  colors: Record<string, string>;
+}
+const T = (id: string, name: string, mode: "dark" | "light", shell: string, rail: string, list: string, input: string, bubble: string, fg: string, muted: string, dim: string, accent: string, accent2: string): ThemePreset => ({
+  id, name, mode,
+  colors: {
+    "--bg-shell": shell, "--bg-rail": rail, "--bg-list": list, "--bg-input": input,
+    "--bg-bubble-in": bubble, "--bg-surface": input, "--bg-surface-2": bubble, "--bg-void": rail,
+    "--fg": fg, "--fg-muted": muted, "--fg-dim": dim, "--accent": accent, "--accent-2": accent2,
+  },
+});
+export const THEMES: ThemePreset[] = [
+  T("github-dark", "GitHub Dark", "dark", "#0d1117", "#010409", "#0d1117", "#161b22", "#161b22", "#e6edf3", "#9198a1", "#6e7681", "#2f81f7", "#a371f7"),
+  T("github-light", "GitHub Light", "light", "#ffffff", "#f6f8fa", "#f6f8fa", "#ffffff", "#f6f8fa", "#1f2328", "#59636e", "#8c959f", "#0969da", "#8250df"),
+  T("vscode-dark", "VS Code Dark+", "dark", "#1e1e1e", "#181818", "#252526", "#2d2d2d", "#2d2d30", "#d4d4d4", "#a0a0a0", "#6a6a6a", "#007acc", "#c586c0"),
+  T("vscode-light", "VS Code Light+", "light", "#ffffff", "#f3f3f3", "#f3f3f3", "#ffffff", "#f3f3f3", "#1f1f1f", "#616161", "#8a8a8a", "#007acc", "#af00db"),
+  T("darcula", "IntelliJ Darcula", "dark", "#2b2b2b", "#313335", "#3c3f41", "#45494a", "#313335", "#bbbbbb", "#a9b7c6", "#787878", "#cc7832", "#6897bb"),
+  T("dracula", "Dracula", "dark", "#282a36", "#191a21", "#21222c", "#343746", "#343746", "#f8f8f2", "#bdbfc9", "#6272a4", "#bd93f9", "#ff79c6"),
+  T("one-dark", "One Dark", "dark", "#282c34", "#21252b", "#21252b", "#2c313c", "#2c313c", "#abb2bf", "#8b919d", "#5c6370", "#61afef", "#c678dd"),
+  T("tokyo-night", "Tokyo Night", "dark", "#1a1b26", "#16161e", "#16161e", "#24283b", "#24283b", "#c0caf5", "#a9b1d6", "#565f89", "#7aa2f7", "#bb9af7"),
+  T("nord", "Nord", "dark", "#2e3440", "#272c36", "#3b4252", "#434c5e", "#3b4252", "#eceff4", "#d8dee9", "#7b88a1", "#88c0d0", "#b48ead"),
+  T("catppuccin-mocha", "Catppuccin Mocha", "dark", "#1e1e2e", "#11111b", "#181825", "#313244", "#313244", "#cdd6f4", "#a6adc8", "#6c7086", "#cba6f7", "#89b4fa"),
+  T("catppuccin-latte", "Catppuccin Latte", "light", "#eff1f5", "#dce0e8", "#e6e9ef", "#ffffff", "#e6e9ef", "#4c4f69", "#6c6f85", "#9ca0b0", "#8839ef", "#1e66f5"),
+  T("gruvbox", "Gruvbox", "dark", "#282828", "#1d2021", "#1d2021", "#3c3836", "#3c3836", "#ebdbb2", "#bdae93", "#7c6f64", "#fabd2f", "#fe8019"),
+  T("monokai", "Monokai", "dark", "#272822", "#1e1f1c", "#1e1f1c", "#3e3d32", "#3e3d32", "#f8f8f2", "#cfcfc2", "#75715e", "#a6e22e", "#f92672"),
+  T("solarized-dark", "Solarized Dark", "dark", "#002b36", "#00212b", "#073642", "#073642", "#073642", "#eee8d5", "#93a1a1", "#657b83", "#2aa198", "#6c71c4"),
+  T("solarized-light", "Solarized Light", "light", "#fdf6e3", "#eee8d5", "#eee8d5", "#fdf6e3", "#eee8d5", "#073642", "#586e75", "#93a1a1", "#268bd2", "#d33682"),
+  T("rose-pine-dawn", "Rosé Pine Dawn", "light", "#faf4ed", "#f2e9e1", "#fffaf3", "#fffaf3", "#f2e9e1", "#575279", "#797593", "#9893a5", "#d7827e", "#907aa9"),
+  T("tg-night", "Telegram Night", "dark", "#212121", "#181818", "#212121", "#2c2c2c", "#2c2c2c", "#ffffff", "#aaaaaa", "#707579", "#8774e1", "#6c5ce7"),
+  T("tg-day", "Telegram Day", "light", "#ffffff", "#f4f4f5", "#ffffff", "#f4f4f5", "#ffffff", "#000000", "#707579", "#a2acb4", "#3390ec", "#6c5ce7"),
 ];
 
 /** A fully user-editable colour slot. The theme editor exposes these as
@@ -108,9 +148,26 @@ export interface Settings {
   /** A user-loaded UI font: label + the font file as a data: URL. */
   customFontName?: string;
   customFontData?: string;
+  /** Complete theme (THEMES id); empty = the built-in look. */
+  themePreset?: string;
+  /** Opacity of block backgrounds, 0.3–1 (wallpaper shows through). */
+  alphas?: { bubbles?: number; panels?: number; inputs?: number };
+  // --- Chat look & media ---
+  stickerSize: number;     // px
+  mediaMaxWidth: number;   // px, photos / GIFs / videos in bubbles
+  bubbleRadius: number;    // px
+  autoplayGifs: boolean;   // GIFs animate in chats (off: tap to play)
+  autoplayStickers: boolean; // animated stickers / emoji play
+  autoplayVideos: boolean; // round videos & link videos start muted by themselves
+  // --- Sounds ---
+  /** Message sound: built-in id ("ding", "pop", …) or "file:<name>". */
+  messageSound: string;
+  soundVolume: number;     // 0–1
+  /** Per chat (peer / group id) sound, same ids as messageSound; "none" = silent. */
+  chatSounds?: Record<string, string>;
 }
 
-const DEFAULTS: Settings = {
+export const DEFAULTS: Settings = {
   mode: "dark",
   palette: "aqua",
   density: "comfortable",
@@ -121,6 +178,14 @@ const DEFAULTS: Settings = {
   linkPreviews: true,
   notifySound: true,
   notifyDesktop: false,
+  stickerSize: 128,
+  mediaMaxWidth: 360,
+  bubbleRadius: 14,
+  autoplayGifs: true,
+  autoplayStickers: true,
+  autoplayVideos: true,
+  messageSound: "ding",
+  soundVolume: 0.7,
 };
 
 const KEY = "aqua-settings";
@@ -149,12 +214,14 @@ function apply(s: Settings) {
   const root = document.documentElement;
 
   // Resolve mode (auto → prefers-color-scheme)
-  const effectiveMode: Exclude<Mode, "auto"> =
-    s.mode === "auto"
+  const presetMode = s.themePreset ? THEMES.find((x) => x.id === s.themePreset)?.mode : undefined;
+  const effectiveMode: Exclude<Mode, "auto"> = presetMode ??
+    (s.mode === "auto"
       ? (window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark")
-      : s.mode;
+      : s.mode);
 
   root.dataset.theme = effectiveMode;
+  root.style.setProperty("color-scheme", effectiveMode);
 
   // Resolve palette
   const p = PALETTES.find((x) => x.id === s.palette) ?? PALETTES[0];
@@ -214,6 +281,21 @@ function apply(s: Settings) {
   }
   root.style.setProperty("--chat-wallpaper", wallCss || "transparent");
 
+  // --- Complete theme preset (GitHub, VS Code, Dracula, …) ---
+  const preset = s.themePreset ? THEMES.find((x) => x.id === s.themePreset) : undefined;
+  if (preset) {
+    for (const [k, v] of Object.entries(preset.colors)) root.style.setProperty(k, v);
+    root.style.setProperty("--accent-soft", hexToRgba(preset.colors["--accent"], 0.14));
+    root.style.setProperty("--accent-glow", hexToRgba(preset.colors["--accent"], 0.42));
+    root.style.setProperty("--accent-strong", preset.colors["--accent"]);
+    root.style.setProperty("--accent-2-glow", hexToRgba(preset.colors["--accent-2"], 0.35));
+    const light = preset.mode === "light";
+    root.style.setProperty("--border", light ? "rgba(0,0,0,0.09)" : "rgba(255,255,255,0.07)");
+    root.style.setProperty("--border-strong", light ? "rgba(0,0,0,0.17)" : "rgba(255,255,255,0.14)");
+    root.style.setProperty("--bg-hover", light ? "rgba(0,0,0,0.045)" : "rgba(255,255,255,0.045)");
+    root.style.setProperty("--bg-active", hexToRgba(preset.colors["--accent"], 0.1));
+  }
+
   // --- Custom colour overrides (theme editor) win over everything. ---
   const custom = s.customColors ?? {};
   for (const { key } of EDITABLE_COLORS) {
@@ -227,6 +309,24 @@ function apply(s: Settings) {
     root.style.setProperty("--accent-glow", hexToRgba(custom["--accent"], 0.45));
     root.style.setProperty("--accent-strong", custom["--accent"]);
   }
+
+  // --- Transparency of blocks (wallpaper shows through) ---
+  const a = s.alphas ?? {};
+  const fade = (key: string, alpha: number | undefined) => {
+    if (alpha == null || alpha >= 0.999) return;
+    const cur = root.style.getPropertyValue(key).trim();
+    if (/^#[0-9a-f]{6}$/i.test(cur)) root.style.setProperty(key, hexToRgba(cur, Math.max(0.15, alpha)));
+  };
+  fade("--bg-bubble-in", a.bubbles);
+  fade("--bg-list", a.panels);
+  fade("--bg-rail", a.panels);
+  fade("--bg-input", a.inputs);
+
+  // --- Chat look ---
+  root.style.setProperty("--sticker-size", `${s.stickerSize ?? 128}px`);
+  root.style.setProperty("--media-max", `${s.mediaMaxWidth ?? 360}px`);
+  root.style.setProperty("--bubble-r", `${s.bubbleRadius ?? 14}px`);
+  root.classList.toggle("no-autoplay-stickers", s.autoplayStickers === false);
 
   // Custom UI font loaded from a file the user picked.
   applyCustomFont(s);

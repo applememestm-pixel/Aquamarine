@@ -10,6 +10,7 @@ pub mod media;
 pub mod activity;
 pub mod web;
 pub mod media_server;
+pub mod personal;
 
 use anyhow::Result;
 use tauri::Manager;
@@ -71,6 +72,11 @@ pub fn run() -> Result<()> {
             media_server::media_stream_url,
             media_server::probe_media,
             media_server::media_support,
+            personal::save_sound,
+            personal::list_sounds,
+            personal::delete_sound,
+            personal::write_theme_file,
+            personal::read_theme_file,
             web::cache_remote_media,
             web::telegraph_page,
             web::open_external,

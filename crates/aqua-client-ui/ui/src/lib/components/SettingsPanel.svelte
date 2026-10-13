@@ -12,7 +12,7 @@
 
 <script lang="ts">
   import { onMount } from "svelte";
-  import { settings, PALETTES, WALLPAPERS, EDITABLE_COLORS, type Mode, type Density } from "../theme";
+  import { settings, PALETTES, WALLPAPERS, EDITABLE_COLORS, THEMES, DEFAULTS, type Mode, type Density } from "../theme";
   import { info } from "../stores";
   import { icons } from "../icons";
   import { openFileDialog } from "../dialog";
@@ -31,6 +31,10 @@
   import { ghost, blocked, setBlocked } from "../ghost";
   import { lockConf, setAutoLock, lockNow, passcodeSetupOpen } from "../lock";
   import { t, lang, LANGS, tr } from "../i18n";
+  import { chats, activeId } from "../stores";
+  import { BUILTIN_SOUNDS, customSounds, refreshSounds, playSound, soundLabel, addSoundBytes } from "../sounds";
+  import { exportThemeToFile, sendThemeToChat, pickAndApplyTheme } from "../themeShare";
+  import { askConfirm } from "./Confirm.svelte";
 
   // ---- Section navigation ----
   type Sec = "ghost" | "language" | "appearance" | "theme" | "behaviour" | "notifications" | "voice" | "wallpaper" | "accent" | "bots" | "account" | "about" | "privacy" | "stickers";
@@ -306,10 +310,74 @@
     }
   }
 
+  // ---- Themes / customisation / sounds ----
+  function pickTheme(id: string) {
+    settings.update((s) => ({ ...s, themePreset: id || undefined, ...(id ? { customColors: {} } : {}) }));
+  }
+  function setNum(key: "stickerSize" | "mediaMaxWidth" | "bubbleRadius" | "soundVolume", v: number) {
+    settings.update((s) => ({ ...s, [key]: v }));
+  }
+  function setFlag(key: "autoplayGifs" | "autoplayStickers" | "autoplayVideos") {
+    settings.update((s) => ({ ...s, [key]: !s[key] }));
+  }
+  function setAlpha(key: "bubbles" | "panels" | "inputs", v: number) {
+    settings.update((s) => ({ ...s, alphas: { ...(s.alphas ?? {}), [key]: v } }));
+  }
+  let themeName = $state("My theme");
+  async function saveTheme() {
+    try { const p = await exportThemeToFile(themeName); if (p) showToast(tr("Theme saved")); }
+    catch (e) { showToast(String(e), 6000); }
+  }
+  async function sendTheme() {
+    const id = $activeId;
+    const chat = $chats.find((c) => c.id === id);
+    if (!chat) { showToast(tr("Open a chat first")); return; }
+    try { await sendThemeToChat(chat.id, themeName); showToast(tr("Theme sent to {name}", { name: chat.name })); }
+    catch (e) { showToast(String(e), 6000); }
+  }
+  async function openTheme() {
+    try { const n = await pickAndApplyTheme(); if (n) showToast(tr("Theme “{name}” applied", { name: n })); }
+    catch (e) { showToast(String(e), 6000); }
+  }
+  const allSounds = $derived([
+    ...BUILTIN_SOUNDS.map((b) => ({ id: b.id, name: b.name, custom: false })),
+    ...$customSounds.map((c) => ({ id: "file:" + c.id, name: c.name, custom: true })),
+  ]);
+  $effect(() => { if (section === "notifications") void refreshSounds(); });
+  async function addSounds() {
+    const res = await openFileDialog({ multiple: true, directory: false, title: tr("Add sounds"), filters: [{ name: "Audio", extensions: ["mp3", "ogg", "opus", "wav", "m4a", "flac", "aac"] }] });
+    const paths = Array.isArray(res) ? res : res ? [res] : [];
+    for (const p of paths) {
+      try {
+        const bytes = new Uint8Array(await (await fetch(await (await import("../media")).streamUrl(p))).arrayBuffer());
+        const f = await addSoundBytes(p.split(/[\\/]/).pop() ?? "sound.mp3", bytes);
+        showToast(tr("Added “{name}”", { name: f.name }));
+      } catch (e) { showToast(String(e), 6000); }
+    }
+  }
+  async function removeSound(id: string) {
+    if (!(await askConfirm({ title: tr("Delete this sound?"), ok: tr("Delete"), danger: true }))) return;
+    try {
+      await api.deleteSound(id.slice(5));
+      settings.update((s) => ({
+        ...s,
+        messageSound: s.messageSound === id ? "ding" : s.messageSound,
+        chatSounds: Object.fromEntries(Object.entries(s.chatSounds ?? {}).filter(([, v]) => v !== id)),
+      }));
+      await refreshSounds();
+    } catch (e) { showToast(String(e)); }
+  }
+  let perChatPick = $state("");
+  function setChatSound(chatId: string, id: string) {
+    settings.update((s) => {
+      const m = { ...(s.chatSounds ?? {}) };
+      if (id) m[chatId] = id; else delete m[chatId];
+      return { ...s, chatSounds: m };
+    });
+  }
+
   function reset() {
-    settings.set({ mode: "dark", palette: "aqua", density: "comfortable", fontScale: 1, wallpaper: "aurora",
-      enterToSend: true, autoDownloadMedia: true, linkPreviews: true, notifySound: true, notifyDesktop: false,
-      customColors: {}, customFontName: undefined, customFontData: undefined });
+    settings.set({ ...DEFAULTS, customColors: {}, customFontName: undefined, customFontData: undefined });
   }
 
   onMount(() => {
@@ -515,6 +583,26 @@
 
       {#if section === "appearance"}
       <section class="group">
+        <div class="label">{$t("Themes")}</div>
+        <div class="themes">
+          <button class="theme-card" class:active={!$settings.themePreset} onclick={() => pickTheme("")}>
+            <span class="tc-prev" style="--s:#0C0F17;--l:#0A0D15;--b:#141825;--a:#00E5C7;--f:#E5EAF2">
+              <i class="tc-l"></i><i class="tc-in"></i><i class="tc-out"></i>
+            </span>
+            <span class="tc-name">Aquamarine</span>
+          </button>
+          {#each THEMES as th (th.id)}
+            <button class="theme-card" class:active={$settings.themePreset === th.id} onclick={() => pickTheme(th.id)} title={th.name}>
+              <span class="tc-prev" style={`--s:${th.colors["--bg-shell"]};--l:${th.colors["--bg-list"]};--b:${th.colors["--bg-bubble-in"]};--a:${th.colors["--accent"]};--f:${th.colors["--fg"]}`}>
+                <i class="tc-l"></i><i class="tc-in"></i><i class="tc-out"></i>
+              </span>
+              <span class="tc-name">{th.name}</span>
+            </button>
+          {/each}
+        </div>
+        <div class="foot-note">{$t("A theme sets every colour; the accent, theme editor and transparency still work on top. Share the whole look in Theme editor → Share.")}</div>
+      </section>
+      <section class="group">
         <div class="label">{$t("Appearance")}</div>
         <div class="row">
           <span class="row-label">{$t("Mode")}</span>
@@ -558,6 +646,42 @@
 
       {#if section === "behaviour"}
       <section class="group">
+        <div class="label">{$t("Chat look & media")}</div>
+        <div class="row">
+          <span class="row-label">{$t("Stickers")}</span>
+          <div class="range">
+            <input type="range" min="80" max="256" step="8" value={$settings.stickerSize} oninput={(e) => setNum("stickerSize", +(e.target as HTMLInputElement).value)} />
+            <span class="range-val">{$settings.stickerSize}px</span>
+          </div>
+        </div>
+        <div class="row">
+          <span class="row-label">{$t("Photos & GIFs")}</span>
+          <div class="range">
+            <input type="range" min="220" max="560" step="10" value={$settings.mediaMaxWidth} oninput={(e) => setNum("mediaMaxWidth", +(e.target as HTMLInputElement).value)} />
+            <span class="range-val">{$settings.mediaMaxWidth}px</span>
+          </div>
+        </div>
+        <div class="row">
+          <span class="row-label">{$t("Bubble corners")}</span>
+          <div class="range">
+            <input type="range" min="2" max="24" step="1" value={$settings.bubbleRadius} oninput={(e) => setNum("bubbleRadius", +(e.target as HTMLInputElement).value)} />
+            <span class="range-val">{$settings.bubbleRadius}px</span>
+          </div>
+        </div>
+        <button class="toggle-row" onclick={() => setFlag("autoplayGifs")}>
+          <div class="tr-text"><div class="tr-title">{$t("Autoplay GIFs")}</div><div class="tr-sub">{$t("Off: GIFs wait for a click")}</div></div>
+          <span class="switch" class:on={$settings.autoplayGifs}></span>
+        </button>
+        <button class="toggle-row" onclick={() => setFlag("autoplayStickers")}>
+          <div class="tr-text"><div class="tr-title">{$t("Animated stickers & emoji")}</div><div class="tr-sub">{$t("Off: they play when you hover them")}</div></div>
+          <span class="switch" class:on={$settings.autoplayStickers}></span>
+        </button>
+        <button class="toggle-row" onclick={() => setFlag("autoplayVideos")}>
+          <div class="tr-text"><div class="tr-title">{$t("Autoplay videos")}</div><div class="tr-sub">{$t("Round videos and videos behind links start muted by themselves")}</div></div>
+          <span class="switch" class:on={$settings.autoplayVideos}></span>
+        </button>
+      </section>
+      <section class="group">
         <div class="label">{$t("Behaviour")}</div>
         <button class="toggle-row" onclick={() => toggle("enterToSend")}>
           <div class="tr-text">
@@ -600,6 +724,52 @@
           </div>
           <span class="switch" class:on={$settings.notifyDesktop}></span>
         </button>
+      </section>
+      <section class="group">
+        <div class="label">{$t("Sounds")}</div>
+        <div class="row">
+          <span class="row-label">{$t("Volume")}</span>
+          <div class="range">
+            <input type="range" min="0" max="1" step="0.05" value={$settings.soundVolume} oninput={(e) => setNum("soundVolume", +(e.target as HTMLInputElement).value)} onchange={() => playSound($settings.messageSound)} />
+            <span class="range-val">{Math.round(($settings.soundVolume ?? 0.7) * 100)}%</span>
+          </div>
+        </div>
+        <div class="snd-list" role="radiogroup" aria-label={$t("Message sound")}>
+          {#each allSounds as snd (snd.id)}
+            <div class="snd" class:on={$settings.messageSound === snd.id}>
+              <button class="snd-pick" role="radio" aria-checked={$settings.messageSound === snd.id} onclick={() => { settings.update((s) => ({ ...s, messageSound: snd.id })); void playSound(snd.id); }}>
+                <span class="lang-radio" class:on={$settings.messageSound === snd.id}></span>
+                <span class="snd-name">{snd.name}</span>
+                {#if snd.custom}<span class="snd-tag">{$t("yours")}</span>{/if}
+              </button>
+              <button class="icon-btn" onclick={() => playSound(snd.id)} title={$t("Listen")} aria-label={$t("Listen")}>▶</button>
+              {#if snd.custom}<button class="icon-btn" onclick={() => removeSound(snd.id)} title={$t("Delete")} aria-label={$t("Delete")}>✕</button>{/if}
+            </div>
+          {/each}
+        </div>
+        <button class="mini-btn" style="margin-top:10px" onclick={addSounds}>{$t("Add sound files…")}</button>
+        <div class="foot-note">{$t("Your sounds live in the app's Sounds folder: mp3, ogg, opus, wav, m4a, flac — up to 3 MB each.")}</div>
+      </section>
+      <section class="group">
+        <div class="label">{$t("Per-person sounds")}</div>
+        {#each Object.entries($settings.chatSounds ?? {}) as [cid, sid] (cid)}
+          <div class="row">
+            <span class="row-label ell">{$chats.find((c) => c.id === cid)?.name ?? cid}</span>
+            <select class="sel" value={sid} onchange={(e) => setChatSound(cid, (e.target as HTMLSelectElement).value)}>
+              <option value="">{$t("Default")}</option>
+              {#each allSounds as snd (snd.id)}<option value={snd.id}>{snd.name}</option>{/each}
+            </select>
+            <button class="icon-btn" onclick={() => playSound(sid)} aria-label={$t("Listen")}>▶</button>
+          </div>
+        {/each}
+        <div class="row">
+          <select class="sel" bind:value={perChatPick}>
+            <option value="">{$t("Choose a chat…")}</option>
+            {#each $chats.filter((c) => !($settings.chatSounds ?? {})[c.id]) as c (c.id)}<option value={c.id}>{c.name}</option>{/each}
+          </select>
+          <button class="mini-btn primary" disabled={!perChatPick} onclick={() => { setChatSound(perChatPick, $settings.messageSound === "ding" ? "chime" : "ding"); perChatPick = ""; }}>{$t("Add")}</button>
+        </div>
+        <div class="foot-note">{$t("Give someone their own sound — you'll know who wrote without looking.")}</div>
       </section>
       {/if}
 
@@ -716,7 +886,28 @@
           <div class="te-hint">{$t(".ttf · .otf · .woff · .woff2 — pick any font from your system folders.")}</div>
         </div>
 
+        <div class="te-group-title">{$t("Transparency")}</div>
+        {#each ([["bubbles", "Message bubbles"], ["panels", "Chat list & rail"], ["inputs", "Fields & cards"]] as const) as [k, lbl] (k)}
+          <div class="row">
+            <span class="row-label">{$t(lbl)}</span>
+            <div class="range">
+              <input type="range" min="0.3" max="1" step="0.02" value={$settings.alphas?.[k] ?? 1} oninput={(e) => setAlpha(k, +(e.target as HTMLInputElement).value)} />
+              <span class="range-val">{Math.round(($settings.alphas?.[k] ?? 1) * 100)}%</span>
+            </div>
+          </div>
+        {/each}
+
         <button class="reset" style="margin-top:16px" onclick={clearColors}>{$t("Clear custom colours")}</button>
+      </section>
+      <section class="group">
+        <div class="label">{$t("Share")}</div>
+        <div class="foot-note" style="margin:0 0 10px">{$t("One .aquatheme file with everything: theme and colours with transparency, wallpaper, font, chat sizes, autoplay and your message sound. Others open it or tap “Apply theme” on it in a chat.")}</div>
+        <div class="share-row">
+          <input class="txt" bind:value={themeName} placeholder={$t("Theme name")} />
+          <button class="mini-btn primary" onclick={saveTheme}>{$t("Save to file…")}</button>
+          <button class="mini-btn" onclick={sendTheme}>{$t("Send to current chat")}</button>
+        </div>
+        <button class="mini-btn" style="margin-top:10px" onclick={openTheme}>{$t("Open a theme file…")}</button>
       </section>
       {/if}
 
@@ -1004,7 +1195,7 @@
   .seg-opt.active {
     background: var(--accent-soft);
     color: var(--accent);
-    box-shadow: 0 0 0 1px rgba(0, 229, 199, 0.25);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
   }
 
   .range { display: flex; align-items: center; gap: 10px; flex: 1; }
@@ -1056,6 +1247,43 @@
     text-align: center;
   }
 
+  .themes { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; }
+  .theme-card {
+    display: flex; flex-direction: column; gap: 6px; padding: 6px;
+    border: 1.5px solid var(--border); border-radius: 12px; background: transparent;
+    color: var(--fg-muted); cursor: pointer; text-align: left;
+  }
+  .theme-card:hover { border-color: var(--border-strong); color: var(--fg); }
+  .theme-card.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  .tc-prev {
+    position: relative; display: block; height: 58px; border-radius: 8px; overflow: hidden;
+    background: var(--s); border: 1px solid rgba(127, 127, 127, 0.18);
+  }
+  .tc-prev i { position: absolute; display: block; border-radius: 6px; }
+  .tc-l { left: 0; top: 0; bottom: 0; width: 28%; border-radius: 0 !important; background: var(--l); }
+  .tc-in { left: 34%; top: 12px; width: 44%; height: 12px; background: var(--b); }
+  .tc-out { right: 8%; top: 32px; width: 40%; height: 12px; background: color-mix(in srgb, var(--a) 55%, var(--s)); }
+  .tc-name { font-size: 11.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .snd-list { display: flex; flex-direction: column; gap: 2px; }
+  .snd { display: flex; align-items: center; gap: 4px; border-radius: 9px; }
+  .snd.on { background: var(--accent-soft); }
+  .snd-pick { flex: 1; display: flex; align-items: center; gap: 10px; padding: 7px 8px; border: none; background: none; color: var(--fg); font: inherit; font-size: 13.5px; cursor: pointer; text-align: left; }
+  .snd-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .snd-tag { font-size: 10.5px; font-weight: 700; color: var(--accent); }
+  .icon-btn {
+    flex: 0 0 30px; height: 30px; display: grid; place-items: center;
+    border: none; border-radius: 8px; background: transparent; color: var(--fg-muted); cursor: pointer; font-size: 12px;
+  }
+  .icon-btn:hover { background: var(--bg-hover); color: var(--fg); }
+  .sel {
+    flex: 1; min-width: 0; height: 32px; padding: 0 8px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 13px;
+  }
+  .ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .share-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .share-row .txt { flex: 1 1 160px; height: 32px; box-sizing: border-box; }
+  .share-row .mini-btn, .rp-import .mini-btn { height: 32px; box-sizing: border-box; }
+  .rp-import .txt { height: 32px; box-sizing: border-box; }
   .palettes {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
