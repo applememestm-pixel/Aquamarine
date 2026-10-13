@@ -9,6 +9,28 @@ import "./app.css";
   const ua = navigator.userAgent;
   if (/Linux/.test(ua) && !/Android|Chrome/.test(ua)) {
     document.documentElement.classList.add("wk-lowfx");
+    // Diagnostics for the launcher log: report main-thread stalls together
+    // with what was clicked last ("[aqua-stall] 2300 ms after click …").
+    let last = performance.now();
+    let lastClick = "";
+    let lastClickAt = 0;
+    addEventListener("pointerdown", (e) => {
+      const t = e.target as Element | null;
+      lastClick = t ? `${t.tagName.toLowerCase()}.${String((t as HTMLElement).className || "").split(" ")[0]}` : "?";
+      lastClickAt = performance.now();
+    }, true);
+    setInterval(() => {
+      const now = performance.now();
+      const gap = now - last - 250;
+      last = now;
+      if (gap > 400) console.warn(`[aqua-stall] ${Math.round(gap)} ms; last click ${lastClick} ${Math.round((now - lastClickAt) / 1000)} s ago`);
+    }, 250);
+    for (const ev of ["error", "stalled", "waiting"] as const) {
+      addEventListener(ev, (e) => {
+        const m = e.target as HTMLMediaElement;
+        if (m && (m.tagName === "AUDIO" || m.tagName === "VIDEO")) console.warn(`[aqua-media] ${ev} ${m.tagName} err=${m.error?.code ?? "-"} ${m.error?.message ?? ""} src=${(m.currentSrc || "").slice(0, 60)}`);
+      }, true);
+    }
   }
 }
 

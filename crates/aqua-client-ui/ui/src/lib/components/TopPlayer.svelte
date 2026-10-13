@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { streamable } from "../media";
+  import { streamable, mediaErrorText } from "../media";
+  import { showToast } from "./Toast.svelte";
+  import { tr } from "../i18n";
   // Persistent background audio bar. Mounted once in App.svelte, so the
   // single <audio> element survives chat/tab switches and keeps playing.
   // The expanded MusicPlayer sheet is driven by this SAME element (passed
@@ -151,6 +153,7 @@
     <audio
       bind:this={audio}
       src={playSrc || undefined}
+      onerror={(e) => { if (playSrc) showToast(tr(mediaErrorText(e.currentTarget as HTMLAudioElement)), 9000); }}
       preload="metadata"
       ontimeupdate={onTime}
       onloadedmetadata={onMeta}

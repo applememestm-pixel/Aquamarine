@@ -19,6 +19,8 @@
    * away), with a button to go full screen.
    */
   import { openLightbox } from "./Lightbox.svelte";
+  import { mediaErrorText } from "../media";
+  import { tr } from "../i18n";
 
   interface Props {
     items: CarouselItem[];
@@ -139,7 +141,7 @@
                 </button>
               {:else if vsrc[i]}
                 <!-- svelte-ignore a11y_media_has_caption -->
-                <video src={vsrc[i]} poster={it.poster} controls autoplay playsinline preload="metadata"></video>
+                <video src={vsrc[i]} poster={it.poster} controls autoplay playsinline preload="metadata" onerror={(e) => { verr[i] = tr(mediaErrorText(e.currentTarget as HTMLVideoElement)); vstate[i] = "error"; vsrc[i] = ""; }}></video>
                 <button class="vbtn fs" onclick={() => fullscreen(i)} title="Full screen" aria-label="Full screen">⤢</button>
               {:else}
                 <button class="hit" onclick={() => click(i)} tabindex="-1" aria-label={`Video ${i + 1}`}>

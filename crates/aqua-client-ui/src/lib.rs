@@ -156,6 +156,8 @@ mod linux_webview {
                 s.set_enable_media_stream(true);
                 s.set_enable_mediasource(true);
                 s.set_media_playback_requires_user_gesture(false);
+                // JS console → stdout, so tools/aquamarine.sh's log has it.
+                s.set_enable_write_console_messages_to_stdout(true);
             }
         });
         if let Err(e) = res {

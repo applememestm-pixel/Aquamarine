@@ -100,6 +100,12 @@ pub fn url_for(path: &Path) -> Result<String, String> {
     Ok(format!("http://127.0.0.1:{}/m/{token}.{ext}", st.port))
 }
 
+/// `AQUA_MEDIA_LOG=1` (set by tools/aquamarine.sh): log every media request.
+fn media_log() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("AQUA_MEDIA_LOG").is_some_and(|v| v == "1"))
+}
+
 fn header(k: &str, v: &str) -> Header {
     Header::from_bytes(k.as_bytes(), v.as_bytes()).expect("valid header")
 }
@@ -134,6 +140,11 @@ fn serve(req: tiny_http::Request) {
         .find(|h| h.field.equiv("Range"))
         .and_then(|h| parse_range(h.value.as_str(), len));
     let head = *req.method() == Method::Head;
+    if media_log() {
+        let r = req.headers().iter().find(|h| h.field.equiv("Range")).map(|h| h.value.as_str().to_string()).unwrap_or_default();
+        eprintln!("[aqua-media] {} {}… range={r:?} len={len} -> {}", req.method(), &token[..8],
+            path.file_name().and_then(|n| n.to_str()).unwrap_or("?"));
+    }
     let common = |r: Response<Box<dyn Read + Send>>| {
         r.with_header(header("Content-Type", mime))
             .with_header(header("Accept-Ranges", "bytes"))

@@ -29,6 +29,18 @@ Frontend: `lib/media.ts` → `streamUrl(path)`, `streamable(assetUrl)`,
 video, circle videos, shared-media / files thumbnails, carousel videos.
 Saved-Messages attachment copy uses `tokio::fs::copy`.
 
+**Follow-up 3 (2026-10-13): user still sees the lag + 0:00 on Arch/NVIDIA,
+not reproducible here** (also not with real PipeWire output, nor with MP3 /
+H.264 decoders removed — that gives MEDIA_ERR 4 and no lag). So: diagnostics
+from the user's machine. `tools/aquamarine.sh` now writes
+`logs/aquamarine-last.log` (app stderr/stdout, JS console via WebKit's
+console-to-stdout, GStreamer warnings `GST_DEBUG=2`, media-server requests
+`AQUA_MEDIA_LOG=1`, `[aqua-stall]` main-thread stall reports with the last
+click) and `logs/system.txt` (pacman versions of WebKit/GStreamer/codecs/
+NVIDIA, gst-inspect decoders & sinks). Undecodable audio/video now shows an
+error with the pacman hint instead of sitting at 0:00. CSP: connect-src lacked
+'self' — the bundled reaction pack manifest was blocked (found in that log).
+
 **Follow-up 2 (2026-10-13): lag after publishing + music stuck at 0:00.**
 Reproduced on the real client (not the mock harness) with a new WebKitGTK
 end-to-end setup — `tools/e2e/run.sh` (Xvfb + tauri-driver +
