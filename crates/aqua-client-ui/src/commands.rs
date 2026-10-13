@@ -830,6 +830,67 @@ pub async fn attach_file(
     attach_file_impl(state, app, peer_id, file_path, None, None).await
 }
 
+/// Send a file the way the user chose in the send dialog:
+/// - `"file"`: as a document (original bytes, no inline preview anywhere)
+/// - `"media"`: as photo / video (inline)
+/// - `"compressed"`: a video re-encoded with ffmpeg to ≤ 720p H.264/AAC
+///   (much smaller; fails with a clear error when ffmpeg is missing).
+#[tauri::command]
+pub async fn attach_file_as(
+    state: State<'_, StdMutex<AppState>>,
+    app: AppHandle,
+    peer_id: String,
+    file_path: String,
+    mode: String,
+) -> Result<AttachResult, String> {
+    match mode.as_str() {
+        "file" => attach_file_impl(state, app, peer_id, file_path, Some("document".into()), None).await,
+        "compressed" => {
+            let out_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.join("outbox") };
+            std::fs::create_dir_all(&out_dir).map_err(|e| format!("mkdir outbox: {e}"))?;
+            let stem = PathBuf::from(&file_path).file_stem().and_then(|s| s.to_str()).unwrap_or("video").to_string();
+            let out = out_dir.join(format!("{}.mp4", stem.replace(['/', '\\', ':'], "_")));
+            let mut cmd = tokio::process::Command::new("ffmpeg");
+            cmd.args(["-v", "error", "-nostdin", "-y", "-i"]).arg(&file_path)
+                .args(["-vf", "scale='min(1280,iw)':'min(720,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
+                       "-c:v", "libx264", "-preset", "veryfast", "-crf", "27", "-pix_fmt", "yuv420p",
+                       "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"])
+                .arg(&out)
+                .stdin(std::process::Stdio::null())
+                .kill_on_drop(true);
+            #[cfg(windows)]
+            {
+                cmd.creation_flags(0x0800_0000);
+            }
+            let res = cmd.output().await.map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound { "ffmpeg is not installed — sent nothing".to_string() } else { format!("ffmpeg: {e}") }
+            })?;
+            if !res.status.success() {
+                return Err(format!("ffmpeg failed: {}", String::from_utf8_lossy(&res.stderr).lines().last().unwrap_or("")));
+            }
+            attach_file_impl(state, app, peer_id, out.display().to_string(), None, Some("video/mp4".into())).await
+        }
+        _ => attach_file_impl(state, app, peer_id, file_path, None, None).await,
+    }
+}
+
+/// Send bytes made in the UI (a compressed photo) as a file named `name`.
+#[tauri::command]
+pub async fn attach_bytes(
+    state: State<'_, StdMutex<AppState>>,
+    app: AppHandle,
+    peer_id: String,
+    name: String,
+    mime: String,
+    bytes: Vec<u8>,
+) -> Result<AttachResult, String> {
+    let out_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.join("outbox") };
+    std::fs::create_dir_all(&out_dir).map_err(|e| format!("mkdir outbox: {e}"))?;
+    let out = out_dir.join(name.replace(['/', '\\', ':'], "_"));
+    tokio::fs::write(&out, &bytes).await.map_err(|e| format!("write: {e}"))?;
+    attach_file_impl(state, app, peer_id, out.display().to_string(), None, Some(mime)).await
+}
+
 #[tauri::command]
 pub async fn send_sticker(
     state: State<'_, StdMutex<AppState>>,

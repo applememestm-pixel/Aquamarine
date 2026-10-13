@@ -123,6 +123,8 @@ export const api = {
   deleteMessage:      (peer_id: string, text: string): Promise<void>                    => invoke("delete_message", { peerId: peer_id, text }),
   deleteMessagesLocal: (peerId: string, ids: string[]): Promise<number> => invoke("delete_messages_local", { peerId, ids }),
   attachFile:         (peer_id: string, file_path: string): Promise<AttachResult>  => invoke("attach_file", { peerId: peer_id, filePath: file_path }),
+  attachFileAs:       (peerId: string, filePath: string, mode: "file" | "media" | "compressed"): Promise<AttachResult> => invoke("attach_file_as", { peerId, filePath, mode }),
+  attachBytes:        (peerId: string, name: string, mime: string, bytes: number[]): Promise<AttachResult> => invoke("attach_bytes", { peerId, name, mime, bytes }),
   downloadFile:       (peer_id: string, message_id: string): Promise<DownloadResult> => invoke("download_file", { peerId: peer_id, messageId: message_id }),
   sendCallSignal:     (peer_id: string, signal: object): Promise<void> =>
     invoke("send_call_signal", { peerId: peer_id, signalJson: JSON.stringify(signal) }),

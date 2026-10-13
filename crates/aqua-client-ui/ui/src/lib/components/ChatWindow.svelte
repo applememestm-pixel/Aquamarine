@@ -2,6 +2,8 @@
   import { tick, onMount, untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import { askConfirm } from "./Confirm.svelte";
+  import { askSend, VIDEO_RE, type SendMode } from "./SendDialog.svelte";
+  import { shrinkImage } from "../imageTools";
   import { openFileDialog } from "../dialog";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { icons } from "../icons";
@@ -152,6 +154,7 @@
     if (cat === "gif") return "gif";
     if (cat === "voice") return "voice";
     if (cat === "circle") return "circle";
+    if (cat === "document") return "file"; // "send as file": never inline
     const mime = (content.mime ?? "").toLowerCase();
     const name = content.name.toLowerCase();
     if (mime === "image/gif" || name.endsWith(".gif")) return "gif";
@@ -223,7 +226,7 @@
     startOutgoingCall(chat.id);
   }
 
-  async function pickAndSendFile() {
+  async function pickAndSendFile(preset?: SendMode) {
     const chat = $activeChat;
     if (!chat) {
       showToast(tr("Pick a chat on the left first"));
@@ -260,7 +263,7 @@
       return;
     }
     if (picked.length === 0) return;
-    await sendFiles(chat.id, picked);
+    await sendFiles(chat.id, picked, preset);
   }
 
   // Voice-message recorder. Uses MediaRecorder → Blob → base64 →
@@ -421,17 +424,36 @@
   // Special case: a single image → the PhotoEditor modal opens first.
   // The user can rotate / tweak / "Send original" / "Send edited".
   // "Send original" falls through to the normal attach pipeline.
-  async function sendFiles(peerId: string, paths: string[]) {
-    if (paths.length === 1 && isImagePath(paths[0])) {
+  async function sendFiles(peerId: string, paths: string[], preset?: SendMode) {
+    if (!paths.length) return;
+    // Telegram-style sheet: previews + "as photo/video" or "as file".
+    const choice = await askSend(paths, preset);
+    if (!choice) return;
+    if (choice.edit && paths.length === 1 && isImagePath(paths[0])) {
       const edited = await maybeEditThenSend(peerId, paths[0]);
-      if (edited) return; // editor handled the send
+      if (edited) { if (choice.caption) await sendCurrent(choice.caption); return; }
     }
     let ok = 0;
     let fail = 0;
     let lastErr = "";
     for (const p of paths) {
       try {
-        await api.attachFile(peerId, p);
+        if (choice.mode === "file") {
+          await api.attachFileAs(peerId, p, "file");
+        } else if (isImagePath(p)) {
+          await sendCompressedPhoto(peerId, p);
+        } else if (VIDEO_RE.test(p) && choice.mode === "compressed") {
+          showToast(tr("Compressing {name}…", { name: p.split(/[\\/]/).pop() ?? "" }), 60000);
+          try {
+            await api.attachFileAs(peerId, p, "compressed");
+          } catch (e) {
+            // No ffmpeg / odd file: send the original rather than nothing.
+            showToast(tr("Could not compress ({e}) — sending the original", { e: String(e) }), 6000);
+            await api.attachFile(peerId, p);
+          }
+        } else {
+          await api.attachFile(peerId, p);
+        }
         ok++;
       } catch (e) {
         console.error("attach failed for", p, e);
@@ -439,6 +461,7 @@
         fail++;
       }
     }
+    if (choice.caption && ok) await sendCurrent(choice.caption);
     await loadActiveMessages();
     if (fail === 0) {
       showToast(ok === 1 ? tr("File sent") : `${ok} files sent`);
@@ -449,8 +472,23 @@
     }
   }
 
+  /** "As photo": like Telegram, re-encode to ≤ 2560 px (GIFs stay as they are). */
+  async function sendCompressedPhoto(peerId: string, path: string) {
+    if (/\.gif$/i.test(path)) { await api.attachFile(peerId, path); return; }
+    const bytes = await api.readUserImage(path);
+    const url = await shrinkImage(new Blob([new Uint8Array(bytes)]), 2560, 0.86);
+    const mime = url.slice(5, url.indexOf(";"));
+    const bin = atob(url.slice(url.indexOf(",") + 1));
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    // Bigger than the original (already small / well compressed)? Send the original.
+    if (out.length >= bytes.length) { await api.attachFile(peerId, path); return; }
+    const base = (path.split(/[\\/]/).pop() ?? "photo").replace(/\.[^.]+$/, "");
+    await api.attachBytes(peerId, `${base}.${mime === "image/webp" ? "webp" : "jpg"}`, mime, Array.from(out));
+  }
+
   function isImagePath(p: string): boolean {
-    return /\.(png|jpe?g|webp|bmp)$/i.test(p);
+    return /\.(png|jpe?g|webp|bmp|gif)$/i.test(p);
   }
 
   async function maybeEditThenSend(peerId: string, path: string): Promise<boolean> {
@@ -2188,8 +2226,12 @@
       <div class="attach-wrap" onmousedown={(e) => e.stopPropagation()}>
         {#if attachMenuOpen}
           <div class="attach-pop" role="menu" tabindex="-1">
-            <button class="ap-item" onclick={() => { attachMenuOpen = false; pickAndSendFile(); }}>
-              {@html icons.attach}<span>Media & files</span>
+            <button class="ap-item" onclick={() => { attachMenuOpen = false; pickAndSendFile("media"); }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>
+              <span>{$t("Photo or video")}</span>
+            </button>
+            <button class="ap-item" onclick={() => { attachMenuOpen = false; pickAndSendFile("file"); }}>
+              {@html icons.attach}<span>{$t("File")}</span>
             </button>
             <button class="ap-item" onclick={() => { attachMenuOpen = false; if ($activeChat) openArticleComposer($activeChat.id); }}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h12a3 3 0 0 1 3 3v14H7a3 3 0 0 1-3-3V4z"/><path d="M19 7v14"/><line x1="7" y1="9" x2="15" y2="9"/><line x1="7" y1="13" x2="15" y2="13"/></svg>

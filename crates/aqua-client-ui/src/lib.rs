@@ -121,6 +121,8 @@ pub fn run() -> Result<()> {
             commands::delete_message,
             commands::delete_messages_local,
             commands::attach_file,
+            commands::attach_file_as,
+            commands::attach_bytes,
             commands::download_file,
             commands::send_call_signal,
             commands::send_control,
