@@ -14,7 +14,7 @@
    * "Instant View" button that opens them in the in-app reader.
    */
   import { api, assetUrl } from "../tauri";
-  import { streamUrl } from "../media";
+  import MediaPlayer from "./MediaPlayer.svelte";
   import { showToast } from "./Toast.svelte";
   import { settings } from "../theme";
   import { t } from "../i18n";
@@ -31,13 +31,6 @@
   let ytPlaying = $state(false);
   let video = $state<"idle" | "loading" | "ready" | "error">("idle");
   let videoPath = $state<string | null>(null);
-  // Played over the loopback media server (lib/media.ts::streamUrl).
-  let videoSrc = $state("");
-  $effect(() => {
-    const vp = videoPath;
-    videoSrc = "";
-    if (vp) void streamUrl(vp).then((u) => { if (videoPath === vp) videoSrc = u; }).catch((e) => showToast(e instanceof Error ? e.message : String(e), 12000));
-  });
   let videoErr = $state("");
 
   function load(u: string): Promise<Preview | null> {
@@ -119,8 +112,7 @@
     {:else if p.kind === "video"}
       <div class="lp-media">
         {#if video === "ready" && videoPath}
-          <!-- svelte-ignore a11y_media_has_caption -->
-          <video src={videoSrc || undefined} controls preload="metadata" playsinline></video>
+          <MediaPlayer src={assetUrl(videoPath)} kind="video" name={p?.title ?? undefined} autoplay />
           <button class="lp-ext" onclick={() => videoPath && openLightbox({ url: assetUrl(videoPath), kind: "video", path: videoPath, name: p?.title ?? undefined })}>{$t("Full screen")} ⤢</button>
         {:else}
           <button class="lp-thumb vid" onclick={fetchVideo} disabled={video === "loading"}>
@@ -168,10 +160,9 @@
   .lp-media { margin-top: 5px; position: relative; }
   .video16 { aspect-ratio: 16 / 9; overflow: hidden; border-radius: 8px; }
   .video16 > .lp-thumb { position: absolute; inset: 0; min-height: 0; }
-  .lp-media iframe, .lp-media video {
+  .lp-media iframe {
     width: 100%; height: 100%; border: none; border-radius: 8px; display: block; background: #000;
   }
-  .lp-media video { height: auto; max-height: 360px; }
   .lp-thumb {
     all: unset; position: relative; display: block; cursor: pointer;
     width: 100%; height: 100%; min-height: 120px; border-radius: 8px; overflow: hidden; background: #0b0d14;

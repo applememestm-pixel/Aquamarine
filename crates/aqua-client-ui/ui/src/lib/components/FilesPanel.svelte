@@ -221,7 +221,7 @@
                     <img class="img" src={url} alt={e.name} />
                   </button>
                 {:else if isVideo}
-                  <MediaPlayer src={url} kind="video" onExpand={() => openLightbox({ url, kind: "video", name: e.name })} />
+                  <MediaPlayer src={url} kind="video" name={e.name} onExpand={() => openLightbox({ url, kind: "video", name: e.name })} />
                 {/if}
               {:else}
                 <div class="loading">{$t("Loading preview…")}</div>

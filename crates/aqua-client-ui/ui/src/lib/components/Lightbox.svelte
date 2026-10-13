@@ -487,12 +487,11 @@
           </div>
         {/if}
       {:else}
-        <div class="lb-center">
-          <div class="lb-video">
-            {#key cur.url + "#" + index}
-              <MediaPlayer src={cur.url} kind="video" />
-            {/key}
-          </div>
+        <!-- Video fills the whole viewer; the player has window / full-screen modes too. -->
+        <div class="lb-video">
+          {#key cur.url + "#" + index}
+            <MediaPlayer src={cur.url} kind="video" fill autoplay name={fileName(cur)} size={cur.size} />
+          {/key}
         </div>
       {/if}
 
@@ -669,7 +668,7 @@
     display: grid; place-items: center;
     padding: 16px;
   }
-  .lb-video { width: min(86vw, 1100px); pointer-events: auto; }
+  .lb-video { position: absolute; inset: 0; pointer-events: auto; }
   .spinner {
     width: 38px; height: 38px;
     border-radius: 50%;

@@ -19,7 +19,7 @@
    * away), with a button to go full screen.
    */
   import { openLightbox } from "./Lightbox.svelte";
-  import { mediaErrorText } from "../media";
+  import MediaPlayer from "./MediaPlayer.svelte";
   import { tr } from "../i18n";
 
   interface Props {
@@ -75,7 +75,7 @@
   }
 
   function isControl(t: EventTarget | null): boolean {
-    return t instanceof Element && !!t.closest("video, .vbtn, .nav, .dot");
+    return t instanceof Element && !!t.closest("video, .vp, .vbtn, .nav, .dot");
   }
   function down(e: PointerEvent) {
     if (n < 2 || e.button !== 0 || isControl(e.target)) return;
@@ -108,7 +108,7 @@
     else onopen?.(i);
   }
   function key(e: KeyboardEvent) {
-    if (e.target instanceof HTMLVideoElement) return;
+    if (e.target instanceof HTMLVideoElement || (e.target instanceof Element && e.target.closest(".vp"))) return;
     if (e.key === "ArrowLeft") { e.preventDefault(); e.stopPropagation(); go(index - 1); }
     else if (e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); go(index + 1); }
     else if (e.key === "Enter") { e.preventDefault(); click(index); }
@@ -140,9 +140,7 @@
                   {#if it.src}<img src={it.src} alt="" draggable="false" decoding="async" />{:else}<span class="ph"></span>{/if}
                 </button>
               {:else if vsrc[i]}
-                <!-- svelte-ignore a11y_media_has_caption -->
-                <video src={vsrc[i]} poster={it.poster} controls autoplay playsinline preload="metadata" onerror={(e) => { verr[i] = tr(mediaErrorText(e.currentTarget as HTMLVideoElement)); vstate[i] = "error"; vsrc[i] = ""; }}></video>
-                <button class="vbtn fs" onclick={() => fullscreen(i)} title="Full screen" aria-label="Full screen">⤢</button>
+                <MediaPlayer src={vsrc[i]} kind="video" poster={it.poster} name={it.label} fill autoplay onExpand={() => fullscreen(i)} />
               {:else}
                 <button class="hit" onclick={() => click(i)} tabindex="-1" aria-label={`Video ${i + 1}`}>
                   {#if it.poster}<img src={it.poster} alt="" draggable="false" decoding="async" />{:else}<span class="ph vid"></span>{/if}
@@ -218,7 +216,6 @@
   }
   .video .hit { cursor: pointer; }
   .slide img { width: 100%; height: 100%; object-fit: contain; display: block; pointer-events: none; }
-  .slide video { width: 100%; height: 100%; object-fit: contain; background: #000; display: block; }
   .ph { width: 100%; height: 100%; background: #0b0d14; }
   .ph.vid { background: radial-gradient(circle at 50% 50%, #1a1f2e, #07080d); }
   .play {
@@ -240,11 +237,6 @@
     position: absolute; left: 10px; bottom: 10px; max-width: calc(100% - 20px);
     padding: 2px 8px; border-radius: 8px; background: rgba(0, 0, 0, 0.6); color: #fff;
     font-size: 11.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .vbtn {
-    position: absolute; top: 10px; left: 10px;
-    width: 32px; height: 32px; border-radius: 8px; border: none;
-    background: rgba(0, 0, 0, 0.55); color: #fff; cursor: pointer; font-size: 16px;
   }
   .nav {
     position: absolute; top: 50%; transform: translateY(-50%);

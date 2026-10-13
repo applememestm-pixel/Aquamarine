@@ -64,7 +64,7 @@ const streams = new Map<string, Promise<string>>();
 let support: Promise<{ blocking: string[]; recommended: string[] }> | null = null;
 /** Missing GStreamer packages (Linux), checked once. */
 export function mediaSupport(): Promise<{ blocking: string[]; recommended: string[] }> {
-  support ??= api.mediaSupport().catch(() => ({ blocking: [], recommended: [] }));
+  support ??= api.mediaSupport().then((r) => ({ blocking: r?.blocking ?? [], recommended: r?.recommended ?? [] })).catch(() => ({ blocking: [], recommended: [] }));
   return support;
 }
 

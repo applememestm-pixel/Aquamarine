@@ -1809,7 +1809,7 @@
                 {:else if rk === "video"}
                   <div class="bubble media-bubble">
                     {#if url}
-                      <MediaPlayer src={url} kind="video" onExpand={() => openInGallery(content.saved_at)} />
+                      <MediaPlayer src={url} kind="video" name={content.name} size={content.size} onExpand={() => openInGallery(content.saved_at)} />
                     {:else if content.saved_at}
                       <div class="media-placeholder" style="aspect-ratio: 16/9;"></div>
                     {:else}
