@@ -121,6 +121,7 @@ export const api = {
   // Edit / delete (local store mutation; relay the control separately)
   editMessage:        (peer_id: string, old_text: string, new_text: string): Promise<void> => invoke("edit_message", { peerId: peer_id, oldText: old_text, newText: new_text }),
   deleteMessage:      (peer_id: string, text: string): Promise<void>                    => invoke("delete_message", { peerId: peer_id, text }),
+  deleteMessagesLocal: (peerId: string, ids: string[]): Promise<number> => invoke("delete_messages_local", { peerId, ids }),
   attachFile:         (peer_id: string, file_path: string): Promise<AttachResult>  => invoke("attach_file", { peerId: peer_id, filePath: file_path }),
   downloadFile:       (peer_id: string, message_id: string): Promise<DownloadResult> => invoke("download_file", { peerId: peer_id, messageId: message_id }),
   sendCallSignal:     (peer_id: string, signal: object): Promise<void> =>

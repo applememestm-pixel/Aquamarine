@@ -12,6 +12,7 @@
   import FingerprintModal from "./lib/components/FingerprintModal.svelte";
   import InputPrompt from "./lib/components/InputPrompt.svelte";
   import Toast, { showToast } from "./lib/components/Toast.svelte";
+  import Confirm from "./lib/components/Confirm.svelte";
   import { mediaSupport, installHint } from "./lib/media";
   import { tr } from "./lib/i18n";
   import CallModal from "./lib/components/CallModal.svelte";
@@ -237,6 +238,7 @@
 <ShortcutsHelp />
 <ImageCropper />
 <Toast />
+<Confirm />
 
 <style>
   .root {

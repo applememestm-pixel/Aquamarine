@@ -670,7 +670,7 @@
   .ap .ib :global(svg) { width: 17px; height: 17px; }
   .ap .ib:hover, .ap .txt:hover { background: var(--bg-hover); color: var(--fg); }
   .ap .txt { height: 24px; min-width: 34px; font-size: 11px; }
-  .ap .menu { background: var(--bg-elev, #151824); color: var(--fg); }
+  .ap .menu { background: var(--bg-shell); color: var(--fg); }
   .aerr { font-size: 11px; color: #ff9a9a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .wave { display: flex; align-items: center; gap: 2px; height: 26px; cursor: pointer; }
   .wb { flex: 1; min-height: 3px; border-radius: 2px; background: var(--border-strong); }

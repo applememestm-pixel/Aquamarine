@@ -2807,6 +2807,30 @@ pub fn delete_message(
     Ok(())
 }
 
+/// Remove messages from this device by id ("delete for me") — works for
+/// every kind (media, articles, polls…), unlike the text-matched
+/// `delete_message`, which also tells the peer.
+#[tauri::command]
+pub fn delete_messages_local(
+    state: State<'_, StdMutex<AppState>>,
+    peer_id: String,
+    ids: Vec<String>,
+) -> Result<usize, String> {
+    let mut s = state.lock().map_err(|e| e.to_string())?;
+    let data_dir = s.data_dir.clone();
+    let Some(book) = s.chats.get_mut(&peer_id) else { return Ok(0) };
+    let before = book.messages.len();
+    book.messages.retain(|m| !ids.contains(&m.id));
+    let removed = before - book.messages.len();
+    if removed > 0 {
+        book.summary.preview = book.messages.last().map(|m| preview_for(&m.kind)).unwrap_or_default();
+        if peer_id == crate::state::SAVED_MESSAGES_ID {
+            crate::state::save_saved_messages(&data_dir, &book.messages);
+        }
+    }
+    Ok(removed)
+}
+
 fn push_peer_message(s: &mut AppState, peer_id: &str, text: String, time: &str) {
     let kind = classify_kind(&text);
     let preview = preview_for(&kind);

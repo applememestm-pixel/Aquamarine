@@ -1,5 +1,7 @@
 <script lang="ts">
   import { tick, onMount, untrack } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
+  import { askConfirm } from "./Confirm.svelte";
   import { openFileDialog } from "../dialog";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { icons } from "../icons";
@@ -503,6 +505,11 @@
       if (e.key === "Escape") {
         if (menu.open) closeMenu();
         else if (selecting) clearSelection();
+      } else if (e.key === "Delete" && selecting && selected.size > 0) {
+        const el = e.target as HTMLElement | null;
+        if (el && (el.isContentEditable || /^(INPUT|TEXTAREA)$/.test(el.tagName))) return;
+        e.preventDefault();
+        void deleteSelection();
       }
     };
     const onUp = () => { endDrag(); if (holdTimer || holdFired) mediaUp(); };
@@ -616,7 +623,7 @@
       searchQuery = "";
       searchIdx = 0;
       selecting = false;
-      selected = new Set();
+      selected.clear();
       text = $drafts[c.id] ?? "";
       prevId = c.id;
       queueMicrotask(() => autoresize());
@@ -985,25 +992,26 @@
 
   // ---- Message selection, context menu, forward (Telegram-style) ----
   let selecting = $state(false);
-  let selected = $state<Set<string>>(new Set());
+  // Fine-grained: only rows whose membership changes re-render (a new Set
+  // per pointer move re-rendered every message → jerky drag-select).
+  const selected = new SvelteSet<string>();
   // Custom (non-Chromium) context menu.
   let menu = $state<{ open: boolean; x: number; y: number; row: Row | null }>({ open: false, x: 0, y: 0, row: null });
 
   function selectedCount() { return selected.size; }
 
   function toggleSelect(id: string) {
-    const next = new Set(selected);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    selected = next;
-    if (next.size === 0) selecting = false;
+    if (selected.has(id)) selected.delete(id); else selected.add(id);
+    if (selected.size === 0) selecting = false;
   }
   function startSelection(row: Row) {
     selecting = true;
-    selected = new Set([row.id]);
+    selected.clear();
+    selected.add(row.id);
   }
   function clearSelection() {
     selecting = false;
-    selected = new Set();
+    selected.clear();
   }
 
   function onMsgClick(row: Row) {
@@ -1138,10 +1146,52 @@
   }
   function cancelEdit() { editTarget = null; text = ""; queueMicrotask(() => autoresize()); }
 
+  /** Text messages are deleted on both sides (matched by text); media,
+   *  articles, polls… are removed on this device. */
+  async function deleteRows(list: Row[], ask = true) {
+    closeMenu();
+    const chat = $activeChat;
+    if (!chat || list.length === 0) return;
+    if (ask) {
+      const ok = await askConfirm({
+        title: list.length === 1 ? tr("Delete this message?") : tr("Delete {n} messages?", { n: list.length }),
+        text: chat.id === "__saved__" ? undefined : tr("Your text messages are deleted for everyone; media and articles — on this device."),
+        ok: tr("Delete"),
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    const local: string[] = [];
+    let failed = 0;
+    for (const row of list) {
+      const k = row.kind.type;
+      const t = k === "text" || k === "reply" ? textOf(row) : null;
+      if (t == null || (!row.outgoing && !chat.id.startsWith("grp_"))) { local.push(row.id); continue; }
+      try {
+        if (!row.outgoing && chat.id.startsWith("grp_")) {
+          await api.deleteGroupMessageOf(chat.id, row.from, t);
+          void sendChatControl(chat.id, "[del:v1]" + JSON.stringify({ text: t, author: row.from })).catch(() => {});
+        } else {
+          await api.deleteMessage(chat.id, t);
+          if (chat.id !== "__saved__") void sendChatControl(chat.id, "[del:v1]" + JSON.stringify({ text: t })).catch(() => {});
+        }
+      } catch { failed++; local.push(row.id); }
+    }
+    if (local.length) { try { await api.deleteMessagesLocal(chat.id, local); } catch { failed++; } }
+    if (failed) showToast(tr("Some messages could not be deleted"));
+    await loadActiveMessages();
+    chats.set(await api.listChats());
+  }
+  async function deleteSelection() {
+    const list = rows.filter((r) => selected.has(r.id));
+    clearSelection();
+    await deleteRows(list);
+  }
+
   async function deleteRow(row: Row) {
     closeMenu();
     const t = textOf(row);
-    if (t == null) { showToast(tr("Can't delete this message yet")); return; }
+    if (t == null || (row.kind.type !== "text" && row.kind.type !== "reply")) { await deleteRows([row]); return; }
     const chat = $activeChat;
     if (!chat) return;
     try {
@@ -1232,13 +1282,20 @@
     const msg = el?.closest(".msg") as HTMLElement | null;
     return msg?.getAttribute("data-id") ?? null;
   }
+  let lastLo = -1, lastHi = -1;
+  let moveFrame = 0;
+  let lastMove: PointerEvent | null = null;
   function applyRange(toId: string) {
     if (dragStartId == null) return;
     const a = selectableIds.indexOf(dragStartId);
     const b = selectableIds.indexOf(toId);
     if (a < 0 || b < 0) return;
     const [lo, hi] = a < b ? [a, b] : [b, a];
-    selected = new Set(selectableIds.slice(lo, hi + 1));
+    if (lo === lastLo && hi === lastHi) return;
+    lastLo = lo; lastHi = hi;
+    const want = new Set(selectableIds.slice(lo, hi + 1));
+    for (const id of [...selected]) if (!want.has(id)) selected.delete(id);
+    for (const id of want) if (!selected.has(id)) selected.add(id);
   }
   function onRowPointerDown(e: PointerEvent, m: Row) {
     if (e.button !== 0) return;
@@ -1265,13 +1322,23 @@
         dragging = true;
         draggedMoved = true;
         selecting = true;
-        selected = new Set([dragStartId]);
+        selected.clear();
+        selected.add(dragStartId);
+        lastLo = lastHi = -1;
       } else {
         return;
       }
     }
-    if (id) applyRange(id);
     e.preventDefault();
+    // Hit-testing + range update once per frame, not per pointer event.
+    lastMove = e;
+    if (!moveFrame) moveFrame = requestAnimationFrame(() => {
+      moveFrame = 0;
+      const ev = lastMove;
+      if (!ev || !dragging) return;
+      const hit = rowIdFromPoint(ev.clientX, ev.clientY);
+      if (hit) applyRange(hit);
+    });
   }
   function endDrag() {
     armed = false;
@@ -1661,6 +1728,7 @@
         <div class="sel-actions">
           {#if !protectedChat}
           <button class="sel-act" onclick={copySelection}>{$t("Copy")}</button>
+          <button class="sel-act danger" onclick={() => void deleteSelection()} title={$t("Delete (Del)")}>{$t("Delete")}</button>
           <button class="sel-act primary" onclick={forwardSelection}>{$t("Forward")}</button>
           {/if}
         </div>
@@ -1780,7 +1848,7 @@
                   </div>
                 {:else if rk === "voice" || rk === "audio"}
                   <div class="bubble audio-bubble">
-                    <div class="audio-icon">{$t(rk === "voice" ? "🎙" : "🎵")}</div>
+                    {#if rk !== "voice" || !url}<div class="audio-icon">{$t(rk === "voice" ? "🎙" : "🎵")}</div>{/if}
                     <div class="audio-body">
                       {#if url && rk === "voice"}
                         <MediaPlayer src={url} kind="voice" />
@@ -3004,6 +3072,8 @@
   .sel-act.primary {
     border-color: var(--accent-soft); background: var(--accent-soft); color: var(--accent);
   }
+  .sel-act.danger { color: #ff6b6b; border-color: color-mix(in srgb, #ff6b6b 40%, transparent); }
+  .sel-act.danger:hover { background: color-mix(in srgb, #ff6b6b 14%, transparent); color: #ff8787; }
   .sel-act.primary:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
 
   /* --- Per-message selection --- */
@@ -3011,13 +3081,10 @@
   /* Selection adds a checkbox as a 3rd grid child. Widen the template to a
      real 3-column grid so the bubble never wraps to a new row (which is what
      was blowing the vertical spacing wide open). */
-  .messages.selecting .msg      { grid-template-columns: 24px 34px 1fr; }
-  .messages.selecting .msg.out  { grid-template-columns: 24px 1fr; }
-  .messages.selecting .sel-check { grid-column: 1; }
-  .messages.selecting .msg .msg-avatar     { grid-column: 2; }
-  .messages.selecting .msg .msg-col        { grid-column: 3; }
-  .messages.selecting .msg.out .msg-col    { grid-column: 2; }
-  .messages.selecting .msg.out .msg-avatar { grid-column: 3; }
+  /* The check sits in the row's left gutter — entering selection mode
+     must not re-flow the whole list (that was the jerk). */
+  .msg { position: relative; }
+  .sel-check { position: absolute; left: 0; top: 50%; transform: translateY(-50%); }
   .msg.selected { background: var(--accent-soft); border-radius: 10px; }
   .sel-check {
     align-self: center;

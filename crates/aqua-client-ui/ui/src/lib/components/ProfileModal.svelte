@@ -262,8 +262,11 @@
     onkeydown={(e) => { if (e.key === "Escape" || e.key === "Enter") closeProfile(); }}
   >
     <div class="sheet" role="dialog" aria-modal="true" tabindex="-1">
+      <!-- Close stays put; banner + body scroll together, so the avatar is
+           never clipped under the banner when the form is long. -->
+      <button class="close" onclick={closeProfile} title={$t("Close (Esc)")}>×</button>
+      <div class="scroll">
       <div class="banner" style:background={shownBanner ? `center / cover no-repeat url("${shownBanner}")` : `linear-gradient(135deg, ${bannerA}, ${bannerB})`}>
-        <button class="close" onclick={closeProfile} title={$t("Close (Esc)")}>×</button>
         {#if editing && isMe && draft}
           <div class="banner-tools">
             <button class="bn-btn" onclick={() => pickImage("banner")} disabled={!!uploading}>{uploading === "banner" ? "Uploading…" : shownBanner ? "Change banner" : "Upload banner"}</button>
@@ -470,6 +473,7 @@
           </div>
         {/if}
       </div>
+      </div>
     </div>
   </div>
 {/if}
@@ -495,8 +499,10 @@
     border-radius: 16px;
     box-shadow: 0 32px 80px -16px rgba(0, 0, 0, 0.6);
     overflow: hidden;
+    position: relative;
     animation: slide-up 0.22s ease-out;
   }
+  .scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
   @keyframes slide-up {
     from { opacity: 0; transform: translateY(12px); }
     to   { opacity: 1; transform: translateY(0); }
@@ -507,7 +513,7 @@
     position: relative;
     flex-shrink: 0;
   }
-  .banner-tools { position: absolute; right: 10px; bottom: 10px; display: flex; gap: 6px; }
+  .banner-tools { position: absolute; right: 12px; bottom: 12px; display: flex; gap: 6px; align-items: center; }
   .bn-btn {
     background: rgba(0, 0, 0, 0.55); color: #fff; border: none; border-radius: 8px;
     padding: 5px 10px; font-size: 12px; font-weight: 700; cursor: pointer; backdrop-filter: blur(6px);
@@ -544,6 +550,7 @@
   .act-line { font-size: 12px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .close {
     position: absolute;
+    z-index: 3;
     top: 10px; right: 10px;
     width: 28px; height: 28px;
     background: rgba(0, 0, 0, 0.35);
@@ -558,8 +565,8 @@
   .close:hover { background: rgba(0, 0, 0, 0.55); }
 
   .body {
+    position: relative;
     padding: 0 22px 22px;
-    overflow-y: auto;
     margin-top: -44px;
   }
 

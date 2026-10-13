@@ -119,6 +119,7 @@ pub fn run() -> Result<()> {
             commands::group_send,
             commands::edit_message,
             commands::delete_message,
+            commands::delete_messages_local,
             commands::attach_file,
             commands::download_file,
             commands::send_call_signal,
