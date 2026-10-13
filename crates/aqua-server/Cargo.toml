@@ -40,6 +40,8 @@ rusqlite    = { version = "0.32", features = ["bundled"] }
 # AQUA_SMTP_* env vars are set the server sends real mail; otherwise it
 # falls back to the dev-code path (logged + returned in the response).
 lettre      = { version = "0.11", default-features = false, features = ["smtp-transport", "builder", "tokio1-rustls-tls", "tokio1"] }
+# Downloads sticker / emoji packs from the Telegram Bot API (see packs.rs).
+reqwest     = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [lib]
 path = "src/lib.rs"
@@ -49,6 +51,6 @@ name = "aqua-server"
 path = "src/main.rs"
 
 [dev-dependencies]
-reqwest            = { version = "0.12", default-features = false, features = ["json"] }
+reqwest            = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tokio-tungstenite  = "0.24"
 base64             = { workspace = true }

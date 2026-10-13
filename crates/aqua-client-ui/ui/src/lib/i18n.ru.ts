@@ -1010,4 +1010,12 @@ export const RU: Record<string, string> = {
   "Delete this sound?": "Удалить этот звук?",
   "Apply theme": "Применить тему",
   "Play GIF": "Запустить GIF",
+  "This reaction is from the “{title}” pack — you have it": "Эта реакция из набора «{title}» — он у вас есть",
+  "“{title}” emoji": "Эмодзи «{title}»",
+  "This reaction is from the “{title}” pack. Add the whole pack to your emoji?": "Эта реакция из набора «{title}». Добавить весь набор в ваши эмодзи?",
+  "Add pack": "Добавить набор",
+  "Added “{title}” ({n})": "Добавлен «{title}» ({n})",
+  "From “{title}” — right-click for the pack": "Из «{title}» — правый клик, чтобы добавить набор",
+  "On this server": "На сервере",
+  "Just paste the link — your server downloads the pack once for everyone.": "Просто вставьте ссылку — сервер скачает набор один раз для всех.",
 };

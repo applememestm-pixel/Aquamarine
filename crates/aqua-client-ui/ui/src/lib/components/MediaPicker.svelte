@@ -45,7 +45,7 @@
   import { insertEmoji } from "../composerBus";
   import { loadActiveMessages } from "../stores";
   import AnimatedMedia from "./AnimatedMedia.svelte";
-  import { reactionPack, packOrder, emojiFromFile, REACTION_PACK, loadReactionPack } from "../reactionPack";
+  import { reactionPack, packOrder, emojiFromFile, REACTION_PACK, loadReactionPack, loadEmojiPacks } from "../reactionPack";
 
   type Tab = "emoji" | "stickers" | "gifs";
   const TAB_KEY = "aqua.picker.tab";
@@ -308,21 +308,30 @@
   let tgToken = $state("");
   let tgPack = $state("");
   try { tgToken = localStorage.getItem(TG_TOKEN_KEY) ?? ""; } catch { /* ignore */ }
+  /** The relay can import packs itself (its admin set a bot token). */
+  let srv = $state<{ telegram: boolean; packs: { name: string; title: string; type: string; count: number }[] } | null>(null);
+  let showTokenField = $derived(!srv?.telegram);
   function openImport(prefill = "") {
     menuOpen = false;
     showImport = true;
     tgPack = prefill;
+    void api.serverPacks().then((r) => { srv = r ?? null; }).catch(() => { srv = null; });
   }
-  async function doImport() {
-    const token = tgToken.trim(), pack = tgPack.trim();
-    if (!token) { showToast(tr("Enter a Telegram bot token first (from @BotFather).")); return; }
+  let serverOnly = $derived(
+    (srv?.packs ?? []).filter((p) => !(catalogue?.packs ?? []).some((c) => c.source === p.name || c.title === p.title)),
+  );
+  async function doImport(link?: string) {
+    const token = tgToken.trim(), pack = (link ?? tgPack).trim();
     if (!pack) { showToast(tr("Paste a t.me/addstickers/… or t.me/addemoji/… link.")); return; }
+    if (!srv?.telegram && !token) { showToast(tr("Enter a Telegram bot token first (from @BotFather).")); return; }
     importing = true;
     try {
-      const r = await api.importTelegramStickers(token, pack);
-      try { localStorage.setItem(TG_TOKEN_KEY, token); } catch { /* ignore */ }
+      // Through the relay when it can (no token needed here), else directly.
+      const r = srv?.telegram ? await api.importPackViaServer(pack) : await api.importTelegramStickers(token, pack);
+      if (!srv?.telegram) { try { localStorage.setItem(TG_TOKEN_KEY, token); } catch { /* ignore */ } }
       await refreshCatalogue();
       if (/eltaller47/i.test(pack)) await loadReactionPack();
+      void loadEmojiPacks();
       const p = catalogue?.packs.find((x) => x.title === r.pack_title);
       tab = p?.kind === "emoji" ? "emoji" : "stickers";
       showImport = false; tgPack = "";
@@ -419,13 +428,26 @@
     {#if showImport}
       <div class="import">
         <div class="imp-title">{$t("Import from Telegram")}</div>
-        <input type="password" placeholder={$t("Bot token from @BotFather")} bind:value={tgToken} disabled={importing} />
+        {#if showTokenField}
+          <input type="password" placeholder={$t("Bot token from @BotFather")} bind:value={tgToken} disabled={importing} />
+        {/if}
         <div class="imp-line">
           <input placeholder={$t("t.me/addemoji/… or t.me/addstickers/…")} bind:value={tgPack} disabled={importing}
             onkeydown={(e) => { if (e.key === "Enter") doImport(); }} />
-          <button class="imp-go" onclick={doImport} disabled={importing}>{$t(importing ? "…" : "Import")}</button>
+          <button class="imp-go" onclick={() => doImport()} disabled={importing}>{$t(importing ? "…" : "Import")}</button>
         </div>
-        <div class="imp-hint">{$t("Works for sticker packs and premium emoji packs, no Telegram Premium needed. The token only talks to Telegram.")} <button class="link" onclick={() => (showImport = false)}>{$t("Close")}</button></div>
+        {#if serverOnly.length}
+          <div class="imp-srv">
+            <span class="imp-srv-t">{$t("On this server")}</span>
+            {#each serverOnly as p (p.name)}
+              <button class="imp-chip" onclick={() => doImport(p.name)} disabled={importing} title={`${p.count}`}>+ {p.title}</button>
+            {/each}
+          </div>
+        {/if}
+        <div class="imp-foot">
+          <span class="imp-hint">{srv?.telegram ? $t("Just paste the link — your server downloads the pack once for everyone.") : $t("Works for sticker packs and premium emoji packs, no Telegram Premium needed. The token only talks to Telegram.")}</span>
+          <button class="imp-close" onclick={() => (showImport = false)}>{$t("Close")}</button>
+        </div>
       </div>
     {/if}
 
@@ -576,7 +598,17 @@
   .imp-line { display: flex; gap: 6px; }
   .imp-go { border: none; border-radius: 7px; background: var(--accent); color: #06070C; font-weight: 700; font-size: 12px; padding: 0 12px; cursor: pointer; }
   .imp-hint { font-size: 10.5px; color: var(--fg-dim); line-height: 1.4; }
-  .link { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font-size: inherit; }
+  .import input { height: 32px; box-sizing: border-box; }
+  .imp-line { align-items: stretch; }
+  .imp-line .imp-go { height: 32px; }
+  .imp-foot { display: flex; align-items: center; gap: 8px; }
+  .imp-foot .imp-hint { flex: 1; }
+  .imp-close { flex: 0 0 auto; height: 26px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--border); background: transparent; color: var(--fg-muted); font-size: 11.5px; font-weight: 600; cursor: pointer; }
+  .imp-close:hover { color: var(--fg); background: var(--bg-hover); }
+  .imp-srv { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  .imp-srv-t { font-size: 10.5px; font-weight: 700; color: var(--fg-dim); text-transform: uppercase; letter-spacing: 0.04em; margin-right: 2px; }
+  .imp-chip { border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--fg); font-size: 11.5px; padding: 3px 9px; cursor: pointer; }
+  .imp-chip:hover { border-color: var(--accent); color: var(--accent); }
 
   .drop-veil {
     position: absolute; inset: 0; z-index: 5; display: grid; place-items: center;

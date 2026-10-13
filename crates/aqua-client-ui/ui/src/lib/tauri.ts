@@ -169,6 +169,9 @@ export const api = {
   // Import a Telegram sticker pack (link / @name / short name) using a
   // Telegram bot token. Downloads straight from the Telegram Bot API into
   // the local stickers library; never touches our own relay.
+  serverPacks:        (): Promise<{ telegram: boolean; packs: { name: string; title: string; type: string; count: number }[] }> => invoke("server_packs"),
+  importPackViaServer: (link: string): Promise<StickerImportReport>                  => invoke("import_pack_via_server", { link }),
+  packFilePath:       (name: string, file: string): Promise<string>                  => invoke("pack_file_path", { name, file }),
   importTelegramStickers: (bot_token: string, pack_ref: string): Promise<StickerImportReport> =>
     invoke("import_telegram_stickers", { botToken: bot_token, packRef: pack_ref }),
 };

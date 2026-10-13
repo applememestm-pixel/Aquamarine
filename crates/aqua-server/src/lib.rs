@@ -26,6 +26,7 @@ use serde::Deserialize;
 use tokio::sync::{mpsc, Mutex};
 
 pub mod auth;
+pub mod packs;
 pub mod directory;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
@@ -833,7 +834,7 @@ async fn server_stats(State(state): State<AppState>) -> Json<StatsResp> {
 // the panel and its API are disabled. The panel shows live stats and edits
 // the access policy (open vs invite-only + a registration allowlist).
 
-fn admin_authed(state: &AppState, headers: &axum::http::HeaderMap) -> Result<(), StatusCode> {
+pub(crate) fn admin_authed(state: &AppState, headers: &axum::http::HeaderMap) -> Result<(), StatusCode> {
     let want = std::env::var("AQUA_ADMIN_TOKEN").unwrap_or_default();
     let _ = state;
     if want.is_empty() {
@@ -1071,6 +1072,11 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/admin/config", post(admin_set_config))
         .route("/v1/admin/smtp", get(admin_get_smtp).post(admin_set_smtp))
         .route("/v1/admin/smtp/test", post(admin_test_smtp))
+        .route("/v1/admin/telegram", get(packs::admin_get).post(packs::admin_set))
+        .route("/v1/packs", get(packs::list))
+        .route("/v1/packs/import", post(packs::import_http))
+        .route("/v1/packs/:name", get(packs::manifest))
+        .route("/v1/packs/:name/:file", get(packs::file))
         .route("/v1/auth/challenge", post(auth::challenge))
         .route("/v1/auth/verify",    post(auth::verify))
         .route("/v1/auth/email/request", post(email_request))

@@ -45,21 +45,82 @@ export function emojiFromFile(file: string): string {
   return i > 0 ? file.slice(0, i) : "";
 }
 
-export function parseReaction(r: string): { file: string | null; emoji: string } {
+export function parseReaction(r: string): { file: string | null; emoji: string; pack: string | null } {
   if (r.startsWith("ce:")) {
     const [ref, emoji] = r.slice(3).split("|");
+    const pack = ref.split("/")[0] || null;
     const file = ref.split("/").slice(1).join("/") || null;
-    return { file, emoji: emoji || (file ? emojiFromFile(file) : "") || "★" };
+    return { file, pack, emoji: emoji || (file ? emojiFromFile(file) : "") || "★" };
   }
-  return { file: null, emoji: r };
+  return { file: null, pack: null, emoji: r };
+}
+
+/**
+ * Every custom-emoji pack on this device, by Telegram short name — any of
+ * them can be used for reactions (`ce:<pack>/<file>|<emoji>`).
+ */
+export interface EmojiPack { name: string; title: string; items: ReactionItem[] }
+export const emojiPacks = writable<EmojiPack[]>([]);
+
+export async function loadEmojiPacks(): Promise<void> {
+  try {
+    const lib = await api.listLocalMedia();
+    emojiPacks.set(
+      lib.packs
+        .filter((p) => p.source && p.source !== REACTION_PACK && (p.kind === "emoji" || p.items.length))
+        .map((p) => ({
+          name: p.source!,
+          title: p.title,
+          items: packOrder(p.items).map((it) => {
+            const file = it.path.split(/[\\/]/).pop() ?? "";
+            const emoji = it.emoji ?? emojiFromFile(file);
+            return { token: `ce:${p.source}/${file}|${emoji}`, url: assetUrl(it.path), mime: it.mime, emoji, file };
+          }),
+        })),
+    );
+  } catch { /* backend not ready */ }
+}
+
+/** Reactions from packs this device doesn't have: fetched from the relay once. */
+const remote = new Map<string, { url: string; mime: string } | null>();
+const MIME: Record<string, string> = { webp: "image/webp", png: "image/png", tgs: "application/x-tgsticker", webm: "video/webm", gif: "image/gif" };
+function fetchRemote(pack: string, file: string) {
+  const key = `${pack}/${file}`;
+  if (remote.has(key)) return;
+  remote.set(key, null);
+  void api.packFilePath(pack, file).then((path) => {
+    remote.set(key, { url: assetUrl(path), mime: MIME[file.split(".").pop() ?? ""] ?? "image/webp" });
+    reactionPack.update((x) => ({ ...x })); // re-render reactions
+  }).catch(() => { /* not on the relay: plain emoji fallback */ });
+}
+
+/** Where a reaction comes from (for "this reaction is from …"). */
+export function reactionSource(r: string): { pack: string; title: string; local: boolean } | null {
+  const { pack } = parseReaction(r);
+  if (!pack) return null;
+  if (pack === REACTION_PACK) return { pack, title: "El Taller", local: get(reactionPack).items.length > 0 };
+  const p = get(emojiPacks).find((x) => x.name === pack);
+  return { pack, title: p?.title ?? pack, local: !!p };
 }
 
 /** Image/animation URL for a reaction, or null if it's a plain emoji / unknown file. */
 export function reactionUrl(r: string, items = get(reactionPack).items): { url: string; mime: string } | null {
-  const { file } = parseReaction(r);
+  const { file, pack } = parseReaction(r);
   if (!file) return null;
-  const it = items.find((x) => x.file === file);
-  return it ? { url: it.url, mime: it.mime } : null;
+  if (!pack || pack === REACTION_PACK) {
+    const it = items.find((x) => x.file === file);
+    if (it) return { url: it.url, mime: it.mime };
+  }
+  if (pack && pack !== REACTION_PACK) {
+    const p = get(emojiPacks).find((x) => x.name === pack);
+    const it = p?.items.find((x) => x.file === file);
+    if (it) return { url: it.url, mime: it.mime };
+  }
+  if (!pack) return null;
+  const hit = remote.get(`${pack}/${file}`);
+  if (hit) return hit;
+  fetchRemote(pack, file);
+  return null;
 }
 
 /** The 8 reactions on the quick bar: Telegram's defaults, drawn from the pack. */
@@ -84,6 +145,7 @@ function fromLibraryItems(items: StickerItem[]): ReactionItem[] {
 const TRIED_KEY = "aqua.reactionPack.autoImportTried";
 
 export async function loadReactionPack(): Promise<void> {
+  void loadEmojiPacks();
   // 1. Bundled with the app build.
   try {
     const res = await fetch(`/reactions/${REACTION_PACK}/manifest.json`);
@@ -107,7 +169,17 @@ export async function loadReactionPack(): Promise<void> {
     if (pack) { reactionPack.set({ source: "imported", items: fromLibraryItems(pack.items) }); return; }
   } catch { /* backend not ready */ }
   reactionPack.set({ source: "none", items: [] });
-  // 3. One silent auto-import if the user already gave us a Telegram bot token.
+  // 3. The relay hosts it (its admin set a Telegram token): fetch it from there.
+  try {
+    const srv = await api.serverPacks();
+    if (srv?.packs?.some((p) => p.name === REACTION_PACK)) {
+      await api.importPackViaServer(REACTION_PACK);
+      const lib = await api.listLocalMedia();
+      const pack = lib.packs.find((p) => p.source === REACTION_PACK);
+      if (pack) { reactionPack.set({ source: "imported", items: fromLibraryItems(pack.items) }); return; }
+    }
+  } catch { /* not connected yet / no packs on the relay */ }
+  // 4. One silent auto-import if the user already gave us a Telegram bot token.
   let token = "";
   try { token = localStorage.getItem("aqua.tgBotToken") ?? ""; } catch { /* ignore */ }
   let tried = false;

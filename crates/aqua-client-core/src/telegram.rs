@@ -255,7 +255,7 @@ fn sticker_filename(dest: &Path, emoji: &str, idx: usize, ext: &str) -> PathBuf 
 }
 
 /// Sanitize a pack title into a folder name.
-fn sanitize_folder(title: &str) -> String {
+pub fn sanitize_folder(title: &str) -> String {
     let cleaned: String = title
         .chars()
         .map(|c| match c {

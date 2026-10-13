@@ -189,6 +189,23 @@
             <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">myaccount.google.com/apppasswords</a>
             and paste it above (not your normal password). The settings are saved in <b>aqua-smtp.json</b> next to the server.</div>
         </div>
+
+        <div class="card">
+          <h2>Stickers &amp; emoji from Telegram</h2>
+          <div class="mstate" id="tState"><span class="d"></span><span id="tStateText">…</span></div>
+          <div class="fields">
+            <div class="full"><label>Telegram bot token</label><input id="tTok" type="password" autocomplete="new-password" placeholder="123456789:AA…" /></div>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <button class="btn" onclick="saveTg()">Save</button>
+            <button class="btn ghost" onclick="saveTg(true)">Remove token</button>
+          </div>
+          <div class="note" id="tMsg"></div>
+          <div class="note">With a token here, people on this server import any pack just by pasting its
+            <b>t.me/addstickers/…</b> or <b>t.me/addemoji/…</b> link — the server downloads it once for everyone
+            (and custom-emoji reactions show up for all). Get a token from
+            <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a> → /newbot. Saved in <b>aqua-telegram.json</b>.</div>
+        </div>
       </div>
     </div>
   </div>
@@ -330,9 +347,33 @@
     } catch(e){ mailMsg("Failed: " + e.message, "err"); }
   }
 
+  // ---- Telegram packs ----
+  let tgLoaded = false;
+  function showTg(v){
+    $("tState").className = "mstate" + (v.has_token ? " on" : "");
+    $("tStateText").innerHTML = v.has_token
+      ? `Token set${v.source === "env" ? " by <b>AQUA_TG_BOT_TOKEN</b>" : ""} · <b>${v.packs}</b> pack(s) on this server`
+      : "<b>No token</b> — users import packs with their own token";
+    $("tTok").disabled = v.source === "env";
+    $("tTok").placeholder = v.has_token ? "•••••••• saved — paste a new one to replace" : "123456789:AA…";
+    tgLoaded = true;
+  }
+  async function loadTg(){ try { showTg(await api("/v1/admin/telegram")); } catch {} }
+  async function saveTg(remove){
+    const token = remove ? "" : $("tTok").value.trim();
+    if (!remove && !token) { $("tMsg").className = "note err"; $("tMsg").textContent = "Paste the token first."; return; }
+    try {
+      const r = await fetch("/v1/admin/telegram", { method: "POST", body: JSON.stringify({ token }),
+        headers: { "Authorization": "Bearer " + TOKEN, "Content-Type": "application/json" } });
+      if (!r.ok) throw new Error(await r.text() || ("HTTP " + r.status));
+      $("tTok").value = ""; showTg(await r.json());
+      $("tMsg").className = "note ok"; $("tMsg").textContent = remove ? "Token removed." : "Saved. Default packs are downloading in the background.";
+    } catch(e){ $("tMsg").className = "note err"; $("tMsg").textContent = "Not saved: " + e.message; }
+  }
+
   async function tick(){
     if (!TOKEN) { $("gate").classList.remove("hide"); pill("", "locked"); return; }
-    try { await refresh(); if (!mailLoaded) loadMail(); }
+    try { await refresh(); if (!mailLoaded) loadMail(); if (!tgLoaded) loadTg(); }
     catch(e){
       if (e.message === "bad token") { $("dash").classList.add("hide"); $("gate").classList.remove("hide"); pill("", "locked"); }
       else pill("down", "server not reachable");

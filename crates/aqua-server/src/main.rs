@@ -54,6 +54,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     tracing::info!(%addr, "aqua-server listening");
+    // Sticker / emoji packs: fetch the default ones in the background.
+    aqua_server::packs::spawn_default_imports();
     axum::serve(listener, app(AppState::new())).await?;
     Ok(())
 }

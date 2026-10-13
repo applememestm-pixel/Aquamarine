@@ -1002,6 +1002,98 @@ pub async fn import_telegram_stickers(
     aqua_client_core::import_telegram_pack(&bot_token, &pack_ref, &stickers_root).await
 }
 
+/// What the relay offers for sticker packs: `{ telegram, packs: [...] }`.
+#[tauri::command]
+pub async fn server_packs(state: State<'_, StdMutex<AppState>>) -> Result<serde_json::Value, String> {
+    let t = { state.lock().map_err(|e| e.to_string())?.transport.clone().ok_or("not connected")? };
+    t.packs_index().await.map_err(|e| e.to_string())
+}
+
+/// Import a pack through the relay (its own Telegram bot token): the relay
+/// downloads it once; we copy it into the local sticker library.
+#[tauri::command]
+pub async fn import_pack_via_server(
+    state: State<'_, StdMutex<AppState>>,
+    link: String,
+) -> Result<aqua_client_core::ImportReport, String> {
+    let (t, root) = {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        (s.transport.clone().ok_or("not connected")?, s.data_dir.join("stickers"))
+    };
+    let m = t.import_pack(&link).await.map_err(|e| match e {
+        aqua_client_core::TransportError::Server { body, .. } if !body.is_empty() => body,
+        e => e.to_string(),
+    })?;
+    save_server_pack(&t, &root, &m).await
+}
+
+async fn save_server_pack(
+    t: &aqua_client_core::Transport,
+    root: &std::path::Path,
+    m: &serde_json::Value,
+) -> Result<aqua_client_core::ImportReport, String> {
+    let name = m["name"].as_str().unwrap_or_default().to_string();
+    let title = m["title"].as_str().unwrap_or(&name).to_string();
+    let dest = root.join(aqua_client_core::sanitize_pack_folder(&title));
+    std::fs::create_dir_all(&dest).map_err(|e| format!("mkdir pack: {e}"))?;
+    let files = m["files"].as_array().cloned().unwrap_or_default();
+    let (mut ok, mut animated, mut video) = (0usize, 0usize, 0usize);
+    for f in &files {
+        let Some(file) = f["file"].as_str() else { continue };
+        if file.contains(['/', '\\']) || file.starts_with('.') {
+            continue;
+        }
+        let out = dest.join(file);
+        if !out.exists() {
+            let Ok(bytes) = t.pack_file(&name, file).await else { continue };
+            if std::fs::write(&out, bytes).is_err() {
+                continue;
+            }
+        }
+        ok += 1;
+        if file.ends_with(".tgs") { animated += 1 } else if file.ends_with(".webm") { video += 1 }
+    }
+    let meta = serde_json::json!({ "name": name, "title": title, "type": m["type"].as_str().unwrap_or("regular") });
+    let _ = std::fs::write(dest.join("pack.json"), meta.to_string());
+    Ok(aqua_client_core::ImportReport {
+        pack_name: name,
+        pack_title: title,
+        dir: dest.display().to_string(),
+        imported: ok,
+        renderable: ok - animated - video,
+        animated,
+        video,
+        total: files.len(),
+    })
+}
+
+/// Local path of one file of a relay-hosted pack (a custom-emoji reaction
+/// from a pack this device doesn't have). Downloaded once, then cached.
+#[tauri::command]
+pub async fn pack_file_path(
+    state: State<'_, StdMutex<AppState>>,
+    name: String,
+    file: String,
+) -> Result<String, String> {
+    let ok_part = |x: &str| !x.is_empty() && !x.contains(['/', '\\']) && !x.starts_with('.');
+    if !ok_part(&name) || !ok_part(&file) {
+        return Err("bad pack file".into());
+    }
+    let (t, dir) = {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        (s.transport.clone(), s.data_dir.join("packcache").join(&name))
+    };
+    let path = dir.join(&file);
+    if path.exists() {
+        return Ok(path.display().to_string());
+    }
+    let t = t.ok_or("not connected")?;
+    let bytes = t.pack_file(&name, &file).await.map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    Ok(path.display().to_string())
+}
+
 /// Send a "circle" video message — a short self-cam clip recorded in
 /// the browser. Writes to `<data_dir>/circles/<name>` and attaches
 /// with `category = "circle"` so the receiver renders it as a round

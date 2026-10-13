@@ -18,7 +18,7 @@
   import AnimatedMedia from "./AnimatedMedia.svelte";
   import RichComposer from "./RichComposer.svelte";
   import { openProfile } from "./ProfileModal.svelte";
-  import { reactionPack, quickReactions, parseReaction, reactionUrl, loadReactionPack, REACTION_PACK } from "../reactionPack";
+  import { reactionPack, quickReactions, parseReaction, reactionUrl, loadReactionPack, REACTION_PACK, emojiPacks, reactionSource, loadEmojiPacks } from "../reactionPack";
   import { editAndSend } from "./PhotoEditor.svelte";
   import MediaPlayer from "./MediaPlayer.svelte";
   import { openGallery, type GalleryItem } from "./Lightbox.svelte";
@@ -1480,7 +1480,35 @@
   }
   /** Context menu: show the whole reaction pack instead of the quick 8. */
   let reactAll = $state(false);
-  $effect(() => { if (!menu.open) reactAll = false; });
+  /** Which pack the full reaction picker shows ("" = El Taller). */
+  let reactTab = $state("");
+  $effect(() => { if (!menu.open) { reactAll = false; reactTab = ""; } });
+  let reactTokens = $derived(
+    !reactAll ? quickReactions($reactionPack.items)
+      : reactTab ? ($emojiPacks.find((p) => p.name === reactTab)?.items.map((i) => i.token) ?? [])
+      : $reactionPack.items.map((i) => i.token),
+  );
+
+  /** Right-click a reaction: which pack it's from, and add that pack. */
+  async function reactionInfo(e: MouseEvent, emoji: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    const src = reactionSource(emoji);
+    if (!src) return;
+    if (src.local) { showToast(tr("This reaction is from the “{title}” pack — you have it", { title: src.title })); return; }
+    const ok = await askConfirm({
+      title: tr("“{title}” emoji", { title: src.title }),
+      text: tr("This reaction is from the “{title}” pack. Add the whole pack to your emoji?", { title: src.title }),
+      ok: tr("Add pack"),
+    });
+    if (!ok) return;
+    try {
+      const r = await api.importPackViaServer(src.pack);
+      await loadEmojiPacks();
+      reactionPack.update((x) => ({ ...x }));
+      showToast(tr("Added “{title}” ({n})", { title: r.pack_title, n: r.imported }));
+    } catch (err) { showToast(String(err), 7000); }
+  }
 
   function reactTo(row: Row, emoji: string) {
     if (allowedReactions && !allowedReactions.includes(emoji)) { closeMenu(); return; }
@@ -2106,7 +2134,8 @@
                   <div class="reaction-row">
                     {#each chips as chip (chip.emoji)}
                       {@const ru = reactionUrl(chip.emoji, $reactionPack.items)}
-                      <button class="reaction-chip" class:mine={chip.mine} onclick={() => toggleChipReaction(m, chip.emoji)} title={parseReaction(chip.emoji).emoji}>
+                      {@const src = reactionSource(chip.emoji)}
+                      <button class="reaction-chip" class:mine={chip.mine} onclick={() => toggleChipReaction(m, chip.emoji)} oncontextmenu={(e) => reactionInfo(e, chip.emoji)} title={src ? tr("From “{title}” — right-click for the pack", { title: src.title }) : parseReaction(chip.emoji).emoji}>
                         {#if ru}<span class="rc-media"><AnimatedMedia src={ru.url} mime={ru.mime} alt={parseReaction(chip.emoji).emoji} play="auto" /></span>{:else}{parseReaction(chip.emoji).emoji}{/if}{#if chip.count > 1}<span class="rc-count">{chip.count}</span>{/if}
                       </button>
                     {/each}
@@ -2132,13 +2161,19 @@
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="ctx-menu" use:keepOnScreen style={`left:${menu.x}px; top:${menu.y}px`} role="menu" tabindex="-1" onmousedown={(e) => e.stopPropagation()}>
         <div class="ctx-reactions" class:expanded={reactAll}>
-          {#each filterReactions(reactAll ? $reactionPack.items.map((i) => i.token) : quickReactions($reactionPack.items)) as r (r)}
+          {#if reactAll && $emojiPacks.length}
+            <div class="react-tabs">
+              <button class:on={!reactTab} onclick={() => (reactTab = "")}>El Taller</button>
+              {#each $emojiPacks as p (p.name)}<button class:on={reactTab === p.name} onclick={() => (reactTab = p.name)} title={p.title}>{p.title}</button>{/each}
+            </div>
+          {/if}
+          {#each filterReactions(reactTokens) as r (r)}
             {@const ru = reactionUrl(r, $reactionPack.items)}
             <button class="ctx-emoji" class:pack={!!ru} onclick={() => reactTo(row, r)} title={`React ${parseReaction(r).emoji}`}>
               {#if ru}<AnimatedMedia src={ru.url} mime={ru.mime} alt={parseReaction(r).emoji} play={reactAll ? "hover" : "auto"} />{:else}{r}{/if}
             </button>
           {/each}
-          {#if $reactionPack.items.length > 8 && allowedReactions === null}
+          {#if ($reactionPack.items.length > 8 || $emojiPacks.length) && allowedReactions === null}
             <button class="ctx-emoji more" onclick={() => (reactAll = !reactAll)} title={$t(reactAll ? "Fewer" : "All reactions")}>{$t(reactAll ? "−" : "+")}</button>
           {/if}
         </div>
@@ -2843,6 +2878,13 @@
   }
   .msg.out .sticker-meta { color: var(--accent); opacity: 0.85; }
   .gif-still { position: relative; }
+  .react-tabs { flex: 1 0 100%; display: flex; gap: 4px; overflow-x: auto; padding: 0 0 6px; scrollbar-width: none; }
+  .react-tabs button {
+    flex: 0 0 auto; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--fg-muted);
+    font-size: 11.5px; font-weight: 600; padding: 3px 9px; cursor: pointer;
+  }
+  .react-tabs button.on { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
   .file-btns { display: flex; gap: 6px; flex-wrap: wrap; }
   .file-dl.primary { background: var(--accent); color: #06070c; border-color: transparent; }
   .gif-badge {

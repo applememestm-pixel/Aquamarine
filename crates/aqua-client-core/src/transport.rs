@@ -535,6 +535,55 @@ impl Transport {
         Ok((resp.username, resp.token))
     }
 
+    // ---- Sticker / emoji packs hosted by the relay ----
+
+    /// `GET /v1/packs` — `{ telegram: bool, packs: [...] }` (raw JSON).
+    pub async fn packs_index(&self) -> Result<serde_json::Value, TransportError> {
+        let url = format!("{}/v1/packs", self.server_url.trim_end_matches('/'));
+        let r = self.http.get(&url).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(r.json().await?)
+    }
+
+    /// Ask the relay to import a Telegram pack by link; returns its manifest.
+    pub async fn import_pack(&self, link: &str) -> Result<serde_json::Value, TransportError> {
+        let url = format!("{}/v1/packs/import", self.server_url.trim_end_matches('/'));
+        let r = self.http.post(&url).bearer_auth(&self.token).json(&serde_json::json!({ "link": link })).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(r.json().await?)
+    }
+
+    /// Manifest of a pack stored on the relay (None if it has no such pack).
+    pub async fn pack_manifest(&self, name: &str) -> Result<Option<serde_json::Value>, TransportError> {
+        let url = format!("{}/v1/packs/{}", self.server_url.trim_end_matches('/'), name);
+        let r = self.http.get(&url).send().await?;
+        if r.status().as_u16() == 404 {
+            return Ok(None);
+        }
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(Some(r.json().await?))
+    }
+
+    /// One file of a relay-hosted pack.
+    pub async fn pack_file(&self, name: &str, file: &str) -> Result<Vec<u8>, TransportError> {
+        let enc: String = file
+            .bytes()
+            .map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+            .collect();
+        let url = format!("{}/v1/packs/{}/{}", self.server_url.trim_end_matches('/'), name, enc);
+        let r = self.http.get(&url).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(r.bytes().await?.to_vec())
+    }
+
     /// List bots owned by this identity. Returns (username, token) pairs.
     pub async fn list_bots(&self) -> Result<Vec<(String, String)>, TransportError> {
         #[derive(serde::Deserialize)]
