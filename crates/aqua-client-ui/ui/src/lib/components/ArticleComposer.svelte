@@ -30,10 +30,10 @@
   import { gallery } from "./Lightbox.svelte";
   import { get as getStore } from "svelte/store";
   import { t, tr } from "../i18n";
-  import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+  import { openFileDialog } from "../dialog";
   import { parseBlocks, wordCount, parseGalleryRefs, galleryLine, GALLERY_LINE, type GalleryRef } from "../markup";
   import { shrinkImage, dataUrlBytes, probeMedia } from "../imageTools";
-  import { fmtDuration, streamUrl } from "../media";
+  import { fmtDuration, fmtSize, streamUrl } from "../media";
   import Markup from "./Markup.svelte";
 
   const MAX_PHOTOS = 40;
@@ -286,6 +286,12 @@
     if (room <= 0) { showToast(tr("Up to {n} videos and tracks per article", { n: MAX_MEDIA })); return []; }
     const out: number[] = [];
     for (const path of paths.slice(0, room)) {
+      // Over the attachment limit: say so now, not after "Publish".
+      const pre = await api.probeMediaFile(path, "size").catch(() => null);
+      if (pre?.too_big) {
+        showToast(tr("{name} is too big: {size} (limit 200 MB)", { name: nameOf(path), size: fmtSize(pre.size) }), 6000);
+        continue;
+      }
       const item: PendingMedia = { kind, name: nameOf(path), path };
       media = [...media, item];
       const i = media.length - 1;

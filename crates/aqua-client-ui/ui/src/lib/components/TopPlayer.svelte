@@ -9,7 +9,7 @@
   } from "../player";
   import { t } from "../i18n";
   import MusicPlayer from "./MusicPlayer.svelte";
-  import { untrack } from "svelte";
+  import { untrack, tick } from "svelte";
 
   const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
   const VOL_KEY = "aqua.player.volume";
@@ -72,13 +72,18 @@
       current = 0;
       // Local files stream over loopback HTTP (lib/media.ts::streamUrl) —
       // the asset protocol would load the whole file at once.
-      void streamable(tr.src).then((u) => {
+      void streamable(tr.src).then(async (u) => {
         if (!audio || $nowPlaying !== tr) return;
-        if (playSrc !== u) { playSrc = u; audio.src = u; }
+        // Only through the binding: setting audio.src here as well made the
+        // element load twice, and the second load aborted play() — tracks
+        // sat at 0:00, paused.
+        playSrc = u;
+        await tick();
+        if (!audio || $nowPlaying !== tr) return;
         if (sameSrc) { try { audio.currentTime = 0; } catch { /* ignore */ } }
         audio.defaultPlaybackRate = speed;
         audio.playbackRate = speed;
-        audio.play().catch(() => { /* autoplay blocked — user can press play */ });
+        audio.play().catch((e) => console.warn("top player: play() failed", e)); // user can press play
       });
     }
   });

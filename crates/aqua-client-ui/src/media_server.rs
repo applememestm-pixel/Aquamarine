@@ -197,6 +197,9 @@ pub struct MediaProbe {
     /// `data:image/jpeg;base64,…`, longest side ≤ 480 px.
     pub poster: Option<String>,
     pub duration: Option<f64>,
+    /// Bytes on disk, and whether that is over the attachment limit.
+    pub size: u64,
+    pub too_big: bool,
 }
 
 /// Run a tool from PATH with a time limit; stdout on success.
@@ -228,6 +231,11 @@ pub async fn probe_media(path: String, kind: String) -> Result<MediaProbe, Strin
         return Err("not a video or audio file".into());
     }
     let mut r = MediaProbe::default();
+    r.size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+    r.too_big = r.size > aqua_core::MAX_FILE_SIZE;
+    if r.too_big || kind == "size" {
+        return Ok(r); // just the size check / refused anyway — no poster
+    }
     let o = |s: &'static str| OsStr::new(s);
     if let Some(out) = run_tool(
         "ffprobe",

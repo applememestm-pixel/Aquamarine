@@ -15,7 +15,7 @@
   import { settings, PALETTES, WALLPAPERS, EDITABLE_COLORS, type Mode, type Density } from "../theme";
   import { info } from "../stores";
   import { icons } from "../icons";
-  import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+  import { openFileDialog } from "../dialog";
   import { api, bytesToDataUrl } from "../tauri";
   import { showToast } from "./Toast.svelte";
   import type { BotInfo } from "../types";

@@ -16,7 +16,7 @@
   import { info } from "../stores";
   import { api, bytesToDataUrl } from "../tauri";
   import { icons } from "../icons";
-  import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+  import { openFileDialog } from "../dialog";
   import { showToast } from "./Toast.svelte";
   import { broadcastPresence, peerPresence, myActivity, shareActivity, myOnline, activityVerb, activityLine } from "../presence";
   import { peerCards, refreshPeer, publishMyProfile, setMyImage, setMyImageBytes, clearMyImage, str, clans } from "../people";

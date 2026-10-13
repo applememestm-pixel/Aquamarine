@@ -40,7 +40,7 @@
   import type { EmojiCat } from "../emojiData";
   import { api, assetUrl } from "../tauri";
   import { showToast } from "./Toast.svelte";
-  import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+  import { openFileDialog } from "../dialog";
   import { openStickerEditor } from "./StickerEditor.svelte";
   import { insertEmoji } from "../composerBus";
   import { loadActiveMessages } from "../stores";

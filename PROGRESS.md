@@ -29,6 +29,23 @@ Frontend: `lib/media.ts` → `streamUrl(path)`, `streamable(assetUrl)`,
 video, circle videos, shared-media / files thumbnails, carousel videos.
 Saved-Messages attachment copy uses `tokio::fs::copy`.
 
+**Follow-up 2 (2026-10-13): lag after publishing + music stuck at 0:00.**
+Reproduced on the real client (not the mock harness) with a new WebKitGTK
+end-to-end setup — `tools/e2e/run.sh` (Xvfb + tauri-driver +
+WebKitWebDriver + local relay, real file pick via a test hook in
+`lib/dialog.ts`). Findings, measured:
+* Clicking a track: web process **95% CPU, 19-22 fps**, track paused at
+  0:00. Two bugs: (1) TopPlayer set `audio.src` by hand *and* through the
+  binding → the second load aborted `play()`; (2) the "now playing" bars
+  animated `height` (and showed while paused) → full-view relayout every
+  frame. Even as a `transform` animation WebKitGTK repainted the view on the
+  CPU (~70%), so on `wk-lowfx` decorative endless animations are off
+  (static bars). After: **3-4% CPU, 66 fps**, music actually plays.
+* Videos over 200 MB are now refused when added (size-only probe), not
+  after "Publish".
+* Windows: `cargo check --target x86_64-pc-windows-gnu` passes; the UI
+  flows pass in Chromium (WebView2's engine) via the Playwright harness.
+
 **Follow-up (2026-10-13): still froze on the user's Arch + NVIDIA box.**
 The loopback server wasn't enough: the hang is in WebKitGTK's GStreamer
 pipeline itself (frame grab into a canvas / GPU decoders). In stock

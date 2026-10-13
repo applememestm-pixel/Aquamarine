@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick, onMount, untrack } from "svelte";
-  import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+  import { openFileDialog } from "../dialog";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { icons } from "../icons";
   import { activeChat, activeMessages, drafts, activeId, sendCurrent, loadActiveMessages, info, chats } from "../stores";

@@ -928,6 +928,7 @@ export const RU: Record<string, string> = {
   "track": "трек",
   "{name}: the file is missing": "{name}: файл не найден",
   "Could not upload: {e}": "Не удалось загрузить: {e}",
+  "{name} is too big: {size} (limit 200 MB)": "{name} слишком большой: {size} (максимум 200 МБ)",
   "Add photos and videos — they become a swipeable carousel": "Добавить фото и видео — они станут каруселью, которую можно листать",
   "Photo / video": "Фото / видео",
   "Attach music — it plays while people read": "Прикрепить музыку — она играет, пока читают статью",

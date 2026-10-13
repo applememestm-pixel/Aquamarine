@@ -38,12 +38,14 @@
 
   // The app-wide player's <audio> (TopPlayer): click a playing track to pause.
   const topAudio = () => document.querySelector<HTMLAudioElement>(".top-player audio");
-  let paused = $state(false);
+  // "Actually playing" (not just loaded): the animated bars show only then.
+  let paused = $state(true);
   $effect(() => {
-    const on = (e: Event) => { if (e.target === topAudio()) paused = (e.target as HTMLAudioElement).paused; };
-    document.addEventListener("play", on, true);
-    document.addEventListener("pause", on, true);
-    return () => { document.removeEventListener("play", on, true); document.removeEventListener("pause", on, true); };
+    const sync = () => { const a = topAudio(); paused = !a || a.paused || a.ended; };
+    const on = (e: Event) => { if (e.target === topAudio()) sync(); };
+    sync();
+    for (const ev of ["play", "playing", "pause", "ended", "emptied"]) document.addEventListener(ev, on, true);
+    return () => { for (const ev of ["play", "playing", "pause", "ended", "emptied"]) document.removeEventListener(ev, on, true); };
   });
 
   async function play(i: number) {
@@ -132,9 +134,11 @@
   .more { font-size: 12px; color: var(--fg-dim); padding: 2px 8px; }
   .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(6, 7, 12, 0.3); border-top-color: #06070c; animation: m-spin 0.8s linear infinite; }
   @keyframes m-spin { to { transform: rotate(360deg); } }
-  .eq { display: flex; gap: 2px; align-items: flex-end; height: 12px; }
-  .eq i { width: 3px; background: #06070c; border-radius: 1px; animation: m-eq 0.9s ease-in-out infinite; }
+  /* Bars scale with transform, not height: animating height re-ran layout
+     for the whole chat every frame (WebKitGTK: ~95% CPU, 20 fps). */
+  .eq { display: flex; gap: 2px; align-items: flex-end; height: 12px; contain: strict; width: 13px; }
+  .eq i { width: 3px; height: 12px; background: #06070c; border-radius: 1px; transform-origin: 50% 100%; transform: scaleY(0.34); animation: m-eq 0.9s ease-in-out infinite; }
   .eq i:nth-child(2) { animation-delay: -0.3s; }
   .eq i:nth-child(3) { animation-delay: -0.6s; }
-  @keyframes m-eq { 0%, 100% { height: 4px; } 50% { height: 12px; } }
+  @keyframes m-eq { 0%, 100% { transform: scaleY(0.34); } 50% { transform: scaleY(1); } }
 </style>
