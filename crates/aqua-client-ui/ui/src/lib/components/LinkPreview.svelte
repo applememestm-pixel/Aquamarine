@@ -15,6 +15,7 @@
    */
   import { api, assetUrl } from "../tauri";
   import { streamUrl } from "../media";
+  import { showToast } from "./Toast.svelte";
   import { settings } from "../theme";
   import { t } from "../i18n";
   import { openTelegraph, openLink } from "../reader";
@@ -35,7 +36,7 @@
   $effect(() => {
     const vp = videoPath;
     videoSrc = "";
-    if (vp) void streamUrl(vp).then((u) => { if (videoPath === vp) videoSrc = u; });
+    if (vp) void streamUrl(vp).then((u) => { if (videoPath === vp) videoSrc = u; }).catch((e) => showToast(e instanceof Error ? e.message : String(e), 12000));
   });
   let videoErr = $state("");
 

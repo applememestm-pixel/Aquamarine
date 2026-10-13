@@ -29,6 +29,22 @@ Frontend: `lib/media.ts` → `streamUrl(path)`, `streamable(assetUrl)`,
 video, circle videos, shared-media / files thumbnails, carousel videos.
 Saved-Messages attachment copy uses `tokio::fs::copy`.
 
+**Follow-up 4 (2026-10-13): ROOT CAUSE FOUND from the user's log.**
+`logs/system.txt`: Arch without **gst-plugins-good** (`pacman -Q` → not
+found). `aquamarine-last.log`: `no such element factory "autoaudiosink"!`
+then `GLib-GObject-CRITICAL invalid (NULL) pointer instance` in
+WebKitWebProcess. Reproduced here by pointing `GST_PLUGIN_SYSTEM_PATH_1_0` at
+a plugin dir without plugins-good: clicking a track → WebDriver "page crash
+or hang". (autoaudiosink and the MP4 demuxer both live in plugins-good;
+WebKitGTK on Arch only optdepends on it.) Every earlier "freeze" — poster
+probe, music, carousel video — was this.
+Fix: `media_support` (Rust) checks the plugin files (libgstautodetect.so,
+libgstisomp4.so; libgstlibav.so recommended) without loading GStreamer;
+`lib/media.ts::streamUrl` refuses to hand out media URLs while plugins-good
+is missing (error with the exact `pacman` command), sticker videos fall back
+to the emoji, and a startup toast says what to install. Verified in the
+no-plugins-good setup: no hang, clear message; normal setup unchanged.
+
 **Follow-up 3 (2026-10-13): user still sees the lag + 0:00 on Arch/NVIDIA,
 not reproducible here** (also not with real PipeWire output, nor with MP3 /
 H.264 decoders removed — that gives MEDIA_ERR 4 and no lag). So: diagnostics

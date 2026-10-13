@@ -63,7 +63,7 @@
       const at = Math.max(0, queue.findIndex((x) => x.k === i));
       playQueue(queue.map(({ m, u }) => ({ src: u, title: nice(m.name), sub: title || $t("Article"), cover })), at);
     } catch (e) {
-      showToast(tr("Could not load the track: {e}", { e: String(e) }), 5000);
+      showToast(tr("Could not load the track: {e}", { e: e instanceof Error ? e.message : String(e) }), 12000);
     } finally {
       loading = null;
     }

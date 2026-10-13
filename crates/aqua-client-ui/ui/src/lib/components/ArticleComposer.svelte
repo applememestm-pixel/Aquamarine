@@ -83,7 +83,7 @@
           title = d.title ?? ""; subtitle = d.subtitle ?? ""; body = d.body ?? "";
           coverDataUrl = d.cover ?? null; images = Array.isArray(d.images) ? d.images : [];
           media = Array.isArray(d.media) ? d.media : [];
-          for (const m of media) if (m.path) void localUrl(m.path);
+          for (const m of media) if (m.path) void localUrl(m.path).catch(() => {});
         }
       } catch { /* no draft */ }
       void tick().then(() => ta?.focus());

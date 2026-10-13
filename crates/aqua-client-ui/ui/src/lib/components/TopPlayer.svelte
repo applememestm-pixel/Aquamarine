@@ -86,7 +86,7 @@
         audio.defaultPlaybackRate = speed;
         audio.playbackRate = speed;
         audio.play().catch((e) => console.warn("top player: play() failed", e)); // user can press play
-      });
+      }).catch((e) => showToast(e instanceof Error ? e.message : String(e), 12000));
     }
   });
 

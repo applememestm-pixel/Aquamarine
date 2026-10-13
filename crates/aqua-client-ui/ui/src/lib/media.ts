@@ -9,6 +9,7 @@
  *   downloads + decrypts them once into a local cache.
  */
 import { api, assetUrl } from "./tauri";
+import { tr } from "./i18n";
 import type { ArticleMedia } from "./types";
 
 const blobUrls = new Map<string, string>();
@@ -60,6 +61,30 @@ export function mediaPath(m: ArticleMedia): Promise<string> {
 
 const streams = new Map<string, Promise<string>>();
 
+let support: Promise<{ blocking: string[]; recommended: string[] }> | null = null;
+/** Missing GStreamer packages (Linux), checked once. */
+export function mediaSupport(): Promise<{ blocking: string[]; recommended: string[] }> {
+  support ??= api.mediaSupport().catch(() => ({ blocking: [], recommended: [] }));
+  return support;
+}
+
+/** Install hint for missing packages. */
+export function installHint(pkgs: string[]): string {
+  return `sudo pacman -S --needed ${pkgs.join(" ")}`;
+}
+
+/**
+ * Throws when playing would hang the app: WebKitGTK without
+ * gst-plugins-good (no audio sink / MP4 demuxer) locks up the whole window
+ * on the first <audio>/<video>.
+ */
+async function assertPlayable(): Promise<void> {
+  const s = await mediaSupport();
+  if (s.blocking.length) {
+    throw new Error(tr("Sound and video need GStreamer plugins. Install: {cmd}", { cmd: installHint([...s.blocking, ...s.recommended]) }));
+  }
+}
+
 /**
  * Loopback-HTTP URL for playing a local video / audio file. Tauri's asset
  * protocol loads a whole file into memory per request (and on Linux pushes
@@ -70,8 +95,9 @@ const streams = new Map<string, Promise<string>>();
 export function streamUrl(path: string): Promise<string> {
   let p = streams.get(path);
   if (!p) {
-    p = api.mediaStreamUrl(path).catch(() => assetUrl(path));
+    p = assertPlayable().then(() => api.mediaStreamUrl(path).catch(() => assetUrl(path)));
     streams.set(path, p);
+    p.catch(() => streams.delete(path));
   }
   return p;
 }
@@ -117,7 +143,7 @@ export function streamSrc(node: HTMLMediaElement, url: string) {
     const hash = u.indexOf("#");
     const base = hash >= 0 ? u.slice(0, hash) : u;
     const frag = hash >= 0 ? u.slice(hash) : "";
-    void streamable(base).then((s) => { if (cur === u) node.src = s + frag; });
+    void streamable(base).then((s) => { if (cur === u) node.src = s + frag; }).catch((e) => console.warn("[aqua-media]", String(e)));
   };
   apply(url);
   return { update: apply, destroy() { cur = ""; } };

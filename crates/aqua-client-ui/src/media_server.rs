@@ -272,6 +272,54 @@ pub async fn probe_media(path: String, kind: String) -> Result<MediaProbe, Strin
     Ok(r)
 }
 
+#[derive(serde::Serialize, Default)]
+pub struct MediaSupport {
+    /// Packages whose absence makes WebKitGTK *hang* on any <audio>/<video>
+    /// (no `autoaudiosink` → NULL sink → the web process locks up). Media
+    /// playback is refused while this is non-empty.
+    pub blocking: Vec<String>,
+    /// Packages needed for common formats (H.264 / AAC); playback just fails.
+    pub recommended: Vec<String>,
+}
+
+/// Which GStreamer pieces WebKitGTK needs are missing (Linux). Checked by
+/// plugin file, without loading GStreamer. Unknown layout → reports nothing.
+#[tauri::command]
+pub async fn media_support() -> MediaSupport {
+    #[cfg(target_os = "linux")]
+    {
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        for var in ["GST_PLUGIN_SYSTEM_PATH_1_0", "GST_PLUGIN_SYSTEM_PATH", "GST_PLUGIN_PATH_1_0", "GST_PLUGIN_PATH"] {
+            if let Some(v) = std::env::var_os(var) {
+                dirs.extend(std::env::split_paths(&v));
+            }
+        }
+        if std::env::var_os("GST_PLUGIN_SYSTEM_PATH_1_0").is_none() && std::env::var_os("GST_PLUGIN_SYSTEM_PATH").is_none() {
+            for d in ["/usr/lib/gstreamer-1.0", "/usr/lib64/gstreamer-1.0", "/usr/lib/x86_64-linux-gnu/gstreamer-1.0",
+                      "/usr/lib/aarch64-linux-gnu/gstreamer-1.0", "/usr/local/lib/gstreamer-1.0"] {
+                dirs.push(PathBuf::from(d));
+            }
+        }
+        let dirs: Vec<PathBuf> = dirs.into_iter().filter(|d| d.is_dir()).collect();
+        let mut r = MediaSupport::default();
+        if dirs.is_empty() {
+            return r;
+        }
+        let has = |lib: &str| dirs.iter().any(|d| d.join(lib).exists());
+        if !has("libgstautodetect.so") || !has("libgstisomp4.so") {
+            r.blocking.push("gst-plugins-good".into());
+        }
+        if !has("libgstlibav.so") {
+            r.recommended.push("gst-libav".into());
+        }
+        r
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        MediaSupport::default()
+    }
+}
+
 /// Linux: keep WebKitGTK's GStreamer away from GPU video decoders.
 ///
 /// NVIDIA's nvcodec / VA-API decoders hand out GPU memory that WebKitGTK

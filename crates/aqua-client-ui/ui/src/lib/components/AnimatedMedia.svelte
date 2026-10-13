@@ -83,6 +83,7 @@
 </script>
 
 <script lang="ts">
+  import { mediaSupport } from "../media";
   /**
    * One element for every kind of sticker / emoji / GIF we show: static
    * images, Telegram animated stickers (.tgs → Lottie on a canvas) and video
@@ -107,6 +108,13 @@
   const kind = $derived(mediaKind(src, mime));
   let box: HTMLDivElement | undefined = $state();
   let video: HTMLVideoElement | undefined = $state();
+  // Linux without gst-plugins-good: any <video> hangs WebKitGTK — show the
+  // fallback instead (lib/media.ts::mediaSupport).
+  let videoOk = $state(false);
+  $effect(() => {
+    if (kind !== "video") return;
+    void mediaSupport().then((m) => { if (m.blocking.length) failed = true; else videoOk = true; });
+  });
   let failed = $state(false);
   let visible = false;
   let hovering = false;
@@ -172,7 +180,7 @@
 >
   {#if kind === "image" || failed}
     {#if !failed}<img {src} {alt} draggable="false" loading="lazy" />{:else}<span class="fallback">{alt}</span>{/if}
-  {:else if kind === "video"}
+  {:else if kind === "video" && videoOk}
     <video bind:this={video} {src} muted loop playsinline preload="metadata" autoplay={play === "auto"}
       onloadeddata={() => sync()}></video>
   {/if}

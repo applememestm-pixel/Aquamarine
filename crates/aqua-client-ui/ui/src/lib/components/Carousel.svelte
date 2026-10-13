@@ -62,7 +62,7 @@
       else if (it.resolve) {
         vstate[i] = "loading";
         try { vsrc[i] = await it.resolve(); vstate[i] = undefined; }
-        catch (e) { vstate[i] = "error"; verr[i] = String(e); return; }
+        catch (e) { vstate[i] = "error"; verr[i] = e instanceof Error ? e.message : String(e); return; }
       }
     }
   }

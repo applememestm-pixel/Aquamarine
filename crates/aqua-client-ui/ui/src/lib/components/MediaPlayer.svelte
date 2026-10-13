@@ -13,12 +13,13 @@
     { src: string; kind?: "audio" | "voice" | "video"; onExpand?: (() => void) | undefined } = $props();
 
   import { streamable } from "../media";
+  import { showToast } from "./Toast.svelte";
   // Local files stream over loopback HTTP (see lib/media.ts::streamUrl).
   let playSrc = $state("");
   $effect(() => {
     const s = src;
     playSrc = "";
-    void streamable(s).then((u) => { if (src === s) playSrc = u; });
+    void streamable(s).then((u) => { if (src === s) playSrc = u; }).catch((e) => showToast(e instanceof Error ? e.message : String(e), 12000));
   });
 
   let media = $state<HTMLMediaElement | null>(null);

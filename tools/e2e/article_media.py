@@ -23,6 +23,7 @@ def t(d):
     watch(d,"after composer closed",5); cpu("after publish (card visible)"); shot(d,"s4_published")
     print("errors:", js(d,"return window.__errs"))
     # --- play the track from the card
+    print("toasts:", js(d,"return [...document.querySelectorAll('.toast, [class*=toast]')].map(t=>t.innerText).filter(Boolean).slice(0,3)"))
     trk=[b for b in d.find_elements(By.CSS_SELECTOR,".music .trk") if b.is_displayed()]
     print("tracks in card:", len(trk))
     if trk:

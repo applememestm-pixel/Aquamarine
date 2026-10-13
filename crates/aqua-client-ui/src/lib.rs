@@ -70,6 +70,7 @@ pub fn run() -> Result<()> {
             commands::allow_media_preview,
             media_server::media_stream_url,
             media_server::probe_media,
+            media_server::media_support,
             web::cache_remote_media,
             web::telegraph_page,
             web::open_external,

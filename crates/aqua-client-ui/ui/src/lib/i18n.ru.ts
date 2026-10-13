@@ -930,6 +930,7 @@ export const RU: Record<string, string> = {
   "No decoder for this format — install GStreamer codecs: sudo pacman -S --needed gst-libav gst-plugins-good": "Нет декодера для этого формата — поставьте кодеки GStreamer: sudo pacman -S --needed gst-libav gst-plugins-good",
   "This format can't be played here": "Этот формат здесь не воспроизводится",
   "Playback failed": "Не удалось воспроизвести",
+  "Sound and video need GStreamer plugins. Install: {cmd}": "Для звука и видео нужны плагины GStreamer. Установите: {cmd}",
   "Could not upload: {e}": "Не удалось загрузить: {e}",
   "{name} is too big: {size} (limit 200 MB)": "{name} слишком большой: {size} (максимум 200 МБ)",
   "Add photos and videos — they become a swipeable carousel": "Добавить фото и видео — они станут каруселью, которую можно листать",

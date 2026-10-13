@@ -146,6 +146,7 @@ export const api = {
   fetchAttachment:    (media: ArticleMedia): Promise<string>                         => invoke("fetch_attachment", { media }),
   allowMediaPreview:  (path: string): Promise<void>                                  => invoke("allow_media_preview", { path }),
   mediaStreamUrl:     (path: string): Promise<string>                                => invoke("media_stream_url", { path }),
+  mediaSupport:       (): Promise<{ blocking: string[]; recommended: string[] }>    => invoke("media_support"),
   probeMediaFile:     (path: string, kind: "video" | "audio" | "size"): Promise<{ poster?: string | null; duration?: number | null; size: number; too_big: boolean }> => invoke("probe_media", { path, kind }),
   copyFileTo:         (source: string, dest: string): Promise<void>                => invoke("copy_file_to", { source, dest }),
 

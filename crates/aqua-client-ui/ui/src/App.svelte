@@ -11,7 +11,9 @@
   import ContactsPanel from "./lib/components/ContactsPanel.svelte";
   import FingerprintModal from "./lib/components/FingerprintModal.svelte";
   import InputPrompt from "./lib/components/InputPrompt.svelte";
-  import Toast from "./lib/components/Toast.svelte";
+  import Toast, { showToast } from "./lib/components/Toast.svelte";
+  import { mediaSupport, installHint } from "./lib/media";
+  import { tr } from "./lib/i18n";
   import CallModal from "./lib/components/CallModal.svelte";
   import MediaPicker from "./lib/components/MediaPicker.svelte";
   import SettingsPanel, { openSettings } from "./lib/components/SettingsPanel.svelte";
@@ -71,6 +73,11 @@
   });
 
   onMount(() => {
+    // Linux: without gst-plugins-good WebKitGTK hangs on the first sound or
+    // video — say what to install up front (playback is refused until then).
+    void mediaSupport().then((m) => {
+      if (m.blocking.length) showToast(tr("Sound and video need GStreamer plugins. Install: {cmd}", { cmd: installHint([...m.blocking, ...m.recommended]) }), 20000);
+    });
     // No browser context menu ("Back / Reload / Print / Save as…") anywhere
     // in the app — only in text fields, where copy / paste / spellcheck help.
     const noNativeMenu = (e: MouseEvent) => {
