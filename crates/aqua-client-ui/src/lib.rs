@@ -23,6 +23,9 @@ pub fn mobile_main() {
 }
 
 pub fn run() -> Result<()> {
+    // Before any thread or webview exists: the web process inherits it.
+    #[cfg(target_os = "linux")]
+    media_server::prefer_software_video_decoding();
     let builder = tauri::Builder::default();
     // WebKitGTK denies camera / mic / screen capture unless the app answers
     // its permission request ("Mic test failed: NotAllowedError" on Linux).
@@ -66,6 +69,7 @@ pub fn run() -> Result<()> {
             commands::fetch_attachment,
             commands::allow_media_preview,
             media_server::media_stream_url,
+            media_server::probe_media,
             web::cache_remote_media,
             web::telegraph_page,
             web::open_external,

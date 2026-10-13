@@ -266,6 +266,20 @@
     return u;
   }
 
+  /**
+   * Poster + duration of a picked file. ffmpeg (in Rust, another process)
+   * first. On Linux the webview is never asked: WebKitGTK's GStreamer can
+   * hang the whole window grabbing a video frame (NVIDIA decoders).
+   */
+  async function probeLocal(path: string, kind: "video" | "audio"): Promise<{ poster?: string; duration?: number }> {
+    const native = await api.probeMediaFile(path, kind).catch(() => null);
+    if (native && (native.poster || kind === "audio") && native.duration) return { poster: native.poster ?? undefined, duration: native.duration };
+    if (document.documentElement.classList.contains("wk-lowfx")) {
+      return { poster: native?.poster ?? undefined, duration: native?.duration ?? undefined };
+    }
+    return probeMedia(await localUrl(path), kind);
+  }
+
   /** Videos / tracks picked from disk → pending media (uploaded on publish). */
   async function addMediaFiles(paths: string[], kind: "video" | "audio"): Promise<number[]> {
     const room = MAX_MEDIA - media.length;
@@ -279,7 +293,7 @@
       // Poster + duration in the background. Streamed over the loopback media
       // server: through the asset protocol the webview pulled the whole file
       // in at once and the window froze on big videos.
-      void localUrl(path).then((u) => probeMedia(u, kind)).then((r) => {
+      void probeLocal(path, kind).then((r) => {
         const cur = media[i];
         if (cur && cur.path === path) media[i] = { ...cur, poster: r.poster, duration: r.duration };
       }).catch(() => {});

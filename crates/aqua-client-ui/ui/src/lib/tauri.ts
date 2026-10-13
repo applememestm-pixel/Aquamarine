@@ -146,6 +146,7 @@ export const api = {
   fetchAttachment:    (media: ArticleMedia): Promise<string>                         => invoke("fetch_attachment", { media }),
   allowMediaPreview:  (path: string): Promise<void>                                  => invoke("allow_media_preview", { path }),
   mediaStreamUrl:     (path: string): Promise<string>                                => invoke("media_stream_url", { path }),
+  probeMediaFile:     (path: string, kind: "video" | "audio"): Promise<{ poster?: string | null; duration?: number | null }> => invoke("probe_media", { path, kind }),
   copyFileTo:         (source: string, dest: string): Promise<void>                => invoke("copy_file_to", { source, dest }),
 
   // Voice & video messages (recorded in-browser → bytes sent to Rust → encrypted via attach pipeline)

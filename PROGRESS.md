@@ -29,6 +29,21 @@ Frontend: `lib/media.ts` → `streamUrl(path)`, `streamable(assetUrl)`,
 video, circle videos, shared-media / files thumbnails, carousel videos.
 Saved-Messages attachment copy uses `tokio::fs::copy`.
 
+**Follow-up (2026-10-13): still froze on the user's Arch + NVIDIA box.**
+The loopback server wasn't enough: the hang is in WebKitGTK's GStreamer
+pipeline itself (frame grab into a canvas / GPU decoders). In stock
+WebKitGTK 2.52 + software decoding the same probe takes ~1 s with no stall
+(tested under Xvfb with a 300 MB 1080p H.264 file), so the difference is the
+driver path. Changes:
+* `probe_media` (Rust): poster + duration via `ffprobe` / `ffmpeg` in a
+  child process with timeouts; the composer uses it, and on Linux never
+  falls back to probing inside the webview (no ffmpeg → placeholder tile).
+* `prefer_software_video_decoding()` at startup (Linux): demotes nvcodec /
+  VA / VA-API / v4l2 decoders via `GST_PLUGIN_FEATURE_RANK` (verified that
+  WebKit's web process honours it; unknown names are ignored).
+  `AQUA_HW_VIDEO=1` opts back in. Needs `gst-libav` for H.264.
+* `media_stream_url` is async (sync Tauri commands run on the GTK thread).
+
 ## 2026-10-12 — Session 45: article reader perf, videos in carousels, music attached to articles
 
 - **Reader lag**: article photos are data: URLs; every `<img src>` / CSS

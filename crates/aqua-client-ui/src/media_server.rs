@@ -185,10 +185,100 @@ pub fn parse_range(v: &str, len: u64) -> Option<(u64, u64)> {
 }
 
 /// Streaming URL for a local video / audio file (picked by the user, a chat
-/// attachment, or something in the app's caches).
+/// attachment, or something in the app's caches). Async so it never runs on
+/// the GTK main thread (sync Tauri commands do).
 #[tauri::command]
-pub fn media_stream_url(path: String) -> Result<String, String> {
-    url_for(&PathBuf::from(path))
+pub async fn media_stream_url(path: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || url_for(&PathBuf::from(path))).await.map_err(|e| e.to_string())?
+}
+
+#[derive(serde::Serialize, Default)]
+pub struct MediaProbe {
+    /// `data:image/jpeg;base64,…`, longest side ≤ 480 px.
+    pub poster: Option<String>,
+    pub duration: Option<f64>,
+}
+
+/// Run a tool from PATH with a time limit; stdout on success.
+async fn run_tool(bin: &str, args: &[&std::ffi::OsStr], secs: u64) -> Option<Vec<u8>> {
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.args(args).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).kill_on_drop(true);
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let out = tokio::time::timeout(std::time::Duration::from_secs(secs), cmd.output()).await.ok()?.ok()?;
+    out.status.success().then_some(out.stdout)
+}
+
+/// Poster frame + duration of a local video (duration only for audio),
+/// worked out by ffprobe / ffmpeg in a separate process.
+///
+/// Why not in the webview: on Linux, WebKitGTK decodes through GStreamer,
+/// and with some GPU drivers (NVIDIA hardware decoders) grabbing a video
+/// frame into a canvas hangs the whole web process — the app froze right
+/// after a video was added to an article. Everything is best effort: no
+/// ffmpeg installed → no poster, the UI shows a placeholder.
+#[tauri::command]
+pub async fn probe_media(path: String, kind: String) -> Result<MediaProbe, String> {
+    use base64::Engine;
+    use std::ffi::OsStr;
+    let p = PathBuf::from(&path);
+    if mime_of(&p).is_none() || !p.is_file() {
+        return Err("not a video or audio file".into());
+    }
+    let mut r = MediaProbe::default();
+    let o = |s: &'static str| OsStr::new(s);
+    if let Some(out) = run_tool(
+        "ffprobe",
+        &[o("-v"), o("error"), o("-show_entries"), o("format=duration"), o("-of"), o("default=nw=1:nk=1"), p.as_os_str()],
+        15,
+    )
+    .await
+    {
+        r.duration = String::from_utf8_lossy(&out).trim().parse::<f64>().ok().filter(|d| d.is_finite() && *d > 0.0);
+    }
+    if kind == "video" {
+        let at = format!("{:.2}", r.duration.map(|d| (d / 3.0).min(1.0)).unwrap_or(0.0));
+        let scale = "scale='if(gt(iw,ih),min(480,iw),-2)':'if(gt(iw,ih),-2,min(480,ih))'";
+        let args: Vec<&OsStr> = vec![
+            o("-v"), o("error"), o("-nostdin"), o("-ss"), OsStr::new(&at), o("-i"), p.as_os_str(),
+            o("-frames:v"), o("1"), o("-vf"), OsStr::new(scale), o("-q:v"), o("5"),
+            o("-f"), o("image2pipe"), o("-vcodec"), o("mjpeg"), o("-"),
+        ];
+        if let Some(jpg) = run_tool("ffmpeg", &args, 20).await.filter(|b| b.len() > 100 && b.len() < 300_000) {
+            r.poster = Some(format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(jpg)));
+        }
+    }
+    Ok(r)
+}
+
+/// Linux: keep WebKitGTK's GStreamer away from GPU video decoders.
+///
+/// NVIDIA's nvcodec / VA-API decoders hand out GPU memory that WebKitGTK
+/// (with the DMA-BUF renderer off, as our launcher sets on NVIDIA) has to
+/// copy back on the web process's main thread — playing or seeking a video
+/// could lock the window up. Software decoding (gst-libav) is plenty for
+/// chat videos. Set `AQUA_HW_VIDEO=1` to keep hardware decoding, or your own
+/// `GST_PLUGIN_FEATURE_RANK` to override.
+#[cfg(target_os = "linux")]
+pub fn prefer_software_video_decoding() {
+    if std::env::var_os("AQUA_HW_VIDEO").is_some_and(|v| v == "1") {
+        return;
+    }
+    const HW: &[&str] = &[
+        "nvh264dec", "nvh265dec", "nvvp8dec", "nvvp9dec", "nvav1dec", "nvmpeg2videodec", "nvmpeg4videodec",
+        "nvmpegvideodec", "nvjpegdec", "nvh264sldec", "nvh265sldec", "nvvp8sldec", "nvvp9sldec", "nvav1sldec",
+        "vah264dec", "vah265dec", "vavp8dec", "vavp9dec", "vaav1dec", "vampeg2dec", "vajpegdec",
+        "vaapih264dec", "vaapih265dec", "vaapivp8dec", "vaapivp9dec", "vaapiav1dec", "vaapimpeg2dec",
+        "vaapijpegdec", "vaapidecodebin", "v4l2slh264dec", "v4l2slh265dec", "v4l2slvp8dec", "v4l2slvp9dec",
+    ];
+    let mine = HW.iter().map(|f| format!("{f}:NONE")).collect::<Vec<_>>().join(",");
+    let val = match std::env::var("GST_PLUGIN_FEATURE_RANK") {
+        Ok(user) if !user.trim().is_empty() => format!("{mine},{user}"), // the user's entries win (applied last)
+        _ => mine,
+    };
+    std::env::set_var("GST_PLUGIN_FEATURE_RANK", val);
 }
 
 #[cfg(test)]
@@ -244,6 +334,31 @@ mod tests {
         let (c, _, _) = get(&format!("http://127.0.0.1:{port}/etc/passwd"), None);
         assert_eq!(c, 404);
         assert!(url_for(&dir.join("notes.txt")).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn probes_with_ffmpeg_when_available() {
+        let dir = std::env::temp_dir().join(format!("aqua-probe-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("clip.mp4");
+        let made = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=25", "-t", "4", "-pix_fmt", "yuv420p"])
+            .arg(&f)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !made {
+            eprintln!("ffmpeg not installed - skipping");
+            return;
+        }
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let r = rt.block_on(probe_media(f.display().to_string(), "video".into())).unwrap();
+        assert!((r.duration.unwrap() - 4.0).abs() < 0.2, "{:?}", r.duration);
+        let poster = r.poster.expect("poster");
+        assert!(poster.starts_with("data:image/jpeg;base64,/9j/"));
+        assert!(poster.len() < 400_000);
+        assert!(rt.block_on(probe_media(dir.join("x.txt").display().to_string(), "video".into())).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
