@@ -712,9 +712,7 @@ pub fn set_activity_detection(enabled: bool) {
 /// What the user is doing right now (empty off Windows or when idle).
 #[tauri::command]
 pub async fn current_activity() -> Result<Vec<crate::activity::Activity>, String> {
-    tokio::task::spawn_blocking(|| crate::activity::classify(&crate::activity::snapshot()))
-        .await
-        .map_err(|e| e.to_string())
+    Ok(crate::activity::detect().await)
 }
 
 /// Background loop: re-detect every 15 s and emit `aqua://activity` when
@@ -724,9 +722,7 @@ pub fn spawn_activity_watcher(app: AppHandle) {
         let mut last: Option<Vec<crate::activity::Activity>> = None;
         loop {
             if ACTIVITY_ENABLED.load(std::sync::atomic::Ordering::Relaxed) {
-                let now = tokio::task::spawn_blocking(|| crate::activity::classify(&crate::activity::snapshot()))
-                    .await
-                    .unwrap_or_default();
+                let now = crate::activity::detect().await;
                 if last.as_ref() != Some(&now) {
                     let _ = app.emit("aqua://activity", &now);
                     last = Some(now);
@@ -735,7 +731,7 @@ pub fn spawn_activity_watcher(app: AppHandle) {
                 let _ = app.emit("aqua://activity", Vec::<crate::activity::Activity>::new());
                 last = Some(Vec::new());
             }
-            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(8)).await;
         }
     });
 }

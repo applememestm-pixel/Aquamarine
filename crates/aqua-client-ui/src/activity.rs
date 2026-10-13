@@ -91,7 +91,7 @@ const KNOWN_GAMES: &[(&str, &str)] = &[
 /// Folders under `steamapps\common` (etc.) that are tools, not games.
 const NOT_GAMES: &[&str] = &[
     "wallpaper_engine", "steamworks shared", "steam controller configs", "steamvr",
-    "steam linux runtime", "proton", "obs studio", "soundpad", "spacewar",
+    "steam linux runtime", "steamlinuxruntime", "proton", "obs studio", "soundpad", "spacewar",
 ];
 
 /// Helper processes that live inside game folders but aren't the game.
@@ -118,6 +118,8 @@ fn game_from_path(path: &str) -> Option<String> {
     if HELPER_EXES.contains(&exe.as_str()) {
         return None;
     }
+    // Native Linux builds drop the ".exe" (cs2, dota2, …).
+    let exe = if exe.contains('.') { exe } else { format!("{exe}.exe") };
     if let Some((_, name)) = KNOWN_GAMES.iter().find(|(e, _)| *e == exe) {
         return Some((*name).to_string());
     }
@@ -127,7 +129,7 @@ fn game_from_path(path: &str) -> Option<String> {
             let rest = &path.replace('/', "\\")[i + marker.len()..];
             let folder = rest.split('\\').next().unwrap_or("").trim();
             let fl = folder.to_ascii_lowercase();
-            if folder.is_empty() || fl == "launcher" || fl.contains("launcher") || NOT_GAMES.contains(&fl.as_str()) {
+            if folder.is_empty() || fl == "launcher" || fl.contains("launcher") || NOT_GAMES.iter().any(|n| fl.starts_with(n)) {
                 return None;
             }
             return Some(folder.to_string());
@@ -262,6 +264,12 @@ fn browser_tab(title: &str) -> Option<Activity> {
         let (track, artist) = split_artist_title(d)?;
         return Some(act("listening", "Яндекс Музыка", &track, &artist));
     }
+    // Spotify Web player tab: "Track • Artist" while playing.
+    if let Some((track, artist)) = t.split_once(" • ") {
+        if !track.trim().is_empty() && !artist.trim().is_empty() && !artist.contains("Spotify") {
+            return Some(act("listening", "Spotify", track, artist));
+        }
+    }
     if t.contains("SoundCloud") && t.starts_with("Stream ") {
         let d = t.trim_start_matches("Stream ");
         let d = d.split(" | ").next().unwrap_or(d);
@@ -330,9 +338,166 @@ pub fn snapshot() -> Vec<WindowInfo> {
     {
         win::enumerate()
     }
-    #[cfg(not(any(windows, aqua_wincheck)))]
+    #[cfg(all(target_os = "linux", not(aqua_wincheck)))]
+    {
+        linux::processes()
+    }
+    #[cfg(not(any(windows, aqua_wincheck, target_os = "linux")))]
     {
         Vec::new()
+    }
+}
+
+/// Everything detected right now: games / players from `snapshot`, plus —
+/// on Linux — what any MPRIS player reports (Spotify, a browser tab playing
+/// Spotify Web / YouTube / SoundCloud, mpv, …), which beats window titles.
+pub async fn detect() -> Vec<Activity> {
+    let mut acts = tokio::task::spawn_blocking(|| classify(&snapshot())).await.unwrap_or_default();
+    #[cfg(target_os = "linux")]
+    if let Some(m) = linux::mpris_now_playing().await {
+        acts.retain(|a| a.kind == "playing");
+        acts.push(m);
+    }
+    acts
+}
+
+/// What an MPRIS player reports, turned into an activity.
+pub fn from_player(identity: &str, bus_name: &str, title: &str, artists: &[String], url: &str) -> Option<Activity> {
+    let title = title.trim();
+    if title.is_empty() {
+        return None;
+    }
+    let artist = artists.iter().map(|a| a.trim()).filter(|a| !a.is_empty()).collect::<Vec<_>>().join(", ");
+    let host = url.split("://").nth(1).unwrap_or("").split('/').next().unwrap_or("").trim_start_matches("www.").to_ascii_lowercase();
+    let bus = bus_name.to_ascii_lowercase();
+    let act = |kind: &str, name: &str, details: &str, state: &str| Activity {
+        kind: kind.into(), name: name.into(), details: details.trim().into(), state: state.trim().into(),
+    };
+    let service = match host.as_str() {
+        "open.spotify.com" => Some(("listening", "Spotify")),
+        "music.youtube.com" => Some(("listening", "YouTube Music")),
+        "youtube.com" | "m.youtube.com" | "youtu.be" => Some(("watching", "YouTube")),
+        "twitch.tv" => Some(("watching", "Twitch")),
+        "soundcloud.com" => Some(("listening", "SoundCloud")),
+        "music.yandex.ru" | "music.yandex.com" => Some(("listening", "Яндекс Музыка")),
+        "vk.com" | "vk.ru" => Some(("listening", "VK Музыка")),
+        "netflix.com" => Some(("watching", "Netflix")),
+        _ => None,
+    };
+    if let Some((kind, name)) = service {
+        return Some(act(kind, name, title, &artist));
+    }
+    if bus.contains("spotify") {
+        return Some(act("listening", "Spotify", title, &artist));
+    }
+    let id = if identity.trim().is_empty() { bus_name.rsplit('.').next().unwrap_or("Player") } else { identity.trim() };
+    let video_players = ["mpv", "vlc", "celluloid", "totem", "haruna", "smplayer", "mplayer", "kodi"];
+    if video_players.iter().any(|v| bus.contains(v)) && artist.is_empty() {
+        return Some(act("watching", id, title, ""));
+    }
+    // Browsers without a known site, music players: with an artist it's music.
+    if !artist.is_empty() {
+        return Some(act("listening", id, title, &artist));
+    }
+    let browsers = ["firefox", "chromium", "chrome", "brave", "vivaldi", "opera", "edge", "librewolf", "zen", "floorp", "yandex"];
+    if browsers.iter().any(|b| bus.contains(b)) {
+        return Some(act("watching", id, title, ""));
+    }
+    Some(act("listening", id, title, ""))
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) mod linux {
+    use super::{from_player, Activity, WindowInfo};
+    use std::collections::HashMap;
+    use zbus::zvariant::{OwnedValue, Value};
+
+    /// The user's processes as "windows" without titles — enough for the
+    /// game rules (Steam `steamapps/common/<Game>`, Proton / Wine `.exe`
+    /// command lines, known exe names, Minecraft's Java main class).
+    pub fn processes() -> Vec<WindowInfo> {
+        let mut out = Vec::new();
+        let Ok(rd) = std::fs::read_dir("/proc") else { return out };
+        for e in rd.flatten() {
+            let name = e.file_name();
+            let Some(pid) = name.to_str().filter(|n| n.bytes().all(|b| b.is_ascii_digit())) else { continue };
+            let dir = std::path::Path::new("/proc").join(pid);
+            let exe = std::fs::read_link(dir.join("exe")).map(|p| p.display().to_string()).unwrap_or_default();
+            if exe.is_empty() {
+                continue; // not ours / kernel thread
+            }
+            let cmd = std::fs::read(dir.join("cmdline")).unwrap_or_default();
+            let args: Vec<String> = cmd.split(|b| *b == 0).filter(|a| !a.is_empty()).map(|a| String::from_utf8_lossy(a).into_owned()).collect();
+            // Wine / Proton: the Windows path of the game is in argv.
+            if let Some(win) = args.iter().find(|a| a.to_ascii_lowercase().ends_with(".exe") && (a.contains('\\') || a.contains('/'))) {
+                out.push(WindowInfo { exe: win.clone(), title: String::new(), foreground: false });
+                continue;
+            }
+            if args.iter().any(|a| a.starts_with("net.minecraft") || a.contains("minecraft/versions")) {
+                out.push(WindowInfo { exe: "javaw.exe".into(), title: "Minecraft".into(), foreground: false });
+                continue;
+            }
+            out.push(WindowInfo { exe, title: String::new(), foreground: false });
+        }
+        out
+    }
+
+    fn text(v: Option<&OwnedValue>) -> String {
+        match v.map(|v| &**v) {
+            Some(Value::Str(s)) => s.to_string(),
+            Some(Value::ObjectPath(p)) => p.to_string(),
+            _ => String::new(),
+        }
+    }
+    fn texts(v: Option<&OwnedValue>) -> Vec<String> {
+        match v.map(|v| &**v) {
+            Some(Value::Array(a)) => a.iter().filter_map(|x| if let Value::Str(s) = x { Some(s.to_string()) } else { None }).collect(),
+            Some(Value::Str(s)) => vec![s.to_string()],
+            _ => Vec::new(),
+        }
+    }
+
+    /// The first MPRIS player that is *playing*, as an activity.
+    pub async fn mpris_now_playing() -> Option<Activity> {
+        let run = async {
+            let conn = zbus::Connection::session().await.ok()?;
+            let dbus = zbus::fdo::DBusProxy::new(&conn).await.ok()?;
+            let names = dbus.list_names().await.ok()?;
+            for n in names.iter().filter(|n| n.as_str().starts_with("org.mpris.MediaPlayer2.")) {
+                let props = |iface: &'static str| {
+                    let conn = conn.clone();
+                    let n = n.to_string();
+                    async move {
+                        let p = zbus::fdo::PropertiesProxy::builder(&conn)
+                            .destination(n).ok()?
+                            .path("/org/mpris/MediaPlayer2").ok()?
+                            .build().await.ok()?;
+                        p.get_all(zbus::names::InterfaceName::from_static_str(iface).ok()?).await.ok()
+                    }
+                };
+                let Some(player) = props("org.mpris.MediaPlayer2.Player").await else { continue };
+                if text(player.get("PlaybackStatus")) != "Playing" {
+                    continue;
+                }
+                let meta: HashMap<String, OwnedValue> = player
+                    .get("Metadata")
+                    .and_then(|m| HashMap::<String, OwnedValue>::try_from(m.try_clone().ok()?).ok())
+                    .unwrap_or_default();
+                let identity = props("org.mpris.MediaPlayer2").await.map(|r| text(r.get("Identity"))).unwrap_or_default();
+                let found = from_player(
+                    &identity,
+                    n.as_str(),
+                    &text(meta.get("xesam:title")),
+                    &texts(meta.get("xesam:artist")),
+                    &text(meta.get("xesam:url")),
+                );
+                if found.is_some() {
+                    return found;
+                }
+            }
+            None
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(3), run).await.ok().flatten()
     }
 }
 
@@ -432,6 +597,32 @@ mod win {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mpris_players() {
+        let a = from_player("Mozilla Firefox", "org.mpris.MediaPlayer2.firefox.instance_1_23", "self-hacking", &["Ling tosite sigure".into()], "https://open.spotify.com/track/1");
+        assert_eq!(a.unwrap(), Activity { kind: "listening".into(), name: "Spotify".into(), details: "self-hacking".into(), state: "Ling tosite sigure".into() });
+        let a = from_player("Mozilla Firefox", "org.mpris.MediaPlayer2.firefox.instance_1_23", "Lofi stream", &[], "https://www.youtube.com/watch?v=x").unwrap();
+        assert_eq!((a.kind.as_str(), a.name.as_str()), ("watching", "YouTube"));
+        let a = from_player("Spotify", "org.mpris.MediaPlayer2.spotify", "Numb", &["Linkin Park".into()], "").unwrap();
+        assert_eq!((a.name.as_str(), a.state.as_str()), ("Spotify", "Linkin Park"));
+        let a = from_player("mpv", "org.mpris.MediaPlayer2.mpv", "movie.mkv", &[], "file:///x/movie.mkv").unwrap();
+        assert_eq!(a.kind, "watching");
+        assert!(from_player("x", "org.mpris.MediaPlayer2.x", "  ", &[], "").is_none());
+    }
+
+    #[test]
+    fn linux_and_wine_game_paths() {
+        let w = |exe: &str| WindowInfo { exe: exe.into(), title: String::new(), foreground: false };
+        let a = classify(&[w("/home/u/.local/share/Steam/steamapps/common/Counter-Strike Global Offensive/game/bin/linuxsteamrt64/cs2")]);
+        assert_eq!(a[0].name, "Counter-Strike 2");
+        let a = classify(&[w("Z:\\home\\u\\.steam\\steam\\steamapps\\common\\ELDEN RING\\Game\\eldenring.exe")]);
+        assert_eq!(a[0].name, "ELDEN RING");
+        let a = classify(&[w("/home/u/.local/share/Steam/steamapps/common/Hades II/Hades2")]);
+        assert!(classify(&[w("/home/u/.local/share/Steam/steamapps/common/Proton 9.0/files/bin/wineserver")]).is_empty());
+        assert!(classify(&[w("/home/u/.local/share/Steam/steamapps/common/SteamLinuxRuntime_sniper/pressure-vessel/bin/pv-adverb")]).is_empty());
+        assert_eq!(a[0].name, "Hades II");
+    }
+
     use super::*;
 
     fn w(exe: &str, title: &str) -> WindowInfo {
@@ -490,5 +681,16 @@ mod tests {
         assert_eq!(a.len(), 2);
         assert_eq!(a[0].name, "Dota 2");
         assert_eq!(a[1].name, "Spotify", "music beats video for the second slot");
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod live {
+    /// Needs a session bus with an MPRIS player: AQUA_TEST_MPRIS=1.
+    #[tokio::test]
+    async fn reads_a_real_mpris_player() {
+        if std::env::var_os("AQUA_TEST_MPRIS").is_none() { return; }
+        let a = super::linux::mpris_now_playing().await.expect("player found");
+        assert_eq!((a.name.as_str(), a.details.as_str(), a.state.as_str()), ("Spotify", "self-hacking", "Ling tosite sigure"));
     }
 }

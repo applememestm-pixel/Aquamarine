@@ -52,6 +52,8 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 # Linux: tune the WebKitGTK webview (WebRTC is off there by default).
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = { version = "2.0.2", features = ["v2_38"] }
+# "Now playing" from other apps (MPRIS: Spotify, browsers, mpv, …).
+zbus = { version = "5", default-features = false, features = ["tokio"] }
 
 [dev-dependencies]
 tempfile = "3"
