@@ -5,6 +5,52 @@ resume. Newest entries at the top.
 
 ---
 
+## 2026-10-14 — Session 47: players, send-as, packs on the relay, themes, bots, speed
+
+Everything from the big 0.1.1 request (see docs/releases/v0.1.1.md):
+
+- **MediaPlayer.svelte** — one player for video/audio/voice: seek with
+  buffered range + hover time, ±10 s, wheel volume, speed menu, loop,
+  info, quality badge, theater (portal to <body>, W), real fullscreen (F),
+  K/J/L/M. Prefs in `aqua.player.v1`; one player plays at a time.
+- **SendDialog.svelte** `askSend()` → media | compressed | file + caption;
+  `attach_file_as` (ffmpeg 720p H.264 for "compressed"), `attach_bytes`.
+- **activity.rs** — Linux: MPRIS over zbus + /proc games (Proton/Wine
+  argv .exe). Windows: GSMTC (`windows` 0.62, Media_Control) via
+  `winmedia::now_playing`, names from `windows_app_name`. macOS: nothing
+  public — still window titles only.
+- **packs.rs (server)** — admin stores the Telegram bot token
+  (`/v1/admin/telegram`, aqua-telegram.json or AQUA_TG_BOT_TOKEN);
+  `/v1/packs/import` imports by link; files served only if listed in the
+  manifest; AQUA_DEFAULT_PACKS imported at start. Client: `server_packs`,
+  `import_pack_via_server`, `pack_file_path` (cached).
+- Reactions `ce:<pack>/<file>|<emoji>`, rendered for everyone (lazy fetch
+  from the relay), right-click → source pack.
+- Themes: 18 presets (`THEMES`), alphas, `.aquatheme` share files
+  (themeShare.ts, validated whitelist), sounds folder + per-chat sounds
+  (sounds.ts, personal.rs), sticker/media/bubble sizes, autoplay toggles.
+- Profile: `music` media kind (≤10 MB audio), banner video → silent VP9
+  ≤8 s 640 px.
+- Bots: `/v1/bot/me`, `DELETE /v1/bot/:name`, long-poll `timeout`,
+  display names in list; Bots tab rewritten; `tools/aqua-console.py`
+  (stdlib) bundled via `save_console_bot`; site has a Bots section.
+- Chat: Del deletes (askConfirm), SvelteSet selection w/o reflow,
+  windowed message list (newest 120 rows, `showOlder` keeps position,
+  `ensureShown` before jumps), row/message object reuse
+  (`reuseUnchanged`, `rowOf`). 3000-msg chat: 1.3 s → 0.45 s, 26k → 1.4k
+  nodes (Chromium harness).
+
+**Verified:** server tests (incl. bot lifecycle that drives the console
+script), client unit tests, svelte-check, Playwright harness (player,
+selection, send dialog, themes, bots, long chat), real WebKitGTK e2e
+(tools/e2e/run.sh: idle CPU 0 %, ~65 fps, stalls < 160 ms after the first
+run), `cargo check --target x86_64-pc-windows-gnu`.
+
+**Release:** tag v0.1.1 must be pushed by the owner (`git push origin
+v0.1.1`) — tag pushes are refused from this environment.
+
+---
+
 ## 2026-10-12 — Session 46: freeze when adding a video to an article
 
 **Symptom (Arch, WebKitGTK):** picking a large video in the article
