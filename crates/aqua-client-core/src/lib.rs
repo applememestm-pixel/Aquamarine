@@ -29,4 +29,5 @@ pub use transport::{
 };
 
 pub mod telegram;
+pub mod backup;
 pub use telegram::{import_pack as import_telegram_pack, sanitize_folder as sanitize_pack_folder, ImportReport};

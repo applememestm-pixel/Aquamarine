@@ -27,6 +27,7 @@ use tokio::sync::{mpsc, Mutex};
 
 pub mod auth;
 pub mod packs;
+pub mod blobstore;
 pub mod directory;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
@@ -74,7 +75,7 @@ pub struct AppState {
     pub auth: Arc<AuthState>,
     /// Content-addressed encrypted blob store, keyed by SHA-256 hex.
     /// Values are opaque ciphertext — the server cannot read them.
-    pub blobs: Arc<DashMap<String, Bytes>>,
+    pub blobs: blobstore::BlobStore,
     /// Persistent registry of @usernames + public profile cards.
     pub directory: Arc<Directory>,
     /// Per-bot inbound message queues (bot username → queue). Ephemeral
@@ -158,7 +159,7 @@ impl AppState {
             users: Arc::new(DashMap::new()),
             bindings: Arc::new(DashMap::new()),
             auth: AuthState::new(),
-            blobs: Arc::new(DashMap::new()),
+            blobs: blobstore::BlobStore::from_env(),
             directory,
             bot_queues: Arc::new(DashMap::new()),
             require_registration,
@@ -344,6 +345,12 @@ async fn ws_run(mut socket: WebSocket, state: AppState, me: UserId) {
                 let _ = socket.send(Message::Binary(bytes.into())).await;
             }
         }
+        // Envelopes that waited on disk (also across server restarts).
+        for (id, bytes) in state.directory.inbox_take(&me) {
+            if socket.send(Message::Binary(bytes.into())).await.is_ok() {
+                state.directory.inbox_ack(id);
+            }
+        }
     }
 
     loop {
@@ -425,7 +432,11 @@ async fn deliver(state: &AppState, msg: RelayMessage) {
         }
     }
     if !delivered {
-        r.inbox.push_back(msg);
+        // Kept on disk until the recipient connects (survives restarts).
+        match serde_json::to_vec(&msg) {
+            Ok(bytes) if state.directory.inbox_push(&msg.to, &bytes).is_ok() => {}
+            _ => r.inbox.push_back(msg),
+        }
     }
 }
 
@@ -452,8 +463,12 @@ async fn upload_blob(
             format!("body sha256 = {actual_cid}, URL says {cid}"),
         ));
     }
-    // Content-addressed: skip re-store on duplicate id.
-    state.blobs.entry(cid).or_insert(body);
+    // Content-addressed: a duplicate just refreshes the file's age.
+    let store = state.blobs.clone();
+    tokio::task::spawn_blocking(move || store.put(&cid, &body))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -461,10 +476,10 @@ async fn fetch_blob(
     State(state): State<AppState>,
     Path(cid): Path<String>,
 ) -> Result<impl IntoResponse, StatusCode> {
-    let Some(entry) = state.blobs.get(&cid) else {
+    let store = state.blobs.clone();
+    let Some(bytes) = tokio::task::spawn_blocking(move || store.get(&cid)).await.ok().flatten() else {
         return Err(StatusCode::NOT_FOUND);
     };
-    let bytes = entry.value().clone();
     Ok((
         [(header::CONTENT_TYPE, "application/octet-stream")],
         bytes,
@@ -565,6 +580,73 @@ async fn login_user(
         .map_err(|e| (dir_err_status(&e), e.to_string()))?;
     tracing::info!(user = %username, "signed in on a new device");
     Ok(Json(LoginResp { username }))
+}
+
+// ---------- Encrypted account backups --------------------------------------
+//
+// The blob is sealed on the device (aqua-client-core::backup); the server
+// stores bytes it can't read. Upload / meta / delete need the account's
+// identity token; a NEW device fetches with an e-mail ticket + password
+// before it has the identity (which is inside the backup).
+
+pub const BACKUP_LIMIT: usize = 64 * 1024 * 1024;
+
+fn caller_username(state: &AppState, dh: &[u8; 32]) -> Result<String, (StatusCode, String)> {
+    state.directory.username_for_identity(dh).ok_or((StatusCode::FORBIDDEN, "register a username first".into()))
+}
+
+async fn backup_put(
+    State(state): State<AppState>,
+    Caller(dh_pub): Caller,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let user = caller_username(&state, &dh_pub)?;
+    if body.len() > BACKUP_LIMIT {
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, "backup is too large".into()));
+    }
+    if !body.starts_with(b"AQBK1") {
+        return Err((StatusCode::BAD_REQUEST, "not an encrypted backup".into()));
+    }
+    state.directory.put_backup(&user, &body).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let (size, at) = state.directory.backup_meta(&user).unwrap_or((0, 0));
+    Ok(Json(serde_json::json!({ "size": size, "updated_at": at })))
+}
+
+async fn backup_meta(
+    State(state): State<AppState>,
+    Caller(dh_pub): Caller,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let user = caller_username(&state, &dh_pub)?;
+    Ok(Json(match state.directory.backup_meta(&user) {
+        Some((size, at)) => serde_json::json!({ "exists": true, "size": size, "updated_at": at }),
+        None => serde_json::json!({ "exists": false }),
+    }))
+}
+
+async fn backup_delete(
+    State(state): State<AppState>,
+    Caller(dh_pub): Caller,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let user = caller_username(&state, &dh_pub)?;
+    state.directory.delete_backup(&user).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct BackupFetchBody { ticket: String, password: String }
+
+/// New device: e-mail ticket + password → the encrypted backup (the ticket
+/// stays valid for the sign-in that follows).
+async fn backup_fetch(
+    State(state): State<AppState>,
+    Json(b): Json<BackupFetchBody>,
+) -> Result<axum::response::Response, (StatusCode, String)> {
+    use axum::response::IntoResponse;
+    let (user, _) = state.directory.check_login(&b.ticket, &b.password).map_err(|e| (dir_err_status(&e), e.to_string()))?;
+    match state.directory.get_backup(&user) {
+        Some(data) => Ok(([(axum::http::header::CONTENT_TYPE, "application/octet-stream")], data).into_response()),
+        None => Err((StatusCode::NOT_FOUND, "no backup for this account".into())),
+    }
 }
 
 #[derive(Deserialize)]
@@ -944,8 +1026,7 @@ async fn admin_stats(
             online += 1;
         }
     }
-    let blobs = state.blobs.len();
-    let blob_bytes: u64 = state.blobs.iter().map(|e| e.value().len() as u64).sum();
+    let (blobs, blob_bytes) = state.blobs.stats();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -1137,6 +1218,9 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/bot/send",           post(bot_send))
         .route("/v1/bot/me",             get(bot_me))
         .route("/v1/bot/:name",          axum::routing::delete(bot_delete))
+        .route("/v1/backup", axum::routing::put(backup_put).get(backup_meta).delete(backup_delete)
+            .layer(DefaultBodyLimit::max(BACKUP_LIMIT + 1024)))
+        .route("/v1/backup/fetch", post(backup_fetch))
         .route("/v1/bundle/:user",   post(upload_bundle).get(fetch_bundle))
         .route("/v1/ws",             get(ws_upgrade))
         .route(

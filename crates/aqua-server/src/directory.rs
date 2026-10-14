@@ -281,6 +281,18 @@ impl Directory {
                 issued_at  INTEGER NOT NULL,
                 verified_at INTEGER
             );
+            CREATE TABLE IF NOT EXISTS inbox (
+                id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                user    TEXT NOT NULL,
+                msg     BLOB NOT NULL,
+                at      INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_inbox_user ON inbox(user, id);
+            CREATE TABLE IF NOT EXISTS backups (
+                username   TEXT PRIMARY KEY,
+                data       BLOB NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS bot_tokens (
                 token      TEXT PRIMARY KEY,
                 username   TEXT NOT NULL,
@@ -668,7 +680,9 @@ impl Directory {
     /// password (if the account has one). Moves the username to this
     /// device's identity key and returns the username. Like Telegram /
     /// Discord: whoever controls the email + password owns the account.
-    pub fn login(&self, ticket: &str, password: &str, identity_dh: &[u8; 32]) -> Result<String, DirError> {
+    /// Check an e-mail ticket + password without changing anything.
+    /// Returns (username, email).
+    pub fn check_login(&self, ticket: &str, password: &str) -> Result<(String, String), DirError> {
         let db = self.db.lock().unwrap();
         let (email, verified_at): (String, Option<i64>) = db
             .query_row(
@@ -691,10 +705,77 @@ impl Directory {
         if !stored.is_empty() && !verify_password(password, &stored) {
             return Err(DirError::BadLogin);
         }
+        Ok((username, email))
+    }
+
+    pub fn login(&self, ticket: &str, password: &str, identity_dh: &[u8; 32]) -> Result<String, DirError> {
+        let (username, _) = self.check_login(ticket, password)?;
+        let db = self.db.lock().unwrap();
         db.execute("UPDATE users SET identity_dh=?2 WHERE username=?1", rusqlite::params![username, identity_dh.as_slice()])?;
         // One-time ticket.
         db.execute("UPDATE email_codes SET ticket=NULL WHERE ticket=?1", rusqlite::params![ticket])?;
         Ok(username)
+    }
+
+    // ---- offline inbox (opaque envelopes waiting for their recipient) ----
+
+    /// Envelopes kept at most this long for someone who never connects.
+    pub const INBOX_TTL_SECS: u64 = 30 * 24 * 3600;
+
+    pub fn inbox_push(&self, user: &str, msg: &[u8]) -> Result<(), DirError> {
+        let db = self.db.lock().unwrap();
+        db.execute("INSERT INTO inbox (user, msg, at) VALUES (?1, ?2, ?3)", rusqlite::params![user, msg, now_secs() as i64])?;
+        Ok(())
+    }
+
+    /// Everything waiting for `user`, oldest first (rows stay until acked).
+    pub fn inbox_take(&self, user: &str) -> Vec<(i64, Vec<u8>)> {
+        let db = self.db.lock().unwrap();
+        let cutoff = now_secs().saturating_sub(Self::INBOX_TTL_SECS) as i64;
+        let _ = db.execute("DELETE FROM inbox WHERE at < ?1", rusqlite::params![cutoff]);
+        let Ok(mut st) = db.prepare("SELECT id, msg FROM inbox WHERE user=?1 ORDER BY id") else { return Vec::new() };
+        st.query_map(rusqlite::params![user], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
+    pub fn inbox_ack(&self, id: i64) {
+        let db = self.db.lock().unwrap();
+        let _ = db.execute("DELETE FROM inbox WHERE id=?1", rusqlite::params![id]);
+    }
+
+    // ---- encrypted account backups (opaque to the server) ----
+
+    pub fn put_backup(&self, username: &str, data: &[u8]) -> Result<(), DirError> {
+        let db = self.db.lock().unwrap();
+        db.execute(
+            "INSERT INTO backups (username, data, updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(username) DO UPDATE SET data=?2, updated_at=?3",
+            rusqlite::params![username, data, now_secs() as i64],
+        )?;
+        Ok(())
+    }
+
+    /// (size, updated_at) of the stored backup.
+    pub fn backup_meta(&self, username: &str) -> Option<(i64, i64)> {
+        let db = self.db.lock().unwrap();
+        db.query_row(
+            "SELECT length(data), updated_at FROM backups WHERE username=?1",
+            rusqlite::params![username],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .ok()
+    }
+
+    pub fn get_backup(&self, username: &str) -> Option<Vec<u8>> {
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT data FROM backups WHERE username=?1", rusqlite::params![username], |r| r.get(0)).ok()
+    }
+
+    pub fn delete_backup(&self, username: &str) -> Result<(), DirError> {
+        let db = self.db.lock().unwrap();
+        db.execute("DELETE FROM backups WHERE username=?1", rusqlite::params![username])?;
+        Ok(())
     }
 
     /// Who may download the owner's avatar / banner (Telegram's "Profile
@@ -1177,5 +1258,38 @@ mod tests {
             d.register("ab", &[1u8; 32], &t, "", "", ""),
             Err(DirError::BadUsername)
         ));
+    }
+
+    #[test]
+    fn inbox_backup_and_check_login() {
+        let d = Directory::open_memory();
+        let id = [9u8; 32];
+        let code = d.request_code("bk@x.com").unwrap().unwrap();
+        let t = d.verify_code("bk@x.com", &code).unwrap();
+        d.register("bkuser", &id, &t, "B", "", "").unwrap();
+        d.set_password("bkuser", &id, "aqv2$0123456789abcdef").unwrap();
+        // check_login: no side effects, ticket stays valid
+        let code = d.request_code("bk@x.com").unwrap().unwrap();
+        let t = d.verify_code("bk@x.com", &code).unwrap();
+        assert!(matches!(d.check_login(&t, "wrong"), Err(DirError::BadLogin)));
+        assert_eq!(d.check_login(&t, "aqv2$0123456789abcdef").unwrap().0, "bkuser");
+        assert_eq!(d.identity_for("bkuser"), Some(id));
+        assert_eq!(d.login(&t, "aqv2$0123456789abcdef", &[7u8; 32]).unwrap(), "bkuser");
+        assert!(d.check_login(&t, "aqv2$0123456789abcdef").is_err(), "ticket is one-time after login");
+        // backups
+        assert!(d.backup_meta("bkuser").is_none());
+        d.put_backup("bkuser", b"AQBK1....").unwrap();
+        assert_eq!(d.backup_meta("bkuser").unwrap().0, 9);
+        assert_eq!(d.get_backup("bkuser").unwrap(), b"AQBK1....");
+        d.delete_backup("bkuser").unwrap();
+        assert!(d.get_backup("bkuser").is_none());
+        // inbox
+        d.inbox_push("bkuser", b"one").unwrap();
+        d.inbox_push("bkuser", b"two").unwrap();
+        d.inbox_push("other", b"x").unwrap();
+        let got = d.inbox_take("bkuser");
+        assert_eq!(got.iter().map(|(_, m)| m.as_slice()).collect::<Vec<_>>(), vec![&b"one"[..], &b"two"[..]]);
+        d.inbox_ack(got[0].0);
+        assert_eq!(d.inbox_take("bkuser").len(), 1);
     }
 }

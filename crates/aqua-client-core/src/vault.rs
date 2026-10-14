@@ -237,6 +237,101 @@ impl Vault {
         Ok(rows?)
     }
 
+    // ---------- Whole-vault export / import (encrypted backups) -----------
+
+    /// Everything in the vault, decrypted — for an encrypted backup only.
+    /// Records whose key starts with one of `skip` are left out.
+    pub fn export_dump(&self, skip: &[&str]) -> Result<VaultDump, VaultError> {
+        let mut d = VaultDump::default();
+        if let Some((n, c)) = self.conn.query_row("SELECT nonce, ciphertext FROM identity WHERE id = 1", [], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?))).optional()? {
+            d.identity = Some(self.unseal(b"identity", &n, &c)?);
+        }
+        {
+            let mut st = self.conn.prepare("SELECT peer_id, nonce, ciphertext, updated_at FROM sessions")?;
+            let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?, r.get::<_, Vec<u8>>(2)?, r.get::<_, i64>(3)?)))?;
+            for row in rows {
+                let (peer, n, c, at) = row?;
+                d.sessions.push((peer.clone(), self.unseal(&session_aad(&peer), &n, &c)?, at));
+            }
+        }
+        {
+            let mut st = self.conn.prepare("SELECT id, nonce, ciphertext, generated_at FROM signed_prekeys")?;
+            let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?, r.get::<_, Vec<u8>>(2)?, r.get::<_, i64>(3)?)))?;
+            for row in rows {
+                let (id, n, c, at) = row?;
+                d.signed_prekeys.push((id, self.unseal(&spk_aad(id as PreKeyId), &n, &c)?, at));
+            }
+        }
+        {
+            let mut st = self.conn.prepare("SELECT id, nonce, ciphertext FROM one_time_prekeys")?;
+            let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?, r.get::<_, Vec<u8>>(2)?)))?;
+            for row in rows {
+                let (id, n, c) = row?;
+                d.one_time_prekeys.push((id, self.unseal(&opk_aad(id as PreKeyId), &n, &c)?));
+            }
+        }
+        {
+            let mut st = self.conn.prepare("SELECT key, nonce, ciphertext FROM kv")?;
+            let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?, r.get::<_, Vec<u8>>(2)?)))?;
+            for row in rows {
+                let (key, n, c) = row?;
+                if skip.iter().any(|p| key.starts_with(p)) {
+                    continue;
+                }
+                d.records.push((key.clone(), self.unseal(&record_aad(&key), &n, &c)?));
+            }
+        }
+        Ok(d)
+    }
+
+    /// Replace the vault's contents with a dump (restoring a backup).
+    /// Records whose key starts with one of `keep` survive.
+    pub fn import_dump(&self, d: &VaultDump, keep: &[&str]) -> Result<(), VaultError> {
+        self.conn.execute_batch("BEGIN")?;
+        let res = (|| -> Result<(), VaultError> {
+            self.conn.execute("DELETE FROM identity", [])?;
+            self.conn.execute("DELETE FROM sessions", [])?;
+            self.conn.execute("DELETE FROM signed_prekeys", [])?;
+            self.conn.execute("DELETE FROM one_time_prekeys", [])?;
+            let kept: Vec<String> = self.record_keys("")?.into_iter().filter(|k| keep.iter().any(|p| k.starts_with(p))).collect();
+            {
+                let mut st = self.conn.prepare("SELECT key FROM kv")?;
+                let all: Vec<String> = st.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<_, _>>()?;
+                for k in all.into_iter().filter(|k| !kept.contains(k)) {
+                    self.conn.execute("DELETE FROM kv WHERE key = ?1", params![k])?;
+                }
+            }
+            if let Some(id) = &d.identity {
+                let (n, c) = self.seal(b"identity", id)?;
+                self.conn.execute("INSERT INTO identity (id, nonce, ciphertext) VALUES (1, ?1, ?2)", params![n, c])?;
+            }
+            for (peer, pt, at) in &d.sessions {
+                let (n, c) = self.seal(&session_aad(peer), pt)?;
+                self.conn.execute("INSERT INTO sessions (peer_id, nonce, ciphertext, updated_at) VALUES (?1, ?2, ?3, ?4)", params![peer, n, c, at])?;
+            }
+            for (id, pt, at) in &d.signed_prekeys {
+                let (n, c) = self.seal(&spk_aad(*id as PreKeyId), pt)?;
+                self.conn.execute("INSERT INTO signed_prekeys (id, nonce, ciphertext, generated_at) VALUES (?1, ?2, ?3, ?4)", params![id, n, c, at])?;
+            }
+            for (id, pt) in &d.one_time_prekeys {
+                let (n, c) = self.seal(&opk_aad(*id as PreKeyId), pt)?;
+                self.conn.execute("INSERT INTO one_time_prekeys (id, nonce, ciphertext) VALUES (?1, ?2, ?3)", params![id, n, c])?;
+            }
+            for (key, pt) in &d.records {
+                if kept.contains(key) {
+                    continue;
+                }
+                let (n, c) = self.seal(&record_aad(key), pt)?;
+                self.conn.execute("INSERT INTO kv (key, nonce, ciphertext, updated_at) VALUES (?1, ?2, ?3, ?4)", params![key, n, c, unix_now()])?;
+            }
+            Ok(())
+        })();
+        match res {
+            Ok(()) => { self.conn.execute_batch("COMMIT")?; Ok(()) }
+            Err(e) => { let _ = self.conn.execute_batch("ROLLBACK"); Err(e) }
+        }
+    }
+
     // ---------- Sessions --------------------------------------------------
 
     pub fn save_session(&self, peer_id: &str, session: &Session) -> Result<(), VaultError> {
@@ -493,6 +588,17 @@ fn unix_now() -> i64 {
         .unwrap_or(0)
 }
 
+/// Plaintext copy of a vault (see [`Vault::export_dump`]). Only ever
+/// serialised inside an encrypted backup.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct VaultDump {
+    pub identity: Option<Vec<u8>>,
+    pub sessions: Vec<(String, Vec<u8>, i64)>,
+    pub signed_prekeys: Vec<(i64, Vec<u8>, i64)>,
+    pub one_time_prekeys: Vec<(i64, Vec<u8>)>,
+    pub records: Vec<(String, Vec<u8>)>,
+}
+
 fn record_aad(key: &str) -> Vec<u8> {
     let mut out = b"record:".to_vec();
     out.extend_from_slice(key.as_bytes());
@@ -687,5 +793,24 @@ mod tests {
         assert_eq!(v.record_keys("hist:al_").unwrap(), vec!["hist:al_ce".to_string()]);
         v.delete_record("hist:alice").unwrap();
         assert!(v.get_record("hist:alice").unwrap().is_none());
+    }
+
+    #[test]
+    fn dump_roundtrip_into_another_vault() {
+        let a = Vault::open_in_memory(MasterKey::generate()).unwrap();
+        let id = IdentityKeyPair::generate();
+        a.save_identity(&id).unwrap();
+        a.put_record("hist:bob", b"hello").unwrap();
+        a.put_record("backup:keys", b"local only").unwrap();
+        let d = a.export_dump(&["backup:"]).unwrap();
+        assert_eq!(d.records.len(), 1);
+        let b = Vault::open_in_memory(MasterKey::generate()).unwrap();
+        b.put_record("backup:keys", b"mine").unwrap();
+        b.put_record("hist:stale", b"x").unwrap();
+        b.import_dump(&d, &["backup:"]).unwrap();
+        assert_eq!(b.load_identity().unwrap().unwrap().public(), id.public());
+        assert_eq!(b.get_record("hist:bob").unwrap().as_deref(), Some(&b"hello"[..]));
+        assert_eq!(b.get_record("backup:keys").unwrap().as_deref(), Some(&b"mine"[..]));
+        assert!(b.get_record("hist:stale").unwrap().is_none());
     }
 }
