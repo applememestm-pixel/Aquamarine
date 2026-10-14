@@ -843,6 +843,7 @@ pub async fn start_bot_chat(
 pub struct BotInfo {
     pub username: String,
     pub token: String,
+    pub display_name: String,
 }
 
 /// Register a bot owned by this identity; returns {username, token}.
@@ -856,9 +857,10 @@ pub async fn create_bot(
         let s = state.lock().map_err(|e| e.to_string())?;
         s.transport.clone().ok_or("not connected")?
     };
+    let display_name = display_name.trim().to_string();
     let (username, token) = transport.register_bot(&username, &display_name)
         .await.map_err(|e| e.to_string())?;
-    Ok(BotInfo { username, token })
+    Ok(BotInfo { username, token, display_name })
 }
 
 /// List bots owned by this identity (with tokens).
@@ -869,7 +871,17 @@ pub async fn list_bots(state: State<'_, StdMutex<AppState>>) -> Result<Vec<BotIn
         s.transport.clone().ok_or("not connected")?
     };
     let rows = transport.list_bots().await.map_err(|e| e.to_string())?;
-    Ok(rows.into_iter().map(|(username, token)| BotInfo { username, token }).collect())
+    Ok(rows.into_iter().map(|(username, token, display_name)| BotInfo { username, token, display_name }).collect())
+}
+
+/// Delete one of my bots on the relay.
+#[tauri::command]
+pub async fn delete_bot(state: State<'_, StdMutex<AppState>>, username: String) -> Result<(), String> {
+    let transport = {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        s.transport.clone().ok_or("not connected")?
+    };
+    transport.delete_bot(&username).await.map_err(|e| e.to_string())
 }
 
 // ---------- File transfer -------------------------------------------------

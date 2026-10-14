@@ -395,3 +395,92 @@ async fn profile_media_is_public_and_owner_only() {
     let r = http.get(format!("{base}/v1/users/owner/media/avatar")).send().await.unwrap();
     assert_eq!(r.status(), 404);
 }
+
+/// Bots: register → /me → long poll → reset token → delete. Also drives
+/// the stdlib console bot (tools/aqua-console.py) when python3 exists.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bot_lifecycle_and_console_script() {
+    let addr = spawn_server().await;
+    let base = format!("http://{addr}");
+    let http = reqwest::Client::new();
+    let mut owner = Client::new("botowner");
+    let mut other = Client::new("botother");
+    owner.login(&http, &base).await;
+    other.login(&http, &base).await;
+
+    let reg = |name: &'static str| {
+        let http = http.clone();
+        let base = base.clone();
+        let tok = owner.token.clone();
+        async move {
+            let v: serde_json::Value = http.post(format!("{base}/v1/bot/register")).bearer_auth(tok)
+                .json(&serde_json::json!({ "username": name, "display_name": "Console Bot" }))
+                .send().await.unwrap().json().await.unwrap();
+            v["token"].as_str().unwrap().to_string()
+        }
+    };
+    let token = reg("e2econsole").await;
+
+    let me: serde_json::Value = http.get(format!("{base}/v1/bot/me?token={token}")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(me["username"], "e2econsole");
+    assert_eq!(me["display_name"], "Console Bot");
+    let list: serde_json::Value = http.get(format!("{base}/v1/bot/list")).bearer_auth(&owner.token).send().await.unwrap().json().await.unwrap();
+    assert_eq!(list[0]["display_name"], "Console Bot");
+
+    // Long poll: empty after the timeout…
+    let t0 = std::time::Instant::now();
+    let ups: serde_json::Value = http.get(format!("{base}/v1/bot/updates?token={token}&after=0&timeout=1")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(ups.as_array().unwrap().len(), 0);
+    assert!(t0.elapsed() >= Duration::from_millis(900));
+    // …and wakes up early when a message arrives (the bot writes to itself).
+    let poll = {
+        let http = http.clone();
+        let url = format!("{base}/v1/bot/updates?token={token}&after=0&timeout=20");
+        tokio::spawn(async move { http.get(url).send().await.unwrap().json::<serde_json::Value>().await.unwrap() })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let t1 = std::time::Instant::now();
+    let r = http.post(format!("{base}/v1/bot/send"))
+        .json(&serde_json::json!({ "token": token, "to": "e2econsole", "text": "hello" })).send().await.unwrap();
+    assert!(r.status().is_success());
+    let got = poll.await.unwrap();
+    assert!(t1.elapsed() < Duration::from_secs(3));
+    assert_eq!(got[0]["text"], "hello");
+
+    // The console script, if python3 is around.
+    if std::process::Command::new("python3").arg("--version").output().is_ok() {
+        use std::io::Write;
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tools/aqua-console.py");
+        let mut child = std::process::Command::new("python3")
+            .args([script, "--server", &base, "--chat", "e2econsole"])
+            .env("AQUA_BOT_TOKEN", &token)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn().unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        writeln!(stdin, "from the console").unwrap();
+        tokio::time::sleep(Duration::from_millis(2000)).await;
+        writeln!(stdin, "/quit").unwrap();
+        drop(stdin);
+        let out = tokio::task::spawn_blocking(move || child.wait_with_output().unwrap()).await.unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains("Connected as @e2econsole"), "{text}");
+        assert!(text.contains("hello"), "backlog not shown: {text}");
+        assert!(text.contains("@e2econsole\u{1b}[0m: from the console"), "own message not echoed back: {text}");
+    }
+
+    // Reset: the old token dies.
+    let token2 = reg("e2econsole").await;
+    assert_ne!(token, token2);
+    let r = http.get(format!("{base}/v1/bot/me?token={token}")).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 401);
+
+    // Only the owner can delete it.
+    let r = http.delete(format!("{base}/v1/bot/e2econsole")).bearer_auth(&other.token).send().await.unwrap();
+    assert!(!r.status().is_success());
+    let r = http.delete(format!("{base}/v1/bot/e2econsole")).bearer_auth(&owner.token).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 204);
+    let r = http.get(format!("{base}/v1/bot/me?token={token2}")).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 401);
+}

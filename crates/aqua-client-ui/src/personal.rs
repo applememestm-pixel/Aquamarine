@@ -117,6 +117,25 @@ pub fn read_theme_file(path: String) -> Result<String, String> {
     std::fs::read_to_string(p).map_err(|e| format!("read: {e}"))
 }
 
+/// The console-chat bot script (tools/aqua-console.py), bundled so the
+/// Bots tab can save a copy next to the user's other files.
+const CONSOLE_BOT: &str = include_str!("../../../tools/aqua-console.py");
+
+/// Save the bundled console bot to a path from a save dialog (.py only).
+#[tauri::command]
+pub fn save_console_bot(path: String) -> Result<(), String> {
+    if ext_of(&path) != "py" {
+        return Err("the script must end in .py".into());
+    }
+    std::fs::write(&path, CONSOLE_BOT).map_err(|e| format!("write: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

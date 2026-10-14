@@ -739,7 +739,7 @@ async fn bot_register(
 }
 
 #[derive(serde::Serialize)]
-struct BotInfo { username: String, token: String }
+struct BotInfo { username: String, token: String, display_name: String }
 
 /// List the bots owned by the calling identity (with their tokens, so
 /// the owner can copy them).
@@ -749,7 +749,10 @@ async fn bot_list(
 ) -> Json<Vec<BotInfo>> {
     let bots = state.directory.list_bots_for_owner(&dh_pub)
         .into_iter()
-        .map(|(username, token)| BotInfo { username, token })
+        .map(|(username, token)| {
+            let display_name = state.directory.display_name_of(&username);
+            BotInfo { username, token, display_name }
+        })
         .collect();
     Json(bots)
 }
@@ -759,11 +762,14 @@ struct BotUpdatesQuery {
     token: String,
     #[serde(default)]
     after: u64,
+    /// Long poll: wait up to this many seconds (max 30) for a new update.
+    #[serde(default)]
+    timeout: u64,
 }
 
 /// A bot program polls for messages addressed to it. Returns updates
-/// with id > `after`. (Simple immediate return — the bot loops with a
-/// short sleep; a real long-poll can come later.)
+/// with id >= `after`; with `timeout` it waits (long poll) until there is
+/// one or the time is up.
 async fn bot_updates(
     State(state): State<AppState>,
     Query(q): Query<BotUpdatesQuery>,
@@ -771,9 +777,42 @@ async fn bot_updates(
     let bot = state.directory.bot_by_token(&q.token)
         .ok_or((StatusCode::UNAUTHORIZED, "bad bot token".into()))?;
     let queue = state.bot_queue(&bot);
-    let qd = queue.lock().await;
-    let out: Vec<BotUpdate> = qd.updates.iter().filter(|u| u.id >= q.after).cloned().collect();
-    Ok(Json(out))
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(q.timeout.min(30));
+    loop {
+        {
+            let qd = queue.lock().await;
+            let out: Vec<BotUpdate> = qd.updates.iter().filter(|u| u.id >= q.after).cloned().collect();
+            if !out.is_empty() || std::time::Instant::now() >= deadline {
+                return Ok(Json(out));
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    }
+}
+
+#[derive(Deserialize)]
+struct BotTokenQuery { token: String }
+
+/// Who am I (for bot programs): `{ username, display_name }`.
+async fn bot_me(
+    State(state): State<AppState>,
+    Query(q): Query<BotTokenQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let bot = state.directory.bot_by_token(&q.token)
+        .ok_or((StatusCode::UNAUTHORIZED, "bad bot token".into()))?;
+    let name = state.directory.display_name_of(&bot);
+    Ok(Json(serde_json::json!({ "username": bot, "display_name": name })))
+}
+
+/// Owner deletes one of their bots.
+async fn bot_delete(
+    State(state): State<AppState>,
+    Caller(dh_pub): Caller,
+    Path(name): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    state.directory.delete_bot(&name, &dh_pub).map_err(|e| (dir_err_status(&e), e.to_string()))?;
+    state.bot_queues.remove(&name.trim().to_lowercase());
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
@@ -1096,6 +1135,8 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/bot/list",           get(bot_list))
         .route("/v1/bot/updates",        get(bot_updates))
         .route("/v1/bot/send",           post(bot_send))
+        .route("/v1/bot/me",             get(bot_me))
+        .route("/v1/bot/:name",          axum::routing::delete(bot_delete))
         .route("/v1/bundle/:user",   post(upload_bundle).get(fetch_bundle))
         .route("/v1/ws",             get(ws_upgrade))
         .route(

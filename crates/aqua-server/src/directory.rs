@@ -842,6 +842,29 @@ impl Directory {
         Ok(token)
     }
 
+    /// Delete a bot the caller owns (its account and token).
+    pub fn delete_bot(&self, username: &str, owner_dh: &[u8; 32]) -> Result<(), DirError> {
+        let username = username.trim().to_lowercase();
+        let db = self.db.lock().unwrap();
+        let owner: Vec<u8> = db
+            .query_row("SELECT owner_dh FROM bot_tokens WHERE username=?1", rusqlite::params![username], |r| r.get(0))
+            .map_err(|_| DirError::NotOwner)?;
+        if owner.as_slice() != owner_dh.as_slice() {
+            return Err(DirError::NotOwner);
+        }
+        db.execute("DELETE FROM bot_tokens WHERE username=?1", rusqlite::params![username])?;
+        db.execute("DELETE FROM users WHERE username=?1 AND is_bot=1", rusqlite::params![username])?;
+        tracing::info!(%username, "bot deleted");
+        Ok(())
+    }
+
+    /// Display name of a user / bot ("" when unknown).
+    pub fn display_name_of(&self, username: &str) -> String {
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT display_name FROM users WHERE username=?1", rusqlite::params![username], |r| r.get(0))
+            .unwrap_or_default()
+    }
+
     /// Resolve a bot token → its username.
     pub fn bot_by_token(&self, token: &str) -> Option<String> {
         let db = self.db.lock().unwrap();

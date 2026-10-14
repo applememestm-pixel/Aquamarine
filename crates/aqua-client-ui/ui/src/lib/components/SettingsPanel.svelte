@@ -35,6 +35,7 @@
   import { BUILTIN_SOUNDS, customSounds, refreshSounds, playSound, soundLabel, addSoundBytes } from "../sounds";
   import { exportThemeToFile, sendThemeToChat, pickAndApplyTheme } from "../themeShare";
   import { askConfirm } from "./Confirm.svelte";
+  import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 
   // ---- Section navigation ----
   type Sec = "ghost" | "language" | "appearance" | "theme" | "behaviour" | "notifications" | "voice" | "wallpaper" | "accent" | "bots" | "account" | "about" | "privacy" | "stickers";
@@ -244,14 +245,15 @@
 
   async function createBot() {
     botError = null;
-    const u = botUsername.trim().toLowerCase();
-    if (!/^[a-z0-9_.]{3,32}$/.test(u)) { botError = "Username: 3–32 chars, a-z 0-9 _ ."; return; }
+    const u = botUsername.trim().toLowerCase().replace(/^@/, "");
+    if (!/^[a-z0-9_.]{3,32}$/.test(u)) { botError = tr("Username: 3–32 chars, a-z 0-9 _ ."); return; }
     botBusy = true;
     try {
-      await api.createBot(u, botDisplay.trim() || u);
+      const made = await api.createBot(u, botDisplay.trim() || u);
       botUsername = ""; botDisplay = "";
       await loadBots();
-      showToast(`Bot @${u} created`);
+      botShown = new Set([...botShown, made.username]);
+      showToast(tr("Bot @{u} created", { u }));
     } catch (e) {
       botError = String(e);
     } finally {
@@ -259,10 +261,73 @@
     }
   }
 
-  async function copyToken(token: string) {
-    try { await navigator.clipboard.writeText(token); showToast(tr("Token copied")); }
+  // Tokens are masked until you ask to see them.
+  let botShown = $state(new Set<string>());
+  function toggleToken(u: string) {
+    const n = new Set(botShown);
+    if (n.has(u)) n.delete(u); else n.add(u);
+    botShown = n;
+  }
+  function maskToken(tok: string) { return tok.slice(0, 9) + "•".repeat(14) + tok.slice(-4); }
+
+  async function copyText(text: string, done = tr("Copied")) {
+    try { await navigator.clipboard.writeText(text); showToast(done); }
     catch { showToast(tr("Copy blocked")); }
   }
+  async function copyToken(token: string) { await copyText(token, tr("Token copied")); }
+
+  async function resetBotToken(b: BotInfo) {
+    const ok = await askConfirm({
+      title: tr("Reset the token of @{u}?", { u: b.username }),
+      text: tr("The old token stops working at once — programs using it must get the new one."),
+      ok: tr("Reset token"),
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api.createBot(b.username, b.display_name || b.username);
+      await loadBots();
+      botShown = new Set([...botShown, b.username]);
+      showToast(tr("New token issued"));
+    } catch (e) { showToast(String(e)); }
+  }
+
+  async function deleteBot(b: BotInfo) {
+    const ok = await askConfirm({
+      title: tr("Delete @{u}?", { u: b.username }),
+      text: tr("The bot disappears from the directory and its token stops working. The username becomes free."),
+      ok: tr("Delete"),
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api.deleteBot(b.username);
+      bots = bots.filter((x) => x.username !== b.username);
+      showToast(tr("Bot deleted"));
+    } catch (e) { showToast(String(e)); }
+  }
+
+  async function openBotChat(b: BotInfo) {
+    try {
+      await api.startBotChat(b.username, "/start");
+      const { chats, selectChat, activeTab } = await import("../stores");
+      chats.set(await api.listChats());
+      activeTab.set("chats");
+      await selectChat(b.username);
+      closeSettings();
+    } catch (e) { showToast(tr("Could not start bot: {e}", { e: String(e) })); }
+  }
+
+  let consoleCmd = $derived(`python3 aqua-console.py --server ${$info?.server_url ?? "http://127.0.0.1:8080"}`);
+  async function saveConsoleScript() {
+    try {
+      const path = await saveDialog({ title: tr("Save the console bot"), defaultPath: "aqua-console.py", filters: [{ name: "Python", extensions: ["py"] }] });
+      if (!path) return;
+      await api.saveConsoleBot(path);
+      showToast(tr("Saved — run it with: {c}", { c: "python3 " + path.split(/[\\/]/).pop() }));
+    } catch (e) { showToast(String(e)); }
+  }
+  let apiOpen = $state(false);
 
   // Load bots whenever the panel opens.
   $effect(() => {
@@ -946,29 +1011,78 @@
 
       {#if section === "bots"}
       <section class="group">
-        <div class="label">{$t("Bots")}</div>
+        <div class="label">{$t("Your bots")}</div>
         {#if !$info?.connected}
           <div class="bots-note">{$t("Connect to a server to create bots.")}</div>
         {:else}
-          <div class="bot-create">
-            <input bind:value={botUsername} placeholder={$t("bot username (e.g. weatherbot)")} oninput={() => (botUsername = botUsername.toLowerCase())} />
-            <input bind:value={botDisplay} placeholder={$t("display name")} />
-            <button class="bot-add" onclick={createBot} disabled={botBusy}>{$t(botBusy ? "…" : "Create")}</button>
-          </div>
+          <form class="bot-create" onsubmit={(e) => { e.preventDefault(); void createBot(); }}>
+            <label class="bc-field">
+              <span>{$t("Username")}</span>
+              <div class="bc-at"><i>@</i><input bind:value={botUsername} placeholder="weatherbot" spellcheck="false" autocomplete="off" oninput={() => (botUsername = botUsername.toLowerCase())} /></div>
+            </label>
+            <label class="bc-field">
+              <span>{$t("Display name")}</span>
+              <input bind:value={botDisplay} placeholder={$t("Weather")} />
+            </label>
+            <button class="bot-add" type="submit" disabled={botBusy || !botUsername.trim()}>{botBusy ? "…" : $t("Create")}</button>
+          </form>
           {#if botError}<div class="bots-note err">{botError}</div>{/if}
           {#if bots.length === 0}
-            <div class="bots-note">No bots yet. Create one — you'll get an API token to drive it over HTTP (<code>/v1/bot/updates</code>, <code>/v1/bot/send</code>).</div>
+            <div class="bots-note">{$t("No bots yet. A bot is an account driven by a program over HTTP — create one and you get its token.")}</div>
           {:else}
+            <div class="bot-list">
             {#each bots as b (b.username)}
-              <div class="bot-row">
-                <div class="bot-main">
-                  <div class="bot-name">@{b.username}</div>
-                  <div class="bot-token" title={b.token}>{b.token}</div>
+              <div class="bot-card">
+                <div class="bot-head">
+                  <div class="bot-ava">{(b.display_name || b.username).slice(0, 1).toUpperCase()}</div>
+                  <div class="bot-main">
+                    <div class="bot-name">{b.display_name || b.username} <span class="bot-tag">BOT</span></div>
+                    <div class="bot-user">@{b.username}</div>
+                  </div>
+                  <button class="bot-btn primary" onclick={() => openBotChat(b)}>{$t("Open chat")}</button>
                 </div>
-                <button class="bot-copy" onclick={() => copyToken(b.token)} title={$t("Copy token")}>{$t("Copy")}</button>
+                <div class="bot-tokrow">
+                  <code class="bot-token" title={botShown.has(b.username) ? b.token : ""}>{botShown.has(b.username) ? b.token : maskToken(b.token)}</code>
+                  <button class="bot-btn" onclick={() => toggleToken(b.username)}>{botShown.has(b.username) ? $t("Hide") : $t("Show")}</button>
+                  <button class="bot-btn" onclick={() => copyToken(b.token)}>{$t("Copy")}</button>
+                </div>
+                <div class="bot-actions">
+                  <span class="bot-sp"></span>
+                  <button class="bot-link" onclick={() => resetBotToken(b)}>{$t("Reset token")}</button>
+                  <button class="bot-link danger" onclick={() => deleteBot(b)}>{$t("Delete")}</button>
+                </div>
               </div>
             {/each}
+            </div>
           {/if}
+        {/if}
+      </section>
+
+      <section class="group">
+        <div class="label">{$t("Console chat")}</div>
+        <div class="bots-note">{$t("A ready-made bot: it prints a chat in your terminal and sends whatever you type. Write to your bot in Aquamarine (or let friends write to it) and answer from the console. Room mode forwards every message to everyone who joined — a tiny chat room. Needs only Python 3.")}</div>
+        <div class="bot-cmd">
+          <code>{consoleCmd}</code>
+          <button class="bot-btn" onclick={() => copyText(consoleCmd, tr("Command copied"))}>{$t("Copy")}</button>
+        </div>
+        <div class="bot-actions">
+          <button class="bot-btn primary" onclick={saveConsoleScript}>{$t("Save aqua-console.py…")}</button>
+          <button class="bot-link" onclick={() => api.openExternal("https://github.com/applememestm-pixel/Aquamarine/blob/main/tools/aqua-console.py").catch(() => {})}>{$t("View source")}</button>
+        </div>
+        <div class="bots-note">{$t("It asks for the token with hidden input. Commands: /to <user>, /who, /room, /quit. Bot chats are not end-to-end encrypted.")}</div>
+      </section>
+
+      <section class="group">
+        <button class="bot-api-toggle" onclick={() => (apiOpen = !apiOpen)} aria-expanded={apiOpen}>
+          <span>{$t("HTTP API for your own bots")}</span><span class="chev" class:open={apiOpen}>›</span>
+        </button>
+        {#if apiOpen}
+<pre class="bot-api">GET  /v1/bot/me?token=TOKEN
+     → {"{"} "username", "display_name" {"}"}
+GET  /v1/bot/updates?token=TOKEN&amp;after=ID&amp;timeout=25
+     → [{"{"} "id", "from", "text", "ts" {"}"}]   (long poll, pass last id + 1)
+POST /v1/bot/send   {"{"} "token", "to": "alice", "text": "hi" {"}"}</pre>
+          <div class="bots-note">{$t("Users start a bot by searching its @username; the first message is /start.")}</div>
         {/if}
       </section>
       {/if}
@@ -1363,42 +1477,88 @@
   }
   .switch.on::after { transform: translateX(17px); background: var(--accent); }
 
-  .bots-note { font-size: 12px; color: var(--fg-dim); line-height: 1.5; margin-top: 4px; }
+  .bots-note { font-size: 12px; color: var(--fg-dim); line-height: 1.5; margin-top: 6px; }
   .bots-note.err { color: #ff9fb0; }
   .bots-note code { font-family: var(--font-mono); font-size: 11px; color: var(--accent); }
-  .bot-create { display: flex; gap: 6px; margin-bottom: 8px; }
-  .bot-create input {
-    flex: 1; min-width: 0;
+  .bot-create {
+    display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px;
+    align-items: end; margin-bottom: 10px;
+  }
+  .bc-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .bc-field > span { font-size: 11px; color: var(--fg-muted); font-weight: 600; }
+  .bc-field input, .bc-at {
+    height: 34px; box-sizing: border-box; width: 100%; min-width: 0;
     background: var(--bg-input); border: 1px solid var(--border);
     border-radius: 8px; color: var(--fg); font-family: inherit;
-    font-size: 12.5px; padding: 7px 10px; outline: none;
+    font-size: 12.5px; padding: 0 10px; outline: none;
   }
-  .bot-create input:focus { border-color: var(--accent); }
+  .bc-at { display: flex; align-items: center; gap: 2px; }
+  .bc-at i { font-style: normal; color: var(--fg-dim); }
+  .bc-at input { height: 100%; border: none; background: transparent; padding: 0; }
+  .bc-field input:focus, .bc-at:focus-within { border-color: var(--accent); }
   .bot-add {
-    padding: 7px 14px; border: none; border-radius: 8px;
+    height: 34px; padding: 0 16px; border: none; border-radius: 8px;
     background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    color: #06070C; font-weight: 700; font-size: 12.5px; cursor: pointer;
-    flex-shrink: 0;
+    color: var(--accent-ink, #06070C); font-weight: 700; font-size: 12.5px; cursor: pointer;
   }
   .bot-add:disabled { opacity: 0.5; cursor: not-allowed; }
-  .bot-row {
-    display: flex; align-items: center; gap: 8px;
-    padding: 8px 10px; margin-bottom: 4px;
-    background: var(--bg-input); border: 1px solid var(--border);
-    border-radius: 10px;
+  .bot-list { display: flex; flex-direction: column; gap: 8px; }
+  .bot-card {
+    padding: 10px 12px; background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: 12px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .bot-head { display: flex; align-items: center; gap: 10px; }
+  .bot-ava {
+    width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
+    display: grid; place-items: center; font-weight: 700; font-size: 14px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: var(--accent-ink, #06070C);
   }
   .bot-main { flex: 1; min-width: 0; }
-  .bot-name { font-size: 13px; font-weight: 600; }
-  .bot-token {
-    font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-dim);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  .bot-name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .bot-tag {
+    font-size: 9px; font-weight: 800; letter-spacing: 0.06em; padding: 1px 5px;
+    border-radius: 4px; background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent);
   }
-  .bot-copy {
-    padding: 5px 10px; border: 1px solid var(--border); border-radius: 7px;
-    background: transparent; color: var(--fg-muted); font-size: 11px;
-    font-weight: 600; cursor: pointer; flex-shrink: 0;
+  .bot-user { font-size: 11.5px; color: var(--fg-dim); }
+  .bot-tokrow, .bot-cmd { display: flex; align-items: center; gap: 6px; }
+  .bot-token, .bot-cmd code {
+    flex: 1; min-width: 0; height: 28px; line-height: 28px; padding: 0 8px; box-sizing: border-box;
+    font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-muted);
+    background: var(--bg-shell); border: 1px solid var(--border); border-radius: 7px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: all;
   }
-  .bot-copy:hover { color: var(--accent); border-color: var(--accent-soft); }
+  .bot-cmd { margin-top: 8px; }
+  .bot-btn {
+    height: 28px; padding: 0 10px; border: 1px solid var(--border); border-radius: 7px;
+    background: transparent; color: var(--fg-muted); font-size: 11.5px;
+    font-weight: 600; cursor: pointer; flex-shrink: 0; white-space: nowrap;
+  }
+  .bot-btn:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+  .bot-btn.primary { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .bot-actions { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 2px; }
+  .bot-sp { flex: 1; }
+  .bot-link {
+    border: none; background: none; padding: 4px 6px; border-radius: 6px;
+    color: var(--fg-dim); font-size: 11.5px; font-weight: 600; cursor: pointer;
+  }
+  .bot-link:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .bot-link.danger:hover { color: #ff7a90; background: rgba(255, 90, 120, 0.08); }
+  .bot-api-toggle {
+    width: 100%; display: flex; justify-content: space-between; align-items: center;
+    border: none; background: none; color: var(--fg); padding: 0;
+    font-size: 12.5px; font-weight: 600; cursor: pointer;
+  }
+  .bot-api-toggle .chev { transition: transform 0.15s; color: var(--fg-dim); }
+  .bot-api-toggle .chev.open { transform: rotate(90deg); }
+  .bot-api {
+    margin: 10px 0 0; padding: 10px; border-radius: 8px; overflow-x: auto;
+    background: var(--bg-shell); border: 1px solid var(--border);
+    font-family: var(--font-mono); font-size: 10.5px; line-height: 1.6; color: var(--fg-muted);
+  }
+  @media (max-width: 520px) {
+    .bot-create { grid-template-columns: 1fr; }
+  }
 
   /* Theme editor */
   .te-intro { font-size: 12px; color: var(--fg-dim); line-height: 1.5; margin-bottom: 12px; }

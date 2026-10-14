@@ -196,6 +196,7 @@ export interface Activity {
 export interface BotInfo {
   username: string;
   token: string;
+  display_name?: string;
 }
 
 // ---- Groups / supergroups / channels ----

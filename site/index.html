@@ -212,9 +212,10 @@
             background: var(--accent-soft); border: 1px solid rgba(0,229,199,0.25); }
   .step h3 { font-size: 15.5px; font-family: var(--body); font-weight: 600; }
   .step p { font-size: 14px; color: var(--fg-muted); margin-top: 2px; }
+  .step p code { font-family: var(--mono); font-size: 12.5px; color: var(--accent); }
   .code {
     background: #04060b; border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px;
-    font-family: var(--mono); font-size: 13px; line-height: 1.8; overflow-x: auto; color: var(--fg-muted);
+    font-family: var(--mono); font-size: 13px; line-height: 1.8; overflow-x: auto; white-space: pre; color: var(--fg-muted);
   }
   .code .c { color: var(--fg-dim); }
   .code .p { color: var(--accent); }
@@ -255,6 +256,7 @@
       <a href="#features">Features</a>
       <a href="#download">Download</a>
       <a href="#selfhost">Self-host</a>
+      <a href="#bots">Bots</a>
       <a href="#repo-link" id="nav-gh">Source</a>
     </div>
     <a class="nav-cta" href="#download">Get the app</a>
@@ -353,6 +355,37 @@ git clone <span class="v">&lt;your-repo&gt;</span> aquamarine
   </div>
 </section>
 
+<section class="band" id="bots">
+  <div class="wrap host">
+    <div>
+      <div class="sec-head" style="margin-bottom:24px">
+        <span class="eyebrow">Bots</span>
+        <h2>Your chat, in a terminal.</h2>
+        <p><b>aqua-console</b> is a ready-made bot: it prints a chat in your console and sends whatever you type. Write to your bot from the app — or let friends write to it — and answer from the terminal. Room mode turns it into a tiny chat room. Pure Python&nbsp;3, no installs, Linux / macOS / Windows.</p>
+      </div>
+      <div class="steps">
+        <div class="step"><div class="step-n">1</div><div><h3>Create a bot</h3><p>In Aquamarine open Settings → Bots, pick a @name and copy its token.</p></div></div>
+        <div class="step"><div class="step-n">2</div><div><h3>Run the script</h3><p>It asks for the token with hidden input and connects to your relay.</p></div></div>
+        <div class="step"><div class="step-n">3</div><div><h3>Chat</h3><p>Message the bot in the app. <code>/to &lt;user&gt;</code>, <code>/who</code>, <code>/room</code>, <code>/quit</code>.</p></div></div>
+      </div>
+      <p style="margin-top:22px"><a class="btn btn-primary" id="console-dl" href="#bots" download="aqua-console.py">Download aqua-console.py</a></p>
+    </div>
+    <div class="code"><span class="c"># talk through your bot from the terminal</span>
+<span class="p">python3</span> aqua-console.py --server <span class="v">https://your-relay:8443</span>
+Bot token (aqbot_…):
+Connected as @mybot on https://your-relay:8443
+<span class="c">12:04</span> <span class="v">@alice</span>: hi there!
+<span class="v">@alice</span> &gt; hey! answering from the terminal
+
+<span class="c"># a mini chat room: everyone who writes /join</span>
+<span class="p">python3</span> aqua-console.py --server <span class="v">…</span> --room
+
+<span class="c"># your own bot: plain HTTP</span>
+GET  /v1/bot/updates?token=…&amp;after=0&amp;timeout=25
+POST /v1/bot/send  {"token","to","text"}</div>
+  </div>
+</section>
+
 <section class="band" style="padding-top:0">
   <div class="wrap">
     <div class="note">
@@ -398,6 +431,10 @@ git clone <span class="v">&lt;your-repo&gt;</span> aquamarine
   const DIR = location.hostname.endsWith("github.io")
     ? REPO + "/releases/latest/download/"
     : "downloads/";
+
+  // The console bot ships in the repo; always fetch the current one.
+  const consoleDl = document.getElementById("console-dl");
+  if (consoleDl) consoleDl.href = REPO + "/raw/main/tools/aqua-console.py";
 
   const PLATFORMS = [
     { key: "windows", label: "Windows", sub: "10 / 11 · 64-bit",
