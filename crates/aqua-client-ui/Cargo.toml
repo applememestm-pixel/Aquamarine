@@ -24,6 +24,7 @@ aqua-client-core = { path = "../aqua-client-core" }
 tauri               = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-log    = { version = "2" }
 log = "0.4"
+futures-util = "0.3"
 tauri-plugin-dialog = { version = "2" }
 tauri-plugin-fs     = { version = "2" }  # reads Android content:// picks
 infer               = "0.22"             # sniff type/extension of such picks

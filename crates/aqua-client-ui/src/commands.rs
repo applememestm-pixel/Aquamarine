@@ -1114,22 +1114,33 @@ async fn save_server_pack(
     let dest = root.join(aqua_client_core::sanitize_pack_folder(&title));
     std::fs::create_dir_all(&dest).map_err(|e| format!("mkdir pack: {e}"))?;
     let files = m["files"].as_array().cloned().unwrap_or_default();
-    let (mut ok, mut animated, mut video) = (0usize, 0usize, 0usize);
-    for f in &files {
-        let Some(file) = f["file"].as_str() else { continue };
-        if file.contains(['/', '\\']) || file.starts_with('.') {
-            continue;
-        }
-        let out = dest.join(file);
-        if !out.exists() {
-            let Ok(bytes) = t.pack_file(&name, file).await else { continue };
-            if std::fs::write(&out, bytes).is_err() {
-                continue;
+    // Several files at a time (the relay may be far away).
+    let wanted: Vec<String> = files
+        .iter()
+        .filter_map(|f| f["file"].as_str())
+        .filter(|f| !f.contains(['/', '\\']) && !f.starts_with('.'))
+        .map(str::to_string)
+        .collect();
+    let mut done: Vec<String> = Vec::new();
+    for chunk in wanted.chunks(8) {
+        let got = futures_util::future::join_all(chunk.iter().map(|file| {
+            let out = dest.join(file);
+            let name = name.clone();
+            async move {
+                if out.exists() {
+                    return Some(file.clone());
+                }
+                let bytes = t.pack_file(&name, file).await.ok()?;
+                std::fs::write(&out, bytes).ok()?;
+                Some(file.clone())
             }
-        }
-        ok += 1;
-        if file.ends_with(".tgs") { animated += 1 } else if file.ends_with(".webm") { video += 1 }
+        }))
+        .await;
+        done.extend(got.into_iter().flatten());
     }
+    let ok = done.len();
+    let animated = done.iter().filter(|f| f.ends_with(".tgs")).count();
+    let video = done.iter().filter(|f| f.ends_with(".webm")).count();
     let meta = serde_json::json!({ "name": name, "title": title, "type": m["type"].as_str().unwrap_or("regular") });
     let _ = std::fs::write(dest.join("pack.json"), meta.to_string());
     Ok(aqua_client_core::ImportReport {

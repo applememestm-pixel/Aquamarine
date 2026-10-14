@@ -456,6 +456,9 @@
             onkeydown={(e) => { if (e.key === "Enter") doImport(); }} />
           <button class="imp-go" onclick={() => doImport()} disabled={importing}>{$t(importing ? "…" : "Import")}</button>
         </div>
+        {#if importing}
+          <div class="imp-busy"><span class="imp-spin"></span>{relayCan ? $t("The server is downloading the pack from Telegram — usually a few seconds, big packs up to a minute.") : $t("Downloading the pack from Telegram…")}</div>
+        {/if}
         {#if serverOnly.length}
           <div class="imp-srv">
             <span class="imp-srv-t">{$t("On this server")}</span>
@@ -635,6 +638,13 @@
   .imp-foot .imp-hint { flex: 1; }
   .imp-close { flex: 0 0 auto; height: 26px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--border); background: transparent; color: var(--fg-muted); font-size: 11.5px; font-weight: 600; cursor: pointer; }
   .imp-close:hover { color: var(--fg); background: var(--bg-hover); }
+  .imp-busy { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--fg-muted); line-height: 1.4; }
+  .imp-spin {
+    width: 12px; height: 12px; flex-shrink: 0; border-radius: 50%;
+    border: 2px solid color-mix(in srgb, var(--accent) 25%, transparent); border-top-color: var(--accent);
+    animation: imp-spin 0.8s linear infinite;
+  }
+  @keyframes imp-spin { to { transform: rotate(360deg); } }
   .imp-note {
     font-size: 11.5px; line-height: 1.45; color: var(--fg-muted);
     padding: 8px 10px; border-radius: 8px;

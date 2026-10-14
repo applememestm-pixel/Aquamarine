@@ -115,11 +115,61 @@ fn urlenc(s: &str) -> String {
 }
 
 /// Download a pack from Telegram (or return the stored one).
+/// One import per pack at a time: a second request for the same pack
+/// waits for the first one and then gets its manifest.
+fn pack_lock(name: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>> =
+        std::sync::OnceLock::new();
+    let map = LOCKS.get_or_init(Default::default);
+    map.lock().unwrap().entry(name.to_string()).or_default().clone()
+}
+
+/// Files downloaded in parallel (Telegram is fine with a handful).
+const PARALLEL: usize = 8;
+
+/// Download one sticker of a set into `tmp`; None if it can't be fetched.
+async fn fetch_sticker(
+    http: reqwest::Client,
+    base: String,
+    token: String,
+    tmp: std::path::PathBuf,
+    i: usize,
+    st: serde_json::Value,
+) -> Option<PackFile> {
+    let fid = st["file_id"].as_str()?;
+    let meta: serde_json::Value = http
+        .get(format!("{base}/bot{token}/getFile?file_id={}", urlenc(fid)))
+        .send().await.ok()?
+        .json().await.ok()?;
+    let fp = meta["result"]["file_path"].as_str()?;
+    let ext = match fp.rsplit('.').next().unwrap_or("") {
+        e @ ("webp" | "png" | "tgs" | "webm" | "gif") => e.to_string(),
+        _ if st["is_animated"].as_bool() == Some(true) => "tgs".into(),
+        _ if st["is_video"].as_bool() == Some(true) => "webm".into(),
+        _ => "webp".into(),
+    };
+    let bytes = http.get(format!("{base}/file/bot{token}/{fp}")).send().await.ok()?.bytes().await.ok()?;
+    if bytes.is_empty() || bytes.len() > MAX_FILE {
+        return None;
+    }
+    let emoji = st["emoji"].as_str().unwrap_or("").trim().to_string();
+    // Same naming as the client importer: <emoji>_<nnn>.<ext>
+    let file = format!("{}_{:03}.{ext}", if emoji.is_empty() { "x" } else { &emoji }, i + 1);
+    std::fs::write(tmp.join(&file), &bytes).ok()?;
+    Some(PackFile { mime: mime_of(&file).into(), file, emoji })
+}
+
 pub async fn import(pack_ref: &str) -> Result<Manifest, String> {
+    use futures_util::StreamExt;
     let name = short_name(pack_ref);
     if name.is_empty() {
         return Err("empty pack link".into());
     }
+    if let Some(m) = load_manifest(&name) {
+        return Ok(m);
+    }
+    let lock = pack_lock(&name.to_ascii_lowercase());
+    let _guard = lock.lock().await;
     if let Some(m) = load_manifest(&name) {
         return Ok(m);
     }
@@ -147,34 +197,16 @@ pub async fn import(pack_ref: &str) -> Result<Manifest, String> {
     let tmp = Path::new(PACKS_DIR).join(format!(".{real}.part"));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-    let mut files = Vec::new();
-    for (i, st) in r["stickers"].as_array().cloned().unwrap_or_default().iter().take(MAX_STICKERS).enumerate() {
-        let Some(fid) = st["file_id"].as_str() else { continue };
-        let meta: serde_json::Value = match http.get(api("getFile", format!("file_id={}", urlenc(fid)))).send().await {
-            Ok(x) => x.json().await.unwrap_or_default(),
-            Err(_) => continue,
-        };
-        let Some(fp) = meta["result"]["file_path"].as_str() else { continue };
-        let ext = match fp.rsplit('.').next().unwrap_or("") {
-            e @ ("webp" | "png" | "tgs" | "webm" | "gif") => e.to_string(),
-            _ if st["is_animated"].as_bool() == Some(true) => "tgs".into(),
-            _ if st["is_video"].as_bool() == Some(true) => "webm".into(),
-            _ => "webp".into(),
-        };
-        let bytes = match http.get(format!("{base}/file/bot{token}/{fp}")).send().await {
-            Ok(x) => x.bytes().await.map(|b| b.to_vec()).unwrap_or_default(),
-            Err(_) => continue,
-        };
-        if bytes.is_empty() || bytes.len() > MAX_FILE {
-            continue;
-        }
-        let emoji = st["emoji"].as_str().unwrap_or("").trim().to_string();
-        // Same naming as the client importer: <emoji>_<nnn>.<ext>
-        let file = format!("{}_{:03}.{ext}", if emoji.is_empty() { "x" } else { &emoji }, i + 1);
-        if std::fs::write(tmp.join(&file), &bytes).is_ok() {
-            files.push(PackFile { mime: mime_of(&file).into(), file, emoji });
-        }
-    }
+    let stickers: Vec<serde_json::Value> = r["stickers"].as_array().cloned().unwrap_or_default().into_iter().take(MAX_STICKERS).collect();
+    tracing::info!(pack = %real, stickers = stickers.len(), "importing sticker pack");
+    let started = std::time::Instant::now();
+    let mut files: Vec<PackFile> = futures_util::stream::iter(stickers.into_iter().enumerate())
+        .map(|(i, st)| fetch_sticker(http.clone(), base.clone(), token.clone(), tmp.clone(), i, st))
+        .buffer_unordered(PARALLEL)
+        .filter_map(|x| async move { x })
+        .collect()
+        .await;
+    files.sort_by(|a, b| a.file.split('_').next_back().cmp(&b.file.split('_').next_back()));
     if files.is_empty() {
         let _ = std::fs::remove_dir_all(&tmp);
         return Err(format!("nothing could be downloaded from \"{title}\""));
@@ -183,7 +215,7 @@ pub async fn import(pack_ref: &str) -> Result<Manifest, String> {
     std::fs::write(tmp.join("manifest.json"), serde_json::to_vec(&m).unwrap_or_default()).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::rename(&tmp, &dir).map_err(|e| e.to_string())?;
-    tracing::info!(pack = %m.name, files = m.files.len(), "sticker pack imported");
+    tracing::info!(pack = %m.name, files = m.files.len(), secs = started.elapsed().as_secs(), "sticker pack imported");
     Ok(m)
 }
 

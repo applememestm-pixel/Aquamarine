@@ -1056,4 +1056,6 @@ export const RU: Record<string, string> = {
   "Use my own bot token instead": "Использовать свой токен бота",
   "Not connected to a server — connect first, or use your own bot token.": "Нет подключения к серверу — подключитесь или используйте свой токен бота.",
   "The picture is still loading — try again in a moment": "Картинка ещё загружается — попробуйте через секунду",
+  "The server is downloading the pack from Telegram — usually a few seconds, big packs up to a minute.": "Сервер скачивает пак из Telegram — обычно несколько секунд, большие паки до минуты.",
+  "Downloading the pack from Telegram…": "Скачиваю пак из Telegram…",
 };
