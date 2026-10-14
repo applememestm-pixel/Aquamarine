@@ -10,7 +10,8 @@ import { writable, derived, get } from "svelte/store";
 import { api, assetUrl } from "./tauri";
 import { profile, updateProfile, type Profile } from "./profile";
 import { info } from "./stores";
-import { broadcastPresence } from "./presence";
+import { broadcastPresence, shareActivity } from "./presence";
+import { playedTop } from "./played";
 import { privacy, isPublic, photoAcl, contactSet } from "./privacy";
 
 export interface PeerCard {
@@ -155,6 +156,10 @@ function myExtra(p: Profile): Record<string, unknown> {
     avatar_emoji: p.avatar_emoji ?? "",
     music_title: p.music_ver ? (p.music_title ?? "") : "",
     clan: p.clan ?? null,
+    links: (p.links ?? []).filter((l) => /^https?:\/\//i.test(l.url)).slice(0, 8),
+    games: (p.games ?? []).slice(0, 12),
+    // Auto "game collection": top games by play time, only while sharing activity.
+    played: get(shareActivity) ? playedTop(8).map((g) => ({ n: g.name, h: Math.round(g.secs / 360) / 10 })) : [],
   };
 }
 

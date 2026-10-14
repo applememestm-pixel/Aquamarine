@@ -29,6 +29,10 @@ export interface Profile {
   music_ver?: number;
   music_url?: string;
   music_title?: string;
+  /** Links shown on the profile (site, GitHub, Steam, Twitch…). */
+  links?: { label: string; url: string }[];
+  /** Favourite games, picked by hand (the played list is automatic). */
+  games?: string[];
   /** Profile version — bumped on every publish so peers refetch the card. */
   pv?: number;
   /** Discord-style server tag I'm wearing (from a group I'm in). */

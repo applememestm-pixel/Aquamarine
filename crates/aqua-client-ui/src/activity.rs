@@ -367,10 +367,46 @@ pub async fn detect() -> Vec<Activity> {
 }
 
 /// What an MPRIS player reports, turned into an activity.
+/// "file:///home/me/Music/Song%20Name.mp3" → "Song Name".
+fn title_from_url(url: &str) -> String {
+    if !url.starts_with("file://") {
+        return String::new();
+    }
+    let last = url.rsplit('/').next().unwrap_or("");
+    let mut bytes = Vec::with_capacity(last.len());
+    let b = last.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(v) = u8::from_str_radix(&last[i + 1..i + 3], 16) {
+                bytes.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        bytes.push(b[i]);
+        i += 1;
+    }
+    let name = String::from_utf8_lossy(&bytes).to_string();
+    match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && ext.len() <= 5 => stem.to_string(),
+        _ => name,
+    }
+}
+
 pub fn from_player(identity: &str, bus_name: &str, title: &str, artists: &[String], url: &str) -> Option<Activity> {
-    let title = title.trim();
+    // Players often leave the title empty for local files (VLC, mpv): use
+    // the file name, and failing that just the player's name.
+    let from_url = title_from_url(url);
+    let title = if title.trim().is_empty() { from_url.as_str() } else { title.trim() };
     if title.is_empty() {
-        return None;
+        let id = if identity.trim().is_empty() { bus_name.rsplit('.').next().unwrap_or("") } else { identity.trim() };
+        let low = format!("{} {}", id.to_ascii_lowercase(), bus_name.to_ascii_lowercase());
+        if id.is_empty() || ["firefox", "chromium", "chrome", "brave", "vivaldi", "opera", "edge", "kdeconnect", "playerctld"].iter().any(|b| low.contains(b)) {
+            return None; // a browser tab or a proxy with nothing to say
+        }
+        let kind = if ["mpv", "vlc", "celluloid", "totem", "haruna", "smplayer"].iter().any(|v| low.contains(v)) { "watching" } else { "listening" };
+        return Some(Activity { kind: kind.into(), name: id.to_string(), details: String::new(), state: String::new() });
     }
     let artist = artists.iter().map(|a| a.trim()).filter(|a| !a.is_empty()).collect::<Vec<_>>().join(", ");
     let host = url.split("://").nth(1).unwrap_or("").split('/').next().unwrap_or("").trim_start_matches("www.").to_ascii_lowercase();
@@ -397,7 +433,8 @@ pub fn from_player(identity: &str, bus_name: &str, title: &str, artists: &[Strin
     }
     let id = if identity.trim().is_empty() { bus_name.rsplit('.').next().unwrap_or("Player") } else { identity.trim() };
     let video_players = ["mpv", "vlc", "celluloid", "totem", "haruna", "smplayer", "mplayer", "kodi"];
-    if video_players.iter().any(|v| bus.contains(v)) && artist.is_empty() {
+    let audio_file = [".mp3", ".flac", ".ogg", ".opus", ".m4a", ".wav", ".aac"].iter().any(|e| url.to_ascii_lowercase().ends_with(e));
+    if video_players.iter().any(|v| bus.contains(v)) && artist.is_empty() && !audio_file {
         return Some(act("watching", id, title, ""));
     }
     // Browsers without a known site, music players: with an artist it's music.
@@ -693,6 +730,22 @@ mod tests {
     }
 
     #[test]
+    fn players_without_a_title() {
+        use super::from_player as f;
+        // VLC playing a local video: the file name.
+        let a = f("VLC media player", "org.mpris.MediaPlayer2.vlc", "", &[], "file:///home/v/Videos/BOOM%20-%20Evil.mp4").unwrap();
+        assert_eq!((a.kind.as_str(), a.details.as_str()), ("watching", "BOOM - Evil"));
+        // VLC playing a song file without tags.
+        let a = f("VLC media player", "org.mpris.MediaPlayer2.vlc", "", &[], "file:///m/track%2001.flac").unwrap();
+        assert_eq!((a.kind.as_str(), a.details.as_str()), ("listening", "track 01"));
+        // Nothing but the player's name.
+        let a = f("Yandex Music", "org.mpris.MediaPlayer2.yandexmusic", "", &[], "").unwrap();
+        assert_eq!((a.kind.as_str(), a.name.as_str()), ("listening", "Yandex Music"));
+        // An empty browser tab says nothing.
+        assert!(f("Firefox", "org.mpris.MediaPlayer2.firefox.instance_1_23", "", &[], "").is_none());
+    }
+
+    #[test]
     fn mpris_players() {
         let a = from_player("Mozilla Firefox", "org.mpris.MediaPlayer2.firefox.instance_1_23", "self-hacking", &["Ling tosite sigure".into()], "https://open.spotify.com/track/1");
         assert_eq!(a.unwrap(), Activity { kind: "listening".into(), name: "Spotify".into(), details: "self-hacking".into(), state: "Ling tosite sigure".into() });
@@ -702,7 +755,7 @@ mod tests {
         assert_eq!((a.name.as_str(), a.state.as_str()), ("Spotify", "Linkin Park"));
         let a = from_player("mpv", "org.mpris.MediaPlayer2.mpv", "movie.mkv", &[], "file:///x/movie.mkv").unwrap();
         assert_eq!(a.kind, "watching");
-        assert!(from_player("x", "org.mpris.MediaPlayer2.x", "  ", &[], "").is_none());
+        assert_eq!(from_player("x", "org.mpris.MediaPlayer2.x", "  ", &[], "").map(|a| a.name), Some("x".into()));
     }
 
     #[test]

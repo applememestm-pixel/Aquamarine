@@ -41,7 +41,8 @@
   import TitleBar from "./lib/components/TitleBar.svelte";
   import ShortcutsHelp from "./lib/components/ShortcutsHelp.svelte";
   import ImageCropper from "./lib/components/ImageCropper.svelte";
-  import { initPresence } from "./lib/presence";
+  import { initPresence, myActivity } from "./lib/presence";
+  import { trackPlayed } from "./lib/played";
   import { refreshPeer, syncMyProfileOnConnect } from "./lib/people";
   import { chats } from "./lib/stores";
   import { initShortcuts } from "./lib/shortcuts";
@@ -93,6 +94,15 @@
     initTheme();
     bootstrap();
     initPresence();
+    trackPlayed();
+    // A game session just ended: republish the card so the game collection
+    // on the profile picks up the new play time.
+    let wasPlaying = false;
+    myActivity.subscribe((a) => {
+      const now = a.some((x) => x.kind === "playing");
+      if (wasPlaying && !now) void import("./lib/people").then((m) => m.publishMyProfile()).catch(() => {});
+      wasPlaying = now;
+    });
     void loadReactionPack();
     const stopShortcuts = initShortcuts();
     // Browser shortcuts that would pop Chromium chrome (print dialog,

@@ -29,6 +29,50 @@
   import { cropImage } from "./ImageCropper.svelte";
   import type { Activity } from "../types";
   import { openRegistration, registrationDismissed } from "./RegistrationWizard.svelte";
+  import { playedTop, played, gameGradient } from "../played";
+
+  let pfTab = $state<"board" | "activity">("board");
+  function hostOf(url: string): string {
+    try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
+  }
+  const LINK_ICONS: [RegExp, string][] = [
+    [/github\.com/, `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-3.2 19.5c.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.3-3.4-1.3-.5-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.5 2.4 1.1 2.9.8.1-.7.4-1.1.6-1.3-2.2-.3-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.8 1a9.6 9.6 0 0 1 5 0c1.9-1.3 2.7-1 2.7-1 .6 1.4.2 2.4.1 2.7.7.7 1 1.6 1 2.7 0 3.9-2.3 4.7-4.6 5 .4.3.7.9.7 1.9v2.8c0 .3.2.6.7.5A10 10 0 0 0 12 2Z"/></svg>`],
+    [/youtube\.com|youtu\.be/, `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M23 7.2a3 3 0 0 0-2.1-2.1C19 4.6 12 4.6 12 4.6s-7 0-8.9.5A3 3 0 0 0 1 7.2 31 31 0 0 0 .5 12a31 31 0 0 0 .5 4.8 3 3 0 0 0 2.1 2.1c1.9.5 8.9.5 8.9.5s7 0 8.9-.5a3 3 0 0 0 2.1-2.1 31 31 0 0 0 .5-4.8 31 31 0 0 0-.5-4.8ZM9.8 15V9l5.7 3-5.7 3Z"/></svg>`],
+    [/twitch\.tv/, `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 2 2 6v14h5v3h3l3-3h4l5-5V2H4Zm16 12-3 3h-5l-3 3v-3H5V4h15v10Zm-4-7h-2v5h2V7Zm-5 0H9v5h2V7Z"/></svg>`],
+    [/steamcommunity\.com|store\.steampowered/, `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-10 9.2l5.4 2.2a2.8 2.8 0 0 1 1.8-.5l2.4-3.5v-.1a3.8 3.8 0 1 1 3.8 3.8h-.1l-3.4 2.5v.2a2.8 2.8 0 0 1-5.6.4L2.4 14.4A10 10 0 1 0 12 2Z"/></svg>`],
+    [/t\.me|telegram/, `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M21.9 4.3 18.6 20c-.2 1.1-.9 1.4-1.8.9l-5-3.7-2.4 2.3c-.3.3-.5.5-1 .5l.4-5.1 9.2-8.3c.4-.4-.1-.6-.6-.2L6 13.6 1.1 12c-1.1-.3-1.1-1.1.2-1.6L20.5 3c.9-.3 1.7.2 1.4 1.3Z"/></svg>`],
+    [/discord\.(gg|com)/, `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.3 4.4A19.8 19.8 0 0 0 15.4 3l-.6 1.3a18.3 18.3 0 0 0-5.6 0L8.6 3a19.7 19.7 0 0 0-4.9 1.4C.6 9 0 13.5.3 18a19.9 19.9 0 0 0 6 3l1.3-2a12.9 12.9 0 0 1-2-1l.5-.4a14.2 14.2 0 0 0 12.2 0l.5.4c-.6.4-1.3.7-2 1l1.3 2a19.8 19.8 0 0 0 6-3c.5-5.2-.9-9.7-3.8-13.6ZM8.5 15.3c-1.2 0-2.2-1.1-2.2-2.4s1-2.4 2.2-2.4 2.2 1.1 2.2 2.4-1 2.4-2.2 2.4Zm7 0c-1.2 0-2.2-1.1-2.2-2.4s1-2.4 2.2-2.4 2.2 1.1 2.2 2.4-1 2.4-2.2 2.4Z"/></svg>`],
+  ];
+  function linkIcon(url: string): string {
+    for (const [re, svg] of LINK_ICONS) if (re.test(url)) return svg;
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/></svg>`;
+  }
+  function asLinks(v: unknown): { label: string; url: string }[] {
+    return Array.isArray(v) ? v.filter((l) => l && typeof l.url === "string" && /^https?:\/\//i.test(l.url)).slice(0, 8).map((l) => ({ label: String(l.label ?? "").slice(0, 40), url: String(l.url) })) : [];
+  }
+  function asGames(v: unknown): string[] {
+    return Array.isArray(v) ? v.filter((g) => typeof g === "string" && g.trim()).slice(0, 12).map((g) => g.slice(0, 60)) : [];
+  }
+  function asPlayed(v: unknown): { n: string; h: number }[] {
+    return Array.isArray(v) ? v.filter((g) => g && typeof g.n === "string").slice(0, 12).map((g) => ({ n: String(g.n).slice(0, 60), h: Number(g.h) || 0 })) : [];
+  }
+  // Link / game editing in the edit form.
+  function setLink(i: number, field: "label" | "url", value: string) {
+    if (!draft) return;
+    const links = [...(draft.links ?? [])];
+    links[i] = { ...(links[i] ?? { label: "", url: "" }), [field]: value };
+    draft = { ...draft, links };
+  }
+  function addLink() { if (draft && (draft.links ?? []).length < 8) draft = { ...draft, links: [...(draft.links ?? []), { label: "", url: "https://" }] }; }
+  function removeLink(i: number) { if (draft) draft = { ...draft, links: (draft.links ?? []).filter((_, j) => j !== i) }; }
+  let gameInput = $state("");
+  function addGame() {
+    const g = gameInput.trim();
+    if (!draft || !g || (draft.games ?? []).includes(g) || (draft.games ?? []).length >= 12) return;
+    draft = { ...draft, games: [...(draft.games ?? []), g] };
+    gameInput = "";
+  }
+  function removeGame(g: string) { if (draft) draft = { ...draft, games: (draft.games ?? []).filter((x) => x !== g) }; }
 
   async function logOut() {
     try {
@@ -144,8 +188,11 @@
     /** Favourite track (audio file) + its title. */
     music_url: string;
     music_title: string;
+    links: { label: string; url: string }[];
+    games: string[];
+    played: { n: string; h: number }[];
   }
-  let view = $derived<View | null>(buildView(activeUsername, $profile, $contacts, $info, $peerCards, $peerPresence, $myActivity));
+  let view = $derived<View | null>((void $played, buildView(activeUsername, $profile, $contacts, $info, $peerCards, $peerPresence, $myActivity)));
   // Which avatar image to show: the live draft when editing myself, else
   // the stored/served one.
   let shownAvatar = $derived(
@@ -195,6 +242,9 @@
         activity: getStore(shareActivity) ? myAct : [],
         music_url: me.music_ver ? (me.music_url ?? "") : "",
         music_title: me.music_title ?? "",
+        links: asLinks(me.links),
+        games: asGames(me.games),
+        played: getStore(shareActivity) ? playedTop(12).map((g) => ({ n: g.name, h: Math.round(g.secs / 360) / 10 })) : [],
       };
     }
     const c = getContact(uname);
@@ -223,6 +273,9 @@
       activity: pr?.activity ?? [],
       music_url: srv?.music ?? "",
       music_title: str(x.music_title),
+      links: asLinks(x.links),
+      games: asGames(x.games),
+      played: asPlayed(x.played),
     };
   }
 
@@ -299,7 +352,7 @@
     onclick={onBackdrop}
     onkeydown={(e) => { if (e.key === "Escape" || e.key === "Enter") closeProfile(); }}
   >
-    <div class="sheet" role="dialog" aria-modal="true" tabindex="-1">
+    <div class="sheet" class:wide={!editing && !privPage} role="dialog" aria-modal="true" tabindex="-1">
       <!-- Close stays put; banner + body scroll together, so the avatar is
            never clipped under the banner when the form is long. -->
       <button class="close" onclick={closeProfile} title={$t("Close (Esc)")}>×</button>
@@ -371,6 +424,27 @@
             <span>{$t("Birthday")}</span>
             <input bind:value={draft.birthday} placeholder={$t("15 March 1998")} />
           </label>
+          <div class="field">
+            <span>{$t("Links")}</span>
+            {#each draft.links ?? [] as l, i (i)}
+              <div class="link-edit">
+                <input class="le-label" value={l.label} placeholder={$t("Label")} oninput={(e) => setLink(i, "label", (e.target as HTMLInputElement).value)} />
+                <input class="le-url" value={l.url} placeholder="https://…" oninput={(e) => setLink(i, "url", (e.target as HTMLInputElement).value)} />
+                <button class="btn-ghost small" onclick={() => removeLink(i)} title={$t("Remove")}>×</button>
+              </div>
+            {/each}
+            {#if (draft.links ?? []).length < 8}<button class="btn-ghost small add-row" onclick={addLink}>+ {$t("Add link")}</button>{/if}
+          </div>
+          <div class="field">
+            <span>{$t("Favourite games")}</span>
+            <div class="game-chips">
+              {#each draft.games ?? [] as g (g)}<span class="game-chip" style:background={gameGradient(g)}>{g}<button onclick={() => removeGame(g)} title={$t("Remove")}>×</button></span>{/each}
+            </div>
+            <div class="link-edit">
+              <input class="le-url" bind:value={gameInput} placeholder={$t("Teardown, Minecraft…")} onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); addGame(); } }} />
+              <button class="btn-ghost small" onclick={addGame}>{$t("Add")}</button>
+            </div>
+          </div>
           <label class="field">
             <span>{$t("Favourite music")}</span>
             <input bind:value={draft.favourite_music} placeholder={$t("Pink Floyd, 2 Pac, Radiohead...")} />
@@ -439,6 +513,8 @@
             </div>
           {/each}
         {:else}
+        <div class="pf-grid">
+        <div class="pf-left">
           <h2 class="name">
             {view.display_name}
             {#if view.verified}<span class="badge" title={$t("Verified identity")}>{@html icons.verified}</span>{/if}
@@ -451,31 +527,25 @@
             <div class="status-line">{view.status}</div>
           {/if}
 
-          {#each view.activity.filter((a, i, all) => all.findIndex((b) => b.kind + b.name === a.kind + a.name) === i) as a (a.kind + a.name)}
-            <div class="act-card">
-              <div class="act-ic" data-k={a.kind}>{a.kind === "playing" ? "🎮" : a.kind === "listening" ? "🎧" : "📺"}</div>
-              <div class="np-info">
-                <div class="np-label">{activityVerb(a)}</div>
-                <div class="np-track"><b>{a.name}</b></div>
-                {#if activityLine(a)}<div class="act-line">{activityLine(a)}</div>{/if}
-              </div>
-            </div>
-          {/each}
-
-          {#if np}
-            <a class="np-card" href={np.url || undefined} target="_blank" rel="noopener" title={np.url ? "Open" : ""}>
-              <span class="np-ic">♪</span>
-              <div class="np-info">
-                <div class="np-label">{$t("Listening to")}</div>
-                <div class="np-track">{np.title}{#if np.artist} · {np.artist}{/if}</div>
-              </div>
-            </a>
-          {/if}
-
           {#if view.about}
             <section class="section">
               <div class="section-label">{$t("About me")}</div>
               <p class="section-body">{view.about}</p>
+            </section>
+          {/if}
+
+          {#if view.links.length}
+            <section class="section">
+              <div class="section-label">{$t("Links")}</div>
+              <div class="links">
+                {#each view.links as l, i (i)}
+                  <button class="link-row" onclick={() => api.openExternal(l.url).catch(() => {})} title={l.url}>
+                    <span class="link-ic">{@html linkIcon(l.url)}</span>
+                    <span class="link-txt">{l.label || hostOf(l.url)}</span>
+                    <span class="link-go">↗</span>
+                  </button>
+                {/each}
+              </div>
             </section>
           {/if}
 
@@ -493,23 +563,6 @@
             </section>
           {/if}
 
-          {#if view.music_url}
-            <section class="section">
-              <div class="section-label">{$t("Favourite track")}</div>
-              <div class="fav-track">
-                <MediaPlayer src={view.music_url} kind="audio" name={view.music_title || undefined} />
-                {#if view.music_title}<div class="fav-title">{view.music_title}</div>{/if}
-              </div>
-            </section>
-          {/if}
-
-          {#if view.favourite_music}
-            <section class="section">
-              <div class="section-label">{$t("Favourite music")}</div>
-              <p class="section-body">{view.favourite_music}</p>
-            </section>
-          {/if}
-
           {#if view.fingerprint}
             <section class="section">
               <div class="section-label">{$t("Session fingerprint")}</div>
@@ -519,7 +572,7 @@
 
           <div class="buttons">
             {#if isMe}
-              <button class="btn-primary" onclick={startEdit}>{$t("Edit profile")}</button>
+              <button class="btn-primary" onclick={startEdit}>{$t("Edit my profile")}</button>
               <button class="btn-ghost danger" onclick={logOut}>{$t("Log out")}</button>
             {:else}
               <button class="btn-ghost danger" onclick={() => setBlocked(activeUsername, !$blocked.has(activeUsername))}>
@@ -531,6 +584,98 @@
               <button class="btn-primary" onclick={startContactEdit}>{$t("Edit contact")}</button>
             {/if}
           </div>
+        </div>
+
+        <div class="pf-right">
+          <div class="pf-tabs" role="tablist">
+            <button role="tab" class:on={pfTab === "board"} aria-selected={pfTab === "board"} onclick={() => (pfTab = "board")}>{$t("Board")}</button>
+            <button role="tab" class:on={pfTab === "activity"} aria-selected={pfTab === "activity"} onclick={() => (pfTab = "activity")}>{$t("Activity")}</button>
+          </div>
+
+          {#if pfTab === "board"}
+            {#each view.activity.filter((a, i, all) => all.findIndex((b) => b.kind + b.name === a.kind + a.name) === i) as a (a.kind + a.name)}
+              <div class="act-card">
+                <div class="act-ic" data-k={a.kind}>{a.kind === "playing" ? "🎮" : a.kind === "listening" ? "🎧" : "📺"}</div>
+                <div class="np-info">
+                  <div class="np-label">{activityVerb(a)}</div>
+                  <div class="np-track"><b>{a.name}</b></div>
+                  {#if activityLine(a)}<div class="act-line">{activityLine(a)}</div>{/if}
+                </div>
+              </div>
+            {/each}
+
+            {#if np}
+              <a class="np-card" href={np.url || undefined} target="_blank" rel="noopener" title={np.url ? "Open" : ""}>
+                <span class="np-ic">♪</span>
+                <div class="np-info">
+                  <div class="np-label">{$t("Listening to")}</div>
+                  <div class="np-track">{np.title}{#if np.artist} · {np.artist}{/if}</div>
+                </div>
+              </a>
+            {/if}
+
+            {#if view.music_url}
+              <section class="card">
+                <div class="section-label">{$t("Favourite track")}</div>
+                <div class="fav-track">
+                  <MediaPlayer src={view.music_url} kind="audio" name={view.music_title || undefined} />
+                  {#if view.music_title}<div class="fav-title">{view.music_title}</div>{/if}
+                </div>
+              </section>
+            {/if}
+
+            {#if view.games.length || view.played.length}
+              <section class="card">
+                <div class="section-label">{$t("Game collection")}</div>
+                <div class="games">
+                  {#each [...new Set([...view.games, ...view.played.map((g) => g.n)])].slice(0, 12) as g (g)}
+                    {@const pl = view.played.find((x) => x.n === g)}
+                    <div class="game" style:background={gameGradient(g)} title={g}>
+                      <span class="game-name">{g}</span>
+                      {#if pl && pl.h > 0}<span class="game-h">{pl.h} {$t("h")}</span>{/if}
+                      {#if view.games.includes(g)}<span class="game-fav" title={$t("Favourite")}>★</span>{/if}
+                    </div>
+                  {/each}
+                </div>
+              </section>
+            {/if}
+
+            {#if view.favourite_music}
+              <section class="card">
+                <div class="section-label">{$t("Favourite music")}</div>
+                <p class="section-body">{view.favourite_music}</p>
+              </section>
+            {/if}
+
+            {#if !view.activity.length && !np && !view.music_url && !view.games.length && !view.played.length && !view.favourite_music}
+              <div class="pf-empty">{isMe ? $t("Add a favourite track, games and links in “Edit profile”.") : $t("Nothing here yet.")}</div>
+            {/if}
+          {:else}
+            {#each view.activity as a (a.kind + a.name)}
+              <div class="act-card">
+                <div class="act-ic" data-k={a.kind}>{a.kind === "playing" ? "🎮" : a.kind === "listening" ? "🎧" : "📺"}</div>
+                <div class="np-info">
+                  <div class="np-label">{$t("Now")} · {activityVerb(a)}</div>
+                  <div class="np-track"><b>{a.name}</b></div>
+                  {#if activityLine(a)}<div class="act-line">{activityLine(a)}</div>{/if}
+                </div>
+              </div>
+            {/each}
+            {#if view.played.length}
+              <div class="section-label" style="margin-top:10px">{$t("Played recently")}</div>
+              {#each view.played as g (g.n)}
+                <div class="played-row">
+                  <span class="played-cover" style:background={gameGradient(g.n)}>{g.n.charAt(0).toUpperCase()}</span>
+                  <span class="played-name">{g.n}</span>
+                  <span class="played-h">{g.h > 0 ? `${g.h} ${$t("h")}` : $t("< 1 h")}</span>
+                </div>
+              {/each}
+            {:else if !view.activity.length}
+              <div class="pf-empty">{isMe ? $t("Games you play show up here automatically (with activity sharing on).") : $t("No activity to show.")}</div>
+            {/if}
+          {/if}
+        </div>
+        </div>
         {/if}
       </div>
       </div>
@@ -539,6 +684,56 @@
 {/if}
 
 <style>
+  /* Wide, two-column profile (view mode) */
+  .sheet.wide { width: min(880px, 96vw) !important; }
+  .pf-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 22px; align-items: start; }
+  .pf-left { min-width: 0; }
+  .pf-right { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+  @media (max-width: 760px) { .pf-grid { grid-template-columns: 1fr; } }
+  .pf-tabs { display: flex; gap: 18px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+  .pf-tabs button {
+    border: none; background: none; padding: 8px 0; cursor: pointer; font-size: 13.5px; font-weight: 600;
+    color: var(--fg-dim); border-bottom: 2px solid transparent; margin-bottom: -1px;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .pf-tabs button.on { color: var(--fg); border-bottom-color: var(--accent); }
+  .card { padding: 12px; border-radius: 12px; background: var(--bg-input); border: 1px solid var(--border); }
+  .pf-empty { font-size: 12.5px; color: var(--fg-dim); padding: 18px 4px; text-align: center; }
+  .links { display: flex; flex-direction: column; gap: 2px; }
+  .link-row {
+    display: flex; align-items: center; gap: 10px; padding: 7px 8px; border: none; border-radius: 8px;
+    background: none; color: var(--fg); cursor: pointer; text-align: left; font-size: 13px;
+    transition: background 0.12s;
+  }
+  .link-row:hover { background: var(--bg-input); }
+  .link-ic { width: 18px; height: 18px; flex-shrink: 0; color: var(--fg-muted); display: grid; place-items: center; }
+  .link-ic :global(svg) { width: 18px; height: 18px; }
+  .link-txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .link-go { color: var(--fg-dim); font-size: 12px; }
+  .games { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; margin-top: 8px; }
+  .game {
+    position: relative; aspect-ratio: 3 / 4; border-radius: 10px; padding: 8px;
+    display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden;
+    color: #fff; box-shadow: inset 0 -40px 40px -20px rgba(0, 0, 0, 0.55);
+    transition: transform 0.15s ease;
+  }
+  .game:hover { transform: translateY(-2px); }
+  .game-name { font-size: 12px; font-weight: 700; line-height: 1.2; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6); }
+  .game-h { font-size: 10.5px; opacity: 0.85; }
+  .game-fav { position: absolute; top: 6px; right: 7px; font-size: 12px; color: #FFD45C; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5); }
+  .played-row { display: flex; align-items: center; gap: 10px; padding: 6px 2px; font-size: 13px; }
+  .played-cover { width: 34px; height: 34px; border-radius: 8px; display: grid; place-items: center; color: #fff; font-weight: 800; flex-shrink: 0; }
+  .played-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .played-h { color: var(--fg-dim); font-size: 12px; }
+  .link-edit { display: flex; gap: 6px; margin-top: 6px; }
+  .link-edit input { min-width: 0; }
+  .le-label { flex: 0 0 34%; }
+  .le-url { flex: 1; }
+  .add-row { margin-top: 6px; align-self: flex-start; }
+  .game-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .game-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 4px 3px 10px; border-radius: 999px; color: #fff; font-size: 12px; font-weight: 600; }
+  .game-chip button { border: none; background: rgba(0, 0, 0, 0.25); color: #fff; width: 18px; height: 18px; border-radius: 50%; cursor: pointer; line-height: 1; }
+
   .backdrop {
     position: fixed; inset: 0;
     background: rgba(6, 7, 12, 0.6);
