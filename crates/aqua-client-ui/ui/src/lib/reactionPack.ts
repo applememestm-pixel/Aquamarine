@@ -65,9 +65,12 @@ export const emojiPacks = writable<EmojiPack[]>([]);
 export async function loadEmojiPacks(): Promise<void> {
   try {
     const lib = await api.listLocalMedia();
+    const seen = new Set<string>();
     emojiPacks.set(
       lib.packs
         .filter((p) => p.source && p.source !== REACTION_PACK && (p.kind === "emoji" || p.items.length))
+        // The same Telegram pack imported into two folders: list it once.
+        .filter((p) => !seen.has(p.source!) && !!seen.add(p.source!))
         .map((p) => ({
           name: p.source!,
           title: p.title,
@@ -144,11 +147,13 @@ function fromLibraryItems(items: StickerItem[]): ReactionItem[] {
 
 const TRIED_KEY = "aqua.reactionPack.autoImportTried";
 
+let bundledMissing = false;
 export async function loadReactionPack(): Promise<void> {
   void loadEmojiPacks();
-  // 1. Bundled with the app build.
-  try {
+  // 1. Bundled with the app build (checked once — it can't appear later).
+  if (!bundledMissing) try {
     const res = await fetch(`/reactions/${REACTION_PACK}/manifest.json`);
+    if (!res.ok) bundledMissing = true;
     if (res.ok) {
       const m = (await res.json()) as { files: { file: string; emoji: string; mime: string }[] };
       if (m.files?.length) {

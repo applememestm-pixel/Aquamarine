@@ -451,7 +451,7 @@
             <div class="status-line">{view.status}</div>
           {/if}
 
-          {#each view.activity as a (a.kind + a.name)}
+          {#each view.activity.filter((a, i, all) => all.findIndex((b) => b.kind + b.name === a.kind + a.name) === i) as a (a.kind + a.name)}
             <div class="act-card">
               <div class="act-ic" data-k={a.kind}>{a.kind === "playing" ? "🎮" : a.kind === "listening" ? "🎧" : "📺"}</div>
               <div class="np-info">

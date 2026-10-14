@@ -237,10 +237,42 @@ pub fn path_is_within(allowed_root: &Path, candidate: &Path) -> bool {
 
 // ---------- Scanning ------------------------------------------------------
 
+/// Stable short hash of a folder name (FNV-1a), for telling apart packs
+/// whose names slugify the same ("My stickers" / "my-stickers") or to
+/// nothing at all (Cyrillic, emoji).
+fn short_hash(s: &str) -> String {
+    let mut h: u32 = 0x811c9dc5;
+    for b in s.bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x01000193);
+    }
+    format!("{h:08x}")
+}
+
+/// A pack id slug that is unique within `used`. Plain ASCII names keep
+/// their old slug, so tokens like `[ce:cats/1.webp]` stay valid.
+fn unique_slug(title: &str, used: &mut std::collections::HashSet<String>) -> String {
+    let base = slugify(title);
+    let slug = if !base.is_empty() && !used.contains(&base) {
+        base
+    } else if base.is_empty() {
+        format!("p-{}", short_hash(title))
+    } else {
+        format!("{base}-{}", short_hash(title))
+    };
+    used.insert(slug.clone());
+    slug
+}
+
 fn scan_sticker_packs(dir: &Path) -> Vec<StickerPack> {
     let mut packs = Vec::new();
     let Ok(entries) = fs::read_dir(dir) else { return packs };
-    for entry in entries.flatten() {
+    // Sorted first, so which of two clashing names keeps the plain slug
+    // never changes between scans.
+    let mut entries: Vec<_> = entries.flatten().collect();
+    entries.sort_by_key(|e| e.file_name());
+    let mut used = std::collections::HashSet::new();
+    for entry in entries {
         let pack_dir = entry.path();
         if !pack_dir.is_dir() {
             continue;
@@ -253,14 +285,15 @@ fn scan_sticker_packs(dir: &Path) -> Vec<StickerPack> {
         if title.is_empty() || title.starts_with('.') {
             continue;
         }
-        let items = scan_sticker_items(&pack_dir, &title);
+        let slug = unique_slug(&title, &mut used);
+        let items = scan_sticker_items(&pack_dir, &slug);
         if items.is_empty() {
             continue;
         }
         let meta = read_pack_meta(&pack_dir);
         let kind = if meta.kind.as_deref() == Some("custom_emoji") { "emoji" } else { "sticker" };
         packs.push(StickerPack {
-            id: format!("pack:{}", slugify(&title)),
+            id: format!("pack:{slug}"),
             title,
             kind: kind.into(),
             source: meta.name,
@@ -271,7 +304,7 @@ fn scan_sticker_packs(dir: &Path) -> Vec<StickerPack> {
     packs
 }
 
-fn scan_sticker_items(pack_dir: &Path, pack_title: &str) -> Vec<StickerItem> {
+fn scan_sticker_items(pack_dir: &Path, pack_slug: &str) -> Vec<StickerItem> {
     let mut out = Vec::new();
     let Ok(entries) = fs::read_dir(pack_dir) else { return out };
     for entry in entries.flatten() {
@@ -287,7 +320,7 @@ fn scan_sticker_items(pack_dir: &Path, pack_title: &str) -> Vec<StickerItem> {
         let (emoji, _display) = parse_emoji_prefix(filename);
         let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         out.push(StickerItem {
-            id: format!("pack:{}:{}", slugify(pack_title), filename),
+            id: format!("pack:{pack_slug}:{filename}"),
             path: path.display().to_string(),
             emoji,
             mime,
@@ -390,6 +423,27 @@ mod tests {
         assert!(td.path().join("stickers/README.md").is_file());
         assert!(td.path().join("gifs").is_dir());
         assert!(td.path().join("gifs/README.md").is_file());
+    }
+
+    #[test]
+    fn pack_ids_are_unique() {
+        let td = tempdir().unwrap();
+        ensure_dirs(td.path());
+        for name in ["My stickers", "my-stickers", "Котики", "Собачки", "cats"] {
+            let pack = td.path().join("stickers").join(name);
+            fs::create_dir_all(&pack).unwrap();
+            fs::write(pack.join("a.png"), b"\x89PNG\r\n").unwrap();
+        }
+        let list = scan(td.path());
+        let ids: std::collections::HashSet<_> = list.packs.iter().map(|p| p.id.clone()).collect();
+        assert_eq!(ids.len(), 5, "{:?}", list.packs.iter().map(|p| &p.id).collect::<Vec<_>>());
+        let items: std::collections::HashSet<_> = list.packs.iter().flat_map(|p| p.items.iter().map(|i| i.id.clone())).collect();
+        assert_eq!(items.len(), 5);
+        // Plain ASCII names keep their old ids.
+        assert!(ids.contains("pack:cats"));
+        // Stable between scans.
+        let again: Vec<_> = scan(td.path()).packs.into_iter().map(|p| p.id).collect();
+        assert_eq!(again, list.packs.iter().map(|p| p.id.clone()).collect::<Vec<_>>());
     }
 
     #[test]

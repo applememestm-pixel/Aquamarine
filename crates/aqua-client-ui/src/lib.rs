@@ -40,7 +40,18 @@ pub fn run() -> Result<()> {
         }
     });
     builder
-        .plugin(tauri_plugin_log::Builder::default().build())
+        // Info by default (the plugin's default is Trace: every WebSocket
+        // read and keyring call). AQUA_LOG=debug|trace for more.
+        .plugin(
+            tauri_plugin_log::Builder::default()
+                .level(match std::env::var("AQUA_LOG").as_deref() {
+                    Ok("trace") => log::LevelFilter::Trace,
+                    Ok("debug") => log::LevelFilter::Debug,
+                    Ok("warn") => log::LevelFilter::Warn,
+                    _ => log::LevelFilter::Info,
+                })
+                .build(),
+        )
         .setup(|app| {
             // Priority: AQUA_DATA_DIR env var > OS app-data dir > temp dir.
             // The env var is how you run two independent clients on the

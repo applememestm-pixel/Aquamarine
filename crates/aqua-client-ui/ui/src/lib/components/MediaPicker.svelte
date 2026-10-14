@@ -196,7 +196,16 @@
   });
 
   const gifs = $derived((catalogue?.gifs ?? []).filter((g) => !terms.length || matchWords(g.name.toLowerCase())));
-  const sections = $derived(tab === "emoji" ? emojiSections : tab === "stickers" ? stickerSections : []);
+  /** Keyed lists must never repeat a key (Svelte throws and the picker
+   *  stops updating) — drop repeats instead. */
+  function uniq<T>(list: T[], key: (x: T) => string): T[] {
+    const seen = new Set<string>();
+    return list.filter((x) => { const k = key(x); if (seen.has(k)) return false; seen.add(k); return true; });
+  }
+  const sections = $derived(
+    uniq(tab === "emoji" ? emojiSections : tab === "stickers" ? stickerSections : [], (s) => s.id)
+      .map((s) => ({ ...s, items: uniq(s.items, (it) => it.key) })),
+  );
 
   // ---- actions ----
   function pick(it: EItem | SItem) {
@@ -328,7 +337,7 @@
       .catch((e) => { srv = null; srvState = /404|not found/i.test(String(e)) ? "old" : "offline"; });
   }
   let serverOnly = $derived(
-    (srv?.packs ?? []).filter((p) => !(catalogue?.packs ?? []).some((c) => c.source === p.name || c.title === p.title)),
+    uniq(srv?.packs ?? [], (p) => p.name).filter((p) => !(catalogue?.packs ?? []).some((c) => c.source === p.name || c.title === p.title)),
   );
   async function doImport(link?: string) {
     const token = tgToken.trim(), pack = (link ?? tgPack).trim();

@@ -621,7 +621,7 @@
       <section class="group">
         <div class="label">{$t("Reactions")}</div>
         <div class="rp-row">
-          {#each quickReactions($reactionPack.items) as r (r)}
+          {#each [...new Set(quickReactions($reactionPack.items))] as r (r)}
             {@const ru = reactionUrl(r, $reactionPack.items)}
             <span class="rp-cell">{#if ru}<AnimatedMedia src={ru.url} mime={ru.mime} alt={parseReaction(r).emoji} play="auto" />{:else}{r}{/if}</span>
           {/each}

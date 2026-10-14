@@ -1036,8 +1036,12 @@
     // minute starts a fresh block with a little breathing room.
     const sameGroup = (a: ChatMessage, fromPrev: string | null, timePrev: string | null) =>
       a.from === fromPrev && a.time === timePrev;
+    const ids = new Set<string>();
     for (let i = 0; i < msgs.length; i++) {
       const m = msgs[i];
+      // A repeated id would break the keyed list for the whole chat.
+      if (ids.has(m.id)) continue;
+      ids.add(m.id);
       if (m.kind.type === "system" || m.kind.type === "date_separator") {
         out.push(rowOf(m, false, false, false));
         prevFrom = null;
@@ -2207,10 +2211,10 @@
           {#if reactAll && $emojiPacks.length}
             <div class="react-tabs">
               <button class:on={!reactTab} onclick={() => (reactTab = "")}>El Taller</button>
-              {#each $emojiPacks as p (p.name)}<button class:on={reactTab === p.name} onclick={() => (reactTab = p.name)} title={p.title}>{p.title}</button>{/each}
+              {#each $emojiPacks.filter((p, i, all) => all.findIndex((q) => q.name === p.name) === i) as p (p.name)}<button class:on={reactTab === p.name} onclick={() => (reactTab = p.name)} title={p.title}>{p.title}</button>{/each}
             </div>
           {/if}
-          {#each filterReactions(reactTokens) as r (r)}
+          {#each [...new Set(filterReactions(reactTokens))] as r (r)}
             {@const ru = reactionUrl(r, $reactionPack.items)}
             <button class="ctx-emoji" class:pack={!!ru} onclick={() => reactTo(row, r)} title={`React ${parseReaction(r).emoji}`}>
               {#if ru}<AnimatedMedia src={ru.url} mime={ru.mime} alt={parseReaction(r).emoji} play={reactAll ? "hover" : "auto"} />{:else}{r}{/if}
