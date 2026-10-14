@@ -291,6 +291,50 @@ pub async fn admin_set(
     Ok(Json(TokenView { source: token_source(), has_token: bot_token().is_some(), packs: list_manifests().len() }))
 }
 
+/// First start without a Telegram token: ask for one in the terminal, so
+/// sticker / emoji import works for everyone without any user ever
+/// seeing a token. Enter skips; AQUA_TG_PROMPT=0 turns the question off.
+/// Runs before the server starts (plain blocking stdin).
+pub fn prompt_for_token_if_missing() {
+    use std::io::{BufRead, IsTerminal, Write};
+    if bot_token().is_some()
+        || std::env::var("AQUA_TG_PROMPT").map(|v| v == "0" || v == "off").unwrap_or(false)
+        || !std::io::stdin().is_terminal()
+    {
+        return;
+    }
+    println!();
+    println!("  Stickers & emoji from Telegram");
+    println!("  ------------------------------");
+    println!("  With a Telegram bot token this server downloads sticker and emoji");
+    println!("  packs for everyone — users just paste a t.me/addstickers/… link.");
+    println!("  Get one from @BotFather in Telegram (/newbot), it looks like 123456:ABC…");
+    println!("  It is saved to {TOKEN_FILE} in the folder the server runs from; change it");
+    println!("  later in the admin panel. Press Enter to skip.");
+    loop {
+        print!("  Bot token: ");
+        let _ = std::io::stdout().flush();
+        let mut line = String::new();
+        if std::io::stdin().lock().read_line(&mut line).is_err() {
+            return;
+        }
+        let t = line.trim();
+        if t.is_empty() {
+            println!("  Skipped — stickers can't be imported until a token is set.\n");
+            return;
+        }
+        if !t.contains(':') {
+            println!("  That doesn't look like a bot token (123456:ABC…). Try again or press Enter.");
+            continue;
+        }
+        match std::fs::write(TOKEN_FILE, serde_json::to_vec_pretty(&TokenFile { token: t.to_string() }).unwrap_or_default()) {
+            Ok(()) => println!("  Saved. Default packs will download in the background.\n"),
+            Err(e) => println!("  Could not save {TOKEN_FILE}: {e}\n"),
+        }
+        return;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

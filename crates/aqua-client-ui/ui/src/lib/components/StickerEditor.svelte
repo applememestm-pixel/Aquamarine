@@ -61,28 +61,34 @@
   });
 
   // Live preview of the cropped sticker (square area, image contained).
-  $effect(() => {
-    if (!canvasEl || !img || !imgUrl) return;
+  // `loaded` bumps when the source image finishes decoding — before that
+  // drawImage paints nothing, which is how blank stickers got saved.
+  let loaded = $state(0);
+  function draw(): boolean {
+    if (!canvasEl || !img || !img.complete || !img.naturalWidth) return false;
     const ctx = canvasEl.getContext("2d");
-    if (!ctx) return;
-    canvasEl.width = CANVAS_SIZE;
-    canvasEl.height = CANVAS_SIZE;
+    if (!ctx) return false;
+    if (canvasEl.width !== CANVAS_SIZE) canvasEl.width = CANVAS_SIZE;
+    if (canvasEl.height !== CANVAS_SIZE) canvasEl.height = CANVAS_SIZE;
     ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
     const iw = img.naturalWidth, ih = img.naturalHeight;
     // Fit image into the canvas by its longest side at scale=1.
-    const baseScale = CANVAS_SIZE / Math.max(iw, ih);
-    const s = baseScale * scale;
+    const s = (CANVAS_SIZE / Math.max(iw, ih)) * scale;
     const w = iw * s;
     const h = ih * s;
-    const cx = (CANVAS_SIZE - w) / 2 + offsetX;
-    const cy = (CANVAS_SIZE - h) / 2 + offsetY;
-    ctx.drawImage(img, cx, cy, w, h);
+    ctx.drawImage(img, (CANVAS_SIZE - w) / 2 + offsetX, (CANVAS_SIZE - h) / 2 + offsetY, w, h);
+    return true;
+  }
+  $effect(() => {
+    void loaded; void scale; void offsetX; void offsetY; void imgUrl;
+    draw();
   });
 
   async function save() {
     const s = $stickerEditorState;
     if (!s || !canvasEl) return;
     if (!packName.trim() || !stickerName.trim()) { showToast(tr("Pack and name required")); return; }
+    if (!draw()) { showToast(tr("The picture is still loading — try again in a moment")); return; }
     processing = true;
     try {
       const blob: Blob = await new Promise((res, rej) =>
@@ -127,7 +133,7 @@
       <div class="body">
         {#if imgUrl}
           <!-- off-canvas image used as the draw source -->
-          <img bind:this={img} src={imgUrl} alt="" class="hidden" onload={() => (scale = scale)} />
+          <img bind:this={img} src={imgUrl} alt="" class="hidden" onload={() => loaded++} />
         {/if}
         <div class="stage">
           <canvas bind:this={canvasEl}></canvas>

@@ -310,12 +310,22 @@
   try { tgToken = localStorage.getItem(TG_TOKEN_KEY) ?? ""; } catch { /* ignore */ }
   /** The relay can import packs itself (its admin set a bot token). */
   let srv = $state<{ telegram: boolean; packs: { name: string; title: string; type: string; count: number }[] } | null>(null);
-  let showTokenField = $derived(!srv?.telegram);
+  /** "loading" until the relay answers, "old" if it has no packs API. */
+  let srvState = $state<"loading" | "ok" | "old" | "offline">("loading");
+  /** Users never need a token — unless they opt into their own (the relay
+   *  isn't set up). Someone who already saved one keeps using it. */
+  let ownToken = $state(false);
+  try { ownToken = !!localStorage.getItem(TG_TOKEN_KEY); } catch { /* ignore */ }
+  let relayCan = $derived(srvState === "ok" && !!srv?.telegram);
+  let showTokenField = $derived(srvState !== "loading" && !relayCan && ownToken);
   function openImport(prefill = "") {
     menuOpen = false;
     showImport = true;
     tgPack = prefill;
-    void api.serverPacks().then((r) => { srv = r ?? null; }).catch(() => { srv = null; });
+    srvState = "loading";
+    void api.serverPacks()
+      .then((r) => { srv = r ?? null; srvState = r ? "ok" : "old"; })
+      .catch((e) => { srv = null; srvState = /404|not found/i.test(String(e)) ? "old" : "offline"; });
   }
   let serverOnly = $derived(
     (srv?.packs ?? []).filter((p) => !(catalogue?.packs ?? []).some((c) => c.source === p.name || c.title === p.title)),
@@ -323,12 +333,13 @@
   async function doImport(link?: string) {
     const token = tgToken.trim(), pack = (link ?? tgPack).trim();
     if (!pack) { showToast(tr("Paste a t.me/addstickers/… or t.me/addemoji/… link.")); return; }
-    if (!srv?.telegram && !token) { showToast(tr("Enter a Telegram bot token first (from @BotFather).")); return; }
+    if (!relayCan && !ownToken) { showToast(tr("Your server can't download packs yet — its admin enters a Telegram bot token once (when the server starts or in the server panel).")); return; }
+    if (!relayCan && !token) { showToast(tr("Enter a Telegram bot token first (from @BotFather).")); return; }
     importing = true;
     try {
       // Through the relay when it can (no token needed here), else directly.
-      const r = srv?.telegram ? await api.importPackViaServer(pack) : await api.importTelegramStickers(token, pack);
-      if (!srv?.telegram) { try { localStorage.setItem(TG_TOKEN_KEY, token); } catch { /* ignore */ } }
+      const r = relayCan ? await api.importPackViaServer(pack) : await api.importTelegramStickers(token, pack);
+      if (!relayCan) { try { localStorage.setItem(TG_TOKEN_KEY, token); } catch { /* ignore */ } }
       await refreshCatalogue();
       if (/eltaller47/i.test(pack)) await loadReactionPack();
       void loadEmojiPacks();
@@ -444,8 +455,18 @@
             {/each}
           </div>
         {/if}
+        {#if srvState !== "loading" && !relayCan && !ownToken}
+          <div class="imp-note">
+            {srvState === "offline"
+              ? $t("Not connected to a server — connect first, or use your own bot token.")
+              : srvState === "old"
+              ? $t("This server is an older version that can't download packs. Update aqua-server — then it asks for a Telegram bot token once at start, and everyone just pastes links.")
+              : $t("Your server can't download packs yet: its admin enters a Telegram bot token once — when the server starts, or in the server panel → “Stickers & emoji from Telegram”.")}
+            <button class="imp-own" onclick={() => (ownToken = true)}>{$t("Use my own bot token instead")}</button>
+          </div>
+        {/if}
         <div class="imp-foot">
-          <span class="imp-hint">{srv?.telegram ? $t("Just paste the link — your server downloads the pack once for everyone.") : $t("Works for sticker packs and premium emoji packs, no Telegram Premium needed. The token only talks to Telegram.")}</span>
+          <span class="imp-hint">{relayCan ? $t("Just paste the link — your server downloads the pack once for everyone.") : showTokenField ? $t("Works for sticker packs and premium emoji packs, no Telegram Premium needed. The token only talks to Telegram.") : ""}</span>
           <button class="imp-close" onclick={() => (showImport = false)}>{$t("Close")}</button>
         </div>
       </div>
@@ -605,6 +626,17 @@
   .imp-foot .imp-hint { flex: 1; }
   .imp-close { flex: 0 0 auto; height: 26px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--border); background: transparent; color: var(--fg-muted); font-size: 11.5px; font-weight: 600; cursor: pointer; }
   .imp-close:hover { color: var(--fg); background: var(--bg-hover); }
+  .imp-note {
+    font-size: 11.5px; line-height: 1.45; color: var(--fg-muted);
+    padding: 8px 10px; border-radius: 8px;
+    background: color-mix(in srgb, var(--accent) 7%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+  .imp-own {
+    display: block; margin-top: 4px; padding: 0; border: none; background: none;
+    color: var(--accent); font-size: 11.5px; font-weight: 600; cursor: pointer;
+  }
+  .imp-own:hover { text-decoration: underline; }
   .imp-srv { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
   .imp-srv-t { font-size: 10.5px; font-weight: 700; color: var(--fg-dim); text-transform: uppercase; letter-spacing: 0.04em; margin-right: 2px; }
   .imp-chip { border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--fg); font-size: 11.5px; padding: 3px 9px; cursor: pointer; }

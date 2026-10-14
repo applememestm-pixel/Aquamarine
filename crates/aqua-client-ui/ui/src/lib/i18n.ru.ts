@@ -1050,4 +1050,10 @@ export const RU: Record<string, string> = {
   "It asks for the token with hidden input. Commands: /to <user>, /who, /room, /quit. Bot chats are not end-to-end encrypted.": "Токен спрашивается скрытым вводом. Команды: /to <user>, /who, /room, /quit. Чаты с ботами не шифруются сквозным шифрованием.",
   "HTTP API for your own bots": "HTTP API для своих ботов",
   "Users start a bot by searching its @username; the first message is /start.": "Пользователи находят бота по @имени; первое сообщение — /start.",
+  "Your server can't download packs yet — its admin enters a Telegram bot token once (when the server starts or in the server panel).": "Сервер пока не умеет скачивать паки — его админ один раз вводит токен Telegram-бота (при запуске сервера или в панели сервера).",
+  "This server is an older version that can't download packs. Update aqua-server — then it asks for a Telegram bot token once at start, and everyone just pastes links.": "Это старая версия сервера, она не умеет скачивать паки. Обновите aqua-server — он один раз спросит токен Telegram-бота при запуске, а дальше все просто вставляют ссылки.",
+  "Your server can't download packs yet: its admin enters a Telegram bot token once — when the server starts, or in the server panel → “Stickers & emoji from Telegram”.": "Сервер пока не умеет скачивать паки: его админ один раз вводит токен Telegram-бота — при запуске сервера или в панели сервера → «Стикеры и эмодзи из Telegram».",
+  "Use my own bot token instead": "Использовать свой токен бота",
+  "Not connected to a server — connect first, or use your own bot token.": "Нет подключения к серверу — подключитесь или используйте свой токен бота.",
+  "The picture is still loading — try again in a moment": "Картинка ещё загружается — попробуйте через секунду",
 };

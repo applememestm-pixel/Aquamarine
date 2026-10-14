@@ -44,6 +44,9 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    // No Telegram token yet? Ask once, right here in the terminal.
+    aqua_server::packs::prompt_for_token_if_missing();
+
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let local = format!("http://127.0.0.1:{}", addr.port());
     let panel = token.as_ref().map(|t| format!("{local}/admin#token={t}"));

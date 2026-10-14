@@ -138,8 +138,8 @@ export const api = {
     invoke("send_control", { peerId: peer_id, payload }),
 
   // Local media (stickers + GIFs)
-  sendSticker:        (peer_id: string, path: string): Promise<AttachResult>       => invoke("send_sticker", { peerId: peer_id, path }),
-  sendGif:            (peer_id: string, path: string): Promise<AttachResult>       => invoke("send_gif", { peerId: peer_id, path }),
+  sendSticker:        (peer_id: string, path: string): Promise<AttachResult>       => invoke("send_sticker", { peerId: peer_id, filePath: path }),
+  sendGif:            (peer_id: string, path: string): Promise<AttachResult>       => invoke("send_gif", { peerId: peer_id, filePath: path }),
   listLocalMedia:     (): Promise<LocalMediaList>                                  => invoke("list_local_media"),
   readMediaBytes:     (path: string): Promise<number[]>                            => invoke("read_media_bytes", { path }),
   readUserFont:       (path: string): Promise<number[]>                            => invoke("read_user_font", { path }),
