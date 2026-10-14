@@ -61,6 +61,7 @@ async fn main() -> anyhow::Result<()> {
     aqua_server::packs::spawn_default_imports();
     let state = AppState::new();
     state.blobs.spawn_sweeper();
+    aqua_server::fed::spawn_sync(state.clone());
     axum::serve(listener, app(state)).await?;
     Ok(())
 }

@@ -78,6 +78,7 @@ export const api = {
   verifyEmailCode:    (server_url: string, email: string, code: string): Promise<string> => invoke("verify_email_code", { serverUrl: server_url, email, code }),
   registerAccount:    (server_url: string, username: string, ticket: string, display_name: string, about: string, phone: string, password?: string, email?: string): Promise<void> => invoke("register_account", { serverUrl: server_url, username, ticket, displayName: display_name, about, phone, password: password || null, email: email || null }),
   loginAccount:       (server_url: string, ticket: string, password: string, email?: string): Promise<string> => invoke("login_account", { serverUrl: server_url, ticket, password, email: email || null }),
+  fedPeers:           (server_url: string): Promise<{ federated: boolean; self?: string; servers: string[] }> => invoke("fed_peers", { serverUrl: server_url }),
   backupStatus:       (): Promise<BackupStatus> => invoke("backup_status"),
   backupEnable:       (password: string): Promise<string> => invoke("backup_enable", { password }),
   backupPhrase:       (): Promise<string | null> => invoke("backup_phrase"),

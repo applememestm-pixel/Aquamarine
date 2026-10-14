@@ -331,6 +331,18 @@ pub async fn register_account(
     .map_err(|e| e.to_string())
 }
 
+/// Federated relays: `{ federated, self, servers }` from GET /v1/fed/peers.
+#[tauri::command]
+pub async fn fed_peers(server_url: String) -> Result<serde_json::Value, String> {
+    let url = format!("{}/v1/fed/peers", server_url.trim_end_matches('/'));
+    let http = reqwest::Client::builder().timeout(std::time::Duration::from_secs(6)).build().map_err(|e| e.to_string())?;
+    let r = http.get(url).send().await.map_err(|e| e.to_string())?;
+    if !r.status().is_success() {
+        return Ok(serde_json::json!({ "federated": false, "servers": [] }));
+    }
+    r.json().await.map_err(|e| e.to_string())
+}
+
 /// Sign in to an existing account on this device (email ticket + password).
 /// Returns the username; the UI then connects and completes registration
 /// locally, exactly like after sign-up.

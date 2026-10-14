@@ -91,6 +91,26 @@ pub struct Directory {
     recent: Mutex<std::collections::VecDeque<(String, String, u64)>>,
 }
 
+/// One account row as relays exchange it (password = the stored hash).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FedUser {
+    pub username: String,
+    pub identity_dh: String,
+    pub email: Option<String>,
+    pub display_name: String,
+    pub about: String,
+    pub phone: String,
+    pub is_bot: bool,
+    pub created_at: i64,
+    pub extra: String,
+    pub avatar_ver: i64,
+    pub banner_ver: i64,
+    pub media_acl: String,
+    pub password: String,
+    pub music_ver: i64,
+    pub updated_at: i64,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum DirError {
     #[error("database error: {0}")]
@@ -233,7 +253,7 @@ impl MediaKind {
             _ => None,
         }
     }
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self { Self::Avatar => "avatar", Self::Banner => "banner", Self::Music => "music" }
     }
     fn ver_col(self) -> &'static str {
@@ -319,6 +339,7 @@ impl Directory {
             "ALTER TABLE users ADD COLUMN media_acl TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE users ADD COLUMN password TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE users ADD COLUMN music_ver INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0",
         ] {
             if let Err(e) = db.execute(stmt, []) {
                 if !e.to_string().contains("duplicate column") {
@@ -326,6 +347,20 @@ impl Directory {
                 }
             }
         }
+        // Federation: every change to a user row bumps updated_at, so peers
+        // can pull "everything since T". A row applied from a peer carries
+        // its own updated_at and is left alone (WHEN clause).
+        db.execute_batch(
+            r#"
+            CREATE TRIGGER IF NOT EXISTS users_touch_ins AFTER INSERT ON users
+            WHEN NEW.updated_at = 0
+            BEGIN UPDATE users SET updated_at = CAST(strftime('%s','now') AS INTEGER) * 1000 + (abs(random()) % 1000) WHERE username = NEW.username; END;
+            CREATE TRIGGER IF NOT EXISTS users_touch_upd AFTER UPDATE ON users
+            WHEN NEW.updated_at = OLD.updated_at
+            BEGIN UPDATE users SET updated_at = max(OLD.updated_at + 1, CAST(strftime('%s','now') AS INTEGER) * 1000) WHERE username = NEW.username; END;
+            CREATE INDEX IF NOT EXISTS idx_users_updated ON users(updated_at);
+            "#,
+        )?;
         Ok(())
     }
 
@@ -715,6 +750,105 @@ impl Directory {
         // One-time ticket.
         db.execute("UPDATE email_codes SET ticket=NULL WHERE ticket=?1", rusqlite::params![ticket])?;
         Ok(username)
+    }
+
+    // ---- federation: replicate accounts between relays ----
+
+    /// User rows changed after `since` (ms), oldest first, at most 500.
+    pub fn fed_users_since(&self, since: i64) -> Vec<FedUser> {
+        let db = self.db.lock().unwrap();
+        let Ok(mut st) = db.prepare(
+            "SELECT username, identity_dh, email, display_name, about, phone, is_bot, created_at,
+                    extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at
+             FROM users WHERE updated_at > ?1 AND is_bot = 0 ORDER BY updated_at LIMIT 500",
+        ) else { return Vec::new() };
+        st.query_map(rusqlite::params![since], |r| {
+            Ok(FedUser {
+                username: r.get(0)?,
+                identity_dh: hex::encode(r.get::<_, Vec<u8>>(1)?),
+                email: r.get(2)?,
+                display_name: r.get(3)?,
+                about: r.get(4)?,
+                phone: r.get(5)?,
+                is_bot: r.get::<_, i64>(6)? != 0,
+                created_at: r.get(7)?,
+                extra: r.get(8)?,
+                avatar_ver: r.get(9)?,
+                banner_ver: r.get(10)?,
+                media_acl: r.get(11)?,
+                password: r.get(12)?,
+                music_ver: r.get(13)?,
+                updated_at: r.get(14)?,
+            })
+        })
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
+    }
+
+    /// Apply a peer's row if it is newer than ours. Returns true if applied.
+    pub fn fed_apply_user(&self, u: &FedUser) -> bool {
+        let Ok(dh) = hex::decode(&u.identity_dh) else { return false };
+        if dh.len() != 32 || !Self::valid_username(&u.username) {
+            return false;
+        }
+        let db = self.db.lock().unwrap();
+        let ours: Option<i64> = db
+            .query_row("SELECT updated_at FROM users WHERE username=?1", rusqlite::params![u.username], |r| r.get(0))
+            .ok();
+        if ours.is_some_and(|t| t >= u.updated_at) {
+            return false;
+        }
+        // An e-mail moving to another username elsewhere: drop it here first.
+        if let Some(email) = &u.email {
+            let _ = db.execute("UPDATE users SET email=NULL WHERE email=?1 AND username<>?2", rusqlite::params![email, u.username]);
+        }
+        db.execute(
+            "INSERT INTO users (username, identity_dh, email, display_name, about, phone, is_bot, created_at,
+                                extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+             ON CONFLICT(username) DO UPDATE SET identity_dh=?2, email=?3, display_name=?4, about=?5, phone=?6,
+                 is_bot=?7, created_at=?8, extra=?9, avatar_ver=?10, banner_ver=?11, media_acl=?12, password=?13,
+                 music_ver=?14, updated_at=?15",
+            rusqlite::params![u.username, dh, u.email, u.display_name, u.about, u.phone, u.is_bot as i64, u.created_at,
+                u.extra, u.avatar_ver, u.banner_ver, u.media_acl, u.password, u.music_ver, u.updated_at],
+        )
+        .is_ok()
+    }
+
+    /// (username, updated_at) of backups changed after `since` (seconds).
+    pub fn fed_backups_since(&self, since: i64) -> Vec<(String, i64)> {
+        let db = self.db.lock().unwrap();
+        let Ok(mut st) = db.prepare("SELECT username, updated_at FROM backups WHERE updated_at > ?1 ORDER BY updated_at LIMIT 200") else { return Vec::new() };
+        st.query_map(rusqlite::params![since], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
+    /// Store a peer's backup if it is newer than ours.
+    pub fn fed_apply_backup(&self, username: &str, data: &[u8], updated_at: i64) -> bool {
+        let db = self.db.lock().unwrap();
+        let ours: Option<i64> = db
+            .query_row("SELECT updated_at FROM backups WHERE username=?1", rusqlite::params![username], |r| r.get(0))
+            .ok();
+        if ours.is_some_and(|t| t >= updated_at) {
+            return false;
+        }
+        db.execute(
+            "INSERT INTO backups (username, data, updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(username) DO UPDATE SET data=?2, updated_at=?3",
+            rusqlite::params![username, data, updated_at],
+        )
+        .is_ok()
+    }
+
+    /// Store a profile image / track fetched from a peer.
+    pub fn fed_store_media(&self, username: &str, kind: MediaKind, mime: &str, data: &[u8]) {
+        let db = self.db.lock().unwrap();
+        let _ = db.execute(
+            "INSERT INTO profile_media (username, kind, mime, data) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(username, kind) DO UPDATE SET mime=?3, data=?4",
+            rusqlite::params![username, kind.as_str(), mime, data],
+        );
     }
 
     // ---- offline inbox (opaque envelopes waiting for their recipient) ----

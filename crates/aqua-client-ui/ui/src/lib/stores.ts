@@ -139,18 +139,54 @@ export async function bootstrap() {
   });
   events.onDisconnected(() => {
     info.update((i) => (i ? { ...i, connected: false } : i));
+    void reconnectLoop();
   });
 }
 
-export async function connect(server_url: string, username: string): Promise<string | null> {
+let reconnecting = false;
+/** The relay dropped us: retry it, then the other federated relays, with
+ *  a growing pause, until one of them takes us back. */
+async function reconnectLoop() {
+  if (reconnecting) return;
+  reconnecting = true;
   try {
-    const i = await api.connectToServer(server_url, username);
+    const delays = [1000, 3000, 7000, 15000, 30000];
+    for (let n = 0; ; n++) {
+      const i = get(info);
+      if (!i || i.connected || !i.username || !i.server_url) return;
+      await new Promise((r) => setTimeout(r, delays[Math.min(n, delays.length - 1)]));
+      const cur = get(info);
+      if (!cur || cur.connected || !cur.username || !cur.server_url) return;
+      const err = await connect(cur.server_url, cur.username);
+      if (!err) return;
+    }
+  } finally {
+    reconnecting = false;
+  }
+}
+
+export async function connect(server_url: string, username: string): Promise<string | null> {
+  const { learnPeers, alternatives } = await import("./servers");
+  const tryOne = async (url: string) => {
+    const i = await api.connectToServer(url, username);
     info.set(i);
     // Also refresh the chat list — some chats become .live=true once
     // the transport is open and sessions reattach.
     try { chats.set(await api.listChats()); } catch { /* non-fatal */ }
+    void learnPeers(url);
+  };
+  try {
+    await tryOne(server_url);
     return null;
   } catch (e) {
+    // Federated: the same account works on any of the relays we know.
+    for (const alt of alternatives(server_url)) {
+      try {
+        await tryOne(alt);
+        console.info(`[aqua] ${server_url} is down — switched to ${alt}`);
+        return null;
+      } catch { /* next */ }
+    }
     return String(e);
   }
 }

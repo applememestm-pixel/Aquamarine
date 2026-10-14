@@ -28,6 +28,7 @@ use tokio::sync::{mpsc, Mutex};
 pub mod auth;
 pub mod packs;
 pub mod blobstore;
+pub mod fed;
 pub mod directory;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
@@ -89,6 +90,8 @@ pub struct AppState {
     /// Admin panel state: access mode + registration allowlist, persisted
     /// to `aqua-admin.json`. Shared behind an RwLock; never held across await.
     pub admin: Arc<std::sync::RwLock<AdminConfig>>,
+    /// Federation with other relays (None = standalone).
+    pub fed: fed::FedSlot,
     /// Unix seconds the process started, for the uptime readout.
     pub started_unix: u64,
 }
@@ -147,6 +150,16 @@ impl AppState {
         Self::build(false)
     }
 
+    /// A relay with its own in-memory directory, blob folder and
+    /// federation settings — several can run in one process (tests).
+    pub fn isolated(blob_dir: std::path::PathBuf, fed_cfg: Option<fed::FedConfig>) -> Self {
+        let mut s = Self::build(true);
+        s.directory = Arc::new(Directory::open_memory());
+        s.blobs = blobstore::BlobStore::new(blob_dir, std::time::Duration::from_secs(3600));
+        s.fed = Arc::new(std::sync::RwLock::new(fed_cfg.and_then(fed::Fed::new)));
+        s
+    }
+
     fn build(require_registration: bool) -> Self {
         let directory = Directory::open()
             .map(Arc::new)
@@ -164,6 +177,7 @@ impl AppState {
             bot_queues: Arc::new(DashMap::new()),
             require_registration,
             admin: Arc::new(std::sync::RwLock::new(AdminConfig::load())),
+            fed: fed::slot_from_config(),
             started_unix: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
@@ -282,16 +296,27 @@ async fn fetch_bundle(
     State(state): State<AppState>,
     Path(user): Path<UserId>,
 ) -> Result<Json<PreKeyBundle>, StatusCode> {
-    let user_state = state.user(&user);
+    if let Some(b) = local_bundle(&state, &user).await {
+        return Ok(Json(b));
+    }
+    // Uploaded to another relay of the federation?
+    if let Some(f) = fed::current(&state) {
+        if let Some(v) = f.fetch_bundle(&user).await {
+            if let Ok(b) = serde_json::from_value::<PreKeyBundle>(v) {
+                return Ok(Json(b));
+            }
+        }
+    }
+    Err(StatusCode::NOT_FOUND)
+}
+
+pub(crate) async fn local_bundle(state: &AppState, user: &str) -> Option<PreKeyBundle> {
+    let user_state = state.user(&user.to_string());
     let mut u = user_state.lock().await;
-    let identity = u.identity.ok_or(StatusCode::NOT_FOUND)?;
-    let signed_prekey = u.signed_prekey.clone().ok_or(StatusCode::NOT_FOUND)?;
+    let identity = u.identity?;
+    let signed_prekey = u.signed_prekey.clone()?;
     let one_time_prekey = u.opks.pop_front();
-    Ok(Json(PreKeyBundle {
-        identity,
-        signed_prekey,
-        one_time_prekey,
-    }))
+    Some(PreKeyBundle { identity, signed_prekey, one_time_prekey })
 }
 
 // ---------- WebSocket relay --------------------------------------------------
@@ -351,6 +376,16 @@ async fn ws_run(mut socket: WebSocket, state: AppState, me: UserId) {
                 state.directory.inbox_ack(id);
             }
         }
+    }
+    // …and those that waited on other relays of the federation.
+    if let Some(f) = fed::current(&state) {
+        for m in f.collect_inbox(&me).await {
+            if let Ok(bytes) = serde_json::to_vec(&m) {
+                let _ = socket.send(Message::Binary(bytes.into())).await;
+            }
+        }
+    }
+    {
     }
 
     loop {
@@ -422,6 +457,28 @@ async fn deliver(state: &AppState, msg: RelayMessage) {
         return;
     }
 
+    if deliver_local(state, &msg).await {
+        return;
+    }
+    // Federation: maybe they're connected to another relay.
+    if let Some(f) = fed::current(state) {
+        if f.forward(&msg).await {
+            return;
+        }
+    }
+    // Kept on disk until the recipient connects (survives restarts; a peer
+    // relay collects it if they connect there).
+    match serde_json::to_vec(&msg) {
+        Ok(bytes) if state.directory.inbox_push(&msg.to, &bytes).is_ok() => {}
+        _ => {
+            let recipient = state.user(&msg.to);
+            recipient.lock().await.inbox.push_back(msg);
+        }
+    }
+}
+
+/// Hand an envelope to the recipient's live connections on THIS relay.
+pub(crate) async fn deliver_local(state: &AppState, msg: &RelayMessage) -> bool {
     let recipient = state.user(&msg.to);
     let mut r = recipient.lock().await;
     let mut delivered = false;
@@ -431,13 +488,7 @@ async fn deliver(state: &AppState, msg: RelayMessage) {
             delivered = true;
         }
     }
-    if !delivered {
-        // Kept on disk until the recipient connects (survives restarts).
-        match serde_json::to_vec(&msg) {
-            Ok(bytes) if state.directory.inbox_push(&msg.to, &bytes).is_ok() => {}
-            _ => r.inbox.push_back(msg),
-        }
-    }
+    delivered
 }
 
 // ---------- Blob storage (encrypted file bodies) ---------------------------
@@ -477,8 +528,20 @@ async fn fetch_blob(
     Path(cid): Path<String>,
 ) -> Result<impl IntoResponse, StatusCode> {
     let store = state.blobs.clone();
-    let Some(bytes) = tokio::task::spawn_blocking(move || store.get(&cid)).await.ok().flatten() else {
-        return Err(StatusCode::NOT_FOUND);
+    let local = { let (store, cid) = (store.clone(), cid.clone()); tokio::task::spawn_blocking(move || store.get(&cid)).await.ok().flatten() };
+    let bytes = match local {
+        Some(b) => b,
+        None => {
+            // Uploaded to another relay of the federation: fetch, check, keep.
+            let f = fed::current(&state).ok_or(StatusCode::NOT_FOUND)?;
+            let (_, b) = f.fetch_bytes(&format!("/v1/fed/blob/{cid}")).await.ok_or(StatusCode::NOT_FOUND)?;
+            if hex_sha256(&b) != cid {
+                return Err(StatusCode::NOT_FOUND);
+            }
+            let (s2, c2, b2) = (store.clone(), cid.clone(), b.clone());
+            let _ = tokio::task::spawn_blocking(move || s2.put(&c2, &b2)).await;
+            b
+        }
     };
     Ok((
         [(header::CONTENT_TYPE, "application/octet-stream")],
@@ -580,6 +643,51 @@ async fn login_user(
         .map_err(|e| (dir_err_status(&e), e.to_string()))?;
     tracing::info!(user = %username, "signed in on a new device");
     Ok(Json(LoginResp { username }))
+}
+
+// ---------- Admin: federation ----------------------------------------------
+
+async fn admin_get_fed(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Result<Json<serde_json::Value>, StatusCode> {
+    admin_authed(&state, &headers)?;
+    let c = fed::FedConfig::load();
+    Ok(Json(serde_json::json!({
+        "active": fed::current(&state).is_some(),
+        "has_secret": !c.secret.is_empty(),
+        "peers": c.peers,
+        "public_url": c.public_url,
+    })))
+}
+
+#[derive(Deserialize)]
+struct FedUpdate {
+    #[serde(default)]
+    secret: Option<String>,
+    #[serde(default)]
+    peers: Vec<String>,
+    #[serde(default)]
+    public_url: String,
+}
+
+async fn admin_set_fed(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(u): Json<FedUpdate>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    admin_authed(&state, &headers).map_err(|c| (c, String::new()))?;
+    let mut c = fed::FedConfig::load();
+    if let Some(sec) = u.secret.filter(|s| !s.trim().is_empty()) {
+        if sec.trim().len() < 16 {
+            return Err((StatusCode::BAD_REQUEST, "the shared secret must be at least 16 characters".into()));
+        }
+        c.secret = sec.trim().to_string();
+    }
+    c.peers = u.peers.into_iter().map(|p| p.trim().trim_end_matches('/').to_string()).filter(|p| p.starts_with("http")).collect();
+    c.public_url = u.public_url.trim().trim_end_matches('/').to_string();
+    c.save().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let next = fed::Fed::new(fed::FedConfig::load());
+    let active = next.is_some();
+    if let Ok(mut g) = state.fed.write() { *g = next; }
+    Ok(Json(serde_json::json!({ "active": active })))
 }
 
 // ---------- Encrypted account backups --------------------------------------
@@ -770,7 +878,15 @@ async fn get_profile_media(
     if !state.directory.may_see_media(&user, viewer.as_deref()) {
         return Err(StatusCode::NOT_FOUND);
     }
-    let (mime, data) = state.directory.get_media(&user, kind).ok_or(StatusCode::NOT_FOUND)?;
+    let (mime, data) = match state.directory.get_media(&user, kind) {
+        Some(m) => m,
+        None => {
+            let f = fed::current(&state).ok_or(StatusCode::NOT_FOUND)?;
+            let (mime, data) = f.fetch_bytes(&format!("/v1/fed/media/{user}/{}", kind.as_str())).await.ok_or(StatusCode::NOT_FOUND)?;
+            state.directory.fed_store_media(&user, kind, &mime, &data);
+            (mime, data)
+        }
+    };
     Ok((
         [
             (header::CONTENT_TYPE, mime),
@@ -1221,6 +1337,16 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/backup", axum::routing::put(backup_put).get(backup_meta).delete(backup_delete)
             .layer(DefaultBodyLimit::max(BACKUP_LIMIT + 1024)))
         .route("/v1/backup/fetch", post(backup_fetch))
+        .route("/v1/fed/peers", get(fed::h_peers))
+        .route("/v1/fed/deliver", post(fed::h_deliver))
+        .route("/v1/fed/inbox/:user", get(fed::h_inbox))
+        .route("/v1/fed/bundle/:user", get(fed::h_bundle))
+        .route("/v1/fed/blob/:cid", get(fed::h_blob))
+        .route("/v1/fed/users", get(fed::h_users))
+        .route("/v1/fed/backups", get(fed::h_backups))
+        .route("/v1/fed/backup/:user", get(fed::h_backup))
+        .route("/v1/fed/media/:user/:kind", get(fed::h_media))
+        .route("/v1/admin/federation", get(admin_get_fed).post(admin_set_fed))
         .route("/v1/bundle/:user",   post(upload_bundle).get(fetch_bundle))
         .route("/v1/ws",             get(ws_upgrade))
         .route(

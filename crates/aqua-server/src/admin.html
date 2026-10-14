@@ -206,6 +206,24 @@
             (and custom-emoji reactions show up for all). Get a token from
             <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a> → /newbot. Saved in <b>aqua-telegram.json</b>.</div>
         </div>
+
+        <div class="card">
+          <h2>Federation</h2>
+          <div class="mstate" id="fState"><span class="d"></span><span id="fStateText">…</span></div>
+          <div class="fields">
+            <div class="full"><label>This server's public address</label><input id="fSelf" placeholder="https://relay1.example.com" /></div>
+            <div class="full"><label>Other servers (one per line)</label><textarea id="fPeers" rows="3" placeholder="https://relay2.example.com"></textarea></div>
+            <div class="full"><label>Shared secret (same on every server, 16+ characters)</label><input id="fSecret" type="password" autocomplete="new-password" placeholder="paste or generate" /></div>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <button class="btn" onclick="saveFed()">Save</button>
+            <button class="btn ghost" onclick="genSecret()">Generate secret</button>
+          </div>
+          <div class="note" id="fMsg"></div>
+          <div class="note">Servers with the same secret act as one network: accounts and encrypted backups
+            are copied between them, messages reach people connected to any of them, and apps switch to a
+            working server when theirs is down. Saved in <b>aqua-federation.json</b>.</div>
+        </div>
       </div>
     </div>
   </div>
@@ -371,9 +389,38 @@
     } catch(e){ $("tMsg").className = "note err"; $("tMsg").textContent = "Not saved: " + e.message; }
   }
 
+  // ---- Federation ----
+  let fedLoaded = false;
+  function showFed(v){
+    $("fState").className = "mstate" + (v.active ? " on" : "");
+    $("fStateText").innerHTML = v.active ? `On · <b>${v.peers.length}</b> other server(s)` : "<b>Off</b> — this server works alone";
+    $("fSelf").value = v.public_url || location.origin;
+    $("fPeers").value = (v.peers || []).join("\n");
+    $("fSecret").placeholder = v.has_secret ? "•••••••• saved — paste a new one to replace" : "paste or generate";
+    fedLoaded = true;
+  }
+  async function loadFed(){ try { showFed(await api("/v1/admin/federation")); } catch {} }
+  function genSecret(){
+    const b = new Uint8Array(24); crypto.getRandomValues(b);
+    $("fSecret").type = "text";
+    $("fSecret").value = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+    $("fMsg").className = "note"; $("fMsg").textContent = "Copy this secret to the other servers' panels too, then Save.";
+  }
+  async function saveFed(){
+    const body = { public_url: $("fSelf").value.trim(), peers: $("fPeers").value.split(/\s+/).filter(Boolean), secret: $("fSecret").value.trim() || null };
+    try {
+      const r = await fetch("/v1/admin/federation", { method: "POST", body: JSON.stringify(body),
+        headers: { "Authorization": "Bearer " + TOKEN, "Content-Type": "application/json" } });
+      if (!r.ok) throw new Error(await r.text() || ("HTTP " + r.status));
+      $("fSecret").value = ""; $("fSecret").type = "password";
+      await loadFed();
+      $("fMsg").className = "note ok"; $("fMsg").textContent = "Saved.";
+    } catch(e){ $("fMsg").className = "note err"; $("fMsg").textContent = "Not saved: " + e.message; }
+  }
+
   async function tick(){
     if (!TOKEN) { $("gate").classList.remove("hide"); pill("", "locked"); return; }
-    try { await refresh(); if (!mailLoaded) loadMail(); if (!tgLoaded) loadTg(); }
+    try { await refresh(); if (!mailLoaded) loadMail(); if (!tgLoaded) loadTg(); if (!fedLoaded) loadFed(); }
     catch(e){
       if (e.message === "bad token") { $("dash").classList.add("hide"); $("gate").classList.remove("hide"); pill("", "locked"); }
       else pill("down", "server not reachable");
