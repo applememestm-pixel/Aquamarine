@@ -1,114 +1,427 @@
 <div align="center">
 
-# 💠 Aquamarine
+# Aquamarine
 
-**End-to-end encrypted messenger — Telegram's chats and channels meet Discord's servers and calls.**
+**Мессенджер со сквозным шифрованием: настольный клиент и самостоятельно размещаемый сервер-ретранслятор.**
 
-[**Website**](https://applememestm-pixel.github.io/aquamarine/) ·
-[**Download**](https://github.com/applememestm-pixel/aquamarine/releases/latest) ·
-[Progress log](PROGRESS.md) ·
-[Network plan](docs/NETWORK_PLAN.md)
+[Релизы](https://github.com/applememestm-pixel/Aquamarine/releases) ·
+[Сайт](https://applememestm-pixel.github.io/aquamarine/) ·
+[Что нового в 0.1.1](docs/releases/v0.1.1.md) ·
+[Журнал разработки](PROGRESS.md)
 
-Rust · Tauri 2 · Svelte 5 · axum
+`Rust` · `Tauri 2` · `Svelte 5` · `axum` · `SQLite` · `WebRTC`
 
 </div>
 
 ---
 
-> 🇷🇺 Aquamarine — десктопный мессенджер со сквозным шифрованием: чаты, группы,
-> каналы и звонки в стиле Telegram + Discord. Сервер — только «почтальон»: он
-> пересылает зашифрованные конверты и никогда не видит текст сообщений.
-
-## Features
+## Паспорт
 
 | | |
 |---|---|
-| 🔐 **E2EE by default** | X3DH key agreement + Double Ratchet. The relay sees only routing metadata and ciphertext. |
-| 💬 **Chats, groups, supergroups, channels** | Replies, edits, deletes, reactions, polls, articles, pinned & archived chats, member tags, admin roles. |
-| 📞 **Calls** | 1:1 and group / channel voice & video (WebRTC mesh), screen share, listener mode for channels. |
-| 🖼️ **Media** | Gallery with zoom, built-in photo editor (draw, crop, text), music player with queue, file panel with previews. |
-| 🕶️ **Privacy** | Per-user privacy rules, session passcode with auto-lock, block list, ghost mode (keep deleted / edited messages locally). |
-| 🌐 **Proxy** | Route all traffic through any SOCKS5 proxy you run (`socks5://host:port`). |
-| 🛰️ **Self-hostable relay** | One small binary, SQLite directory, email sign-up, web admin panel with invite-only (solo) mode. |
-| 🌍 **RU / EN** | Full Russian and English UI. |
+| Что это | Клиент-серверный мессенджер. Сообщения шифруются на устройстве отправителя и расшифровываются только на устройстве получателя. Сервер пересылает зашифрованные конверты. |
+| Кто делает | Независимый проект с открытым исходным кодом. Репозиторий: [applememestm-pixel/Aquamarine](https://github.com/applememestm-pixel/Aquamarine). Рекламы и аналитики в приложении нет. |
+| Версия | 0.1.1 |
+| Клиент | Windows, macOS, Linux; сборки для Android и iOS (iOS — без подписи, только сайдлоад) |
+| Сервер | Один исполняемый файл. Windows, macOS, Linux x64, Linux ARM64 |
+| Протокол | X3DH + Double Ratchet, собственная реализация на проверенных криптобиблиотеках Rust |
+| Аудит | Независимого аудита безопасности не было |
+| Магазины приложений | В Google Play и App Store приложения нет |
+| Лицензия | MIT OR Apache-2.0 (указана в `Cargo.toml`) |
 
-## Download
+---
 
-Grab the latest build from [**Releases**](https://github.com/applememestm-pixel/aquamarine/releases/latest):
+## Содержание
 
-| Platform | Client | Relay server |
+1. [Как это устроено](#как-это-устроено)
+2. [Криптография](#криптография)
+3. [Путь сообщения](#путь-сообщения)
+4. [Файлы, группы, звонки, боты](#файлы-группы-звонки-боты)
+5. [Вход и аккаунты](#вход-и-аккаунты)
+6. [Что видит сервер](#что-видит-сервер)
+7. [Что хранится на устройстве](#что-хранится-на-устройстве)
+8. [Сетевые запросы клиента](#сетевые-запросы-клиента)
+9. [Ограничения](#ограничения)
+10. [Установка](#установка)
+11. [Свой сервер](#свой-сервер)
+12. [Сборка из исходников](#сборка-из-исходников)
+13. [Структура репозитория](#структура-репозитория)
+14. [Ссылки](#ссылки)
+
+---
+
+## Как это устроено
+
+```
+ ┌──────────────── устройство A ────────────────┐                  ┌──────────────── устройство B ────────────────┐
+ │  Svelte 5 UI  (WebView)                      │                  │                      Svelte 5 UI  (WebView)  │
+ │      │  Tauri IPC                            │                  │                            Tauri IPC  │      │
+ │  Rust: aqua-client-ui ── aqua-client-core    │                  │    aqua-client-core ── aqua-client-ui :Rust  │
+ │            │                 │               │                  │          │                 │                 │
+ │       хранилище ключей   aqua-core (крипто)  │                  │   aqua-core (крипто)   хранилище ключей      │
+ │       (vault.sqlite)                         │                  │                        (vault.sqlite)        │
+ └──────────────────────┬───────────────────────┘                  └───────────────────────┬──────────────────────┘
+                        │  HTTPS + WebSocket                                               │
+                        │  (зашифрованные конверты)                                        │
+                        └──────────────────────►  aqua-server (axum)  ◄────────────────────┘
+                                                  ├─ каталог @имён, профили — SQLite
+                                                  ├─ публичные ключи (prekey bundles)
+                                                  ├─ очередь конвертов для офлайн-получателей
+                                                  └─ зашифрованные файлы по хешу (CID)
+
+ Звонки: медиапоток идёт напрямую между устройствами по WebRTC; сервер передаёт только зашифрованную сигнализацию.
+```
+
+**Клиент** — приложение на [Tauri 2](https://v2.tauri.app/). Интерфейс на [Svelte 5](https://svelte.dev/) выполняется в системном WebView: WebView2 на Windows, WKWebView на macOS, WebKitGTK на Linux. Шифрование, ключи, сеть и файлы живут в Rust-части и вызываются из интерфейса через IPC.
+
+**Сервер** (`aqua-server`) — HTTP/WebSocket-сервис на [axum](https://github.com/tokio-rs/axum). Он хранит каталог пользователей, раздаёт публичные ключи, держит очередь конвертов для тех, кто не в сети, и хранит зашифрованные файлы. Ключей для расшифровки у него нет.
+
+**Общий код** (`aqua-core`) — протокол: ключи, X3DH, Double Ratchet, форматы конвертов, шифрование файлов. Его используют и клиент, и сервер. Сервер — только для проверки подписей и форматов.
+
+---
+
+## Криптография
+
+### Примитивы
+
+| Назначение | Алгоритм | Стандарт | Реализация |
+|---|---|---|---|
+| Обмен ключами | X25519 | [RFC 7748](https://www.rfc-editor.org/rfc/rfc7748) | `x25519-dalek` |
+| Подписи | Ed25519 | [RFC 8032](https://www.rfc-editor.org/rfc/rfc8032) | `ed25519-dalek` |
+| Шифрование сообщений и файлов | ChaCha20-Poly1305 (AEAD) | [RFC 8439](https://www.rfc-editor.org/rfc/rfc8439) | `chacha20poly1305` |
+| Вывод ключей | HKDF-SHA256 | [RFC 5869](https://www.rfc-editor.org/rfc/rfc5869) | `hkdf` |
+| Цепочки ключей, токены сервера | HMAC-SHA256 | [RFC 2104](https://www.rfc-editor.org/rfc/rfc2104) | `hmac` |
+| Идентификатор файла | SHA-256 | [FIPS 180-4](https://csrc.nist.gov/pubs/fips/180-4/upd1/final) | `sha2` |
+| Пароли на сервере | PBKDF2-HMAC-SHA256, 120 000 итераций, соль 16 байт | [RFC 8018](https://www.rfc-editor.org/rfc/rfc8018) | своя обёртка над `hmac` |
+
+Протокол собран из этих библиотек вручную, без `libsignal` или `vodozemac`. Весь код протокола помещается в один крейт `aqua-core`, но с Signal и Matrix он **несовместим**.
+
+### Ключи
+
+У каждой установки есть **постоянная личность** из двух независимых пар ключей:
+
+- **Ed25519** — подписывает публичные ключи и ответы на вход;
+- **X25519** — участвует в X3DH.
+
+В Signal одна пара выводится из другой через XEdDSA. Здесь пары раздельные: кода меньше, а на проводе на 32 байта больше.
+
+Сервер раздаёт **набор ключей (prekey bundle)** каждого пользователя:
+
+| Ключ | Что это | Политика |
+|---|---|---|
+| IK | публичная личность (Ed25519 + X25519) | постоянный |
+| SPK | подписанный предварительный ключ (подпись Ed25519) | меняется раз в 7 дней |
+| OPK | одноразовые ключи | когда их меньше 10, клиент догенерирует до 50 |
+
+### X3DH — начало переписки
+
+Первое сообщение можно отправить, даже если собеседник не в сети: инициатор берёт его набор ключей с сервера и вычисляет общий секрет ([спецификация X3DH](https://signal.org/docs/specifications/x3dh/)):
+
+```
+DH1 = DH(IK_A,  SPK_B)
+DH2 = DH(EK_A,  IK_B)
+DH3 = DH(EK_A,  SPK_B)
+DH4 = DH(EK_A,  OPK_B)          — если одноразовый ключ есть
+
+SK  = HKDF-SHA256(salt = 0×32, ikm = 0xFF×32 ‖ DH1 ‖ DH2 ‖ DH3 [‖ DH4],
+                  info = "Aquamarine/X3DH v1", len = 32)
+AD  = IK_A(X25519) ‖ IK_B(X25519)
+```
+
+Подпись SPK проверяется перед использованием. Одноразовый ключ получатель удаляет после первого сообщения. `AD` входит в AAD каждого шифротекста сессии.
+
+### Double Ratchet — дальнейшая переписка
+
+Из `SK` запускается [Double Ratchet](https://signal.org/docs/specifications/doubleratchet/): X25519 для DH-храповика, HKDF-SHA256 для корневой цепочки, HMAC-SHA256 для цепочек сообщений, ChaCha20-Poly1305 для самих сообщений.
+
+- **Прямая секретность (forward secrecy).** Ключ каждого сообщения используется один раз и стирается. Кража устройства не раскрывает уже полученную переписку.
+- **Восстановление после компрометации.** С каждым новым DH-ключом собеседника в корневой ключ подмешивается свежий Диффи–Хеллман. Если состояние сессии утекло, злоумышленник теряет доступ после первого обмена сообщениями.
+- **Сообщения вне очереди.** Ключи пропущенных сообщений хранятся в кэше до 1000 штук. Сообщение, пришедшее позже, всё ещё расшифруется; дальше этого предела — нет, с явной ошибкой.
+
+### Проверка собеседника
+
+В окне «Отпечаток» показан полный публичный X25519-ключ собеседника в hex и 8 слов. Защиту от подмены ключа сервером даёт **только сравнение полного hex** по другому каналу (лично, звонком). Слова — быстрая визуальная подсказка, они не криптостойкие: каждое кодирует один байт по модулю 24.
+
+---
+
+## Путь сообщения
+
+1. Клиент получает с сервера набор ключей собеседника (`GET /v1/bundle/:user`) и проверяет подпись SPK.
+2. Выполняется X3DH, создаётся сессия, сообщение шифруется Double Ratchet.
+3. Конверт `{from, to, kind, payload}` уходит на сервер по WebSocket (`/v1/ws`). Для сервера `payload` — непрозрачные байты.
+4. Если получатель в сети, сервер сразу пересылает конверт на все его подключения. Если нет — кладёт в очередь в памяти и отдаёт при подключении.
+5. Получатель расшифровывает, сессия сохраняется в его зашифрованное хранилище.
+
+Служебные сообщения — отметки о прочтении, «печатает…», статус в сети, голоса в опросах, реакции, правки, удаления, сигнализация звонков — идут теми же E2EE-сессиями.
+
+---
+
+## Файлы, группы, звонки, боты
+
+### Файлы
+
+1. Отправитель генерирует для файла случайный 32-байтный ключ и 12-байтный nonce и шифрует файл ChaCha20-Poly1305.
+2. SHA-256 шифротекста становится идентификатором файла (CID). Шифротекст загружается в `POST /v1/blob/:cid`. Сервер отклоняет загрузку, если хеш тела не совпадает с CID.
+3. Ключ, nonce, имя, размер и MIME уходят получателю обычным E2EE-сообщением. Сервер их не видит.
+4. Получатель скачивает шифротекст по CID, сверяет хеш и расшифровывает.
+
+Лимит — 200 МиБ на файл. Видео при отправке «со сжатием» перекодируется в 720p H.264 через `ffmpeg` на устройстве, фото уменьшаются до 2560 px. Режим «файлом» отправляет оригинал.
+
+### Группы и каналы
+
+Сервер о группах **ничего не знает**. Состав, роли и настройки хранятся у участников. Сообщение в группу клиент шифрует отдельно для каждого участника его парной сессией и отправляет каждому отдельно (fan-out). Права (кто может писать, слать медиа и т. п.) проверяет и отправитель, и каждый получатель. Это ограничивает практический размер группы: каждое сообщение отправляется N−1 раз.
+
+### Звонки
+
+- Сигнализация WebRTC (SDP, ICE-кандидаты) идёт через E2EE-сессии.
+- Медиапоток идёт напрямую между устройствами и защищён стандартным для WebRTC DTLS-SRTP ([RFC 8827](https://www.rfc-editor.org/rfc/rfc8827)).
+- Для обхода NAT используются публичные STUN-серверы Google и Cloudflare. TURN-сервер можно указать в настройках «Голос и видео», по умолчанию его нет.
+- Групповые звонки — mesh: каждый участник соединён с каждым.
+
+### Боты
+
+Боты **не используют сквозное шифрование**: переписка с ботом идёт открытым текстом через сервер, и интерфейс помечает такие чаты как незашифрованные. Бот — программа, которая работает с HTTP API сервера:
+
+```
+GET  /v1/bot/me?token=TOKEN                           → { username, display_name }
+GET  /v1/bot/updates?token=TOKEN&after=ID&timeout=25  → [{ id, from, text, ts }]   (long poll)
+POST /v1/bot/send   { "token": "...", "to": "alice", "text": "..." }
+```
+
+Создать бота и получить его токен можно в Настройки → Боты. Готовый пример — [`tools/aqua-console.py`](tools/aqua-console.py): консольный чат на стандартной библиотеке Python. Очередь бота хранится в памяти сервера, не больше 1000 последних сообщений.
+
+### Стикеры и эмодзи из Telegram
+
+Паки скачивает **сервер** через [Telegram Bot API](https://core.telegram.org/bots/api#getstickerset), а не каждый клиент. Токен Telegram-бота задаёт администратор сервера: его спрашивают при первом запуске или вводят в панели администратора. Пользователь вставляет только ссылку `t.me/addstickers/…` или `t.me/addemoji/…`. Сервер скачивает пак один раз (до 200 стикеров, до 2 МиБ на файл, 8 файлов параллельно) и раздаёт его всем. Свои эмодзи в реакциях отображаются и у тех, у кого пака нет: клиент подгружает нужный файл с сервера и кэширует.
+
+---
+
+## Вход и аккаунты
+
+- **Вход по подписи.** Клиент запрашивает одноразовый nonce (`/v1/auth/challenge`, живёт 60 с) и подписывает его ключом Ed25519 (`/v1/auth/verify`). Сервер выдаёт токен на 1 час: `dh_pub ‖ expires_at ‖ HMAC-SHA256(server_key, …)`. Токен проверяется без хранения состояния.
+- **Регистрация @имени** — через код на e-mail (код живёт 10 минут, тикет — 30) и пароль. Пароль хранится как PBKDF2-хеш. Без настроенного SMTP сервер работает в режиме разработки и показывает коды в консоли и в панели.
+- **Одна личность — одно устройство.** Вход на новом устройстве по e-mail и паролю переносит @имя на ключ нового устройства. Сессии с собеседниками устанавливаются заново, старая история на новое устройство не переносится.
+- **Код-пароль приложения** (по желанию) — локальная блокировка с автоблокировкой по таймеру. Хеш PBKDF2-SHA256 с солью хранится только на устройстве.
+
+---
+
+## Что видит сервер
+
+| Видит | Не видит |
+|---|---|
+| @имя, e-mail, отображаемое имя, «о себе», телефон (если указан), хеш пароля | Текст сообщений, реакции, голоса, правки |
+| Публичные ключи (IK, SPK, OPK) | Закрытые ключи и состояние сессий |
+| Кто кому отправляет конверт, когда и какого размера; IP-адреса подключений | Ключи файлов, их имена и типы |
+| Зашифрованные файлы (шифротекст) и их размер | Состав групп и каналов, их названия |
+| Аватар, баннер и «любимый трек» профиля: они публичные, у аватара можно ограничить доступ | Содержимое звонков |
+| Переписку с ботами (открытый текст) | |
+| Какие паки стикеров импортированы | |
+
+Каталог пользователей хранится в SQLite и переживает перезапуск. Очередь конвертов для офлайн-получателей, наборы ключей и зашифрованные файлы хранятся **в памяти**: после перезапуска сервера недоставленные сообщения и файлы пропадают. Клиенты заново публикуют свои ключи при подключении.
+
+---
+
+## Что хранится на устройстве
+
+Папка данных: `~/.local/share/app.aquamarine.desktop` (Linux), `%APPDATA%\app.aquamarine.desktop` (Windows), `~/Library/Application Support/app.aquamarine.desktop` (macOS). Переопределяется переменной `AQUA_DATA_DIR`.
+
+| Что | Где | Зашифровано |
+|---|---|---|
+| Личность, сессии, предварительные ключи | `vault.sqlite` — каждая запись ChaCha20-Poly1305 | да |
+| Мастер-ключ хранилища | системное хранилище ключей (Secret Service / Keychain / Windows Credential Manager); если оно недоступно — файл `master.key` | — |
+| История переписки | только в памяти, на диск не пишется | — |
+| «Избранное» (Saved Messages) | `saved-messages.json`, `saved-media/` | **нет** |
+| Группы: состав и настройки | `groups.json` | **нет** |
+| Настройки, контакты, закрепы, реакции | хранилище WebView (localStorage) | **нет** |
+| Стикеры, звуки, кэш медиа | `stickers/`, `sounds/`, `media-cache/` | **нет** |
+
+История личных и групповых чатов после перезапуска приложения не сохраняется. Это осознанное текущее поведение, а не баг.
+
+---
+
+## Сетевые запросы клиента
+
+Кроме вашего сервера, клиент обращается к:
+
+| Куда | Когда |
+|---|---|
+| `fonts.googleapis.com` / `fonts.gstatic.com` | загрузка шрифтов интерфейса при запуске |
+| `stun.l.google.com`, `stun.cloudflare.com` | при звонках (определение внешнего адреса) |
+| сайт из ссылки в сообщении | превью ссылок: клиент сам запрашивает страницу. Отключается в Настройки → Настройки чатов |
+| `youtube.com` / `youtube-nocookie.com`, `i.ytimg.com` | встроенный плеер и превью YouTube |
+| `telegra.ph` | открытие ссылок telegra.ph во встроенной читалке |
+| `api.telegram.org` | только если пользователь импортирует пак своим токеном, минуя сервер |
+
+Весь трафик к серверу (HTTP и WebSocket) можно пустить через SOCKS5-прокси: Настройки → Аккаунт и сервер, формат `socks5://host:port` или `socks5h://host:port` (DNS через прокси).
+
+---
+
+## Ограничения
+
+- Независимого аудита кода и протокола не было.
+- Протокол несовместим с Signal и Matrix.
+- История чатов хранится только в памяти; «Избранное» и группы лежат на диске без шифрования.
+- Одно устройство на аккаунт; синхронизации между устройствами нет.
+- Офлайн-очередь и файлы на сервере теряются при его перезапуске.
+- Группы рассылаются попарно, поэтому большие группы работают медленно.
+- Слова-отпечаток — не криптостойкая проверка; сверять нужно полный ключ.
+- Боты работают без сквозного шифрования.
+- Шрифты загружаются с Google Fonts.
+- Объединения серверов (федерации) нет: каждый сервер — отдельная сеть. Черновик: [docs/NETWORK_PLAN.md](docs/NETWORK_PLAN.md).
+
+---
+
+## Установка
+
+Готовые сборки: [Releases](https://github.com/applememestm-pixel/Aquamarine/releases). Собираются в GitHub Actions ([`release.yml`](.github/workflows/release.yml)) на каждый тег `v*`.
+
+| Платформа | Клиент | Сервер |
 |---|---|---|
 | Windows 10/11 x64 | `Aquamarine-Setup.exe` | `aqua-server-windows-x64.exe` |
 | macOS Apple Silicon | `Aquamarine.dmg` | `aqua-server-macos-arm64` |
 | macOS Intel | `Aquamarine-Intel.dmg` | — |
-| Linux x64 | `Aquamarine.AppImage` / `.deb` / `.rpm` | `aqua-server-linux-x64` |
-| Linux ARM64 (Raspberry Pi…) | — | `aqua-server-linux-arm64` |
-| Android 7+ (beta) | `Aquamarine.apk` | — |
-| iOS (beta, sideload) | `Aquamarine-iOS-unsigned.ipa` → install with AltStore / SideStore | — |
+| Linux x64 | `Aquamarine.AppImage`, `.deb`, `.rpm` | `aqua-server-linux-x64` |
+| Linux ARM64 | — | `aqua-server-linux-arm64` |
+| Android | `Aquamarine.apk` | — |
+| iOS | `Aquamarine-iOS-unsigned.ipa` — без подписи, ставится через [AltStore](https://altstore.io/) / [SideStore](https://sidestore.io/) | — |
 
-Releases are built by [`release.yml`](.github/workflows/release.yml) on every `v*` tag.
-
-## Run your own relay
+**Linux.** Звук и видео в WebKitGTK идут через GStreamer. Нужны `gst-plugins-good` (без него окно зависает на первом же звуке; приложение проверяет это и подсказывает), `gst-libav` (H.264/AAC) и `ffmpeg` (обложки и сжатие видео):
 
 ```bash
-AQUA_LISTEN=0.0.0.0:7777 \
-AQUA_ADMIN_TOKEN=change-me \
-./aqua-server-linux-x64
+sudo pacman -S --needed gst-plugins-good gst-libav ffmpeg                   # Arch
+sudo apt install gstreamer1.0-plugins-good gstreamer1.0-libav ffmpeg        # Debian / Ubuntu
 ```
 
-Then open `http://<server>:7777/admin` for live stats and access control.
+На NVIDIA + Wayland окно WebKitGTK может быть пустым — запускайте с `WEBKIT_DISABLE_DMABUF_RENDERER=1`. Сборка `build-all.sh` кладёт рядом с бинарником [`aquamarine.sh`](tools/aquamarine.sh), который делает это сам и пишет логи в `logs/`. AppImage на Arch требует `fuse2`.
 
-| Variable | Meaning |
-|---|---|
-| `AQUA_LISTEN` | bind address (default `127.0.0.1:7777`) |
-| `AQUA_DIR_DB` | path to the SQLite directory |
-| `AQUA_ADMIN_TOKEN` | enables the `/admin` panel (404 without it) |
-| `AQUA_OPEN_SIGNUP` | allow sign-up without email confirmation |
-| `AQUA_SMTP_HOST` / `_PORT` / `_USER` / `_PASS` / `_FROM` | SMTP for email codes |
-| `AQUA_DEV_CODES` | dev only: print email codes to the log |
+---
 
-Put it behind any TLS reverse proxy (Caddy, nginx) for `wss://`.
-
-## Build from source
-
-Requirements: Rust stable, Node.js 22+, Tauri CLI (`cargo install tauri-cli --version '^2'`).
-Linux also needs `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf`
-(Arch: `sudo pacman -S --needed rustup nodejs npm base-devel webkit2gtk-4.1 libappindicator-gtk3 librsvg patchelf`).
+## Свой сервер
 
 ```bash
-# everything at once → ../Aquamarine-apps
-build-all.bat        # Windows
-./build-all.sh       # macOS / Linux
+AQUA_LISTEN=0.0.0.0:7777 ./aqua-server-linux-x64
+```
 
-# or by hand
-cargo test
+При запуске сервер печатает адреса для подключения и ссылку на панель администратора со случайным токеном. При первом запуске он предлагает ввести токен Telegram-бота для стикеров (Enter — пропустить). Для `https://` / `wss://` поставьте перед сервером обратный прокси с TLS ([Caddy](https://caddyserver.com/), nginx).
+
+**Панель администратора** (`/admin`): статистика, режим «только по приглашению» (регистрация только для e-mail из списка), настройка SMTP для кодов подтверждения, токен Telegram для стикеров.
+
+### Переменные окружения
+
+| Переменная | Значение |
+|---|---|
+| `AQUA_LISTEN` | адрес и порт, по умолчанию `127.0.0.1:7777` |
+| `AQUA_DIR_DB` | файл каталога, по умолчанию `aqua-directory.sqlite` |
+| `AQUA_ADMIN_TOKEN` | свой токен панели (иначе генерируется при каждом запуске) |
+| `AQUA_ADMIN=off` | отключить панель |
+| `AQUA_OPEN_PANEL=1` | открыть панель в браузере при запуске |
+| `AQUA_OPEN_SIGNUP=1` | не требовать регистрацию @имени |
+| `AQUA_SMTP_HOST` / `_PORT` / `_USER` / `_PASS` / `_FROM` | SMTP для кодов (иначе — из панели, `aqua-smtp.json`) |
+| `AQUA_DEV_CODES` | `1` — всегда показывать коды в консоли, `0` — никогда |
+| `AQUA_TG_BOT_TOKEN` | токен Telegram-бота для паков (иначе — `aqua-telegram.json`) |
+| `AQUA_TG_PROMPT=0` | не спрашивать токен при запуске |
+| `AQUA_DEFAULT_PACKS` | паки, которые скачиваются при запуске, по умолчанию `eltaller47` |
+
+### Файлы сервера
+
+Создаются в рабочей папке сервера: `aqua-directory.sqlite` (каталог), `aqua-admin.json` (режим доступа), `aqua-smtp.json` (SMTP), `aqua-telegram.json` (токен Telegram), `aqua-packs/` (паки стикеров).
+
+### Лимиты
+
+| | |
+|---|---|
+| Файл (blob) | 210 МиБ на сервере, 200 МиБ в клиенте |
+| Аватар / баннер-картинка | 8 МиБ |
+| Анимированный аватар/баннер (GIF, WebM, MP4) | 3 МиБ; клиент пережимает баннер-видео в WebM без звука, до 8 с |
+| «Любимый трек» профиля | 10 МиБ |
+| Токен входа | 1 час |
+
+### HTTP API
+
+| Метод и путь | Назначение |
+|---|---|
+| `POST /v1/auth/challenge`, `POST /v1/auth/verify` | вход по подписи |
+| `POST /v1/auth/email/request`, `/verify` | код на e-mail |
+| `POST /v1/users/register`, `POST /v1/users/login` | регистрация @имени, вход на новом устройстве |
+| `GET /v1/users/search` · `GET/POST /v1/users/:user/profile` | каталог и профили |
+| `GET/POST/DELETE /v1/users/:user/media/:kind` | аватар, баннер, трек |
+| `GET/POST /v1/bundle/:user` | наборы ключей |
+| `GET /v1/ws` | WebSocket для конвертов |
+| `GET/POST /v1/blob/:cid` | зашифрованные файлы |
+| `/v1/bot/*` | API ботов |
+| `/v1/packs*` | паки стикеров |
+| `GET /v1/stats`, `/admin`, `/v1/admin/*` | статистика и панель |
+
+---
+
+## Сборка из исходников
+
+Нужны: Rust stable, Node.js 22+, Tauri CLI (`cargo install tauri-cli --version '^2'`). На Linux — WebKitGTK 4.1 и GTK 3:
+
+```bash
+sudo pacman -S --needed rustup nodejs npm base-devel webkit2gtk-4.1 libappindicator-gtk3 librsvg patchelf     # Arch
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf                                     # Debian / Ubuntu
+```
+
+```bash
+# всё сразу → ../Aquamarine-apps
+./build-all.sh          # Linux / macOS
+build-all.bat           # Windows
+
+# по отдельности
 cargo build --release -p aqua-server
 cd crates/aqua-client-ui/ui && npm ci && npm run build && cd ..
 cargo tauri build
 ```
 
-Dev mode: `cd crates/aqua-client-ui && cargo tauri dev`.
+Режим разработки: `cd crates/aqua-client-ui && cargo tauri dev`.
 
-## Layout
+### Тесты
+
+```bash
+cargo test                                   # aqua-core, aqua-client-core, aqua-server (в т.ч. сквозной тест через настоящий сервер)
+
+cd crates/aqua-client-ui
+cargo test                                   # клиент: медиа, паки, активность, звуки
+python3 ../../tools/check-invokes.py         # сверка вызовов из интерфейса с Rust-командами
+(cd ui && npx svelte-check)                  # типы интерфейса
+
+tools/e2e/run.sh                             # из корня: настоящий Linux-клиент под Xvfb — воспроизведение, зависания, CPU, fps
+```
+
+---
+
+## Структура репозитория
 
 ```
 crates/
-  aqua-core/          crypto + protocol (X3DH, Double Ratchet, wire types)
-  aqua-server/        axum relay, SQLite directory, admin panel
-  aqua-client-core/   transport, session store, sync loop
-  aqua-client-ui/     Tauri 2 shell + Svelte 5 UI (ui/)
-site/                 landing page (GitHub Pages)
-docs/                 design notes, network plan
+  aqua-core/          протокол: ключи, X3DH, Double Ratchet, конверты, шифрование файлов
+  aqua-client-core/   транспорт (HTTP/WebSocket, SOCKS5), зашифрованное хранилище, предварительные ключи, импорт паков
+  aqua-client-ui/     приложение Tauri: Rust-команды (src/) и интерфейс Svelte 5 (ui/)
+  aqua-server/        сервер: axum, каталог SQLite, вход, боты, паки, панель администратора
+tools/                скрипты запуска, aqua-console.py, e2e-тесты
+bots/                 пример бота
+site/                 сайт (GitHub Pages)
+docs/                 описания релизов, черновик сети серверов
+.github/workflows/    сборка релизов, проверка Windows, сайт
 ```
 
-## Roadmap
+---
 
-- [x] E2EE 1:1, groups, channels, calls, media, admin panel, multi-platform builds
-- [x] Android / iOS builds (beta)
-- [ ] App Store / Play Store releases
-- [ ] Server federation: shared mode, replication, coordinator election ([plan](docs/NETWORK_PLAN.md))
-- [ ] Own mesh / DHT between relays
+## Ссылки
 
-## License
+Протоколы:
+- [The X3DH Key Agreement Protocol](https://signal.org/docs/specifications/x3dh/) — Marlinspike, Perrin
+- [The Double Ratchet Algorithm](https://signal.org/docs/specifications/doubleratchet/) — Perrin, Marlinspike
+- [RFC 7748 — X25519](https://www.rfc-editor.org/rfc/rfc7748) · [RFC 8032 — Ed25519](https://www.rfc-editor.org/rfc/rfc8032) · [RFC 8439 — ChaCha20-Poly1305](https://www.rfc-editor.org/rfc/rfc8439) · [RFC 5869 — HKDF](https://www.rfc-editor.org/rfc/rfc5869) · [RFC 8018 — PBKDF2](https://www.rfc-editor.org/rfc/rfc8018)
+- [RFC 8827 — WebRTC Security Architecture](https://www.rfc-editor.org/rfc/rfc8827) · [RFC 1928 — SOCKS5](https://www.rfc-editor.org/rfc/rfc1928)
 
-MIT OR Apache-2.0.
+Библиотеки и платформы:
+- [dalek-cryptography](https://github.com/dalek-cryptography) (X25519, Ed25519) · [RustCrypto/AEADs](https://github.com/RustCrypto/AEADs) (ChaCha20-Poly1305)
+- [Tauri 2](https://v2.tauri.app/) · [Svelte 5](https://svelte.dev/docs/svelte) · [axum](https://docs.rs/axum) · [Tokio](https://tokio.rs/)
+- [Telegram Bot API: getStickerSet](https://core.telegram.org/bots/api#getstickerset)
+
+Проект:
+- [PROGRESS.md](PROGRESS.md) — журнал разработки с решениями и причинами
+- [docs/releases](docs/releases) — описания релизов
+- [docs/NETWORK_PLAN.md](docs/NETWORK_PLAN.md) — черновик сети серверов
