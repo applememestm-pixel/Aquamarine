@@ -103,6 +103,7 @@ pub fn run() -> Result<()> {
             personal::write_theme_file,
             personal::read_theme_file,
             personal::save_console_bot,
+            personal::save_temp_file,
             commands::fed_peers,
             backups::backup_status,
             backups::backup_enable,

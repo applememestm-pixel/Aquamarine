@@ -112,6 +112,7 @@ export const api = {
   startBotChat:       (bot_username: string, first_message: string): Promise<ChatSummary> => invoke("start_bot_chat", { botUsername: bot_username, firstMessage: first_message }),
   createBot:          (username: string, display_name: string): Promise<BotInfo>       => invoke("create_bot", { username, displayName: display_name }),
   listBots:           (): Promise<BotInfo[]>                                           => invoke("list_bots"),
+  saveTempFile:       (name: string, bytes: number[]): Promise<string>                  => invoke("save_temp_file", { name, bytes }),
   saveConsoleBot:     (path: string): Promise<void>                                    => invoke("save_console_bot", { path }),
   deleteBot:          (username: string): Promise<void>                                => invoke("delete_bot", { username }),
   startChatWith:      (peer_username: string, first_message: string): Promise<ChatSummary> => invoke("start_chat_with", { peerUsername: peer_username, firstMessage: first_message }),

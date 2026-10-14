@@ -498,10 +498,18 @@ pub(crate) async fn deliver_local(state: &AppState, msg: &RelayMessage) -> bool 
 /// `aqua_core::file_transfer::MAX_FILE_SIZE` plus AEAD tag headroom.
 const BLOB_LIMIT: usize = 210 * 1024 * 1024;
 
+#[derive(Deserialize, Default)]
+struct BlobQuery {
+    /// 1 = long-lived (group photo / banner), see `blobstore::KEEP_TTL`.
+    #[serde(default)]
+    keep: u8,
+}
+
 async fn upload_blob(
     State(state): State<AppState>,
     Caller(_dh_pub): Caller,
     Path(cid): Path<String>,
+    Query(q): Query<BlobQuery>,
     body: Bytes,
 ) -> Result<StatusCode, (StatusCode, String)> {
     if body.len() > BLOB_LIMIT {
@@ -516,7 +524,11 @@ async fn upload_blob(
     }
     // Content-addressed: a duplicate just refreshes the file's age.
     let store = state.blobs.clone();
-    tokio::task::spawn_blocking(move || store.put(&cid, &body))
+    let keep = q.keep == 1;
+    if keep && body.len() > blobstore::KEEP_LIMIT {
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, "only files up to 4 MiB can be kept".into()));
+    }
+    tokio::task::spawn_blocking(move || if keep { store.put_keep(&cid, &body) } else { store.put(&cid, &body) })
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

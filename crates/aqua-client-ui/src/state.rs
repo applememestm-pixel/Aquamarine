@@ -91,7 +91,7 @@ pub struct LocalPrefs {
 /// inside the (E2EE) article message.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArticleMedia {
-    /// "video" | "audio"
+    /// "video" | "audio" | "image"
     pub kind: String,
     pub cid: String,
     #[serde(default)]
@@ -115,7 +115,7 @@ impl ArticleMedia {
     /// Only well-formed references survive parsing (no remote URLs, no
     /// path tricks in the CID).
     pub fn sane(mut self) -> Option<Self> {
-        if self.kind != "video" && self.kind != "audio" { return None; }
+        if self.kind != "video" && self.kind != "audio" && self.kind != "image" { return None; }
         let cid_ok = (self.cid.len() == 64 && self.cid.chars().all(|c| c.is_ascii_hexdigit()))
             || (self.cid.starts_with("local-") && self.cid.len() <= 64
                 && self.cid.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));

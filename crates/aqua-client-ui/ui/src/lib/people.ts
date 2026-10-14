@@ -44,8 +44,11 @@ export const peerCards = writable<Record<string, PeerCard>>(load());
 peerCards.subscribe((v) => { try { localStorage.setItem(KEY, JSON.stringify(v)); } catch { /* ignore */ } });
 
 /** username → avatar URL, including ourselves. */
-export const avatars = derived([peerCards, profile, info], ([cards, me, i]) => {
-  const out: Record<string, string> = {};
+/** Avatars from elsewhere (group / channel photos), merged into `avatars`. */
+export const extraAvatars = writable<Record<string, string>>({});
+
+export const avatars = derived([peerCards, profile, info, extraAvatars], ([cards, me, i, extra]) => {
+  const out: Record<string, string> = { ...extra };
   for (const [u, c] of Object.entries(cards)) if (c.avatar) out[u] = c.avatar;
   if (i?.username && me.avatar_url) out[i.username] = me.avatar_url;
   return out;

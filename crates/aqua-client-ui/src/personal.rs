@@ -117,6 +117,21 @@ pub fn read_theme_file(path: String) -> Result<String, String> {
     std::fs::read_to_string(p).map_err(|e| format!("read: {e}"))
 }
 
+/// Write bytes the UI made (a cropped photo…) to a temp file and return
+/// its path, so commands that take a file can use it.
+#[tauri::command]
+pub fn save_temp_file(state: State<'_, StdMutex<AppState>>, name: String, bytes: Vec<u8>) -> Result<String, String> {
+    if bytes.len() > 40 * 1024 * 1024 {
+        return Err("file too large".into());
+    }
+    let dir = { state.lock().map_err(|e| e.to_string())?.data_dir.join("tmp") };
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let p = dir.join(format!("{stamp:x}-{}", safe_name(&name)));
+    std::fs::write(&p, bytes).map_err(|e| e.to_string())?;
+    Ok(p.display().to_string())
+}
+
 /// The console-chat bot script (tools/aqua-console.py), bundled so the
 /// Bots tab can save a copy next to the user's other files.
 const CONSOLE_BOT: &str = include_str!("../../../tools/aqua-console.py");

@@ -72,7 +72,7 @@ export type MessageKind =
 
 /** A video / track attached to an article (encrypted blob on the relay). */
 export interface ArticleMedia {
-  kind: "video" | "audio";
+  kind: "video" | "audio" | "image";
   cid: string;
   key_b64: string;
   nonce_b64: string;
@@ -289,4 +289,13 @@ export interface Group {
   requests?: JoinRequest[];
   log?: GroupLogEntry[];
   clan?: ClanTag | null;
+  /** Photo / banner: E2EE file references (encrypted blobs on the relay). */
+  photo?: ArticleMedia | null;
+  banner?: ArticleMedia | null;
+  /** Shown to members on the info page and once at the top of the chat. */
+  rules?: string;
+  /** Greeting shown to people who just joined. */
+  welcome?: string;
+  /** Header tint. */
+  accent?: string;
 }

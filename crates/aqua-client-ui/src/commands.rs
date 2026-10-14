@@ -1755,6 +1755,7 @@ fn media_ext(mime: Option<&str>, name: &str) -> String {
         "video/mp4" => "mp4", "video/webm" => "webm", "video/quicktime" => "mov", "video/x-matroska" => "mkv",
         "audio/mpeg" => "mp3", "audio/mp4" => "m4a", "audio/ogg" => "ogg", "audio/flac" => "flac",
         "audio/wav" => "wav", "audio/opus" => "opus", "audio/webm" => "weba", "audio/aac" => "aac",
+        "image/png" => "png", "image/jpeg" => "jpg", "image/webp" => "webp", "image/gif" => "gif",
         _ => "bin",
     }.into()
 }
@@ -1792,7 +1793,9 @@ pub async fn upload_attachment(
     let kind = match mime.as_deref() {
         Some(m) if m.starts_with("video/") => "video",
         Some(m) if m.starts_with("audio/") => "audio",
-        _ => return Err(format!("{name}: not a video or audio file")),
+        // Group / channel photos and banners (and article images).
+        Some(m) if m.starts_with("image/") => "image",
+        _ => return Err(format!("{name}: not an image, video or audio file")),
     };
     let cache = media_cache_dir(&data_dir);
     std::fs::create_dir_all(&cache).map_err(|e| format!("mkdir: {e}"))?;
@@ -1815,7 +1818,9 @@ pub async fn upload_attachment(
         let s = state.lock().map_err(|e| e.to_string())?;
         s.transport.clone().ok_or("not connected")?
     };
-    transport.upload_blob(&envelope.cid, ciphertext).await.map_err(|e| format!("upload_blob: {e}"))?;
+    // Images are group photos / banners: kept by the relay for months.
+    let keep = kind == "image" && ciphertext.len() <= 4 * 1024 * 1024;
+    transport.upload_blob_ext(&envelope.cid, ciphertext, keep).await.map_err(|e| format!("upload_blob: {e}"))?;
     let _ = tokio::fs::write(cache.join(format!("{}.{ext}", envelope.cid)), &bytes).await;
     Ok(crate::state::ArticleMedia {
         kind: kind.into(),

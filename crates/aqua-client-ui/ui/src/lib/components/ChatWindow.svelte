@@ -56,7 +56,7 @@
   import { openNewChatDialog } from "../newChat";
 
   import { contacts, getContact } from "../contacts";
-  import type { ChatMessage } from "../types";
+  import type { ChatMessage, Group } from "../types";
 
   // Inline media now streams straight from disk via Tauri's asset
   // protocol — instant, no IPC byte-copy, no base64. (Previously each
@@ -852,6 +852,18 @@
     { cmd: "video", desc: $t("Record a round video message"), run: () => { text = ""; if ($activeChat) openCircleRecorder($activeChat.id); } },
     { cmd: "call", desc: $t("Voice call"), run: () => { text = ""; if (isGroup && activeGroup) void joinGroupCall(activeGroup.id); else startVoiceCall(); } },
     { cmd: "search", desc: $t("Search in this chat"), run: () => { text = ""; openSearch(); } },
+    ...(isGroup && activeGroup ? [
+      { cmd: "rules", desc: $t("Post this chat's rules"), run: () => activeGroup?.rules ? sendNow(`📜 ${tr("Rules")}\n${activeGroup.rules}`) : (text = "", showToast(tr("No rules set — admins add them in Edit"))) },
+      { cmd: "top", desc: $t("Top chatters this week"), run: () => sendNow(topChatters()) },
+      { cmd: "pick", desc: $t("Pick a random member"), run: () => { const u = pickOne(activeGroup!.members.map((m) => m.username)); if (u) sendNow(`🎯 ${tr("The chosen one")}: @${u}`); } },
+      { cmd: "ship", desc: $t("Ship two random members"), run: () => {
+        const ms = activeGroup!.members.map((m) => m.username);
+        if (ms.length < 2) { text = ""; showToast(tr("Need at least two members")); return; }
+        const a = pickOne(ms)!; const b = pickOne(ms.filter((x) => x !== a))!;
+        sendNow(`💘 @${a} + @${b} = ${Math.floor(Math.random() * 101)}%`);
+      } },
+    ] : []),
+    { cmd: "8ball", desc: $t("Ask the magic 8-ball"), run: () => sendNow(`🎱 ${tr(pickOne(EIGHT_BALL)!)}`) },
     { cmd: "dice", desc: $t("Roll a die"), run: () => sendNow(`🎲 ${1 + Math.floor(Math.random() * 6)}`) },
     { cmd: "coin", desc: $t("Flip a coin"), run: () => sendNow(`🪙 ${Math.random() < 0.5 ? $t("Heads") : $t("Tails")}`) },
     { cmd: "shrug", desc: "¯\\_(ツ)_/¯", run: () => replaceText("¯\\_(ツ)_/¯ ") },
@@ -940,6 +952,34 @@
   let myUsername = $derived($info?.username ?? "");
   let isGroup = $derived($activeChat?.id?.startsWith("grp_") ?? false);
   let activeGroup = $derived($activeChat ? $groupMap[$activeChat.id] : undefined);
+
+  // ---- server rules / welcome note (once per change) ---------------------
+  const rulesKey = (g: Group) => `aqua.rulesSeen.${g.id}`;
+  const rulesHash = (g: Group) => { let h = 0; for (const c of `${g.rules ?? ""}|${g.welcome ?? ""}`) h = (h * 31 + c.charCodeAt(0)) | 0; return String(h); };
+  let rulesTick = $state(0);
+  let rulesNote = $derived.by(() => {
+    void rulesTick;
+    const g = activeGroup;
+    if (!g || g.kind === "channel" || (!g.rules && !g.welcome)) return null;
+    try { if (localStorage.getItem(rulesKey(g)) === rulesHash(g)) return null; } catch { /* storage off: show */ }
+    return { rules: g.rules ?? "", welcome: g.owner === myUsername ? "" : g.welcome ?? "" };
+  });
+  function dismissRules() {
+    if (activeGroup) try { localStorage.setItem(rulesKey(activeGroup), rulesHash(activeGroup)); } catch { /* ignore */ }
+    rulesTick++;
+  }
+  // ---- server fun -------------------------------------------------------
+  function pickOne<T>(a: T[]): T | undefined { return a[Math.floor(Math.random() * a.length)]; }
+  function topChatters(): string {
+    const week = Date.now() - 7 * 864e5;
+    const n: Record<string, number> = {};
+    for (const m of $activeMessages) { const at = Date.parse(m.time); if (at >= week && m.from) n[m.from] = (n[m.from] ?? 0) + 1; }
+    const top = Object.entries(n).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    if (!top.length) return tr("🏆 Nobody has said anything this week");
+    return `🏆 ${tr("Top chatters this week")}\n` + top.map(([u, c], i) => `${["🥇", "🥈", "🥉", "4.", "5."][i]} @${u} — ${c}`).join("\n");
+  }
+  const EIGHT_BALL = ["It is certain", "Without a doubt", "Yes — definitely", "Most likely", "Signs point to yes",
+    "Reply hazy, try again", "Ask again later", "Cannot predict now", "Don't count on it", "My sources say no", "Very doubtful"];
   // Can the current user post here? (Same rules the backend enforces on
   // receive — groupRules.ts / state.rs may_post.)
   let postBlocked = $derived(postBlock(activeGroup, myUsername));
@@ -1734,6 +1774,7 @@
       {#if isGroup && activeGroup}
         <button class="avatar sz-40 avatar-btn" style="--gradient: {$activeChat.gradient}" title="Group info & settings">
           {$activeChat.letter}
+          {#if $avatars[$activeChat.id]}<img class="ava-img" src={$avatars[$activeChat.id]} alt="" />{/if}
         </button>
       {:else}
         <div class="avatar sz-40" class:online={chatOnline($activeChat, $peerPresence, $presenceNow)} style="--gradient: {$activeChat.gradient}">
@@ -1861,6 +1902,16 @@
           </div>
         </button>
         <button class="pin-x" onclick={unpin} title={$t("Unpin")}>×</button>
+      </div>
+    {/if}
+
+    {#if rulesNote}
+      <div class="rules-bar" style:--acc={activeGroup?.accent ?? "var(--accent)"}>
+        <div class="rb-text">
+          {#if rulesNote.welcome}<div class="rb-welcome">👋 {rulesNote.welcome}</div>{/if}
+          {#if rulesNote.rules}<details><summary>📜 {$t("Rules of this chat")}</summary><p>{rulesNote.rules}</p></details>{/if}
+        </div>
+        <button class="rb-ok" onclick={dismissRules}>{$t("Got it")}</button>
       </div>
     {/if}
 
@@ -3379,6 +3430,15 @@
   .rr.read :global(svg) { color: var(--accent); }
 
   /* Pinned-message bar */
+  .rules-bar { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--acc) 12%, var(--bg-shell)); animation: rb-in .35s cubic-bezier(.2,.8,.2,1); }
+  .rb-text { flex: 1; min-width: 0; font-size: 13px; }
+  .rb-welcome { font-weight: 600; margin-bottom: 4px; }
+  .rules-bar summary { cursor: pointer; color: var(--acc); font-weight: 700; }
+  .rules-bar summary::marker { color: var(--acc); }
+  .rules-bar p { margin: 6px 0 0; white-space: pre-wrap; line-height: 1.45; max-height: 30vh; overflow-y: auto; }
+  .rb-ok { border: none; border-radius: 8px; padding: 6px 12px; background: var(--acc); color: #06070c; font-weight: 700; cursor: pointer; }
+  @keyframes rb-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
   .pin-bar {
     display: flex; align-items: center; gap: 6px;
     padding: 8px 14px; border-bottom: 1px solid var(--border);

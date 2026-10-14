@@ -15,7 +15,12 @@
    *   removed users, join requests, server tag (Discord), recent actions.
    * Toggles apply immediately (like Telegram); text fields have a Save.
    */
-  import { groupMap, refreshGroups } from "../groups";
+  import { groupMap, groupMedia, refreshGroups } from "../groups";
+  import { openFileDialog } from "../dialog";
+  import { cropImage } from "./ImageCropper.svelte";
+  import { askConfirm } from "./Confirm.svelte";
+  import { activeChat, activeMessages } from "../stores";
+  import type { ChatMessage } from "../types";
   import { info, selectChat, backToList } from "../stores";
   import { api } from "../tauri";
   import { showToast } from "./Toast.svelte";
@@ -39,11 +44,15 @@
   let admin = $derived(isAdmin(group, me));
   let owner = $derived(isOwner(group, me));
   let isChannel = $derived(group?.kind === "channel");
+  /** Basic groups: private, ≤ 200 members, no server tag / slow mode / log. */
+  let basic = $derived(group?.kind === "group");
+  let media = $derived(group ? $groupMedia[group.id] ?? {} : {});
   let noun = $derived(isChannel ? "channel" : "group");
   let busy = $state(false);
 
   // Text drafts on the manage page.
   let dTitle = $state(""), dDesc = $state(""), dLink = $state("");
+  let dRules = $state(""), dWelcome = $state(""), dAccent = $state("");
   let lastId = "";
   $effect(() => {
     const g = group;
@@ -56,6 +65,7 @@
   });
   function resetDrafts(g: Group) {
     dTitle = g.title; dDesc = g.description; dLink = g.settings.public_link;
+    dRules = g.rules ?? ""; dWelcome = g.welcome ?? ""; dAccent = g.accent ?? "";
     myTag = memberOf(g, me)?.tag ?? "";
   }
 
@@ -89,9 +99,97 @@
     const changes: string[] = [];
     if (group && t !== group.title) changes.push(`renamed to “${t}”`);
     if (group && dDesc.trim() !== group.description) changes.push("changed the description");
-    await commit((g) => { g.title = t; g.description = dDesc.trim(); }, changes.join(", ") || undefined);
+    if (group && dRules.trim() !== (group.rules ?? "")) changes.push("updated the rules");
+    if (group && dWelcome.trim() !== (group.welcome ?? "")) changes.push("changed the welcome message");
+    if (group && dAccent !== (group.accent ?? "")) changes.push("changed the accent colour");
+    await commit((g) => {
+      g.title = t; g.description = dDesc.trim();
+      g.rules = dRules.trim() || undefined; g.welcome = dWelcome.trim() || undefined; g.accent = dAccent || undefined;
+    }, changes.join(", ") || undefined);
     showToast(tr("Saved"));
   }
+
+  // ---- photo & banner --------------------------------------------------
+  let uploading = $state<"" | "photo" | "banner">("");
+  async function pickGroupImage(kind: "photo" | "banner") {
+    if (!group) return;
+    try {
+      const result = await openFileDialog({
+        multiple: false, directory: false, title: tr(kind === "photo" ? "Pick a photo" : "Pick a banner"),
+        filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }],
+      });
+      const path = Array.isArray(result) ? (result[0] ?? null) : result;
+      if (!path) return;
+      let file = path;
+      if (!path.toLowerCase().endsWith(".gif")) {
+        // Animated GIFs go as they are; stills are cropped and re-encoded.
+        const raw = await api.readUserImage(path);
+        const src = URL.createObjectURL(new Blob([new Uint8Array(raw)]));
+        const blob = await cropImage(src, kind === "photo"
+          ? { aspect: 1, round: true, outWidth: 512, title: tr("Position the photo") }
+          : { aspect: 3, outWidth: 1500, title: tr("Position the banner") });
+        URL.revokeObjectURL(src);
+        if (!blob) return;
+        file = await api.saveTempFile(`${group.id}-${kind}.webp`, Array.from(new Uint8Array(await blob.arrayBuffer())));
+      }
+      uploading = kind;
+      const m = await api.uploadAttachment(group.id, file);
+      await commit((g) => { g[kind] = m; }, kind === "photo" ? "changed the photo" : "changed the banner");
+      showToast(tr(kind === "photo" ? "Photo updated" : "Banner updated"));
+    } catch (e) {
+      showToast(`${tr("Couldn't upload")}: ${e}`, 5000);
+    } finally {
+      uploading = "";
+    }
+  }
+  async function removeGroupImage(kind: "photo" | "banner") {
+    await commit((g) => { g[kind] = null; }, kind === "photo" ? "removed the photo" : "removed the banner");
+  }
+
+  // ---- group ⇄ supergroup ----------------------------------------------
+  const BASIC_LIMIT = 200;
+  async function setKind(k: "group" | "supergroup") {
+    if (!group || group.kind === k || !owner) return;
+    if (k === "group") {
+      if (group.members.length > BASIC_LIMIT) { showToast(tr("A group can have at most 200 members — this one is bigger"), 5000); return; }
+      const ok = await askConfirm({
+        title: tr("Turn into a regular group?"),
+        text: tr("Regular groups are private and small: the public link, server tag, slow mode, hidden member list and admin log are switched off. Settings are kept and come back if you upgrade again."),
+        ok: tr("Convert"),
+      });
+      if (!ok) return;
+      await commit((g) => { g.kind = "group"; g.settings.is_public = false; }, "converted the supergroup to a group");
+    } else {
+      await commit((g) => { g.kind = "supergroup"; }, "upgraded the group to a supergroup");
+      showToast(tr("Now a supergroup: up to 200 000 members, public link, server tag, slow mode and admin log"), 5000);
+    }
+  }
+
+  // ---- server stats (fun) ------------------------------------------------
+  let loadedMsgs = $state<{ gid: string; list: ChatMessage[] }>({ gid: "", list: [] });
+  $effect(() => {
+    const gid = group?.id;
+    if (!gid || gid === $activeChat?.id || loadedMsgs.gid === gid) return;
+    void api.getMessages(gid).then((list) => { loadedMsgs = { gid, list }; }).catch(() => {});
+  });
+  let stats = $derived.by(() => {
+    if (!group) return null;
+    const msgs = group.id === $activeChat?.id ? $activeMessages : loadedMsgs.gid === group.id ? loadedMsgs.list : [];
+    const week = Date.now() - 7 * 864e5;
+    const count: Record<string, number> = {};
+    let today = 0;
+    const d0 = new Date(); d0.setHours(0, 0, 0, 0);
+    for (const m of msgs) {
+      const at = Date.parse(m.time);
+      if (!Number.isFinite(at)) continue;
+      if (at >= d0.getTime()) today++;
+      if (at >= week && m.from) count[m.from] = (count[m.from] ?? 0) + 1;
+    }
+    const top = Object.entries(count).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    const created = Date.parse(group.created_at);
+    const ageDays = Number.isFinite(created) ? Math.max(0, Math.floor((Date.now() - created) / 864e5)) : null;
+    return { top, today, total: msgs.length, ageDays, max: top[0]?.[1] ?? 1 };
+  });
 
   // ---- my own stuff ----------------------------------------------------
   let myTag = $state("");
@@ -140,6 +238,7 @@
     const u = addUser.trim().toLowerCase().replace(/^@/, "");
     if (!u || !group) return;
     if (group.members.some((m) => m.username === u)) { showToast(tr("Already here")); return; }
+    if (basic && group.members.length >= BASIC_LIMIT) { showToast(tr("A group can have at most 200 members — upgrade it to a supergroup in Edit → Group type"), 6000); return; }
     if (get(peerPresence)[u]?.ni) {
       try { await navigator.clipboard.writeText(shareLink(group)); } catch { /* ignore */ }
       showToast(`@${u} only lets certain people add them to groups — the invite link is copied, send it to them`, 7000);
@@ -283,7 +382,7 @@
       .sort((a, b) => rank(a) - rank(b) || a.username.localeCompare(b.username));
   });
   const admins = $derived(group ? group.members.filter((m) => m.role !== "member") : []);
-  const showMembers = $derived(!!group && (admin || !group.settings.hide_members));
+  const showMembers = $derived(!!group && (admin || basic || !group.settings.hide_members));
 
   const PAGE_TITLE: Record<Page, string> = {
     info: "", manage: "Edit", type: "Type & link", perms: "Permissions", reactions: "Reactions",
@@ -345,14 +444,47 @@
 
       <div class="body">
       {#if page === "info"}
-        <div class="hero">
-          <span class="ava" style:background={group.gradient}>{group.title.charAt(0).toUpperCase()}</span>
+        {#if media.banner || group.accent}
+          <div class="gbanner" style:background={media.banner ? `center / cover no-repeat url("${media.banner}")` : `linear-gradient(135deg, ${group.accent}, color-mix(in srgb, ${group.accent} 40%, #000))`}></div>
+        {/if}
+        <div class="hero" class:over={!!(media.banner || group.accent)}>
+          {#if media.photo}
+            <img class="ava img" src={media.photo} alt="" style:--ring={group.accent ?? "transparent"} />
+          {:else}
+            <span class="ava" style:background={group.gradient} style:--ring={group.accent ?? "transparent"}>{group.title.charAt(0).toUpperCase()}</span>
+          {/if}
           <div class="hero-t">
             <h2>{group.title} {#if group.clan}<ClanTag tag={{ ...group.clan, gid: group.id, title: group.title, owner: group.owner }} size="md" />{/if}</h2>
-            <div class="sub">{$tn(group.members.length, isChannel ? "subscriber" : "member")}{$t(group.settings.is_public ? " · public" : " · private")}{group.settings.protected_content ? $t(" · protected") : ""}</div>
+            <div class="sub">{#if !isChannel}<span class="kind">{$t(basic ? "Group" : "Supergroup")}</span> · {/if}{$tn(group.members.length, isChannel ? "subscriber" : "member")}{$t(group.settings.is_public ? " · public" : " · private")}{group.settings.protected_content ? $t(" · protected") : ""}</div>
           </div>
         </div>
         {#if group.description}<p class="desc">{group.description}</p>{/if}
+
+        {#if group.rules}
+          <details class="card rules" style:--acc={group.accent ?? "var(--accent)"}>
+            <summary class="ct">{$t("Rules")}</summary>
+            <p class="rules-t">{group.rules}</p>
+          </details>
+        {/if}
+
+        {#if stats && stats.total > 0 && !isChannel}
+          <div class="card">
+            <div class="ct">{$t("This week")}</div>
+            <div class="stat-row">
+              <div class="stat"><b>{stats.today}</b><span>{$t("messages today")}</span></div>
+              <div class="stat"><b>{stats.total}</b><span>{$t("in history")}</span></div>
+              {#if stats.ageDays !== null}<div class="stat"><b>{stats.ageDays}</b><span>{$t("days old")}</span></div>{/if}
+            </div>
+            {#each stats.top as [u, n], i (u)}
+              <div class="leader">
+                <span class="medal">{["🥇", "🥈", "🥉", "4", "5"][i]}</span>
+                <span class="m-name">{u}</span>
+                <span class="lbar"><span style:width="{(n / stats.max) * 100}%" style:background={group.accent ?? "var(--accent)"}></span></span>
+                <span class="ln">{n}</span>
+              </div>
+            {/each}
+          </div>
+        {/if}
 
         <div class="card">
           <button class="row" onclick={copyLink}>
@@ -378,7 +510,7 @@
           </div>
         {/if}
 
-        {#if group.clan}
+        {#if group.clan && !basic}
           <div class="card">
             <div class="ct">{$t("Server tag")}</div>
             <div class="inline">
@@ -413,32 +545,76 @@
         <button class="danger-btn" onclick={leave} disabled={busy}>{owner ? `Delete and leave ${noun}` : `Leave ${noun}`}</button>
 
       {:else if page === "manage"}
+        {#if can(group, me, "change_info")}
+          <div class="card media-edit">
+            <div class="me-banner" style:background={media.banner ? `center / cover no-repeat url("${media.banner}")` : (group.accent ? group.accent : "var(--surface-2, #2a2f3a)")}>
+              <button class="me-btn" onclick={() => pickGroupImage("banner")} disabled={!!uploading}>{$t(uploading === "banner" ? "Uploading…" : media.banner ? "Change banner" : "Add banner")}</button>
+              {#if group.banner}<button class="me-btn ghost" onclick={() => removeGroupImage("banner")} disabled={busy}>{$t("Remove")}</button>{/if}
+            </div>
+            <div class="me-photo">
+              <button class="me-ava" onclick={() => pickGroupImage("photo")} disabled={!!uploading} title={$t("Change photo")}>
+                {#if media.photo}<img src={media.photo} alt="" />{:else}<span style:background={group.gradient}>{group.title.charAt(0).toUpperCase()}</span>{/if}
+                <i>{uploading === "photo" ? "…" : "📷"}</i>
+              </button>
+              <div class="me-actions">
+                <button class="btn" onclick={() => pickGroupImage("photo")} disabled={!!uploading}>{$t(media.photo ? "Change photo" : "Set photo")}</button>
+                {#if group.photo}<button class="btn ghost" onclick={() => removeGroupImage("photo")} disabled={busy}>{$t("Remove")}</button>{/if}
+              </div>
+            </div>
+            <div class="note">{$t("PNG, JPG, WebP or an animated GIF up to 4 MB. Encrypted for members; the relay keeps it while it's being viewed.")}</div>
+          </div>
+        {/if}
         <div class="card">
           <label class="fld"><span>{$t("Name")}</span><input class="inp" bind:value={dTitle} maxlength="64" disabled={!can(group, me, "change_info")} /></label>
           <label class="fld"><span>{$t("Description")}</span><textarea class="inp" rows="3" bind:value={dDesc} maxlength="255" disabled={!can(group, me, "change_info")}></textarea></label>
+          {#if !isChannel}
+            <label class="fld"><span>{$t("Rules")}</span><textarea class="inp" rows="4" bind:value={dRules} maxlength="1500" placeholder={$t("1. Be nice\n2. No spam")} disabled={!can(group, me, "change_info")}></textarea></label>
+            <label class="fld"><span>{$t("Welcome message")}</span><input class="inp" bind:value={dWelcome} maxlength="200" placeholder={$t("Shown to people who just joined")} disabled={!can(group, me, "change_info")} /></label>
+          {/if}
+          <div class="fld"><span>{$t("Accent colour")}</span>
+            <div class="colors">
+              <button class="ccell none" class:on={!dAccent} onclick={() => (dAccent = "")} aria-label={$t("None")} disabled={!can(group, me, "change_info")}>∅</button>
+              {#each CLAN_COLORS as c (c)}<button class="ccell" class:on={dAccent === c} style:background={c} onclick={() => (dAccent = c)} aria-label={c} disabled={!can(group, me, "change_info")}></button>{/each}
+              <input type="color" value={dAccent || "#3fb6a8"} oninput={(e) => (dAccent = (e.target as HTMLInputElement).value)} aria-label={$t("Custom colour")} disabled={!can(group, me, "change_info")} />
+            </div>
+          </div>
           {#if can(group, me, "change_info")}<button class="btn wide" onclick={saveInfo} disabled={busy}>{$t("Save")}</button>{/if}
         </div>
+        {#if !isChannel && owner}
+          <div class="card">
+            <div class="ct">{$t("Chat type")}</div>
+            <div class="seg">
+              <button class:active={basic} onclick={() => setKind("group")} disabled={busy}>{$t("Group")}</button>
+              <button class:active={!basic} onclick={() => setKind("supergroup")} disabled={busy}>{$t("Supergroup")}</button>
+            </div>
+            <div class="note">{$t(basic
+              ? "Group: private, up to 200 members. Upgrade for a public link, server tag, slow mode, hidden members and the admin log."
+              : "Supergroup: up to 200 000 members, public link, server tag, slow mode, hidden members and the admin log.")}</div>
+          </div>
+        {/if}
         <div class="card">
-          {@render row(isChannel ? "Channel type" : "Group type", group.settings.is_public ? "Public" : "Private", () => go("type"), "#007AFF")}
+          {#if !basic}{@render row(isChannel ? "Channel type" : "Group type", group.settings.is_public ? "Public" : "Private", () => go("type"), "#007AFF")}{/if}
           {#if !isChannel}{@render row("Permissions", `${PERM_ROWS.filter((p) => isOn(group, p.key)).length}/${PERM_ROWS.length}`, () => go("perms"), "#34C759")}{/if}
           {@render row("Reactions", group.settings.reactions === "none" ? "Off" : group.settings.reactions === "some" ? `${group.settings.allowed_reactions?.length ?? 0}` : "All", () => go("reactions"), "#FF9500")}
           {@render row("Administrators", `${admins.length}`, () => go("admins"), "#5856D6")}
           {@render row(isChannel ? "Subscribers" : "Members", `${group.members.length}`, () => go("members"), "#32ADE6")}
-          {@render row("Join requests", `${group.requests?.length ?? 0}`, () => go("requests"), "#FF2D55")}
+          {#if !basic}{@render row("Join requests", `${group.requests?.length ?? 0}`, () => go("requests"), "#FF2D55")}{/if}
           {@render row("Removed users", `${group.banned?.length ?? 0}`, () => go("banned"), "#FF3B30")}
-          {@render row("Server tag", group.clan?.text ?? "None", () => go("clan"), "#AF52DE")}
-          {@render row("Recent actions", `${group.log?.length ?? 0}`, () => go("log"), "#8E8E93")}
+          {#if !basic}
+            {@render row("Server tag", group.clan?.text ?? "None", () => go("clan"), "#AF52DE")}
+            {@render row("Recent actions", `${group.log?.length ?? 0}`, () => go("log"), "#8E8E93")}
+          {/if}
         </div>
         <div class="card">
           {#if !isChannel}
             {@render toggle("Chat history for new members", group.settings.history_visible ? "Visible" : "Hidden", group.settings.history_visible, () => toggleSetting("history_visible", "history for new members"))}
           {/if}
-          {@render toggle("Approve new members", "Admins must approve anyone who joins by link or server tag", !!group.settings.join_requests, () => toggleSetting("join_requests", "approve new members"))}
+          {#if !basic}{@render toggle("Approve new members", "Admins must approve anyone who joins by link or server tag", !!group.settings.join_requests, () => toggleSetting("join_requests", "approve new members"))}{/if}
           {@render toggle("Restrict saving content", "No forwarding, copying or saving media", !!group.settings.protected_content, () => toggleSetting("protected_content", "restrict saving content"))}
           {#if isChannel}
             {@render toggle("Sign messages", "Add the admin's name to posts", group.settings.sign_messages, () => toggleSetting("sign_messages", "sign messages"))}
             {@render toggle("Show authors' profiles", "Signatures link to the author", !!group.settings.show_authors, () => toggleSetting("show_authors", "show authors' profiles"))}
-          {:else}
+          {:else if !basic}
             {@render toggle("Hide members", "Only admins see the member list", !!group.settings.hide_members, () => toggleSetting("hide_members", "hide members"))}
           {/if}
         </div>
@@ -469,7 +645,7 @@
             {@render toggle(p.label, "", isOn(group, p.key), () => togglePerm(p.key, p.label), busy)}
           {/each}
         </div>
-        <div class="card">
+        <div class="card" class:hidden={basic}>
           <div class="ct">{$t("Slow mode")}</div>
           <div class="seg">
             {#each SLOW as v}
@@ -643,7 +819,45 @@
 
   .hero { display: flex; gap: 14px; align-items: center; padding: 6px 4px 10px; }
   .ava { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0;
-         color: #06070C; font-weight: 800; font-size: 26px; }
+         color: #06070C; font-weight: 800; font-size: 26px; box-shadow: 0 0 0 3px var(--ring, transparent); }
+  .ava.img { object-fit: cover; background: var(--bg-surface); }
+  .gbanner { height: 120px; margin: -12px -14px 0; animation: gb-in .45s cubic-bezier(.2,.8,.2,1); }
+  .hero.over { margin-top: -34px; position: relative; }
+  .hero.over .ava { width: 76px; height: 76px; box-shadow: 0 0 0 4px var(--bg-shell), 0 0 0 6px var(--ring, transparent); }
+  .hero.over .hero-t { padding-top: 30px; }
+  .kind { font-weight: 700; color: var(--fg); }
+  @keyframes gb-in { from { opacity: 0; transform: scale(1.04); } to { opacity: 1; transform: none; } }
+  .rules summary { cursor: pointer; list-style: none; color: var(--acc); }
+  .rules summary::before { content: "📜 "; }
+  .rules summary::after { content: " ›"; display: inline-block; transition: transform .2s; }
+  .rules[open] summary::after { transform: rotate(90deg); }
+  .rules-t { margin: 0 0 10px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; color: var(--fg); }
+  .stat-row { display: flex; gap: 8px; margin-bottom: 8px; }
+  .stat { flex: 1; background: var(--bg-input); border-radius: 10px; padding: 8px; display: flex; flex-direction: column; align-items: center; }
+  .stat b { font-size: 18px; color: var(--fg); }
+  .stat span { font-size: 11px; color: var(--fg-dim); }
+  .leader { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; }
+  .medal { width: 22px; text-align: center; color: var(--fg-dim); font-weight: 700; }
+  .lbar { flex: 1; height: 6px; border-radius: 3px; background: var(--bg-input); overflow: hidden; }
+  .lbar span { display: block; height: 100%; border-radius: 3px; transition: width .6s cubic-bezier(.2,.8,.2,1); }
+  .ln { min-width: 28px; text-align: right; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+  .media-edit { padding: 0 0 6px; overflow: hidden; }
+  .media-edit .note { padding: 6px 12px 4px; }
+  .me-banner { height: 110px; display: flex; align-items: flex-end; justify-content: flex-end; gap: 6px; padding: 8px; }
+  .me-btn { border: none; border-radius: 8px; padding: 6px 10px; font-size: 12px; font-weight: 700; cursor: pointer;
+            background: rgba(0,0,0,.55); color: #fff; backdrop-filter: blur(6px); }
+  .me-btn.ghost { background: rgba(0,0,0,.3); }
+  .me-photo { display: flex; align-items: center; gap: 12px; padding: 0 12px; margin-top: -30px; }
+  .me-ava { position: relative; width: 72px; height: 72px; border-radius: 50%; padding: 0; border: 4px solid var(--bg-surface);
+            overflow: hidden; cursor: pointer; background: none; flex-shrink: 0; }
+  .me-ava img, .me-ava span { width: 100%; height: 100%; object-fit: cover; display: grid; place-items: center;
+            font-weight: 800; font-size: 26px; color: #06070C; }
+  .me-ava i { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.45);
+              opacity: 0; transition: opacity .2s; font-style: normal; font-size: 20px; }
+  .me-ava:hover i { opacity: 1; }
+  .me-actions { display: flex; gap: 6px; padding-top: 30px; }
+  .ccell.none { background: var(--bg-input); color: var(--fg-dim); font-size: 13px; }
+  .hidden { display: none; }
   .hero h2 { margin: 0; font-size: 19px; font-weight: 800; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .sub { font-size: 12.5px; color: var(--fg-muted); margin-top: 3px; }
   .desc { margin: 0 4px 10px; font-size: 13.5px; color: var(--fg); line-height: 1.45; white-space: pre-wrap; }

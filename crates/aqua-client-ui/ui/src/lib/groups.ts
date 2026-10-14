@@ -9,8 +9,39 @@ import { info } from "./stores";
 import { can } from "./groupRules";
 import { showToast } from "./components/Toast.svelte";
 import { allowed } from "./privacy";
+import { extraAvatars } from "./people";
+import { mediaPath } from "./media";
+import { assetUrl } from "./tauri";
+import type { ArticleMedia } from "./types";
 
 export const groups = writable<Group[]>([]);
+
+/** Decrypted local URLs of group photos / banners: gid → { photo, banner }. */
+export const groupMedia = writable<Record<string, { photo?: string; banner?: string }>>({});
+/** cid already resolved per gid+slot, so list refreshes don't re-decrypt. */
+const resolvedCid = new Map<string, string>();
+groups.subscribe((list) => {
+  for (const g of list) {
+    for (const k of ["photo", "banner"] as const) {
+      const slot = `${g.id}|${k}`;
+      const m = g[k] as ArticleMedia | null | undefined;
+      if (!m?.cid) {
+        if (!resolvedCid.has(slot)) continue;
+        resolvedCid.delete(slot);
+        groupMedia.update((x) => ({ ...x, [g.id]: { ...x[g.id], [k]: undefined } }));
+        if (k === "photo") extraAvatars.update((x) => { const { [g.id]: _, ...rest } = x; return rest; });
+        continue;
+      }
+      if (resolvedCid.get(slot) === m.cid) continue;
+      resolvedCid.set(slot, m.cid);
+      void mediaPath(m).then((path) => {
+        const url = assetUrl(path);
+        groupMedia.update((x) => ({ ...x, [g.id]: { ...x[g.id], [k]: url } }));
+        if (k === "photo") extraAvatars.update((x) => ({ ...x, [g.id]: url }));
+      }).catch(() => resolvedCid.delete(slot));
+    }
+  }
+});
 
 /** Map id -> group, for quick lookups in components. */
 export const groupMap = derived(groups, ($g) => {

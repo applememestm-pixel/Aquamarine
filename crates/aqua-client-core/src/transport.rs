@@ -341,7 +341,13 @@ impl Transport {
     /// Upload an encrypted blob to the content-addressed store. Server
     /// checks that the SHA-256 of the body matches `cid`.
     pub async fn upload_blob(&self, cid: &str, bytes: Vec<u8>) -> Result<(), TransportError> {
-        let url = format!("{}/v1/blob/{}", self.server_url.trim_end_matches('/'), cid);
+        self.upload_blob_ext(cid, bytes, false).await
+    }
+
+    /// `keep`: ask the relay to hold it long-term (group photos, ≤ 4 MiB)
+    /// instead of in the hours-long delivery cache.
+    pub async fn upload_blob_ext(&self, cid: &str, bytes: Vec<u8>, keep: bool) -> Result<(), TransportError> {
+        let url = format!("{}/v1/blob/{}{}", self.server_url.trim_end_matches('/'), cid, if keep { "?keep=1" } else { "" });
         let r = self.http.post(&url).bearer_auth(self.bearer().await?).body(bytes).send().await?;
         if !r.status().is_success() {
             return Err(TransportError::Server {
