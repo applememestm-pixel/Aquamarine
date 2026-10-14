@@ -185,7 +185,11 @@ pub enum Incoming {
 pub struct Transport {
     server_url: String,
     username: String,
-    token: String,
+    /// Bearer token + when it was issued. The server's tokens live one
+    /// hour; [`Transport::bearer`] signs in again before that.
+    token: std::sync::Mutex<(String, std::time::Instant)>,
+    /// Kept to re-sign the auth challenge when the token gets old.
+    identity: IdentityKeyPair,
     http: reqwest::Client,
     ws_out: mpsc::UnboundedSender<RelayMessage>,
     /// Kept alive so the WS read/write tasks stay running.
@@ -271,7 +275,8 @@ impl Transport {
             Self {
                 server_url: server_url.to_string(),
                 username: username.to_string(),
-                token,
+                token: std::sync::Mutex::new((token, std::time::Instant::now())),
+                identity: identity.clone(),
                 http,
                 ws_out: out_tx,
                 _write_task: write_task,
@@ -282,14 +287,33 @@ impl Transport {
     }
 
     pub fn username(&self) -> &str { &self.username }
-    pub fn token(&self) -> &str { &self.token }
+    /// The current bearer token (may be close to expiry — prefer [`Self::bearer`]).
+    pub fn token(&self) -> String { self.token.lock().map(|t| t.0.clone()).unwrap_or_default() }
+
+    /// A bearer token that is valid for a while yet: tokens older than
+    /// 45 minutes (they expire after 60) are renewed by signing a fresh
+    /// challenge. Without this every request failed with "token has
+    /// expired" once the app had been open for an hour.
+    pub async fn bearer(&self) -> Result<String, TransportError> {
+        const RENEW_AFTER: std::time::Duration = std::time::Duration::from_secs(45 * 60);
+        if let Ok(t) = self.token.lock() {
+            if t.1.elapsed() < RENEW_AFTER {
+                return Ok(t.0.clone());
+            }
+        }
+        let fresh = sign_in(&self.http, &self.server_url, &self.identity).await?;
+        if let Ok(mut t) = self.token.lock() {
+            *t = (fresh.clone(), std::time::Instant::now());
+        }
+        Ok(fresh)
+    }
 
     pub async fn upload_bundle(&self, bundle: &BundleUpload) -> Result<(), TransportError> {
         let url = format!("{}/v1/bundle/{}", self.server_url.trim_end_matches('/'), self.username);
         let r = self
             .http
             .post(&url)
-            .bearer_auth(&self.token)
+            .bearer_auth(self.bearer().await?)
             .json(bundle)
             .send()
             .await?;
@@ -318,7 +342,7 @@ impl Transport {
     /// checks that the SHA-256 of the body matches `cid`.
     pub async fn upload_blob(&self, cid: &str, bytes: Vec<u8>) -> Result<(), TransportError> {
         let url = format!("{}/v1/blob/{}", self.server_url.trim_end_matches('/'), cid);
-        let r = self.http.post(&url).bearer_auth(&self.token).body(bytes).send().await?;
+        let r = self.http.post(&url).bearer_auth(self.bearer().await?).body(bytes).send().await?;
         if !r.status().is_success() {
             return Err(TransportError::Server {
                 status: r.status().as_u16(),
@@ -436,7 +460,7 @@ impl Transport {
             "ticket": ticket, "username": username,
             "display_name": display_name, "about": about, "phone": phone,
         });
-        let r = self.http.post(&url).bearer_auth(&self.token).json(&body).send().await?;
+        let r = self.http.post(&url).bearer_auth(self.bearer().await?).json(&body).send().await?;
         if !r.status().is_success() {
             return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
         }
@@ -448,7 +472,7 @@ impl Transport {
     pub async fn update_profile(&self, display_name: &str, about: &str, phone: &str) -> Result<(), TransportError> {
         let url = format!("{}/v1/users/{}/profile", self.server_url.trim_end_matches('/'), self.username);
         let body = serde_json::json!({ "display_name": display_name, "about": about, "phone": phone });
-        let r = self.http.post(&url).bearer_auth(&self.token).json(&body).send().await?;
+        let r = self.http.post(&url).bearer_auth(self.bearer().await?).json(&body).send().await?;
         if !r.status().is_success() {
             return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
         }
@@ -465,7 +489,7 @@ impl Transport {
     ) -> Result<(), TransportError> {
         let url = format!("{}/v1/users/{}/profile", self.server_url.trim_end_matches('/'), self.username);
         let body = serde_json::json!({ "display_name": display_name, "about": about, "phone": phone, "extra": extra });
-        let r = self.http.post(&url).bearer_auth(&self.token).json(&body).send().await?;
+        let r = self.http.post(&url).bearer_auth(self.bearer().await?).json(&body).send().await?;
         if !r.status().is_success() {
             return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
         }
@@ -478,7 +502,7 @@ impl Transport {
         #[derive(serde::Deserialize)]
         struct Resp { ver: i64 }
         let url = format!("{}/v1/users/{}/media/{}", self.server_url.trim_end_matches('/'), self.username, kind);
-        let r = self.http.post(&url).bearer_auth(&self.token)
+        let r = self.http.post(&url).bearer_auth(self.bearer().await?)
             .header(reqwest::header::CONTENT_TYPE, mime)
             .body(bytes).send().await?;
         if !r.status().is_success() {
@@ -490,7 +514,7 @@ impl Transport {
     /// Remove our avatar / banner.
     pub async fn clear_profile_media(&self, kind: &str) -> Result<(), TransportError> {
         let url = format!("{}/v1/users/{}/media/{}", self.server_url.trim_end_matches('/'), self.username, kind);
-        let r = self.http.delete(&url).bearer_auth(&self.token).send().await?;
+        let r = self.http.delete(&url).bearer_auth(self.bearer().await?).send().await?;
         if !r.status().is_success() && r.status().as_u16() != 404 {
             return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
         }
@@ -501,7 +525,7 @@ impl Transport {
     pub async fn set_media_acl(&self, everybody: bool, allow: &[String], deny: &[String]) -> Result<(), TransportError> {
         let url = format!("{}/v1/users/{}/media_acl", self.server_url.trim_end_matches('/'), self.username);
         let body = serde_json::json!({ "everybody": everybody, "allow": allow, "deny": deny });
-        let r = self.http.post(&url).bearer_auth(&self.token).json(&body).send().await?;
+        let r = self.http.post(&url).bearer_auth(self.bearer().await?).json(&body).send().await?;
         if !r.status().is_success() {
             return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
         }
@@ -512,7 +536,7 @@ impl Transport {
     pub async fn fetch_profile_media(&self, username: &str, kind: &str, ver: i64) -> Result<Option<(String, Vec<u8>)>, TransportError> {
         let url = format!("{}/v1/users/{}/media/{}?v={}", self.server_url.trim_end_matches('/'), username, kind, ver);
         // Authenticated so a profile-photo privacy list can include us.
-        let r = self.http.get(&url).bearer_auth(&self.token).send().await?;
+        let r = self.http.get(&url).bearer_auth(self.bearer().await?).send().await?;
         if r.status().as_u16() == 404 || r.status().as_u16() == 403 { return Ok(None); }
         if !r.status().is_success() {
             return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
@@ -530,7 +554,7 @@ impl Transport {
         struct Resp { username: String, token: String }
         let url = format!("{}/v1/bot/register", self.server_url.trim_end_matches('/'));
         let body = serde_json::json!({ "username": username, "display_name": display_name });
-        let r = self.http.post(&url).bearer_auth(&self.token).json(&body).send().await?;
+        let r = self.http.post(&url).bearer_auth(self.bearer().await?).json(&body).send().await?;
         if !r.status().is_success() {
             return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
         }
@@ -553,7 +577,7 @@ impl Transport {
     /// Ask the relay to import a Telegram pack by link; returns its manifest.
     pub async fn import_pack(&self, link: &str) -> Result<serde_json::Value, TransportError> {
         let url = format!("{}/v1/packs/import", self.server_url.trim_end_matches('/'));
-        let r = self.http.post(&url).bearer_auth(&self.token).json(&serde_json::json!({ "link": link })).send().await?;
+        let r = self.http.post(&url).bearer_auth(self.bearer().await?).json(&serde_json::json!({ "link": link })).send().await?;
         if !r.status().is_success() {
             return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
         }
@@ -592,7 +616,7 @@ impl Transport {
         #[derive(serde::Deserialize)]
         struct Row { username: String, token: String, #[serde(default)] display_name: String }
         let url = format!("{}/v1/bot/list", self.server_url.trim_end_matches('/'));
-        let r = self.http.get(&url).bearer_auth(&self.token).send().await?;
+        let r = self.http.get(&url).bearer_auth(self.bearer().await?).send().await?;
         if !r.status().is_success() {
             return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
         }
@@ -603,7 +627,7 @@ impl Transport {
     /// Delete one of this identity's bots (its token stops working).
     pub async fn delete_bot(&self, username: &str) -> Result<(), TransportError> {
         let url = format!("{}/v1/bot/{}", self.server_url.trim_end_matches('/'), username.trim().to_lowercase());
-        let r = self.http.delete(&url).bearer_auth(&self.token).send().await?;
+        let r = self.http.delete(&url).bearer_auth(self.bearer().await?).send().await?;
         if !r.status().is_success() {
             return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
         }
