@@ -50,6 +50,11 @@ rand         = "0.8"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 
 # Linux: tune the WebKitGTK webview (WebRTC is off there by default).
+# "Now playing" from the Windows media session (Spotify, browsers, Яндекс
+# Музыка, Media Player… — anything that shows in the volume flyout).
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Media_Control", "Foundation", "Foundation_Collections", "Win32_System_WinRT"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = { version = "2.0.2", features = ["v2_38"] }
 # "Now playing" from other apps (MPRIS: Spotify, browsers, mpv, …).

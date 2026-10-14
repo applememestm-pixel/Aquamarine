@@ -353,6 +353,11 @@ pub fn snapshot() -> Vec<WindowInfo> {
 /// Spotify Web / YouTube / SoundCloud, mpv, …), which beats window titles.
 pub async fn detect() -> Vec<Activity> {
     let mut acts = tokio::task::spawn_blocking(|| classify(&snapshot())).await.unwrap_or_default();
+    #[cfg(windows)]
+    if let Some(m) = tokio::task::spawn_blocking(winmedia::now_playing).await.ok().flatten() {
+        acts.retain(|a| a.kind == "playing");
+        acts.push(m);
+    }
     #[cfg(target_os = "linux")]
     if let Some(m) = linux::mpris_now_playing().await {
         acts.retain(|a| a.kind == "playing");
@@ -595,8 +600,98 @@ mod win {
     }
 }
 
+/// A friendly name for a Windows media-session app id (AUMID or exe).
+pub fn windows_app_name(app_id: &str) -> String {
+    let l = app_id.to_ascii_lowercase();
+    let known: &[(&str, &str)] = &[
+        ("spotify", "Spotify"),
+        ("yandex.music", "Яндекс Музыка"),
+        ("yandexmusic", "Яндекс Музыка"),
+        ("msedge", "Edge"),
+        ("chrome", "Chrome"),
+        ("firefox", "Firefox"),
+        ("308046b0af4a39cb", "Firefox"),
+        ("opera", "Opera"),
+        ("brave", "Brave"),
+        ("vivaldi", "Vivaldi"),
+        ("yandex", "Яндекс Браузер"),
+        ("zunemusic", "Media Player"),
+        ("zunevideo", "Movies & TV"),
+        ("applemusic", "Apple Music"),
+        ("itunes", "iTunes"),
+        ("vlc", "VLC"),
+        ("foobar2000", "foobar2000"),
+        ("aimp", "AIMP"),
+        ("musicbee", "MusicBee"),
+        ("tidal", "TIDAL"),
+        ("deezer", "Deezer"),
+        ("discord", "Discord"),
+        ("telegram", "Telegram"),
+    ];
+    for (k, v) in known {
+        if l.contains(k) {
+            return (*v).to_string();
+        }
+    }
+    // "Foo.exe" / "Company.App_hash!App" → "Foo" / "App"
+    let base = app_id.split('!').next().unwrap_or(app_id);
+    let base = base.rsplit(['\\', '/']).next().unwrap_or(base);
+    let base = base.trim_end_matches(".exe").trim_end_matches(".EXE");
+    let base = base.split('_').next().unwrap_or(base);
+    base.rsplit('.').next().unwrap_or(base).to_string()
+}
+
+#[cfg(windows)]
+mod winmedia {
+    use super::{from_player, windows_app_name, Activity};
+    use windows::Media::Control::{
+        GlobalSystemMediaTransportControlsSessionManager as Manager,
+        GlobalSystemMediaTransportControlsSessionPlaybackStatus as Status,
+    };
+
+    /// The first session that is actually playing.
+    pub fn now_playing() -> Option<Activity> {
+        unsafe {
+            let _ = windows::Win32::System::WinRT::RoInitialize(windows::Win32::System::WinRT::RO_INIT_MULTITHREADED);
+        }
+        let mgr = Manager::RequestAsync().ok()?.join().ok()?;
+        let sessions = mgr.GetSessions().ok()?;
+        let n = sessions.Size().ok()?;
+        for i in 0..n {
+            let Ok(s) = sessions.GetAt(i) else { continue };
+            let playing = s.GetPlaybackInfo().ok().and_then(|p| p.PlaybackStatus().ok()) == Some(Status::Playing);
+            if !playing {
+                continue;
+            }
+            let Some(props) = s.TryGetMediaPropertiesAsync().ok().and_then(|op| op.join().ok()) else { continue };
+            let title = props.Title().map(|h| h.to_string()).unwrap_or_default();
+            let artist = props.Artist().map(|h| h.to_string()).unwrap_or_default();
+            let app = s.SourceAppUserModelId().map(|h| h.to_string()).unwrap_or_default();
+            let name = windows_app_name(&app);
+            let key = format!("{} {}", app.to_ascii_lowercase(), name.to_ascii_lowercase());
+            if let Some(a) = from_player(&name, &key, &title, &[artist], "") {
+                return Some(a);
+            }
+        }
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn windows_media_apps() {
+        use super::windows_app_name as n;
+        assert_eq!(n("Spotify.exe"), "Spotify");
+        assert_eq!(n("MSEdge"), "Edge");
+        assert_eq!(n("308046B0AF4A39CB"), "Firefox");
+        assert_eq!(n("Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic"), "Media Player");
+        assert_eq!(n("C:\\Apps\\Strawberry\\strawberry.exe"), "strawberry");
+        assert_eq!(n("Contoso.Player_abc123!App"), "Player");
+        let a = super::from_player(&n("Spotify.exe"), "spotify.exe spotify", "Song", &["Band".into()], "").unwrap();
+        assert_eq!((a.kind.as_str(), a.name.as_str(), a.details.as_str()), ("listening", "Spotify", "Song"));
+    }
+
     #[test]
     fn mpris_players() {
         let a = from_player("Mozilla Firefox", "org.mpris.MediaPlayer2.firefox.instance_1_23", "self-hacking", &["Ling tosite sigure".into()], "https://open.spotify.com/track/1");
