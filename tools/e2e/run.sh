@@ -2,6 +2,7 @@
 # End-to-end check of the real Linux client (WebKitGTK) — no mocks.
 #   tools/e2e/run.sh            article with a video + music, playback,
 #                               reader; prints main-thread stalls, CPU and fps
+#   tools/e2e/run.sh x.py ...   run these scripts (after registering) instead
 # Needs: Xvfb, webkit2gtk-driver (WebKitWebDriver), tauri-driver
 # (cargo install tauri-driver), python3 + selenium, ffmpeg, and release builds
 # of aqua-server and the client (cargo build --release --features custom-protocol).
@@ -20,5 +21,9 @@ DISPLAY=:99 AQUA_DATA_DIR="$E2E_WORK/data" WEBKIT_DISABLE_DMABUF_RENDERER=1 taur
 trap 'kill $TD $SRV $XV 2>/dev/null || true' EXIT
 sleep 1
 python3 "$HERE/register.py"
-python3 "$HERE/article_media.py"
+if [ $# -gt 0 ]; then
+  for s in "$@"; do python3 "$HERE/$s"; done   # e.g. run.sh audio_probe.py
+else
+  python3 "$HERE/article_media.py"
+fi
 echo "screenshots: $E2E_WORK"

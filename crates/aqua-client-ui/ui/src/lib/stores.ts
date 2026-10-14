@@ -228,12 +228,27 @@ export function backToList(fromHistory = false) {
   } catch { /* ignore */ }
 }
 
+/** Keep the old object for every message that didn't change, so a
+ *  refresh after one new message doesn't re-render the whole chat. */
+function reuseUnchanged(prev: ChatMessage[], next: ChatMessage[]): ChatMessage[] {
+  if (!prev.length) return next;
+  const old = new Map(prev.map((m) => [m.id, m]));
+  let same = prev.length === next.length;
+  const out = next.map((m, i) => {
+    const o = old.get(m.id);
+    const keep = o && JSON.stringify(o) === JSON.stringify(m) ? o : m;
+    if (keep !== prev[i]) same = false;
+    return keep;
+  });
+  return same ? prev : out;
+}
+
 export async function loadActiveMessages() {
   const id = get(activeId);
   if (!id) { activeMessages.set([]); return; }
   try {
     const msgs = await api.getMessages(id);
-    activeMessages.set(msgs);
+    activeMessages.set(reuseUnchanged(get(activeId) === id ? get(activeMessages) : [], msgs));
   } catch (e) {
     console.error("get_messages failed", e);
     activeMessages.set([]);
@@ -258,7 +273,7 @@ export async function sendCurrent(text: string): Promise<string | null> {
     }
     // Refresh both messages and chat list (backend bumps chat to top).
     const [msgs, updated] = await Promise.all([api.getMessages(id), api.listChats()]);
-    activeMessages.set(msgs);
+    activeMessages.set(reuseUnchanged(get(activeMessages), msgs));
     chats.set(updated);
     // Clear draft.
     drafts.update((d) => { const { [id]: _, ...rest } = d; return rest; });

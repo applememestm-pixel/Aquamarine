@@ -697,6 +697,7 @@
     if (!messagesEl) return;
     const dist = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
     scrolledUp = dist > messagesEl.clientHeight * 0.9;
+    if (messagesEl.scrollTop < 600) void showOlder();
   }
   function jumpToBottom() {
     if (!messagesEl) return;
@@ -785,7 +786,8 @@
     if (kbReplyIdx >= list.length) { replyTarget = null; kbReplyIdx = -1; return; }
     const row = list[kbReplyIdx];
     replyTarget = { author: authorOf(row), text: snippetOf(row).slice(0, 180) };
-    document.querySelector(`[data-msg-id="${CSS.escape(row.id)}"]`)?.scrollIntoView({ block: "nearest" });
+    void ensureShown(row.id).then(() =>
+      document.querySelector(`[data-msg-id="${CSS.escape(row.id)}"]`)?.scrollIntoView({ block: "nearest" }));
   }
 
   // ---- Article card in the chat ------------------------------------------
@@ -985,6 +987,45 @@
   });
   let rows = $derived(computeRows($activeMessages, myUsername));
 
+  // ---- Windowed rendering: only the newest WINDOW_STEP rows are in the
+  // DOM; scrolling near the top reveals the next page (scroll position
+  // kept). Long chats stay as light as short ones.
+  const WINDOW_STEP = 120;
+  let shownCount = $state(WINDOW_STEP);
+  let shownRows = $derived(rows.length > shownCount ? rows.slice(rows.length - shownCount) : rows);
+  $effect(() => {
+    void $activeChat?.id;
+    untrack(() => { shownCount = WINDOW_STEP; });
+  });
+  let growing = false;
+  async function showOlder() {
+    if (growing || !messagesEl || shownCount >= rows.length) return;
+    growing = true;
+    const h0 = messagesEl.scrollHeight, top0 = messagesEl.scrollTop;
+    shownCount += WINDOW_STEP;
+    await tick();
+    if (messagesEl) messagesEl.scrollTop = top0 + (messagesEl.scrollHeight - h0);
+    growing = false;
+  }
+  /** Make sure a row is rendered before scrolling to it. */
+  async function ensureShown(id: string) {
+    const idx = rows.findIndex((r) => r.id === id);
+    if (idx < 0) return;
+    const need = rows.length - idx + 20;
+    if (need > shownCount) { shownCount = need; await tick(); }
+  }
+
+  // Row objects are reused while their message and grouping are unchanged,
+  // so the keyed list only touches rows that actually changed.
+  let rowCache = new WeakMap<ChatMessage, Row>();
+  function rowOf(m: ChatMessage, first: boolean, last: boolean, outgoing: boolean): Row {
+    const c = rowCache.get(m);
+    if (c && c.first === first && c.last === last && c.outgoing === outgoing) return c;
+    const r = { ...m, first, last, outgoing } as Row;
+    rowCache.set(m, r);
+    return r;
+  }
+
   function computeRows(msgs: ChatMessage[], me: string): Row[] {
     const out: Row[] = [];
     let prevFrom: string | null = null;
@@ -998,7 +1039,7 @@
     for (let i = 0; i < msgs.length; i++) {
       const m = msgs[i];
       if (m.kind.type === "system" || m.kind.type === "date_separator") {
-        out.push({ ...m, first: false, last: false, outgoing: false });
+        out.push(rowOf(m, false, false, false));
         prevFrom = null;
         prevTime = null;
         continue;
@@ -1011,7 +1052,7 @@
         next.kind.type === "date_separator" ||
         next.from !== m.from ||
         next.time !== m.time;
-      out.push({ ...m, first, last, outgoing: mine(m.from) });
+      out.push(rowOf(m, first, last, mine(m.from)));
       prevFrom = m.from;
       prevTime = m.time;
     }
@@ -1125,9 +1166,10 @@
     queueMicrotask(() => document.querySelector<HTMLInputElement>("#chat-search-input")?.focus());
   }
   function closeSearch() { searchOpen = false; searchQuery = ""; searchIdx = 0; }
-  function scrollToHit() {
+  async function scrollToHit() {
     const id = searchHits[searchIdx];
     if (!id || !messagesEl) return;
+    await ensureShown(id);
     messagesEl.querySelector(`[data-id="${id}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
   }
   function searchNext() {
@@ -1574,8 +1616,9 @@
     if (!id) return null;
     return rows.find((r) => r.id === id) ?? null;
   });
-  function scrollToPinned() {
+  async function scrollToPinned() {
     if (!pinned || !messagesEl) return;
+    await ensureShown(pinned.id);
     const el = messagesEl.querySelector(`[data-id="${pinned.id}"]`);
     el?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
@@ -1831,7 +1874,7 @@
           </div>
         </div>
       {/if}
-      {#each rows as m (m.id)}
+      {#each shownRows as m (m.id)}
         {#if m.kind.type === "date_separator"}
           <div class="date-sep">{m.kind.content.label}</div>
         {:else if m.kind.type === "system"}
