@@ -84,7 +84,7 @@
 
 <script lang="ts">
   import { settings } from "../theme";
-  import { mediaSupport } from "../media";
+  import { mediaSupport, streamSrc } from "../media";
   /**
    * One element for every kind of sticker / emoji / GIF we show: static
    * images, Telegram animated stickers (.tgs → Lottie on a canvas) and video
@@ -103,8 +103,10 @@
     play?: "auto" | "hover" | "never";
     fit?: "contain" | "cover";
     class?: string;
+    /** Big grids (the picker): let the browser load images as they scroll in. */
+    lazy?: boolean;
   }
-  let { src, mime = null, alt = "", play: playProp = "auto", fit = "contain", class: klass = "" }: Props = $props();
+  let { src, mime = null, alt = "", play: playProp = "auto", fit = "contain", class: klass = "", lazy = false }: Props = $props();
   // "Animated stickers & emoji" off → they play on hover only.
   const play = $derived(playProp === "auto" && !$settings.autoplayStickers ? "hover" : playProp);
 
@@ -182,10 +184,12 @@
   onmouseleave={() => { hovering = false; if (play === "hover") sync(); }}
 >
   {#if kind === "image" || failed}
-    {#if !failed}<img {src} {alt} draggable="false" loading="lazy" />{:else}<span class="fallback">{alt}</span>{/if}
+    {#if !failed}<img {src} {alt} draggable="false" loading={lazy ? "lazy" : "eager"} decoding="async" />{:else}<span class="fallback">{alt}</span>{/if}
   {:else if kind === "video" && videoOk}
-    <video bind:this={video} {src} muted loop playsinline preload="metadata" autoplay={play === "auto"}
-      onloadeddata={() => sync()}></video>
+    <!-- Local files go through the loopback media server: WebKitGTK hangs
+         on <video> straight from the asset protocol (lib/media.ts). -->
+    <video bind:this={video} use:streamSrc={src} muted loop playsinline preload="metadata"
+      onloadeddata={() => sync()} onerror={() => (failed = true)}></video>
   {/if}
 </div>
 

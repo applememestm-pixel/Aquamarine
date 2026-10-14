@@ -208,6 +208,36 @@
   );
 
   // ---- actions ----
+  // ---- Telegram-style preview: press and hold a sticker / custom emoji,
+  // slide over others to switch, release to close (nothing is sent).
+  let preview = $state<CItem | SItem | null>(null);
+  let holdTimer: ReturnType<typeof setTimeout> | null = null;
+  let suppressClick = false;
+  const byKey = $derived.by(() => {
+    const m = new Map<string, CItem | SItem>();
+    for (const sec of sections) for (const it of sec.items) if (it.kind !== "unicode") m.set(it.key, it);
+    return m;
+  });
+  function holdStart(e: PointerEvent, it: EItem | SItem) {
+    if (it.kind === "unicode" || e.button !== 0) return;
+    if (holdTimer) clearTimeout(holdTimer);
+    holdTimer = setTimeout(() => { preview = it; suppressClick = true; holdTimer = null; }, 320);
+  }
+  function holdMove(e: PointerEvent) {
+    if (!preview) return;
+    const cell = (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)?.closest<HTMLElement>("[data-pk]");
+    const it = cell ? byKey.get(cell.dataset.pk ?? "") : null;
+    if (it && it !== preview) preview = it;
+  }
+  function holdEnd() {
+    if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+    if (preview) preview = null;
+  }
+  function pickGuarded(it: EItem | SItem) {
+    if (suppressClick) { suppressClick = false; return; }
+    pick(it);
+  }
+
   function pick(it: EItem | SItem) {
     if (it.kind === "unicode") { insertEmoji(it.u); pushRecent("emoji", it.u); }
     else if (it.kind === "custom") { insertEmoji(it.token); pushRecent("emoji", it.token); }
@@ -361,6 +391,14 @@
     finally { importing = false; }
   }
 
+  // Releasing anywhere ends a press-and-hold preview.
+  onMount(() => {
+    const up = () => holdEnd();
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    return () => { window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up); };
+  });
+
   // ---- outside click / drag & drop ----
   onMount(() => {
     const onDown = (e: MouseEvent) => {
@@ -399,9 +437,9 @@
   {#if it.kind === "unicode"}
     <button class="cell e" title={it.words.split(" ").slice(0, 4).join(" ")} onclick={() => pick(it)}>{it.u}</button>
   {:else if it.kind === "custom"}
-    <button class="cell e" title={it.emoji} onclick={() => pick(it)}><AnimatedMedia src={it.url} mime={it.mime} alt={it.emoji} play="hover" /></button>
+    <button class="cell e" title={it.emoji} data-pk={it.key} onpointerdown={(e) => holdStart(e, it)} onclick={() => pickGuarded(it)}><AnimatedMedia lazy src={it.url} mime={it.mime} alt={it.emoji} play="hover" /></button>
   {:else}
-    <button class="cell s" title={it.emoji} onclick={() => pick(it)}><AnimatedMedia src={it.url} mime={it.mime} alt={it.emoji} play="hover" /></button>
+    <button class="cell s" title={it.emoji} data-pk={it.key} onpointerdown={(e) => holdStart(e, it)} onclick={() => pickGuarded(it)}><AnimatedMedia lazy src={it.url} mime={it.mime} alt={it.emoji} play="hover" /></button>
   {/if}
 {/snippet}
 
@@ -414,6 +452,7 @@
     style:bottom="{pos.bottom}px"
     role="dialog"
     aria-label={$t("Emoji, stickers and GIFs")}
+    onpointermove={holdMove}
   >
     <div class="top">
       <div class="tabs" role="tablist">
@@ -533,6 +572,13 @@
       </div>
     {/if}
 
+    {#if preview}
+      <div class="pv" class:emoji={preview.kind === "custom"} aria-hidden="true">
+        <div class="pv-media"><AnimatedMedia src={preview.url} mime={preview.mime} alt={preview.emoji} play="auto" /></div>
+        <div class="pv-emoji">{preview.emoji}</div>
+      </div>
+    {/if}
+
     {#if dropHover}
       <div class="drop-veil">Drop to add to {tab === "gifs" ? "GIFs" : tab === "emoji" ? "My emoji" : "My stickers"}</div>
     {/if}
@@ -540,6 +586,19 @@
 {/if}
 
 <style>
+  .pv {
+    position: absolute; inset: 0; z-index: 5; pointer-events: none;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+    background: color-mix(in srgb, var(--bg-surface) 72%, transparent);
+    backdrop-filter: blur(6px);
+    border-radius: inherit;
+    animation: pv-in 0.14s ease-out;
+  }
+  .pv-media { width: 220px; height: 220px; }
+  .pv.emoji .pv-media { width: 128px; height: 128px; }
+  .pv-emoji { font-size: 28px; line-height: 1; font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; }
+  @keyframes pv-in { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: none; } }
+
   .panel {
     position: fixed; z-index: 95;
     width: 392px; height: min(460px, 70vh);

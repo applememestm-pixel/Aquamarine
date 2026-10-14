@@ -2,7 +2,9 @@
   import { hasMarkup, plainText } from "../markup";
   /** Chat-list line without formatting markers (spoilers stay hidden). */
   function previewText(p: string): string {
-    return p && hasMarkup(p) ? plainText(p).replace(/\s*\n\s*/g, " ") : p;
+    // [ce:pack/😏_001.webp] → 😏 (the backend does it too; old previews don't)
+    const q = p ? p.replace(/\[ce:[^\]\s]*?\/([^\]\s/_]+)_[^\]\s]*\]/g, "$1").replace(/\[ce:[^\]]*$/, "…") : p;
+    return q && hasMarkup(q) ? plainText(q).replace(/\s*\n\s*/g, " ") : q;
   }
   import { chatOnline, presenceNow } from "../presence";
   import { t, tr } from "../i18n";

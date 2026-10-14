@@ -733,13 +733,38 @@ pub fn save_saved_messages(data_dir: &std::path::Path, msgs: &[ChatMessage]) {
 }
 
 /// Short one-line preview for a message kind, used in chat-list cards.
+/// `[ce:pack/😏_001.webp]` custom-emoji tokens → the emoji itself, for
+/// chat-list previews and notifications.
+pub fn humanize_tokens(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find("[ce:") {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 4..];
+        match after.find(']') {
+            Some(j) if !after[..j].contains(char::is_whitespace) => {
+                let file = after[..j].rsplit('/').next().unwrap_or("");
+                let emoji = file.split('_').next().filter(|e| !e.is_empty() && !e.is_ascii()).unwrap_or("🙂");
+                out.push_str(emoji);
+                rest = &after[j + 1..];
+            }
+            _ => {
+                out.push_str("[ce:");
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 pub fn one_line_preview(kind: &MessageKind) -> String {
     match kind {
-        MessageKind::Text { text } => text.lines().next().unwrap_or("").to_string(),
+        MessageKind::Text { text } => humanize_tokens(text.lines().next().unwrap_or("")),
         MessageKind::Code { .. } => "📄 code snippet".into(),
         MessageKind::File { name, category, .. } => {
             let icon = match category.as_deref() {
-                Some("sticker") => "🎨",
+                Some("sticker") => return "🎨 Sticker".into(),
                 Some("gif")     => "🎞️",
                 Some("image")   => "🖼️",
                 Some("video")   => "📹",
@@ -1187,11 +1212,11 @@ pub fn classify_kind(text: &str) -> MessageKind {
 /// Short human preview of a message for the chat-list line.
 pub fn preview_for(kind: &MessageKind) -> String {
     match kind {
-        MessageKind::Text { text } => text.clone(),
+        MessageKind::Text { text } => humanize_tokens(text),
         MessageKind::Code { .. }   => "[code]".into(),
         MessageKind::File { name, category, mime, .. } => {
             let icon = match category.as_deref() {
-                Some("sticker") => "🎨",
+                Some("sticker") => return "🎨 Sticker".into(),
                 Some("gif") => "🎞️",
                 _ => match mime.as_deref() {
                     Some(m) if m.starts_with("image/") => "🖼️",
@@ -1234,6 +1259,18 @@ pub fn uuid_like() -> String {
     format!("{n:x}")
 }
 
+
+#[cfg(test)]
+mod preview_tests {
+    #[test]
+    fn custom_emoji_tokens_become_emoji() {
+        use super::humanize_tokens as h;
+        assert_eq!(h("hi [ce:eltaller47/😏_001.webp][ce:eltaller47/🔥_050.webp]!"), "hi 😏🔥!");
+        assert_eq!(h("[ce:pack/x_002.tgs]"), "🙂");
+        assert_eq!(h("broken [ce:no end"), "broken [ce:no end");
+        assert_eq!(h("plain"), "plain");
+    }
+}
 
 #[cfg(test)]
 mod group_rule_tests {

@@ -29,7 +29,24 @@ export interface ReactionItem {
   file: string;
 }
 
-export const reactionPack = writable<{ source: "bundled" | "imported" | "none"; items: ReactionItem[] }>({ source: "none", items: [] });
+type PackState = { source: "bundled" | "imported" | "none"; items: ReactionItem[] };
+const CACHE_KEY = "aqua.reactionPack.cache.v1";
+function cached(): PackState {
+  try {
+    const c = JSON.parse(localStorage.getItem(CACHE_KEY) ?? "null") as PackState | null;
+    if (c && c.source !== "none" && Array.isArray(c.items) && c.items.length) return c;
+  } catch { /* ignore */ }
+  return { source: "none", items: [] };
+}
+/** Starts from last run's list, so reactions draw at once instead of after
+ *  the library scan / relay round-trip; loadReactionPack refreshes it. */
+export const reactionPack = writable<PackState>(cached());
+reactionPack.subscribe((p) => {
+  if (p.source === "none") return;
+  try { localStorage.setItem(CACHE_KEY, JSON.stringify(p)); } catch { /* ignore */ }
+  // Warm the image cache for the quick-reaction bar.
+  if (typeof Image !== "undefined") for (const it of p.items.slice(0, 64)) { const i = new Image(); i.decoding = "async"; i.src = it.url; }
+});
 
 const strip = (e: string) => e.replace(/️/g, "");
 
@@ -173,7 +190,8 @@ export async function loadReactionPack(): Promise<void> {
     const pack = lib.packs.find((p) => p.source === REACTION_PACK) ?? lib.packs.find((p) => /eltaller/i.test(p.title));
     if (pack) { reactionPack.set({ source: "imported", items: fromLibraryItems(pack.items) }); return; }
   } catch { /* backend not ready */ }
-  reactionPack.set({ source: "none", items: [] });
+  // Keep a cached list on screen while we look further.
+  if (get(reactionPack).source === "none") reactionPack.set({ source: "none", items: [] });
   // 3. The relay hosts it (its admin set a Telegram token): fetch it from there.
   try {
     const srv = await api.serverPacks();
