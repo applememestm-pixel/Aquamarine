@@ -135,6 +135,8 @@ pub enum DirError {
     BadLogin,
     #[error("password must be at least 8 characters")]
     WeakPassword,
+    #[error("one account can own at most 20 bots")]
+    TooManyBots,
 }
 
 impl From<rusqlite::Error> for DirError {
@@ -185,6 +187,19 @@ fn profile_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Profile> {
 // ---- passwords: PBKDF2-HMAC-SHA256, 120k rounds, random 16-byte salt ----
 
 const PBKDF2_ROUNDS: u32 = 120_000;
+
+/// Bots one identity may own.
+pub const MAX_BOTS_PER_OWNER: i64 = 20;
+
+/// Stored form of a bot token (192 random bits, so a plain hash is enough).
+pub fn bot_token_hash(token: &str) -> String {
+    use sha2::Digest;
+    hex::encode(sha2::Sha256::digest(token.as_bytes()))
+}
+
+fn token_hint(token: &str) -> String {
+    token.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect()
+}
 
 fn pbkdf2_sha256(password: &[u8], salt: &[u8], rounds: u32) -> [u8; 32] {
     use hmac::{Hmac, Mac};
@@ -313,13 +328,20 @@ impl Directory {
                 data       BLOB NOT NULL,
                 updated_at INTEGER NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS bot_tokens (
-                token      TEXT PRIMARY KEY,
-                username   TEXT NOT NULL,
+            CREATE TABLE IF NOT EXISTS bot_keys (
+                token_hash TEXT PRIMARY KEY,
+                username   TEXT NOT NULL UNIQUE,
                 owner_dh   BLOB NOT NULL,
-                created_at INTEGER NOT NULL
+                created_at INTEGER NOT NULL,
+                hint       TEXT NOT NULL DEFAULT ''
             );
-            CREATE INDEX IF NOT EXISTS idx_bot_owner ON bot_tokens(owner_dh);
+            CREATE INDEX IF NOT EXISTS idx_botkey_owner ON bot_keys(owner_dh);
+            CREATE TABLE IF NOT EXISTS bot_peers (
+                bot  TEXT NOT NULL,
+                user TEXT NOT NULL,
+                at   INTEGER NOT NULL,
+                PRIMARY KEY (bot, user)
+            );
             CREATE TABLE IF NOT EXISTS profile_media (
                 username   TEXT NOT NULL,
                 kind       TEXT NOT NULL,
@@ -346,6 +368,24 @@ impl Directory {
                     return Err(e);
                 }
             }
+        }
+        // Bot tokens used to be stored as they are; keep only their hashes.
+        let old: bool = db
+            .query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name='bot_tokens'", [], |_| Ok(true))
+            .unwrap_or(false);
+        if old {
+            let rows: Vec<(String, String, Vec<u8>, i64)> = {
+                let mut st = db.prepare("SELECT token, username, owner_dh, created_at FROM bot_tokens")?;
+                let it = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+                it.filter_map(|r| r.ok()).collect()
+            };
+            for (token, username, owner, at) in rows {
+                db.execute(
+                    "INSERT OR IGNORE INTO bot_keys (token_hash, username, owner_dh, created_at, hint) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    rusqlite::params![bot_token_hash(&token), username, owner, at, token_hint(&token)],
+                )?;
+            }
+            db.execute("DROP TABLE bot_tokens", [])?;
         }
         // Federation: every change to a user row bumps updated_at, so peers
         // can pull "everything since T". A row applied from a peer carries
@@ -1012,10 +1052,11 @@ impl Directory {
     // ---- bots ----
 
     /// Register a bot account owned by `owner_dh`. The bot is a normal
-    /// directory user with `is_bot = 1`; a random token is minted so
-    /// the bot program can authenticate over the HTTP bot API. Returns
-    /// the token. The username must be free (or already a bot owned by
-    /// the same identity, in which case the token is rotated).
+    /// directory user with `is_bot = 1`; a random 192-bit token is minted
+    /// for the bot program. Only its SHA-256 is stored, so the token is
+    /// shown once (the owner's client keeps it in its encrypted vault).
+    /// The username must be free, or already a bot owned by the same
+    /// identity, in which case the token is rotated.
     pub fn register_bot(
         &self,
         username: &str,
@@ -1026,8 +1067,10 @@ impl Directory {
         if !Self::valid_username(&username) {
             return Err(DirError::BadUsername);
         }
+        let display_name: String = display_name.trim().chars().take(64).collect();
         let db = self.db.lock().unwrap();
         // If the username exists and isn't a bot owned by us, refuse.
+        let mut existing = false;
         if let Ok((owner, is_bot)) = db.query_row(
             "SELECT identity_dh, is_bot FROM users WHERE username=?1",
             rusqlite::params![username],
@@ -1036,41 +1079,91 @@ impl Directory {
             if is_bot == 0 || owner.as_slice() != owner_dh.as_slice() {
                 return Err(DirError::UsernameTaken);
             }
+            existing = true;
+        }
+        if !existing {
+            let n: i64 = db
+                .query_row("SELECT COUNT(*) FROM bot_keys WHERE owner_dh=?1", rusqlite::params![owner_dh.as_slice()], |r| r.get(0))
+                .unwrap_or(0);
+            if n >= MAX_BOTS_PER_OWNER {
+                return Err(DirError::TooManyBots);
+            }
         }
         // Upsert the bot as a directory user.
         db.execute(
             "INSERT INTO users (username, identity_dh, email, display_name, about, phone, is_bot, created_at)
              VALUES (?1, ?2, NULL, ?3, '', '', 1, ?4)
              ON CONFLICT(username) DO UPDATE SET display_name=?3, is_bot=1",
-            rusqlite::params![username, owner_dh.as_slice(), display_name.trim(), now_secs() as i64],
+            rusqlite::params![username, owner_dh.as_slice(), display_name, now_secs() as i64],
         )?;
         // Rotate any old token for this bot, mint a fresh one.
-        db.execute("DELETE FROM bot_tokens WHERE username=?1", rusqlite::params![username])?;
+        db.execute("DELETE FROM bot_keys WHERE username=?1", rusqlite::params![username])?;
         let mut t = [0u8; 24];
         OsRng.fill_bytes(&mut t);
         let token = format!("aqbot_{}", hex::encode(t));
         db.execute(
-            "INSERT INTO bot_tokens (token, username, owner_dh, created_at) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![token, username, owner_dh.as_slice(), now_secs() as i64],
+            "INSERT INTO bot_keys (token_hash, username, owner_dh, created_at, hint) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![bot_token_hash(&token), username, owner_dh.as_slice(), now_secs() as i64, token_hint(&token)],
         )?;
         tracing::info!(%username, "bot registered");
         Ok(token)
     }
 
-    /// Delete a bot the caller owns (its account and token).
+    /// Delete a bot the caller owns (its account, token and contacts).
     pub fn delete_bot(&self, username: &str, owner_dh: &[u8; 32]) -> Result<(), DirError> {
         let username = username.trim().to_lowercase();
         let db = self.db.lock().unwrap();
         let owner: Vec<u8> = db
-            .query_row("SELECT owner_dh FROM bot_tokens WHERE username=?1", rusqlite::params![username], |r| r.get(0))
+            .query_row("SELECT owner_dh FROM bot_keys WHERE username=?1", rusqlite::params![username], |r| r.get(0))
             .map_err(|_| DirError::NotOwner)?;
         if owner.as_slice() != owner_dh.as_slice() {
             return Err(DirError::NotOwner);
         }
-        db.execute("DELETE FROM bot_tokens WHERE username=?1", rusqlite::params![username])?;
+        db.execute("DELETE FROM bot_keys WHERE username=?1", rusqlite::params![username])?;
+        db.execute("DELETE FROM bot_peers WHERE bot=?1", rusqlite::params![username])?;
         db.execute("DELETE FROM users WHERE username=?1 AND is_bot=1", rusqlite::params![username])?;
         tracing::info!(%username, "bot deleted");
         Ok(())
+    }
+
+    /// `user` wrote to `bot`: from now on the bot may answer them.
+    pub fn bot_peer_add(&self, bot: &str, user: &str) {
+        let db = self.db.lock().unwrap();
+        let _ = db.execute(
+            "INSERT INTO bot_peers (bot, user, at) VALUES (?1, ?2, ?3) ON CONFLICT(bot, user) DO UPDATE SET at=?3",
+            rusqlite::params![bot, user, now_secs() as i64],
+        );
+    }
+
+    /// The identity that owns `bot`.
+    pub fn bot_owner(&self, bot: &str) -> Option<Vec<u8>> {
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT owner_dh FROM bot_keys WHERE username=?1", rusqlite::params![bot], |r| r.get(0)).ok()
+    }
+
+    /// `user` blocked / stopped `bot` (sent /stop): no more messages.
+    pub fn bot_peer_remove(&self, bot: &str, user: &str) {
+        let db = self.db.lock().unwrap();
+        let _ = db.execute("DELETE FROM bot_peers WHERE bot=?1 AND user=?2", rusqlite::params![bot, user]);
+    }
+
+    /// A bot may message people who wrote to it first, and its owner.
+    pub fn bot_may_message(&self, bot: &str, user: &str) -> bool {
+        if bot == user {
+            return true; // a console bot echoing to itself
+        }
+        let db = self.db.lock().unwrap();
+        let peer = db
+            .query_row("SELECT 1 FROM bot_peers WHERE bot=?1 AND user=?2", rusqlite::params![bot, user], |_| Ok(()))
+            .is_ok();
+        peer || db
+            .query_row(
+                "SELECT 1 FROM bot_keys k JOIN users u ON u.identity_dh = k.owner_dh AND u.is_bot = 0
+                 WHERE k.username=?1 AND u.username=?2",
+                rusqlite::params![bot, user],
+                |_| Ok(()),
+            )
+            .is_ok()
     }
 
     /// Display name of a user / bot ("" when unknown).
@@ -1082,10 +1175,13 @@ impl Directory {
 
     /// Resolve a bot token → its username.
     pub fn bot_by_token(&self, token: &str) -> Option<String> {
+        if !token.starts_with("aqbot_") || token.len() > 80 {
+            return None;
+        }
         let db = self.db.lock().unwrap();
         db.query_row(
-            "SELECT username FROM bot_tokens WHERE token=?1",
-            rusqlite::params![token],
+            "SELECT username FROM bot_keys WHERE token_hash=?1",
+            rusqlite::params![bot_token_hash(token)],
             |r| r.get::<_, String>(0),
         ).ok()
     }
@@ -1101,13 +1197,14 @@ impl Directory {
         ).map(|v| v != 0).unwrap_or(false)
     }
 
-    /// List bots owned by an identity (for the "my bots" management UI).
+    /// List bots owned by an identity: (username, last 4 characters of
+    /// the token) — the token itself is not stored.
     pub fn list_bots_for_owner(&self, owner_dh: &[u8; 32]) -> Vec<(String, String)> {
         let db = self.db.lock().unwrap();
         let mut stmt = match db.prepare(
-            "SELECT u.username, u.display_name, bt.token
-             FROM bot_tokens bt JOIN users u ON u.username = bt.username
-             WHERE bt.owner_dh = ?1 ORDER BY u.username",
+            "SELECT u.username, u.display_name, bk.hint
+             FROM bot_keys bk JOIN users u ON u.username = bk.username
+             WHERE bk.owner_dh = ?1 ORDER BY u.username",
         ) { Ok(s) => s, Err(_) => return Vec::new() };
         let rows = stmt.query_map(rusqlite::params![owner_dh.as_slice()], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(2)?))

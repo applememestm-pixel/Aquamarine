@@ -426,16 +426,43 @@ async fn bot_lifecycle_and_console_script() {
     assert_eq!(me["display_name"], "Console Bot");
     let list: serde_json::Value = http.get(format!("{base}/v1/bot/list")).bearer_auth(&owner.token).send().await.unwrap().json().await.unwrap();
     assert_eq!(list[0]["display_name"], "Console Bot");
+    // The relay keeps only a hash: the list shows the last 4 characters.
+    assert_eq!(list[0]["token"], "");
+    assert_eq!(list[0]["hint"].as_str().unwrap(), &token[token.len() - 4..]);
+    // The header form works too.
+    let me2: serde_json::Value = http.get(format!("{base}/v1/bot/me")).header("Authorization", format!("Bot {token}"))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(me2["username"], "e2econsole");
+    // Bots can't cold-message people who never wrote to them.
+    let r = http.post(format!("{base}/v1/bot/send")).header("Authorization", format!("Bot {token}"))
+        .json(&serde_json::json!({ "to": "botother", "text": "spam" })).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 403);
+    let r = http.post(format!("{base}/v1/bot/send")).header("Authorization", format!("Bot {token}"))
+        .json(&serde_json::json!({ "to": "e2econsole", "text": "x".repeat(5000) })).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 413);
+    // Per-chat rate limit: a burst of 5, then 429.
+    let mut codes = Vec::new();
+    for i in 0..8 {
+        let r = http.post(format!("{base}/v1/bot/send")).header("Authorization", format!("Bot {token}"))
+            .json(&serde_json::json!({ "to": "e2econsole", "text": format!("n{i}") })).send().await.unwrap();
+        codes.push(r.status().as_u16());
+    }
+    assert!(codes.contains(&429), "{codes:?}");
+    // Drain those, and let the per-chat bucket refill for the checks below.
+    let ups: serde_json::Value = http.get(format!("{base}/v1/bot/updates?token={token}&after=0")).send().await.unwrap().json().await.unwrap();
+    let next = ups.as_array().unwrap().last().map(|u| u["id"].as_u64().unwrap() + 1).unwrap_or(0);
+    let _ = http.get(format!("{base}/v1/bot/updates?token={token}&after={next}")).send().await.unwrap();
+    tokio::time::sleep(Duration::from_secs(5)).await;
 
     // Long poll: empty after the timeout…
     let t0 = std::time::Instant::now();
-    let ups: serde_json::Value = http.get(format!("{base}/v1/bot/updates?token={token}&after=0&timeout=1")).send().await.unwrap().json().await.unwrap();
+    let ups: serde_json::Value = http.get(format!("{base}/v1/bot/updates?token={token}&after={next}&timeout=1")).send().await.unwrap().json().await.unwrap();
     assert_eq!(ups.as_array().unwrap().len(), 0);
     assert!(t0.elapsed() >= Duration::from_millis(900));
     // …and wakes up early when a message arrives (the bot writes to itself).
     let poll = {
         let http = http.clone();
-        let url = format!("{base}/v1/bot/updates?token={token}&after=0&timeout=20");
+        let url = format!("{base}/v1/bot/updates?token={token}&after={next}&timeout=20");
         tokio::spawn(async move { http.get(url).send().await.unwrap().json::<serde_json::Value>().await.unwrap() })
     };
     tokio::time::sleep(Duration::from_millis(300)).await;

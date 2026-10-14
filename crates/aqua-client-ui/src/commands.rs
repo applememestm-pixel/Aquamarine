@@ -883,9 +883,16 @@ pub async fn start_bot_chat(
 #[derive(Debug, serde::Serialize)]
 pub struct BotInfo {
     pub username: String,
+    /// Empty when this device never saw it (made elsewhere): reset to get one.
     pub token: String,
     pub display_name: String,
+    /// Last 4 characters of the token, from the relay.
+    pub hint: String,
 }
+
+/// Bot tokens live in the encrypted vault (and so in backups): the relay
+/// stores only their hashes and can't show them again.
+fn bot_token_key(username: &str) -> String { format!("bot_token:{username}") }
 
 /// Register a bot owned by this identity; returns {username, token}.
 #[tauri::command]
@@ -901,7 +908,12 @@ pub async fn create_bot(
     let display_name = display_name.trim().to_string();
     let (username, token) = transport.register_bot(&username, &display_name)
         .await.map_err(|e| e.to_string())?;
-    Ok(BotInfo { username, token, display_name })
+    {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        let _ = s.vault.put_record(&bot_token_key(&username), token.as_bytes());
+    }
+    let hint = token.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+    Ok(BotInfo { username, token, display_name, hint })
 }
 
 /// List bots owned by this identity (with tokens).
@@ -912,7 +924,21 @@ pub async fn list_bots(state: State<'_, StdMutex<AppState>>) -> Result<Vec<BotIn
         s.transport.clone().ok_or("not connected")?
     };
     let rows = transport.list_bots().await.map_err(|e| e.to_string())?;
-    Ok(rows.into_iter().map(|(username, token, display_name)| BotInfo { username, token, display_name }).collect())
+    let s = state.lock().map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|(username, token, display_name, hint)| {
+            let token = if !token.is_empty() {
+                token // an old relay that still returns it
+            } else {
+                s.vault.get_record(&bot_token_key(&username)).ok().flatten()
+                    .map(|b| String::from_utf8_lossy(&b).to_string())
+                    .filter(|t| hint.is_empty() || t.ends_with(&hint))
+                    .unwrap_or_default()
+            };
+            BotInfo { username, token, display_name, hint }
+        })
+        .collect())
 }
 
 /// Delete one of my bots on the relay.
@@ -922,7 +948,10 @@ pub async fn delete_bot(state: State<'_, StdMutex<AppState>>, username: String) 
         let s = state.lock().map_err(|e| e.to_string())?;
         s.transport.clone().ok_or("not connected")?
     };
-    transport.delete_bot(&username).await.map_err(|e| e.to_string())
+    transport.delete_bot(&username).await.map_err(|e| e.to_string())?;
+    let s = state.lock().map_err(|e| e.to_string())?;
+    let _ = s.vault.delete_record(&bot_token_key(&username.trim().to_lowercase()));
+    Ok(())
 }
 
 // ---------- File transfer -------------------------------------------------

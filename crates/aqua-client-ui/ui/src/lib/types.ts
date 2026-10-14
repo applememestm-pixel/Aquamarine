@@ -195,8 +195,11 @@ export interface Activity {
 /** A bot the current user owns (with its API token). */
 export interface BotInfo {
   username: string;
+  /** "" when this device never saw it (the relay keeps only a hash). */
   token: string;
   display_name?: string;
+  /** Last 4 characters of the token. */
+  hint?: string;
 }
 
 // ---- Groups / supergroups / channels ----

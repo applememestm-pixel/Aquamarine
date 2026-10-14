@@ -312,7 +312,7 @@
     if (n.has(u)) n.delete(u); else n.add(u);
     botShown = n;
   }
-  function maskToken(tok: string) { return tok.slice(0, 9) + "•".repeat(14) + tok.slice(-4); }
+  function maskToken(tok: string, hint = "") { return tok ? tok.slice(0, 9) + "•".repeat(14) + tok.slice(-4) : "aqbot_" + "•".repeat(17) + hint; }
 
   async function copyText(text: string, done = tr("Copied")) {
     try { await navigator.clipboard.writeText(text); showToast(done); }
@@ -1162,10 +1162,13 @@
                   <button class="bot-btn primary" onclick={() => openBotChat(b)}>{$t("Open chat")}</button>
                 </div>
                 <div class="bot-tokrow">
-                  <code class="bot-token" title={botShown.has(b.username) ? b.token : ""}>{botShown.has(b.username) ? b.token : maskToken(b.token)}</code>
-                  <button class="bot-btn" onclick={() => toggleToken(b.username)}>{botShown.has(b.username) ? $t("Hide") : $t("Show")}</button>
-                  <button class="bot-btn" onclick={() => copyToken(b.token)}>{$t("Copy")}</button>
+                  <code class="bot-token" title={botShown.has(b.username) ? b.token : ""}>{botShown.has(b.username) && b.token ? b.token : maskToken(b.token, b.hint)}</code>
+                  {#if b.token}
+                    <button class="bot-btn" onclick={() => toggleToken(b.username)}>{botShown.has(b.username) ? $t("Hide") : $t("Show")}</button>
+                    <button class="bot-btn" onclick={() => copyToken(b.token)}>{$t("Copy")}</button>
+                  {/if}
                 </div>
+                {#if !b.token}<div class="bots-note">{$t("The server keeps only a fingerprint of the token, and this device doesn't have it. Reset the token to get a new one.")}</div>{/if}
                 <div class="bot-actions">
                   <span class="bot-sp"></span>
                   <button class="bot-link" onclick={() => resetBotToken(b)}>{$t("Reset token")}</button>
@@ -1197,11 +1200,13 @@
           <span>{$t("HTTP API for your own bots")}</span><span class="chev" class:open={apiOpen}>›</span>
         </button>
         {#if apiOpen}
-<pre class="bot-api">GET  /v1/bot/me?token=TOKEN
+<pre class="bot-api">Authorization: Bot TOKEN
+GET  /v1/bot/me
      → {"{"} "username", "display_name" {"}"}
-GET  /v1/bot/updates?token=TOKEN&amp;after=ID&amp;timeout=25
+GET  /v1/bot/updates?after=ID&amp;timeout=25
      → [{"{"} "id", "from", "text", "ts" {"}"}]   (long poll, pass last id + 1)
-POST /v1/bot/send   {"{"} "token", "to": "alice", "text": "hi" {"}"}</pre>
+POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
+     403 — they never wrote to the bot · 429 — 30/s per bot, 1/s per chat</pre>
           <div class="bots-note">{$t("Users start a bot by searching its @username; the first message is /start.")}</div>
         {/if}
       </section>

@@ -64,7 +64,35 @@ pub struct BotUpdate {
 pub struct BotQueue {
     pub next_id: u64,
     pub updates: VecDeque<BotUpdate>,
+    /// Wakes long polls when an update arrives.
+    pub notify: Arc<tokio::sync::Notify>,
 }
+
+/// Token buckets for the bot API: per bot, and per bot → recipient.
+#[derive(Default)]
+pub struct BotLimits {
+    buckets: DashMap<String, (f64, std::time::Instant)>,
+}
+
+impl BotLimits {
+    /// Take one token from bucket `key` (capacity `cap`, `rate` per second).
+    fn take(&self, key: &str, cap: f64, rate: f64) -> bool {
+        let now = std::time::Instant::now();
+        let mut e = self.buckets.entry(key.to_string()).or_insert((cap, now));
+        let (ref mut tokens, ref mut at) = *e;
+        *tokens = (*tokens + now.duration_since(*at).as_secs_f64() * rate).min(cap);
+        *at = now;
+        if *tokens >= 1.0 {
+            *tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// Longest text a bot may send (Telegram's limit too).
+pub const BOT_TEXT_LIMIT: usize = 4096;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -82,6 +110,8 @@ pub struct AppState {
     /// Per-bot inbound message queues (bot username → queue). Ephemeral
     /// — bots are expected to be online and polling.
     pub bot_queues: Arc<DashMap<String, Arc<Mutex<BotQueue>>>>,
+    /// Rate limits of the bot API.
+    pub bot_limits: Arc<BotLimits>,
     /// When true, only usernames registered in the directory (email-verified)
     /// may upload a bundle or open a WebSocket. This makes email registration
     /// mandatory — no ephemeral unregistered handles. Toggle off for an open
@@ -175,6 +205,7 @@ impl AppState {
             blobs: blobstore::BlobStore::from_env(),
             directory,
             bot_queues: Arc::new(DashMap::new()),
+            bot_limits: Arc::new(BotLimits::default()),
             require_registration,
             admin: Arc::new(std::sync::RwLock::new(AdminConfig::load())),
             fed: fed::slot_from_config(),
@@ -438,11 +469,17 @@ async fn deliver(state: &AppState, msg: RelayMessage) {
     // into its bot queue instead of the normal user inbox — bots pull
     // via GET /v1/bot/updates, they don't hold a WebSocket.
     if msg.kind == PayloadKind::Plaintext && state.directory.is_bot(&msg.to) {
+        let text: String = String::from_utf8_lossy(&msg.payload).chars().take(BOT_TEXT_LIMIT).collect();
+        // Writing to a bot lets it answer; /stop takes that back.
+        if text.trim() == "/stop" {
+            state.directory.bot_peer_remove(&msg.to, &msg.from);
+        } else {
+            state.directory.bot_peer_add(&msg.to, &msg.from);
+        }
         let q = state.bot_queue(&msg.to);
         let mut q = q.lock().await;
         let id = q.next_id;
         q.next_id += 1;
-        let text = String::from_utf8_lossy(&msg.payload).to_string();
         q.updates.push_back(BotUpdate {
             id,
             from: msg.from.clone(),
@@ -454,6 +491,7 @@ async fn deliver(state: &AppState, msg: RelayMessage) {
         });
         // Cap the queue so an idle bot doesn't grow unbounded.
         while q.updates.len() > 1000 { q.updates.pop_front(); }
+        q.notify.notify_waiters();
         return;
     }
 
@@ -948,8 +986,32 @@ async fn bot_register(
     Ok(Json(BotRegisterResp { ok: true, username, token }))
 }
 
+/// The bot token from `Authorization: Bot <token>` (or `Bearer`), else the
+/// `token` query / body field (kept for old scripts; it ends up in logs).
+fn bot_token_of(headers: &axum::http::HeaderMap, fallback: &str) -> String {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bot ").or_else(|| v.strip_prefix("Bearer ")))
+        .map(|t| t.trim().to_string())
+        .filter(|t| t.starts_with("aqbot_"))
+        .unwrap_or_else(|| fallback.trim().to_string())
+}
+
+/// Resolve the calling bot; a wrong token costs a short delay.
+async fn bot_auth(state: &AppState, headers: &axum::http::HeaderMap, fallback: &str) -> Result<String, (StatusCode, String)> {
+    let token = bot_token_of(headers, fallback);
+    match state.directory.bot_by_token(&token) {
+        Some(b) => Ok(b),
+        None => {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            Err((StatusCode::UNAUTHORIZED, "bad bot token".into()))
+        }
+    }
+}
+
 #[derive(serde::Serialize)]
-struct BotInfo { username: String, token: String, display_name: String }
+struct BotInfo { username: String, token: String, display_name: String, hint: String }
 
 /// List the bots owned by the calling identity (with their tokens, so
 /// the owner can copy them).
@@ -959,9 +1021,10 @@ async fn bot_list(
 ) -> Json<Vec<BotInfo>> {
     let bots = state.directory.list_bots_for_owner(&dh_pub)
         .into_iter()
-        .map(|(username, token)| {
+        .map(|(username, hint)| {
             let display_name = state.directory.display_name_of(&username);
-            BotInfo { username, token, display_name }
+            // The relay keeps only a hash: the token is shown once, at creation.
+            BotInfo { username, token: String::new(), display_name, hint }
         })
         .collect();
     Json(bots)
@@ -969,6 +1032,7 @@ async fn bot_list(
 
 #[derive(Deserialize)]
 struct BotUpdatesQuery {
+    #[serde(default)]
     token: String,
     #[serde(default)]
     after: u64,
@@ -982,34 +1046,45 @@ struct BotUpdatesQuery {
 /// one or the time is up.
 async fn bot_updates(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Query(q): Query<BotUpdatesQuery>,
 ) -> Result<Json<Vec<BotUpdate>>, (StatusCode, String)> {
-    let bot = state.directory.bot_by_token(&q.token)
-        .ok_or((StatusCode::UNAUTHORIZED, "bad bot token".into()))?;
+    let bot = bot_auth(&state, &headers, &q.token).await?;
+    if !state.bot_limits.take(&format!("poll:{bot}"), 20.0, 5.0) {
+        return Err((StatusCode::TOO_MANY_REQUESTS, "polling too fast".into()));
+    }
     let queue = state.bot_queue(&bot);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(q.timeout.min(30));
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(q.timeout.min(30));
     loop {
-        {
-            let qd = queue.lock().await;
-            let out: Vec<BotUpdate> = qd.updates.iter().filter(|u| u.id >= q.after).cloned().collect();
-            if !out.is_empty() || std::time::Instant::now() >= deadline {
-                return Ok(Json(out));
+        let notified = {
+            let mut qd = queue.lock().await;
+            // Asking for `after` acknowledges everything before it.
+            while qd.updates.front().is_some_and(|u| u.id < q.after) {
+                qd.updates.pop_front();
             }
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            if !qd.updates.is_empty() || tokio::time::Instant::now() >= deadline {
+                return Ok(Json(qd.updates.iter().cloned().collect()));
+            }
+            qd.notify.clone()
+        };
+        let wait = notified.notified();
+        let _ = tokio::time::timeout_at(deadline, wait).await;
     }
 }
 
 #[derive(Deserialize)]
-struct BotTokenQuery { token: String }
+struct BotTokenQuery {
+    #[serde(default)]
+    token: String,
+}
 
 /// Who am I (for bot programs): `{ username, display_name }`.
 async fn bot_me(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Query(q): Query<BotTokenQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let bot = state.directory.bot_by_token(&q.token)
-        .ok_or((StatusCode::UNAUTHORIZED, "bad bot token".into()))?;
+    let bot = bot_auth(&state, &headers, &q.token).await?;
     let name = state.directory.display_name_of(&bot);
     Ok(Json(serde_json::json!({ "username": bot, "display_name": name })))
 }
@@ -1027,21 +1102,44 @@ async fn bot_delete(
 
 #[derive(Deserialize)]
 struct BotSendBody {
+    #[serde(default)]
     token: String,
     to: String,
     text: String,
 }
 
-/// A bot program sends a plaintext message to a user.
+/// A bot program sends a plaintext message to a user. Bots answer people
+/// who wrote to them (and their owner) — they can't cold-message anyone —
+/// at most 30 messages a second overall and one a second per chat
+/// (bursts of 5).
 async fn bot_send(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<BotSendBody>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let bot = state.directory.bot_by_token(&body.token)
-        .ok_or((StatusCode::UNAUTHORIZED, "bad bot token".into()))?;
+    let bot = bot_auth(&state, &headers, &body.token).await?;
+    let to = body.to.trim().trim_start_matches('@').to_lowercase();
+    if body.text.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "empty text".into()));
+    }
+    if body.text.chars().count() > BOT_TEXT_LIMIT {
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, format!("text is longer than {BOT_TEXT_LIMIT} characters")));
+    }
+    // The owner may also be connected under a name only the relay's
+    // session table knows (open-signup relays).
+    let owner_online = state.directory.bot_owner(&bot)
+        .is_some_and(|o| state.bindings.get(&to).is_some_and(|b| b.as_slice() == o.as_slice()));
+    if !owner_online && !state.directory.bot_may_message(&bot, &to) {
+        return Err((StatusCode::FORBIDDEN, format!("@{to} hasn't written to this bot (or sent /stop)")));
+    }
+    if !state.bot_limits.take(&format!("send:{bot}"), 30.0, 30.0)
+        || !state.bot_limits.take(&format!("send:{bot}>{to}"), 5.0, 1.0)
+    {
+        return Err((StatusCode::TOO_MANY_REQUESTS, "slow down: 30 msg/s per bot, 1 msg/s per chat".into()));
+    }
     let msg = RelayMessage {
         from: bot,
-        to: body.to.trim().to_lowercase(),
+        to,
         payload: body.text.into_bytes(),
         kind: PayloadKind::Plaintext,
     };

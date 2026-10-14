@@ -11,8 +11,9 @@ goes back as the bot.
     python3 aqua-console.py --server http://127.0.0.1:8080 --chat alice
     python3 aqua-console.py --server ... --room      # console chat room
 
-The token is asked for interactively (input hidden) unless you pass
---token or set AQUA_BOT_TOKEN. Only the Python standard library is used,
+The token is asked for interactively (input hidden) unless AQUA_BOT_TOKEN
+is set; it is never taken from the command line, where other users of the
+machine could see it in the process list. Only the Python standard library is used,
 so it runs anywhere Python 3.8+ does (Linux, macOS, Windows).
 
 Commands while it runs:
@@ -55,12 +56,13 @@ def say(line):
         sys.stdout.flush()
 
 
-def api(server, path, query=None, body=None, timeout=40):
+def api(server, token, path, query=None, body=None, timeout=40):
     url = server.rstrip("/") + path
     if query:
         url += "?" + urllib.parse.urlencode(query)
     data = None
-    headers = {"User-Agent": "aqua-console/1"}
+    # The token travels in a header, never in the URL (URLs end up in logs).
+    headers = {"User-Agent": "aqua-console/2", "Authorization": "Bot " + token}
     if body is not None:
         data = json.dumps(body).encode()
         headers["Content-Type"] = "application/json"
@@ -71,7 +73,18 @@ def api(server, path, query=None, body=None, timeout=40):
 
 
 def send(server, token, to, text):
-    api(server, "/v1/bot/send", body={"token": token, "to": to, "text": text})
+    for attempt in range(3):
+        try:
+            api(server, token, "/v1/bot/send", body={"to": to, "text": text[:4096]})
+            return
+        except urllib.error.HTTPError as e:
+            if e.code == 429:  # rate limit: 30 msg/s per bot, 1 msg/s per chat
+                time.sleep(1.2)
+                continue
+            if e.code == 403:
+                say(f"\033[93m@{to} hasn't written to this bot (or sent /stop) — bots can only answer.\033[0m")
+                return
+            raise
 
 
 def poll(server, token, me, stop):
@@ -79,7 +92,7 @@ def poll(server, token, me, stop):
     first = True
     while not stop.is_set():
         try:
-            ups = api(server, "/v1/bot/updates", {"token": token, "after": after, "timeout": 25}, timeout=40)
+            ups = api(server, token, "/v1/bot/updates", {"after": after, "timeout": 25}, timeout=40)
         except urllib.error.HTTPError as e:
             if e.code == 401:
                 say("\033[91mThe token was rejected (deleted or reset?). Exiting.\033[0m")
@@ -140,7 +153,6 @@ def main():
     ap = argparse.ArgumentParser(description="Read and write an Aquamarine chat from the terminal (as a bot).")
     ap.add_argument("--server", default=os.environ.get("AQUA_SERVER", "http://127.0.0.1:8080"),
                     help="relay URL (default: $AQUA_SERVER or http://127.0.0.1:8080)")
-    ap.add_argument("--token", default=os.environ.get("AQUA_BOT_TOKEN"), help="bot token (default: asked, hidden)")
     ap.add_argument("--chat", help="start writing to this @user")
     ap.add_argument("--room", action="store_true", help="room mode: forward each message to everyone who /join-ed")
     a = ap.parse_args()
@@ -148,9 +160,9 @@ def main():
     if os.name == "nt":
         os.system("")  # turn on ANSI colours in the Windows console
 
-    token = a.token or getpass.getpass("Bot token (aqbot_…): ").strip()
+    token = os.environ.get("AQUA_BOT_TOKEN") or getpass.getpass("Bot token (aqbot_…): ").strip()
     try:
-        me = api(a.server, "/v1/bot/me", {"token": token})
+        me = api(a.server, token, "/v1/bot/me")
     except urllib.error.HTTPError as e:
         sys.exit("The relay rejected the token." if e.code == 401 else f"Relay error: {e.code}")
     except Exception as e:

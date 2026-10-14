@@ -2487,8 +2487,12 @@
     </div>
     {/if}
     <div class="composer-note">
-      {@html icons.lock}
-      X3DH · Double Ratchet · your keys never leave this device
+      {#if $activeChat.live && !$activeChat.has_lock}
+        <span class="plain-note">⚠ {$t("Bot chat: not end-to-end encrypted — the server and the bot's owner can read it. Send /stop to make the bot stop writing.")}</span>
+      {:else}
+        {@html icons.lock}
+        X3DH · Double Ratchet · {$t("your keys never leave this device")}
+      {/if}
       <span class="kbds"><kbd>{$t("Enter")}</kbd> {$t("to send ·")} <kbd>{$t("Shift + Enter")}</kbd> {$t("newline")}</span>
     </div>
   {/if}
@@ -3430,6 +3434,7 @@
   .rr.read :global(svg) { color: var(--accent); }
 
   /* Pinned-message bar */
+  .plain-note { color: #f5b14c; }
   .rules-bar { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-bottom: 1px solid var(--border);
     background: color-mix(in srgb, var(--acc) 12%, var(--bg-shell)); animation: rb-in .35s cubic-bezier(.2,.8,.2,1); }
   .rb-text { flex: 1; min-width: 0; font-size: 13px; }

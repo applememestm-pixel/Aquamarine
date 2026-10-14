@@ -1164,4 +1164,7 @@ export const RU: Record<string, string> = {
   "Pick an icon": "Выберите иконку",
   "Position the icon": "Расположите иконку",
   "App icon changed": "Иконка приложения изменена",
+  "Bot chat: not end-to-end encrypted — the server and the bot's owner can read it. Send /stop to make the bot stop writing.": "Чат с ботом не защищён сквозным шифрованием — его могут читать сервер и владелец бота. Отправьте /stop, чтобы бот перестал писать.",
+  "your keys never leave this device": "ключи не покидают это устройство",
+  "The server keeps only a fingerprint of the token, and this device doesn't have it. Reset the token to get a new one.": "Сервер хранит только отпечаток токена, а на этом устройстве его нет. Сбросьте токен, чтобы получить новый.",
 };

@@ -380,9 +380,10 @@ Connected as @mybot on https://your-relay:8443
 <span class="c"># a mini chat room: everyone who writes /join</span>
 <span class="p">python3</span> aqua-console.py --server <span class="v">…</span> --room
 
-<span class="c"># your own bot: plain HTTP</span>
-GET  /v1/bot/updates?token=…&amp;after=0&amp;timeout=25
-POST /v1/bot/send  {"token","to","text"}</div>
+<span class="c"># your own bot: plain HTTP, header "Authorization: Bot …"</span>
+GET  /v1/bot/updates?after=0&amp;timeout=25
+POST /v1/bot/send  {"to","text"}
+<span class="c"># guide: docs/BOTS.md</span></div>
   </div>
 </section>
 

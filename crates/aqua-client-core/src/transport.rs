@@ -678,17 +678,19 @@ impl Transport {
         Ok(r.bytes().await?.to_vec())
     }
 
-    /// List bots owned by this identity. Returns (username, token, display name).
-    pub async fn list_bots(&self) -> Result<Vec<(String, String, String)>, TransportError> {
+    /// List bots owned by this identity. Returns (username, token, display
+    /// name, token hint). Current relays keep only a hash, so `token` is
+    /// empty and `hint` holds its last 4 characters.
+    pub async fn list_bots(&self) -> Result<Vec<(String, String, String, String)>, TransportError> {
         #[derive(serde::Deserialize)]
-        struct Row { username: String, token: String, #[serde(default)] display_name: String }
+        struct Row { username: String, #[serde(default)] token: String, #[serde(default)] display_name: String, #[serde(default)] hint: String }
         let url = format!("{}/v1/bot/list", self.server_url.trim_end_matches('/'));
         let r = self.http.get(&url).bearer_auth(self.bearer().await?).send().await?;
         if !r.status().is_success() {
             return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
         }
         let rows: Vec<Row> = r.json().await?;
-        Ok(rows.into_iter().map(|b| (b.username, b.token, b.display_name)).collect())
+        Ok(rows.into_iter().map(|b| (b.username, b.token, b.display_name, b.hint)).collect())
     }
 
     /// Delete one of this identity's bots (its token stops working).
