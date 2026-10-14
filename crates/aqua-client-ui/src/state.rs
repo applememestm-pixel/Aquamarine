@@ -445,14 +445,8 @@ pub fn load_groups(dir: &std::path::Path) -> HashMap<String, Group> {
         .unwrap_or_default()
 }
 
-pub fn save_groups(dir: &std::path::Path, groups: &HashMap<String, Group>) {
-    let path = dir.join(GROUPS_FILE);
-    let list: Vec<&Group> = groups.values().collect();
-    if let Ok(bytes) = serde_json::to_vec_pretty(&list) {
-        if let Err(e) = std::fs::write(&path, bytes) {
-            tracing::warn!(?e, "groups.json write failed");
-        }
-    }
+pub fn save_groups(_dir: &std::path::Path, _groups: &HashMap<String, Group>) {
+    // Groups are kept in the encrypted vault (history.rs flush).
 }
 
 /// Build a chat summary for a group so it shows in the sidebar list.
@@ -498,6 +492,8 @@ pub struct AppState {
     /// Groups / supergroups / channels this account belongs to.
     pub groups: HashMap<String, Group>,
     pub prefs: LocalPrefs,
+    /// Content hash of each chat as last written to the vault (history.rs).
+    pub hist_hashes: HashMap<String, u64>,
 }
 
 impl AppState {
@@ -538,6 +534,26 @@ impl AppState {
                 chat_order.push(peer_id.clone());
                 sessions.insert(peer_id, sess);
             }
+        }
+
+        // Stored history (encrypted in the vault): messages + summaries.
+        let mut hist_hashes = HashMap::new();
+        for (id, summary, messages) in crate::history::load_all(&vault) {
+            // Not "written" yet as far as the flush knows: 0 never matches.
+            hist_hashes.insert(id.clone(), 0);
+            match chats.get_mut(&id) {
+                Some(book) => { book.summary = summary; book.messages = messages; }
+                None => {
+                    chats.insert(id.clone(), ChatBook { summary, messages });
+                    chat_order.push(id);
+                }
+            }
+        }
+
+        // Saved Messages stays on top.
+        if let Some(pos) = chat_order.iter().position(|c| c == SAVED_MESSAGES_ID) {
+            let id = chat_order.remove(pos);
+            chat_order.insert(0, id);
         }
 
         // Load the last-connection hints (server_url + username) from
@@ -629,7 +645,7 @@ impl AppState {
         }
 
         // Load groups/channels and surface each as a sidebar chat.
-        let groups = load_groups(&data_dir);
+        let groups = crate::history::load_groups(&vault).unwrap_or_else(|| load_groups(&data_dir));
         for g in groups.values() {
             if !chats.contains_key(&g.id) {
                 chats.insert(g.id.clone(), ChatBook {
@@ -654,6 +670,7 @@ impl AppState {
             chat_order,
             groups,
             prefs: LocalPrefs::default(),
+            hist_hashes,
         }))
     }
 
@@ -720,16 +737,9 @@ pub fn load_saved_messages(data_dir: &std::path::Path) -> Vec<ChatMessage> {
 }
 
 /// Persist the Saved Messages chat log to disk. Errors are logged.
-pub fn save_saved_messages(data_dir: &std::path::Path, msgs: &[ChatMessage]) {
-    let path = data_dir.join(SAVED_MESSAGES_FILE);
-    match serde_json::to_vec_pretty(msgs) {
-        Ok(bytes) => {
-            if let Err(e) = std::fs::write(&path, bytes) {
-                tracing::warn!(?e, path = %path.display(), "saved-messages.json write failed");
-            }
-        }
-        Err(e) => tracing::warn!(?e, "saved-messages.json serialize failed"),
-    }
+pub fn save_saved_messages(_data_dir: &std::path::Path, _msgs: &[ChatMessage]) {
+    // Saved Messages now live in the encrypted vault with the rest of the
+    // history (history.rs flushes them); nothing is written in the clear.
 }
 
 /// Short one-line preview for a message kind, used in chat-list cards.

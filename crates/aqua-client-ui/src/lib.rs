@@ -11,6 +11,7 @@ pub mod activity;
 pub mod web;
 pub mod media_server;
 pub mod personal;
+pub mod history;
 
 use anyhow::Result;
 use tauri::Manager;
@@ -68,6 +69,18 @@ pub fn run() -> Result<()> {
             let _ = app.asset_protocol_scope().allow_directory(&data_dir, true);
             let state = state::AppState::boot(data_dir)?;
             app.manage(state);
+            // Write changed chat history to the encrypted vault every few seconds.
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    let st = handle.state::<std::sync::Mutex<state::AppState>>();
+                    let guard = st.lock();
+                    if let Ok(mut s) = guard {
+                        history::flush(&mut s);
+                    }
+                });
+            }
             commands::spawn_activity_watcher(app.handle().clone());
             #[cfg(target_os = "linux")]
             linux_webview::configure(app);
@@ -162,7 +175,18 @@ pub fn run() -> Result<()> {
             commands::read_user_font,
             commands::copy_file_to,
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
+        .map(|app| {
+            app.run(|handle, ev| {
+                if let tauri::RunEvent::Exit = ev {
+                    let st = handle.state::<std::sync::Mutex<state::AppState>>();
+                    let guard = st.lock();
+                    if let Ok(mut s) = guard {
+                        history::flush(&mut s);
+                    }
+                }
+            })
+        })
         .map_err(anyhow::Error::from)?;
     Ok(())
 }

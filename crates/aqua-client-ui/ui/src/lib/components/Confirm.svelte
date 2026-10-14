@@ -1,7 +1,13 @@
 <script module lang="ts">
-  import { writable } from "svelte/store";
-  interface Ask { title: string; text?: string; ok?: string; danger?: boolean; resolve: (v: boolean) => void }
+  import { writable, get as getStore } from "svelte/store";
+  interface Ask { title: string; text?: string; ok?: string; danger?: boolean; check?: string; checked?: boolean; resolve: (v: boolean) => void }
   const pending = writable<Ask | null>(null);
+  const checkState = writable(false);
+  /** Same dialog with one checkbox ("Also delete for Alice"). */
+  export function askConfirmCheck(o: { title: string; text?: string; ok?: string; danger?: boolean; check: string; checked?: boolean }): Promise<{ ok: boolean; checked: boolean }> {
+    checkState.set(o.checked ?? false);
+    return new Promise((resolve) => pending.set({ ...o, resolve: (v) => resolve({ ok: v, checked: v && getStore(checkState) }) }));
+  }
   /** In-app confirm dialog (no browser / GTK dialog). Enter = yes, Esc = no. */
   export function askConfirm(o: { title: string; text?: string; ok?: string; danger?: boolean }): Promise<boolean> {
     return new Promise((resolve) => pending.set({ ...o, resolve }));
@@ -33,6 +39,9 @@
     <div class="cf" tabindex="-1" role="alertdialog" aria-modal="true" aria-label={$pending.title} onclick={(e) => e.stopPropagation()}>
       <h3>{$pending.title}</h3>
       {#if $pending.text}<p>{$pending.text}</p>{/if}
+      {#if $pending.check}
+        <label class="cf-check"><input type="checkbox" bind:checked={$checkState} /> <span>{$pending.check}</span></label>
+      {/if}
       <div class="cf-row">
         <button class="cf-btn" onclick={() => done(false)}>{$t("Cancel")}</button>
         <button class="cf-btn ok" class:danger={$pending.danger} bind:this={okBtn} onclick={() => done(true)}>{$pending.ok ?? $t("OK")}</button>
@@ -67,4 +76,6 @@
   .cf-btn.ok { border-color: transparent; background: var(--accent); color: #06070c; }
   .cf-btn.ok.danger { background: #e5484d; color: #fff; }
   .cf-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .cf-check { display: flex; align-items: center; gap: 8px; margin: 2px 0 14px; font-size: 13px; color: var(--fg); cursor: pointer; }
+  .cf-check input { width: 16px; height: 16px; accent-color: var(--accent); }
 </style>

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick, onMount, untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
-  import { askConfirm } from "./Confirm.svelte";
+  import { askConfirm, askConfirmCheck } from "./Confirm.svelte";
   import { askSend, VIDEO_RE, type SendMode } from "./SendDialog.svelte";
   import { shrinkImage } from "../imageTools";
   import { applyThemeFromPath } from "../themeShare";
@@ -1247,14 +1247,33 @@
     closeMenu();
     const chat = $activeChat;
     if (!chat || list.length === 0) return;
+    // "Delete for everyone" is possible for your own text messages (and,
+    // in groups, for others' when you may moderate); the rest is local.
+    const canAll = chat.id !== "__saved__" && list.some((r) => (r.kind.type === "text" || r.kind.type === "reply") && (r.outgoing || chat.id.startsWith("grp_")));
+    let forAll = canAll;
     if (ask) {
-      const ok = await askConfirm({
-        title: list.length === 1 ? tr("Delete this message?") : tr("Delete {n} messages?", { n: list.length }),
-        text: chat.id === "__saved__" ? undefined : tr("Your text messages are deleted for everyone; media and articles — on this device."),
-        ok: tr("Delete"),
-        danger: true,
-      });
-      if (!ok) return;
+      const title = list.length === 1 ? tr("Delete this message?") : tr("Delete {n} messages?", { n: list.length });
+      if (canAll) {
+        const r = await askConfirmCheck({
+          title,
+          text: tr("Media and articles are removed on this device only."),
+          check: chat.id.startsWith("grp_") ? tr("Also delete for all members") : tr("Also delete for {name}", { name: chat.name }),
+          checked: true,
+          ok: tr("Delete"),
+          danger: true,
+        });
+        if (!r.ok) return;
+        forAll = r.checked;
+      } else {
+        const ok = await askConfirm({ title, ok: tr("Delete"), danger: true });
+        if (!ok) return;
+      }
+    }
+    if (!forAll) {
+      try { await api.deleteMessagesLocal(chat.id, list.map((r) => r.id)); } catch { showToast(tr("Some messages could not be deleted")); }
+      await loadActiveMessages();
+      chats.set(await api.listChats());
+      return;
     }
     const local: string[] = [];
     let failed = 0;

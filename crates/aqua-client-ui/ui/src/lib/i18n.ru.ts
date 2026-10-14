@@ -1076,4 +1076,7 @@ export const RU: Record<string, string> = {
   "No activity to show.": "Активности пока нет.",
   "Add a favourite track, games and links in “Edit profile”.": "Добавьте любимый трек, игры и ссылки в «Редактировать профиль».",
   "Games you play show up here automatically (with activity sharing on).": "Игры, в которые вы играете, появятся здесь сами (если включён показ активности).",
+  "Media and articles are removed on this device only.": "Медиа и статьи удаляются только на этом устройстве.",
+  "Also delete for all members": "Удалить также у всех участников",
+  "Also delete for {name}": "Удалить также у {name}",
 };

@@ -120,6 +120,7 @@ dependencies = [
  "base64 0.22.1",
  "bincode",
  "dirs 5.0.1",
+ "flate2",
  "futures-util",
  "hex",
  "infer",

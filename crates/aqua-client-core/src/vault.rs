@@ -156,6 +156,13 @@ impl Vault {
                 nonce      BLOB    NOT NULL,
                 ciphertext BLOB    NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS kv (
+                key        TEXT    PRIMARY KEY,
+                nonce      BLOB    NOT NULL,
+                ciphertext BLOB    NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
             "#,
         )?;
         Ok(())
@@ -187,6 +194,47 @@ impl Vault {
                 Ok(Some(bincode::deserialize(&pt)?))
             }
         }
+    }
+
+    // ---------- Generic records (chat history, groups, settings) ----------
+
+    /// Store an opaque value under `key`, sealed like everything else.
+    pub fn put_record(&self, key: &str, data: &[u8]) -> Result<(), VaultError> {
+        let aad = record_aad(key);
+        let (nonce, ct) = self.seal(&aad, data)?;
+        self.conn.execute(
+            "INSERT INTO kv (key, nonce, ciphertext, updated_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(key) DO UPDATE SET nonce = excluded.nonce, ciphertext = excluded.ciphertext,
+                 updated_at = excluded.updated_at",
+            params![key, nonce, ct, unix_now()],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_record(&self, key: &str) -> Result<Option<Vec<u8>>, VaultError> {
+        let row = self
+            .conn
+            .query_row("SELECT nonce, ciphertext FROM kv WHERE key = ?1", params![key], |row| {
+                Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })
+            .optional()?;
+        match row {
+            None => Ok(None),
+            Some((nonce, ct)) => Ok(Some(self.unseal(&record_aad(key), &nonce, &ct)?)),
+        }
+    }
+
+    pub fn delete_record(&self, key: &str) -> Result<(), VaultError> {
+        self.conn.execute("DELETE FROM kv WHERE key = ?1", params![key])?;
+        Ok(())
+    }
+
+    /// Keys starting with `prefix`, newest first.
+    pub fn record_keys(&self, prefix: &str) -> Result<Vec<String>, VaultError> {
+        let mut stmt = self.conn.prepare("SELECT key FROM kv WHERE key LIKE ?1 ESCAPE '\\' ORDER BY updated_at DESC")?;
+        let pat = format!("{}%", prefix.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
+        let rows: Result<Vec<String>, rusqlite::Error> = stmt.query_map(params![pat], |row| row.get::<_, String>(0))?.collect();
+        Ok(rows?)
     }
 
     // ---------- Sessions --------------------------------------------------
@@ -445,6 +493,12 @@ fn unix_now() -> i64 {
         .unwrap_or(0)
 }
 
+fn record_aad(key: &str) -> Vec<u8> {
+    let mut out = b"record:".to_vec();
+    out.extend_from_slice(key.as_bytes());
+    out
+}
+
 fn session_aad(peer_id: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(9 + peer_id.len());
     out.extend_from_slice(b"session:");
@@ -618,5 +672,20 @@ mod tests {
 
         let v = Vault::open(&path, key).unwrap();
         assert!(matches!(v.load_identity().unwrap_err(), VaultError::Decrypt));
+    }
+
+    #[test]
+    fn records_roundtrip_and_prefix() {
+        let v = Vault::open_in_memory(MasterKey::generate()).unwrap();
+        v.put_record("hist:alice", b"one").unwrap();
+        v.put_record("hist:al_ce", b"two").unwrap();
+        v.put_record("groups", b"g").unwrap();
+        assert_eq!(v.get_record("hist:alice").unwrap().as_deref(), Some(&b"one"[..]));
+        let mut keys = v.record_keys("hist:").unwrap();
+        keys.sort();
+        assert_eq!(keys, vec!["hist:al_ce".to_string(), "hist:alice".to_string()]);
+        assert_eq!(v.record_keys("hist:al_").unwrap(), vec!["hist:al_ce".to_string()]);
+        v.delete_record("hist:alice").unwrap();
+        assert!(v.get_record("hist:alice").unwrap().is_none());
     }
 }
