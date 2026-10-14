@@ -3,6 +3,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Aquamarine</title>
+  <link rel="icon" href="logo.svg" type="image/svg+xml">
 <meta name="description" content="Aquamarine — an open, end-to-end encrypted desktop messenger. Your keys, your server." />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -67,8 +68,7 @@
   .brand { display: flex; align-items: center; gap: 11px; font-family: var(--display); font-weight: 700; font-size: 18px; }
   .logo {
     width: 34px; height: 34px; border-radius: 10px;
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    display: grid; place-items: center; color: #04060b; font-weight: 800; font-size: 19px;
+    display: block;
     box-shadow: 0 0 22px -4px var(--accent-glow);
   }
   .nav-links { display: flex; gap: 26px; margin-left: auto; font-size: 14.5px; color: var(--fg-muted); }
@@ -251,7 +251,7 @@
 
 <nav>
   <div class="wrap nav-in">
-    <a class="brand" href="#top"><span class="logo">A</span> Aquamarine</a>
+    <a class="brand" href="#top"><img class="logo" src="logo.svg" alt="" width="28" height="28"> Aquamarine</a>
     <div class="nav-links">
       <a href="#features">Features</a>
       <a href="#download">Download</a>
@@ -401,7 +401,7 @@ POST /v1/bot/send  {"token","to","text"}</div>
 <footer>
   <div class="wrap">
     <div class="foot-in">
-      <a class="brand" href="#top"><span class="logo">A</span> Aquamarine</a>
+      <a class="brand" href="#top"><img class="logo" src="logo.svg" alt="" width="28" height="28"> Aquamarine</a>
       <div class="foot-links">
         <a href="#features">Features</a>
         <a href="#download">Download</a>

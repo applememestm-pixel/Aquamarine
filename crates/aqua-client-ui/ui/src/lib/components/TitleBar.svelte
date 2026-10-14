@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { appIconUrl } from "../appIcon";
   import { t } from "../i18n";
   /**
    * Our own window title bar (the native one is turned off in
@@ -32,7 +33,7 @@
 
 <div class="titlebar" data-tauri-drag-region>
   <div class="brand" data-tauri-drag-region>
-    <span class="logo" data-tauri-drag-region>A</span>
+    <img class="logo" src={$appIconUrl} alt="" data-tauri-drag-region draggable="false" />
     <span class="name" data-tauri-drag-region>{$t("Aquamarine")}</span>
     {#if $info?.connected}<span class="dot" data-tauri-drag-region title={$t("Connected")}></span>{/if}
   </div>
@@ -70,9 +71,8 @@
   .logo {
     width: 18px; height: 18px; border-radius: 6px;
     display: grid; place-items: center;
-    font-size: 11px; font-weight: 900; color: #06070C;
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    box-shadow: 0 0 10px -2px var(--accent-glow);
+    border-radius: 5px; transition: filter .3s;
+    filter: drop-shadow(0 0 6px var(--accent-glow));
   }
   .name {
     font-size: 12.5px; font-weight: 800; letter-spacing: 0.02em;

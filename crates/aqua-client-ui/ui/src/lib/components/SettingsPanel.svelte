@@ -16,6 +16,8 @@
   import { info } from "../stores";
   import { icons } from "../icons";
   import { openFileDialog } from "../dialog";
+  import { ICON_PRESETS, logoSvg, svgDataUrl, colorsFromAccent, setAppIcon } from "../appIcon";
+  import { cropImage } from "./ImageCropper.svelte";
   import { api, bytesToDataUrl } from "../tauri";
   import { showToast } from "./Toast.svelte";
   import type { BotInfo } from "../types";
@@ -380,6 +382,31 @@
   function setPalette(id: string) { settings.update((s) => ({ ...s, palette: id })); }
   function setDensity(d: Density) { settings.update((s) => ({ ...s, density: d })); }
   function setFontScale(v: number) { settings.update((s) => ({ ...s, fontScale: Math.max(0.85, Math.min(1.25, v)) })); }
+  // ---- app icon ----
+  let iconMode = $derived($settings.appIcon?.mode ?? "theme");
+  let themeIconUrl = $derived.by(() => {
+    void $settings.palette; void $settings.themePreset;
+    const acc = typeof document !== "undefined" ? getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() : "";
+    return svgDataUrl(logoSvg(colorsFromAccent(/^#[0-9a-f]{6}$/i.test(acc) ? acc : "#00E5C7")));
+  });
+  async function pickCustomIcon() {
+    try {
+      const result = await openFileDialog({ multiple: false, directory: false, title: tr("Pick an icon"), filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] }] });
+      const path = Array.isArray(result) ? (result[0] ?? null) : result;
+      if (!path) return;
+      const raw = await api.readUserImage(path);
+      const src = URL.createObjectURL(new Blob([new Uint8Array(raw)]));
+      const blob = await cropImage(src, { aspect: 1, outWidth: 256, title: tr("Position the icon") });
+      URL.revokeObjectURL(src);
+      if (!blob) return;
+      const url = bytesToDataUrl(Array.from(new Uint8Array(await blob.arrayBuffer())), blob.type || "image/webp");
+      setAppIcon({ mode: "custom", custom: url });
+      showToast(tr("App icon changed"));
+    } catch (e) {
+      showToast(`${e}`);
+    }
+  }
+
   function setWallpaper(id: string) { settings.update((s) => ({ ...s, wallpaper: id })); }
 
   async function pickCustomWallpaper() {
@@ -919,6 +946,23 @@
       {/if}
 
       {#if section === "accent"}
+      <section class="group">
+        <div class="label">{$t("App icon")}</div>
+        <div class="icons-row">
+          <button class="app-ic" class:active={iconMode === "theme"} onclick={() => setAppIcon({ mode: "theme" })} title={$t("Follows the accent colour")}>
+            <img src={themeIconUrl} alt="" /><span>{$t("Theme")}</span>
+          </button>
+          {#each ICON_PRESETS as p (p.id)}
+            <button class="app-ic" class:active={iconMode === "preset" && $settings.appIcon?.preset === p.id} onclick={() => setAppIcon({ mode: "preset", preset: p.id })} title={p.name}>
+              <img src={svgDataUrl(logoSvg(p))} alt="" /><span>{p.name}</span>
+            </button>
+          {/each}
+          <button class="app-ic" class:active={iconMode === "custom"} onclick={pickCustomIcon} title={$t("Your own picture")}>
+            {#if $settings.appIcon?.custom}<img src={$settings.appIcon.custom} alt="" />{:else}<span class="plus">＋</span>{/if}<span>{$t("Custom…")}</span>
+          </button>
+        </div>
+        <div class="foot-note">{$t("Shown in the title bar, the sidebar and the taskbar. “Theme” repaints the logo in your accent colour. On Wayland the taskbar uses the installed icon.")}</div>
+      </section>
       <section class="group">
         <div class="label">{$t("Accent colour")}</div>
         <div class="palettes">
@@ -1761,4 +1805,12 @@ POST /v1/bot/send   {"{"} "token", "to": "alice", "text": "hi" {"}"}</pre>
     box-shadow: 0 6px 16px -4px var(--accent-glow);
   }
   .done:hover { transform: translateY(-1px); }
+  .icons-row { display: flex; flex-wrap: wrap; gap: 10px; }
+  .app-ic { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 8px; width: 76px;
+    border: 1px solid var(--border); border-radius: 14px; background: var(--bg-input); color: var(--fg-muted);
+    font-size: 11px; cursor: pointer; transition: transform .25s cubic-bezier(.2,.8,.2,1), border-color .2s, background .2s; }
+  .app-ic:hover { transform: translateY(-2px); }
+  .app-ic.active { border-color: var(--accent); background: var(--accent-soft); color: var(--fg); }
+  .app-ic img, .app-ic .plus { width: 48px; height: 48px; border-radius: 12px; object-fit: cover; }
+  .app-ic .plus { display: grid; place-items: center; font-size: 22px; border: 1px dashed var(--border-strong); }
 </style>

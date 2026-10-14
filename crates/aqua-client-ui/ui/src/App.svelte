@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { startAppIcon } from "./lib/appIcon";
   import { bootstrap, activeTab, info, activeId, backToList } from "./lib/stores";
   import { openRegistration, closeRegistration, registrationDismissed } from "./lib/components/RegistrationWizard.svelte";
   import { initTheme } from "./lib/theme";
@@ -77,6 +78,7 @@
   });
 
   onMount(() => {
+    const stopIcon = startAppIcon();
     // Linux: without gst-plugins-good WebKitGTK hangs on the first sound or
     // video — say what to install up front (playback is refused until then).
     void mediaSupport().then((m) => {
@@ -193,6 +195,7 @@
     window.addEventListener("drop", onDrop);
     window.addEventListener("dragover", onDragOver);
     return () => {
+      stopIcon();
       stopShortcuts();
       window.removeEventListener("popstate", onPop);
       document.removeEventListener("keydown", onKey);

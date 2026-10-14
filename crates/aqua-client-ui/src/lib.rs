@@ -104,6 +104,7 @@ pub fn run() -> Result<()> {
             personal::read_theme_file,
             personal::save_console_bot,
             personal::save_temp_file,
+            personal::set_window_icon,
             commands::fed_peers,
             backups::backup_status,
             backups::backup_enable,

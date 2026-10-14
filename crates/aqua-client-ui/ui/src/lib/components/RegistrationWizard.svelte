@@ -9,6 +9,7 @@
 </script>
 
 <script lang="ts">
+  import { appIconUrl } from "../appIcon";
   import { t, tr } from "../i18n";
   import { api } from "../tauri";
   import { info, chats } from "../stores";
@@ -249,7 +250,7 @@
   <div class="backdrop">
     <div class="sheet login" role="dialog" aria-modal="true" tabindex="-1">
       <aside class="hero">
-        <div class="logo-lg">A</div>
+        <img class="logo-lg" src={$appIconUrl} alt="" draggable="false" />
         <h1 class="hero-title">{$t("Aquamarine")}</h1>
         <p class="hero-tag">{$t("An open, end-to-end encrypted messenger. Your keys never leave this device.")}</p>
         <ul class="hero-feat">
@@ -424,9 +425,7 @@
   }
   .logo-lg {
     width: 56px; height: 56px; border-radius: 16px;
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    display: grid; place-items: center;
-    font-weight: 800; font-size: 26px; color: #06070C;
+    display: block;
     box-shadow: 0 0 30px -4px var(--accent-glow);
     margin-bottom: 18px;
   }

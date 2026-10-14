@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { appIconUrl } from "../appIcon";
   import { t } from "../i18n";
   import { icons } from "../icons";
   import { info, activeTab, type NavTab } from "../stores";
@@ -6,7 +7,7 @@
 </script>
 
 <aside class="rail">
-  <div class="brand" title={$t("Aquamarine")}>A</div>
+  <img class="brand" src={$appIconUrl} alt={$t("Aquamarine")} title={$t("Aquamarine")} draggable="false" />
   <div class="rail-divider"></div>
 
   {#each [
@@ -58,12 +59,10 @@
   .brand {
     width: 40px; height: 40px;
     border-radius: 12px;
-    background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
-    display: grid; place-items: center;
-    font-weight: 800; font-size: 18px;
-    color: #06070C;
+    display: block; object-fit: cover;
     margin-bottom: 10px;
     box-shadow: 0 0 24px -4px var(--accent-glow);
+    transition: transform .35s cubic-bezier(.2,.8,.2,1), box-shadow .35s;
     letter-spacing: -0.02em;
   }
   .rail-divider {

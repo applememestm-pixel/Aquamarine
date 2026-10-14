@@ -148,6 +148,8 @@ export interface Settings {
   /** A user-loaded UI font: label + the font file as a data: URL. */
   customFontName?: string;
   customFontData?: string;
+  /** The app's own logo: follows the theme, a preset, or a custom picture. */
+  appIcon?: { mode: "theme" | "preset" | "custom"; preset?: string; custom?: string };
   /** Complete theme (THEMES id); empty = the built-in look. */
   themePreset?: string;
   /** Opacity of block backgrounds, 0.3–1 (wallpaper shows through). */

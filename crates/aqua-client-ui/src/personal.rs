@@ -132,6 +132,19 @@ pub fn save_temp_file(state: State<'_, StdMutex<AppState>>, name: String, bytes:
     Ok(p.display().to_string())
 }
 
+/// Swap the window / taskbar icon for the one the UI drew (the logo in the
+/// current theme colours, or the user's own picture). RGBA, square, ≤ 512.
+/// Wayland compositors take the icon from the .desktop file instead, so
+/// there this is a no-op.
+#[tauri::command]
+pub fn set_window_icon(window: tauri::WebviewWindow, rgba: Vec<u8>, size: u32) -> Result<(), String> {
+    if size == 0 || size > 512 || rgba.len() != (size * size * 4) as usize {
+        return Err("bad icon".into());
+    }
+    let img = tauri::image::Image::new_owned(rgba, size, size);
+    window.set_icon(img).map_err(|e| e.to_string())
+}
+
 /// The console-chat bot script (tools/aqua-console.py), bundled so the
 /// Bots tab can save a copy next to the user's other files.
 const CONSOLE_BOT: &str = include_str!("../../../tools/aqua-console.py");

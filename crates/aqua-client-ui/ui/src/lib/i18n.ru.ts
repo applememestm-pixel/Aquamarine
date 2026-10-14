@@ -1157,4 +1157,11 @@ export const RU: Record<string, string> = {
   "Don't count on it": "Даже не думай",
   "My sources say no": "Мои источники говорят — нет",
   "Very doubtful": "Весьма сомнительно",
+  "App icon": "Иконка приложения",
+  "Follows the accent colour": "Меняет цвет вместе с акцентом",
+  "Your own picture": "Своя картинка",
+  "Shown in the title bar, the sidebar and the taskbar. “Theme” repaints the logo in your accent colour. On Wayland the taskbar uses the installed icon.": "Показывается в заголовке окна, боковой панели и на панели задач. «Тема» перекрашивает логотип в акцентный цвет. В Wayland панель задач берёт установленную иконку.",
+  "Pick an icon": "Выберите иконку",
+  "Position the icon": "Расположите иконку",
+  "App icon changed": "Иконка приложения изменена",
 };
