@@ -484,3 +484,53 @@ async fn bot_lifecycle_and_console_script() {
     let r = http.get(format!("{base}/v1/bot/me?token={token2}")).send().await.unwrap();
     assert_eq!(r.status().as_u16(), 401);
 }
+
+/// Backups: sign up with a hashed password, upload a sealed backup, then a
+/// "new device" fetches it with an e-mail ticket + the same password,
+/// opens it, and signs in with the restored identity.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn encrypted_backup_moves_an_account_to_a_new_device() {
+    use aqua_client_core::backup;
+    let addr = spawn_server().await;
+    let base = format!("http://{addr}");
+    let http = reqwest::Client::new();
+    let email = "move@x.com";
+    let password = "correct horse battery";
+    let secret = backup::auth_secret(password, email);
+
+    // Old device: register.
+    let mut old = Client::new("mover");
+    old.login(&http, &base).await;
+    let code: serde_json::Value = http.post(format!("{base}/v1/auth/email/request")).json(&serde_json::json!({ "email": email })).send().await.unwrap().json().await.unwrap();
+    let t: serde_json::Value = http.post(format!("{base}/v1/auth/email/verify")).json(&serde_json::json!({ "email": email, "code": code["dev_code"] })).send().await.unwrap().json().await.unwrap();
+    let r = http.post(format!("{base}/v1/users/register")).bearer_auth(&old.token)
+        .json(&serde_json::json!({ "ticket": t["ticket"], "username": "mover", "display_name": "M", "password": secret }))
+        .send().await.unwrap();
+    assert!(r.status().is_success(), "{}", r.text().await.unwrap());
+
+    // Upload a sealed backup.
+    let (keys, phrase) = backup::new_keys(password);
+    let blob = backup::seal(&keys, b"vault dump + chats");
+    let r = http.put(format!("{base}/v1/backup")).bearer_auth(&old.token).body(b"plain text".to_vec()).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 400, "only sealed backups are accepted");
+    let r = http.put(format!("{base}/v1/backup")).bearer_auth(&old.token).body(blob.clone()).send().await.unwrap();
+    assert!(r.status().is_success());
+    let meta: serde_json::Value = http.get(format!("{base}/v1/backup")).bearer_auth(&old.token).send().await.unwrap().json().await.unwrap();
+    assert_eq!(meta["exists"], true);
+
+    // New device: ticket + password → backup.
+    let code: serde_json::Value = http.post(format!("{base}/v1/auth/email/request")).json(&serde_json::json!({ "email": email })).send().await.unwrap().json().await.unwrap();
+    let t: serde_json::Value = http.post(format!("{base}/v1/auth/email/verify")).json(&serde_json::json!({ "email": email, "code": code["dev_code"] })).send().await.unwrap().json().await.unwrap();
+    let ticket = t["ticket"].as_str().unwrap();
+    assert!(aqua_client_core::Transport::fetch_backup(&base, ticket, "wrong").await.is_err());
+    let got = aqua_client_core::Transport::fetch_backup(&base, ticket, &secret).await.unwrap().unwrap();
+    assert_eq!(got, blob);
+    assert_eq!(backup::open_with_password(&got, password).unwrap().0, b"vault dump + chats");
+    assert_eq!(backup::open_with_recovery(&got, &phrase).unwrap().0, b"vault dump + chats");
+    // The relay only ever had the hash: it can't open the backup with it.
+    assert!(backup::open_with_password(&got, &secret).is_err());
+
+    // The ticket still works for the sign-in, with the restored identity.
+    let u = aqua_client_core::Transport::login_account(&base, &old.identity, ticket, &secret).await.unwrap();
+    assert_eq!(u, "mover");
+}

@@ -52,6 +52,7 @@ path = "src/main.rs"
 
 [dev-dependencies]
 tempfile           = "3"
+aqua-client-core   = { path = "../aqua-client-core" }
 reqwest            = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tokio-tungstenite  = "0.24"
 base64             = { workspace = true }

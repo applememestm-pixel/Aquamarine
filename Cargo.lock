@@ -102,6 +102,7 @@ name = "aqua-server"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "aqua-client-core",
  "aqua-core",
  "axum",
  "base64 0.22.1",

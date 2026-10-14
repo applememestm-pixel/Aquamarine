@@ -446,6 +446,67 @@ impl Transport {
         Ok(r.json::<Resp>().await?.username)
     }
 
+    /// Set the account password (already turned into [`crate::backup::auth_secret`]).
+    pub async fn set_password_with(
+        server_url: &str,
+        identity: &IdentityKeyPair,
+        username: &str,
+        secret: &str,
+    ) -> Result<(), TransportError> {
+        let http = http_client()?;
+        let token = sign_in(&http, server_url, identity).await?;
+        let url = format!("{}/v1/users/{}/password", server_url.trim_end_matches('/'), username);
+        let r = http.post(&url).bearer_auth(&token).json(&serde_json::json!({ "password": secret })).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(())
+    }
+
+    /// New device: download the encrypted backup with an e-mail ticket +
+    /// password secret. `Ok(None)` = the account has no backup.
+    pub async fn fetch_backup(server_url: &str, ticket: &str, secret: &str) -> Result<Option<Vec<u8>>, TransportError> {
+        let http = http_client()?;
+        let url = format!("{}/v1/backup/fetch", server_url.trim_end_matches('/'));
+        let r = http.post(&url).json(&serde_json::json!({ "ticket": ticket, "password": secret })).send().await?;
+        if r.status().as_u16() == 404 {
+            return Ok(None);
+        }
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(Some(r.bytes().await?.to_vec()))
+    }
+
+    /// Upload this account's encrypted backup (replaces the previous one).
+    pub async fn put_backup(&self, blob: Vec<u8>) -> Result<serde_json::Value, TransportError> {
+        let url = format!("{}/v1/backup", self.server_url.trim_end_matches('/'));
+        let r = self.http.put(&url).bearer_auth(self.bearer().await?).body(blob).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(r.json().await?)
+    }
+
+    /// `{ exists, size, updated_at }` of the stored backup.
+    pub async fn backup_meta(&self) -> Result<serde_json::Value, TransportError> {
+        let url = format!("{}/v1/backup", self.server_url.trim_end_matches('/'));
+        let r = self.http.get(&url).bearer_auth(self.bearer().await?).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(r.json().await?)
+    }
+
+    pub async fn delete_backup(&self) -> Result<(), TransportError> {
+        let url = format!("{}/v1/backup", self.server_url.trim_end_matches('/'));
+        let r = self.http.delete(&url).bearer_auth(self.bearer().await?).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(())
+    }
+
     /// Register `@username` to this identity, gated by an email ticket.
     pub async fn register_user(
         &self,

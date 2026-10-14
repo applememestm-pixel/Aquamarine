@@ -35,10 +35,11 @@
   import { BUILTIN_SOUNDS, customSounds, refreshSounds, playSound, soundLabel, addSoundBytes } from "../sounds";
   import { exportThemeToFile, sendThemeToChat, pickAndApplyTheme } from "../themeShare";
   import { askConfirm } from "./Confirm.svelte";
+  import { backupState, refreshBackup, backupNow } from "../backup";
   import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 
   // ---- Section navigation ----
-  type Sec = "ghost" | "language" | "appearance" | "theme" | "behaviour" | "notifications" | "voice" | "wallpaper" | "accent" | "bots" | "account" | "about" | "privacy" | "stickers";
+  type Sec = "ghost" | "language" | "appearance" | "theme" | "behaviour" | "notifications" | "voice" | "wallpaper" | "accent" | "bots" | "account" | "about" | "privacy" | "stickers" | "backups";
   let section = $state<Sec>("notifications");
   // Telegram-mobile style: coloured icon tiles in grouped lists.
   interface Item { id: Sec | "profile" | "shortcuts"; label: string; color: string; icon: string; hint?: string }
@@ -47,6 +48,7 @@
     [
       { id: "profile", label: "Edit profile", color: "#007AFF", icon: ic(`<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>`) },
       { id: "ghost", label: "Ghost mode", color: "#5E5CE6", icon: ic(`<path d="M9 10h.01"/><path d="M15 10h.01"/><path d="M12 2a8 8 0 0 0-8 8v12l3-3 2.5 2.5L12 19l2.5 2.5L17 19l3 3V10a8 8 0 0 0-8-8z"/>`) },
+      { id: "backups", label: "Backups", color: "#30B0C7", icon: ic(`<path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/><path d="M22 2v6h-6"/>`) },
       { id: "privacy", label: "Privacy & Security", color: "#8E8E93", icon: ic(`<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>`) },
     ],
     [
@@ -214,6 +216,46 @@
   function clearCustomFont() {
     settings.update((s) => ({ ...s, customFontName: undefined, customFontData: undefined }));
     showToast(tr("Font reset to default"));
+  }
+
+  // ---- Backups ----
+  let bkBusy = $state(false);
+  let bkPw = $state("");
+  let bkPhrase = $state<string | null>(null);
+  $effect(() => { if ($settingsOpen && section === "backups") void refreshBackup(); });
+  function fmtWhen(sec: number): string {
+    const d = new Date(sec * 1000);
+    return d.toLocaleString();
+  }
+  function fmtBytes(n: number): string {
+    return n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+  }
+  async function bkEnable() {
+    if (bkPw.length < 8) { showToast(tr("Password must be at least 8 characters")); return; }
+    bkBusy = true;
+    try {
+      bkPhrase = await api.backupEnable(bkPw);
+      bkPw = "";
+      await refreshBackup();
+      try { await backupNow(true); } catch (e) { showToast(tr("Backups are on; the first upload failed: {e}", { e: String(e) })); }
+    } catch (e) { showToast(String(e)); }
+    finally { bkBusy = false; }
+  }
+  async function bkNow() {
+    bkBusy = true;
+    try { await backupNow(true); showToast(tr("Backup uploaded")); }
+    catch (e) { showToast(tr("Backup failed: {e}", { e: String(e) })); }
+    finally { bkBusy = false; }
+  }
+  async function bkShowPhrase() {
+    const ok = await askConfirm({ title: tr("Show the recovery key?"), text: tr("Anyone who sees these 24 words and gets into your e-mail can restore your account. Make sure nobody is looking at your screen."), ok: tr("Show") });
+    if (!ok) return;
+    try { bkPhrase = await api.backupPhrase(); if (!bkPhrase) showToast(tr("This device doesn't have the recovery key (backup opened with the password)")); } catch (e) { showToast(String(e)); }
+  }
+  async function bkDisable() {
+    const ok = await askConfirm({ title: tr("Turn off backups?"), text: tr("The encrypted copy on the server is deleted. Chats stay on this device."), ok: tr("Turn off"), danger: true });
+    if (!ok) return;
+    try { await api.backupDisable(); bkPhrase = null; await refreshBackup(); } catch (e) { showToast(String(e)); }
   }
 
   // ---- Bots ----
@@ -1009,6 +1051,40 @@
       </section>
       {/if}
 
+      {#if section === "backups"}
+      <section class="group">
+        <div class="label">{$t("Encrypted backup")}</div>
+        <div class="bots-note">{$t("Your keys, chats, groups and settings are sealed on this device and kept on your server, which can't read them. Sign in on a new device with your e-mail and password and everything comes back. Photos and videos are not included.")}</div>
+        {#if !$backupState?.enabled}
+          <div class="bk-row">
+            <input class="txt" type="password" placeholder={$t("Account password")} bind:value={bkPw} onkeydown={(e) => { if (e.key === "Enter") void bkEnable(); }} />
+            <button class="bot-btn primary" onclick={bkEnable} disabled={bkBusy || bkPw.length < 8}>{bkBusy ? "…" : $t("Turn on")}</button>
+          </div>
+          <div class="bots-note">{$t("Use the password of your account: it opens the backup on a new device.")}</div>
+        {:else}
+          <div class="bk-stat">
+            <span class="bk-dot on"></span>
+            <span>{$backupState.last ? tr("Last backup: {when} · {size}", { when: fmtWhen($backupState.last.at), size: fmtBytes($backupState.last.size) }) : $t("On — no backup uploaded yet")}</span>
+          </div>
+          <div class="bot-actions">
+            <button class="bot-btn primary" onclick={bkNow} disabled={bkBusy || !$info?.connected}>{bkBusy ? "…" : $t("Back up now")}</button>
+            <button class="bot-link" onclick={bkShowPhrase}>{$t("Show recovery key")}</button>
+            <span class="bot-sp"></span>
+            <button class="bot-link danger" onclick={bkDisable}>{$t("Turn off")}</button>
+          </div>
+          <div class="bots-note">{$t("Backups run by themselves every 6 hours while you're connected.")}</div>
+        {/if}
+        {#if bkPhrase}
+          <div class="bk-phrase">
+            <div class="bk-ph-title">{$t("Recovery key — write it down and keep it offline")}</div>
+            <ol>{#each bkPhrase.split(" ") as w, i (i)}<li>{w}</li>{/each}</ol>
+            <div class="bots-note">{$t("If you forget the password, these 24 words still open the backup. Nobody, including the server admin, can recover it without one of them.")}</div>
+            <button class="bot-link" onclick={() => (bkPhrase = null)}>{$t("Hide")}</button>
+          </div>
+        {/if}
+      </section>
+      {/if}
+
       {#if section === "bots"}
       <section class="group">
         <div class="label">{$t("Your bots")}</div>
@@ -1559,6 +1635,16 @@ POST /v1/bot/send   {"{"} "token", "to": "alice", "text": "hi" {"}"}</pre>
   @media (max-width: 520px) {
     .bot-create { grid-template-columns: 1fr; }
   }
+
+  .bk-row { display: flex; gap: 8px; margin-top: 10px; }
+  .bk-row .txt { flex: 1; min-width: 0; }
+  .bk-stat { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 10px 0 6px; }
+  .bk-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fg-dim); }
+  .bk-dot.on { background: #34C759; box-shadow: 0 0 0 3px rgba(52, 199, 89, 0.18); }
+  .bk-phrase { margin-top: 12px; padding: 12px; border-radius: 12px; border: 1px dashed color-mix(in srgb, var(--accent) 50%, transparent); background: var(--bg-input); }
+  .bk-ph-title { font-size: 12px; font-weight: 700; color: var(--accent); margin-bottom: 8px; }
+  .bk-phrase ol { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px 10px; margin: 0; padding-left: 22px; font-family: var(--font-mono); font-size: 12.5px; }
+  @media (max-width: 520px) { .bk-phrase ol { grid-template-columns: repeat(2, 1fr); } }
 
   /* Theme editor */
   .te-intro { font-size: 12px; color: var(--fg-dim); line-height: 1.5; margin-bottom: 12px; }

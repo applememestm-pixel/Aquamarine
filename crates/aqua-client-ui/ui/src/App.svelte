@@ -43,6 +43,7 @@
   import ImageCropper from "./lib/components/ImageCropper.svelte";
   import { initPresence, myActivity } from "./lib/presence";
   import { trackPlayed } from "./lib/played";
+  import { startAutoBackup } from "./lib/backup";
   import { refreshPeer, syncMyProfileOnConnect } from "./lib/people";
   import { chats } from "./lib/stores";
   import { initShortcuts } from "./lib/shortcuts";
@@ -95,6 +96,7 @@
     bootstrap();
     initPresence();
     trackPlayed();
+    startAutoBackup();
     // A game session just ended: republish the card so the game collection
     // on the profile picks up the new play time.
     let wasPlaying = false;

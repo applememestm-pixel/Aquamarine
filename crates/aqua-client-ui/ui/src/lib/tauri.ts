@@ -76,8 +76,15 @@ export const api = {
   // Email registration + user directory
   requestEmailCode:   (server_url: string, email: string): Promise<string | null>  => invoke("request_email_code", { serverUrl: server_url, email }),
   verifyEmailCode:    (server_url: string, email: string, code: string): Promise<string> => invoke("verify_email_code", { serverUrl: server_url, email, code }),
-  registerAccount:    (server_url: string, username: string, ticket: string, display_name: string, about: string, phone: string, password?: string): Promise<void> => invoke("register_account", { serverUrl: server_url, username, ticket, displayName: display_name, about, phone, password: password || null }),
-  loginAccount:       (server_url: string, ticket: string, password: string): Promise<string> => invoke("login_account", { serverUrl: server_url, ticket, password }),
+  registerAccount:    (server_url: string, username: string, ticket: string, display_name: string, about: string, phone: string, password?: string, email?: string): Promise<void> => invoke("register_account", { serverUrl: server_url, username, ticket, displayName: display_name, about, phone, password: password || null, email: email || null }),
+  loginAccount:       (server_url: string, ticket: string, password: string, email?: string): Promise<string> => invoke("login_account", { serverUrl: server_url, ticket, password, email: email || null }),
+  backupStatus:       (): Promise<BackupStatus> => invoke("backup_status"),
+  backupEnable:       (password: string): Promise<string> => invoke("backup_enable", { password }),
+  backupPhrase:       (): Promise<string | null> => invoke("backup_phrase"),
+  backupNow:          (ui: string, force: boolean): Promise<BackupStatus> => invoke("backup_now", { ui, force }),
+  backupDisable:      (): Promise<void> => invoke("backup_disable"),
+  backupRestore:      (server_url: string, ticket: string, password: string, email: string, phrase?: string): Promise<{ found: boolean; need_phrase: boolean; username: string | null; email: string | null; ui: string }> =>
+    invoke("backup_restore", { serverUrl: server_url, ticket, password, email, phrase: phrase || null }),
   registerUsername:   (ticket: string, username: string, display_name: string, about: string, phone: string): Promise<void> => invoke("register_username", { ticket, username, displayName: display_name, about, phone }),
   searchDirectory:    (query: string): Promise<DirProfile[]>                        => invoke("search_directory", { query }),
   fetchDirectoryProfile: (username: string): Promise<DirProfile | null>            => invoke("fetch_directory_profile", { username }),
@@ -206,6 +213,8 @@ export interface PollVoteEvent { from: string; vote: { poll: string; options?: n
 export function sendChatControl(chatId: string, payload: string): Promise<void> {
   return chatId.startsWith("grp_") ? api.groupControl(chatId, payload) : api.sendControl(chatId, payload);
 }
+
+export interface BackupStatus { enabled: boolean; last: { at: number; size: number } | null; has_phrase: boolean }
 
 export const events = {
   onIncoming:        (fn: (p: IncomingPayload) => void)   => listen<IncomingPayload>("aqua://incoming", (e) => fn(e.payload)),

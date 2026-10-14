@@ -307,14 +307,25 @@ pub async fn register_account(
     about: String,
     phone: String,
     password: Option<String>,
+    email: Option<String>,
 ) -> Result<(), String> {
     let identity = {
         let s = state.lock().map_err(|e| e.to_string())?;
         s.identity.clone()
     };
+    // The relay never sees the password itself, only an Argon2id hash of it
+    // (aqua_client_core::backup::auth_secret) — the backup key stays ours.
+    let secret = match (password.as_deref(), email.as_deref()) {
+        (Some(p), Some(e)) if !p.is_empty() && !e.trim().is_empty() => {
+            if p.chars().count() < 8 { return Err("password must be at least 8 characters".into()); }
+            let (p, e) = (p.to_string(), e.to_string());
+            tokio::task::spawn_blocking(move || aqua_client_core::backup::auth_secret(&p, &e)).await.map_err(|e| e.to_string())?
+        }
+        (Some(p), _) => p.to_string(),
+        _ => String::new(),
+    };
     Transport::register_account(
-        &server_url, &identity, &ticket, &username, &display_name, &about, &phone,
-        password.as_deref().unwrap_or(""),
+        &server_url, &identity, &ticket, &username, &display_name, &about, &phone, &secret,
     )
     .await
     .map_err(|e| e.to_string())
@@ -329,14 +340,32 @@ pub async fn login_account(
     server_url: String,
     ticket: String,
     password: String,
+    email: Option<String>,
 ) -> Result<String, String> {
     let identity = {
         let s = state.lock().map_err(|e| e.to_string())?;
         s.identity.clone()
     };
-    Transport::login_account(&server_url, &identity, &ticket, &password)
-        .await
-        .map_err(|e| e.to_string())
+    let Some(email) = email.filter(|e| !e.trim().is_empty()) else {
+        return Transport::login_account(&server_url, &identity, &ticket, &password).await.map_err(|e| e.to_string());
+    };
+    let secret = {
+        let (p, e) = (password.clone(), email.clone());
+        tokio::task::spawn_blocking(move || aqua_client_core::backup::auth_secret(&p, &e)).await.map_err(|e| e.to_string())?
+    };
+    match Transport::login_account(&server_url, &identity, &ticket, &secret).await {
+        Ok(u) => Ok(u),
+        Err(e) if e.to_string().contains("wrong email or password") => {
+            // An account from before hashed sign-in: try the raw password once,
+            // then switch it to the hash so the relay stops seeing it.
+            let u = Transport::login_account(&server_url, &identity, &ticket, &password).await.map_err(|e| e.to_string())?;
+            if let Err(e) = Transport::set_password_with(&server_url, &identity, &u, &secret).await {
+                tracing::warn!(error = %e, "could not upgrade the stored password");
+            }
+            Ok(u)
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Register @username to this identity. Requires an already-open

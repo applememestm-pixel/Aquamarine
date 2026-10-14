@@ -16,6 +16,7 @@
   import { connect } from "../stores";
   import { showToast } from "./Toast.svelte";
   import { icons } from "../icons";
+  import { applyUiState, refreshBackup } from "../backup";
 
   // On Android, 127.0.0.1 is the phone itself. The emulator reaches the PC's
   // relay at 10.0.2.2; a real phone needs the PC's LAN IP or a public relay.
@@ -65,7 +66,9 @@
   }
 
   // Steps: 1 email → 2 code → 3 username+profile → done
-  let step = $state<1 | 2 | 3>(1);
+  let step = $state<1 | 2 | 3 | 4>(1);
+  /** Step 4: the backup didn't open with the password — recovery key. */
+  let phrase = $state("");
   let serverUrl = $state(DEFAULT_SERVER);
   let email = $state("");
   let code = $state("");
@@ -147,21 +150,48 @@
     }
   }
 
-  /** Existing account → move it to this device, connect, done. */
-  async function finishSignIn() {
+  /** Existing account → restore its encrypted backup (if any), move it to
+   *  this device, connect, done. */
+  async function finishSignIn(withPhrase = false) {
+    let restored = false;
     try {
-      const u = await api.loginAccount(serverUrl.trim(), ticket, password);
+      const r = await api.backupRestore(serverUrl.trim(), ticket, password, email.trim(), withPhrase ? phrase.trim() : undefined);
+      if (r.found && r.need_phrase) { step = 4; error = withPhrase ? tr("That recovery key doesn't open the backup") : null; return; }
+      if (r.found) { applyUiState(r.ui); restored = true; }
+    } catch (e) {
+      // No backup / old relay: carry on with a fresh device.
+      console.warn("backup restore", e);
+    }
+    try {
+      const u = await api.loginAccount(serverUrl.trim(), ticket, password, email.trim());
       const err = await connect(serverUrl.trim(), u);
       if (err) { error = err; return; }
       try { info.set(await api.completeRegistration(u, email.trim() || null)); } catch { /* non-fatal */ }
       try { chats.set(await api.listChats()); } catch { /* non-fatal */ }
-      showToast(tr("Signed in as @{u}", { u }));
+      if (!restored) { try { await api.backupEnable(password); } catch { /* non-fatal */ } }
+      void refreshBackup();
+      showToast(restored ? tr("Signed in as @{u} — chats restored from your backup", { u }) : tr("Signed in as @{u}", { u }));
       closeRegistration();
+      // Restored settings (theme, folders…) apply on a fresh start of the UI.
+      if (restored) setTimeout(() => location.reload(), 600);
     } catch (e) {
       const m = String(e);
       error = /wrong email or password/i.test(m) ? tr("Wrong email or password") : tr("Could not sign in: {e}", { e: m });
       step = 1;
     }
+  }
+
+  /** Recovery key step: give up on the backup and start fresh. */
+  async function skipRestore() {
+    phrase = "";
+    try {
+      const u = await api.loginAccount(serverUrl.trim(), ticket, password, email.trim());
+      const err = await connect(serverUrl.trim(), u);
+      if (err) { error = err; return; }
+      try { info.set(await api.completeRegistration(u, email.trim() || null)); } catch { /* non-fatal */ }
+      try { await api.backupEnable(password); } catch { /* non-fatal */ }
+      closeRegistration();
+    } catch (e) { error = String(e); }
   }
 
   async function finish() {
@@ -176,7 +206,7 @@
       // 1. Register the account FIRST (HTTP sign-in + directory write). The
       //    server now requires a registered username before it will accept a
       //    bundle upload or a WebSocket, so this must precede connect.
-      await api.registerAccount(serverUrl.trim(), u, ticket, displayName.trim(), about.trim(), phone.trim(), password);
+      await api.registerAccount(serverUrl.trim(), u, ticket, displayName.trim(), about.trim(), phone.trim(), password, email.trim());
       // 2. Connect (signs in + opens WS + uploads bundle), which also
       //    saves the auto-reconnect hints.
       const err = await connect(serverUrl.trim(), u);
@@ -196,6 +226,8 @@
       //    gate ($info.registered) closes immediately.
       try { info.set(await api.completeRegistration(u, email.trim() || null)); } catch { /* non-fatal */ }
       try { chats.set(await api.listChats()); } catch { /* non-fatal */ }
+      // Encrypted backups on by default (the password opens them).
+      try { await api.backupEnable(password); void refreshBackup(); } catch { /* non-fatal */ }
       showToast(`Registered as @${u}`);
       closeRegistration();
     } catch (e) {
@@ -302,6 +334,18 @@
           <div class="actions">
             <button class="ghost" onclick={() => (step = 1)}>{$t("Back")}</button>
             <button class="primary" onclick={checkCode} disabled={busy}>{$t(busy ? "Verifying…" : "Verify")}</button>
+          </div>
+        </div>
+      {:else if step === 4}
+        <div class="form">
+          <p class="note">{$t("This account has an encrypted backup, but your current password doesn't open it (the password was changed after it was made). Enter the 24-word recovery key to restore your chats.")}</p>
+          <label class="field">
+            <span>{$t("Recovery key")}</span>
+            <textarea bind:value={phrase} rows="4" spellcheck="false" placeholder="word word word …"></textarea>
+          </label>
+          <div class="actions">
+            <button class="ghost" onclick={skipRestore} disabled={busy}>{$t("Start without the backup")}</button>
+            <button class="primary" onclick={() => finishSignIn(true)} disabled={busy || phrase.trim().split(/\s+/).length !== 24}>{$t("Restore")}</button>
           </div>
         </div>
       {:else}

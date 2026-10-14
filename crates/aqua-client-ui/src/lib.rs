@@ -12,6 +12,7 @@ pub mod web;
 pub mod media_server;
 pub mod personal;
 pub mod history;
+pub mod backups;
 
 use anyhow::Result;
 use tauri::Manager;
@@ -102,6 +103,12 @@ pub fn run() -> Result<()> {
             personal::write_theme_file,
             personal::read_theme_file,
             personal::save_console_bot,
+            backups::backup_status,
+            backups::backup_enable,
+            backups::backup_phrase,
+            backups::backup_now,
+            backups::backup_disable,
+            backups::backup_restore,
             web::cache_remote_media,
             web::telegraph_page,
             web::open_external,
