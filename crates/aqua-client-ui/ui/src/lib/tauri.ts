@@ -88,7 +88,9 @@ export const api = {
   setProfileImage:      (kind: "avatar" | "banner", path: string): Promise<{ ver: number; path: string }> => invoke("set_profile_image", { kind, path }),
   setProfileImageBytes: (kind: "avatar" | "banner", mime: string, bytes: number[]): Promise<{ ver: number; path: string }> => invoke("set_profile_image_bytes", { kind, mime, bytes }),
   clearProfileImage:    (kind: "avatar" | "banner"): Promise<void> => invoke("clear_profile_image", { kind }),
-  profileMediaPath:     (username: string, kind: "avatar" | "banner", ver: number): Promise<string | null> => invoke("profile_media_path", { username, kind, ver }),
+  clearProfileMedia:    (kind: "avatar" | "banner" | "music"): Promise<void> => invoke("clear_profile_image", { kind }),
+  setProfileMediaFile:  (kind: "banner" | "music", path: string): Promise<{ ver: number; path: string }> => invoke("set_profile_media_file", { kind, path }),
+  profileMediaPath:     (username: string, kind: "avatar" | "banner" | "music", ver: number): Promise<string | null> => invoke("profile_media_path", { username, kind, ver }),
 
   // Media library management
   addMediaFiles:      (target: "gifs" | "stickers" | "emoji", pack: string | null, paths: string[]): Promise<number> => invoke("add_media_files", { target, pack, paths }),

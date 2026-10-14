@@ -22,9 +22,13 @@ export interface PeerCard {
   extra: Record<string, unknown>;
   avatar_ver: number;
   banner_ver: number;
+  /** "Favourite track" audio version (0 = none). */
+  music_ver?: number;
   /** Asset URLs of the cached images ("" when none). */
   avatar: string;
   banner: string;
+  /** Asset URL of the cached favourite track ("" when none). */
+  music?: string;
   /** When we last fetched (ms). */
   fetched: number;
   /** Highest profile version we've seen announced in presence. */
@@ -95,7 +99,9 @@ export function refreshPeer(username: string, force = false): Promise<void> {
         peerCards.update((m) => ({ ...m, [username]: { ...(m[username] ?? blank(username)), fetched: Date.now() } }));
         return;
       }
-      const av = card.avatar_ver ?? 0, bv = card.banner_ver ?? 0;
+      const av = card.avatar_ver ?? 0, bv = card.banner_ver ?? 0, mv = card.music_ver ?? 0;
+      let music = cur && cur.music_ver === mv ? (cur.music ?? "") : "";
+      if (mv && !music) music = assetUrl(await api.profileMediaPath(username, "music", mv).catch(() => null));
       let avatar = cur && cur.avatar_ver === av ? cur.avatar : "";
       let banner = cur && cur.banner_ver === bv ? cur.banner : "";
       if (av && !avatar) avatar = assetUrl(await api.profileMediaPath(username, "avatar", av).catch(() => null));
@@ -109,8 +115,8 @@ export function refreshPeer(username: string, force = false): Promise<void> {
           phone: card.phone,
           is_bot: card.is_bot,
           extra: (card.extra ?? {}) as Record<string, unknown>,
-          avatar_ver: av, banner_ver: bv,
-          avatar: av ? avatar : "", banner: bv ? banner : "",
+          avatar_ver: av, banner_ver: bv, music_ver: mv,
+          avatar: av ? avatar : "", banner: bv ? banner : "", music: mv ? music : "",
           fetched: Date.now(),
           pv: m[username]?.pv ?? 0,
         },
@@ -147,6 +153,7 @@ function myExtra(p: Profile): Record<string, unknown> {
     // over E2EE presence instead (presence.ts `pp`).
     birthday: isPublic("birthday") ? (p.birthday ?? "") : "", favourite_music: p.favourite_music ?? "",
     avatar_emoji: p.avatar_emoji ?? "",
+    music_title: p.music_ver ? (p.music_title ?? "") : "",
     clan: p.clan ?? null,
   };
 }
@@ -181,6 +188,24 @@ function applyMyImage(kind: "avatar" | "banner", r: { ver: number; path: string 
   else updateProfile({ banner_ver: r.ver, banner_url: url });
   updateProfile({ pv: Date.now() });
   broadcastPresence();
+}
+
+/** Animated banner (GIF / short video, made silent + light) or favourite track. */
+export async function setMyMediaFile(kind: "banner" | "music", path: string): Promise<void> {
+  const r = await api.setProfileMediaFile(kind, path);
+  if (kind === "music") {
+    const title = (path.split(/[\\/]/).pop() ?? "").replace(/\.[^.]+$/, "").replace(/_/g, " ");
+    updateProfile({ music_ver: r.ver, music_url: assetUrl(r.path), music_title: title });
+    await publishMyProfile();
+  } else {
+    applyMyImage("banner", r);
+  }
+}
+
+export async function clearMyMusic(): Promise<void> {
+  await api.clearProfileMedia("music");
+  updateProfile({ music_ver: 0, music_url: "", music_title: "" });
+  await publishMyProfile();
 }
 
 export async function clearMyImage(kind: "avatar" | "banner"): Promise<void> {

@@ -372,6 +372,7 @@ pub struct DirProfile {
     /// Server version of the avatar / banner image (0 = none).
     pub avatar_ver: i64,
     pub banner_ver: i64,
+    pub music_ver: i64,
 }
 
 impl From<aqua_client_core::ProfileCard> for DirProfile {
@@ -385,6 +386,7 @@ impl From<aqua_client_core::ProfileCard> for DirProfile {
             extra: if c.extra.is_object() { c.extra } else { serde_json::json!({}) },
             avatar_ver: c.avatar_ver,
             banner_ver: c.banner_ver,
+            music_ver: c.music_ver,
         }
     }
 }
@@ -455,7 +457,7 @@ pub async fn publish_profile_full(
 // ---------- Profile images (public avatar / banner) -----------------------
 
 fn check_media_kind(kind: &str) -> Result<(), String> {
-    if kind == "avatar" || kind == "banner" { Ok(()) } else { Err(format!("unknown profile image kind {kind:?}")) }
+    if matches!(kind, "avatar" | "banner" | "music") { Ok(()) } else { Err(format!("unknown profile media kind {kind:?}")) }
 }
 
 fn image_mime_for(path: &str) -> Option<&'static str> {
@@ -473,6 +475,16 @@ fn ext_for_mime(mime: &str) -> &'static str {
         "image/jpeg" => "jpg",
         "image/webp" => "webp",
         "image/gif" => "gif",
+        "video/mp4" => "mp4",
+        "video/webm" => "webm",
+        "audio/mpeg" => "mp3",
+        "audio/ogg" => "ogg",
+        "audio/opus" => "opus",
+        "audio/mp4" => "m4a",
+        "audio/aac" => "aac",
+        "audio/flac" => "flac",
+        "audio/wav" => "wav",
+        "audio/webm" => "weba",
         _ => "img",
     }
 }
@@ -514,8 +526,9 @@ async fn upload_profile_image(
     bytes: Vec<u8>,
 ) -> Result<ProfileImageResult, String> {
     check_media_kind(&kind)?;
-    if bytes.is_empty() || bytes.len() > 8 * 1024 * 1024 {
-        return Err("image is empty or larger than 8 MB".into());
+    let limit = if kind == "music" { 10 } else if matches!(mime.as_str(), "image/gif" | "video/mp4" | "video/webm") { 3 } else { 8 };
+    if bytes.is_empty() || bytes.len() > limit * 1024 * 1024 {
+        return Err(format!("file is empty or larger than {limit} MB"));
     }
     let (transport, data_dir) = {
         let s = state.lock().map_err(|e| e.to_string())?;
@@ -552,6 +565,58 @@ pub async fn set_profile_image(
     }
     let bytes = std::fs::read(&path).map_err(|e| format!("read: {e}"))?;
     upload_profile_image(state, kind, mime.to_string(), bytes).await
+}
+
+/// Upload a picked file as profile media: an animated banner (GIF or a
+/// short video — re-encoded silent and small with ffmpeg when available)
+/// or the "favourite track" audio file.
+#[tauri::command]
+pub async fn set_profile_media_file(
+    state: State<'_, StdMutex<AppState>>,
+    kind: String,
+    path: String,
+) -> Result<ProfileImageResult, String> {
+    check_media_kind(&kind)?;
+    let lower = path.to_ascii_lowercase();
+    let ext = lower.rsplit('.').next().unwrap_or("").to_string();
+    let audio_mime = match ext.as_str() {
+        "mp3" => Some("audio/mpeg"), "ogg" | "oga" => Some("audio/ogg"), "opus" => Some("audio/opus"),
+        "m4a" => Some("audio/mp4"), "aac" => Some("audio/aac"), "flac" => Some("audio/flac"),
+        "wav" => Some("audio/wav"), "weba" => Some("audio/webm"), _ => None,
+    };
+    if kind == "music" {
+        let mime = audio_mime.ok_or("pick an audio file: mp3, ogg, opus, m4a, aac, flac or wav")?;
+        let bytes = tokio::fs::read(&path).await.map_err(|e| format!("read: {e}"))?;
+        return upload_profile_image(state, kind, mime.into(), bytes).await;
+    }
+    if matches!(ext.as_str(), "mp4" | "webm" | "mov" | "mkv" | "m4v") {
+        if kind != "banner" {
+            return Err("videos can only be a banner".into());
+        }
+        // Silent, ≤ 8 s, 480 px wide, small: a banner must stay light.
+        let out_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.join("outbox") };
+        std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+        let out = out_dir.join("banner.webm");
+        let mut cmd = tokio::process::Command::new("ffmpeg");
+        cmd.args(["-v", "error", "-nostdin", "-y", "-t", "8", "-i"]).arg(&path)
+            .args(["-an", "-vf", "scale='min(640,iw)':-2", "-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "42", "-deadline", "good", "-cpu-used", "4", "-row-mt", "1"])
+            .arg(&out)
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true);
+        #[cfg(windows)]
+        {
+            cmd.creation_flags(0x0800_0000);
+        }
+        let (mime, bytes) = match cmd.output().await {
+            Ok(o) if o.status.success() => ("video/webm", tokio::fs::read(&out).await.map_err(|e| e.to_string())?),
+            // No ffmpeg: upload as is if it already fits.
+            _ => (if ext == "webm" { "video/webm" } else { "video/mp4" }, tokio::fs::read(&path).await.map_err(|e| format!("read: {e}"))?),
+        };
+        return upload_profile_image(state, kind, mime.into(), bytes).await;
+    }
+    let mime = image_mime_for(&path).ok_or("pick a PNG, JPG, WEBP, GIF or a short video")?;
+    let bytes = tokio::fs::read(&path).await.map_err(|e| format!("read: {e}"))?;
+    upload_profile_image(state, kind, mime.into(), bytes).await
 }
 
 /// Upload already-encoded image bytes (e.g. a cropped avatar from the editor).

@@ -1018,4 +1018,12 @@ export const RU: Record<string, string> = {
   "From “{title}” — right-click for the pack": "Из «{title}» — правый клик, чтобы добавить набор",
   "On this server": "На сервере",
   "Just paste the link — your server downloads the pack once for everyone.": "Просто вставьте ссылку — сервер скачает набор один раз для всех.",
+  "Pick your favourite track": "Выберите любимый трек",
+  "Favourite track set — visible to everyone": "Любимый трек установлен — его видят все",
+  "Could not upload the track: {e}": "Не удалось загрузить трек: {e}",
+  "Favourite track (file)": "Любимый трек (файл)",
+  "Track": "Трек",
+  "No track yet — up to 10 MB": "Трека пока нет — до 10 МБ",
+  "Upload": "Загрузить",
+  "Favourite track": "Любимый трек",
 };

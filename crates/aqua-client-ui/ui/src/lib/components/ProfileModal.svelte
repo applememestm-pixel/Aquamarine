@@ -19,7 +19,9 @@
   import { openFileDialog } from "../dialog";
   import { showToast } from "./Toast.svelte";
   import { broadcastPresence, peerPresence, myActivity, shareActivity, myOnline, activityVerb, activityLine } from "../presence";
-  import { peerCards, refreshPeer, publishMyProfile, setMyImage, setMyImageBytes, clearMyImage, str, clans } from "../people";
+  import { peerCards, refreshPeer, publishMyProfile, setMyImage, setMyImageBytes, clearMyImage, setMyMediaFile, clearMyMusic, str, clans } from "../people";
+  import MediaPlayer from "./MediaPlayer.svelte";
+  import { streamSrc } from "../media";
   import ClanTag from "./ClanTag.svelte";
   import { privacy, PRIV_ITEMS, allowed, exceptionOf, setException, exceptionCount, contactSet, type PrivKey, type Exception } from "../privacy";
   import { t, tr } from "../i18n";
@@ -40,18 +42,47 @@
     }
   }
 
-  let uploading = $state<"" | "avatar" | "banner">("");
+  let uploading = $state<"" | "avatar" | "banner" | "music">("");
+
+  /** Favourite track: an audio file on your public profile. */
+  async function pickMusic() {
+    try {
+      const result = await openFileDialog({
+        multiple: false, directory: false, title: tr("Pick your favourite track"),
+        filters: [{ name: "Audio", extensions: ["mp3", "ogg", "opus", "m4a", "aac", "flac", "wav"] }],
+      });
+      const path = Array.isArray(result) ? (result[0] ?? null) : result;
+      if (!path) return;
+      uploading = "music";
+      await setMyMediaFile("music", path);
+      showToast(tr("Favourite track set — visible to everyone"));
+    } catch (e) {
+      showToast(tr("Could not upload the track: {e}", { e: String(e) }), 6000);
+    } finally {
+      uploading = "";
+    }
+  }
+  async function removeMusic() {
+    try { uploading = "music"; await clearMyMusic(); }
+    catch (e) { showToast(String(e)); }
+    finally { uploading = ""; }
+  }
+  const isVideoUrl = (u: string) => /\.(webm|mp4)(\?|$)/i.test(u);
 
   /** Avatar / banner go straight to the server so everyone sees them. */
   async function pickImage(kind: "avatar" | "banner") {
     try {
       const result = await openFileDialog({
         multiple: false, directory: false, title: kind === "avatar" ? "Pick an avatar" : "Pick a banner",
-        filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }],
+        filters: [{ name: kind === "banner" ? "Images, GIFs, short videos" : "Images", extensions: kind === "banner" ? ["png", "jpg", "jpeg", "webp", "gif", "mp4", "webm", "mov"] : ["png", "jpg", "jpeg", "webp", "gif"] }],
       });
       const path = Array.isArray(result) ? (result[0] ?? null) : result;
       if (!path) return;
-      if (path.toLowerCase().endsWith(".gif")) {
+      if (kind === "banner" && /\.(mp4|webm|mov)$/i.test(path)) {
+        // Animated banner: re-encoded silent and light (≤ 3 MB).
+        uploading = kind;
+        await setMyMediaFile("banner", path);
+      } else if (path.toLowerCase().endsWith(".gif")) {
         // Animated: upload as-is (cropping would flatten it to one frame).
         uploading = kind;
         await setMyImage(kind, path);
@@ -110,6 +141,9 @@
     banner_url: string;
     online: string;
     activity: Activity[];
+    /** Favourite track (audio file) + its title. */
+    music_url: string;
+    music_title: string;
   }
   let view = $derived<View | null>(buildView(activeUsername, $profile, $contacts, $info, $peerCards, $peerPresence, $myActivity));
   // Which avatar image to show: the live draft when editing myself, else
@@ -159,6 +193,8 @@
         banner_url: me.banner_url ?? "",
         online: getStore(myOnline),
         activity: getStore(shareActivity) ? myAct : [],
+        music_url: me.music_ver ? (me.music_url ?? "") : "",
+        music_title: me.music_title ?? "",
       };
     }
     const c = getContact(uname);
@@ -185,6 +221,8 @@
       banner_url: srv?.banner ?? "",
       online: pr?.online ?? "",
       activity: pr?.activity ?? [],
+      music_url: srv?.music ?? "",
+      music_title: str(x.music_title),
     };
   }
 
@@ -266,7 +304,11 @@
            never clipped under the banner when the form is long. -->
       <button class="close" onclick={closeProfile} title={$t("Close (Esc)")}>×</button>
       <div class="scroll">
-      <div class="banner" style:background={shownBanner ? `center / cover no-repeat url("${shownBanner}")` : `linear-gradient(135deg, ${bannerA}, ${bannerB})`}>
+      <div class="banner" style:background={shownBanner && !isVideoUrl(shownBanner) ? `center / cover no-repeat url("${shownBanner}")` : `linear-gradient(135deg, ${bannerA}, ${bannerB})`}>
+        {#if shownBanner && isVideoUrl(shownBanner)}
+          <!-- Animated banner: silent short loop. -->
+          <video class="banner-vid" use:streamSrc={shownBanner} muted loop autoplay playsinline></video>
+        {/if}
         {#if editing && isMe && draft}
           <div class="banner-tools">
             <button class="bn-btn" onclick={() => pickImage("banner")} disabled={!!uploading}>{uploading === "banner" ? "Uploading…" : shownBanner ? "Change banner" : "Upload banner"}</button>
@@ -333,6 +375,14 @@
             <span>{$t("Favourite music")}</span>
             <input bind:value={draft.favourite_music} placeholder={$t("Pink Floyd, 2 Pac, Radiohead...")} />
           </label>
+          <div class="field">
+            <span>{$t("Favourite track (file)")}</span>
+            <div class="track-row">
+              <span class="track-name">{$profile.music_ver ? ($profile.music_title || $t("Track")) : $t("No track yet — up to 10 MB")}</span>
+              <button class="btn-ghost small" onclick={pickMusic} disabled={!!uploading}>{uploading === "music" ? $t("Uploading…") : $profile.music_ver ? $t("Change") : $t("Upload")}</button>
+              {#if $profile.music_ver}<button class="btn-ghost small" onclick={removeMusic} disabled={!!uploading}>{$t("Remove")}</button>{/if}
+            </div>
+          </div>
           <div class="row">
             <label class="field half">
               <span>{$t("Banner A")}</span>
@@ -443,6 +493,16 @@
             </section>
           {/if}
 
+          {#if view.music_url}
+            <section class="section">
+              <div class="section-label">{$t("Favourite track")}</div>
+              <div class="fav-track">
+                <MediaPlayer src={view.music_url} kind="audio" name={view.music_title || undefined} />
+                {#if view.music_title}<div class="fav-title">{view.music_title}</div>{/if}
+              </div>
+            </section>
+          {/if}
+
           {#if view.favourite_music}
             <section class="section">
               <div class="section-label">{$t("Favourite music")}</div>
@@ -512,7 +572,14 @@
     height: 120px;
     position: relative;
     flex-shrink: 0;
+    overflow: hidden;
   }
+  .banner-vid { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+  .track-row { display: flex; align-items: center; gap: 8px; }
+  .track-name { flex: 1; min-width: 0; font-size: 13px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .btn-ghost.small { padding: 5px 10px; font-size: 12px; }
+  .fav-track { display: flex; flex-direction: column; gap: 4px; }
+  .fav-title { font-size: 12.5px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .banner-tools { position: absolute; right: 12px; bottom: 12px; display: flex; gap: 6px; align-items: center; }
   .bn-btn {
     background: rgba(0, 0, 0, 0.55); color: #fff; border: none; border-radius: 8px;

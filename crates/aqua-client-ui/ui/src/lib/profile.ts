@@ -25,6 +25,10 @@ export interface Profile {
   avatar_ver?: number;
   banner_ver?: number;
   banner_url?: string;
+  /** "Favourite track" — an audio file on the server (+ local copy). */
+  music_ver?: number;
+  music_url?: string;
+  music_title?: string;
   /** Profile version — bumped on every publish so peers refetch the card. */
   pv?: number;
   /** Discord-style server tag I'm wearing (from a group I'm in). */

@@ -180,6 +180,8 @@ export interface DirProfile {
   /** Server version of the avatar / banner image; 0 = none. */
   avatar_ver?: number;
   banner_ver?: number;
+  /** "Favourite track" audio version; 0 = none. */
+  music_ver?: number;
 }
 
 /** Discord-style activity detected on this PC (or shared by a peer). */

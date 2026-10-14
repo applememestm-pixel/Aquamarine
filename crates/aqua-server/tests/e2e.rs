@@ -36,6 +36,14 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 
 async fn spawn_server() -> SocketAddr {
+    // A fresh directory DB per test run (not the repo's aqua-directory.sqlite,
+    // which kept "owner" from the last run and failed the register step).
+    static DB: std::sync::Once = std::sync::Once::new();
+    DB.call_once(|| {
+        let p = std::env::temp_dir().join(format!("aqua-e2e-{}.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        std::env::set_var("AQUA_DIR_DB", p);
+    });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     // Open signup: the e2e test exercises the raw relay with ad-hoc
@@ -324,9 +332,10 @@ async fn profile_media_is_public_and_owner_only() {
     let t: serde_json::Value = http.post(format!("{base}/v1/auth/email/verify"))
         .json(&serde_json::json!({ "email": "o@x.com", "code": code })).send().await.unwrap().json().await.unwrap();
     let r = http.post(format!("{base}/v1/users/register")).bearer_auth(&owner.token)
-        .json(&serde_json::json!({ "ticket": t["ticket"], "username": "owner", "display_name": "Owner" }))
+        .json(&serde_json::json!({ "ticket": t["ticket"], "username": "owner", "display_name": "Owner", "password": "correct horse battery" }))
         .send().await.unwrap();
-    assert!(r.status().is_success(), "register: {}", r.status());
+    let st = r.status();
+    assert!(st.is_success(), "register: {} {}", st, r.text().await.unwrap_or_default());
 
     // Upload an avatar.
     let png = b"\x89PNG fake".to_vec();
@@ -354,6 +363,23 @@ async fn profile_media_is_public_and_owner_only() {
     assert_eq!(r.status(), 400);
     let r = http.get(format!("{base}/v1/users/owner/media/bogus")).send().await.unwrap();
     assert_eq!(r.status(), 404);
+
+    // Favourite track (audio) shows up on the card; audio isn't an avatar.
+    let r = http.post(format!("{base}/v1/users/owner/media/music")).bearer_auth(&owner.token)
+        .header("content-type", "audio/mpeg").body(vec![0xFFu8; 4096]).send().await.unwrap();
+    assert!(r.status().is_success(), "music: {}", r.status());
+    let card: serde_json::Value = http.get(format!("{base}/v1/users/owner/profile")).send().await.unwrap().json().await.unwrap();
+    assert!(card["music_ver"].as_i64().unwrap() > 0);
+    let r = http.post(format!("{base}/v1/users/owner/media/avatar")).bearer_auth(&owner.token)
+        .header("content-type", "audio/mpeg").body(vec![0u8; 10]).send().await.unwrap();
+    assert_eq!(r.status(), 400);
+    // Animated banners must be light: a 4 MB GIF is refused, a small video is fine.
+    let r = http.post(format!("{base}/v1/users/owner/media/banner")).bearer_auth(&owner.token)
+        .header("content-type", "image/gif").body(vec![0u8; 4 * 1024 * 1024]).send().await.unwrap();
+    assert_eq!(r.status(), 400);
+    let r = http.post(format!("{base}/v1/users/owner/media/banner")).bearer_auth(&owner.token)
+        .header("content-type", "video/webm").body(vec![0u8; 200 * 1024]).send().await.unwrap();
+    assert!(r.status().is_success(), "video banner: {}", r.status());
 
     // Extras round-trip through the profile endpoint.
     let r = http.post(format!("{base}/v1/users/owner/profile")).bearer_auth(&owner.token)

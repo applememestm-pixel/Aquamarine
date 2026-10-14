@@ -128,6 +128,9 @@ pub struct ProfileCard {
     /// Banner image version on the server (0 = none).
     #[serde(default)]
     pub banner_ver: i64,
+    /// "Favourite track" audio version (0 = none; older servers omit it).
+    #[serde(default)]
+    pub music_ver: i64,
 }
 
 /// Request an email verification code (no auth required). Returns the

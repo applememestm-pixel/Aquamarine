@@ -100,6 +100,7 @@ pub fn run() -> Result<()> {
             commands::publish_profile_full,
             commands::set_profile_image,
             commands::set_profile_image_bytes,
+            commands::set_profile_media_file,
             commands::clear_profile_image,
             commands::set_photo_privacy,
             commands::group_control,

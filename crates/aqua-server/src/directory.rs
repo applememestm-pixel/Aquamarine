@@ -138,11 +138,13 @@ pub struct Profile {
     pub avatar_ver: i64,
     /// Version of the uploaded banner image; 0 = none.
     pub banner_ver: i64,
+    /// Version of the "favourite track" audio file; 0 = none.
+    pub music_ver: i64,
 }
 
 /// Columns selected for a [`Profile`], in the order `profile_from_row` reads.
 const PROFILE_COLS: &str =
-    "username, display_name, about, phone, is_bot, created_at, extra, avatar_ver, banner_ver";
+    "username, display_name, about, phone, is_bot, created_at, extra, avatar_ver, banner_ver, music_ver";
 
 fn profile_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Profile> {
     let extra: String = r.get(6)?;
@@ -156,6 +158,7 @@ fn profile_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Profile> {
         extra: serde_json::from_str(&extra).unwrap_or_else(|_| serde_json::json!({})),
         avatar_ver: r.get(7)?,
         banner_ver: r.get(8)?,
+        music_ver: r.get(9)?,
     })
 }
 
@@ -209,27 +212,32 @@ pub struct MediaAcl {
 pub const MEDIA_ACL_MAX: usize = 5000;
 
 /// Largest avatar / banner image the server stores.
-pub const PROFILE_MEDIA_LIMIT: usize = 8 * 1024 * 1024;
+pub const PROFILE_MEDIA_LIMIT: usize = 10 * 1024 * 1024;
+/// Animated avatars / banners (GIF, short silent video) must stay light.
+pub const ANIMATED_MEDIA_LIMIT: usize = 3 * 1024 * 1024;
+/// Static avatar / banner images.
+pub const IMAGE_MEDIA_LIMIT: usize = 8 * 1024 * 1024;
 /// Largest `extra` JSON blob accepted.
 pub const PROFILE_EXTRA_LIMIT: usize = 8 * 1024;
 
 /// Which profile image.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MediaKind { Avatar, Banner }
+pub enum MediaKind { Avatar, Banner, Music }
 
 impl MediaKind {
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "avatar" => Some(Self::Avatar),
             "banner" => Some(Self::Banner),
+            "music" => Some(Self::Music),
             _ => None,
         }
     }
     fn as_str(self) -> &'static str {
-        match self { Self::Avatar => "avatar", Self::Banner => "banner" }
+        match self { Self::Avatar => "avatar", Self::Banner => "banner", Self::Music => "music" }
     }
     fn ver_col(self) -> &'static str {
-        match self { Self::Avatar => "avatar_ver", Self::Banner => "banner_ver" }
+        match self { Self::Avatar => "avatar_ver", Self::Banner => "banner_ver", Self::Music => "music_ver" }
     }
 }
 
@@ -298,6 +306,7 @@ impl Directory {
             "ALTER TABLE users ADD COLUMN banner_ver INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE users ADD COLUMN media_acl TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE users ADD COLUMN password TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE users ADD COLUMN music_ver INTEGER NOT NULL DEFAULT 0",
         ] {
             if let Err(e) = db.execute(stmt, []) {
                 if !e.to_string().contains("duplicate column") {
@@ -606,11 +615,17 @@ impl Directory {
     ) -> Result<i64, DirError> {
         let username = username.trim().to_lowercase();
         let mime = mime.trim().to_ascii_lowercase();
-        if !matches!(mime.as_str(), "image/png" | "image/jpeg" | "image/webp" | "image/gif") {
-            return Err(DirError::BadProfile(format!("unsupported image type {mime:?}")));
-        }
-        if data.is_empty() || data.len() > PROFILE_MEDIA_LIMIT {
-            return Err(DirError::BadProfile("image is empty or larger than 8 MB".into()));
+        let mb = |n: usize| n / 1024 / 1024;
+        let limit = match (kind, mime.as_str()) {
+            (MediaKind::Avatar | MediaKind::Banner, "image/png" | "image/jpeg" | "image/webp") => IMAGE_MEDIA_LIMIT,
+            // Animated: GIF anywhere, short silent video for banners — light only.
+            (MediaKind::Avatar | MediaKind::Banner, "image/gif") => ANIMATED_MEDIA_LIMIT,
+            (MediaKind::Banner, "video/webm" | "video/mp4") => ANIMATED_MEDIA_LIMIT,
+            (MediaKind::Music, "audio/mpeg" | "audio/ogg" | "audio/opus" | "audio/mp4" | "audio/aac" | "audio/flac" | "audio/wav" | "audio/webm") => PROFILE_MEDIA_LIMIT,
+            _ => return Err(DirError::BadProfile(format!("unsupported type {mime:?} for {}", kind.as_str()))),
+        };
+        if data.is_empty() || data.len() > limit {
+            return Err(DirError::BadProfile(format!("file is empty or larger than {} MB", mb(limit))));
         }
         let db = self.db.lock().unwrap();
         Self::check_owner(&db, &username, identity_dh)?;
