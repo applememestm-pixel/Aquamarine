@@ -7,6 +7,7 @@
 </script>
 
 <script lang="ts">
+  import ColorInput from "./ColorInput.svelte";
   import { t, tr, tn } from "../i18n";
   /**
    * Telegram-grade group / channel info and management:
@@ -606,7 +607,7 @@
             <div class="colors">
               <button class="ccell none" class:on={!dAccent} onclick={() => (dAccent = "")} aria-label={$t("None")} disabled={!can(group, me, "change_info")}>∅</button>
               {#each CLAN_COLORS as c (c)}<button class="ccell" class:on={dAccent === c} style:background={c} onclick={() => (dAccent = c)} aria-label={c} disabled={!can(group, me, "change_info")}></button>{/each}
-              <input type="color" value={dAccent || "#3fb6a8"} oninput={(e) => (dAccent = (e.target as HTMLInputElement).value)} aria-label={$t("Custom colour")} disabled={!can(group, me, "change_info")} />
+              <ColorInput value={dAccent || "#3fb6a8"} oninput={(v) => (dAccent = v)} title={$t("Custom colour")} disabled={!can(group, me, "change_info")} size={26} />
             </div>
           </div>
           {#if can(group, me, "change_info")}<button class="btn wide" onclick={saveInfo} disabled={busy}>{$t("Save")}</button>{/if}
@@ -813,7 +814,7 @@
           <div class="ct">{$t("Colour")}</div>
           <div class="colors">
             {#each CLAN_COLORS as c (c)}<button class="ccell" class:on={clanColor === c} style:background={c} onclick={() => (clanColor = c)} aria-label={c}></button>{/each}
-            <input type="color" bind:value={clanColor} aria-label={$t("Custom colour")} />
+            <ColorInput bind:value={clanColor} title={$t("Custom colour")} size={26} />
           </div>
           <div class="abtns">
             <button class="btn" onclick={() => saveClan()}>{$t("Save tag")}</button>

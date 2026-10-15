@@ -132,6 +132,51 @@ pub fn save_temp_file(state: State<'_, StdMutex<AppState>>, name: String, bytes:
     Ok(p.display().to_string())
 }
 
+// ---- wallpapers -------------------------------------------------------------
+
+fn wallpapers_dir(state: &State<'_, StdMutex<AppState>>) -> Result<std::path::PathBuf, String> {
+    let dir = state.lock().map_err(|e| e.to_string())?.data_dir.join("wallpapers");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+/// Keep a wallpaper picture in the library (`<data>/wallpapers/`).
+#[tauri::command]
+pub fn save_wallpaper(state: State<'_, StdMutex<AppState>>, name: String, bytes: Vec<u8>) -> Result<String, String> {
+    if bytes.is_empty() || bytes.len() > 40 * 1024 * 1024 {
+        return Err("pick an image up to 40 MB".into());
+    }
+    let dir = wallpapers_dir(&state)?;
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let p = dir.join(format!("{stamp}-{}", safe_name(&name)));
+    std::fs::write(&p, bytes).map_err(|e| e.to_string())?;
+    Ok(p.display().to_string())
+}
+
+/// Wallpapers in the library, newest first.
+#[tauri::command]
+pub fn list_wallpapers(state: State<'_, StdMutex<AppState>>) -> Result<Vec<String>, String> {
+    let dir = wallpapers_dir(&state)?;
+    let mut v: Vec<(std::time::SystemTime, String)> = std::fs::read_dir(&dir).map_err(|e| e.to_string())?
+        .flatten()
+        .filter(|e| e.path().is_file())
+        .filter(|e| matches!(ext_of(&e.path().display().to_string()).as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif" | "avif" | "bmp"))
+        .map(|e| (e.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH), e.path().display().to_string()))
+        .collect();
+    v.sort_by(|a, b| b.0.cmp(&a.0));
+    Ok(v.into_iter().map(|x| x.1).collect())
+}
+
+#[tauri::command]
+pub fn delete_wallpaper(state: State<'_, StdMutex<AppState>>, path: String) -> Result<(), String> {
+    let dir = wallpapers_dir(&state)?;
+    let p = std::path::PathBuf::from(&path);
+    if p.parent() != Some(dir.as_path()) {
+        return Err("not a library wallpaper".into());
+    }
+    std::fs::remove_file(p).map_err(|e| e.to_string())
+}
+
 /// Swap the window / taskbar icon for the one the UI drew (the logo in the
 /// current theme colours, or the user's own picture). RGBA, square, ≤ 512.
 /// Wayland compositors take the icon from the .desktop file instead, so

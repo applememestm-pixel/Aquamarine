@@ -38,7 +38,7 @@ struct StoredRef<'a> {
 }
 
 pub fn compress(data: &[u8]) -> Vec<u8> {
-    let mut enc = DeflateEncoder::new(Vec::with_capacity(data.len() / 3), Compression::best());
+    let mut enc = DeflateEncoder::new(Vec::with_capacity(data.len() / 3), Compression::new(6));
     let _ = enc.write_all(data);
     enc.finish().unwrap_or_default()
 }
@@ -77,8 +77,31 @@ pub fn load_groups(vault: &Vault) -> Option<HashMap<String, Group>> {
     Some(list.into_iter().map(|g| (g.id.clone(), g)).collect())
 }
 
-/// Write whatever changed. Cheap when nothing did (one serialisation +
-/// hash per chat); called every few seconds and on exit.
+/// Cheap change detector: no serialisation of the messages. Appends,
+/// removals, summary changes and edits/deletions recorded in `meta` move
+/// it; in-place edits without history are flagged via `mark_dirty`.
+fn fingerprint(book: &crate::state::ChatBook) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    serde_json::to_vec(&book.summary).unwrap_or_default().hash(&mut h);
+    book.messages.len().hash(&mut h);
+    if let Some(m) = book.messages.last() { m.id.hash(&mut h); }
+    for m in &book.messages {
+        if let Some(meta) = &m.meta {
+            m.id.hash(&mut h);
+            meta.deleted.hash(&mut h);
+            meta.edits.len().hash(&mut h);
+        }
+    }
+    h.finish()
+}
+
+/// Force `chat` to be rewritten on the next flush (in-place edits).
+pub fn mark_dirty(s: &mut AppState, chat: &str) {
+    s.hist_fp.remove(chat);
+}
+
+/// Write whatever changed. Cheap when nothing did (a fingerprint per chat,
+/// no serialisation); called every few seconds and on exit.
 pub fn flush(s: &mut AppState) {
     let mut written = 0usize;
     let ids: Vec<String> = s.chats.keys().cloned().collect();
@@ -87,8 +110,13 @@ pub fn flush(s: &mut AppState) {
             continue;
         }
         let Some(book) = s.chats.get(id) else { continue };
+        let fp = fingerprint(book);
+        if s.hist_fp.get(id) == Some(&fp) {
+            continue;
+        }
         let Ok(json) = serde_json::to_vec(&StoredRef { summary: &book.summary, messages: &book.messages }) else { continue };
         let h = hash_of(&json);
+        s.hist_fp.insert(id.clone(), fp);
         if s.hist_hashes.get(id) == Some(&h) {
             continue;
         }
@@ -105,6 +133,7 @@ pub fn flush(s: &mut AppState) {
     for id in gone {
         let _ = s.vault.delete_record(&format!("{PREFIX}{id}"));
         s.hist_hashes.remove(&id);
+        s.hist_fp.remove(&id);
     }
     // Groups, in a stable order so the hash only moves on real changes.
     let mut groups: Vec<&Group> = s.groups.values().collect();

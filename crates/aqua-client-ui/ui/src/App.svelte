@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { startAppIcon } from "./lib/appIcon";
+  import { migrateCustomWallpaper } from "./lib/theme";
+  import { api } from "./lib/tauri";
   import { bootstrap, activeTab, info, activeId, backToList } from "./lib/stores";
   import { openRegistration, closeRegistration, registrationDismissed } from "./lib/components/RegistrationWizard.svelte";
   import { initTheme } from "./lib/theme";
@@ -79,6 +81,7 @@
 
   onMount(() => {
     const stopIcon = startAppIcon();
+    void migrateCustomWallpaper(api.saveWallpaper);
     // Linux: without gst-plugins-good WebKitGTK hangs on the first sound or
     // video — say what to install up front (playback is refused until then).
     void mediaSupport().then((m) => {

@@ -630,7 +630,11 @@ pub async fn set_profile_media_file(
         let bytes = tokio::fs::read(&path).await.map_err(|e| format!("read: {e}"))?;
         return upload_profile_image(state, kind, mime.into(), bytes).await;
     }
-    if matches!(ext.as_str(), "mp4" | "webm" | "mov" | "mkv" | "m4v") {
+    // A big GIF banner is turned into a light WebM loop (the relay keeps
+    // animated banners ≤ 3 MB); small GIFs go up as they are.
+    let big_gif = ext == "gif" && kind == "banner"
+        && std::fs::metadata(&path).map(|m| m.len() > 2_900_000).unwrap_or(false);
+    if big_gif || matches!(ext.as_str(), "mp4" | "webm" | "mov" | "mkv" | "m4v") {
         if kind != "banner" {
             return Err("videos can only be a banner".into());
         }
@@ -651,6 +655,7 @@ pub async fn set_profile_media_file(
         let (mime, bytes) = match cmd.output().await {
             Ok(o) if o.status.success() => ("video/webm", tokio::fs::read(&out).await.map_err(|e| e.to_string())?),
             // No ffmpeg: upload as is if it already fits.
+            _ if big_gif => return Err("this GIF is over 3 MB — install ffmpeg so it can be shrunk, or pick a smaller one".into()),
             _ => (if ext == "webm" { "video/webm" } else { "video/mp4" }, tokio::fs::read(&path).await.map_err(|e| format!("read: {e}"))?),
         };
         return upload_profile_image(state, kind, mime.into(), bytes).await;
@@ -3103,6 +3108,9 @@ fn apply_edit(s: &mut AppState, chat_id: &str, author: &str, old: &str, new: &st
                 book.summary.preview = preview_for(&last.kind);
             }
         }
+    }
+    if changed {
+        crate::history::mark_dirty(s, chat_id);
     }
     changed
 }

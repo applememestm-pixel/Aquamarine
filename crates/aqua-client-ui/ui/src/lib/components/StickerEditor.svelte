@@ -15,6 +15,7 @@
 </script>
 
 <script lang="ts">
+  import ColorInput from "./ColorInput.svelte";
   /**
    * Telegram-style sticker editor.
    *   Move    — drag the picture, wheel / slider to zoom, slider to rotate, flip
@@ -579,7 +580,7 @@
               {#if tool === "draw"}
                 <div class="colors">
                   {#each COLORS as c (c)}<button class="cc" class:on={color === c} style:background={c} onclick={() => (color = c)} aria-label={c}></button>{/each}
-                  <input type="color" bind:value={color} aria-label={$t("Custom colour")} />
+                  <ColorInput bind:value={color} title={$t("Custom colour")} size={24} />
                 </div>
                 <button class="chip" onclick={() => { checkpoint(); strokesC.getContext("2d")!.clearRect(0, 0, S, S); render(); }}>{$t("Clear drawing")}</button>
               {/if}

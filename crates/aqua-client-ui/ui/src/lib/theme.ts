@@ -9,6 +9,7 @@
  */
 
 import { writable, get } from "svelte/store";
+import { convertFileSrc } from "@tauri-apps/api/core";
 
 export type Mode = "dark" | "light" | "auto";
 export type Density = "comfortable" | "compact";
@@ -58,6 +59,19 @@ export const WALLPAPERS: Wallpaper[] = [
   { id: "forest",    name: "Forest",     css: "radial-gradient(900px 500px at 20% 10%, rgba(46,204,113,0.14), transparent 60%), radial-gradient(900px 420px at 85% 90%, rgba(26,188,156,0.12), transparent 60%), #0D1715" },
   { id: "midnight",  name: "Midnight",   css: "linear-gradient(135deg, #0F0A26 0%, #1A1240 50%, #0A0820 100%)" },
   { id: "parchment", name: "Parchment",  css: "radial-gradient(1000px 500px at 50% 0%, #faf6ea, #f0e9d2 70%, #e9e0c0)" },
+  { id: "sakura",    name: "Sakura",     css: "radial-gradient(900px 500px at 80% 0%, rgba(255,183,213,0.22), transparent 60%), radial-gradient(800px 420px at 10% 100%, rgba(255,140,190,0.16), transparent 60%), #1a1018" },
+  { id: "lavender",  name: "Lavender",   css: "linear-gradient(160deg, #241c3a 0%, #2d2350 45%, #1b1630 100%)" },
+  { id: "mint",      name: "Mint",       css: "radial-gradient(1000px 500px at 30% 0%, rgba(120,255,214,0.16), transparent 60%), linear-gradient(180deg, #0e1f1c, #0a1513)" },
+  { id: "peach",     name: "Peach",      css: "linear-gradient(135deg, #ffe3d3 0%, #ffd1dc 50%, #f8e1ff 100%)" },
+  { id: "arctic",    name: "Arctic",     css: "linear-gradient(180deg, #eaf4ff 0%, #d9ecff 60%, #cfe3f7 100%)" },
+  { id: "sunset",    name: "Sunset",     css: "linear-gradient(180deg, #2b1238 0%, #6a1f4a 45%, #c2513a 80%, #f3a259 100%)" },
+  { id: "deepsea",   name: "Deep sea",   css: "radial-gradient(1000px 600px at 50% 120%, rgba(0,180,255,0.18), transparent 60%), linear-gradient(180deg, #020b18, #04182e)" },
+  { id: "grid",      name: "Neon grid",  css: "linear-gradient(rgba(0,229,199,0.07) 1px, transparent 1px) 0 0 / 32px 32px, linear-gradient(90deg, rgba(0,229,199,0.07) 1px, transparent 1px) 0 0 / 32px 32px, #070b12" },
+  { id: "dots",      name: "Dots",       css: "radial-gradient(rgba(255,255,255,0.08) 1.2px, transparent 1.6px) 0 0 / 18px 18px, #0d1018" },
+  { id: "diagonal",  name: "Lines",      css: "repeating-linear-gradient(45deg, rgba(255,255,255,0.035) 0 2px, transparent 2px 14px), #10131c" },
+  { id: "carbon",    name: "Carbon",     css: "linear-gradient(27deg, #151515 5px, transparent 5px) 0 5px / 20px 20px, linear-gradient(207deg, #151515 5px, transparent 5px) 10px 0 / 20px 20px, linear-gradient(27deg, #222 5px, transparent 5px) 0 10px / 20px 20px, linear-gradient(207deg, #222 5px, transparent 5px) 10px 5px / 20px 20px, linear-gradient(90deg, #1b1b1b 10px, transparent 10px) 0 0 / 20px 20px, #1d1d1d" },
+  { id: "aurora2",   name: "Northern",   css: "radial-gradient(1200px 400px at 20% 0%, rgba(80,255,170,0.18), transparent 60%), radial-gradient(1000px 400px at 80% 10%, rgba(140,90,255,0.2), transparent 60%), #050913" },
+  { id: "matcha",    name: "Matcha",     css: "linear-gradient(160deg, #e9f2df 0%, #d8e8c8 60%, #c9dcb5 100%)" },
   { id: "stars",     name: "Stars",      css: "radial-gradient(2px 2px at 20% 30%, rgba(255,255,255,0.4), transparent 2px), radial-gradient(1.5px 1.5px at 70% 60%, rgba(255,255,255,0.3), transparent 2px), radial-gradient(2px 2px at 40% 80%, rgba(255,255,255,0.4), transparent 2px), radial-gradient(1.5px 1.5px at 85% 20%, rgba(255,255,255,0.3), transparent 2px), linear-gradient(180deg, #0A0E1A, #06080F)" },
 ];
 
@@ -134,7 +148,11 @@ export interface Settings {
   density: Density;
   fontScale: number; // 0.85–1.25
   wallpaper: string; // wallpaper id, or "custom"
-  wallpaperCustom?: string; // CSS value for custom wallpaper (data: URL)
+  wallpaperCustom?: string; // legacy: CSS with a data: URL (migrated to a file)
+  /** Custom wallpaper: a file in <data>/wallpapers/. */
+  wallpaperPath?: string;
+  /** Darkening over a custom wallpaper, 0–0.8. */
+  wallpaperDim?: number;
   // Behaviour
   enterToSend: boolean;       // Enter sends (true) vs newline (false)
   autoDownloadMedia: boolean; // auto-fetch inline media on receive
@@ -275,7 +293,12 @@ function apply(s: Settings) {
   // .messages container. "none" clears it; "custom" uses the stored
   // data URL; everything else is a preset's CSS value.
   let wallCss = "";
-  if (s.wallpaper === "custom" && s.wallpaperCustom) {
+  if (s.wallpaper === "custom" && s.wallpaperPath) {
+    const d = s.wallpaperDim ?? 0.3;
+    let url = s.wallpaperPath;
+    try { url = convertFileSrc(s.wallpaperPath); } catch { /* browser preview */ }
+    wallCss = `linear-gradient(rgba(12,15,23,${d}), rgba(12,15,23,${d})), url("${url}") center / cover no-repeat`;
+  } else if (s.wallpaper === "custom" && s.wallpaperCustom) {
     wallCss = s.wallpaperCustom;
   } else {
     const wp = WALLPAPERS.find((w) => w.id === s.wallpaper);
@@ -382,5 +405,28 @@ export function initTheme() {
       if (get(settings).mode === "auto") apply(get(settings));
     };
     try { mq.addEventListener("change", listener); } catch { mq.addListener(listener); }
+  }
+}
+
+
+/**
+ * Older versions kept a custom wallpaper as a multi-megabyte data: URL in
+ * the settings — rewritten to localStorage on every settings change and
+ * pushed into a CSS variable, which made the whole app sluggish. Move it
+ * into the wallpaper library (a file) once.
+ */
+export async function migrateCustomWallpaper(save: (name: string, bytes: number[]) => Promise<string>): Promise<void> {
+  const s = get(settings);
+  const m = s.wallpaperCustom ? /url\("?(data:([^;]+);base64,([^")]+))"?\)/.exec(s.wallpaperCustom) : null;
+  if (!m) { if (s.wallpaperCustom && s.wallpaperPath) settings.update((x) => ({ ...x, wallpaperCustom: undefined })); return; }
+  try {
+    const bin = atob(m[3]);
+    const bytes = new Array<number>(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const ext = m[2].split("/")[1]?.replace("jpeg", "jpg") ?? "png";
+    const path = await save(`wallpaper.${ext}`, bytes);
+    settings.update((x) => ({ ...x, wallpaperPath: path, wallpaperCustom: undefined }));
+  } catch (e) {
+    console.warn("wallpaper migration", e);
   }
 }

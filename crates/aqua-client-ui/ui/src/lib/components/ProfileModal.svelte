@@ -10,6 +10,7 @@
 </script>
 
 <script lang="ts">
+  import ColorInput from "./ColorInput.svelte";
   import { onMount } from "svelte";
   import { profile, updateProfile, type Profile } from "../profile";
   import { contacts, saveContact, getContact } from "../contacts";
@@ -122,7 +123,7 @@
       });
       const path = Array.isArray(result) ? (result[0] ?? null) : result;
       if (!path) return;
-      if (kind === "banner" && /\.(mp4|webm|mov)$/i.test(path)) {
+      if (kind === "banner" && /\.(mp4|webm|mov|gif)$/i.test(path)) {
         // Animated banner: re-encoded silent and light (≤ 3 MB).
         uploading = kind;
         await setMyMediaFile("banner", path);
@@ -362,6 +363,11 @@
           <!-- Animated banner: silent short loop. -->
           <video class="banner-vid" use:streamSrc={shownBanner} muted loop autoplay playsinline></video>
         {/if}
+        {#if isMe && !editing}
+          <button class="banner-hit" onclick={() => pickImage("banner")} disabled={!!uploading} aria-label={$t("Change banner")}>
+            <span>{uploading === "banner" ? $t("Uploading…") : $t("📷 Change banner — photo, GIF or video")}</span>
+          </button>
+        {/if}
         {#if editing && isMe && draft}
           <div class="banner-tools">
             <button class="bn-btn" onclick={() => pickImage("banner")} disabled={!!uploading}>{uploading === "banner" ? "Uploading…" : shownBanner ? "Change banner" : "Upload banner"}</button>
@@ -460,11 +466,11 @@
           <div class="row">
             <label class="field half">
               <span>{$t("Banner A")}</span>
-              <input type="color" bind:value={draft.banner_a} />
+              <ColorInput bind:value={draft.banner_a} size={36} />
             </label>
             <label class="field half">
               <span>{$t("Banner B")}</span>
-              <input type="color" bind:value={draft.banner_b} />
+              <ColorInput bind:value={draft.banner_b} size={36} />
             </label>
           </div>
           <div class="buttons">
@@ -775,6 +781,12 @@
   .btn-ghost.small { padding: 5px 10px; font-size: 12px; }
   .fav-track { display: flex; flex-direction: column; gap: 4px; }
   .fav-title { font-size: 12.5px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .banner-hit { position: absolute; inset: 0; border: none; background: rgba(0,0,0,0); color: #fff; cursor: pointer;
+    display: grid; place-items: center; font: inherit; font-weight: 700; font-size: 13px; transition: background .2s; }
+  .banner-hit span { opacity: 0; transform: translateY(4px); transition: opacity .2s, transform .2s; background: rgba(0,0,0,.55);
+    padding: 6px 12px; border-radius: 10px; backdrop-filter: blur(6px); }
+  .banner-hit:hover { background: rgba(0,0,0,.25); }
+  .banner-hit:hover span, .banner-hit:focus-visible span { opacity: 1; transform: none; }
   .banner-tools { position: absolute; right: 12px; bottom: 12px; display: flex; gap: 6px; align-items: center; }
   .bn-btn {
     background: rgba(0, 0, 0, 0.55); color: #fff; border: none; border-radius: 8px;

@@ -28,6 +28,25 @@ export const setArchived = (id: string, on?: boolean) => toggleIn(archived, id, 
 export const setMuted = (id: string, on?: boolean) => toggleIn(mutedChats, id, on);
 export const isMuted = (id: string) => get(mutedChats).has(id);
 
+/** Pinned chats, in pin order (Telegram: up to 10, newest pin on top). */
+function persistedList(key: string) {
+  let init: string[] = [];
+  try { init = JSON.parse(localStorage.getItem(key) ?? "[]"); } catch { /* ignore */ }
+  const s = writable<string[]>(Array.isArray(init) ? init : []);
+  s.subscribe((v) => { try { localStorage.setItem(key, JSON.stringify(v)); } catch { /* ignore */ } });
+  return s;
+}
+export const pinnedChats = persistedList("aqua.pinnedChats");
+export const MAX_PINS = 10;
+/** Pin or unpin; returns false when the pin limit is reached. */
+export function togglePin(id: string): boolean {
+  const cur = get(pinnedChats);
+  if (cur.includes(id)) { pinnedChats.set(cur.filter((x) => x !== id)); return true; }
+  if (cur.length >= MAX_PINS) return false;
+  pinnedChats.set([id, ...cur]);
+  return true;
+}
+
 /** A new message arrived in `id`: unmuted archived chats come back. */
 export function onIncomingForArchive(id: string) {
   if (get(archived).has(id) && !get(mutedChats).has(id)) setArchived(id, false);

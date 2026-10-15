@@ -11,6 +11,7 @@
 </script>
 
 <script lang="ts">
+  import ColorInput from "./ColorInput.svelte";
   import { onMount } from "svelte";
   import { settings, PALETTES, WALLPAPERS, EDITABLE_COLORS, THEMES, DEFAULTS, type Mode, type Density } from "../theme";
   import { info } from "../stores";
@@ -450,29 +451,39 @@
 
   function setWallpaper(id: string) { settings.update((s) => ({ ...s, wallpaper: id })); }
 
+  // ---- wallpaper library (files, not data: URLs) ----
+  let myWalls = $state<string[]>([]);
+  async function loadWalls() { try { myWalls = await api.listWallpapers(); } catch { myWalls = []; } }
+  $effect(() => { if (section === "wallpaper") void loadWalls(); });
   async function pickCustomWallpaper() {
     try {
       const result = await openFileDialog({
-        multiple: false, directory: false, title: "Pick a wallpaper",
-        filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }],
+        multiple: true, directory: false, title: tr("Add wallpapers"),
+        filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif", "avif"] }],
       });
-      const path = Array.isArray(result) ? (result[0] ?? null) : result;
-      if (!path) return;
-      const bytes = await api.readUserImage(path);
-      // Guess mime from extension for the data URL.
-      const lower = path.toLowerCase();
-      const mime = lower.endsWith(".png") ? "image/png"
-        : lower.endsWith(".webp") ? "image/webp"
-        : lower.endsWith(".gif") ? "image/gif"
-        : "image/jpeg";
-      const url = bytesToDataUrl(bytes, mime);
-      const css = `linear-gradient(rgba(12,15,23,0.35), rgba(12,15,23,0.35)), url("${url}")`;
-      settings.update((s) => ({ ...s, wallpaper: "custom", wallpaperCustom: css }));
-      showToast(tr("Wallpaper set"));
+      const paths = Array.isArray(result) ? result : result ? [result] : [];
+      if (!paths.length) return;
+      let last = "";
+      for (const p of paths) {
+        const bytes = await api.readUserImage(p);
+        last = await api.saveWallpaper(p.split(/[\\/]/).pop() ?? "wallpaper.jpg", bytes);
+      }
+      await loadWalls();
+      if (last) useWall(last);
+      showToast(paths.length > 1 ? tr("{n} wallpapers added", { n: paths.length }) : tr("Wallpaper set"));
     } catch (e) {
-      showToast(`Could not set wallpaper: ${e}`);
+      showToast(`Could not add wallpaper: ${e}`);
     }
   }
+  function useWall(path: string) { settings.update((s) => ({ ...s, wallpaper: "custom", wallpaperPath: path, wallpaperCustom: undefined })); }
+  async function removeWall(path: string) {
+    try {
+      await api.deleteWallpaper(path);
+      if ($settings.wallpaperPath === path) settings.update((s) => ({ ...s, wallpaper: "aurora", wallpaperPath: undefined }));
+      await loadWalls();
+    } catch (e) { showToast(`${e}`); }
+  }
+
 
   function toggle(key: "enterToSend" | "autoDownloadMedia" | "linkPreviews" | "notifySound" | "notifyDesktop") {
     settings.update((s) => ({ ...s, [key]: !s[key] }));
@@ -1015,20 +1026,34 @@
               <span class="wall-name">{w.name}</span>
             </button>
           {/each}
-          <button
-            class="wall"
-            class:active={$settings.wallpaper === "custom"}
-            onclick={pickCustomWallpaper}
-            title={$t("Upload your own image")}
-          >
-            <span class="wall-swatch custom" style={$settings.wallpaper === "custom" && $settings.wallpaperCustom ? `background: ${$settings.wallpaperCustom}; background-size: cover;` : ""}>
-              {#if $settings.wallpaper !== "custom" || !$settings.wallpaperCustom}
-                <span class="wall-mark">+</span>
-              {/if}
-            </span>
-            <span class="wall-name">{$t("Custom…")}</span>
-          </button>
         </div>
+      </section>
+      <section class="group">
+        <div class="label">{$t("Your wallpapers")}</div>
+        <div class="walls">
+          <button class="wall" onclick={pickCustomWallpaper} title={$t("Add pictures — several at once")}>
+            <span class="wall-swatch custom"><span class="wall-mark">+</span></span>
+            <span class="wall-name">{$t("Add…")}</span>
+          </button>
+          {#each myWalls as w (w)}
+            <div class="wall own" class:active={$settings.wallpaper === "custom" && $settings.wallpaperPath === w}>
+              <button class="wall-pick" onclick={() => useWall(w)} title={$t("Use this wallpaper")}>
+                <img class="wall-swatch img" src={assetUrl(w)} alt="" loading="lazy" />
+              </button>
+              <button class="wall-del" onclick={() => removeWall(w)} title={$t("Delete")} aria-label={$t("Delete")}>×</button>
+            </div>
+          {/each}
+        </div>
+        {#if $settings.wallpaper === "custom"}
+          <div class="row">
+            <span class="row-label">{$t("Darken")}</span>
+            <div class="range">
+              <input type="range" min="0" max="0.8" step="0.05" value={$settings.wallpaperDim ?? 0.3} oninput={(e) => settings.update((s) => ({ ...s, wallpaperDim: +(e.target as HTMLInputElement).value }))} />
+              <span class="range-val">{Math.round(($settings.wallpaperDim ?? 0.3) * 100)}%</span>
+            </div>
+          </div>
+        {/if}
+        <div class="foot-note">{$t("Pictures are kept in the app's data folder; switch between them any time.")}</div>
       </section>
       {/if}
 
@@ -1099,12 +1124,7 @@
           <div class="te-colors">
             {#each EDITABLE_COLORS.filter((c) => c.group === grp) as c (c.key)}
               <label class="te-color" title={c.desc}>
-                <input
-                  type="color"
-                  value={colorValue(c.key, c.dark, c.light)}
-                  oninput={(e) => setColor(c.key, (e.target as HTMLInputElement).value)}
-                />
-                <span class="te-swatch" style={`background:${colorValue(c.key, c.dark, c.light)}`}></span>
+                <ColorInput value={colorValue(c.key, c.dark, c.light)} oninput={(v) => setColor(c.key, v)} size={28} title={c.label} />
                 <span class="te-name">{c.label}</span>
                 <span class="te-help" title={c.desc}>*<span class="te-tip">{c.desc}</span></span>
               </label>
@@ -1927,4 +1947,10 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .mp-add { aspect-ratio: 1; border-radius: 10px; border: 1.5px dashed var(--border-strong); background: none; color: var(--fg-dim); font-size: 22px; cursor: pointer; }
   .mp-add:hover { color: var(--accent); border-color: var(--accent); }
   .mini-btn.danger { color: #ff6b6b; }
+  .wall.own { position: relative; padding: 0; }
+  .wall-pick { border: none; background: none; padding: 0; cursor: pointer; width: 100%; }
+  .wall-swatch.img { object-fit: cover; display: block; width: 100%; }
+  .wall-del { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; border-radius: 50%; border: none;
+    background: rgba(0,0,0,.6); color: #fff; cursor: pointer; opacity: 0; transition: opacity .15s; }
+  .wall.own:hover .wall-del { opacity: 1; }
 </style>

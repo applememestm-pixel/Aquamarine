@@ -11,7 +11,7 @@
   import { avatars, peerCards, clans } from "../people";
   import ClanTag from "./ClanTag.svelte";
   import { keepOnScreen } from "../actions";
-  import { archived, mutedChats, setArchived, setMuted } from "../chatPrefs";
+  import { archived, mutedChats, setArchived, setMuted, pinnedChats, togglePin, MAX_PINS } from "../chatPrefs";
   import { parseJoinLink } from "../groupRules";
   import { groupMap, requestJoinGroup } from "../groups";
   import { peerPresence, activityVerb } from "../presence";
@@ -40,12 +40,44 @@
     const af = $activeFolder;
     let list = $visibleChats;
     if (!$search.trim()) list = list.filter((c) => (showArchive ? $archived.has(c.id) : !$archived.has(c.id)));
-    if (af === "all" || showArchive) return list;
-    const f = $folders.find((x) => x.id === af);
-    if (!f) return list;
-    const set = new Set(f.chatIds);
-    return list.filter((c) => set.has(c.id));
+    if (af !== "all" && !showArchive) {
+      const f = $folders.find((x) => x.id === af);
+      if (f) { const set = new Set(f.chatIds); list = list.filter((c) => set.has(c.id)); }
+    }
+    // Pinned chats on top, in pin order (not while searching).
+    if ($search.trim() || !$pinnedChats.length) return list;
+    const rank = new Map($pinnedChats.map((id, i) => [id, i]));
+    const pinned = list.filter((c) => rank.has(c.id)).sort((a, b) => rank.get(a.id)! - rank.get(b.id)!);
+    return [...pinned, ...list.filter((c) => !rank.has(c.id))];
   });
+  function pinChat(id: string) {
+    const was = $pinnedChats.includes(id);
+    if (!togglePin(id)) showToast(tr("You can pin up to {n} chats", { n: MAX_PINS }));
+    else showToast(was ? tr("Unpinned") : tr("Pinned to the top"));
+    ctx = null;
+  }
+
+  // ---- Resizable list (drag the right edge) ----
+  const LW_KEY = "aqua.listWidth";
+  function applyListWidth(w: number) { document.documentElement.style.setProperty("--list-w", `${w}px`); }
+  try { const w = +(localStorage.getItem(LW_KEY) ?? 0); if (w) applyListWidth(w); } catch { /* ignore */ }
+  let resizing = $state(false);
+  function startResize(e: PointerEvent) {
+    const handle = e.currentTarget as HTMLElement;
+    const aside = handle.parentElement!;
+    handle.setPointerCapture(e.pointerId);
+    resizing = true;
+    const left = aside.getBoundingClientRect().left;
+    const move = (ev: PointerEvent) => applyListWidth(Math.round(Math.min(600, Math.max(240, ev.clientX - left))));
+    const up = () => {
+      resizing = false;
+      handle.removeEventListener("pointermove", move); handle.removeEventListener("pointerup", up);
+      try { localStorage.setItem(LW_KEY, String(Math.round(aside.getBoundingClientRect().width))); } catch { /* ignore */ }
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+  }
+  function resetWidth() { document.documentElement.style.removeProperty("--list-w"); try { localStorage.removeItem(LW_KEY); } catch { /* ignore */ } }
 
   // ---- Right-click a chat: archive / mute ----
   let ctx = $state<{ x: number; y: number; id: string } | null>(null);
@@ -179,7 +211,9 @@
   }
 </script>
 
-<aside class="list">
+<aside class="list" class:resizing>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="resize-handle" onpointerdown={startResize} ondblclick={resetWidth} title={$t("Drag to resize · double-click to reset")}></div>
   <div class="list-header">
     <label class="search">
       {@html icons.search}
@@ -303,6 +337,7 @@
         class="chat-item"
         class:active={c.id === $activeId}
         class:kb={ci === kbIndex}
+        class:pinned={$pinnedChats.includes(c.id)}
         onclick={() => selectChat(c.id)}
         oncontextmenu={(e) => openCtx(e, c.id)}
       >
@@ -334,6 +369,8 @@
             {/if}
             {#if c.unread > 0 && c.id !== $activeId}
               <span class="chat-badge" class:muted={c.channel || $mutedChats.has(c.id)}>{c.unread}</span>
+            {:else if $pinnedChats.includes(c.id)}
+              <span class="pin-ic" title={$t("Pinned")}><svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 3l5 5-3 1-4 4 1 5-2 2-4-4-5 5-1-1 5-5-4-4 2-2 5 1 4-4z"/></svg></span>
             {/if}
           </div>
         </div>
@@ -347,6 +384,7 @@
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div class="ctx-scrim" onclick={() => (ctx = null)} oncontextmenu={(e) => { e.preventDefault(); ctx = null; }}></div>
     <div class="chat-ctx" use:keepOnScreen style:left="{ctx.x}px" style:top="{ctx.y}px" role="menu">
+      <button onclick={() => pinChat(cid)}>{$t($pinnedChats.includes(cid) ? "Unpin" : "Pin to top")}</button>
       <button onclick={() => archiveChat(cid)}>{$t($archived.has(cid) ? "Unarchive" : "Archive")}</button>
       <button onclick={() => { setMuted(cid); ctx = null; }}>{$t($mutedChats.has(cid) ? "Unmute" : "Mute notifications")}</button>
       <button onclick={() => { void selectChat(cid); ctx = null; }}>{$t("Open")}</button>
@@ -356,6 +394,13 @@
 
 <style>
   .chat-item.kb { box-shadow: inset 0 0 0 2px var(--accent); }
+  .resize-handle { position: absolute; top: 0; right: -3px; width: 6px; height: 100%; cursor: col-resize; z-index: 6; }
+  .resize-handle::after { content: ""; position: absolute; left: 2px; top: 0; bottom: 0; width: 2px; background: transparent; transition: background .2s; }
+  .resize-handle:hover::after, .list.resizing .resize-handle::after { background: var(--accent); }
+  .list.resizing { user-select: none; }
+  .pin-ic { width: 14px; height: 14px; color: var(--fg-dim); flex-shrink: 0; transform: rotate(45deg); }
+  .pin-ic svg { width: 100%; height: 100%; }
+  .chat-item.pinned { background: color-mix(in srgb, var(--bg-hover) 50%, transparent); }
   .cn-text { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .muted-ic { display: inline-grid; color: var(--fg-dim); flex-shrink: 0; }
   .muted-ic svg { width: 13px; height: 13px; }
@@ -398,6 +443,7 @@
   .chat-preview.activity { color: var(--accent); }
   .chat-preview.activity b { font-weight: 700; }
   .list {
+    position: relative;
     background: var(--bg-list);
     border-right: 1px solid var(--border);
     display: flex;

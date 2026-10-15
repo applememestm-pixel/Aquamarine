@@ -534,6 +534,8 @@ pub struct AppState {
     pub prefs: LocalPrefs,
     /// Content hash of each chat as last written to the vault (history.rs).
     pub hist_hashes: HashMap<String, u64>,
+    /// Cheap per-chat fingerprints from the last flush (history.rs).
+    pub hist_fp: HashMap<String, u64>,
     /// Room the UI has open per supergroup; sends without a room go there.
     pub active_rooms: HashMap<String, String>,
 }
@@ -714,6 +716,7 @@ impl AppState {
             prefs: LocalPrefs::default(),
             hist_hashes,
             active_rooms: HashMap::new(),
+            hist_fp: HashMap::new(),
         }))
     }
 
