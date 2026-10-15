@@ -5,6 +5,17 @@ resume. Newest entries at the top.
 
 ---
 
+## 2026-10-15 — Session 48: backups, federation, groups, app icon, bots, sticker editor
+
+- Encrypted backups (AQBK1: DEK under Argon2id(password) and HKDF(24-word recovery key)); sign-in sends an Argon2id-derived secret, never the password.
+- History in the vault (DEFLATE + ChaCha20-Poly1305), delete for me / for everyone, keep-deleted.
+- Relay: SQLite inbox (30 d), disk blob store (72 h; `?keep=1` blobs 90 d sliding), federation (HMAC-signed, replication every 30 s, forward/collect, client failover).
+- Groups: photo/banner/rules/welcome/accent, group ⇄ supergroup with gating, stats, fun slash commands.
+- App logo (SVG, theme-following, presets, custom), runtime window icon, regenerated bundle/Android icons.
+- Bots: hashed tokens (migrated), header auth, contact rule, /stop, rate limits; docs/BOTS.md.
+- Telegram-style sticker editor; own packs in Settings; smoother motion.
+- README rewritten as a formal technical description with licensing; LICENSE-MIT/-APACHE added.
+
 ## 2026-10-14 — Session 47: players, send-as, packs on the relay, themes, bots, speed
 
 Everything from the big 0.1.1 request (see docs/releases/v0.1.1.md):
