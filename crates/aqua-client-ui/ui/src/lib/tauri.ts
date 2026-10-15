@@ -103,6 +103,8 @@ export const api = {
   // Media library management
   addMediaFiles:      (target: "gifs" | "stickers" | "emoji", pack: string | null, paths: string[]): Promise<number> => invoke("add_media_files", { target, pack, paths }),
   deleteMediaItem:    (path: string): Promise<void> => invoke("delete_media_item", { path }),
+  deleteStickerPack:  (title: string): Promise<void> => invoke("delete_sticker_pack", { title }),
+  renameStickerPack:  (title: string, new_title: string): Promise<void> => invoke("rename_sticker_pack", { title, newTitle: new_title }),
 
   // Rich presence (what you're playing / listening to / watching)
   setActivityDetection: (enabled: boolean): Promise<void> => invoke("set_activity_detection", { enabled }),

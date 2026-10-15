@@ -2785,11 +2785,13 @@
     color: var(--fg);
     border: 1px solid var(--border);
     box-shadow: var(--shadow-lift);
-    animation: msg-in 0.25s ease-out;
+    animation: msg-in 0.34s cubic-bezier(.2,.9,.25,1.08);
+    transform-origin: bottom left;
   }
+  .msg.out .bubble { transform-origin: bottom right; }
   @keyframes msg-in {
-    from { opacity: 0; transform: translateY(4px); }
-    to   { opacity: 1; transform: translateY(0); }
+    from { opacity: 0; transform: translateY(8px) scale(0.97); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
   }
   .msg:not(.first) .bubble { border-top-left-radius: var(--bubble-r, 14px); }
 

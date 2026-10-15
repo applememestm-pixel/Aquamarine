@@ -169,7 +169,7 @@
     background: var(--bg-shell); border: 1px solid var(--border); border-radius: 16px;
     padding: 18px; display: flex; flex-direction: column; align-items: center; gap: 12px;
     box-shadow: 0 32px 80px -16px rgba(0, 0, 0, 0.7);
-  }
+   animation: aq-pop .3s var(--ease-spring, ease-out); }
   .title { align-self: flex-start; font-weight: 800; font-size: 16px; color: var(--fg); }
   .frame { position: relative; overflow: hidden; border-radius: 12px; background: #000; cursor: grab; touch-action: none; }
   .frame:active { cursor: grabbing; }

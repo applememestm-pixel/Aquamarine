@@ -807,7 +807,7 @@
               display: grid; place-items: center; z-index: 130; padding: 20px; }
   .sheet { width: min(500px, 95vw); height: min(720px, 90vh); display: flex; flex-direction: column;
            background: var(--bg-shell); border: 1px solid var(--border-strong); border-radius: 18px;
-           box-shadow: 0 40px 90px -24px rgba(0,0,0,0.7); overflow: hidden; }
+           box-shadow: 0 40px 90px -24px rgba(0,0,0,0.7); overflow: hidden;  animation: aq-pop .3s var(--ease-spring, ease-out); }
   .bar { display: flex; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
   .bar-t { font-weight: 800; font-size: 15px; color: var(--fg); }
   .sp { flex: 1; }

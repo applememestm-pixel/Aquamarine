@@ -612,7 +612,7 @@
     padding: 10px 10px;
     border-radius: 10px;
     cursor: pointer;
-    transition: background-color 0.12s ease;
+    transition: background-color 0.2s var(--ease-out, ease), box-shadow 0.25s var(--ease-out, ease), transform 0.2s var(--ease-out, ease);
     align-items: center;
     min-width: 0;
     width: 100%;
@@ -622,6 +622,7 @@
     color: inherit;
   }
   .chat-item:hover { background: var(--bg-hover); }
+  .chat-item:active { transform: scale(0.985); }
   .chat-item.active {
     background: var(--bg-active);
     box-shadow: inset 3px 0 0 var(--accent);

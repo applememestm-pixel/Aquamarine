@@ -145,7 +145,7 @@
               display: grid; place-items: center; z-index: 130; padding: 20px; }
   .sheet { width: min(460px, 94vw); max-height: 88vh; overflow-y: auto; background: var(--bg-shell);
            border: 1px solid var(--border-strong); border-radius: 18px; padding: 20px;
-           box-shadow: 0 40px 90px -24px rgba(0,0,0,0.7); }
+           box-shadow: 0 40px 90px -24px rgba(0,0,0,0.7);  animation: aq-pop .3s var(--ease-spring, ease-out); }
   .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
   .head h2 { margin: 0; font-size: 18px; font-weight: 800; }
   .x { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--border);

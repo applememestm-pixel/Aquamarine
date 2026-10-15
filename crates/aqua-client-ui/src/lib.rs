@@ -146,6 +146,8 @@ pub fn run() -> Result<()> {
             commands::profile_media_path,
             commands::add_media_files,
             commands::delete_media_item,
+            commands::delete_sticker_pack,
+            commands::rename_sticker_pack,
             commands::set_activity_detection,
             commands::current_activity,
             commands::start_bot_chat,

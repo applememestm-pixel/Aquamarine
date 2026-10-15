@@ -41,7 +41,7 @@
   import { api, assetUrl } from "../tauri";
   import { showToast } from "./Toast.svelte";
   import { openFileDialog } from "../dialog";
-  import { openStickerEditor } from "./StickerEditor.svelte";
+  import { openStickerEditor, stickerLibraryTick } from "./StickerEditor.svelte";
   import { insertEmoji } from "../composerBus";
   import { loadActiveMessages } from "../stores";
   import AnimatedMedia from "./AnimatedMedia.svelte";
@@ -78,6 +78,9 @@
   }
 
   // ---- data ----
+  // A sticker made in the editor shows up without reopening the panel.
+  let seenTick = 0;
+  $effect(() => { const n = $stickerLibraryTick; if (n !== seenTick) { seenTick = n; untrack(() => void refreshCatalogue()); } });
   async function refreshCatalogue() {
     loading = true;
     try { catalogue = await api.listLocalMedia(); }

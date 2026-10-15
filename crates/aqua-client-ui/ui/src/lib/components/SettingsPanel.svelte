@@ -18,11 +18,13 @@
   import { openFileDialog } from "../dialog";
   import { ICON_PRESETS, logoSvg, svgDataUrl, colorsFromAccent, setAppIcon } from "../appIcon";
   import { cropImage } from "./ImageCropper.svelte";
-  import { api, bytesToDataUrl } from "../tauri";
+  import { openStickerEditor, stickerLibraryTick } from "./StickerEditor.svelte";
+  import AnimatedMedia from "./AnimatedMedia.svelte";
+  import type { StickerPack } from "../types";
+  import { api, bytesToDataUrl, assetUrl } from "../tauri";
   import { showToast } from "./Toast.svelte";
   import type { BotInfo } from "../types";
   import VoiceVideoSettings from "./VoiceVideoSettings.svelte";
-  import AnimatedMedia from "./AnimatedMedia.svelte";
   import { openProfile } from "./ProfileModal.svelte";
   import { openRegistration, registrationDismissed } from "./RegistrationWizard.svelte";
   import { shortcutsOpen } from "../shortcuts";
@@ -382,6 +384,45 @@
   function setPalette(id: string) { settings.update((s) => ({ ...s, palette: id })); }
   function setDensity(d: Density) { settings.update((s) => ({ ...s, density: d })); }
   function setFontScale(v: number) { settings.update((s) => ({ ...s, fontScale: Math.max(0.85, Math.min(1.25, v)) })); }
+  // ---- your stickers ----
+  let myPacks = $state<StickerPack[]>([]);
+  let openPack = $state<string | null>(null);
+  let renaming = $state<string | null>(null);
+  let renameTo = $state("");
+  async function loadMyPacks() {
+    try {
+      const lib = await api.listLocalMedia();
+      myPacks = lib.packs.filter((p) => !p.source && p.kind !== "emoji");
+    } catch { myPacks = []; }
+  }
+  $effect(() => { void $stickerLibraryTick; if (section === "stickers") void loadMyPacks(); });
+  async function newSticker(pack?: string) {
+    try {
+      const result = await openFileDialog({ multiple: false, directory: false, title: tr("Pick a picture for the sticker"),
+        filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }] });
+      const path = Array.isArray(result) ? (result[0] ?? null) : result;
+      if (!path) return;
+      const bytes = await api.readUserImage(path);
+      const low = path.toLowerCase();
+      const mime = low.endsWith(".png") ? "image/png" : low.endsWith(".webp") ? "image/webp" : low.endsWith(".gif") ? "image/gif" : "image/jpeg";
+      openStickerEditor(bytes, mime, path.split(/[\\/]/).pop() ?? "sticker", pack);
+    } catch (e) { showToast(`${e}`); }
+  }
+  async function deleteMySticker(path: string) {
+    try { await api.deleteMediaItem(path); await loadMyPacks(); } catch (e) { showToast(`${e}`); }
+  }
+  async function deleteMyPack(p: StickerPack) {
+    const ok = await askConfirm({ title: tr("Delete the pack “{p}”?", { p: p.title }), text: tr("All {n} stickers in it are deleted from this device.", { n: p.items.length }), ok: tr("Delete"), danger: true });
+    if (!ok) return;
+    try { await api.deleteStickerPack(p.title); await loadMyPacks(); } catch (e) { showToast(`${e}`); }
+  }
+  async function renameMyPack(p: StickerPack) {
+    const n = renameTo.trim();
+    renaming = null;
+    if (!n || n === p.title) return;
+    try { await api.renameStickerPack(p.title, n); if (openPack === p.title) openPack = n; await loadMyPacks(); } catch (e) { showToast(`${e}`); }
+  }
+
   // ---- app icon ----
   let iconMode = $derived($settings.appIcon?.mode ?? "theme");
   let themeIconUrl = $derived.by(() => {
@@ -705,6 +746,52 @@
             <input class="txt" type="password" placeholder={$t("Telegram bot token")} bind:value={rpToken} />
             <button class="mini-btn primary" onclick={importRp} disabled={rpBusy}>{$t(rpBusy ? "Importing…" : "Import")}</button>
           </div>
+        {/if}
+      </section>
+      <section class="group">
+        <div class="label">{$t("Your stickers")}</div>
+        <div class="my-actions">
+          <button class="mini-btn primary" onclick={() => newSticker()}>＋ {$t("New sticker")}</button>
+          <button class="mini-btn" onclick={() => openStickerEditor([], "", "text", myPacks[0]?.title)}>Aa {$t("Text sticker")}</button>
+        </div>
+        {#if myPacks.length === 0}
+          <div class="foot-note">{$t("Stickers you make in the editor live here. Pick a picture — the editor cuts out the background, adds captions, drawing and a white outline, like Telegram.")}</div>
+        {:else}
+          {#each myPacks as p (p.title)}
+            <div class="my-pack" class:open={openPack === p.title}>
+              <div class="mp-head">
+                <button class="mp-toggle" onclick={() => (openPack = openPack === p.title ? null : p.title)}>
+                  <span class="mp-thumb">{#if p.items[0]}<AnimatedMedia src={assetUrl(p.items[0].path)} mime={p.items[0].mime} play="hover" alt="" />{/if}</span>
+                  {#if renaming === p.title}
+                    <!-- svelte-ignore a11y_autofocus -->
+                    <input class="txt mp-rename" bind:value={renameTo} autofocus onclick={(e) => e.stopPropagation()}
+                      onkeydown={(e) => { if (e.key === "Enter") void renameMyPack(p); if (e.key === "Escape") renaming = null; }}
+                      onblur={() => void renameMyPack(p)} />
+                  {:else}
+                    <span class="mp-title">{p.title}</span>
+                  {/if}
+                  <span class="mp-count">{p.items.length}</span>
+                  <span class="mp-chev">›</span>
+                </button>
+              </div>
+              {#if openPack === p.title}
+                <div class="mp-grid">
+                  {#each p.items as it (it.id)}
+                    <div class="mp-item">
+                      <AnimatedMedia src={assetUrl(it.path)} mime={it.mime} play="hover" alt={it.emoji ?? ""} />
+                      {#if it.emoji}<span class="mp-emoji">{it.emoji}</span>{/if}
+                      <button class="mp-del" onclick={() => deleteMySticker(it.path)} title={$t("Delete")} aria-label={$t("Delete")}>×</button>
+                    </div>
+                  {/each}
+                  <button class="mp-add" onclick={() => newSticker(p.title)} title={$t("New sticker")}>＋</button>
+                </div>
+                <div class="my-actions">
+                  <button class="mini-btn" onclick={() => { renaming = p.title; renameTo = p.title; }}>{$t("Rename")}</button>
+                  <button class="mini-btn danger" onclick={() => deleteMyPack(p)}>{$t("Delete pack")}</button>
+                </div>
+              {/if}
+            </div>
+          {/each}
         {/if}
       </section>
       <section class="group">
@@ -1818,4 +1905,26 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .app-ic.active { border-color: var(--accent); background: var(--accent-soft); color: var(--fg); }
   .app-ic img, .app-ic .plus { width: 48px; height: 48px; border-radius: 12px; object-fit: cover; }
   .app-ic .plus { display: grid; place-items: center; font-size: 22px; border: 1px dashed var(--border-strong); }
+  .my-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 10px; }
+  .my-pack { border: 1px solid var(--border); border-radius: 12px; margin-bottom: 8px; overflow: hidden; transition: border-color .2s; }
+  .my-pack.open { border-color: var(--accent); }
+  .mp-toggle { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: none; background: var(--bg-input); color: var(--fg); cursor: pointer; text-align: left; }
+  .mp-thumb { width: 36px; height: 36px; display: grid; place-items: center; flex-shrink: 0; }
+  .mp-thumb :global(img), .mp-thumb :global(video) { max-width: 100%; max-height: 100%; }
+  .mp-title { flex: 1; font-weight: 700; font-size: 13px; }
+  .mp-rename { flex: 1; }
+  .mp-count { font-size: 12px; color: var(--fg-dim); }
+  .mp-chev { transition: transform .25s cubic-bezier(.2,.8,.2,1); color: var(--fg-dim); }
+  .my-pack.open .mp-chev { transform: rotate(90deg); }
+  .mp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 6px; padding: 10px; animation: mp-in .3s cubic-bezier(.2,.8,.2,1); }
+  @keyframes mp-in { from { opacity: 0; transform: translateY(-4px); } }
+  .mp-item { position: relative; aspect-ratio: 1; display: grid; place-items: center; border-radius: 10px; background: var(--bg-input); }
+  .mp-item :global(img), .mp-item :global(video) { max-width: 88%; max-height: 88%; }
+  .mp-emoji { position: absolute; left: 4px; bottom: 2px; font-size: 13px; }
+  .mp-del { position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; border-radius: 50%; border: none; background: rgba(0,0,0,.6); color: #fff;
+    cursor: pointer; opacity: 0; transition: opacity .15s; line-height: 1; }
+  .mp-item:hover .mp-del { opacity: 1; }
+  .mp-add { aspect-ratio: 1; border-radius: 10px; border: 1.5px dashed var(--border-strong); background: none; color: var(--fg-dim); font-size: 22px; cursor: pointer; }
+  .mp-add:hover { color: var(--accent); border-color: var(--accent); }
+  .mini-btn.danger { color: #ff6b6b; }
 </style>

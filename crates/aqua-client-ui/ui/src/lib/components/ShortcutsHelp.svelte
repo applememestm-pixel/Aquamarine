@@ -53,7 +53,7 @@
     background: var(--bg-shell); border: 1px solid var(--border); border-radius: 16px;
     box-shadow: 0 32px 80px -16px rgba(0, 0, 0, 0.6);
     padding: 18px 22px 22px;
-  }
+   animation: aq-pop .3s var(--ease-spring, ease-out); }
   .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
   h2 { margin: 0; font-size: 18px; color: var(--fg); }
   .close { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--fg-dim); font-size: 18px; cursor: pointer; }

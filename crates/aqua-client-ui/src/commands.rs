@@ -1117,14 +1117,58 @@ pub fn save_sticker(
     };
     let pack_dir = data_dir.join("stickers").join(&pack_safe);
     std::fs::create_dir_all(&pack_dir).map_err(|e| format!("mkdir pack: {e}"))?;
-    let final_name = if name_safe.to_ascii_lowercase().ends_with(".png") {
+    let lower = name_safe.to_ascii_lowercase();
+    let final_name = if lower.ends_with(".png") || lower.ends_with(".webp") {
         name_safe
     } else {
         format!("{name_safe}.png")
     };
-    let path = pack_dir.join(&final_name);
+    // Never overwrite: "😀_sticker.png" → "😀_sticker-2.png".
+    let mut path = pack_dir.join(&final_name);
+    let (stem, ext) = final_name.rsplit_once('.').map(|(a, b)| (a.to_string(), b.to_string())).unwrap_or((final_name.clone(), "png".into()));
+    let mut n = 2;
+    while path.exists() {
+        path = pack_dir.join(format!("{stem}-{n}.{ext}"));
+        n += 1;
+    }
     std::fs::write(&path, &bytes).map_err(|e| format!("write sticker: {e}"))?;
     Ok(path.display().to_string())
+}
+
+fn own_pack_dir(state: &State<'_, StdMutex<AppState>>, title: &str) -> Result<PathBuf, String> {
+    let data_dir = state.lock().map_err(|e| e.to_string())?.data_dir.clone();
+    let root = data_dir.join("stickers");
+    let t = title.trim();
+    if t.is_empty() || t.contains(['/', '\\']) || t.starts_with('.') {
+        return Err("bad pack name".into());
+    }
+    let dir = root.join(t);
+    if !dir.is_dir() || !media::path_is_within(&root, &dir) {
+        return Err("no such pack".into());
+    }
+    Ok(dir)
+}
+
+/// Delete a whole sticker pack folder from the local library.
+#[tauri::command]
+pub fn delete_sticker_pack(state: State<'_, StdMutex<AppState>>, title: String) -> Result<(), String> {
+    let dir = own_pack_dir(&state, &title)?;
+    std::fs::remove_dir_all(&dir).map_err(|e| format!("delete pack: {e}"))
+}
+
+/// Rename a sticker pack (its folder).
+#[tauri::command]
+pub fn rename_sticker_pack(state: State<'_, StdMutex<AppState>>, title: String, new_title: String) -> Result<(), String> {
+    let dir = own_pack_dir(&state, &title)?;
+    let n = new_title.trim();
+    if n.is_empty() || n.len() > 64 || n.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) || n.starts_with('.') {
+        return Err("bad pack name".into());
+    }
+    let dest = dir.parent().ok_or("bad pack")?.join(n);
+    if dest.exists() {
+        return Err("a pack with this name already exists".into());
+    }
+    std::fs::rename(&dir, &dest).map_err(|e| format!("rename pack: {e}"))
 }
 
 /// Import a Telegram sticker pack into the local stickers library.

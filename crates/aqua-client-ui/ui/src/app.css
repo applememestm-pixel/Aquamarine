@@ -185,6 +185,18 @@ input, textarea, .bubble, .art-md, .msg-col, [contenteditable],
   -webkit-user-select: text;
 }
 
+/* Motion: shared easings and gentle colour transitions on every control. */
+:root {
+  --ease-out: cubic-bezier(.2, .8, .2, 1);
+  --ease-spring: cubic-bezier(.2, .9, .25, 1.12);
+}
+button, a, input, select, textarea {
+  transition-property: background-color, color, border-color, box-shadow, opacity;
+  transition-duration: .18s;
+  transition-timing-function: var(--ease-out);
+}
+@keyframes aq-pop { from { opacity: 0; transform: translateY(6px) scale(.98); } }
+
 /* Focus */
 :focus-visible {
   outline: 2px solid var(--accent);
