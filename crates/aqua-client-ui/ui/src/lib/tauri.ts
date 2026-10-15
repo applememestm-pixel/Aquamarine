@@ -132,6 +132,7 @@ export const api = {
   groupSetMyTag:      (gid: string, tag: string): Promise<void>                        => invoke("group_set_my_tag", { gid, tag }),
   groupRequestJoin:   (gid: string, admin: string, title: string, note: string): Promise<void> => invoke("group_request_join", { gid, admin, title, note }),
   groupSend:          (gid: string, body: string): Promise<SendResult>                 => invoke("group_send", { gid, body }),
+  setGroupRoom:       (gid: string, room: string): Promise<void>                      => invoke("set_group_room", { gid, room }),
 
   // Edit / delete (local store mutation; relay the control separately)
   editMessage:        (peer_id: string, old_text: string, new_text: string): Promise<void> => invoke("edit_message", { peerId: peer_id, oldText: old_text, newText: new_text }),

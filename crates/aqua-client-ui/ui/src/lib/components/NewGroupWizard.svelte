@@ -18,6 +18,7 @@
   import { t, tr } from "../i18n";
   import { chats, selectChat } from "../stores";
   import { refreshGroups } from "../groups";
+  import { DEFAULT_ROOMS } from "../groupRules";
   import { api } from "../tauri";
   import { showToast } from "./Toast.svelte";
 
@@ -67,7 +68,14 @@
     }
     busy = true;
     try {
-      const g = await api.createGroup(kind, t, description.trim(), members);
+      let g = await api.createGroup(kind, t, description.trim(), members);
+      if (kind === "supergroup") {
+        // A server: starts with Discord-style rooms.
+        const next = JSON.parse(JSON.stringify(g)) as typeof g;
+        next.settings.rooms_enabled = true;
+        next.rooms = DEFAULT_ROOMS.map((r) => ({ ...r }));
+        try { g = await api.updateGroup(next); } catch { /* rooms can be turned on later */ }
+      }
       await refreshGroups();
       closeNewGroup();
       await selectChat(g.id);
@@ -99,7 +107,7 @@
         {#if kind === "channel"}
           Broadcast to subscribers — only admins post. Everyone else reads.
         {:else if kind === "supergroup"}
-          A large group with full admin tools and granular permissions.
+          A server: rooms like Discord channels (#general, announcements, voice), public link, server tag and full admin tools.
         {:else}
           A private group chat. Everyone can post by default.
         {/if}

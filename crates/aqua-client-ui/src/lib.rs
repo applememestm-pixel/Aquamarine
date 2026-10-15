@@ -162,6 +162,7 @@ pub fn run() -> Result<()> {
             commands::group_set_my_tag,
             commands::group_request_join,
             commands::group_send,
+            commands::set_group_room,
             commands::edit_message,
             commands::delete_message,
             commands::delete_messages_local,

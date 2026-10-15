@@ -24,7 +24,7 @@ export interface ChatMessage {
   time: string;
   kind: MessageKind;
   /** Local history: deleted by the sender (kept), previous versions. */
-  meta?: { deleted?: boolean; edits?: string[] } | null;
+  meta?: { deleted?: boolean; edits?: string[]; room?: string } | null;
 }
 
 export type MessageKind =
@@ -271,7 +271,12 @@ export interface GroupSettings {
   hide_members?: boolean;
   discussion?: string;
   accent?: string;
+  /** Supergroups: Discord-style rooms. */
+  rooms_enabled?: boolean;
 }
+
+/** A supergroup room (Discord channel). */
+export interface Room { id: string; name: string; kind: "text" | "voice"; readonly?: boolean; emoji?: string }
 
 export interface JoinRequest { username: string; note: string; at: string }
 export interface GroupLogEntry { at: string; by: string; text: string }
@@ -292,6 +297,7 @@ export interface Group {
   requests?: JoinRequest[];
   log?: GroupLogEntry[];
   clan?: ClanTag | null;
+  rooms?: Room[];
   /** Photo / banner: E2EE file references (encrypted blobs on the relay). */
   photo?: ArticleMedia | null;
   banner?: ArticleMedia | null;

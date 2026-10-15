@@ -2,7 +2,7 @@
  * Group / channel rules shared by the UI (the backend enforces the same on
  * receive — see state.rs `may_post` / `accept_group_snapshot`).
  */
-import type { AdminRights, Group, GroupMember, Perm } from "./types";
+import type { AdminRights, Group, GroupMember, Perm, Room } from "./types";
 
 export function memberOf(g: Group | undefined, u: string): GroupMember | undefined {
   return g?.members.find((m) => m.username === u);
@@ -37,6 +37,19 @@ export function perm(g: Group, key: keyof Group["settings"]): Perm {
 }
 
 /** Why the current user can't post here (null = can post). */
+/** Rooms of a supergroup with rooms on (empty otherwise). */
+export function roomsOf(g: Group | undefined): Room[] {
+  if (!g || g.kind !== "supergroup" || !g.settings.rooms_enabled) return [];
+  return g.rooms ?? [];
+}
+/** Rooms a fresh supergroup starts with. */
+export const DEFAULT_ROOMS: Room[] = [
+  { id: "general", name: "general", kind: "text" },
+  { id: "news", name: "news", kind: "text", readonly: true, emoji: "📢" },
+  { id: "offtopic", name: "offtopic", kind: "text" },
+  { id: "voice", name: "Voice", kind: "voice" },
+];
+
 export function postBlock(g: Group | undefined, me: string): string | null {
   if (!g) return null;
   const m = memberOf(g, me);

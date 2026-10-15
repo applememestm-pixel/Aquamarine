@@ -2384,21 +2384,24 @@ pub async fn group_send(
     gid: String,
     body: String,
 ) -> Result<SendResult, String> {
-    let (me, group) = {
+    let (me, group, room) = {
         let s = state.lock().map_err(|e| e.to_string())?;
         let g = s.groups.get(&gid).cloned().ok_or("unknown group")?;
-        (s.username.clone().ok_or("not registered")?, g)
+        let room = crate::state::resolve_room(&g, s.active_rooms.get(&gid).map(String::as_str));
+        (s.username.clone().ok_or("not registered")?, g, room)
     };
 
     // Permission: the same rule every receiver applies (state.rs may_post).
-    if !crate::state::may_post(&group, &me, &body) {
+    if !crate::state::may_post_in(&group, &me, &body, room.as_ref()) {
         return Err("You can't post this here.".into());
     }
+    let room_id = room.map(|r| r.id);
 
     // Local echo.
     let out = {
         let mut s = state.lock().map_err(|e| e.to_string())?;
-        let msg = ChatMessage { meta: None,
+        let msg = ChatMessage {
+            meta: room_id.clone().map(|r| crate::state::MsgMeta { room: Some(r), ..Default::default() }),
             id: format!("m-{}", crate::state::uuid_like()),
             from: me.clone(),
             time: hhmm_now(),
@@ -2420,7 +2423,7 @@ pub async fn group_send(
     // Fan out.
     let wire = format!(
         "{GRPMSG_PREFIX}{}",
-        serde_json::json!({ "gid": gid, "author": me, "body": body })
+        serde_json::json!({ "gid": gid, "author": me, "body": body, "room": room_id })
     );
     for m in group.members.iter().filter(|m| m.username != me) {
         if let Err(e) = deliver_to_member(&app, &m.username, &wire).await {
@@ -2429,6 +2432,15 @@ pub async fn group_send(
     }
 
     Ok(SendResult { id: out.0, time: out.1 })
+}
+
+/// The room the UI has open in a supergroup: group sends without an
+/// explicit room (text, files, stickers, polls) go there.
+#[tauri::command]
+pub fn set_group_room(state: State<'_, StdMutex<AppState>>, gid: String, room: String) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| e.to_string())?;
+    if room.is_empty() { s.active_rooms.remove(&gid); } else { s.active_rooms.insert(gid, room); }
+    Ok(())
 }
 
 /// Send a group control payload (a poll vote, a reaction) to every member.
@@ -2548,16 +2560,21 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
             {
                 let mut s = match state.lock() { Ok(s) => s, Err(_) => return true };
                 // Only accept messages for groups we know about, from members
-                // who are allowed to post this.
-                match s.groups.get(&gid) {
-                    Some(g) if crate::state::may_post(g, &author, &inner) => {}
-                    _ => return true,
-                }
+                // who are allowed to post this (in this room).
+                let room = match s.groups.get(&gid) {
+                    Some(g) => {
+                        let room = crate::state::resolve_room(g, v.get("room").and_then(|x| x.as_str()));
+                        if !crate::state::may_post_in(g, &author, &inner, room.as_ref()) { return true; }
+                        room
+                    }
+                    None => return true,
+                };
                 let kind = classify_kind(&inner);
                 let preview = preview_for(&kind);
                 let len = s.chats.get(&gid).map(|b| b.messages.len()).unwrap_or(0);
                 if let Some(book) = s.chats.get_mut(&gid) {
-                    book.messages.push(ChatMessage { meta: None,
+                    book.messages.push(ChatMessage {
+                        meta: room.map(|r| crate::state::MsgMeta { room: Some(r.id), ..Default::default() }),
                         id: format!("g-{time}-{len}"),
                         from: author.clone(),
                         time: time.clone(),

@@ -29,12 +29,13 @@
   import { mutedChats, setMuted } from "../chatPrefs";
   import { reactionPack, quickReactions, reactionUrl, parseReaction } from "../reactionPack";
   import { CLAN_BADGES, CLAN_COLORS, badgeSvg } from "../clanBadges";
-  import { memberOf, isAdmin, isOwner, can, tagOf, shareLink, ALL_RIGHTS } from "../groupRules";
+  import { memberOf, isAdmin, isOwner, can, tagOf, shareLink, ALL_RIGHTS, DEFAULT_ROOMS } from "../groupRules";
+  import type { Room } from "../types";
   import AnimatedMedia from "./AnimatedMedia.svelte";
   import ClanTag from "./ClanTag.svelte";
   import type { AdminRights, Group, GroupMember, Perm } from "../types";
 
-  type Page = "info" | "manage" | "type" | "perms" | "reactions" | "admins" | "admin-edit" | "members" | "banned" | "requests" | "clan" | "log";
+  type Page = "rooms" | "info" | "manage" | "type" | "perms" | "reactions" | "admins" | "admin-edit" | "members" | "banned" | "requests" | "clan" | "log";
   let page = $state<Page>("info");
   let stack: Page[] = [];
   let editUser = $state("");
@@ -160,9 +161,39 @@
       if (!ok) return;
       await commit((g) => { g.kind = "group"; g.settings.is_public = false; }, "converted the supergroup to a group");
     } else {
-      await commit((g) => { g.kind = "supergroup"; }, "upgraded the group to a supergroup");
-      showToast(tr("Now a supergroup: up to 200 000 members, public link, server tag, slow mode and admin log"), 5000);
+      await commit((g) => {
+        g.kind = "supergroup";
+        if (!(g.rooms ?? []).length) { S(g).rooms_enabled = true; g.rooms = DEFAULT_ROOMS.map((r) => ({ ...r })); }
+      }, "upgraded the group to a supergroup");
+      showToast(tr("Now a supergroup: rooms like Discord channels, public link, server tag, slow mode and admin log"), 5000);
     }
+  }
+
+  // ---- rooms (Discord-style channels) -----------------------------------
+  let roomList = $derived<Room[]>(group?.rooms ?? []);
+  const slugRoom = (n: string) => n.trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "").slice(0, 24) || "room";
+  async function setRoomsEnabled(on: boolean) {
+    await commit((g) => {
+      S(g).rooms_enabled = on;
+      if (on && !(g.rooms ?? []).length) g.rooms = DEFAULT_ROOMS.map((r) => ({ ...r }));
+    }, on ? "turned rooms on" : "turned rooms off");
+  }
+  async function saveRooms(next: Room[], log?: string) {
+    if (!next.some((r) => r.kind === "text")) { showToast(tr("Keep at least one text room")); return; }
+    await commit((g) => { g.rooms = next; }, log);
+  }
+  async function addRoom(kind: "text" | "voice") {
+    const base = kind === "voice" ? tr("Voice") : tr("new-room");
+    let id = slugRoom(base), n = 2;
+    while (roomList.some((r) => r.id === id)) id = `${slugRoom(base)}-${n++}`;
+    await saveRooms([...roomList, { id, name: kind === "voice" ? base : id, kind }], `added room ${id}`);
+  }
+  function patchRoom(id: string, p: Partial<Room>) { return roomList.map((r) => (r.id === id ? { ...r, ...p } : r)); }
+  function moveRoom(i: number, d: number) {
+    const a = [...roomList]; const j = i + d;
+    if (j < 0 || j >= a.length) return;
+    [a[i], a[j]] = [a[j], a[i]];
+    void saveRooms(a);
   }
 
   // ---- server stats (fun) ------------------------------------------------
@@ -387,7 +418,7 @@
   const PAGE_TITLE: Record<Page, string> = {
     info: "", manage: "Edit", type: "Type & link", perms: "Permissions", reactions: "Reactions",
     admins: "Administrators", "admin-edit": "Admin rights", members: "Members", banned: "Removed users",
-    requests: "Join requests", clan: "Server tag", log: "Recent actions",
+    requests: "Join requests", clan: "Server tag", log: "Recent actions", rooms: "Rooms",
   };
   const I = {
     pencil: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>`,
@@ -600,6 +631,9 @@
           {@render row(isChannel ? "Subscribers" : "Members", `${group.members.length}`, () => go("members"), "#32ADE6")}
           {#if !basic}{@render row("Join requests", `${group.requests?.length ?? 0}`, () => go("requests"), "#FF2D55")}{/if}
           {@render row("Removed users", `${group.banned?.length ?? 0}`, () => go("banned"), "#FF3B30")}
+          {#if !basic && !isChannel}
+            {@render row("Rooms", group.settings.rooms_enabled ? `${roomList.length}` : "Off", () => go("rooms"), "#00C7BE")}
+          {/if}
           {#if !basic}
             {@render row("Server tag", group.clan?.text ?? "None", () => go("clan"), "#AF52DE")}
             {@render row("Recent actions", `${group.log?.length ?? 0}`, () => go("log"), "#8E8E93")}
@@ -788,6 +822,36 @@
           <div class="note">{$t("Like Discord server tags: members can wear it next to their name everywhere, and anyone can click it to ask to join.")}</div>
         </div>
 
+      {:else if page === "rooms"}
+        <div class="card">
+          {@render toggle("Rooms", "Split the chat into channels like a Discord server: text rooms, announcement rooms, voice rooms", !!group.settings.rooms_enabled, () => setRoomsEnabled(!group.settings.rooms_enabled), busy || !can(group, me, "change_info"))}
+        </div>
+        {#if group.settings.rooms_enabled}
+          <div class="card">
+            {#each roomList as r, i (r.id)}
+              <div class="room-row">
+                <input class="inp re" value={r.emoji ?? ""} maxlength="2" placeholder={r.kind === "voice" ? "🔊" : "#"}
+                  onchange={(e) => saveRooms(patchRoom(r.id, { emoji: (e.target as HTMLInputElement).value.trim() || undefined }))} />
+                <input class="inp rn" value={r.name} maxlength="32"
+                  onchange={(e) => { const v = (e.target as HTMLInputElement).value.trim(); if (v) void saveRooms(patchRoom(r.id, { name: r.kind === "text" ? slugRoom(v) : v }), `renamed room to ${v}`); }} />
+                {#if r.kind === "text"}
+                  <button class="rr-btn" class:on={r.readonly} title={$t("Only admins write here")} onclick={() => saveRooms(patchRoom(r.id, { readonly: !r.readonly }))}>🔒</button>
+                {:else}
+                  <span class="rr-kind">{$t("voice")}</span>
+                {/if}
+                <button class="rr-btn" onclick={() => moveRoom(i, -1)} disabled={i === 0} aria-label={$t("Up")}>↑</button>
+                <button class="rr-btn" onclick={() => moveRoom(i, 1)} disabled={i === roomList.length - 1} aria-label={$t("Down")}>↓</button>
+                <button class="rr-btn danger" onclick={() => saveRooms(roomList.filter((x) => x.id !== r.id), `deleted room ${r.name}`)} aria-label={$t("Delete")}>×</button>
+              </div>
+            {/each}
+            <div class="abtns">
+              <button class="btn" onclick={() => addRoom("text")}># {$t("Text room")}</button>
+              <button class="btn ghost" onclick={() => addRoom("voice")}>🔊 {$t("Voice room")}</button>
+            </div>
+            <div class="note">{$t("🔒 — announcement room: only admins write. Messages of a deleted room move to the first room. Voice rooms join the group's voice chat.")}</div>
+          </div>
+        {/if}
+
       {:else if page === "log"}
         <div class="card">
           {#each [...(group.log ?? [])].reverse() as l, i (i)}
@@ -858,6 +922,15 @@
   .me-actions { display: flex; gap: 6px; padding-top: 30px; }
   .ccell.none { background: var(--bg-input); color: var(--fg-dim); font-size: 13px; }
   .hidden { display: none; }
+  .room-row { display: flex; gap: 6px; align-items: center; padding: 5px 0; border-bottom: 1px solid var(--border); }
+  .room-row:last-of-type { border-bottom: none; }
+  .room-row .re { flex: 0 0 44px; width: 44px; text-align: center; padding: 6px 4px; }
+  .room-row .rn { flex: 1; }
+  .rr-btn { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-input); color: var(--fg-muted); cursor: pointer; flex-shrink: 0; }
+  .rr-btn.on { border-color: var(--accent); background: var(--accent-soft); }
+  .rr-btn.danger:hover { color: #ff6b6b; }
+  .rr-btn:disabled { opacity: .35; }
+  .rr-kind { font-size: 11px; color: var(--fg-dim); padding: 0 4px; }
   .hero h2 { margin: 0; font-size: 19px; font-weight: 800; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .sub { font-size: 12.5px; color: var(--fg-muted); margin-top: 3px; }
   .desc { margin: 0 4px 10px; font-size: 13.5px; color: var(--fg); line-height: 1.45; white-space: pre-wrap; }

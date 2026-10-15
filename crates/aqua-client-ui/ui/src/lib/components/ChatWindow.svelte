@@ -38,7 +38,8 @@
   import { ghost } from "../ghost";
   import GroupCallPanel from "./GroupCallPanel.svelte";
   import { groupCall, activeGroupCalls, joinGroupCall } from "../groupCall";
-  import { postBlock, tagOf, canSendKind, isAdmin, can } from "../groupRules";
+  import { postBlock, tagOf, canSendKind, isAdmin, can, roomsOf } from "../groupRules";
+  import type { Room } from "../types";
   import { t, tr, tn } from "../i18n";
   import { mutedChats, setMuted } from "../chatPrefs";
   import { insertToComposer } from "../composerBus";
@@ -982,7 +983,50 @@
     "Reply hazy, try again", "Ask again later", "Cannot predict now", "Don't count on it", "My sources say no", "Very doubtful"];
   // Can the current user post here? (Same rules the backend enforces on
   // receive — groupRules.ts / state.rs may_post.)
-  let postBlocked = $derived(postBlock(activeGroup, myUsername));
+  // ---- supergroup rooms (Discord-style channels) ---------------------------
+  const ROOM_KEY = "aqua.rooms.active.v1", SEEN_KEY = "aqua.rooms.seen.v1";
+  const readJson = <T,>(k: string, d: T): T => { try { return JSON.parse(localStorage.getItem(k) ?? "") as T; } catch { return d; } };
+  let roomPick = $state<Record<string, string>>(readJson(ROOM_KEY, {}));
+  let roomSeen = $state<Record<string, Record<string, number>>>(readJson(SEEN_KEY, {}));
+  let rooms = $derived(roomsOf(activeGroup));
+  let textRooms = $derived(rooms.filter((r) => r.kind === "text"));
+  let activeRoom = $derived.by((): Room | null => {
+    if (!activeGroup || !textRooms.length) return null;
+    return textRooms.find((r) => r.id === roomPick[activeGroup.id]) ?? textRooms[0];
+  });
+  const roomOfMsg = (m: ChatMessage) => m.meta?.room && textRooms.some((r) => r.id === m.meta!.room) ? m.meta.room : textRooms[0]?.id;
+  let roomCounts = $derived.by(() => {
+    const c: Record<string, number> = {};
+    if (textRooms.length) for (const m of $activeMessages) { const r = roomOfMsg(m); if (r) c[r] = (c[r] ?? 0) + 1; }
+    return c;
+  });
+  let roomMessages = $derived(activeRoom ? $activeMessages.filter((m) => roomOfMsg(m) === activeRoom!.id) : $activeMessages);
+  // Tell the backend where sends go, and mark the open room as read.
+  $effect(() => {
+    const g = activeGroup, r = activeRoom;
+    if (!g) return;
+    void api.setGroupRoom(g.id, r?.id ?? "").catch(() => {});
+    if (r) {
+      const n = roomCounts[r.id] ?? 0;
+      if ((roomSeen[g.id]?.[r.id] ?? -1) !== n) {
+        roomSeen = { ...roomSeen, [g.id]: { ...(roomSeen[g.id] ?? {}), [r.id]: n } };
+        try { localStorage.setItem(SEEN_KEY, JSON.stringify(roomSeen)); } catch { /* ignore */ }
+      }
+    }
+  });
+  function pickRoom(r: Room) {
+    if (!activeGroup) return;
+    if (r.kind === "voice") { void joinGroupCall(activeGroup.id); return; }
+    roomPick = { ...roomPick, [activeGroup.id]: r.id };
+    try { localStorage.setItem(ROOM_KEY, JSON.stringify(roomPick)); } catch { /* ignore */ }
+  }
+  const roomUnread = (r: Room) => activeGroup ? Math.max(0, (roomCounts[r.id] ?? 0) - (roomSeen[activeGroup.id]?.[r.id] ?? roomCounts[r.id] ?? 0)) : 0;
+  let roomsOpen = $state(false);
+
+  let postBlocked = $derived(
+    activeRoom?.readonly && !isAdmin(activeGroup, myUsername)
+      ? tr("Only admins write in #{room}", { room: activeRoom.name })
+      : postBlock(activeGroup, myUsername));
   let canPost = $derived(postBlocked === null);
   /** Channel / group forbids forwarding, copying and saving. */
   let protectedChat = $derived(!!activeGroup?.settings.protected_content && !isAdmin(activeGroup, myUsername));
@@ -1025,7 +1069,7 @@
     const id = $activeChat?.id;
     untrack(() => { slowLeft = id ? slowModeWait(id) : 0; });
   });
-  let rows = $derived(computeRows($activeMessages, myUsername));
+  let rows = $derived(computeRows(roomMessages, myUsername));
 
   // ---- Windowed rendering: only the newest WINDOW_STEP rows are in the
   // DOM; scrolling near the top reveals the next page (scroll position
@@ -1750,10 +1794,44 @@
   {/each}
 {/snippet}
 
-<main class="active-chat">
+<main class="active-chat" class:with-rooms={rooms.length > 0}>
   {#if !$activeChat}
     <div class="empty">{$t("Pick a chat on the left.")}</div>
   {:else}
+    {#if rooms.length && activeGroup}
+      <nav class="rooms" class:open={roomsOpen} aria-label={$t("Rooms")}>
+        <button class="rooms-head" onclick={() => openGroupPanel(activeGroup!.id)} title={$t("Group settings")}>
+          {#if $avatars[activeGroup.id]}<img src={$avatars[activeGroup.id]} alt="" />{:else}<span class="rh-ava" style:background={activeGroup.gradient}>{activeGroup.title.charAt(0).toUpperCase()}</span>{/if}
+          <span class="rh-name">{activeGroup.title}</span>
+          <span class="rh-chev">⌄</span>
+        </button>
+        <div class="rooms-list">
+          <div class="rooms-cat">{$t("Text rooms")}</div>
+          {#each textRooms as r (r.id)}
+            {@const n = roomUnread(r)}
+            <button class="room" class:active={activeRoom?.id === r.id} class:unread={n > 0} onclick={() => { pickRoom(r); roomsOpen = false; }}>
+              <span class="room-ic">{r.emoji ?? "#"}</span><span class="room-name">{r.name}</span>
+              {#if r.readonly}<span class="room-lock" title={$t("Only admins write here")}>🔒</span>{/if}
+              {#if n > 0}<span class="room-badge">{n > 99 ? "99+" : n}</span>{/if}
+            </button>
+          {/each}
+          {#if rooms.some((r) => r.kind === "voice")}
+            <div class="rooms-cat">{$t("Voice rooms")}</div>
+            {#each rooms.filter((r) => r.kind === "voice") as r (r.id)}
+              {@const live = $activeGroupCalls[activeGroup.id]}
+              <button class="room voice" onclick={() => pickRoom(r)}>
+                <span class="room-ic">🔊</span><span class="room-name">{r.name}</span>
+              </button>
+              {#if live?.users?.length}
+                <div class="room-people">
+                  {#each live.users.slice(0, 8) as u (u)}<span class="rp">{#if $avatars[u]}<img src={$avatars[u]} alt="" />{:else}{u.charAt(0).toUpperCase()}{/if}<i>{u}</i></span>{/each}
+                </div>
+              {/if}
+            {/each}
+          {/if}
+        </div>
+      </nav>
+    {/if}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <header
@@ -1785,7 +1863,10 @@
       <div class="peer-info">
         <h1 class="peer-name">
           {#if isGroup && activeGroup}
-            <span class="group-name-btn">{$activeChat.name}</span>
+            {#if activeRoom}
+              <button class="room-switch" onclick={(e) => { e.stopPropagation(); roomsOpen = !roomsOpen; }} title={$t("Rooms")}>{activeRoom.emoji ?? "#"} {activeRoom.name}</button>
+            {/if}
+            <span class="group-name-btn" class:dim={!!activeRoom}>{$activeChat.name}</span>
           {:else}
             {$activeChat.name}
             {#if $clans[$activeChat.id]}<span class="hdr-clan"><ClanTag tag={$clans[$activeChat.id]} /></span>{/if}
@@ -2449,7 +2530,7 @@
         <RichComposer
           bind:this={composerEl}
           bind:value={text}
-          placeholder={liveChat ? `Написать ${$activeChat.name.split(" ")[0]}...` : "Start a real chat first — see the banner above"}
+          placeholder={liveChat ? (activeRoom ? `Написать в #${activeRoom.name}…` : `Написать ${$activeChat.name.split(" ")[0]}...`) : "Start a real chat first — see the banner above"}
           resolve={(k) => emojiMap[k]}
           oninput={onComposerInput}
           onkeydown={onKey}
@@ -3437,6 +3518,43 @@
 
   /* Pinned-message bar */
   .plain-note { color: #f5b14c; }
+  /* ---- rooms sidebar ---- */
+  .active-chat.with-rooms { padding-left: 232px; }
+  .rooms { position: absolute; left: 0; top: 0; bottom: 0; width: 232px; display: flex; flex-direction: column;
+    background: color-mix(in srgb, var(--bg-list) 92%, transparent); border-right: 1px solid var(--border); z-index: 5;
+    animation: rooms-in .3s var(--ease-out, ease-out); }
+  @keyframes rooms-in { from { opacity: 0; transform: translateX(-8px); } }
+  .rooms-head { display: flex; align-items: center; gap: 10px; height: 64px; padding: 0 14px; border: none; border-bottom: 1px solid var(--border);
+    background: transparent; color: var(--fg); cursor: pointer; text-align: left; }
+  .rooms-head:hover { background: var(--bg-hover); }
+  .rooms-head img, .rh-ava { width: 30px; height: 30px; border-radius: 9px; object-fit: cover; display: grid; place-items: center; font-weight: 800; color: #06070c; flex-shrink: 0; }
+  .rh-name { flex: 1; font-weight: 800; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rh-chev { color: var(--fg-dim); }
+  .rooms-list { flex: 1; overflow-y: auto; padding: 8px; }
+  .rooms-cat { font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-dim); padding: 12px 8px 6px; }
+  .room { width: 100%; display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: none; border-radius: 8px; background: transparent;
+    color: var(--fg-muted); font-size: 14px; cursor: pointer; text-align: left; transition: background .15s, color .15s, transform .15s; }
+  .room:hover { background: var(--bg-hover); color: var(--fg); }
+  .room:active { transform: scale(.98); }
+  .room.active { background: var(--bg-active); color: var(--fg); box-shadow: inset 3px 0 0 var(--accent); }
+  .room.unread { color: var(--fg); font-weight: 700; }
+  .room-ic { width: 18px; text-align: center; color: var(--fg-dim); font-weight: 700; }
+  .room-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .room-lock { font-size: 11px; opacity: .7; }
+  .room-badge { min-width: 18px; padding: 0 6px; height: 18px; border-radius: 9px; background: var(--accent); color: #06070c; font-size: 11px; font-weight: 800; display: grid; place-items: center; }
+  .room-people { display: flex; flex-direction: column; gap: 4px; padding: 2px 0 6px 34px; }
+  .rp { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-muted); }
+  .rp img, .rp { --s: 20px; }
+  .rp img { width: 20px; height: 20px; border-radius: 50%; }
+  .rp i { font-style: normal; }
+  .room-switch { border: none; background: var(--accent-soft); color: var(--accent); border-radius: 8px; padding: 1px 8px; font: inherit; font-weight: 800; cursor: pointer; margin-right: 6px; }
+  .group-name-btn.dim { color: var(--fg-muted); font-weight: 600; font-size: .85em; }
+  @media (min-width: 761px) { .room-switch { pointer-events: none; } }
+  @media (max-width: 760px) {
+    .active-chat.with-rooms { padding-left: 0; }
+    .rooms { width: min(280px, 82vw); transform: translateX(-102%); transition: transform .3s var(--ease-out, ease); box-shadow: 0 0 40px rgba(0,0,0,.5); z-index: 30; animation: none; }
+    .rooms.open { transform: none; }
+  }
   .rules-bar { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-bottom: 1px solid var(--border);
     background: color-mix(in srgb, var(--acc) 12%, var(--bg-shell)); animation: rb-in .35s cubic-bezier(.2,.8,.2,1); }
   .rb-text { flex: 1; min-width: 0; font-size: 13px; }

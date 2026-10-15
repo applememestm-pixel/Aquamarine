@@ -73,6 +73,9 @@ pub struct MsgMeta {
     pub deleted: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub edits: Vec<String>,
+    /// Supergroup room (Discord-style channel) the message belongs to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub room: Option<String>,
 }
 
 /// Device-local behaviour switches set from the UI.
@@ -415,6 +418,43 @@ pub fn can_delete_others(g: &Group, who: &str) -> bool {
     }
 }
 
+/// A supergroup room (Discord-style channel), stored in the group snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Room {
+    pub id: String,
+    pub name: String,
+    /// "text" | "voice"
+    #[serde(default = "room_text")]
+    pub kind: String,
+    /// Only admins may post (announcements).
+    #[serde(default)]
+    pub readonly: bool,
+}
+fn room_text() -> String { "text".into() }
+
+/// The rooms of a supergroup with rooms turned on (empty otherwise).
+pub fn rooms_of(g: &Group) -> Vec<Room> {
+    if g.kind != "supergroup" || !g.settings.extra.get("rooms_enabled").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Vec::new();
+    }
+    g.extra.get("rooms").and_then(|v| serde_json::from_value::<Vec<Room>>(v.clone()).ok()).unwrap_or_default()
+}
+
+/// Which room a message to `g` lands in: the requested one if it exists,
+/// else the first text room; None when the group has no rooms.
+pub fn resolve_room(g: &Group, wanted: Option<&str>) -> Option<Room> {
+    let rooms: Vec<Room> = rooms_of(g).into_iter().filter(|r| r.kind == "text").collect();
+    if rooms.is_empty() {
+        return None;
+    }
+    wanted.and_then(|w| rooms.iter().find(|r| r.id == w).cloned()).or_else(|| rooms.first().cloned())
+}
+
+/// `may_post` plus the room rule (read-only rooms are for admins).
+pub fn may_post_in(g: &Group, author: &str, body: &str, room: Option<&Room>) -> bool {
+    may_post(g, author, body) && !(room.is_some_and(|r| r.readonly) && !g.is_admin(author))
+}
+
 pub fn may_post(g: &Group, author: &str, body: &str) -> bool {
     if !g.is_member(author) || g.is_banned(author) {
         return false;
@@ -494,6 +534,8 @@ pub struct AppState {
     pub prefs: LocalPrefs,
     /// Content hash of each chat as last written to the vault (history.rs).
     pub hist_hashes: HashMap<String, u64>,
+    /// Room the UI has open per supergroup; sends without a room go there.
+    pub active_rooms: HashMap<String, String>,
 }
 
 impl AppState {
@@ -671,6 +713,7 @@ impl AppState {
             groups,
             prefs: LocalPrefs::default(),
             hist_hashes,
+            active_rooms: HashMap::new(),
         }))
     }
 
