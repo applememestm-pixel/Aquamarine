@@ -1,5 +1,6 @@
 <script module lang="ts">
-  import { writable } from "svelte/store";
+  import { writable, get as getStore } from "svelte/store";
+  import { api as tauriApi } from "../tauri";
 
   interface State { imageBytes: number[]; mime: string; sourceName: string; pack?: string }
   export const stickerEditorState = writable<State | null>(null);
@@ -11,7 +12,34 @@
   export function openStickerEditor(imageBytes: number[], mime: string, sourceName: string, pack?: string) {
     stickerEditorState.set({ imageBytes, mime, sourceName, pack });
   }
-  export function closeStickerEditor() { stickerEditorState.set(null); }
+  export function closeStickerEditor() { stickerEditorState.set(null); stickerQueue.set(null); }
+
+  /** Making a whole pack: the editor walks through several pictures. */
+  interface Queue { paths: string[]; index: number; pack: string; saved: number }
+  export const stickerQueue = writable<Queue | null>(null);
+  const mimeOf = (p: string) => { const l = p.toLowerCase(); return l.endsWith(".png") ? "image/png" : l.endsWith(".webp") ? "image/webp" : l.endsWith(".gif") ? "image/gif" : "image/jpeg"; };
+  export async function openStickerQueue(paths: string[], pack: string) {
+    if (!paths.length) return;
+    stickerQueue.set({ paths, index: 0, pack, saved: 0 });
+    await openQueued();
+  }
+  async function openQueued() {
+    const q = getStore(stickerQueue);
+    if (!q) return;
+    const p = q.paths[q.index];
+    const bytes = await tauriApi.readUserImage(p);
+    stickerEditorState.set({ imageBytes: bytes, mime: mimeOf(p), sourceName: p.split(/[\\/]/).pop() ?? "sticker", pack: q.pack });
+  }
+  /** Next picture of the pack (after a save or a skip); false when done. */
+  export async function nextInQueue(savedOne: boolean): Promise<boolean> {
+    const q = getStore(stickerQueue);
+    if (!q) return false;
+    const saved = q.saved + (savedOne ? 1 : 0);
+    if (q.index + 1 >= q.paths.length) { stickerQueue.set({ ...q, saved }); return false; }
+    stickerQueue.set({ ...q, index: q.index + 1, saved });
+    await openQueued();
+    return true;
+  }
 </script>
 
 <script lang="ts">
@@ -96,7 +124,8 @@
     tool = "move"; tf = { x: 0, y: 0, scale: 1, rot: 0, flip: false };
     texts = []; selText = null; emojis = ["😀"]; emojiQuery = "";
     undoStack = []; redoStack = []; syncHistory();
-    processing = false; outline = true;
+    processing = false;
+    if (!$stickerQueue || $stickerQueue.index === 0) outline = true;
     stickerName = (s.sourceName || "sticker").replace(/\.[^.]+$/, "").replace(/[^\p{L}\p{N}_-]/gu, "_").slice(0, 32) || "sticker";
     strokesC.getContext("2d")!.clearRect(0, 0, S, S);
     srcC = maskC = cutC = null;
@@ -480,6 +509,13 @@
       const bytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
       await api.saveSticker(pack, `${emojis.join("")}_${stickerName.trim()}.${ext}`, bytes);
       stickerLibraryTick.update((n) => n + 1);
+      if ($stickerQueue) {
+        const q = $stickerQueue;
+        if (await nextInQueue(true)) { showToast(tr("Saved {i} of {n}", { i: q.index + 1, n: q.paths.length })); return; }
+        showToast(tr("Pack “{pack}” is ready — {n} stickers", { pack, n: q.saved + 1 }));
+        closeStickerEditor();
+        return;
+      }
       showToast(tr("Saved to “{pack}”", { pack }));
       closeStickerEditor();
     } catch (e) {
@@ -518,7 +554,7 @@
        onkeydown={() => {}}>
     <div class="sheet" role="dialog" aria-modal="true" tabindex="-1">
       <div class="head">
-        <h2>{$t("Sticker editor")}</h2>
+        <h2>{$t("Sticker editor")}{#if $stickerQueue}<span class="q-count"> · {$t("sticker {i} of {n}", { i: $stickerQueue.index + 1, n: $stickerQueue.paths.length })}</span>{/if}</h2>
         <div class="hist">
           <button class="ib" onclick={undo} disabled={!canUndo} title={$t("Undo (Ctrl+Z)")} aria-label={$t("Undo")}>↶</button>
           <button class="ib" onclick={redo} disabled={!canRedo} title={$t("Redo (Ctrl+Shift+Z)")} aria-label={$t("Redo")}>↷</button>
@@ -648,7 +684,13 @@
       </div>
 
       <div class="foot">
-        <button class="btn-ghost" onclick={closeStickerEditor} disabled={processing}>{$t("Cancel")}</button>
+        {#if $stickerQueue}
+          <div class="q-strip">
+            {#each $stickerQueue.paths as _, i (i)}<span class="q-dot" class:done={i < $stickerQueue.index} class:cur={i === $stickerQueue.index}></span>{/each}
+          </div>
+          <button class="btn-ghost" onclick={async () => { if (!(await nextInQueue(false))) closeStickerEditor(); }} disabled={processing}>{$t("Skip")}</button>
+        {/if}
+        <button class="btn-ghost" onclick={closeStickerEditor} disabled={processing}>{$t($stickerQueue ? "Finish" : "Cancel")}</button>
         <button class="btn-primary" onclick={save} disabled={processing}>{$t(processing ? "Saving…" : "Save sticker")}</button>
       </div>
     </div>
@@ -724,6 +766,11 @@
   .em:hover { background: var(--bg-hover); transform: scale(1.12); }
   .em.on { background: var(--accent-soft); border-color: var(--accent); }
   .link { align-self: flex-start; border: none; background: none; color: var(--accent); font-size: 12px; cursor: pointer; padding: 0; }
+  .q-count { color: var(--accent); font-weight: 700; }
+  .q-strip { flex: 1; display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+  .q-dot { width: 18px; height: 5px; border-radius: 3px; background: var(--border-strong); transition: background .3s, width .3s; }
+  .q-dot.done { background: var(--accent); opacity: .6; }
+  .q-dot.cur { background: var(--accent); width: 30px; }
   .foot { display: flex; justify-content: flex-end; gap: 10px; padding: 10px 14px; border-top: 1px solid var(--border); background: var(--bg-list); }
   .btn-ghost, .btn-primary { padding: 8px 18px; border-radius: 10px; font-size: 13px; font-weight: 700; cursor: pointer; border: none; }
   .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--fg-muted); }

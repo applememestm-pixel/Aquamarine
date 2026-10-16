@@ -32,6 +32,7 @@
   import type { Activity } from "../types";
   import { openRegistration, registrationDismissed } from "./RegistrationWizard.svelte";
   import { playedTop, played, gameGradient } from "../played";
+  import { gameIds, gameIcons, resolveGame, rememberGame, iconFor } from "../games";
 
   let pfTab = $state<"board" | "activity">("board");
   function hostOf(url: string): string {
@@ -68,13 +69,33 @@
   function addLink() { if (draft && (draft.links ?? []).length < 8) draft = { ...draft, links: [...(draft.links ?? []), { label: "", url: "https://" }] }; }
   function removeLink(i: number) { if (draft) draft = { ...draft, links: (draft.links ?? []).filter((_, j) => j !== i) }; }
   let gameInput = $state("");
-  function addGame() {
-    const g = gameInput.trim();
+  let gameHits = $state<{ id: string; name: string; has_icon: boolean }[]>([]);
+  let gameTimer: ReturnType<typeof setTimeout> | null = null;
+  $effect(() => {
+    const q = gameInput.trim();
+    if (gameTimer) clearTimeout(gameTimer);
+    if (q.length < 2) { gameHits = []; return; }
+    gameTimer = setTimeout(() => {
+      void api.gamesSearch(q).then((h) => { if (gameInput.trim() === q) { gameHits = h.slice(0, 8); h.slice(0, 8).forEach((x) => x.has_icon && resolveGame(x.name, x.id)); } }).catch(() => (gameHits = []));
+    }, 250);
+  });
+  function addGame(hit?: { id: string; name: string }) {
+    const g = (hit?.name ?? gameInput).trim();
     if (!draft || !g || (draft.games ?? []).includes(g) || (draft.games ?? []).length >= 12) return;
-    draft = { ...draft, games: [...(draft.games ?? []), g] };
-    gameInput = "";
+    const ids = { ...(draft.game_ids ?? {}) };
+    if (hit) { ids[g] = hit.id; rememberGame(g, hit.id); }
+    draft = { ...draft, games: [...(draft.games ?? []), g], game_ids: ids };
+    resolveGame(g, hit?.id);
+    gameInput = ""; gameHits = [];
   }
-  function removeGame(g: string) { if (draft) draft = { ...draft, games: (draft.games ?? []).filter((x) => x !== g) }; }
+  function removeGame(g: string) { if (draft) { const ids = { ...(draft.game_ids ?? {}) }; delete ids[g]; draft = { ...draft, games: (draft.games ?? []).filter((x) => x !== g), game_ids: ids }; } }
+  // Look up icons for whatever is on screen.
+  $effect(() => {
+    const v = view;
+    if (!v) return;
+    for (const g of v.games) resolveGame(g, v.game_ids[g]);
+    for (const p of v.played) resolveGame(p.n);
+  });
 
   async function logOut() {
     try {
@@ -192,6 +213,7 @@
     music_title: string;
     links: { label: string; url: string }[];
     games: string[];
+    game_ids: Record<string, string>;
     played: { n: string; h: number }[];
   }
   let view = $derived<View | null>((void $played, buildView(activeUsername, $profile, $contacts, $info, $peerCards, $peerPresence, $myActivity)));
@@ -246,6 +268,7 @@
         music_title: me.music_title ?? "",
         links: asLinks(me.links),
         games: asGames(me.games),
+        game_ids: me.game_ids ?? {},
         played: getStore(shareActivity) ? playedTop(12).map((g) => ({ n: g.name, h: Math.round(g.secs / 360) / 10 })) : [],
       };
     }
@@ -277,6 +300,7 @@
       music_title: str(x.music_title),
       links: asLinks(x.links),
       games: asGames(x.games),
+      game_ids: (x.game_ids && typeof x.game_ids === "object" ? x.game_ids : {}) as Record<string, string>,
       played: asPlayed(x.played),
     };
   }
@@ -433,11 +457,25 @@
           <div class="field">
             <span>{$t("Favourite games")}</span>
             <div class="game-chips">
-              {#each draft.games ?? [] as g (g)}<span class="game-chip" style:background={gameGradient(g)}>{g}<button onclick={() => removeGame(g)} title={$t("Remove")}>×</button></span>{/each}
+              {#each draft.games ?? [] as g (g)}
+                {@const ic = iconFor(g, $gameIds, $gameIcons, draft.game_ids)}
+                <span class="game-chip" style:background={gameGradient(g)}>{#if ic}<img src={ic} alt="" />{/if}{g}<button onclick={() => removeGame(g)} title={$t("Remove")}>×</button></span>
+              {/each}
             </div>
-            <div class="link-edit">
-              <input class="le-url" bind:value={gameInput} placeholder={$t("Teardown, Minecraft…")} onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); addGame(); } }} />
-              <button class="btn-ghost small" onclick={addGame}>{$t("Add")}</button>
+            <div class="link-edit game-search">
+              <input class="le-url" bind:value={gameInput} placeholder={$t("Search a game — Teardown, Minecraft…")} onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); addGame(gameHits[0] && gameHits[0].name.toLowerCase() === gameInput.trim().toLowerCase() ? gameHits[0] : undefined); } }} />
+              <button class="btn-ghost small" onclick={() => addGame()}>{$t("Add")}</button>
+              {#if gameHits.length}
+                <div class="game-hits">
+                  {#each gameHits as h (h.id)}
+                    {@const ic = $gameIcons[h.id]}
+                    <button class="game-hit" onclick={() => addGame(h)}>
+                      {#if ic}<img src={ic} alt="" />{:else}<span class="gh-ph" style:background={gameGradient(h.name)}>{h.name.charAt(0)}</span>{/if}
+                      <span>{h.name}</span>
+                    </button>
+                  {/each}
+                </div>
+              {/if}
             </div>
           </div>
           <label class="field">
@@ -619,19 +657,37 @@
               </section>
             {/if}
 
-            {#if view.games.length || view.played.length}
+            {#if view.games.length}
               <section class="card">
-                <div class="section-label">{$t("Game collection")}</div>
+                <div class="section-label">{$t("Favourite games")}</div>
                 <div class="games">
-                  {#each [...new Set([...view.games, ...view.played.map((g) => g.n)])].slice(0, 12) as g (g)}
+                  {#each view.games as g (g)}
                     {@const pl = view.played.find((x) => x.n === g)}
-                    <div class="game" style:background={gameGradient(g)} title={g}>
+                    {@const ic = iconFor(g, $gameIds, $gameIcons, view.game_ids)}
+                    <div class="game" title={g} style:--gg={gameGradient(g)}>
+                      {#if ic}<img class="game-bg" src={ic} alt="" /><img class="game-ic" src={ic} alt="" />{:else}<span class="game-ph">{g.charAt(0).toUpperCase()}</span>{/if}
                       <span class="game-name">{g}</span>
                       {#if pl && pl.h > 0}<span class="game-h">{pl.h} {$t("h")}</span>{/if}
-                      {#if view.games.includes(g)}<span class="game-fav" title={$t("Favourite")}>★</span>{/if}
                     </div>
                   {/each}
                 </div>
+              </section>
+            {/if}
+            {#if view.played.length || view.games.length}
+              {@const all = [...new Set([...view.played.map((g) => g.n), ...view.games])]}
+              <section class="card">
+                <div class="section-label">{$t("All games")} · {all.length}</div>
+                {#each all as g (g)}
+                  {@const pl = view.played.find((x) => x.n === g)}
+                  {@const ic = iconFor(g, $gameIds, $gameIcons, view.game_ids)}
+                  {@const max = Math.max(1, ...view.played.map((x) => x.h))}
+                  <div class="played-row">
+                    {#if ic}<img class="played-cover" src={ic} alt="" />{:else}<span class="played-cover" style:background={gameGradient(g)}>{g.charAt(0).toUpperCase()}</span>{/if}
+                    <span class="played-name">{g}{#if view.games.includes(g)} <span class="game-star">★</span>{/if}</span>
+                    {#if pl}<span class="played-bar"><span style:width="{Math.max(4, (pl.h / max) * 100)}%"></span></span>{/if}
+                    <span class="played-h">{pl ? (pl.h > 0 ? `${pl.h} ${$t("h")}` : $t("< 1 h")) : ""}</span>
+                  </div>
+                {/each}
               </section>
             {/if}
 
@@ -659,8 +715,9 @@
             {#if view.played.length}
               <div class="section-label" style="margin-top:10px">{$t("Played recently")}</div>
               {#each view.played as g (g.n)}
+                {@const ic = iconFor(g.n, $gameIds, $gameIcons)}
                 <div class="played-row">
-                  <span class="played-cover" style:background={gameGradient(g.n)}>{g.n.charAt(0).toUpperCase()}</span>
+                  {#if ic}<img class="played-cover" src={ic} alt="" />{:else}<span class="played-cover" style:background={gameGradient(g.n)}>{g.n.charAt(0).toUpperCase()}</span>{/if}
                   <span class="played-name">{g.n}</span>
                   <span class="played-h">{g.h > 0 ? `${g.h} ${$t("h")}` : $t("< 1 h")}</span>
                 </div>
@@ -707,11 +764,28 @@
   .link-go { color: var(--fg-dim); font-size: 12px; }
   .games { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; margin-top: 8px; }
   .game {
-    position: relative; aspect-ratio: 3 / 4; border-radius: 10px; padding: 8px;
-    display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden;
-    color: #fff; box-shadow: inset 0 -40px 40px -20px rgba(0, 0, 0, 0.55);
-    transition: transform 0.15s ease;
+    position: relative; aspect-ratio: 3 / 4; border-radius: 12px; padding: 8px;
+    display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-start; overflow: hidden;
+    color: #fff; background: var(--gg); box-shadow: inset 0 -50px 40px -20px rgba(0, 0, 0, 0.6);
+    transition: transform 0.2s cubic-bezier(.2,.8,.2,1), box-shadow .2s;
   }
+  .game:hover { box-shadow: inset 0 -50px 40px -20px rgba(0,0,0,.6), 0 10px 24px -10px rgba(0,0,0,.6); }
+  .game-bg { position: absolute; inset: -20%; width: 140%; height: 140%; object-fit: cover; filter: blur(18px) saturate(1.4) brightness(.7); }
+  .game-ic { position: absolute; top: 18%; left: 50%; transform: translateX(-50%); width: 52%; aspect-ratio: 1; border-radius: 14px;
+    box-shadow: 0 8px 20px rgba(0,0,0,.45); }
+  .game-ph { position: absolute; top: 22%; left: 50%; transform: translateX(-50%); font-size: 34px; font-weight: 900; opacity: .9; }
+  .game-name, .game-h { position: relative; }
+  .game-star { color: #FFD45C; font-size: 11px; }
+  .played-bar { flex: 0 0 70px; height: 5px; border-radius: 3px; background: var(--bg-input); overflow: hidden; }
+  .played-bar span { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+  img.played-cover { object-fit: cover; }
+  .game-chip img { width: 16px; height: 16px; border-radius: 4px; margin-right: 5px; vertical-align: -3px; }
+  .game-search { position: relative; }
+  .game-hits { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 20; background: var(--bg-shell); border: 1px solid var(--border-strong);
+    border-radius: 12px; padding: 4px; box-shadow: 0 18px 40px -14px rgba(0,0,0,.7); max-height: 260px; overflow-y: auto; }
+  .game-hit { width: 100%; display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: none; border-radius: 8px; background: none; color: var(--fg); font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
+  .game-hit:hover { background: var(--accent-soft); }
+  .game-hit img, .gh-ph { width: 28px; height: 28px; border-radius: 7px; object-fit: cover; flex-shrink: 0; display: grid; place-items: center; color: #fff; font-weight: 800; }
   .game:hover { transform: translateY(-2px); }
   .game-name { font-size: 12px; font-weight: 700; line-height: 1.2; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6); }
   .game-h { font-size: 10.5px; opacity: 0.85; }

@@ -132,6 +132,43 @@ pub fn save_temp_file(state: State<'_, StdMutex<AppState>>, name: String, bytes:
     Ok(p.display().to_string())
 }
 
+// ---- game catalogue (via the relay) --------------------------------------------
+
+#[derive(serde::Serialize)]
+pub struct GameHit { pub id: String, pub name: String, pub has_icon: bool }
+
+#[tauri::command]
+pub async fn games_search(state: State<'_, StdMutex<AppState>>, q: String) -> Result<Vec<GameHit>, String> {
+    let t = { state.lock().map_err(|e| e.to_string())?.transport.clone().ok_or("not connected")? };
+    let v = t.games_search(q.trim()).await.map_err(|e| e.to_string())?;
+    Ok(v.into_iter().map(|(id, name, has_icon)| GameHit { id, name, has_icon }).collect())
+}
+
+/// Local path of a game's icon (downloaded from the relay once).
+#[tauri::command]
+pub async fn game_icon(state: State<'_, StdMutex<AppState>>, id: String) -> Result<Option<String>, String> {
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) || id.len() > 24 {
+        return Ok(None);
+    }
+    let (dir, t) = {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        (s.data_dir.join("game-icons"), s.transport.clone())
+    };
+    let file = dir.join(format!("{id}.png"));
+    if file.exists() {
+        return Ok(Some(file.display().to_string()));
+    }
+    let Some(t) = t else { return Ok(None) };
+    match t.game_icon(&id).await.map_err(|e| e.to_string())? {
+        Some(b) => {
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            std::fs::write(&file, b).map_err(|e| e.to_string())?;
+            Ok(Some(file.display().to_string()))
+        }
+        None => Ok(None),
+    }
+}
+
 // ---- wallpapers -------------------------------------------------------------
 
 fn wallpapers_dir(state: &State<'_, StdMutex<AppState>>) -> Result<std::path::PathBuf, String> {

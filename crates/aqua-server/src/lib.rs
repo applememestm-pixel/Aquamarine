@@ -29,6 +29,7 @@ pub mod auth;
 pub mod packs;
 pub mod blobstore;
 pub mod fed;
+pub mod games;
 pub mod directory;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
@@ -112,6 +113,8 @@ pub struct AppState {
     pub bot_queues: Arc<DashMap<String, Arc<Mutex<BotQueue>>>>,
     /// Rate limits of the bot API.
     pub bot_limits: Arc<BotLimits>,
+    /// Game catalogue (names + icons) for profiles.
+    pub games: games::GameDb,
     /// When true, only usernames registered in the directory (email-verified)
     /// may upload a bundle or open a WebSocket. This makes email registration
     /// mandatory — no ephemeral unregistered handles. Toggle off for an open
@@ -206,6 +209,7 @@ impl AppState {
             directory,
             bot_queues: Arc::new(DashMap::new()),
             bot_limits: Arc::new(BotLimits::default()),
+            games: games::GameDb::default(),
             require_registration,
             admin: Arc::new(std::sync::RwLock::new(AdminConfig::load())),
             fed: fed::slot_from_config(),
@@ -1147,6 +1151,22 @@ async fn bot_send(
     Ok(StatusCode::NO_CONTENT)
 }
 
+// ---------- Game catalogue ---------------------------------------------------
+
+#[derive(Deserialize)]
+struct GameQuery { #[serde(default)] q: String }
+
+async fn games_search(State(state): State<AppState>, Query(q): Query<GameQuery>) -> Json<Vec<games::Hit>> {
+    let q = q.q.chars().take(64).collect::<String>();
+    let list = state.games.get().await;
+    Json(games::search(&list, &q, 20))
+}
+
+async fn games_icon(State(state): State<AppState>, Path(id): Path<String>) -> Result<impl IntoResponse, StatusCode> {
+    let b = state.games.icon(&id).await.ok_or(StatusCode::NOT_FOUND)?;
+    Ok(([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "public, max-age=604800")], b))
+}
+
 // ---------- Server stats (for the control-panel GUI) -----------------------
 
 #[derive(serde::Serialize)]
@@ -1438,6 +1458,8 @@ pub fn app(state: AppState) -> Router {
                 .layer(DefaultBodyLimit::max(directory::PROFILE_MEDIA_LIMIT + 1024)),
         )
         .route("/v1/users/:user/media_acl", post(put_media_acl))
+        .route("/v1/games/search",       get(games_search))
+        .route("/v1/games/icon/:id",     get(games_icon))
         .route("/v1/bot/register",       post(bot_register))
         .route("/v1/bot/list",           get(bot_list))
         .route("/v1/bot/updates",        get(bot_updates))

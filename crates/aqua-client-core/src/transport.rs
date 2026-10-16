@@ -678,6 +678,32 @@ impl Transport {
         Ok(r.bytes().await?.to_vec())
     }
 
+    /// Search the relay's game catalogue: [(id, name, has_icon)].
+    pub async fn games_search(&self, q: &str) -> Result<Vec<(String, String, bool)>, TransportError> {
+        #[derive(serde::Deserialize)]
+        struct Hit { id: String, name: String, #[serde(default)] has_icon: bool }
+        let url = format!("{}/v1/games/search", self.server_url.trim_end_matches('/'));
+        let r = self.http.get(&url).query(&[("q", q)]).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        let v: Vec<Hit> = r.json().await?;
+        Ok(v.into_iter().map(|h| (h.id, h.name, h.has_icon)).collect())
+    }
+
+    /// PNG icon of a game from the relay (None when it has none).
+    pub async fn game_icon(&self, id: &str) -> Result<Option<Vec<u8>>, TransportError> {
+        let url = format!("{}/v1/games/icon/{}", self.server_url.trim_end_matches('/'), id);
+        let r = self.http.get(&url).send().await?;
+        if r.status().as_u16() == 404 {
+            return Ok(None);
+        }
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(Some(r.bytes().await?.to_vec()))
+    }
+
     /// List bots owned by this identity. Returns (username, token, display
     /// name, token hint). Current relays keep only a hash, so `token` is
     /// empty and `hint` holds its last 4 characters.

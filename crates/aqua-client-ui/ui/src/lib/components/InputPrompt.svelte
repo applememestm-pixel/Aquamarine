@@ -104,7 +104,7 @@
     background: rgba(6,7,12,0.6);
     backdrop-filter: blur(6px);
     display: grid; place-items: center;
-    z-index: 200;
+    z-index: 290;
     padding: 20px;
   }
   .dialog {

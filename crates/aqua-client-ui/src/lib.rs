@@ -106,6 +106,8 @@ pub fn run() -> Result<()> {
             personal::save_temp_file,
             personal::set_window_icon,
             personal::save_wallpaper,
+            personal::games_search,
+            personal::game_icon,
             personal::list_wallpapers,
             personal::delete_wallpaper,
             commands::fed_peers,

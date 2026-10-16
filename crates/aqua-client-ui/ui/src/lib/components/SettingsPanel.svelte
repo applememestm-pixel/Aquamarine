@@ -19,7 +19,8 @@
   import { openFileDialog } from "../dialog";
   import { ICON_PRESETS, logoSvg, svgDataUrl, colorsFromAccent, setAppIcon } from "../appIcon";
   import { cropImage } from "./ImageCropper.svelte";
-  import { openStickerEditor, stickerLibraryTick } from "./StickerEditor.svelte";
+  import { openStickerEditor, openStickerQueue, stickerLibraryTick } from "./StickerEditor.svelte";
+  import { askInput, closeInput } from "./InputPrompt.svelte";
   import AnimatedMedia from "./AnimatedMedia.svelte";
   import type { StickerPack } from "../types";
   import { api, bytesToDataUrl, assetUrl } from "../tauri";
@@ -409,6 +410,32 @@
       openStickerEditor(bytes, mime, path.split(/[\\/]/).pop() ?? "sticker", pack);
     } catch (e) { showToast(`${e}`); }
   }
+  /** A whole pack: name it, pick the pictures, the editor walks through them. */
+  async function pickMany(title: string): Promise<string[]> {
+    const result = await openFileDialog({ multiple: true, directory: false, title, filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }] });
+    return Array.isArray(result) ? result : result ? [result] : [];
+  }
+  function newPackFlow() {
+    askInput({
+      title: tr("New sticker pack"),
+      description: tr("Then pick the pictures — several at once. The editor opens each in turn: cut out, caption, emoji."),
+      fields: [{ label: tr("Pack name"), placeholder: tr("My stickers") }],
+      submitLabel: tr("Pick pictures"),
+      onSubmit: async ([name]) => {
+        const n = name.trim();
+        if (!n) return tr("Give the pack a name");
+        if (myPacks.some((p) => p.title === n)) return tr("A pack with this name already exists");
+        closeInput();
+        const paths = await pickMany(tr("Pictures for “{p}”", { p: n }));
+        if (paths.length) await openStickerQueue(paths, n);
+        return null;
+      },
+    });
+  }
+  async function addManyTo(pack: string) {
+    try { const paths = await pickMany(tr("Pictures for “{p}”", { p: pack })); if (paths.length) await openStickerQueue(paths, pack); }
+    catch (e) { showToast(`${e}`); }
+  }
   async function deleteMySticker(path: string) {
     try { await api.deleteMediaItem(path); await loadMyPacks(); } catch (e) { showToast(`${e}`); }
   }
@@ -762,7 +789,8 @@
       <section class="group">
         <div class="label">{$t("Your stickers")}</div>
         <div class="my-actions">
-          <button class="mini-btn primary" onclick={() => newSticker()}>＋ {$t("New sticker")}</button>
+          <button class="mini-btn primary" onclick={newPackFlow}>＋ {$t("New pack")}</button>
+          <button class="mini-btn" onclick={() => newSticker()}>＋ {$t("New sticker")}</button>
           <button class="mini-btn" onclick={() => openStickerEditor([], "", "text", myPacks[0]?.title)}>Aa {$t("Text sticker")}</button>
         </div>
         {#if myPacks.length === 0}
@@ -794,7 +822,7 @@
                       <button class="mp-del" onclick={() => deleteMySticker(it.path)} title={$t("Delete")} aria-label={$t("Delete")}>×</button>
                     </div>
                   {/each}
-                  <button class="mp-add" onclick={() => newSticker(p.title)} title={$t("New sticker")}>＋</button>
+                  <button class="mp-add" onclick={() => addManyTo(p.title)} title={$t("Add stickers — several at once")}>＋</button>
                 </div>
                 <div class="my-actions">
                   <button class="mini-btn" onclick={() => { renaming = p.title; renameTo = p.title; }}>{$t("Rename")}</button>

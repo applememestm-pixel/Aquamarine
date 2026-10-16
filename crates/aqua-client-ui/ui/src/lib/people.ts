@@ -161,6 +161,7 @@ function myExtra(p: Profile): Record<string, unknown> {
     clan: p.clan ?? null,
     links: (p.links ?? []).filter((l) => /^https?:\/\//i.test(l.url)).slice(0, 8),
     games: (p.games ?? []).slice(0, 12),
+    game_ids: Object.fromEntries(Object.entries(p.game_ids ?? {}).filter(([n]) => (p.games ?? []).includes(n)).slice(0, 12)),
     // Auto "game collection": top games by play time, only while sharing activity.
     played: get(shareActivity) ? playedTop(8).map((g) => ({ n: g.name, h: Math.round(g.secs / 360) / 10 })) : [],
   };
