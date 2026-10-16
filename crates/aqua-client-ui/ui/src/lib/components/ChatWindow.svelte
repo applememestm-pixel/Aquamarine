@@ -1014,9 +1014,31 @@
       }
     }
   });
+  // ---- voice room full screen (Discord) ----
+  let voiceView = $state<Record<string, string>>({});   // gid → voice room id
+  let voiceChat = $state(false);
+  let headerH = $state(64);
+  let inMyCall = $derived(!!activeGroup && $groupCall?.gid === activeGroup.id);
+  let fullVoice = $derived(!!activeGroup && !!voiceView[activeGroup.id] && inMyCall);
+  let voiceRoomName = $derived(activeGroup ? rooms.find((r) => r.id === voiceView[activeGroup.id])?.name ?? "" : "");
+  // The call ended → back to the chat.
+  let hadCall = false;
+  $effect(() => {
+    const on = !!$groupCall;
+    if (hadCall && !on) voiceView = {};
+    hadCall = on;
+  });
+  function openVoiceFull() { if (activeGroup) voiceView = { ...voiceView, [activeGroup.id]: rooms.find((r) => r.kind === "voice")?.id ?? "voice" }; }
+
   function pickRoom(r: Room) {
     if (!activeGroup) return;
-    if (r.kind === "voice") { void joinGroupCall(activeGroup.id); return; }
+    if (r.kind === "voice") {
+      voiceView = { ...voiceView, [activeGroup.id]: r.id };
+      voiceChat = false;
+      if (!inMyCall) void joinGroupCall(activeGroup.id);
+      return;
+    }
+    if (voiceView[activeGroup.id]) { const { [activeGroup.id]: _, ...rest } = voiceView; voiceView = rest; }
     roomPick = { ...roomPick, [activeGroup.id]: r.id };
     try { localStorage.setItem(ROOM_KEY, JSON.stringify(roomPick)); } catch { /* ignore */ }
   }
@@ -1794,7 +1816,7 @@
   {/each}
 {/snippet}
 
-<main class="active-chat" class:with-rooms={rooms.length > 0}>
+<main class="active-chat" class:with-rooms={rooms.length > 0} class:voice-on={fullVoice} class:voice-chat={fullVoice && voiceChat}>
   {#if !$activeChat}
     <div class="empty">{$t("Pick a chat on the left.")}</div>
   {:else}
@@ -1819,12 +1841,12 @@
             <div class="rooms-cat">{$t("Voice rooms")}</div>
             {#each rooms.filter((r) => r.kind === "voice") as r (r.id)}
               {@const live = $activeGroupCalls[activeGroup.id]}
-              <button class="room voice" onclick={() => pickRoom(r)}>
+              <button class="room voice" class:active={fullVoice && voiceView[activeGroup.id] === r.id} onclick={() => pickRoom(r)}>
                 <span class="room-ic">🔊</span><span class="room-name">{r.name}</span>
               </button>
               {#if live?.users?.length}
                 <div class="room-people">
-                  {#each live.users.slice(0, 8) as u (u)}<span class="rp">{#if $avatars[u]}<img src={$avatars[u]} alt="" />{:else}{u.charAt(0).toUpperCase()}{/if}<i>{u}</i></span>{/each}
+                  {#each live.users.slice(0, 8) as u (u)}<span class="rp">{#if $avatars[u]}<img src={$avatars[u]} alt="" />{:else}<b class="rp-l">{u.charAt(0).toUpperCase()}</b>{/if}<i>{u}</i></span>{/each}
                 </div>
               {/if}
             {/each}
@@ -1835,6 +1857,7 @@
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <header
+      bind:clientHeight={headerH}
       class="chat-header"
       class:clickable={$activeChat.id !== "__saved__"}
       onclick={(e) => {
@@ -1953,7 +1976,12 @@
         <button class="icon-btn" title="Shared media & files" onclick={toggleSharedMedia}>{@html icons.info}</button>
       </div>
     </header>
-    {#if isGroup && activeGroup}<GroupCallPanel gid={activeGroup.id} />{/if}
+    {#if isGroup && activeGroup && !fullVoice}<GroupCallPanel gid={activeGroup.id} onExpand={rooms.length ? openVoiceFull : undefined} />{/if}
+    {#if fullVoice && activeGroup}
+      <div class="voice-full" class:with-chat={voiceChat} style:top="{headerH}px">
+        <GroupCallPanel gid={activeGroup.id} mode="full" roomName={voiceRoomName} chatOpen={voiceChat} onToggleChat={() => (voiceChat = !voiceChat)} />
+      </div>
+    {/if}
 
     {#if searchOpen}
       <div class="search-bar">
@@ -3518,6 +3546,16 @@
 
   /* Pinned-message bar */
   .plain-note { color: #f5b14c; }
+  /* ---- voice room full screen ---- */
+  .voice-full { position: absolute; left: 0; right: 0; bottom: 0; z-index: 4; animation: vf-in .35s cubic-bezier(.2,.8,.2,1); }
+  @keyframes vf-in { from { opacity: 0; transform: scale(.985); } }
+  .active-chat.with-rooms .voice-full { left: 232px; }
+  .voice-full.with-chat { right: 380px; border-right: 1px solid var(--border); }
+  .active-chat.voice-chat > :not(.chat-header):not(.rooms):not(.voice-full) { align-self: flex-end; width: 380px; max-width: 380px; box-sizing: border-box; }
+  .active-chat.voice-on:not(.voice-chat) .composer-note { visibility: hidden; }
+  .active-chat.voice-chat .kbds { display: none; }
+  .rp-l { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 10px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070c; }
+  @media (max-width: 760px) { .active-chat.with-rooms .voice-full { left: 0; } .voice-full.with-chat { right: 0; top: auto !important; height: 45%; } }
   /* ---- rooms sidebar ---- */
   .active-chat.with-rooms { padding-left: 232px; }
   .rooms { position: absolute; left: 0; top: 0; bottom: 0; width: 232px; display: flex; flex-direction: column;

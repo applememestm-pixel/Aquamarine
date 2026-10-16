@@ -11,7 +11,8 @@
   import { isAdmin } from "../groupRules";
   import { t } from "../i18n";
 
-  let { gid, mode = "stage" }: { gid: string; mode?: "stage" | "pill" } = $props();
+  let { gid, mode = "stage", roomName = "", chatOpen = false, onToggleChat, onExpand }:
+    { gid: string; mode?: "stage" | "pill" | "full"; roomName?: string; chatOpen?: boolean; onToggleChat?: () => void; onExpand?: () => void } = $props();
   let collapsed = $state(false);
   let focus = $state<string | null>(null);
   let now = $state(Date.now());
@@ -62,21 +63,34 @@
     </div>
   {/if}
 {:else if mine}
-  <section class="stage" class:collapsed>
+  <section class="stage" class:full={mode === "full"} class:collapsed={collapsed && mode !== "full"}>
     <div class="st-head">
       <span class="live-dot"></span>
-      <b>{isChannel ? $t("Live stream") : $t("Voice chat")}</b>
+      {#if mode === "full"}
+        <b class="fu-room">🔊 {roomName || $t("Voice chat")}</b>
+      {:else}
+        <b>{isChannel ? $t("Live stream") : $t("Voice chat")}</b>
+      {/if}
       <span class="st-sub">{$t("{n} in the call", { n: Math.max(tiles.length, ongoing?.users.length ?? 0) })} · {elapsed}</span>
-      <button class="st-x" onclick={() => (collapsed = !collapsed)} title={collapsed ? $t("Expand") : $t("Collapse")}>{collapsed ? "▾" : "▴"}</button>
+      {#if mode === "full"}
+        <button class="fu-chat" class:on={chatOpen} onclick={() => onToggleChat?.()} title={$t("Chat")}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span>{$t(chatOpen ? "Hide chat" : "Chat")}</span>
+        </button>
+      {:else}
+        {#if onExpand}<button class="st-x" onclick={() => onExpand?.()} title={$t("Full screen")}>⤢</button>{/if}
+        <button class="st-x" onclick={() => (collapsed = !collapsed)} title={collapsed ? $t("Expand") : $t("Collapse")}>{collapsed ? "▾" : "▴"}</button>
+      {/if}
     </div>
-    {#if !collapsed}
-      <div class="grid" class:focus={!!focus} style:--n={Math.min(4, Math.max(1, shown.length))}>
+    {#if !collapsed || mode === "full"}
+      <div class="grid" class:focus={!!focus} class:solo={shown.length === 1} style:--n={Math.min(4, Math.max(1, shown.length))}>
         {#each shown as tl (tl.user)}
           <button class="tile" class:speaking={tl.speaking && !tl.muted} class:video={tl.video} onclick={() => (focus = focus === tl.user ? null : tl.user)}>
             {#if tl.video && tl.stream}
               <!-- svelte-ignore a11y_media_has_caption -->
               <video use:srcObject={tl.stream} autoplay playsinline muted class:mirror={tl.me && mine.camera}></video>
             {:else}
+              {#if mode === "full" && $avatars[tl.user]}<img class="tile-bg" src={$avatars[tl.user]} alt="" />{/if}
               <span class="ava">{#if $avatars[tl.user]}<img src={$avatars[tl.user]} alt="" />{:else}{tl.user.charAt(0).toUpperCase()}{/if}</span>
             {/if}
             <span class="name">{tl.me ? $t("You") : tl.user}{#if tl.muted}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="2" y1="2" x2="22" y2="22"/><path d="M15 9.3V5a3 3 0 0 0-5.7-1.3"/><path d="M9 9v3a3 3 0 0 0 5.1 2.1"/></svg>{/if}</span>
@@ -134,8 +148,31 @@
   }
   .st-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; font-size: 13px; color: var(--fg); }
   .st-sub { color: var(--fg-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-  .st-x { margin-left: auto; background: none; border: none; color: var(--fg-dim); cursor: pointer; font-size: 14px; }
+  .st-sub { margin-right: auto; }
+  .st-x { background: none; border: none; color: var(--fg-dim); cursor: pointer; font-size: 14px; }
   .grid { display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); gap: 8px; padding: 0 12px 4px; max-height: 340px; overflow-y: auto; }
+  .grid.solo { grid-template-columns: minmax(0, 420px); justify-content: center; }
+  /* ---- full screen (Discord voice channel) ---- */
+  .stage.full { margin: 0; height: 100%; border-radius: 0; border: none; display: flex; flex-direction: column;
+    background: radial-gradient(900px 400px at 50% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 70%), #08090f; }
+  .stage.full .st-head { padding: 12px 18px; font-size: 14px; }
+  .fu-room { font-size: 15px; }
+  .fu-chat { display: flex; align-items: center; gap: 6px; border: 1px solid var(--border-strong); background: var(--bg-input); color: var(--fg);
+    border-radius: 10px; padding: 7px 12px; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; transition: background .2s, color .2s, border-color .2s; }
+  .fu-chat svg { width: 16px; height: 16px; }
+  .fu-chat:hover, .fu-chat.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+  .stage.full .grid { flex: 1; max-height: none; padding: 8px 24px; align-content: center; gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
+  .stage.full .grid.solo { grid-template-columns: minmax(0, min(100%, 760px)); }
+  .stage.full .grid.focus { grid-template-columns: 1fr; }
+  .stage.full .tile { border-radius: 16px; background: #15171f; animation: tile-in .35s cubic-bezier(.2,.9,.25,1.1) both; }
+  @keyframes tile-in { from { opacity: 0; transform: scale(.94); } }
+  .stage.full .ava { width: 96px; height: 96px; font-size: 38px; position: relative; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
+  .stage.full .tile.speaking .ava { box-shadow: 0 0 0 4px #3ddc84, 0 10px 30px rgba(0,0,0,.5); }
+  .tile-bg { position: absolute; inset: -20%; width: 140%; height: 140%; object-fit: cover; filter: blur(30px) brightness(.45) saturate(1.3); }
+  .stage.full .name { font-size: 13px; left: 12px; bottom: 10px; }
+  .stage.full .ctrls { padding: 14px 0 20px; }
+  .stage.full .cb { width: 50px; height: 50px; }
   .grid.focus { grid-template-columns: 1fr; }
   .tile {
     position: relative; aspect-ratio: 16 / 9; border-radius: 12px; background: var(--bg-input); border: 2px solid transparent;
