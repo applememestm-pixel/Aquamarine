@@ -342,6 +342,11 @@ impl Directory {
                 at   INTEGER NOT NULL,
                 PRIMARY KEY (bot, user)
             );
+            CREATE TABLE IF NOT EXISTS prekeys (
+                username   TEXT PRIMARY KEY,
+                data       TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS profile_media (
                 username   TEXT NOT NULL,
                 kind       TEXT NOT NULL,
@@ -879,6 +884,42 @@ impl Directory {
             rusqlite::params![username, data, updated_at],
         )
         .is_ok()
+    }
+
+    /// Something to compare: (newest account change, newest backup). When
+    /// it moves, this relay tells its peers to pull right away.
+    pub fn change_mark(&self) -> (i64, i64) {
+        let db = self.db.lock().unwrap();
+        let u = db.query_row("SELECT COALESCE(MAX(updated_at), 0) FROM users", [], |r| r.get(0)).unwrap_or(0);
+        let b = db.query_row("SELECT COALESCE(MAX(updated_at), 0) FROM backups", [], |r| r.get(0)).unwrap_or(0);
+        (u, b)
+    }
+
+    /// (avatar, banner, music) versions of a user's profile media.
+    pub fn media_versions(&self, username: &str) -> Option<(i64, i64, i64)> {
+        let db = self.db.lock().unwrap();
+        db.query_row(
+            "SELECT avatar_ver, banner_ver, music_ver FROM users WHERE username=?1",
+            rusqlite::params![username],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .ok()
+    }
+
+    // ---- prekeys: kept on disk so a restart doesn't make users unreachable ----
+
+    pub fn prekeys_put(&self, username: &str, json: &str) {
+        let db = self.db.lock().unwrap();
+        let _ = db.execute(
+            "INSERT INTO prekeys (username, data, updated_at) VALUES (?1, ?2, CAST(strftime('%s','now') AS INTEGER))
+             ON CONFLICT(username) DO UPDATE SET data=?2, updated_at=CAST(strftime('%s','now') AS INTEGER)",
+            rusqlite::params![username, json],
+        );
+    }
+
+    pub fn prekeys_get(&self, username: &str) -> Option<String> {
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT data FROM prekeys WHERE username=?1", rusqlite::params![username], |r| r.get(0)).ok()
     }
 
     /// Store a profile image / track fetched from a peer.

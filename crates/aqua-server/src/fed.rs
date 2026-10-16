@@ -8,8 +8,11 @@
 //! ```
 //!
 //! What they do together:
-//! * accounts and encrypted backups replicate (pull every 30 s, newest
-//!   row wins), so any relay can sign a user in;
+//! * accounts, public profiles, profile media and encrypted backups
+//!   replicate between all relays: a relay that changes something pokes
+//!   its peers (`POST /v1/fed/poke`, within ~2 s) and they pull "everything
+//!   since T" right away (plus a pull every 30 s as a safety net; newest
+//!   row wins), so any relay can sign a user in and show their profile;
 //! * an envelope for someone connected elsewhere is forwarded there; if
 //!   nobody has them online it waits where it was sent, and the relay they
 //!   connect to next collects it from its peers;
@@ -145,6 +148,17 @@ impl Fed {
         futures_util::future::join_all(tries).await.into_iter().any(|d| d)
     }
 
+    /// Tell every peer to pull from us now.
+    pub async fn poke_all(&self) {
+        let body = serde_json::to_vec(&serde_json::json!({ "from": self.cfg.public_url })).unwrap_or_default();
+        let tries = self.cfg.peers.iter().map(|p| {
+            let body = body.clone();
+            async move { self.post(p, "/v1/fed/poke", body).await.is_some() }
+        });
+        let ok = futures_util::future::join_all(tries).await.into_iter().filter(|x| *x).count();
+        tracing::debug!(ok, peers = self.cfg.peers.len(), "federation: poked peers");
+    }
+
     /// Envelopes that peers kept for `user` (they drop them once sent).
     pub async fn collect_inbox(&self, user: &str) -> Vec<RelayMessage> {
         let path = format!("/v1/fed/inbox/{user}");
@@ -201,6 +215,13 @@ pub async fn h_deliver(State(state): State<AppState>, headers: HeaderMap, body: 
     let msg: RelayMessage = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
     let delivered = crate::deliver_local(&state, &msg).await;
     Ok(Json(serde_json::json!({ "delivered": delivered })))
+}
+
+/// A peer changed something: pull from the peers now instead of in ≤ 30 s.
+pub async fn h_poke(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Result<StatusCode, StatusCode> {
+    check(&state, &headers, "POST", "/v1/fed/poke", &body)?;
+    state.fed_kick.notify_one();
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn h_inbox(State(state): State<AppState>, headers: HeaderMap, Path(user): Path<String>) -> Result<Json<Vec<RelayMessage>>, StatusCode> {
@@ -263,13 +284,42 @@ pub async fn h_peers(State(state): State<AppState>) -> Json<serde_json::Value> {
 
 // ------------------------------------------------------------------ sync loop
 
-/// Pull accounts and backups from every peer every 30 seconds.
+/// Pull accounts, profiles and backups from every peer — right away when a
+/// peer pokes us, and every 30 seconds anyway. A second task watches the
+/// local database and pokes the peers whenever something here changed.
 pub fn spawn_sync(state: AppState) {
+    let st = state.clone();
     tokio::spawn(async move {
         let mut cursors = Cursors::default();
         loop {
-            sync_once(&state, &mut cursors).await;
-            tokio::time::sleep(Duration::from_secs(30)).await;
+            sync_once(&st, &mut cursors).await;
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(30)) => {}
+                _ = st.fed_kick.notified() => {
+                    // Let a burst of changes on the peer settle.
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                }
+            }
+        }
+    });
+    spawn_announcer(state);
+}
+
+/// Poke the peers whenever an account, profile or backup changed here.
+pub fn spawn_announcer(state: AppState) {
+    tokio::spawn(async move {
+        let mut last: Option<(i64, i64)> = None;
+        loop {
+            let dir = state.directory.clone();
+            let mark = tokio::task::spawn_blocking(move || dir.change_mark()).await.unwrap_or_default();
+            if last != Some(mark) {
+                // First round too: peers learn what changed while we were down.
+                if let Some(fed) = current(&state) {
+                    fed.poke_all().await;
+                }
+                last = Some(mark);
+            }
+            tokio::time::sleep(Duration::from_millis(1500)).await;
         }
     });
 }
@@ -306,8 +356,23 @@ async fn sync_peer(
         }
         let mut applied = 0;
         for u in &rows {
+            let before = state.directory.media_versions(&u.username).unwrap_or((0, 0, 0));
             if state.directory.fed_apply_user(u) {
                 applied += 1;
+                // Profile media travels with the account, so it is here
+                // even if the other relay goes away.
+                for (kind, old, new) in [("avatar", before.0, u.avatar_ver), ("banner", before.1, u.banner_ver), ("music", before.2, u.music_ver)] {
+                    if new == old || new == 0 {
+                        continue;
+                    }
+                    let Some(k) = crate::directory::MediaKind::parse(kind) else { continue };
+                    if let Some(r) = fed.get(peer, &format!("/v1/fed/media/{}/{kind}", u.username)).await {
+                        let mime = r.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("application/octet-stream").to_string();
+                        if let Ok(b) = r.bytes().await {
+                            state.directory.fed_store_media(&u.username, k, &mime, &b);
+                        }
+                    }
+                }
             }
         }
         let last = rows.iter().map(|u| u.updated_at).max().unwrap_or(since);

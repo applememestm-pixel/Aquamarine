@@ -44,7 +44,7 @@
   import { t, tr, tn } from "../i18n";
   import { mutedChats, setMuted } from "../chatPrefs";
   import { insertToComposer } from "../composerBus";
-  import { groupMap } from "../groups";
+  import { groupMap, refreshGroups } from "../groups";
   import Markup from "./Markup.svelte";
   import LinkPreview from "./LinkPreview.svelte";
   import Carousel, { type CarouselItem } from "./Carousel.svelte";
@@ -1045,8 +1045,51 @@
     roomPick = { ...roomPick, [activeGroup.id]: r.id };
     try { localStorage.setItem(ROOM_KEY, JSON.stringify(roomPick)); } catch { /* ignore */ }
   }
-  const roomUnread = (r: Room) => activeGroup ? Math.max(0, (roomCounts[r.id] ?? 0) - (roomSeen[activeGroup.id]?.[r.id] ?? roomCounts[r.id] ?? 0)) : 0;
+  const MUTE_KEY = "aqua.rooms.muted.v1";
+  let roomMuted = $state<Record<string, boolean>>(readJson(MUTE_KEY, {}));
+  const isRoomMuted = (r: Room) => !!activeGroup && !!roomMuted[`${activeGroup.id}/${r.id}`];
+  const roomUnread = (r: Room) => activeGroup && !isRoomMuted(r) ? Math.max(0, (roomCounts[r.id] ?? 0) - (roomSeen[activeGroup.id]?.[r.id] ?? roomCounts[r.id] ?? 0)) : 0;
   let roomsOpen = $state(false);
+  // ---- room context menu (right click) ----
+  let roomMenu = $state<{ r: Room; x: number; y: number } | null>(null);
+  const canEditRooms = $derived(!!activeGroup && (can(activeGroup, myUsername, "change_info") || hasPerm(activeGroup, myUsername, "manage_rooms")));
+  function openRoomMenu(e: MouseEvent, r: Room) {
+    e.preventDefault();
+    const W = 220, H = 230;
+    roomMenu = { r, x: Math.min(e.clientX, window.innerWidth - W - 8), y: Math.min(e.clientY, window.innerHeight - H - 8) };
+  }
+  function markRoomRead(r: Room) {
+    if (!activeGroup) return;
+    roomSeen = { ...roomSeen, [activeGroup.id]: { ...(roomSeen[activeGroup.id] ?? {}), [r.id]: roomCounts[r.id] ?? 0 } };
+    try { localStorage.setItem(SEEN_KEY, JSON.stringify(roomSeen)); } catch { /* ignore */ }
+  }
+  function toggleRoomMute(r: Room) {
+    if (!activeGroup) return;
+    const k = `${activeGroup.id}/${r.id}`;
+    const { [k]: was, ...rest } = roomMuted;
+    roomMuted = was ? rest : { ...rest, [k]: true };
+    try { localStorage.setItem(MUTE_KEY, JSON.stringify(roomMuted)); } catch { /* ignore */ }
+    showToast(was ? tr("Room unmuted") : tr("Room muted"));
+  }
+  async function deleteRoomQuick(r: Room) {
+    const g = activeGroup;
+    if (!g) return;
+    if ((g.rooms ?? []).filter((x) => x.kind === "text").length < 2 && r.kind === "text") { showToast(tr("Keep at least one text room")); return; }
+    if (!(await askConfirm({ title: tr("Delete room?"), text: tr("“{room}” disappears for everyone. Its messages move to the first room.", { room: r.name }), ok: tr("Delete"), danger: true }))) return;
+    const next = JSON.parse(JSON.stringify(g)) as typeof g;
+    next.rooms = (next.rooms ?? []).filter((x) => x.id !== r.id);
+    next.log = [...(next.log ?? []), { at: new Date().toLocaleString(), by: myUsername, text: `deleted room ${r.name}` }].slice(-200);
+    try { await api.updateGroup(next); await refreshGroups(); } catch (e) { showToast(`Couldn't save: ${e}`, 5000); }
+  }
+  $effect(() => {
+    if (!roomMenu) return;
+    const close = (e: Event) => { if (!(e.target as HTMLElement)?.closest?.(".room-menu")) roomMenu = null; };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); roomMenu = null; } };
+    document.addEventListener("pointerdown", close, true);
+    document.addEventListener("keydown", key, true);
+    window.addEventListener("blur", close);
+    return () => { document.removeEventListener("pointerdown", close, true); document.removeEventListener("keydown", key, true); window.removeEventListener("blur", close); };
+  });
 
   let postBlocked = $derived(
     activeRoom?.readonly && !isAdmin(activeGroup, myUsername)
@@ -1819,6 +1862,12 @@
   {/each}
 {/snippet}
 
+{#snippet roomIcon(r: Room)}
+  {#if r.emoji}<span class="room-ic">{r.emoji}</span>
+  {:else if r.color}<span class="room-ic tint" style:--tint={r.color}>{r.name.charAt(0).toUpperCase()}</span>
+  {:else}<span class="room-ic">{r.kind === "voice" ? "🔊" : "#"}</span>{/if}
+{/snippet}
+
 <main class="active-chat" class:with-rooms={rooms.length > 0} class:voice-on={fullVoice} class:voice-chat={fullVoice && voiceChat}>
   {#if !$activeChat}
     <div class="empty">{$t("Pick a chat on the left.")}</div>
@@ -1834,8 +1883,8 @@
           <div class="rooms-cat">{$t("Text rooms")}</div>
           {#each textRooms as r (r.id)}
             {@const n = roomUnread(r)}
-            <button class="room" class:active={activeRoom?.id === r.id} class:unread={n > 0} onclick={() => { pickRoom(r); roomsOpen = false; }}>
-              <span class="room-ic">{r.emoji ?? "#"}</span><span class="room-name">{r.name}</span>
+            <button class="room" class:active={activeRoom?.id === r.id} class:unread={n > 0} class:muted={isRoomMuted(r)} onclick={() => { pickRoom(r); roomsOpen = false; }} oncontextmenu={(e) => openRoomMenu(e, r)} title={r.topic ?? ""}>
+              {@render roomIcon(r)}<span class="room-name">{r.name}</span>
               {#if r.readonly}<span class="room-lock" title={$t("Only admins write here")}>🔒</span>{/if}
               {#if n > 0}<span class="room-badge">{n > 99 ? "99+" : n}</span>{/if}
             </button>
@@ -1844,8 +1893,8 @@
             <div class="rooms-cat">{$t("Voice rooms")}</div>
             {#each rooms.filter((r) => r.kind === "voice") as r (r.id)}
               {@const live = $activeGroupCalls[activeGroup.id]}
-              <button class="room voice" class:active={fullVoice && voiceView[activeGroup.id] === r.id} onclick={() => pickRoom(r)}>
-                <span class="room-ic">🔊</span><span class="room-name">{r.name}</span>
+              <button class="room voice" class:active={fullVoice && voiceView[activeGroup.id] === r.id} onclick={() => pickRoom(r)} oncontextmenu={(e) => openRoomMenu(e, r)} title={r.topic ?? ""}>
+                <span class="room-ic">{r.emoji ?? "🔊"}</span><span class="room-name">{r.name}</span>
               </button>
               {#if live?.users?.length}
                 <div class="room-people">
@@ -1856,6 +1905,25 @@
           {/if}
         </div>
       </nav>
+      {#each roomMenu ? [roomMenu] : [] as rm (rm)}
+        {@const r = rm.r}
+        <div class="room-menu" role="menu" style:left="{rm.x}px" style:top="{rm.y}px">
+          <div class="rm-head">{@render roomIcon(r)}<b>{r.name}</b></div>
+          {#if r.kind === "text"}
+            <button role="menuitem" onclick={() => { markRoomRead(r); roomMenu = null; }}>✓ {$t("Mark as read")}</button>
+          {/if}
+          <button role="menuitem" onclick={() => { toggleRoomMute(r); roomMenu = null; }}>{isRoomMuted(r) ? "🔔" : "🔕"} {$t(isRoomMuted(r) ? "Unmute room" : "Mute room")}</button>
+          <button role="menuitem" onclick={() => { void navigator.clipboard?.writeText(r.name); roomMenu = null; showToast(tr("Copied")); }}>⧉ {$t("Copy name")}</button>
+          {#if canEditRooms}
+            <div class="rm-sep"></div>
+            <button role="menuitem" onclick={() => { const g = activeGroup!.id; roomMenu = null; openGroupPanel(g, { page: "room-edit", room: r.id }); }}>⚙ {$t("Room settings")}</button>
+            {#if rolesOn(activeGroup)}
+              <button role="menuitem" onclick={() => { const g = activeGroup!.id; roomMenu = null; openGroupPanel(g, { page: "room-perms", room: r.id }); }}>🛡 {$t("Room permissions")}</button>
+            {/if}
+            <button role="menuitem" class="danger" onclick={() => { roomMenu = null; void deleteRoomQuick(r); }}>🗑 {$t("Delete room")}</button>
+          {/if}
+        </div>
+      {/each}
     {/if}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -1890,7 +1958,7 @@
         <h1 class="peer-name">
           {#if isGroup && activeGroup}
             {#if activeRoom}
-              <button class="room-switch" onclick={(e) => { e.stopPropagation(); roomsOpen = !roomsOpen; }} title={$t("Rooms")}>{activeRoom.emoji ?? "#"} {activeRoom.name}</button>
+              <button class="room-switch" onclick={(e) => { e.stopPropagation(); roomsOpen = !roomsOpen; }} oncontextmenu={(e) => { e.stopPropagation(); openRoomMenu(e, activeRoom!); }} title={activeRoom.topic ?? $t("Rooms")}>{activeRoom.emoji ?? "#"} {activeRoom.name}</button>
             {/if}
             <span class="group-name-btn" class:dim={!!activeRoom}>{$activeChat.name}</span>
           {:else}
@@ -1916,6 +1984,10 @@
           {#if isGroup && activeGroup}
             {#if typingPeers.has($activeChat.id) && typingWho[$activeChat.id]}
               <span class="typing-ind">{typingWho[$activeChat.id]} {$t("typing…")}</span>
+              <span class="sep">·</span>
+            {/if}
+            {#if activeRoom?.topic}
+              <span class="room-topic" title={activeRoom.topic}>{activeRoom.topic}</span>
               <span class="sep">·</span>
             {/if}
             <span class="group-sub">
@@ -2041,6 +2113,8 @@
       </div>
     {/if}
 
+    <div class="msg-stage">
+    <div class="chat-wall" aria-hidden="true"></div>
     <div
       class="messages"
       class:protected={protectedChat}
@@ -2375,6 +2449,7 @@
           </div>
         {/if}
       {/each}
+    </div>
     </div>
 
     {#if scrolledUp}
@@ -2809,10 +2884,20 @@
     padding: 12px 0 8px;
     display: flex;
     flex-direction: column;
+    position: relative;
+    z-index: 1;
+    min-height: 0;
+    overscroll-behavior: contain;
+  }
+  /* The wallpaper sits on its own composited layer behind the scroller, so
+     scrolling moves only the messages (a background on the scroller itself
+     with attachment:local was re-rasterised on every scroll step). */
+  .msg-stage { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
+  .chat-wall {
+    position: absolute; inset: 0; z-index: 0; pointer-events: none;
     background: var(--chat-wallpaper, transparent);
-    background-size: cover;
-    background-position: center;
-    background-attachment: local;
+    transform: translateZ(0);
+    contain: strict;
   }
 
   .date-sep {
@@ -3579,7 +3664,21 @@
   .room:active { transform: scale(.98); }
   .room.active { background: var(--bg-active); color: var(--fg); box-shadow: inset 3px 0 0 var(--accent); }
   .room.unread { color: var(--fg); font-weight: 700; }
-  .room-ic { width: 18px; text-align: center; color: var(--fg-dim); font-weight: 700; }
+  .room-ic { width: 18px; text-align: center; color: var(--fg-dim); font-weight: 700; flex-shrink: 0; }
+  .room-ic.tint { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 10.5px; font-weight: 800; color: #fff;
+    background: var(--tint); box-shadow: 0 2px 6px -2px var(--tint); }
+  .room.muted { opacity: .55; }
+  .room-topic { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); }
+  .room-menu { position: fixed; z-index: 400; width: 220px; padding: 6px; border-radius: 12px; background: var(--bg-shell);
+    border: 1px solid var(--border-strong); box-shadow: 0 18px 50px -12px rgba(0,0,0,.7); display: flex; flex-direction: column; gap: 1px;
+    animation: rm-in .16s cubic-bezier(.2,.9,.25,1.1); transform-origin: top left; }
+  @keyframes rm-in { from { opacity: 0; transform: scale(.95); } }
+  .rm-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px 8px; font-size: 13px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+  .rm-head b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .room-menu button { text-align: left; border: none; background: transparent; color: var(--fg); font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 8px; cursor: pointer; }
+  .room-menu button:hover { background: var(--bg-hover, var(--bg-input)); }
+  .room-menu button.danger { color: #ff6b6b; }
+  .rm-sep { height: 1px; background: var(--border); margin: 4px 2px; }
   .room-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .room-lock { font-size: 11px; opacity: .7; }
   .room-badge { min-width: 18px; padding: 0 6px; height: 18px; border-radius: 9px; background: var(--accent); color: #06070c; font-size: 11px; font-weight: 800; display: grid; place-items: center; }

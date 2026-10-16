@@ -414,3 +414,24 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+
+  # ---------------------------------------------------------------- checksums
+  # SHA256SUMS.txt for every file attached to the release, so a download
+  # can be checked (SECURITY.md → "Рекомендации пользователям").
+  checksums:
+    name: checksums
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
+    needs: [desktop, android, ios, server]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hash the release files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p dl && cd dl
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*' --skip-existing
+          rm -f SHA256SUMS.txt
+          sha256sum -- * > ../SHA256SUMS.txt
+          cat ../SHA256SUMS.txt
+          gh release upload "$TAG" ../SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --clobber

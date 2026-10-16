@@ -127,6 +127,8 @@ pub struct AppState {
     pub fed: fed::FedSlot,
     /// Unix seconds the process started, for the uptime readout.
     pub started_unix: u64,
+    /// Woken when a peer says "I changed something": pull from peers now.
+    pub fed_kick: Arc<tokio::sync::Notify>,
 }
 
 /// Admin-tunable server policy (the panel edits this).
@@ -217,6 +219,7 @@ impl AppState {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
+            fed_kick: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -322,6 +325,11 @@ async fn upload_bundle(
     for opk in body.one_time_prekeys {
         u.opks.push_back(opk);
     }
+    // Keep only the newest 200 one-time keys.
+    while u.opks.len() > 200 {
+        u.opks.pop_front();
+    }
+    persist_prekeys(&state, &user, &u);
     tracing::info!(user = %user, token = %token_fp, opk_count,
         "upload_bundle OK: bundle stored");
     Ok(StatusCode::NO_CONTENT)
@@ -345,12 +353,39 @@ async fn fetch_bundle(
     Err(StatusCode::NOT_FOUND)
 }
 
+/// Prekeys as stored on disk.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredPrekeys {
+    identity: IdentityPublic,
+    signed_prekey: SignedPreKeyPublic,
+    #[serde(default)]
+    opks: Vec<OneTimePreKeyPublic>,
+}
+
+fn persist_prekeys(state: &AppState, user: &str, u: &UserState) {
+    let (Some(identity), Some(signed_prekey)) = (u.identity, u.signed_prekey.clone()) else { return };
+    let rec = StoredPrekeys { identity, signed_prekey, opks: u.opks.iter().cloned().collect() };
+    if let Ok(json) = serde_json::to_string(&rec) {
+        state.directory.prekeys_put(user, &json);
+    }
+}
+
 pub(crate) async fn local_bundle(state: &AppState, user: &str) -> Option<PreKeyBundle> {
     let user_state = state.user(&user.to_string());
     let mut u = user_state.lock().await;
+    if u.identity.is_none() {
+        // After a restart: load what the user uploaded before.
+        let rec: StoredPrekeys = serde_json::from_str(&state.directory.prekeys_get(user)?).ok()?;
+        u.identity = Some(rec.identity);
+        u.signed_prekey = Some(rec.signed_prekey);
+        u.opks = rec.opks.into();
+    }
     let identity = u.identity?;
     let signed_prekey = u.signed_prekey.clone()?;
     let one_time_prekey = u.opks.pop_front();
+    if one_time_prekey.is_some() {
+        persist_prekeys(state, user, &u);
+    }
     Some(PreKeyBundle { identity, signed_prekey, one_time_prekey })
 }
 
@@ -1471,6 +1506,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/backup/fetch", post(backup_fetch))
         .route("/v1/fed/peers", get(fed::h_peers))
         .route("/v1/fed/deliver", post(fed::h_deliver))
+        .route("/v1/fed/poke", post(fed::h_poke))
         .route("/v1/fed/inbox/:user", get(fed::h_inbox))
         .route("/v1/fed/bundle/:user", get(fed::h_bundle))
         .route("/v1/fed/blob/:cid", get(fed::h_blob))

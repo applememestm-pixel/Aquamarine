@@ -135,3 +135,66 @@ async fn two_relays_act_as_one() {
     fed::sync_once(&sb, &mut Default::default()).await;
     assert_eq!(sb.directory.get_backup("alice").unwrap(), b"AQBK1 sealed");
 }
+
+/// Changes travel on their own: a relay that changed something pokes its
+/// peers, which pull at once (no manual sync, well under the 30 s timer).
+/// Profile media is copied along with the account; prekeys survive a
+/// restart of the relay process.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn changes_are_pushed_to_peers() {
+    let la = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let lb = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (a, b) = (la.local_addr().unwrap().to_string(), lb.local_addr().unwrap().to_string());
+    let (ua, ub) = (format!("http://{a}"), format!("http://{b}"));
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = |me: &str, peer: &str| FedConfig { secret: SECRET.into(), peers: vec![peer.into()], public_url: me.into() };
+    let sa = AppState::isolated(tmp.path().join("a"), Some(cfg(&ua, &ub)));
+    let sb = AppState::isolated(tmp.path().join("b"), Some(cfg(&ub, &ua)));
+    { let s = sa.clone(); tokio::spawn(async move { axum::serve(la, app(s)).await.unwrap() }); }
+    { let s = sb.clone(); tokio::spawn(async move { axum::serve(lb, app(s)).await.unwrap() }); }
+    fed::spawn_sync(sa.clone());
+    fed::spawn_sync(sb.clone());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let http = reqwest::Client::new();
+
+    // Unsigned pokes are refused.
+    assert_eq!(http.post(format!("{ua}/v1/fed/poke")).body("{}").send().await.unwrap().status().as_u16(), 401);
+
+    let ida = IdentityKeyPair::generate();
+    let ta = register(&http, &ua, &ida, "dora").await;
+    let until = |f: Box<dyn Fn() -> bool + Send>| async move {
+        for _ in 0..80 {
+            if f() { return true; }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        false
+    };
+    let sb2 = sb.clone();
+    assert!(until(Box::new(move || sb2.directory.identity_for("dora").is_some())).await, "account reached B by itself");
+
+    // A profile picture set on A is stored on B too (not just proxied).
+    let png: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D, b'I', b'H', b'D', b'R', 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 0x1F, 0x15, 0xC4, 0x89];
+    let r = http.post(format!("{ua}/v1/users/dora/media/avatar")).bearer_auth(&ta).header("content-type", "image/png").body(png.to_vec()).send().await.unwrap();
+    assert!(r.status().is_success(), "avatar upload: {}", r.status());
+    let sb3 = sb.clone();
+    assert!(until(Box::new(move || sb3.directory.get_media("dora", aqua_server::directory::MediaKind::Avatar).is_some())).await, "avatar copied to B");
+
+    // Backups too.
+    assert!(http.put(format!("{ua}/v1/backup")).bearer_auth(&ta).body(b"AQBK1 v2".to_vec()).send().await.unwrap().status().is_success());
+    let sb4 = sb.clone();
+    assert!(until(Box::new(move || sb4.directory.get_backup("dora").as_deref() == Some(&b"AQBK1 v2"[..]))).await, "backup copied to B");
+
+    // Prekeys are on disk: forget the in-memory state ("restart") and the
+    // bundle is still served.
+    let spk = SignedPreKey::generate(1, &ida);
+    let up = BundleUpload { identity: ida.public(), signed_prekey: spk.public(), one_time_prekeys: vec![OneTimePreKey::generate(7).public(), OneTimePreKey::generate(8).public()] };
+    assert!(http.post(format!("{ua}/v1/bundle/dora")).bearer_auth(&ta).json(&up).send().await.unwrap().status().is_success());
+    sa.users.clear();
+    let bundle: PreKeyBundle = http.get(format!("{ua}/v1/bundle/dora")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(bundle.identity, ida.public());
+    assert!(bundle.one_time_prekey.is_some());
+    // The used one-time key is gone after another "restart".
+    sa.users.clear();
+    let b2: PreKeyBundle = http.get(format!("{ua}/v1/bundle/dora")).send().await.unwrap().json().await.unwrap();
+    assert_ne!(serde_json::to_string(&b2.one_time_prekey).unwrap(), serde_json::to_string(&bundle.one_time_prekey).unwrap());
+}

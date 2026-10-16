@@ -280,6 +280,10 @@ export interface GroupSettings {
 /** A supergroup room (Discord channel). */
 export interface Room {
   id: string; name: string; kind: "text" | "voice"; readonly?: boolean; emoji?: string;
+  /** Tint of the icon when there's no emoji (Telegram topic colours). */
+  color?: string;
+  /** One line shown under the room name. */
+  topic?: string;
   /** Per-role permission overrides (Discord channel permissions). */
   overrides?: Record<string, import("./roles").Override>;
 }

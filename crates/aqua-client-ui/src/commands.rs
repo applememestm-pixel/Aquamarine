@@ -665,6 +665,58 @@ pub async fn set_profile_media_file(
     upload_profile_image(state, kind, mime.into(), bytes).await
 }
 
+/// Turn a GIF or a short video into a light, silent WebM loop for a group
+/// banner: cropped to 3:1, ≤ 960 px wide, at most 8 seconds. Returns the
+/// path of the encoded file (or the original when it is already small and
+/// ffmpeg is missing).
+#[tauri::command]
+pub async fn prepare_banner_video(
+    state: State<'_, StdMutex<AppState>>,
+    app: AppHandle,
+    path: String,
+) -> Result<String, String> {
+    let data_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.clone() };
+    let path = if is_uri_pick(&path) { materialize_picked(&app, &data_dir, &path)? } else { path };
+    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    if !matches!(ext.as_str(), "gif" | "mp4" | "webm" | "mov" | "mkv" | "m4v") {
+        return Err("pick a GIF or a short video (mp4, webm, mov)".into());
+    }
+    let size = std::fs::metadata(&path).map(|m| m.len()).map_err(|e| format!("{path}: {e}"))?;
+    if size > 200 * 1024 * 1024 {
+        return Err("this file is too big for a banner".into());
+    }
+    let out_dir = data_dir.join("outbox");
+    std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+    let out = out_dir.join(format!("banner-{}.webm", crate::state::uuid_like()));
+    let mut cmd = tokio::process::Command::new("ffmpeg");
+    cmd.args(["-v", "error", "-nostdin", "-y", "-t", "8", "-i"]).arg(&path)
+        .args(["-an", "-vf", "crop='min(iw,ih*3)':'min(ih,iw/3)',scale='min(960,iw)':-2",
+               "-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "40", "-deadline", "good", "-cpu-used", "4", "-row-mt", "1"])
+        .arg(&out)
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(0x0800_0000);
+    }
+    match cmd.output().await {
+        Ok(o) if o.status.success() => {
+            let n = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
+            if n == 0 {
+                return Err("ffmpeg produced nothing".into());
+            }
+            if n > 4 * 1024 * 1024 {
+                let _ = std::fs::remove_file(&out);
+                return Err("even shrunk this banner is over 4 MB — pick a shorter clip (3–5 s)".into());
+            }
+            Ok(out.to_string_lossy().into_owned())
+        }
+        Ok(o) => Err(format!("ffmpeg: {}", String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("failed"))),
+        Err(_) if size <= 4 * 1024 * 1024 => Ok(path),
+        Err(_) => Err("install ffmpeg so the banner can be shrunk, or pick a file under 4 MB".into()),
+    }
+}
+
 /// Upload already-encoded image bytes (e.g. a cropped avatar from the editor).
 #[tauri::command]
 pub async fn set_profile_image_bytes(
@@ -1858,6 +1910,7 @@ pub async fn upload_attachment(
     app: AppHandle,
     peer_id: String,
     file_path: String,
+    keep: Option<bool>,
 ) -> Result<crate::state::ArticleMedia, String> {
     let data_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.clone() };
     let file_path = if is_uri_pick(&file_path) { materialize_picked(&app, &data_dir, &file_path)? } else { file_path };
@@ -1897,7 +1950,8 @@ pub async fn upload_attachment(
         s.transport.clone().ok_or("not connected")?
     };
     // Images are group photos / banners: kept by the relay for months.
-    let keep = kind == "image" && ciphertext.len() <= 4 * 1024 * 1024;
+    // `keep` asks the same for an animated (video) banner.
+    let keep = (kind == "image" || keep == Some(true)) && ciphertext.len() <= 4 * 1024 * 1024;
     transport.upload_blob_ext(&envelope.cid, ciphertext, keep).await.map_err(|e| format!("upload_blob: {e}"))?;
     let _ = tokio::fs::write(cache.join(format!("{}.{ext}", envelope.cid)), &bytes).await;
     Ok(crate::state::ArticleMedia {

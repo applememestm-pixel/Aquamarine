@@ -92,6 +92,7 @@ pub fn run() -> Result<()> {
         .invoke_handler(tauri::generate_handler![
             web::link_preview,
             commands::upload_attachment,
+            commands::prepare_banner_video,
             commands::fetch_attachment,
             commands::allow_media_preview,
             media_server::media_stream_url,

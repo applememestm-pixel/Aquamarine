@@ -2,7 +2,13 @@
   import { writable, get } from "svelte/store";
   import { peerPresence } from "../presence";
   export const groupPanelId = writable<string | null>(null);
-  export function openGroupPanel(gid: string) { groupPanelId.set(gid); }
+  /** Open straight at a page (e.g. a room's settings from its context menu). */
+  const groupPanelStart = writable<{ page: string; room?: string } | null>(null);
+  export function openGroupPanel(gid: string, start?: { page: "room-edit" | "room-perms" | "rooms"; room?: string }) {
+    groupPanelStart.set(start ?? null);
+    groupPanelId.set(null);
+    groupPanelId.set(gid);
+  }
   export function closeGroupPanel() { groupPanelId.set(null); }
 </script>
 
@@ -19,6 +25,7 @@
   import { groupMap, groupMedia, refreshGroups } from "../groups";
   import { openFileDialog } from "../dialog";
   import { cropImage } from "./ImageCropper.svelte";
+  import { streamSrc } from "../media";
   import { askConfirm } from "./Confirm.svelte";
   import { activeChat, activeMessages } from "../stores";
   import type { ChatMessage } from "../types";
@@ -37,7 +44,7 @@
   import ClanTag from "./ClanTag.svelte";
   import type { AdminRights, Group, GroupMember, Perm } from "../types";
 
-  type Page = "roles" | "role-edit" | "room-perms" | "rooms" | "info" | "manage" | "type" | "perms" | "reactions" | "admins" | "admin-edit" | "members" | "banned" | "requests" | "clan" | "log";
+  type Page = "room-edit" | "roles" | "role-edit" | "room-perms" | "rooms" | "info" | "manage" | "type" | "perms" | "reactions" | "admins" | "admin-edit" | "members" | "banned" | "requests" | "clan" | "log";
   let page = $state<Page>("info");
   let stack: Page[] = [];
   let editUser = $state("");
@@ -64,6 +71,13 @@
       lastId = g.id;
       page = "info"; stack = [];
       resetDrafts(g);
+      const st = get(groupPanelStart);
+      if (st) {
+        groupPanelStart.set(null);
+        if (st.room) { editRoomId = st.room; permRoomId = st.room; }
+        stack = st.page === "rooms" ? ["info"] : ["info", "rooms"];
+        page = st.page as Page;
+      }
     }
   });
   function resetDrafts(g: Group) {
@@ -114,17 +128,30 @@
 
   // ---- photo & banner --------------------------------------------------
   let uploading = $state<"" | "photo" | "banner">("");
+  const isVid = (u: string) => /\.(webm|mp4|mov|mkv|m4v)(\?|$)/i.test(u);
   async function pickGroupImage(kind: "photo" | "banner") {
     if (!group) return;
     try {
       const result = await openFileDialog({
         multiple: false, directory: false, title: tr(kind === "photo" ? "Pick a photo" : "Pick a banner"),
-        filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }],
+        filters: kind === "banner"
+          ? [{ name: tr("Images, GIFs, short videos"), extensions: ["png", "jpg", "jpeg", "webp", "gif", "mp4", "webm", "mov", "mkv", "m4v"] }]
+          : [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }],
       });
       const path = Array.isArray(result) ? (result[0] ?? null) : result;
       if (!path) return;
       let file = path;
-      if (!path.toLowerCase().endsWith(".gif")) {
+      let keep = false;
+      const animated = /\.(gif|mp4|webm|mov|mkv|m4v)$/i.test(path);
+      if (kind === "banner" && animated) {
+        // GIFs and clips become a silent 3:1 WebM loop (≤ 8 s, ≤ 4 MB).
+        uploading = kind;
+        file = await api.prepareBannerVideo(path);
+        keep = true;
+      } else if (kind === "photo" && animated && !path.toLowerCase().endsWith(".gif")) {
+        showToast(tr("A group photo can be a picture or a GIF"));
+        return;
+      } else if (!animated) {
         // Animated GIFs go as they are; stills are cropped and re-encoded.
         const raw = await api.readUserImage(path);
         const src = URL.createObjectURL(new Blob([new Uint8Array(raw)]));
@@ -136,7 +163,7 @@
         file = await api.saveTempFile(`${group.id}-${kind}.webp`, Array.from(new Uint8Array(await blob.arrayBuffer())));
       }
       uploading = kind;
-      const m = await api.uploadAttachment(group.id, file);
+      const m = await api.uploadAttachment(group.id, file, keep);
       await commit((g) => { g[kind] = m; }, kind === "photo" ? "changed the photo" : "changed the banner");
       showToast(tr(kind === "photo" ? "Photo updated" : "Banner updated"));
     } catch (e) {
@@ -196,6 +223,48 @@
     if (j < 0 || j >= a.length) return;
     [a[i], a[j]] = [a[j], a[i]];
     void saveRooms(a);
+  }
+
+  // ---- one room's settings (Telegram "Edit topic") ------------------------
+  /** Telegram's topic colours: a room without an emoji shows a tinted mark. */
+  const ROOM_TINTS = ["#6FB9F0", "#FFD67E", "#CB86DB", "#8EEE98", "#FF93B2", "#FB6F5F"];
+  const ROOM_EMOJI: { title: string; list: string[] }[] = [
+    { title: "Talk", list: ["💬", "🗨️", "📢", "📣", "📌", "❓", "❗", "💡", "📝", "📰", "📜", "🗳️", "🤝", "👋", "🙏", "💭"] },
+    { title: "Fun", list: ["🎮", "🕹️", "🎲", "🎯", "🎨", "🎬", "🎵", "🎧", "🎤", "📸", "🍿", "🎉", "🎁", "🏆", "⚽", "🏀"] },
+    { title: "Work", list: ["💼", "📊", "📈", "🗂️", "📅", "⏰", "🛠️", "⚙️", "💻", "🖥️", "📱", "🧪", "🔬", "📚", "🎓", "✅"] },
+    { title: "Life", list: ["🍕", "🍔", "☕", "🍵", "🍰", "🍺", "✈️", "🚗", "🏠", "🌍", "🌙", "☀️", "🌸", "🌿", "🐱", "🐶"] },
+    { title: "Signs", list: ["❤️", "🔥", "⭐", "⚡", "💎", "🚀", "👑", "🛡️", "🔒", "🔔", "🆕", "🆘", "♻️", "🧩", "🎗️", "🏳️"] },
+  ];
+  let editRoomId = $state("");
+  let editRoom = $derived((group?.rooms ?? []).find((r) => r.id === editRoomId));
+  let rName = $state(""), rEmoji = $state(""), rColor = $state(""), rTopic = $state(""), rReadonly = $state(false);
+  let rLoaded = "";
+  $effect(() => {
+    if (page !== "room-edit" || !editRoom) { if (page !== "room-edit") rLoaded = ""; return; }
+    if (rLoaded === editRoom.id) return;
+    rLoaded = editRoom.id;
+    rName = editRoom.name; rEmoji = editRoom.emoji ?? ""; rColor = editRoom.color ?? "";
+    rTopic = editRoom.topic ?? ""; rReadonly = !!editRoom.readonly;
+  });
+  const canRooms = $derived(!!group && (can(group, me, "change_info") || hasPerm(group, me, "manage_rooms")));
+  const roomDirty = $derived(!!editRoom && (rName.trim() !== editRoom.name || rEmoji !== (editRoom.emoji ?? "") || rColor !== (editRoom.color ?? "")
+    || rTopic.trim() !== (editRoom.topic ?? "") || rReadonly !== !!editRoom.readonly));
+  async function saveRoom() {
+    if (!editRoom) return;
+    const name = rName.trim().slice(0, 32);
+    if (!name) { showToast(tr("Name can't be empty")); return; }
+    const was = editRoom.name;
+    await saveRooms(patchRoom(editRoom.id, {
+      name, emoji: rEmoji || undefined, color: rColor || undefined, topic: rTopic.trim().slice(0, 240) || undefined,
+      readonly: editRoom.kind === "text" ? rReadonly : undefined,
+    }), name !== was ? `renamed room ${was} to ${name}` : `edited room ${name}`);
+    rLoaded = "";
+    showToast(tr("Saved"));
+  }
+  async function deleteRoom(r: Room) {
+    if (!(await askConfirm({ title: tr("Delete room?"), text: tr("“{room}” disappears for everyone. Its messages move to the first room.", { room: r.name }), ok: tr("Delete"), danger: true }))) return;
+    await saveRooms(roomList.filter((x) => x.id !== r.id), `deleted room ${r.name}`);
+    if (page === "room-edit") back();
   }
 
   // ---- roles (Discord) -------------------------------------------------------
@@ -491,7 +560,7 @@
   const PAGE_TITLE: Record<Page, string> = {
     info: "", manage: "Edit", type: "Type & link", perms: "Permissions", reactions: "Reactions",
     admins: "Administrators", "admin-edit": "Admin rights", members: "Members", banned: "Removed users",
-    requests: "Join requests", clan: "Server tag", log: "Recent actions", rooms: "Rooms",
+    requests: "Join requests", clan: "Server tag", log: "Recent actions", rooms: "Rooms", "room-edit": "Room settings",
     roles: "Roles", "role-edit": "Edit role", "room-perms": "Room permissions",
   };
   const I = {
@@ -550,7 +619,9 @@
       <div class="body">
       {#if page === "info"}
         {#if media.banner || group.accent}
-          <div class="gbanner" style:background={media.banner ? `center / cover no-repeat url("${media.banner}")` : `linear-gradient(135deg, ${group.accent}, color-mix(in srgb, ${group.accent} 40%, #000))`}></div>
+          <div class="gbanner" style:background={media.banner && !isVid(media.banner) ? `center / cover no-repeat url("${media.banner}")` : `linear-gradient(135deg, ${group.accent ?? "#223"}, color-mix(in srgb, ${group.accent ?? "#223"} 40%, #000))`}>
+            {#if media.banner && isVid(media.banner)}<video class="gb-vid" use:streamSrc={media.banner} muted loop autoplay playsinline></video>{/if}
+          </div>
         {/if}
         <div class="hero" class:over={!!(media.banner || group.accent)}>
           {#if media.photo}
@@ -652,7 +723,8 @@
       {:else if page === "manage"}
         {#if can(group, me, "change_info")}
           <div class="card media-edit">
-            <div class="me-banner" style:background={media.banner ? `center / cover no-repeat url("${media.banner}")` : (group.accent ? group.accent : "var(--surface-2, #2a2f3a)")}>
+            <div class="me-banner" style:background={media.banner && !isVid(media.banner) ? `center / cover no-repeat url("${media.banner}")` : (group.accent ? group.accent : "var(--surface-2, #2a2f3a)")}>
+              {#if media.banner && isVid(media.banner)}<video class="gb-vid" use:streamSrc={media.banner} muted loop autoplay playsinline></video>{/if}
               <button class="me-btn" onclick={() => pickGroupImage("banner")} disabled={!!uploading}>{$t(uploading === "banner" ? "Uploading…" : media.banner ? "Change banner" : "Add banner")}</button>
               {#if group.banner}<button class="me-btn ghost" onclick={() => removeGroupImage("banner")} disabled={busy}>{$t("Remove")}</button>{/if}
             </div>
@@ -666,7 +738,7 @@
                 {#if group.photo}<button class="btn ghost" onclick={() => removeGroupImage("photo")} disabled={busy}>{$t("Remove")}</button>{/if}
               </div>
             </div>
-            <div class="note">{$t("PNG, JPG, WebP or an animated GIF up to 4 MB. Encrypted for members; the relay keeps it while it's being viewed.")}</div>
+            <div class="note">{$t("Photo: PNG, JPG, WebP or a GIF. Banner: a picture, a GIF or a short clip (3–5 s; it becomes a silent loop up to 8 s). Encrypted for members; the relay keeps it while it's being viewed.")}</div>
           </div>
         {/if}
         <div class="card">
@@ -977,6 +1049,54 @@
           {#if !locked}<button class="danger-btn" onclick={() => deleteRole(editRole!)}>{$t("Delete role")}</button>{/if}
         {/if}
 
+      {:else if page === "room-edit" && editRoom}
+        {@const r = editRoom}
+        <div class="card re-card">
+          <div class="re-hero">
+            <span class="re-icon" style:--tint={rColor || ROOM_TINTS[0]} class:emoji={!!rEmoji}>
+              {#if rEmoji}{rEmoji}{:else}{r.kind === "voice" ? "🔊" : (rName.trim().charAt(0).toUpperCase() || "#")}{/if}
+            </span>
+            <div class="re-hero-txt">
+              <input class="inp re-name" bind:value={rName} maxlength="32" placeholder={$t("Room name")} disabled={!canRooms} />
+              <span class="re-kind">{r.kind === "voice" ? $t("Voice room") : rReadonly ? $t("Announcement room") : $t("Text room")}</span>
+            </div>
+          </div>
+          {#if canRooms}
+            <div class="re-lbl">{$t("Icon")}</div>
+            <div class="re-tints">
+              {#each ROOM_TINTS as c (c)}
+                <button class="re-tint" class:on={!rEmoji && (rColor || ROOM_TINTS[0]) === c} style:--tint={c} onclick={() => { rEmoji = ""; rColor = c; }} aria-label={c}>{rName.trim().charAt(0).toUpperCase() || "#"}</button>
+              {/each}
+              <input class="inp re-own" value={rEmoji} maxlength="4" placeholder="🙂" title={$t("Any emoji")}
+                oninput={(e) => { const v = (e.target as HTMLInputElement).value.trim(); rEmoji = [...v].slice(0, 2).join(""); }} />
+            </div>
+            <div class="re-grid">
+              {#each ROOM_EMOJI as cat (cat.title)}
+                <div class="re-cat">{$t(cat.title)}</div>
+                <div class="re-emojis">
+                  {#each cat.list as e (e)}
+                    <button class="re-emo" class:on={rEmoji === e} onclick={() => (rEmoji = rEmoji === e ? "" : e)}>{e}</button>
+                  {/each}
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+        {#if r.kind === "text"}
+          <div class="card">
+            <div class="re-lbl">{$t("Topic")}</div>
+            <textarea class="inp re-topic" bind:value={rTopic} maxlength="240" rows="2" placeholder={$t("What this room is for — shown under its name")} disabled={!canRooms}></textarea>
+            {@render toggle("Announcements only", "Only admins write in this room; everyone reads", rReadonly, () => (rReadonly = !rReadonly), !canRooms)}
+          </div>
+        {/if}
+        {#if canRooms}
+          <button class="btn wide" onclick={saveRoom} disabled={busy || !roomDirty}>{$t("Save")}</button>
+          {#if rolesOn(group)}
+            <div class="card">{@render row("Room permissions", "", () => { permRoomId = r.id; go("room-perms"); }, "#5865F2")}</div>
+          {/if}
+          <button class="danger-btn" onclick={() => deleteRoom(r)} disabled={busy || (r.kind === "text" && roomList.filter((x) => x.kind === "text").length < 2)}>{$t("Delete room")}</button>
+        {/if}
+
       {:else if page === "room-perms" && permRoom}
         {@const cols = ROOM_PERMS.filter((p) => permRoom!.kind === "voice" ? ["view_room", "connect", "speak", "video"].includes(p) : !["connect", "speak", "video"].includes(p))}
         <div class="card">
@@ -1005,7 +1125,7 @@
                 <input class="inp re" value={r.emoji ?? ""} maxlength="2" placeholder={r.kind === "voice" ? "🔊" : "#"}
                   onchange={(e) => saveRooms(patchRoom(r.id, { emoji: (e.target as HTMLInputElement).value.trim() || undefined }))} />
                 <input class="inp rn" value={r.name} maxlength="32"
-                  onchange={(e) => { const v = (e.target as HTMLInputElement).value.trim(); if (v) void saveRooms(patchRoom(r.id, { name: r.kind === "text" ? slugRoom(v) : v }), `renamed room to ${v}`); }} />
+                  onchange={(e) => { const v = (e.target as HTMLInputElement).value.trim().slice(0, 32); if (v) void saveRooms(patchRoom(r.id, { name: v }), `renamed room to ${v}`); }} />
                 {#if r.kind === "text"}
                   <button class="rr-btn" class:on={r.readonly} title={$t("Only admins write here")} onclick={() => saveRooms(patchRoom(r.id, { readonly: !r.readonly }))}>🔒</button>
                 {:else}
@@ -1013,8 +1133,8 @@
                 {/if}
                 <button class="rr-btn" onclick={() => moveRoom(i, -1)} disabled={i === 0} aria-label={$t("Up")}>↑</button>
                 <button class="rr-btn" onclick={() => moveRoom(i, 1)} disabled={i === roomList.length - 1} aria-label={$t("Down")}>↓</button>
-                {#if rolesOn(group)}<button class="rr-btn" onclick={() => { permRoomId = r.id; go("room-perms"); }} title={$t("Room permissions")}>⚙</button>{/if}
-                <button class="rr-btn danger" onclick={() => saveRooms(roomList.filter((x) => x.id !== r.id), `deleted room ${r.name}`)} aria-label={$t("Delete")}>×</button>
+                <button class="rr-btn" onclick={() => { editRoomId = r.id; go("room-edit"); }} title={$t("Room settings")}>⚙</button>
+                <button class="rr-btn danger" onclick={() => deleteRoom(r)} aria-label={$t("Delete")}>×</button>
               </div>
             {/each}
             <div class="abtns">
@@ -1058,7 +1178,10 @@
   .ava { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0;
          color: #06070C; font-weight: 800; font-size: 26px; box-shadow: 0 0 0 3px var(--ring, transparent); }
   .ava.img { object-fit: cover; background: var(--bg-surface); }
-  .gbanner { height: 120px; margin: -12px -14px 0; animation: gb-in .45s cubic-bezier(.2,.8,.2,1); }
+  .gb-vid { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; z-index: 0; }
+  .me-banner { position: relative; overflow: hidden; }
+  .me-banner > :global(button) { position: relative; z-index: 1; }
+  .gbanner { position: relative; overflow: hidden; height: 120px; margin: -12px -14px 0; animation: gb-in .45s cubic-bezier(.2,.8,.2,1); }
   .hero.over { margin-top: -34px; position: relative; }
   .hero.over .ava { width: 76px; height: 76px; box-shadow: 0 0 0 4px var(--bg-shell), 0 0 0 6px var(--ring, transparent); }
   .hero.over .hero-t { padding-top: 30px; }
@@ -1114,6 +1237,29 @@
   .ov-cell { height: 28px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg-input); color: var(--fg-dim); cursor: pointer; font-weight: 800; }
   .ov-cell.allow { background: rgba(61,220,132,.16); color: #3ddc84; border-color: rgba(61,220,132,.4); }
   .ov-cell.deny { background: rgba(255,77,109,.14); color: #ff6b6b; border-color: rgba(255,77,109,.4); }
+  .re-card { padding: 12px; }
+  .re-hero { display: flex; gap: 12px; align-items: center; margin-bottom: 6px; }
+  .re-icon { width: 56px; height: 56px; flex-shrink: 0; border-radius: 50%; display: grid; place-items: center; font-size: 24px; font-weight: 800;
+    color: #fff; background: radial-gradient(circle at 30% 25%, color-mix(in srgb, var(--tint) 70%, #fff), var(--tint)); box-shadow: 0 6px 18px -6px var(--tint);
+    transition: background .2s, transform .2s var(--ease-spring, ease); }
+  .re-icon.emoji { background: var(--bg-input); box-shadow: none; font-size: 32px; }
+  .re-hero-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+  .re-name { font-size: 15px; font-weight: 700; }
+  .re-kind { font-size: 11.5px; color: var(--fg-dim); padding-left: 2px; }
+  .re-lbl { font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-dim); margin: 10px 0 6px; }
+  .re-tints { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .re-tint { width: 34px; height: 34px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; color: #fff; font-weight: 800; font-size: 13px;
+    background: var(--tint); transition: transform .15s; }
+  .re-tint:hover { transform: scale(1.08); }
+  .re-tint.on { border-color: var(--fg); box-shadow: 0 0 0 2px var(--bg-surface) inset; }
+  .inp.re-own { flex: 0 0 64px; width: 64px; text-align: center; font-size: 18px; padding: 5px; }
+  .re-grid { max-height: 240px; overflow-y: auto; margin-top: 8px; padding-right: 2px; }
+  .re-cat { font-size: 11px; color: var(--fg-dim); margin: 8px 0 4px; font-weight: 700; }
+  .re-emojis { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; }
+  .re-emo { aspect-ratio: 1; border-radius: 10px; border: 1px solid transparent; background: transparent; font-size: 20px; cursor: pointer; transition: background .12s, transform .12s; }
+  .re-emo:hover { background: var(--bg-input); transform: scale(1.1); }
+  .re-emo.on { background: var(--accent-soft); border-color: var(--accent); }
+  .re-topic { width: 100%; box-sizing: border-box; resize: vertical; font: inherit; font-size: 13px; margin-bottom: 4px; }
   .room-row { display: flex; gap: 6px; align-items: center; padding: 5px 0; border-bottom: 1px solid var(--border); }
   .room-row:last-of-type { border-bottom: none; }
   .room-row .re { flex: 0 0 44px; width: 44px; text-align: center; padding: 6px 4px; }

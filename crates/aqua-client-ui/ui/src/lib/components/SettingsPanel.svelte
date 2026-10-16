@@ -1233,7 +1233,7 @@
       {#if section === "backups"}
       <section class="group">
         <div class="label">{$t("Encrypted backup")}</div>
-        <div class="bots-note">{$t("Your keys, chats, groups and settings are sealed on this device and kept on your server, which can't read them. Sign in on a new device with your e-mail and password and everything comes back. Photos and videos are not included.")}</div>
+        <div class="bots-note">{$t("Your keys, chats, groups and settings are sealed on this device and kept on your server — and, in a federated network, copied to every other server within seconds. None of them can read it. Sign in on a new device with your e-mail and password and everything comes back. Photos and videos are not included.")}</div>
         {#if !$backupState?.enabled}
           <div class="bk-row">
             <input class="txt" type="password" placeholder={$t("Account password")} bind:value={bkPw} onkeydown={(e) => { if (e.key === "Enter") void bkEnable(); }} />
@@ -1251,7 +1251,7 @@
             <span class="bot-sp"></span>
             <button class="bot-link danger" onclick={bkDisable}>{$t("Turn off")}</button>
           </div>
-          <div class="bots-note">{$t("Backups run by themselves every 6 hours while you're connected.")}</div>
+          <div class="bots-note">{$t("Uploaded by itself about 20 seconds after an important change (groups, contacts, profile, settings), after new messages at most every 20 minutes, and at least every 6 hours.")}</div>
         {/if}
         {#if bkPhrase}
           <div class="bk-phrase">
