@@ -9,7 +9,15 @@ cd "$(dirname "$(readlink -f "$0")")"
 pkill -x aqua-server 2>/dev/null && sleep 1 || true
 
 if [ -f ./_find-server.sh ]; then . ./_find-server.sh; else
-  EXE="$(pwd)/aqua-server"; [ -x "$EXE" ] || { echo "[X] aqua-server not found next to this script." >&2; exit 1; }
+  EXE="$(pwd)/aqua-server"
+  # Files copied from another disk/archive can lose the exec bit.
+  [ -f "$EXE" ] && [ ! -x "$EXE" ] && chmod +x "$EXE" 2>/dev/null
+  if [ ! -f "$EXE" ]; then echo "[X] aqua-server not found next to this script ($(pwd))." >&2; exit 1; fi
+  if [ ! -x "$EXE" ]; then
+    echo "[X] aqua-server is not executable and chmod failed (exFAT/NTFS mounted without exec?)." >&2
+    echo "    Run: chmod +x \"$EXE\"  or copy the folder to your home directory." >&2
+    exit 1
+  fi
 fi
 
 export AQUA_LISTEN=0.0.0.0:7777

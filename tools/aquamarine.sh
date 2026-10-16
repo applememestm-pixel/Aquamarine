@@ -7,6 +7,13 @@
 # logs/system.txt lists the media packages / GPU. Attach both to a bug report.
 DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 export WEBKIT_DISABLE_DMABUF_RENDERER=1
+# Files copied from another disk/archive can lose the exec bit.
+[ -f "$DIR/aquamarine" ] && [ ! -x "$DIR/aquamarine" ] && chmod +x "$DIR/aquamarine" 2>/dev/null
+[ -f "$DIR/aqua-server" ] && [ ! -x "$DIR/aqua-server" ] && chmod +x "$DIR/aqua-server" 2>/dev/null
+if [ ! -x "$DIR/aquamarine" ]; then
+  echo "[X] $DIR/aquamarine is missing or not executable. Run: chmod +x \"$DIR/aquamarine\"" >&2
+  exit 1
+fi
 LOGS="$DIR/logs"
 if mkdir -p "$LOGS" 2>/dev/null && [ -w "$LOGS" ]; then
   {
