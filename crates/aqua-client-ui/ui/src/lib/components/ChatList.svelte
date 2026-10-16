@@ -11,7 +11,7 @@
   import { avatars, peerCards, clans } from "../people";
   import ClanTag from "./ClanTag.svelte";
   import { keepOnScreen } from "../actions";
-  import { archived, mutedChats, setArchived, setMuted, pinnedChats, togglePin, MAX_PINS } from "../chatPrefs";
+  import { archived, mutedChats, setArchived, setMuted, pinnedChats, togglePin, movePin, MAX_PINS } from "../chatPrefs";
   import { parseJoinLink } from "../groupRules";
   import { groupMap, requestJoinGroup } from "../groups";
   import { peerPresence, activityVerb } from "../presence";
@@ -55,6 +55,28 @@
     if (!togglePin(id)) showToast(tr("You can pin up to {n} chats", { n: MAX_PINS }));
     else showToast(was ? tr("Unpinned") : tr("Pinned to the top"));
     ctx = null;
+  }
+
+  // ---- Reorder pinned chats by dragging ----
+  let dragPin = $state<{ id: string; y0: number; active: boolean; over: number } | null>(null);
+  let suppressClick = false;
+  function pinDown(e: PointerEvent, id: string) {
+    if (e.button !== 0 || !$pinnedChats.includes(id) || $search.trim()) return;
+    dragPin = { id, y0: e.clientY, active: false, over: $pinnedChats.indexOf(id) };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  }
+  function pinMove(e: PointerEvent) {
+    if (!dragPin) return;
+    if (!dragPin.active && Math.abs(e.clientY - dragPin.y0) < 6) return;
+    dragPin.active = true;
+    const rows = [...document.querySelectorAll<HTMLElement>(".chat-item.pinned")];
+    let over = rows.length - 1;
+    for (let i = 0; i < rows.length; i++) { const r = rows[i].getBoundingClientRect(); if (e.clientY < r.top + r.height / 2) { over = i; break; } }
+    dragPin.over = over;
+  }
+  function pinUp() {
+    if (dragPin?.active) { movePin(dragPin.id, dragPin.over); suppressClick = true; setTimeout(() => (suppressClick = false), 0); }
+    dragPin = null;
   }
 
   // ---- Resizable list (drag the right edge) ----
@@ -235,7 +257,7 @@
         title={$t("New chat, group or channel")}
         aria-label={$t("New")}
       >
-        <span class="plus-glyph">+</span>
+        <svg class="plus-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
       </button>
       {#if plusMenuOpen}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -338,7 +360,13 @@
         class:active={c.id === $activeId}
         class:kb={ci === kbIndex}
         class:pinned={$pinnedChats.includes(c.id)}
-        onclick={() => selectChat(c.id)}
+        class:dragging={dragPin?.active && dragPin.id === c.id}
+        class:drop-before={dragPin?.active && dragPin.id !== c.id && $pinnedChats.indexOf(c.id) === dragPin.over}
+        onpointerdown={(e) => pinDown(e, c.id)}
+        onpointermove={pinMove}
+        onpointerup={pinUp}
+        onpointercancel={() => (dragPin = null)}
+        onclick={() => { if (!suppressClick) void selectChat(c.id); }}
         oncontextmenu={(e) => openCtx(e, c.id)}
       >
         <div class="avatar sz-44" class:online={chatOnline(c, $peerPresence, $presenceNow)} style="--gradient: {c.gradient}">
@@ -385,6 +413,11 @@
     <div class="ctx-scrim" onclick={() => (ctx = null)} oncontextmenu={(e) => { e.preventDefault(); ctx = null; }}></div>
     <div class="chat-ctx" use:keepOnScreen style:left="{ctx.x}px" style:top="{ctx.y}px" role="menu">
       <button onclick={() => pinChat(cid)}>{$t($pinnedChats.includes(cid) ? "Unpin" : "Pin to top")}</button>
+      {#if $pinnedChats.includes(cid) && $pinnedChats.length > 1}
+        {@const pi = $pinnedChats.indexOf(cid)}
+        {#if pi > 0}<button onclick={() => { movePin(cid, pi - 1); ctx = null; }}>{$t("Move up")}</button>{/if}
+        {#if pi < $pinnedChats.length - 1}<button onclick={() => { movePin(cid, pi + 1); ctx = null; }}>{$t("Move down")}</button>{/if}
+      {/if}
       <button onclick={() => archiveChat(cid)}>{$t($archived.has(cid) ? "Unarchive" : "Archive")}</button>
       <button onclick={() => { setMuted(cid); ctx = null; }}>{$t($mutedChats.has(cid) ? "Unmute" : "Mute notifications")}</button>
       <button onclick={() => { void selectChat(cid); ctx = null; }}>{$t("Open")}</button>
@@ -401,6 +434,8 @@
   .pin-ic { width: 14px; height: 14px; color: var(--fg-dim); flex-shrink: 0; transform: rotate(45deg); }
   .pin-ic svg { width: 100%; height: 100%; }
   .chat-item.pinned { background: color-mix(in srgb, var(--bg-hover) 50%, transparent); }
+  .chat-item.dragging { opacity: .6; transform: scale(.98); cursor: grabbing; }
+  .chat-item.drop-before { box-shadow: inset 0 3px 0 var(--accent); }
   .cn-text { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .muted-ic { display: inline-grid; color: var(--fg-dim); flex-shrink: 0; }
   .muted-ic svg { width: 13px; height: 13px; }
@@ -451,6 +486,7 @@
     min-width: 0;
   }
   .list-header {
+    container-type: inline-size;
     padding: 14px 14px 10px;
     display: flex;
     align-items: center;
@@ -458,6 +494,7 @@
   }
   .search {
     flex: 1;
+    min-width: 0;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -525,13 +562,9 @@
     transform: translateY(-1px);
     box-shadow: 0 6px 18px -4px var(--accent-glow);
   }
-  .plus-glyph {
-    font-size: 20px;
-    font-weight: 800;
-    line-height: 1;
-    display: inline-block;
-    margin-top: -1px;
-  }
+  .plus-glyph { width: 18px; height: 18px; display: block; }
+  .search input { min-width: 0; }
+  @container (max-width: 300px) { .search-kbd { display: none; } }
   .plus-btn.nudge {
     animation: plus-pulse 1.8s ease-in-out infinite;
   }

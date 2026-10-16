@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { startAppIcon } from "./lib/appIcon";
+  import { startAutoscroll } from "./lib/autoscroll";
   import { migrateCustomWallpaper } from "./lib/theme";
   import { api } from "./lib/tauri";
   import { bootstrap, activeTab, info, activeId, backToList } from "./lib/stores";
@@ -166,7 +167,7 @@
       if (!editable) e.preventDefault();
     };
     // Block middle-click autoscroll + drag-navigation artefacts.
-    const onAux = (e: MouseEvent) => { if (e.button === 1) e.preventDefault(); };
+    const stopAutoscroll = startAutoscroll();
     // Single-media coordinator: whenever any audio/video starts playing,
     // pause every other one (inline previews, the lightbox, the top
     // background player). Only one thing plays at a time.
@@ -192,7 +193,7 @@
     window.addEventListener("popstate", onPop);
     document.addEventListener("keydown", onKey);
     document.addEventListener("contextmenu", onCtx);
-    document.addEventListener("auxclick", onAux);
+
     document.addEventListener("wheel", onWheel, { passive: false });
     document.addEventListener("play", onMediaPlay, true);
     window.addEventListener("drop", onDrop);
@@ -203,7 +204,7 @@
       window.removeEventListener("popstate", onPop);
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("contextmenu", onCtx);
-      document.removeEventListener("auxclick", onAux);
+      stopAutoscroll();
       document.removeEventListener("wheel", onWheel);
       document.removeEventListener("play", onMediaPlay, true);
       window.removeEventListener("drop", onDrop);

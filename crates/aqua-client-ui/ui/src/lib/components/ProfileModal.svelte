@@ -10,6 +10,7 @@
 </script>
 
 <script lang="ts">
+  import BirthdayInput from "./BirthdayInput.svelte";
   import ColorInput from "./ColorInput.svelte";
   import { onMount } from "svelte";
   import { profile, updateProfile, type Profile } from "../profile";
@@ -407,18 +408,6 @@
             <input bind:value={draft.status} placeholder={$t("What's on your mind?")} />
           </label>
           <label class="field">
-            <span>{$t("Pronouns")}</span>
-            <input bind:value={draft.pronouns} placeholder="she/her · he/him · они" />
-          </label>
-          <div class="field">
-            <span>{$t("Now playing (shown to people you chat with)")}</span>
-            <div class="np-edit">
-              <input placeholder={$t("Track title")} value={draft.listening?.title ?? ""} oninput={(e) => setListening("title", (e.target as HTMLInputElement).value)} />
-              <input placeholder={$t("Artist")} value={draft.listening?.artist ?? ""} oninput={(e) => setListening("artist", (e.target as HTMLInputElement).value)} />
-              <input placeholder={$t("Link (Spotify / YouTube, optional)")} value={draft.listening?.url ?? ""} oninput={(e) => setListening("url", (e.target as HTMLInputElement).value)} />
-            </div>
-          </div>
-          <label class="field">
             <span>{$t("About")}</span>
             <textarea bind:value={draft.about} rows="3" placeholder={$t("Tell people a little about yourself...")}></textarea>
           </label>
@@ -426,10 +415,10 @@
             <span>{$t("Phone")}</span>
             <input bind:value={draft.phone} placeholder="+7 999 123-45-67" />
           </label>
-          <label class="field">
+          <div class="field">
             <span>{$t("Birthday")}</span>
-            <input bind:value={draft.birthday} placeholder={$t("15 March 1998")} />
-          </label>
+            <BirthdayInput bind:value={draft.birthday} />
+          </div>
           <div class="field">
             <span>{$t("Links")}</span>
             {#each draft.links ?? [] as l, i (i)}
@@ -525,7 +514,7 @@
             {view.display_name}
             {#if view.verified}<span class="badge" title={$t("Verified identity")}>{@html icons.verified}</span>{/if}
             {#if view.is_bot}<span class="bot-tag">BOT</span>{/if}
-            {#if view.pronouns}<span class="pronouns">{view.pronouns}</span>{/if}
+
             {#if $clans[isMe ? ($info?.username ?? "") : activeUsername]}<ClanTag tag={$clans[isMe ? ($info?.username ?? "") : activeUsername]} size="md" />{/if}
           </h2>
           <div class="username">@{view.username}</div>
@@ -787,7 +776,7 @@
     padding: 6px 12px; border-radius: 10px; backdrop-filter: blur(6px); }
   .banner-hit:hover { background: rgba(0,0,0,.25); }
   .banner-hit:hover span, .banner-hit:focus-visible span { opacity: 1; transform: none; }
-  .banner-tools { position: absolute; right: 12px; bottom: 12px; display: flex; gap: 6px; align-items: center; }
+  .banner-tools { z-index: 3; position: absolute; right: 12px; bottom: 12px; display: flex; gap: 6px; align-items: center; }
   .bn-btn {
     background: rgba(0, 0, 0, 0.55); color: #fff; border: none; border-radius: 8px;
     padding: 5px 10px; font-size: 12px; font-weight: 700; cursor: pointer; backdrop-filter: blur(6px);

@@ -47,6 +47,14 @@ export function togglePin(id: string): boolean {
   return true;
 }
 
+/** Move a pinned chat to position `to` among the pins. */
+export function movePin(id: string, to: number) {
+  const cur = get(pinnedChats).filter((x) => x !== id);
+  if (!get(pinnedChats).includes(id)) return;
+  cur.splice(Math.max(0, Math.min(cur.length, to)), 0, id);
+  pinnedChats.set(cur);
+}
+
 /** A new message arrived in `id`: unmuted archived chats come back. */
 export function onIncomingForArchive(id: string) {
   if (get(archived).has(id) && !get(mutedChats).has(id)) setArchived(id, false);
