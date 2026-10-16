@@ -262,3 +262,7 @@ button { font-family: inherit; }
 .aq-autoscroll::after { bottom: 1px; border-top-color: #fff; }
 .aq-autoscroll[data-dir="up"]::before, .aq-autoscroll[data-dir="down"]::after { opacity: 1; }
 html.autoscrolling, html.autoscrolling * { cursor: all-scroll !important; user-select: none !important; }
+
+/* Drawn without the GPU (llvmpipe): drop the costly effects. */
+.soft-render * { box-shadow: none !important; text-shadow: none !important; }
+.soft-render *, .soft-render *::before, .soft-render *::after { transition-duration: 0s !important; }

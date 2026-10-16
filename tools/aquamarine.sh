@@ -14,6 +14,13 @@ if [ ! -x "$DIR/aquamarine" ]; then
   echo "[X] $DIR/aquamarine is missing or not executable. Run: chmod +x \"$DIR/aquamarine\"" >&2
   exit 1
 fi
+# NVIDIA driver updated but not rebooted: the kernel module and the
+# libraries differ, WebKit silently falls back to CPU drawing and lags.
+if command -v nvidia-smi >/dev/null && nvidia-smi 2>&1 | grep -qi "version mismatch"; then
+  msg="NVIDIA: driver/library version mismatch — restart the computer, otherwise Aquamarine is drawn without the GPU and lags."
+  echo "[!] $msg" >&2
+  command -v notify-send >/dev/null && notify-send -a Aquamarine "Aquamarine" "$msg" 2>/dev/null &
+fi
 LOGS="$DIR/logs"
 if mkdir -p "$LOGS" 2>/dev/null && [ -w "$LOGS" ]; then
   {

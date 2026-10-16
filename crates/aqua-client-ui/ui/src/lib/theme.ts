@@ -415,6 +415,63 @@ export function initTheme() {
  * pushed into a CSS variable, which made the whole app sluggish. Move it
  * into the wallpaper library (a file) once.
  */
+/** Longest side a wallpaper needs: the screen in device pixels, ≤ 2560. */
+function wallLongSide(): number {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  return Math.min(2560, Math.round(Math.max(screen.width || 1920, screen.height || 1080) * dpr));
+}
+
+/**
+ * Shrink a picture to what the screen can show (JPEG). A 4000-px photo
+ * scaled down on every repaint is what makes scrolling stutter, above all
+ * when WebKit draws without the GPU. GIFs and small images come back as is.
+ */
+export async function fitWallpaper(bytes: number[] | Uint8Array, name: string): Promise<{ bytes: number[]; name: string }> {
+  const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  if (/\.gif$/i.test(name)) return { bytes: Array.from(arr), name };
+  try {
+    const bmp = await createImageBitmap(new Blob([arr as Uint8Array<ArrayBuffer>]));
+    const max = wallLongSide();
+    const long = Math.max(bmp.width, bmp.height);
+    if (long <= max * 1.1 && arr.length < 1_500_000) { bmp.close?.(); return { bytes: Array.from(arr), name }; }
+    const k = Math.min(1, max / long);
+    const c = document.createElement("canvas");
+    c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+    const ctx = c.getContext("2d");
+    if (!ctx) { bmp.close?.(); return { bytes: Array.from(arr), name }; }
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(bmp, 0, 0, c.width, c.height);
+    bmp.close?.();
+    const blob = await new Promise<Blob | null>((r) => c.toBlob(r, "image/jpeg", 0.9));
+    if (!blob) return { bytes: Array.from(arr), name };
+    return { bytes: Array.from(new Uint8Array(await blob.arrayBuffer())), name: name.replace(/\.[^.]+$/, "") + "-fit.jpg" };
+  } catch {
+    return { bytes: Array.from(arr), name };
+  }
+}
+
+/** Once: replace an oversized wallpaper that is already in use with a fitted copy. */
+export async function fitCurrentWallpaper(
+  save: (name: string, bytes: number[]) => Promise<string>,
+  del: (path: string) => Promise<void>,
+  read: (path: string) => Promise<number[]>,
+): Promise<void> {
+  const s = get(settings);
+  const path = s.wallpaper === "custom" ? s.wallpaperPath : undefined;
+  if (!path || /-fit\.jpg$|\.gif$/i.test(path)) return;
+  try {
+    const raw = new Uint8Array(await read(path));
+    const name = path.split(/[\\/]/).pop() ?? "wallpaper.jpg";
+    const fit = await fitWallpaper(raw, name);
+    if (fit.name === name) return;
+    const next = await save(fit.name, fit.bytes);
+    settings.update((x) => ({ ...x, wallpaperPath: next }));
+    await del(path).catch(() => {});
+  } catch (e) {
+    console.warn("wallpaper fit", e);
+  }
+}
+
 export async function migrateCustomWallpaper(save: (name: string, bytes: number[]) => Promise<string>): Promise<void> {
   const s = get(settings);
   const m = s.wallpaperCustom ? /url\("?(data:([^;]+);base64,([^")]+))"?\)/.exec(s.wallpaperCustom) : null;

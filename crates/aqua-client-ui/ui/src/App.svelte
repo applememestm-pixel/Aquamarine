@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { startAppIcon } from "./lib/appIcon";
   import { startAutoscroll } from "./lib/autoscroll";
-  import { migrateCustomWallpaper } from "./lib/theme";
+  import { migrateCustomWallpaper, fitCurrentWallpaper } from "./lib/theme";
   import { api } from "./lib/tauri";
   import { bootstrap, activeTab, info, activeId, backToList } from "./lib/stores";
   import { openRegistration, closeRegistration, registrationDismissed } from "./lib/components/RegistrationWizard.svelte";
@@ -82,9 +82,12 @@
 
   onMount(() => {
     const stopIcon = startAppIcon();
-    void migrateCustomWallpaper(api.saveWallpaper);
+    void migrateCustomWallpaper(api.saveWallpaper).then(() => setTimeout(() => void fitCurrentWallpaper(api.saveWallpaper, api.deleteWallpaper, api.readMediaBytes), 4000));
     // Linux: without gst-plugins-good WebKitGTK hangs on the first sound or
     // video — say what to install up front (playback is refused until then).
+    if ((window as unknown as { __aquaSoftRender?: string }).__aquaSoftRender) {
+      setTimeout(() => showToast(tr("The graphics card isn't used — everything is drawn by the CPU, so the app is slow. After a video driver update, restart the computer."), 15000), 2500);
+    }
     void mediaSupport().then((m) => {
       if (m.blocking.length) showToast(tr("Sound and video need GStreamer plugins. Install: {cmd}", { cmd: installHint([...m.blocking, ...m.recommended]) }), 20000);
     });

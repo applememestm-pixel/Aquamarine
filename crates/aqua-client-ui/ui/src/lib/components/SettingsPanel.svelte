@@ -13,6 +13,7 @@
 <script lang="ts">
   import ColorInput from "./ColorInput.svelte";
   import { onMount } from "svelte";
+  import { fitWallpaper } from "../theme";
   import { settings, PALETTES, WALLPAPERS, EDITABLE_COLORS, THEMES, DEFAULTS, type Mode, type Density } from "../theme";
   import { info } from "../stores";
   import { icons } from "../icons";
@@ -492,8 +493,8 @@
       if (!paths.length) return;
       let last = "";
       for (const p of paths) {
-        const bytes = await api.readUserImage(p);
-        last = await api.saveWallpaper(p.split(/[\\/]/).pop() ?? "wallpaper.jpg", bytes);
+        const fit = await fitWallpaper(await api.readUserImage(p), p.split(/[\\/]/).pop() ?? "wallpaper.jpg");
+        last = await api.saveWallpaper(fit.name, fit.bytes);
       }
       await loadWalls();
       if (last) useWall(last);

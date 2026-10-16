@@ -59,24 +59,33 @@ const NOISY = [/^aqua\.rooms\.(seen|active)/, /^aqua\.played/, /^aqua\.recent\./
   /^aqua\.reader\./, /^aqua\.gameIds/, /^aqua\.call\./, /^aqua\.onlineStatus/];
 const MIN_GAP = 2 * 60_000, MSG_GAP = 20 * 60_000, QUIET = 20_000;
 
-function hash(s: string): string {
-  let h = 2166136261;
-  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
-  return (h >>> 0).toString(36) + ":" + s.length;
-}
-function importantPrint(): string {
-  let ui = "";
+/** Settings writes since the last upload (set by a cheap localStorage hook,
+ *  so nothing is re-read or hashed on a timer). */
+let uiDirty = false;
+function watchStorage() {
   try {
-    const m = JSON.parse(collectUiState()) as Record<string, string>;
-    ui = Object.keys(m).filter((k) => !NOISY.some((re) => re.test(k))).sort().map((k) => k + "=" + m[k]).join("\n");
+    const proto = Storage.prototype as Storage & { __aquaHooked?: boolean };
+    if (proto.__aquaHooked) return;
+    proto.__aquaHooked = true;
+    const set = proto.setItem, del = proto.removeItem;
+    const touch = (k: string) => { if (k.startsWith("aqua") && !NOISY.some((re) => re.test(k)) && !SKIP.some((re) => re.test(k))) uiDirty = true; };
+    proto.setItem = function (k: string, v: string) {
+      if (this === localStorage && !uiDirty) { try { if (localStorage.getItem(k) !== v) touch(k); } catch { /* ignore */ } }
+      return set.call(this, k, v);
+    };
+    proto.removeItem = function (k: string) { if (this === localStorage) touch(k); return del.call(this, k); };
   } catch { /* ignore */ }
-  const g = get(groups).map((x) => `${x.id}@${x.version}:${x.members.length}`).sort().join(",");
-  const c = get(chats).map((x) => `${x.id}:${x.name}:${x.has_lock ? 1 : 0}`).sort().join(",");
-  const p = JSON.stringify(get(profile));
-  return hash([ui, g, c, p].join("\u0001"));
+}
+/** Small fingerprints of the stores that matter (a few hundred bytes). */
+function importantPrint(): string {
+  const g = get(groups).map((x) => `${x.id}@${x.version}:${x.members.length}`).join(",");
+  const c = get(chats).map((x) => `${x.id}:${x.name}:${x.has_lock ? 1 : 0}`).join(",");
+  const p = get(profile) as unknown as Record<string, unknown>;
+  const pv = Object.keys(p).sort().map((k) => typeof p[k] === "string" ? `${k}=${(p[k] as string).length}:${(p[k] as string).slice(0, 64)}` : `${k}=${JSON.stringify(p[k])?.length}`).join(";");
+  return `${g}|${c}|${pv}`;
 }
 function messagePrint(): string {
-  return hash(get(chats).map((x) => `${x.id}:${x.time}:${x.preview}`).join("\n"));
+  return get(chats).map((x) => `${x.id}:${x.time}:${x.preview.length}`).join(",");
 }
 
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -87,12 +96,13 @@ async function upload(): Promise<void> {
   running = true;
   try {
     const s = await refreshBackup();
-    if (!s?.enabled) return;
     const imp = importantPrint(), msg = messagePrint();
+    if (!s?.enabled) { uiDirty = false; changedAt = 0; msgChangedAt = 0; lastImportant = imp; lastMessages = msg; return; }
+    uiDirty = false;
     await backupNow(true);
     lastUpload = Date.now();
     lastImportant = imp; lastMessages = msg; changedAt = 0; msgChangedAt = 0;
-  } catch { /* offline — the next tick retries */ } finally {
+  } catch { uiDirty = true; /* offline — the next tick retries */ } finally {
     running = false;
   }
 }
@@ -102,11 +112,12 @@ export function backupSoon(): void { changedAt = changedAt || Date.now(); }
 
 export function startAutoBackup(): void {
   if (timer) return;
+  watchStorage();
   const tick = async () => {
     const now = Date.now();
     const imp = importantPrint(), msg = messagePrint();
     if (!lastImportant) { lastImportant = imp; lastMessages = msg; }
-    if (imp !== lastImportant && !changedAt) changedAt = now;
+    if ((imp !== lastImportant || uiDirty) && !changedAt) changedAt = now;
     if (msg !== lastMessages && !msgChangedAt) msgChangedAt = now;
     const importantDue = changedAt && now - changedAt >= QUIET && now - lastUpload >= MIN_GAP;
     const messagesDue = msgChangedAt && now - lastUpload >= MSG_GAP;

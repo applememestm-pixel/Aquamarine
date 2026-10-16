@@ -221,7 +221,7 @@ pub fn rewrap_password(keys: &mut Keys, password: &str) {
 // ---------------------------------------------------------------- blobs
 
 pub fn seal(keys: &Keys, payload: &[u8]) -> Vec<u8> {
-    let mut enc = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
+    let mut enc = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::new(3));
     let _ = enc.write_all(payload);
     let packed = enc.finish().unwrap_or_default();
     let mut nonce = [0u8; 12];

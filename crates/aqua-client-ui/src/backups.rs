@@ -16,6 +16,8 @@ use crate::state::AppState;
 const KEYS: &str = "backup:keys";
 const PHRASE: &str = "backup:phrase";
 const LAST: &str = "backup:last";
+/// SHA-256 of the last uploaded contents (skip identical uploads).
+const HASH: &str = "backup:hash";
 /// Automatic backups at most this often.
 const AUTO_EVERY_SECS: u64 = 6 * 3600;
 
@@ -82,6 +84,7 @@ pub async fn backup_enable(state: State<'_, StdMutex<AppState>>, password: Strin
     s.vault.put_record(KEYS, &serde_json::to_vec(&keys).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     s.vault.put_record(PHRASE, phrase.as_bytes()).map_err(|e| e.to_string())?;
     let _ = s.vault.delete_record(LAST);
+    let _ = s.vault.delete_record(HASH);
     Ok(phrase)
 }
 
@@ -95,7 +98,10 @@ pub fn backup_phrase(state: State<'_, StdMutex<AppState>>) -> Result<Option<Stri
 /// older than six hours (the UI calls this periodically).
 #[tauri::command]
 pub async fn backup_now(state: State<'_, StdMutex<AppState>>, ui: String, force: bool) -> Result<BackupStatus, String> {
-    let (blob, transport) = {
+    // Only the vault snapshot is taken under the app lock; serialising,
+    // compressing and sealing (the slow part) run on a worker thread so the
+    // UI and message handling never wait for a backup.
+    let (keys, payload, transport, prev) = {
         let mut s = state.lock().map_err(|e| e.to_string())?;
         let Some(keys) = keys_of(&s) else { return Err("backups are off".into()) };
         if !force && last_of(&s).is_some_and(|l| now().saturating_sub(l.at) < AUTO_EVERY_SECS) {
@@ -105,19 +111,41 @@ pub async fn backup_now(state: State<'_, StdMutex<AppState>>, ui: String, force:
         crate::history::flush(&mut s);
         let payload = Payload {
             v: 1,
-            created: now(),
+            created: 0,
             username: s.username.clone(),
             email: s.email.clone(),
             vault: s.vault.export_dump(&["backup:"]).map_err(|e| e.to_string())?,
             ui,
         };
+        let prev = s.vault.get_record(HASH).ok().flatten().unwrap_or_default();
+        (keys, payload, t, prev)
+    };
+    let sealed = tokio::task::spawn_blocking(move || -> Result<Option<(Vec<u8>, Vec<u8>)>, String> {
+        // Nothing changed since the last upload: don't send the same copy
+        // again (and don't make every relay of the network copy it).
         let bytes = bincode::serialize(&payload).map_err(|e| e.to_string())?;
-        (backup::seal(&keys, &bytes), t)
+        let hash = <sha2::Sha256 as sha2::Digest>::digest(&bytes).to_vec();
+        if hash == prev {
+            return Ok(None);
+        }
+        let mut payload = payload;
+        payload.created = now();
+        let bytes = bincode::serialize(&payload).map_err(|e| e.to_string())?;
+        Ok(Some((backup::seal(&keys, &bytes), hash)))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let Some((blob, hash)) = sealed else {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        let size = last_of(&s).map(|l| l.size).unwrap_or(0);
+        let _ = s.vault.put_record(LAST, &serde_json::to_vec(&Last { at: now(), size }).unwrap_or_default());
+        return Ok(status_of(&s));
     };
     let size = blob.len() as u64;
     transport.put_backup(blob).await.map_err(|e| e.to_string())?;
     let s = state.lock().map_err(|e| e.to_string())?;
     let _ = s.vault.put_record(LAST, &serde_json::to_vec(&Last { at: now(), size }).unwrap_or_default());
+    let _ = s.vault.put_record(HASH, &hash);
     Ok(status_of(&s))
 }
 
@@ -129,7 +157,7 @@ pub async fn backup_disable(state: State<'_, StdMutex<AppState>>) -> Result<(), 
         t.delete_backup().await.map_err(|e| e.to_string())?;
     }
     let s = state.lock().map_err(|e| e.to_string())?;
-    for k in [KEYS, PHRASE, LAST] {
+    for k in [KEYS, PHRASE, LAST, HASH] {
         let _ = s.vault.delete_record(k);
     }
     Ok(())
