@@ -378,6 +378,10 @@ pub fn accept_group_snapshot(cur: Option<&Group>, next: &Group, from: &str) -> b
                 return false;
             }
             if !cur.is_admin(from) {
+                // Supergroup roles: managers may change what their roles allow.
+                if roles_on(cur) && role_change_ok(cur, next, from) {
+                    return true;
+                }
                 // A plain member may only *add* members, when the group allows it.
                 return cur.settings.add_members == "all" && cur.is_member(from) && only_adds_members(cur, next);
             }
@@ -418,6 +422,196 @@ pub fn can_delete_others(g: &Group, who: &str) -> bool {
     }
 }
 
+// ---- Discord-style roles (mirrors ui/src/lib/roles.ts) ------------------------
+
+pub const ALL_PERMS: &[&str] = &[
+    "administrator", "manage_server", "manage_roles", "manage_rooms", "view_log",
+    "kick_members", "ban_members", "mute_members", "invite_members",
+    "view_room", "send_messages", "attach_files", "embed_links", "add_reactions",
+    "send_polls", "use_stickers", "mention_everyone", "manage_messages",
+    "connect", "speak", "video",
+];
+const EVERYONE_DEFAULT: &[&str] = &["view_room", "send_messages", "attach_files", "embed_links", "use_stickers", "add_reactions", "send_polls", "invite_members", "connect", "speak", "video"];
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RoleDef {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub color: String,
+    #[serde(default)]
+    pub perms: Vec<String>,
+    #[serde(default)]
+    pub hoist: bool,
+    #[serde(default)]
+    pub mentionable: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Override {
+    #[serde(default)]
+    pub allow: Vec<String>,
+    #[serde(default)]
+    pub deny: Vec<String>,
+}
+
+pub fn roles_on(g: &Group) -> bool {
+    g.kind == "supergroup" && g.extra.get("roles").and_then(|v| v.as_array()).is_some_and(|a| !a.is_empty())
+}
+
+/// Roles highest first, always ending with @everyone.
+pub fn roles_list(g: &Group) -> Vec<RoleDef> {
+    let mut v: Vec<RoleDef> = g.extra.get("roles").and_then(|x| serde_json::from_value(x.clone()).ok()).unwrap_or_default();
+    if !v.iter().any(|r| r.id == "everyone") {
+        v.push(RoleDef { id: "everyone".into(), name: "@everyone".into(), color: String::new(), perms: EVERYONE_DEFAULT.iter().map(|s| s.to_string()).collect(), hoist: false, mentionable: false });
+    }
+    v
+}
+
+fn member_role_ids(g: &Group, u: &str) -> Vec<String> {
+    g.members.iter().find(|m| m.username == u)
+        .and_then(|m| m.extra.get("roles")).and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
+        .unwrap_or_default()
+}
+
+fn legacy_all(g: &Group, u: &str) -> bool {
+    g.owner == u || matches!(g.role_of(u), "owner" | "admin")
+}
+
+/// Position of the member's highest role (lower = higher); -1 for owner/admins.
+pub fn role_rank(g: &Group, u: &str) -> i64 {
+    if legacy_all(g, u) {
+        return -1;
+    }
+    let ids = member_role_ids(g, u);
+    let roles = roles_list(g);
+    roles.iter().position(|r| ids.contains(&r.id)).map(|i| i as i64).unwrap_or(roles.len() as i64)
+}
+
+/// Effective permissions (in `room`, when given).
+pub fn perms_of(g: &Group, u: &str, room: Option<&Room>) -> std::collections::HashSet<String> {
+    use std::collections::HashSet;
+    if legacy_all(g, u) {
+        return ALL_PERMS.iter().map(|s| s.to_string()).collect();
+    }
+    let roles = roles_list(g);
+    let ids = member_role_ids(g, u);
+    let mine: Vec<&RoleDef> = roles.iter().filter(|r| r.id != "everyone" && ids.contains(&r.id)).collect();
+    let mut set: HashSet<String> = roles.iter().filter(|r| r.id == "everyone").flat_map(|r| r.perms.clone()).collect();
+    for r in &mine { set.extend(r.perms.iter().cloned()); }
+    if set.contains("administrator") {
+        return ALL_PERMS.iter().map(|s| s.to_string()).collect();
+    }
+    if let Some(room) = room {
+        if let Some(e) = room.overrides.get("everyone") {
+            for p in &e.deny { set.remove(p); }
+            for p in &e.allow { set.insert(p.clone()); }
+        }
+        let mut deny = HashSet::new();
+        let mut allow = HashSet::new();
+        for r in &mine {
+            if let Some(o) = room.overrides.get(&r.id) {
+                deny.extend(o.deny.iter().cloned());
+                allow.extend(o.allow.iter().cloned());
+            }
+        }
+        for p in deny { set.remove(&p); }
+        set.extend(allow);
+    }
+    set
+}
+
+/// A snapshot from a member who isn't an owner/admin but holds managing
+/// permissions through roles: accept it only if it stays within them —
+/// nothing at or above their highest role changes, no permission they lack
+/// is granted, and every part that changed is one they may manage.
+pub fn role_change_ok(cur: &Group, next: &Group, from: &str) -> bool {
+    use serde_json::Value;
+    if !cur.is_member(from) || cur.is_banned(from) || next.id != cur.id || next.owner != cur.owner || next.kind != cur.kind {
+        return false;
+    }
+    let perms = perms_of(cur, from, None);
+    let has = |p: &str| perms.contains(p) || perms.contains("administrator");
+    let my_rank = role_rank(cur, from);
+
+    // Roles at or above mine are untouchable, in place.
+    let (cr, nr) = (roles_list(cur), roles_list(next));
+    let top = (my_rank.max(0) as usize + 1).min(cr.len());
+    if nr.len() < top || cr[..top] != nr[..top] {
+        return false;
+    }
+    if cr != nr {
+        if !has("manage_roles") {
+            return false;
+        }
+        for r in &nr {
+            let old = cr.iter().find(|x| x.id == r.id);
+            if old != Some(r) && r.perms.iter().any(|p| !has(p)) {
+                return false;
+            }
+        }
+    }
+
+    // Members.
+    for m in &cur.members {
+        match next.members.iter().find(|x| x.username == m.username) {
+            None => {
+                if !(has("kick_members") || has("ban_members")) || role_rank(cur, &m.username) <= my_rank {
+                    return false;
+                }
+            }
+            Some(n) => {
+                if n.role != m.role {
+                    return false;
+                }
+                let (old_roles, new_roles) = (member_role_ids(cur, &m.username), member_role_ids(next, &m.username));
+                if old_roles != new_roles {
+                    if !has("manage_roles") || (m.username != from && role_rank(cur, &m.username) <= my_rank) {
+                        return false;
+                    }
+                    // Only roles below mine can be given or taken.
+                    let changed = old_roles.iter().filter(|r| !new_roles.contains(r)).chain(new_roles.iter().filter(|r| !old_roles.contains(r)));
+                    for id in changed {
+                        match cr.iter().position(|r| &r.id == id) {
+                            Some(i) if (i as i64) > my_rank => {}
+                            _ => return false,
+                        }
+                    }
+                }
+                let strip = |x: &GroupMember| { let mut e = x.extra.clone(); e.remove("roles"); e.remove("muted"); e };
+                if m.extra.get("muted") != n.extra.get("muted") && (!has("mute_members") || role_rank(cur, &m.username) <= my_rank) {
+                    return false;
+                }
+                if strip(m) != strip(n) && !has("manage_roles") {
+                    return false;
+                }
+            }
+        }
+    }
+    for n in &next.members {
+        if !cur.is_member(&n.username) && (n.role != "member" || !(has("invite_members") || cur.settings.add_members == "all")) {
+            return false;
+        }
+    }
+
+    // Everything else, field by field.
+    let (Ok(Value::Object(mut a)), Ok(Value::Object(mut b))) = (serde_json::to_value(cur), serde_json::to_value(next)) else { return false };
+    for k in ["version", "members", "roles", "log"] {
+        a.remove(k);
+        b.remove(k);
+    }
+    let changed = |k: &str, a: &serde_json::Map<String, Value>, b: &serde_json::Map<String, Value>| a.get(k) != b.get(k);
+    if changed("rooms", &a, &b) && !has("manage_rooms") { return false; }
+    if changed("banned", &a, &b) && !has("ban_members") { return false; }
+    if changed("requests", &a, &b) && !(has("invite_members") || has("manage_server")) { return false; }
+    for k in ["rooms", "banned", "requests"] {
+        a.remove(k);
+        b.remove(k);
+    }
+    a == b || has("manage_server")
+}
+
 /// A supergroup room (Discord-style channel), stored in the group snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Room {
@@ -429,6 +623,9 @@ pub struct Room {
     /// Only admins may post (announcements).
     #[serde(default)]
     pub readonly: bool,
+    /// Per-role permission overrides.
+    #[serde(default)]
+    pub overrides: std::collections::HashMap<String, Override>,
 }
 fn room_text() -> String { "text".into() }
 
@@ -452,6 +649,18 @@ pub fn resolve_room(g: &Group, wanted: Option<&str>) -> Option<Room> {
 
 /// `may_post` plus the room rule (read-only rooms are for admins).
 pub fn may_post_in(g: &Group, author: &str, body: &str, room: Option<&Room>) -> bool {
+    if roles_on(g) && !g.is_admin(author) {
+        // Roles decide (the generic group rules still apply: member, not banned / muted).
+        if !g.is_member(author) || g.is_banned(author) { return false; }
+        let muted = g.members.iter().find(|m| m.username == author)
+            .and_then(|m| m.extra.get("muted")).and_then(|v| v.as_bool()).unwrap_or(false);
+        if muted || room.is_some_and(|r| r.readonly) { return false; }
+        let p = perms_of(g, author, room);
+        if !p.contains("send_messages") || (room.is_some() && !p.contains("view_room")) { return false; }
+        if body.starts_with("[poll:v1]") && !p.contains("send_polls") { return false; }
+        if body.starts_with(aqua_core::file_transfer::OFFER_PREFIX) && !p.contains("attach_files") { return false; }
+        return true;
+    }
     may_post(g, author, body) && !(room.is_some_and(|r| r.readonly) && !g.is_admin(author))
 }
 
@@ -1472,5 +1681,93 @@ mod group_rule_tests {
         // Old files without the new fields still load.
         let old = r#"{"id":"g","kind":"group","title":"t","description":"","gradient":"","owner":"o","members":[{"username":"o","role":"owner"}],"settings":{"send_messages":"all","send_media":"all","send_stickers":"all","send_polls":"all","add_members":"all","pin_messages":"admins","change_info":"admins","slow_mode":0,"sign_messages":false,"is_public":false,"public_link":"","history_visible":true},"created_at":"","version":1}"#;
         assert!(serde_json::from_str::<Group>(old).is_ok());
+    }
+
+    fn server() -> Group {
+        let mut g = group();
+        g.kind = "supergroup".into();
+        g.members.push(member("mod", "member"));
+        g.members.push(member("kid", "member"));
+        g.extra.insert("roles".into(), serde_json::json!([
+            { "id": "mods", "name": "Mods", "color": "#e91e63", "perms": ["manage_roles", "kick_members", "mute_members"] },
+            { "id": "vip", "name": "VIP", "color": "#f1c40f", "perms": ["attach_files"] },
+            { "id": "everyone", "name": "@everyone", "perms": ["view_room", "send_messages"] }
+        ]));
+        for m in g.members.iter_mut() {
+            if m.username == "mod" { m.extra.insert("roles".into(), serde_json::json!(["mods"])); }
+        }
+        g
+    }
+
+    #[test]
+    fn role_permissions_and_rooms() {
+        let g = server();
+        assert!(roles_on(&g));
+        assert!(perms_of(&g, "kid", None).contains("send_messages"));
+        assert!(!perms_of(&g, "kid", None).contains("attach_files"));
+        assert!(perms_of(&g, "mod", None).contains("kick_members"));
+        assert!(perms_of(&g, "own", None).contains("administrator"));
+        // A room that @everyone can't write in, but VIPs can.
+        let mut room = Room { id: "r".into(), name: "r".into(), kind: "text".into(), readonly: false, overrides: Default::default() };
+        room.overrides.insert("everyone".into(), Override { allow: vec![], deny: vec!["send_messages".into()] });
+        room.overrides.insert("vip".into(), Override { allow: vec!["send_messages".into()], deny: vec![] });
+        assert!(!may_post_in(&g, "kid", "hi", Some(&room)));
+        let mut g2 = g.clone();
+        for m in g2.members.iter_mut() { if m.username == "kid" { m.extra.insert("roles".into(), serde_json::json!(["vip"])); } }
+        assert!(may_post_in(&g2, "kid", "hi", Some(&room)));
+        assert!(!may_post_in(&g, "kid", "AQUA-FILE:v1:{}", None), "no attach_files");
+        assert!(may_post_in(&g2, "kid", "AQUA-FILE:v1:{}", None));
+    }
+
+    #[test]
+    fn role_managers_stay_within_their_rank() {
+        let cur = server();
+        // Mod gives VIP to kid: fine.
+        let mut next = cur.clone();
+        next.version += 1;
+        for m in next.members.iter_mut() { if m.username == "kid" { m.extra.insert("roles".into(), serde_json::json!(["vip"])); } }
+        assert!(accept_group_snapshot(Some(&cur), &next, "mod"));
+        // Mod can't give himself a role above or equal to his own, nor promote.
+        let mut bad = cur.clone();
+        bad.version += 1;
+        for m in bad.members.iter_mut() { if m.username == "kid" { m.extra.insert("roles".into(), serde_json::json!(["mods"])); } }
+        assert!(!accept_group_snapshot(Some(&cur), &bad, "mod"));
+        let mut bad2 = cur.clone();
+        bad2.version += 1;
+        for m in bad2.members.iter_mut() { if m.username == "kid" { m.role = "admin".into(); } }
+        assert!(!accept_group_snapshot(Some(&cur), &bad2, "mod"));
+        // Mod can't grant a permission he lacks.
+        let mut bad3 = cur.clone();
+        bad3.version += 1;
+        bad3.extra.insert("roles".into(), serde_json::json!([
+            { "id": "mods", "name": "Mods", "color": "#e91e63", "perms": ["manage_roles", "kick_members", "mute_members"] },
+            { "id": "vip", "name": "VIP", "color": "#f1c40f", "perms": ["attach_files", "ban_members"] },
+            { "id": "everyone", "name": "@everyone", "perms": ["view_room", "send_messages"] }
+        ]));
+        assert!(!accept_group_snapshot(Some(&cur), &bad3, "mod"));
+        // ...nor touch his own role.
+        let mut bad4 = cur.clone();
+        bad4.version += 1;
+        bad4.extra.insert("roles".into(), serde_json::json!([
+            { "id": "mods", "name": "Mods", "color": "#000000", "perms": ["manage_roles", "kick_members", "mute_members"] },
+            { "id": "vip", "name": "VIP", "color": "#f1c40f", "perms": ["attach_files"] },
+            { "id": "everyone", "name": "@everyone", "perms": ["view_room", "send_messages"] }
+        ]));
+        assert!(!accept_group_snapshot(Some(&cur), &bad4, "mod"));
+        // Kick a plain member: fine; kick the admin: no; rename the group: no.
+        let mut kick = cur.clone();
+        kick.version += 1;
+        kick.members.retain(|m| m.username != "kid");
+        assert!(accept_group_snapshot(Some(&cur), &kick, "mod"));
+        let mut kick_adm = cur.clone();
+        kick_adm.version += 1;
+        kick_adm.members.retain(|m| m.username != "adm");
+        assert!(!accept_group_snapshot(Some(&cur), &kick_adm, "mod"));
+        let mut rename = cur.clone();
+        rename.version += 1;
+        rename.title = "pwned".into();
+        assert!(!accept_group_snapshot(Some(&cur), &rename, "mod"));
+        // A member without managing roles can't do any of it.
+        assert!(!accept_group_snapshot(Some(&cur), &next, "kid"));
     }
 }

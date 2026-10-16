@@ -3,6 +3,11 @@
  * receive — see state.rs `may_post` / `accept_group_snapshot`).
  */
 import type { AdminRights, Group, GroupMember, Perm, Room } from "./types";
+import { rolesOn, hasPerm, type PermKey } from "./roles";
+
+/** Room the UI has open per group (so permission checks know where we are). */
+const openRoom = new Map<string, Room | null>();
+export function setOpenRoom(gid: string, room: Room | null) { openRoom.set(gid, room); }
 
 export function memberOf(g: Group | undefined, u: string): GroupMember | undefined {
   return g?.members.find((m) => m.username === u);
@@ -25,7 +30,15 @@ export function can(g: Group | undefined, u: string, right: keyof AdminRights): 
   const m = memberOf(g, u);
   if (!m) return false;
   if (m.role === "owner") return true;
-  if (m.role !== "admin") return false;
+  if (m.role !== "admin") {
+    // Supergroup roles grant the matching admin rights.
+    if (!rolesOn(g)) return false;
+    const map: Partial<Record<keyof AdminRights, PermKey[]>> = {
+      change_info: ["manage_server"], ban_users: ["ban_members", "kick_members"], pin_messages: ["manage_messages"],
+      delete_messages: ["manage_messages"], invite_users: ["invite_members"], add_admins: ["manage_roles"], manage_tags: ["manage_roles"],
+    };
+    return (map[right] ?? []).some((p) => hasPerm(g, u, p));
+  }
   const r = m.rights;
   if (!r) return right !== "add_admins" && right !== "anonymous";
   return !!r[right];
@@ -50,7 +63,7 @@ export const DEFAULT_ROOMS: Room[] = [
   { id: "voice", name: "Voice", kind: "voice" },
 ];
 
-export function postBlock(g: Group | undefined, me: string): string | null {
+export function postBlock(g: Group | undefined, me: string, roomArg?: Room | null): string | null {
   if (!g) return null;
   const m = memberOf(g, me);
   if (!m) return "You are not a member of this chat.";
@@ -61,12 +74,21 @@ export function postBlock(g: Group | undefined, me: string): string | null {
   }
   if (g.kind === "channel") return "channel";
   if (m.muted) return "An admin restricted you from sending messages.";
+  if (rolesOn(g)) {
+    const room = roomArg !== undefined ? roomArg : openRoom.get(g.id) ?? null;
+    if (!hasPerm(g, me, "send_messages", room)) return room ? `You don't have permission to write in #${room.name}.` : "You don't have permission to send messages here.";
+    return null;
+  }
   if (g.settings.send_messages === "admins") return "Only admins can send messages in this group.";
   return null;
 }
 
 export function canSendKind(g: Group | undefined, me: string, kind: "poll" | "sticker" | "media" | "voice" | "link"): boolean {
   if (!g || isAdmin(g, me)) return true;
+  if (rolesOn(g)) {
+    const p: PermKey = kind === "poll" ? "send_polls" : kind === "sticker" ? "use_stickers" : kind === "link" ? "embed_links" : "attach_files";
+    return hasPerm(g, me, p, openRoom.get(g.id) ?? null);
+  }
   const key = kind === "poll" ? "send_polls" : kind === "sticker" ? "send_stickers" : kind === "voice" ? "send_voice" : kind === "link" ? "embed_links" : "send_media";
   return perm(g, key as keyof Group["settings"]) !== "admins";
 }

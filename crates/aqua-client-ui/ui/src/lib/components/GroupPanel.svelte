@@ -32,18 +32,19 @@
   import { CLAN_BADGES, CLAN_COLORS, badgeSvg } from "../clanBadges";
   import { memberOf, isAdmin, isOwner, can, tagOf, shareLink, ALL_RIGHTS, DEFAULT_ROOMS } from "../groupRules";
   import type { Room } from "../types";
+  import { rolesOn, rolesOf, memberRoles, memberRoleIds, roleColor, hasPerm, canManageRole, outranks, rank, everyoneRole, PERM_GROUPS, ROLE_COLORS, ROOM_PERMS, type Role, type PermKey } from "../roles";
   import AnimatedMedia from "./AnimatedMedia.svelte";
   import ClanTag from "./ClanTag.svelte";
   import type { AdminRights, Group, GroupMember, Perm } from "../types";
 
-  type Page = "rooms" | "info" | "manage" | "type" | "perms" | "reactions" | "admins" | "admin-edit" | "members" | "banned" | "requests" | "clan" | "log";
+  type Page = "roles" | "role-edit" | "room-perms" | "rooms" | "info" | "manage" | "type" | "perms" | "reactions" | "admins" | "admin-edit" | "members" | "banned" | "requests" | "clan" | "log";
   let page = $state<Page>("info");
   let stack: Page[] = [];
   let editUser = $state("");
 
   let me = $derived($info?.username ?? "");
   let group = $derived($groupPanelId ? $groupMap[$groupPanelId] : undefined);
-  let admin = $derived(isAdmin(group, me));
+  let admin = $derived(isAdmin(group, me) || (rolesOn(group) && ["manage_server", "manage_roles", "manage_rooms", "kick_members", "ban_members", "mute_members"].some((p) => hasPerm(group, me, p as PermKey))));
   let owner = $derived(isOwner(group, me));
   let isChannel = $derived(group?.kind === "channel");
   /** Basic groups: private, ≤ 200 members, no server tag / slow mode / log. */
@@ -196,6 +197,77 @@
     [a[i], a[j]] = [a[j], a[i]];
     void saveRooms(a);
   }
+
+  // ---- roles (Discord) -------------------------------------------------------
+  let roleList = $derived(rolesOf(group));
+  let editRoleId = $state("");
+  let editRole = $derived(roleList.find((r) => r.id === editRoleId));
+  let roleName = $state("");
+  $effect(() => { if (page === "role-edit" && editRole) roleName = editRole.name; });
+  const canRoles = $derived(!!group && (isAdmin(group, me) || hasPerm(group, me, "manage_roles")));
+  const myPerms = $derived(new Set(group ? PERM_GROUPS.flatMap((x) => x.perms.map((p) => p.key)).filter((p) => hasPerm(group, me, p)) : []));
+  async function enableRoles() {
+    await commit((g) => {
+      g.roles = [
+        { id: "mod", name: tr("Moderator"), color: "#e91e63", perms: ["manage_messages", "kick_members", "mute_members", "view_log"], hoist: true, mentionable: true },
+        { id: "member", name: tr("Member"), color: "#3498db", perms: [], hoist: false },
+        everyoneRole(),
+      ];
+    }, "turned on roles");
+  }
+  async function saveRoles(next: Role[], log?: string) { await commit((g) => { g.roles = next; }, log); }
+  function patchRole(id: string, p: Partial<Role>) { return roleList.map((r) => (r.id === id ? { ...r, ...p } : r)); }
+  async function addRole() {
+    let n = 1, id = "role";
+    while (roleList.some((r) => r.id === id)) id = `role${++n}`;
+    // New roles go just below my highest role (or at the top for owners).
+    const at = Math.max(0, rank(group, me) + 1);
+    const next = [...roleList];
+    next.splice(Math.min(at, next.length - 1), 0, { id, name: tr("new role"), color: ROLE_COLORS[(roleList.length * 5) % ROLE_COLORS.length], perms: [] });
+    await saveRoles(next, "created a role");
+    editRoleId = id; go("role-edit");
+  }
+  function moveRole(i: number, d: number) {
+    const a = [...roleList], j = i + d;
+    if (j < 0 || j >= a.length - 1 || i >= a.length - 1) return;   // @everyone stays last
+    if (!canManageRole(group, me, a[i].id) || !canManageRole(group, me, a[j].id)) return;
+    [a[i], a[j]] = [a[j], a[i]];
+    void saveRoles(a);
+  }
+  function togglePermOf(r: Role, p: PermKey) {
+    const has = r.perms.includes(p);
+    void saveRoles(patchRole(r.id, { perms: has ? r.perms.filter((x) => x !== p) : [...r.perms, p] }));
+  }
+  async function deleteRole(r: Role) {
+    await commit((g) => {
+      g.roles = (g.roles ?? []).filter((x) => x.id !== r.id);
+      g.members = g.members.map((m) => (m.roles?.includes(r.id) ? { ...m, roles: m.roles.filter((x) => x !== r.id) } : m));
+    }, `deleted role ${r.name}`);
+    back();
+  }
+  async function toggleMemberRole(u: string, roleId: string) {
+    const cur = memberRoleIds(group, u);
+    const has = cur.includes(roleId);
+    await setMemberField(u, { roles: has ? cur.filter((x) => x !== roleId) : [...cur, roleId] }, `${has ? "took" : "gave"} a role ${has ? "from" : "to"} @${u}`);
+  }
+  // Room overrides: tri-state per role.
+  let permRoomId = $state("");
+  let permRoom = $derived(roleList.length ? (group?.rooms ?? []).find((r) => r.id === permRoomId) : undefined);
+  function ovState(room: Room, roleId: string, p: PermKey): "allow" | "deny" | "" {
+    const o = room.overrides?.[roleId];
+    return o?.allow.includes(p) ? "allow" : o?.deny.includes(p) ? "deny" : "";
+  }
+  async function cycleOverride(room: Room, roleId: string, p: PermKey) {
+    const st = ovState(room, roleId, p);
+    const nextSt = st === "" ? "allow" : st === "allow" ? "deny" : "";
+    const ov = { ...(room.overrides ?? {}) };
+    const o = { allow: (ov[roleId]?.allow ?? []).filter((x) => x !== p), deny: (ov[roleId]?.deny ?? []).filter((x) => x !== p) };
+    if (nextSt === "allow") o.allow.push(p);
+    if (nextSt === "deny") o.deny.push(p);
+    if (!o.allow.length && !o.deny.length) delete ov[roleId]; else ov[roleId] = o;
+    await commit((g) => { g.rooms = (g.rooms ?? []).map((r) => (r.id === room.id ? { ...r, overrides: ov } : r)); });
+  }
+  const PERM_LABEL = Object.fromEntries(PERM_GROUPS.flatMap((g) => g.perms.map((p) => [p.key, p.label]))) as Record<PermKey, string>;
 
   // ---- server stats (fun) ------------------------------------------------
   let loadedMsgs = $state<{ gid: string; list: ChatMessage[] }>({ gid: "", list: [] });
@@ -420,6 +492,7 @@
     info: "", manage: "Edit", type: "Type & link", perms: "Permissions", reactions: "Reactions",
     admins: "Administrators", "admin-edit": "Admin rights", members: "Members", banned: "Removed users",
     requests: "Join requests", clan: "Server tag", log: "Recent actions", rooms: "Rooms",
+    roles: "Roles", "role-edit": "Edit role", "room-perms": "Room permissions",
   };
   const I = {
     pencil: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>`,
@@ -565,7 +638,7 @@
               {@const mt = tagOf(group, m.username)}
               <div class="mrow">
                 {@render memberAva(m.username)}
-                <span class="m-name">{m.username}{#if m.username === me}<em> {$t("(you)")}</em>{/if}
+                <span class="m-name" style:color={roleColor(group, m.username) || null}>{m.username}{#if m.username === me}<em> {$t("(you)")}</em>{/if}
                   {#if mt?.tag}<span class="mtag" class:admin={mt.admin}>{mt.tag}</span>{/if}</span>
                 {#if mt?.title}<span class="m-role" class:owner={m.role === "owner"}>{mt.title}</span>{/if}
               </div>
@@ -633,6 +706,7 @@
           {#if !basic}{@render row("Join requests", `${group.requests?.length ?? 0}`, () => go("requests"), "#FF2D55")}{/if}
           {@render row("Removed users", `${group.banned?.length ?? 0}`, () => go("banned"), "#FF3B30")}
           {#if !basic && !isChannel}
+            {@render row("Roles", rolesOn(group) ? `${roleList.length - 1}` : "Off", () => go("roles"), "#EB459E")}
             {@render row("Rooms", group.settings.rooms_enabled ? `${roomList.length}` : "Off", () => go("rooms"), "#00C7BE")}
           {/if}
           {#if !basic}
@@ -753,11 +827,23 @@
             {@const mt = tagOf(group, m.username)}
             <button class="mrow click" onclick={() => { openMember = openMember === m.username ? "" : m.username; tagDraft = m.tag ?? ""; }}>
               {@render memberAva(m.username)}
-              <span class="m-name">{m.username}{#if m.username === me}<em> {$t("(you)")}</em>{/if}
+              <span class="m-name" style:color={roleColor(group, m.username) || null}>{m.username}{#if m.username === me}<em> {$t("(you)")}</em>{/if}
+                {#each memberRoles(group, m.username).slice(0, 3) as r (r.id)}<span class="role-pill" style:--rc={r.color || "var(--fg-dim)"}>{r.name}</span>{/each}
                 {#if mt?.tag}<span class="mtag" class:admin={mt.admin}>{mt.tag}</span>{/if}
                 {#if m.muted}<span class="mtag muted">{$t("restricted")}</span>{/if}</span>
               {#if mt?.title}<span class="m-role" class:owner={m.role === "owner"}>{mt.title}</span>{/if}
             </button>
+            {#if openMember === m.username && canRoles && rolesOn(group) && (m.username === me ? isAdmin(group, me) : outranks(group, me, m.username))}
+              <div class="macts">
+                <div class="ct">{$t("Roles")}</div>
+                <div class="role-picks">
+                  {#each roleList.filter((r) => r.id !== "everyone") as r (r.id)}
+                    {@const on = memberRoleIds(group, m.username).includes(r.id)}
+                    <button class="role-pick" class:on style:--rc={r.color || "var(--accent)"} disabled={!canManageRole(group, me, r.id) || busy} onclick={() => toggleMemberRole(m.username, r.id)}>{on ? "✓ " : ""}{r.name}</button>
+                  {/each}
+                </div>
+              </div>
+            {/if}
             {#if openMember === m.username && m.username !== me && m.role !== "owner"}
               <div class="macts">
                 {#if can(group, me, "manage_tags")}
@@ -823,6 +909,91 @@
           <div class="note">{$t("Like Discord server tags: members can wear it next to their name everywhere, and anyone can click it to ask to join.")}</div>
         </div>
 
+      {:else if page === "roles"}
+        {#if !rolesOn(group)}
+          <div class="card">
+            <div class="note">{$t("Roles work like on a Discord server: named, coloured ranks with their own permissions, a hierarchy, and per-room overrides. Admins and the owner keep full rights.")}</div>
+            <button class="btn wide" onclick={enableRoles} disabled={busy || !isAdmin(group, me)}>{$t("Turn on roles")}</button>
+          </div>
+        {:else}
+          <div class="card">
+            <div class="note">{$t("Higher roles come first. Members get the permissions of all their roles; the colour of the highest coloured one. You can manage roles below your own.")}</div>
+            {#each roleList as r, i (r.id)}
+              {@const count = r.id === "everyone" ? group.members.length : group.members.filter((m) => (m.roles ?? []).includes(r.id)).length}
+              <div class="role-row">
+                <span class="role-dot" style:background={r.color || "var(--fg-dim)"}></span>
+                <button class="role-name" onclick={() => { editRoleId = r.id; go("role-edit"); }} disabled={!canManageRole(group, me, r.id) && r.id !== "everyone"}>
+                  <b style:color={r.color || null}>{r.name}</b><span class="rs">{$tn(count, "member")}{r.hoist ? " · " + $t("shown separately") : ""}</span>
+                </button>
+                {#if r.id !== "everyone"}
+                  <button class="rr-btn" onclick={() => moveRole(i, -1)} disabled={i === 0 || !canManageRole(group, me, r.id) || !canManageRole(group, me, roleList[i - 1]?.id ?? "")} aria-label={$t("Up")}>↑</button>
+                  <button class="rr-btn" onclick={() => moveRole(i, 1)} disabled={i >= roleList.length - 2 || !canManageRole(group, me, r.id)} aria-label={$t("Down")}>↓</button>
+                {/if}
+              </div>
+            {/each}
+            {#if canRoles}<button class="btn wide" onclick={addRole} disabled={busy}>＋ {$t("Create role")}</button>{/if}
+          </div>
+        {/if}
+
+      {:else if page === "role-edit" && editRole}
+        {@const locked = editRole.id === "everyone" ? !isAdmin(group, me) && !hasPerm(group, me, "manage_roles") : !canManageRole(group, me, editRole.id)}
+        <div class="card">
+          {#if editRole.id !== "everyone"}
+            <label class="fld"><span>{$t("Role name")}</span>
+              <div class="inline"><input class="inp" maxlength="32" bind:value={roleName} disabled={locked} />
+                <button class="btn" onclick={() => roleName.trim() && saveRoles(patchRole(editRole!.id, { name: roleName.trim() }))} disabled={locked || busy}>{$t("Set")}</button></div>
+            </label>
+            <div class="fld"><span>{$t("Colour")}</span>
+              <div class="colors">
+                <button class="ccell none" class:on={!editRole.color} onclick={() => saveRoles(patchRole(editRole!.id, { color: "" }))} disabled={locked}>∅</button>
+                {#each ROLE_COLORS as c (c)}<button class="ccell" class:on={editRole.color === c} style:background={c} onclick={() => saveRoles(patchRole(editRole!.id, { color: c }))} aria-label={c} disabled={locked}></button>{/each}
+                <ColorInput value={editRole.color || "#99aab5"} oninput={(v) => saveRoles(patchRole(editRole!.id, { color: v }))} size={26} disabled={locked} />
+              </div>
+            </div>
+            {@render toggle("Show separately", "Members with this role are listed in their own group", !!editRole.hoist, () => saveRoles(patchRole(editRole!.id, { hoist: !editRole!.hoist })), locked || busy)}
+            {@render toggle("Mentionable", "Anyone can @mention this role", !!editRole.mentionable, () => saveRoles(patchRole(editRole!.id, { mentionable: !editRole!.mentionable })), locked || busy)}
+          {:else}
+            <div class="note">{$t("@everyone — the permissions every member has, before other roles add to them.")}</div>
+          {/if}
+        </div>
+        {#each PERM_GROUPS as pg (pg.title)}
+          <div class="card">
+            <div class="ct">{$t(pg.title)}</div>
+            {#each pg.perms as p (p.key)}
+              {@render toggle(p.label, p.desc, editRole.perms.includes(p.key), () => togglePermOf(editRole!, p.key), locked || busy || (!myPerms.has(p.key) && !editRole.perms.includes(p.key)))}
+            {/each}
+          </div>
+        {/each}
+        {#if editRole.id !== "everyone"}
+          <div class="card">
+            <div class="ct">{$t("Members with this role")}</div>
+            {#each group.members.filter((m) => (m.roles ?? []).includes(editRole!.id)) as m (m.username)}
+              <div class="mrow">{@render memberAva(m.username)}<span class="m-name">{m.username}</span>
+                {#if !locked}<button class="btn ghost" onclick={() => toggleMemberRole(m.username, editRole!.id)}>{$t("Remove")}</button>{/if}</div>
+            {:else}
+              <div class="note">{$t("Nobody yet — give it to people in Members.")}</div>
+            {/each}
+          </div>
+          {#if !locked}<button class="danger-btn" onclick={() => deleteRole(editRole!)}>{$t("Delete role")}</button>{/if}
+        {/if}
+
+      {:else if page === "room-perms" && permRoom}
+        {@const cols = ROOM_PERMS.filter((p) => permRoom!.kind === "voice" ? ["view_room", "connect", "speak", "video"].includes(p) : !["connect", "speak", "video"].includes(p))}
+        <div class="card">
+          <div class="note">{$t("Per-room overrides: ✓ allows, ✕ denies, — follows the role. Denies on @everyone apply first, then the member's roles.")}</div>
+          <div class="ov-table" style:--cols={cols.length}>
+            <span></span>
+            {#each cols as p (p)}<span class="ov-h" title={$t(PERM_LABEL[p])}>{$t(PERM_LABEL[p])}</span>{/each}
+            {#each roleList as r (r.id)}
+              <span class="ov-role" style:color={r.color || null}>{r.name}</span>
+              {#each cols as p (p)}
+                {@const st = ovState(permRoom!, r.id, p)}
+                <button class="ov-cell {st}" onclick={() => cycleOverride(permRoom!, r.id, p)} disabled={busy || !(isAdmin(group, me) || hasPerm(group, me, "manage_rooms"))}>{st === "allow" ? "✓" : st === "deny" ? "✕" : "—"}</button>
+              {/each}
+            {/each}
+          </div>
+        </div>
+
       {:else if page === "rooms"}
         <div class="card">
           {@render toggle("Rooms", "Split the chat into channels like a Discord server: text rooms, announcement rooms, voice rooms", !!group.settings.rooms_enabled, () => setRoomsEnabled(!group.settings.rooms_enabled), busy || !can(group, me, "change_info"))}
@@ -842,6 +1013,7 @@
                 {/if}
                 <button class="rr-btn" onclick={() => moveRoom(i, -1)} disabled={i === 0} aria-label={$t("Up")}>↑</button>
                 <button class="rr-btn" onclick={() => moveRoom(i, 1)} disabled={i === roomList.length - 1} aria-label={$t("Down")}>↓</button>
+                {#if rolesOn(group)}<button class="rr-btn" onclick={() => { permRoomId = r.id; go("room-perms"); }} title={$t("Room permissions")}>⚙</button>{/if}
                 <button class="rr-btn danger" onclick={() => saveRooms(roomList.filter((x) => x.id !== r.id), `deleted room ${r.name}`)} aria-label={$t("Delete")}>×</button>
               </div>
             {/each}
@@ -923,6 +1095,25 @@
   .me-actions { display: flex; gap: 6px; padding-top: 30px; }
   .ccell.none { background: var(--bg-input); color: var(--fg-dim); font-size: 13px; }
   .hidden { display: none; }
+  .role-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .role-row:last-of-type { border-bottom: none; }
+  .role-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+  .role-name { flex: 1; display: flex; flex-direction: column; align-items: flex-start; border: none; background: none; color: var(--fg); cursor: pointer; padding: 2px 0; font: inherit; text-align: left; }
+  .role-name:disabled { cursor: default; }
+  .role-name b { font-size: 13.5px; }
+  .role-pill { display: inline-block; margin-left: 5px; padding: 0 6px; border-radius: 6px; font-size: 10.5px; font-weight: 700; vertical-align: 1px;
+    color: var(--rc); background: color-mix(in srgb, var(--rc) 16%, transparent); }
+  .role-picks { display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 6px; }
+  .role-pick { border: 1px solid color-mix(in srgb, var(--rc) 50%, transparent); background: transparent; color: var(--rc); border-radius: 8px; padding: 4px 10px;
+    font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; transition: background .15s; }
+  .role-pick.on { background: color-mix(in srgb, var(--rc) 22%, transparent); }
+  .role-pick:disabled { opacity: .4; cursor: not-allowed; }
+  .ov-table { display: grid; grid-template-columns: minmax(80px, 1.2fr) repeat(var(--cols), minmax(34px, 1fr)); gap: 4px; align-items: center; overflow-x: auto; padding-bottom: 8px; }
+  .ov-h { font-size: 9.5px; font-weight: 700; color: var(--fg-dim); text-align: center; line-height: 1.15; word-break: break-word; }
+  .ov-role { font-size: 12.5px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ov-cell { height: 28px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg-input); color: var(--fg-dim); cursor: pointer; font-weight: 800; }
+  .ov-cell.allow { background: rgba(61,220,132,.16); color: #3ddc84; border-color: rgba(61,220,132,.4); }
+  .ov-cell.deny { background: rgba(255,77,109,.14); color: #ff6b6b; border-color: rgba(255,77,109,.4); }
   .room-row { display: flex; gap: 6px; align-items: center; padding: 5px 0; border-bottom: 1px solid var(--border); }
   .room-row:last-of-type { border-bottom: none; }
   .room-row .re { flex: 0 0 44px; width: 44px; text-align: center; padding: 6px 4px; }

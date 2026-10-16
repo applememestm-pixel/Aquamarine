@@ -38,7 +38,8 @@
   import { ghost } from "../ghost";
   import GroupCallPanel from "./GroupCallPanel.svelte";
   import { groupCall, activeGroupCalls, joinGroupCall } from "../groupCall";
-  import { postBlock, tagOf, canSendKind, isAdmin, can, roomsOf } from "../groupRules";
+  import { postBlock, tagOf, canSendKind, isAdmin, can, roomsOf, setOpenRoom } from "../groupRules";
+  import { roleColor, hasPerm, rolesOn } from "../roles";
   import type { Room } from "../types";
   import { t, tr, tn } from "../i18n";
   import { mutedChats, setMuted } from "../chatPrefs";
@@ -989,7 +990,7 @@
   let roomPick = $state<Record<string, string>>(readJson(ROOM_KEY, {}));
   let roomSeen = $state<Record<string, Record<string, number>>>(readJson(SEEN_KEY, {}));
   let rooms = $derived(roomsOf(activeGroup));
-  let textRooms = $derived(rooms.filter((r) => r.kind === "text"));
+  let textRooms = $derived(rooms.filter((r) => r.kind === "text" && (!rolesOn(activeGroup) || hasPerm(activeGroup, myUsername, "view_room", r))));
   let activeRoom = $derived.by((): Room | null => {
     if (!activeGroup || !textRooms.length) return null;
     return textRooms.find((r) => r.id === roomPick[activeGroup.id]) ?? textRooms[0];
@@ -1005,6 +1006,7 @@
   $effect(() => {
     const g = activeGroup, r = activeRoom;
     if (!g) return;
+    setOpenRoom(g.id, r);
     void api.setGroupRoom(g.id, r?.id ?? "").catch(() => {});
     if (r) {
       const n = roomCounts[r.id] ?? 0;
@@ -1033,6 +1035,7 @@
   function pickRoom(r: Room) {
     if (!activeGroup) return;
     if (r.kind === "voice") {
+      if (rolesOn(activeGroup) && !hasPerm(activeGroup, myUsername, "connect", r)) { showToast(tr("You can't join this voice room")); return; }
       voiceView = { ...voiceView, [activeGroup.id]: r.id };
       voiceChat = false;
       if (!inMyCall) void joinGroupCall(activeGroup.id);
@@ -1048,7 +1051,7 @@
   let postBlocked = $derived(
     activeRoom?.readonly && !isAdmin(activeGroup, myUsername)
       ? tr("Only admins write in #{room}", { room: activeRoom.name })
-      : postBlock(activeGroup, myUsername));
+      : postBlock(activeGroup, myUsername, activeRoom));
   let canPost = $derived(postBlocked === null);
   /** Channel / group forbids forwarding, copying and saving. */
   let protectedChat = $derived(!!activeGroup?.settings.protected_content && !isAdmin(activeGroup, myUsername));
@@ -2091,7 +2094,7 @@
               {#if m.first && !m.outgoing && $activeChat}
                 {@const mt = isGroup ? tagOf(activeGroup, m.from) : null}
                 <div class="msg-header">
-                  <span class="msg-author">{isGroup ? m.from : $activeChat.name.split(' ')[0]}</span>
+                  <span class="msg-author" style:color={isGroup ? roleColor(activeGroup, m.from) || null : null}>{isGroup ? m.from : $activeChat.name.split(' ')[0]}</span>
                   {#if $clans[m.from]}<ClanTag tag={$clans[m.from]} />{/if}
                   {#if mt?.tag}<span class="member-tag" class:admin={mt.admin}>{mt.tag}</span>{/if}
                   {#if mt?.title}<span class="admin-title">{mt.title}</span>{/if}

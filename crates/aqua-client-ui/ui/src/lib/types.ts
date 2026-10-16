@@ -232,6 +232,8 @@ export interface GroupMember {
   rights?: AdminRights;
   /** Restricted: can read but not send. */
   muted?: boolean;
+  /** Supergroup role ids (Discord-style roles). */
+  roles?: string[];
 }
 
 /** Discord-style server tag: up to 4 characters + badge + colour. */
@@ -276,7 +278,11 @@ export interface GroupSettings {
 }
 
 /** A supergroup room (Discord channel). */
-export interface Room { id: string; name: string; kind: "text" | "voice"; readonly?: boolean; emoji?: string }
+export interface Room {
+  id: string; name: string; kind: "text" | "voice"; readonly?: boolean; emoji?: string;
+  /** Per-role permission overrides (Discord channel permissions). */
+  overrides?: Record<string, import("./roles").Override>;
+}
 
 export interface JoinRequest { username: string; note: string; at: string }
 export interface GroupLogEntry { at: string; by: string; text: string }
@@ -298,6 +304,8 @@ export interface Group {
   log?: GroupLogEntry[];
   clan?: ClanTag | null;
   rooms?: Room[];
+  /** Discord-style roles, highest first; last is @everyone. */
+  roles?: import("./roles").Role[];
   /** Photo / banner: E2EE file references (encrypted blobs on the relay). */
   photo?: ArticleMedia | null;
   banner?: ArticleMedia | null;
