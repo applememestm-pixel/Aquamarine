@@ -11,7 +11,15 @@ Tauri выбирает сам, переносить нельзя). Эта пап
 3. **Rust** (https://rustup.rs) и **Node.js 22+** (https://nodejs.org) — для ПК-сборки они у тебя уже есть.
 
 ## Linux (Arch)
-Те же три шага — `.sh`-версии (запускать из терминала):
+**Одной командой** — всё сразу (пакеты, Android Studio из AUR, SDK + NDK, сборка APK):
+
+```bash
+bash android/arch-all.sh          # зависимости + APK, потом предложит открыть Android Studio
+bash android/arch-all.sh apk      # только APK
+bash android/arch-all.sh studio   # зависимости + Android Studio (запуск на телефоне / эмуляторе)
+```
+
+Или по шагам — `.sh`-версии (запускать из терминала):
 
 ```bash
 sudo pacman -S --needed rustup nodejs npm jdk21-openjdk unzip && rustup default stable
