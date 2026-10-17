@@ -18,10 +18,16 @@ if ! cargo tauri --version >/dev/null 2>&1; then
   cargo install tauri-cli --version '^2' --locked
 fi
 
-# node_modules from a Windows install carries win32-only native binaries - reinstall then.
-if ls -d ui/node_modules/@rollup/*win32* ui/node_modules/@esbuild/win32* >/dev/null 2>&1; then
-  echo "[*] node_modules came from Windows - reinstalling…"
-  rm -rf ui/node_modules
+# node_modules made elsewhere (Windows, or by pnpm) lacks this system's native
+# rollup / esbuild binaries and vite dies with "Cannot find module
+# @rollup/rollup-linux-x64-gnu". Reinstall when they don't load here.
+if [ -d ui/node_modules ]; then
+  if [ -d ui/node_modules/.pnpm ] \
+     || ls -d ui/node_modules/@rollup/*win32* ui/node_modules/@esbuild/win32* >/dev/null 2>&1 \
+     || ! ( cd ui && node -e "require('rollup/dist/native.js'); require('esbuild')" >/dev/null 2>&1 ); then
+    echo "[*] node_modules was made for another system (Windows / pnpm) - reinstalling…"
+    rm -rf ui/node_modules
+  fi
 fi
 if [ -x ui/node_modules/.bin/vite ]; then
   echo "[*] Frontend dependencies already installed."
