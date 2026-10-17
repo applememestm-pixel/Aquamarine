@@ -1,17 +1,34 @@
 name: release
 
-# Builds the desktop client (Tauri) and the relay server for Windows, macOS
-# and Linux. Tauri can't cross-compile, so each OS builds on its own runner.
-# Artifacts are uploaded for every run; on a v* tag they're attached to the
-# GitHub Release.
+# Builds the desktop client (Tauri), Android / iOS and the relay server for
+# every platform. Tauri can't cross-compile, so each OS builds on its own
+# runner.
+#
+# Two channels:
+#   * a v* tag            → the stable GitHub Release of that version
+#                           ("Latest"; the site's download buttons use it);
+#   * a push to main      → the "nightly" pre-release, rebuilt for every
+#     (or a manual run)     platform from the newest commit, so Windows /
+#                           macOS / Android never lag behind Linux.
+# A newer push cancels a nightly build still in progress.
 
 on:
   push:
     tags: ["v*"]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+
+env:
+  # Which release the files go to.
+  REL_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'nightly' }}
+  NIGHTLY: ${{ startsWith(github.ref, 'refs/tags/v') && 'false' || 'true' }}
 
 jobs:
   # ---------------------------------------------------------------- notes
@@ -20,11 +37,27 @@ jobs:
   # attach files, so they keep whatever text is set here.
   notes:
     name: release notes
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Nightly: move the "nightly" tag to this commit and (re)title the
+      # pre-release; the build jobs then replace its files.
+      - name: Prepare the nightly pre-release
+        if: env.NIGHTLY == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          short=$(git rev-parse --short HEAD)
+          git tag -f nightly HEAD
+          git push -f origin refs/tags/nightly
+          notes="Automatic build of \`main\` at ${short} ($(date -u '+%Y-%m-%d %H:%M UTC')) for every platform. Newer than the stable release; may have rough edges. SHA256SUMS.txt is added when all builds finish."
+          if gh release view nightly >/dev/null 2>&1; then
+            gh release edit nightly --title "Aquamarine nightly (${short})" --notes "$notes" --prerelease --latest=false
+          else
+            gh release create nightly --title "Aquamarine nightly (${short})" --notes "$notes" --prerelease --latest=false --verify-tag
+          fi
       - name: Create / update the release text
+        if: env.NIGHTLY != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
@@ -47,6 +80,7 @@ jobs:
   # ---------------------------------------------------------------- desktop
   desktop:
     name: desktop (${{ matrix.name }})
+    needs: notes
     strategy:
       fail-fast: false
       matrix:
@@ -130,14 +164,18 @@ jobs:
           if-no-files-found: warn
 
       - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.REL_TAG }}
+          prerelease: ${{ env.NIGHTLY == 'true' }}
+          make_latest: ${{ env.NIGHTLY == 'true' && 'false' || 'true' }}
+          overwrite_files: true
           files: dist/*
 
   # ---------------------------------------------------------------- android
   android:
     name: mobile (android)
+    needs: notes
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -227,9 +265,12 @@ jobs:
           if-no-files-found: error
 
       - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.REL_TAG }}
+          prerelease: ${{ env.NIGHTLY == 'true' }}
+          make_latest: ${{ env.NIGHTLY == 'true' && 'false' || 'true' }}
+          overwrite_files: true
           files: dist/*
 
   # ---------------------------------------------------------------- ios
@@ -238,6 +279,7 @@ jobs:
   # account and signing secrets — not set up yet, so this job is best-effort.
   ios:
     name: mobile (ios, unsigned)
+    needs: notes
     runs-on: macos-latest
     continue-on-error: true
     steps:
@@ -345,14 +387,18 @@ jobs:
           if-no-files-found: error
 
       - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.REL_TAG }}
+          prerelease: ${{ env.NIGHTLY == 'true' }}
+          make_latest: ${{ env.NIGHTLY == 'true' && 'false' || 'true' }}
+          overwrite_files: true
           files: dist/*.ipa
 
   # ---------------------------------------------------------------- server
   server:
     name: server (${{ matrix.name }})
+    needs: notes
     strategy:
       fail-fast: false
       matrix:
@@ -410,9 +456,12 @@ jobs:
           if-no-files-found: error
 
       - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.REL_TAG }}
+          prerelease: ${{ env.NIGHTLY == 'true' }}
+          make_latest: ${{ env.NIGHTLY == 'true' && 'false' || 'true' }}
+          overwrite_files: true
           files: dist/*
 
   # ---------------------------------------------------------------- checksums
@@ -420,14 +469,26 @@ jobs:
   # can be checked (SECURITY.md → "Рекомендации пользователям").
   checksums:
     name: checksums
-    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
-    needs: [desktop, android, ios, server]
+    if: ${{ always() && needs.notes.result == 'success' }}
+    needs: [notes, desktop, android, ios, server]
     runs-on: ubuntu-latest
     steps:
+      # Nightly: drop files an older build left behind (renamed bundles),
+      # so the pre-release holds exactly this commit's files.
+      - name: Remove stale nightly files
+        if: env.NIGHTLY == 'true' && needs.desktop.result == 'success' && needs.android.result == 'success' && needs.ios.result == 'success' && needs.server.result == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          started=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .run_started_at)
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/nightly" --jq ".assets[] | select(.updated_at < \"$started\") | .name" |
+            while read -r name; do
+              [ -n "$name" ] && gh release delete-asset nightly "$name" --repo "$GITHUB_REPOSITORY" --yes || true
+            done
       - name: Hash the release files
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.REL_TAG }}
         run: |
           mkdir -p dl && cd dl
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*' --skip-existing
