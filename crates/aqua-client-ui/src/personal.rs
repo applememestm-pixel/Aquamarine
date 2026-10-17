@@ -223,8 +223,17 @@ pub fn set_window_icon(window: tauri::WebviewWindow, rgba: Vec<u8>, size: u32) -
     if size == 0 || size > 512 || rgba.len() != (size * size * 4) as usize {
         return Err("bad icon".into());
     }
-    let img = tauri::image::Image::new_owned(rgba, size, size);
-    window.set_icon(img).map_err(|e| e.to_string())
+    // Phones have no window icon (Android / iOS: the launcher icon is fixed).
+    #[cfg(desktop)]
+    {
+        let img = tauri::image::Image::new_owned(rgba, size, size);
+        window.set_icon(img).map_err(|e| e.to_string())
+    }
+    #[cfg(mobile)]
+    {
+        let _ = (window, rgba);
+        Ok(())
+    }
 }
 
 /// The console-chat bot script (tools/aqua-console.py), bundled so the
