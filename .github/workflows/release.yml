@@ -155,7 +155,8 @@ jobs:
           # Windows: NSIS + MSI
           find "$base/bundle" -type f \( -name '*-setup.exe' -o -name '*.msi' \) -exec cp {} dist/ \; 2>/dev/null || true
           # macOS: DMG (+ zipped .app)
-          find "$base/bundle" -type f -name '*.dmg' -exec cp {} dist/ \; 2>/dev/null || true
+          # (not bundle_dmg.sh's leftover read-write image "rw.<pid>.<name>.dmg")
+          find "$base/bundle" -type f -name '*.dmg' ! -name 'rw.*' -exec cp {} dist/ \; 2>/dev/null || true
           # Linux: AppImage + deb + rpm
           find "$base/bundle" -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) -exec cp {} dist/ \; 2>/dev/null || true
           # Stable copies so the website can link releases/latest/download/<name>
