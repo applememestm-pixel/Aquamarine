@@ -13,6 +13,8 @@ pub mod media_server;
 pub mod personal;
 pub mod history;
 pub mod backups;
+pub mod gpu;
+pub mod stickers;
 
 use anyhow::Result;
 use tauri::Manager;
@@ -29,6 +31,7 @@ pub fn run() -> Result<()> {
     // Before any thread or webview exists: the web process inherits it.
     #[cfg(target_os = "linux")]
     media_server::prefer_software_video_decoding();
+    let _ = gpu::init();
     let builder = tauri::Builder::default();
     // WebKitGTK denies camera / mic / screen capture unless the app answers
     // its permission request ("Mic test failed: NotAllowedError" on Linux).
@@ -93,6 +96,17 @@ pub fn run() -> Result<()> {
             web::link_preview,
             commands::upload_attachment,
             commands::prepare_banner_video,
+            gpu::gpu_status,
+            stickers::create_sticker_pack,
+            stickers::pack_add_files,
+            stickers::pack_set_order,
+            stickers::pack_set_icon,
+            stickers::sticker_set_emoji,
+            stickers::sticker_delete,
+            stickers::sync_telegram_pack,
+            stickers::check_pack_updates,
+            media_server::transcode_media,
+            gpu::set_gpu_mode,
             commands::fetch_attachment,
             commands::allow_media_preview,
             media_server::media_stream_url,
@@ -228,6 +242,11 @@ mod linux_webview {
                 s.set_media_playback_requires_user_gesture(false);
                 // JS console → stdout, so tools/aquamarine.sh's log has it.
                 s.set_enable_write_console_messages_to_stdout(true);
+                // No usable GPU (see gpu.rs): paint on the CPU directly
+                // instead of compositing through emulated OpenGL.
+                if crate::gpu::gpu_status().software {
+                    s.set_hardware_acceleration_policy(webkit2gtk::HardwareAccelerationPolicy::Never);
+                }
             }
         });
         if let Err(e) = res {

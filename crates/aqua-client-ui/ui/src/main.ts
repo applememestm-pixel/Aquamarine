@@ -25,20 +25,6 @@ import "./app.css";
       last = now;
       if (gap > 400) console.warn(`[aqua-stall] ${Math.round(gap)} ms; last click ${lastClick} ${Math.round((now - lastClickAt) / 1000)} s ago`);
     }, 250);
-    // Is WebKit drawing with the GPU? A software renderer (llvmpipe) means
-    // the graphics driver failed to load — after an NVIDIA update without a
-    // reboot, typically — and every repaint costs CPU.
-    try {
-      const gl = document.createElement("canvas").getContext("webgl") as WebGLRenderingContext | null;
-      const ext = gl?.getExtension("WEBGL_debug_renderer_info");
-      const r = gl ? String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER)) : "none";
-      const soft = !gl || /llvmpipe|softpipe|swrast|software/i.test(r);
-      console.warn(`[aqua-gpu] renderer: ${r}${soft ? " (SOFTWARE — no GPU acceleration)" : ""}`);
-      if (soft) {
-        document.documentElement.classList.add("soft-render");
-        (window as unknown as { __aquaSoftRender?: string }).__aquaSoftRender = r;
-      }
-    } catch { /* ignore */ }
     for (const ev of ["error", "stalled", "waiting"] as const) {
       addEventListener(ev, (e) => {
         const m = e.target as HTMLMediaElement;

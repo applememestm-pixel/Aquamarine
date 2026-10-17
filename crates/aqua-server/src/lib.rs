@@ -1477,6 +1477,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/packs", get(packs::list))
         .route("/v1/packs/import", post(packs::import_http))
         .route("/v1/packs/:name", get(packs::manifest))
+        .route("/v1/packs/:name/refresh", post(packs::refresh_http))
         .route("/v1/packs/:name/:file", get(packs::file))
         .route("/v1/auth/challenge", post(auth::challenge))
         .route("/v1/auth/verify",    post(auth::verify))

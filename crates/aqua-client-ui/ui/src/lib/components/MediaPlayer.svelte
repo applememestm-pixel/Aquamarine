@@ -29,7 +29,8 @@
    *  - keyboard: Space/K, ←/→ 5 s, J/L 10 s, ↑/↓ volume, M, F, W, 0–9, < >
    */
   import { t, tr } from "../i18n";
-  import { streamable, fmtSize } from "../media";
+  import { streamable, fmtSize, localPathOf } from "../media";
+  import { api } from "../tauri";
   import { showToast } from "./Toast.svelte";
   import { onDestroy } from "svelte";
 
@@ -49,10 +50,13 @@
 
   // Local files stream over loopback HTTP (see lib/media.ts::streamUrl).
   let playSrc = $state("");
+  let converted = "";      // src we already re-encoded (try once)
+  let converting = $state(false);
   $effect(() => {
     const s = src;
     playSrc = "";
     started = false;
+    converting = false;
     void streamable(s)
       .then((u) => { if (src === s) playSrc = u; })
       .catch((e) => { failed = e instanceof Error ? e.message : String(e); showToast(failed, 12000); });
@@ -118,6 +122,20 @@
   function onError() {
     if (!media || !playSrc) return;
     const code = media.error?.code;
+    // Unsupported codec / container: re-encode with ffmpeg and try again.
+    const path = localPathOf(src);
+    if ((code === 4 || code === 3) && path && converted !== src) {
+      converted = src;
+      converting = true;
+      failed = "";
+      const s = src;
+      void api.transcodeMedia(path)
+        .then((out) => api.mediaStreamUrl(out))
+        .then((u) => { if (src === s) { playSrc = u; if (started || autoplay) queueMicrotask(play); } })
+        .catch((e) => { if (src === s) failed = `${tr("This format can't be played here")}: ${e}`; })
+        .finally(() => { if (src === s) converting = false; });
+      return;
+    }
     failed = code === 4 || code === 3 ? tr("This format can't be played here") : tr("Playback failed");
   }
 
@@ -407,7 +425,9 @@
     {#if (theater || isFs) && name}
       <div class="top">{name}</div>
     {/if}
-    {#if failed}
+    {#if converting}
+      <div class="center err">{$t("Converting to a playable format…")}</div>
+    {:else if failed}
       <div class="center err">{failed}</div>
     {:else if waiting && playing}
       <div class="center"><span class="spin"></span></div>
@@ -477,7 +497,7 @@
       {/if}
       <div class="arow">
         <span class="time">{fmt(current)} <i>/</i> {fmt(duration)}</span>
-        {#if failed}<span class="aerr" title={failed}>⚠ {failed}</span>{/if}
+        {#if converting}<span class="aerr">⟳ {$t("Converting to a playable format…")}</span>{:else if failed}<span class="aerr" title={failed}>⚠ {failed}</span>{/if}
         <span class="grow"></span>
         {@render speedMenu()}
         {@render volume_()}

@@ -75,6 +75,11 @@ pub struct StickerPack {
     pub kind: String,
     /// Telegram short name (`t.me/addemoji/<name>`), when imported.
     pub source: Option<String>,
+    /// Path of the pack's icon (its first item unless one was chosen).
+    pub icon: Option<String>,
+    /// Made here (not a Telegram copy): stickers can be added, removed,
+    /// reordered and re-tagged.
+    pub editable: bool,
     pub items: Vec<StickerItem>,
 }
 
@@ -95,6 +100,28 @@ struct PackMeta {
     /// Telegram `sticker_type`: "regular" | "mask" | "custom_emoji".
     #[serde(default, rename = "type")]
     kind: Option<String>,
+    /// File names in display order (Telegram's order, or the user's).
+    #[serde(default)]
+    order: Vec<String>,
+    /// File name of the pack icon.
+    #[serde(default)]
+    icon: Option<String>,
+}
+
+/// `pack.json` as loose JSON, for updating some keys and keeping the rest.
+pub fn read_pack_json(pack_dir: &Path) -> serde_json::Map<String, serde_json::Value> {
+    fs::read_to_string(pack_dir.join("pack.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default()
+}
+pub fn write_pack_json(pack_dir: &Path, m: &serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
+    fs::write(pack_dir.join("pack.json"), serde_json::Value::Object(m.clone()).to_string()).map_err(|e| e.to_string())
+}
+/// A copy of a Telegram pack (read-only here).
+pub fn is_telegram_pack(pack_dir: &Path) -> bool {
+    read_pack_json(pack_dir).get("name").and_then(|v| v.as_str()).is_some_and(|s| !s.is_empty())
 }
 
 fn read_pack_meta(pack_dir: &Path) -> PackMeta {
@@ -151,7 +178,7 @@ fn is_gif_like(name: &str) -> bool {
     l.ends_with(".gif") || l.ends_with(".mp4") || l.ends_with(".webm")
 }
 
-fn sanitize_name(s: &str) -> String {
+pub fn sanitize_name(s: &str) -> String {
     let c: String = s
         .chars()
         .map(|c| match c { '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_', _ => c })
@@ -160,7 +187,7 @@ fn sanitize_name(s: &str) -> String {
     if t.is_empty() { "untitled".into() } else { t.to_string() }
 }
 
-fn unique_path(dir: &Path, name: &str) -> std::path::PathBuf {
+pub fn unique_path(dir: &Path, name: &str) -> std::path::PathBuf {
     let first = dir.join(name);
     if !first.exists() {
         return first;
@@ -286,17 +313,26 @@ fn scan_sticker_packs(dir: &Path) -> Vec<StickerPack> {
             continue;
         }
         let slug = unique_slug(&title, &mut used);
-        let items = scan_sticker_items(&pack_dir, &slug);
-        if items.is_empty() {
+        let mut items = scan_sticker_items(&pack_dir, &slug);
+        let meta = read_pack_meta(&pack_dir);
+        let editable = meta.name.as_deref().map_or(true, str::is_empty);
+        // Empty packs stay visible only when made here (to add stickers to).
+        if items.is_empty() && !(editable && pack_dir.join("pack.json").exists()) {
             continue;
         }
-        let meta = read_pack_meta(&pack_dir);
+        sort_items(&mut items, &meta.order);
         let kind = if meta.kind.as_deref() == Some("custom_emoji") { "emoji" } else { "sticker" };
+        let icon = meta.icon.as_ref()
+            .and_then(|f| items.iter().find(|i| i.path.ends_with(&format!("{}{f}", std::path::MAIN_SEPARATOR)) || Path::new(&i.path).file_name().and_then(|n| n.to_str()) == Some(f.as_str())))
+            .or(items.first())
+            .map(|i| i.path.clone());
         packs.push(StickerPack {
             id: format!("pack:{slug}"),
             title,
             kind: kind.into(),
-            source: meta.name,
+            source: meta.name.filter(|n| !n.is_empty()),
+            icon,
+            editable,
             items,
         });
     }
@@ -331,6 +367,24 @@ fn scan_sticker_items(pack_dir: &Path, pack_slug: &str) -> Vec<StickerItem> {
     out
 }
 
+/// Pack order: the saved order first, then by the number in Telegram-style
+/// names ("👍_007.webp"), then by name.
+fn sort_items(items: &mut [StickerItem], order: &[String]) {
+    let pos: std::collections::HashMap<&str, usize> = order.iter().enumerate().map(|(i, f)| (f.as_str(), i)).collect();
+    let num = |p: &str| -> u64 {
+        let stem = p.rsplit_once('.').map(|x| x.0).unwrap_or(p);
+        let tail = stem.rsplit_once('_').map(|x| x.1).unwrap_or("");
+        tail.split('-').next().and_then(|d| d.parse().ok()).unwrap_or(u64::MAX)
+    };
+    let name = |i: &StickerItem| Path::new(&i.path).file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+    items.sort_by(|a, b| {
+        let (na, nb) = (name(a), name(b));
+        let ka = (pos.get(na.as_str()).copied().unwrap_or(usize::MAX), num(&na), na.clone());
+        let kb = (pos.get(nb.as_str()).copied().unwrap_or(usize::MAX), num(&nb), nb.clone());
+        ka.cmp(&kb)
+    });
+}
+
 fn scan_gifs(dir: &Path) -> Vec<GifItem> {
     let mut out = Vec::new();
     let Ok(entries) = fs::read_dir(dir) else { return out };
@@ -360,7 +414,7 @@ fn scan_gifs(dir: &Path) -> Vec<GifItem> {
 
 // ---------- Helpers -------------------------------------------------------
 
-fn classify(filename: &str) -> (String, bool) {
+pub fn classify(filename: &str) -> (String, bool) {
     let lower = filename.to_ascii_lowercase();
     let (mime, is_media) = if lower.ends_with(".png") {
         ("image/png", true)
@@ -387,7 +441,7 @@ fn classify(filename: &str) -> (String, bool) {
 /// prefix is anything before the first `_`, if the prefix is 1–8
 /// characters and contains at least one non-ASCII byte (a crude but
 /// serviceable test for an emoji).
-fn parse_emoji_prefix(filename: &str) -> (Option<String>, String) {
+pub fn parse_emoji_prefix(filename: &str) -> (Option<String>, String) {
     if let Some(underscore_idx) = filename.find('_') {
         let prefix = &filename[..underscore_idx];
         if !prefix.is_empty()
@@ -511,5 +565,38 @@ mod tests {
 
         let outside = std::env::temp_dir().join("..").join("outside.txt");
         assert!(!path_is_within(td.path(), &outside));
+    }
+
+    #[test]
+    fn pack_order_icon_and_editable() {
+        let td = tempdir().unwrap();
+        let st = td.path().join("stickers");
+        // Own pack with a saved order and icon.
+        let own = st.join("Mine");
+        fs::create_dir_all(&own).unwrap();
+        for f in ["😀_a.webp", "😎_b.webp", "🔥_c.webp"] { fs::write(own.join(f), b"x").unwrap(); }
+        fs::write(own.join("pack.json"), r#"{"type":"regular","own":true,"order":["🔥_c.webp","😀_a.webp"],"icon":"😎_b.webp"}"#).unwrap();
+        // Empty own emoji pack: still listed.
+        let empty = st.join("Empty");
+        fs::create_dir_all(&empty).unwrap();
+        fs::write(empty.join("pack.json"), r#"{"type":"custom_emoji","own":true}"#).unwrap();
+        // Telegram copy: numeric names, read-only.
+        let tg = st.join("TG");
+        fs::create_dir_all(&tg).unwrap();
+        for f in ["👍_010.webp", "👍_002.webp", "👍_001-abc.webp"] { fs::write(tg.join(f), b"x").unwrap(); }
+        fs::write(tg.join("pack.json"), r#"{"name":"tgpack","type":"regular"}"#).unwrap();
+        let list = scan(td.path());
+        let mine = list.packs.iter().find(|p| p.title == "Mine").unwrap();
+        let names: Vec<_> = mine.items.iter().map(|i| Path::new(&i.path).file_name().unwrap().to_str().unwrap().to_string()).collect();
+        assert_eq!(names, ["🔥_c.webp", "😀_a.webp", "😎_b.webp"], "saved order, unknown files after it");
+        assert!(mine.icon.as_deref().unwrap().ends_with("😎_b.webp"));
+        assert!(mine.editable);
+        let e = list.packs.iter().find(|p| p.title == "Empty").unwrap();
+        assert!(e.items.is_empty() && e.kind == "emoji" && e.editable);
+        let t = list.packs.iter().find(|p| p.title == "TG").unwrap();
+        assert!(!t.editable && t.source.as_deref() == Some("tgpack"));
+        let tn: Vec<_> = t.items.iter().map(|i| Path::new(&i.path).file_name().unwrap().to_str().unwrap().to_string()).collect();
+        assert_eq!(tn, ["👍_001-abc.webp", "👍_002.webp", "👍_010.webp"]);
+        assert!(is_telegram_pack(&tg) && !is_telegram_pack(&own));
     }
 }

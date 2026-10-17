@@ -138,6 +138,10 @@ export interface StickerPack {
   kind?: string;
   /** Telegram short name, when imported from t.me/add… */
   source?: string | null;
+  /** Path of the pack icon. */
+  icon?: string | null;
+  /** Made here: stickers can be added / removed / reordered (Telegram copies can't). */
+  editable?: boolean;
   items: StickerItem[];
 }
 

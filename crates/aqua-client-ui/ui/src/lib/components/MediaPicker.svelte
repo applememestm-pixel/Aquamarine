@@ -41,12 +41,16 @@
   import { api, assetUrl } from "../tauri";
   import { showToast } from "./Toast.svelte";
   import { openFileDialog } from "../dialog";
-  import { openStickerEditor, stickerLibraryTick } from "./StickerEditor.svelte";
+  import { openStickerEditor, openStickerQueue, stickerLibraryTick } from "./StickerEditor.svelte";
+  import { openPackManager } from "./PackManager.svelte";
+  import { askInput } from "./InputPrompt.svelte";
   import { insertEmoji } from "../composerBus";
   import { loadActiveMessages } from "../stores";
   import AnimatedMedia from "./AnimatedMedia.svelte";
-  import { reactionPack, packOrder, emojiFromFile, REACTION_PACK, loadReactionPack, loadEmojiPacks } from "../reactionPack";
+  import { reactionPack, emojiFromFile, REACTION_PACK, loadReactionPack, loadEmojiPacks } from "../reactionPack";
 
+  /** Telegram's paper plane, for packs that came from there. */
+  const TG_ICON = `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="12" fill="#2AABEE"/><path fill="#fff" d="M5.4 11.8 16.9 7.3c.53-.2 1 .13.83.95l-1.96 9.23c-.14.66-.53.82-1.08.51l-3-2.21-1.45 1.4c-.16.16-.3.29-.6.29l.21-3.05 5.55-5.01c.24-.21-.05-.33-.38-.12L8.2 13.66l-2.95-.92c-.64-.2-.65-.64.14-.94z"/></svg>`;
   type Tab = "emoji" | "stickers" | "gifs";
   const TAB_KEY = "aqua.picker.tab";
   let tab = $state<Tab>(((): Tab => { try { return (localStorage.getItem(TAB_KEY) as Tab) || "emoji"; } catch { return "emoji"; } })());
@@ -95,6 +99,7 @@
       if (!emojiCats) void import("../emojiData").then((m) => { emojiCats = m.EMOJI_CATS; });
       if ($reactionPack.source === "none") void loadReactionPack();
       void placeAndFocus();
+      void checkUpdates();
     });
   });
 
@@ -115,7 +120,7 @@
   interface CItem { kind: "custom"; key: string; token: string; url: string; mime: string; emoji: string; path: string }
   interface UItem { kind: "unicode"; key: string; u: string; words: string }
   type EItem = CItem | UItem;
-  interface Section { id: string; title: string; icon: { emoji?: string; item?: CItem | SItem }; items: (EItem | SItem)[] }
+  interface Section { id: string; title: string; icon: { emoji?: string; item?: CItem | SItem }; items: (EItem | SItem)[]; pack?: StickerPack }
   interface SItem { kind: "sticker"; key: string; path: string; url: string; mime: string; emoji: string }
 
   const slugOf = (p: StickerPack) => p.id.replace(/^pack:/, "");
@@ -125,7 +130,7 @@
     // Packs with a Telegram source are addressed by it, so tokens match
     // between people (and with the app-bundled reaction pack).
     const slug = p.source || slugOf(p);
-    return packOrder(p.items).map((it) => {
+    return p.items.map((it) => {
       const file = fileOf(it.path);
       return { kind: "custom", key: `${slug}/${file}`, token: `[ce:${slug}/${file}]`, url: assetUrl(it.path), mime: it.mime, emoji: it.emoji ?? emojiFromFile(file), path: it.path };
     });
@@ -133,7 +138,7 @@
 
   const emojiPacks = $derived.by(() => {
     const packs = (catalogue?.packs ?? []).filter((p) => p.kind === "emoji");
-    const out: { id: string; title: string; items: CItem[] }[] = packs.map((p) => ({ id: p.id, title: p.title, items: customFromPack(p) }));
+    const out: { id: string; title: string; items: CItem[]; pack?: StickerPack }[] = packs.map((p) => ({ id: p.id, title: p.title, items: customFromPack(p), pack: p }));
     // App-bundled reaction pack, when it isn't also imported.
     if ($reactionPack.source === "bundled" && !packs.some((p) => p.source === REACTION_PACK)) {
       out.unshift({
@@ -173,7 +178,8 @@
     }
     for (const p of emojiPacks) {
       const items = p.items.filter((it) => matchEmojiChar(it.emoji, p.title));
-      if (items.length) secs.push({ id: p.id, title: p.title, icon: { item: p.items[0] }, items });
+      const icon = (p.pack?.icon && p.items.find((i) => i.path === p.pack!.icon)) || p.items[0];
+      if (items.length || (!terms.length && p.pack?.editable)) secs.push({ id: p.id, title: p.title, icon: icon ? { item: icon } : { emoji: "😀" }, items, pack: p.pack });
     }
     for (const [id, title, list] of emojiCats ?? []) {
       const items: UItem[] = list.filter(([, w]) => !terms.length || matchWords(w)).map(([u, w]) => ({ kind: "unicode", key: id + u, u, words: w }));
@@ -192,8 +198,9 @@
       if (items.length) secs.push({ id: "recent", title: "Recently used", icon: { emoji: "🕓" }, items });
     }
     for (const p of stickerPacks) {
-      const items = packOrder(p.items).map(toS).filter((s) => matchEmojiChar(s.emoji, p.title));
-      if (items.length) secs.push({ id: p.id, title: p.title, icon: { item: toS(packOrder(p.items)[0]) }, items });
+      const items = p.items.map(toS).filter((s) => matchEmojiChar(s.emoji, p.title));
+      const ic = p.items.find((i) => i.path === p.icon) ?? p.items[0];
+      if (items.length || (!terms.length && p.editable)) secs.push({ id: p.id, title: p.title, icon: ic ? { item: toS(ic) } : { emoji: "🖼" }, items, pack: p });
     }
     return secs;
   });
@@ -305,6 +312,56 @@
     void tab; void query;
     untrack(() => { activeSection = sections[0]?.id ?? ""; scroller?.scrollTo({ top: 0 }); });
   });
+
+  // ---- Telegram packs follow their originals ----
+  let lastCheck = 0;
+  async function checkUpdates() {
+    if (Date.now() - lastCheck < 15 * 60_000) return;
+    lastCheck = Date.now();
+    try {
+      const done = await api.checkPackUpdates();
+      if (done.length) { await refreshCatalogue(); showToast(tr("Updated from Telegram: {list}", { list: done.map((d) => d.title).join(", ") }), 4000); }
+    } catch { /* offline / old server */ }
+  }
+  let syncing = $state("");
+  async function syncPack(p: StickerPack) {
+    syncing = p.title;
+    try {
+      const r = await api.syncTelegramPack(p.title);
+      await refreshCatalogue();
+      showToast(r.changed ? tr("“{pack}” updated: +{a} −{r}", { pack: p.title, a: r.added, r: r.removed }) : tr("“{pack}” is up to date", { pack: p.title }), 3500);
+    } catch (e) { showToast(`${e}`, 5000); } finally { syncing = ""; }
+  }
+
+  // ---- own packs (the @Stickers bot, see PackManager) ----
+  async function quickAdd(p: StickerPack) {
+    try {
+      const r = await openFileDialog({ multiple: true, directory: false, title: tr("Add to “{pack}”", { pack: p.title }),
+        filters: [{ name: tr("Pictures and animations"), extensions: ["png", "jpg", "jpeg", "webp", "gif", "webm", "tgs"] }] });
+      const paths = (Array.isArray(r) ? r : r ? [r] : []) as string[];
+      if (!paths.length) return;
+      const stills = paths.filter((x) => /\.(png|jpe?g|webp)$/i.test(x));
+      const anim = paths.filter((x) => !/\.(png|jpe?g|webp)$/i.test(x));
+      if (anim.length) { await api.packAddFiles(p.title, anim); await refreshCatalogue(); }
+      if (stills.length) { closeMediaPicker(); await openStickerQueue(stills, p.title); }
+    } catch (e) { showToast(`${e}`); }
+  }
+  function manage(p: StickerPack) { closeMediaPicker(); openPackManager(p.title); }
+  function newPack(kind: "sticker" | "emoji") {
+    menuOpen = false;
+    askInput({
+      title: tr(kind === "emoji" ? "New emoji pack" : "New sticker pack"),
+      description: tr(kind === "emoji" ? "Your own custom emoji: add pictures, give each an emoji, use them in messages and reactions." : "Then add pictures — the editor cuts out the background and adds captions — or GIF / WEBM / TGS as they are."),
+      fields: [{ label: tr("Pack name"), placeholder: tr(kind === "emoji" ? "My emoji" : "My stickers") }],
+      submitLabel: tr("Create"),
+      onSubmit: async ([name]) => {
+        const n = name.trim();
+        if (!n) return tr("Give the pack a name");
+        try { const tt = await api.createStickerPack(n, kind); closeMediaPicker(); openPackManager(tt); stickerLibraryTick.update((x) => x + 1); return null; }
+        catch (e) { return String(e); }
+      },
+    });
+  }
 
   // ---- adding things ----
   const targetForTab = (): "emoji" | "stickers" | "gifs" => (tab === "gifs" ? "gifs" : tab === "emoji" ? "emoji" : "stickers");
@@ -475,6 +532,10 @@
               <button role="menuitem" onclick={() => openImport("https://t.me/addemoji/eltaller47")}>{$t("Get El Taller reactions")}</button>
             {/if}
             {#if tab !== "gifs"}<button role="menuitem" onclick={createSticker}>{$t("Create a sticker…")}</button>{/if}
+            {#if tab !== "gifs"}
+              <button role="menuitem" onclick={() => newPack("sticker")}>{$t("New sticker pack…")}</button>
+              <button role="menuitem" onclick={() => newPack("emoji")}>{$t("New emoji pack…")}</button>
+            {/if}
           </div>
         {/if}
       </div>
@@ -556,9 +617,21 @@
           </div>
         {/if}
         {#each sections as sec (sec.id)}
-          <div class="sec-title" data-sec={sec.id}>{sec.title}</div>
+          <div class="sec-title" data-sec={sec.id}>
+            {#if sec.pack?.source}<span class="tg" title={$t("From Telegram — read-only")}>{@html TG_ICON}</span>{/if}
+            <span class="sec-name">{sec.id === "recent" ? $t(sec.title) : sec.title}</span>
+            {#if sec.pack?.source}
+              <button class="sec-act" class:spin={syncing === sec.pack.title} onclick={() => syncPack(sec.pack!)} title={$t("Check for new stickers in Telegram")} aria-label={$t("Update")} disabled={!!syncing}>↻</button>
+            {:else if sec.pack?.editable}
+              <button class="sec-act" onclick={() => quickAdd(sec.pack!)} title={$t("Add to this pack")} aria-label={$t("Add")}>＋</button>
+              <button class="sec-act" onclick={() => manage(sec.pack!)} title={$t("Edit pack: emoji, order, icon, delete")} aria-label={$t("Edit pack")}>✎</button>
+            {/if}
+          </div>
           <div class="grid" class:stickers={tab === "stickers"}>
             {#each sec.items as it (it.key)}{@render emojiCell(it)}{/each}
+            {#if sec.pack?.editable && !sec.items.length}
+              <button class="cell add-cell" class:s={tab === "stickers"} onclick={() => quickAdd(sec.pack!)}>＋</button>
+            {/if}
           </div>
         {/each}
       {/if}
@@ -651,6 +724,16 @@
   .clear { background: none; border: none; color: var(--fg-dim); font-size: 18px; cursor: pointer; line-height: 1; }
 
   .body { flex: 1; overflow-y: auto; padding: 0 6px 8px; position: relative; scrollbar-width: thin; }
+  .sec-title { display: flex; align-items: center; gap: 6px; }
+  .sec-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tg { width: 14px; height: 14px; flex-shrink: 0; display: inline-grid; }
+  .tg :global(svg) { width: 14px; height: 14px; }
+  .sec-act { width: 22px; height: 22px; flex-shrink: 0; border-radius: 6px; border: none; background: var(--bg-input); color: var(--fg-muted); cursor: pointer; font-size: 13px; line-height: 1; display: grid; place-items: center; }
+  .sec-act:hover:not(:disabled) { background: var(--bg-input); color: var(--accent); }
+  .sec-act.spin { animation: sec-spin .9s linear infinite; }
+  @keyframes sec-spin { to { transform: rotate(360deg); } }
+  .add-cell { display: grid; place-items: center; font-size: 22px; color: var(--fg-dim); border: 2px dashed var(--border-strong) !important; border-radius: 10px; }
+  .add-cell:hover { color: var(--accent); border-color: var(--accent) !important; }
   .sec-title {
     position: sticky; top: 0; z-index: 1;
     padding: 8px 6px 4px; font-size: 12.5px; font-weight: 700; color: var(--fg-dim);

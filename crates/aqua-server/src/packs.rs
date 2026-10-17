@@ -33,6 +33,9 @@ pub struct PackFile {
     pub file: String,
     pub emoji: String,
     pub mime: String,
+    /// Telegram `file_unique_id`: a refresh keeps files it already has.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +47,21 @@ pub struct Manifest {
     #[serde(rename = "type")]
     pub kind: String,
     pub files: Vec<PackFile>,
+    /// Unix seconds of the last download / check against Telegram.
+    #[serde(default)]
+    pub updated: u64,
+    /// Bumped whenever the set of files or their order changes.
+    #[serde(default)]
+    pub rev: u64,
+}
+
+/// A stored pack older than this is checked against Telegram again.
+const STALE_SECS: u64 = 6 * 3600;
+/// Explicit refreshes of one pack at most this often.
+const REFRESH_MIN_SECS: u64 = 60;
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -125,7 +143,7 @@ fn pack_lock(name: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
 }
 
 /// Files downloaded in parallel (Telegram is fine with a handful).
-const PARALLEL: usize = 8;
+const PARALLEL: usize = 16;
 
 /// Download one sticker of a set into `tmp`; None if it can't be fetched.
 async fn fetch_sticker(
@@ -153,25 +171,57 @@ async fn fetch_sticker(
         return None;
     }
     let emoji = st["emoji"].as_str().unwrap_or("").trim().to_string();
-    // Same naming as the client importer: <emoji>_<nnn>.<ext>
-    let file = format!("{}_{:03}.{ext}", if emoji.is_empty() { "x" } else { &emoji }, i + 1);
+    let uid = st["file_unique_id"].as_str().unwrap_or("").to_string();
+    // <emoji>_<nnn>.<ext> (the client sorts by the number); a refresh
+    // names new files after their position too, but never reuses a name.
+    let mut file = format!("{}_{:03}.{ext}", if emoji.is_empty() { "x" } else { &emoji }, i + 1);
+    if tmp.join(&file).exists() {
+        file = format!("{}_{:03}-{}.{ext}", if emoji.is_empty() { "x" } else { &emoji }, i + 1, &uid.chars().filter(|c| c.is_ascii_alphanumeric()).take(10).collect::<String>());
+    }
     std::fs::write(tmp.join(&file), &bytes).ok()?;
-    Some(PackFile { mime: mime_of(&file).into(), file, emoji })
+    Some(PackFile { mime: mime_of(&file).into(), file, emoji, id: uid })
 }
 
+/// Import a pack (or return the stored one; a stale one is re-checked in
+/// the background).
 pub async fn import(pack_ref: &str) -> Result<Manifest, String> {
-    use futures_util::StreamExt;
     let name = short_name(pack_ref);
     if name.is_empty() {
         return Err("empty pack link".into());
     }
     if let Some(m) = load_manifest(&name) {
+        refresh_if_stale(&m);
         return Ok(m);
     }
+    sync(&name, false).await
+}
+
+/// Check a stored pack against Telegram in the background when it's old.
+pub fn refresh_if_stale(m: &Manifest) {
+    if now_secs().saturating_sub(m.updated) < STALE_SECS || bot_token().is_none() {
+        return;
+    }
+    let name = m.name.clone();
+    tokio::spawn(async move {
+        if let Err(e) = sync(&name, true).await {
+            tracing::warn!(pack = %name, error = %e, "pack refresh failed");
+        }
+    });
+}
+
+/// Download a pack from Telegram, or bring a stored one up to date: files
+/// it already has (same `file_unique_id`) are kept, only new stickers are
+/// downloaded, removed ones disappear, Telegram's order is applied.
+pub async fn sync(name: &str, refresh: bool) -> Result<Manifest, String> {
+    use futures_util::StreamExt;
     let lock = pack_lock(&name.to_ascii_lowercase());
     let _guard = lock.lock().await;
-    if let Some(m) = load_manifest(&name) {
-        return Ok(m);
+    let old = load_manifest(name);
+    if let Some(m) = &old {
+        // Someone else just did it while we waited for the lock.
+        if !refresh || now_secs().saturating_sub(m.updated) < REFRESH_MIN_SECS {
+            return Ok(m.clone());
+        }
     }
     let token = bot_token().ok_or("this server has no Telegram bot token — ask its admin to add one in the admin panel")?;
     let http = reqwest::Client::builder()
@@ -181,16 +231,15 @@ pub async fn import(pack_ref: &str) -> Result<Manifest, String> {
     // AQUA_TG_API: another Bot API endpoint (a local bot-api server, tests).
     let base = std::env::var("AQUA_TG_API").unwrap_or_else(|_| "https://api.telegram.org".into());
     let base = base.trim_end_matches('/').to_string();
-    let api = |m: &str, q: String| format!("{base}/bot{token}/{m}?{q}");
     let set: serde_json::Value = http
-        .get(api("getStickerSet", format!("name={}", urlenc(&name))))
+        .get(format!("{base}/bot{token}/getStickerSet?name={}", urlenc(name)))
         .send().await.map_err(|e| format!("Telegram: {e}"))?
         .json().await.map_err(|e| format!("Telegram: {e}"))?;
     if !set["ok"].as_bool().unwrap_or(false) {
         return Err(format!("Telegram: {}", set["description"].as_str().unwrap_or("error")));
     }
     let r = &set["result"];
-    let real = r["name"].as_str().map(short_name).unwrap_or_else(|| name.clone());
+    let real = r["name"].as_str().map(short_name).unwrap_or_else(|| name.to_string());
     let title = r["title"].as_str().unwrap_or(&real).to_string();
     let kind = r["sticker_type"].as_str().unwrap_or("regular").to_string();
     let dir = pack_dir(&real);
@@ -198,24 +247,54 @@ pub async fn import(pack_ref: &str) -> Result<Manifest, String> {
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
     let stickers: Vec<serde_json::Value> = r["stickers"].as_array().cloned().unwrap_or_default().into_iter().take(MAX_STICKERS).collect();
-    tracing::info!(pack = %real, stickers = stickers.len(), "importing sticker pack");
     let started = std::time::Instant::now();
-    let mut files: Vec<PackFile> = futures_util::stream::iter(stickers.into_iter().enumerate())
-        .map(|(i, st)| fetch_sticker(http.clone(), base.clone(), token.clone(), tmp.clone(), i, st))
+    // Keep what we have: link (or copy) the old file into the new folder.
+    let have: std::collections::HashMap<String, PackFile> = old.as_ref()
+        .map(|m| m.files.iter().filter(|f| !f.id.is_empty()).map(|f| (f.id.clone(), f.clone())).collect())
+        .unwrap_or_default();
+    let mut slots: Vec<Option<PackFile>> = vec![None; stickers.len()];
+    let mut todo = Vec::new();
+    for (i, st) in stickers.into_iter().enumerate() {
+        let uid = st["file_unique_id"].as_str().unwrap_or("");
+        if let Some(f) = have.get(uid) {
+            let src = dir.join(&f.file);
+            if std::fs::hard_link(&src, tmp.join(&f.file)).is_ok() || std::fs::copy(&src, tmp.join(&f.file)).is_ok() {
+                let mut f = f.clone();
+                f.emoji = st["emoji"].as_str().unwrap_or(&f.emoji).trim().to_string();
+                slots[i] = Some(f);
+                continue;
+            }
+        }
+        todo.push((i, st));
+    }
+    let fresh = todo.len();
+    tracing::info!(pack = %real, kept = slots.iter().flatten().count(), downloading = fresh, "syncing sticker pack");
+    let got: Vec<(usize, PackFile)> = futures_util::stream::iter(todo)
+        .map(|(i, st)| {
+            let (http, base, token, tmp) = (http.clone(), base.clone(), token.clone(), tmp.clone());
+            async move { fetch_sticker(http, base, token, tmp, i, st).await.map(|f| (i, f)) }
+        })
         .buffer_unordered(PARALLEL)
         .filter_map(|x| async move { x })
         .collect()
         .await;
-    files.sort_by(|a, b| a.file.split('_').next_back().cmp(&b.file.split('_').next_back()));
+    for (i, f) in got {
+        slots[i] = Some(f);
+    }
+    let files: Vec<PackFile> = slots.into_iter().flatten().collect();
     if files.is_empty() {
         let _ = std::fs::remove_dir_all(&tmp);
         return Err(format!("nothing could be downloaded from \"{title}\""));
     }
-    let m = Manifest { name: real.clone(), title, kind, files };
+    let same = old.as_ref().is_some_and(|o| {
+        o.title == title && o.files.len() == files.len() && o.files.iter().zip(&files).all(|(a, b)| a.file == b.file && a.emoji == b.emoji)
+    });
+    let rev = old.as_ref().map(|o| o.rev + u64::from(!same)).unwrap_or(1);
+    let m = Manifest { name: real.clone(), title, kind, files, updated: now_secs(), rev };
     std::fs::write(tmp.join("manifest.json"), serde_json::to_vec(&m).unwrap_or_default()).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::rename(&tmp, &dir).map_err(|e| e.to_string())?;
-    tracing::info!(pack = %m.name, files = m.files.len(), secs = started.elapsed().as_secs(), "sticker pack imported");
+    tracing::info!(pack = %m.name, files = m.files.len(), downloaded = fresh, rev = m.rev, ms = started.elapsed().as_millis() as u64, "sticker pack synced");
     Ok(m)
 }
 
@@ -262,7 +341,18 @@ pub async fn list(State(_): State<AppState>) -> Json<PacksIndex> {
 }
 
 pub async fn manifest(UrlPath(name): UrlPath<String>) -> Result<Json<Manifest>, StatusCode> {
-    load_manifest(&short_name(&name)).map(Json).ok_or(StatusCode::NOT_FOUND)
+    let m = load_manifest(&short_name(&name)).ok_or(StatusCode::NOT_FOUND)?;
+    refresh_if_stale(&m);
+    Ok(Json(m))
+}
+
+/// Check a pack against Telegram now (at most once a minute per pack).
+pub async fn refresh_http(_caller: Caller, UrlPath(name): UrlPath<String>) -> Result<Json<Manifest>, (StatusCode, String)> {
+    let name = short_name(&name);
+    if load_manifest(&name).is_none() {
+        return Err((StatusCode::NOT_FOUND, "no such pack".into()));
+    }
+    sync(&name, true).await.map(Json).map_err(|e| (StatusCode::BAD_GATEWAY, e))
 }
 
 pub async fn file(UrlPath((name, file)): UrlPath<(String, String)>) -> impl IntoResponse {

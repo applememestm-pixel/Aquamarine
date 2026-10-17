@@ -627,6 +627,31 @@ pub async fn set_profile_media_file(
     };
     if kind == "music" {
         let mime = audio_mime.ok_or("pick an audio file: mp3, ogg, opus, m4a, aac, flac or wav")?;
+        // Everything but MP3 / Ogg is re-encoded to Opus: an .m4a (ALAC,
+        // HE-AAC…) or a big FLAC/WAV often doesn't play for others
+        // (WebKitGTK "FormatError") or is over the 10 MB limit.
+        if !matches!(ext.as_str(), "mp3" | "ogg" | "oga" | "opus") {
+            let out_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.join("outbox") };
+            std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+            let out = out_dir.join("profile-track.ogg");
+            let mut cmd = tokio::process::Command::new("ffmpeg");
+            cmd.args(["-v", "error", "-nostdin", "-y", "-i"]).arg(&path)
+                .args(["-vn", "-map_metadata", "0", "-c:a", "libopus", "-b:a", "128k"])
+                .arg(&out)
+                .stdin(std::process::Stdio::null())
+                .kill_on_drop(true);
+            #[cfg(windows)]
+            {
+                cmd.creation_flags(0x0800_0000);
+            }
+            if let Ok(o) = cmd.output().await {
+                if o.status.success() {
+                    let bytes = tokio::fs::read(&out).await.map_err(|e| format!("read: {e}"))?;
+                    return upload_profile_image(state, kind, "audio/ogg".into(), bytes).await;
+                }
+            }
+            // No ffmpeg: upload the original.
+        }
         let bytes = tokio::fs::read(&path).await.map_err(|e| format!("read: {e}"))?;
         return upload_profile_image(state, kind, mime.into(), bytes).await;
     }
@@ -1173,6 +1198,9 @@ pub fn save_sticker(
         s.data_dir.clone()
     };
     let pack_dir = data_dir.join("stickers").join(&pack_safe);
+    if crate::media::is_telegram_pack(&pack_dir) {
+        return Err("packs from Telegram can't be changed — pick one of yours".into());
+    }
     std::fs::create_dir_all(&pack_dir).map_err(|e| format!("mkdir pack: {e}"))?;
     let lower = name_safe.to_ascii_lowercase();
     let final_name = if lower.ends_with(".png") || lower.ends_with(".webp") {
@@ -1189,6 +1217,9 @@ pub fn save_sticker(
         n += 1;
     }
     std::fs::write(&path, &bytes).map_err(|e| format!("write sticker: {e}"))?;
+    if let Some(f) = path.file_name().and_then(|n| n.to_str()) {
+        crate::stickers::note_added(&pack_dir, f);
+    }
     Ok(path.display().to_string())
 }
 
@@ -1217,6 +1248,9 @@ pub fn delete_sticker_pack(state: State<'_, StdMutex<AppState>>, title: String) 
 #[tauri::command]
 pub fn rename_sticker_pack(state: State<'_, StdMutex<AppState>>, title: String, new_title: String) -> Result<(), String> {
     let dir = own_pack_dir(&state, &title)?;
+    if crate::media::is_telegram_pack(&dir) {
+        return Err("packs from Telegram can't be renamed".into());
+    }
     let n = new_title.trim();
     if n.is_empty() || n.len() > 64 || n.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) || n.starts_with('.') {
         return Err("bad pack name".into());
@@ -1282,38 +1316,18 @@ async fn save_server_pack(
 ) -> Result<aqua_client_core::ImportReport, String> {
     let name = m["name"].as_str().unwrap_or_default().to_string();
     let title = m["title"].as_str().unwrap_or(&name).to_string();
-    let dest = root.join(aqua_client_core::sanitize_pack_folder(&title));
-    std::fs::create_dir_all(&dest).map_err(|e| format!("mkdir pack: {e}"))?;
-    let files = m["files"].as_array().cloned().unwrap_or_default();
-    // Several files at a time (the relay may be far away).
-    let wanted: Vec<String> = files
-        .iter()
-        .filter_map(|f| f["file"].as_str())
-        .filter(|f| !f.contains(['/', '\\']) && !f.starts_with('.'))
-        .map(str::to_string)
-        .collect();
-    let mut done: Vec<String> = Vec::new();
-    for chunk in wanted.chunks(8) {
-        let got = futures_util::future::join_all(chunk.iter().map(|file| {
-            let out = dest.join(file);
-            let name = name.clone();
-            async move {
-                if out.exists() {
-                    return Some(file.clone());
-                }
-                let bytes = t.pack_file(&name, file).await.ok()?;
-                std::fs::write(&out, bytes).ok()?;
-                Some(file.clone())
-            }
-        }))
-        .await;
-        done.extend(got.into_iter().flatten());
-    }
-    let ok = done.len();
-    let animated = done.iter().filter(|f| f.ends_with(".tgs")).count();
-    let video = done.iter().filter(|f| f.ends_with(".webm")).count();
-    let meta = serde_json::json!({ "name": name, "title": title, "type": m["type"].as_str().unwrap_or("regular") });
-    let _ = std::fs::write(dest.join("pack.json"), meta.to_string());
+    // A pack we already have (maybe under another folder name): update it.
+    let existing = std::fs::read_dir(root).ok().and_then(|rd| {
+        rd.flatten().map(|e| e.path()).find(|d| crate::media::read_pack_json(d).get("name").and_then(|v| v.as_str()) == Some(name.as_str()))
+    });
+    let dest = existing.unwrap_or_else(|| root.join(aqua_client_core::sanitize_pack_folder(&title)));
+    crate::stickers::apply_manifest(t, &dest, m).await?;
+    let files: Vec<String> = std::fs::read_dir(&dest)
+        .map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().to_string()).filter(|n| crate::media::classify(n).1).collect())
+        .unwrap_or_default();
+    let ok = files.len();
+    let animated = files.iter().filter(|f| f.ends_with(".tgs")).count();
+    let video = files.iter().filter(|f| f.ends_with(".webm")).count();
     Ok(aqua_client_core::ImportReport {
         pack_name: name,
         pack_title: title,
@@ -1322,7 +1336,7 @@ async fn save_server_pack(
         renderable: ok - animated - video,
         animated,
         video,
-        total: files.len(),
+        total: m["files"].as_array().map(|a| a.len()).unwrap_or(ok),
     })
 }
 

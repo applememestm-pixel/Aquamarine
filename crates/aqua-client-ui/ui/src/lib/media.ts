@@ -104,6 +104,14 @@ export function streamUrl(path: string): Promise<string> {
 
 const ASSET_URL = /^(?:asset:\/\/localhost\/|https?:\/\/asset\.localhost\/)(.+)$/;
 
+/** The local file behind an asset: URL (or a plain path), else "". */
+export function localPathOf(url: string): string {
+  if (url.startsWith("/") || /^[A-Za-z]:[\\/]/.test(url)) return url;
+  const m = ASSET_URL.exec(url);
+  if (!m) return "";
+  try { return decodeURIComponent(m[1].split("#")[0]); } catch { return ""; }
+}
+
 /** Turn an asset: URL of a video / audio file into a streaming URL. */
 export async function streamable(url: string): Promise<string> {
   const m = ASSET_URL.exec(url);

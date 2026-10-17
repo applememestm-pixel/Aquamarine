@@ -203,6 +203,68 @@ pub async fn media_stream_url(path: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || url_for(&PathBuf::from(path))).await.map_err(|e| e.to_string())?
 }
 
+type SharedState = Mutex<crate::state::AppState>;
+
+/// Re-encode a local audio / video file WebKit can't play ("FormatError":
+/// an unusual codec or container) into something it always can: Opus in
+/// Ogg for audio, VP9 + Opus in WebM for video. Results are cached under
+/// `<data>/transcoded/`, keyed by the file's path, size and mtime.
+#[tauri::command]
+pub async fn transcode_media(
+    state: tauri::State<'_, SharedState>,
+    path: String,
+) -> Result<String, String> {
+    let src = PathBuf::from(&path).canonicalize().map_err(|e| format!("{path}: {e}"))?;
+    let mime = mime_of(&src).ok_or("not a video or audio file")?;
+    let video = mime.starts_with("video/");
+    let md = std::fs::metadata(&src).map_err(|e| e.to_string())?;
+    let stamp = md.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+    let key = {
+        use sha2::Digest;
+        let mut h = sha2::Sha256::new();
+        h.update(src.to_string_lossy().as_bytes());
+        h.update(md.len().to_le_bytes());
+        h.update(stamp.to_le_bytes());
+        hex::encode(&h.finalize()[..12])
+    };
+    let dir = { state.lock().map_err(|e| e.to_string())?.data_dir.join("transcoded") };
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let out = dir.join(format!("{key}.{}", if video { "webm" } else { "ogg" }));
+    if out.is_file() && std::fs::metadata(&out).map(|m| m.len() > 0).unwrap_or(false) {
+        return Ok(out.to_string_lossy().into_owned());
+    }
+    let tmp = dir.join(format!("{key}.part.{}", if video { "webm" } else { "ogg" }));
+    let mut cmd = tokio::process::Command::new("ffmpeg");
+    cmd.args(["-v", "error", "-nostdin", "-y", "-i"]).arg(&src);
+    if video {
+        cmd.args(["-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8", "-row-mt", "1", "-b:v", "0", "-crf", "33",
+                  "-c:a", "libopus", "-b:a", "128k"]);
+    } else {
+        cmd.args(["-vn", "-map_metadata", "0", "-c:a", "libopus", "-b:a", "160k"]);
+    }
+    cmd.arg(&tmp).stdin(std::process::Stdio::null()).kill_on_drop(true);
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(0x0800_0000);
+    }
+    let res = tokio::time::timeout(std::time::Duration::from_secs(if video { 1800 } else { 300 }), cmd.output()).await;
+    match res {
+        Ok(Ok(o)) if o.status.success() => {
+            std::fs::rename(&tmp, &out).map_err(|e| e.to_string())?;
+            Ok(out.to_string_lossy().into_owned())
+        }
+        Ok(Ok(o)) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(format!("ffmpeg: {}", String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("failed")))
+        }
+        Ok(Err(_)) => Err("ffmpeg is not installed (sudo pacman -S ffmpeg)".into()),
+        Err(_) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err("converting took too long".into())
+        }
+    }
+}
+
 #[derive(serde::Serialize, Default)]
 pub struct MediaProbe {
     /// `data:image/jpeg;base64,…`, longest side ≤ 480 px.

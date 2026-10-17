@@ -132,7 +132,7 @@
     hasImage = false;
     try {
       const lib = await api.listLocalMedia();
-      packs = lib.packs.filter((p) => !p.source && p.kind !== "emoji").map((p) => p.title);
+      packs = lib.packs.filter((p) => !p.source && p.editable !== false).map((p) => p.title);
     } catch { packs = []; }
     packName = s.pack ?? packs[0] ?? "My stickers";
     newPack = !packs.includes(packName);

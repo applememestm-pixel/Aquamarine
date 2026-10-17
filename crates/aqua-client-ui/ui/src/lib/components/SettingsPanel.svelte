@@ -21,6 +21,7 @@
   import { ICON_PRESETS, logoSvg, svgDataUrl, colorsFromAccent, setAppIcon } from "../appIcon";
   import { cropImage } from "./ImageCropper.svelte";
   import { openStickerEditor, openStickerQueue, stickerLibraryTick } from "./StickerEditor.svelte";
+  import { openPackManager } from "./PackManager.svelte";
   import { askInput, closeInput } from "./InputPrompt.svelte";
   import AnimatedMedia from "./AnimatedMedia.svelte";
   import type { StickerPack } from "../types";
@@ -395,7 +396,7 @@
   async function loadMyPacks() {
     try {
       const lib = await api.listLocalMedia();
-      myPacks = lib.packs.filter((p) => !p.source && p.kind !== "emoji");
+      myPacks = lib.packs.filter((p) => !p.source && p.editable !== false);
     } catch { myPacks = []; }
   }
   $effect(() => { void $stickerLibraryTick; if (section === "stickers") void loadMyPacks(); });
@@ -478,6 +479,14 @@
   }
 
   function setWallpaper(id: string) { settings.update((s) => ({ ...s, wallpaper: id })); }
+
+  // ---- graphics mode (gpu.rs) ----
+  let gpu = $state<{ mode: "auto" | "on" | "off"; software: boolean; reason: string } | null>(null);
+  $effect(() => { if (section === "behaviour" && !gpu) void api.gpuStatus().then((g) => (gpu = g)).catch(() => {}); });
+  async function setGpu(mode: "auto" | "on" | "off") {
+    try { await api.setGpuMode(mode); if (gpu) gpu = { ...gpu, mode }; showToast(tr("Restart Aquamarine to apply")); }
+    catch (e) { showToast(String(e)); }
+  }
 
   // ---- wallpaper library (files, not data: URLs) ----
   let myWalls = $state<string[]>([]);
@@ -813,6 +822,7 @@
                   <span class="mp-count">{p.items.length}</span>
                   <span class="mp-chev">›</span>
                 </button>
+                <button class="mini-btn" onclick={() => openPackManager(p.title)} title={$t("Edit pack: emoji, order, icon, delete")}>✎ {$t("Manage")}</button>
               </div>
               {#if openPack === p.title}
                 <div class="mp-grid">
@@ -942,6 +952,24 @@
           <span class="switch" class:on={$settings.autoplayVideos}></span>
         </button>
       </section>
+      {#if gpu}
+      <section class="group">
+        <div class="label">{$t("Graphics")}</div>
+        <div class="row">
+          <span class="row-label">{$t("Drawing")}</span>
+          <div class="seg">
+            {#each [["auto", "Auto"], ["on", "Graphics card"], ["off", "CPU"]] as [id, lbl] (id)}
+              <button class="seg-opt" class:active={gpu.mode === id} onclick={() => setGpu(id as "auto" | "on" | "off")}>{$t(lbl)}</button>
+            {/each}
+          </div>
+        </div>
+        <div class="foot-note" style="margin:4px 0 0">
+          {gpu.software ? $t("Now: drawn by the CPU (no GPU compositing).") : $t("Now: the graphics card composites the window.")}
+          {gpu.reason === "nvidia-mismatch" ? " " + $t("The NVIDIA driver was updated without a restart — restart the computer to get the graphics card back.") : ""}
+          {$t("Auto switches to the CPU when the graphics driver can't be used. Takes effect after restarting Aquamarine.")}
+        </div>
+      </section>
+      {/if}
       <section class="group">
         <div class="label">{$t("Behaviour")}</div>
         <button class="toggle-row" onclick={() => toggle("enterToSend")}>

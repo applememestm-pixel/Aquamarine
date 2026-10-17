@@ -29,6 +29,7 @@
   import ArticleReader from "./lib/components/ArticleReader.svelte";
   import CircleRecorder from "./lib/components/CircleRecorder.svelte";
   import StickerEditor from "./lib/components/StickerEditor.svelte";
+  import PackManager from "./lib/components/PackManager.svelte";
   import RegistrationWizard from "./lib/components/RegistrationWizard.svelte";
   import LockScreen from "./lib/components/LockScreen.svelte";
   import GroupCallPanel from "./lib/components/GroupCallPanel.svelte";
@@ -85,9 +86,13 @@
     void migrateCustomWallpaper(api.saveWallpaper).then(() => setTimeout(() => void fitCurrentWallpaper(api.saveWallpaper, api.deleteWallpaper, api.readMediaBytes), 4000));
     // Linux: without gst-plugins-good WebKitGTK hangs on the first sound or
     // video — say what to install up front (playback is refused until then).
-    if ((window as unknown as { __aquaSoftRender?: string }).__aquaSoftRender) {
-      setTimeout(() => showToast(tr("The graphics card isn't used — everything is drawn by the CPU, so the app is slow. After a video driver update, restart the computer."), 15000), 2500);
-    }
+    // No usable GPU (gpu.rs switched WebKit to plain CPU painting): lighter
+    // effects, and say why if it's the NVIDIA driver waiting for a reboot.
+    void api.gpuStatus().then((g) => {
+      if (!g.software) return;
+      document.documentElement.classList.add("soft-render");
+      if (g.reason === "nvidia-mismatch") setTimeout(() => showToast(tr("The NVIDIA driver was updated but the computer wasn't restarted, so the graphics card can't be used and the app draws on the CPU. Restart the computer."), 20000), 2500);
+    }).catch(() => {});
     void mediaSupport().then((m) => {
       if (m.blocking.length) showToast(tr("Sound and video need GStreamer plugins. Install: {cmd}", { cmd: installHint([...m.blocking, ...m.recommended]) }), 20000);
     });
@@ -249,6 +254,7 @@
 <ArticleComposer />
 <ArticleReader />
 <CircleRecorder />
+<PackManager />
 <StickerEditor />
 <RegistrationWizard />
 <LockScreen />

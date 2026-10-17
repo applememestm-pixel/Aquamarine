@@ -651,6 +651,16 @@ impl Transport {
         Ok(r.json().await?)
     }
 
+    /// Ask the relay to check a pack against Telegram now; its new manifest.
+    pub async fn refresh_pack(&self, name: &str) -> Result<serde_json::Value, TransportError> {
+        let url = format!("{}/v1/packs/{}/refresh", self.server_url.trim_end_matches('/'), name);
+        let r = self.http.post(&url).bearer_auth(self.bearer().await?).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(r.json().await?)
+    }
+
     /// Manifest of a pack stored on the relay (None if it has no such pack).
     pub async fn pack_manifest(&self, name: &str) -> Result<Option<serde_json::Value>, TransportError> {
         let url = format!("{}/v1/packs/{}", self.server_url.trim_end_matches('/'), name);

@@ -1020,6 +1020,10 @@
   let voiceView = $state<Record<string, string>>({});   // gid → voice room id
   let voiceChat = $state(false);
   let headerH = $state(64);
+  let headerEl = $state<HTMLElement | null>(null);
+  // Measured only for the voice view (a size binding here kept a
+  // ResizeObserver busy on every repaint of the chat).
+  $effect(() => { if (fullVoice && headerEl) headerH = headerEl.offsetHeight; });
   let inMyCall = $derived(!!activeGroup && $groupCall?.gid === activeGroup.id);
   let fullVoice = $derived(!!activeGroup && !!voiceView[activeGroup.id] && inMyCall);
   let voiceRoomName = $derived(activeGroup ? rooms.find((r) => r.id === voiceView[activeGroup.id])?.name ?? "" : "");
@@ -1928,7 +1932,7 @@
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <header
-      bind:clientHeight={headerH}
+      bind:this={headerEl}
       class="chat-header"
       class:clickable={$activeChat.id !== "__saved__"}
       onclick={(e) => {
