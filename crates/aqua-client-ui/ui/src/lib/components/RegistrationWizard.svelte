@@ -54,10 +54,16 @@
       if (!err) {
         try { chats.set(await api.listChats()); } catch { /* non-fatal */ }
         closeRegistration();
-      } else if (/not regist|different identity/i.test(err)) {
-        error = `@${i.username} isn't registered on this server (or it was claimed from another device / before a reset). Register below to set it up fresh.`;
+      } else if (/different identity|already claimed|\b403\b|forbidden/i.test(err)) {
+        // The relay answers 403 when @name is bound to another device's key
+        // (registered from a phone / emulator, or this device's keys were reset).
+        // "Sign in" with the account's email + password moves it to this device.
+        mode = "signin";
+        error = tr("@{name} on this server is tied to another device's key (signed up from a phone or emulator, or the keys here were reset). Sign in below with this account's email and password — the account moves to this computer and the other device is signed out.", { name: i.username });
+      } else if (/not regist/i.test(err)) {
+        error = tr("@{name} isn't registered on this server. Register below to set it up.", { name: i.username });
       } else {
-        error = `Could not reach the server — is it running at this address?  (${err})`;
+        error = tr("Could not reach the server — is it running at this address?") + `  (${err})`;
       }
     } catch (e) {
       error = `Could not sign in: ${e}`;

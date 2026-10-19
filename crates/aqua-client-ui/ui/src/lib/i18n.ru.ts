@@ -1391,4 +1391,7 @@ export const RU: Record<string, string> = {
   "See-through menus": "Полупрозрачные меню",
   "Menus, pop-ups and windows become frosted glass over the chat": "Меню, всплывающие панели и окна становятся матовым стеклом поверх чата",
   "Opacity": "Плотность",
+  "@{name} on this server is tied to another device's key (signed up from a phone or emulator, or the keys here were reset). Sign in below with this account's email and password — the account moves to this computer and the other device is signed out.": "@{name} на этом сервере привязан к ключу другого устройства (регистрация с телефона или эмулятора, либо ключи здесь были сброшены). Войдите ниже с почтой и паролем этого аккаунта — он перейдёт на этот компьютер, а на другом устройстве сессия завершится.",
+  "@{name} isn't registered on this server. Register below to set it up.": "@{name} не зарегистрирован на этом сервере. Зарегистрируйтесь ниже.",
+  "Could not reach the server — is it running at this address?": "Не удалось подключиться к серверу — он запущен по этому адресу?",
 };
