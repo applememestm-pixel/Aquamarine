@@ -235,6 +235,11 @@ jobs:
           cp -r icons/android/* gen/android/app/src/main/res/
           # MainActivity asking for Android 17 local-network access
           cp ../../android/MainActivity.kt "$(find gen/android/app/src/main/java -name MainActivity.kt | head -1)"
+          # Plain HTTP to the loopback media server (audio / video playback)
+          mkdir -p gen/android/app/src/main/res/xml
+          cp ../../android/netsec/release.xml gen/android/app/src/main/res/xml/network_security_config.xml
+          sed -i '0,/<application/s##<application android:networkSecurityConfig="@xml/network_security_config"#' "$m"
+          grep -n networkSecurityConfig "$m"
 
       - name: Build APK
         working-directory: crates/aqua-client-ui

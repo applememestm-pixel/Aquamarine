@@ -468,6 +468,8 @@ x-aqua-fed: <unix_ms>.<hex HMAC-SHA256(secret, METHOD "\n" PATH "\n" unix_ms "\n
 
 Полное описание API, ограничений и модели безопасности — в [docs/BOTS.md](docs/BOTS.md). Примеры: [`bots/echo_bot.py`](bots/echo_bot.py), [`tools/aqua-console.py`](tools/aqua-console.py).
 
+Библиотека для ботов на Python — [`sdk/python`](sdk/python) (`aquabot`). Она подключает нейросети (llama.cpp, Ollama, OpenAI-совместимые серверы, Anthropic), содержит встроенную математику и команду `aquabot run` для готового ИИ-бота.
+
 ---
 
 ## 13. Наборы стикеров и эмодзи
@@ -689,6 +691,7 @@ crates/aqua-client-core/   транспорт, SOCKS5, хранилище, ре�
 crates/aqua-client-ui/     приложение Tauri: src/ (Rust), ui/ (Svelte 5), icons/
 crates/aqua-server/        ретранслятор: каталог, вложения, копии, боты, наборы, федерация, панель
 bots/                      пример бота
+sdk/python/                библиотека aquabot: боты, нейросети, математика
 tools/                     сценарии запуска, консольный бот, e2e-тесты, проверка IPC
 docs/                      руководство по ботам, описания релизов, проект сети
 site/                      сайт проекта (GitHub Pages)

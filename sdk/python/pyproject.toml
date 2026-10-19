@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aquamarine-bot"
+version = "0.2.0"
+description = "Bots for the Aquamarine messenger: long-polling framework, LLM connectors (llama.cpp, Ollama, OpenAI-compatible, Anthropic) and a safe math toolkit. No dependencies."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT OR Apache-2.0" }
+authors = [{ name = "The Aquamarine contributors" }]
+keywords = ["aquamarine", "messenger", "bot", "llm", "llama.cpp", "ollama", "openai", "calculator"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Topic :: Communications :: Chat",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Typing :: Typed",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/applememestm-pixel/aquamarine"
+Documentation = "https://github.com/applememestm-pixel/aquamarine/blob/main/sdk/python/README.md"
+Source = "https://github.com/applememestm-pixel/aquamarine/tree/main/sdk/python"
+
+[project.scripts]
+aquabot = "aquabot.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+aquabot = ["py.typed"]

@@ -31,6 +31,19 @@ if ($x -notmatch 'ACCESS_LOCAL_NETWORK') {
   [IO.File]::WriteAllText($m, $x)
   Write-Host '[patch] ACCESS_LOCAL_NETWORK added'
 }
+# 1d. Plain HTTP to the app's own loopback media server (audio / video
+#     playback); debug builds also to the dev server.
+$xmlMain = Join-Path $app 'src\main\res\xml'; $xmlDebug = Join-Path $app 'src\debug\res\xml'
+New-Item -ItemType Directory -Force $xmlMain, $xmlDebug | Out-Null
+Copy-Item (Join-Path $PSScriptRoot 'netsec\release.xml') (Join-Path $xmlMain 'network_security_config.xml') -Force
+Copy-Item (Join-Path $PSScriptRoot 'netsec\debug.xml') (Join-Path $xmlDebug 'network_security_config.xml') -Force
+$mt = Get-Content $m -Raw
+if ($mt -notmatch 'networkSecurityConfig') {
+  $mt = $mt -replace '<application', '<application android:networkSecurityConfig="@xml/network_security_config"'
+  Set-Content -Path $m -Value $mt -NoNewline -Encoding UTF8
+  Write-Host '[patch] network security config (loopback media server)'
+}
+
 # 1c. MainActivity that asks for local-network access on Android 17+.
 $ma = Get-ChildItem -Path (Join-Path $app 'src\main\java') -Recurse -Filter MainActivity.kt | Select-Object -First 1
 if ($ma) {

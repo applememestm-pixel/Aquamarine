@@ -185,19 +185,46 @@ pub fn save_wallpaper(state: State<'_, StdMutex<AppState>>, name: String, bytes:
     }
     let dir = wallpapers_dir(&state)?;
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
-    let p = dir.join(format!("{stamp}-{}", safe_name(&name)));
+    // Android's gallery hands over "content://…/1000012345" — no extension.
+    // Name the file after what it really is, so the library lists it.
+    let kind = infer::get(&bytes).filter(|k| k.mime_type().starts_with("image/")).ok_or("not a picture")?;
+    let mut base = safe_name(&name);
+    if !is_wall_ext(&base) {
+        base = format!("{base}.{}", kind.extension());
+    }
+    let p = dir.join(format!("{stamp}-{base}"));
     std::fs::write(&p, bytes).map_err(|e| e.to_string())?;
     Ok(p.display().to_string())
+}
+
+fn is_wall_ext(name: &str) -> bool {
+    matches!(ext_of(name).as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif" | "avif" | "bmp")
+}
+
+/// Older saves without an extension: add one from the content.
+fn fix_wallpaper_names(dir: &std::path::Path) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let p = e.path();
+        if !p.is_file() || is_wall_ext(&p.display().to_string()) {
+            continue;
+        }
+        let head = std::fs::File::open(&p).ok().and_then(|mut f| { use std::io::Read; let mut b = vec![0u8; 64]; f.read(&mut b).ok().map(|n| { b.truncate(n); b }) });
+        if let Some(kind) = head.and_then(|b| infer::get(&b)).filter(|k| k.mime_type().starts_with("image/")) {
+            let _ = std::fs::rename(&p, p.with_file_name(format!("{}.{}", p.file_name().and_then(|n| n.to_str()).unwrap_or("wallpaper"), kind.extension())));
+        }
+    }
 }
 
 /// Wallpapers in the library, newest first.
 #[tauri::command]
 pub fn list_wallpapers(state: State<'_, StdMutex<AppState>>) -> Result<Vec<String>, String> {
     let dir = wallpapers_dir(&state)?;
+    fix_wallpaper_names(&dir);
     let mut v: Vec<(std::time::SystemTime, String)> = std::fs::read_dir(&dir).map_err(|e| e.to_string())?
         .flatten()
         .filter(|e| e.path().is_file())
-        .filter(|e| matches!(ext_of(&e.path().display().to_string()).as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif" | "avif" | "bmp"))
+        .filter(|e| is_wall_ext(&e.path().display().to_string()))
         .map(|e| (e.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH), e.path().display().to_string()))
         .collect();
     v.sort_by(|a, b| b.0.cmp(&a.0));

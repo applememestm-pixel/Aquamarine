@@ -13,7 +13,7 @@
 <script lang="ts">
   import ColorInput from "./ColorInput.svelte";
   import { onMount } from "svelte";
-  import { fitWallpaper } from "../theme";
+  import { fitWallpaper, followWallpaper } from "../theme";
   import { settings, PALETTES, WALLPAPERS, EDITABLE_COLORS, THEMES, DEFAULTS, type Mode, type Density } from "../theme";
   import { info } from "../stores";
   import { icons } from "../icons";
@@ -490,7 +490,12 @@
 
   // ---- wallpaper library (files, not data: URLs) ----
   let myWalls = $state<string[]>([]);
-  async function loadWalls() { try { myWalls = await api.listWallpapers(); } catch { myWalls = []; } }
+  async function loadWalls() {
+    try { myWalls = await api.listWallpapers(); } catch { myWalls = []; }
+    // The library may have renamed an extension-less file (Android gallery
+    // picks): follow it, so the wallpaper in use keeps showing.
+    followWallpaper(myWalls);
+  }
   $effect(() => { if (section === "wallpaper") void loadWalls(); });
   async function pickCustomWallpaper() {
     try {
@@ -875,6 +880,20 @@
       </section>
       <section class="group">
         <div class="label">{$t("Appearance")}</div>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, glassMenus: !x.glassMenus }))}>
+          <div class="tr-text"><div class="tr-title">{$t("See-through menus")}</div><div class="tr-sub">{$t("Menus, pop-ups and windows become frosted glass over the chat")}</div></div>
+          <span class="switch" class:on={!!$settings.glassMenus}></span>
+        </button>
+        {#if $settings.glassMenus}
+          <div class="row">
+            <span class="row-label">{$t("Opacity")}</span>
+            <div class="range">
+              <input type="range" min="0.35" max="0.95" step="0.05" value={$settings.menuAlpha ?? 0.7}
+                oninput={(e) => settings.update((x) => ({ ...x, menuAlpha: +(e.target as HTMLInputElement).value }))} />
+              <span class="range-val">{Math.round(($settings.menuAlpha ?? 0.7) * 100)}%</span>
+            </div>
+          </div>
+        {/if}
         <div class="row">
           <span class="row-label">{$t("Mode")}</span>
           <div class="seg">

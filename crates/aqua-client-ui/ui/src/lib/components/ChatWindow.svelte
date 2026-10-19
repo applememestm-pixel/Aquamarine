@@ -44,6 +44,7 @@
   import { t, tr, tn } from "../i18n";
   import { mutedChats, setMuted } from "../chatPrefs";
   import { insertToComposer } from "../composerBus";
+  import { startRecorder, AUDIO_TYPES } from "../recorder";
   import { groupMap, refreshGroups } from "../groups";
   import Markup from "./Markup.svelte";
   import LinkPreview from "./LinkPreview.svelte";
@@ -313,11 +314,12 @@
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       recordedChunks = [];
-      // Prefer opus in webm — tiny files and good quality.
-      const mimeCandidates = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/ogg"];
-      const mimeType = mimeCandidates.find((m) => MediaRecorder.isTypeSupported(m)) ?? "";
-      recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-      recorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
+      // Prefer opus in webm — tiny files and good quality; whatever starts.
+      let st;
+      try { st = startRecorder(stream, AUDIO_TYPES, (b) => recordedChunks.push(b), 1000); }
+      catch (e) { stream.getTracks().forEach((t) => t.stop()); throw e; }
+      recorder = st.recorder;
+      const mimeType = st.mime;
       recorder.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
         recording = false;
@@ -327,7 +329,6 @@
         await sendVoiceBlob(new Blob(recordedChunks, { type: mimeType || "audio/webm" }));
         recordedChunks = [];
       };
-      recorder.start();
       recordStartMs = Date.now();
       recordElapsed = 0;
       recordTimer = setInterval(() => {
@@ -335,7 +336,7 @@
       }, 250);
       recording = true;
     } catch (e) {
-      showToast(`Mic access denied: ${e}`);
+      showToast(`${tr("Voice recording failed")}: ${e instanceof Error ? e.message : e}`, 8000);
     }
   }
 
@@ -401,7 +402,7 @@
   async function sendVoiceBlob(blob: Blob) {
     const chat = $activeChat;
     if (!chat) return;
-    const ext = blob.type.includes("ogg") ? "ogg" : "webm";
+    const ext = blob.type.includes("ogg") ? "ogg" : blob.type.includes("mp4") ? "m4a" : blob.type.includes("aac") ? "aac" : "webm";
     const name = `voice-${new Date().toISOString().replace(/[:.]/g, "-")}.${ext}`;
     try {
       const buf = await blob.arrayBuffer();
@@ -1278,6 +1279,22 @@
     menu = { open: true, x, y, row };
   }
   function closeMenu() { menu = { open: false, x: 0, y: 0, row: null }; }
+  /** Touch screens: a long press opens the menu, so text is selected from
+   *  here (Telegram's "Select text"); the system handles then adjust it. */
+  function selectRowText(row: Row) {
+    closeMenu();
+    const bubble = messagesEl?.querySelector<HTMLElement>(`[data-id="${CSS.escape(String(row.id))}"] .bubble`);
+    if (!bubble) return;
+    const meta = bubble.querySelector(":scope > .bubble-meta");
+    requestAnimationFrame(() => {
+      const r = document.createRange();
+      r.selectNodeContents(bubble);
+      if (meta) r.setEndBefore(meta);   // the text, not the time / ticks
+      const sel = getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(r);
+    });
+  }
 
   /** Extract a forwardable payload from a message, or null if it can't
    *  be forwarded (e.g. a media file that was never downloaded). */
@@ -1877,6 +1894,11 @@
     <div class="empty">{$t("Pick a chat on the left.")}</div>
   {:else}
     {#if rooms.length && activeGroup}
+      {#if roomsOpen}
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="rooms-veil" onclick={() => (roomsOpen = false)}></div>
+      {/if}
       <nav class="rooms" class:open={roomsOpen} aria-label={$t("Rooms")}>
         <button class="rooms-head" onclick={() => openGroupPanel(activeGroup!.id)} title={$t("Group settings")}>
           {#if $avatars[activeGroup.id]}<img src={$avatars[activeGroup.id]} alt="" />{:else}<span class="rh-ava" style:background={activeGroup.gradient}>{activeGroup.title.charAt(0).toUpperCase()}</span>{/if}
@@ -1897,7 +1919,7 @@
             <div class="rooms-cat">{$t("Voice rooms")}</div>
             {#each rooms.filter((r) => r.kind === "voice") as r (r.id)}
               {@const live = $activeGroupCalls[activeGroup.id]}
-              <button class="room voice" class:active={fullVoice && voiceView[activeGroup.id] === r.id} onclick={() => pickRoom(r)} oncontextmenu={(e) => openRoomMenu(e, r)} title={r.topic ?? ""}>
+              <button class="room voice" class:active={fullVoice && voiceView[activeGroup.id] === r.id} onclick={() => { pickRoom(r); roomsOpen = false; }} oncontextmenu={(e) => openRoomMenu(e, r)} title={r.topic ?? ""}>
                 <span class="room-ic">{r.emoji ?? "🔊"}</span><span class="room-name">{r.name}</span>
               </button>
               {#if live?.users?.length}
@@ -1990,6 +2012,7 @@
               <span class="typing-ind">{typingWho[$activeChat.id]} {$t("typing…")}</span>
               <span class="sep">·</span>
             {/if}
+            {#if activeRoom}<span class="grp-title-m">{$activeChat.name}</span>{/if}
             {#if activeRoom?.topic}
               <span class="room-topic" title={activeRoom.topic}>{activeRoom.topic}</span>
               <span class="sep">·</span>
@@ -2048,7 +2071,7 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>
             </button>
           {/if}
-          <button class="icon-btn" title={$t("Group settings")} onclick={() => openGroupPanel(activeGroup.id)} aria-label={$t("Group settings")}>
+          <button class="icon-btn group-gear" title={$t("Group settings")} onclick={() => openGroupPanel(activeGroup.id)} aria-label={$t("Group settings")}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           </button>
         {/if}
@@ -2504,6 +2527,7 @@
         {/if}
         {#if textOf(row) != null && !protectedChat}
           <button class="ctx-item" role="menuitem" onclick={() => copyRow(row)}>{$t("Copy text")}</button>
+          <button class="ctx-item" role="menuitem" onclick={() => selectRowText(row)}>{$t("Select text")}</button>
         {/if}
         {#if row.outgoing && (row.kind.type === "text" || row.kind.type === "reply")}
           <button class="ctx-item" role="menuitem" onclick={() => startEdit(row)}>{$t("Edit")}</button>
@@ -2719,8 +2743,7 @@
     padding: 12px 20px;
     border-bottom: 1px solid var(--border);
     background: rgba(12,15,23,0.7);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
+    position: relative;
     flex-shrink: 0;
   }
   /* Mobile-only back button (returns to the chat list). */
@@ -2893,10 +2916,12 @@
     min-height: 0;
     overscroll-behavior: contain;
   }
+  /* isolate: the wallpaper / messages z-order stays inside this box, so the
+     composer's popups (attach menu, mentions…) still draw above the messages. */
   /* The wallpaper sits on its own composited layer behind the scroller, so
      scrolling moves only the messages (a background on the scroller itself
      with attachment:local was re-rasterised on every scroll step). */
-  .msg-stage { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
+  .msg-stage { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; isolation: isolate; }
   .chat-wall {
     position: absolute; inset: 0; z-index: 0; pointer-events: none;
     background: var(--chat-wallpaper, transparent);
@@ -3691,14 +3716,30 @@
   .rp img, .rp { --s: 20px; }
   .rp img { width: 20px; height: 20px; border-radius: 50%; }
   .rp i { font-style: normal; }
-  .room-switch { border: none; background: var(--accent-soft); color: var(--accent); border-radius: 8px; padding: 1px 8px; font: inherit; font-weight: 800; cursor: pointer; margin-right: 6px; }
-  .group-name-btn.dim { color: var(--fg-muted); font-weight: 600; font-size: .85em; }
+  .room-switch { border: none; background: var(--accent-soft); color: var(--accent); border-radius: 8px; padding: 1px 8px; font: inherit; font-weight: 800; cursor: pointer; margin-right: 6px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: 62%; flex-shrink: 1; }
+  .group-name-btn.dim { color: var(--fg-muted); font-weight: 600; font-size: .85em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex-shrink: 1; }
+  .peer-name { min-width: 0; }
+  .rooms-veil { display: none; }
+  .grp-title-m { display: none; }
+  /* Phone: the room gets the whole title line; the group name moves to the
+     status line ("Aqua Lab · 4 members"). */
+  @media (max-width: 720px) {
+    .group-name-btn.dim { display: none; }
+    .room-switch { max-width: 100%; }
+    .grp-title-m { display: inline; color: var(--fg); font-weight: 600; margin-right: 6px; }
+    .grp-title-m::after { content: "·"; margin-left: 6px; color: var(--fg-dim); }
+    .active-chat.with-rooms .chat-actions .group-gear { display: none; }
+  }
   @media (min-width: 761px) { .room-switch { pointer-events: none; } }
   @media (max-width: 760px) {
     .active-chat.with-rooms { padding-left: 0; }
     .rooms { width: min(280px, 82vw); transform: translateX(-102%); transition: transform .3s var(--ease-out, ease); box-shadow: 0 0 40px rgba(0,0,0,.5); z-index: 30; animation: none; }
     .rooms.open { transform: none; }
+    /* Tap anywhere outside the drawer to close it. */
+    .rooms-veil { display: block; position: absolute; inset: 0; z-index: 29; background: rgba(4, 6, 12, .45); animation: rv-in .2s ease-out; }
   }
+  @keyframes rv-in { from { opacity: 0; } }
   .rules-bar { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-bottom: 1px solid var(--border);
     background: color-mix(in srgb, var(--acc) 12%, var(--bg-shell)); animation: rb-in .35s cubic-bezier(.2,.8,.2,1); }
   .rb-text { flex: 1; min-width: 0; font-size: 13px; }
@@ -3817,9 +3858,19 @@
     padding: 8px 16px 10px;
     border-top: 1px solid var(--border);
     background: rgba(12,15,23,0.7);
+    position: relative;
+    flex-shrink: 0;
+  }
+  /* The blur lives on a pseudo-layer: a backdrop-filter on the bar itself would make it a
+     "backdrop root", and popups inside it (attach menu, room list) couldn't blur the chat. */
+  .composer::before, .chat-header::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
-    flex-shrink: 0;
   }
   .attach-btn {
     width: 36px; height: 36px;

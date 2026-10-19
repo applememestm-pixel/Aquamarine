@@ -163,29 +163,51 @@
   export function blur() { el?.blur(); }
 
   /** Insert text (with optional [ce:] tokens) at the caret. */
+  /** Touch screens: picking an emoji must not focus the field (the
+   *  on-screen keyboard would jump up over the emoji panel). */
+  const coarse = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+  function endRange(): Range {
+    const r = document.createRange();
+    r.selectNodeContents(el!);
+    const last = el!.lastChild;
+    if (last && last.nodeName === "BR") { r.setStartBefore(last); r.setEndBefore(last); }
+    r.collapse(false);
+    return r;
+  }
   export function insert(str: string) {
     if (!el) { value += str; return; }
-    focus();
+    const quiet = coarse && document.activeElement !== el;
+    let range: Range;
     const sel = getSelection();
-    if (!sel || !sel.rangeCount) return;
-    const range = sel.getRangeAt(0);
+    if (quiet) {
+      range = savedRange && el.contains(savedRange.startContainer) ? savedRange.cloneRange() : endRange();
+    } else {
+      focus();
+      if (!sel || !sel.rangeCount) return;
+      range = sel.getRangeAt(0);
+    }
     range.deleteContents();
     const frag = fragmentOf(str);
     const lastNode = frag.lastChild;
     range.insertNode(frag);
     if (lastNode) { range.setStartAfter(lastNode); range.collapse(true); }
-    sel.removeAllRanges();
-    sel.addRange(range);
+    if (quiet) {
+      sync();
+      savedRange = lastNode && lastNode.parentNode ? (() => { const r = document.createRange(); r.setStartAfter(lastNode); r.collapse(true); return r; })() : range.cloneRange();
+      return;
+    }
+    sel!.removeAllRanges();
+    sel!.addRange(range);
     sync();
     // sync() may have added the tail <br>; keep the caret on the new line.
     if (lastNode && lastNode.parentNode === el) {
       const r = document.createRange();
       r.setStartAfter(lastNode);
       r.collapse(true);
-      sel.removeAllRanges();
-      sel.addRange(r);
+      sel!.removeAllRanges();
+      sel!.addRange(r);
     }
-    savedRange = sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+    savedRange = sel!.rangeCount ? sel!.getRangeAt(0).cloneRange() : null;
   }
 
   // ---- Telegram-style formatting of the selected text -------------------

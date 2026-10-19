@@ -1384,4 +1384,11 @@ export const RU: Record<string, string> = {
   "Emoji for this sticker": "Эмодзи этого стикера",
   "Make pack icon": "Сделать иконкой набора",
   "Click a sticker to change its emoji, make it the pack icon or delete it. Drag to reorder.": "Нажмите на стикер, чтобы сменить эмодзи, сделать его иконкой набора или удалить. Перетаскивайте, чтобы поменять порядок.",
+  "Select text": "Выделить текст",
+  "Recording failed": "Запись не удалась",
+  "Could not start recording": "Не удалось начать запись",
+  "Voice recording failed": "Не удалось записать голосовое",
+  "See-through menus": "Полупрозрачные меню",
+  "Menus, pop-ups and windows become frosted glass over the chat": "Меню, всплывающие панели и окна становятся матовым стеклом поверх чата",
+  "Opacity": "Плотность",
 };

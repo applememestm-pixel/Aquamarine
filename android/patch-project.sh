@@ -34,6 +34,16 @@ if [ -n "$MA" ]; then
   echo '[patch] MainActivity requests local network access'
 fi
 
+# 1d. Plain HTTP to the app's own loopback media server (audio / video
+#     playback); debug builds also to the dev server.
+mkdir -p "$APP/src/main/res/xml" "$APP/src/debug/res/xml"
+cp -f "$HERE/netsec/release.xml" "$APP/src/main/res/xml/network_security_config.xml"
+cp -f "$HERE/netsec/debug.xml" "$APP/src/debug/res/xml/network_security_config.xml"
+if ! grep -q networkSecurityConfig "$M"; then
+  perl -0pi -e 's|<application|<application android:networkSecurityConfig="\@xml/network_security_config"|' "$M"
+  echo '[patch] network security config (loopback media server)'
+fi
+
 # 2. App icon.
 ICONS="$ROOT/crates/aqua-client-ui/icons/android"
 if [ -d "$ICONS" ]; then

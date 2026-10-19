@@ -186,10 +186,60 @@ export async function setMyImage(kind: "avatar" | "banner", path: string): Promi
   applyMyImage(kind, r);
 }
 
-export async function setMyImageBytes(kind: "avatar" | "banner", mime: string, bytes: number[]): Promise<void> {
-  const r = await api.setProfileImageBytes(kind, mime, bytes);
-  applyMyImage(kind, r);
+/** Picked while offline (or the upload failed): shown here right away,
+ *  uploaded as soon as the relay is reachable. */
+const PENDING_KEY = "aqua.pendingImage.v1";
+interface PendingImage { kind: "avatar" | "banner"; mime: string; b64: string }
+function bytesToB64(bytes: number[]): string {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.slice(i, i + 0x8000));
+  return btoa(s);
 }
+function b64ToBytes(b64: string): number[] { const s = atob(b64); const out = new Array<number>(s.length); for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i); return out; }
+
+export async function setMyImageBytes(kind: "avatar" | "banner", mime: string, bytes: number[]): Promise<void> {
+  try {
+    const r = await api.setProfileImageBytes(kind, mime, bytes);
+    applyMyImage(kind, r);
+    clearPending(kind);
+  } catch (e) {
+    // Show it now; keep it for the next connection.
+    const b64 = bytesToB64(bytes);
+    const local = `data:${mime};base64,${b64}`;
+    if (kind === "avatar") updateProfile({ avatar_url: local }); else updateProfile({ banner_url: local });
+    updateProfile({ pv: Date.now() });
+    try {
+      const list = (JSON.parse(localStorage.getItem(PENDING_KEY) ?? "[]") as PendingImage[]).filter((p) => p.kind !== kind);
+      list.push({ kind, mime, b64 });
+      localStorage.setItem(PENDING_KEY, JSON.stringify(list));
+    } catch { /* too big for storage: the next try needs a new pick */ }
+    throw new Error(`${e} — saved here, it is uploaded when the server is reachable`);
+  }
+}
+function clearPending(kind: "avatar" | "banner") {
+  try {
+    const list = (JSON.parse(localStorage.getItem(PENDING_KEY) ?? "[]") as PendingImage[]).filter((p) => p.kind !== kind);
+    if (list.length) localStorage.setItem(PENDING_KEY, JSON.stringify(list)); else localStorage.removeItem(PENDING_KEY);
+  } catch { /* ignore */ }
+}
+let flushing = false;
+async function flushPendingImages() {
+  if (flushing) return;
+  let list: PendingImage[] = [];
+  try { list = JSON.parse(localStorage.getItem(PENDING_KEY) ?? "[]"); } catch { return; }
+  if (!list.length) return;
+  flushing = true;
+  try {
+    for (const p of list) {
+      try {
+        const r = await api.setProfileImageBytes(p.kind, p.mime, b64ToBytes(p.b64));
+        applyMyImage(p.kind, r);
+        clearPending(p.kind);
+      } catch { /* still offline */ }
+    }
+  } finally { flushing = false; }
+}
+info.subscribe((i) => { if (i?.connected) void flushPendingImages(); });
 
 function applyMyImage(kind: "avatar" | "banner", r: { ver: number; path: string }) {
   const url = assetUrl(r.path) + `?v=${r.ver}`;

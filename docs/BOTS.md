@@ -157,6 +157,28 @@ while True:
         bot.send(u["from"], u["text"])    # POST /v1/bot/send
 ```
 
+### 7.2.1. Библиотека aquabot (Python)
+
+[`sdk/python`](../sdk/python) — готовая библиотека без зависимостей. В ней есть:
+
+- команды, обработчики и состояние на пользователя;
+- повторы при 429 и 5xx, разбиение длинных ответов;
+- подключение нейросетей: llama.cpp, Ollama, OpenAI-совместимые серверы, Anthropic;
+- безопасный калькулятор и математика.
+
+```sh
+pip install "git+https://github.com/applememestm-pixel/aquamarine#subdirectory=sdk/python"
+```
+
+```python
+from aquabot import Bot, llm
+bot = Bot()                                   # $AQUA_SERVER, $AQUA_BOT_TOKEN
+bot.use_help().use_calc().use_llm(llm.LlamaCpp("http://127.0.0.1:8080"))
+bot.run()
+```
+
+Готовый бот без кода — `aquabot run`; модель задаётся через `--llm ollama:llama3.1` или `$AQUA_LLM`. Подробнее — в [sdk/python/README.md](../sdk/python/README.md).
+
 ### 7.3. JavaScript (Node.js ≥ 18)
 
 ```js

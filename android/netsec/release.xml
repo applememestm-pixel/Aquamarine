@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Aquamarine: the app streams its own audio / video to the WebView from a
+     loopback HTTP server (127.0.0.1, random port, random per-file tokens).
+     Android blocks plain HTTP in release builds, which made every local
+     track and video fail with "format not supported". Allow it for the
+     loopback address only. -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

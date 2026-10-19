@@ -167,7 +167,9 @@
       if (draft) draft = { ...draft, avatar_url: $profile.avatar_url, banner_url: $profile.banner_url };
       showToast(kind === "avatar" ? "Avatar updated — visible to everyone" : "Banner updated — visible to everyone");
     } catch (e) {
-      showToast(`Could not upload ${kind}: ${e}`, 5000);
+      // Kept locally and uploaded on the next connection (people.ts).
+      if (draft) draft = { ...draft, avatar_url: $profile.avatar_url, banner_url: $profile.banner_url };
+      showToast(`Could not upload ${kind}: ${e}`, 6000);
     } finally {
       uploading = "";
     }

@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { startAppIcon } from "./lib/appIcon";
   import { startAutoscroll } from "./lib/autoscroll";
-  import { migrateCustomWallpaper, fitCurrentWallpaper } from "./lib/theme";
+  import { migrateCustomWallpaper, fitCurrentWallpaper, followWallpaper } from "./lib/theme";
   import { api } from "./lib/tauri";
   import { bootstrap, activeTab, info, activeId, backToList } from "./lib/stores";
   import { openRegistration, closeRegistration, registrationDismissed } from "./lib/components/RegistrationWizard.svelte";
@@ -83,7 +83,9 @@
 
   onMount(() => {
     const stopIcon = startAppIcon();
-    void migrateCustomWallpaper(api.saveWallpaper).then(() => setTimeout(() => void fitCurrentWallpaper(api.saveWallpaper, api.deleteWallpaper, api.readMediaBytes), 4000));
+    void migrateCustomWallpaper(api.saveWallpaper)
+      .then(() => api.listWallpapers().then(followWallpaper).catch(() => {}))
+      .then(() => setTimeout(() => void fitCurrentWallpaper(api.saveWallpaper, api.deleteWallpaper, api.readMediaBytes), 4000));
     // Linux: without gst-plugins-good WebKitGTK hangs on the first sound or
     // video — say what to install up front (playback is refused until then).
     // No usable GPU (gpu.rs switched WebKit to plain CPU painting): lighter

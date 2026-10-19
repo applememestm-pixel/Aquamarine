@@ -34,7 +34,11 @@
   let busy = $state(false);
 
   // Frame size on screen.
-  const FW = $derived($req ? ($req.aspect >= 1 ? 440 : 440 * $req.aspect) : 440);
+  // Fits a phone screen too (dialog padding 18 px on each side + margins).
+  let vw = $state(typeof window !== "undefined" ? window.innerWidth : 1000);
+  $effect(() => { const f = () => (vw = window.innerWidth); window.addEventListener("resize", f); return () => window.removeEventListener("resize", f); });
+  const MAXW = $derived(Math.min(440, Math.max(200, vw - 60)));
+  const FW = $derived($req ? ($req.aspect >= 1 ? MAXW : MAXW * $req.aspect) : MAXW);
   const FH = $derived($req ? FW / $req.aspect : 440);
   // Scale (screen px per image px) at zoom 1 = cover the frame.
   const base = $derived(natW && natH ? Math.max(FW / natW, FH / natH) : 1);

@@ -11,7 +11,8 @@
 </script>
 
 <script lang="ts">
-  import { t } from "../i18n";
+  import { t, tr } from "../i18n";
+  import { startRecorder, VIDEO_TYPES, extFor } from "../recorder";
   import { onMount, onDestroy } from "svelte";
   import { api } from "../tauri";
   import { loadActiveMessages } from "../stores";
@@ -57,11 +58,11 @@
   async function startRecording() {
     if (!stream) return;
     chunks = [];
-    const mimeCandidates = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"];
-    const mimeType = mimeCandidates.find((m) => MediaRecorder.isTypeSupported(m)) ?? "";
     try {
-      recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+      const st = startRecorder(stream, VIDEO_TYPES, (b) => chunks.push(b), 1000);
+      recorder = st.recorder;
+      const mimeType = st.mime;
+      recorder.onerror = (ev) => { errorMsg = `${tr("Recording failed")}: ${(ev as unknown as { error?: Error }).error?.message ?? "error"}`; };
       recorder.onstop = () => {
         if (timer) { clearInterval(timer); timer = null; }
         const blob = new Blob(chunks, { type: mimeType || "video/webm" });
@@ -73,7 +74,6 @@
         recordedUrl = URL.createObjectURL(blob);
         phase = "review";
       };
-      recorder.start();
       phase = "recording";
       elapsed = 0;
       timer = setInterval(() => {
@@ -81,7 +81,7 @@
         if (elapsed >= MAX_SECONDS) stopRecording();
       }, 1000);
     } catch (e) {
-      errorMsg = `Could not start recording: ${e}`;
+      errorMsg = `${tr("Could not start recording")}: ${e instanceof Error ? e.message : e}`;
     }
   }
 
@@ -103,7 +103,7 @@
     try {
       const buf = await recordedBlob.arrayBuffer();
       const bytes = Array.from(new Uint8Array(buf));
-      const name = `circle-${new Date().toISOString().replace(/[:.]/g, "-")}.webm`;
+      const name = `circle-${new Date().toISOString().replace(/[:.]/g, "-")}.${extFor(recordedBlob.type, "webm")}`;
       await api.sendCircleVideo(s.peerId, name, recordedBlob.type || "video/webm", bytes);
       await loadActiveMessages();
       close();

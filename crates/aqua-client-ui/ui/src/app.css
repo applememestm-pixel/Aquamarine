@@ -266,3 +266,33 @@ html.autoscrolling, html.autoscrolling * { cursor: all-scroll !important; user-s
 /* Drawn without the GPU (llvmpipe): drop the costly effects. */
 .soft-render * { box-shadow: none !important; text-shadow: none !important; }
 .soft-render *, .soft-render *::before, .soft-render *::after { transition-duration: 0s !important; }
+
+/* Phones: every modal dialog fits the screen (no sideways overflow). */
+@media (max-width: 600px) {
+  .backdrop, .modal-bg, .pm-veil { padding: 8px !important; }
+  [role="dialog"][aria-modal="true"], .pm {
+    max-width: calc(100vw - 16px) !important;
+    max-height: calc(100dvh - 16px) !important;
+    box-sizing: border-box;
+  }
+  [role="dialog"][aria-modal="true"] { overflow-x: hidden; }
+}
+
+/* Settings → Appearance → See-through menus: frosted glass for menus,
+   pop-ups and dialogs. --menu-alpha is how solid they stay. */
+html.glass-menus :is(.ctx-menu, .chat-ctx, .room-menu, .attach-pop, .plus-pop, [role="menu"],
+  .cp-pop, .bd-pop, .panel, .pm, [role="dialog"][aria-modal="true"], .toast) {
+  background: color-mix(in srgb, var(--bg-shell) var(--menu-alpha, 70%), transparent) !important;
+  backdrop-filter: blur(22px) saturate(1.5);
+  -webkit-backdrop-filter: blur(22px) saturate(1.5);
+  border-color: color-mix(in srgb, var(--border-strong) 70%, transparent) !important;
+}
+/* Inner cards stay a touch more solid so text keeps its contrast. */
+html.glass-menus :is([role="dialog"][aria-modal="true"], .pm) :is(.card, .group, .pm-sel) {
+  background: color-mix(in srgb, var(--bg-surface) calc(var(--menu-alpha, 70%) + 10%), transparent) !important;
+}
+/* WebKitGTK paints blur on the CPU: keep the see-through, skip the blur. */
+html.wk-lowfx.glass-menus :is(.ctx-menu, .chat-ctx, .room-menu, .attach-pop, .plus-pop, [role="menu"],
+  .cp-pop, .bd-pop, .panel, .pm, [role="dialog"][aria-modal="true"], .toast) {
+  backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+}

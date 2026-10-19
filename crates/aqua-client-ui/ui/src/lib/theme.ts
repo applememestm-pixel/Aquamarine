@@ -153,6 +153,10 @@ export interface Settings {
   wallpaperPath?: string;
   /** Darkening over a custom wallpaper, 0–0.8. */
   wallpaperDim?: number;
+  /** See-through menus, popovers and dialogs (frosted glass). */
+  glassMenus?: boolean;
+  /** How solid they are with glassMenus on, 0.35–0.95. */
+  menuAlpha?: number;
   // Behaviour
   enterToSend: boolean;       // Enter sends (true) vs newline (false)
   autoDownloadMedia: boolean; // auto-fetch inline media on receive
@@ -352,6 +356,8 @@ function apply(s: Settings) {
   root.style.setProperty("--media-max", `${s.mediaMaxWidth ?? 360}px`);
   root.style.setProperty("--bubble-r", `${s.bubbleRadius ?? 14}px`);
   root.classList.toggle("no-autoplay-stickers", s.autoplayStickers === false);
+  root.classList.toggle("glass-menus", !!s.glassMenus);
+  root.style.setProperty("--menu-alpha", `${Math.round((s.menuAlpha ?? 0.7) * 100)}%`);
 
   // Custom UI font loaded from a file the user picked.
   applyCustomFont(s);
@@ -448,6 +454,14 @@ export async function fitWallpaper(bytes: number[] | Uint8Array, name: string): 
   } catch {
     return { bytes: Array.from(arr), name };
   }
+}
+
+/** The library renamed an extension-less file: point the setting at it. */
+export function followWallpaper(list: string[]): void {
+  const cur = get(settings).wallpaperPath;
+  if (!cur || list.includes(cur)) return;
+  const moved = list.find((w) => w.startsWith(cur + "."));
+  if (moved) settings.update((x) => ({ ...x, wallpaperPath: moved }));
 }
 
 /** Once: replace an oversized wallpaper that is already in use with a fitted copy. */
