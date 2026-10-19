@@ -693,7 +693,15 @@ async fn fetch_blob(
 struct EmailRequestBody { email: String }
 
 #[derive(serde::Serialize)]
-struct EmailRequestResp { ok: bool, dev_code: Option<String> }
+struct EmailRequestResp {
+    ok: bool,
+    dev_code: Option<String>,
+    /// The mail server refused: the code is in the server window / admin panel.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    delivery_failed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
 
 async fn email_request(
     State(state): State<AppState>,
@@ -703,8 +711,8 @@ async fn email_request(
     if !state.admin.read().map(|c| c.permits(&body.email)).unwrap_or(true) {
         return Err((StatusCode::FORBIDDEN, "this relay is invite-only — ask the admin to add your email".into()));
     }
-    match state.directory.request_code(&body.email) {
-        Ok(dev_code) => Ok(Json(EmailRequestResp { ok: true, dev_code })),
+    match state.directory.request_code_delivered(&body.email).await {
+        Ok(d) => Ok(Json(EmailRequestResp { ok: true, dev_code: d.dev_code, delivery_failed: d.delivery_failed, error: d.error })),
         Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
     }
 }

@@ -136,15 +136,31 @@ pub struct ProfileCard {
 /// Request an email verification code (no auth required). Returns the
 /// code itself only when the server is in dev mode.
 pub async fn request_email_code(server_url: &str, email: &str) -> Result<Option<String>, TransportError> {
-    #[derive(serde::Deserialize)]
-    struct Resp { #[serde(default)] dev_code: Option<String> }
+    Ok(request_email_code_ex(server_url, email).await?.dev_code)
+}
+
+/// What the relay said about a code request.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct CodeRequest {
+    /// Dev-mode relays (no mail server) hand the code back.
+    #[serde(default)]
+    pub dev_code: Option<String>,
+    /// The relay has a mail server but couldn't send: the code is in the
+    /// relay's console / admin panel.
+    #[serde(default)]
+    pub delivery_failed: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+pub async fn request_email_code_ex(server_url: &str, email: &str) -> Result<CodeRequest, TransportError> {
     let http = http_client()?;
     let url = format!("{}/v1/auth/email/request", server_url.trim_end_matches('/'));
     let r = http.post(&url).json(&serde_json::json!({ "email": email })).send().await?;
     if !r.status().is_success() {
         return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
     }
-    Ok(r.json::<Resp>().await?.dev_code)
+    Ok(r.json::<CodeRequest>().await?)
 }
 
 /// Verify an email code (no auth required). Returns a registration

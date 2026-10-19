@@ -295,9 +295,9 @@
       : "The relay only accepts connections from this PC.";
 
     $("codesHint").textContent = s.dev_codes ? "dev mode — no mail is sent" : "sent by e-mail (SMTP)";
-    $("codes").innerHTML = !s.dev_codes
-      ? `<div class="empty">Codes are e-mailed to users, so they don't show up here.</div>`
-      : (s.codes.length ? s.codes.map(c => `<div class="code-row"><span class="code">${esc(c.code)}</span>
+    $("codes").innerHTML = !s.dev_codes && !s.codes.length
+      ? `<div class="empty">Codes are e-mailed to users, so they don't show up here. If an e-mail can't be sent, its code appears here.</div>`
+      : (!s.dev_codes ? `<div class="empty" style="color:#ffb454">These e-mails could NOT be sent — pass the code on to the person yourself.</div>` : "") + (s.codes.length ? s.codes.map(c => `<div class="code-row"><span class="code">${esc(c.code)}</span>
             <span class="em">${esc(c.email)}</span><span class="ago">${ago(c.at)}</span>
             <button class="copy" onclick="copy('${esc(c.code)}')">Copy</button></div>`).join("")
           : `<div class="empty">No codes yet. When someone taps <b>Send code</b> in the app, it appears here.</div>`);

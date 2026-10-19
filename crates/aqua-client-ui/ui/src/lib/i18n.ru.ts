@@ -1415,4 +1415,8 @@ export const RU: Record<string, string> = {
   "Telegram token": "Токен Telegram",
   "Bots written for Telegram": "Боты из Telegram",
   "This server speaks the Telegram Bot API too: an existing Telegram bot works here unchanged — copy its “Telegram token” above and point the library at this server instead of api.telegram.org. Inline buttons appear as a numbered list; the user answers with the number and the bot gets the button press.": "Сервер понимает и Telegram Bot API: готовый бот для Telegram работает здесь без переделки — скопируйте его «Токен Telegram» выше и укажите библиотеке адрес этого сервера вместо api.telegram.org. Инлайн-кнопки показываются нумерованным списком: пользователь отвечает номером, и бот получает нажатие кнопки.",
+  "The server couldn't send the e-mail ({e}). The code is shown in the server window and in its admin panel — if this is your server, take it from there; otherwise ask the server's owner.": "Сервер не смог отправить письмо ({e}). Код показан в окне сервера и в его панели администратора — если сервер ваш, возьмите код оттуда; иначе спросите владельца сервера.",
+  "Check your inbox at {email}.": "Проверьте почту {email}.",
+  "Resend code in {n}s": "Отправить ещё раз через {n} с",
+  "Resend code": "Отправить код ещё раз",
 };

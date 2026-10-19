@@ -79,7 +79,7 @@ export const api = {
   setNetworkProxy:    (url: string): Promise<InitInfo>                             => invoke("set_network_proxy", { url }),
 
   // Email registration + user directory
-  requestEmailCode:   (server_url: string, email: string): Promise<string | null>  => invoke("request_email_code", { serverUrl: server_url, email }),
+  requestEmailCode:   (server_url: string, email: string): Promise<{ dev_code: string | null; delivery_failed: boolean; error: string | null }> => invoke("request_email_code", { serverUrl: server_url, email }),
   verifyEmailCode:    (server_url: string, email: string, code: string): Promise<string> => invoke("verify_email_code", { serverUrl: server_url, email, code }),
   registerAccount:    (server_url: string, username: string, ticket: string, display_name: string, about: string, phone: string, password?: string, email?: string): Promise<void> => invoke("register_account", { serverUrl: server_url, username, ticket, displayName: display_name, about, phone, password: password || null, email: email || null }),
   listDevices:        (): Promise<DeviceInfo[]> => invoke("list_devices"),

@@ -25,7 +25,7 @@ pub use prekeys::{
 
 pub mod transport;
 pub use transport::{
-    request_email_code, verify_email_code, DeviceInfo, Incoming, ProfileCard, Transport, TransportError,
+    request_email_code, request_email_code_ex, verify_email_code, CodeRequest, DeviceInfo, Incoming, ProfileCard, Transport, TransportError,
 };
 
 pub mod telegram;

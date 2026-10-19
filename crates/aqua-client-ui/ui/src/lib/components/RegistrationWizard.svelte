@@ -80,6 +80,8 @@
   let email = $state("");
   let code = $state("");
   let devCode = $state<string | null>(null);
+  /** The relay couldn't e-mail the code (its mail server refused). */
+  let mailFailed = $state<string | null>(null);
   let ticket = $state("");
   let username = $state("");
   let displayName = $state("");
@@ -105,7 +107,8 @@
     serverUrl = normalizeServer(serverUrl); // fix https→http for local relays, reflect it
     busy = true;
     try {
-      devCode = await api.requestEmailCode(serverUrl.trim(), email.trim());
+      const r = await api.requestEmailCode(serverUrl.trim(), email.trim());
+      devCode = r.dev_code; mailFailed = r.delivery_failed ? (r.error || "?") : null;
       step = 2;
       if (devCode) code = devCode; // prefill in dev mode for convenience
       startResendCooldown();
@@ -132,7 +135,8 @@
     error = null;
     busy = true;
     try {
-      devCode = await api.requestEmailCode(serverUrl.trim(), email.trim());
+      const r = await api.requestEmailCode(serverUrl.trim(), email.trim());
+      devCode = r.dev_code; mailFailed = r.delivery_failed ? (r.error || "?") : null;
       if (devCode) code = devCode;
       startResendCooldown();
     } catch (e) {
@@ -332,11 +336,13 @@
           </label>
           {#if devCode}
             <p class="note dev">{$t("Dev mode — your code is")} <b>{devCode}</b> {$t("(also printed in the server console).")}</p>
+          {:else if mailFailed}
+            <p class="note warn">{$t("The server couldn't send the e-mail ({e}). The code is shown in the server window and in its admin panel — if this is your server, take it from there; otherwise ask the server's owner.", { e: mailFailed })}</p>
           {:else}
-            <p class="note">Check your inbox at {email}.</p>
+            <p class="note">{$t("Check your inbox at {email}.", { email })}</p>
           {/if}
           <button class="resend" onclick={resendCode} disabled={resendIn > 0 || busy}>
-            {resendIn > 0 ? `Resend code in ${resendIn}s` : "Resend code"}
+            {resendIn > 0 ? $t("Resend code in {n}s", { n: resendIn }) : $t("Resend code")}
           </button>
           <div class="actions">
             <button class="ghost" onclick={() => (step = 1)}>{$t("Back")}</button>
@@ -528,4 +534,5 @@
   .primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070C; box-shadow: 0 6px 16px -4px var(--accent-glow); }
   .primary:hover:not(:disabled) { transform: translateY(-1px); }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .note.warn { color: #ffb454; line-height: 1.45; }
 </style>

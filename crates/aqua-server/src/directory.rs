@@ -469,6 +469,41 @@ impl Directory {
     /// only when running in dev mode (so the UI can show it); otherwise
     /// returns None and the code is delivered out of band.
     pub fn request_code(&self, email: &str) -> Result<Option<String>, DirError> {
+        let (email, code) = self.issue_code(email)?;
+        self.send_email_code(&email, &code);
+        Ok(if self.dev_codes() { Some(code) } else { None })
+    }
+
+    /// Like [`Self::request_code`], but waits for the mail server. When the
+    /// e-mail can't be sent, the code goes to the server console and the admin
+    /// panel (the operator can pass it on) and `delivery_failed` says so.
+    pub async fn request_code_delivered(&self, email: &str) -> Result<CodeDelivery, DirError> {
+        let (email, code) = self.issue_code(email)?;
+        let cfg = self.smtp.read().ok().and_then(|c| c.clone());
+        let Some(cfg) = cfg else {
+            self.send_email_code(&email, &code);
+            return Ok(CodeDelivery { dev_code: self.dev_codes().then_some(code), delivery_failed: false, error: None });
+        };
+        let res = tokio::time::timeout(std::time::Duration::from_secs(45), send_smtp_any_port(&cfg, &email, &code)).await;
+        let err = match res {
+            Ok(Ok(())) => {
+                tracing::info!(%email, "verification code emailed");
+                return Ok(CodeDelivery { dev_code: self.dev_codes().then_some(code), delivery_failed: false, error: None });
+            }
+            Ok(Err(e)) => e.to_string(),
+            Err(_) => "the mail server didn't answer in time".to_string(),
+        };
+        tracing::error!(%email, error = %err, "SMTP send failed");
+        tracing::warn!(%email, %code, "📧 E-MAIL NOT SENT — give this code to the user (also in the admin panel)");
+        if let Ok(mut r) = self.recent.lock() {
+            r.push_front((email.clone(), code.clone(), now_secs()));
+            r.truncate(20);
+        }
+        Ok(CodeDelivery { dev_code: self.dev_codes().then_some(code), delivery_failed: true, error: Some(err) })
+    }
+
+    /// Generate and store a fresh code for `email` → (normalized email, code).
+    fn issue_code(&self, email: &str) -> Result<(String, String), DirError> {
         let email = email.trim().to_lowercase();
         if !email.contains('@') || email.len() < 5 {
             return Err(DirError::BadCode);
@@ -485,8 +520,7 @@ impl Directory {
                 rusqlite::params![email, code, now_secs() as i64],
             )?;
         }
-        self.send_email_code(&email, &code);
-        Ok(if self.dev_codes() { Some(code) } else { None })
+        Ok((email, code))
     }
 
     /// Check a code; on success mint + store a one-time ticket.
@@ -533,7 +567,7 @@ impl Directory {
         let code = code.to_string();
         // Fire-and-forget on the tokio runtime; failures are logged.
         tokio::spawn(async move {
-            if let Err(e) = send_smtp(&cfg, &email, &code).await {
+            if let Err(e) = send_smtp_any_port(&cfg, &email, &code).await {
                 tracing::error!(%email, error = %e, "SMTP send failed");
             } else {
                 tracing::info!(%email, "verification code emailed");
@@ -576,7 +610,7 @@ impl Directory {
     pub async fn send_test_email(&self, to: &str) -> anyhow::Result<()> {
         let cfg = self.smtp.read().ok().and_then(|c| c.clone())
             .ok_or_else(|| anyhow::anyhow!("e-mail delivery is not configured"))?;
-        send_smtp(&cfg, to.trim(), "123456").await
+        send_smtp_any_port(&cfg, to.trim(), "123456").await
     }
 
     // ---- registration ----
@@ -1483,6 +1517,36 @@ fn build_code_email(cfg: &SmtpConfig, to: &str, code: &str) -> anyhow::Result<le
         .multipart(MultiPart::alternative_plain_html(text, html))?)
 }
 
+/// Result of asking for a code.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CodeDelivery {
+    /// Only in dev mode (no SMTP): the code itself.
+    pub dev_code: Option<String>,
+    /// SMTP is set up but the mail couldn't be sent: the code is in the
+    /// server console / admin panel.
+    pub delivery_failed: bool,
+    pub error: Option<String>,
+}
+
+/// Send over the configured port; if that fails, over the other one
+/// (587 STARTTLS ↔ 465 TLS). VPNs and some networks break one of them —
+/// "incomplete response" on 587 is the usual sign.
+async fn send_smtp_any_port(cfg: &SmtpConfig, to: &str, code: &str) -> anyhow::Result<()> {
+    let first = send_smtp(cfg, to, code).await;
+    let Err(e1) = first else { return Ok(()) };
+    let alt = match cfg.port { 465 => 587, 587 | 25 | 2525 => 465, _ => return Err(e1) };
+    tracing::warn!(port = cfg.port, error = %e1, alt, "SMTP failed, trying the other port");
+    let mut c2 = cfg.clone();
+    c2.port = alt;
+    match send_smtp(&c2, to, code).await {
+        Ok(()) => {
+            tracing::info!(alt, "SMTP works on the other port — consider switching to it in the admin panel");
+            Ok(())
+        }
+        Err(e2) => Err(anyhow::anyhow!("port {}: {e1}; port {alt}: {e2}", cfg.port)),
+    }
+}
+
 async fn send_smtp(cfg: &SmtpConfig, to: &str, code: &str) -> anyhow::Result<()> {
     use lettre::{
         transport::smtp::authentication::Credentials,
@@ -1513,6 +1577,27 @@ mod tests {
     use super::*;
 
     fn dir() -> Directory { Directory::open_memory() }
+
+    /// The mail server drops the connection (as Gmail does through some VPNs):
+    /// the request still succeeds, says the mail failed, and the operator
+    /// gets the code — the requester never does.
+    #[tokio::test]
+    async fn failed_mail_puts_the_code_in_the_admin_panel() {
+        let mut d = dir();
+        d.dev_forced = None; // a real relay with SMTP set up
+        // A "mail server" that accepts and closes at once.
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move { loop { if let Ok((s, _)) = l.accept().await { drop(s); } } });
+        d.smtp.write().unwrap().replace(SmtpConfig { host: "127.0.0.1".into(), user: "me@x.com".into(),
+            pass: "p".into(), from: "me@x.com".into(), port });
+        let r = d.request_code_delivered("Who@X.com").await.unwrap();
+        assert!(r.delivery_failed);
+        assert!(r.dev_code.is_none(), "the requester must not get the code");
+        let recent = d.recent_codes();
+        assert_eq!(recent[0].0, "who@x.com");
+        assert!(d.verify_code("who@x.com", &recent[0].1).is_ok());
+    }
 
     #[test]
     fn code_email_builds() {
