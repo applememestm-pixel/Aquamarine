@@ -61,6 +61,11 @@ export interface IncomingPayload {
   is_new_chat: boolean;
 }
 
+/** One device of my account (Settings → Devices). */
+export interface DeviceInfo {
+  addr: string; id: string; primary: boolean; name: string; added: number; online: boolean; current: boolean;
+}
+
 export const api = {
   initApp:            (): Promise<InitInfo>                                        => invoke("init_app"),
   completeRegistration: (username: string, email: string | null): Promise<InitInfo> => invoke("complete_registration", { username, email }),
@@ -77,6 +82,9 @@ export const api = {
   requestEmailCode:   (server_url: string, email: string): Promise<string | null>  => invoke("request_email_code", { serverUrl: server_url, email }),
   verifyEmailCode:    (server_url: string, email: string, code: string): Promise<string> => invoke("verify_email_code", { serverUrl: server_url, email, code }),
   registerAccount:    (server_url: string, username: string, ticket: string, display_name: string, about: string, phone: string, password?: string, email?: string): Promise<void> => invoke("register_account", { serverUrl: server_url, username, ticket, displayName: display_name, about, phone, password: password || null, email: email || null }),
+  listDevices:        (): Promise<DeviceInfo[]> => invoke("list_devices"),
+  removeDevice:       (id: string): Promise<void> => invoke("remove_device", { id }),
+  renameDevice:       (id: string, name: string): Promise<void> => invoke("rename_device", { id, name }),
   loginAccount:       (server_url: string, ticket: string, password: string, email?: string): Promise<string> => invoke("login_account", { serverUrl: server_url, ticket, password, email: email || null }),
   fedPeers:           (server_url: string): Promise<{ federated: boolean; self?: string; servers: string[] }> => invoke("fed_peers", { serverUrl: server_url }),
   backupStatus:       (): Promise<BackupStatus> => invoke("backup_status"),

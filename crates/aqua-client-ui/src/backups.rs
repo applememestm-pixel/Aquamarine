@@ -175,8 +175,9 @@ pub struct Restored {
 }
 
 /// New device, before sign-in: fetch the account's backup and, if it
-/// opens, replace this device's (empty) vault with it — identity
-/// included, so the account and every conversation continue as before.
+/// opens, take its chats, history and settings. The device keeps its OWN
+/// identity key and sessions: it signs in as one more device of the
+/// account (two devices sharing a key would break each other's sessions).
 #[tauri::command]
 pub async fn backup_restore(
     state: State<'_, StdMutex<AppState>>,
@@ -208,8 +209,16 @@ pub async fn backup_restore(
         }
         Err(e) => return Err(e.to_string()),
     };
-    let payload: Payload = bincode::deserialize(&bytes).map_err(|e| format!("backup contents: {e}"))?;
+    let mut payload: Payload = bincode::deserialize(&bytes).map_err(|e| format!("backup contents: {e}"))?;
     let mut s = state.lock().map_err(|e| e.to_string())?;
+    // Keep this device's keys: identity, prekeys and per-device sessions.
+    let own = s.vault.export_dump(&[]).map_err(|e| e.to_string())?;
+    if own.identity.is_some() {
+        payload.vault.identity = own.identity;
+        payload.vault.sessions = own.sessions;
+        payload.vault.signed_prekeys = own.signed_prekeys;
+        payload.vault.one_time_prekeys = own.one_time_prekeys;
+    }
     s.vault.import_dump(&payload.vault, &[]).map_err(|e| e.to_string())?;
     let _ = s.vault.put_record(KEYS, &serde_json::to_vec(&keys).unwrap_or_default());
     if let Some(p) = phrase {

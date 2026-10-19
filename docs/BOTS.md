@@ -208,3 +208,77 @@ for (;;) {
 - длинный опрос с немедленным пробуждением;
 - работу консольного сценария;
 - отзыв токена при сбросе и права на удаление.
+
+## 9. Совместимость с Telegram Bot API
+
+Ретранслятор принимает запросы в формате Telegram Bot API по адресу `/bot<токен>/<метод>` (как `https://api.telegram.org/bot<токен>/<метод>`). Бот, написанный для Telegram, работает в Aquamarine без изменения кода: достаточно указать библиотеке адрес ретранслятора и токен бота Aquamarine.
+
+### 9.1. Токен
+
+Библиотеки Telegram проверяют вид токена `<число>:<секрет>`. Поэтому ретранслятор принимает токен Aquamarine в таком же виде: `<id бота>:aqbot_…`. Его выдают при создании бота (`telegram_token` в ответе `POST /v1/bot/register`) и кнопка «Токен Telegram» в настройках ботов. Числовая часть служит оформлением; проверяется только секрет.
+
+### 9.2. Подключение библиотек
+
+```python
+# python-telegram-bot ≥ 20
+app = Application.builder().token(TOKEN).base_url("http://relay:7777/bot").build()
+
+# aiogram 3
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
+bot = Bot(TOKEN, session=AiohttpSession(api=TelegramAPIServer.from_base("http://relay:7777")))
+
+# pyTelegramBotAPI
+telebot.apihelper.API_URL = "http://relay:7777/bot{0}/{1}"
+```
+
+```js
+// telegraf
+const bot = new Telegraf(TOKEN, { telegram: { apiRoot: "http://relay:7777" } });
+// grammY
+const bot = new Bot(TOKEN, { client: { apiRoot: "http://relay:7777" } });
+```
+
+```sh
+curl "http://relay:7777/bot$TOKEN/getMe"
+```
+
+### 9.3. Соответствие понятий
+
+| Telegram | Aquamarine |
+|---|---|
+| `chat.id`, `from.id` | Число, вычисляемое из `@имени` (первые 6 байт SHA-256); постоянно для имени. В `chat_id` можно передать и `"@имя"` |
+| Тип чата | Только `private` |
+| `update_id` | Номер в очереди бота + 1; `offset` подтверждает предыдущие обновления, как в Telegram |
+| `message.entities` | `bot_command` для текста, начинающегося с `/` |
+| `parse_mode` | HTML, MarkdownV2 и Markdown переводятся в разметку Aquamarine (`**жирный**`, `__курсив__`, `++подчёркнутый++`, `~~зачёркнутый~~`, `||скрытый||`, `` `код` ``, `[текст](ссылка)`) |
+| Встроенная клавиатура | Кнопки выводятся под текстом нумерованным списком (1️⃣ 2️⃣ …), URL-кнопки — ссылками. Ответ пользователя номером или текстом кнопки превращается в `callback_query` с её `callback_data`. Клавиатура действует 24 ч или до следующей клавиатуры этому пользователю |
+| Обычная клавиатура | Кнопки перечисляются под текстом; ответ приходит обычным сообщением, как в Telegram |
+| `answerCallbackQuery` | Текст, если задан, приходит пользователю сообщением (`ℹ️ …`, при `show_alert` — `⚠️ …`) |
+| `editMessageText` | Новая версия отправляется новым сообщением |
+| Медиа (`sendPhoto`, `sendDocument`…) | Отправляются подпись и ссылка (если файл задан URL); загруженные файлы пока не пересылаются |
+
+### 9.4. Поддерживаемые методы
+
+| Группа | Методы |
+|---|---|
+| Получение обновлений | `getUpdates` (`offset`, `limit`, `timeout` до 50 с), `setWebhook` (`url`, `secret_token`, `drop_pending_updates`), `deleteWebhook`, `getWebhookInfo` |
+| Отправка | `sendMessage`, `sendPhoto`, `sendDocument`, `sendVideo`, `sendAudio`, `sendVoice`, `sendAnimation`, `sendVideoNote`, `sendSticker`, `sendMediaGroup`, `sendLocation`, `sendVenue`, `sendContact`, `sendDice`, `sendPoll` |
+| Кнопки | `answerCallbackQuery`, `editMessageText`, `editMessageCaption`, `editMessageReplyMarkup` |
+| Сведения | `getMe`, `getChat`, `getChatMember`, `getUserProfilePhotos`, `getMyCommands`, `getMyName`, `getMyDescription`, `getMyShortDescription`, `getChatMenuButton` |
+| Принимаются без действия | `sendChatAction`, `deleteMessage(s)`, `setMyCommands`, `deleteMyCommands`, `setMyName`, `setMyDescription`, `setMyShortDescription`, `setChatMenuButton`, `setMessageReaction`, `pinChatMessage`, `unpinChatMessage`, `close`, `logOut` |
+| Не поддерживаются | `forwardMessage`, `copyMessage`, `getFile` (ответ 400); остальные методы — 404 `Not Found`, как у Telegram для неизвестного метода |
+
+Ошибки возвращаются в формате Telegram: `{"ok": false, "error_code": …, "description": …}`; при превышении частоты — 429 с `parameters.retry_after`.
+
+### 9.5. Вебхуки
+
+После `setWebhook` ретранслятор отправляет каждое обновление отдельным запросом `POST` на указанный адрес. Если задан `secret_token`, он передаётся в заголовке `X-Telegram-Bot-Api-Secret-Token`. Обновление удаляется из очереди после ответа 2xx; при ошибке доставка повторяется с паузой от 1 до 60 с, а `getWebhookInfo` показывает последнюю ошибку. Пока вебхук задан, `getUpdates` отвечает 409, как в Telegram. Вебхуки сохраняются в `aqua-tg-webhooks.json` и возобновляются после перезапуска.
+
+Принимаются адреса `http://` и `https://`. Запросы к служебному адресу облачных метаданных (`169.254.x.x`) отклоняются.
+
+### 9.6. Ограничения
+
+Действуют ограничения раздела 5: бот пишет только тем, кто написал ему (иначе 403 `Forbidden: bot can't initiate conversation with a user`), частота отправки — 30 сообщений/с на бота и 1 сообщение/с на чат. Группы, каналы, инлайн-режим, платежи и мини-приложения не поддерживаются. Переписка с ботом не защищена сквозным шифрованием.
+
+Проверка: интеграционный тест `crates/aqua-server/tests/e2e.rs::telegram_bot_api_compat` (вход, длинный опрос, команда, клавиатура → `callback_query`, `answerCallbackQuery`, вебхук с секретом, 409 для `getUpdates`).

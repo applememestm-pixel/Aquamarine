@@ -1,3 +1,4 @@
+import { listen } from "@tauri-apps/api/event";
 import { writable, derived, get } from "svelte/store";
 import type { ChatMessage, ChatSummary, InitInfo } from "./types";
 import { api, events } from "./tauri";
@@ -132,6 +133,11 @@ export async function bootstrap() {
     const updated = await api.listChats();
     chats.set(updated);
     api.initApp().then((i) => info.set(i)).catch(() => {});
+  });
+  // Sent from another device of this account: show it in the open chat.
+  listen<{ peer_id: string }>("aqua://own_sent", async (e) => {
+    chats.set(await api.listChats());
+    if (get(activeId) === e.payload.peer_id) await loadActiveMessages();
   });
   events.onTransportError((msg) => {
     console.error("transport error:", msg);

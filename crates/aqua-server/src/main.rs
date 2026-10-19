@@ -62,6 +62,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState::new();
     state.blobs.spawn_sweeper();
     aqua_server::fed::spawn_sync(state.clone());
+    aqua_server::tgapi::resume_webhooks(state.clone());
     axum::serve(listener, app(state)).await?;
     Ok(())
 }

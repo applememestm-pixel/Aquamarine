@@ -82,6 +82,7 @@ pub struct SendResult {
 
 #[tauri::command]
 pub async fn send_message(
+    app: AppHandle,
     state: State<'_, StdMutex<AppState>>,
     peer_id: String,
     text: String,
@@ -125,7 +126,7 @@ pub async fn send_message(
     // Under the lock: validate the chat is live, append local echo,
     // encrypt, persist state. Take transport handle out to send outside
     // the lock.
-    let (transport, envelope_opt, out_msg) = {
+    let out_msg = {
         let mut s = state.lock().map_err(|e| e.to_string())?;
         let is_live = s.chats.get(&peer_id).map(|c| c.summary.live).unwrap_or(false);
         if !is_live {
@@ -141,29 +142,10 @@ pub async fn send_message(
         }
         let msg = text_msg_from_me(&text);
         push_own_message(&mut s, &peer_id, msg.clone(), &text);
-
-        let env = {
-            let session = s.sessions.get_mut(&peer_id).ok_or("no session for peer")?;
-            session.encrypt(text.as_bytes()).map_err(|e| format!("encrypt: {e}"))?
-        };
-        // Persist advanced ratchet state (re-borrow immutably).
-        if let Some(session) = s.sessions.get(&peer_id) {
-            if let Err(e) = s.vault.save_session(&peer_id, session) {
-                tracing::warn!(?e, "save_session after encrypt");
-            }
-        }
-        (s.transport.clone(), Some(env), msg.clone())
+        msg
     };
-
-    let Some(env) = envelope_opt else {
-        // Should be unreachable now that we refuse non-live sends above.
-        return Err("internal: no envelope produced".into());
-    };
-    let Some(transport) = transport else {
-        return Err("not connected to a server".into());
-    };
-    transport.send_envelope(&peer_id, &env)
-        .map_err(|e| format!("send: {e}"))?;
+    // Encrypted once per device of the peer, plus a copy for my other devices.
+    crate::multidev::fanout(&app, &peer_id, &text, true).await?;
     Ok(SendResult { id: out_msg.id, time: out_msg.time })
 }
 
@@ -359,18 +341,18 @@ pub async fn login_account(
         s.identity.clone()
     };
     let Some(email) = email.filter(|e| !e.trim().is_empty()) else {
-        return Transport::login_account(&server_url, &identity, &ticket, &password).await.map_err(|e| e.to_string());
+        return Transport::login_account_named(&server_url, &identity, &ticket, &password, &crate::multidev::this_device_name()).await.map_err(|e| e.to_string());
     };
     let secret = {
         let (p, e) = (password.clone(), email.clone());
         tokio::task::spawn_blocking(move || aqua_client_core::backup::auth_secret(&p, &e)).await.map_err(|e| e.to_string())?
     };
-    match Transport::login_account(&server_url, &identity, &ticket, &secret).await {
+    match Transport::login_account_named(&server_url, &identity, &ticket, &secret, &crate::multidev::this_device_name()).await {
         Ok(u) => Ok(u),
         Err(e) if e.to_string().contains("wrong email or password") => {
             // An account from before hashed sign-in: try the raw password once,
             // then switch it to the hash so the relay stops seeing it.
-            let u = Transport::login_account(&server_url, &identity, &ticket, &password).await.map_err(|e| e.to_string())?;
+            let u = Transport::login_account_named(&server_url, &identity, &ticket, &password, &crate::multidev::this_device_name()).await.map_err(|e| e.to_string())?;
             if let Err(e) = Transport::set_password_with(&server_url, &identity, &u, &secret).await {
                 tracing::warn!(error = %e, "could not upgrade the stored password");
             }
@@ -1635,20 +1617,8 @@ async fn attach_file_impl(
     if !is_live {
         return Err("no live session with peer".into());
     }
-    let env = {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
-        let env = {
-            let session = s.sessions.get_mut(&peer_id).ok_or("no session for peer")?;
-            session.encrypt(offer_text.as_bytes())
-                .map_err(|e| format!("encrypt: {e}"))?
-        };
-        if let Some(session) = s.sessions.get(&peer_id) {
-            let _ = s.vault.save_session(&peer_id, session);
-        }
-        env
-    };
-    transport.send_envelope(&peer_id, &env)
-        .map_err(|e| format!("send: {e}"))?;
+    let _ = &transport;
+    crate::multidev::fanout(&app, &peer_id, &offer_text, true).await?;
 
     // 5. Reflect it locally as a File message with saved_at pointing
     //    at the sender's source file (so the UI can render inline
@@ -2098,34 +2068,17 @@ pub async fn start_chat_with(
     peer_username: String,
     first_message: String,
 ) -> Result<ChatSummary, String> {
-    let transport = {
+    {
         let s = state.lock().map_err(|e| e.to_string())?;
-        s.transport.clone().ok_or("not connected")?
-    };
-    let bundle = transport.fetch_bundle(&peer_username).await
-        .map_err(|e| format!("fetch_bundle: {e}"))?;
-    bundle.verify().map_err(|e| format!("bad bundle: {e}"))?;
+        s.transport.clone().ok_or("not connected")?;
+    }
+    // X3DH with each of the peer's devices (the first message rides along),
+    // and a copy for my other devices so the chat appears there too.
+    crate::multidev::fanout(&app, &peer_username, &first_message, true).await?;
 
-    // Build the session + initial message outside the lock.
-    let identity_clone = {
-        let s = state.lock().map_err(|e| e.to_string())?;
-        s.identity.clone()
-    };
-    let (session, initial) = Session::start_as_initiator(
-        &identity_clone, &bundle, first_message.as_bytes(),
-    ).map_err(|e| format!("start_as_initiator: {e}"))?;
-
-    // Send the initial before persisting state — if the wire fails we
-    // don't want a session sitting in the vault the peer can't decrypt.
-    transport.send_initial(&peer_username, &initial)
-        .map_err(|e| format!("send_initial: {e}"))?;
-
-    // Persist + update chat store.
+    // Update the chat store.
     let summary = {
         let mut s = state.lock().map_err(|e| e.to_string())?;
-        s.vault.save_session(&peer_username, &session)
-            .map_err(|e| format!("save_session: {e}"))?;
-        s.sessions.insert(peer_username.clone(), session);
 
         let mut summary = summary_for(&peer_username, &first_message, true, false);
         summary.online = true;
@@ -2186,27 +2139,21 @@ pub const GRPMSG_PREFIX: &str = "[grpmsg:v1]";
 /// receipts. No-op-safe: fails quietly if there's no live session.
 #[tauri::command]
 pub async fn send_control(
+    app: AppHandle,
     state: State<'_, StdMutex<AppState>>,
     peer_id: String,
     payload: String,
 ) -> Result<(), String> {
-    let (transport, env) = {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
+    {
+        let s = state.lock().map_err(|e| e.to_string())?;
         if s.chats.get(&peer_id).map(|c| !c.summary.live).unwrap_or(true) {
             return Ok(()); // nothing to do without a live session
         }
-        let env = {
-            let session = s.sessions.get_mut(&peer_id).ok_or("no session for peer")?;
-            session.encrypt(payload.as_bytes()).map_err(|e| format!("encrypt: {e}"))?
-        };
-        if let Some(session) = s.sessions.get(&peer_id) {
-            let _ = s.vault.save_session(&peer_id, session);
-        }
-        (s.transport.clone(), env)
-    };
-    let Some(transport) = transport else { return Ok(()) };
-    transport.send_envelope(&peer_id, &env).map_err(|e| format!("send: {e}"))?;
-    Ok(())
+        if s.transport.is_none() { return Ok(()); }
+    }
+    // Edits / deletions of my messages show on my other devices too.
+    let sync = payload.starts_with(EDIT_PREFIX) || payload.starts_with(DEL_PREFIX);
+    crate::multidev::fanout(&app, &peer_id, &payload, sync).await
 }
 
 // ---------- Groups / supergroups / channels --------------------------------
@@ -2215,46 +2162,8 @@ pub async fn send_control(
 /// fresh session via X3DH if none exists yet (the payload rides as the
 /// initial message). Used for group fan-out.
 async fn deliver_to_member(app: &AppHandle, member: &str, payload: &str) -> Result<(), String> {
-    let state: State<'_, StdMutex<AppState>> = app.state();
-
-    // Fast path: a live session already exists.
-    let fast = {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
-        if s.sessions.contains_key(member) {
-            let env = {
-                let session = s.sessions.get_mut(member).unwrap();
-                session.encrypt(payload.as_bytes()).map_err(|e| format!("encrypt: {e}"))?
-            };
-            if let Some(session) = s.sessions.get(member) {
-                let _ = s.vault.save_session(member, session);
-            }
-            Some((s.transport.clone(), env))
-        } else {
-            None
-        }
-    };
-    if let Some((transport, env)) = fast {
-        let transport = transport.ok_or("not connected")?;
-        transport.send_envelope(member, &env).map_err(|e| format!("send: {e}"))?;
-        return Ok(());
-    }
-
-    // Slow path: establish a session, sending the payload as the initial.
-    let (transport, identity) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
-        (s.transport.clone().ok_or("not connected")?, s.identity.clone())
-    };
-    let bundle = transport.fetch_bundle(member).await.map_err(|e| format!("fetch_bundle: {e}"))?;
-    bundle.verify().map_err(|e| format!("bad bundle: {e}"))?;
-    let (session, initial) = Session::start_as_initiator(&identity, &bundle, payload.as_bytes())
-        .map_err(|e| format!("start_as_initiator: {e}"))?;
-    transport.send_initial(member, &initial).map_err(|e| format!("send_initial: {e}"))?;
-    {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
-        let _ = s.vault.save_session(member, &session);
-        s.sessions.insert(member.to_string(), session);
-    }
-    Ok(())
+    // Every device of the member (each has its own session).
+    crate::multidev::fanout(app, member, payload, false).await
 }
 
 #[tauri::command]
@@ -2324,6 +2233,7 @@ pub async fn create_group(
             tracing::warn!(member = %m.username, %e, "create_group: snapshot delivery failed");
         }
     }
+    crate::multidev::sync_raw(&app, &snapshot).await;
 
     let _ = app.emit("aqua://chats_updated", ());
     let _ = app.emit("aqua://groups_updated", ());
@@ -2368,6 +2278,7 @@ pub async fn update_group(
             tracing::warn!(member = %m, %e, "update_group: snapshot delivery failed");
         }
     }
+    crate::multidev::sync_raw(&app, &snapshot).await;
 
     let _ = app.emit("aqua://chats_updated", ());
     let _ = app.emit("aqua://groups_updated", ());
@@ -2503,6 +2414,7 @@ pub async fn group_send(
             tracing::warn!(member = %m.username, %e, "group_send: delivery failed");
         }
     }
+    crate::multidev::sync_raw(&app, &wire).await;
 
     Ok(SendResult { id: out.0, time: out.1 })
 }
@@ -2575,6 +2487,52 @@ pub async fn group_control_to(
 
 /// Handle a decrypted group control payload (info snapshot or message).
 /// Returns true if the text was a group payload and was consumed.
+pub fn route_group_payload_pub(app: &AppHandle, from: &str, text: &str) -> bool {
+    route_group_payload(app, from, text)
+}
+
+/// A message (or an edit / deletion) I sent to `to` from another device.
+pub fn own_device_message(app: &AppHandle, to: &str, inner: &str) {
+    let state: State<'_, StdMutex<AppState>> = app.state();
+    let Ok(mut s) = state.lock() else { return };
+    let me = s.username.clone().unwrap_or_default();
+    if let Some(body) = inner.strip_prefix(EDIT_PREFIX) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
+            let old = v.get("old").and_then(|x| x.as_str()).unwrap_or("");
+            let new = v.get("new").and_then(|x| x.as_str()).unwrap_or("");
+            if !old.is_empty() { apply_edit(&mut s, to, &me, old, new); }
+        }
+        drop(s);
+        let _ = app.emit("aqua://chats_updated", ());
+        return;
+    }
+    if let Some(body) = inner.strip_prefix(DEL_PREFIX) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
+            let t = v.get("text").and_then(|x| x.as_str()).unwrap_or("");
+            if !t.is_empty() { apply_delete_ex(&mut s, to, &me, t, false); }
+        }
+        drop(s);
+        let _ = app.emit("aqua://chats_updated", ());
+        return;
+    }
+    // Per-device state (typing, read marks, presence…) isn't mirrored.
+    for p in [CALL_PREFIX, POLLVOTE_PREFIX, POLLCLOSE_PREFIX, SEEN_PREFIX, STATUS_PREFIX, REACT_PREFIX, TYPING_PREFIX] {
+        if inner.starts_with(p) { return; }
+    }
+    if !s.chats.contains_key(to) {
+        let mut summary = crate::state::summary_for(to, "", true, false);
+        summary.live = true;
+        s.chats.insert(to.to_string(), ChatBook { summary, messages: Vec::new() });
+        s.chat_order.retain(|id| id != to);
+        s.chat_order.insert(0, to.to_string());
+    }
+    let msg = text_msg_from_me(inner);
+    push_own_message(&mut s, to, msg, inner);
+    drop(s);
+    let _ = app.emit("aqua://chats_updated", ());
+    let _ = app.emit("aqua://own_sent", serde_json::json!({ "peer_id": to }));
+}
+
 fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
     if let Some(body) = text.strip_prefix(GRPINFO_PREFIX) {
         let state: State<'_, StdMutex<AppState>> = app.state();
@@ -2645,6 +2603,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                 let kind = classify_kind(&inner);
                 let preview = preview_for(&kind);
                 let len = s.chats.get(&gid).map(|b| b.messages.len()).unwrap_or(0);
+                let s_me = s.username.clone();
                 if let Some(book) = s.chats.get_mut(&gid) {
                     book.messages.push(ChatMessage {
                         meta: room.map(|r| crate::state::MsgMeta { room: Some(r.id), ..Default::default() }),
@@ -2654,10 +2613,12 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                         kind,
                     });
                     book.summary.preview = preview;
-                    book.summary.preview_by_me = false;
+                    // Posted from another device of mine: it's my message.
+                    let mine = s_me.as_deref() == Some(author.as_str());
+                    book.summary.preview_by_me = mine;
                     book.summary.time = time.clone();
                     let is_active = false; // UI decides unread via its own active id
-                    if !is_active { book.summary.unread += 1; }
+                    if !is_active && !mine { book.summary.unread += 1; }
                 }
                 if let Some(pos) = s.chat_order.iter().position(|id| id == &gid) {
                     if pos > 0 { s.chat_order.remove(pos); s.chat_order.insert(0, gid.clone()); }
@@ -2812,30 +2773,23 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
 
 #[tauri::command]
 pub async fn send_call_signal(
+    app: AppHandle,
     state: State<'_, StdMutex<AppState>>,
     peer_id: String,
     signal_json: String,
 ) -> Result<(), String> {
-    let (transport, env) = {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
+    {
+        let s = state.lock().map_err(|e| e.to_string())?;
         if s.chats.get(&peer_id).map(|c| !c.summary.live).unwrap_or(true) {
             return Err("no live session with peer".into());
         }
-        let plaintext = format!("{CALL_PREFIX}{signal_json}");
-        let env = {
-            let session = s.sessions.get_mut(&peer_id).ok_or("no session for peer")?;
-            session.encrypt(plaintext.as_bytes())
-                .map_err(|e| format!("encrypt: {e}"))?
-        };
-        if let Some(session) = s.sessions.get(&peer_id) {
-            let _ = s.vault.save_session(&peer_id, session);
-        }
-        (s.transport.clone(), env)
-    };
-    let Some(transport) = transport else { return Err("not connected".into()) };
-    transport.send_envelope(&peer_id, &env)
-        .map_err(|e| format!("send: {e}"))?;
-    Ok(())
+    }
+    let plaintext = format!("{CALL_PREFIX}{signal_json}");
+    // Answered or declined here: my other devices stop ringing.
+    let kind = serde_json::from_str::<serde_json::Value>(&signal_json).ok()
+        .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(str::to_string)).unwrap_or_default();
+    let sync = kind == "answer" || kind == "reject";
+    crate::multidev::fanout(&app, &peer_id, &plaintext, sync).await
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -2900,7 +2854,7 @@ async fn on_incoming_plaintext(app: &AppHandle, from: String, text: String) {
 
 async fn on_incoming_initial(
     app: &AppHandle,
-    from: String,
+    addr: String,
     message: aqua_core::wire::InitialMessage,
 ) {
     let state: State<'_, StdMutex<AppState>> = app.state();
@@ -2927,14 +2881,25 @@ async fn on_incoming_initial(
     let plain_text = String::from_utf8_lossy(&plain).to_string();
     let time = hhmm_now();
 
+    // The session belongs to the sender's DEVICE; the chat to the account.
+    {
+        let mut s = match state.lock() { Ok(s) => s, Err(_) => return };
+        if let Err(e) = s.vault.save_session(&addr, &session) {
+            tracing::warn!(?e, "save_session on accept");
+        }
+        s.sessions.insert(addr.clone(), session);
+    }
+    crate::multidev::note_sender(&addr);
+    let from = crate::multidev::base_user(&addr).to_string();
+    if state.lock().ok().and_then(|s| s.username.clone()).as_deref() == Some(from.as_str()) {
+        crate::multidev::handle_own_device(app, &plain_text);
+        return;
+    }
+
     // Store + emit.
     let is_new_chat;
     {
         let mut s = match state.lock() { Ok(s) => s, Err(_) => return };
-        if let Err(e) = s.vault.save_session(&from, &session) {
-            tracing::warn!(?e, "save_session on accept");
-        }
-        s.sessions.insert(from.clone(), session);
         is_new_chat = !s.chats.contains_key(&from);
         // A group payload may ride as the very first X3DH message (that's how
         // a new member learns the group exists). Route it rather than opening
@@ -2974,7 +2939,7 @@ async fn on_incoming_initial(
 
 async fn on_incoming_envelope(
     app: &AppHandle,
-    from: String,
+    addr: String,
     envelope: aqua_core::wire::Envelope,
 ) {
     let state: State<'_, StdMutex<AppState>> = app.state();
@@ -2983,8 +2948,8 @@ async fn on_incoming_envelope(
     let text = {
         let mut s = match state.lock() { Ok(s) => s, Err(_) => return };
         let plain = {
-            let Some(session) = s.sessions.get_mut(&from) else {
-                tracing::warn!(peer = %from, "envelope for unknown session");
+            let Some(session) = s.sessions.get_mut(&addr) else {
+                tracing::warn!(peer = %addr, "envelope for unknown session");
                 return;
             };
             match session.decrypt(&envelope) {
@@ -2992,13 +2957,19 @@ async fn on_incoming_envelope(
                 Err(e) => { tracing::warn!(?e, "decrypt failed"); return }
             }
         };
-        if let Some(session) = s.sessions.get(&from) {
-            if let Err(e) = s.vault.save_session(&from, session) {
+        if let Some(session) = s.sessions.get(&addr) {
+            if let Err(e) = s.vault.save_session(&addr, session) {
                 tracing::warn!(?e, "save_session after decrypt");
             }
         }
         String::from_utf8_lossy(&plain).to_string()
     };
+    let from = crate::multidev::base_user(&addr).to_string();
+    // Sent by another device of mine.
+    if state.lock().ok().and_then(|s| s.username.clone()).as_deref() == Some(from.as_str()) {
+        crate::multidev::handle_own_device(app, &text);
+        return;
+    }
 
     // Blocked people: everything is dropped except group traffic (their
     // messages in shared groups stay visible, like Telegram).

@@ -31,6 +31,7 @@ pub mod blobstore;
 pub mod fed;
 pub mod games;
 pub mod directory;
+pub mod tgapi;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
 pub use auth::{AuthState, Caller};
@@ -59,6 +60,13 @@ pub struct BotUpdate {
     pub from: String,
     pub text: String,
     pub ts: u64,
+    /// The user picked a button of the bot's inline keyboard (Telegram API
+    /// layer): its callback_data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub callback: Option<String>,
+    /// Message the keyboard belonged to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub callback_msg: Option<i64>,
 }
 
 #[derive(Default)]
@@ -129,6 +137,8 @@ pub struct AppState {
     pub started_unix: u64,
     /// Woken when a peer says "I changed something": pull from peers now.
     pub fed_kick: Arc<tokio::sync::Notify>,
+    /// Telegram Bot API compatibility layer (keyboards, webhooks, ids).
+    pub tg: Arc<tgapi::TgState>,
 }
 
 /// Admin-tunable server policy (the panel edits this).
@@ -220,6 +230,7 @@ impl AppState {
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
             fed_kick: Arc::new(tokio::sync::Notify::new()),
+            tg: Arc::new(tgapi::TgState::load()),
         }
     }
 
@@ -249,8 +260,9 @@ impl AppState {
     ) -> Result<(), auth::AuthError> {
         // A registered @username (persisted in the directory) is only
         // usable by its owner identity, even across restarts.
-        if let Some(owner) = self.directory.identity_for(user_id) {
-            return if owner == identity_dh_pub {
+        if self.directory.identity_for(user_id).is_some() {
+            // The primary device or one of the account's extra devices.
+            return if self.directory.device_role(user_id, &identity_dh_pub).is_some() {
                 Ok(())
             } else {
                 Err(auth::AuthError::UsernameTaken)
@@ -276,6 +288,34 @@ impl AppState {
             }
         }
     }
+}
+
+impl AppState {
+    /// Where envelopes for this device go. The primary device keeps the
+    /// plain `user` address (what older clients send to); every extra device
+    /// is `user~<device id>`. Call after [`Self::claim_or_check`] succeeded.
+    pub fn address_for(&self, user_id: &str, identity_dh: &[u8; 32]) -> String {
+        match self.directory.device_role(user_id, identity_dh) {
+            Some(false) => format!("{user_id}~{}", directory::device_id(identity_dh)),
+            _ => user_id.to_string(),
+        }
+    }
+
+    /// Every address of an account: `user` plus `user~dev` per extra device.
+    pub fn addresses_of(&self, user_id: &str) -> Vec<String> {
+        let mut out = vec![user_id.to_string()];
+        for d in self.directory.devices(user_id) {
+            if let Ok(b) = hex::decode(&d.dh) {
+                out.push(format!("{user_id}~{}", directory::device_id(&b)));
+            }
+        }
+        out
+    }
+}
+
+/// `alice~a1b2c3` → `alice`.
+pub fn base_user(addr: &str) -> &str {
+    addr.split('~').next().unwrap_or(addr)
 }
 
 impl Default for AppState {
@@ -317,6 +357,8 @@ async fn upload_bundle(
         tracing::warn!(user = %user, error = %e, "upload_bundle REJECT: bad SPK signature");
         (StatusCode::BAD_REQUEST, format!("bad SPK signature: {e}"))
     })?;
+    // Each device publishes its own bundle under its own address.
+    let user = state.address_for(&user, &dh_pub);
     let user_state = state.user(&user);
     let mut u = user_state.lock().await;
     u.identity = Some(body.identity);
@@ -424,8 +466,8 @@ async fn ws_upgrade(
             "WS REJECT: claim_or_check failed — username bound to different identity");
         return Err((e.status(), e.to_string()));
     }
-    tracing::info!(user = %q.user, token = %token_fp, "WS OK: upgrading to WebSocket");
-    let me = q.user;
+    let me = state.address_for(&q.user, &dh_pub);
+    tracing::info!(user = %q.user, addr = %me, token = %token_fp, "WS OK: upgrading to WebSocket");
     Ok(ws.on_upgrade(move |sock| ws_run(sock, state, me)))
 }
 
@@ -508,6 +550,9 @@ async fn deliver(state: &AppState, msg: RelayMessage) {
     // into its bot queue instead of the normal user inbox — bots pull
     // via GET /v1/bot/updates, they don't hold a WebSocket.
     if msg.kind == PayloadKind::Plaintext && state.directory.is_bot(&msg.to) {
+        // Bots talk to accounts, not devices.
+        let mut msg = msg;
+        msg.from = base_user(&msg.from).to_string();
         let text: String = String::from_utf8_lossy(&msg.payload).chars().take(BOT_TEXT_LIMIT).collect();
         // Writing to a bot lets it answer; /stop takes that back.
         if text.trim() == "/stop" {
@@ -515,6 +560,8 @@ async fn deliver(state: &AppState, msg: RelayMessage) {
         } else {
             state.directory.bot_peer_add(&msg.to, &msg.from);
         }
+        // A Telegram-style bot's open inline keyboard: "2" / "Yes" picks a button.
+        let callback = tgapi::classify(state, &msg.to, &msg.from, &text);
         let q = state.bot_queue(&msg.to);
         let mut q = q.lock().await;
         let id = q.next_id;
@@ -522,6 +569,8 @@ async fn deliver(state: &AppState, msg: RelayMessage) {
         q.updates.push_back(BotUpdate {
             id,
             from: msg.from.clone(),
+            callback: callback.as_ref().map(|c| c.0.clone()),
+            callback_msg: callback.map(|c| c.1),
             text,
             ts: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -714,13 +763,16 @@ struct LoginBody {
     ticket: String,
     #[serde(default)]
     password: String,
+    /// "Pixel 8", "vpst (Linux)"… shown in the account's device list.
+    #[serde(default)]
+    device_name: String,
 }
 
 #[derive(serde::Serialize)]
 struct LoginResp { username: String }
 
-/// Sign in on a new device (email ticket + password) — the username moves
-/// to the caller's identity key.
+/// Sign in on another device (email ticket + password): the caller's
+/// identity key is ADDED to the account as one more device.
 async fn login_user(
     State(state): State<AppState>,
     Caller(dh_pub): Caller,
@@ -728,10 +780,112 @@ async fn login_user(
 ) -> Result<Json<LoginResp>, (StatusCode, String)> {
     let username = state
         .directory
-        .login(&body.ticket, &body.password, &dh_pub)
+        .login_named(&body.ticket, &body.password, &dh_pub, &body.device_name)
         .map_err(|e| (dir_err_status(&e), e.to_string()))?;
-    tracing::info!(user = %username, "signed in on a new device");
+    tracing::info!(user = %username, device = %directory::device_id(&dh_pub), "signed in on another device");
     Ok(Json(LoginResp { username }))
+}
+
+// ---------- Devices ------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+struct DeviceView {
+    /// Where to send envelopes for this device.
+    addr: String,
+    id: String,
+    primary: bool,
+    name: String,
+    added: i64,
+    /// Connected to this relay right now.
+    online: bool,
+    /// Only in /v1/me/devices: the device asking.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    current: bool,
+}
+
+async fn device_views(state: &AppState, user: &str, me: Option<&[u8; 32]>) -> Option<Vec<DeviceView>> {
+    let primary = state.directory.identity_for(user)?;
+    let mut list = vec![(primary.to_vec(), String::new(), 0i64, true)];
+    for d in state.directory.devices(user) {
+        if let Ok(b) = hex::decode(&d.dh) {
+            list.push((b, d.name, d.added, false));
+        }
+    }
+    let mut out = Vec::new();
+    for (dh, name, added, primary) in list {
+        let id = directory::device_id(&dh);
+        let addr = if primary { user.to_string() } else { format!("{user}~{id}") };
+        let online = match state.users.get(&addr).map(|u| u.value().clone()) {
+            Some(u) => u.lock().await.tx.iter().any(|t| !t.is_closed()),
+            None => false,
+        };
+        let current = me.is_some_and(|m| m.as_slice() == dh.as_slice());
+        out.push(DeviceView { addr, id, primary, name, added, online, current });
+    }
+    Some(out)
+}
+
+/// `GET /v1/devices/:user` — the devices to encrypt for (public, like bundles).
+async fn get_devices(State(state): State<AppState>, Path(user): Path<UserId>) -> Result<Json<Vec<DeviceView>>, StatusCode> {
+    let user = base_user(user.trim().trim_start_matches('@')).to_lowercase();
+    device_views(&state, &user, None).await.map(Json).ok_or(StatusCode::NOT_FOUND)
+}
+
+/// `GET /v1/me/devices` — my devices, with the current one marked.
+async fn my_devices(State(state): State<AppState>, Caller(dh): Caller) -> Result<Json<Vec<DeviceView>>, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    device_views(&state, &me, Some(&dh)).await.map(Json).ok_or((StatusCode::NOT_FOUND, "no such account".into()))
+}
+
+#[derive(Deserialize)]
+struct RenameBody { name: String }
+
+/// `POST /v1/me/devices/:id` `{name}` — rename an extra device.
+async fn rename_device(
+    State(state): State<AppState>,
+    Caller(dh): Caller,
+    Path(id): Path<String>,
+    Json(body): Json<RenameBody>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    match state.directory.rename_device(&me, &id, &body.name) {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err((StatusCode::NOT_FOUND, "no such device".into())),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
+}
+
+/// `DELETE /v1/me/devices/:id` — sign a device out. Signing out the primary
+/// device from another one makes the caller the primary device.
+async fn remove_device(
+    State(state): State<AppState>,
+    Caller(dh): Caller,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    if directory::device_id(&dh) == id {
+        return Err((StatusCode::BAD_REQUEST, "use another device to sign this one out".into()));
+    }
+    let was_primary = state.directory.identity_for(&me).is_some_and(|p| directory::device_id(&p) == id);
+    match state.directory.remove_device(&me, &id, Some(&dh)) {
+        Ok(true) => {
+            // Drop the device's live connections and queued envelopes.
+            let addr = if was_primary { me.clone() } else { format!("{me}~{id}") };
+            if let Some(u) = state.users.get(&addr).map(|u| u.value().clone()) {
+                let mut u = u.lock().await;
+                u.tx.clear();
+                u.inbox.clear();
+                u.identity = None;
+                u.signed_prekey = None;
+                u.opks.clear();
+            }
+            state.directory.prekeys_delete(&addr);
+            tracing::info!(user = %me, device = %id, was_primary, "device signed out");
+            Ok(StatusCode::NO_CONTENT)
+        }
+        Ok(false) => Err((StatusCode::NOT_FOUND, "no such device".into())),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
 }
 
 // ---------- Admin: federation ----------------------------------------------
@@ -1009,7 +1163,7 @@ struct BotRegisterBody {
 }
 
 #[derive(serde::Serialize)]
-struct BotRegisterResp { ok: bool, username: String, token: String }
+struct BotRegisterResp { ok: bool, username: String, token: String, telegram_token: String }
 
 /// Owner (authenticated user) mints a bot account + token.
 async fn bot_register(
@@ -1022,7 +1176,8 @@ async fn bot_register(
         .directory
         .register_bot(&username, &dh_pub, &body.display_name)
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-    Ok(Json(BotRegisterResp { ok: true, username, token }))
+    let telegram_token = tgapi::telegram_token(&username, &token);
+    Ok(Json(BotRegisterResp { ok: true, username, token, telegram_token }))
 }
 
 /// The bot token from `Authorization: Bot <token>` (or `Bearer`), else the
@@ -1125,7 +1280,7 @@ async fn bot_me(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let bot = bot_auth(&state, &headers, &q.token).await?;
     let name = state.directory.display_name_of(&bot);
-    Ok(Json(serde_json::json!({ "username": bot, "display_name": name })))
+    Ok(Json(serde_json::json!({ "username": bot, "display_name": name, "id": tgapi::tg_id(&bot) })))
 }
 
 /// Owner deletes one of their bots.
@@ -1176,14 +1331,21 @@ async fn bot_send(
     {
         return Err((StatusCode::TOO_MANY_REQUESTS, "slow down: 30 msg/s per bot, 1 msg/s per chat".into()));
     }
-    let msg = RelayMessage {
-        from: bot,
-        to,
-        payload: body.text.into_bytes(),
-        kind: PayloadKind::Plaintext,
-    };
-    deliver(&state, msg).await;
+    bot_deliver_text(&state, &bot, &to, &body.text).await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// A bot's text to a user: every device of the account gets it.
+pub(crate) async fn bot_deliver_text(state: &AppState, bot: &str, to: &str, text: &str) {
+    for addr in state.addresses_of(to) {
+        let msg = RelayMessage {
+            from: bot.to_string(),
+            to: addr,
+            payload: text.as_bytes().to_vec(),
+            kind: PayloadKind::Plaintext,
+        };
+        deliver(state, msg).await;
+    }
 }
 
 // ---------- Game catalogue ---------------------------------------------------
@@ -1486,6 +1648,9 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/users/register",     post(register_user))
         .route("/v1/users/search",       get(search_users))
         .route("/v1/users/login",        post(login_user))
+        .route("/v1/devices/:user",      get(get_devices))
+        .route("/v1/me/devices",         get(my_devices))
+        .route("/v1/me/devices/:id",     post(rename_device).delete(remove_device))
         .route("/v1/users/:user/password", post(set_password))
         .route("/v1/users/:user/profile", get(get_profile).post(update_profile))
         .route(
@@ -1518,6 +1683,9 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/admin/federation", get(admin_get_fed).post(admin_set_fed))
         .route("/v1/bundle/:user",   post(upload_bundle).get(fetch_bundle))
         .route("/v1/ws",             get(ws_upgrade))
+        // Telegram Bot API: /bot<token>/<method> (see tgapi.rs).
+        .route("/:bot/:method",      get(tgapi::handle).post(tgapi::handle)
+            .layer(DefaultBodyLimit::max(20 * 1024 * 1024)))
         .route(
             "/v1/blob/:cid",
             post(upload_blob).get(fetch_blob)

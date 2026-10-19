@@ -109,6 +109,32 @@ pub struct FedUser {
     pub password: String,
     pub music_ver: i64,
     pub updated_at: i64,
+    /// Extra devices (JSON); older relays don't send it.
+    #[serde(default = "no_devices")]
+    pub devices: String,
+}
+
+fn no_devices() -> String { "[]".into() }
+
+/// Most devices an account may have besides its primary one.
+pub const MAX_DEVICES: usize = 10;
+
+/// One extra device of an account. The primary device is the row's
+/// `identity_dh`; each device has its own identity key and its own E2EE
+/// sessions (senders encrypt to every device separately).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Device {
+    /// Hex of the device's identity DH public key.
+    pub dh: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub added: i64,
+}
+
+/// Short public id of a device: the first 6 bytes of its identity key, hex.
+pub fn device_id(dh: &[u8]) -> String {
+    hex::encode(&dh[..dh.len().min(6)])
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -367,6 +393,8 @@ impl Directory {
             "ALTER TABLE users ADD COLUMN password TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE users ADD COLUMN music_ver INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE users ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0",
+            // Extra devices of the account (JSON list of {dh, name, added}).
+            "ALTER TABLE users ADD COLUMN devices TEXT NOT NULL DEFAULT '[]'",
         ] {
             if let Err(e) = db.execute(stmt, []) {
                 if !e.to_string().contains("duplicate column") {
@@ -788,13 +816,109 @@ impl Directory {
         Ok((username, email))
     }
 
+    /// Sign in on another device: the device is ADDED to the account (each
+    /// device keeps its own keys; the old ones stay signed in). With all
+    /// device slots taken, the oldest extra device makes room.
     pub fn login(&self, ticket: &str, password: &str, identity_dh: &[u8; 32]) -> Result<String, DirError> {
+        self.login_named(ticket, password, identity_dh, "")
+    }
+
+    pub fn login_named(&self, ticket: &str, password: &str, identity_dh: &[u8; 32], name: &str) -> Result<String, DirError> {
         let (username, _) = self.check_login(ticket, password)?;
+        self.add_device(&username, identity_dh, name)?;
         let db = self.db.lock().unwrap();
-        db.execute("UPDATE users SET identity_dh=?2 WHERE username=?1", rusqlite::params![username, identity_dh.as_slice()])?;
         // One-time ticket.
         db.execute("UPDATE email_codes SET ticket=NULL WHERE ticket=?1", rusqlite::params![ticket])?;
         Ok(username)
+    }
+
+    // ---- devices ----
+
+    /// The extra (non-primary) devices of an account.
+    pub fn devices(&self, username: &str) -> Vec<Device> {
+        let username = username.trim().to_lowercase();
+        let db = self.db.lock().unwrap();
+        let raw: String = db
+            .query_row("SELECT devices FROM users WHERE username=?1", rusqlite::params![username], |r| r.get(0))
+            .unwrap_or_default();
+        serde_json::from_str(&raw).unwrap_or_default()
+    }
+
+    fn put_devices(&self, username: &str, list: &[Device]) -> Result<(), DirError> {
+        let json = serde_json::to_string(list).unwrap_or_else(|_| "[]".into());
+        let db = self.db.lock().unwrap();
+        db.execute("UPDATE users SET devices=?2 WHERE username=?1", rusqlite::params![username, json])?;
+        Ok(())
+    }
+
+    /// Does this identity key belong to the account? `Some(true)` = primary
+    /// device, `Some(false)` = extra device, `None` = not this account's.
+    pub fn device_role(&self, username: &str, identity_dh: &[u8; 32]) -> Option<bool> {
+        let primary = self.identity_for(username)?;
+        if &primary == identity_dh {
+            return Some(true);
+        }
+        let hex = hex::encode(identity_dh);
+        self.devices(username).iter().any(|d| d.dh == hex).then_some(false)
+    }
+
+    /// Add a device (no-op if it's already there or is the primary one).
+    pub fn add_device(&self, username: &str, identity_dh: &[u8; 32], name: &str) -> Result<(), DirError> {
+        let username = username.trim().to_lowercase();
+        if self.device_role(&username, identity_dh).is_some() {
+            return Ok(());
+        }
+        let mut list = self.devices(&username);
+        while list.len() >= MAX_DEVICES {
+            list.remove(0);
+        }
+        let added = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        let name: String = name.trim().chars().take(48).collect();
+        list.push(Device { dh: hex::encode(identity_dh), name, added });
+        self.put_devices(&username, &list)
+    }
+
+    /// Sign a device out of the account. Removing the primary device makes
+    /// `successor` (another device of the account) the primary one.
+    pub fn remove_device(&self, username: &str, dev: &str, successor: Option<&[u8; 32]>) -> Result<bool, DirError> {
+        let username = username.trim().to_lowercase();
+        let Some(primary) = self.identity_for(&username) else { return Ok(false) };
+        let mut list = self.devices(&username);
+        if device_id(&primary) == dev {
+            let Some(next) = successor else { return Ok(false) };
+            let hex = hex::encode(next);
+            if !list.iter().any(|d| d.dh == hex) {
+                return Ok(false);
+            }
+            list.retain(|d| d.dh != hex);
+            self.put_devices(&username, &list)?;
+            let db = self.db.lock().unwrap();
+            db.execute("UPDATE users SET identity_dh=?2 WHERE username=?1", rusqlite::params![username, next.as_slice()])?;
+            return Ok(true);
+        }
+        let before = list.len();
+        list.retain(|d| hex::decode(&d.dh).map(|b| device_id(&b) != dev).unwrap_or(true));
+        if list.len() == before {
+            return Ok(false);
+        }
+        self.put_devices(&username, &list)?;
+        Ok(true)
+    }
+
+    /// Rename an extra device.
+    pub fn rename_device(&self, username: &str, dev: &str, name: &str) -> Result<bool, DirError> {
+        let mut list = self.devices(username);
+        let mut hit = false;
+        for d in list.iter_mut() {
+            if hex::decode(&d.dh).map(|b| device_id(&b) == dev).unwrap_or(false) {
+                d.name = name.trim().chars().take(48).collect();
+                hit = true;
+            }
+        }
+        if hit {
+            self.put_devices(&username.trim().to_lowercase(), &list)?;
+        }
+        Ok(hit)
     }
 
     // ---- federation: replicate accounts between relays ----
@@ -804,7 +928,7 @@ impl Directory {
         let db = self.db.lock().unwrap();
         let Ok(mut st) = db.prepare(
             "SELECT username, identity_dh, email, display_name, about, phone, is_bot, created_at,
-                    extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at
+                    extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices
              FROM users WHERE updated_at > ?1 AND is_bot = 0 ORDER BY updated_at LIMIT 500",
         ) else { return Vec::new() };
         st.query_map(rusqlite::params![since], |r| {
@@ -824,6 +948,7 @@ impl Directory {
                 password: r.get(12)?,
                 music_ver: r.get(13)?,
                 updated_at: r.get(14)?,
+                devices: r.get(15)?,
             })
         })
         .map(|rows| rows.flatten().collect())
@@ -849,13 +974,13 @@ impl Directory {
         }
         db.execute(
             "INSERT INTO users (username, identity_dh, email, display_name, about, phone, is_bot, created_at,
-                                extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                                extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
              ON CONFLICT(username) DO UPDATE SET identity_dh=?2, email=?3, display_name=?4, about=?5, phone=?6,
                  is_bot=?7, created_at=?8, extra=?9, avatar_ver=?10, banner_ver=?11, media_acl=?12, password=?13,
-                 music_ver=?14, updated_at=?15",
+                 music_ver=?14, updated_at=?15, devices=?16",
             rusqlite::params![u.username, dh, u.email, u.display_name, u.about, u.phone, u.is_bot as i64, u.created_at,
-                u.extra, u.avatar_ver, u.banner_ver, u.media_acl, u.password, u.music_ver, u.updated_at],
+                u.extra, u.avatar_ver, u.banner_ver, u.media_acl, u.password, u.music_ver, u.updated_at, u.devices],
         )
         .is_ok()
     }
@@ -915,6 +1040,11 @@ impl Directory {
              ON CONFLICT(username) DO UPDATE SET data=?2, updated_at=CAST(strftime('%s','now') AS INTEGER)",
             rusqlite::params![username, json],
         );
+    }
+
+    pub fn prekeys_delete(&self, username: &str) {
+        let db = self.db.lock().unwrap();
+        let _ = db.execute("DELETE FROM prekeys WHERE username=?1", rusqlite::params![username]);
     }
 
     pub fn prekeys_get(&self, username: &str) -> Option<String> {
@@ -1036,9 +1166,20 @@ impl Directory {
     /// The username registered to an identity key, if any.
     pub fn username_for_identity(&self, identity_dh: &[u8; 32]) -> Option<String> {
         let db = self.db.lock().unwrap();
-        db.query_row(
+        let primary: Option<String> = db.query_row(
             "SELECT username FROM users WHERE identity_dh=?1 AND is_bot=0 LIMIT 1",
             rusqlite::params![identity_dh.as_slice()],
+            |r| r.get(0),
+        )
+        .ok();
+        if primary.is_some() {
+            return primary;
+        }
+        // An extra device of some account.
+        let hex = hex::encode(identity_dh);
+        db.query_row(
+            "SELECT username FROM users WHERE is_bot=0 AND instr(devices, ?1) > 0 LIMIT 1",
+            rusqlite::params![format!("\"{hex}\"")],
             |r| r.get(0),
         )
         .ok()
@@ -1205,6 +1346,26 @@ impl Directory {
                 |_| Ok(()),
             )
             .is_ok()
+    }
+
+    /// Everyone who wrote to the bot (and didn't send /stop).
+    pub fn bot_peers_of(&self, bot: &str) -> Vec<String> {
+        let db = self.db.lock().unwrap();
+        let Ok(mut st) = db.prepare("SELECT user FROM bot_peers WHERE bot=?1 ORDER BY at DESC LIMIT 5000") else { return Vec::new() };
+        st.query_map(rusqlite::params![bot], |r| r.get::<_, String>(0))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
+    /// The @username of the bot's owner.
+    pub fn bot_owner_name(&self, bot: &str) -> Option<String> {
+        let db = self.db.lock().unwrap();
+        db.query_row(
+            "SELECT u.username FROM bot_keys k JOIN users u ON u.identity_dh = k.owner_dh AND u.is_bot = 0 WHERE k.username=?1",
+            rusqlite::params![bot],
+            |r| r.get(0),
+        )
+        .ok()
     }
 
     /// Display name of a user / bot ("" when unknown).
@@ -1431,12 +1592,15 @@ mod tests {
         let new_dev = [8u8; 32];
         assert!(matches!(d.login(&t2, "wrong pass!", &new_dev), Err(DirError::BadLogin)));
         assert_eq!(d.login(&t2, "correct horse", &new_dev).unwrap(), "media");
-        assert_eq!(d.identity_for("media"), Some(new_dev));
+        // The new device is added; the first one stays the primary device.
+        assert_eq!(d.identity_for("media"), Some(id));
+        assert_eq!(d.device_role("media", &new_dev), Some(false));
+        assert_eq!(d.device_role("media", &id), Some(true));
+        assert_eq!(d.username_for_identity(&new_dev).as_deref(), Some("media"));
         assert!(d.login(&t2, "correct horse", &new_dev).is_err()); // ticket is single-use
-        // back to the old identity for the rest of the test
-        let code = d.request_code("m@x.com").unwrap().unwrap();
-        let t3 = d.verify_code("m@x.com", &code).unwrap();
-        d.login(&t3, "correct horse", &id).unwrap();
+        // Sign the extra device out again.
+        assert!(d.remove_device("media", &device_id(&new_dev), None).unwrap());
+        assert_eq!(d.device_role("media", &new_dev), None);
 
         // Profile-photo privacy.
         assert!(d.may_see_media("media", None));

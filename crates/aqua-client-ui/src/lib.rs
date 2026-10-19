@@ -15,6 +15,7 @@ pub mod history;
 pub mod backups;
 pub mod gpu;
 pub mod stickers;
+pub mod multidev;
 
 use anyhow::Result;
 use tauri::Manager;
@@ -162,6 +163,9 @@ pub fn run() -> Result<()> {
             commands::group_control_to,
             commands::set_local_prefs,
             commands::login_account,
+            multidev::list_devices,
+            multidev::remove_device,
+            multidev::rename_device,
             commands::delete_group_message_of,
             commands::profile_media_path,
             commands::add_media_files,

@@ -25,7 +25,7 @@
   import { askInput, closeInput } from "./InputPrompt.svelte";
   import AnimatedMedia from "./AnimatedMedia.svelte";
   import type { StickerPack } from "../types";
-  import { api, bytesToDataUrl, assetUrl } from "../tauri";
+  import { api, bytesToDataUrl, assetUrl, type DeviceInfo } from "../tauri";
   import { showToast } from "./Toast.svelte";
   import type { BotInfo } from "../types";
   import VoiceVideoSettings from "./VoiceVideoSettings.svelte";
@@ -47,7 +47,7 @@
   import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 
   // ---- Section navigation ----
-  type Sec = "ghost" | "language" | "appearance" | "theme" | "behaviour" | "notifications" | "voice" | "wallpaper" | "accent" | "bots" | "account" | "about" | "privacy" | "stickers" | "backups";
+  type Sec = "ghost" | "language" | "appearance" | "theme" | "behaviour" | "notifications" | "voice" | "wallpaper" | "accent" | "bots" | "account" | "about" | "privacy" | "stickers" | "backups" | "devices";
   let section = $state<Sec>("notifications");
   // Telegram-mobile style: coloured icon tiles in grouped lists.
   interface Item { id: Sec | "profile" | "shortcuts"; label: string; color: string; icon: string; hint?: string }
@@ -56,6 +56,7 @@
     [
       { id: "profile", label: "Edit profile", color: "#007AFF", icon: ic(`<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>`) },
       { id: "ghost", label: "Ghost mode", color: "#5E5CE6", icon: ic(`<path d="M9 10h.01"/><path d="M15 10h.01"/><path d="M12 2a8 8 0 0 0-8 8v12l3-3 2.5 2.5L12 19l2.5 2.5L17 19l3 3V10a8 8 0 0 0-8-8z"/>`) },
+      { id: "devices", label: "Devices", color: "#34C759", icon: ic(`<rect x="2" y="4" width="13" height="10" rx="2"/><line x1="5" y1="18" x2="12" y2="18"/><rect x="17" y="8" width="5" height="12" rx="1"/>`) },
       { id: "backups", label: "Backups", color: "#30B0C7", icon: ic(`<path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/><path d="M22 2v6h-6"/>`) },
       { id: "privacy", label: "Privacy & Security", color: "#8E8E93", icon: ic(`<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>`) },
     ],
@@ -231,6 +232,39 @@
   let bkPw = $state("");
   let bkPhrase = $state<string | null>(null);
   $effect(() => { if ($settingsOpen && section === "backups") void refreshBackup(); });
+
+  // ---- Devices: every device has its own keys; all of them get every message.
+  let devices = $state<DeviceInfo[] | null>(null);
+  let devErr = $state<string | null>(null);
+  async function loadDevices() {
+    devErr = null;
+    try { devices = await api.listDevices(); }
+    catch (e) { devices = null; devErr = String(e); }
+  }
+  $effect(() => { if ($settingsOpen && section === "devices") void loadDevices(); });
+  async function devRemove(d: DeviceInfo) {
+    const ok = await askConfirm({
+      title: tr("Sign out “{n}”?", { n: d.name || (d.primary ? tr("Main device") : d.id) }),
+      text: d.primary ? tr("This device becomes the main one. The other device loses access to the account.") : tr("The device loses access to the account and stops getting messages."),
+      ok: tr("Sign out"), danger: true,
+    });
+    if (!ok) return;
+    try { await api.removeDevice(d.id); showToast(tr("Device signed out")); }
+    catch (e) { showToast(String(e)); }
+    await loadDevices();
+  }
+  let devEdit = $state<string | null>(null);
+  let devName = $state("");
+  async function devRename(d: DeviceInfo) {
+    const name = devName.trim();
+    devEdit = null;
+    if (!name || name === d.name) return;
+    try { await api.renameDevice(d.id, name); } catch (e) { showToast(String(e)); }
+    await loadDevices();
+  }
+  function devAdded(sec: number): string {
+    return sec ? new Date(sec * 1000).toLocaleDateString() : "";
+  }
   function fmtWhen(sec: number): string {
     const d = new Date(sec * 1000);
     return d.toLocaleString();
@@ -325,6 +359,16 @@
     catch { showToast(tr("Copy blocked")); }
   }
   async function copyToken(token: string) { await copyText(token, tr("Token copied")); }
+  /** Telegram libraries want "<digits>:<secret>": the relay's numeric id of
+   *  the bot (first 6 bytes of SHA-256 of its username) in front of the token. */
+  async function tgToken(username: string, token: string): Promise<string> {
+    const h = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(username)));
+    let id = 0;
+    for (let i = 0; i < 6; i++) id = id * 256 + h[i];
+    return `${Math.max(1, id)}:${token}`;
+  }
+  async function copyTgToken(username: string, token: string) { await copyText(await tgToken(username, token), tr("Telegram-style token copied")); }
+  const tgBase = $derived(($info?.server_url || "http://127.0.0.1:7777").replace(/\/+$/, ""));
 
   async function resetBotToken(b: BotInfo) {
     const ok = await askConfirm({
@@ -622,7 +666,7 @@
     tabindex="-1"
     aria-label={$t("Close settings")}
     onclick={(e) => { if ((e.target as HTMLElement).classList.contains("backdrop")) closeAll(); }}
-    onkeydown={(e) => { if (e.key === "Escape" || e.key === "Enter") closeAll(); }}
+    onkeydown={(e) => { if (e.target === e.currentTarget && (e.key === "Escape" || e.key === "Enter")) closeAll(); }}
   >
     <div class="sheet" class:detail role="dialog" aria-modal="true" tabindex="-1">
       <div class="layout">
@@ -1278,6 +1322,47 @@
       </section>
       {/if}
 
+      {#if section === "devices"}
+      <section class="group">
+        <div class="label">{$t("Devices")}</div>
+        <div class="bots-note">{$t("Your account works on several devices at once: phone, computer, tablet. Each device has its own encryption keys and gets every message. To add one, open Aquamarine there and choose “Sign in” with your e-mail and password.")}</div>
+        {#if devErr}
+          <div class="bots-note">{$t("Couldn't load the list: {e}", { e: devErr })}</div>
+        {:else if !devices}
+          <div class="bots-note">…</div>
+        {:else}
+          <div class="dev-list">
+            {#each devices as d (d.id)}
+              <div class="dev-row">
+                <span class="bk-dot" class:on={d.online}></span>
+                <div class="dev-main">
+                  {#if devEdit === d.id}
+                    <!-- svelte-ignore a11y_autofocus -->
+                    <input class="txt dev-input" bind:value={devName} autofocus placeholder={$t("Device name")}
+                      onkeydown={(e) => {
+                        if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); e.stopPropagation(); }
+                        if (e.key === "Enter") void devRename(d);
+                        if (e.key === "Escape") devEdit = null;
+                      }}
+                      onblur={() => { if (devEdit === d.id) void devRename(d); }} />
+                  {:else}
+                  <div class="dev-name">
+                    {d.name || (d.primary ? $t("Main device") : $t("Device {id}", { id: d.id.slice(0, 6) }))}
+                    {#if d.current}<span class="dev-tag">{$t("this device")}</span>{/if}
+                    {#if d.primary}<span class="dev-tag dim">{$t("main")}</span>{/if}
+                  </div>
+                  <div class="dev-sub">{d.online ? $t("online") : $t("offline")}{d.added ? " · " + tr("added {d}", { d: devAdded(d.added) }) : ""} · {d.id}</div>
+                  {/if}
+                </div>
+                {#if !d.primary && devEdit !== d.id}<button class="bot-link" onclick={() => { devName = d.name; devEdit = d.id; }}>{$t("Rename")}</button>{/if}
+                {#if !d.current}<button class="bot-link danger" onclick={() => devRemove(d)}>{$t("Sign out")}</button>{/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </section>
+      {/if}
+
       {#if section === "backups"}
       <section class="group">
         <div class="label">{$t("Encrypted backup")}</div>
@@ -1349,6 +1434,7 @@
                   {#if b.token}
                     <button class="bot-btn" onclick={() => toggleToken(b.username)}>{botShown.has(b.username) ? $t("Hide") : $t("Show")}</button>
                     <button class="bot-btn" onclick={() => copyToken(b.token)}>{$t("Copy")}</button>
+                    <button class="bot-btn" title={$t("For bots written for Telegram")} onclick={() => copyTgToken(b.username, b.token)}>{$t("Telegram token")}</button>
                   {/if}
                 </div>
                 {#if !b.token}<div class="bots-note">{$t("The server keeps only a fingerprint of the token, and this device doesn't have it. Reset the token to get a new one.")}</div>{/if}
@@ -1362,6 +1448,14 @@
             </div>
           {/if}
         {/if}
+      </section>
+
+      <section class="group">
+        <div class="label">{$t("Bots written for Telegram")}</div>
+        <div class="bots-note">{$t("This server speaks the Telegram Bot API too: an existing Telegram bot works here unchanged — copy its “Telegram token” above and point the library at this server instead of api.telegram.org. Inline buttons appear as a numbered list; the user answers with the number and the bot gets the button press.")}</div>
+        <div class="bot-cmd"><code>python-telegram-bot: .base_url("{tgBase}/bot")</code><button class="bot-btn" onclick={() => copyText(`.base_url("${tgBase}/bot")`, tr("Copied"))}>{$t("Copy")}</button></div>
+        <div class="bot-cmd"><code>aiogram: TelegramAPIServer.from_base("{tgBase}")</code><button class="bot-btn" onclick={() => copyText(`TelegramAPIServer.from_base("${tgBase}")`, tr("Copied"))}>{$t("Copy")}</button></div>
+        <div class="bot-cmd"><code>telegraf / grammY: apiRoot: "{tgBase}"</code><button class="bot-btn" onclick={() => copyText(`apiRoot: "${tgBase}"`, tr("Copied"))}>{$t("Copy")}</button></div>
       </section>
 
       <section class="group">
@@ -1869,6 +1963,15 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   }
 
   .bk-row { display: flex; gap: 8px; margin-top: 10px; }
+  .dev-list { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; }
+  .dev-row { display: flex; align-items: center; gap: 10px; padding: 9px 4px; border-top: 1px solid var(--border); }
+  .dev-row:first-child { border-top: none; }
+  .dev-main { flex: 1; min-width: 0; }
+  .dev-input { width: 100%; }
+  .dev-name { font-size: 14px; font-weight: 600; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .dev-sub { font-size: 12px; color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dev-tag { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: 6px; padding: 1px 6px; }
+  .dev-tag.dim { color: var(--fg-dim); background: color-mix(in srgb, var(--fg-dim) 14%, transparent); }
   .bk-row .txt { flex: 1; min-width: 0; }
   .bk-stat { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 10px 0 6px; }
   .bk-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fg-dim); }

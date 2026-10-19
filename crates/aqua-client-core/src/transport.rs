@@ -161,6 +161,24 @@ pub async fn verify_email_code(server_url: &str, email: &str, code: &str) -> Res
     Ok(r.json::<Resp>().await?.ticket)
 }
 
+/// One device of an account (`GET /v1/devices/:user`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DeviceInfo {
+    /// Where envelopes for this device go: `user` (primary) or `user~id`.
+    pub addr: String,
+    pub id: String,
+    #[serde(default)]
+    pub primary: bool,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub added: i64,
+    #[serde(default)]
+    pub online: bool,
+    #[serde(default)]
+    pub current: bool,
+}
+
 // ---------- Incoming events ----------------------------------------------
 
 #[derive(Debug)]
@@ -432,19 +450,30 @@ impl Transport {
     }
 
     /// Sign in on this device with an email ticket + password; the server
-    /// moves the account to this identity. Returns the username.
+    /// adds this identity to the account as one more device. Returns the username.
     pub async fn login_account(
         server_url: &str,
         identity: &IdentityKeyPair,
         ticket: &str,
         password: &str,
     ) -> Result<String, TransportError> {
+        Self::login_account_named(server_url, identity, ticket, password, "").await
+    }
+
+    /// [`Self::login_account`] with a name for the device list ("Pixel 8").
+    pub async fn login_account_named(
+        server_url: &str,
+        identity: &IdentityKeyPair,
+        ticket: &str,
+        password: &str,
+        device_name: &str,
+    ) -> Result<String, TransportError> {
         #[derive(serde::Deserialize)]
         struct Resp { username: String }
         let http = http_client()?;
         let token = sign_in(&http, server_url, identity).await?;
         let url = format!("{}/v1/users/login", server_url.trim_end_matches('/'));
-        let body = serde_json::json!({ "ticket": ticket, "password": password });
+        let body = serde_json::json!({ "ticket": ticket, "password": password, "device_name": device_name });
         let r = http.post(&url).bearer_auth(&token).json(&body).send().await?;
         if !r.status().is_success() {
             return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
@@ -733,6 +762,49 @@ impl Transport {
     pub async fn delete_bot(&self, username: &str) -> Result<(), TransportError> {
         let url = format!("{}/v1/bot/{}", self.server_url.trim_end_matches('/'), username.trim().to_lowercase());
         let r = self.http.delete(&url).bearer_auth(self.bearer().await?).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(())
+    }
+
+    // ---- devices ------------------------------------------------------------
+
+    /// The devices of `user` to encrypt for. `Ok(None)`: the relay predates
+    /// multi-device (send to the plain username only).
+    pub async fn devices(&self, user: &str) -> Result<Option<Vec<DeviceInfo>>, TransportError> {
+        let url = format!("{}/v1/devices/{}", self.server_url.trim_end_matches('/'), user);
+        let r = self.http.get(&url).send().await?;
+        match r.status().as_u16() {
+            200 => Ok(Some(r.json().await?)),
+            404 | 405 => Ok(None),
+            s => Err(TransportError::Server { status: s, body: r.text().await.unwrap_or_default() }),
+        }
+    }
+
+    /// This account's devices (the asking one has `current = true`).
+    pub async fn my_devices(&self) -> Result<Vec<DeviceInfo>, TransportError> {
+        let url = format!("{}/v1/me/devices", self.server_url.trim_end_matches('/'));
+        let r = self.http.get(&url).bearer_auth(self.bearer().await?).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(r.json().await?)
+    }
+
+    /// Sign another device of this account out.
+    pub async fn remove_device(&self, id: &str) -> Result<(), TransportError> {
+        let url = format!("{}/v1/me/devices/{}", self.server_url.trim_end_matches('/'), id);
+        let r = self.http.delete(&url).bearer_auth(self.bearer().await?).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(())
+    }
+
+    pub async fn rename_device(&self, id: &str, name: &str) -> Result<(), TransportError> {
+        let url = format!("{}/v1/me/devices/{}", self.server_url.trim_end_matches('/'), id);
+        let r = self.http.post(&url).bearer_auth(self.bearer().await?).json(&serde_json::json!({ "name": name })).send().await?;
         if !r.status().is_success() {
             return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
         }
