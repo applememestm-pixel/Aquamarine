@@ -8,8 +8,9 @@ if [ -f "$HERE/../Cargo.toml" ] && command -v cargo >/dev/null; then
   ( cd "$HERE/.." && cargo build --release -p aqua-server -q )
 fi
 for c in "$HERE/../target/release/aqua-server" "$HERE/../../Aquamarine-apps/aqua-server" "$HERE/aqua-server"; do
-  [ -f "$c" ] && [ ! -x "$c" ] && chmod +x "$c" 2>/dev/null
-  if [ -x "$c" ]; then EXE="$(readlink -f "$c")"; break; fi
+  [ -f "$c" ] || continue
+  if declare -F runnable >/dev/null; then EXE="$(runnable "$(readlink -f "$c")")" && break
+  else chmod +x "$c" 2>/dev/null; [ -x "$c" ] && { EXE="$(readlink -f "$c")"; break; }; fi
 done
 if [ -z "$EXE" ]; then
   echo "[X] aqua-server not found. Run ./build-all.sh first." >&2

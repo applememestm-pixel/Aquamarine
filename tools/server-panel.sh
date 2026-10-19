@@ -7,16 +7,26 @@ cd "$(dirname "$(readlink -f "$0")")"
 PORT=7777
 
 pkill -x aqua-server 2>/dev/null && sleep 1 || true
-if [ -f ./_find-server.sh ]; then . ./_find-server.sh; else
-  EXE="$(pwd)/aqua-server"
-  # Files copied from another disk/archive can lose the exec bit.
-  [ -f "$EXE" ] && [ ! -x "$EXE" ] && chmod +x "$EXE" 2>/dev/null
-  if [ ! -f "$EXE" ]; then echo "[X] aqua-server not found next to this script ($(pwd))." >&2; exit 1; fi
-  if [ ! -x "$EXE" ]; then
-    echo "[X] aqua-server is not executable and chmod failed (exFAT/NTFS mounted without exec?)." >&2
-    echo "    Run: chmod +x \"$EXE\"  or copy the folder to your home directory." >&2
-    exit 1
+# Disks mounted with noexec (NTFS/exFAT via fstab "user", USB sticks) can't run
+# programs: chmod does nothing there. Then run a copy from ~/.cache instead -
+# the data (database, logs, aqua-*.json) stays in this folder.
+runnable() {
+  local src="$1" dst dir
+  [ -f "$src" ] || return 1
+  [ -x "$src" ] || chmod +x "$src" 2>/dev/null || true
+  if [ -x "$src" ]; then printf '%s\n' "$src"; return 0; fi
+  dir="${XDG_CACHE_HOME:-$HOME/.cache}/aquamarine/bin"
+  mkdir -p "$dir" || return 1
+  dst="$dir/$(basename "$src")"
+  if [ ! -x "$dst" ] || ! cmp -s "$src" "$dst"; then
+    echo "[i] $(dirname "$src") is mounted without exec - running a copy from $dir" >&2
+    cp -f "$src" "$dst.tmp" && chmod +x "$dst.tmp" && mv -f "$dst.tmp" "$dst" || return 1
   fi
+  printf '%s\n' "$dst"
+}
+if [ -f ./_find-server.sh ]; then . ./_find-server.sh; else
+  if [ ! -f "$(pwd)/aqua-server" ]; then echo "[X] aqua-server not found next to this script ($(pwd))." >&2; exit 1; fi
+  EXE="$(runnable "$(pwd)/aqua-server")" || { echo "[X] can't make aqua-server runnable." >&2; exit 1; }
 fi
 
 # LAN IPv4 so others on the network can connect (skip VPN / virtual adapters).
