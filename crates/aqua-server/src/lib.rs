@@ -690,7 +690,13 @@ async fn fetch_blob(
 // ---------- User directory: email registration + search --------------------
 
 #[derive(Deserialize)]
-struct EmailRequestBody { email: String }
+struct EmailRequestBody {
+    email: String,
+    /// "signup" | "signin" | "reset" (older clients send nothing): lets the
+    /// relay say right away that the account exists / doesn't exist.
+    #[serde(default)]
+    purpose: String,
+}
 
 #[derive(serde::Serialize)]
 struct EmailRequestResp {
@@ -710,6 +716,12 @@ async fn email_request(
     // Invite-only (solo) relays: refuse before sending a code.
     if !state.admin.read().map(|c| c.permits(&body.email)).unwrap_or(true) {
         return Err((StatusCode::FORBIDDEN, "this relay is invite-only — ask the admin to add your email".into()));
+    }
+    let exists = state.directory.email_registered(&body.email);
+    match body.purpose.as_str() {
+        "signup" if exists => return Err((StatusCode::CONFLICT, directory::DirError::AccountExists.to_string())),
+        "signin" | "reset" if !exists => return Err((StatusCode::NOT_FOUND, directory::DirError::NoAccount.to_string())),
+        _ => {}
     }
     match state.directory.request_code_delivered(&body.email).await {
         Ok(d) => Ok(Json(EmailRequestResp { ok: true, dev_code: d.dev_code, delivery_failed: d.delivery_failed, error: d.error })),
@@ -792,6 +804,53 @@ async fn login_user(
         .map_err(|e| (dir_err_status(&e), e.to_string()))?;
     tracing::info!(user = %username, device = %directory::device_id(&dh_pub), "signed in on another device");
     Ok(Json(LoginResp { username }))
+}
+
+// ---------- Account recovery ------------------------------------------------------
+
+#[derive(Deserialize)]
+struct ResetBody {
+    ticket: String,
+    /// Recovery check derived from the 24-word key ("" if the account has none).
+    #[serde(default)]
+    recovery: String,
+    /// The new password (as the client's auth secret).
+    password: String,
+}
+
+/// `POST /v1/users/reset` — forgotten password: e-mail ticket + recovery key.
+async fn reset_password(
+    State(state): State<AppState>,
+    Json(body): Json<ResetBody>,
+) -> Result<Json<LoginResp>, (StatusCode, String)> {
+    let username = state
+        .directory
+        .reset_password(&body.ticket, &body.recovery, &body.password)
+        .map_err(|e| (match e { directory::DirError::BadRecovery => StatusCode::FORBIDDEN, _ => dir_err_status(&e) }, e.to_string()))?;
+    Ok(Json(LoginResp { username }))
+}
+
+#[derive(Deserialize)]
+struct RecoveryBody { check: String }
+
+#[derive(serde::Serialize)]
+struct RecoveryState { set: bool }
+
+/// `GET /v1/me/recovery` — does my account have a recovery key?
+async fn recovery_get(State(state): State<AppState>, Caller(dh): Caller) -> Result<Json<RecoveryState>, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    Ok(Json(RecoveryState { set: state.directory.has_recovery(&me) }))
+}
+
+/// `PUT /v1/me/recovery` `{check}` — register the recovery key's check.
+async fn recovery_put(
+    State(state): State<AppState>,
+    Caller(dh): Caller,
+    Json(body): Json<RecoveryBody>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    state.directory.set_recovery(&me, &dh, &body.check).map_err(|e| (dir_err_status(&e), e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---------- Devices ------------------------------------------------------------
@@ -1367,6 +1426,11 @@ async fn games_search(State(state): State<AppState>, Query(q): Query<GameQuery>)
     Json(games::search(&list, &q, 20))
 }
 
+async fn games_cover(State(state): State<AppState>, Path(id): Path<String>) -> Result<impl IntoResponse, StatusCode> {
+    let (mime, bytes) = state.games.cover(&id).await.ok_or(StatusCode::NOT_FOUND)?;
+    Ok(([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "public, max-age=604800".to_string())], bytes))
+}
+
 async fn games_icon(State(state): State<AppState>, Path(id): Path<String>) -> Result<impl IntoResponse, StatusCode> {
     let b = state.games.icon(&id).await.ok_or(StatusCode::NOT_FOUND)?;
     Ok(([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "public, max-age=604800")], b))
@@ -1656,6 +1720,8 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/users/register",     post(register_user))
         .route("/v1/users/search",       get(search_users))
         .route("/v1/users/login",        post(login_user))
+        .route("/v1/users/reset",        post(reset_password))
+        .route("/v1/me/recovery",        get(recovery_get).put(recovery_put))
         .route("/v1/devices/:user",      get(get_devices))
         .route("/v1/me/devices",         get(my_devices))
         .route("/v1/me/devices/:id",     post(rename_device).delete(remove_device))
@@ -1669,6 +1735,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/users/:user/media_acl", post(put_media_acl))
         .route("/v1/games/search",       get(games_search))
         .route("/v1/games/icon/:id",     get(games_icon))
+        .route("/v1/games/cover/:id",    get(games_cover))
         .route("/v1/bot/register",       post(bot_register))
         .route("/v1/bot/list",           get(bot_list))
         .route("/v1/bot/updates",        get(bot_updates))

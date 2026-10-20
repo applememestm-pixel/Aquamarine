@@ -112,6 +112,9 @@ pub struct FedUser {
     /// Extra devices (JSON); older relays don't send it.
     #[serde(default = "no_devices")]
     pub devices: String,
+    /// Hash of the recovery check; older relays don't send it.
+    #[serde(default)]
+    pub recovery: String,
 }
 
 fn no_devices() -> String { "[]".into() }
@@ -163,6 +166,12 @@ pub enum DirError {
     WeakPassword,
     #[error("one account can own at most 20 bots")]
     TooManyBots,
+    #[error("an account with this e-mail already exists — sign in instead")]
+    AccountExists,
+    #[error("there's no account with this e-mail")]
+    NoAccount,
+    #[error("the recovery key doesn't match this account")]
+    BadRecovery,
 }
 
 impl From<rusqlite::Error> for DirError {
@@ -242,6 +251,17 @@ fn pbkdf2_sha256(password: &[u8], salt: &[u8], rounds: u32) -> [u8; 32] {
         for (o, x) in out.iter_mut().zip(u.iter()) { *o ^= x; }
     }
     out
+}
+
+/// What the relay stores of a recovery check.
+fn recovery_hash(check: &str) -> String {
+    use sha2::Digest;
+    hex::encode(sha2::Sha256::digest(format!("aquamarine/recovery/v1|{check}").as_bytes()))
+}
+
+/// Constant-time byte comparison.
+fn subtle_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 pub fn hash_password(password: &str) -> String {
@@ -395,6 +415,8 @@ impl Directory {
             "ALTER TABLE users ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0",
             // Extra devices of the account (JSON list of {dh, name, added}).
             "ALTER TABLE users ADD COLUMN devices TEXT NOT NULL DEFAULT '[]'",
+            // SHA-256 of the account's recovery check (see `set_recovery`).
+            "ALTER TABLE users ADD COLUMN recovery TEXT NOT NULL DEFAULT ''",
         ] {
             if let Err(e) = db.execute(stmt, []) {
                 if !e.to_string().contains("duplicate column") {
@@ -866,6 +888,79 @@ impl Directory {
         Ok(username)
     }
 
+    // ---- account recovery ----
+
+    /// Is this e-mail bound to an account (people, not bots)?
+    pub fn email_registered(&self, email: &str) -> bool {
+        let email = email.trim().to_lowercase();
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT 1 FROM users WHERE email=?1 AND is_bot=0", rusqlite::params![email], |_| Ok(()))
+            .is_ok()
+    }
+
+    /// Store the account's recovery check. The client derives it from the
+    /// 24-word recovery key (the same key that opens the encrypted backup);
+    /// the relay keeps only its SHA-256, so the words never reach it.
+    /// Any signed-in device of the account may set it.
+    pub fn set_recovery(&self, username: &str, identity_dh: &[u8; 32], check: &str) -> Result<(), DirError> {
+        let check = check.trim();
+        if check.len() < 32 || check.len() > 128 {
+            return Err(DirError::BadProfile("bad recovery check".into()));
+        }
+        let username = username.trim().to_lowercase();
+        if self.device_role(&username, identity_dh).is_none() {
+            return Err(DirError::NotOwner);
+        }
+        let db = self.db.lock().unwrap();
+        db.execute("UPDATE users SET recovery=?2 WHERE username=?1", rusqlite::params![username, recovery_hash(check)])?;
+        Ok(())
+    }
+
+    /// Does the account have a recovery key?
+    pub fn has_recovery(&self, username: &str) -> bool {
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT recovery FROM users WHERE username=?1", rusqlite::params![username.trim().to_lowercase()], |r| r.get::<_, String>(0))
+            .map(|r| !r.is_empty())
+            .unwrap_or(false)
+    }
+
+    /// Forgotten password: an e-mail ticket plus — when the account has one —
+    /// the recovery check set a new password. The ticket stays valid, so the
+    /// client goes on to sign in (and restore its backup) with the new one.
+    /// Returns the username.
+    pub fn reset_password(&self, ticket: &str, check: &str, new_secret: &str) -> Result<String, DirError> {
+        if new_secret.chars().count() < 8 {
+            return Err(DirError::WeakPassword);
+        }
+        let db = self.db.lock().unwrap();
+        let (email, verified_at): (String, Option<i64>) = db
+            .query_row(
+                "SELECT email, verified_at FROM email_codes WHERE ticket=?1",
+                rusqlite::params![ticket],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(|_| DirError::BadTicket)?;
+        match verified_at {
+            Some(ts) if now_secs().saturating_sub(ts as u64) <= TICKET_TTL_SECS => {}
+            _ => return Err(DirError::BadTicket),
+        }
+        let (username, stored): (String, String) = db
+            .query_row(
+                "SELECT username, recovery FROM users WHERE email=?1 AND is_bot=0",
+                rusqlite::params![email],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(|_| DirError::NoAccount)?;
+        if !stored.is_empty() {
+            if !subtle_eq(recovery_hash(check.trim()).as_bytes(), stored.as_bytes()) {
+                return Err(DirError::BadRecovery);
+            }
+        }
+        db.execute("UPDATE users SET password=?2 WHERE username=?1", rusqlite::params![username, hash_password(new_secret)])?;
+        tracing::info!(%username, with_key = !stored.is_empty(), "password reset");
+        Ok(username)
+    }
+
     // ---- devices ----
 
     /// The extra (non-primary) devices of an account.
@@ -962,7 +1057,7 @@ impl Directory {
         let db = self.db.lock().unwrap();
         let Ok(mut st) = db.prepare(
             "SELECT username, identity_dh, email, display_name, about, phone, is_bot, created_at,
-                    extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices
+                    extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices, recovery
              FROM users WHERE updated_at > ?1 AND is_bot = 0 ORDER BY updated_at LIMIT 500",
         ) else { return Vec::new() };
         st.query_map(rusqlite::params![since], |r| {
@@ -983,6 +1078,7 @@ impl Directory {
                 music_ver: r.get(13)?,
                 updated_at: r.get(14)?,
                 devices: r.get(15)?,
+                recovery: r.get(16)?,
             })
         })
         .map(|rows| rows.flatten().collect())
@@ -1008,13 +1104,14 @@ impl Directory {
         }
         db.execute(
             "INSERT INTO users (username, identity_dh, email, display_name, about, phone, is_bot, created_at,
-                                extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                                extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices, recovery)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
              ON CONFLICT(username) DO UPDATE SET identity_dh=?2, email=?3, display_name=?4, about=?5, phone=?6,
                  is_bot=?7, created_at=?8, extra=?9, avatar_ver=?10, banner_ver=?11, media_acl=?12, password=?13,
-                 music_ver=?14, updated_at=?15, devices=?16",
+                 music_ver=?14, updated_at=?15, devices=?16,
+                 recovery=CASE WHEN ?17 = '' THEN recovery ELSE ?17 END",
             rusqlite::params![u.username, dh, u.email, u.display_name, u.about, u.phone, u.is_bot as i64, u.created_at,
-                u.extra, u.avatar_ver, u.banner_ver, u.media_acl, u.password, u.music_ver, u.updated_at, u.devices],
+                u.extra, u.avatar_ver, u.banner_ver, u.media_acl, u.password, u.music_ver, u.updated_at, u.devices, u.recovery],
         )
         .is_ok()
     }

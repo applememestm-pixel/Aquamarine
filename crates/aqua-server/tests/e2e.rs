@@ -787,3 +787,69 @@ async fn telegram_bot_api_compat() {
     assert_eq!(r["ok"], true);
     let _ = std::fs::remove_file("aqua-tg-webhooks.json");
 }
+
+/// Sign-up with a taken e-mail fails at once; a forgotten password is reset
+/// with the e-mail plus the 24-word recovery key (when the account has one).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn signup_conflict_and_password_reset() {
+    use aqua_client_core::backup;
+    let addr = spawn_server().await;
+    let base = format!("http://{addr}");
+    let http = reqwest::Client::new();
+    let email = "reset@x.com";
+    let req = |purpose: &'static str, email: &'static str| {
+        let http = http.clone();
+        let base = base.clone();
+        async move { http.post(format!("{base}/v1/auth/email/request")).json(&serde_json::json!({ "email": email, "purpose": purpose })).send().await.unwrap() }
+    };
+    async fn ticket_of(http: &reqwest::Client, base: &str, r: reqwest::Response, email: &str) -> String {
+        let code: serde_json::Value = r.json().await.unwrap();
+        let t: serde_json::Value = http.post(format!("{base}/v1/auth/email/verify")).json(&serde_json::json!({ "email": email, "code": code["dev_code"] })).send().await.unwrap().json().await.unwrap();
+        t["ticket"].as_str().unwrap().to_string()
+    }
+
+    // No account yet: sign-in / reset are refused, sign-up goes on.
+    assert_eq!(req("signin", email).await.status().as_u16(), 404);
+    assert_eq!(req("reset", email).await.status().as_u16(), 404);
+    let mut a = Client::new("resetter");
+    a.login(&http, &base).await;
+    let t = ticket_of(&http, &base, req("signup", email).await, email).await;
+    let r = http.post(format!("{base}/v1/users/register")).bearer_auth(&a.token)
+        .json(&serde_json::json!({ "ticket": t, "username": "resetter", "password": backup::auth_secret("old password", email) }))
+        .send().await.unwrap();
+    assert!(r.status().is_success());
+
+    // Now the e-mail is taken.
+    let r = req("signup", "Reset@X.com ").await;
+    assert_eq!(r.status().as_u16(), 409);
+    assert!(r.text().await.unwrap().contains("already exists"));
+    assert!(req("signin", email).await.status().is_success());
+
+    // Without a recovery key the e-mail alone resets the password.
+    let t = ticket_of(&http, &base, req("reset", email).await, email).await;
+    let s2 = backup::auth_secret("second password", email);
+    assert_eq!(aqua_client_core::Transport::reset_password(&base, &t, "", &s2).await.unwrap(), "resetter");
+    let b = IdentityKeyPair::generate();
+    assert_eq!(aqua_client_core::Transport::login_account(&base, &b, &t, &s2).await.unwrap(), "resetter");
+
+    // Register a recovery key: from now on it is required.
+    let phrase = backup::new_phrase();
+    let check = backup::recovery_check(&phrase).unwrap();
+    let r = http.put(format!("{base}/v1/me/recovery")).bearer_auth(&a.token).json(&serde_json::json!({ "check": check })).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 204);
+    let st: serde_json::Value = http.get(format!("{base}/v1/me/recovery")).bearer_auth(&a.token).send().await.unwrap().json().await.unwrap();
+    assert_eq!(st["set"], true);
+
+    let t = ticket_of(&http, &base, req("reset", email).await, email).await;
+    let s3 = backup::auth_secret("third password", email);
+    let e = aqua_client_core::Transport::reset_password(&base, &t, "", &s3).await.unwrap_err();
+    assert!(e.to_string().contains("recovery key"), "{e}");
+    let wrong = backup::recovery_check(&backup::new_phrase()).unwrap();
+    assert!(aqua_client_core::Transport::reset_password(&base, &t, &wrong, &s3).await.is_err());
+    assert_eq!(aqua_client_core::Transport::reset_password(&base, &t, &check, &s3).await.unwrap(), "resetter");
+    // The old password no longer works; the new one does.
+    let c = IdentityKeyPair::generate();
+    let t = ticket_of(&http, &base, req("signin", email).await, email).await;
+    assert!(aqua_client_core::Transport::login_account(&base, &c, &t, &s2).await.is_err());
+    assert_eq!(aqua_client_core::Transport::login_account(&base, &c, &t, &s3).await.unwrap(), "resetter");
+}

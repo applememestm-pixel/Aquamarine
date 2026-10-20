@@ -5,6 +5,19 @@ resume. Newest entries at the top.
 
 ---
 
+## 2026-10-20 — Session 49: polish pass from the 19.10 list (phase 1)
+
+- Lag: blurred bubble shadows were the biggest CPU paint cost in WebKitGTK; flat shadows under `wk-lowfx`. Optional DMA-BUF renderer (Settings → Chat settings → Graphics) with a 20 s auto-revert; `[aqua-fps]` scroll log.
+- Tap a sticker → its whole pack (PackSheet; `FileEnvelope.pack` = `tg:<name>` / `own:<folder>`); Telegram packs listed in Settings → Stickers with refresh.
+- Game cards with Steam covers (`/v1/games/cover/:id`, client cache); two-column profile editor.
+- Status dots only on people; "Supergroup" → "Server"; opening a server collapses the chat list to avatars.
+- Native grey controls replaced (appearance:none for buttons/selects/checkboxes).
+- Rebindable shortcuts: cheat-sheet editor (Ctrl+/) + `~/.config/aquamarine/keybindings.json`.
+- Sign-up with a taken e-mail fails at once (409); sign-in/reset for an unknown one 404.
+- Password reset: e-mail code + 24-word recovery key (the backup's key). The relay keeps SHA-256 of an HKDF-derived check (`/v1/me/recovery`, `/v1/users/reset`); accounts without a key reset by e-mail alone. Sign-up shows the key once.
+- Settings → Appearance merges themes, wallpaper, accent, app icon and theme editor with a sticky live preview.
+- Auto-delete timers (autodelete.rs, `[ttl:v1]`, group setting `ttl`) and per-chat read receipts.
+
 ## 2026-10-15 — Session 48: backups, federation, groups, app icon, bots, sticker editor
 
 - Encrypted backups (AQBK1: DEK under Argon2id(password) and HKDF(24-word recovery key)); sign-in sends an Argon2id-derived secret, never the password.

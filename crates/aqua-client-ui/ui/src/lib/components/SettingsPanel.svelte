@@ -25,7 +25,7 @@
   import { askInput, closeInput } from "./InputPrompt.svelte";
   import AnimatedMedia from "./AnimatedMedia.svelte";
   import type { StickerPack } from "../types";
-  import { api, bytesToDataUrl, assetUrl, type DeviceInfo } from "../tauri";
+  import { api, bytesToDataUrl, assetUrl, type DeviceInfo, type GpuStatus } from "../tauri";
   import { showToast } from "./Toast.svelte";
   import type { BotInfo } from "../types";
   import VoiceVideoSettings from "./VoiceVideoSettings.svelte";
@@ -69,9 +69,6 @@
     ],
     [
       { id: "appearance", label: "Appearance", color: "#32ADE6", icon: ic(`<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>`) },
-      { id: "accent", label: "Accent colour", color: "#AF52DE", icon: ic(`<path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/>`) },
-      { id: "theme", label: "Theme editor", color: "#5856D6", icon: ic(`<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>`) },
-      { id: "wallpaper", label: "Chat wallpaper", color: "#FF2D55", icon: ic(`<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>`) },
     ],
     [
       { id: "shortcuts", label: "Keyboard shortcuts", color: "#5AC8FA", icon: ic(`<rect x="2" y="6" width="20" height="12" rx="2"/><line x1="6" y1="10" x2="6.01" y2="10"/><line x1="10" y1="10" x2="10.01" y2="10"/><line x1="14" y1="10" x2="14.01" y2="10"/><line x1="18" y1="10" x2="18.01" y2="10"/><line x1="7" y1="14" x2="17" y2="14"/>`), hint: "Ctrl+/" },
@@ -173,10 +170,13 @@
 
   $effect(() => {
     const want = $settingsSection;
-    if (want && SECTIONS.some((x) => x.id === want)) {
-      section = want as Sec;
+    // The look-related pages were merged into Appearance: jump to their part.
+    const sub = want === "wallpaper" || want === "accent" || want === "theme" ? want : null;
+    if (sub || (want && SECTIONS.some((x) => x.id === want))) {
+      section = (sub ? "appearance" : want) as Sec;
       settingsSection.set(null);
       queueMicrotask(enterDetail);
+      if (sub) setTimeout(() => document.getElementById(`ap-${sub}`)?.scrollIntoView({ block: "start", behavior: "smooth" }), 60);
     }
   });
 
@@ -231,7 +231,24 @@
   let bkBusy = $state(false);
   let bkPw = $state("");
   let bkPhrase = $state<string | null>(null);
-  $effect(() => { if ($settingsOpen && section === "backups") void refreshBackup(); });
+  $effect(() => { if ($settingsOpen && section === "backups") { void refreshBackup(); void loadRecovery(); } });
+  /** Account recovery key: known on this device / registered on the relay. */
+  let rc = $state<{ local: boolean; server: boolean | null } | null>(null);
+  async function loadRecovery() { try { rc = await api.recoveryStatus(); } catch { rc = null; } }
+  async function rcShow() {
+    const ok = await askConfirm({ title: tr("Show the recovery key?"), text: tr("Anyone who sees these 24 words and gets into your e-mail can restore your account. Make sure nobody is looking at your screen."), ok: tr("Show") });
+    if (!ok) return;
+    if (!rc?.local && rc?.server) {
+      const again = await askConfirm({ title: tr("Make a new recovery key?"), text: tr("This device doesn't know the account's current key. A new one replaces it: the old words stop working, and the backup is sealed for the new ones."), ok: tr("Make a new one") });
+      if (!again) return;
+    }
+    try { bkPhrase = await api.recoveryCreate(); await loadRecovery(); }
+    catch (e) {
+      // Offline: still show the words this device has.
+      try { bkPhrase = await api.backupPhrase(); } catch { /* ignore */ }
+      showToast(tr("The key isn't registered on the server yet: {e}", { e: String(e) }));
+    }
+  }
 
   // ---- Devices: every device has its own keys; all of them get every message.
   let devices = $state<DeviceInfo[] | null>(null);
@@ -288,11 +305,6 @@
     try { await backupNow(true); showToast(tr("Backup uploaded")); }
     catch (e) { showToast(tr("Backup failed: {e}", { e: String(e) })); }
     finally { bkBusy = false; }
-  }
-  async function bkShowPhrase() {
-    const ok = await askConfirm({ title: tr("Show the recovery key?"), text: tr("Anyone who sees these 24 words and gets into your e-mail can restore your account. Make sure nobody is looking at your screen."), ok: tr("Show") });
-    if (!ok) return;
-    try { bkPhrase = await api.backupPhrase(); if (!bkPhrase) showToast(tr("This device doesn't have the recovery key (backup opened with the password)")); } catch (e) { showToast(String(e)); }
   }
   async function bkDisable() {
     const ok = await askConfirm({ title: tr("Turn off backups?"), text: tr("The encrypted copy on the server is deleted. Chats stay on this device."), ok: tr("Turn off"), danger: true });
@@ -434,6 +446,22 @@
   function setFontScale(v: number) { settings.update((s) => ({ ...s, fontScale: Math.max(0.85, Math.min(1.25, v)) })); }
   // ---- your stickers ----
   let myPacks = $state<StickerPack[]>([]);
+  /** Packs imported from Telegram: read-only, kept up to date from Telegram. */
+  let tgPacks = $state<StickerPack[]>([]);
+  let tgBusy = $state<string | null>(null);
+  async function syncTg(p: StickerPack) {
+    tgBusy = p.title;
+    try {
+      const r = await api.syncTelegramPack(p.title);
+      showToast(r.changed ? tr("“{t}” updated: +{a} −{r}", { t: p.title, a: r.added, r: r.removed }) : tr("“{t}” is up to date", { t: p.title }));
+      stickerLibraryTick.update((n) => n + 1);
+    } catch (e) { showToast(String(e)); }
+    finally { tgBusy = null; }
+  }
+  async function deleteTgPack(p: StickerPack) {
+    if (!(await askConfirm({ title: tr("Delete pack?"), text: tr("“{pack}” and all its stickers are removed from this device.", { pack: p.title }), ok: tr("Delete"), danger: true }))) return;
+    try { await api.deleteStickerPack(p.title); stickerLibraryTick.update((n) => n + 1); } catch (e) { showToast(String(e)); }
+  }
   let openPack = $state<string | null>(null);
   let renaming = $state<string | null>(null);
   let renameTo = $state("");
@@ -441,7 +469,8 @@
     try {
       const lib = await api.listLocalMedia();
       myPacks = lib.packs.filter((p) => !p.source && p.editable !== false);
-    } catch { myPacks = []; }
+      tgPacks = lib.packs.filter((p) => !!p.source);
+    } catch { myPacks = []; tgPacks = []; }
   }
   $effect(() => { void $stickerLibraryTick; if (section === "stickers") void loadMyPacks(); });
   async function newSticker(pack?: string) {
@@ -525,7 +554,19 @@
   function setWallpaper(id: string) { settings.update((s) => ({ ...s, wallpaper: id })); }
 
   // ---- graphics mode (gpu.rs) ----
-  let gpu = $state<{ mode: "auto" | "on" | "off"; software: boolean; reason: string } | null>(null);
+  let gpu = $state<GpuStatus | null>(null);
+  const isLinuxWk = typeof document !== "undefined" && document.documentElement.classList.contains("wk-lowfx");
+  async function toggleDmabuf() {
+    if (!gpu) return;
+    const on = !gpu.dmabuf;
+    const ok = await askConfirm({
+      title: on ? tr("Turn on direct GPU rendering?") : tr("Turn off direct GPU rendering?"),
+      text: on ? tr("Frames go from the graphics card straight to the screen — much smoother on Linux. On some NVIDIA + Wayland setups the window stays blank: then do nothing, and in 20 seconds Aquamarine switches back by itself.") : tr("Aquamarine restarts in the safe mode."),
+      ok: tr("Restart"),
+    });
+    if (!ok) return;
+    try { await api.setDmabuf(on); await api.restartApp(); } catch (e) { showToast(String(e)); }
+  }
   $effect(() => { if (section === "behaviour" && !gpu) void api.gpuStatus().then((g) => (gpu = g)).catch(() => {}); });
   async function setGpu(mode: "auto" | "on" | "off") {
     try { await api.setGpuMode(mode); if (gpu) gpu = { ...gpu, mode }; showToast(tr("Restart Aquamarine to apply")); }
@@ -668,7 +709,7 @@
     onclick={(e) => { if ((e.target as HTMLElement).classList.contains("backdrop")) closeAll(); }}
     onkeydown={(e) => { if (e.target === e.currentTarget && (e.key === "Escape" || e.key === "Enter")) closeAll(); }}
   >
-    <div class="sheet" class:detail role="dialog" aria-modal="true" tabindex="-1">
+    <div class="sheet" class:detail class:wide={section === "appearance"} role="dialog" aria-modal="true" tabindex="-1">
       <div class="layout">
         <nav class="nav">
           <div class="list-head phone-only">
@@ -894,6 +935,41 @@
         {/if}
       </section>
       <section class="group">
+        <div class="label">{$t("Telegram packs")}</div>
+        {#if tgPacks.length === 0}
+          <div class="foot-note">{$t("Packs you import from Telegram appear here. They can't be edited, but they update from Telegram.")}</div>
+        {:else}
+          {#each tgPacks as p (p.title)}
+            <div class="my-pack" class:open={openPack === "tg:" + p.title}>
+              <div class="mp-head">
+                <button class="mp-toggle" onclick={() => (openPack = openPack === "tg:" + p.title ? null : "tg:" + p.title)}>
+                  <span class="mp-thumb">{#if p.icon || p.items[0]}<AnimatedMedia src={assetUrl(p.icon ?? p.items[0].path)} mime={p.items.find((i) => i.path === p.icon)?.mime ?? p.items[0]?.mime ?? "image/webp"} play="hover" alt="" />{/if}</span>
+                  <span class="mp-title">{p.title}</span>
+                  <span class="tg-badge" title="Telegram">
+                    <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M21.9 4.3 18.6 19.8c-.2 1.1-.9 1.4-1.8.9l-5-3.7-2.4 2.3c-.3.3-.5.5-1 .5l.4-5.1 9.2-8.3c.4-.4-.1-.6-.6-.2L6 13.4 1.1 11.9c-1.1-.3-1.1-1.1.2-1.6L20.5 2.9c.9-.3 1.7.2 1.4 1.4Z"/></svg>
+                  </span>
+                  <span class="mp-count">{p.items.length}</span>
+                  <span class="mp-chev">›</span>
+                </button>
+                <button class="mini-btn" onclick={() => syncTg(p)} disabled={tgBusy === p.title} title={$t("Get the latest version from Telegram")}>{tgBusy === p.title ? "…" : "↻"}</button>
+                <button class="mini-btn danger" onclick={() => deleteTgPack(p)} title={$t("Delete pack")}>✕</button>
+              </div>
+              {#if openPack === "tg:" + p.title}
+                <div class="mp-grid">
+                  {#each p.items as it (it.id)}
+                    <div class="mp-item">
+                      <AnimatedMedia src={assetUrl(it.path)} mime={it.mime} play="hover" alt={it.emoji ?? ""} lazy />
+                      {#if it.emoji}<span class="mp-emoji">{it.emoji}</span>{/if}
+                    </div>
+                  {/each}
+                </div>
+                {#if p.source}<div class="foot-note">t.me/{p.kind === "emoji" ? "addemoji" : "addstickers"}/{p.source}</div>{/if}
+              {/if}
+            </div>
+          {/each}
+        {/if}
+      </section>
+      <section class="group">
         <div class="label">{$t("Panel")}</div>
         <div class="foot-note">
           {$t("Open with the smiley in the message box or")} <b>{$t("Ctrl+E")}</b>{$t(". Drop GIF / PNG / TGS files onto the panel to add them, import any Telegram sticker or emoji pack from")} <b>+</b>{$t(", and right-click a sticker or GIF in a chat to save it.")}
@@ -902,6 +978,8 @@
       {/if}
 
       {#if section === "appearance"}
+      <div class="ap-split">
+      <div class="ap-controls">
       <section class="group">
         <div class="label">{$t("Themes")}</div>
         <div class="themes">
@@ -976,11 +1054,8 @@
           </div>
         </div>
       </section>
-      {/if}
-
-      {#if section === "behaviour"}
       <section class="group">
-        <div class="label">{$t("Chat look & media")}</div>
+        <div class="label">{$t("Bubbles & media size")}</div>
         <div class="row">
           <span class="row-label">{$t("Stickers")}</span>
           <div class="range">
@@ -1002,6 +1077,176 @@
             <span class="range-val">{$settings.bubbleRadius}px</span>
           </div>
         </div>
+      </section>
+      <div class="ap-div" id="ap-wallpaper"><span>{$t("Chat wallpaper")}</span></div>
+      <section class="group">
+        <div class="label">{$t("Chat wallpaper")}</div>
+        <div class="walls">
+          {#each WALLPAPERS as w}
+            <button
+              class="wall"
+              class:active={$settings.wallpaper === w.id}
+              onclick={() => setWallpaper(w.id)}
+              title={w.name}
+            >
+              <span class="wall-swatch" style={w.css ? `background: ${w.css};` : "background: var(--bg-input); border-style: dashed;"}>
+                {#if w.id === "none"}<span class="wall-mark">✕</span>{/if}
+              </span>
+              <span class="wall-name">{$t(w.name)}</span>
+            </button>
+          {/each}
+        </div>
+      </section>
+      <section class="group">
+        <div class="label">{$t("Your wallpapers")}</div>
+        <div class="walls">
+          <button class="wall" onclick={pickCustomWallpaper} title={$t("Add pictures — several at once")}>
+            <span class="wall-swatch custom"><span class="wall-mark">+</span></span>
+            <span class="wall-name">{$t("Add…")}</span>
+          </button>
+          {#each myWalls as w (w)}
+            <div class="wall own" class:active={$settings.wallpaper === "custom" && $settings.wallpaperPath === w}>
+              <button class="wall-pick" onclick={() => useWall(w)} title={$t("Use this wallpaper")}>
+                <img class="wall-swatch img" src={assetUrl(w)} alt="" loading="lazy" />
+              </button>
+              <button class="wall-del" onclick={() => removeWall(w)} title={$t("Delete")} aria-label={$t("Delete")}>×</button>
+            </div>
+          {/each}
+        </div>
+        {#if $settings.wallpaper === "custom"}
+          <div class="row">
+            <span class="row-label">{$t("Darken")}</span>
+            <div class="range">
+              <input type="range" min="0" max="0.8" step="0.05" value={$settings.wallpaperDim ?? 0.3} oninput={(e) => settings.update((s) => ({ ...s, wallpaperDim: +(e.target as HTMLInputElement).value }))} />
+              <span class="range-val">{Math.round(($settings.wallpaperDim ?? 0.3) * 100)}%</span>
+            </div>
+          </div>
+        {/if}
+        <div class="foot-note">{$t("Pictures are kept in the app's data folder; switch between them any time.")}</div>
+      </section>
+      <div class="ap-div" id="ap-accent"><span>{$t("Colours & icon")}</span></div>
+      <section class="group">
+        <div class="label">{$t("Accent colour")}</div>
+        <div class="palettes">
+          {#each PALETTES as p}
+            <button
+              class="palette"
+              class:active={$settings.palette === p.id}
+              onclick={() => setPalette(p.id)}
+              title={p.name}
+              style={`--pa:${p.accent}; --pb:${p.accent2};`}
+            >
+              <span class="swatch"></span>
+              <span class="pal-name">{p.name}</span>
+              {#if $settings.palette === p.id}
+                <span class="chk">{@html icons.check}</span>
+              {/if}
+            </button>
+          {/each}
+        </div>
+      </section>
+      <section class="group">
+        <div class="label">{$t("App icon")}</div>
+        <div class="icons-row">
+          <button class="app-ic" class:active={iconMode === "theme"} onclick={() => setAppIcon({ mode: "theme" })} title={$t("Follows the accent colour")}>
+            <img src={themeIconUrl} alt="" /><span>{$t("Theme")}</span>
+          </button>
+          {#each ICON_PRESETS as p (p.id)}
+            <button class="app-ic" class:active={iconMode === "preset" && $settings.appIcon?.preset === p.id} onclick={() => setAppIcon({ mode: "preset", preset: p.id })} title={p.name}>
+              <img src={svgDataUrl(logoSvg(p))} alt="" /><span>{p.name}</span>
+            </button>
+          {/each}
+          <button class="app-ic" class:active={iconMode === "custom"} onclick={pickCustomIcon} title={$t("Your own picture")}>
+            {#if $settings.appIcon?.custom}<img src={$settings.appIcon.custom} alt="" />{:else}<span class="plus">＋</span>{/if}<span>{$t("Custom…")}</span>
+          </button>
+        </div>
+        <div class="foot-note">{$t("Shown in the title bar, the sidebar and the taskbar. “Theme” repaints the logo in your accent colour. On Wayland the taskbar uses the installed icon.")}</div>
+      </section>
+      <div class="ap-div" id="ap-theme"><span>{$t("Theme editor")}</span></div>
+      <section class="group">
+        <div class="label">{$t("Theme editor")}</div>
+        <div class="te-intro">{$t("Override any colour. Changes apply live and are saved to this device.")}</div>
+
+
+        {#each COLOR_GROUPS as grp}
+          <div class="te-group-title">{$t(grp)}</div>
+          <div class="te-colors">
+            {#each EDITABLE_COLORS.filter((c) => c.group === grp) as c (c.key)}
+              <label class="te-color" title={$t(c.desc)}>
+                <ColorInput value={colorValue(c.key, c.dark, c.light)} oninput={(v) => setColor(c.key, v)} size={28} title={$t(c.label)} />
+                <span class="te-name">{$t(c.label)}</span>
+                <span class="te-help" title={$t(c.desc)}>*<span class="te-tip">{$t(c.desc)}</span></span>
+              </label>
+            {/each}
+          </div>
+        {/each}
+
+        <div class="te-group-title">{$t("Interface font")}</div>
+        <div class="te-font">
+          <div class="te-font-cur">{$settings.customFontName ?? "Default (Onest)"}</div>
+          <div class="te-font-btns">
+            <button class="te-btn" onclick={pickCustomFont}>{$t("Load font file…")}</button>
+            {#if $settings.customFontName}
+              <button class="te-btn ghost" onclick={clearCustomFont}>{$t("Reset")}</button>
+            {/if}
+          </div>
+          <div class="te-hint">{$t(".ttf · .otf · .woff · .woff2 — pick any font from your system folders.")}</div>
+        </div>
+
+        <div class="te-group-title">{$t("Transparency")}</div>
+        {#each ([["bubbles", "Message bubbles"], ["panels", "Chat list & rail"], ["inputs", "Fields & cards"]] as const) as [k, lbl] (k)}
+          <div class="row">
+            <span class="row-label">{$t(lbl)}</span>
+            <div class="range">
+              <input type="range" min="0.3" max="1" step="0.02" value={$settings.alphas?.[k] ?? 1} oninput={(e) => setAlpha(k, +(e.target as HTMLInputElement).value)} />
+              <span class="range-val">{Math.round(($settings.alphas?.[k] ?? 1) * 100)}%</span>
+            </div>
+          </div>
+        {/each}
+
+        <button class="reset" style="margin-top:16px" onclick={clearColors}>{$t("Clear custom colours")}</button>
+      </section>
+      <section class="group">
+        <div class="label">{$t("Share")}</div>
+        <div class="foot-note" style="margin:0 0 10px">{$t("One .aquatheme file with everything: theme and colours with transparency, wallpaper, font, chat sizes, autoplay and your message sound. Others open it or tap “Apply theme” on it in a chat.")}</div>
+        <div class="share-row">
+          <input class="txt" bind:value={themeName} placeholder={$t("Theme name")} />
+          <button class="mini-btn primary" onclick={saveTheme}>{$t("Save to file…")}</button>
+          <button class="mini-btn" onclick={sendTheme}>{$t("Send to current chat")}</button>
+        </div>
+        <button class="mini-btn" style="margin-top:10px" onclick={openTheme}>{$t("Open a theme file…")}</button>
+      </section>
+      </div>
+      <aside class="ap-preview" aria-label={$t("Preview")}>
+        <div class="pv-card">
+          <div class="pv-head">
+            <span class="pv-ava">A</span>
+            <div class="pv-meta"><b>{$t("Alice")}</b><span>{$t("online")}</span></div>
+          </div>
+          <div class="pv-stage">
+            <div class="pv-wall"></div>
+            <div class="pv-msgs">
+              <span class="pv-date">{$t("Today")}</span>
+              <div class="pv-b in first">{$t("Hi! How does the new theme look?")}<span class="pv-t">12:40</span></div>
+              <div class="pv-b in">{$t("The wallpaper shows through here 🌊")}<span class="pv-t">12:40</span></div>
+              <div class="pv-b out first"><span class="pv-reply"><b>{$t("Alice")}</b>{$t("How does the new theme look?")}</span>{$t("Looks great — every change shows up right here.")}<span class="pv-t">12:41 ✓✓</span></div>
+              <div class="pv-b out">{$t("Bold")} <b>{$t("text")}</b>, <a href="#top" onclick={(e) => e.preventDefault()}>{$t("a link")}</a> {$t("and")} <code>code</code><span class="pv-t">12:41 ✓✓</span></div>
+              <div class="pv-sticker">🐬</div>
+            </div>
+          </div>
+          <div class="pv-foot">
+            <span class="pv-field">{$t("Write a message…")}</span>
+            <span class="pv-send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></span>
+          </div>
+        </div>
+        <div class="pv-note">{$t("Live preview — every change applies at once")}</div>
+      </aside>
+      </div>
+      {/if}
+
+      {#if section === "behaviour"}
+      <section class="group">
+        <div class="label">{$t("Media")}</div>
         <button class="toggle-row" onclick={() => setFlag("autoplayGifs")}>
           <div class="tr-text"><div class="tr-title">{$t("Autoplay GIFs")}</div><div class="tr-sub">{$t("Off: GIFs wait for a click")}</div></div>
           <span class="switch" class:on={$settings.autoplayGifs}></span>
@@ -1031,6 +1276,12 @@
           {gpu.reason === "nvidia-mismatch" ? " " + $t("The NVIDIA driver was updated without a restart — restart the computer to get the graphics card back.") : ""}
           {$t("Auto switches to the CPU when the graphics driver can't be used. Takes effect after restarting Aquamarine.")}
         </div>
+        {#if isLinuxWk && !gpu.software}
+          <button class="toggle-row" onclick={toggleDmabuf}>
+            <div class="tr-text"><div class="tr-title">{$t("Direct GPU rendering (DMA-BUF)")}</div><div class="tr-sub">{$t("Smoother scrolling on Linux. If the window turns blank, it switches back by itself.")}</div></div>
+            <span class="switch" class:on={!!gpu.dmabuf}></span>
+          </button>
+        {/if}
       </section>
       {/if}
       <section class="group">
@@ -1129,166 +1380,6 @@
         <VoiceVideoSettings />
       {/if}
 
-      {#if section === "wallpaper"}
-      <section class="group">
-        <div class="label">{$t("Chat wallpaper")}</div>
-        <div class="walls">
-          {#each WALLPAPERS as w}
-            <button
-              class="wall"
-              class:active={$settings.wallpaper === w.id}
-              onclick={() => setWallpaper(w.id)}
-              title={w.name}
-            >
-              <span class="wall-swatch" style={w.css ? `background: ${w.css};` : "background: var(--bg-input); border-style: dashed;"}>
-                {#if w.id === "none"}<span class="wall-mark">✕</span>{/if}
-              </span>
-              <span class="wall-name">{w.name}</span>
-            </button>
-          {/each}
-        </div>
-      </section>
-      <section class="group">
-        <div class="label">{$t("Your wallpapers")}</div>
-        <div class="walls">
-          <button class="wall" onclick={pickCustomWallpaper} title={$t("Add pictures — several at once")}>
-            <span class="wall-swatch custom"><span class="wall-mark">+</span></span>
-            <span class="wall-name">{$t("Add…")}</span>
-          </button>
-          {#each myWalls as w (w)}
-            <div class="wall own" class:active={$settings.wallpaper === "custom" && $settings.wallpaperPath === w}>
-              <button class="wall-pick" onclick={() => useWall(w)} title={$t("Use this wallpaper")}>
-                <img class="wall-swatch img" src={assetUrl(w)} alt="" loading="lazy" />
-              </button>
-              <button class="wall-del" onclick={() => removeWall(w)} title={$t("Delete")} aria-label={$t("Delete")}>×</button>
-            </div>
-          {/each}
-        </div>
-        {#if $settings.wallpaper === "custom"}
-          <div class="row">
-            <span class="row-label">{$t("Darken")}</span>
-            <div class="range">
-              <input type="range" min="0" max="0.8" step="0.05" value={$settings.wallpaperDim ?? 0.3} oninput={(e) => settings.update((s) => ({ ...s, wallpaperDim: +(e.target as HTMLInputElement).value }))} />
-              <span class="range-val">{Math.round(($settings.wallpaperDim ?? 0.3) * 100)}%</span>
-            </div>
-          </div>
-        {/if}
-        <div class="foot-note">{$t("Pictures are kept in the app's data folder; switch between them any time.")}</div>
-      </section>
-      {/if}
-
-      {#if section === "accent"}
-      <section class="group">
-        <div class="label">{$t("App icon")}</div>
-        <div class="icons-row">
-          <button class="app-ic" class:active={iconMode === "theme"} onclick={() => setAppIcon({ mode: "theme" })} title={$t("Follows the accent colour")}>
-            <img src={themeIconUrl} alt="" /><span>{$t("Theme")}</span>
-          </button>
-          {#each ICON_PRESETS as p (p.id)}
-            <button class="app-ic" class:active={iconMode === "preset" && $settings.appIcon?.preset === p.id} onclick={() => setAppIcon({ mode: "preset", preset: p.id })} title={p.name}>
-              <img src={svgDataUrl(logoSvg(p))} alt="" /><span>{p.name}</span>
-            </button>
-          {/each}
-          <button class="app-ic" class:active={iconMode === "custom"} onclick={pickCustomIcon} title={$t("Your own picture")}>
-            {#if $settings.appIcon?.custom}<img src={$settings.appIcon.custom} alt="" />{:else}<span class="plus">＋</span>{/if}<span>{$t("Custom…")}</span>
-          </button>
-        </div>
-        <div class="foot-note">{$t("Shown in the title bar, the sidebar and the taskbar. “Theme” repaints the logo in your accent colour. On Wayland the taskbar uses the installed icon.")}</div>
-      </section>
-      <section class="group">
-        <div class="label">{$t("Accent colour")}</div>
-        <div class="palettes">
-          {#each PALETTES as p}
-            <button
-              class="palette"
-              class:active={$settings.palette === p.id}
-              onclick={() => setPalette(p.id)}
-              title={p.name}
-              style={`--pa:${p.accent}; --pb:${p.accent2};`}
-            >
-              <span class="swatch"></span>
-              <span class="pal-name">{p.name}</span>
-              {#if $settings.palette === p.id}
-                <span class="chk">{@html icons.check}</span>
-              {/if}
-            </button>
-          {/each}
-        </div>
-      </section>
-      {/if}
-
-      {#if section === "theme"}
-      <section class="group">
-        <div class="label">{$t("Theme editor")}</div>
-        <div class="te-intro">Override any colour. Changes apply live and are saved to this device. Based on the current {effMode()} mode.</div>
-
-        <!-- Live preview — reflects your edits as you make them. -->
-        <div class="te-preview">
-          <div class="tp-head">
-            <span class="tp-ava"></span>
-            <div class="tp-meta"><span class="tp-name">{$t("Aquamarine")}</span><span class="tp-sub">{$t("online · preview")}</span></div>
-          </div>
-          <div class="tp-body">
-            <div class="tp-in">{$t("Here's how incoming messages look.")}</div>
-            <div class="tp-in dim">{$t("Muted and dim text share this bubble.")}</div>
-            <div class="tp-out">{$t("And this is a message from you.")}</div>
-          </div>
-          <div class="tp-foot">
-            <span class="tp-field">{$t("Type a message…")}</span>
-            <span class="tp-send"></span>
-          </div>
-        </div>
-
-        {#each COLOR_GROUPS as grp}
-          <div class="te-group-title">{grp}</div>
-          <div class="te-colors">
-            {#each EDITABLE_COLORS.filter((c) => c.group === grp) as c (c.key)}
-              <label class="te-color" title={c.desc}>
-                <ColorInput value={colorValue(c.key, c.dark, c.light)} oninput={(v) => setColor(c.key, v)} size={28} title={c.label} />
-                <span class="te-name">{c.label}</span>
-                <span class="te-help" title={c.desc}>*<span class="te-tip">{c.desc}</span></span>
-              </label>
-            {/each}
-          </div>
-        {/each}
-
-        <div class="te-group-title">{$t("Interface font")}</div>
-        <div class="te-font">
-          <div class="te-font-cur">{$settings.customFontName ?? "Default (Onest)"}</div>
-          <div class="te-font-btns">
-            <button class="te-btn" onclick={pickCustomFont}>{$t("Load font file…")}</button>
-            {#if $settings.customFontName}
-              <button class="te-btn ghost" onclick={clearCustomFont}>{$t("Reset")}</button>
-            {/if}
-          </div>
-          <div class="te-hint">{$t(".ttf · .otf · .woff · .woff2 — pick any font from your system folders.")}</div>
-        </div>
-
-        <div class="te-group-title">{$t("Transparency")}</div>
-        {#each ([["bubbles", "Message bubbles"], ["panels", "Chat list & rail"], ["inputs", "Fields & cards"]] as const) as [k, lbl] (k)}
-          <div class="row">
-            <span class="row-label">{$t(lbl)}</span>
-            <div class="range">
-              <input type="range" min="0.3" max="1" step="0.02" value={$settings.alphas?.[k] ?? 1} oninput={(e) => setAlpha(k, +(e.target as HTMLInputElement).value)} />
-              <span class="range-val">{Math.round(($settings.alphas?.[k] ?? 1) * 100)}%</span>
-            </div>
-          </div>
-        {/each}
-
-        <button class="reset" style="margin-top:16px" onclick={clearColors}>{$t("Clear custom colours")}</button>
-      </section>
-      <section class="group">
-        <div class="label">{$t("Share")}</div>
-        <div class="foot-note" style="margin:0 0 10px">{$t("One .aquatheme file with everything: theme and colours with transparency, wallpaper, font, chat sizes, autoplay and your message sound. Others open it or tap “Apply theme” on it in a chat.")}</div>
-        <div class="share-row">
-          <input class="txt" bind:value={themeName} placeholder={$t("Theme name")} />
-          <button class="mini-btn primary" onclick={saveTheme}>{$t("Save to file…")}</button>
-          <button class="mini-btn" onclick={sendTheme}>{$t("Send to current chat")}</button>
-        </div>
-        <button class="mini-btn" style="margin-top:10px" onclick={openTheme}>{$t("Open a theme file…")}</button>
-      </section>
-      {/if}
-
       {#if section === "account"}
       <section class="group">
         <div class="label">{$t("Session")}</div>
@@ -1380,17 +1471,32 @@
           </div>
           <div class="bot-actions">
             <button class="bot-btn primary" onclick={bkNow} disabled={bkBusy || !$info?.connected}>{bkBusy ? "…" : $t("Back up now")}</button>
-            <button class="bot-link" onclick={bkShowPhrase}>{$t("Show recovery key")}</button>
             <span class="bot-sp"></span>
             <button class="bot-link danger" onclick={bkDisable}>{$t("Turn off")}</button>
           </div>
           <div class="bots-note">{$t("Uploaded by itself about 20 seconds after an important change (groups, contacts, profile, settings), after new messages at most every 20 minutes, and at least every 6 hours.")}</div>
         {/if}
+      </section>
+      <section class="group">
+        <div class="label">{$t("Recovery key")}</div>
+        <div class="bots-note">{$t("24 words that reset a forgotten password and open your encrypted backup. The server keeps only a check derived from them — it can't reproduce the words.")}</div>
+        <div class="bk-stat">
+          <span class="bk-dot" class:on={rc?.server === true}></span>
+          <span>
+            {#if rc?.server === true}{$t("Set — a forgotten password is reset with the e-mail code plus these words")}
+            {:else if rc?.server === false}{$t("Not set — whoever gets into your e-mail can reset the password")}
+            {:else}{$t("Connect to the server to check")}{/if}
+          </span>
+        </div>
+        <div class="bot-actions">
+          <button class="bot-btn primary" onclick={rcShow} disabled={!$info?.connected && !rc?.local}>{rc?.local ? $t("Show recovery key") : $t("Create recovery key")}</button>
+        </div>
         {#if bkPhrase}
           <div class="bk-phrase">
             <div class="bk-ph-title">{$t("Recovery key — write it down and keep it offline")}</div>
             <ol>{#each bkPhrase.split(" ") as w, i (i)}<li>{w}</li>{/each}</ol>
-            <div class="bots-note">{$t("If you forget the password, these 24 words still open the backup. Nobody, including the server admin, can recover it without one of them.")}</div>
+            <div class="bots-note">{$t("If you forget the password: Sign in → Forgot password?, the e-mail code and these 24 words. Nobody, including the server admin, can recover the backup without the password or the words.")}</div>
+            <button class="bot-link" onclick={() => navigator.clipboard?.writeText(bkPhrase ?? "").then(() => showToast(tr("Recovery key copied")))}>{$t("Copy")}</button>
             <button class="bot-link" onclick={() => (bkPhrase = null)}>{$t("Hide")}</button>
           </div>
         {/if}
@@ -1670,6 +1776,56 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   }
   .close:hover { color: var(--fg); background: var(--bg-hover); }
 
+
+  /* ---- Appearance: controls on the left, a live chat preview on the right ---- */
+  @media (min-width: 721px) {
+    .sheet.wide { width: min(1220px, 97vw); height: min(800px, 93vh); }
+  }
+  .ap-split { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 4px; align-items: start; padding-right: 16px; }
+  .ap-controls { min-width: 0; }
+  .ap-preview { position: sticky; top: 64px; margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .ap-div { display: flex; align-items: center; gap: 12px; margin: 26px 16px 4px; scroll-margin-top: 64px; }
+  .ap-div::before, .ap-div::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, transparent, var(--border-strong), transparent); }
+  .ap-div span { font-size: 11px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-muted); }
+  .pv-card { border: 1px solid var(--border-strong); border-radius: 16px; overflow: hidden; background: var(--bg-shell); display: flex; flex-direction: column; height: min(560px, calc(93vh - 140px)); }
+  .pv-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--bg-list); border-bottom: 1px solid var(--border); }
+  .pv-ava { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 14px; color: #06070C; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+  .pv-meta { display: flex; flex-direction: column; line-height: 1.2; }
+  .pv-meta b { font-size: 13.5px; color: var(--fg); }
+  .pv-meta span { font-size: 11px; color: var(--accent); }
+  .pv-stage { position: relative; flex: 1; min-height: 0; isolation: isolate; overflow: hidden; }
+  .pv-wall { position: absolute; inset: 0; z-index: 0; background: var(--chat-wallpaper, transparent); }
+  .pv-msgs { position: relative; z-index: 1; height: 100%; box-sizing: border-box; padding: 12px 10px; display: flex; flex-direction: column; justify-content: flex-end; gap: 4px; font-size: calc(13px * var(--font-scale, 1)); }
+  .pv-date { align-self: center; font-size: 10.5px; font-weight: 700; text-transform: uppercase; color: var(--fg-muted); background: color-mix(in srgb, var(--bg-shell) 70%, transparent); padding: 3px 10px; border-radius: 999px; margin-bottom: 4px; }
+  .pv-b { max-width: 82%; padding: calc(7px * var(--density, 1)) 10px; line-height: 1.4; color: var(--fg); background: var(--bg-bubble-in); border: 1px solid var(--border); border-radius: var(--bubble-r, 14px); word-wrap: break-word; }
+  .pv-b.in { align-self: flex-start; }
+  .pv-b.in.first { border-top-left-radius: 4px; }
+  .pv-b.out { align-self: flex-end; background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 16%, transparent), color-mix(in srgb, var(--accent-2) 14%, transparent)), var(--bg-bubble-in); border-color: color-mix(in srgb, var(--accent) 22%, transparent); }
+  .pv-b.out.first { border-top-right-radius: 4px; margin-top: 6px; }
+  .pv-b a { color: var(--accent); }
+  .pv-b code { font-family: var(--font-mono, monospace); font-size: 0.9em; background: var(--bg-hover); padding: 0 4px; border-radius: 4px; }
+  .pv-t { float: right; margin: 5px 0 0 10px; font-size: 10px; color: var(--fg-dim); }
+  .pv-b.out .pv-t { color: var(--accent); opacity: 0.85; }
+  .pv-reply { display: block; border-left: 3px solid var(--accent); padding: 2px 8px; margin-bottom: 4px; border-radius: 4px; background: var(--accent-soft); font-size: 0.9em; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pv-reply b { display: block; color: var(--accent); font-size: 0.92em; }
+  .pv-sticker { align-self: flex-start; font-size: calc(var(--sticker-size, 128px) * 0.42); line-height: 1; margin-top: 4px; }
+  .pv-foot { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-top: 1px solid var(--border); background: var(--bg-list); }
+  .pv-field { flex: 1; font-size: 12px; color: var(--fg-dim); background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; padding: 7px 10px; }
+  .pv-send { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: #06070C; background: linear-gradient(135deg, var(--accent), var(--accent-2)); flex-shrink: 0; }
+  .pv-send svg { width: 14px; height: 14px; }
+  .pv-note { text-align: center; font-size: 11.5px; color: var(--fg-dim); }
+  @media (max-width: 1080px) {
+    .ap-split { grid-template-columns: 1fr; padding-right: 0; }
+    .ap-preview { order: -1; top: 56px; z-index: 1; margin: 10px 16px 0; padding-bottom: 6px; background: var(--bg-shell); }
+    .pv-card { height: 250px; }
+    .pv-note { display: none; }
+  }
+  /* Sections slide in when you switch (transform/opacity only: cheap). */
+  .content .group, .content .ap-div, .content .ap-preview { animation: sec-in 0.2s cubic-bezier(.2,.8,.3,1) both; }
+  .content .group:nth-of-type(2) { animation-delay: 0.025s; }
+  .content .group:nth-of-type(3) { animation-delay: 0.05s; }
+  @keyframes sec-in { from { opacity: 0; transform: translateY(6px); } }
+  @media (prefers-reduced-motion: reduce) { .content .group, .content .ap-div, .content .ap-preview { animation: none; } }
   .group {
     margin: 12px 16px 0;
     padding: 12px 16px 14px;
@@ -1962,6 +2118,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     .bot-create { grid-template-columns: 1fr; }
   }
 
+  .tg-badge { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: #2AABEE; color: #fff; flex-shrink: 0; }
   .bk-row { display: flex; gap: 8px; margin-top: 10px; }
   .dev-list { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; }
   .dev-row { display: flex; align-items: center; gap: 10px; padding: 9px 4px; border-top: 1px solid var(--border); }
@@ -2018,26 +2175,6 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .te-help:hover .te-tip { opacity: 1; transform: translateY(0); }
 
   /* Live preview card */
-  .te-preview {
-    border: 1px solid var(--border-strong); border-radius: 12px;
-    overflow: hidden; margin-bottom: 14px; background: var(--bg-shell);
-  }
-  .tp-head {
-    display: flex; align-items: center; gap: 9px;
-    padding: 9px 12px; background: var(--bg-list);
-    border-bottom: 1px solid var(--border);
-  }
-  .tp-ava { width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--accent-2)); flex-shrink: 0; }
-  .tp-name { font-size: 13px; font-weight: 700; color: var(--fg); display: block; }
-  .tp-sub { font-size: 10.5px; color: var(--fg-muted); }
-  .tp-body { padding: 12px; display: flex; flex-direction: column; gap: 6px; background: var(--bg-shell); }
-  .tp-in, .tp-out { max-width: 78%; padding: 7px 11px; font-size: 12.5px; border-radius: 4px 12px 12px 12px; }
-  .tp-in { align-self: flex-start; background: var(--bg-bubble-in); color: var(--fg); border: 1px solid var(--border); }
-  .tp-in.dim { color: var(--fg-muted); }
-  .tp-out { align-self: flex-end; border-radius: 12px 4px 12px 12px; background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 24%, var(--bg-bubble-in)), var(--bg-bubble-in)); color: var(--fg); border: 1px solid var(--accent-soft); }
-  .tp-foot { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-top: 1px solid var(--border); background: var(--bg-list); }
-  .tp-field { flex: 1; font-size: 12px; color: var(--fg-dim); background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; }
-  .tp-send { width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--accent-2)); flex-shrink: 0; }
   /* Hide the native colour input; the swatch is the visible control. */
   .te-color input[type="color"] {
     position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none;

@@ -27,6 +27,9 @@ pub struct Game {
     pub icon: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
+    /// Steam app id, when Discord knows it: gives the portrait cover art.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steam: Option<String>,
 }
 
 /// What a search returns.
@@ -35,6 +38,8 @@ pub struct Hit {
     pub id: String,
     pub name: String,
     pub has_icon: bool,
+    /// A portrait cover is available (`/v1/games/cover/:id`).
+    pub has_cover: bool,
 }
 
 #[derive(Clone, Default)]
@@ -57,11 +62,28 @@ pub fn parse_detectable(raw: &[u8]) -> Vec<Game> {
         icon: Option<String>,
         #[serde(default)]
         aliases: Vec<String>,
+        #[serde(default)]
+        third_party_skus: Vec<Sku>,
+    }
+    #[derive(Deserialize)]
+    struct Sku {
+        #[serde(default)]
+        distributor: String,
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        sku: Option<String>,
     }
     serde_json::from_slice::<Vec<App>>(raw)
         .map(|v| v.into_iter()
             .filter(|a| !a.name.trim().is_empty() && a.id.chars().all(|c| c.is_ascii_digit()))
-            .map(|a| Game { id: a.id, name: a.name.trim().to_string(), icon: a.icon, aliases: a.aliases })
+            .map(|a| {
+                let steam = a.third_party_skus.iter()
+                    .filter(|k| k.distributor == "steam")
+                    .find_map(|k| k.id.clone().or_else(|| k.sku.clone()))
+                    .filter(|x| !x.is_empty() && x.len() < 12 && x.chars().all(|c| c.is_ascii_digit()));
+                Game { id: a.id, name: a.name.trim().to_string(), icon: a.icon, aliases: a.aliases, steam }
+            })
             .collect())
         .unwrap_or_default()
 }
@@ -89,7 +111,7 @@ pub fn search(list: &[Game], q: &str, limit: usize) -> Vec<Hit> {
         }
     }
     scored.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-    scored.into_iter().take(limit).map(|(_, _, g)| Hit { id: g.id.clone(), name: g.name.clone(), has_icon: g.icon.is_some() }).collect()
+    scored.into_iter().take(limit).map(|(_, _, g)| Hit { id: g.id.clone(), name: g.name.clone(), has_icon: g.icon.is_some(), has_cover: g.steam.is_some() }).collect()
 }
 
 impl GameDb {
@@ -113,7 +135,9 @@ impl GameDb {
         let cached: Vec<Game> = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
         if !cached.is_empty() {
             *self.list.write().await = cached.clone();
-            if !fresh {
+            // A cache from before Steam ids were kept: fetch the list again.
+            let old_format = !cached.iter().any(|g| g.steam.is_some());
+            if !fresh || old_format {
                 let me = self.clone();
                 tokio::spawn(async move { me.download().await; });
             }
@@ -175,18 +199,90 @@ impl GameDb {
     }
 }
 
+impl GameDb {
+    /// Portrait cover art (Steam library capsule, 600×900) of a game, cached
+    /// on disk: `(mime, bytes)`. Falls back to the landscape header image.
+    pub async fn cover(&self, id: &str) -> Option<(String, Vec<u8>)> {
+        if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) || id.len() > 24 {
+            return None;
+        }
+        let dir = PathBuf::from(ICON_DIR).join("covers");
+        let file = dir.join(format!("{id}.jpg"));
+        let none = dir.join(format!("{id}.none"));
+        if let Ok(b) = std::fs::read(&file) {
+            return Some(("image/jpeg".into(), b));
+        }
+        // Looked up recently and there was nothing: don't ask Steam again for a day.
+        if std::fs::metadata(&none).and_then(|m| m.modified()).ok()
+            .and_then(|t| SystemTime::now().duration_since(t).ok())
+            .is_some_and(|age| age < Duration::from_secs(24 * 3600)) {
+            return None;
+        }
+        let game = self.get().await.into_iter().find(|g| g.id == id)?;
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(20)).user_agent("aqua-server").build().ok()?;
+        let _ = std::fs::create_dir_all(&dir);
+        let steam = match game.steam.clone() {
+            Some(s) => s,
+            // Not in Discord's list: Steam's store search by exact name.
+            None => match steam_app_by_name(&client, &game.name).await {
+                Some(s) => s,
+                None => {
+                    let _ = std::fs::write(&none, b"");
+                    return None;
+                }
+            },
+        };
+        let urls = [
+            format!("https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{steam}/library_600x900.jpg"),
+            format!("https://cdn.akamai.steamstatic.com/steam/apps/{steam}/library_600x900.jpg"),
+            format!("https://cdn.akamai.steamstatic.com/steam/apps/{steam}/header.jpg"),
+        ];
+        for u in urls {
+            let Ok(r) = client.get(&u).send().await else { continue };
+            if !r.status().is_success() {
+                continue;
+            }
+            let Ok(b) = r.bytes().await else { continue };
+            if b.len() < 512 || b.len() > 3 * 1024 * 1024 || !b.starts_with(&[0xFF, 0xD8]) {
+                continue;
+            }
+            let _ = std::fs::write(&file, &b);
+            return Some(("image/jpeg".into(), b.to_vec()));
+        }
+        let _ = std::fs::write(&none, b"");
+        None
+    }
+}
+
+/// Steam app id of a game by its exact (normalized) name.
+async fn steam_app_by_name(client: &reqwest::Client, name: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Resp { #[serde(default)] items: Vec<Item> }
+    #[derive(Deserialize)]
+    struct Item { id: u64, name: String }
+    let r: Resp = client
+        .get("https://store.steampowered.com/api/storesearch/")
+        .query(&[("term", name), ("l", "english"), ("cc", "US")])
+        .send().await.ok()?.error_for_status().ok()?.json().await.ok()?;
+    let want = norm(name);
+    r.items.into_iter().find(|i| norm(&i.name) == want).map(|i| i.id.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn parse_and_search() {
         let raw = br#"[{"id":"1","name":"Minecraft","icon":"abc","aliases":["MC"],"executables":[{"name":"javaw.exe","os":"win32"}]},
+                      {"id":"5","name":"Terraria","icon":"t","third_party_skus":[{"distributor":"steam","id":"105600","sku":"105600"}]},
                       {"id":"2","name":"Teardown","icon":null},
                       {"id":"3","name":"Minecraft Dungeons","icon":"def"},
                       {"id":"x","name":"bad id"},
                       {"id":"4","name":"Portal 2","icon":"p2"}]"#;
         let l = parse_detectable(raw);
-        assert_eq!(l.len(), 4);
+        assert_eq!(l.len(), 5);
+        assert_eq!(l.iter().find(|g| g.name == "Terraria").unwrap().steam.as_deref(), Some("105600"));
+        assert!(search(&l, "terraria", 10)[0].has_cover);
         let h = search(&l, "minec", 10);
         assert_eq!(h[0].name, "Minecraft");
         assert_eq!(h[1].name, "Minecraft Dungeons");

@@ -151,6 +151,9 @@ pub enum MessageKind {
         /// generic file. Drives inline rendering on the receiver side.
         #[serde(default)]
         category: Option<String>,
+        /// Stickers: the pack (`tg:<name>` / `own:<title>`), see FileEnvelope.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pack: Option<String>,
         /// Locally-cached path if the receiver has already downloaded
         /// and decrypted the blob, OR the sender's own source path for
         /// outgoing attachments. Lets the UI render inline previews.
@@ -747,6 +750,8 @@ pub struct AppState {
     pub hist_fp: HashMap<String, u64>,
     /// Room the UI has open per supergroup; sends without a room go there.
     pub active_rooms: HashMap<String, String>,
+    /// Auto-delete timers and message stamps (autodelete.rs).
+    pub ttl: crate::autodelete::TtlBook,
 }
 
 impl AppState {
@@ -909,6 +914,7 @@ impl AppState {
             }
         }
 
+        let ttl = crate::autodelete::load(&vault);
         Ok(StdMutex::new(Self {
             data_dir,
             vault,
@@ -926,6 +932,7 @@ impl AppState {
             hist_hashes,
             active_rooms: HashMap::new(),
             hist_fp: HashMap::new(),
+            ttl,
         }))
     }
 
@@ -1468,6 +1475,7 @@ pub fn classify_kind(text: &str) -> MessageKind {
             size: env.size,
             mime: env.mime,
             category: env.category,
+            pack: env.pack,
             saved_at: None,
         },
         Err(_) => MessageKind::Text { text: text.into() },

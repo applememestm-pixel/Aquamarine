@@ -5,7 +5,10 @@
    *  reopening the window for the rest of the session. */
   export const registrationDismissed = writable<boolean>(false);
   export function openRegistration() { wizardOpen.set(true); }
-  export function closeRegistration() { wizardOpen.set(false); }
+  /** Sign-up in progress: keep the window open after the connection comes
+   *  up (the recovery key is shown last). */
+  export const wizardHold = writable<boolean>(false);
+  export function closeRegistration() { wizardHold.set(false); wizardOpen.set(false); }
 </script>
 
 <script lang="ts">
@@ -73,7 +76,11 @@
   }
 
   // Steps: 1 email → 2 code → 3 username+profile → done
-  let step = $state<1 | 2 | 3 | 4>(1);
+  // 4 = recovery key for the backup, 5 = recovery key for a password
+  // reset, 6 = "save your recovery key" after sign-up.
+  let step = $state<1 | 2 | 3 | 4 | 5 | 6>(1);
+  let recoveryWords = $state("");
+  let savedWords = $state(false);
   /** Step 4: the backup didn't open with the password — recovery key. */
   let phrase = $state("");
   let serverUrl = $state(DEFAULT_SERVER);
@@ -90,7 +97,9 @@
   let busy = $state(false);
   let error = $state<string | null>(null);
   /** Discord / Spotify style: create an account, or sign in to one. */
-  let mode = $state<"signup" | "signin">("signup");
+  let mode = $state<"signup" | "signin" | "reset">("signup");
+  /** The relay said the e-mail already has an account: offer to sign in. */
+  let existsHint = $state(false);
   let password = $state("");
   let password2 = $state("");
   let showPw = $state(false);
@@ -103,20 +112,47 @@
     error = null;
     if (!email.includes("@")) { error = tr("Enter a valid email"); return; }
     if (password.length < 8) { error = tr("Password must be at least 8 characters"); return; }
-    if (mode === "signup" && password !== password2) { error = tr("Passwords don't match"); return; }
+    if (mode !== "signin" && password !== password2) { error = tr("Passwords don't match"); return; }
     serverUrl = normalizeServer(serverUrl); // fix https→http for local relays, reflect it
     busy = true;
+    existsHint = false;
     try {
-      const r = await api.requestEmailCode(serverUrl.trim(), email.trim());
+      const r = await api.requestEmailCode(serverUrl.trim(), email.trim(), mode);
       devCode = r.dev_code; mailFailed = r.delivery_failed ? (r.error || "?") : null;
       step = 2;
       if (devCode) code = devCode; // prefill in dev mode for convenience
       startResendCooldown();
     } catch (e) {
-      error = `Could not send code: ${e}`;
+      const m = String(e);
+      if (/already exists/i.test(m)) { error = tr("An account with this e-mail already exists."); existsHint = true; }
+      else if (/no account with this e-mail/i.test(m)) error = tr("There's no account with this e-mail on this server.");
+      else error = tr("Could not send code: {e}", { e: m });
     } finally {
       busy = false;
     }
+  }
+
+  /** Forgotten password: e-mail ticket + recovery key → new password, then
+   *  the usual sign-in (restoring the backup with the key). */
+  async function doReset() {
+    error = null;
+    busy = true;
+    try {
+      await api.passwordReset(serverUrl.trim(), ticket, email.trim(), phrase.trim(), password);
+      showToast(tr("Password changed"));
+      await finishSignIn(!!phrase.trim());
+    } catch (e) {
+      const m = String(e);
+      error = /recovery key/i.test(m) ? tr("This recovery key doesn't match the account. Check the words (they're in the order they were shown).")
+        : /expected 24 words|unknown word|checksum/i.test(m) ? tr("The recovery key is mistyped: {e}", { e: m.replace(/^.*recovery key: /, "") })
+        : tr("Could not reset the password: {e}", { e: m });
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function copyWords() {
+    try { await navigator.clipboard.writeText(recoveryWords); showToast(tr("Recovery key copied")); } catch { /* ignore */ }
   }
 
   // Resend code with a 45-second cooldown.
@@ -135,7 +171,7 @@
     error = null;
     busy = true;
     try {
-      const r = await api.requestEmailCode(serverUrl.trim(), email.trim());
+      const r = await api.requestEmailCode(serverUrl.trim(), email.trim(), mode);
       devCode = r.dev_code; mailFailed = r.delivery_failed ? (r.error || "?") : null;
       if (devCode) code = devCode;
       startResendCooldown();
@@ -153,6 +189,7 @@
     try {
       ticket = await api.verifyEmailCode(serverUrl.trim(), email.trim(), code.trim());
       if (mode === "signin") { await finishSignIn(); return; }
+      if (mode === "reset") { phrase = ""; step = 5; return; }
       step = 3;
     } catch (e) {
       error = `Wrong or expired code: ${e}`;
@@ -188,6 +225,7 @@
     } catch (e) {
       const m = String(e);
       error = /wrong email or password/i.test(m) ? tr("Wrong email or password") : tr("Could not sign in: {e}", { e: m });
+      if (mode === "reset") mode = "signin";
       step = 1;
     }
   }
@@ -213,6 +251,7 @@
       return;
     }
     busy = true;
+    wizardHold.set(true);
     try {
       // 1. Register the account FIRST (HTTP sign-in + directory write). The
       //    server now requires a registered username before it will accept a
@@ -221,7 +260,7 @@
       // 2. Connect (signs in + opens WS + uploads bundle), which also
       //    saves the auto-reconnect hints.
       const err = await connect(serverUrl.trim(), u);
-      if (err) { error = err; busy = false; return; }
+      if (err) { error = err; busy = false; wizardHold.set(false); return; }
       // 3. Mirror into the local profile store so the sidebar + profile
       //    modal reflect it immediately.
       updateProfile({
@@ -239,10 +278,19 @@
       try { chats.set(await api.listChats()); } catch { /* non-fatal */ }
       // Encrypted backups on by default (the password opens them).
       try { await api.backupEnable(password); void refreshBackup(); } catch { /* non-fatal */ }
-      showToast(`Registered as @${u}`);
-      closeRegistration();
+      showToast(tr("Registered as @{u}", { u }));
+      // The 24-word recovery key: shown once now, registered on the relay
+      // (only a check derived from it) so a forgotten password can be reset.
+      try {
+        recoveryWords = await api.recoveryCreate();
+        savedWords = false;
+        step = 6;
+      } catch {
+        closeRegistration();
+      }
     } catch (e) {
       error = `Registration failed: ${e}`;
+      wizardHold.set(false);
     } finally {
       busy = false;
     }
@@ -276,10 +324,17 @@
         <span class="bar" class:done={step > 1}></span>
         <span class="dot" class:active={step >= 2} class:done={step > 2}>2</span>
         <span class="bar" class:done={step > 2}></span>
-        <span class="dot" class:active={step >= 3}>3</span>
+        <span class="dot" class:active={step >= 3}>{step === 6 ? "✓" : 3}</span>
       </div>
 
-      {#if error}<div class="err">{error}</div>{/if}
+      {#if error}
+        <div class="err">
+          {error}
+          {#if existsHint}
+            <button class="err-act" onclick={() => { mode = "signin"; error = null; existsHint = false; password2 = ""; }}>{$t("Sign in to it")}</button>
+          {/if}
+        </div>
+      {/if}
 
       {#if step === 1 && $info?.registered && $info?.username}
         <div class="continue-box">
@@ -292,10 +347,18 @@
       {/if}
 
       {#if step === 1}
-        <div class="mode-tabs">
-          <button class:on={mode === "signup"} onclick={() => { mode = "signup"; error = null; }}>{$t("Create account")}</button>
-          <button class:on={mode === "signin"} onclick={() => { mode = "signin"; error = null; }}>{$t("Sign in")}</button>
-        </div>
+        {#if mode === "reset"}
+          <div class="reset-head">
+            <button class="link" onclick={() => { mode = "signin"; error = null; }}>← {$t("Sign in")}</button>
+            <b>{$t("Reset password")}</b>
+            <p class="note">{$t("We'll send a code to your e-mail. Then enter your 24-word recovery key and a new password — your chats come back from the encrypted backup.")}</p>
+          </div>
+        {:else}
+          <div class="mode-tabs">
+            <button class:on={mode === "signup"} onclick={() => { mode = "signup"; error = null; existsHint = false; }}>{$t("Create account")}</button>
+            <button class:on={mode === "signin"} onclick={() => { mode = "signin"; error = null; existsHint = false; }}>{$t("Sign in")}</button>
+          </div>
+        {/if}
         <div class="form">
           <label class="field">
             <span>{$t("Server")}</span>
@@ -306,17 +369,20 @@
             <input bind:value={email} type="email" autocomplete="email" placeholder={$t("you@example.com")} />
           </label>
           <label class="field">
-            <span>{$t("Password")}</span>
+            <span>{mode === "reset" ? $t("New password") : $t("Password")}</span>
             <div class="pw">
-              <input bind:value={password} type={showPw ? "text" : "password"} autocomplete={mode === "signup" ? "new-password" : "current-password"}
-                     placeholder={mode === "signup" ? $t("At least 8 characters") : ""} onkeydown={(e) => e.key === "Enter" && mode === "signin" && sendCode()} />
+              <input bind:value={password} type={showPw ? "text" : "password"} autocomplete={mode === "signin" ? "current-password" : "new-password"}
+                     placeholder={mode === "signin" ? "" : $t("At least 8 characters")} onkeydown={(e) => e.key === "Enter" && mode === "signin" && sendCode()} />
               <button class="pw-eye" type="button" onclick={() => (showPw = !showPw)} title={showPw ? $t("Hide") : $t("Show")}>{showPw ? "◉" : "◎"}</button>
             </div>
-            {#if mode === "signup" && password}
+            {#if mode !== "signin" && password}
               <span class="pw-meter"><i style:width="{pwScore * 20}%" class:ok={pwScore >= 3}></i></span>
             {/if}
+            {#if mode === "signin"}
+              <button class="link forgot" type="button" onclick={() => { mode = "reset"; error = null; password = ""; password2 = ""; }}>{$t("Forgot password?")}</button>
+            {/if}
           </label>
-          {#if mode === "signup"}
+          {#if mode !== "signin"}
             <label class="field">
               <span>{$t("Repeat password")}</span>
               <input bind:value={password2} type={showPw ? "text" : "password"} autocomplete="new-password" onkeydown={(e) => e.key === "Enter" && sendCode()} />
@@ -347,6 +413,32 @@
           <div class="actions">
             <button class="ghost" onclick={() => (step = 1)}>{$t("Back")}</button>
             <button class="primary" onclick={checkCode} disabled={busy}>{$t(busy ? "Verifying…" : "Verify")}</button>
+          </div>
+        </div>
+      {:else if step === 5}
+        <div class="form">
+          <p class="note">{$t("Enter the 24-word recovery key you saved when you created the account (Settings → Backups → Recovery key shows it on a signed-in device).")}</p>
+          <label class="field">
+            <span>{$t("Recovery key")}</span>
+            <textarea bind:value={phrase} rows="4" spellcheck="false" autocomplete="off" placeholder="word word word …"></textarea>
+          </label>
+          <p class="note dim">{$t("Never saved one? Leave it empty: if the account has no recovery key, the e-mail confirms it's you — but the encrypted backup can't be opened, chats start fresh.")}</p>
+          <div class="actions">
+            <button class="ghost" onclick={() => (step = 2)}>{$t("Back")}</button>
+            <button class="primary" onclick={doReset} disabled={busy || (phrase.trim() !== "" && phrase.trim().split(/\s+/).length !== 24)}>{$t(busy ? "Checking…" : "Set the new password")}</button>
+          </div>
+        </div>
+      {:else if step === 6}
+        <div class="form">
+          <b class="rk-title">{$t("Save your recovery key")}</b>
+          <p class="note">{$t("These 24 words are the only way back in if you forget the password. Write them down or keep them in a password manager — nobody, not even the server, can restore them.")}</p>
+          <ol class="rk-words">
+            {#each recoveryWords.split(/\s+/) as w, i (i)}<li><span>{i + 1}</span>{w}</li>{/each}
+          </ol>
+          <button class="resend" onclick={copyWords}>{$t("Copy")}</button>
+          <label class="rk-ok"><input type="checkbox" bind:checked={savedWords} /> {$t("I've saved the recovery key")}</label>
+          <div class="actions">
+            <button class="primary" onclick={() => { recoveryWords = ""; closeRegistration(); }} disabled={!savedWords}>{$t("Done")}</button>
           </div>
         </div>
       {:else if step === 4}
@@ -391,6 +483,18 @@
 {/if}
 
 <style>
+  .reset-head { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+  .reset-head b { font-size: 18px; }
+  .link { align-self: flex-start; border: none; background: none; padding: 0; color: var(--accent); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .link:hover { text-decoration: underline; }
+  .link.forgot { margin-top: 6px; font-weight: 500; }
+  .err-act { display: block; margin-top: 8px; border: 1px solid currentColor; background: none; color: inherit; font: inherit; font-weight: 700; font-size: 13px; padding: 6px 12px; border-radius: 8px; cursor: pointer; }
+  .note.dim { opacity: 0.75; font-size: 12.5px; }
+  .rk-title { font-size: 18px; }
+  .rk-words { list-style: none; margin: 4px 0 0; padding: 12px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px 10px; background: var(--bg-input); border-radius: 12px; border: 1px solid var(--border); font-family: var(--font-mono, ui-monospace, monospace); font-size: 13.5px; user-select: text; }
+  .rk-words li { display: flex; gap: 6px; align-items: baseline; }
+  .rk-words li span { color: var(--fg-dim); font-size: 11px; min-width: 16px; text-align: right; }
+  .rk-ok { display: flex; align-items: center; gap: 8px; font-size: 13.5px; cursor: pointer; }
   .mode-tabs { display: flex; gap: 4px; background: var(--bg-input); border-radius: 12px; padding: 4px; margin-bottom: 14px; }
   .mode-tabs button { flex: 1; border: none; background: none; color: var(--fg-muted); font: inherit; font-weight: 700; font-size: 13.5px; padding: 9px; border-radius: 9px; cursor: pointer; }
   .mode-tabs button.on { background: var(--bg-shell); color: var(--accent); box-shadow: 0 0 0 1px var(--border-strong), 0 4px 14px -6px var(--accent-glow); }

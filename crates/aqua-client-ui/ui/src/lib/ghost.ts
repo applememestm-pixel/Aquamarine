@@ -31,6 +31,15 @@ function persisted<T>(key: string, init: T) {
 
 export const ghost = persisted<GhostPrefs>("aqua.ghost.v1", DEF);
 
+/** Chats where I don't send read receipts (the other side never sees "read"). */
+let nrInit: string[] = [];
+try { nrInit = JSON.parse(localStorage.getItem("aqua.noReceipts.v1") ?? "[]"); } catch { /* ignore */ }
+export const noReceiptChats = writable<Set<string>>(new Set(nrInit));
+noReceiptChats.subscribe((b) => { try { localStorage.setItem("aqua.noReceipts.v1", JSON.stringify([...b])); } catch { /* ignore */ } });
+export function setReceipts(chat: string, on: boolean) {
+  noReceiptChats.update((s) => { const n = new Set(s); if (on) n.delete(chat); else n.add(chat); return n; });
+}
+
 let blockedInit: string[] = [];
 try { blockedInit = JSON.parse(localStorage.getItem("aqua.blocked.v1") ?? "[]"); } catch { /* ignore */ }
 export const blocked = writable<Set<string>>(new Set(blockedInit));

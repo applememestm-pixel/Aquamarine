@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formattingAction } from "../keybindings";
   /**
    * The message box. A contenteditable that keeps the same plain-text value
    * the rest of the app works with ("hi [ce:pack/👍_001.tgs]!"), but shows
@@ -299,14 +300,16 @@
   }
 
   function onKey(e: KeyboardEvent) {
-    const ctrl = e.ctrlKey || e.metaKey;
-    if (ctrl && !e.altKey) {
-      const c = e.code;
-      const map: Record<string, Fmt | undefined> = e.shiftKey
-        ? { KeyX: "s", KeyP: "spoiler", KeyM: "code", KeyN: "clear", Period: "quote" }
-        : { KeyB: "b", KeyI: "i", KeyU: "u", KeyK: "link" };
-      const k = map[c];
-      if (k) {
+    {
+      const FMT: Record<string, Fmt> = {
+        fmtBold: "b", fmtItalic: "i", fmtUnderline: "u", fmtLink: "link",
+        fmtStrike: "s", fmtSpoiler: "spoiler", fmtMono: "code", fmtClear: "clear", fmtQuote: "quote",
+      };
+      const act = formattingAction(e);
+      const k = act ? FMT[act] : undefined;
+      // Only intercept "no selection" for Ctrl combos (the browser's own
+      // rich-text commands); a rebound plain key just types when nothing's selected.
+      if (k && !selectionInside() && !(e.ctrlKey || e.metaKey)) { /* fall through */ } else if (k) {
         // No selection: Ctrl+B / I / U must not fall through to the
         // browser's own rich-text commands (they'd add <b> tags).
         e.preventDefault();

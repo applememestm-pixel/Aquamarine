@@ -16,6 +16,7 @@ pub mod backups;
 pub mod gpu;
 pub mod stickers;
 pub mod multidev;
+pub mod autodelete;
 
 use anyhow::Result;
 use tauri::Manager;
@@ -87,6 +88,7 @@ pub fn run() -> Result<()> {
                 });
             }
             commands::spawn_activity_watcher(app.handle().clone());
+            autodelete::spawn(app.handle().clone());
             #[cfg(target_os = "linux")]
             linux_webview::configure(app);
             Ok(())
@@ -106,8 +108,12 @@ pub fn run() -> Result<()> {
             stickers::sticker_delete,
             stickers::sync_telegram_pack,
             stickers::check_pack_updates,
+            stickers::pack_preview,
             media_server::transcode_media,
             gpu::set_gpu_mode,
+            gpu::set_dmabuf,
+            gpu::confirm_dmabuf,
+            gpu::restart_app,
             commands::fetch_attachment,
             commands::allow_media_preview,
             media_server::media_stream_url,
@@ -124,12 +130,21 @@ pub fn run() -> Result<()> {
             personal::save_wallpaper,
             personal::games_search,
             personal::game_icon,
+            personal::game_cover,
+            personal::load_keybindings,
+            personal::save_keybindings,
+            personal::open_keybindings_file,
             personal::list_wallpapers,
             personal::delete_wallpaper,
             commands::fed_peers,
             backups::backup_status,
             backups::backup_enable,
             backups::backup_phrase,
+            backups::recovery_status,
+            autodelete::get_chat_ttl,
+            autodelete::set_chat_ttl,
+            backups::recovery_create,
+            backups::password_reset,
             backups::backup_now,
             backups::backup_disable,
             backups::backup_restore,

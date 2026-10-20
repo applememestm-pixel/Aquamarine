@@ -14,11 +14,15 @@ export function keepOnScreen(node: HTMLElement, margin = 8) {
     if (left !== r.left) node.style.left = `${left}px`;
     if (top !== r.top) node.style.top = `${top}px`;
     // Taller than the window: let it scroll.
-    if (r.height > vh - 2 * margin) { node.style.maxHeight = `${vh - 2 * margin}px`; node.style.overflowY = "auto"; }
+    const maxH = `${vh - 2 * margin}px`;
+    if (r.height > vh - 2 * margin && node.style.maxHeight !== maxH) { node.style.maxHeight = maxH; node.style.overflowY = "auto"; }
   };
-  const ro = new ResizeObserver(() => fit());
+  // Fit on the next frame, not inside the observer callback: changing the
+  // size from the callback re-triggers it ("ResizeObserver loop…").
+  let raf = 0;
+  const ro = new ResizeObserver(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(fit); });
   ro.observe(node);
   requestAnimationFrame(fit);
   window.addEventListener("resize", fit);
-  return { destroy() { ro.disconnect(); window.removeEventListener("resize", fit); } };
+  return { destroy() { cancelAnimationFrame(raf); ro.disconnect(); window.removeEventListener("resize", fit); } };
 }

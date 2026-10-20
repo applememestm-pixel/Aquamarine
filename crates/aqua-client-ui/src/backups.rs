@@ -30,6 +30,42 @@ struct Payload {
     vault: VaultDump,
     /// The UI's own settings (localStorage), as JSON.
     ui: String,
+    /// The 24-word recovery key, so every device the backup lands on can
+    /// show it again (the backup itself opens with the password or this key).
+    phrase: Option<String>,
+}
+
+/// Backups made before the recovery key was carried along.
+#[derive(Deserialize)]
+struct PayloadV1 {
+    v: u32,
+    created: u64,
+    username: Option<String>,
+    email: Option<String>,
+    vault: VaultDump,
+    ui: String,
+}
+
+fn decode_payload(bytes: &[u8]) -> Result<Payload, String> {
+    match bincode::deserialize::<Payload>(bytes) {
+        Ok(p) => Ok(p),
+        Err(e) => match bincode::deserialize::<PayloadV1>(bytes) {
+            Ok(o) => Ok(Payload { v: o.v, created: o.created, username: o.username, email: o.email, vault: o.vault, ui: o.ui, phrase: None }),
+            Err(_) => Err(format!("backup contents: {e}")),
+        },
+    }
+}
+
+fn phrase_of(s: &AppState) -> Option<String> {
+    s.vault.get_record(PHRASE).ok().flatten().map(|b| String::from_utf8_lossy(&b).trim().to_string()).filter(|p| !p.is_empty())
+}
+
+/// Tell the relay about the recovery key (only a hash-derived check goes
+/// out), so a forgotten password can be reset with it. Best effort.
+async fn push_recovery(transport: Option<std::sync::Arc<Transport>>, phrase: &str) -> Result<(), String> {
+    let Some(t) = transport else { return Err("not connected".into()) };
+    let check = backup::recovery_check(phrase).map_err(|e| e.to_string())?;
+    t.put_recovery(&check).await.map_err(|e| e.to_string())
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]
@@ -78,14 +114,87 @@ pub async fn backup_enable(state: State<'_, StdMutex<AppState>>, password: Strin
     if password.chars().count() < 8 {
         return Err("password must be at least 8 characters".into());
     }
+    // The account's recovery key, if this device already has one, stays.
+    let existing = { let s = state.lock().map_err(|e| e.to_string())?; phrase_of(&s) };
     // Argon2id with 64 MiB: off the async runtime.
-    let (keys, phrase) = tokio::task::spawn_blocking(move || backup::new_keys(&password)).await.map_err(|e| e.to_string())?;
+    let (keys, phrase) = tokio::task::spawn_blocking(move || match existing {
+        Some(p) => backup::new_keys_with_phrase(&password, &p).unwrap_or_else(|_| backup::new_keys(&password)),
+        None => backup::new_keys(&password),
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    // The relay learns about the key only once the user has seen it
+    // (`recovery_create`): a key nobody wrote down must not lock them out.
     let s = state.lock().map_err(|e| e.to_string())?;
     s.vault.put_record(KEYS, &serde_json::to_vec(&keys).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     s.vault.put_record(PHRASE, phrase.as_bytes()).map_err(|e| e.to_string())?;
     let _ = s.vault.delete_record(LAST);
     let _ = s.vault.delete_record(HASH);
     Ok(phrase)
+}
+
+#[derive(Serialize)]
+pub struct RecoveryStatus {
+    /// This device knows the 24 words.
+    pub local: bool,
+    /// The relay has a recovery key for the account (None = couldn't ask).
+    pub server: Option<bool>,
+}
+
+#[tauri::command]
+pub async fn recovery_status(state: State<'_, StdMutex<AppState>>) -> Result<RecoveryStatus, String> {
+    let (local, t) = { let s = state.lock().map_err(|e| e.to_string())?; (phrase_of(&s).is_some(), s.transport.clone()) };
+    let server = match t { Some(t) => t.recovery_set().await.ok(), None => None };
+    Ok(RecoveryStatus { local, server })
+}
+
+/// Make sure the account has a recovery key: reuse this device's, or make a
+/// new one (the backup is re-wrapped so the new words open it too), and
+/// register it on the relay. Call it when the words are on screen.
+/// Returns the 24 words.
+#[tauri::command]
+pub async fn recovery_create(state: State<'_, StdMutex<AppState>>) -> Result<String, String> {
+    let (phrase, t) = {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        let phrase = match phrase_of(&s) {
+            Some(p) => p,
+            None => {
+                let p = backup::new_phrase();
+                if let Some(mut keys) = keys_of(&s) {
+                    backup::rewrap_recovery(&mut keys, &p).map_err(|e| e.to_string())?;
+                    s.vault.put_record(KEYS, &serde_json::to_vec(&keys).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+                    let _ = s.vault.delete_record(HASH); // re-upload with the new header
+                    let _ = s.vault.delete_record(LAST);
+                }
+                s.vault.put_record(PHRASE, p.as_bytes()).map_err(|e| e.to_string())?;
+                p
+            }
+        };
+        (phrase, s.transport.clone())
+    };
+    push_recovery(t, &phrase).await?;
+    Ok(phrase)
+}
+
+/// Forgotten password, before sign-in: e-mail ticket + the 24 words (empty
+/// when the account never had them) set a new password on the relay.
+/// The UI then signs in with the new password as usual.
+#[tauri::command]
+pub async fn password_reset(server_url: String, ticket: String, email: String, phrase: String, password: String) -> Result<String, String> {
+    if password.chars().count() < 8 {
+        return Err("password must be at least 8 characters".into());
+    }
+    let phrase = phrase.trim().to_string();
+    let (check, secret) = tokio::task::spawn_blocking(move || -> Result<(String, String), String> {
+        let check = if phrase.is_empty() { String::new() } else { backup::recovery_check(&phrase).map_err(|e| e.to_string())? };
+        Ok((check, backup::auth_secret(&password, &email)))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Transport::reset_password(&server_url, &ticket, &check, &secret).await.map_err(|e| {
+        let m = e.to_string();
+        if m.contains("recovery key") { "the recovery key doesn't match this account".to_string() } else { m }
+    })
 }
 
 #[tauri::command]
@@ -116,6 +225,7 @@ pub async fn backup_now(state: State<'_, StdMutex<AppState>>, ui: String, force:
             email: s.email.clone(),
             vault: s.vault.export_dump(&["backup:"]).map_err(|e| e.to_string())?,
             ui,
+            phrase: phrase_of(&s),
         };
         let prev = s.vault.get_record(HASH).ok().flatten().unwrap_or_default();
         (keys, payload, t, prev)
@@ -157,7 +267,8 @@ pub async fn backup_disable(state: State<'_, StdMutex<AppState>>) -> Result<(), 
         t.delete_backup().await.map_err(|e| e.to_string())?;
     }
     let s = state.lock().map_err(|e| e.to_string())?;
-    for k in [KEYS, PHRASE, LAST, HASH] {
+    // The recovery key stays: it also resets the account's password.
+    for k in [KEYS, LAST, HASH] {
         let _ = s.vault.delete_record(k);
     }
     Ok(())
@@ -196,20 +307,28 @@ pub async fn backup_restore(
     let Some(blob) = blob else {
         return Ok(Restored { found: false, need_phrase: false, username: None, email: None, ui: String::new() });
     };
+    let pw = password.clone();
     let opened = tokio::task::spawn_blocking(move || match phrase {
         Some(p) if !p.trim().is_empty() => backup::open_with_recovery(&blob, &p).map(|r| (r, Some(p))),
-        _ => backup::open_with_password(&blob, &password).map(|r| (r, None)),
+        _ => backup::open_with_password(&blob, &pw).map(|r| (r, None)),
     })
     .await
     .map_err(|e| e.to_string())?;
-    let ((bytes, keys), phrase) = match opened {
+    let ((bytes, mut keys), phrase) = match opened {
         Ok(v) => v,
         Err(backup::BackupError::Key) => {
             return Ok(Restored { found: true, need_phrase: true, username: None, email: None, ui: String::new() })
         }
         Err(e) => return Err(e.to_string()),
     };
-    let mut payload: Payload = bincode::deserialize(&bytes).map_err(|e| format!("backup contents: {e}"))?;
+    // Opened with the recovery key (password forgotten or changed): wrap the
+    // data key under the current password too, so it opens the next backups.
+    if phrase.is_some() {
+        let pw = password.clone();
+        keys = tokio::task::spawn_blocking(move || { backup::rewrap_password(&mut keys, &pw); keys }).await.map_err(|e| e.to_string())?;
+    }
+    let mut payload = decode_payload(&bytes)?;
+    let phrase = phrase.or_else(|| payload.phrase.take());
     let mut s = state.lock().map_err(|e| e.to_string())?;
     // Keep this device's keys: identity, prekeys and per-device sessions.
     let own = s.vault.export_dump(&[]).map_err(|e| e.to_string())?;

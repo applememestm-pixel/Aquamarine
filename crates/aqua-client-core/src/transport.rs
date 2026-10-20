@@ -136,7 +136,7 @@ pub struct ProfileCard {
 /// Request an email verification code (no auth required). Returns the
 /// code itself only when the server is in dev mode.
 pub async fn request_email_code(server_url: &str, email: &str) -> Result<Option<String>, TransportError> {
-    Ok(request_email_code_ex(server_url, email).await?.dev_code)
+    Ok(request_email_code_ex(server_url, email, "").await?.dev_code)
 }
 
 /// What the relay said about a code request.
@@ -153,10 +153,13 @@ pub struct CodeRequest {
     pub error: Option<String>,
 }
 
-pub async fn request_email_code_ex(server_url: &str, email: &str) -> Result<CodeRequest, TransportError> {
+/// `purpose` = "signup" | "signin" | "reset" | "": the relay refuses a sign-up
+/// for an e-mail that already has an account (409) and a sign-in / reset for
+/// one that has none (404).
+pub async fn request_email_code_ex(server_url: &str, email: &str, purpose: &str) -> Result<CodeRequest, TransportError> {
     let http = http_client()?;
     let url = format!("{}/v1/auth/email/request", server_url.trim_end_matches('/'));
-    let r = http.post(&url).json(&serde_json::json!({ "email": email })).send().await?;
+    let r = http.post(&url).json(&serde_json::json!({ "email": email, "purpose": purpose })).send().await?;
     if !r.status().is_success() {
         return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
     }
@@ -516,6 +519,21 @@ impl Transport {
 
     /// New device: download the encrypted backup with an e-mail ticket +
     /// password secret. `Ok(None)` = the account has no backup.
+    /// Forgotten password: e-mail ticket + recovery check (`""` when the
+    /// account has no recovery key) → new password. Returns the username.
+    /// The ticket stays valid for the sign-in that follows.
+    pub async fn reset_password(server_url: &str, ticket: &str, recovery: &str, secret: &str) -> Result<String, TransportError> {
+        #[derive(serde::Deserialize)]
+        struct Resp { username: String }
+        let http = http_client()?;
+        let url = format!("{}/v1/users/reset", server_url.trim_end_matches('/'));
+        let r = http.post(&url).json(&serde_json::json!({ "ticket": ticket, "recovery": recovery, "password": secret })).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(r.json::<Resp>().await?.username)
+    }
+
     pub async fn fetch_backup(server_url: &str, ticket: &str, secret: &str) -> Result<Option<Vec<u8>>, TransportError> {
         let http = http_client()?;
         let url = format!("{}/v1/backup/fetch", server_url.trim_end_matches('/'));
@@ -759,6 +777,19 @@ impl Transport {
         Ok(Some(r.bytes().await?.to_vec()))
     }
 
+    /// Portrait cover art of a game (`/v1/games/cover/:id`), if the relay has one.
+    pub async fn game_cover(&self, id: &str) -> Result<Option<Vec<u8>>, TransportError> {
+        let url = format!("{}/v1/games/cover/{}", self.server_url.trim_end_matches('/'), id);
+        let r = self.http.get(&url).send().await?;
+        if matches!(r.status().as_u16(), 404 | 405) {
+            return Ok(None);
+        }
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(Some(r.bytes().await?.to_vec()))
+    }
+
     /// List bots owned by this identity. Returns (username, token, display
     /// name, token hint). Current relays keep only a hash, so `token` is
     /// empty and `hint` holds its last 4 characters.
@@ -806,6 +837,28 @@ impl Transport {
             return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
         }
         Ok(r.json().await?)
+    }
+
+    /// Does the account have a recovery key registered?
+    pub async fn recovery_set(&self) -> Result<bool, TransportError> {
+        #[derive(serde::Deserialize)]
+        struct R { set: bool }
+        let url = format!("{}/v1/me/recovery", self.server_url.trim_end_matches('/'));
+        let r = self.http.get(&url).bearer_auth(self.bearer().await?).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(r.json::<R>().await?.set)
+    }
+
+    /// Register the recovery key's check (see [`crate::backup::recovery_check`]).
+    pub async fn put_recovery(&self, check: &str) -> Result<(), TransportError> {
+        let url = format!("{}/v1/me/recovery", self.server_url.trim_end_matches('/'));
+        let r = self.http.put(&url).bearer_auth(self.bearer().await?).json(&serde_json::json!({ "check": check })).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(())
     }
 
     /// Sign another device of this account out.

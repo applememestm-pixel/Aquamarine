@@ -316,3 +316,59 @@ pub async fn check_pack_updates(state: State<'_, StdMutex<AppState>>) -> Result<
         .await;
     Ok(out)
 }
+
+// ---------- Pack preview (tap a sticker in a chat) -------------------------------
+
+/// What tapping a sticker shows: its whole pack.
+#[derive(Debug, Serialize)]
+pub struct PackPreview {
+    /// The reference that came with the sticker (`tg:<name>` / `own:<folder>`).
+    #[serde(rename = "ref")]
+    pub pack_ref: String,
+    pub title: String,
+    /// "sticker" | "emoji"
+    pub kind: String,
+    /// Already in my library (then `local` has the items).
+    pub installed: bool,
+    pub local: Option<media::StickerPack>,
+    /// A Telegram pack not added yet: the relay's manifest
+    /// (`{name, title, type, files: [{file, emoji, mime}]}`).
+    pub server: Option<serde_json::Value>,
+}
+
+#[tauri::command]
+pub async fn pack_preview(state: State<'_, StdMutex<AppState>>, pack_ref: String) -> Result<PackPreview, String> {
+    let (data_dir, transport) = {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        (s.data_dir.clone(), s.transport.clone())
+    };
+    let (kind_ref, name) = pack_ref.split_once(':').ok_or("bad pack reference")?;
+    let (kind_ref, name) = (kind_ref.to_string(), name.to_string());
+    let name = name.as_str();
+    if name.is_empty() || name.contains(['/', '\\']) || name.starts_with('.') {
+        return Err("bad pack reference".into());
+    }
+    let lib = media::scan(&data_dir);
+    let local = lib.packs.into_iter().find(|p| match kind_ref.as_str() {
+        "tg" => p.source.as_deref() == Some(name),
+        _ => p.items.first().and_then(|i| Path::new(&i.path).parent().and_then(|d| d.file_name()).map(|f| f == name)).unwrap_or(false),
+    });
+    if let Some(p) = local {
+        return Ok(PackPreview { pack_ref, title: p.title.clone(), kind: p.kind.clone(), installed: true, local: Some(p), server: None });
+    }
+    if kind_ref == "tg" {
+        let t = transport.ok_or("not connected")?;
+        let m = match t.pack_manifest(name).await.map_err(|e| e.to_string())? {
+            Some(m) => m,
+            // The relay hasn't fetched it yet: ask it to (its own bot token).
+            None => t.import_pack(name).await.map_err(|e| match e {
+                aqua_client_core::TransportError::Server { body, .. } if !body.is_empty() => body,
+                e => e.to_string(),
+            })?,
+        };
+        let title = m["title"].as_str().unwrap_or(name).to_string();
+        let kind = if m["type"].as_str() == Some("custom_emoji") { "emoji" } else { "sticker" }.to_string();
+        return Ok(PackPreview { pack_ref, title, kind, installed: false, local: None, server: Some(m) });
+    }
+    Ok(PackPreview { pack_ref, title: name.to_string(), kind: "sticker".into(), installed: false, local: None, server: None })
+}

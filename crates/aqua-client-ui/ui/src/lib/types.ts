@@ -40,6 +40,8 @@ export type MessageKind =
       saved_at: string | null;
       /** Render hint: "sticker" | "gif" | "image" | "video" | "voice" | undefined */
       category: string | null;
+      /** Stickers: their pack, `tg:<name>` or `own:<folder>`. */
+      pack?: string | null;
     } }
   | { type: "article";         content: {
       title: string;
@@ -279,6 +281,8 @@ export interface GroupSettings {
   accent?: string;
   /** Supergroups: Discord-style rooms. */
   rooms_enabled?: boolean;
+  /** Auto-delete messages after this many seconds (0 / unset = off). */
+  ttl?: number;
 }
 
 /** A supergroup room (Discord channel). */

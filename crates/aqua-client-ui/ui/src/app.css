@@ -85,6 +85,17 @@ html.wk-lowfx body::after {
   animation: none;
   will-change: auto;
 }
+/* WebKitGTK paints a blurred box-shadow on the CPU for every bubble on every
+   scroll step: the soft 24px "lift" under message bubbles alone cost a third
+   of the frame (24 → 35 fps measured in WebKitGTK 2.52). A hard 1px edge
+   looks nearly the same and is free. */
+html.wk-lowfx {
+  --shadow-lift: 0 1px 0 rgba(255,255,255,0.04) inset, 0 1px 0 rgba(0,0,0,0.35);
+}
+html.wk-lowfx .messages .bubble,
+html.wk-lowfx .messages .bubble.code {
+  box-shadow: 0 1px 0 rgba(0,0,0,0.35) !important;
+}
 html.wk-lowfx *,
 html.wk-lowfx *::before,
 html.wk-lowfx *::after {
@@ -124,6 +135,11 @@ html.wk-lowfx .eq i:nth-child(3) { transform: scaleY(0.75); }
 }
 @media (max-width: 960px) {
   .app { grid-template-columns: 68px var(--list-w, 300px) 1fr; }
+}
+/* A server is open: the chat list shrinks to a column of avatars. */
+@media (min-width: 721px) {
+  html.list-compact .app { grid-template-columns: 68px 76px 1fr; }
+  .app { transition: grid-template-columns .22s cubic-bezier(.2,.8,.2,1); }
 }
 @media (max-width: 720px) {
   .app { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr); }
@@ -205,6 +221,49 @@ button, a, input, select, textarea {
 button:focus-visible { outline-offset: 0; box-shadow: 0 0 0 2px var(--accent); }
 button { font-family: inherit; }
 
+/* WebKitGTK draws buttons, selects and checkboxes as grey GTK widgets
+   unless the native look is switched off — then our styles apply. */
+button, select, input[type="checkbox"], input[type="radio"] {
+  -webkit-appearance: none;
+  appearance: none;
+}
+select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238A91A0' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 10px center !important;
+  background-size: 14px !important;
+  padding-right: 32px !important;
+  cursor: pointer;
+}
+select:where(:not([class])) {
+  background-color: var(--bg-input); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 10px; padding: 8px 12px; font: inherit; font-size: 13px;
+}
+select:hover { border-color: var(--border-strong); }
+option, optgroup { background: var(--bg-shell); color: var(--fg); }
+input[type="checkbox"], input[type="radio"] {
+  width: 17px; height: 17px; margin: 0; flex-shrink: 0; cursor: pointer;
+  border: 1.6px solid var(--border-strong); background: var(--bg-input);
+  display: inline-grid; place-content: center; vertical-align: middle;
+  transition: background-color .15s, border-color .15s;
+}
+input[type="checkbox"] { border-radius: 5px; }
+input[type="radio"] { border-radius: 50%; }
+input[type="checkbox"]:hover, input[type="radio"]:hover { border-color: var(--accent); }
+input[type="checkbox"]:checked, input[type="radio"]:checked { background: var(--accent); border-color: var(--accent); }
+input[type="checkbox"]:checked::after {
+  content: ""; width: 9px; height: 5px; margin-top: -2px;
+  border: solid #061015; border-width: 0 0 2px 2px; transform: rotate(-45deg);
+}
+input[type="radio"]:checked::after { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #061015; }
+input[type="checkbox"]:disabled, input[type="radio"]:disabled { opacity: .5; cursor: default; }
+/* Plain buttons that nobody styled: a neutral "secondary" button, not GTK grey. */
+:where(button:not([class])) {
+  background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong);
+  border-radius: 10px; padding: 7px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+:where(button:not([class])):hover { border-color: var(--accent); color: var(--accent); }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.001s !important;
@@ -243,6 +302,21 @@ button { font-family: inherit; }
   background: var(--online);
   border: 2.5px solid var(--bg-list);
 }
+
+/* Discord-style status circle on people's avatars (lists, headers). */
+.st-dot {
+  position: absolute; right: -2px; bottom: -2px; z-index: 1;
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 3px solid var(--bg-list); box-sizing: border-box;
+  background: var(--online, #23A55A);
+  transition: background-color .25s;
+}
+.st-dot.idle { background: #F0B232; }
+.st-dot.idle::after { content: ""; position: absolute; left: -1px; top: -1px; width: 6px; height: 6px; border-radius: 50%; background: var(--bg-list); }
+.st-dot.dnd { background: #F23F43; }
+.st-dot.dnd::after { content: ""; position: absolute; left: 1px; right: 1px; top: 50%; height: 2px; margin-top: -1px; border-radius: 1px; background: var(--bg-list); }
+.st-dot.offline { background: #80848E; }
+.st-dot.offline::after { content: ""; position: absolute; inset: 2px; border-radius: 50%; background: var(--bg-list); }
 
 .verified-badge {
   width: 13px; height: 13px;

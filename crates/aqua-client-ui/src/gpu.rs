@@ -23,15 +23,43 @@ pub struct GpuStatus {
     pub software: bool,
     /// Why ("nvidia-mismatch", "forced", "env", "").
     pub reason: String,
+    /// WebKit's DMA-BUF renderer is on for this run (Linux: frames go to
+    /// the compositor straight from the GPU instead of being copied
+    /// through the CPU — much smoother at full HD, but on some NVIDIA +
+    /// Wayland setups the window stays blank).
+    #[serde(default)]
+    pub dmabuf: bool,
+    /// Just switched on and not confirmed yet: the UI asks "does it look
+    /// right?" and switches back by itself if nobody answers.
+    #[serde(default)]
+    pub dmabuf_pending: bool,
 }
 
 static STATUS: OnceLock<GpuStatus> = OnceLock::new();
 
-fn mode_file() -> Option<PathBuf> {
+fn config_dir() -> Option<PathBuf> {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-        .map(|d| d.join("aquamarine").join("gpu-mode"))
+        .map(|d| d.join("aquamarine"))
+}
+
+fn mode_file() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("gpu-mode"))
+}
+
+fn dmabuf_file() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("dmabuf"))
+}
+
+/// Written when DMA-BUF is switched on, removed once the UI confirms the
+/// window looks right. Still there at the next start = it didn't work.
+fn dmabuf_pending_file() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("dmabuf-pending"))
+}
+
+fn dmabuf_saved() -> bool {
+    dmabuf_file().and_then(|p| std::fs::read_to_string(p).ok()).is_some_and(|v| v.trim() == "on")
 }
 
 pub fn saved_mode() -> String {
@@ -87,14 +115,66 @@ pub fn init() -> GpuStatus {
         std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
         eprintln!("[aqua-gpu] drawing without GPU compositing ({reason})");
     }
-    let st = GpuStatus { mode, software, reason };
+    // DMA-BUF renderer: the launcher turns it off (blank windows on some
+    // NVIDIA + Wayland setups); the user may turn it back on.
+    let mut dmabuf = false;
+    let mut dmabuf_pending = false;
+    if cfg!(target_os = "linux") && !software && dmabuf_saved() {
+        let pending = dmabuf_pending_file().is_some_and(|p| p.exists());
+        if pending {
+            // Switched on last time and never confirmed (blank window,
+            // crash): back to the safe mode.
+            eprintln!("[aqua-gpu] DMA-BUF renderer wasn't confirmed last time — switching it off");
+            if let Some(p) = dmabuf_file() { let _ = std::fs::write(p, "off"); }
+            if let Some(p) = dmabuf_pending_file() { let _ = std::fs::remove_file(p); }
+        } else {
+            std::env::remove_var("WEBKIT_DISABLE_DMABUF_RENDERER");
+            dmabuf = true;
+            eprintln!("[aqua-gpu] DMA-BUF renderer on");
+        }
+    }
+    if dmabuf {
+        // Confirmed already? (No pending marker = a confirmed earlier run.)
+        dmabuf_pending = std::fs::read_to_string(config_dir().map(|d| d.join("dmabuf-confirmed")).unwrap_or_default())
+            .is_err();
+        if dmabuf_pending {
+            if let Some(p) = dmabuf_pending_file() { let _ = std::fs::write(p, "1"); }
+        }
+    }
+    let st = GpuStatus { mode, software, reason, dmabuf, dmabuf_pending };
     let _ = STATUS.set(st.clone());
     st
 }
 
 #[tauri::command]
 pub fn gpu_status() -> GpuStatus {
-    STATUS.get().cloned().unwrap_or(GpuStatus { mode: saved_mode(), software: false, reason: String::new() })
+    STATUS.get().cloned().unwrap_or(GpuStatus { mode: saved_mode(), software: false, reason: String::new(), dmabuf: false, dmabuf_pending: false })
+}
+
+/// Switch the DMA-BUF renderer on / off (after a restart).
+#[tauri::command]
+pub fn set_dmabuf(on: bool) -> Result<(), String> {
+    let d = config_dir().ok_or("no config directory")?;
+    std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+    std::fs::write(d.join("dmabuf"), if on { "on" } else { "off" }).map_err(|e| e.to_string())?;
+    // A fresh switch-on must be confirmed again.
+    let _ = std::fs::remove_file(d.join("dmabuf-confirmed"));
+    let _ = std::fs::remove_file(d.join("dmabuf-pending"));
+    Ok(())
+}
+
+/// The window looks right with DMA-BUF: keep it.
+#[tauri::command]
+pub fn confirm_dmabuf() -> Result<(), String> {
+    let d = config_dir().ok_or("no config directory")?;
+    let _ = std::fs::remove_file(d.join("dmabuf-pending"));
+    std::fs::write(d.join("dmabuf-confirmed"), "1").map_err(|e| e.to_string())
+}
+
+/// Restart the app (to apply a graphics change).
+#[tauri::command]
+pub fn restart_app(app: tauri::AppHandle) {
+    app.restart();
 }
 
 /// Takes effect after a restart.

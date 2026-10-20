@@ -134,6 +134,10 @@ export async function bootstrap() {
     chats.set(updated);
     api.initApp().then((i) => info.set(i)).catch(() => {});
   });
+  // Auto-delete timers removed messages.
+  listen<{ peer_id: string }>("aqua://expired", async (e) => {
+    if (get(activeId) === e.payload.peer_id) await loadActiveMessages();
+  });
   // Sent from another device of this account: show it in the open chat.
   listen<{ peer_id: string }>("aqua://own_sent", async (e) => {
     chats.set(await api.listChats());

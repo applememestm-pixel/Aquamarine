@@ -5,7 +5,7 @@
   import { migrateCustomWallpaper, fitCurrentWallpaper, followWallpaper } from "./lib/theme";
   import { api } from "./lib/tauri";
   import { bootstrap, activeTab, info, activeId, backToList } from "./lib/stores";
-  import { openRegistration, closeRegistration, registrationDismissed } from "./lib/components/RegistrationWizard.svelte";
+  import { openRegistration, closeRegistration, registrationDismissed, wizardHold } from "./lib/components/RegistrationWizard.svelte";
   import { initTheme } from "./lib/theme";
   import NavRail from "./lib/components/NavRail.svelte";
   import ChatList from "./lib/components/ChatList.svelte";
@@ -28,6 +28,7 @@
   import ArticleComposer from "./lib/components/ArticleComposer.svelte";
   import ArticleReader from "./lib/components/ArticleReader.svelte";
   import CircleRecorder from "./lib/components/CircleRecorder.svelte";
+  import PackSheet from "./lib/components/PackSheet.svelte";
   import StickerEditor from "./lib/components/StickerEditor.svelte";
   import PackManager from "./lib/components/PackManager.svelte";
   import RegistrationWizard from "./lib/components/RegistrationWizard.svelte";
@@ -75,7 +76,7 @@
   $effect(() => {
     const i = $info;
     if (!i) return;
-    if (i.connected) { everConnected = true; closeRegistration(); return; }
+    if (i.connected) { everConnected = true; if (!$wizardHold) closeRegistration(); return; }
     // Only show the door on first launch — a transient drop mid-session must
     // not pop the login window over the user's chat (the plug icon reconnects).
     if (!everConnected && !$registrationDismissed) openRegistration();
@@ -91,6 +92,7 @@
     // No usable GPU (gpu.rs switched WebKit to plain CPU painting): lighter
     // effects, and say why if it's the NVIDIA driver waiting for a reboot.
     void api.gpuStatus().then((g) => {
+      if (g.dmabuf_pending) askGpu();
       if (!g.software) return;
       document.documentElement.classList.add("soft-render");
       if (g.reason === "nvidia-mismatch") setTimeout(() => showToast(tr("The NVIDIA driver was updated but the computer wasn't restarted, so the graphics card can't be used and the app draws on the CPU. Restart the computer."), 20000), 2500);
@@ -129,17 +131,7 @@
     const BLOCKED_CTRL = new Set(["p", "s", "f", "g", "r", "u", "j", "o", "+", "-", "=", "_", "0"]);
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
-      // Our own shortcuts first.
-      if (mod && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        (document.querySelector<HTMLInputElement>("#search"))?.focus();
-        return;
-      }
-      if (mod && e.key === ",") {
-        e.preventDefault();
-        openSettings();
-        return;
-      }
+      // Our own shortcuts live in lib/shortcuts.ts (rebindable).
       // Reload keys — would blow away app state.
       if (e.key === "F5" || (mod && e.key.toLowerCase() === "r")) {
         e.preventDefault();
@@ -221,6 +213,27 @@
       window.removeEventListener("dragover", onDragOver);
     };
   });
+  // Direct GPU rendering was just switched on: "does it look right?" —
+  // with no answer (a blank window can't be clicked) it switches back.
+  let gpuAsk = $state(0);
+  let gpuTimer: ReturnType<typeof setInterval> | null = null;
+  function askGpu() {
+    gpuAsk = 20;
+    gpuTimer = setInterval(() => {
+      gpuAsk -= 1;
+      if (gpuAsk <= 0) { if (gpuTimer) clearInterval(gpuTimer); void gpuRevert(); }
+    }, 1000);
+  }
+  async function gpuKeep() {
+    if (gpuTimer) clearInterval(gpuTimer);
+    gpuAsk = 0;
+    try { await api.confirmDmabuf(); showToast(tr("Direct GPU rendering stays on")); } catch (e) { showToast(String(e)); }
+  }
+  async function gpuRevert() {
+    if (gpuTimer) clearInterval(gpuTimer);
+    gpuAsk = 0;
+    try { await api.setDmabuf(false); await api.restartApp(); } catch (e) { showToast(String(e)); }
+  }
 </script>
 
 <div class="root">
@@ -268,11 +281,30 @@
 <GroupPanel />
 <ShortcutsHelp />
 <ImageCropper />
+<PackSheet />
 <Toast />
+{#if gpuAsk > 0}
+  <div class="gpu-ask" role="alertdialog" aria-live="assertive">
+    <div class="gpu-card">
+      <b>{tr("Direct GPU rendering is on")}</b>
+      <p>{tr("Is everything shown correctly? Without an answer it switches back in {n} s.", { n: gpuAsk })}</p>
+      <div class="gpu-btns">
+        <button class="gpu-keep" onclick={gpuKeep}>{tr("Keep")}</button>
+        <button class="gpu-back" onclick={gpuRevert}>{tr("Switch back")}</button>
+      </div>
+    </div>
+  </div>
+{/if}
 <Confirm />
 <SendDialog />
 
 <style>
+  .gpu-ask { position: fixed; inset: 0; z-index: 100000; display: grid; place-items: center; background: rgba(4, 6, 12, 0.55); }
+  .gpu-card { background: var(--bg-shell); border: 1px solid var(--border-strong); border-radius: 16px; padding: 20px 22px; max-width: 380px; display: flex; flex-direction: column; gap: 8px; }
+  .gpu-card p { margin: 0; color: var(--fg-muted); font-size: 14px; line-height: 1.45; }
+  .gpu-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px; }
+  .gpu-btns button { border-radius: 10px; padding: 8px 14px; font-weight: 600; cursor: pointer; border: 1px solid var(--border-strong); background: transparent; color: var(--fg); }
+  .gpu-btns .gpu-keep { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #061015; border: none; }
   .root {
     height: 100%;
     display: flex;

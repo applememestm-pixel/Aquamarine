@@ -300,14 +300,14 @@
   .row-wrap:hover { background: var(--bg-hover); }
   .row {
     width: 100%;
-    display: grid;
-    grid-template-columns: 1fr 32px;
+    display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 2px;
   }
   .main {
+    flex: 1 1 auto;
     display: grid;
-    grid-template-columns: 36px 1fr;
+    grid-template-columns: auto minmax(0, 1fr);
     gap: 11px;
     align-items: center;
     padding: 9px 10px;
@@ -328,8 +328,9 @@
     color: var(--fg-dim);
     font-size: 13px;
     cursor: pointer;
-    margin-right: 8px;
+    flex-shrink: 0;
   }
+  .goto:last-child { margin-right: 8px; }
   .goto:hover { color: var(--accent); border-color: var(--accent-soft); background: var(--accent-soft); }
   .chev {
     display: inline-block;
@@ -357,12 +358,12 @@
   .img-btn { border: none; padding: 0; background: transparent; cursor: zoom-in; align-self: flex-start; border-radius: 10px; overflow: hidden; }
   .img { max-width: 100%; max-height: 260px; border-radius: 10px; background: #0a0d14; display: block; }
   .loading { font-size: 12px; color: var(--fg-dim); font-style: italic; padding: 10px 0; }
-  .ic.thumb { position: relative; width: 52px; height: 52px; padding: 0; overflow: hidden; background: #000; }
+  .ic.thumb { position: relative; width: 44px; height: 44px; padding: 0; overflow: hidden; background: #000; }
   .ic.thumb img, .ic.thumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
   .vplay { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; background: rgba(0,0,0,0.28); }
   .vplay svg { width: 18px; height: 18px; filter: drop-shadow(0 1px 3px rgba(0,0,0,0.6)); }
   .ic {
-    width: 36px; height: 36px;
+    width: 44px; height: 44px;
     border-radius: 10px;
     background: var(--bg-input);
     display: grid; place-items: center;

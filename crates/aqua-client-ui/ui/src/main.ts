@@ -31,6 +31,43 @@ import "./app.css";
         if (m && (m.tagName === "AUDIO" || m.tagName === "VIDEO")) console.warn(`[aqua-media] ${ev} ${m.tagName} err=${m.error?.code ?? "-"} ${m.error?.message ?? ""} src=${(m.currentSrc || "").slice(0, 60)}`);
       }, true);
     }
+    // Smoothness report for the launcher log: frames per second during each
+    // scroll gesture ("[aqua-fps] scroll 41 fps, worst frame 52 ms"), so a
+    // "it lags" report comes with numbers. At most one line per 10 s.
+    let active = false, frames = 0, t0 = 0, prev = 0, worst = 0, lastLog = 0;
+    let idle: ReturnType<typeof setTimeout> | null = null;
+    let what = "";
+    const tick = () => {
+      if (!active) return;
+      const now = performance.now();
+      worst = Math.max(worst, now - prev);
+      prev = now;
+      frames++;
+      requestAnimationFrame(tick);
+    };
+    const end = () => {
+      active = false;
+      const dur = prev - t0;
+      const now = performance.now();
+      if (dur < 400 || frames < 5 || now - lastLog < 10_000) return;
+      lastLog = now;
+      console.warn(`[aqua-fps] scroll ${Math.round((frames * 1000) / dur)} fps, worst frame ${Math.round(worst)} ms over ${Math.round(dur)} ms in ${what}`);
+    };
+    addEventListener("scroll", (e) => {
+      if (!active) {
+        active = true; frames = 0; worst = 0; t0 = prev = performance.now();
+        const el = e.target as HTMLElement | null;
+        what = el && el.className ? `.${String(el.className).split(" ")[0]}` : "page";
+        requestAnimationFrame(tick);
+      }
+      if (idle) clearTimeout(idle);
+      idle = setTimeout(end, 250);
+    }, { capture: true, passive: true });
+    // The "ResizeObserver loop completed with undelivered notifications"
+    // message is harmless noise from WebKit; keep it out of the log.
+    addEventListener("error", (e) => {
+      if (e.message?.includes("ResizeObserver loop")) { e.preventDefault(); e.stopImmediatePropagation(); }
+    });
   }
 }
 

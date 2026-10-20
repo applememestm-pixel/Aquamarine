@@ -32,7 +32,7 @@
   import type { Activity } from "../types";
   import { openRegistration, registrationDismissed } from "./RegistrationWizard.svelte";
   import { playedTop, played, gameGradient } from "../played";
-  import { gameIds, gameIcons, resolveGame, rememberGame, iconFor } from "../games";
+  import { gameIds, gameIcons, gameCovers, resolveGame, rememberGame, iconFor, coverFor } from "../games";
 
   let pfTab = $state<"board" | "activity">("board");
   function hostOf(url: string): string {
@@ -378,9 +378,9 @@
     tabindex="-1"
     aria-label={$t("Close profile")}
     onclick={onBackdrop}
-    onkeydown={(e) => { if (e.key === "Escape" || e.key === "Enter") closeProfile(); }}
+    onkeydown={(e) => { if (e.target === e.currentTarget && (e.key === "Escape" || e.key === "Enter")) closeProfile(); }}
   >
-    <div class="sheet" class:wide={!editing && !privPage} role="dialog" aria-modal="true" tabindex="-1">
+    <div class="sheet" class:wide={!editing && !privPage} class:ed={editing && isMe && !!draft} role="dialog" aria-modal="true" tabindex="-1">
       <!-- Close stays put; banner + body scroll together, so the avatar is
            never clipped under the banner when the form is long. -->
       <button class="close" onclick={closeProfile} title={$t("Close (Esc)")}>×</button>
@@ -397,7 +397,7 @@
         {/if}
         {#if editing && isMe && draft}
           <div class="banner-tools">
-            <button class="bn-btn" onclick={() => pickImage("banner")} disabled={!!uploading}>{uploading === "banner" ? "Uploading…" : shownBanner ? "Change banner" : "Upload banner"}</button>
+            <button class="bn-btn" onclick={() => pickImage("banner")} disabled={!!uploading}>{uploading === "banner" ? $t("Uploading…") : shownBanner ? $t("Change banner") : $t("Upload banner")}</button>
             {#if shownBanner}<button class="bn-btn" onclick={() => removeImage("banner")} disabled={!!uploading}>{$t("Remove")}</button>{/if}
           </div>
         {/if}
@@ -422,28 +422,43 @@
         </div>
 
         {#if editing && isMe && draft}
+          <div class="ed-left">
           <input
             class="edit-name"
             bind:value={draft.display_name}
             placeholder={$t("Display name")}
           />
           <div class="username">@{view.username}</div>
-          <div class="pub-note">{$t("Avatar and banner are published to the server — everyone you chat with sees them.")}</div>
           <label class="field">
             <span>{$t("Custom status")}</span>
             <input bind:value={draft.status} placeholder={$t("What's on your mind?")} />
           </label>
           <label class="field">
             <span>{$t("About")}</span>
-            <textarea bind:value={draft.about} rows="3" placeholder={$t("Tell people a little about yourself...")}></textarea>
+            <textarea bind:value={draft.about} rows="4" placeholder={$t("Tell people a little about yourself...")}></textarea>
           </label>
-          <label class="field">
-            <span>{$t("Phone")}</span>
-            <input bind:value={draft.phone} placeholder="+7 999 123-45-67" />
-          </label>
-          <div class="field">
-            <span>{$t("Birthday")}</span>
-            <BirthdayInput bind:value={draft.birthday} />
+          <div class="row">
+            <label class="field half">
+              <span>{$t("Banner A")}</span>
+              <ColorInput bind:value={draft.banner_a} size={36} />
+            </label>
+            <label class="field half">
+              <span>{$t("Banner B")}</span>
+              <ColorInput bind:value={draft.banner_b} size={36} />
+            </label>
+          </div>
+          <div class="pub-note">{$t("Avatar and banner are published to the server — everyone you chat with sees them.")}</div>
+          </div>
+          <div class="ed-right">
+          <div class="row">
+            <label class="field half">
+              <span>{$t("Phone")}</span>
+              <input bind:value={draft.phone} placeholder="+7 999 123-45-67" />
+            </label>
+            <div class="field half">
+              <span>{$t("Birthday")}</span>
+              <BirthdayInput bind:value={draft.birthday} />
+            </div>
           </div>
           <div class="field">
             <span>{$t("Links")}</span>
@@ -458,12 +473,18 @@
           </div>
           <div class="field">
             <span>{$t("Favourite games")}</span>
-            <div class="game-chips">
-              {#each draft.games ?? [] as g (g)}
-                {@const ic = iconFor(g, $gameIds, $gameIcons, draft.game_ids)}
-                <span class="game-chip" style:background={gameGradient(g)}>{#if ic}<img src={ic} alt="" />{/if}{g}<button onclick={() => removeGame(g)} title={$t("Remove")}>×</button></span>
-              {/each}
-            </div>
+            {#if (draft.games ?? []).length}
+              <div class="ed-games">
+                {#each draft.games ?? [] as g (g)}
+                  {@const cv = coverFor(g, $gameIds, $gameCovers, draft.game_ids)}
+                  {@const ic = iconFor(g, $gameIds, $gameIcons, draft.game_ids)}
+                  <div class="ed-game" title={g} style:--gg={gameGradient(g)}>
+                    {#if cv}<img class="eg-cover" src={cv} alt="" />{:else}{#if ic}<img class="eg-bg" src={ic} alt="" /><img class="eg-ic" src={ic} alt="" />{:else}<span class="eg-ph">{g.charAt(0).toUpperCase()}</span>{/if}<span class="eg-name">{g}</span>{/if}
+                    <button class="eg-x" onclick={() => removeGame(g)} title={$t("Remove")} aria-label={$t("Remove")}>×</button>
+                  </div>
+                {/each}
+              </div>
+            {/if}
             <div class="link-edit game-search">
               <input class="le-url" bind:value={gameInput} placeholder={$t("Search a game — Teardown, Minecraft…")} onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); addGame(gameHits[0] && gameHits[0].name.toLowerCase() === gameInput.trim().toLowerCase() ? gameHits[0] : undefined); } }} />
               <button class="btn-ghost small" onclick={() => addGame()}>{$t("Add")}</button>
@@ -492,19 +513,10 @@
               {#if $profile.music_ver}<button class="btn-ghost small" onclick={removeMusic} disabled={!!uploading}>{$t("Remove")}</button>{/if}
             </div>
           </div>
-          <div class="row">
-            <label class="field half">
-              <span>{$t("Banner A")}</span>
-              <ColorInput bind:value={draft.banner_a} size={36} />
-            </label>
-            <label class="field half">
-              <span>{$t("Banner B")}</span>
-              <ColorInput bind:value={draft.banner_b} size={36} />
-            </label>
-          </div>
           <div class="buttons">
             <button class="btn-ghost" onclick={cancelEdit}>{$t("Cancel")}</button>
             <button class="btn-primary" onclick={saveEdit}>{$t("Save")}</button>
+          </div>
           </div>
         {:else if editing && !isMe && contactDraft}
           <div class="username">@{view.username}</div>
@@ -666,8 +678,15 @@
                   {#each view.games as g (g)}
                     {@const pl = view.played.find((x) => x.n === g)}
                     {@const ic = iconFor(g, $gameIds, $gameIcons, view.game_ids)}
-                    <div class="game" title={g} style:--gg={gameGradient(g)}>
-                      {#if ic}<img class="game-bg" src={ic} alt="" /><img class="game-ic" src={ic} alt="" />{:else}<span class="game-ph">{g.charAt(0).toUpperCase()}</span>{/if}
+                    {@const cv = coverFor(g, $gameIds, $gameCovers, view.game_ids)}
+                    <div class="game" class:has-cover={!!cv} title={g} style:--gg={gameGradient(g)}>
+                      {#if cv}
+                        <img class="game-cover" src={cv} alt={g} />
+                      {:else if ic}
+                        <img class="game-bg" src={ic} alt="" /><img class="game-ic" src={ic} alt="" />
+                      {:else}
+                        <span class="game-ph">{g.charAt(0).toUpperCase()}</span>
+                      {/if}
                       <span class="game-name">{g}</span>
                       {#if pl && pl.h > 0}<span class="game-h">{pl.h} {$t("h")}</span>{/if}
                     </div>
@@ -778,6 +797,43 @@
   .game-ph { position: absolute; top: 22%; left: 50%; transform: translateX(-50%); font-size: 34px; font-weight: 900; opacity: .9; }
   .game-name, .game-h { position: relative; }
   .game-star { color: #FFD45C; font-size: 11px; }
+  .game.has-cover { padding: 0; }
+  .game-cover { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transition: transform .3s cubic-bezier(.2,.8,.2,1); }
+  .game.has-cover .game-name { position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 8px 7px; background: linear-gradient(transparent, rgba(0,0,0,.75)); opacity: 0; transition: opacity .2s; }
+  .game.has-cover:hover .game-name { opacity: 1; }
+  .game.has-cover:hover .game-cover { transform: scale(1.05); }
+  .game.has-cover .game-h { position: absolute; top: 6px; right: 6px; background: rgba(0,0,0,.6); border-radius: 6px; padding: 1px 5px; }
+  .game:hover { transform: translateY(-2px); }
+
+  /* ---- editor: two columns (card on the left, details on the right) ---- */
+  .sheet.ed { width: min(980px, 96vw); height: min(720px, 92vh); max-height: 92vh; }
+  .sheet.ed .scroll { display: grid; grid-template-columns: minmax(280px, 340px) 1fr; grid-template-rows: 120px auto minmax(0, 1fr); overflow: hidden; }
+  .sheet.ed .banner { grid-column: 1; grid-row: 1; }
+  .sheet.ed .body { display: contents; }
+  .sheet.ed .avatar-wrap { grid-column: 1; grid-row: 2; margin: -44px 0 18px 22px; }
+  .field .track-name { text-transform: none; letter-spacing: normal; font-size: 13px; font-weight: 400; color: var(--fg-muted); }
+  .ed-left { grid-column: 1; grid-row: 3; padding: 0 22px 18px; overflow-y: auto; min-height: 0; }
+  .ed-right { grid-column: 2; grid-row: 1 / span 3; padding: 26px 26px 18px; border-left: 1px solid var(--border); overflow-y: auto; min-height: 0;
+    display: flex; flex-direction: column; }
+  .ed-right .buttons { margin-top: auto; padding-top: 16px; position: sticky; bottom: -18px; background: var(--bg-shell); padding-bottom: 2px; }
+  .ed-games { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 8px; margin: 2px 0 8px; }
+  .ed-game { position: relative; aspect-ratio: 3 / 4; border-radius: 10px; overflow: hidden; background: var(--gg); color: #fff;
+    display: flex; align-items: flex-end; padding: 6px; animation: fade-in .2s ease-out; }
+  .eg-cover { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .eg-bg { position: absolute; inset: -20%; width: 140%; height: 140%; object-fit: cover; filter: blur(14px) brightness(.7); }
+  .eg-ic { position: absolute; top: 16%; left: 50%; transform: translateX(-50%); width: 50%; aspect-ratio: 1; border-radius: 10px; }
+  .eg-ph { position: absolute; top: 20%; left: 50%; transform: translateX(-50%); font-size: 26px; font-weight: 900; }
+  .eg-name { position: relative; font-size: 11px; font-weight: 700; line-height: 1.15; text-shadow: 0 1px 2px rgba(0,0,0,.7); }
+  .eg-x { position: absolute; top: 4px; right: 4px; width: 20px; height: 20px; border-radius: 50%; border: none; cursor: pointer;
+    background: rgba(0,0,0,.6); color: #fff; font-size: 13px; line-height: 1; opacity: 0; transition: opacity .15s; }
+  .ed-game:hover .eg-x, .eg-x:focus-visible { opacity: 1; }
+  @media (max-width: 760px) {
+    .sheet.ed { height: auto; }
+    .sheet.ed .scroll { display: block; overflow-y: auto; }
+    .sheet.ed .body { display: block; padding: 0 18px 18px; margin-top: -44px; }
+    .sheet.ed .avatar-wrap { margin: 0 0 14px; }
+    .ed-left, .ed-right { padding: 0; border: none; overflow: visible; }
+  }
   .played-bar { flex: 0 0 70px; height: 5px; border-radius: 3px; background: var(--bg-input); overflow: hidden; }
   .played-bar span { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
   img.played-cover { object-fit: cover; }

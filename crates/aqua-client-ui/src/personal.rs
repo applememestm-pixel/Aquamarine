@@ -169,6 +169,42 @@ pub async fn game_icon(state: State<'_, StdMutex<AppState>>, id: String) -> Resu
     }
 }
 
+/// Portrait cover of a game, cached in `<data>/game-covers/`. `None` when the
+/// relay has none (then the UI draws a card from the icon).
+#[tauri::command]
+pub async fn game_cover(state: State<'_, StdMutex<AppState>>, id: String) -> Result<Option<String>, String> {
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) || id.len() > 24 {
+        return Ok(None);
+    }
+    let (dir, t) = {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        (s.data_dir.join("game-covers"), s.transport.clone())
+    };
+    let file = dir.join(format!("{id}.jpg"));
+    if file.exists() {
+        return Ok(Some(file.display().to_string()));
+    }
+    // Asked recently, nothing there: don't ask again for a day.
+    let none = dir.join(format!("{id}.none"));
+    if std::fs::metadata(&none).and_then(|m| m.modified()).ok()
+        .and_then(|t| std::time::SystemTime::now().duration_since(t).ok())
+        .is_some_and(|age| age < std::time::Duration::from_secs(24 * 3600)) {
+        return Ok(None);
+    }
+    let Some(t) = t else { return Ok(None) };
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    match t.game_cover(&id).await.map_err(|e| e.to_string())? {
+        Some(b) => {
+            std::fs::write(&file, b).map_err(|e| e.to_string())?;
+            Ok(Some(file.display().to_string()))
+        }
+        None => {
+            let _ = std::fs::write(&none, b"");
+            Ok(None)
+        }
+    }
+}
+
 // ---- wallpapers -------------------------------------------------------------
 
 fn wallpapers_dir(state: &State<'_, StdMutex<AppState>>) -> Result<std::path::PathBuf, String> {
@@ -293,4 +329,55 @@ mod tests {
         assert!(theme_path_ok("/x/a.aquatheme").is_ok());
         assert!(theme_path_ok("/x/a.sh").is_err());
     }
+}
+
+// ---- keyboard shortcuts (keybindings.json) -------------------------------------
+
+fn keybindings_file() -> Option<std::path::PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("APPDATA").map(std::path::PathBuf::from))
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
+        .map(|d| d.join("aquamarine").join("keybindings.json"))
+}
+
+/// The user's shortcut overrides (`{"settings": ["Ctrl+Comma"], …}`), if any.
+#[tauri::command]
+pub fn load_keybindings() -> Option<String> {
+    let s = std::fs::read_to_string(keybindings_file()?).ok()?;
+    (s.len() < 64 * 1024).then_some(s)
+}
+
+#[tauri::command]
+pub fn save_keybindings(json: String) -> Result<(), String> {
+    if json.len() > 64 * 1024 || serde_json::from_str::<serde_json::Value>(&json).is_err() {
+        return Err("bad keybindings".into());
+    }
+    let p = keybindings_file().ok_or("no config directory")?;
+    if let Some(d) = p.parent() {
+        std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&p, json).map_err(|e| e.to_string())
+}
+
+/// Open keybindings.json in the system's text editor (created if missing).
+#[tauri::command]
+pub fn open_keybindings_file() -> Result<String, String> {
+    let p = keybindings_file().ok_or("no config directory")?;
+    if !p.exists() {
+        if let Some(d) = p.parent() {
+            std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&p, "{\n}\n").map_err(|e| e.to_string())?;
+    }
+    let s = p.display().to_string();
+    #[cfg(target_os = "linux")]
+    let r = std::process::Command::new("xdg-open").arg(&s).spawn();
+    #[cfg(target_os = "macos")]
+    let r = std::process::Command::new("open").args(["-t", &s]).spawn();
+    #[cfg(target_os = "windows")]
+    let r = std::process::Command::new("notepad").arg(&s).spawn();
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    let r: std::io::Result<std::process::Child> = Err(std::io::Error::other("not supported here"));
+    r.map(|_| s).map_err(|e| e.to_string())
 }

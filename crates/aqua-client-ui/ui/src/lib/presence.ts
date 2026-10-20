@@ -59,6 +59,19 @@ export function peerStatus(p: Presence | undefined, now = Date.now()): string {
 /** Should this chat show the green "online" dot? Real people: only what
  *  their (privacy-filtered) presence says — so ghost / invisible works.
  *  Bots keep their static flag; Saved Messages never shows one. */
+/** Status circle of a chat in lists: people only ("online" | "idle" |
+ *  "dnd" | "offline"); groups, channels, servers, bots and Saved Messages
+ *  get none. */
+export function chatStatus(
+  c: { id: string; live: boolean; has_lock: boolean; channel?: boolean },
+  map: Record<string, Presence>,
+  now = Date.now(),
+): string | null {
+  if (c.id === "__saved__" || c.id.startsWith("grp_") || c.channel) return null;
+  if (!(c.live && c.has_lock)) return null;
+  return peerStatus(map[c.id], now);
+}
+
 export function chatOnline(
   c: { id: string; online: boolean; live: boolean; has_lock: boolean },
   map: Record<string, Presence>,

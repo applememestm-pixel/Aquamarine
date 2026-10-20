@@ -188,13 +188,13 @@
         ok: tr("Convert"),
       });
       if (!ok) return;
-      await commit((g) => { g.kind = "group"; g.settings.is_public = false; }, "converted the supergroup to a group");
+      await commit((g) => { g.kind = "group"; g.settings.is_public = false; }, "converted the server to a group");
     } else {
       await commit((g) => {
         g.kind = "supergroup";
         if (!(g.rooms ?? []).length) { S(g).rooms_enabled = true; g.rooms = DEFAULT_ROOMS.map((r) => ({ ...r })); }
-      }, "upgraded the group to a supergroup");
-      showToast(tr("Now a supergroup: rooms like Discord channels, public link, server tag, slow mode and admin log"), 5000);
+      }, "turned the group into a server");
+      showToast(tr("Now a server: rooms like Discord channels, public link, server tag, slow mode and admin log"), 5000);
     }
   }
 
@@ -411,7 +411,7 @@
     const u = addUser.trim().toLowerCase().replace(/^@/, "");
     if (!u || !group) return;
     if (group.members.some((m) => m.username === u)) { showToast(tr("Already here")); return; }
-    if (basic && group.members.length >= BASIC_LIMIT) { showToast(tr("A group can have at most 200 members — upgrade it to a supergroup in Edit → Group type"), 6000); return; }
+    if (basic && group.members.length >= BASIC_LIMIT) { showToast(tr("A group can have at most 200 members — turn it into a server in Edit → Group type"), 6000); return; }
     if (get(peerPresence)[u]?.ni) {
       try { await navigator.clipboard.writeText(shareLink(group)); } catch { /* ignore */ }
       showToast(`@${u} only lets certain people add them to groups — the invite link is copied, send it to them`, 7000);
@@ -631,7 +631,7 @@
           {/if}
           <div class="hero-t">
             <h2>{group.title} {#if group.clan}<ClanTag tag={{ ...group.clan, gid: group.id, title: group.title, owner: group.owner }} size="md" />{/if}</h2>
-            <div class="sub">{#if !isChannel}<span class="kind">{$t(basic ? "Group" : "Supergroup")}</span> · {/if}{$tn(group.members.length, isChannel ? "subscriber" : "member")}{$t(group.settings.is_public ? " · public" : " · private")}{group.settings.protected_content ? $t(" · protected") : ""}</div>
+            <div class="sub">{#if !isChannel}<span class="kind">{$t(basic ? "Group" : "Server")}</span> · {/if}{$tn(group.members.length, isChannel ? "subscriber" : "member")}{$t(group.settings.is_public ? " · public" : " · private")}{group.settings.protected_content ? $t(" · protected") : ""}</div>
           </div>
         </div>
         {#if group.description}<p class="desc">{group.description}</p>{/if}
@@ -762,11 +762,11 @@
             <div class="ct">{$t("Chat type")}</div>
             <div class="seg">
               <button class:active={basic} onclick={() => setKind("group")} disabled={busy}>{$t("Group")}</button>
-              <button class:active={!basic} onclick={() => setKind("supergroup")} disabled={busy}>{$t("Supergroup")}</button>
+              <button class:active={!basic} onclick={() => setKind("supergroup")} disabled={busy}>{$t("Server")}</button>
             </div>
             <div class="note">{$t(basic
               ? "Group: private, up to 200 members. Upgrade for a public link, server tag, slow mode, hidden members and the admin log."
-              : "Supergroup: up to 200 000 members, public link, server tag, slow mode, hidden members and the admin log.")}</div>
+              : "Server: up to 200 000 members, rooms, public link, server tag, slow mode, hidden members and the admin log.")}</div>
           </div>
         {/if}
         <div class="card">

@@ -6,7 +6,7 @@
     const q = p ? p.replace(/\[ce:[^\]\s]*?\/([^\]\s/_]+)_[^\]\s]*\]/g, "$1").replace(/\[ce:[^\]]*$/, "…") : p;
     return q && hasMarkup(q) ? plainText(q).replace(/\s*\n\s*/g, " ") : q;
   }
-  import { chatOnline, presenceNow } from "../presence";
+  import { chatStatus, presenceNow } from "../presence";
   import { t, tr } from "../i18n";
   import { avatars, peerCards, clans } from "../people";
   import ClanTag from "./ClanTag.svelte";
@@ -78,6 +78,14 @@
     if (dragPin?.active) { movePin(dragPin.id, dragPin.over); suppressClick = true; setTimeout(() => (suppressClick = false), 0); }
     dragPin = null;
   }
+
+  // ---- A server (supergroup) is open: the list shrinks to avatars, like
+  // Discord's server column, and grows back for any other chat. ----
+  let compactPinned = $state(false); // the user opened it wide while in a server
+  const inServer = $derived(!!$activeId && $groupMap[$activeId]?.kind === "supergroup");
+  const compact = $derived(inServer && !compactPinned);
+  $effect(() => { if (!inServer) compactPinned = false; });
+  $effect(() => { document.documentElement.classList.toggle("list-compact", compact); });
 
   // ---- Resizable list (drag the right edge) ----
   const LW_KEY = "aqua.listWidth";
@@ -233,7 +241,14 @@
   }
 </script>
 
-<aside class="list" class:resizing>
+<aside class="list" class:resizing class:compact>
+  {#if compact}
+    <button class="compact-expand" onclick={() => (compactPinned = true)} title={$t("Show the chat list")} aria-label={$t("Show the chat list")}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+  {:else if inServer}
+    <button class="compact-collapse" onclick={() => (compactPinned = false)} title={$t("Collapse to avatars")} aria-label={$t("Collapse to avatars")}>‹</button>
+  {/if}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="resize-handle" onpointerdown={startResize} ondblclick={resetWidth} title={$t("Drag to resize · double-click to reset")}></div>
   <div class="list-header">
@@ -355,8 +370,10 @@
       </button>
     {/if}
     {#each shownChats as c, ci (c.id)}
+      {@const st = chatStatus(c, $peerPresence, $presenceNow)}
       <button
         class="chat-item"
+        title={compact ? c.name : undefined}
         class:active={c.id === $activeId}
         class:kb={ci === kbIndex}
         class:pinned={$pinnedChats.includes(c.id)}
@@ -369,9 +386,11 @@
         onclick={() => { if (!suppressClick) void selectChat(c.id); }}
         oncontextmenu={(e) => openCtx(e, c.id)}
       >
-        <div class="avatar sz-44" class:online={chatOnline(c, $peerPresence, $presenceNow)} style="--gradient: {c.gradient}">
+        <div class="avatar sz-44" style="--gradient: {c.gradient}">
           {c.letter}
           {#if $avatars[c.id]}<img class="ava-img" src={$avatars[c.id]} alt="" loading="lazy" />{/if}
+          {#if st}<span class="st-dot {st}" title={$t(st === "online" ? "Online" : st === "idle" ? "Idle" : st === "dnd" ? "Do not disturb" : "Offline")}></span>{/if}
+          {#if compact && c.unread > 0 && c.id !== $activeId}<span class="cmp-badge" class:muted={c.channel || $mutedChats.has(c.id)}>{c.unread > 99 ? "99+" : c.unread}</span>{/if}
         </div>
         <div class="chat-body">
           <div class="chat-row-1">
@@ -477,6 +496,20 @@
   .chat-ctx button:hover { background: var(--accent-soft); color: var(--accent); }
   .chat-preview.activity { color: var(--accent); }
   .chat-preview.activity b { font-weight: 700; }
+  /* Compact: avatars only (a server is open). */
+  .list.compact .list-header, .list.compact .folder-strip, .list.compact .chat-body,
+  .list.compact .resize-handle, .list.compact .join-card { display: none; }
+  .list.compact .chats { padding: 6px 0; scrollbar-width: none; }
+  .list.compact .chat-item { position: relative; justify-content: center; padding: 6px 0; margin: 2px 8px; border-radius: 16px; }
+  .list.compact .chat-item.active { background: var(--bg-active); box-shadow: none; }
+  .list.compact .chat-item.active::before { content: ""; position: absolute; left: -8px; top: 50%; width: 4px; height: 26px; margin-top: -13px; border-radius: 0 4px 4px 0; background: var(--accent); }
+  .compact-expand { margin: 12px auto 4px; width: 44px; height: 36px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg-input); color: var(--fg-muted); cursor: pointer; display: grid; place-items: center; flex-shrink: 0; transition: color .15s, border-color .15s; }
+  .compact-expand:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+  .compact-expand svg { width: 18px; height: 18px; }
+  .compact-collapse { position: absolute; top: 50%; right: -12px; z-index: 7; width: 22px; height: 44px; margin-top: -22px; border-radius: 0 10px 10px 0; border: 1px solid var(--border); border-left: none; background: var(--bg-list); color: var(--fg-muted); cursor: pointer; font-size: 16px; }
+  .compact-collapse:hover { color: var(--accent); }
+  .cmp-badge { position: absolute; right: -4px; bottom: -4px; z-index: 2; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; background: #F23F43; color: #fff; font-size: 11px; font-weight: 800; line-height: 18px; text-align: center; border: 2px solid var(--bg-list); }
+  .cmp-badge.muted { background: var(--fg-dim); }
   .list {
     position: relative;
     background: var(--bg-list);

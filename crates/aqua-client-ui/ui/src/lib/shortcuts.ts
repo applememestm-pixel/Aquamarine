@@ -12,6 +12,10 @@ import { openSettings, settingsOpen } from "./components/SettingsPanel.svelte";
 import { openProfile } from "./components/ProfileModal.svelte";
 import { toggleCallMute, toggleCallDeafen } from "./components/CallModal.svelte";
 import { openNewChatDialog } from "./newChat";
+import { matches, formattingAction, loadKeybindingsFile, type ActionId } from "./keybindings";
+
+/** The cheat-sheet is waiting for a new key combo: global keys stay quiet. */
+export const rebinding = writable<string | null>(null);
 
 export const shortcutsOpen = writable(false);
 
@@ -28,37 +32,7 @@ export function emit(name: string, detail?: unknown) {
   window.dispatchEvent(new CustomEvent(name, { detail }));
 }
 
-export interface ShortcutDoc { keys: string; what: string; group: string }
-export const SHORTCUTS: ShortcutDoc[] = [
-  { group: "Navigation", keys: "Ctrl+K", what: "Search chats and people" },
-  { group: "Navigation", keys: "↑ / ↓ / Enter", what: "Pick a chat from the search results" },
-  { group: "Navigation", keys: "Alt+↑ / Alt+↓", what: "Previous / next chat" },
-  { group: "Navigation", keys: "Ctrl+Tab / Ctrl+Shift+Tab", what: "Next / previous chat" },
-  { group: "Navigation", keys: "Ctrl+1…9", what: "Jump to chat 1–9 in the list" },
-  { group: "Navigation", keys: "Ctrl+0", what: "Saved Messages" },
-  { group: "Navigation", keys: "Alt+1…4", what: "Chats · Calls · Files · Contacts" },
-  { group: "Navigation", keys: "Ctrl+N", what: "New chat" },
-  { group: "Chat", keys: "A…Z", what: "Start typing — focuses the message box" },
-  { group: "Chat", keys: "Ctrl+F", what: "Search in this chat" },
-  { group: "Chat", keys: "↑", what: "Edit your last message (empty box)" },
-  { group: "Chat", keys: "Ctrl+↑ / Ctrl+↓", what: "Reply to an earlier / later message" },
-  { group: "Chat", keys: "Esc", what: "Cancel reply / edit, close panels" },
-  { group: "Chat", keys: "Ctrl+E", what: "Emoji, stickers & GIFs" },
-  { group: "Chat", keys: "Ctrl+End", what: "Jump to the latest message" },
-  { group: "Chat", keys: "Ctrl+Shift+C", what: "Call this chat" },
-  { group: "Formatting", keys: "Ctrl+B / Ctrl+I / Ctrl+U", what: "Bold / italic / underline (select text first)" },
-  { group: "Formatting", keys: "Ctrl+Shift+X", what: "Strikethrough" },
-  { group: "Formatting", keys: "Ctrl+Shift+P", what: "Spoiler" },
-  { group: "Formatting", keys: "Ctrl+Shift+M", what: "Monospace" },
-  { group: "Formatting", keys: "Ctrl+K", what: "Add a link" },
-  { group: "Formatting", keys: "Ctrl+Shift+N", what: "Clear formatting" },
-  { group: "Chat", keys: "/", what: "Commands: /article, /poll, /gif, /call…" },
-  { group: "Calls", keys: "Ctrl+Shift+M", what: "Mute / unmute" },
-  { group: "Calls", keys: "Ctrl+Shift+D", what: "Deafen / undeafen" },
-  { group: "App", keys: "Ctrl+,", what: "Settings" },
-  { group: "App", keys: "Ctrl+P", what: "Your profile" },
-  { group: "App", keys: "Ctrl+/ / F1", what: "This cheat-sheet" },
-];
+export { ACTIONS, FIXED } from "./keybindings";
 
 function isEditable(el: Element | null): boolean {
   if (!el) return false;
@@ -93,50 +67,53 @@ function onKeyDown(e: KeyboardEvent) {
   const ctrl = e.ctrlKey || e.metaKey;
   const code = e.code;
   let handled = true;
+  const is = (id: ActionId) => matches(e, id);
+  // The cheat-sheet is capturing a new combo for an action.
+  if (get(rebinding)) return;
 
-  // Telegram formatting keys (Ctrl+K link, Ctrl+Shift+M/X/P/N) on selected
-  // text belong to the text field, not to the app-wide shortcuts.
-  if (ctrl && formattingSelection() && (code === "KeyK" || (e.shiftKey && ["KeyM", "KeyX", "KeyP", "KeyN"].includes(code)))) return;
+  // Formatting keys on selected text belong to the text field, not to the
+  // app-wide shortcuts (Ctrl+K there adds a link instead of searching).
+  if (formattingSelection() && formattingAction(e)) return;
 
-  if ((ctrl && (e.key === "/" || code === "Slash")) || e.key === "F1") {
+  if (is("cheatsheet")) {
     shortcutsOpen.update((v) => !v);
-  } else if (ctrl && e.shiftKey && code === "KeyM") {
+  } else if (is("callMute")) {
     toggleCallMute();
-  } else if (ctrl && e.shiftKey && code === "KeyD") {
+  } else if (is("callDeafen")) {
     toggleCallDeafen();
-  } else if (ctrl && e.shiftKey && code === "KeyC") {
+  } else if (is("call")) {
     emit("aqua:call");
-  } else if (ctrl && code === "KeyK") {
+  } else if (is("search")) {
     activeTab.set("chats");
     queueMicrotask(() => document.querySelector<HTMLInputElement>("#search")?.focus());
-  } else if (ctrl && code === "KeyF") {
+  } else if (is("chatSearch")) {
     emit("aqua:chat-search");
-  } else if (ctrl && code === "KeyE") {
+  } else if (is("emoji")) {
     emit("aqua:toggle-emoji");
-  } else if (ctrl && code === "KeyN") {
+  } else if (is("newChat")) {
     openNewChatDialog();
-  } else if (ctrl && code === "KeyP") {
+  } else if (is("profile")) {
     openProfile();
-  } else if (ctrl && e.key === ",") {
+  } else if (is("settings")) {
     openSettings();
-  } else if (ctrl && code === "End") {
+  } else if (is("jumpBottom")) {
     emit("aqua:jump-bottom");
-  } else if (ctrl && code === "Tab") {
-    moveChat(e.shiftKey ? -1 : 1);
-  } else if (e.altKey && !ctrl && (code === "ArrowUp" || code === "ArrowDown")) {
-    moveChat(code === "ArrowUp" ? -1 : 1);
-  } else if (ctrl && !e.shiftKey && /^Digit[0-9]$/.test(code)) {
+  } else if (is("nextChat")) {
+    moveChat(1);
+  } else if (is("prevChat")) {
+    moveChat(-1);
+  } else if (is("savedMessages")) {
+    activeTab.set("chats");
+    void selectChat("__saved__");
+    queueMicrotask(() => emit("aqua:focus-composer"));
+  } else if (is("tabChats") || is("tabCalls") || is("tabFiles") || is("tabContacts")) {
+    activeTab.set(is("tabChats") ? "chats" : is("tabCalls") ? "calls" : is("tabFiles") ? "files" : "contacts");
+  } else if (ctrl && !e.shiftKey && !e.altKey && /^Digit[1-9]$/.test(code)) {
     const n = Number(code.slice(5));
     activeTab.set("chats");
-    if (n === 0) void selectChat("__saved__");
-    else {
-      const c = get(orderedChats)[n - 1];
-      if (c) void selectChat(c.id);
-    }
+    const c = get(orderedChats)[n - 1];
+    if (c) void selectChat(c.id);
     queueMicrotask(() => emit("aqua:focus-composer"));
-  } else if (e.altKey && !ctrl && /^Digit[1-4]$/.test(code)) {
-    const tabs: NavTab[] = ["chats", "calls", "files", "contacts"];
-    activeTab.set(tabs[Number(code.slice(5)) - 1]);
   } else if (
     !ctrl && !e.altKey && e.key.length === 1 && !isEditable(document.activeElement) && !overlayOpen()
   ) {
@@ -155,6 +132,7 @@ function onKeyDown(e: KeyboardEvent) {
 
 /** Install the global key handler. Returns an uninstaller. */
 export function initShortcuts(): () => void {
+  void loadKeybindingsFile();
   window.addEventListener("keydown", onKeyDown, true);
   return () => window.removeEventListener("keydown", onKeyDown, true);
 }

@@ -78,6 +78,10 @@ pub struct FileEnvelope {
     /// generic file. Added in v1.1; older clients that don't know
     /// about this field just render the attachment as a plain file.
     pub category: Option<String>,
+    /// For stickers: the pack it comes from — `tg:<short name>` (a Telegram
+    /// pack anyone can add) or `own:<title>` (the sender's own pack).
+    /// Older clients ignore it.
+    pub pack: Option<String>,
 }
 
 // On the wire, the envelope is a small compact JSON object. Fields kept
@@ -93,6 +97,8 @@ struct WireEnvelope<'a> {
     mime:  Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cat:   Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pack:  Option<&'a str>,
 }
 
 impl FileEnvelope {
@@ -106,6 +112,7 @@ impl FileEnvelope {
             size:  self.size,
             mime:  self.mime.as_deref(),
             cat:   self.category.as_deref(),
+            pack:  self.pack.as_deref(),
         };
         let json = serde_json::to_string(&wire).expect("wire envelope serializes");
         format!("{OFFER_PREFIX}{json}")
@@ -130,6 +137,8 @@ impl FileEnvelope {
             mime: Option<String>,
             #[serde(default)]
             cat: Option<String>,
+            #[serde(default)]
+            pack: Option<String>,
         }
         let w: Owned = serde_json::from_str(payload)
             .map_err(|e| FileError::BadJson(e.to_string()))?;
@@ -149,6 +158,7 @@ impl FileEnvelope {
             size: w.size,
             mime: w.mime,
             category: w.cat,
+            pack: w.pack.filter(|p| p.len() <= 128),
         })
     }
 }
@@ -198,6 +208,7 @@ pub fn encrypt_file_with_category(
             size: plaintext.len() as u64,
             mime,
             category,
+            pack: None,
         },
         ciphertext,
     ))

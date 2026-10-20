@@ -262,8 +262,8 @@ pub async fn connect_to_server(
 // ---------- User directory: email registration + search --------------------
 
 #[tauri::command]
-pub async fn request_email_code(server_url: String, email: String) -> Result<aqua_client_core::CodeRequest, String> {
-    aqua_client_core::request_email_code_ex(&server_url, &email)
+pub async fn request_email_code(server_url: String, email: String, purpose: Option<String>) -> Result<aqua_client_core::CodeRequest, String> {
+    aqua_client_core::request_email_code_ex(&server_url, &email, purpose.as_deref().unwrap_or(""))
         .await
         .map_err(|e| e.to_string())
 }
@@ -1484,6 +1484,18 @@ fn materialize_picked(app: &AppHandle, data_dir: &std::path::Path, path: &str) -
 
 /// Shared implementation for attach_file / send_sticker / send_gif.
 /// `category` becomes the inline-render hint on both ends.
+/// Which pack a sticker file belongs to: `tg:<short name>` for Telegram
+/// packs (anyone can add them), `own:<folder>` for packs made here.
+fn sticker_pack_ref(path: &std::path::Path) -> Option<String> {
+    let dir = path.parent()?;
+    let meta = crate::media::read_pack_json(dir);
+    if let Some(name) = meta.get("name").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+        return Some(format!("tg:{name}"));
+    }
+    let folder = dir.file_name()?.to_str()?;
+    (folder != "stickers").then(|| format!("own:{folder}"))
+}
+
 async fn attach_file_impl(
     state: State<'_, StdMutex<AppState>>,
     app: AppHandle,
@@ -1558,6 +1570,7 @@ async fn attach_file_impl(
                 size,
                 mime: mime.clone(),
                 category: category.clone(),
+                pack: if category.as_deref() == Some("sticker") { sticker_pack_ref(&path) } else { None },
                 saved_at: Some(saved_path),
             },
         };
@@ -1579,6 +1592,10 @@ async fn attach_file_impl(
     let (envelope, ciphertext) =
         encrypt_file_with_category(&bytes, &filename, mime, category.clone())
             .map_err(|e| format!("encrypt_file: {e}"))?;
+    let mut envelope = envelope;
+    if category.as_deref() == Some("sticker") {
+        envelope.pack = sticker_pack_ref(&path);
+    }
     let cid = envelope.cid.clone();
     let size = envelope.size;
 
@@ -1810,6 +1827,7 @@ pub async fn download_file(
                     size: *size,
                     mime: mime.clone(),
                     category: category.clone(),
+                    pack: None,
                 }
             }
             _ => return Err("message is not a file".into()),
@@ -1988,7 +2006,7 @@ pub async fn fetch_attachment(
     let envelope = FileEnvelope {
         cid: media.cid.clone(), key, nonce,
         filename: media.name.clone(), size: media.size,
-        mime: media.mime.clone(), category: Some(media.kind.clone()),
+        mime: media.mime.clone(), category: Some(media.kind.clone()), pack: None,
     };
     let transport = {
         let s = state.lock().map_err(|e| e.to_string())?;
@@ -2513,6 +2531,13 @@ pub fn own_device_message(app: &AppHandle, to: &str, inner: &str) {
         }
         drop(s);
         let _ = app.emit("aqua://chats_updated", ());
+        return;
+    }
+    if let Some(body) = inner.strip_prefix(crate::autodelete::TTL_PREFIX) {
+        crate::autodelete::handle_control(&mut s, to, body, "");
+        drop(s);
+        let _ = app.emit("aqua://chats_updated", ());
+        let _ = app.emit("aqua://own_sent", serde_json::json!({ "peer_id": to }));
         return;
     }
     // Per-device state (typing, read marks, presence…) isn't mirrored.
@@ -3069,6 +3094,19 @@ async fn on_incoming_envelope(
                 peer_id: from, text: String::new(), time: hhmm_now(), is_new_chat: false,
             });
         }
+        return;
+    }
+
+    // Auto-delete timer of this chat, set by the peer.
+    if let Some(body) = text.strip_prefix(crate::autodelete::TTL_PREFIX) {
+        {
+            let mut s = match state.lock() { Ok(s) => s, Err(_) => return };
+            crate::autodelete::handle_control(&mut s, &from, body, &from);
+        }
+        let _ = app.emit("aqua://chats_updated", ());
+        let _ = app.emit("aqua://incoming", IncomingEventPayload {
+            peer_id: from, text: String::new(), time: hhmm_now(), is_new_chat: false,
+        });
         return;
     }
 

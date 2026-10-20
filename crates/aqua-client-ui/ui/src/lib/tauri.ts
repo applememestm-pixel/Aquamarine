@@ -26,6 +26,7 @@ import type {
   Activity,
   SendResult,
   StickerImportReport,
+  StickerPack,
 } from "./types";
 
 export interface LinkPreview {
@@ -61,6 +62,8 @@ export interface IncomingPayload {
   is_new_chat: boolean;
 }
 
+export interface GpuStatus { mode: "auto" | "on" | "off"; software: boolean; reason: string; dmabuf?: boolean; dmabuf_pending?: boolean }
+
 /** One device of my account (Settings → Devices). */
 export interface DeviceInfo {
   addr: string; id: string; primary: boolean; name: string; added: number; online: boolean; current: boolean;
@@ -79,7 +82,8 @@ export const api = {
   setNetworkProxy:    (url: string): Promise<InitInfo>                             => invoke("set_network_proxy", { url }),
 
   // Email registration + user directory
-  requestEmailCode:   (server_url: string, email: string): Promise<{ dev_code: string | null; delivery_failed: boolean; error: string | null }> => invoke("request_email_code", { serverUrl: server_url, email }),
+  /** purpose: the relay answers at once if the e-mail already has an account (signup) or has none (signin/reset). */
+  requestEmailCode:   (server_url: string, email: string, purpose?: "signup" | "signin" | "reset"): Promise<{ dev_code: string | null; delivery_failed: boolean; error: string | null }> => invoke("request_email_code", { serverUrl: server_url, email, purpose: purpose ?? null }),
   verifyEmailCode:    (server_url: string, email: string, code: string): Promise<string> => invoke("verify_email_code", { serverUrl: server_url, email, code }),
   registerAccount:    (server_url: string, username: string, ticket: string, display_name: string, about: string, phone: string, password?: string, email?: string): Promise<void> => invoke("register_account", { serverUrl: server_url, username, ticket, displayName: display_name, about, phone, password: password || null, email: email || null }),
   listDevices:        (): Promise<DeviceInfo[]> => invoke("list_devices"),
@@ -90,6 +94,17 @@ export const api = {
   backupStatus:       (): Promise<BackupStatus> => invoke("backup_status"),
   backupEnable:       (password: string): Promise<string> => invoke("backup_enable", { password }),
   backupPhrase:       (): Promise<string | null> => invoke("backup_phrase"),
+  /** Auto-delete timer of a chat in seconds (0 = off). */
+  getChatTtl:         (peer_id: string): Promise<number> => invoke("get_chat_ttl", { peerId: peer_id }),
+  /** Set a 1:1 chat's auto-delete timer (shared with the other person). */
+  setChatTtl:         (peer_id: string, secs: number): Promise<void> => invoke("set_chat_ttl", { peerId: peer_id, secs }),
+  /** Does this device know the 24-word key / does the relay have it? */
+  recoveryStatus:     (): Promise<{ local: boolean; server: boolean | null }> => invoke("recovery_status"),
+  /** Ensure a recovery key exists, register it on the relay, return the words. */
+  recoveryCreate:     (): Promise<string> => invoke("recovery_create"),
+  /** Forgotten password: e-mail ticket + 24 words (or "") → new password. */
+  passwordReset:      (server_url: string, ticket: string, email: string, phrase: string, password: string): Promise<string> =>
+    invoke("password_reset", { serverUrl: server_url, ticket, email, phrase, password }),
   backupNow:          (ui: string, force: boolean): Promise<BackupStatus> => invoke("backup_now", { ui, force }),
   backupDisable:      (): Promise<void> => invoke("backup_disable"),
   backupRestore:      (server_url: string, ticket: string, password: string, email: string, phrase?: string): Promise<{ found: boolean; need_phrase: boolean; username: string | null; email: string | null; ui: string }> =>
@@ -132,6 +147,7 @@ export const api = {
   listBots:           (): Promise<BotInfo[]>                                           => invoke("list_bots"),
   gamesSearch:        (q: string): Promise<{ id: string; name: string; has_icon: boolean }[]> => invoke("games_search", { q }),
   gameIcon:           (id: string): Promise<string | null>                              => invoke("game_icon", { id }),
+  gameCover:          (id: string): Promise<string | null> => invoke("game_cover", { id }),
   saveWallpaper:      (name: string, bytes: number[]): Promise<string>                  => invoke("save_wallpaper", { name, bytes }),
   listWallpapers:     (): Promise<string[]>                                            => invoke("list_wallpapers"),
   deleteWallpaper:    (path: string): Promise<void>                                    => invoke("delete_wallpaper", { path }),
@@ -184,7 +200,10 @@ export const api = {
   openExternal:       (url: string): Promise<void>                                  => invoke("open_external", { url }),
   uploadAttachment:   (peer_id: string, file_path: string, keep?: boolean): Promise<ArticleMedia> => invoke("upload_attachment", { peerId: peer_id, filePath: file_path, keep: keep ?? null }),
   prepareBannerVideo: (path: string): Promise<string>                                  => invoke("prepare_banner_video", { path }),
-  gpuStatus:          (): Promise<{ mode: "auto" | "on" | "off"; software: boolean; reason: string }> => invoke("gpu_status"),
+  gpuStatus:          (): Promise<GpuStatus> => invoke("gpu_status"),
+  setDmabuf:          (on: boolean): Promise<void> => invoke("set_dmabuf", { on }),
+  confirmDmabuf:      (): Promise<void> => invoke("confirm_dmabuf"),
+  restartApp:         (): Promise<void> => invoke("restart_app"),
   setGpuMode:         (mode: "auto" | "on" | "off"): Promise<void>                     => invoke("set_gpu_mode", { mode }),
   fetchAttachment:    (media: ArticleMedia): Promise<string>                         => invoke("fetch_attachment", { media }),
   allowMediaPreview:  (path: string): Promise<void>                                  => invoke("allow_media_preview", { path }),
@@ -210,6 +229,7 @@ export const api = {
   // Import a Telegram sticker pack (link / @name / short name) using a
   // Telegram bot token. Downloads straight from the Telegram Bot API into
   // the local stickers library; never touches our own relay.
+  packPreview:        (pack_ref: string): Promise<{ ref: string; title: string; kind: string; installed: boolean; local: StickerPack | null; server: Record<string, unknown> | null }> => invoke("pack_preview", { packRef: pack_ref }),
   serverPacks:        (): Promise<{ telegram: boolean; packs: { name: string; title: string; type: string; count: number }[] }> => invoke("server_packs"),
   importPackViaServer: (link: string): Promise<StickerImportReport>                  => invoke("import_pack_via_server", { link }),
   packFilePath:       (name: string, file: string): Promise<string>                  => invoke("pack_file_path", { name, file }),

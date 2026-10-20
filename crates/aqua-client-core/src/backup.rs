@@ -142,6 +142,26 @@ pub fn auth_secret(password: &str, email: &str) -> String {
 
 // ---------------------------------------------------------------- recovery key
 
+/// What the relay keeps to recognise the recovery key at a password reset
+/// (it stores only a hash of this). HKDF with its own label, so it can't
+/// open the backup. Same 24 words → same check.
+pub fn recovery_check(phrase: &str) -> Result<String, BackupError> {
+    let mut e = phrase_to_entropy(phrase)?;
+    let mut out = [0u8; 32];
+    Hkdf::<Sha256>::new(None, &e).expand(b"aquamarine account recovery v1", &mut out).expect("hkdf");
+    e.zeroize();
+    Ok(hex::encode(out))
+}
+
+/// A fresh 24-word recovery key.
+pub fn new_phrase() -> String {
+    let mut rk = [0u8; 32];
+    OsRng.fill_bytes(&mut rk);
+    let p = entropy_to_phrase(&rk);
+    rk.zeroize();
+    p
+}
+
 fn wordlist() -> Vec<&'static str> {
     WORDS.lines().map(str::trim).filter(|w| !w.is_empty()).collect()
 }
@@ -190,10 +210,19 @@ pub fn phrase_to_entropy(phrase: &str) -> Result<[u8; 32], BackupError> {
 /// New backup keys for this account. Returns the keys to keep and the
 /// 24-word recovery key to show the user once.
 pub fn new_keys(password: &str) -> (Keys, String) {
-    let mut dek = vec![0u8; 32];
-    OsRng.fill_bytes(&mut dek);
     let mut rk = [0u8; 32];
     OsRng.fill_bytes(&mut rk);
+    new_keys_with(password, rk)
+}
+
+/// Like [`new_keys`], keeping a recovery key the user already has.
+pub fn new_keys_with_phrase(password: &str, phrase: &str) -> Result<(Keys, String), BackupError> {
+    Ok(new_keys_with(password, phrase_to_entropy(phrase)?))
+}
+
+fn new_keys_with(password: &str, mut rk: [u8; 32]) -> (Keys, String) {
+    let mut dek = vec![0u8; 32];
+    OsRng.fill_bytes(&mut dek);
     let mut salt = vec![0u8; 16];
     OsRng.fill_bytes(&mut salt);
     let kdf = Kdf { salt, m_kib: 64 * 1024, t: 3, p: 1 };
@@ -216,6 +245,14 @@ pub fn rewrap_password(keys: &mut Keys, password: &str) {
     keys.header.kdf.salt = salt;
     let kek = argon(password, &keys.header.kdf.salt, keys.header.kdf.m_kib, keys.header.kdf.t, keys.header.kdf.p);
     keys.header.pw = wrap(&kek, &keys.dek, b"pw");
+}
+
+/// Wrap the data key under another recovery key (the device lost the old one).
+pub fn rewrap_recovery(keys: &mut Keys, phrase: &str) -> Result<(), BackupError> {
+    let mut e = phrase_to_entropy(phrase)?;
+    keys.header.rk = wrap(&recovery_kek(&e), &keys.dek, b"rk");
+    e.zeroize();
+    Ok(())
 }
 
 // ---------------------------------------------------------------- blobs
@@ -290,6 +327,21 @@ pub fn open_with_recovery(blob: &[u8], phrase: &str) -> Result<(Vec<u8>, Keys), 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_check_and_rewrap() {
+        let p = new_phrase();
+        assert_eq!(recovery_check(&p).unwrap(), recovery_check(&format!("  {}  ", p.to_uppercase())).unwrap());
+        assert_ne!(recovery_check(&p).unwrap(), recovery_check(&new_phrase()).unwrap());
+        let (mut keys, p1) = new_keys_with_phrase("pw", &p).unwrap();
+        assert_eq!(p1, p);
+        let p2 = new_phrase();
+        rewrap_recovery(&mut keys, &p2).unwrap();
+        let blob = seal(&keys, b"x");
+        assert!(open_with_recovery(&blob, &p).is_err());
+        assert_eq!(open_with_recovery(&blob, &p2).unwrap().0, b"x");
+        assert_eq!(open_with_password(&blob, "pw").unwrap().0, b"x");
+    }
 
     #[test]
     fn wordlist_is_bip39() {

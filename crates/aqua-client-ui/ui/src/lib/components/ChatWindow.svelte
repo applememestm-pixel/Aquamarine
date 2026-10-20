@@ -35,7 +35,9 @@
   import { notePeerProfileVersion, avatars, clans } from "../people";
   import ClanTag from "./ClanTag.svelte";
   import { keepOnScreen } from "../actions";
-  import { ghost } from "../ghost";
+  import { openPackSheet } from "./PackSheet.svelte";
+  import { ghost, noReceiptChats, setReceipts } from "../ghost";
+  import { TTL_PRESETS, ttlLabel, ttlShort, ttlNote } from "../ttl";
   import GroupCallPanel from "./GroupCallPanel.svelte";
   import { groupCall, activeGroupCalls, joinGroupCall } from "../groupCall";
   import { postBlock, tagOf, canSendKind, isAdmin, can, roomsOf, setOpenRoom } from "../groupRules";
@@ -956,6 +958,42 @@
   let isGroup = $derived($activeChat?.id?.startsWith("grp_") ?? false);
   let activeGroup = $derived($activeChat ? $groupMap[$activeChat.id] : undefined);
 
+  // ---- Auto-delete timer + read receipts of this chat (header ⏱ menu) ----
+  let chatTtl = $state(0);
+  let ttlMenu = $state(false);
+  $effect(() => {
+    const id = $activeChat?.id;
+    void $chats;
+    ttlMenu = false;
+    if (!id) { chatTtl = 0; return; }
+    const g = $groupMap[id];
+    if (g) { chatTtl = g.settings.ttl ?? 0; return; }
+    api.getChatTtl(id).then((v) => { if ($activeChat?.id === id) chatTtl = v; }).catch(() => { chatTtl = 0; });
+  });
+  /** May I change this chat's timer? (1:1 with a live session; group admins) */
+  let ttlEditable = $derived(
+    !!$activeChat && $activeChat.id !== "__saved__" &&
+    (activeGroup ? isAdmin(activeGroup, myUsername) : $activeChat.live && $activeChat.has_lock),
+  );
+  async function setTtl(secs: number) {
+    const chat = $activeChat;
+    ttlMenu = false;
+    if (!chat || secs === chatTtl) return;
+    try {
+      if (activeGroup) {
+        const g = JSON.parse(JSON.stringify(activeGroup));
+        g.settings.ttl = secs;
+        g.log = [...(g.log ?? []), { at: new Date().toLocaleString(), by: myUsername, text: secs ? `set auto-delete to ${ttlLabel(secs)}` : "turned off auto-delete" }].slice(-200);
+        await api.updateGroup(g);
+        await refreshGroups();
+      } else {
+        await api.setChatTtl(chat.id, secs);
+        await loadActiveMessages();
+      }
+      chatTtl = secs;
+    } catch (e) { showToast(String(e)); }
+  }
+
   // ---- server rules / welcome note (once per change) ---------------------
   const rulesKey = (g: Group) => `aqua.rulesSeen.${g.id}`;
   const rulesHash = (g: Group) => { let h = 0; for (const c of `${g.rules ?? ""}|${g.welcome ?? ""}`) h = (h * 31 + c.charCodeAt(0)) | 0; return String(h); };
@@ -1828,7 +1866,7 @@
   $effect(() => {
     const chat = $activeChat;
     void $activeMessages.length;
-    if (chat?.live && !chat.id.startsWith("grp_") && !$ghost.noReadReceipts && $activeMessages.some((m) => m.from !== "me")) {
+    if (chat?.live && !chat.id.startsWith("grp_") && !$ghost.noReadReceipts && !$noReceiptChats.has(chat.id) && $activeMessages.some((m) => m.from !== "me")) {
       void api.sendControl(chat.id, "[seen:v1]{}");
     }
   });
@@ -2056,6 +2094,36 @@
           <button class="icon-btn" title={$t("Voice call")} onclick={startVoiceCall}>{@html icons.phone}</button>
           <button class="icon-btn" title={$t("Video call (coming soon)")}>{@html icons.video}</button>
         {/if}
+        {#if ttlEditable || chatTtl}
+          <div class="ttl-wrap">
+            <button class="icon-btn ttl-btn" class:active={ttlMenu} class:on={chatTtl > 0}
+              title={chatTtl ? tr("Auto-delete: {t}", { t: ttlLabel(chatTtl) }) : $t("Auto-delete & read receipts")}
+              onclick={() => (ttlMenu = !ttlMenu)} aria-haspopup="menu" aria-expanded={ttlMenu}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2"/><path d="M9.5 2.5h5"/><path d="M12 2.5V5"/></svg>
+              {#if chatTtl}<span class="ttl-badge">{ttlShort(chatTtl)}</span>{/if}
+            </button>
+            {#if ttlMenu}
+              {@const cid = $activeChat.id}
+              <div class="ttl-pop" role="menu" tabindex="-1">
+                <div class="ttl-h">{$t("Auto-delete messages")}</div>
+                <div class="ttl-opts">
+                  {#each TTL_PRESETS as v (v)}
+                    <button role="menuitemradio" aria-checked={chatTtl === v} class:on={chatTtl === v} disabled={!ttlEditable} onclick={() => setTtl(v)}>{ttlLabel(v)}</button>
+                  {/each}
+                </div>
+                <div class="ttl-note">{ttlEditable ? $t("New messages disappear for everyone in the chat after this time. Messages already here stay.") : $t("Only admins can change the timer.")}</div>
+                {#if !isGroup}
+                  <div class="ttl-sep"></div>
+                  <button class="ttl-toggle" role="menuitemcheckbox" aria-checked={!$noReceiptChats.has(cid)} onclick={() => setReceipts(cid, $noReceiptChats.has(cid))}>
+                    <span class="ttl-tt"><b>{$t("Read receipts")}</b><span>{$noReceiptChats.has(cid) ? $t("Off — they won't see when you've read their messages") : $t("On — they see ✓✓ when you open the chat")}</span></span>
+                    <span class="ttl-sw" class:on={!$noReceiptChats.has(cid) && !$ghost.noReadReceipts}></span>
+                  </button>
+                  {#if $ghost.noReadReceipts}<div class="ttl-note">{$t("Ghost mode is on: no read receipts are sent anywhere.")}</div>{/if}
+                {/if}
+              </div>
+            {/if}
+          </div>
+        {/if}
         <button class="icon-btn" class:active={searchOpen} title={$t("Search in chat")} onclick={() => (searchOpen ? closeSearch() : openSearch())}>{@html icons.search}</button>
         {#if isGroup && activeGroup}
           {@const gidCall = activeGroup.id}
@@ -2165,7 +2233,8 @@
         {#if m.kind.type === "date_separator"}
           <div class="date-sep">{m.kind.content.label}</div>
         {:else if m.kind.type === "system"}
-          <div class="sys">{@html icons.lock}<span>{@html m.kind.content.text}</span></div>
+          {@const tn2 = ttlNote(m.kind.content.text)}
+          <div class="sys" class:ttl={!!tn2}>{@html icons.lock}<span>{@html tn2 ?? m.kind.content.text}</span></div>
         {:else}
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -2211,7 +2280,9 @@
                 {#if rk === "sticker"}
                   <div class="sticker-wrap">
                     {#if url}
-                      <img class="sticker-img" src={url} alt="sticker" />
+                      <button class="sticker-btn" title={$t("Show the pack")} onclick={() => openPackSheet(content.pack ?? "own:-", m.outgoing ? undefined : m.from, content.saved_at)}>
+                        <img class="sticker-img" src={url} alt="sticker" />
+                      </button>
                     {:else}
                       <div class="sticker-placeholder"></div>
                     {/if}
@@ -2713,7 +2784,36 @@
   {/if}
 </main>
 
+<svelte:window onmousedown={(e) => { if (ttlMenu && !(e.target as HTMLElement).closest?.(".ttl-wrap")) ttlMenu = false; }} />
+
 <style>
+  .ttl-wrap { position: relative; display: inline-flex; }
+  .ttl-btn { position: relative; }
+  .ttl-btn.on { color: var(--accent); }
+  .ttl-badge { position: absolute; right: -2px; bottom: 0; font-size: 9px; font-weight: 800; line-height: 1; padding: 2px 3px; border-radius: 6px; background: var(--accent); color: #06070C; pointer-events: none; }
+  .ttl-pop {
+    position: absolute; top: calc(100% + 8px); right: 0; z-index: 40; width: 290px;
+    background: var(--bg-shell); border: 1px solid var(--border-strong); border-radius: 14px; padding: 12px;
+    box-shadow: 0 18px 40px -12px rgba(0, 0, 0, 0.55); animation: ttl-pop 0.16s cubic-bezier(.2,.9,.3,1.15); transform-origin: top right;
+    cursor: default;
+  }
+  @keyframes ttl-pop { from { opacity: 0; transform: translateY(-6px) scale(0.97); } }
+  .ttl-h { font-size: 12px; font-weight: 800; color: var(--accent); margin-bottom: 8px; }
+  .ttl-opts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .ttl-opts button { border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); border-radius: 9px; padding: 7px 4px; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
+  .ttl-opts button:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border-strong); }
+  .ttl-opts button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .ttl-opts button:disabled { opacity: 0.55; cursor: default; }
+  .ttl-note { font-size: 11.5px; color: var(--fg-dim); line-height: 1.45; margin-top: 8px; }
+  .ttl-sep { height: 1px; background: var(--border); margin: 10px -12px; }
+  .ttl-toggle { width: 100%; display: flex; align-items: center; gap: 10px; border: none; background: none; color: var(--fg); padding: 2px 0; text-align: left; font: inherit; cursor: pointer; }
+  .ttl-tt { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+  .ttl-tt b { font-size: 13px; }
+  .ttl-tt span { font-size: 11.5px; color: var(--fg-dim); }
+  .ttl-sw { width: 34px; height: 20px; border-radius: 10px; background: var(--bg-hover); border: 1px solid var(--border-strong); position: relative; flex-shrink: 0; transition: background 0.15s; }
+  .ttl-sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--fg-muted); transition: transform 0.15s, background 0.15s; }
+  .ttl-sw.on { background: var(--accent); border-color: transparent; }
+  .ttl-sw.on::after { transform: translateX(14px); background: #fff; }
   .active-chat {
     position: relative; /* anchor the floating jump-to-bottom button */
     display: flex;
@@ -3198,6 +3298,9 @@
     animation: msg-in 0.25s ease-out;
   }
   .msg.out .sticker-wrap { align-items: flex-end; }
+  .sticker-btn { border: none; background: transparent; padding: 0; cursor: pointer; display: block; border-radius: 12px; transition: transform 0.15s ease; }
+  .sticker-btn:hover { transform: scale(1.04); }
+  .sticker-btn:active { transform: scale(0.97); }
   .sticker-img {
     width: var(--sticker-size, 128px);
     height: var(--sticker-size, 128px);
