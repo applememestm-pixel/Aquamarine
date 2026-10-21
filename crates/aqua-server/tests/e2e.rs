@@ -944,3 +944,59 @@ async fn telegram_mini_apps() {
     };
     assert_eq!(String::from_utf8(got.payload).unwrap(), "Order **#3** placed");
 }
+
+/// Sealed messages: the relay holds only the key and hands it to the
+/// recipient once the date has come (after the owner's chance to deny).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sealed_messages_open_on_their_condition() {
+    let addr = spawn_server().await;
+    let base = format!("http://{addr}");
+    let http = reqwest::Client::new();
+    async fn register(http: &reqwest::Client, base: &str, name: &str) -> Client {
+        let mut c = Client::new(name);
+        c.login(http, base).await;
+        let email = format!("{name}@x.com");
+        let code: serde_json::Value = http.post(format!("{base}/v1/auth/email/request")).json(&serde_json::json!({ "email": email })).send().await.unwrap().json().await.unwrap();
+        let t: serde_json::Value = http.post(format!("{base}/v1/auth/email/verify")).json(&serde_json::json!({ "email": email, "code": code["dev_code"] })).send().await.unwrap().json().await.unwrap();
+        let r = http.post(format!("{base}/v1/users/register")).bearer_auth(&c.token)
+            .json(&serde_json::json!({ "ticket": t["ticket"], "username": name, "password": "pw-secret-hash" })).send().await.unwrap();
+        assert!(r.status().is_success());
+        c
+    }
+    let owner = register(&http, &base, "capowner").await;
+    let rcpt = register(&http, &base, "caprcpt").await;
+    let stranger = register(&http, &base, "capother").await;
+    let key = "ab".repeat(32);
+    let put = |id: &str, open_at: i64, grace_h: i64| {
+        http.put(format!("{base}/v1/capsules")).bearer_auth(&owner.token)
+            .json(&serde_json::json!({ "id": id, "recipient": "caprcpt", "key": key, "kind": "date", "open_at": open_at, "grace_h": grace_h }))
+            .send()
+    };
+    let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+    assert_eq!(put("cap-past-0", now_ms - 1000, 0).await.unwrap().status().as_u16(), 204);
+    assert_eq!(put("cap-future", now_ms + 3_600_000, 0).await.unwrap().status().as_u16(), 204);
+    assert_eq!(put("cap-grace1", now_ms - 1000, 1).await.unwrap().status().as_u16(), 204);
+    assert!(!put("bad id!", now_ms, 0).await.unwrap().status().is_success());
+
+    let open = |c: &Client, id: &str| http.post(format!("{base}/v1/capsules/{id}/open")).bearer_auth(&c.token).send();
+    let v: serde_json::Value = open(&rcpt, "cap-past-0").await.unwrap().json().await.unwrap();
+    assert_eq!((v["state"].as_str(), v["key"].as_str()), (Some("open"), Some(key.as_str())));
+    let v: serde_json::Value = open(&rcpt, "cap-future").await.unwrap().json().await.unwrap();
+    assert_eq!(v["state"], "sealed");
+    assert!(v.get("key").is_none());
+    assert_eq!(open(&stranger, "cap-past-0").await.unwrap().status().as_u16(), 404);
+
+    // With a confirmation window: the first request only starts the clock…
+    let v: serde_json::Value = open(&rcpt, "cap-grace1").await.unwrap().json().await.unwrap();
+    assert_eq!(v["state"], "waiting");
+    let mine: serde_json::Value = http.get(format!("{base}/v1/capsules")).bearer_auth(&owner.token).send().await.unwrap().json().await.unwrap();
+    let g = mine.as_array().unwrap().iter().find(|c| c["id"] == "cap-grace1").unwrap().clone();
+    assert!(g["requested"].as_i64().unwrap() > 0);
+    assert!(g.get("key").is_none());
+    // …and the owner can say no, or cancel it for good.
+    let stop = |forever: bool| http.post(format!("{base}/v1/capsules/cap-grace1/stop")).bearer_auth(&owner.token).json(&serde_json::json!({ "forever": forever })).send();
+    assert_eq!(stop(false).await.unwrap().status().as_u16(), 204);
+    assert_eq!(stop(true).await.unwrap().status().as_u16(), 204);
+    let v: serde_json::Value = open(&rcpt, "cap-grace1").await.unwrap().json().await.unwrap();
+    assert_eq!(v["state"], "cancelled");
+}

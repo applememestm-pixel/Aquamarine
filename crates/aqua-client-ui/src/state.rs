@@ -1548,6 +1548,9 @@ pub fn classify_kind(text: &str) -> MessageKind {
 /// Short human preview of a message for the chat-list line.
 /// Previews of the UI's structured messages (events, checklists, docs).
 pub fn special_preview(text: &str) -> Option<String> {
+    if text.starts_with("[capsule:v1]") {
+        return Some("✉️ Sealed message".into());
+    }
     if let Some(b) = text.strip_prefix(COMMENT_PREFIX) {
         let v: serde_json::Value = serde_json::from_str(b).ok()?;
         let t: String = v.get("t").and_then(|t| t.as_str()).unwrap_or("").chars().take(80).collect();

@@ -36,6 +36,9 @@
   import { startChannelStats } from "./lib/channelStats";
   import { startHandoff } from "./lib/handoff";
   import HandoffBanner from "./lib/components/HandoffBanner.svelte";
+  import CapsuleComposer from "./lib/components/CapsuleComposer.svelte";
+  import CapsuleAlerts from "./lib/components/CapsuleAlerts.svelte";
+  import { startCapsules } from "./lib/capsules";
   import ReminderPopup from "./lib/components/ReminderPopup.svelte";
   import ChatCalendar from "./lib/components/ChatCalendar.svelte";
   import { startPlanner } from "./lib/planner";
@@ -95,6 +98,7 @@
   onMount(() => {
     startPlanner();
     startWorkspace();
+    startCapsules();
     startChannelStats();
     startHandoff();
     const stopIcon = startAppIcon();
@@ -300,6 +304,8 @@
 <PlannerComposer />
 <DocEditor />
 <HandoffBanner />
+<CapsuleComposer />
+<CapsuleAlerts />
 <ReminderPopup />
 <ChatCalendar />
 <Toast />

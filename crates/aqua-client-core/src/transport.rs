@@ -863,6 +863,49 @@ impl Transport {
         Ok(r.json().await?)
     }
 
+    /// Sealed messages: store the key with its condition on my relay.
+    pub async fn capsule_put(&self, body: &serde_json::Value) -> Result<(), TransportError> {
+        let url = format!("{}/v1/capsules", self.server_url.trim_end_matches('/'));
+        let r = self.http.put(&url).bearer_auth(self.bearer().await?).json(body).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(())
+    }
+
+    /// My sealed messages (no keys).
+    pub async fn capsules_mine(&self) -> Result<serde_json::Value, TransportError> {
+        let url = format!("{}/v1/capsules", self.server_url.trim_end_matches('/'));
+        let r = self.http.get(&url).bearer_auth(self.bearer().await?).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(r.json().await?)
+    }
+
+    /// Deny the pending request (`forever` = cancel the sealed message).
+    pub async fn capsule_stop(&self, id: &str, forever: bool) -> Result<(), TransportError> {
+        let url = format!("{}/v1/capsules/{}/stop", self.server_url.trim_end_matches('/'), id);
+        let r = self.http.post(&url).bearer_auth(self.bearer().await?).json(&serde_json::json!({ "forever": forever })).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(())
+    }
+
+    /// Ask the sender's relay (`server_url`, from the message) to open a
+    /// sealed message for me.
+    pub async fn capsule_open_at(server_url: &str, identity: &IdentityKeyPair, id: &str) -> Result<serde_json::Value, TransportError> {
+        let http = http_client()?;
+        let token = sign_in(&http, server_url, identity).await?;
+        let url = format!("{}/v1/capsules/{}/open", server_url.trim_end_matches('/'), id);
+        let r = http.post(&url).bearer_auth(&token).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(r.json().await?)
+    }
+
     /// Does the account have a recovery key registered?
     pub async fn recovery_set(&self) -> Result<bool, TransportError> {
         #[derive(serde::Deserialize)]

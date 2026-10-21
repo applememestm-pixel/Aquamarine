@@ -47,6 +47,9 @@
   import { parseDoc, parseBoard, newWsId } from "../workspace";
   import DocCard, { docEditor } from "./DocCard.svelte";
   import BoardCard from "./BoardCard.svelte";
+  import CapsuleCard from "./CapsuleCard.svelte";
+  import { capsuleComposer } from "./CapsuleComposer.svelte";
+  import { parseCapsule } from "../capsules";
   import { chatLocks, unlocked, unlockChat, noteLeft } from "../chatLocks";
   import ThreadPanel, { type ThreadItem } from "./ThreadPanel.svelte";
   import { noteView, viewCounts, channelStats } from "../channelStats";
@@ -2901,6 +2904,9 @@
               {:else if m.kind.type === "text" && m.kind.content.text.startsWith("[doc:v1]") && parseDoc(m.kind.content.text) && $activeChat}
                 <DocCard doc={parseDoc(m.kind.content.text)!} chat={$activeChat.id} outgoing={m.outgoing} />
                 <span class="card-meta">{m.time}</span>
+              {:else if m.kind.type === "text" && m.kind.content.text.startsWith("[capsule:v1]") && parseCapsule(m.kind.content.text)}
+                <CapsuleCard c={parseCapsule(m.kind.content.text)!} outgoing={m.outgoing} />
+                <span class="card-meta">{m.time}</span>
               {:else if m.kind.type === "text" && m.kind.content.text.startsWith("[board:v1]") && parseBoard(m.kind.content.text) && $activeChat}
                 <BoardCard board={parseBoard(m.kind.content.text)!} chat={$activeChat.id} outgoing={m.outgoing} />
                 <span class="card-meta">{m.time}</span>
@@ -3180,6 +3186,12 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 6 9 10 5"/><line x1="13" y1="7" x2="20" y2="7"/><polyline points="4 15 6 17 10 13"/><line x1="13" y1="15" x2="20" y2="15"/></svg>
               <span>{$t("Checklist")}</span>
             </button>
+            {#if $activeChat && !isGroup && !isBotChat && $activeChat.id !== "__saved__"}
+              <button class="ap-item" onclick={() => { attachMenuOpen = false; if ($activeChat) capsuleComposer.set($activeChat.id); }}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><polyline points="3 7 12 13 21 7"/><circle cx="18" cy="17" r="3" fill="var(--bg-shell)"/><path d="M18 15.5v1.6l1 .7"/></svg>
+                <span>{$t("Sealed message")}</span>
+              </button>
+            {/if}
           </div>
         {/if}
         <button

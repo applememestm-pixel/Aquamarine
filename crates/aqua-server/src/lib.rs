@@ -472,6 +472,7 @@ async fn ws_upgrade(
 }
 
 async fn ws_run(mut socket: WebSocket, state: AppState, me: UserId) {
+    state.directory.touch_seen(base_user(&me));
     let user_state = state.user(&me);
     let (tx, mut rx) = mpsc::unbounded_channel::<RelayMessage>();
     {
@@ -543,6 +544,8 @@ async fn ws_run(mut socket: WebSocket, state: AppState, me: UserId) {
 
     let mut u = user_state.lock().await;
     u.tx.retain(|t| !t.is_closed());
+    drop(u);
+    state.directory.touch_seen(base_user(&me));
 }
 
 async fn deliver(state: &AppState, msg: RelayMessage) {
@@ -834,6 +837,78 @@ async fn webapp_init(
 /// `GET /v1/webapp/menu/:bot` — the bot's menu button (`{"type":"web_app",…}` or default).
 async fn webapp_menu(State(state): State<AppState>, Path(bot): Path<String>) -> Json<serde_json::Value> {
     Json(tgapi::menu_button(&state, &bot.trim().trim_start_matches('@').to_lowercase()))
+}
+
+// ---------- Sealed messages ------------------------------------------------------
+
+#[derive(Deserialize)]
+struct CapsuleBody {
+    id: String,
+    recipient: String,
+    /// Hex of the 32-byte message key.
+    key: String,
+    /// "date" | "inactive"
+    kind: String,
+    #[serde(default)]
+    open_at: i64,
+    #[serde(default)]
+    days: i64,
+    #[serde(default)]
+    grace_h: i64,
+}
+
+/// `PUT /v1/capsules` — store a sealed message's key with its condition.
+async fn capsule_put(State(state): State<AppState>, Caller(dh): Caller, Json(b): Json<CapsuleBody>) -> Result<StatusCode, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    state.directory.capsule_put(&me, &b.id, &b.recipient, &b.key, &b.kind, b.open_at, b.days, b.grace_h)
+        .map_err(|e| (dir_err_status(&e), e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET /v1/capsules` — mine (without keys).
+async fn capsules_mine(State(state): State<AppState>, Caller(dh): Caller) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    Ok(Json(state.directory.capsules_of(&me)))
+}
+
+/// `POST /v1/capsules/:id/open` — the recipient asks; the key once the
+/// condition (and the owner's chance to deny) has passed.
+async fn capsule_open(State(state): State<AppState>, Caller(dh): Caller, Path(id): Path<String>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    let owner = {
+        // Who owns it (to see whether they're online right now).
+        state.directory.capsule_owner(&id)
+    };
+    let online = match owner {
+        Some(o) => {
+            let mut on = false;
+            for addr in state.addresses_of(&o) {
+                if let Some(u) = state.users.get(&addr).map(|u| u.value().clone()) {
+                    if u.lock().await.tx.iter().any(|t| !t.is_closed()) { on = true; break; }
+                }
+            }
+            on
+        }
+        None => false,
+    };
+    match state.directory.capsule_open(&id, &me, online).map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))? {
+        Ok(key) => Ok(Json(serde_json::json!({ "state": "open", "key": key }))),
+        Err(v) => Ok(Json(v)),
+    }
+}
+
+#[derive(Deserialize)]
+struct CapsuleStop { #[serde(default)] forever: bool }
+
+/// `POST /v1/capsules/:id/stop` `{forever}` — the owner denies the pending
+/// request, or cancels the sealed message for good.
+async fn capsule_stop(State(state): State<AppState>, Caller(dh): Caller, Path(id): Path<String>, Json(b): Json<CapsuleStop>) -> Result<StatusCode, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    match state.directory.capsule_stop(&me, &id, b.forever) {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err((StatusCode::NOT_FOUND, "no such sealed message (or already opened)".into())),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
 }
 
 // ---------- Account recovery ------------------------------------------------------
@@ -1752,6 +1827,9 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/users/login",        post(login_user))
         .route("/v1/users/reset",        post(reset_password))
         .route("/v1/webapp/init",        post(webapp_init))
+        .route("/v1/capsules",           get(capsules_mine).put(capsule_put))
+        .route("/v1/capsules/:id/open",  post(capsule_open))
+        .route("/v1/capsules/:id/stop",  post(capsule_stop))
         .route("/v1/webapp/menu/:bot",   get(webapp_menu))
         .route("/v1/me/recovery",        get(recovery_get).put(recovery_put))
         .route("/v1/devices/:user",      get(get_devices))

@@ -369,6 +369,25 @@ impl Directory {
                 at      INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_inbox_user ON inbox(user, id);
+            CREATE TABLE IF NOT EXISTS capsules (
+                id          TEXT PRIMARY KEY,
+                owner       TEXT NOT NULL,
+                recipient   TEXT NOT NULL,
+                key         TEXT NOT NULL,
+                kind        TEXT NOT NULL,
+                open_at     INTEGER NOT NULL DEFAULT 0,
+                days        INTEGER NOT NULL DEFAULT 0,
+                grace_h     INTEGER NOT NULL DEFAULT 0,
+                created     INTEGER NOT NULL,
+                requested   INTEGER NOT NULL DEFAULT 0,
+                released    INTEGER NOT NULL DEFAULT 0,
+                cancelled   INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_capsules_owner ON capsules(owner);
+            CREATE TABLE IF NOT EXISTS last_seen (
+                username TEXT PRIMARY KEY,
+                at       INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS backups (
                 username   TEXT PRIMARY KEY,
                 data       BLOB NOT NULL,
@@ -959,6 +978,124 @@ impl Directory {
         db.execute("UPDATE users SET password=?2 WHERE username=?1", rusqlite::params![username, hash_password(new_secret)])?;
         tracing::info!(%username, with_key = !stored.is_empty(), "password reset");
         Ok(username)
+    }
+
+    // ---- sealed messages ("message to a trusted person") ----
+
+    /// The user was connected just now (any device).
+    pub fn touch_seen(&self, username: &str) {
+        let db = self.db.lock().unwrap();
+        let _ = db.execute(
+            "INSERT INTO last_seen (username, at) VALUES (?1, ?2) ON CONFLICT(username) DO UPDATE SET at=?2",
+            rusqlite::params![username.trim().to_lowercase(), now_secs() as i64],
+        );
+    }
+
+    pub fn last_seen(&self, username: &str) -> Option<i64> {
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT at FROM last_seen WHERE username=?1", rusqlite::params![username.trim().to_lowercase()], |r| r.get(0)).ok()
+    }
+
+    /// Store the key of a sealed message. The recipient already has the
+    /// ciphertext (sent end-to-end encrypted); the relay has only the key —
+    /// neither can read it alone until the condition is met.
+    #[allow(clippy::too_many_arguments)]
+    pub fn capsule_put(&self, owner: &str, id: &str, recipient: &str, key: &str, kind: &str, open_at: i64, days: i64, grace_h: i64) -> Result<(), DirError> {
+        let ok = id.len() >= 8 && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            && key.len() == 64 && key.chars().all(|c| c.is_ascii_hexdigit())
+            && matches!(kind, "date" | "inactive")
+            && (0..=24 * 30).contains(&grace_h) && (0..=3650).contains(&days);
+        if !ok || (kind == "inactive" && days < 1) || (kind == "date" && open_at <= 0) {
+            return Err(DirError::BadProfile("bad sealed message".into()));
+        }
+        let db = self.db.lock().unwrap();
+        let n: i64 = db.query_row("SELECT COUNT(*) FROM capsules WHERE owner=?1 AND cancelled=0", rusqlite::params![owner], |r| r.get(0)).unwrap_or(0);
+        if n >= 50 {
+            return Err(DirError::BadProfile("at most 50 sealed messages".into()));
+        }
+        db.execute(
+            "INSERT INTO capsules (id, owner, recipient, key, kind, open_at, days, grace_h, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            rusqlite::params![id, owner, recipient.trim().to_lowercase(), key.to_lowercase(), kind, open_at, days, grace_h, now_secs() as i64],
+        ).map_err(|_| DirError::BadProfile("this sealed message already exists".into()))?;
+        Ok(())
+    }
+
+    /// The recipient asks to open: `Ok(Ok(key))` when it opens, `Ok(Err(state))` otherwise
+    /// (`state` says what it waits for). The first request of a capsule that
+    /// needs a grace period starts the clock; the owner can deny meanwhile.
+    pub fn capsule_open(&self, id: &str, caller: &str, owner_online: bool) -> Result<Result<String, serde_json::Value>, DirError> {
+        let db = self.db.lock().unwrap();
+        let row = db.query_row(
+            "SELECT owner, recipient, key, kind, open_at, days, grace_h, requested, released, cancelled FROM capsules WHERE id=?1",
+            rusqlite::params![id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, i64>(4)?,
+                    r.get::<_, i64>(5)?, r.get::<_, i64>(6)?, r.get::<_, i64>(7)?, r.get::<_, i64>(8)?, r.get::<_, i64>(9)?)),
+        ).map_err(|_| DirError::NotOwner)?;
+        let (owner, recipient, key, kind, open_at, days, grace_h, requested, released, cancelled) = row;
+        if recipient != caller.trim().to_lowercase() {
+            return Err(DirError::NotOwner);
+        }
+        if cancelled != 0 {
+            return Ok(Err(serde_json::json!({ "state": "cancelled" })));
+        }
+        if released != 0 {
+            return Ok(Ok(key));
+        }
+        let now = now_secs() as i64;
+        // The condition itself.
+        let met = match kind.as_str() {
+            "date" => now * 1000 >= open_at,
+            _ => {
+                let seen: i64 = db.query_row("SELECT at FROM last_seen WHERE username=?1", rusqlite::params![owner], |r| r.get(0)).unwrap_or(0);
+                !owner_online && seen > 0 && now - seen >= days * 86_400
+            }
+        };
+        if !met {
+            return Ok(Err(match kind.as_str() {
+                "date" => serde_json::json!({ "state": "sealed", "until": open_at }),
+                _ => serde_json::json!({ "state": "sealed", "inactive_days": days }),
+            }));
+        }
+        // Then the confirmation window, if any.
+        if grace_h > 0 {
+            if requested == 0 {
+                db.execute("UPDATE capsules SET requested=?2 WHERE id=?1", rusqlite::params![id, now])?;
+                return Ok(Err(serde_json::json!({ "state": "waiting", "until": (now + grace_h * 3600) * 1000 })));
+            }
+            if now < requested + grace_h * 3600 {
+                return Ok(Err(serde_json::json!({ "state": "waiting", "until": (requested + grace_h * 3600) * 1000 })));
+            }
+        }
+        db.execute("UPDATE capsules SET released=?2 WHERE id=?1", rusqlite::params![id, now])?;
+        Ok(Ok(key))
+    }
+
+    pub fn capsule_owner(&self, id: &str) -> Option<String> {
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT owner FROM capsules WHERE id=?1", rusqlite::params![id], |r| r.get(0)).ok()
+    }
+
+    /// The owner's sealed messages (keys left out).
+    pub fn capsules_of(&self, owner: &str) -> Vec<serde_json::Value> {
+        let db = self.db.lock().unwrap();
+        let Ok(mut st) = db.prepare("SELECT id, recipient, kind, open_at, days, grace_h, created, requested, released, cancelled FROM capsules WHERE owner=?1 ORDER BY created DESC") else { return Vec::new() };
+        st.query_map(rusqlite::params![owner], |r| Ok(serde_json::json!({
+            "id": r.get::<_, String>(0)?, "recipient": r.get::<_, String>(1)?, "kind": r.get::<_, String>(2)?,
+            "open_at": r.get::<_, i64>(3)?, "days": r.get::<_, i64>(4)?, "grace_h": r.get::<_, i64>(5)?,
+            "created": r.get::<_, i64>(6)? * 1000, "requested": r.get::<_, i64>(7)? * 1000,
+            "released": r.get::<_, i64>(8)? * 1000, "cancelled": r.get::<_, i64>(9)? != 0,
+        }))).map(|rows| rows.flatten().collect()).unwrap_or_default()
+    }
+
+    /// Owner: cancel for good (`forever`) or just deny the pending request.
+    pub fn capsule_stop(&self, owner: &str, id: &str, forever: bool) -> Result<bool, DirError> {
+        let db = self.db.lock().unwrap();
+        let sql = if forever {
+            "UPDATE capsules SET cancelled=1 WHERE id=?1 AND owner=?2 AND released=0"
+        } else {
+            "UPDATE capsules SET requested=0 WHERE id=?1 AND owner=?2 AND released=0"
+        };
+        Ok(db.execute(sql, rusqlite::params![id, owner])? > 0)
     }
 
     // ---- devices ----

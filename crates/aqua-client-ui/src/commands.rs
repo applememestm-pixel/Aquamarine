@@ -2955,6 +2955,35 @@ async fn on_incoming_plaintext(app: &AppHandle, from: String, text: String) {
     });
 }
 
+/// Sealed message: store its key with the condition on my relay.
+#[tauri::command]
+pub async fn capsule_create(state: State<'_, StdMutex<AppState>>, body: serde_json::Value) -> Result<(), String> {
+    let t = { state.lock().map_err(|e| e.to_string())?.transport.clone().ok_or("not connected to a server")? };
+    t.capsule_put(&body).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn capsules_mine(state: State<'_, StdMutex<AppState>>) -> Result<serde_json::Value, String> {
+    let t = { state.lock().map_err(|e| e.to_string())?.transport.clone().ok_or("not connected to a server")? };
+    t.capsules_mine().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn capsule_stop(state: State<'_, StdMutex<AppState>>, id: String, forever: bool) -> Result<(), String> {
+    let t = { state.lock().map_err(|e| e.to_string())?.transport.clone().ok_or("not connected to a server")? };
+    t.capsule_stop(&id, forever).await.map_err(|e| e.to_string())
+}
+
+/// Ask the sender's relay to open a sealed message (relay URL from the message).
+#[tauri::command]
+pub async fn capsule_open(state: State<'_, StdMutex<AppState>>, server_url: String, id: String) -> Result<serde_json::Value, String> {
+    if !(server_url.starts_with("http://") || server_url.starts_with("https://")) || server_url.len() > 200 {
+        return Err("bad relay address".into());
+    }
+    let identity = { state.lock().map_err(|e| e.to_string())?.identity.clone() };
+    Transport::capsule_open_at(&server_url, &identity, &id).await.map_err(|e| e.to_string())
+}
+
 /// Send text to a bot WITHOUT showing it in the chat: a pressed button
 /// (`[cb:v1]…`) or mini app data (`[wad:v1]…`).
 #[tauri::command]
