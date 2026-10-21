@@ -1,13 +1,6 @@
 <script module lang="ts">
-  import { writable } from "svelte/store";
-  export const settingsOpen = writable<boolean>(false);
-  /** Section to jump to on the next open (e.g. "voice" from the call UI). */
-  export const settingsSection = writable<string | null>(null);
-  export function openSettings(section?: string) {
-    if (section) settingsSection.set(section);
-    settingsOpen.set(true);
-  }
-  export function closeSettings() { settingsOpen.set(false); }
+  import { settingsOpen, settingsSection, openSettings, closeSettings } from "../panels/settings";
+  export { settingsOpen, settingsSection, openSettings, closeSettings };
 </script>
 
 <script lang="ts">
@@ -20,7 +13,7 @@
   import { openFileDialog } from "../dialog";
   import { ICON_PRESETS, logoSvg, svgDataUrl, colorsFromAccent, setAppIcon } from "../appIcon";
   import { cropImage } from "./ImageCropper.svelte";
-  import { openStickerEditor, openStickerQueue, stickerLibraryTick } from "./StickerEditor.svelte";
+  import { openStickerEditor, openStickerQueue, stickerLibraryTick } from "../panels/stickerEditor";
   import { openPackManager } from "./PackManager.svelte";
   import { askInput, closeInput } from "./InputPrompt.svelte";
   import AnimatedMedia from "./AnimatedMedia.svelte";

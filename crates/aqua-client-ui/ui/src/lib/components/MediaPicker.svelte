@@ -41,7 +41,7 @@
   import { api, assetUrl } from "../tauri";
   import { showToast } from "./Toast.svelte";
   import { openFileDialog } from "../dialog";
-  import { openStickerEditor, openStickerQueue, stickerLibraryTick } from "./StickerEditor.svelte";
+  import { openStickerEditor, openStickerQueue, stickerLibraryTick } from "../panels/stickerEditor";
   import { openPackManager } from "./PackManager.svelte";
   import { askInput } from "./InputPrompt.svelte";
   import { insertEmoji } from "../composerBus";

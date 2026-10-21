@@ -58,3 +58,8 @@ dashmap             = "6"
 
 # --- Storage -----------------------------------------------------------------
 rusqlite            = { version = "0.32", features = ["bundled"] }
+
+# Smaller, faster release binaries (cross-crate inlining).
+[profile.release]
+lto = "thin"
+codegen-units = 4

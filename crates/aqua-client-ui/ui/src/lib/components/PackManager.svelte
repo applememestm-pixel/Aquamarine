@@ -20,7 +20,7 @@
   import { showToast } from "./Toast.svelte";
   import { askConfirm } from "./Confirm.svelte";
   import { openFileDialog } from "../dialog";
-  import { openStickerQueue, openStickerEditor, stickerLibraryTick } from "./StickerEditor.svelte";
+  import { openStickerQueue, openStickerEditor, stickerLibraryTick } from "../panels/stickerEditor";
   import AnimatedMedia from "./AnimatedMedia.svelte";
   import { emojiFromFile } from "../reactionPack";
 

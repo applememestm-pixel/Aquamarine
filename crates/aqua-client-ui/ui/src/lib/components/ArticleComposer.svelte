@@ -1,17 +1,7 @@
 <script module lang="ts">
-  import { writable } from "svelte/store";
-
-  interface ComposerState {
-    peerId: string;
-  }
-  export const articleState = writable<ComposerState | null>(null);
-
-  export function openArticleComposer(peerId: string) {
-    articleState.set({ peerId });
-  }
-  export function closeArticleComposer() {
-    articleState.set(null);
-  }
+  import { articleState, openArticleComposer, closeArticleComposer } from "../panels/articleComposer";
+  import type { ComposerState } from "../panels/articleComposer";
+  export { articleState, openArticleComposer, closeArticleComposer };
 </script>
 
 <script lang="ts">

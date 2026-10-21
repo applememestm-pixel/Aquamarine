@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Lazy from "./lib/components/Lazy.svelte";
   import { onMount } from "svelte";
   import { startAppIcon } from "./lib/appIcon";
   import { startAutoscroll } from "./lib/autoscroll";
@@ -22,10 +23,10 @@
   import { tr } from "./lib/i18n";
   import CallModal from "./lib/components/CallModal.svelte";
   import MediaPicker from "./lib/components/MediaPicker.svelte";
-  import SettingsPanel, { openSettings } from "./lib/components/SettingsPanel.svelte";
+  import { settingsOpen, openSettings } from "./lib/panels/settings";
   import ProfileModal from "./lib/components/ProfileModal.svelte";
-  import PhotoEditor from "./lib/components/PhotoEditor.svelte";
-  import ArticleComposer from "./lib/components/ArticleComposer.svelte";
+  import { editorState } from "./lib/panels/photoEditor";
+  import { articleState } from "./lib/panels/articleComposer";
   import ArticleReader from "./lib/components/ArticleReader.svelte";
   import CircleRecorder from "./lib/components/CircleRecorder.svelte";
   import PackSheet from "./lib/components/PackSheet.svelte";
@@ -45,7 +46,7 @@
   import ReminderPopup from "./lib/components/ReminderPopup.svelte";
   import ChatCalendar from "./lib/components/ChatCalendar.svelte";
   import { startPlanner } from "./lib/planner";
-  import StickerEditor from "./lib/components/StickerEditor.svelte";
+  import { stickerEditorState, stickerQueue } from "./lib/panels/stickerEditor";
   import PackManager from "./lib/components/PackManager.svelte";
   import RegistrationWizard from "./lib/components/RegistrationWizard.svelte";
   import LockScreen from "./lib/components/LockScreen.svelte";
@@ -58,7 +59,7 @@
   import SharedMediaPanel from "./lib/components/SharedMediaPanel.svelte";
   import PollComposer from "./lib/components/PollComposer.svelte";
   import NewGroupWizard from "./lib/components/NewGroupWizard.svelte";
-  import GroupPanel from "./lib/components/GroupPanel.svelte";
+  import { groupPanelId } from "./lib/panels/groupPanel";
   import UserPanel from "./lib/components/UserPanel.svelte";
   import TitleBar from "./lib/components/TitleBar.svelte";
   import ShortcutsHelp from "./lib/components/ShortcutsHelp.svelte";
@@ -285,14 +286,14 @@
 <InputPrompt />
 <CallModal />
 <MediaPicker />
-<SettingsPanel />
+<Lazy when={$settingsOpen} load={() => import("./lib/components/SettingsPanel.svelte")} />
 <ProfileModal />
-<PhotoEditor />
-<ArticleComposer />
+<Lazy when={!!$editorState} load={() => import("./lib/components/PhotoEditor.svelte")} />
+<Lazy when={!!$articleState} load={() => import("./lib/components/ArticleComposer.svelte")} />
 <ArticleReader />
 <CircleRecorder />
 <PackManager />
-<StickerEditor />
+<Lazy when={!!($stickerEditorState || $stickerQueue)} load={() => import("./lib/components/StickerEditor.svelte")} />
 <RegistrationWizard />
 <LockScreen />
 <Lightbox />
@@ -300,7 +301,7 @@
 <FolderManager />
 <PollComposer />
 <NewGroupWizard />
-<GroupPanel />
+<Lazy when={!!$groupPanelId} load={() => import("./lib/components/GroupPanel.svelte")} />
 <ShortcutsHelp />
 <ImageCropper />
 <PackSheet />

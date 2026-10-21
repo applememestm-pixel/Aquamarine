@@ -3,7 +3,7 @@
   import { t } from "../i18n";
   import { icons } from "../icons";
   import { activeTab, type NavTab } from "../stores";
-  import { openSettings } from "./SettingsPanel.svelte";
+  import { openSettings } from "../panels/settings";
 </script>
 
 <aside class="rail">

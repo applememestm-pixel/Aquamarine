@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Lazy from "./lib/components/Lazy.svelte";
   /**
    * One chat in its own window (Ctrl+click a chat in the list). Same app
    * state as the main window — this only shows a different view of it, and
@@ -27,9 +28,9 @@
   import { startWorkspace } from "./lib/workspace";
   import ChatCalendar from "./lib/components/ChatCalendar.svelte";
   import PollComposer from "./lib/components/PollComposer.svelte";
-  import ArticleComposer from "./lib/components/ArticleComposer.svelte";
+  import { articleState } from "./lib/panels/articleComposer";
   import ArticleReader from "./lib/components/ArticleReader.svelte";
-  import PhotoEditor from "./lib/components/PhotoEditor.svelte";
+  import { editorState } from "./lib/panels/photoEditor";
   import { loadReactionPack } from "./lib/reactionPack";
 
   let { chat }: { chat: string } = $props();
@@ -82,8 +83,8 @@
 <InputPrompt />
 <MediaPicker />
 <ProfileModal />
-<PhotoEditor />
-<ArticleComposer />
+<Lazy when={!!$editorState} load={() => import("./lib/components/PhotoEditor.svelte")} />
+<Lazy when={!!$articleState} load={() => import("./lib/components/ArticleComposer.svelte")} />
 <ArticleReader />
 <Lightbox />
 <ForwardPicker />

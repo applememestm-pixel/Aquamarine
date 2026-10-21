@@ -76,3 +76,8 @@ custom-protocol = ["tauri/custom-protocol"]
 [lints.rust]
 # `--cfg aqua_wincheck` type-checks the Windows-only activity detector on Linux.
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(aqua_wincheck)', 'cfg(aqua_mobilecheck)'] }
+
+# Smaller, faster release binary (cross-crate inlining).
+[profile.release]
+lto = "thin"
+codegen-units = 4

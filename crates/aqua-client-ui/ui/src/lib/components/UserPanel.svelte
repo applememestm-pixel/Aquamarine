@@ -10,7 +10,7 @@
   import { profile, updateProfile } from "../profile";
   import { myOnline, myActivity, shareActivity, activityVerb, activityLine, broadcastPresence, type OnlineStatus } from "../presence";
   import { callMuted, callDeafened, callState, toggleCallMute, toggleCallDeafen } from "./CallModal.svelte";
-  import { openSettings } from "./SettingsPanel.svelte";
+  import { openSettings } from "../panels/settings";
   import { openProfile } from "./ProfileModal.svelte";
   import { showToast } from "./Toast.svelte";
 

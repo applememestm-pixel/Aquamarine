@@ -23,6 +23,8 @@ import "./app.css";
       const now = performance.now();
       const gap = now - last - 250;
       last = now;
+      // Hidden / minimised windows get throttled timers: not a stall.
+      if (document.hidden) return;
       if (gap > 400) console.warn(`[aqua-stall] ${Math.round(gap)} ms; last click ${lastClick} ${Math.round((now - lastClickAt) / 1000)} s ago`);
     }, 250);
     for (const ev of ["error", "stalled", "waiting"] as const) {

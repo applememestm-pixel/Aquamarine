@@ -19,10 +19,10 @@
   import RichComposer from "./RichComposer.svelte";
   import { openProfile } from "./ProfileModal.svelte";
   import { reactionPack, quickReactions, parseReaction, reactionUrl, loadReactionPack, REACTION_PACK, emojiPacks, reactionSource, loadEmojiPacks } from "../reactionPack";
-  import { editAndSend } from "./PhotoEditor.svelte";
+  import { editAndSend } from "../panels/photoEditor";
   import MediaPlayer from "./MediaPlayer.svelte";
   import { openGallery, type GalleryItem } from "./Lightbox.svelte";
-  import { openArticleComposer } from "./ArticleComposer.svelte";
+  import { openArticleComposer } from "../panels/articleComposer";
   import { openCircleRecorder } from "./CircleRecorder.svelte";
   import { openPollComposer } from "./PollComposer.svelte";
   import { openForward, type ForwardItem } from "./ForwardPicker.svelte";
@@ -77,7 +77,7 @@
   import { objectUrl, mediaUrl, streamSrc, gifStill } from "../media";
   import { openArticleReader } from "../reader";
   import { shortcutsOpen } from "../shortcuts";
-  import { openGroupPanel } from "./GroupPanel.svelte";
+  import { openGroupPanel } from "../panels/groupPanel";
   import { reactions, toggleMyReaction, applyPeerReaction, reactionChips, hashContent, pins, pinMessage, unpinMessage, pinnedId } from "../messageMeta";
   import { openNewChatDialog } from "../newChat";
 
@@ -1426,12 +1426,15 @@
   // ---- Windowed rendering: only the newest WINDOW_STEP rows are in the
   // DOM; scrolling near the top reveals the next page (scroll position
   // kept). Long chats stay as light as short ones.
-  const WINDOW_STEP = 120;
-  let shownCount = $state(WINDOW_STEP);
+  // A chat opens with the newest WINDOW_FIRST rows (a few screens) — the
+  // first layout is the expensive part of opening a chat in WebKitGTK.
+  const WINDOW_FIRST = 40;
+  const WINDOW_STEP = 80;
+  let shownCount = $state(WINDOW_FIRST);
   let shownRows = $derived(rows.length > shownCount ? rows.slice(rows.length - shownCount) : rows);
   $effect(() => {
     void $activeChat?.id;
-    untrack(() => { shownCount = WINDOW_STEP; });
+    untrack(() => { shownCount = WINDOW_FIRST; });
   });
   let growing = false;
   async function showOlder() {

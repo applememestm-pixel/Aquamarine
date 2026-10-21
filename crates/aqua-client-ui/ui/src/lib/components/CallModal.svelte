@@ -87,7 +87,7 @@
   import { info } from "../stores";
   import { showToast } from "./Toast.svelte";
   import { allowed } from "../privacy";
-  import { openSettings } from "./SettingsPanel.svelte";
+  import { openSettings } from "../panels/settings";
   import { callSettings, iceServersFor, patchCallSettings, keyLabel } from "../callSettings";
   import {
     tuneSdp, orderCodecs, tuneSendParameters, displayMediaOptions, screenVideoConstraints,

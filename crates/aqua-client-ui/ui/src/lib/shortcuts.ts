@@ -8,7 +8,7 @@
 import { writable, derived, get } from "svelte/store";
 import { visibleChats, activeId, selectChat, activeTab, type NavTab } from "./stores";
 import { folders, activeFolder } from "./folders";
-import { openSettings, settingsOpen } from "./components/SettingsPanel.svelte";
+import { openSettings, settingsOpen } from "./panels/settings";
 import { openProfile } from "./components/ProfileModal.svelte";
 import { toggleCallMute, toggleCallDeafen } from "./components/CallModal.svelte";
 import { openNewChatDialog } from "./newChat";

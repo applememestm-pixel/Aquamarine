@@ -1,15 +1,8 @@
 <script module lang="ts">
-  import { writable, get } from "svelte/store";
+  import { groupPanelId, groupPanelStart, openGroupPanel, closeGroupPanel } from "../panels/groupPanel";
+  export { groupPanelId, groupPanelStart, openGroupPanel, closeGroupPanel };
+  import { get } from "svelte/store";
   import { peerPresence } from "../presence";
-  export const groupPanelId = writable<string | null>(null);
-  /** Open straight at a page (e.g. a room's settings from its context menu). */
-  const groupPanelStart = writable<{ page: string; room?: string } | null>(null);
-  export function openGroupPanel(gid: string, start?: { page: "room-edit" | "room-perms" | "rooms"; room?: string }) {
-    groupPanelStart.set(start ?? null);
-    groupPanelId.set(null);
-    groupPanelId.set(gid);
-  }
-  export function closeGroupPanel() { groupPanelId.set(null); }
 </script>
 
 <script lang="ts">

@@ -12,9 +12,9 @@
   import { api, assetUrl } from "../tauri";
   import { activeId, loadActiveMessages } from "../stores";
   import { showToast } from "./Toast.svelte";
-  import { stickerLibraryTick } from "./StickerEditor.svelte";
+  import { stickerLibraryTick } from "../panels/stickerEditor";
   import { openPackManager } from "./PackManager.svelte";
-  import { openSettings } from "./SettingsPanel.svelte";
+  import { openSettings } from "../panels/settings";
   import AnimatedMedia from "./AnimatedMedia.svelte";
 
   interface Item { key: string; src: Promise<string> | string; mime: string; emoji: string; path?: string }
