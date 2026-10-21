@@ -1521,6 +1521,16 @@ pub fn classify_kind(text: &str) -> MessageKind {
 }
 
 /// Short human preview of a message for the chat-list line.
+/// Previews of the UI's structured messages (events, checklists, docs).
+pub fn special_preview(text: &str) -> Option<String> {
+    let (icon, body) = [("[event:v1]", "📅"), ("[tasks:v1]", "☑️"), ("[doc:v1]", "📄"), ("[board:v1]", "🗂")]
+        .iter()
+        .find_map(|(p, i)| text.strip_prefix(p).map(|b| (*i, b)))?;
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let title: String = v.get("title").and_then(|t| t.as_str()).unwrap_or("").chars().take(80).collect();
+    Some(format!("{icon} {title}"))
+}
+
 /// A bot message with buttons: `[kb:v1]{…}\n<text>\u{2063}<numbered list>` → `<text>`.
 pub fn strip_bot_keyboard(text: &str) -> String {
     let Some(rest) = text.strip_prefix("[kb:v1]") else { return text.to_string() };
@@ -1530,7 +1540,7 @@ pub fn strip_bot_keyboard(text: &str) -> String {
 
 pub fn preview_for(kind: &MessageKind) -> String {
     match kind {
-        MessageKind::Text { text } => humanize_tokens(&strip_bot_keyboard(text)),
+        MessageKind::Text { text } => special_preview(text).unwrap_or_else(|| humanize_tokens(&strip_bot_keyboard(text))),
         MessageKind::Code { .. }   => "[code]".into(),
         MessageKind::File { name, category, mime, .. } => {
             let icon = match category.as_deref() {
@@ -1591,6 +1601,13 @@ mod preview_tests {
         let (k, m) = super::classify_full("[fwd:v1]{\"name\":\"Bob\"}\n[article:v1]{\"title\":\"T\",\"body\":\"B\"}", None);
         assert!(matches!(k, super::MessageKind::Article { .. }));
         assert_eq!(m.unwrap().fwd.unwrap()["name"], "Bob");
+    }
+
+    #[test]
+    fn special_previews() {
+        assert_eq!(super::special_preview("[event:v1]{\"id\":\"e\",\"title\":\"Meet\",\"at\":1}").unwrap(), "📅 Meet");
+        assert_eq!(super::special_preview("[tasks:v1]{\"title\":\"Todo\"}").unwrap(), "☑️ Todo");
+        assert!(super::special_preview("hi").is_none());
     }
 
     #[test]

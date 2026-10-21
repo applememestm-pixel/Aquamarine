@@ -17,6 +17,7 @@ export const BUILTIN_SOUNDS: { id: string; name: string }[] = [
   { id: "drop", name: "Drop" },
   { id: "knock", name: "Knock" },
   { id: "blip", name: "Blip" },
+  { id: "alarm", name: "Alarm" },
   { id: "none", name: "Silent" },
 ];
 
@@ -69,6 +70,7 @@ function synth(id: string, vol: number) {
     case "drop": tone(c, 1400, 0, 0.18, v, "sine", 380); break;
     case "knock": tone(c, 180, 0, 0.07, v * 1.6, "square"); tone(c, 160, 0.13, 0.07, v * 1.6, "square"); break;
     case "blip": tone(c, 880, 0, 0.06, v, "square"); tone(c, 1320, 0.07, 0.06, v * 0.8, "square"); break;
+    case "alarm": for (let i = 0; i < 3; i++) { tone(c, 988, i * 0.32, 0.12, v, "triangle"); tone(c, 1319, i * 0.32 + 0.13, 0.14, v, "triangle"); } break;
     case "none": break;
     default: tone(c, 880, 0, 0.25, v); // ding
   }

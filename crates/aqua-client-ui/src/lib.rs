@@ -144,6 +144,7 @@ pub fn run() -> Result<()> {
             autodelete::get_chat_ttl,
             commands::bot_send_raw,
             commands::forward_file,
+            personal::write_text_file,
             commands::webapp_init,
             commands::webapp_menu,
             autodelete::set_chat_ttl,

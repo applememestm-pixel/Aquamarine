@@ -1354,6 +1354,17 @@
         <div class="foot-note">{$t("Your sounds live in the app's Sounds folder: mp3, ogg, opus, wav, m4a, flac — up to 3 MB each.")}</div>
       </section>
       <section class="group">
+        <div class="label">{$t("Calendar reminders")}</div>
+        <div class="row">
+          <span class="row-label">{$t("Reminder sound")}</span>
+          <select class="sel" value={$settings.reminderSound ?? "alarm"} onchange={(e) => { const v = (e.target as HTMLSelectElement).value; settings.update((x) => ({ ...x, reminderSound: v })); void playSound(v); }}>
+            {#each allSounds as snd (snd.id)}<option value={snd.id}>{$t(snd.name)}</option>{/each}
+          </select>
+          <button class="icon-btn" onclick={() => playSound($settings.reminderSound ?? "alarm")} aria-label={$t("Listen")}>▶</button>
+        </div>
+        <div class="foot-note">{$t("Events in chats remind you with a pop-up and this sound — 1 day, 1 hour or 5 minutes before, as you choose on each event.")}</div>
+      </section>
+      <section class="group">
         <div class="label">{$t("Per-person sounds")}</div>
         {#each Object.entries($settings.chatSounds ?? {}) as [cid, sid] (cid)}
           <div class="row">

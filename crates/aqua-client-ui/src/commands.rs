@@ -2177,6 +2177,9 @@ pub const GRPJOIN_PREFIX: &str = "[grpjoin:v1]";
 pub const GRPLEAVE_PREFIX: &str = "[grpleave:v1]";
 /// Group control (poll votes, reactions): fanned out, never stored.
 pub const GRPCTL_PREFIX: &str = "[grpctl:v1]";
+/// Generic chat control for UI features (event RSVPs, shared task ticks…):
+/// `[ctl:v1]{"t":type,…}`. Never stored; the UI gets `aqua://ctl`.
+pub const CTL_PREFIX: &str = "[ctl:v1]";
 /// Group voice / video chat signalling (join, leave, offer, answer, ice).
 pub const GCALL_PREFIX: &str = "[gcall:v1]";
 /// A group chat message: JSON `{gid, author, body}` where `body` is the
@@ -2201,7 +2204,7 @@ pub async fn send_control(
         if s.transport.is_none() { return Ok(()); }
     }
     // Edits / deletions of my messages show on my other devices too.
-    let sync = payload.starts_with(EDIT_PREFIX) || payload.starts_with(DEL_PREFIX);
+    let sync = payload.starts_with(EDIT_PREFIX) || payload.starts_with(DEL_PREFIX) || payload.starts_with(CTL_PREFIX);
     crate::multidev::fanout(&app, &peer_id, &payload, sync).await
 }
 
@@ -2490,7 +2493,7 @@ pub async fn group_control(
 ) -> Result<(), String> {
     if !(body.starts_with(POLLVOTE_PREFIX) || body.starts_with(REACT_PREFIX) || body.starts_with(POLLCLOSE_PREFIX)
         || body.starts_with(EDIT_PREFIX) || body.starts_with(DEL_PREFIX) || body.starts_with(TYPING_PREFIX)
-        || body.starts_with(GCALL_PREFIX)) {
+        || body.starts_with(GCALL_PREFIX) || body.starts_with(CTL_PREFIX)) {
         return Err("unsupported group control".into());
     }
     let (me, group) = {
@@ -2563,6 +2566,13 @@ pub fn own_device_message(app: &AppHandle, to: &str, inner: &str) {
         }
         drop(s);
         let _ = app.emit("aqua://chats_updated", ());
+        return;
+    }
+    if let Some(body) = inner.strip_prefix(CTL_PREFIX) {
+        drop(s);
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
+            let _ = app.emit("aqua://ctl", serde_json::json!({ "from": me, "chat": to, "body": v, "own": true }));
+        }
         return;
     }
     if let Some(body) = inner.strip_prefix(crate::autodelete::TTL_PREFIX) {
@@ -2775,6 +2785,10 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
             }
         } else if inner.starts_with(TYPING_PREFIX) {
             let _ = app.emit("aqua://typing", serde_json::json!({ "from": from, "gid": gid }));
+        } else if let Some(b) = inner.strip_prefix(CTL_PREFIX) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(b) {
+                let _ = app.emit("aqua://ctl", serde_json::json!({ "from": from, "chat": gid, "body": v }));
+            }
         } else if let Some(b) = inner.strip_prefix(EDIT_PREFIX) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(b) {
                 let old = v.get("old").and_then(|x| x.as_str()).unwrap_or("");
@@ -3099,6 +3113,14 @@ async fn on_incoming_envelope(
     if let Some(body) = text.strip_prefix(POLLCLOSE_PREFIX) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
             let _ = app.emit("aqua://poll_close", serde_json::json!({ "from": from, "close": v }));
+        }
+        return;
+    }
+
+    // UI controls (event RSVPs, task ticks…).
+    if let Some(body) = text.strip_prefix(CTL_PREFIX) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
+            let _ = app.emit("aqua://ctl", serde_json::json!({ "from": from, "chat": from, "body": v }));
         }
         return;
     }

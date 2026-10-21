@@ -106,6 +106,21 @@ pub fn write_theme_file(path: String, text: String) -> Result<(), String> {
     std::fs::write(p, text).map_err(|e| format!("write: {e}"))
 }
 
+/// Save a text export the user picked a place for (calendar .ics, a chat
+/// document as .md / .txt / .html). Only those extensions, up to 4 MB.
+#[tauri::command]
+pub fn write_text_file(path: String, text: String) -> Result<(), String> {
+    let p = std::path::PathBuf::from(&path);
+    let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if !matches!(ext.as_str(), "ics" | "md" | "txt" | "html" | "csv") {
+        return Err("only .ics, .md, .txt, .html and .csv files".into());
+    }
+    if text.len() > 4 * 1024 * 1024 {
+        return Err("too large".into());
+    }
+    std::fs::write(p, text).map_err(|e| format!("write: {e}"))
+}
+
 /// Read a theme config (picked by the user, or received in a chat).
 #[tauri::command]
 pub fn read_theme_file(path: String) -> Result<String, String> {

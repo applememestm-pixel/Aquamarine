@@ -186,6 +186,8 @@ export interface Settings {
   // --- Sounds ---
   /** Message sound: built-in id ("ding", "pop", …) or "file:<name>". */
   messageSound: string;
+  /** Calendar reminders (a different sound by default). */
+  reminderSound?: string;
   soundVolume: number;     // 0–1
   /** Per chat (peer / group id) sound, same ids as messageSound; "none" = silent. */
   chatSounds?: Record<string, string>;

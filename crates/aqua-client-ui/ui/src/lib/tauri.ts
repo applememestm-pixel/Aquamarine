@@ -101,6 +101,8 @@ export const api = {
   webappInit:         (bot: string, start_param?: string): Promise<{ init_data: string; signed: boolean }> => invoke("webapp_init", { bot, startParam: start_param ?? null }),
   /** The bot's menu button. */
   webappMenu:         (bot: string): Promise<{ type: string; text?: string; web_app?: { url: string } }> => invoke("webapp_menu", { bot }),
+  /** Save a text export (.ics/.md/.txt/.html/.csv) to a path the user picked. */
+  writeTextFile:      (path: string, text: string): Promise<void> => invoke("write_text_file", { path, text }),
   getChatTtl:         (peer_id: string): Promise<number> => invoke("get_chat_ttl", { peerId: peer_id }),
   /** Set a 1:1 chat's auto-delete timer (shared with the other person). */
   setChatTtl:         (peer_id: string, secs: number): Promise<void> => invoke("set_chat_ttl", { peerId: peer_id, secs }),

@@ -43,6 +43,11 @@
   import { TTL_PRESETS, ttlLabel, ttlShort, ttlNote } from "../ttl";
   import { parseBotText, type BotKb, type KbButton } from "../botkb";
   import { openMiniApp } from "./MiniApp.svelte";
+  import { parseSpecial } from "../planner";
+  import EventCard from "./EventCard.svelte";
+  import TasksCard from "./TasksCard.svelte";
+  import { openPlanner } from "./PlannerComposer.svelte";
+  import { calendarFor } from "./ChatCalendar.svelte";
   import GroupCallPanel from "./GroupCallPanel.svelte";
   import { groupCall, activeGroupCalls, joinGroupCall } from "../groupCall";
   import { postBlock, tagOf, canSendKind, isAdmin, can, roomsOf, setOpenRoom } from "../groupRules";
@@ -1928,6 +1933,21 @@
     if (!id) return null;
     return rows.find((r) => r.id === id) ?? null;
   });
+  // Jump to a message (calendar, search results elsewhere…).
+  onMount(() => {
+    const onJump = async (e: Event) => {
+      const id = (e as CustomEvent<string>).detail;
+      if (!id || !messagesEl) return;
+      await ensureShown(id);
+      const el = messagesEl.querySelector(`[data-id="${id}"]`) as HTMLElement | null;
+      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+      el?.classList.add("flash");
+      setTimeout(() => el?.classList.remove("flash"), 1400);
+    };
+    window.addEventListener("aqua:jump", onJump);
+    return () => window.removeEventListener("aqua:jump", onJump);
+  });
+
   async function scrollToPinned() {
     if (!pinned || !messagesEl) return;
     await ensureShown(pinned.id);
@@ -2201,6 +2221,12 @@
               </div>
             {/if}
           </div>
+        {/if}
+        {#if $activeChat.id !== "__saved__" && !isBotChat}
+          <button class="icon-btn" class:active={$calendarFor === $activeChat.id} title={$t("Calendar")}
+            onclick={() => calendarFor.set($calendarFor === $activeChat.id ? null : $activeChat.id)}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="16" y1="3" x2="16" y2="7"/></svg>
+          </button>
         {/if}
         <button class="icon-btn" class:active={searchOpen} title={$t("Search in chat")} onclick={() => (searchOpen ? closeSearch() : openSearch())}>{@html icons.search}</button>
         {#if isGroup && activeGroup}
@@ -2604,6 +2630,14 @@
                     {@render statusTick(m.outgoing)}
                   </span>
                 </div>
+              {:else if m.kind.type === "text" && (m.kind.content.text.startsWith("[event:v1]") || m.kind.content.text.startsWith("[tasks:v1]")) && parseSpecial(m.kind.content.text) && $activeChat}
+                {@const sp = parseSpecial(m.kind.content.text)!}
+                {#if sp.kind === "event"}
+                  <EventCard ev={sp.ev} chat={$activeChat.id} outgoing={m.outgoing} />
+                {:else}
+                  <TasksCard tl={sp.tl} chat={$activeChat.id} members={isGroup && activeGroup ? activeGroup.members.length : 2} outgoing={m.outgoing} />
+                {/if}
+                <span class="card-meta">{m.time}</span>
               {:else if m.kind.type === "text" && isBotChat && m.kind.content.text.startsWith("[kb:v1]")}
                 {@const pb = parseBotText(m.kind.content.text)}
                 <div class="bubble">
@@ -2835,6 +2869,14 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="20" x2="6" y2="12"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="18" y1="20" x2="18" y2="9"/></svg>
               <span>{$t("Poll")}</span>
             </button>
+            <button class="ap-item" onclick={() => { attachMenuOpen = false; if ($activeChat) openPlanner("event", $activeChat.id); }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="16" y1="3" x2="16" y2="7"/></svg>
+              <span>{$t("Event")}</span>
+            </button>
+            <button class="ap-item" onclick={() => { attachMenuOpen = false; if ($activeChat) openPlanner("tasks", $activeChat.id); }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 6 9 10 5"/><line x1="13" y1="7" x2="20" y2="7"/><polyline points="4 15 6 17 10 13"/><line x1="13" y1="15" x2="20" y2="15"/></svg>
+              <span>{$t("Checklist")}</span>
+            </button>
           </div>
         {/if}
         <button
@@ -2919,6 +2961,9 @@
 <svelte:window onmousedown={(e) => { if (ttlMenu && !(e.target as HTMLElement).closest?.(".ttl-wrap")) ttlMenu = false; }} />
 
 <style>
+  .card-meta { font-size: 10.5px; color: var(--fg-dim); padding: 2px 6px 0; font-variant-numeric: tabular-nums; }
+  :global(.flash) .bubble, :global(.flash) .ev, :global(.flash) .tl { animation: msg-flash 1.3s ease-out; }
+  @keyframes msg-flash { 0%, 30% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
   /* "Forwarded from" — the author's avatar in the corner. */
   .fwd-tag {
     display: inline-flex; align-items: center; gap: 7px; max-width: min(100%, 420px);

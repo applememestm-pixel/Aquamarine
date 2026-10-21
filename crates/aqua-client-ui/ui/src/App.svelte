@@ -30,6 +30,10 @@
   import CircleRecorder from "./lib/components/CircleRecorder.svelte";
   import PackSheet from "./lib/components/PackSheet.svelte";
   import MiniApp from "./lib/components/MiniApp.svelte";
+  import PlannerComposer from "./lib/components/PlannerComposer.svelte";
+  import ReminderPopup from "./lib/components/ReminderPopup.svelte";
+  import ChatCalendar from "./lib/components/ChatCalendar.svelte";
+  import { startPlanner } from "./lib/planner";
   import StickerEditor from "./lib/components/StickerEditor.svelte";
   import PackManager from "./lib/components/PackManager.svelte";
   import RegistrationWizard from "./lib/components/RegistrationWizard.svelte";
@@ -84,6 +88,7 @@
   });
 
   onMount(() => {
+    startPlanner();
     const stopIcon = startAppIcon();
     void migrateCustomWallpaper(api.saveWallpaper)
       .then(() => api.listWallpapers().then(followWallpaper).catch(() => {}))
@@ -284,6 +289,9 @@
 <ImageCropper />
 <PackSheet />
 <MiniApp />
+<PlannerComposer />
+<ReminderPopup />
+<ChatCalendar />
 <Toast />
 {#if gpuAsk > 0}
   <div class="gpu-ask" role="alertdialog" aria-live="assertive">
