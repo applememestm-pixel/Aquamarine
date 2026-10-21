@@ -6,6 +6,8 @@
     placeholder?: string;
     value?: string;
     monospace?: boolean;
+    /** Hidden input (passwords). */
+    secret?: boolean;
   }
 
   export interface PromptSpec {
@@ -75,7 +77,8 @@
         <label class="field">
           <span class="label">{f.label}</span>
           <input
-            type="text"
+            type={f.secret ? "password" : "text"}
+            autocomplete={f.secret ? "new-password" : "off"}
             placeholder={f.placeholder ?? ""}
             bind:value={values[i]}
             onkeydown={onKey}

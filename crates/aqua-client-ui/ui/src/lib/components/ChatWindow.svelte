@@ -44,6 +44,7 @@
   import { parseBotText, type BotKb, type KbButton } from "../botkb";
   import { openMiniApp } from "./MiniApp.svelte";
   import { parseSpecial } from "../planner";
+  import { chatLocks, unlocked, unlockChat, noteLeft } from "../chatLocks";
   import EventCard from "./EventCard.svelte";
   import TasksCard from "./TasksCard.svelte";
   import { openPlanner } from "./PlannerComposer.svelte";
@@ -967,6 +968,30 @@
   let myUsername = $derived($info?.username ?? "");
   let isGroup = $derived($activeChat?.id?.startsWith("grp_") ?? false);
   let activeGroup = $derived($activeChat ? $groupMap[$activeChat.id] : undefined);
+
+  // ---- Chat password (only for me) ----
+  let lockedNow = $derived(!!$activeChat && !!$chatLocks[$activeChat.id] && !$unlocked[$activeChat.id]);
+  let lockPass = $state("");
+  let lockErr = $state(false);
+  let lockBusy = $state(false);
+  let prevChat = "";
+  $effect(() => {
+    const id = $activeChat?.id ?? "";
+    untrack(() => {
+      if (prevChat && prevChat !== id) noteLeft(prevChat);
+      prevChat = id;
+      lockPass = ""; lockErr = false;
+      if (id && $unlocked[id]) unlocked.update((u) => ({ ...u, [id]: Date.now() }));
+    });
+  });
+  async function tryUnlock() {
+    if (!$activeChat || lockBusy) return;
+    lockBusy = true;
+    const ok = await unlockChat($activeChat.id, lockPass);
+    lockBusy = false;
+    lockErr = !ok;
+    if (ok) lockPass = "";
+  }
 
   /** This chat is in its own window (calls stay in the main one). */
   const POPOUT = typeof document !== "undefined" && document.documentElement.classList.contains("popout");
@@ -2009,7 +2034,7 @@
   $effect(() => {
     const chat = $activeChat;
     void $activeMessages.length;
-    if (chat?.live && !chat.id.startsWith("grp_") && !$ghost.noReadReceipts && !$noReceiptChats.has(chat.id) && $activeMessages.some((m) => m.from !== "me")) {
+    if (chat?.live && !chat.id.startsWith("grp_") && !$ghost.noReadReceipts && !$noReceiptChats.has(chat.id) && !lockedNow && $activeMessages.some((m) => m.from !== "me")) {
       void api.sendControl(chat.id, "[seen:v1]{}");
     }
   });
@@ -2074,6 +2099,21 @@
   {#if !$activeChat}
     <div class="empty">{$t("Pick a chat on the left.")}</div>
   {:else}
+    {#if lockedNow}
+      <div class="lock-gate">
+        <div class="lg-card">
+          <div class="lg-ic">{@html icons.lock}</div>
+          <b>{$t("This chat is locked")}</b>
+          <span class="lg-sub">{$t("Enter its password to open it.")}</span>
+          <!-- svelte-ignore a11y_autofocus -->
+          <input class="lg-in" class:err={lockErr} type="password" autocomplete="off" autofocus placeholder={$t("Password")}
+            bind:value={lockPass} oninput={() => (lockErr = false)} onkeydown={(e) => { if (e.key === "Enter") void tryUnlock(); }} />
+          {#if lockErr}<span class="lg-err">{$t("Wrong password")}</span>{/if}
+          {#if $chatLocks[$activeChat.id]?.hint}<span class="lg-hint">{$t("Hint")}: {$chatLocks[$activeChat.id].hint}</span>{/if}
+          <button class="lg-btn" onclick={tryUnlock} disabled={lockBusy || !lockPass}>{lockBusy ? "…" : $t("Unlock")}</button>
+        </div>
+      </div>
+    {/if}
     {#if rooms.length && activeGroup}
       {#if roomsOpen}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -3022,6 +3062,19 @@
 <svelte:window onmousedown={(e) => { if (ttlMenu && !(e.target as HTMLElement).closest?.(".ttl-wrap")) ttlMenu = false; }} />
 
 <style>
+  .lock-gate { position: absolute; inset: 0; z-index: 30; display: grid; place-items: center; background: var(--bg-shell); animation: ttl-pop 0.18s ease-out; }
+  .lg-card { width: min(320px, calc(100% - 32px)); display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; }
+  .lg-ic { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); margin-bottom: 6px; }
+  .lg-ic :global(svg) { width: 28px; height: 28px; }
+  .lg-card b { font-size: 17px; }
+  .lg-sub, .lg-hint { font-size: 13px; color: var(--fg-muted); }
+  .lg-in { width: 100%; box-sizing: border-box; margin-top: 6px; padding: 11px 14px; border-radius: 12px; border: 1px solid var(--border-strong); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 15px; text-align: center; outline: none; }
+  .lg-in:focus { border-color: var(--accent); }
+  .lg-in.err { border-color: #ff5c5c; animation: lg-shake 0.3s; }
+  .lg-err { font-size: 12.5px; color: #ff5c5c; }
+  .lg-btn { width: 100%; border: none; border-radius: 12px; padding: 11px; background: var(--accent); color: #06070C; font: inherit; font-weight: 800; cursor: pointer; }
+  .lg-btn:disabled { opacity: 0.6; }
+  @keyframes lg-shake { 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
   .ctx-emoji.fav { position: relative; }
   .ctx-emoji.fav::after { content: ""; position: absolute; right: -3px; top: 20%; bottom: 20%; width: 1px; background: var(--border-strong); }
   .sb-reacts { display: flex; align-items: center; gap: 5px; padding: 4px 14px 8px; overflow-x: auto; scrollbar-width: none; animation: ttl-pop 0.14s ease-out; }

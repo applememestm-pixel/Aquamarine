@@ -5,6 +5,7 @@ import { api, events } from "./tauri";
 import { contacts, contactMatches, displayName, saveContact } from "./contacts";
 import { settings } from "./theme";
 import { playSound, soundFor } from "./sounds";
+import { tr } from "./i18n";
 
 /** Play a short chime + optional desktop notification for an incoming
  *  message, honouring the user's notification settings. */
@@ -13,8 +14,11 @@ function notifyIncoming(peerId: string, text: string) {
   if (s.notifySound) void playSound(soundFor(peerId));
   if (s.notifyDesktop && "Notification" in window && Notification.permission === "granted") {
     try {
-      const name = displayName(peerId, peerId);
-      new Notification(name, { body: text.slice(0, 120) });
+      // A chat with a password: nothing of it in the notification.
+      let lockedChat = false;
+      try { lockedChat = !!JSON.parse(localStorage.getItem("aqua.chatLocks.v1") ?? "{}")[peerId]; } catch { /* ignore */ }
+      if (lockedChat) new Notification("Aquamarine", { body: tr("New message in a locked chat") });
+      else new Notification(displayName(peerId, peerId), { body: text.slice(0, 120) });
     } catch { /* ignore */ }
   }
 }

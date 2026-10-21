@@ -24,6 +24,8 @@
   let plusMenuOpen = $state(false);
   import { contacts, saveContact } from "../contacts";
   import { api } from "../tauri";
+  import { chatLocks, unlocked, setChatLock, removeChatLock, unlockChat, lockNowChat } from "../chatLocks";
+  import { askInput, closeInput } from "./InputPrompt.svelte";
   import type { DirProfile } from "../types";
   import { folders, activeFolder } from "../folders";
   import { openFolderManager } from "./FolderManager.svelte";
@@ -108,6 +110,39 @@
     handle.addEventListener("pointerup", up);
   }
   function resetWidth() { document.documentElement.style.removeProperty("--list-w"); try { localStorage.removeItem(LW_KEY); } catch { /* ignore */ } }
+
+  // ---- Per-chat passwords (only for me) ----
+  function askSetLock(id: string) {
+    askInput({
+      title: tr("Password for this chat"),
+      description: tr("The chat's name and messages are hidden until you enter it. Only you are affected; it goes with your encrypted backup to your other devices."),
+      fields: [{ label: tr("Password"), secret: true }, { label: tr("Repeat password"), secret: true }, { label: tr("Hint (optional)") }],
+      submitLabel: tr("Set password"),
+      onSubmit: async ([a, b, hint]) => {
+        if ((a ?? "").length < 4) return tr("At least 4 characters");
+        if (a !== b) return tr("Passwords don't match");
+        await setChatLock(id, a, hint);
+        if ($activeId === id) lockNowChat(id);
+        closeInput();
+        showToast(tr("The chat is locked"));
+        return null;
+      },
+    });
+  }
+  function askRemoveLock(id: string) {
+    askInput({
+      title: tr("Remove the password"),
+      fields: [{ label: tr("Current password"), secret: true }],
+      submitLabel: tr("Remove"),
+      onSubmit: async ([p]) => {
+        if (!(await unlockChat(id, p ?? ""))) return tr("Wrong password");
+        removeChatLock(id);
+        closeInput();
+        showToast(tr("Password removed"));
+        return null;
+      },
+    });
+  }
 
   // ---- Ctrl+click (or Ctrl+right-click): the chat in its own window ----
   const DESKTOP = typeof navigator !== "undefined" && !/android|iphone|ipad/i.test(navigator.userAgent);
@@ -378,6 +413,7 @@
     {/if}
     {#each shownChats as c, ci (c.id)}
       {@const st = chatStatus(c, $peerPresence, $presenceNow)}
+      {@const lk = !!$chatLocks[c.id] && !$unlocked[c.id]}
       <button
         class="chat-item"
         title={compact ? c.name : undefined}
@@ -393,16 +429,17 @@
         onclick={(e) => { if (suppressClick) return; if ((e.ctrlKey || e.metaKey) && DESKTOP) { popOut(c.id, c.name); return; } void selectChat(c.id); }}
         oncontextmenu={(e) => { if ((e.ctrlKey || e.metaKey) && DESKTOP) { e.preventDefault(); popOut(c.id, c.name); return; } openCtx(e, c.id); }}
       >
-        <div class="avatar sz-44" style="--gradient: {c.gradient}">
-          {c.letter}
-          {#if $avatars[c.id]}<img class="ava-img" src={$avatars[c.id]} alt="" loading="lazy" />{/if}
+        <div class="avatar sz-44" class:lk style="--gradient: {c.gradient}">
+          {lk ? "" : c.letter}
+          {#if $avatars[c.id] && !lk}<img class="ava-img" src={$avatars[c.id]} alt="" loading="lazy" />{/if}
+          {#if lk}<span class="lk-ic">{@html icons.lock}</span>{/if}
           {#if st}<span class="st-dot {st}" title={$t(st === "online" ? "Online" : st === "idle" ? "Idle" : st === "dnd" ? "Do not disturb" : "Offline")}></span>{/if}
           {#if compact && c.unread > 0 && c.id !== $activeId}<span class="cmp-badge" class:muted={c.channel || $mutedChats.has(c.id)}>{c.unread > 99 ? "99+" : c.unread}</span>{/if}
         </div>
         <div class="chat-body">
           <div class="chat-row-1">
             <span class="chat-name">
-              <span class="cn-text">{c.name}</span>
+              <span class="cn-text" class:lk-blur={lk}>{lk ? "•••••••" : c.name}</span>
               {#if c.verified}<span class="verified-badge">{@html icons.verified}</span>{/if}
               {#if $clans[c.id]}<ClanTag tag={$clans[c.id]} />{/if}
               {#if $mutedChats.has(c.id)}<span class="muted-ic" title={$t("Muted")}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg></span>{/if}
@@ -410,7 +447,9 @@
             <span class="chat-time">{c.time}</span>
           </div>
           <div class="chat-row-2">
-            {#if c.preview_is_typing}
+            {#if lk}
+              <span class="chat-preview lk-prev">{$t("Locked chat")}</span>
+            {:else if c.preview_is_typing}
               <span class="chat-preview typing">{c.preview}</span>
             {:else if $peerPresence[c.id]?.activity?.[0]}
               {@const a = $peerPresence[c.id].activity![0]}
@@ -447,12 +486,23 @@
       <button onclick={() => archiveChat(cid)}>{$t($archived.has(cid) ? "Unarchive" : "Archive")}</button>
       <button onclick={() => { setMuted(cid); ctx = null; }}>{$t($mutedChats.has(cid) ? "Unmute" : "Mute notifications")}</button>
       <button onclick={() => { void selectChat(cid); ctx = null; }}>{$t("Open")}</button>
+      {#if $chatLocks[cid]}
+        <button onclick={() => { const id = cid; ctx = null; askRemoveLock(id); }}>{$t("Remove the password")}</button>
+        {#if $unlocked[cid]}<button onclick={() => { const id = cid; ctx = null; lockNowChat(id); }}>{$t("Lock now")}</button>{/if}
+      {:else}
+        <button onclick={() => { const id = cid; ctx = null; askSetLock(id); }}>{$t("Set a password…")}</button>
+      {/if}
       {#if DESKTOP}<button onclick={() => popOut(cid, $chats.find((x) => x.id === cid)?.name ?? cid)}>{$t("Open in a new window")} <span class="ctx-kbd">Ctrl+click</span></button>{/if}
     </div>
   {/if}
 </aside>
 
 <style>
+  .avatar.lk { filter: saturate(0.3); }
+  .lk-ic { position: absolute; inset: 0; display: grid; place-items: center; color: rgba(255,255,255,0.9); }
+  .lk-ic :global(svg) { width: 18px; height: 18px; }
+  .lk-blur { filter: blur(3px); letter-spacing: 2px; user-select: none; }
+  .lk-prev { color: var(--fg-dim); font-style: italic; }
   .ctx-kbd { float: right; margin-left: 12px; font-size: 11px; color: var(--fg-dim); }
   .chat-item.kb { box-shadow: inset 0 0 0 2px var(--accent); }
   .resize-handle { position: absolute; top: 0; right: -3px; width: 6px; height: 100%; cursor: col-resize; z-index: 6; }
