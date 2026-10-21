@@ -207,54 +207,122 @@ impl GameDb {
             return None;
         }
         let dir = PathBuf::from(ICON_DIR).join("covers");
-        let file = dir.join(format!("{id}.jpg"));
         let none = dir.join(format!("{id}.none"));
-        if let Ok(b) = std::fs::read(&file) {
-            return Some(("image/jpeg".into(), b));
+        for ext in ["jpg", "img"] {
+            if let Ok(b) = std::fs::read(dir.join(format!("{id}.{ext}"))) {
+                if let Some(m) = image_mime(&b) {
+                    return Some((m.into(), b));
+                }
+            }
         }
-        // Looked up recently and there was nothing: don't ask Steam again for a day.
+        // Looked up recently and there was nothing: don't ask again for a day.
         if std::fs::metadata(&none).and_then(|m| m.modified()).ok()
             .and_then(|t| SystemTime::now().duration_since(t).ok())
             .is_some_and(|age| age < Duration::from_secs(24 * 3600)) {
             return None;
         }
         let game = self.get().await.into_iter().find(|g| g.id == id)?;
-        let client = reqwest::Client::builder().timeout(Duration::from_secs(20)).user_agent("aqua-server").build().ok()?;
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(20))
+            .user_agent("aqua-server/0.2 (https://github.com/applememestm-pixel/Aquamarine)").build().ok()?;
         let _ = std::fs::create_dir_all(&dir);
         let steam = match game.steam.clone() {
-            Some(s) => s,
-            // Not in Discord's list: Steam's store search by exact name.
-            None => match steam_app_by_name(&client, &game.name).await {
-                Some(s) => s,
-                None => {
-                    let _ = std::fs::write(&none, b"");
-                    return None;
-                }
-            },
+            Some(s) => Some(s),
+            // Not in Discord's list: Steam's store search by name.
+            None => steam_app_by_name(&client, &game.name).await,
         };
-        let urls = [
-            format!("https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{steam}/library_600x900.jpg"),
-            format!("https://cdn.akamai.steamstatic.com/steam/apps/{steam}/library_600x900.jpg"),
-            format!("https://cdn.akamai.steamstatic.com/steam/apps/{steam}/header.jpg"),
-        ];
+        let mut urls: Vec<String> = Vec::new();
+        if let Some(steam) = &steam {
+            // Newer apps keep their art under hashed paths: ask the store.
+            let (cap, header) = steam_assets(&client, steam).await;
+            urls.extend(cap);
+            urls.push(format!("https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{steam}/library_600x900.jpg"));
+            urls.push(format!("https://cdn.akamai.steamstatic.com/steam/apps/{steam}/library_600x900.jpg"));
+            // Games that aren't on Steam (Minecraft, Roblox, Fortnite…), or
+            // without a portrait capsule: the infobox art of their Wikipedia article.
+            urls.push(String::new());
+            urls.extend(header);
+            urls.push(format!("https://cdn.akamai.steamstatic.com/steam/apps/{steam}/header.jpg"));
+        } else {
+            urls.push(String::new());
+        }
         for u in urls {
+            let u = if u.is_empty() {
+                match wikipedia_cover(&client, "en", &game.name, "video game").await {
+                    Some(w) => w,
+                    None => match wikipedia_cover(&client, "ru", &game.name, "компьютерная игра").await { Some(w) => w, None => continue },
+                }
+            } else { u };
             let Ok(r) = client.get(&u).send().await else { continue };
             if !r.status().is_success() {
                 continue;
             }
             let Ok(b) = r.bytes().await else { continue };
-            if b.len() < 512 || b.len() > 3 * 1024 * 1024 || !b.starts_with(&[0xFF, 0xD8]) {
+            if b.len() < 512 || b.len() > 4 * 1024 * 1024 {
                 continue;
             }
-            let _ = std::fs::write(&file, &b);
-            return Some(("image/jpeg".into(), b.to_vec()));
+            let Some(m) = image_mime(&b) else { continue };
+            let _ = std::fs::write(dir.join(format!("{id}.img")), &b);
+            return Some((m.into(), b.to_vec()));
         }
         let _ = std::fs::write(&none, b"");
         None
     }
 }
 
-/// Steam app id of a game by its exact (normalized) name.
+/// Portrait capsule and header URLs of a Steam app, from the store API.
+async fn steam_assets(client: &reqwest::Client, app: &str) -> (Option<String>, Option<String>) {
+    let input = format!(r#"{{"ids":[{{"appid":{app}}}],"context":{{"language":"english","country_code":"US"}},"data_request":{{"include_assets":true}}}}"#);
+    let Ok(r) = client.get("https://api.steampowered.com/IStoreBrowseService/GetItems/v1/").query(&[("input_json", input)]).send().await else { return (None, None) };
+    let Ok(v) = r.json::<serde_json::Value>().await else { return (None, None) };
+    let a = &v["response"]["store_items"][0]["assets"];
+    let Some(fmt) = a["asset_url_format"].as_str() else { return (None, None) };
+    let url = |k: &str| a[k].as_str().filter(|f| !f.is_empty() && !f.contains("..")).map(|f| format!("https://shared.akamai.steamstatic.com/store_item_assets/{}", fmt.replace("${FILENAME}", f)));
+    (url("library_capsule"), url("header"))
+}
+
+/// JPEG / PNG / WebP by their magic bytes.
+fn image_mime(b: &[u8]) -> Option<&'static str> {
+    if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if b.starts_with(b"\x89PNG") {
+        Some("image/png")
+    } else if b.len() > 12 && &b[..4] == b"RIFF" && &b[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
+/// Cover art from the game's English Wikipedia article (the infobox image).
+async fn wikipedia_cover(client: &reqwest::Client, lang: &str, name: &str, what: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Resp { #[serde(default)] query: Option<Q> }
+    #[derive(Deserialize)]
+    struct Q { #[serde(default)] pages: std::collections::HashMap<String, Page> }
+    #[derive(Deserialize)]
+    struct Page { #[serde(default)] title: String, #[serde(default)] index: Option<u32>, #[serde(default)] original: Option<Img> }
+    #[derive(Deserialize)]
+    struct Img { source: String }
+    let want = norm(name);
+    let r: Resp = client
+        .get(format!("https://{lang}.wikipedia.org/w/api.php"))
+        .query(&[("action", "query"), ("format", "json"), ("redirects", "1"), ("prop", "pageimages"), ("piprop", "original"),
+                 ("pilicense", "any"), ("generator", "search"), ("gsrsearch", &format!("{name} {what}")), ("gsrlimit", "5")])
+        .send().await.ok()?.error_for_status().ok()?.json().await.ok()?;
+    let mut pages: Vec<Page> = r.query?.pages.into_values().collect();
+    pages.sort_by_key(|p| p.index.unwrap_or(99));
+    // "Peak (video game)" → "peak".
+    let base = |t: &str| norm(t.split(" (").next().unwrap_or(t));
+    let ok = |p: &Page| p.original.as_ref().is_some_and(|o| {
+        let l = o.source.to_lowercase();
+        !l.contains(".svg") && (l.contains(".jpg") || l.contains(".jpeg") || l.contains(".png") || l.contains(".webp"))
+    });
+    let pick = pages.iter().find(|p| base(&p.title) == want && ok(p))
+        .or_else(|| pages.iter().find(|p| base(&p.title).starts_with(&want) && ok(p)))?;
+    pick.original.as_ref().map(|o| o.source.clone())
+}
+
+/// Steam app id of a game by its name (exact, else the base game).
 async fn steam_app_by_name(client: &reqwest::Client, name: &str) -> Option<String> {
     #[derive(Deserialize)]
     struct Resp { #[serde(default)] items: Vec<Item> }
@@ -265,7 +333,12 @@ async fn steam_app_by_name(client: &reqwest::Client, name: &str) -> Option<Strin
         .query(&[("term", name), ("l", "english"), ("cc", "US")])
         .send().await.ok()?.error_for_status().ok()?.json().await.ok()?;
     let want = norm(name);
-    r.items.into_iter().find(|i| norm(&i.name) == want).map(|i| i.id.to_string())
+    let exact = r.items.iter().find(|i| norm(&i.name) == want);
+    exact.or_else(|| r.items.iter().find(|i| {
+        let n = norm(&i.name);
+        // "Teardown" ↔ "Teardown Folkrace" is fine, "Peak" ↔ "Peaky Blinders" is not.
+        n.starts_with(&format!("{want} ")) || n.starts_with(&format!("{want}:"))
+    })).map(|i| i.id.to_string())
 }
 
 #[cfg(test)]

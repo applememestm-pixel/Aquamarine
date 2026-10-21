@@ -35,6 +35,8 @@ export interface Profile {
   games?: string[];
   /** Catalogue ids of those games (name → id), for icons. */
   game_ids?: Record<string, string>;
+  /** A line about the first (favourite) game. */
+  game_note?: string;
   /** Profile version — bumped on every publish so peers refetch the card. */
   pv?: number;
   /** Discord-style server tag I'm wearing (from a group I'm in). */

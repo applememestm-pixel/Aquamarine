@@ -1791,4 +1791,13 @@ export const RU: Record<string, string> = {
   "It opens on {d} unless you say no.": "Оно откроется {d}, если вы не откажете.",
   "Say no": "Отказать",
   "Let it open": "Пусть откроется",
+  "Favourite game": "Любимая игра",
+  "My favourite games": "Мои любимые игры",
+  "Playing now": "Играет сейчас",
+  "in game": "в игре",
+  "{n} favourite games": "Любимых игр: {n}",
+  "Show less": "Свернуть",
+  "Show more": "Показать больше",
+  "Make it my favourite game": "Сделать любимой игрой",
+  "What do you love about {g}?": "Что вам нравится в {g}?",
 };

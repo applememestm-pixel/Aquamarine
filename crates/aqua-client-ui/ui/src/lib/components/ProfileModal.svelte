@@ -32,6 +32,7 @@
   import type { Activity } from "../types";
   import { openRegistration, registrationDismissed } from "./RegistrationWizard.svelte";
   import { playedTop, played, gameGradient } from "../played";
+  import GamePoster from "./GamePoster.svelte";
   import { gameIds, gameIcons, gameCovers, resolveGame, rememberGame, iconFor, coverFor } from "../games";
 
   let pfTab = $state<"board" | "activity">("board");
@@ -88,6 +89,8 @@
     resolveGame(g, hit?.id);
     gameInput = ""; gameHits = [];
   }
+  function makeFavourite(g: string) { if (draft) draft = { ...draft, games: [g, ...(draft.games ?? []).filter((x) => x !== g)] }; }
+  let showAllGames = $state(false);
   function removeGame(g: string) { if (draft) { const ids = { ...(draft.game_ids ?? {}) }; delete ids[g]; draft = { ...draft, games: (draft.games ?? []).filter((x) => x !== g), game_ids: ids }; } }
   // Look up icons for whatever is on screen.
   $effect(() => {
@@ -216,6 +219,7 @@
     links: { label: string; url: string }[];
     games: string[];
     game_ids: Record<string, string>;
+    game_note: string;
     played: { n: string; h: number }[];
   }
   let view = $derived<View | null>((void $played, buildView(activeUsername, $profile, $contacts, $info, $peerCards, $peerPresence, $myActivity)));
@@ -271,6 +275,7 @@
         links: asLinks(me.links),
         games: asGames(me.games),
         game_ids: me.game_ids ?? {},
+        game_note: (me.game_note ?? "").slice(0, 140),
         played: getStore(shareActivity) ? playedTop(12).map((g) => ({ n: g.name, h: Math.round(g.secs / 360) / 10 })) : [],
       };
     }
@@ -303,6 +308,7 @@
       links: asLinks(x.links),
       games: asGames(x.games),
       game_ids: (x.game_ids && typeof x.game_ids === "object" ? x.game_ids : {}) as Record<string, string>,
+      game_note: str(x.game_note).slice(0, 140),
       played: asPlayed(x.played),
     };
   }
@@ -478,12 +484,16 @@
                 {#each draft.games ?? [] as g (g)}
                   {@const cv = coverFor(g, $gameIds, $gameCovers, draft.game_ids)}
                   {@const ic = iconFor(g, $gameIds, $gameIcons, draft.game_ids)}
-                  <div class="ed-game" title={g} style:--gg={gameGradient(g)}>
-                    {#if cv}<img class="eg-cover" src={cv} alt="" />{:else}{#if ic}<img class="eg-bg" src={ic} alt="" /><img class="eg-ic" src={ic} alt="" />{:else}<span class="eg-ph">{g.charAt(0).toUpperCase()}</span>{/if}<span class="eg-name">{g}</span>{/if}
+                  <div class="ed-game" class:first={g === draft.games?.[0]}>
+                    <GamePoster name={g} cover={cv} icon={ic} />
+                    {#if g !== draft.games?.[0]}<button class="eg-star" onclick={() => makeFavourite(g)} title={$t("Make it my favourite game")} aria-label={$t("Make it my favourite game")}>★</button>{:else}<span class="eg-first">★ {$t("Favourite")}</span>{/if}
                     <button class="eg-x" onclick={() => removeGame(g)} title={$t("Remove")} aria-label={$t("Remove")}>×</button>
                   </div>
                 {/each}
               </div>
+            {/if}
+            {#if (draft.games ?? []).length}
+              <input class="game-note" bind:value={draft.game_note} maxlength="140" placeholder={tr("What do you love about {g}?", { g: draft.games?.[0] ?? "" })} />
             {/if}
             <div class="link-edit game-search">
               <input class="le-url" bind:value={gameInput} placeholder={$t("Search a game — Teardown, Minecraft…")} onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); addGame(gameHits[0] && gameHits[0].name.toLowerCase() === gameInput.trim().toLowerCase() ? gameHits[0] : undefined); } }} />
@@ -672,27 +682,36 @@
             {/if}
 
             {#if view.games.length}
+              {@const fg = view.games[0]}
+              {@const fpl = view.played.find((x) => x.n === fg)}
+              {@const now = view.activity.some((a) => a.name === fg)}
               <section class="card">
-                <div class="section-label">{$t("Favourite games")}</div>
-                <div class="games">
-                  {#each view.games as g (g)}
-                    {@const pl = view.played.find((x) => x.n === g)}
-                    {@const ic = iconFor(g, $gameIds, $gameIcons, view.game_ids)}
-                    {@const cv = coverFor(g, $gameIds, $gameCovers, view.game_ids)}
-                    <div class="game" class:has-cover={!!cv} title={g} style:--gg={gameGradient(g)}>
-                      {#if cv}
-                        <img class="game-cover" src={cv} alt={g} />
-                      {:else if ic}
-                        <img class="game-bg" src={ic} alt="" /><img class="game-ic" src={ic} alt="" />
-                      {:else}
-                        <span class="game-ph">{g.charAt(0).toUpperCase()}</span>
-                      {/if}
-                      <span class="game-name">{g}</span>
-                      {#if pl && pl.h > 0}<span class="game-h">{pl.h} {$t("h")}</span>{/if}
+                <div class="section-label">{$t("Favourite game")}</div>
+                <div class="fav-game">
+                  <div class="fg-poster"><GamePoster name={fg} cover={coverFor(fg, $gameIds, $gameCovers, view.game_ids)} icon={iconFor(fg, $gameIds, $gameIcons, view.game_ids)} label={false} /></div>
+                  <div class="fg-info">
+                    <b class="fg-name">{fg}</b>
+                    {#if view.game_note}<p class="fg-note">“ {view.game_note}</p>{/if}
+                    <div class="fg-chips">
+                      {#if now}<span class="fg-chip live">● {$t("Playing now")}</span>{/if}
+                      {#if fpl && fpl.h > 0}<span class="fg-chip">🕹 {fpl.h} {$t("h")} {$t("in game")}</span>{/if}
+                      {#if (view.games.length > 1)}<span class="fg-chip">★ {tr("{n} favourite games", { n: view.games.length })}</span>{/if}
                     </div>
-                  {/each}
+                  </div>
                 </div>
               </section>
+              {#if view.games.length > 1}
+                <section class="card">
+                  <div class="section-label">{$t("My favourite games")}</div>
+                  <div class="games">
+                    {#each view.games.slice(1, showAllGames ? 12 : 9) as g (g)}
+                      {@const pl = view.played.find((x) => x.n === g)}
+                      <GamePoster name={g} cover={coverFor(g, $gameIds, $gameCovers, view.game_ids)} icon={iconFor(g, $gameIds, $gameIcons, view.game_ids)} hours={pl?.h ?? 0} />
+                    {/each}
+                  </div>
+                  {#if view.games.length > 9}<button class="more-games" onclick={() => (showAllGames = !showAllGames)}>{showAllGames ? $t("Show less") : $t("Show more")}</button>{/if}
+                </section>
+              {/if}
             {/if}
             {#if view.played.length || view.games.length}
               {@const all = [...new Set([...view.played.map((g) => g.n), ...view.games])]}
@@ -783,27 +802,18 @@
   .link-ic :global(svg) { width: 18px; height: 18px; }
   .link-txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .link-go { color: var(--fg-dim); font-size: 12px; }
-  .games { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; margin-top: 8px; }
-  .game {
-    position: relative; aspect-ratio: 3 / 4; border-radius: 12px; padding: 8px;
-    display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-start; overflow: hidden;
-    color: #fff; background: var(--gg); box-shadow: inset 0 -50px 40px -20px rgba(0, 0, 0, 0.6);
-    transition: transform 0.2s cubic-bezier(.2,.8,.2,1), box-shadow .2s;
-  }
-  .game:hover { box-shadow: inset 0 -50px 40px -20px rgba(0,0,0,.6), 0 10px 24px -10px rgba(0,0,0,.6); }
-  .game-bg { position: absolute; inset: -20%; width: 140%; height: 140%; object-fit: cover; filter: blur(18px) saturate(1.4) brightness(.7); }
-  .game-ic { position: absolute; top: 18%; left: 50%; transform: translateX(-50%); width: 52%; aspect-ratio: 1; border-radius: 14px;
-    box-shadow: 0 8px 20px rgba(0,0,0,.45); }
-  .game-ph { position: absolute; top: 22%; left: 50%; transform: translateX(-50%); font-size: 34px; font-weight: 900; opacity: .9; }
-  .game-name, .game-h { position: relative; }
+  .games { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 8px; }
   .game-star { color: #FFD45C; font-size: 11px; }
-  .game.has-cover { padding: 0; }
-  .game-cover { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transition: transform .3s cubic-bezier(.2,.8,.2,1); }
-  .game.has-cover .game-name { position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 8px 7px; background: linear-gradient(transparent, rgba(0,0,0,.75)); opacity: 0; transition: opacity .2s; }
-  .game.has-cover:hover .game-name { opacity: 1; }
-  .game.has-cover:hover .game-cover { transform: scale(1.05); }
-  .game.has-cover .game-h { position: absolute; top: 6px; right: 6px; background: rgba(0,0,0,.6); border-radius: 6px; padding: 1px 5px; }
-  .game:hover { transform: translateY(-2px); }
+  .more-games { margin-top: 10px; border: none; background: none; color: var(--fg-muted); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; padding: 0; }
+  .more-games:hover { color: var(--accent); text-decoration: underline; }
+  .fav-game { display: flex; gap: 14px; margin-top: 8px; align-items: flex-start; }
+  .fg-poster { width: 92px; flex-shrink: 0; }
+  .fg-info { min-width: 0; display: flex; flex-direction: column; gap: 6px; padding-top: 4px; }
+  .fg-name { font-size: 16px; }
+  .fg-note { margin: 0; font-size: 13px; color: var(--fg-muted); line-height: 1.45; word-wrap: break-word; }
+  .fg-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .fg-chip { font-size: 11.5px; font-weight: 600; padding: 3px 8px; border-radius: 7px; border: 1px solid var(--border-strong); color: var(--fg-muted); }
+  .fg-chip.live { color: #3ddc84; border-color: color-mix(in srgb, #3ddc84 40%, transparent); }
 
   /* ---- editor: two columns (card on the left, details on the right) ---- */
   .sheet.ed { width: min(980px, 96vw); height: min(720px, 92vh); max-height: 92vh; }
@@ -817,13 +827,13 @@
     display: flex; flex-direction: column; }
   .ed-right .buttons { margin-top: auto; padding-top: 16px; position: sticky; bottom: -18px; background: var(--bg-shell); padding-bottom: 2px; }
   .ed-games { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 8px; margin: 2px 0 8px; }
-  .ed-game { position: relative; aspect-ratio: 3 / 4; border-radius: 10px; overflow: hidden; background: var(--gg); color: #fff;
-    display: flex; align-items: flex-end; padding: 6px; animation: fade-in .2s ease-out; }
-  .eg-cover { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-  .eg-bg { position: absolute; inset: -20%; width: 140%; height: 140%; object-fit: cover; filter: blur(14px) brightness(.7); }
-  .eg-ic { position: absolute; top: 16%; left: 50%; transform: translateX(-50%); width: 50%; aspect-ratio: 1; border-radius: 10px; }
-  .eg-ph { position: absolute; top: 20%; left: 50%; transform: translateX(-50%); font-size: 26px; font-weight: 900; }
-  .eg-name { position: relative; font-size: 11px; font-weight: 700; line-height: 1.15; text-shadow: 0 1px 2px rgba(0,0,0,.7); }
+  .ed-game { position: relative; animation: fade-in .2s ease-out; }
+  .ed-game.first :global(.gp) { box-shadow: 0 0 0 2px #FFD45C; }
+  .eg-star { position: absolute; top: 4px; left: 4px; width: 20px; height: 20px; border-radius: 50%; border: none; cursor: pointer;
+    background: rgba(0,0,0,.6); color: #FFD45C; font-size: 12px; line-height: 1; opacity: 0; transition: opacity .15s; }
+  .ed-game:hover .eg-star { opacity: 1; }
+  .eg-first { position: absolute; top: 4px; left: 4px; white-space: nowrap; text-transform: none; letter-spacing: 0; font-size: 9.5px; font-weight: 800; color: #1a1205; background: #FFD45C; border-radius: 6px; padding: 1px 5px; }
+  .game-note { width: 100%; box-sizing: border-box; margin-bottom: 8px; }
   .eg-x { position: absolute; top: 4px; right: 4px; width: 20px; height: 20px; border-radius: 50%; border: none; cursor: pointer;
     background: rgba(0,0,0,.6); color: #fff; font-size: 13px; line-height: 1; opacity: 0; transition: opacity .15s; }
   .ed-game:hover .eg-x, .eg-x:focus-visible { opacity: 1; }
