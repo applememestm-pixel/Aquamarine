@@ -92,5 +92,5 @@
   .wb svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.3; }
   .wb:hover { background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); }
   .wb.close:hover { background: #E81123; color: #fff; box-shadow: 0 0 16px -2px rgba(232, 17, 35, 0.7); }
-  @media (max-width: 720px) { .titlebar { display: none; } }
+  @media (max-width: 720px) { :global(html:not(.popout)) .titlebar { display: none; } }
 </style>

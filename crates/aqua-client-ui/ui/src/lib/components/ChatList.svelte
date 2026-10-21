@@ -16,7 +16,7 @@
   import { groupMap, requestJoinGroup } from "../groups";
   import { peerPresence, activityVerb } from "../presence";
   import { icons } from "../icons";
-  import { info, search, visibleChats, activeId, selectChat, startChat } from "../stores";
+  import { info, search, visibleChats, activeId, selectChat, startChat, chats } from "../stores";
   import { showToast } from "./Toast.svelte";
   import { openNewChatDialog } from "../newChat";
   import { openNewGroup } from "./NewGroupWizard.svelte";
@@ -108,6 +108,13 @@
     handle.addEventListener("pointerup", up);
   }
   function resetWidth() { document.documentElement.style.removeProperty("--list-w"); try { localStorage.removeItem(LW_KEY); } catch { /* ignore */ } }
+
+  // ---- Ctrl+click (or Ctrl+right-click): the chat in its own window ----
+  const DESKTOP = typeof navigator !== "undefined" && !/android|iphone|ipad/i.test(navigator.userAgent);
+  function popOut(id: string, name: string) {
+    ctx = null;
+    void api.openChatWindow(id, name).catch((e) => showToast(String(e)));
+  }
 
   // ---- Right-click a chat: archive / mute ----
   let ctx = $state<{ x: number; y: number; id: string } | null>(null);
@@ -383,8 +390,8 @@
         onpointermove={pinMove}
         onpointerup={pinUp}
         onpointercancel={() => (dragPin = null)}
-        onclick={() => { if (!suppressClick) void selectChat(c.id); }}
-        oncontextmenu={(e) => openCtx(e, c.id)}
+        onclick={(e) => { if (suppressClick) return; if ((e.ctrlKey || e.metaKey) && DESKTOP) { popOut(c.id, c.name); return; } void selectChat(c.id); }}
+        oncontextmenu={(e) => { if ((e.ctrlKey || e.metaKey) && DESKTOP) { e.preventDefault(); popOut(c.id, c.name); return; } openCtx(e, c.id); }}
       >
         <div class="avatar sz-44" style="--gradient: {c.gradient}">
           {c.letter}
@@ -440,11 +447,13 @@
       <button onclick={() => archiveChat(cid)}>{$t($archived.has(cid) ? "Unarchive" : "Archive")}</button>
       <button onclick={() => { setMuted(cid); ctx = null; }}>{$t($mutedChats.has(cid) ? "Unmute" : "Mute notifications")}</button>
       <button onclick={() => { void selectChat(cid); ctx = null; }}>{$t("Open")}</button>
+      {#if DESKTOP}<button onclick={() => popOut(cid, $chats.find((x) => x.id === cid)?.name ?? cid)}>{$t("Open in a new window")} <span class="ctx-kbd">Ctrl+click</span></button>{/if}
     </div>
   {/if}
 </aside>
 
 <style>
+  .ctx-kbd { float: right; margin-left: 12px; font-size: 11px; color: var(--fg-dim); }
   .chat-item.kb { box-shadow: inset 0 0 0 2px var(--accent); }
   .resize-handle { position: absolute; top: 0; right: -3px; width: 6px; height: 100%; cursor: col-resize; z-index: 6; }
   .resize-handle::after { content: ""; position: absolute; left: 2px; top: 0; bottom: 0; width: 2px; background: transparent; transition: background .2s; }

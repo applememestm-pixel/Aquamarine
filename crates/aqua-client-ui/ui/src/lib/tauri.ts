@@ -103,6 +103,8 @@ export const api = {
   webappMenu:         (bot: string): Promise<{ type: string; text?: string; web_app?: { url: string } }> => invoke("webapp_menu", { bot }),
   /** Save a text export (.ics/.md/.txt/.html/.csv) to a path the user picked. */
   writeTextFile:      (path: string, text: string): Promise<void> => invoke("write_text_file", { path, text }),
+  /** Desktop: open a chat in its own window (or focus it). */
+  openChatWindow:     (peer_id: string, title: string): Promise<void> => invoke("open_chat_window", { peerId: peer_id, title }),
   getChatTtl:         (peer_id: string): Promise<number> => invoke("get_chat_ttl", { peerId: peer_id }),
   /** Set a 1:1 chat's auto-delete timer (shared with the other person). */
   setChatTtl:         (peer_id: string, secs: number): Promise<void> => invoke("set_chat_ttl", { peerId: peer_id, secs }),

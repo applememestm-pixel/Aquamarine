@@ -74,5 +74,10 @@ import "./app.css";
 const target = document.getElementById("app");
 if (!target) throw new Error("#app root not found");
 
-const app = mount(App, { target });
+// A chat opened in its own window (Ctrl+click in the list): `#popout=<id>`.
+const pop = /^#popout=(.+)$/.exec(location.hash);
+if (pop) document.documentElement.classList.add("popout");
+const app = pop
+  ? mount((await import("./Popout.svelte")).default, { target, props: { chat: decodeURIComponent(pop[1]) } })
+  : mount(App, { target });
 export default app;

@@ -1662,4 +1662,5 @@ export const RU: Record<string, string> = {
   "Save to Saved Messages (only you see this mark)": "Сохранить в Избранное (эту отметку видите только вы)",
   "Save-to-favourites reaction": "Реакция «в Избранное»",
   "React with it and the message is copied to Saved Messages. Only you see this reaction.": "Поставьте её — и сообщение скопируется в Избранное. Эту реакцию видите только вы.",
+  "Open in a new window": "Открыть в новом окне",
 };

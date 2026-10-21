@@ -17,6 +17,7 @@ pub mod gpu;
 pub mod stickers;
 pub mod multidev;
 pub mod autodelete;
+pub mod windows;
 
 use anyhow::Result;
 use tauri::Manager;
@@ -145,6 +146,7 @@ pub fn run() -> Result<()> {
             commands::bot_send_raw,
             commands::forward_file,
             personal::write_text_file,
+            windows::open_chat_window,
             commands::webapp_init,
             commands::webapp_menu,
             autodelete::set_chat_ttl,
@@ -251,11 +253,16 @@ pub fn run() -> Result<()> {
 /// WebKitGTK ships with WebRTC switched off; calls need it (plus media
 /// streams for getUserMedia and MSE for in-app media playback).
 #[cfg(target_os = "linux")]
-mod linux_webview {
+pub mod linux_webview {
     use tauri::Manager;
 
     pub fn configure(app: &tauri::App) {
         let Some(win) = app.get_webview_window("main") else { return };
+        configure_window(&win);
+    }
+
+    /// WebKitGTK settings every window of ours needs (calls, media, logs).
+    pub fn configure_window(win: &tauri::WebviewWindow) {
         let res = win.with_webview(|wv| {
             use webkit2gtk::{SettingsExt, WebViewExt};
             let view = wv.inner();

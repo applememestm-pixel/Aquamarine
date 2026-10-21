@@ -968,6 +968,9 @@
   let isGroup = $derived($activeChat?.id?.startsWith("grp_") ?? false);
   let activeGroup = $derived($activeChat ? $groupMap[$activeChat.id] : undefined);
 
+  /** This chat is in its own window (calls stay in the main one). */
+  const POPOUT = typeof document !== "undefined" && document.documentElement.classList.contains("popout");
+
   // ---- Bots: keyboards, mini apps, menu button ----
   let isBotChat = $derived(!!$activeChat && $activeChat.live && !$activeChat.has_lock && !$activeChat.id.startsWith("grp_"));
   let kbBusy = $state<string | null>(null);
@@ -2230,7 +2233,7 @@
         </div>
       </div>
       <div class="chat-actions">
-        {#if !isGroup}
+        {#if !isGroup && !POPOUT}
           <button class="icon-btn" title={$t("Voice call")} onclick={startVoiceCall}>{@html icons.phone}</button>
           <button class="icon-btn" title={$t("Video call (coming soon)")}>{@html icons.video}</button>
         {/if}
