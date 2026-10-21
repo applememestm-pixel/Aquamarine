@@ -29,6 +29,8 @@ export interface Presence {
   nc?: boolean;
   nv?: boolean;
   ni?: boolean;
+  /** "You may link to my account when forwarding my messages" (when that isn't public). */
+  fl?: boolean;
   /** Local receive time (ms) — not sent; used to expire stale "online". */
   at?: number;
 }
@@ -122,6 +124,7 @@ export function myPresence(peer = ""): Presence {
     if (!ok("calls")) out.nc = true;
     if (!ok("voice")) out.nv = true;
     if (!ok("invites")) out.ni = true;
+    if (!isPublic("forwards", rules) && ok("forwards")) out.fl = true;
   }
   return out;
 }

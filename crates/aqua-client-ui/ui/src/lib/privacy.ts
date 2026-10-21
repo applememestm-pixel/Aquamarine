@@ -23,7 +23,7 @@ import { tr } from "./i18n";
 import { isBlocked } from "./ghost";
 
 export type Audience = "everybody" | "contacts" | "nobody";
-export type PrivKey = "last_seen" | "photo" | "bio" | "phone" | "birthday" | "activity" | "calls" | "voice" | "invites";
+export type PrivKey = "last_seen" | "photo" | "bio" | "phone" | "birthday" | "activity" | "calls" | "voice" | "invites" | "forwards";
 export interface Rule { who: Audience; allow: string[]; deny: string[] }
 export type Rules = Record<PrivKey, Rule>;
 
@@ -37,6 +37,7 @@ export const PRIV_ITEMS: { key: PrivKey; label: string; q: string; noNobody?: bo
   { key: "calls",     label: "Calls",              q: "Who can call me?" },
   { key: "voice",     label: "Voice messages",     q: "Who can send me voice and video messages?" },
   { key: "invites",   label: "Invites",            q: "Who can add me to groups and channels?" },
+  { key: "forwards",  label: "Forwarded messages", q: "Who can link to my account when forwarding my messages?" },
 ];
 
 const DEFAULTS: Rules = {
@@ -49,6 +50,7 @@ const DEFAULTS: Rules = {
   calls:     { who: "everybody", allow: [], deny: [] },
   voice:     { who: "everybody", allow: [], deny: [] },
   invites:   { who: "everybody", allow: [], deny: [] },
+  forwards:  { who: "everybody", allow: [], deny: [] },
 };
 
 function load(): Rules {

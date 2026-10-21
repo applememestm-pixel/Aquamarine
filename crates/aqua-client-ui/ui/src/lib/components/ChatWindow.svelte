@@ -32,7 +32,10 @@
   import { events } from "../tauri";
   import { pollStates, castVote, retractVote, applyRemoteVote, closePoll, viewPoll, ME as POLL_ME, type PollView } from "../polls";
   import { peerPresence, setPeerPresence, broadcastPresenceTo, activityVerb, chatOnline, peerStatus, presenceNow } from "../presence";
-  import { notePeerProfileVersion, avatars, clans } from "../people";
+  import { notePeerProfileVersion, avatars, clans, peerCards } from "../people";
+  import { profile as myProfile } from "../profile";
+  import { isPublic } from "../privacy";
+  import type { ForwardAuthor } from "./ForwardPicker.svelte";
   import ClanTag from "./ClanTag.svelte";
   import { keepOnScreen } from "../actions";
   import { openPackSheet } from "./PackSheet.svelte";
@@ -1392,13 +1395,32 @@
 
   /** Extract a forwardable payload from a message, or null if it can't
    *  be forwarded (e.g. a media file that was never downloaded). */
+  /** Who wrote `m`, for the "Forwarded from" header. A re-forward keeps the
+   *  original author; a link to the account only if they allow it. */
+  function fwdAuthorOf(m: ChatMessage): ForwardAuthor | undefined {
+    const f = m.meta?.fwd;
+    if (f?.name) return { from: f.from, name: f.name, at: f.at, chat: f.chat };
+    const from = m.from === "me" ? myUsername : m.from;
+    if (!from || from === "system") return undefined;
+    const mine = from === myUsername;
+    const card = $peerCards[from];
+    const name = mine
+      ? ($myProfile.display_name && $myProfile.display_name !== "You" ? $myProfile.display_name : myUsername)
+      : (card?.display_name || (!isGroup ? $activeChat?.name : "") || from);
+    const link = mine ? isPublic("forwards") : (card?.extra?.fwd_link !== false || $peerPresence[from]?.fl === true);
+    const chan = isGroup && activeGroup ? activeGroup.title : undefined;
+    return { from: link ? from : undefined, name, at: m.time, chat: chan };
+  }
+
   function forwardItemOf(m: ChatMessage): ForwardItem | null {
     const k = m.kind;
-    if (k.type === "text") return { kind: "text", text: k.content.text };
-    if (k.type === "code") return { kind: "text", text: k.content.code };
-    if (k.type === "article") return { kind: "text", text: `${k.content.title}\n\n${k.content.body}` };
+    const author = fwdAuthorOf(m);
+    if (k.type === "text") return { kind: "text", text: k.content.text, author };
+    if (k.type === "code") return { kind: "text", text: "```" + (k.content.language || "") + "\n" + k.content.code + "\n```", author };
+    if (k.type === "article") return { kind: "text", text: `${k.content.title}\n\n${k.content.body}`, author };
+    if (k.type === "reply") return { kind: "text", text: k.content.text, author };
     if (k.type === "file") {
-      if (k.content.saved_at) return { kind: "file", path: k.content.saved_at, name: k.content.name };
+      if (k.content.saved_at) return { kind: "file", path: k.content.saved_at, name: k.content.name, author };
       return null; // not downloaded → can't re-send
     }
     return null;
@@ -2327,6 +2349,14 @@
                   <span class="msg-time">{m.time}</span>
                 </div>
               {/if}
+              {#if m.meta?.fwd?.name}
+                {@const fw = m.meta.fwd}
+                <button class="fwd-tag" class:out={m.outgoing} disabled={!fw.from} onclick={() => fw.from && openProfile(fw.from)}
+                  title={fw.from ? `@${fw.from}${fw.at ? " · " + fw.at : ""}` : $t("The author doesn't allow linking to their account")}>
+                  <span class="fwd-av" style:background-image={fw.from && $avatars[fw.from] ? `url("${$avatars[fw.from]}")` : undefined}>{fw.from && $avatars[fw.from] ? "" : fw.name.slice(0, 1).toUpperCase()}</span>
+                  <span class="fwd-txt"><i>{$t("Forwarded from")}</i> <b>{fw.name}</b>{#if fw.chat}<span class="fwd-chat"> · {fw.chat}</span>{/if}</span>
+                </button>
+              {/if}
               {#if m.kind.type === "code"}
                 <div class="bubble code"><pre>{m.kind.content.code}</pre></div>
               {:else if m.kind.type === "file"}
@@ -2889,6 +2919,22 @@
 <svelte:window onmousedown={(e) => { if (ttlMenu && !(e.target as HTMLElement).closest?.(".ttl-wrap")) ttlMenu = false; }} />
 
 <style>
+  /* "Forwarded from" — the author's avatar in the corner. */
+  .fwd-tag {
+    display: inline-flex; align-items: center; gap: 7px; max-width: min(100%, 420px);
+    margin: 0 0 2px; padding: 3px 10px 3px 3px; border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+    background: color-mix(in srgb, var(--bg-bubble-in) 85%, var(--accent) 15%);
+    color: var(--fg-muted); font: inherit; font-size: 12px; cursor: pointer; text-align: left;
+  }
+  .fwd-tag.out { align-self: flex-end; }
+  .fwd-tag:disabled { cursor: default; }
+  .fwd-tag:not(:disabled):hover { border-color: var(--accent); }
+  .fwd-av { width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0; display: grid; place-items: center; font-size: 10px; font-weight: 800; color: #06070C; background: linear-gradient(135deg, var(--accent), var(--accent-2)); background-size: cover; background-position: center; }
+  .fwd-txt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fwd-txt i { font-style: normal; color: var(--fg-dim); }
+  .fwd-txt b { color: var(--accent); }
+  .fwd-chat { color: var(--fg-dim); }
   /* Bot keyboards */
   .ikb { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; width: min(100%, 420px); }
   .ikb-row { display: flex; gap: 4px; }

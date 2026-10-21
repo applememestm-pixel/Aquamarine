@@ -157,6 +157,8 @@ function myExtra(p: Profile): Record<string, unknown> {
     // over E2EE presence instead (presence.ts `pp`).
     birthday: isPublic("birthday") ? (p.birthday ?? "") : "", favourite_music: p.favourite_music ?? "",
     avatar_emoji: p.avatar_emoji ?? "",
+    // Forwards of my messages may link to my account (Privacy → Forwarded messages).
+    fwd_link: isPublic("forwards"),
     music_title: p.music_ver ? (p.music_title ?? "") : "",
     clan: p.clan ?? null,
     links: (p.links ?? []).filter((l) => /^https?:\/\//i.test(l.url)).slice(0, 8),

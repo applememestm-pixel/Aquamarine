@@ -76,6 +76,40 @@ pub struct MsgMeta {
     /// Supergroup room (Discord-style channel) the message belongs to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub room: Option<String>,
+    /// Forwarded: `{"from":"alice"?, "name":"Alice", "at":"12:30"?}` —
+    /// carried as a `[fwd:v1]{…}\n` first line in front of any payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fwd: Option<serde_json::Value>,
+}
+
+pub const FWD_PREFIX: &str = "[fwd:v1]";
+
+/// `[fwd:v1]{header}\n<payload>` → (header, payload). The header is checked
+/// (small object with string fields) so a peer can't stuff anything there.
+pub fn split_fwd(text: &str) -> (Option<serde_json::Value>, &str) {
+    let Some(rest) = text.strip_prefix(FWD_PREFIX) else { return (None, text) };
+    let Some((head, body)) = rest.split_once('\n') else { return (None, text) };
+    if head.len() > 600 {
+        return (None, text);
+    }
+    let Ok(serde_json::Value::Object(m)) = serde_json::from_str::<serde_json::Value>(head) else { return (None, text) };
+    let mut clean = serde_json::Map::new();
+    for k in ["from", "name", "at", "chat", "kind"] {
+        if let Some(v) = m.get(k).and_then(|v| v.as_str()) {
+            clean.insert(k.into(), serde_json::Value::String(v.chars().take(80).collect()));
+        }
+    }
+    if !clean.contains_key("name") {
+        return (None, text);
+    }
+    (Some(serde_json::Value::Object(clean)), body)
+}
+
+/// Kind + local extras for a payload (forward header split off).
+pub fn classify_full(text: &str, room: Option<String>) -> (MessageKind, Option<MsgMeta>) {
+    let (fwd, body) = split_fwd(text);
+    let meta = if fwd.is_some() || room.is_some() { Some(MsgMeta { room, fwd, ..Default::default() }) } else { None };
+    (classify_kind(body), meta)
 }
 
 /// Device-local behaviour switches set from the UI.
@@ -652,6 +686,8 @@ pub fn resolve_room(g: &Group, wanted: Option<&str>) -> Option<Room> {
 
 /// `may_post` plus the room rule (read-only rooms are for admins).
 pub fn may_post_in(g: &Group, author: &str, body: &str, room: Option<&Room>) -> bool {
+    // A forward header doesn't change what kind of post it is.
+    let body = split_fwd(body).1;
     if roles_on(g) && !g.is_admin(author) {
         // Roles decide (the generic group rules still apply: member, not banned / muted).
         if !g.is_member(author) || g.is_banned(author) { return false; }
@@ -1353,20 +1389,22 @@ pub fn hhmm_now() -> String {
 // ---------- Small message constructors ------------------------------------
 
 pub fn text_msg_from_me(text: &str) -> ChatMessage {
-    ChatMessage { meta: None,
+    let (kind, meta) = classify_full(text, None);
+    ChatMessage { meta,
         id: format!("m-{}", uuid_like()),
         from: "me".into(),
         time: hhmm_now(),
-        kind: classify_kind(text),
+        kind,
     }
 }
 
 pub fn text_msg_from_peer(peer_id: &str, text: &str) -> ChatMessage {
-    ChatMessage { meta: None,
+    let (kind, meta) = classify_full(text, None);
+    ChatMessage { meta,
         id: format!("m-{}", uuid_like()),
         from: peer_id.into(),
         time: hhmm_now(),
-        kind: classify_kind(text),
+        kind,
     }
 }
 
@@ -1542,6 +1580,19 @@ pub fn uuid_like() -> String {
 
 #[cfg(test)]
 mod preview_tests {
+    #[test]
+    fn forward_header_is_split_and_checked() {
+        let (h, body) = super::split_fwd("[fwd:v1]{\"from\":\"alice\",\"name\":\"Alice\",\"evil\":{\"x\":1}}\nhello");
+        assert_eq!(body, "hello");
+        let h = h.unwrap();
+        assert_eq!(h["name"], "Alice");
+        assert!(h.get("evil").is_none());
+        assert_eq!(super::split_fwd("[fwd:v1]{\"from\":\"x\"}\nhi").0, None);
+        let (k, m) = super::classify_full("[fwd:v1]{\"name\":\"Bob\"}\n[article:v1]{\"title\":\"T\",\"body\":\"B\"}", None);
+        assert!(matches!(k, super::MessageKind::Article { .. }));
+        assert_eq!(m.unwrap().fwd.unwrap()["name"], "Bob");
+    }
+
     #[test]
     fn bot_keyboard_is_hidden_in_previews() {
         assert_eq!(super::strip_bot_keyboard("[kb:v1]{\"kind\":\"inline\"}\nPick one\u{2063}\n\n1️⃣ A"), "Pick one");

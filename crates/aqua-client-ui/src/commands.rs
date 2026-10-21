@@ -16,7 +16,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::state::{
-    classify_kind, gradient_for, group_summary, hex_fingerprint_from, hhmm_now, preview_for,
+    gradient_for, group_summary, hex_fingerprint_from, hhmm_now, preview_for,
     save_groups, summary_for, text_msg_from_me, word_fingerprint_from, AppState, ChatBook,
     ChatMessage, ChatSummary, Group, GroupMember, GroupSettings, IncomingEventPayload, InitInfo,
     MessageKind,
@@ -1504,6 +1504,31 @@ async fn attach_file_impl(
     category: Option<String>,
     mime_override: Option<String>,
 ) -> Result<AttachResult, String> {
+    attach_file_fwd(state, app, peer_id, file_path, category, mime_override, None).await
+}
+
+/// Forward a file (re-sent from this device) with a "Forwarded from" header.
+#[tauri::command]
+pub async fn forward_file(
+    state: State<'_, StdMutex<AppState>>,
+    app: AppHandle,
+    peer_id: String,
+    file_path: String,
+    header: Option<String>,
+) -> Result<AttachResult, String> {
+    let header = header.filter(|h| crate::state::split_fwd(&format!("{}{h}\nx", crate::state::FWD_PREFIX)).0.is_some());
+    attach_file_fwd(state, app, peer_id, file_path, None, None, header).await
+}
+
+async fn attach_file_fwd(
+    state: State<'_, StdMutex<AppState>>,
+    app: AppHandle,
+    peer_id: String,
+    file_path: String,
+    category: Option<String>,
+    mime_override: Option<String>,
+    fwd: Option<String>,
+) -> Result<AttachResult, String> {
     // 1. Read the file from disk (phone picks arrive as content:// URIs).
     let file_path = if is_uri_pick(&file_path) {
         let data_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.clone() };
@@ -1558,7 +1583,9 @@ async fn attach_file_impl(
                 }
             }
         };
-        let msg = ChatMessage { meta: None,
+        let msg = ChatMessage {
+            meta: fwd.as_deref().and_then(|h| crate::state::split_fwd(&format!("{}{h}\nx", crate::state::FWD_PREFIX)).0)
+                .map(|f| crate::state::MsgMeta { fwd: Some(f), ..Default::default() }),
             id: format!("m-{}", crate::state::uuid_like()),
             from: "me".into(),
             time: hhmm_now(),
@@ -1610,6 +1637,10 @@ async fn attach_file_impl(
     // 4. Send the offer as a regular E2EE text message through the
     //    peer's session.
     let offer_text = envelope.to_message_text();
+    let offer_text = match &fwd {
+        Some(h) => format!("{}{h}\n{offer_text}", crate::state::FWD_PREFIX),
+        None => offer_text,
+    };
 
     // Groups / channels: the blob is uploaded once; the offer (with the
     // file key) fans out to every member over their own E2EE sessions.
@@ -2402,12 +2433,13 @@ pub async fn group_send(
     // Local echo.
     let out = {
         let mut s = state.lock().map_err(|e| e.to_string())?;
+        let (kind, meta) = crate::state::classify_full(&body, room_id.clone());
         let msg = ChatMessage {
-            meta: room_id.clone().map(|r| crate::state::MsgMeta { room: Some(r), ..Default::default() }),
+            meta,
             id: format!("m-{}", crate::state::uuid_like()),
             from: me.clone(),
             time: hhmm_now(),
-            kind: classify_kind(&body),
+            kind,
         };
         let out = (msg.id.clone(), msg.time.clone());
         if let Some(book) = s.chats.get_mut(&gid) {
@@ -2625,13 +2657,13 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                     }
                     None => return true,
                 };
-                let kind = classify_kind(&inner);
+                let (kind, meta) = crate::state::classify_full(&inner, room.map(|r| r.id));
                 let preview = preview_for(&kind);
                 let len = s.chats.get(&gid).map(|b| b.messages.len()).unwrap_or(0);
                 let s_me = s.username.clone();
                 if let Some(book) = s.chats.get_mut(&gid) {
                     book.messages.push(ChatMessage {
-                        meta: room.map(|r| crate::state::MsgMeta { room: Some(r.id), ..Default::default() }),
+                        meta,
                         id: format!("g-{time}-{len}"),
                         from: author.clone(),
                         time: time.clone(),
@@ -3327,11 +3359,11 @@ pub fn delete_messages_local(
 }
 
 fn push_peer_message(s: &mut AppState, peer_id: &str, text: String, time: &str) {
-    let kind = classify_kind(&text);
+    let (kind, meta) = crate::state::classify_full(&text, None);
     let preview = preview_for(&kind);
     if let Some(book) = s.chats.get_mut(peer_id) {
         let msg_len = book.messages.len();
-        book.messages.push(ChatMessage { meta: None,
+        book.messages.push(ChatMessage { meta,
             id: format!("in-{time}-{msg_len}"),
             from: peer_id.to_string(),
             time: time.to_string(),
