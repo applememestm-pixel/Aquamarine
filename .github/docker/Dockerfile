@@ -1,5 +1,5 @@
 # Release image: packs the aqua-server binaries that release.yml already
-# built (linux x64 / arm64) — no compile here. Same layout as ../../Dockerfile.
+# built (linux x64 / arm64) — no compile here — and the website. Same layout as ../../Dockerfile.
 FROM debian:bookworm-slim
 ARG TARGETARCH
 RUN apt-get update \
@@ -9,11 +9,14 @@ RUN apt-get update \
  && mkdir -p /data && chown aqua /data
 COPY bin/aqua-server-${TARGETARCH} /usr/local/bin/aqua-server
 RUN chmod 755 /usr/local/bin/aqua-server
+# Website (site/ + docs/*.md, laid out by release.yml).
+COPY site /srv/site
 USER aqua
 WORKDIR /data
 ENV AQUA_LISTEN=0.0.0.0:7777 \
     AQUA_TG_PROMPT=0 \
-    AQUA_IN_CONTAINER=1
+    AQUA_IN_CONTAINER=1 \
+    AQUA_SITE_DIR=/srv/site
 EXPOSE 7777
 VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \

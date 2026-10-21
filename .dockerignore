@@ -1,8 +1,9 @@
 **/target
 **/node_modules
 crates/aqua-client-ui
-site
-docs
+site/downloads
+site/docs
+docs/releases
 sdk
 android
 tools

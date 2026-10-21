@@ -507,6 +507,13 @@ jobs:
           cp art/aqua-server-linux-x64 .github/docker/bin/aqua-server-amd64
           cp art/aqua-server-linux-arm64 .github/docker/bin/aqua-server-arm64
           ls -la .github/docker/bin
+      - name: Lay out the website
+        run: |
+          cp -r site .github/docker/site
+          rm -rf .github/docker/site/downloads
+          mkdir -p .github/docker/site/docs
+          cp docs/*.md .github/docker/site/docs/
+          cp README.md .github/docker/site/docs/passport.md
       - name: Image name and tags
         id: meta
         run: |

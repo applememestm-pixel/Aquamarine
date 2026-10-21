@@ -99,6 +99,9 @@ fn banner(ansi: bool, addr: &SocketAddr, port: u16, local: &str, panel: Option<&
         println!("  {}  {}", paint("Phones/LAN  ", dim), paint("off — set AQUA_LISTEN=0.0.0.0:7777", dim));
     }
     println!("  {}  {}", paint("Emulator    ", dim), paint(&format!("http://10.0.2.2:{port}"), fg));
+    if aqua_server::site::enabled() {
+        println!("  {}  {}", paint("Website     ", dim), paint(&format!("{local}/"), fg));
+    }
     match panel {
         Some(p) => println!("  {}  {}", paint("Admin panel ", dim), paint(p, teal)),
         None => println!("  {}  {}", paint("Admin panel ", dim), paint("off", dim)),

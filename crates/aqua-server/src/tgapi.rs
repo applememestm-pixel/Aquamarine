@@ -710,7 +710,8 @@ pub async fn handle(
     req: Request,
 ) -> Response {
     if !seg.starts_with("bot") {
-        return fail(404, "Not Found");
+        // "/docs/api.md" and the like: two segments, but a website path.
+        return crate::site::serve(req.method(), &format!("/{seg}/{method}")).await;
     }
     let Some(bot) = auth(&state, &seg).await else {
         return fail(401, "Unauthorized");

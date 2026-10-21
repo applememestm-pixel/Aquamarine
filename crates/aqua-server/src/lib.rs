@@ -32,6 +32,7 @@ pub mod fed;
 pub mod games;
 pub mod directory;
 pub mod tgapi;
+pub mod site;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
 pub use auth::{AuthState, Caller};
@@ -1876,6 +1877,8 @@ pub fn app(state: AppState) -> Router {
             post(upload_blob).get(fetch_blob)
                 .layer(DefaultBodyLimit::max(BLOB_LIMIT)),
         )
+        // Everything else: the optional website (AQUA_SITE_DIR, see site.rs).
+        .fallback(site::fallback)
         .with_state(state)
 }
 

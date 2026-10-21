@@ -192,12 +192,17 @@ POST /v1/bot/send   {"to":"alice","text":"hi"}
 </footer>
 
 <script>
-  /* Downloads come from the latest GitHub Release on GitHub Pages (release.yml
-     uploads them under these exact names) and from ./downloads/ elsewhere
-     (filled by build-all). */
+  /* Downloads come from the latest GitHub Release (release.yml uploads them
+     under these exact names). A copy of the site with its own ./downloads/
+     (filled by build-all) offers those files instead. */
   const REPO = "https://github.com/applememestm-pixel/Aquamarine";
   const VERSION = "0.2.1";
-  const DIR = location.hostname.endsWith("github.io") ? REPO + "/releases/latest/download/" : "downloads/";
+  let DIR = REPO + "/releases/latest/download/";
+  if (!location.hostname.endsWith("github.io")) {
+    fetch("downloads/Aquamarine.AppImage", { method: "HEAD" })
+      .then((r) => { if (r.ok) { DIR = "downloads/"; render(); } })
+      .catch(() => { /* file:// or no local copy */ });
+  }
 
   // ---------------------------------------------------------------- i18n
   const T = {

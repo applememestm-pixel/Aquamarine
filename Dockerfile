@@ -4,6 +4,7 @@
 #   docker build -t aquamarine-server .       # just the image
 #
 # Data (SQLite, attachments, packs, settings) lives in /data — mount a volume.
+# The project website (site/ + docs/*.md) is served on the same port: /, /docs.html, /api.html.
 
 FROM rust:1-bookworm AS build
 WORKDIR /src
@@ -25,11 +26,16 @@ RUN apt-get update \
  && useradd --system --uid 10001 --home /data aqua \
  && mkdir -p /data && chown aqua /data
 COPY --from=build /aqua-server /usr/local/bin/aqua-server
+# Website: the pages, plus the Markdown documents docs.html renders.
+COPY site /srv/site
+COPY docs/*.md /srv/site/docs/
+COPY README.md /srv/site/docs/passport.md
 USER aqua
 WORKDIR /data
 ENV AQUA_LISTEN=0.0.0.0:7777 \
     AQUA_TG_PROMPT=0 \
-    AQUA_IN_CONTAINER=1
+    AQUA_IN_CONTAINER=1 \
+    AQUA_SITE_DIR=/srv/site
 EXPOSE 7777
 VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
