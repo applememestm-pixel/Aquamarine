@@ -9,10 +9,19 @@ IMAGE="ghcr.io/applememestm-pixel/aquamarine-server:${TAG:-nightly}"
 NAME="${NAME:-aquamarine}"
 PORT="${PORT:-7777}"
 
-if ! docker info >/dev/null 2>&1; then
-  echo "Docker недоступен. Запустите службу и добавьте себя в группу docker:"
-  echo "  sudo systemctl enable --now docker && sudo usermod -aG docker \$USER && newgrp docker"
-  exit 1
+# Without access to /var/run/docker.sock (not in the "docker" group yet,
+# or the group was added after login) fall back to sudo.
+docker() { command docker "$@"; }
+if ! command docker info >/dev/null 2>&1; then
+  if ! systemctl is-active --quiet docker 2>/dev/null; then
+    echo "Служба Docker не запущена — запускаю (нужен пароль sudo)."
+    sudo systemctl enable --now docker
+  fi
+  if ! command docker info >/dev/null 2>&1; then
+    echo "Нет доступа к Docker без sudo — запускаю через sudo."
+    echo "(Чтобы не нужно было: sudo usermod -aG docker \$USER и перезайти в систему.)"
+    docker() { sudo docker "$@"; }
+  fi
 fi
 
 echo "→ $IMAGE"
@@ -31,4 +40,4 @@ echo "  на этом компьютере:  http://127.0.0.1:$PORT"
 echo "Данные — в томе aquamarine-data. Остановить: docker stop $NAME"
 echo "Журнал (Ctrl+C — выйти, сервер продолжит работать):"
 echo
-exec docker logs -f "$NAME"
+docker logs -f "$NAME"
