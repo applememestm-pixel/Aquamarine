@@ -200,7 +200,7 @@ pub async fn game_cover(state: State<'_, StdMutex<AppState>>, id: String) -> Res
         return Ok(Some(file.display().to_string()));
     }
     // Asked recently, nothing there: don't ask again for a day.
-    let none = dir.join(format!("{id}.none"));
+    let none = dir.join(format!("{id}.none2")); // .none from 0.1.x: tried with fewer sources
     if std::fs::metadata(&none).and_then(|m| m.modified()).ok()
         .and_then(|t| std::time::SystemTime::now().duration_since(t).ok())
         .is_some_and(|age| age < std::time::Duration::from_secs(24 * 3600)) {

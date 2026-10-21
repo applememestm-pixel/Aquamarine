@@ -207,7 +207,7 @@ impl GameDb {
             return None;
         }
         let dir = PathBuf::from(ICON_DIR).join("covers");
-        let none = dir.join(format!("{id}.none"));
+        let none = dir.join(format!("{id}.none2")); // .none from 0.1.x: tried with fewer sources
         for ext in ["jpg", "img"] {
             if let Ok(b) = std::fs::read(dir.join(format!("{id}.{ext}"))) {
                 if let Some(m) = image_mime(&b) {
