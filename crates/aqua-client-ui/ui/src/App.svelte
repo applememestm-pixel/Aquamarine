@@ -39,6 +39,9 @@
   import CapsuleComposer from "./lib/components/CapsuleComposer.svelte";
   import CapsuleAlerts from "./lib/components/CapsuleAlerts.svelte";
   import { startCapsules } from "./lib/capsules";
+  import BluetoothSheet from "./lib/components/BluetoothSheet.svelte";
+  import BluetoothIncoming from "./lib/components/BluetoothIncoming.svelte";
+  import { startBluetooth } from "./lib/bluetooth";
   import ReminderPopup from "./lib/components/ReminderPopup.svelte";
   import ChatCalendar from "./lib/components/ChatCalendar.svelte";
   import { startPlanner } from "./lib/planner";
@@ -99,6 +102,7 @@
     startPlanner();
     startWorkspace();
     startCapsules();
+    if (!/android|iphone|ipad/i.test(navigator.userAgent)) startBluetooth();
     startChannelStats();
     startHandoff();
     const stopIcon = startAppIcon();
@@ -306,6 +310,8 @@
 <HandoffBanner />
 <CapsuleComposer />
 <CapsuleAlerts />
+<BluetoothSheet />
+<BluetoothIncoming />
 <ReminderPopup />
 <ChatCalendar />
 <Toast />

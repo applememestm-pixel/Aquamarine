@@ -50,6 +50,7 @@
   import CapsuleCard from "./CapsuleCard.svelte";
   import { capsuleComposer } from "./CapsuleComposer.svelte";
   import { parseCapsule } from "../capsules";
+  import { btSheet } from "../bluetooth";
   import { chatLocks, unlocked, unlockChat, noteLeft } from "../chatLocks";
   import ThreadPanel, { type ThreadItem } from "./ThreadPanel.svelte";
   import { noteView, viewCounts, channelStats } from "../channelStats";
@@ -3070,6 +3071,10 @@
         {#if !protectedChat}
         <button class="ctx-item" role="menuitem" onclick={() => forwardRow(row)}>{$t("Forward")}</button>
         {/if}
+        {#if DESKTOP_APP && !protectedChat && row.kind.type === "file" && row.kind.content.saved_at}
+          {@const p = row.kind.content.saved_at}
+          <button class="ctx-item" role="menuitem" onclick={() => { closeMenu(); btSheet.set([p]); }}>{$t("Send via Bluetooth")}</button>
+        {/if}
         {#if textOf(row) != null && !protectedChat}
           <button class="ctx-item" role="menuitem" onclick={() => copyRow(row)}>{$t("Copy text")}</button>
           <button class="ctx-item" role="menuitem" onclick={() => selectRowText(row)}>{$t("Select text")}</button>
@@ -3191,6 +3196,12 @@
             <button class="ap-item" onclick={() => { attachMenuOpen = false; pickAndSendFile("file"); }}>
               {@html icons.attach}<span>{$t("File")}</span>
             </button>
+            {#if DESKTOP_APP}
+              <button class="ap-item" onclick={() => { attachMenuOpen = false; btSheet.set([]); }}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 7 17 17 12 22 12 2 17 7 7 17"/></svg>
+                <span>{$t("Bluetooth")}</span>
+              </button>
+            {/if}
             <button class="ap-item" onclick={() => { attachMenuOpen = false; if ($activeChat) openArticleComposer($activeChat.id); }}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h12a3 3 0 0 1 3 3v14H7a3 3 0 0 1-3-3V4z"/><path d="M19 7v14"/><line x1="7" y1="9" x2="15" y2="9"/><line x1="7" y1="13" x2="15" y2="13"/></svg>
               <span>{$t("Article")}</span>

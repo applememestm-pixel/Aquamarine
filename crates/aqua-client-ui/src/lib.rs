@@ -18,6 +18,7 @@ pub mod stickers;
 pub mod multidev;
 pub mod autodelete;
 pub mod windows;
+pub mod bluetooth;
 
 use anyhow::Result;
 use tauri::Manager;
@@ -97,6 +98,13 @@ pub fn run() -> Result<()> {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            bluetooth::bt_status,
+            bluetooth::bt_devices,
+            bluetooth::bt_power,
+            bluetooth::bt_send,
+            bluetooth::bt_answer,
+            bluetooth::bt_receive,
+            bluetooth::bt_show_inbox,
             web::link_preview,
             commands::upload_attachment,
             commands::prepare_banner_video,
