@@ -835,6 +835,10 @@
           </div>
           <div class="note">{$t("Members can send one message per interval.")}</div>
         </div>
+        <div class="card">
+          <div class="ct">{$t("Comments")}</div>
+          {@render toggle($t("Comments under posts and messages"), $t("Everyone may discuss a post in its thread — even in a channel where only admins post."), group.settings.comments !== false, () => commit((g) => { g.settings.comments = g.settings.comments === false; }, group.settings.comments === false ? "turned comments on" : "turned comments off"), busy)}
+        </div>
 
       {:else if page === "reactions"}
         <div class="card">

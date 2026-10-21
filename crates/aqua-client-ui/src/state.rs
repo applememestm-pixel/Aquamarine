@@ -693,7 +693,9 @@ pub fn may_post_in(g: &Group, author: &str, body: &str, room: Option<&Room>) -> 
         if !g.is_member(author) || g.is_banned(author) { return false; }
         let muted = g.members.iter().find(|m| m.username == author)
             .and_then(|m| m.extra.get("muted")).and_then(|v| v.as_bool()).unwrap_or(false);
-        if muted || room.is_some_and(|r| r.readonly) { return false; }
+        if muted { return false; }
+        if body.starts_with(COMMENT_PREFIX) && comments_on(g) { return true; }
+        if room.is_some_and(|r| r.readonly) { return false; }
         let p = perms_of(g, author, room);
         if !p.contains("send_messages") || (room.is_some() && !p.contains("view_room")) { return false; }
         if body.starts_with("[poll:v1]") && !p.contains("send_polls") { return false; }
@@ -701,6 +703,13 @@ pub fn may_post_in(g: &Group, author: &str, body: &str, room: Option<&Room>) -> 
         return true;
     }
     may_post(g, author, body) && !(room.is_some_and(|r| r.readonly) && !g.is_admin(author))
+}
+
+pub const COMMENT_PREFIX: &str = "[cmt:v1]";
+
+/// Comments are on unless the group's `comments` setting is false.
+pub fn comments_on(g: &Group) -> bool {
+    g.settings.extra.get("comments").and_then(|v| v.as_bool()) != Some(false)
 }
 
 pub fn may_post(g: &Group, author: &str, body: &str) -> bool {
@@ -715,6 +724,11 @@ pub fn may_post(g: &Group, author: &str, body: &str) -> bool {
         .and_then(|m| m.extra.get("muted")).and_then(|v| v.as_bool()).unwrap_or(false);
     if muted {
         return false;
+    }
+    // Comments under channel posts / group messages: every member may write
+    // them unless the admins turned comments off.
+    if body.starts_with(COMMENT_PREFIX) && comments_on(g) {
+        return true;
     }
     if g.kind == "channel" || g.settings.send_messages == "admins" {
         return false;
@@ -1523,6 +1537,11 @@ pub fn classify_kind(text: &str) -> MessageKind {
 /// Short human preview of a message for the chat-list line.
 /// Previews of the UI's structured messages (events, checklists, docs).
 pub fn special_preview(text: &str) -> Option<String> {
+    if let Some(b) = text.strip_prefix(COMMENT_PREFIX) {
+        let v: serde_json::Value = serde_json::from_str(b).ok()?;
+        let t: String = v.get("t").and_then(|t| t.as_str()).unwrap_or("").chars().take(80).collect();
+        return Some(format!("💬 {}", humanize_tokens(&t)));
+    }
     let (icon, body) = [("[event:v1]", "📅"), ("[tasks:v1]", "☑️"), ("[doc:v1]", "📄"), ("[board:v1]", "🗂")]
         .iter()
         .find_map(|(p, i)| text.strip_prefix(p).map(|b| (*i, b)))?;

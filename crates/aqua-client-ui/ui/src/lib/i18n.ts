@@ -50,6 +50,9 @@ const PLURALS: Record<string, { en: [string, string]; ru: [string, string, strin
   vote: { en: ["vote", "votes"], ru: ["голос", "голоса", "голосов"] },
   rule: { en: ["rule", "rules"], ru: ["правило", "правила", "правил"] },
   chat: { en: ["chat", "chats"], ru: ["чат", "чата", "чатов"] },
+  comment: { en: ["comment", "comments"], ru: ["комментарий", "комментария", "комментариев"] },
+  reply: { en: ["reply", "replies"], ru: ["ответ", "ответа", "ответов"] },
+  view: { en: ["view", "views"], ru: ["просмотр", "просмотра", "просмотров"] },
 };
 function ruForm(n: number): 0 | 1 | 2 {
   const a = Math.abs(n) % 100, b = a % 10;

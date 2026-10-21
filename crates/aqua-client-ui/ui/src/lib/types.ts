@@ -283,6 +283,8 @@ export interface GroupSettings {
   rooms_enabled?: boolean;
   /** Auto-delete messages after this many seconds (0 / unset = off). */
   ttl?: number;
+  /** Comments under posts / messages (default on). */
+  comments?: boolean;
 }
 
 /** A supergroup room (Discord channel). */

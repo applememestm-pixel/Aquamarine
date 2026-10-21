@@ -45,6 +45,7 @@
   import { openMiniApp } from "./MiniApp.svelte";
   import { parseSpecial } from "../planner";
   import { chatLocks, unlocked, unlockChat, noteLeft } from "../chatLocks";
+  import ThreadPanel, { type ThreadItem } from "./ThreadPanel.svelte";
   import EventCard from "./EventCard.svelte";
   import TasksCard from "./TasksCard.svelte";
   import { openPlanner } from "./PlannerComposer.svelte";
@@ -969,6 +970,73 @@
   let isGroup = $derived($activeChat?.id?.startsWith("grp_") ?? false);
   let activeGroup = $derived($activeChat ? $groupMap[$activeChat.id] : undefined);
 
+  // ---- Threads: comments under posts, replies gathered under a message ----
+  interface Cmt { id: string; from: string; time: string; to: string; t: string; re: { a: string; t: string } | null; outgoing: boolean }
+  let comments = $derived.by<Cmt[]>(() => {
+    const out: Cmt[] = [];
+    for (const m of roomMessages) {
+      if (!isComment(m) || m.kind.type !== "text") continue;
+      try {
+        const v = JSON.parse(m.kind.content.text.slice(8));
+        if (typeof v?.to !== "string" || typeof v?.t !== "string") continue;
+        const re = v.re && typeof v.re.a === "string" && typeof v.re.t === "string" ? { a: v.re.a.slice(0, 60), t: v.re.t.slice(0, 160) } : null;
+        const mine = m.from === "me" || m.from === myUsername;
+        out.push({ id: m.id, from: mine ? myUsername : m.from, time: m.time, to: v.to, t: v.t.slice(0, 4000), re, outgoing: mine });
+      } catch { /* not a comment */ }
+    }
+    return out;
+  });
+  let commentCount = $derived.by(() => { const c = new Map<string, number>(); for (const x of comments) c.set(x.to, (c.get(x.to) ?? 0) + 1); return c; });
+  let replyCount = $derived.by(() => {
+    const c = new Map<string, number>();
+    for (const r of rows) if (r.kind.type === "reply") c.set(r.kind.content.quoted_text, (c.get(r.kind.content.quoted_text) ?? 0) + 1);
+    return c;
+  });
+  const quoteOf = (m: ChatMessage) => snippetOf(m).slice(0, 180);
+  let thread = $state<{ kind: "comments" | "replies"; root: Row } | null>(null);
+  $effect(() => { void $activeChat?.id; thread = null; });
+  let threadItems = $derived.by<ThreadItem[]>(() => {
+    const th = thread;
+    if (!th) return [];
+    if (th.kind === "comments") {
+      const key = reactionKey(th.root);
+      return comments.filter((c) => c.to === key).map((c) => ({ id: c.id, author: c.from, time: c.time, text: c.t, outgoing: c.outgoing, re: c.re, depth: c.re ? 1 : 0 }));
+    }
+    // Replies, and replies to those (Telegram's "replies" view).
+    const out: ThreadItem[] = [];
+    let level = [quoteOf(th.root)];
+    const seen = new Set<string>();
+    for (let depth = 0; depth < 4 && level.length; depth++) {
+      const next: string[] = [];
+      for (const r of rows) {
+        if (r.kind.type !== "reply" || seen.has(r.id) || !level.includes(r.kind.content.quoted_text)) continue;
+        seen.add(r.id);
+        out.push({ id: r.id, author: r.outgoing ? myUsername : (isGroup ? r.from : ($activeChat?.name ?? r.from)), time: r.time, text: r.kind.content.text, outgoing: r.outgoing, re: depth ? { a: r.kind.content.quoted_author, t: r.kind.content.quoted_text } : null, depth });
+        next.push(quoteOf(r));
+      }
+      level = next;
+    }
+    return out;
+  });
+  let commentsAllowed = $derived(!!activeGroup && activeGroup.settings.comments !== false);
+  function openThread(row: Row, kind?: "comments" | "replies") {
+    closeMenu();
+    const k = kind ?? (activeGroup?.kind === "channel" ? "comments" : "replies");
+    thread = { kind: k, root: row };
+  }
+  async function sendThread(text: string, re: { a: string; t: string } | null) {
+    const th = thread, chat = $activeChat;
+    if (!th || !chat) return;
+    const body = th.kind === "comments"
+      ? "[cmt:v1]" + JSON.stringify({ to: reactionKey(th.root), t: text, ...(re ? { re } : {}) })
+      : "[reply:v1]" + JSON.stringify({ quoted_author: re?.a ?? authorOf(th.root), quoted_text: re ? re.t.slice(0, 180) : quoteOf(th.root), text });
+    try {
+      if (chat.id.startsWith("grp_")) await api.groupSend(chat.id, body);
+      else await api.sendMessage(chat.id, body);
+      await loadActiveMessages();
+    } catch (e) { showToast(String(e)); }
+  }
+
   // ---- Chat password (only for me) ----
   let lockedNow = $derived(!!$activeChat && !!$chatLocks[$activeChat.id] && !$unlocked[$activeChat.id]);
   let lockPass = $state("");
@@ -1272,7 +1340,10 @@
     const id = $activeChat?.id;
     untrack(() => { slowLeft = id ? slowModeWait(id) : 0; });
   });
-  let rows = $derived(computeRows(roomMessages, myUsername));
+  // Comments ([cmt:v1]) live in threads under their message, not in the flow.
+  const isComment = (m: ChatMessage) => m.kind.type === "text" && m.kind.content.text.startsWith("[cmt:v1]");
+  let flowMessages = $derived(roomMessages.some(isComment) ? roomMessages.filter((m) => !isComment(m)) : roomMessages);
+  let rows = $derived(computeRows(flowMessages, myUsername));
 
   // ---- Windowed rendering: only the newest WINDOW_STEP rows are in the
   // DOM; scrolling near the top reveals the next page (scroll position
@@ -1533,7 +1604,7 @@
   // ---- Quoted replies ----
   let replyTarget = $state<{ author: string; text: string } | null>(null);
   function authorOf(m: Row): string {
-    return m.outgoing ? ($info?.username ?? "You") : ($activeChat?.name ?? "Peer");
+    return m.outgoing ? ($info?.username ?? "You") : isGroup ? m.from : ($activeChat?.name ?? "Peer");
   }
   /** A short snippet of any message, for the reply preview. */
   function snippetOf(m: ChatMessage): string {
@@ -2099,6 +2170,20 @@
   {#if !$activeChat}
     <div class="empty">{$t("Pick a chat on the left.")}</div>
   {:else}
+    {#if thread && !lockedNow}
+      {@const th = thread}
+      <ThreadPanel
+        title={th.kind === "comments" ? $t("Comments") : $t("Thread")}
+        rootAuthor={th.root.outgoing ? $t("You") : (isGroup ? th.root.from : $activeChat.name)}
+        rootText={snippetOf(th.root)}
+        rootTime={th.root.time}
+        items={threadItems}
+        canWrite={$activeChat.live && (th.kind === "replies" ? canPost : commentsAllowed)}
+        onSend={sendThread}
+        onClose={() => (thread = null)}
+        onJump={th.kind === "replies" ? (id) => window.dispatchEvent(new CustomEvent("aqua:jump", { detail: id })) : undefined}
+      />
+    {/if}
     {#if lockedNow}
       <div class="lock-gate">
         <div class="lg-card">
@@ -2771,6 +2856,14 @@
                 </div>
               {/if}
 
+              {#if (isGroup && commentsAllowed && (activeGroup?.kind === "channel" || commentCount.get(reactionKey(m)))) || replyCount.get(quoteOf(m))}
+                {@const nc = isGroup ? (commentCount.get(reactionKey(m)) ?? 0) : 0}
+                {@const nr = replyCount.get(quoteOf(m)) ?? 0}
+                <button class="thread-chip" class:out={m.outgoing} onclick={() => openThread(m, nc || activeGroup?.kind === "channel" ? "comments" : "replies")}>
+                  {#if nc || activeGroup?.kind === "channel"}💬 {nc ? $tn(nc, "comment") : $t("Comment")}{:else}↩ {$tn(nr, "reply")}{/if}
+                  <span class="tc-arrow">›</span>
+                </button>
+              {/if}
               {#if $activeChat}
                 {@const chips = reactionChips($reactions[reactionKey(m)])}
                 {#if chips.length > 0}
@@ -2825,6 +2918,7 @@
           {/if}
         </div>
         <button class="ctx-item" role="menuitem" onclick={() => replyRow(row)}>{$t("Reply")}</button>
+        <button class="ctx-item" role="menuitem" onclick={() => openThread(row)}>{$t(isGroup && commentsAllowed ? "Comments & thread" : "Thread")}</button>
         {#if row.kind.type === "file" && row.kind.content.saved_at && !row.outgoing && !protectedChat}
           {@const rk = renderKind(row.kind.content)}
           {#if rk === "sticker"}
@@ -3062,6 +3156,10 @@
 <svelte:window onmousedown={(e) => { if (ttlMenu && !(e.target as HTMLElement).closest?.(".ttl-wrap")) ttlMenu = false; }} />
 
 <style>
+  .thread-chip { display: inline-flex; align-items: center; gap: 6px; margin-top: 3px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-bubble-in); color: var(--accent); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; transition: border-color 0.12s, background 0.12s; }
+  .thread-chip.out { align-self: flex-end; }
+  .thread-chip:hover { border-color: var(--accent); }
+  .tc-arrow { color: var(--fg-dim); font-size: 14px; line-height: 1; }
   .lock-gate { position: absolute; inset: 0; z-index: 30; display: grid; place-items: center; background: var(--bg-shell); animation: ttl-pop 0.18s ease-out; }
   .lg-card { width: min(320px, calc(100% - 32px)); display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; }
   .lg-ic { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); margin-bottom: 6px; }
