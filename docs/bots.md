@@ -169,7 +169,7 @@ while True:
 - безопасный калькулятор и математика.
 
 ```sh
-pip install "git+https://github.com/applememestm-pixel/aquamarine#subdirectory=sdk/python"
+pip install "git+https://github.com/applememestm-pixel/Aquamarine#subdirectory=sdk/python"
 ```
 
 ```python

@@ -2,7 +2,7 @@
 
 **Мессенджер со сквозным шифрованием: настольный и мобильный клиент, самостоятельно размещаемый ретранслятор и федерация ретрансляторов.**
 
-[Релизы](https://github.com/applememestm-pixel/Aquamarine/releases) · [Сайт](https://applememestm-pixel.github.io/aquamarine/) · [Документация](docs/README.md) · [HTTP API](docs/api.md) · [Изменения](CHANGELOG.md) · [Безопасность](SECURITY.md)
+[Релизы](https://github.com/applememestm-pixel/Aquamarine/releases) · [Сайт](https://applememestm-pixel.github.io/Aquamarine/) · [Документация](docs/README.md) · [HTTP API](docs/api.md) · [Изменения](CHANGELOG.md) · [Безопасность](SECURITY.md)
 
 ---
 

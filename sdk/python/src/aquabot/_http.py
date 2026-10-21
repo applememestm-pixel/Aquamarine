@@ -6,7 +6,7 @@ import urllib.error
 import urllib.request
 from typing import Any, Dict, Iterator, Optional
 
-USER_AGENT = "aquamarine-bot/0.1 (+https://github.com/applememestm-pixel/aquamarine)"
+USER_AGENT = "aquamarine-bot/0.1 (+https://github.com/applememestm-pixel/Aquamarine)"
 
 
 class HTTPError(Exception):

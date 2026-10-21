@@ -7,7 +7,7 @@
 ## Установка
 
 ```bash
-pip install "git+https://github.com/applememestm-pixel/aquamarine#subdirectory=sdk/python"
+pip install "git+https://github.com/applememestm-pixel/Aquamarine#subdirectory=sdk/python"
 # или, когда пакет выложен в PyPI:
 pip install aquamarine-bot
 ```
