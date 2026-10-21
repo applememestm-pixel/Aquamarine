@@ -5,6 +5,16 @@ resume. Newest entries at the top.
 
 ---
 
+## 2026-10-21 — Session 51: shell polish, Bluetooth, spatial sound (0.2.1)
+
+- Rail without the connection dot and settings gear; the open chat's row is a notebook tab that runs into the chat panel.
+- Header: search · one call button (audio / video) · tools menu (calendar, auto-delete, channel statistics, new window) · shared media. No hint line under the composer.
+- Real avatars in members, contacts and calls; archive / folder switches expand the collapsed list.
+- Lock screen as a profile card: password → straight in; Forgot password (code to the account e-mail) and Log out of the profile; the passcode prompt after sign-in can be skipped.
+- Bluetooth: OBEX Object Push via BlueZ/obexd over zbus (bluetooth.rs): device list, search, power on, progress, receiving agent → Downloads/Aquamarine Bluetooth. Linux only.
+- Spatial sound in voice rooms (spatial.ts): HRTF panner per voice, draggable room map, acoustics (open / room / hall).
+- Optimisation: heavy panels lazy-loaded (lib/panels/*), first chat window 40 rows, thin LTO.
+
 ## 2026-10-21 — Session 50: phase 2 (r18)
 
 - Bot buttons (inline + reply keyboards, callbacks) and Telegram mini apps: iframe with the official WebApp protocol, initData signed like Telegram (`/v1/webapp/init`), menu button, `answerWebAppQuery`, `sendData`.
