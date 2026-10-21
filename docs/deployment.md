@@ -18,10 +18,11 @@ AQUA_LISTEN=0.0.0.0:7777 ./aqua-server-linux-x64
 |---|---|
 | `aquamarine-server.sh`, `Aquamarine Server.bat` | Запуск свежей сборки ретранслятора |
 | `server-panel.sh` | Ретранслятор с текстовой панелью: адрес для подключения, счётчики `/v1/stats`, журнал (коды подтверждения в режиме разработки) |
+| `aquamarine-docker.sh` | Ретранслятор в Docker из `ghcr.io` (по умолчанию `:nightly`, `TAG=latest` — стабильный): обновляет образ, пересоздаёт контейнер, показывает адрес и журнал |
 
 ## 2. Docker
 
-Образ публикуется в GitHub Container Registry с каждым релизом: `ghcr.io/applememestm-pixel/aquamarine-server` (теги `<версия>`, `latest`, `nightly`; amd64 и arm64).
+Образ публикуется в GitHub Container Registry: `ghcr.io/applememestm-pixel/aquamarine-server` — `<версия>` и `latest` с каждым релизом, `nightly` с каждым push в `main`; amd64 и arm64.
 
 ```bash
 docker run -d --name aquamarine --restart unless-stopped \

@@ -65,7 +65,7 @@ pkill -x aqua-server 2>/dev/null && sleep 1 || true
 cp -f target/release/aqua-server "$OUT/aqua-server" && echo "  + aqua-server"
 BIN="crates/aqua-client-ui/target/release/aqua-client-ui"
 [ -f "$BIN" ] && cp -f "$BIN" "$OUT/aquamarine" && echo "  + aquamarine"
-for f in aquamarine.sh aquamarine-server.sh server-panel.sh; do
+for f in aquamarine.sh aquamarine-server.sh server-panel.sh aquamarine-docker.sh; do
   cp -f "tools/$f" "$OUT/$f" && chmod +x "$OUT/$f" && echo "  + $f"
 done
 
@@ -90,6 +90,7 @@ cat <<EOT
     - aquamarine.sh         (./aquamarine.sh to chat)
     - aquamarine-server.sh  (host a relay; opens its admin panel)
     - server-panel.sh       (relay with live stats in the terminal)
+    - aquamarine-docker.sh  (relay in Docker from ghcr.io, follows its log)
   Packages (.AppImage/.deb/.rpm) are there and in site/downloads too.
 ============================================================
 EOT
