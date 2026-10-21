@@ -2,7 +2,7 @@
   import { appIconUrl } from "../appIcon";
   import { t } from "../i18n";
   import { icons } from "../icons";
-  import { info, activeTab, type NavTab } from "../stores";
+  import { activeTab, type NavTab } from "../stores";
   import { openSettings } from "./SettingsPanel.svelte";
 </script>
 
@@ -26,17 +26,6 @@
 
   <div class="rail-spacer"></div>
 
-  <!-- Compact connection pill — green when connected, dim when not.
-       No button: connection is handled automatically. On first launch
-       the registration/connect wizard pops up by itself. -->
-  <div
-    class="status-pill"
-    class:connected={$info?.connected}
-    title={$info?.connected ? `Connected to ${$info?.server_url ?? "server"} as @${$info?.username ?? "?"}` : "Not connected — auto-retrying…"}
-  >
-    <span class="pill-dot"></span>
-  </div>
-
   <!-- Settings / profile live in the user panel on desktop; the rail keeps
        a settings button only in the narrow (mobile) layout. -->
   <button class="nav-btn mobile-only" data-label="Settings" onclick={() => openSettings()}>
@@ -45,8 +34,10 @@
 </aside>
 
 <style>
-  .mobile-only { display: none; }
-  @media (max-width: 720px) { .mobile-only { display: grid; } }
+  /* The connection state lives in the title bar; settings in the user
+     panel. The rail keeps a settings button only in the narrow layout. */
+  .nav-btn.mobile-only { display: none; }
+  @media (max-width: 720px) { .nav-btn.mobile-only { display: grid; } }
   .rail {
     background: var(--bg-rail);
     border-right: 1px solid var(--border);
@@ -98,28 +89,6 @@
     background: var(--accent-soft);
   }
   .nav-btn.active::before { height: 22px; }
-  .status-pill {
-    display: grid; place-items: center;
-    width: 36px; height: 14px;
-    margin: 2px 0 6px;
-  }
-  .pill-dot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    background: var(--fg-dim);
-    box-shadow: none;
-    transition: background 0.3s ease, box-shadow 0.3s ease;
-    animation: pill-fade 1.6s ease-in-out infinite;
-  }
-  .status-pill.connected .pill-dot {
-    background: var(--online);
-    box-shadow: 0 0 8px var(--online);
-    animation: none;
-  }
-  @keyframes pill-fade {
-    0%, 100% { opacity: 0.9; }
-    50%      { opacity: 0.3; }
-  }
   .nav-btn :global(svg) { width: 20px; height: 20px; }
   .rail-spacer { flex: 1; }
   .me {

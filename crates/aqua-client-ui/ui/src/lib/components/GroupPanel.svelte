@@ -33,7 +33,7 @@
   import { api } from "../tauri";
   import { showToast } from "./Toast.svelte";
   import { profile, updateProfile } from "../profile";
-  import { publishMyProfile } from "../people";
+  import { publishMyProfile, avatars } from "../people";
   import { mutedChats, setMuted } from "../chatPrefs";
   import { reactionPack, quickReactions, reactionUrl, parseReaction } from "../reactionPack";
   import { CLAN_BADGES, CLAN_COLORS, badgeSvg } from "../clanBadges";
@@ -586,7 +586,7 @@
 {/snippet}
 
 {#snippet memberAva(u: string, size = 34)}
-  <span class="m-ava" style:width="{size}px" style:height="{size}px">{u.charAt(0).toUpperCase()}</span>
+  <span class="m-ava" style:width="{size}px" style:height="{size}px" style:background-image={$avatars[u] ? `url("${$avatars[u]}")` : undefined} class:img={!!$avatars[u]}>{$avatars[u] ? "" : u.charAt(0).toUpperCase()}</span>
 {/snippet}
 
 <svelte:window onkeydown={(e) => {
@@ -1368,4 +1368,5 @@
   .ccell { width: 26px; height: 26px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; }
   .ccell.on { border-color: var(--fg); }
   .colors input[type=color] { width: 30px; height: 30px; border: none; background: none; cursor: pointer; }
+  .m-ava.img { background-size: cover; background-position: center; }
 </style>

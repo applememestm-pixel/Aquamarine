@@ -5,6 +5,7 @@
   import { openProfile } from "./ProfileModal.svelte";
   import { openNewChatDialog } from "../newChat";
   import { icons } from "../icons";
+  import { avatars } from "../people";
 
   interface Row {
     username: string;
@@ -86,7 +87,7 @@
       {#each rows as r (r.username)}
         <div class="row">
           <button class="open" onclick={() => openContact(r)} title={$t(r.has_chat ? "Open chat" : "View profile")}>
-            <div class="avatar">{(r.full_name || r.username).charAt(0).toUpperCase()}</div>
+            <div class="avatar" style:background-image={$avatars[r.username] ? `url("${$avatars[r.username]}")` : undefined} style:background-size="cover" style:background-position="center">{$avatars[r.username] ? "" : (r.full_name || r.username).charAt(0).toUpperCase()}</div>
             <div class="meta">
               <div class="name">{r.full_name || r.username}</div>
               <div class="sub">

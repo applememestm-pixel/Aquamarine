@@ -239,7 +239,7 @@
     else openProfile(c.id);
   }
 
-  function startVoiceCall() {
+  function startVoiceCall(video = false) {
     const chat = $activeChat;
     if (!chat || !chat.live) {
       showToast(tr("No live session — connect and start a chat first"));
@@ -249,7 +249,7 @@
       showToast(tr("Already in a call"));
       return;
     }
-    startOutgoingCall(chat.id);
+    startOutgoingCall(chat.id, video);
   }
 
   async function pickAndSendFile(preset?: SendMode) {
@@ -1155,6 +1155,49 @@
   // ---- Auto-delete timer + read receipts of this chat (header ⏱ menu) ----
   let chatTtl = $state(0);
   let ttlMenu = $state(false);
+  // ---- Header: one call button (audio / video), one tools menu ----
+  let callMenu = $state(false);
+  let toolsMenu = $state(false);
+  const DESKTOP_APP = typeof navigator !== "undefined" && !/android|iphone|ipad/i.test(navigator.userAgent);
+  const IC = {
+    phone: icons.phone,
+    video: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>',
+    tools: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><circle cx="17.25" cy="17.25" r="3.75"/></svg>',
+    cal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="16" y1="3" x2="16" y2="7"/></svg>',
+    ttl: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2"/><path d="M9.5 2.5h5"/><path d="M12 2.5V5"/></svg>',
+    stats: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="20" x2="6" y2="12"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="18" y1="20" x2="18" y2="9"/></svg>',
+    win: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="14" height="14" rx="2"/><path d="M14 3h7v7"/><path d="M21 3l-8 8"/></svg>',
+  };
+  type HdrItem = { id: string; label: string; sub?: string; icon: string; on?: boolean; run: () => void };
+  let callChoices = $derived.by((): HdrItem[] => {
+    const c = $activeChat;
+    if (!c || POPOUT) return [];
+    if (isGroup && activeGroup) {
+      const gid = activeGroup.id;
+      const chan = activeGroup.kind === "channel";
+      const speaker = !chan || isAdmin(activeGroup, myUsername);
+      const out: HdrItem[] = [];
+      if (speaker || $activeGroupCalls[gid]) out.push({ id: "voice", label: chan ? (speaker ? tr("Start a live stream") : tr("Listen to the live stream")) : tr("Voice chat"), icon: IC.phone, on: $groupCall?.gid === gid, run: () => void joinGroupCall(gid) });
+      if (speaker) out.push({ id: "video", label: tr("Video chat"), icon: IC.video, run: () => void joinGroupCall(gid, { video: true }) });
+      return out;
+    }
+    if (c.id === "__saved__" || isBotChat) return [];
+    return [
+      { id: "audio", label: tr("Audio call"), icon: IC.phone, run: () => startVoiceCall(false) },
+      { id: "video", label: tr("Video call"), icon: IC.video, run: () => startVoiceCall(true) },
+    ];
+  });
+  let toolItems = $derived.by((): HdrItem[] => {
+    const c = $activeChat;
+    if (!c) return [];
+    const out: HdrItem[] = [];
+    if (c.id !== "__saved__" && !isBotChat) out.push({ id: "cal", label: tr("Calendar"), sub: tr("Events and reminders of this chat"), icon: IC.cal, on: $calendarFor === c.id, run: () => calendarFor.set($calendarFor === c.id ? null : c.id) });
+    if (ttlEditable || chatTtl) out.push({ id: "ttl", label: tr("Auto-delete & read receipts"), sub: chatTtl ? tr("Auto-delete: {t}", { t: ttlLabel(chatTtl) }) : tr("Off"), icon: IC.ttl, on: chatTtl > 0, run: () => (ttlMenu = true) });
+    if (amChanAdmin) out.push({ id: "stats", label: tr("Channel statistics"), sub: tr("Views, reactions, comments"), icon: IC.stats, on: $statsFor === c.id, run: () => statsFor.set($statsFor === c.id ? null : c.id) });
+    if (DESKTOP_APP && !POPOUT) out.push({ id: "win", label: tr("Open in a new window"), sub: "Ctrl + " + tr("click"), icon: IC.win, run: () => void api.openChatWindow(c.id, c.name).catch((e) => showToast(String(e))) });
+    return out;
+  });
+  $effect(() => { void $activeChat?.id; callMenu = false; toolsMenu = false; });
   $effect(() => {
     const id = $activeChat?.id;
     void $chats;
@@ -2437,20 +2480,36 @@
         </div>
       </div>
       <div class="chat-actions">
-        {#if !isGroup && !POPOUT}
-          <button class="icon-btn" title={$t("Voice call")} onclick={startVoiceCall}>{@html icons.phone}</button>
-          <button class="icon-btn" title={$t("Video call (coming soon)")}>{@html icons.video}</button>
+        <button class="icon-btn" class:active={searchOpen} title={$t("Search in chat")} onclick={() => (searchOpen ? closeSearch() : openSearch())}>{@html icons.search}</button>
+        {#if callChoices.length}
+          <div class="ttl-wrap hdr-menu">
+            <button class="icon-btn call-btn" class:active={callMenu} class:live={callChoices.some((c) => c.on)} title={$t("Call")} aria-haspopup="menu" aria-expanded={callMenu}
+              onclick={() => { callMenu = !callMenu; toolsMenu = false; ttlMenu = false; }}>{@html icons.phone}<span class="hm-caret"></span></button>
+            {#if callMenu}
+              <div class="ttl-pop hm-pop" role="menu" tabindex="-1">
+                {#each callChoices as c (c.id)}
+                  <button class="hm-item" class:on={c.on} role="menuitem" onclick={() => { callMenu = false; c.run(); }}><span class="hm-ic">{@html c.icon}</span><span class="hm-tx"><b>{c.label}</b>{#if c.sub}<small>{c.sub}</small>{/if}</span></button>
+                {/each}
+              </div>
+            {/if}
+          </div>
         {/if}
-        {#if ttlEditable || chatTtl}
-          <div class="ttl-wrap">
-            <button class="icon-btn ttl-btn" class:active={ttlMenu} class:on={chatTtl > 0}
-              title={chatTtl ? tr("Auto-delete: {t}", { t: ttlLabel(chatTtl) }) : $t("Auto-delete & read receipts")}
-              onclick={() => (ttlMenu = !ttlMenu)} aria-haspopup="menu" aria-expanded={ttlMenu}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2"/><path d="M9.5 2.5h5"/><path d="M12 2.5V5"/></svg>
+        {#if toolItems.length}
+          {@const cid = $activeChat.id}
+          <div class="ttl-wrap hdr-menu">
+            <button class="icon-btn ttl-btn" class:active={toolsMenu || ttlMenu} class:on={chatTtl > 0} title={$t("Tools")} aria-haspopup="menu" aria-expanded={toolsMenu}
+              onclick={() => { if (ttlMenu) { ttlMenu = false; return; } toolsMenu = !toolsMenu; callMenu = false; }}>
+              {@html IC.tools}
               {#if chatTtl}<span class="ttl-badge">{ttlShort(chatTtl)}</span>{/if}
             </button>
+            {#if toolsMenu}
+              <div class="ttl-pop hm-pop" role="menu" tabindex="-1">
+                {#each toolItems as it (it.id)}
+                  <button class="hm-item" class:on={it.on} role="menuitem" onclick={() => { toolsMenu = false; it.run(); }}><span class="hm-ic">{@html it.icon}</span><span class="hm-tx"><b>{it.label}</b>{#if it.sub}<small>{it.sub}</small>{/if}</span></button>
+                {/each}
+              </div>
+            {/if}
             {#if ttlMenu}
-              {@const cid = $activeChat.id}
               <div class="ttl-pop" role="menu" tabindex="-1">
                 <div class="ttl-h">{$t("Auto-delete messages")}</div>
                 <div class="ttl-opts">
@@ -2471,37 +2530,7 @@
             {/if}
           </div>
         {/if}
-        {#if amChanAdmin}
-          <button class="icon-btn" class:active={$statsFor === $activeChat.id} title={$t("Channel statistics")} onclick={() => statsFor.set($statsFor === $activeChat.id ? null : $activeChat.id)}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="20" x2="6" y2="12"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="18" y1="20" x2="18" y2="9"/></svg>
-          </button>
-        {/if}
-        {#if $activeChat.id !== "__saved__" && !isBotChat}
-          <button class="icon-btn" class:active={$calendarFor === $activeChat.id} title={$t("Calendar")}
-            onclick={() => calendarFor.set($calendarFor === $activeChat.id ? null : $activeChat.id)}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="16" y1="3" x2="16" y2="7"/></svg>
-          </button>
-        {/if}
-        <button class="icon-btn" class:active={searchOpen} title={$t("Search in chat")} onclick={() => (searchOpen ? closeSearch() : openSearch())}>{@html icons.search}</button>
-        {#if isGroup && activeGroup}
-          {@const gidCall = activeGroup.id}
-          {@const chan = activeGroup.kind === "channel"}
-          {@const speaker = !chan || isAdmin(activeGroup, myUsername)}
-          {#if speaker || $activeGroupCalls[gidCall]}
-            <button class="icon-btn" class:active={$groupCall?.gid === gidCall}
-              title={chan ? (speaker ? $t("Start a live stream") : $t("Listen to the live stream")) : $t("Voice chat")}
-              onclick={() => joinGroupCall(gidCall)}>{@html icons.phone}</button>
-          {/if}
-          {#if speaker}
-            <button class="icon-btn" title={$t("Video chat")} onclick={() => joinGroupCall(gidCall, { video: true })}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>
-            </button>
-          {/if}
-          <button class="icon-btn group-gear" title={$t("Group settings")} onclick={() => openGroupPanel(activeGroup.id)} aria-label={$t("Group settings")}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          </button>
-        {/if}
-        <button class="icon-btn" title="Shared media & files" onclick={toggleSharedMedia}>{@html icons.info}</button>
+        <button class="icon-btn" title={$t("Shared media & files")} onclick={toggleSharedMedia}>{@html icons.info}</button>
       </div>
     </header>
     {#if isGroup && activeGroup && !fullVoice}<GroupCallPanel gid={activeGroup.id} onExpand={rooms.length ? openVoiceFull : undefined} />{/if}
@@ -3261,19 +3290,10 @@
       {/if}
     </div>
     {/if}
-    <div class="composer-note">
-      {#if $activeChat.live && !$activeChat.has_lock}
-        <span class="plain-note">⚠ {$t("Bot chat: not end-to-end encrypted — the server and the bot's owner can read it. Send /stop to make the bot stop writing.")}</span>
-      {:else}
-        {@html icons.lock}
-        X3DH · Double Ratchet · {$t("your keys never leave this device")}
-      {/if}
-      <span class="kbds"><kbd>{$t("Enter")}</kbd> {$t("to send ·")} <kbd>{$t("Shift + Enter")}</kbd> {$t("newline")}</span>
-    </div>
   {/if}
 </main>
 
-<svelte:window onmousedown={(e) => { if (ttlMenu && !(e.target as HTMLElement).closest?.(".ttl-wrap")) ttlMenu = false; }} />
+<svelte:window onmousedown={(e) => { if ((ttlMenu || callMenu || toolsMenu) && !(e.target as HTMLElement).closest?.(".ttl-wrap")) { ttlMenu = false; callMenu = false; toolsMenu = false; } }} />
 
 <style>
   .post-foot { display: flex; align-items: center; gap: 8px; margin-top: 3px; }
@@ -3353,6 +3373,18 @@
   .bot-menu-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bot-menu-btn svg { width: 16px; height: 16px; flex-shrink: 0; }
   .ttl-wrap { position: relative; display: inline-flex; }
+  .hm-pop { width: 270px; padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+  .hm-item { display: flex; align-items: center; gap: 11px; width: 100%; padding: 8px 10px; border: none; border-radius: 10px; background: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; transition: background 0.12s; }
+  .hm-item:hover { background: var(--bg-hover); }
+  .hm-item.on .hm-ic { color: var(--accent); background: var(--accent-soft); }
+  .hm-ic { width: 32px; height: 32px; flex-shrink: 0; border-radius: 9px; display: grid; place-items: center; background: var(--bg-input); color: var(--fg-muted); }
+  .hm-ic :global(svg) { width: 17px; height: 17px; }
+  .hm-tx { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .hm-tx b { font-size: 13.5px; font-weight: 600; }
+  .hm-tx small { font-size: 11.5px; color: var(--fg-dim); }
+  .call-btn { position: relative; }
+  .call-btn.live { color: var(--online); }
+  .hm-caret { position: absolute; right: 3px; bottom: 4px; width: 0; height: 0; border-left: 3px solid transparent; border-right: 3px solid transparent; border-top: 4px solid currentColor; opacity: 0.6; }
   .ttl-btn { position: relative; }
   .ttl-btn.on { color: var(--accent); }
   .ttl-badge { position: absolute; right: -2px; bottom: 0; font-size: 9px; font-weight: 800; line-height: 1; padding: 2px 3px; border-radius: 6px; background: var(--accent); color: #06070C; pointer-events: none; }

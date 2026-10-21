@@ -87,6 +87,11 @@
   const inServer = $derived(!!$activeId && $groupMap[$activeId]?.kind === "supergroup");
   const compact = $derived(inServer && !compactPinned);
   $effect(() => { if (!inServer) compactPinned = false; });
+  // Opening the archive or switching folders means browsing the list:
+  // show it wide, with avatars and names.
+  $effect(() => { if (showArchive && inServer) compactPinned = true; });
+  let lastFolder = $activeFolder;
+  $effect(() => { const f = $activeFolder; if (f !== lastFolder) { lastFolder = f; if (inServer) compactPinned = true; } });
   $effect(() => { document.documentElement.classList.toggle("list-compact", compact); });
 
   // ---- Resizable list (drag the right edge) ----
@@ -283,17 +288,20 @@
   }
 </script>
 
-<aside class="list" class:resizing class:compact>
+<aside class="list" class:resizing class:compact class:has-active={!!$activeId}>
   {#if compact}
     <button class="compact-expand" onclick={() => (compactPinned = true)} title={$t("Show the chat list")} aria-label={$t("Show the chat list")}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
     </button>
-  {:else if inServer}
-    <button class="compact-collapse" onclick={() => (compactPinned = false)} title={$t("Collapse to avatars")} aria-label={$t("Collapse to avatars")}>‹</button>
   {/if}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="resize-handle" onpointerdown={startResize} ondblclick={resetWidth} title={$t("Drag to resize · double-click to reset")}></div>
   <div class="list-header">
+    {#if inServer && !compact}
+      <button class="collapse-btn" onclick={() => (compactPinned = false)} title={$t("Collapse to avatars")} aria-label={$t("Collapse to avatars")}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      </button>
+    {/if}
     <label class="search">
       {@html icons.search}
       <input
@@ -560,13 +568,13 @@
   .list.compact .resize-handle, .list.compact .join-card { display: none; }
   .list.compact .chats { padding: 6px 0; scrollbar-width: none; }
   .list.compact .chat-item { position: relative; justify-content: center; padding: 6px 0; margin: 2px 8px; border-radius: 16px; }
-  .list.compact .chat-item.active { background: var(--bg-active); box-shadow: none; }
-  .list.compact .chat-item.active::before { content: ""; position: absolute; left: -8px; top: 50%; width: 4px; height: 26px; margin-top: -13px; border-radius: 0 4px 4px 0; background: var(--accent); }
+  .list.compact .chat-item.active { margin: 2px 0 2px 8px; width: auto; border-radius: 16px 0 0 16px; }
   .compact-expand { margin: 12px auto 4px; width: 44px; height: 36px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg-input); color: var(--fg-muted); cursor: pointer; display: grid; place-items: center; flex-shrink: 0; transition: color .15s, border-color .15s; }
   .compact-expand:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
   .compact-expand svg { width: 18px; height: 18px; }
-  .compact-collapse { position: absolute; top: 50%; right: -12px; z-index: 7; width: 22px; height: 44px; margin-top: -22px; border-radius: 0 10px 10px 0; border: 1px solid var(--border); border-left: none; background: var(--bg-list); color: var(--fg-muted); cursor: pointer; font-size: 16px; }
-  .compact-collapse:hover { color: var(--accent); }
+  .collapse-btn { width: 30px; height: 36px; flex-shrink: 0; border: none; border-radius: 10px; background: none; color: var(--fg-muted); cursor: pointer; display: grid; place-items: center; }
+  .collapse-btn:hover { background: var(--bg-hover); color: var(--accent); }
+  .collapse-btn svg { width: 16px; height: 16px; }
   .cmp-badge { position: absolute; right: -4px; bottom: -4px; z-index: 2; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; background: #F23F43; color: #fff; font-size: 11px; font-weight: 800; line-height: 18px; text-align: center; border: 2px solid var(--bg-list); }
   .cmp-badge.muted { background: var(--fg-dim); }
   .list {
@@ -794,10 +802,21 @@
   }
   .chat-item:hover { background: var(--bg-hover); }
   .chat-item:active { transform: scale(0.985); }
+  /* The open chat is a notebook tab: its row runs into the list's edge,
+     which becomes the spine the chat panel hangs on. */
+  .list { --tab: color-mix(in srgb, var(--accent) 15%, var(--bg-list)); }
+  .list.has-active { border-right-color: color-mix(in srgb, var(--accent) 42%, var(--border)); }
   .chat-item.active {
-    background: var(--bg-active);
-    box-shadow: inset 3px 0 0 var(--accent);
+    position: relative; z-index: 1;
+    background: var(--tab);
+    width: calc(100% + 6px); margin-right: -6px;
+    border-radius: 12px 0 0 12px;
   }
+  .chat-item.active::before, .chat-item.active::after {
+    content: ""; position: absolute; right: 0; width: 12px; height: 12px; pointer-events: none;
+  }
+  .chat-item.active::before { top: -12px; background: radial-gradient(circle at 0 0, transparent 11.5px, var(--tab) 12px); }
+  .chat-item.active::after { bottom: -12px; background: radial-gradient(circle at 0 100%, transparent 11.5px, var(--tab) 12px); }
   .chat-body { min-width: 0; }
   .chat-row-1 {
     display: flex; align-items: center; gap: 6px;

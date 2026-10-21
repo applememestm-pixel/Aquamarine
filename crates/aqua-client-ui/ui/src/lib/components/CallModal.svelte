@@ -26,7 +26,11 @@
     callDeafened.update((d) => !d);
   }
 
-  export function startOutgoingCall(peer: string) {
+  /** The call was placed as a video call: turn the camera on once connected. */
+  let camOnConnect = false;
+  export function takeCamOnConnect() { const v = camOnConnect; camOnConnect = false; return v; }
+  export function startOutgoingCall(peer: string, video = false) {
+    camOnConnect = video;
     if (getStore(peerPresence)[peer]?.nc) {
       toastM(`@${peer} doesn't accept calls from you`);
       return;
@@ -75,6 +79,7 @@
 
 <script lang="ts">
   import { t, tr } from "../i18n";
+  import { avatars } from "../people";
   import { onMount } from "svelte";
   import { get } from "svelte/store";
   import type { Action } from "svelte/action";
@@ -650,6 +655,12 @@
   const toggleMute = toggleCallMute;
   const toggleDeafen = toggleCallDeafen;
 
+  $effect(() => {
+    const k = $callState.kind;
+    if (k === "connected" && pc && !camStream && takeCamOnConnect()) setTimeout(() => void toggleCam(), 400);
+    if (k === "ended" || k === "idle") takeCamOnConnect();
+  });
+
   async function toggleCam() {
     if (camStream) return stopCam();
     if (!pc || !tx[T_CAM] || tx[T_CAM].receiver.track.kind !== "video") { showToast(tr("Your contact's app is too old for video — ask them to update")); return; }
@@ -1057,9 +1068,9 @@
   </span>
 {/snippet}
 
-{#snippet avatar(letter: string, speaking: boolean, size: "lg" | "md" | "sm", muted = false, deaf = false)}
-  <div class="ava {size}" class:speaking>
-    <span>{letter}</span>
+{#snippet avatar(letter: string, speaking: boolean, size: "lg" | "md" | "sm", muted = false, deaf = false, img = "")}
+  <div class="ava {size}" class:speaking style:background-image={img ? `url("${img}")` : undefined} style:background-size={img ? "cover" : undefined} style:background-position={img ? "center" : undefined}>
+    {#if !img}<span>{letter}</span>{/if}
     {#if deaf}<b class="ava-badge">{@html I.headOff}</b>{:else if muted}<b class="ava-badge">{@html I.micOff}</b>{/if}
   </div>
 {/snippet}
@@ -1078,7 +1089,7 @@
     ondblclick={() => { if (big) void toggleFullscreen(); }}
   >
     {#if id === "r-ava"}
-      <div class="tile-ava">{@render avatar(peerLetter, speakingPeer, big ? "lg" : "md", remote.muted, remote.deaf)}</div>
+      <div class="tile-ava">{@render avatar(peerLetter, speakingPeer, big ? "lg" : "md", remote.muted, remote.deaf, $avatars[peerId] ?? "")}</div>
     {:else}
       <!-- svelte-ignore a11y_media_has_caption -->
       <video
@@ -1194,7 +1205,7 @@
   <div class="stage" class:fs={fullscreen} role="dialog" aria-label={$t("Call")}>
     <header class="st-head">
       <div class="st-peer">
-        {@render avatar(peerLetter, speakingPeer, "sm", remote.muted, remote.deaf)}
+        {@render avatar(peerLetter, speakingPeer, "sm", remote.muted, remote.deaf, $avatars[peerId] ?? "")}
         <span class="st-name">{peerName}</span>
         <span class="st-time">{fmt(elapsedSeconds)}</span>
         {#if reconnecting}<span class="recon">{$t("Reconnecting…")}</span>{/if}
@@ -1226,7 +1237,7 @@
       </div>
     {/if}
     <div class="mini-top">
-      {@render avatar(peerLetter, speakingPeer, "md", remote.muted, remote.deaf)}
+      {@render avatar(peerLetter, speakingPeer, "md", remote.muted, remote.deaf, $avatars[peerId] ?? "")}
       <div class="mini-text">
         <div class="mini-name">{$callState.kind === "ended" ? "Call ended" : peerName}</div>
         <div class="mini-status">
@@ -1243,7 +1254,7 @@
         </div>
       </div>
       {#if $callState.kind === "connected"}
-        <div class="mini-me">{@render avatar(myLetter, speakingMe, "sm", $callMuted, deafened)}</div>
+        <div class="mini-me">{@render avatar(myLetter, speakingMe, "sm", $callMuted, deafened, $avatars[$info?.username ?? ""] ?? "")}</div>
         {@render bars()}
       {/if}
     </div>
