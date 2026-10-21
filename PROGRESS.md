@@ -5,6 +5,22 @@ resume. Newest entries at the top.
 
 ---
 
+## 2026-10-21 — Session 50: phase 2 (r18)
+
+- Bot buttons (inline + reply keyboards, callbacks) and Telegram mini apps: iframe with the official WebApp protocol, initData signed like Telegram (`/v1/webapp/init`), menu button, `answerWebAppQuery`, `sendData`.
+- Forwarding with the author (`[fwd:v1]`, privacy setting "forwards" hides the link), multi-select, comment, groups.
+- Calendar events with RSVP, reminders and .ics export; shared checklists; per-chat calendar.
+- Favourite reaction (⭐ by default) copies to Saved; search by reaction.
+- Ctrl+click opens a chat in its own window (`open_chat_window`, `#popout=`).
+- Chat passwords (PBKDF2, relock after 5 min, no read receipts or previews while locked).
+- Comments under posts and reply threads (`[cmt:v1]`, ThreadPanel).
+- Workspace from a chat: shared documents and kanban boards, selection → checklist/doc/board.
+- Event rooms that close at a set time (`ends_at`).
+- Channel statistics counted on admins' devices (views, who/when for 30 days, hourly for 48 h).
+- Handoff: open the same chat on another own device.
+- Sealed messages: AES-GCM on the device, ciphertext to the recipient, key + condition (date / sender away N days, optional grace to say no) on the sender's relay (`/v1/capsules`).
+- Not done yet: handing a running call over; phase 3 research (spatial voice, post-quantum, Bluetooth/Wi-Fi nearby, relay on the phone).
+
 ## 2026-10-20 — Session 49: polish pass from the 19.10 list (phase 1)
 
 - Lag: blurred bubble shadows were the biggest CPU paint cost in WebKitGTK; flat shadows under `wk-lowfx`. Optional DMA-BUF renderer (Settings → Chat settings → Graphics) with a 20 s auto-revert; `[aqua-fps]` scroll log.
