@@ -50,3 +50,6 @@ site/downloads/*.rpm
 # Per-PC NDK linker paths written by android/patch-project.ps1
 crates/aqua-client-ui/.cargo/
 __pycache__/
+
+# Documents copied in by pages.yml
+site/docs/

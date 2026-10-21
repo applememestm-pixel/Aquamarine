@@ -1,265 +1,29 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Aquamarine</title>
-  <link rel="icon" href="logo.svg" type="image/svg+xml">
-<meta name="description" content="Aquamarine — an open, end-to-end encrypted desktop messenger. Your keys, your server." />
+<link rel="icon" href="logo.svg" type="image/svg+xml">
+<meta name="description" content="Aquamarine — открытый мессенджер со сквозным шифрованием. Ваши ключи, ваш сервер. An open, end-to-end encrypted messenger." />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" />
-<style>
-  /* ---- Aquamarine landing — single dark "neo" world, by choice.
-         Layout: fixed glass nav · aurora hero with a live chat mockup ·
-         feature grid · per-platform download rack · self-host · footer. ---- */
-  :root {
-    /* Color — pulled straight from the app's Aquamarine palette */
-    --void:      #06070C;
-    --ink:       #0C0F17;   /* raised surface */
-    --ink-2:     #121622;   /* card */
-    --line:      rgba(255,255,255,0.08);
-    --line-str:  rgba(255,255,255,0.16);
-    --fg:        #EAF0F6;
-    --fg-muted:  #9BA6B6;
-    --fg-dim:    #67707F;
-    --accent:    #00E5C7;   /* teal */
-    --accent-2:  #7B5CFF;   /* violet */
-    --accent-soft: rgba(0,229,199,0.12);
-    --accent-glow: rgba(0,229,199,0.45);
-    --violet-glow: rgba(123,92,255,0.40);
-    --good:      #37E29A;
-
-    /* Type */
-    --display: "Sora", system-ui, sans-serif;
-    --body:    "IBM Plex Sans", system-ui, sans-serif;
-    --mono:    "JetBrains Mono", ui-monospace, monospace;
-
-    color-scheme: dark;
-  }
-
-  * { box-sizing: border-box; }
-  html, body { margin: 0; }
-  body {
-    background:
-      radial-gradient(1100px 620px at 12% -8%, rgba(0,229,199,0.10), transparent 58%),
-      radial-gradient(1000px 640px at 92% 4%, rgba(123,92,255,0.12), transparent 56%),
-      var(--void);
-    color: var(--fg);
-    font-family: var(--body);
-    font-size: 16px;
-    line-height: 1.6;
-    -webkit-font-smoothing: antialiased;
-    overflow-x: hidden;
-  }
-  a { color: inherit; text-decoration: none; }
-  h1, h2, h3 { font-family: var(--display); font-weight: 700; letter-spacing: -0.02em; text-wrap: balance; margin: 0; }
-  p { margin: 0; }
-
-  .wrap { width: min(1120px, 100%); margin: 0 auto; padding-inline: 24px; }
-
-  /* ---------- Nav ---------- */
-  nav {
-    position: sticky; top: env(safe-area-inset-top, 0px); z-index: 50;
-    backdrop-filter: blur(14px);
-    background: color-mix(in srgb, var(--void) 72%, transparent);
-    border-bottom: 1px solid var(--line);
-  }
-  .nav-in { display: flex; align-items: center; gap: 20px; height: 64px; }
-  .brand { display: flex; align-items: center; gap: 11px; font-family: var(--display); font-weight: 700; font-size: 18px; }
-  .logo {
-    width: 34px; height: 34px; border-radius: 10px;
-    display: block;
-    box-shadow: 0 0 22px -4px var(--accent-glow);
-  }
-  .nav-links { display: flex; gap: 26px; margin-left: auto; font-size: 14.5px; color: var(--fg-muted); }
-  .nav-links a:hover { color: var(--fg); }
-  .nav-cta {
-    padding: 8px 16px; border-radius: 10px; font-size: 14px; font-weight: 600;
-    background: var(--accent-soft); color: var(--accent);
-    border: 1px solid rgba(0,229,199,0.28);
-  }
-  .nav-cta:hover { background: rgba(0,229,199,0.2); }
-  @media (max-width: 720px) { .nav-links { display: none; } }
-
-  /* ---------- Hero ---------- */
-  .hero { padding-block: 86px 72px; display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 54px; align-items: center; }
-  @media (max-width: 900px) { .hero { grid-template-columns: 1fr; gap: 40px; padding-block: 58px 44px; } }
-
-  .eyebrow {
-    display: inline-flex; align-items: center; gap: 8px;
-    font-size: 12.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
-    color: var(--accent); background: var(--accent-soft);
-    border: 1px solid rgba(0,229,199,0.22); border-radius: 999px; padding: 5px 12px;
-  }
-  .hero h1 { font-size: clamp(38px, 6vw, 64px); line-height: 1.02; margin: 20px 0 0; }
-  .hero h1 .grad {
-    background: linear-gradient(110deg, var(--accent), var(--accent-2));
-    -webkit-background-clip: text; background-clip: text; color: transparent;
-  }
-  .hero .lede { margin-top: 20px; font-size: 18px; color: var(--fg-muted); max-width: 42ch; }
-  .hero-actions { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 30px; align-items: center; }
-  .btn {
-    display: inline-flex; align-items: center; gap: 10px;
-    padding: 13px 22px; border-radius: 13px; font-weight: 600; font-size: 15px;
-    cursor: pointer; border: 1px solid transparent; transition: transform .14s ease, box-shadow .14s ease;
-  }
-  .btn-primary {
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    color: #04060b; box-shadow: 0 14px 34px -12px var(--accent-glow);
-  }
-  .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 18px 40px -12px var(--accent-glow); }
-  .btn-ghost { background: transparent; border-color: var(--line-str); color: var(--fg); }
-  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
-  .btn small { font-weight: 400; opacity: .72; font-size: 12.5px; }
-  .os-note { font-size: 13px; color: var(--fg-dim); }
-  .os-note b { color: var(--fg-muted); font-weight: 600; }
-
-  .trust { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 30px; font-size: 13px; color: var(--fg-dim); }
-  .trust span { display: inline-flex; align-items: center; gap: 7px; }
-  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent-glow); }
-
-  /* ---------- Hero chat mockup ---------- */
-  .mock {
-    position: relative; border-radius: 22px; overflow: hidden;
-    border: 1px solid var(--line-str);
-    background:
-      radial-gradient(600px 300px at 80% -10%, rgba(123,92,255,0.18), transparent 60%),
-      linear-gradient(170deg, var(--ink), var(--void));
-    box-shadow: 0 40px 90px -36px rgba(0,0,0,0.8), 0 0 60px -30px var(--violet-glow);
-  }
-  .mock-bar { display: flex; align-items: center; gap: 12px; padding: 13px 16px; border-bottom: 1px solid var(--line); }
-  .mock-ava { width: 36px; height: 36px; border-radius: 11px; background: linear-gradient(135deg, #7B5CFF, #00E5C7); flex-shrink: 0; }
-  .mock-name { font-weight: 600; font-size: 14.5px; }
-  .mock-sub { font-size: 12px; color: var(--accent); display: flex; align-items: center; gap: 6px; }
-  .mock-lock { margin-left: auto; font-size: 11px; color: var(--fg-dim); display: inline-flex; gap: 6px; align-items: center; }
-  .mock-body { padding: 20px 16px 22px; display: flex; flex-direction: column; gap: 12px; }
-  .bubble { max-width: 78%; padding: 10px 13px; border-radius: 15px; font-size: 14px; line-height: 1.45; }
-  .b-in  { align-self: flex-start; background: var(--ink-2); border: 1px solid var(--line); border-bottom-left-radius: 5px; }
-  .b-out { align-self: flex-end; color: #04060b; border-bottom-right-radius: 5px;
-           background: linear-gradient(135deg, var(--accent), #35ecd3); box-shadow: 0 8px 20px -10px var(--accent-glow); }
-  .b-meta { display: block; font-size: 10.5px; opacity: .6; margin-top: 4px; text-align: right; }
-  .react { display: inline-flex; gap: 4px; align-items: center; margin-top: 2px; font-size: 12px;
-           background: var(--accent-soft); border: 1px solid rgba(0,229,199,0.25); color: var(--accent);
-           border-radius: 999px; padding: 2px 8px; align-self: flex-start; }
-  .fpr { margin: 4px 16px 16px; padding: 10px 12px; border: 1px dashed var(--line-str); border-radius: 12px;
-         font-family: var(--mono); font-size: 11.5px; color: var(--fg-muted); line-height: 1.5; }
-  .fpr b { color: var(--accent); font-weight: 600; }
-
-  /* ---------- Section frame ---------- */
-  section.band { padding-block: 72px; }
-  .sec-head { max-width: 60ch; margin-bottom: 42px; }
-  .sec-head .eyebrow { margin-bottom: 14px; }
-  .sec-head h2 { font-size: clamp(27px, 3.4vw, 38px); }
-  .sec-head p { margin-top: 14px; color: var(--fg-muted); font-size: 16.5px; }
-
-  /* ---------- Features ---------- */
-  .feat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
-  @media (max-width: 860px) { .feat-grid { grid-template-columns: 1fr 1fr; } }
-  @media (max-width: 560px) { .feat-grid { grid-template-columns: 1fr; } }
-  .card {
-    background: linear-gradient(180deg, var(--ink-2), var(--ink));
-    border: 1px solid var(--line); border-radius: 18px; padding: 24px;
-    transition: border-color .16s ease, transform .16s ease;
-  }
-  .card:hover { border-color: var(--line-str); transform: translateY(-3px); }
-  .ficon {
-    width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; margin-bottom: 16px;
-    background: var(--accent-soft); border: 1px solid rgba(0,229,199,0.22); color: var(--accent);
-  }
-  .ficon svg { width: 21px; height: 21px; }
-  .card h3 { font-size: 17.5px; }
-  .card p { margin-top: 8px; color: var(--fg-muted); font-size: 14.5px; }
-
-  /* ---------- Downloads ---------- */
-  .dl-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; }
-  @media (max-width: 860px) { .dl-grid { grid-template-columns: 1fr 1fr; } }
-  @media (max-width: 480px) { .dl-grid { grid-template-columns: 1fr; } }
-  .dl {
-    position: relative; display: flex; flex-direction: column; gap: 4px;
-    background: linear-gradient(180deg, var(--ink-2), var(--ink));
-    border: 1px solid var(--line); border-radius: 18px; padding: 22px;
-  }
-  .dl.rec { border-color: rgba(0,229,199,0.5); box-shadow: 0 0 0 1px rgba(0,229,199,0.18), 0 22px 46px -26px var(--accent-glow); }
-  .dl-plat { display: flex; align-items: center; gap: 10px; }
-  .dl-plat svg { width: 26px; height: 26px; color: var(--fg); flex-shrink: 0; }
-  .dl-plat h3 { font-size: 17px; }
-  .dl-sub { font-size: 12.5px; color: var(--fg-dim); }
-  .dl-file { font-family: var(--mono); font-size: 11px; color: var(--fg-muted); margin-top: 8px; word-break: break-all; }
-  .dl-btn {
-    margin-top: 16px; text-align: center; padding: 10px 14px; border-radius: 11px;
-    font-weight: 600; font-size: 14px; background: var(--accent-soft); color: var(--accent);
-    border: 1px solid rgba(0,229,199,0.3);
-  }
-  .dl-btn:hover { background: rgba(0,229,199,0.2); }
-  .dl.rec .dl-btn { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #04060b; border-color: transparent; }
-  .tag {
-    position: absolute; top: 16px; right: 16px; font-size: 10px; font-weight: 700; letter-spacing: .05em;
-    text-transform: uppercase; padding: 3px 8px; border-radius: 999px;
-  }
-  .tag.rec  { background: var(--accent); color: #04060b; }
-  .tag.beta { background: rgba(123,92,255,0.18); color: #b7a3ff; border: 1px solid rgba(123,92,255,0.4); }
-  .dl-foot { margin-top: 22px; font-size: 13.5px; color: var(--fg-dim); }
-  .dl-foot a { color: var(--accent); }
-  .dl-foot a:hover { text-decoration: underline; }
-
-  /* ---------- Self-host ---------- */
-  .host { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: center; }
-  @media (max-width: 820px) { .host { grid-template-columns: 1fr; gap: 28px; } }
-  .steps { display: flex; flex-direction: column; gap: 18px; margin-top: 6px; }
-  .step { display: flex; gap: 14px; }
-  .step-n { flex-shrink: 0; width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center;
-            font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--accent);
-            background: var(--accent-soft); border: 1px solid rgba(0,229,199,0.25); }
-  .step h3 { font-size: 15.5px; font-family: var(--body); font-weight: 600; }
-  .step p { font-size: 14px; color: var(--fg-muted); margin-top: 2px; }
-  .step p code { font-family: var(--mono); font-size: 12.5px; color: var(--accent); }
-  .code {
-    background: #04060b; border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px;
-    font-family: var(--mono); font-size: 13px; line-height: 1.8; overflow-x: auto; white-space: pre; color: var(--fg-muted);
-  }
-  .code .c { color: var(--fg-dim); }
-  .code .p { color: var(--accent); }
-  .code .v { color: #b7a3ff; }
-
-  /* ---------- Privacy note ---------- */
-  .note {
-    display: flex; gap: 16px; align-items: flex-start;
-    background: linear-gradient(135deg, rgba(123,92,255,0.08), rgba(0,229,199,0.05));
-    border: 1px solid var(--line); border-radius: 18px; padding: 24px 26px;
-  }
-  .note svg { width: 24px; height: 24px; color: var(--accent); flex-shrink: 0; margin-top: 2px; }
-  .note h3 { font-size: 17px; }
-  .note p { margin-top: 7px; color: var(--fg-muted); font-size: 14.5px; max-width: 72ch; }
-
-  /* ---------- Footer ---------- */
-  footer { border-top: 1px solid var(--line); padding-block: 36px 48px; margin-top: 40px; }
-  .foot-in { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; }
-  .foot-in .brand { font-size: 16px; }
-  .foot-links { margin-left: auto; display: flex; gap: 22px; font-size: 13.5px; color: var(--fg-dim); }
-  .foot-links a:hover { color: var(--fg); }
-  .foot-copy { width: 100%; font-size: 12.5px; color: var(--fg-dim); margin-top: 6px; }
-
-  @media (prefers-reduced-motion: no-preference) {
-    .aura { animation: drift 16s ease-in-out infinite alternate; }
-    @keyframes drift { to { transform: translate(18px, -14px) scale(1.06); } }
-  }
-  .aura { position: absolute; inset: -20% -10% auto -10%; height: 520px; z-index: -1; pointer-events: none;
-          background: radial-gradient(600px 300px at 30% 30%, rgba(0,229,199,0.12), transparent 60%),
-                      radial-gradient(520px 280px at 72% 20%, rgba(123,92,255,0.14), transparent 60%);
-          filter: blur(8px); }
-</style>
+<link rel="stylesheet" href="style.css" />
 
 <nav>
   <div class="wrap nav-in">
     <a class="brand" href="#top"><img class="logo" src="logo.svg" alt="" width="28" height="28"> Aquamarine</a>
     <div class="nav-links">
-      <a href="#features">Features</a>
-      <a href="#download">Download</a>
-      <a href="#selfhost">Self-host</a>
-      <a href="#bots">Bots</a>
-      <a href="#repo-link" id="nav-gh">Source</a>
+      <a href="#features" data-i="nav.features">Возможности</a>
+      <a href="#download" data-i="nav.download">Скачать</a>
+      <a href="#selfhost" data-i="nav.selfhost">Свой сервер</a>
+      <a href="#bots" data-i="nav.bots">Боты</a>
+      <a href="docs.html" data-i="nav.docs">Документация</a>
+      <a href="api.html">API</a>
+      <a href="#" id="nav-gh">GitHub</a>
     </div>
-    <a class="nav-cta" href="#download">Get the app</a>
+    <button class="lang-btn" id="lang-btn" type="button" aria-label="Language">EN</button>
+    <a class="nav-cta" href="#download" data-i="nav.cta">Скачать</a>
   </div>
 </nav>
 
@@ -267,18 +31,18 @@
 <header class="wrap hero">
   <div class="aura"></div>
   <div>
-    <span class="eyebrow"><span class="dot"></span> Open · End-to-end encrypted</span>
-    <h1>Your words. Your keys.<br><span class="grad">Your server.</span></h1>
-    <p class="lede">A desktop messenger that feels like Discord met Telegram — stickers, polls, calls and themes — with Signal-grade encryption and no company in the middle.</p>
+    <span class="eyebrow"><span class="dot"></span> <span data-i="hero.eyebrow">Открытый · Сквозное шифрование</span></span>
+    <h1><span data-i="hero.h1a">Ваши слова. Ваши ключи.</span><br><span class="grad" data-i="hero.h1b">Ваш сервер.</span></h1>
+    <p class="lede" data-i="hero.lede">Мессенджер, в котором есть всё привычное — серверы с комнатами и ролями, каналы, стикеры, звонки, боты и мини-приложения, — но ключи шифрования никогда не покидают ваших устройств.</p>
     <div class="hero-actions">
-      <a class="btn btn-primary" id="hero-dl" href="#download">Download for your device</a>
-      <a class="btn btn-ghost" href="#selfhost">Run your own server</a>
+      <a class="btn btn-primary" id="hero-dl" href="#download">Скачать</a>
+      <a class="btn btn-ghost" href="#selfhost" data-i="hero.host">Поднять свой сервер</a>
     </div>
     <p class="os-note" id="os-note"></p>
     <div class="trust">
       <span><span class="dot"></span> X3DH · Double Ratchet</span>
-      <span><span class="dot"></span> Connect by address — host it yourself</span>
-      <span><span class="dot"></span> No ads, no economy, no tracking</span>
+      <span><span class="dot"></span> <span data-i="hero.t2">Свой сервер или сеть серверов</span></span>
+      <span><span class="dot"></span> <span data-i="hero.t3">Без рекламы и слежки</span></span>
     </div>
   </div>
 
@@ -295,7 +59,7 @@
       <div class="bubble b-in">перенёс всё лучшее из старого мессенджера 🎉</div>
       <div class="bubble b-out">красиво вышло. стикеры и кастом-эмодзи тоже?<span class="b-meta">20:14 ✓✓</span></div>
       <div class="react">🔥 2</div>
-      <div class="bubble b-in">ага, и темы, и звонки с демонстрацией экрана<span class="b-meta">20:15</span></div>
+      <div class="bubble b-in">ага, и серверы с ролями, и звонки с объёмным звуком<span class="b-meta">20:15</span></div>
     </div>
     <div class="fpr">
       <b>session fingerprint</b><br>
@@ -307,23 +71,23 @@
 <section class="band" id="features">
   <div class="wrap">
     <div class="sec-head">
-      <span class="eyebrow">What's inside</span>
-      <h2>A full messenger — nothing you'd have to give up privacy for.</h2>
-      <p>Everything worth keeping from the apps you already use, rebuilt so the keys never leave your machine.</p>
+      <span class="eyebrow" data-i="feat.eyebrow">Что внутри</span>
+      <h2 data-i="feat.h2">Полноценный мессенджер — без уступок в приватности.</h2>
+      <p data-i="feat.p">Всё, что стоит взять у привычных приложений, — собрано заново так, чтобы ключи оставались только у вас.</p>
     </div>
-    <div class="feat-grid" id="feat-grid"></div>
+    <div class="feat-grid four" id="feat-grid"></div>
   </div>
 </section>
 
 <section class="band" id="download">
   <div class="wrap">
     <div class="sec-head">
-      <span class="eyebrow">Download</span>
-      <h2>Pick your platform.</h2>
-      <p>Native builds for every desktop, plus an Android client. Signed releases, no store account required.</p>
+      <span class="eyebrow" data-i="dl.eyebrow">Скачать</span>
+      <h2 data-i="dl.h2">Выберите платформу.</h2>
+      <p data-i="dl.p">Сборки для всех настольных ОС, Android и iOS. Без магазинов и учётных записей в них.</p>
     </div>
     <div class="dl-grid" id="dl-grid"></div>
-    <p class="dl-foot">Want the newest features before the next release? <a id="nightly-link" href="https://github.com/applememestm-pixel/aquamarine/releases/tag/nightly" target="_blank" rel="noopener">Nightly builds</a> are rebuilt for every platform after each change. Prefer to build it yourself? Everything is open source — <a href="#selfhost">compile from source</a> in a few commands. Checksums ship with every release.</p>
+    <p class="dl-foot"><span data-i="dl.foot1">Нужны самые свежие функции?</span> <a id="nightly-link" href="#" target="_blank" rel="noopener" data-i="dl.nightly">Ночные сборки</a> <span data-i="dl.foot2">пересобираются для всех платформ после каждого изменения. К каждому релизу приложен SHA256SUMS.txt. Хотите собрать сами —</span> <a href="docs.html?d=building" data-i="dl.build">инструкция по сборке</a>.</p>
   </div>
 </section>
 
@@ -331,27 +95,31 @@
   <div class="wrap host">
     <div>
       <div class="sec-head" style="margin-bottom:24px">
-        <span class="eyebrow">Self-host</span>
-        <h2>Own the relay.</h2>
-        <p>Aquamarine talks to any server by address. Run the relay on your own box and your messages never touch infrastructure you don't control.</p>
+        <span class="eyebrow" data-i="host.eyebrow">Свой сервер</span>
+        <h2 data-i="host.h2">Ретранслятор — ваш.</h2>
+        <p data-i="host.p">Aquamarine подключается к любому ретранслятору по адресу. Поднимите свой — на сервере, ПК или Raspberry Pi — и объедините несколько в сеть: учётные записи и копии реплицируются, клиенты сами переходят на живой узел.</p>
       </div>
       <div class="steps">
-        <div class="step"><div class="step-n">1</div><div><h3>Start the relay</h3><p>One Rust binary. Point it at a port and open it to your friends.</p></div></div>
-        <div class="step"><div class="step-n">2</div><div><h3>Share the address</h3><p>Everyone enters the same server URL on the login screen — a LAN IP or a public host.</p></div></div>
-        <div class="step"><div class="step-n">3</div><div><h3>Chat end-to-end</h3><p>The relay only forwards sealed envelopes. It can't read a thing.</p></div></div>
+        <div class="step"><div class="step-n">1</div><div><h3 data-i="host.s1">Запустите ретранслятор</h3><p data-i="host.s1p">Один исполняемый файл без зависимостей. Для HTTPS поставьте перед ним Caddy или nginx.</p></div></div>
+        <div class="step"><div class="step-n">2</div><div><h3 data-i="host.s2">Дайте адрес друзьям</h3><p data-i="host.s2p">Все вводят один адрес сервера при входе — IP в локальной сети или публичное имя.</p></div></div>
+        <div class="step"><div class="step-n">3</div><div><h3 data-i="host.s3">Общайтесь</h3><p data-i="host.s3p">Сервер только пересылает запечатанные конверты. Прочитать их он не может.</p></div></div>
       </div>
+      <p style="margin-top:22px"><a class="btn btn-ghost" href="docs.html?d=deployment" data-i="host.more">Развёртывание и настройка</a></p>
     </div>
-    <div class="code"><span class="c"># clone & run the relay</span>
-git clone <span class="v">&lt;your-repo&gt;</span> aquamarine
-<span class="p">cd</span> aquamarine
-<span class="p">cargo</span> run -p aqua-server
+    <div class="code"><span class="c"># relay: one binary</span>
+<span class="p">AQUA_LISTEN</span>=0.0.0.0:7777 ./aqua-server-linux-x64
 
-<span class="c"># build the desktop client</span>
-<span class="p">cd</span> crates/aqua-client-ui
-<span class="p">cargo</span> tauri build
+<span class="c"># HTTPS in front (Caddyfile)</span>
+relay.example.org {
+    reverse_proxy 127.0.0.1:7777
+}
 
-<span class="c"># build the Android client</span>
-<span class="p">cargo</span> tauri android build</div>
+<span class="c"># a network of relays</span>
+<span class="p">AQUA_FED_SECRET</span>=<span class="v">…</span> <span class="p">AQUA_FED_PEERS</span>=<span class="v">https://r2.example.org</span> \
+  ./aqua-server-linux-x64
+
+<span class="c"># or build from source</span>
+<span class="p">cargo</span> build --release -p aqua-server</div>
   </div>
 </section>
 
@@ -359,31 +127,40 @@ git clone <span class="v">&lt;your-repo&gt;</span> aquamarine
   <div class="wrap host">
     <div>
       <div class="sec-head" style="margin-bottom:24px">
-        <span class="eyebrow">Bots</span>
-        <h2>Your chat, in a terminal.</h2>
-        <p><b>aqua-console</b> is a ready-made bot: it prints a chat in your console and sends whatever you type. Write to your bot from the app — or let friends write to it — and answer from the terminal. Room mode turns it into a tiny chat room. Pure Python&nbsp;3, no installs, Linux / macOS / Windows.</p>
+        <span class="eyebrow" data-i="bots.eyebrow">Боты</span>
+        <h2 data-i="bots.h2">Боты из Telegram работают как есть.</h2>
+        <p data-i="bots.p">Ретранслятор понимает Telegram Bot API: укажите библиотеке адрес своего сервера вместо api.telegram.org — и бот на aiogram, python-telegram-bot, telegraf или grammY заработает с кнопками, вебхуками и мини-приложениями.</p>
       </div>
       <div class="steps">
-        <div class="step"><div class="step-n">1</div><div><h3>Create a bot</h3><p>In Aquamarine open Settings → Bots, pick a @name and copy its token.</p></div></div>
-        <div class="step"><div class="step-n">2</div><div><h3>Run the script</h3><p>It asks for the token with hidden input and connects to your relay.</p></div></div>
-        <div class="step"><div class="step-n">3</div><div><h3>Chat</h3><p>Message the bot in the app. <code>/to &lt;user&gt;</code>, <code>/who</code>, <code>/room</code>, <code>/quit</code>.</p></div></div>
+        <div class="step"><div class="step-n">1</div><div><h3 data-i="bots.s1">Создайте бота</h3><p data-i="bots.s1p">«Настройки → Боты»: имя и токен. Сервер хранит только хеш токена.</p></div></div>
+        <div class="step"><div class="step-n">2</div><div><h3 data-i="bots.s2">Подключите библиотеку</h3><p data-i="bots.s2p">Свой HTTP API или слой Telegram — <code>/bot&lt;token&gt;/&lt;method&gt;</code>.</p></div></div>
+        <div class="step"><div class="step-n">3</div><div><h3 data-i="bots.s3">Или без кода</h3><p data-i="bots.s3p"><code>aquabot run</code> — готовый ИИ-бот на локальной модели; <code>aqua-console.py</code> — чат в терминале.</p></div></div>
       </div>
-      <p style="margin-top:22px"><a class="btn btn-primary" id="console-dl" href="#bots" download="aqua-console.py">Download aqua-console.py</a></p>
+      <p style="margin-top:22px"><a class="btn btn-ghost" href="docs.html?d=bots" data-i="bots.more">Руководство по ботам</a> <a class="btn btn-ghost" href="api.html">HTTP API</a></p>
     </div>
-    <div class="code"><span class="c"># talk through your bot from the terminal</span>
-<span class="p">python3</span> aqua-console.py --server <span class="v">https://your-relay:8443</span>
-Bot token (aqbot_…):
-Connected as @mybot on https://your-relay:8443
-<span class="c">12:04</span> <span class="v">@alice</span>: hi there!
-<span class="v">@alice</span> &gt; hey! answering from the terminal
+    <div class="code"><span class="c"># aiogram 3 — the relay instead of api.telegram.org</span>
+bot = Bot(TOKEN, session=AiohttpSession(
+    api=TelegramAPIServer.from_base(<span class="v">"https://relay.example.org"</span>)))
 
-<span class="c"># a mini chat room: everyone who writes /join</span>
-<span class="p">python3</span> aqua-console.py --server <span class="v">…</span> --room
-
-<span class="c"># your own bot: plain HTTP, header "Authorization: Bot …"</span>
+<span class="c"># or the native API</span>
 GET  /v1/bot/updates?after=0&amp;timeout=25
-POST /v1/bot/send  {"to","text"}
-<span class="c"># guide: docs/BOTS.md</span></div>
+POST /v1/bot/send   {"to":"alice","text":"hi"}
+<span class="c"># header: Authorization: Bot aqbot_…</span>
+
+<span class="c"># an AI bot on a local model, no code</span>
+<span class="p">pip</span> install "git+…/aquamarine#subdirectory=sdk/python"
+<span class="p">aquabot</span> run --llm ollama:llama3.1</div>
+  </div>
+</section>
+
+<section class="band" id="docs">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow" data-i="docs.eyebrow">Документация</span>
+      <h2 data-i="docs.h2">Всё устройство — открыто и описано.</h2>
+      <p data-i="docs.p">Техпаспорт системы, протокол, модель угроз и справочник API. Документы живут в репозитории рядом с кодом и меняются вместе с ним.</p>
+    </div>
+    <div class="docs-grid" id="docs-grid"></div>
   </div>
 </section>
 
@@ -392,8 +169,8 @@ POST /v1/bot/send  {"to","text"}
     <div class="note">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2 4 6v6c0 5 3.4 8.3 8 10 4.6-1.7 8-5 8-10V6l-8-4Z"/></svg>
       <div>
-        <h3>Why there's no "web version"</h3>
-        <p>A browser tab can't hold your keys safely — any page you load could be swapped for a malicious one, and your private keys would live inside it. So Aquamarine stays a native app: keys are generated and sealed on your device, in an encrypted vault. This page is only a front door. It's where you get the app, never where you sign in.</p>
+        <h3 data-i="note.h3">Почему нет веб-версии</h3>
+        <p data-i="note.p">Вкладка браузера не может надёжно хранить ваши ключи: любую загруженную страницу можно подменить, и закрытые ключи оказались бы внутри неё. Поэтому Aquamarine — приложение: ключи создаются и хранятся на устройстве в зашифрованном хранилище. Этот сайт — только парадный вход: здесь скачивают приложение, но никогда не входят в аккаунт.</p>
       </div>
     </div>
   </div>
@@ -402,86 +179,129 @@ POST /v1/bot/send  {"to","text"}
 <footer>
   <div class="wrap">
     <div class="foot-in">
-      <a class="brand" href="#top"><img class="logo" src="logo.svg" alt="" width="28" height="28"> Aquamarine</a>
+      <a class="brand" href="#top"><img class="logo" src="logo.svg" alt="" width="28" height="28"> Aquamarine <span class="ver-chip" id="ver-chip"></span></a>
       <div class="foot-links">
-        <a href="#features">Features</a>
-        <a href="#download">Download</a>
-        <a href="#selfhost">Self-host</a>
-        <a href="#repo-link" id="foot-gh">Source</a>
+        <a href="docs.html" data-i="nav.docs">Документация</a>
+        <a href="api.html">API</a>
+        <a href="docs.html?d=security-model" data-i="foot.security">Безопасность</a>
+        <a href="#" id="foot-gh">GitHub</a>
       </div>
-      <div class="foot-copy">Open-source, end-to-end encrypted. Built for people who'd rather run their own server.</div>
+      <div class="foot-copy" data-i="foot.copy">Открытый исходный код, MIT OR Apache-2.0. Для тех, кто предпочитает свой сервер.</div>
     </div>
   </div>
 </footer>
 
 <script>
-  /* =======================================================================
-     Release wiring
-     -----------------------------------------------------------------------
-     Buttons download straight from this site's own ./downloads/ folder.
-     `build-all.bat` drops the built installers there under exactly these
-     names, so the site just works once you've run the build — nothing to
-     edit per release. Bump VERSION to update the label. REPO only powers
-     the "Source" links.
-     ======================================================================= */
-  const REPO = "https://github.com/applememestm-pixel/aquamarine";
-  const VERSION = "0.1.1";
-  // On GitHub Pages the installers come from the latest GitHub Release
-  // (release.yml uploads them under these exact names); anywhere else the
-  // site serves its own ./downloads/ folder filled by build-all.
-  const DIR = location.hostname.endsWith("github.io")
-    ? REPO + "/releases/latest/download/"
-    : "downloads/";
+  /* Downloads come from the latest GitHub Release on GitHub Pages (release.yml
+     uploads them under these exact names) and from ./downloads/ elsewhere
+     (filled by build-all). */
+  const REPO = "https://github.com/applememestm-pixel/Aquamarine";
+  const VERSION = "0.2.1";
+  const DIR = location.hostname.endsWith("github.io") ? REPO + "/releases/latest/download/" : "downloads/";
 
-  // The console bot ships in the repo; always fetch the current one.
-  const consoleDl = document.getElementById("console-dl");
-  if (consoleDl) consoleDl.href = REPO + "/raw/main/tools/aqua-console.py";
-
+  // ---------------------------------------------------------------- i18n
+  const T = {
+    en: {
+      "nav.features": "Features", "nav.download": "Download", "nav.selfhost": "Self-host", "nav.bots": "Bots", "nav.docs": "Docs", "nav.cta": "Get the app",
+      "hero.eyebrow": "Open · End-to-end encrypted", "hero.h1a": "Your words. Your keys.", "hero.h1b": "Your server.",
+      "hero.lede": "A messenger with everything you're used to — servers with rooms and roles, channels, stickers, calls, bots and mini apps — while the encryption keys never leave your devices.",
+      "hero.host": "Run your own server", "hero.t2": "Your own relay, or a network of them", "hero.t3": "No ads, no tracking",
+      "feat.eyebrow": "What's inside", "feat.h2": "A full messenger — nothing you'd give up privacy for.", "feat.p": "Everything worth keeping from the apps you already use, rebuilt so the keys stay with you.",
+      "dl.eyebrow": "Download", "dl.h2": "Pick your platform.", "dl.p": "Builds for every desktop, Android and iOS. No store, no store account.",
+      "dl.foot1": "Want the newest features?", "dl.nightly": "Nightly builds", "dl.foot2": "are rebuilt for every platform after each change. Every release ships SHA256SUMS.txt. Prefer to build it yourself —", "dl.build": "build instructions",
+      "host.eyebrow": "Self-host", "host.h2": "Own the relay.", "host.p": "Aquamarine talks to any relay by address. Run yours — on a server, a PC or a Raspberry Pi — and join several into a network: accounts and backups replicate, clients move to a live node by themselves.",
+      "host.s1": "Start the relay", "host.s1p": "One binary, no dependencies. Put Caddy or nginx in front for HTTPS.", "host.s2": "Share the address", "host.s2p": "Everyone enters the same server address when signing in — a LAN IP or a public host.", "host.s3": "Chat", "host.s3p": "The relay only forwards sealed envelopes. It can't read a thing.", "host.more": "Deployment guide",
+      "bots.eyebrow": "Bots", "bots.h2": "Telegram bots work as they are.", "bots.p": "The relay speaks the Telegram Bot API: point your library at your relay instead of api.telegram.org, and a bot written with aiogram, python-telegram-bot, telegraf or grammY runs — with buttons, webhooks and mini apps.",
+      "bots.s1": "Create a bot", "bots.s1p": "Settings → Bots: a name and a token. The relay keeps only the token's hash.", "bots.s2": "Plug in your library", "bots.s2p": "The native HTTP API or the Telegram layer — <code>/bot&lt;token&gt;/&lt;method&gt;</code>.", "bots.s3": "Or no code at all", "bots.s3p": "<code>aquabot run</code> — a ready AI bot on a local model; <code>aqua-console.py</code> — a chat in your terminal.", "bots.more": "Bot guide",
+      "docs.eyebrow": "Documentation", "docs.h2": "Every part is open and written down.", "docs.p": "The technical passport, protocol, threat model and API reference. The documents live next to the code and change with it (in Russian).",
+      "note.h3": "Why there's no web version", "note.p": "A browser tab can't hold your keys safely — any page you load could be swapped for a malicious one, and your private keys would live inside it. So Aquamarine stays an app: keys are made and kept on your device in an encrypted vault. This site is only a front door: you get the app here, you never sign in here.",
+      "foot.security": "Security", "foot.copy": "Open source, MIT OR Apache-2.0. For people who'd rather run their own server.",
+      "dl.rec": "Recommended", "dl.beta": "Beta", "dl.btn": "Download", "hero.dl": "Download for", "os.detected": "Detected", "os.other": "— other platforms are in the", "os.section": "download", "os.tail": "section.", "more": "Read →",
+    },
+  };
+  const FEATURES = {
+    ru: [
+      ["Шифрование уровня Signal", "X3DH и Double Ratchet. У каждого устройства свои ключи; сервер видит только шифротекст."],
+      ["Свой сервер и сеть серверов", "Подключение к любому ретранслятору по адресу. Несколько серверов объединяются в сеть с репликацией и переключением."],
+      ["Серверы, комнаты, роли", "Супергруппы как в Discord: текстовые и голосовые комнаты, роли с правами, каналы с комментариями и статистикой."],
+      ["Звонки и голосовые комнаты", "Аудио, видео, демонстрация экрана по WebRTC напрямую. Объёмный звук: голоса звучат с разных сторон."],
+      ["Стикеры и эмодзи", "Наборы из Telegram по ссылке, свои наборы и редактор с вырезанием фона. Эмодзи прямо в тексте."],
+      ["Боты и мини-приложения", "Совместимость с Telegram Bot API: кнопки, вебхуки, мини-приложения. Библиотека для ИИ-ботов на Python."],
+      ["Рабочее пространство", "События с напоминаниями, чеклисты, общие документы и канбан-доски прямо в чате."],
+      ["Запечатанные послания", "Придёт сразу, откроется в нужную дату — или если вы пропадёте. Сервер хранит только ключ."],
+      ["Устройства и копии", "Вход на нескольких устройствах, зашифрованная копия и ключ восстановления из 24 слов, передача чата между устройствами."],
+      ["Bluetooth рядом", "Отправка и приём файлов по Bluetooth без интернета и сервера (Linux)."],
+      ["Приватность на устройстве", "Пароль приложения и отдельных чатов, автоудаление, отключаемые отметки о прочтении."],
+      ["Под себя", "Темы и редактор тем, обои, профиль с баннером, треком и карточками игр с обложками."],
+    ],
+    en: [
+      ["Signal-grade encryption", "X3DH and the Double Ratchet. Every device has its own keys; the server only sees ciphertext."],
+      ["Your relay, or a network", "Connect to any relay by address. Several relays form one network with replication and failover."],
+      ["Servers, rooms, roles", "Discord-style servers: text and voice rooms, roles with permissions, channels with comments and statistics."],
+      ["Calls and voice rooms", "Audio, video and screen sharing over direct WebRTC. Spatial sound: voices come from around you."],
+      ["Stickers and emoji", "Telegram packs by link, your own packs and an editor with background removal. Emoji right in the text."],
+      ["Bots and mini apps", "Telegram Bot API compatible: buttons, webhooks, mini apps. A Python library for AI bots."],
+      ["A workspace", "Events with reminders, checklists, shared documents and kanban boards right in the chat."],
+      ["Sealed messages", "Arrives now, opens on a date — or if you go silent. The server keeps only the key."],
+      ["Devices and backups", "Several devices, an encrypted backup and a 24-word recovery key, chat handoff between devices."],
+      ["Bluetooth nearby", "Send and receive files over Bluetooth, no internet or server (Linux)."],
+      ["Privacy on the device", "App and per-chat passwords, auto-delete timers, read receipts you can switch off."],
+      ["Make it yours", "Themes and a theme editor, wallpapers, a profile with banner, track and game cards with covers."],
+    ],
+  };
+  const FICONS = [
+    '<path d="M12 2 4 6v6c0 5 3.4 8.3 8 10 4.6-1.7 8-5 8-10V6l-8-4Z"/><path d="m9 12 2 2 4-4"/>',
+    '<rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/>',
+    '<path d="M4 6h10M4 12h16M4 18h12"/><circle cx="18" cy="6" r="2"/>',
+    '<path d="M15 10l5-3v10l-5-3"/><rect x="3" y="6" width="12" height="12" rx="2"/>',
+    '<circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 9h.01M15 9h.01"/>',
+    '<rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 13h.01M15 13h.01"/>',
+    '<rect x="3" y="5" width="18" height="16" rx="3"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="16" y1="3" x2="16" y2="7"/>',
+    '<rect x="3" y="5" width="18" height="14" rx="2"/><polyline points="3 7 12 13 21 7"/>',
+    '<rect x="2" y="5" width="13" height="10" rx="2"/><rect x="17" y="8" width="5" height="11" rx="1.5"/><path d="M6 19h6"/>',
+    '<polyline points="7 7 17 17 12 22 12 2 17 7 7 17"/>',
+    '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+    '<circle cx="13.5" cy="6.5" r="2.5"/><circle cx="6.5" cy="12" r="2.5"/><circle cx="17" cy="14" r="2.5"/><path d="M8 18a4 4 0 0 0 8 0"/>',
+  ];
+  const DOCS = {
+    ru: [
+      ["passport", "Техпаспорт", "Назначение, платформы, криптография, данные на сервере — одной таблицей."],
+      ["api", "HTTP API", "Все методы ретранслятора: аутентификация, ключи, доставка, копии, боты, федерация."],
+      ["protocol", "Протокол", "X3DH, Double Ratchet, ключи устройств и проверка собеседника."],
+      ["security-model", "Модель угроз", "Что видит сервер, чего не видит, и известные ограничения."],
+      ["federation", "Федерация", "Как серверы образуют сеть: подпись запросов, репликация, доставка."],
+      ["deployment", "Развёртывание", "Запуск ретранслятора, HTTPS, systemd, переменные окружения."],
+    ],
+    en: [
+      ["passport", "Technical passport", "Purpose, platforms, cryptography, data on the server — in one table."],
+      ["api", "HTTP API", "Every relay endpoint: auth, keys, delivery, backups, bots, federation."],
+      ["protocol", "Protocol", "X3DH, the Double Ratchet, device keys and verifying your contact."],
+      ["security-model", "Threat model", "What the server sees, what it doesn't, and the known limits."],
+      ["federation", "Federation", "How relays form a network: signed requests, replication, delivery."],
+      ["deployment", "Deployment", "Running a relay, HTTPS, systemd, environment variables."],
+    ],
+  };
   const PLATFORMS = [
-    { key: "windows", label: "Windows", sub: "10 / 11 · 64-bit",
-      file: "Aquamarine-Setup.exe", href: DIR + "Aquamarine-Setup.exe", status: "ready",
+    { key: "windows", label: "Windows", sub: "10 / 11 · 64-bit", file: "Aquamarine-Setup.exe", status: "ready",
       icon: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 5.5 10.5 4.4v7.1H3V5.5Zm0 13L10.5 19.6v-7H3v6ZM11.5 4.3 21 3v8.5h-9.5V4.3Zm0 15.4L21 21v-8.5h-9.5v7.2Z"/></svg>' },
-    { key: "macos", label: "macOS", sub: "Apple Silicon & Intel",
-      file: "Aquamarine.dmg", href: DIR + "Aquamarine.dmg", status: "ready",
+    { key: "macos", label: "macOS", sub: "Apple Silicon", file: "Aquamarine.dmg", status: "ready",
       icon: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.3 12.7c0-2 1.6-2.9 1.7-3-1-1.4-2.4-1.6-2.9-1.6-1.2-.1-2.4.7-3 .7-.6 0-1.6-.7-2.6-.7-1.3 0-2.6.8-3.2 2-1.4 2.4-.4 6 1 8 .6 1 1.4 2.1 2.4 2 1-.1 1.3-.6 2.5-.6s1.5.6 2.6.6c1 0 1.7-1 2.4-2 .7-1.1 1-2.1 1-2.2 0 0-2-.8-2-3.4ZM14.6 6.3c.5-.7.9-1.6.8-2.6-.8 0-1.8.5-2.4 1.2-.5.6-1 1.5-.8 2.4.9.1 1.8-.4 2.4-1Z"/></svg>' },
-    { key: "linux", label: "Linux", sub: "AppImage · .deb",
-      file: "Aquamarine.AppImage", href: DIR + "Aquamarine.AppImage", status: "ready",
+    { key: "linux", label: "Linux", sub: "AppImage · .deb · .rpm", file: "Aquamarine.AppImage", status: "ready",
       icon: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2c-1.7 0-3 1.4-3 3.1 0 1 .1 1.9.1 2.7 0 .8-.6 1.4-1.2 2.3C7 11.3 6 12.8 6 14.6c0 .5.1 1 .3 1.4-.5.4-.9 1-.9 1.7 0 .4.1.7.1 1 0 .9 1.3 1.6 3.2 1.9.6.1 1.3.4 2 .4h.6c.7 0 1.4-.3 2-.4 1.9-.3 3.2-1 3.2-1.9 0-.3.1-.6.1-1 0-.7-.4-1.3-.9-1.7.2-.4.3-.9.3-1.4 0-1.8-1-3.3-1.9-4.5-.6-.9-1.2-1.5-1.2-2.3 0-.8.1-1.7.1-2.7C15 3.4 13.7 2 12 2Zm-1.2 3c.4 0 .7.4.7.9s-.3.9-.7.9-.7-.4-.7-.9.3-.9.7-.9Zm2.4 0c.4 0 .7.4.7.9s-.3.9-.7.9-.7-.4-.7-.9.3-.9.7-.9Z"/></svg>' },
-    { key: "android", label: "Android", sub: "7.0+ · .apk",
-      file: "Aquamarine.apk", href: DIR + "Aquamarine.apk", status: "beta",
+    { key: "android", label: "Android", sub: "7.0+ · .apk", file: "Aquamarine.apk", status: "beta",
       icon: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 9v7a1 1 0 0 0 1 1h1v3a1 1 0 0 0 2 0v-3h4v3a1 1 0 0 0 2 0v-3h1a1 1 0 0 0 1-1V9H6Zm-2 0a1 1 0 0 0-1 1v4a1 1 0 0 0 2 0v-4a1 1 0 0 0-1-1Zm16 0a1 1 0 0 0-1 1v4a1 1 0 0 0 2 0v-4a1 1 0 0 0-1-1ZM7.3 8c.1-1.9 1.3-3.5 3-4.3l-.9-1.6a.3.3 0 0 1 .5-.3l.9 1.7a6 6 0 0 1 4.4 0l.9-1.7a.3.3 0 0 1 .5.3l-.9 1.6c1.7.8 2.9 2.4 3 4.3H7.3Zm2.2-2.4a.6.6 0 1 0 0-1.2.6.6 0 0 0 0 1.2Zm5 0a.6.6 0 1 0 0-1.2.6.6 0 0 0 0 1.2Z"/></svg>' },
-    { key: "ios", label: "iOS", sub: "Sideload · .ipa",
-      file: "Aquamarine-iOS-unsigned.ipa", href: DIR + "Aquamarine-iOS-unsigned.ipa", status: "beta",
+    { key: "ios", label: "iOS", sub: "Sideload · .ipa", file: "Aquamarine-iOS-unsigned.ipa", status: "beta",
       icon: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 2h8a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm0 3v13h8V5H8Zm4 14.2a.9.9 0 1 0 0 1.8.9.9 0 0 0 0-1.8Z"/></svg>' },
+    { key: "macos-intel", label: "macOS Intel", sub: "x86-64", file: "Aquamarine-Intel.dmg", status: "ready",
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>' },
   ];
 
-  const FEATURES = [
-    { t: "Signal-grade encryption", d: "X3DH key agreement and the Double Ratchet. Every message is sealed to the recipient; the server only ever sees ciphertext.",
-      i: '<path d="M12 2 4 6v6c0 5 3.4 8.3 8 10 4.6-1.7 8-5 8-10V6l-8-4Z"/><path d="m9 12 2 2 4-4"/>' },
-    { t: "Open & self-hostable", d: "No gatekeeper. Connect to any relay by address, or run your own on a Raspberry Pi. The protocol is yours to inspect.",
-      i: '<rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/>' },
-    { t: "Stickers & custom emoji", d: "Import Telegram sticker and premium-emoji packs — no Premium needed — and drop custom emoji inline, right in the text.",
-      i: '<circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 9h.01M15 9h.01"/>' },
-    { t: "Polls, replies & reactions", d: "Quote-reply with the snippet carried along, react across peers, run quick polls — the group chat toolkit, 1-to-1 and end-to-end.",
-      i: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/>' },
-    { t: "Calls with screen-share", d: "Discord-style voice and video over WebRTC, with live screen-sharing and clean mid-call renegotiation.",
-      i: '<path d="M15 10l5-3v10l-5-3"/><rect x="3" y="6" width="12" height="12" rx="2"/>' },
-    { t: "Make it yours", d: "A full theme editor — every colour, custom fonts from your system folders, chat wallpapers, a background media player that follows you between chats.",
-      i: '<circle cx="13.5" cy="6.5" r="2.5"/><circle cx="6.5" cy="12" r="2.5"/><circle cx="17" cy="14" r="2.5"/><path d="M8 18a4 4 0 0 0 8 0"/>' },
-  ];
+  let LANG = (() => { try { return localStorage.getItem("aqua.site.lang") || (navigator.language.toLowerCase().startsWith("ru") ? "ru" : "en"); } catch { return "ru"; } })();
+  const RU = {};
+  document.querySelectorAll("[data-i]").forEach((el) => { RU[el.dataset.i] = el.innerHTML; });
+  const t = (k, ru) => (LANG === "en" ? T.en[k] ?? ru ?? RU[k] ?? k : ru ?? RU[k] ?? T.en[k] ?? k);
 
-  const svg = (inner, stroke = true) =>
-    `<svg viewBox="0 0 24 24" fill="${stroke ? "none" : "currentColor"}" ${stroke ? 'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"' : ""}>${inner}</svg>`;
-
-  // Features
-  document.getElementById("feat-grid").innerHTML = FEATURES.map((f) => `
-    <div class="card">
-      <div class="ficon">${svg(f.i)}</div>
-      <h3>${f.t}</h3>
-      <p>${f.d}</p>
-    </div>`).join("");
-
-  // OS detection → recommended platform
+  const svg = (inner) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
   function detectOS() {
     const p = (navigator.userAgentData?.platform || navigator.platform || navigator.userAgent || "").toLowerCase();
     const ua = navigator.userAgent.toLowerCase();
@@ -489,38 +309,44 @@ POST /v1/bot/send  {"to","text"}
     if (/iphone|ipad|ipod/.test(ua)) return "ios";
     if (/win/.test(p)) return "windows";
     if (/mac/.test(p)) return "macos";
-    if (/linux/.test(p) && !/android/.test(ua)) return "linux";
+    if (/linux/.test(p)) return "linux";
     return "windows";
   }
   const rec = detectOS();
 
-  // Download cards (recommended first)
-  const ordered = [...PLATFORMS].sort((a, b) => (a.key === rec ? -1 : b.key === rec ? 1 : 0));
-  document.getElementById("dl-grid").innerHTML = ordered.map((p) => {
-    const isRec = p.key === rec;
-    const tag = isRec ? '<span class="tag rec">Recommended</span>'
-      : p.status === "beta" ? '<span class="tag beta">Beta</span>' : "";
-    return `
-    <div class="dl ${isRec ? "rec" : ""}">
-      ${tag}
-      <div class="dl-plat">${p.icon}<div><h3>${p.label}</h3><div class="dl-sub">${p.sub}</div></div></div>
-      <div class="dl-file">${p.file}</div>
-      <a class="dl-btn" href="${p.href}" download>Download</a>
-    </div>`;
-  }).join("");
-
-  // Hero CTA + OS note
-  const recPlat = PLATFORMS.find((p) => p.key === rec);
-  const heroBtn = document.getElementById("hero-dl");
-  heroBtn.href = recPlat.href;
-  heroBtn.setAttribute("download", "");
-  heroBtn.innerHTML = `Download for ${recPlat.label} <small>${VERSION}</small>`;
-  document.getElementById("os-note").innerHTML =
-    `Detected <b>${recPlat.label}</b> — other platforms are in the <a href="#download" style="color:var(--accent)">download</a> section.`;
-
-  // Source links
-  for (const id of ["nav-gh", "foot-gh"]) {
-    const el = document.getElementById(id);
-    el.href = REPO; el.target = "_blank"; el.rel = "noopener";
+  function render() {
+    document.documentElement.lang = LANG;
+    document.querySelectorAll("[data-i]").forEach((el) => { el.innerHTML = t(el.dataset.i); });
+    document.getElementById("lang-btn").textContent = LANG === "ru" ? "EN" : "RU";
+    document.getElementById("feat-grid").innerHTML = FEATURES[LANG].map(([h, d], i) => `
+      <div class="card"><div class="ficon">${svg(FICONS[i])}</div><h3>${h}</h3><p>${d}</p></div>`).join("");
+    document.getElementById("docs-grid").innerHTML = DOCS[LANG].map(([d, h, p]) => `
+      <a class="card" href="${d === "api" ? "api.html" : "docs.html?d=" + d}"><h3>${h}</h3><p>${p}</p><span class="more">${LANG === "ru" ? "Читать →" : t("more")}</span></a>`).join("");
+    const ordered = [...PLATFORMS].sort((a, b) => (a.key === rec ? -1 : b.key === rec ? 1 : 0));
+    document.getElementById("dl-grid").innerHTML = ordered.map((p) => {
+      const isRec = p.key === rec;
+      const tag = isRec ? `<span class="tag rec">${LANG === "ru" ? "Для вас" : t("dl.rec")}</span>` : p.status === "beta" ? `<span class="tag beta">${LANG === "ru" ? "Бета" : t("dl.beta")}</span>` : "";
+      return `<div class="dl ${isRec ? "rec" : ""}">${tag}
+        <div class="dl-plat">${p.icon}<div><h3>${p.label}</h3><div class="dl-sub">${p.sub}</div></div></div>
+        <div class="dl-file">${p.file}</div>
+        <a class="dl-btn" href="${DIR + p.file}" download>${LANG === "ru" ? "Скачать" : t("dl.btn")}</a></div>`;
+    }).join("");
+    const rp = PLATFORMS.find((p) => p.key === rec);
+    const hero = document.getElementById("hero-dl");
+    hero.href = DIR + rp.file; hero.setAttribute("download", "");
+    hero.innerHTML = `${LANG === "ru" ? "Скачать для" : t("hero.dl")} ${rp.label} <small>${VERSION}</small>`;
+    document.getElementById("os-note").innerHTML = LANG === "ru"
+      ? `Определено: <b>${rp.label}</b> — остальные платформы в разделе <a href="#download" style="color:var(--accent)">«Скачать»</a>.`
+      : `${t("os.detected")} <b>${rp.label}</b> ${t("os.other")} <a href="#download" style="color:var(--accent)">${t("os.section")}</a> ${t("os.tail")}`;
   }
+
+  document.getElementById("lang-btn").addEventListener("click", () => {
+    LANG = LANG === "ru" ? "en" : "ru";
+    try { localStorage.setItem("aqua.site.lang", LANG); } catch { /* private mode */ }
+    render();
+  });
+  for (const id of ["nav-gh", "foot-gh"]) { const el = document.getElementById(id); el.href = REPO; el.target = "_blank"; el.rel = "noopener"; }
+  document.getElementById("nightly-link").href = REPO + "/releases/tag/nightly";
+  document.getElementById("ver-chip").textContent = "v" + VERSION;
+  render();
 </script>

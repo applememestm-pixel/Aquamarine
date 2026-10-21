@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HTTP API — Aquamarine</title>
+<link rel="icon" href="logo.svg" type="image/svg+xml">
+<meta name="description" content="HTTP API и WebSocket ретранслятора Aquamarine: аутентификация, ключи, доставка, вложения, резервные копии, боты, федерация." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" />
+<link rel="stylesheet" href="style.css" />
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="docs.js"></script>
+
+<nav>
+  <div class="wrap nav-in" style="width:min(1360px,100%)">
+    <a class="brand" href="index.html"><img class="logo" src="logo.svg" alt="" width="28" height="28"> Aquamarine</a>
+    <div class="nav-links">
+      <a href="index.html#features">Возможности</a>
+      <a href="index.html#download">Скачать</a>
+      <a href="docs.html">Документация</a>
+      <a href="api.html" class="on">API</a>
+      <a href="https://github.com/applememestm-pixel/Aquamarine" target="_blank" rel="noopener">GitHub</a>
+    </div>
+    <a class="nav-cta" href="index.html#download">Скачать</a>
+  </div>
+</nav>
+
+<header class="wrap api-hero" style="width:min(1360px,100%)">
+  <span class="eyebrow"><span class="dot"></span> <span id="api-eyebrow">Для разработчиков</span></span>
+  <h1>HTTP API <span style="color:var(--fg-dim)">/v1</span></h1>
+  <p id="api-lede">Всё, что делает клиент Aquamarine, идёт через этот API: аутентификация подписью, ключи, доставка конвертов по WebSocket, вложения, резервные копии, боты и федерация. По нему можно написать свой клиент, бота или инструмент администрирования.</p>
+  <div class="api-facts">
+    <span><b>JSON</b> UTF-8</span>
+    <span><b>Bearer</b> session · <b>Bot</b> token</span>
+    <span><b>WebSocket</b> /v1/ws</span>
+    <span><b>Telegram</b> /bot&lt;token&gt;/&lt;method&gt;</span>
+    <span id="api-count"></span>
+  </div>
+</header>
+
+<div class="wrap doc-shell" style="width:min(1360px,100%);padding-top:18px">
+  <aside class="doc-side">
+    <input type="search" id="api-filter" placeholder="Метод или путь: backup, POST, /v1/ws…">
+    <div id="api-nav"></div>
+  </aside>
+  <main>
+    <div class="doc-note" id="doc-note" hidden>The reference is written in Russian; paths, fields and examples are universal. Your browser can translate the page.</div>
+    <article class="md" id="doc" data-page="api"><p class="loading">…</p></article>
+  </main>
+  <aside class="doc-toc" id="doc-toc"></aside>
+</div>
+
+<script>
+  document.addEventListener("DOMContentLoaded", async () => {
+    const D = window.AquaDocs;
+    const main = document.getElementById("doc");
+    if (D.lang === "en") {
+      document.getElementById("doc-note").hidden = false;
+      document.getElementById("api-eyebrow").textContent = "For developers";
+      document.getElementById("api-lede").textContent = "Everything the Aquamarine client does goes through this API: signature auth, keys, envelope delivery over WebSocket, attachments, backups, bots and federation. Build your own client, bot or admin tool on it.";
+      document.getElementById("api-filter").placeholder = "Method or path: backup, POST, /v1/ws…";
+    }
+    let toc = [];
+    try { toc = D.render(await D.load("api"), "api", main); }
+    catch (e) { main.innerHTML = `<p class="loading">${D.L("Справочник не загрузился", "The reference didn't load")} (${String(e)}). <a href="${D.REPO}/blob/main/docs/api.md" target="_blank" rel="noopener">docs/api.md</a></p>`; return; }
+
+    // Method names → coloured badges ("GET", "GET, POST", "`POST /v1/…`").
+    const METHOD = /^(GET|POST|PUT|DELETE|\*)(?:,\s*(GET|POST|PUT|DELETE))*(?=\s|$)/;
+    const badge = (m) => `<span class="mth ${m === "*" ? "any" : m.toLowerCase()}">${m === "*" ? "ANY" : m}</span>`;
+    main.querySelectorAll("td:first-child, h3 code").forEach((el) => {
+      const code = el.querySelector("code") ?? (el.tagName === "CODE" ? el : null);
+      const raw = (code ?? el).textContent.trim();
+      const m = raw.match(/^((?:GET|POST|PUT|DELETE)(?:,\s*(?:GET|POST|PUT|DELETE))*)\s+(\S.*)$/);
+      if (code && m) { code.outerHTML = m[1].split(/,\s*/).map(badge).join(" ") + ` <code>${m[2]}</code>`; return; }
+      if (!code && METHOD.test(raw)) el.innerHTML = raw.split(/,\s*/).map(badge).join(" ");
+    });
+
+    // Endpoint rows for the filter.
+    const rows = [...main.querySelectorAll("tbody tr")].filter((tr) => /\/v1\/|\/bot|\/admin|\/ws/.test(tr.textContent));
+    document.getElementById("api-count").innerHTML = `<b>${main.querySelectorAll("h2").length}</b> ${D.L("разделов", "sections")} · <b>${rows.length}</b> ${D.L("строк методов", "endpoint rows")}`;
+    const nav = document.getElementById("api-nav");
+    nav.innerHTML = toc.filter((t) => t.level === 2).map((t) => `<a href="#${t.id}">${t.text.replace(/#$/, "")}</a>`).join("");
+    const filter = document.getElementById("api-filter");
+    filter.addEventListener("input", () => {
+      const q = filter.value.trim().toLowerCase();
+      for (const tr of rows) {
+        const hit = q && tr.textContent.toLowerCase().includes(q);
+        tr.classList.toggle("hit-row", !!hit);
+        tr.classList.toggle("dim-row", !!q && !hit);
+      }
+      if (q) rows.find((tr) => tr.classList.contains("hit-row"))?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+    D.tocList(document.getElementById("doc-toc"), toc);
+    if (location.hash) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView();
+  });
+</script>

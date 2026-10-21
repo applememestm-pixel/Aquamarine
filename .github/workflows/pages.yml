@@ -1,12 +1,13 @@
 name: pages
 
-# Publishes the landing page in site/ to GitHub Pages.
+# Publishes the site in site/ to GitHub Pages, together with the Markdown
+# documents it renders (docs/*.md and the README as docs/passport.md).
 # One-time setup: repo Settings → Pages → Source: "GitHub Actions".
 
 on:
   push:
     branches: [main]
-    paths: ["site/**", ".github/workflows/pages.yml"]
+    paths: ["site/**", "docs/**", "README.md", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
 permissions:
@@ -27,6 +28,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      - name: Add the documents
+        run: |
+          mkdir -p site/docs
+          cp docs/*.md site/docs/
+          cp README.md site/docs/passport.md
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
