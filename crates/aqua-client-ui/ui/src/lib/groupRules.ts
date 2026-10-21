@@ -65,6 +65,7 @@ export const DEFAULT_ROOMS: Room[] = [
 
 export function postBlock(g: Group | undefined, me: string, roomArg?: Room | null): string | null {
   if (!g) return null;
+  if (g.settings.ends_at && Date.now() >= g.settings.ends_at) return "This event room has ended.";
   const m = memberOf(g, me);
   if (!m) return "You are not a member of this chat.";
   if ((g.banned ?? []).includes(me)) return "You were removed from this chat.";

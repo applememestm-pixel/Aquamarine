@@ -68,6 +68,7 @@ export async function refreshGroups() {
     console.warn("listGroups failed", e);
     return;
   }
+  archiveEnded(list);
   const me = get(info)?.username ?? "";
   const prev = known;
   known = new Set(list.map((g) => g.id));
@@ -123,8 +124,25 @@ async function onJoinRequest(gid: string, from: string) {
 }
 
 /** Wire the live refresh. Call once at startup. */
+/** Event rooms that ended and should go to the archive (once each). */
+function archiveEnded(list: Group[]) {
+  let done: string[] = [];
+  try { done = JSON.parse(localStorage.getItem("aqua.endedArchived") ?? "[]"); } catch { /* ignore */ }
+  const now = Date.now();
+  let changed = false;
+  for (const g of list) {
+    const end = g.settings.ends_at;
+    if (!end || now < end || (g.settings.end_action ?? "archive") !== "archive" || done.includes(g.id)) continue;
+    void import("./chatPrefs").then((p) => p.setArchived(g.id, true));
+    done.push(g.id);
+    changed = true;
+  }
+  if (changed) try { localStorage.setItem("aqua.endedArchived", JSON.stringify(done.slice(-500))); } catch { /* ignore */ }
+}
+
 export function initGroups() {
   void refreshGroups();
+  setInterval(() => archiveEnded(Object.values(get(groupMap))), 60_000);
   void events.onGroupsUpdated(() => refreshGroups());
   void events.onGroupJoinRequest((p) => { void onJoinRequest(p.gid, p.from); });
 }

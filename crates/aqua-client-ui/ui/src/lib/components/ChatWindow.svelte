@@ -2366,6 +2366,11 @@
             <span class="group-sub">
               {$tn(activeGroup.members.length, activeGroup.kind === "channel" ? "subscriber" : "member")}
             </span>
+            {#if activeGroup.settings.ends_at}
+              {@const left = activeGroup.settings.ends_at - Date.now()}
+              <span class="sep">·</span>
+              <span class="event-room" class:ended={left <= 0}>⏳ {left <= 0 ? $t("event over") : left < 3_600_000 ? tr("ends in {n} min", { n: Math.max(1, Math.round(left / 60_000)) }) : left < 86_400_000 ? tr("ends in {n} h", { n: Math.round(left / 3_600_000) }) : tr("ends in {n} d", { n: Math.round(left / 86_400_000) })}</span>
+            {/if}
             <span class="sep">·</span>
             <span class="e2ee">{@html icons.lock} encrypted</span>
           {:else}
@@ -3213,6 +3218,8 @@
 <svelte:window onmousedown={(e) => { if (ttlMenu && !(e.target as HTMLElement).closest?.(".ttl-wrap")) ttlMenu = false; }} />
 
 <style>
+  .event-room { color: var(--accent); font-weight: 600; }
+  .event-room.ended { color: var(--fg-dim); }
   .thread-chip { display: inline-flex; align-items: center; gap: 6px; margin-top: 3px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-bubble-in); color: var(--accent); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; transition: border-color 0.12s, background 0.12s; }
   .thread-chip.out { align-self: flex-end; }
   .thread-chip:hover { border-color: var(--accent); }

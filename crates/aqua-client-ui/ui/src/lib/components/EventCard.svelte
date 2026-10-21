@@ -41,6 +41,29 @@
     myReminders.update((r) => ({ ...r, [ev.id]: next }));
   }
 
+  /** A temporary group for this event: the people going (or the chat
+   *  partner), closing and archiving itself a day after the event. */
+  let roomBusy = $state(false);
+  async function makeRoom() {
+    if (roomBusy) return;
+    roomBusy = true;
+    try {
+      const members = chat.startsWith("grp_") ? going.filter((u) => u !== ME) : [chat];
+      const g = await api.createGroup("group", ev.title.slice(0, 60), [when, ev.place ?? ""].filter(Boolean).join(" · "), members);
+      g.settings.ends_at = ev.at + (ev.dur ?? 60) * 60_000 + 24 * 3_600_000;
+      g.settings.end_action = "archive";
+      await api.updateGroup(g);
+      await api.groupSend(g.id, "[event:v1]" + JSON.stringify(ev));
+      const { refreshGroups } = await import("../groups");
+      await refreshGroups();
+      const st = await import("../stores");
+      st.chats.set(await api.listChats());
+      await st.selectChat(g.id);
+      showToast(tr("Event room created — it closes a day after the event"));
+    } catch (e) { showToast(String(e)); }
+    finally { roomBusy = false; }
+  }
+
   async function exportIcs() {
     try {
       const path = await save({ title: "Calendar", defaultPath: `${ev.title.replace(/[^\p{L}\p{N} _-]/gu, "").slice(0, 40) || "event"}.ics`, filters: [{ name: "iCalendar", extensions: ["ics"] }] });
@@ -79,6 +102,7 @@
     <div class="ev-foot">
       <button class="ev-link" onclick={() => (showRem = !showRem)}>🔔 {rem.length ? rem.map((m) => remindLabel(m)).join(", ") : $t("No reminders")}</button>
       <button class="ev-link" onclick={exportIcs}>{$t("To calendar")}</button>
+      {#if !chat.startsWith("grp_") || going.length > 1}<button class="ev-link" onclick={makeRoom} disabled={roomBusy}>{$t("Event room")}</button>{/if}
     </div>
     {#if showRem}
       <div class="ev-rem">
@@ -114,7 +138,7 @@
   .ev-btns button { border: 1px solid var(--border); border-radius: 9px; background: var(--bg-input); color: var(--fg); font: inherit; font-size: 12.5px; font-weight: 700; padding: 7px 4px; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
   .ev-btns button:hover { border-color: var(--border-strong); }
   .ev-btns button.on { background: var(--accent); border-color: var(--accent); color: #06070C; }
-  .ev-foot { display: flex; justify-content: space-between; gap: 8px; }
+  .ev-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 10px; }
   .ev-link { border: none; background: none; padding: 0; color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ev-link:hover { text-decoration: underline; }
   .ev-rem { display: flex; flex-wrap: wrap; gap: 5px; }

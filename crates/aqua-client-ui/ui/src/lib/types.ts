@@ -285,6 +285,10 @@ export interface GroupSettings {
   ttl?: number;
   /** Comments under posts / messages (default on). */
   comments?: boolean;
+  /** Temporary event room: ends at this time (ms) — then read-only. */
+  ends_at?: number;
+  /** What happens to the room on each device when it ends. */
+  end_action?: "archive" | "close";
 }
 
 /** A supergroup room (Discord channel). */

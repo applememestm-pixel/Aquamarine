@@ -835,6 +835,21 @@
           </div>
           <div class="note">{$t("Members can send one message per interval.")}</div>
         </div>
+        <div class="card" class:hidden={basic}>
+          <div class="ct">{$t("Event room")}</div>
+          <div class="note" style="margin:0 0 8px">{group.settings.ends_at ? (Date.now() >= group.settings.ends_at ? $t("Ended") + " · " : $t("Ends") + " ") + new Date(group.settings.ends_at).toLocaleString() : $t("A temporary room for an event: when it ends, the chat closes (read-only) and moves to the archive.")}</div>
+          <div class="seg">
+            {#each [[0, "Off"], [6, "6 h"], [24, "1 day"], [72, "3 days"], [168, "1 week"]] as [h, l] (h)}
+              <button class:active={h === 0 ? !group.settings.ends_at : false} onclick={() => commit((g) => { if (h) { g.settings.ends_at = Date.now() + Number(h) * 3_600_000; g.settings.end_action = g.settings.end_action ?? "archive"; } else { delete g.settings.ends_at; } }, h ? `made it an event room ending in ${l}` : "made it a permanent room")}>{$t(String(l))}</button>
+            {/each}
+          </div>
+          {#if group.settings.ends_at}
+            <div class="seg" style="margin-top:8px">
+              <button class:active={(group.settings.end_action ?? "archive") === "archive"} onclick={() => commit((g) => { g.settings.end_action = "archive"; })}>{$t("Close and archive")}</button>
+              <button class:active={group.settings.end_action === "close"} onclick={() => commit((g) => { g.settings.end_action = "close"; })}>{$t("Only close")}</button>
+            </div>
+          {/if}
+        </div>
         <div class="card">
           <div class="ct">{$t("Comments")}</div>
           {@render toggle($t("Comments under posts and messages"), $t("Everyone may discuss a post in its thread — even in a channel where only admins post."), group.settings.comments !== false, () => commit((g) => { g.settings.comments = g.settings.comments === false; }, group.settings.comments === false ? "turned comments on" : "turned comments off"), busy)}

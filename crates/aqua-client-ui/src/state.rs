@@ -686,6 +686,9 @@ pub fn resolve_room(g: &Group, wanted: Option<&str>) -> Option<Room> {
 
 /// `may_post` plus the room rule (read-only rooms are for admins).
 pub fn may_post_in(g: &Group, author: &str, body: &str, room: Option<&Room>) -> bool {
+    if room_ended(g) {
+        return false;
+    }
     // A forward header doesn't change what kind of post it is.
     let body = split_fwd(body).1;
     if roles_on(g) && !g.is_admin(author) {
@@ -706,6 +709,14 @@ pub fn may_post_in(g: &Group, author: &str, body: &str, room: Option<&Room>) -> 
 }
 
 pub const COMMENT_PREFIX: &str = "[cmt:v1]";
+
+/// A temporary event room whose end time (`ends_at`, ms) has passed: it's
+/// read-only for everyone (admins can move the end time to reopen it).
+pub fn room_ended(g: &Group) -> bool {
+    let Some(end) = g.settings.extra.get("ends_at").and_then(|v| v.as_i64()) else { return false };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    end > 0 && now >= end
+}
 
 /// Comments are on unless the group's `comments` setting is false.
 pub fn comments_on(g: &Group) -> bool {
@@ -1620,6 +1631,24 @@ mod preview_tests {
         let (k, m) = super::classify_full("[fwd:v1]{\"name\":\"Bob\"}\n[article:v1]{\"title\":\"T\",\"body\":\"B\"}", None);
         assert!(matches!(k, super::MessageKind::Article { .. }));
         assert_eq!(m.unwrap().fwd.unwrap()["name"], "Bob");
+    }
+
+    #[test]
+    fn ended_event_rooms_are_read_only() {
+        let mut g: super::Group = serde_json::from_value(serde_json::json!({
+            "id": "grp_x", "kind": "group", "title": "Party", "description": "", "gradient": "", "owner": "a",
+            "members": [{ "username": "a", "role": "owner" }, { "username": "b", "role": "member" }],
+            "settings": { "send_messages": "all", "send_media": "all", "send_stickers": "all", "send_polls": "all",
+                "add_members": "all", "pin_messages": "admins", "change_info": "admins", "slow_mode": 0,
+                "sign_messages": false, "is_public": false, "public_link": "", "history_visible": true },
+            "created_at": "", "version": 1
+        })).unwrap();
+        assert!(super::may_post_in(&g, "b", "hi", None));
+        g.settings.extra.insert("ends_at".into(), serde_json::json!(1));
+        assert!(!super::may_post_in(&g, "b", "hi", None));
+        assert!(!super::may_post_in(&g, "a", "hi", None));
+        g.settings.extra.insert("ends_at".into(), serde_json::json!(i64::MAX / 2));
+        assert!(super::may_post_in(&g, "b", "hi", None));
     }
 
     #[test]
