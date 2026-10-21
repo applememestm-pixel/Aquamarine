@@ -10,6 +10,8 @@
   import { avatars } from "../people";
   import { isAdmin } from "../groupRules";
   import { t } from "../i18n";
+  import { spatial, setSpatial } from "../spatial";
+  import SpatialMap from "./SpatialMap.svelte";
 
   let { gid, mode = "stage", roomName = "", chatOpen = false, onToggleChat, onExpand }:
     { gid: string; mode?: "stage" | "pill" | "full"; roomName?: string; chatOpen?: boolean; onToggleChat?: () => void; onExpand?: () => void } = $props();
@@ -44,6 +46,14 @@
     return mine.listener ? others : [self, ...others];
   });
   const shown = $derived(focus ? tiles.filter((x) => x.user === focus) : tiles);
+  let showMap = $state(false);
+  function toggleSpatial() {
+    if (!mine) return;
+    const on = !$spatial.on;
+    setSpatial(on, Object.fromEntries(Object.values(mine.peers).map((p) => [p.user, p.stream])), gid);
+    showMap = on;
+  }
+  const speakingMap = $derived(mine ? Object.fromEntries(Object.values(mine.peers).map((p) => [p.user, p.speaking && !p.muted])) : {});
 </script>
 
 {#if mode === "pill"}
@@ -102,9 +112,12 @@
         {/if}
       </div>
     {/if}
+    {#if $spatial.on && showMap && (!collapsed || mode === "full")}
+      <SpatialMap users={Object.keys(mine.peers)} me={$info?.username ?? "me"} speaking={speakingMap} />
+    {/if}
     <!-- remote audio (always mounted, even collapsed) -->
     {#each Object.values(mine.peers) as p (p.user)}
-      {#if p.stream}<audio use:srcObject={p.stream} autoplay muted={mine.deafened}></audio>{/if}
+      {#if p.stream}<audio use:srcObject={p.stream} autoplay muted={mine.deafened || $spatial.on}></audio>{/if}
     {/each}
     <div class="ctrls">
       {#if !mine.listener}
@@ -124,6 +137,12 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
         </button>
       {/if}
+      <button class="cb" class:on={$spatial.on} onclick={toggleSpatial} title={$spatial.on ? $t("Spatial sound: on") : $t("Spatial sound")}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.5"/><path d="M7.5 7.5a6.4 6.4 0 0 0 0 9"/><path d="M16.5 7.5a6.4 6.4 0 0 1 0 9"/><path d="M4.6 4.6a10.5 10.5 0 0 0 0 14.8"/><path d="M19.4 4.6a10.5 10.5 0 0 1 0 14.8"/></svg>
+      </button>
+      {#if $spatial.on}<button class="cb map-btn" class:on={showMap} onclick={() => (showMap = !showMap)} title={$t("Room map")}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="1.5"/><circle cx="7" cy="8" r="1.5"/><circle cx="17" cy="9" r="1.5"/></svg>
+      </button>{/if}
       <button class="cb leave" onclick={leaveGroupCall} title={$t("Leave")}>
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08a.996.996 0 0 1 0-1.41C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28a11.27 11.27 0 0 0-2.67-1.85.996.996 0 0 1-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>
       </button>

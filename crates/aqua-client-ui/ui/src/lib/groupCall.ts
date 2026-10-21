@@ -13,6 +13,7 @@
  */
 import { captureScreenOrCamera } from "./rtcQuality";
 import { writable, get } from "svelte/store";
+import { spatialRoute, spatialDrop, spatialReset, spatialDeafen } from "./spatial";
 import { api, events } from "./tauri";
 import { info } from "./stores";
 import { groupMap } from "./groups";
@@ -120,7 +121,7 @@ function makePc(gid: string, callId: string, user: string, offerer: boolean): RT
     e.track.onmute = refresh;
     e.track.onunmute = refresh;
     refresh();
-    if (e.track.kind === "audio") watchLevel(user, stream);
+    if (e.track.kind === "audio") { watchLevel(user, stream); spatialRoute(user, stream, gid); }
   };
   pc.onconnectionstatechange = () => {
     setPeer(user, { state: pc.connectionState });
@@ -202,6 +203,7 @@ export async function leaveGroupCall() {
   void broadcast(s.gid, { t: "leave", call: s.callId });
   for (const pc of pcs.values()) pc.close();
   pcs.clear(); pendingIce.clear(); analysers.clear(); videoSenders.clear(); remoteStreams.clear();
+  spatialReset();
   s.local?.getTracks().forEach((t) => t.stop());
   if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
   if (meterTimer) { clearInterval(meterTimer); meterTimer = null; }
@@ -217,7 +219,7 @@ export function toggleGroupMute() {
   patch((n) => { n.muted = muted; });
   void broadcast(s.gid, { t: "state", call: s.callId, muted });
 }
-export function toggleGroupDeafen() { patch((n) => { n.deafened = !n.deafened; }); }
+export function toggleGroupDeafen() { patch((n) => { n.deafened = !n.deafened; spatialDeafen(n.deafened); }); }
 
 async function replaceVideo(track: MediaStreamTrack | null) {
   const s = get(groupCall);
@@ -316,7 +318,7 @@ async function onSignal(from: string, gid: string, m: Record<string, unknown>) {
       if (typeof m.muted === "boolean" && s.peers[from]) setPeer(from, { muted: m.muted });
       break;
     case "leave":
-      pcs.get(from)?.close(); pcs.delete(from); analysers.delete(from); videoSenders.delete(from); remoteStreams.delete(from);
+      pcs.get(from)?.close(); pcs.delete(from); analysers.delete(from); videoSenders.delete(from); remoteStreams.delete(from); spatialDrop(from);
       patch((n) => { delete n.peers[from]; });
       break;
   }
