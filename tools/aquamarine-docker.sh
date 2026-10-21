@@ -5,6 +5,7 @@
 #   PORT=8080 bash aquamarine-docker.sh  # другой порт на хосте
 set -euo pipefail
 
+ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="src") print $(i+1)}' || true)
 IMAGE="ghcr.io/applememestm-pixel/aquamarine-server:${TAG:-nightly}"
 NAME="${NAME:-aquamarine}"
 PORT="${PORT:-7777}"
@@ -29,10 +30,10 @@ docker pull "$IMAGE"
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --restart unless-stopped \
   -p "$PORT:7777" -v aquamarine-data:/data \
+  -e AQUA_HOST_PORT="$PORT" ${ip:+-e AQUA_LAN_URL="http://$ip:$PORT"} \
   ${AQUA_ADMIN_TOKEN:+-e AQUA_ADMIN_TOKEN="$AQUA_ADMIN_TOKEN"} \
   "$IMAGE" >/dev/null
 
-ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="src") print $(i+1)}')
 echo
 echo "Ретранслятор запущен. Адрес для клиента:"
 echo "  на этом компьютере:  http://127.0.0.1:$PORT"

@@ -12,7 +12,8 @@ RUN chmod 755 /usr/local/bin/aqua-server
 USER aqua
 WORKDIR /data
 ENV AQUA_LISTEN=0.0.0.0:7777 \
-    AQUA_TG_PROMPT=0
+    AQUA_TG_PROMPT=0 \
+    AQUA_IN_CONTAINER=1
 EXPOSE 7777
 VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \

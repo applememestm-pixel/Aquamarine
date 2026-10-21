@@ -99,6 +99,7 @@ WantedBy=multi-user.target
 | `AQUA_TG_PROMPT=0` | Не спрашивать токен Telegram при запуске | — |
 | `AQUA_DEFAULT_PACKS` | Наборы, импортируемые при запуске | `eltaller47` |
 | `AQUA_GAMES_CACHE` | Файл каталога игр | `aqua-games.json` |
+| `AQUA_HOST_PORT`, `AQUA_LAN_URL` | Порт и адрес в локальной сети для заставки при запуске в контейнере (задаёт `aquamarine-docker.sh`) | Порт из `AQUA_LISTEN`, адрес определяется сам |
 
 ## 6. Файлы
 
