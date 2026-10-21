@@ -483,6 +483,56 @@ jobs:
           overwrite_files: true
           files: dist/*
 
+  # ---------------------------------------------------------------- docker
+  # Container image of the relay on GitHub Container Registry, from the
+  # server binaries built above: ghcr.io/<owner>/aquamarine-server with
+  # :<version> and :latest for a release, :nightly for main.
+  docker:
+    name: docker image
+    needs: server
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: aqua-server-linux-*
+          path: art
+          merge-multiple: true
+      - name: Lay out the binaries
+        run: |
+          mkdir -p .github/docker/bin
+          cp art/aqua-server-linux-x64 .github/docker/bin/aqua-server-amd64
+          cp art/aqua-server-linux-arm64 .github/docker/bin/aqua-server-arm64
+          ls -la .github/docker/bin
+      - name: Image name and tags
+        id: meta
+        run: |
+          img="ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/aquamarine-server"
+          if [ "$NIGHTLY" = "true" ]; then
+            tags="$img:nightly"
+          else
+            v="${REL_TAG#v}"
+            tags="$img:$v,$img:latest"
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+          echo "$tags"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .github/docker
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+
   # ---------------------------------------------------------------- checksums
   # SHA256SUMS.txt for every file attached to the release, so a download
   # can be checked (SECURITY.md → "Рекомендации пользователям").

@@ -72,7 +72,7 @@ cd sdk/python && python -m pytest                  # библиотека бот
 
 | Рабочий процесс | Когда | Что делает |
 |---|---|---|
-| `release.yml` | Тег `v*`; каждый push в `main`; вручную | Тег — стабильный релиз; push — пре-релиз `nightly`. Собирает клиент (Windows, macOS ARM и Intel, Linux), Android (APK), iOS (неподписанный `.ipa`), ретранслятор (Windows, macOS, Linux x86-64 и ARM64); прикладывает `SHA256SUMS.txt` |
+| `release.yml` | Тег `v*`; каждый push в `main`; вручную | Тег — стабильный релиз; push — пре-релиз `nightly`. Собирает клиент (Windows, macOS ARM и Intel, Linux), Android (APK), iOS (неподписанный `.ipa`), ретранслятор (Windows, macOS, Linux x86-64 и ARM64); прикладывает `SHA256SUMS.txt`; публикует образ ретранслятора `ghcr.io/…/aquamarine-server` (amd64, arm64) |
 | `autotag.yml` | Push в `main` | Если версии из `Cargo.toml` нет тега `v<версия>`, создаёт тег и запускает `release.yml` на нём |
 | `windows-build.yml` | Вручную | Отдельная сборка `aqua-server.exe` и клиента под Windows |
 | `pages.yml` | Изменения `site/`, `docs/`, `README.md` | Публикация сайта на GitHub Pages |

@@ -1,0 +1,9 @@
+**/target
+**/node_modules
+crates/aqua-client-ui
+site
+docs
+sdk
+android
+tools
+.git

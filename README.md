@@ -99,6 +99,10 @@ Linux: для воспроизведения нужны `gst-plugins-good`, `gst
 
 ```bash
 AQUA_LISTEN=0.0.0.0:7777 ./aqua-server-linux-x64
+# или в Docker
+docker run -d --name aquamarine --restart unless-stopped -p 7777:7777 -v aquamarine-data:/data ghcr.io/applememestm-pixel/aquamarine-server:latest
+# или из исходников
+docker compose up -d --build
 ```
 
 Для `https://` и `wss://` перед ним ставится обратный прокси (Caddy, nginx). Переменные окружения, файлы, systemd и панель администратора — [docs/deployment.md](docs/deployment.md); объединение ретрансляторов в сеть — [docs/federation.md](docs/federation.md).
