@@ -6,9 +6,9 @@ Tauri выбирает сам, переносить нельзя). Эта пап
 ## Один раз установить
 1. **Android Studio** (https://developer.android.com/studio), пройти первый запуск.
 2. Больше ничего ставить руками не нужно: скрипты сами находят SDK, Java (JBR из Android Studio)
-   и Studio на любом диске (у тебя `D:\Android\Sdk`, `D:\AndroidStudio`), а недостающий **NDK**
+   и Studio на любом диске, а недостающий **NDK**
    `1-setup.bat` ставит сам — в отдельном окне, где нужно один раз нажать `y` (лицензия Google).
-3. **Rust** (https://rustup.rs) и **Node.js 22+** (https://nodejs.org) — для ПК-сборки они у тебя уже есть.
+3. **Rust** (https://rustup.rs) и **Node.js 22+** (https://nodejs.org) — те же, что для сборки на ПК.
 
 ## Linux (Arch)
 **Одной командой** — всё сразу (пакеты, Android Studio из AUR, SDK + NDK, сборка APK):

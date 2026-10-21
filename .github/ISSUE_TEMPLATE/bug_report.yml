@@ -1,0 +1,45 @@
+name: Ошибка
+description: Что-то работает не так, как ожидалось
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Уязвимости сюда не пишите — сообщите закрыто, как описано в SECURITY.md.
+  - type: textarea
+    id: what
+    attributes:
+      label: Что произошло
+      description: Что вы сделали, что ожидали увидеть и что увидели вместо этого.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Как воспроизвести
+      placeholder: |
+        1. Открыть …
+        2. Нажать …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Версия клиента и ретранслятора
+      placeholder: "клиент 0.2.1, ретранслятор 0.2.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Платформа
+      multiple: true
+      options: [Linux, Windows, macOS, Android, iOS, "Ретранслятор"]
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Журнал
+      description: Для Linux — вывод tools/aquamarine.sh (строки [aqua-…]). Уберите адреса почты, токены и пароли.
+      render: text

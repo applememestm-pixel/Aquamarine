@@ -1,0 +1,20 @@
+name: Предложение
+description: Новая функция или улучшение
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Задача
+      description: Что вы хотите сделать и что мешает сейчас.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Как это могло бы работать
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Приватность
+      description: Узнает ли ретранслятор что-то новое? Нужны ли данные, которых сейчас нет на сервере?

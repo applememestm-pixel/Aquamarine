@@ -6,6 +6,8 @@ name: release
 #
 # Two channels:
 #   * a v* tag            → the stable GitHub Release of that version
+#     (autotag.yml creates the tag when Cargo.toml gets a new version
+#     and starts this workflow on it)
 #                           ("Latest"; the site's download buttons use it);
 #   * a push to main      → the "nightly" pre-release, rebuilt for every
 #     (or a manual run)     platform from the newest commit, so Windows /

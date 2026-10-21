@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Сообщить об уязвимости
+    url: https://github.com/applememestm-pixel/Aquamarine/security/advisories/new
+    about: Закрыто, через GitHub Security Advisories (см. SECURITY.md).
+  - name: Документация
+    url: https://github.com/applememestm-pixel/Aquamarine/tree/main/docs
+    about: Устройство системы, API, развёртывание.

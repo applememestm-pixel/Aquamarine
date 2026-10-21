@@ -1,0 +1,64 @@
+name: autotag
+
+# A new version on main becomes a release by itself: when the version in
+# Cargo.toml ([workspace.package]) has no v<version> tag yet, this job
+# creates the tag and starts release.yml on it.
+#
+# Tags pushed with the workflow token don't trigger other workflows, so
+# the release is started explicitly (workflow_dispatch on the tag ref),
+# which is the one event that token is allowed to trigger.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: autotag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Version in Cargo.toml
+        id: ver
+        run: |
+          v=$(awk '/^\[workspace.package\]/{f=1;next} /^\[/{f=0} f && /^version *=/{gsub(/[" ]/,"",$0); split($0,a,"="); print a[2]; exit}' Cargo.toml)
+          [ -n "$v" ] || { echo "::error::no [workspace.package] version in Cargo.toml"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "tag=v$v" >> "$GITHUB_OUTPUT"
+          echo "Cargo.toml version: $v"
+
+      - name: Create the tag if it's new
+        id: mk
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            echo "$TAG already exists - nothing to do"
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          msg="Aquamarine ${TAG#v}"
+          [ -f "docs/releases/$TAG.md" ] || echo "::warning::docs/releases/$TAG.md is missing - the release will have no description"
+          git tag -a "$TAG" -m "$msg" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
+          echo "created=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build the release
+        if: steps.mk.outputs.created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: gh workflow run release.yml --ref "$TAG" --repo "$GITHUB_REPOSITORY"
