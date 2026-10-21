@@ -1748,4 +1748,10 @@ export const RU: Record<string, string> = {
   "Who viewed": "Кто смотрел",
   "Nobody yet.": "Пока никого.",
   "The details are older than {d} days — only the counter is kept.": "Подробности старше {d} дней — остался только счётчик.",
+  "Continue on this device: {c}": "Продолжить на этом устройстве: {c}",
+  "from {d}": "с {d}",
+  "Continue": "Продолжить",
+  "Handoff": "Переход между устройствами",
+  "Continue on another device": "Продолжать на другом устройстве",
+  "When you switch away from Aquamarine here, your other devices offer to open the same chat with what you were typing. Only your devices get it, end-to-end encrypted.": "Когда вы уходите из Aquamarine на этом устройстве, другие ваши устройства предлагают открыть тот же чат с недописанным текстом. Это получают только ваши устройства, со сквозным шифрованием.",
 };

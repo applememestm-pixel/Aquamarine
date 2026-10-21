@@ -34,6 +34,8 @@
   import DocEditor from "./lib/components/DocEditor.svelte";
   import { startWorkspace } from "./lib/workspace";
   import { startChannelStats } from "./lib/channelStats";
+  import { startHandoff } from "./lib/handoff";
+  import HandoffBanner from "./lib/components/HandoffBanner.svelte";
   import ReminderPopup from "./lib/components/ReminderPopup.svelte";
   import ChatCalendar from "./lib/components/ChatCalendar.svelte";
   import { startPlanner } from "./lib/planner";
@@ -94,6 +96,7 @@
     startPlanner();
     startWorkspace();
     startChannelStats();
+    startHandoff();
     const stopIcon = startAppIcon();
     void migrateCustomWallpaper(api.saveWallpaper)
       .then(() => api.listWallpapers().then(followWallpaper).catch(() => {}))
@@ -296,6 +299,7 @@
 <MiniApp />
 <PlannerComposer />
 <DocEditor />
+<HandoffBanner />
 <ReminderPopup />
 <ChatCalendar />
 <Toast />

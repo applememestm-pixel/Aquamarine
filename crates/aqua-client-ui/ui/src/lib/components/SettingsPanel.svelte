@@ -44,6 +44,7 @@
   import { exportThemeToFile, sendThemeToChat, pickAndApplyTheme } from "../themeShare";
   import { askConfirm } from "./Confirm.svelte";
   import { backupState, refreshBackup, backupNow } from "../backup";
+  import { handoffOn } from "../handoff";
   import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 
   // ---- Section navigation ----
@@ -1471,6 +1472,13 @@
             {/each}
           </div>
         {/if}
+      </section>
+      <section class="group">
+        <div class="label">{$t("Handoff")}</div>
+        <button class="toggle-row" onclick={() => handoffOn.update((v) => !v)}>
+          <div class="tr-text"><div class="tr-title">{$t("Continue on another device")}</div><div class="tr-sub">{$t("When you switch away from Aquamarine here, your other devices offer to open the same chat with what you were typing. Only your devices get it, end-to-end encrypted.")}</div></div>
+          <span class="switch" class:on={$handoffOn}></span>
+        </button>
       </section>
       {/if}
 

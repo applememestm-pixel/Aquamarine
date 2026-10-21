@@ -206,6 +206,28 @@ pub fn unwrap_sync(text: &str) -> Option<(String, &str)> {
     Some((to, body))
 }
 
+/// Seamless handoff: tell my other devices which chat I'm in and what I was
+/// typing, so they can pick it up ("Continue here"). Only my own devices
+/// get it, end-to-end encrypted like everything else.
+#[tauri::command]
+pub async fn handoff(app: AppHandle, chat: String, draft: String) -> Result<(), String> {
+    if chat.is_empty() || chat.len() > 80 {
+        return Err("bad chat".into());
+    }
+    let draft: String = draft.chars().take(4000).collect();
+    let body = format!(
+        "{}{}",
+        crate::commands::CTL_PREFIX,
+        serde_json::json!({ "t": "handoff", "draft": draft, "dev": this_device_name(), "at": chrono_ms() })
+    );
+    sync_raw(&app, &wrap_sync(&chat, &body)).await;
+    Ok(())
+}
+
+fn chrono_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
 // ---------- device management (Settings → Devices) ------------------------------
 
 #[tauri::command]
