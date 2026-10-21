@@ -144,6 +144,7 @@ pub fn run() -> Result<()> {
             backups::recovery_status,
             autodelete::get_chat_ttl,
             commands::bot_send_raw,
+            commands::group_control_admins,
             commands::forward_file,
             personal::write_text_file,
             windows::open_chat_window,

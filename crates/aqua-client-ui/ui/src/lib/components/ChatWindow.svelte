@@ -49,6 +49,8 @@
   import BoardCard from "./BoardCard.svelte";
   import { chatLocks, unlocked, unlockChat, noteLeft } from "../chatLocks";
   import ThreadPanel, { type ThreadItem } from "./ThreadPanel.svelte";
+  import { noteView, viewCounts, channelStats } from "../channelStats";
+  import ChannelStats, { statsFor, type StatPost } from "./ChannelStats.svelte";
   import EventCard from "./EventCard.svelte";
   import TasksCard from "./TasksCard.svelte";
   import { openPlanner } from "./PlannerComposer.svelte";
@@ -972,6 +974,32 @@
   let myUsername = $derived($info?.username ?? "");
   let isGroup = $derived($activeChat?.id?.startsWith("grp_") ?? false);
   let activeGroup = $derived($activeChat ? $groupMap[$activeChat.id] : undefined);
+
+  // ---- Channel views (subscribers report to admins; see channelStats.ts) ----
+  let isChannel = $derived(activeGroup?.kind === "channel");
+  let amChanAdmin = $derived(!!activeGroup && isChannel && isAdmin(activeGroup, myUsername));
+  $effect(() => {
+    const el = messagesEl, gid = $activeChat?.id;
+    void shownRows.length;
+    if (!el || !gid || !isChannel || amChanAdmin || lockedNow) return;
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        const k = (e.target as HTMLElement).dataset.vkey;
+        if (e.isIntersecting && k) { noteView(gid, k); io.unobserve(e.target); }
+      }
+    }, { root: el, threshold: 0.6 });
+    void tick().then(() => el.querySelectorAll("[data-vkey]").forEach((n) => io.observe(n)));
+    return () => io.disconnect();
+  });
+
+  let statPosts = $derived.by<StatPost[]>(() => {
+    if (!amChanAdmin || $statsFor !== $activeChat?.id) return [];
+    return rows.filter((r) => r.kind.type !== "system" && r.kind.type !== "date_separator").map((r) => {
+      const key = reactionKey(r);
+      const rc = $reactions[key];
+      return { key, id: r.id, text: snippetOf(r).replace(/\s+/g, " ").slice(0, 120), time: r.time, reactions: rc ? rc.mine.length + Object.values(rc.peer).reduce((a, b) => a + b, 0) : 0, comments: commentCount.get(key) ?? 0 };
+    });
+  });
 
   // ---- Threads: comments under posts, replies gathered under a message ----
   interface Cmt { id: string; from: string; time: string; to: string; t: string; re: { a: string; t: string } | null; outgoing: boolean }
@@ -2210,6 +2238,9 @@
   {#if !$activeChat}
     <div class="empty">{$t("Pick a chat on the left.")}</div>
   {:else}
+    {#if $statsFor === $activeChat.id && amChanAdmin && activeGroup}
+      <ChannelStats gid={$activeChat.id} subscribers={activeGroup.members.length} posts={statPosts} />
+    {/if}
     {#if thread && !lockedNow}
       {@const th = thread}
       <ThreadPanel
@@ -2437,6 +2468,11 @@
             {/if}
           </div>
         {/if}
+        {#if amChanAdmin}
+          <button class="icon-btn" class:active={$statsFor === $activeChat.id} title={$t("Channel statistics")} onclick={() => statsFor.set($statsFor === $activeChat.id ? null : $activeChat.id)}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="20" x2="6" y2="12"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="18" y1="20" x2="18" y2="9"/></svg>
+          </button>
+        {/if}
         {#if $activeChat.id !== "__saved__" && !isBotChat}
           <button class="icon-btn" class:active={$calendarFor === $activeChat.id} title={$t("Calendar")}
             onclick={() => calendarFor.set($calendarFor === $activeChat.id ? null : $activeChat.id)}>
@@ -2576,6 +2612,7 @@
           <div
             class="msg {m.outgoing ? 'out' : 'in'}"
             data-msg-id={m.id}
+            data-vkey={isChannel ? reactionKey(m) : undefined}
             class:first={m.first}
             class:last={m.last}
             class:selected={selected.has(m.id)}
@@ -2910,13 +2947,22 @@
                 </div>
               {/if}
 
-              {#if (isGroup && commentsAllowed && (activeGroup?.kind === "channel" || commentCount.get(reactionKey(m)))) || replyCount.get(quoteOf(m))}
+              {#if (isGroup && commentsAllowed && (activeGroup?.kind === "channel" || commentCount.get(reactionKey(m)))) || replyCount.get(quoteOf(m)) || isChannel}
                 {@const nc = isGroup ? (commentCount.get(reactionKey(m)) ?? 0) : 0}
                 {@const nr = replyCount.get(quoteOf(m)) ?? 0}
-                <button class="thread-chip" class:out={m.outgoing} onclick={() => openThread(m, nc || activeGroup?.kind === "channel" ? "comments" : "replies")}>
-                  {#if nc || activeGroup?.kind === "channel"}💬 {nc ? $tn(nc, "comment") : $t("Comment")}{:else}↩ {$tn(nr, "reply")}{/if}
-                  <span class="tc-arrow">›</span>
-                </button>
+                {@const vk = reactionKey(m)}
+                <div class="post-foot" class:out={m.outgoing}>
+                  {#if (isGroup && commentsAllowed && (activeGroup?.kind === "channel" || nc)) || nr}
+                    <button class="thread-chip" onclick={() => openThread(m, nc || activeGroup?.kind === "channel" ? "comments" : "replies")}>
+                      {#if nc || activeGroup?.kind === "channel"}💬 {nc ? $tn(nc, "comment") : $t("Comment")}{:else}↩ {$tn(nr, "reply")}{/if}
+                      <span class="tc-arrow">›</span>
+                    </button>
+                  {/if}
+                  {#if isChannel}
+                    {@const n = Math.max($viewCounts[$activeChat?.id ?? ""]?.[vk] ?? 0, $channelStats[$activeChat?.id ?? ""]?.[vk]?.n ?? 0)}
+                    <span class="views-chip" title={$t("Views")}>👁 {n}</span>
+                  {/if}
+                </div>
               {/if}
               {#if $activeChat}
                 {@const chips = reactionChips($reactions[reactionKey(m)])}
@@ -3218,6 +3264,10 @@
 <svelte:window onmousedown={(e) => { if (ttlMenu && !(e.target as HTMLElement).closest?.(".ttl-wrap")) ttlMenu = false; }} />
 
 <style>
+  .post-foot { display: flex; align-items: center; gap: 8px; margin-top: 3px; }
+  .post-foot.out { align-self: flex-end; }
+  .post-foot .thread-chip { margin-top: 0; }
+  .views-chip { font-size: 11.5px; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
   .event-room { color: var(--accent); font-weight: 600; }
   .event-room.ended { color: var(--fg-dim); }
   .thread-chip { display: inline-flex; align-items: center; gap: 6px; margin-top: 3px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-bubble-in); color: var(--accent); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; transition: border-color 0.12s, background 0.12s; }

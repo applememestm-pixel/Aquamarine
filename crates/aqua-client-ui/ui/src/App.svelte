@@ -33,6 +33,7 @@
   import PlannerComposer from "./lib/components/PlannerComposer.svelte";
   import DocEditor from "./lib/components/DocEditor.svelte";
   import { startWorkspace } from "./lib/workspace";
+  import { startChannelStats } from "./lib/channelStats";
   import ReminderPopup from "./lib/components/ReminderPopup.svelte";
   import ChatCalendar from "./lib/components/ChatCalendar.svelte";
   import { startPlanner } from "./lib/planner";
@@ -92,6 +93,7 @@
   onMount(() => {
     startPlanner();
     startWorkspace();
+    startChannelStats();
     const stopIcon = startAppIcon();
     void migrateCustomWallpaper(api.saveWallpaper)
       .then(() => api.listWallpapers().then(followWallpaper).catch(() => {}))

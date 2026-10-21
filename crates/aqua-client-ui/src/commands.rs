@@ -2481,6 +2481,35 @@ pub fn set_group_room(state: State<'_, StdMutex<AppState>>, gid: String, room: S
     Ok(())
 }
 
+/// A `[ctl:v1]` control to the owner and admins of a group only (channel
+/// view receipts: subscribers tell the admins, nobody else).
+#[tauri::command]
+pub async fn group_control_admins(
+    app: AppHandle,
+    state: State<'_, StdMutex<AppState>>,
+    gid: String,
+    body: String,
+) -> Result<(), String> {
+    if !body.starts_with(CTL_PREFIX) || body.len() > 8 * 1024 {
+        return Err("unsupported group control".into());
+    }
+    let (me, group) = {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        let g = s.groups.get(&gid).cloned().ok_or("unknown group")?;
+        (s.username.clone().ok_or("not registered")?, g)
+    };
+    if !group.is_member(&me) || group.is_banned(&me) {
+        return Err("not a member".into());
+    }
+    let wire = format!("{GRPCTL_PREFIX}{}", serde_json::json!({ "gid": gid, "body": body }));
+    for m in group.members.iter().filter(|m| m.username != me && group.is_admin(&m.username)) {
+        if let Err(e) = deliver_to_member(&app, &m.username, &wire).await {
+            tracing::warn!(member = %m.username, %e, "group_control_admins: delivery failed");
+        }
+    }
+    Ok(())
+}
+
 /// Send a group control payload (a poll vote, a reaction) to every member.
 /// Nothing is stored in the chat — receivers turn it into the same event a
 /// 1:1 control message would raise, tagged with the group id.
