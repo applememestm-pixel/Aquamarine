@@ -43,7 +43,10 @@
   import { TTL_PRESETS, ttlLabel, ttlShort, ttlNote } from "../ttl";
   import { parseBotText, type BotKb, type KbButton } from "../botkb";
   import { openMiniApp } from "./MiniApp.svelte";
-  import { parseSpecial } from "../planner";
+  import { parseSpecial, newId as plannerId } from "../planner";
+  import { parseDoc, parseBoard, newWsId } from "../workspace";
+  import DocCard, { docEditor } from "./DocCard.svelte";
+  import BoardCard from "./BoardCard.svelte";
   import { chatLocks, unlocked, unlockChat, noteLeft } from "../chatLocks";
   import ThreadPanel, { type ThreadItem } from "./ThreadPanel.svelte";
   import EventCard from "./EventCard.svelte";
@@ -1777,6 +1780,43 @@
     clearSelection();
   }
 
+  // ---- Workspace: documents and boards, also made from selected messages ----
+  async function postToChat(body: string) {
+    const chat = $activeChat;
+    if (!chat) return;
+    try {
+      if (chat.id.startsWith("grp_")) await api.groupSend(chat.id, body);
+      else await api.sendMessage(chat.id, body);
+      await loadActiveMessages();
+      chats.set(await api.listChats());
+    } catch (e) { showToast(String(e)); }
+  }
+  async function newDoc(title = tr("Notes"), body = "") {
+    const doc = { id: newWsId(), title, body: body.slice(0, 20000) };
+    await postToChat("[doc:v1]" + JSON.stringify(doc));
+    if ($activeChat) docEditor.set({ chat: $activeChat.id, doc });
+  }
+  async function newBoard(title = tr("Board"), texts: string[] = []) {
+    const b = { id: newWsId(), title, cols: [tr("To do"), tr("Doing"), tr("Done")], cards: texts.slice(0, 200).map((t, i) => ({ id: String(i + 1), t: t.slice(0, 500), c: 0 })) };
+    await postToChat("[board:v1]" + JSON.stringify(b));
+  }
+  /** One tap: the selected messages become a checklist, a document or a board. */
+  async function selectionTo(kind: "tasks" | "doc" | "board") {
+    const picked = rows.filter((r) => selected.has(r.id));
+    const texts = picked.map((r) => (textOf(r) ?? "").replace(/^\[\w+:v1\]\{.*?\}\n?/, "").trim()).filter(Boolean);
+    if (!texts.length) { showToast(tr("Nothing with text selected")); return; }
+    clearSelection();
+    if (kind === "tasks") {
+      const tl = { id: plannerId(), title: tr("Tasks from the chat"), items: texts.slice(0, 50).map((t, i) => ({ id: String(i + 1), t: t.slice(0, 300) })), need: { mode: "all", n: 1 }, seq: false, open: true };
+      await postToChat("[tasks:v1]" + JSON.stringify(tl));
+    } else if (kind === "doc") {
+      const lines = picked.map((r) => { const t = (textOf(r) ?? "").trim(); return t ? `**${r.outgoing ? myUsername : (isGroup ? r.from : ($activeChat?.name ?? r.from))}** (${r.time}): ${t}` : ""; }).filter(Boolean);
+      await newDoc(tr("Notes from the chat"), lines.join("\n\n"));
+    } else {
+      await newBoard(tr("Board from the chat"), texts);
+    }
+  }
+
   async function copySelection() {
     const parts: string[] = [];
     for (const r of rows) {
@@ -2489,6 +2529,9 @@
           {#if !protectedChat}
           <button class="sel-act" onclick={copySelection}>{$t("Copy")}</button>
           <button class="sel-act danger" onclick={() => void deleteSelection()} title={$t("Delete (Del)")}>{$t("Delete")}</button>
+          <button class="sel-act" onclick={() => void selectionTo("tasks")} title={$t("Make a checklist from these messages")}>☑️ {$t("Tasks")}</button>
+          <button class="sel-act" onclick={() => void selectionTo("doc")} title={$t("Make a shared document from these messages")}>📄 {$t("Doc")}</button>
+          <button class="sel-act" onclick={() => void selectionTo("board")} title={$t("Make a board: one card per message")}>🗂 {$t("Board")}</button>
           <button class="sel-act primary" onclick={forwardSelection}>{$t("Forward")}</button>
           {/if}
         </div>
@@ -2813,6 +2856,12 @@
                     {@render statusTick(m.outgoing)}
                   </span>
                 </div>
+              {:else if m.kind.type === "text" && m.kind.content.text.startsWith("[doc:v1]") && parseDoc(m.kind.content.text) && $activeChat}
+                <DocCard doc={parseDoc(m.kind.content.text)!} chat={$activeChat.id} outgoing={m.outgoing} />
+                <span class="card-meta">{m.time}</span>
+              {:else if m.kind.type === "text" && m.kind.content.text.startsWith("[board:v1]") && parseBoard(m.kind.content.text) && $activeChat}
+                <BoardCard board={parseBoard(m.kind.content.text)!} chat={$activeChat.id} outgoing={m.outgoing} />
+                <span class="card-meta">{m.time}</span>
               {:else if m.kind.type === "text" && (m.kind.content.text.startsWith("[event:v1]") || m.kind.content.text.startsWith("[tasks:v1]")) && parseSpecial(m.kind.content.text) && $activeChat}
                 {@const sp = parseSpecial(m.kind.content.text)!}
                 {#if sp.kind === "event"}
@@ -3067,6 +3116,14 @@
             <button class="ap-item" onclick={() => { attachMenuOpen = false; if ($activeChat) openPlanner("event", $activeChat.id); }}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="16" y1="3" x2="16" y2="7"/></svg>
               <span>{$t("Event")}</span>
+            </button>
+            <button class="ap-item" onclick={() => { attachMenuOpen = false; void newDoc(); }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>
+              <span>{$t("Document")}</span>
+            </button>
+            <button class="ap-item" onclick={() => { attachMenuOpen = false; void newBoard(); }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
+              <span>{$t("Board")}</span>
             </button>
             <button class="ap-item" onclick={() => { attachMenuOpen = false; if ($activeChat) openPlanner("tasks", $activeChat.id); }}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 6 9 10 5"/><line x1="13" y1="7" x2="20" y2="7"/><polyline points="4 15 6 17 10 13"/><line x1="13" y1="15" x2="20" y2="15"/></svg>
@@ -4069,7 +4126,8 @@
   }
   .sel-x:hover { color: var(--fg); background: var(--bg-hover); }
   .sel-count { flex: 1; font-size: 13.5px; font-weight: 600; color: var(--fg); }
-  .sel-actions { display: flex; gap: 6px; }
+  .sel-actions { display: flex; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .sel-actions .sel-act { flex-shrink: 0; }
   .sel-act {
     padding: 6px 14px; border-radius: 8px;
     border: 1px solid var(--border); background: transparent;

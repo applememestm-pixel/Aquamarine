@@ -23,6 +23,8 @@
   import PackSheet from "./lib/components/PackSheet.svelte";
   import MiniApp from "./lib/components/MiniApp.svelte";
   import PlannerComposer from "./lib/components/PlannerComposer.svelte";
+  import DocEditor from "./lib/components/DocEditor.svelte";
+  import { startWorkspace } from "./lib/workspace";
   import ChatCalendar from "./lib/components/ChatCalendar.svelte";
   import PollComposer from "./lib/components/PollComposer.svelte";
   import ArticleComposer from "./lib/components/ArticleComposer.svelte";
@@ -36,6 +38,7 @@
     document.documentElement.classList.add("popout");
     document.body.classList.add("chat-open");
     initTheme();
+    startWorkspace();
     void loadReactionPack();
     const stop = initShortcuts();
     activeId.set(chat);
@@ -88,6 +91,7 @@
 <PackSheet />
 <MiniApp />
 <PlannerComposer />
+<DocEditor />
 <ChatCalendar />
 <Toast />
 <Confirm />
