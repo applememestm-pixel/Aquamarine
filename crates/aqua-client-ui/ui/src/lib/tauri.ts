@@ -95,6 +95,12 @@ export const api = {
   backupEnable:       (password: string): Promise<string> => invoke("backup_enable", { password }),
   backupPhrase:       (): Promise<string | null> => invoke("backup_phrase"),
   /** Auto-delete timer of a chat in seconds (0 = off). */
+  /** Send to a bot without showing it in the chat (button press / mini app data). */
+  botSendRaw:         (peer_id: string, text: string): Promise<void> => invoke("bot_send_raw", { peerId: peer_id, text }),
+  /** Signed initData for a bot's mini app. */
+  webappInit:         (bot: string, start_param?: string): Promise<{ init_data: string; signed: boolean }> => invoke("webapp_init", { bot, startParam: start_param ?? null }),
+  /** The bot's menu button. */
+  webappMenu:         (bot: string): Promise<{ type: string; text?: string; web_app?: { url: string } }> => invoke("webapp_menu", { bot }),
   getChatTtl:         (peer_id: string): Promise<number> => invoke("get_chat_ttl", { peerId: peer_id }),
   /** Set a 1:1 chat's auto-delete timer (shared with the other person). */
   setChatTtl:         (peer_id: string, secs: number): Promise<void> => invoke("set_chat_ttl", { peerId: peer_id, secs }),

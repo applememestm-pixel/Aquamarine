@@ -1556,4 +1556,13 @@ export const RU: Record<string, string> = {
   "Off — they won't see when you've read their messages": "Выкл. — собеседник не увидит, что вы прочитали его сообщения",
   "On — they see ✓✓ when you open the chat": "Вкл. — собеседник видит ✓✓, когда вы открываете чат",
   "Ghost mode is on: no read receipts are sent anywhere.": "Включён режим призрака: отметки о прочтении не отправляются нигде.",
+  "Sharing a contact or location with bots isn't supported yet": "Отправка контакта или геопозиции ботам пока не поддерживается",
+  "Bot keyboard": "Клавиатура бота",
+  "Mini app": "Мини-приложение",
+  "not verified": "без подписи",
+  "Reload": "Обновить",
+  "This mini app has a broken address.": "У мини-приложения неправильный адрес.",
+  "Close the mini app?": "Закрыть мини-приложение?",
+  "Changes you made may not be saved.": "Изменения могут не сохраниться.",
+  "This mini app can't send data from here": "Отсюда мини-приложение не может отправить данные",
 };

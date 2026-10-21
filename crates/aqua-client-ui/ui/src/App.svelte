@@ -29,6 +29,7 @@
   import ArticleReader from "./lib/components/ArticleReader.svelte";
   import CircleRecorder from "./lib/components/CircleRecorder.svelte";
   import PackSheet from "./lib/components/PackSheet.svelte";
+  import MiniApp from "./lib/components/MiniApp.svelte";
   import StickerEditor from "./lib/components/StickerEditor.svelte";
   import PackManager from "./lib/components/PackManager.svelte";
   import RegistrationWizard from "./lib/components/RegistrationWizard.svelte";
@@ -282,6 +283,7 @@
 <ShortcutsHelp />
 <ImageCropper />
 <PackSheet />
+<MiniApp />
 <Toast />
 {#if gpuAsk > 0}
   <div class="gpu-ask" role="alertdialog" aria-live="assertive">

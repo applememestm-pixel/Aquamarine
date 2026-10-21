@@ -38,6 +38,8 @@
   import { openPackSheet } from "./PackSheet.svelte";
   import { ghost, noReceiptChats, setReceipts } from "../ghost";
   import { TTL_PRESETS, ttlLabel, ttlShort, ttlNote } from "../ttl";
+  import { parseBotText, type BotKb, type KbButton } from "../botkb";
+  import { openMiniApp } from "./MiniApp.svelte";
   import GroupCallPanel from "./GroupCallPanel.svelte";
   import { groupCall, activeGroupCalls, joinGroupCall } from "../groupCall";
   import { postBlock, tagOf, canSendKind, isAdmin, can, roomsOf, setOpenRoom } from "../groupRules";
@@ -957,6 +959,60 @@
   let myUsername = $derived($info?.username ?? "");
   let isGroup = $derived($activeChat?.id?.startsWith("grp_") ?? false);
   let activeGroup = $derived($activeChat ? $groupMap[$activeChat.id] : undefined);
+
+  // ---- Bots: keyboards, mini apps, menu button ----
+  let isBotChat = $derived(!!$activeChat && $activeChat.live && !$activeChat.has_lock && !$activeChat.id.startsWith("grp_"));
+  let kbBusy = $state<string | null>(null);
+  /** The reply keyboard the bot left open (newest bot message that set or removed one). */
+  let replyKb = $derived.by<BotKb | null>(() => {
+    if (!isBotChat) return null;
+    const msgs = $activeMessages;
+    let mineAfter = false;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m.from === "me") { mineAfter = true; continue; }
+      if (m.kind.type !== "text" || !m.kind.content.text.startsWith("[kb:v1]")) continue;
+      const { kb } = parseBotText(m.kind.content.text);
+      if (!kb || kb.kind === "inline") continue;
+      if (kb.kind === "remove") return null;
+      if (kb.once && mineAfter) return null;
+      return kb;
+    }
+    return null;
+  });
+  let replyKbHidden = $state(false);
+  $effect(() => { void replyKb; replyKbHidden = false; });
+  let botMenu = $state<{ text: string; url: string } | null>(null);
+  $effect(() => {
+    const id = $activeChat?.id;
+    botMenu = null;
+    if (!id || !isBotChat) return;
+    api.webappMenu(id).then((m) => {
+      if ($activeChat?.id === id && m?.type === "web_app" && m.web_app?.url) botMenu = { text: m.text || tr("Open"), url: m.web_app.url };
+    }).catch(() => {});
+  });
+  async function pressKb(b: KbButton, kb: BotKb) {
+    const chat = $activeChat;
+    if (!chat) return;
+    if (b.url) { void api.openExternal(b.url).catch(() => {}); return; }
+    if (b.wa) { openMiniApp({ bot: chat.id, url: b.wa, buttonText: b.t, from: kb.kind === "reply" ? "reply" : "inline" }); return; }
+    if (b.contact || b.location) { showToast(tr("Sharing a contact or location with bots isn't supported yet")); return; }
+    if (b.q !== undefined) { composerEl?.insert(`@${chat.id} ${b.q}`); return; }
+    if (b.cb !== undefined && kb.kind === "inline") {
+      const key = `${kb.m}:${b.cb}`;
+      kbBusy = key;
+      try { await api.botSendRaw(chat.id, "[cb:v1]" + JSON.stringify({ m: kb.m, d: b.cb })); }
+      catch (e) { showToast(String(e)); }
+      finally { setTimeout(() => { if (kbBusy === key) kbBusy = null; }, 900); }
+      return;
+    }
+    // Reply keyboard: the label is an ordinary message, like in Telegram.
+    try {
+      await api.sendMessage(chat.id, b.t);
+      await loadActiveMessages();
+      chats.set(await api.listChats());
+    } catch (e) { showToast(String(e)); }
+  }
 
   // ---- Auto-delete timer + read receipts of this chat (header ⏱ menu) ----
   let chatTtl = $state(0);
@@ -2518,6 +2574,30 @@
                     {@render statusTick(m.outgoing)}
                   </span>
                 </div>
+              {:else if m.kind.type === "text" && isBotChat && m.kind.content.text.startsWith("[kb:v1]")}
+                {@const pb = parseBotText(m.kind.content.text)}
+                <div class="bubble">
+                  {@render msgBody(pb.body)}
+                  <span class="bubble-meta">
+                    {@render msgFlags(m)}
+                    {m.time}
+                  </span>
+                </div>
+                {#if pb.kb?.kind === "inline" && pb.kb.rows?.length}
+                  {@const kb = pb.kb}
+                  <div class="ikb">
+                    {#each kb.rows ?? [] as row, ri (ri)}
+                      <div class="ikb-row">
+                        {#each row as b, bi (bi)}
+                          <button class="ikb-btn" class:busy={kbBusy === `${kb.m}:${b.cb}`} onclick={() => pressKb(b, kb)} title={b.url ?? b.wa ?? ""}>
+                            <span>{b.t}</span>
+                            {#if b.url}<i class="ikb-ic">↗</i>{:else if b.wa}<i class="ikb-ic">◫</i>{/if}
+                          </button>
+                        {/each}
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
               {:else if m.kind.type === "text"}
                 <div class="bubble">
                   {@render msgBody(m.kind.content.text)}
@@ -2682,7 +2762,29 @@
         </div>
       {/if}
     {:else}
+    {#if replyKb && !replyKbHidden}
+      <div class="rkb" class:many={(replyKb.rows?.length ?? 0) > 3}>
+        {#each replyKb.rows ?? [] as row, ri (ri)}
+          <div class="rkb-row">
+            {#each row as b, bi (bi)}
+              <button class="rkb-btn" onclick={() => pressKb(b, replyKb!)}>{b.t}{#if b.wa}<i class="ikb-ic">◫</i>{/if}</button>
+            {/each}
+          </div>
+        {/each}
+      </div>
+    {/if}
     <div class="composer" class:disabled={!liveChat}>
+      {#if botMenu}
+        <button class="bot-menu-btn" onclick={() => { if ($activeChat && botMenu) openMiniApp({ bot: $activeChat.id, url: botMenu.url, from: "menu" }); }} title={botMenu.url}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="14" y2="17"/></svg>
+          <span>{botMenu.text}</span>
+        </button>
+      {/if}
+      {#if replyKb}
+        <button class="icon-btn rkb-toggle" class:on={!replyKbHidden} onclick={() => (replyKbHidden = !replyKbHidden)} title={$t("Bot keyboard")} aria-label={$t("Bot keyboard")}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><line x1="6" y1="10" x2="6.01" y2="10"/><line x1="10" y1="10" x2="10.01" y2="10"/><line x1="14" y1="10" x2="14.01" y2="10"/><line x1="18" y1="10" x2="18.01" y2="10"/><line x1="7" y1="14" x2="17" y2="14"/></svg>
+        </button>
+      {/if}
       <!-- Attach popup (Media / Article / Poll) -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="attach-wrap" onmousedown={(e) => e.stopPropagation()}>
@@ -2787,6 +2889,31 @@
 <svelte:window onmousedown={(e) => { if (ttlMenu && !(e.target as HTMLElement).closest?.(".ttl-wrap")) ttlMenu = false; }} />
 
 <style>
+  /* Bot keyboards */
+  .ikb { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; width: min(100%, 420px); }
+  .ikb-row { display: flex; gap: 4px; }
+  .ikb-btn {
+    flex: 1; min-width: 0; position: relative; display: flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 8px 10px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+    background: color-mix(in srgb, var(--bg-bubble-in) 82%, var(--accent) 18%); color: var(--fg);
+    font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; transition: background 0.12s, transform 0.08s;
+  }
+  .ikb-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ikb-btn:hover { background: color-mix(in srgb, var(--bg-bubble-in) 70%, var(--accent) 30%); }
+  .ikb-btn:active { transform: scale(0.98); }
+  .ikb-btn.busy { opacity: 0.6; }
+  .ikb-btn.busy::after { content: ""; position: absolute; right: 8px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--accent-soft); border-top-color: var(--accent); animation: ikb-rot 0.7s linear infinite; }
+  @keyframes ikb-rot { to { transform: rotate(360deg); } }
+  .ikb-ic { font-style: normal; font-size: 11px; color: var(--accent); margin-left: 6px; }
+  .rkb { display: flex; flex-direction: column; gap: 5px; padding: 8px 12px 4px; animation: ttl-pop 0.14s ease-out; }
+  .rkb.many { max-height: 190px; overflow-y: auto; }
+  .rkb-row { display: flex; gap: 5px; }
+  .rkb-btn { flex: 1; min-width: 0; padding: 10px 8px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rkb-btn:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+  .rkb-toggle.on { color: var(--accent); }
+  .bot-menu-btn { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; height: 36px; padding: 0 12px; border-radius: 10px; border: none; background: var(--accent); color: #06070C; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; max-width: 160px; }
+  .bot-menu-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bot-menu-btn svg { width: 16px; height: 16px; flex-shrink: 0; }
   .ttl-wrap { position: relative; display: inline-flex; }
   .ttl-btn { position: relative; }
   .ttl-btn.on { color: var(--accent); }

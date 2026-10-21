@@ -727,8 +727,15 @@ async fn telegram_bot_api_compat() {
         if let Message::Binary(b) = m { break serde_json::from_slice::<RelayMessage>(&b).unwrap(); }
     };
     let text = String::from_utf8(got.payload).unwrap();
-    assert!(text.starts_with("**Pick** a colour"), "{text}");
-    assert!(text.contains("1️⃣ Red") && text.contains("2️⃣ Blue"), "{text}");
+    // First line: the keyboard for the app to draw; then the text; the
+    // numbered list (for older apps) after an invisible separator.
+    let (head, rest) = text.split_once('\n').unwrap();
+    let kb: serde_json::Value = serde_json::from_str(head.strip_prefix("[kb:v1]").unwrap()).unwrap();
+    assert_eq!(kb["kind"], "inline");
+    assert_eq!(kb["m"], kb_msg);
+    assert_eq!(kb["rows"][0][1]["cb"], "c:blue");
+    assert!(rest.starts_with("**Pick** a colour\u{2063}"), "{rest}");
+    assert!(rest.contains("1️⃣ Red") && rest.contains("2️⃣ Blue"), "{rest}");
 
     // The user answers "2" → the bot gets a callback_query for "Blue".
     ws.send(Message::Binary(serde_json::to_vec(&say("2")).unwrap().into())).await.unwrap();
@@ -738,6 +745,13 @@ async fn telegram_bot_api_compat() {
     assert_eq!(cq["message"]["message_id"], kb_msg);
     assert_eq!(cq["from"]["id"], chat_id);
     let offset = ups["result"][0]["update_id"].as_i64().unwrap() + 1;
+
+    // A button pressed in the app.
+    ws.send(Message::Binary(serde_json::to_vec(&say(&format!("[cb:v1]{{\"m\":{kb_msg},\"d\":\"c:red\"}}"))).unwrap().into())).await.unwrap();
+    let ups2: serde_json::Value = http.get(format!("{api}/getUpdates?offset={offset}&timeout=5")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(ups2["result"][0]["callback_query"]["data"], "c:red", "{ups2}");
+    assert_eq!(ups2["result"][0]["callback_query"]["message"]["message_id"], kb_msg);
+    let offset = ups2["result"][0]["update_id"].as_i64().unwrap() + 1;
 
     // answerCallbackQuery with text reaches the user.
     let r: serde_json::Value = http.post(format!("{api}/answerCallbackQuery"))
@@ -852,4 +866,81 @@ async fn signup_conflict_and_password_reset() {
     let t = ticket_of(&http, &base, req("signin", email).await, email).await;
     assert!(aqua_client_core::Transport::login_account(&base, &c, &t, &s2).await.is_err());
     assert_eq!(aqua_client_core::Transport::login_account(&base, &c, &t, &s3).await.unwrap(), "resetter");
+}
+
+
+/// Mini apps: initData is signed with the bot token exactly like Telegram's
+/// (a bot can check it with the usual library code), sendData reaches the
+/// bot as web_app_data, answerWebAppQuery writes to the user, and the menu
+/// button is published.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn telegram_mini_apps() {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    let addr = spawn_server().await;
+    let base = format!("http://{addr}");
+    let http = reqwest::Client::new();
+    // A registered user.
+    let mut user = Client::new("maker");
+    user.login(&http, &base).await;
+    let code: serde_json::Value = http.post(format!("{base}/v1/auth/email/request")).json(&serde_json::json!({ "email": "mk@x.com" })).send().await.unwrap().json().await.unwrap();
+    let t: serde_json::Value = http.post(format!("{base}/v1/auth/email/verify")).json(&serde_json::json!({ "email": "mk@x.com", "code": code["dev_code"] })).send().await.unwrap().json().await.unwrap();
+    let r = http.post(format!("{base}/v1/users/register")).bearer_auth(&user.token)
+        .json(&serde_json::json!({ "ticket": t["ticket"], "username": "maker", "password": "pw-secret-hash" })).send().await.unwrap();
+    assert!(r.status().is_success());
+    let reg: serde_json::Value = http.post(format!("{base}/v1/bot/register")).bearer_auth(&user.token)
+        .json(&serde_json::json!({ "username": "shop_bot", "display_name": "Shop" }))
+        .send().await.unwrap().json().await.unwrap();
+    let tg_token = reg["telegram_token"].as_str().unwrap().to_string();
+    let api = format!("{base}/bot{tg_token}");
+    // The bot sets a menu button (and so the relay learns how it signs).
+    let r: serde_json::Value = http.post(format!("{api}/setChatMenuButton"))
+        .json(&serde_json::json!({ "menu_button": { "type": "web_app", "text": "Shop", "web_app": { "url": "https://shop.example/app" } } }))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(r["ok"], true);
+    let menu: serde_json::Value = http.get(format!("{base}/v1/webapp/menu/shop_bot")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(menu["web_app"]["url"], "https://shop.example/app");
+
+    // The user opens the app.
+    let init: serde_json::Value = http.post(format!("{base}/v1/webapp/init")).bearer_auth(&user.token)
+        .json(&serde_json::json!({ "bot": "shop_bot", "start_param": "promo" })).send().await.unwrap().json().await.unwrap();
+    assert_eq!(init["signed"], true, "{init}");
+    let data = init["init_data"].as_str().unwrap();
+    // Validate it the way Telegram's docs (and every bot library) do.
+    let mut pairs: Vec<(String, String)> = form_urlencoded::parse(data.as_bytes()).into_owned().collect();
+    let hash = pairs.iter().find(|(k, _)| k == "hash").unwrap().1.clone();
+    pairs.retain(|(k, _)| k != "hash");
+    pairs.sort();
+    let check = pairs.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("\n");
+    let mut sk = <Hmac<Sha256> as Mac>::new_from_slice(b"WebAppData").unwrap();
+    sk.update(tg_token.as_bytes());
+    let secret = sk.finalize().into_bytes();
+    let mut h = <Hmac<Sha256> as Mac>::new_from_slice(&secret).unwrap();
+    h.update(check.as_bytes());
+    assert_eq!(hex::encode(h.finalize().into_bytes()), hash);
+    let user_json: serde_json::Value = serde_json::from_str(&pairs.iter().find(|(k, _)| k == "user").unwrap().1).unwrap();
+    assert_eq!(user_json["username"], "maker");
+    assert_eq!(pairs.iter().find(|(k, _)| k == "start_param").unwrap().1, "promo");
+    let query_id = pairs.iter().find(|(k, _)| k == "query_id").unwrap().1.clone();
+
+    // sendData → web_app_data.
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=maker&token={}", user.token)).await.unwrap();
+    let say = |text: &str| RelayMessage { from: String::new(), to: "shop_bot".into(), payload: text.as_bytes().to_vec(), kind: PayloadKind::Plaintext };
+    ws.send(Message::Binary(serde_json::to_vec(&say(r#"[wad:v1]{"t":"Order","d":"{\"item\":3}"}"#)).unwrap().into())).await.unwrap();
+    let ups: serde_json::Value = http.post(format!("{api}/getUpdates")).json(&serde_json::json!({ "timeout": 5 })).send().await.unwrap().json().await.unwrap();
+    let wad = &ups["result"][0]["message"]["web_app_data"];
+    assert_eq!(wad["data"], r#"{"item":3}"#, "{ups}");
+    assert_eq!(wad["button_text"], "Order");
+
+    // answerWebAppQuery writes to the user.
+    let r: serde_json::Value = http.post(format!("{api}/answerWebAppQuery"))
+        .json(&serde_json::json!({ "web_app_query_id": query_id, "result": { "type": "article", "id": "1", "title": "x",
+            "input_message_content": { "message_text": "Order <b>#3</b> placed", "parse_mode": "HTML" } } }))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(r["ok"], true, "{r}");
+    let got = loop {
+        let m = tokio::time::timeout(Duration::from_secs(5), ws.next()).await.unwrap().unwrap().unwrap();
+        if let Message::Binary(b) = m { break serde_json::from_slice::<RelayMessage>(&b).unwrap(); }
+    };
+    assert_eq!(String::from_utf8(got.payload).unwrap(), "Order **#3** placed");
 }

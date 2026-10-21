@@ -806,6 +806,36 @@ async fn login_user(
     Ok(Json(LoginResp { username }))
 }
 
+// ---------- Mini apps (Telegram WebApp) ------------------------------------------
+
+#[derive(Deserialize)]
+struct WebAppInitBody {
+    bot: String,
+    #[serde(default)]
+    start_param: String,
+}
+
+/// `POST /v1/webapp/init` `{bot}` → `{init_data, signed}` for a mini app the
+/// caller opens (signed with the bot's token, as Telegram does).
+async fn webapp_init(
+    State(state): State<AppState>,
+    Caller(dh): Caller,
+    Json(body): Json<WebAppInitBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    let bot = body.bot.trim().trim_start_matches('@').to_lowercase();
+    if !state.directory.is_bot(&bot) {
+        return Err((StatusCode::NOT_FOUND, "not a bot".into()));
+    }
+    let (init_data, signed) = tgapi::init_data(&state, &bot, &me, Some(body.start_param.as_str()));
+    Ok(Json(serde_json::json!({ "init_data": init_data, "signed": signed })))
+}
+
+/// `GET /v1/webapp/menu/:bot` — the bot's menu button (`{"type":"web_app",…}` or default).
+async fn webapp_menu(State(state): State<AppState>, Path(bot): Path<String>) -> Json<serde_json::Value> {
+    Json(tgapi::menu_button(&state, &bot.trim().trim_start_matches('@').to_lowercase()))
+}
+
 // ---------- Account recovery ------------------------------------------------------
 
 #[derive(Deserialize)]
@@ -1721,6 +1751,8 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/users/search",       get(search_users))
         .route("/v1/users/login",        post(login_user))
         .route("/v1/users/reset",        post(reset_password))
+        .route("/v1/webapp/init",        post(webapp_init))
+        .route("/v1/webapp/menu/:bot",   get(webapp_menu))
         .route("/v1/me/recovery",        get(recovery_get).put(recovery_put))
         .route("/v1/devices/:user",      get(get_devices))
         .route("/v1/me/devices",         get(my_devices))

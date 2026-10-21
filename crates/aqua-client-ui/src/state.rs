@@ -1483,9 +1483,16 @@ pub fn classify_kind(text: &str) -> MessageKind {
 }
 
 /// Short human preview of a message for the chat-list line.
+/// A bot message with buttons: `[kb:v1]{…}\n<text>\u{2063}<numbered list>` → `<text>`.
+pub fn strip_bot_keyboard(text: &str) -> String {
+    let Some(rest) = text.strip_prefix("[kb:v1]") else { return text.to_string() };
+    let body = rest.split_once('\n').map(|(_, b)| b).unwrap_or("");
+    body.split('\u{2063}').next().unwrap_or("").to_string()
+}
+
 pub fn preview_for(kind: &MessageKind) -> String {
     match kind {
-        MessageKind::Text { text } => humanize_tokens(text),
+        MessageKind::Text { text } => humanize_tokens(&strip_bot_keyboard(text)),
         MessageKind::Code { .. }   => "[code]".into(),
         MessageKind::File { name, category, mime, .. } => {
             let icon = match category.as_deref() {
@@ -1535,6 +1542,12 @@ pub fn uuid_like() -> String {
 
 #[cfg(test)]
 mod preview_tests {
+    #[test]
+    fn bot_keyboard_is_hidden_in_previews() {
+        assert_eq!(super::strip_bot_keyboard("[kb:v1]{\"kind\":\"inline\"}\nPick one\u{2063}\n\n1️⃣ A"), "Pick one");
+        assert_eq!(super::strip_bot_keyboard("plain"), "plain");
+    }
+
     #[test]
     fn custom_emoji_tokens_become_emoji() {
         use super::humanize_tokens as h;

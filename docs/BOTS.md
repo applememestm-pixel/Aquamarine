@@ -252,8 +252,9 @@ curl "http://relay:7777/bot$TOKEN/getMe"
 | `update_id` | Номер в очереди бота + 1; `offset` подтверждает предыдущие обновления, как в Telegram |
 | `message.entities` | `bot_command` для текста, начинающегося с `/` |
 | `parse_mode` | HTML, MarkdownV2 и Markdown переводятся в разметку Aquamarine (`**жирный**`, `__курсив__`, `++подчёркнутый++`, `~~зачёркнутый~~`, `||скрытый||`, `` `код` ``, `[текст](ссылка)`) |
-| Встроенная клавиатура | Кнопки выводятся под текстом нумерованным списком (1️⃣ 2️⃣ …), URL-кнопки — ссылками. Ответ пользователя номером или текстом кнопки превращается в `callback_query` с её `callback_data`. Клавиатура действует 24 ч или до следующей клавиатуры этому пользователю |
-| Обычная клавиатура | Кнопки перечисляются под текстом; ответ приходит обычным сообщением, как в Telegram |
+| Встроенная клавиатура | Приложение рисует настоящие кнопки под сообщением. Нажатие кнопки с `callback_data` даёт боту `callback_query` с `message.message_id` того сообщения. URL-кнопки открывают ссылку, кнопки `web_app` — мини-приложение. Старые версии приложения видят нумерованный список (1️⃣ 2️⃣ …) и могут ответить номером или текстом кнопки |
+| Обычная клавиатура | Кнопки показываются над полем ввода (`one_time_keyboard`, `remove_keyboard`, `input_field_placeholder` учитываются); нажатие отправляет текст кнопки обычным сообщением, как в Telegram |
+| Мини-приложения | Кнопки `web_app` (во встроенной и обычной клавиатуре) и кнопка меню (`setChatMenuButton` с `type: web_app`) открывают страницу так же, как Telegram Web: во фрейме, с параметрами запуска в `#hash`. Официальный `telegram-web-app.js` работает без изменений. `initData` подписывается ретранслятором ключом бота по алгоритму Telegram (HMAC-SHA256 с ключом `HMAC-SHA256("WebAppData", токен)`), поэтому обычная проверка подписи в коде бота проходит. Ключ ретранслятор узнаёт при первом обращении бота к API после запуска. `sendData` из мини-приложения, открытого кнопкой обычной клавиатуры, приходит боту как `message.web_app_data`; `answerWebAppQuery` отправляет пользователю текст результата. Поддерживаются MainButton, SecondaryButton, BackButton, SettingsButton, всплывающие окна, CloudStorage (хранится на устройстве), полноэкранный режим, тема приложения |
 | `answerCallbackQuery` | Текст, если задан, приходит пользователю сообщением (`ℹ️ …`, при `show_alert` — `⚠️ …`) |
 | `editMessageText` | Новая версия отправляется новым сообщением |
 | Медиа (`sendPhoto`, `sendDocument`…) | Отправляются подпись и ссылка (если файл задан URL); загруженные файлы пока не пересылаются |
@@ -265,8 +266,9 @@ curl "http://relay:7777/bot$TOKEN/getMe"
 | Получение обновлений | `getUpdates` (`offset`, `limit`, `timeout` до 50 с), `setWebhook` (`url`, `secret_token`, `drop_pending_updates`), `deleteWebhook`, `getWebhookInfo` |
 | Отправка | `sendMessage`, `sendPhoto`, `sendDocument`, `sendVideo`, `sendAudio`, `sendVoice`, `sendAnimation`, `sendVideoNote`, `sendSticker`, `sendMediaGroup`, `sendLocation`, `sendVenue`, `sendContact`, `sendDice`, `sendPoll` |
 | Кнопки | `answerCallbackQuery`, `editMessageText`, `editMessageCaption`, `editMessageReplyMarkup` |
-| Сведения | `getMe`, `getChat`, `getChatMember`, `getUserProfilePhotos`, `getMyCommands`, `getMyName`, `getMyDescription`, `getMyShortDescription`, `getChatMenuButton` |
-| Принимаются без действия | `sendChatAction`, `deleteMessage(s)`, `setMyCommands`, `deleteMyCommands`, `setMyName`, `setMyDescription`, `setMyShortDescription`, `setChatMenuButton`, `setMessageReaction`, `pinChatMessage`, `unpinChatMessage`, `close`, `logOut` |
+| Мини-приложения | `setChatMenuButton`, `getChatMenuButton`, `answerWebAppQuery` |
+| Сведения | `getMe`, `getChat`, `getChatMember`, `getUserProfilePhotos`, `getMyCommands`, `getMyName`, `getMyDescription`, `getMyShortDescription` |
+| Принимаются без действия | `sendChatAction`, `deleteMessage(s)`, `setMyCommands`, `deleteMyCommands`, `setMyName`, `setMyDescription`, `setMyShortDescription`, `setMessageReaction`, `pinChatMessage`, `unpinChatMessage`, `close`, `logOut` |
 | Не поддерживаются | `forwardMessage`, `copyMessage`, `getFile` (ответ 400); остальные методы — 404 `Not Found`, как у Telegram для неизвестного метода |
 
 Ошибки возвращаются в формате Telegram: `{"ok": false, "error_code": …, "description": …}`; при превышении частоты — 429 с `parameters.retry_after`.

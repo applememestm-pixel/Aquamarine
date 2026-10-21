@@ -839,6 +839,30 @@ impl Transport {
         Ok(r.json().await?)
     }
 
+    /// Signed Telegram-style initData for a bot's mini app → (init_data, signed).
+    pub async fn webapp_init(&self, bot: &str, start_param: &str) -> Result<(String, bool), TransportError> {
+        #[derive(serde::Deserialize)]
+        struct R { init_data: String, signed: bool }
+        let url = format!("{}/v1/webapp/init", self.server_url.trim_end_matches('/'));
+        let r = self.http.post(&url).bearer_auth(self.bearer().await?)
+            .json(&serde_json::json!({ "bot": bot, "start_param": start_param })).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        let r: R = r.json().await?;
+        Ok((r.init_data, r.signed))
+    }
+
+    /// A bot's menu button (`{"type":"web_app","text":…,"web_app":{"url":…}}` or default).
+    pub async fn webapp_menu(&self, bot: &str) -> Result<serde_json::Value, TransportError> {
+        let url = format!("{}/v1/webapp/menu/{}", self.server_url.trim_end_matches('/'), bot);
+        let r = self.http.get(&url).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(r.json().await?)
+    }
+
     /// Does the account have a recovery key registered?
     pub async fn recovery_set(&self) -> Result<bool, TransportError> {
         #[derive(serde::Deserialize)]

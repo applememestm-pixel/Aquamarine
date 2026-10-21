@@ -23,11 +23,17 @@
 //!   (`setWebhook` with `secret_token`, `deleteWebhook`, `getWebhookInfo`).
 //! * `sendMessage` with `parse_mode` HTML / MarkdownV2 / Markdown, turned
 //!   into Aquamarine's markup (`**bold**`, `__italic__`, `` `code` ``…).
-//! * Inline keyboards: the buttons are listed under the text, numbered.
-//!   The user answers with the number (or the button's label) and the bot
-//!   receives a real `callback_query` with the button's `callback_data`.
-//!   URL buttons are shown as links. Reply keyboards are listed too; their
-//!   labels arrive as ordinary messages, as in Telegram.
+//! * Keyboards: the message carries the keyboard as a `[kb:v1]{…}` first
+//!   line, and the app draws real buttons (inline under the message, reply
+//!   keyboards over the message box). Pressing a callback button sends
+//!   `[cb:v1]{"m":id,"d":data}` and the bot gets a real `callback_query`.
+//!   Older apps still see the numbered list under the text and may answer
+//!   with the number or the label.
+//! * Mini apps (`web_app` buttons, the menu button): the app opens the page
+//!   in Telegram Web's iframe mode, so the official `telegram-web-app.js`
+//!   works unchanged; `initData` is signed by this relay with the bot token
+//!   exactly like Telegram does (`POST /v1/webapp/init`). `sendData` arrives
+//!   as `message.web_app_data`; `answerWebAppQuery` sends the result.
 //! * `editMessageText` / `editMessageReplyMarkup` send the new version as a
 //!   new message (Aquamarine has no bot-side edits yet); `deleteMessage`,
 //!   `sendChatAction`, `setMyCommands`… succeed.
@@ -103,6 +109,13 @@ pub struct TgState {
     webhooks: RwLock<HashMap<String, Webhook>>,
     /// Bot → running webhook pusher.
     pushers: DashMap<String, tokio::task::AbortHandle>,
+    /// Bot → HMAC-SHA256("WebAppData", token as the bot uses it): signs
+    /// mini app initData. Learned when the bot calls the API.
+    webapp_keys: DashMap<String, Vec<u8>>,
+    /// Bot → menu button (setChatMenuButton).
+    menus: DashMap<String, Value>,
+    /// Mini app query_id → (bot, user), for answerWebAppQuery.
+    queries: DashMap<String, (String, String, std::time::Instant)>,
 }
 
 impl TgState {
@@ -215,6 +228,12 @@ fn entities(text: &str) -> Option<Value> {
 /// user and the text picks one of its buttons, the update becomes a
 /// callback query.
 pub fn classify(state: &AppState, bot: &str, user: &str, text: &str) -> Option<(String, i64)> {
+    // A button pressed in the app: `[cb:v1]{"m":message_id,"d":callback_data}`.
+    if let Some(body) = text.strip_prefix(CB_PREFIX) {
+        let v: Value = serde_json::from_str(body).ok()?;
+        let data = v.get("d")?.as_str()?.chars().take(64).collect::<String>();
+        return Some((data, v.get("m").and_then(|m| m.as_i64()).unwrap_or(0)));
+    }
     let key = (bot.to_string(), user.to_string());
     let kb = state.tg.keyboards.get(&key)?.clone();
     if kb.at.elapsed() > KEYBOARD_TTL {
@@ -230,6 +249,18 @@ pub fn classify(state: &AppState, bot: &str, user: &str, text: &str) -> Option<(
         .and_then(|i| kb.buttons.get(i))
         .or_else(|| kb.buttons.iter().find(|b| b.label.trim().eq_ignore_ascii_case(t)))?;
     Some((pick.data.clone(), kb.message_id))
+}
+
+pub const CB_PREFIX: &str = "[cb:v1]";
+pub const WAD_PREFIX: &str = "[wad:v1]";
+pub const KB_PREFIX: &str = "[kb:v1]";
+
+/// `[wad:v1]{"t":button_text,"d":data}` — Telegram.WebApp.sendData().
+pub fn web_app_data(text: &str) -> Option<(String, String)> {
+    let v: Value = serde_json::from_str(text.strip_prefix(WAD_PREFIX)?).ok()?;
+    let data: String = v.get("d")?.as_str()?.chars().take(4096).collect();
+    let button: String = v.get("t").and_then(|t| t.as_str()).unwrap_or("").chars().take(64).collect();
+    Some((data, button))
 }
 
 /// A queued update in Telegram's shape.
@@ -261,6 +292,12 @@ fn update_json(state: &AppState, bot: &str, u: &BotUpdate) -> Value {
                 "data": data,
             }
         });
+    }
+    if let Some((data, button_text)) = web_app_data(&u.text) {
+        return json!({ "update_id": update_id, "message": {
+            "message_id": update_id, "from": from, "chat": chat, "date": u.ts,
+            "web_app_data": { "data": data, "button_text": button_text },
+        }});
     }
     let mut message = json!({
         "message_id": update_id,
@@ -394,6 +431,61 @@ fn format_text(text: &str, parse_mode: Option<&str>) -> String {
 fn keycap(n: usize) -> String {
     const CAPS: [&str; 10] = ["0️⃣", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣"];
     if n < 10 { CAPS[n].to_string() } else { format!("[{n}]") }
+}
+
+/// The keyboard as the app draws it (first line of the message):
+/// `{"kind":"inline"|"reply"|"remove","rows":[[{"t":label,"cb"|"url"|"wa":…}]],…}`.
+fn app_markup(markup: Option<&Value>, message_id: i64) -> Option<Value> {
+    let m = match markup? {
+        Value::String(s) => serde_json::from_str::<Value>(s).ok()?,
+        v => v.clone(),
+    };
+    let cell = |b: &Value| -> Option<Value> {
+        if let Some(t) = b.as_str() {
+            return Some(json!({ "t": t }));
+        }
+        let t = b.get("text")?.as_str()?.chars().take(64).collect::<String>();
+        let mut c = json!({ "t": t });
+        if let Some(d) = b.get("callback_data").and_then(|d| d.as_str()) {
+            c["cb"] = json!(d);
+        } else if let Some(u) = b.get("url").or_else(|| b.get("login_url").and_then(|l| l.get("url"))).and_then(|u| u.as_str()) {
+            c["url"] = json!(u);
+        } else if let Some(u) = b.get("web_app").and_then(|w| w.get("url")).and_then(|u| u.as_str()) {
+            c["wa"] = json!(u);
+        } else if let Some(q) = b.get("switch_inline_query").or_else(|| b.get("switch_inline_query_current_chat")).and_then(|q| q.as_str()) {
+            c["q"] = json!(q);
+        } else if b.get("request_contact").and_then(|x| x.as_bool()) == Some(true) {
+            c["contact"] = json!(true);
+        } else if b.get("request_location").and_then(|x| x.as_bool()) == Some(true) {
+            c["location"] = json!(true);
+        }
+        Some(c)
+    };
+    let rows = |key: &str| -> Option<Vec<Value>> {
+        Some(
+            m.get(key)?
+                .as_array()?
+                .iter()
+                .take(16)
+                .map(|row| Value::Array(row.as_array().into_iter().flatten().take(8).filter_map(cell).collect()))
+                .filter(|r| r.as_array().is_some_and(|a| !a.is_empty()))
+                .collect(),
+        )
+    };
+    if let Some(r) = rows("inline_keyboard") {
+        return Some(json!({ "kind": "inline", "m": message_id, "rows": r }));
+    }
+    if let Some(r) = rows("keyboard") {
+        return Some(json!({
+            "kind": "reply", "m": message_id, "rows": r,
+            "once": m.get("one_time_keyboard").and_then(|x| x.as_bool()).unwrap_or(false),
+            "ph": m.get("input_field_placeholder").and_then(|x| x.as_str()).unwrap_or(""),
+        }));
+    }
+    if m.get("remove_keyboard").and_then(|x| x.as_bool()) == Some(true) {
+        return Some(json!({ "kind": "remove", "m": message_id }));
+    }
+    None
 }
 
 /// Lists a reply_markup under the text; returns the answerable buttons.
@@ -538,14 +630,76 @@ async fn auth(state: &AppState, seg: &str) -> Option<String> {
         Some((n, t)) if n.chars().all(|c| c.is_ascii_digit()) => t,
         _ => token,
     };
+    let raw = seg.strip_prefix("bot").unwrap_or("").to_string();
     let token = if token.starts_with("aqbot_") { token.to_string() } else { format!("aqbot_{token}") };
     match state.directory.bot_by_token(&token) {
-        Some(b) => Some(b),
+        Some(b) => {
+            // Mini apps check initData with the token exactly as the bot has it.
+            if !state.tg.webapp_keys.contains_key(&b) {
+                state.tg.webapp_keys.insert(b.clone(), webapp_key(&raw));
+            }
+            Some(b)
+        }
         None => {
             tokio::time::sleep(Duration::from_millis(300)).await;
             None
         }
     }
+}
+
+fn hmac(key: &[u8], msg: &[u8]) -> Vec<u8> {
+    use hmac::{Hmac, Mac};
+    let mut m = <Hmac<Sha256> as Mac>::new_from_slice(key).expect("hmac key");
+    m.update(msg);
+    m.finalize().into_bytes().to_vec()
+}
+
+/// Telegram: secret_key = HMAC_SHA256(key = "WebAppData", msg = bot_token).
+fn webapp_key(token: &str) -> Vec<u8> {
+    hmac(b"WebAppData", token.as_bytes())
+}
+
+/// Signed `initData` for a mini app of `bot` opened by `user` (Telegram's
+/// format: url-encoded fields + `hash` over the sorted "k=v" lines).
+pub fn init_data(state: &AppState, bot: &str, user: &str, start_param: Option<&str>) -> (String, bool) {
+    let mut q = [0u8; 12];
+    rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut q);
+    let query_id = format!("AA{}", hex::encode(q));
+    state.tg.queries.retain(|_, v| v.2.elapsed() < Duration::from_secs(3600));
+    state.tg.queries.insert(query_id.clone(), (bot.to_string(), user.to_string(), std::time::Instant::now()));
+    let display = state.directory.display_name_of(user);
+    let u = json!({
+        "id": remember(state, user),
+        "first_name": if display.trim().is_empty() { user.to_string() } else { display },
+        "username": user,
+        "language_code": "ru",
+        "allows_write_to_pm": true,
+    });
+    let mut fields: Vec<(String, String)> = vec![
+        ("auth_date".into(), now().to_string()),
+        ("query_id".into(), query_id),
+        ("user".into(), u.to_string()),
+    ];
+    if let Some(sp) = start_param.filter(|s| !s.is_empty()) {
+        fields.push(("start_param".into(), sp.chars().take(512).collect()));
+    }
+    fields.sort();
+    let check: String = fields.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("\n");
+    let key = state.tg.webapp_keys.get(bot).map(|k| k.clone());
+    let signed = key.is_some();
+    if let Some(key) = key {
+        fields.push(("hash".into(), hex::encode(hmac(&key, check.as_bytes()))));
+    }
+    let enc: String = form_urlencoded::Serializer::new(String::new()).extend_pairs(fields.iter()).finish();
+    // The user opened the bot's app: the bot may write to them (Telegram's
+    // allows_write_to_pm).
+    state.directory.bot_peer_add(bot, user);
+    (enc, signed)
+}
+
+/// The bot's menu button, if it set a mini app one.
+pub fn menu_button(state: &AppState, bot: &str) -> Value {
+    state.tg.menus.get(bot).map(|m| m.clone()).unwrap_or(json!({ "type": "default" }))
 }
 
 /// `ANY /:bot_token/:method` — the Telegram Bot API entry point.
@@ -650,7 +804,7 @@ pub async fn handle(
             ok(json!(true))
         }
         "sendchataction" | "deletemessage" | "deletemessages" | "setmydescription" | "setmyshortdescription"
-        | "setmyname" | "setchatmenubutton" | "setmydefaultadministratorrights" | "setmessagereaction" | "close"
+        | "setmyname" | "setmydefaultadministratorrights" | "setmessagereaction" | "close"
         | "logout" | "pinchatmessage" | "unpinchatmessage" | "unpinallchatmessages" => ok(json!(true)),
         "setmycommands" => {
             let cmds = match p.get("commands") {
@@ -669,7 +823,43 @@ pub async fn handle(
         "getmydescription" => ok(json!({ "description": "" })),
         "getmyshortdescription" => ok(json!({ "short_description": "" })),
         "getmyname" => ok(json!({ "name": state.directory.display_name_of(&bot) })),
-        "getchatmenubutton" => ok(json!({ "type": "default" })),
+        "getchatmenubutton" => ok(menu_button(&state, &bot)),
+        "setchatmenubutton" => {
+            let mb = match p.get("menu_button") {
+                Some(Value::String(js)) => serde_json::from_str::<Value>(js).unwrap_or(Value::Null),
+                Some(v) => v.clone(),
+                None => json!({ "type": "default" }),
+            };
+            if mb.get("type").and_then(|t| t.as_str()) == Some("web_app") {
+                state.tg.menus.insert(bot.clone(), mb);
+            } else {
+                state.tg.menus.remove(&bot);
+            }
+            ok(json!(true))
+        }
+        "answerwebappquery" => {
+            let Some(qid) = s(&p, "web_app_query_id") else { return fail(400, "Bad Request: web_app_query_id is required") };
+            let Some((qbot, user, _)) = state.tg.queries.get(qid).map(|q| q.clone()) else {
+                return fail(400, "Bad Request: query is too old or query ID is invalid");
+            };
+            if qbot != bot {
+                return fail(400, "Bad Request: query ID is invalid");
+            }
+            let result = match p.get("result") {
+                Some(Value::String(js)) => serde_json::from_str::<Value>(js).unwrap_or(Value::Null),
+                Some(v) => v.clone(),
+                None => Value::Null,
+            };
+            let content = result.get("input_message_content");
+            let text = content.and_then(|c| c.get("message_text")).and_then(|t| t.as_str())
+                .or_else(|| result.get("title").and_then(|t| t.as_str()))
+                .unwrap_or("");
+            let body = format_text(text, content.and_then(|c| c.get("parse_mode")).and_then(|x| x.as_str()));
+            if !body.trim().is_empty() {
+                crate::bot_deliver_text(&state, &bot, &user, &body).await;
+            }
+            ok(json!({ "inline_message_id": qid }))
+        }
         "getchat" => match resolve_chat(&state, &bot, p.get("chat_id")) {
             Some(u) => ok(chat_json(&state, &u)),
             None => fail(400, "Bad Request: chat not found"),
@@ -747,13 +937,21 @@ async fn send(state: &AppState, bot: &str, p: &Map<String, Value>, text: &str) -
         return fail_retry(1);
     }
     let message_id = state.tg.next_message_id(bot);
+    let app_kb = app_markup(p.get("reply_markup"), message_id);
     if !buttons.is_empty() {
         state.tg.keyboards.insert(
             (bot.to_string(), to.clone()),
             Keyboard { buttons, message_id, text: body.clone(), at: std::time::Instant::now() },
         );
     }
-    let text: String = full.chars().take(BOT_TEXT_LIMIT + 512).collect();
+    let mut text: String = full.chars().take(BOT_TEXT_LIMIT + 512).collect();
+    if let Some(kb) = app_kb {
+        // The app draws the buttons from the first line and hides the
+        // numbered list after the invisible separator.
+        let listing = text.get(body.len()..).unwrap_or("").to_string();
+        let head: String = body.chars().take(BOT_TEXT_LIMIT).collect();
+        text = format!("{KB_PREFIX}{kb}\n{head}\u{2063}{listing}");
+    }
     crate::bot_deliver_text(state, bot, &to, &text).await;
     ok(json!({
         "message_id": message_id,
@@ -932,6 +1130,30 @@ mod tests {
         // Form-encoded bodies carry reply_markup as a JSON string.
         let (_, b2) = render_markup(Some(&Value::String(markup.to_string())));
         assert_eq!(b2.len(), 2);
+    }
+
+    #[test]
+    fn app_keyboard_and_callbacks() {
+        let markup = json!({ "inline_keyboard": [[{ "text": "Yes", "callback_data": "y" }, { "text": "App", "web_app": { "url": "https://a.b" } }]] });
+        let kb = app_markup(Some(&markup), 7).unwrap();
+        assert_eq!(kb["kind"], "inline");
+        assert_eq!(kb["rows"][0][0]["cb"], "y");
+        assert_eq!(kb["rows"][0][1]["wa"], "https://a.b");
+        let reply = app_markup(Some(&json!({ "keyboard": [["A", { "text": "B" }]], "one_time_keyboard": true })), 8).unwrap();
+        assert_eq!(reply["kind"], "reply");
+        assert_eq!(reply["once"], true);
+        assert_eq!(reply["rows"][0][1]["t"], "B");
+        assert_eq!(app_markup(Some(&json!({ "remove_keyboard": true })), 9).unwrap()["kind"], "remove");
+        assert_eq!(web_app_data(r#"[wad:v1]{"t":"Go","d":"42"}"#), Some(("42".into(), "Go".into())));
+    }
+
+    #[test]
+    fn webapp_signature_matches_telegram() {
+        // Telegram's check: hex(HMAC(HMAC("WebAppData", token), data_check_string)).
+        let key = webapp_key("123:ABC");
+        let sig = hex::encode(hmac(&key, b"auth_date=1\nquery_id=AA\nuser={}"));
+        assert_eq!(sig.len(), 64);
+        assert_ne!(webapp_key("123:ABC"), webapp_key("aqbot_ABC"));
     }
 
     #[test]

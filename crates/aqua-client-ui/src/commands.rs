@@ -2868,13 +2868,50 @@ async fn on_incoming_plaintext(app: &AppHandle, from: String, text: String) {
             s.chat_order.insert(0, from.clone());
         }
         push_peer_message(&mut s, &from, text.clone(), &time);
+        if is_new_chat {
+            if let Some(b) = s.chats.get_mut(&from) { b.summary.preview = crate::state::strip_bot_keyboard(&text); }
+        }
     }
     let _ = app.emit("aqua://incoming", IncomingEventPayload {
         peer_id: from,
-        text,
+        text: crate::state::strip_bot_keyboard(&text),
         time,
         is_new_chat,
     });
+}
+
+/// Send text to a bot WITHOUT showing it in the chat: a pressed button
+/// (`[cb:v1]…`) or mini app data (`[wad:v1]…`).
+#[tauri::command]
+pub async fn bot_send_raw(state: State<'_, StdMutex<AppState>>, peer_id: String, text: String) -> Result<(), String> {
+    if !(text.starts_with("[cb:v1]") || text.starts_with("[wad:v1]")) {
+        return Err("only button presses and mini app data go this way".into());
+    }
+    let transport = {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        let bot_chat = s.chats.get(&peer_id).map(|c| c.summary.live && !c.summary.has_lock).unwrap_or(false);
+        if !bot_chat { return Err("not a bot chat".into()); }
+        s.transport.clone().ok_or("not connected to a server")?
+    };
+    transport.send_plaintext(&peer_id, &text).map_err(|e| format!("send: {e}"))
+}
+
+#[derive(serde::Serialize)]
+pub struct WebAppInit { pub init_data: String, pub signed: bool }
+
+/// initData for a bot's mini app, signed by the relay with the bot token.
+#[tauri::command]
+pub async fn webapp_init(state: State<'_, StdMutex<AppState>>, bot: String, start_param: Option<String>) -> Result<WebAppInit, String> {
+    let t = { state.lock().map_err(|e| e.to_string())?.transport.clone().ok_or("not connected to a server")? };
+    let (init_data, signed) = t.webapp_init(&bot, start_param.as_deref().unwrap_or("")).await.map_err(|e| e.to_string())?;
+    Ok(WebAppInit { init_data, signed })
+}
+
+/// The bot's menu button (mini app) — `{"type":"default"}` when it has none.
+#[tauri::command]
+pub async fn webapp_menu(state: State<'_, StdMutex<AppState>>, bot: String) -> Result<serde_json::Value, String> {
+    let t = { state.lock().map_err(|e| e.to_string())?.transport.clone().ok_or("not connected to a server")? };
+    t.webapp_menu(&bot).await.map_err(|e| e.to_string())
 }
 
 async fn on_incoming_initial(
