@@ -35,7 +35,7 @@
   import { notePeerProfileVersion, avatars, clans, peerCards } from "../people";
   import { profile as myProfile } from "../profile";
   import { isPublic } from "../privacy";
-  import type { ForwardAuthor } from "./ForwardPicker.svelte";
+  import { fwdHeader, type ForwardAuthor } from "./ForwardPicker.svelte";
   import ClanTag from "./ClanTag.svelte";
   import { keepOnScreen } from "../actions";
   import { openPackSheet } from "./PackSheet.svelte";
@@ -1444,11 +1444,28 @@
   // ---- In-chat search ----
   let searchOpen = $state(false);
   let searchQuery = $state("");
+  /** Search by reaction: only reactions that occur in this chat are offered
+   *  (computed while the search bar is open, from the local reaction map). */
+  let searchReact = $state("");
+  let chatReactions = $derived.by<{ emoji: string; n: number }[]>(() => {
+    if (!searchOpen) return [];
+    const count = new Map<string, number>();
+    for (const m of rows) {
+      if (m.kind.type === "system" || m.kind.type === "date_separator") continue;
+      const r = $reactions[reactionKey(m)];
+      if (!r) continue;
+      for (const e of new Set([...r.mine, ...Object.keys(r.peer)])) count.set(e, (count.get(e) ?? 0) + 1);
+    }
+    return [...count.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([emoji, n]) => ({ emoji, n }));
+  });
   let searchHits = $derived.by<string[]>(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return [];
-    return $activeMessages
-      .filter((m) => (textOf(m) ?? "").toLowerCase().includes(q))
+    const re = searchReact;
+    if (!q && !re) return [];
+    return rows
+      .filter((m) => m.kind.type !== "system" && m.kind.type !== "date_separator")
+      .filter((m) => !q || (textOf(m) ?? "").toLowerCase().includes(q))
+      .filter((m) => { if (!re) return true; const r = $reactions[reactionKey(m)]; return !!r && (r.mine.includes(re) || !!r.peer[re]); })
       .map((m) => m.id);
   });
   let searchIdx = $state(0);
@@ -1463,7 +1480,7 @@
     searchOpen = true;
     queueMicrotask(() => document.querySelector<HTMLInputElement>("#chat-search-input")?.focus());
   }
-  function closeSearch() { searchOpen = false; searchQuery = ""; searchIdx = 0; }
+  function closeSearch() { searchOpen = false; searchQuery = ""; searchReact = ""; searchIdx = 0; }
   async function scrollToHit() {
     const id = searchHits[searchIdx];
     if (!id || !messagesEl) return;
@@ -1869,7 +1886,31 @@
     } catch (err) { showToast(String(err), 7000); }
   }
 
+  /** The private "save to Saved Messages" reaction (⭐ by default). */
+  let favEmoji = $derived($settings.favReaction ?? "⭐");
+  async function saveToFavorites(row: Row, on: boolean) {
+    if (!on) { showToast(tr("Removed the mark — the copy stays in Saved Messages")); return; }
+    const it = forwardItemOf(row);
+    if (!it) { showToast(tr("This message can't be saved (not downloaded)")); return; }
+    const h = fwdHeader(it.author);
+    try {
+      if (it.kind === "text") await api.sendMessage("__saved__", h ? `[fwd:v1]${h}\n${it.text}` : it.text);
+      else if (h) await api.forwardFile("__saved__", it.path, h);
+      else await api.attachFile("__saved__", it.path);
+      chats.set(await api.listChats());
+      showToast(tr("Saved to Saved Messages"));
+    } catch (e) { showToast(String(e)); }
+  }
+
   function reactTo(row: Row, emoji: string) {
+    if (favEmoji && emoji === favEmoji && $activeChat?.id !== "__saved__") {
+      // Private: marks the message here and copies it to Saved Messages; the
+      // other side never sees this reaction.
+      const added = toggleMyReaction(reactionKey(row), emoji);
+      void saveToFavorites(row, added);
+      closeMenu();
+      return;
+    }
     if (allowedReactions && !allowedReactions.includes(emoji)) { closeMenu(); return; }
     const key = reactionKey(row);
     const added = toggleMyReaction(key, emoji);
@@ -1882,6 +1923,7 @@
   function toggleChipReaction(row: Row, emoji: string) {
     const key = reactionKey(row);
     const added = toggleMyReaction(key, emoji);
+    if (favEmoji && emoji === favEmoji) { void saveToFavorites(row, added); return; }
     const peer = $activeChat?.id;
     if (peer && $activeChat?.live) {
       void sendChatControl(peer, "[react:v1]" + JSON.stringify({ key, emoji, add: added })).catch(() => {});
@@ -2272,6 +2314,19 @@
         <button class="sb-btn" title={$t("Next (Enter)")} onclick={searchNext} disabled={searchHits.length === 0}>↓</button>
         <button class="sb-btn" title={$t("Close (Esc)")} onclick={closeSearch}>×</button>
       </div>
+      {#if chatReactions.length}
+        <div class="sb-reacts" role="toolbar" aria-label={$t("Find by reaction")}>
+          <span class="sb-rl">{$t("By reaction")}</span>
+          {#each chatReactions as r (r.emoji)}
+            {@const ru = reactionUrl(r.emoji, $reactionPack.items)}
+            <button class="sb-react" class:on={searchReact === r.emoji} title={parseReaction(r.emoji).emoji}
+              onclick={() => { searchReact = searchReact === r.emoji ? "" : r.emoji; searchIdx = Math.max(0, searchHits.length - 1); void tick().then(scrollToHit); }}>
+              {#if ru}<span class="sbr-media"><AnimatedMedia src={ru.url} mime={ru.mime} alt={parseReaction(r.emoji).emoji} play="hover" /></span>{:else}{parseReaction(r.emoji).emoji}{/if}
+              <i>{r.n}</i>
+            </button>
+          {/each}
+        </div>
+      {/if}
     {/if}
 
     {#if pinned}
@@ -2713,7 +2768,10 @@
               {#each $emojiPacks.filter((p, i, all) => all.findIndex((q) => q.name === p.name) === i) as p (p.name)}<button class:on={reactTab === p.name} onclick={() => (reactTab = p.name)} title={p.title}>{p.title}</button>{/each}
             </div>
           {/if}
-          {#each [...new Set(filterReactions(reactTokens))] as r (r)}
+          {#if favEmoji && !reactAll && $activeChat?.id !== "__saved__"}
+            <button class="ctx-emoji fav" onclick={() => reactTo(row, favEmoji)} title={$t("Save to Saved Messages (only you see this mark)")}>{favEmoji}</button>
+          {/if}
+          {#each [...new Set(filterReactions(reactTokens))].filter((r) => r !== favEmoji) as r (r)}
             {@const ru = reactionUrl(r, $reactionPack.items)}
             <button class="ctx-emoji" class:pack={!!ru} onclick={() => reactTo(row, r)} title={`React ${parseReaction(r).emoji}`}>
               {#if ru}<AnimatedMedia src={ru.url} mime={ru.mime} alt={parseReaction(r).emoji} play={reactAll ? "hover" : "auto"} />{:else}{r}{/if}
@@ -2961,6 +3019,15 @@
 <svelte:window onmousedown={(e) => { if (ttlMenu && !(e.target as HTMLElement).closest?.(".ttl-wrap")) ttlMenu = false; }} />
 
 <style>
+  .ctx-emoji.fav { position: relative; }
+  .ctx-emoji.fav::after { content: ""; position: absolute; right: -3px; top: 20%; bottom: 20%; width: 1px; background: var(--border-strong); }
+  .sb-reacts { display: flex; align-items: center; gap: 5px; padding: 4px 14px 8px; overflow-x: auto; scrollbar-width: none; animation: ttl-pop 0.14s ease-out; }
+  .sb-rl { font-size: 11px; font-weight: 700; color: var(--fg-dim); text-transform: uppercase; letter-spacing: 0.04em; margin-right: 4px; white-space: nowrap; }
+  .sb-react { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 14px; cursor: pointer; flex-shrink: 0; }
+  .sb-react i { font-style: normal; font-size: 11px; color: var(--fg-dim); }
+  .sb-react.on { border-color: var(--accent); background: var(--accent-soft); }
+  .sbr-media { width: 18px; height: 18px; display: inline-grid; }
+  .sbr-media :global(img), .sbr-media :global(video), .sbr-media :global(canvas) { width: 18px; height: 18px; object-fit: contain; }
   .card-meta { font-size: 10.5px; color: var(--fg-dim); padding: 2px 6px 0; font-variant-numeric: tabular-nums; }
   :global(.flash) .bubble, :global(.flash) .ev, :global(.flash) .tl { animation: msg-flash 1.3s ease-out; }
   @keyframes msg-flash { 0%, 30% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }

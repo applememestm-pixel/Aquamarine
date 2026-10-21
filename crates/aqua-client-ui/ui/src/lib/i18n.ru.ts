@@ -1654,4 +1654,12 @@ export const RU: Record<string, string> = {
   "4 h": "4 ч",
   "8 h": "8 ч",
   "1 d": "1 день",
+  "Removed the mark — the copy stays in Saved Messages": "Отметка снята — копия осталась в Избранном",
+  "This message can't be saved (not downloaded)": "Это сообщение нельзя сохранить (не скачано)",
+  "Saved to Saved Messages": "Сохранено в Избранное",
+  "Find by reaction": "Поиск по реакции",
+  "By reaction": "По реакции",
+  "Save to Saved Messages (only you see this mark)": "Сохранить в Избранное (эту отметку видите только вы)",
+  "Save-to-favourites reaction": "Реакция «в Избранное»",
+  "React with it and the message is copied to Saved Messages. Only you see this reaction.": "Поставьте её — и сообщение скопируется в Избранное. Эту реакцию видите только вы.",
 };

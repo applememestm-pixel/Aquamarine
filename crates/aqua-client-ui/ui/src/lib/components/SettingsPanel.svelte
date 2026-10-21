@@ -1247,6 +1247,15 @@
       {#if section === "behaviour"}
       <section class="group">
         <div class="label">{$t("Media")}</div>
+        <div class="row">
+          <span class="row-label">{$t("Save-to-favourites reaction")}</span>
+          <div class="seg">
+            {#each ["⭐", "🔖", "📌", "💾", ""] as e (e)}
+              <button class="seg-opt" class:active={($settings.favReaction ?? "⭐") === e} onclick={() => settings.update((x) => ({ ...x, favReaction: e }))}>{e || $t("Off")}</button>
+            {/each}
+          </div>
+        </div>
+        <div class="foot-note" style="margin:0 0 8px">{$t("React with it and the message is copied to Saved Messages. Only you see this reaction.")}</div>
         <button class="toggle-row" onclick={() => setFlag("autoplayGifs")}>
           <div class="tr-text"><div class="tr-title">{$t("Autoplay GIFs")}</div><div class="tr-sub">{$t("Off: GIFs wait for a click")}</div></div>
           <span class="switch" class:on={$settings.autoplayGifs}></span>

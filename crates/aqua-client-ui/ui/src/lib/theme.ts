@@ -186,6 +186,8 @@ export interface Settings {
   // --- Sounds ---
   /** Message sound: built-in id ("ding", "pop", …) or "file:<name>". */
   messageSound: string;
+  /** Reacting with this emoji saves the message to Saved Messages (private, not sent). "" = off. */
+  favReaction?: string;
   /** Calendar reminders (a different sound by default). */
   reminderSound?: string;
   soundVolume: number;     // 0–1
