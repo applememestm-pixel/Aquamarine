@@ -13,6 +13,7 @@
 
 <script lang="ts">
   import { appIconUrl } from "../appIcon";
+  import ServerPicker from "./ServerPicker.svelte";
   import { t, tr } from "../i18n";
   import { api } from "../tauri";
   import { info, chats } from "../stores";
@@ -360,10 +361,11 @@
           </div>
         {/if}
         <div class="form">
-          <label class="field">
+          <div class="field">
             <span>{$t("Server")}</span>
-            <input bind:value={serverUrl} placeholder={DEFAULT_SERVER} />
-          </label>
+            <ServerPicker bind:value={serverUrl} placeholder={DEFAULT_SERVER}
+              defaults={IS_ANDROID ? ["http://10.0.2.2:7777"] : ["http://127.0.0.1:7777"]} />
+          </div>
           <label class="field">
             <span>{$t("Email")}</span>
             <input bind:value={email} type="email" autocomplete="email" placeholder={$t("you@example.com")} />

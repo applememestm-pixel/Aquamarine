@@ -19,6 +19,7 @@ pub mod multidev;
 pub mod autodelete;
 pub mod windows;
 pub mod bluetooth;
+pub mod servers;
 
 use anyhow::Result;
 use tauri::Manager;
@@ -146,6 +147,8 @@ pub fn run() -> Result<()> {
             personal::list_wallpapers,
             personal::delete_wallpaper,
             commands::fed_peers,
+            servers::probe_servers,
+            servers::scan_lan_relays,
             backups::backup_status,
             backups::backup_enable,
             backups::backup_phrase,

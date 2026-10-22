@@ -1799,7 +1799,8 @@ async fn admin_page(State(state): State<AppState>) -> impl IntoResponse {
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        include_str!("admin.html").to_string(),
+        // The app icon, inlined so the panel needs nothing but this response.
+        include_str!("admin.html").replace("__LOGO__", concat!("data:image/webp;base64,", include_str!("admin-logo.b64"))),
     )
 }
 

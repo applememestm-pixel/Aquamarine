@@ -7,6 +7,14 @@ import { listen } from "@tauri-apps/api/event";
  * is the fast path for inline media (images, video, audio, stickers);
  * `read_media_bytes` stays as a fallback for odd cases.
  */
+/** One relay in the sign-in server picker (servers.rs). */
+export interface ServerProbe {
+  url: string; host: string; port: number; ip: string | null;
+  scope: "loopback" | "lan" | "emulator" | "public" | null;
+  ok: boolean; ms: number | null; users: number | null; online: number | null;
+  country: string | null; country_code: string | null; city: string | null;
+}
+
 export function assetUrl(path: string | null | undefined): string {
   if (!path) return "";
   try { return convertFileSrc(path); } catch { return ""; }
@@ -91,6 +99,8 @@ export const api = {
   renameDevice:       (id: string, name: string): Promise<void> => invoke("rename_device", { id, name }),
   loginAccount:       (server_url: string, ticket: string, password: string, email?: string): Promise<string> => invoke("login_account", { serverUrl: server_url, ticket, password, email: email || null }),
   fedPeers:           (server_url: string): Promise<{ federated: boolean; self?: string; servers: string[] }> => invoke("fed_peers", { serverUrl: server_url }),
+  probeServers:       (urls: string[]): Promise<ServerProbe[]>                  => invoke("probe_servers", { urls }),
+  scanLanRelays:      (port?: number): Promise<string[]>                        => invoke("scan_lan_relays", { port: port ?? null }),
   backupStatus:       (): Promise<BackupStatus> => invoke("backup_status"),
   backupEnable:       (password: string): Promise<string> => invoke("backup_enable", { password }),
   backupPhrase:       (): Promise<string | null> => invoke("backup_phrase"),
