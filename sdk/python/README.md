@@ -12,6 +12,25 @@ pip install "git+https://github.com/applememestm-pixel/Aquamarine#subdirectory=s
 pip install aquamarine-bot
 ```
 
+
+## Кнопки, разметка и остальной API
+
+```python
+@bot.command("pick", help="выбрать цвет")      # строки help становятся меню «/» в приложении
+def pick(ctx):
+    ctx.reply("**Какой?**", parse_mode="Markdown",
+              buttons=[[{"text": "Красный", "data": "c:red"}, {"text": "Синий", "data": "c:blue"}],
+                       [{"text": "Сайт", "url": "https://example.org"}]])
+
+@bot.callback(r"^c:")                           # нажатая кнопка
+def chosen(ctx):
+    ctx.reply("Вы выбрали " + ctx.callback[2:])
+```
+
+В `bot.api` есть также `edit`, `broadcast`, `contacts`, `user`, `stats`, `set_commands`,
+`set_profile`, `set_webhook` / `delete_webhook` и `call(метод, **параметры)` — любой метод
+Telegram Bot API. Полная таблица — [docs/bots.md, раздел 10](../../docs/bots.md#10-справочник-всех-функций).
+
 ## Бот с нейросетью за 6 строк
 
 ```python

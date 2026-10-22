@@ -1656,6 +1656,13 @@ impl Directory {
         ).ok()
     }
 
+    /// Is there an account (user or bot) with this name?
+    pub fn user_exists(&self, username: &str) -> bool {
+        let username = username.trim().to_lowercase();
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT 1 FROM users WHERE username=?1", rusqlite::params![username], |_| Ok(())).is_ok()
+    }
+
     /// Is this username a registered bot?
     pub fn is_bot(&self, username: &str) -> bool {
         let username = username.trim().to_lowercase();

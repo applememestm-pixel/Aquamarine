@@ -11,12 +11,15 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 from ._http import HTTPError, request
 
 #: The relay refuses longer texts (413).
 MAX_TEXT = 4096
+
+#: ``["Yes", "No"]``, or rows of strings / ``{"text", "data" | "url" | "app"}``.
+Buttons = Sequence[Any]
 
 
 class BotError(Exception):
@@ -44,6 +47,14 @@ class Update:
     text: str
     ts: int = 0
     raw: dict = field(default_factory=dict, repr=False)
+    #: A button of the bot's keyboard was pressed: its ``data`` (else None).
+    callback: Optional[str] = None
+    #: The message that keyboard belonged to.
+    callback_message: Optional[int] = None
+
+    @property
+    def is_callback(self) -> bool:
+        return self.callback is not None
 
     @property
     def is_command(self) -> bool:
@@ -130,13 +141,106 @@ class Client:
         timeout = max(0, min(int(timeout), 30))
         rows = self._call("GET", f"/v1/bot/updates?after={int(after)}&timeout={timeout}", timeout=timeout + 15) or []
         return [Update(id=int(r.get("id", 0)), sender=str(r.get("from", "")), text=str(r.get("text", "")),
-                       ts=int(r.get("ts", 0) or 0), raw=r) for r in rows]
+                       ts=int(r.get("ts", 0) or 0), raw=r,
+                       callback=r.get("callback"), callback_message=r.get("callback_msg")) for r in rows]
 
-    def send(self, to: str, text: str) -> int:
-        """Send ``text`` (split into several messages if longer than 4096). Returns how many were sent."""
+    def send(self, to: str, text: str, *, parse_mode: Optional[str] = None,
+             buttons: Optional[Buttons] = None, keyboard: Optional[Buttons] = None,
+             one_time: bool = False, remove_keyboard: bool = False) -> int:
+        """Send ``text`` (split if longer than 4096). Returns how many messages went out.
+
+        ``parse_mode``: "Markdown", "MarkdownV2" or "HTML".
+        ``buttons``: under the message — ``["Yes", "No"]`` or rows
+        ``[[{"text": "Open", "url": "https://…"}], [{"text": "Pay", "data": "pay"}]]``;
+        a pressed button arrives as an update with ``callback`` = its data.
+        ``keyboard``: buttons over the message box that send their text.
+        """
         parts = [p for p in split_text(text) if p.strip()]
+        extra: Dict[str, Any] = {}
+        if parse_mode:
+            extra["parse_mode"] = parse_mode
+        if remove_keyboard:
+            extra["remove_keyboard"] = True
         for i, part in enumerate(parts):
-            self._call("POST", "/v1/bot/send", body={"to": to, "text": part})
+            body: Dict[str, Any] = {"to": to, "text": part, **extra}
+            if i + 1 == len(parts):          # buttons go on the last piece
+                if buttons is not None:
+                    body["buttons"] = buttons
+                if keyboard is not None:
+                    body["keyboard"] = keyboard
+                    body["one_time"] = one_time
+            self._call("POST", "/v1/bot/send", body=body)
             if i + 1 < len(parts):
                 time.sleep(1.05)   # 1 message/s per recipient (burst 5)
         return len(parts)
+
+    def edit(self, to: str, text: str, *, message_id: Optional[int] = None,
+             parse_mode: Optional[str] = None, buttons: Optional[Buttons] = None) -> Optional[int]:
+        """A new version of a message (shown as an edit). Returns the new message id."""
+        body: Dict[str, Any] = {"to": to, "text": text}
+        if message_id is not None:
+            body["message_id"] = message_id
+        if parse_mode:
+            body["parse_mode"] = parse_mode
+        if buttons is not None:
+            body["buttons"] = buttons
+        r = self._call("POST", "/v1/bot/edit", body=body) or {}
+        return r.get("message_id")
+
+    def broadcast(self, text: str, *, parse_mode: Optional[str] = None, buttons: Optional[Buttons] = None) -> int:
+        """Send one message to every contact (in the background, at the rate limit). Returns how many."""
+        body: Dict[str, Any] = {"text": text}
+        if parse_mode:
+            body["parse_mode"] = parse_mode
+        if buttons is not None:
+            body["buttons"] = buttons
+        return int((self._call("POST", "/v1/bot/broadcast", body=body) or {}).get("queued", 0))
+
+    def contacts(self) -> List[dict]:
+        """Everyone who wrote to the bot and didn't /stop: ``[{username, display_name, id}]``."""
+        return self._call("GET", "/v1/bot/contacts") or []
+
+    def user(self, name: str) -> dict:
+        """``{username, display_name, id, is_bot, is_contact}``."""
+        return self._call("GET", "/v1/bot/user/" + name.lstrip("@"))
+
+    def commands(self) -> List[dict]:
+        return self._call("GET", "/v1/bot/commands") or []
+
+    def set_commands(self, commands: Union[Dict[str, str], Sequence[dict]]) -> None:
+        """The "/" menu users see: ``{"help": "what I can do", …}``."""
+        self._call("POST", "/v1/bot/commands", body=commands if isinstance(commands, list) else dict(commands))
+
+    def delete_commands(self) -> None:
+        self._call("DELETE", "/v1/bot/commands")
+
+    def profile(self) -> dict:
+        return self._call("GET", "/v1/bot/profile")
+
+    def set_profile(self, *, description: Optional[str] = None, short_description: Optional[str] = None) -> None:
+        body = {k: v for k, v in (("description", description), ("short_description", short_description)) if v is not None}
+        self._call("POST", "/v1/bot/profile", body=body)
+
+    def stats(self) -> dict:
+        """``{username, contacts, pending_updates, webhook, commands}``."""
+        return self._call("GET", "/v1/bot/stats")
+
+    def set_webhook(self, url: str, *, secret: Optional[str] = None, drop_pending: bool = False) -> None:
+        """Push updates to ``url`` instead of polling (``X-Telegram-Bot-Api-Secret-Token`` carries ``secret``)."""
+        body: Dict[str, Any] = {"url": url, "drop_pending": drop_pending}
+        if secret:
+            body["secret"] = secret
+        self._call("POST", "/v1/bot/webhook", body=body)
+
+    def delete_webhook(self) -> None:
+        self._call("DELETE", "/v1/bot/webhook")
+
+    def webhook(self) -> dict:
+        return self._call("GET", "/v1/bot/webhook")
+
+    def call(self, method: str, **params: Any) -> Any:
+        """Any Telegram Bot API method (``getMe``, ``sendPoll``, ``answerCallbackQuery``…). Returns its ``result``."""
+        r = self._call("POST", "/v1/bot/call/" + method, body=params) or {}
+        if isinstance(r, dict) and r.get("ok") is False:
+            raise BotError(r.get("description", "error"))
+        return r.get("result") if isinstance(r, dict) else r

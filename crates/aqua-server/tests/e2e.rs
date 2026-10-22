@@ -802,6 +802,91 @@ async fn telegram_bot_api_compat() {
     let _ = std::fs::remove_file("aqua-tg-webhooks.json");
 }
 
+/// The convenient native bot API: rich send, contacts, commands, profile,
+/// stats, broadcast and any Telegram method through /v1/bot/call.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_bot_api_extras() {
+    let addr = spawn_server().await;
+    let base = format!("http://{addr}");
+    let http = reqwest::Client::new();
+    let mut owner = Client::new("xowner");
+    owner.login(&http, &base).await;
+    let reg: serde_json::Value = http.post(format!("{base}/v1/bot/register")).bearer_auth(&owner.token)
+        .json(&serde_json::json!({ "username": "extras_bot", "display_name": "Extras" }))
+        .send().await.unwrap().json().await.unwrap();
+    let tok = reg["token"].as_str().unwrap().to_string();
+    let auth = format!("Bot {tok}");
+    let get = |path: &str| http.get(format!("{base}{path}")).header("Authorization", &auth);
+    let post = |path: &str| http.post(format!("{base}{path}")).header("Authorization", &auth);
+
+    // Nobody wrote yet.
+    let c: serde_json::Value = get("/v1/bot/contacts").send().await.unwrap().json().await.unwrap();
+    assert_eq!(c, serde_json::json!([]));
+
+    let mut user = Client::new("xuser");
+    user.login(&http, &base).await;
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=xuser&token={}", user.token)).await.unwrap();
+    let say = |text: &str| RelayMessage { from: String::new(), to: "extras_bot".into(), payload: text.as_bytes().to_vec(), kind: PayloadKind::Plaintext };
+    ws.send(Message::Binary(serde_json::to_vec(&say("/start")).unwrap().into())).await.unwrap();
+    let _ = get("/v1/bot/updates?timeout=5").send().await.unwrap();
+
+    let c: serde_json::Value = get("/v1/bot/contacts").send().await.unwrap().json().await.unwrap();
+    assert_eq!(c[0]["username"], "xuser");
+    let u: serde_json::Value = get("/v1/bot/user/@XUser").send().await.unwrap().json().await.unwrap();
+    assert_eq!((u["is_contact"].clone(), u["is_bot"].clone()), (serde_json::json!(true), serde_json::json!(false)));
+    assert_eq!(get("/v1/bot/user/nobody_here").send().await.unwrap().status(), 404);
+
+    // Rich send: Markdown + buttons → drawn keyboard, a message id back.
+    let r = post("/v1/bot/send").json(&serde_json::json!({
+        "to": "xuser", "text": "*Pick*", "parse_mode": "Markdown", "buttons": [["Yes", {"text": "No", "data": "n"}]]
+    })).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    let r: serde_json::Value = r.json().await.unwrap();
+    assert!(r["message_id"].as_i64().unwrap() > 0);
+    let got = loop {
+        let m = tokio::time::timeout(Duration::from_secs(5), ws.next()).await.unwrap().unwrap().unwrap();
+        if let Message::Binary(b) = m { break serde_json::from_slice::<RelayMessage>(&b).unwrap(); }
+    };
+    let text = String::from_utf8(got.payload).unwrap();
+    assert!(text.starts_with("[kb:v1]") && text.contains("**Pick**"), "{text}");
+    // A plain send is still 204.
+    let r = post("/v1/bot/send").json(&serde_json::json!({ "to": "xuser", "text": "plain" })).send().await.unwrap();
+    assert_eq!(r.status(), 204);
+
+    // Commands, profile, stats.
+    assert_eq!(post("/v1/bot/commands").json(&serde_json::json!({ "help": "what I can do", "/Start": "begin", "bad cmd": "x" })).send().await.unwrap().status(), 204);
+    let cmds: serde_json::Value = get("/v1/bot/commands").send().await.unwrap().json().await.unwrap();
+    assert_eq!(cmds.as_array().unwrap().len(), 2, "{cmds}");
+    assert_eq!(post("/v1/bot/profile").json(&serde_json::json!({ "description": "I help" })).send().await.unwrap().status(), 204);
+    let pr: serde_json::Value = get("/v1/bot/profile").send().await.unwrap().json().await.unwrap();
+    assert_eq!(pr["description"], "I help");
+    let st: serde_json::Value = get("/v1/bot/stats").send().await.unwrap().json().await.unwrap();
+    assert_eq!((st["contacts"].clone(), st["commands"].clone()), (serde_json::json!(1), serde_json::json!(2)));
+
+    // Any Telegram method through the native auth header.
+    let me: serde_json::Value = post("/v1/bot/call/getMe").send().await.unwrap().json().await.unwrap();
+    assert_eq!(me["result"]["username"], "extras_bot");
+    let d: serde_json::Value = post("/v1/bot/call/getMyDescription").json(&serde_json::json!({})).send().await.unwrap().json().await.unwrap();
+    assert_eq!(d["result"]["description"], "I help");
+
+    // Broadcast reaches the contact.
+    let r = post("/v1/bot/broadcast").json(&serde_json::json!({ "text": "news!" })).send().await.unwrap();
+    assert_eq!(r.status(), 202);
+    assert_eq!(r.json::<serde_json::Value>().await.unwrap()["queued"], 1);
+    let mut seen = false;
+    for _ in 0..4 {
+        let m = tokio::time::timeout(Duration::from_secs(5), ws.next()).await.unwrap().unwrap().unwrap();
+        if let Message::Binary(b) = m {
+            let msg = serde_json::from_slice::<RelayMessage>(&b).unwrap();
+            if String::from_utf8(msg.payload).unwrap() == "news!" { seen = true; break; }
+        }
+    }
+    assert!(seen);
+    // Wrong token.
+    let r = http.get(format!("{base}/v1/bot/stats")).header("Authorization", "Bot aqbot_nope").send().await.unwrap();
+    assert_eq!(r.status(), 401);
+}
+
 /// Sign-up with a taken e-mail fails at once; a forgotten password is reset
 /// with the e-mail plus the 24-word recovery key (when the account has one).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

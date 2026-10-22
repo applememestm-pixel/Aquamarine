@@ -10,6 +10,8 @@ class FakeAPI:
     def __init__(self, updates):
         self.queue = list(updates)
         self.sent = []
+        self.bodies = []
+        self.commands = None
         self.fail_send = set()
 
     def __call__(self, method, path, headers, body):
@@ -25,7 +27,15 @@ class FakeAPI:
             if body["to"] in self.fail_send:
                 return 403, {"error": "user hasn't started the bot"}, None
             self.sent.append((body["to"], body["text"]))
+            self.bodies.append(body)
             return 200, {"id": len(self.sent)}, None
+        if path == "/v1/bot/commands":
+            self.commands = body
+            return 204, b"", None
+        if path == "/v1/bot/contacts":
+            return 200, [{"username": "ann", "display_name": "Ann", "id": 1}], None
+        if path.startswith("/v1/bot/call/"):
+            return 200, {"ok": True, "result": {"method": path.rsplit("/", 1)[1], "params": body}}, None
         return 404, {}, None
 
 
@@ -121,6 +131,40 @@ class BotTests(unittest.TestCase):
 
         api, _ = self.run_bot([U(1, "ann", "/boom")], setup)
         self.assertEqual(api.sent, [("ann", "error: kaboom")])
+
+
+    def test_buttons_and_callbacks(self):
+        def setup(bot):
+            @bot.command("pick", help="choose a colour")
+            def pick(ctx):
+                ctx.reply("Pick one", buttons=["Red", {"text": "Blue", "data": "c:blue"}], parse_mode="Markdown")
+
+            @bot.callback("c:blue")
+            def blue(ctx):
+                ctx.reply("blue it is")
+
+            @bot.callback()
+            def anything(ctx):
+                ctx.reply("pressed " + ctx.callback)
+
+        cb = lambda i, data: {"id": i, "from": "ann", "text": data, "ts": 0, "callback": data, "callback_msg": 7}
+        api, _ = self.run_bot([U(1, "ann", "/pick"), cb(2, "c:blue"), cb(3, "Red")], setup)
+        self.assertEqual([t for _, t in api.sent], ["Pick one", "blue it is", "pressed Red"])
+        self.assertEqual(api.bodies[0]["buttons"][1]["data"], "c:blue")
+        self.assertEqual(api.bodies[0]["parse_mode"], "Markdown")
+        self.assertEqual(api.commands, {"pick": "choose a colour"})
+
+    def test_client_extras(self):
+        api = FakeAPI([])
+        srv = Fake(api)
+        try:
+            c = Client(srv.url, "good", retries=0)
+            self.assertEqual(c.contacts()[0]["username"], "ann")
+            r = c.call("sendPoll", chat_id="@ann", question="?")
+            self.assertEqual(r["method"], "sendPoll")
+            self.assertEqual(r["params"]["question"], "?")
+        finally:
+            srv.close()
 
 
 if __name__ == "__main__":

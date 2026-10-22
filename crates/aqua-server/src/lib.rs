@@ -32,6 +32,7 @@ pub mod fed;
 pub mod games;
 pub mod directory;
 pub mod tgapi;
+pub mod botx;
 pub mod site;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
@@ -1366,7 +1367,7 @@ fn bot_token_of(headers: &axum::http::HeaderMap, fallback: &str) -> String {
 }
 
 /// Resolve the calling bot; a wrong token costs a short delay.
-async fn bot_auth(state: &AppState, headers: &axum::http::HeaderMap, fallback: &str) -> Result<String, (StatusCode, String)> {
+pub(crate) async fn bot_auth(state: &AppState, headers: &axum::http::HeaderMap, fallback: &str) -> Result<String, (StatusCode, String)> {
     let token = bot_token_of(headers, fallback);
     match state.directory.bot_by_token(&token) {
         Some(b) => Ok(b),
@@ -1472,7 +1473,9 @@ struct BotSendBody {
     #[serde(default)]
     token: String,
     to: String,
-    text: String,
+    /// text + optional parse_mode / buttons / keyboard (botx.rs)
+    #[serde(flatten)]
+    rich: botx::Rich,
 }
 
 /// A bot program sends a plaintext message to a user. Bots answer people
@@ -1483,13 +1486,13 @@ async fn bot_send(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     Json(body): Json<BotSendBody>,
-) -> Result<StatusCode, (StatusCode, String)> {
+) -> Result<axum::response::Response, (StatusCode, String)> {
     let bot = bot_auth(&state, &headers, &body.token).await?;
     let to = body.to.trim().trim_start_matches('@').to_lowercase();
-    if body.text.trim().is_empty() {
+    if body.rich.text.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "empty text".into()));
     }
-    if body.text.chars().count() > BOT_TEXT_LIMIT {
+    if body.rich.text.chars().count() > BOT_TEXT_LIMIT {
         return Err((StatusCode::PAYLOAD_TOO_LARGE, format!("text is longer than {BOT_TEXT_LIMIT} characters")));
     }
     // The owner may also be connected under a name only the relay's
@@ -1504,8 +1507,12 @@ async fn bot_send(
     {
         return Err((StatusCode::TOO_MANY_REQUESTS, "slow down: 30 msg/s per bot, 1 msg/s per chat".into()));
     }
-    bot_deliver_text(&state, &bot, &to, &body.text).await;
-    Ok(StatusCode::NO_CONTENT)
+    // Formatting or buttons: through the Telegram layer, which draws them.
+    if body.rich.is_rich() {
+        return botx::send_rich(&state, &bot, &to, &body.rich).await.map(|v| Json(v).into_response());
+    }
+    bot_deliver_text(&state, &bot, &to, &body.rich.text).await;
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 /// A bot's text to a user: every device of the account gets it.
@@ -1853,6 +1860,15 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/bot/updates",        get(bot_updates))
         .route("/v1/bot/send",           post(bot_send))
         .route("/v1/bot/me",             get(bot_me))
+        .route("/v1/bot/call/:method",   post(botx::call))
+        .route("/v1/bot/edit",           post(botx::edit))
+        .route("/v1/bot/broadcast",      post(botx::broadcast))
+        .route("/v1/bot/contacts",       get(botx::contacts))
+        .route("/v1/bot/user/:name",     get(botx::user))
+        .route("/v1/bot/commands",       get(botx::commands_get).post(botx::commands_set).delete(botx::commands_delete))
+        .route("/v1/bot/webhook",        get(botx::webhook_get).post(botx::webhook_set).delete(botx::webhook_delete))
+        .route("/v1/bot/profile",        get(botx::profile_get).post(botx::profile_set))
+        .route("/v1/bot/stats",          get(botx::stats))
         .route("/v1/bot/:name",          axum::routing::delete(bot_delete))
         .route("/v1/backup", axum::routing::put(backup_put).get(backup_meta).delete(backup_delete)
             .layer(DefaultBodyLimit::max(BACKUP_LIMIT + 1024)))

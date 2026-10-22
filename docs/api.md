@@ -385,7 +385,16 @@
 |---|---|---|
 | `GET /v1/bot/me` | бот | `{"username", "display_name", "id"}` |
 | `GET /v1/bot/updates?after=N&timeout=25` | бот | Длинный опрос (до 30 с). Ответ — `[{"id", "from", "text", "ts", "callback"?, "callback_msg"?}]`; `after` подтверждает обновления с меньшим `id` |
-| `POST /v1/bot/send` | бот | `{"to", "text"}` → `204` |
+| `POST /v1/bot/send` | бот | `{"to", "text"}` → `204`; с `parse_mode`, `buttons`, `keyboard`, `remove_keyboard` → `{"message_id"}` |
+| `POST /v1/bot/edit` | бот | `{"to", "text", "message_id"?, "buttons"?, "parse_mode"?}` → `{"message_id"}` |
+| `POST /v1/bot/broadcast` | бот | `{"text", "parse_mode"?, "buttons"?}` → `202 {"queued"}`: всем контактам, в фоне, в пределах лимитов |
+| `GET /v1/bot/contacts` | бот | `[{"username", "display_name", "id"}]` — кому бот может писать |
+| `GET /v1/bot/user/:name` | бот | `{"username", "display_name", "id", "is_bot", "is_contact"}` |
+| `GET, POST, DELETE /v1/bot/commands` | бот | Меню команд: `[{"command", "description"}]` или `{"команда": "описание"}` |
+| `GET, POST, DELETE /v1/bot/webhook` | бот | `{"url", "secret"?, "drop_pending"?}`; `GET` — как `getWebhookInfo` |
+| `GET, POST /v1/bot/profile` | бот | `{"description"?, "short_description"?}` |
+| `GET /v1/bot/stats` | бот | `{"username", "contacts", "pending_updates", "webhook", "commands"}` |
+| `POST /v1/bot/call/:method` | бот | Любой метод Telegram Bot API с заголовком `Authorization: Bot`; ответ `{"ok", "result"}` |
 
 Бот пишет только тем, кто писал ему (и владельцу); `/stop` отзывает разрешение. Частота: 30 сообщений/с на бота, 1/с на чат (всплеск 5), опрос — 5/с. Подробно — [bots.md](bots.md).
 
@@ -502,6 +511,15 @@ x-aqua-fed: <unix_ms>.<hex HMAC-SHA256(secret, METHOD "\n" PATH "\n" unix_ms "\n
 | GET | `/v1/bot/me` | бот | 12 |
 | GET | `/v1/bot/updates` | бот | 12 |
 | POST | `/v1/bot/send` | бот | 12 |
+| POST | `/v1/bot/edit` | бот | 12 |
+| POST | `/v1/bot/broadcast` | бот | 12 |
+| GET | `/v1/bot/contacts` | бот | 12 |
+| GET | `/v1/bot/user/:name` | бот | 12 |
+| GET, POST, DELETE | `/v1/bot/commands` | бот | 12 |
+| GET, POST, DELETE | `/v1/bot/webhook` | бот | 12 |
+| GET, POST | `/v1/bot/profile` | бот | 12 |
+| GET | `/v1/bot/stats` | бот | 12 |
+| POST | `/v1/bot/call/:method` | бот | 12 |
 | GET, POST | `/bot<токен>/<метод>` | бот | 12 |
 | GET | `/v1/packs` | открытый | 13 |
 | POST | `/v1/packs/import` | сеанс | 13 |

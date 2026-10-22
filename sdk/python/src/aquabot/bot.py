@@ -60,9 +60,17 @@ class Context:
     def args(self) -> str:
         return self.update.args
 
-    def reply(self, text: Any) -> None:
-        """Answer the sender (long texts are split; /stop'ed users are skipped)."""
-        self.bot.send(self.sender, str(text))
+    @property
+    def callback(self) -> Optional[str]:
+        """Data of the pressed button (button updates only)."""
+        return self.update.callback
+
+    def reply(self, text: Any, **opts: Any) -> None:
+        """Answer the sender (long texts are split; /stop'ed users are skipped).
+
+        ``opts``: ``parse_mode``, ``buttons``, ``keyboard``, ``one_time``, ``remove_keyboard``
+        (see :meth:`Client.send`)."""
+        self.bot.send(self.sender, str(text), **opts)
 
 
 @dataclass
@@ -83,6 +91,7 @@ class Bot:
         self._commands: Dict[str, Handler] = {}
         self._help: Dict[str, str] = {}
         self._routes: List[_Route] = []
+        self._callbacks: List[_Route] = []
         self._fallback: Optional[Handler] = None
         self._on_error: Optional[Callable[[Context, BaseException], Any]] = None
         self._states: Dict[str, Dict[str, Any]] = {}
@@ -110,6 +119,18 @@ class Bot:
 
         def deco(fn: Handler) -> Handler:
             self._routes.append(_Route(fn, rx, when))
+            return fn
+        return deco
+
+    def callback(self, pattern: Union[str, Pattern, None] = None) -> Callable[[Handler], Handler]:
+        """Button presses: ``@bot.callback("yes")`` (exact data), a regex, or any press with no argument."""
+        if isinstance(pattern, str) and not any(ch in pattern for ch in "^$.*+?()[]{}|\\"):
+            rx: Optional[Pattern] = re.compile("^" + re.escape(pattern) + "$")
+        else:
+            rx = re.compile(pattern) if isinstance(pattern, str) else pattern
+
+        def deco(fn: Handler) -> Handler:
+            self._callbacks.append(_Route(fn, rx))
             return fn
         return deco
 
@@ -181,10 +202,10 @@ class Bot:
         return self
 
     # ---- sending -------------------------------------------------------------------
-    def send(self, to: str, text: str) -> bool:
+    def send(self, to: str, text: str, **opts: Any) -> bool:
         """Send to a user; False if they haven't written to the bot or sent /stop."""
         try:
-            self.api.send(to, text)
+            self.api.send(to, text, **opts)
             return True
         except Forbidden:
             log.info("can't write to @%s (no /start or /stop)", to)
@@ -207,6 +228,13 @@ class Bot:
                     self._states.pop(u.sender, None)
                     return
                 fn: Optional[Handler] = None
+                if u.is_callback:
+                    for r in self._callbacks:
+                        m = r.pattern.search(u.callback or "") if r.pattern else None
+                        if r.pattern is None or m:
+                            ctx.match = m
+                            r.fn(ctx)
+                            return
                 if u.is_command and u.command in self._commands:
                     fn = self._commands[u.command]
                 if fn is None:
@@ -246,6 +274,12 @@ class Bot:
         """Long-poll and dispatch until :meth:`stop` (or Ctrl+C). ``once``: a single poll (tests)."""
         me = self.api.me()
         self.username = me.get("username", "")
+        # The "/" menu in the app lists the commands that have a help line.
+        if self._help:
+            try:
+                self.api.set_commands(dict(self._help))
+            except Exception:  # noqa: BLE001 — older relay
+                pass
         log.info("@%s running against %s", self.username, self.api.server)
         pool = ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="aquabot")
         backoff = 1.0

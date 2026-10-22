@@ -103,6 +103,40 @@ Authorization: Bot aqbot_0123…
 
 Обе команды доставляются боту как обычные обновления.
 
+### 4.6. Кнопки и форматирование в `send`
+
+`POST /v1/bot/send` принимает, кроме `to` и `text`, необязательные поля. С любым из них ответ — `200 {"message_id"}` вместо `204`:
+
+| Поле | Значение |
+|---|---|
+| `parse_mode` | `"Markdown"`, `"MarkdownV2"` или `"HTML"` — как в Telegram |
+| `buttons` | Кнопки под сообщением: `["Да", "Нет"]` (один ряд) или ряды `[[{"text", "data"}], [{"text", "url"}], [{"text", "app"}]]`. Строка — кнопка, которая возвращает свой текст; `data` — данные нажатия; `url` открывает ссылку; `app` — мини-приложение |
+| `keyboard` | Кнопки над полем ввода, отправляют свой текст: `[["1", "2"], ["3"]]` |
+| `one_time` | Скрыть `keyboard` после нажатия |
+| `remove_keyboard` | Убрать клавиатуру над полем ввода |
+| `reply_markup` | Готовая разметка Telegram (если она уже есть) |
+
+Нажатие кнопки с `data` приходит обновлением с полями `callback` (данные) и `callback_msg` (номер сообщения с кнопками).
+
+### 4.7. Остальные методы
+
+| Метод и путь | Тело / параметры | Ответ |
+|---|---|---|
+| `POST /v1/bot/edit` | `{"to", "text", "message_id"?, "buttons"?, "parse_mode"?}` | `{"message_id"}`; правка показывается новой версией сообщения |
+| `POST /v1/bot/broadcast` | `{"text", "parse_mode"?, "buttons"?}` | `202 {"queued": N}`; рассылка всем контактам идёт в фоне в пределах лимитов (повтор при 429) |
+| `GET /v1/bot/contacts` | — | `[{"username", "display_name", "id"}]` |
+| `GET /v1/bot/user/{имя}` | — | `{"username", "display_name", "id", "is_bot", "is_contact"}`; `404`, если такого пользователя нет |
+| `GET /v1/bot/commands` | — | `[{"command", "description"}]` |
+| `POST /v1/bot/commands` | `[{"command", "description"}]` или `{"help": "что умею", …}` | `204`; до 100 команд, имя — `a–z`, `0–9`, `_`, до 32 символов |
+| `DELETE /v1/bot/commands` | — | `204` |
+| `GET /v1/bot/webhook` | — | как `getWebhookInfo` |
+| `POST /v1/bot/webhook` | `{"url", "secret"?, "drop_pending"?}` | `204`; обновления отправляются на адрес (раздел 9.5) |
+| `DELETE /v1/bot/webhook` | — | `204`; снова работает `updates` |
+| `GET /v1/bot/profile` | — | `{"username", "display_name", "description", "short_description"}` |
+| `POST /v1/bot/profile` | `{"description"?, "short_description"?}` | `204`; до 512 и 120 символов |
+| `GET /v1/bot/stats` | — | `{"username", "contacts", "pending_updates", "webhook", "commands"}` |
+| `POST /v1/bot/call/{метод}` | параметры метода Telegram (JSON) | ответ Telegram `{"ok", "result"}` — любой метод из раздела 9.4 с заголовком `Authorization: Bot` |
+
 ## 5. Ограничения
 
 | Ограничение | Значение |
@@ -269,8 +303,9 @@ curl "http://relay:7777/bot$TOKEN/getMe"
 | Отправка | `sendMessage`, `sendPhoto`, `sendDocument`, `sendVideo`, `sendAudio`, `sendVoice`, `sendAnimation`, `sendVideoNote`, `sendSticker`, `sendMediaGroup`, `sendLocation`, `sendVenue`, `sendContact`, `sendDice`, `sendPoll` |
 | Кнопки | `answerCallbackQuery`, `editMessageText`, `editMessageCaption`, `editMessageReplyMarkup` |
 | Мини-приложения | `setChatMenuButton`, `getChatMenuButton`, `answerWebAppQuery` |
-| Сведения | `getMe`, `getChat`, `getChatMember`, `getUserProfilePhotos`, `getMyCommands`, `getMyName`, `getMyDescription`, `getMyShortDescription` |
-| Принимаются без действия | `sendChatAction`, `deleteMessage(s)`, `setMyCommands`, `deleteMyCommands`, `setMyName`, `setMyDescription`, `setMyShortDescription`, `setMessageReaction`, `pinChatMessage`, `unpinChatMessage`, `close`, `logOut` |
+| Сведения | `getMe`, `getChat`, `getChatMember`, `getChatMemberCount`, `getChatAdministrators`, `getUserProfilePhotos`, `getMyName`, `getMyDescription`, `getMyShortDescription`, `getMyDefaultAdministratorRights` |
+| Настройка бота | `setMyCommands`, `getMyCommands`, `deleteMyCommands`, `setMyDescription`, `setMyShortDescription` |
+| Принимаются без действия | `sendChatAction`, `deleteMessage(s)`, `setMyName`, `setMyDefaultAdministratorRights`, `setMessageReaction`, `pinChatMessage`, `unpinChatMessage`, `unpinAllChatMessages`, `leaveChat`, `close`, `logOut` |
 | Не поддерживаются | `forwardMessage`, `copyMessage`, `getFile` (ответ 400); остальные методы — 404 `Not Found`, как у Telegram для неизвестного метода |
 
 Ошибки возвращаются в формате Telegram: `{"ok": false, "error_code": …, "description": …}`; при превышении частоты — 429 с `parameters.retry_after`.
@@ -286,3 +321,107 @@ curl "http://relay:7777/bot$TOKEN/getMe"
 Действуют ограничения раздела 5: бот пишет только тем, кто написал ему (иначе 403 `Forbidden: bot can't initiate conversation with a user`), частота отправки — 30 сообщений/с на бота и 1 сообщение/с на чат. Группы, каналы, инлайн-режим и платежи не поддерживаются. Переписка с ботом не защищена сквозным шифрованием.
 
 Проверка: интеграционный тест `crates/aqua-server/tests/e2e.rs::telegram_bot_api_compat` (вход, длинный опрос, команда, клавиатура → `callback_query`, `answerCallbackQuery`, вебхук с секретом, 409 для `getUpdates`).
+
+## 10. Справочник всех функций
+
+Сводка всего, что умеет бот: родной API ретранслятора, слой Telegram и библиотека `aquabot`. Авторизация родного API — заголовок `Authorization: Bot aqbot_…`; слоя Telegram — токен в пути `/bot<id>:aqbot_…/<метод>`.
+
+### 10.1. Родной API
+
+| Метод | Путь | Параметры | Ответ | Ошибки | Пример |
+|---|---|---|---|---|---|
+| `GET` | `/v1/bot/me` | — | `{"username", "display_name", "id"}` | 401 | проверка токена при запуске |
+| `GET` | `/v1/bot/updates` | `after`, `timeout` (0–30) | `[{"id", "from", "text", "ts", "callback"?, "callback_msg"?}]` | 401, 409 при вебхуке, 429 | длинный опрос: `after=последний id + 1`, `timeout=25` |
+| `POST` | `/v1/bot/send` | `to`, `text`, `parse_mode`?, `buttons`?, `keyboard`?, `one_time`?, `remove_keyboard`?, `reply_markup`? | `204` или `{"message_id"}` | 400, 403, 413, 429 | `{"to":"alice","text":"Выбери","buttons":["Да","Нет"]}` |
+| `POST` | `/v1/bot/edit` | `to`, `text`, `message_id`?, `parse_mode`?, `buttons`? | `{"message_id"}` | 400, 403, 429 | обновить карточку после нажатия |
+| `POST` | `/v1/bot/broadcast` | `text`, `parse_mode`?, `buttons`? | `202 {"queued"}` | 400, 413 | новости всем подписчикам |
+| `GET` | `/v1/bot/contacts` | — | `[{"username", "display_name", "id"}]` | 401 | кому можно написать |
+| `GET` | `/v1/bot/user/{имя}` | — | `{"username", "display_name", "id", "is_bot", "is_contact"}` | 404 | проверить собеседника |
+| `GET` | `/v1/bot/commands` | — | `[{"command", "description"}]` | 401 | — |
+| `POST` | `/v1/bot/commands` | список или объект `{"команда": "описание"}` | `204` | 400 | меню «/» в приложении |
+| `DELETE` | `/v1/bot/commands` | — | `204` | 401 | — |
+| `GET` | `/v1/bot/webhook` | — | `{"url", "pending_update_count", "last_error_*"?}` | 401 | — |
+| `POST` | `/v1/bot/webhook` | `url`, `secret`?, `drop_pending`? | `204` | 400 | бот за HTTPS без опроса |
+| `DELETE` | `/v1/bot/webhook` | — | `204` | 401 | вернуться к опросу |
+| `GET` | `/v1/bot/profile` | — | `{"username", "display_name", "description", "short_description"}` | 401 | — |
+| `POST` | `/v1/bot/profile` | `description`?, `short_description`? | `204` | 401 | — |
+| `GET` | `/v1/bot/stats` | — | `{"username", "contacts", "pending_updates", "webhook", "commands"}` | 401 | мониторинг |
+| `POST` | `/v1/bot/call/{метод}` | параметры метода Telegram | `{"ok", "result"}` | как у Telegram | `call/sendPoll` с `{"chat_id":"@alice","question":"?","options":["a","b"]}` |
+| `POST` | `/v1/bot/register` | `username`, `display_name` (сеанс владельца) | `{"ok", "username", "token", "telegram_token"}` | 400, 409 | создать бота или сбросить токен |
+| `GET` | `/v1/bot/list` | — (сеанс владельца) | `[{"username", "display_name", "hint"}]` | 401 | — |
+| `DELETE` | `/v1/bot/{имя}` | — (сеанс владельца) | `204` | 403, 404 | удалить бота |
+
+### 10.2. Слой Telegram Bot API
+
+| Метод | Важные параметры | Что делает в Aquamarine |
+|---|---|---|
+| `getMe` | — | Карточка бота; `can_join_groups` и прочие возможности — `false` |
+| `getUpdates` | `offset`, `limit` (1–100), `timeout` (до 50) | Длинный опрос; 409, пока задан вебхук |
+| `setWebhook` | `url`, `secret_token`, `drop_pending_updates` | Обновления отправляются `POST` на адрес, повтор с паузой 1–60 с |
+| `deleteWebhook` | `drop_pending_updates` | Снимает вебхук |
+| `getWebhookInfo` | — | Адрес, очередь, последняя ошибка |
+| `sendMessage` | `chat_id`, `text`, `parse_mode`, `reply_markup` | Сообщение с разметкой и кнопками |
+| `editMessageText` | `chat_id`, `message_id`, `text`, `reply_markup` | Новая версия отправляется новым сообщением |
+| `editMessageCaption` | `caption` | То же для подписи |
+| `editMessageReplyMarkup` | `reply_markup` | Обновляет кнопки |
+| `sendPhoto`, `sendDocument`, `sendVideo`, `sendAudio`, `sendVoice`, `sendAnimation`, `sendVideoNote`, `sendSticker`, `sendMediaGroup` | файл ссылкой, `caption` | Значок, подпись и ссылка; загруженные файлы пока не пересылаются |
+| `sendLocation`, `sendVenue` | `latitude`, `longitude`, `title` | Ссылка на карту OpenStreetMap |
+| `sendContact` | `first_name`, `phone_number` | Карточка контакта текстом |
+| `sendDice` | `emoji` | Бросок 1–6 |
+| `sendPoll` | `question`, `options` | Вопрос с пронумерованными вариантами |
+| `answerCallbackQuery` | `callback_query_id`, `text`, `show_alert` | Текст приходит пользователю (`ℹ️`/`⚠️`) |
+| `setChatMenuButton`, `getChatMenuButton` | `menu_button` (`web_app`) | Кнопка мини-приложения в чате |
+| `answerWebAppQuery` | `web_app_query_id`, `result` | Результат мини-приложения сообщением |
+| `getChat`, `getChatMember` | `chat_id` | Личный чат; участник — `member` |
+| `getChatMemberCount` | `chat_id` | 2 (личный чат) |
+| `getChatAdministrators` | `chat_id` | Пустой список |
+| `getUserProfilePhotos` | `user_id` | Пустой список |
+| `setMyCommands`, `getMyCommands`, `deleteMyCommands` | `commands` | Меню команд |
+| `setMyDescription`, `getMyDescription` | `description` | Описание бота (до 512 символов) |
+| `setMyShortDescription`, `getMyShortDescription` | `short_description` | Короткое описание (до 120 символов) |
+| `getMyName` | — | Отображаемое имя |
+| `getMyDefaultAdministratorRights` | — | Все права `false` |
+| `sendChatAction`, `deleteMessage(s)`, `setMyName`, `setMyDefaultAdministratorRights`, `setMessageReaction`, `pinChatMessage`, `unpinChatMessage`, `unpinAllChatMessages`, `leaveChat`, `close`, `logOut` | — | Принимаются, ответ `true` |
+| `forwardMessage(s)`, `copyMessage(s)`, `getFile` | — | 400: пока не поддерживаются |
+| остальные | — | 404 `Not Found`, как у Telegram |
+
+### 10.3. Библиотека `aquabot` (Python)
+
+| Вызов | Что делает |
+|---|---|
+| `Bot(server?, token?)` | Бот; адрес и токен по умолчанию из `$AQUA_SERVER`, `$AQUA_BOT_TOKEN` |
+| `@bot.command("start", help="…")` | Обработчик команды; строки `help` становятся меню «/» в приложении |
+| `@bot.message(r"regex", when=…)` | Обработчик обычных сообщений (`ctx.match`) |
+| `@bot.callback("data")` / `@bot.callback(r"^c:")` / `@bot.callback()` | Нажатие кнопки: точные данные, шаблон или любое |
+| `@bot.default` | Всё, что не обработано |
+| `@bot.on_error` | Ошибки обработчиков |
+| `bot.use_help()`, `bot.use_calc()`, `bot.use_llm(llm)` | Готовые `/help`, калькулятор, чат с нейросетью |
+| `bot.run()` / `bot.stop()` | Запуск длинного опроса / остановка |
+| `ctx.reply(text, buttons=…, keyboard=…, parse_mode=…)` | Ответ отправителю |
+| `ctx.sender`, `ctx.text`, `ctx.command`, `ctx.args`, `ctx.callback`, `ctx.state` | Отправитель, текст, команда, аргументы, данные кнопки, состояние пользователя |
+| `bot.send(to, text, **opts)` | Сообщение пользователю; `False`, если он не писал боту или отправил `/stop` |
+| `bot.api.send(...)`, `edit(...)`, `broadcast(...)` | Отправка, правка, рассылка |
+| `bot.api.contacts()`, `user(name)`, `stats()` | Контакты, карточка пользователя, статистика |
+| `bot.api.set_commands({...})`, `commands()`, `delete_commands()` | Меню команд |
+| `bot.api.set_profile(description=…)`, `profile()` | Описание бота |
+| `bot.api.set_webhook(url, secret=…)`, `webhook()`, `delete_webhook()` | Вебхук |
+| `bot.api.call("sendPoll", chat_id="@alice", …)` | Любой метод Telegram |
+
+```python
+from aquabot import Bot
+bot = Bot()
+
+@bot.command("pick", help="выбрать цвет")
+def pick(ctx):
+    ctx.reply("**Какой цвет?**", parse_mode="Markdown",
+              buttons=[[{"text": "Красный", "data": "c:red"}, {"text": "Синий", "data": "c:blue"}],
+                       [{"text": "Сайт", "url": "https://example.org"}]])
+
+@bot.callback(r"^c:")
+def chosen(ctx):
+    ctx.reply(f"Вы выбрали {ctx.callback[2:]}")
+
+bot.run()
+```
+
+Проверка: `crates/aqua-server/tests/e2e.rs::native_bot_api_extras` и `sdk/python/tests/test_bot.py`.

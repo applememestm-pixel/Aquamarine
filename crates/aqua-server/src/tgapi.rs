@@ -86,8 +86,8 @@ struct Keyboard {
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-struct Webhook {
-    url: String,
+pub(crate) struct Webhook {
+    pub(crate) url: String,
     #[serde(default)]
     secret: String,
     #[serde(skip)]
@@ -104,9 +104,9 @@ pub struct TgState {
     /// Per-bot outgoing message counters.
     counters: DashMap<String, Arc<AtomicI64>>,
     /// Bot → commands set with setMyCommands.
-    commands: DashMap<String, Value>,
+    pub(crate) commands: DashMap<String, Value>,
     /// Bot → webhook.
-    webhooks: RwLock<HashMap<String, Webhook>>,
+    pub(crate) webhooks: RwLock<HashMap<String, Webhook>>,
     /// Bot → running webhook pusher.
     pushers: DashMap<String, tokio::task::AbortHandle>,
     /// Bot → HMAC-SHA256("WebAppData", token as the bot uses it): signs
@@ -114,6 +114,8 @@ pub struct TgState {
     webapp_keys: DashMap<String, Vec<u8>>,
     /// Bot → menu button (setChatMenuButton).
     menus: DashMap<String, Value>,
+    /// Bot → (description, short description).
+    pub(crate) about: DashMap<String, (String, String)>,
     /// Mini app query_id → (bot, user), for answerWebAppQuery.
     queries: DashMap<String, (String, String, std::time::Instant)>,
 }
@@ -717,6 +719,13 @@ pub async fn handle(
         return fail(401, "Unauthorized");
     };
     let p = params(query, req).await;
+    dispatch(&state, &bot, &method, p).await
+}
+
+/// Runs one Telegram Bot API method for an authenticated bot. Also used by
+/// the native API (`/v1/bot/call/{method}`, botx.rs).
+pub(crate) async fn dispatch(state: &AppState, bot: &str, method: &str, p: Map<String, Value>) -> Response {
+    let (state, bot) = (state.clone(), bot.to_string());
     let m = method.to_ascii_lowercase();
     match m.as_str() {
         "getme" => {
@@ -804,9 +813,32 @@ pub async fn handle(
             }
             ok(json!(true))
         }
-        "sendchataction" | "deletemessage" | "deletemessages" | "setmydescription" | "setmyshortdescription"
-        | "setmyname" | "setmydefaultadministratorrights" | "setmessagereaction" | "close"
-        | "logout" | "pinchatmessage" | "unpinchatmessage" | "unpinallchatmessages" => ok(json!(true)),
+        "sendchataction" | "deletemessage" | "deletemessages" | "setmyname" | "setmydefaultadministratorrights"
+        | "setmessagereaction" | "close" | "logout" | "pinchatmessage" | "unpinchatmessage" | "unpinallchatmessages"
+        | "leavechat" => ok(json!(true)),
+        "setmydescription" => {
+            let d: String = s(&p, "description").unwrap_or("").chars().take(512).collect();
+            state.tg.about.entry(bot.clone()).or_default().0 = d;
+            ok(json!(true))
+        }
+        "setmyshortdescription" => {
+            let d: String = s(&p, "short_description").unwrap_or("").chars().take(120).collect();
+            state.tg.about.entry(bot.clone()).or_default().1 = d;
+            ok(json!(true))
+        }
+        "getmydefaultadministratorrights" => ok(json!({
+            "is_anonymous": false, "can_manage_chat": false, "can_delete_messages": false,
+            "can_manage_video_chats": false, "can_restrict_members": false, "can_promote_members": false,
+            "can_change_info": false, "can_invite_users": false,
+        })),
+        "getchatmembercount" => match resolve_chat(&state, &bot, p.get("chat_id")) {
+            Some(_) => ok(json!(2)),
+            None => fail(400, "Bad Request: chat not found"),
+        },
+        "getchatadministrators" => match resolve_chat(&state, &bot, p.get("chat_id")) {
+            Some(_) => ok(json!([])),
+            None => fail(400, "Bad Request: chat not found"),
+        },
         "setmycommands" => {
             let cmds = match p.get("commands") {
                 Some(Value::String(js)) => serde_json::from_str::<Value>(js).unwrap_or(json!([])),
@@ -821,8 +853,8 @@ pub async fn handle(
             state.tg.commands.remove(&bot);
             ok(json!(true))
         }
-        "getmydescription" => ok(json!({ "description": "" })),
-        "getmyshortdescription" => ok(json!({ "short_description": "" })),
+        "getmydescription" => ok(json!({ "description": state.tg.about.get(&bot).map(|a| a.0.clone()).unwrap_or_default() })),
+        "getmyshortdescription" => ok(json!({ "short_description": state.tg.about.get(&bot).map(|a| a.1.clone()).unwrap_or_default() })),
         "getmyname" => ok(json!({ "name": state.directory.display_name_of(&bot) })),
         "getchatmenubutton" => ok(menu_button(&state, &bot)),
         "setchatmenubutton" => {
