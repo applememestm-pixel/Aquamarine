@@ -178,9 +178,79 @@
     background:var(--ink-2);border:1px solid var(--line-str);padding:9px 15px;border-radius:12px;font-size:13.5px;font-weight:600;
     box-shadow:0 18px 40px -16px #000}
   .toast.on{opacity:1;transform:translateX(-50%)}
+
+  /* ---------- motion: a living background, cards that rise and glow ---------- */
+  .fx-bg{position:fixed;inset:0;z-index:-1;pointer-events:none;overflow:hidden}
+  .fx-grid{position:absolute;inset:0;background-image:linear-gradient(rgba(0,229,199,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(0,229,199,.045) 1px,transparent 1px);
+    background-size:52px 52px;-webkit-mask-image:radial-gradient(ellipse at 50% 15%,#000,transparent 72%);mask-image:radial-gradient(ellipse at 50% 15%,#000,transparent 72%)}
+  .fx-glow{position:absolute;border-radius:50%;filter:blur(110px);opacity:.28}
+  .fx-glow.g1{width:520px;height:520px;background:var(--accent);top:-180px;left:-140px}
+  .fx-glow.g2{width:460px;height:460px;background:var(--accent-2);bottom:-170px;right:-120px}
+  .fx-glow.g3{width:300px;height:300px;background:#1fc7e0;top:45%;left:52%;opacity:.12}
+  .fx-bg canvas{position:absolute;inset:0}
+  @media (prefers-reduced-motion:no-preference){
+    .fx-glow{animation:fx-float 16s ease-in-out infinite}
+    .fx-glow.g2{animation-delay:-8s} .fx-glow.g3{animation-duration:22s}
+    @keyframes fx-float{50%{transform:translate(46px,34px) scale(1.15)}}
+    .page:not(.hide) .rv{animation:rise .6s cubic-bezier(.2,.7,.2,1) both;animation-delay:calc(var(--i,0)*70ms)}
+    @keyframes rise{from{opacity:0;transform:translateY(22px) scale(.985)}}
+    .brand img,.hero-logo{animation:breathe 4.5s ease-in-out infinite}
+    @keyframes breathe{0%,100%{box-shadow:0 0 18px -4px var(--accent-glow)}50%{box-shadow:0 0 36px 2px var(--accent-glow)}}
+    .hero-logo{animation:breathe 4.5s ease-in-out infinite,bob 6s ease-in-out infinite}
+    @keyframes bob{50%{transform:translateY(-7px) rotate(-1.5deg)}}
+    .hero h1 span{background-size:220% 100%;animation:shine 7s ease-in-out infinite}
+    @keyframes shine{50%{background-position:100% 50%}}
+    .btn{position:relative;overflow:hidden}
+    .btn::after{content:"";position:absolute;inset:0;transform:translateX(-120%);background:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.45) 50%,transparent 70%)}
+    .btn:not(.ghost):hover::after{transform:translateX(120%);transition:transform .8s ease}
+    .tab{transition:color .15s,background .15s,border-color .15s,transform .15s}
+    .tab:active{transform:scale(.97)}
+    .code-row{animation:rise .4s cubic-bezier(.2,.8,.2,1) both}
+  }
+  /* hero */
+  .hero{position:relative;overflow:hidden;display:flex;align-items:center;gap:22px;padding:24px 26px;margin-bottom:18px;border-radius:22px;
+    border:1px solid var(--line-str);background:
+      radial-gradient(600px 220px at 85% -20%,rgba(123,92,255,.22),transparent 60%),
+      radial-gradient(500px 220px at 0% 120%,rgba(0,229,199,.16),transparent 60%),
+      linear-gradient(180deg,var(--ink-2),var(--ink));box-shadow:0 30px 70px -40px #000}
+  .hero-logo{width:76px;height:76px;border-radius:22px;flex-shrink:0}
+  .hero h1{font-size:28px;font-weight:700;line-height:1.1}
+  .hero h1 span{background:linear-gradient(110deg,var(--accent),var(--accent-2),var(--accent));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .hero .meta{margin-top:8px;display:flex;flex-wrap:wrap;gap:8px}
+  .chip2{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border-radius:999px;font-size:12.5px;color:var(--fg-muted);background:rgba(255,255,255,.04);border:1px solid var(--line)}
+  .chip2 b{color:var(--fg);font-weight:600}
+  .chip2 .d{width:7px;height:7px;border-radius:50%;background:var(--good);box-shadow:0 0 8px var(--good)}
+  .spark{margin-left:auto;width:min(340px,40%);min-width:200px}
+  .spark .lbl{display:flex;justify-content:space-between;font-size:12px;color:var(--fg-dim);margin-bottom:6px}
+  .spark .lbl b{color:var(--accent);font-family:var(--mono)}
+  .spark svg{width:100%;height:70px;display:block;overflow:visible}
+  main{min-width:0}
+  .card h2{flex-wrap:wrap}
+  @media (max-width:760px){.hero{flex-wrap:wrap;padding:20px}.spark{width:100%;margin-left:0;min-width:0}.hero h1{font-size:23px}.hero-logo{width:60px;height:60px;border-radius:18px}}
+  @media (max-width:420px){.stats{gap:10px}.stat{padding:14px}.stat .n{font-size:24px}.stat .ic{width:28px;height:28px;right:10px;top:10px}.addr{flex-wrap:wrap}.addr .k{width:auto}}
+  /* stats with icons, glow and a spotlight */
+  .stat{transition:transform .25s ease,border-color .25s ease,box-shadow .25s ease}
+  .stat:hover{transform:translateY(-4px);border-color:rgba(0,229,199,.35);box-shadow:0 18px 40px -22px var(--accent-glow)}
+  .stat .ic{position:absolute;right:14px;top:14px;width:34px;height:34px;border-radius:11px;display:grid;place-items:center;
+    background:var(--accent-soft);border:1px solid rgba(0,229,199,.22);color:var(--accent)}
+  .stat .ic svg{width:17px;height:17px}
+  .card,.stat{isolation:isolate}
+  .card::before,.stat::before{content:"";position:absolute;inset:0;border-radius:inherit;z-index:-1;opacity:0;transition:opacity .3s;
+    background:radial-gradient(340px circle at var(--mx,50%) var(--my,50%),rgba(0,229,199,.10),transparent 60%)}
+  .card{position:relative}
+  .card:hover::before,.stat:hover::before{opacity:1}
+  .card:hover{border-color:var(--line-str)}
+  /* first load */
+  .boot{position:fixed;inset:0;display:grid;place-items:center;z-index:5;transition:opacity .4s}
+  .boot.gone{opacity:0;pointer-events:none}
+  .spin{width:46px;height:46px;border-radius:50%;border:3px solid var(--line-str);border-top-color:var(--accent);animation:spinr .8s linear infinite}
+  @keyframes spinr{to{transform:rotate(360deg)}}
+  .gate .card{box-shadow:0 0 70px -20px var(--accent-glow)}
 </style>
 </head>
 <body>
+<div class="fx-bg" aria-hidden="true"><div class="fx-grid"></div><div class="fx-glow g1"></div><div class="fx-glow g2"></div><div class="fx-glow g3"></div><canvas id="fx"></canvas></div>
+<div class="boot" id="boot"><div class="spin"></div></div>
 <nav class="top">
   <div class="top-in">
     <a class="brand" href="/" title="Website"><img src="__LOGO__" alt="" /> Aquamarine</a>
@@ -198,7 +268,7 @@
 
 <!-- Token gate (only when the link had no token) -->
 <div id="gate" class="gate hide">
-  <div class="card">
+  <div class="card rv">
     <img src="__LOGO__" alt="" />
     <h1 data-t="Admin sign-in">Admin sign-in</h1>
     <p data-t="The token is printed in the server window.">The token is printed in the server window.</p>
@@ -225,15 +295,35 @@
   <main>
     <!-- Overview -->
     <section class="page" data-page="overview">
-      <div class="page-head"><div class="eyebrow" data-t="Relay">Relay</div><h1 data-t="Overview">Overview</h1></div>
+      <div class="hero rv" style="--i:0">
+        <img class="hero-logo" src="__LOGO__" alt="" />
+        <div>
+          <div class="eyebrow" data-t="Relay">Relay</div>
+          <h1>Aquamarine <span data-t="relay">relay</span></h1>
+          <div class="meta">
+            <span class="chip2"><span class="d"></span><span data-t="running">running</span> <b id="heroUp">—</b></span>
+            <span class="chip2"><span data-t="Online now">Online now</span> <b id="heroOn">—</b></span>
+            <span class="chip2">E2EE</span>
+          </div>
+        </div>
+        <div class="spark">
+          <div class="lbl"><span data-t="Online, last minutes">Online, last minutes</span><b id="sparkNow">0</b></div>
+          <svg id="spark" viewBox="0 0 300 70" preserveAspectRatio="none">
+            <defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#00E5C7" stop-opacity=".35"/><stop offset="1" stop-color="#00E5C7" stop-opacity="0"/></linearGradient></defs>
+            <path id="sparkArea" fill="url(#sg)" d=""/>
+            <path id="sparkLine" fill="none" stroke="#00E5C7" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" d=""/>
+            <circle id="sparkDot" r="3.5" fill="#00E5C7" cx="-10" cy="-10"/>
+          </svg>
+        </div>
+      </div>
       <div class="stats" id="stats"></div>
       <div class="two">
-        <div class="card">
+        <div class="card rv">
           <h2><span data-t="Connect">Connect</span> <span class="hint" data-t="type this into the app's Server field">type this into the app's Server field</span></h2>
           <div id="addrs"></div>
           <div class="note" id="lanNote"></div>
         </div>
-        <div class="card">
+        <div class="card rv">
           <h2><span data-t="Latest codes">Latest codes</span> <span class="hint"><a href="#codes" data-t="all →">all →</a></span></h2>
           <div class="codes" id="codesMini"></div>
         </div>
@@ -242,16 +332,16 @@
 
     <!-- Codes -->
     <section class="page hide" data-page="codes">
-      <div class="page-head"><div class="eyebrow" data-t="Sign-up">Sign-up</div><h1 data-t="Email codes">Email codes</h1>
+      <div class="page-head rv"><div class="eyebrow" data-t="Sign-up">Sign-up</div><h1 data-t="Email codes">Email codes</h1>
         <p id="codesHint"></p></div>
-      <div class="card"><div class="codes" id="codes"></div></div>
+      <div class="card rv"><div class="codes" id="codes"></div></div>
     </section>
 
     <!-- Access -->
     <section class="page hide" data-page="access">
-      <div class="page-head"><div class="eyebrow" data-t="Who may register">Who may register</div><h1 data-t="Access">Access</h1>
+      <div class="page-head rv"><div class="eyebrow" data-t="Who may register">Who may register</div><h1 data-t="Access">Access</h1>
         <p data-t="This list only decides who may create an account on this relay; encryption is unchanged.">This list only decides who may create an account on this relay; encryption is unchanged.</p></div>
-      <div class="card">
+      <div class="card rv">
         <div class="toggle" onclick="toggleInvite()">
           <div><div class="t" data-t="Invite-only (solo mode)">Invite-only (solo mode)</div>
             <div class="s" data-t="Only emails on the list below may register. Off = open relay.">Only emails on the list below may register. Off = open relay.</div></div>
@@ -270,9 +360,9 @@
 
     <!-- Mail -->
     <section class="page hide" data-page="mail">
-      <div class="page-head"><div class="eyebrow">SMTP</div><h1 data-t="Email delivery">Email delivery</h1>
+      <div class="page-head rv"><div class="eyebrow">SMTP</div><h1 data-t="Email delivery">Email delivery</h1>
         <p data-t="Until mail is set up the relay runs in dev mode: codes are shown here instead of being sent.">Until mail is set up the relay runs in dev mode: codes are shown here instead of being sent.</p></div>
-      <div class="card">
+      <div class="card rv">
         <div class="mstate" id="mState"><span class="d"></span><span id="mStateText">…</span></div>
         <div class="chips" id="mPresets">
           <button class="chip" onclick="preset('smtp.gmail.com',587)">Gmail</button>
@@ -303,8 +393,8 @@
 
     <!-- Telegram -->
     <section class="page hide" data-page="telegram">
-      <div class="page-head"><div class="eyebrow">Telegram</div><h1 data-t="Stickers &amp; emoji from Telegram">Stickers &amp; emoji from Telegram</h1></div>
-      <div class="card">
+      <div class="page-head rv"><div class="eyebrow">Telegram</div><h1 data-t="Stickers &amp; emoji from Telegram">Stickers &amp; emoji from Telegram</h1></div>
+      <div class="card rv">
         <div class="mstate" id="tState"><span class="d"></span><span id="tStateText">…</span></div>
         <label data-t="Telegram bot token">Telegram bot token</label>
         <input id="tTok" type="password" autocomplete="new-password" placeholder="123456789:AA…" />
@@ -322,9 +412,9 @@
 
     <!-- Federation -->
     <section class="page hide" data-page="fed">
-      <div class="page-head"><div class="eyebrow" data-t="Network">Network</div><h1 data-t="Federation">Federation</h1>
+      <div class="page-head rv"><div class="eyebrow" data-t="Network">Network</div><h1 data-t="Federation">Federation</h1>
         <p data-t="Servers with the same secret act as one network: accounts and encrypted backups are copied between them, and apps switch to a working server when theirs is down.">Servers with the same secret act as one network: accounts and encrypted backups are copied between them, and apps switch to a working server when theirs is down.</p></div>
-      <div class="card">
+      <div class="card rv">
         <div class="mstate" id="fState"><span class="d"></span><span id="fStateText">…</span></div>
         <div class="fields">
           <div class="full"><label data-t="This server's public address">This server's public address</label><input id="fSelf" placeholder="https://relay1.example.com" /></div>
@@ -356,7 +446,7 @@
     "The token is printed in the server window.":"Токен напечатан в окне сервера.","paste the token":"вставьте токен","Unlock":"Войти",
     "Overview":"Обзор","Email codes":"Коды из писем","Access":"Доступ","Email delivery":"Почта","Stickers":"Стикеры","Federation":"Федерация",
     "E2EE: the relay only forwards encrypted envelopes — nothing here can read messages.":"Сквозное шифрование: ретранслятор только пересылает зашифрованные конверты — отсюда сообщения не прочитать.",
-    "Relay":"Ретранслятор","Connect":"Подключение","type this into the app's Server field":"впишите в поле «Сервер» в приложении",
+    "Relay":"Ретранслятор","Online, last minutes":"В сети за последние минуты","Connect":"Подключение","type this into the app's Server field":"впишите в поле «Сервер» в приложении",
     "Latest codes":"Последние коды","all →":"все →","Sign-up":"Регистрация","Who may register":"Кто может зарегистрироваться",
     "This list only decides who may create an account on this relay; encryption is unchanged.":"Список решает только, кто может создать аккаунт на этом ретрансляторе; шифрование от этого не меняется.",
     "Invite-only (solo mode)":"Только по приглашениям","Only emails on the list below may register. Off = open relay.":"Регистрироваться могут только адреса из списка. Выключено — открытый сервер.",
@@ -460,7 +550,7 @@
     catch(e){ msg("gateMsg", e.message==="bad token" ? T("Wrong token.") : T("Can't reach the relay."), "err"); }
   }
   function signOut(){
-    store.del("aqua.admin.token"); TOKEN = "";
+    store.del("aqua.admin.token"); TOKEN = ""; bootDone();
     $("dash").classList.add("hide"); $("gate").classList.remove("hide"); $("lockBtn").classList.add("hide"); pill("", T("locked"));
   }
 
@@ -474,15 +564,60 @@
       <button class="copy" data-copy="${esc(c.code)}">${T("Copy")}</button></div>`).join("");
   }
 
+  // ---- stat tiles: built once, numbers glide to their new values ----
+  const ICONS = {
+    online: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1"/></svg>',
+    users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+    bots: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4"/><circle cx="12" cy="3" r="1"/><path d="M9 13h.01M15 13h.01"/></svg>',
+    files: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>',
+    disk: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/></svg>',
+    time: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+  };
+  const STATS = [["online","Online now",true],["users","Accounts"],["bots","Bots"],["files","Files"],["disk","Storage"],["time","Uptime"]];
+  const shown = {};
+  function renderStats(s){
+    const box = $("stats");
+    if (!box.children.length) {
+      box.innerHTML = STATS.map(([k,l,hi],i)=>`<div class="stat rv ${hi?"hi":""}" style="--i:${i+1}"><span class="ic">${ICONS[k]}</span><div class="n" id="st-${k}">0</div><div class="l">${T(l)}</div></div>`).join("");
+    }
+    glide("online", s.online); glide("users", s.users); glide("bots", s.bots); glide("files", s.blobs);
+    $("st-disk").textContent = human(s.blob_bytes);
+    $("st-time").textContent = dur(s.uptime_secs);
+  }
+  function glide(k, to){
+    const el = $("st-"+k); if (!el) return;
+    const from = shown[k] ?? 0; shown[k] = to;
+    if (from === to || matchMedia("(prefers-reduced-motion: reduce)").matches) { el.textContent = to; return; }
+    const t0 = performance.now(), d = 700;
+    const step = (t) => { const p = Math.min(1, (t - t0) / d), e = 1 - Math.pow(1 - p, 3);
+      el.textContent = Math.round(from + (to - from) * e); if (p < 1) requestAnimationFrame(step); };
+    requestAnimationFrame(step);
+  }
+  // ---- online sparkline from the polls (every 4 s, last ~6 minutes) ----
+  const hist = [];
+  function pushSpark(v){
+    hist.push(v); if (hist.length > 90) hist.shift();
+    $("sparkNow").textContent = v;
+    const W = 300, H = 66, max = Math.max(1, ...hist), n = hist.length;
+    const pts = hist.map((y,i)=>[n === 1 ? W : (i/(n-1))*W, H - (y/max)*(H-8) - 2]);
+    const line = pts.map((p,i)=>(i?"L":"M")+p[0].toFixed(1)+" "+p[1].toFixed(1)).join(" ");
+    $("sparkLine").setAttribute("d", line);
+    $("sparkArea").setAttribute("d", line + ` L${W} ${H+4} L0 ${H+4} Z`);
+    const last = pts[pts.length-1]; $("sparkDot").setAttribute("cx", last[0]); $("sparkDot").setAttribute("cy", last[1]);
+  }
+  let booted = false;
+  function bootDone(){ if (booted) return; booted = true; $("boot").classList.add("gone"); setTimeout(()=>$("boot").remove(), 500); }
+
   async function refresh(){
     const s = await api("/v1/admin/stats");
     $("gate").classList.add("hide"); $("dash").classList.remove("hide"); $("lockBtn").classList.remove("hide");
     pill("live", T("running") + " · " + dur(s.uptime_secs));
 
-    $("stats").innerHTML = [
-      ["Online now", s.online, true], ["Accounts", s.users], ["Bots", s.bots],
-      ["Files", s.blobs], ["Storage", human(s.blob_bytes)], ["Uptime", dur(s.uptime_secs)],
-    ].map(([l,n,hi])=>`<div class="stat ${hi?"hi":""}"><div class="n">${n}</div><div class="l">${T(l)}</div></div>`).join("");
+    renderStats(s);
+    $("heroUp").textContent = dur(s.uptime_secs);
+    $("heroOn").textContent = s.online;
+    pushSpark(s.online);
+    bootDone();
 
     const port = (s.listen.split(":").pop()) || "7777";
     const lanOpen = s.listen.startsWith("0.0.0.0") || s.listen.startsWith("[::]");
@@ -621,13 +756,34 @@
   }
 
   async function tick(){
-    if (!TOKEN) { $("gate").classList.remove("hide"); pill("", T("locked")); return; }
+    if (!TOKEN) { $("gate").classList.remove("hide"); pill("", T("locked")); bootDone(); return; }
     try { await refresh(); if (!mailLoaded) loadMail(); if (!tgLoaded) loadTg(); if (!fedLoaded) loadFed(); }
     catch(e){
       if (e.message === "bad token") { signOut(); }
-      else pill("down", T("server not reachable"));
+      else { pill("down", T("server not reachable")); bootDone(); }
     }
   }
+  // ---- particles drifting behind everything ----
+  (() => {
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const c = $("fx"), g = c.getContext("2d"); let W, H, P = [], raf = 0;
+    const fit = () => { const d = Math.min(2, devicePixelRatio||1); W = innerWidth; H = innerHeight; c.width = W*d; c.height = H*d; c.style.width = W+"px"; c.style.height = H+"px"; g.setTransform(d,0,0,d,0,0);
+      P = Array.from({length: Math.round(Math.min(60, W*H/24000))}, () => ({x:Math.random()*W, y:Math.random()*H, vx:(Math.random()-.5)*.3, vy:(Math.random()-.5)*.3, r:Math.random()*1.5+.5, a:Math.random()*.45+.2})); };
+    const draw = () => { g.clearRect(0,0,W,H);
+      for (const p of P) { p.x+=p.vx; p.y+=p.vy; if(p.x<0||p.x>W)p.vx*=-1; if(p.y<0||p.y>H)p.vy*=-1; g.beginPath(); g.arc(p.x,p.y,p.r,0,7); g.fillStyle=`rgba(0,229,199,${p.a})`; g.fill(); }
+      for (let i=0;i<P.length;i++) for (let j=i+1;j<P.length;j++) { const a=P[i], b=P[j], d=Math.hypot(a.x-b.x,a.y-b.y);
+        if (d<125) { g.beginPath(); g.moveTo(a.x,a.y); g.lineTo(b.x,b.y); g.strokeStyle=`rgba(0,229,199,${.08*(1-d/125)})`; g.stroke(); } }
+      raf = requestAnimationFrame(draw); };
+    fit(); addEventListener("resize", fit);
+    document.addEventListener("visibilitychange", () => { cancelAnimationFrame(raf); if (!document.hidden) raf = requestAnimationFrame(draw); });
+    raf = requestAnimationFrame(draw);
+  })();
+  // cards light up where the cursor is
+  document.addEventListener("pointermove", (e) => {
+    const c = e.target.closest && e.target.closest(".card, .stat"); if (!c) return;
+    const r = c.getBoundingClientRect(); c.style.setProperty("--mx", e.clientX-r.left+"px"); c.style.setProperty("--my", e.clientY-r.top+"px");
+  }, { passive: true });
+
   pill("", T("connecting…"));
   tick();
   setInterval(() => { if (!$("dash").classList.contains("hide")) tick(); }, 4000);
