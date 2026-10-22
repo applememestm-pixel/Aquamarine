@@ -208,8 +208,12 @@ pub async fn flush_to_relay(app: &AppHandle) {
 pub struct MeshStatus {
     pub supported: bool,
     pub enabled: bool,
-    /// Bluetooth is on and the service is registered.
+    /// Listening on at least one way (local network or Bluetooth).
     pub ready: bool,
+    pub lan_ready: bool,
+    /// This platform can do Bluetooth delivery.
+    pub bt_supported: bool,
+    pub bt_ready: bool,
     pub queued: usize,
     /// Queued messages per chat (account name).
     pub per_chat: HashMap<String, usize>,
@@ -234,6 +238,9 @@ fn status_of(app: &AppHandle) -> MeshStatus {
         supported: platform::SUPPORTED,
         enabled: b.enabled.unwrap_or(true),
         ready: platform::ready(),
+        lan_ready: lan::ready(),
+        bt_supported: bt::SUPPORTED,
+        bt_ready: bt::ready(),
         queued: b.items.len(),
         per_chat,
         peers,
@@ -501,14 +508,13 @@ fn exchange<S: Read + Write, C: Ctx>(ctx: &C, link: &mut S, dialled: bool, rep: 
         sign_pub: B64.encode(pubk.sign_pub.as_bytes()),
         dh_pub: B64.encode(pubk.dh_pub.as_bytes()),
     };
-    // 1. Hello both ways.
+    // 1. Hello both ways. The dialled side checks the caller is a contact
+    // before it says who it is, so a stranger learns nothing.
     let theirs = if dialled {
         send_frame(link, &hello)?;
         read_frame(link)?
     } else {
-        let t = read_frame(link)?;
-        send_frame(link, &hello)?;
-        t
+        read_frame(link)?
     };
     let Frame::Hello { v, addrs, nonce, sign_pub, dh_pub } = theirs else { return Err("expected hello".into()) };
     if v != 1 {
@@ -528,6 +534,9 @@ fn exchange<S: Read + Write, C: Ctx>(ctx: &C, link: &mut S, dialled: bool, rep: 
         return Err("not one of your contacts".into());
     };
     let their_id = me.contacts[&peer_addr];
+    if !dialled {
+        send_frame(link, &hello)?;
+    }
     // My address as they know it: the first one of mine, the device address.
     let my_addr = me.addrs[0].clone();
 
@@ -596,27 +605,74 @@ fn exchange<S: Read + Write, C: Ctx>(ctx: &C, link: &mut S, dialled: bool, rep: 
     Ok(())
 }
 
-// ---------- platforms ---------------------------------------------------------
+// ---------- transports ---------------------------------------------------------
+
+#[path = "mesh_lan.rs"]
+mod lan;
 
 #[cfg(target_os = "linux")]
 #[path = "mesh_linux.rs"]
-mod platform;
+mod bt;
 
 #[cfg(target_os = "android")]
 #[path = "mesh_android.rs"]
-mod platform;
+mod bt;
+
+#[cfg(any(windows, aqua_wincheck))]
+#[path = "mesh_windows.rs"]
+mod bt;
 
 #[cfg(target_os = "android")]
-pub use platform::plugin as android_plugin;
+pub use bt::plugin as android_plugin;
 
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
-mod platform {
+#[cfg(not(any(target_os = "linux", target_os = "android", windows, aqua_wincheck)))]
+mod bt {
     use tauri::AppHandle;
     pub const SUPPORTED: bool = false;
     pub fn ready() -> bool { false }
-    pub async fn listen(_app: &AppHandle) -> Result<(), String> { Err("not supported".into()) }
+    pub async fn listen(_app: &AppHandle) -> Result<(), String> { Err("Bluetooth delivery isn't available on this platform yet".into()) }
     pub async fn stop(_app: &AppHandle) {}
-    pub async fn sync_round(_app: &AppHandle, _scan: bool) -> Result<(), String> { Err("not supported".into()) }
+    pub async fn sync_round(_app: &AppHandle, _scan: bool) -> Result<(), String> { Err("Bluetooth delivery isn't available on this platform yet".into()) }
+}
+
+/// Both transports together: the local network everywhere, Bluetooth where
+/// the platform has it.
+mod platform {
+    use super::{bt, lan};
+    use tauri::AppHandle;
+
+    pub const SUPPORTED: bool = true;
+
+    pub fn ready() -> bool {
+        lan::ready() || bt::ready()
+    }
+
+    pub async fn listen(app: &AppHandle) -> Result<(), String> {
+        let l = lan::listen(app).await;
+        let b = if bt::SUPPORTED { bt::listen(app).await } else { Ok(()) };
+        match (l, b) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(e), Err(f)) => Err(format!("{e}; {f}")),
+            // One way works: note what the other said.
+            (Ok(()), Err(e)) | (Err(e), Ok(())) => Err(e),
+        }
+    }
+
+    pub async fn stop(app: &AppHandle) {
+        lan::stop();
+        bt::stop(app).await;
+    }
+
+    pub async fn sync_round(app: &AppHandle, scan: bool) -> Result<(), String> {
+        let l = lan::sync_round(app, scan).await;
+        let b = if bt::SUPPORTED { bt::sync_round(app, scan).await } else { Err(String::new()) };
+        match (l, b) {
+            (Ok(n), _) if n > 0 => Ok(()),
+            (_, Ok(())) => Ok(()),
+            _ if !scan => Ok(()),
+            _ => Err("no contacts with Aquamarine nearby — same Wi-Fi, or Bluetooth on".into()),
+        }
+    }
 }
 
 #[cfg(test)]

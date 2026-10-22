@@ -56,7 +56,12 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 # "Now playing" from the Windows media session (Spotify, browsers, Яндекс
 # Музыка, Media Player… — anything that shows in the volume flyout).
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = ["Media_Control", "Foundation", "Foundation_Collections", "Win32_System_WinRT"] }
+windows = { version = "0.62", features = [
+  "Media_Control", "Foundation", "Foundation_Collections", "Win32_System_WinRT",
+  # Nearby delivery over Bluetooth (mesh_windows.rs)
+  "Devices_Bluetooth", "Devices_Bluetooth_Rfcomm", "Devices_Enumeration",
+  "Networking", "Networking_Sockets", "Storage_Streams",
+] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = { version = "2.0.2", features = ["v2_38"] }

@@ -1472,12 +1472,16 @@
       {#if section === "nearby"}
       {@const ms = $meshStatus}
       <section class="group">
-        <div class="label">{$t("Bluetooth, like Briar")}</div>
-        <div class="bots-note">{$t("No internet or the server is down? Messages to your contacts wait on this device, and as soon as their phone or computer is within Bluetooth range (about 10 m), the two devices swap them directly. When the server is back, whatever is still waiting goes through it. Everything stays end-to-end encrypted; only contacts you've already chatted with can connect.")}</div>
+        <div class="label">{$t("Wi-Fi and Bluetooth, like Briar")}</div>
+        <div class="bots-note">{$t("No internet or the server is down? Messages to your contacts wait on this device, and as soon as their phone or computer is on the same Wi-Fi (or hotspot) or within Bluetooth range, the two devices swap them directly. When the server is back, whatever is still waiting goes through it. Everything stays end-to-end encrypted; only contacts you've already chatted with can connect.")}</div>
         <button class="toggle-row" onclick={() => meshSetEnabled(!(ms?.enabled ?? true))}>
-          <div class="tr-text"><div class="tr-title">{$t("Deliver over Bluetooth")}</div><div class="tr-sub">{ms && !ms.supported ? $t("Not available on this platform yet.") : ms?.ready ? $t("Listening for contacts nearby.") : ms?.note ? $t(ms.note) : $t("Bluetooth is not ready.")}</div></div>
+          <div class="tr-text"><div class="tr-title">{$t("Deliver without internet")}</div><div class="tr-sub">{ms?.ready ? $t("Listening for contacts nearby.") : $t("Not listening yet.")}</div></div>
           <span class="switch" class:on={ms?.enabled ?? true}></span>
         </button>
+        <div class="mesh-ways">
+          <span class="mesh-way" class:on={ms?.lan_ready}><span class="bk-dot" class:on={ms?.lan_ready}></span>Wi-Fi / {$t("local network")}</span>
+          <span class="mesh-way" class:on={ms?.bt_ready}><span class="bk-dot" class:on={ms?.bt_ready}></span>Bluetooth{#if ms && !ms.bt_supported} · {$t("not on this platform yet")}{:else if ms && !ms.bt_ready && ms.note} · {$t(ms.note)}{/if}</span>
+        </div>
         <div class="mesh-row">
           <div class="mesh-big">{ms?.queued ?? 0}</div>
           <div class="mesh-txt">
@@ -1504,7 +1508,7 @@
       {/if}
       <section class="group">
         <div class="label">{$t("How to start")}</div>
-        <div class="bots-note">{$t("1. Chat with the person at least once through a server — that's when your devices exchange keys. 2. Android finds nearby phones by itself; on Linux pair the devices once in the system Bluetooth settings. 3. Keep Bluetooth on. Messages are swapped automatically every couple of minutes while the server is away, or right now with “Find contacts nearby”.")}</div>
+        <div class="bots-note">{$t("1. Chat with the person at least once through a server — that's when your devices exchange keys. 2. Be on the same Wi-Fi (a phone's hotspot works without internet), or keep Bluetooth on: Android finds nearby phones by itself; on Linux and Windows pair the devices once in the system Bluetooth settings. 3. Messages are swapped automatically every couple of minutes while the server is away, or right now with “Find contacts nearby”.")}</div>
       </section>
       {/if}
 
@@ -1838,6 +1842,9 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .ap-split { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 4px; align-items: start; padding-right: 16px; }
   .ap-controls { min-width: 0; }
   .ap-preview { position: sticky; top: 64px; margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .mesh-ways { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 16px 0; }
+  .mesh-way { display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px; border-radius: 999px; font-size: 12.5px; color: var(--fg-muted); background: var(--bg-input); border: 1px solid var(--border); }
+  .mesh-way.on { color: var(--fg); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
   .mesh-row { display: flex; align-items: center; gap: 14px; margin: 10px 16px 4px; padding: 12px 14px; border-radius: 14px; background: var(--bg-input); border: 1px solid var(--border); }
   .mesh-big { font-size: 28px; font-weight: 800; color: var(--accent); min-width: 36px; text-align: center; font-variant-numeric: tabular-nums; }
   .mesh-txt { flex: 1; min-width: 0; }

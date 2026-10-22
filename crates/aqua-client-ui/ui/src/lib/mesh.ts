@@ -11,6 +11,7 @@ export interface MeshPeer { addr: string; name: string; last: number }
 export interface MeshReport { at: number; device: string; peer: string; sent: number; received: number; error: string | null }
 export interface MeshStatus {
   supported: boolean; enabled: boolean; ready: boolean;
+  lan_ready: boolean; bt_supported: boolean; bt_ready: boolean;
   queued: number; per_chat: Record<string, number>;
   peers: MeshPeer[]; last: MeshReport[]; syncing: boolean; note: string | null;
 }

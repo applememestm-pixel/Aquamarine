@@ -8,6 +8,8 @@
   <string>Aquamarine uses the camera for video calls and video messages.</string>
   <key>NSPhotoLibraryUsageDescription</key>
   <string>Aquamarine lets you send photos and videos from your library.</string>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>Aquamarine finds your relay and, without internet, your contacts on the same Wi-Fi to swap encrypted messages.</string>
   <key>UIFileSharingEnabled</key>
   <true/>
   <key>LSSupportsOpeningDocumentsInPlace</key>

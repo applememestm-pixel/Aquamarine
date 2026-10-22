@@ -3246,7 +3246,7 @@
       {@const n = $meshStatus?.per_chat?.[$activeChat.id] ?? 0}
       <div class="mesh-bar">
         <span class="mesh-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7l10 10-5 5V2l5 5L7 17"/></svg></span>
-        <span class="mesh-tx">{$t("No server — {n} waiting. They go via Bluetooth when {name} is nearby, or via the server once it's back.", { n, name: $activeChat.name.split(" ")[0] })}</span>
+        <span class="mesh-tx">{$t("No server — {n} waiting. They go over Wi-Fi or Bluetooth when {name} is nearby, or via the server once it's back.", { n, name: $activeChat.name.split(" ")[0] })}</span>
         {#if $meshStatus?.supported}
           <button class="mesh-go" disabled={$meshStatus?.syncing} onclick={async () => { const e = await meshSyncNow(); if (e) showToast(tr(e.replace(/^Error: /, ""))); }}>{$t($meshStatus?.syncing ? "Searching…" : "Find nearby")}</button>
         {/if}
