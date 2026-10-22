@@ -11,7 +11,7 @@
   import { info } from "../stores";
   import { icons } from "../icons";
   import { openFileDialog } from "../dialog";
-  import { ICON_PRESETS, logoSvg, svgDataUrl, colorsFromAccent, setAppIcon } from "../appIcon";
+  import { DEFAULT_ICON, setAppIcon } from "../appIcon";
   import { cropImage } from "./ImageCropper.svelte";
   import { openStickerEditor, openStickerQueue, stickerLibraryTick } from "../panels/stickerEditor";
   import { openPackManager } from "./PackManager.svelte";
@@ -521,12 +521,7 @@
   }
 
   // ---- app icon ----
-  let iconMode = $derived($settings.appIcon?.mode ?? "theme");
-  let themeIconUrl = $derived.by(() => {
-    void $settings.palette; void $settings.themePreset;
-    const acc = typeof document !== "undefined" ? getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() : "";
-    return svgDataUrl(logoSvg(colorsFromAccent(/^#[0-9a-f]{6}$/i.test(acc) ? acc : "#00E5C7")));
-  });
+  let iconMode = $derived($settings.appIcon?.mode === "custom" ? "custom" : "default");
   async function pickCustomIcon() {
     try {
       const result = await openFileDialog({ multiple: false, directory: false, title: tr("Pick an icon"), filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] }] });
@@ -1142,19 +1137,14 @@
       <section class="group">
         <div class="label">{$t("App icon")}</div>
         <div class="icons-row">
-          <button class="app-ic" class:active={iconMode === "theme"} onclick={() => setAppIcon({ mode: "theme" })} title={$t("Follows the accent colour")}>
-            <img src={themeIconUrl} alt="" /><span>{$t("Theme")}</span>
+          <button class="app-ic" class:active={iconMode === "default"} onclick={() => setAppIcon({ mode: "default" })} title="Aquamarine">
+            <img src={DEFAULT_ICON} alt="" /><span>Aquamarine</span>
           </button>
-          {#each ICON_PRESETS as p (p.id)}
-            <button class="app-ic" class:active={iconMode === "preset" && $settings.appIcon?.preset === p.id} onclick={() => setAppIcon({ mode: "preset", preset: p.id })} title={p.name}>
-              <img src={svgDataUrl(logoSvg(p))} alt="" /><span>{p.name}</span>
-            </button>
-          {/each}
           <button class="app-ic" class:active={iconMode === "custom"} onclick={pickCustomIcon} title={$t("Your own picture")}>
             {#if $settings.appIcon?.custom}<img src={$settings.appIcon.custom} alt="" />{:else}<span class="plus">＋</span>{/if}<span>{$t("Custom…")}</span>
           </button>
         </div>
-        <div class="foot-note">{$t("Shown in the title bar, the sidebar and the taskbar. “Theme” repaints the logo in your accent colour. On Wayland the taskbar uses the installed icon.")}</div>
+        <div class="foot-note">{$t("Shown in the title bar, the sidebar and the taskbar. On Wayland the taskbar uses the installed icon.")}</div>
       </section>
       <div class="ap-div" id="ap-theme"><span>{$t("Theme editor")}</span></div>
       <section class="group">

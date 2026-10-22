@@ -171,7 +171,7 @@ export interface Settings {
   customFontName?: string;
   customFontData?: string;
   /** The app's own logo: follows the theme, a preset, or a custom picture. */
-  appIcon?: { mode: "theme" | "preset" | "custom"; preset?: string; custom?: string };
+  appIcon?: { mode: "default" | "custom" | "theme" | "preset"; preset?: string; custom?: string };
   /** Complete theme (THEMES id); empty = the built-in look. */
   themePreset?: string;
   /** Opacity of block backgrounds, 0.3–1 (wallpaper shows through). */
