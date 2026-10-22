@@ -1,5 +1,11 @@
 package app.aquamarine.messenger
 
+// Android halves of two features (copied next to MainActivity by CI and
+// android/patch-project.sh):
+//  * AquaGalleryPlugin — the recent photos and videos for the attach sheet
+//    (crates/aqua-client-ui/src/gallery.rs), like Telegram's.
+//  * AquaRelayPlugin + AquaRelayService — "Server on this device".
+//
 // "Server on this device" — the Android half. The relay itself runs in Rust
 // inside the app process (crates/aqua-client-ui/src/relay_host.rs); this
 // foreground service only keeps that process alive with the screen off and
@@ -21,6 +27,14 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.content.ContentUris
+import android.graphics.Bitmap
+import android.provider.MediaStore
+import android.util.Base64
+import android.util.Size
+import app.tauri.plugin.JSArray
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.Executors
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
@@ -100,5 +114,71 @@ class AquaRelayService : Service() {
     wifi?.let { if (it.isHeld) it.release() }
     wake = null; wifi = null
     super.onDestroy()
+  }
+}
+
+
+@InvokeArg
+class GalleryArgs {
+  var limit: Int = 60
+}
+
+@TauriPlugin
+class AquaGalleryPlugin(private val activity: Activity) : Plugin(activity) {
+  private val pool = Executors.newSingleThreadExecutor()
+
+  private fun needed(): Array<String> =
+    if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
+    else arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+
+  private fun granted(): Boolean {
+    if (Build.VERSION.SDK_INT >= 34 &&
+      activity.checkSelfPermission("android.permission.READ_MEDIA_VISUAL_USER_SELECTED") == PackageManager.PERMISSION_GRANTED) return true
+    return needed().all { activity.checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
+  }
+
+  @Command
+  fun ask(invoke: Invoke) {
+    if (!granted()) activity.requestPermissions(needed(), 7791)
+    invoke.resolve(JSObject().put("granted", granted()))
+  }
+
+  /** The newest photos and videos: content URIs with small JPEG thumbnails. */
+  @Command
+  fun recent(invoke: Invoke) {
+    val args = invoke.parseArgs(GalleryArgs::class.java)
+    if (!granted()) { invoke.resolve(JSObject().put("granted", false).put("items", JSArray())); return }
+    pool.execute {
+      val out = JSArray()
+      try {
+        val uri = MediaStore.Files.getContentUri("external")
+        val proj = arrayOf(MediaStore.Files.FileColumns._ID, MediaStore.Files.FileColumns.MEDIA_TYPE,
+          MediaStore.Files.FileColumns.MIME_TYPE, MediaStore.Video.VideoColumns.DURATION)
+        val sel = "${MediaStore.Files.FileColumns.MEDIA_TYPE} IN (${MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE},${MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO})"
+        activity.contentResolver.query(uri, proj, sel, null, "${MediaStore.Files.FileColumns.DATE_ADDED} DESC")?.use { c ->
+          var n = 0
+          while (c.moveToNext() && n < args.limit.coerceIn(1, 200)) {
+            val id = c.getLong(0)
+            val video = c.getInt(1) == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO
+            val base = if (video) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            val item = ContentUris.withAppendedId(base, id)
+            val thumb = try {
+              val bmp: Bitmap = if (Build.VERSION.SDK_INT >= 29) activity.contentResolver.loadThumbnail(item, Size(256, 256), null)
+                else if (video) MediaStore.Video.Thumbnails.getThumbnail(activity.contentResolver, id, MediaStore.Video.Thumbnails.MINI_KIND, null)
+                else MediaStore.Images.Thumbnails.getThumbnail(activity.contentResolver, id, MediaStore.Images.Thumbnails.MINI_KIND, null)
+              val bos = ByteArrayOutputStream()
+              bmp.compress(Bitmap.CompressFormat.JPEG, 72, bos)
+              "data:image/jpeg;base64," + Base64.encodeToString(bos.toByteArray(), Base64.NO_WRAP)
+            } catch (e: Exception) { "" }
+            out.put(JSObject().put("uri", item.toString()).put("mime", c.getString(2) ?: "")
+              .put("video", video).put("duration", if (video) c.getLong(3) else 0L).put("thumb", thumb))
+            n++
+          }
+        }
+        invoke.resolve(JSObject().put("granted", true).put("items", out))
+      } catch (e: Exception) {
+        invoke.reject(e.message ?: "gallery")
+      }
+    }
   }
 }

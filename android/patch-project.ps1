@@ -62,7 +62,11 @@ $x = [IO.File]::ReadAllText($m)
 if ($x -notmatch 'AquaRelayService') {
   $fgs = '<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />' + "`n    " +
          '<uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />' + "`n    " +
-         '<uses-permission android:name="android.permission.WAKE_LOCK" />' + "`n    <application"
+         '<uses-permission android:name="android.permission.WAKE_LOCK" />' + "`n    " +
+         '<uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />' + "`n    " +
+         '<uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />' + "`n    " +
+         '<uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />' + "`n    " +
+         '<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />' + "`n    <application"
   $x = ([regex]'<application').Replace($x, $fgs, 1)
   $svc = '<service android:name=".AquaRelayService" android:exported="false" android:foregroundServiceType="specialUse"><property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Hosts the Aquamarine relay server for the user and their contacts" /></service>' + "`n    </application>"
   $x = $x.Replace('</application>', $svc)

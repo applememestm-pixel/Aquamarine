@@ -437,6 +437,14 @@
   {/if}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="resize-handle" onpointerdown={startResize} ondblclick={resetWidth} title={$t("Drag to resize · double-click to reset")}></div>
+  <!-- Phones: a title row like Telegram's ("Aquamarine" + menu). -->
+  <div class="m-title">
+    <span class="m-name">Aquamarine</span>
+    {#if $info && !$info.connected}<span class="m-conn">{$t("Connecting…")}</span>{/if}
+    <button class="m-menu" onclick={() => (plusMenuOpen = !plusMenuOpen)} aria-label={$t("New")}>
+      <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
+    </button>
+  </div>
   <div class="list-header">
     {#if inServer && !compact}
       <button class="collapse-btn" onclick={() => (compactPinned = false)} title={$t("Collapse to avatars")} aria-label={$t("Collapse to avatars")}>
@@ -745,6 +753,12 @@
         </div>
       </div>
     </div>
+  {/if}
+  <!-- Phones: compose button over the list, like Telegram. -->
+  {#if !showArchive}
+    <button class="m-fab" onclick={() => openNewChatDialog()} aria-label={$t("New chat")} title={$t("New chat")}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+    </button>
   {/if}
 </aside>
 
@@ -1247,4 +1261,52 @@
   }
   .verified-badge :global(svg) { width: 13px; height: 13px; color: var(--accent); filter: drop-shadow(0 0 4px var(--accent-glow)); }
   @media (max-width: 720px) { .search-kbd { display: none; } }
+
+  /* ---- Phones: the main page as in the new Telegram ---- */
+  .m-title, .m-fab { display: none; }
+  @media (max-width: 720px) {
+    .m-title { display: flex; align-items: center; gap: 10px; padding: 12px 10px 2px 20px; }
+    .m-name { font-size: 27px; font-weight: 800; letter-spacing: -0.02em; font-family: var(--font-display, inherit); }
+    .m-conn { font-size: 13px; color: var(--fg-dim); }
+    .m-menu { margin-left: auto; width: 44px; height: 44px; border-radius: 50%; border: none; background: transparent; color: var(--fg); display: grid; place-items: center; }
+    .m-menu svg { width: 22px; height: 22px; }
+    .m-menu:active { background: var(--bg-hover); }
+    .list-header { padding: 8px 14px 10px; }
+    .plus-btn { display: none; }
+    .plus-pop { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 58px); right: 14px; min-width: 200px; border-radius: 16px; padding: 6px; }
+    .plus-pop button { padding: 12px 14px; font-size: 15px; border-radius: 11px; }
+    .search { height: 50px; padding: 0 18px; border-radius: 25px; background: var(--bg-surface-2, var(--bg-input)); border-color: transparent; gap: 12px; }
+    .search :global(svg) { width: 20px; height: 20px; }
+    .search input { font-size: 16px; }
+    /* Folders: a pill tray, the current one lit. */
+    .folder-strip { margin: 0 14px 6px; padding: 5px; gap: 2px; border: none; border-radius: 26px;
+      background: color-mix(in srgb, var(--bg-surface-2, var(--bg-input)) 80%, transparent); scrollbar-width: none; }
+    .folder-strip.empty-strip { padding-bottom: 5px; }
+    .folder-strip.empty-strip .folder-tab { flex: 0 0 auto; padding-inline: 22px; }
+    .folder-tab { flex: 1 0 auto; justify-content: center; padding: 10px 16px; font-size: 15px; border: none; color: var(--fg-muted); }
+    .folder-tab.active { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+    .folder-edit { padding: 10px 14px; font-size: 14px; border: none; }
+    /* Rows: big avatars, roomy text, no notebook tab (one panel at a time). */
+    .chats { padding: 2px 6px calc(100px + env(safe-area-inset-bottom, 0px)); }
+    .chat-item { grid-template-columns: 58px 1fr; gap: 14px; padding: 9px 12px; border-radius: 16px; }
+    .chat-item .avatar.sz-44 { width: 58px; height: 58px; font-size: 21px; }
+    .chat-item.active { background: transparent; width: 100%; margin-right: 0; border-radius: 16px; }
+    .chat-item.active::before, .chat-item.active::after { display: none; }
+    .chat-item.active .chat-time { color: var(--fg-dim); }
+    .chat-name { font-size: 16.5px; }
+    .chat-preview { font-size: 15px; }
+    .chat-time { font-size: 13px; }
+    .chat-row-1 { margin-bottom: 3px; }
+    .m-fab {
+      display: grid; place-items: center; position: fixed; z-index: 55;
+      right: 18px; bottom: calc(92px + env(safe-area-inset-bottom, 0px));
+      width: 60px; height: 60px; border-radius: 50%; border: none;
+      color: #06070c; background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      box-shadow: 0 14px 30px -10px var(--accent-glow);
+      transition: transform .32s cubic-bezier(.2,.8,.2,1);
+    }
+    .m-fab svg { width: 25px; height: 25px; }
+    :global(html.dock-hidden) .m-fab { transform: translateY(78px); }
+    :global(body.chat-open) .m-fab { display: none; }
+  }
 </style>

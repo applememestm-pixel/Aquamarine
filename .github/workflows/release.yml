@@ -241,7 +241,7 @@ jobs:
           cp ../../android/AquaMesh.kt "$(dirname "$(find gen/android/app/src/main/java -name MainActivity.kt | head -1)")/AquaMesh.kt"
           # Server on this device: a foreground service keeps the in-app relay alive
           cp ../../android/AquaRelay.kt "$(dirname "$(find gen/android/app/src/main/java -name MainActivity.kt | head -1)")/AquaRelay.kt"
-          fgs='<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />\n    <application'
+          fgs='<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />\n    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />\n    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />\n    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n    <application'
           sed -i "0,/<application/s##${fgs}#" "$m"
           svc='<service android:name=".AquaRelayService" android:exported="false" android:foregroundServiceType="specialUse"><property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Hosts the Aquamarine relay server for the user and their contacts" /></service>\n    </application>'
           sed -i "s#</application>#${svc}#" "$m"

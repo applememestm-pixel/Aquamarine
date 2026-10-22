@@ -1,43 +1,145 @@
 <script lang="ts">
+  /**
+   * The rail: a column of sections on desktop; on phones a floating tab bar
+   * like the new Telegram — equal buttons, a highlight that slides between
+   * them, press-and-hold to drag the highlight and drop it on a section, and
+   * (as in exteraGram) it slips away while you scroll down and comes back
+   * when you scroll up.
+   */
+  import { onMount } from "svelte";
   import { appIconUrl } from "../appIcon";
   import { t } from "../i18n";
   import { icons } from "../icons";
   import { activeTab, type NavTab } from "../stores";
   import { openSettings } from "../panels/settings";
+  import { openProfile } from "./ProfileModal.svelte";
+  import { profile } from "../profile";
+  import { info } from "../stores";
+
+  type Item = { id: string; label: string; svg?: string; tab?: NavTab; mobileOnly?: boolean };
+  const items: Item[] = [
+    { id: "chats", label: "Chats", svg: icons.chats, tab: "chats" },
+    { id: "calls", label: "Calls", svg: icons.phone, tab: "calls" },
+    { id: "files", label: "Files", svg: icons.files, tab: "files" },
+    { id: "contacts", label: "Contacts", svg: icons.contacts, tab: "contacts" },
+    { id: "settings", label: "Settings", svg: icons.settings, mobileOnly: true },
+    { id: "profile", label: "Profile", mobileOnly: true },
+  ];
+  const letter = $derived(((($profile.display_name && $profile.display_name !== "You") ? $profile.display_name : $info?.username) || "?").charAt(0).toUpperCase());
+
+  function activate(it: Item) {
+    if (it.tab) activeTab.set(it.tab);
+    else if (it.id === "settings") openSettings();
+    else if (it.id === "profile") openProfile();
+  }
+  const activeIndex = $derived(Math.max(0, items.findIndex((i) => i.tab === $activeTab)));
+
+  // ---- press and hold: drag the highlight, drop it on a section ----
+  let bar: HTMLElement | undefined = $state();
+  let dragX = $state<number | null>(null);   // pill centre while dragging (px in the bar)
+  let holdTimer: ReturnType<typeof setTimeout> | null = null;
+  let pressX = 0, pressY = 0, swallowClick = false, lastIdx = -1;
+  const mobile = () => matchMedia("(max-width: 720px)").matches;
+  function idxAt(x: number): number {
+    if (!bar) return 0;
+    const r = bar.getBoundingClientRect();
+    const w = (r.width - 12) / items.length;
+    return Math.max(0, Math.min(items.length - 1, Math.floor((x - r.left - 6) / w)));
+  }
+  function down(e: PointerEvent) {
+    if (!mobile() || !bar) return;
+    pressX = e.clientX; pressY = e.clientY;
+    holdTimer = setTimeout(() => {
+      holdTimer = null;
+      const r = bar!.getBoundingClientRect();
+      dragX = pressX - r.left;
+      lastIdx = idxAt(pressX);
+      try { navigator.vibrate?.(12); } catch { /* none */ }
+      try { bar!.setPointerCapture(e.pointerId); } catch { /* gone */ }
+    }, 260);
+  }
+  function move(e: PointerEvent) {
+    if (holdTimer && Math.hypot(e.clientX - pressX, e.clientY - pressY) > 10) { clearTimeout(holdTimer); holdTimer = null; }
+    if (dragX == null || !bar) return;
+    e.preventDefault();
+    const r = bar.getBoundingClientRect();
+    dragX = Math.max(30, Math.min(r.width - 30, e.clientX - r.left));
+    const i = idxAt(e.clientX);
+    if (i !== lastIdx) { lastIdx = i; try { navigator.vibrate?.(6); } catch { /* none */ } }
+  }
+  function up(e: PointerEvent) {
+    if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+    if (dragX == null) return;
+    const it = items[idxAt(e.clientX)];
+    dragX = null;
+    swallowClick = true;
+    setTimeout(() => (swallowClick = false), 0);
+    activate(it);
+  }
+  function cancel() { if (holdTimer) clearTimeout(holdTimer); holdTimer = null; dragX = null; }
+
+  // ---- exteraGram: hide while scrolling down, show when scrolling up ----
+  let hidden = $state(false);
+  onMount(() => {
+    const last = new WeakMap<EventTarget, number>();
+    const onScroll = (e: Event) => {
+      if (!mobile()) return;
+      const el = e.target as HTMLElement;
+      if (!el || !(el instanceof HTMLElement) || el.closest(".main-pane, .rail, [role=dialog]")) return;
+      const y = el.scrollTop;
+      const prev = last.get(el) ?? y;
+      last.set(el, y);
+      if (y < 40) hidden = false;
+      else if (y - prev > 6) hidden = true;
+      else if (prev - y > 6) hidden = false;
+    };
+    document.addEventListener("scroll", onScroll, { capture: true, passive: true });
+    return () => document.removeEventListener("scroll", onScroll, { capture: true });
+  });
+  // A new section starts with the bar in view.
+  $effect(() => { void $activeTab; hidden = false; });
+  $effect(() => { document.documentElement.classList.toggle("dock-hidden", hidden); });
 </script>
 
-<aside class="rail">
+<aside
+  class="rail"
+  class:hidden
+  class:dragging={dragX != null}
+  bind:this={bar}
+  style="--n: {items.length}; --i: {activeIndex}; {dragX != null ? `--drag-x: ${dragX}px;` : ''}"
+  onpointerdown={down}
+  onpointermove={move}
+  onpointerup={up}
+  onpointercancel={cancel}
+  oncontextmenu={(e) => { if (mobile()) e.preventDefault(); }}
+>
   <img class="brand" src={$appIconUrl} alt={$t("Aquamarine")} title={$t("Aquamarine")} draggable="false" />
   <div class="rail-divider"></div>
+  <span class="pill" aria-hidden="true"></span>
 
-  {#each [
-    { id: "chats",    label: "Chats",    svg: icons.chats },
-    { id: "calls",    label: "Calls",    svg: icons.phone },
-    { id: "files",    label: "Files",    svg: icons.files },
-    { id: "contacts", label: "Contacts", svg: icons.contacts },
-  ] as item (item.id)}
+  {#each items as item, i (item.id)}
     <button
       class="nav-btn"
-      class:active={$activeTab === item.id}
-      data-label={item.label}
-      onclick={() => activeTab.set(item.id as NavTab)}
-    >{@html item.svg}<span class="nav-lbl">{item.label}</span></button>
+      class:mobile-only={item.mobileOnly}
+      class:active={item.tab ? $activeTab === item.tab : false}
+      class:hover={dragX != null && lastIdx === i}
+      data-label={$t(item.label)}
+      onclick={(e) => { if (swallowClick) { e.preventDefault(); return; } activate(item); }}
+    >
+      {#if item.id === "profile"}
+        <span class="me-ava">{#if $profile.avatar_url}<img src={$profile.avatar_url} alt="" />{:else}{letter}{/if}</span>
+      {:else}
+        {@html item.svg}
+      {/if}
+      <span class="nav-lbl">{$t(item.label)}</span>
+    </button>
+    {#if item.id === "contacts"}<div class="rail-spacer"></div>{/if}
   {/each}
-
-  <div class="rail-spacer"></div>
-
-  <!-- Settings / profile live in the user panel on desktop; the rail keeps
-       a settings button only in the narrow (mobile) layout. -->
-  <button class="nav-btn mobile-only" data-label="Settings" onclick={() => openSettings()}>
-    {@html icons.settings}<span class="nav-lbl">{$t("Settings")}</span>
-  </button>
 </aside>
 
 <style>
-  /* The connection state lives in the title bar; settings in the user
-     panel. The rail keeps a settings button only in the narrow layout. */
   .nav-btn.mobile-only { display: none; }
-  @media (max-width: 720px) { .nav-btn.mobile-only { display: grid; } }
+  .nav-btn.mobile-only:first-of-type { margin-top: auto; }
   .rail {
     background: var(--bg-rail);
     border-right: 1px solid var(--border);
@@ -46,21 +148,17 @@
     align-items: center;
     padding: 14px 0;
     gap: 4px;
+    position: relative;
   }
+  .pill { display: none; }
   .brand {
     width: 40px; height: 40px;
     border-radius: 12px;
     display: block; object-fit: cover;
     margin-bottom: 10px;
     box-shadow: 0 0 24px -4px var(--accent-glow);
-    transition: transform .35s cubic-bezier(.2,.8,.2,1), box-shadow .35s;
-    letter-spacing: -0.02em;
   }
-  .rail-divider {
-    width: 32px; height: 1px;
-    background: var(--border);
-    margin: 4px 0 10px;
-  }
+  .rail-divider { width: 32px; height: 1px; background: var(--border); margin: 4px 0 10px; }
   .nav-btn {
     width: 44px; height: 44px;
     display: grid; place-items: center;
@@ -69,7 +167,7 @@
     border-radius: 12px;
     color: var(--fg-muted);
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: background-color .15s ease, color .15s ease;
     position: relative;
   }
   .nav-btn::before {
@@ -84,39 +182,10 @@
     box-shadow: 0 0 8px var(--accent-glow);
   }
   .nav-btn:hover { background: var(--bg-hover); color: var(--fg); }
-  .nav-btn.active {
-    color: var(--accent);
-    background: var(--accent-soft);
-  }
+  .nav-btn.active { color: var(--accent); background: var(--accent-soft); }
   .nav-btn.active::before { height: 22px; }
   .nav-btn :global(svg) { width: 20px; height: 20px; }
   .rail-spacer { flex: 1; }
-  .me {
-    width: 40px; height: 40px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
-    display: grid; place-items: center;
-    font-weight: 700; color: #06070C;
-    cursor: pointer;
-    position: relative;
-    box-shadow: 0 4px 12px -4px var(--accent-glow);
-    border: none;
-    font-family: inherit;
-    font-size: 15px;
-    letter-spacing: -0.01em;
-    transition: transform 0.15s ease;
-  }
-  .me:hover { transform: scale(1.05); }
-  .me::after {
-    content: '';
-    position: absolute;
-    right: -2px; bottom: -2px;
-    width: 12px; height: 12px;
-    border-radius: 50%;
-    background: var(--online);
-    border: 3px solid var(--bg-rail);
-    box-shadow: 0 0 8px var(--online);
-  }
   .nav-btn[data-label]:hover::after {
     content: attr(data-label);
     position: absolute;
@@ -135,37 +204,70 @@
     z-index: 100;
     pointer-events: none;
   }
-
-  /* Labels under icons — only shown in the mobile bottom bar. */
   .nav-lbl { display: none; }
+  .me-ava { width: 26px; height: 26px; border-radius: 50%; position: relative; overflow: hidden; display: grid; place-items: center;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070c; font-weight: 700; font-size: 12px; }
+  .me-ava img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 
-  /* ---- Mobile: the rail becomes a bottom tab bar ---- */
+  /* ---- Phones: a floating tab bar, like the new Telegram ---- */
   @media (max-width: 720px) {
     .rail {
       flex-direction: row;
-      align-items: center;
-      justify-content: space-around;
+      align-items: stretch;
       position: fixed;
-      left: 0; right: 0; bottom: 0;
-      height: calc(60px + env(safe-area-inset-bottom, 0px));
-      padding: 0 4px env(safe-area-inset-bottom, 0px);
-      border-right: none;
-      border-top: 1px solid var(--border-strong);
+      left: 12px; right: 12px;
+      bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+      height: 64px;
+      padding: 6px;
       gap: 0;
+      border: 1px solid var(--border-strong);
+      border-radius: 32px;
+      background: color-mix(in srgb, var(--bg-surface, #12151d) 86%, transparent);
+      backdrop-filter: blur(18px) saturate(1.4);
+      -webkit-backdrop-filter: blur(18px) saturate(1.4);
+      box-shadow: 0 18px 40px -18px rgba(0,0,0,.8), 0 1px 0 rgba(255,255,255,.05) inset;
       z-index: 60;
+      touch-action: pan-y;
+      user-select: none;
+      -webkit-user-select: none;
+      transition: transform .32s cubic-bezier(.2,.8,.2,1), opacity .25s ease;
     }
-    .brand, .rail-divider, .rail-spacer, .status-pill { display: none; }
+    .rail.hidden:not(.dragging) { transform: translateY(calc(100% + 24px)); opacity: 0; pointer-events: none; }
+    .brand, .rail-divider, .rail-spacer { display: none; }
+    .nav-btn.mobile-only { display: flex; margin-top: 0; }
+    /* Every button the same size: the whole slot is the hitbox. */
     .nav-btn {
-      flex-direction: column;
-      gap: 2px;
-      width: auto; height: auto;
-      padding: 4px 8px;
-      border-radius: 10px;
+      flex: 1 1 0; min-width: 0;
+      width: auto; height: 100%;
+      flex-direction: column; justify-content: center; align-items: center;
+      display: flex; gap: 3px;
+      padding: 0;
+      border-radius: 26px;
+      background: transparent !important;
+      z-index: 1;
     }
-    .nav-btn::before { display: none; }
-    .nav-btn :global(svg) { width: 22px; height: 22px; }
-    .nav-btn[data-label]:hover::after { display: none; } /* no tooltips on touch */
-    .nav-lbl { display: block; font-size: 10px; font-weight: 600; }
-    .me { width: 34px; height: 34px; font-size: 13px; }
+    .nav-btn::before, .nav-btn[data-label]:hover::after { display: none; }
+    .nav-btn :global(svg) { width: 23px; height: 23px; }
+    .nav-btn.active, .nav-btn.hover { color: var(--accent); }
+    .nav-lbl { display: block; font-size: 10.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+    /* The highlight slides under the active button… */
+    .pill {
+      display: block; position: absolute; top: 6px; bottom: 6px;
+      width: calc((100% - 12px) / var(--n));
+      left: calc(6px + var(--i) * (100% - 12px) / var(--n));
+      border-radius: 26px;
+      background: var(--accent-soft);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent) inset;
+      transition: left .34s cubic-bezier(.2,.9,.25,1.12), transform .2s ease, width .2s ease;
+    }
+    /* …and follows the finger while held. */
+    .rail.dragging .pill {
+      left: calc(var(--drag-x) - (100% - 12px) / var(--n) / 2);
+      transition: transform .2s ease;
+      transform: scale(1.08, 1.12);
+      background: color-mix(in srgb, var(--accent) 24%, transparent);
+      box-shadow: 0 8px 24px -8px var(--accent-glow), 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent) inset;
+    }
+    .me-ava { width: 25px; height: 25px; }
   }
 </style>

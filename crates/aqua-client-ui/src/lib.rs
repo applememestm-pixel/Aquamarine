@@ -22,6 +22,7 @@ pub mod bluetooth;
 pub mod servers;
 pub mod mesh;
 pub mod relay_host;
+pub mod gallery;
 
 use anyhow::Result;
 use tauri::Manager;
@@ -42,7 +43,7 @@ pub fn run() -> Result<()> {
     let builder = tauri::Builder::default();
     // Android: the Bluetooth sockets of nearby delivery live in Kotlin.
     #[cfg(target_os = "android")]
-    let builder = builder.plugin(mesh::android_plugin()).plugin(relay_host::android::plugin());
+    let builder = builder.plugin(mesh::android_plugin()).plugin(relay_host::android::plugin()).plugin(gallery::android::plugin());
     // WebKitGTK denies camera / mic / screen capture unless the app answers
     // its permission request ("Mic test failed: NotAllowedError" on Linux).
     // The webview only ever shows our own UI, so grant what calls need.
@@ -163,6 +164,8 @@ pub fn run() -> Result<()> {
             relay_host::relay_host_status,
             relay_host::relay_host_start,
             relay_host::relay_host_stop,
+            gallery::gallery_recent,
+            gallery::gallery_ask,
             servers::probe_servers,
             servers::scan_lan_relays,
             backups::backup_status,

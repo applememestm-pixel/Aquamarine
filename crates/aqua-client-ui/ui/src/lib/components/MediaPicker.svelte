@@ -103,7 +103,52 @@
     });
   });
 
+  // ---- Phones: the panel takes the keyboard's place (Telegram) ----
+  // The keyboard's height is learnt from the visual viewport while it's up;
+  // opening the panel hides the keyboard and the panel fills the same space,
+  // so the composer doesn't jump. Tapping the message field brings the
+  // keyboard back and the panel goes.
+  const phone = () => matchMedia("(max-width: 720px)").matches;
+  const KB_KEY = "aqua.kbH";
+  let kbH = $state((() => { try { return Number(localStorage.getItem(KB_KEY)) || 0; } catch { return 0; } })());
+  onMount(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const on = () => {
+      const h = Math.round(window.innerHeight - vv.height);
+      if (h > 140 && h < window.innerHeight * 0.7) {
+        kbH = h;
+        try { localStorage.setItem(KB_KEY, String(h)); } catch { /* ignore */ }
+      }
+    };
+    vv.addEventListener("resize", on);
+    return () => vv.removeEventListener("resize", on);
+  });
+  const dockH = $derived(Math.max(280, Math.min(kbH || 0, 480)) || 300);
+  $effect(() => {
+    const docked = $pickerState.open && phone();
+    const r = document.documentElement;
+    r.classList.toggle("picker-docked", docked);
+    if (docked) r.style.setProperty("--dock-h", `${dockH}px`);
+  });
+  // The message field gets the finger: keyboard up, panel down.
+  onMount(() => {
+    const focusIn = (e: FocusEvent) => {
+      if (!$pickerState.open || !phone() || !panel) return;
+      const t = e.target as HTMLElement;
+      if (panel.contains(t)) return;
+      if (t.closest("textarea, [contenteditable], input")) closeMediaPicker();
+    };
+    document.addEventListener("focusin", focusIn);
+    return () => document.removeEventListener("focusin", focusIn);
+  });
+
   async function placeAndFocus() {
+    if (phone()) {
+      // Hide the keyboard; the panel takes its place.
+      (document.activeElement as HTMLElement | null)?.blur?.();
+      return;
+    }
     const anchor = document.querySelector("[data-emoji-anchor]")?.getBoundingClientRect();
     const W = 392;
     if (anchor) {
@@ -527,6 +572,7 @@
     bind:this={panel}
     class="panel"
     class:drop={dropHover}
+    class:docked={phone()}
     style:left="{pos.left}px"
     style:bottom="{pos.bottom}px"
     role="dialog"
@@ -833,4 +879,22 @@
     color: #fff; font-weight: 800; font-size: 15px; pointer-events: none;
     border: 2px dashed var(--accent); border-radius: 14px;
   }
+
+  /* ---- Phones: docked where the keyboard was, tabs as a pill below ---- */
+  @media (max-width: 720px) {
+    .panel.docked {
+      left: 0 !important; right: 0; bottom: 0 !important; width: auto;
+      height: calc(var(--dock-h, 300px) + env(safe-area-inset-bottom, 0px));
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+      border-radius: 20px 20px 0 0; border-left: none; border-right: none; border-bottom: none;
+      animation: dock-up .2s cubic-bezier(.2,.8,.2,1);
+      box-shadow: 0 -10px 30px -18px rgba(0,0,0,.7);
+    }
+    .panel.docked .top { order: 9; justify-content: center; position: relative; padding: 6px 10px 8px; }
+    .panel.docked .tabs { padding: 4px; border-radius: 22px; background: var(--bg-surface-2, var(--bg-input)); box-shadow: 0 6px 18px -10px rgba(0,0,0,.7); }
+    .panel.docked .tab { padding: 8px 18px; font-size: 15px; border-radius: 18px; }
+    .panel.docked .more-wrap { position: absolute; right: 10px; }
+    .panel.docked .menu { top: auto; bottom: calc(100% + 6px); }
+  }
+  @keyframes dock-up { from { transform: translateY(40%); opacity: .4; } }
 </style>

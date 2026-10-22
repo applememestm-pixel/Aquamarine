@@ -377,6 +377,41 @@
   // sends a voice note); drag up while holding to "lock" hands-free
   // recording so the pause/delete/send controls stay up.
   let attachMenuOpen = $state(false);
+  // ---- Phones: the attach sheet with the gallery grid (Telegram) ----
+  let phoneUI = $state(typeof window !== "undefined" && window.matchMedia("(max-width: 720px)").matches);
+  $effect(() => {
+    const mq = window.matchMedia("(max-width: 720px)");
+    const on = () => (phoneUI = mq.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  });
+  type GalItem = { uri: string; mime: string; video: boolean; duration: number; thumb: string };
+  let gallery = $state<{ state: "idle" | "ok" | "denied" | "none"; items: GalItem[] }>({ state: "idle", items: [] });
+  let gallerySel = $state<string[]>([]);
+  async function galleryLoad() {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const r = await invoke<{ granted: boolean; items: GalItem[] }>("gallery_recent", { limit: 90 });
+      gallery = { state: r.granted ? "ok" : "denied", items: r.items ?? [] };
+    } catch { gallery = { state: "none", items: [] }; }
+  }
+  async function galleryAsk() {
+    try { const { invoke } = await import("@tauri-apps/api/core"); await invoke("gallery_ask"); } catch { /* not here */ }
+    // The system dialog answers asynchronously: look again a few times.
+    for (const ms of [800, 1800, 3500]) { await new Promise((r) => setTimeout(r, ms)); await galleryLoad(); if (gallery.state === "ok") break; }
+  }
+  function galleryToggle(uri: string) {
+    gallerySel = gallerySel.includes(uri) ? gallerySel.filter((u) => u !== uri) : [...gallerySel, uri];
+  }
+  async function gallerySend() {
+    const chat = $activeChat;
+    const pick = gallerySel;
+    attachMenuOpen = false;
+    gallerySel = [];
+    if (chat && pick.length) await sendFiles(chat.id, pick, "media");
+  }
+  function fmtDur(ms: number) { const s = Math.round(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
+  $effect(() => { if (attachMenuOpen && phoneUI) { gallerySel = []; void galleryLoad(); } });
   let mediaMode = $state<"voice" | "circle">("voice");
   let holdTimer: ReturnType<typeof setTimeout> | null = null;
   let holdFired = false;
@@ -694,6 +729,7 @@
     el.animate([{ opacity: 0, transform: "translateY(10px)" }, { opacity: 1, transform: "none" }], { duration: 240, easing: "cubic-bezier(.2,.8,.2,1)" });
   });
   let composerEl: RichComposer | undefined = $state();
+  const KEYBOARD_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="3"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M18 13h.01M9 15.5h6"/></svg>`;
   let text = $state("");
 
   // Load draft when active chat changes; save on unmount / switch.
@@ -2045,7 +2081,10 @@
     const own = selecting
       ? "a, button, input, textarea, select, video, audio, [contenteditable], .media-img-btn, .reaction-chip"
       : ".bubble, a, button, input, textarea, img, video, .media-img-btn";
+    // Fingers scroll the chat — except on the selection circles.
+    if (e.pointerType === "touch" && !t.closest(".sel-check")) return;
     if (t.closest(own)) return;
+    if (e.pointerType === "touch") { try { (e.currentTarget as HTMLElement)?.releasePointerCapture?.(e.pointerId); } catch { /* none */ } }
     armed = true;
     dragging = false;
     draggedMoved = false;
@@ -3322,7 +3361,36 @@
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="attach-wrap" onmousedown={(e) => e.stopPropagation()}>
         {#if attachMenuOpen}
-          <div class="attach-pop" role="menu" tabindex="-1">
+          {#if phoneUI}
+            <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+            <div class="ap-scrim" onclick={() => (attachMenuOpen = false)}></div>
+          {/if}
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <div class="attach-pop" class:sheet={phoneUI} role="menu" tabindex="-1" onmousedown={(e) => e.stopPropagation()}>
+            {#if phoneUI}
+              <div class="ap-grab"></div>
+              <div class="ap-gallery">
+                <button class="ap-tile ap-pick" onclick={() => { attachMenuOpen = false; pickAndSendFile("media"); }}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>
+                  <span>{$t("Gallery")}</span>
+                </button>
+                {#if gallery.state === "denied"}
+                  <button class="ap-tile ap-allow" onclick={galleryAsk}><span>{$t("Allow access to photos")}</span></button>
+                {/if}
+                {#each gallery.items as g (g.uri)}
+                  {@const n = gallerySel.indexOf(g.uri)}
+                  <button class="ap-tile" class:on={n >= 0} onclick={() => galleryToggle(g.uri)}>
+                    {#if g.thumb}<img src={g.thumb} alt="" loading="lazy" />{/if}
+                    {#if g.video}<span class="ap-dur">{fmtDur(g.duration)}</span>{/if}
+                    <span class="ap-check">{n >= 0 ? n + 1 : ""}</span>
+                  </button>
+                {/each}
+              </div>
+              {#if gallerySel.length}
+                <button class="ap-send" onclick={gallerySend}>{$t("Send {n}", { n: gallerySel.length })}</button>
+              {/if}
+            {/if}
+            <div class="ap-items">
             <button class="ap-item" onclick={() => { attachMenuOpen = false; pickAndSendFile("media"); }}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>
               <span>{$t("Photo or video")}</span>
@@ -3366,6 +3434,7 @@
                 <span>{$t("Sealed message")}</span>
               </button>
             {/if}
+            </div>
           </div>
         {/if}
         <button
@@ -3381,8 +3450,14 @@
         class:disabled={!liveChat}
         title={$t(liveChat ? "Emoji, stickers & GIFs (Ctrl+E)" : "Start a real chat first")}
         data-emoji-anchor
-        onclick={() => { if ($pickerState.open) closeMediaPicker(); else if (liveChat && $activeChat) openMediaPicker($activeChat.id); }}
-      >{@html icons.sticker}</button>
+        onclick={() => {
+          if ($pickerState.open) {
+            closeMediaPicker();
+            // Phones: back to the keyboard, like Telegram's ⌨ button.
+            if (matchMedia("(max-width: 720px)").matches) composerEl?.focus?.();
+          } else if (liveChat && $activeChat) openMediaPicker($activeChat.id);
+        }}
+      >{#if $pickerState.open}<span class="kb-ico">{@html KEYBOARD_ICON}</span>{:else}{@html icons.sticker}{/if}</button>
       <div class="input-wrap">
         {#if slashMatches.length}
           <div class="slash-pop" role="listbox" aria-label={$t("Commands")}>
@@ -4271,6 +4346,44 @@
     animation: ap-in 0.12s ease-out;
   }
   @keyframes ap-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+  /* ---- Phones: a bottom sheet — gallery on top, the actions as a tab bar ---- */
+  .ap-scrim { position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,.45); animation: ap-fade .2s ease; }
+  @keyframes ap-fade { from { opacity: 0; } }
+  .attach-pop.sheet {
+    position: fixed; left: 0; right: 0; bottom: 0; top: auto; z-index: 71;
+    height: min(78vh, 640px); min-width: 0; padding: 0 0 calc(10px + env(safe-area-inset-bottom, 0px));
+    border-radius: 24px 24px 0 0; border-left: none; border-right: none; border-bottom: none;
+    display: flex; flex-direction: column; background: var(--bg-shell);
+    animation: ap-up .26s cubic-bezier(.2,.8,.2,1);
+  }
+  @keyframes ap-up { from { transform: translateY(60%); opacity: .5; } }
+  .ap-grab { width: 40px; height: 4px; border-radius: 2px; background: var(--border-strong); margin: 8px auto 6px; flex-shrink: 0; }
+  .ap-gallery { flex: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; padding: 0 3px 96px; align-content: start; }
+  .ap-tile { position: relative; aspect-ratio: 1; border: none; padding: 0; overflow: hidden; background: var(--bg-surface-2); color: var(--fg-muted); border-radius: 4px; }
+  .ap-tile img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .18s ease; }
+  .ap-tile.on img { transform: scale(.86); border-radius: 8px; }
+  .ap-pick, .ap-allow { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; font-size: 13px; font-weight: 600; }
+  .ap-pick :global(svg) { width: 34px; height: 34px; }
+  .ap-allow { color: var(--accent); padding: 8px; text-align: center; }
+  .ap-check { position: absolute; top: 7px; right: 7px; width: 24px; height: 24px; border-radius: 50%; border: 2px solid #fff; background: rgba(0,0,0,.25);
+    display: grid; place-items: center; font-size: 12.5px; font-weight: 800; color: #06070c; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+  .ap-tile.on .ap-check { background: var(--accent); border-color: var(--accent); }
+  .ap-dur { position: absolute; left: 6px; bottom: 6px; font-size: 11px; font-weight: 700; color: #fff; background: rgba(0,0,0,.5); padding: 1px 6px; border-radius: 8px; }
+  .ap-send { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(96px + env(safe-area-inset-bottom, 0px)); z-index: 2;
+    padding: 12px 26px; border-radius: 26px; border: none; font: 700 15px var(--font-sans, inherit); color: #06070c;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 12px 28px -10px var(--accent-glow); }
+  .attach-pop.sheet .ap-items {
+    position: absolute; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    display: flex; gap: 0; overflow-x: auto; scrollbar-width: none; padding: 6px; border-radius: 30px;
+    background: color-mix(in srgb, var(--bg-surface-2) 92%, transparent); border: 1px solid var(--border-strong);
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); box-shadow: 0 14px 34px -14px rgba(0,0,0,.8);
+  }
+  .attach-pop.sheet .ap-items::-webkit-scrollbar { display: none; }
+  .attach-pop.sheet .ap-item { flex: 0 0 78px; width: 78px; flex-direction: column; justify-content: center; gap: 4px; padding: 8px 2px; border-radius: 24px; font-size: 11.5px; text-align: center; }
+  .attach-pop.sheet .ap-item span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .attach-pop.sheet .ap-item :global(svg) { width: 24px; height: 24px; }
+  .attach-pop.sheet .ap-item:hover { background: transparent; color: inherit; }
+  .attach-pop.sheet .ap-item:active { background: var(--accent-soft); color: var(--accent); }
   .ap-item {
     display: flex; align-items: center; gap: 10px; width: 100%;
     padding: 9px 12px; border: none; background: transparent;
@@ -4408,6 +4521,10 @@
   }
   .sel-check { transition: background-color .14s ease, border-color .14s ease, scale .18s cubic-bezier(.2,.9,.25,1.3); }
   .sel-check.on { background: var(--accent); border-color: var(--accent); scale: 1.08; }
+  /* Touch: slide a finger down the column of circles to pick a range (as in
+     Telegram); the circles don't scroll the chat, so the drag selects. */
+  .sel-check { touch-action: none; }
+  .sel-check::after { content: ""; position: absolute; inset: -14px -10px; }
   .sel-check :global(svg) { width: 12px; height: 12px; color: #06070C; }
 
   /* --- Custom (non-Chromium) context menu --- */
