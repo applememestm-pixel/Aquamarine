@@ -1854,4 +1854,11 @@ export const RU: Record<string, string> = {
   "Hall": "Зал",
   "Drag people around you. Headphones make it work best.": "Перетаскивайте людей вокруг себя. Лучше всего — в наушниках.",
   "Arrange in an arc": "Расставить дугой",
+  "Hold to peek": "Зажмите, чтобы заглянуть в чат",
+  "No messages yet": "Сообщений пока нет",
+  "Voice message": "Голосовое сообщение",
+  "Sticker": "Стикер",
+  "Mute notifications": "Отключить уведомления",
+  "Archive": "В архив",
+  "Unarchive": "Вернуть из архива",
 };

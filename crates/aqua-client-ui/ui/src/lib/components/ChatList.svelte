@@ -26,7 +26,8 @@
   import { api } from "../tauri";
   import { chatLocks, unlocked, setChatLock, removeChatLock, unlockChat, lockNowChat } from "../chatLocks";
   import { askInput, closeInput } from "./InputPrompt.svelte";
-  import type { DirProfile } from "../types";
+  import type { DirProfile, ChatMessage } from "../types";
+  import { assetUrl } from "../tauri";
   import { folders, activeFolder } from "../folders";
   import { openFolderManager } from "./FolderManager.svelte";
 
@@ -154,6 +155,76 @@
   function popOut(id: string, name: string) {
     ctx = null;
     void api.openChatWindow(id, name).catch((e) => showToast(String(e)));
+  }
+
+  // ---- Hold an avatar: peek into the chat without opening it (Telegram) ----
+  let peek = $state<{ id: string; msgs: ChatMessage[] } | null>(null);
+  let peekTimer: ReturnType<typeof setTimeout> | null = null;
+  let peekStart = { x: 0, y: 0 };
+  let peekFired = false;
+  function peekDown(e: PointerEvent, id: string) {
+    if (e.button !== 0) return;
+    peekFired = false;
+    peekStart = { x: e.clientX, y: e.clientY };
+    if (peekTimer) clearTimeout(peekTimer);
+    peekTimer = setTimeout(() => { peekTimer = null; void openPeek(id); }, 380);
+  }
+  function peekMove(e: PointerEvent) {
+    if (peekTimer && Math.hypot(e.clientX - peekStart.x, e.clientY - peekStart.y) > 8) { clearTimeout(peekTimer); peekTimer = null; }
+  }
+  function peekCancel() {
+    if (peekTimer) { clearTimeout(peekTimer); peekTimer = null; }
+  }
+  async function openPeek(id: string) {
+    if ($chatLocks[id] && !$unlocked[id]) return;            // a locked chat stays closed
+    peekFired = true;
+    dragPin = null;
+    suppressClick = true; setTimeout(() => (suppressClick = false), 600);
+    try { navigator.vibrate?.(12); } catch { /* no vibration */ }
+    let msgs: ChatMessage[] = [];
+    try { msgs = await api.getMessages(id); } catch { /* show the header anyway */ }
+    peek = { id, msgs: msgs.filter((m) => m.kind.type !== "date_separator").slice(-30) };
+  }
+  function closePeek() { peek = null; }
+  function openFromPeek() { const id = peek?.id; peek = null; if (id) void selectChat(id); }
+  let peekScroll = $state<HTMLElement | null>(null);
+  $effect(() => { if (peek && peekScroll) peekScroll.scrollTop = peekScroll.scrollHeight; });
+  function isMine(m: ChatMessage) { return m.from === "me" || (!!$info?.username && m.from === $info.username); }
+  function peekImage(m: ChatMessage): string | null {
+    if (m.kind.type !== "file") return null;
+    const c = m.kind.content;
+    const pic = c.category === "image" || c.category === "sticker" || c.category === "gif" || /^image\//.test(c.mime ?? "");
+    return pic && c.saved_at ? assetUrl(c.saved_at) : null;
+  }
+  function peekText(m: ChatMessage): string {
+    const k = m.kind;
+    switch (k.type) {
+      case "text": return previewText(k.content.text);
+      case "reply": return previewText(k.content.text);
+      case "code": return k.content.code.split("\n").slice(0, 4).join("\n");
+      case "system": return k.content.text;
+      case "article": return "📰 " + k.content.title;
+      case "poll": return "📊 " + k.content.question;
+      case "file": {
+        const c = k.content;
+        if (c.category === "voice") return "🎤 " + tr("Voice message");
+        if (c.category === "sticker") return "🖼 " + tr("Sticker");
+        if (c.category === "gif") return "GIF";
+        if (c.category === "video") return "🎬 " + c.name;
+        return "📎 " + c.name;
+      }
+      default: return "";
+    }
+  }
+  function peekStatus(id: string): string {
+    const c = $chats.find((x) => x.id === id);
+    if (!c) return "";
+    if (id.startsWith("grp_")) { const g = $groupMap[id]; return g ? `${g.members.length} ${tr("members")}` : ""; }
+    const st = chatStatus(c, $peerPresence, $presenceNow);
+    return st ? tr(st === "online" ? "Online" : st === "idle" ? "Idle" : st === "dnd" ? "Do not disturb" : "Offline") : "";
+  }
+  function markRead(id: string) {
+    chats.update((cs) => cs.map((c) => (c.id === id ? { ...c, unread: 0 } : c)));
   }
 
   // ---- Right-click a chat: archive / mute ----
@@ -431,13 +502,14 @@
         class:dragging={dragPin?.active && dragPin.id === c.id}
         class:drop-before={dragPin?.active && dragPin.id !== c.id && $pinnedChats.indexOf(c.id) === dragPin.over}
         onpointerdown={(e) => pinDown(e, c.id)}
-        onpointermove={pinMove}
-        onpointerup={pinUp}
-        onpointercancel={() => (dragPin = null)}
+        onpointermove={(e) => { peekMove(e); pinMove(e); }}
+        onpointerup={() => { peekCancel(); pinUp(); }}
+        onpointercancel={() => { peekCancel(); dragPin = null; }}
         onclick={(e) => { if (suppressClick) return; if ((e.ctrlKey || e.metaKey) && DESKTOP) { popOut(c.id, c.name); return; } void selectChat(c.id); }}
-        oncontextmenu={(e) => { if ((e.ctrlKey || e.metaKey) && DESKTOP) { e.preventDefault(); popOut(c.id, c.name); return; } openCtx(e, c.id); }}
+        oncontextmenu={(e) => { if (peekFired || peek) { e.preventDefault(); return; } if ((e.ctrlKey || e.metaKey) && DESKTOP) { e.preventDefault(); popOut(c.id, c.name); return; } openCtx(e, c.id); }}
       >
-        <div class="avatar sz-44" class:lk style="--gradient: {c.gradient}">
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="avatar sz-44" class:lk style="--gradient: {c.gradient}" onpointerdown={(e) => peekDown(e, c.id)} title={compact ? undefined : $t("Hold to peek")}>
           {lk ? "" : c.letter}
           {#if $avatars[c.id] && !lk}<img class="ava-img" src={$avatars[c.id]} alt="" loading="lazy" />{/if}
           {#if lk}<span class="lk-ic">{@html icons.lock}</span>{/if}
@@ -503,6 +575,54 @@
       {#if DESKTOP}<button onclick={() => popOut(cid, $chats.find((x) => x.id === cid)?.name ?? cid)}>{$t("Open in a new window")} <span class="ctx-kbd">Ctrl+click</span></button>{/if}
     </div>
   {/if}
+
+  {#if peek}
+    {@const pc = $chats.find((x) => x.id === peek!.id)}
+    {@const pid = peek.id}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div class="peek-veil" onclick={closePeek} oncontextmenu={(e) => { e.preventDefault(); closePeek(); }}>
+      <div class="peek" onclick={(e) => e.stopPropagation()}>
+        <button class="peek-card" onclick={openFromPeek} title={$t("Open")}>
+          <div class="peek-head">
+            <div class="avatar sz-40" style="--gradient: {pc?.gradient ?? ''}">
+              {pc?.letter ?? "?"}
+              {#if $avatars[pid]}<img class="ava-img" src={$avatars[pid]} alt="" />{/if}
+            </div>
+            <div class="peek-who">
+              <div class="peek-name">{pc?.name ?? pid}</div>
+              <div class="peek-st">{peekStatus(pid)}</div>
+            </div>
+          </div>
+          <div class="peek-msgs" bind:this={peekScroll}>
+            {#if peek.msgs.length === 0}
+              <div class="peek-empty">{$t("No messages yet")}</div>
+            {/if}
+            {#each peek.msgs as m (m.id)}
+              {#if m.kind.type === "system"}
+                <div class="peek-sys">{peekText(m)}</div>
+              {:else}
+                {@const img = peekImage(m)}
+                <div class="peek-row" class:mine={isMine(m)}>
+                  <div class="peek-bubble" class:pic={!!img}>
+                    {#if img}<img src={img} alt="" loading="lazy" />{:else}<span class="peek-txt" class:code={m.kind.type === "code"}>{peekText(m)}</span>{/if}
+                    <span class="peek-time">{m.time}</span>
+                  </div>
+                </div>
+              {/if}
+            {/each}
+          </div>
+        </button>
+        <div class="peek-menu" role="menu">
+          <button onclick={openFromPeek}>{$t("Open")}</button>
+          {#if (pc?.unread ?? 0) > 0}<button onclick={() => { markRead(pid); closePeek(); }}>{$t("Mark as read")}</button>{/if}
+          <button onclick={() => { pinChat(pid); closePeek(); }}>{$t($pinnedChats.includes(pid) ? "Unpin" : "Pin to top")}</button>
+          <button onclick={() => { setMuted(pid); closePeek(); }}>{$t($mutedChats.has(pid) ? "Unmute" : "Mute notifications")}</button>
+          <button onclick={() => { archiveChat(pid); closePeek(); }}>{$t($archived.has(pid) ? "Unarchive" : "Archive")}</button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </aside>
 
 <style>
@@ -551,6 +671,66 @@
   .jc-btn { border: none; border-radius: 8px; padding: 7px 11px; background: var(--accent); color: #06070C; font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; white-space: nowrap; }
   .jc-done { font-size: 12px; color: var(--fg-muted); font-weight: 700; }
   .ctx-scrim { position: fixed; inset: 0; z-index: 70; }
+  /* Peek (hold an avatar) */
+  .peek-veil {
+    position: fixed; inset: 0; z-index: 90;
+    display: grid; place-items: center; padding: 16px;
+    background: rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(14px) saturate(1.2); -webkit-backdrop-filter: blur(14px) saturate(1.2);
+    animation: peek-fade 0.18s ease-out;
+  }
+  @keyframes peek-fade { from { opacity: 0; } }
+  .peek {
+    width: min(420px, 100%); max-height: calc(100vh - 32px);
+    display: flex; flex-direction: column; gap: 10px;
+    animation: peek-pop 0.26s cubic-bezier(0.2, 0.9, 0.25, 1.12);
+  }
+  @keyframes peek-pop { from { opacity: 0; transform: scale(0.88); } to { opacity: 1; transform: scale(1); } }
+  .peek-card {
+    display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto;
+    padding: 0; border: 1px solid var(--border-strong); border-radius: 18px; overflow: hidden;
+    background: var(--bg-chat, var(--bg-surface)); color: var(--fg); font: inherit; text-align: left; cursor: pointer;
+    box-shadow: 0 24px 60px -18px rgba(0, 0, 0, 0.7);
+  }
+  .peek-head {
+    display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+    background: color-mix(in srgb, var(--bg-shell) 85%, transparent); border-bottom: 1px solid var(--border);
+  }
+  .peek-who { min-width: 0; }
+  .peek-name { font-weight: 700; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .peek-st { font-size: 12px; color: var(--fg-dim); }
+  .peek-msgs {
+    height: min(52vh, 420px); overflow-y: auto; padding: 10px 10px 12px;
+    display: flex; flex-direction: column; gap: 4px; scrollbar-width: none;
+  }
+  .peek-empty, .peek-sys { align-self: center; font-size: 12px; color: var(--fg-dim); padding: 4px 10px; border-radius: 10px; background: var(--bg-input); }
+  .peek-empty { margin: auto; }
+  .peek-row { display: flex; }
+  .peek-row.mine { justify-content: flex-end; }
+  .peek-bubble {
+    position: relative; max-width: 80%; padding: 6px 10px 6px; border-radius: 14px;
+    background: var(--bubble-in, var(--bg-surface-2)); font-size: 13.5px; line-height: 1.35;
+    display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0 8px;
+  }
+  .peek-row.mine .peek-bubble { background: var(--bubble-out, color-mix(in srgb, var(--accent) 30%, var(--bg-surface-2))); }
+  .peek-bubble.pic { padding: 3px; flex-direction: column; align-items: stretch; }
+  .peek-bubble.pic img { display: block; max-width: 100%; max-height: 180px; border-radius: 11px; object-fit: cover; }
+  .peek-bubble.pic .peek-time { position: absolute; right: 8px; bottom: 6px; padding: 0 5px; border-radius: 8px; background: rgba(0,0,0,0.45); color: #fff; }
+  .peek-txt { white-space: pre-wrap; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 8; line-clamp: 8; -webkit-box-orient: vertical; overflow: hidden; }
+  .peek-txt.code { font-family: var(--mono, monospace); font-size: 12px; }
+  .peek-time { margin-left: auto; font-size: 10.5px; color: var(--fg-dim); }
+  .peek-menu {
+    align-self: flex-start; min-width: 210px; padding: 5px;
+    display: flex; flex-direction: column; gap: 1px;
+    background: var(--bg-shell); border: 1px solid var(--border-strong); border-radius: 14px;
+    box-shadow: 0 18px 44px -14px rgba(0,0,0,0.6);
+    animation: peek-pop 0.3s cubic-bezier(0.2, 0.9, 0.25, 1.12) 0.03s both;
+  }
+  .peek-menu button {
+    text-align: left; padding: 11px 14px; border-radius: 9px; border: none; background: transparent;
+    color: var(--fg); font: inherit; font-size: 14px; cursor: pointer;
+  }
+  .peek-menu button:hover { background: var(--accent-soft); color: var(--accent); }
   .chat-ctx {
     position: fixed; z-index: 71; min-width: 180px; padding: 5px;
     background: var(--bg-shell); border: 1px solid var(--border-strong); border-radius: 12px;

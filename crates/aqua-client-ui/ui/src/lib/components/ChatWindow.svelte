@@ -1529,7 +1529,7 @@
   /** GIFs the user started while "Autoplay GIFs" is off. */
   const gifPlaying = new SvelteSet<string>();
   // Custom (non-Chromium) context menu.
-  let menu = $state<{ open: boolean; x: number; y: number; row: Row | null }>({ open: false, x: 0, y: 0, row: null });
+  let menu = $state<{ open: boolean; x: number; y: number; row: Row | null; touch?: boolean }>({ open: false, x: 0, y: 0, row: null });
 
   function selectedCount() { return selected.size; }
 
@@ -1547,13 +1547,61 @@
     selected.clear();
   }
 
-  function onMsgClick(row: Row) {
+  // ---- Touch, as in Telegram: a tap opens the menu with reactions at once;
+  // a long press on the words selects text (the system's handles), a long
+  // press beside them selects the whole message.
+  let lastPointerType = "mouse";
+  let tap: { x: number; y: number; t: number; menuOpen: boolean } | null = null;
+  function notePointer(e: PointerEvent) {
+    lastPointerType = e.pointerType || "mouse";
+    tap = { x: e.clientX, y: e.clientY, t: performance.now(), menuOpen: menu.open };
+  }
+  /** Things inside a bubble that do something on their own when tapped. */
+  const TAP_OWN = "a, button, input, textarea, select, video, audio, canvas, label, summary, [role=button], [contenteditable], .media-img-btn, .reaction-chip, .spoiler:not(.revealed)";
+  /** Is (x, y) over actual characters (not the padding beside them)? */
+  function pointOnText(x: number, y: number): boolean {
+    const el = document.elementFromPoint(x, y);
+    if (!el || !el.closest(".bubble") || el.closest(".bubble-meta")) return false;
+    const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const range = document.createRange();
+    for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+      if (!n.textContent?.trim()) continue;
+      range.selectNodeContents(n);
+      for (const b of range.getClientRects()) {
+        if (x >= b.left - 2 && x <= b.right + 2 && y >= b.top - 2 && y <= b.bottom + 2) return true;
+      }
+    }
+    return false;
+  }
+  function openTouchMenu(row: Row, x: number, y: number) {
+    menu = { open: true, x, y, row, touch: true };
+  }
+
+  function onMsgClick(row: Row, e?: MouseEvent) {
     // Swallow the click that trails a real drag-select so it doesn't
     // immediately toggle the start row back off.
     if (draggedMoved) { draggedMoved = false; return; }
-    if (selecting) toggleSelect(row.id);
+    if (selecting) { toggleSelect(row.id); return; }
+    const t0 = tap; tap = null;
+    if (!e || lastPointerType === "mouse" || !t0) return;
+    if (t0.menuOpen) return;                       // that tap only closed the menu
+    if (performance.now() - t0.t > 450 || Math.hypot(e.clientX - t0.x, e.clientY - t0.y) > 12) return;
+    if ((e.target as HTMLElement).closest(TAP_OWN)) return;
+    const sel = getSelection();
+    if (sel && !sel.isCollapsed && sel.toString().trim()) return;   // tapping off a text selection
+    openTouchMenu(row, e.clientX, e.clientY);
   }
   function onMsgContext(e: MouseEvent, row: Row) {
+    if (lastPointerType === "touch") {
+      const canSelect = !protectedChat && !selecting && pointOnText(e.clientX, e.clientY);
+      if (canSelect) { closeMenu(); return; }      // let the system select the words
+      e.preventDefault();
+      e.stopPropagation();
+      closeMenu();
+      if (selecting) toggleSelect(row.id); else startSelection(row);
+      try { navigator.vibrate?.(12); } catch { /* no vibration */ }
+      return;
+    }
     e.preventDefault();
     e.stopPropagation();
     // Clamp so the menu stays on screen (approx 190x220).
@@ -2655,9 +2703,10 @@
             class:search-hit={searchOpen && searchHitSet.has(m.id)}
             class:search-current={searchOpen && m.id === currentHitId}
             data-id={m.id}
-            onclick={() => onMsgClick(m)}
+            class:menu-target={menu.open && menu.touch && menu.row?.id === m.id}
+            onclick={(e) => onMsgClick(m, e)}
             oncontextmenu={(e) => onMsgContext(e, m)}
-            onpointerdown={(e) => onRowPointerDown(e, m)}
+            onpointerdown={(e) => { notePointer(e); onRowPointerDown(e, m); }}
           >
             {#if selecting}
               <span class="sel-check" class:on={selected.has(m.id)}>
@@ -3034,8 +3083,13 @@
 
     {#if menu.open && menu.row}
       {@const row = menu.row}
+      {#if menu.touch}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <div class="ctx-veil" onclick={closeMenu}></div>
+      {/if}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="ctx-menu" use:keepOnScreen style={`left:${menu.x}px; top:${menu.y}px`} role="menu" tabindex="-1" onmousedown={(e) => e.stopPropagation()}>
+      <div class="ctx-menu" class:touch={menu.touch} use:keepOnScreen style={`left:${menu.x}px; top:${menu.y}px`} role="menu" tabindex="-1" onmousedown={(e) => e.stopPropagation()}>
         <div class="ctx-reactions" class:expanded={reactAll}>
           {#if reactAll && $emojiPacks.length}
             <div class="react-tabs">
@@ -4289,6 +4343,27 @@
     animation: ctx-in 0.1s ease-out;
   }
   @keyframes ctx-in { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: scale(1); } }
+  /* Touch: Telegram-style pop with a soft spring, over a dimmed chat. */
+  .ctx-menu.touch {
+    transform-origin: top left;
+    animation: ctx-pop 0.22s cubic-bezier(0.2, 0.9, 0.25, 1.12);
+    border-radius: 14px;
+  }
+  .ctx-menu.touch :global(.ctx-item) { padding-top: 11px; padding-bottom: 11px; }
+  @keyframes ctx-pop {
+    from { opacity: 0; transform: scale(0.82) translateY(-6px); }
+    60% { opacity: 1; }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+  }
+  .ctx-veil {
+    position: fixed; inset: 0; z-index: 119;
+    background: rgba(0, 0, 0, 0.28);
+    animation: veil-in 0.18s ease-out;
+  }
+  @keyframes veil-in { from { opacity: 0; } }
+  .msg.menu-target { position: relative; z-index: 120; }
+  .msg.menu-target :global(.bubble) { animation: bubble-lift 0.22s cubic-bezier(0.2, 0.9, 0.25, 1.12) both; }
+  @keyframes bubble-lift { from { transform: scale(1); } 50% { transform: scale(0.97); } to { transform: scale(1); } }
   .ctx-item {
     display: block; width: 100%; text-align: left;
     padding: 8px 12px; border: none; background: transparent;

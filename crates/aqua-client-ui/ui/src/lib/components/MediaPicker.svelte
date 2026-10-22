@@ -293,13 +293,32 @@
     }
   }
 
+  // Each section is its own <section> so its sticky title stays inside it:
+  // a title stuck at the top no longer reports the scroll position as its own
+  // offset, which made jumps back up land where the list already was.
+  let jumping: ReturnType<typeof setTimeout> | null = null;
   function jumpTo(id: string) {
     const el = scroller?.querySelector<HTMLElement>(`[data-sec="${CSS.escape(id)}"]`);
-    if (el && scroller) scroller.scrollTo({ top: el.offsetTop - 4, behavior: "smooth" });
     activeSection = id;
+    if (!el || !scroller) return;
+    const target = el.offsetTop;
+    const from = scroller.scrollTop;
+    // Far away: hop most of the way at once, glide the last screen (as in Telegram).
+    const screen = scroller.clientHeight;
+    if (Math.abs(target - from) > screen * 2) scroller.scrollTop = target + (target > from ? -screen : screen);
+    scroller.scrollTo({ top: target, behavior: "smooth" });
+    if (jumping) clearTimeout(jumping);
+    jumping = setTimeout(() => { jumping = null; }, 600);
   }
+  // Keep the highlighted pack icon visible in a long bottom bar.
+  let bar = $state<HTMLElement | null>(null);
+  $effect(() => {
+    const id = activeSection;
+    const b = bar?.querySelector<HTMLElement>(`[data-bar="${CSS.escape(id)}"]`);
+    b?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+  });
   function onScroll() {
-    if (!scroller) return;
+    if (!scroller || jumping) return;
     const top = scroller.scrollTop + 8;
     let cur = sections[0]?.id ?? "";
     for (const el of scroller.querySelectorAll<HTMLElement>("[data-sec]")) {
@@ -617,7 +636,8 @@
           </div>
         {/if}
         {#each sections as sec (sec.id)}
-          <div class="sec-title" data-sec={sec.id}>
+          <section class="sec" data-sec={sec.id}>
+          <div class="sec-title">
             {#if sec.pack?.source}<span class="tg" title={$t("From Telegram — read-only")}>{@html TG_ICON}</span>{/if}
             <span class="sec-name">{sec.id === "recent" ? $t(sec.title) : sec.title}</span>
             {#if sec.pack?.source}
@@ -633,14 +653,15 @@
               <button class="cell add-cell" class:s={tab === "stickers"} onclick={() => quickAdd(sec.pack!)}>＋</button>
             {/if}
           </div>
+          </section>
         {/each}
       {/if}
     </div>
 
     {#if tab !== "gifs" && sections.length > 1 && !query}
-      <div class="bar">
+      <div class="bar" bind:this={bar}>
         {#each sections as sec (sec.id)}
-          <button class="bar-btn" class:active={activeSection === sec.id} title={sec.title} onclick={() => jumpTo(sec.id)}>
+          <button class="bar-btn" data-bar={sec.id} class:active={activeSection === sec.id} title={sec.title} onclick={() => jumpTo(sec.id)}>
             {#if sec.icon.emoji}<span class="bar-emoji">{sec.icon.emoji}</span>
             {:else if sec.icon.item}<AnimatedMedia src={sec.icon.item.url} mime={sec.icon.item.mime} play="never" />{/if}
           </button>
