@@ -34,6 +34,7 @@ pub mod directory;
 pub mod tgapi;
 pub mod botx;
 pub mod site;
+pub mod public;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
 pub use auth::{AuthState, Caller};
@@ -1072,6 +1073,7 @@ async fn admin_get_fed(State(state): State<AppState>, headers: axum::http::Heade
         "has_secret": !c.secret.is_empty(),
         "peers": c.peers,
         "public_url": c.public_url,
+        "detected_url": crate::public::url(),
     })))
 }
 

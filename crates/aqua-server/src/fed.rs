@@ -277,7 +277,7 @@ pub async fn h_peers(State(state): State<AppState>) -> Json<serde_json::Value> {
     let cfg = current(&state).map(|f| f.cfg.clone());
     Json(serde_json::json!({
         "federated": cfg.is_some(),
-        "self": cfg.as_ref().map(|c| c.public_url.clone()).unwrap_or_default(),
+        "self": cfg.as_ref().map(|c| c.public_url.clone()).filter(|u| !u.is_empty()).unwrap_or_else(crate::public::url),
         "servers": cfg.map(|c| c.peers).unwrap_or_default(),
     }))
 }

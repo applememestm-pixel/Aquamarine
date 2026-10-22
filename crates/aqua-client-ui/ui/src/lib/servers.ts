@@ -23,7 +23,9 @@ export async function learnPeers(current: string): Promise<void> {
   const cur = norm(current);
   try {
     const r = await api.fedPeers(cur);
-    save([cur, ...(r.servers ?? []).map(norm), ...knownServers()]);
+    // `self`: the relay's own other address — e.g. its white IP for when this
+    // device leaves the home Wi-Fi it signed in on.
+    save([cur, ...(r.self ? [norm(r.self)] : []), ...(r.servers ?? []).map(norm), ...knownServers()]);
   } catch {
     save([cur, ...knownServers()]);
   }

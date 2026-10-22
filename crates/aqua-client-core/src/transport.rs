@@ -56,6 +56,9 @@ pub fn proxy() -> Option<String> {
 /// A reqwest client that honours the configured proxy.
 pub fn http_client() -> Result<reqwest::Client, TransportError> {
     let mut b = reqwest::Client::builder()
+        // A home relay's LAN address from outside the home network never
+        // answers: give up soon so the next known address gets its turn.
+        .connect_timeout(std::time::Duration::from_secs(8))
         .user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION")));
     if let Some(p) = proxy() {
         b = b.proxy(reqwest::Proxy::all(&p).map_err(TransportError::Http)?);
