@@ -206,7 +206,8 @@
     if (!$settings.autoDownloadMedia) return;
     for (const m of msgs) {
       if (m.kind.type !== "file") continue;
-      if (m.from === "me") continue;
+      // Mine too: sent from the other device, or restored from a backup
+      // made there — the local copy isn't on this one.
       if (m.kind.content.saved_at) continue;
       if (autoTriggered.has(m.id)) continue;
       const kind = renderKind(m.kind.content);
@@ -2881,12 +2882,10 @@
                         <button class="file-dl" onclick={() => saveFileAs(content.saved_at, content.name)}>
                           {$t("Save as…")}
                         </button>
-                      {:else if !m.outgoing}
-                        <button class="file-dl" onclick={() => downloadAttachment(m.id)}>
-                          Download & decrypt
-                        </button>
                       {:else}
-                        <div class="file-saved">{$t("Uploaded")}</div>
+                        <button class="file-dl" onclick={() => downloadAttachment(m.id)}>
+                          {$t("Download")}
+                        </button>
                       {/if}
                     </div>
                     <span class="bubble-meta">

@@ -19,6 +19,8 @@
   const ctx = canvas.getContext("2d");
   let W = 0, H = 0, dpr = 1, pts = [], raf = 0, mouse = { x: -1e4, y: -1e4 };
   function resize() {
+    // Phones fire resize while scrolling (the address bar): keep the dots.
+    if (pts.length && innerWidth === W && Math.abs(innerHeight - H) < 160) return;
     dpr = Math.min(2, devicePixelRatio || 1);
     W = innerWidth; H = innerHeight;
     canvas.width = W * dpr; canvas.height = H * dpr;
@@ -31,7 +33,11 @@
       r: Math.random() * 1.6 + 0.5, a: Math.random() * 0.5 + 0.25,
     }));
   }
-  function frame() {
+  let last = 0;
+  function frame(t = 0) {
+    raf = requestAnimationFrame(frame);
+    if (t - last < 33) return; // ~30 fps is plenty for drifting dots
+    last = t;
     ctx.clearRect(0, 0, W, H);
     const link = 130;
     for (const p of pts) {
@@ -51,7 +57,6 @@
         ctx.strokeStyle = `rgba(0,229,199,${0.09 * (1 - d / link)})`; ctx.lineWidth = 1; ctx.stroke();
       }
     }
-    raf = requestAnimationFrame(frame);
   }
   if (!reduce) {
     resize();
@@ -70,25 +75,52 @@
   addEventListener("scroll", onScroll, { passive: true }); onScroll();
 
   // ---- reveal on scroll (also for cards rendered later by the page) ----
-  const SEL = ".sec-head, .card, .dl, .step, .code, .note, .md > *, .api-hero, .ep, .mock, .hero > div:nth-child(2)";
+  // Quick and early: things start rising a bit before they reach the screen,
+  // and only what enters together is staggered (docs text isn't animated).
+  const SEL = ".sec-head, .card, .dl, .step, .code, .note, .api-hero, .ep, .mock, .hero > div:nth-child(2)";
   const io = "IntersectionObserver" in window && !reduce ? new IntersectionObserver((es) => {
-    for (const e of es) if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
-  }, { threshold: 0.12, rootMargin: "0px 0px -6% 0px" }) : null;
+    let k = 0;
+    for (const e of es) if (e.isIntersecting) {
+      e.target.style.setProperty("--rv-delay", Math.min(k++, 5) * 45 + "ms");
+      e.target.classList.add("in"); io.unobserve(e.target);
+    }
+  }, { threshold: 0, rootMargin: "0px 0px 12% 0px" }) : null;
   function scan(scope = document) {
-    const groups = new Map();
     scope.querySelectorAll(SEL).forEach((el) => {
-      if (el.classList.contains("rv")) return;
+      if (el.classList.contains("rv") || el.closest(".md")) return;
       el.classList.add("rv");
-      // stagger siblings: 0, 70, 140 ms …
-      const g = groups.get(el.parentElement) ?? 0;
-      groups.set(el.parentElement, g + 1);
-      el.style.setProperty("--rv-delay", Math.min(g, 8) * 70 + "ms");
       if (io) io.observe(el); else el.classList.add("in");
     });
   }
   scan();
   new MutationObserver((ms) => { for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1) scan(n.parentElement || document); })
     .observe(document.body, { childList: true, subtree: true });
+
+  // ---- section rail: the page's sections, always at hand ----
+  const secs = [...document.querySelectorAll("section.band[id]")].filter((s) => s.querySelector(".eyebrow"));
+  if (secs.length >= 3) {
+    const rail = document.createElement("nav");
+    rail.className = "sec-rail";
+    rail.setAttribute("aria-label", "Sections");
+    const label = (s) => (s.querySelector(".eyebrow")?.textContent || s.id).trim();
+    const links = secs.map((s) => {
+      const a = document.createElement("a");
+      a.href = "#" + s.id; a.textContent = label(s);
+      rail.appendChild(a);
+      return a;
+    });
+    document.body.appendChild(rail);
+    // Labels follow the language switch.
+    const relabel = new MutationObserver(() => links.forEach((a, i) => { const t = label(secs[i]); if (a.textContent !== t) a.textContent = t; }));
+    secs.forEach((s) => { const e = s.querySelector(".eyebrow"); if (e) relabel.observe(e, { subtree: true, characterData: true, childList: true }); });
+    const spy = new IntersectionObserver((es) => {
+      for (const e of es) if (e.isIntersecting) {
+        const i = secs.indexOf(e.target);
+        links.forEach((a, j) => a.classList.toggle("on", j === i));
+      }
+    }, { rootMargin: "-45% 0px -50% 0px" });
+    secs.forEach((s) => spy.observe(s));
+  }
 
   // ---- cards light up where the cursor is ----
   document.addEventListener("pointermove", (e) => {

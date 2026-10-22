@@ -150,7 +150,13 @@ export async function bootstrap() {
   events.onTransportError((msg) => {
     console.error("transport error:", msg);
     info.update((i) => (i ? { ...i, connected: false } : i));
+    // The socket is gone (network switched, connection reset): come back.
+    void reconnectLoop();
   });
+  // Network back / app back in front: don't wait for the next retry.
+  const kick = () => { const i = get(info); if (i && !i.connected) { reconnectNow = true; void reconnectLoop(); } };
+  addEventListener("online", kick);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") kick(); });
   events.onDisconnected(() => {
     info.update((i) => (i ? { ...i, connected: false } : i));
     void reconnectLoop();
@@ -158,6 +164,8 @@ export async function bootstrap() {
 }
 
 let reconnecting = false;
+/** Set when the network came back: the loop skips its current pause. */
+let reconnectNow = false;
 /** The relay dropped us: retry it, then the other federated relays, with
  *  a growing pause, until one of them takes us back. */
 async function reconnectLoop() {
@@ -168,7 +176,10 @@ async function reconnectLoop() {
     for (let n = 0; ; n++) {
       const i = get(info);
       if (!i || i.connected || !i.username || !i.server_url) return;
-      await new Promise((r) => setTimeout(r, delays[Math.min(n, delays.length - 1)]));
+      // Wait, but wake up early if the network comes back meanwhile.
+      const until = Date.now() + delays[Math.min(n, delays.length - 1)];
+      while (Date.now() < until && !reconnectNow) await new Promise((r) => setTimeout(r, 250));
+      if (reconnectNow) { reconnectNow = false; n = -1; }
       const cur = get(info);
       if (!cur || cur.connected || !cur.username || !cur.server_url) return;
       const err = await connect(cur.server_url, cur.username);

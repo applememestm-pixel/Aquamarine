@@ -53,6 +53,11 @@ pub fn proxy() -> Option<String> {
     PROXY.read().ok().and_then(|g| g.clone())
 }
 
+/// Ping the relay this often…
+const KEEPALIVE: std::time::Duration = std::time::Duration::from_secs(20);
+/// …and call the connection dead after this long without any frame.
+const SILENCE_LIMIT: std::time::Duration = std::time::Duration::from_secs(50);
+
 /// A reqwest client that honours the configured proxy.
 pub fn http_client() -> Result<reqwest::Client, TransportError> {
     let mut b = reqwest::Client::builder()
@@ -270,16 +275,31 @@ impl Transport {
 
         // Writer task: forwards outgoing RelayMessages onto the socket
         // as binary JSON. Ends when the sender is dropped.
+        // Also pings every 20 s: phones drop off Wi-Fi / mobile data without
+        // the socket noticing, and a ping is what finds that out.
         let write_task = tokio::spawn(async move {
-            while let Some(msg) = out_rx.recv().await {
-                match serde_json::to_vec(&msg) {
-                    Ok(bytes) => {
-                        if let Err(e) = ws_write.send(Message::Binary(bytes.into())).await {
-                            tracing::warn!(?e, "ws write failed; giving up on this connection");
+            let mut ping = tokio::time::interval(KEEPALIVE);
+            ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            ping.tick().await;
+            loop {
+                tokio::select! {
+                    m = out_rx.recv() => {
+                        let Some(msg) = m else { break };
+                        match serde_json::to_vec(&msg) {
+                            Ok(bytes) => {
+                                if let Err(e) = ws_write.send(Message::Binary(bytes.into())).await {
+                                    tracing::warn!(?e, "ws write failed; giving up on this connection");
+                                    break;
+                                }
+                            }
+                            Err(e) => tracing::warn!(?e, "encode outgoing"),
+                        }
+                    }
+                    _ = ping.tick() => {
+                        if ws_write.send(Message::Ping(Vec::new().into())).await.is_err() {
                             break;
                         }
                     }
-                    Err(e) => tracing::warn!(?e, "encode outgoing"),
                 }
             }
             let _ = ws_write.close().await;
@@ -289,7 +309,21 @@ impl Transport {
         // Initial/Envelope events. Emits Incoming::Closed / Error too.
         let in_tx_r = in_tx.clone();
         let read_task = tokio::spawn(async move {
-            while let Some(frame) = ws_read.next().await {
+            loop {
+                // Nothing at all (not even the pong to our ping) for this
+                // long: the link is dead even if the OS hasn't said so.
+                let frame = match tokio::time::timeout(SILENCE_LIMIT, ws_read.next()).await {
+                    Ok(Some(f)) => f,
+                    Ok(None) => {
+                        let _ = in_tx_r.send(Incoming::Closed);
+                        break;
+                    }
+                    Err(_) => {
+                        tracing::warn!("relay silent for {SILENCE_LIMIT:?}; reconnecting");
+                        let _ = in_tx_r.send(Incoming::Closed);
+                        break;
+                    }
+                };
                 match frame {
                     Ok(Message::Binary(bytes)) => {
                         dispatch_frame(&in_tx_r, &bytes);

@@ -71,7 +71,27 @@ pub fn get_messages(
     peer_id: String,
 ) -> Result<Vec<ChatMessage>, String> {
     let s = state.lock().map_err(|e| e.to_string())?;
-    Ok(s.chats.get(&peer_id).map(|c| c.messages.clone()).unwrap_or_default())
+    let mut msgs = s.chats.get(&peer_id).map(|c| c.messages.clone()).unwrap_or_default();
+    drop(s);
+    forget_missing_files(&mut msgs);
+    Ok(msgs)
+}
+
+/// A file's local copy that isn't on this device — history restored from a
+/// backup made on the PC, or a file deleted since — is fetched from the
+/// relay again instead of failing with "No such file or directory".
+fn forget_missing_files(msgs: &mut [ChatMessage]) {
+    for m in msgs {
+        if let MessageKind::File { saved_at, .. } = &mut m.kind {
+            let gone = saved_at.as_deref().is_some_and(|p| {
+                let fs_path = p.starts_with('/') || p.as_bytes().get(1) == Some(&b':');
+                fs_path && !std::path::Path::new(p).exists()
+            });
+            if gone {
+                *saved_at = None;
+            }
+        }
+    }
 }
 
 #[derive(Debug, serde::Serialize)]

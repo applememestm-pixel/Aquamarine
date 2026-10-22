@@ -207,7 +207,7 @@ impl GameDb {
             return None;
         }
         let dir = PathBuf::from(ICON_DIR).join("covers");
-        let none = dir.join(format!("{id}.none2")); // .none from 0.1.x: tried with fewer sources
+        let none = dir.join(format!("{id}.none3")); // older markers: tried with fewer sources
         for ext in ["jpg", "img"] {
             if let Ok(b) = std::fs::read(dir.join(format!("{id}.{ext}"))) {
                 if let Some(m) = image_mime(&b) {
@@ -317,8 +317,12 @@ async fn wikipedia_cover(client: &reqwest::Client, lang: &str, name: &str, what:
         let l = o.source.to_lowercase();
         !l.contains(".svg") && (l.contains(".jpg") || l.contains(".jpeg") || l.contains(".png") || l.contains(".webp"))
     });
+    // "Minecraft: Java Edition" lives in the article "Minecraft": a title
+    // that is the name's first words counts too.
+    let prefix_of_name = |t: &str| { let b = base(t); !b.is_empty() && want.starts_with(&format!("{b} ")) };
     let pick = pages.iter().find(|p| base(&p.title) == want && ok(p))
-        .or_else(|| pages.iter().find(|p| base(&p.title).starts_with(&want) && ok(p)))?;
+        .or_else(|| pages.iter().find(|p| base(&p.title).starts_with(&want) && ok(p)))
+        .or_else(|| pages.iter().find(|p| prefix_of_name(&p.title) && ok(p)))?;
     pick.original.as_ref().map(|o| o.source.clone())
 }
 

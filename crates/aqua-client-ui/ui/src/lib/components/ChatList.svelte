@@ -142,7 +142,15 @@
   // Discord's server column, and grows back for any other chat. ----
   let compactPinned = $state(false); // the user opened it wide while in a server
   const inServer = $derived(!!$activeId && $groupMap[$activeId]?.kind === "supergroup");
-  const compact = $derived(inServer && !compactPinned);
+  // Phones show one panel at a time: the avatar column makes no sense there.
+  let phone = $state(typeof window !== "undefined" && window.matchMedia("(max-width: 720px)").matches);
+  $effect(() => {
+    const mq = window.matchMedia("(max-width: 720px)");
+    const on = () => (phone = mq.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  });
+  const compact = $derived(inServer && !compactPinned && !phone);
   $effect(() => { if (!inServer) compactPinned = false; });
   // Opening the archive or switching folders means browsing the list:
   // show it wide, with avatars and names.

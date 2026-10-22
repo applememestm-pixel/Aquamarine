@@ -504,8 +504,25 @@ async fn ws_run(mut socket: WebSocket, state: AppState, me: UserId) {
     {
     }
 
+    // Phones vanish without closing the socket (Wi-Fi ↔ mobile data, a
+    // tunnel): ping them, and drop a connection that has been silent too long
+    // so it isn't counted as online and the client's reconnect gets a clean slot.
+    let mut ping = tokio::time::interval(std::time::Duration::from_secs(25));
+    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    ping.tick().await;
+    let mut heard = std::time::Instant::now();
     loop {
         tokio::select! {
+            _ = ping.tick() => {
+                if heard.elapsed() > std::time::Duration::from_secs(80) {
+                    tracing::info!(user = %me, "WS: silent for 80 s, dropping");
+                    break;
+                }
+                if socket.send(Message::Ping(Vec::new().into())).await.is_err() {
+                    break;
+                }
+                continue;
+            }
             m = rx.recv() => match m {
                 Some(m) => match serde_json::to_vec(&m) {
                     Ok(bytes) => {
@@ -517,7 +534,7 @@ async fn ws_run(mut socket: WebSocket, state: AppState, me: UserId) {
                 },
                 None => break,
             },
-            frame = socket.next() => match frame {
+            frame = socket.next() => match { heard = std::time::Instant::now(); frame } {
                 Some(Ok(Message::Binary(bytes))) => match serde_json::from_slice::<RelayMessage>(&bytes) {
                     Ok(mut m) => {
                         m.from = me.clone();
@@ -1565,16 +1582,25 @@ struct StatsResp {
 /// Lightweight, unauthenticated server stats for the admin GUI: how many
 /// accounts are registered and how many clients are connected right now.
 /// No identities, emails or message content — just counts.
+/// People (not devices) with at least one live connection; bots excluded.
+async fn online_people(state: &AppState) -> usize {
+    let mut who = std::collections::HashSet::new();
+    for entry in state.users.iter() {
+        let live = entry.value().lock().await.tx.iter().any(|t| !t.is_closed());
+        if live {
+            let base = base_user(entry.key());
+            if !state.directory.is_bot(base) {
+                who.insert(base.to_string());
+            }
+        }
+    }
+    who.len()
+}
+
 async fn server_stats(State(state): State<AppState>) -> Json<StatsResp> {
     let (users, bots) = state.directory.counts();
     // Count users with at least one live WS sender.
-    let mut online = 0usize;
-    for entry in state.users.iter() {
-        let u = entry.value().lock().await;
-        if u.tx.iter().any(|t| !t.is_closed()) {
-            online += 1;
-        }
-    }
+    let online = online_people(&state).await;
     Json(StatsResp { ok: true, users, bots, online, require_registration: state.require_registration })
 }
 
@@ -1612,6 +1638,8 @@ struct AdminStats {
     listen: String,
     /// This machine's LAN address, for phones on the same Wi-Fi.
     lan_ip: Option<String>,
+    /// `http://<white ip>:<port>` once known (see public.rs).
+    public_url: String,
     /// Codes are shown here instead of e-mailed.
     dev_codes: bool,
     /// Recent dev-mode verification codes, newest first.
@@ -1649,13 +1677,7 @@ async fn admin_stats(
 ) -> Result<Json<AdminStats>, StatusCode> {
     admin_authed(&state, &headers)?;
     let (users, bots) = state.directory.counts();
-    let mut online = 0usize;
-    for entry in state.users.iter() {
-        let u = entry.value().lock().await;
-        if u.tx.iter().any(|t| !t.is_closed()) {
-            online += 1;
-        }
-    }
+    let online = online_people(&state).await;
     let (blobs, blob_bytes) = state.blobs.stats();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1665,6 +1687,7 @@ async fn admin_stats(
     Ok(Json(AdminStats {
         listen: std::env::var("AQUA_LISTEN").unwrap_or_else(|_| "127.0.0.1:7777".into()),
         lan_ip: lan_ip(),
+        public_url: crate::public::url(),
         dev_codes: state.directory.dev_codes(),
         codes: state
             .directory

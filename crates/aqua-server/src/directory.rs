@@ -782,18 +782,25 @@ impl Directory {
         Ok(())
     }
 
+    /// The account's primary device or any of its extra devices (a phone
+    /// signed in next to the PC may change the avatar too).
     fn check_owner(db: &Connection, username: &str, identity_dh: &[u8; 32]) -> Result<(), DirError> {
-        let owner: Vec<u8> = db
+        let (owner, devices): (Vec<u8>, Option<String>) = db
             .query_row(
-                "SELECT identity_dh FROM users WHERE username=?1",
+                "SELECT identity_dh, devices FROM users WHERE username=?1",
                 rusqlite::params![username],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .map_err(|_| DirError::NotOwner)?;
-        if owner.as_slice() != identity_dh.as_slice() {
-            return Err(DirError::NotOwner);
+        if owner.as_slice() == identity_dh.as_slice() {
+            return Ok(());
         }
-        Ok(())
+        let hex = hex::encode(identity_dh);
+        let list: Vec<Device> = devices.as_deref().and_then(|d| serde_json::from_str(d).ok()).unwrap_or_default();
+        if list.iter().any(|d| d.dh == hex) {
+            return Ok(());
+        }
+        Err(DirError::NotOwner)
     }
 
     // ---- profile images (avatar / banner) ----
@@ -1890,6 +1897,10 @@ mod tests {
         assert_eq!(d.get_profile("media").unwrap().extra["status"], "coding");
         assert!(d.update_profile_full("media", &id, "M", "", "", Some(&serde_json::json!([1]))).is_err());
         assert!(matches!(d.update_profile_full("media", &[9u8; 32], "x", "", "", None), Err(DirError::NotOwner)));
+        // Another device of the account (a phone next to the PC) may edit too.
+        d.add_device("media", &[5u8; 32], "Phone").unwrap();
+        d.update_profile_full("media", &[5u8; 32], "Media", "bio", "", Some(&extra)).unwrap();
+        assert!(d.set_media("media", &[5u8; 32], MediaKind::Avatar, "image/png", b"png").is_ok());
         // Plain update keeps extras.
         d.update_profile("media", &id, "Media2", "bio", "").unwrap();
         assert_eq!(d.get_profile("media").unwrap().extra["status"], "coding");

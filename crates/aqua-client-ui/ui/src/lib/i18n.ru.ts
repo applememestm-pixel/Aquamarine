@@ -175,6 +175,7 @@ export const RU: Record<string, string> = {
   "Dismiss admin": "Снять админа",
   "Display name": "Отображаемое имя",
   "Done": "Готово",
+  "Download": "Скачать",
   "Download started": "Загрузка началась",
   "Download video": "Скачать видео",
   "Drag to move · scroll or +/− to zoom · Enter to save": "Перетаскивайте · колесо или +/− — масштаб · Enter — сохранить",
