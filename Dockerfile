@@ -1,46 +1,32 @@
-# Aquamarine relay (aqua-server) — built from source.
+# Aquamarine website (site/ + the Markdown documents it renders) — a tiny
+# static image, ~2 MB, for amd64 / arm64 / armv7. The relay is NOT in here:
+# it runs natively (aquamarine-server.sh).
 #
-#   docker compose up -d                      # with docker-compose.yml
-#   docker build -t aquamarine-server .       # just the image
+#   docker run -d --name aquamarine-site --restart unless-stopped -p 8080:8080 \
+#     ghcr.io/applememestm-pixel/aquamarine-site
+#   docker compose up -d        # the same, built from this checkout
 #
-# Data (SQLite, attachments, packs, settings) lives in /data — mount a volume.
-# The project website (site/ + docs/*.md) is served on the same port: /, /docs.html, /api.html.
+# Without Docker (Termux on a phone, any Linux/macOS): tools/aquamarine-site.sh
 
-FROM rust:1-bookworm AS build
-WORKDIR /src
-# Only what the relay needs (the Tauri client is not part of the workspace).
-COPY Cargo.toml Cargo.lock ./
-COPY crates/aqua-core crates/aqua-core
-COPY crates/aqua-client-core crates/aqua-client-core
-COPY crates/aqua-server crates/aqua-server
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target \
-    cargo build --release --locked -p aqua-server \
- && cp target/release/aqua-server /aqua-server \
- && strip /aqua-server
-
-FROM debian:bookworm-slim
-RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates tini \
- && rm -rf /var/lib/apt/lists/* \
- && useradd --system --uid 10001 --home /data aqua \
- && mkdir -p /data && chown aqua /data
-COPY --from=build /aqua-server /usr/local/bin/aqua-server
-# Website: the pages, plus the Markdown documents docs.html renders.
+FROM busybox:1.36-musl
 COPY site /srv/site
 COPY docs/*.md /srv/site/docs/
 COPY README.md /srv/site/docs/passport.md
-USER aqua
-WORKDIR /data
-ENV AQUA_LISTEN=0.0.0.0:7777 \
-    AQUA_TG_PROMPT=0 \
-    AQUA_IN_CONTAINER=1 \
-    AQUA_SITE_DIR=/srv/site
-EXPOSE 7777
-VOLUME ["/data"]
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
-  CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/${AQUA_LISTEN##*:} && printf 'GET /v1/stats HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q '\"ok\":true' <&3"]
-ENTRYPOINT ["/usr/bin/tini", "--", "aqua-server"]
-LABEL org.opencontainers.image.title="Aquamarine relay" \
+RUN rm -rf /srv/site/downloads \
+ && printf '%s\n' \
+      '.html:text/html; charset=utf-8' \
+      '.css:text/css; charset=utf-8' \
+      '.js:text/javascript; charset=utf-8' \
+      '.md:text/markdown; charset=utf-8' \
+      '.svg:image/svg+xml' \
+      '.png:image/png' \
+      '.ico:image/x-icon' \
+      '.webp:image/webp' > /etc/httpd.conf
+USER 65534
+EXPOSE 8080
+HEALTHCHECK --interval=60s --timeout=5s CMD ["wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+CMD ["httpd", "-f", "-v", "-p", "8080", "-h", "/srv/site", "-c", "/etc/httpd.conf"]
+LABEL org.opencontainers.image.title="Aquamarine website" \
+      org.opencontainers.image.description="Website and documentation of the Aquamarine messenger" \
       org.opencontainers.image.source="https://github.com/applememestm-pixel/Aquamarine" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"

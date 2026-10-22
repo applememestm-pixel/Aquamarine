@@ -48,10 +48,7 @@ async fn main() -> anyhow::Result<()> {
     aqua_server::packs::prompt_for_token_if_missing();
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    // In Docker the relay sees its own port and the container's address;
-    // AQUA_HOST_PORT / AQUA_LAN_URL (set by tools/aquamarine-docker.sh) tell
-    // it what the host actually exposes, so the banner shows usable URLs.
-    let host_port = std::env::var("AQUA_HOST_PORT").ok().and_then(|p| p.parse::<u16>().ok()).unwrap_or(addr.port());
+    let host_port = addr.port();
     let local = format!("http://127.0.0.1:{host_port}");
     let panel = token.as_ref().map(|t| format!("{local}/admin#token={t}"));
     banner(ansi, &addr, host_port, &local, panel.as_deref());
@@ -78,19 +75,12 @@ fn banner(ansi: bool, addr: &SocketAddr, port: u16, local: &str, panel: Option<&
     let dim = Color::Rgb(140, 150, 165).normal();
     let fg = Style::new().bold();
     let line = paint(&"─".repeat(60), violet);
-    let container = std::env::var("AQUA_IN_CONTAINER").map(|v| v == "1").unwrap_or(false);
-    let lan_url = std::env::var("AQUA_LAN_URL").ok().filter(|u| !u.trim().is_empty());
 
     println!();
     println!("  {}  {}", paint("◆ Aquamarine", teal), paint("relay server", dim));
     println!("  {line}");
     println!("  {}  {}", paint("This PC     ", dim), paint(local, fg));
-    if let Some(url) = lan_url {
-        println!("  {}  {}", paint("Phones/LAN  ", dim), paint(&url, fg));
-    } else if container {
-        // The container's own IP (172.17.x.x) is not reachable from the LAN.
-        println!("  {}  {}", paint("Phones/LAN  ", dim), paint(&format!("http://<host's LAN IP>:{port}"), fg));
-    } else if addr.ip().is_unspecified() {
+    if addr.ip().is_unspecified() {
         match lan_ip() {
             Some(ip) => println!("  {}  {}", paint("Phones/LAN  ", dim), paint(&format!("http://{ip}:{port}"), fg)),
             None => println!("  {}  {}", paint("Phones/LAN  ", dim), paint("no LAN address found", dim)),
@@ -108,11 +98,7 @@ fn banner(ansi: bool, addr: &SocketAddr, port: u16, local: &str, panel: Option<&
     }
     println!("  {line}");
     println!("  {}", paint("Email codes (dev mode) appear below and in the admin panel.", dim));
-    if container {
-        println!("  {}", paint("Runs in the background; stop it with `docker stop <container>`.", dim));
-    } else {
-        println!("  {}", paint("Close this window to stop the server.", dim));
-    }
+    println!("  {}", paint("Close this window to stop the server.", dim));
     println!();
 }
 

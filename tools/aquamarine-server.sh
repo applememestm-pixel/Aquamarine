@@ -8,6 +8,21 @@ cd "$(dirname "$(readlink -f "$0")")"
 # Stop a server that is already running so port 7777 is free.
 pkill -x aqua-server 2>/dev/null && sleep 1 || true
 
+port_busy() { command -v ss >/dev/null 2>&1 && [ -n "$(ss -ltnH 'sport = :7777' 2>/dev/null)" ]; }
+# The relay used to be offered as a Docker container ("aquamarine", restarts
+# by itself) — it holds 7777 too. The relay runs natively now: remove it.
+if port_busy && command -v docker >/dev/null 2>&1; then
+  echo "[i] Port 7777 is taken - removing the old Docker container \"aquamarine\"..."
+  docker rm -f aquamarine >/dev/null 2>&1 || sudo docker rm -f aquamarine >/dev/null 2>&1 || true
+  sleep 1
+fi
+if port_busy; then
+  echo "[X] Port 7777 is still taken by:" >&2
+  ss -ltnpH 'sport = :7777' >&2 || true
+  echo "    Stop that program and run this script again." >&2
+  exit 1
+fi
+
 # Disks mounted with noexec (NTFS/exFAT via fstab "user", USB sticks) can't run
 # programs: chmod does nothing there. Then run a copy from ~/.cache instead -
 # the data (database, logs, aqua-*.json) stays in this folder.

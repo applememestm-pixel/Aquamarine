@@ -99,13 +99,9 @@ Linux: для воспроизведения нужны `gst-plugins-good`, `gst
 
 ```bash
 AQUA_LISTEN=0.0.0.0:7777 ./aqua-server-linux-x64
-# или в Docker
-docker run -d --name aquamarine --restart unless-stopped -p 7777:7777 -v aquamarine-data:/data ghcr.io/applememestm-pixel/aquamarine-server:latest
-# или из исходников
-docker compose up -d --build
 ```
 
-Образ Docker заодно отдаёт сайт проекта с документацией на том же порту (`http://<адрес>:7777/`). Для `https://` и `wss://` перед ним ставится обратный прокси (Caddy, nginx). Переменные окружения, файлы, systemd и панель администратора — [docs/deployment.md](docs/deployment.md); объединение ретрансляторов в сеть — [docs/federation.md](docs/federation.md).
+Сайт с документацией можно держать под рукой где угодно, хоть в Termux на телефоне: `tools/aquamarine-site.sh` (или контейнер `ghcr.io/applememestm-pixel/aquamarine-site`). Для `https://` и `wss://` перед ним ставится обратный прокси (Caddy, nginx). Переменные окружения, файлы, systemd и панель администратора — [docs/deployment.md](docs/deployment.md); объединение ретрансляторов в сеть — [docs/federation.md](docs/federation.md).
 
 ## Сборка из исходников
 

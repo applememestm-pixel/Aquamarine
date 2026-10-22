@@ -1,7 +1,7 @@
 //! Optional static website next to the API.
 //!
-//! With `AQUA_SITE_DIR` pointing at a folder (the Docker image sets it to
-//! `/srv/site`: the project site plus its Markdown documents), every path
+//! With `AQUA_SITE_DIR` pointing at a folder (the project site plus its
+//! Markdown documents, e.g. unpacked aquamarine-site.tar.gz), every path
 //! the API doesn't use is served from there: `/` → `index.html`,
 //! `/docs.html`, `/docs/api.md`, … Without it the relay answers 404 as before.
 

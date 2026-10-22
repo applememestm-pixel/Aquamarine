@@ -483,49 +483,45 @@ jobs:
           overwrite_files: true
           files: dist/*
 
-  # ---------------------------------------------------------------- docker
-  # Container image of the relay on GitHub Container Registry, from the
-  # server binaries built above: ghcr.io/<owner>/aquamarine-server with
-  # :<version> and :latest for a release, :nightly for main.
-  docker:
-    name: docker image
-    needs: server
+  # ---------------------------------------------------------------- site
+  # The website as aquamarine-site.tar.gz (pages + Markdown documents) —
+  # tools/aquamarine-site.sh downloads it to serve the site anywhere, even
+  # from Termux on a phone — and the same files as a tiny container image,
+  # ghcr.io/<owner>/aquamarine-site (:latest; :<version> for a release).
+  # The relay itself is not containerised.
+  site:
+    name: website bundle + image
+    needs: notes
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - name: Pack the website
+        run: |
+          mkdir -p out/aquamarine-site/docs
+          cp -r site/. out/aquamarine-site/
+          rm -rf out/aquamarine-site/downloads
+          cp docs/*.md out/aquamarine-site/docs/
+          cp README.md out/aquamarine-site/docs/passport.md
+          tar -C out -czf aquamarine-site.tar.gz aquamarine-site
+          ls -la aquamarine-site.tar.gz
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
         with:
-          pattern: aqua-server-linux-*
-          path: art
-          merge-multiple: true
-      - name: Lay out the binaries
-        run: |
-          mkdir -p .github/docker/bin
-          cp art/aqua-server-linux-x64 .github/docker/bin/aqua-server-amd64
-          cp art/aqua-server-linux-arm64 .github/docker/bin/aqua-server-arm64
-          ls -la .github/docker/bin
-      - name: Lay out the website
-        run: |
-          cp -r site .github/docker/site
-          rm -rf .github/docker/site/downloads
-          mkdir -p .github/docker/site/docs
-          cp docs/*.md .github/docker/site/docs/
-          cp README.md .github/docker/site/docs/passport.md
-      - name: Image name and tags
+          tag_name: ${{ env.REL_TAG }}
+          prerelease: ${{ env.NIGHTLY == 'true' }}
+          make_latest: ${{ env.NIGHTLY == 'true' && 'false' || 'true' }}
+          overwrite_files: true
+          files: aquamarine-site.tar.gz
+      - name: Image tags
         id: meta
         run: |
-          img="ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/aquamarine-server"
-          if [ "$NIGHTLY" = "true" ]; then
-            tags="$img:nightly"
-          else
-            v="${REL_TAG#v}"
-            tags="$img:$v,$img:latest"
-          fi
+          img="ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/aquamarine-site"
+          tags="$img:latest"
+          [ "$NIGHTLY" = "true" ] || tags="$tags,$img:${REL_TAG#v}"
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
-          echo "$tags"
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -535,8 +531,8 @@ jobs:
           password: ${{ github.token }}
       - uses: docker/build-push-action@v6
         with:
-          context: .github/docker
-          platforms: linux/amd64,linux/arm64
+          context: .
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: true
           tags: ${{ steps.meta.outputs.tags }}
 
@@ -546,7 +542,7 @@ jobs:
   checksums:
     name: checksums
     if: ${{ always() && needs.notes.result == 'success' }}
-    needs: [notes, desktop, android, ios, server]
+    needs: [notes, desktop, android, ios, server, site]
     runs-on: ubuntu-latest
     steps:
       # Nightly: drop files an older build left behind (renamed bundles),

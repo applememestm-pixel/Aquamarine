@@ -18,30 +18,33 @@ AQUA_LISTEN=0.0.0.0:7777 ./aqua-server-linux-x64
 |---|---|
 | `aquamarine-server.sh`, `Aquamarine Server.bat` | Запуск свежей сборки ретранслятора |
 | `server-panel.sh` | Ретранслятор с текстовой панелью: адрес для подключения, счётчики `/v1/stats`, журнал (коды подтверждения в режиме разработки) |
-| `aquamarine-docker.sh` | Ретранслятор в Docker из `ghcr.io` (по умолчанию `:nightly`, `TAG=latest` — стабильный): обновляет образ, пересоздаёт контейнер, показывает адрес и журнал |
+| `aquamarine-site.sh` | Сайт проекта с документацией на `:8080` — на компьютере, в Termux на телефоне или в Docker (раздел 2) |
 
-## 2. Docker
+## 2. Сайт проекта: Termux, Docker
 
-Образ публикуется в GitHub Container Registry: `ghcr.io/applememestm-pixel/aquamarine-server` — `<версия>` и `latest` с каждым релизом, `nightly` с каждым push в `main`; amd64 и arm64.
+Ретранслятор в контейнер не упаковывается — он запускается как обычная программа (раздел 1). Отдельно можно держать под рукой сайт проекта с документацией и справочником API; он же всегда доступен на [GitHub Pages](https://applememestm-pixel.github.io/Aquamarine/).
 
-```bash
-docker run -d --name aquamarine --restart unless-stopped \
-  -p 7777:7777 -v aquamarine-data:/data \
-  ghcr.io/applememestm-pixel/aquamarine-server:latest
-```
+`tools/aquamarine-site.sh` отдаёт сайт на `http://<адрес>:8080/` (`PORT=…` — другой порт). Из копии репозитория берёт файлы рядом, иначе скачивает `aquamarine-site.tar.gz` из релиза (`TAG=latest` — стабильный, по умолчанию `nightly`). Нужен `python3` (или `busybox`, или `php`).
 
-Из исходников — `docker-compose.yml` в корне репозитория:
+Termux на телефоне:
 
 ```bash
-docker compose up -d --build      # первая сборка ~5 мин
-docker compose logs -f            # журнал; коды подтверждения почты — здесь, пока не настроен SMTP
+pkg install curl python
+curl -fsSLO https://raw.githubusercontent.com/applememestm-pixel/Aquamarine/main/tools/aquamarine-site.sh
+bash aquamarine-site.sh            # update — скачать свежую версию
 ```
 
-- Данные (база, вложения, наборы, настройки) — в томе `/data`. Процесс работает от пользователя `aqua` (UID 10001); при монтировании каталога хоста вместо тома выдайте ему права: `chown 10001 <каталог>`.
-- Переменные окружения — как в разделе 5 (`-e AQUA_ADMIN_TOKEN=…`, `-e AQUA_PUBLIC_URL=…`).
-- Сайт проекта с документацией и справочником API встроен в образ и открывается на том же порту: `http://<адрес>:7777/` (`docs.html`, `api.html`). Кнопки «Скачать» ведут на последний релиз GitHub.
-- Проверка состояния встроена (`HEALTHCHECK` по `/v1/stats`).
-- Обновление: `docker pull …:latest`, затем пересоздать контейнер; том сохраняется.
+Docker (amd64, arm64, armv7; образ ~2 МБ на busybox):
+
+```bash
+bash aquamarine-site.sh docker     # фоном, поднимается после перезагрузки; stop — остановить
+# или вручную
+docker run -d --name aquamarine-site --restart unless-stopped -p 8080:8080 ghcr.io/applememestm-pixel/aquamarine-site
+# или из исходников
+docker compose up -d --build
+```
+
+Кнопки «Скачать» на сайте ведут на последний релиз GitHub.
 
 ## 3. TLS
 
@@ -100,8 +103,7 @@ WantedBy=multi-user.target
 | `AQUA_TG_PROMPT=0` | Не спрашивать токен Telegram при запуске | — |
 | `AQUA_DEFAULT_PACKS` | Наборы, импортируемые при запуске | `eltaller47` |
 | `AQUA_GAMES_CACHE` | Файл каталога игр | `aqua-games.json` |
-| `AQUA_SITE_DIR` | Каталог статического сайта: всё, что не занято API, отдаётся оттуда (`/` → `index.html`). В образе Docker — `/srv/site` | — (сайт выключен) |
-| `AQUA_HOST_PORT`, `AQUA_LAN_URL` | Порт и адрес в локальной сети для заставки при запуске в контейнере (задаёт `aquamarine-docker.sh`) | Порт из `AQUA_LISTEN`, адрес определяется сам |
+| `AQUA_SITE_DIR` | Каталог статического сайта: всё, что не занято API, отдаётся оттуда (`/` → `index.html`) | — (сайт выключен) |
 
 ## 6. Файлы
 
