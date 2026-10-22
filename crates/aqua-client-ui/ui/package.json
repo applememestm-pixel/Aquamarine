@@ -1,7 +1,7 @@
 {
   "name": "aqua-client-ui-frontend",
   "private": true,
-  "version": "0.2.101",
+  "version": "1.0.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
