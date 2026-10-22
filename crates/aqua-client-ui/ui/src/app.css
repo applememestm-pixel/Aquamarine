@@ -161,6 +161,11 @@ html.wk-lowfx .eq i:nth-child(3) { transform: scaleY(0.75); }
   }
   body.chat-open .main-pane { padding-bottom: env(safe-area-inset-bottom, 0px); }
 }
+/* Phones: the conversation slides in over the list, and back. */
+@media (max-width: 720px) and (prefers-reduced-motion: no-preference) {
+  body.chat-open .main-pane { animation: aq-slide-in .28s var(--ease-out); }
+  body:not(.chat-open) .list { animation: aq-slide-back .26s var(--ease-out); }
+}
 
 /* Scrollbars — thin, themed, rounded, hover-reveal. */
 *::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -207,11 +212,23 @@ input, textarea, .bubble, .art-md, .msg-col, [contenteditable],
   --ease-spring: cubic-bezier(.2, .9, .25, 1.12);
 }
 button, a, input, select, textarea {
-  transition-property: background-color, color, border-color, box-shadow, opacity;
+  transition-property: background-color, color, border-color, box-shadow, opacity, scale;
   transition-duration: .18s;
   transition-timing-function: var(--ease-out);
 }
 @keyframes aq-pop { from { opacity: 0; transform: translateY(6px) scale(.98); } }
+@keyframes aq-pop-spring { from { opacity: 0; transform: translateY(10px) scale(.94); } 60% { opacity: 1; } }
+@keyframes aq-fade { from { opacity: 0; } }
+@keyframes aq-slide-in { from { opacity: .4; transform: translateX(36px); } }
+@keyframes aq-slide-back { from { opacity: .4; transform: translateX(-28px); } }
+@media (prefers-reduced-motion: no-preference) {
+  /* Every press gives way a little (the `scale` property keeps each
+     button's own transform intact). */
+  button:not(:disabled):active, [role="button"]:active, a:active { scale: .97; }
+  /* Dialogs that don't animate themselves pop in with a soft spring. */
+  [role="dialog"], [role="alertdialog"] { animation: aq-pop-spring .26s var(--ease-spring); }
+  [role="menu"], [role="listbox"] { animation: aq-pop .16s var(--ease-out); }
+}
 
 /* Focus */
 :focus-visible {

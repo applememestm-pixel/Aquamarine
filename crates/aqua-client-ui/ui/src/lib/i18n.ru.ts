@@ -1895,4 +1895,5 @@ export const RU: Record<string, string> = {
   "allow \"Nearby devices\" for Aquamarine to use Bluetooth": "разрешите Aquamarine доступ к «Устройствам поблизости», чтобы работал Bluetooth",
   "Bluetooth service isn't running (systemctl start bluetooth)": "служба Bluetooth не запущена (systemctl start bluetooth)",
   "Bluetooth delivery isn't available on this platform yet": "доставка через Bluetooth на этой платформе пока недоступна",
+  "Messages are end-to-end encrypted": "Сообщения защищены сквозным шифрованием",
 };

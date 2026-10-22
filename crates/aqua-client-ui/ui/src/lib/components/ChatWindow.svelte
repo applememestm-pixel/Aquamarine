@@ -10,6 +10,7 @@
   import { icons } from "../icons";
   import { activeChat, activeMessages, drafts, activeId, sendCurrent, loadActiveMessages, info, chats } from "../stores";
   import { meshStatus, meshSyncNow } from "../mesh";
+  import Welcome from "./Welcome.svelte";
   import { settings } from "../theme";
   import { api, assetUrl, sendChatControl } from "../tauri";
   import { openFingerprint } from "./FingerprintModal.svelte";
@@ -680,6 +681,17 @@
   }
 
   let messagesEl: HTMLDivElement | undefined = $state();
+  // Switching chats: the new conversation glides in instead of snapping.
+  let lastShownChat = "";
+  $effect(() => {
+    const id = $activeId ?? "";
+    const el = messagesEl;
+    if (!el || !id || id === lastShownChat) return;
+    const first = !lastShownChat;
+    lastShownChat = id;
+    if (first || matchMedia("(prefers-reduced-motion: reduce)").matches || document.documentElement.classList.contains("soft-render")) return;
+    el.animate([{ opacity: 0, transform: "translateY(10px)" }, { opacity: 1, transform: "none" }], { duration: 240, easing: "cubic-bezier(.2,.8,.2,1)" });
+  });
   let composerEl: RichComposer | undefined = $state();
   let text = $state("");
 
@@ -2335,7 +2347,7 @@
 
 <main class="active-chat" class:with-rooms={rooms.length > 0} class:voice-on={fullVoice} class:voice-chat={fullVoice && voiceChat}>
   {#if !$activeChat}
-    <div class="empty">{$t("Pick a chat on the left.")}</div>
+    <Welcome />
   {:else}
     {#if $statsFor === $activeChat.id && amChanAdmin && activeGroup}
       <ChannelStats gid={$activeChat.id} subscribers={activeGroup.members.length} posts={statPosts} />

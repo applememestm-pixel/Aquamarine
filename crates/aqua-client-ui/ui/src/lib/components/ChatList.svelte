@@ -8,6 +8,9 @@
   }
   import { chatStatus, presenceNow } from "../presence";
   import { t, tr } from "../i18n";
+  import { fly, scale as scaleIn } from "svelte/transition";
+  import { flip } from "svelte/animate";
+  import { cubicOut, backOut } from "svelte/easing";
   import { avatars, peerCards, clans } from "../people";
   import ClanTag from "./ClanTag.svelte";
   import { keepOnScreen } from "../actions";
@@ -156,6 +159,10 @@
     ctx = null;
     void api.openChatWindow(id, name).catch((e) => showToast(String(e)));
   }
+
+  // Lists move (a chat jumps to the top) and appear with a short glide.
+  const calm = typeof window !== "undefined" && (matchMedia("(prefers-reduced-motion: reduce)").matches || document.documentElement.classList.contains("soft-render"));
+  const motionMs = (ms: number) => (calm ? 0 : ms);
 
   // ---- Hold an avatar: peek into the chat without opening it (Telegram) ----
   let peek = $state<{ id: string; msgs: ChatMessage[] } | null>(null);
@@ -495,6 +502,8 @@
       {@const lk = !!$chatLocks[c.id] && !$unlocked[c.id]}
       <button
         class="chat-item"
+        animate:flip={{ duration: motionMs(260), easing: cubicOut }}
+        in:fly|global={{ y: 10, duration: motionMs(300), delay: Math.min(ci, 14) * 22, easing: cubicOut }}
         title={compact ? c.name : undefined}
         class:active={c.id === $activeId}
         class:kb={ci === kbIndex}
@@ -541,7 +550,7 @@
               </span>
             {/if}
             {#if c.unread > 0 && c.id !== $activeId}
-              <span class="chat-badge" class:muted={c.channel || $mutedChats.has(c.id)}>{c.unread}</span>
+              {#key c.unread}<span class="chat-badge" class:muted={c.channel || $mutedChats.has(c.id)} in:scaleIn={{ start: 0.4, duration: 260, easing: backOut }}>{c.unread}</span>{/key}
             {:else if $pinnedChats.includes(c.id)}
               <span class="pin-ic" title={$t("Pinned")}><svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 3l5 5-3 1-4 4 1 5-2 2-4-4-5 5-1-1 5-5-4-4 2-2 5 1 4-4z"/></svg></span>
             {/if}
