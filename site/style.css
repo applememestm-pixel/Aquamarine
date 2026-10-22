@@ -317,3 +317,78 @@ a.card .more { display: inline-block; margin-top: 12px; font-size: 13.5px; font-
 .doc-shell > main, .host > * , .hero > * { min-width: 0; }
 @media (max-width: 480px) { .nav-cta { display: none; } }
 html { overflow-x: clip; } .hero { position: relative; }
+
+/* ======================================================================
+   Motion (motion.js): living background, reveal on scroll, glowing cards,
+   a chat mock that types. Off for prefers-reduced-motion.
+   ====================================================================== */
+.fx-bg { position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
+.fx-grid {
+  position: absolute; inset: 0;
+  background-image:
+    linear-gradient(rgba(0,229,199,0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,229,199,0.045) 1px, transparent 1px);
+  background-size: 52px 52px;
+  -webkit-mask-image: radial-gradient(ellipse at 50% 20%, #000 0%, transparent 72%);
+          mask-image: radial-gradient(ellipse at 50% 20%, #000 0%, transparent 72%);
+}
+.fx-glow { position: absolute; border-radius: 50%; filter: blur(110px); opacity: 0.32; }
+.fx-glow.g1 { width: 520px; height: 520px; background: var(--accent); top: -160px; left: -140px; }
+.fx-glow.g2 { width: 460px; height: 460px; background: var(--accent-2); bottom: -160px; right: -120px; }
+.fx-glow.g3 { width: 300px; height: 300px; background: #1fc7e0; top: 40%; left: 55%; opacity: 0.16; }
+.fx-particles { position: absolute; inset: 0; }
+
+nav { transition: background .3s ease, border-color .3s ease, box-shadow .3s ease; }
+nav.scrolled { box-shadow: 0 10px 30px -18px rgba(0,0,0,.9); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .fx-glow { animation: fx-float 16s ease-in-out infinite; }
+  .fx-glow.g2 { animation-delay: -8s; }
+  .fx-glow.g3 { animation-duration: 22s; animation-delay: -4s; }
+  @keyframes fx-float {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    50% { transform: translate(46px, 34px) scale(1.15); }
+  }
+
+  /* sections rise in */
+  .js-motion .rv { opacity: 0; transform: translateY(28px) scale(.985); transition: opacity .7s cubic-bezier(.2,.7,.2,1), transform .7s cubic-bezier(.2,.7,.2,1); transition-delay: var(--rv-delay, 0ms); }
+  .js-motion .rv.in { opacity: 1; transform: none; }
+
+  /* hero */
+  .hero h1 .grad { background-size: 220% 100%; animation: fx-shine 7s ease-in-out infinite; }
+  @keyframes fx-shine { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+  .brand .logo { animation: fx-pulse 4.5s ease-in-out infinite; }
+  @keyframes fx-pulse { 0%, 100% { box-shadow: 0 0 18px -4px var(--accent-glow); } 50% { box-shadow: 0 0 34px 0 var(--accent-glow); } }
+  .mock { animation: fx-phone 6s ease-in-out infinite; }
+  @keyframes fx-phone { 0%, 100% { transform: translateY(0) rotate(-.4deg); } 50% { transform: translateY(-14px) rotate(.4deg); } }
+  .js-motion .mock-body > * { opacity: 0; transform: translateY(10px) scale(.96); transition: opacity .45s ease, transform .45s cubic-bezier(.2,.9,.3,1.2); }
+  .js-motion .mock-body > .show { opacity: 1; transform: none; }
+  .eyebrow .dot, .trust .dot { animation: fx-blip 2.4s ease-in-out infinite; }
+  @keyframes fx-blip { 50% { opacity: .35; transform: scale(.7); } }
+
+  /* buttons: lift + a sheen that sweeps across */
+  .btn, .dl-btn, .nav-cta { position: relative; overflow: hidden; transition: transform .18s ease, box-shadow .18s ease, background .18s ease, color .18s ease, border-color .18s ease; }
+  .btn:hover, .dl-btn:hover { transform: translateY(-2px); }
+  .btn:active, .dl-btn:active { transform: translateY(0) scale(.98); }
+  .btn-primary::after, .dl-btn::after {
+    content: ""; position: absolute; inset: 0; transform: translateX(-120%);
+    background: linear-gradient(100deg, transparent 30%, rgba(255,255,255,.45) 50%, transparent 70%);
+  }
+  .btn-primary:hover::after, .dl-btn:hover::after { transform: translateX(120%); transition: transform .8s ease; }
+}
+
+/* the typing bubble of the mock */
+.typing { display: flex; gap: 4px; align-self: flex-start; padding: 11px 13px; border-radius: 15px; border-bottom-left-radius: 5px; background: var(--ink-2); border: 1px solid var(--line); }
+.typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: fx-dots 1.3s infinite; }
+.typing span:nth-child(2) { animation-delay: .18s; } .typing span:nth-child(3) { animation-delay: .36s; }
+@keyframes fx-dots { 0%, 60%, 100% { opacity: .3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
+
+/* cards: lift, glow and a spotlight that follows the cursor */
+.card, .dl, .code, .note { position: relative; isolation: isolate; transition: transform .25s ease, border-color .25s ease, box-shadow .25s ease; }
+.card::before, .dl::before, .code::before, .note::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; z-index: -1; opacity: 0; transition: opacity .3s ease;
+  background: radial-gradient(360px circle at var(--mx, 50%) var(--my, 50%), rgba(0,229,199,.12), transparent 60%);
+}
+.card:hover::before, .dl:hover::before, .code:hover::before, .note:hover::before { opacity: 1; }
+.card:hover, .dl:hover { box-shadow: 0 0 0 1px rgba(0,229,199,.18), 0 18px 46px -22px var(--accent-glow); }
+.dl:hover { transform: translateY(-4px); border-color: rgba(0,229,199,.35); }
