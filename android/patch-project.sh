@@ -34,6 +34,22 @@ if [ -n "$MA" ]; then
   echo '[patch] MainActivity requests local network access'
 fi
 
+# 1c'. Nearby delivery over Bluetooth (crates/aqua-client-ui/src/mesh_android.rs).
+if [ -n "$MA" ]; then
+  cp -f "$HERE/AquaMesh.kt" "$(dirname "$MA")/AquaMesh.kt"
+  echo '[patch] AquaMesh.kt (Bluetooth nearby delivery)'
+fi
+if ! grep -q BLUETOOTH_CONNECT "$M"; then
+  AQ_BT='<uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+    ' perl -0pi -e 's/<application/$ENV{AQ_BT}<application/' "$M"
+  echo '[patch] Bluetooth permissions added'
+fi
+
 # 1d. Plain HTTP to the app's own loopback media server (audio / video
 #     playback); debug builds also to the dev server.
 mkdir -p "$APP/src/main/res/xml" "$APP/src/debug/res/xml"

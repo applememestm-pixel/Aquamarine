@@ -23,7 +23,7 @@
 | [calls.md](calls.md) | Личные и групповые звонки, объёмный звук в голосовых комнатах |
 | [workspace.md](workspace.md) | События, чеклисты, общие документы, доски, избранное реакцией |
 | [sealed-messages.md](sealed-messages.md) | Запечатанные послания: разделение знания, условия, окно для отказа |
-| [bluetooth.md](bluetooth.md) | Передача файлов по Bluetooth (OBEX через BlueZ) |
+| [bluetooth.md](bluetooth.md) | Сообщения без интернета по Bluetooth (как в Briar) и передача файлов (OBEX) |
 | [stickers.md](stickers.md) | Наборы стикеров и эмодзи, редактор, реакции |
 | [profiles.md](profiles.md) | Профиль, статусы, активность, карточки игр |
 | [bots.md](bots.md) | Боты, мини-приложения, совместимость с Telegram Bot API |

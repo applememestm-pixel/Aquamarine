@@ -43,6 +43,7 @@
   import BluetoothSheet from "./lib/components/BluetoothSheet.svelte";
   import BluetoothIncoming from "./lib/components/BluetoothIncoming.svelte";
   import { startBluetooth } from "./lib/bluetooth";
+  import { startMesh } from "./lib/mesh";
   import ReminderPopup from "./lib/components/ReminderPopup.svelte";
   import ChatCalendar from "./lib/components/ChatCalendar.svelte";
   import { startPlanner } from "./lib/planner";
@@ -104,6 +105,7 @@
     startWorkspace();
     startCapsules();
     if (!/android|iphone|ipad/i.test(navigator.userAgent)) startBluetooth();
+    startMesh();
     startChannelStats();
     startHandoff();
     const stopIcon = startAppIcon();

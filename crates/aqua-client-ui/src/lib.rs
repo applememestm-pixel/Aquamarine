@@ -20,6 +20,7 @@ pub mod autodelete;
 pub mod windows;
 pub mod bluetooth;
 pub mod servers;
+pub mod mesh;
 
 use anyhow::Result;
 use tauri::Manager;
@@ -38,6 +39,9 @@ pub fn run() -> Result<()> {
     media_server::prefer_software_video_decoding();
     let _ = gpu::init();
     let builder = tauri::Builder::default();
+    // Android: the Bluetooth sockets of nearby delivery live in Kotlin.
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(mesh::android_plugin());
     // WebKitGTK denies camera / mic / screen capture unless the app answers
     // its permission request ("Mic test failed: NotAllowedError" on Linux).
     // The webview only ever shows our own UI, so grant what calls need.
@@ -92,6 +96,11 @@ pub fn run() -> Result<()> {
             }
             commands::spawn_activity_watcher(app.handle().clone());
             autodelete::spawn(app.handle().clone());
+            // Nearby delivery (Bluetooth, like Briar): listen for contacts.
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move { mesh::start(handle).await });
+            }
             #[cfg(target_os = "linux")]
             linux_webview::configure(app);
             Ok(())
@@ -99,6 +108,9 @@ pub fn run() -> Result<()> {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            mesh::mesh_status,
+            mesh::mesh_set_enabled,
+            mesh::mesh_sync_now,
             bluetooth::bt_status,
             bluetooth::bt_devices,
             bluetooth::bt_power,

@@ -213,7 +213,46 @@ impl DoubleRatchet {
 
     /// Decrypt one message. Handles DH ratchet steps and out-of-order
     /// delivery transparently.
+    /// Decrypts one message. All-or-nothing: if the message doesn't
+    /// authenticate (a replay, a copy that already arrived by another
+    /// route, a forgery) the state is exactly what it was before, so the
+    /// next genuine message still decrypts.
     pub fn decrypt(
+        &mut self,
+        header: &Header,
+        ciphertext: &[u8],
+        associated_data: &[u8],
+    ) -> Result<Vec<u8>, RatchetError> {
+        let before = self.rollback_point();
+        match self.decrypt_in_place(header, ciphertext, associated_data) {
+            Ok(p) => Ok(p),
+            Err(e) => {
+                *self = before; // the advanced state is dropped (zeroized)
+                Err(e)
+            }
+        }
+    }
+
+    /// A private copy taken only to undo a failed [`Self::decrypt`]; it
+    /// never leaves this type (see the note on `Clone` above).
+    fn rollback_point(&self) -> Self {
+        Self {
+            root_key: self.root_key,
+            dhs: self.dhs.clone(),
+            dhr: self.dhr,
+            ck_send: self.ck_send,
+            ck_recv: self.ck_recv,
+            n_send: self.n_send,
+            n_recv: self.n_recv,
+            pn: self.pn,
+            skipped: self.skipped.clone(),
+            skipped_order: self.skipped_order.clone(),
+            max_skip: self.max_skip,
+            max_cache: self.max_cache,
+        }
+    }
+
+    fn decrypt_in_place(
         &mut self,
         header: &Header,
         ciphertext: &[u8],
@@ -508,6 +547,34 @@ mod tests {
         // Second delivery: message key was consumed, so decrypt must fail.
         // (Either NoMessageKey or Crypto, depending on state; either way not Ok.)
         assert!(bob.decrypt(&h, &ct, &ad).is_err());
+    }
+
+    #[test]
+    fn replay_does_not_break_the_session() {
+        // The same envelope arriving twice (relay + Bluetooth) must not
+        // advance the chain: the next real message still decrypts.
+        let (mut alice, mut bob, ad) = establish_session();
+        let (h1, c1) = alice.encrypt(b"one", &ad).unwrap();
+        assert_eq!(bob.decrypt(&h1, &c1, &ad).unwrap(), b"one");
+        assert!(bob.decrypt(&h1, &c1, &ad).is_err());
+        let (h2, c2) = alice.encrypt(b"two", &ad).unwrap();
+        assert_eq!(bob.decrypt(&h2, &c2, &ad).unwrap(), b"two");
+    }
+
+    #[test]
+    fn forged_message_does_not_break_the_session() {
+        let (mut alice, mut bob, ad) = establish_session();
+        let (h1, mut c1) = alice.encrypt(b"one", &ad).unwrap();
+        let good = c1.clone();
+        c1[3] ^= 0x40;
+        assert!(bob.decrypt(&h1, &c1, &ad).is_err());
+        assert_eq!(bob.decrypt(&h1, &good, &ad).unwrap(), b"one");
+        // A forged header claiming a new DH ratchet key doesn't stick either.
+        let (mut h2, c2) = alice.encrypt(b"two", &ad).unwrap();
+        let real = h2.clone();
+        h2.dh_pub = crate::crypto::DhSecret::generate().public();
+        assert!(bob.decrypt(&h2, &c2, &ad).is_err());
+        assert_eq!(bob.decrypt(&real, &c2, &ad).unwrap(), b"two");
     }
 
     #[test]

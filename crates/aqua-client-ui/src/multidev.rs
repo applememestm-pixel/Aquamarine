@@ -107,8 +107,16 @@ pub async fn send_to_address(app: &AppHandle, addr: &str, payload: &str) -> Resu
         }
     };
     if let Some((transport, env)) = fast {
-        let transport = transport.ok_or("not connected")?;
-        return transport.send_envelope(addr, &env).map_err(|e| format!("send: {e}"));
+        // No relay right now: the envelope waits in the nearby-delivery
+        // outbox (Bluetooth, or the relay once it's back) — see mesh.rs.
+        let sent = transport.map(|t| t.send_envelope(addr, &env).is_ok()).unwrap_or(false);
+        if !sent {
+            if !worth_keeping(payload) {
+                return Err("not connected".into());
+            }
+            crate::mesh::queue(app, addr, &env);
+        }
+        return Ok(());
     }
     let (transport, identity) = {
         let s = state.lock().map_err(|e| e.to_string())?;
@@ -125,6 +133,29 @@ pub async fn send_to_address(app: &AppHandle, addr: &str, payload: &str) -> Resu
     Ok(())
 }
 
+/// Typing, presence, call signalling and handoff only matter right now;
+/// they aren't kept for later delivery.
+fn worth_keeping(payload: &str) -> bool {
+    use crate::commands::{CALL_PREFIX, CTL_PREFIX, GCALL_PREFIX, STATUS_PREFIX, TYPING_PREFIX};
+    let inner = unwrap_sync(payload).map(|(_, p)| p).unwrap_or(payload);
+    ![CALL_PREFIX, TYPING_PREFIX, STATUS_PREFIX, GCALL_PREFIX, CTL_PREFIX].iter().any(|p| inner.starts_with(p))
+}
+
+/// Device addresses of `user` we can reach without the relay: the last
+/// known device list, else every device we have a session with.
+fn offline_addresses(app: &AppHandle, user: &str) -> Vec<String> {
+    if let Ok(c) = CACHE.lock() {
+        if let Some((_, list)) = c.as_ref().and_then(|m| m.get(user)) {
+            return list.clone();
+        }
+    }
+    let state: State<'_, StdMutex<AppState>> = app.state();
+    let Ok(s) = state.lock() else { return Vec::new() };
+    let mut v: Vec<String> = s.sessions.keys().filter(|a| base_user(a) == user).cloned().collect();
+    v.sort();
+    v
+}
+
 /// Send `payload` to every device of `peer`. With `sync`, my other devices
 /// get a copy too (so they show what I sent). Succeeds when at least one of
 /// the peer's devices got it.
@@ -132,9 +163,12 @@ pub async fn fanout(app: &AppHandle, peer: &str, payload: &str, sync: bool) -> R
     let state: State<'_, StdMutex<AppState>> = app.state();
     let (transport, me) = {
         let s = state.lock().map_err(|e| e.to_string())?;
-        (s.transport.clone().ok_or("not connected to a server")?, s.username.clone().unwrap_or_default())
+        (s.transport.clone(), s.username.clone().unwrap_or_default())
     };
     let peer = base_user(peer).to_string();
+    let Some(transport) = transport else {
+        return fanout_offline(app, &peer, &me, payload, sync).await;
+    };
     let mut first_err: Option<String> = None;
     let mut ok = 0usize;
     if peer != me {
@@ -159,6 +193,35 @@ pub async fn fanout(app: &AppHandle, peer: &str, payload: &str, sync: bool) -> R
         // A device that disappeared: refresh the list next time.
         invalidate(&peer);
         return Err(first_err.unwrap_or_else(|| "no device to send to".into()));
+    }
+    Ok(())
+}
+
+/// [`fanout`] with no relay: encrypt for every device we have a session
+/// with and leave the envelopes in the nearby-delivery outbox.
+async fn fanout_offline(app: &AppHandle, peer: &str, me: &str, payload: &str, sync: bool) -> Result<(), String> {
+    if !worth_keeping(payload) {
+        return Err("not connected to a server".into());
+    }
+    let mut ok = 0usize;
+    if peer != me {
+        for addr in offline_addresses(app, peer) {
+            if send_to_address(app, &addr, payload).await.is_ok() {
+                ok += 1;
+            }
+        }
+    }
+    if (sync || peer == me) && !me.is_empty() {
+        let copy = if peer == me { payload.to_string() } else { wrap_sync(peer, payload) };
+        for addr in offline_addresses(app, me) {
+            let _ = send_to_address(app, &addr, &copy).await;
+        }
+        if peer == me {
+            return Ok(());
+        }
+    }
+    if ok == 0 {
+        return Err("not connected to a server".into());
     }
     Ok(())
 }

@@ -254,6 +254,12 @@ pub async fn connect_to_server(
         }
         tracing::info!("incoming stream ended");
     });
+    // Messages written while offline go out now (mesh.rs).
+    crate::mesh::relay_back();
+    {
+        let app_fl = app.clone();
+        tokio::spawn(async move { crate::mesh::flush_to_relay(&app_fl).await });
+    }
 
     let info = state.lock().map_err(|e| e.to_string())?.init_info();
     Ok(info)
@@ -2900,17 +2906,19 @@ pub struct CallSignalEvent {
 
 // ---------- Incoming reader dispatch ---------------------------------------
 
-async fn handle_incoming(app: &AppHandle, inc: aqua_client_core::Incoming) {
+pub(crate) async fn handle_incoming(app: &AppHandle, inc: aqua_client_core::Incoming) {
     use aqua_client_core::Incoming::*;
     match inc {
         Initial { from, message } => on_incoming_initial(app, from, message).await,
         Envelope { from, envelope } => on_incoming_envelope(app, from, envelope).await,
         Plaintext { from, text } => on_incoming_plaintext(app, from, text).await,
         Closed => {
+            crate::mesh::relay_lost();
             tracing::info!("transport closed by server");
             let _ = app.emit("aqua://disconnected", ());
         }
         Error(e) => {
+            crate::mesh::relay_lost();
             tracing::warn!(err = %e, "transport error");
             let _ = app.emit("aqua://transport_error", e);
         }

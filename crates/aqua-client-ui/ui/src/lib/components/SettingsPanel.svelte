@@ -39,9 +39,10 @@
   import { backupState, refreshBackup, backupNow } from "../backup";
   import { handoffOn } from "../handoff";
   import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+  import { meshStatus, meshSyncNow, meshSetEnabled, refreshMesh } from "../mesh";
 
   // ---- Section navigation ----
-  type Sec = "ghost" | "language" | "appearance" | "theme" | "behaviour" | "notifications" | "voice" | "wallpaper" | "accent" | "bots" | "account" | "about" | "privacy" | "stickers" | "backups" | "devices";
+  type Sec = "nearby" | "ghost" | "language" | "appearance" | "theme" | "behaviour" | "notifications" | "voice" | "wallpaper" | "accent" | "bots" | "account" | "about" | "privacy" | "stickers" | "backups" | "devices";
   let section = $state<Sec>("notifications");
   // Telegram-mobile style: coloured icon tiles in grouped lists.
   interface Item { id: Sec | "profile" | "shortcuts"; label: string; color: string; icon: string; hint?: string }
@@ -51,6 +52,7 @@
       { id: "profile", label: "Edit profile", color: "#007AFF", icon: ic(`<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>`) },
       { id: "ghost", label: "Ghost mode", color: "#5E5CE6", icon: ic(`<path d="M9 10h.01"/><path d="M15 10h.01"/><path d="M12 2a8 8 0 0 0-8 8v12l3-3 2.5 2.5L12 19l2.5 2.5L17 19l3 3V10a8 8 0 0 0-8-8z"/>`) },
       { id: "devices", label: "Devices", color: "#34C759", icon: ic(`<rect x="2" y="4" width="13" height="10" rx="2"/><line x1="5" y1="18" x2="12" y2="18"/><rect x="17" y="8" width="5" height="12" rx="1"/>`) },
+      { id: "nearby", label: "Without internet", color: "#0A84FF", icon: ic(`<path d="M7 7l10 10-5 5V2l5 5L7 17"/>`) },
       { id: "backups", label: "Backups", color: "#30B0C7", icon: ic(`<path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/><path d="M22 2v6h-6"/>`) },
       { id: "privacy", label: "Privacy & Security", color: "#8E8E93", icon: ic(`<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>`) },
     ],
@@ -253,6 +255,8 @@
     catch (e) { devices = null; devErr = String(e); }
   }
   $effect(() => { if ($settingsOpen && section === "devices") void loadDevices(); });
+  let meshBusy = $state(false);
+  $effect(() => { if ($settingsOpen && section === "nearby") void refreshMesh(); });
   async function devRemove(d: DeviceInfo) {
     const ok = await askConfirm({
       title: tr("Sign out “{n}”?", { n: d.name || (d.primary ? tr("Main device") : d.id) }),
@@ -1465,6 +1469,45 @@
       </section>
       {/if}
 
+      {#if section === "nearby"}
+      {@const ms = $meshStatus}
+      <section class="group">
+        <div class="label">{$t("Bluetooth, like Briar")}</div>
+        <div class="bots-note">{$t("No internet or the server is down? Messages to your contacts wait on this device, and as soon as their phone or computer is within Bluetooth range (about 10 m), the two devices swap them directly. When the server is back, whatever is still waiting goes through it. Everything stays end-to-end encrypted; only contacts you've already chatted with can connect.")}</div>
+        <button class="toggle-row" onclick={() => meshSetEnabled(!(ms?.enabled ?? true))}>
+          <div class="tr-text"><div class="tr-title">{$t("Deliver over Bluetooth")}</div><div class="tr-sub">{ms && !ms.supported ? $t("Not available on this platform yet.") : ms?.ready ? $t("Listening for contacts nearby.") : ms?.note ? $t(ms.note) : $t("Bluetooth is not ready.")}</div></div>
+          <span class="switch" class:on={ms?.enabled ?? true}></span>
+        </button>
+        <div class="mesh-row">
+          <div class="mesh-big">{ms?.queued ?? 0}</div>
+          <div class="mesh-txt">
+            <div class="tr-title">{$t("waiting to be delivered")}</div>
+            <div class="tr-sub">{Object.entries(ms?.per_chat ?? {}).map(([u, n]) => `${u} · ${n}`).join(", ") || $t("Nothing is waiting.")}</div>
+          </div>
+          <button class="mesh-btn" disabled={meshBusy || !(ms?.supported) || !(ms?.enabled ?? true)} onclick={async () => { meshBusy = true; const e = await meshSyncNow(); meshBusy = false; showToast(e ? tr(e.replace(/^Error: /, "")) : tr("Done")); }}>
+            {meshBusy || ms?.syncing ? $t("Searching…") : $t("Find contacts nearby")}
+          </button>
+        </div>
+      </section>
+      {#if ms?.last?.length}
+      <section class="group">
+        <div class="label">{$t("Recent meetings")}</div>
+        {#each ms.last as r}
+          <div class="mesh-log">
+            <span class="bk-dot" class:on={!r.error}></span>
+            <span class="mesh-who">{r.peer ? r.peer.split("~")[0] : r.device}</span>
+            <span class="mesh-what">{r.error ? $t(r.error) : `↑${r.sent} ↓${r.received}`}</span>
+            <span class="mesh-when">{new Date(r.at * 1000).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
+          </div>
+        {/each}
+      </section>
+      {/if}
+      <section class="group">
+        <div class="label">{$t("How to start")}</div>
+        <div class="bots-note">{$t("1. Chat with the person at least once through a server — that's when your devices exchange keys. 2. Android finds nearby phones by itself; on Linux pair the devices once in the system Bluetooth settings. 3. Keep Bluetooth on. Messages are swapped automatically every couple of minutes while the server is away, or right now with “Find contacts nearby”.")}</div>
+      </section>
+      {/if}
+
       {#if section === "backups"}
       <section class="group">
         <div class="label">{$t("Encrypted backup")}</div>
@@ -1795,6 +1838,15 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .ap-split { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 4px; align-items: start; padding-right: 16px; }
   .ap-controls { min-width: 0; }
   .ap-preview { position: sticky; top: 64px; margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .mesh-row { display: flex; align-items: center; gap: 14px; margin: 10px 16px 4px; padding: 12px 14px; border-radius: 14px; background: var(--bg-input); border: 1px solid var(--border); }
+  .mesh-big { font-size: 28px; font-weight: 800; color: var(--accent); min-width: 36px; text-align: center; font-variant-numeric: tabular-nums; }
+  .mesh-txt { flex: 1; min-width: 0; }
+  .mesh-btn { border: none; border-radius: 10px; padding: 9px 14px; background: var(--accent); color: #06070C; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+  .mesh-btn:disabled { opacity: .5; cursor: default; }
+  .mesh-log { display: flex; align-items: center; gap: 10px; padding: 8px 16px; font-size: 13px; }
+  .mesh-who { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mesh-what { color: var(--fg-muted); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mesh-when { color: var(--fg-dim); font-size: 12px; white-space: nowrap; }
   .ap-div { display: flex; align-items: center; gap: 12px; margin: 26px 16px 4px; scroll-margin-top: 64px; }
   .ap-div::before, .ap-div::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, transparent, var(--border-strong), transparent); }
   .ap-div span { font-size: 11px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-muted); }

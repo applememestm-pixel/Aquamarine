@@ -50,6 +50,25 @@ if ($ma) {
   Copy-Item (Join-Path $PSScriptRoot 'MainActivity.kt') $ma.FullName -Force
   Write-Host '[patch] MainActivity requests local network access'
 }
+# 1c'. Nearby delivery over Bluetooth (crates\aqua-client-ui\src\mesh_android.rs).
+if ($ma) {
+  Copy-Item (Join-Path $PSScriptRoot 'AquaMesh.kt') (Join-Path $ma.DirectoryName 'AquaMesh.kt') -Force
+  Write-Host '[patch] AquaMesh.kt (Bluetooth nearby delivery)'
+}
+$x = [IO.File]::ReadAllText($m)
+if ($x -notmatch 'BLUETOOTH_CONNECT') {
+  $bt = @(
+    '<uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />',
+    '<uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />',
+    '<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />',
+    '<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />',
+    '<uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />',
+    '<uses-feature android:name="android.hardware.bluetooth" android:required="false" />'
+  ) -join "`n    "
+  $x = ([regex]'<application').Replace($x, "$bt`n    <application", 1)
+  [IO.File]::WriteAllText($m, $x)
+  Write-Host '[patch] Bluetooth permissions added'
+}
 
 # 2. App icon.
 $icons = Join-Path $root 'crates\aqua-client-ui\icons\android'

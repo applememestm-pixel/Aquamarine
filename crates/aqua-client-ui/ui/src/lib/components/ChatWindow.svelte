@@ -9,6 +9,7 @@
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { icons } from "../icons";
   import { activeChat, activeMessages, drafts, activeId, sendCurrent, loadActiveMessages, info, chats } from "../stores";
+  import { meshStatus, meshSyncNow } from "../mesh";
   import { settings } from "../theme";
   import { api, assetUrl, sendChatControl } from "../tauri";
   import { openFingerprint } from "./FingerprintModal.svelte";
@@ -3229,6 +3230,16 @@
         {/each}
       </div>
     {/if}
+    {#if $activeChat && !$info?.connected && ($meshStatus?.per_chat?.[$activeChat.id] ?? 0) > 0}
+      {@const n = $meshStatus?.per_chat?.[$activeChat.id] ?? 0}
+      <div class="mesh-bar">
+        <span class="mesh-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7l10 10-5 5V2l5 5L7 17"/></svg></span>
+        <span class="mesh-tx">{$t("No server — {n} waiting. They go via Bluetooth when {name} is nearby, or via the server once it's back.", { n, name: $activeChat.name.split(" ")[0] })}</span>
+        {#if $meshStatus?.supported}
+          <button class="mesh-go" disabled={$meshStatus?.syncing} onclick={async () => { const e = await meshSyncNow(); if (e) showToast(tr(e.replace(/^Error: /, ""))); }}>{$t($meshStatus?.syncing ? "Searching…" : "Find nearby")}</button>
+        {/if}
+      </div>
+    {/if}
     <div class="composer" class:disabled={!liveChat}>
       {#if botMenu}
         <button class="bot-menu-btn" onclick={() => { if ($activeChat && botMenu) openMiniApp({ bot: $activeChat.id, url: botMenu.url, from: "menu" }); }} title={botMenu.url}>
@@ -4355,6 +4366,17 @@
     60% { opacity: 1; }
     to { opacity: 1; transform: scale(1) translateY(0); }
   }
+  .mesh-bar {
+    display: flex; align-items: center; gap: 10px; margin: 0 12px 6px; padding: 8px 10px 8px 12px;
+    border-radius: 12px; font-size: 12.5px; line-height: 1.35; color: var(--fg-muted);
+    background: color-mix(in srgb, #0A84FF 12%, var(--bg-surface)); border: 1px solid color-mix(in srgb, #0A84FF 35%, transparent);
+    animation: veil-in .2s ease-out;
+  }
+  .mesh-ic { width: 18px; height: 18px; color: #0A84FF; flex-shrink: 0; }
+  .mesh-ic svg { width: 100%; height: 100%; }
+  .mesh-tx { flex: 1; min-width: 0; }
+  .mesh-go { border: none; border-radius: 9px; padding: 6px 11px; background: #0A84FF; color: #fff; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+  .mesh-go:disabled { opacity: .6; }
   .ctx-veil {
     position: fixed; inset: 0; z-index: 119;
     background: rgba(0, 0, 0, 0.28);
