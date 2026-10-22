@@ -155,6 +155,8 @@ export interface Settings {
   wallpaperDim?: number;
   /** See-through menus, popovers and dialogs (frosted glass). */
   glassMenus?: boolean;
+  /** Contrast rows: every other chat / person a shade darker, so neighbours don't merge. */
+  contrastRows?: boolean;
   /** How solid they are with glassMenus on, 0.35–0.95. */
   menuAlpha?: number;
   // Behaviour
@@ -361,6 +363,7 @@ function apply(s: Settings) {
   root.style.setProperty("--bubble-r", `${s.bubbleRadius ?? 14}px`);
   root.classList.toggle("no-autoplay-stickers", s.autoplayStickers === false);
   root.classList.toggle("glass-menus", !!s.glassMenus);
+  root.classList.toggle("contrast-rows", !!s.contrastRows);
   root.style.setProperty("--menu-alpha", `${Math.round((s.menuAlpha ?? 0.7) * 100)}%`);
 
   // Custom UI font loaded from a file the user picked.

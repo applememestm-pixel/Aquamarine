@@ -5,7 +5,7 @@
   import { startAutoscroll } from "./lib/autoscroll";
   import { migrateCustomWallpaper, fitCurrentWallpaper, followWallpaper } from "./lib/theme";
   import { api } from "./lib/tauri";
-  import { bootstrap, activeTab, info, activeId, backToList } from "./lib/stores";
+  import { bootstrap, activeTab, info, activeId, backToList, connect, quickConnect } from "./lib/stores";
   import { openRegistration, closeRegistration, registrationDismissed, wizardHold } from "./lib/components/RegistrationWizard.svelte";
   import { initTheme } from "./lib/theme";
   import NavRail from "./lib/components/NavRail.svelte";
@@ -50,6 +50,7 @@
   import { stickerEditorState, stickerQueue } from "./lib/panels/stickerEditor";
   import PackManager from "./lib/components/PackManager.svelte";
   import RegistrationWizard from "./lib/components/RegistrationWizard.svelte";
+  import ChatGroupSheet from "./lib/components/ChatGroupSheet.svelte";
   import LockScreen from "./lib/components/LockScreen.svelte";
   import GroupCallPanel from "./lib/components/GroupCallPanel.svelte";
   import { groupCall, initGroupCalls } from "./lib/groupCall";
@@ -73,12 +74,14 @@
   import { initShortcuts } from "./lib/shortcuts";
   import { loadReactionPack } from "./lib/reactionPack";
 
-  // Entry gate: show the registration / login window on EVERY launch until
-  // the user is in a live session. A registered user gets a one-click
-  // "Continue as @me" inside the window; they can also register/log in as
-  // someone else. Nothing auto-enters silently — the window is always the
-  // door in, so registration is always testable.
+  // Entry: an account registered on this device goes straight in (after
+  // the app passcode, if one is set) — no "Continue as" window. The
+  // sign-in window shows only for a new device, or when the relay says
+  // this account isn't linked to this device any more. A relay that is
+  // down doesn't block the app: chats open, delivery waits (mesh.rs) and
+  // the connection is retried in the background.
   let everConnected = $state(false);
+  let autoEntry = false;
 
   // Profiles: publish ours on every (re)connect, fetch everyone we chat with.
   let wasConnected = false;
@@ -95,9 +98,22 @@
     const i = $info;
     if (!i) return;
     if (i.connected) { everConnected = true; if (!$wizardHold) closeRegistration(); return; }
-    // Only show the door on first launch — a transient drop mid-session must
-    // not pop the login window over the user's chat (the plug icon reconnects).
-    if (!everConnected && !$registrationDismissed) openRegistration();
+    // Only on launch — a transient drop mid-session must not pop the login
+    // window over the user's chat (the plug icon reconnects).
+    if (everConnected || $registrationDismissed) return;
+    if (i.registered && i.username && i.server_url) {
+      if (autoEntry) return;
+      autoEntry = true;
+      const user = i.username, url = i.server_url;
+      void connect(url, user).then((err) => {
+        if (!err) return;
+        // The account belongs elsewhere now: the window explains what to do.
+        if (/different identity|already claimed|\b403\b|forbidden|not regist/i.test(err)) openRegistration();
+        else void quickConnect(url, user);   // relay down: keep trying quietly
+      });
+      return;
+    }
+    openRegistration();
   });
 
   onMount(() => {
@@ -297,6 +313,7 @@
 <PackManager />
 <Lazy when={!!($stickerEditorState || $stickerQueue)} load={() => import("./lib/components/StickerEditor.svelte")} />
 <RegistrationWizard />
+<ChatGroupSheet />
 <LockScreen />
 <Lightbox />
 <ForwardPicker />

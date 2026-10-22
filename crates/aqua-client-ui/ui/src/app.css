@@ -387,3 +387,12 @@ html.wk-lowfx.glass-menus :is(.ctx-menu, .chat-ctx, .room-menu, .attach-pop, .pl
   .cp-pop, .bd-pop, .panel, .pm, [role="dialog"][aria-modal="true"], .toast) {
   backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
 }
+
+/* Contrast rows (Settings → Appearance): every other row of a list a shade
+   darker, so neighbours don't merge. Lists mark rows with .alt. */
+html.contrast-rows .alt:not(.active):not(:hover):not(.kb):not(.pinned) {
+  background: color-mix(in srgb, var(--bg-list, var(--bg-surface)) 72%, #000);
+}
+html.contrast-rows[data-theme="light"] .alt:not(.active):not(:hover):not(.kb):not(.pinned) {
+  background: color-mix(in srgb, var(--bg-list, var(--bg-surface)) 92%, #000);
+}

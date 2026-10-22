@@ -698,9 +698,9 @@
         {#if showMembers}
           <div class="card">
             <div class="ct">{$t(isChannel ? "Subscribers" : "Members")}</div>
-            {#each filteredMembers.slice(0, 50) as m (m.username)}
+            {#each filteredMembers.slice(0, 50) as m, mi (m.username)}
               {@const mt = tagOf(group, m.username)}
-              <div class="mrow">
+              <div class="mrow" class:alt={mi % 2 === 1}>
                 {@render memberAva(m.username)}
                 <span class="m-name" style:color={roleColor(group, m.username) || null}>{m.username}{#if m.username === me}<em> {$t("(you)")}</em>{/if}
                   {#if mt?.tag}<span class="mtag" class:admin={mt.admin}>{mt.tag}</span>{/if}</span>
@@ -907,9 +907,9 @@
           <input class="inp search" placeholder={$t("Search members")} bind:value={memberFilter} />
         </div>
         <div class="card">
-          {#each filteredMembers as m (m.username)}
+          {#each filteredMembers as m, mi (m.username)}
             {@const mt = tagOf(group, m.username)}
-            <button class="mrow click" onclick={() => { openMember = openMember === m.username ? "" : m.username; tagDraft = m.tag ?? ""; }}>
+            <button class="mrow click" class:alt={mi % 2 === 1} onclick={() => { openMember = openMember === m.username ? "" : m.username; tagDraft = m.tag ?? ""; }}>
               {@render memberAva(m.username)}
               <span class="m-name" style:color={roleColor(group, m.username) || null}>{m.username}{#if m.username === me}<em> {$t("(you)")}</em>{/if}
                 {#each memberRoles(group, m.username).slice(0, 3) as r (r.id)}<span class="role-pill" style:--rc={r.color || "var(--fg-dim)"}>{r.name}</span>{/each}

@@ -32,6 +32,8 @@
   import type { DirProfile, ChatMessage } from "../types";
   import { assetUrl } from "../tauri";
   import { folders, activeFolder } from "../folders";
+  import { chatGroups, openGroupId, createGroup, addToGroup, removeFromGroup, type ChatGroup } from "../chatGroups";
+  import type { ChatSummary } from "../types";
   import { openFolderManager } from "./FolderManager.svelte";
 
   // ---- Archive (Telegram): archived chats live behind one row ----
@@ -56,6 +58,57 @@
     const pinned = list.filter((c) => rank.has(c.id)).sort((a, b) => rank.get(a.id)! - rank.get(b.id)!);
     return [...pinned, ...list.filter((c) => !rank.has(c.id))];
   });
+  // ---- Chat groups: a folded group is one row, at its newest chat's place ----
+  interface Entry { key: string; c: ChatSummary; g?: ChatGroup; members?: ChatSummary[] }
+  let groupByChat = $derived.by(() => {
+    const m = new Map<string, ChatGroup>();
+    for (const g of $chatGroups) for (const id of g.chatIds) m.set(id, g);
+    return m;
+  });
+  let entries = $derived.by((): Entry[] => {
+    if ($search.trim() || showArchive) return shownChats.map((c) => ({ key: c.id, c }));
+    const out: Entry[] = [];
+    const placed = new Set<string>();
+    for (const c of shownChats) {
+      const g = groupByChat.get(c.id);
+      if (g?.collapsed) {
+        if (placed.has(g.id)) continue;
+        placed.add(g.id);
+        const set = new Set(g.chatIds);
+        out.push({ key: g.id, c, g, members: shownChats.filter((x) => set.has(x.id)) });
+      } else {
+        out.push({ key: c.id, c });
+      }
+    }
+    return out;
+  });
+  const groupUnread = (e: Entry) => (e.members ?? []).reduce((n, m) => n + (m.id === $activeId ? 0 : m.unread), 0);
+  /** "CeZeOs news" inside group "CeZeOs" → "news": the group name is already on the row. */
+  function memberLabel(group: string, chat: string): string {
+    const rest = chat.toLowerCase().startsWith(group.toLowerCase()) ? chat.slice(group.length).replace(/^[\s·:|\-–—]+/, "") : "";
+    return rest || chat;
+  }
+  const groupMuted = (e: Entry) => (e.members ?? []).every((m) => m.channel || $mutedChats.has(m.id));
+
+  /** Chat menu → "Add to a group…": pick one, or name a new one. */
+  let groupPick = $state<{ x: number; y: number; id: string } | null>(null);
+  function newGroupFor(id: string) {
+    groupPick = null;
+    askInput({
+      title: tr("New chat group"),
+      description: tr("Chats of a group can be shown as one row of the list."),
+      fields: [{ label: tr("Name") }],
+      submitLabel: tr("Create"),
+      onSubmit: async ([n]) => {
+        if (!(n ?? "").trim()) return tr("Enter a name");
+        const gid = createGroup(n ?? "", [id]);
+        closeInput();
+        openGroupId.set(gid);
+        return null;
+      },
+    });
+  }
+
   function pinChat(id: string) {
     const was = $pinnedChats.includes(id);
     if (!togglePin(id)) showToast(tr("You can pin up to {n} chats", { n: MAX_PINS }));
@@ -267,16 +320,18 @@
   let kbIndex = $state(-1);
   $effect(() => { void $search; kbIndex = $search ? 0 : -1; });
   function onSearchKey(e: KeyboardEvent) {
-    const n = shownChats.length;
+    const n = entries.length;
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       if (!n) return;
       e.preventDefault();
       kbIndex = e.key === "ArrowDown" ? (kbIndex + 1) % n : (kbIndex - 1 + n) % n;
       document.querySelectorAll(".chat-item")[kbIndex]?.scrollIntoView({ block: "nearest" });
     } else if (e.key === "Enter") {
-      const c = shownChats[kbIndex >= 0 ? kbIndex : 0];
-      if (!c) return;
+      const en = entries[kbIndex >= 0 ? kbIndex : 0];
+      if (!en) return;
       e.preventDefault();
+      if (en.g) { openGroupId.set(en.g.id); return; }
+      const c = en.c;
       void selectChat(c.id);
       search.set("");
       kbIndex = -1;
@@ -497,26 +552,55 @@
         </div>
       </button>
     {/if}
-    {#each shownChats as c, ci (c.id)}
-      {@const st = chatStatus(c, $peerPresence, $presenceNow)}
-      {@const lk = !!$chatLocks[c.id] && !$unlocked[c.id]}
+    {#each entries as en, ci (en.key)}
+      {@const c = en.c}
+      {@const g = en.g}
+      {@const st = g ? null : chatStatus(c, $peerPresence, $presenceNow)}
+      {@const lk = !g && !!$chatLocks[c.id] && !$unlocked[c.id]}
+      {@const inGroup = g ? undefined : groupByChat.get(c.id)}
       <button
         class="chat-item"
+        class:grp={!!g}
+        class:alt={ci % 2 === 1}
         animate:flip={{ duration: motionMs(260), easing: cubicOut }}
         in:fly|global={{ y: 10, duration: motionMs(300), delay: Math.min(ci, 14) * 22, easing: cubicOut }}
-        title={compact ? c.name : undefined}
-        class:active={c.id === $activeId}
+        title={compact ? (g ? g.name : c.name) : undefined}
+        class:active={!g && c.id === $activeId}
         class:kb={ci === kbIndex}
-        class:pinned={$pinnedChats.includes(c.id)}
-        class:dragging={dragPin?.active && dragPin.id === c.id}
-        class:drop-before={dragPin?.active && dragPin.id !== c.id && $pinnedChats.indexOf(c.id) === dragPin.over}
-        onpointerdown={(e) => pinDown(e, c.id)}
+        class:pinned={!g && $pinnedChats.includes(c.id)}
+        class:dragging={!g && dragPin?.active && dragPin.id === c.id}
+        class:drop-before={!g && dragPin?.active && dragPin.id !== c.id && $pinnedChats.indexOf(c.id) === dragPin.over}
+        onpointerdown={(e) => { if (!g) pinDown(e, c.id); }}
         onpointermove={(e) => { peekMove(e); pinMove(e); }}
         onpointerup={() => { peekCancel(); pinUp(); }}
         onpointercancel={() => { peekCancel(); dragPin = null; }}
-        onclick={(e) => { if (suppressClick) return; if ((e.ctrlKey || e.metaKey) && DESKTOP) { popOut(c.id, c.name); return; } void selectChat(c.id); }}
-        oncontextmenu={(e) => { if (peekFired || peek) { e.preventDefault(); return; } if ((e.ctrlKey || e.metaKey) && DESKTOP) { e.preventDefault(); popOut(c.id, c.name); return; } openCtx(e, c.id); }}
+        onclick={(e) => { if (suppressClick) return; if (g) { openGroupId.set(g.id); return; } if ((e.ctrlKey || e.metaKey) && DESKTOP) { popOut(c.id, c.name); return; } void selectChat(c.id); }}
+        oncontextmenu={(e) => { if (g) { e.preventDefault(); openGroupId.set(g.id); return; } if (peekFired || peek) { e.preventDefault(); return; } if ((e.ctrlKey || e.metaKey) && DESKTOP) { e.preventDefault(); popOut(c.id, c.name); return; } openCtx(e, c.id); }}
       >
+        {#if g}
+          {@const n = groupUnread(en)}
+          <div class="gstack">
+            {#if g.emoji}<span class="gemo">{g.emoji}</span>
+            {:else}
+              {#each (en.members ?? []).slice(0, 3) as m, k (m.id)}
+                <span class="avatar gmini" style="--gradient: {m.gradient}; --k: {k}">{m.letter}{#if $avatars[m.id]}<img class="ava-img" src={$avatars[m.id]} alt="" loading="lazy" />{/if}</span>
+              {/each}
+            {/if}
+            {#if compact && n > 0}<span class="cmp-badge" class:muted={groupMuted(en)}>{n > 99 ? "99+" : n}</span>{/if}
+          </div>
+          <div class="chat-body">
+            <div class="chat-row-1">
+              <span class="chat-name"><span class="cn-text">{g.name}</span><span class="g-count">{(en.members ?? []).length}</span></span>
+              <span class="chat-time">{c.time}</span>
+            </div>
+            <div class="chat-row-2">
+              <span class="chat-preview"><span class="me-prefix">{memberLabel(g.name, c.name)}:</span> {previewText(c.preview)}</span>
+              {#if n > 0}
+                {#key n}<span class="chat-badge" class:muted={groupMuted(en)} in:scaleIn={{ start: 0.4, duration: 260, easing: backOut }}>{n}</span>{/key}
+              {/if}
+            </div>
+          </div>
+        {:else}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div class="avatar sz-44" class:lk style="--gradient: {c.gradient}" onpointerdown={(e) => peekDown(e, c.id)} title={compact ? undefined : $t("Hold to peek")}>
           {lk ? "" : c.letter}
@@ -529,6 +613,7 @@
           <div class="chat-row-1">
             <span class="chat-name">
               <span class="cn-text" class:lk-blur={lk}>{lk ? "•••••••" : c.name}</span>
+              {#if inGroup}<!-- svelte-ignore a11y_no_static_element_interactions --><!-- svelte-ignore a11y_click_events_have_key_events --><span class="g-tag" onclick={(e) => { e.stopPropagation(); openGroupId.set(inGroup.id); }} title={$t("Chat group")}>{inGroup.emoji ?? "▣"} {inGroup.name}</span>{/if}
               {#if c.verified}<span class="verified-badge">{@html icons.verified}</span>{/if}
               {#if $clans[c.id]}<ClanTag tag={$clans[c.id]} />{/if}
               {#if $mutedChats.has(c.id)}<span class="muted-ic" title={$t("Muted")}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg></span>{/if}
@@ -556,6 +641,7 @@
             {/if}
           </div>
         </div>
+        {/if}
       </button>
     {/each}
   </div>
@@ -573,6 +659,13 @@
         {#if pi < $pinnedChats.length - 1}<button onclick={() => { movePin(cid, pi + 1); ctx = null; }}>{$t("Move down")}</button>{/if}
       {/if}
       <button onclick={() => archiveChat(cid)}>{$t($archived.has(cid) ? "Unarchive" : "Archive")}</button>
+      {#if groupByChat.get(cid)}
+        {@const cg = groupByChat.get(cid)!}
+        <button onclick={() => { ctx = null; openGroupId.set(cg.id); }}>{$t("Open group “{name}”", { name: cg.name })}</button>
+        <button onclick={() => { removeFromGroup(cid); ctx = null; }}>{$t("Remove from the group")}</button>
+      {:else}
+        <button onclick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); groupPick = { x: r.right + 4, y: r.top, id: cid }; ctx = null; }}>{$t("Add to a group…")} ›</button>
+      {/if}
       <button onclick={() => { setMuted(cid); ctx = null; }}>{$t($mutedChats.has(cid) ? "Unmute" : "Mute notifications")}</button>
       <button onclick={() => { void selectChat(cid); ctx = null; }}>{$t("Open")}</button>
       {#if $chatLocks[cid]}
@@ -582,6 +675,19 @@
         <button onclick={() => { const id = cid; ctx = null; askSetLock(id); }}>{$t("Set a password…")}</button>
       {/if}
       {#if DESKTOP}<button onclick={() => popOut(cid, $chats.find((x) => x.id === cid)?.name ?? cid)}>{$t("Open in a new window")} <span class="ctx-kbd">Ctrl+click</span></button>{/if}
+    </div>
+  {/if}
+
+  {#if groupPick}
+    {@const gp = groupPick}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div class="ctx-scrim" onclick={() => (groupPick = null)} oncontextmenu={(e) => { e.preventDefault(); groupPick = null; }}></div>
+    <div class="chat-ctx" use:keepOnScreen style:left="{gp.x}px" style:top="{gp.y}px" role="menu">
+      {#each $chatGroups as cg (cg.id)}
+        <button onclick={() => { addToGroup(cg.id, gp.id); groupPick = null; showToast(tr("Added to “{name}”", { name: cg.name })); }}>{cg.emoji ?? "▣"} {cg.name} <span class="ctx-kbd">{cg.chatIds.length}</span></button>
+      {/each}
+      <button onclick={() => newGroupFor(gp.id)}>＋ {$t("New group…")}</button>
     </div>
   {/if}
 
@@ -680,6 +786,17 @@
   .jc-btn { border: none; border-radius: 8px; padding: 7px 11px; background: var(--accent); color: #06070C; font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; white-space: nowrap; }
   .jc-done { font-size: 12px; color: var(--fg-muted); font-weight: 700; }
   .ctx-scrim { position: fixed; inset: 0; z-index: 70; }
+  /* chat groups */
+  .gstack { position: relative; width: 44px; height: 44px; flex-shrink: 0; }
+  .gmini { position: absolute; width: 28px; height: 28px; font-size: 11px; border: 2px solid var(--bg-list);
+    left: calc(var(--k) * 8px); top: calc(var(--k) * 8px); z-index: calc(3 - var(--k)); }
+  .gemo { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 14px; background: var(--bg-input); font-size: 22px; }
+  .g-count { flex-shrink: 0; min-width: 18px; padding: 0 6px; height: 17px; border-radius: 9px; font-size: 10.5px; font-weight: 800; line-height: 17px; text-align: center;
+    color: var(--fg-muted); background: var(--bg-input); border: 1px solid var(--border); }
+  .chat-item.grp .cn-text { font-weight: 700; }
+  .g-tag { flex-shrink: 1; min-width: 0; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 7px; border-radius: 7px;
+    font-size: 10.5px; font-weight: 700; color: var(--accent); background: var(--accent-soft); cursor: pointer; }
+  .g-tag:hover { filter: brightness(1.2); }
   /* Peek (hold an avatar) */
   .peek-veil {
     position: fixed; inset: 0; z-index: 90;

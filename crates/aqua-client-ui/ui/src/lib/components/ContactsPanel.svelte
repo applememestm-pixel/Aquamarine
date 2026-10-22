@@ -84,8 +84,8 @@
         </div>
       </div>
     {:else}
-      {#each rows as r (r.username)}
-        <div class="row">
+      {#each rows as r, ri (r.username)}
+        <div class="row" class:alt={ri % 2 === 1}>
           <button class="open" onclick={() => openContact(r)} title={$t(r.has_chat ? "Open chat" : "View profile")}>
             <div class="avatar" style:background-image={$avatars[r.username] ? `url("${$avatars[r.username]}")` : undefined} style:background-size="cover" style:background-position="center">{$avatars[r.username] ? "" : (r.full_name || r.username).charAt(0).toUpperCase()}</div>
             <div class="meta">

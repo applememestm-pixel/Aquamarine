@@ -995,6 +995,10 @@
       </section>
       <section class="group">
         <div class="label">{$t("Appearance")}</div>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, contrastRows: !x.contrastRows }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Contrast rows")}</div><div class="tr-sub">{$t("Every other chat and person in lists is a shade darker, so neighbours don't merge (like Spotify)")}</div></div>
+          <span class="switch" class:on={!!$settings.contrastRows}></span>
+        </button>
         <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, glassMenus: !x.glassMenus }))}>
           <div class="tr-text"><div class="tr-title">{$t("See-through menus")}</div><div class="tr-sub">{$t("Menus, pop-ups and windows become frosted glass over the chat")}</div></div>
           <span class="switch" class:on={!!$settings.glassMenus}></span>
