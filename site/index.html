@@ -199,7 +199,10 @@ POST /v1/bot/send   {"to":"alice","text":"hi"}
   const REPO = "https://github.com/applememestm-pixel/Aquamarine";
   const VERSION = "0.2.1";
   let DIR = REPO + "/releases/latest/download/";
-  if (!location.hostname.endsWith("github.io")) {
+  // The public site (GitHub Pages, also under the project domain) always
+  // offers the release; a local copy may have its own downloads/.
+  const PUBLIC = /(^|\.)github\.io$|(^|\.)aquamarinemessenger\.pw$/.test(location.hostname);
+  if (!PUBLIC) {
     fetch("downloads/Aquamarine.AppImage", { method: "HEAD" })
       .then((r) => { if (r.ok) { DIR = "downloads/"; render(); } })
       .catch(() => { /* file:// or no local copy */ });
