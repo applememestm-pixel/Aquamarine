@@ -2,6 +2,21 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/); версии — [семантические](https://semver.org/lang/ru/). Подробные описания выпусков — в [docs/releases](docs/releases/).
 
+## [0.2.101] — 2026-10-22
+
+### Добавлено
+- Сообщения без интернета: Wi-Fi и локальная сеть на всех платформах, Bluetooth в Linux, Android и Windows.
+- Группы чатов, как сообщества в Telegram; контрастные строки в списках.
+- Bot API: кнопки и форматирование в отправке, рассылка, контакты, команды, профиль, статистика, звонок.
+- Выбор сервера с IP, портом и расположением; касания как в Telegram.
+
+### Изменено
+- После пароля блокировки — сразу в аккаунт, без окна входа.
+- Плавные анимации в приложении и на сайте; обновлённая панель сервера; новая иконка.
+- Docker-образ ретранслятора отдаёт сайт; сайт готов к домену aquamarinemessenger.pw.
+
+[Описание](docs/releases/v0.2.101.md)
+
 ## [0.2.1] — 2026-10-21
 
 ### Добавлено
@@ -46,6 +61,7 @@
 
 Первый публичный выпуск: личные чаты со сквозным шифрованием, группы, звонки, стикеры, ретранслятор.
 
+[0.2.101]: https://github.com/applememestm-pixel/Aquamarine/releases/tag/v0.2.101
 [0.2.1]: https://github.com/applememestm-pixel/Aquamarine/releases/tag/v0.2.1
 [0.2.0]: https://github.com/applememestm-pixel/Aquamarine/compare/v0.1.1...v0.2.1
 [0.1.1]: https://github.com/applememestm-pixel/Aquamarine/releases/tag/v0.1.1
