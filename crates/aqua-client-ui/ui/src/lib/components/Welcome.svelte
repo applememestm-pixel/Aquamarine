@@ -14,7 +14,7 @@
     const c = canvas;
     if (!c) return;
     const calm = matchMedia("(prefers-reduced-motion: reduce)").matches
-      || document.documentElement.classList.contains("soft-render");
+      || document.documentElement.classList.contains("soft-render") || document.documentElement.classList.contains("wk-lowfx");
     if (calm) return;
     const ctx = c.getContext("2d");
     if (!ctx) return;
@@ -80,9 +80,9 @@
 <style>
   .welcome { position: relative; place-self: stretch; overflow: hidden; display: grid; place-items: center; min-height: 0; height: 100%; }
   canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-  .glow { position: absolute; border-radius: 50%; filter: blur(90px); opacity: .22; pointer-events: none; }
-  .g1 { width: 380px; height: 380px; background: var(--accent); top: -120px; left: -80px; animation: drift 15s ease-in-out infinite; }
-  .g2 { width: 340px; height: 340px; background: var(--accent-2, #7B5CFF); bottom: -120px; right: -60px; animation: drift 15s ease-in-out -7.5s infinite; }
+  .glow { position: absolute; border-radius: 50%; opacity: .22; pointer-events: none; }
+  .g1 { width: 680px; height: 680px; background: radial-gradient(circle, var(--accent) 0%, transparent 62%); top: -270px; left: -230px; animation: drift 15s ease-in-out infinite; }
+  .g2 { width: 620px; height: 620px; background: radial-gradient(circle, var(--accent-2, #7B5CFF) 0%, transparent 62%); bottom: -260px; right: -200px; animation: drift 15s ease-in-out -7.5s infinite; }
   @keyframes drift { 50% { transform: translate(40px, 30px) scale(1.15); } }
   .center { position: relative; text-align: center; animation: rise .6s cubic-bezier(.2,.8,.2,1) both; }
   @keyframes rise { from { opacity: 0; transform: translateY(18px); } }
@@ -97,4 +97,6 @@
   .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: blip 2.4s ease-in-out infinite; }
   @keyframes blip { 50% { opacity: .35; transform: scale(.7); } }
   @media (prefers-reduced-motion: reduce) { .glow, .logo, .dot, .center { animation: none; } }
+  /* Linux (WebKitGTK): endless animations repaint the whole window on the CPU. */
+  :global(html.wk-lowfx) .glow, :global(html.wk-lowfx) .logo, :global(html.wk-lowfx) .dot { animation: none; }
 </style>

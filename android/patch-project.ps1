@@ -54,8 +54,21 @@ if ($ma) {
 if ($ma) {
   Copy-Item (Join-Path $PSScriptRoot 'AquaMesh.kt') (Join-Path $ma.DirectoryName 'AquaMesh.kt') -Force
   Write-Host '[patch] AquaMesh.kt (Bluetooth nearby delivery)'
+  # Server on this device (crates\aqua-client-ui\src\relay_host.rs).
+  Copy-Item (Join-Path $PSScriptRoot 'AquaRelay.kt') (Join-Path $ma.DirectoryName 'AquaRelay.kt') -Force
+  Write-Host '[patch] AquaRelay.kt (server on this device)'
 }
 $x = [IO.File]::ReadAllText($m)
+if ($x -notmatch 'AquaRelayService') {
+  $fgs = '<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />' + "`n    " +
+         '<uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />' + "`n    " +
+         '<uses-permission android:name="android.permission.WAKE_LOCK" />' + "`n    <application"
+  $x = ([regex]'<application').Replace($x, $fgs, 1)
+  $svc = '<service android:name=".AquaRelayService" android:exported="false" android:foregroundServiceType="specialUse"><property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Hosts the Aquamarine relay server for the user and their contacts" /></service>' + "`n    </application>"
+  $x = $x.Replace('</application>', $svc)
+  [IO.File]::WriteAllText($m, $x)
+  Write-Host '[patch] foreground service for the server added'
+}
 if ($x -notmatch 'BLUETOOTH_CONNECT') {
   $bt = @(
     '<uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />',

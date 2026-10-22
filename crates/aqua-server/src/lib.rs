@@ -1928,3 +1928,25 @@ pub fn app(state: AppState) -> Router {
 fn short_hex(bytes: &[u8]) -> String {
     hex::encode(&bytes[..bytes.len().min(8)])
 }
+
+/// Run the relay inside another program — the app's "Server on this device"
+/// (a phone or PC hosting its own relay). The caller sets the working
+/// directory first: the relay keeps its files (database, blobs, settings)
+/// relative to it, exactly like the standalone binary.
+pub async fn serve_embedded(
+    listener: tokio::net::TcpListener,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> std::io::Result<()> {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    let port = listener.local_addr().map(|a| a.port()).unwrap_or(7777);
+    let everywhere = listener.local_addr().map(|a| a.ip().is_unspecified()).unwrap_or(false);
+    ONCE.call_once(|| {
+        packs::spawn_default_imports();
+        public::spawn(port, everywhere, false);
+    });
+    let state = AppState::new();
+    state.blobs.spawn_sweeper();
+    fed::spawn_sync(state.clone());
+    tgapi::resume_webhooks(state.clone());
+    axum::serve(listener, app(state)).with_graceful_shutdown(shutdown).await
+}

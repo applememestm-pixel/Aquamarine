@@ -61,6 +61,8 @@ pub fn list_chats(state: State<'_, StdMutex<AppState>>) -> Result<Vec<ChatSummar
     let s = state.lock().map_err(|e| e.to_string())?;
     Ok(s.chat_order
         .iter()
+        // "user~device" rows came from an older build: a device isn't a chat.
+        .filter(|id| !id.contains('~'))
         .filter_map(|id| s.chats.get(id).map(|c| c.summary.clone()))
         .collect())
 }
@@ -2951,6 +2953,13 @@ pub(crate) async fn handle_incoming(app: &AppHandle, inc: aqua_client_core::Inco
 async fn on_incoming_plaintext(app: &AppHandle, from: String, text: String) {
     let state: State<'_, StdMutex<AppState>> = app.state();
     let time = hhmm_now();
+    // Chats are per account: "vpst~fbab0a51…" is a device of @vpst. My own
+    // devices never get a chat of their own.
+    let from = crate::multidev::base_user(&from).to_string();
+    if state.lock().ok().and_then(|s| s.username.clone()).as_deref() == Some(from.as_str()) {
+        crate::multidev::handle_own_device(app, &text);
+        return;
+    }
     let is_new_chat;
     {
         let mut s = match state.lock() { Ok(s) => s, Err(_) => return };

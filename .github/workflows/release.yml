@@ -239,6 +239,13 @@ jobs:
           cp ../../android/MainActivity.kt "$(find gen/android/app/src/main/java -name MainActivity.kt | head -1)"
           # Nearby delivery over Bluetooth (mesh_android.rs)
           cp ../../android/AquaMesh.kt "$(dirname "$(find gen/android/app/src/main/java -name MainActivity.kt | head -1)")/AquaMesh.kt"
+          # Server on this device: a foreground service keeps the in-app relay alive
+          cp ../../android/AquaRelay.kt "$(dirname "$(find gen/android/app/src/main/java -name MainActivity.kt | head -1)")/AquaRelay.kt"
+          fgs='<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />\n    <application'
+          sed -i "0,/<application/s##${fgs}#" "$m"
+          svc='<service android:name=".AquaRelayService" android:exported="false" android:foregroundServiceType="specialUse"><property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Hosts the Aquamarine relay server for the user and their contacts" /></service>\n    </application>'
+          sed -i "s#</application>#${svc}#" "$m"
+          grep -n 'AquaRelayService\|FOREGROUND' "$m"
           # Plain HTTP to the loopback media server (audio / video playback)
           mkdir -p gen/android/app/src/main/res/xml
           cp ../../android/netsec/release.xml gen/android/app/src/main/res/xml/network_security_config.xml

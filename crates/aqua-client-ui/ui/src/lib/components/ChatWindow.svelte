@@ -690,7 +690,7 @@
     if (!el || !id || id === lastShownChat) return;
     const first = !lastShownChat;
     lastShownChat = id;
-    if (first || matchMedia("(prefers-reduced-motion: reduce)").matches || document.documentElement.classList.contains("soft-render")) return;
+    if (first || matchMedia("(prefers-reduced-motion: reduce)").matches || document.documentElement.classList.contains("soft-render") || document.documentElement.classList.contains("wk-lowfx")) return;
     el.animate([{ opacity: 0, transform: "translateY(10px)" }, { opacity: 1, transform: "none" }], { duration: 240, easing: "cubic-bezier(.2,.8,.2,1)" });
   });
   let composerEl: RichComposer | undefined = $state();
@@ -1555,10 +1555,12 @@
     selecting = true;
     selected.clear();
     selected.add(row.id);
+    anchorId = row.id;
   }
   function clearSelection() {
     selecting = false;
     selected.clear();
+    anchorId = null;
   }
 
   // ---- Touch, as in Telegram: a tap opens the menu with reactions at once;
@@ -1595,7 +1597,12 @@
     // Swallow the click that trails a real drag-select so it doesn't
     // immediately toggle the start row back off.
     if (draggedMoved) { draggedMoved = false; return; }
-    if (selecting) { toggleSelect(row.id); return; }
+    // Shift+click: a range; Ctrl/⌘+click: pick one without the menu.
+    if (e && e.shiftKey && (selecting || anchorId)) { e.preventDefault(); getSelection()?.removeAllRanges(); selectRangeTo(row.id); return; }
+    if (e && (e.ctrlKey || e.metaKey) && lastPointerType === "mouse" && !(e.target as HTMLElement).closest("a")) {
+      selecting = true; toggleSelect(row.id); anchorId = row.id; return;
+    }
+    if (selecting) { toggleSelect(row.id); anchorId = row.id; return; }
     const t0 = tap; tap = null;
     if (!e || lastPointerType === "mouse" || !t0) return;
     if (t0.menuOpen) return;                       // that tap only closed the menu
@@ -1975,11 +1982,18 @@
   let selectableIds = $derived(
     rows.filter((r) => r.kind.type !== "system" && r.kind.type !== "date_separator").map((r) => r.id),
   );
-  let dragging = false;       // a real range-drag is in progress
-  let armed = false;          // pointer is down in a gutter, not yet dragging
+  // As in Telegram Desktop: dragging from an unselected message adds the
+  // range to what's already selected, dragging from a selected one takes the
+  // range out; the earlier picks stay. Near the top / bottom edge the chat
+  // scrolls by itself and the range keeps growing. Shift+click picks a range.
+  let dragging = $state(false); // a real range-drag is in progress
+  let armed = false;            // pointer is down, not yet dragging
   let dragStartId: string | null = null;
   let armStartY = 0;
-  let draggedMoved = false;   // true once a drag actually moved → swallow the click
+  let draggedMoved = false;     // true once a drag actually moved → swallow the click
+  let dragMode: "add" | "remove" = "add";
+  let dragBase = new Set<string>();   // the selection before this drag
+  let anchorId: string | null = null; // last clicked message (Shift+click ranges)
 
   function rowIdFromPoint(x: number, y: number): string | null {
     const el = document.elementFromPoint(x, y) as HTMLElement | null;
@@ -1988,7 +2002,13 @@
   }
   let lastLo = -1, lastHi = -1;
   let moveFrame = 0;
-  let lastMove: PointerEvent | null = null;
+  let lastPt: { x: number; y: number } | null = null;
+  /** Membership of index i for the current drag range [lo, hi]. */
+  function wantAt(i: number, lo: number, hi: number): boolean {
+    const id = selectableIds[i];
+    const inRange = i >= lo && i <= hi;
+    return dragMode === "add" ? dragBase.has(id) || inRange : dragBase.has(id) && !inRange;
+  }
   function applyRange(toId: string) {
     if (dragStartId == null) return;
     const a = selectableIds.indexOf(dragStartId);
@@ -1996,19 +2016,36 @@
     if (a < 0 || b < 0) return;
     const [lo, hi] = a < b ? [a, b] : [b, a];
     if (lo === lastLo && hi === lastHi) return;
+    // Only the rows between the old and the new range can change.
+    const from = lastLo < 0 ? lo : Math.min(lo, lastLo);
+    const to = lastHi < 0 ? hi : Math.max(hi, lastHi);
+    for (let i = from; i <= to; i++) {
+      const id = selectableIds[i];
+      if (wantAt(i, lo, hi)) { if (!selected.has(id)) selected.add(id); }
+      else if (selected.has(id)) selected.delete(id);
+    }
     lastLo = lo; lastHi = hi;
-    const want = new Set(selectableIds.slice(lo, hi + 1));
-    for (const id of [...selected]) if (!want.has(id)) selected.delete(id);
-    for (const id of want) if (!selected.has(id)) selected.add(id);
+  }
+  /** Shift+click: everything between the last clicked message and this one. */
+  function selectRangeTo(id: string) {
+    const a = anchorId ? selectableIds.indexOf(anchorId) : -1;
+    const b = selectableIds.indexOf(id);
+    if (b < 0) return;
+    if (a < 0) { selected.add(id); anchorId = id; selecting = true; return; }
+    const [lo, hi] = a < b ? [a, b] : [b, a];
+    for (let i = lo; i <= hi; i++) selected.add(selectableIds[i]);
+    selecting = true;
+    anchorId = id;
   }
   function onRowPointerDown(e: PointerEvent, m: Row) {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || e.shiftKey) return;
     const t = e.target as HTMLElement;
-    // Leave the bubble's own text/links/controls alone so copying text
-    // and clicking media still work. Dragging starts in the row gutter.
-    if (t.closest(".bubble, a, button, input, textarea, img, video, .media-img-btn")) return;
-    // Arm only — selection does NOT start on a click. It begins once the
-    // pointer actually drags onto another message (or far enough).
+    // Out of selection mode the bubble's text stays copyable: the drag
+    // starts beside it. In selection mode it starts anywhere but controls.
+    const own = selecting
+      ? "a, button, input, textarea, select, video, audio, [contenteditable], .media-img-btn, .reaction-chip"
+      : ".bubble, a, button, input, textarea, img, video, .media-img-btn";
+    if (t.closest(own)) return;
     armed = true;
     dragging = false;
     draggedMoved = false;
@@ -2019,36 +2056,54 @@
     if (!armed || dragStartId == null) return;
     const id = rowIdFromPoint(e.clientX, e.clientY);
     const movedFar = Math.abs(e.clientY - armStartY) > 8;
-    // Begin a real selection only when we reach a different message, or
-    // drag clearly up/down past the threshold.
     if (!dragging) {
-      if ((id && id !== dragStartId) || movedFar) {
-        dragging = true;
-        draggedMoved = true;
-        selecting = true;
-        selected.clear();
-        selected.add(dragStartId);
-        lastLo = lastHi = -1;
-      } else {
-        return;
-      }
+      if (!((id && id !== dragStartId) || movedFar)) return;
+      dragging = true;
+      draggedMoved = true;
+      const wasSelecting = selecting;
+      selecting = true;
+      dragBase = wasSelecting ? new Set(selected) : new Set();
+      dragMode = wasSelecting && selected.has(dragStartId) ? "remove" : "add";
+      if (!wasSelecting) selected.clear();
+      lastLo = lastHi = -1;
+      applyRange(dragStartId);
+      getSelection()?.removeAllRanges();
+      edgeLoop();
     }
     e.preventDefault();
+    lastPt = { x: e.clientX, y: e.clientY };
     // Hit-testing + range update once per frame, not per pointer event.
-    lastMove = e;
     if (!moveFrame) moveFrame = requestAnimationFrame(() => {
       moveFrame = 0;
-      const ev = lastMove;
-      if (!ev || !dragging) return;
-      const hit = rowIdFromPoint(ev.clientX, ev.clientY);
+      if (!lastPt || !dragging) return;
+      const hit = rowIdFromPoint(lastPt.x, lastPt.y);
       if (hit) applyRange(hit);
     });
+  }
+  /** While dragging near the top or bottom edge, scroll and keep selecting. */
+  function edgeLoop() {
+    const el = messagesEl;
+    if (!dragging || !el) return;
+    if (lastPt) {
+      const r = el.getBoundingClientRect();
+      const zone = 56;
+      const d = lastPt.y < r.top + zone ? lastPt.y - (r.top + zone) : lastPt.y > r.bottom - zone ? lastPt.y - (r.bottom - zone) : 0;
+      if (d) {
+        el.scrollTop += Math.sign(d) * Math.min(28, 2 + Math.abs(d) * 0.35);
+        const y = Math.min(r.bottom - 4, Math.max(r.top + 4, lastPt.y));
+        const hit = rowIdFromPoint(lastPt.x, y);
+        if (hit) applyRange(hit);
+      }
+    }
+    requestAnimationFrame(edgeLoop);
   }
   function endDrag() {
     armed = false;
     if (!dragging) { dragStartId = null; return; }
     dragging = false;
+    anchorId = dragStartId;
     dragStartId = null;
+    lastPt = null;
     if (selected.size === 0) selecting = false;
   }
 
@@ -4341,7 +4396,9 @@
      must not re-flow the whole list (that was the jerk). */
   .msg { position: relative; }
   .sel-check { position: absolute; left: 0; top: 50%; transform: translateY(-50%); }
+  .msg { transition: background-color .14s ease; }
   .msg.selected { background: var(--accent-soft); border-radius: 10px; }
+  .messages.dragging { cursor: default; }
   .sel-check {
     align-self: center;
     width: 20px; height: 20px; flex-shrink: 0;
@@ -4349,7 +4406,8 @@
     border: 2px solid var(--border-strong);
     display: grid; place-items: center;
   }
-  .sel-check.on { background: var(--accent); border-color: var(--accent); }
+  .sel-check { transition: background-color .14s ease, border-color .14s ease, scale .18s cubic-bezier(.2,.9,.25,1.3); }
+  .sel-check.on { background: var(--accent); border-color: var(--accent); scale: 1.08; }
   .sel-check :global(svg) { width: 12px; height: 12px; color: #06070C; }
 
   /* --- Custom (non-Chromium) context menu --- */
@@ -4637,7 +4695,9 @@
   /* While drag-selecting, suppress text selection so the drag reads as
      a message range-select, not a text highlight. */
   .messages.dragging :global(.bubble),
-  .messages.dragging :global(.msg-col) {
+  .messages.dragging :global(.msg-col),
+  .messages.selecting :global(.bubble),
+  .messages.selecting :global(.msg-col) {
     user-select: none;
     -webkit-user-select: none;
   }

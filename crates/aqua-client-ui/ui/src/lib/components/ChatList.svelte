@@ -222,7 +222,7 @@
   }
 
   // Lists move (a chat jumps to the top) and appear with a short glide.
-  const calm = typeof window !== "undefined" && (matchMedia("(prefers-reduced-motion: reduce)").matches || document.documentElement.classList.contains("soft-render"));
+  const calm = typeof window !== "undefined" && (matchMedia("(prefers-reduced-motion: reduce)").matches || document.documentElement.classList.contains("soft-render") || document.documentElement.classList.contains("wk-lowfx"));
   const motionMs = (ms: number) => (calm ? 0 : ms);
 
   // ---- Hold an avatar: peek into the chat without opening it (Telegram) ----

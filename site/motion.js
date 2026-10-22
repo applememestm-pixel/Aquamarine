@@ -122,6 +122,103 @@
     secs.forEach((s) => spy.observe(s));
   }
 
+
+  // ---- tour: the phone shows whichever card is in the middle of the screen ----
+  const phone = document.querySelector(".tour-phone");
+  if (phone) {
+    const cards = [...document.querySelectorAll(".tour-card")];
+    const typed = phone.querySelector(".tp-typed");
+    let typer = 0;
+    const typeIt = () => {
+      if (!typed) return;
+      clearInterval(typer);
+      const word = "party";
+      let i = 0;
+      typed.dataset.text = "";
+      typer = setInterval(() => { typed.dataset.text = word.slice(0, ++i); if (i >= word.length) clearInterval(typer); }, 120);
+    };
+    const show = (card) => {
+      cards.forEach((c) => c.classList.toggle("on", c === card));
+      const step = card.dataset.step;
+      if (phone.dataset.on === step) return;
+      phone.dataset.on = step;
+      // restart the screen's little animations
+      phone.querySelectorAll(`[data-screen="${step}"] *`).forEach((el) => { el.style.animation = "none"; void el.offsetWidth; el.style.animation = ""; });
+      if (step === "gif") typeIt();
+    };
+    // The card nearest to the reading line wins (the middle of the screen;
+    // on phones, the part below the sticky phone).
+    let pend = 0;
+    const pick = () => {
+      pend = 0;
+      const narrow = innerWidth <= 900;
+      const line = narrow ? innerHeight * 0.78 : innerHeight * 0.5;
+      let best = cards[0], bd = Infinity;
+      for (const c of cards) {
+        const r = c.getBoundingClientRect();
+        const d = Math.abs((r.top + r.bottom) / 2 - line);
+        if (d < bd) { bd = d; best = c; }
+      }
+      show(best);
+    };
+    addEventListener("scroll", () => { if (!pend) pend = requestAnimationFrame(pick); }, { passive: true });
+    addEventListener("resize", pick);
+    pick();
+  }
+
+  // ---- a comet behind the pointer: little stars that fall and fade ----
+  if (!reduce && matchMedia("(pointer: fine)").matches) {
+    const tc = document.createElement("canvas");
+    tc.className = "fx-trail";
+    tc.setAttribute("aria-hidden", "true");
+    document.body.appendChild(tc);
+    const tx = tc.getContext("2d");
+    let tw = 0, th = 0, tdpr = 1, sparks = [], tRaf = 0, px = -1, py = -1;
+    const fit = () => {
+      tdpr = Math.min(2, devicePixelRatio || 1); tw = innerWidth; th = innerHeight;
+      tc.width = tw * tdpr; tc.height = th * tdpr; tc.style.width = tw + "px"; tc.style.height = th + "px";
+      tx.setTransform(tdpr, 0, 0, tdpr, 0, 0);
+    };
+    fit(); addEventListener("resize", fit);
+    const COLORS = ["0,229,199", "123,92,255", "255,255,255", "130,240,255"];
+    const star = (x, y, r, rot) => {
+      tx.beginPath();
+      for (let i = 0; i < 8; i++) {
+        const a = rot + (i * Math.PI) / 4, rr = i % 2 ? r * 0.38 : r;
+        tx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+      }
+      tx.closePath(); tx.fill();
+    };
+    const tick = () => {
+      tx.clearRect(0, 0, tw, th);
+      sparks = sparks.filter((p) => (p.life -= 0.022) > 0);
+      for (const p of sparks) {
+        p.vy += 0.045; p.x += p.vx; p.y += p.vy; p.rot += p.spin;
+        tx.fillStyle = `rgba(${p.c},${p.life * 0.9})`;
+        tx.shadowColor = `rgba(${p.c},${p.life})`; tx.shadowBlur = 8;
+        star(p.x, p.y, p.r * (0.5 + p.life * 0.5), p.rot);
+      }
+      tx.shadowBlur = 0;
+      tRaf = sparks.length ? requestAnimationFrame(tick) : 0;
+    };
+    addEventListener("pointermove", (e) => {
+      if (px < 0) { px = e.clientX; py = e.clientY; return; }
+      const dx = e.clientX - px, dy = e.clientY - py, d = Math.hypot(dx, dy);
+      px = e.clientX; py = e.clientY;
+      if (d < 3) return;
+      const n = Math.min(3, Math.ceil(d / 22));
+      for (let i = 0; i < n && sparks.length < 90; i++) {
+        sparks.push({
+          x: px - dx * (i / n) + (Math.random() - 0.5) * 6, y: py - dy * (i / n) + (Math.random() - 0.5) * 6,
+          vx: -dx * 0.03 + (Math.random() - 0.5) * 0.8, vy: -dy * 0.03 + (Math.random() - 0.5) * 0.8 - 0.4,
+          r: 2 + Math.random() * 3.2, rot: Math.random() * Math.PI, spin: (Math.random() - 0.5) * 0.2,
+          life: 0.8 + Math.random() * 0.2, c: COLORS[(Math.random() * COLORS.length) | 0],
+        });
+      }
+      if (!tRaf) tRaf = requestAnimationFrame(tick);
+    }, { passive: true });
+  }
+
   // ---- cards light up where the cursor is ----
   document.addEventListener("pointermove", (e) => {
     const c = e.target.closest && e.target.closest(".card, .dl, .code, .note");

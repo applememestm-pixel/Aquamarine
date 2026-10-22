@@ -42,7 +42,7 @@
   import { meshStatus, meshSyncNow, meshSetEnabled, refreshMesh } from "../mesh";
 
   // ---- Section navigation ----
-  type Sec = "nearby" | "ghost" | "language" | "appearance" | "theme" | "behaviour" | "notifications" | "voice" | "wallpaper" | "accent" | "bots" | "account" | "about" | "privacy" | "stickers" | "backups" | "devices";
+  type Sec = "nearby" | "host" | "ghost" | "language" | "appearance" | "theme" | "behaviour" | "notifications" | "voice" | "wallpaper" | "accent" | "bots" | "account" | "about" | "privacy" | "stickers" | "backups" | "devices";
   let section = $state<Sec>("notifications");
   // Telegram-mobile style: coloured icon tiles in grouped lists.
   interface Item { id: Sec | "profile" | "shortcuts"; label: string; color: string; icon: string; hint?: string }
@@ -52,6 +52,7 @@
       { id: "profile", label: "Edit profile", color: "#007AFF", icon: ic(`<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>`) },
       { id: "ghost", label: "Ghost mode", color: "#5E5CE6", icon: ic(`<path d="M9 10h.01"/><path d="M15 10h.01"/><path d="M12 2a8 8 0 0 0-8 8v12l3-3 2.5 2.5L12 19l2.5 2.5L17 19l3 3V10a8 8 0 0 0-8-8z"/>`) },
       { id: "devices", label: "Devices", color: "#34C759", icon: ic(`<rect x="2" y="4" width="13" height="10" rx="2"/><line x1="5" y1="18" x2="12" y2="18"/><rect x="17" y="8" width="5" height="12" rx="1"/>`) },
+      { id: "host", label: "Server on this device", color: "#00C7BE", icon: ic(`<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><line x1="7" y1="6.5" x2="7.01" y2="6.5"/><line x1="7" y1="17.5" x2="7.01" y2="17.5"/><path d="M14 6.5h3M14 17.5h3"/>`) },
       { id: "nearby", label: "Without internet", color: "#0A84FF", icon: ic(`<path d="M7 7l10 10-5 5V2l5 5L7 17"/>`) },
       { id: "backups", label: "Backups", color: "#30B0C7", icon: ic(`<path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/><path d="M22 2v6h-6"/>`) },
       { id: "privacy", label: "Privacy & Security", color: "#8E8E93", icon: ic(`<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>`) },
@@ -255,6 +256,31 @@
     catch (e) { devices = null; devErr = String(e); }
   }
   $effect(() => { if ($settingsOpen && section === "devices") void loadDevices(); });
+  // ---- Server on this device: the relay inside the app ----
+  type HostStatus = { running: boolean; port: number; lan_url: string | null; public_url: string | null; admin_url: string | null; dir: string; error: string | null; background: boolean };
+  let host = $state<HostStatus | null>(null);
+  let hostBusy = $state(false);
+  let hostPort = $state(7777);
+  const invoke = async <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => (await import("@tauri-apps/api/core")).invoke<T>(cmd, args);
+  async function hostRefresh() { try { host = await invoke<HostStatus>("relay_host_status"); } catch (e) { host = null; } }
+  async function hostToggle() {
+    hostBusy = true;
+    try {
+      host = await invoke<HostStatus>(host?.running ? "relay_host_stop" : "relay_host_start", host?.running ? {} : { port: hostPort });
+      try { localStorage.setItem("aqua.hostRelay", host.running ? String(host.port) : ""); } catch { /* ignore */ }
+    } catch (e) { showToast(String(e)); await hostRefresh(); }
+    hostBusy = false;
+  }
+  async function hostCopy(u: string | null) {
+    if (!u) return;
+    try { await navigator.clipboard.writeText(u); showToast(tr("Copied")); } catch { showToast(u); }
+  }
+  $effect(() => {
+    if (!($settingsOpen && section === "host")) return;
+    void hostRefresh();
+    const id = setInterval(hostRefresh, 5000);
+    return () => clearInterval(id);
+  });
   let meshBusy = $state(false);
   $effect(() => { if ($settingsOpen && section === "nearby") void refreshMesh(); });
   async function devRemove(d: DeviceInfo) {
@@ -1473,6 +1499,34 @@
       </section>
       {/if}
 
+      {#if section === "host"}
+      <section class="group">
+        <div class="label">{$t("Your own server, right here")}</div>
+        <div class="bots-note">{$t("This device becomes an Aquamarine server: you and your friends sign in to its address. Messages stay end-to-end encrypted — the server only passes sealed envelopes along. Keep the device on and connected; on a phone a notification shows while it runs.")}</div>
+        <button class="toggle-row" disabled={hostBusy} onclick={hostToggle}>
+          <div class="tr-text">
+            <div class="tr-title">{$t("Run the server")}</div>
+            <div class="tr-sub">{hostBusy ? "…" : host?.running ? $t("Running on port {p}.", { p: host.port }) : host?.error ? host.error : $t("Off.")}</div>
+          </div>
+          <span class="switch" class:on={host?.running}></span>
+        </button>
+        {#if !host?.running}
+          <label class="host-port">{$t("Port")} <input class="txt" type="number" min="1024" max="65535" bind:value={hostPort} /></label>
+        {/if}
+      </section>
+      {#if host?.running}
+      <section class="group">
+        <div class="label">{$t("Addresses")}</div>
+        <div class="host-addr"><span>{$t("Same Wi-Fi")}</span><code>{host.lan_url ?? "—"}</code><button class="mesh-btn" onclick={() => hostCopy(host?.lan_url ?? null)}>{$t("Copy")}</button></div>
+        <div class="host-addr"><span>{$t("Internet")}</span><code>{host.public_url ?? $t("looking it up…")}</code><button class="mesh-btn" onclick={() => hostCopy(host?.public_url ?? null)} disabled={!host.public_url}>{$t("Copy")}</button></div>
+        <div class="bots-note">{$t("The internet address works once the router forwards TCP port {p} to this device (and the provider gives you a white IP). On a phone, mobile networks almost never allow it — use Wi-Fi.", { p: host.port })}</div>
+        {#if host.admin_url}
+          <button class="bot-btn" onclick={() => void api.openExternal(host!.admin_url!).catch(() => hostCopy(host?.admin_url ?? null))}>{$t("Open the admin panel")}</button>
+        {/if}
+      </section>
+      {/if}
+      {/if}
+
       {#if section === "nearby"}
       {@const ms = $meshStatus}
       <section class="group">
@@ -2343,4 +2397,9 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .wall-del { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; border-radius: 50%; border: none;
     background: rgba(0,0,0,.6); color: #fff; cursor: pointer; opacity: 0; transition: opacity .15s; }
   .wall.own:hover .wall-del { opacity: 1; }
+  .host-port { display: flex; align-items: center; gap: 10px; padding: 8px 14px 12px; font-size: 13.5px; color: var(--fg-dim); }
+  .host-port input { width: 110px; }
+  .host-addr { display: flex; align-items: center; gap: 10px; padding: 8px 14px; }
+  .host-addr span { width: 84px; flex-shrink: 0; font-size: 13px; color: var(--fg-dim); }
+  .host-addr code { flex: 1; min-width: 0; font-family: var(--font-mono, monospace); font-size: 13px; overflow-wrap: anywhere; user-select: all; }
 </style>

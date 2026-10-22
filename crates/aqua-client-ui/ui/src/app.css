@@ -216,6 +216,9 @@ button, a, input, select, textarea {
   transition-duration: .18s;
   transition-timing-function: var(--ease-out);
 }
+html.wk-lowfx :is(button, a, input, select, textarea) {
+  transition-property: background-color, color, border-color, opacity;
+}
 @keyframes aq-pop { from { opacity: 0; transform: translateY(6px) scale(.98); } }
 @keyframes aq-pop-spring { from { opacity: 0; transform: translateY(10px) scale(.94); } 60% { opacity: 1; } }
 @keyframes aq-fade { from { opacity: 0; } }
@@ -224,10 +227,12 @@ button, a, input, select, textarea {
 @media (prefers-reduced-motion: no-preference) {
   /* Every press gives way a little (the `scale` property keeps each
      button's own transform intact). */
-  button:not(:disabled):active, [role="button"]:active, a:active { scale: .97; }
+  /* Not on Linux (WebKitGTK): there any animation repaints the whole
+     window on the CPU, and every click felt sticky. */
+  html:not(.wk-lowfx) :is(button:not(:disabled):active, [role="button"]:active, a:active) { scale: .97; }
   /* Dialogs that don't animate themselves pop in with a soft spring. */
-  [role="dialog"], [role="alertdialog"] { animation: aq-pop-spring .26s var(--ease-spring); }
-  [role="menu"], [role="listbox"] { animation: aq-pop .16s var(--ease-out); }
+  html:not(.wk-lowfx) :is([role="dialog"], [role="alertdialog"]) { animation: aq-pop-spring .26s var(--ease-spring); }
+  html:not(.wk-lowfx) :is([role="menu"], [role="listbox"]) { animation: aq-pop .16s var(--ease-out); }
 }
 
 /* Focus */
@@ -345,14 +350,13 @@ input[type="checkbox"]:disabled, input[type="radio"]:disabled { opacity: .5; cur
 @media (max-width: 720px) { :root { --tb-h: 0px; } }
 
 /* Middle-button autoscroll anchor (lib/autoscroll.ts). */
-.aq-autoscroll { position: fixed; z-index: 99999; width: 28px; height: 28px; margin: -14px 0 0 -14px; border-radius: 50%;
-  border: 2px solid rgba(255,255,255,.85); background: rgba(10,12,20,.55); backdrop-filter: blur(4px); pointer-events: none;
-  box-shadow: 0 2px 10px rgba(0,0,0,.5); }
-.aq-autoscroll::before, .aq-autoscroll::after { content: ""; position: absolute; left: 50%; border: 5px solid transparent; transform: translateX(-50%); opacity: .5; transition: opacity .1s; }
-.aq-autoscroll::before { top: 1px; border-bottom-color: #fff; }
-.aq-autoscroll::after { bottom: 1px; border-top-color: #fff; }
-.aq-autoscroll[data-dir="up"]::before, .aq-autoscroll[data-dir="down"]::after { opacity: 1; }
-html.autoscrolling, html.autoscrolling * { cursor: all-scroll !important; user-select: none !important; }
+/* Middle-button autoscroll: the pointer itself turns into the scroll badge
+   (bright arrow = the way it's scrolling); a faint dot marks where it began. */
+.aq-autoscroll { position: fixed; z-index: 99999; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%;
+  background: var(--accent); opacity: .55; pointer-events: none; box-shadow: 0 0 0 3px rgba(0,0,0,.35); }
+html.autoscrolling, html.autoscrolling * { cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='%230A0C14' fill-opacity='.72' stroke='%23fff' stroke-width='2'/><circle cx='16' cy='16' r='2' fill='%2300E5C7'/><path d='M16 6l5 6H11z' fill='%23fff' fill-opacity='.45'/><path d='M16 26l-5-6h10z' fill='%23fff' fill-opacity='.45'/></svg>") 16 16, all-scroll !important; user-select: none !important; }
+html.autoscrolling.as-up, html.autoscrolling.as-up * { cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='%230A0C14' fill-opacity='.72' stroke='%23fff' stroke-width='2'/><circle cx='16' cy='16' r='2' fill='%2300E5C7'/><path d='M16 6l5 6H11z' fill='%23fff' fill-opacity='1'/><path d='M16 26l-5-6h10z' fill='%23fff' fill-opacity='.45'/></svg>") 16 16, all-scroll !important; }
+html.autoscrolling.as-down, html.autoscrolling.as-down * { cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='%230A0C14' fill-opacity='.72' stroke='%23fff' stroke-width='2'/><circle cx='16' cy='16' r='2' fill='%2300E5C7'/><path d='M16 6l5 6H11z' fill='%23fff' fill-opacity='.45'/><path d='M16 26l-5-6h10z' fill='%23fff' fill-opacity='1'/></svg>") 16 16, all-scroll !important; }
 
 /* Drawn without the GPU (llvmpipe): drop the costly effects. */
 .soft-render * { box-shadow: none !important; text-shadow: none !important; }
@@ -396,3 +400,7 @@ html.contrast-rows .alt:not(.active):not(:hover):not(.kb):not(.pinned) {
 html.contrast-rows[data-theme="light"] .alt:not(.active):not(:hover):not(.kb):not(.pinned) {
   background: color-mix(in srgb, var(--bg-list, var(--bg-surface)) 92%, #000);
 }
+
+/* Selected text in the app's colours, not the system blue. */
+::selection { background: color-mix(in srgb, var(--accent) 34%, transparent); color: inherit; }
+.msg.out .bubble ::selection { background: color-mix(in srgb, var(--accent) 45%, transparent); }

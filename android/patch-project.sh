@@ -39,6 +39,20 @@ if [ -n "$MA" ]; then
   cp -f "$HERE/AquaMesh.kt" "$(dirname "$MA")/AquaMesh.kt"
   echo '[patch] AquaMesh.kt (Bluetooth nearby delivery)'
 fi
+# 1c''. Server on this device (crates/aqua-client-ui/src/relay_host.rs).
+if [ -n "$MA" ]; then
+  cp -f "$HERE/AquaRelay.kt" "$(dirname "$MA")/AquaRelay.kt"
+  echo '[patch] AquaRelay.kt (server on this device)'
+fi
+if ! grep -q AquaRelayService "$M"; then
+  AQ_FGS='<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    ' perl -0pi -e 's/<application/$ENV{AQ_FGS}<application/' "$M"
+  AQ_SVC='<service android:name=".AquaRelayService" android:exported="false" android:foregroundServiceType="specialUse"><property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Hosts the Aquamarine relay server for the user and their contacts" /></service>
+    </application>' perl -0pi -e 's|</application>|$ENV{AQ_SVC}|' "$M"
+  echo '[patch] foreground service for the server added'
+fi
 if ! grep -q BLUETOOTH_CONNECT "$M"; then
   AQ_BT='<uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />

@@ -1,6 +1,6 @@
 [package]
 name        = "aqua-client-ui"
-version     = "0.2.101"
+version     = "1.0.1"
 edition     = "2021"
 license     = "MIT OR Apache-2.0"
 description = "Aquamarine desktop shell — Tauri 2 + Svelte + TypeScript."
@@ -20,6 +20,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 aqua-core        = { path = "../aqua-core" }
 aqua-client-core = { path = "../aqua-client-core" }
+# "Server on this device": the relay runs inside the app (relay_host.rs).
+aqua-server      = { path = "../aqua-server" }
 
 tauri               = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-log    = { version = "2" }

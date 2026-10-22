@@ -19,6 +19,16 @@ import "./app.css";
       lastClick = t ? `${t.tagName.toLowerCase()}.${String((t as HTMLElement).className || "").split(" ")[0]}` : "?";
       lastClickAt = performance.now();
     }, true);
+    // How long a click takes to show on screen ("[aqua-click] 180 ms on
+    // button.chat-item"): the next painted frame after the click handlers.
+    addEventListener("click", () => {
+      const t0 = lastClickAt || performance.now();
+      const what = lastClick;
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const ms = performance.now() - t0;
+        if (ms > 120) console.warn(`[aqua-click] ${Math.round(ms)} ms on ${what}`);
+      }));
+    }, true);
     setInterval(() => {
       const now = performance.now();
       const gap = now - last - 250;

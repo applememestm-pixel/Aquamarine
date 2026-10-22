@@ -17,12 +17,14 @@ export function startAutoscroll(): () => void {
   let target: HTMLElement | null = null;
   let ax = 0, ay = 0, mx = 0, my = 0, t0 = 0, raf = 0, moved = false;
   let marker: HTMLDivElement | null = null;
+  let lastDir = "";
 
   const stop = () => {
     target = null;
     cancelAnimationFrame(raf);
     marker?.remove(); marker = null;
-    document.documentElement.classList.remove("autoscrolling");
+    document.documentElement.classList.remove("autoscrolling", "as-up", "as-down");
+    lastDir = "";
   };
   const frame = () => {
     if (!target) return;
@@ -30,7 +32,13 @@ export function startAutoscroll(): () => void {
     const f = (d: number) => (Math.abs(d) < 12 ? 0 : Math.sign(d) * Math.pow(Math.abs(d) - 12, 1.25) / 6);
     target.scrollTop += f(dy);
     if (target.scrollWidth > target.clientWidth) target.scrollLeft += f(dx);
-    if (marker) marker.dataset.dir = Math.abs(dy) < 12 ? "" : dy > 0 ? "down" : "up";
+    const dir = Math.abs(dy) < 12 ? "" : dy > 0 ? "down" : "up";
+    if (dir !== lastDir) {
+      lastDir = dir;
+      const r = document.documentElement.classList;
+      r.toggle("as-up", dir === "up");
+      r.toggle("as-down", dir === "down");
+    }
     raf = requestAnimationFrame(frame);
   };
   const down = (e: MouseEvent) => {
