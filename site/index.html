@@ -190,13 +190,6 @@
         <div class="step"><div class="step-n">3</div><div><h3 data-i="host.s3">Общайтесь</h3><p data-i="host.s3p">Сервер только пересылает запечатанные конверты. Прочитать их он не может.</p></div></div>
       </div>
       <p style="margin-top:22px"><a class="btn btn-ghost" href="docs.html?d=deployment" data-i="host.more">Развёртывание и настройка</a></p>
-      <div class="relay-card">
-        <div>
-          <b data-i="relay.h">Сервер проекта</b>
-          <p data-i="relay.p">Чтобы попробовать без своего сервера: вставьте этот адрес в поле «Сервер» при входе.</p>
-        </div>
-        <div class="relay-addr"><code id="relay-addr"></code><button type="button" class="relay-copy" id="relay-copy" data-i="relay.copy">Копировать</button></div>
-      </div>
     </div>
     <div class="code"><span class="c"># relay: one binary</span>
 <span class="p">AQUA_LISTEN</span>=0.0.0.0:7777 ./aqua-server-linux-x64
@@ -289,8 +282,6 @@ POST /v1/bot/send   {"to":"alice","text":"hi"}
      (filled by build-all) offers those files instead. */
   const REPO = "https://github.com/applememestm-pixel/Aquamarine";
   const VERSION = "1.0.2";
-  // The project's public relay (DNS: relay.aquamarinemessenger.pw → the home server).
-  const PUBLIC_RELAY = "http://relay.aquamarinemessenger.pw:7777";
   let DIR = REPO + "/releases/latest/download/";
   // The public site (GitHub Pages, also under the project domain) always
   // offers the release; a local copy may have its own downloads/.
@@ -309,7 +300,6 @@ POST /v1/bot/send   {"to":"alice","text":"hi"}
       "tour.emoji": "Emoji and reactions", "tour.emojip": "Your own emoji inside the text, reactions in one tap, big emoji without a bubble — like Telegram.",
       "tour.stickers": "Stickers", "tour.stickersp": "Telegram packs by link and your own — the editor cuts the background out. Sent whole like a picture, but they live in a pack.",
       "tour.new": "New in 1.0", "tour.newp": "Chat groups like communities, contrast rows, Telegram-style message selection and delivery without internet — over Wi-Fi and Bluetooth.",
-      "relay.h": "The project's server", "relay.p": "To try it without a server of your own: paste this address into the Server field when signing in.", "relay.copy": "Copy", "relay.copied": "Copied",
       "nav.features": "Features", "nav.download": "Download", "nav.selfhost": "Self-host", "nav.bots": "Bots", "nav.docs": "Docs", "nav.cta": "Get the app",
       "hero.eyebrow": "Open · End-to-end encrypted", "hero.h1a": "Your words. Your keys.", "hero.h1b": "Your server.",
       "hero.lede": "A messenger with everything you're used to — servers with rooms and roles, channels, stickers, calls, bots and mini apps — while the encryption keys never leave your devices.",
@@ -456,14 +446,5 @@ POST /v1/bot/send   {"to":"alice","text":"hi"}
   for (const id of ["nav-gh", "foot-gh"]) { const el = document.getElementById(id); el.href = REPO; el.target = "_blank"; el.rel = "noopener"; }
   document.getElementById("nightly-link").href = REPO + "/releases/tag/nightly";
   document.getElementById("ver-chip").textContent = "v" + VERSION;
-  // The project's relay: the address to paste into the app.
-  document.getElementById("relay-addr").textContent = PUBLIC_RELAY;
-  document.getElementById("relay-copy").addEventListener("click", async (e) => {
-    const b = e.currentTarget;
-    try { await navigator.clipboard.writeText(PUBLIC_RELAY); } catch { /* blocked: the text is selectable */ }
-    b.textContent = LANG === "ru" ? "Скопировано" : t("relay.copied");
-    b.classList.add("ok");
-    setTimeout(() => { b.textContent = t("relay.copy"); b.classList.remove("ok"); }, 1600);
-  });
   render();
 </script>
