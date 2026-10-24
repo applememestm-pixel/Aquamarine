@@ -49,8 +49,8 @@
   function idxAt(x: number): number {
     if (!bar) return 0;
     const r = bar.getBoundingClientRect();
-    const w = (r.width - 12) / items.length;
-    return Math.max(0, Math.min(items.length - 1, Math.floor((x - r.left - 6) / w)));
+    const w = (r.width - 8) / items.length;
+    return Math.max(0, Math.min(items.length - 1, Math.floor((x - r.left - 4) / w)));
   }
   function down(e: PointerEvent) {
     if (!mobile() || !bar) return;
@@ -214,13 +214,13 @@
       flex-direction: row;
       align-items: stretch;
       position: fixed;
-      left: 12px; right: 12px;
+      left: 50%; width: min(340px, calc(100% - 48px)); transform: translateX(-50%);
       bottom: calc(8px + env(safe-area-inset-bottom, 0px));
-      height: 52px;
-      padding: 6px;
+      height: 50px;
+      padding: 4px;
       gap: 0;
       border: 1px solid var(--border-strong);
-      border-radius: 26px;
+      border-radius: 25px;
       /* Frosted glass: the list shows through, softly. */
       background: color-mix(in srgb, var(--bg-surface, #12151d) 58%, transparent);
       backdrop-filter: blur(22px) saturate(1.6);
@@ -232,7 +232,7 @@
       -webkit-user-select: none;
       transition: transform .38s cubic-bezier(.22,1,.36,1), opacity .3s ease;
     }
-    .rail.hidden:not(.dragging) { transform: translateY(calc(100% + 24px)); opacity: 0; pointer-events: none; }
+    .rail.hidden:not(.dragging) { transform: translateX(-50%) translateY(calc(100% + 24px)); opacity: 0; pointer-events: none; }
     .brand, .rail-divider, .rail-spacer { display: none; }
     .nav-btn.mobile-only { display: flex; margin-top: 0; }
     /* Every button the same size: the whole slot is the hitbox. */
@@ -249,12 +249,12 @@
     .nav-btn::before, .nav-btn[data-label]:hover::after { display: none; }
     .nav-btn :global(svg) { width: 20px; height: 20px; }
     .nav-btn.active, .nav-btn.hover { color: var(--accent); }
-    .nav-lbl { display: block; font-size: 9.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+    .nav-lbl { display: block; font-size: 10px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
     /* The highlight slides under the active button… */
     .pill {
-      display: block; position: absolute; top: 6px; bottom: 6px;
-      width: calc((100% - 12px) / var(--n));
-      left: calc(6px + var(--i) * (100% - 12px) / var(--n));
+      display: block; position: absolute; top: 4px; bottom: 4px;
+      width: calc((100% - 8px) / var(--n));
+      left: calc(4px + var(--i) * (100% - 8px) / var(--n));
       border-radius: 20px;
       background: var(--accent-soft);
       box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent) inset;
@@ -262,7 +262,7 @@
     }
     /* …and follows the finger while held. */
     .rail.dragging .pill {
-      left: calc(var(--drag-x) - (100% - 12px) / var(--n) / 2);
+      left: calc(var(--drag-x) - (100% - 8px) / var(--n) / 2);
       transition: transform .25s cubic-bezier(.22,1,.36,1);
       transform: scale(1.08, 1.12);
       background: color-mix(in srgb, var(--accent) 24%, transparent);

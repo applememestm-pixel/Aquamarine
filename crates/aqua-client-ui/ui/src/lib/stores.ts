@@ -229,14 +229,19 @@ export async function quickConnect(server_url: string, username: string) {
     if (DELAYS_MS[attempt] > 0) {
       await new Promise((r) => setTimeout(r, DELAYS_MS[attempt]));
     }
-    try {
-      const i = await api.connectToServer(server_url, username);
-      info.set(i);
-      try { chats.set(await api.listChats()); } catch { /* non-fatal */ }
-      console.info(`[aqua] auto-reconnected to ${server_url} as ${username}`);
-      return;
-    } catch (e) {
-      console.warn(`[aqua] auto-reconnect attempt ${attempt + 1} failed:`, e);
+    // The relay's other address too: its home one when the white IP doesn't
+    // answer from inside, its white IP away from home.
+    const { aliasesOf } = await import("./servers");
+    for (const url of [server_url, ...aliasesOf(server_url)]) {
+      try {
+        const i = await api.connectToServer(url, username);
+        info.set(i);
+        try { chats.set(await api.listChats()); } catch { /* non-fatal */ }
+        console.info(`[aqua] auto-reconnected to ${url} as ${username}`);
+        return;
+      } catch (e) {
+        console.warn(`[aqua] auto-reconnect attempt ${attempt + 1} (${url}) failed:`, e);
+      }
     }
   }
   console.warn("[aqua] auto-reconnect gave up — user can click the plug icon");
