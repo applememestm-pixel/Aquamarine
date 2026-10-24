@@ -199,6 +199,59 @@ pub async fn scan_lan_relays(port: Option<u16>) -> Result<Vec<String>, String> {
     Ok(join_all(checks).await.into_iter().flatten().collect())
 }
 
+/// One relay from the project's public list (site/servers.json).
+#[derive(Debug, Clone, Serialize)]
+pub struct PublicServer {
+    pub url: String,
+    pub name: Option<String>,
+    pub note: Option<String>,
+}
+
+/// Where the public list is published: the project site, its GitHub Pages
+/// address (until the domain has its certificate) and the file in the repo.
+const PUBLIC_LISTS: &[&str] = &[
+    "https://aquamarinemessenger.pw/servers.json",
+    "https://applememestm-pixel.github.io/Aquamarine/servers.json",
+    "https://raw.githubusercontent.com/applememestm-pixel/Aquamarine/main/site/servers.json",
+];
+
+fn parse_public(v: &serde_json::Value) -> Vec<PublicServer> {
+    v["servers"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|e| {
+                    let url = e["url"].as_str().or_else(|| e.as_str())?;
+                    let (url, _, _) = split_url(url)?;
+                    let text = |k: &str| e[k].as_str().map(|s| s.chars().take(80).collect::<String>());
+                    Some(PublicServer { url, name: text("name"), note: text("note") })
+                })
+                .take(100)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Relays anyone can sign up on, from the project's public list — so a
+/// phone on mobile data (no local network to search) still has servers to
+/// pick from. The first address that answers wins.
+#[tauri::command]
+pub async fn public_servers() -> Result<Vec<PublicServer>, String> {
+    let http = aqua_client_core::transport::http_client().map_err(|e| e.to_string())?;
+    let mut last = String::from("no list");
+    for url in PUBLIC_LISTS {
+        match http.get(*url).timeout(Duration::from_secs(6)).send().await {
+            Ok(r) if r.status().is_success() => match r.bytes().await.ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()) {
+                Some(v) => return Ok(parse_public(&v)),
+                None => last = format!("{url}: not JSON"),
+            },
+            Ok(r) => last = format!("{url}: HTTP {}", r.status()),
+            Err(e) => last = format!("{url}: {e}"),
+        }
+    }
+    Err(last)
+}
+
 /// The ping next to the title on the main page: one round trip to the relay
 /// we're on. The connection is kept alive between calls, so it measures the
 /// network, not a fresh TCP handshake every time.
@@ -230,6 +283,19 @@ pub async fn server_ping(url: String) -> Result<u64, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn public_list() {
+        let v = serde_json::json!({ "servers": [
+            { "url": "http://109.120.138.220:7777/", "name": "A" },
+            "relay.example.org:7777",
+            { "url": "not a url at all ::" },
+        ]});
+        let l = super::parse_public(&v);
+        assert_eq!(l[0].url, "http://109.120.138.220:7777");
+        assert_eq!(l[0].name.as_deref(), Some("A"));
+        assert!(l.len() >= 2);
+    }
+
     use super::*;
 
     #[test]

@@ -105,6 +105,7 @@ export const api = {
   loginAccount:       (server_url: string, ticket: string, password: string, email?: string): Promise<string> => invoke("login_account", { serverUrl: server_url, ticket, password, email: email || null }),
   fedPeers:           (server_url: string): Promise<{ federated: boolean; self?: string; servers: string[] }> => invoke("fed_peers", { serverUrl: server_url }),
   probeServers:       (urls: string[]): Promise<ServerProbe[]>                  => invoke("probe_servers", { urls }),
+  publicServers:      (): Promise<{ url: string; name: string | null; note: string | null }[]> => invoke("public_servers"),
   scanLanRelays:      (port?: number): Promise<string[]>                        => invoke("scan_lan_relays", { port: port ?? null }),
   backupStatus:       (): Promise<BackupStatus> => invoke("backup_status"),
   backupEnable:       (password: string): Promise<string> => invoke("backup_enable", { password }),
