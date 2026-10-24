@@ -10,7 +10,7 @@
    */
   import { onMount } from "svelte";
   import { api, type ServerProbe } from "../tauri";
-  import { knownServers } from "../servers";
+  import { knownServers, aliasesOf, rememberAlias } from "../servers";
   import { t, tr } from "../i18n";
 
   // inline: the list is always shown in place (the server sheet on the main
@@ -23,6 +23,7 @@
   let scanning = $state(false);
   let wrap = $state<HTMLElement | null>(null);
   let lastRun = 0;
+  let aliasTick = $state(0);
   // The public list, kept for offline starts.
   const PUB_KEY = "aqua.publicServers.v1";
   type Pub = { url: string; name: string | null; note: string | null };
@@ -61,6 +62,7 @@
         asked.add(norm(p.url));
         try {
           const r = await api.fedPeers(p.url);
+          if (r.self) { rememberAlias(p.url, r.self); aliasTick++; }
           more.push(...(r.self ? [r.self] : []), ...(r.servers ?? []));
         } catch { /* not federated */ }
       }));
@@ -124,10 +126,21 @@
     return p.ip ? "" : tr("address not found");
   }
 
+  /** The other address of the same relay that answers (the home address of
+   *  a white IP the router doesn't loop back inside). */
+  function twin(p: ServerProbe, all: ServerProbe[]): ServerProbe | undefined {
+    void aliasTick;
+    const al = aliasesOf(p.url);
+    return all.find((q) => q !== p && al.includes(norm(q.url)));
+  }
+  const nameOf = (p: ServerProbe) => { const t2 = twin(p, probes); return pubOf(p.url) ?? (t2 && pubOf(t2.url)); };
+  // A relay seen at both its addresses is one row: the one that answers here.
   let sorted = $derived(
-    [...probes].sort((a, b) => Number(b.ok) - Number(a.ok) || (a.ms ?? 1e9) - (b.ms ?? 1e9) || a.url.localeCompare(b.url)),
+    probes.filter((p) => p.ok || !twin(p, probes)?.ok).sort((a, b) => Number(b.ok) - Number(a.ok) || (a.ms ?? 1e9) - (b.ms ?? 1e9) || a.url.localeCompare(b.url)),
   );
   let current = $derived(norm(value));
+  const isCur = (p: ServerProbe) => [p.url, ...(twin(p, probes)?.ok ? [twin(p, probes)!.url] : [])]
+    .some((u) => norm(u) === current || norm(u).replace(/:(80|443)$/, "") === current);
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -148,13 +161,14 @@
         <button type="button" class="sp-re" onclick={refresh} disabled={probing || scanning} title={$t("Check again")}>↻</button>
       </div>
       {#each sorted as p (p.url)}
-        <button type="button" class="sp-row" class:cur={norm(p.url) === current || norm(p.url).replace(/:(80|443)$/, "") === current} class:down={!p.ok} role="option" aria-selected={norm(p.url) === current} onclick={() => pick(p)}>
+        <button type="button" class="sp-row" class:cur={isCur(p)} class:down={!p.ok} role="option" aria-selected={isCur(p)} onclick={() => pick(p)}>
           <span class="dot" class:ok={p.ok}></span>
           <span class="sp-main">
-            <span class="sp-url">{#if pubOf(p.url)?.name}<b class="sp-name">{pubOf(p.url)?.name}</b>{/if}{p.url.replace(/^https?:\/\//, "")}</span>
+            <span class="sp-url">{#if nameOf(p)?.name}<b class="sp-name">{nameOf(p)?.name}</b>{/if}{p.url.replace(/^https?:\/\//, "")}</span>
             <span class="sp-sub">
               {#if p.ip && p.ip !== p.host}<span class="mono">{p.ip}</span>{/if}
-              {#if pubOf(p.url)}<span class="pub">{pubOf(p.url)?.note || $t("public server")}</span>{/if}
+              {#if nameOf(p)}<span class="pub">{nameOf(p)?.note || $t("public server")}</span>{/if}
+              {#if p.ok && twin(p, probes) && !twin(p, probes)?.ok}<span>{$t("from outside: {a}", { a: twin(p, probes)!.url.replace(/^https?:\/\//, "") })}</span>{/if}
               {#if where(p)}<span>{where(p)}</span>{/if}
               {#if p.url.startsWith("https")}<span class="tls">🔒 TLS</span>{/if}
             </span>

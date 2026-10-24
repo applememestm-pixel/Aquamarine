@@ -1384,15 +1384,15 @@
   /* ---- Phones: the main page as in the new Telegram ---- */
   .m-title, .acc-scrim, .acc-sheet { display: none; }
   @media (max-width: 720px) {
-    .m-title { display: flex; align-items: center; gap: 10px; padding: 12px 10px 2px 16px; }
-    .m-me { width: 40px; height: 40px; flex-shrink: 0; border-radius: 50%; border: none; padding: 0; overflow: hidden; position: relative;
-      display: grid; place-items: center; font-weight: 800; font-size: 16px; color: #06070c;
+    .m-title { display: flex; align-items: center; gap: 10px; padding: 8px 8px 0 14px; }
+    .m-me { width: 36px; height: 36px; flex-shrink: 0; border-radius: 50%; border: none; padding: 0; overflow: hidden; position: relative;
+      display: grid; place-items: center; font-weight: 800; font-size: 15px; color: #06070c;
       background: linear-gradient(135deg, var(--accent), var(--accent-2)); touch-action: manipulation;
       -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
     .m-me img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
     .m-net { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; border: none; cursor: pointer;
       font: 700 12px var(--font-ui); font-variant-numeric: tabular-nums; color: var(--online, #35D399);
-      padding: 4px 10px; border-radius: 12px; background: color-mix(in srgb, currentColor 13%, transparent); align-self: center; margin-top: 4px; }
+      padding: 3px 9px; border-radius: 11px; background: color-mix(in srgb, currentColor 13%, transparent); align-self: center; margin-top: 2px; }
     .m-net.slow { color: #F0B232; }
     .m-net.bad { color: var(--danger, #FF4D6D); }
     .m-net.off { color: var(--fg-muted); font-weight: 600; }
@@ -1435,34 +1435,34 @@
     .acc-add { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: none; background: transparent; color: var(--accent); font: 600 16px var(--font-ui); border-radius: 16px; text-align: left; }
     .acc-plus { width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; font-size: 24px; background: var(--accent-soft); }
     .acc-note { font-size: 12.5px; color: var(--fg-dim); padding: 6px 12px 0; line-height: 1.4; }
-    .m-name { font-size: 27px; font-weight: 800; letter-spacing: -0.02em; font-family: var(--font-display, inherit); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .m-menu { margin-left: auto; width: 44px; height: 44px; border-radius: 50%; border: none; background: transparent; color: var(--fg); display: grid; place-items: center; }
-    .m-menu svg { width: 22px; height: 22px; }
+    .m-name { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; font-family: var(--font-display, inherit); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .m-menu { margin-left: auto; width: 40px; height: 40px; border-radius: 50%; border: none; background: transparent; color: var(--fg); display: grid; place-items: center; }
+    .m-menu svg { width: 20px; height: 20px; }
     .m-menu:active { background: var(--bg-hover); }
-    .list-header { padding: 8px 14px 10px; }
+    .list-header { padding: 6px 14px 8px; }
     .plus-btn { display: none; }
-    .plus-pop { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 58px); right: 14px; min-width: 200px; border-radius: 16px; padding: 6px; }
+    .plus-pop { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 50px); right: 14px; min-width: 200px; border-radius: 16px; padding: 6px; }
     .plus-pop button { padding: 12px 14px; font-size: 15px; border-radius: 11px; }
-    .search { height: 50px; padding: 0 18px; border-radius: 25px; background: var(--bg-surface-2, var(--bg-input)); border-color: transparent; gap: 12px; }
-    .search :global(svg) { width: 20px; height: 20px; }
-    .search input { font-size: 16px; }
+    .search { height: 40px; padding: 0 14px; border-radius: 20px; background: var(--bg-surface-2, var(--bg-input)); border-color: transparent; gap: 10px; }
+    .search :global(svg) { width: 17px; height: 17px; }
+    .search input { font-size: 15px; }
     /* Folders: a pill tray, the current one lit. */
-    .folder-strip { margin: 0 14px 6px; padding: 5px; gap: 2px; border: none; border-radius: 26px;
+    .folder-strip { margin: 0 14px 4px; padding: 3px; gap: 2px; border: none; border-radius: 20px;
       background: color-mix(in srgb, var(--bg-surface-2, var(--bg-input)) 80%, transparent); scrollbar-width: none; }
-    .folder-strip.empty-strip { padding-bottom: 5px; }
-    .folder-strip.empty-strip .folder-tab { flex: 0 0 auto; padding-inline: 22px; }
-    .folder-tab { flex: 1 0 auto; justify-content: center; padding: 10px 16px; font-size: 15px; border: none; color: var(--fg-muted); }
+    .folder-strip.empty-strip { padding-bottom: 3px; }
+    .folder-strip.empty-strip .folder-tab { flex: 0 0 auto; padding-inline: 18px; }
+    .folder-tab { flex: 1 0 auto; justify-content: center; padding: 7px 14px; font-size: 14px; border: none; color: var(--fg-muted); }
     .folder-tab.active { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
-    .folder-edit { padding: 10px 14px; font-size: 14px; border: none; }
+    .folder-edit { padding: 7px 12px; font-size: 13px; border: none; }
     /* Rows: big avatars, roomy text, no notebook tab (one panel at a time). */
-    .chats { padding: 2px 6px calc(80px + env(safe-area-inset-bottom, 0px)); }
-    .chat-item { grid-template-columns: 58px 1fr; gap: 14px; padding: 9px 12px; border-radius: 16px; }
-    .chat-item .avatar.sz-44 { width: 58px; height: 58px; font-size: 21px; }
+    .chats { padding: 2px 6px calc(72px + env(safe-area-inset-bottom, 0px)); }
+    .chat-item { grid-template-columns: 54px 1fr; gap: 12px; padding: 8px 10px; border-radius: 16px; }
+    .chat-item .avatar.sz-44 { width: 54px; height: 54px; font-size: 20px; }
     .chat-item.active { background: transparent; width: 100%; margin-right: 0; border-radius: 16px; }
     .chat-item.active::before, .chat-item.active::after { display: none; }
     .chat-item.active .chat-time { color: var(--fg-dim); }
-    .chat-name { font-size: calc(16.5px * var(--font-scale, 1)); }
-    .chat-preview { font-size: calc(15px * var(--font-scale, 1)); }
+    .chat-name { font-size: calc(16px * var(--font-scale, 1)); }
+    .chat-preview { font-size: calc(14.5px * var(--font-scale, 1)); }
     .chat-time { font-size: 13px; }
     .chat-row-1 { margin-bottom: 3px; }
 
