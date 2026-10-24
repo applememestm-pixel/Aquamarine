@@ -387,6 +387,12 @@ async fn fetch_bundle(
     if let Some(b) = local_bundle(&state, &user).await {
         return Ok(Json(b));
     }
+    // An old @username: the account's keys under its new one.
+    if let Some(new) = state.directory.renamed_to(&user) {
+        if let Some(b) = local_bundle(&state, &new).await {
+            return Ok(Json(b));
+        }
+    }
     // Uploaded to another relay of the federation?
     if let Some(f) = fed::current(&state) {
         if let Some(v) = f.fetch_bundle(&user).await {
@@ -569,6 +575,14 @@ async fn ws_run(mut socket: WebSocket, state: AppState, me: UserId) {
 }
 
 async fn deliver(state: &AppState, msg: RelayMessage) {
+    // Sent to an old @username: it forwards to the account's new one.
+    let mut msg = msg;
+    let base = base_user(&msg.to).to_string();
+    if !state.directory.user_exists(&base) {
+        if let Some(new) = state.directory.renamed_to(&base) {
+            msg.to = format!("{new}{}", &msg.to[base.len()..]);
+        }
+    }
     // If the recipient is a registered bot, queue the (plaintext) text
     // into its bot queue instead of the normal user inbox — bots pull
     // via GET /v1/bot/updates, they don't hold a WebSocket.
@@ -1089,6 +1103,37 @@ async fn get_devices(State(state): State<AppState>, Path(user): Path<UserId>) ->
 async fn my_devices(State(state): State<AppState>, Caller(dh): Caller) -> Result<Json<Vec<DeviceView>>, (StatusCode, String)> {
     let me = caller_username(&state, &dh)?;
     device_views(&state, &me, Some(&dh)).await.map(Json).ok_or((StatusCode::NOT_FOUND, "no such account".into()))
+}
+
+#[derive(Deserialize)]
+struct UsernameBody { username: String }
+
+/// `POST /v1/me/username` `{username}` — change the account's @username
+/// (primary device). Bundles, queues and live connections move to the new
+/// name; the old one forwards to it for a while (directory::RENAME_KEEP_SECS).
+async fn change_username(
+    State(state): State<AppState>,
+    Caller(dh): Caller,
+    Json(body): Json<UsernameBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let old = caller_username(&state, &dh)?;
+    let new = state.directory.rename_user(&old, &dh, &body.username).map_err(|e| {
+        let st = if matches!(e, directory::DirError::UsernameTaken) { StatusCode::CONFLICT } else { dir_err_status(&e) };
+        (st, e.to_string())
+    })?;
+    if new != old {
+        // In memory: keys, queued envelopes and the identity binding, for the
+        // account and each of its devices (old~dev → new~dev).
+        let keys: Vec<String> = state.users.iter().map(|e| e.key().clone()).filter(|k| base_user(k) == old).collect();
+        for k in keys {
+            let nk = format!("{new}{}", &k[old.len()..]);
+            if let Some((_, v)) = state.users.remove(&k) { state.users.insert(nk.clone(), v); }
+            if let Some((_, b)) = state.bindings.remove(&k) { state.bindings.insert(nk, b); }
+        }
+        tracing::info!(%old, %new, "@username changed");
+        state.fed_kick.notify_waiters();
+    }
+    Ok(Json(serde_json::json!({ "ok": true, "username": new })))
 }
 
 #[derive(Deserialize)]
@@ -1932,6 +1977,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/me/recovery",        get(recovery_get).put(recovery_put))
         .route("/v1/devices/:user",      get(get_devices))
         .route("/v1/me/devices",         get(my_devices))
+        .route("/v1/me/username",        post(change_username))
         .route("/v1/me/devices/:id",     post(rename_device).delete(remove_device))
         .route("/v1/users/:user/password", post(set_password))
         .route("/v1/users/:user/profile", get(get_profile).post(update_profile))

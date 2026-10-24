@@ -186,7 +186,13 @@ pub enum DirError {
     NoAccount,
     #[error("the recovery key doesn't match this account")]
     BadRecovery,
+    #[error("the @username can be changed once a day")]
+    RenameTooSoon,
 }
+
+/// After a @username change the old name forwards to the new one (and stays
+/// reserved for its owner) this long — Telegram keeps old names a while too.
+pub const RENAME_KEEP_SECS: u64 = 30 * 24 * 3600;
 
 impl From<rusqlite::Error> for DirError {
     fn from(e: rusqlite::Error) -> Self { DirError::Db(e.to_string()) }
@@ -433,6 +439,13 @@ impl Directory {
                 mime       TEXT NOT NULL,
                 data       BLOB NOT NULL,
                 PRIMARY KEY (username, kind)
+            );
+            -- @username changes: for RENAME_KEEP_SECS the old name forwards
+            -- to the new one and nobody else can take it.
+            CREATE TABLE IF NOT EXISTS renames (
+                old_name TEXT PRIMARY KEY,
+                new_name TEXT NOT NULL,
+                at       INTEGER NOT NULL
             );
             "#,
         )?;
@@ -771,6 +784,18 @@ impl Directory {
             if existing_user != username {
                 return Err(DirError::EmailTaken);
             }
+        }
+
+        // Someone's old name, still forwarding to them: not free yet.
+        let reserved: bool = db
+            .query_row(
+                "SELECT 1 FROM renames WHERE old_name=?1 AND at > ?2",
+                rusqlite::params![username, now_secs() as i64 - RENAME_KEEP_SECS as i64],
+                |_| Ok(()),
+            )
+            .is_ok();
+        if reserved {
+            return Err(DirError::UsernameTaken);
         }
 
         // Username free, or already ours?
@@ -1308,6 +1333,24 @@ impl Directory {
         if ours.is_some_and(|t| t >= u.updated_at) {
             return false;
         }
+        // The same account under a new @username (renamed on its home relay):
+        // the old row goes, and the old name forwards here too.
+        let renamed: Vec<String> = {
+            let mut st = match db.prepare("SELECT username FROM users WHERE identity_dh=?1 AND username<>?2 AND is_bot=0") {
+                Ok(st) => st,
+                Err(_) => return false,
+            };
+            st.query_map(rusqlite::params![dh, u.username], |r| r.get::<_, String>(0))
+                .map(|rows| rows.flatten().collect())
+                .unwrap_or_default()
+        };
+        for old in renamed {
+            let _ = db.execute("DELETE FROM users WHERE username=?1", rusqlite::params![old]);
+            let _ = db.execute(
+                "INSERT INTO renames (old_name, new_name, at) VALUES (?1, ?2, ?3) ON CONFLICT(old_name) DO UPDATE SET new_name=?2, at=?3",
+                rusqlite::params![old, u.username, now_secs() as i64],
+            );
+        }
         // An e-mail moving to another username elsewhere: drop it here first.
         if let Some(email) = &u.email {
             let _ = db.execute("UPDATE users SET email=NULL WHERE email=?1 AND username<>?2", rusqlite::params![email, u.username]);
@@ -1526,6 +1569,81 @@ impl Directory {
         .ok()
     }
 
+    /// Change an account's @username (its primary device only). Everything
+    /// stored under the old name moves; the old name forwards to the new one
+    /// for `RENAME_KEEP_SECS` and stays reserved for this account meanwhile.
+    pub fn rename_user(&self, old: &str, identity_dh: &[u8; 32], new: &str) -> Result<String, DirError> {
+        let old = old.trim().to_lowercase();
+        let new = new.trim().trim_start_matches('@').to_lowercase();
+        if !Self::valid_username(&new) {
+            return Err(DirError::BadUsername);
+        }
+        if self.device_role(&old, identity_dh) != Some(true) || self.is_bot(&old) {
+            return Err(DirError::NotOwner);
+        }
+        if new == old {
+            return Ok(new);
+        }
+        let now = now_secs() as i64;
+        let mut db = self.db.lock().unwrap();
+        // Taken by someone, or someone's recent old name.
+        let taken: bool = db.query_row("SELECT 1 FROM users WHERE username=?1", rusqlite::params![new], |_| Ok(())).is_ok();
+        if taken {
+            return Err(DirError::UsernameTaken);
+        }
+        let reserved_for: Option<String> = db
+            .query_row(
+                "SELECT new_name FROM renames WHERE old_name=?1 AND at > ?2",
+                rusqlite::params![new, now - RENAME_KEEP_SECS as i64],
+                |r| r.get(0),
+            )
+            .ok();
+        if reserved_for.is_some_and(|n| n != old) {
+            return Err(DirError::UsernameTaken);
+        }
+        // Not more often than once a day (it's announced to every contact).
+        let last: Option<i64> = db
+            .query_row("SELECT max(at) FROM renames WHERE new_name=?1", rusqlite::params![old], |r| r.get(0))
+            .ok()
+            .flatten();
+        if last.is_some_and(|t| now - t < 24 * 3600) {
+            return Err(DirError::RenameTooSoon);
+        }
+        let tx = db.transaction()?;
+        tx.execute("UPDATE users SET username=?1 WHERE username=?2", rusqlite::params![new, old])?;
+        for (table, col) in [("last_seen", "username"), ("backups", "username"), ("prekeys", "username"), ("profile_media", "username"),
+                             ("capsules", "owner"), ("capsules", "recipient"), ("bot_peers", "user")] {
+            tx.execute(&format!("UPDATE OR IGNORE {table} SET {col}=?1 WHERE {col}=?2"), rusqlite::params![new, old])?;
+        }
+        // Waiting envelopes, to the account and to each of its devices (user~dev).
+        tx.execute("UPDATE inbox SET user=?1 WHERE user=?2", rusqlite::params![new, old])?;
+        tx.execute(
+            "UPDATE inbox SET user=?1 || substr(user, length(?2) + 1) WHERE substr(user, 1, length(?2) + 1) = ?2 || '~'",
+            rusqlite::params![new, old],
+        )?;
+        // Older names of this account now point at the newest one.
+        tx.execute("UPDATE renames SET new_name=?1 WHERE new_name=?2", rusqlite::params![new, old])?;
+        tx.execute("DELETE FROM renames WHERE old_name=?1", rusqlite::params![new])?;
+        tx.execute(
+            "INSERT INTO renames (old_name, new_name, at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(old_name) DO UPDATE SET new_name=?2, at=?3",
+            rusqlite::params![old, new, now],
+        )?;
+        tx.commit()?;
+        Ok(new)
+    }
+
+    /// The current name of a renamed account (`old` forwards for a while).
+    pub fn renamed_to(&self, old: &str) -> Option<String> {
+        let db = self.db.lock().unwrap();
+        db.query_row(
+            "SELECT new_name FROM renames WHERE old_name=?1 AND at > ?2",
+            rusqlite::params![old.trim().to_lowercase(), now_secs() as i64 - RENAME_KEEP_SECS as i64],
+            |r| r.get(0),
+        )
+        .ok()
+    }
+
     /// Fetch a user's avatar / banner: `(mime, bytes)`.
     pub fn get_media(&self, username: &str, kind: MediaKind) -> Option<(String, Vec<u8>)> {
         let username = username.trim().to_lowercase();
@@ -1552,20 +1670,24 @@ impl Directory {
 
     /// Prefix / substring search over username + display name.
     pub fn search(&self, query: &str, limit: usize) -> Vec<Profile> {
-        let q = query.trim().to_lowercase();
+        // "@ivan" is "ivan"; "_" and "%" are literal characters of a name.
+        let q = query.trim().trim_start_matches('@').to_lowercase();
         if q.is_empty() { return Vec::new(); }
-        let like = format!("%{}%", q.replace('%', "").replace('_', ""));
+        let esc = q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+        let like = format!("%{esc}%");
+        // An old @username still forwarding: show the account under its new one.
+        let renamed = self.renamed_to(&q);
         let db = self.db.lock().unwrap();
         let sql = format!(
             "SELECT {PROFILE_COLS} FROM users
-             WHERE username LIKE ?1 OR lower(display_name) LIKE ?1
-             ORDER BY username LIMIT ?2"
+             WHERE username LIKE ?1 ESCAPE '\\' OR lower(display_name) LIKE ?1 ESCAPE '\\' OR username = ?4
+             ORDER BY (username = ?3 OR username = ?4) DESC, username LIMIT ?2"
         );
         let mut stmt = match db.prepare(&sql) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };
-        let rows = stmt.query_map(rusqlite::params![like, limit as i64], profile_from_row);
+        let rows = stmt.query_map(rusqlite::params![like, limit as i64, q, renamed.unwrap_or_default()], profile_from_row);
         match rows {
             Ok(it) => it.filter_map(|r| r.ok()).collect(),
             Err(_) => Vec::new(),
@@ -1930,6 +2052,36 @@ mod tests {
         assert!(raw.contains("multipart/alternative"));
         assert!(raw.contains("042517"));
         if let Ok(p) = std::env::var("AQUA_DUMP_EMAIL") { std::fs::write(p, raw).unwrap(); }
+    }
+
+    #[test]
+    fn rename_moves_the_account_and_keeps_the_old_name() {
+        let d = dir();
+        let (a, b) = ([7u8; 32], [8u8; 32]);
+        let code = d.request_code("ren@x.com").unwrap().unwrap();
+        let t = d.verify_code("ren@x.com", &code).unwrap();
+        d.register("oldname", &a, &t, "Ren", "", "").unwrap();
+        d.inbox_push("oldname", b"m1").unwrap();
+        d.inbox_push("oldname~dev2", b"m2").unwrap();
+        // Only the owner, only a valid free name.
+        assert!(matches!(d.rename_user("oldname", &b, "newname"), Err(DirError::NotOwner)));
+        assert!(matches!(d.rename_user("oldname", &a, "x"), Err(DirError::BadUsername)));
+        assert_eq!(d.rename_user("oldname", &a, "@NewName").unwrap(), "newname");
+        assert!(d.user_exists("newname") && !d.user_exists("oldname"));
+        assert_eq!(d.username_for_identity(&a).as_deref(), Some("newname"));
+        assert_eq!(d.renamed_to("oldname").as_deref(), Some("newname"));
+        assert_eq!(d.inbox_take("newname").len(), 1);
+        assert_eq!(d.inbox_take("newname~dev2").len(), 1);
+        // The old name is reserved: nobody else registers it.
+        let code = d.request_code("other@x.com").unwrap().unwrap();
+        let t = d.verify_code("other@x.com", &code).unwrap();
+        assert!(matches!(d.register("oldname", &b, &t, "", "", ""), Err(DirError::UsernameTaken)));
+        // Search: with or without "@", and by the old name.
+        assert_eq!(d.search("@newn", 5).first().map(|p| p.username.as_str()), Some("newname"));
+        assert_eq!(d.search("@oldname", 5).first().map(|p| p.username.as_str()), Some("newname"));
+        assert!(d.search("new_name", 5).is_empty(), "_ is a literal, not a wildcard");
+        // Once a day.
+        assert!(matches!(d.rename_user("newname", &a, "third"), Err(DirError::RenameTooSoon)));
     }
 
     #[tokio::test]

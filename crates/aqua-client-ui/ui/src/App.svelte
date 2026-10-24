@@ -5,6 +5,8 @@
   import { startAutoscroll } from "./lib/autoscroll";
   import { startKeyboardInset } from "./lib/keyboard";
   import { startBack, onBack } from "./lib/back";
+  import { startRenames } from "./lib/rename";
+  import { startNetwork } from "./lib/network";
   import { migrateCustomWallpaper, fitCurrentWallpaper, followWallpaper } from "./lib/theme";
   import { api } from "./lib/tauri";
   import { bootstrap, activeTab, info, activeId, backToList, connect, quickConnect } from "./lib/stores";
@@ -247,6 +249,8 @@
     };
     // Phone Back button / back gesture: closes whatever is on top (lib/back.ts).
     const stopBack = startBack();
+    const stopRenames = startRenames();
+    const stopNetwork = startNetwork();
     document.addEventListener("keydown", onKey);
     document.addEventListener("contextmenu", onCtx);
 
@@ -259,6 +263,8 @@
       stopUpdates();
       stopShortcuts();
       stopBack();
+      stopRenames();
+      stopNetwork();
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("contextmenu", onCtx);
       stopAutoscroll();

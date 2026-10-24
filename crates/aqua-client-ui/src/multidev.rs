@@ -359,6 +359,23 @@ pub fn handle_own_device(app: &AppHandle, text: &str) {
         own_device_message(app, &to, inner);
         return;
     }
+    // My account got a new @username on another device: take it here too
+    // (the UI reconnects under it).
+    if let Some(body) = text.strip_prefix(REN_PREFIX) {
+        let state: State<'_, StdMutex<AppState>> = app.state();
+        let v: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+        let (old, new) = (v["old"].as_str().unwrap_or(""), v["new"].as_str().unwrap_or(""));
+        if let Ok(mut s) = state.lock() {
+            if s.username.as_deref() == Some(old) && !new.is_empty() {
+                let email = s.email.clone();
+                s.mark_registered(new.to_string(), email);
+                s.save_connection_hints();
+                drop(s);
+                let _ = app.emit("aqua://self_renamed", serde_json::json!({ "old": old, "new": new }));
+            }
+        }
+        return;
+    }
     // Group traffic of mine (snapshots, messages) arrives unwrapped.
     let me = {
         let state: State<'_, StdMutex<AppState>> = app.state();

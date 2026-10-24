@@ -2201,6 +2201,9 @@ pub const TYPING_PREFIX: &str = "[typing:v1]";
 pub const EDIT_PREFIX: &str = "[edit:v1]";
 /// Delete a previously-sent message: JSON `{text}` (matched by exact text).
 pub const DEL_PREFIX: &str = "[del:v1]";
+/// The sender changed their @username: JSON `{old, new}`. The chat, the
+/// sessions and group memberships move to the new name.
+pub const REN_PREFIX: &str = "[ren:v1]";
 pub const GRPINFO_PREFIX: &str = "[grpinfo:v1]";
 /// A member's own edits that don't need an admin: `{gid, tag}` (member tag,
 /// when the group lets members set their own).
@@ -3190,6 +3193,23 @@ async fn on_incoming_envelope(
         return;
     }
 
+    // They changed their @username.
+    if let Some(body) = text.strip_prefix(REN_PREFIX) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
+            let old = v["old"].as_str().unwrap_or("").to_string();
+            let new = v["new"].as_str().unwrap_or("").trim().to_lowercase();
+            let valid = new.len() >= 3 && new.len() <= 32 && new.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '.');
+            // Only for themselves: the notice comes from the old name.
+            if old == from && valid {
+                if let Ok(mut s) = state.lock() { apply_peer_rename(&mut s, &old, &new); }
+                crate::multidev::invalidate(&old);
+                let _ = app.emit("aqua://renamed", serde_json::json!({ "old": old, "new": new }));
+                let _ = app.emit("aqua://chats_updated", ());
+            }
+        }
+        return;
+    }
+
     // Dispatch based on payload prefix.
     if let Some(signal_body) = text.strip_prefix(CALL_PREFIX) {
         // Call signals bypass the chat log entirely — the CallModal
@@ -3501,6 +3521,98 @@ pub fn mark_chat_read(state: State<'_, StdMutex<AppState>>, peer_id: String) -> 
         book.summary.unread = 0;
     }
     Ok(())
+}
+
+/// Change my @username. The relay renames the account (the old name forwards
+/// for a while), then every contact I have a session with is told, over the
+/// still-open connection, so their chat with me moves to the new name. The
+/// UI reconnects under the new name afterwards.
+#[tauri::command]
+pub async fn change_username(app: AppHandle, state: State<'_, StdMutex<AppState>>, username: String) -> Result<String, String> {
+    let wanted = username.trim().trim_start_matches('@').to_lowercase();
+    let (transport, old, peers) = {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        let t = s.transport.clone().ok_or("not connected")?;
+        let me = s.username.clone().ok_or("not registered")?;
+        let mut peers: Vec<String> = s.sessions.keys().map(|k| crate::multidev::base_user(k).to_string()).filter(|p| p != &me).collect();
+        peers.sort();
+        peers.dedup();
+        (t, me, peers)
+    };
+    if wanted == old {
+        return Ok(old);
+    }
+    let new = transport.change_username(&wanted).await.map_err(|e| e.to_string())?;
+    let payload = format!("{REN_PREFIX}{}", serde_json::json!({ "old": old, "new": new }));
+    // My other devices first (to myself = to my devices only).
+    let _ = crate::multidev::fanout(&app, &old, &payload, false).await;
+    for p in &peers {
+        if let Err(e) = crate::multidev::fanout(&app, p, &payload, false).await {
+            tracing::warn!(peer = %p, %e, "rename notice not sent");
+        }
+    }
+    {
+        let mut s = state.lock().map_err(|e| e.to_string())?;
+        let email = s.email.clone();
+        s.mark_registered(new.clone(), email);
+        s.save_connection_hints();
+        // My own name in group member lists.
+        rename_member_everywhere(&mut s, &old, &new);
+    }
+    let _ = app.emit("aqua://chats_updated", ());
+    Ok(new)
+}
+
+fn rename_member_everywhere(s: &mut AppState, old: &str, new: &str) {
+    for g in s.groups.values_mut() {
+        for m in &mut g.members {
+            if m.username == old { m.username = new.to_string(); }
+        }
+    }
+}
+
+/// A contact changed their @username: their chat, sessions (in memory and in
+/// the vault, every device: old~dev → new~dev) and group memberships move.
+pub fn apply_peer_rename(s: &mut AppState, old: &str, new: &str) {
+    if old == new || s.username.as_deref() == Some(new) {
+        return;
+    }
+    if let Some(mut book) = s.chats.remove(old) {
+        book.summary.id = new.to_string();
+        if book.summary.name == old { book.summary.name = new.to_string(); }
+        for m in &mut book.messages {
+            if m.from == old { m.from = new.to_string(); }
+        }
+        match s.chats.get_mut(new) {
+            // A chat under the new name already (they wrote from it first): one chat.
+            Some(cur) => {
+                let mut all = std::mem::take(&mut book.messages);
+                all.append(&mut cur.messages);
+                cur.messages = all;
+            }
+            None => { s.chats.insert(new.to_string(), book); }
+        }
+    }
+    for id in &mut s.chat_order {
+        if id == old { *id = new.to_string(); }
+    }
+    let mut seen = std::collections::HashSet::new();
+    s.chat_order.retain(|id| seen.insert(id.clone()));
+    let mut keys: Vec<String> = s.sessions.keys().filter(|k| crate::multidev::base_user(k) == old).cloned().collect();
+    for k in s.vault.list_session_peer_ids().unwrap_or_default() {
+        if crate::multidev::base_user(&k) == old && !keys.contains(&k) { keys.push(k); }
+    }
+    for k in keys {
+        let nk = format!("{new}{}", &k[old.len()..]);
+        let sess = s.sessions.remove(&k).or_else(|| s.vault.load_session(&k).ok().flatten());
+        if let Some(sess) = sess {
+            if let Err(e) = s.vault.save_session(&nk, &sess) { tracing::warn!(?e, "rename: save_session"); }
+            let _ = s.vault.delete_session(&k);
+            s.sessions.insert(nk, sess);
+        }
+    }
+    rename_member_everywhere(s, old, new);
+    crate::history::mark_dirty(s, new);
 }
 
 /// "Delete chat" on this device, as in Telegram: the history is gone (the

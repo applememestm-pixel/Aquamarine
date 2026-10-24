@@ -453,7 +453,7 @@
   // could reasonably try to start a chat with: non-empty, no spaces,
   // not already the name of a visible chat.
   function computeStartHint(term: string, chats: typeof $visibleChats): boolean {
-    const t = term.trim();
+    const t = term.trim().replace(/^@+/, "");
     if (t.length === 0) return false;
     if (t.includes("://")) return false;
     if (t.includes(" ")) return false;
@@ -462,7 +462,8 @@
       (c) => c.name.toLowerCase() === lower || c.id.toLowerCase() === lower,
     );
   }
-  let searchTerm   = $derived(($search ?? "").trim());
+  // "@ivan" works as well as "ivan".
+  let searchTerm   = $derived(($search ?? "").trim().replace(/^@+/, ""));
   let showStartHint = $derived(computeStartHint($search ?? "", $visibleChats));
 
   // Live server-directory search. Debounced; results shown under the
@@ -473,7 +474,7 @@
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   $effect(() => {
-    const q = $search.trim();
+    const q = $search.trim().replace(/^@+/, "");
     if (debounceTimer) clearTimeout(debounceTimer);
     if (q.length < 2 || !$info?.connected) { dirResults = []; return; }
     debounceTimer = setTimeout(async () => {
@@ -557,7 +558,7 @@
       {@html icons.search}
       <input
         id="search"
-        placeholder={$t("Search by name, phone or username")}
+        placeholder={$t("Search by name, phone or @username")}
         autocomplete="off"
         bind:value={$search}
         onkeydown={onSearchKey}

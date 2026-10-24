@@ -994,6 +994,18 @@ impl Transport {
         Ok(())
     }
 
+    /// Change this account's @username on the relay; returns the name as
+    /// the relay stored it (lower-case, no "@").
+    pub async fn change_username(&self, username: &str) -> Result<String, TransportError> {
+        let url = format!("{}/v1/me/username", self.server_url.trim_end_matches('/'));
+        let r = self.http.post(&url).bearer_auth(self.bearer().await?).json(&serde_json::json!({ "username": username })).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        let v: serde_json::Value = r.json().await?;
+        Ok(v["username"].as_str().unwrap_or(username).to_string())
+    }
+
     pub async fn rename_device(&self, id: &str, name: &str) -> Result<(), TransportError> {
         let url = format!("{}/v1/me/devices/{}", self.server_url.trim_end_matches('/'), id);
         let r = self.http.post(&url).bearer_auth(self.bearer().await?).json(&serde_json::json!({ "name": name })).send().await?;

@@ -67,7 +67,7 @@ function loadDrafts(): Record<string, string> {
  *  typing any of those three finds the chat. Also enriches each
  *  chat with the stored display_name when available. */
 export const visibleChats = derived([chats, search, contacts], ([$chats, $search, _$c]) => {
-  const q = $search.trim();
+  const q = $search.trim().replace(/^@+/, "");
   const enriched = $chats.map((c) => ({
     ...c,
     name: displayName(c.id, c.name),
@@ -253,6 +253,8 @@ export async function startChat(
   first_message: string,
   extra?: { full_name?: string; phone?: string },
 ): Promise<string | null> {
+  // "@ivan" and "ivan" are the same person.
+  peer_username = peer_username.trim().replace(/^@+/, "").toLowerCase();
   try {
     await api.startChatWith(peer_username, first_message);
     // Save contact metadata (name, phone) locally so the chat renders

@@ -1085,3 +1085,37 @@ async fn sealed_messages_open_on_their_condition() {
     let v: serde_json::Value = open(&rcpt, "cap-grace1").await.unwrap().json().await.unwrap();
     assert_eq!(v["state"], "cancelled");
 }
+
+#[tokio::test]
+async fn changing_the_username_moves_the_account() {
+    let addr = spawn_server().await;
+    let base = format!("http://{addr}");
+    let http = reqwest::Client::new();
+    let mut me = Client::new("before");
+    let mut other = Client::new("someone");
+    me.login(&http, &base).await;
+    other.login(&http, &base).await;
+    let code: serde_json::Value = http.post(format!("{base}/v1/auth/email/request"))
+        .json(&serde_json::json!({ "email": "ren@x.com" })).send().await.unwrap().json().await.unwrap();
+    let t: serde_json::Value = http.post(format!("{base}/v1/auth/email/verify"))
+        .json(&serde_json::json!({ "email": "ren@x.com", "code": code["dev_code"] })).send().await.unwrap().json().await.unwrap();
+    let r = http.post(format!("{base}/v1/users/register")).bearer_auth(&me.token)
+        .json(&serde_json::json!({ "ticket": t["ticket"], "username": "before", "display_name": "Ren" })).send().await.unwrap();
+    assert!(r.status().is_success());
+
+    // Somebody else can't rename my account.
+    let r = http.post(format!("{base}/v1/me/username")).bearer_auth(&other.token)
+        .json(&serde_json::json!({ "username": "stolen" })).send().await.unwrap();
+    assert!(!r.status().is_success());
+
+    let r = http.post(format!("{base}/v1/me/username")).bearer_auth(&me.token)
+        .json(&serde_json::json!({ "username": "@After" })).send().await.unwrap();
+    assert!(r.status().is_success(), "rename: {}", r.status());
+    assert_eq!(r.json::<serde_json::Value>().await.unwrap()["username"], "after");
+
+    // Found under the new name only; the old one is no longer a profile.
+    let found: serde_json::Value = http.get(format!("{base}/v1/users/search?q=after")).send().await.unwrap().json().await.unwrap();
+    assert!(found.to_string().contains("\"after\""), "search: {found}");
+    let found: serde_json::Value = http.get(format!("{base}/v1/users/search?q=before")).send().await.unwrap().json().await.unwrap();
+    assert!(!found.to_string().contains("\"before\""), "old name still listed: {found}");
+}
