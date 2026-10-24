@@ -42,8 +42,8 @@
   .brand{display:flex;align-items:center;gap:11px;font-family:var(--display);font-weight:700;font-size:17px;color:var(--fg)}
   .brand:hover{text-decoration:none}
   .brand img{width:34px;height:34px;border-radius:10px;box-shadow:0 0 22px -4px var(--accent-glow)}
-  .tag{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--accent);padding:3px 8px;border-radius:999px;
-    background:var(--accent-soft);border:1px solid rgba(0,229,199,.25)}
+  .tag{font-family:var(--mono);font-size:11px;font-weight:600;color:#fff;padding:3px 8px;border-radius:999px;
+    background:rgba(255,255,255,.06);border:1px solid var(--line-str)}
   .host{font-family:var(--mono);font-size:12.5px;color:var(--fg-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
   .top-right{margin-left:auto;display:flex;align-items:center;gap:8px}
   .pill{display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border-radius:999px;white-space:nowrap;
@@ -199,14 +199,12 @@
     @keyframes breathe{0%,100%{box-shadow:0 0 18px -4px var(--accent-glow)}50%{box-shadow:0 0 36px 2px var(--accent-glow)}}
     .hero-logo{animation:breathe 4.5s ease-in-out infinite,bob 6s ease-in-out infinite}
     @keyframes bob{50%{transform:translateY(-7px) rotate(-1.5deg)}}
-    .hero h1 span{background-size:220% 100%;animation:shine 7s ease-in-out infinite}
-    @keyframes shine{50%{background-position:100% 50%}}
     .btn{position:relative;overflow:hidden}
     .btn::after{content:"";position:absolute;inset:0;transform:translateX(-120%);background:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.45) 50%,transparent 70%)}
     .btn:not(.ghost):hover::after{transform:translateX(120%);transition:transform .8s ease}
     .tab{transition:color .15s,background .15s,border-color .15s,transform .15s}
     .tab:active{transform:scale(.97)}
-    .code-row{animation:rise .4s cubic-bezier(.2,.8,.2,1) both}
+    .code-row.fresh{animation:rise .4s cubic-bezier(.2,.8,.2,1) both}
   }
   /* hero */
   .hero{position:relative;overflow:hidden;display:flex;align-items:center;gap:22px;padding:24px 26px;margin-bottom:18px;border-radius:22px;
@@ -216,7 +214,7 @@
       linear-gradient(180deg,var(--ink-2),var(--ink));box-shadow:0 30px 70px -40px #000}
   .hero-logo{width:76px;height:76px;border-radius:22px;flex-shrink:0}
   .hero h1{font-size:28px;font-weight:700;line-height:1.1}
-  .hero h1 span{background:linear-gradient(110deg,var(--accent),var(--accent-2),var(--accent));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .hero h1 span{color:#fff}
   .hero .meta{margin-top:8px;display:flex;flex-wrap:wrap;gap:8px}
   .chip2{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border-radius:999px;font-size:12.5px;color:var(--fg-muted);background:rgba(255,255,255,.04);border:1px solid var(--line)}
   .chip2 b{color:var(--fg);font-weight:600}
@@ -247,6 +245,55 @@
   .spin{width:46px;height:46px;border-radius:50%;border:3px solid var(--line-str);border-top-color:var(--accent);animation:spinr .8s linear infinite}
   @keyframes spinr{to{transform:rotate(360deg)}}
   .gate .card{box-shadow:0 0 70px -20px var(--accent-glow)}
+  /* Mode chooser, servers list, sticker packs */
+  .modal{position:fixed;inset:0;z-index:60;display:grid;place-items:center;padding:20px;background:rgba(3,4,8,.72);backdrop-filter:blur(8px)}
+  .modal .card{max-width:640px;width:100%;margin:0;box-shadow:0 40px 90px -30px #000,0 0 70px -30px var(--accent-glow)}
+  .modes{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px}
+  @media (max-width:560px){.modes{grid-template-columns:1fr}}
+  .mode{text-align:left;padding:18px;border-radius:16px;border:1px solid var(--line-str);background:var(--void);color:var(--fg);font:inherit;cursor:pointer;transition:border-color .15s,box-shadow .15s}
+  .mode:hover,.mode.on{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  .mode b{display:block;font-family:var(--display);font-size:16px;margin:8px 0 4px}
+  .mode span{font-size:13px;color:var(--fg-muted);line-height:1.5}
+  .mode svg{width:26px;height:26px;color:var(--accent)}
+  .seg{display:inline-flex;padding:4px;border-radius:12px;background:var(--void);border:1px solid var(--line);gap:4px;margin-bottom:14px}
+  .seg button{border:none;background:transparent;color:var(--fg-muted);font:inherit;font-weight:600;font-size:13.5px;padding:7px 14px;border-radius:9px;cursor:pointer}
+  .seg button.on{background:var(--accent-soft);color:var(--accent)}
+  .srv{display:flex;align-items:center;gap:12px;padding:11px 13px;border-radius:12px;background:var(--void);border:1px solid var(--line);margin-bottom:8px}
+  .srv .d{width:9px;height:9px;border-radius:50%;background:var(--fg-dim);flex-shrink:0}
+  .srv .d.ok{background:var(--good);box-shadow:0 0 8px var(--good)}
+  .srv .u{flex:1;min-width:0;font-family:var(--mono);font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .srv .tags{display:flex;gap:6px;flex-wrap:wrap}
+  .srv .tg{font-size:11.5px;padding:2px 8px;border-radius:999px;border:1px solid var(--line-str);color:var(--fg-muted);white-space:nowrap}
+  .srv .tg.net{color:var(--accent);border-color:rgba(0,229,199,.35)}
+  .srv .ms{font-family:var(--mono);font-size:12.5px;color:var(--good);white-space:nowrap;min-width:52px;text-align:right}
+  .srv .ms.off{color:var(--fg-dim)}
+  .invite{display:flex;gap:8px;align-items:center}
+  .invite code{flex:1;min-width:0;font-family:var(--mono);font-size:12.5px;padding:10px 12px;border-radius:11px;background:var(--void);border:1px solid var(--line-str);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg-muted)}
+  details.adv summary{cursor:pointer;color:var(--fg-muted);font-size:13.5px;font-weight:600;margin:6px 0 12px}
+  .packs{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;margin-top:4px}
+  .pack{padding:12px;border-radius:14px;background:var(--void);border:1px solid var(--line)}
+  .pack .pv{display:flex;gap:6px;height:44px;margin-bottom:8px}
+  .pack .pv img,.pack .pv video{width:44px;height:44px;object-fit:contain;border-radius:8px;background:var(--ink-2)}
+  .pack .pv .ph{width:44px;height:44px;border-radius:8px;background:var(--ink-2);display:grid;place-items:center;color:var(--fg-dim);font-size:11px}
+  .pack b{display:block;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pack span{font-size:12px;color:var(--fg-dim)}
+  /* The website's cursor: a small teal dot, a thin comet tail (the button in
+     the top bar turns the tail off; the dot stays). Fields and selected text
+     get the normal cursor back. */
+  .fx-trail{position:fixed;inset:0;z-index:70;pointer-events:none}
+  html.fx-cursor,html.fx-cursor *{cursor:none!important}
+  .fx-dot{position:fixed;left:0;top:0;z-index:71;pointer-events:none;width:0;height:0;opacity:0;transition:opacity .15s ease}
+  .fx-dot::before{content:"";position:absolute;left:-7px;top:-7px;width:14px;height:14px;border-radius:50%;
+    background:rgba(0,229,199,.32);box-shadow:0 0 0 1px rgba(0,229,199,.55) inset,0 0 12px rgba(0,229,199,.35);
+    transition:transform .18s cubic-bezier(.22,1,.36,1),background .18s ease}
+  .fx-dot.on{opacity:1}
+  .fx-dot.big::before{transform:scale(1.6);background:rgba(0,229,199,.18)}
+  .fx-dot.press::before{transform:scale(.8)}
+  .fx-toggle{display:grid;place-items:center;width:34px;height:34px;padding:0;border-radius:10px;border:1px solid var(--line-str);
+    background:transparent;color:var(--accent);cursor:pointer;flex-shrink:0}
+  .fx-toggle svg{width:17px;height:17px}
+  .fx-toggle.off{color:var(--fg-dim)}
+  .fx-toggle:hover{border-color:var(--accent)}
 </style>
 </head>
 <body>
@@ -409,6 +456,11 @@
           (and custom-emoji reactions show up for all). Get a token from
           <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a> → /newbot. Saved in <b>aqua-telegram.json</b>.</div>
       </div>
+      <div class="card rv">
+        <h2><span data-t="Packs on this server">Packs on this server</span> <span class="hint" id="packsCount"></span></h2>
+        <div class="packs" id="packs"></div>
+        <div class="note" data-t="packsNote">Apps download a pack once and keep its files on the device; this list is what the server keeps for everyone.</div>
+      </div>
     </section>
 
     <!-- Federation -->
@@ -416,7 +468,28 @@
       <div class="page-head rv"><div class="eyebrow" data-t="Network">Network</div><h1 data-t="Federation">Federation</h1>
         <p data-t="Servers with the same secret act as one network: accounts and encrypted backups are copied between them, and apps switch to a working server when theirs is down.">Servers with the same secret act as one network: accounts and encrypted backups are copied between them, and apps switch to a working server when theirs is down.</p></div>
       <div class="card rv">
+        <div class="seg" id="modeSeg">
+          <button data-mode="solo" onclick="setMode('solo')" data-t="Alone">Alone</button>
+          <button data-mode="network" onclick="setMode('network')" data-t="In a network">In a network</button>
+        </div>
         <div class="mstate" id="fState"><span class="d"></span><span id="fStateText">…</span></div>
+        <div id="netBox" class="hide">
+          <label data-t="Invitation into this network">Invitation into this network</label>
+          <div class="invite"><code id="inviteCode">…</code><button class="copy" id="inviteCopy" data-t="Copy">Copy</button></div>
+          <div class="note" data-th="inviteNote">Give it to the admin of another relay: they paste it below on their panel, and the relays add each other — and from then on find every other relay of the network by themselves. It holds the network's secret: send it privately.</div>
+          <div class="mt"><label data-t="Join a network by an invitation">Join a network by an invitation</label>
+            <div class="row"><input id="joinInv" placeholder="aquafed:…" style="flex:1;min-width:200px" autocomplete="off" /><button class="btn" onclick="joinNet()" data-t="Join">Join</button></div></div>
+          <div class="note" id="mailVia"></div>
+        </div>
+        <div class="note" id="fMsg"></div>
+      </div>
+      <div class="card rv">
+        <h2><span data-t="Servers">Servers</span> <span class="hint"><button class="copy" onclick="loadServers(true)" id="srvRe" data-t="Search again">Search again</button></span></h2>
+        <div id="servers"><div class="empty" data-t="Looking for servers…">Looking for servers…</div></div>
+        <div class="note" data-th="serversNote">Your network's relays, relays on this local network and the public list. <b>In the network</b> — shares the secret with this relay; the others are separate servers (send them an invitation to join).</div>
+      </div>
+      <div class="card rv">
+        <details class="adv"><summary data-t="By hand">By hand</summary>
         <div class="fields">
           <div class="full"><label data-t="This server's public address">This server's public address</label><input id="fSelf" placeholder="https://relay1.example.com" /></div>
           <div class="full"><label data-t="Other servers (one per line)">Other servers (one per line)</label><textarea id="fPeers" rows="3" placeholder="https://relay2.example.com"></textarea></div>
@@ -426,13 +499,28 @@
           <button class="btn" onclick="saveFed()" data-t="Save">Save</button>
           <button class="btn ghost" onclick="genSecret()" data-t="Generate secret">Generate secret</button>
         </div>
-        <div class="note" id="fMsg"></div>
         <div class="note" data-t="Saved in aqua-federation.json.">Saved in aqua-federation.json.</div>
+        </details>
       </div>
     </section>
   </main>
 </div>
 <div class="toast" id="toast"></div>
+<!-- First open: how does this relay work? (changeable in Federation) -->
+<div class="modal hide" id="modeModal">
+  <div class="card">
+    <div class="eyebrow" data-t="First start">First start</div>
+    <h2 style="font-size:22px" data-t="How will this server work?">How will this server work?</h2>
+    <div class="modes">
+      <button class="mode" onclick="setMode('solo', true)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/></svg>
+        <b data-t="Alone">Alone</b><span data-t="soloText">Its own accounts and chats; nothing is shared with other servers. You can join a network later.</span></button>
+      <button class="mode" onclick="setMode('network', true)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="5" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="m7.2 10.8 9.6-4.6M7.2 13.2l9.6 4.6"/></svg>
+        <b data-t="In a network">In a network</b><span data-t="netText">With other relays: accounts and backups are shared, people stay reachable when one server is down, and a relay with mail sends codes for all.</span></button>
+    </div>
+  </div>
+</div>
 
 <script>
   const $ = (id) => document.getElementById(id);
@@ -480,13 +568,34 @@
     "Paste the token first.":"Сначала вставьте токен.","Token removed.":"Токен удалён.","savedTg":"Сохранено. Наборы по умолчанию скачиваются в фоне.",
     "copySecret":"Скопируйте этот секрет в панели других серверов и нажмите «Сохранить».",
     "s ago":" с назад","m ago":" мин назад","h ago":" ч назад",
+    "Packs on this server":"Наборы на этом сервере",
+    "packsNote":"Приложение скачивает набор один раз и хранит его файлы на устройстве; здесь — то, что сервер хранит для всех.",
+    "Alone":"Один","In a network":"В сети","Invitation into this network":"Приглашение в эту сеть",
+    "Join a network by an invitation":"Вступить в сеть по приглашению","Join":"Вступить","Servers":"Серверы","Search again":"Искать снова",
+    "Looking for servers…":"Ищу серверы…","By hand":"Вручную","First start":"Первый запуск","How will this server work?":"Как будет работать этот сервер?",
+    "soloText":"Свои аккаунты и чаты, с другими серверами ничего не делится. В сеть можно вступить позже.",
+    "netText":"Вместе с другими ретрансляторами: аккаунты и резервные копии общие, люди на связи, даже когда один сервер выключен, а сервер с почтой отправляет коды за всех.",
+    "soloState":"<b>Один</b> — сервер работает сам по себе","netState":"<b>В сети</b> · других серверов: ",
+    "netNoPeers":"<b>В сети</b> — пока один: передайте приглашение админу другого сервера",
+    "inNet":"в сети","otherNet":"другой сервер","lan":"локальная сеть","public":"публичный","peerDown":"не отвечает",
+    "noServers":"Других серверов не видно.","joined":"Готово — серверы добавили друг друга.",
+    "mailVia":"Почта здесь не настроена — коды отправит сервер сети, у которого она есть. Пароль от почты никуда не передаётся.",
+    "mailHere":"Почта настроена здесь — этот сервер отправляет коды и за серверы сети без почты (пароль остаётся тут).",
+    "accounts":"аккаунтов","online":"в сети",
   };
   const T = (s) => (RU && DICT[s]) || ({lanOn:"Phones must be on the same Wi-Fi. If they can't connect, allow <b>aqua-server</b> in the firewall.",
     lanOff:"The relay only accepts connections from this PC.", codesMailed:"Codes are e-mailed to users, so they don't show up here. If an e-mail can't be sent, its code appears here.",
     notSent:"These e-mails could NOT be sent — pass the code on to the person yourself.",
     noCodes:"No codes yet. When someone taps <b>Send code</b> in the app, it appears here.",
     savedMail:"Saved. New sign-ups now get real e-mails — send a test to check.", savedTg:"Saved. Default packs are downloading in the background.",
-    copySecret:"Copy this secret to the other servers' panels too, then Save.", "dev mode — no mail is sent":"Dev mode — no mail is sent. Pass the code on yourself.",
+    copySecret:"Copy this secret to the other servers' panels too, then Save.",
+    soloState:"<b>Alone</b> — this server works by itself", netState:"<b>In a network</b> · other servers: ",
+    netNoPeers:"<b>In a network</b> — on its own so far: give the invitation to another relay's admin",
+    inNet:"in the network", otherNet:"separate server", lan:"local network", public:"public", peerDown:"not answering",
+    noServers:"No other servers in sight.", joined:"Done — the relays added each other.",
+    mailVia:"No mail here — a relay of the network that has mail sends the codes. The mail password never leaves it.",
+    mailHere:"Mail is set up here — this relay also sends codes for relays of the network without mail (the password stays here).",
+    accounts:"accounts", online:"online", packsNote:"Apps download a pack once and keep its files on the device; this list is what the server keeps for everyone.", "dev mode — no mail is sent":"Dev mode — no mail is sent. Pass the code on yourself.",
     "sent by e-mail (SMTP)":"Codes are e-mailed (SMTP). Only the ones that couldn't be sent show up here."}[s]) || s;
   if (RU) {
     document.documentElement.lang = "ru";
@@ -494,6 +603,8 @@
     document.querySelectorAll("[data-tp]").forEach((el) => { const k = el.getAttribute("data-tp"); if (DICT[k]) el.placeholder = DICT[k]; });
     const notes = {
       gmailNote: "Gmail: включите двухэтапную проверку и создайте <b>пароль приложения</b> на <a href=\"https://myaccount.google.com/apppasswords\" target=\"_blank\" rel=\"noopener\">myaccount.google.com/apppasswords</a> — вставьте его выше (не обычный пароль). Настройки хранятся в <b>aqua-smtp.json</b> рядом с сервером.",
+      inviteNote: "Передайте его админу другого ретранслятора: он вставит его ниже в своей панели, и серверы добавят друг друга — а дальше сами найдут все остальные серверы сети. В приглашении секрет сети: пересылайте его лично.",
+      serversNote: "Серверы вашей сети, серверы в этой локальной сети и из публичного списка. <b>В сети</b> — знает секрет этого сервера; остальные — отдельные серверы (чтобы они вступили, передайте им приглашение).",
       tgNote: "С токеном здесь люди на этом сервере добавляют любой набор, просто вставив ссылку <b>t.me/addstickers/…</b> или <b>t.me/addemoji/…</b> — сервер скачивает его один раз для всех (и реакции кастомными эмодзи видны всем). Токен выдаёт <a href=\"https://t.me/BotFather\" target=\"_blank\" rel=\"noopener\">@BotFather</a> → /newbot. Хранится в <b>aqua-telegram.json</b>.",
     };
     document.querySelectorAll("[data-th]").forEach((el) => { el.innerHTML = notes[el.getAttribute("data-th")] || el.innerHTML; });
@@ -517,6 +628,8 @@
     document.querySelectorAll(".page").forEach((p) => p.classList.toggle("hide", p.dataset.page !== id));
     if (location.hash.slice(1) !== id && !/token=/.test(location.hash)) history.replaceState(null, "", "#" + id);
     store.set("aqua.admin.tab", id);
+    // Opened: the servers around / the packs on the server (after the script has run).
+    setTimeout(() => { if (id === "fed") loadServers(); if (id === "telegram") loadTg(); }, 0);
     document.querySelector(`.tab[data-tab="${id}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
   document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => { showTab(b.dataset.tab); window.scrollTo({ top: 0 }); }));
@@ -559,11 +672,19 @@
     return `<div class="addr ${off?"off":""}"><span class="k">${T(k)}</span><code>${esc(T(url))}</code>`+
       (off?"":`<button class="copy" data-copy="${esc(url)}">${T("Copy")}</button>`)+`</div>`;
   }
+  // Codes are polled every few seconds: a list is rebuilt only when its codes
+  // change (only the new rows rise in), and "5m ago" is updated in place —
+  // rebuilding it on every poll replayed the animation, and the rows jumped.
+  const seenCodes = new Set();
+  let firstCodes = true;
   function codeRows(list){
-    return list.map(c => `<div class="code-row"><span class="code">${esc(c.code)}</span>
-      <span class="em">${esc(c.email)}</span><span class="ago">${ago(c.at)}</span>
-      <button class="copy" data-copy="${esc(c.code)}">${T("Copy")}</button></div>`).join("");
+    return list.map(c => { const k = c.email + c.code + c.at; const fresh = !firstCodes && !seenCodes.has(k);
+      return `<div class="code-row${fresh ? " fresh" : ""}"><span class="code">${esc(c.code)}</span>
+      <span class="em">${esc(c.email)}</span><span class="ago" data-at="${c.at}">${ago(c.at)}</span>
+      <button class="copy" data-copy="${esc(c.code)}">${T("Copy")}</button></div>`; }).join("");
   }
+  /** Set innerHTML only when it differs (no flicker, no replayed animations). */
+  function setHtml(id, html){ const el = $(id); if (el.dataset.html !== html) { el.dataset.html = html; el.innerHTML = html; } }
 
   // ---- stat tiles: built once, numbers glide to their new values ----
   const ICONS = {
@@ -622,12 +743,12 @@
 
     const port = (s.listen.split(":").pop()) || "7777";
     const lanOpen = s.listen.startsWith("0.0.0.0") || s.listen.startsWith("[::]");
-    $("addrs").innerHTML =
+    setHtml("addrs",
       addrRow("This PC", `http://127.0.0.1:${port}`) +
       (lanOpen && s.lan_ip ? addrRow("Phones · Wi-Fi", `http://${s.lan_ip}:${port}`)
                            : addrRow("Phones · Wi-Fi", lanOpen ? "no LAN address found" : "off — start with AQUA_LISTEN=0.0.0.0", true)) +
       (s.public_url ? addrRow("Internet", s.public_url) : "") +
-      addrRow("Android emulator", `http://10.0.2.2:${port}`);
+      addrRow("Android emulator", `http://10.0.2.2:${port}`));
     $("lanNote").innerHTML = T(lanOpen ? "lanOn" : "lanOff");
 
     $("codesHint").textContent = T(s.dev_codes ? "dev mode — no mail is sent" : "sent by e-mail (SMTP)");
@@ -636,8 +757,17 @@
       ? `<div class="empty">${T("codesMailed")}</div>`
       : (!s.dev_codes ? `<div class="warnbox">${T("notSent")}</div>` : "") +
         (codes.length ? codeRows(codes) : `<div class="empty">${T("noCodes")}</div>`);
-    $("codes").innerHTML = body;
-    $("codesMini").innerHTML = codes.length ? codeRows(codes.slice(0, 3)) : `<div class="empty">${T(s.dev_codes ? "noCodes" : "codesMailed")}</div>`;
+    // Rebuild only when the set of codes changed; otherwise just the ages tick.
+    const sig = codes.map((c) => c.email + c.code + c.at).join("|") + "|" + s.dev_codes;
+    if (sig !== refresh.codeSig) {
+      refresh.codeSig = sig;
+      $("codes").innerHTML = body;
+      $("codesMini").innerHTML = codes.length ? codeRows(codes.slice(0, 3)) : `<div class="empty">${T(s.dev_codes ? "noCodes" : "codesMailed")}</div>`;
+      for (const c of codes) seenCodes.add(c.email + c.code + c.at);
+      firstCodes = false;
+    } else {
+      document.querySelectorAll(".code-row .ago[data-at]").forEach((el) => { el.textContent = ago(+el.dataset.at); });
+    }
     $("codesBadge").textContent = codes.length; $("codesBadge").classList.toggle("hide", !codes.length);
 
     inviteOnly = s.invite_only;
@@ -713,6 +843,13 @@
             : `Token set${v.source === "env" ? " by <b>AQUA_TG_BOT_TOKEN</b>" : ""} · <b>${v.packs}</b> pack(s) on this server`)
       : (RU ? "<b>Токена нет</b> — пользователи добавляют наборы со своим токеном" : "<b>No token</b> — users import packs with their own token");
     $("tTok").disabled = v.source === "env";
+    const packs = v.list || [];
+    $("packsCount").textContent = packs.length ? String(packs.length) : "";
+    setHtml("packs", packs.length ? packs.map((p) => `<div class="pack"><div class="pv">${(p.preview || []).map(([f, mime]) =>
+        mime.startsWith("video/") ? `<video src="/v1/packs/${encodeURIComponent(p.name)}/${encodeURIComponent(f)}" muted loop autoplay playsinline></video>`
+        : mime.startsWith("image/") ? `<img src="/v1/packs/${encodeURIComponent(p.name)}/${encodeURIComponent(f)}" alt="" loading="lazy" />`
+        : `<span class="ph">TGS</span>`).join("")}</div><b>${esc(p.title || p.name)}</b><span>${p.count} · ${esc(p.kind === "custom_emoji" ? (RU ? "эмодзи" : "emoji") : (RU ? "стикеры" : "stickers"))}</span></div>`).join("")
+      : `<div class="empty">${RU ? "Наборов пока нет — вставьте ссылку t.me/addstickers/… в приложении." : "No packs yet — paste a t.me/addstickers/… link in the app."}</div>`);
     $("tTok").placeholder = v.has_token ? (RU ? "•••••••• сохранён — вставьте новый, чтобы заменить" : "•••••••• saved — paste a new one to replace") : "123456789:AA…";
     tgLoaded = true;
   }
@@ -728,19 +865,67 @@
   }
 
   // ---- Federation ----
-  let fedLoaded = false;
+  let fedLoaded = false, fedMode = "", fedSmtp = false;
   function showFed(v){
+    fedMode = v.mode || ""; fedSmtp = !!v.smtp;
+    document.querySelectorAll("#modeSeg button").forEach((b) => b.classList.toggle("on", b.dataset.mode === fedMode));
+    const net = fedMode === "network";
+    $("netBox").classList.toggle("hide", !net);
     $("fState").className = "mstate" + (v.active ? " on" : "");
     $("fedSt").className = "st" + (v.active ? " on" : "");
-    $("fStateText").innerHTML = v.active
-      ? (RU ? `Включена · других серверов: <b>${v.peers.length}</b>` : `On · <b>${v.peers.length}</b> other server(s)`)
-      : (RU ? "<b>Выключена</b> — сервер работает один" : "<b>Off</b> — this server works alone");
-    $("fSelf").value = v.public_url || location.origin;
+    $("fStateText").innerHTML = !net ? T("soloState") : (v.peers.length ? T("netState") + `<b>${v.peers.length}</b>` : T("netNoPeers"));
+    $("mailVia").textContent = net ? T(v.smtp ? "mailHere" : "mailVia") : "";
+    $("fSelf").value = v.public_url || v.detected_url || location.origin;
     $("fPeers").value = (v.peers || []).join("\n");
     $("fSecret").placeholder = v.has_secret ? (RU ? "•••••••• сохранён — вставьте новый, чтобы заменить" : "•••••••• saved — paste a new one to replace") : T("paste or generate");
+    // First open: choose how this relay works.
+    $("modeModal").classList.toggle("hide", fedMode !== "");
+    if (net) loadInvite();
     fedLoaded = true;
   }
   async function loadFed(){ try { showFed(await api("/v1/admin/federation")); } catch {} }
+  async function setMode(mode, fromModal){
+    try {
+      const cur = await api("/v1/admin/federation");
+      await api("/v1/admin/federation", { method: "POST", body: JSON.stringify({ mode, public_url: cur.public_url || cur.detected_url || "", peers: cur.peers || [] }) });
+      await loadFed();
+      if (fromModal && mode === "network") showTab("fed");
+      loadServers();
+    } catch(e){ msg("fMsg", T("Not saved: ") + e.message, "err"); }
+  }
+  let inviteText = "";
+  async function loadInvite(){
+    try { const r = await api("/v1/admin/fed/invite"); inviteText = r.invite || "";
+      $("inviteCode").textContent = inviteText ? inviteText.slice(0, 18) + "•••••••••••••" : (RU ? "нужен публичный адрес (вручную, ниже)" : "needs a public address (By hand, below)"); } catch {}
+  }
+  $("inviteCopy").addEventListener("click", () => inviteText && copy(inviteText));
+  async function joinNet(){
+    const invite = $("joinInv").value.trim();
+    if (!invite) return;
+    msg("fMsg", T("Sending…"));
+    try { await api("/v1/admin/fed/join", { method: "POST", body: JSON.stringify({ invite }) });
+      $("joinInv").value = ""; msg("fMsg", T("joined"), "ok"); await loadFed(); loadServers(true); }
+    catch(e){ msg("fMsg", T("Failed: ") + e.message, "err"); }
+  }
+  let serversBusy = false, serversAt = 0;
+  async function loadServers(force){
+    if (serversBusy || (!force && Date.now() - serversAt < 60000)) return;
+    serversBusy = true; $("srvRe").disabled = true;
+    if (force) $("servers").innerHTML = `<div class="empty">${T("Looking for servers…")}</div>`;
+    try {
+      const r = await api("/v1/admin/servers");
+      serversAt = Date.now();
+      const list = (r.servers || []).sort((a, b) => (b.same_network - a.same_network) || (b.ok - a.ok) || ((a.ms ?? 1e9) - (b.ms ?? 1e9)));
+      $("servers").innerHTML = list.length ? list.map((x) => `<div class="srv"><span class="d ${x.ok ? "ok" : ""}"></span>
+        <span class="u">${esc(x.url.replace(/^https?:\/\//, ""))}</span>
+        <span class="tags">${x.same_network ? `<span class="tg net">${T("inNet")}</span>` : x.ok ? `<span class="tg">${T("otherNet")}</span>` : ""}
+          ${x.found === "lan" ? `<span class="tg">${T("lan")}</span>` : x.found === "public" ? `<span class="tg">${T("public")}</span>` : ""}
+          ${x.ok && x.users != null ? `<span class="tg">${x.users} ${T("accounts")} · ${x.online ?? 0} ${T("online")}</span>` : ""}</span>
+        <span class="ms ${x.ok ? "" : "off"}">${x.ok ? x.ms + " ms" : T("peerDown")}</span></div>`).join("")
+        : `<div class="empty">${T("noServers")}</div>`;
+    } catch(e){ $("servers").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+    serversBusy = false; $("srvRe").disabled = false;
+  }
   function genSecret(){
     const b = new Uint8Array(24); crypto.getRandomValues(b);
     $("fSecret").type = "text";
@@ -785,6 +970,72 @@
     const c = e.target.closest && e.target.closest(".card, .stat"); if (!c) return;
     const r = c.getBoundingClientRect(); c.style.setProperty("--mx", e.clientX-r.left+"px"); c.style.setProperty("--my", e.clientY-r.top+"px");
   }, { passive: true });
+
+  // ---- the website's cursor: a dot instead of the arrow + a comet tail ----
+  (() => {
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches || !matchMedia("(pointer: fine)").matches) return;
+    const root = document.documentElement, KEY = "aqua.admin.fx";
+    let tailOn = store.get(KEY) !== "off";
+    const tc = document.createElement("canvas"); tc.className = "fx-trail"; tc.setAttribute("aria-hidden", "true"); document.body.appendChild(tc);
+    const dot = document.createElement("div"); dot.className = "fx-dot"; dot.setAttribute("aria-hidden", "true"); document.body.appendChild(dot);
+    const tx = tc.getContext("2d"); let tw = 0, th = 0, raf = 0;
+    const fit = () => { const d = Math.min(2, devicePixelRatio || 1); tw = innerWidth; th = innerHeight;
+      tc.width = tw * d; tc.height = th * d; tc.style.width = tw + "px"; tc.style.height = th + "px"; tx.setTransform(d, 0, 0, d, 0, 0); };
+    fit(); addEventListener("resize", fit);
+    const TAIL = 480, WIDTH = 2.6;
+    let pts = [], head = null, target = null, still = 0;
+    const tick = (now) => {
+      raf = 0;
+      if (target) {
+        if (!head) head = { ...target };
+        head.x += (target.x - head.x) * 0.32; head.y += (target.y - head.y) * 0.32;
+        const l = pts[pts.length - 1];
+        if (!l || Math.hypot(head.x - l.x, head.y - l.y) > 1.5) pts.push({ x: head.x, y: head.y, t: now });
+      }
+      pts = pts.filter((p) => now - p.t < TAIL);
+      tx.clearRect(0, 0, tw, th);
+      if (pts.length > 1) {
+        tx.lineCap = "round"; tx.lineJoin = "round"; tx.globalCompositeOperation = "lighter";
+        for (let i = 1; i < pts.length; i++) {
+          const a = pts[i - 1], b = pts[i], k = 1 - (now - b.t) / TAIL;
+          tx.strokeStyle = `rgba(0,229,199,${0.5 * k})`; tx.shadowColor = `rgba(0,229,199,${0.35 * k})`; tx.shadowBlur = 6 * k;
+          tx.lineWidth = Math.max(0.4, WIDTH * k); tx.beginPath(); tx.moveTo(a.x, a.y); tx.lineTo(b.x, b.y); tx.stroke();
+        }
+        tx.shadowBlur = 0; tx.globalCompositeOperation = "source-over";
+      }
+      if (pts.length || (head && target && Math.hypot(target.x - head.x, target.y - head.y) > 0.5)) raf = requestAnimationFrame(tick);
+      else if (now - still > 100) head = null;
+    };
+    const TYPING = "input, textarea, select, [contenteditable='true']";
+    let selecting = false, overField = false;
+    const native = () => selecting || overField;
+    const paint = () => { root.classList.toggle("fx-cursor", !native()); dot.classList.toggle("on", !native() && !!target); };
+    document.addEventListener("selectionchange", () => { const sl = getSelection(); selecting = !!sl && !sl.isCollapsed && String(sl).trim() !== ""; paint(); });
+    addEventListener("pointermove", (e) => {
+      target = { x: e.clientX, y: e.clientY };
+      overField = !!(e.target.closest && e.target.closest(TYPING));
+      dot.style.transform = `translate(${e.clientX}px, ${e.clientY}px)`;
+      dot.classList.toggle("big", !!(e.target.closest && e.target.closest("a, button, label, .tab, .toggle, [data-copy]")));
+      paint();
+      if (!tailOn || native()) return;
+      still = performance.now();
+      if (!raf) raf = requestAnimationFrame(tick);
+    }, { passive: true });
+    addEventListener("pointerdown", () => dot.classList.add("press"), { passive: true });
+    addEventListener("pointerup", () => dot.classList.remove("press"), { passive: true });
+    document.documentElement.addEventListener("mouseleave", () => { target = null; head = null; paint(); });
+    // The switch: the tail only, like on the website.
+    const btn = document.createElement("button");
+    btn.type = "button"; btn.className = "fx-toggle";
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="16" cy="8" r="3"/><path d="M13.5 10.5 4 20M11 9 6 14M15 13l-5 5"/></svg>';
+    const label = () => { btn.title = tailOn ? (RU ? "Выключить след курсора" : "Turn the cursor trail off") : (RU ? "Включить след курсора" : "Turn the cursor trail on");
+      btn.setAttribute("aria-pressed", String(tailOn)); btn.classList.toggle("off", !tailOn); };
+    btn.addEventListener("click", () => { tailOn = !tailOn; store.set(KEY, tailOn ? "on" : "off");
+      if (!tailOn) { pts = []; head = null; tx.clearRect(0, 0, tw, th); } label(); });
+    label();
+    document.querySelector(".top-right")?.prepend(btn);
+    paint();
+  })();
 
   pill("", T("connecting…"));
   tick();

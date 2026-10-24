@@ -175,7 +175,7 @@
   // ---- the cursor: a small teal dot instead of the arrow, a thin comet
   // tail behind it (the colour of the site's text selection). Selecting
   // text or typing brings the normal cursor back. A button in the nav turns
-  // both off (remembered). ----
+  // the tail off (remembered); the dot stays. ----
   if (!reduce && matchMedia("(pointer: fine)").matches) {
     const FX_KEY = "aqua.site.fx";
     let fxOn = (() => { try { return localStorage.getItem(FX_KEY) !== "off"; } catch { return true; } })();
@@ -236,8 +236,8 @@
     let selecting = false, overField = false;
     const native = () => selecting || overField;
     const paint = () => {
-      const show = fxOn && !native() && !!target;
-      root.classList.toggle("fx-cursor", fxOn && !native());
+      const show = !native() && !!target;
+      root.classList.toggle("fx-cursor", !native());
       dot.classList.toggle("on", show);
     };
     document.addEventListener("selectionchange", () => {

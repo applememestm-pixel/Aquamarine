@@ -94,7 +94,7 @@
                 <span class="keys">
                   {#each f.keys as alt, ai}
                     {#if ai > 0}<span class="or">/</span>{/if}
-                    {#each alt as k}<kbd>{k}</kbd>{/each}
+                    {#each alt as k}<kbd>{k.length > 4 ? $t(k) : k}</kbd>{/each}
                   {/each}
                 </span>
               </div>

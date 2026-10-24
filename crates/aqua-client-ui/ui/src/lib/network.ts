@@ -5,6 +5,8 @@
  * other address (home / white IP, servers.ts aliases) and its federation
  * (servers.ts knownServers) — each with a live ping. "Pick the fastest by
  * itself" moves the connection to a clearly faster one (or off a dead one).
+ * "Stay on this server" locks it: no moving at all, not even off a dead one
+ * — then the app is offline until that server is back.
  *
  * Proxies: a list of SOCKS5 / HTTP proxies with a ping to our relay through
  * each. "Use proxy" routes everything through the chosen one; "Switch
@@ -22,9 +24,11 @@ export interface NetPrefs {
   useProxy: boolean;
   proxies: string[];
   autoProxy: boolean;
+  /** The server we never move away from ("" = not locked). */
+  lockServer: string;
 }
 const KEY = "aqua.net.v1";
-const DEF: NetPrefs = { autoServer: true, useProxy: false, proxies: [], autoProxy: true };
+const DEF: NetPrefs = { autoServer: true, useProxy: false, proxies: [], autoProxy: true, lockServer: "" };
 function load(): NetPrefs {
   try { return { ...DEF, ...JSON.parse(localStorage.getItem(KEY) || "{}") }; } catch { return { ...DEF }; }
 }
@@ -36,6 +40,9 @@ export const serverPings = writable<Record<string, number | null>>({});
 export const proxyPings = writable<Record<string, number | null>>({});
 
 const norm = (u: string) => u.trim().replace(/\/+$/, "");
+
+/** The locked server, or "" when the app may move between servers. */
+export const lockedServer = () => norm(get(netPrefs).lockServer ?? "");
 
 /** Relays where this account works, the current one first. */
 export function serverCandidates(): string[] {
@@ -78,7 +85,11 @@ export async function switchServer(url: string): Promise<string | null> {
   const user = get(info)?.username;
   if (!user) return tr("Not signed in");
   const err = await connect(url, user);
-  if (!err) void learnPeers(url);
+  if (!err) {
+    void learnPeers(url);
+    // Picked by hand while locked: the lock moves with the user.
+    if (lockedServer()) netPrefs.update((p) => ({ ...p, lockServer: norm(url) }));
+  }
   return err;
 }
 
@@ -121,7 +132,7 @@ async function round() {
         }
       } else proxyMisses = 0;
     }
-    if (p.autoServer) {
+    if (p.autoServer && !lockedServer()) {
       const sp = await measureServers();
       const cur = norm(i.server_url);
       const curMs = sp[cur];

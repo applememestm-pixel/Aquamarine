@@ -35,6 +35,7 @@ pub mod tgapi;
 pub mod botx;
 pub mod site;
 pub mod public;
+pub mod discovery;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
 pub use auth::{AuthState, Caller};
@@ -204,7 +205,7 @@ impl AppState {
         let mut s = Self::build(true);
         s.directory = Arc::new(Directory::open_memory());
         s.blobs = blobstore::BlobStore::new(blob_dir, std::time::Duration::from_secs(3600));
-        s.fed = Arc::new(std::sync::RwLock::new(fed_cfg.and_then(fed::Fed::new)));
+        s.fed = Arc::new(std::sync::RwLock::new(fed_cfg.map(|c| fed::FedConfig { ephemeral: true, ..c }).and_then(fed::Fed::new)));
         s
     }
 
@@ -788,6 +789,20 @@ async fn email_request(
     }
     let nonce = (!body.nonce.is_empty()).then_some(body.nonce.as_str());
     let base = nonce.and_then(|_| link_base(&headers));
+    // No mail server here, but a relay of the network has one: it sends the
+    // code (our SMTP-less relay never sees its password).
+    if !state.directory.has_smtp() {
+        if let Some(f) = fed::current(&state) {
+            let (email, code, link) = state.directory.prepare_code(&body.email, nonce, base.as_deref())
+                .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+            if f.send_mail(&email, &code, link.as_deref()).await {
+                return Ok(Json(EmailRequestResp { ok: true, dev_code: None, delivery_failed: false, error: None }));
+            }
+            return state.directory.deliver_code(email, code, link).await
+                .map(|d| Json(EmailRequestResp { ok: true, dev_code: d.dev_code, delivery_failed: d.delivery_failed, error: d.error }))
+                .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()));
+        }
+    }
     match state.directory.request_code_delivered_ex(&body.email, nonce, base.as_deref()).await {
         Ok(d) => Ok(Json(EmailRequestResp { ok: true, dev_code: d.dev_code, delivery_failed: d.delivery_failed, error: d.error })),
         Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
@@ -1200,6 +1215,8 @@ async fn admin_get_fed(State(state): State<AppState>, headers: axum::http::Heade
     admin_authed(&state, &headers)?;
     let c = fed::FedConfig::load();
     Ok(Json(serde_json::json!({
+        "mode": c.effective_mode(),
+        "smtp": state.directory.has_smtp(),
         "active": fed::current(&state).is_some(),
         "has_secret": !c.secret.is_empty(),
         "peers": c.peers,
@@ -1216,6 +1233,9 @@ struct FedUpdate {
     peers: Vec<String>,
     #[serde(default)]
     public_url: String,
+    /// "solo" / "network"; None = leave as it is.
+    #[serde(default)]
+    mode: Option<String>,
 }
 
 async fn admin_set_fed(
@@ -1233,11 +1253,92 @@ async fn admin_set_fed(
     }
     c.peers = u.peers.into_iter().map(|p| p.trim().trim_end_matches('/').to_string()).filter(|p| p.starts_with("http")).collect();
     c.public_url = u.public_url.trim().trim_end_matches('/').to_string();
+    if let Some(m) = u.mode.filter(|m| m == "solo" || m == "network") {
+        // Into a network: a secret is needed to sign with — make one.
+        if m == "network" && c.secret.len() < 16 {
+            let mut b = [0u8; 24];
+            rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut b);
+            c.secret = hex::encode(b);
+        }
+        c.mode = m;
+    }
     c.save().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let next = fed::Fed::new(fed::FedConfig::load());
     let active = next.is_some();
-    if let Ok(mut g) = state.fed.write() { *g = next; }
-    Ok(Json(serde_json::json!({ "active": active })))
+    if let Ok(mut g) = state.fed.write() { *g = next.clone(); }
+    if let Some(f) = next {
+        let st = state.clone();
+        tokio::spawn(async move { let new = f.hello_all().await; let _ = fed::add_peers(&st, &new); st.fed_kick.notify_one(); });
+    }
+    Ok(Json(serde_json::json!({ "active": active, "mode": fed::FedConfig::load().effective_mode() })))
+}
+
+/// The invitation into this relay's network (it holds the secret: only
+/// for the admin, to hand to another relay's admin).
+async fn admin_fed_invite(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Result<Json<serde_json::Value>, StatusCode> {
+    admin_authed(&state, &headers)?;
+    let c = fed::FedConfig::load();
+    Ok(Json(serde_json::json!({ "invite": fed::invite(&c) })))
+}
+
+#[derive(Deserialize)]
+struct JoinBody { invite: String }
+
+/// Join the network an invitation is from: take its secret, add its relay,
+/// say hello (it adds us; we learn the rest of the network).
+async fn admin_fed_join(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(b): Json<JoinBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    admin_authed(&state, &headers).map_err(|c| (c, String::new()))?;
+    let (url, secret) = fed::parse_invite(&b.invite).ok_or((StatusCode::BAD_REQUEST, "that's not an invitation (aquafed:…)".into()))?;
+    let mut c = fed::FedConfig::load();
+    c.secret = secret;
+    c.mode = "network".into();
+    if !c.peers.contains(&url) { c.peers.push(url.clone()); }
+    if c.public_url.is_empty() { c.public_url = crate::public::url(); }
+    c.save().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let next = fed::Fed::new(fed::FedConfig::load());
+    if let Ok(mut g) = state.fed.write() { *g = next.clone(); }
+    let Some(f) = next else { return Err((StatusCode::BAD_REQUEST, "could not start federation".into())) };
+    if !f.same_network(&url).await {
+        return Err((StatusCode::BAD_GATEWAY, format!("{url} doesn't answer or doesn't accept this secret")));
+    }
+    let new = f.hello_all().await;
+    fed::add_peers(&state, &new);
+    state.fed_kick.notify_one();
+    Ok(Json(serde_json::json!({ "ok": true, "peers": fed::FedConfig::load().peers })))
+}
+
+/// Every relay this one can see: its peers (with how they're doing), relays
+/// on the local network, the public list, and whom the peers know.
+async fn admin_servers(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Result<Json<serde_json::Value>, StatusCode> {
+    admin_authed(&state, &headers)?;
+    let cfg = fed::FedConfig::load();
+    let me = if cfg.public_url.is_empty() { crate::public::url() } else { cfg.public_url.clone() };
+    let port: u16 = std::env::var("AQUA_LISTEN").ok().and_then(|l| l.rsplit(':').next().and_then(|p| p.parse().ok())).unwrap_or(7777);
+    let mut urls: Vec<(String, &'static str)> = cfg.peers.iter().map(|p| (p.clone(), "peer")).collect();
+    for u in discovery::lan_relays(port).await { urls.push((u, "lan")); }
+    for u in discovery::public_list().await { urls.push((u, "public")); }
+    let mut seen = std::collections::HashSet::new();
+    let lan_self = lan_ip().map(|ip| format!("http://{ip}:{port}"));
+    urls.retain(|(u, _)| {
+        let u = u.trim_end_matches('/').to_string();
+        u != me && Some(&u) != lan_self.as_ref() && !u.contains("127.0.0.1") && seen.insert(u)
+    });
+    let fed_now = fed::current(&state);
+    let checks = urls.into_iter().take(40).map(|(u, from)| {
+        let f = fed_now.clone();
+        let is_peer = cfg.peers.iter().any(|p| p == u.trim_end_matches('/'));
+        async move {
+            let (ok, ms, users, online) = discovery::probe(&u).await;
+            let same = match (&f, ok) { (Some(f), true) => f.same_network(&u).await, _ => false };
+            serde_json::json!({ "url": u, "found": from, "peer": is_peer, "ok": ok, "ms": ms, "users": users, "online": online, "same_network": same })
+        }
+    });
+    let list = futures_util::future::join_all(checks).await;
+    Ok(Json(serde_json::json!({ "self": me, "mode": cfg.effective_mode(), "servers": list })))
 }
 
 // ---------- Encrypted account backups --------------------------------------
@@ -2017,6 +2118,12 @@ pub fn app(state: AppState) -> Router {
             .layer(DefaultBodyLimit::max(BACKUP_LIMIT + 1024)))
         .route("/v1/backup/fetch", post(backup_fetch))
         .route("/v1/fed/peers", get(fed::h_peers))
+        .route("/v1/fed/hello", post(fed::h_hello))
+        .route("/v1/fed/ping", get(fed::h_ping))
+        .route("/v1/fed/mail", post(fed::h_mail))
+        .route("/v1/admin/fed/invite", get(admin_fed_invite))
+        .route("/v1/admin/fed/join", post(admin_fed_join))
+        .route("/v1/admin/servers", get(admin_servers))
         .route("/v1/fed/deliver", post(fed::h_deliver))
         .route("/v1/fed/poke", post(fed::h_poke))
         .route("/v1/fed/inbox/:user", get(fed::h_inbox))

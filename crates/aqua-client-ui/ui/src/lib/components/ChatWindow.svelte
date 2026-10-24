@@ -1752,6 +1752,13 @@
     if (sel && !sel.isCollapsed && sel.toString().trim()) return;   // tapping off a text selection
     openTouchMenu(row, e.clientX, e.clientY);
   }
+  /** Telegram Desktop: double-click a message to reply to it. */
+  function onMsgDblClick(row: Row, e: MouseEvent) {
+    if (lastPointerType !== "mouse" || selecting || e.shiftKey || e.ctrlKey || e.metaKey) return;
+    if ((e.target as HTMLElement).closest(TAP_OWN)) return;
+    getSelection()?.removeAllRanges();             // the word the double-click picked
+    replyRow(row);
+  }
   function onMsgContext(e: MouseEvent, row: Row) {
     if (lastPointerType === "touch") {
       const canSelect = !protectedChat && !selecting && pointOnText(e.clientX, e.clientY);
@@ -3012,6 +3019,7 @@
             data-id={m.id}
             class:menu-target={menu.open && menu.touch && menu.row?.id === m.id}
             onclick={(e) => onMsgClick(m, e)}
+            ondblclick={(e) => onMsgDblClick(m, e)}
             oncontextmenu={(e) => onMsgContext(e, m)}
             onpointerdown={(e) => { notePointer(e); onRowPointerDown(e, m); }}
           >
@@ -3472,7 +3480,7 @@
       <div class="reply-bar">
         <div class="rb-line"></div>
         <div class="rb-body">
-          <div class="rb-author">Reply to {replyTarget.author}</div>
+          <div class="rb-author">{$t("Reply to {name}", { name: replyTarget.author })}</div>
           <div class="rb-text">{replyTarget.text}</div>
         </div>
         <button class="rb-x" onclick={cancelReply} title={$t("Cancel reply")}>×</button>
