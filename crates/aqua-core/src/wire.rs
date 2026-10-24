@@ -69,6 +69,11 @@ pub struct RelayMessage {
     #[serde(with = "serde_bytes")]
     pub payload: Vec<u8>,
     pub kind: PayloadKind,
+    /// When the relay took it from the sender (unix ms), stamped by the
+    /// relay: a message fetched later (the app was closed) still shows the
+    /// time it was sent. Older relays leave it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ts: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

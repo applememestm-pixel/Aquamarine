@@ -200,6 +200,7 @@ async fn full_authenticated_e2e_conversation() {
         to: "bob".into(),
         payload,
         kind: PayloadKind::Initial,
+        ts: None,
     };
     a_ws.send(Message::Binary(serde_json::to_vec(&relay).unwrap().into())).await.unwrap();
 
@@ -207,6 +208,9 @@ async fn full_authenticated_e2e_conversation() {
     let incoming = recv_relay(&mut b_ws).await;
     assert_eq!(incoming.from, "alice");
     assert_eq!(incoming.kind, PayloadKind::Initial);
+    // The relay stamps when it got it (the client sent none).
+    let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+    assert!(incoming.ts.is_some_and(|t| (now_ms - t).abs() < 60_000), "ts: {:?}", incoming.ts);
     let incoming_initial: aqua_core::wire::InitialMessage =
         bincode::deserialize(&incoming.payload).unwrap();
     let spk = bob.spks.remove(&1).unwrap();
@@ -225,6 +229,7 @@ async fn full_authenticated_e2e_conversation() {
             to: "alice".into(),
             payload: bincode::serialize(&env).unwrap(),
             kind: PayloadKind::Envelope,
+            ts: None,
         }).unwrap().into())).await.unwrap();
         let got = recv_relay(&mut a_ws).await;
         assert_eq!(got.from, "bob");
@@ -238,6 +243,7 @@ async fn full_authenticated_e2e_conversation() {
             to: "bob".into(),
             payload: bincode::serialize(&env).unwrap(),
             kind: PayloadKind::Envelope,
+            ts: None,
         }).unwrap().into())).await.unwrap();
         let got = recv_relay(&mut b_ws).await;
         assert_eq!(got.from, "alice");
@@ -639,7 +645,7 @@ async fn one_account_on_two_devices() {
 
     // The peer encrypts once per device.
     for (to, body) in [("multi".to_string(), b"for A".to_vec()), (b_addr.clone(), b"for B".to_vec())] {
-        let m = RelayMessage { from: String::new(), to, payload: body, kind: PayloadKind::Envelope };
+        let m = RelayMessage { from: String::new(), to, payload: body, kind: PayloadKind::Envelope, ts: None };
         p_ws.send(Message::Binary(serde_json::to_vec(&m).unwrap().into())).await.unwrap();
     }
     let ga = recv(&mut a_ws).await;
@@ -648,7 +654,7 @@ async fn one_account_on_two_devices() {
     assert_eq!((gb.from.as_str(), gb.payload.as_slice()), ("mpeer", &b"for B"[..]));
 
     // B answers: the peer sees which device wrote.
-    let m = RelayMessage { from: String::new(), to: "mpeer".into(), payload: b"hi from B".to_vec(), kind: PayloadKind::Envelope };
+    let m = RelayMessage { from: String::new(), to: "mpeer".into(), payload: b"hi from B".to_vec(), kind: PayloadKind::Envelope, ts: None };
     b_ws.send(Message::Binary(serde_json::to_vec(&m).unwrap().into())).await.unwrap();
     let gp = recv(&mut p_ws).await;
     assert_eq!(gp.from, b_addr);
@@ -699,7 +705,7 @@ async fn telegram_bot_api_compat() {
     let mut user = Client::new("tguser");
     user.login(&http, &base).await;
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=tguser&token={}", user.token)).await.unwrap();
-    let say = |text: &str| RelayMessage { from: String::new(), to: "tgcompat_bot".into(), payload: text.as_bytes().to_vec(), kind: PayloadKind::Plaintext };
+    let say = |text: &str| RelayMessage { from: String::new(), to: "tgcompat_bot".into(), payload: text.as_bytes().to_vec(), kind: PayloadKind::Plaintext, ts: None };
     ws.send(Message::Binary(serde_json::to_vec(&say("/start hello")).unwrap().into())).await.unwrap();
 
     let ups: serde_json::Value = http.post(format!("{api}/getUpdates")).json(&serde_json::json!({ "timeout": 5 }))
@@ -826,7 +832,7 @@ async fn native_bot_api_extras() {
     let mut user = Client::new("xuser");
     user.login(&http, &base).await;
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=xuser&token={}", user.token)).await.unwrap();
-    let say = |text: &str| RelayMessage { from: String::new(), to: "extras_bot".into(), payload: text.as_bytes().to_vec(), kind: PayloadKind::Plaintext };
+    let say = |text: &str| RelayMessage { from: String::new(), to: "extras_bot".into(), payload: text.as_bytes().to_vec(), kind: PayloadKind::Plaintext, ts: None };
     ws.send(Message::Binary(serde_json::to_vec(&say("/start")).unwrap().into())).await.unwrap();
     let _ = get("/v1/bot/updates?timeout=5").send().await.unwrap();
 
@@ -1010,7 +1016,7 @@ async fn telegram_mini_apps() {
 
     // sendData → web_app_data.
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=maker&token={}", user.token)).await.unwrap();
-    let say = |text: &str| RelayMessage { from: String::new(), to: "shop_bot".into(), payload: text.as_bytes().to_vec(), kind: PayloadKind::Plaintext };
+    let say = |text: &str| RelayMessage { from: String::new(), to: "shop_bot".into(), payload: text.as_bytes().to_vec(), kind: PayloadKind::Plaintext, ts: None };
     ws.send(Message::Binary(serde_json::to_vec(&say(r#"[wad:v1]{"t":"Order","d":"{\"item\":3}"}"#)).unwrap().into())).await.unwrap();
     let ups: serde_json::Value = http.post(format!("{api}/getUpdates")).json(&serde_json::json!({ "timeout": 5 })).send().await.unwrap().json().await.unwrap();
     let wad = &ups["result"][0]["message"]["web_app_data"];

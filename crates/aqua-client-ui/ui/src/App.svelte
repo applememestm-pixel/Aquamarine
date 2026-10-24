@@ -171,6 +171,8 @@
     window.addEventListener("contextmenu", noNativeMenu);
     initGroupCalls();
     initTheme();
+    // Message times in this device's time zone (Rust can't ask Android for it).
+    void api.setTzOffset(-new Date().getTimezoneOffset()).catch(() => {});
     bootstrap();
     initPresence();
     trackPlayed();

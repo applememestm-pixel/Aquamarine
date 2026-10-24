@@ -110,6 +110,10 @@ pub async fn update_check(channel: String) -> Result<UpdateInfo, String> {
     let assets = rel["assets"].as_array().cloned().unwrap_or_default();
     let find = |n: &str| assets.iter().find(|a| a["name"].as_str() == Some(n)).cloned();
     let mut asset = None;
+    // Which commit each file really is (release.yml writes BUILDS.json): a
+    // nightly whose build for this platform failed keeps the older file
+    // under the new title.
+    let mut built_from: Option<String> = None;
     for want in wanted_assets() {
         if let Some(a) = find(want) {
             let updated = a["updated_at"].as_str().unwrap_or_default().to_string();
@@ -126,6 +130,13 @@ pub async fn update_check(channel: String) -> Result<UpdateInfo, String> {
                     }
                 }
             }
+            if let Some(u) = find("BUILDS.json").and_then(|b| b["browser_download_url"].as_str().map(str::to_string)) {
+                if let Ok(r) = http.get(u).timeout(std::time::Duration::from_secs(20)).send().await {
+                    if let Ok(v) = r.json::<serde_json::Value>().await {
+                        built_from = v[*want].as_str().map(|c| c.to_ascii_lowercase());
+                    }
+                }
+            }
             asset = Some(UpdateAsset {
                 name: want.to_string(),
                 url: a["browser_download_url"].as_str().unwrap_or_default().to_string(),
@@ -136,7 +147,7 @@ pub async fn update_check(channel: String) -> Result<UpdateInfo, String> {
         }
     }
     Ok(UpdateInfo {
-        commit: if channel == "stable" { None } else { short_commit(&name) },
+        commit: if channel == "stable" { None } else { built_from.or_else(|| short_commit(&name)) },
         version: (channel == "stable").then(|| tag.trim_start_matches('v').to_string()),
         published_at: s("published_at"),
         notes: s("body"),

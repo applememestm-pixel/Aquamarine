@@ -59,7 +59,7 @@ async fn recv(ws: &mut Ws) -> RelayMessage {
 }
 
 fn msg(from: &str, to: &str, body: &[u8]) -> Message {
-    Message::Binary(serde_json::to_vec(&RelayMessage { from: from.into(), to: to.into(), payload: body.to_vec(), kind: PayloadKind::Envelope }).unwrap().into())
+    Message::Binary(serde_json::to_vec(&RelayMessage { from: from.into(), to: to.into(), payload: body.to_vec(), kind: PayloadKind::Envelope, ts: None }).unwrap().into())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

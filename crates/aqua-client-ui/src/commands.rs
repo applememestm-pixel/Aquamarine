@@ -2941,10 +2941,12 @@ pub struct CallSignalEvent {
 
 pub(crate) async fn handle_incoming(app: &AppHandle, inc: aqua_client_core::Incoming) {
     use aqua_client_core::Incoming::*;
+    // Times written while handling it are when it was sent, not now.
+    let sent = &crate::state::SENT_AT;
     match inc {
-        Initial { from, message } => on_incoming_initial(app, from, message).await,
-        Envelope { from, envelope } => on_incoming_envelope(app, from, envelope).await,
-        Plaintext { from, text } => on_incoming_plaintext(app, from, text).await,
+        Initial { from, message, ts } => sent.scope(ts, on_incoming_initial(app, from, message)).await,
+        Envelope { from, envelope, ts } => sent.scope(ts, on_incoming_envelope(app, from, envelope)).await,
+        Plaintext { from, text, ts } => sent.scope(ts, on_incoming_plaintext(app, from, text)).await,
         Closed => {
             crate::mesh::relay_lost();
             tracing::info!("transport closed by server");
@@ -3509,6 +3511,22 @@ pub fn delete_messages_local(
         }
     }
     Ok(removed)
+}
+
+/// The UI's offset from UTC (minutes, east positive). Message times are
+/// written in local time from now on; the first call also moves the times
+/// stored before (they were UTC).
+#[tauri::command]
+pub fn set_tz_offset(app: AppHandle, state: State<'_, StdMutex<AppState>>, minutes: i32) -> Result<(), String> {
+    crate::state::set_tz_offset(minutes);
+    let n = {
+        let mut s = state.lock().map_err(|e| e.to_string())?;
+        crate::state::localize_old_times(&mut s)
+    };
+    if n > 0 {
+        let _ = app.emit("aqua://chats_updated", ());
+    }
+    Ok(())
 }
 
 /// The chat was read: its unread counter goes to zero. Before, only the UI

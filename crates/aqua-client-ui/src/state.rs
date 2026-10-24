@@ -1402,13 +1402,77 @@ pub fn gradient_for(peer_id: &str) -> (String, String) {
     (letter, format!("linear-gradient(135deg, {a} 0%, {b} 100%)"))
 }
 
+tokio::task_local! {
+    /// While an incoming message is handled: when the relay got it from the
+    /// sender (unix ms). `hhmm_now` writes that time instead of "now", so
+    /// messages fetched after the app was closed keep their real time.
+    pub static SENT_AT: Option<i64>;
+}
+
+/// This device's offset from UTC in minutes (the UI tells it at start:
+/// Rust on Android has no time-zone database to ask).
+static TZ_MIN: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+pub fn set_tz_offset(minutes: i32) {
+    TZ_MIN.store(minutes.clamp(-14 * 60, 14 * 60), std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn tz_offset() -> i32 {
+    TZ_MIN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Local "HH:MM:SS" of a unix time in seconds.
+pub fn hms_at(unix_secs: i64) -> String {
+    let local = unix_secs + tz_offset() as i64 * 60;
+    let day = local.rem_euclid(24 * 3600);
+    format!("{:02}:{:02}:{:02}", day / 3600, day / 60 % 60, day % 60)
+}
+
+/// The time a message gets: when it was sent (while handling an incoming
+/// one the relay stamped), else now — local time, with seconds (the UI
+/// hides them unless Settings → Chat settings → "Seconds" is on). It used
+/// to be UTC "HH:MM", hours off for everyone east or west of London.
 pub fn hhmm_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    let mins_total = (secs / 60) % (24 * 60);
-    let h = (mins_total / 60) as u32;
-    let m = (mins_total % 60) as u32;
-    format!("{:02}:{:02}", h, m)
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let sent = SENT_AT.try_with(|t| *t).ok().flatten().map(|ms| ms / 1000)
+        // A relay clock far ahead of ours: don't show the future.
+        .filter(|s| *s <= now + 120);
+    hms_at(sent.unwrap_or(now))
+}
+
+/// Times stored before the fix were UTC: shift every "HH:MM" by the local
+/// offset once. Returns how many chats changed.
+pub fn localize_old_times(s: &mut AppState) -> usize {
+    let flag = s.data_dir.join("times-local.v1");
+    if flag.exists() {
+        return 0;
+    }
+    let off = tz_offset() as i64;
+    let shift = |t: &mut String| {
+        let b = t.as_bytes();
+        let ok = (t.len() == 5 || t.len() == 8) && b[2] == b':' && b.iter().enumerate().all(|(i, c)| i == 2 || i == 5 || c.is_ascii_digit());
+        if !ok || off == 0 {
+            return false;
+        }
+        let (h, m): (i64, i64) = (t[0..2].parse().unwrap_or(0), t[3..5].parse().unwrap_or(0));
+        let mins = (h * 60 + m + off).rem_euclid(24 * 60);
+        *t = format!("{:02}:{:02}{}", mins / 60, mins % 60, &t[5..]);
+        true
+    };
+    let mut changed = Vec::new();
+    for (id, book) in s.chats.iter_mut() {
+        let mut any = shift(&mut book.summary.time);
+        for m in &mut book.messages {
+            any |= shift(&mut m.time);
+        }
+        if any { changed.push(id.clone()); }
+    }
+    for id in &changed {
+        crate::history::mark_dirty(s, id);
+    }
+    let _ = std::fs::write(&flag, b"1");
+    changed.len()
 }
 
 // ---------- Small message constructors ------------------------------------

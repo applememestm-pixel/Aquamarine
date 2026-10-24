@@ -232,11 +232,12 @@ pub enum Incoming {
     /// A first message from a new peer. Caller must run
     /// `Session::accept_initial` to produce a live session and the
     /// first plaintext.
-    Initial { from: String, message: InitialMessage },
+    /// `ts`: when the relay got it from the sender (unix ms), if it says.
+    Initial { from: String, message: InitialMessage, ts: Option<i64> },
     /// A subsequent message on an existing session.
-    Envelope { from: String, envelope: Envelope },
+    Envelope { from: String, envelope: Envelope, ts: Option<i64> },
     /// An un-encrypted message from a bot.
-    Plaintext { from: String, text: String },
+    Plaintext { from: String, text: String, ts: Option<i64> },
     /// The socket closed cleanly.
     Closed,
     /// A transport-level error the caller may want to surface.
@@ -1037,6 +1038,7 @@ impl Transport {
             to: to.to_string(),
             payload,
             kind,
+            ts: None, // and this
         };
         self.ws_out
             .send(msg)
@@ -1167,16 +1169,16 @@ fn dispatch_frame(tx: &mpsc::UnboundedSender<Incoming>, bytes: &[u8]) {
     };
     match msg.kind {
         PayloadKind::Initial => match bincode::deserialize::<InitialMessage>(&msg.payload) {
-            Ok(initial) => { let _ = tx.send(Incoming::Initial { from: msg.from, message: initial }); }
+            Ok(initial) => { let _ = tx.send(Incoming::Initial { from: msg.from, message: initial, ts: msg.ts }); }
             Err(e) => { let _ = tx.send(Incoming::Error(format!("decode initial: {e}"))); }
         },
         PayloadKind::Envelope => match bincode::deserialize::<Envelope>(&msg.payload) {
-            Ok(envelope) => { let _ = tx.send(Incoming::Envelope { from: msg.from, envelope }); }
+            Ok(envelope) => { let _ = tx.send(Incoming::Envelope { from: msg.from, envelope, ts: msg.ts }); }
             Err(e) => { let _ = tx.send(Incoming::Error(format!("decode envelope: {e}"))); }
         },
         PayloadKind::Plaintext => {
             let text = String::from_utf8_lossy(&msg.payload).to_string();
-            let _ = tx.send(Incoming::Plaintext { from: msg.from, text });
+            let _ = tx.send(Incoming::Plaintext { from: msg.from, text, ts: msg.ts });
         }
     }
 }
