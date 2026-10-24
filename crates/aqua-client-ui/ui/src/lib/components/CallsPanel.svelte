@@ -113,9 +113,9 @@
   .head h2 { margin: 0; font-size: 15.5px; font-weight: 700; letter-spacing: -0.01em; }
   .back { display: none; }
   @media (max-width: 720px) {
-    .back { display: grid; place-items: center; width: 40px; height: 40px; margin: 0 4px 0 -8px; border: none; border-radius: 50%; background: transparent; color: var(--accent); }
-    .back svg { width: 22px; height: 22px; }
-    .head h2 { font-size: 22px; font-weight: 800; margin-right: auto; }
+    .back { display: grid; place-items: center; width: 32px; height: 32px; margin: 0 4px 0 -8px; border: none; border-radius: 50%; background: transparent; color: var(--accent); }
+    .back svg { width: 20px; height: 20px; }
+    .head h2 { font-size: 17px; margin-right: auto; }
   }
   .clear {
     padding: 5px 10px;

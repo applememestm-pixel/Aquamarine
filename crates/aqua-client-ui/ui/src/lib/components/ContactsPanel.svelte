@@ -107,9 +107,9 @@
         </div>
         <div class="empty-sub">
           {#if search}
-            Try a different name, phone or username — or add a new contact with the <b>{$t("+ Add")}</b> button above.
+            {$t("Try a different name, phone or username — or add a new contact with the")} <b>{$t("+ Add")}</b> {$t("button above.")}
           {:else}
-            Click <b>{$t("+ Add")}</b> {$t("to save someone's name and phone against their username. New chats created from")} <b>{$t("+ New chat")}</b> are also added here automatically.
+            {$t("Click")} <b>{$t("+ Add")}</b> {$t("to save someone's name and phone against their username. New chats created from")} <b>{$t("+ New chat")}</b> {$t("are also added here automatically.")}
           {/if}
         </div>
       </div>
@@ -190,26 +190,26 @@
   .list { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 6px; }
   .quick { display: none; }
   @media (max-width: 720px) {
-    .head { padding: 16px 18px 10px; }
-    .head h2 { font-size: 27px; font-weight: 800; letter-spacing: -0.02em; }
-    .add-btn { padding: 8px 14px; font-size: 13px; border-radius: 12px; }
-    .search { margin: 0 14px 12px; height: 50px; box-sizing: border-box; padding: 0 18px; border-radius: 25px; border-color: transparent; background: var(--bg-surface-2, var(--bg-input)); }
-    .search input { font-size: 16px; }
-    .search :global(svg) { width: 18px; height: 18px; }
-    .quick { display: flex; flex-direction: column; margin: 0 6px 12px; padding: 4px; border-radius: 20px;
+    .head { padding: 14px 16px 10px; }
+    .head h2 { font-size: 17px; }
+    .add-btn { padding: 6px 12px; font-size: 12.5px; border-radius: 9px; }
+    .search { margin: 0 14px 10px; height: 36px; box-sizing: border-box; padding: 0 12px; border-radius: 18px; border-color: transparent; background: var(--bg-surface-2, var(--bg-input)); }
+    .search input { font-size: 14px; }
+    .search :global(svg) { width: 15px; height: 15px; }
+    .quick { display: flex; flex-direction: column; margin: 0 4px 8px; padding: 2px; border-radius: 14px;
       background: color-mix(in srgb, var(--bg-surface-2, var(--bg-input)) 70%, transparent); }
-    .q-row { display: flex; align-items: center; gap: 14px; padding: 10px 12px; border: none; background: transparent; color: var(--fg); font: 500 16px var(--font-ui); text-align: left; border-radius: 16px; }
+    .q-row { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border: none; background: transparent; color: var(--fg); font: 500 14.5px var(--font-ui); text-align: left; border-radius: 12px; }
     .q-row:active { background: var(--bg-hover); }
-    .q-ic { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; color: #fff; flex-shrink: 0; }
-    .q-ic :global(svg), .q-ic svg { width: 20px; height: 20px; }
+    .q-ic { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; color: #fff; flex-shrink: 0; }
+    .q-ic :global(svg), .q-ic svg { width: 16px; height: 16px; }
     .q-ic.inv { background: linear-gradient(135deg, #3B9BFF, #2563EB); }
     .q-ic.calls { background: linear-gradient(135deg, #34D399, #059669); }
     .q-lbl { flex: 1; }
     .q-badge { min-width: 22px; height: 22px; padding: 0 6px; box-sizing: border-box; border-radius: 11px; background: var(--danger, #FF4D6D); color: #fff; font-size: 12px; font-weight: 800; display: grid; place-items: center; }
-    .open { grid-template-columns: 50px 1fr; gap: 14px; padding: 8px 8px; }
-    .avatar { width: 50px; height: 50px; font-size: 18px; }
-    .name { font-size: 16px; }
-    .sub { font-size: 13px; }
+    .open { grid-template-columns: 44px 1fr; gap: 12px; padding: 7px 8px; }
+    .avatar { width: 44px; height: 44px; font-size: 16px; }
+    .name { font-size: 15px; }
+    .sub { font-size: 12.5px; }
   }
   .empty { padding: 60px 22px; text-align: center; color: var(--fg-dim); font-size: 12.5px; }
   .empty-icon {
