@@ -492,7 +492,7 @@ impl Ctx for AppCtx<'_> {
     fn deliver(&self, from: String, envelope: Envelope) {
         let app = self.0.clone();
         tauri::async_runtime::block_on(async move {
-            crate::commands::handle_incoming(&app, aqua_client_core::Incoming::Envelope { from, envelope }).await;
+            crate::commands::handle_incoming(&app, aqua_client_core::Incoming::Envelope { from, envelope, ts: None }).await;
         });
     }
 }

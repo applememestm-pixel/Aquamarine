@@ -582,6 +582,7 @@ jobs:
           started=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .run_started_at)
           gh api "repos/$GITHUB_REPOSITORY/releases/tags/nightly" --jq ".assets[] | select(.updated_at < \"$started\") | .name" |
             while read -r name; do
+              [ "$name" = "BUILDS.json" ] && continue
               [ -n "$name" ] && gh release delete-asset nightly "$name" --repo "$GITHUB_REPOSITORY" --yes || true
             done
       - name: Hash the release files
@@ -591,7 +592,26 @@ jobs:
         run: |
           mkdir -p dl && cd dl
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*' --skip-existing
+          # BUILDS.json: which commit each file was built from. A job that
+          # failed leaves its old file, and the release title (set before the
+          # builds) would claim the new commit for it: the in-app updater then
+          # "updated" to the same old build. It reads this file instead.
+          [ -f BUILDS.json ] && mv BUILDS.json ../BUILDS.prev.json || echo '{}' > ../BUILDS.prev.json
           rm -f SHA256SUMS.txt
+          started=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .run_started_at)
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq ".assets[] | select(.updated_at >= \"$started\") | .name" > ../fresh.txt || true
+          python3 - "$GITHUB_SHA" <<'PY'
+          import json, sys
+          sha = sys.argv[1][:7]
+          try: builds = json.load(open("../BUILDS.prev.json"))
+          except Exception: builds = {}
+          for name in open("../fresh.txt").read().split("\n"):
+              name = name.strip()
+              if name and name not in ("SHA256SUMS.txt", "BUILDS.json"):
+                  builds[name] = sha
+          json.dump(builds, open("../BUILDS.json", "w"), indent=1, sort_keys=True)
+          print(json.dumps(builds, indent=1, sort_keys=True))
+          PY
           sha256sum -- * > ../SHA256SUMS.txt
           cat ../SHA256SUMS.txt
-          gh release upload "$TAG" ../SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload "$TAG" ../SHA256SUMS.txt ../BUILDS.json --repo "$GITHUB_REPOSITORY" --clobber

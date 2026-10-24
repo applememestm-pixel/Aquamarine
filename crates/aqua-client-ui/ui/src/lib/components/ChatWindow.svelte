@@ -1620,7 +1620,7 @@
     // the same minute sticks together tightly; a sender change OR a new
     // minute starts a fresh block with a little breathing room.
     const sameGroup = (a: ChatMessage, fromPrev: string | null, timePrev: string | null) =>
-      a.from === fromPrev && a.time === timePrev;
+      a.from === fromPrev && a.time.slice(0, 5) === timePrev?.slice(0, 5);
     const ids = new Set<string>();
     for (let i = 0; i < msgs.length; i++) {
       const m = msgs[i];
@@ -1640,7 +1640,7 @@
         next.kind.type === "system" ||
         next.kind.type === "date_separator" ||
         next.from !== m.from ||
-        next.time !== m.time;
+        next.time.slice(0, 5) !== m.time.slice(0, 5);
       out.push(rowOf(m, first, last, mine(m.from)));
       prevFrom = m.from;
       prevTime = m.time;

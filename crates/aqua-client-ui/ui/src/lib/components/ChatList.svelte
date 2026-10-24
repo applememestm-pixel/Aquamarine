@@ -361,6 +361,19 @@
     chats.update((cs) => cs.map((c) => (c.id === id ? { ...c, unread: 0 } : c)));
     void api.markChatRead(id).catch(() => {});
   }
+  /** "Mark all as read": every chat of a folder (or all of them). */
+  function markAllRead(ids?: string[]) {
+    const set = ids ? new Set(ids) : null;
+    const unread = $chats.filter((c) => c.unread > 0 && (!set || set.has(c.id)));
+    for (const c of unread) markRead(c.id);
+    if (unread.length) showToast(tr("Marked as read: {n}", { n: unread.length }));
+  }
+  // A folder tab held / right-clicked: its menu.
+  let folderMenu = $state<{ x: number; y: number; id: string } | null>(null);
+  function openFolderMenu(e: MouseEvent, id: string) {
+    e.preventDefault();
+    folderMenu = { x: Math.min(e.clientX, window.innerWidth - 220), y: e.clientY + 8, id };
+  }
 
   // ---- Right-click a chat: archive / mute ----
   let ctx = $state<{ x: number; y: number; id: string } | null>(null);
@@ -582,6 +595,7 @@
           <button onclick={() => { plusMenuOpen = false; openNewChatDialog(); }}>{$t("New chat")}</button>
           <button onclick={() => { plusMenuOpen = false; openNewGroup("group"); }}>{$t("New group")}</button>
           <button onclick={() => { plusMenuOpen = false; openNewGroup("channel"); }}>{$t("New channel")}</button>
+          {#if $chats.some((c) => c.unread > 0)}<button onclick={() => { plusMenuOpen = false; markAllRead(); }}>{$t("Mark all as read")}</button>{/if}
         </div>
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div class="plus-scrim" onclick={() => (plusMenuOpen = false)}></div>
@@ -591,9 +605,9 @@
 
   {#if $folders.length > 0}
     <div class="folder-strip">
-      <button class="folder-tab" class:active={$activeFolder === "all"} onclick={() => activeFolder.set("all")}>{$t("All")}</button>
+      <button class="folder-tab" class:active={$activeFolder === "all"} onclick={() => activeFolder.set("all")} oncontextmenu={(e) => openFolderMenu(e, "all")}>{$t("All")}</button>
       {#each $folders as f (f.id)}
-        <button class="folder-tab" class:active={$activeFolder === f.id} onclick={() => activeFolder.set(f.id)}>
+        <button class="folder-tab" class:active={$activeFolder === f.id} onclick={() => activeFolder.set(f.id)} oncontextmenu={(e) => openFolderMenu(e, f.id)}>
           {f.name}{#if f.chatIds.length > 0}<span class="ft-count">{f.chatIds.length}</span>{/if}
         </button>
       {/each}
@@ -601,8 +615,17 @@
     </div>
   {:else}
     <div class="folder-strip empty-strip">
-      <button class="folder-tab active">{$t("All")}</button>
+      <button class="folder-tab active" oncontextmenu={(e) => openFolderMenu(e, "all")}>{$t("All")}</button>
       <button class="folder-edit" onclick={openFolderManager} title={$t("Create folders")}>{$t("+ Folders")}</button>
+    </div>
+  {/if}
+  {#if folderMenu}
+    {@const fm = folderMenu}
+    <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+    <div class="ctx-scrim" onclick={() => (folderMenu = null)} oncontextmenu={(e) => { e.preventDefault(); folderMenu = null; }}></div>
+    <div class="chat-ctx" use:keepOnScreen style:left="{fm.x}px" style:top="{fm.y}px" role="menu">
+      <button onclick={() => { markAllRead(fm.id === "all" ? undefined : $folders.find((f) => f.id === fm.id)?.chatIds ?? []); folderMenu = null; }}>{$t("Mark all as read")}</button>
+      <button onclick={() => { folderMenu = null; openFolderManager(); }}>{$t("Manage folders")}</button>
     </div>
   {/if}
 
@@ -629,7 +652,7 @@
         {$t("Archived chats")}
       </button>
     {:else if !$search.trim() && archivedChats.length > 0 && $activeFolder === "all"}
-      <button class="chat-item arch-row" onclick={() => (showArchive = true)}>
+      <button class="chat-item arch-row" onclick={() => (showArchive = true)} oncontextmenu={(e) => { e.preventDefault(); markAllRead(archivedChats.map((c) => c.id)); }}>
         <div class="arch-ic">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9"/><line x1="10" y1="13" x2="14" y2="13"/></svg>
         </div>
@@ -777,6 +800,7 @@
         {#if pi > 0}<button onclick={() => { movePin(cid, pi - 1); ctx = null; }}>{$t("Move up")}</button>{/if}
         {#if pi < $pinnedChats.length - 1}<button onclick={() => { movePin(cid, pi + 1); ctx = null; }}>{$t("Move down")}</button>{/if}
       {/if}
+      {#if ($chats.find((x) => x.id === cid)?.unread ?? 0) > 0}<button onclick={() => { markRead(cid); ctx = null; }}>{$t("Mark as read")}</button>{/if}
       <button onclick={() => archiveChat(cid)}>{$t($archived.has(cid) ? "Unarchive" : "Archive")}</button>
       {#if groupByChat.get(cid)}
         {@const cg = groupByChat.get(cid)!}
@@ -1417,6 +1441,9 @@
   /* ---- Phones: the main page as in the new Telegram ---- */
   .m-title, .acc-scrim, .acc-sheet { display: none; }
   @media (max-width: 720px) {
+    /* One column: no edge between the list and a chat beside it (it showed
+       as a teal line down the right side once a chat had been opened). */
+    .list, .list.has-active { border-right: none; }
     .m-title { display: flex; align-items: center; gap: 9px; padding: 10px 10px 6px 16px; }
     .m-me { width: 30px; height: 30px; flex-shrink: 0; border-radius: 50%; border: none; padding: 0; overflow: hidden; position: relative;
       display: grid; place-items: center; font-weight: 800; font-size: 13px; color: #06070c;

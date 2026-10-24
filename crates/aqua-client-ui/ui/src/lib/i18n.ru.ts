@@ -2048,4 +2048,8 @@ export const RU: Record<string, string> = {
   "Connected through {p}": "Подключено через {p}",
   "The proxy stopped answering — switched to {p}": "Прокси перестал отвечать — переключились на {p}",
   "Switched to a faster server: {u} ({ms} ms)": "Переключились на более быстрый сервер: {u} ({ms} мс)",
+  "Seconds in message times": "Секунды во времени сообщений",
+  "12:30:45 instead of 12:30 (for messages from this version on).": "12:30:45 вместо 12:30 (для сообщений начиная с этой версии).",
+  "Mark all as read": "Прочитать все",
+  "Marked as read: {n}": "Отмечено прочитанными: {n}",
 };

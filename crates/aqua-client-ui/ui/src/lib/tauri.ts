@@ -82,12 +82,21 @@ export interface DeviceInfo {
   addr: string; id: string; primary: boolean; name: string; added: number; online: boolean; current: boolean;
 }
 
+/** Times come as local "HH:MM:SS"; the seconds show only when asked for. */
+function shownTime(t: string): string {
+  if (!/^\d\d:\d\d:\d\d$/.test(t)) return t;
+  let secs = false;
+  try { secs = !!JSON.parse(localStorage.getItem("aqua-settings") || "{}").showSeconds; } catch { /* default */ }
+  return secs ? t : t.slice(0, 5);
+}
+
 export const api = {
   initApp:            (): Promise<InitInfo>                                        => invoke("init_app"),
   completeRegistration: (username: string, email: string | null): Promise<InitInfo> => invoke("complete_registration", { username, email }),
   logOut:             (): Promise<InitInfo>                                        => invoke("log_out"),
-  listChats:          (): Promise<ChatSummary[]>                                   => invoke("list_chats"),
-  getMessages:        (peer_id: string): Promise<ChatMessage[]>                    => invoke("get_messages", { peerId: peer_id }),
+  listChats:          (): Promise<ChatSummary[]>                                   => invoke<ChatSummary[]>("list_chats").then((l) => l.map((c) => ({ ...c, time: shownTime(c.time) }))),
+  getMessages:        (peer_id: string): Promise<ChatMessage[]>                    => invoke<ChatMessage[]>("get_messages", { peerId: peer_id }).then((l) => l.map((m) => ({ ...m, time: shownTime(m.time) }))),
+  setTzOffset:        (minutes: number): Promise<void> => invoke("set_tz_offset", { minutes }),
   sendMessage:        (peer_id: string, text: string): Promise<SendResult>        => invoke("send_message", { peerId: peer_id, text }),
   verifyFingerprint:  (peer_id: string): Promise<FingerprintView>                  => invoke("verify_fingerprint", { peerId: peer_id }),
   sessionFingerprint: (): Promise<string>                                          => invoke("session_fingerprint"),

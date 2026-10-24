@@ -267,6 +267,7 @@ pub fn run() -> Result<()> {
             commands::delete_messages_local,
             commands::delete_chat,
             commands::mark_chat_read,
+            commands::set_tz_offset,
             commands::change_username,
             commands::attach_file,
             commands::attach_file_as,

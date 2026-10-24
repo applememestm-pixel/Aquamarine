@@ -317,6 +317,11 @@ impl AppState {
 }
 
 /// `alice~a1b2c3` → `alice`.
+/// Unix time in milliseconds (the "sent at" stamp on relayed messages).
+pub(crate) fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
 pub fn base_user(addr: &str) -> &str {
     addr.split('~').next().unwrap_or(addr)
 }
@@ -544,6 +549,7 @@ async fn ws_run(mut socket: WebSocket, state: AppState, me: UserId) {
                 Some(Ok(Message::Binary(bytes))) => match serde_json::from_slice::<RelayMessage>(&bytes) {
                     Ok(mut m) => {
                         m.from = me.clone();
+                        m.ts = Some(now_ms());
                         deliver(&state, m).await;
                     }
                     Err(e) => tracing::warn!(?e, "decode relay message"),
@@ -551,6 +557,7 @@ async fn ws_run(mut socket: WebSocket, state: AppState, me: UserId) {
                 Some(Ok(Message::Text(text))) => match serde_json::from_str::<RelayMessage>(&text) {
                     Ok(mut m) => {
                         m.from = me.clone();
+                        m.ts = Some(now_ms());
                         deliver(&state, m).await;
                     }
                     Err(e) => tracing::warn!(?e, "decode relay message (text)"),
@@ -1649,6 +1656,7 @@ pub(crate) async fn bot_deliver_text(state: &AppState, bot: &str, to: &str, text
             to: addr,
             payload: text.as_bytes().to_vec(),
             kind: PayloadKind::Plaintext,
+            ts: Some(now_ms()),
         };
         deliver(state, msg).await;
     }

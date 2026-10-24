@@ -165,6 +165,8 @@ export interface Settings {
   enterToSend: boolean;       // Enter sends (true) vs newline (false)
   autoDownloadMedia: boolean; // auto-fetch inline media on receive
   linkPreviews: boolean;      // fetch previews for links (and videos behind them)
+  /** Message times with seconds (12:30:45). */
+  showSeconds?: boolean;
   // Notifications
   notifySound: boolean;       // play a chime on incoming message
   notifyDesktop: boolean;     // OS desktop notification on incoming
