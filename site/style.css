@@ -488,7 +488,12 @@ nav.scrolled { box-shadow: 0 10px 30px -18px rgba(0,0,0,.9); }
 @keyframes tp-rise { from { opacity: 0; transform: translateY(14px); } }
 @media (max-width: 900px) {
   .tour { grid-template-columns: 1fr; gap: 0; }
-  .tour-stage { order: -1; top: 74px; z-index: 5; display: flex; justify-content: center; }
+  /* The phone sticks under the nav on a full-width backdrop that fades out
+     at the bottom: the cards slide away under it instead of peeking out
+     around the phone's corners. */
+  .tour-stage { order: -1; top: 64px; z-index: 5; display: flex; justify-content: center;
+    margin-inline: calc(50% - 50vw); padding: 10px 16px 30px;
+    background: linear-gradient(to bottom, var(--void) 0, var(--void) calc(100% - 30px), transparent); }
   .tour-phone { width: min(320px, 100%); height: 400px; }
   .tour-phone .tp-screen { inset: 60px 0 0; }
   .tour-steps { gap: 42vh; padding-block: 8vh 24vh; position: relative; z-index: 1; }
@@ -506,5 +511,5 @@ nav.scrolled { box-shadow: 0 10px 30px -18px rgba(0,0,0,.9); }
 .relay-copy { padding: 9px 16px; border-radius: 11px; border: 1px solid var(--accent); background: transparent; color: var(--accent); font: 600 14px var(--body); cursor: pointer; }
 .relay-copy:hover, .relay-copy.ok { background: var(--accent); color: #04060b; }
 
-/* Cursor trail: little stars falling behind the pointer (motion.js) */
+/* Cursor trail: a white comet tail behind the pointer (motion.js) */
 .fx-trail { position: fixed; inset: 0; z-index: 70; pointer-events: none; }

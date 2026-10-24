@@ -119,17 +119,43 @@
     inp.addEventListener("input", () => { const pos = inp.selectionStart; sidebar(el, current, inp.value); const n = el.querySelector("input"); n.focus(); n.setSelectionRange(pos, pos); });
   }
 
-  function tocList(el, toc) {
-    if (!el) return;
-    el.innerHTML = toc.length ? `<h4>${L("На этой странице", "On this page")}</h4>` + toc.map((t) => `<a href="#${t.id}" class="l${t.level}">${t.text.replace(/#$/, "")}</a>`).join("") : "";
-    const links = [...el.querySelectorAll("a")];
+  // Keep the lit link inside its scrolling panel: a long document's
+  // section 20 must not stay hidden below section 7.
+  function follow(panel, link) {
+    if (!panel || !link || panel.scrollHeight <= panel.clientHeight) return;
+    const top = link.getBoundingClientRect().top - panel.getBoundingClientRect().top + panel.scrollTop, h = link.offsetHeight;
+    const view = panel.scrollTop, vh = panel.clientHeight;
+    if (top < view + vh * 0.2 || top + h > view + vh * 0.8) {
+      panel.scrollTo({ top: Math.max(0, top - vh * 0.35), behavior: "smooth" });
+    }
+  }
+
+  /** "On this page" with the current heading lit; `nav` (optional) is a
+   *  second list of the same document's H2 links (the API page's sidebar). */
+  function tocList(el, toc, nav) {
+    if (el) el.innerHTML = toc.length ? `<h4>${L("На этой странице", "On this page")}</h4>` + toc.map((t) => `<a href="#${t.id}" class="l${t.level}">${t.text.replace(/#$/, "")}</a>`).join("") : "";
+    const links = el ? [...el.querySelectorAll("a")] : [];
+    const navLinks = nav ? [...nav.querySelectorAll("a")] : [];
     const heads = toc.map((t) => document.getElementById(t.id)).filter(Boolean);
+    let lastCur = "", lastH2 = "", pend = 0;
     const spy = () => {
-      let cur = heads[0]?.id;
-      for (const h of heads) if (h.getBoundingClientRect().top < 120) cur = h.id;
-      links.forEach((a) => a.classList.toggle("on", a.getAttribute("href") === "#" + cur));
+      pend = 0;
+      let cur = heads[0]?.id, h2 = heads[0]?.id;
+      for (const h of heads) if (h.getBoundingClientRect().top < 120) { cur = h.id; if (h.tagName === "H2") h2 = h.id; }
+      if (cur !== lastCur) {
+        lastCur = cur;
+        let on = null;
+        links.forEach((a) => { const hit = a.getAttribute("href") === "#" + cur; a.classList.toggle("on", hit); if (hit) on = a; });
+        follow(el, on);
+      }
+      if (nav && h2 !== lastH2) {
+        lastH2 = h2;
+        let on = null;
+        navLinks.forEach((a) => { const hit = a.getAttribute("href") === "#" + h2; a.classList.toggle("on", hit); if (hit) on = a; });
+        follow(nav.closest(".doc-side") || nav, on);
+      }
     };
-    window.addEventListener("scroll", spy, { passive: true });
+    window.addEventListener("scroll", () => { if (!pend) pend = requestAnimationFrame(spy); }, { passive: true });
     spy();
   }
 

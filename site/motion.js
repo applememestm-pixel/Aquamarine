@@ -166,57 +166,64 @@
     pick();
   }
 
-  // ---- a comet behind the pointer: little stars that fall and fade ----
+  // ---- a comet behind the pointer: a white tail that thins and fades ----
   if (!reduce && matchMedia("(pointer: fine)").matches) {
     const tc = document.createElement("canvas");
     tc.className = "fx-trail";
     tc.setAttribute("aria-hidden", "true");
     document.body.appendChild(tc);
     const tx = tc.getContext("2d");
-    let tw = 0, th = 0, tdpr = 1, sparks = [], tRaf = 0, px = -1, py = -1;
+    let tw = 0, th = 0, tdpr = 1, tRaf = 0;
     const fit = () => {
       tdpr = Math.min(2, devicePixelRatio || 1); tw = innerWidth; th = innerHeight;
       tc.width = tw * tdpr; tc.height = th * tdpr; tc.style.width = tw + "px"; tc.style.height = th + "px";
       tx.setTransform(tdpr, 0, 0, tdpr, 0, 0);
     };
     fit(); addEventListener("resize", fit);
-    const COLORS = ["0,229,199", "123,92,255", "255,255,255", "130,240,255"];
-    const star = (x, y, r, rot) => {
-      tx.beginPath();
-      for (let i = 0; i < 8; i++) {
-        const a = rot + (i * Math.PI) / 4, rr = i % 2 ? r * 0.38 : r;
-        tx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+    // The last positions of the pointer; each lives TAIL ms. The head chases
+    // the pointer a little (smoothing), so the tail curves instead of zigzagging.
+    const TAIL = 520, WIDTH = 7;
+    let pts = [], head = null, target = null, still = 0;
+    const tick = (now) => {
+      tRaf = 0;
+      if (target) {
+        if (!head) head = { ...target };
+        head.x += (target.x - head.x) * 0.45; head.y += (target.y - head.y) * 0.45;
+        const lastPt = pts[pts.length - 1];
+        if (!lastPt || Math.hypot(head.x - lastPt.x, head.y - lastPt.y) > 1.5) pts.push({ x: head.x, y: head.y, t: now });
       }
-      tx.closePath(); tx.fill();
-    };
-    const tick = () => {
+      pts = pts.filter((p) => now - p.t < TAIL);
       tx.clearRect(0, 0, tw, th);
-      sparks = sparks.filter((p) => (p.life -= 0.022) > 0);
-      for (const p of sparks) {
-        p.vy += 0.045; p.x += p.vx; p.y += p.vy; p.rot += p.spin;
-        tx.fillStyle = `rgba(${p.c},${p.life * 0.9})`;
-        tx.shadowColor = `rgba(${p.c},${p.life})`; tx.shadowBlur = 8;
-        star(p.x, p.y, p.r * (0.5 + p.life * 0.5), p.rot);
+      if (pts.length > 1) {
+        tx.lineCap = "round"; tx.lineJoin = "round";
+        tx.globalCompositeOperation = "lighter";
+        for (let i = 1; i < pts.length; i++) {
+          const a = pts[i - 1], b = pts[i];
+          const k = 1 - (now - b.t) / TAIL;          // 1 at the head, 0 at the end
+          tx.strokeStyle = `rgba(255,255,255,${0.55 * k * k})`;
+          tx.shadowColor = `rgba(170,240,255,${0.6 * k})`;
+          tx.shadowBlur = 10 * k;
+          tx.lineWidth = Math.max(0.6, WIDTH * k * k);
+          tx.beginPath(); tx.moveTo(a.x, a.y); tx.lineTo(b.x, b.y); tx.stroke();
+        }
+        // The bright head.
+        const h = pts[pts.length - 1], fresh = 1 - (now - h.t) / TAIL;
+        const g = tx.createRadialGradient(h.x, h.y, 0, h.x, h.y, 10);
+        g.addColorStop(0, `rgba(255,255,255,${0.9 * fresh})`); g.addColorStop(1, "rgba(255,255,255,0)");
+        tx.fillStyle = g; tx.shadowBlur = 0;
+        tx.beginPath(); tx.arc(h.x, h.y, 10, 0, Math.PI * 2); tx.fill();
+        tx.globalCompositeOperation = "source-over";
       }
-      tx.shadowBlur = 0;
-      tRaf = sparks.length ? requestAnimationFrame(tick) : 0;
+      // Keep going while the tail is still fading or the head catches up.
+      if (pts.length || (head && target && Math.hypot(target.x - head.x, target.y - head.y) > 0.5)) tRaf = requestAnimationFrame(tick);
+      else if (now - still > 100) head = null;
     };
     addEventListener("pointermove", (e) => {
-      if (px < 0) { px = e.clientX; py = e.clientY; return; }
-      const dx = e.clientX - px, dy = e.clientY - py, d = Math.hypot(dx, dy);
-      px = e.clientX; py = e.clientY;
-      if (d < 3) return;
-      const n = Math.min(3, Math.ceil(d / 22));
-      for (let i = 0; i < n && sparks.length < 90; i++) {
-        sparks.push({
-          x: px - dx * (i / n) + (Math.random() - 0.5) * 6, y: py - dy * (i / n) + (Math.random() - 0.5) * 6,
-          vx: -dx * 0.03 + (Math.random() - 0.5) * 0.8, vy: -dy * 0.03 + (Math.random() - 0.5) * 0.8 - 0.4,
-          r: 2 + Math.random() * 3.2, rot: Math.random() * Math.PI, spin: (Math.random() - 0.5) * 0.2,
-          life: 0.8 + Math.random() * 0.2, c: COLORS[(Math.random() * COLORS.length) | 0],
-        });
-      }
+      target = { x: e.clientX, y: e.clientY };
+      still = performance.now();
       if (!tRaf) tRaf = requestAnimationFrame(tick);
     }, { passive: true });
+    document.addEventListener("pointerleave", () => { target = null; head = null; });
   }
 
   // ---- cards light up where the cursor is ----

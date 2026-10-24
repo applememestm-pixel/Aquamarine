@@ -92,7 +92,7 @@
       }
       if (q) rows.find((tr) => tr.classList.contains("hit-row"))?.scrollIntoView({ block: "center", behavior: "smooth" });
     });
-    D.tocList(document.getElementById("doc-toc"), toc);
+    D.tocList(document.getElementById("doc-toc"), toc, nav);
     if (location.hash) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView();
   });
 </script>
