@@ -508,5 +508,20 @@ nav.scrolled { box-shadow: 0 10px 30px -18px rgba(0,0,0,.9); }
   .tour-card { transform: none !important; }
 }
 
-/* Cursor trail: a thin teal comet tail behind the pointer (motion.js) */
+/* Cursor (motion.js): a small translucent teal dot instead of the arrow,
+   a thin comet tail behind it; the normal cursor comes back over fields and
+   while text is selected. */
 .fx-trail { position: fixed; inset: 0; z-index: 70; pointer-events: none; }
+html.fx-cursor, html.fx-cursor * { cursor: none !important; }
+.fx-dot { position: fixed; left: 0; top: 0; z-index: 71; pointer-events: none; width: 0; height: 0; opacity: 0; transition: opacity .15s ease; }
+.fx-dot::before { content: ""; position: absolute; left: -7px; top: -7px; width: 14px; height: 14px; border-radius: 50%;
+  background: rgba(0,229,199,.32); box-shadow: 0 0 0 1px rgba(0,229,199,.55) inset, 0 0 12px rgba(0,229,199,.35);
+  transition: transform .18s cubic-bezier(.22,1,.36,1), background .18s ease; }
+.fx-dot.on { opacity: 1; }
+.fx-dot.big::before { transform: scale(1.6); background: rgba(0,229,199,.18); }
+.fx-dot.press::before { transform: scale(.8); }
+.fx-toggle { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border-radius: 9px; border: 1px solid var(--line-str);
+  background: transparent; color: var(--accent); cursor: pointer; flex-shrink: 0; }
+.fx-toggle svg { width: 17px; height: 17px; }
+.fx-toggle.off { color: var(--fg-dim); }
+.fx-toggle:hover { border-color: var(--accent); }
