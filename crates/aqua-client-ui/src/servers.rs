@@ -286,12 +286,12 @@ mod tests {
     #[test]
     fn public_list() {
         let v = serde_json::json!({ "servers": [
-            { "url": "http://109.120.138.220:7777/", "name": "A" },
+            { "url": "http://203.0.113.10:7777/", "name": "A" },
             "relay.example.org:7777",
             { "url": "not a url at all ::" },
         ]});
         let l = super::parse_public(&v);
-        assert_eq!(l[0].url, "http://109.120.138.220:7777");
+        assert_eq!(l[0].url, "http://203.0.113.10:7777");
         assert_eq!(l[0].name.as_deref(), Some("A"));
         assert!(l.len() >= 2);
     }
