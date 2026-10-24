@@ -216,11 +216,11 @@
       position: fixed;
       left: 50%; width: min(340px, calc(100% - 48px)); transform: translateX(-50%);
       bottom: calc(8px + env(safe-area-inset-bottom, 0px));
-      height: 50px;
+      height: 48px;
       padding: 4px;
       gap: 0;
       border: 1px solid var(--border-strong);
-      border-radius: 25px;
+      border-radius: 24px;
       /* Frosted glass: the list shows through, softly. */
       background: color-mix(in srgb, var(--bg-surface, #12151d) 58%, transparent);
       backdrop-filter: blur(22px) saturate(1.6);
@@ -247,7 +247,7 @@
       z-index: 1;
     }
     .nav-btn::before, .nav-btn[data-label]:hover::after { display: none; }
-    .nav-btn :global(svg) { width: 20px; height: 20px; }
+    .nav-btn :global(svg) { width: 19px; height: 19px; }
     .nav-btn.active, .nav-btn.hover { color: var(--accent); }
     .nav-lbl { display: block; font-size: 10px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
     /* The highlight slides under the active button… */

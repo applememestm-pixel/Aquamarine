@@ -1890,11 +1890,11 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     }
     .layout { grid-template-columns: 1fr; }
     .nav { border-right: none; padding: 12px 12px 20px; }
-    .nav-item { padding: 11px 14px; font-size: 15.5px; }
-    .nav-item + .nav-item::before { left: 56px; }
+    .nav-item { padding: 9px 12px; font-size: 14.5px; }
+    .nav-item + .nav-item::before { left: 52px; }
     .nav-item.active { background: transparent; }
     .nav-item.active .nav-lbl { color: var(--fg); font-weight: 500; }
-    .tile { width: 30px; height: 30px; }
+    .tile { width: 28px; height: 28px; }
     .phone-only { display: flex; }
     .sheet:not(.detail) .content { display: none; }
     .sheet.detail .nav { display: none; }
