@@ -1,9 +1,12 @@
 <script lang="ts">
   /**
-   * Server field with a drop-down of every relay the app knows: the
-   * defaults, remembered / federated ones and relays found on the local
-   * network — each with its full address and port, IP, rough location,
-   * ping and who's online. Tap one to use it.
+   * Server field with a drop-down of every relay the app can find: the
+   * project's public list (site/servers.json — so mobile data, with no local
+   * network to search, still shows servers), the defaults, remembered ones,
+   * relays found on the local network, and every relay those know about
+   * (their own outside address and their federation, two hops deep) — each
+   * with its full address and port, IP, rough location, ping and who's
+   * online. Tap one to use it.
    */
   import { api, type ServerProbe } from "../tauri";
   import { knownServers } from "../servers";
@@ -17,11 +20,16 @@
   let scanning = $state(false);
   let wrap = $state<HTMLElement | null>(null);
   let lastRun = 0;
+  // The public list, kept for offline starts.
+  const PUB_KEY = "aqua.publicServers.v1";
+  type Pub = { url: string; name: string | null; note: string | null };
+  let pub = $state<Pub[]>((() => { try { return JSON.parse(localStorage.getItem(PUB_KEY) || "[]"); } catch { return []; } })());
+  const pubOf = (url: string) => pub.find((x) => norm(x.url) === norm(url));
 
   const norm = (u: string) => u.trim().replace(/\/+$/, "");
 
   function candidates(extra: string[] = []): string[] {
-    const list = [value, ...defaults, ...knownServers(), ...extra].map(norm).filter(Boolean);
+    const list = [value, ...pub.map((x) => x.url), ...defaults, ...knownServers(), ...extra].map(norm).filter(Boolean);
     return [...new Set(list)];
   }
 
@@ -37,15 +45,36 @@
     probing = false;
   }
 
-  /** Federated relays the answering ones know about. */
-  async function learn() {
-    const ok = probes.filter((p) => p.ok).slice(0, 4);
-    const more: string[] = [];
-    await Promise.all(ok.map(async (p) => {
-      try { more.push(...(await api.fedPeers(p.url)).servers); } catch { /* not federated */ }
-    }));
-    const fresh = more.map(norm).filter((u) => !probes.some((p) => norm(p.url) === u || norm(p.url).replace(/:(80|443)$/, "") === u));
-    if (fresh.length) await probe(fresh);
+  /** Relays the answering ones know about: their own outside address (a
+   *  home relay found on Wi-Fi tells its white IP) and their federation —
+   *  and what those know, two hops deep. */
+  async function learn(depth = 2) {
+    const asked = new Set<string>();
+    for (let hop = 0; hop < depth; hop++) {
+      const ok = probes.filter((p) => p.ok && !asked.has(norm(p.url))).slice(0, 8);
+      if (!ok.length) return;
+      const more: string[] = [];
+      await Promise.all(ok.map(async (p) => {
+        asked.add(norm(p.url));
+        try {
+          const r = await api.fedPeers(p.url);
+          more.push(...(r.self ? [r.self] : []), ...(r.servers ?? []));
+        } catch { /* not federated */ }
+      }));
+      const fresh = [...new Set(more.map(norm))].filter((u) => u && !probes.some((p) => norm(p.url) === u || norm(p.url).replace(/:(80|443)$/, "") === u));
+      if (!fresh.length) return;
+      await probe(fresh);
+    }
+  }
+
+  async function loadPublic() {
+    try {
+      const list = await api.publicServers();
+      pub = list;
+      try { localStorage.setItem(PUB_KEY, JSON.stringify(list)); } catch { /* storage blocked */ }
+      const fresh = list.map((x) => norm(x.url)).filter((u) => !probes.some((p) => norm(p.url) === u));
+      await probe(fresh);
+    } catch { /* offline: the cached list was probed already */ }
   }
 
   async function scan() {
@@ -61,7 +90,8 @@
     lastRun = Date.now();
     await probe(candidates());
     void learn();
-    void scan();
+    void scan().then(() => learn());
+    void loadPublic().then(() => learn());
   }
 
   function show() {
@@ -116,9 +146,10 @@
         <button type="button" class="sp-row" class:cur={norm(p.url) === current || norm(p.url).replace(/:(80|443)$/, "") === current} class:down={!p.ok} role="option" aria-selected={norm(p.url) === current} onclick={() => pick(p)}>
           <span class="dot" class:ok={p.ok}></span>
           <span class="sp-main">
-            <span class="sp-url">{p.url.replace(/^https?:\/\//, "")}</span>
+            <span class="sp-url">{#if pubOf(p.url)?.name}<b class="sp-name">{pubOf(p.url)?.name}</b>{/if}{p.url.replace(/^https?:\/\//, "")}</span>
             <span class="sp-sub">
               {#if p.ip && p.ip !== p.host}<span class="mono">{p.ip}</span>{/if}
+              {#if pubOf(p.url)}<span class="pub">{pubOf(p.url)?.note || $t("public server")}</span>{/if}
               {#if where(p)}<span>{where(p)}</span>{/if}
               {#if p.url.startsWith("https")}<span class="tls">🔒 TLS</span>{/if}
             </span>
@@ -182,6 +213,8 @@
   .sp-sub { display: flex; flex-wrap: wrap; gap: 3px 10px; font-size: 11.5px; color: var(--fg-dim); }
   .mono { font-family: var(--mono, ui-monospace, monospace); }
   .tls { color: var(--accent); }
+  .pub { color: var(--accent); }
+  .sp-name { margin-right: 8px; }
   .sp-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 11.5px; flex-shrink: 0; }
   .ms { color: #3BD671; font-weight: 700; }
   .ms.slow { color: #F0B232; }

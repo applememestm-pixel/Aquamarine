@@ -174,6 +174,7 @@ pub fn run() -> Result<()> {
             gallery::gallery_ask,
             gallery::gallery_albums,
             servers::server_ping,
+            servers::public_servers,
             accounts::accounts_list,
             accounts::account_switch,
             accounts::account_forget,

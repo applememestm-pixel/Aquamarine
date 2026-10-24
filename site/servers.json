@@ -1,0 +1,6 @@
+{
+  "about": "Public Aquamarine relays anyone can sign up on. The app shows them in the server list at sign-in (crates/aqua-client-ui/src/servers.rs, public_servers). To add yours: a pull request with its address.",
+  "servers": [
+    { "url": "http://109.120.138.220:7777", "name": "Aquamarine", "note": "Сервер проекта" }
+  ]
+}
