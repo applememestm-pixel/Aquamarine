@@ -68,6 +68,13 @@ if ! grep -q BLUETOOTH_CONNECT "$M"; then
   echo '[patch] Bluetooth permissions added'
 fi
 
+# 1e. In-app updates (crates/aqua-client-ui/src/updates.rs): installing
+#      the downloaded APK needs this permission.
+if ! grep -q REQUEST_INSTALL_PACKAGES "$M"; then
+  perl -0pi -e 's|<application|<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />\n    <application|' "$M"
+  echo '[patch] REQUEST_INSTALL_PACKAGES (in-app updates)'
+fi
+
 # 1d. Plain HTTP to the app's own loopback media server (audio / video
 #     playback); debug builds also to the dev server.
 mkdir -p "$APP/src/main/res/xml" "$APP/src/debug/res/xml"

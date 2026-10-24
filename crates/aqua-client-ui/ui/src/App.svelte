@@ -73,6 +73,8 @@
   import { chats } from "./lib/stores";
   import { initShortcuts } from "./lib/shortcuts";
   import { loadReactionPack } from "./lib/reactionPack";
+  import UpdateBanner from "./lib/components/UpdateBanner.svelte";
+  import { startUpdates } from "./lib/updates";
 
   // Entry: an account registered on this device goes straight in (after
   // the app passcode, if one is set) — no "Continue as" window. The
@@ -130,6 +132,7 @@
     startChannelStats();
     startHandoff();
     const stopIcon = startAppIcon();
+    const stopUpdates = startUpdates();
     void migrateCustomWallpaper(api.saveWallpaper)
       .then(() => api.listWallpapers().then(followWallpaper).catch(() => {}))
       .then(() => setTimeout(() => void fitCurrentWallpaper(api.saveWallpaper, api.deleteWallpaper, api.readMediaBytes), 4000));
@@ -248,6 +251,7 @@
     window.addEventListener("dragover", onDragOver);
     return () => {
       stopIcon();
+      stopUpdates();
       stopShortcuts();
       window.removeEventListener("popstate", onPop);
       document.removeEventListener("keydown", onKey);
@@ -339,6 +343,7 @@
 <BluetoothIncoming />
 <ReminderPopup />
 <ChatCalendar />
+<UpdateBanner />
 <Toast />
 {#if gpuAsk > 0}
   <div class="gpu-ask" role="alertdialog" aria-live="assertive">

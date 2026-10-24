@@ -10,7 +10,7 @@ import { api, type AccountSlot } from "./tauri";
  */
 const DEVICE_KEYS = new Set([
   "aqua-settings", "aqua.lang", "aqua.keybindings.v1", "aqua.kbH", "aqua.listWidth",
-  "aqua.hostRelay", "aqua.player.volume", "aqua.player.speed", "aqua.reader.scale", "aqua.servers.v1",
+  "aqua.hostRelay", "aqua.player.volume", "aqua.player.speed", "aqua.reader.scale", "aqua.servers.v1", "aqua.updates.v1",
 ]);
 
 export const accounts = writable<AccountSlot[]>([]);

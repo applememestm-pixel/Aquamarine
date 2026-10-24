@@ -73,6 +73,13 @@ if ($x -notmatch 'AquaRelayService') {
   [IO.File]::WriteAllText($m, $x)
   Write-Host '[patch] foreground service for the server added'
 }
+# In-app updates (crates/aqua-client-ui/src/updates.rs): installing the
+# downloaded APK needs this permission.
+if ($x -notmatch 'REQUEST_INSTALL_PACKAGES') {
+  $x = ([regex]'<application').Replace($x, '<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />' + "`n    <application", 1)
+  [IO.File]::WriteAllText($m, $x)
+  Write-Host '[patch] REQUEST_INSTALL_PACKAGES (in-app updates)'
+}
 if ($x -notmatch 'BLUETOOTH_CONNECT') {
   $bt = @(
     '<uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />',
