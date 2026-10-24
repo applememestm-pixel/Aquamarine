@@ -4502,8 +4502,8 @@
   /* Square tiles. The rows are sized by the tiles (max-content): with "auto"
      rows a too-short container squeezed them into overlapping strips. */
   .ap-gallery { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
-    grid-auto-rows: max-content; gap: 3px; padding: 0 3px calc(110px + env(safe-area-inset-bottom, 0px) + var(--rest)); align-content: start; }
-  .attach-pop.sheet.full .ap-gallery { padding-bottom: calc(110px + env(safe-area-inset-bottom, 0px)); }
+    grid-auto-rows: max-content; gap: 3px; padding: 0 3px calc(92px + env(safe-area-inset-bottom, 0px) + var(--rest)); align-content: start; }
+  .attach-pop.sheet.full .ap-gallery { padding-bottom: calc(92px + env(safe-area-inset-bottom, 0px)); }
   .ap-tile { position: relative; aspect-ratio: 1 / 1; width: 100%; height: auto; min-height: 0; border: none; padding: 0; overflow: hidden; background: var(--bg-surface-2); color: var(--fg-muted); border-radius: 4px; }
   .ap-tile img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .22s cubic-bezier(.22,1,.36,1), border-radius .22s ease; }
   .ap-tile.on img { transform: scale(.86); border-radius: 8px; }
@@ -4514,7 +4514,7 @@
     display: grid; place-items: center; font-size: 12.5px; font-weight: 800; color: #06070c; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
   .ap-tile.on .ap-check { background: var(--accent); border-color: var(--accent); }
   .ap-dur { position: absolute; left: 6px; bottom: 6px; font-size: 11px; font-weight: 700; color: #fff; background: rgba(0,0,0,.5); padding: 1px 6px; border-radius: 8px; }
-  .ap-send { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(100px + env(safe-area-inset-bottom, 0px)); z-index: 73;
+  .ap-send { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(84px + env(safe-area-inset-bottom, 0px)); z-index: 73;
     padding: 12px 26px; border-radius: 26px; border: none; font: 700 15px var(--font-ui, inherit); color: #06070c;
     background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 12px 28px -10px var(--accent-glow);
     animation: ap-send-in .3s cubic-bezier(.22,1,.36,1); transition: opacity .2s ease; }
@@ -4525,15 +4525,15 @@
   .ap-dock.closing { transform: translateY(140%); opacity: 0; }
   @keyframes ap-dock-in { from { transform: translateY(140%); } }
   .ap-dock .ap-items {
-    display: flex; gap: 0; overflow-x: auto; scrollbar-width: none; padding: 6px; border-radius: 30px;
+    display: flex; gap: 0; overflow-x: auto; scrollbar-width: none; padding: 5px; border-radius: 26px;
     background: color-mix(in srgb, var(--bg-surface-2) 62%, transparent); border: 1px solid var(--border-strong);
     backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6); box-shadow: 0 14px 34px -14px rgba(0,0,0,.8);
     overscroll-behavior-x: contain;
   }
   .ap-dock .ap-items::-webkit-scrollbar { display: none; }
-  .ap-dock .ap-item { flex: 0 0 78px; width: 78px; flex-direction: column; justify-content: center; gap: 4px; padding: 8px 2px; border-radius: 24px; font-size: 11.5px; text-align: center; }
+  .ap-dock .ap-item { flex: 0 0 66px; width: 66px; flex-direction: column; justify-content: center; gap: 2px; padding: 6px 2px; border-radius: 20px; font-size: 10.5px; text-align: center; }
   .ap-dock .ap-item span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-  .ap-dock .ap-item :global(svg) { width: 24px; height: 24px; }
+  .ap-dock .ap-item :global(svg) { width: 21px; height: 21px; }
   .ap-dock .ap-item:hover { background: transparent; color: inherit; }
   .ap-dock .ap-item:active { background: var(--accent-soft); color: var(--accent); }
   .ap-item {

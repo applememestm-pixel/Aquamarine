@@ -215,12 +215,12 @@
       align-items: stretch;
       position: fixed;
       left: 12px; right: 12px;
-      bottom: calc(10px + env(safe-area-inset-bottom, 0px));
-      height: 64px;
+      bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+      height: 52px;
       padding: 6px;
       gap: 0;
       border: 1px solid var(--border-strong);
-      border-radius: 32px;
+      border-radius: 26px;
       /* Frosted glass: the list shows through, softly. */
       background: color-mix(in srgb, var(--bg-surface, #12151d) 58%, transparent);
       backdrop-filter: blur(22px) saturate(1.6);
@@ -240,22 +240,22 @@
       flex: 1 1 0; min-width: 0;
       width: auto; height: 100%;
       flex-direction: column; justify-content: center; align-items: center;
-      display: flex; gap: 3px;
+      display: flex; gap: 1px;
       padding: 0;
-      border-radius: 26px;
+      border-radius: 20px;
       background: transparent !important;
       z-index: 1;
     }
     .nav-btn::before, .nav-btn[data-label]:hover::after { display: none; }
-    .nav-btn :global(svg) { width: 23px; height: 23px; }
+    .nav-btn :global(svg) { width: 20px; height: 20px; }
     .nav-btn.active, .nav-btn.hover { color: var(--accent); }
-    .nav-lbl { display: block; font-size: 10.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+    .nav-lbl { display: block; font-size: 9.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
     /* The highlight slides under the active button… */
     .pill {
       display: block; position: absolute; top: 6px; bottom: 6px;
       width: calc((100% - 12px) / var(--n));
       left: calc(6px + var(--i) * (100% - 12px) / var(--n));
-      border-radius: 26px;
+      border-radius: 20px;
       background: var(--accent-soft);
       box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent) inset;
       transition: left .42s cubic-bezier(.22,1,.36,1), transform .25s cubic-bezier(.22,1,.36,1), width .2s ease;
