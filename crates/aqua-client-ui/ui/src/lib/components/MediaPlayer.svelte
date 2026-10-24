@@ -88,6 +88,14 @@
     active = media;
     void media.play().catch((e) => { if (e?.name !== "AbortError") console.warn("[aqua-media] play()", e); });
   }
+  // Phones: a tap on a video in the chat opens the viewer, as in Telegram
+  // (playing it inside the bubble and a double tap for full screen was
+  // clumsy on a small screen).
+  const coarse = typeof matchMedia !== "undefined" && matchMedia("(pointer: coarse)").matches;
+  function tapVideo() {
+    if (onExpand && coarse && !theater && !isFs) { onExpand(); return; }
+    toggle();
+  }
   function toggle() {
     if (!media) return;
     if (media.paused) play(); else media.pause();
@@ -418,8 +426,8 @@
       onplaying={() => (waiting = false)}
       oncanplay={() => (waiting = false)}
       onerror={onError}
-      onclick={(e) => { e.stopPropagation(); toggle(); }}
-      ondblclick={(e) => { e.stopPropagation(); void toggleFs(); }}
+      onclick={(e) => { e.stopPropagation(); tapVideo(); }}
+      ondblclick={(e) => { e.stopPropagation(); if (!coarse) void toggleFs(); }}
     ></video>
 
     {#if (theater || isFs) && name}
@@ -432,7 +440,7 @@
     {:else if waiting && playing}
       <div class="center"><span class="spin"></span></div>
     {:else if !playing}
-      <button class="big" onclick={(e) => { e.stopPropagation(); toggle(); }} aria-label={$t("Play")}>{@render ico(I.play, true)}</button>
+      <button class="big" onclick={(e) => { e.stopPropagation(); tapVideo(); }} aria-label={$t("Play")}>{@render ico(I.play, true)}</button>
     {/if}
 
     <!-- svelte-ignore a11y_click_events_have_key_events -->

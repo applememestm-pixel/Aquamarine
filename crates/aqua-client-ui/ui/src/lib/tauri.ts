@@ -203,6 +203,8 @@ export const api = {
   editMessage:        (peer_id: string, old_text: string, new_text: string): Promise<void> => invoke("edit_message", { peerId: peer_id, oldText: old_text, newText: new_text }),
   deleteMessage:      (peer_id: string, text: string): Promise<void>                    => invoke("delete_message", { peerId: peer_id, text }),
   deleteMessagesLocal: (peerId: string, ids: string[]): Promise<number> => invoke("delete_messages_local", { peerId, ids }),
+  deleteChat:         (peerId: string): Promise<void> => invoke("delete_chat", { peerId }),
+  markChatRead:       (peerId: string): Promise<void> => invoke("mark_chat_read", { peerId }),
   attachFile:         (peer_id: string, file_path: string): Promise<AttachResult>  => invoke("attach_file", { peerId: peer_id, filePath: file_path }),
   /** Re-send a file with a "Forwarded from" header (JSON). */
   forwardFile:        (peer_id: string, file_path: string, header: string): Promise<AttachResult> => invoke("forward_file", { peerId: peer_id, filePath: file_path, header }),

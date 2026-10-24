@@ -2,6 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 import { writable, derived, get } from "svelte/store";
 import type { ChatMessage, ChatSummary, InitInfo } from "./types";
 import { api, events } from "./tauri";
+import { onBack } from "./back";
 import { contacts, contactMatches, displayName, saveContact } from "./contacts";
 import { settings } from "./theme";
 import { playSound, soundFor } from "./sounds";
@@ -268,30 +269,53 @@ export async function startChat(
   }
 }
 
+/** The open chat is on screen: the app is in front, and on a phone the
+ *  conversation (not the list) is showing. */
+function chatOnScreen(): boolean {
+  try {
+    if (document.visibilityState !== "visible") return false;
+    return !matchMedia("(max-width: 720px)").matches || document.body.classList.contains("chat-open");
+  } catch { return true; }
+}
+/** Messages arriving in the open chat are read at once; the counter is
+ *  zeroed on the Rust side too, so a list refresh doesn't bring it back. */
+function readActive() {
+  const id = get(activeId);
+  if (!id || !chatOnScreen()) return;
+  const c = get(chats).find((x) => x.id === id);
+  if (!c || !c.unread) return;
+  chats.update((cs) => cs.map((x) => (x.id === id ? { ...x, unread: 0 } : x)));
+  void api.markChatRead(id).catch(() => {});
+}
+chats.subscribe(() => queueMicrotask(readActive));
+try { document.addEventListener("visibilitychange", readActive); } catch { /* no document */ }
+
 export async function selectChat(id: string) {
   activeId.set(id);
   chats.update((cs) => cs.map((c) => (c.id === id ? { ...c, unread: 0 } : c)));
+  void api.markChatRead(id).catch(() => {});
   // On a phone-width layout this switches the single column from the chat
   // list to the open conversation (see the <=720px rules in app.css).
   try {
     const wasOpen = document.body.classList.contains("chat-open");
     document.body.classList.add("chat-open");
-    // Give the phone's system Back button something to pop: one history
-    // entry per "list → chat" step (see the popstate hook in App.svelte).
+    // The phone's Back button / gesture: back to the list (lib/back.ts).
     if (!wasOpen && window.matchMedia("(max-width: 720px)").matches) {
-      history.pushState({ aquaChat: true }, "");
+      releaseChatBack?.();
+      releaseChatBack = onBack(() => { releaseChatBack = null; backToList(); });
     }
   } catch { /* ignore */ }
   await loadActiveMessages();
 }
 
-/** Mobile: go back from an open chat to the chat list. `fromHistory` is
- *  set when the system Back button already popped our history entry. */
-export function backToList(fromHistory = false) {
-  try {
-    document.body.classList.remove("chat-open");
-    if (!fromHistory && history.state?.aquaChat) history.back();
-  } catch { /* ignore */ }
+let releaseChatBack: (() => void) | null = null;
+
+/** Mobile: go back from an open chat to the chat list. */
+export function backToList(_fromHistory = false) {
+  try { document.body.classList.remove("chat-open"); } catch { /* ignore */ }
+  const r = releaseChatBack;
+  releaseChatBack = null;
+  r?.();
 }
 
 /** Keep the old object for every message that didn't change, so a

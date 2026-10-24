@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onBack } from "../back";
   import { hasMarkup, plainText } from "../markup";
   /** Chat-list line without formatting markers (spoilers stay hidden). */
   function previewText(p: string): string {
@@ -19,7 +20,8 @@
   import { groupMap, requestJoinGroup } from "../groups";
   import { peerPresence, activityVerb } from "../presence";
   import { icons } from "../icons";
-  import { info, search, visibleChats, activeId, selectChat, startChat, chats, connect } from "../stores";
+  import { info, search, visibleChats, activeId, selectChat, startChat, chats, connect, backToList } from "../stores";
+  import { askConfirm } from "./Confirm.svelte";
   import { showToast } from "./Toast.svelte";
   import { openNewChatDialog } from "../newChat";
   import { openNewGroup } from "./NewGroupWizard.svelte";
@@ -69,6 +71,10 @@
   async function forgetAccount(slot: string) {
     try { await api.accountForget(slot); await loadAccounts(); } catch (e) { showToast(String(e)); }
   }
+  // Back closes the sheets and the preview (lib/back.ts).
+  $effect(() => { if (accountsOpen) return onBack(() => (accountsOpen = false)); });
+  $effect(() => { if (serversOpen) return onBack(() => (serversOpen = false)); });
+  $effect(() => { if (peek) return onBack(() => (peek = null)); });
   // ---- The servers sheet: which relay we're on, the others, reconnect ----
   let serversOpen = $state(false);
   let srvUrl = $state("");
@@ -353,6 +359,7 @@
   }
   function markRead(id: string) {
     chats.update((cs) => cs.map((c) => (c.id === id ? { ...c, unread: 0 } : c)));
+    void api.markChatRead(id).catch(() => {});
   }
 
   // ---- Right-click a chat: archive / mute ----
@@ -366,6 +373,28 @@
     setArchived(id, on);
     showToast(on ? "Chat archived" : "Chat moved back to the list");
     ctx = null;
+  }
+
+  /** Telegram's "Delete chat" (this device): the history goes; a new
+   *  message from them starts it again. */
+  async function deleteChat(id: string) {
+    ctx = null;
+    peek = null;
+    const c = $chats.find((x) => x.id === id);
+    const saved = id === "__saved__";
+    const ok = await askConfirm({
+      title: tr(saved ? "Clear Saved Messages?" : "Delete the chat with {name}?", { name: c?.name ?? id }),
+      text: tr("The messages are removed from this device. This can't be undone."),
+      ok: tr("Delete"),
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api.deleteChat(id);
+      if ($activeId === id) { backToList(); activeId.set(""); }
+      setArchived(id, false);
+      chats.set(await api.listChats());
+    } catch (e) { showToast(String(e)); }
   }
 
   // ---- Invite links pasted into the search box ----
@@ -764,6 +793,7 @@
         <button onclick={() => { const id = cid; ctx = null; askSetLock(id); }}>{$t("Set a password…")}</button>
       {/if}
       {#if DESKTOP}<button onclick={() => popOut(cid, $chats.find((x) => x.id === cid)?.name ?? cid)}>{$t("Open in a new window")} <span class="ctx-kbd">Ctrl+click</span></button>{/if}
+      {#if !cid.startsWith("grp_")}<button class="danger" onclick={() => void deleteChat(cid)}>{$t(cid === "__saved__" ? "Clear history" : "Delete chat")}</button>{/if}
     </div>
   {/if}
 
@@ -823,6 +853,7 @@
           <button onclick={() => { pinChat(pid); closePeek(); }}>{$t($pinnedChats.includes(pid) ? "Unpin" : "Pin to top")}</button>
           <button onclick={() => { setMuted(pid); closePeek(); }}>{$t($mutedChats.has(pid) ? "Unmute" : "Mute notifications")}</button>
           <button onclick={() => { archiveChat(pid); closePeek(); }}>{$t($archived.has(pid) ? "Unarchive" : "Archive")}</button>
+          {#if !pid.startsWith("grp_")}<button class="danger" onclick={() => void deleteChat(pid)}>{$t(pid === "__saved__" ? "Clear history" : "Delete chat")}</button>{/if}
         </div>
       </div>
     </div>
@@ -1008,6 +1039,8 @@
     color: var(--fg); font: inherit; font-size: 13.5px; cursor: pointer;
   }
   .chat-ctx button:hover { background: var(--accent-soft); color: var(--accent); }
+  .chat-ctx button.danger, .peek-menu button.danger { color: var(--danger, #FF4D6D); }
+  .chat-ctx button.danger:hover, .peek-menu button.danger:hover { background: color-mix(in srgb, var(--danger, #FF4D6D) 14%, transparent); color: var(--danger, #FF4D6D); }
   .chat-preview.activity { color: var(--accent); }
   .chat-preview.activity b { font-weight: 700; }
   /* Compact: avatars only (a server is open). */
@@ -1248,7 +1281,6 @@
     color: inherit;
   }
   .chat-item:hover { background: var(--bg-hover); }
-  .chat-item:active { transform: scale(0.985); }
   /* The open chat is a notebook tab: its row runs into the list's edge,
      which becomes the spine the chat panel hangs on. */
   .list { --tab: color-mix(in srgb, var(--accent) 15%, var(--bg-list)); }

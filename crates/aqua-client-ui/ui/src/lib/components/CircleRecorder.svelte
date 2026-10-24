@@ -1,11 +1,20 @@
 <script module lang="ts">
   import { writable, get as getStore } from "svelte/store";
 
-  interface State { peerId: string; }
+  /** hold: opened by holding the composer's camera button (Telegram):
+   *  recording starts as soon as the camera is up, and letting go sends. */
+  interface State { peerId: string; hold?: boolean; }
   export const circleState = writable<State | null>(null);
+  /** The finger left the button: "send" (stop and send) or "lock" (keep
+   *  recording hands-free; Stop / Send in the window). */
+  export const circleHold = writable<"down" | "send" | "lock">("down");
 
-  export function openCircleRecorder(peerId: string) {
-    circleState.set({ peerId });
+  export function openCircleRecorder(peerId: string, hold = false) {
+    circleHold.set("down");
+    circleState.set({ peerId, hold });
+  }
+  export function releaseCircleHold(lock = false) {
+    if (getStore(circleState)?.hold) circleHold.set(lock ? "lock" : "send");
   }
   export function closeCircleRecorder() { circleState.set(null); }
 </script>
@@ -45,6 +54,11 @@
         video.muted = true;
         void video.play();
       }
+      if ($circleState?.hold) {
+        // Let go before the camera came up: a tap too short to record.
+        if ($circleHold === "send") { close(); showToast(tr("Hold the button to record a video message")); return; }
+        void startRecording();
+      }
     } catch (e) {
       errorMsg = `Camera access denied: ${e}`;
     }
@@ -73,6 +87,8 @@
         recordedBlob = blob;
         recordedUrl = URL.createObjectURL(blob);
         phase = "review";
+        // Held and let go: straight out, like a voice note.
+        if ($circleState?.hold && $circleHold === "send") void sendCircle();
       };
       phase = "recording";
       elapsed = 0;
@@ -127,6 +143,11 @@
     closeCircleRecorder();
   }
 
+  // Finger up while recording → stop (onstop sends).
+  $effect(() => {
+    if ($circleHold === "send" && phase === "recording") stopRecording();
+  });
+
   // Open camera when the recorder opens.
   let prev = "";
   $effect(() => {
@@ -163,7 +184,7 @@
     role="button"
     tabindex="-1"
     aria-label={$t("Close recorder")}
-    onclick={(e) => { if ((e.target as HTMLElement).classList.contains("backdrop")) close(); }}
+    onclick={(e) => { if ((e.target as HTMLElement).classList.contains("backdrop") && !$circleState?.hold) close(); }}
     onkeydown={(e) => { if (e.key === "Escape") close(); }}
   >
     <div class="sheet" role="dialog" aria-modal="true" tabindex="-1">
@@ -208,10 +229,14 @@
           <button class="btn-rec" onclick={startRecording} disabled={!stream || !!errorMsg}>
             <span class="rec-dot"></span> {$t("Start recording")}
           </button>
-          <div class="hint">Up to {MAX_SECONDS} seconds. Centred selfie-cam view.</div>
+          <div class="hint">{$t("Up to {n} seconds, front camera.", { n: MAX_SECONDS })}</div>
         {:else if phase === "recording"}
-          <button class="btn-stop" onclick={stopRecording}>{$t("■ Stop")}</button>
-          <div class="hint">Recording · auto-stops at {MAX_SECONDS}s</div>
+          {#if $circleState?.hold && $circleHold === "down"}
+            <div class="hint">{$t("Let go to send · slide up to keep recording")}</div>
+          {:else}
+            <button class="btn-stop" onclick={stopRecording}>{$t("■ Stop")}</button>
+            <div class="hint">{$t("Recording · stops by itself after {n} s", { n: MAX_SECONDS })}</div>
+          {/if}
         {:else}
           <div class="review-row">
             <button class="btn-ghost" onclick={retake} disabled={sending}>{$t("Retake")}</button>

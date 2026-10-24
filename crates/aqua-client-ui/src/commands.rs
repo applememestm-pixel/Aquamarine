@@ -2619,7 +2619,9 @@ pub fn own_device_message(app: &AppHandle, to: &str, inner: &str) {
     if let Some(body) = inner.strip_prefix(DEL_PREFIX) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
             let t = v.get("text").and_then(|x| x.as_str()).unwrap_or("");
-            if !t.is_empty() { apply_delete_ex(&mut s, to, &me, t, false); }
+            // The peer's message, deleted for both from my other device.
+            let author = v.get("author").and_then(|x| x.as_str()).filter(|a| *a == to).unwrap_or(me.as_str()).to_string();
+            if !t.is_empty() { apply_delete_ex(&mut s, to, &author, t, false); }
         }
         drop(s);
         let _ = app.emit("aqua://chats_updated", ());
@@ -3273,7 +3275,15 @@ async fn on_incoming_envelope(
             let t = v.get("text").and_then(|x| x.as_str()).unwrap_or("");
             if !t.is_empty() {
                 let mut s = match state.lock() { Ok(s) => s, Err(_) => return };
-                apply_delete_ex(&mut s, &from, &from, t, true);
+                // In a 1:1 chat either side may delete any message for both,
+                // as in Telegram: `author` names whose message it was.
+                let mine = v.get("author").and_then(|x| x.as_str())
+                    .is_some_and(|a| s.username.as_deref() == Some(a));
+                if mine {
+                    apply_delete_ex(&mut s, &from, "me", t, false);
+                } else {
+                    apply_delete_ex(&mut s, &from, &from, t, true);
+                }
             }
             let _ = app.emit("aqua://chats_updated", ());
             let _ = app.emit("aqua://incoming", IncomingEventPayload {
@@ -3473,6 +3483,42 @@ pub fn delete_messages_local(
         }
     }
     Ok(removed)
+}
+
+/// The chat was read: its unread counter goes to zero. Before, only the UI
+/// zeroed it, and the next chat-list refresh brought every message read in
+/// the open chat back as "unread".
+#[tauri::command]
+pub fn mark_chat_read(state: State<'_, StdMutex<AppState>>, peer_id: String) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| e.to_string())?;
+    if let Some(book) = s.chats.get_mut(&peer_id) {
+        book.summary.unread = 0;
+    }
+    Ok(())
+}
+
+/// "Delete chat" on this device, as in Telegram: the history is gone (the
+/// next flush drops its vault record); a new message from them starts the
+/// chat again. Saved Messages are only emptied. Groups are left, not deleted.
+#[tauri::command]
+pub fn delete_chat(state: State<'_, StdMutex<AppState>>, peer_id: String) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| e.to_string())?;
+    if peer_id.starts_with("grp_") {
+        return Err("leave the group instead".into());
+    }
+    if peer_id == crate::state::SAVED_MESSAGES_ID {
+        let data_dir = s.data_dir.clone();
+        if let Some(book) = s.chats.get_mut(&peer_id) {
+            book.messages.clear();
+            book.summary.preview = String::new();
+            book.summary.unread = 0;
+            crate::state::save_saved_messages(&data_dir, &book.messages);
+        }
+        return Ok(());
+    }
+    s.chats.remove(&peer_id);
+    s.chat_order.retain(|c| c != &peer_id);
+    Ok(())
 }
 
 fn push_peer_message(s: &mut AppState, peer_id: &str, text: String, time: &str) {

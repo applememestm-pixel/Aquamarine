@@ -24,6 +24,7 @@
 </script>
 
 <script lang="ts">
+  import { onBack } from "../back";
   import { t, tr } from "../i18n";
   /**
    * Telegram-style Emoji · Stickers · GIFs panel.
@@ -124,6 +125,8 @@
     vv.addEventListener("resize", on);
     return () => vv.removeEventListener("resize", on);
   });
+  // Back closes the panel (lib/back.ts).
+  $effect(() => { if ($pickerState.open && phone()) return onBack(() => closeMediaPicker()); });
   const dockH = $derived(Math.max(280, Math.min(kbH || 0, 480)) || 300);
   $effect(() => {
     const docked = $pickerState.open && phone();
@@ -306,7 +309,7 @@
       await api.sendSticker(s.peer, it.path);
       pushRecent("stickers", it.path);
       await loadActiveMessages();
-      closeMediaPicker();
+      // The panel stays open, as in Telegram: send several in a row.
     } catch (e) { showToast(`Send failed: ${e}`); }
   }
 
@@ -316,7 +319,6 @@
     try {
       await api.sendGif(s.peer, g.path);
       await loadActiveMessages();
-      closeMediaPicker();
     } catch (e) { showToast(`Send failed: ${e}`); }
   }
 

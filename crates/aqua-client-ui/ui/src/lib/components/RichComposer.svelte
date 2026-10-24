@@ -18,9 +18,11 @@
     resolve: (key: string) => { url: string; mime: string } | undefined;
     onkeydown?: (e: KeyboardEvent) => void;
     oninput?: () => void;
+    /** Pictures / files pasted from the clipboard. */
+    onpastefiles?: (files: File[]) => void;
     class?: string;
   }
-  let { value = $bindable(""), placeholder = "", resolve, onkeydown, oninput, class: klass = "" }: Props = $props();
+  let { value = $bindable(""), placeholder = "", resolve, onkeydown, oninput, onpastefiles, class: klass = "" }: Props = $props();
 
   let el: HTMLDivElement | undefined = $state();
   let lastValue = "";
@@ -326,6 +328,17 @@
   }
 
   function onPaste(e: ClipboardEvent) {
+    // A copied picture (a screenshot, "Copy image") comes as a file, with no
+    // text: it used to paste nothing at all.
+    const files = [...(e.clipboardData?.items ?? [])]
+      .filter((it) => it.kind === "file")
+      .map((it) => it.getAsFile())
+      .filter((f): f is File => !!f);
+    if (files.length && onpastefiles) {
+      e.preventDefault();
+      onpastefiles(files);
+      return;
+    }
     const t = e.clipboardData?.getData("text/plain");
     if (t == null) return;
     e.preventDefault();

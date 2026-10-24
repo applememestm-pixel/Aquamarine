@@ -264,6 +264,8 @@ pub fn run() -> Result<()> {
             commands::edit_message,
             commands::delete_message,
             commands::delete_messages_local,
+            commands::delete_chat,
+            commands::mark_chat_read,
             commands::attach_file,
             commands::attach_file_as,
             commands::attach_bytes,

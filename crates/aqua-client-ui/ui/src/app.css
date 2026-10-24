@@ -161,6 +161,8 @@ html.wk-lowfx .eq i:nth-child(3) { transform: scaleY(0.75); }
              0 env(safe-area-inset-left, 0px);
   }
   body.chat-open .main-pane { padding-bottom: env(safe-area-inset-bottom, 0px); }
+  /* Keyboard up: the composer sits right on top of it (lib/keyboard.ts). */
+  html.kb-open body.chat-open .main-pane { padding-bottom: var(--kb, 0px); }
   /* Emoji / stickers panel open: it sits where the keyboard was, the
      conversation and the composer stay above it. */
   html.picker-docked body.chat-open .main-pane { padding-bottom: calc(var(--dock-h, 300px) + env(safe-area-inset-bottom, 0px)); }
@@ -232,14 +234,15 @@ html.wk-lowfx :is(button, a, input, select, textarea) {
 @keyframes aq-slide-in { from { opacity: .4; transform: translateX(36px); } }
 @keyframes aq-slide-back { from { opacity: .4; transform: translateX(-28px); } }
 @media (prefers-reduced-motion: no-preference) {
-  /* Every press gives way a little (the `scale` property keeps each
-     button's own transform intact). */
+  /* (Buttons no longer shrink while pressed: menus and lists visibly
+     "breathed" under the finger, and the moving target felt like a jump.) */
   /* Not on Linux (WebKitGTK): there any animation repaints the whole
      window on the CPU, and every click felt sticky. */
-  html:not(.wk-lowfx) :is(button:not(:disabled):active, [role="button"]:active, a:active) { scale: .97; }
-  /* Dialogs that don't animate themselves pop in with a soft spring. */
-  html:not(.wk-lowfx) :is([role="dialog"], [role="alertdialog"]) { animation: aq-pop-spring .32s cubic-bezier(.22, 1, .36, 1); }
-  html:not(.wk-lowfx) :is([role="menu"], [role="listbox"]) { animation: aq-pop .16s var(--ease-out); }
+  /* Dialogs that don't animate themselves fade in, without sliding. */
+  html:not(.wk-lowfx) :is([role="dialog"], [role="alertdialog"]) { animation: aq-fade .18s ease-out; }
+  /* Opacity only: a transform here overrode menus centred with one, and they
+     jumped into place when the animation ended. */
+  html:not(.wk-lowfx) :is([role="menu"], [role="listbox"]) { animation: aq-fade .14s var(--ease-out); }
 }
 
 /* Focus */

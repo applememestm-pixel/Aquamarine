@@ -3,6 +3,8 @@
   import { onMount } from "svelte";
   import { startAppIcon } from "./lib/appIcon";
   import { startAutoscroll } from "./lib/autoscroll";
+  import { startKeyboardInset } from "./lib/keyboard";
+  import { startBack, onBack } from "./lib/back";
   import { migrateCustomWallpaper, fitCurrentWallpaper, followWallpaper } from "./lib/theme";
   import { api } from "./lib/tauri";
   import { bootstrap, activeTab, info, activeId, backToList, connect, quickConnect } from "./lib/stores";
@@ -84,6 +86,13 @@
   // the connection is retried in the background.
   let everConnected = $state(false);
   let autoEntry = false;
+
+  // Phones: Back from Files / Contacts / Calls goes to Chats, as in Telegram.
+  $effect(() => {
+    const tab = $activeTab;
+    if (tab === "chats" || !matchMedia("(max-width: 720px)").matches) return;
+    return onBack(() => activeTab.set("chats"));
+  });
 
   // Profiles: publish ours on every (re)connect, fetch everyone we chat with.
   let wasConnected = false;
@@ -219,6 +228,7 @@
     };
     // Block middle-click autoscroll + drag-navigation artefacts.
     const stopAutoscroll = startAutoscroll();
+    const stopKeyboard = startKeyboardInset();
     // Single-media coordinator: whenever any audio/video starts playing,
     // pause every other one (inline previews, the lightbox, the top
     // background player). Only one thing plays at a time.
@@ -235,13 +245,8 @@
         if (mm !== el && !mm.paused) { try { mm.pause(); } catch { /* ignore */ } }
       });
     };
-    // Phone Back button / back gesture: leave the open chat for the list.
-    const onPop = () => {
-      // Settings on top handle Back themselves (section -> list -> closed).
-      if (document.body.classList.contains("settings-open")) return;
-      if (document.body.classList.contains("chat-open")) backToList(true);
-    };
-    window.addEventListener("popstate", onPop);
+    // Phone Back button / back gesture: closes whatever is on top (lib/back.ts).
+    const stopBack = startBack();
     document.addEventListener("keydown", onKey);
     document.addEventListener("contextmenu", onCtx);
 
@@ -253,10 +258,11 @@
       stopIcon();
       stopUpdates();
       stopShortcuts();
-      window.removeEventListener("popstate", onPop);
+      stopBack();
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("contextmenu", onCtx);
       stopAutoscroll();
+      stopKeyboard();
       document.removeEventListener("wheel", onWheel);
       document.removeEventListener("play", onMediaPlay, true);
       window.removeEventListener("drop", onDrop);

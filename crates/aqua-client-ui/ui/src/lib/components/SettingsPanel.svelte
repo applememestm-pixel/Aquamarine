@@ -733,7 +733,7 @@
     onclick={(e) => { if ((e.target as HTMLElement).classList.contains("backdrop")) closeAll(); }}
     onkeydown={(e) => { if (e.target === e.currentTarget && (e.key === "Escape" || e.key === "Enter")) closeAll(); }}
   >
-    <div class="sheet" class:detail class:wide={section === "appearance"} role="dialog" aria-modal="true" tabindex="-1">
+    <div class="sheet" data-own-back class:detail class:wide={section === "appearance"} role="dialog" aria-modal="true" tabindex="-1">
       <div class="layout">
         <nav class="nav">
           <div class="list-head phone-only">
