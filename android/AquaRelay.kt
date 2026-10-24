@@ -6,6 +6,8 @@ package app.aquamarine.messenger
 //    and its album menu (crates/aqua-client-ui/src/gallery.rs), like Telegram's.
 //  * AquaRelayPlugin + AquaRelayService — "Server on this device" (and the
 //    relaunch after switching accounts, crates/aqua-client-ui/src/accounts.rs).
+//  * AquaUpdatePlugin — hands a downloaded update to the system installer
+//    (crates/aqua-client-ui/src/updates.rs).
 //
 // "Server on this device" — the Android half. The relay itself runs in Rust
 // inside the app process (crates/aqua-client-ui/src/relay_host.rs); this
@@ -29,6 +31,10 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.content.ContentUris
+import android.net.Uri
+import android.provider.Settings
+import androidx.core.content.FileProvider
+import java.io.File
 import android.graphics.Bitmap
 import android.provider.MediaStore
 import android.util.Base64
@@ -244,6 +250,45 @@ class AquaGalleryPlugin(private val activity: Activity) : Plugin(activity) {
       } catch (e: Exception) {
         invoke.reject(e.message ?: "gallery")
       }
+    }
+  }
+}
+
+@InvokeArg
+class InstallArgs {
+  var path: String = ""
+}
+
+/** Updates: the APK updates.rs downloaded and checked goes to the system
+ *  installer through the app's FileProvider (cache-path). Android asks once
+ *  to allow installs from Aquamarine; until then we open that setting. */
+@TauriPlugin
+class AquaUpdatePlugin(private val activity: Activity) : Plugin(activity) {
+  @Command
+  fun install(invoke: Invoke) {
+    val args = invoke.parseArgs(InstallArgs::class.java)
+    if (Build.VERSION.SDK_INT >= 26 && !activity.packageManager.canRequestPackageInstalls()) {
+      activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + activity.packageName)))
+      invoke.resolve(JSObject().put("needsPermission", true))
+      return
+    }
+    try {
+      var f = File(args.path)
+      // The FileProvider only serves the cache directory.
+      if (!f.canonicalPath.startsWith(activity.cacheDir.canonicalPath + File.separator)) {
+        val dir = File(activity.cacheDir, "updates").apply { mkdirs() }
+        val copy = File(dir, f.name)
+        f.copyTo(copy, overwrite = true)
+        f = copy
+      }
+      val uri = FileProvider.getUriForFile(activity, activity.packageName + ".fileprovider", f)
+      val i = Intent(Intent.ACTION_VIEW)
+        .setDataAndType(uri, "application/vnd.android.package-archive")
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+      activity.startActivity(i)
+      invoke.resolve(JSObject().put("started", true))
+    } catch (e: Exception) {
+      invoke.reject(e.message ?: "install")
     }
   }
 }

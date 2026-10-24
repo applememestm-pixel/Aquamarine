@@ -8,6 +8,7 @@
   import { onMount } from "svelte";
   import { fitWallpaper, followWallpaper } from "../theme";
   import SegFit from "./SegFit.svelte";
+  import { BUILD, BUILD_SHORT, updatePrefs, updateState, checkUpdates } from "../updates";
   import { settings, PALETTES, WALLPAPERS, EDITABLE_COLORS, THEMES, DEFAULTS, MENU_ALPHA, type Mode, type Density } from "../theme";
   import { info } from "../stores";
   import { icons } from "../icons";
@@ -43,7 +44,7 @@
   import { meshStatus, meshSyncNow, meshSetEnabled, refreshMesh } from "../mesh";
 
   // ---- Section navigation ----
-  type Sec = "nearby" | "host" | "ghost" | "language" | "appearance" | "theme" | "behaviour" | "notifications" | "voice" | "wallpaper" | "accent" | "bots" | "account" | "about" | "privacy" | "stickers" | "backups" | "devices";
+  type Sec = "nearby" | "host" | "ghost" | "language" | "appearance" | "theme" | "behaviour" | "notifications" | "voice" | "wallpaper" | "accent" | "bots" | "account" | "updates" | "about" | "privacy" | "stickers" | "backups" | "devices";
   let section = $state<Sec>("notifications");
   // Telegram-mobile style: coloured icon tiles in grouped lists.
   interface Item { id: Sec | "profile" | "shortcuts"; label: string; color: string; icon: string; hint?: string }
@@ -72,6 +73,7 @@
       { id: "shortcuts", label: "Keyboard shortcuts", color: "#5AC8FA", icon: ic(`<rect x="2" y="6" width="20" height="12" rx="2"/><line x1="6" y1="10" x2="6.01" y2="10"/><line x1="10" y1="10" x2="10.01" y2="10"/><line x1="14" y1="10" x2="14.01" y2="10"/><line x1="18" y1="10" x2="18.01" y2="10"/><line x1="7" y1="14" x2="17" y2="14"/>`), hint: "Ctrl+/" },
       { id: "bots", label: "Bots", color: "#00C7BE", icon: ic(`<rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4"/><circle cx="12" cy="3" r="1"/><line x1="9" y1="13" x2="9.01" y2="13"/><line x1="15" y1="13" x2="15.01" y2="13"/>`) },
       { id: "account", label: "Account & server", color: "#007AFF", icon: ic(`<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>`) },
+      { id: "updates", label: "Updates", color: "#34C759", icon: ic(`<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>`) },
       { id: "about", label: "About Aquamarine", color: "#8E8E93", icon: ic(`<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>`) },
     ],
   ];
@@ -1702,6 +1704,33 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
       </section>
       {/if}
 
+      {#if section === "updates"}
+      <section class="group">
+        <div class="label">{$t("Updates")}</div>
+        <div class="info-row"><span class="k">{$t("This build")}</span><span class="v mono">{BUILD.version || "—"}{BUILD_SHORT ? ` · ${BUILD_SHORT}` : ""} · {BUILD.channel}</span></div>
+        <div class="row">
+          <span class="row-label">{$t("Channel")}</span>
+          <SegFit label={$t("Channel")} value={$updatePrefs.channel} onpick={(c) => { updatePrefs.update((p) => ({ ...p, channel: c, skip: undefined })); void checkUpdates(true); }}
+            options={[{ id: "nightly" as const, label: $t("Every build") }, { id: "stable" as const, label: $t("Releases only") }]} />
+        </div>
+        <button class="toggle-row" onclick={() => updatePrefs.update((p) => ({ ...p, auto: !p.auto }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Check for updates")}</div><div class="tr-sub">{$t("On start and every 6 hours; a card offers the new build")}</div></div>
+          <span class="switch" class:on={$updatePrefs.auto}></span>
+        </button>
+        <div class="info-row">
+          <span class="v">
+            {#if $updateState.s === "checking"}{$t("Checking…")}
+            {:else if $updateState.s === "none"}{$t("You have the newest build")}
+            {:else if $updateState.s === "available" || $updateState.s === "downloading" || $updateState.s === "installing" || $updateState.s === "permission"}{$t("A new build is available — see the card at the top")}
+            {:else if $updateState.s === "error"}<span class="upd-err">{$updateState.error}</span>
+            {/if}
+          </span>
+          <button class="mini-btn" onclick={() => checkUpdates(true)} disabled={$updateState.s === "checking" || $updateState.s === "downloading"}>{$t("Check now")}</button>
+        </div>
+        <div class="foot-note">{$t("The file is checked against the release's SHA-256 list before it's installed. On Android an update installs over the app only when both are signed with the same key.")}</div>
+      </section>
+      {/if}
+
       {#if section === "about"}
       <section class="group">
         <div class="label">{$t("About")}</div>
@@ -2089,6 +2118,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .info-row .mono { font-family: var(--font-mono); color: var(--fg-muted); font-size: 11.5px; }
   .info-row .dir { direction: rtl; text-align: left; }
 
+  .upd-err { color: var(--danger, #FF4D6D); white-space: normal; }
   .about { font-size: 12.5px; color: var(--fg-muted); line-height: 1.6; }
   .about b { color: var(--accent); }
 
