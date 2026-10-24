@@ -89,6 +89,20 @@ pub struct Directory {
     smtp_source: std::sync::RwLock<&'static str>,
     /// Last few dev-mode codes (email, code, unix secs) for the admin panel.
     recent: Mutex<std::collections::VecDeque<(String, String, u64)>>,
+    /// "It's me" links from the code e-mails (link token → request), so the
+    /// app fills the code in by itself once the link is tapped.
+    links: Mutex<std::collections::HashMap<String, MagicLink>>,
+}
+
+/// One "It's me" link: tapped (`confirmed`) → the app that asked with
+/// `nonce` gets the code. Kept in memory for the code's lifetime.
+#[derive(Debug, Clone)]
+struct MagicLink {
+    email: String,
+    code: String,
+    nonce: String,
+    confirmed: bool,
+    at: u64,
 }
 
 /// One account row as relays exchange it (password = the stored hash).
@@ -338,6 +352,7 @@ impl Directory {
             smtp: std::sync::RwLock::new(None),
             smtp_source: std::sync::RwLock::new("none"),
             recent: Mutex::new(Default::default()),
+            links: Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -501,6 +516,7 @@ impl Directory {
             smtp: std::sync::RwLock::new(smtp),
             smtp_source: std::sync::RwLock::new(source),
             recent: Mutex::new(Default::default()),
+            links: Mutex::new(std::collections::HashMap::new()),
         })
     }
 
@@ -519,13 +535,35 @@ impl Directory {
     /// e-mail can't be sent, the code goes to the server console and the admin
     /// panel (the operator can pass it on) and `delivery_failed` says so.
     pub async fn request_code_delivered(&self, email: &str) -> Result<CodeDelivery, DirError> {
+        self.request_code_delivered_ex(email, None, None).await
+    }
+
+    /// As `request_code_delivered`; with the app's `nonce` and the address
+    /// the app reached this relay at (`link_base`), the e-mail also carries
+    /// an "It's me" link: tapping it lets that app fill the code in itself
+    /// (`poll_link`).
+    pub async fn request_code_delivered_ex(&self, email: &str, nonce: Option<&str>, link_base: Option<&str>) -> Result<CodeDelivery, DirError> {
         let (email, code) = self.issue_code(email)?;
+        let link = match (nonce.map(str::trim).filter(|n| n.len() >= 16 && n.len() <= 128), link_base) {
+            (Some(nonce), Some(base)) => {
+                let mut t = [0u8; 18];
+                OsRng.fill_bytes(&mut t);
+                let token = hex::encode(t);
+                if let Ok(mut m) = self.links.lock() {
+                    let now = now_secs();
+                    m.retain(|_, l| now.saturating_sub(l.at) <= CODE_TTL_SECS && l.email != email);
+                    m.insert(token.clone(), MagicLink { email: email.clone(), code: code.clone(), nonce: nonce.to_string(), confirmed: false, at: now });
+                }
+                Some(format!("{}/v1/auth/email/link/{token}", base.trim_end_matches('/')))
+            }
+            _ => None,
+        };
         let cfg = self.smtp.read().ok().and_then(|c| c.clone());
         let Some(cfg) = cfg else {
             self.send_email_code(&email, &code);
             return Ok(CodeDelivery { dev_code: self.dev_codes().then_some(code), delivery_failed: false, error: None });
         };
-        let res = tokio::time::timeout(std::time::Duration::from_secs(45), send_smtp_any_port(&cfg, &email, &code)).await;
+        let res = tokio::time::timeout(std::time::Duration::from_secs(45), send_smtp_any_port(&cfg, &email, &code, link.as_deref())).await;
         let err = match res {
             Ok(Ok(())) => {
                 tracing::info!(%email, "verification code emailed");
@@ -541,6 +579,34 @@ impl Directory {
             r.truncate(20);
         }
         Ok(CodeDelivery { dev_code: self.dev_codes().then_some(code), delivery_failed: true, error: Some(err) })
+    }
+
+    /// The e-mail an "It's me" link is for (still valid), masked for the page.
+    pub fn link_email(&self, token: &str) -> Option<String> {
+        let m = self.links.lock().ok()?;
+        let l = m.get(token).filter(|l| now_secs().saturating_sub(l.at) <= CODE_TTL_SECS)?;
+        let (user, host) = l.email.split_once('@')?;
+        let shown: String = user.chars().take(2).collect();
+        Some(format!("{shown}•••@{host}"))
+    }
+
+    /// The link was tapped: the app waiting on it gets the code.
+    pub fn confirm_link(&self, token: &str) -> bool {
+        let Ok(mut m) = self.links.lock() else { return false };
+        match m.get_mut(token) {
+            Some(l) if now_secs().saturating_sub(l.at) <= CODE_TTL_SECS => { l.confirmed = true; true }
+            _ => false,
+        }
+    }
+
+    /// The app asks whether its link was tapped: the code, once it was.
+    /// Only the app that asked for the code (its `nonce`) gets it.
+    pub fn poll_link(&self, email: &str, nonce: &str) -> Option<String> {
+        let email = email.trim().to_lowercase();
+        let m = self.links.lock().ok()?;
+        m.values()
+            .find(|l| l.email == email && l.nonce == nonce && l.confirmed && now_secs().saturating_sub(l.at) <= CODE_TTL_SECS)
+            .map(|l| l.code.clone())
     }
 
     /// Generate and store a fresh code for `email` → (normalized email, code).
@@ -608,7 +674,7 @@ impl Directory {
         let code = code.to_string();
         // Fire-and-forget on the tokio runtime; failures are logged.
         tokio::spawn(async move {
-            if let Err(e) = send_smtp_any_port(&cfg, &email, &code).await {
+            if let Err(e) = send_smtp_any_port(&cfg, &email, &code, None).await {
                 tracing::error!(%email, error = %e, "SMTP send failed");
             } else {
                 tracing::info!(%email, "verification code emailed");
@@ -651,7 +717,7 @@ impl Directory {
     pub async fn send_test_email(&self, to: &str) -> anyhow::Result<()> {
         let cfg = self.smtp.read().ok().and_then(|c| c.clone())
             .ok_or_else(|| anyhow::anyhow!("e-mail delivery is not configured"))?;
-        send_smtp_any_port(&cfg, to.trim(), "123456").await
+        send_smtp_any_port(&cfg, to.trim(), "123456", None).await
     }
 
     // ---- registration ----
@@ -1727,15 +1793,21 @@ impl Directory {
 
 /// Send a verification code via SMTP using lettre.
 /// The verification e-mail (plain text + HTML), ready to send.
-fn build_code_email(cfg: &SmtpConfig, to: &str, code: &str) -> anyhow::Result<lettre::Message> {
+fn build_code_email(cfg: &SmtpConfig, to: &str, code: &str, link: Option<&str>) -> anyhow::Result<lettre::Message> {
     use lettre::message::{Message, MultiPart};
+    let link_text = link.map(|l| format!("Или нажмите — код подставится в приложении сам: {l}\nOr tap — the app fills the code in by itself.\n\n")).unwrap_or_default();
     let text = format!(
         "Aquamarine\n\n\
          Ваш код подтверждения: {code}\n\
          Your verification code: {code}\n\n\
+         {link_text}\
          Код действует 10 минут. Если вы его не запрашивали, просто проигнорируйте это письмо.\n\
          It expires in 10 minutes. If you didn't request it, ignore this email."
     );
+    let link_html = link.map(|l| format!(r#"<tr><td align="center" style="padding:0 28px 20px">
+<a href="{l}" style="display:inline-block;padding:13px 26px;border-radius:12px;background:#00E5C7;background-image:linear-gradient(135deg,#00E5C7,#7B5CFF);color:#06070C;font-weight:800;font-size:15px;text-decoration:none">Это я — подставить код</a>
+<div style="color:#6b7488;font-size:12px;padding-top:8px">It's me — fill the code in the app</div>
+</td></tr>"#)).unwrap_or_default();
     let spaced: String = code.chars().map(|c| c.to_string()).collect::<Vec<_>>().join("&#8202;");
     let html = format!(r#"<!doctype html><html><body style="margin:0;padding:0;background:#06070C">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#06070C;padding:32px 12px;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif">
@@ -1751,6 +1823,7 @@ fn build_code_email(cfg: &SmtpConfig, to: &str, code: &str) -> anyhow::Result<le
 <tr><td style="padding:18px 28px">
 <div style="background:#141926;border:1px solid #1f2535;border-radius:14px;padding:18px;text-align:center;font-family:Consolas,Menlo,monospace;font-size:34px;font-weight:800;letter-spacing:8px;color:#00E5C7">{spaced}</div>
 </td></tr>
+{link_html}
 <tr><td style="padding:0 28px 26px;color:#aab2c5;font-size:13px;line-height:1.55">
 Код действует 10 минут. Если вы его не запрашивали — просто проигнорируйте письмо.<br>
 <span style="color:#6b7488">It expires in 10 minutes. If you didn't request it, ignore this email.</span>
@@ -1779,14 +1852,14 @@ pub struct CodeDelivery {
 /// Send over the configured port; if that fails, over the other one
 /// (587 STARTTLS ↔ 465 TLS). VPNs and some networks break one of them —
 /// "incomplete response" on 587 is the usual sign.
-async fn send_smtp_any_port(cfg: &SmtpConfig, to: &str, code: &str) -> anyhow::Result<()> {
-    let first = send_smtp(cfg, to, code).await;
+async fn send_smtp_any_port(cfg: &SmtpConfig, to: &str, code: &str, link: Option<&str>) -> anyhow::Result<()> {
+    let first = send_smtp(cfg, to, code, link).await;
     let Err(e1) = first else { return Ok(()) };
     let alt = match cfg.port { 465 => 587, 587 | 25 | 2525 => 465, _ => return Err(e1) };
     tracing::warn!(port = cfg.port, error = %e1, alt, "SMTP failed, trying the other port");
     let mut c2 = cfg.clone();
     c2.port = alt;
-    match send_smtp(&c2, to, code).await {
+    match send_smtp(&c2, to, code, link).await {
         Ok(()) => {
             tracing::info!(alt, "SMTP works on the other port — consider switching to it in the admin panel");
             Ok(())
@@ -1795,12 +1868,12 @@ async fn send_smtp_any_port(cfg: &SmtpConfig, to: &str, code: &str) -> anyhow::R
     }
 }
 
-async fn send_smtp(cfg: &SmtpConfig, to: &str, code: &str) -> anyhow::Result<()> {
+async fn send_smtp(cfg: &SmtpConfig, to: &str, code: &str, link: Option<&str>) -> anyhow::Result<()> {
     use lettre::{
         transport::smtp::authentication::Credentials,
         AsyncSmtpTransport, AsyncTransport, Tokio1Executor,
     };
-    let email = build_code_email(cfg, to, code)?;
+    let email = build_code_email(cfg, to, code, link)?;
     // Gmail shows app passwords as "abcd efgh ijkl mnop" and people paste them
     // like that; the real password has no spaces (Gmail answers 535 otherwise).
     let pass: String = cfg.pass.chars().filter(|c| !c.is_whitespace()).collect();
@@ -1851,12 +1924,27 @@ mod tests {
     fn code_email_builds() {
         let cfg = SmtpConfig { host: "smtp.example.com".into(), user: "me@example.com".into(),
             pass: "x".into(), from: "me@example.com".into(), port: 587 };
-        let m = build_code_email(&cfg, "you@example.com", "042517").unwrap();
+        let m = build_code_email(&cfg, "you@example.com", "042517", Some("http://relay.example:7777/v1/auth/email/link/ab12")).unwrap();
         let raw = String::from_utf8(m.formatted()).unwrap();
         assert!(raw.contains("From: Aquamarine <me@example.com>"));
         assert!(raw.contains("multipart/alternative"));
         assert!(raw.contains("042517"));
         if let Ok(p) = std::env::var("AQUA_DUMP_EMAIL") { std::fs::write(p, raw).unwrap(); }
+    }
+
+    #[tokio::test]
+    async fn its_me_link_gives_the_code_to_the_asking_app_only() {
+        let d = dir();
+        let nonce = "n0nce-of-the-app-0123456789";
+        d.request_code_delivered_ex("Link@X.com", Some(nonce), Some("http://relay:7777")).await.unwrap();
+        let token = d.links.lock().unwrap().keys().next().cloned().unwrap();
+        assert_eq!(d.link_email(&token).as_deref(), Some("li•••@x.com"));
+        assert_eq!(d.poll_link("link@x.com", nonce), None); // not tapped yet
+        assert!(d.confirm_link(&token));
+        let code = d.poll_link("link@x.com", nonce).expect("code after the tap");
+        assert_eq!(d.poll_link("link@x.com", "another-app-nonce-0000000"), None);
+        assert!(d.verify_code("link@x.com", &code).is_ok());
+        assert!(!d.confirm_link("nope"));
     }
 
     #[test]

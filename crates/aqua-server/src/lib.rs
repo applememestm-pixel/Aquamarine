@@ -719,6 +719,11 @@ struct EmailRequestBody {
     /// relay say right away that the account exists / doesn't exist.
     #[serde(default)]
     purpose: String,
+    /// A random string from the app: with it the e-mail carries an "It's me"
+    /// link, and the app that sent it gets the code from `poll` once the
+    /// link is tapped.
+    #[serde(default)]
+    nonce: String,
 }
 
 #[derive(serde::Serialize)]
@@ -732,8 +737,22 @@ struct EmailRequestResp {
     error: Option<String>,
 }
 
+/// Where the "It's me" link in the e-mail points: the public address when the
+/// operator set one, else the address the app itself used to reach us.
+fn link_base(headers: &axum::http::HeaderMap) -> Option<String> {
+    if let Ok(u) = std::env::var("AQUA_PUBLIC_URL") {
+        let u = u.trim();
+        if u.starts_with("http") { return Some(u.trim_end_matches('/').to_string()); }
+    }
+    let host = headers.get(header::HOST)?.to_str().ok()?.trim();
+    if host.is_empty() || host.contains(['/', ' ', '"', '<', '>']) { return None; }
+    let proto = headers.get("x-forwarded-proto").and_then(|v| v.to_str().ok()).filter(|p| *p == "https").unwrap_or("http");
+    Some(format!("{proto}://{host}"))
+}
+
 async fn email_request(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<EmailRequestBody>,
 ) -> Result<Json<EmailRequestResp>, (StatusCode, String)> {
     // Invite-only (solo) relays: refuse before sending a code.
@@ -746,9 +765,52 @@ async fn email_request(
         "signin" | "reset" if !exists => return Err((StatusCode::NOT_FOUND, directory::DirError::NoAccount.to_string())),
         _ => {}
     }
-    match state.directory.request_code_delivered(&body.email).await {
+    let nonce = (!body.nonce.is_empty()).then_some(body.nonce.as_str());
+    let base = nonce.and_then(|_| link_base(&headers));
+    match state.directory.request_code_delivered_ex(&body.email, nonce, base.as_deref()).await {
         Ok(d) => Ok(Json(EmailRequestResp { ok: true, dev_code: d.dev_code, delivery_failed: d.delivery_failed, error: d.error })),
         Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
+    }
+}
+
+#[derive(Deserialize)]
+struct EmailPollBody { email: String, nonce: String }
+
+/// The app waits on its "It's me" link: `{ code }` once it was tapped.
+async fn email_poll(State(state): State<AppState>, Json(body): Json<EmailPollBody>) -> Json<serde_json::Value> {
+    Json(match state.directory.poll_link(&body.email, &body.nonce) {
+        Some(code) => serde_json::json!({ "ok": true, "code": code }),
+        None => serde_json::json!({ "ok": false }),
+    })
+}
+
+fn link_page(title: &str, text: &str, button: bool) -> axum::response::Html<String> {
+    let form = if button {
+        r#"<form method="post"><button type="submit">Да, это я · It's me</button></form>"#
+    } else { "" };
+    axum::response::Html(format!(r#"<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Aquamarine</title><style>
+body{{margin:0;min-height:100vh;display:grid;place-items:center;background:#06070C;color:#eef1f7;font:16px/1.5 Segoe UI,Roboto,Helvetica,Arial,sans-serif}}
+.c{{max-width:380px;margin:24px;padding:28px;border:1px solid #2b3346;border-radius:18px;background:#0C0F17;text-align:center}}
+h1{{font-size:20px;margin:0 0 10px}}p{{color:#aab2c5;margin:0 0 18px}}
+button{{border:0;border-radius:12px;padding:13px 24px;font:800 15px inherit;color:#06070C;background:linear-gradient(135deg,#00E5C7,#7B5CFF);cursor:pointer}}
+</style></head><body><div class="c"><h1>{title}</h1><p>{text}</p>{form}</div></body></html>"#))
+}
+
+/// The "It's me" page: a button (so a mail scanner opening the link doesn't
+/// confirm it by itself).
+async fn email_link_page(State(state): State<AppState>, axum::extract::Path(token): axum::extract::Path<String>) -> axum::response::Html<String> {
+    match state.directory.link_email(&token) {
+        Some(e) => link_page("Вход в Aquamarine", &format!("Подтвердите, что это вы входите с адресом {e}. Код подставится в приложении сам."), true),
+        None => link_page("Ссылка устарела", "Запросите новый код в приложении.", false),
+    }
+}
+
+async fn email_link_confirm(State(state): State<AppState>, axum::extract::Path(token): axum::extract::Path<String>) -> axum::response::Html<String> {
+    if state.directory.confirm_link(&token) {
+        link_page("Готово ✓", "Вернитесь в приложение — код уже там.", false)
+    } else {
+        link_page("Ссылка устарела", "Запросите новый код в приложении.", false)
     }
 }
 
@@ -1856,6 +1918,8 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/auth/verify",    post(auth::verify))
         .route("/v1/auth/email/request", post(email_request))
         .route("/v1/auth/email/verify",  post(email_verify))
+        .route("/v1/auth/email/poll",    post(email_poll))
+        .route("/v1/auth/email/link/:token", get(email_link_page).post(email_link_confirm))
         .route("/v1/users/register",     post(register_user))
         .route("/v1/users/search",       get(search_users))
         .route("/v1/users/login",        post(login_user))

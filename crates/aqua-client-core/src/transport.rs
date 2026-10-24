@@ -165,13 +165,32 @@ pub struct CodeRequest {
 /// for an e-mail that already has an account (409) and a sign-in / reset for
 /// one that has none (404).
 pub async fn request_email_code_ex(server_url: &str, email: &str, purpose: &str) -> Result<CodeRequest, TransportError> {
+    request_email_code_nonce(server_url, email, purpose, "").await
+}
+
+/// With `nonce` (random, from this app): the e-mail also carries an "It's
+/// me" link, and `poll_email_code` gets the code once it's tapped.
+pub async fn request_email_code_nonce(server_url: &str, email: &str, purpose: &str, nonce: &str) -> Result<CodeRequest, TransportError> {
     let http = http_client()?;
     let url = format!("{}/v1/auth/email/request", server_url.trim_end_matches('/'));
-    let r = http.post(&url).json(&serde_json::json!({ "email": email, "purpose": purpose })).send().await?;
+    let r = http.post(&url).json(&serde_json::json!({ "email": email, "purpose": purpose, "nonce": nonce })).send().await?;
     if !r.status().is_success() {
         return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
     }
     Ok(r.json::<CodeRequest>().await?)
+}
+
+/// The code, once the "It's me" link in the e-mail was tapped (else None).
+/// Relays without the link answer 404: also None.
+pub async fn poll_email_code(server_url: &str, email: &str, nonce: &str) -> Result<Option<String>, TransportError> {
+    let http = http_client()?;
+    let url = format!("{}/v1/auth/email/poll", server_url.trim_end_matches('/'));
+    let r = http.post(&url).json(&serde_json::json!({ "email": email, "nonce": nonce })).send().await?;
+    if !r.status().is_success() {
+        return Ok(None);
+    }
+    let v: serde_json::Value = r.json().await?;
+    Ok(v["code"].as_str().map(str::to_string))
 }
 
 /// Verify an email code (no auth required). Returns a registration

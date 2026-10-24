@@ -119,6 +119,36 @@
     (/[A-ZА-Я]/.test(password) && /[a-zа-я]/.test(password) ? 1 : 0) + (/\d/.test(password) ? 1 : 0) + (/[^\w\s]/.test(password) ? 1 : 0),
   );
 
+  // ---- The code fills in by itself ----
+  // The request carries a random nonce; the e-mail then has an "It's me"
+  // button, and while this screen is open we ask the relay whether it was
+  // tapped — then the code comes back here and is checked. Typing it works
+  // as before, and a complete 6-digit code is checked without pressing Next.
+  let nonce = "";
+  const newNonce = () => [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
+  $effect(() => {
+    if (step !== 2 || !nonce) return;
+    let stop = false;
+    const look = async () => {
+      if (stop || busy || code.trim().length === 6) return;
+      try {
+        const c = await api.pollEmailCode(serverUrl.trim(), email.trim(), nonce);
+        if (c && !stop && !busy) { code = c; void checkCode(); }
+      } catch { /* offline for a moment */ }
+    };
+    const iv = setInterval(look, 2500);
+    // Back from the mail app: look right away.
+    const vis = () => { if (document.visibilityState === "visible") void look(); };
+    document.addEventListener("visibilitychange", vis);
+    window.addEventListener("focus", vis);
+    return () => { stop = true; clearInterval(iv); document.removeEventListener("visibilitychange", vis); window.removeEventListener("focus", vis); };
+  });
+  function onCodeInput() {
+    const d = code.replace(/\D/g, "").slice(0, 6);
+    if (d !== code) code = d;
+    if (d.length === 6 && !busy) void checkCode();
+  }
+
   async function sendCode() {
     error = null;
     if (!email.includes("@")) { error = tr("Enter a valid email"); return; }
@@ -128,7 +158,8 @@
     busy = true;
     existsHint = false;
     try {
-      const r = await api.requestEmailCode(serverUrl.trim(), email.trim(), mode);
+      nonce = newNonce();
+      const r = await api.requestEmailCode(serverUrl.trim(), email.trim(), mode, nonce);
       devCode = r.dev_code; mailFailed = r.delivery_failed ? (r.error || "?") : null;
       step = 2;
       if (devCode) code = devCode; // prefill in dev mode for convenience
@@ -182,7 +213,8 @@
     error = null;
     busy = true;
     try {
-      const r = await api.requestEmailCode(serverUrl.trim(), email.trim(), mode);
+      nonce = newNonce();
+      const r = await api.requestEmailCode(serverUrl.trim(), email.trim(), mode, nonce);
       devCode = r.dev_code; mailFailed = r.delivery_failed ? (r.error || "?") : null;
       if (devCode) code = devCode;
       startResendCooldown();
@@ -418,14 +450,15 @@
         <div class="form">
           <label class="field">
             <span>{$t("Verification code")}</span>
-            <input bind:value={code} placeholder="123456" maxlength="6" class="code-input" onkeydown={(e) => e.key === "Enter" && checkCode()} />
+            <input bind:value={code} placeholder="123456" maxlength="6" class="code-input" autocomplete="one-time-code" inputmode="numeric"
+                   oninput={onCodeInput} onkeydown={(e) => e.key === "Enter" && checkCode()} />
           </label>
           {#if devCode}
             <p class="note dev">{$t("Dev mode — your code is")} <b>{devCode}</b> {$t("(also printed in the server console).")}</p>
           {:else if mailFailed}
             <p class="note warn">{$t("The server couldn't send the e-mail ({e}). The code is shown in the server window and in its admin panel — if this is your server, take it from there; otherwise ask the server's owner.", { e: mailFailed })}</p>
           {:else}
-            <p class="note">{$t("Check your inbox at {email}.", { email })}</p>
+            <p class="note">{$t("Check your inbox at {email}.", { email })} {$t("Tap “It's me” in the e-mail — the code fills in here by itself.")}</p>
           {/if}
           <button class="resend" onclick={resendCode} disabled={resendIn > 0 || busy}>
             {resendIn > 0 ? $t("Resend code in {n}s", { n: resendIn }) : $t("Resend code")}

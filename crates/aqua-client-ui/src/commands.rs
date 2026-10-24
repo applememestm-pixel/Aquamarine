@@ -290,10 +290,16 @@ pub async fn connect_to_server(
 // ---------- User directory: email registration + search --------------------
 
 #[tauri::command]
-pub async fn request_email_code(server_url: String, email: String, purpose: Option<String>) -> Result<aqua_client_core::CodeRequest, String> {
-    aqua_client_core::request_email_code_ex(&server_url, &email, purpose.as_deref().unwrap_or(""))
+pub async fn request_email_code(server_url: String, email: String, purpose: Option<String>, nonce: Option<String>) -> Result<aqua_client_core::CodeRequest, String> {
+    aqua_client_core::request_email_code_nonce(&server_url, &email, purpose.as_deref().unwrap_or(""), nonce.as_deref().unwrap_or(""))
         .await
         .map_err(|e| e.to_string())
+}
+
+/// The code from the e-mail, once its "It's me" link was tapped.
+#[tauri::command]
+pub async fn poll_email_code(server_url: String, email: String, nonce: String) -> Result<Option<String>, String> {
+    aqua_client_core::poll_email_code(&server_url, &email, &nonce).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]

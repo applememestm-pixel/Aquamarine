@@ -2016,4 +2016,5 @@ export const RU: Record<string, string> = {
   "Up to {n} seconds, front camera.": "До {n} секунд, фронтальная камера.",
   "More": "Ещё",
   "Could not paste": "Не удалось вставить",
+  "Tap “It's me” in the e-mail — the code fills in here by itself.": "Или нажмите в письме «Это я» — код подставится здесь сам.",
 };

@@ -96,7 +96,8 @@ export const api = {
 
   // Email registration + user directory
   /** purpose: the relay answers at once if the e-mail already has an account (signup) or has none (signin/reset). */
-  requestEmailCode:   (server_url: string, email: string, purpose?: "signup" | "signin" | "reset"): Promise<{ dev_code: string | null; delivery_failed: boolean; error: string | null }> => invoke("request_email_code", { serverUrl: server_url, email, purpose: purpose ?? null }),
+  requestEmailCode:   (server_url: string, email: string, purpose?: "signup" | "signin" | "reset", nonce?: string): Promise<{ dev_code: string | null; delivery_failed: boolean; error: string | null }> => invoke("request_email_code", { serverUrl: server_url, email, purpose: purpose ?? null, nonce: nonce ?? null }),
+  pollEmailCode:      (server_url: string, email: string, nonce: string): Promise<string | null> => invoke("poll_email_code", { serverUrl: server_url, email, nonce }),
   verifyEmailCode:    (server_url: string, email: string, code: string): Promise<string> => invoke("verify_email_code", { serverUrl: server_url, email, code }),
   registerAccount:    (server_url: string, username: string, ticket: string, display_name: string, about: string, phone: string, password?: string, email?: string): Promise<void> => invoke("register_account", { serverUrl: server_url, username, ticket, displayName: display_name, about, phone, password: password || null, email: email || null }),
   listDevices:        (): Promise<DeviceInfo[]> => invoke("list_devices"),

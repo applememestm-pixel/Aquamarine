@@ -32,6 +32,7 @@
   import { toggleSharedMedia } from "./SharedMediaPanel.svelte";
   import { backToList } from "../stores";
   import { onBack } from "../back";
+  import { clipboardFiles } from "../pasteFiles";
   import { events } from "../tauri";
   import { pollStates, castVote, retractVote, applyRemoteVote, closePoll, viewPoll, ME as POLL_ME, type PollView } from "../polls";
   import { peerPresence, setPeerPresence, broadcastPresenceTo, activityVerb, chatOnline, peerStatus, presenceNow } from "../presence";
@@ -615,10 +616,10 @@
   /** "As photo": like Telegram, re-encode to ≤ 2560 px (GIFs stay as they are). */
   /** Pictures pasted into the message field: saved to a temp file and sent
    *  like picked ones (the send dialog offers caption / compression). */
-  async function pasteFiles(files: File[]) {
+  async function pasteFiles(files: File[], local: string[] = []) {
     const chat = $activeChat;
     if (!chat?.live) return;
-    const paths: string[] = [];
+    const paths: string[] = [...local];
     for (const f of files) {
       try {
         const ext = (f.type.split("/")[1] || "bin").replace("jpeg", "jpg").replace(/[^a-z0-9]/gi, "");
@@ -707,6 +708,17 @@
       }
     };
     const onUp = () => { endDrag(); if (holdTimer || holdFired) mediaUp(); };
+    // Ctrl+V with the focus outside the message field: files still go in.
+    const onWinPaste = (e: ClipboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA)$/.test(t.tagName))) return;
+      if (!$activeChat?.live || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      const got = clipboardFiles(e.clipboardData);
+      if (!got.files.length && !got.paths.length) return;
+      e.preventDefault();
+      void pasteFiles(got.files, got.paths);
+    };
+    window.addEventListener("paste", onWinPaste);
     window.addEventListener("mousedown", onDown);
     window.addEventListener("keydown", onKey);
     window.addEventListener("pointerup", onUp);
@@ -755,6 +767,7 @@
       if (unTyping) unTyping();
       if (unsub) unsub();
       window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("paste", onWinPaste);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("pointerup", onUp);
       for (const [n, f] of kb) window.removeEventListener(n, f);
@@ -3699,7 +3712,7 @@
           resolve={(k) => emojiMap[k]}
           oninput={onComposerInput}
           onkeydown={onKey}
-          onpastefiles={(f) => void pasteFiles(f)}
+          onpastefiles={(f, p) => void pasteFiles(f, p)}
         />
       </div>
       {#if text.trim().length === 0 && liveChat}

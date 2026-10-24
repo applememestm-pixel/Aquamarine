@@ -222,6 +222,7 @@ pub fn run() -> Result<()> {
             commands::set_network_proxy,
             commands::request_email_code,
             commands::verify_email_code,
+            commands::poll_email_code,
             commands::register_account,
             commands::register_username,
             commands::search_directory,
