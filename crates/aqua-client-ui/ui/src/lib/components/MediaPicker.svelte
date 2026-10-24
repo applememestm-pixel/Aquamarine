@@ -582,7 +582,7 @@
     <div class="top">
       <div class="tabs" role="tablist">
         {#each [["emoji", "Emoji"], ["stickers", "Stickers"], ["gifs", "GIFs"]] as [id, label]}
-          <button class="tab" class:active={tab === id} role="tab" aria-selected={tab === id} onclick={() => { tab = id as Tab; searchEl?.focus(); }}>{label}</button>
+          <button class="tab" class:active={tab === id} role="tab" aria-selected={tab === id} onclick={() => { tab = id as Tab; if (!phone()) searchEl?.focus(); }}>{$t(label)}</button>
         {/each}
       </div>
       <div class="more-wrap">
@@ -609,7 +609,7 @@
     <label class="search">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
       <input bind:this={searchEl} bind:value={query} onkeydown={onSearchKey}
-        placeholder={tab === "emoji" ? "Search emoji" : tab === "stickers" ? "Search stickers" : "Search GIFs"} />
+        placeholder={$t(tab === "emoji" ? "Search emoji" : tab === "stickers" ? "Search stickers" : "Search GIFs")} />
       {#if query}<button class="clear" onclick={() => { query = ""; searchEl?.focus(); }} aria-label={$t("Clear")}>×</button>{/if}
     </label>
 

@@ -146,7 +146,9 @@ export interface Settings {
   mode: Mode;
   palette: string;   // palette id
   density: Density;
-  fontScale: number; // 0.85–1.25
+  fontScale: number; // 0.85–1.4, the text of messages, chat rows and the composer
+  /** Everything bigger or smaller, like a browser's page zoom (0.8–1.3). */
+  uiScale?: number;
   wallpaper: string; // wallpaper id, or "custom"
   wallpaperCustom?: string; // legacy: CSS with a data: URL (migrated to a file)
   /** Custom wallpaper: a file in <data>/wallpapers/. */
@@ -197,6 +199,10 @@ export interface Settings {
   chatSounds?: Record<string, string>;
 }
 
+/** See-through menus: how solid they are unless the slider says otherwise —
+ *  mostly glass, a little matte. */
+export const MENU_ALPHA = 0.55;
+
 export const DEFAULTS: Settings = {
   mode: "dark",
   palette: "aqua",
@@ -217,6 +223,32 @@ export const DEFAULTS: Settings = {
   messageSound: "ding",
   soundVolume: 0.7,
 };
+
+/**
+ * Interface scale, as a page zoom (so layout, viewport units and pointer
+ * coordinates all agree — CSS `zoom` would break them): the webview's zoom
+ * on desktop, the viewport tag's scale on phones (MainActivity lets the tag
+ * drive it on Android).
+ */
+let uiScaleNow = 1;
+const PHONE_UA = typeof navigator !== "undefined" && /android|iphone|ipad/i.test(navigator.userAgent);
+function applyUiScale(scale: number) {
+  const s = Math.max(0.8, Math.min(1.3, Number(scale) || 1));
+  if (Math.abs(s - uiScaleNow) < 0.001) return;
+  uiScaleNow = s;
+  const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  if (inTauri && !PHONE_UA) {
+    void import("@tauri-apps/api/webview")
+      .then((m) => m.getCurrentWebview().setZoom(s))
+      .catch((e) => console.warn("[aqua] zoom:", e));
+    return;
+  }
+  const meta = document.querySelector('meta[name="viewport"]');
+  if (!meta) return;
+  meta.setAttribute("content", s === 1
+    ? "width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    : `initial-scale=${s}, minimum-scale=${s}, maximum-scale=${s}, user-scalable=no, viewport-fit=cover`);
+}
 
 const KEY = "aqua-settings";
 
@@ -295,9 +327,10 @@ function apply(s: Settings) {
   // Density affects base padding & gap scale through a multiplier.
   root.style.setProperty("--density", s.density === "compact" ? "0.84" : "1");
 
-  // Font scale
+  // Text size: message text, chat rows and the composer follow --font-scale.
   root.style.setProperty("--font-scale", String(s.fontScale));
   root.style.fontSize = `${16 * s.fontScale}px`;
+  applyUiScale(s.uiScale ?? 1);
 
   // Chat wallpaper — ChatWindow reads `--chat-wallpaper` on the
   // .messages container. "none" clears it; "custom" uses the stored
@@ -364,7 +397,7 @@ function apply(s: Settings) {
   root.classList.toggle("no-autoplay-stickers", s.autoplayStickers === false);
   root.classList.toggle("glass-menus", !!s.glassMenus);
   root.classList.toggle("contrast-rows", !!s.contrastRows);
-  root.style.setProperty("--menu-alpha", `${Math.round((s.menuAlpha ?? 0.7) * 100)}%`);
+  root.style.setProperty("--menu-alpha", `${Math.round((s.menuAlpha ?? MENU_ALPHA) * 100)}%`);
 
   // Custom UI font loaded from a file the user picked.
   applyCustomFont(s);

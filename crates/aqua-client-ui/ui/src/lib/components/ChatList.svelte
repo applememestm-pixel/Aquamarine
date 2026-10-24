@@ -35,6 +35,40 @@
   import { chatGroups, openGroupId, createGroup, addToGroup, removeFromGroup, type ChatGroup } from "../chatGroups";
   import type { ChatSummary } from "../types";
   import { openFolderManager } from "./FolderManager.svelte";
+  import { openProfile } from "./ProfileModal.svelte";
+  import { profile } from "../profile";
+  import { ping } from "../ping";
+  import { accounts, loadAccounts, switchAccount } from "../accounts";
+
+  // ---- Phones: your avatar in the title row. Tap — your profile; hold —
+  // the accounts on this device (switch, or add one more). ----
+  const meLetter = $derived(((($profile.display_name && $profile.display_name !== "You") ? $profile.display_name : $info?.username) || "?").charAt(0).toUpperCase());
+  let accountsOpen = $state(false);
+  let switching = $state(false);
+  let meTimer: ReturnType<typeof setTimeout> | null = null;
+  let meHeld = false;
+  function meDown(e: PointerEvent) {
+    meHeld = false;
+    if (e.button !== 0) return;
+    if (meTimer) clearTimeout(meTimer);
+    meTimer = setTimeout(() => { meTimer = null; meHeld = true; openAccounts(); }, 420);
+  }
+  function meCancel() { if (meTimer) { clearTimeout(meTimer); meTimer = null; } }
+  function meClick() { meCancel(); if (meHeld) { meHeld = false; return; } openProfile(); }
+  function openAccounts() {
+    try { navigator.vibrate?.(12); } catch { /* no vibration */ }
+    accountsOpen = true;
+    void loadAccounts();
+  }
+  async function pickAccount(slot: string) {
+    if (switching) return;
+    switching = true;
+    try { await switchAccount(slot); } catch (e) { switching = false; showToast(String(e)); }
+  }
+  async function forgetAccount(slot: string) {
+    try { await api.accountForget(slot); await loadAccounts(); } catch (e) { showToast(String(e)); }
+  }
+  const hostOf = (u: string | null) => { try { return u ? new URL(u).host : ""; } catch { return u ?? ""; } };
 
   // ---- Archive (Telegram): archived chats live behind one row ----
   let showArchive = $state(false);
@@ -251,10 +285,17 @@
     try { navigator.vibrate?.(12); } catch { /* no vibration */ }
     let msgs: ChatMessage[] = [];
     try { msgs = await api.getMessages(id); } catch { /* show the header anyway */ }
+    peekAt = Date.now();
     peek = { id, msgs: msgs.filter((m) => m.kind.type !== "date_separator").slice(-30) };
   }
+  // The veil appears under the finger that is still holding the avatar: the
+  // long press's own contextmenu (and a stray click on release) land on it
+  // and must not close the peek they opened.
+  let peekAt = 0;
+  const peekSettled = () => Date.now() - peekAt > 650;
   function closePeek() { peek = null; }
-  function openFromPeek() { const id = peek?.id; peek = null; if (id) void selectChat(id); }
+  function dismissPeek() { if (peekSettled()) peek = null; }
+  function openFromPeek() { if (!peekSettled()) return; const id = peek?.id; peek = null; if (id) void selectChat(id); }
   let peekScroll = $state<HTMLElement | null>(null);
   $effect(() => { if (peek && peekScroll) peekScroll.scrollTop = peekScroll.scrollHeight; });
   function isMine(m: ChatMessage) { return m.from === "me" || (!!$info?.username && m.from === $info.username); }
@@ -439,8 +480,13 @@
   <div class="resize-handle" onpointerdown={startResize} ondblclick={resetWidth} title={$t("Drag to resize · double-click to reset")}></div>
   <!-- Phones: a title row like Telegram's ("Aquamarine" + menu). -->
   <div class="m-title">
+    <button class="m-me" onpointerdown={meDown} onpointerup={meCancel} onpointercancel={meCancel} onpointerleave={meCancel}
+      onclick={meClick} oncontextmenu={(e) => e.preventDefault()} aria-label={$t("Profile")} title={$t("Tap — profile, hold — accounts")}>
+      {#if $profile.avatar_url}<img src={$profile.avatar_url} alt="" draggable="false" />{:else}{meLetter}{/if}
+    </button>
     <span class="m-name">Aquamarine</span>
-    {#if $info && !$info.connected}<span class="m-conn">{$t("Connecting…")}</span>{/if}
+    {#if $info && !$info.connected}<span class="m-conn">{$t("Connecting…")}</span>
+    {:else if $ping != null}<span class="m-ping" class:slow={$ping >= 150} class:bad={$ping >= 400} title={$t("Ping to the server")}>{$ping} {$t("ms")}</span>{/if}
     <button class="m-menu" onclick={() => (plusMenuOpen = !plusMenuOpen)} aria-label={$t("New")}>
       <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
     </button>
@@ -712,7 +758,7 @@
     {@const pid = peek.id}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div class="peek-veil" onclick={closePeek} oncontextmenu={(e) => { e.preventDefault(); closePeek(); }}>
+    <div class="peek-veil" onclick={dismissPeek} oncontextmenu={(e) => e.preventDefault()}>
       <div class="peek" onclick={(e) => e.stopPropagation()}>
         <button class="peek-card" onclick={openFromPeek} title={$t("Open")}>
           <div class="peek-head">
@@ -754,11 +800,35 @@
       </div>
     </div>
   {/if}
-  <!-- Phones: compose button over the list, like Telegram. -->
-  {#if !showArchive}
-    <button class="m-fab" onclick={() => openNewChatDialog()} aria-label={$t("New chat")} title={$t("New chat")}>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
-    </button>
+  {#if accountsOpen}
+    <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+    <div class="acc-scrim" onclick={() => { if (!switching) accountsOpen = false; }}></div>
+    <div class="acc-sheet" role="dialog" aria-label={$t("Accounts")}>
+      <div class="acc-grab"></div>
+      <div class="acc-title">{$t("Accounts")}</div>
+      {#each $accounts as a (a.slot)}
+        <div class="acc-row" class:on={a.active}>
+          <button class="acc-pick" disabled={switching} onclick={() => { if (a.active) { accountsOpen = false; openProfile(); } else void pickAccount(a.slot); }}>
+            <span class="acc-ava">
+              {#if a.active && $profile.avatar_url}<img src={$profile.avatar_url} alt="" />{:else}{(a.username || "?").charAt(0).toUpperCase()}{/if}
+            </span>
+            <span class="acc-who">
+              <span class="acc-name">{a.username ? "@" + a.username : $t("Not signed in")}</span>
+              <span class="acc-sub">{hostOf(a.server_url) || $t("Sign-in not finished")}</span>
+            </span>
+            {#if a.active}<span class="acc-tick">{@html icons.check}</span>{/if}
+          </button>
+          {#if !a.active && !a.registered && a.slot}
+            <button class="acc-x" onclick={() => forgetAccount(a.slot)} aria-label={$t("Remove")} title={$t("Remove")}>×</button>
+          {/if}
+        </div>
+      {/each}
+      <button class="acc-add" disabled={switching} onclick={() => pickAccount("new")}>
+        <span class="acc-plus">+</span>{$t("Add account")}
+      </button>
+      {#if switching}<div class="acc-note">{$t("Opening the account…")}</div>
+      {:else}<div class="acc-note">{$t("Each account keeps its own chats on this device. The app restarts to switch.")}</div>{/if}
+    </div>
   {/if}
 </aside>
 
@@ -827,6 +897,8 @@
     backdrop-filter: blur(14px) saturate(1.2); -webkit-backdrop-filter: blur(14px) saturate(1.2);
     animation: peek-fade 0.18s ease-out;
   }
+  @keyframes acc-fade { from { opacity: 0; } }
+  @keyframes acc-up { from { transform: translateY(40px); opacity: 0; } }
   @keyframes peek-fade { from { opacity: 0; } }
   .peek {
     width: min(420px, 100%); max-height: calc(100vh - 32px);
@@ -1152,7 +1224,7 @@
   }
   .chat-name {
     font-weight: 600;
-    font-size: 14.5px;
+    font-size: calc(14.5px * var(--font-scale, 1));
     color: var(--fg);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1172,7 +1244,7 @@
     justify-content: space-between;
   }
   .chat-preview {
-    font-size: 13px;
+    font-size: calc(13px * var(--font-scale, 1));
     color: var(--fg-muted);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1263,10 +1335,44 @@
   @media (max-width: 720px) { .search-kbd { display: none; } }
 
   /* ---- Phones: the main page as in the new Telegram ---- */
-  .m-title, .m-fab { display: none; }
+  .m-title, .acc-scrim, .acc-sheet { display: none; }
   @media (max-width: 720px) {
-    .m-title { display: flex; align-items: center; gap: 10px; padding: 12px 10px 2px 20px; }
-    .m-name { font-size: 27px; font-weight: 800; letter-spacing: -0.02em; font-family: var(--font-display, inherit); }
+    .m-title { display: flex; align-items: center; gap: 10px; padding: 12px 10px 2px 16px; }
+    .m-me { width: 40px; height: 40px; flex-shrink: 0; border-radius: 50%; border: none; padding: 0; overflow: hidden; position: relative;
+      display: grid; place-items: center; font-weight: 800; font-size: 16px; color: #06070c;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2)); touch-action: manipulation;
+      -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
+    .m-me img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+    .m-ping { flex-shrink: 0; white-space: nowrap; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--online, #35D399);
+      padding: 2px 8px; border-radius: 10px; background: color-mix(in srgb, currentColor 13%, transparent); align-self: center; margin-top: 4px; }
+    .m-ping.slow { color: #F0B232; }
+    .m-ping.bad { color: var(--danger, #FF4D6D); }
+    /* Accounts: a sheet from the bottom. */
+    .acc-scrim { display: block; position: fixed; inset: 0; z-index: 80; background: rgba(0,0,0,.35); animation: acc-fade .2s ease; }
+    .acc-sheet { display: flex; flex-direction: column; gap: 2px; position: fixed; left: 8px; right: 8px; z-index: 81;
+      bottom: calc(8px + env(safe-area-inset-bottom, 0px)); padding: 6px 8px 12px; border-radius: 26px;
+      background: color-mix(in srgb, var(--bg-shell) var(--menu-alpha, 82%), transparent);
+      backdrop-filter: blur(24px) saturate(1.5); -webkit-backdrop-filter: blur(24px) saturate(1.5);
+      border: 1px solid var(--border-strong); box-shadow: 0 20px 50px -20px rgba(0,0,0,.8);
+      animation: acc-up .3s cubic-bezier(.2,.8,.2,1); }
+    .acc-grab { width: 38px; height: 4px; border-radius: 2px; background: var(--border-strong); margin: 4px auto 6px; }
+    .acc-title { font-size: 13px; font-weight: 700; color: var(--fg-dim); text-transform: uppercase; letter-spacing: .06em; padding: 4px 12px 6px; }
+    .acc-row { display: flex; align-items: center; gap: 4px; border-radius: 16px; }
+    .acc-row.on { background: var(--accent-soft); }
+    .acc-pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: none; background: transparent; color: var(--fg); text-align: left; border-radius: 16px; }
+    .acc-ava { width: 42px; height: 42px; border-radius: 50%; flex-shrink: 0; position: relative; overflow: hidden; display: grid; place-items: center;
+      font-weight: 800; color: #06070c; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+    .acc-ava img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+    .acc-who { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+    .acc-name { font-size: 16px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .acc-sub { font-size: 13px; color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .acc-tick { color: var(--accent); display: grid; }
+    .acc-tick :global(svg) { width: 20px; height: 20px; }
+    .acc-x { width: 40px; height: 40px; border: none; background: transparent; color: var(--fg-dim); font-size: 22px; border-radius: 50%; }
+    .acc-add { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: none; background: transparent; color: var(--accent); font: 600 16px var(--font-ui); border-radius: 16px; text-align: left; }
+    .acc-plus { width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; font-size: 24px; background: var(--accent-soft); }
+    .acc-note { font-size: 12.5px; color: var(--fg-dim); padding: 6px 12px 0; line-height: 1.4; }
+    .m-name { font-size: 27px; font-weight: 800; letter-spacing: -0.02em; font-family: var(--font-display, inherit); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .m-conn { font-size: 13px; color: var(--fg-dim); }
     .m-menu { margin-left: auto; width: 44px; height: 44px; border-radius: 50%; border: none; background: transparent; color: var(--fg); display: grid; place-items: center; }
     .m-menu svg { width: 22px; height: 22px; }
@@ -1293,20 +1399,10 @@
     .chat-item.active { background: transparent; width: 100%; margin-right: 0; border-radius: 16px; }
     .chat-item.active::before, .chat-item.active::after { display: none; }
     .chat-item.active .chat-time { color: var(--fg-dim); }
-    .chat-name { font-size: 16.5px; }
-    .chat-preview { font-size: 15px; }
+    .chat-name { font-size: calc(16.5px * var(--font-scale, 1)); }
+    .chat-preview { font-size: calc(15px * var(--font-scale, 1)); }
     .chat-time { font-size: 13px; }
     .chat-row-1 { margin-bottom: 3px; }
-    .m-fab {
-      display: grid; place-items: center; position: fixed; z-index: 55;
-      right: 18px; bottom: calc(92px + env(safe-area-inset-bottom, 0px));
-      width: 60px; height: 60px; border-radius: 50%; border: none;
-      color: #06070c; background: linear-gradient(135deg, var(--accent), var(--accent-2));
-      box-shadow: 0 14px 30px -10px var(--accent-glow);
-      transition: transform .32s cubic-bezier(.2,.8,.2,1);
-    }
-    .m-fab svg { width: 25px; height: 25px; }
-    :global(html.dock-hidden) .m-fab { transform: translateY(78px); }
-    :global(body.chat-open) .m-fab { display: none; }
+
   }
 </style>

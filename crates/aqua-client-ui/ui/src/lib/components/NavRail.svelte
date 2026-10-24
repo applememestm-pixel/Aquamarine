@@ -12,34 +12,40 @@
   import { icons } from "../icons";
   import { activeTab, type NavTab } from "../stores";
   import { openSettings } from "../panels/settings";
-  import { openProfile } from "./ProfileModal.svelte";
-  import { profile } from "../profile";
-  import { info } from "../stores";
 
-  type Item = { id: string; label: string; svg?: string; tab?: NavTab; mobileOnly?: boolean };
-  const items: Item[] = [
+  type Item = { id: string; label: string; svg: string; tab?: NavTab; mobileOnly?: boolean; desktopOnly?: boolean };
+  // Phones get four: Chats, Files, Contacts (with recent calls inside, like
+  // Telegram) and Settings; your profile is the avatar on the main page.
+  const all: Item[] = [
     { id: "chats", label: "Chats", svg: icons.chats, tab: "chats" },
-    { id: "calls", label: "Calls", svg: icons.phone, tab: "calls" },
+    { id: "calls", label: "Calls", svg: icons.phone, tab: "calls", desktopOnly: true },
     { id: "files", label: "Files", svg: icons.files, tab: "files" },
     { id: "contacts", label: "Contacts", svg: icons.contacts, tab: "contacts" },
     { id: "settings", label: "Settings", svg: icons.settings, mobileOnly: true },
-    { id: "profile", label: "Profile", mobileOnly: true },
   ];
-  const letter = $derived(((($profile.display_name && $profile.display_name !== "You") ? $profile.display_name : $info?.username) || "?").charAt(0).toUpperCase());
+  const mq = typeof window !== "undefined" ? matchMedia("(max-width: 720px)") : null;
+  let phone = $state(!!mq?.matches);
+  onMount(() => {
+    const on = () => (phone = !!mq?.matches);
+    mq?.addEventListener("change", on);
+    return () => mq?.removeEventListener("change", on);
+  });
+  const items = $derived(all.filter((i) => (phone ? !i.desktopOnly : !i.mobileOnly)));
 
   function activate(it: Item) {
     if (it.tab) activeTab.set(it.tab);
     else if (it.id === "settings") openSettings();
-    else if (it.id === "profile") openProfile();
   }
-  const activeIndex = $derived(Math.max(0, items.findIndex((i) => i.tab === $activeTab)));
+  // On phones the calls list lives under Contacts.
+  const shownTab = $derived(phone && $activeTab === "calls" ? "contacts" : $activeTab);
+  const activeIndex = $derived(Math.max(0, items.findIndex((i) => i.tab === shownTab)));
 
   // ---- press and hold: drag the highlight, drop it on a section ----
   let bar: HTMLElement | undefined = $state();
   let dragX = $state<number | null>(null);   // pill centre while dragging (px in the bar)
   let holdTimer: ReturnType<typeof setTimeout> | null = null;
   let pressX = 0, pressY = 0, swallowClick = false, lastIdx = -1;
-  const mobile = () => matchMedia("(max-width: 720px)").matches;
+  const mobile = () => phone;
   function idxAt(x: number): number {
     if (!bar) return 0;
     const r = bar.getBoundingClientRect();
@@ -121,16 +127,12 @@
     <button
       class="nav-btn"
       class:mobile-only={item.mobileOnly}
-      class:active={item.tab ? $activeTab === item.tab : false}
+      class:active={item.tab ? shownTab === item.tab : false}
       class:hover={dragX != null && lastIdx === i}
       data-label={$t(item.label)}
       onclick={(e) => { if (swallowClick) { e.preventDefault(); return; } activate(item); }}
     >
-      {#if item.id === "profile"}
-        <span class="me-ava">{#if $profile.avatar_url}<img src={$profile.avatar_url} alt="" />{:else}{letter}{/if}</span>
-      {:else}
-        {@html item.svg}
-      {/if}
+      {@html item.svg}
       <span class="nav-lbl">{$t(item.label)}</span>
     </button>
     {#if item.id === "contacts"}<div class="rail-spacer"></div>{/if}
@@ -205,9 +207,6 @@
     pointer-events: none;
   }
   .nav-lbl { display: none; }
-  .me-ava { width: 26px; height: 26px; border-radius: 50%; position: relative; overflow: hidden; display: grid; place-items: center;
-    background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070c; font-weight: 700; font-size: 12px; }
-  .me-ava img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 
   /* ---- Phones: a floating tab bar, like the new Telegram ---- */
   @media (max-width: 720px) {
@@ -222,15 +221,16 @@
       gap: 0;
       border: 1px solid var(--border-strong);
       border-radius: 32px;
-      background: color-mix(in srgb, var(--bg-surface, #12151d) 86%, transparent);
-      backdrop-filter: blur(18px) saturate(1.4);
-      -webkit-backdrop-filter: blur(18px) saturate(1.4);
+      /* Frosted glass: the list shows through, softly. */
+      background: color-mix(in srgb, var(--bg-surface, #12151d) 58%, transparent);
+      backdrop-filter: blur(22px) saturate(1.6);
+      -webkit-backdrop-filter: blur(22px) saturate(1.6);
       box-shadow: 0 18px 40px -18px rgba(0,0,0,.8), 0 1px 0 rgba(255,255,255,.05) inset;
       z-index: 60;
       touch-action: pan-y;
       user-select: none;
       -webkit-user-select: none;
-      transition: transform .32s cubic-bezier(.2,.8,.2,1), opacity .25s ease;
+      transition: transform .38s cubic-bezier(.22,1,.36,1), opacity .3s ease;
     }
     .rail.hidden:not(.dragging) { transform: translateY(calc(100% + 24px)); opacity: 0; pointer-events: none; }
     .brand, .rail-divider, .rail-spacer { display: none; }
@@ -258,16 +258,15 @@
       border-radius: 26px;
       background: var(--accent-soft);
       box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent) inset;
-      transition: left .34s cubic-bezier(.2,.9,.25,1.12), transform .2s ease, width .2s ease;
+      transition: left .42s cubic-bezier(.22,1,.36,1), transform .25s cubic-bezier(.22,1,.36,1), width .2s ease;
     }
     /* …and follows the finger while held. */
     .rail.dragging .pill {
       left: calc(var(--drag-x) - (100% - 12px) / var(--n) / 2);
-      transition: transform .2s ease;
+      transition: transform .25s cubic-bezier(.22,1,.36,1);
       transform: scale(1.08, 1.12);
       background: color-mix(in srgb, var(--accent) 24%, transparent);
       box-shadow: 0 8px 24px -8px var(--accent-glow), 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent) inset;
     }
-    .me-ava { width: 25px; height: 25px; }
   }
 </style>

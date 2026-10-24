@@ -388,12 +388,71 @@
   type GalItem = { uri: string; mime: string; video: boolean; duration: number; thumb: string };
   let gallery = $state<{ state: "idle" | "ok" | "denied" | "none"; items: GalItem[] }>({ state: "idle", items: [] });
   let gallerySel = $state<string[]>([]);
+  // Albums (Camera, Screenshots, …) in a menu at the top, like the system picker.
+  type GalAlbum = { id: string; name: string; count: number; cover: string };
+  let albums = $state<GalAlbum[]>([]);
+  let album = $state("");
+  let albumMenu = $state(false);
+  const albumName = (id: string) => {
+    if (id === "") return tr("All media");
+    if (id === "*video") return tr("All videos");
+    return albums.find((a) => a.id === id)?.name || tr("Album");
+  };
   async function galleryLoad() {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      const r = await invoke<{ granted: boolean; items: GalItem[] }>("gallery_recent", { limit: 90 });
+      const r = await invoke<{ granted: boolean; items: GalItem[] }>("gallery_recent", { limit: 120, bucket: album });
       gallery = { state: r.granted ? "ok" : "denied", items: r.items ?? [] };
     } catch { gallery = { state: "none", items: [] }; }
+  }
+  async function albumsLoad() {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      albums = (await invoke<{ albums: GalAlbum[] }>("gallery_albums")).albums ?? [];
+    } catch { albums = []; }
+  }
+  function pickAlbum(id: string) {
+    albumMenu = false;
+    if (id === album) return;
+    album = id;
+    gallery = { ...gallery, items: [] };
+    void galleryLoad();
+  }
+  // ---- The sheet follows the finger: pull up to fill the screen, down to
+  // close. Only transforms move (no relayout), so it stays smooth. ----
+  let sheetFull = $state(false);
+  let sheetDy = $state(0);
+  let sheetClosing = $state(false);
+  let sheetDrag: { y0: number; t0: number } | null = $state(null);
+  function sheetDown(e: PointerEvent) {
+    if (e.button !== 0 || (e.target as HTMLElement).closest("button")) return;
+    sheetDrag = { y0: e.clientY, t0: performance.now() };
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* gone */ }
+  }
+  function sheetMove(e: PointerEvent) {
+    if (!sheetDrag) return;
+    const dy = e.clientY - sheetDrag.y0;
+    // Up past the full height only gives a little (rubber band).
+    sheetDy = dy < 0 && sheetFull ? dy / 5 : dy;
+  }
+  function sheetUp(e: PointerEvent) {
+    if (!sheetDrag) return;
+    const dy = e.clientY - sheetDrag.y0;
+    const v = dy / Math.max(1, performance.now() - sheetDrag.t0);
+    sheetDrag = null;
+    sheetDy = 0;
+    if (dy < -50 || v < -0.5) sheetFull = true;
+    else if (dy > 50 || v > 0.5) {
+      if (sheetFull && dy < 320) sheetFull = false;
+      else closeSheet();
+    }
+  }
+  function closeSheet() {
+    if (!phoneUI) { attachMenuOpen = false; return; }
+    if (sheetClosing) return;
+    sheetClosing = true;
+    albumMenu = false;
+    setTimeout(() => { attachMenuOpen = false; sheetClosing = false; }, 260);
   }
   async function galleryAsk() {
     try { const { invoke } = await import("@tauri-apps/api/core"); await invoke("gallery_ask"); } catch { /* not here */ }
@@ -411,7 +470,12 @@
     if (chat && pick.length) await sendFiles(chat.id, pick, "media");
   }
   function fmtDur(ms: number) { const s = Math.round(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
-  $effect(() => { if (attachMenuOpen && phoneUI) { gallerySel = []; void galleryLoad(); } });
+  $effect(() => {
+    if (attachMenuOpen && phoneUI) {
+      gallerySel = []; sheetFull = false; sheetDy = 0; albumMenu = false; album = "";
+      void galleryLoad(); void albumsLoad();
+    }
+  });
   let mediaMode = $state<"voice" | "circle">("voice");
   let holdTimer: ReturnType<typeof setTimeout> | null = null;
   let holdFired = false;
@@ -3363,12 +3427,40 @@
         {#if attachMenuOpen}
           {#if phoneUI}
             <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
-            <div class="ap-scrim" onclick={() => (attachMenuOpen = false)}></div>
+            <div class="ap-scrim" class:closing={sheetClosing} onclick={closeSheet}></div>
           {/if}
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-          <div class="attach-pop" class:sheet={phoneUI} role="menu" tabindex="-1" onmousedown={(e) => e.stopPropagation()}>
+          <div class="attach-pop" class:sheet={phoneUI} class:full={sheetFull} class:dragging={!!sheetDrag} class:closing={sheetClosing}
+            style:--dy={phoneUI ? `${sheetDy}px` : undefined}
+            role="menu" tabindex="-1" onmousedown={(e) => e.stopPropagation()}>
             {#if phoneUI}
-              <div class="ap-grab"></div>
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div class="ap-head" onpointerdown={sheetDown} onpointermove={sheetMove} onpointerup={sheetUp} onpointercancel={sheetUp}>
+                <div class="ap-grab"></div>
+                <div class="ap-bar">
+                  <button class="ap-close" onclick={closeSheet} aria-label={$t("Close")}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+                  </button>
+                  <button class="ap-album" class:open={albumMenu} disabled={albums.length < 2} onclick={() => (albumMenu = !albumMenu)}>
+                    <span>{albumName(album)}</span>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                  </button>
+                  {#if gallerySel.length}<span class="ap-count">{$t("{n} selected", { n: gallerySel.length })}</span>{/if}
+                </div>
+              </div>
+              {#if albumMenu}
+                <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+                <div class="ap-albums-veil" onclick={() => (albumMenu = false)}></div>
+                <div class="ap-albums" role="listbox" aria-label={$t("Albums")}>
+                  {#each albums as a (a.id)}
+                    <button class="ap-alb" class:on={a.id === album} role="option" aria-selected={a.id === album} onclick={() => pickAlbum(a.id)}>
+                      <span class="ap-alb-cover">{#if a.cover}<img src={a.cover} alt="" />{/if}</span>
+                      <span class="ap-alb-name">{albumName(a.id)}</span>
+                      <span class="ap-alb-n">{a.count}</span>
+                    </button>
+                  {/each}
+                </div>
+              {/if}
               <div class="ap-gallery">
                 <button class="ap-tile ap-pick" onclick={() => { attachMenuOpen = false; pickAndSendFile("media"); }}>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>
@@ -3380,16 +3472,25 @@
                 {#each gallery.items as g (g.uri)}
                   {@const n = gallerySel.indexOf(g.uri)}
                   <button class="ap-tile" class:on={n >= 0} onclick={() => galleryToggle(g.uri)}>
-                    {#if g.thumb}<img src={g.thumb} alt="" loading="lazy" />{/if}
+                    {#if g.thumb}<img src={g.thumb} alt="" loading="lazy" decoding="async" />{/if}
                     {#if g.video}<span class="ap-dur">{fmtDur(g.duration)}</span>{/if}
                     <span class="ap-check">{n >= 0 ? n + 1 : ""}</span>
                   </button>
                 {/each}
               </div>
-              {#if gallerySel.length}
-                <button class="ap-send" onclick={gallerySend}>{$t("Send {n}", { n: gallerySel.length })}</button>
-              {/if}
+            {:else}
+              {@render attachActions()}
             {/if}
+          </div>
+          {#if phoneUI}
+            <!-- Phones: the actions as a floating tab bar, the send button above it. -->
+            <div class="ap-dock" class:closing={sheetClosing}>{@render attachActions()}</div>
+            {#if gallerySel.length}
+              <button class="ap-send" class:closing={sheetClosing} onclick={gallerySend}>{$t("Send {n}", { n: gallerySel.length })}</button>
+            {/if}
+          {/if}
+        {/if}
+        {#snippet attachActions()}
             <div class="ap-items">
             <button class="ap-item" onclick={() => { attachMenuOpen = false; pickAndSendFile("media"); }}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>
@@ -3435,8 +3536,7 @@
               </button>
             {/if}
             </div>
-          </div>
-        {/if}
+        {/snippet}
         <button
           class="attach-btn"
           class:disabled={!liveChat}
@@ -3923,7 +4023,7 @@
     max-width: 620px;
     word-wrap: break-word;
     overflow-wrap: break-word;
-    font-size: 14.5px;
+    font-size: calc(14.5px * var(--font-scale, 1));
     line-height: 1.45;
     color: var(--fg);
     border: 1px solid var(--border);
@@ -4347,43 +4447,95 @@
   }
   @keyframes ap-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
   /* ---- Phones: a bottom sheet — gallery on top, the actions as a tab bar ---- */
-  .ap-scrim { position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,.45); animation: ap-fade .2s ease; }
+  .ap-scrim { position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,.3); animation: ap-fade .25s ease; transition: opacity .26s ease; }
+  .ap-scrim.closing { opacity: 0; }
   @keyframes ap-fade { from { opacity: 0; } }
+  /* The sheet is always full height; the half-open state is a transform, so
+     opening, dragging and closing never re-lay out the grid. */
   .attach-pop.sheet {
+    --h-full: calc(100dvh - 28px - env(safe-area-inset-top, 0px));
+    --h-half: min(64dvh, 620px);
+    --rest: calc(var(--h-full) - var(--h-half));
     position: fixed; left: 0; right: 0; bottom: 0; top: auto; z-index: 71;
-    height: min(78vh, 640px); min-width: 0; padding: 0 0 calc(10px + env(safe-area-inset-bottom, 0px));
-    border-radius: 24px 24px 0 0; border-left: none; border-right: none; border-bottom: none;
-    display: flex; flex-direction: column; background: var(--bg-shell);
-    animation: ap-up .26s cubic-bezier(.2,.8,.2,1);
+    height: var(--h-full); min-width: 0; padding: 0;
+    border-radius: 26px 26px 0 0; border-left: none; border-right: none; border-bottom: none;
+    display: flex; flex-direction: column; overflow: hidden;
+    /* Frosted glass always (see-through menus make it lighter still). */
+    background: color-mix(in srgb, var(--bg-shell) 84%, transparent);
+    backdrop-filter: blur(26px) saturate(1.5); -webkit-backdrop-filter: blur(26px) saturate(1.5);
+    transform: translateY(calc(var(--rest) + var(--dy, 0px)));
+    transition: transform .42s cubic-bezier(.22,1,.36,1);
+    animation: ap-up .42s cubic-bezier(.22,1,.36,1);
+    will-change: transform;
+    touch-action: pan-y;
   }
-  @keyframes ap-up { from { transform: translateY(60%); opacity: .5; } }
-  .ap-grab { width: 40px; height: 4px; border-radius: 2px; background: var(--border-strong); margin: 8px auto 6px; flex-shrink: 0; }
-  .ap-gallery { flex: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; padding: 0 3px 96px; align-content: start; }
-  .ap-tile { position: relative; aspect-ratio: 1; border: none; padding: 0; overflow: hidden; background: var(--bg-surface-2); color: var(--fg-muted); border-radius: 4px; }
-  .ap-tile img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .18s ease; }
+  .attach-pop.sheet.full { transform: translateY(var(--dy, 0px)); }
+  .attach-pop.sheet.dragging { transition: none; }
+  .attach-pop.sheet.closing { transform: translateY(100%); transition: transform .26s cubic-bezier(.4,0,1,1); }
+  @keyframes ap-up { from { transform: translateY(100%); } }
+  .ap-head { flex-shrink: 0; touch-action: none; cursor: grab; }
+  .ap-grab { width: 40px; height: 4px; border-radius: 2px; background: var(--border-strong); margin: 8px auto 4px; }
+  .ap-bar { display: flex; align-items: center; gap: 6px; padding: 0 12px 8px 8px; min-height: 44px; }
+  .ap-close { width: 40px; height: 40px; border-radius: 50%; border: none; background: transparent; color: var(--fg-muted); display: grid; place-items: center; flex-shrink: 0; }
+  .ap-close svg { width: 20px; height: 20px; }
+  .ap-album { display: inline-flex; align-items: center; gap: 6px; border: none; background: transparent; color: var(--fg); font: 700 18px var(--font-ui); padding: 6px 10px; border-radius: 14px; min-width: 0; }
+  .ap-album span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ap-album svg { width: 18px; height: 18px; flex-shrink: 0; transition: transform .25s cubic-bezier(.22,1,.36,1); color: var(--fg-muted); }
+  .ap-album.open svg { transform: rotate(180deg); }
+  .ap-album:disabled { opacity: 1; }
+  .ap-album:disabled svg { display: none; }
+  .ap-count { margin-left: auto; font-size: 14px; font-weight: 600; color: var(--accent); white-space: nowrap; }
+  /* Albums: a menu under the title, like the system picker's. */
+  .ap-albums-veil { position: absolute; inset: 0; z-index: 3; }
+  .ap-albums { position: absolute; z-index: 4; top: 62px; left: 10px; width: min(330px, calc(100% - 20px)); max-height: min(60dvh, 480px); overflow-y: auto;
+    padding: 6px; border-radius: 20px; border: 1px solid var(--border-strong);
+    background: color-mix(in srgb, var(--bg-surface) 82%, transparent);
+    backdrop-filter: blur(22px) saturate(1.5); -webkit-backdrop-filter: blur(22px) saturate(1.5);
+    box-shadow: 0 22px 50px -18px rgba(0,0,0,.85); transform-origin: top left; animation: ap-menu .22s cubic-bezier(.22,1,.36,1); }
+  @keyframes ap-menu { from { opacity: 0; transform: scale(.94) translateY(-6px); } }
+  .ap-alb { display: flex; align-items: center; gap: 14px; width: 100%; padding: 7px 10px 7px 7px; border: none; border-radius: 14px; background: transparent; color: var(--fg); text-align: left; font: 500 16px var(--font-ui); }
+  .ap-alb.on, .ap-alb:active { background: var(--accent-soft); }
+  .ap-alb-cover { width: 46px; height: 46px; border-radius: 10px; overflow: hidden; flex-shrink: 0; background: var(--bg-surface-2); }
+  .ap-alb-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .ap-alb-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ap-alb-n { color: var(--fg-dim); font-size: 14px; font-variant-numeric: tabular-nums; }
+  /* Square tiles. The rows are sized by the tiles (max-content): with "auto"
+     rows a too-short container squeezed them into overlapping strips. */
+  .ap-gallery { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-auto-rows: max-content; gap: 3px; padding: 0 3px calc(110px + env(safe-area-inset-bottom, 0px) + var(--rest)); align-content: start; }
+  .attach-pop.sheet.full .ap-gallery { padding-bottom: calc(110px + env(safe-area-inset-bottom, 0px)); }
+  .ap-tile { position: relative; aspect-ratio: 1 / 1; width: 100%; height: auto; min-height: 0; border: none; padding: 0; overflow: hidden; background: var(--bg-surface-2); color: var(--fg-muted); border-radius: 4px; }
+  .ap-tile img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .22s cubic-bezier(.22,1,.36,1), border-radius .22s ease; }
   .ap-tile.on img { transform: scale(.86); border-radius: 8px; }
   .ap-pick, .ap-allow { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; font-size: 13px; font-weight: 600; }
   .ap-pick :global(svg) { width: 34px; height: 34px; }
   .ap-allow { color: var(--accent); padding: 8px; text-align: center; }
-  .ap-check { position: absolute; top: 7px; right: 7px; width: 24px; height: 24px; border-radius: 50%; border: 2px solid #fff; background: rgba(0,0,0,.25);
+  .ap-check { position: absolute; top: 7px; right: 7px; width: 24px; height: 24px; box-sizing: border-box; border-radius: 50%; border: 2px solid #fff; background: rgba(0,0,0,.25);
     display: grid; place-items: center; font-size: 12.5px; font-weight: 800; color: #06070c; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
   .ap-tile.on .ap-check { background: var(--accent); border-color: var(--accent); }
   .ap-dur { position: absolute; left: 6px; bottom: 6px; font-size: 11px; font-weight: 700; color: #fff; background: rgba(0,0,0,.5); padding: 1px 6px; border-radius: 8px; }
-  .ap-send { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(96px + env(safe-area-inset-bottom, 0px)); z-index: 2;
-    padding: 12px 26px; border-radius: 26px; border: none; font: 700 15px var(--font-sans, inherit); color: #06070c;
-    background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 12px 28px -10px var(--accent-glow); }
-  .attach-pop.sheet .ap-items {
-    position: absolute; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  .ap-send { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(100px + env(safe-area-inset-bottom, 0px)); z-index: 73;
+    padding: 12px 26px; border-radius: 26px; border: none; font: 700 15px var(--font-ui, inherit); color: #06070c;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 12px 28px -10px var(--accent-glow);
+    animation: ap-send-in .3s cubic-bezier(.22,1,.36,1); transition: opacity .2s ease; }
+  .ap-send.closing { opacity: 0; }
+  @keyframes ap-send-in { from { opacity: 0; transform: translateX(-50%) translateY(14px) scale(.9); } }
+  .ap-dock { position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); z-index: 72;
+    animation: ap-dock-in .42s cubic-bezier(.22,1,.36,1); transition: transform .26s cubic-bezier(.4,0,1,1), opacity .26s ease; }
+  .ap-dock.closing { transform: translateY(140%); opacity: 0; }
+  @keyframes ap-dock-in { from { transform: translateY(140%); } }
+  .ap-dock .ap-items {
     display: flex; gap: 0; overflow-x: auto; scrollbar-width: none; padding: 6px; border-radius: 30px;
-    background: color-mix(in srgb, var(--bg-surface-2) 92%, transparent); border: 1px solid var(--border-strong);
-    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); box-shadow: 0 14px 34px -14px rgba(0,0,0,.8);
+    background: color-mix(in srgb, var(--bg-surface-2) 62%, transparent); border: 1px solid var(--border-strong);
+    backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6); box-shadow: 0 14px 34px -14px rgba(0,0,0,.8);
+    overscroll-behavior-x: contain;
   }
-  .attach-pop.sheet .ap-items::-webkit-scrollbar { display: none; }
-  .attach-pop.sheet .ap-item { flex: 0 0 78px; width: 78px; flex-direction: column; justify-content: center; gap: 4px; padding: 8px 2px; border-radius: 24px; font-size: 11.5px; text-align: center; }
-  .attach-pop.sheet .ap-item span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-  .attach-pop.sheet .ap-item :global(svg) { width: 24px; height: 24px; }
-  .attach-pop.sheet .ap-item:hover { background: transparent; color: inherit; }
-  .attach-pop.sheet .ap-item:active { background: var(--accent-soft); color: var(--accent); }
+  .ap-dock .ap-items::-webkit-scrollbar { display: none; }
+  .ap-dock .ap-item { flex: 0 0 78px; width: 78px; flex-direction: column; justify-content: center; gap: 4px; padding: 8px 2px; border-radius: 24px; font-size: 11.5px; text-align: center; }
+  .ap-dock .ap-item span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .ap-dock .ap-item :global(svg) { width: 24px; height: 24px; }
+  .ap-dock .ap-item:hover { background: transparent; color: inherit; }
+  .ap-dock .ap-item:active { background: var(--accent-soft); color: var(--accent); }
   .ap-item {
     display: flex; align-items: center; gap: 10px; width: 100%;
     padding: 9px 12px; border: none; background: transparent;

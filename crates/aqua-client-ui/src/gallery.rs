@@ -3,20 +3,37 @@
 //! AquaGalleryPlugin). Other platforms answer "unsupported" and the sheet
 //! shows the system picker instead.
 
+/// The newest photos and videos — of one album (`bucket`, from
+/// `gallery_albums`) or of all of them.
 #[tauri::command]
-pub async fn gallery_recent(limit: Option<u32>) -> Result<serde_json::Value, String> {
+pub async fn gallery_recent(limit: Option<u32>, bucket: Option<String>) -> Result<serde_json::Value, String> {
     #[cfg(target_os = "android")]
     {
         let limit = limit.unwrap_or(60);
-        return tauri::async_runtime::spawn_blocking(move || android::call("recent", serde_json::json!({ "limit": limit })))
+        let bucket = bucket.unwrap_or_default();
+        return tauri::async_runtime::spawn_blocking(move || android::call("recent", serde_json::json!({ "limit": limit, "bucket": bucket })))
             .await
             .map_err(|e| e.to_string())?;
     }
     #[cfg(not(target_os = "android"))]
     {
-        let _ = limit;
+        let _ = (limit, bucket);
         Err("unsupported".into())
     }
+}
+
+/// The albums (Camera, Screenshots, Telegram, …) with a count and a cover,
+/// for the menu at the top of the attach sheet.
+#[tauri::command]
+pub async fn gallery_albums() -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    {
+        return tauri::async_runtime::spawn_blocking(|| android::call("albums", serde_json::json!({})))
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(target_os = "android"))]
+    Err("unsupported".into())
 }
 
 #[tauri::command]

@@ -3,6 +3,7 @@ package app.aquamarine.messenger
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
 
 // Copied over the Tauri-generated file by android/patch-project.ps1 and CI.
@@ -11,6 +12,15 @@ class MainActivity : TauriActivity() {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     requestLocalNetworkAccess()
+  }
+
+  // Let the page's viewport tag set the zoom: Settings → Appearance →
+  // Interface scale changes its initial-scale (theme.ts), like a browser's
+  // page zoom. The tag keeps width=device-width otherwise, so nothing else
+  // changes.
+  override fun onWebViewCreate(webView: WebView) {
+    webView.settings.useWideViewPort = true
+    webView.settings.loadWithOverviewMode = false
   }
 
   // Android 17 (targetSdk 37) blocks connections to local / private addresses

@@ -224,7 +224,10 @@ html.wk-lowfx :is(button, a, input, select, textarea) {
   transition-property: background-color, color, border-color, opacity;
 }
 @keyframes aq-pop { from { opacity: 0; transform: translateY(6px) scale(.98); } }
-@keyframes aq-pop-spring { from { opacity: 0; transform: translateY(10px) scale(.94); } 60% { opacity: 1; } }
+/* Windows open in one smooth motion: a short rise and a fade, no bounce. A
+   scale-up from .94 with an overshooting curve read as "the window shrinks,
+   then grows" right after the button's own press. */
+@keyframes aq-pop-spring { from { opacity: 0; transform: translateY(12px); } }
 @keyframes aq-fade { from { opacity: 0; } }
 @keyframes aq-slide-in { from { opacity: .4; transform: translateX(36px); } }
 @keyframes aq-slide-back { from { opacity: .4; transform: translateX(-28px); } }
@@ -235,7 +238,7 @@ html.wk-lowfx :is(button, a, input, select, textarea) {
      window on the CPU, and every click felt sticky. */
   html:not(.wk-lowfx) :is(button:not(:disabled):active, [role="button"]:active, a:active) { scale: .97; }
   /* Dialogs that don't animate themselves pop in with a soft spring. */
-  html:not(.wk-lowfx) :is([role="dialog"], [role="alertdialog"]) { animation: aq-pop-spring .26s var(--ease-spring); }
+  html:not(.wk-lowfx) :is([role="dialog"], [role="alertdialog"]) { animation: aq-pop-spring .32s cubic-bezier(.22, 1, .36, 1); }
   html:not(.wk-lowfx) :is([role="menu"], [role="listbox"]) { animation: aq-pop .16s var(--ease-out); }
 }
 
@@ -365,6 +368,15 @@ html.autoscrolling.as-down, html.autoscrolling.as-down * { cursor: url("data:ima
 /* Drawn without the GPU (llvmpipe): drop the costly effects. */
 .soft-render * { box-shadow: none !important; text-shadow: none !important; }
 .soft-render *, .soft-render *::before, .soft-render *::after { transition-duration: 0s !important; }
+
+/* Phones: thin overlay-like scrollbars (a 10 px gutter eats the edge), and
+   nothing scrolls sideways — a page that "wobbles" left and right under the
+   thumb feels broken. Rows that don't fit wrap or become drop-downs. */
+@media (max-width: 720px) {
+  *::-webkit-scrollbar { width: 3px; height: 3px; }
+  *::-webkit-scrollbar-thumb { border: none; }
+  [role="dialog"], .content, .panel, .list { overscroll-behavior-x: none; }
+}
 
 /* Phones: every modal dialog fits the screen (no sideways overflow). */
 @media (max-width: 600px) {
