@@ -22,6 +22,16 @@
   import { showToast } from "./Toast.svelte";
   import { icons } from "../icons";
   import { applyUiState, refreshBackup } from "../backup";
+  import { accounts, loadAccounts, switchAccount } from "../accounts";
+
+  // Opened by "Add account": the other accounts on this device stay one tap away.
+  $effect(() => { if ($wizardOpen) void loadAccounts(); });
+  const otherAccounts = $derived($accounts.filter((a) => !a.active && a.registered && a.username));
+  let leaving = $state(false);
+  async function backTo(slot: string) {
+    leaving = true;
+    try { await switchAccount(slot); } catch (e) { leaving = false; showToast(String(e)); }
+  }
 
   // On Android, 127.0.0.1 is the phone itself. The emulator reaches the PC's
   // relay at 10.0.2.2; a real phone needs the PC's LAN IP or a public relay.
@@ -347,6 +357,14 @@
         </div>
       {/if}
 
+      {#if step === 1 && otherAccounts.length && !$info?.registered}
+        <div class="other-acc">
+          {#each otherAccounts as a (a.slot)}
+            <button class="link" disabled={leaving} onclick={() => backTo(a.slot)}>← {$t("Back to @{name}", { name: a.username ?? "" })}</button>
+          {/each}
+        </div>
+      {/if}
+
       {#if step === 1}
         {#if mode === "reset"}
           <div class="reset-head">
@@ -485,6 +503,7 @@
 {/if}
 
 <style>
+  .other-acc { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
   .reset-head { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
   .reset-head b { font-size: 18px; }
   .link { align-self: flex-start; border: none; background: none; padding: 0; color: var(--accent); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }

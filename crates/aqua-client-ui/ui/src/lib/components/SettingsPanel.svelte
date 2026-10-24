@@ -7,7 +7,8 @@
   import ColorInput from "./ColorInput.svelte";
   import { onMount } from "svelte";
   import { fitWallpaper, followWallpaper } from "../theme";
-  import { settings, PALETTES, WALLPAPERS, EDITABLE_COLORS, THEMES, DEFAULTS, type Mode, type Density } from "../theme";
+  import SegFit from "./SegFit.svelte";
+  import { settings, PALETTES, WALLPAPERS, EDITABLE_COLORS, THEMES, DEFAULTS, MENU_ALPHA, type Mode, type Density } from "../theme";
   import { info } from "../stores";
   import { icons } from "../icons";
   import { openFileDialog } from "../dialog";
@@ -467,7 +468,9 @@
   function setMode(m: Mode) { settings.update((s) => ({ ...s, mode: m })); }
   function setPalette(id: string) { settings.update((s) => ({ ...s, palette: id })); }
   function setDensity(d: Density) { settings.update((s) => ({ ...s, density: d })); }
-  function setFontScale(v: number) { settings.update((s) => ({ ...s, fontScale: Math.max(0.85, Math.min(1.25, v)) })); }
+  function setFontScale(v: number) { settings.update((s) => ({ ...s, fontScale: Math.max(0.85, Math.min(1.4, v)) })); }
+  let uiScalePreview = $state<number | null>(null);
+  function setUiScale(v: number) { settings.update((s) => ({ ...s, uiScale: Math.max(0.8, Math.min(1.3, v)) })); }
   // ---- your stickers ----
   let myPacks = $state<StickerPack[]>([]);
   /** Packs imported from Telegram: read-only, kept up to date from Telegram. */
@@ -823,11 +826,8 @@
         {#if $lockConf?.hash}
           <div class="row">
             <span class="row-label">{$t("Auto-lock")}</span>
-            <div class="seg">
-              {#each ([[1, "1 min"], [5, "5 min"], [15, "15 min"], [60, "1 hour"], [0, "Off"]] as const) as [m, l] (m)}
-                <button class="seg-opt" class:active={$lockConf.autoMin === m} onclick={() => setAutoLock(m)}>{$t(l)}</button>
-              {/each}
-            </div>
+            <SegFit label={$t("Auto-lock")} value={$lockConf.autoMin} onpick={(m) => setAutoLock(m)}
+              options={([[1, "1 min"], [5, "5 min"], [15, "15 min"], [60, "1 hour"], [0, "Off"]] as const).map(([id, l]) => ({ id: id as number, label: $t(l) }))} />
           </div>
           <div class="info-row"><span class="v">{$t("Ctrl+L locks the app any time.")}</span>
             <button class="mini-btn" onclick={() => { closeSettings(); lockNow(); }}>{$t("Lock now")}</button>
@@ -851,11 +851,8 @@
         <div class="label">{$t("Who sees what")}</div>
         <div class="row">
           <span class="row-label">{$t("Status")}</span>
-          <div class="seg">
-            {#each ([["online", "Online"], ["idle", "Idle"], ["dnd", "Busy"], ["invisible", "Invisible"]] as const) as [id, lbl]}
-              <button class="seg-opt" class:active={$myOnline === id} onclick={() => myOnline.set(id)}>{$t(lbl)}</button>
-            {/each}
-          </div>
+          <SegFit label={$t("Status")} value={$myOnline} onpick={(id) => myOnline.set(id)}
+            options={([["online", "Online"], ["idle", "Idle"], ["dnd", "Busy"], ["invisible", "Invisible"]] as const).map(([id, l]) => ({ id, label: $t(l) }))} />
         </div>
         <button class="toggle-row" onclick={() => shareActivity.update((v) => !v)}>
           <div class="tr-text">
@@ -1033,47 +1030,47 @@
           <div class="row">
             <span class="row-label">{$t("Opacity")}</span>
             <div class="range">
-              <input type="range" min="0.35" max="0.95" step="0.05" value={$settings.menuAlpha ?? 0.7}
+              <input type="range" min="0.35" max="0.95" step="0.05" value={$settings.menuAlpha ?? MENU_ALPHA}
                 oninput={(e) => settings.update((x) => ({ ...x, menuAlpha: +(e.target as HTMLInputElement).value }))} />
-              <span class="range-val">{Math.round(($settings.menuAlpha ?? 0.7) * 100)}%</span>
+              <span class="range-val">{Math.round(($settings.menuAlpha ?? MENU_ALPHA) * 100)}%</span>
             </div>
           </div>
         {/if}
         <div class="row">
           <span class="row-label">{$t("Mode")}</span>
-          <div class="seg">
-            {#each (["dark", "light", "auto"] as const) as m}
-              <button
-                class="seg-opt"
-                class:active={$settings.mode === m}
-                onclick={() => setMode(m)}
-              >{m}</button>
-            {/each}
-          </div>
+          <SegFit label={$t("Mode")} value={$settings.mode} onpick={(m) => setMode(m)}
+            options={(["dark", "light", "auto"] as const).map((m) => ({ id: m, label: $t(m === "dark" ? "Dark" : m === "light" ? "Light" : "Auto") }))} />
         </div>
 
         <div class="row">
           <span class="row-label">{$t("Density")}</span>
-          <div class="seg">
-            {#each (["comfortable", "compact"] as const) as d}
-              <button
-                class="seg-opt"
-                class:active={$settings.density === d}
-                onclick={() => setDensity(d)}
-              >{d}</button>
-            {/each}
-          </div>
+          <SegFit label={$t("Density")} value={$settings.density} onpick={(d) => setDensity(d)}
+            options={(["comfortable", "compact"] as const).map((d) => ({ id: d, label: $t(d === "compact" ? "Compact" : "Comfortable") }))} />
         </div>
 
         <div class="row">
-          <span class="row-label">{$t("Font size")}</span>
+          <span class="row-label">{$t("Text size")}</span>
           <div class="range">
             <input
-              type="range" min="0.85" max="1.25" step="0.05"
+              type="range" min="0.85" max="1.4" step="0.05"
               value={$settings.fontScale}
               oninput={(e) => setFontScale(parseFloat((e.target as HTMLInputElement).value))}
             />
             <span class="range-val">{Math.round($settings.fontScale * 100)}%</span>
+          </div>
+        </div>
+        <!-- Applied on release: zooming while the finger is on the slider
+             would move the slider under it. -->
+        <div class="row">
+          <span class="row-label">{$t("Interface scale")}</span>
+          <div class="range">
+            <input
+              type="range" min="0.8" max="1.3" step="0.05"
+              value={$settings.uiScale ?? 1}
+              oninput={(e) => (uiScalePreview = parseFloat((e.target as HTMLInputElement).value))}
+              onchange={(e) => { uiScalePreview = null; setUiScale(parseFloat((e.target as HTMLInputElement).value)); }}
+            />
+            <span class="range-val">{Math.round((uiScalePreview ?? $settings.uiScale ?? 1) * 100)}%</span>
           </div>
         </div>
       </section>
@@ -1267,11 +1264,8 @@
         <div class="label">{$t("Media")}</div>
         <div class="row">
           <span class="row-label">{$t("Save-to-favourites reaction")}</span>
-          <div class="seg">
-            {#each ["⭐", "🔖", "📌", "💾", ""] as e (e)}
-              <button class="seg-opt" class:active={($settings.favReaction ?? "⭐") === e} onclick={() => settings.update((x) => ({ ...x, favReaction: e }))}>{e || $t("Off")}</button>
-            {/each}
-          </div>
+          <SegFit label={$t("Save-to-favourites reaction")} value={$settings.favReaction ?? "⭐"} onpick={(e) => settings.update((x) => ({ ...x, favReaction: e }))}
+            options={["⭐", "🔖", "📌", "💾", ""].map((e) => ({ id: e, label: e || $t("Off") }))} />
         </div>
         <div class="foot-note" style="margin:0 0 8px">{$t("React with it and the message is copied to Saved Messages. Only you see this reaction.")}</div>
         <button class="toggle-row" onclick={() => setFlag("autoplayGifs")}>
@@ -1292,11 +1286,8 @@
         <div class="label">{$t("Graphics")}</div>
         <div class="row">
           <span class="row-label">{$t("Drawing")}</span>
-          <div class="seg">
-            {#each [["auto", "Auto"], ["on", "Graphics card"], ["off", "CPU"]] as [id, lbl] (id)}
-              <button class="seg-opt" class:active={gpu.mode === id} onclick={() => setGpu(id as "auto" | "on" | "off")}>{$t(lbl)}</button>
-            {/each}
-          </div>
+          <SegFit label={$t("Drawing")} value={gpu.mode} onpick={(id) => setGpu(id)}
+            options={([["auto", "Auto"], ["on", "Graphics card"], ["off", "CPU"]] as const).map(([id, l]) => ({ id, label: $t(l) }))} />
         </div>
         <div class="foot-note" style="margin:4px 0 0">
           {gpu.software ? $t("Now: drawn by the CPU (no GPU compositing).") : $t("Now: the graphics card composites the window.")}
@@ -1805,7 +1796,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .nav-lbl { flex: 1; }
   .nav-hint { font-size: 11.5px; color: var(--fg-dim); }
   .chev { color: var(--fg-dim); font-size: 18px; line-height: 1; }
-  .content { overflow-y: auto; padding: 0 0 14px; }
+  .content { overflow-y: auto; overflow-x: hidden; padding: 0 0 14px; }
   .content .head { position: sticky; top: 0; z-index: 2; background: var(--bg-shell); }
   .mini-btn {
     flex-shrink: 0; border: 1px solid var(--border-strong); background: var(--bg-input); color: var(--fg);
@@ -1970,33 +1961,6 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .row { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
   .row:last-child { margin-bottom: 0; }
   .row-label { flex: 0 0 90px; color: var(--fg-muted); font-size: 13px; }
-
-  .seg {
-    display: flex;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 3px;
-    gap: 2px;
-  }
-  .seg-opt {
-    padding: 5px 12px;
-    background: transparent;
-    border: none;
-    border-radius: 7px;
-    color: var(--fg-muted);
-    font-size: 12.5px;
-    font-weight: 600;
-    text-transform: capitalize;
-    cursor: pointer;
-    transition: all 0.12s ease;
-  }
-  .seg-opt:hover { color: var(--fg); }
-  .seg-opt.active {
-    background: var(--accent-soft);
-    color: var(--accent);
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
-  }
 
   .range { display: flex; align-items: center; gap: 10px; flex: 1; }
   .range input[type="range"] {

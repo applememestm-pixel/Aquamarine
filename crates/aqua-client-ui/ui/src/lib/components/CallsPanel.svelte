@@ -51,6 +51,10 @@
 
 <aside class="panel">
   <div class="head">
+    <!-- Phones: the calls list opens from Contacts; back goes there. -->
+    <button class="back" onclick={() => activeTab.set("contacts")} aria-label={$t("Back")}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+    </button>
     <h2>{$t("Calls")}</h2>
     {#if sorted.length > 0}
       <button class="clear" onclick={() => confirm("Clear all call history?") && clearCallHistory()}>
@@ -107,6 +111,12 @@
     border-bottom: 1px solid var(--border);
   }
   .head h2 { margin: 0; font-size: 15.5px; font-weight: 700; letter-spacing: -0.01em; }
+  .back { display: none; }
+  @media (max-width: 720px) {
+    .back { display: grid; place-items: center; width: 40px; height: 40px; margin: 0 4px 0 -8px; border: none; border-radius: 50%; background: transparent; color: var(--accent); }
+    .back svg { width: 22px; height: 22px; }
+    .head h2 { font-size: 22px; font-weight: 800; margin-right: auto; }
+  }
   .clear {
     padding: 5px 10px;
     background: transparent;

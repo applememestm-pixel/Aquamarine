@@ -6,6 +6,25 @@
   import { openNewChatDialog } from "../newChat";
   import { icons } from "../icons";
   import { avatars } from "../people";
+  import { callHistory } from "../callHistory";
+  import { showToast } from "./Toast.svelte";
+  import { tr } from "../i18n";
+
+  // Phones: Contacts is also where recent calls and invitations live (one
+  // tab instead of three, like Telegram).
+  const missed = $derived($callHistory.filter((c) => c.status === "missed" && Date.now() - c.started_at < 7 * 86400000).length);
+  async function invite() {
+    const me = $info?.username;
+    let server = "";
+    try { server = $info?.server_url ? new URL($info.server_url).host : ""; } catch { /* keep it empty */ }
+    const text = me
+      ? tr("Write to me in Aquamarine: @{name}{at}", { name: me, at: server ? ` (${tr("server")} ${server})` : "" })
+      : tr("Let's talk in Aquamarine");
+    try {
+      if (navigator.share) { await navigator.share({ text }); return; }
+    } catch { /* closed, or not allowed: copy instead */ }
+    try { await navigator.clipboard.writeText(text); showToast(tr("Invitation copied — send it to a friend")); } catch { showToast(text); }
+  }
 
   interface Row {
     username: string;
@@ -69,6 +88,17 @@
   </label>
 
   <div class="list">
+    <div class="quick">
+      <button class="q-row" onclick={invite}>
+        <span class="q-ic inv"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0"/><path d="M19 8v6M16 11h6"/></svg></span>
+        <span class="q-lbl">{$t("Invite friends")}</span>
+      </button>
+      <button class="q-row" onclick={() => activeTab.set("calls")}>
+        <span class="q-ic calls">{@html icons.phone}</span>
+        <span class="q-lbl">{$t("Recent calls")}</span>
+        {#if missed > 0}<span class="q-badge">{missed}</span>{/if}
+      </button>
+    </div>
     {#if rows.length === 0}
       <div class="empty">
         <div class="empty-icon">{@html icons.contacts}</div>
@@ -157,7 +187,30 @@
     min-width: 0;
   }
 
-  .list { flex: 1; overflow-y: auto; padding: 6px; }
+  .list { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 6px; }
+  .quick { display: none; }
+  @media (max-width: 720px) {
+    .head { padding: 16px 18px 10px; }
+    .head h2 { font-size: 27px; font-weight: 800; letter-spacing: -0.02em; }
+    .add-btn { padding: 8px 14px; font-size: 13px; border-radius: 12px; }
+    .search { margin: 0 14px 12px; height: 50px; box-sizing: border-box; padding: 0 18px; border-radius: 25px; border-color: transparent; background: var(--bg-surface-2, var(--bg-input)); }
+    .search input { font-size: 16px; }
+    .search :global(svg) { width: 18px; height: 18px; }
+    .quick { display: flex; flex-direction: column; margin: 0 6px 12px; padding: 4px; border-radius: 20px;
+      background: color-mix(in srgb, var(--bg-surface-2, var(--bg-input)) 70%, transparent); }
+    .q-row { display: flex; align-items: center; gap: 14px; padding: 10px 12px; border: none; background: transparent; color: var(--fg); font: 500 16px var(--font-ui); text-align: left; border-radius: 16px; }
+    .q-row:active { background: var(--bg-hover); }
+    .q-ic { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; color: #fff; flex-shrink: 0; }
+    .q-ic :global(svg), .q-ic svg { width: 20px; height: 20px; }
+    .q-ic.inv { background: linear-gradient(135deg, #3B9BFF, #2563EB); }
+    .q-ic.calls { background: linear-gradient(135deg, #34D399, #059669); }
+    .q-lbl { flex: 1; }
+    .q-badge { min-width: 22px; height: 22px; padding: 0 6px; box-sizing: border-box; border-radius: 11px; background: var(--danger, #FF4D6D); color: #fff; font-size: 12px; font-weight: 800; display: grid; place-items: center; }
+    .open { grid-template-columns: 50px 1fr; gap: 14px; padding: 8px 8px; }
+    .avatar { width: 50px; height: 50px; font-size: 18px; }
+    .name { font-size: 16px; }
+    .sub { font-size: 13px; }
+  }
   .empty { padding: 60px 22px; text-align: center; color: var(--fg-dim); font-size: 12.5px; }
   .empty-icon {
     display: inline-grid; place-items: center;

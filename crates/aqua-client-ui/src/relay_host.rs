@@ -10,7 +10,6 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 use tokio::sync::oneshot;
 
-use crate::state::AppState;
 
 struct Running {
     port: u16,
@@ -37,9 +36,10 @@ pub struct RelayHostStatus {
     background: bool,
 }
 
-fn relay_dir(state: &State<'_, StdMutex<AppState>>) -> Result<PathBuf, String> {
-    let s = state.lock().map_err(|e| e.to_string())?;
-    Ok(s.data_dir.join("relay"))
+/// The server belongs to the device, not to whichever account is open:
+/// it lives in the app's base data directory (accounts.rs).
+fn relay_dir(base: &State<'_, crate::accounts::Base>) -> Result<PathBuf, String> {
+    Ok(base.0.join("relay"))
 }
 
 fn status_now(dir: String) -> RelayHostStatus {
@@ -71,18 +71,18 @@ fn status_now(dir: String) -> RelayHostStatus {
 }
 
 #[tauri::command]
-pub fn relay_host_status(state: State<'_, StdMutex<AppState>>) -> Result<RelayHostStatus, String> {
-    let dir = relay_dir(&state)?;
+pub fn relay_host_status(base: State<'_, crate::accounts::Base>) -> Result<RelayHostStatus, String> {
+    let dir = relay_dir(&base)?;
     Ok(status_now(dir.display().to_string()))
 }
 
 #[tauri::command]
 pub async fn relay_host_start(
     app: AppHandle,
-    state: State<'_, StdMutex<AppState>>,
+    base: State<'_, crate::accounts::Base>,
     port: Option<u16>,
 ) -> Result<RelayHostStatus, String> {
-    let dir = relay_dir(&state)?;
+    let dir = relay_dir(&base)?;
     if RUNNING.lock().map(|r| r.is_some()).unwrap_or(false) {
         return Ok(status_now(dir.display().to_string()));
     }
@@ -133,8 +133,8 @@ pub async fn relay_host_start(
 }
 
 #[tauri::command]
-pub async fn relay_host_stop(state: State<'_, StdMutex<AppState>>) -> Result<RelayHostStatus, String> {
-    let dir = relay_dir(&state)?;
+pub async fn relay_host_stop(base: State<'_, crate::accounts::Base>) -> Result<RelayHostStatus, String> {
+    let dir = relay_dir(&base)?;
     let stop = RUNNING.lock().ok().and_then(|mut r| r.as_mut().and_then(|x| x.stop.take()));
     if let Some(tx) = stop {
         let _ = tx.send(());
@@ -155,8 +155,7 @@ pub async fn relay_host_stop(state: State<'_, StdMutex<AppState>>) -> Result<Rel
 /// Restart it on launch if it was on (Settings remembers the choice; the UI
 /// calls `relay_host_start` then). Kept for symmetry with other features.
 pub fn data_dir_of(app: &AppHandle) -> Option<PathBuf> {
-    let state: State<'_, StdMutex<AppState>> = app.state();
-    state.lock().ok().map(|s| s.data_dir.join("relay"))
+    app.try_state::<crate::accounts::Base>().map(|b| b.0.join("relay"))
 }
 
 #[cfg(target_os = "android")]
@@ -185,6 +184,14 @@ pub mod android {
         let cmd = if on { "start" } else { "stop" };
         if let Err(e) = h.run_mobile_plugin::<serde_json::Value>(cmd, serde_json::json!({ "port": port })) {
             tracing::warn!(%e, "relay host: foreground service {cmd}");
+        }
+    }
+
+    /// Start the app over in a fresh process (another account was picked).
+    pub fn relaunch() {
+        let Some(h) = HANDLE.get() else { return };
+        if let Err(e) = h.run_mobile_plugin::<serde_json::Value>("relaunch", serde_json::json!({})) {
+            tracing::warn!(%e, "relaunch");
         }
     }
 }

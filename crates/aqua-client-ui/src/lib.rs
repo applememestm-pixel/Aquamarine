@@ -23,6 +23,7 @@ pub mod servers;
 pub mod mesh;
 pub mod relay_host;
 pub mod gallery;
+pub mod accounts;
 
 use anyhow::Result;
 use tauri::Manager;
@@ -73,10 +74,14 @@ pub fn run() -> Result<()> {
             // The env var is how you run two independent clients on the
             // same machine (each with its own identity + vault): set
             // AQUA_DATA_DIR to a distinct path per launch.
-            let data_dir = std::env::var_os("AQUA_DATA_DIR")
+            let base_dir = std::env::var_os("AQUA_DATA_DIR")
                 .map(std::path::PathBuf::from)
                 .or_else(|| app.path().app_data_dir().ok())
                 .unwrap_or_else(|| std::env::temp_dir().join("aquamarine-dev"));
+            // Several accounts on this device: each has its own directory
+            // (accounts.rs); the first one is the base directory itself.
+            let data_dir = accounts::resolve(&base_dir);
+            app.manage(accounts::Base(base_dir));
             tracing::info!(path = %data_dir.display(), "aquamarine data directory");
             // Cached media (web previews, article videos / music) is played
             // through the asset protocol — also when AQUA_DATA_DIR points
@@ -166,6 +171,12 @@ pub fn run() -> Result<()> {
             relay_host::relay_host_stop,
             gallery::gallery_recent,
             gallery::gallery_ask,
+            gallery::gallery_albums,
+            servers::server_ping,
+            accounts::accounts_list,
+            accounts::account_switch,
+            accounts::account_forget,
+            accounts::app_relaunch,
             servers::probe_servers,
             servers::scan_lan_relays,
             backups::backup_status,

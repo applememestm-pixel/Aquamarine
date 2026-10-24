@@ -199,6 +199,35 @@ pub async fn scan_lan_relays(port: Option<u16>) -> Result<Vec<String>, String> {
     Ok(join_all(checks).await.into_iter().flatten().collect())
 }
 
+/// The ping next to the title on the main page: one round trip to the relay
+/// we're on. The connection is kept alive between calls, so it measures the
+/// network, not a fresh TCP handshake every time.
+#[tauri::command]
+pub async fn server_ping(url: String) -> Result<u64, String> {
+    static HTTP: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    let (url, _, _) = split_url(&url).ok_or("bad server address")?;
+    let http = match HTTP.get() {
+        Some(c) => c.clone(),
+        None => {
+            let c = reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(3))
+                .timeout(Duration::from_secs(5))
+                .pool_idle_timeout(Duration::from_secs(90))
+                .build()
+                .map_err(|e| e.to_string())?;
+            HTTP.get_or_init(|| c).clone()
+        }
+    };
+    let t0 = Instant::now();
+    let r = http.get(format!("{url}/v1/stats")).send().await.map_err(|e| e.to_string())?;
+    let ms = t0.elapsed().as_millis() as u64;
+    if !r.status().is_success() {
+        return Err(format!("HTTP {}", r.status()));
+    }
+    let _ = r.bytes().await; // drain, so the connection goes back to the pool
+    Ok(ms)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

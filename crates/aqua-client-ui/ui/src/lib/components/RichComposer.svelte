@@ -398,7 +398,7 @@
     box-sizing: border-box;
     padding: 6px 4px;
     font-family: inherit;
-    font-size: 14.5px;
+    font-size: calc(14.5px * var(--font-scale, 1));
     line-height: 1.35;
     color: var(--fg);
     outline: none;

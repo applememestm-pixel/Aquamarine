@@ -3,8 +3,9 @@ package app.aquamarine.messenger
 // Android halves of two features (copied next to MainActivity by CI and
 // android/patch-project.sh):
 //  * AquaGalleryPlugin — the recent photos and videos for the attach sheet
-//    (crates/aqua-client-ui/src/gallery.rs), like Telegram's.
-//  * AquaRelayPlugin + AquaRelayService — "Server on this device".
+//    and its album menu (crates/aqua-client-ui/src/gallery.rs), like Telegram's.
+//  * AquaRelayPlugin + AquaRelayService — "Server on this device" (and the
+//    relaunch after switching accounts, crates/aqua-client-ui/src/accounts.rs).
 //
 // "Server on this device" — the Android half. The relay itself runs in Rust
 // inside the app process (crates/aqua-client-ui/src/relay_host.rs); this
@@ -66,6 +67,19 @@ class AquaRelayPlugin(private val activity: Activity) : Plugin(activity) {
     activity.stopService(Intent(activity, AquaRelayService::class.java))
     invoke.resolve(JSObject().put("ok", true))
   }
+
+  /** Start the app over in a fresh process: another account was picked and
+   *  the data directory is chosen once, at start (accounts.rs). */
+  @Command
+  fun relaunch(invoke: Invoke) {
+    invoke.resolve(JSObject().put("ok", true))
+    val launch = activity.packageManager.getLaunchIntentForPackage(activity.packageName) ?: return
+    val restart = Intent.makeRestartActivityTask(launch.component)
+    activity.runOnUiThread {
+      activity.startActivity(restart)
+      Runtime.getRuntime().exit(0)
+    }
+  }
 }
 
 class AquaRelayService : Service() {
@@ -121,7 +135,11 @@ class AquaRelayService : Service() {
 @InvokeArg
 class GalleryArgs {
   var limit: Int = 60
+  /** An album's bucket id, "*video" for all videos, "" for everything. */
+  var bucket: String = ""
 }
+
+private class GalleryAlbum(val id: String, val name: String, var count: Int, val coverId: Long, val coverVideo: Boolean)
 
 @TauriPlugin
 class AquaGalleryPlugin(private val activity: Activity) : Plugin(activity) {
@@ -154,28 +172,75 @@ class AquaGalleryPlugin(private val activity: Activity) : Plugin(activity) {
         val uri = MediaStore.Files.getContentUri("external")
         val proj = arrayOf(MediaStore.Files.FileColumns._ID, MediaStore.Files.FileColumns.MEDIA_TYPE,
           MediaStore.Files.FileColumns.MIME_TYPE, MediaStore.Video.VideoColumns.DURATION)
-        val sel = "${MediaStore.Files.FileColumns.MEDIA_TYPE} IN (${MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE},${MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO})"
-        activity.contentResolver.query(uri, proj, sel, null, "${MediaStore.Files.FileColumns.DATE_ADDED} DESC")?.use { c ->
+        var sel = "${MediaStore.Files.FileColumns.MEDIA_TYPE} IN (${MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE},${MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO})"
+        var selArgs: Array<String>? = null
+        when {
+          args.bucket == "*video" -> sel = "${MediaStore.Files.FileColumns.MEDIA_TYPE} = ${MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO}"
+          args.bucket.isNotEmpty() -> { sel += " AND bucket_id = ?"; selArgs = arrayOf(args.bucket) }
+        }
+        activity.contentResolver.query(uri, proj, sel, selArgs, "${MediaStore.Files.FileColumns.DATE_ADDED} DESC")?.use { c ->
           var n = 0
           while (c.moveToNext() && n < args.limit.coerceIn(1, 200)) {
             val id = c.getLong(0)
             val video = c.getInt(1) == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO
             val base = if (video) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
             val item = ContentUris.withAppendedId(base, id)
-            val thumb = try {
-              val bmp: Bitmap = if (Build.VERSION.SDK_INT >= 29) activity.contentResolver.loadThumbnail(item, Size(256, 256), null)
-                else if (video) MediaStore.Video.Thumbnails.getThumbnail(activity.contentResolver, id, MediaStore.Video.Thumbnails.MINI_KIND, null)
-                else MediaStore.Images.Thumbnails.getThumbnail(activity.contentResolver, id, MediaStore.Images.Thumbnails.MINI_KIND, null)
-              val bos = ByteArrayOutputStream()
-              bmp.compress(Bitmap.CompressFormat.JPEG, 72, bos)
-              "data:image/jpeg;base64," + Base64.encodeToString(bos.toByteArray(), Base64.NO_WRAP)
-            } catch (e: Exception) { "" }
+            val thumb = thumbOf(id, video, 256)
             out.put(JSObject().put("uri", item.toString()).put("mime", c.getString(2) ?: "")
               .put("video", video).put("duration", if (video) c.getLong(3) else 0L).put("thumb", thumb))
             n++
           }
         }
         invoke.resolve(JSObject().put("granted", true).put("items", out))
+      } catch (e: Exception) {
+        invoke.reject(e.message ?: "gallery")
+      }
+    }
+  }
+
+  /** A small square-ish JPEG preview as a data: URL ("" if there's none). */
+  private fun thumbOf(id: Long, video: Boolean, px: Int): String = try {
+    val base = if (video) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+    val item = ContentUris.withAppendedId(base, id)
+    val bmp: Bitmap = if (Build.VERSION.SDK_INT >= 29) activity.contentResolver.loadThumbnail(item, Size(px, px), null)
+      else if (video) MediaStore.Video.Thumbnails.getThumbnail(activity.contentResolver, id, MediaStore.Video.Thumbnails.MINI_KIND, null)
+      else MediaStore.Images.Thumbnails.getThumbnail(activity.contentResolver, id, MediaStore.Images.Thumbnails.MINI_KIND, null)
+    val bos = ByteArrayOutputStream()
+    bmp.compress(Bitmap.CompressFormat.JPEG, 72, bos)
+    "data:image/jpeg;base64," + Base64.encodeToString(bos.toByteArray(), Base64.NO_WRAP)
+  } catch (e: Exception) { "" }
+
+  /** The albums, newest first, like the system picker's menu: "All media",
+   *  "All videos", then every folder with a count and its newest picture. */
+  @Command
+  fun albums(invoke: Invoke) {
+    if (!granted()) { invoke.resolve(JSObject().put("granted", false).put("albums", JSArray())); return }
+    pool.execute {
+      try {
+        val uri = MediaStore.Files.getContentUri("external")
+        val proj = arrayOf(MediaStore.Files.FileColumns._ID, MediaStore.Files.FileColumns.MEDIA_TYPE, "bucket_id", "bucket_display_name")
+        val sel = "${MediaStore.Files.FileColumns.MEDIA_TYPE} IN (${MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE},${MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO})"
+        val byId = LinkedHashMap<String, GalleryAlbum>()
+        var total = 0; var videos = 0
+        var first: Pair<Long, Boolean>? = null
+        var firstVideo: Long? = null
+        activity.contentResolver.query(uri, proj, sel, null, "${MediaStore.Files.FileColumns.DATE_ADDED} DESC")?.use { c ->
+          while (c.moveToNext()) {
+            val id = c.getLong(0)
+            val video = c.getInt(1) == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO
+            val bid = c.getString(2) ?: continue
+            total++
+            if (first == null) first = Pair(id, video)
+            if (video) { videos++; if (firstVideo == null) firstVideo = id }
+            val a = byId[bid]
+            if (a == null) byId[bid] = GalleryAlbum(bid, c.getString(3) ?: "", 1, id, video) else a.count++
+          }
+        }
+        val out = JSArray()
+        out.put(JSObject().put("id", "").put("name", "").put("count", total).put("cover", first?.let { thumbOf(it.first, it.second, 128) } ?: ""))
+        if (videos > 0) out.put(JSObject().put("id", "*video").put("name", "").put("count", videos).put("cover", firstVideo?.let { thumbOf(it, true, 128) } ?: ""))
+        for (a in byId.values) out.put(JSObject().put("id", a.id).put("name", a.name).put("count", a.count).put("cover", thumbOf(a.coverId, a.coverVideo, 128)))
+        invoke.resolve(JSObject().put("granted", true).put("albums", out))
       } catch (e: Exception) {
         invoke.reject(e.message ?: "gallery")
       }

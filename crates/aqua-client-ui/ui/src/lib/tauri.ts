@@ -15,6 +15,11 @@ export interface ServerProbe {
   country: string | null; country_code: string | null; city: string | null;
 }
 
+/** One account on this device (accounts.rs); slot "" is the first one. */
+export interface AccountSlot {
+  slot: string; registered: boolean; username: string | null; server_url: string | null; active: boolean;
+}
+
 export function assetUrl(path: string | null | undefined): string {
   if (!path) return "";
   try { return convertFileSrc(path); } catch { return ""; }
@@ -228,6 +233,11 @@ export const api = {
   setDmabuf:          (on: boolean): Promise<void> => invoke("set_dmabuf", { on }),
   confirmDmabuf:      (): Promise<void> => invoke("confirm_dmabuf"),
   restartApp:         (): Promise<void> => invoke("restart_app"),
+  serverPing:         (url: string): Promise<number> => invoke("server_ping", { url }),
+  accountsList:       (): Promise<AccountSlot[]> => invoke("accounts_list"),
+  accountSwitch:      (slot: string, store: string): Promise<{ slot: string; store: string | null }> => invoke("account_switch", { slot, store }),
+  accountForget:      (slot: string): Promise<void> => invoke("account_forget", { slot }),
+  appRelaunch:        (): Promise<void> => invoke("app_relaunch"),
   setGpuMode:         (mode: "auto" | "on" | "off"): Promise<void>                     => invoke("set_gpu_mode", { mode }),
   fetchAttachment:    (media: ArticleMedia): Promise<string>                         => invoke("fetch_attachment", { media }),
   allowMediaPreview:  (path: string): Promise<void>                                  => invoke("allow_media_preview", { path }),
