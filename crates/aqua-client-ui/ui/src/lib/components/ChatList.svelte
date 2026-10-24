@@ -19,7 +19,7 @@
   import { groupMap, requestJoinGroup } from "../groups";
   import { peerPresence, activityVerb } from "../presence";
   import { icons } from "../icons";
-  import { info, search, visibleChats, activeId, selectChat, startChat, chats } from "../stores";
+  import { info, search, visibleChats, activeId, selectChat, startChat, chats, connect } from "../stores";
   import { showToast } from "./Toast.svelte";
   import { openNewChatDialog } from "../newChat";
   import { openNewGroup } from "./NewGroupWizard.svelte";
@@ -38,6 +38,7 @@
   import { openProfile } from "./ProfileModal.svelte";
   import { profile } from "../profile";
   import { ping } from "../ping";
+  import ServerPicker from "./ServerPicker.svelte";
   import { accounts, loadAccounts, switchAccount } from "../accounts";
 
   // ---- Phones: your avatar in the title row. Tap — your profile; hold —
@@ -67,6 +68,24 @@
   }
   async function forgetAccount(slot: string) {
     try { await api.accountForget(slot); await loadAccounts(); } catch (e) { showToast(String(e)); }
+  }
+  // ---- The servers sheet: which relay we're on, the others, reconnect ----
+  let serversOpen = $state(false);
+  let srvUrl = $state("");
+  let srvBusy = $state(false);
+  let srvErr = $state<string | null>(null);
+  function openServers() {
+    srvUrl = $info?.server_url ?? "";
+    srvErr = null;
+    serversOpen = true;
+  }
+  async function reconnectTo() {
+    const user = $info?.username;
+    if (!user || !srvUrl.trim()) return;
+    srvBusy = true; srvErr = null;
+    const err = await connect(srvUrl.trim(), user);
+    srvBusy = false;
+    if (err) srvErr = err; else serversOpen = false;
   }
   const hostOf = (u: string | null) => { try { return u ? new URL(u).host : ""; } catch { return u ?? ""; } };
 
@@ -485,8 +504,16 @@
       {#if $profile.avatar_url}<img src={$profile.avatar_url} alt="" draggable="false" />{:else}{meLetter}{/if}
     </button>
     <span class="m-name">Aquamarine</span>
-    {#if $info && !$info.connected}<span class="m-conn">{$t("Connecting…")}</span>
-    {:else if $ping != null}<span class="m-ping" class:slow={$ping >= 150} class:bad={$ping >= 400} title={$t("Ping to the server")}>{$ping} {$t("ms")}</span>{/if}
+    <!-- The connection: ping when connected, "connecting" otherwise; tap —
+         the servers sheet (switch server, see which ones answer). -->
+    {#if $info}
+      <button class="m-net" class:off={!$info.connected} class:slow={$info.connected && ($ping ?? 0) >= 150} class:bad={$info.connected && ($ping ?? 0) >= 400}
+        onclick={openServers} title={$t("Server")} aria-label={$t("Server")}>
+        {#if !$info.connected}<span class="m-spin"></span>{$t("Connecting…")}
+        {:else if $ping != null}{$ping} {$t("ms")}
+        {:else}<span class="m-dot"></span>{$t("online")}{/if}
+      </button>
+    {/if}
     <button class="m-menu" onclick={() => (plusMenuOpen = !plusMenuOpen)} aria-label={$t("New")}>
       <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
     </button>
@@ -800,6 +827,25 @@
       </div>
     </div>
   {/if}
+  {#if serversOpen}
+    <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+    <div class="acc-scrim" onclick={() => { if (!srvBusy) serversOpen = false; }}></div>
+    <div class="acc-sheet srv-sheet" role="dialog" aria-label={$t("Server")}>
+      <div class="acc-grab"></div>
+      <div class="acc-title">{$t("Server")}</div>
+      <div class="srv-now">
+        <span class="srv-dot" class:ok={$info?.connected}></span>
+        <span class="srv-addr">{hostOf($info?.server_url ?? null) || "—"}</span>
+        <span class="srv-st">{$info?.connected ? ($ping != null ? `${$ping} ${$t("ms")}` : $t("online")) : $t("Connecting…")}</span>
+      </div>
+      <div class="srv-pick"><ServerPicker bind:value={srvUrl} inline placeholder="http://…:7777" /></div>
+      {#if srvErr}<div class="srv-err">{srvErr}</div>{/if}
+      <button class="srv-go" disabled={srvBusy || !srvUrl.trim()} onclick={reconnectTo}>
+        {srvBusy ? $t("Connecting…") : $t("Connect to this server")}
+      </button>
+      <div class="acc-note">{$t("Your account lives on the server it was created on; another server works only if they're in one federation.")}</div>
+    </div>
+  {/if}
   {#if accountsOpen}
     <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
     <div class="acc-scrim" onclick={() => { if (!switching) accountsOpen = false; }}></div>
@@ -898,6 +944,7 @@
     animation: peek-fade 0.18s ease-out;
   }
   @keyframes acc-fade { from { opacity: 0; } }
+  @keyframes m-spin { to { transform: rotate(360deg); } }
   @keyframes acc-up { from { transform: translateY(40px); opacity: 0; } }
   @keyframes peek-fade { from { opacity: 0; } }
   .peek {
@@ -1343,10 +1390,26 @@
       background: linear-gradient(135deg, var(--accent), var(--accent-2)); touch-action: manipulation;
       -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
     .m-me img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
-    .m-ping { flex-shrink: 0; white-space: nowrap; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--online, #35D399);
-      padding: 2px 8px; border-radius: 10px; background: color-mix(in srgb, currentColor 13%, transparent); align-self: center; margin-top: 4px; }
-    .m-ping.slow { color: #F0B232; }
-    .m-ping.bad { color: var(--danger, #FF4D6D); }
+    .m-net { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; border: none; cursor: pointer;
+      font: 700 12px var(--font-ui); font-variant-numeric: tabular-nums; color: var(--online, #35D399);
+      padding: 4px 10px; border-radius: 12px; background: color-mix(in srgb, currentColor 13%, transparent); align-self: center; margin-top: 4px; }
+    .m-net.slow { color: #F0B232; }
+    .m-net.bad { color: var(--danger, #FF4D6D); }
+    .m-net.off { color: var(--fg-muted); font-weight: 600; }
+    .m-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    .m-spin { width: 10px; height: 10px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: m-spin .8s linear infinite; }
+    /* The servers sheet */
+    .srv-sheet { max-height: calc(100dvh - 24px - env(safe-area-inset-top, 0px)); overflow-y: auto; }
+    .srv-now { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 14px; background: var(--accent-soft); }
+    .srv-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--fg-dim); flex-shrink: 0; }
+    .srv-dot.ok { background: var(--online, #35D399); box-shadow: 0 0 8px var(--online, #35D399); }
+    .srv-addr { flex: 1; min-width: 0; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .srv-st { font-size: 13px; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+    .srv-pick { padding: 8px 4px 4px; }
+    .srv-err { margin: 4px 8px; padding: 8px 10px; border-radius: 10px; font-size: 13px; color: var(--danger, #FF4D6D); background: color-mix(in srgb, var(--danger, #FF4D6D) 12%, transparent); overflow-wrap: anywhere; }
+    .srv-go { margin: 6px 8px 0; padding: 12px; border: none; border-radius: 14px; font: 700 15px var(--font-ui); color: #06070c;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+    .srv-go:disabled { opacity: .6; }
     /* Accounts: a sheet from the bottom. */
     .acc-scrim { display: block; position: fixed; inset: 0; z-index: 80; background: rgba(0,0,0,.35); animation: acc-fade .2s ease; }
     .acc-sheet { display: flex; flex-direction: column; gap: 2px; position: fixed; left: 8px; right: 8px; z-index: 81;
@@ -1373,7 +1436,6 @@
     .acc-plus { width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; font-size: 24px; background: var(--accent-soft); }
     .acc-note { font-size: 12.5px; color: var(--fg-dim); padding: 6px 12px 0; line-height: 1.4; }
     .m-name { font-size: 27px; font-weight: 800; letter-spacing: -0.02em; font-family: var(--font-display, inherit); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .m-conn { font-size: 13px; color: var(--fg-dim); }
     .m-menu { margin-left: auto; width: 44px; height: 44px; border-radius: 50%; border: none; background: transparent; color: var(--fg); display: grid; place-items: center; }
     .m-menu svg { width: 22px; height: 22px; }
     .m-menu:active { background: var(--bg-hover); }
@@ -1393,7 +1455,7 @@
     .folder-tab.active { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
     .folder-edit { padding: 10px 14px; font-size: 14px; border: none; }
     /* Rows: big avatars, roomy text, no notebook tab (one panel at a time). */
-    .chats { padding: 2px 6px calc(100px + env(safe-area-inset-bottom, 0px)); }
+    .chats { padding: 2px 6px calc(80px + env(safe-area-inset-bottom, 0px)); }
     .chat-item { grid-template-columns: 58px 1fr; gap: 14px; padding: 9px 12px; border-radius: 16px; }
     .chat-item .avatar.sz-44 { width: 58px; height: 58px; font-size: 21px; }
     .chat-item.active { background: transparent; width: 100%; margin-right: 0; border-radius: 16px; }

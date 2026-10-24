@@ -1997,4 +1997,6 @@ export const RU: Record<string, string> = {
   "The file is checked against the release's SHA-256 list before it's installed. On Android an update installs over the app only when both are signed with the same key.": "Перед установкой файл сверяется со списком SHA-256 выпуска. На Android обновление встаёт поверх приложения, только если обе сборки подписаны одним ключом.",
   "The new build for this device isn't ready yet — try again in a few minutes.": "Новая сборка для этого устройства ещё не готова — попробуйте через несколько минут.",
   "public server": "публичный сервер",
+  "Your account lives on the server it was created on; another server works only if they're in one federation.": "Аккаунт живёт на сервере, где его создали; другой сервер подойдёт, только если они в одной федерации.",
+  "Connect to this server": "Подключиться",
 };

@@ -152,7 +152,7 @@ html.wk-lowfx .eq i:nth-child(3) { transform: scaleY(0.75); }
   body.chat-open .rail { display: none; }
   /* The tab bar floats over the lists (they scroll under it); each list
      keeps room at its end so the last row clears the bar. */
-  .app > .panel .list { padding-bottom: calc(100px + env(safe-area-inset-bottom, 0px)); }
+  .app > .panel .list { padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px)); }
   /* Phones draw edge-to-edge: keep content out from under the status bar,
      the notch and the gesture bar. */
   body {

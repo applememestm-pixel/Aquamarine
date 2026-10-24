@@ -8,11 +8,14 @@
    * with its full address and port, IP, rough location, ping and who's
    * online. Tap one to use it.
    */
+  import { onMount } from "svelte";
   import { api, type ServerProbe } from "../tauri";
   import { knownServers } from "../servers";
   import { t, tr } from "../i18n";
 
-  let { value = $bindable(""), defaults = [] as string[], placeholder = "" } = $props();
+  // inline: the list is always shown in place (the server sheet on the main
+  // page), not as a drop-down under the field.
+  let { value = $bindable(""), defaults = [] as string[], placeholder = "", inline = false } = $props();
 
   let open = $state(false);
   let probes = $state<ServerProbe[]>([]);
@@ -101,9 +104,11 @@
   function pick(p: ServerProbe) {
     // Keep the scheme the relay answers on; drop a default port for neatness.
     value = p.url.replace(/^(https:\/\/[^/]+):443$/, "$1").replace(/^(http:\/\/[^/]+):80$/, "$1");
-    open = false;
+    if (!inline) open = false;
   }
+  onMount(() => { if (inline) { open = true; void refresh(); } });
   function onFocusOut(e: FocusEvent) {
+    if (inline) return;
     const to = e.relatedTarget as Node | null;
     if (!to || !wrap?.contains(to)) open = false;
   }
@@ -126,7 +131,7 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="sp" bind:this={wrap} onfocusout={onFocusOut}>
+<div class="sp" class:inline bind:this={wrap} onfocusout={onFocusOut}>
   <div class="sp-in">
     <input bind:value {placeholder} onfocus={show} onclick={show} autocomplete="off" spellcheck="false"
            onkeydown={(e) => { if (e.key === "Escape") open = false; else if (e.key === "ArrowDown") show(); }} />
@@ -156,7 +161,7 @@
           </span>
           <span class="sp-meta">
             {#if p.ok}
-              <span class="ms" class:slow={(p.ms ?? 0) > 400}>{p.ms} ms</span>
+              <span class="ms" class:slow={(p.ms ?? 0) > 400}>{p.ms} {$t("ms")}</span>
               {#if p.online != null}<span class="on">{p.online} {$t("online")}</span>{/if}
             {:else}
               <span class="off">{$t(probing ? "…" : "no answer")}</span>
@@ -173,6 +178,9 @@
 
 <style>
   .sp { position: relative; }
+  .sp.inline .sp-list { position: static; margin-top: 8px; max-height: min(320px, 42vh); box-shadow: none; animation: none;
+    background: color-mix(in srgb, var(--bg-surface) 60%, transparent); }
+  .sp.inline .sp-tg { display: none; }
   .sp-in { position: relative; display: flex; }
   .sp-in input {
     flex: 1; min-width: 0; box-sizing: border-box;
