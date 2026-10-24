@@ -382,6 +382,34 @@ pub struct TokenView {
     pub source: &'static str,
     pub has_token: bool,
     pub packs: usize,
+    /// The packs stored here, for the panel's list.
+    pub list: Vec<PackBrief>,
+}
+
+/// One stored pack in the admin panel: name, title, kind, how many files,
+/// and a few files to show (`/v1/packs/<name>/<file>`).
+#[derive(Serialize)]
+pub struct PackBrief {
+    pub name: String,
+    pub title: String,
+    pub kind: String,
+    pub count: usize,
+    pub preview: Vec<(String, String)>,
+    pub updated: u64,
+}
+
+fn briefs() -> Vec<PackBrief> {
+    list_manifests()
+        .into_iter()
+        .map(|m| PackBrief {
+            count: m.files.len(),
+            preview: m.files.iter().take(4).map(|f| (f.file.clone(), f.mime.clone())).collect(),
+            name: m.name,
+            title: m.title,
+            kind: m.kind,
+            updated: m.updated,
+        })
+        .collect()
 }
 #[derive(Deserialize)]
 pub struct TokenUpdate {
@@ -391,7 +419,8 @@ pub struct TokenUpdate {
 
 pub async fn admin_get(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Result<Json<TokenView>, StatusCode> {
     admin_authed(&state, &headers)?;
-    Ok(Json(TokenView { source: token_source(), has_token: bot_token().is_some(), packs: list_manifests().len() }))
+    let list = briefs();
+    Ok(Json(TokenView { source: token_source(), has_token: bot_token().is_some(), packs: list.len(), list }))
 }
 
 pub async fn admin_set(
@@ -410,7 +439,8 @@ pub async fn admin_set(
     std::fs::write(TOKEN_FILE, serde_json::to_vec_pretty(&TokenFile { token: t }).unwrap_or_default())
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     spawn_default_imports();
-    Ok(Json(TokenView { source: token_source(), has_token: bot_token().is_some(), packs: list_manifests().len() }))
+    let list = briefs();
+    Ok(Json(TokenView { source: token_source(), has_token: bot_token().is_some(), packs: list.len(), list }))
 }
 
 /// First start without a Telegram token: ask for one in the terminal, so

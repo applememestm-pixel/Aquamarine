@@ -48,6 +48,14 @@ pub struct FedConfig {
     /// How clients reach THIS relay (shown to them as a fallback).
     #[serde(default)]
     pub public_url: String,
+    /// "solo" — this relay works alone; "network" — with the others; ""
+    /// — not chosen yet (the admin panel asks on first open; a config with
+    /// a secret and peers from before counts as "network").
+    #[serde(default)]
+    pub mode: String,
+    /// Kept in memory only (tests): peers learnt later aren't written to disk.
+    #[serde(skip)]
+    pub ephemeral: bool,
 }
 
 impl FedConfig {
@@ -69,9 +77,60 @@ impl FedConfig {
     pub fn save(&self) -> std::io::Result<()> {
         std::fs::write(FILE, serde_json::to_vec_pretty(self).unwrap_or_default())
     }
+    /// In a network: a secret is set (peers may still be on their way —
+    /// they say hello and get added by themselves).
     pub fn active(&self) -> bool {
-        self.secret.len() >= 16 && !self.peers.is_empty()
+        self.mode != "solo" && self.secret.len() >= 16 && (self.mode == "network" || !self.peers.is_empty())
     }
+    /// "solo" / "network" / "" — what the panel shows.
+    pub fn effective_mode(&self) -> &str {
+        if self.mode.is_empty() && self.secret.len() >= 16 && !self.peers.is_empty() { "network" } else { &self.mode }
+    }
+}
+
+/// An invitation into this network: another relay's admin pastes it and
+/// both relays add each other. `aquafed:` + base64url(JSON {url, secret}).
+pub fn invite(cfg: &FedConfig) -> Option<String> {
+    use base64::Engine;
+    let url = if cfg.public_url.is_empty() { crate::public::url() } else { cfg.public_url.clone() };
+    if cfg.secret.len() < 16 || url.is_empty() {
+        return None;
+    }
+    let json = serde_json::json!({ "url": url, "secret": cfg.secret }).to_string();
+    Some(format!("aquafed:{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)))
+}
+
+/// (relay address, secret) from an invitation.
+pub fn parse_invite(s: &str) -> Option<(String, String)> {
+    use base64::Engine;
+    let b = s.trim().strip_prefix("aquafed:")?;
+    let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(b.trim_end_matches('=')).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&raw).ok()?;
+    let url = v["url"].as_str()?.trim().trim_end_matches('/').to_string();
+    let secret = v["secret"].as_str()?.trim().to_string();
+    (url.starts_with("http") && secret.len() >= 16).then_some((url, secret))
+}
+
+/// Add relays to the peer list (saved, and the live config replaced).
+/// Returns the ones that were new.
+pub fn add_peers(state: &AppState, urls: &[String]) -> Vec<String> {
+    let mut c = current(state).map(|f| f.cfg.clone()).unwrap_or_else(FedConfig::load);
+    let me = if c.public_url.is_empty() { crate::public::url() } else { c.public_url.clone() };
+    let mut added = Vec::new();
+    for u in urls {
+        let u = u.trim().trim_end_matches('/').to_string();
+        if !u.starts_with("http") || u == me || c.peers.contains(&u) || c.peers.len() >= 64 {
+            continue;
+        }
+        c.peers.push(u.clone());
+        added.push(u);
+    }
+    if !added.is_empty() && (c.ephemeral || c.save().is_ok()) {
+        let next = Fed::new(c);
+        if let Ok(mut g) = state.fed.write() { *g = next; }
+        tracing::info!(?added, "federation: new peers");
+    }
+    added
 }
 
 pub struct Fed {
@@ -146,6 +205,52 @@ impl Fed {
             }
         });
         futures_util::future::join_all(tries).await.into_iter().any(|d| d)
+    }
+
+    /// Say hello to every peer: they add us if they didn't know us, and we
+    /// learn whom they know (same secret — the reply is signed by it).
+    /// Returns relays that were new to us.
+    pub async fn hello_all(&self) -> Vec<String> {
+        let me = if self.cfg.public_url.is_empty() { crate::public::url() } else { self.cfg.public_url.clone() };
+        let body = serde_json::to_vec(&serde_json::json!({ "url": me, "peers": self.cfg.peers })).unwrap_or_default();
+        let tries = self.cfg.peers.iter().map(|p| {
+            let body = body.clone();
+            async move {
+                let r = self.post(p, "/v1/fed/hello", body).await?;
+                let v: serde_json::Value = r.json().await.ok()?;
+                let mut out: Vec<String> = v["peers"].as_array()?.iter().filter_map(|x| x.as_str().map(str::to_string)).collect();
+                if let Some(s) = v["self"].as_str() { out.push(s.to_string()); }
+                Some(out)
+            }
+        });
+        let mut known: Vec<String> = futures_util::future::join_all(tries).await.into_iter().flatten().flatten().collect();
+        known.sort();
+        known.dedup();
+        known.retain(|u| u.trim_end_matches('/') != me && !self.cfg.peers.iter().any(|p| p == u.trim_end_matches('/')));
+        known
+    }
+
+    /// Is `url` a relay of this network (does it accept our signature)?
+    pub async fn same_network(&self, url: &str) -> bool {
+        self.get(url.trim_end_matches('/'), "/v1/fed/ping").await.is_some()
+    }
+
+    /// Have a peer with mail set up send a sign-up code (this relay has no
+    /// mail server): the SMTP password never leaves the relay that has it.
+    pub async fn send_mail(&self, to: &str, code: &str, link: Option<&str>) -> bool {
+        let body = serde_json::to_vec(&serde_json::json!({ "to": to, "code": code, "link": link })).unwrap_or_default();
+        for p in &self.cfg.peers {
+            let r = self.http.post(format!("{p}/v1/fed/mail"))
+                .header("x-aqua-fed", self.header("POST", "/v1/fed/mail", &body))
+                .header("content-type", "application/json")
+                .timeout(Duration::from_secs(50))
+                .body(body.clone()).send().await;
+            if r.is_ok_and(|r| r.status().is_success()) {
+                tracing::info!(peer = %p, "sign-up code e-mailed by a peer");
+                return true;
+            }
+        }
+        false
     }
 
     /// Tell every peer to pull from us now.
@@ -272,6 +377,69 @@ pub async fn h_media(State(state): State<AppState>, headers: HeaderMap, Path((us
     Ok(([(axum::http::header::CONTENT_TYPE, mime)], data))
 }
 
+#[derive(Deserialize)]
+pub struct Hello { url: String, #[serde(default)] peers: Vec<String> }
+
+/// A relay of the network says hello: it's added to our peers if new, and
+/// gets the list of relays we know (that's how they find each other).
+pub async fn h_hello(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Result<Json<serde_json::Value>, StatusCode> {
+    let fed = check(&state, &headers, "POST", "/v1/fed/hello", &body)?;
+    let h: Hello = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let mut urls = vec![h.url];
+    urls.extend(h.peers);
+    let st = state.clone();
+    // Peers it knows join too — but only those that answer our signature.
+    tokio::spawn(async move {
+        let mut ok = Vec::new();
+        for u in urls {
+            if let Some(f) = current(&st) {
+                if f.cfg.peers.iter().any(|p| p == u.trim_end_matches('/')) { continue; }
+                if f.same_network(&u).await { ok.push(u); }
+            }
+        }
+        if !add_peers(&st, &ok).is_empty() { st.fed_kick.notify_one(); }
+    });
+    let me = if fed.cfg.public_url.is_empty() { crate::public::url() } else { fed.cfg.public_url.clone() };
+    Ok(Json(serde_json::json!({ "self": me, "peers": fed.cfg.peers })))
+}
+
+/// "Do you accept our signature?" — 204 for relays of the same network.
+pub async fn h_ping(State(state): State<AppState>, headers: HeaderMap) -> Result<StatusCode, StatusCode> {
+    check(&state, &headers, "GET", "/v1/fed/ping", b"")?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct MailReq { to: String, code: String, #[serde(default)] link: Option<String> }
+
+/// A relay of the network without mail asks us to send a sign-up code.
+/// Only to relays that share the secret; a few per address per 10 minutes.
+pub async fn h_mail(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Result<StatusCode, StatusCode> {
+    check(&state, &headers, "POST", "/v1/fed/mail", &body)?;
+    let m: MailReq = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    if m.code.len() > 12 || !m.to.contains('@') || m.link.as_ref().is_some_and(|l| !l.starts_with("http") || l.len() > 300) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    {
+        static RECENT: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Vec<i64>>>> = std::sync::OnceLock::new();
+        let mut g = RECENT.get_or_init(Default::default).lock().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let now = now_ms();
+        let list = g.entry(m.to.to_lowercase()).or_default();
+        list.retain(|t| now - t < 10 * 60 * 1000);
+        if list.len() >= 5 {
+            return Err(StatusCode::TOO_MANY_REQUESTS);
+        }
+        list.push(now);
+    }
+    match state.directory.send_code_mail(&m.to, &m.code, m.link.as_deref()).await {
+        Ok(()) => Ok(StatusCode::NO_CONTENT),
+        Err(e) => {
+            tracing::warn!(error = %e, "relaying a sign-up e-mail for a peer failed");
+            Err(StatusCode::SERVICE_UNAVAILABLE)
+        }
+    }
+}
+
 /// Public: where else clients can connect.
 pub async fn h_peers(State(state): State<AppState>) -> Json<serde_json::Value> {
     let cfg = current(&state).map(|f| f.cfg.clone());
@@ -307,6 +475,21 @@ pub fn spawn_sync(state: AppState) {
 
 /// Poke the peers whenever an account, profile or backup changed here.
 pub fn spawn_announcer(state: AppState) {
+    // Every few minutes: hello to the peers, so relays of the network find
+    // each other (and a relay that was down learns who joined meanwhile).
+    let st = state.clone();
+    tokio::spawn(async move {
+        loop {
+            if let Some(fed) = current(&st) {
+                let mut new = Vec::new();
+                for u in fed.hello_all().await {
+                    if fed.same_network(&u).await { new.push(u); }
+                }
+                if !add_peers(&st, &new).is_empty() { st.fed_kick.notify_one(); }
+            }
+            tokio::time::sleep(Duration::from_secs(180)).await;
+        }
+    });
     tokio::spawn(async move {
         let mut last: Option<(i64, i64)> = None;
         loop {

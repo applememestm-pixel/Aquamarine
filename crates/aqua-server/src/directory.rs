@@ -556,6 +556,26 @@ impl Directory {
     /// an "It's me" link: tapping it lets that app fill the code in itself
     /// (`poll_link`).
     pub async fn request_code_delivered_ex(&self, email: &str, nonce: Option<&str>, link_base: Option<&str>) -> Result<CodeDelivery, DirError> {
+        let (email, code, link) = self.prepare_code(email, nonce, link_base)?;
+        self.deliver_code(email, code, link).await
+    }
+
+    /// Mail is configured here (not dev mode).
+    pub fn has_smtp(&self) -> bool {
+        self.smtp.read().map(|c| c.is_some()).unwrap_or(false) && !self.dev_codes()
+    }
+
+    /// Send a sign-up code with this relay's mail server (for itself, or for
+    /// a relay of the network that has none).
+    pub async fn send_code_mail(&self, to: &str, code: &str, link: Option<&str>) -> anyhow::Result<()> {
+        let cfg = self.smtp.read().ok().and_then(|c| c.clone()).ok_or_else(|| anyhow::anyhow!("no mail server here"))?;
+        tokio::time::timeout(std::time::Duration::from_secs(45), send_smtp_any_port(&cfg, to, code, link))
+            .await
+            .map_err(|_| anyhow::anyhow!("the mail server didn't answer in time"))?
+    }
+
+    /// A fresh code for `email` (and its "It's me" link) → (email, code, link).
+    pub fn prepare_code(&self, email: &str, nonce: Option<&str>, link_base: Option<&str>) -> Result<(String, String, Option<String>), DirError> {
         let (email, code) = self.issue_code(email)?;
         let link = match (nonce.map(str::trim).filter(|n| n.len() >= 16 && n.len() <= 128), link_base) {
             (Some(nonce), Some(base)) => {
@@ -571,6 +591,11 @@ impl Directory {
             }
             _ => None,
         };
+        Ok((email, code, link))
+    }
+
+    /// Mail a prepared code (or, in dev mode, show it in the panel).
+    pub async fn deliver_code(&self, email: String, code: String, link: Option<String>) -> Result<CodeDelivery, DirError> {
         let cfg = self.smtp.read().ok().and_then(|c| c.clone());
         let Some(cfg) = cfg else {
             self.send_email_code(&email, &code);
@@ -1332,6 +1357,19 @@ impl Directory {
             .ok();
         if ours.is_some_and(|t| t >= u.updated_at) {
             return false;
+        }
+        // The same @name, but someone else's account (a relay that ran alone
+        // and then joined): the older account keeps the name.
+        if let Ok((their_dh, devices, created)) = db.query_row(
+            "SELECT identity_dh, devices, created_at FROM users WHERE username=?1",
+            rusqlite::params![u.username],
+            |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)),
+        ) {
+            let same = their_dh == dh || devices.contains(&u.identity_dh);
+            if !same && created <= u.created_at {
+                tracing::warn!(user = %u.username, "federation: another account already has this name here — kept the older one");
+                return false;
+            }
         }
         // The same account under a new @username (renamed on its home relay):
         // the old row goes, and the old name forwards here too.

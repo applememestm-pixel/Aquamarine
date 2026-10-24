@@ -61,6 +61,7 @@ export const FIXED: FixedDef[] = [
   { group: "Chat", what: "Start typing — focuses the message box", keys: [["A…Z"]] },
   { group: "Chat", what: "Edit your last message (empty box)", keys: [["↑"]] },
   { group: "Chat", what: "Reply to an earlier / later message", keys: [["Ctrl", "↑"], ["Ctrl", "↓"]] },
+  { group: "Chat", what: "Double-click a message to reply", keys: [["Double-click"]] },
   { group: "Chat", what: "Cancel reply / edit, close panels", keys: [["Esc"]] },
   { group: "Chat", what: "Commands: /article, /poll, /gif, /call…", keys: [["/"]] },
 ];

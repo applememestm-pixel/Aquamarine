@@ -12,6 +12,7 @@
   let addErr = $state<string | null>(null);
   const cur = $derived(($info?.server_url ?? "").replace(/\/+$/, ""));
   const curProxy = $derived($info?.proxy ?? "");
+  const locked = $derived(($netPrefs.lockServer ?? "").replace(/\/+$/, ""));
 
   async function refresh() {
     servers = serverCandidates();
@@ -76,15 +77,19 @@
           <span class="ns-sub">{u === cur ? $t($info?.connected ? "Connected" : "Connecting…") : $t("Your account works here too")}</span>
         </span>
         <span class="ns-ms {msClass(ms)}">{busy === u ? "…" : msLabel(ms)}</span>
-        {#if u === cur}<span class="ns-tick">✓</span>{/if}
+        {#if u === locked}<span class="ns-lock" title={$t("Locked")}>🔒</span>{:else if u === cur}<span class="ns-tick">✓</span>{/if}
       </button>
     {:else}
       <div class="ns-empty">{$t("Not connected to a server yet.")}</div>
     {/each}
   </div>
   <label class="ns-switch">
+    <span><b>{$t("Stay on this server")}</b><small>{locked ? $t("Locked to {u}. The app never moves to another server — if this one goes down, you're offline until it's back.", { u: short(locked) }) : $t("Never move to another server by itself, not even when this one stops answering.")}</small></span>
+    <input type="checkbox" checked={!!locked} disabled={!cur && !locked} onchange={(e) => netPrefs.update((p) => ({ ...p, lockServer: (e.currentTarget as HTMLInputElement).checked ? cur : "" }))} />
+  </label>
+  <label class="ns-switch" class:off={!!locked}>
     <span><b>{$t("Pick the fastest server by itself")}</b><small>{$t("Moves to a server of your federation that answers clearly faster, or off one that stopped answering. Your chats and account are the same on all of them.")}</small></span>
-    <input type="checkbox" checked={$netPrefs.autoServer} onchange={(e) => netPrefs.update((p) => ({ ...p, autoServer: (e.currentTarget as HTMLInputElement).checked }))} />
+    <input type="checkbox" checked={$netPrefs.autoServer && !locked} disabled={!!locked} onchange={(e) => netPrefs.update((p) => ({ ...p, autoServer: (e.currentTarget as HTMLInputElement).checked }))} />
   </label>
 </section>
 
@@ -140,6 +145,8 @@
   .ns-ms { font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .ns-ms.ok { color: #3BD671; } .ns-ms.mid { color: #9BD63B; } .ns-ms.slow { color: #F0B232; } .ns-ms.off { color: var(--fg-dim); font-weight: 600; }
   .ns-tick { color: var(--accent); font-weight: 800; }
+  .ns-lock { font-size: 13px; }
+  .ns-switch.off { opacity: .5; cursor: default; }
   .ns-x { width: 32px; height: 32px; border: none; border-radius: 50%; background: transparent; color: var(--fg-dim); font-size: 18px; cursor: pointer; flex-shrink: 0; }
   .ns-x:hover { color: var(--danger, #FF4D6D); background: var(--bg-hover); }
   .ns-empty { padding: 10px; font-size: 13px; color: var(--fg-dim); }

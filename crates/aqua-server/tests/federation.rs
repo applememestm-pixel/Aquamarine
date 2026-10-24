@@ -69,7 +69,7 @@ async fn two_relays_act_as_one() {
     let (a, b) = (la.local_addr().unwrap().to_string(), lb.local_addr().unwrap().to_string());
     let (ua, ub) = (format!("http://{a}"), format!("http://{b}"));
     let tmp = tempfile::tempdir().unwrap();
-    let cfg = |me: &str, peer: &str| FedConfig { secret: SECRET.into(), peers: vec![peer.into()], public_url: me.into() };
+    let cfg = |me: &str, peer: &str| FedConfig { secret: SECRET.into(), peers: vec![peer.into()], public_url: me.into(), ..Default::default() };
     let sa = AppState::isolated(tmp.path().join("a"), Some(cfg(&ua, &ub)));
     let sb = AppState::isolated(tmp.path().join("b"), Some(cfg(&ub, &ua)));
     { let s = sa.clone(); tokio::spawn(async move { axum::serve(la, app(s)).await.unwrap() }); }
@@ -147,7 +147,7 @@ async fn changes_are_pushed_to_peers() {
     let (a, b) = (la.local_addr().unwrap().to_string(), lb.local_addr().unwrap().to_string());
     let (ua, ub) = (format!("http://{a}"), format!("http://{b}"));
     let tmp = tempfile::tempdir().unwrap();
-    let cfg = |me: &str, peer: &str| FedConfig { secret: SECRET.into(), peers: vec![peer.into()], public_url: me.into() };
+    let cfg = |me: &str, peer: &str| FedConfig { secret: SECRET.into(), peers: vec![peer.into()], public_url: me.into(), ..Default::default() };
     let sa = AppState::isolated(tmp.path().join("a"), Some(cfg(&ua, &ub)));
     let sb = AppState::isolated(tmp.path().join("b"), Some(cfg(&ub, &ua)));
     { let s = sa.clone(); tokio::spawn(async move { axum::serve(la, app(s)).await.unwrap() }); }
@@ -197,4 +197,48 @@ async fn changes_are_pushed_to_peers() {
     sa.users.clear();
     let b2: PreKeyBundle = http.get(format!("{ua}/v1/bundle/dora")).send().await.unwrap().json().await.unwrap();
     assert_ne!(serde_json::to_string(&b2.one_time_prekey).unwrap(), serde_json::to_string(&bundle.one_time_prekey).unwrap());
+}
+
+/// Relays of one network find each other: C knows only B; after hellos, B
+/// knows C and A learns C from B. An invitation round-trips; a relay with
+/// another secret isn't "the same network".
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn relays_find_each_other_by_hello() {
+    let ls: Vec<TcpListener> = futures_util::future::join_all((0..4).map(|_| TcpListener::bind("127.0.0.1:0"))).await.into_iter().map(|l| l.unwrap()).collect();
+    let urls: Vec<String> = ls.iter().map(|l| format!("http://{}", l.local_addr().unwrap())).collect();
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = |me: &str, peers: &[&String], secret: &str| FedConfig {
+        secret: secret.into(), peers: peers.iter().map(|p| p.to_string()).collect(), public_url: me.into(), mode: "network".into(), ..Default::default()
+    };
+    let sa = AppState::isolated(tmp.path().join("a"), Some(cfg(&urls[0], &[&urls[1]], SECRET)));
+    let sb = AppState::isolated(tmp.path().join("b"), Some(cfg(&urls[1], &[&urls[0]], SECRET)));
+    let sc = AppState::isolated(tmp.path().join("c"), Some(cfg(&urls[2], &[&urls[1]], SECRET)));
+    let sx = AppState::isolated(tmp.path().join("x"), Some(cfg(&urls[3], &[], "another-network-secret-0000")));
+    for (l, s) in ls.into_iter().zip([sa.clone(), sb.clone(), sc.clone(), sx.clone()]) {
+        tokio::spawn(async move { axum::serve(l, app(s)).await.unwrap() });
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let peers = |s: &AppState| fed::current(s).unwrap().cfg.peers.clone();
+
+    // C says hello to B: B adds C (after checking C signs with the secret).
+    fed::current(&sc).unwrap().hello_all().await;
+    for _ in 0..50 { if peers(&sb).contains(&urls[2]) { break } tokio::time::sleep(Duration::from_millis(40)).await; }
+    assert!(peers(&sb).contains(&urls[2]), "B learnt C: {:?}", peers(&sb));
+
+    // A says hello to B and hears about C.
+    let new = fed::current(&sa).unwrap().hello_all().await;
+    assert!(new.contains(&urls[2]), "A heard of C: {new:?}");
+    fed::add_peers(&sa, &new);
+    assert!(peers(&sa).contains(&urls[2]));
+
+    // X has another secret: not one of us.
+    let f = fed::current(&sa).unwrap();
+    assert!(f.same_network(&urls[1]).await);
+    assert!(!f.same_network(&urls[3]).await);
+
+    // Invitation: the address and the secret, back again.
+    let inv = fed::invite(&f.cfg).unwrap();
+    assert!(inv.starts_with("aquafed:"));
+    assert_eq!(fed::parse_invite(&inv), Some((urls[0].clone(), SECRET.to_string())));
+    assert_eq!(fed::parse_invite("aquafed:garbage"), None);
 }

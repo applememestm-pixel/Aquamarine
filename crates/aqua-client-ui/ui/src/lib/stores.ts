@@ -205,8 +205,12 @@ export async function connect(server_url: string, username: string): Promise<str
     await tryOne(server_url);
     return null;
   } catch (e) {
-    // Federated: the same account works on any of the relays we know.
-    for (const alt of alternatives(server_url)) {
+    // Federated: the same account works on any of the relays we know —
+    // unless the user locked this one (then only its own other addresses).
+    const { lockedServer } = await import("./network");
+    const { aliasesOf } = await import("./servers");
+    const alts = lockedServer() ? aliasesOf(server_url) : alternatives(server_url);
+    for (const alt of alts) {
       try {
         await tryOne(alt);
         console.info(`[aqua] ${server_url} is down — switched to ${alt}`);

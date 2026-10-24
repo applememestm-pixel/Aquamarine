@@ -450,7 +450,10 @@
 | `GET`, `POST /v1/admin/smtp` | Настройки почтового сервера (пароль в ответе не возвращается) |
 | `POST /v1/admin/smtp/test` | `{"to"}` — отправить пробное письмо |
 | `GET`, `POST /v1/admin/telegram` | Токен бота Telegram для импорта наборов: `{"token"}` |
-| `GET`, `POST /v1/admin/federation` | `{"secret", "peers": [адреса], "public_url"}`; секрет не короче 16 символов и в ответе не возвращается |
+| `GET`, `POST /v1/admin/federation` | `{"mode": "solo"\|"network", "secret", "peers": [адреса], "public_url"}`; секрет не короче 16 символов и в ответе не возвращается. `mode: "network"` без секрета создаёт его сам. В ответе GET также `smtp` — есть ли у узла своя почта |
+| `GET /v1/admin/fed/invite` | `{"invite"}` — код приглашения в сеть `aquafed:…` (адрес узла и секрет сети) |
+| `POST /v1/admin/fed/join` | `{"invite"}` — войти в сеть по коду: узел берёт секрет, добавляет пригласившего соседом и знакомится с остальными |
+| `GET /v1/admin/servers` | Другие ретрансляторы: соседи, найденные в локальной сети (`/24`) и в публичном списке; для каждого `url`, `found`, `peer`, `ok`, `ms`, `users`, `online`, `same_network` |
 
 ---
 
@@ -476,6 +479,9 @@ x-aqua-fed: <unix_ms>.<hex HMAC-SHA256(secret, METHOD "\n" PATH "\n" unix_ms "\n
 | `GET /v1/fed/inbox/:user` | Забрать конверты, ждущие получателя на этом узле |
 | `GET /v1/fed/bundle/:user` | Набор ключей (без OPK) |
 | `GET /v1/fed/blob/:cid` | Шифротекст вложения |
+| `POST /v1/fed/hello` | `{"url", "peers": [адреса]}` — «я в сети»: получатель добавляет отправителя и тех из его соседей, кто отвечает с тем же секретом |
+| `GET /v1/fed/ping` | Проверка «в той же сети» (`204` при верной подписи) |
+| `POST /v1/fed/mail` | `{"to", "code", "link"}` — отправить письмо с кодом подтверждения за узел без своей почты (не больше 5 писем на адрес за 10 минут) |
 
 Протокол — в [federation.md](federation.md).
 
@@ -546,4 +552,7 @@ x-aqua-fed: <unix_ms>.<hex HMAC-SHA256(secret, METHOD "\n" PATH "\n" unix_ms "\n
 | POST | `/v1/admin/smtp/test` | админ | 15 |
 | GET, POST | `/v1/admin/telegram` | админ | 15 |
 | GET, POST | `/v1/admin/federation` | админ | 15 |
+| GET | `/v1/admin/fed/invite` | админ | 15 |
+| POST | `/v1/admin/fed/join` | админ | 15 |
+| GET | `/v1/admin/servers` | админ | 15 |
 | * | `/v1/fed/*` | федерация | 16 |
