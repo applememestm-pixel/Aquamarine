@@ -8,6 +8,7 @@ import { get } from "svelte/store";
 import { info, search, startChat } from "./stores";
 import { askInput } from "./components/InputPrompt.svelte";
 import { showToast } from "./components/Toast.svelte";
+import { tr } from "./i18n";
 
 export function openNewChatDialog(prefillUsername = "") {
   const i = get(info);
@@ -16,19 +17,17 @@ export function openNewChatDialog(prefillUsername = "") {
     return;
   }
   askInput({
-    title: "Add contact & start chat",
-    description:
-      "Username is required — it's how peers are routed on the server. " +
-      "Full name and phone are optional; they're saved to your local contact book so chats show the real name instead of the username.",
+    title: tr("Add contact & start chat"),
+    description: tr("The @username is required (with or without the @): it's how people are found on the server. Full name and phone are optional; they're saved to your local contact book so chats show the real name instead of the username."),
     fields: [
-      { label: "Full name (ФИО)", placeholder: "Иван Иванов", value: "" },
-      { label: "Phone",           placeholder: "+7 999 123-45-67", value: "" },
-      { label: "Username *",      placeholder: "e.g. ivan2027", value: prefillUsername },
-      { label: "First message *", placeholder: "Привет!" },
+      { label: tr("Full name"), placeholder: "Иван Иванов", value: "" },
+      { label: tr("Phone"),     placeholder: "+7 999 123-45-67", value: "" },
+      { label: tr("@username *"), placeholder: "@ivan2027", value: prefillUsername },
+      { label: tr("First message *"), placeholder: "Привет!" },
     ],
-    submitLabel: "Send",
+    submitLabel: tr("Send"),
     onSubmit: async ([fullName, phone, peer, msg]) => {
-      if (!peer || !msg) return "Username and first message are required";
+      if (!peer || !msg) return tr("The @username and the first message are required");
       const err = await startChat(peer.trim(), msg, {
         full_name: fullName?.trim() || undefined,
         phone:     phone?.trim()    || undefined,

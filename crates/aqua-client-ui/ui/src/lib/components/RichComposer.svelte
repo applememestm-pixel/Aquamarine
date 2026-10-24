@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { clipboardFiles } from "../pasteFiles";
   import { formattingAction } from "../keybindings";
   /**
    * The message box. A contenteditable that keeps the same plain-text value
@@ -18,9 +19,12 @@
     resolve: (key: string) => { url: string; mime: string } | undefined;
     onkeydown?: (e: KeyboardEvent) => void;
     oninput?: () => void;
+    /** Pictures / files pasted from the clipboard: file contents, or local
+     *  paths (a file copied in a Linux file manager comes as file:// URIs). */
+    onpastefiles?: (files: File[], paths: string[]) => void;
     class?: string;
   }
-  let { value = $bindable(""), placeholder = "", resolve, onkeydown, oninput, class: klass = "" }: Props = $props();
+  let { value = $bindable(""), placeholder = "", resolve, onkeydown, oninput, onpastefiles, class: klass = "" }: Props = $props();
 
   let el: HTMLDivElement | undefined = $state();
   let lastValue = "";
@@ -326,6 +330,14 @@
   }
 
   function onPaste(e: ClipboardEvent) {
+    // A copied picture (a screenshot, "Copy image") comes as a file, with no
+    // text: it used to paste nothing at all.
+    const got = clipboardFiles(e.clipboardData);
+    if ((got.files.length || got.paths.length) && onpastefiles) {
+      e.preventDefault();
+      onpastefiles(got.files, got.paths);
+      return;
+    }
     const t = e.clipboardData?.getData("text/plain");
     if (t == null) return;
     e.preventDefault();

@@ -25,12 +25,14 @@
   import MediaPlayer from "./MediaPlayer.svelte";
   import { openGallery, type GalleryItem } from "./Lightbox.svelte";
   import { openArticleComposer } from "../panels/articleComposer";
-  import { openCircleRecorder } from "./CircleRecorder.svelte";
+  import { openCircleRecorder, releaseCircleHold } from "./CircleRecorder.svelte";
   import { openPollComposer } from "./PollComposer.svelte";
   import { openForward, type ForwardItem } from "./ForwardPicker.svelte";
   import { playQueue, type Track } from "../player";
   import { toggleSharedMedia } from "./SharedMediaPanel.svelte";
   import { backToList } from "../stores";
+  import { onBack } from "../back";
+  import { clipboardFiles } from "../pasteFiles";
   import { events } from "../tauri";
   import { pollStates, castVote, retractVote, applyRemoteVote, closePoll, viewPoll, ME as POLL_ME, type PollView } from "../polls";
   import { peerPresence, setPeerPresence, broadcastPresenceTo, activityVerb, chatOnline, peerStatus, presenceNow } from "../presence";
@@ -504,12 +506,13 @@
     holdTimer = setTimeout(() => {
       holdFired = true;
       if (mediaMode === "voice") void startRecording();
-      else if ($activeChat) openCircleRecorder($activeChat.id);
+      else if ($activeChat) openCircleRecorder($activeChat.id, true);
     }, 250);
   }
   function mediaMove(e: PointerEvent) {
-    if (holdFired && mediaMode === "voice" && !recLocked && holdStartY - e.clientY > 40) {
+    if (holdFired && !recLocked && holdStartY - e.clientY > 40) {
       recLocked = true; // slid up → hands-free
+      if (mediaMode === "circle") releaseCircleHold(true);
     }
   }
   function mediaUp() {
@@ -522,6 +525,7 @@
     // Hold released: quick voice note sends on release; a locked
     // recording keeps going (controlled by the rec-bar).
     if (mediaMode === "voice" && !recLocked && recording) stopRecording();
+    if (mediaMode === "circle" && !recLocked) releaseCircleHold();
   }
 
   async function sendVoiceBlob(blob: Blob) {
@@ -610,6 +614,22 @@
   }
 
   /** "As photo": like Telegram, re-encode to ≤ 2560 px (GIFs stay as they are). */
+  /** Pictures pasted into the message field: saved to a temp file and sent
+   *  like picked ones (the send dialog offers caption / compression). */
+  async function pasteFiles(files: File[], local: string[] = []) {
+    const chat = $activeChat;
+    if (!chat?.live) return;
+    const paths: string[] = [...local];
+    for (const f of files) {
+      try {
+        const ext = (f.type.split("/")[1] || "bin").replace("jpeg", "jpg").replace(/[^a-z0-9]/gi, "");
+        const name = f.name && f.name !== "image.png" ? f.name : `pasted-${new Date().toISOString().replace(/[:.]/g, "-")}.${ext}`;
+        paths.push(await api.saveTempFile(name, Array.from(new Uint8Array(await f.arrayBuffer()))));
+      } catch (e) { showToast(`${tr("Could not paste")}: ${e}`); }
+    }
+    if (paths.length) await sendFiles(chat.id, paths);
+  }
+
   async function sendCompressedPhoto(peerId: string, path: string) {
     if (/\.gif$/i.test(path)) { await api.attachFile(peerId, path); return; }
     const bytes = await api.readUserImage(path);
@@ -688,6 +708,17 @@
       }
     };
     const onUp = () => { endDrag(); if (holdTimer || holdFired) mediaUp(); };
+    // Ctrl+V with the focus outside the message field: files still go in.
+    const onWinPaste = (e: ClipboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA)$/.test(t.tagName))) return;
+      if (!$activeChat?.live || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      const got = clipboardFiles(e.clipboardData);
+      if (!got.files.length && !got.paths.length) return;
+      e.preventDefault();
+      void pasteFiles(got.files, got.paths);
+    };
+    window.addEventListener("paste", onWinPaste);
     window.addEventListener("mousedown", onDown);
     window.addEventListener("keydown", onKey);
     window.addEventListener("pointerup", onUp);
@@ -736,6 +767,7 @@
       if (unTyping) unTyping();
       if (unsub) unsub();
       window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("paste", onWinPaste);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("pointerup", onUp);
       for (const [n, f] of kb) window.removeEventListener(n, f);
@@ -1645,7 +1677,15 @@
   // Custom (non-Chromium) context menu.
   let menu = $state<{ open: boolean; x: number; y: number; row: Row | null; touch?: boolean }>({ open: false, x: 0, y: 0, row: null });
 
+  // Back (phone button / gesture) closes these, newest first (lib/back.ts).
+  $effect(() => { if (attachMenuOpen) return onBack(() => closeSheet()); });
+  $effect(() => { if (selecting) return onBack(() => clearSelection()); });
+  $effect(() => { if (menu.open) return onBack(() => closeMenu()); });
+  $effect(() => { if (searchOpen) return onBack(() => closeSearch()); });
+
   function selectedCount() { return selected.size; }
+  let selMore = $state(false);
+  $effect(() => { if (!selecting) selMore = false; });
 
   function toggleSelect(id: string) {
     if (selected.has(id)) selected.delete(id); else selected.add(id);
@@ -1909,7 +1949,8 @@
     if (!chat || list.length === 0) return;
     // "Delete for everyone" is possible for your own text messages (and,
     // in groups, for others' when you may moderate); the rest is local.
-    const canAll = chat.id !== "__saved__" && list.some((r) => (r.kind.type === "text" || r.kind.type === "reply") && (r.outgoing || chat.id.startsWith("grp_")));
+    // In a 1:1 chat either side may delete any text message for both (Telegram).
+    const canAll = chat.id !== "__saved__" && list.some((r) => (r.kind.type === "text" || r.kind.type === "reply") && (r.outgoing || chat.id.startsWith("grp_") || (!isGroup && !r.outgoing)));
     let forAll = canAll;
     if (ask) {
       const title = list.length === 1 ? tr("Delete this message?") : tr("Delete {n} messages?", { n: list.length });
@@ -1940,7 +1981,13 @@
     for (const row of list) {
       const k = row.kind.type;
       const t = k === "text" || k === "reply" ? textOf(row) : null;
-      if (t == null || (!row.outgoing && !chat.id.startsWith("grp_"))) { local.push(row.id); continue; }
+      if (t == null) { local.push(row.id); continue; }
+      if (!row.outgoing && !chat.id.startsWith("grp_")) {
+        // Their message in a 1:1 chat: gone here, and they're told to drop it too.
+        local.push(row.id);
+        void sendChatControl(chat.id, "[del:v1]" + JSON.stringify({ text: t, author: row.from === "me" ? myUsername : (row.from || chat.id) })).catch(() => {});
+        continue;
+      }
       try {
         if (!row.outgoing && chat.id.startsWith("grp_")) {
           await api.deleteGroupMessageOf(chat.id, row.from, t);
@@ -1962,28 +2009,10 @@
     await deleteRows(list);
   }
 
+  /** One message: asks first, with "also delete for …" ticked (Telegram). */
   async function deleteRow(row: Row) {
     closeMenu();
-    const t = textOf(row);
-    if (t == null || (row.kind.type !== "text" && row.kind.type !== "reply")) { await deleteRows([row]); return; }
-    const chat = $activeChat;
-    if (!chat) return;
-    try {
-      if (!row.outgoing && chat.id.startsWith("grp_")) {
-        // Admin removing someone else's message.
-        await api.deleteGroupMessageOf(chat.id, row.from, t);
-        void sendChatControl(chat.id, "[del:v1]" + JSON.stringify({ text: t, author: row.from })).catch(() => {});
-      } else {
-        await api.deleteMessage(chat.id, t);
-        if (chat.id !== "__saved__") {
-          void sendChatControl(chat.id, "[del:v1]" + JSON.stringify({ text: t })).catch(() => {});
-        }
-      }
-      await loadActiveMessages();
-      chats.set(await api.listChats());
-    } catch (e) {
-      showToast(`Delete failed: ${e}`);
-    }
+    await deleteRows([row]);
   }
 
   // ---- Typing indicator ----
@@ -2137,6 +2166,84 @@
     selecting = true;
     anchorId = id;
   }
+  // ---- Phones: Telegram's swipes ----
+  // A message pulled to the left → reply to it; the chat pulled to the
+  // right → back to the list. Touch events, so a vertical scroll is never
+  // hijacked: the direction is decided after the first few pixels.
+  const SWIPE_REPLY = 64, SWIPE_BACK = 90;
+  let chatRoot = $state<HTMLElement | null>(null);
+  $effect(() => {
+    const el = messagesEl;
+    const root = chatRoot;
+    if (!el || !root) return;
+    const isPhone = () => matchMedia("(max-width: 720px)").matches;
+    let g: { x0: number; y0: number; t0: number; dir: 0 | 1 | 2 | -1; dx: number; rowEl: HTMLElement | null; id: string | null; buzzed: boolean } | null = null;
+    const reset = (node: HTMLElement | null, prop: "transform") => {
+      if (!node) return;
+      node.style.transition = "transform .22s cubic-bezier(.22,1,.36,1)";
+      node.style[prop] = "";
+      setTimeout(() => { node.style.transition = ""; node.classList.remove("swiping"); }, 240);
+    };
+    const start = (e: TouchEvent) => {
+      if (e.touches.length !== 1 || selecting || !isPhone()) { g = null; return; }
+      const t = e.touches[0];
+      const target = e.target as HTMLElement;
+      // Sliders, players, text fields and things that scroll sideways keep the finger.
+      if (target.closest("input, textarea, [contenteditable], .ctl, .reactions-row, .carousel, pre, .hscroll")) { g = null; return; }
+      const rowEl = target.closest<HTMLElement>(".msg[data-id]");
+      g = { x0: t.clientX, y0: t.clientY, t0: performance.now(), dir: 0, dx: 0, rowEl, id: rowEl?.dataset.id ?? null, buzzed: false };
+    };
+    const move = (e: TouchEvent) => {
+      if (!g || g.dir === -1) return;
+      const t = e.touches[0];
+      const dx = t.clientX - g.x0, dy = t.clientY - g.y0;
+      if (g.dir === 0) {
+        if (Math.hypot(dx, dy) < 10) return;
+        if (Math.abs(dx) < Math.abs(dy) * 1.4) { g.dir = -1; return; }   // a scroll
+        g.dir = dx < 0 ? (g.rowEl && $activeChat?.live ? 1 : -1) : 2;
+        if (g.dir === -1) return;
+        getSelection()?.removeAllRanges();
+      }
+      e.preventDefault();
+      g.dx = dx;
+      if (g.dir === 1 && g.rowEl) {
+        const d = Math.max(-96, Math.min(0, dx));
+        g.rowEl.classList.add("swiping");
+        g.rowEl.style.transform = `translateX(${d}px)`;
+        g.rowEl.style.setProperty("--sw", String(Math.min(1, -d / SWIPE_REPLY)));
+        if (!g.buzzed && -d >= SWIPE_REPLY) { g.buzzed = true; try { navigator.vibrate?.(10); } catch { /* none */ } }
+      } else if (g.dir === 2) {
+        root.style.transform = `translateX(${Math.max(0, dx)}px)`;
+      }
+    };
+    const end = () => {
+      if (!g) return;
+      const { dir, dx, rowEl, id, t0 } = g;
+      g = null;
+      if (dir === 1) {
+        reset(rowEl, "transform");
+        if (-dx >= SWIPE_REPLY && id) { const r = rows.find((x) => String(x.id) === id); if (r) replyRow(r); }
+      } else if (dir === 2) {
+        const fast = dx > 40 && dx / Math.max(1, performance.now() - t0) > 0.6;
+        if (dx >= SWIPE_BACK || fast) {
+          root.style.transition = "transform .2s ease-out";
+          root.style.transform = "translateX(100%)";
+          setTimeout(() => { backToList(); root.style.transition = ""; root.style.transform = ""; }, 190);
+        } else reset(root, "transform");
+      }
+    };
+    el.addEventListener("touchstart", start, { passive: true });
+    el.addEventListener("touchmove", move, { passive: false });
+    el.addEventListener("touchend", end);
+    el.addEventListener("touchcancel", end);
+    return () => {
+      el.removeEventListener("touchstart", start);
+      el.removeEventListener("touchmove", move);
+      el.removeEventListener("touchend", end);
+      el.removeEventListener("touchcancel", end);
+    };
+  });
+
   function onRowPointerDown(e: PointerEvent, m: Row) {
     if (e.button !== 0 || e.shiftKey) return;
     const t = e.target as HTMLElement;
@@ -2471,7 +2578,7 @@
 
 {#snippet msgFlags(m: ChatMessage)}
   {#if m.meta?.deleted}<span class="mflag del" title={$t("Deleted by the sender — kept on this device")}>{$t("deleted")}</span>{/if}
-  {#if m.meta?.edits?.length}<span class="mflag" title={$t("Earlier versions:") + "\n" + m.meta.edits.join("\n— ")}>{$t("edited")}</span>{/if}
+  {#if m.meta?.edits?.length}<span class="mflag pen" role="img" aria-label={$t("edited")} title={$t("Earlier versions:") + "\n" + m.meta.edits.join("\n— ")}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>{/if}
 {/snippet}
 
 {#snippet statusTick(outgoing: boolean)}
@@ -2504,7 +2611,7 @@
   {:else}<span class="room-ic">{r.kind === "voice" ? "🔊" : "#"}</span>{/if}
 {/snippet}
 
-<main class="active-chat" class:with-rooms={rooms.length > 0} class:voice-on={fullVoice} class:voice-chat={fullVoice && voiceChat}>
+<main class="active-chat" bind:this={chatRoot} class:with-rooms={rooms.length > 0} class:voice-on={fullVoice} class:voice-chat={fullVoice && voiceChat}>
   {#if !$activeChat}
     <Welcome />
   {:else}
@@ -2603,6 +2710,7 @@
     <header
       bind:this={headerEl}
       class="chat-header"
+      class:under-sel={selecting}
       class:clickable={$activeChat.id !== "__saved__"}
       onclick={(e) => {
         // The whole bar opens the chat / channel / profile info, except
@@ -2819,17 +2927,44 @@
     {/if}
 
     {#if selecting}
+      <!-- On phones it takes the header's place, actions as icons (new Telegram). -->
       <div class="sel-bar">
-        <button class="sel-x" onclick={clearSelection} title={$t("Cancel (Esc)")}>×</button>
-        <span class="sel-count">{selectedCount()} selected</span>
+        <button class="sel-x" onclick={clearSelection} title={$t("Cancel (Esc)")} aria-label={$t("Cancel")}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+        <span class="sel-count">{selectedCount()}</span>
         <div class="sel-actions">
+          {#if selectedCount() === 1 && $activeChat?.live}
+            <button class="sel-act" onclick={() => { const r = rows.find((x) => selected.has(x.id)); clearSelection(); if (r) replyRow(r); }} title={$t("Reply")} aria-label={$t("Reply")}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 6 6v5"/></svg><span>{$t("Reply")}</span>
+            </button>
+          {/if}
           {#if !protectedChat}
-          <button class="sel-act" onclick={copySelection}>{$t("Copy")}</button>
-          <button class="sel-act danger" onclick={() => void deleteSelection()} title={$t("Delete (Del)")}>{$t("Delete")}</button>
-          <button class="sel-act" onclick={() => void selectionTo("tasks")} title={$t("Make a checklist from these messages")}>☑️ {$t("Tasks")}</button>
-          <button class="sel-act" onclick={() => void selectionTo("doc")} title={$t("Make a shared document from these messages")}>📄 {$t("Doc")}</button>
-          <button class="sel-act" onclick={() => void selectionTo("board")} title={$t("Make a board: one card per message")}>🗂 {$t("Board")}</button>
-          <button class="sel-act primary" onclick={forwardSelection}>{$t("Forward")}</button>
+            <button class="sel-act" onclick={copySelection} title={$t("Copy")} aria-label={$t("Copy")}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg><span>{$t("Copy")}</span>
+            </button>
+            <button class="sel-act" onclick={forwardSelection} title={$t("Forward")} aria-label={$t("Forward")}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0-6 6v5"/></svg><span>{$t("Forward")}</span>
+            </button>
+          {/if}
+          <button class="sel-act danger" onclick={() => void deleteSelection()} title={$t("Delete (Del)")} aria-label={$t("Delete")}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/></svg><span>{$t("Delete")}</span>
+          </button>
+          {#if !protectedChat}
+            <div class="sel-more-wrap">
+              <button class="sel-act" onclick={() => (selMore = !selMore)} title={$t("More")} aria-label={$t("More")}>
+                <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
+              </button>
+              {#if selMore}
+                <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+                <div class="sel-more-veil" onclick={() => (selMore = false)}></div>
+                <div class="sel-more" role="menu">
+                  <button role="menuitem" onclick={() => { selMore = false; void selectionTo("tasks"); }}>☑️ {$t("Tasks")}</button>
+                  <button role="menuitem" onclick={() => { selMore = false; void selectionTo("doc"); }}>📄 {$t("Doc")}</button>
+                  <button role="menuitem" onclick={() => { selMore = false; void selectionTo("board"); }}>🗂 {$t("Board")}</button>
+                </div>
+              {/if}
+            </div>
           {/if}
         </div>
       </div>
@@ -3309,7 +3444,7 @@
         {#if row.outgoing && (row.kind.type === "text" || row.kind.type === "reply")}
           <button class="ctx-item" role="menuitem" onclick={() => startEdit(row)}>{$t("Edit")}</button>
         {/if}
-        {#if row.outgoing || (isGroup && can(activeGroup, myUsername, "delete_messages"))}
+        {#if row.outgoing || !isGroup || can(activeGroup, myUsername, "delete_messages")}
           <button class="ctx-item danger" role="menuitem" onclick={() => deleteRow(row)}>{$t("Delete")}</button>
         {/if}
         {#if pinnedId($activeChat?.id ?? "") === row.id}
@@ -3577,6 +3712,7 @@
           resolve={(k) => emojiMap[k]}
           oninput={onComposerInput}
           onkeydown={onKey}
+          onpastefiles={(f, p) => void pasteFiles(f, p)}
         />
       </div>
       {#if text.trim().length === 0 && liveChat}
@@ -3867,6 +4003,9 @@
   .admin-title { font-size: 11px; color: var(--fg-dim); font-style: italic; }
   .mflag { font-size: 10.5px; font-style: italic; color: var(--fg-dim); margin-right: 4px; cursor: help; }
   .mflag.del { color: #ff8f8f; }
+  /* "Edited": a small pencil by the time instead of a word (Telegram). */
+  .mflag.pen { display: inline-flex; vertical-align: -1px; font-style: normal; opacity: .75; }
+  .mflag.pen svg { width: 11px; height: 11px; }
   .slow-left { font-size: 12px; font-weight: 800; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
   .hdr-clan { margin-left: 6px; display: inline-flex; vertical-align: middle; }
 
@@ -4624,33 +4763,54 @@
 
   /* --- Selection bar --- */
   .sel-bar {
-    display: flex; align-items: center; gap: 12px;
-    padding: 10px 16px;
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px;
     background: var(--bg-list);
     border-bottom: 1px solid var(--border);
     z-index: 6;
+    animation: sel-in .18s ease-out;
   }
+  @keyframes sel-in { from { opacity: 0; transform: translateY(-6px); } }
   .sel-x {
-    width: 28px; height: 28px;
-    background: transparent; border: 1px solid var(--border);
-    border-radius: 8px; color: var(--fg-muted); font-size: 17px; cursor: pointer;
+    width: 34px; height: 34px; flex-shrink: 0; display: grid; place-items: center;
+    background: transparent; border: none; border-radius: 50%; color: var(--fg-muted); cursor: pointer;
   }
+  .sel-x svg { width: 18px; height: 18px; }
   .sel-x:hover { color: var(--fg); background: var(--bg-hover); }
-  .sel-count { flex: 1; font-size: 13.5px; font-weight: 600; color: var(--fg); }
-  .sel-actions { display: flex; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
-  .sel-actions .sel-act { flex-shrink: 0; }
+  .sel-count { flex: 1; font-size: 16px; font-weight: 700; color: var(--fg); font-variant-numeric: tabular-nums; }
+  .sel-actions { display: flex; align-items: center; gap: 4px; min-width: 0; }
   .sel-act {
-    padding: 6px 14px; border-radius: 8px;
-    border: 1px solid var(--border); background: transparent;
+    display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0;
+    padding: 7px 10px; border-radius: 10px; border: none; background: transparent;
     color: var(--fg-muted); font-size: 12.5px; font-weight: 600; cursor: pointer;
   }
-  .sel-act:hover { color: var(--fg); border-color: var(--border-strong); }
-  .sel-act.primary {
-    border-color: var(--accent-soft); background: var(--accent-soft); color: var(--accent);
-  }
-  .sel-act.danger { color: #ff6b6b; border-color: color-mix(in srgb, #ff6b6b 40%, transparent); }
+  .sel-act svg { width: 19px; height: 19px; }
+  .sel-act:hover { color: var(--fg); background: var(--bg-hover); }
+  .sel-act.danger { color: #ff6b6b; }
   .sel-act.danger:hover { background: color-mix(in srgb, #ff6b6b 14%, transparent); color: #ff8787; }
-  .sel-act.primary:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  .sel-more-wrap { position: relative; }
+  .sel-more-veil { position: fixed; inset: 0; z-index: 30; }
+  .sel-more { position: absolute; right: 0; top: calc(100% + 6px); z-index: 31; min-width: 170px; padding: 5px; display: flex; flex-direction: column;
+    background: var(--bg-surface-2); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: 0 16px 40px -10px rgba(0,0,0,.6); }
+  .sel-more button { text-align: left; padding: 10px 12px; border: none; border-radius: 8px; background: transparent; color: var(--fg); font: inherit; font-size: 14px; cursor: pointer; }
+  .sel-more button:hover { background: var(--accent-soft); color: var(--accent); }
+  /* Phones: the bar replaces the chat header; icons only, big targets. */
+  @media (max-width: 720px) {
+    .chat-header.under-sel { display: none; }
+    .sel-bar { min-height: 56px; box-sizing: border-box; padding: calc(6px + 0px) 6px 6px 8px; gap: 6px; }
+    .sel-act span { display: none; }
+    .sel-act { width: 44px; height: 44px; padding: 0; justify-content: center; border-radius: 50%; color: var(--fg); }
+    .sel-act svg { width: 22px; height: 22px; }
+    .sel-act.danger { color: #ff6b6b; }
+  }
+
+  /* Swipe to reply: an arrow fades in at the right edge as the message slides. */
+  .msg:global(.swiping) { position: relative; }
+  .msg:global(.swiping)::after {
+    content: ""; position: absolute; right: -40px; top: 50%; width: 30px; height: 30px; margin-top: -15px; border-radius: 50%;
+    opacity: var(--sw, 0); transform: scale(calc(.6 + .4 * var(--sw, 0)));
+    background: var(--accent-soft) center / 18px no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2300E5C7' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 14 4 9l5-5'/%3E%3Cpath d='M4 9h10a6 6 0 0 1 6 6v5'/%3E%3C/svg%3E");
+  }
 
   /* --- Per-message selection --- */
   .messages.selecting .msg { cursor: pointer; }

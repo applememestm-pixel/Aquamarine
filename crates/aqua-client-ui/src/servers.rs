@@ -252,23 +252,34 @@ pub async fn public_servers() -> Result<Vec<PublicServer>, String> {
     Err(last)
 }
 
-/// The ping next to the title on the main page: one round trip to the relay
-/// we're on. The connection is kept alive between calls, so it measures the
-/// network, not a fresh TCP handshake every time.
+/// The ping next to the title on the main page, and the pings in Settings →
+/// Network: one round trip to `url`. `via`: None — the way the app connects
+/// now (the proxy, if one is on); "" — direct; else through that proxy
+/// (socks5:// or http://). Connections are kept alive between calls, so it
+/// measures the network, not a fresh handshake every time.
 #[tauri::command]
-pub async fn server_ping(url: String) -> Result<u64, String> {
-    static HTTP: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+pub async fn server_ping(url: String, via: Option<String>) -> Result<u64, String> {
+    static HTTP: std::sync::OnceLock<Mutex<HashMap<String, reqwest::Client>>> = std::sync::OnceLock::new();
     let (url, _, _) = split_url(&url).ok_or("bad server address")?;
-    let http = match HTTP.get() {
-        Some(c) => c.clone(),
+    let proxy = match via {
+        Some(v) => v.trim().to_string(),
+        None => aqua_client_core::transport::proxy().unwrap_or_default(),
+    };
+    let cached = HTTP.get_or_init(|| Mutex::new(HashMap::new())).lock().ok().and_then(|m| m.get(&proxy).cloned());
+    let http = match cached {
+        Some(c) => c,
         None => {
-            let c = reqwest::Client::builder()
+            let mut b = reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(3))
                 .timeout(Duration::from_secs(5))
-                .pool_idle_timeout(Duration::from_secs(90))
-                .build()
-                .map_err(|e| e.to_string())?;
-            HTTP.get_or_init(|| c).clone()
+                .pool_idle_timeout(Duration::from_secs(90));
+            b = if proxy.is_empty() { b.no_proxy() } else { b.proxy(reqwest::Proxy::all(&proxy).map_err(|e| format!("proxy: {e}"))?) };
+            let c = b.build().map_err(|e| e.to_string())?;
+            if let Ok(mut m) = HTTP.get_or_init(|| Mutex::new(HashMap::new())).lock() {
+                if m.len() > 16 { m.clear(); }
+                m.insert(proxy.clone(), c.clone());
+            }
+            c
         }
     };
     let t0 = Instant::now();

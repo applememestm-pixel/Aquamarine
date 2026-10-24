@@ -269,8 +269,23 @@ jobs:
           apk=$(find crates/aqua-client-ui/gen/android -name '*universal*release*.apk' | head -1)
           [ -n "$apk" ] || apk=$(find crates/aqua-client-ui/gen/android -name '*release*.apk' | head -1)
           echo "unsigned: $apk"
+          # Secrets pasted with a stray newline or spaces (the alias came as
+          # "aquamarine\n" → "entry does not contain a key"): trim them.
+          trim() { printf '%s' "$1" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
+          KS_PASS=$(trim "$KS_PASS"); KS_ALIAS=$(trim "$KS_ALIAS")
           if [ -n "$KS_B64" ]; then
-            echo "$KS_B64" | base64 -d > ks.jks
+            printf '%s' "$KS_B64" | tr -d ' \t\r\n' | base64 -d > ks.jks
+            # The alias secret doesn't name a key in the keystore: take its only key.
+            if ! keytool -list -keystore ks.jks -storepass "$KS_PASS" -alias "$KS_ALIAS" >/dev/null 2>&1; then
+              found=$(keytool -list -keystore ks.jks -storepass "$KS_PASS" 2>/dev/null | awk -F, '/PrivateKeyEntry/ {print $1; exit}')
+              if [ -n "$found" ]; then
+                echo "::warning::ANDROID_KEY_ALIAS doesn't match the keystore — using its key \"$found\""
+                KS_ALIAS="$found"
+              else
+                echo "::error::Can't open the keystore with ANDROID_KEYSTORE_PASSWORD, or it holds no key"
+                exit 1
+              fi
+            fi
           else
             # No signing secrets yet: throwaway key. Works, but each build has
             # a different key, so updates need uninstall → install.

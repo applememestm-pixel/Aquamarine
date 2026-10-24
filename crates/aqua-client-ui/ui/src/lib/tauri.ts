@@ -96,7 +96,8 @@ export const api = {
 
   // Email registration + user directory
   /** purpose: the relay answers at once if the e-mail already has an account (signup) or has none (signin/reset). */
-  requestEmailCode:   (server_url: string, email: string, purpose?: "signup" | "signin" | "reset"): Promise<{ dev_code: string | null; delivery_failed: boolean; error: string | null }> => invoke("request_email_code", { serverUrl: server_url, email, purpose: purpose ?? null }),
+  requestEmailCode:   (server_url: string, email: string, purpose?: "signup" | "signin" | "reset", nonce?: string): Promise<{ dev_code: string | null; delivery_failed: boolean; error: string | null }> => invoke("request_email_code", { serverUrl: server_url, email, purpose: purpose ?? null, nonce: nonce ?? null }),
+  pollEmailCode:      (server_url: string, email: string, nonce: string): Promise<string | null> => invoke("poll_email_code", { serverUrl: server_url, email, nonce }),
   verifyEmailCode:    (server_url: string, email: string, code: string): Promise<string> => invoke("verify_email_code", { serverUrl: server_url, email, code }),
   registerAccount:    (server_url: string, username: string, ticket: string, display_name: string, about: string, phone: string, password?: string, email?: string): Promise<void> => invoke("register_account", { serverUrl: server_url, username, ticket, displayName: display_name, about, phone, password: password || null, email: email || null }),
   listDevices:        (): Promise<DeviceInfo[]> => invoke("list_devices"),
@@ -203,6 +204,8 @@ export const api = {
   editMessage:        (peer_id: string, old_text: string, new_text: string): Promise<void> => invoke("edit_message", { peerId: peer_id, oldText: old_text, newText: new_text }),
   deleteMessage:      (peer_id: string, text: string): Promise<void>                    => invoke("delete_message", { peerId: peer_id, text }),
   deleteMessagesLocal: (peerId: string, ids: string[]): Promise<number> => invoke("delete_messages_local", { peerId, ids }),
+  deleteChat:         (peerId: string): Promise<void> => invoke("delete_chat", { peerId }),
+  markChatRead:       (peerId: string): Promise<void> => invoke("mark_chat_read", { peerId }),
   attachFile:         (peer_id: string, file_path: string): Promise<AttachResult>  => invoke("attach_file", { peerId: peer_id, filePath: file_path }),
   /** Re-send a file with a "Forwarded from" header (JSON). */
   forwardFile:        (peer_id: string, file_path: string, header: string): Promise<AttachResult> => invoke("forward_file", { peerId: peer_id, filePath: file_path, header }),
@@ -234,7 +237,7 @@ export const api = {
   setDmabuf:          (on: boolean): Promise<void> => invoke("set_dmabuf", { on }),
   confirmDmabuf:      (): Promise<void> => invoke("confirm_dmabuf"),
   restartApp:         (): Promise<void> => invoke("restart_app"),
-  serverPing:         (url: string): Promise<number> => invoke("server_ping", { url }),
+  serverPing:         (url: string, via?: string): Promise<number> => invoke("server_ping", { url, via: via ?? null }),
   accountsList:       (): Promise<AccountSlot[]> => invoke("accounts_list"),
   accountSwitch:      (slot: string, store: string): Promise<{ slot: string; store: string | null }> => invoke("account_switch", { slot, store }),
   accountForget:      (slot: string): Promise<void> => invoke("account_forget", { slot }),

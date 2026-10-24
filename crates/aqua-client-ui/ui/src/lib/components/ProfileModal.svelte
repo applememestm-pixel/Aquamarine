@@ -10,6 +10,7 @@
 </script>
 
 <script lang="ts">
+  import UsernameEdit from "./UsernameEdit.svelte";
   import BirthdayInput from "./BirthdayInput.svelte";
   import ColorInput from "./ColorInput.svelte";
   import { onMount } from "svelte";
@@ -434,7 +435,10 @@
             bind:value={draft.display_name}
             placeholder={$t("Display name")}
           />
-          <div class="username">@{view.username}</div>
+          <div class="field">
+            <span>{$t("Username")}</span>
+            <UsernameEdit />
+          </div>
           <label class="field">
             <span>{$t("Custom status")}</span>
             <input bind:value={draft.status} placeholder={$t("What's on your mind?")} />

@@ -19,7 +19,16 @@ export interface GhostPrefs {
   sendReadLater: boolean;
 }
 
-const DEF: GhostPrefs = { noReadReceipts: false, noTyping: false, keepDeleted: true, keepEdits: true, sendReadLater: false };
+// Deleted messages disappear by default, as in Telegram ("keep" was the
+// default before and made deleting look broken on the other side).
+const DEF: GhostPrefs = { noReadReceipts: false, noTyping: false, keepDeleted: false, keepEdits: true, sendReadLater: false };
+try {
+  if (!localStorage.getItem("aqua.ghost.del2")) {
+    const raw = localStorage.getItem("aqua.ghost.v1");
+    if (raw) localStorage.setItem("aqua.ghost.v1", JSON.stringify({ ...JSON.parse(raw), keepDeleted: false }));
+    localStorage.setItem("aqua.ghost.del2", "1");
+  }
+} catch { /* ignore */ }
 
 function persisted<T>(key: string, init: T) {
   let v = init;

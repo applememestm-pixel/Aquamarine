@@ -4,6 +4,8 @@
 </script>
 
 <script lang="ts">
+  import UsernameEdit from "./UsernameEdit.svelte";
+  import NetworkSettings from "./NetworkSettings.svelte";
   import ColorInput from "./ColorInput.svelte";
   import { onMount } from "svelte";
   import { fitWallpaper, followWallpaper } from "../theme";
@@ -44,7 +46,7 @@
   import { meshStatus, meshSyncNow, meshSetEnabled, refreshMesh } from "../mesh";
 
   // ---- Section navigation ----
-  type Sec = "nearby" | "host" | "ghost" | "language" | "appearance" | "theme" | "behaviour" | "notifications" | "voice" | "wallpaper" | "accent" | "bots" | "account" | "updates" | "about" | "privacy" | "stickers" | "backups" | "devices";
+  type Sec = "network" | "nearby" | "host" | "ghost" | "language" | "appearance" | "theme" | "behaviour" | "notifications" | "voice" | "wallpaper" | "accent" | "bots" | "account" | "updates" | "about" | "privacy" | "stickers" | "backups" | "devices";
   let section = $state<Sec>("notifications");
   // Telegram-mobile style: coloured icon tiles in grouped lists.
   interface Item { id: Sec | "profile" | "shortcuts"; label: string; color: string; icon: string; hint?: string }
@@ -72,6 +74,7 @@
     [
       { id: "shortcuts", label: "Keyboard shortcuts", color: "#5AC8FA", icon: ic(`<rect x="2" y="6" width="20" height="12" rx="2"/><line x1="6" y1="10" x2="6.01" y2="10"/><line x1="10" y1="10" x2="10.01" y2="10"/><line x1="14" y1="10" x2="14.01" y2="10"/><line x1="18" y1="10" x2="18.01" y2="10"/><line x1="7" y1="14" x2="17" y2="14"/>`), hint: "Ctrl+/" },
       { id: "bots", label: "Bots", color: "#00C7BE", icon: ic(`<rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4"/><circle cx="12" cy="3" r="1"/><line x1="9" y1="13" x2="9.01" y2="13"/><line x1="15" y1="13" x2="15.01" y2="13"/>`) },
+      { id: "network", label: "Network & proxy", color: "#5856D6", icon: ic(`<circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20"/><path d="M12 2a15 15 0 0 0 0 20"/>`) },
       { id: "account", label: "Account & server", color: "#007AFF", icon: ic(`<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>`) },
       { id: "updates", label: "Updates", color: "#34C759", icon: ic(`<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>`) },
       { id: "about", label: "About Aquamarine", color: "#8E8E93", icon: ic(`<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>`) },
@@ -733,7 +736,7 @@
     onclick={(e) => { if ((e.target as HTMLElement).classList.contains("backdrop")) closeAll(); }}
     onkeydown={(e) => { if (e.target === e.currentTarget && (e.key === "Escape" || e.key === "Enter")) closeAll(); }}
   >
-    <div class="sheet" class:detail class:wide={section === "appearance"} role="dialog" aria-modal="true" tabindex="-1">
+    <div class="sheet" data-own-back class:detail class:wide={section === "appearance"} role="dialog" aria-modal="true" tabindex="-1">
       <div class="layout">
         <nav class="nav">
           <div class="list-head phone-only">
@@ -1414,9 +1417,9 @@
       {#if section === "account"}
       <section class="group">
         <div class="label">{$t("Session")}</div>
-        <div class="info-row">
+        <div class="info-row ue">
           <span class="k">{$t("Username")}</span>
-          <span class="v">{$info?.username ?? "—"}</span>
+          <div class="v"><UsernameEdit /></div>
         </div>
         <div class="info-row">
           <span class="k">{$t("Server")}</span>
@@ -1432,16 +1435,13 @@
         </div>
       </section>
       <section class="group">
-        <div class="label">{$t("Connect through a server")}</div>
-        <div class="row">
-          <input class="proxy-in" bind:value={proxyUrl} placeholder="socks5://127.0.0.1:1080" spellcheck="false" />
-          <button class="mini-btn" onclick={saveProxy} disabled={proxyBusy}>{proxyBusy ? "…" : $t("Save")}</button>
-        </div>
-        {#if proxyNote}<div class="foot-note">{proxyNote}</div>{/if}
-        <div class="foot-note">
-          {$t("Routes all traffic through a local SOCKS5 proxy — e.g. an OpenFlux tunnel you run. Leave empty for a direct connection. Aquamarine doesn't run the tunnel; point this at one you've started.")}
-        </div>
+        <div class="label">{$t("Proxy")}</div>
+        <button class="mini-btn" onclick={() => { section = "network"; }}>{$t("Network & proxy")} ›</button>
       </section>
+      {/if}
+
+      {#if section === "network"}
+        <NetworkSettings />
       {/if}
 
       {#if section === "devices"}
@@ -2115,6 +2115,8 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   }
   .info-row .k { flex: 0 0 90px; color: var(--fg-dim); font-weight: 600; }
   .info-row .v { flex: 1; color: var(--fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .info-row.ue { align-items: flex-start; }
+  .info-row.ue .v { white-space: normal; overflow: visible; }
   .info-row .mono { font-family: var(--font-mono); color: var(--fg-muted); font-size: 11.5px; }
   .info-row .dir { direction: rtl; text-align: left; }
 

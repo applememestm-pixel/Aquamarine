@@ -71,7 +71,7 @@ export function displayName(username: string, fallback: string): string {
  * fields (full_name, phone, username). Powers the global search bar.
  */
 export function contactMatches(username: string, query: string): boolean {
-  const q = query.trim().toLowerCase();
+  const q = query.trim().replace(/^@+/, "").toLowerCase();
   if (!q) return true;
   if (username.toLowerCase().includes(q)) return true;
   const c = get(contacts)[username.trim()];
