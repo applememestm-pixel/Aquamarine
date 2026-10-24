@@ -172,13 +172,22 @@
     pick();
   }
 
-  // ---- a comet behind the pointer: a thin teal tail (the site's text
-  // selection colour) that thins and fades ----
+  // ---- the cursor: a small teal dot instead of the arrow, a thin comet
+  // tail behind it (the colour of the site's text selection). Selecting
+  // text or typing brings the normal cursor back. A button in the nav turns
+  // both off (remembered). ----
   if (!reduce && matchMedia("(pointer: fine)").matches) {
+    const FX_KEY = "aqua.site.fx";
+    let fxOn = (() => { try { return localStorage.getItem(FX_KEY) !== "off"; } catch { return true; } })();
+
     const tc = document.createElement("canvas");
     tc.className = "fx-trail";
     tc.setAttribute("aria-hidden", "true");
     document.body.appendChild(tc);
+    const dot = document.createElement("div");
+    dot.className = "fx-dot";
+    dot.setAttribute("aria-hidden", "true");
+    document.body.appendChild(dot);
     const tx = tc.getContext("2d");
     let tw = 0, th = 0, tdpr = 1, tRaf = 0;
     const fit = () => {
@@ -213,24 +222,69 @@
           tx.lineWidth = Math.max(0.4, WIDTH * k);
           tx.beginPath(); tx.moveTo(a.x, a.y); tx.lineTo(b.x, b.y); tx.stroke();
         }
-        // The bright head.
-        const h = pts[pts.length - 1], fresh = 1 - (now - h.t) / TAIL;
-        const g = tx.createRadialGradient(h.x, h.y, 0, h.x, h.y, 6);
-        g.addColorStop(0, `rgba(150,255,240,${0.55 * fresh})`); g.addColorStop(1, "rgba(0,229,199,0)");
-        tx.fillStyle = g; tx.shadowBlur = 0;
-        tx.beginPath(); tx.arc(h.x, h.y, 6, 0, Math.PI * 2); tx.fill();
+        tx.shadowBlur = 0;
         tx.globalCompositeOperation = "source-over";
       }
       // Keep going while the tail is still fading or the head catches up.
       if (pts.length || (head && target && Math.hypot(target.x - head.x, target.y - head.y) > 0.5)) tRaf = requestAnimationFrame(tick);
       else if (now - still > 100) head = null;
     };
+
+    // Where the dot gives way to the normal cursor: text being selected,
+    // fields to type in.
+    const TYPING = "input, textarea, select, [contenteditable=''], [contenteditable='true']";
+    let selecting = false, overField = false;
+    const native = () => selecting || overField;
+    const paint = () => {
+      const show = fxOn && !native() && !!target;
+      root.classList.toggle("fx-cursor", fxOn && !native());
+      dot.classList.toggle("on", show);
+    };
+    document.addEventListener("selectionchange", () => {
+      const s = getSelection();
+      selecting = !!s && !s.isCollapsed && String(s).trim() !== "";
+      paint();
+    });
     addEventListener("pointermove", (e) => {
       target = { x: e.clientX, y: e.clientY };
+      overField = !!(e.target.closest && e.target.closest(TYPING));
+      dot.style.transform = `translate(${e.clientX}px, ${e.clientY}px)`;
+      const link = e.target.closest && e.target.closest("a, button, summary, label, [role=button]");
+      dot.classList.toggle("big", !!link);
+      paint();
+      if (!fxOn || native()) return;
       still = performance.now();
       if (!tRaf) tRaf = requestAnimationFrame(tick);
     }, { passive: true });
-    document.addEventListener("pointerleave", () => { target = null; head = null; });
+    addEventListener("pointerdown", () => dot.classList.add("press"), { passive: true });
+    addEventListener("pointerup", () => dot.classList.remove("press"), { passive: true });
+    document.addEventListener("pointerleave", () => { target = null; head = null; paint(); });
+    document.documentElement.addEventListener("mouseleave", () => { target = null; head = null; paint(); });
+
+    // The switch in the nav.
+    const btn = document.createElement("button");
+    btn.type = "button"; btn.className = "fx-toggle";
+    const label = () => {
+      // The same language the page picks (index.html, docs.js).
+      let ru = true;
+      try { ru = (localStorage.getItem("aqua.site.lang") || (navigator.language.toLowerCase().startsWith("ru") ? "ru" : "en")) === "ru"; } catch { /* storage blocked */ }
+      btn.title = fxOn ? (ru ? "Выключить след курсора" : "Turn the cursor trail off") : (ru ? "Включить след курсора" : "Turn the cursor trail on");
+      btn.setAttribute("aria-label", btn.title);
+      btn.setAttribute("aria-pressed", String(fxOn));
+    };
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="16" cy="8" r="3"/><path d="M13.5 10.5 4 20M11 9 6 14M15 13l-5 5"/></svg>';
+    btn.addEventListener("click", () => {
+      fxOn = !fxOn;
+      try { localStorage.setItem(FX_KEY, fxOn ? "on" : "off"); } catch { /* private mode */ }
+      if (!fxOn) { pts = []; head = null; tx.clearRect(0, 0, tw, th); }
+      btn.classList.toggle("off", !fxOn);
+      label(); paint();
+    });
+    btn.classList.toggle("off", !fxOn);
+    label();
+    const navIn = document.querySelector(".nav-in");
+    if (navIn) navIn.insertBefore(btn, navIn.querySelector(".lang-btn, .nav-cta"));
+    paint();
   }
 
   // ---- cards light up where the cursor is ----
