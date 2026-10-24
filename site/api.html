@@ -49,7 +49,6 @@
     <div class="doc-note" id="doc-note" hidden>The reference is written in Russian; paths, fields and examples are universal. Your browser can translate the page.</div>
     <article class="md" id="doc" data-page="api"><p class="loading">…</p></article>
   </main>
-  <aside class="doc-toc" id="doc-toc"></aside>
 </div>
 
 <script>
@@ -81,7 +80,7 @@
     const rows = [...main.querySelectorAll("tbody tr")].filter((tr) => /\/v1\/|\/bot|\/admin|\/ws/.test(tr.textContent));
     document.getElementById("api-count").innerHTML = `<b>${main.querySelectorAll("h2").length}</b> ${D.L("разделов", "sections")} · <b>${rows.length}</b> ${D.L("строк методов", "endpoint rows")}`;
     const nav = document.getElementById("api-nav");
-    nav.innerHTML = toc.filter((t) => t.level === 2).map((t) => `<a href="#${t.id}">${t.text.replace(/#$/, "")}</a>`).join("");
+    D.outline(nav, toc);
     const filter = document.getElementById("api-filter");
     filter.addEventListener("input", () => {
       const q = filter.value.trim().toLowerCase();
@@ -92,7 +91,6 @@
       }
       if (q) rows.find((tr) => tr.classList.contains("hit-row"))?.scrollIntoView({ block: "center", behavior: "smooth" });
     });
-    D.tocList(document.getElementById("doc-toc"), toc, nav);
     if (location.hash) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView();
   });
 </script>

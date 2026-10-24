@@ -26,11 +26,12 @@
     canvas.width = W * dpr; canvas.height = H * dpr;
     canvas.style.width = W + "px"; canvas.style.height = H + "px";
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const n = Math.round(Math.min(70, (W * H) / 22000));
+    const n = Math.round(Math.min(110, (W * H) / 14000));
     pts = Array.from({ length: n }, () => ({
       x: Math.random() * W, y: Math.random() * H,
-      vx: (Math.random() - 0.5) * 0.32, vy: (Math.random() - 0.5) * 0.32,
-      r: Math.random() * 1.6 + 0.5, a: Math.random() * 0.5 + 0.25,
+      vx: (Math.random() - 0.5) * 0.6, vy: (Math.random() - 0.5) * 0.6,
+      r: Math.random() * 1.8 + 0.8, a: Math.random() * 0.45 + 0.45,
+      tw: Math.random() * Math.PI * 2, ts: 0.03 + Math.random() * 0.05, // twinkle phase and speed
     }));
   }
   let last = 0;
@@ -47,14 +48,19 @@
       // gently pushed away from the cursor
       const dx = p.x - mouse.x, dy = p.y - mouse.y, d2 = dx * dx + dy * dy;
       if (d2 < 14000) { const k = 0.6 / Math.sqrt(d2 + 1); p.x += dx * k; p.y += dy * k; }
+      p.tw += p.ts;
+      const a = p.a * (0.6 + 0.4 * Math.sin(p.tw));
+      // a soft halo, then the star (cheaper than shadowBlur on phones)
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 3, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(0,229,199,${a * 0.12})`; ctx.fill();
       ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(0,229,199,${p.a})`; ctx.fill();
+      ctx.fillStyle = `rgba(0,229,199,${a})`; ctx.fill();
     }
     for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) {
       const a = pts[i], b = pts[j], d = Math.hypot(a.x - b.x, a.y - b.y);
       if (d < link) {
         ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
-        ctx.strokeStyle = `rgba(0,229,199,${0.09 * (1 - d / link)})`; ctx.lineWidth = 1; ctx.stroke();
+        ctx.strokeStyle = `rgba(0,229,199,${0.16 * (1 - d / link)})`; ctx.lineWidth = 1; ctx.stroke();
       }
     }
   }
@@ -166,7 +172,8 @@
     pick();
   }
 
-  // ---- a comet behind the pointer: a white tail that thins and fades ----
+  // ---- a comet behind the pointer: a thin teal tail (the site's text
+  // selection colour) that thins and fades ----
   if (!reduce && matchMedia("(pointer: fine)").matches) {
     const tc = document.createElement("canvas");
     tc.className = "fx-trail";
@@ -182,13 +189,13 @@
     fit(); addEventListener("resize", fit);
     // The last positions of the pointer; each lives TAIL ms. The head chases
     // the pointer a little (smoothing), so the tail curves instead of zigzagging.
-    const TAIL = 520, WIDTH = 7;
+    const TAIL = 480, WIDTH = 2.6;
     let pts = [], head = null, target = null, still = 0;
     const tick = (now) => {
       tRaf = 0;
       if (target) {
         if (!head) head = { ...target };
-        head.x += (target.x - head.x) * 0.45; head.y += (target.y - head.y) * 0.45;
+        head.x += (target.x - head.x) * 0.32; head.y += (target.y - head.y) * 0.32;
         const lastPt = pts[pts.length - 1];
         if (!lastPt || Math.hypot(head.x - lastPt.x, head.y - lastPt.y) > 1.5) pts.push({ x: head.x, y: head.y, t: now });
       }
@@ -200,18 +207,18 @@
         for (let i = 1; i < pts.length; i++) {
           const a = pts[i - 1], b = pts[i];
           const k = 1 - (now - b.t) / TAIL;          // 1 at the head, 0 at the end
-          tx.strokeStyle = `rgba(255,255,255,${0.55 * k * k})`;
-          tx.shadowColor = `rgba(170,240,255,${0.6 * k})`;
-          tx.shadowBlur = 10 * k;
-          tx.lineWidth = Math.max(0.6, WIDTH * k * k);
+          tx.strokeStyle = `rgba(0,229,199,${0.5 * k})`;
+          tx.shadowColor = `rgba(0,229,199,${0.35 * k})`;
+          tx.shadowBlur = 6 * k;
+          tx.lineWidth = Math.max(0.4, WIDTH * k);
           tx.beginPath(); tx.moveTo(a.x, a.y); tx.lineTo(b.x, b.y); tx.stroke();
         }
         // The bright head.
         const h = pts[pts.length - 1], fresh = 1 - (now - h.t) / TAIL;
-        const g = tx.createRadialGradient(h.x, h.y, 0, h.x, h.y, 10);
-        g.addColorStop(0, `rgba(255,255,255,${0.9 * fresh})`); g.addColorStop(1, "rgba(255,255,255,0)");
+        const g = tx.createRadialGradient(h.x, h.y, 0, h.x, h.y, 6);
+        g.addColorStop(0, `rgba(150,255,240,${0.55 * fresh})`); g.addColorStop(1, "rgba(0,229,199,0)");
         tx.fillStyle = g; tx.shadowBlur = 0;
-        tx.beginPath(); tx.arc(h.x, h.y, 10, 0, Math.PI * 2); tx.fill();
+        tx.beginPath(); tx.arc(h.x, h.y, 6, 0, Math.PI * 2); tx.fill();
         tx.globalCompositeOperation = "source-over";
       }
       // Keep going while the tail is still fading or the head catches up.

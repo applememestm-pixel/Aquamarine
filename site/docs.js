@@ -84,6 +84,13 @@
   function render(md, id, into) {
     const srcPath = id === "passport" ? "README.md" : `docs/${id}.md`;
     into.innerHTML = window.marked.parse(md, { gfm: true });
+    // The document's own "Contents" list: the left column already is one.
+    into.querySelectorAll("h2").forEach((h) => {
+      if (!/^(содержание|contents)$/i.test(h.textContent.trim())) return;
+      let n = h.nextElementSibling;
+      h.remove();
+      while (n && n.tagName !== "H2") { const next = n.nextElementSibling; n.remove(); n = next; }
+    });
     const slug = slugger();
     const toc = [];
     into.querySelectorAll("h1, h2, h3, h4").forEach((h) => {
@@ -115,51 +122,75 @@
         return `<h4>${L(gr, ge)}</h4>` + items.map(([id, ru, en]) =>
           `<a href="${id === "api" ? "api.html" : "docs.html?d=" + id}" class="${id === current ? "on" : ""}">${L(ru, en)}</a>`).join("");
       }).join("");
+    // The open document's sections, right under its name (not while searching).
+    const cur = !q && el.querySelector("a.on");
+    if (cur && outlineToc.length) {
+      const box = document.createElement("div");
+      cur.after(box);
+      outline(box, outlineToc);
+    }
     const inp = el.querySelector("input");
     inp.addEventListener("input", () => { const pos = inp.selectionStart; sidebar(el, current, inp.value); const n = el.querySelector("input"); n.focus(); n.setSelectionRange(pos, pos); });
   }
 
-  // Keep the lit link inside its scrolling panel: a long document's
-  // section 20 must not stay hidden below section 7.
+  // ---- The page's outline, in the left column (the only one) ----
+  // Sections (H2) in a column; the one being read opens to show its
+  // subsections (H3), the others stay folded. The lit line is kept in view
+  // inside the scrolling column.
+  let outlineToc = [];
+  function outline(el, toc) {
+    outlineToc = toc;
+    if (!el) return;
+    const clean = (t) => t.replace(/#$/, "");
+    const groups = [];
+    for (const t of toc) {
+      if (t.level === 2 || !groups.length) groups.push({ h: t, subs: [] });
+      else groups[groups.length - 1].subs.push(t);
+    }
+    el.classList.add("doc-outline");
+    el.innerHTML = groups.map((g) => `<div class="og" data-h="${g.h.id}"><a href="#${g.h.id}" class="o2">${clean(g.h.text)}</a>` +
+      (g.subs.length ? `<div class="o3s"><div>${g.subs.map((s) => `<a href="#${s.id}" class="o3">${clean(s.text)}</a>`).join("")}</div></div>` : "") + "</div>").join("");
+    lastSpy = "";
+    startSpy();
+    spy();
+  }
+
   function follow(panel, link) {
     if (!panel || !link || panel.scrollHeight <= panel.clientHeight) return;
     const top = link.getBoundingClientRect().top - panel.getBoundingClientRect().top + panel.scrollTop, h = link.offsetHeight;
     const view = panel.scrollTop, vh = panel.clientHeight;
-    if (top < view + vh * 0.2 || top + h > view + vh * 0.8) {
-      panel.scrollTo({ top: Math.max(0, top - vh * 0.35), behavior: "smooth" });
+    if (top < view + vh * 0.15 || top + h > view + vh * 0.75) {
+      panel.scrollTo({ top: Math.max(0, top - vh * 0.3), behavior: "smooth" });
     }
   }
 
-  /** "On this page" with the current heading lit; `nav` (optional) is a
-   *  second list of the same document's H2 links (the API page's sidebar). */
-  function tocList(el, toc, nav) {
-    if (el) el.innerHTML = toc.length ? `<h4>${L("На этой странице", "On this page")}</h4>` + toc.map((t) => `<a href="#${t.id}" class="l${t.level}">${t.text.replace(/#$/, "")}</a>`).join("") : "";
-    const links = el ? [...el.querySelectorAll("a")] : [];
-    const navLinks = nav ? [...nav.querySelectorAll("a")] : [];
-    const heads = toc.map((t) => document.getElementById(t.id)).filter(Boolean);
-    let lastCur = "", lastH2 = "", pend = 0;
-    const spy = () => {
-      pend = 0;
-      let cur = heads[0]?.id, h2 = heads[0]?.id;
-      for (const h of heads) if (h.getBoundingClientRect().top < 120) { cur = h.id; if (h.tagName === "H2") h2 = h.id; }
-      if (cur !== lastCur) {
-        lastCur = cur;
-        let on = null;
-        links.forEach((a) => { const hit = a.getAttribute("href") === "#" + cur; a.classList.toggle("on", hit); if (hit) on = a; });
-        follow(el, on);
-      }
-      if (nav && h2 !== lastH2) {
-        lastH2 = h2;
-        let on = null;
-        navLinks.forEach((a) => { const hit = a.getAttribute("href") === "#" + h2; a.classList.toggle("on", hit); if (hit) on = a; });
-        follow(nav.closest(".doc-side") || nav, on);
-      }
-    };
+  let lastSpy = "", spyOn = false, pend = 0;
+  function spy() {
+    pend = 0;
+    const box = document.querySelector(".doc-outline");
+    if (!box || !outlineToc.length) return;
+    let cur = "", h2 = "";
+    for (const t of outlineToc) {
+      const h = document.getElementById(t.id);
+      if (!h || h.getBoundingClientRect().top >= 120) break;
+      cur = t.id; if (t.level === 2) h2 = t.id;
+    }
+    if (!cur) { cur = outlineToc[0].id; h2 = cur; }
+    if (cur === lastSpy) return;
+    lastSpy = cur;
+    box.querySelectorAll(".og").forEach((g) => g.classList.toggle("open", g.dataset.h === h2));
+    let on = null;
+    box.querySelectorAll("a").forEach((a) => { const hit = a.getAttribute("href") === "#" + cur; a.classList.toggle("on", hit); if (hit) on = a; });
+    // Wait for the open/close animation before scrolling the column.
+    setTimeout(() => follow(box.closest(".doc-side") || box, on), 320);
+  }
+  function startSpy() {
+    if (spyOn) return;
+    spyOn = true;
     window.addEventListener("scroll", () => { if (!pend) pend = requestAnimationFrame(spy); }, { passive: true });
-    spy();
   }
 
-  window.AquaDocs = { load, render, sidebar, tocList, lang, L, REPO };
+  window.AquaDocs = { load, render, sidebar, outline, lang, L, REPO };
 
   // docs.html boots itself; api.html calls the pieces it needs.
   document.addEventListener("DOMContentLoaded", async () => {
@@ -170,8 +201,8 @@
     sidebar(document.getElementById("doc-side"), id);
     if (lang === "en") document.getElementById("doc-note").hidden = false;
     try {
-      const toc = render(await load(id), id, main);
-      tocList(document.getElementById("doc-toc"), toc);
+      outlineToc = render(await load(id), id, main);
+      sidebar(document.getElementById("doc-side"), id);
       if (location.hash) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView();
     } catch (e) {
       main.innerHTML = `<p class="loading">${L("Документ не загрузился", "The document didn't load")} (${String(e)}). <a href="${REPO}/tree/main/docs" target="_blank" rel="noopener">GitHub</a></p>`;
