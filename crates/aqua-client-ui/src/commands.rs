@@ -3153,9 +3153,14 @@ async fn on_incoming_initial(
         s.sessions.insert(addr.clone(), session);
     }
     crate::multidev::note_sender(&addr);
+    // Presence, typing, group traffic… may open a session too (a new device
+    // of theirs): handle it like any other envelope, never as a bubble.
+    // The same path covers my own devices and blocked people.
     let from = crate::multidev::base_user(&addr).to_string();
-    if state.lock().ok().and_then(|s| s.username.clone()).as_deref() == Some(from.as_str()) {
-        crate::multidev::handle_own_device(app, &plain_text);
+    let mine = state.lock().ok().and_then(|s| s.username.clone()).as_deref() == Some(from.as_str());
+    let blocked = state.lock().map(|s| s.prefs.blocked.contains(&from)).unwrap_or(false);
+    if mine || blocked || is_control_text(&plain_text) {
+        on_incoming_text(app, &addr, plain_text).await;
         return;
     }
 
@@ -3164,16 +3169,6 @@ async fn on_incoming_initial(
     {
         let mut s = match state.lock() { Ok(s) => s, Err(_) => return };
         is_new_chat = !s.chats.contains_key(&from);
-        // A group payload may ride as the very first X3DH message (that's how
-        // a new member learns the group exists). Route it rather than opening
-        // a 1:1 chat. The session we just stored stays — it's reused for
-        // subsequent fan-out both ways.
-        let is_group = plain_text.starts_with(GRPINFO_PREFIX) || plain_text.starts_with(GRPMSG_PREFIX);
-        if is_group {
-            drop(s);
-            route_group_payload(app, &from, &plain_text);
-            return;
-        }
         if is_new_chat {
             let (letter, gradient) = gradient_for(&from);
             let summary = ChatSummary {
@@ -3227,7 +3222,25 @@ async fn on_incoming_envelope(
         }
         String::from_utf8_lossy(&plain).to_string()
     };
-    let from = crate::multidev::base_user(&addr).to_string();
+    on_incoming_text(app, &addr, text).await;
+}
+
+/// Is this a control payload (presence, typing, edits, group traffic…)
+/// rather than a message to show? Those must never become a bubble, even
+/// when one happens to open a new session (X3DH initial message).
+pub(crate) fn is_control_text(text: &str) -> bool {
+    text.starts_with(CALL_PREFIX)
+        || [POLLVOTE_PREFIX, POLLCLOSE_PREFIX, SEEN_PREFIX, STATUS_PREFIX, REACT_PREFIX, TYPING_PREFIX,
+            EDIT_PREFIX, DEL_PREFIX, REN_PREFIX, CTL_PREFIX, GCALL_PREFIX, GRPINFO_PREFIX, GRPSELF_PREFIX,
+            GRPJOIN_PREFIX, GRPLEAVE_PREFIX, GRPCTL_PREFIX, GRPMSG_PREFIX, crate::autodelete::TTL_PREFIX]
+            .iter().any(|p| text.starts_with(p))
+}
+
+/// A decrypted payload from `addr` (a device of some account): control
+/// messages are applied, the rest lands in the chat.
+async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
+    let state: State<'_, StdMutex<AppState>> = app.state();
+    let from = crate::multidev::base_user(addr).to_string();
     // Sent by another device of mine.
     if state.lock().ok().and_then(|s| s.username.clone()).as_deref() == Some(from.as_str()) {
         crate::multidev::handle_own_device(app, &text);
@@ -3827,6 +3840,21 @@ fn push_replies(s: &mut AppState, text: String, time: &str) {
 #[cfg(test)]
 mod replies_tests {
     use super::reply_note;
+    #[test]
+    fn control_payloads_never_become_bubbles() {
+        assert!(super::is_control_text(r#"[status:v1]{"online":"offline","pp":{"birthday":"27 февраля"}}"#));
+        assert!(super::is_control_text("[typing:v1]"));
+        assert!(super::is_control_text("AQUA-CALL:v1:{}"));
+        assert!(super::is_control_text(r#"[grpmsg:v1]{"gid":"g"}"#));
+        assert!(!super::is_control_text("привет"));
+        assert!(!super::is_control_text(r#"[reply:v1]{"q":"x","t":"y"}"#));
+        let m = crate::state::ChatMessage {
+            id: "1".into(), from: "vpst".into(), time: "18:22".into(),
+            kind: crate::state::MessageKind::Text { text: "[status:v1]{}".into() }, meta: None,
+        };
+        assert!(crate::state::stray_control(&m));
+    }
+
     #[test]
     fn replies_finds_what_is_for_me() {
         let r = reply_note("bob", "ann", "Club", r#"[reply:v1]{"quoted_author":"bob","quoted_text":"hi","text":"hey"}"#).unwrap();
