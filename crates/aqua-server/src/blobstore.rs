@@ -21,6 +21,8 @@ pub struct BlobStore {
 pub const KEEP_TTL: Duration = Duration::from_secs(90 * 24 * 3600);
 /// Only small files may be kept.
 pub const KEEP_LIMIT: usize = 4 * 1024 * 1024;
+/// File kinds the admin panel tells apart.
+pub const KINDS: [&str; 8] = ["photo", "video", "sticker", "gif", "emoji", "voice", "audio", "file"];
 
 fn valid_cid(cid: &str) -> bool {
     cid.len() == 64 && cid.bytes().all(|b| b.is_ascii_hexdigit())
@@ -47,6 +49,36 @@ impl BlobStore {
         self.put_in(&self.dir, cid, data)
     }
 
+    /// Remember what kind of file a blob is (for the admin panel): a
+    /// `.k.<cid>` file next to it, swept together with it.
+    pub fn set_kind(&self, cid: &str, keep: bool, kind: &str) {
+        if !valid_cid(cid) || !KINDS.contains(&kind) { return; }
+        let dir = if keep { &self.keep } else { &self.dir };
+        let _ = std::fs::write(dir.join(format!(".k.{}", cid.to_ascii_lowercase())), kind);
+    }
+
+    /// (kind, count, bytes) over both stores; unlabelled blobs (uploaded by
+    /// older apps) count as "unknown".
+    pub fn stats_by_kind(&self) -> Vec<(String, usize, u64)> {
+        let mut m: std::collections::BTreeMap<String, (usize, u64)> = Default::default();
+        for dir in [&self.dir, &self.keep] {
+            let Ok(rd) = std::fs::read_dir(dir) else { continue };
+            for e in rd.flatten() {
+                let name = e.file_name().to_string_lossy().to_string();
+                if name.starts_with('.') { continue; }
+                let Some(meta) = e.metadata().ok().filter(|m| m.is_file()) else { continue };
+                let kind = std::fs::read_to_string(dir.join(format!(".k.{name}"))).ok()
+                    .filter(|k| KINDS.contains(&k.as_str())).unwrap_or_else(|| "unknown".into());
+                let x = m.entry(kind).or_default();
+                x.0 += 1;
+                x.1 += meta.len();
+            }
+        }
+        let mut v: Vec<_> = m.into_iter().map(|(k, (n, b))| (k, n, b)).collect();
+        v.sort_by(|a, b| b.2.cmp(&a.2));
+        v
+    }
+
     /// Store a blob that should outlive the delivery cache (≤ `KEEP_LIMIT`).
     pub fn put_keep(&self, cid: &str, data: &[u8]) -> std::io::Result<()> {
         if data.len() > KEEP_LIMIT {
@@ -63,6 +95,7 @@ impl BlobStore {
         if p.exists() {
             // Same content; just refresh its age.
             touch(&p);
+            touch(&dir.join(format!(".k.{}", cid.to_ascii_lowercase())));
             return Ok(());
         }
         let tmp = dir.join(format!(".{cid}.part"));
@@ -154,6 +187,10 @@ mod tests {
         assert_eq!(s.get(&cid).unwrap(), b"cipher");
         assert!(s.get("../etc/passwd").is_none());
         assert_eq!(s.stats(), (1, 6));
+        s.set_kind(&cid, false, "video");
+        s.set_kind(&cid, false, "../x");
+        assert_eq!(s.stats(), (1, 6));
+        assert_eq!(s.stats_by_kind(), vec![("video".to_string(), 1, 6)]);
         // Age it past the TTL.
         let f = std::fs::File::options().write(true).open(dir.path().join(&cid)).unwrap();
         f.set_modified(SystemTime::now() - Duration::from_secs(7200)).unwrap();

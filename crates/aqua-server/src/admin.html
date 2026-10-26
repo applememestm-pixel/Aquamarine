@@ -246,6 +246,20 @@
   @keyframes spinr{to{transform:rotate(360deg)}}
   .gate .card{box-shadow:0 0 70px -20px var(--accent-glow)}
   /* Mode chooser, servers list, sticker packs */
+  .stat.click{cursor:pointer}
+  #detHint,#jsum{font-size:12.5px;color:var(--fg-dim)}
+  .stat.click .l::after{content:" ›";opacity:.5}
+  .code-row.unseen{border-color:rgba(0,229,199,.55);box-shadow:0 0 22px -10px var(--accent-glow)}
+  .dl{display:flex;flex-direction:column;gap:6px;max-height:60vh;overflow:auto;margin-top:10px}
+  .dl-row{display:flex;align-items:center;gap:12px;padding:9px 12px;border-radius:11px;background:var(--void);border:1px solid var(--line);font-size:13.5px}
+  .dl-row .main{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dl-row .sub{font-size:12px;color:var(--fg-dim);white-space:nowrap}
+  .dl-row .bar{flex:0 0 90px;height:6px;border-radius:3px;background:var(--line);overflow:hidden}
+  .dl-row .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),#7ff3e3)}
+  .ev{font-size:11px;font-weight:700;padding:2px 8px;border-radius:8px;background:var(--line);text-transform:uppercase;letter-spacing:.04em}
+  .ev.online,.ev.login,.ev.register{background:rgba(0,229,199,.16);color:var(--accent)}
+  .jf{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+  .jf input{flex:1;min-width:160px}
   .modal{position:fixed;inset:0;z-index:60;display:grid;place-items:center;padding:20px;background:rgba(3,4,8,.72);backdrop-filter:blur(8px)}
   .modal .card{max-width:640px;width:100%;margin:0;box-shadow:0 40px 90px -30px #000,0 0 70px -30px var(--accent-glow)}
   .modes{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px}
@@ -337,6 +351,7 @@
     <button class="tab" data-tab="mail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></svg><span data-t="Email delivery">Email delivery</span><span class="st" id="mailSt"></span></button>
     <button class="tab" data-tab="telegram"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 9h.01M15 9h.01"/></svg><span data-t="Stickers">Stickers</span><span class="st" id="tgSt"></span></button>
     <button class="tab" data-tab="fed"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="5" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="m7.2 10.8 9.6-4.6M7.2 13.2l9.6 4.6"/></svg><span data-t="Federation">Federation</span><span class="st" id="fedSt"></span></button>
+    <button class="tab" data-tab="journal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h12a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg><span data-t="Journal">Journal</span></button>
     <div class="rail-foot" data-t="E2EE: the relay only forwards encrypted envelopes — nothing here can read messages.">E2EE: the relay only forwards encrypted envelopes — nothing here can read messages.</div>
   </aside>
 
@@ -383,6 +398,14 @@
       <div class="page-head rv"><div class="eyebrow" data-t="Sign-up">Sign-up</div><h1 data-t="Email codes">Email codes</h1>
         <p id="codesHint"></p></div>
       <div class="card rv"><div class="codes" id="codes"></div></div>
+    </section>
+
+    <!-- Journal -->
+    <section class="page hide" data-page="journal">
+      <div class="page-head rv"><div class="eyebrow" data-t="Metrics">Metrics</div><h1 data-t="Journal">Journal</h1>
+        <p data-t="journalHint">Who came online and went offline, signed in on a new device or registered. Also written to aqua-journal.log next to the server.</p></div>
+      <div class="card rv"><div class="jf"><input id="jq" data-tp="filter by @name" placeholder="filter by @name" oninput="renderJournal()" /></div>
+        <div id="jsum" class="hint"></div><div class="dl" id="jlist"></div></div>
     </section>
 
     <!-- Access -->
@@ -507,6 +530,10 @@
 </div>
 <div class="toast" id="toast"></div>
 <!-- First open: how does this relay work? (changeable in Federation) -->
+<div class="modal hide" id="detModal" onclick="if(event.target===this)closeDetail()">
+  <div class="card"><h2 id="detTitle"></h2><div id="detHint" class="hint"></div><div class="dl" id="detList"></div>
+    <div style="margin-top:12px;text-align:right"><button class="btn ghost" onclick="closeDetail()" data-t="Close">Close</button></div></div>
+</div>
 <div class="modal hide" id="modeModal">
   <div class="card">
     <div class="eyebrow" data-t="First start">First start</div>
@@ -552,8 +579,15 @@
     "Generate secret":"Сгенерировать","Saved in aqua-federation.json.":"Хранится в aqua-federation.json.",
     // dynamic
     "connecting…":"подключение…","locked":"заблокировано","running":"работает","server not reachable":"сервер недоступен",
+    "Journal":"Журнал","Metrics":"Метрики","filter by @name":"фильтр по @имени","Close":"Закрыть",
+    "journalHint":"Кто заходил в сеть и выходил, входил с нового устройства или регистрировался. Пишется и в aqua-journal.log рядом с сервером.",
+    "Online now — who":"Сейчас в сети","Files by type":"Файлы по типам","Bots on this server":"Боты на сервере","From other servers since the start":"С других серверов с момента запуска",
+    "Nobody":"Никого","No files":"Файлов нет","No bots":"Ботов нет","No one yet":"Пока никого","No events yet":"Событий пока нет",
+    "photo":"Фото","video":"Видео","sticker":"Стикеры","gif":"GIF","emoji":"Эмодзи","voice":"Голосовые","audio":"Музыка","file":"Другие файлы","unknown":"Без метки (старые версии)",
+    "user":"человек","offline":"вышел","login":"вход","register":"регистрация",
+    "filesHint":"Файлы зашифрованы — сервер знает только тип, который сообщило приложение.","times":"раз","was online":"был в сети",
     "Online now":"Сейчас в сети","Accounts":"Аккаунтов","Bots":"Ботов","Files":"Файлов","Storage":"Хранилище","Uptime":"Работает",
-    "This PC":"Этот компьютер","Phones · Wi-Fi":"Телефоны · Wi-Fi","Internet":"Интернет (белый IP)","Android emulator":"Эмулятор Android","Copy":"Копировать","Copied":"Скопировано",
+    "This PC":"Этот компьютер","Phones · Wi-Fi":"Телефоны · Wi-Fi","Internet":"Интернет (белый IP)","doesn't lead back here: VPN on, or the port isn't forwarded":"не ведёт сюда: включён VPN или не проброшен порт","Android emulator":"Эмулятор Android","Copy":"Копировать","Copied":"Скопировано",
     "no LAN address found":"адрес в сети не найден","off — start with AQUA_LISTEN=0.0.0.0":"выключено — запустите с AQUA_LISTEN=0.0.0.0",
     "lanOn":"Телефон должен быть в той же Wi-Fi-сети. Если не подключается — разрешите <b>aqua-server</b> в брандмауэре.",
     "lanOff":"Ретранслятор принимает подключения только с этого компьютера.",
@@ -596,7 +630,10 @@
     mailVia:"No mail here — a relay of the network that has mail sends the codes. The mail password never leaves it.",
     mailHere:"Mail is set up here — this relay also sends codes for relays of the network without mail (the password stays here).",
     accounts:"accounts", online:"online", packsNote:"Apps download a pack once and keep its files on the device; this list is what the server keeps for everyone.", "dev mode — no mail is sent":"Dev mode — no mail is sent. Pass the code on yourself.",
-    "sent by e-mail (SMTP)":"Codes are e-mailed (SMTP). Only the ones that couldn't be sent show up here."}[s]) || s;
+    "sent by e-mail (SMTP)":"Codes are e-mailed (SMTP). Only the ones that couldn't be sent show up here.",
+    filesHint:"Files are encrypted — the server only knows the type the app reported.", times:"times",
+    photo:"Photos", video:"Videos", sticker:"Stickers", gif:"GIFs", emoji:"Emoji", voice:"Voice messages", audio:"Music", file:"Other files", unknown:"Unlabelled (older apps)",
+    offline:"offline", login:"sign-in", register:"sign-up"}[s]) || s;
   if (RU) {
     document.documentElement.lang = "ru";
     document.querySelectorAll("[data-t]").forEach((el) => { const k = el.getAttribute("data-t"); if (DICT[k]) el.innerHTML = DICT[k]; });
@@ -621,7 +658,7 @@
   else TOKEN = store.get("aqua.admin.token");
 
   // ---- sections (remembered in the address: /admin#mail) ----
-  const TABS = ["overview","codes","access","mail","telegram","fed"];
+  const TABS = ["overview","codes","access","mail","telegram","fed","journal"];
   function showTab(id){
     if (!TABS.includes(id)) id = "overview";
     document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("on", b.dataset.tab === id));
@@ -629,7 +666,7 @@
     if (location.hash.slice(1) !== id && !/token=/.test(location.hash)) history.replaceState(null, "", "#" + id);
     store.set("aqua.admin.tab", id);
     // Opened: the servers around / the packs on the server (after the script has run).
-    setTimeout(() => { if (id === "fed") loadServers(); if (id === "telegram") loadTg(); }, 0);
+    setTimeout(() => { if (id === "fed") loadServers(); if (id === "telegram") loadTg(); if (id === "journal") loadJournal(); if (id === "codes") markCodesSeen(); }, 0);
     document.querySelector(`.tab[data-tab="${id}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
   document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => { showTab(b.dataset.tab); window.scrollTo({ top: 0 }); }));
@@ -677,9 +714,29 @@
   // rebuilding it on every poll replayed the animation, and the rows jumped.
   const seenCodes = new Set();
   let firstCodes = true;
+  // Codes the admin has looked at (on the Codes page) stop glowing and leave the badge.
+  const readCodes = new Set((store.get("aqua.admin.readCodes") || "").split("|").filter(Boolean));
+  let lastCodes = [];
+  function markCodesSeen(){
+    if (document.hidden || store.get("aqua.admin.tab") !== "codes") return;
+    let changed = false;
+    for (const c of lastCodes) { const k = c.email + c.code + c.at; if (!readCodes.has(k)) { readCodes.add(k); changed = true; } }
+    if (!changed) return;
+    // Only codes still on the panel are worth remembering.
+    const live = new Set(lastCodes.map((c) => c.email + c.code + c.at));
+    for (const k of [...readCodes]) if (!live.has(k)) readCodes.delete(k);
+    store.set("aqua.admin.readCodes", [...readCodes].join("|"));
+    setTimeout(() => document.querySelectorAll(".code-row.unseen").forEach((el) => el.classList.remove("unseen")), 1200);
+    updateCodesBadge();
+  }
+  function updateCodesBadge(){
+    const n = lastCodes.filter((c) => !readCodes.has(c.email + c.code + c.at)).length;
+    $("codesBadge").textContent = n; $("codesBadge").classList.toggle("hide", !n);
+  }
+  document.addEventListener("visibilitychange", markCodesSeen);
   function codeRows(list){
     return list.map(c => { const k = c.email + c.code + c.at; const fresh = !firstCodes && !seenCodes.has(k);
-      return `<div class="code-row${fresh ? " fresh" : ""}"><span class="code">${esc(c.code)}</span>
+      return `<div class="code-row${fresh ? " fresh" : ""}${readCodes.has(k) ? "" : " unseen"}"><span class="code">${esc(c.code)}</span>
       <span class="em">${esc(c.email)}</span><span class="ago" data-at="${c.at}">${ago(c.at)}</span>
       <button class="copy" data-copy="${esc(c.code)}">${T("Copy")}</button></div>`; }).join("");
   }
@@ -697,10 +754,41 @@
   };
   const STATS = [["online","Online now",true],["users","Accounts"],["bots","Bots"],["files","Files"],["disk","Storage"],["time","Uptime"]];
   const shown = {};
+  // What each tile opens.
+  const DET = { online: "online", users: "journal", bots: "bots", files: "files", disk: "files", time: "visitors" };
+  async function openDetail(what){
+    if (what === "journal") { showTab("journal"); return; }
+    const titles = { online: "Online now — who", files: "Files by type", bots: "Bots on this server", visitors: "From other servers since the start" };
+    $("detTitle").textContent = T(titles[what]); $("detHint").textContent = what === "files" ? T("filesHint") : "";
+    $("detList").innerHTML = `<div class="empty">…</div>`; $("detModal").classList.remove("hide");
+    let d; try { d = await api("/v1/admin/detail/" + what); } catch (e) { $("detList").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+    const row = (main, sub, extra = "") => `<div class="dl-row"><span class="main">${main}</span>${extra}<span class="sub">${sub}</span></div>`;
+    let html = "";
+    if (what === "online") html = d.map((u) => row("@" + esc(u), "")).join("") || `<div class="empty">${T("Nobody")}</div>`;
+    else if (what === "bots") html = d.map((b) => row("@" + esc(b.username), esc(b.name || ""))).join("") || `<div class="empty">${T("No bots")}</div>`;
+    else if (what === "files") {
+      const max = Math.max(1, ...d.map((f) => f.bytes));
+      html = d.map((f) => row(T(f.kind), `${f.count} · ${human(f.bytes)}`, `<span class="bar"><i style="width:${(f.bytes / max * 100).toFixed(1)}%"></i></span>`)).join("") || `<div class="empty">${T("No files")}</div>`;
+    } else if (what === "visitors") html = d.map((v) => row((v.kind === "user" ? "@" : "") + esc(v.who), `${T(v.kind)} · ${v.count} ${T("times")} · ${ago(v.last)}`)).join("") || `<div class="empty">${T("No one yet")}</div>`;
+    $("detList").innerHTML = html;
+  }
+  function closeDetail(){ $("detModal").classList.add("hide"); }
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDetail(); });
+  // ---- journal ----
+  let journal = [];
+  async function loadJournal(){ try { journal = await api("/v1/admin/detail/journal"); renderJournal(); } catch {} }
+  function renderJournal(){
+    const q = ($("jq").value || "").trim().replace(/^@/, "").toLowerCase();
+    const list = q ? journal.filter((e) => e.user.toLowerCase().includes(q)) : journal;
+    const people = new Set(list.filter((e) => e.ev === "online").map((e) => e.user));
+    $("jsum").textContent = list.length ? `${list.length} · ${T("online")}: ${people.size}` : "";
+    $("jlist").innerHTML = list.map((e) => `<div class="dl-row"><span class="ev ${e.ev}">${T(e.ev)}</span><span class="main">@${esc(e.user)}${e.note ? ` <span class="sub">${e.ev === "offline" ? T("was online") + " " : ""}${esc(e.note)}</span>` : ""}</span><span class="sub" title="${new Date(e.at * 1000).toLocaleString()}">${new Date(e.at * 1000).toLocaleString([], { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</span></div>`).join("") || `<div class="empty">${T("No events yet")}</div>`;
+  }
   function renderStats(s){
     const box = $("stats");
     if (!box.children.length) {
-      box.innerHTML = STATS.map(([k,l,hi],i)=>`<div class="stat rv ${hi?"hi":""}" style="--i:${i+1}"><span class="ic">${ICONS[k]}</span><div class="n" id="st-${k}">0</div><div class="l">${T(l)}</div></div>`).join("");
+      box.innerHTML = STATS.map(([k,l,hi],i)=>`<div class="stat rv click ${hi?"hi":""}" style="--i:${i+1}" data-det="${DET[k]}" role="button" tabindex="0"><span class="ic">${ICONS[k]}</span><div class="n" id="st-${k}">0</div><div class="l">${T(l)}</div></div>`).join("");
+      box.querySelectorAll("[data-det]").forEach((el) => el.addEventListener("click", () => openDetail(el.dataset.det)));
     }
     glide("online", s.online); glide("users", s.users); glide("bots", s.bots); glide("files", s.blobs);
     $("st-disk").textContent = human(s.blob_bytes);
@@ -747,7 +835,8 @@
       addrRow("This PC", `http://127.0.0.1:${port}`) +
       (lanOpen && s.lan_ip ? addrRow("Phones · Wi-Fi", `http://${s.lan_ip}:${port}`)
                            : addrRow("Phones · Wi-Fi", lanOpen ? "no LAN address found" : "off — start with AQUA_LISTEN=0.0.0.0", true)) +
-      (s.public_url ? addrRow("Internet", s.public_url) : "") +
+      (s.public_url ? addrRow("Internet", s.public_url)
+        : s.public_unverified ? addrRow("Internet", s.public_unverified + " — " + T("doesn't lead back here: VPN on, or the port isn't forwarded"), true) : "") +
       addrRow("Android emulator", `http://10.0.2.2:${port}`));
     $("lanNote").innerHTML = T(lanOpen ? "lanOn" : "lanOff");
 
@@ -768,7 +857,10 @@
     } else {
       document.querySelectorAll(".code-row .ago[data-at]").forEach((el) => { el.textContent = ago(+el.dataset.at); });
     }
-    $("codesBadge").textContent = codes.length; $("codesBadge").classList.toggle("hide", !codes.length);
+    lastCodes = codes;
+    updateCodesBadge();
+    markCodesSeen();
+    if (store.get("aqua.admin.tab") === "journal" && !document.hidden) loadJournal();
 
     inviteOnly = s.invite_only;
     $("sw").className = "sw" + (inviteOnly?" on":"");

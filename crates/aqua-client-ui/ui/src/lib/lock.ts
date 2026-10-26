@@ -5,7 +5,7 @@
  */
 import { writable, get } from "svelte/store";
 
-interface LockConf { hash: string; salt: string; autoMin: number; skipped?: boolean }
+interface LockConf { hash: string; salt: string; autoMin: number; skipped?: boolean; /** "pin": 4 digits on a keypad (Telegram); otherwise a password. */ kind?: "pin" | "password" }
 const KEY = "aqua.lock.v1";
 
 function loadConf(): LockConf | null {
@@ -34,9 +34,9 @@ async function derive(pass: string, saltHex: string): Promise<string> {
 
 export function hasPasscode(): boolean { return !!get(lockConf)?.hash; }
 
-export async function setPasscode(pass: string, autoMin = 5) {
+export async function setPasscode(pass: string, autoMin = 5, kind: "pin" | "password" = "password") {
   const salt = hex(crypto.getRandomValues(new Uint8Array(16)).buffer);
-  lockConf.set({ hash: await derive(pass, salt), salt, autoMin });
+  lockConf.set({ hash: await derive(pass, salt), salt, autoMin, kind });
   locked.set(false);
 }
 

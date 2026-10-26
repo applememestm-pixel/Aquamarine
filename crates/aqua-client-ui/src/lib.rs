@@ -49,7 +49,9 @@ pub fn run() -> Result<()> {
     // WebKitGTK denies camera / mic / screen capture unless the app answers
     // its permission request ("Mic test failed: NotAllowedError" on Linux).
     // The webview only ever shows our own UI, so grant what calls need.
-    #[cfg(target_os = "linux")]
+    // Windows too: WebView2 asks "tauri.localhost wants to use your
+    // microphone" and remembers a "Block" — with no way to ask again.
+    #[cfg(any(target_os = "linux", windows))]
     let builder = builder.on_permission_request(|_, kind| {
         use tauri::webview::{PermissionKind as K, PermissionResponse as R};
         match kind {
@@ -115,6 +117,7 @@ pub fn run() -> Result<()> {
         })
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             mesh::mesh_status,
             mesh::mesh_set_enabled,

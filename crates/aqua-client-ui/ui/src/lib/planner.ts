@@ -202,9 +202,9 @@ function check() {
   });
   reminders.update((r) => [...r, ...due].slice(-6));
   void playSound(get(settings).reminderSound ?? "alarm");
-  if (get(settings).notifyDesktop) {
+  {
     const d = due[0];
-    try { new Notification(d.ev.title, { body: d.min ? tr("Starts in {t}", { t: ttlLabel(d.min * 60) }) : tr("Starting now") }); } catch { /* ignore */ }
+    void import("./notify").then((n) => n.osNotify(d.ev.title, d.min ? tr("Starts in {t}", { t: ttlLabel(d.min * 60) }) : tr("Starting now")));
   }
 }
 

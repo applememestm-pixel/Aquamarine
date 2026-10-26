@@ -15,7 +15,7 @@
 import { writable, get } from "svelte/store";
 import { api } from "./tauri";
 import { info, connect } from "./stores";
-import { federationOf, aliasesOf, learnPeers } from "./servers";
+import { federationOf, aliasesOf, learnPeers, manualServers } from "./servers";
 import { showToast } from "./components/Toast.svelte";
 import { tr } from "./i18n";
 
@@ -47,7 +47,7 @@ export const lockedServer = () => norm(get(netPrefs).lockServer ?? "");
 /** Relays where this account works, the current one first. */
 export function serverCandidates(): string[] {
   const cur = norm(get(info)?.server_url ?? "");
-  const list = [cur, ...aliasesOf(cur), ...federationOf(cur)].filter(Boolean);
+  const list = [cur, ...aliasesOf(cur), ...federationOf(cur), ...manualServers()].filter(Boolean);
   return [...new Set(list)].slice(0, 12);
 }
 

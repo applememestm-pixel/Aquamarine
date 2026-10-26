@@ -5,6 +5,36 @@
   import { t, tr } from "../i18n";
   import { netPrefs, serverPings, proxyPings, serverCandidates, measureServers, measureProxies, switchServer, applyProxy, normProxy } from "../network";
   import { showToast } from "./Toast.svelte";
+  import { addManualServer, forgetServer, aliasesOf, federationOf } from "../servers";
+  import { api } from "../tauri";
+
+  // ---- Add a server by hand / forget one ----
+  let newServer = $state("");
+  let srvErr = $state<string | null>(null);
+  let srvBusy = $state(false);
+  async function addServer() {
+    srvErr = null;
+    let u = newServer.trim().replace(/\/+$/, "");
+    if (!u) return;
+    if (!/^https?:\/\//i.test(u)) u = "http://" + u;
+    if (!/:\d+$/.test(u.replace(/^https?:\/\//, "")) && u.startsWith("http://")) u += ":7777";
+    srvBusy = true;
+    try {
+      const ms = await api.serverPing(u);
+      if (ms == null) throw new Error(tr("no answer"));
+      addManualServer(u);
+      newServer = "";
+      servers = serverCandidates();
+      void measureServers();
+      showToast(tr("Added {u}", { u: short(u) }));
+    } catch (e) { srvErr = tr("{u} doesn't answer: {e}", { u: short(u), e: String(e).replace(/^Error: /, "") }); }
+    srvBusy = false;
+  }
+  function forget(u: string) {
+    forgetServer(u);
+    servers = serverCandidates();
+  }
+  const kindOf = (u: string) => (aliasesOf(cur).includes(u) ? "alias" : federationOf(cur).includes(u) ? "fed" : "manual");
 
   let servers = $state<string[]>([]);
   let busy = $state<string | null>(null);
@@ -70,19 +100,27 @@
   <div class="ns-list">
     {#each servers as u (u)}
       {@const ms = $serverPings[u]}
-      <button class="ns-row" class:cur={u === cur} onclick={() => pickServer(u)} disabled={!!busy}>
-        <span class="ns-dot {msClass(ms)}"></span>
-        <span class="ns-main">
-          <span class="ns-addr">{short(u)}</span>
-          <span class="ns-sub">{u === cur ? $t($info?.connected ? "Connected" : "Connecting…") : $t("Your account works here too")}</span>
-        </span>
-        <span class="ns-ms {msClass(ms)}">{busy === u ? "…" : msLabel(ms)}</span>
-        {#if u === locked}<span class="ns-lock" title={$t("Locked")}>🔒</span>{:else if u === cur}<span class="ns-tick">✓</span>{/if}
-      </button>
+      <div class="ns-row as-div" class:cur={u === cur}>
+        <button class="ns-pick" onclick={() => pickServer(u)} disabled={!!busy}>
+          <span class="ns-dot {msClass(ms)}"></span>
+          <span class="ns-main">
+            <span class="ns-addr">{short(u)}</span>
+            <span class="ns-sub">{u === cur ? $t($info?.connected ? "Connected" : "Connecting…") : kindOf(u) === "alias" ? $t("This server's other address") : kindOf(u) === "fed" ? $t("Your account works here too") : $t("Added by you")}</span>
+          </span>
+          <span class="ns-ms {msClass(ms)}">{busy === u ? "…" : msLabel(ms)}</span>
+          {#if u === locked}<span class="ns-lock" title={$t("Locked")}>🔒</span>{:else if u === cur}<span class="ns-tick">✓</span>{/if}
+        </button>
+        {#if u !== cur}<button class="ns-x" onclick={() => forget(u)} title={$t("Forget this server")} aria-label={$t("Forget this server")}>×</button>{/if}
+      </div>
     {:else}
       <div class="ns-empty">{$t("Not connected to a server yet.")}</div>
     {/each}
   </div>
+  <form class="ns-add" onsubmit={(e) => { e.preventDefault(); void addServer(); }}>
+    <input bind:value={newServer} placeholder="192.168.1.39:7777" spellcheck="false" autocomplete="off" autocapitalize="off" />
+    <button type="submit" disabled={!newServer.trim() || srvBusy}>{srvBusy ? "…" : $t("Add server")}</button>
+  </form>
+  {#if srvErr}<div class="ns-note bad">{srvErr}</div>{/if}
   <label class="ns-switch">
     <span><b>{$t("Stay on this server")}</b><small>{locked ? $t("Locked to {u}. The app never moves to another server — if this one goes down, you're offline until it's back.", { u: short(locked) }) : $t("Never move to another server by itself, not even when this one stops answering.")}</small></span>
     <input type="checkbox" checked={!!locked} disabled={!cur && !locked} onchange={(e) => netPrefs.update((p) => ({ ...p, lockServer: (e.currentTarget as HTMLInputElement).checked ? cur : "" }))} />

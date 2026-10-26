@@ -358,6 +358,7 @@ input[type="checkbox"]:disabled, input[type="radio"]:disabled { opacity: .5; cur
 }
 
 @media (max-width: 720px) { :root { --tb-h: 0px; } }
+html.phone { --tb-h: 0px; }
 
 /* Middle-button autoscroll anchor (lib/autoscroll.ts). */
 /* Middle-button autoscroll: the pointer itself turns into the scroll badge

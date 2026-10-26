@@ -43,7 +43,7 @@
   import ClanTag from "./ClanTag.svelte";
   import { keepOnScreen } from "../actions";
   import { openPackSheet } from "./PackSheet.svelte";
-  import { ghost, noReceiptChats, setReceipts } from "../ghost";
+  import { ghost, noReceiptChats, setReceipts, blocked, setBlocked } from "../ghost";
   import { TTL_PRESETS, ttlLabel, ttlShort, ttlNote } from "../ttl";
   import { parseBotText, type BotKb, type KbButton } from "../botkb";
   import { openMiniApp } from "./MiniApp.svelte";
@@ -57,6 +57,8 @@
   import { btSheet } from "../bluetooth";
   import { chatLocks, unlocked, unlockChat, noteLeft } from "../chatLocks";
   import ThreadPanel, { type ThreadItem } from "./ThreadPanel.svelte";
+  import { unsupportedKind } from "../compat";
+  import { checkUpdates } from "../updates";
   import { noteView, viewCounts, channelStats } from "../channelStats";
   import ChannelStats, { statsFor, type StatPost } from "./ChannelStats.svelte";
   import EventCard from "./EventCard.svelte";
@@ -248,7 +250,7 @@
   /** Open the info / settings sheet for whatever chat is open. */
   function openChatInfo() {
     const c = $activeChat;
-    if (!c || c.id === "__saved__") return;
+    if (!c || c.id === "__saved__" || c.id === "__replies__") return;
     if (c.id.startsWith("grp_")) openGroupPanel(c.id);
     else openProfile(c.id);
   }
@@ -1189,12 +1191,36 @@
     return out;
   });
   let commentCount = $derived.by(() => { const c = new Map<string, number>(); for (const x of comments) c.set(x.to, (c.get(x.to) ?? 0) + 1); return c; });
+  /** The last three people who commented on a post (Telegram's avatars on the bar). */
+  let commentAuthors = $derived.by(() => {
+    const c = new Map<string, string[]>();
+    for (let i = comments.length - 1; i >= 0; i--) {
+      const x = comments[i], l = c.get(x.to) ?? [];
+      if (l.length < 3 && !l.includes(x.from)) { l.push(x.from); c.set(x.to, l); }
+    }
+    return c;
+  });
   let replyCount = $derived.by(() => {
     const c = new Map<string, number>();
     for (const r of rows) if (r.kind.type === "reply") c.set(r.kind.content.quoted_text, (c.get(r.kind.content.quoted_text) ?? 0) + 1);
     return c;
   });
   const quoteOf = (m: ChatMessage) => snippetOf(m).slice(0, 180);
+  /** Telegram's seven name colours, picked by the name. */
+  const PEER_COLORS = ["#FF6B6B", "#FFA94D", "#B197FC", "#51CF66", "#3BC9DB", "#4DABF7", "#F783AC"];
+  function peerColor(name: string): string {
+    let h = 0;
+    for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) | 0;
+    return PEER_COLORS[Math.abs(h) % PEER_COLORS.length];
+  }
+  /** Tap on a quote: to the message it quotes (the nearest one above). */
+  function jumpToQuoted(fromId: string, quoted: string) {
+    const at = rows.findIndex((r) => r.id === fromId);
+    for (let i = (at < 0 ? rows.length : at) - 1; i >= 0; i--) {
+      if (quoteOf(rows[i]) === quoted) { window.dispatchEvent(new CustomEvent("aqua:jump", { detail: rows[i].id })); return; }
+    }
+    showToast(tr("The original message isn't here any more"));
+  }
   let thread = $state<{ kind: "comments" | "replies"; root: Row } | null>(null);
   $effect(() => { void $activeChat?.id; thread = null; });
   let threadItems = $derived.by<ThreadItem[]>(() => {
@@ -1543,7 +1569,9 @@
     activeRoom?.readonly && !isAdmin(activeGroup, myUsername)
       ? tr("Only admins write in #{room}", { room: activeRoom.name })
       : postBlock(activeGroup, myUsername, activeRoom));
-  let canPost = $derived(postBlocked === null);
+  /** A person you blocked: no composer, an "Unblock" bar instead (Telegram). */
+  let peerBlocked = $derived(!!$activeChat && !activeGroup && !$activeChat.channel && $blocked.has($activeChat.id));
+  let canPost = $derived(postBlocked === null && !peerBlocked && $activeChat?.id !== "__replies__");
   /** Channel / group forbids forwarding, copying and saving. */
   let protectedChat = $derived(!!activeGroup?.settings.protected_content && !isAdmin(activeGroup, myUsername));
   /** Reactions the chat allows (null = any). */
@@ -2739,7 +2767,7 @@
       bind:this={headerEl}
       class="chat-header"
       class:under-sel={selecting}
-      class:clickable={$activeChat.id !== "__saved__"}
+      class:clickable={$activeChat.id !== "__saved__" && $activeChat.id !== "__replies__"}
       onclick={(e) => {
         // The whole bar opens the chat / channel / profile info, except
         // the action buttons on the right and other real controls.
@@ -3061,7 +3089,7 @@
               {firstLetter(m.from)}
               {#if $avatars[avatarKey(m.from)]}<img class="ava-img" src={$avatars[avatarKey(m.from)]} alt="" loading="lazy" />{/if}
             </div>
-            <div class="msg-col">
+            <div class="msg-col" class:post={isGroup && commentsAllowed && activeGroup?.kind === "channel"}>
               {#if m.first && !m.outgoing && $activeChat}
                 {@const mt = isGroup ? tagOf(activeGroup, m.from) : null}
                 <div class="msg-header">
@@ -3314,11 +3342,14 @@
                   </div>
                 </div>
               {:else if m.kind.type === "reply"}
+                {@const qa = m.kind.content.quoted_author}
+                {@const qt = m.kind.content.quoted_text}
                 <div class="bubble">
-                  <div class="reply-quote">
-                    <span class="rq-author">{m.kind.content.quoted_author}</span>
-                    <span class="rq-text">{@render richText(m.kind.content.quoted_text)}</span>
-                  </div>
+                  <!-- Telegram's quote: the author's colour, a bar, tap → to the original. -->
+                  <button class="reply-quote" style:--rq={peerColor(qa)} onclick={(e) => { e.stopPropagation(); jumpToQuoted(m.id, qt); }}>
+                    <span class="rq-author">{qa === myUsername ? $t("You") : !isGroup && qa === $activeChat?.id ? $activeChat.name : qa}</span>
+                    <span class="rq-text">{@render richText(qt)}</span>
+                  </button>
                   {@render msgBody(m.kind.content.text)}
                   <span class="bubble-meta">
                     {@render msgFlags(m)}
@@ -3367,6 +3398,14 @@
                     {/each}
                   </div>
                 {/if}
+              {:else if m.kind.type === "text" && unsupportedKind(m.kind.content.text)}
+                <!-- Sent by a newer app: say so instead of showing raw JSON. -->
+                <div class="bubble unsupported">
+                  <span class="uns-ic">⬆</span>
+                  <span class="uns-body"><b>{$t("This message isn't supported by your version of Aquamarine")}</b>
+                    <button class="uns-up" onclick={() => void checkUpdates(true)}>{$t("Update the app")}</button></span>
+                  <span class="bubble-meta">{m.time}</span>
+                </div>
               {:else if m.kind.type === "text"}
                 <div class="bubble">
                   {@render msgBody(m.kind.content.text)}
@@ -3382,10 +3421,26 @@
                 {@const nc = isGroup ? (commentCount.get(reactionKey(m)) ?? 0) : 0}
                 {@const nr = replyCount.get(quoteOf(m)) ?? 0}
                 {@const vk = reactionKey(m)}
+                {#if isGroup && commentsAllowed && activeGroup?.kind === "channel"}
+                  <!-- Telegram: a bar under every post — who commented, how many, "Leave a comment". -->
+                  <button class="cmt-bar" class:out={m.outgoing} onclick={() => openThread(m, "comments")}>
+                    {#if nc}
+                      <span class="cmt-avas">
+                        {#each commentAuthors.get(vk) ?? [] as a (a)}
+                          <span class="cmt-av" style:background-image={$avatars[a] ? `url("${$avatars[a]}")` : undefined}>{$avatars[a] ? "" : a.slice(0, 1).toUpperCase()}</span>
+                        {/each}
+                      </span>
+                    {:else}
+                      <svg class="cmt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1.1-4.6A8 8 0 1 1 21 12z"/></svg>
+                    {/if}
+                    <span class="cmt-label">{nc ? $tn(nc, "comment") : $t("Leave a comment")}</span>
+                    <span class="tc-arrow">›</span>
+                  </button>
+                {/if}
                 <div class="post-foot" class:out={m.outgoing}>
-                  {#if (isGroup && commentsAllowed && (activeGroup?.kind === "channel" || nc)) || nr}
-                    <button class="thread-chip" onclick={() => openThread(m, nc || activeGroup?.kind === "channel" ? "comments" : "replies")}>
-                      {#if nc || activeGroup?.kind === "channel"}💬 {nc ? $tn(nc, "comment") : $t("Comment")}{:else}↩ {$tn(nr, "reply")}{/if}
+                  {#if (isGroup && commentsAllowed && activeGroup?.kind !== "channel" && nc) || (nr && activeGroup?.kind !== "channel")}
+                    <button class="thread-chip" onclick={() => openThread(m, nc ? "comments" : "replies")}>
+                      {#if nc}💬 {$tn(nc, "comment")}{:else}↩ {$tn(nr, "reply")}{/if}
                       <span class="tc-arrow">›</span>
                     </button>
                   {/if}
@@ -3549,7 +3604,12 @@
     {/if}
 
     {#if !canPost}
-      {#if postBlocked === "channel" && $activeChat}
+      {#if $activeChat?.id === "__replies__"}
+        <div class="channel-locked">{$t("Answers to you, comments on your comments and @mentions from groups and channels.")}</div>
+      {:else if peerBlocked && $activeChat}
+        {@const cid = $activeChat.id}
+        <button class="channel-mute danger-txt" onclick={() => setBlocked(cid, false)}>{$t("Unblock")}</button>
+      {:else if postBlocked === "channel" && $activeChat}
         {@const cid = $activeChat.id}
         <button class="channel-mute" onclick={() => setMuted(cid)}>
           {$t($mutedChats.has(cid) ? "Unmute" : "Mute")}
@@ -4955,14 +5015,17 @@
   /* Reaction chips under a bubble */
   /* Quoted reply inside a bubble */
   .reply-quote {
-    display: block;
-    border-left: 3px solid var(--accent);
-    padding: 3px 0 3px 8px; margin-bottom: 5px;
-    background: color-mix(in srgb, var(--accent) 8%, transparent);
-    border-radius: 0 6px 6px 0; max-width: 100%;
+    --rq: var(--accent);
+    display: block; width: 100%; box-sizing: border-box; text-align: left; font: inherit; color: inherit; cursor: pointer;
+    border: none; border-left: 3px solid var(--rq);
+    padding: 4px 10px 5px 9px; margin-bottom: 6px;
+    background: color-mix(in srgb, var(--rq) 13%, transparent);
+    border-radius: 5px 9px 9px 5px; max-width: 100%;
+    transition: background-color .12s;
   }
-  .rq-author { display: block; font-size: 11.5px; font-weight: 700; color: var(--accent); }
-  .rq-text { display: block; font-size: 12.5px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .reply-quote:hover { background: color-mix(in srgb, var(--rq) 20%, transparent); }
+  .rq-author { display: block; font-size: 13px; font-weight: 700; color: var(--rq); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rq-text { display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; font-size: 13.5px; line-height: 1.3; color: var(--fg); opacity: .88; overflow: hidden; }
 
   .ce-preview {
     position: absolute; left: 0; right: 0; bottom: calc(100% + 6px);
@@ -5334,4 +5397,27 @@
     color: var(--fg-muted);
   }
   .kbds { margin-left: auto; }
+  .channel-mute.danger-txt { color: var(--danger, #FF4D6D); }
+  /* A channel post and its comment bar are one block, as wide as the wider of the two. */
+  .msg-col.post { display: grid; justify-items: stretch; width: fit-content; max-width: 100%; }
+  .msg.out .msg-col.post { justify-self: end; }
+  .msg-col.post > .bubble { border-bottom-left-radius: 6px; border-bottom-right-radius: 6px; }
+  .msg-col.post > .post-foot.out { justify-self: end; }
+  .cmt-bar { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 240px; box-sizing: border-box; margin-top: -1px; padding: 9px 14px;
+    border: 1px solid var(--border); border-top-color: color-mix(in srgb, var(--border) 60%, transparent); border-radius: 0 0 16px 16px;
+    background: var(--bg-bubble-in); color: var(--accent); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; text-align: left; transition: background-color .12s; }
+  .cmt-bar.out { align-self: flex-end; background: var(--bg-bubble-out, var(--bg-bubble-in)); }
+  .cmt-bar:hover { background: color-mix(in srgb, var(--accent) 10%, var(--bg-bubble-in)); }
+  .cmt-bar .cmt-label { flex: 1; }
+  .cmt-ic { width: 20px; height: 20px; flex-shrink: 0; }
+  .cmt-avas { display: flex; flex-shrink: 0; }
+  .cmt-av { width: 22px; height: 22px; border-radius: 50%; margin-left: -6px; border: 2px solid var(--bg-bubble-in); display: grid; place-items: center; font-size: 10px; font-weight: 800; color: #06070C;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); background-size: cover; background-position: center; }
+  .cmt-av:first-child { margin-left: 0; }
+  .bubble.unsupported { display: flex; align-items: flex-start; gap: 10px; font-style: normal; }
+  .uns-ic { width: 30px; height: 30px; flex-shrink: 0; border-radius: 50%; display: grid; place-items: center; font-size: 15px; color: #06070C; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+  .uns-body { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+  .uns-body b { font-weight: 600; font-size: 14px; }
+  .uns-up { border: none; padding: 0; background: none; color: var(--accent); font: inherit; font-size: 13.5px; font-weight: 700; cursor: pointer; }
+  .uns-up:hover { text-decoration: underline; }
 </style>

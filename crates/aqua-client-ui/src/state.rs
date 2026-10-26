@@ -26,6 +26,9 @@ use serde::{Deserialize, Serialize};
 
 /// Identifier of the built-in "Saved Messages" self-chat.
 pub const SAVED_MESSAGES_ID: &str = "__saved__";
+/// Telegram's "Replies": answers to you, comments on your comments and
+/// @mentions from groups and channels, in one read-only chat.
+pub const REPLIES_ID: &str = "__replies__";
 
 /// Name of the on-disk file holding Saved Messages. Lives next to the
 /// vault; readable only to this user since the data directory is in

@@ -32,6 +32,7 @@ crates/aqua-client-ui/gen/
 *.sqlite-*
 aqua-admin.json
 aqua-smtp.json   # SMTP login + app password (admin panel)
+aqua-journal.log # who came online / signed in (admin panel journal)
 proxy.txt
 /.data-*
 /Aquamarine-apps/

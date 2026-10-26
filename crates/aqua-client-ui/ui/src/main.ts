@@ -2,6 +2,10 @@ import App from "./App.svelte";
 import { mount } from "svelte";
 import "./app.css";
 
+// Phones and tablets: no desktop title bar even when the screen is turned
+// sideways and wider than the phone layout's breakpoint.
+if (/android|iphone|ipad/i.test(navigator.userAgent)) document.documentElement.classList.add("phone");
+
 // Linux desktop = WebKitGTK, which paints CSS blur on the CPU every frame
 // (no Chrome in the UA there; Android's WebView and Windows' WebView2 have it,
 // macOS WKWebView isn't Linux). Lighter effects keep it smooth — see app.css.

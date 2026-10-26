@@ -217,11 +217,36 @@
       home = null;
     }
     theater = on;
+    if (!on) { sideways = false; if (isFs && "__TAURI_INTERNALS__" in window) { isFs = false; void windowFs(false); } }
     poke();
     queueMicrotask(() => box?.focus());
   }
+  // Phones: "full screen" is the window mode, turned sideways when the video
+  // is wide and the phone is held upright (Android's webview has no element
+  // full screen and won't lock the orientation).
+  const PHONE = typeof document !== "undefined" && document.documentElement.classList.contains("phone");
+  let sideways = $state(false);
+  // Desktop app: the element's full screen fills only the webview — make the
+  // window itself full screen too.
+  async function windowFs(on: boolean) {
+    if (!("__TAURI_INTERNALS__" in window) || PHONE) return;
+    try { const { getCurrentWindow } = await import("@tauri-apps/api/window"); await getCurrentWindow().setFullscreen(on); } catch { /* not allowed */ }
+  }
   async function toggleFs() {
     if (!box) return;
+    if (PHONE) {
+      const on = !theater;
+      sideways = on && vw > vh && innerHeight > innerWidth;
+      setTheater(on);
+      return;
+    }
+    if ("__TAURI_INTERNALS__" in window) {
+      const on = !isFs;
+      setTheater(on);
+      isFs = on;
+      await windowFs(on);
+      return;
+    }
     try {
       if (document.fullscreenElement) await document.exitFullscreen();
       else {
@@ -399,6 +424,7 @@
     class:fill
     class:theater
     class:fs={isFs}
+    class:sideways
     class:hide={!showControls}
     bind:this={box}
     tabindex="0"
@@ -542,6 +568,8 @@
   }
   .vp.theater video, .vp.fs video { height: 100%; max-height: none; object-fit: contain; }
   .vp.fs { border-radius: 0; width: 100%; height: 100%; }
+  /* Phone held upright, wide video: lay the player on its side. */
+  .vp.theater.sideways { inset: auto; top: 50%; left: 50%; width: 100vh; height: 100vw; transform: translate(-50%, -50%) rotate(90deg); }
   .vp.hide { cursor: none; }
   .vp.hide .ctl, .vp.hide .top { opacity: 0; pointer-events: none; }
 

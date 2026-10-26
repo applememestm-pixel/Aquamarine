@@ -170,6 +170,7 @@ export interface Settings {
   // Notifications
   notifySound: boolean;       // play a chime on incoming message
   notifyDesktop: boolean;     // OS desktop notification on incoming
+  notifyOnV2?: boolean;       // the one-time "on by default" migration ran
   // --- Full customisation (the theme editor) ---
   /** Per-var colour overrides (CSS var → hex). Wins over palette/mode. */
   customColors?: Record<string, string>;
@@ -215,7 +216,7 @@ export const DEFAULTS: Settings = {
   autoDownloadMedia: true,
   linkPreviews: true,
   notifySound: true,
-  notifyDesktop: false,
+  notifyDesktop: true,
   stickerSize: 128,
   mediaMaxWidth: 360,
   bubbleRadius: 14,
@@ -259,7 +260,11 @@ function load(): Settings {
     const raw = localStorage.getItem(KEY);
     if (!raw) return { ...DEFAULTS };
     const parsed = JSON.parse(raw) as Partial<Settings>;
-    return { ...DEFAULTS, ...parsed };
+    const s = { ...DEFAULTS, ...parsed };
+    // 1.0.61: notifications are on by default (they used to start off, so
+    // nobody saw them). Once; switching them off afterwards sticks.
+    if (!parsed.notifyOnV2) { s.notifyDesktop = true; s.notifyOnV2 = true; }
+    return s;
   } catch {
     return { ...DEFAULTS };
   }

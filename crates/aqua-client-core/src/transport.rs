@@ -526,7 +526,17 @@ impl Transport {
     /// `keep`: ask the relay to hold it long-term (group photos, ≤ 4 MiB)
     /// instead of in the hours-long delivery cache.
     pub async fn upload_blob_ext(&self, cid: &str, bytes: Vec<u8>, keep: bool) -> Result<(), TransportError> {
-        let url = format!("{}/v1/blob/{}{}", self.server_url.trim_end_matches('/'), cid, if keep { "?keep=1" } else { "" });
+        self.upload_blob_kind(cid, bytes, keep, None).await
+    }
+
+    /// `kind`: a coarse label for the relay's admin panel ("photo", "video",
+    /// "sticker", "gif", "emoji", "voice", "audio", "file") — the content
+    /// itself stays encrypted. Older relays ignore it.
+    pub async fn upload_blob_kind(&self, cid: &str, bytes: Vec<u8>, keep: bool, kind: Option<&str>) -> Result<(), TransportError> {
+        let mut q = Vec::new();
+        if keep { q.push("keep=1".to_string()); }
+        if let Some(k) = kind.filter(|k| k.bytes().all(|b| b.is_ascii_lowercase())) { q.push(format!("kind={k}")); }
+        let url = format!("{}/v1/blob/{}{}{}", self.server_url.trim_end_matches('/'), cid, if q.is_empty() { "" } else { "?" }, q.join("&"));
         let r = self.http.post(&url).bearer_auth(self.bearer().await?).body(bytes).send().await?;
         if !r.status().is_success() {
             return Err(TransportError::Server {

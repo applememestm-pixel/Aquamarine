@@ -149,6 +149,27 @@
   let focus = $state<TileId | null>(null);
   let goLiveOpen = $state(false);
   let volOpen = $state(false);
+  // In-call devices panel (the ⚙ button): pick the mic / speaker and levels
+  // here instead of being thrown out of the call into Settings.
+  let devOpen = $state(false);
+  let devices = $state<{ mics: MediaDeviceInfo[]; speakers: MediaDeviceInfo[] }>({ mics: [], speakers: [] });
+  async function openDevices() {
+    goLiveOpen = false; volOpen = false;
+    devOpen = !devOpen;
+    if (!devOpen) return;
+    try {
+      const all = await navigator.mediaDevices.enumerateDevices();
+      devices = { mics: all.filter((d) => d.kind === "audioinput"), speakers: all.filter((d) => d.kind === "audiooutput") };
+    } catch { devices = { mics: [], speakers: [] }; }
+  }
+  async function switchMic(id: string) {
+    callSettings.update((c) => ({ ...c, micId: id }));
+    try { micRaw?.getTracks().forEach((t) => t.stop()); } catch { /* gone */ }
+    try { await inCtx?.close(); } catch { /* closed */ }
+    inCtx = null;
+    await startMic();
+  }
+  const canPickSpeaker = typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
   let statsOpen = $state(getStore(callSettings).showStats);
   let elapsedSeconds = $state(0);
   let liveCfg = $state<{ res: ResPreset; fps: FpsPreset; hint: ContentHint; audio: boolean } | null>(null);
@@ -206,7 +227,7 @@
       }
       // Ctrl+Shift+M / D are global (lib/shortcuts.ts).
       if (e.key === "Escape") {
-        if (goLiveOpen || volOpen) { goLiveOpen = false; volOpen = false; }
+        if (goLiveOpen || volOpen || devOpen) { goLiveOpen = false; volOpen = false; devOpen = false; }
         else if (fullscreen) void toggleFullscreen();
       }
     };
@@ -911,7 +932,7 @@
     prevBytes.clear();
     remote = { ...NO_REMOTE };
     speakingMe = false; speakingPeer = false; reconnecting = false; pttHeld = false;
-    goLiveOpen = false; volOpen = false; focus = null; stats = null; expanded = true;
+    goLiveOpen = false; volOpen = false; devOpen = false; focus = null; stats = null; expanded = true;
     if (fullscreen) void toggleFullscreen();
     peerId = ""; polite = false; makingOffer = false;
     if (wasConnected) blip(false);
@@ -1228,6 +1249,38 @@
   </div>
 {/snippet}
 
+{#snippet devicesPanel()}
+  <div class="pop dev" role="dialog" aria-label={$t("Microphone and sound")}>
+    <div class="pop-label">{$t("Microphone")}</div>
+    <select class="pop-select" value={$callSettings.micId} onchange={(e) => void switchMic((e.target as HTMLSelectElement).value)}>
+      <option value="default">{$t("System default")}</option>
+      {#each devices.mics.filter((d) => d.deviceId && d.deviceId !== "default") as d (d.deviceId)}<option value={d.deviceId}>{d.label || $t("Microphone")}</option>{/each}
+    </select>
+    {#if canPickSpeaker}
+      <div class="pop-label">{$t("Speaker")}</div>
+      <select class="pop-select" value={$callSettings.speakerId} onchange={(e) => callSettings.update((c) => ({ ...c, speakerId: (e.target as HTMLSelectElement).value }))}>
+        <option value="default">{$t("System default")}</option>
+        {#each devices.speakers.filter((d) => d.deviceId && d.deviceId !== "default") as d (d.deviceId)}<option value={d.deviceId}>{d.label || $t("Speaker")}</option>{/each}
+      </select>
+    {/if}
+    <div class="pop-label">{$t("Microphone volume")}</div>
+    <div class="pop-range">
+      <input type="range" min="0" max="2" step="0.01" value={$callSettings.inputVolume}
+        oninput={(e) => callSettings.update((c) => ({ ...c, inputVolume: parseFloat((e.target as HTMLInputElement).value) }))} />
+      <span>{Math.round($callSettings.inputVolume * 100)}%</span>
+    </div>
+    <div class="pop-label">{$t("Sound volume")}</div>
+    <div class="pop-range">
+      <input type="range" min="0" max="1" step="0.01" value={$callSettings.outputVolume}
+        oninput={(e) => callSettings.update((c) => ({ ...c, outputVolume: parseFloat((e.target as HTMLInputElement).value) }))} />
+      <span>{Math.round($callSettings.outputVolume * 100)}%</span>
+    </div>
+    <label class="pop-check"><input type="checkbox" checked={$callSettings.noiseSuppression}
+      onchange={(e) => { callSettings.update((c) => ({ ...c, noiseSuppression: (e.target as HTMLInputElement).checked })); void switchMic($callSettings.micId); }} /> {$t("Noise suppression")}</label>
+    <button class="pop-btn" onclick={() => { devOpen = false; openSettings("voice"); }}>{$t("All voice & video settings")}</button>
+  </div>
+{/snippet}
+
 {#snippet volumePanel()}
   <div class="pop vol" role="dialog" aria-label={$t("Volume")}>
     <div class="pop-title">{peerName}</div>
@@ -1265,10 +1318,13 @@
       </div>
     {/if}
     <div class="anchor">
-      <button class="cb" class:on={volOpen} onclick={() => { goLiveOpen = false; volOpen = !volOpen; }} title={$t("Volume")}>{@html I.vol}</button>
+      <button class="cb" class:on={volOpen} onclick={() => { goLiveOpen = false; devOpen = false; volOpen = !volOpen; }} title={$t("Volume")}>{@html I.vol}</button>
       {#if volOpen}{@render volumePanel()}{/if}
     </div>
-    <button class="cb" onclick={() => { expanded = false; openSettings("voice"); }} title="Voice & video settings">{@html I.gear}</button>
+    <div class="anchor">
+      <button class="cb" class:on={devOpen} onclick={openDevices} title={$t("Microphone and sound")}>{@html I.gear}</button>
+      {#if devOpen}{@render devicesPanel()}{/if}
+    </div>
     <button class="cb hang" onclick={() => hangup("local-hangup")} title={$t("Hang up")}>{@html I.hang}</button>
   </div>
 {/snippet}
@@ -1447,6 +1503,13 @@
     text-align: left;
   }
   .pop.vol { width: 240px; }
+  .pop.dev { width: 280px; left: auto; right: -40px; transform: none; }
+  .pop-select { width: 100%; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--border-strong); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 13px; }
+  .pop-check { display: flex; align-items: center; gap: 8px; margin: 12px 0 4px; font-size: 13px; color: var(--fg); cursor: pointer; }
+  .pop-check input { accent-color: var(--accent); }
+  .pop.dev .pop-btn { width: 100%; margin-top: 10px; }
+  /* Buttons keep their size whatever is open: nothing jumps. */
+  .controls :global(.cb) { flex: 0 0 auto; }
   .pop-title { font-weight: 700; font-size: 14px; color: var(--fg); margin-bottom: 8px; }
   .pop-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-dim); margin: 10px 0 6px; }
   .pop-seg { display: flex; gap: 4px; background: var(--bg-input); border-radius: 8px; padding: 3px; }

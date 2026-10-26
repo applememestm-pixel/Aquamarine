@@ -37,6 +37,33 @@ export function rememberAlias(a: string, b: string) {
   const rest = aliasPairs().filter(([p, q]) => !(p === x && q === y) && !(p === y && q === x));
   try { localStorage.setItem(ALIAS_KEY, JSON.stringify([[x, y], ...rest].slice(0, 12))); } catch { /* ignore */ }
 }
+function forgetAliasesOf(url: string) {
+  const u = norm(url);
+  try { localStorage.setItem(ALIAS_KEY, JSON.stringify(aliasPairs().filter(([p, q]) => p !== u && q !== u))); } catch { /* ignore */ }
+}
+
+// ---- Servers added by hand (Settings → Network & proxy → Add server) ----
+const MANUAL_KEY = "aqua.manualServers.v1";
+export function manualServers(): string[] {
+  try { return (JSON.parse(localStorage.getItem(MANUAL_KEY) ?? "[]") as string[]).map(norm).filter(Boolean); } catch { return []; }
+}
+export function addManualServer(url: string) {
+  const u = norm(url);
+  if (!u) return;
+  try { localStorage.setItem(MANUAL_KEY, JSON.stringify([u, ...manualServers().filter((x) => x !== u)].slice(0, 12))); } catch { /* ignore */ }
+}
+
+/** Forget a relay everywhere this device remembered it (it stays usable by hand). */
+export function forgetServer(url: string) {
+  const u = norm(url);
+  forgetAliasesOf(u);
+  try { localStorage.setItem(MANUAL_KEY, JSON.stringify(manualServers().filter((x) => x !== u))); } catch { /* ignore */ }
+  const f = feds();
+  delete f[u];
+  for (const k of Object.keys(f)) f[k] = f[k].filter((x) => x !== u);
+  saveFeds(f);
+}
+
 /** The relay's other addresses. */
 export function aliasesOf(url: string): string[] {
   const u = norm(url);
@@ -54,7 +81,7 @@ export function federationOf(url: string): string[] {
 /** Every relay we know a federation for — the sign-in screen's suggestions. */
 export function knownServers(): string[] {
   const f = feds();
-  return [...new Set(Object.entries(f).flatMap(([k, v]) => [k, ...v]))].slice(0, 12);
+  return [...new Set([...manualServers(), ...Object.entries(f).flatMap(([k, v]) => [k, ...v])])].slice(0, 12);
 }
 
 /** Ask `current` for its federation and remember exactly that. */
@@ -65,6 +92,10 @@ export async function learnPeers(current: string): Promise<void> {
     // `self`: the relay's own other address — e.g. its white IP for when this
     // device leaves the home Wi-Fi it signed in on.
     if (r.self) rememberAlias(cur, r.self);
+    // The relay no longer names an internet address of its own (since 1.0.61
+    // it only announces one that leads back to it): forget what an older one
+    // said — VPN exits like the "Frankfurt" servers nobody could reach.
+    else forgetAliasesOf(cur);
     const f = feds();
     f[cur] = r.federated ? [...new Set((r.servers ?? []).map(norm))].filter((x) => x && x !== cur).slice(0, 12) : [];
     // Keep the map small: the relays we're on now and lately.

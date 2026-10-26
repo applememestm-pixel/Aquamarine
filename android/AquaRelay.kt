@@ -272,6 +272,22 @@ class AquaUpdatePlugin(private val activity: Activity) : Plugin(activity) {
       invoke.resolve(JSObject().put("needsPermission", true))
       return
     }
+    // A build signed with another key can't replace this one: Android only
+    // says "App not installed". Find out first and say what to do.
+    try {
+      val mine = signersOf(activity.packageManager.let { pm ->
+        if (Build.VERSION.SDK_INT >= 28) pm.getPackageInfo(activity.packageName, PackageManager.GET_SIGNING_CERTIFICATES)
+        else @Suppress("DEPRECATION") pm.getPackageInfo(activity.packageName, PackageManager.GET_SIGNATURES)
+      })
+      val theirs = signersOf(activity.packageManager.let { pm ->
+        if (Build.VERSION.SDK_INT >= 28) pm.getPackageArchiveInfo(args.path, PackageManager.GET_SIGNING_CERTIFICATES)
+        else @Suppress("DEPRECATION") pm.getPackageArchiveInfo(args.path, PackageManager.GET_SIGNATURES)
+      })
+      if (mine.isNotEmpty() && theirs.isNotEmpty() && mine.intersect(theirs).isEmpty()) {
+        invoke.resolve(JSObject().put("signatureMismatch", true))
+        return
+      }
+    } catch (e: Exception) { /* can't tell: let the installer decide */ }
     try {
       var f = File(args.path)
       // The FileProvider only serves the cache directory.
@@ -290,5 +306,16 @@ class AquaUpdatePlugin(private val activity: Activity) : Plugin(activity) {
     } catch (e: Exception) {
       invoke.reject(e.message ?: "install")
     }
+  }
+
+  /** SHA-256 of each signing certificate of a package (installed or a file). */
+  private fun signersOf(info: android.content.pm.PackageInfo?): Set<String> {
+    if (info == null) return emptySet()
+    val sigs = if (Build.VERSION.SDK_INT >= 28) {
+      val si = info.signingInfo ?: return emptySet()
+      if (si.hasMultipleSigners()) si.apkContentsSigners else si.signingCertificateHistory
+    } else @Suppress("DEPRECATION") info.signatures
+    val md = java.security.MessageDigest.getInstance("SHA-256")
+    return (sigs ?: emptyArray()).map { md.digest(it.toByteArray()).joinToString("") { b -> "%02x".format(b) } }.toSet()
   }
 }

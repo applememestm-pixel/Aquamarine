@@ -4,7 +4,7 @@
   import { updateState, installUpdate, skipUpdate, BUILD_SHORT, BUILD } from "../updates";
 
   const st = $derived($updateState);
-  const shown = $derived(st.s === "available" || st.s === "downloading" || st.s === "installing" || st.s === "permission" || (st.s === "error" && !!st.id));
+  const shown = $derived(st.s === "available" || st.s === "downloading" || st.s === "installing" || st.s === "permission" || st.s === "signature" || (st.s === "error" && !!st.id));
   const label = $derived("info" in st && st.info ? (st.info.version ? `v${st.info.version}` : st.info.commit ?? st.info.tag) : "");
   const mb = (n: number) => (n / 1048576).toFixed(1);
 </script>
@@ -28,6 +28,9 @@
       {:else if st.s === "permission"}
         <b>{$t("Allow installing updates")}</b>
         <span>{$t("Turn on “Allow from this source” for Aquamarine and come back — the update continues by itself.")}</span>
+      {:else if st.s === "signature"}
+        <b>{$t("This build can't go over yours")}</b>
+        <span>{$t("It's signed with a different key (older builds used temporary ones). Make a backup in Settings → Backups, uninstall Aquamarine, install the new build — after that updates go over it by themselves.")}</span>
       {:else if st.s === "error"}
         <b>{$t("The update didn't work")}</b>
         <span class="err">{st.error}</span>
@@ -39,6 +42,11 @@
         <button class="later" onclick={skipUpdate}>{$t("Later")}</button>
       {:else if st.s === "permission"}
         <button class="go" onclick={installUpdate}>{$t("Continue")}</button>
+      {:else if st.s === "signature" && st.info.html_url}
+        <a class="go" href={st.info.html_url} target="_blank" rel="noopener">{$t("Download")}</a>
+      {/if}
+      {#if st.s !== "available" && st.s !== "error" && st.s !== "downloading"}
+        <button class="later x" onclick={skipUpdate} aria-label={$t("Close")} title={$t("Close")}>✕</button>
       {/if}
     </div>
   </div>
@@ -66,7 +74,7 @@
   .bar { display: block; height: 5px; border-radius: 3px; background: var(--bg-input); overflow: hidden; margin: 2px 0; }
   .bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .25s ease; }
   .upd-act { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
-  .upd-act button { border: none; border-radius: 12px; padding: 8px 14px; font: 700 13.5px var(--font-ui); cursor: pointer; }
+  .upd-act button, .upd-act a { border: none; border-radius: 12px; padding: 8px 14px; font: 700 13.5px var(--font-ui); cursor: pointer; text-align: center; text-decoration: none; }
   .go { color: #06070c; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
   .later { color: var(--fg-muted); background: transparent; }
 </style>

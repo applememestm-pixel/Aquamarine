@@ -20,6 +20,7 @@
   import ContactsPanel from "./lib/components/ContactsPanel.svelte";
   import FingerprintModal from "./lib/components/FingerprintModal.svelte";
   import InputPrompt from "./lib/components/InputPrompt.svelte";
+  import NewChatSheet from "./lib/components/NewChatSheet.svelte";
   import Toast, { showToast } from "./lib/components/Toast.svelte";
   import Confirm from "./lib/components/Confirm.svelte";
   import SendDialog from "./lib/components/SendDialog.svelte";
@@ -130,6 +131,13 @@
   });
 
   onMount(() => {
+    // Notifications are on by default: ask the system once, on first start.
+    try {
+      if (!localStorage.getItem("aqua.notifyAsked")) {
+        localStorage.setItem("aqua.notifyAsked", "1");
+        void import("./lib/notify").then((n) => n.ensureNotifyPermission(true));
+      }
+    } catch { /* storage blocked */ }
     // "Server on this device" was on: bring the relay back with the app.
     try {
       const port = Number(localStorage.getItem("aqua.hostRelay") || 0);
@@ -325,6 +333,7 @@
 
 <FingerprintModal />
 <InputPrompt />
+<NewChatSheet />
 <CallModal />
 <MediaPicker />
 <Lazy when={$settingsOpen} load={() => import("./lib/components/SettingsPanel.svelte")} />

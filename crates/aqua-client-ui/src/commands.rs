@@ -1691,7 +1691,7 @@ async fn attach_file_fwd(
         let s = state.lock().map_err(|e| e.to_string())?;
         s.transport.clone().ok_or("not connected")?
     };
-    transport.upload_blob(&cid, ciphertext).await
+    transport.upload_blob_kind(&cid, ciphertext, false, Some(blob_kind(envelope.category.as_deref(), envelope.mime.as_deref(), &envelope.filename))).await
         .map_err(|e| format!("upload_blob: {e}"))?;
 
     // 4. Send the offer as a regular E2EE text message through the
@@ -2045,7 +2045,7 @@ pub async fn upload_attachment(
     // Images are group photos / banners: kept by the relay for months.
     // `keep` asks the same for an animated (video) banner.
     let keep = (kind == "image" || keep == Some(true)) && ciphertext.len() <= 4 * 1024 * 1024;
-    transport.upload_blob_ext(&envelope.cid, ciphertext, keep).await.map_err(|e| format!("upload_blob: {e}"))?;
+    transport.upload_blob_kind(&envelope.cid, ciphertext, keep, Some(blob_kind(envelope.category.as_deref(), envelope.mime.as_deref(), &envelope.filename))).await.map_err(|e| format!("upload_blob: {e}"))?;
     let _ = tokio::fs::write(cache.join(format!("{}.{ext}", envelope.cid)), &bytes).await;
     Ok(crate::state::ArticleMedia {
         kind: kind.into(),
@@ -2177,9 +2177,20 @@ pub async fn start_chat_with(
     peer_username: String,
     first_message: String,
 ) -> Result<ChatSummary, String> {
-    {
+    let transport = {
         let s = state.lock().map_err(|e| e.to_string())?;
-        s.transport.clone().ok_or("not connected")?;
+        s.transport.clone().ok_or("not connected")?
+    };
+    // Only people who exist: a registered @name (profile card) or at least
+    // a device that published keys. Otherwise no chat is made.
+    let peer_username = peer_username.trim().trim_start_matches('@').to_lowercase();
+    if peer_username.is_empty() || peer_username.starts_with("__") || peer_username.starts_with("grp_") {
+        return Err("No such user".into());
+    }
+    let known = matches!(transport.get_profile(&peer_username).await, Ok(Some(_)))
+        || transport.fetch_bundle(&peer_username).await.is_ok();
+    if !known {
+        return Err(format!("No user @{peer_username} on this server"));
     }
     // X3DH with each of the peer's devices (the first message rides along),
     // and a copy for my other devices so the chat appears there too.
@@ -2783,6 +2794,16 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                 }
                 if let Some(pos) = s.chat_order.iter().position(|id| id == &gid) {
                     if pos > 0 { s.chat_order.remove(pos); s.chat_order.insert(0, gid.clone()); }
+                }
+                if let Some(me) = s_me.as_deref().filter(|me| *me != author.as_str()) {
+                    let me = me.to_string();
+                    let gname = s.groups.get(&gid).map(|g| g.title.clone()).unwrap_or_default();
+                    if let Some(note) = reply_note(&me, &author, &gname, &inner) {
+                        push_replies(&mut s, note, &time);
+                        let _ = app.emit("aqua://incoming", IncomingEventPayload {
+                            peer_id: crate::state::REPLIES_ID.into(), text: format!("@{author}: {}", reply_text(&inner)), time: time.clone(), is_new_chat: false,
+                        });
+                    }
                 }
             }
             let _ = app.emit("aqua://incoming", IncomingEventPayload {
@@ -3706,5 +3727,114 @@ fn push_peer_message(s: &mut AppState, peer_id: &str, text: String, time: &str) 
             s.chat_order.remove(pos);
             s.chat_order.insert(0, peer_id.to_string());
         }
+    }
+}
+
+/// What the relay's admin panel counts a file as (only this label leaves
+/// the device in the clear — never the name or the content).
+fn blob_kind(category: Option<&str>, mime: Option<&str>, name: &str) -> &'static str {
+    let lower = name.to_ascii_lowercase();
+    match category {
+        Some("sticker") => return "sticker",
+        Some("emoji") => return "emoji",
+        Some("gif") => return "gif",
+        Some("voice") => return "voice",
+        Some("circle") => return "video",
+        _ => {}
+    }
+    let m = mime.unwrap_or("");
+    if m == "image/gif" || lower.ends_with(".gif") { "gif" }
+    else if m.starts_with("image/") { "photo" }
+    else if m.starts_with("video/") { "video" }
+    else if m.starts_with("audio/") { "audio" }
+    else { "file" }
+}
+
+/// The words of a group message, whatever wraps them (reply, comment).
+fn reply_text(inner: &str) -> String {
+    for p in ["[reply:v1]", "[cmt:v1]"] {
+        if let Some(j) = inner.strip_prefix(p) {
+            let v: serde_json::Value = serde_json::from_str(j).unwrap_or_default();
+            return v.get(if p == "[cmt:v1]" { "t" } else { "text" }).and_then(|x| x.as_str()).unwrap_or("").to_string();
+        }
+    }
+    inner.to_string()
+}
+
+/// Is this group message for me — an answer to my message, a comment
+/// answering my comment, or an @mention? Then what "Replies" shows: a
+/// reply quoting what was answered.
+fn reply_note(me: &str, author: &str, group: &str, inner: &str) -> Option<String> {
+    let me_l = me.to_lowercase();
+    let quoted = if let Some(j) = inner.strip_prefix("[reply:v1]") {
+        let v: serde_json::Value = serde_json::from_str(j).ok()?;
+        let qa = v.get("quoted_author").and_then(|x| x.as_str()).unwrap_or("");
+        (qa.trim_start_matches('@').to_lowercase() == me_l).then(|| v.get("quoted_text").and_then(|x| x.as_str()).unwrap_or("").to_string())
+    } else if let Some(j) = inner.strip_prefix("[cmt:v1]") {
+        let v: serde_json::Value = serde_json::from_str(j).ok()?;
+        let re = v.get("re");
+        let qa = re.and_then(|r| r.get("a")).and_then(|x| x.as_str()).unwrap_or("");
+        (qa.trim_start_matches('@').to_lowercase() == me_l).then(|| re.and_then(|r| r.get("t")).and_then(|x| x.as_str()).unwrap_or("").to_string())
+    } else {
+        None
+    };
+    let text = reply_text(inner);
+    let mentioned = || {
+        let lower = text.to_lowercase();
+        let tag = format!("@{me_l}");
+        lower.match_indices(&tag).any(|(i, _)| !lower[i + tag.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_'))
+    };
+    let quoted = match quoted {
+        Some(q) => q,
+        None if !inner.starts_with('[') && mentioned() => String::new(),
+        None => return None,
+    };
+    let where_ = if group.is_empty() { String::new() } else { format!(" · {group}") };
+    let body = format!("@{author}{where_}\n{text}");
+    Some(if quoted.is_empty() {
+        body
+    } else {
+        format!("[reply:v1]{}", serde_json::json!({ "quoted_author": me, "quoted_text": quoted, "text": body }))
+    })
+}
+
+fn push_replies(s: &mut AppState, text: String, time: &str) {
+    use crate::state::REPLIES_ID;
+    if !s.chats.contains_key(REPLIES_ID) {
+        let summary = ChatSummary {
+            id: REPLIES_ID.into(),
+            name: "Replies".into(),
+            letter: "↩".into(),
+            gradient: "linear-gradient(135deg, #2AABEE 0%, #00E5C7 100%)".into(),
+            preview: String::new(),
+            preview_is_typing: false, preview_by_me: false, has_lock: false,
+            time: time.to_string(),
+            unread: 0, online: false, verified: true, channel: true,
+            live: false,
+        };
+        s.chats.insert(REPLIES_ID.into(), crate::state::ChatBook { summary, messages: Vec::new() });
+        s.chat_order.insert(0, REPLIES_ID.into());
+    }
+    push_peer_message(s, REPLIES_ID, text, time);
+    if let Some(b) = s.chats.get_mut(REPLIES_ID) {
+        b.summary.has_lock = false;
+        // At most 500: it's a feed, not an archive.
+        let n = b.messages.len();
+        if n > 500 { b.messages.drain(..n - 500); }
+    }
+}
+
+#[cfg(test)]
+mod replies_tests {
+    use super::reply_note;
+    #[test]
+    fn replies_finds_what_is_for_me() {
+        let r = reply_note("bob", "ann", "Club", r#"[reply:v1]{"quoted_author":"bob","quoted_text":"hi","text":"hey"}"#).unwrap();
+        assert!(r.starts_with("[reply:v1]") && r.contains("@ann · Club"));
+        assert!(reply_note("bob", "ann", "Club", r#"[reply:v1]{"quoted_author":"eve","quoted_text":"hi","text":"hey"}"#).is_none());
+        assert!(reply_note("bob", "ann", "Club", r#"[cmt:v1]{"to":"k","t":"yes","re":{"a":"bob","t":"no?"}}"#).is_some());
+        assert!(reply_note("bob", "ann", "Club", "ping @bob, look").is_some());
+        assert!(reply_note("bob", "ann", "Club", "ping @bobby").is_none());
+        assert!(reply_note("bob", "ann", "Club", "just text").is_none());
     }
 }
