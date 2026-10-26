@@ -1489,10 +1489,11 @@ impl Directory {
     /// Envelopes kept at most this long for someone who never connects.
     pub const INBOX_TTL_SECS: u64 = 30 * 24 * 3600;
 
-    pub fn inbox_push(&self, user: &str, msg: &[u8]) -> Result<(), DirError> {
+    /// Returns the row id ([`Self::inbox_ack`] removes it).
+    pub fn inbox_push(&self, user: &str, msg: &[u8]) -> Result<i64, DirError> {
         let db = self.db.lock().unwrap();
         db.execute("INSERT INTO inbox (user, msg, at) VALUES (?1, ?2, ?3)", rusqlite::params![user, msg, now_secs() as i64])?;
-        Ok(())
+        Ok(db.last_insert_rowid())
     }
 
     /// Everything waiting for `user`, oldest first (rows stay until acked).

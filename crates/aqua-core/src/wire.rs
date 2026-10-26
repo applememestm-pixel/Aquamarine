@@ -74,6 +74,20 @@ pub struct RelayMessage {
     /// time it was sent. Older relays leave it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ts: Option<i64>,
+    /// Delivery id (random, set by the sender or the relay). With acks on
+    /// (`/v1/ws?...&ack=1`) the relay confirms each message it took and keeps
+    /// each one it hands over until the device confirms it; both sides drop
+    /// repeats by this id. Older peers leave it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+}
+
+impl RelayMessage {
+    /// "Got it" for the message with `id`; with no id it's the relay's
+    /// greeting that says it sends and expects acks.
+    pub fn ack(id: Option<String>) -> Self {
+        Self { from: String::new(), to: String::new(), payload: Vec::new(), kind: PayloadKind::Ack, ts: None, id }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -85,6 +99,8 @@ pub enum PayloadKind {
     /// where no interactive X3DH handshake is possible. The UI marks
     /// these conversations as NOT end-to-end encrypted.
     Plaintext,
+    /// Delivery confirmation (see [`RelayMessage::id`]); no payload.
+    Ack,
 }
 
 /// Auth-flow request / response types.

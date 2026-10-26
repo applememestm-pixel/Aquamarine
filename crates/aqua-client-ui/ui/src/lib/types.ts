@@ -106,6 +106,8 @@ export interface FingerprintView {
   words: string[];
   hex: string;
   peer_name: string;
+  /** The peer's identity key (hex), to notice when it changes. */
+  peer_key: string;
 }
 
 export interface SendResult {

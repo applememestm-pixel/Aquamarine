@@ -201,6 +201,7 @@ async fn full_authenticated_e2e_conversation() {
         payload,
         kind: PayloadKind::Initial,
         ts: None,
+        id: None,
     };
     a_ws.send(Message::Binary(serde_json::to_vec(&relay).unwrap().into())).await.unwrap();
 
@@ -230,6 +231,7 @@ async fn full_authenticated_e2e_conversation() {
             payload: bincode::serialize(&env).unwrap(),
             kind: PayloadKind::Envelope,
             ts: None,
+            id: None,
         }).unwrap().into())).await.unwrap();
         let got = recv_relay(&mut a_ws).await;
         assert_eq!(got.from, "bob");
@@ -244,6 +246,7 @@ async fn full_authenticated_e2e_conversation() {
             payload: bincode::serialize(&env).unwrap(),
             kind: PayloadKind::Envelope,
             ts: None,
+            id: None,
         }).unwrap().into())).await.unwrap();
         let got = recv_relay(&mut b_ws).await;
         assert_eq!(got.from, "alice");
@@ -645,7 +648,7 @@ async fn one_account_on_two_devices() {
 
     // The peer encrypts once per device.
     for (to, body) in [("multi".to_string(), b"for A".to_vec()), (b_addr.clone(), b"for B".to_vec())] {
-        let m = RelayMessage { from: String::new(), to, payload: body, kind: PayloadKind::Envelope, ts: None };
+        let m = RelayMessage { from: String::new(), to, payload: body, kind: PayloadKind::Envelope, ts: None, id: None };
         p_ws.send(Message::Binary(serde_json::to_vec(&m).unwrap().into())).await.unwrap();
     }
     let ga = recv(&mut a_ws).await;
@@ -654,7 +657,7 @@ async fn one_account_on_two_devices() {
     assert_eq!((gb.from.as_str(), gb.payload.as_slice()), ("mpeer", &b"for B"[..]));
 
     // B answers: the peer sees which device wrote.
-    let m = RelayMessage { from: String::new(), to: "mpeer".into(), payload: b"hi from B".to_vec(), kind: PayloadKind::Envelope, ts: None };
+    let m = RelayMessage { from: String::new(), to: "mpeer".into(), payload: b"hi from B".to_vec(), kind: PayloadKind::Envelope, ts: None, id: None };
     b_ws.send(Message::Binary(serde_json::to_vec(&m).unwrap().into())).await.unwrap();
     let gp = recv(&mut p_ws).await;
     assert_eq!(gp.from, b_addr);
@@ -705,7 +708,7 @@ async fn telegram_bot_api_compat() {
     let mut user = Client::new("tguser");
     user.login(&http, &base).await;
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=tguser&token={}", user.token)).await.unwrap();
-    let say = |text: &str| RelayMessage { from: String::new(), to: "tgcompat_bot".into(), payload: text.as_bytes().to_vec(), kind: PayloadKind::Plaintext, ts: None };
+    let say = |text: &str| RelayMessage { from: String::new(), to: "tgcompat_bot".into(), payload: text.as_bytes().to_vec(), kind: PayloadKind::Plaintext, ts: None, id: None };
     ws.send(Message::Binary(serde_json::to_vec(&say("/start hello")).unwrap().into())).await.unwrap();
 
     let ups: serde_json::Value = http.post(format!("{api}/getUpdates")).json(&serde_json::json!({ "timeout": 5 }))
@@ -832,7 +835,7 @@ async fn native_bot_api_extras() {
     let mut user = Client::new("xuser");
     user.login(&http, &base).await;
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=xuser&token={}", user.token)).await.unwrap();
-    let say = |text: &str| RelayMessage { from: String::new(), to: "extras_bot".into(), payload: text.as_bytes().to_vec(), kind: PayloadKind::Plaintext, ts: None };
+    let say = |text: &str| RelayMessage { from: String::new(), to: "extras_bot".into(), payload: text.as_bytes().to_vec(), kind: PayloadKind::Plaintext, ts: None, id: None };
     ws.send(Message::Binary(serde_json::to_vec(&say("/start")).unwrap().into())).await.unwrap();
     let _ = get("/v1/bot/updates?timeout=5").send().await.unwrap();
 
@@ -1016,7 +1019,7 @@ async fn telegram_mini_apps() {
 
     // sendData → web_app_data.
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=maker&token={}", user.token)).await.unwrap();
-    let say = |text: &str| RelayMessage { from: String::new(), to: "shop_bot".into(), payload: text.as_bytes().to_vec(), kind: PayloadKind::Plaintext, ts: None };
+    let say = |text: &str| RelayMessage { from: String::new(), to: "shop_bot".into(), payload: text.as_bytes().to_vec(), kind: PayloadKind::Plaintext, ts: None, id: None };
     ws.send(Message::Binary(serde_json::to_vec(&say(r#"[wad:v1]{"t":"Order","d":"{\"item\":3}"}"#)).unwrap().into())).await.unwrap();
     let ups: serde_json::Value = http.post(format!("{api}/getUpdates")).json(&serde_json::json!({ "timeout": 5 })).send().await.unwrap().json().await.unwrap();
     let wad = &ups["result"][0]["message"]["web_app_data"];
@@ -1124,4 +1127,65 @@ async fn changing_the_username_moves_the_account() {
     assert!(found.to_string().contains("\"after\""), "search: {found}");
     let found: serde_json::Value = http.get(format!("{base}/v1/users/search?q=before")).send().await.unwrap().json().await.unwrap();
     assert!(!found.to_string().contains("\"before\""), "old name still listed: {found}");
+}
+
+/// Delivery with acks (`&ack=1`): the relay confirms what it took from the
+/// sender, and keeps what it handed to the recipient until the recipient
+/// confirms it — a connection that died unnoticed loses nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acks_redeliver_until_confirmed() {
+    let addr = spawn_server().await;
+    let base = format!("http://{addr}");
+    let http = reqwest::Client::new();
+    let mut a = Client::new("acka");
+    a.login(&http, &base).await;
+    let mut b = Client::new("ackb");
+    b.login(&http, &base).await;
+    let url = |user: &str, token: &str| format!("ws://{addr}/v1/ws?user={user}&token={token}&ack=1");
+    let ack = |id: &str| Message::Binary(serde_json::to_vec(&RelayMessage::ack(Some(id.into()))).unwrap().into());
+
+    // Both get the greeting that says the relay speaks acks.
+    let (mut a_ws, _) = tokio_tungstenite::connect_async(url("acka", &a.token)).await.unwrap();
+    let hello = recv_relay(&mut a_ws).await;
+    assert_eq!((hello.kind, hello.id), (PayloadKind::Ack, None));
+    let (mut b_ws, _) = tokio_tungstenite::connect_async(url("ackb", &b.token)).await.unwrap();
+    assert_eq!(recv_relay(&mut b_ws).await.kind, PayloadKind::Ack);
+
+    // A sends with an id: the relay confirms it.
+    let m = RelayMessage { from: String::new(), to: "ackb".into(), payload: b"one".to_vec(), kind: PayloadKind::Envelope, ts: None, id: Some("m1".into()) };
+    a_ws.send(Message::Binary(serde_json::to_vec(&m).unwrap().into())).await.unwrap();
+    let got_ack = recv_relay(&mut a_ws).await;
+    assert_eq!((got_ack.kind, got_ack.id.as_deref()), (PayloadKind::Ack, Some("m1")));
+
+    // B gets it but never confirms; its connection goes away.
+    let got = recv_relay(&mut b_ws).await;
+    assert_eq!((got.from.as_str(), got.id.as_deref(), got.payload.as_slice()), ("acka", Some("m1"), &b"one"[..]));
+    drop(b_ws);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // The next connection gets it again; confirmed, it's gone for good.
+    let (mut b_ws, _) = tokio_tungstenite::connect_async(url("ackb", &b.token)).await.unwrap();
+    assert_eq!(recv_relay(&mut b_ws).await.kind, PayloadKind::Ack);
+    let again = recv_relay(&mut b_ws).await;
+    assert_eq!((again.id.as_deref(), again.payload.as_slice()), (Some("m1"), &b"one"[..]));
+    b_ws.send(ack("m1")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(b_ws);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let (mut b_ws, _) = tokio_tungstenite::connect_async(url("ackb", &b.token)).await.unwrap();
+    assert_eq!(recv_relay(&mut b_ws).await.kind, PayloadKind::Ack);
+    let nothing = tokio::time::timeout(Duration::from_millis(600), recv_relay(&mut b_ws)).await;
+    assert!(nothing.is_err(), "confirmed message came again: {nothing:?}");
+
+    // Without acks (an older client) nothing changes: no greeting, no ack.
+    let mut c = Client::new("ackc");
+    c.login(&http, &base).await;
+    let (mut c_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=ackc&token={}", c.token)).await.unwrap();
+    let m = RelayMessage { from: String::new(), to: "acka".into(), payload: b"old".to_vec(), kind: PayloadKind::Envelope, ts: None, id: None };
+    c_ws.send(Message::Binary(serde_json::to_vec(&m).unwrap().into())).await.unwrap();
+    let got = recv_relay(&mut a_ws).await;
+    assert_eq!(got.payload, b"old");
+    assert!(got.id.is_some(), "the relay gives it an id for the ack-speaking recipient");
+    let quiet = tokio::time::timeout(Duration::from_millis(400), recv_relay(&mut c_ws)).await;
+    assert!(quiet.is_err(), "an older client gets no acks: {quiet:?}");
 }

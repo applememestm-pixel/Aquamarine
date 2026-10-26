@@ -1,12 +1,29 @@
 <script module lang="ts">
-  import { writable } from "svelte/store";
+  import { writable, get } from "svelte/store";
   import type { FingerprintView } from "../types";
 
   const open = writable<boolean>(false);
   const view = writable<FingerprintView | null>(null);
+  const peer = writable<string>("");
 
-  export function openFingerprint(v: FingerprintView) {
+  /** peer id → the identity key (hex) the user checked against the words. */
+  const KEY = "aqua.verified.v1";
+  function loadVerified(): Record<string, string> {
+    try { return JSON.parse(localStorage.getItem(KEY) || "{}"); } catch { return {}; }
+  }
+  export const verifiedKeys = writable<Record<string, string>>(loadVerified());
+  verifiedKeys.subscribe((v) => { try { localStorage.setItem(KEY, JSON.stringify(v)); } catch { /* storage blocked */ } });
+
+  /** "verified": checked and unchanged; "changed": checked, but the key is different now. */
+  export function keyState(peerId: string, key: string | null | undefined, known: Record<string, string>): "verified" | "changed" | "unverified" {
+    const k = known[peerId];
+    if (!k || !key) return "unverified";
+    return k === key ? "verified" : "changed";
+  }
+
+  export function openFingerprint(v: FingerprintView, peerId = "") {
     view.set(v);
+    peer.set(peerId);
     open.set(true);
   }
   export function closeFingerprint() { open.set(false); }
@@ -14,7 +31,7 @@
 </script>
 
 <script lang="ts">
-  import { t } from "../i18n";
+  import { t, tr } from "../i18n";
   import { onMount } from "svelte";
   import { showToast } from "./Toast.svelte";
 
@@ -24,10 +41,18 @@
     return () => document.removeEventListener("keydown", onKey);
   });
 
+  const state = $derived($view && $peer ? keyState($peer, $view.peer_key, $verifiedKeys) : "unverified");
+
   function markVerified() {
-    const name = $view?.peer_name ?? "This peer";
+    const v = get(view), id = get(peer);
+    if (v && id) verifiedKeys.update((m) => ({ ...m, [id]: v.peer_key }));
     closeFingerprint();
-    showToast(`${name}'s key marked verified`);
+    showToast(tr("{name}'s key marked verified", { name: v?.peer_name ?? "" }));
+  }
+  function unverify() {
+    const id = get(peer);
+    verifiedKeys.update((m) => { const n = { ...m }; delete n[id]; return n; });
+    closeFingerprint();
   }
 </script>
 
@@ -41,26 +66,38 @@
     onkeydown={(e) => { if (e.key === "Escape" && e.target === e.currentTarget) closeFingerprint(); }}
   >
     <div class="modal" role="dialog" aria-modal="true">
-      <h2>Verify {$view.peer_name}'s key</h2>
-      <p>Compare these words in person or on a trusted channel. If they match on both devices, no one is impersonating {$view.peer_name}.</p>
+      <h2>{$t("Verify {name}'s key", { name: $view.peer_name })}</h2>
+      {#if state === "changed"}
+        <p class="fp-warn">{$t("{name}'s key has changed since you verified it. That happens after reinstalling the app or signing in anew — or when someone is trying to read the chat. Compare the words again.", { name: $view.peer_name })}</p>
+      {:else if state === "verified"}
+        <p class="fp-ok">{$t("Verified: these words matched on both phones.")}</p>
+      {/if}
+      <p>{$t("Open this window in the same chat on {name}'s device — in person, or over a call where you know the voice. If the words are the same on both screens, nobody stands between you.", { name: $view.peer_name })}</p>
       <div class="fp-grid">
         {#each $view.words as w, i (i)}
           <div class="word">{w}</div>
         {/each}
       </div>
       <div class="fp-instruction">
-        {$t("Also visible as SHA-256 fingerprint:")}
+        {$t("Safety code:")}
         <span class="hex">{$view.hex}</span>
       </div>
       <div class="modal-actions">
-        <button class="btn" onclick={closeFingerprint}>{$t("Cancel")}</button>
-        <button class="btn primary" onclick={markVerified}>{$t("They match")}</button>
+        {#if state === "verified"}
+          <button class="btn" onclick={unverify}>{$t("Mark as not verified")}</button>
+          <button class="btn primary" onclick={closeFingerprint}>{$t("Done")}</button>
+        {:else}
+          <button class="btn" onclick={closeFingerprint}>{$t("Cancel")}</button>
+          <button class="btn primary" onclick={markVerified}>{$t("They match")}</button>
+        {/if}
       </div>
     </div>
   </div>
 {/if}
 
 <style>
+  .fp-warn { color: #F0B232; font-weight: 600; }
+  .fp-ok { color: #3BD671; font-weight: 600; }
   .modal-bg {
     position: fixed;
     inset: 0;

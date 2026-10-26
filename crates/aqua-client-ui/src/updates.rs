@@ -1,6 +1,7 @@
 //! Updates from GitHub Releases (Settings → Updates; the banner on start).
 //!
-//! Two channels, the same as release.yml builds them: "nightly" — the
+//! Two channels, the same as release.yml builds them: "nightly" (every
+//! build: the newest published release, numbered pre-releases included) — the
 //! pre-release rebuilt from every push to main — and "stable", the latest
 //! v* release. The UI knows which build it is (vite.config.ts bakes in the
 //! commit and version) and compares; this side finds the release, picks the
@@ -99,12 +100,20 @@ fn parse_sums(text: &str, file: &str) -> Option<String> {
 #[tauri::command]
 pub async fn update_check(channel: String) -> Result<UpdateInfo, String> {
     let http = aqua_client_core::transport::http_client().map_err(|e| e.to_string())?;
-    let url = if channel == "stable" {
-        format!("https://api.github.com/repos/{REPO}/releases/latest")
+    let rel = if channel == "stable" {
+        get_json(&http, &format!("https://api.github.com/repos/{REPO}/releases/latest")).await?
     } else {
-        format!("https://api.github.com/repos/{REPO}/releases/tags/nightly")
+        // Every build: the most recently published release — a numbered
+        // pre-release (v1.0.61…), a stable one, or the old moving "nightly".
+        let list = get_json(&http, &format!("https://api.github.com/repos/{REPO}/releases?per_page=15")).await?;
+        list.as_array()
+            .into_iter()
+            .flatten()
+            .filter(|r| !r["draft"].as_bool().unwrap_or(false))
+            .max_by(|a, b| a["published_at"].as_str().unwrap_or_default().cmp(b["published_at"].as_str().unwrap_or_default()))
+            .cloned()
+            .ok_or("no releases yet")?
     };
-    let rel = get_json(&http, &url).await?;
     let s = |k: &str| rel[k].as_str().unwrap_or_default().to_string();
     let (tag, name) = (s("tag_name"), s("name"));
     let assets = rel["assets"].as_array().cloned().unwrap_or_default();
@@ -148,7 +157,7 @@ pub async fn update_check(channel: String) -> Result<UpdateInfo, String> {
     }
     Ok(UpdateInfo {
         commit: if channel == "stable" { None } else { built_from.or_else(|| short_commit(&name)) },
-        version: (channel == "stable").then(|| tag.trim_start_matches('v').to_string()),
+        version: tag.starts_with('v').then(|| tag.trim_start_matches('v').to_string()),
         published_at: s("published_at"),
         notes: s("body"),
         html_url: s("html_url"),

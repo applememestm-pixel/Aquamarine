@@ -453,6 +453,9 @@ struct WsQuery {
     user: String,
     /// Bearer token from the /v1/auth/verify response.
     token: String,
+    /// 1 = the client speaks acks (see `RelayMessage::id`).
+    #[serde(default)]
+    ack: u8,
 }
 
 async fn ws_upgrade(
@@ -483,24 +486,70 @@ async fn ws_upgrade(
     }
     let me = state.address_for(&q.user, &dh_pub);
     tracing::info!(user = %q.user, addr = %me, token = %token_fp, "WS OK: upgrading to WebSocket");
-    Ok(ws.on_upgrade(move |sock| ws_run(sock, state, me)))
+    let acks = q.ack == 1;
+    Ok(ws.on_upgrade(move |sock| ws_run(sock, state, me, acks)))
 }
 
-async fn ws_run(mut socket: WebSocket, state: AppState, me: UserId) {
+/// A fresh delivery id (16 random bytes, hex).
+pub(crate) fn new_msg_id() -> String {
+    let mut b = [0u8; 16];
+    rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut b);
+    hex::encode(b)
+}
+
+/// Hand `m` to an ack-speaking device: it stays in the on-disk inbox until
+/// the device confirms it (`row` = it's already there), so a connection that
+/// died without anyone noticing loses nothing — the next one gets it again.
+async fn send_tracked(
+    socket: &mut WebSocket,
+    state: &AppState,
+    me: &str,
+    pending: &mut std::collections::HashMap<String, Vec<i64>>,
+    mut m: RelayMessage,
+    row: Option<i64>,
+) -> bool {
+    let id = m.id.get_or_insert_with(new_msg_id).clone();
+    let Ok(bytes) = serde_json::to_vec(&m) else { return true };
+    let row = match row {
+        Some(r) => Some(r),
+        None => state.directory.inbox_push(me, &bytes).ok(),
+    };
+    if let Some(r) = row {
+        pending.entry(id).or_default().push(r);
+    }
+    socket.send(Message::Binary(bytes.into())).await.is_ok()
+}
+
+async fn ws_run(mut socket: WebSocket, state: AppState, me: UserId, acks: bool) {
     state.directory.touch_seen(base_user(&me));
     let user_state = state.user(&me);
     let (tx, mut rx) = mpsc::unbounded_channel::<RelayMessage>();
+    // With acks: delivery id → inbox rows waiting for the device's "got it".
+    let mut pending: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
+    if acks {
+        // "I confirm what you send and wait for your confirmations."
+        if let Ok(bytes) = serde_json::to_vec(&RelayMessage::ack(None)) {
+            let _ = socket.send(Message::Binary(bytes.into())).await;
+        }
+    }
     {
         let mut u = user_state.lock().await;
         u.tx.push(tx);
         while let Some(m) = u.inbox.pop_front() {
-            if let Ok(bytes) = serde_json::to_vec(&m) {
+            if acks {
+                send_tracked(&mut socket, &state, &me, &mut pending, m, None).await;
+            } else if let Ok(bytes) = serde_json::to_vec(&m) {
                 let _ = socket.send(Message::Binary(bytes.into())).await;
             }
         }
         // Envelopes that waited on disk (also across server restarts).
         for (id, bytes) in state.directory.inbox_take(&me) {
-            if socket.send(Message::Binary(bytes.into())).await.is_ok() {
+            if acks {
+                match serde_json::from_slice::<RelayMessage>(&bytes) {
+                    Ok(m) => { send_tracked(&mut socket, &state, &me, &mut pending, m, Some(id)).await; }
+                    Err(_) => state.directory.inbox_ack(id),
+                }
+            } else if socket.send(Message::Binary(bytes.into())).await.is_ok() {
                 state.directory.inbox_ack(id);
             }
         }
@@ -508,12 +557,12 @@ async fn ws_run(mut socket: WebSocket, state: AppState, me: UserId) {
     // …and those that waited on other relays of the federation.
     if let Some(f) = fed::current(&state) {
         for m in f.collect_inbox(&me).await {
-            if let Ok(bytes) = serde_json::to_vec(&m) {
+            if acks {
+                send_tracked(&mut socket, &state, &me, &mut pending, m, None).await;
+            } else if let Ok(bytes) = serde_json::to_vec(&m) {
                 let _ = socket.send(Message::Binary(bytes.into())).await;
             }
         }
-    }
-    {
     }
 
     // Phones vanish without closing the socket (Wi-Fi ↔ mobile data, a
@@ -536,9 +585,16 @@ async fn ws_run(mut socket: WebSocket, state: AppState, me: UserId) {
                 continue;
             }
             m = rx.recv() => match m {
+                Some(m) if acks => {
+                    if !send_tracked(&mut socket, &state, &me, &mut pending, m, None).await {
+                        break;
+                    }
+                }
                 Some(m) => match serde_json::to_vec(&m) {
                     Ok(bytes) => {
-                        if socket.send(Message::Binary(bytes.into())).await.is_err() {
+                        if socket.send(Message::Binary(bytes.clone().into())).await.is_err() {
+                            // Not lost: it waits on disk for the next connection.
+                            let _ = state.directory.inbox_push(&me, &bytes);
                             break;
                         }
                     }
@@ -548,19 +604,11 @@ async fn ws_run(mut socket: WebSocket, state: AppState, me: UserId) {
             },
             frame = socket.next() => match { heard = std::time::Instant::now(); frame } {
                 Some(Ok(Message::Binary(bytes))) => match serde_json::from_slice::<RelayMessage>(&bytes) {
-                    Ok(mut m) => {
-                        m.from = me.clone();
-                        m.ts = Some(now_ms());
-                        deliver(&state, m).await;
-                    }
+                    Ok(m) => take_from_device(&mut socket, &state, &me, &mut pending, m).await,
                     Err(e) => tracing::warn!(?e, "decode relay message"),
                 },
                 Some(Ok(Message::Text(text))) => match serde_json::from_str::<RelayMessage>(&text) {
-                    Ok(mut m) => {
-                        m.from = me.clone();
-                        m.ts = Some(now_ms());
-                        deliver(&state, m).await;
-                    }
+                    Ok(m) => take_from_device(&mut socket, &state, &me, &mut pending, m).await,
                     Err(e) => tracing::warn!(?e, "decode relay message (text)"),
                 },
                 Some(Ok(Message::Ping(p))) => {
@@ -579,7 +627,45 @@ async fn ws_run(mut socket: WebSocket, state: AppState, me: UserId) {
     let mut u = user_state.lock().await;
     u.tx.retain(|t| !t.is_closed());
     drop(u);
+    // Handed to this connection but never sent: keep them for the next one.
+    rx.close();
+    while let Ok(m) = rx.try_recv() {
+        if let Ok(bytes) = serde_json::to_vec(&m) {
+            let _ = state.directory.inbox_push(&me, &bytes);
+        }
+    }
     state.directory.touch_seen(base_user(&me));
+}
+
+/// A frame from the device: a confirmation, or a message to pass on (which
+/// we confirm once it's delivered or safely stored).
+async fn take_from_device(
+    socket: &mut WebSocket,
+    state: &AppState,
+    me: &str,
+    pending: &mut std::collections::HashMap<String, Vec<i64>>,
+    mut m: RelayMessage,
+) {
+    if m.kind == PayloadKind::Ack {
+        if let Some(rows) = m.id.as_ref().and_then(|id| pending.remove(id)) {
+            for r in rows {
+                state.directory.inbox_ack(r);
+            }
+        }
+        return;
+    }
+    m.from = me.to_string();
+    m.ts = Some(now_ms());
+    let from_client = m.id.clone();
+    if m.id.is_none() {
+        m.id = Some(new_msg_id());
+    }
+    deliver(state, m).await;
+    if let Some(id) = from_client {
+        if let Ok(bytes) = serde_json::to_vec(&RelayMessage::ack(Some(id))) {
+            let _ = socket.send(Message::Binary(bytes.into())).await;
+        }
+    }
 }
 
 async fn deliver(state: &AppState, msg: RelayMessage) {
@@ -1758,6 +1844,7 @@ pub(crate) async fn bot_deliver_text(state: &AppState, bot: &str, to: &str, text
             payload: text.as_bytes().to_vec(),
             kind: PayloadKind::Plaintext,
             ts: Some(now_ms()),
+            id: Some(new_msg_id()),
         };
         deliver(state, msg).await;
     }

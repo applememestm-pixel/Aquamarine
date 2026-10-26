@@ -3,7 +3,7 @@
  *
  * Servers: the relays where this account works — the one we're on, its
  * other address (home / white IP, servers.ts aliases) and its federation
- * (servers.ts knownServers) — each with a live ping. "Pick the fastest by
+ * (servers.ts federationOf) — each with a live ping. "Pick the fastest by
  * itself" moves the connection to a clearly faster one (or off a dead one).
  * "Stay on this server" locks it: no moving at all, not even off a dead one
  * — then the app is offline until that server is back.
@@ -15,7 +15,7 @@
 import { writable, get } from "svelte/store";
 import { api } from "./tauri";
 import { info, connect } from "./stores";
-import { knownServers, aliasesOf, learnPeers } from "./servers";
+import { federationOf, aliasesOf, learnPeers } from "./servers";
 import { showToast } from "./components/Toast.svelte";
 import { tr } from "./i18n";
 
@@ -47,7 +47,7 @@ export const lockedServer = () => norm(get(netPrefs).lockServer ?? "");
 /** Relays where this account works, the current one first. */
 export function serverCandidates(): string[] {
   const cur = norm(get(info)?.server_url ?? "");
-  const list = [cur, ...aliasesOf(cur), ...knownServers().map(norm)].filter(Boolean);
+  const list = [cur, ...aliasesOf(cur), ...federationOf(cur)].filter(Boolean);
   return [...new Set(list)].slice(0, 12);
 }
 

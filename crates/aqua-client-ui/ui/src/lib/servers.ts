@@ -1,20 +1,23 @@
 /**
  * Failover between federated relays. After a successful connect we ask the
- * relay for its peers and remember them; when the connection drops (or the
- * relay is down at start), we try the others until one answers. The
- * account lives on all of them (federation replicates it).
+ * relay for its federation peers and remember them — per relay: only the
+ * relays that relay itself names are "the same account elsewhere". A relay
+ * we merely visited once is not one of them: moving there would leave the
+ * chats on the old one (messages "half arriving").
  */
 import { api } from "./tauri";
 
-const KEY = "aqua.servers.v1";
+const KEY = "aqua.federations.v1";
+type Feds = Record<string, string[]>;
 
-export function knownServers(): string[] {
-  try { return JSON.parse(localStorage.getItem(KEY) ?? "[]") as string[]; } catch { return []; }
+function feds(): Feds {
+  try { return JSON.parse(localStorage.getItem(KEY) ?? "{}") as Feds; } catch { return {}; }
 }
-
-function save(list: string[]) {
-  try { localStorage.setItem(KEY, JSON.stringify([...new Set(list)].slice(0, 12))); } catch { /* ignore */ }
+function saveFeds(f: Feds) {
+  try { localStorage.setItem(KEY, JSON.stringify(f)); } catch { /* ignore */ }
 }
+// The old list mixed every relay ever used; it can't tell them apart.
+try { localStorage.removeItem("aqua.servers.v1"); } catch { /* ignore */ }
 
 const norm = (u: string) => u.trim().replace(/\/+$/, "");
 
@@ -40,23 +43,40 @@ export function aliasesOf(url: string): string[] {
   return aliasPairs().flatMap(([p, q]) => (p === u ? [q] : q === u ? [p] : []));
 }
 
-/** Remember `current` first, then whatever peers it reports. */
+/** The relays of `url`'s federation (as it reported them), itself excluded. */
+export function federationOf(url: string): string[] {
+  const f = feds();
+  const u = norm(url);
+  const own = [u, ...aliasesOf(u)];
+  return [...new Set(own.flatMap((x) => f[x] ?? []))].filter((x) => !own.includes(x));
+}
+
+/** Every relay we know a federation for — the sign-in screen's suggestions. */
+export function knownServers(): string[] {
+  const f = feds();
+  return [...new Set(Object.entries(f).flatMap(([k, v]) => [k, ...v]))].slice(0, 12);
+}
+
+/** Ask `current` for its federation and remember exactly that. */
 export async function learnPeers(current: string): Promise<void> {
   const cur = norm(current);
   try {
     const r = await api.fedPeers(cur);
-    if (r.self) rememberAlias(cur, r.self);
     // `self`: the relay's own other address — e.g. its white IP for when this
     // device leaves the home Wi-Fi it signed in on.
-    save([cur, ...(r.self ? [norm(r.self)] : []), ...(r.servers ?? []).map(norm), ...knownServers()]);
-  } catch {
-    save([cur, ...knownServers()]);
-  }
+    if (r.self) rememberAlias(cur, r.self);
+    const f = feds();
+    f[cur] = r.federated ? [...new Set((r.servers ?? []).map(norm))].filter((x) => x && x !== cur).slice(0, 12) : [];
+    // Keep the map small: the relays we're on now and lately.
+    const keys = Object.keys(f);
+    if (keys.length > 12) for (const k of keys.slice(0, keys.length - 12)) delete f[k];
+    saveFeds(f);
+  } catch { /* an old relay: no federation known */ }
 }
 
 /** Other relays to try when `failed` doesn't answer. */
 export function alternatives(failed: string): string[] {
   const f = norm(failed);
-  // The same relay's other address first, then the federation.
-  return [...new Set([...aliasesOf(f), ...knownServers().map(norm)])].filter((s) => s !== f);
+  // The same relay's other address first, then its federation.
+  return [...new Set([...aliasesOf(f), ...federationOf(f)])].filter((s) => s !== f);
 }
