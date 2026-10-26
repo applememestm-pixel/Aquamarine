@@ -318,6 +318,7 @@ fn check(state: &AppState, headers: &HeaderMap, method: &str, path: &str, body: 
 pub async fn h_deliver(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Result<Json<serde_json::Value>, StatusCode> {
     check(&state, &headers, "POST", "/v1/fed/deliver", &body)?;
     let msg: RelayMessage = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    crate::journal::visitor(crate::base_user(&msg.from), "user");
     let delivered = crate::deliver_local(&state, &msg).await;
     Ok(Json(serde_json::json!({ "delivered": delivered })))
 }
@@ -385,6 +386,7 @@ pub struct Hello { url: String, #[serde(default)] peers: Vec<String> }
 pub async fn h_hello(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Result<Json<serde_json::Value>, StatusCode> {
     let fed = check(&state, &headers, "POST", "/v1/fed/hello", &body)?;
     let h: Hello = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    crate::journal::visitor(h.url.trim_end_matches('/'), "relay");
     let mut urls = vec![h.url];
     urls.extend(h.peers);
     let st = state.clone();

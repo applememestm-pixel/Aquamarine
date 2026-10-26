@@ -1,6 +1,6 @@
 [package]
 name        = "aqua-client-ui"
-version     = "1.0.6"
+version     = "1.0.61"
 edition     = "2021"
 license     = "MIT OR Apache-2.0"
 description = "Aquamarine desktop shell — Tauri 2 + Svelte + TypeScript."
@@ -29,6 +29,7 @@ log = "0.4"
 futures-util = "0.3"
 flate2 = "1"
 tauri-plugin-dialog = { version = "2" }
+tauri-plugin-notification = { version = "2" }  # OS notifications (desktop + Android)
 tauri-plugin-fs     = { version = "2" }  # reads Android content:// picks
 infer               = "0.22"             # sniff type/extension of such picks
 dirs                = "5"

@@ -722,7 +722,9 @@ impl Directory {
 
     /// Recent dev-mode codes, newest first (admin panel).
     pub fn recent_codes(&self) -> Vec<(String, String, u64)> {
-        self.recent.lock().map(|r| r.iter().cloned().collect()).unwrap_or_default()
+        // A code past its 10 minutes is no use to anyone: off the panel.
+        let now = now_secs();
+        self.recent.lock().map(|r| r.iter().filter(|c| now.saturating_sub(c.2) <= CODE_TTL_SECS).cloned().collect()).unwrap_or_default()
     }
 
     /// True when codes are shown instead of mailed.
@@ -1920,6 +1922,14 @@ impl Directory {
         let rows = stmt.query_map(rusqlite::params![owner_dh.as_slice()], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(2)?))
         });
+        match rows { Ok(it) => it.filter_map(|r| r.ok()).collect(), Err(_) => Vec::new() }
+    }
+
+    /// Every bot: (username, display name). For the admin panel.
+    pub fn all_bots(&self) -> Vec<(String, String)> {
+        let db = self.db.lock().unwrap();
+        let Ok(mut stmt) = db.prepare("SELECT username, display_name FROM users WHERE is_bot=1 ORDER BY username") else { return Vec::new() };
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?.unwrap_or_default())));
         match rows { Ok(it) => it.filter_map(|r| r.ok()).collect(), Err(_) => Vec::new() }
     }
 

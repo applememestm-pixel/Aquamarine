@@ -7,21 +7,20 @@ import { contacts, contactMatches, displayName, saveContact } from "./contacts";
 import { settings } from "./theme";
 import { playSound, soundFor } from "./sounds";
 import { tr } from "./i18n";
+import { osNotify, appInFront } from "./notify";
 
 /** Play a short chime + optional desktop notification for an incoming
  *  message, honouring the user's notification settings. */
 function notifyIncoming(peerId: string, text: string) {
   const s = get(settings);
   if (s.notifySound) void playSound(soundFor(peerId));
-  if (s.notifyDesktop && "Notification" in window && Notification.permission === "granted") {
-    try {
-      // A chat with a password: nothing of it in the notification.
-      let lockedChat = false;
-      try { lockedChat = !!JSON.parse(localStorage.getItem("aqua.chatLocks.v1") ?? "{}")[peerId]; } catch { /* ignore */ }
-      if (lockedChat) new Notification("Aquamarine", { body: tr("New message in a locked chat") });
-      else new Notification(displayName(peerId, peerId), { body: text.slice(0, 120) });
-    } catch { /* ignore */ }
-  }
+  // A banner only when the user isn't already reading that chat.
+  if (appInFront() && get(activeId) === peerId) return;
+  // A chat with a password: nothing of it in the notification.
+  let lockedChat = false;
+  try { lockedChat = !!JSON.parse(localStorage.getItem("aqua.chatLocks.v1") ?? "{}")[peerId]; } catch { /* ignore */ }
+  if (lockedChat) void osNotify("Aquamarine", tr("New message in a locked chat"));
+  else void osNotify(displayName(peerId, peerId), text.slice(0, 120));
 }
 
 /** Startup info from the backend. */

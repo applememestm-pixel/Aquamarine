@@ -35,6 +35,7 @@ export type UpdateState =
   | { s: "downloading"; info: UpdateInfo; id: string; done: number; total: number }
   | { s: "installing"; info: UpdateInfo; id: string }
   | { s: "permission"; info: UpdateInfo; id: string; path: string }
+  | { s: "signature"; info: UpdateInfo; id: string }
   | { s: "error"; error: string; info?: UpdateInfo; id?: string };
 export const updateState = writable<UpdateState>({ s: "idle" });
 
@@ -111,6 +112,9 @@ export async function installUpdate(): Promise<void> {
     const r = await invoke<string>("update_install", { path });
     // Android: installs from the app need a one-time "allow" in system settings.
     if (r === "permission") updateState.set({ s: "permission", info, id, path });
+    // Android: the new build is signed with another key — it can't go over
+    // this one (the system would only say "App not installed").
+    else if (r === "signature") updateState.set({ s: "signature", info, id });
   } catch (e) {
     updateState.set({ s: "error", error: String(e), info, id });
   }
@@ -122,7 +126,21 @@ export function startUpdates(): () => void {
   const first = setTimeout(tick, 15000);
   const every = setInterval(tick, 6 * 3600 * 1000);
   // Back from "allow installs" in system settings: carry on.
-  const onVis = () => { if (document.visibilityState === "visible" && get(updateState).s === "permission") void installUpdate(); };
+  // Back from the system installer and still here: it didn't go through —
+  // don't keep saying "Installing…" forever.
+  let hiddenWhileInstalling = false;
+  const onVis = () => {
+    const s = get(updateState);
+    if (document.visibilityState === "hidden") { hiddenWhileInstalling = s.s === "installing"; return; }
+    if (s.s === "permission") void installUpdate();
+    else if (s.s === "installing" && hiddenWhileInstalling) {
+      hiddenWhileInstalling = false;
+      setTimeout(() => {
+        const n = get(updateState);
+        if (n.s === "installing") updateState.set({ s: "available", info: n.info, id: n.id });
+      }, 1500);
+    }
+  };
   document.addEventListener("visibilitychange", onVis);
   return () => { clearTimeout(first); clearInterval(every); document.removeEventListener("visibilitychange", onVis); };
 }

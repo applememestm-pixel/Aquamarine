@@ -36,6 +36,7 @@ pub mod botx;
 pub mod site;
 pub mod public;
 pub mod discovery;
+pub mod journal;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
 pub use auth::{AuthState, Caller};
@@ -532,6 +533,11 @@ async fn ws_run(mut socket: WebSocket, state: AppState, me: UserId, acks: bool) 
             let _ = socket.send(Message::Binary(bytes.into())).await;
         }
     }
+    let person = base_user(&me).to_string();
+    let is_bot = state.directory.is_bot(&person);
+    if !is_bot && !person_live(&state, &person).await {
+        journal::online(&person, me.split_once('~').map(|(_, d)| d).unwrap_or(""));
+    }
     {
         let mut u = user_state.lock().await;
         u.tx.push(tx);
@@ -627,6 +633,9 @@ async fn ws_run(mut socket: WebSocket, state: AppState, me: UserId, acks: bool) 
     let mut u = user_state.lock().await;
     u.tx.retain(|t| !t.is_closed());
     drop(u);
+    if !is_bot && !person_live(&state, &person).await {
+        journal::offline(&person);
+    }
     // Handed to this connection but never sent: keep them for the next one.
     rx.close();
     while let Ok(m) = rx.try_recv() {
@@ -760,6 +769,9 @@ struct BlobQuery {
     /// 1 = long-lived (group photo / banner), see `blobstore::KEEP_TTL`.
     #[serde(default)]
     keep: u8,
+    /// A coarse label for the admin panel (see `blobstore::KINDS`).
+    #[serde(default)]
+    kind: Option<String>,
 }
 
 async fn upload_blob(
@@ -785,7 +797,12 @@ async fn upload_blob(
     if keep && body.len() > blobstore::KEEP_LIMIT {
         return Err((StatusCode::PAYLOAD_TOO_LARGE, "only files up to 4 MiB can be kept".into()));
     }
-    tokio::task::spawn_blocking(move || if keep { store.put_keep(&cid, &body) } else { store.put(&cid, &body) })
+    let kind = q.kind.clone();
+    tokio::task::spawn_blocking(move || {
+        let r = if keep { store.put_keep(&cid, &body) } else { store.put(&cid, &body) };
+        if let (Ok(()), Some(k)) = (&r, kind) { store.set_kind(&cid, keep, &k); }
+        r
+    })
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -982,6 +999,7 @@ async fn register_user(
             .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     }
     tracing::info!(user = %body.username, "registered via directory");
+    journal::log(&body.username, "register", "");
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1010,6 +1028,7 @@ async fn login_user(
         .login_named(&body.ticket, &body.password, &dh_pub, &body.device_name)
         .map_err(|e| (dir_err_status(&e), e.to_string()))?;
     tracing::info!(user = %username, device = %directory::device_id(&dh_pub), "signed in on another device");
+    journal::log(&username, "login", body.device_name.clone());
     Ok(Json(LoginResp { username }))
 }
 
@@ -1383,7 +1402,7 @@ async fn admin_fed_join(
     c.secret = secret;
     c.mode = "network".into();
     if !c.peers.contains(&url) { c.peers.push(url.clone()); }
-    if c.public_url.is_empty() { c.public_url = crate::public::url(); }
+    // Not saved: a detected address can change (and may be re-detected).
     c.save().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let next = fed::Fed::new(fed::FedConfig::load());
     if let Ok(mut g) = state.fed.write() { *g = next.clone(); }
@@ -1880,12 +1899,37 @@ struct StatsResp {
     bots: i64,
     online: usize,
     require_registration: bool,
+    /// This relay process's random id: lets a relay (or a client) tell
+    /// whether an address leads to this very relay.
+    instance: &'static str,
 }
 
 /// Lightweight, unauthenticated server stats for the admin GUI: how many
 /// accounts are registered and how many clients are connected right now.
 /// No identities, emails or message content — just counts.
 /// People (not devices) with at least one live connection; bots excluded.
+/// Has this person (any of their devices) a live connection?
+async fn person_live(state: &AppState, person: &str) -> bool {
+    let keys: Vec<_> = state.users.iter().filter(|e| base_user(e.key()) == person).map(|e| e.value().clone()).collect();
+    for u in keys {
+        if u.lock().await.tx.iter().any(|t| !t.is_closed()) { return true; }
+    }
+    false
+}
+
+/// @names of the people online now (bots aside), sorted.
+async fn online_names(state: &AppState) -> Vec<String> {
+    let mut who = std::collections::BTreeSet::new();
+    let all: Vec<_> = state.users.iter().map(|e| (e.key().clone(), e.value().clone())).collect();
+    for (k, u) in all {
+        if u.lock().await.tx.iter().any(|t| !t.is_closed()) {
+            let base = base_user(&k);
+            if !state.directory.is_bot(base) { who.insert(base.to_string()); }
+        }
+    }
+    who.into_iter().collect()
+}
+
 async fn online_people(state: &AppState) -> usize {
     let mut who = std::collections::HashSet::new();
     for entry in state.users.iter() {
@@ -1904,7 +1948,7 @@ async fn server_stats(State(state): State<AppState>) -> Json<StatsResp> {
     let (users, bots) = state.directory.counts();
     // Count users with at least one live WS sender.
     let online = online_people(&state).await;
-    Json(StatsResp { ok: true, users, bots, online, require_registration: state.require_registration })
+    Json(StatsResp { ok: true, users, bots, online, require_registration: state.require_registration, instance: crate::public::instance() })
 }
 
 // ---------- Admin panel ------------------------------------------------------
@@ -1943,6 +1987,8 @@ struct AdminStats {
     lan_ip: Option<String>,
     /// `http://<white ip>:<port>` once known (see public.rs).
     public_url: String,
+    /// A looked-up address that doesn't lead back here (VPN / no forwarding).
+    public_unverified: String,
     /// Codes are shown here instead of e-mailed.
     dev_codes: bool,
     /// Recent dev-mode verification codes, newest first.
@@ -1991,6 +2037,7 @@ async fn admin_stats(
         listen: std::env::var("AQUA_LISTEN").unwrap_or_else(|_| "127.0.0.1:7777".into()),
         lan_ip: lan_ip(),
         public_url: crate::public::url(),
+        public_unverified: crate::public::unverified(),
         dev_codes: state.directory.dev_codes(),
         codes: state
             .directory
@@ -2007,6 +2054,29 @@ async fn admin_stats(
         require_registration: state.require_registration,
         invite_only: cfg.invite_only,
         allow: cfg.allow,
+    }))
+}
+
+/// What a stat tile of the panel opens: `online`, `files`, `bots`,
+/// `visitors` (relays and people of the federation since the start),
+/// `journal` (online / offline / sign-ins).
+async fn admin_detail(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Path(what): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    admin_authed(&state, &headers)?;
+    Ok(Json(match what.as_str() {
+        "online" => serde_json::json!(online_names(&state).await),
+        "files" => {
+            let store = state.blobs.clone();
+            let v = tokio::task::spawn_blocking(move || store.stats_by_kind()).await.unwrap_or_default();
+            serde_json::json!(v.into_iter().map(|(kind, n, bytes)| serde_json::json!({ "kind": kind, "count": n, "bytes": bytes })).collect::<Vec<_>>())
+        }
+        "bots" => serde_json::json!(state.directory.all_bots().into_iter().map(|(u, n)| serde_json::json!({ "username": u, "name": n })).collect::<Vec<_>>()),
+        "visitors" => serde_json::json!(journal::visitors()),
+        "journal" => serde_json::json!(journal::recent(500)),
+        _ => return Err(StatusCode::NOT_FOUND),
     }))
 }
 
@@ -2146,6 +2216,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/stats", get(server_stats))
         .route("/admin", get(admin_page))
         .route("/v1/admin/stats", get(admin_stats))
+        .route("/v1/admin/detail/:what", get(admin_detail))
         .route("/v1/admin/config", post(admin_set_config))
         .route("/v1/admin/smtp", get(admin_get_smtp).post(admin_set_smtp))
         .route("/v1/admin/smtp/test", post(admin_test_smtp))

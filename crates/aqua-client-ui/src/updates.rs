@@ -189,23 +189,53 @@ pub async fn update_download(app: AppHandle, asset: UpdateAsset) -> Result<Strin
         return Err("unexpected update address".into());
     }
     let dir = updates_dir(&app)?;
-    // Only the newest download is kept.
-    if let Ok(rd) = std::fs::read_dir(&dir) {
-        for e in rd.flatten() {
-            let _ = std::fs::remove_file(e.path());
-        }
-    }
     let path = dir.join(&asset.name);
     let part = dir.join(format!("{}.part", asset.name));
+    let tag = dir.join(format!("{}.part.sha256", asset.name));
+    // Already downloaded and intact: nothing to fetch.
+    if let Some(h) = file_sha256(&path) {
+        if h == expected {
+            return Ok(path.display().to_string());
+        }
+    }
+    // Only this download is kept: older builds and other leftovers go. A
+    // part of *this* build stays, and the download resumes where it stopped.
+    let resumable = std::fs::read_to_string(&tag).map(|t| t.trim() == expected).unwrap_or(false);
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if resumable && (p == part || p == tag) {
+                continue;
+            }
+            let _ = std::fs::remove_file(p);
+        }
+    }
+    let _ = std::fs::write(&tag, &expected);
+    let have = if resumable { std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0) } else { 0 };
     let http = aqua_client_core::transport::http_client().map_err(|e| e.to_string())?;
-    let mut r = http.get(&asset.url).send().await.map_err(|e| e.to_string())?;
+    let mut req = http.get(&asset.url);
+    if have > 0 {
+        req = req.header("Range", format!("bytes={have}-"));
+    }
+    let mut r = req.send().await.map_err(|e| e.to_string())?;
     if !r.status().is_success() {
         return Err(format!("download: HTTP {}", r.status()));
     }
-    let total = r.content_length().unwrap_or(asset.size);
-    let mut f = std::fs::File::create(&part).map_err(|e| e.to_string())?;
+    let resumed = have > 0 && r.status().as_u16() == 206;
     let mut hasher = Sha256::new();
-    let (mut done, mut last) = (0u64, 0u64);
+    let mut done = 0u64;
+    let mut f = if resumed {
+        // Hash what's already there, then append.
+        let mut old = std::fs::File::open(&part).map_err(|e| e.to_string())?;
+        std::io::copy(&mut old, &mut HashWriter(&mut hasher)).map_err(|e| e.to_string())?;
+        done = have;
+        std::fs::OpenOptions::new().append(true).open(&part).map_err(|e| e.to_string())?
+    } else {
+        std::fs::File::create(&part).map_err(|e| e.to_string())?
+    };
+    let total = r.content_length().map(|n| n + done).unwrap_or(asset.size);
+    let mut last = 0u64;
+    let _ = app.emit("aqua://update-progress", Progress { done, total });
     while let Some(chunk) = r.chunk().await.map_err(|e| e.to_string())? {
         f.write_all(&chunk).map_err(|e| e.to_string())?;
         hasher.update(&chunk);
@@ -220,10 +250,32 @@ pub async fn update_download(app: AppHandle, asset: UpdateAsset) -> Result<Strin
     let got = hex::encode(hasher.finalize());
     if got != expected {
         let _ = std::fs::remove_file(&part);
+        let _ = std::fs::remove_file(&tag);
         return Err(format!("the download is damaged (SHA-256 {}… instead of {}…) — try again", &got[..12], &expected[..12]));
     }
+    let _ = std::fs::remove_file(&tag);
     std::fs::rename(&part, &path).map_err(|e| e.to_string())?;
     Ok(path.display().to_string())
+}
+
+/// SHA-256 of a file, if it can be read.
+fn file_sha256(p: &std::path::Path) -> Option<String> {
+    let mut f = std::fs::File::open(p).ok()?;
+    let mut h = Sha256::new();
+    std::io::copy(&mut f, &mut HashWriter(&mut h)).ok()?;
+    Some(hex::encode(h.finalize()))
+}
+
+/// `io::Write` into a hasher (for `io::copy`).
+struct HashWriter<'a>(&'a mut Sha256);
+impl std::io::Write for HashWriter<'_> {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.0.update(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Install a file `update_download` fetched.
@@ -239,6 +291,9 @@ pub async fn update_install(app: AppHandle, path: String) -> Result<String, Stri
         let r = tauri::async_runtime::spawn_blocking(move || android::call("install", serde_json::json!({ "path": path })))
             .await
             .map_err(|e| e.to_string())??;
+        if r["signatureMismatch"].as_bool().unwrap_or(false) {
+            return Ok("signature".into());
+        }
         return Ok(if r["needsPermission"].as_bool().unwrap_or(false) { "permission".into() } else { "started".into() });
     }
     #[cfg(target_os = "windows")]

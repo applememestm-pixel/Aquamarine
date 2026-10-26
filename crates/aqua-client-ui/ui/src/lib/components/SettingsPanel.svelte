@@ -22,6 +22,7 @@
   import { askInput, closeInput } from "./InputPrompt.svelte";
   import AnimatedMedia from "./AnimatedMedia.svelte";
   import type { StickerPack } from "../types";
+  import { ensureNotifyPermission } from "../notify";
   import { api, bytesToDataUrl, assetUrl, type DeviceInfo, type GpuStatus } from "../tauri";
   import { showToast } from "./Toast.svelte";
   import type { BotInfo } from "../types";
@@ -643,11 +644,11 @@
     settings.update((s) => ({ ...s, [key]: !s[key] }));
   }
   async function enableDesktopNotifications() {
-    settings.update((s) => ({ ...s, notifyDesktop: !s.notifyDesktop }));
-    // Request OS permission when turning it on.
-    if (!$settings.notifyDesktop && "Notification" in window) {
-      try { await Notification.requestPermission(); } catch { /* ignore */ }
-    }
+    const on = !$settings.notifyDesktop;
+    settings.update((s) => ({ ...s, notifyDesktop: on }));
+    // Turning it on asks the system for permission (the old check ran
+    // after the flip and so never asked).
+    if (on && !(await ensureNotifyPermission(true))) showToast(tr("The system doesn't allow notifications for Aquamarine — turn them on in its settings."), 5000);
   }
 
   // ---- Themes / customisation / sounds ----
@@ -725,6 +726,31 @@
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
+
+  // ---- a resizable window (desktop) ----
+  const SIZE_KEY = "aqua.settings.size";
+  function loadSheetSize(): { w: number; h: number } | null {
+    try { const v = JSON.parse(localStorage.getItem(SIZE_KEY) || "null"); return v && v.w > 0 && v.h > 0 ? v : null; } catch { return null; }
+  }
+  let sheetSize = $state<{ w: number; h: number } | null>(loadSheetSize());
+  function setSheetSize(v: { w: number; h: number } | null) {
+    sheetSize = v;
+    try { if (v) localStorage.setItem(SIZE_KEY, JSON.stringify(v)); else localStorage.removeItem(SIZE_KEY); } catch { /* storage blocked */ }
+  }
+  function startSheetResize(e: PointerEvent) {
+    const sheet = (e.currentTarget as HTMLElement).parentElement!;
+    const r = sheet.getBoundingClientRect();
+    const x0 = e.clientX, y0 = e.clientY, w0 = r.width, h0 = r.height;
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    // The window stays centred: the corner follows the pointer when both sides grow.
+    const move = (ev: PointerEvent) => {
+      sheetSize = { w: Math.round(Math.max(560, Math.min(window.innerWidth * 0.98, w0 + 2 * (ev.clientX - x0)))), h: Math.round(Math.max(420, Math.min(window.innerHeight * 0.96, h0 + 2 * (ev.clientY - y0)))) };
+    };
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); if (sheetSize) setSheetSize(sheetSize); };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
 </script>
 
 {#if $settingsOpen}
@@ -736,7 +762,11 @@
     onclick={(e) => { if ((e.target as HTMLElement).classList.contains("backdrop")) closeAll(); }}
     onkeydown={(e) => { if (e.target === e.currentTarget && (e.key === "Escape" || e.key === "Enter")) closeAll(); }}
   >
-    <div class="sheet" data-own-back class:detail class:wide={section === "appearance"} role="dialog" aria-modal="true" tabindex="-1">
+    <div class="sheet" data-own-back class:detail class:wide={section === "appearance"} class:sized={!!sheetSize} role="dialog" aria-modal="true" tabindex="-1"
+      style:width={sheetSize ? `min(${sheetSize.w}px, 98vw)` : undefined} style:height={sheetSize ? `min(${sheetSize.h}px, 96vh)` : undefined}>
+      <!-- Drag the corner to resize (remembered); double-click — back to the default. -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="sz-grip" onpointerdown={startSheetResize} ondblclick={() => setSheetSize(null)} title={$t("Drag to resize the window · double-click to reset")}></div>
       <div class="layout">
         <nav class="nav">
           <div class="list-head phone-only">
@@ -1770,6 +1800,11 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     padding: 20px;
   }
   @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+  .sz-grip { position: absolute; right: 2px; bottom: 2px; width: 18px; height: 18px; z-index: 5; cursor: nwse-resize; opacity: .5;
+    background: linear-gradient(135deg, transparent 50%, var(--fg-dim) 50%, var(--fg-dim) 58%, transparent 58%, transparent 70%, var(--fg-dim) 70%, var(--fg-dim) 78%, transparent 78%); border-bottom-right-radius: 14px; }
+  .sz-grip:hover { opacity: 1; }
+  .sheet { position: relative; }
+  @media (max-width: 720px) { .sz-grip { display: none; } }
   .sheet {
     width: min(940px, 96vw);
     height: min(680px, 90vh);
@@ -1890,7 +1925,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   @media (max-width: 720px) {
     .backdrop { padding: 0; background: var(--bg-shell); backdrop-filter: none; }
     .sheet {
-      width: 100vw; height: 100%; border: none; border-radius: 0; box-shadow: none;
+      width: 100vw !important; height: 100% !important; border: none; border-radius: 0; box-shadow: none;
       padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
                env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
       box-sizing: border-box;
@@ -1922,7 +1957,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
 
   /* ---- Appearance: controls on the left, a live chat preview on the right ---- */
   @media (min-width: 721px) {
-    .sheet.wide { width: min(1220px, 97vw); height: min(800px, 93vh); }
+    .sheet.wide:not(.sized) { width: min(1220px, 97vw); height: min(800px, 93vh); }
   }
   .ap-split { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 4px; align-items: start; padding-right: 16px; }
   .ap-controls { min-width: 0; }

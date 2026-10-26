@@ -4,11 +4,13 @@
   import { hasMarkup, plainText } from "../markup";
   /** Chat-list line without formatting markers (spoilers stay hidden). */
   function previewText(p: string): string {
+    if (p && unsupportedKind(p)) return tr("Unsupported message — update the app");
     // [ce:pack/😏_001.webp] → 😏 (the backend does it too; old previews don't)
     const q = p ? p.replace(/\[ce:[^\]\s]*?\/([^\]\s/_]+)_[^\]\s]*\]/g, "$1").replace(/\[ce:[^\]]*$/, "…") : p;
     return q && hasMarkup(q) ? plainText(q).replace(/\s*\n\s*/g, " ") : q;
   }
   import { chatStatus, presenceNow } from "../presence";
+  import { unsupportedKind } from "../compat";
   import { t, tr } from "../i18n";
   import { fly, scale as scaleIn } from "svelte/transition";
   import { flip } from "svelte/animate";
@@ -25,11 +27,13 @@
   import { askConfirm } from "./Confirm.svelte";
   import { showToast } from "./Toast.svelte";
   import { openNewChatDialog } from "../newChat";
+  import { openNewChat } from "./NewChatSheet.svelte";
   import { openNewGroup } from "./NewGroupWizard.svelte";
 
   let plusMenuOpen = $state(false);
   import { contacts, saveContact } from "../contacts";
   import { api } from "../tauri";
+  import { blocked, setBlocked } from "../ghost";
   import { chatLocks, unlocked, setChatLock, removeChatLock, unlockChat, lockNowChat } from "../chatLocks";
   import { askInput, closeInput } from "./InputPrompt.svelte";
   import type { DirProfile, ChatMessage } from "../types";
@@ -524,11 +528,8 @@
       }
       return;
     }
-    const err = await startChat(p.username, "Привет!", {
-      full_name: p.display_name || undefined,
-      phone: p.phone || undefined,
-    });
-    if (err) { showToast(err); return; }
+    // Their card and the first message — not an instant "Привет!".
+    openNewChat(p);
     search.set("");
   }
 </script>
@@ -773,7 +774,6 @@
               <span class="chat-preview activity" title={`${activityVerb(a)} ${a.name}${a.details ? " — " + a.details : ""}`}>{activityVerb(a)} <b>{a.name}</b></span>
             {:else}
               <span class="chat-preview">
-                {#if c.has_lock}<span class="lock-mini">{@html icons.lock}</span>{/if}
                 {#if c.preview_by_me}<span class="me-prefix">{$t("you:")}</span>{/if}{previewText(c.preview)}
               </span>
             {/if}
@@ -819,6 +819,9 @@
         <button onclick={() => { const id = cid; ctx = null; askSetLock(id); }}>{$t("Set a password…")}</button>
       {/if}
       {#if DESKTOP}<button onclick={() => popOut(cid, $chats.find((x) => x.id === cid)?.name ?? cid)}>{$t("Open in a new window")} <span class="ctx-kbd">Ctrl+click</span></button>{/if}
+      {#if !cid.startsWith("grp_") && cid !== "__saved__" && !$chats.find((x) => x.id === cid)?.channel}
+        <button class="danger" onclick={() => { setBlocked(cid, !$blocked.has(cid)); showToast(tr($blocked.has(cid) ? "Blocked — their messages won't reach you" : "Unblocked")); ctx = null; }}>{$t($blocked.has(cid) ? "Unblock" : "Block")}</button>
+      {/if}
       {#if !cid.startsWith("grp_")}<button class="danger" onclick={() => void deleteChat(cid)}>{$t(cid === "__saved__" ? "Clear history" : "Delete chat")}</button>{/if}
     </div>
   {/if}

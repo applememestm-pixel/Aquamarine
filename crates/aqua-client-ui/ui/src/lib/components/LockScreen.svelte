@@ -29,12 +29,48 @@
 
   const AUTO: [number, string][] = [[1, "1 min"], [5, "5 min"], [15, "15 min"], [60, "1 hour"], [0, "Off"]];
 
+  // ---- Telegram's passcode: 4 digits in boxes, a keypad below ----
+  const PIN_LEN = 4;
+  const KEYS: [string, string][] = [["1", ""], ["2", "ABC"], ["3", "DEF"], ["4", "GHI"], ["5", "JKL"], ["6", "MNO"], ["7", "PQRS"], ["8", "TUV"], ["9", "WXYZ"]];
+  let usePassword = $state(false);                 // setup: "use a password instead"
+  let pinStep = $state<1 | 2>(1);                  // setup: enter, then repeat
+  let pinFirst = "";
+  const pinMode = $derived($locked ? $lockConf?.kind === "pin" : !usePassword);
+  function pinKey(d: string) {
+    err = "";
+    if (d === "del") { pass = pass.slice(0, -1); return; }
+    if (pass.length >= PIN_LEN) return;
+    pass += d;
+    try { navigator.vibrate?.(5); } catch { /* none */ }
+    if (pass.length === PIN_LEN) setTimeout(pinDone, 120);
+  }
+  async function pinDone() {
+    if ($locked) { await doUnlock(); return; }
+    if (pinStep === 1) { pinFirst = pass; pass = ""; pinStep = 2; return; }
+    if (pass !== pinFirst) { err = $t("Passcodes don't match"); pass = ""; pinStep = 1; pinFirst = ""; shake = true; setTimeout(() => (shake = false), 450); return; }
+    busy = true;
+    await setPasscode(pass, autoMin, "pin");
+    busy = false;
+    passcodeSetupOpen.set(false);
+    pinStep = 1; pinFirst = "";
+  }
+  // Digits from a physical keyboard too.
+  $effect(() => {
+    if (!(($locked && forgotStep === 0) || $passcodeSetupOpen) || !pinMode) return;
+    const k = (e: KeyboardEvent) => {
+      if (/^[0-9]$/.test(e.key)) { e.preventDefault(); pinKey(e.key); }
+      else if (e.key === "Backspace") { e.preventDefault(); pinKey("del"); }
+    };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  });
+
   // Signed in but no passcode yet → ask for one (once the sign-in window closes).
   $effect(() => {
     if ($info?.registered && !$wizardOpen && !$lockConf?.hash && !$lockConf?.skipped) passcodeSetupOpen.set(true);
   });
   $effect(() => {
-    if ($locked || $passcodeSetupOpen) { pass = ""; pass2 = ""; err = ""; forgotStep = 0; code = ""; void tick().then(() => input?.focus()); }
+    if ($locked || $passcodeSetupOpen) { pass = ""; pass2 = ""; err = ""; forgotStep = 0; code = ""; pinStep = 1; pinFirst = ""; void tick().then(() => input?.focus()); }
   });
 
   async function doUnlock() {
@@ -42,7 +78,7 @@
     busy = true;
     const ok = await unlock(pass);
     busy = false;
-    if (!ok) { err = $t("Wrong password"); pass = ""; shake = true; setTimeout(() => (shake = false), 450); }
+    if (!ok) { err = $t($lockConf?.kind === "pin" ? "Wrong passcode" : "Wrong password"); pass = ""; shake = true; setTimeout(() => (shake = false), 450); }
   }
   async function doSetup() {
     if (pass.length < 4) { err = $t("At least 4 characters"); return; }
@@ -118,7 +154,31 @@
         <b>{myName}</b>
         {#if $info?.username}<span>@{$info.username}</span>{/if}
       </div>
-      {#if $locked && forgotStep === 0}
+      {#if pinMode && (($locked && forgotStep === 0) || !$locked)}
+        <h2>{$locked ? $t("Enter your passcode") : pinStep === 1 ? $t("Create a passcode") : $t("Re-enter your passcode")}</h2>
+        {#if !$locked}<p>{$t("Enter any 4 digits that you will use to unlock Aquamarine.")}</p>{/if}
+        <div class="pin-boxes" aria-label={$t("Passcode")}>
+          {#each Array(PIN_LEN) as _, i (i)}<span class="pin-box" class:filled={pass.length > i} class:cur={pass.length === i}></span>{/each}
+        </div>
+        {#if err}<div class="err">{err}</div>{/if}
+        <div class="keypad">
+          {#each KEYS as [d, l] (d)}<button class="key" onclick={() => pinKey(d)} disabled={busy}><b>{d}</b><small>{l}</small></button>{/each}
+          <span></span>
+          <button class="key" onclick={() => pinKey("0")} disabled={busy}><b>0</b><small>+</small></button>
+          <button class="key del" onclick={() => pinKey("del")} aria-label={$t("Delete")}>⌫</button>
+        </div>
+        {#if $locked}
+          <div class="pair">
+            <button class="ghost" onclick={forgot} disabled={busy}>{$t("Forgot passcode")}</button>
+            <button class="ghost danger" onclick={logOutProfile}>{$t("Log out of the profile")}</button>
+          </div>
+        {:else}
+          <div class="pair">
+            <button class="ghost" onclick={() => { usePassword = true; pass = ""; err = ""; }}>{$t("Use a password instead")}</button>
+            <button class="ghost" onclick={skipSetup}>{$t("Not now")}</button>
+          </div>
+        {/if}
+      {:else if $locked && forgotStep === 0}
         <form class="form" onsubmit={(e) => { e.preventDefault(); void doUnlock(); }}>
           <div class="pw">
             <input bind:this={input} type={showPw ? "text" : "password"} bind:value={pass} placeholder={$t("Password")} autocomplete="current-password" aria-label={$t("Password")} />
@@ -159,7 +219,7 @@
           {#if err}<div class="err">{err}</div>{/if}
           <button class="primary" onclick={doSetup} disabled={busy}>{$t("Save passcode")}</button>
         </div>
-        <div class="pair"><button class="ghost" onclick={skipSetup}>{$t("Not now")}</button></div>
+        <div class="pair"><button class="ghost" onclick={() => { usePassword = false; pass = ""; pass2 = ""; err = ""; }}>{$t("Use 4 digits instead")}</button><button class="ghost" onclick={skipSetup}>{$t("Not now")}</button></div>
         <div class="hint">{$t("Ctrl+L locks the app any time.")}</div>
       {/if}
     </div>
@@ -224,4 +284,26 @@
   .chips button { border: 1px solid var(--border); background: var(--bg-input); color: var(--fg-muted); border-radius: 100px; padding: 5px 10px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
   .chips button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
   .hint { font-size: 11.5px; color: var(--fg-dim); }
+  /* ---- the keypad ---- */
+  .pin-boxes { display: flex; gap: 12px; margin: 10px 0 4px; }
+  .pin-box { width: 46px; height: 54px; border-radius: 12px; border: 2px solid var(--border-strong); position: relative; transition: border-color .15s; }
+  .pin-box.cur { border-color: var(--accent); }
+  .pin-box.filled::after { content: ""; position: absolute; left: 50%; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; background: var(--fg); animation: pin-pop .18s cubic-bezier(.2,.9,.3,1.4); }
+  @keyframes pin-pop { from { transform: scale(.2); } }
+  .keypad { width: 100%; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; }
+  .key { height: 58px; border: none; border-radius: 16px; background: var(--bg-input); color: var(--fg); cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 10px; font: inherit; transition: background-color .12s; }
+  .key b { font-size: 24px; font-weight: 600; }
+  .key small { font-size: 11px; font-weight: 600; color: var(--fg-dim); letter-spacing: .06em; min-width: 30px; text-align: left; }
+  .key:active { background: var(--accent-soft); }
+  .key.del { font-size: 22px; color: var(--fg-muted); }
+  @media (max-width: 720px) {
+    .lock { place-items: stretch; }
+    .card { box-sizing: border-box; width: 100vw; height: 100%; overflow-y: auto; border-radius: 0; border: none; box-shadow: none; gap: 8px;
+      padding: calc(28px + env(safe-area-inset-top, 0px)) 18px calc(18px + env(safe-area-inset-bottom, 0px)); }
+    .banner { display: none; }
+    .ava { margin-top: 0; width: 76px; height: 76px; font-size: 30px; border-width: 0; }
+    .keypad { margin-top: auto; }
+    .pair { flex-wrap: wrap; }
+  }
 </style>
