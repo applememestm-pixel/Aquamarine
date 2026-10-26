@@ -15,12 +15,17 @@ exclude = [
 ]
 
 [workspace.package]
-version = "1.0.5"
+version = "1.0.6"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 rust-version = "1.75"
 authors = ["Aquamarine contributors"]
 repository = "https://github.com/applememestm-pixel/Aquamarine"
+
+# Release kind for autotag.yml: false → a full release (Latest); true → a
+# numbered pre-release (1.0.61, 1.0.62… after release 1.0.6). See CLAUDE.md.
+[workspace.metadata.aqua]
+prerelease = false
 
 [workspace.dependencies]
 # --- Cryptography ------------------------------------------------------------

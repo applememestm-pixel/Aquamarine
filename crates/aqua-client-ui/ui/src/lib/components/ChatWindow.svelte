@@ -13,7 +13,7 @@
   import Welcome from "./Welcome.svelte";
   import { settings } from "../theme";
   import { api, assetUrl, sendChatControl } from "../tauri";
-  import { openFingerprint } from "./FingerprintModal.svelte";
+  import { openFingerprint, verifiedKeys, keyState } from "./FingerprintModal.svelte";
   import { showToast } from "./Toast.svelte";
   import { startOutgoingCall, callState } from "./CallModal.svelte";
   import { openMediaPicker, closeMediaPicker, pickerState, panelClaimsDrop } from "./MediaPicker.svelte";
@@ -181,7 +181,7 @@
     name: string;
   }): "sticker" | "gif" | "image" | "video" | "audio" | "voice" | "circle" | "file" {
     const cat = (content.category ?? "").toLowerCase();
-    if (cat === "sticker") return "sticker";
+    if (cat === "sticker" || content.name.toLowerCase().endsWith(".tgs") || (content.mime ?? "").toLowerCase() === "application/x-tgsticker") return "sticker";
     if (cat === "gif") return "gif";
     if (cat === "voice") return "voice";
     if (cat === "circle") return "circle";
@@ -193,6 +193,14 @@
     if (mime.startsWith("video/")) return "video";
     if (mime.startsWith("audio/") || /\.(mp3|wav|ogg|flac|m4a|opus|aac)$/.test(name)) return "audio";
     return "file";
+  }
+
+  /** The type AnimatedMedia needs: a .tgs often travels as gzip / octet-stream. */
+  function stickerMime(content: { mime: string | null; name: string }): string | null {
+    const n = content.name.toLowerCase();
+    if (n.endsWith(".tgs")) return "application/x-tgsticker";
+    if (n.endsWith(".webm")) return "video/webm";
+    return content.mime;
   }
 
   // Auto-download anything small or any sticker/gif, so the picker and
@@ -1108,11 +1116,24 @@
     if (!c) return;
     try {
       const view = await api.verifyFingerprint(c.id);
-      openFingerprint(view);
+      peerKey = { id: c.id, key: view.peer_key };
+      openFingerprint(view, c.id);
     } catch (e) {
-      console.error(e);
+      showToast(tr(String(e)));
     }
   }
+
+  // Key check: every encrypted one-to-one chat gets the shield; it fills in
+  // once the words were compared, and turns amber if the key changed since.
+  let peerKey = $state<{ id: string; key: string | null } | null>(null);
+  const e2eePeer = $derived(!!$activeChat && $activeChat.live && $activeChat.has_lock && !$activeChat.id.startsWith("grp_") && $activeChat.id !== "__saved__");
+  $effect(() => {
+    const id = e2eePeer ? $activeChat?.id : null;
+    if (!id) { peerKey = null; return; }
+    api.verifyFingerprint(id).then((v) => { if ($activeChat?.id === id) peerKey = { id, key: v.peer_key }; })
+      .catch(() => { if ($activeChat?.id === id) peerKey = { id, key: null }; });
+  });
+  const keyCheck = $derived(peerKey && peerKey.id === $activeChat?.id ? keyState(peerKey.id, peerKey.key, $verifiedKeys) : "unverified");
 
   // ---- Message grouping ----
 
@@ -2723,7 +2744,7 @@
         // The whole bar opens the chat / channel / profile info, except
         // the action buttons on the right and other real controls.
         const t = e.target as HTMLElement;
-        if (t.closest(".chat-actions, .back-btn, .verified-btn, a")) return;
+        if (t.closest(".chat-actions, .back-btn, .verified-btn, .e2ee-btn, a")) return;
         openChatInfo();
       }}
       title={$activeChat.id === "__saved__" ? "" : isGroup ? "Info & settings" : "Profile & privacy"}
@@ -2753,10 +2774,18 @@
             {$activeChat.name}
             {#if $clans[$activeChat.id]}<span class="hdr-clan"><ClanTag tag={$clans[$activeChat.id]} /></span>{/if}
           {/if}
-          {#if $activeChat.verified}
-            <button class="verified-btn" onclick={openPeerFingerprint} title={$t("Verify key")}>
-              <span class="verified-badge">{@html icons.verified}</span>
+          {#if e2eePeer}
+            <button class="verified-btn key-{keyCheck}" onclick={openPeerFingerprint}
+              title={$t(keyCheck === "verified" ? "Key verified" : keyCheck === "changed" ? "Key changed — check again" : "Verify key")}
+              aria-label={$t("Verify key")}>
+              {#if keyCheck === "verified"}
+                <span class="verified-badge">{@html icons.verified}</span>
+              {:else}
+                <svg class="key-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>{#if keyCheck === "changed"}<path d="M12 8v4"/><path d="M12 16h.01"/>{/if}</svg>
+              {/if}
             </button>
+          {:else if $activeChat.verified}
+            <span class="verified-badge" title={$t("Official")}>{@html icons.verified}</span>
           {/if}
         </h1>
         {#if $peerPresence[$activeChat.id]?.listening?.title}
@@ -2805,7 +2834,7 @@
           {#if $activeChat.live && !$activeChat.has_lock}
             <span class="bot-badge">{$t("🤖 bot · not encrypted")}</span>
           {:else}
-            <span class="e2ee">{@html icons.lock} end-to-end encrypted</span>
+            <button class="e2ee e2ee-btn" onclick={openPeerFingerprint} title={$t("Verify key")}>{@html icons.lock} {$t(keyCheck === "verified" ? "encrypted · key verified" : "end-to-end encrypted")}</button>
           {/if}
           {#if $contacts && $activeChat && getContact($activeChat.id)?.phone}
             <span class="sep">·</span>
@@ -3061,7 +3090,8 @@
                   <div class="sticker-wrap">
                     {#if url}
                       <button class="sticker-btn" title={$t("Show the pack")} onclick={() => openPackSheet(content.pack ?? "own:-", m.outgoing ? undefined : m.from, content.saved_at)}>
-                        <img class="sticker-img" src={url} alt="sticker" />
+                        <!-- .tgs (Lottie) and .webm stickers play; plain images stay images. -->
+                        <span class="sticker-img"><AnimatedMedia src={url} mime={stickerMime(content)} alt={$t("Sticker")} play="auto" /></span>
                       </button>
                     {:else}
                       <div class="sticker-placeholder"></div>
@@ -3940,6 +3970,11 @@
     gap: 5px;
     letter-spacing: -0.01em;
   }
+  .e2ee-btn { background: none; border: none; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+  .e2ee-btn:hover { text-decoration: underline; }
+  .key-shield { width: 15px; height: 15px; color: var(--fg-dim); opacity: .8; }
+  .verified-btn:hover .key-shield { color: var(--accent); opacity: 1; }
+  .key-changed .key-shield { color: #F0B232; opacity: 1; }
   .verified-btn {
     background: transparent;
     border: none;
@@ -4370,6 +4405,7 @@
     height: var(--sticker-size, 128px);
     object-fit: contain;
     display: block;
+    pointer-events: none;
     filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.35));
   }
   .sticker-placeholder {

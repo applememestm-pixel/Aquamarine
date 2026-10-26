@@ -93,7 +93,7 @@
     tuneSdp, orderCodecs, tuneSendParameters, displayMediaOptions, screenVideoConstraints,
     micConstraints, cameraConstraints, targetVideoKbps, kbpsForFrame, qualityLabel, RES_LABEL,
     SDP_VIDEO_MAX_KBPS, SDP_VIDEO_START_KBPS, SDP_VIDEO_MIN_KBPS,
-    type ResPreset, type FpsPreset, type ContentHint, type SdpTuning, type SenderTuning, captureScreenOrCamera } from "../rtcQuality";
+    type ResPreset, type FpsPreset, type ContentHint, type SdpTuning, type SenderTuning, captureScreenOrCamera, canCaptureScreen } from "../rtcQuality";
 
   // ---------------------------------------------------------------------------
   // Media layout. Every call negotiates the same four m-lines up front, so
@@ -119,6 +119,11 @@
   let analyser: AnalyserNode | null = null;
   let levelBuf: Float32Array | null = null;
   let camStream = $state.raw<MediaStream | null>(null);
+  /** Phones: which camera — the front one, or the back one to show what's
+   *  in front of you (phones can't share their screen). */
+  let facing = $state<"user" | "environment">("user");
+  const touchUi = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+  const screenShareOk = canCaptureScreen();
   let screenStream = $state.raw<MediaStream | null>(null);
 
   // Remote media
@@ -666,7 +671,7 @@
     if (!pc || !tx[T_CAM] || tx[T_CAM].receiver.track.kind !== "video") { showToast(tr("Your contact's app is too old for video — ask them to update")); return; }
     const cs = get(callSettings);
     try {
-      const s = await navigator.mediaDevices.getUserMedia({ video: cameraConstraints(cs.camId, cs.camRes), audio: false });
+      const s = await navigator.mediaDevices.getUserMedia({ video: camVideo(cs.camId, cs.camRes), audio: false });
       const v = s.getVideoTracks()[0];
       try { v.contentHint = "motion"; } catch { /* ignore */ }
       await tx[T_CAM].sender.replaceTrack(v);
@@ -677,6 +682,36 @@
       sendMedia();
     } catch (e) {
       showToast(`Could not start camera: ${e}`);
+    }
+  }
+
+  /** Camera constraints; on phones the chosen side (front / back). */
+  function camVideo(camId: string | undefined, res: "720" | "1080"): MediaTrackConstraints {
+    const c = cameraConstraints(touchUi ? undefined : camId, res);
+    if (touchUi) c.facingMode = { ideal: facing };
+    return c;
+  }
+
+  /** Front ↔ back camera, without dropping the video. */
+  async function flipCam() {
+    if (!camStream || !tx[T_CAM]) return;
+    const cs = get(callSettings);
+    const next = facing === "user" ? "environment" : "user";
+    const prev = facing;
+    facing = next;
+    try {
+      // Some phones can't open two cameras at once: let go of the old one first.
+      camStream.getVideoTracks().forEach((t) => { t.onended = null; t.stop(); });
+      const s = await navigator.mediaDevices.getUserMedia({ video: camVideo(cs.camId, cs.camRes), audio: false });
+      const v = s.getVideoTracks()[0];
+      try { v.contentHint = "motion"; } catch { /* ignore */ }
+      await tx[T_CAM].sender.replaceTrack(v);
+      camStream = s;
+      v.onended = () => void stopCam();
+    } catch (e) {
+      facing = prev;
+      showToast(tr("Could not switch the camera: {e}", { e: String(e) }));
+      await stopCam();
     }
   }
 
@@ -751,6 +786,45 @@
     const cs = get(callSettings);
     patchCallSettings({ [kind]: { ...cs[kind], [peerId]: v } } as any);
   }
+
+  // ---- Watching a shared screen on a phone: fullscreen, landscape, pinch ----
+  let zoom = $state({ s: 1, x: 0, y: 0 });
+  let pinch: { d: number; s: number; x: number; y: number; px: number; py: number } | null = null;
+  const dist = (t: TouchList) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  function zoomStart(e: TouchEvent) {
+    const t = e.touches;
+    pinch = { d: t.length > 1 ? dist(t) : 0, s: zoom.s, x: zoom.x, y: zoom.y, px: t[0].clientX, py: t[0].clientY };
+  }
+  function zoomMove(e: TouchEvent) {
+    if (!pinch) return;
+    const t = e.touches;
+    if (t.length > 1 && pinch.d) {
+      e.preventDefault();
+      zoom = { ...zoom, s: Math.min(5, Math.max(1, pinch.s * (dist(t) / pinch.d))) };
+    } else if (zoom.s > 1) {
+      e.preventDefault();
+      zoom = { ...zoom, x: pinch.x + (t[0].clientX - pinch.px), y: pinch.y + (t[0].clientY - pinch.py) };
+    }
+  }
+  function zoomEnd(e: TouchEvent) {
+    if (e.touches.length) { zoomStart(e); return; }
+    pinch = null;
+    if (zoom.s <= 1.05) zoom = { s: 1, x: 0, y: 0 };
+  }
+  /** Tap on the shared screen: whole screen, turned sideways if it's wide. */
+  async function watchFullscreen() {
+    if (!fullscreen) await toggleFullscreen();
+    const v = rScreen?.getVideoTracks()[0]?.getSettings();
+    if (v?.width && v?.height && v.width > v.height) {
+      try { await (screen.orientation as unknown as { lock(o: string): Promise<void> }).lock("landscape"); } catch { /* not allowed here */ }
+    }
+  }
+  $effect(() => {
+    if (!fullscreen) {
+      try { screen.orientation?.unlock?.(); } catch { /* ignore */ }
+      zoom = { s: 1, x: 0, y: 0 };
+    }
+  });
 
   async function toggleFullscreen() {
     const next = !fullscreen;
@@ -1056,6 +1130,7 @@
     stats: svg(`<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>`),
     vol: svg(`<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14"/>`),
     x: svg(`<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>`),
+    flip: svg(`<path d="M20 7h-3.2l-1.6-2H8.8L7.2 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M9 13.5a3 3 0 0 1 5.2-2"/><path d="M15 12.5a3 3 0 0 1-5.2 2"/><polyline points="14.5 9.5 14.4 11.6 12.3 11.4"/><polyline points="9.5 16.5 9.6 14.4 11.7 14.6"/>`),
   };
 </script>
 
@@ -1084,7 +1159,10 @@
     role="button"
     tabindex="0"
     title={$t(big ? "Double-click for fullscreen" : "Click to focus")}
-    onclick={() => { if (!big && id !== "r-ava") focus = id; }}
+    onclick={() => {
+      if (!big && id !== "r-ava") focus = id;
+      else if (touchUi && big && id === "r-screen" && !fullscreen && zoom.s === 1) void watchFullscreen();
+    }}
     onkeydown={(e) => { if (e.key === "Enter" && !big && id !== "r-ava") focus = id; }}
     ondblclick={() => { if (big) void toggleFullscreen(); }}
   >
@@ -1094,8 +1172,12 @@
       <!-- svelte-ignore a11y_media_has_caption -->
       <video
         use:srcObject={id === "r-screen" ? rScreen : id === "r-cam" ? rCam : id === "l-screen" ? screenStream : camStream}
-        class:mirror={id === "l-cam"}
+        class:mirror={id === "l-cam" && facing === "user"}
         class:contain={id === "r-screen" || id === "l-screen"}
+        style:transform={id === "r-screen" && big && zoom.s > 1 ? `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.s})` : undefined}
+        ontouchstart={id === "r-screen" && big ? zoomStart : undefined}
+        ontouchmove={id === "r-screen" && big ? zoomMove : undefined}
+        ontouchend={id === "r-screen" && big ? zoomEnd : undefined}
         autoplay playsinline muted data-call-media
       ></video>
     {/if}
@@ -1173,10 +1255,15 @@
     </button>
     <button class="cb" class:off={deafened} onclick={toggleDeafen} title={$t("Deafen (Ctrl+Shift+D)")}>{@html deafened ? I.headOff : I.head}</button>
     <button class="cb" class:on={!!camStream} onclick={toggleCam} title={$t(camStream ? "Turn camera off" : "Turn camera on")}>{@html camStream ? I.cam : I.camOff}</button>
-    <div class="anchor">
-      <button class="cb" class:live={!!screenStream} onclick={openGoLive} title={$t(screenStream ? "Stream settings" : "Share your screen")}>{@html I.screen}</button>
-      {#if goLiveOpen}{@render goLivePanel()}{/if}
-    </div>
+    {#if touchUi && camStream}
+      <button class="cb" onclick={flipCam} title={$t(facing === "user" ? "Back camera" : "Front camera")} aria-label={$t("Switch camera")}>{@html I.flip}</button>
+    {/if}
+    {#if screenShareOk || screenStream}
+      <div class="anchor">
+        <button class="cb" class:live={!!screenStream} onclick={openGoLive} title={$t(screenStream ? "Stream settings" : "Share your screen")}>{@html I.screen}</button>
+        {#if goLiveOpen}{@render goLivePanel()}{/if}
+      </div>
+    {/if}
     <div class="anchor">
       <button class="cb" class:on={volOpen} onclick={() => { goLiveOpen = false; volOpen = !volOpen; }} title={$t("Volume")}>{@html I.vol}</button>
       {#if volOpen}{@render volumePanel()}{/if}
@@ -1475,6 +1562,7 @@
   .tile.speaking, .tile.me-speaking { box-shadow: inset 0 0 0 3px #3BA55D; }
   .tile video { width: 100%; height: 100%; display: block; object-fit: cover; background: #000; }
   .tile video.contain { object-fit: contain; }
+  .tile.big video.contain { touch-action: none; transform-origin: center; }
   .tile video.mirror { transform: scaleX(-1); }
   .tile-ava { width: 100%; height: 100%; display: grid; place-items: center; }
   .tile-tag {

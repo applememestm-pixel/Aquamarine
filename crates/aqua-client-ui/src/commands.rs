@@ -175,9 +175,26 @@ pub async fn send_message(
 
 #[derive(Debug, serde::Serialize)]
 pub struct FingerprintView {
+    /// The safety code: the same 8 words on both ends of the chat.
     pub words: Vec<String>,
     pub hex: String,
     pub peer_name: String,
+    /// The peer's key (hex): the UI remembers it once verified and warns
+    /// when it changes.
+    pub peer_key: String,
+}
+
+/// The chat's safety code: SHA-256 over both identity keys, the smaller
+/// first — so both ends compute the same one, and it changes if either key
+/// is swapped (a relay putting itself in the middle can't keep it).
+fn safety_code(mine: &[u8; 32], theirs: &[u8; 32]) -> [u8; 32] {
+    use sha2::Digest;
+    let (a, b) = if mine <= theirs { (mine, theirs) } else { (theirs, mine) };
+    let mut h = sha2::Sha256::new();
+    h.update(b"aquamarine-safety-code-v1");
+    h.update(a);
+    h.update(b);
+    h.finalize().into()
 }
 
 #[tauri::command]
@@ -186,16 +203,16 @@ pub fn verify_fingerprint(
     peer_id: String,
 ) -> Result<FingerprintView, String> {
     let s = state.lock().map_err(|e| e.to_string())?;
-    let dh_pub = if let Some(sess) = s.sessions.get(&peer_id) {
-        *sess.peer.dh_pub.as_bytes()
-    } else {
-        *s.identity.public().dh_pub.as_bytes()
-    };
+    let sess = s.sessions.get(&peer_id).ok_or("no encrypted session with this chat yet — send a message first")?;
+    let theirs = *sess.peer.dh_pub.as_bytes();
+    let mine = *s.identity.public().dh_pub.as_bytes();
+    let code = safety_code(&mine, &theirs);
     let name = s.chats.get(&peer_id).map(|c| c.summary.name.clone()).unwrap_or(peer_id);
     Ok(FingerprintView {
-        words: word_fingerprint_from(&dh_pub),
-        hex:   hex_fingerprint_from(&dh_pub),
+        words: word_fingerprint_from(&code),
+        hex:   hex_fingerprint_from(&code)[..39].to_string(),
         peer_name: name,
+        peer_key: hex::encode(theirs),
     })
 }
 
@@ -262,6 +279,15 @@ pub async fn connect_to_server(
     // Publish state and persist the hints so a later launch auto-reconnects.
     {
         let mut s = state.lock().map_err(|e| e.to_string())?;
+        // What the old connection sent but the relay never confirmed goes
+        // out again (the recipient drops copies by id).
+        if let Some(old) = s.transport.take().filter(|t| t.username() == username) {
+            let lost = old.take_unconfirmed();
+            if !lost.is_empty() {
+                tracing::info!(n = lost.len(), "resending unconfirmed messages");
+                transport.resend(lost);
+            }
+        }
         s.transport = Some(transport);
         s.username = Some(username);
         s.server_url = Some(server_url);

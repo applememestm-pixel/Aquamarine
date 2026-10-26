@@ -53,6 +53,59 @@ pub fn proxy() -> Option<String> {
     PROXY.read().ok().and_then(|g| g.clone())
 }
 
+/// Delivery ids seen lately, process-wide so a reconnect (a new
+/// [`Transport`]) still drops what the relay sends again.
+static SEEN: std::sync::Mutex<Option<(std::collections::HashSet<String>, std::collections::VecDeque<String>)>> =
+    std::sync::Mutex::new(None);
+
+/// First time we see `id`? Remembers the last 4096.
+fn first_sighting(id: &str) -> bool {
+    let Ok(mut g) = SEEN.lock() else { return true };
+    let (set, order) = g.get_or_insert_with(Default::default);
+    if !set.insert(id.to_string()) {
+        return false;
+    }
+    order.push_back(id.to_string());
+    while order.len() > 4096 {
+        if let Some(old) = order.pop_front() {
+            set.remove(&old);
+        }
+    }
+    true
+}
+
+/// A relay that confirms deliveries but hasn't confirmed one for this long
+/// is unreachable, whatever the socket says: reconnect.
+const ACK_DEADLINE: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// What the relay hasn't confirmed yet (only when it confirms at all).
+#[derive(Default)]
+struct Acks {
+    /// The relay greeted us with "I confirm" (1.0.6+).
+    on: std::sync::atomic::AtomicBool,
+    unconfirmed: std::sync::Mutex<std::collections::VecDeque<(RelayMessage, std::time::Instant)>>,
+}
+
+impl Acks {
+    fn on(&self) -> bool {
+        self.on.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    fn confirmed(&self, id: &str) {
+        if let Ok(mut q) = self.unconfirmed.lock() {
+            q.retain(|(m, _)| m.id.as_deref() != Some(id));
+        }
+    }
+    fn overdue(&self) -> bool {
+        self.on() && self.unconfirmed.lock().ok().and_then(|q| q.front().map(|(_, at)| at.elapsed() > ACK_DEADLINE)).unwrap_or(false)
+    }
+}
+
+fn new_delivery_id() -> String {
+    let mut b = [0u8; 16];
+    rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut b);
+    hex::encode(b)
+}
+
 /// Ping the relay this often…
 const KEEPALIVE: std::time::Duration = std::time::Duration::from_secs(20);
 /// …and call the connection dead after this long without any frame.
@@ -257,6 +310,7 @@ pub struct Transport {
     identity: IdentityKeyPair,
     http: reqwest::Client,
     ws_out: mpsc::UnboundedSender<RelayMessage>,
+    acks: std::sync::Arc<Acks>,
     /// Kept alive so the WS read/write tasks stay running.
     _write_task: tokio::task::JoinHandle<()>,
     _read_task: tokio::task::JoinHandle<()>,
@@ -292,6 +346,8 @@ impl Transport {
 
         let (out_tx, mut out_rx) = mpsc::unbounded_channel::<RelayMessage>();
         let (in_tx, in_rx) = mpsc::unbounded_channel::<Incoming>();
+        let acks = std::sync::Arc::new(Acks::default());
+        let (acks_w, acks_r, in_tx_w, out_tx_r) = (acks.clone(), acks.clone(), in_tx.clone(), out_tx.clone());
 
         // Writer task: forwards outgoing RelayMessages onto the socket
         // as binary JSON. Ends when the sender is dropped.
@@ -301,8 +357,19 @@ impl Transport {
             let mut ping = tokio::time::interval(KEEPALIVE);
             ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             ping.tick().await;
+            let mut watch = tokio::time::interval(std::time::Duration::from_secs(3));
+            watch.tick().await;
             loop {
                 tokio::select! {
+                    _ = watch.tick() => {
+                        // Sent, but the relay never said "got it": the link
+                        // is dead even if the socket hasn't noticed.
+                        if acks_w.overdue() {
+                            tracing::warn!("relay didn't confirm a message in {ACK_DEADLINE:?}; reconnecting");
+                            let _ = in_tx_w.send(Incoming::Closed);
+                            break;
+                        }
+                    }
                     m = out_rx.recv() => {
                         let Some(msg) = m else { break };
                         match serde_json::to_vec(&msg) {
@@ -346,10 +413,10 @@ impl Transport {
                 };
                 match frame {
                     Ok(Message::Binary(bytes)) => {
-                        dispatch_frame(&in_tx_r, &bytes);
+                        dispatch_frame(&in_tx_r, &acks_r, &out_tx_r, &bytes);
                     }
                     Ok(Message::Text(text)) => {
-                        dispatch_frame(&in_tx_r, text.as_bytes());
+                        dispatch_frame(&in_tx_r, &acks_r, &out_tx_r, text.as_bytes());
                     }
                     Ok(Message::Ping(_)) | Ok(Message::Pong(_)) => {}
                     Ok(Message::Close(_)) => {
@@ -373,11 +440,29 @@ impl Transport {
                 identity: identity.clone(),
                 http,
                 ws_out: out_tx,
+                acks,
                 _write_task: write_task,
                 _read_task: read_task,
             },
             in_rx,
         ))
+    }
+
+    /// Messages a confirming relay never confirmed (the connection died
+    /// under them). Empty with an older relay: nothing to tell apart there.
+    pub fn take_unconfirmed(&self) -> Vec<RelayMessage> {
+        if !self.acks.on() {
+            return Vec::new();
+        }
+        self.acks.unconfirmed.lock().map(|mut q| q.drain(..).map(|(m, _)| m).collect()).unwrap_or_default()
+    }
+
+    /// Send again what an earlier connection lost; same ids, so the
+    /// recipient drops any copy that did get through.
+    pub fn resend(&self, msgs: Vec<RelayMessage>) {
+        for m in msgs {
+            let _ = self.push(m);
+        }
     }
 
     pub fn username(&self) -> &str { &self.username }
@@ -1039,7 +1124,21 @@ impl Transport {
             payload,
             kind,
             ts: None, // and this
+            id: Some(new_delivery_id()),
         };
+        self.push(msg)
+    }
+
+    /// Queue a message; it's kept until the relay confirms it (an older
+    /// relay never does: then only the last 500 are kept, and never resent
+    /// by the deadline — see [`Acks::overdue`]).
+    fn push(&self, msg: RelayMessage) -> Result<(), TransportError> {
+        if let Ok(mut q) = self.acks.unconfirmed.lock() {
+            q.push_back((msg.clone(), std::time::Instant::now()));
+            while q.len() > 500 {
+                q.pop_front();
+            }
+        }
         self.ws_out
             .send(msg)
             .map_err(|_| TransportError::BadPayload("transport disconnected".into()))
@@ -1156,10 +1255,10 @@ fn build_ws_url(server_url: &str, username: &str, token: &str) -> Result<String,
         )));
     };
     // Percent-encode the token (base64url is URL-safe already, but be defensive).
-    Ok(format!("{ws_base}/v1/ws?user={username}&token={token}"))
+    Ok(format!("{ws_base}/v1/ws?user={username}&token={token}&ack=1"))
 }
 
-fn dispatch_frame(tx: &mpsc::UnboundedSender<Incoming>, bytes: &[u8]) {
+fn dispatch_frame(tx: &mpsc::UnboundedSender<Incoming>, acks: &Acks, out: &mpsc::UnboundedSender<RelayMessage>, bytes: &[u8]) {
     let msg: RelayMessage = match serde_json::from_slice(bytes) {
         Ok(m) => m,
         Err(e) => {
@@ -1167,7 +1266,24 @@ fn dispatch_frame(tx: &mpsc::UnboundedSender<Incoming>, bytes: &[u8]) {
             return;
         }
     };
+    if msg.kind == PayloadKind::Ack {
+        match &msg.id {
+            Some(id) => acks.confirmed(id),
+            None => acks.on.store(true, std::sync::atomic::Ordering::Relaxed),
+        }
+        return;
+    }
+    if let Some(id) = &msg.id {
+        if acks.on() {
+            let _ = out.send(RelayMessage::ack(Some(id.clone())));
+        }
+        // The relay sends again what we may not have got; once is enough.
+        if !first_sighting(id) {
+            return;
+        }
+    }
     match msg.kind {
+        PayloadKind::Ack => {}
         PayloadKind::Initial => match bincode::deserialize::<InitialMessage>(&msg.payload) {
             Ok(initial) => { let _ = tx.send(Incoming::Initial { from: msg.from, message: initial, ts: msg.ts }); }
             Err(e) => { let _ = tx.send(Incoming::Error(format!("decode initial: {e}"))); }

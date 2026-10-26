@@ -2,7 +2,8 @@ name: autotag
 
 # A new version on main becomes a release by itself: when the version in
 # Cargo.toml ([workspace.package]) has no v<version> tag yet, this job
-# creates the tag and starts release.yml on it.
+# creates the tag and starts release.yml on it — as a pre-release when
+# [workspace.metadata.aqua] prerelease = true (see CLAUDE.md, versions).
 #
 # Tags pushed with the workflow token don't trigger other workflows, so
 # the release is started explicitly (workflow_dispatch on the tag ref),
@@ -36,7 +37,11 @@ jobs:
           [ -n "$v" ] || { echo "::error::no [workspace.package] version in Cargo.toml"; exit 1; }
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "tag=v$v" >> "$GITHUB_OUTPUT"
-          echo "Cargo.toml version: $v"
+          # [workspace.metadata.aqua] prerelease = true → a numbered pre-release.
+          pre=$(awk '/^\[workspace.metadata.aqua\]/{f=1;next} /^\[/{f=0} f && /^prerelease *=/{gsub(/[" ]/,"",$0); split($0,a,"="); print a[2]; exit}' Cargo.toml)
+          [ "$pre" = "true" ] || pre=false
+          echo "prerelease=$pre" >> "$GITHUB_OUTPUT"
+          echo "Cargo.toml version: $v (pre-release: $pre)"
 
       - name: Create the tag if it's new
         id: mk
@@ -61,4 +66,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.ver.outputs.tag }}
-        run: gh workflow run release.yml --ref "$TAG" --repo "$GITHUB_REPOSITORY"
+          PRE: ${{ steps.ver.outputs.prerelease }}
+        run: gh workflow run release.yml --ref "$TAG" --repo "$GITHUB_REPOSITORY" -f prerelease="$PRE"

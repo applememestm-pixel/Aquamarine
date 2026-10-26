@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onBack } from "../back";
+  import AnimatedMedia from "./AnimatedMedia.svelte";
   import { hasMarkup, plainText } from "../markup";
   /** Chat-list line without formatting markers (spoilers stay hidden). */
   function previewText(p: string): string {
@@ -864,7 +865,7 @@
                 {@const img = peekImage(m)}
                 <div class="peek-row" class:mine={isMine(m)}>
                   <div class="peek-bubble" class:pic={!!img}>
-                    {#if img}<img src={img} alt="" loading="lazy" />{:else}<span class="peek-txt" class:code={m.kind.type === "code"}>{peekText(m)}</span>{/if}
+                    {#if img && /\.(tgs|webm)$/i.test(m.kind.type === "file" ? m.kind.content.name : "")}<span class="peek-anim"><AnimatedMedia src={img} mime={m.kind.type === "file" && /\.tgs$/i.test(m.kind.content.name) ? "application/x-tgsticker" : "video/webm"} play="auto" /></span>{:else if img}<img src={img} alt="" loading="lazy" />{:else}<span class="peek-txt" class:code={m.kind.type === "code"}>{peekText(m)}</span>{/if}
                     <span class="peek-time">{m.time}</span>
                   </div>
                 </div>
@@ -1037,6 +1038,7 @@
   }
   .peek-row.mine .peek-bubble { background: var(--bubble-out, color-mix(in srgb, var(--accent) 30%, var(--bg-surface-2))); }
   .peek-bubble.pic { padding: 3px; flex-direction: column; align-items: stretch; }
+  .peek-anim { display: block; width: 120px; height: 120px; }
   .peek-bubble.pic img { display: block; max-width: 100%; max-height: 180px; border-radius: 11px; object-fit: cover; }
   .peek-bubble.pic .peek-time { position: absolute; right: 8px; bottom: 6px; padding: 0 5px; border-radius: 8px; background: rgba(0,0,0,0.45); color: #fff; }
   .peek-txt { white-space: pre-wrap; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 8; line-clamp: 8; -webkit-box-orient: vertical; overflow: hidden; }

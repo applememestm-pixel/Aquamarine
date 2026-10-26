@@ -4,8 +4,9 @@ import { listen } from "@tauri-apps/api/event";
 import { tr } from "./i18n";
 
 /**
- * In-app updates (Rust: updates.rs). Every push to main is built into the
- * "nightly" pre-release and every v* tag into a stable release; the app
+ * In-app updates (Rust: updates.rs). Every v* tag is a release — stable,
+ * or a numbered pre-release (1.0.61…) — and "every build" takes the newest
+ * published one (the old moving "nightly" included); the app
  * compares itself with the newest one of its channel and, on a "yes",
  * downloads the file for this platform, checks its SHA-256 and installs it.
  */
@@ -37,11 +38,26 @@ export type UpdateState =
   | { s: "error"; error: string; info?: UpdateInfo; id?: string };
 export const updateState = writable<UpdateState>({ s: "idle" });
 
-/** "1.0.10" > "1.0.9". */
-function newer(a: string, b: string): boolean {
-  const pa = a.split(/[.-]/).map((x) => parseInt(x, 10) || 0), pb = b.split(/[.-]/).map((x) => parseInt(x, 10) || 0);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) > (pb[i] ?? 0);
+/**
+ * "1.0.10" > "1.0.9", and the project's pre-release numbering: after release
+ * 1.0.6 come pre-releases 1.0.61, 1.0.62… and then release 1.0.7. So when
+ * one patch number is longer, it's a pre-release of the shorter's line and
+ * only its leading digits count against it: 1.0.7 > 1.0.62 > 1.0.61 > 1.0.6.
+ */
+export function newer(a: string, b: string): boolean {
+  const sa = a.split(/[.-]/), sb = b.split(/[.-]/);
+  const n = Math.max(sa.length, sb.length);
+  for (let i = 0; i < n; i++) {
+    let x = sa[i] ?? "0", y = sb[i] ?? "0";
+    if (i === 2 && x.length !== y.length) {
+      // 1.0.7 vs 1.0.62: compare 7 with 6; equal (1.0.6 vs 1.0.61) → the longer is newer.
+      const short = Math.min(x.length, y.length);
+      const hx = parseInt(x.slice(0, short), 10) || 0, hy = parseInt(y.slice(0, short), 10) || 0;
+      if (hx !== hy) return hx > hy;
+      return x.length > y.length;
+    }
+    const px = parseInt(x, 10) || 0, py = parseInt(y, 10) || 0;
+    if (px !== py) return px > py;
   }
   return false;
 }
