@@ -6,8 +6,10 @@
 <script lang="ts">
   import Select from "./Select.svelte";
   import Donut from "./Donut.svelte";
+  import { LINKS } from "../links";
   import { NOTES, openWhatsNew } from "./WhatsNew.svelte";
   import { AUTODL_DEFAULT, POWER_DEFAULT } from "../theme";
+  import { powerActive, battery, powerMode } from "../power";
   import { autostartEnabled, setAutostart } from "../desktop";
   import { pickFolder } from "../dialog";
   const PHONE_UI = /android|iphone|ipad/i.test(navigator.userAgent);
@@ -68,7 +70,7 @@
   import { meshStatus, meshSyncNow, meshSetEnabled, refreshMesh } from "../mesh";
 
   // ---- Section navigation ----
-  type Sec = "network" | "nearby" | "host" | "ghost" | "language" | "appearance" | "theme" | "behaviour" | "notifications" | "voice" | "wallpaper" | "accent" | "bots" | "account" | "updates" | "about" | "privacy" | "stickers" | "backups" | "devices" | "storage" | "advanced";
+  type Sec = "network" | "nearby" | "host" | "ghost" | "language" | "appearance" | "theme" | "behaviour" | "notifications" | "voice" | "wallpaper" | "accent" | "bots" | "account" | "updates" | "about" | "privacy" | "stickers" | "backups" | "devices" | "storage" | "advanced" | "power" | "window";
   let section = $state<Sec>("notifications");
   // Telegram-mobile style: coloured icon tiles in grouped lists.
   interface Item { id: Sec | "profile" | "shortcuts"; label: string; color: string; icon: string; hint?: string }
@@ -76,31 +78,35 @@
   const GROUPS: Item[][] = [
     [
       { id: "profile", label: "Edit profile", color: "#007AFF", icon: ic(`<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>`) },
-      { id: "ghost", label: "Ghost mode", color: "#5E5CE6", icon: ic(`<path d="M9 10h.01"/><path d="M15 10h.01"/><path d="M12 2a8 8 0 0 0-8 8v12l3-3 2.5 2.5L12 19l2.5 2.5L17 19l3 3V10a8 8 0 0 0-8-8z"/>`) },
       { id: "devices", label: "Devices", color: "#34C759", icon: ic(`<rect x="2" y="4" width="13" height="10" rx="2"/><line x1="5" y1="18" x2="12" y2="18"/><rect x="17" y="8" width="5" height="12" rx="1"/>`) },
-      { id: "host", label: "Server on this device", color: "#00C7BE", icon: ic(`<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><line x1="7" y1="6.5" x2="7.01" y2="6.5"/><line x1="7" y1="17.5" x2="7.01" y2="17.5"/><path d="M14 6.5h3M14 17.5h3"/>`) },
-      { id: "nearby", label: "Without internet", color: "#0A84FF", icon: ic(`<path d="M7 7l10 10-5 5V2l5 5L7 17"/>`) },
-      { id: "backups", label: "Backups", color: "#30B0C7", icon: ic(`<path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/><path d="M22 2v6h-6"/>`) },
       { id: "privacy", label: "Privacy & Security", color: "#8E8E93", icon: ic(`<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>`) },
+      { id: "ghost", label: "Ghost mode", color: "#5E5CE6", icon: ic(`<path d="M9 10h.01"/><path d="M15 10h.01"/><path d="M12 2a8 8 0 0 0-8 8v12l3-3 2.5 2.5L12 19l2.5 2.5L17 19l3 3V10a8 8 0 0 0-8-8z"/>`) },
     ],
     [
       { id: "notifications", label: "Notifications", color: "#FF3B30", icon: ic(`<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>`) },
       { id: "behaviour", label: "Chat settings", color: "#007AFF", icon: ic(`<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>`) },
+      { id: "storage", label: "Data and storage", color: "#30D158", icon: ic(`<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>`) },
+      { id: "power", label: "Power saving", color: "#FFCC00", icon: ic(`<rect x="2" y="7" width="17" height="10" rx="2"/><line x1="22" y1="11" x2="22" y2="13"/><path d="M10 9l-2 3h3l-2 3"/>`) },
+      { id: "stickers", label: "Stickers & Emoji", color: "#FF9500", icon: ic(`<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>`) },
       { id: "voice", label: "Voice & Video", color: "#34C759", icon: ic(`<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/>`) },
       { id: "language", label: "Language", color: "#AF52DE", icon: ic(`<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>`) },
-      { id: "storage", label: "Data and storage", color: "#30D158", icon: ic(`<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>`) },
-      { id: "stickers", label: "Stickers & Emoji", color: "#FF9500", icon: ic(`<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>`) },
     ],
     [
       { id: "appearance", label: "Appearance", color: "#32ADE6", icon: ic(`<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>`) },
+      { id: "window", label: "Window & system", color: "#64D2FF", icon: ic(`<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><circle cx="6.5" cy="6.5" r=".5"/>`) },
+    ],
+    [
+      { id: "account", label: "Account & server", color: "#007AFF", icon: ic(`<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>`) },
+      { id: "network", label: "Network & proxy", color: "#5856D6", icon: ic(`<circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20"/><path d="M12 2a15 15 0 0 0 0 20"/>`) },
+      { id: "host", label: "Server on this device", color: "#00C7BE", icon: ic(`<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><line x1="7" y1="6.5" x2="7.01" y2="6.5"/><line x1="7" y1="17.5" x2="7.01" y2="17.5"/><path d="M14 6.5h3M14 17.5h3"/>`) },
+      { id: "nearby", label: "Without internet", color: "#0A84FF", icon: ic(`<path d="M7 7l10 10-5 5V2l5 5L7 17"/>`) },
+      { id: "backups", label: "Backups", color: "#30B0C7", icon: ic(`<path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/><path d="M22 2v6h-6"/>`) },
+      { id: "bots", label: "Bots", color: "#00C7BE", icon: ic(`<rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4"/><circle cx="12" cy="3" r="1"/><line x1="9" y1="13" x2="9.01" y2="13"/><line x1="15" y1="13" x2="15.01" y2="13"/>`) },
     ],
     [
       { id: "shortcuts", label: "Keyboard shortcuts", color: "#5AC8FA", icon: ic(`<rect x="2" y="6" width="20" height="12" rx="2"/><line x1="6" y1="10" x2="6.01" y2="10"/><line x1="10" y1="10" x2="10.01" y2="10"/><line x1="14" y1="10" x2="14.01" y2="10"/><line x1="18" y1="10" x2="18.01" y2="10"/><line x1="7" y1="14" x2="17" y2="14"/>`), hint: "Ctrl+/" },
-      { id: "bots", label: "Bots", color: "#00C7BE", icon: ic(`<rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4"/><circle cx="12" cy="3" r="1"/><line x1="9" y1="13" x2="9.01" y2="13"/><line x1="15" y1="13" x2="15.01" y2="13"/>`) },
-      { id: "advanced", label: "Advanced", color: "#636366", icon: ic(`<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>`) },
-      { id: "network", label: "Network & proxy", color: "#5856D6", icon: ic(`<circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20"/><path d="M12 2a15 15 0 0 0 0 20"/>`) },
-      { id: "account", label: "Account & server", color: "#007AFF", icon: ic(`<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>`) },
       { id: "updates", label: "Updates", color: "#34C759", icon: ic(`<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>`) },
+      { id: "advanced", label: "Experimental", color: "#636366", icon: ic(`<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>`) },
       { id: "about", label: "About Aquamarine", color: "#8E8E93", icon: ic(`<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>`) },
     ],
   ];
@@ -374,12 +380,13 @@
     settings.update((x) => ({ ...x, autoDl: { ...AUTODL_DEFAULT, ...(x.autoDl ?? {}), [k]: v } }));
   }
   const pw = $derived({ ...POWER_DEFAULT, ...($settings.power ?? {}) });
+  const pwMode = $derived(powerMode($settings));
   function setPower(k: keyof typeof POWER_DEFAULT, v: boolean) {
     settings.update((x) => ({ ...x, power: { ...POWER_DEFAULT, ...(x.power ?? {}), [k]: v } }));
   }
   // ---- Advanced: launch at start-up ----
   let autostart = $state(false);
-  $effect(() => { if ($settingsOpen && section === "advanced") void autostartEnabled().then((v) => (autostart = v)); });
+  $effect(() => { if ($settingsOpen && section === "window") void autostartEnabled().then((v) => (autostart = v)); });
   async function toggleAutostart() {
     try { autostart = await setAutostart(!autostart); } catch (e) { showToast(String(e)); }
   }
@@ -884,7 +891,7 @@
         <nav class="nav">
           <div class="list-head phone-only">
             <h2>{$t("Settings")}</h2>
-            <button class="close" onclick={closeAll} title={$t("Close")}>×</button>
+            <button data-x class="close" onclick={closeAll} title={$t("Close")}>×</button>
           </div>
           <button class="me-card" onclick={() => { closeAll(); openProfile(); }} title={$t("Edit profile")}>
             <span class="me-ava" style:background={`linear-gradient(135deg, ${$profile.banner_a}, ${$profile.banner_b})`}>
@@ -898,7 +905,7 @@
           </button>
           {#each GROUPS as g, gi}
             <div class="nav-group">
-              {#each g.filter((x) => !(x.id === "shortcuts" && (phone || TOUCH))) as it}
+              {#each g.filter((x) => !((x.id === "shortcuts" || x.id === "window") && (phone || TOUCH))) as it}
                 <button class="nav-item" class:active={section === it.id} onclick={() => openItem(it)}>
                   <span class="tile" style:background={it.color}>{@html it.icon}</span>
                   <span class="nav-lbl">{$t(it.label)}</span>
@@ -919,7 +926,7 @@
               {#if sectionItem}<span class="tile" style:background={sectionItem.color}>{@html sectionItem.icon}</span>{/if}
               <h2>{$t(sectionTitle)}</h2>
             </div>
-            <button class="close" onclick={closeAll} title={$t("Close (Esc)")}>×</button>
+            <button data-x class="close" onclick={closeAll} title={$t("Close (Esc)")}>×</button>
           </div>
 
       {#if section === "ghost"}
@@ -1442,6 +1449,20 @@
         <div class="pv-note">{$t("Live preview — every change applies at once")}</div>
       </aside>
       </div>
+      <section class="group">
+        <div class="label">{$t("Avatar corners")}</div>
+        {#each [["avatarRadius", "People", "ava-p"], ["avatarRadiusGroup", "Groups and servers", "ava-g"], ["avatarRadiusChannel", "Channels", "ava-c"]] as [k, l, cls] (k)}
+          {@const v = (($settings as unknown as Record<string, number | undefined>)[k] ?? (k === "avatarRadius" ? undefined : $settings.avatarRadius)) ?? 50}
+          <div class="ava-row">
+            <span class="ava-demo {cls}" style:border-radius="{v}%">{l === "People" ? ($info?.username ?? "A").slice(0, 2).toUpperCase() : l === "Channels" ? "📢" : "👥"}</span>
+            <div class="ava-ctl">
+              <div class="ava-head"><b>{$t(l)}</b><span class="pill-tag">{v >= 50 ? $t("Circle") : v <= 0 ? $t("Square") : `${v}%`}</span></div>
+              <div class="range"><input type="range" min="0" max="50" step="1" value={v}
+                oninput={(e) => settings.update((x) => ({ ...x, [k]: parseInt((e.target as HTMLInputElement).value) }))} /></div>
+            </div>
+          </div>
+        {/each}
+      </section>
       {/if}
 
       {#if section === "behaviour"}
@@ -1804,20 +1825,50 @@
 
       {#if section === "advanced"}
       <section class="group">
-        <div class="label">{$t("Avatar corners")}</div>
-        {#each [["avatarRadius", "People", "ava-p"], ["avatarRadiusGroup", "Groups and servers", "ava-g"], ["avatarRadiusChannel", "Channels", "ava-c"]] as [k, l, cls] (k)}
-          {@const v = (($settings as unknown as Record<string, number | undefined>)[k] ?? (k === "avatarRadius" ? undefined : $settings.avatarRadius)) ?? 50}
-          <div class="ava-row">
-            <span class="ava-demo {cls}" style:border-radius="{v}%">{l === "People" ? ($info?.username ?? "A").slice(0, 2).toUpperCase() : l === "Channels" ? "📢" : "👥"}</span>
-            <div class="ava-ctl">
-              <div class="ava-head"><b>{$t(l)}</b><span class="pill-tag">{v >= 50 ? $t("Circle") : v <= 0 ? $t("Square") : `${v}%`}</span></div>
-              <div class="range"><input type="range" min="0" max="50" step="1" value={v}
-                oninput={(e) => settings.update((x) => ({ ...x, [k]: parseInt((e.target as HTMLInputElement).value) }))} /></div>
-            </div>
-          </div>
-        {/each}
+        <div class="label">{$t("Experimental")}</div>
+        <div class="bots-note">{$t("Features that are still being tried out. They may change, break or disappear in the next versions.")}</div>
       </section>
-      {#if !PHONE_UI}
+      {/if}
+
+      {#if section === "power"}
+      <section class="group">
+        <div class="label">{$t("Power saving mode")} <span class="pill-tag" class:on={$powerActive}>{$powerActive ? $t("ON") : $t("OFF")}</span></div>
+        <div class="pw-scale"><span>{$t("Off")}</span><span class="mid">{pwMode > 0 && pwMode < 100 ? $t("When below {n}%", { n: pwMode }) : ""}</span><span>{$t("On")}</span></div>
+        <div class="range"><input type="range" min="0" max="100" step="5" value={pwMode}
+          oninput={(e) => settings.update((x) => ({ ...x, powerMode: parseInt((e.target as HTMLInputElement).value) }))} /></div>
+        <div class="foot-note">{pwMode >= 100 ? $t("Power saving is always on: less movement, less battery and CPU.") : pwMode <= 0 ? $t("Power saving is off. Each switch below decides by itself.") : $battery ? $t("Automatically reduce power usage and animations when your battery is below {n}% (now {b}%{c}).", { n: pwMode, b: $battery.level, c: $battery.charging ? ", " + tr("charging") : "" }) : $t("This device doesn't tell the battery level — the mode stays off until you set it to On.")}</div>
+      </section>
+      <section class="group" class:pw-dim={$powerActive}>
+        <div class="label">{$t("Power saving options")}</div>
+        {#each [["stickers", "Animated stickers"], ["emoji", "Animated emoji"], ["chat", "Effects in chats"], ["calls", "Animations in calls"]] as [k, l] (k)}
+          <button class="toggle-row" onclick={() => setPower(k as "ui", !pw[k as "ui"])}>
+            <div class="tr-text"><div class="tr-title">{$t(l)}</div></div>
+            <span class="switch" class:on={pw[k as "ui"]}></span>
+          </button>
+        {/each}
+        <button class="toggle-row" onclick={() => setFlag("autoplayVideos")}>
+          <div class="tr-text"><div class="tr-title">{$t("Autoplay videos")}</div></div>
+          <span class="switch" class:on={$settings.autoplayVideos}></span>
+        </button>
+        <button class="toggle-row" onclick={() => setFlag("autoplayGifs")}>
+          <div class="tr-text"><div class="tr-title">{$t("Autoplay GIFs")}</div></div>
+          <span class="switch" class:on={$settings.autoplayGifs}></span>
+        </button>
+        <button class="toggle-row" onclick={() => setPower("particles", !pw.particles)}>
+          <div class="tr-text"><div class="tr-title">{$t("Particles")}</div><div class="tr-sub">{$t("The glows moving behind the app.")}</div></div>
+          <span class="switch" class:on={pw.particles}></span>
+        </button>
+      </section>
+      <section class="group">
+        <button class="toggle-row" onclick={() => setPower("ui", !pw.ui)}>
+          <div class="tr-text"><div class="tr-title">{$t("Enable smooth transitions")}</div></div>
+          <span class="switch" class:on={pw.ui}></span>
+        </button>
+        <div class="foot-note">{$t("You can disable animated transitions between different sections of the app. Stickers and emoji that don't play by themselves play on hover.")}</div>
+      </section>
+      {/if}
+
+      {#if section === "window"}
       <section class="group">
         <div class="label">{$t("Window title bar")}</div>
         {#each [["titleChatName", "Show chat name", true], ["titleAccount", "Show active account", false], ["titleUnread", "Total unread count", true]] as [k, l, def] (k)}
@@ -1848,29 +1899,6 @@
           <div class="tr-text"><div class="tr-title">{$t("Restore last opened windows")}</div><div class="tr-sub">{$t("Chats opened in their own windows open again on start.")}</div></div>
           <span class="switch" class:on={!!$settings.restoreWindows}></span>
         </button>
-      </section>
-      {/if}
-      <section class="group">
-        <div class="label">{$t("What's new")}</div>
-        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, whatsNew: x.whatsNew === false }))}>
-          <div class="tr-text"><div class="tr-title">{$t("Show what's new after updates")}</div><div class="tr-sub">{$t("A window with the release notes once after each update.")}</div></div>
-          <span class="switch" class:on={$settings.whatsNew !== false}></span>
-        </button>
-        {#if NOTES.md}<button class="mini-btn" onclick={() => { closeSettings(); openWhatsNew(); }}>{$t("Open what's new")} · {NOTES.version}</button>{/if}
-      </section>
-      <section class="group">
-        <div class="label">{$t("Power saving")}</div>
-        {#each [["stickers", "Animated stickers"], ["emoji", "Animated emoji"], ["chat", "Animations in chats"], ["calls", "Animations in calls"], ["ui", "Interface animations"]] as [k, l] (k)}
-          <button class="toggle-row" onclick={() => setPower(k as "ui", !pw[k as "ui"])}>
-            <div class="tr-text"><div class="tr-title">{$t(l)}</div></div>
-            <span class="switch" class:on={pw[k as "ui"]}></span>
-          </button>
-        {/each}
-        <div class="foot-note">{$t("Off: less movement, less battery and CPU. Stickers and emoji then play on hover.")}</div>
-      </section>
-      <section class="group">
-        <div class="label">{$t("Export")}</div>
-        <button class="mini-btn" onclick={exportChats}>{$t("Export my chats (JSON)")}</button>
       </section>
       {/if}
 
@@ -2128,16 +2156,36 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
         </div>
         <div class="foot-note">{$t("The file is checked against the release's SHA-256 list before it's installed. On Android an update installs over the app only when both are signed with the same key.")}</div>
       </section>
+      <section class="group">
+        <div class="label">{$t("What's new")}</div>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, whatsNew: x.whatsNew === false }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Show what's new after updates")}</div><div class="tr-sub">{$t("A window with the release notes once after each update.")}</div></div>
+          <span class="switch" class:on={$settings.whatsNew !== false}></span>
+        </button>
+        {#if NOTES.md}<button class="mini-btn" onclick={() => { closeSettings(); openWhatsNew(); }}>{$t("Open what's new")} · {NOTES.version}</button>{/if}
+      </section>
       {/if}
 
       {#if section === "about"}
       <section class="group">
         <div class="label">{$t("About")}</div>
         <div class="about">
-          <b>{$t("Aquamarine")}</b> {$t("— end-to-end encrypted desktop messenger.")}<br />
+          <b>{$t("Aquamarine")}</b> {$t("— an end-to-end encrypted messenger.")} <span class="ab-ver">{BUILD.version || ""}</span><br />
           {$t("X3DH · Double Ratchet · ChaCha20-Poly1305 · your keys never leave this device.")}
         </div>
-        <button class="reset" onclick={reset} style="margin-top:14px">{$t("Reset all settings to defaults")}</button>
+      </section>
+      <section class="group">
+        <div class="label">{$t("Links")}</div>
+        {#each LINKS as l (l.id)}
+          <button class="toggle-row ab-link" onclick={() => void api.openExternal(l.url).catch((e) => showToast(String(e)))}>
+            <span class="ab-ic"><svg viewBox="0 0 24 24">{@html l.icon}</svg></span>
+            <div class="tr-text"><div class="tr-title">{l.label}</div><div class="tr-sub">{$t(l.sub)} · {l.url.replace(/^https?:\/\//, "")}</div></div>
+            <span class="ab-go">›</span>
+          </button>
+        {/each}
+      </section>
+      <section class="group">
+        <button class="reset" onclick={reset}>{$t("Reset all settings to defaults")}</button>
       </section>
       {/if}
 
@@ -2366,12 +2414,13 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .ap-split { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 4px; align-items: start; padding-right: 16px; }
   .ap-controls { min-width: 0; }
   .ap-preview { position: sticky; top: 64px; margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
-  .mesh-ways { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 16px 0; }
+  .mesh-ways { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 0; }
   .mesh-way { display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px; border-radius: 999px; font-size: 12.5px; color: var(--fg-muted); background: var(--bg-input); border: 1px solid var(--border); }
   .mesh-way.on { color: var(--fg); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
-  .mesh-row { display: flex; align-items: center; gap: 14px; margin: 10px 16px 4px; padding: 12px 14px; border-radius: calc(14px * var(--rk, 1)); background: var(--bg-input); border: 1px solid var(--border); }
+  .mesh-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 10px 0 4px; padding: 12px 14px; border-radius: calc(14px * var(--rk, 1)); background: var(--bg-input); border: 1px solid var(--border); }
   .mesh-big { font-size: 28px; font-weight: 800; color: var(--accent); min-width: 36px; text-align: center; font-variant-numeric: tabular-nums; }
-  .mesh-txt { flex: 1; min-width: 0; }
+  .mesh-txt { flex: 1 1 140px; min-width: 0; }
+  @media (max-width: 520px) { .mesh-btn { flex: 1 1 100%; } }
   .mesh-btn { border: none; border-radius: calc(10px * var(--rk, 1)); padding: 9px 14px; background: var(--accent); color: #06070C; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap; }
   .mesh-btn:disabled { opacity: .5; cursor: default; }
   .mesh-log { display: flex; align-items: center; gap: 10px; padding: 8px 16px; font-size: 13px; }
@@ -2420,13 +2469,24 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .content .group:nth-of-type(3) { animation-delay: 0.05s; }
   @keyframes sec-in { from { opacity: 0; transform: translateY(6px); } }
   @media (prefers-reduced-motion: reduce) { .content .group, .content .ap-div, .content .ap-preview { animation: none; } }
-  .group {
+  /* Global inside the panel: sections drawn by child components
+     (NetworkSettings, VoiceVideoSettings) look like the rest. */
+  .ab-link { gap: 12px; }
+  .ab-ic { width: 34px; height: 34px; border-radius: calc(10px * var(--rk, 1)); background: var(--bg-input); display: grid; place-items: center; color: var(--fg); flex-shrink: 0; }
+  .ab-ic svg { width: 19px; height: 19px; }
+  .ab-go { color: var(--fg-dim); font-size: 20px; }
+  .ab-ver { color: var(--fg-dim); font-size: 12px; }
+  .pw-scale { display: flex; justify-content: space-between; font-size: 13px; color: var(--fg-muted); margin: 2px 0 6px; }
+  .pw-scale .mid { color: var(--accent); font-weight: 600; }
+  .pw-dim { opacity: .55; }
+  .label .pill-tag.on { background: var(--accent); color: #06070C; }
+  .content :global(.group), .group {
     margin: 12px 16px 0;
     padding: 12px 16px 14px;
     background: var(--bg-surface);
     border-radius: calc(14px * var(--rk, 1));
   }
-  .label {
+  .content :global(.group > .label), .label {
     font-size: 12px;
     font-weight: 700;
     color: var(--accent);

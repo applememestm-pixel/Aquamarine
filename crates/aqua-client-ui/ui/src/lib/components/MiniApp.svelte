@@ -247,7 +247,7 @@
   <div class="ma-veil" onclick={(e) => { if (e.target === e.currentTarget) void close(); }}>
     <div class="ma" class:full={fullscreen} role="dialog" aria-modal="true" aria-label={$t("Mini app")} style:background={bgColor ?? undefined}>
       <header class="ma-head" style:background={headerColor ?? undefined}>
-        <button class="ma-ic ma-close" onclick={() => close()} aria-label={$t("Close")}>✕</button>
+        <button data-x class="ma-ic ma-close" onclick={() => close()} aria-label={$t("Close")}>✕</button>
         {#if back}
           <button class="ma-ic ma-back" onclick={() => post("back_button_pressed")} aria-label={$t("Back")}>←</button>
         {/if}

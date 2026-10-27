@@ -49,7 +49,7 @@
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div class="veil" onclick={close}>
     <div class="sheet" role="dialog" aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()}>
-      <button class="x" onclick={close} aria-label={$t("Close")}>✕</button>
+      <button data-x class="x" onclick={close} aria-label={$t("Close")}>✕</button>
       <div class="head">
         <div class="stack big">
           {#if group.emoji}

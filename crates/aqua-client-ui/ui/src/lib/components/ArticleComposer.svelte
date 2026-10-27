@@ -504,7 +504,7 @@
           <button class:active={!preview} onclick={() => (preview = false)}>{$t("Edit")}</button>
           <button class:active={preview}  onclick={() => (preview = true)}>{$t("Preview")}</button>
         </div>
-        <button class="close" onclick={closeArticleComposer} title={$t("Close (Esc) — the draft is kept")}>×</button>
+        <button data-x class="close" onclick={closeArticleComposer} title={$t("Close (Esc) — the draft is kept")}>×</button>
       </div>
 
       {#if !preview}

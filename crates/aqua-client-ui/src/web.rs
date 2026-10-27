@@ -461,8 +461,11 @@ pub fn open_external(url: String) -> Result<(), String> {
     let r = std::process::Command::new("open").arg(&s).spawn();
     #[cfg(target_os = "windows")]
     let r = std::process::Command::new("rundll32").args(["url.dll,FileProtocolHandler", &s]).spawn();
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "android")]
+    return crate::relay_host::android::open_url(&s);
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "android")))]
     let r: std::io::Result<std::process::Child> = Err(std::io::Error::other("opening links is not supported here"));
+    #[cfg(not(target_os = "android"))]
     r.map(|_| ()).map_err(|e| e.to_string())
 }
 

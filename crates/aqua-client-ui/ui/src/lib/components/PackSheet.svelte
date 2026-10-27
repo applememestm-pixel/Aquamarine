@@ -105,7 +105,7 @@
             </span>
           {/if}
         </div>
-        <button class="ps-x" onclick={close} aria-label={$t("Close")}>✕</button>
+        <button data-x class="ps-x" onclick={close} aria-label={$t("Close")}>✕</button>
       </header>
 
       {#if error}

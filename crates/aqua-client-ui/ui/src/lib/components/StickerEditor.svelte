@@ -522,7 +522,7 @@
           <button class="ib" onclick={undo} disabled={!canUndo} title={$t("Undo (Ctrl+Z)")} aria-label={$t("Undo")}>↶</button>
           <button class="ib" onclick={redo} disabled={!canRedo} title={$t("Redo (Ctrl+Shift+Z)")} aria-label={$t("Redo")}>↷</button>
         </div>
-        <button class="ib x" onclick={closeStickerEditor} title={$t("Close")}>×</button>
+        <button data-x class="ib x" onclick={closeStickerEditor} title={$t("Close")}>×</button>
       </div>
 
       <div class="body">

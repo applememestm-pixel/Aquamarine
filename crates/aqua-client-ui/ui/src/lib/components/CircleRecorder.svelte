@@ -190,7 +190,7 @@
     <div class="sheet" role="dialog" aria-modal="true" tabindex="-1">
       <div class="head">
         <h2>{$t("Record a circle video")}</h2>
-        <button class="close" onclick={close} title={$t("Close (Esc)")}>×</button>
+        <button data-x class="close" onclick={close} title={$t("Close (Esc)")}>×</button>
       </div>
 
       <div class="stage">

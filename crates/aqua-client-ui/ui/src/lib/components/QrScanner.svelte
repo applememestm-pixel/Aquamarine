@@ -54,7 +54,7 @@
     <div class="qs" role="dialog" aria-modal="true">
       <div class="qs-head">
         <b>{$t("Scan a QR code")}</b>
-        <button class="x" onclick={() => finish(null)} aria-label={$t("Close")}>×</button>
+        <button data-x class="x" onclick={() => finish(null)} aria-label={$t("Close")}>×</button>
       </div>
       <div class="cam">
         <!-- svelte-ignore a11y_media_has_caption -->

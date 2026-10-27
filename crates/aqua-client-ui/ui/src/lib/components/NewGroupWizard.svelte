@@ -95,7 +95,7 @@
     <div class="sheet" role="dialog" aria-modal="true">
       <div class="head">
         <h2>New {kind === "channel" ? "channel" : kind === "supergroup" ? "supergroup" : "group"}</h2>
-        <button class="x" onclick={closeNewGroup}>×</button>
+        <button data-x class="x" onclick={closeNewGroup}>×</button>
       </div>
 
       <div class="seg">

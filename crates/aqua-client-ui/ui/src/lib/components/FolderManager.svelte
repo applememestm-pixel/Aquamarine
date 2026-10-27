@@ -38,7 +38,7 @@
     <div class="fm-sheet" role="dialog" aria-modal="true" tabindex="-1">
       <div class="fm-head">
         <h3>{$t("Chat folders")}</h3>
-        <button class="fm-close" onclick={closeFolderManager} title={$t("Close (Esc)")}>×</button>
+        <button data-x class="fm-close" onclick={closeFolderManager} title={$t("Close (Esc)")}>×</button>
       </div>
 
       <div class="fm-create">

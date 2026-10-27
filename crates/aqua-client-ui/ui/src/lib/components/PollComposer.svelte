@@ -89,7 +89,7 @@
     <div class="pc-sheet" role="dialog" aria-modal="true" tabindex="-1">
       <div class="pc-head">
         <h3>{quiz ? $t("New quiz") : $t("New poll")}</h3>
-        <button class="pc-close" onclick={closePollComposer} title={$t("Close (Esc)")}>×</button>
+        <button data-x class="pc-close" onclick={closePollComposer} title={$t("Close (Esc)")}>×</button>
       </div>
       <div class="pc-body">
         <label class="pc-field">

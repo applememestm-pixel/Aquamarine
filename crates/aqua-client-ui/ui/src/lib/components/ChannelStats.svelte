@@ -28,11 +28,11 @@
   const when = (ms: number) => new Date(ms).toLocaleString(loc(), { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 </script>
 
-<aside class="cs" aria-label={$t("Channel statistics")}>
+<aside class="cs" data-back aria-label={$t("Channel statistics")}>
   <header class="cs-head">
     {#if cur}<button class="cs-back" onclick={() => (sel = null)} aria-label={$t("Back")}>‹</button>{/if}
     <b>📊 {cur ? $t("Post") : $t("Statistics")}</b>
-    <button class="cs-x" onclick={() => statsFor.set(null)} aria-label={$t("Close")}>✕</button>
+    <button data-x class="cs-x" onclick={() => statsFor.set(null)} aria-label={$t("Close")}>✕</button>
   </header>
   <div class="cs-body">
     {#if !cur}

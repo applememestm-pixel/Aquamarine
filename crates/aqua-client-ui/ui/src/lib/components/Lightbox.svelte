@@ -473,7 +473,7 @@
             {@render ico("M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5")}
           {/if}
         </button>
-        <button class="gbtn close" onclick={closeLightbox} title={$t("Close (Esc)")} aria-label={$t("Close")}>
+        <button data-x class="gbtn close" onclick={closeLightbox} title={$t("Close (Esc)")} aria-label={$t("Close")}>
           {@render ico("M6 6l12 12M18 6L6 18")}
         </button>
       </div>

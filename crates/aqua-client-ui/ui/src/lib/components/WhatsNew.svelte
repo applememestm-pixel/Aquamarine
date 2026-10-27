@@ -6,7 +6,7 @@
   const SEEN = "aqua.whatsNew.seen";
   export function openWhatsNew() { if (NOTES.md) open.set(true); }
   /** After an update (not on the very first start): show this version's
-   *  notes once, unless turned off in Settings → Advanced. */
+   *  notes once, unless turned off in Settings → Updates. */
   export function maybeShowWhatsNew(enabled: boolean) {
     if (!NOTES.version || document.documentElement.classList.contains("popout")) return;
     let seen = "";
@@ -21,6 +21,9 @@
   import { onBack } from "../back";
   import { api } from "../tauri";
   import { openSettings } from "../panels/settings";
+  import { LINKS as ALL } from "../links";
+  // One of each place (GitHub, Telegram, X, YouTube).
+  const LINKS = ALL.filter((l, i) => ALL.findIndex((x) => x.label === l.label) === i);
 
   function close() { open.set(false); }
   $effect(() => { if ($open) return onBack(close); });
@@ -67,18 +70,14 @@
     const a = (e.target as Element).closest?.("a[data-ext]") as HTMLAnchorElement | null;
     if (a) { e.preventDefault(); void api.openExternal(a.href).catch(() => {}); }
   }
-  const LINKS = [
-    { label: "Telegram", url: "https://t.me/ShadowIn_TheNight", icon: '<path d="M21.9 4.3 18.6 20c-.2 1.1-.9 1.4-1.8.9l-5-3.7-2.4 2.3c-.3.3-.5.5-1 .5l.4-5.1 9.2-8.3c.4-.4-.1-.6-.6-.2L6 13.6 1.1 12c-1.1-.3-1.1-1.1.2-1.6L20.5 3c.9-.3 1.7.2 1.4 1.3Z" fill="currentColor"/>' },
-    { label: "X", url: "https://x.com/vpst27", icon: '<path d="M17.8 3h3.1l-6.8 7.8 8 10.2h-6.3l-4.9-6.4L5.3 21H2.2l7.3-8.3L1.8 3h6.4l4.4 5.9L17.8 3Zm-1.1 16.2h1.7L7.2 4.7H5.4l11.3 14.5Z" fill="currentColor"/>' },
-    { label: "GitHub", url: "https://github.com/applememestm-pixel/Aquamarine", icon: '<path d="M12 2a10 10 0 0 0-3.2 19.5c.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.3-3.4-1.3-.5-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.5 2.4 1.1 2.9.8.1-.7.4-1.1.6-1.3-2.2-.3-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.8 1a9.6 9.6 0 0 1 5 0c1.9-1.3 2.7-1 2.7-1 .6 1.4.2 2.4.1 2.7.7.7 1 1.6 1 2.7 0 3.9-2.3 4.7-4.6 5 .4.3.7.9.7 1.9v2.8c0 .3.2.6.7.5A10 10 0 0 0 12 2Z" fill="currentColor"/>' },
-  ];
+
 </script>
 
 {#if $open}
   <div class="wn-bg" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) close(); }}>
     <div class="wn" role="dialog" aria-modal="true" aria-label={$t("What's new")}>
       <header>
-        <button class="x" onclick={close} aria-label={$t("Close")}>×</button>
+        <button data-x class="x" onclick={close} aria-label={$t("Close")}>×</button>
         <div class="ttl"><b>{$t("What's new")}</b>{#if date}<small>{date}</small>{/if}</div>
       </header>
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
@@ -89,8 +88,8 @@
           <i class="b1"></i><i class="b2"></i><i class="b3"></i>
         </div>
         <div class="md">{@html html}</div>
-        <p class="off">{$t("Don't want this window after updates? Turn it off in Settings → Advanced → What's new.")}
-          <button class="lnk" onclick={() => { close(); openSettings("advanced"); }}>{$t("Open settings")}</button></p>
+        <p class="off">{$t("Don't want this window after updates? Turn it off in Settings → Updates.")}
+          <button class="lnk" onclick={() => { close(); openSettings("updates"); }}>{$t("Open settings")}</button></p>
       </div>
       <footer>
         {#each LINKS as l (l.url)}

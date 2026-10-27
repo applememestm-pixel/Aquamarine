@@ -435,3 +435,11 @@ html.contrast-rows[data-theme="light"] .alt:not(.active):not(:hover):not(.kb):no
 html.ps-ui *, html.ps-ui *::before, html.ps-ui *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; scroll-behavior: auto !important; }
 html.ps-chat .messages *, html.ps-chat .messages *::before, html.ps-chat .messages *::after { animation: none !important; transition: none !important; }
 html.ps-calls .stage *, html.ps-calls .stage *::before, html.ps-calls .stage *::after, html.ps-calls .gc *, html.ps-calls .gc *::before { animation: none !important; transition: none !important; }
+
+/* Android: windows close with Back (the button or the gesture), like
+   Telegram — no × on them (lib/back.ts closes them, data-x marks the
+   buttons it presses). iOS has no Back, so it keeps them. */
+html.android [data-x] { display: none !important; }
+
+/* Power saving → Particles: the ambient glows behind the app stay still. */
+html.ps-particles body::before, html.ps-particles body::after { animation: none !important; }

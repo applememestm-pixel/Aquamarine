@@ -43,14 +43,14 @@
 </script>
 
 {#if $calendarFor}
-  <aside class="cal" aria-label={$t("Calendar")}>
+  <aside class="cal" data-back aria-label={$t("Calendar")}>
     <header class="cal-head">
       <b>📅 {$t("Calendar")}</b>
       <div class="cal-seg">
         <button class:on={!all} onclick={() => (all = false)}>{$t("This chat")}</button>
         <button class:on={all} onclick={() => (all = true)}>{$t("All chats")}</button>
       </div>
-      <button class="cal-x" onclick={() => calendarFor.set(null)} aria-label={$t("Close")}>✕</button>
+      <button data-x class="cal-x" onclick={() => calendarFor.set(null)} aria-label={$t("Close")}>✕</button>
     </header>
     <div class="cal-body">
       <MonthGrid bind:selected={day} {marks} />

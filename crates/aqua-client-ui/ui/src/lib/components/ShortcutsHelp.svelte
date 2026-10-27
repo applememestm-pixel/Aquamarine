@@ -59,7 +59,7 @@
         <span class="grow"></span>
         <button class="hbtn" onclick={openConfig} title="~/.config/aquamarine/keybindings.json">{$t("Config file")}</button>
         {#if Object.keys($keyOverrides).length}<button class="hbtn" onclick={resetAllBindings}>{$t("Reset all")}</button>{/if}
-        <button class="close" onclick={() => shortcutsOpen.set(false)} title={$t("Close (Esc)")}>×</button>
+        <button data-x class="close" onclick={() => shortcutsOpen.set(false)} title={$t("Close (Esc)")}>×</button>
       </div>
       <div class="cols">
         {#each groups as g}

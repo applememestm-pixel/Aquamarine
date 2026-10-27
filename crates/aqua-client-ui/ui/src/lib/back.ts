@@ -70,10 +70,22 @@ export function startBack(): () => void {
   // already understands.
   const dialogs = new Map<Element, () => void>();
   const scan = () => {
-    for (const el of document.querySelectorAll('[role="dialog"][aria-modal="true"]')) {
+    // Side panels without a modal role (thread, calendar, shared media…)
+    // opt in with data-back; their close button carries data-x.
+    for (const el of document.querySelectorAll('[role="dialog"][aria-modal="true"], [data-back]')) {
       if (dialogs.has(el) || el.closest("[data-own-back]")) continue;
       dialogs.set(el, onBack(() => {
+        // Back used this entry: forget it, so a dialog that is still open
+        // afterwards gets a new one (else the next Back closed the app).
+        dialogs.delete(el);
         el.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+        setTimeout(() => {
+          if (!el.isConnected) return;
+          // Didn't take the Esc: press its own close / cancel button.
+          const btn = el.querySelector<HTMLElement>('[data-x], .close, .x, button[aria-label="Close"], button[aria-label="Закрыть"], .btn-cancel, button.cancel');
+          btn?.click();
+          setTimeout(scan, 60);
+        }, 60);
       }));
     }
     for (const [el, release] of dialogs) {

@@ -224,10 +224,12 @@ export interface Settings {
   /** "What's new" after an update (default on). */
   whatsNew?: boolean;
   // --- Power saving: what may move ---
-  power?: { stickers: boolean; emoji: boolean; chat: boolean; calls: boolean; ui: boolean };
+  power?: { stickers: boolean; emoji: boolean; chat: boolean; calls: boolean; ui: boolean; particles?: boolean };
+  /** Power saving mode: 0 off, 100 always, else "when the battery is below N%". */
+  powerMode?: number;
 }
 
-export const POWER_DEFAULT = { stickers: true, emoji: true, chat: true, calls: true, ui: true };
+export const POWER_DEFAULT = { stickers: true, emoji: true, chat: true, calls: true, ui: true, particles: true };
 export const AUTODL_DEFAULT = { private: true, groups: true, channels: true, limitMb: 25 };
 
 /** See-through menus: how solid they are unless the slider says otherwise —
@@ -263,9 +265,9 @@ export const DEFAULTS: Settings = {
  */
 let uiScaleNow = 1;
 const PHONE_UA = typeof navigator !== "undefined" && /android|iphone|ipad/i.test(navigator.userAgent);
-function applyUiScale(scale: number) {
+function applyUiScale(scale: number, force = false) {
   const s = Math.max(0.8, Math.min(1.3, Number(scale) || 1));
-  if (Math.abs(s - uiScaleNow) < 0.001) return;
+  if (!force && Math.abs(s - uiScaleNow) < 0.001) return;
   uiScaleNow = s;
   const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
   if (inTauri && !PHONE_UA) {
@@ -276,9 +278,17 @@ function applyUiScale(scale: number) {
   }
   const meta = document.querySelector('meta[name="viewport"]');
   if (!meta) return;
+  // The width is spelled out: with only a scale, Android's WebView laid the
+  // page out at the screen's width and then shrank it — the app filled 90%
+  // of the screen with empty strips on the right and at the bottom.
+  const w = Math.round((screen.width || innerWidth) / s);
   meta.setAttribute("content", s === 1
     ? "width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
-    : `initial-scale=${s}, minimum-scale=${s}, maximum-scale=${s}, user-scalable=no, viewport-fit=cover`);
+    : `width=${w}, initial-scale=${s}, minimum-scale=${s}, maximum-scale=${s}, user-scalable=no, viewport-fit=cover`);
+}
+if (typeof window !== "undefined" && PHONE_UA) {
+  // Turning the phone changes the screen's width.
+  window.addEventListener("orientationchange", () => setTimeout(() => applyUiScale(uiScaleNow, true), 250));
 }
 
 const KEY = "aqua-settings";
@@ -437,11 +447,7 @@ function apply(s: Settings) {
   root.style.setProperty("--ava-r", pct(s.avatarRadius));
   root.style.setProperty("--ava-r-group", pct(s.avatarRadiusGroup ?? s.avatarRadius));
   root.style.setProperty("--ava-r-chan", pct(s.avatarRadiusChannel ?? s.avatarRadius));
-  const pw = { ...POWER_DEFAULT, ...(s.power ?? {}) };
-  root.classList.toggle("ps-ui", !pw.ui);
-  root.classList.toggle("ps-chat", !pw.chat);
-  root.classList.toggle("ps-calls", !pw.calls);
-  root.classList.toggle("ps-emoji", !pw.emoji);
+  // Power saving classes: lib/power.ts (it also watches the battery).
   root.style.setProperty("--menu-alpha", `${Math.round((s.menuAlpha ?? MENU_ALPHA) * 100)}%`);
 
   // Custom UI font loaded from a file the user picked.

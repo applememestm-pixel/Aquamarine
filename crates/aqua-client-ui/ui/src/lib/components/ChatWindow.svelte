@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { power } from "../power";
   import { emojiStatusOf } from "../people";
   import EmojiStatus from "./EmojiStatus.svelte";
   import { tick, onMount, untrack } from "svelte";
@@ -3241,7 +3242,7 @@
                 {:else if rk === "gif" || rk === "image"}
                   <div class="bubble media-bubble">
                     {#if url}
-                      {#if rk === "gif" && !$settings.autoplayGifs && !gifPlaying.has(m.id)}
+                      {#if rk === "gif" && !$power.gifs && !gifPlaying.has(m.id)}
                         <!-- Autoplay off: a still frame until clicked. -->
                         <button class="media-img-btn gif-still" onclick={() => gifPlaying.add(m.id)} title={$t("Play GIF")}>
                           {#await gifStill(url) then still}<img class="media-img" src={still} alt={content.name} />{/await}
@@ -3268,7 +3269,7 @@
                   <div class="circle-wrap">
                     {#if url}
                       <!-- svelte-ignore a11y_media_has_caption -->
-                      <video class="circle-vid" use:streamSrc={url} loop playsinline autoplay={$settings.autoplayVideos} muted
+                      <video class="circle-vid" use:streamSrc={url} loop playsinline autoplay={$power.videos} muted
                         onclick={(e) => { const v = e.currentTarget as HTMLVideoElement; v.muted = !v.muted; }}
                         title={$t("Click to toggle sound")}></video>
                     {:else}
