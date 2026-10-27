@@ -5011,10 +5011,10 @@
   .ap-alb-n { color: var(--fg-dim); font-size: 14px; font-variant-numeric: tabular-nums; }
   /* Square tiles. The rows are sized by the tiles (max-content): with "auto"
      rows a too-short container squeezed them into overlapping strips. */
-  .ap-gallery { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  .ap-gallery { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); justify-items: stretch;
     grid-auto-rows: max-content; gap: 3px; padding: 0 3px calc(92px + env(safe-area-inset-bottom, 0px) + var(--rest)); align-content: start; }
   .attach-pop.sheet.full .ap-gallery { padding-bottom: calc(92px + env(safe-area-inset-bottom, 0px)); }
-  .ap-tile { position: relative; aspect-ratio: 1 / 1; width: 100%; height: auto; min-height: 0; border: none; padding: 0; overflow: hidden; background: var(--bg-surface-2); color: var(--fg-muted); border-radius: calc(4px * var(--rk, 1)); }
+  .ap-tile { position: relative; aspect-ratio: 1 / 1; width: 100%; height: auto; min-height: 0; min-width: 0; box-sizing: border-box; display: block; border: none; padding: 0; overflow: hidden; background: var(--bg-surface-2); color: var(--fg-muted); border-radius: calc(4px * var(--rk, 1)); }
   .ap-tile img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .22s cubic-bezier(.22,1,.36,1), border-radius .22s ease; }
   .ap-tile.on img { transform: scale(.86); border-radius: calc(8px * var(--rk, 1)); }
   .ap-pick, .ap-allow { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; font-size: 13px; font-weight: 600; }
@@ -5041,7 +5041,9 @@
     overscroll-behavior-x: contain;
   }
   .ap-dock .ap-items::-webkit-scrollbar { display: none; }
-  .ap-dock .ap-item { flex: 0 0 66px; width: 66px; flex-direction: column; justify-content: center; gap: 2px; padding: 6px 2px; border-radius: calc(20px * var(--rk, 1)); font-size: 10.5px; text-align: center; }
+  /* Evenly across the bar (they were packed to the left, names cut). */
+  .ap-dock .ap-items { justify-content: space-between; }
+  .ap-dock .ap-item { flex: 1 0 62px; width: auto; min-width: 62px; flex-direction: column; justify-content: center; gap: 2px; padding: 6px 2px; border-radius: calc(20px * var(--rk, 1)); font-size: 10.5px; text-align: center; }
   .ap-dock .ap-item span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
   .ap-dock .ap-item :global(svg) { width: 21px; height: 21px; }
   .ap-dock .ap-item:hover { background: transparent; color: inherit; }

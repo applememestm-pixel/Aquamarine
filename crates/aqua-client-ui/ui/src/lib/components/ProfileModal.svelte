@@ -426,7 +426,7 @@
     onclick={onBackdrop}
     onkeydown={(e) => { if (e.target === e.currentTarget && (e.key === "Escape" || e.key === "Enter")) closeProfile(); }}
   >
-    <div class="sheet" class:wide={!editing && !privPage} class:ed={editing && isMe && !!draft} style:--card={cardColor} role="dialog" aria-modal="true" tabindex="-1">
+    <div class="sheet" data-phone-full class:wide={!editing && !privPage} class:ed={editing && isMe && !!draft} style:--card={cardColor} role="dialog" aria-modal="true" tabindex="-1">
       <!-- Close stays put; banner + body scroll together, so the avatar is
            never clipped under the banner when the form is long. -->
       <button data-x class="close" onclick={closeProfile} title={$t("Close (Esc)")}>×</button>

@@ -41,6 +41,9 @@
 }
 
 html, body { height: 100%; }
+/* Fields with width:100% and padding stayed inside their box (they ran out
+   of dialogs on phones — the new-poll window). */
+input, textarea, select { box-sizing: border-box; }
 body {
   margin: 0;
   background: var(--bg-void);
@@ -396,7 +399,7 @@ html.autoscrolling.as-down, html.autoscrolling.as-down * { cursor: url("data:ima
   [role="dialog"][aria-modal="true"] { overflow-x: hidden; }
   /* …except the ones that ARE the whole screen (photo viewer): capped, they
      stopped 16px short and sat shifted to the left. */
-  [role="dialog"][aria-modal="true"].fullscreen-layer { max-width: none !important; max-height: none !important; }
+  [role="dialog"][aria-modal="true"]:is(.fullscreen-layer, [data-phone-full]) { max-width: none !important; max-height: none !important; }
 }
 
 /* Settings → Appearance → See-through menus: frosted glass for menus,

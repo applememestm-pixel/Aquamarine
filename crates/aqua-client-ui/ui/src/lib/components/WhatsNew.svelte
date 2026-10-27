@@ -75,7 +75,7 @@
 
 {#if $open}
   <div class="wn-bg" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) close(); }}>
-    <div class="wn" role="dialog" aria-modal="true" aria-label={$t("What's new")}>
+    <div class="wn" data-phone-full role="dialog" aria-modal="true" aria-label={$t("What's new")}>
       <header>
         <button data-x class="x" onclick={close} aria-label={$t("Close")}>×</button>
         <div class="ttl"><b>{$t("What's new")}</b>{#if date}<small>{date}</small>{/if}</div>

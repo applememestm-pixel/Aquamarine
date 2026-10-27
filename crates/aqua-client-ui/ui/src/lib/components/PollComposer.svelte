@@ -86,7 +86,7 @@
   <div class="pc-backdrop" role="button" tabindex="-1" aria-label={$t("Close")}
        onclick={(e) => { if ((e.target as HTMLElement).classList.contains("pc-backdrop")) closePollComposer(); }}
        onkeydown={(e) => { if (e.key === "Escape") closePollComposer(); }}>
-    <div class="pc-sheet" role="dialog" aria-modal="true" tabindex="-1">
+    <div class="pc-sheet" data-phone-full role="dialog" aria-modal="true" tabindex="-1">
       <div class="pc-head">
         <h3>{quiz ? $t("New quiz") : $t("New poll")}</h3>
         <button data-x class="pc-close" onclick={closePollComposer} title={$t("Close (Esc)")}>×</button>
@@ -168,6 +168,12 @@
     width: min(460px, 94vw); max-height: 88vh; display: flex; flex-direction: column;
     background: var(--bg-shell); border: 1px solid var(--border);
     border-radius: calc(16px * var(--rk, 1)); overflow: hidden; box-shadow: 0 32px 80px -16px rgba(0,0,0,0.6);
+  }
+  @media (max-width: 720px) {
+    .pc-backdrop { padding: 0 !important; place-items: stretch !important; }
+    .pc-sheet { width: 100% !important; max-width: none !important; height: 100% !important; max-height: none !important; border-radius: 0 !important; border: none !important;
+      padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+    .pc-body { flex: 1; }
   }
   .pc-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--border); }
   .pc-head h3 { margin: 0; font-size: 14.5px; font-weight: 700; }
