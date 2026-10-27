@@ -57,7 +57,7 @@
         host.style.cssText = `position:fixed;left:-10000px;top:0;width:${size}px;height:${size}px;`;
         document.body.appendChild(host);
         try {
-          const a = lottie.loadAnimation({ container: host, renderer: "canvas", loop: false, autoplay: false, animationData: data, rendererSettings: { clearCanvas: true } });
+          const a = lottie.loadAnimation({ container: host, renderer: "canvas", loop: false, autoplay: false, animationData: data, rendererSettings: { clearCanvas: true, dpr: Math.min(3, Math.max(2, window.devicePixelRatio || 1)) } });
           a.goToAndStop(0, true);
           const c = host.querySelector("canvas");
           const out = c ? c.toDataURL("image/png") : "";
@@ -154,7 +154,9 @@
           loop: true,
           autoplay: false,
           animationData: data,
-          rendererSettings: { preserveAspectRatio: "xMidYMid meet", clearCanvas: true },
+          // At least 2× the CSS size: at 1× the canvas looked soft
+          // in the picker, and stickers are small anyway.
+          rendererSettings: { preserveAspectRatio: "xMidYMid meet", clearCanvas: true, dpr: Math.min(3, Math.max(2, window.devicePixelRatio || 1)) },
         });
         anim.goToAndStop(0, true);
         sync();

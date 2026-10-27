@@ -16,6 +16,8 @@ pub fn keeps_running() -> bool {
 pub fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
+        // Phones have no minimized windows (and no such method).
+        #[cfg(desktop)]
         let _ = w.unminimize();
         let _ = w.set_focus();
     }

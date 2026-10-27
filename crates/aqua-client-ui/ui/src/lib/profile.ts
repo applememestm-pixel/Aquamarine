@@ -39,6 +39,9 @@ export interface Profile {
   game_note?: string;
   /** Profile version — bumped on every publish so peers refetch the card. */
   pv?: number;
+  /** The emoji next to my name: a pack emoji token (`ce:pack/file|😀`) or a
+   *  plain emoji; "" = none. */
+  estatus?: string;
   /** Colour of the whole profile card; "" = taken from the banner. */
   card?: string;
   /** An emoji repeated over the banner in a soft pattern (Telegram-style). */

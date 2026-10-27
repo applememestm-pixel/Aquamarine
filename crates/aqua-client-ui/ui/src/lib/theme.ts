@@ -210,6 +210,9 @@ export interface Settings {
   // --- Look of avatars ---
   /** Corner of avatars in % of their size: 50 = circle, 0 = square. */
   avatarRadius?: number;
+  /** The same for groups / servers and for channels. */
+  avatarRadiusGroup?: number;
+  avatarRadiusChannel?: number;
   // --- Window title bar (desktop) ---
   titleChatName?: boolean;
   titleAccount?: boolean;
@@ -218,6 +221,8 @@ export interface Settings {
   tray?: boolean;
   trayMono?: boolean;
   restoreWindows?: boolean;
+  /** "What's new" after an update (default on). */
+  whatsNew?: boolean;
   // --- Power saving: what may move ---
   power?: { stickers: boolean; emoji: boolean; chat: boolean; calls: boolean; ui: boolean };
 }
@@ -428,7 +433,10 @@ function apply(s: Settings) {
   root.classList.toggle("glass-menus", !!s.glassMenus);
   root.classList.toggle("contrast-rows", !!s.contrastRows);
   root.style.setProperty("--rk", String(s.corners ?? 1));
-  root.style.setProperty("--ava-r", `${Math.max(0, Math.min(50, s.avatarRadius ?? 50))}%`);
+  const pct = (v: number | undefined) => `${Math.max(0, Math.min(50, v ?? 50))}%`;
+  root.style.setProperty("--ava-r", pct(s.avatarRadius));
+  root.style.setProperty("--ava-r-group", pct(s.avatarRadiusGroup ?? s.avatarRadius));
+  root.style.setProperty("--ava-r-chan", pct(s.avatarRadiusChannel ?? s.avatarRadius));
   const pw = { ...POWER_DEFAULT, ...(s.power ?? {}) };
   root.classList.toggle("ps-ui", !pw.ui);
   root.classList.toggle("ps-chat", !pw.chat);

@@ -299,6 +299,7 @@ pub fn run() -> Result<()> {
             storage::storage_stats,
             storage::storage_clear,
             storage::storage_trim,
+            storage::storage_traffic,
             storage::export_chats,
             tray::tray_set,
             commands::send_call_signal,

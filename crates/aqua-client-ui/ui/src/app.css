@@ -322,6 +322,9 @@ input[type="checkbox"]:disabled, input[type="radio"]:disabled { opacity: .5; cur
   border-radius: var(--ava-r, 50%);
   object-fit: cover;
 }
+/* Groups and channels have their own corner (Settings → Advanced). */
+.avatar.ava-grp, .avatar.ava-grp > .ava-img { border-radius: var(--ava-r-group, var(--ava-r, 50%)); }
+.avatar.ava-chan, .avatar.ava-chan > .ava-img { border-radius: var(--ava-r-chan, var(--ava-r, 50%)); }
 .avatar.sz-44 { width: 44px; height: 44px; font-size: 15px; }
 .avatar.sz-40 { width: 40px; height: 40px; font-size: 14px; }
 .avatar.sz-34 { width: 34px; height: 34px; font-size: 13px; }

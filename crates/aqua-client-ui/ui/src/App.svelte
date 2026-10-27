@@ -11,7 +11,8 @@
   import { api } from "./lib/tauri";
   import { bootstrap, activeTab, info, activeId, backToList, connect, quickConnect } from "./lib/stores";
   import { openRegistration, closeRegistration, registrationDismissed, wizardHold } from "./lib/components/RegistrationWizard.svelte";
-  import { initTheme } from "./lib/theme";
+  import { initTheme, settings } from "./lib/theme";
+  import { get } from "svelte/store";
   import NavRail from "./lib/components/NavRail.svelte";
   import ChatList from "./lib/components/ChatList.svelte";
   import ChatWindow from "./lib/components/ChatWindow.svelte";
@@ -22,6 +23,7 @@
   import InputPrompt from "./lib/components/InputPrompt.svelte";
   import NewChatSheet from "./lib/components/NewChatSheet.svelte";
   import QrScanner from "./lib/components/QrScanner.svelte";
+  import WhatsNew, { maybeShowWhatsNew } from "./lib/components/WhatsNew.svelte";
   import Toast, { showToast } from "./lib/components/Toast.svelte";
   import Confirm from "./lib/components/Confirm.svelte";
   import SendDialog from "./lib/components/SendDialog.svelte";
@@ -182,6 +184,7 @@
     window.addEventListener("contextmenu", noNativeMenu);
     initGroupCalls();
     initTheme();
+    maybeShowWhatsNew(get(settings).whatsNew !== false);
     // Message times in this device's time zone (Rust can't ask Android for it).
     void api.setTzOffset(-new Date().getTimezoneOffset()).catch(() => {});
     bootstrap();
@@ -338,6 +341,7 @@
 <InputPrompt />
 <NewChatSheet />
 <QrScanner />
+<WhatsNew />
 <CallModal />
 <MediaPicker />
 <Lazy when={$settingsOpen} load={() => import("./lib/components/SettingsPanel.svelte")} />

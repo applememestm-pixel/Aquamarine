@@ -19,6 +19,20 @@ function commit(): string {
   if (process.env.GITHUB_SHA) return process.env.GITHUB_SHA;
   try { return execSync("git rev-parse HEAD", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim(); } catch { return ""; }
 }
+// "What's new" after an update: this version's release notes and date,
+// baked into the build (docs/releases/vX.Y.Z.md, CHANGELOG.md).
+function notes(version: string): { version: string; date: string; md: string } {
+  const root = new URL("../../../", import.meta.url);
+  let md = "", date = "";
+  try { md = readFileSync(new URL(`docs/releases/v${version}.md`, root), "utf8"); } catch { /* no notes */ }
+  try {
+    const cl = readFileSync(new URL("CHANGELOG.md", root), "utf8");
+    date = new RegExp(`## \\[${version.replace(/\./g, "\\.")}\\] — (\\d{4}-\\d{2}-\\d{2})`).exec(cl)?.[1] ?? "";
+  } catch { /* none */ }
+  return { version, date, md };
+}
+const pkgVersion: string = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
+
 const channel = process.env.NIGHTLY === "true" ? "nightly" : process.env.NIGHTLY === "false" ? "stable" : "dev";
 
 export default defineConfig(async () => ({
@@ -37,8 +51,9 @@ export default defineConfig(async () => ({
     __AQ_BUILD__: JSON.stringify({
       commit: commit(),
       channel,
-      version: JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version,
+      version: pkgVersion,
     }),
+    __AQ_NOTES__: JSON.stringify(notes(pkgVersion)),
   },
   build: {
     target: "es2022",

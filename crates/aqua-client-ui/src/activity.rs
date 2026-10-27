@@ -236,6 +236,17 @@ fn video_player(exe: &str, title: &str) -> Option<Activity> {
     }
 }
 
+/// "lichess.org", "github.com", "Free Online Chess" — a site, not a song.
+fn looks_like_site(s: &str) -> bool {
+    let l = s.to_lowercase();
+    let domain = l.split(|c: char| c.is_whitespace() || c == '/' || c == '(' || c == ')').any(|w| {
+        let w = w.trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '-');
+        w.contains('.') && w.rsplit('.').next().is_some_and(|tld| (2..=6).contains(&tld.len()) && tld.chars().all(|c| c.is_ascii_alphabetic()))
+    });
+    domain || ["lichess", "chess", "github", "gitlab", "discord", "reddit", "online", "free ", "login", "sign in", "inbox", "google", "яндекс", "вконтакте"]
+        .iter().any(|k| l.contains(k))
+}
+
 fn browser_tab(title: &str) -> Option<Activity> {
     let t = strip_browser_suffix(title);
     let act = |kind: &str, name: &str, details: &str, state: &str| Activity {
@@ -264,9 +275,13 @@ fn browser_tab(title: &str) -> Option<Activity> {
         let (track, artist) = split_artist_title(d)?;
         return Some(act("listening", "Яндекс Музыка", &track, &artist));
     }
-    // Spotify Web player tab: "Track • Artist" while playing.
+    // Spotify Web player tab: "Track • Artist" while playing. Plenty of other
+    // sites use " • " too ("Play vs Bob • lichess.org" showed as Spotify),
+    // so: no site name / domain on either side, nothing after a "|".
     if let Some((track, artist)) = t.split_once(" • ") {
-        if !track.trim().is_empty() && !artist.trim().is_empty() && !artist.contains("Spotify") {
+        if !track.trim().is_empty() && !artist.trim().is_empty() && !artist.contains("Spotify")
+            && !looks_like_site(track) && !looks_like_site(artist) && !t.contains(" | ") && t.matches(" • ").count() == 1
+        {
             return Some(act("listening", "Spotify", track, artist));
         }
     }
@@ -716,6 +731,15 @@ mod winmedia {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn chess_is_not_spotify() {
+        use super::browser_tab as b;
+        assert!(b("Play vs Bob • lichess.org — Mozilla Firefox").is_none());
+        assert!(b("lichess.org • Free Online Chess - Google Chrome").is_none());
+        let a = b("Bohemian Rhapsody • Queen - Google Chrome").unwrap();
+        assert_eq!((a.name.as_str(), a.details.as_str(), a.state.as_str()), ("Spotify", "Bohemian Rhapsody", "Queen"));
+    }
+
     #[test]
     fn windows_media_apps() {
         use super::windows_app_name as n;

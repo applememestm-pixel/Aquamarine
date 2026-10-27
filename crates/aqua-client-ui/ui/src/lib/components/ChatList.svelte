@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { emojiStatusOf } from "../people";
+  import EmojiStatus from "./EmojiStatus.svelte";
   import { onBack } from "../back";
   import AnimatedMedia from "./AnimatedMedia.svelte";
   import { hasMarkup, plainText } from "../markup";
@@ -748,7 +750,7 @@
           </div>
         {:else}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="avatar sz-44" class:lk style="--gradient: {c.gradient}" onpointerdown={(e) => peekDown(e, c.id)} title={compact ? undefined : $t("Hold to peek")}>
+        <div class="avatar sz-44" class:lk class:ava-grp={c.id.startsWith("grp_") && !c.channel} class:ava-chan={c.channel} style="--gradient: {c.gradient}" onpointerdown={(e) => peekDown(e, c.id)} title={compact ? undefined : $t("Hold to peek")}>
           {lk ? "" : c.letter}
           {#if $avatars[c.id] && !lk}<img class="ava-img" src={$avatars[c.id]} alt="" loading="lazy" />{/if}
           {#if lk}<span class="lk-ic">{@html icons.lock}</span>{/if}
@@ -758,7 +760,7 @@
         <div class="chat-body">
           <div class="chat-row-1">
             <span class="chat-name">
-              <span class="cn-text" class:lk-blur={lk}>{lk ? "•••••••" : c.name}</span>
+              <span class="cn-text" class:lk-blur={lk}>{lk ? "•••••••" : c.name}</span>{#if !lk && !c.id.startsWith("grp_")}<EmojiStatus token={emojiStatusOf($peerCards, c.id)} size={16} />{/if}
               {#if inGroup}<!-- svelte-ignore a11y_no_static_element_interactions --><!-- svelte-ignore a11y_click_events_have_key_events --><span class="g-tag" onclick={(e) => { e.stopPropagation(); openGroupId.set(inGroup.id); }} title={$t("Chat group")}>{inGroup.emoji ?? "▣"} {inGroup.name}</span>{/if}
               {#if c.verified}<span class="verified-badge">{@html icons.verified}</span>{/if}
               {#if $clans[c.id]}<ClanTag tag={$clans[c.id]} />{/if}

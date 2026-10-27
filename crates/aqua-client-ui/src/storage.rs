@@ -205,6 +205,46 @@ pub fn storage_stats(state: State<'_, StdMutex<AppState>>) -> Result<StorageStat
     Ok(st)
 }
 
+/// Where the traffic came from / went to: per kind, per chat. Received =
+/// files downloaded to this device; sent = files I sent.
+#[derive(Debug, Default, Serialize)]
+pub struct TrafficRow { pub chat: String, pub name: String, pub bytes: u64, pub count: u64 }
+
+#[derive(Debug, Default, Serialize)]
+pub struct Traffic {
+    pub received: std::collections::BTreeMap<String, Vec<TrafficRow>>,
+    pub sent: std::collections::BTreeMap<String, Vec<TrafficRow>>,
+}
+
+#[tauri::command]
+pub fn storage_traffic(state: State<'_, StdMutex<AppState>>) -> Result<Traffic, String> {
+    use std::collections::{BTreeMap, HashMap};
+    let s = state.lock().map_err(|e| e.to_string())?;
+    let mut rx: HashMap<(String, String), (u64, u64)> = HashMap::new();
+    let mut tx: HashMap<(String, String), (u64, u64)> = HashMap::new();
+    let mut names: HashMap<String, String> = HashMap::new();
+    for (id, b) in &s.chats {
+        names.insert(id.clone(), b.summary.name.clone());
+        for m in &b.messages {
+            if let MessageKind::File { name, size, mime, category, saved_at, .. } = &m.kind {
+                let k = kind_of(name, mime.as_deref(), category.as_deref()).to_string();
+                let slot = if m.from == "me" { &mut tx } else if saved_at.is_some() { &mut rx } else { continue };
+                let e = slot.entry((k, id.clone())).or_default();
+                e.0 += *size; e.1 += 1;
+            }
+        }
+    }
+    let fold = |m: HashMap<(String, String), (u64, u64)>| {
+        let mut out: BTreeMap<String, Vec<TrafficRow>> = BTreeMap::new();
+        for ((k, chat), (bytes, count)) in m {
+            out.entry(k).or_default().push(TrafficRow { name: names.get(&chat).cloned().unwrap_or_else(|| chat.clone()), chat, bytes, count });
+        }
+        for v in out.values_mut() { v.sort_by(|a, b| b.bytes.cmp(&a.bytes)); v.truncate(12); }
+        out
+    };
+    Ok(Traffic { received: fold(rx), sent: fold(tx) })
+}
+
 /// Forget the local copy of these files: delete them and clear the
 /// message's `saved_at`, so they can be downloaded again (they stay on the
 /// relay as long as it keeps them).

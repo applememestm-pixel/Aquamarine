@@ -129,53 +129,109 @@
   }
 
 
-  // ---- tour: the phone shows whichever card is in the middle of the screen ----
-  const phone = document.querySelector(".tour-phone");
-  if (phone) {
-    const cards = [...document.querySelectorAll(".tour-card")];
+  // ---- tour: a carousel. Arrows on both sides, dots, ←/→, a swipe on the
+  // phone; it moves on by itself until someone touches it. ----
+  const tour = document.querySelector(".tour");
+  const phone = tour && tour.querySelector(".tour-phone");
+  if (tour && phone) {
+    const cards = [...tour.querySelectorAll(".tour-card")];
+    const dots = tour.querySelector(".tour-dots");
+    const prog = document.createElement("i");
+    prog.className = "tp-progress"; phone.appendChild(prog);
     const typed = phone.querySelector(".tp-typed");
-    let typer = 0;
+    let typer = 0, cur = -1, timer = 0, manual = false;
+    const AUTO = 7000;
+    tour.style.setProperty("--auto", AUTO + "ms");
     const typeIt = () => {
       if (!typed) return;
       clearInterval(typer);
-      const word = "party";
-      let i = 0;
-      typed.dataset.text = "";
+      const word = typed.dataset.word || (typed.dataset.word = typed.dataset.text || "race");
+      let i = 0; typed.dataset.text = "";
       typer = setInterval(() => { typed.dataset.text = word.slice(0, ++i); if (i >= word.length) clearInterval(typer); }, 120);
     };
-    const show = (card) => {
-      cards.forEach((c) => c.classList.toggle("on", c === card));
-      const step = card.dataset.step;
-      if (phone.dataset.on === step) return;
+    const dotBtns = cards.map((c, i) => {
+      const d = document.createElement("button");
+      d.type = "button"; d.setAttribute("role", "tab");
+      d.setAttribute("aria-label", (i + 1) + ": " + (c.querySelector("h3")?.textContent || ""));
+      d.addEventListener("click", () => { manual = true; go(i); });
+      dots.appendChild(d);
+      return d;
+    });
+    const restartAuto = () => {
+      clearTimeout(timer);
+      tour.classList.remove("playing");
+      if (reduce || manual) return;
+      void prog.offsetWidth;
+      tour.classList.add("playing");
+      timer = setTimeout(() => go(cur + 1), AUTO);
+    };
+    function go(i) {
+      const n = cards.length;
+      i = ((i % n) + n) % n;
+      const dir = i > cur || (cur === n - 1 && i === 0) ? 1 : -1;
+      cards.forEach((c, j) => {
+        c.style.setProperty("--from", (j === i ? -dir * 30 : dir * -30) + "px");
+        c.classList.toggle("on", j === i);
+        c.setAttribute("aria-hidden", String(j !== i));
+      });
+      dotBtns.forEach((d, j) => { d.classList.toggle("on", j === i); d.setAttribute("aria-selected", String(j === i)); });
+      cur = i;
+      const step = cards[i].dataset.step;
       phone.dataset.on = step;
       // restart the screen's little animations
       phone.querySelectorAll(`[data-screen="${step}"] *`).forEach((el) => { el.style.animation = "none"; void el.offsetWidth; el.style.animation = ""; });
       if (step === "gif") typeIt();
-    };
-    // The card nearest to the reading line wins (the middle of the screen;
-    // on phones, the part below the sticky phone).
-    let pend = 0;
-    const pick = () => {
-      pend = 0;
-      const narrow = innerWidth <= 900;
-      const line = narrow ? innerHeight * 0.78 : innerHeight * 0.5;
-      let best = cards[0], bd = Infinity;
-      for (const c of cards) {
-        const r = c.getBoundingClientRect();
-        const d = Math.abs((r.top + r.bottom) / 2 - line);
-        if (d < bd) { bd = d; best = c; }
+      restartAuto();
+    }
+    const step = (d) => { manual = true; go(cur + d); };
+    tour.querySelector(".tour-arrow.prev").addEventListener("click", () => step(-1));
+    tour.querySelector(".tour-arrow.next").addEventListener("click", () => step(1));
+    tour.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowLeft") { e.preventDefault(); step(-1); }
+      if (e.key === "ArrowRight") { e.preventDefault(); step(1); }
+    });
+    // Swipe (or drag with the mouse) across the phone.
+    let sx = null;
+    phone.addEventListener("pointerdown", (e) => { sx = e.clientX; });
+    addEventListener("pointerup", (e) => {
+      if (sx === null) return;
+      const dx = e.clientX - sx; sx = null;
+      if (Math.abs(dx) > 40) step(dx < 0 ? 1 : -1);
+    });
+    // Waits while the pointer is over it or it's off screen.
+    tour.addEventListener("pointerenter", () => { clearTimeout(timer); tour.classList.remove("playing"); });
+    tour.addEventListener("pointerleave", restartAuto);
+    if ("IntersectionObserver" in window) new IntersectionObserver((es) => {
+      for (const e of es) if (e.isIntersecting) restartAuto(); else { clearTimeout(timer); tour.classList.remove("playing"); }
+    }).observe(tour);
+
+    // The owner's sticker / emoji packs (tools/site-packs.sh) replace the
+    // stand-ins when the site has them.
+    fetch("assets/packs/manifest.json").then((r) => (r.ok ? r.json() : null)).then((m) => {
+      if (!m) return;
+      const el = (src, cls) => {
+        const v = /\.webm$/i.test(src);
+        const x = document.createElement(v ? "video" : "img");
+        x.src = src; if (cls) x.className = cls;
+        if (v) { x.muted = true; x.loop = true; x.autoplay = true; x.playsInline = true; } else x.loading = "lazy";
+        return x;
+      };
+      if (m.sticker && m.sticker.length) {
+        const grid = phone.querySelector('[data-pack="sticker"]');
+        grid.replaceChildren(...m.sticker.slice(0, 8).map((src) => { const d = document.createElement("div"); d.className = "st"; d.appendChild(el(src)); return d; }));
+        phone.querySelector("[data-pack-sent]").replaceChildren(el(m.sticker[0]));
       }
-      show(best);
-    };
-    addEventListener("scroll", () => { if (!pend) pend = requestAnimationFrame(pick); }, { passive: true });
-    addEventListener("resize", pick);
-    pick();
+      if (m.emoji && m.emoji.length) {
+        phone.querySelector('[data-pack="emoji"]').replaceChildren(...m.emoji.slice(0, 7).map((src) => el(src)));
+      }
+    }).catch(() => { /* no packs on this copy of the site */ });
+    go(0);
   }
 
   // ---- the cursor: a small teal dot instead of the arrow, a thin comet
   // tail behind it (the colour of the site's text selection). Selecting
   // text or typing brings the normal cursor back. A button in the nav turns
-  // the tail off (remembered); the dot stays. ----
+  // both off (remembered): the normal cursor, no tail. ----
   if (!reduce && matchMedia("(pointer: fine)").matches) {
     const FX_KEY = "aqua.site.fx";
     let fxOn = (() => { try { return localStorage.getItem(FX_KEY) !== "off"; } catch { return true; } })();
@@ -200,8 +256,12 @@
     // the pointer a little (smoothing), so the tail curves instead of zigzagging.
     const TAIL = 480, WIDTH = 2.6;
     let pts = [], head = null, target = null, still = 0;
+    const wipe = () => { pts = []; head = null; tx.clearRect(0, 0, tw, th); };
     const tick = (now) => {
       tRaf = 0;
+      // Turned off (or the pointer left): nothing more is drawn, and the
+      // loop doesn't keep itself alive by chasing the pointer.
+      if (!fxOn || !target) { wipe(); return; }
       if (target) {
         if (!head) head = { ...target };
         head.x += (target.x - head.x) * 0.32; head.y += (target.y - head.y) * 0.32;
@@ -234,7 +294,7 @@
     // fields to type in.
     const TYPING = "input, textarea, select, [contenteditable=''], [contenteditable='true']";
     let selecting = false, overField = false;
-    const native = () => selecting || overField;
+    const native = () => !fxOn || selecting || overField;
     const paint = () => {
       const show = !native() && !!target;
       root.classList.toggle("fx-cursor", !native());
@@ -258,8 +318,11 @@
     }, { passive: true });
     addEventListener("pointerdown", () => dot.classList.add("press"), { passive: true });
     addEventListener("pointerup", () => dot.classList.remove("press"), { passive: true });
-    document.addEventListener("pointerleave", () => { target = null; head = null; paint(); });
-    document.documentElement.addEventListener("mouseleave", () => { target = null; head = null; paint(); });
+    const away = () => { target = null; wipe(); paint(); };
+    document.addEventListener("pointerleave", away);
+    document.documentElement.addEventListener("mouseleave", away);
+    addEventListener("blur", away);
+    document.addEventListener("visibilitychange", () => { if (document.hidden) away(); });
 
     // The switch in the nav.
     const btn = document.createElement("button");
@@ -268,7 +331,7 @@
       // The same language the page picks (index.html, docs.js).
       let ru = true;
       try { ru = (localStorage.getItem("aqua.site.lang") || (navigator.language.toLowerCase().startsWith("ru") ? "ru" : "en")) === "ru"; } catch { /* storage blocked */ }
-      btn.title = fxOn ? (ru ? "Выключить след курсора" : "Turn the cursor trail off") : (ru ? "Включить след курсора" : "Turn the cursor trail on");
+      btn.title = fxOn ? (ru ? "Выключить эффекты курсора (след и точку)" : "Turn the cursor effects off (trail and dot)") : (ru ? "Включить эффекты курсора" : "Turn the cursor effects on");
       btn.setAttribute("aria-label", btn.title);
       btn.setAttribute("aria-pressed", String(fxOn));
     };
@@ -276,7 +339,7 @@
     btn.addEventListener("click", () => {
       fxOn = !fxOn;
       try { localStorage.setItem(FX_KEY, fxOn ? "on" : "off"); } catch { /* private mode */ }
-      if (!fxOn) { pts = []; head = null; tx.clearRect(0, 0, tw, th); }
+      if (!fxOn) wipe();
       btn.classList.toggle("off", !fxOn);
       label(); paint();
     });

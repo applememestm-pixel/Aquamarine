@@ -35,6 +35,8 @@
   import { playedTop, played, gameGradient } from "../played";
   import GamePoster from "./GamePoster.svelte";
   import QrCode from "./QrCode.svelte";
+  import EmojiStatus from "./EmojiStatus.svelte";
+  import { reactionPack, emojiPacks, loadEmojiPacks } from "../reactionPack";
   import { averageColor, mixHex, patternUrl, PATTERN_EMOJI } from "../cardStyle";
   import { userQr } from "../qr";
   import { gameIds, gameIcons, gameCovers, resolveGame, rememberGame, iconFor, coverFor } from "../games";
@@ -228,6 +230,7 @@
     /** Card colour set by hand ("" = from the banner) and banner emoji. */
     card: string;
     pattern: string;
+    estatus: string;
   }
   let view = $derived<View | null>((void $played, buildView(activeUsername, $profile, $contacts, $info, $peerCards, $peerPresence, $myActivity)));
   // Which avatar image to show: the live draft when editing myself, else
@@ -253,6 +256,13 @@
   let patternEmoji = $derived((editing && isMe && draft) ? (draft.pattern ?? "") : (view?.pattern ?? ""));
   let patternBg = $derived(patternEmoji ? patternUrl(patternEmoji) : "");
   let showQr = $state(false);
+  // Emoji status choices: the bundled pack, then the user's emoji packs.
+  const esChoices = $derived.by(() => {
+    const out = $reactionPack.items.slice(0, 40).map((i) => i.token);
+    for (const p of $emojiPacks) for (const i of p.items.slice(0, 24)) out.push(i.token);
+    if (!out.length) out.push("⭐", "🔥", "💎", "🌸", "🎮", "🎵", "👑", "🦋", "🍀", "🌙", "⚡", "❤️");
+    return out.slice(0, 96);
+  });
   let patternInput = $state("");
 
   // Now-playing to show on the card: our own when viewing self, else the
@@ -301,6 +311,7 @@
         played: getStore(shareActivity) ? playedTop(12).map((g) => ({ n: g.name, h: Math.round(g.secs / 360) / 10 })) : [],
         card: me.card ?? "",
         pattern: me.pattern ?? "",
+        estatus: me.estatus ?? "",
       };
     }
     const c = getContact(uname);
@@ -337,6 +348,7 @@
       played: asPlayed(x.played),
       card: /^#[0-9a-f]{6}$/i.test(str(x.card)) ? str(x.card) : "",
       pattern: str(x.pattern).slice(0, 16),
+      estatus: str(x.es),
     };
   }
 
@@ -359,6 +371,7 @@
 
   function startEdit() {
     if (!isMe) return;
+    void loadEmojiPacks();
     draft = { ...$profile };
     editing = true;
   }
@@ -492,6 +505,16 @@
             </div>
           </div>
           <div class="field">
+            <span>{$t("Emoji next to your name")}</span>
+            <div class="es-pick">
+              <button class="pat" class:on={!draft.estatus} onclick={() => draft && (draft = { ...draft, estatus: "" })} title={$t("None")}>—</button>
+              {#each esChoices as tok (tok)}
+                <button class="pat es-opt" class:on={draft.estatus === tok} onclick={() => draft && (draft = { ...draft, estatus: tok })}><EmojiStatus token={tok} size={22} /></button>
+              {/each}
+            </div>
+            <small class="es-note">{$t("One emoji, animated ones too. Everyone sees it next to your name; the server may limit how often it changes.")}</small>
+          </div>
+          <div class="field">
             <span>{$t("Banner pattern")}</span>
             <div class="pat-row">
               <button class="pat" class:on={!draft.pattern} onclick={() => draft && (draft = { ...draft, pattern: "" })} title={$t("No pattern")}>∅</button>
@@ -622,7 +645,7 @@
         <div class="pf-grid">
         <div class="pf-left">
           <h2 class="name">
-            {view.display_name}
+            {view.display_name}<EmojiStatus token={view.estatus} size={22} />
             {#if view.verified}<span class="badge" title={$t("Verified identity")}>{@html icons.verified}</span>{/if}
             {#if view.is_bot}<span class="bot-tag">BOT</span>{/if}
 
@@ -947,6 +970,10 @@
   .sheet.ed .ed-right .buttons { background: color-mix(in srgb, var(--card) 10%, var(--bg-shell)); }
   .pattern { position: absolute; inset: 0; pointer-events: none; background-size: 168px 112px; opacity: 0.32; mix-blend-mode: soft-light; }
   .card-row, .pat-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .es-pick { display: flex; flex-wrap: wrap; gap: 4px; max-height: 132px; overflow-y: auto; padding: 2px; }
+  .es-opt { filter: none; display: grid; place-items: center; }
+  .es-opt :global(.es) { margin: 0; }
+  .field small.es-note { font-size: 11.5px; color: var(--fg-dim); text-transform: none; letter-spacing: 0; font-weight: 400; }
   .chip { border: 1px solid var(--border); background: none; color: var(--fg-muted); border-radius: 100px; padding: 5px 11px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
   .chip.on { border-color: var(--accent); color: var(--accent); }
   .pat { width: 32px; height: 32px; border-radius: calc(9px * var(--rk, 1)); border: 1px solid transparent; background: color-mix(in srgb, var(--card) 14%, transparent); font-size: 16px; cursor: pointer; color: var(--fg-muted); filter: grayscale(1); }

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { emojiStatusOf } from "../people";
+  import EmojiStatus from "./EmojiStatus.svelte";
   import { tick, onMount, untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import { askConfirm, askConfirmCheck } from "./Confirm.svelte";
@@ -227,6 +229,42 @@
       case "sealed": if (chat) capsuleComposer.set(chat.id); break;
     }
   }
+
+  // ---- Desktop: hovering the emoji button unfolds the panel (Telegram);
+  // moving away folds it again unless you clicked inside. ----
+  const HOVER_UI = typeof matchMedia === "function" && matchMedia("(hover: hover) and (pointer: fine)").matches;
+  let hoverOpened = false;
+  let hoverTimer: ReturnType<typeof setTimeout> | null = null;
+  let hoverWatch: ReturnType<typeof setInterval> | null = null;
+  function emojiHoverIn() {
+    if (!HOVER_UI || $pickerState.open || !$activeChat?.live || !$activeChat || matchMedia("(max-width: 720px)").matches) return;
+    if (hoverTimer) clearTimeout(hoverTimer);
+    hoverTimer = setTimeout(() => {
+      hoverTimer = null;
+      if ($pickerState.open || !$activeChat) return;
+      hoverOpened = true;
+      openMediaPicker($activeChat.id);
+      if (hoverWatch) clearInterval(hoverWatch);
+      let away = 0;
+      hoverWatch = setInterval(() => {
+        const hovering = !!document.querySelector("[data-media-picker]:hover, [data-emoji-anchor]:hover");
+        away = hovering ? 0 : away + 1;
+        if (!hoverOpened || !$pickerState.open || away >= 2) {
+          if (hoverOpened && $pickerState.open && away >= 2) closeMediaPicker();
+          hoverOpened = false;
+          if (hoverWatch) { clearInterval(hoverWatch); hoverWatch = null; }
+        }
+      }, 220);
+    }, 260);
+  }
+  function emojiHoverOut() { if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; } }
+  // A click or a key inside the panel keeps it open.
+  $effect(() => {
+    const keep = (e: Event) => { if ((e.target as Element)?.closest?.("[data-media-picker]")) hoverOpened = false; };
+    document.addEventListener("pointerdown", keep, true);
+    document.addEventListener("keydown", keep, true);
+    return () => { document.removeEventListener("pointerdown", keep, true); document.removeEventListener("keydown", keep, true); if (hoverWatch) clearInterval(hoverWatch); };
+  });
 
   /** A photo / video sent "as a file": still viewable in the gallery. */
   function docMedia(c: { mime: string | null; name: string }): "image" | "video" | null {
@@ -896,6 +934,8 @@
     el.animate([{ opacity: 0, transform: "translateY(10px)" }, { opacity: 1, transform: "none" }], { duration: 240, easing: "cubic-bezier(.2,.8,.2,1)" });
   });
   let composerEl: RichComposer | undefined = $state();
+  // Telegram's smiley: emoji, stickers and GIFs live behind it.
+  const SMILE_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><path d="M8 14.2s1.5 2.3 4 2.3 4-2.3 4-2.3"/><circle cx="9" cy="9.6" r=".6" fill="currentColor"/><circle cx="15" cy="9.6" r=".6" fill="currentColor"/></svg>`;
   const KEYBOARD_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="3"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M18 13h.01M9 15.5h6"/></svg>`;
   let text = $state("");
 
@@ -2850,7 +2890,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
       </button>
       {#if isGroup && activeGroup}
-        <button class="avatar sz-40 avatar-btn" style="--gradient: {$activeChat.gradient}" title="Group info & settings">
+        <button class="avatar sz-40 avatar-btn" class:ava-grp={!$activeChat.channel} class:ava-chan={$activeChat.channel} style="--gradient: {$activeChat.gradient}" title="Group info & settings">
           {$activeChat.letter}
           {#if $avatars[$activeChat.id]}<img class="ava-img" src={$avatars[$activeChat.id]} alt="" />{/if}
         </button>
@@ -2868,7 +2908,7 @@
             {/if}
             <span class="group-name-btn" class:dim={!!activeRoom}>{$activeChat.name}</span>
           {:else}
-            {$activeChat.name}
+            {$activeChat.name}<EmojiStatus token={emojiStatusOf($peerCards, $activeChat.id)} size={18} />
             {#if $clans[$activeChat.id]}<span class="hdr-clan"><ClanTag tag={$clans[$activeChat.id]} /></span>{/if}
           {/if}
           {#if e2eePeer}
@@ -3839,19 +3879,6 @@
           onclick={() => liveChat && (attachMenuOpen = !attachMenuOpen)}
         >{@html icons.attach}</button>
       </div>
-      <button
-        class="attach-btn"
-        class:disabled={!liveChat}
-        title={$t(liveChat ? "Emoji, stickers & GIFs (Ctrl+E)" : "Start a real chat first")}
-        data-emoji-anchor
-        onclick={() => {
-          if ($pickerState.open) {
-            closeMediaPicker();
-            // Phones: back to the keyboard, like Telegram's ⌨ button.
-            if (matchMedia("(max-width: 720px)").matches) composerEl?.focus?.();
-          } else if (liveChat && $activeChat) openMediaPicker($activeChat.id);
-        }}
-      >{#if $pickerState.open}<span class="kb-ico">{@html KEYBOARD_ICON}</span>{:else}{@html icons.sticker}{/if}</button>
       <div class="input-wrap">
         {#if slashMatches.length}
           <div class="slash-pop" role="listbox" aria-label={$t("Commands")}>
@@ -3873,6 +3900,22 @@
           onkeydown={onKey}
           onpastefiles={(f, p) => void pasteFiles(f, p)}
         />
+        <button
+          class="emoji-in"
+          class:disabled={!liveChat}
+          title={$t(liveChat ? "Emoji, stickers & GIFs (Ctrl+E)" : "Start a real chat first")}
+          data-emoji-anchor
+          onmouseenter={emojiHoverIn}
+          onmouseleave={emojiHoverOut}
+          onclick={() => {
+            hoverOpened = false;
+            if ($pickerState.open) {
+              closeMediaPicker();
+              // Phones: back to the keyboard, like Telegram's ⌨ button.
+              if (matchMedia("(max-width: 720px)").matches) composerEl?.focus?.();
+            } else if (liveChat && $activeChat) openMediaPicker($activeChat.id);
+          }}
+        >{#if $pickerState.open}<span class="kb-ico">{@html KEYBOARD_ICON}</span>{:else}{@html SMILE_ICON}{/if}</button>
       </div>
       {#if text.trim().length === 0 && liveChat}
         <!-- One button: tap switches mic↔camera, hold to record -->
@@ -5418,28 +5461,33 @@
   }
   .composer-input::placeholder { color: var(--fg-dim); }
 
+  /* Telegram-like: a round button; with text in the field, a paper plane
+     in the accent colour that pops in. */
   .send-btn {
-    width: 36px; height: 36px;
+    width: 38px; height: 38px;
     display: grid; place-items: center;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: calc(10px * var(--rk, 1));
-    color: var(--fg-dim);
+    background: transparent;
+    border: none;
+    border-radius: 50%;
+    color: var(--fg-muted);
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: color 0.15s ease, background 0.15s ease, transform 0.15s ease;
     flex-shrink: 0;
   }
-  .send-btn.ready {
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    color: #06070C;
-    border-color: transparent;
-    box-shadow: 0 0 20px -4px var(--accent-glow);
+  .send-btn:hover { background: var(--bg-hover); }
+  .send-btn.ready { color: var(--accent); animation: send-pop .22s cubic-bezier(.2,.9,.3,1.4); }
+  .send-btn.ready:hover { background: var(--accent-soft); transform: translateX(1px); }
+  @keyframes send-pop { from { transform: scale(.5) rotate(-25deg); opacity: 0; } }
+  .send-btn :global(svg) { width: 22px; height: 22px; }
+  .send-btn.media-btn :global(svg) { width: 20px; height: 20px; }
+  .emoji-in {
+    width: 32px; height: 32px; margin: 0 0 1px 2px; flex-shrink: 0;
+    display: grid; place-items: center; border: none; background: transparent; border-radius: 50%;
+    color: var(--fg-dim); cursor: pointer; transition: color .15s, background .15s;
   }
-  .send-btn.ready:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 0 28px -2px var(--accent-glow);
-  }
-  .send-btn :global(svg) { width: 17px; height: 17px; }
+  .emoji-in:hover { color: var(--accent); background: var(--accent-soft); }
+  .emoji-in.disabled { opacity: .4; cursor: help; }
+  .emoji-in :global(svg) { width: 21px; height: 21px; }
 
   .composer-note {
     padding: 0 20px 12px;
@@ -5469,12 +5517,14 @@
   .msg.out .msg-col.post { justify-self: end; }
   .msg-col.post > .bubble { border-bottom-left-radius: 6px; border-bottom-right-radius: 6px; }
   .msg-col.post > .post-foot.out { justify-self: end; }
-  .cmt-bar { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 240px; box-sizing: border-box; margin-top: -1px; padding: 9px 14px;
+  /* Never wider than the post above it (text, photo, video, circle…): it
+     adds nothing to the column's width (width 0) and stretches to it. */
+  .cmt-bar { display: flex; align-items: center; gap: 8px; width: 0; min-width: 100%; box-sizing: border-box; margin-top: -1px; padding: 8px 12px; overflow: hidden;
     border: 1px solid var(--border); border-top-color: color-mix(in srgb, var(--border) 60%, transparent); border-radius: 0 0 16px 16px;
     background: var(--bg-bubble-in); color: var(--accent); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; text-align: left; transition: background-color .12s; }
   .cmt-bar.out { align-self: flex-end; background: var(--bg-bubble-out, var(--bg-bubble-in)); }
   .cmt-bar:hover { background: color-mix(in srgb, var(--accent) 10%, var(--bg-bubble-in)); }
-  .cmt-bar .cmt-label { flex: 1; }
+  .cmt-bar .cmt-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
   .cmt-ic { width: 20px; height: 20px; flex-shrink: 0; }
   .cmt-avas { display: flex; flex-shrink: 0; }
   .cmt-av { width: 22px; height: 22px; border-radius: 50%; margin-left: -6px; border: 2px solid var(--bg-bubble-in); display: grid; place-items: center; font-size: 10px; font-weight: 800; color: #06070C;
