@@ -263,7 +263,7 @@
     width: min(440px, 94vw);
     background: var(--bg-shell);
     border: 1px solid var(--border);
-    border-radius: 16px;
+    border-radius: calc(16px * var(--rk, 1));
     box-shadow: 0 32px 80px -16px rgba(0,0,0,0.6);
     overflow: hidden;
     animation: slide-up 0.22s ease-out;
@@ -279,7 +279,7 @@
     border-bottom: 1px solid var(--border);
   }
   .head h2 { margin: 0; font-size: 15px; font-weight: 700; }
-  .close { width: 30px; height: 30px; background: transparent; border: 1px solid var(--border); border-radius: 8px; color: var(--fg-dim); font-size: 18px; cursor: pointer; }
+  .close { width: 30px; height: 30px; background: transparent; border: 1px solid var(--border); border-radius: calc(8px * var(--rk, 1)); color: var(--fg-dim); font-size: 18px; cursor: pointer; }
 
   .stage { padding: 24px; display: grid; place-items: center; background: #06080f; }
   .error { color: var(--danger); font-size: 13px; text-align: center; padding: 40px; }
@@ -353,7 +353,7 @@
   .review-row { display: flex; gap: 10px; }
   .btn-ghost, .btn-primary {
     padding: 8px 20px;
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     font-size: 13px;
     font-weight: 700;
     cursor: pointer;

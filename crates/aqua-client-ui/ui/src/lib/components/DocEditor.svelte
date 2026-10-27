@@ -89,11 +89,11 @@
 
 <style>
   .de-veil { position: fixed; inset: 0; z-index: 900; display: grid; place-items: center; background: rgba(4, 6, 12, 0.5); animation: de-fade 0.14s ease-out; }
-  .de { width: min(820px, calc(100vw - 20px)); height: min(720px, calc(100dvh - 24px)); display: flex; flex-direction: column; background: var(--bg-shell); border: 1px solid var(--border-strong); border-radius: 18px; overflow: hidden; animation: de-pop 0.18s cubic-bezier(.2,.9,.3,1.12); }
+  .de { width: min(820px, calc(100vw - 20px)); height: min(720px, calc(100dvh - 24px)); display: flex; flex-direction: column; background: var(--bg-shell); border: 1px solid var(--border-strong); border-radius: calc(18px * var(--rk, 1)); overflow: hidden; animation: de-pop 0.18s cubic-bezier(.2,.9,.3,1.12); }
   .de-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
   .de-title { flex: 1; min-width: 0; border: none; background: none; color: var(--fg); font: inherit; font-size: 18px; font-weight: 800; outline: none; }
-  .de-seg { display: flex; gap: 2px; padding: 2px; border-radius: 9px; background: var(--bg-input); }
-  .de-seg button { border: none; background: none; color: var(--fg-muted); font: inherit; font-size: 12.5px; font-weight: 600; padding: 6px 10px; border-radius: 7px; cursor: pointer; }
+  .de-seg { display: flex; gap: 2px; padding: 2px; border-radius: calc(9px * var(--rk, 1)); background: var(--bg-input); }
+  .de-seg button { border: none; background: none; color: var(--fg-muted); font: inherit; font-size: 12.5px; font-weight: 600; padding: 6px 10px; border-radius: calc(7px * var(--rk, 1)); cursor: pointer; }
   .de-seg button.on { background: var(--bg-shell); color: var(--accent); }
   .de-x { width: 30px; height: 30px; border-radius: 50%; border: none; background: var(--bg-hover); color: var(--fg-muted); cursor: pointer; }
   .de-newer { padding: 8px 14px; background: var(--accent-soft); color: var(--fg); font-size: 13px; }
@@ -103,7 +103,7 @@
   .de-prev { flex: 1; overflow-y: auto; padding: 16px 20px; font-size: 14.5px; line-height: 1.6; }
   .de-foot { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border); }
   .de-info { flex: 1; font-size: 11.5px; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
-  .de-btn { border: none; border-radius: 10px; padding: 9px 16px; background: var(--accent); color: #06070C; font: inherit; font-weight: 700; cursor: pointer; }
+  .de-btn { border: none; border-radius: calc(10px * var(--rk, 1)); padding: 9px 16px; background: var(--accent); color: #06070C; font: inherit; font-weight: 700; cursor: pointer; }
   .de-btn.ghost { background: var(--bg-input); color: var(--fg); }
   .de-btn:disabled { opacity: 0.55; }
   @keyframes de-fade { from { opacity: 0; } }

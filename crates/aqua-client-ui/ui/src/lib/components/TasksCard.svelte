@@ -79,11 +79,11 @@
   .tl-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width 0.3s ease; }
   .tl-rule { font-size: 11.5px; color: var(--fg-dim); }
   .tl-items { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-  .tl-items li { display: flex; align-items: center; gap: 9px; padding: 6px 4px; border-radius: 8px; transition: background 0.12s, opacity 0.2s; }
+  .tl-items li { display: flex; align-items: center; gap: 9px; padding: 6px 4px; border-radius: calc(8px * var(--rk, 1)); transition: background 0.12s, opacity 0.2s; }
   .tl-items li:hover { background: var(--bg-hover); }
   .tl-items li.lock { opacity: 0.45; }
   .tl-items li.done .tl-t { text-decoration: line-through; color: var(--fg-dim); }
-  .tl-check { width: 22px; height: 22px; border-radius: 7px; border: 2px solid var(--border-strong); background: none; color: #06070C; font-size: 13px; font-weight: 900; display: grid; place-items: center; cursor: pointer; flex-shrink: 0; transition: background 0.12s, border-color 0.12s, transform 0.1s; }
+  .tl-check { width: 22px; height: 22px; border-radius: calc(7px * var(--rk, 1)); border: 2px solid var(--border-strong); background: none; color: #06070C; font-size: 13px; font-weight: 900; display: grid; place-items: center; cursor: pointer; flex-shrink: 0; transition: background 0.12s, border-color 0.12s, transform 0.1s; }
   .tl-check.on { background: var(--accent); border-color: var(--accent); }
   .tl-check:active:not(:disabled) { transform: scale(0.9); }
   .tl-check:disabled { cursor: not-allowed; }
@@ -92,8 +92,8 @@
   .tl-av { width: 18px; height: 18px; border-radius: 50%; margin-left: -5px; border: 2px solid var(--bg-bubble-in); display: grid; place-items: center; font-size: 9px; font-weight: 800; color: #06070C; background: linear-gradient(135deg, var(--accent), var(--accent-2)); background-size: cover; background-position: center; }
   .tl-n { margin-left: 5px; font-size: 11px; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
   .tl-add { display: flex; gap: 6px; margin-top: 4px; }
-  .tl-add input { flex: 1; min-width: 0; padding: 7px 10px; border-radius: 9px; border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 13px; outline: none; }
+  .tl-add input { flex: 1; min-width: 0; padding: 7px 10px; border-radius: calc(9px * var(--rk, 1)); border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 13px; outline: none; }
   .tl-add input:focus { border-color: var(--accent); }
-  .tl-add button { width: 34px; border-radius: 9px; border: none; background: var(--accent); color: #06070C; font-size: 16px; font-weight: 800; cursor: pointer; }
+  .tl-add button { width: 34px; border-radius: calc(9px * var(--rk, 1)); border: none; background: var(--accent); color: #06070C; font-size: 16px; font-weight: 800; cursor: pointer; }
   .tl-add button:disabled { opacity: 0.5; }
 </style>

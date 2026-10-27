@@ -4,7 +4,7 @@
    * through (Telegram-style local passcode with auto-lock).
    */
   import { onMount, tick } from "svelte";
-  import { locked, passcodeSetupOpen, lockConf, setPasscode, unlock, lockNow, initLock } from "../lock";
+  import { locked, passcodeSetupOpen, lockConf, setPasscode, unlock, lockNow, initLock, unlockBiometric, biometricAvailable } from "../lock";
   import { wizardOpen } from "./RegistrationWizard.svelte";
   import { info } from "../stores";
   import { api } from "../tauri";
@@ -72,6 +72,13 @@
   $effect(() => {
     if ($locked || $passcodeSetupOpen) { pass = ""; pass2 = ""; err = ""; forgotStep = 0; code = ""; pinStep = 1; pinFirst = ""; void tick().then(() => input?.focus()); }
   });
+
+  // Fingerprint / face: asked for right away when the lock shows (phones,
+  // when turned on in Privacy); the key bottom-left asks again.
+  let bioOk = $state(false);
+  $effect(() => { if ($lockConf?.bio) void biometricAvailable().then((v) => (bioOk = v)); else bioOk = false; });
+  async function tryBio() { if ($locked && bioOk) await unlockBiometric(tr("Unlock Aquamarine")); }
+  $effect(() => { if ($locked && bioOk) void tryBio(); });
 
   async function doUnlock() {
     if (!pass || busy) return;
@@ -163,7 +170,11 @@
         {#if err}<div class="err">{err}</div>{/if}
         <div class="keypad">
           {#each KEYS as [d, l] (d)}<button class="key" onclick={() => pinKey(d)} disabled={busy}><b>{d}</b><small>{l}</small></button>{/each}
-          <span></span>
+          {#if $locked && bioOk}
+            <button class="key bio" onclick={tryBio} aria-label={$t("Fingerprint")} title={$t("Fingerprint")}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 11v3a8 8 0 0 1-1.5 4.7M8.5 7.7A5 5 0 0 1 17 11v1.5M7 11a5 5 0 0 1 .3-1.7M14.6 20.4A12 12 0 0 0 16 15M4 15.5A12 12 0 0 0 5 11a7 7 0 0 1 12.2-4.7M20 13a19 19 0 0 1-.7 4.5M9.7 21a12 12 0 0 1 .3-1.5"/></svg>
+            </button>
+          {:else}<span></span>{/if}
           <button class="key" onclick={() => pinKey("0")} disabled={busy}><b>0</b><small>+</small></button>
           <button class="key del" onclick={() => pinKey("del")} aria-label={$t("Delete")}>⌫</button>
         </div>
@@ -227,6 +238,7 @@
 {/if}
 
 <style>
+  .key.bio svg { width: 30px; height: 30px; color: var(--accent); }
   .lock {
     position: fixed; inset: var(--tb-h, 0px) 0 0 0; z-index: 390; display: grid; place-items: center;
     background:
@@ -236,7 +248,7 @@
   }
   .card {
     position: relative; width: min(380px, 92vw); display: flex; flex-direction: column; align-items: center; gap: 10px;
-    padding: 0 24px 22px; border-radius: 22px; background: var(--bg-shell); border: 1px solid var(--border-strong); overflow: hidden;
+    padding: 0 24px 22px; border-radius: calc(22px * var(--rk, 1)); background: var(--bg-shell); border: 1px solid var(--border-strong); overflow: hidden;
     box-shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.7), 0 0 40px -18px var(--accent-glow);
     animation: card-in 0.35s cubic-bezier(.2,.9,.3,1.1);
   }
@@ -256,25 +268,25 @@
   .form { width: 100%; display: flex; flex-direction: column; gap: 10px; }
   .pw { position: relative; }
   .pw input { padding-right: 44px; }
-  .eye { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 34px; height: 34px; border: none; border-radius: 8px; background: none; color: var(--fg-dim); cursor: pointer; display: grid; place-items: center; }
+  .eye { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 34px; height: 34px; border: none; border-radius: calc(8px * var(--rk, 1)); background: none; color: var(--fg-dim); cursor: pointer; display: grid; place-items: center; }
   .eye:hover { color: var(--fg); }
   .eye svg { width: 18px; height: 18px; }
   .code { letter-spacing: 0.5em; font-size: 20px; font-weight: 800; }
   .pair { width: 100%; display: flex; gap: 8px; margin-top: 4px; }
-  .ghost { flex: 1; border: 1px solid var(--border); background: var(--bg-input); color: var(--fg-muted); border-radius: 10px; padding: 9px 8px; font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; transition: color .15s, border-color .15s; }
+  .ghost { flex: 1; border: 1px solid var(--border); background: var(--bg-input); color: var(--fg-muted); border-radius: calc(10px * var(--rk, 1)); padding: 9px 8px; font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; transition: color .15s, border-color .15s; }
   .ghost:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
   .ghost.danger:hover { color: #ff8f8f; border-color: color-mix(in srgb, #ff5c5c 45%, transparent); }
   .ghost:disabled { opacity: 0.6; }
   h2 { margin: 0; font-size: 18px; font-weight: 800; color: var(--fg); }
   p { margin: 0 0 6px; font-size: 12.5px; color: var(--fg-muted); text-align: center; line-height: 1.5; }
   input {
-    width: 100%; box-sizing: border-box; background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px;
+    width: 100%; box-sizing: border-box; background: var(--bg-input); border: 1px solid var(--border); border-radius: calc(10px * var(--rk, 1));
     color: var(--fg); font: inherit; font-size: 15px; padding: 12px 14px; outline: none; text-align: center;
   }
   input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   .err { color: #ff8f8f; font-size: 12.5px; }
   .primary {
-    width: 100%; border: none; border-radius: 10px; padding: 11px; font: inherit; font-weight: 800; font-size: 14px; cursor: pointer;
+    width: 100%; border: none; border-radius: calc(10px * var(--rk, 1)); padding: 11px; font: inherit; font-weight: 800; font-size: 14px; cursor: pointer;
     background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070c; margin-top: 4px;
   }
   .primary:disabled { opacity: 0.6; }
@@ -286,12 +298,12 @@
   .hint { font-size: 11.5px; color: var(--fg-dim); }
   /* ---- the keypad ---- */
   .pin-boxes { display: flex; gap: 12px; margin: 10px 0 4px; }
-  .pin-box { width: 46px; height: 54px; border-radius: 12px; border: 2px solid var(--border-strong); position: relative; transition: border-color .15s; }
+  .pin-box { width: 46px; height: 54px; border-radius: calc(12px * var(--rk, 1)); border: 2px solid var(--border-strong); position: relative; transition: border-color .15s; }
   .pin-box.cur { border-color: var(--accent); }
   .pin-box.filled::after { content: ""; position: absolute; left: 50%; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; background: var(--fg); animation: pin-pop .18s cubic-bezier(.2,.9,.3,1.4); }
   @keyframes pin-pop { from { transform: scale(.2); } }
   .keypad { width: 100%; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; }
-  .key { height: 58px; border: none; border-radius: 16px; background: var(--bg-input); color: var(--fg); cursor: pointer;
+  .key { height: 58px; border: none; border-radius: calc(16px * var(--rk, 1)); background: var(--bg-input); color: var(--fg); cursor: pointer;
     display: flex; align-items: center; justify-content: center; gap: 10px; font: inherit; transition: background-color .12s; }
   .key b { font-size: 24px; font-weight: 600; }
   .key small { font-size: 11px; font-weight: 600; color: var(--fg-dim); letter-spacing: .06em; min-width: 30px; text-align: left; }

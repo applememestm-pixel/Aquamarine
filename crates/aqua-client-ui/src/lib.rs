@@ -46,6 +46,8 @@ pub fn run() -> Result<()> {
     // Android: the Bluetooth sockets of nearby delivery live in Kotlin.
     #[cfg(target_os = "android")]
     let builder = builder.plugin(mesh::android_plugin()).plugin(relay_host::android::plugin()).plugin(gallery::android::plugin()).plugin(updates::android::plugin());
+    #[cfg(mobile)]
+    let builder = builder.plugin(tauri_plugin_biometric::init());
     // WebKitGTK denies camera / mic / screen capture unless the app answers
     // its permission request ("Mic test failed: NotAllowedError" on Linux).
     // The webview only ever shows our own UI, so grant what calls need.
@@ -276,6 +278,7 @@ pub fn run() -> Result<()> {
             commands::attach_file_as,
             commands::attach_bytes,
             commands::download_file,
+            commands::open_saved_file,
             commands::send_call_signal,
             commands::send_control,
             commands::send_sticker,

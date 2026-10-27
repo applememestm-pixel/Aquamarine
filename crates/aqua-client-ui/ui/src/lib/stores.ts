@@ -157,6 +157,13 @@ export async function bootstrap() {
   const kick = () => { const i = get(info); if (i && !i.connected) { reconnectNow = true; void reconnectLoop(); } };
   addEventListener("online", kick);
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") kick(); });
+  // The dot under my name trusts the app's own state: if it says "not
+  // connected" while the transport is actually up (missed event), it heals.
+  setInterval(() => {
+    const i = get(info);
+    if (!i || i.connected || !i.username) return;
+    api.initApp().then((n) => { info.set(n); if (!n.connected) kick(); }).catch(() => {});
+  }, 20_000);
   events.onDisconnected(() => {
     info.update((i) => (i ? { ...i, connected: false } : i));
     void reconnectLoop();

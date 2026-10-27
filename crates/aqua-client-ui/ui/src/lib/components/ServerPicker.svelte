@@ -198,13 +198,13 @@
   .sp-in { position: relative; display: flex; }
   .sp-in input {
     flex: 1; min-width: 0; box-sizing: border-box;
-    background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px;
+    background: var(--bg-input); border: 1px solid var(--border); border-radius: calc(10px * var(--rk, 1));
     color: var(--fg); font-family: inherit; font-size: 14px; padding: 9px 36px 9px 12px; outline: none;
   }
   .sp-in input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   .sp-tg {
     position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
-    width: 28px; height: 28px; border: none; border-radius: 8px; background: transparent;
+    width: 28px; height: 28px; border: none; border-radius: calc(8px * var(--rk, 1)); background: transparent;
     color: var(--fg-dim); cursor: pointer; display: grid; place-items: center; transition: transform .18s, color .15s;
   }
   .sp-tg svg { width: 16px; height: 16px; }
@@ -212,7 +212,7 @@
   .sp-list {
     position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 40;
     max-height: min(360px, 55vh); overflow-y: auto; padding: 6px;
-    background: var(--bg-shell, var(--bg-surface)); border: 1px solid var(--border-strong); border-radius: 14px;
+    background: var(--bg-shell, var(--bg-surface)); border: 1px solid var(--border-strong); border-radius: calc(14px * var(--rk, 1));
     box-shadow: 0 22px 50px -16px rgba(0, 0, 0, 0.65);
     animation: sp-in .18s cubic-bezier(.2, .9, .25, 1.1);
   }
@@ -222,7 +222,7 @@
   .sp-re { margin-left: auto; border: none; background: none; color: var(--fg-dim); cursor: pointer; font-size: 15px; }
   .sp-re:hover:not(:disabled) { color: var(--accent); }
   .sp-row {
-    width: 100%; display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: none; border-radius: 10px;
+    width: 100%; display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: none; border-radius: calc(10px * var(--rk, 1));
     background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer;
   }
   .sp-row:hover { background: var(--bg-hover); }

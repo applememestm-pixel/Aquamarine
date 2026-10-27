@@ -159,6 +159,8 @@ export interface Settings {
   glassMenus?: boolean;
   /** Contrast rows: every other chat / person a shade darker, so neighbours don't merge. */
   contrastRows?: boolean;
+  /** Shape of the interface: 0.35 square-ish … 1 standard … 1.6 round. */
+  corners?: number;
   /** How solid they are with glassMenus on, 0.35–0.95. */
   menuAlpha?: number;
   // Behaviour
@@ -404,6 +406,7 @@ function apply(s: Settings) {
   root.classList.toggle("no-autoplay-stickers", s.autoplayStickers === false);
   root.classList.toggle("glass-menus", !!s.glassMenus);
   root.classList.toggle("contrast-rows", !!s.contrastRows);
+  root.style.setProperty("--rk", String(s.corners ?? 1));
   root.style.setProperty("--menu-alpha", `${Math.round((s.menuAlpha ?? MENU_ALPHA) * 100)}%`);
 
   // Custom UI font loaded from a file the user picked.

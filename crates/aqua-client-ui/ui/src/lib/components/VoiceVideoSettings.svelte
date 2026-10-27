@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Select from "./Select.svelte";
   import { t } from "../i18n";
   import { onMount, onDestroy } from "svelte";
   import type { Action } from "svelte/action";
@@ -166,17 +167,15 @@
   {/if}
   <div class="row">
     <span class="row-label">{$t("Input")}</span>
-    <select class="sel" value={$callSettings.micId} onchange={(e) => { set("micId", (e.target as HTMLSelectElement).value); if (testing) void startTest(); }}>
-      {#if !mics.some((d) => d.deviceId === "default")}<option value="default">{$t("System default")}</option>{/if}
-      {#each mics as d, i (d.deviceId)}<option value={d.deviceId}>{devLabel(d, i, "Microphone")}</option>{/each}
-    </select>
+    <Select class="sel" value={$callSettings.micId}
+      options={[...(mics.some((d) => d.deviceId === "default") ? [] : [{ value: "default", label: $t("System default") }]), ...mics.map((d, i) => ({ value: d.deviceId, label: devLabel(d, i, "Microphone") }))]}
+      onchange={(v) => { set("micId", v); if (testing) void startTest(); }} />
   </div>
   <div class="row">
     <span class="row-label">{$t("Output")}</span>
-    <select class="sel" value={$callSettings.speakerId} onchange={(e) => set("speakerId", (e.target as HTMLSelectElement).value)}>
-      {#if !speakers.some((d) => d.deviceId === "default")}<option value="default">{$t("System default")}</option>{/if}
-      {#each speakers as d, i (d.deviceId)}<option value={d.deviceId}>{devLabel(d, i, "Speaker")}</option>{/each}
-    </select>
+    <Select class="sel" value={$callSettings.speakerId}
+      options={[...(speakers.some((d) => d.deviceId === "default") ? [] : [{ value: "default", label: $t("System default") }]), ...speakers.map((d, i) => ({ value: d.deviceId, label: devLabel(d, i, "Speaker") }))]}
+      onchange={(v) => set("speakerId", v)} />
   </div>
   <div class="row">
     <span class="row-label">{$t("Input volume")}</span>
@@ -283,10 +282,9 @@
   <div class="label">{$t("Camera")}</div>
   <div class="row">
     <span class="row-label">{$t("Device")}</span>
-    <select class="sel" value={$callSettings.camId} onchange={(e) => set("camId", (e.target as HTMLSelectElement).value)}>
-      {#if !cams.some((d) => d.deviceId === "default")}<option value="default">{$t("System default")}</option>{/if}
-      {#each cams as d, i (d.deviceId)}<option value={d.deviceId}>{devLabel(d, i, "Camera")}</option>{/each}
-    </select>
+    <Select class="sel" value={$callSettings.camId}
+      options={[...(cams.some((d) => d.deviceId === "default") ? [] : [{ value: "default", label: $t("System default") }]), ...cams.map((d, i) => ({ value: d.deviceId, label: devLabel(d, i, "Camera") }))]}
+      onchange={(v) => set("camId", v)} />
   </div>
   <div class="row">
     <span class="row-label">{$t("Resolution")}</span>
@@ -396,13 +394,13 @@
 
 <style>
   /* Same grouped-card look as the rest of Settings. */
-  .group { margin: 12px 16px 0; padding: 12px 16px 14px; background: var(--bg-surface); border-radius: 14px; }
+  .group { margin: 12px 16px 0; padding: 12px 16px 14px; background: var(--bg-surface); border-radius: calc(14px * var(--rk, 1)); }
   .label { font-size: 12px; font-weight: 700; color: var(--accent); margin-bottom: 10px; }
   .row { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; flex-wrap: wrap; }
   .row-label { flex: 0 0 110px; color: var(--fg-muted); font-size: 13px; }
-  .seg { display: flex; background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; padding: 3px; gap: 2px; flex-wrap: wrap; }
+  .seg { display: flex; background: var(--bg-input); border: 1px solid var(--border); border-radius: calc(10px * var(--rk, 1)); padding: 3px; gap: 2px; flex-wrap: wrap; }
   .seg-opt {
-    padding: 5px 11px; background: transparent; border: none; border-radius: 7px;
+    padding: 5px 11px; background: transparent; border: none; border-radius: calc(7px * var(--rk, 1));
     color: var(--fg-muted); font-size: 12.5px; font-weight: 600; cursor: pointer; white-space: nowrap;
   }
   .seg-opt:hover { color: var(--fg); }
@@ -413,13 +411,13 @@
   .sel, .txt {
     flex: 1; min-width: 0;
     background: var(--bg-input); color: var(--fg);
-    border: 1px solid var(--border); border-radius: 8px;
+    border: 1px solid var(--border); border-radius: calc(8px * var(--rk, 1));
     padding: 7px 9px; font-size: 13px; font-family: inherit;
   }
   .sel:focus, .txt:focus { outline: none; border-color: var(--accent); }
   .btn {
     background: var(--bg-input); color: var(--fg);
-    border: 1px solid var(--border-strong); border-radius: 8px;
+    border: 1px solid var(--border-strong); border-radius: calc(8px * var(--rk, 1));
     padding: 6px 12px; font-size: 12.5px; font-weight: 600; cursor: pointer; white-space: nowrap;
   }
   .btn:hover { border-color: var(--accent); }
@@ -430,7 +428,7 @@
   .note.small { font-size: 11.5px; color: var(--fg-dim); margin: 2px 0 6px; }
 
   .mictest { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
-  .meter { position: relative; flex: 1; height: 10px; border-radius: 5px; background: var(--bg-input); border: 1px solid var(--border); overflow: hidden; }
+  .meter { position: relative; flex: 1; height: 10px; border-radius: calc(5px * var(--rk, 1)); background: var(--bg-input); border: 1px solid var(--border); overflow: hidden; }
   .meter-fill { height: 100%; background: linear-gradient(90deg, #3BA55D, #FAA61A 80%, #ED4245); transition: width 0.05s linear; }
   .meter-fill.gated { background: var(--fg-dim); opacity: 0.5; }
   .meter-mark { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--fg); }
@@ -457,5 +455,5 @@
   }
   .switch.on { background: var(--accent-soft); border-color: var(--accent); }
   .switch.on::after { transform: translateX(17px); background: var(--accent); }
-  .preview { width: 100%; max-width: 360px; border-radius: 10px; background: #000; transform: scaleX(-1); margin-top: 4px; }
+  .preview { width: 100%; max-width: 360px; border-radius: calc(10px * var(--rk, 1)); background: #000; transform: scaleX(-1); margin-top: 4px; }
 </style>

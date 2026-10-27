@@ -1,6 +1,7 @@
 <script lang="ts">
   import { streamSrc } from "../media";
-  import { t } from "../i18n";
+  import { t, tr } from "../i18n";
+  import { showToast } from "./Toast.svelte";
   import { onMount } from "svelte";
   import { chats, activeTab, selectChat } from "../stores";
   import { api, assetUrl } from "../tauri";
@@ -33,6 +34,9 @@
     category: string | null;
     saved_at: string | null;
     from_me: boolean;
+    cid: string;
+    /** How many times this very file was sent (same blob). */
+    count: number;
   }
 
   // Local tab filter: all | images | videos | audio | docs
@@ -62,13 +66,25 @@
             category:   c.category,
             saved_at:   c.saved_at,
             from_me:    m.from === "me",
+            cid:        c.cid,
+            count:      1,
           });
         }
       } catch (e) { console.warn("list files for", chat.id, e); }
     }
-    // Newest first.
+    // Newest first; the same file (same blob — a sticker sent five times,
+    // a forwarded photo) is listed once.
     out.sort((a, b) => (a.time < b.time ? 1 : -1));
-    entries = out;
+    const seen = new Map<string, FileEntry>();
+    const uniq: FileEntry[] = [];
+    for (const e of out) {
+      const k = e.cid || `${e.name}:${e.size}`;
+      const first = seen.get(k);
+      if (first) { first.count++; if (!first.saved_at && e.saved_at) first.saved_at = e.saved_at; continue; }
+      seen.set(k, e);
+      uniq.push(e);
+    }
+    entries = uniq;
     loading = false;
   }
 
@@ -111,9 +127,20 @@
   }
   /** Click on a file: photos / videos open the gallery over everything in
    *  the current tab, audio plays as a queue, documents open their chat. */
-  function openEntry(e: FileEntry) {
+  let busy = $state("");
+  async function openEntry(e: FileEntry) {
     const k = kindOf(e);
-    if (!e.saved_at || k === "doc") { openChat(e.peer_id); return; }
+    // Not on this device yet: fetch it first, then show it right here.
+    if (!e.saved_at) {
+      busy = e.message_id;
+      try {
+        const r = await api.downloadFile(e.peer_id, e.message_id);
+        e.saved_at = r.saved_path;
+        entries = [...entries];
+      } catch (err) { showToast(tr("Could not download: {e}", { e: String(err) })); return; }
+      finally { busy = ""; }
+    }
+    if (k === "doc") { api.openSavedFile(e.saved_at!).catch((err) => showToast(String(err))); return; }
     if (k === "audio") {
       const list = shown.filter((x) => x.saved_at && kindOf(x) === "audio");
       playQueue(list.map((x) => ({ src: assetUrl(x.saved_at!), title: x.name, sub: x.peer_name })), Math.max(0, list.indexOf(e)));
@@ -193,6 +220,8 @@
               <div class="meta">
                 <div class="r1">
                   <span class="name" title={e.name}>{e.name}</span>
+                  {#if e.count > 1}<span class="cnt" title={tr("Sent {n} times", { n: e.count })}>×{e.count}</span>{/if}
+                  {#if busy === e.message_id}<span class="spin"></span>{/if}
                   <span class="size">{fmtSize(e.size)}</span>
                 </div>
                 <div class="r2">
@@ -235,6 +264,9 @@
 </aside>
 
 <style>
+  .cnt { font-size: 11px; font-weight: 700; color: var(--accent); flex-shrink: 0; }
+  .spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--accent-soft); border-top-color: var(--accent); animation: fp-spin .7s linear infinite; flex-shrink: 0; }
+  @keyframes fp-spin { to { transform: rotate(360deg); } }
   .panel {
     background: var(--bg-list);
     border-right: 1px solid var(--border);
@@ -250,7 +282,7 @@
     width: 28px; height: 28px;
     background: transparent;
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: calc(8px * var(--rk, 1));
     color: var(--fg-muted);
     cursor: pointer;
     font-size: 15px;
@@ -267,7 +299,7 @@
     padding: 5px 11px;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 7px;
+    border-radius: calc(7px * var(--rk, 1));
     color: var(--fg-muted);
     font-size: 12px;
     font-weight: 600;
@@ -293,7 +325,7 @@
   .empty-sub { line-height: 1.5; }
 
   .row-wrap {
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     margin-bottom: 2px;
     overflow: hidden;
   }
@@ -313,7 +345,7 @@
     padding: 9px 10px;
     background: transparent;
     border: none;
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     text-align: left;
     color: inherit;
     cursor: pointer;
@@ -324,7 +356,7 @@
     width: 28px; height: 28px;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 7px;
+    border-radius: calc(7px * var(--rk, 1));
     color: var(--fg-dim);
     font-size: 13px;
     cursor: pointer;
@@ -355,8 +387,8 @@
   }
   .bg-play svg { width: 15px; height: 15px; }
   .bg-play:hover { filter: brightness(1.07); }
-  .img-btn { border: none; padding: 0; background: transparent; cursor: zoom-in; align-self: flex-start; border-radius: 10px; overflow: hidden; }
-  .img { max-width: 100%; max-height: 260px; border-radius: 10px; background: #0a0d14; display: block; }
+  .img-btn { border: none; padding: 0; background: transparent; cursor: zoom-in; align-self: flex-start; border-radius: calc(10px * var(--rk, 1)); overflow: hidden; }
+  .img { max-width: 100%; max-height: 260px; border-radius: calc(10px * var(--rk, 1)); background: #0a0d14; display: block; }
   .loading { font-size: 12px; color: var(--fg-dim); font-style: italic; padding: 10px 0; }
   .ic.thumb { position: relative; width: 44px; height: 44px; padding: 0; overflow: hidden; background: #000; }
   .ic.thumb img, .ic.thumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -364,7 +396,7 @@
   .vplay svg { width: 18px; height: 18px; filter: drop-shadow(0 1px 3px rgba(0,0,0,0.6)); }
   .ic {
     width: 44px; height: 44px;
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     background: var(--bg-input);
     display: grid; place-items: center;
     font-size: 17px;

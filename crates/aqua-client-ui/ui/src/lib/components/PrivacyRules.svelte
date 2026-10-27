@@ -110,10 +110,10 @@
 {/if}
 
 <style>
-  .pr-group { background: var(--bg-surface); border-radius: 14px; padding: 6px; margin: 0 18px 12px; }
+  .pr-group { background: var(--bg-surface); border-radius: calc(14px * var(--rk, 1)); padding: 6px; margin: 0 18px 12px; }
   .pr-label { font-size: 11.5px; font-weight: 800; color: var(--accent); text-transform: uppercase; letter-spacing: 0.06em; padding: 8px 10px 6px; }
   .pr-row, .pr-person {
-    display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px; border-radius: 10px;
+    display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px; border-radius: calc(10px * var(--rk, 1));
     background: none; border: none; color: var(--fg); font: inherit; font-size: 14px; text-align: left; cursor: pointer;
   }
   .pr-person { cursor: default; }
@@ -132,7 +132,7 @@
   .pr-q { font-size: 14px; font-weight: 700; padding: 4px 10px 10px; color: var(--fg); }
   .pr-aud { display: flex; flex-direction: column; }
   .pr-opt {
-    display: flex; align-items: center; gap: 12px; padding: 11px 10px; border-radius: 10px;
+    display: flex; align-items: center; gap: 12px; padding: 11px 10px; border-radius: calc(10px * var(--rk, 1));
     background: none; border: none; color: var(--fg); font: inherit; font-size: 14px; text-align: left; cursor: pointer;
   }
   .pr-opt:hover { background: var(--bg-hover); }
@@ -143,9 +143,9 @@
   .pr-x:hover { color: var(--danger, #ff6b6b); }
   .pr-add { display: flex; gap: 6px; padding: 6px 10px 8px; }
   .pr-add input {
-    flex: 1; min-width: 0; background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px;
+    flex: 1; min-width: 0; background: var(--bg-input); border: 1px solid var(--border); border-radius: calc(8px * var(--rk, 1));
     color: var(--fg); font: inherit; font-size: 13px; padding: 7px 10px; outline: none;
   }
   .pr-add input:focus { border-color: var(--accent); }
-  .pr-add button { border: none; border-radius: 8px; padding: 7px 12px; background: var(--accent-soft); color: var(--accent); font: inherit; font-weight: 700; font-size: 13px; cursor: pointer; }
+  .pr-add button { border: none; border-radius: calc(8px * var(--rk, 1)); padding: 7px 12px; background: var(--accent-soft); color: var(--accent); font: inherit; font-weight: 700; font-size: 13px; cursor: pointer; }
 </style>

@@ -312,7 +312,7 @@
   .ma {
     width: min(440px, calc(100vw - 16px)); height: min(760px, calc(100dvh - 24px));
     display: flex; flex-direction: column; overflow: hidden;
-    background: var(--bg-shell); border: 1px solid var(--border-strong); border-radius: 18px;
+    background: var(--bg-shell); border: 1px solid var(--border-strong); border-radius: calc(18px * var(--rk, 1));
     animation: ma-pop 0.2s cubic-bezier(.2,.9,.3,1.15);
   }
   .ma.full { width: 100vw; height: 100dvh; border-radius: 0; border: none; }
@@ -329,14 +329,14 @@
   .ma-spin.sm { width: 16px; height: 16px; border-width: 2px; border-color: rgba(0,0,0,0.2); border-top-color: currentColor; }
   .ma-err { padding: 30px 20px; color: var(--fg-muted); text-align: center; }
   .ma-foot { display: flex; gap: 8px; padding: 10px; background: var(--bg-list); border-top: 1px solid var(--border); }
-  .ma-btn { flex: 1; height: 44px; border: none; border-radius: 12px; font: inherit; font-weight: 700; font-size: 15px; cursor: pointer; background: var(--accent); color: #06070C; display: grid; place-items: center; }
+  .ma-btn { flex: 1; height: 44px; border: none; border-radius: calc(12px * var(--rk, 1)); font: inherit; font-weight: 700; font-size: 15px; cursor: pointer; background: var(--accent); color: #06070C; display: grid; place-items: center; }
   .ma-btn.second { background: var(--bg-input); color: var(--accent); }
   .ma-btn:disabled { opacity: 0.55; cursor: default; }
   .ma-pop-veil { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,0.45); padding: 20px; }
-  .ma-pop { width: min(320px, 100%); background: var(--bg-shell); border: 1px solid var(--border-strong); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .ma-pop { width: min(320px, 100%); background: var(--bg-shell); border: 1px solid var(--border-strong); border-radius: calc(14px * var(--rk, 1)); padding: 16px; display: flex; flex-direction: column; gap: 8px; }
   .ma-pop p { margin: 0; color: var(--fg-muted); font-size: 14px; line-height: 1.45; white-space: pre-wrap; }
   .ma-pop-btns { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
-  .ma-pop-btns button { border: none; background: none; color: var(--accent); font: inherit; font-weight: 700; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+  .ma-pop-btns button { border: none; background: none; color: var(--accent); font: inherit; font-weight: 700; padding: 8px 10px; border-radius: calc(8px * var(--rk, 1)); cursor: pointer; }
   .ma-pop-btns button:hover { background: var(--bg-hover); }
   .ma-pop-btns button.danger { color: #ff5c5c; }
   @keyframes ma-fade { from { opacity: 0; } }

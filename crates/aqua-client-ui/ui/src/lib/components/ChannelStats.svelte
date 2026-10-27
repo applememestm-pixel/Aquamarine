@@ -93,20 +93,20 @@
   .cs-body { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
   .cs-tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
   .cs-tiles.three { grid-template-columns: repeat(3, 1fr); }
-  .cs-tile { padding: 10px 12px; border-radius: 12px; background: var(--bg-input); display: flex; flex-direction: column; gap: 2px; }
+  .cs-tile { padding: 10px 12px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-input); display: flex; flex-direction: column; gap: 2px; }
   .cs-tile b { font-size: 20px; color: var(--accent); font-variant-numeric: tabular-nums; }
   .cs-tile span { font-size: 11.5px; color: var(--fg-muted); }
   .cs-lbl { margin-top: 6px; font-size: 11.5px; font-weight: 800; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.04em; }
   .cs-empty { font-size: 12.5px; color: var(--fg-dim); }
-  .cs-post { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 11px; border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+  .cs-post { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: calc(11px * var(--rk, 1)); border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
   .cs-post:hover { border-color: var(--accent); }
   .cs-pt { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cs-pm { font-size: 11.5px; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
   .cs-bar { height: 3px; border-radius: 2px; background: var(--bg-hover); overflow: hidden; }
   .cs-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
   .cs-note { margin-top: 8px; font-size: 11.5px; color: var(--fg-dim); line-height: 1.5; }
-  .cs-root { padding: 10px 12px; border-radius: 12px; background: var(--bg-input); border-left: 3px solid var(--accent); font-size: 13.5px; line-height: 1.45; max-height: 120px; overflow: hidden; }
-  .cs-chart { height: 90px; display: flex; align-items: flex-end; gap: 2px; padding: 6px; border-radius: 10px; background: var(--bg-input); }
+  .cs-root { padding: 10px 12px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-input); border-left: 3px solid var(--accent); font-size: 13.5px; line-height: 1.45; max-height: 120px; overflow: hidden; }
+  .cs-chart { height: 90px; display: flex; align-items: flex-end; gap: 2px; padding: 6px; border-radius: calc(10px * var(--rk, 1)); background: var(--bg-input); }
   .cs-chart i { flex: 1; min-height: 2px; border-radius: 2px 2px 0 0; background: linear-gradient(180deg, var(--accent), var(--accent-2)); }
   .cs-viewer { display: flex; align-items: center; gap: 9px; padding: 4px 2px; }
   .cs-av { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 800; color: #06070C; background: linear-gradient(135deg, var(--accent), var(--accent-2)); background-size: cover; background-position: center; }

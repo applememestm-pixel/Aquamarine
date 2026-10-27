@@ -40,13 +40,13 @@
 
 <style>
   .bi { position: fixed; right: 16px; bottom: 16px; z-index: 976; display: flex; flex-direction: column; gap: 8px; width: min(340px, calc(100vw - 32px)); }
-  .bi-card { padding: 12px 14px; border-radius: 14px; background: var(--bg-shell); border: 1px solid color-mix(in srgb, #1f6fff 60%, var(--border)); display: flex; flex-direction: column; gap: 5px; box-shadow: 0 16px 40px -16px rgba(0,0,0,0.6); animation: bi-in 0.2s ease-out; }
+  .bi-card { padding: 12px 14px; border-radius: calc(14px * var(--rk, 1)); background: var(--bg-shell); border: 1px solid color-mix(in srgb, #1f6fff 60%, var(--border)); display: flex; flex-direction: column; gap: 5px; box-shadow: 0 16px 40px -16px rgba(0,0,0,0.6); animation: bi-in 0.2s ease-out; }
   @keyframes bi-in { from { opacity: 0; transform: translateY(10px); } }
   .bi-card b { font-size: 13.5px; }
   .bi-f { font-size: 12.5px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bi-btns { display: flex; gap: 6px; margin-top: 4px; }
   .bi-btns:empty { display: none; }
-  .bi-btn { border: none; border-radius: 9px; padding: 7px 12px; background: #1f6fff; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+  .bi-btn { border: none; border-radius: calc(9px * var(--rk, 1)); padding: 7px 12px; background: #1f6fff; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
   .bi-btn.ghost { background: var(--bg-input); color: var(--fg); }
   .bi-bar { height: 4px; border-radius: 2px; background: var(--bg-hover); overflow: hidden; }
   .bi-bar i { display: block; height: 100%; background: #1f6fff; transition: width 0.25s; }

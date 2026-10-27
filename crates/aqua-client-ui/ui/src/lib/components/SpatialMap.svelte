@@ -80,10 +80,10 @@
   .sm-empty { position: absolute; left: 0; right: 0; bottom: 18%; text-align: center; font-size: 11.5px; color: var(--fg-dim); }
   .sm-side { display: flex; flex-direction: column; gap: 8px; min-width: 180px; max-width: 240px; }
   .sm-lbl { font-size: 11px; font-weight: 800; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.05em; }
-  .sm-seg { display: flex; gap: 3px; padding: 3px; border-radius: 10px; background: var(--bg-input); }
-  .sm-seg button { flex: 1; border: none; background: none; color: var(--fg-muted); font: inherit; font-size: 12px; font-weight: 600; padding: 6px 4px; border-radius: 8px; cursor: pointer; white-space: nowrap; }
+  .sm-seg { display: flex; gap: 3px; padding: 3px; border-radius: calc(10px * var(--rk, 1)); background: var(--bg-input); }
+  .sm-seg button { flex: 1; border: none; background: none; color: var(--fg-muted); font: inherit; font-size: 12px; font-weight: 600; padding: 6px 4px; border-radius: calc(8px * var(--rk, 1)); cursor: pointer; white-space: nowrap; }
   .sm-seg button.on { background: var(--bg-shell); color: var(--accent); box-shadow: 0 0 0 1px var(--border-strong); }
   .sm-note { margin: 0; font-size: 11.5px; color: var(--fg-dim); line-height: 1.45; }
-  .sm-reset { align-self: flex-start; border: 1px solid var(--border); background: none; color: var(--fg-muted); border-radius: 9px; padding: 6px 10px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .sm-reset { align-self: flex-start; border: 1px solid var(--border); background: none; color: var(--fg-muted); border-radius: calc(9px * var(--rk, 1)); padding: 6px 10px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
   .sm-reset:hover { color: var(--accent); border-color: var(--accent); }
 </style>

@@ -142,7 +142,7 @@
     margin: 4px 0;
     padding: 3px 10px;
     border-left: 3px solid var(--accent);
-    border-radius: 4px;
+    border-radius: calc(4px * var(--rk, 1));
     background: color-mix(in srgb, var(--accent) 9%, transparent);
   }
   .article .mk-quote { margin: 0.9em 0; padding: 8px 14px; }
@@ -158,7 +158,7 @@
     padding: 8px 10px;
     background: var(--bg-input);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: calc(8px * var(--rk, 1));
     font-family: var(--font-mono);
     font-size: 0.88em;
     line-height: 1.5;
@@ -172,7 +172,7 @@
     font-family: var(--font-mono);
     font-size: 0.9em;
     padding: 1px 5px;
-    border-radius: 4px;
+    border-radius: calc(4px * var(--rk, 1));
     background: var(--bg-input);
     color: var(--accent);
   }
@@ -188,7 +188,7 @@
   .mk-mention:hover { text-decoration: underline; }
   .mk-tag { color: var(--accent); }
   .mk-spoiler {
-    border-radius: 4px;
+    border-radius: calc(4px * var(--rk, 1));
     background: var(--fg-dim);
     color: transparent;
     cursor: pointer;

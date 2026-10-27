@@ -153,7 +153,7 @@
   .ps {
     width: min(560px, calc(100vw - 24px)); max-height: min(640px, calc(100dvh - 24px));
     display: flex; flex-direction: column; background: var(--bg-shell); border: 1px solid var(--border-strong);
-    border-radius: 18px; overflow: hidden; animation: ps-pop 0.18s cubic-bezier(.2,.9,.3,1.2);
+    border-radius: calc(18px * var(--rk, 1)); overflow: hidden; animation: ps-pop 0.18s cubic-bezier(.2,.9,.3,1.2);
   }
   .ps-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px 10px; border-bottom: 1px solid var(--border); }
   .ps-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -162,17 +162,17 @@
   .ps-x { width: 30px; height: 30px; border-radius: 50%; border: none; background: var(--bg-hover); color: var(--fg-muted); cursor: pointer; }
   .ps-x:hover { color: var(--fg); }
   .ps-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 6px; padding: 12px; overflow-y: auto; }
-  .ps-cell { aspect-ratio: 1; border: none; background: transparent; border-radius: 12px; padding: 6px; cursor: pointer; display: grid; place-items: center; transition: background 0.12s, transform 0.12s; }
+  .ps-cell { aspect-ratio: 1; border: none; background: transparent; border-radius: calc(12px * var(--rk, 1)); padding: 6px; cursor: pointer; display: grid; place-items: center; transition: background 0.12s, transform 0.12s; }
   .ps-cell:hover { background: var(--bg-hover); transform: scale(1.04); }
   .ps-cell.disabled { cursor: default; }
   .ps-cell :global(img), .ps-cell :global(video), .ps-cell :global(canvas) { max-width: 100%; max-height: 100%; object-fit: contain; }
-  .skel { width: 100%; height: 100%; border-radius: 12px; background: linear-gradient(90deg, var(--bg-hover), color-mix(in srgb, var(--bg-hover) 40%, transparent), var(--bg-hover)); background-size: 200% 100%; animation: ps-shimmer 1.2s linear infinite; }
+  .skel { width: 100%; height: 100%; border-radius: calc(12px * var(--rk, 1)); background: linear-gradient(90deg, var(--bg-hover), color-mix(in srgb, var(--bg-hover) 40%, transparent), var(--bg-hover)); background-size: 200% 100%; animation: ps-shimmer 1.2s linear infinite; }
   .ps-cell.skel { padding: 0; }
   .ps-miss { font-size: 28px; }
   .ps-note { padding: 22px 18px; color: var(--fg-muted); font-size: 14px; line-height: 1.5; }
   .ps-foot { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border); min-height: 24px; }
   .ps-ok { margin-right: auto; color: var(--accent); font-size: 13px; font-weight: 600; }
-  .ps-btn { border-radius: 10px; padding: 9px 16px; font-weight: 600; font-size: 14px; cursor: pointer; border: 1px solid var(--border-strong); background: transparent; color: var(--fg); }
+  .ps-btn { border-radius: calc(10px * var(--rk, 1)); padding: 9px 16px; font-weight: 600; font-size: 14px; cursor: pointer; border: 1px solid var(--border-strong); background: transparent; color: var(--fg); }
   .ps-btn.primary { flex: 1; border: none; color: #061015; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
   .ps-btn:disabled { opacity: 0.6; cursor: default; }
   @keyframes ps-fade { from { opacity: 0; } }

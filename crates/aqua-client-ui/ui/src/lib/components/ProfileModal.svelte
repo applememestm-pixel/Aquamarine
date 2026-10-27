@@ -16,12 +16,12 @@
   import { onMount } from "svelte";
   import { profile, updateProfile, type Profile } from "../profile";
   import { contacts, saveContact, getContact } from "../contacts";
-  import { info } from "../stores";
+  import { info, chats } from "../stores";
   import { api, bytesToDataUrl } from "../tauri";
   import { icons } from "../icons";
   import { openFileDialog } from "../dialog";
   import { showToast } from "./Toast.svelte";
-  import { broadcastPresence, peerPresence, myActivity, shareActivity, myOnline, activityVerb, activityLine } from "../presence";
+  import { broadcastPresence, peerPresence, myActivity, shareActivity, myOnline, activityVerb, activityLine, peerStatus } from "../presence";
   import { peerCards, refreshPeer, publishMyProfile, setMyImage, setMyImageBytes, clearMyImage, setMyMediaFile, clearMyMusic, str, clans } from "../people";
   import MediaPlayer from "./MediaPlayer.svelte";
   import { streamSrc } from "../media";
@@ -34,6 +34,9 @@
   import { openRegistration, registrationDismissed } from "./RegistrationWizard.svelte";
   import { playedTop, played, gameGradient } from "../played";
   import GamePoster from "./GamePoster.svelte";
+  import QrCode from "./QrCode.svelte";
+  import { averageColor, mixHex, patternUrl, PATTERN_EMOJI } from "../cardStyle";
+  import { userQr } from "../qr";
   import { gameIds, gameIcons, gameCovers, resolveGame, rememberGame, iconFor, coverFor } from "../games";
 
   let pfTab = $state<"board" | "activity">("board");
@@ -222,6 +225,9 @@
     game_ids: Record<string, string>;
     game_note: string;
     played: { n: string; h: number }[];
+    /** Card colour set by hand ("" = from the banner) and banner emoji. */
+    card: string;
+    pattern: string;
   }
   let view = $derived<View | null>((void $played, buildView(activeUsername, $profile, $contacts, $info, $peerCards, $peerPresence, $myActivity)));
   // Which avatar image to show: the live draft when editing myself, else
@@ -234,6 +240,21 @@
   );
   let bannerA = $derived((editing && isMe && draft) ? draft.banner_a : (view?.banner_a ?? "#4F7AFE"));
   let bannerB = $derived((editing && isMe && draft) ? draft.banner_b : (view?.banner_b ?? "#9B6CFF"));
+  // Card colour: set by hand, else the banner picture's average colour,
+  // else halfway between the two banner colours.
+  let sampled = $state("");
+  $effect(() => {
+    const u = shownBanner && !isVideoUrl(shownBanner) ? shownBanner : "";
+    sampled = "";
+    if (u) void averageColor(u).then((c) => { if (u === shownBanner) sampled = c; });
+  });
+  let cardSet = $derived((editing && isMe && draft) ? (draft.card ?? "") : (view?.card ?? ""));
+  let cardColor = $derived(cardSet || sampled || mixHex(bannerA, bannerB));
+  let patternEmoji = $derived((editing && isMe && draft) ? (draft.pattern ?? "") : (view?.pattern ?? ""));
+  let patternBg = $derived(patternEmoji ? patternUrl(patternEmoji) : "");
+  let showQr = $state(false);
+  let patternInput = $state("");
+
   // Now-playing to show on the card: our own when viewing self, else the
   // peer's last-broadcast presence.
   let np = $derived.by(() => {
@@ -278,6 +299,8 @@
         game_ids: me.game_ids ?? {},
         game_note: (me.game_note ?? "").slice(0, 140),
         played: getStore(shareActivity) ? playedTop(12).map((g) => ({ n: g.name, h: Math.round(g.secs / 360) / 10 })) : [],
+        card: me.card ?? "",
+        pattern: me.pattern ?? "",
       };
     }
     const c = getContact(uname);
@@ -286,7 +309,8 @@
     const pr = pres[uname];
     return {
       // Prefer the server-published card, then the local contact book.
-      display_name: c?.full_name || srv?.display_name || uname,
+      display_name: c?.full_name || (srv?.display_name && srv.display_name !== "You" ? srv.display_name : "")
+        || (getStore(chats).find((ch) => ch.id === uname)?.name ?? "") || uname,
       username: uname,
       // Fields they keep private arrive over E2EE presence (`pp`).
       about: srv?.about || pr?.pp?.about || "",
@@ -302,8 +326,8 @@
       pronouns: str(x.pronouns),
       is_bot: !!srv?.is_bot,
       banner_url: srv?.banner ?? "",
-      online: pr?.online ?? "",
-      activity: pr?.activity ?? [],
+      online: peerStatus(pr),
+      activity: peerStatus(pr) === "offline" ? [] : (pr?.activity ?? []),
       music_url: srv?.music ?? "",
       music_title: str(x.music_title),
       links: asLinks(x.links),
@@ -311,6 +335,8 @@
       game_ids: (x.game_ids && typeof x.game_ids === "object" ? x.game_ids : {}) as Record<string, string>,
       game_note: str(x.game_note).slice(0, 140),
       played: asPlayed(x.played),
+      card: /^#[0-9a-f]{6}$/i.test(str(x.card)) ? str(x.card) : "",
+      pattern: str(x.pattern).slice(0, 16),
     };
   }
 
@@ -387,7 +413,7 @@
     onclick={onBackdrop}
     onkeydown={(e) => { if (e.target === e.currentTarget && (e.key === "Escape" || e.key === "Enter")) closeProfile(); }}
   >
-    <div class="sheet" class:wide={!editing && !privPage} class:ed={editing && isMe && !!draft} role="dialog" aria-modal="true" tabindex="-1">
+    <div class="sheet" class:wide={!editing && !privPage} class:ed={editing && isMe && !!draft} style:--card={cardColor} role="dialog" aria-modal="true" tabindex="-1">
       <!-- Close stays put; banner + body scroll together, so the avatar is
            never clipped under the banner when the form is long. -->
       <button class="close" onclick={closeProfile} title={$t("Close (Esc)")}>×</button>
@@ -397,6 +423,7 @@
           <!-- Animated banner: silent short loop. -->
           <video class="banner-vid" use:streamSrc={shownBanner} muted loop autoplay playsinline></video>
         {/if}
+        {#if patternBg}<div class="pattern" style:background-image={`url("${patternBg}")`}></div>{/if}
         {#if isMe && !editing}
           <button class="banner-hit" onclick={() => pickImage("banner")} disabled={!!uploading} aria-label={$t("Change banner")}>
             <span>{uploading === "banner" ? $t("Uploading…") : $t("📷 Change banner — photo, GIF or video")}</span>
@@ -419,7 +446,7 @@
               {view.display_name.charAt(0).toUpperCase()}
             {/if}
           </div>
-          {#if view.online && view.online !== "offline"}<span class="presence {view.online}" title={view.online}></span>{/if}
+          {#if view.online}<span class="presence {view.online}" title={view.online}></span>{/if}
           {#if editing && isMe && draft}
             <button class="av-edit" onclick={() => pickImage("avatar")} title={$t("Change avatar")} disabled={!!uploading}>{$t(uploading === "avatar" ? "…" : "Change")}</button>
             {#if draft.avatar_url}
@@ -456,6 +483,24 @@
               <span>{$t("Banner B")}</span>
               <ColorInput bind:value={draft.banner_b} size={36} />
             </label>
+          </div>
+          <div class="field">
+            <span>{$t("Card colour")}</span>
+            <div class="card-row">
+              <button class="chip" class:on={!draft.card} onclick={() => draft && (draft = { ...draft, card: "" })}>{$t("From the banner")}</button>
+              <ColorInput value={draft.card || cardColor} size={30} oninput={(v) => draft && (draft = { ...draft, card: v })} />
+            </div>
+          </div>
+          <div class="field">
+            <span>{$t("Banner pattern")}</span>
+            <div class="pat-row">
+              <button class="pat" class:on={!draft.pattern} onclick={() => draft && (draft = { ...draft, pattern: "" })} title={$t("No pattern")}>∅</button>
+              {#each PATTERN_EMOJI as e (e)}
+                <button class="pat" class:on={draft.pattern === e} onclick={() => draft && (draft = { ...draft, pattern: e })}>{e}</button>
+              {/each}
+              <input class="pat-own" bind:value={patternInput} maxlength="8" placeholder={$t("Your emoji")}
+                oninput={() => { const v = [...patternInput.trim()].slice(0, 4).join(""); if (draft && v) draft = { ...draft, pattern: v }; }} />
+            </div>
           </div>
           <div class="pub-note">{$t("Avatar and banner are published to the server — everyone you chat with sees them.")}</div>
           </div>
@@ -583,7 +628,20 @@
 
             {#if $clans[isMe ? ($info?.username ?? "") : activeUsername]}<ClanTag tag={$clans[isMe ? ($info?.username ?? "") : activeUsername]} size="md" />{/if}
           </h2>
-          <div class="username">@{view.username}</div>
+          <div class="username">@{view.username}
+            {#if !view.is_bot}<button class="qr-btn" onclick={() => (showQr = true)} title={$t("QR code")} aria-label={$t("QR code")}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 14h3v3M21 14v.01M17 21h4v-4M14 18v3"/></svg>
+            </button>{/if}
+          </div>
+          {#if showQr}
+            <div class="qr-pop" role="presentation" onclick={() => (showQr = false)}>
+              <div class="qr-card" role="presentation" onclick={(e) => e.stopPropagation()}>
+                <QrCode text={userQr(view.username, isMe ? ($info?.server_url ?? "") : "")} color={cardColor} avatar={shownAvatar} letter={view.display_name.charAt(0).toUpperCase()} />
+                <b>@{view.username}</b>
+                <small>{$t("Scan it in Aquamarine: New message → Scan QR.")}</small>
+              </div>
+            </div>
+          {/if}
           {#if view.status}
             <div class="status-line">{view.status}</div>
           {/if}
@@ -793,11 +851,11 @@
     transition: color 0.15s, border-color 0.15s;
   }
   .pf-tabs button.on { color: var(--fg); border-bottom-color: var(--accent); }
-  .card { padding: 12px; border-radius: 12px; background: var(--bg-input); border: 1px solid var(--border); }
+  .card { padding: 12px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-input); border: 1px solid var(--border); }
   .pf-empty { font-size: 12.5px; color: var(--fg-dim); padding: 18px 4px; text-align: center; }
   .links { display: flex; flex-direction: column; gap: 2px; }
   .link-row {
-    display: flex; align-items: center; gap: 10px; padding: 7px 8px; border: none; border-radius: 8px;
+    display: flex; align-items: center; gap: 10px; padding: 7px 8px; border: none; border-radius: calc(8px * var(--rk, 1));
     background: none; color: var(--fg); cursor: pointer; text-align: left; font-size: 13px;
     transition: background 0.12s;
   }
@@ -816,7 +874,7 @@
   .fg-name { font-size: 16px; }
   .fg-note { margin: 0; font-size: 13px; color: var(--fg-muted); line-height: 1.45; word-wrap: break-word; }
   .fg-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-  .fg-chip { font-size: 11.5px; font-weight: 600; padding: 3px 8px; border-radius: 7px; border: 1px solid var(--border-strong); color: var(--fg-muted); }
+  .fg-chip { font-size: 11.5px; font-weight: 600; padding: 3px 8px; border-radius: calc(7px * var(--rk, 1)); border: 1px solid var(--border-strong); color: var(--fg-muted); }
   .fg-chip.live { color: #3ddc84; border-color: color-mix(in srgb, #3ddc84 40%, transparent); }
 
   /* ---- editor: two columns (card on the left, details on the right) ---- */
@@ -836,7 +894,7 @@
   .eg-star { position: absolute; top: 4px; left: 4px; width: 20px; height: 20px; border-radius: 50%; border: none; cursor: pointer;
     background: rgba(0,0,0,.6); color: #FFD45C; font-size: 12px; line-height: 1; opacity: 0; transition: opacity .15s; }
   .ed-game:hover .eg-star { opacity: 1; }
-  .eg-first { position: absolute; top: 4px; left: 4px; white-space: nowrap; text-transform: none; letter-spacing: 0; font-size: 9.5px; font-weight: 800; color: #1a1205; background: #FFD45C; border-radius: 6px; padding: 1px 5px; }
+  .eg-first { position: absolute; top: 4px; left: 4px; white-space: nowrap; text-transform: none; letter-spacing: 0; font-size: 9.5px; font-weight: 800; color: #1a1205; background: #FFD45C; border-radius: calc(6px * var(--rk, 1)); padding: 1px 5px; }
   .game-note { width: 100%; box-sizing: border-box; margin-bottom: 8px; }
   .eg-x { position: absolute; top: 4px; right: 4px; width: 20px; height: 20px; border-radius: 50%; border: none; cursor: pointer;
     background: rgba(0,0,0,.6); color: #fff; font-size: 13px; line-height: 1; opacity: 0; transition: opacity .15s; }
@@ -851,19 +909,19 @@
   .played-bar { flex: 0 0 70px; height: 5px; border-radius: 3px; background: var(--bg-input); overflow: hidden; }
   .played-bar span { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
   img.played-cover { object-fit: cover; }
-  .game-chip img { width: 16px; height: 16px; border-radius: 4px; margin-right: 5px; vertical-align: -3px; }
+  .game-chip img { width: 16px; height: 16px; border-radius: calc(4px * var(--rk, 1)); margin-right: 5px; vertical-align: -3px; }
   .game-search { position: relative; }
   .game-hits { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 20; background: var(--bg-shell); border: 1px solid var(--border-strong);
-    border-radius: 12px; padding: 4px; box-shadow: 0 18px 40px -14px rgba(0,0,0,.7); max-height: 260px; overflow-y: auto; }
-  .game-hit { width: 100%; display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: none; border-radius: 8px; background: none; color: var(--fg); font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
+    border-radius: calc(12px * var(--rk, 1)); padding: 4px; box-shadow: 0 18px 40px -14px rgba(0,0,0,.7); max-height: 260px; overflow-y: auto; }
+  .game-hit { width: 100%; display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: none; border-radius: calc(8px * var(--rk, 1)); background: none; color: var(--fg); font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
   .game-hit:hover { background: var(--accent-soft); }
-  .game-hit img, .gh-ph { width: 28px; height: 28px; border-radius: 7px; object-fit: cover; flex-shrink: 0; display: grid; place-items: center; color: #fff; font-weight: 800; }
+  .game-hit img, .gh-ph { width: 28px; height: 28px; border-radius: calc(7px * var(--rk, 1)); object-fit: cover; flex-shrink: 0; display: grid; place-items: center; color: #fff; font-weight: 800; }
   .game:hover { transform: translateY(-2px); }
   .game-name { font-size: 12px; font-weight: 700; line-height: 1.2; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6); }
   .game-h { font-size: 10.5px; opacity: 0.85; }
   .game-fav { position: absolute; top: 6px; right: 7px; font-size: 12px; color: #FFD45C; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5); }
   .played-row { display: flex; align-items: center; gap: 10px; padding: 6px 2px; font-size: 13px; }
-  .played-cover { width: 34px; height: 34px; border-radius: 8px; display: grid; place-items: center; color: #fff; font-weight: 800; flex-shrink: 0; }
+  .played-cover { width: 34px; height: 34px; border-radius: calc(8px * var(--rk, 1)); display: grid; place-items: center; color: #fff; font-weight: 800; flex-shrink: 0; }
   .played-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .played-h { color: var(--fg-dim); font-size: 12px; }
   .link-edit { display: flex; gap: 6px; margin-top: 6px; }
@@ -874,6 +932,35 @@
   .game-chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .game-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 4px 3px 10px; border-radius: 999px; color: #fff; font-size: 12px; font-weight: 600; }
   .game-chip button { border: none; background: rgba(0, 0, 0, 0.25); color: #fff; width: 18px; height: 18px; border-radius: 50%; cursor: pointer; line-height: 1; }
+
+  /* The whole card takes its colour (from the banner unless set by hand). */
+  .sheet {
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--card) 34%, var(--bg-shell)) 0%, color-mix(in srgb, var(--card) 12%, var(--bg-shell)) 55%, color-mix(in srgb, var(--card) 8%, var(--bg-shell)) 100%) !important;
+    border-color: color-mix(in srgb, var(--card) 35%, var(--border)) !important;
+  }
+  .sheet :global(.section), .sheet .card, .sheet .act-card {
+    background: color-mix(in srgb, var(--card) 14%, rgba(0, 0, 0, 0.22)) !important;
+    border-color: color-mix(in srgb, var(--card) 22%, transparent) !important;
+  }
+  .sheet .avatar { border-color: color-mix(in srgb, var(--card) 34%, var(--bg-shell)); }
+  .sheet.ed .ed-right .buttons { background: color-mix(in srgb, var(--card) 10%, var(--bg-shell)); }
+  .pattern { position: absolute; inset: 0; pointer-events: none; background-size: 168px 112px; opacity: 0.32; mix-blend-mode: soft-light; }
+  .card-row, .pat-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .chip { border: 1px solid var(--border); background: none; color: var(--fg-muted); border-radius: 100px; padding: 5px 11px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .chip.on { border-color: var(--accent); color: var(--accent); }
+  .pat { width: 32px; height: 32px; border-radius: calc(9px * var(--rk, 1)); border: 1px solid transparent; background: color-mix(in srgb, var(--card) 14%, transparent); font-size: 16px; cursor: pointer; color: var(--fg-muted); filter: grayscale(1); }
+  .pat.on { border-color: var(--accent); filter: none; }
+  .field input.pat-own { width: 92px; padding: 6px 8px; font-size: 13px; }
+  .username { display: flex; align-items: center; gap: 6px; }
+  .qr-btn { border: none; background: none; padding: 2px; color: var(--fg-dim); cursor: pointer; display: grid; place-items: center; }
+  .qr-btn:hover { color: var(--accent); }
+  .qr-btn svg { width: 16px; height: 16px; }
+  .qr-pop { position: fixed; inset: 0; z-index: 140; display: grid; place-items: center; background: rgba(4, 6, 10, 0.6); backdrop-filter: blur(4px); }
+  .qr-card { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 22px; border-radius: calc(22px * var(--rk, 1)); color: #fff;
+    background: linear-gradient(160deg, var(--card), color-mix(in srgb, var(--card) 45%, #000)); box-shadow: 0 30px 70px -20px rgba(0,0,0,.7); }
+  .qr-card b { font-size: 17px; }
+  .qr-card small { opacity: .8; font-size: 12px; max-width: 220px; text-align: center; }
 
   .backdrop {
     position: fixed; inset: 0;
@@ -892,7 +979,7 @@
     display: flex; flex-direction: column;
     background: var(--bg-shell);
     border: 1px solid var(--border);
-    border-radius: 16px;
+    border-radius: calc(16px * var(--rk, 1));
     box-shadow: 0 32px 80px -16px rgba(0, 0, 0, 0.6);
     overflow: hidden;
     position: relative;
@@ -919,12 +1006,12 @@
   .banner-hit { position: absolute; inset: 0; border: none; background: rgba(0,0,0,0); color: #fff; cursor: pointer;
     display: grid; place-items: center; font: inherit; font-weight: 700; font-size: 13px; transition: background .2s; }
   .banner-hit span { opacity: 0; transform: translateY(4px); transition: opacity .2s, transform .2s; background: rgba(0,0,0,.55);
-    padding: 6px 12px; border-radius: 10px; backdrop-filter: blur(6px); }
+    padding: 6px 12px; border-radius: calc(10px * var(--rk, 1)); backdrop-filter: blur(6px); }
   .banner-hit:hover { background: rgba(0,0,0,.25); }
   .banner-hit:hover span, .banner-hit:focus-visible span { opacity: 1; transform: none; }
   .banner-tools { z-index: 3; position: absolute; right: 12px; bottom: 12px; display: flex; gap: 6px; align-items: center; }
   .bn-btn {
-    background: rgba(0, 0, 0, 0.55); color: #fff; border: none; border-radius: 8px;
+    background: rgba(0, 0, 0, 0.55); color: #fff; border: none; border-radius: calc(8px * var(--rk, 1));
     padding: 5px 10px; font-size: 12px; font-weight: 700; cursor: pointer; backdrop-filter: blur(6px);
   }
   .bn-btn:hover:not(:disabled) { background: rgba(0, 0, 0, 0.75); }
@@ -938,13 +1025,13 @@
     padding: 5px 11px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
   }
   .pv-quick button:hover { color: var(--accent); border-color: var(--accent-soft); }
-  .pv-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: var(--bg-input); border-radius: 10px; margin-bottom: 6px; }
+  .pv-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: var(--bg-input); border-radius: calc(10px * var(--rk, 1)); margin-bottom: 6px; }
   .pv-text { flex: 1; min-width: 0; }
   .pv-name { font-size: 13.5px; font-weight: 600; color: var(--fg); }
   .pv-eff { font-size: 11.5px; color: var(--accent); }
   .pv-eff.no { color: #ff8f8f; }
-  .pv-seg { display: flex; background: var(--bg-shell); border: 1px solid var(--border); border-radius: 9px; padding: 2px; flex-shrink: 0; }
-  .pv-seg button { border: none; background: none; color: var(--fg-dim); font: inherit; font-size: 11.5px; font-weight: 700; padding: 5px 8px; border-radius: 7px; cursor: pointer; }
+  .pv-seg { display: flex; background: var(--bg-shell); border: 1px solid var(--border); border-radius: calc(9px * var(--rk, 1)); padding: 2px; flex-shrink: 0; }
+  .pv-seg button { border: none; background: none; color: var(--fg-dim); font: inherit; font-size: 11.5px; font-weight: 700; padding: 5px 8px; border-radius: calc(7px * var(--rk, 1)); cursor: pointer; }
   .pv-seg button.on { background: var(--bg-hover); color: var(--fg); }
   .pv-seg button.ok.on { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
   .pv-seg button.bad.on { background: rgba(255, 77, 109, 0.16); color: #ff8f8f; }
@@ -953,9 +1040,9 @@
   .act-card {
     display: flex; align-items: center; gap: 12px;
     margin-top: 12px; padding: 10px 12px;
-    background: var(--bg-input); border: 1px solid var(--border); border-radius: 12px;
+    background: var(--bg-input); border: 1px solid var(--border); border-radius: calc(12px * var(--rk, 1));
   }
-  .act-ic { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; font-size: 20px; background: var(--accent-soft); flex-shrink: 0; }
+  .act-ic { width: 40px; height: 40px; border-radius: calc(10px * var(--rk, 1)); display: grid; place-items: center; font-size: 20px; background: var(--accent-soft); flex-shrink: 0; }
   .act-line { font-size: 12px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .close {
     position: absolute;
@@ -964,7 +1051,7 @@
     width: 28px; height: 28px;
     background: rgba(0, 0, 0, 0.35);
     border: none;
-    border-radius: 8px;
+    border-radius: calc(8px * var(--rk, 1));
     color: #fff;
     font-size: 18px;
     line-height: 1;
@@ -1001,6 +1088,8 @@
     border: 4px solid var(--bg-shell);
   }
   .presence.idle { background: #FAA61A; }
+  /* Offline: a hollow ring, like Discord. */
+  .presence.offline, .presence.invisible { background: var(--bg-shell); box-shadow: inset 0 0 0 3px #80848E; }
   .presence.dnd { background: #ED4245; }
   .av-edit {
     position: absolute;
@@ -1024,7 +1113,7 @@
   .bot-tag {
     font-size: 9.5px; font-weight: 800; letter-spacing: 0.06em;
     background: var(--accent); color: #06070C;
-    padding: 2px 6px; border-radius: 5px;
+    padding: 2px 6px; border-radius: calc(5px * var(--rk, 1));
   }
   .pronouns {
     font-size: 11.5px; font-weight: 600; color: var(--fg-dim);
@@ -1040,11 +1129,11 @@
     display: flex; align-items: center; gap: 11px;
     padding: 10px 12px; margin-bottom: 14px;
     background: var(--accent-soft); border: 1px solid var(--accent-soft);
-    border-radius: 12px; text-decoration: none;
+    border-radius: calc(12px * var(--rk, 1)); text-decoration: none;
   }
   .np-card:hover { border-color: var(--accent); }
   .np-ic {
-    width: 34px; height: 34px; flex-shrink: 0; border-radius: 9px;
+    width: 34px; height: 34px; flex-shrink: 0; border-radius: calc(9px * var(--rk, 1));
     display: grid; place-items: center; font-size: 17px;
     background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070C;
   }
@@ -1070,7 +1159,7 @@
 
   .section {
     background: var(--bg-input);
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     padding: 10px 14px;
     margin-bottom: 8px;
   }
@@ -1118,7 +1207,7 @@
   .field input, .field textarea {
     background: var(--bg-input);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: calc(8px * var(--rk, 1));
     color: var(--fg);
     font-family: inherit;
     font-size: 13.5px;
@@ -1132,12 +1221,13 @@
   .field.half { flex: 1; }
 
   .buttons {
-    display: flex; justify-content: flex-end; gap: 10px;
+    display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px;
     margin-top: 16px;
   }
+  .buttons > button { white-space: nowrap; }
   .btn-ghost, .btn-primary {
     padding: 8px 16px;
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     font-size: 13px;
     font-weight: 700;
     cursor: pointer;

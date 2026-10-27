@@ -121,7 +121,7 @@
     padding: 5px 10px;
     background: transparent;
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: calc(8px * var(--rk, 1));
     color: var(--fg-dim);
     font-size: 11.5px;
     cursor: pointer;
@@ -155,7 +155,7 @@
     padding: 10px 10px;
     background: transparent;
     border: none;
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     text-align: left;
     color: inherit;
     cursor: pointer;
@@ -165,7 +165,7 @@
   .icon {
     position: relative;
     width: 42px; height: 42px;
-    border-radius: 12px;
+    border-radius: calc(12px * var(--rk, 1));
     display: grid; place-items: center;
     background: var(--bg-input);
     color: var(--fg-muted);

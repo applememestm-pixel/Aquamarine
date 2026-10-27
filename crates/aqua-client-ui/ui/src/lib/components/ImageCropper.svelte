@@ -170,21 +170,21 @@
 <style>
   .backdrop { position: fixed; inset: 0; z-index: 280; background: rgba(6, 7, 12, 0.7); display: grid; place-items: center; }
   .sheet {
-    background: var(--bg-shell); border: 1px solid var(--border); border-radius: 16px;
+    background: var(--bg-shell); border: 1px solid var(--border); border-radius: calc(16px * var(--rk, 1));
     padding: 18px; display: flex; flex-direction: column; align-items: center; gap: 12px;
     box-shadow: 0 32px 80px -16px rgba(0, 0, 0, 0.7);
    animation: aq-pop .3s var(--ease-spring, ease-out); }
   .title { align-self: flex-start; font-weight: 800; font-size: 16px; color: var(--fg); }
-  .frame { position: relative; overflow: hidden; border-radius: 12px; background: #000; cursor: grab; touch-action: none; }
+  .frame { position: relative; overflow: hidden; border-radius: calc(12px * var(--rk, 1)); background: #000; cursor: grab; touch-action: none; }
   .frame:active { cursor: grabbing; }
   .frame img { position: absolute; left: 50%; top: 50%; max-width: none; user-select: none; pointer-events: none; }
-  .mask { position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.5); border-radius: 12px; }
+  .mask { position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.5); border-radius: calc(12px * var(--rk, 1)); }
   .mask.round { border-radius: 50%; box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.55), inset 0 0 0 2px rgba(255, 255, 255, 0.6); }
   .zoom { display: flex; align-items: center; gap: 10px; width: 100%; color: var(--fg-dim); font-weight: 700; }
   .zoom input { flex: 1; accent-color: var(--accent); }
   .hint { font-size: 11.5px; color: var(--fg-dim); }
   .actions { display: flex; gap: 8px; align-self: flex-end; }
-  .actions button { border: none; border-radius: 10px; padding: 8px 16px; font-weight: 700; cursor: pointer; font-size: 13.5px; }
+  .actions button { border: none; border-radius: calc(10px * var(--rk, 1)); padding: 8px 16px; font-weight: 700; cursor: pointer; font-size: 13.5px; }
   .ghost { background: var(--bg-input); color: var(--fg); }
   .primary { background: var(--accent); color: #06070C; }
   .primary:disabled { opacity: 0.6; cursor: default; }

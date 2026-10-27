@@ -1314,7 +1314,7 @@
     display: flex; flex-direction: column;
     background: var(--bg-shell);
     border: 1px solid var(--border);
-    border-radius: 18px;
+    border-radius: calc(18px * var(--rk, 1));
     overflow: hidden;
     box-shadow: 0 40px 120px -24px rgba(0, 0, 0, 0.75);
     animation: pe-rise 0.2s ease-out;
@@ -1331,7 +1331,7 @@
   .ib {
     height: 32px; min-width: 32px; padding: 0 8px;
     display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-    background: transparent; border: 1px solid transparent; border-radius: 9px;
+    background: transparent; border: 1px solid transparent; border-radius: calc(9px * var(--rk, 1));
     color: var(--fg-muted); font: inherit; font-size: 12.5px; font-weight: 600;
     cursor: pointer;
     transition: background 0.12s, color 0.12s;
@@ -1517,7 +1517,7 @@
   .th {
     position: relative; display: block;
     width: 62px; height: 62px;
-    border-radius: 12px; overflow: hidden;
+    border-radius: calc(12px * var(--rk, 1)); overflow: hidden;
     border: 2px solid var(--border);
     background: var(--bg-input);
     transition: border-color 0.12s, box-shadow 0.12s;
@@ -1539,7 +1539,7 @@
   .tb {
     height: 38px; padding: 0 12px;
     display: inline-flex; align-items: center; gap: 7px;
-    background: transparent; border: 1px solid transparent; border-radius: 11px;
+    background: transparent; border: 1px solid transparent; border-radius: calc(11px * var(--rk, 1));
     color: var(--fg-muted); font: inherit; font-size: 12.5px; font-weight: 600;
     cursor: pointer;
     transition: color 0.12s, background 0.12s, box-shadow 0.12s;
@@ -1558,12 +1558,12 @@
   .btn-ghost, .btn-primary {
     height: 38px; padding: 0 18px;
     display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-    border-radius: 11px;
+    border-radius: calc(11px * var(--rk, 1));
     font: inherit; font-size: 13px; font-weight: 700;
     cursor: pointer;
     transition: transform 0.12s, color 0.12s, border-color 0.12s, box-shadow 0.12s;
   }
-  .btn-ghost.sm, .btn-primary.sm { height: 32px; padding: 0 14px; font-size: 12.5px; border-radius: 9px; }
+  .btn-ghost.sm, .btn-primary.sm { height: 32px; padding: 0 14px; font-size: 12.5px; border-radius: calc(9px * var(--rk, 1)); }
   .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--fg-muted); }
   .btn-ghost:hover:not(:disabled) { color: var(--fg); border-color: var(--border-strong); }
   .btn-ghost.danger:hover:not(:disabled) { color: var(--danger); border-color: var(--danger); }

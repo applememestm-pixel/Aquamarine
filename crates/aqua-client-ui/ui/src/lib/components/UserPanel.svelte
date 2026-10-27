@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { accounts, loadAccounts, switchAccount } from "../accounts";
   import { t, tr } from "../i18n";
   /**
    * Discord-style user panel (bottom-left): avatar with status, name,
@@ -35,8 +36,17 @@
     return $myOnline === "invisible" ? "Invisible" : `@${$info?.username ?? ""}`;
   });
 
+  // Several accounts on the PC too (like the phone's hold-the-avatar sheet).
+  let switching = $state(false);
+  function hostOf(u: string) { try { return new URL(u).host; } catch { return u; } }
+  async function pickAccount(slot: string) {
+    if (switching) return;
+    switching = true;
+    try { await switchAccount(slot); } catch (e) { switching = false; showToast(String(e)); }
+  }
   function toggleMenu() {
     menuOpen = !menuOpen;
+    if (menuOpen) void loadAccounts();
     if (menuOpen) statusDraft = $profile.status ?? "";
   }
 
@@ -111,6 +121,18 @@
         {/each}
         <div class="sep"></div>
         <button class="menu-item" onclick={() => { menuOpen = false; openProfile(); }}>{$t("Edit profile")}</button>
+        <div class="sep"></div>
+        <div class="mi-head">{$t("Accounts")}</div>
+        {#each $accounts as a (a.slot)}
+          <button class="menu-item acc" class:active={a.active} disabled={switching || a.active} onclick={() => pickAccount(a.slot)}>
+            <span class="acc-ava">{(a.username || "?").charAt(0).toUpperCase()}</span>
+            <span class="mi-text"><span class="mi-label">{a.username ? "@" + a.username : $t("Not signed in")}</span><span class="mi-hint">{hostOf(a.server_url ?? "") || $t("Sign-in not finished")}</span></span>
+            {#if a.active}<span class="acc-tick">✓</span>{/if}
+          </button>
+        {/each}
+        <button class="menu-item" disabled={switching} onclick={() => pickAccount("new")}>
+          <span class="acc-ava plus">+</span><span class="mi-label">{switching ? $t("Opening the account…") : $t("Add account")}</span>
+        </button>
         <button class="menu-item" onclick={() => { shareActivity.update((v) => !v); }}>
           <span class="mi-text"><span class="mi-label">{$t($shareActivity ? "Hide my activity" : "Share my activity")}</span><span class="mi-hint">{$t("Games, music and videos you have open")}</span></span>
         </button>
@@ -140,6 +162,12 @@
 </div>
 
 <style>
+  .mi-head { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-dim); padding: 4px 10px 2px; }
+  .menu-item.acc:disabled { opacity: 1; cursor: default; }
+  .acc-ava { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0; font-weight: 800; font-size: 12px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070C; }
+  .acc-ava.plus { background: var(--accent-soft); color: var(--accent); font-size: 16px; }
+  .acc-tick { margin-left: auto; color: var(--accent); font-weight: 800; }
   .user-panel {
     grid-column: 1 / span 2;
     grid-row: 2;
@@ -149,14 +177,14 @@
     padding: 6px 6px 6px 6px;
     background: var(--bg-input);
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: calc(12px * var(--rk, 1));
     z-index: 30;
   }
   .who {
     flex: 1; min-width: 0;
     display: flex; align-items: center; gap: 9px;
     background: transparent; border: none; color: inherit; cursor: pointer;
-    padding: 3px 6px 3px 3px; border-radius: 8px; text-align: left;
+    padding: 3px 6px 3px 3px; border-radius: calc(8px * var(--rk, 1)); text-align: left;
   }
   .who:hover { background: var(--bg-hover); }
   .ava {
@@ -178,13 +206,13 @@
   .dot.online { background: #3BA55D; }
   .dot.idle { background: #FAA61A; }
   .dot.dnd { background: #ED4245; }
-  .dot.invisible, .dot.offline { background: #80848E; }
+  .dot.invisible, .dot.offline { background: var(--bg-input); box-shadow: inset 0 0 0 2.5px #80848E; }
   .who-text { min-width: 0; }
   .who-name { font-size: 13.5px; font-weight: 700; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .who-sub { font-size: 11.5px; color: var(--fg-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .btns { display: flex; gap: 2px; flex-shrink: 0; }
   .ub {
-    width: 32px; height: 32px; border-radius: 8px; border: none;
+    width: 32px; height: 32px; border-radius: calc(8px * var(--rk, 1)); border: none;
     background: transparent; color: var(--fg-muted); cursor: pointer;
     display: grid; place-items: center;
   }
@@ -198,7 +226,7 @@
     width: 300px;
     background: var(--bg-surface);
     border: 1px solid var(--border-strong);
-    border-radius: 14px;
+    border-radius: calc(14px * var(--rk, 1));
     box-shadow: 0 18px 48px -12px rgba(0, 0, 0, 0.7);
     overflow: hidden;
     animation: pop 0.14s ease-out;
@@ -210,14 +238,14 @@
   .card-name { font-size: 18px; font-weight: 800; color: var(--fg); }
   .card-user { background: none; border: none; padding: 0; color: var(--fg-muted); font-size: 13px; cursor: pointer; }
   .card-user:hover { color: var(--accent); }
-  .card-act { margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: var(--bg-input); }
+  .card-act { margin-top: 10px; padding: 8px 10px; border-radius: calc(8px * var(--rk, 1)); background: var(--bg-input); }
   .act-k { font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-dim); }
   .act-n { font-size: 13px; font-weight: 700; color: var(--fg); margin-top: 2px; }
   .act-d { font-size: 12px; color: var(--fg-muted); }
   .status-input {
     width: 100%; box-sizing: border-box; margin-top: 10px;
     background: var(--bg-input); color: var(--fg);
-    border: 1px solid var(--border); border-radius: 8px;
+    border: 1px solid var(--border); border-radius: calc(8px * var(--rk, 1));
     padding: 7px 9px; font-size: 13px; font-family: inherit;
   }
   .status-input:focus { outline: none; border-color: var(--accent); }
@@ -225,7 +253,7 @@
   .menu-item {
     width: 100%; display: flex; align-items: center; gap: 10px;
     background: transparent; border: none; color: var(--fg);
-    padding: 7px 8px; border-radius: 6px; cursor: pointer; text-align: left;
+    padding: 7px 8px; border-radius: calc(6px * var(--rk, 1)); cursor: pointer; text-align: left;
     font-size: 13px; font-weight: 600;
   }
   .menu-item:hover { background: var(--accent-soft); color: var(--accent); }

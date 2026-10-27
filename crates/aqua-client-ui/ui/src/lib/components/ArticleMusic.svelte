@@ -104,20 +104,20 @@
     margin: 0.9em 0;
     padding: 8px;
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: calc(12px * var(--rk, 1));
     background: var(--bg-list);
   }
   .music.compact { margin: 6px 0 2px; padding: 6px; }
   .m-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 4px 6px; }
   .m-title { font-size: 12px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; color: var(--accent); }
   .m-all {
-    border: none; border-radius: 8px; padding: 4px 10px; cursor: pointer;
+    border: none; border-radius: calc(8px * var(--rk, 1)); padding: 4px 10px; cursor: pointer;
     background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent);
     font-size: 12px; font-weight: 700;
   }
   .trk {
     width: 100%; display: flex; align-items: center; gap: 10px;
-    padding: 6px; border: none; border-radius: 8px; background: transparent;
+    padding: 6px; border: none; border-radius: calc(8px * var(--rk, 1)); background: transparent;
     color: var(--fg); cursor: pointer; text-align: left; font-size: 13.5px;
   }
   .trk:hover { background: var(--bg-hover); }

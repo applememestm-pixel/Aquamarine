@@ -4,6 +4,21 @@
 </script>
 
 <script lang="ts">
+  import Select from "./Select.svelte";
+  import { ATTACH_ITEMS, attachFront, toggleAttachFront, resetAttachMenu } from "../attachMenu";
+  import { chatLocks } from "../chatLocks";
+  import { askSetLock, askRemoveLock, askChangeLock } from "../chatLockUi";
+  let blockPick = $state("");
+  async function testNotification() {
+    const { ensureNotifyPermission, osNotify } = await import("../notify");
+    if (!(await ensureNotifyPermission(true))) { showToast(tr("The system doesn't allow notifications for Aquamarine")); return; }
+    await osNotify("Aquamarine", tr("Notifications work 🎉"));
+  }
+  let bioAvail = $state(false);
+  void biometricAvailable().then((v) => (bioAvail = v));
+  let lockPick = $state("");
+  const blockable = $derived($chats.filter((c) => !c.id.startsWith("grp_") && !c.id.startsWith("__") && !c.channel && c.id !== "welcome" && !$blocked.has(c.id)));
+  const lockable = $derived($chats.filter((c) => !c.id.startsWith("__") && !$chatLocks[c.id]));
   import UsernameEdit from "./UsernameEdit.svelte";
   import NetworkSettings from "./NetworkSettings.svelte";
   import ColorInput from "./ColorInput.svelte";
@@ -35,7 +50,7 @@
   import { reactionPack, quickReactions, reactionUrl, parseReaction, importReactionPack, REACTION_PACK_LINK } from "../reactionPack";
   import PrivacyRules from "./PrivacyRules.svelte";
   import { ghost, blocked, setBlocked } from "../ghost";
-  import { lockConf, setAutoLock, lockNow, passcodeSetupOpen } from "../lock";
+  import { lockConf, setAutoLock, lockNow, passcodeSetupOpen, biometricAvailable, setBiometric } from "../lock";
   import { t, lang, LANGS, tr } from "../i18n";
   import { chats, activeId, loadActiveMessages } from "../stores";
   import { BUILTIN_SOUNDS, customSounds, refreshSounds, playSound, soundLabel, addSoundBytes } from "../sounds";
@@ -864,6 +879,12 @@
             <SegFit label={$t("Auto-lock")} value={$lockConf.autoMin} onpick={(m) => setAutoLock(m)}
               options={([[1, "1 min"], [5, "5 min"], [15, "15 min"], [60, "1 hour"], [0, "Off"]] as const).map(([id, l]) => ({ id: id as number, label: $t(l) }))} />
           </div>
+          {#if bioAvail}
+            <button class="toggle-row" onclick={() => setBiometric(!$lockConf?.bio)}>
+              <div class="tr-text"><div class="tr-title">{$t("Unlock with fingerprint")}</div><div class="tr-sub">{$t("Or with your face, if the phone can. The passcode still works.")}</div></div>
+              <span class="switch" class:on={!!$lockConf?.bio}></span>
+            </button>
+          {/if}
           <div class="info-row"><span class="v">{$t("Ctrl+L locks the app any time.")}</span>
             <button class="mini-btn" onclick={() => { closeSettings(); lockNow(); }}>{$t("Lock now")}</button>
             <button class="mini-btn" onclick={() => { lockConf.set(null); passcodeSetupOpen.set(true); }}>{$t("Change")}</button>
@@ -875,12 +896,38 @@
       <section class="group">
         <div class="label">{$t("Blocked users")}</div>
         {#if $blocked.size === 0}
-          <div class="foot-note">{$t("Nobody is blocked. Block someone from their profile.")}</div>
+          <div class="foot-note">{$t("Nobody is blocked.")}</div>
         {:else}
           {#each [...$blocked] as u (u)}
-            <div class="info-row"><span class="v">@{u}</span><button class="mini-btn" onclick={() => setBlocked(u, false)}>{$t("Unblock")}</button></div>
+            <div class="info-row"><span class="v">{$chats.find((c) => c.id === u)?.name ?? u} <span class="dim">@{u}</span></span><button class="mini-btn" onclick={() => setBlocked(u, false)}>{$t("Unblock")}</button></div>
           {/each}
         {/if}
+        {#if blockable.length}
+          <div class="row">
+            <Select class="sel" bind:value={blockPick} options={[{ value: "", label: $t("Block someone…") }, ...blockable.map((c) => ({ value: c.id, label: `${c.name} · @${c.id}` }))]} />
+            <button class="mini-btn danger" disabled={!blockPick} onclick={() => { setBlocked(blockPick, true); blockPick = ""; }}>{$t("Block")}</button>
+          </div>
+        {/if}
+      </section>
+      <section class="group">
+        <div class="label">{$t("Locked chats")}</div>
+        {#if !Object.keys($chatLocks).length}
+          <div class="foot-note">{$t("No chat has its own password.")}</div>
+        {/if}
+        {#each Object.keys($chatLocks) as id (id)}
+          <div class="info-row">
+            <span class="v">🔒 {$chats.find((c) => c.id === id)?.name ?? id}</span>
+            <button class="mini-btn" onclick={() => askChangeLock(id)}>{$t("Change password")}</button>
+            <button class="mini-btn" onclick={() => askRemoveLock(id)}>{$t("Remove")}</button>
+          </div>
+        {/each}
+        {#if lockable.length}
+          <div class="row">
+            <Select class="sel" bind:value={lockPick} options={[{ value: "", label: $t("Lock a chat…") }, ...lockable.map((c) => ({ value: c.id, label: c.name }))]} />
+            <button class="mini-btn primary" disabled={!lockPick} onclick={() => { askSetLock(lockPick); lockPick = ""; }}>{$t("Set password")}</button>
+          </div>
+        {/if}
+        <div class="foot-note">{$t("A locked chat hides its name and messages until you enter its password. Only on your devices — the other side sees nothing.")}</div>
       </section>
       <section class="group">
         <div class="label">{$t("Who sees what")}</div>
@@ -1053,6 +1100,11 @@
       </section>
       <section class="group">
         <div class="label">{$t("Appearance")}</div>
+        <div class="row">
+          <span class="row-label">{$t("Shape")}</span>
+          <SegFit label={$t("Shape")} value={$settings.corners ?? 1} onpick={(v) => settings.update((x) => ({ ...x, corners: v }))}
+            options={([[0.3, "Square"], [0.65, "Soft"], [1, "Standard"], [1.6, "Round"]] as const).map(([id, l]) => ({ id: id as number, label: $t(l) }))} />
+        </div>
         <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, contrastRows: !x.contrastRows }))}>
           <div class="tr-text"><div class="tr-title">{$t("Contrast rows")}</div><div class="tr-sub">{$t("Every other chat and person in lists is a shade darker, so neighbours don't merge (like Spotify)")}</div></div>
           <span class="switch" class:on={!!$settings.contrastRows}></span>
@@ -1296,6 +1348,17 @@
 
       {#if section === "behaviour"}
       <section class="group">
+        <div class="label">{$t("Attach menu")}</div>
+        <div class="foot-note" style="margin:0 0 8px">{$t("What the 📎 button shows right away. The rest waits under “More”.")}</div>
+        {#each ATTACH_ITEMS as it (it.id)}
+          <button class="toggle-row" onclick={() => toggleAttachFront(it.id)}>
+            <div class="tr-text"><div class="tr-title">{$t(it.label)}</div></div>
+            <span class="switch" class:on={$attachFront.includes(it.id)}></span>
+          </button>
+        {/each}
+        <button class="mini-btn" onclick={resetAttachMenu}>{$t("Reset")}</button>
+      </section>
+      <section class="group">
         <div class="label">{$t("Media")}</div>
         <div class="row">
           <span class="row-label">{$t("Save-to-favourites reaction")}</span>
@@ -1387,6 +1450,10 @@
           </div>
           <span class="switch" class:on={$settings.notifyDesktop}></span>
         </button>
+        {#if $settings.notifyDesktop}
+          <button class="mini-btn" onclick={testNotification}>{$t("Send a test notification")}</button>
+          <div class="foot-note">{$t("Notifications come for chats you aren't looking at. If the test doesn't show up, notifications for Aquamarine are off in the system (on Linux — in your shell's notification settings).")}</div>
+        {/if}
       </section>
       <section class="group">
         <div class="label">{$t("Sounds")}</div>
@@ -1417,9 +1484,8 @@
         <div class="label">{$t("Calendar reminders")}</div>
         <div class="row">
           <span class="row-label">{$t("Reminder sound")}</span>
-          <select class="sel" value={$settings.reminderSound ?? "alarm"} onchange={(e) => { const v = (e.target as HTMLSelectElement).value; settings.update((x) => ({ ...x, reminderSound: v })); void playSound(v); }}>
-            {#each allSounds as snd (snd.id)}<option value={snd.id}>{$t(snd.name)}</option>{/each}
-          </select>
+          <Select class="sel" value={$settings.reminderSound ?? "alarm"} options={allSounds.map((snd) => ({ value: snd.id, label: $t(snd.name) }))}
+            onchange={(v) => { settings.update((x) => ({ ...x, reminderSound: v })); void playSound(v); }} />
           <button class="icon-btn" onclick={() => playSound($settings.reminderSound ?? "alarm")} aria-label={$t("Listen")}>▶</button>
         </div>
         <div class="foot-note">{$t("Events in chats remind you with a pop-up and this sound — 1 day, 1 hour or 5 minutes before, as you choose on each event.")}</div>
@@ -1429,18 +1495,14 @@
         {#each Object.entries($settings.chatSounds ?? {}) as [cid, sid] (cid)}
           <div class="row">
             <span class="row-label ell">{$chats.find((c) => c.id === cid)?.name ?? cid}</span>
-            <select class="sel" value={sid} onchange={(e) => setChatSound(cid, (e.target as HTMLSelectElement).value)}>
-              <option value="">{$t("Default")}</option>
-              {#each allSounds as snd (snd.id)}<option value={snd.id}>{snd.name}</option>{/each}
-            </select>
+            <Select class="sel" value={sid} options={[{ value: "", label: $t("Default") }, ...allSounds.map((snd) => ({ value: snd.id, label: $t(snd.name) }))]}
+              onchange={(v) => setChatSound(cid, v)} />
             <button class="icon-btn" onclick={() => playSound(sid)} aria-label={$t("Listen")}>▶</button>
           </div>
         {/each}
         <div class="row">
-          <select class="sel" bind:value={perChatPick}>
-            <option value="">{$t("Choose a chat…")}</option>
-            {#each $chats.filter((c) => !($settings.chatSounds ?? {})[c.id]) as c (c.id)}<option value={c.id}>{c.name}</option>{/each}
-          </select>
+          <Select class="sel" bind:value={perChatPick}
+            options={[{ value: "", label: $t("Choose a chat…") }, ...$chats.filter((c) => !($settings.chatSounds ?? {})[c.id]).map((c) => ({ value: c.id, label: c.name }))]} />
           <button class="mini-btn primary" disabled={!perChatPick} onclick={() => { setChatSound(perChatPick, $settings.messageSound === "ding" ? "chime" : "ding"); perChatPick = ""; }}>{$t("Add")}</button>
         </div>
         <div class="foot-note">{$t("Give someone their own sound — you'll know who wrote without looking.")}</div>
@@ -1811,7 +1873,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     display: flex; flex-direction: column;
     background: var(--bg-shell);
     border: 1px solid var(--border);
-    border-radius: 16px;
+    border-radius: calc(16px * var(--rk, 1));
     box-shadow: 0 32px 80px -16px rgba(0, 0, 0, 0.6);
     overflow: hidden;
     animation: slide-up 0.22s ease-out;
@@ -1829,7 +1891,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .nav > * { flex-shrink: 0; }
   .me-card {
     display: flex; align-items: center; gap: 14px;
-    padding: 12px; border-radius: 14px; border: none; cursor: pointer; text-align: left;
+    padding: 12px; border-radius: calc(14px * var(--rk, 1)); border: none; cursor: pointer; text-align: left;
     background: var(--bg-surface); color: inherit;
   }
   .me-card:hover { background: var(--bg-hover); }
@@ -1843,7 +1905,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .me-sub { font-size: 12.5px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .me-online { font-size: 12px; color: var(--accent); }
   .me-online.off { color: var(--fg-dim); }
-  .nav-group { background: var(--bg-surface); border-radius: 14px; overflow: hidden; }
+  .nav-group { background: var(--bg-surface); border-radius: calc(14px * var(--rk, 1)); overflow: hidden; }
   .nav-item {
     width: 100%;
     display: flex; align-items: center; gap: 12px;
@@ -1860,7 +1922,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .nav-item.active { background: var(--accent-soft); }
   .nav-item.active .nav-lbl { color: var(--accent); font-weight: 700; }
   .tile {
-    width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0;
+    width: 28px; height: 28px; border-radius: calc(8px * var(--rk, 1)); flex-shrink: 0;
     display: grid; place-items: center; color: #fff;
   }
   .tile :global(svg) { width: 16px; height: 16px; }
@@ -1871,14 +1933,14 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .content .head { position: sticky; top: 0; z-index: 2; background: var(--bg-shell); }
   .mini-btn {
     flex-shrink: 0; border: 1px solid var(--border-strong); background: var(--bg-input); color: var(--fg);
-    border-radius: 8px; padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer;
+    border-radius: calc(8px * var(--rk, 1)); padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer;
   }
   .mini-btn.primary { background: var(--accent); color: #06070C; border-color: transparent; }
   .mini-btn:disabled { opacity: 0.6; }
   .foot-note { font-size: 12px; color: var(--fg-dim); line-height: 1.55; margin-top: 8px; }
   .foot-note code { font-size: 11px; }
   .lang-row {
-    display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 8px; border-radius: 10px;
+    display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 8px; border-radius: calc(10px * var(--rk, 1));
     background: none; border: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer;
   }
   .lang-row:hover { background: var(--bg-hover); }
@@ -1897,7 +1959,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .rp-import { display: flex; gap: 8px; margin-top: 10px; }
   .txt {
     flex: 1; min-width: 0; background: var(--bg-input); color: var(--fg);
-    border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; font-size: 13px;
+    border: 1px solid var(--border); border-radius: calc(8px * var(--rk, 1)); padding: 7px 9px; font-size: 13px;
   }
   @keyframes slide-up {
     from { opacity: 0; transform: translateY(12px); }
@@ -1913,7 +1975,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .phone-only { display: none; }
   .back {
     width: 36px; height: 36px; margin-left: -8px; flex-shrink: 0;
-    background: transparent; border: none; border-radius: 10px;
+    background: transparent; border: none; border-radius: calc(10px * var(--rk, 1));
     color: var(--accent); cursor: pointer; align-items: center; justify-content: center;
   }
   .back svg { width: 24px; height: 24px; }
@@ -1949,7 +2011,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .close {
     width: 30px; height: 30px;
     background: transparent; border: 1px solid var(--border);
-    border-radius: 8px; color: var(--fg-dim);
+    border-radius: calc(8px * var(--rk, 1)); color: var(--fg-dim);
     font-size: 18px; line-height: 1; cursor: pointer;
   }
   .close:hover { color: var(--fg); background: var(--bg-hover); }
@@ -1965,10 +2027,10 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .mesh-ways { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 16px 0; }
   .mesh-way { display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px; border-radius: 999px; font-size: 12.5px; color: var(--fg-muted); background: var(--bg-input); border: 1px solid var(--border); }
   .mesh-way.on { color: var(--fg); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
-  .mesh-row { display: flex; align-items: center; gap: 14px; margin: 10px 16px 4px; padding: 12px 14px; border-radius: 14px; background: var(--bg-input); border: 1px solid var(--border); }
+  .mesh-row { display: flex; align-items: center; gap: 14px; margin: 10px 16px 4px; padding: 12px 14px; border-radius: calc(14px * var(--rk, 1)); background: var(--bg-input); border: 1px solid var(--border); }
   .mesh-big { font-size: 28px; font-weight: 800; color: var(--accent); min-width: 36px; text-align: center; font-variant-numeric: tabular-nums; }
   .mesh-txt { flex: 1; min-width: 0; }
-  .mesh-btn { border: none; border-radius: 10px; padding: 9px 14px; background: var(--accent); color: #06070C; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+  .mesh-btn { border: none; border-radius: calc(10px * var(--rk, 1)); padding: 9px 14px; background: var(--accent); color: #06070C; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap; }
   .mesh-btn:disabled { opacity: .5; cursor: default; }
   .mesh-log { display: flex; align-items: center; gap: 10px; padding: 8px 16px; font-size: 13px; }
   .mesh-who { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1977,7 +2039,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .ap-div { display: flex; align-items: center; gap: 12px; margin: 26px 16px 4px; scroll-margin-top: 64px; }
   .ap-div::before, .ap-div::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, transparent, var(--border-strong), transparent); }
   .ap-div span { font-size: 11px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-muted); }
-  .pv-card { border: 1px solid var(--border-strong); border-radius: 16px; overflow: hidden; background: var(--bg-shell); display: flex; flex-direction: column; height: min(560px, calc(93vh - 140px)); }
+  .pv-card { border: 1px solid var(--border-strong); border-radius: calc(16px * var(--rk, 1)); overflow: hidden; background: var(--bg-shell); display: flex; flex-direction: column; height: min(560px, calc(93vh - 140px)); }
   .pv-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--bg-list); border-bottom: 1px solid var(--border); }
   .pv-ava { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 14px; color: #06070C; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
   .pv-meta { display: flex; flex-direction: column; line-height: 1.2; }
@@ -1993,14 +2055,14 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .pv-b.out { align-self: flex-end; background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 16%, transparent), color-mix(in srgb, var(--accent-2) 14%, transparent)), var(--bg-bubble-in); border-color: color-mix(in srgb, var(--accent) 22%, transparent); }
   .pv-b.out.first { border-top-right-radius: 4px; margin-top: 6px; }
   .pv-b a { color: var(--accent); }
-  .pv-b code { font-family: var(--font-mono, monospace); font-size: 0.9em; background: var(--bg-hover); padding: 0 4px; border-radius: 4px; }
+  .pv-b code { font-family: var(--font-mono, monospace); font-size: 0.9em; background: var(--bg-hover); padding: 0 4px; border-radius: calc(4px * var(--rk, 1)); }
   .pv-t { float: right; margin: 5px 0 0 10px; font-size: 10px; color: var(--fg-dim); }
   .pv-b.out .pv-t { color: var(--accent); opacity: 0.85; }
-  .pv-reply { display: block; border-left: 3px solid var(--accent); padding: 2px 8px; margin-bottom: 4px; border-radius: 4px; background: var(--accent-soft); font-size: 0.9em; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pv-reply { display: block; border-left: 3px solid var(--accent); padding: 2px 8px; margin-bottom: 4px; border-radius: calc(4px * var(--rk, 1)); background: var(--accent-soft); font-size: 0.9em; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .pv-reply b { display: block; color: var(--accent); font-size: 0.92em; }
   .pv-sticker { align-self: flex-start; font-size: calc(var(--sticker-size, 128px) * 0.42); line-height: 1; margin-top: 4px; }
   .pv-foot { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-top: 1px solid var(--border); background: var(--bg-list); }
-  .pv-field { flex: 1; font-size: 12px; color: var(--fg-dim); background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; padding: 7px 10px; }
+  .pv-field { flex: 1; font-size: 12px; color: var(--fg-dim); background: var(--bg-input); border: 1px solid var(--border); border-radius: calc(10px * var(--rk, 1)); padding: 7px 10px; }
   .pv-send { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: #06070C; background: linear-gradient(135deg, var(--accent), var(--accent-2)); flex-shrink: 0; }
   .pv-send svg { width: 14px; height: 14px; }
   .pv-note { text-align: center; font-size: 11.5px; color: var(--fg-dim); }
@@ -2020,7 +2082,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     margin: 12px 16px 0;
     padding: 12px 16px 14px;
     background: var(--bg-surface);
-    border-radius: 14px;
+    border-radius: calc(14px * var(--rk, 1));
   }
   .label {
     font-size: 12px;
@@ -2050,7 +2112,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     padding: 4px;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     cursor: pointer;
     color: var(--fg-muted);
     transition: all 0.12s ease;
@@ -2064,7 +2126,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .wall-swatch {
     width: 100%;
     aspect-ratio: 4 / 3;
-    border-radius: 8px;
+    border-radius: calc(8px * var(--rk, 1));
     border: 1px solid var(--border);
     background-size: cover;
     background-position: center;
@@ -2085,33 +2147,33 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .themes { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; }
   .theme-card {
     display: flex; flex-direction: column; gap: 6px; padding: 6px;
-    border: 1.5px solid var(--border); border-radius: 12px; background: transparent;
+    border: 1.5px solid var(--border); border-radius: calc(12px * var(--rk, 1)); background: transparent;
     color: var(--fg-muted); cursor: pointer; text-align: left;
   }
   .theme-card:hover { border-color: var(--border-strong); color: var(--fg); }
   .theme-card.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
   .tc-prev {
-    position: relative; display: block; height: 58px; border-radius: 8px; overflow: hidden;
+    position: relative; display: block; height: 58px; border-radius: calc(8px * var(--rk, 1)); overflow: hidden;
     background: var(--s); border: 1px solid rgba(127, 127, 127, 0.18);
   }
-  .tc-prev i { position: absolute; display: block; border-radius: 6px; }
+  .tc-prev i { position: absolute; display: block; border-radius: calc(6px * var(--rk, 1)); }
   .tc-l { left: 0; top: 0; bottom: 0; width: 28%; border-radius: 0 !important; background: var(--l); }
   .tc-in { left: 34%; top: 12px; width: 44%; height: 12px; background: var(--b); }
   .tc-out { right: 8%; top: 32px; width: 40%; height: 12px; background: color-mix(in srgb, var(--a) 55%, var(--s)); }
   .tc-name { font-size: 11.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .snd-list { display: flex; flex-direction: column; gap: 2px; }
-  .snd { display: flex; align-items: center; gap: 4px; border-radius: 9px; }
+  .snd { display: flex; align-items: center; gap: 4px; border-radius: calc(9px * var(--rk, 1)); }
   .snd.on { background: var(--accent-soft); }
   .snd-pick { flex: 1; display: flex; align-items: center; gap: 10px; padding: 7px 8px; border: none; background: none; color: var(--fg); font: inherit; font-size: 13.5px; cursor: pointer; text-align: left; }
   .snd-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .snd-tag { font-size: 10.5px; font-weight: 700; color: var(--accent); }
   .icon-btn {
     flex: 0 0 30px; height: 30px; display: grid; place-items: center;
-    border: none; border-radius: 8px; background: transparent; color: var(--fg-muted); cursor: pointer; font-size: 12px;
+    border: none; border-radius: calc(8px * var(--rk, 1)); background: transparent; color: var(--fg-muted); cursor: pointer; font-size: 12px;
   }
   .icon-btn:hover { background: var(--bg-hover); color: var(--fg); }
   .sel {
-    flex: 1; min-width: 0; height: 32px; padding: 0 8px; border-radius: 8px;
+    flex: 1; min-width: 0; height: 32px; padding: 0 8px; border-radius: calc(8px * var(--rk, 1));
     border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 13px;
   }
   .ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2129,7 +2191,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     padding: 9px 12px;
     background: var(--bg-input);
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     cursor: pointer;
     transition: all 0.12s ease;
     color: var(--fg);
@@ -2213,7 +2275,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .bc-field input, .bc-at {
     height: 34px; box-sizing: border-box; width: 100%; min-width: 0;
     background: var(--bg-input); border: 1px solid var(--border);
-    border-radius: 8px; color: var(--fg); font-family: inherit;
+    border-radius: calc(8px * var(--rk, 1)); color: var(--fg); font-family: inherit;
     font-size: 12.5px; padding: 0 10px; outline: none;
   }
   .bc-at { display: flex; align-items: center; gap: 2px; }
@@ -2221,7 +2283,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .bc-at input { height: 100%; border: none; background: transparent; padding: 0; }
   .bc-field input:focus, .bc-at:focus-within { border-color: var(--accent); }
   .bot-add {
-    height: 34px; padding: 0 16px; border: none; border-radius: 8px;
+    height: 34px; padding: 0 16px; border: none; border-radius: calc(8px * var(--rk, 1));
     background: linear-gradient(135deg, var(--accent), var(--accent-2));
     color: var(--accent-ink, #06070C); font-weight: 700; font-size: 12.5px; cursor: pointer;
   }
@@ -2229,7 +2291,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .bot-list { display: flex; flex-direction: column; gap: 8px; }
   .bot-card {
     padding: 10px 12px; background: var(--bg-input);
-    border: 1px solid var(--border); border-radius: 12px;
+    border: 1px solid var(--border); border-radius: calc(12px * var(--rk, 1));
     display: flex; flex-direction: column; gap: 8px;
   }
   .bot-head { display: flex; align-items: center; gap: 10px; }
@@ -2242,19 +2304,19 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .bot-name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
   .bot-tag {
     font-size: 9px; font-weight: 800; letter-spacing: 0.06em; padding: 1px 5px;
-    border-radius: 4px; background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent);
+    border-radius: calc(4px * var(--rk, 1)); background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent);
   }
   .bot-user { font-size: 11.5px; color: var(--fg-dim); }
   .bot-tokrow, .bot-cmd { display: flex; align-items: center; gap: 6px; }
   .bot-token, .bot-cmd code {
     flex: 1; min-width: 0; height: 28px; line-height: 28px; padding: 0 8px; box-sizing: border-box;
     font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-muted);
-    background: var(--bg-shell); border: 1px solid var(--border); border-radius: 7px;
+    background: var(--bg-shell); border: 1px solid var(--border); border-radius: calc(7px * var(--rk, 1));
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: all;
   }
   .bot-cmd { margin-top: 8px; }
   .bot-btn {
-    height: 28px; padding: 0 10px; border: 1px solid var(--border); border-radius: 7px;
+    height: 28px; padding: 0 10px; border: 1px solid var(--border); border-radius: calc(7px * var(--rk, 1));
     background: transparent; color: var(--fg-muted); font-size: 11.5px;
     font-weight: 600; cursor: pointer; flex-shrink: 0; white-space: nowrap;
   }
@@ -2263,7 +2325,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .bot-actions { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 2px; }
   .bot-sp { flex: 1; }
   .bot-link {
-    border: none; background: none; padding: 4px 6px; border-radius: 6px;
+    border: none; background: none; padding: 4px 6px; border-radius: calc(6px * var(--rk, 1));
     color: var(--fg-dim); font-size: 11.5px; font-weight: 600; cursor: pointer;
   }
   .bot-link:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
@@ -2276,7 +2338,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .bot-api-toggle .chev { transition: transform 0.15s; color: var(--fg-dim); }
   .bot-api-toggle .chev.open { transform: rotate(90deg); }
   .bot-api {
-    margin: 10px 0 0; padding: 10px; border-radius: 8px; overflow-x: auto;
+    margin: 10px 0 0; padding: 10px; border-radius: calc(8px * var(--rk, 1)); overflow-x: auto;
     background: var(--bg-shell); border: 1px solid var(--border);
     font-family: var(--font-mono); font-size: 10.5px; line-height: 1.6; color: var(--fg-muted);
   }
@@ -2293,13 +2355,13 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .dev-input { width: 100%; }
   .dev-name { font-size: 14px; font-weight: 600; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
   .dev-sub { font-size: 12px; color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .dev-tag { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: 6px; padding: 1px 6px; }
+  .dev-tag { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: calc(6px * var(--rk, 1)); padding: 1px 6px; }
   .dev-tag.dim { color: var(--fg-dim); background: color-mix(in srgb, var(--fg-dim) 14%, transparent); }
   .bk-row .txt { flex: 1; min-width: 0; }
   .bk-stat { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 10px 0 6px; }
   .bk-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fg-dim); }
   .bk-dot.on { background: #34C759; box-shadow: 0 0 0 3px rgba(52, 199, 89, 0.18); }
-  .bk-phrase { margin-top: 12px; padding: 12px; border-radius: 12px; border: 1px dashed color-mix(in srgb, var(--accent) 50%, transparent); background: var(--bg-input); }
+  .bk-phrase { margin-top: 12px; padding: 12px; border-radius: calc(12px * var(--rk, 1)); border: 1px dashed color-mix(in srgb, var(--accent) 50%, transparent); background: var(--bg-input); }
   .bk-ph-title { font-size: 12px; font-weight: 700; color: var(--accent); margin-bottom: 8px; }
   .bk-phrase ol { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px 10px; margin: 0; padding-left: 22px; font-family: var(--font-mono); font-size: 12.5px; }
   @media (max-width: 520px) { .bk-phrase ol { grid-template-columns: repeat(2, 1fr); } }
@@ -2317,7 +2379,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     display: flex; align-items: center; gap: 9px;
     padding: 7px 10px;
     background: var(--bg-input); border: 1px solid var(--border);
-    border-radius: 9px; cursor: pointer;
+    border-radius: calc(9px * var(--rk, 1)); cursor: pointer;
   }
   .te-color:hover { border-color: var(--border-strong); }
   .te-help {
@@ -2331,7 +2393,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     position: absolute; bottom: calc(100% + 8px); right: -4px;
     width: 200px;
     background: var(--bg-surface-2); color: var(--fg);
-    border: 1px solid var(--border-strong); border-radius: 9px;
+    border: 1px solid var(--border-strong); border-radius: calc(9px * var(--rk, 1));
     padding: 8px 10px; font-size: 11.5px; font-weight: 400; line-height: 1.45;
     box-shadow: 0 12px 30px -8px rgba(0,0,0,0.6);
     opacity: 0; pointer-events: none; transform: translateY(4px);
@@ -2346,7 +2408,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none;
   }
   .te-swatch {
-    width: 22px; height: 22px; border-radius: 6px;
+    width: 22px; height: 22px; border-radius: calc(6px * var(--rk, 1));
     border: 1px solid var(--border-strong); flex-shrink: 0;
   }
   .te-name { font-size: 12.5px; color: var(--fg); font-weight: 600; }
@@ -2355,11 +2417,11 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .te-font-cur {
     font-size: 13px; color: var(--fg); font-weight: 600;
     padding: 8px 10px; background: var(--bg-input);
-    border: 1px solid var(--border); border-radius: 9px; margin-bottom: 8px;
+    border: 1px solid var(--border); border-radius: calc(9px * var(--rk, 1)); margin-bottom: 8px;
   }
   .te-font-btns { display: flex; gap: 6px; }
   .te-btn {
-    padding: 7px 12px; border-radius: 8px;
+    padding: 7px 12px; border-radius: calc(8px * var(--rk, 1));
     border: 1px solid var(--accent-soft); background: var(--accent-soft);
     color: var(--accent); font-size: 12.5px; font-weight: 600; cursor: pointer;
   }
@@ -2380,7 +2442,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     padding: 8px 14px;
     background: transparent;
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     color: var(--fg-dim);
     font-size: 12.5px;
     font-weight: 600;
@@ -2392,7 +2454,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     background: linear-gradient(135deg, var(--accent), var(--accent-2));
     color: #06070C;
     border: none;
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     font-size: 13px;
     font-weight: 700;
     cursor: pointer;
@@ -2401,14 +2463,14 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .done:hover { transform: translateY(-1px); }
   .icons-row { display: flex; flex-wrap: wrap; gap: 10px; }
   .app-ic { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 8px; width: 76px;
-    border: 1px solid var(--border); border-radius: 14px; background: var(--bg-input); color: var(--fg-muted);
+    border: 1px solid var(--border); border-radius: calc(14px * var(--rk, 1)); background: var(--bg-input); color: var(--fg-muted);
     font-size: 11px; cursor: pointer; transition: transform .25s cubic-bezier(.2,.8,.2,1), border-color .2s, background .2s; }
   .app-ic:hover { transform: translateY(-2px); }
   .app-ic.active { border-color: var(--accent); background: var(--accent-soft); color: var(--fg); }
-  .app-ic img, .app-ic .plus { width: 48px; height: 48px; border-radius: 12px; object-fit: cover; }
+  .app-ic img, .app-ic .plus { width: 48px; height: 48px; border-radius: calc(12px * var(--rk, 1)); object-fit: cover; }
   .app-ic .plus { display: grid; place-items: center; font-size: 22px; border: 1px dashed var(--border-strong); }
   .my-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 10px; }
-  .my-pack { border: 1px solid var(--border); border-radius: 12px; margin-bottom: 8px; overflow: hidden; transition: border-color .2s; }
+  .my-pack { border: 1px solid var(--border); border-radius: calc(12px * var(--rk, 1)); margin-bottom: 8px; overflow: hidden; transition: border-color .2s; }
   .my-pack.open { border-color: var(--accent); }
   .mp-toggle { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: none; background: var(--bg-input); color: var(--fg); cursor: pointer; text-align: left; }
   .mp-thumb { width: 36px; height: 36px; display: grid; place-items: center; flex-shrink: 0; }
@@ -2420,15 +2482,16 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .my-pack.open .mp-chev { transform: rotate(90deg); }
   .mp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 6px; padding: 10px; animation: mp-in .3s cubic-bezier(.2,.8,.2,1); }
   @keyframes mp-in { from { opacity: 0; transform: translateY(-4px); } }
-  .mp-item { position: relative; aspect-ratio: 1; display: grid; place-items: center; border-radius: 10px; background: var(--bg-input); }
+  .mp-item { position: relative; aspect-ratio: 1; display: grid; place-items: center; border-radius: calc(10px * var(--rk, 1)); background: var(--bg-input); }
   .mp-item :global(img), .mp-item :global(video) { max-width: 88%; max-height: 88%; }
   .mp-emoji { position: absolute; left: 4px; bottom: 2px; font-size: 13px; }
   .mp-del { position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; border-radius: 50%; border: none; background: rgba(0,0,0,.6); color: #fff;
     cursor: pointer; opacity: 0; transition: opacity .15s; line-height: 1; }
   .mp-item:hover .mp-del { opacity: 1; }
-  .mp-add { aspect-ratio: 1; border-radius: 10px; border: 1.5px dashed var(--border-strong); background: none; color: var(--fg-dim); font-size: 22px; cursor: pointer; }
+  .mp-add { aspect-ratio: 1; border-radius: calc(10px * var(--rk, 1)); border: 1.5px dashed var(--border-strong); background: none; color: var(--fg-dim); font-size: 22px; cursor: pointer; }
   .mp-add:hover { color: var(--accent); border-color: var(--accent); }
   .mini-btn.danger { color: #ff6b6b; }
+  .info-row .dim { color: var(--fg-dim); font-size: 12px; }
   .wall.own { position: relative; padding: 0; }
   .wall-pick { border: none; background: none; padding: 0; cursor: pointer; width: 100%; }
   .wall-swatch.img { object-fit: cover; display: block; width: 100%; }

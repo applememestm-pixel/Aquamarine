@@ -5,7 +5,7 @@
  */
 import { writable, get } from "svelte/store";
 
-interface LockConf { hash: string; salt: string; autoMin: number; skipped?: boolean; /** "pin": 4 digits on a keypad (Telegram); otherwise a password. */ kind?: "pin" | "password" }
+interface LockConf { hash: string; salt: string; autoMin: number; skipped?: boolean; /** "pin": 4 digits on a keypad (Telegram); otherwise a password. */ kind?: "pin" | "password"; /** Phones: fingerprint / face opens it too. */ bio?: boolean }
 const KEY = "aqua.lock.v1";
 
 function loadConf(): LockConf | null {
@@ -53,6 +53,37 @@ export async function unlock(pass: string): Promise<boolean> {
   const ok = (await derive(pass, c.salt)) === c.hash;
   if (ok) { locked.set(false); bump(); }
   return ok;
+}
+
+// ---- fingerprint / face (Android, iOS): tauri-plugin-biometric ----
+const PHONE = typeof document !== "undefined" && /android|iphone|ipad/i.test(navigator.userAgent);
+
+/** Can this device unlock with a fingerprint or the face? */
+export async function biometricAvailable(): Promise<boolean> {
+  if (!PHONE || !("__TAURI_INTERNALS__" in window)) return false;
+  try {
+    const { checkStatus } = await import("@tauri-apps/plugin-biometric");
+    return (await checkStatus()).isAvailable;
+  } catch { return false; }
+}
+
+export function setBiometric(on: boolean) {
+  const c = get(lockConf);
+  if (c) lockConf.set({ ...c, bio: on });
+}
+
+/** Ask for the fingerprint / face; true = unlocked. The passcode keeps
+ *  working as the fallback. */
+export async function unlockBiometric(reason: string): Promise<boolean> {
+  const c = get(lockConf);
+  if (!c?.bio || !(await biometricAvailable())) return false;
+  try {
+    const { authenticate } = await import("@tauri-apps/plugin-biometric");
+    await authenticate(reason, { allowDeviceCredential: false, cancelTitle: "", fallbackTitle: "" });
+    locked.set(false);
+    bump();
+    return true;
+  } catch { return false; }
 }
 
 export function lockNow() { if (hasPasscode()) locked.set(true); }

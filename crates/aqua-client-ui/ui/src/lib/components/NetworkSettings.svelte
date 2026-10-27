@@ -167,9 +167,9 @@
 
 <style>
   .ns-list { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 8px; }
-  .ns-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; border: none; border-radius: 12px; background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+  .ns-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; border: none; border-radius: calc(12px * var(--rk, 1)); background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
   .ns-row.as-div { padding: 0 4px 0 0; cursor: default; }
-  .ns-pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: none; border-radius: 12px; background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+  .ns-pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: none; border-radius: calc(12px * var(--rk, 1)); background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
   .ns-row:hover:not(.as-div), .ns-pick:hover { background: var(--bg-hover); }
   .ns-row.cur { background: var(--accent-soft); }
   .ns-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; background: var(--fg-dim); }
@@ -194,9 +194,9 @@
   .ns-switch small { font-size: 12px; color: var(--fg-dim); line-height: 1.4; }
   .ns-switch input { width: 18px; height: 18px; accent-color: var(--accent); flex-shrink: 0; }
   .ns-add { display: flex; gap: 8px; margin: 4px 0; }
-  .ns-add input { flex: 1; min-width: 0; background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; color: var(--fg); font: 13px var(--font-mono, monospace); padding: 8px 10px; outline: none; }
+  .ns-add input { flex: 1; min-width: 0; background: var(--bg-input); border: 1px solid var(--border); border-radius: calc(10px * var(--rk, 1)); color: var(--fg); font: 13px var(--font-mono, monospace); padding: 8px 10px; outline: none; }
   .ns-add input:focus { border-color: var(--accent); }
-  .ns-add button { border: none; border-radius: 10px; padding: 8px 12px; background: var(--accent-soft); color: var(--accent); font: 600 13px var(--font-ui); cursor: pointer; white-space: nowrap; }
+  .ns-add button { border: none; border-radius: calc(10px * var(--rk, 1)); padding: 8px 12px; background: var(--accent-soft); color: var(--accent); font: 600 13px var(--font-ui); cursor: pointer; white-space: nowrap; }
   .ns-add button:disabled { opacity: .5; }
   .ns-note { font-size: 12px; color: var(--fg-dim); line-height: 1.45; margin-top: 6px; }
   .ns-note.bad { color: var(--danger, #FF4D6D); }

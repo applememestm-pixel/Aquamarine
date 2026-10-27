@@ -547,7 +547,7 @@
     display: block;
     width: 100%;
     min-width: 260px;
-    border-radius: 12px;
+    border-radius: calc(12px * var(--rk, 1));
     overflow: hidden;
     background: #000;
     outline: none;
@@ -613,7 +613,7 @@
     flex: 0 0 auto;
     width: 32px; height: 32px;
     display: grid; place-items: center;
-    border: none; border-radius: 8px;
+    border: none; border-radius: calc(8px * var(--rk, 1));
     background: transparent; color: inherit;
     cursor: pointer;
   }
@@ -625,12 +625,12 @@
   .time i { font-style: normal; opacity: 0.55; }
   .badge {
     font-size: 10.5px; font-weight: 800; letter-spacing: 0.02em;
-    padding: 2px 6px; border-radius: 5px;
+    padding: 2px 6px; border-radius: calc(5px * var(--rk, 1));
     background: rgba(255, 255, 255, 0.16);
   }
   .txt {
     height: 28px; min-width: 40px; padding: 0 7px;
-    border: none; border-radius: 7px;
+    border: none; border-radius: calc(7px * var(--rk, 1));
     background: transparent; color: inherit;
     font-size: 12px; font-weight: 800; font-variant-numeric: tabular-nums;
     cursor: pointer;
@@ -643,14 +643,14 @@
     z-index: 3;
     display: flex; flex-direction: column;
     min-width: 76px; padding: 4px;
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     background: rgba(16, 18, 26, 0.96);
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.08);
     color: #fff;
   }
   .menu button {
     border: none; background: transparent; color: inherit;
-    text-align: left; padding: 5px 10px; border-radius: 7px;
+    text-align: left; padding: 5px 10px; border-radius: calc(7px * var(--rk, 1));
     font-size: 12.5px; font-variant-numeric: tabular-nums; cursor: pointer;
   }
   .menu button:hover { background: rgba(255, 255, 255, 0.1); }
@@ -674,7 +674,7 @@
   .tip {
     position: absolute; bottom: 18px;
     transform: translateX(-50%);
-    padding: 2px 6px; border-radius: 5px;
+    padding: 2px 6px; border-radius: calc(5px * var(--rk, 1));
     background: rgba(0, 0, 0, 0.8); color: #fff;
     font-size: 11px; font-variant-numeric: tabular-nums;
     pointer-events: none; white-space: nowrap;

@@ -439,7 +439,7 @@
     padding: 4px;
     background: var(--bg-surface-2, var(--bg-list));
     border: 1px solid var(--border-strong);
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     box-shadow: 0 10px 28px -8px rgba(0, 0, 0, 0.55);
     animation: fmt-in 0.12s ease-out;
   }
@@ -447,7 +447,7 @@
   @keyframes fmt-in { from { opacity: 0; margin-top: 4px; } to { opacity: 1; margin-top: 0; } }
   .fmt-bar button {
     min-width: 28px; height: 28px; padding: 0 6px;
-    border: none; border-radius: 7px; background: transparent;
+    border: none; border-radius: calc(7px * var(--rk, 1)); background: transparent;
     color: var(--fg); font-size: 13.5px; cursor: pointer;
   }
   .fmt-bar button:hover { background: var(--bg-hover); color: var(--accent); }

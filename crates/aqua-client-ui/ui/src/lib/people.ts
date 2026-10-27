@@ -114,7 +114,7 @@ export function refreshPeer(username: string, force = false): Promise<void> {
         ...m,
         [username]: {
           username,
-          display_name: card.display_name,
+          display_name: card.display_name === "You" ? "" : card.display_name,
           about: card.about,
           phone: card.phone,
           is_bot: card.is_bot,
@@ -161,6 +161,8 @@ function myExtra(p: Profile): Record<string, unknown> {
     fwd_link: isPublic("forwards"),
     music_title: p.music_ver ? (p.music_title ?? "") : "",
     clan: p.clan ?? null,
+    card: /^#[0-9a-f]{6}$/i.test(p.card ?? "") ? p.card : "",
+    pattern: (p.pattern ?? "").slice(0, 16),
     links: (p.links ?? []).filter((l) => /^https?:\/\//i.test(l.url)).slice(0, 8),
     games: (p.games ?? []).slice(0, 12),
     game_ids: Object.fromEntries(Object.entries(p.game_ids ?? {}).filter(([n]) => (p.games ?? []).includes(n)).slice(0, 12)),
@@ -170,11 +172,39 @@ function myExtra(p: Profile): Record<string, unknown> {
   };
 }
 
+/** The name to publish: never the "You" placeholder of a fresh device. */
+export function myPublicName(p: Profile = get(profile)): string {
+  const n = (p.display_name ?? "").trim();
+  return n && n !== "You" ? n : (get(info)?.username ?? "");
+}
+
+/** Signed in on a new device: take my name, bio and colours from the card
+ *  already on the server instead of publishing the "You" placeholder. */
+export async function adoptMyCard(username: string): Promise<void> {
+  try {
+    const card = await api.fetchDirectoryProfile(username);
+    if (!card) return;
+    const p = get(profile);
+    const x = (card.extra ?? {}) as Record<string, unknown>;
+    const patch: Partial<Profile> = {};
+    const fresh = !p.display_name || p.display_name === "You";
+    if (fresh && card.display_name && card.display_name !== "You") patch.display_name = card.display_name;
+    if (fresh && card.about && (!p.about || p.about === "An Aquamarine user.")) patch.about = card.about;
+    if (fresh && card.phone && !p.phone) patch.phone = card.phone;
+    if (fresh && typeof x.birthday === "string" && !p.birthday) patch.birthday = x.birthday;
+    if (fresh && typeof x.banner_a === "string") patch.banner_a = x.banner_a;
+    if (fresh && typeof x.banner_b === "string") patch.banner_b = x.banner_b;
+    if (fresh && typeof x.card === "string") patch.card = x.card;
+    if (fresh && typeof x.pattern === "string") patch.pattern = x.pattern;
+    if (Object.keys(patch).length) updateProfile(patch);
+  } catch { /* offline: keep what we have */ }
+}
+
 /** Push our card (name, bio, extras) to the server and tell peers. */
 export async function publishMyProfile(): Promise<void> {
   const p = get(profile);
   await api.publishProfileFull(
-    p.display_name,
+    myPublicName(p),
     isPublic("bio") ? p.about : "",
     isPublic("phone") ? p.phone : "",
     myExtra(p),

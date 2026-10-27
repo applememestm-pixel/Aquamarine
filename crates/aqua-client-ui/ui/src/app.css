@@ -177,7 +177,7 @@ html.wk-lowfx .eq i:nth-child(3) { transform: scaleY(0.75); }
 *::-webkit-scrollbar { width: 10px; height: 10px; }
 *::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--fg-dim) 55%, transparent);
-  border-radius: 8px;
+  border-radius: calc(8px * var(--rk, 1));
   border: 3px solid transparent;
   background-clip: padding-box;
   transition: background 0.15s ease;
@@ -269,7 +269,7 @@ select {
 }
 select:where(:not([class])) {
   background-color: var(--bg-input); color: var(--fg); border: 1px solid var(--border);
-  border-radius: 10px; padding: 8px 12px; font: inherit; font-size: 13px;
+  border-radius: calc(10px * var(--rk, 1)); padding: 8px 12px; font: inherit; font-size: 13px;
 }
 select:hover { border-color: var(--border-strong); }
 option, optgroup { background: var(--bg-shell); color: var(--fg); }
@@ -279,7 +279,7 @@ input[type="checkbox"], input[type="radio"] {
   display: inline-grid; place-content: center; vertical-align: middle;
   transition: background-color .15s, border-color .15s;
 }
-input[type="checkbox"] { border-radius: 5px; }
+input[type="checkbox"] { border-radius: calc(5px * var(--rk, 1)); }
 input[type="radio"] { border-radius: 50%; }
 input[type="checkbox"]:hover, input[type="radio"]:hover { border-color: var(--accent); }
 input[type="checkbox"]:checked, input[type="radio"]:checked { background: var(--accent); border-color: var(--accent); }
@@ -292,7 +292,7 @@ input[type="checkbox"]:disabled, input[type="radio"]:disabled { opacity: .5; cur
 /* Plain buttons that nobody styled: a neutral "secondary" button, not GTK grey. */
 :where(button:not([class])) {
   background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong);
-  border-radius: 10px; padding: 7px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
+  border-radius: calc(10px * var(--rk, 1)); padding: 7px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
 }
 :where(button:not([class])):hover { border-color: var(--accent); color: var(--accent); }
 
@@ -391,6 +391,9 @@ html.autoscrolling.as-down, html.autoscrolling.as-down * { cursor: url("data:ima
     box-sizing: border-box;
   }
   [role="dialog"][aria-modal="true"] { overflow-x: hidden; }
+  /* …except the ones that ARE the whole screen (photo viewer): capped, they
+     stopped 16px short and sat shifted to the left. */
+  [role="dialog"][aria-modal="true"].fullscreen-layer { max-width: none !important; max-height: none !important; }
 }
 
 /* Settings → Appearance → See-through menus: frosted glass for menus,

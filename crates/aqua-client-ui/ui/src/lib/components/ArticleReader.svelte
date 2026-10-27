@@ -207,7 +207,7 @@
   .icon {
     height: 34px; min-width: 34px; padding: 0 8px;
     display: grid; place-items: center;
-    border: 1px solid var(--border); border-radius: 9px;
+    border: 1px solid var(--border); border-radius: calc(9px * var(--rk, 1));
     background: transparent; color: var(--fg-muted); cursor: pointer;
   }
   .icon:hover { color: var(--fg); border-color: var(--border-strong); }
@@ -232,7 +232,7 @@
   .state { display: grid; place-items: center; gap: 12px; padding: 80px 20px; color: var(--fg-dim); text-align: center; }
   .state.err { color: var(--danger); }
   .btn {
-    padding: 9px 18px; border-radius: 10px; border: none; cursor: pointer; font-weight: 700;
+    padding: 9px 18px; border-radius: calc(10px * var(--rk, 1)); border: none; cursor: pointer; font-weight: 700;
     background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070c;
   }
   .btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--fg-muted); }

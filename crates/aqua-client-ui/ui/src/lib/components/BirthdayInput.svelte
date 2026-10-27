@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Select from "./Select.svelte";
   /**
    * Birthday: type it, or pick day / month / year from a small menu.
    * The value stays a readable string ("15 марта 1998" / "15 March 1998").
@@ -37,7 +38,7 @@
   function toggle() { if (!open) parse(value); open = !open; }
   $effect(() => {
     if (!open) return;
-    const h = (e: PointerEvent) => { if (wrap && !wrap.contains(e.target as Node)) open = false; };
+    const h = (e: PointerEvent) => { if (wrap && !wrap.contains(e.target as Node) && !(e.target as Element).closest?.(".aq-list")) open = false; };
     const k = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); open = false; } };
     document.addEventListener("pointerdown", h, true);
     document.addEventListener("keydown", k, true);
@@ -61,10 +62,8 @@
         {/each}
       </div>
       <div class="bd-foot">
-        <select value={year} onchange={(e) => { year = +(e.target as HTMLSelectElement).value; compose(); }}>
-          <option value={0}>{$t("No year")}</option>
-          {#each YEARS as y (y)}<option value={y}>{y}</option>{/each}
-        </select>
+        <Select compact value={year} options={[{ value: 0, label: $t("No year") }, ...YEARS.map((y) => ({ value: y, label: String(y) }))]}
+          onchange={(v) => { year = v; compose(); }} />
         <button type="button" class="bd-ok" onclick={() => { compose(); open = false; }}>{$t("Done")}</button>
       </div>
     </div>
@@ -73,21 +72,21 @@
 
 <style>
   .bd { position: relative; display: flex; gap: 6px; }
-  .bd input { flex: 1; min-width: 0; background: var(--bg-input); border: 1px solid var(--border); border-radius: 9px; color: var(--fg);
+  .bd input { flex: 1; min-width: 0; background: var(--bg-input); border: 1px solid var(--border); border-radius: calc(9px * var(--rk, 1)); color: var(--fg);
     font: inherit; font-size: 13.5px; padding: 9px 12px; outline: none; }
   .bd input:focus { border-color: var(--accent); }
-  .bd-btn { flex-shrink: 0; width: 38px; border-radius: 9px; border: 1px solid var(--border); background: var(--bg-input); cursor: pointer; font-size: 16px; }
+  .bd-btn { flex-shrink: 0; width: 38px; border-radius: calc(9px * var(--rk, 1)); border: 1px solid var(--border); background: var(--bg-input); cursor: pointer; font-size: 16px; }
   .bd-btn:hover { border-color: var(--accent); }
-  .bd-pop { position: absolute; z-index: 50; right: 0; top: calc(100% + 6px); width: 280px; padding: 10px; border-radius: 14px;
+  .bd-pop { position: absolute; z-index: 50; right: 0; top: calc(100% + 6px); width: 280px; padding: 10px; border-radius: calc(14px * var(--rk, 1));
     background: var(--bg-shell); border: 1px solid var(--border-strong); box-shadow: 0 20px 50px -14px rgba(0,0,0,.7);
     display: flex; flex-direction: column; gap: 8px; animation: bd-in .2s cubic-bezier(.2,.9,.25,1.1); }
   @keyframes bd-in { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
   .bd-months { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
   .bd-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
-  .bd-pop button { border: 1px solid transparent; background: var(--bg-input); color: var(--fg); border-radius: 7px; padding: 5px 0; font: inherit; font-size: 12px; cursor: pointer; }
+  .bd-pop button { border: 1px solid transparent; background: var(--bg-input); color: var(--fg); border-radius: calc(7px * var(--rk, 1)); padding: 5px 0; font: inherit; font-size: 12px; cursor: pointer; }
   .bd-pop button:hover { border-color: var(--border-strong); }
   .bd-pop button.on { background: var(--accent); color: #06070c; font-weight: 800; }
   .bd-foot { display: flex; gap: 6px; }
-  .bd-foot select { flex: 1; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border); border-radius: 8px; padding: 5px; font: inherit; font-size: 12px; }
+  .bd-foot :global(.aq-select) { flex: 1; }
   .bd-pop .bd-ok { padding: 5px 14px; background: var(--accent-soft); color: var(--accent); font-weight: 800; }
 </style>

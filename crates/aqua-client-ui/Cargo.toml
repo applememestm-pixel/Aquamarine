@@ -51,6 +51,10 @@ reqwest      = { version = "0.12", default-features = false, features = ["rustls
 tiny_http    = "0.12"
 rand         = "0.8"
 
+# Fingerprint / face unlock of the passcode lock (phones only).
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-plugin-biometric = "2"
+
 # OS keychain on desktop only (phones keep the key in the app sandbox).
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }

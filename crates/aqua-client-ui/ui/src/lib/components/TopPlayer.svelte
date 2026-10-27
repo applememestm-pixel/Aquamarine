@@ -256,7 +256,7 @@
     min-width: 120px; max-width: 220px; flex-shrink: 0;
     display: flex; flex-direction: column; align-items: flex-start;
     background: transparent; border: none; padding: 2px 6px; margin: 0 -6px;
-    border-radius: 6px; cursor: pointer; text-align: left; font: inherit;
+    border-radius: calc(6px * var(--rk, 1)); cursor: pointer; text-align: left; font: inherit;
   }
   .tp-info:hover { background: var(--bg-hover); }
   .tp-info:hover .tp-title { color: var(--accent); }
@@ -287,7 +287,7 @@
   }
   .tp-speed {
     flex-shrink: 0; min-width: 38px;
-    padding: 2px 6px; border-radius: 6px;
+    padding: 2px 6px; border-radius: calc(6px * var(--rk, 1));
     border: 1px solid var(--border); background: transparent;
     color: var(--fg-dim); font-size: 11px; font-weight: 700;
     font-variant-numeric: tabular-nums; cursor: pointer;
@@ -316,7 +316,7 @@
     width: 28px; height: 28px; padding: 0;
     display: grid; place-items: center;
     background: transparent; border: 1px solid var(--border);
-    border-radius: 8px; color: var(--fg-dim); cursor: pointer;
+    border-radius: calc(8px * var(--rk, 1)); color: var(--fg-dim); cursor: pointer;
   }
   .tp-icon svg { width: 14px; height: 14px; }
   .tp-icon:hover { color: var(--fg); background: var(--bg-hover); border-color: var(--border-strong); }

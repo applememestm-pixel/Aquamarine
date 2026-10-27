@@ -30,18 +30,21 @@
 </div>
 
 <style>
-  .gp { position: relative; aspect-ratio: 3 / 4; border-radius: 10px; overflow: hidden; color: #fff; background: var(--gg);
-    box-shadow: 0 0 0 1px rgba(255,255,255,0.06) inset; transition: transform 0.2s cubic-bezier(.2,.8,.2,1), box-shadow 0.2s; }
-  .gp:hover { transform: translateY(-3px); box-shadow: 0 14px 28px -12px rgba(0,0,0,0.7); }
-  .gp-cover { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transition: transform 0.35s cubic-bezier(.2,.8,.2,1); }
+  /* No movement on hover: lifting the card slid it out from under the
+     cursor at the edge (jitter), and the scaled image showed the gradient
+     behind it as a coloured rim. Only light changes now. */
+  .gp { position: relative; aspect-ratio: 3 / 4; border-radius: calc(10px * var(--rk, 1)); overflow: hidden; color: #fff; background: var(--gg);
+    isolation: isolate; transition: filter 0.2s, box-shadow 0.2s; }
+  .gp.art { background: #000; }
+  .gp:hover { filter: brightness(1.08); box-shadow: 0 10px 24px -14px rgba(0,0,0,0.8); }
+  .gp-cover { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
   .gp.wide .gp-cover { object-fit: contain; padding: 10%; box-sizing: border-box; filter: drop-shadow(0 6px 14px rgba(0,0,0,0.5)); }
-  .gp:hover .gp-cover { transform: scale(1.05); }
   .gp-blur { position: absolute; inset: -20%; width: 140%; height: 140%; object-fit: cover; filter: blur(18px) saturate(1.4) brightness(0.65); }
-  .gp-ic { position: absolute; top: 20%; left: 50%; transform: translateX(-50%); width: 50%; aspect-ratio: 1; border-radius: 14px; box-shadow: 0 8px 20px rgba(0,0,0,0.45); }
+  .gp-ic { position: absolute; top: 20%; left: 50%; transform: translateX(-50%); width: 50%; aspect-ratio: 1; border-radius: calc(14px * var(--rk, 1)); box-shadow: 0 8px 20px rgba(0,0,0,0.45); }
   .gp-ph { position: absolute; top: 24%; left: 50%; transform: translateX(-50%); font-size: 34px; font-weight: 900; opacity: 0.9; }
   .gp-name { position: absolute; left: 0; right: 0; bottom: 0; padding: 22px 8px 7px; font-size: 12px; font-weight: 700; line-height: 1.25;
     background: linear-gradient(transparent, rgba(0,0,0,0.8)); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; }
   .gp.art .gp-name { opacity: 0; transition: opacity 0.2s; }
   .gp.art:hover .gp-name { opacity: 1; }
-  .gp-h { position: absolute; top: 6px; right: 6px; font-size: 10.5px; font-weight: 700; background: rgba(0,0,0,0.6); border-radius: 6px; padding: 1px 5px; }
+  .gp-h { position: absolute; top: 6px; right: 6px; font-size: 10.5px; font-weight: 700; background: rgba(0,0,0,0.6); border-radius: calc(6px * var(--rk, 1)); padding: 1px 5px; }
 </style>

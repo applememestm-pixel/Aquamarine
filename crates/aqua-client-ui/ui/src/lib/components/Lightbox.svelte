@@ -214,7 +214,8 @@
 
   function rotate() {
     if (!isImage || loading || failed) return;
-    rot += 90;
+    rot = (rot + 90) % 360;
+    if (rot === 0) settled = false, requestAnimationFrame(() => requestAnimationFrame(() => (settled = true)));
     if (!fitMode) { tx = panX; ty = panY; }
   }
 
@@ -222,7 +223,37 @@
   let drag: { id: number; x: number; y: number; tx: number; ty: number; moved: boolean } | null = null;
   let suppressClick = false;
 
+  // Two fingers: pinch to zoom around the point between them.
+  const touches = new Map<number, { x: number; y: number }>();
+  let pinch: { d: number; z: number } | null = null;
+  const pdist = () => { const [a, b] = [...touches.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
+  function pinchDown(e: PointerEvent): boolean {
+    if (e.pointerType !== "touch" || !isImage || loading || failed) return false;
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (touches.size === 2) {
+      drag = null; dragging = false;
+      pinch = { d: pdist(), z: zoom };
+      return true;
+    }
+    return false;
+  }
+  function pinchMove(e: PointerEvent): boolean {
+    if (!touches.has(e.pointerId)) return false;
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (!pinch || touches.size < 2) return false;
+    const [a, b] = [...touches.values()];
+    const p = stagePoint({ clientX: (a.x + b.x) / 2, clientY: (a.y + b.y) / 2 });
+    zoomTo(pinch.z * (pdist() / Math.max(1, pinch.d)), p.x, p.y);
+    suppressClick = true;
+    return true;
+  }
+  function pinchUp(e: PointerEvent) {
+    touches.delete(e.pointerId);
+    if (touches.size < 2) pinch = null;
+  }
+
   function onPointerDown(e: PointerEvent) {
+    if (pinchDown(e)) return;
     suppressClick = false;
     if (e.button !== 0 || !canPan) return;
     if ((e.target as HTMLElement).closest("button")) return;
@@ -232,6 +263,7 @@
     e.preventDefault();
   }
   function onPointerMove(e: PointerEvent) {
+    if (pinchMove(e)) return;
     if (!drag || e.pointerId !== drag.id) return;
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     if (!drag.moved && Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
@@ -239,6 +271,7 @@
     ty = clamp(drag.ty + dy, -maxY, maxY);
   }
   function onPointerUp(e: PointerEvent) {
+    pinchUp(e);
     if (!drag || e.pointerId !== drag.id) return;
     suppressClick = drag.moved;
     try { stageEl?.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
@@ -404,7 +437,7 @@
 {/snippet}
 
 {#if $gallery && cur}
-  <div class="lb" role="dialog" aria-modal="true" aria-label={fileName(cur)}>
+  <div class="lb fullscreen-layer" role="dialog" aria-modal="true" aria-label={fileName(cur)}>
     <!-- Top bar -->
     <header class="lb-top">
       <div class="lb-info">
@@ -574,7 +607,7 @@
   .lb-top {
     flex: none;
     display: flex; align-items: center; justify-content: space-between; gap: 16px;
-    padding: 12px 16px;
+    padding: calc(12px + env(safe-area-inset-top, 0px)) calc(16px + env(safe-area-inset-right, 0px)) 12px calc(16px + env(safe-area-inset-left, 0px));
     background: linear-gradient(to bottom, rgba(2, 3, 6, 0.7), rgba(2, 3, 6, 0));
     position: relative; z-index: 3;
   }
@@ -623,7 +656,7 @@
     display: inline-grid; place-items: center;
     min-width: 36px; height: 36px;
     padding: 0 8px;
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     border: 1px solid rgba(255, 255, 255, 0.1);
     background: rgba(255, 255, 255, 0.08);
     color: rgba(255, 255, 255, 0.88);
@@ -633,7 +666,14 @@
     transition: color 0.12s, box-shadow 0.15s, border-color 0.15s, background 0.15s;
   }
   .gbtn.txt { font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
-  .gbtn:hover:not(:disabled), .gbtn:focus-visible {
+  /* Hover only where there is a mouse: on a phone it stuck after a tap,
+     and the rotate button stayed lit even after a full turn. */
+  @media (hover: hover) { .gbtn:hover:not(:disabled) {
+    color: var(--accent);
+    border-color: var(--accent-soft, rgba(255, 255, 255, 0.2));
+    box-shadow: 0 0 14px var(--accent-glow);
+  } }
+  .gbtn:focus-visible {
     color: var(--accent);
     border-color: var(--accent-soft, rgba(255, 255, 255, 0.2));
     box-shadow: 0 0 14px var(--accent-glow);
@@ -658,7 +698,7 @@
     max-width: none; max-height: none;
     transform-origin: center center;
     will-change: transform;
-    border-radius: 4px;
+    border-radius: calc(4px * var(--rk, 1));
     box-shadow: 0 10px 60px rgba(0, 0, 0, 0.55);
     -webkit-user-drag: none;
   }
@@ -690,7 +730,7 @@
     width: 56px; height: 96px;
     display: grid; place-items: center;
     border: none;
-    border-radius: 14px;
+    border-radius: calc(14px * var(--rk, 1));
     background: rgba(255, 255, 255, 0.05);
     color: rgba(255, 255, 255, 0.75);
     cursor: pointer;
@@ -725,7 +765,7 @@
     flex: none;
     width: 56px; height: 56px;
     padding: 0;
-    border-radius: 8px;
+    border-radius: calc(8px * var(--rk, 1));
     overflow: hidden;
     border: 1px solid rgba(255, 255, 255, 0.1);
     background: rgba(255, 255, 255, 0.06);
@@ -750,6 +790,13 @@
     background: linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));
   }
 
+  /* Phones: the name gets its own line above the buttons, nothing sits
+     under the status bar, and the bottom bar clears the gesture strip. */
+  :global(html.phone) .lb-top { flex-wrap: wrap; gap: 8px; padding-top: calc(10px + max(env(safe-area-inset-top, 0px), var(--status-h, 24px))); }
+  :global(html.phone) .lb-info { flex: 1 1 100%; order: 2; }
+  :global(html.phone) .lb-actions { margin-left: auto; }
+  :global(html.phone) .lb-bottom { padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
+  :global(html.phone) .lb-stage { touch-action: none; }
   @media (max-width: 560px) {
     .meta { display: none; }
     .dot { display: none; }

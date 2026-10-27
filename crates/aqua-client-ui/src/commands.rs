@@ -1925,6 +1925,22 @@ pub async fn download_file(
         }
     };
 
+    // The same file (same blob) already saved for another message — a
+    // sticker sent twice, a forwarded photo: point at that copy instead of
+    // downloading it again as "name (1).jpg".
+    let have = {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        s.chats.values().flat_map(|b| b.messages.iter()).find_map(|m| match &m.kind {
+            MessageKind::File { cid, saved_at: Some(p), .. } if *cid == envelope.cid && std::path::Path::new(p).is_file() => Some(p.clone()),
+            _ => None,
+        })
+    };
+    if let Some(saved_str) = have {
+        set_saved_at(&state, &peer_id, &message_id, &saved_str)?;
+        let _ = app.emit("aqua://chats_updated", ());
+        return Ok(DownloadResult { saved_path: saved_str });
+    }
+
     // Download blob.
     let transport = {
         let s = state.lock().map_err(|e| e.to_string())?;
@@ -1944,23 +1960,56 @@ pub async fn download_file(
     };
     let base = downloads_dir(&data_dir);
     std::fs::create_dir_all(&base).map_err(|e| format!("mkdir: {e}"))?;
-    let save_path = pick_unique_path(&base, &envelope.filename);
-    std::fs::write(&save_path, &plaintext).map_err(|e| format!("write: {e}"))?;
+    // A file of that name with exactly these bytes is already there: reuse it.
+    let same = base.join(sanitize_name(&envelope.filename));
+    let save_path = if std::fs::read(&same).map(|b| b == plaintext).unwrap_or(false) {
+        same
+    } else {
+        let p = pick_unique_path(&base, &envelope.filename);
+        std::fs::write(&p, &plaintext).map_err(|e| format!("write: {e}"))?;
+        p
+    };
     let saved_str = save_path.to_string_lossy().to_string();
+    set_saved_at(&state, &peer_id, &message_id, &saved_str)?;
+    let _ = app.emit("aqua://chats_updated", ());
+    Ok(DownloadResult { saved_path: saved_str })
+}
 
-    // Update the message's saved_at.
-    {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
-        if let Some(book) = s.chats.get_mut(&peer_id) {
-            if let Some(msg) = book.messages.iter_mut().find(|m| m.id == message_id) {
-                if let MessageKind::File { saved_at, .. } = &mut msg.kind {
-                    *saved_at = Some(saved_str.clone());
-                }
+fn set_saved_at(state: &State<'_, StdMutex<AppState>>, peer_id: &str, message_id: &str, path: &str) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| e.to_string())?;
+    if let Some(book) = s.chats.get_mut(peer_id) {
+        if let Some(msg) = book.messages.iter_mut().find(|m| m.id == message_id) {
+            if let MessageKind::File { saved_at, .. } = &mut msg.kind {
+                *saved_at = Some(path.to_string());
             }
         }
     }
-    let _ = app.emit("aqua://chats_updated", ());
-    Ok(DownloadResult { saved_path: saved_str })
+    Ok(())
+}
+
+/// Open a received file in the system's app for it (PDF viewer, player…).
+/// Only files the app saved itself — never an arbitrary path.
+#[tauri::command]
+pub fn open_saved_file(state: State<'_, StdMutex<AppState>>, path: String) -> Result<(), String> {
+    let (data_dir, known) = {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        let known = s.chats.values().flat_map(|b| b.messages.iter()).any(|m| matches!(&m.kind, MessageKind::File { saved_at: Some(p), .. } if *p == path));
+        (s.data_dir.clone(), known)
+    };
+    let p = std::path::Path::new(&path).canonicalize().map_err(|e| e.to_string())?;
+    let under = |d: PathBuf| d.canonicalize().map(|d| p.starts_with(d)).unwrap_or(false);
+    if !known || !(under(downloads_dir(&data_dir)) || under(data_dir.clone())) {
+        return Err("not a file saved by Aquamarine".into());
+    }
+    #[cfg(target_os = "linux")]
+    let r = std::process::Command::new("xdg-open").arg(&p).spawn();
+    #[cfg(target_os = "macos")]
+    let r = std::process::Command::new("open").arg(&p).spawn();
+    #[cfg(target_os = "windows")]
+    let r = std::process::Command::new("explorer").arg(&p).spawn();
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    let r: std::io::Result<std::process::Child> = Err(std::io::Error::other("opening files is not supported here"));
+    r.map(|_| ()).map_err(|e| e.to_string())
 }
 
 // ---- Article media (videos in carousels, music playlists) ---------------
@@ -2148,7 +2197,16 @@ fn mime_from_extension(path: &std::path::Path) -> Option<String> {
     })
 }
 
+/// Only the last part of a sender-chosen name: no folders, no "..".
+fn sanitize_name(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or("").trim();
+    let clean: String = base.chars().filter(|c| !c.is_control() && !matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|')).collect();
+    let clean = clean.trim_matches('.').trim().to_string();
+    if clean.is_empty() { "file".into() } else { clean.chars().take(180).collect() }
+}
+
 fn pick_unique_path(dir: &std::path::Path, filename: &str) -> PathBuf {
+    let filename = &sanitize_name(filename);
     let mut candidate = dir.join(filename);
     if !candidate.exists() {
         return candidate;
@@ -3840,6 +3898,14 @@ fn push_replies(s: &mut AppState, text: String, time: &str) {
 #[cfg(test)]
 mod replies_tests {
     use super::reply_note;
+    #[test]
+    fn file_names_stay_in_their_folder() {
+        assert_eq!(super::sanitize_name("../../.bashrc"), "bashrc");
+        assert_eq!(super::sanitize_name("C:\\Windows\\evil.exe"), "evil.exe");
+        assert_eq!(super::sanitize_name("photo.jpg"), "photo.jpg");
+        assert_eq!(super::sanitize_name(".."), "file");
+    }
+
     #[test]
     fn control_payloads_never_become_bubbles() {
         assert!(super::is_control_text(r#"[status:v1]{"online":"offline","pp":{"birthday":"27 февраля"}}"#));

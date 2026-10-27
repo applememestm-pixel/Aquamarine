@@ -21,6 +21,7 @@
   import FingerprintModal from "./lib/components/FingerprintModal.svelte";
   import InputPrompt from "./lib/components/InputPrompt.svelte";
   import NewChatSheet from "./lib/components/NewChatSheet.svelte";
+  import QrScanner from "./lib/components/QrScanner.svelte";
   import Toast, { showToast } from "./lib/components/Toast.svelte";
   import Confirm from "./lib/components/Confirm.svelte";
   import SendDialog from "./lib/components/SendDialog.svelte";
@@ -334,6 +335,7 @@
 <FingerprintModal />
 <InputPrompt />
 <NewChatSheet />
+<QrScanner />
 <CallModal />
 <MediaPicker />
 <Lazy when={$settingsOpen} load={() => import("./lib/components/SettingsPanel.svelte")} />
@@ -385,10 +387,10 @@
 
 <style>
   .gpu-ask { position: fixed; inset: 0; z-index: 100000; display: grid; place-items: center; background: rgba(4, 6, 12, 0.55); }
-  .gpu-card { background: var(--bg-shell); border: 1px solid var(--border-strong); border-radius: 16px; padding: 20px 22px; max-width: 380px; display: flex; flex-direction: column; gap: 8px; }
+  .gpu-card { background: var(--bg-shell); border: 1px solid var(--border-strong); border-radius: calc(16px * var(--rk, 1)); padding: 20px 22px; max-width: 380px; display: flex; flex-direction: column; gap: 8px; }
   .gpu-card p { margin: 0; color: var(--fg-muted); font-size: 14px; line-height: 1.45; }
   .gpu-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px; }
-  .gpu-btns button { border-radius: 10px; padding: 8px 14px; font-weight: 600; cursor: pointer; border: 1px solid var(--border-strong); background: transparent; color: var(--fg); }
+  .gpu-btns button { border-radius: calc(10px * var(--rk, 1)); padding: 8px 14px; font-weight: 600; cursor: pointer; border: 1px solid var(--border-strong); background: transparent; color: var(--fg); }
   .gpu-btns .gpu-keep { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #061015; border: none; }
   .root {
     height: 100%;

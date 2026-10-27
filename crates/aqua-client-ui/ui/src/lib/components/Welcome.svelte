@@ -86,7 +86,7 @@
   @keyframes drift { 50% { transform: translate(40px, 30px) scale(1.15); } }
   .center { position: relative; text-align: center; animation: rise .6s cubic-bezier(.2,.8,.2,1) both; }
   @keyframes rise { from { opacity: 0; transform: translateY(18px); } }
-  .logo { width: 92px; height: 92px; border-radius: 24px; animation: breathe 4.5s ease-in-out infinite, bob 6s ease-in-out infinite; }
+  .logo { width: 92px; height: 92px; border-radius: calc(24px * var(--rk, 1)); animation: breathe 4.5s ease-in-out infinite, bob 6s ease-in-out infinite; }
   @keyframes breathe { 0%, 100% { box-shadow: 0 0 26px -6px var(--accent-glow, rgba(0,229,199,.45)); } 50% { box-shadow: 0 0 48px 2px var(--accent-glow, rgba(0,229,199,.45)); } }
   @keyframes bob { 50% { transform: translateY(-8px); } }
   h2 { margin: 18px 0 4px; font-size: 22px; font-weight: 800; letter-spacing: -.02em;

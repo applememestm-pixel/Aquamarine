@@ -69,17 +69,13 @@
   }
   .brand { display: flex; align-items: center; gap: 8px; padding-left: 12px; height: 100%; }
   .logo {
-    width: 18px; height: 18px; border-radius: 6px;
+    width: 18px; height: 18px; border-radius: calc(6px * var(--rk, 1));
     display: grid; place-items: center;
-    border-radius: 5px; transition: filter .3s;
+    border-radius: calc(5px * var(--rk, 1)); transition: filter .3s;
     filter: drop-shadow(0 0 6px var(--accent-glow));
   }
-  .name {
-    font-size: 12.5px; font-weight: 800; letter-spacing: 0.02em;
-    background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    -webkit-background-clip: text; background-clip: text; color: transparent;
-    text-shadow: 0 0 12px color-mix(in srgb, var(--accent) 35%, transparent);
-  }
+  /* Plain text colour of the theme: white on dark, black on light. */
+  .name { font-size: 12.5px; font-weight: 800; letter-spacing: 0.02em; color: var(--fg); }
   .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--online); box-shadow: 0 0 6px var(--online); }
   .spacer { flex: 1; height: 100%; }
   .ctrls { display: flex; height: 100%; }

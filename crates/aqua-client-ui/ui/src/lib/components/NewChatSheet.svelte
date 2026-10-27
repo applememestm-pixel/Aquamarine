@@ -23,6 +23,8 @@
   import { saveContact } from "../contacts";
   import { onBack } from "../back";
   import { openNewGroup } from "./NewGroupWizard.svelte";
+  import { scanQr } from "./QrScanner.svelte";
+  import { parseQr } from "../qr";
 
   let q = $state("");
   let who = $state<DirProfile | null>(null);
@@ -48,7 +50,7 @@
   function close() { req.set(null); }
   function back() { if (who && !$req?.who) { who = null; err = ""; void tick().then(() => inputEl?.focus()); } else close(); }
 
-  const clean = (s: string) => s.trim().replace(/^@+/, "").toLowerCase();
+  const clean = (s: string) => s.trim().replace(/^aqua:/i, "").replace(/\?.*$/, "").replace(/^@+/, "").toLowerCase();
   // People you already talk to (1:1, not groups / channels / service chats).
   const mine = $derived.by(() => {
     const s = clean(q);
@@ -84,6 +86,17 @@
     close();
     activeTab.set("chats");
     await selectChat(id);
+  }
+
+  /** Scan someone's profile QR (or paste "aqua:@name"). */
+  async function scan() {
+    const text = await scanQr();
+    if (!text) return;
+    const r = parseQr(text);
+    if (!r || r.kind !== "user") { err = tr("That QR code isn't an Aquamarine profile"); return; }
+    const p = await api.fetchDirectoryProfile(r.username).catch(() => null);
+    if (!p) { err = tr("No user @{u} on this server", { u: r.username }); q = "@" + r.username; return; }
+    pick(p);
   }
 
   function pick(p: DirProfile) {
@@ -171,6 +184,10 @@
             <span class="nc-ava ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg></span>
             <span class="nc-main"><b>{$t("New channel")}</b></span>
           </button>
+          <button class="nc-row act" onclick={scan}>
+            <span class="nc-ava ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 14h3v3M21 14v.01M17 21h4v-4M14 18v3"/></svg></span>
+            <span class="nc-main"><b>{$t("Scan QR code")}</b></span>
+          </button>
         {/if}
         {#if results.length}
           <div class="nc-sec">{$t("Global search")}</div>
@@ -201,7 +218,7 @@
 <style>
   .nc-veil { position: fixed; inset: 0; z-index: 240; background: rgba(0,0,0,.45); animation: nc-fade .18s ease; }
   .nc { position: fixed; z-index: 241; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(440px, calc(100vw - 24px)); height: min(620px, calc(100vh - 48px));
-    display: flex; flex-direction: column; border-radius: 18px; background: var(--bg-surface); border: 1px solid var(--border-strong);
+    display: flex; flex-direction: column; border-radius: calc(18px * var(--rk, 1)); background: var(--bg-surface); border: 1px solid var(--border-strong);
     box-shadow: 0 30px 80px -24px rgba(0,0,0,.8); overflow: hidden; animation: nc-in .24s cubic-bezier(.22,1,.36,1); outline: none; }
   @keyframes nc-fade { from { opacity: 0; } }
   @keyframes nc-in { from { opacity: 0; transform: translate(-50%, -48%) scale(.97); } }
@@ -210,12 +227,12 @@
   .nc-ic { width: 36px; height: 36px; border: none; border-radius: 50%; background: transparent; color: var(--fg-muted); cursor: pointer; display: grid; place-items: center; }
   .nc-ic:hover { background: var(--bg-hover); color: var(--fg); }
   .nc-ic svg { width: 20px; height: 20px; }
-  .nc-search { display: flex; align-items: center; gap: 8px; margin: 4px 14px 8px; padding: 0 12px; height: 42px; border-radius: 21px; background: var(--bg-input); color: var(--fg-dim); }
+  .nc-search { display: flex; align-items: center; gap: 8px; margin: 4px 14px 8px; padding: 0 12px; height: 42px; border-radius: calc(21px * var(--rk, 1)); background: var(--bg-input); color: var(--fg-dim); }
   .nc-search svg { width: 18px; height: 18px; flex-shrink: 0; }
   .nc-search input { flex: 1; min-width: 0; border: none; outline: none; background: transparent; color: var(--fg); font: inherit; font-size: 15px; }
   .nc-list { flex: 1; overflow-y: auto; padding: 0 6px 10px; }
   .nc-sec { padding: 12px 10px 4px; font-size: 12.5px; font-weight: 700; color: var(--accent); }
-  .nc-row { width: 100%; display: flex; align-items: center; gap: 12px; padding: 7px 10px; border: none; border-radius: 12px; background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+  .nc-row { width: 100%; display: flex; align-items: center; gap: 12px; padding: 7px 10px; border: none; border-radius: calc(12px * var(--rk, 1)); background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
   .nc-row:hover, .nc-row:focus-visible { background: var(--bg-hover); outline: none; }
   .nc-row.act b { color: var(--accent); font-weight: 600; }
   .nc-ava { width: 42px; height: 42px; border-radius: 50%; flex-shrink: 0; display: grid; place-items: center; font-weight: 800; font-size: 17px; color: #06070C;
@@ -226,14 +243,14 @@
   .nc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .nc-main b { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .nc-main small { font-size: 13px; color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .nc-bot { margin-left: 6px; padding: 1px 5px; border-radius: 5px; font-size: 10px; font-weight: 800; background: var(--accent-soft); color: var(--accent); vertical-align: 2px; }
+  .nc-bot { margin-left: 6px; padding: 1px 5px; border-radius: calc(5px * var(--rk, 1)); font-size: 10px; font-weight: 800; background: var(--accent-soft); color: var(--accent); vertical-align: 2px; }
   .nc-empty { padding: 18px 12px; font-size: 14px; color: var(--fg-dim); text-align: center; }
   .nc-err { margin: 8px 14px; font-size: 13.5px; color: var(--danger, #FF4D6D); }
   .nc-card { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 18px 20px 12px; text-align: center; }
   .nc-name { margin-top: 8px; font-size: 19px; font-weight: 700; }
   .nc-user { font-size: 14px; color: var(--accent); }
   .nc-about { margin-top: 6px; font-size: 13.5px; color: var(--fg-muted); max-width: 320px; }
-  .nc-send { display: flex; align-items: flex-end; gap: 8px; margin: 10px 14px 0; padding: 6px 6px 6px 14px; border-radius: 22px; background: var(--bg-input); }
+  .nc-send { display: flex; align-items: flex-end; gap: 8px; margin: 10px 14px 0; padding: 6px 6px 6px 14px; border-radius: calc(22px * var(--rk, 1)); background: var(--bg-input); }
   .nc-send textarea { flex: 1; min-width: 0; resize: none; border: none; outline: none; background: transparent; color: var(--fg); font: inherit; font-size: 15px; padding: 8px 0; max-height: 140px; }
   .nc-go { width: 40px; height: 40px; flex-shrink: 0; border: none; border-radius: 50%; display: grid; place-items: center; cursor: pointer; color: #06070C; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
   .nc-go:disabled { opacity: .45; cursor: default; }

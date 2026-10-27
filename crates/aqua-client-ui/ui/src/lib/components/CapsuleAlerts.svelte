@@ -29,10 +29,10 @@
 
 <style>
   .ca { position: fixed; left: 16px; bottom: 16px; z-index: 975; display: flex; flex-direction: column; gap: 8px; width: min(360px, calc(100vw - 32px)); }
-  .ca-card { padding: 12px 14px; border-radius: 14px; background: var(--bg-shell); border: 1px solid #ffb84d; display: flex; flex-direction: column; gap: 4px; box-shadow: 0 16px 40px -16px rgba(0,0,0,0.6); }
+  .ca-card { padding: 12px 14px; border-radius: calc(14px * var(--rk, 1)); background: var(--bg-shell); border: 1px solid #ffb84d; display: flex; flex-direction: column; gap: 4px; box-shadow: 0 16px 40px -16px rgba(0,0,0,0.6); }
   .ca-card b { font-size: 13.5px; }
   .ca-card span { font-size: 12.5px; color: var(--fg-muted); }
   .ca-btns { display: flex; gap: 6px; margin-top: 6px; }
-  .ca-btn { border: none; border-radius: 9px; padding: 7px 12px; background: #ffb84d; color: #1a1205; font: inherit; font-weight: 700; cursor: pointer; }
+  .ca-btn { border: none; border-radius: calc(9px * var(--rk, 1)); padding: 7px 12px; background: #ffb84d; color: #1a1205; font: inherit; font-weight: 700; cursor: pointer; }
   .ca-btn.ghost { background: var(--bg-input); color: var(--fg); }
 </style>

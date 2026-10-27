@@ -138,7 +138,7 @@
     width: min(460px, 94vw); max-height: 88vh;
     display: flex; flex-direction: column; gap: 12px;
     padding: 18px;
-    border-radius: 16px;
+    border-radius: calc(16px * var(--rk, 1));
     background: var(--bg-shell);
     border: 1px solid var(--border-strong);
     box-shadow: 0 28px 70px rgba(0, 0, 0, 0.55);
@@ -152,7 +152,7 @@
   }
   .grid.one { grid-template-columns: 1fr; }
   .it {
-    position: relative; aspect-ratio: 1; border-radius: 10px; overflow: hidden;
+    position: relative; aspect-ratio: 1; border-radius: calc(10px * var(--rk, 1)); overflow: hidden;
     background: var(--bg-input); display: grid; place-items: center;
   }
   .grid.one .it { aspect-ratio: 16 / 10; }
@@ -174,7 +174,7 @@
   .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .modes button {
     display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
-    padding: 10px 12px; border-radius: 11px;
+    padding: 10px 12px; border-radius: calc(11px * var(--rk, 1));
     border: 1.5px solid var(--border); background: var(--bg-input); color: var(--fg);
     text-align: left; cursor: pointer;
   }
@@ -184,14 +184,14 @@
   .chk { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--fg-muted); cursor: pointer; }
   .chk input { accent-color: var(--accent); width: 16px; height: 16px; }
   .cap {
-    height: 38px; padding: 0 12px; border-radius: 10px;
+    height: 38px; padding: 0 12px; border-radius: calc(10px * var(--rk, 1));
     border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 14px;
   }
   .cap:focus { outline: none; border-color: var(--accent); }
   .row { display: flex; align-items: center; gap: 8px; }
   .grow { flex: 1; }
   .btn {
-    height: 36px; padding: 0 16px; border-radius: 10px;
+    height: 36px; padding: 0 16px; border-radius: calc(10px * var(--rk, 1));
     border: 1px solid var(--border-strong); background: transparent; color: var(--fg);
     font-size: 13.5px; font-weight: 600; cursor: pointer;
   }
