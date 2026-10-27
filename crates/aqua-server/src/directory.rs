@@ -569,7 +569,7 @@ impl Directory {
     /// a relay of the network that has none).
     pub async fn send_code_mail(&self, to: &str, code: &str, link: Option<&str>) -> anyhow::Result<()> {
         let cfg = self.smtp.read().ok().and_then(|c| c.clone()).ok_or_else(|| anyhow::anyhow!("no mail server here"))?;
-        tokio::time::timeout(std::time::Duration::from_secs(45), send_smtp_any_port(&cfg, to, code, link))
+        tokio::time::timeout(std::time::Duration::from_secs(60), send_smtp_any_port(&cfg, to, code, link))
             .await
             .map_err(|_| anyhow::anyhow!("the mail server didn't answer in time"))?
     }
@@ -601,7 +601,7 @@ impl Directory {
             self.send_email_code(&email, &code);
             return Ok(CodeDelivery { dev_code: self.dev_codes().then_some(code), delivery_failed: false, error: None });
         };
-        let res = tokio::time::timeout(std::time::Duration::from_secs(45), send_smtp_any_port(&cfg, &email, &code, link.as_deref())).await;
+        let res = tokio::time::timeout(std::time::Duration::from_secs(60), send_smtp_any_port(&cfg, &email, &code, link.as_deref())).await;
         let err = match res {
             Ok(Ok(())) => {
                 tracing::info!(%email, "verification code emailed");
@@ -617,6 +617,14 @@ impl Directory {
             r.truncate(20);
         }
         Ok(CodeDelivery { dev_code: self.dev_codes().then_some(code), delivery_failed: true, error: Some(err) })
+    }
+
+    /// A code another relay of the network mailed after all: off the panel's
+    /// "couldn't be sent" list.
+    pub fn forget_unsent(&self, email: &str, code: &str) {
+        if let Ok(mut r) = self.recent.lock() {
+            r.retain(|c| !(c.0 == email && c.1 == code));
+        }
     }
 
     /// The e-mail an "It's me" link is for (still valid), masked for the page.
@@ -2023,23 +2031,63 @@ pub struct CodeDelivery {
 /// Send over the configured port; if that fails, over the other one
 /// (587 STARTTLS ↔ 465 TLS). VPNs and some networks break one of them —
 /// "incomplete response" on 587 is the usual sign.
+///
+/// IPv4 addresses go first: smtp.gmail.com answers with an IPv6 address
+/// first, and on a machine whose IPv6 is broken the connection hung until
+/// the whole attempt ran out of time ("the mail server didn't answer in
+/// time") without ever trying IPv4. The certificate is still checked
+/// against the server's name.
 async fn send_smtp_any_port(cfg: &SmtpConfig, to: &str, code: &str, link: Option<&str>) -> anyhow::Result<()> {
-    let first = send_smtp(cfg, to, code, link).await;
-    let Err(e1) = first else { return Ok(()) };
-    let alt = match cfg.port { 465 => 587, 587 | 25 | 2525 => 465, _ => return Err(e1) };
-    tracing::warn!(port = cfg.port, error = %e1, alt, "SMTP failed, trying the other port");
-    let mut c2 = cfg.clone();
-    c2.port = alt;
-    match send_smtp(&c2, to, code, link).await {
-        Ok(()) => {
-            tracing::info!(alt, "SMTP works on the other port — consider switching to it in the admin panel");
-            Ok(())
+    let alt = match cfg.port { 465 => Some(587), 587 | 25 | 2525 => Some(465), _ => None };
+    let mut errors: Vec<String> = Vec::new();
+    for port in std::iter::once(cfg.port).chain(alt) {
+        let addrs = smtp_addrs(&cfg.host, port).await;
+        // Per address: a short wait, so a dead address leaves time for the next.
+        let targets: Vec<Option<String>> = if addrs.is_empty() { vec![None] } else { addrs.into_iter().map(Some).collect() };
+        for target in targets {
+            let mut c = cfg.clone();
+            c.port = port;
+            let at = target.clone().unwrap_or_else(|| cfg.host.clone());
+            match tokio::time::timeout(std::time::Duration::from_secs(10), send_smtp(&c, target.as_deref(), to, code, link)).await {
+                Ok(Ok(())) => {
+                    if port != cfg.port {
+                        tracing::info!(port, "SMTP works on the other port — consider switching to it in the admin panel");
+                    }
+                    return Ok(());
+                }
+                Ok(Err(e)) => {
+                    let s = e.to_string();
+                    // Wrong login or password: other addresses won't help.
+                    if s.contains("535") || s.to_lowercase().contains("authentication") {
+                        return Err(anyhow::anyhow!("the mail server refused the login or password: {s}"));
+                    }
+                    tracing::warn!(%at, port, error = %s, "SMTP attempt failed");
+                    errors.push(format!("{at}:{port}: {s}"));
+                }
+                Err(_) => {
+                    tracing::warn!(%at, port, "SMTP attempt timed out");
+                    errors.push(format!("{at}:{port}: no answer"));
+                }
+            }
         }
-        Err(e2) => Err(anyhow::anyhow!("port {}: {e1}; port {alt}: {e2}", cfg.port)),
     }
+    Err(anyhow::anyhow!("couldn't reach the mail server ({}) — a firewall, the provider or a VPN may block ports 587/465", errors.join("; ")))
 }
 
-async fn send_smtp(cfg: &SmtpConfig, to: &str, code: &str, link: Option<&str>) -> anyhow::Result<()> {
+/// The server's addresses, IPv4 first (at most two of each family).
+async fn smtp_addrs(host: &str, port: u16) -> Vec<String> {
+    let Ok(Ok(it)) = tokio::time::timeout(std::time::Duration::from_secs(5), tokio::net::lookup_host((host, port))).await else {
+        return Vec::new();
+    };
+    let all: Vec<std::net::SocketAddr> = it.collect();
+    let v4 = all.iter().filter(|a| a.is_ipv4()).take(2);
+    let v6 = all.iter().filter(|a| a.is_ipv6()).take(1);
+    v4.chain(v6).map(|a| a.ip().to_string()).collect()
+}
+
+/// `at`: connect to this address instead of resolving `cfg.host` (the TLS
+/// certificate is checked against `cfg.host` either way).
+async fn send_smtp(cfg: &SmtpConfig, at: Option<&str>, to: &str, code: &str, link: Option<&str>) -> anyhow::Result<()> {
     use lettre::{
         transport::smtp::authentication::Credentials,
         AsyncSmtpTransport, AsyncTransport, Tokio1Executor,
@@ -2049,16 +2097,15 @@ async fn send_smtp(cfg: &SmtpConfig, to: &str, code: &str, link: Option<&str>) -
     // like that; the real password has no spaces (Gmail answers 535 otherwise).
     let pass: String = cfg.pass.chars().filter(|c| !c.is_whitespace()).collect();
     let creds = Credentials::new(cfg.user.trim().to_string(), pass);
+    use lettre::transport::smtp::client::{Tls, TlsParameters};
     // 465 = implicit TLS (SSL); anything else (587) = STARTTLS.
-    let builder = if cfg.port == 465 {
-        AsyncSmtpTransport::<Tokio1Executor>::relay(&cfg.host)?
-    } else {
-        AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&cfg.host)?
-    };
-    let mailer: AsyncSmtpTransport<Tokio1Executor> = builder
+    let params = TlsParameters::new(cfg.host.clone())?;
+    let tls = if cfg.port == 465 { Tls::Wrapper(params) } else { Tls::Required(params) };
+    let mailer: AsyncSmtpTransport<Tokio1Executor> = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(at.unwrap_or(&cfg.host))
         .port(cfg.port)
+        .tls(tls)
         .credentials(creds)
-        .timeout(Some(std::time::Duration::from_secs(20)))
+        .timeout(Some(std::time::Duration::from_secs(10)))
         .build();
     mailer.send(email).await?;
     Ok(())
