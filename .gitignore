@@ -56,3 +56,4 @@ __pycache__/
 
 # Documents copied in by pages.yml
 site/docs/
+docker/bin/

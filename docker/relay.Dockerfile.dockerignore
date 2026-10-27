@@ -1,0 +1,10 @@
+# Used instead of the root .dockerignore (which keeps only the website)
+# when building docker/relay.Dockerfile.
+*
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+!crates/aqua-core
+!crates/aqua-server
+!crates/aqua-client-core
+**/target

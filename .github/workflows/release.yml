@@ -521,12 +521,61 @@ jobs:
           overwrite_files: true
           files: dist/*
 
+  # ---------------------------------------------------------------- relay image
+  # The relay as a container, from the Linux binaries above (no compiling
+  # under QEMU): ghcr.io/<owner>/aquamarine-server — :latest and :<version>
+  # for a release, :<version> and :pre for a pre-release, :nightly for main.
+  # How to run it: docs/docker.md.
+  relay-image:
+    name: relay image
+    needs: [notes, server]
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: aqua-server-linux-x64
+          path: docker/bin/amd64
+      - uses: actions/download-artifact@v4
+        with:
+          name: aqua-server-linux-arm64
+          path: docker/bin/arm64
+      - name: Name the binaries
+        run: |
+          mv docker/bin/amd64/aqua-server-linux-x64 docker/bin/amd64/aqua-server
+          mv docker/bin/arm64/aqua-server-linux-arm64 docker/bin/arm64/aqua-server
+          ls -la docker/bin/*
+      - name: Image tags
+        id: meta
+        run: |
+          img="ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/aquamarine-server"
+          if [ "$NIGHTLY" = "true" ]; then tags="$img:nightly"
+          elif [ "$PRE" = "true" ]; then tags="$img:${REL_TAG#v},$img:pre"
+          else tags="$img:${REL_TAG#v},$img:latest"; fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/relay-bin.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+
   # ---------------------------------------------------------------- site
   # The website as aquamarine-site.tar.gz (pages + Markdown documents) —
   # tools/aquamarine-site.sh downloads it to serve the site anywhere, even
   # from Termux on a phone — and the same files as a tiny container image,
   # ghcr.io/<owner>/aquamarine-site (:latest; :<version> for a release).
-  # The relay itself is not containerised.
+  # The relay has its own image (relay-image above).
   site:
     name: website bundle + image
     needs: notes

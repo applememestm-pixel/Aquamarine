@@ -34,6 +34,7 @@
 |---|---|
 | [api.md](api.md) | HTTP API и WebSocket ретранслятора: все методы, форматы, ошибки |
 | [federation.md](federation.md) | Сеть ретрансляторов: подпись запросов, репликация, доставка, режимы доступа, планы |
+| [docker.md](docker.md) | Docker на Windows, macOS и Linux; сервер одной командой, обновление, резервная копия, сборка образа из исходников |
 | [deployment.md](deployment.md) | Запуск ретранслятора, TLS, systemd, переменные окружения, файлы, панель администратора |
 | [overlay-networks.md](overlay-networks.md) | Подключение без белого IP через виртуальную сеть: NetBird, ZeroTier, Tailscale, Radmin VPN, Hamachi |
 | [building.md](building.md) | Сборка всех платформ, тесты, непрерывная интеграция, выпуск версии |

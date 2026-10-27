@@ -230,13 +230,20 @@
         <p data-i="host.p">Aquamarine подключается к любому ретранслятору по адресу. Поднимите свой — на сервере, ПК или Raspberry Pi — и объедините несколько в сеть: учётные записи и копии реплицируются, клиенты сами переходят на живой узел.</p>
       </div>
       <div class="steps">
-        <div class="step"><div class="step-n">1</div><div><h3 data-i="host.s1">Запустите ретранслятор</h3><p data-i="host.s1p">Один исполняемый файл без зависимостей. Для HTTPS поставьте перед ним Caddy или nginx.</p></div></div>
+        <div class="step"><div class="step-n">1</div><div><h3 data-i="host.s1">Запустите ретранслятор</h3><p data-i="host.s1p">Одной командой в Docker — на Windows, macOS и Linux одинаково — или одним файлом без зависимостей. Для HTTPS поставьте перед ним Caddy или nginx.</p></div></div>
         <div class="step"><div class="step-n">2</div><div><h3 data-i="host.s2">Дайте адрес друзьям</h3><p data-i="host.s2p">Все вводят один адрес сервера при входе — IP в локальной сети или публичное имя.</p></div></div>
         <div class="step"><div class="step-n">3</div><div><h3 data-i="host.s3">Общайтесь</h3><p data-i="host.s3p">Сервер только пересылает запечатанные конверты. Прочитать их он не может.</p></div></div>
       </div>
-      <p style="margin-top:22px"><a class="btn btn-ghost" href="docs.html?d=deployment" data-i="host.more">Развёртывание и настройка</a></p>
+      <p style="margin-top:22px"><a class="btn btn-primary" href="docs.html?d=docker" data-i="host.docker">Docker: как поставить и запустить</a> <a class="btn btn-ghost" href="docs.html?d=deployment" data-i="host.more">Развёртывание и настройка</a></p>
     </div>
-    <div class="code"><span class="c"># relay: one binary</span>
+    <div class="code"><span class="c"># relay in Docker: Windows, macOS, Linux</span>
+<span class="p">docker</span> run -d --name aquamarine-server \
+  --restart unless-stopped -p 7777:7777 \
+  -v aquamarine-data:/data \
+  -e <span class="p">AQUA_ADMIN_TOKEN</span>=<span class="v">your-panel-password</span> \
+  ghcr.io/applememestm-pixel/aquamarine-server
+
+<span class="c"># or one binary</span>
 <span class="p">AQUA_LISTEN</span>=0.0.0.0:7777 ./aqua-server-linux-x64
 
 <span class="c"># HTTPS in front (Caddyfile)</span>
@@ -367,7 +374,7 @@ POST /v1/bot/send   {"to":"alice","text":"hi"}
       "dl.eyebrow": "Download", "dl.h2": "Pick your platform.", "dl.p": "Builds for every desktop, Android and iOS. No store, no store account.",
       "dl.foot1": "Want the newest features?", "dl.nightly": "Nightly builds", "dl.foot2": "are rebuilt for every platform after each change. Every release ships SHA256SUMS.txt. Prefer to build it yourself —", "dl.build": "build instructions",
       "host.eyebrow": "Self-host", "host.h2": "Own the relay.", "host.p": "Aquamarine talks to any relay by address. Run yours — on a server, a PC or a Raspberry Pi — and join several into a network: accounts and backups replicate, clients move to a live node by themselves.",
-      "host.s1": "Start the relay", "host.s1p": "One binary, no dependencies. Put Caddy or nginx in front for HTTPS.", "host.s2": "Share the address", "host.s2p": "Everyone enters the same server address when signing in — a LAN IP or a public host.", "host.s3": "Chat", "host.s3p": "The relay only forwards sealed envelopes. It can't read a thing.", "host.more": "Deployment guide",
+      "host.s1": "Start the relay", "host.s1p": "One command in Docker — the same on Windows, macOS and Linux — or one binary with no dependencies. Put Caddy or nginx in front for HTTPS.", "host.docker": "Docker: install and run", "host.s2": "Share the address", "host.s2p": "Everyone enters the same server address when signing in — a LAN IP or a public host.", "host.s3": "Chat", "host.s3p": "The relay only forwards sealed envelopes. It can't read a thing.", "host.more": "Deployment guide",
       "bots.eyebrow": "Bots", "bots.h2": "Telegram bots work as they are.", "bots.p": "The relay speaks the Telegram Bot API: point your library at your relay instead of api.telegram.org, and a bot written with aiogram, python-telegram-bot, telegraf or grammY runs — with buttons, webhooks and mini apps.",
       "bots.s1": "Create a bot", "bots.s1p": "Settings → Bots: a name and a token. The relay keeps only the token's hash.", "bots.s2": "Plug in your library", "bots.s2p": "The native HTTP API or the Telegram layer — <code>/bot&lt;token&gt;/&lt;method&gt;</code>.", "bots.s3": "Or no code at all", "bots.s3p": "<code>aquabot run</code> — a ready AI bot on a local model; <code>aqua-console.py</code> — a chat in your terminal.", "bots.more": "Bot guide",
       "docs.eyebrow": "Documentation", "docs.h2": "Every part is open and written down.", "docs.p": "The technical passport, protocol, threat model and API reference. The documents live next to the code and change with it (in Russian).",

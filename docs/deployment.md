@@ -4,7 +4,7 @@
 
 ## 1. Запуск
 
-Ретранслятор — один исполняемый файл без внешних зависимостей (SQLite встроена). Сборки для Windows x64, macOS ARM64, Linux x86-64 и ARM64 — в [GitHub Releases](https://github.com/applememestm-pixel/Aquamarine/releases).
+Ретранслятор — один исполняемый файл без внешних зависимостей (SQLite встроена). Проще всего — готовый образ Docker: [docker.md](docker.md) (как поставить Docker на любую систему и запустить сервер одной командой). Сборки для Windows x64, macOS ARM64, Linux x86-64 и ARM64 — в [GitHub Releases](https://github.com/applememestm-pixel/Aquamarine/releases).
 
 ```bash
 AQUA_LISTEN=0.0.0.0:7777 ./aqua-server-linux-x64
@@ -31,7 +31,7 @@ AQUA_LISTEN=0.0.0.0:7777 ./aqua-server-linux-x64
 
 ## 2. Сайт проекта: Termux, Docker
 
-Ретранслятор в контейнер не упаковывается — он запускается как обычная программа (раздел 1). Отдельно можно держать под рукой сайт проекта с документацией и справочником API; он же всегда доступен на [GitHub Pages](https://applememestm-pixel.github.io/Aquamarine/).
+Ретранслятор в Docker — [docker.md](docker.md). Отдельно можно держать под рукой сайт проекта с документацией и справочником API; он же всегда доступен на [GitHub Pages](https://applememestm-pixel.github.io/Aquamarine/).
 
 `tools/aquamarine-site.sh` отдаёт сайт на `http://<адрес>:8080/` (`PORT=…` — другой порт). Из копии репозитория берёт файлы рядом, иначе скачивает `aquamarine-site.tar.gz` из релиза (`TAG=latest` — стабильный, по умолчанию `nightly`). Нужен `python3` (или `busybox`, или `php`).
 

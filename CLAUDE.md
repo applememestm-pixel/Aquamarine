@@ -80,6 +80,7 @@ Aquamarine — мессенджер со сквозным шифрованием
   - Аватарки: `--ava-r` (люди), `--ava-r-group`, `--ava-r-chan` (классы `ava-grp`/`ava-chan`). Память: `Donut.svelte`, `storage.rs::storage_traffic`.
   - Поле ввода: кнопка эмодзи `.emoji-in` внутри `.input-wrap` справа (`data-emoji-anchor` — по нему ставится панель), отправка — самолётик (`icons.send`). Lottie рисуется с `dpr ≥ 2`.
   - CI Android: методы окна, которые есть только на ПК (`unminimize` и т. п.), — под `#[cfg(desktop)]`. Локально под Android не собрать (нет NDK), лог CI: `gh api repos/…/actions/jobs/<id>/logs`.
+  - Docker: сервер снова в образе `ghcr.io/<owner>/aquamarine-server` (job `relay-image` в `release.yml` берёт готовые linux-x64/arm64 бинарники, `docker/relay-bin.Dockerfile`; из исходников — `docker/relay.Dockerfile` со своим `.dockerignore`). Данные — том `/data`, контейнер `aquamarine-server`. Инструкция — `docs/docker.md` (и на сайте). Корневой `Dockerfile` — по-прежнему только сайт.
   - Сайт: тур — карусель (`motion.js`, `.tour`), ассеты в `site/assets` (Noto CC BY 4.0, DiceBear CC0, Wikimedia), наборы владельца — `tools/site-packs.sh` → `site/assets/packs/manifest.json`. Telegram-наборы без токена бота отсюда не скачать.
 
 ## Открытые вопросы
