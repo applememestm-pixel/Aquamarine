@@ -7,7 +7,21 @@
    * click to maximise; neon window buttons on the right, Discord-style.
    */
   import { onMount } from "svelte";
-  import { info } from "../stores";
+  import { info, chats, activeChat } from "../stores";
+  import { settings } from "../theme";
+  import { forgetPopout } from "../popouts";
+  import { mutedChats } from "../chatPrefs";
+
+  // Settings → Advanced → Window title bar: the open chat, the account and
+  // the unread count — on the bar and in the system's window title.
+  const unread = $derived($chats.reduce((n, c) => n + (c.channel || $mutedChats.has(c.id) ? 0 : c.unread), 0));
+  const chatName = $derived($settings.titleChatName !== false && $activeChat ? $activeChat.name : "");
+  const account = $derived($settings.titleAccount && $info?.username ? "@" + $info.username : "");
+  const showUnread = $derived($settings.titleUnread !== false && unread > 0);
+  $effect(() => {
+    const title = ["Aquamarine" + (showUnread ? ` (${unread})` : ""), chatName, account].filter(Boolean).join(" — ");
+    void getWin().then((w) => w.setTitle(title)).catch(() => {});
+  });
 
   let maximized = $state(false);
   type Win = Awaited<ReturnType<typeof getWin>>;
@@ -36,6 +50,9 @@
     <img class="logo" src={$appIconUrl} alt="" data-tauri-drag-region draggable="false" />
     <span class="name" data-tauri-drag-region>{$t("Aquamarine")}</span>
     {#if $info?.connected}<span class="dot" data-tauri-drag-region title={$t("Connected")}></span>{/if}
+    {#if showUnread}<span class="tb-unread" data-tauri-drag-region>{unread > 99 ? "99+" : unread}</span>{/if}
+    {#if chatName}<span class="tb-sub" data-tauri-drag-region>· {chatName}</span>{/if}
+    {#if account}<span class="tb-sub dim" data-tauri-drag-region>{account}</span>{/if}
   </div>
   <div class="spacer" data-tauri-drag-region></div>
   <div class="ctrls">
@@ -49,13 +66,16 @@
         <svg viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" rx="1.2" /></svg>
       {/if}
     </button>
-    <button class="wb close" onclick={act((w) => w.close())} title={$t("Close")} aria-label={$t("Close")}>
+    <button class="wb close" onclick={() => { const pop = /^#popout=(.+)$/.exec(location.hash); if (pop) forgetPopout(decodeURIComponent(pop[1])); act((w) => w.close())(); }} title={$t("Close")} aria-label={$t("Close")}>
       <svg viewBox="0 0 12 12"><line x1="2.5" y1="2.5" x2="9.5" y2="9.5" /><line x1="9.5" y1="2.5" x2="2.5" y2="9.5" /></svg>
     </button>
   </div>
 </div>
 
 <style>
+  .tb-unread { font-size: 10.5px; font-weight: 800; color: #06070C; background: var(--accent); border-radius: 100px; padding: 0 6px; line-height: 16px; }
+  .tb-sub { font-size: 12px; font-weight: 600; color: var(--fg-muted); max-width: 32vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tb-sub.dim { color: var(--fg-dim); font-family: var(--font-mono); font-size: 11.5px; }
   .titlebar {
     height: 32px;
     flex-shrink: 0;

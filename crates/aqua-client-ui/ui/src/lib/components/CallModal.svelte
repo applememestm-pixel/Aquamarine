@@ -1461,7 +1461,7 @@
   /* ---------- shared ---------- */
   .ava {
     position: relative;
-    border-radius: 50%;
+    border-radius: var(--ava-r, 50%);
     background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
     display: grid; place-items: center;
     color: #06070C; font-weight: 700; letter-spacing: -0.02em;
@@ -1475,7 +1475,7 @@
   .ava.speaking { box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 4px #3BA55D; }
   .ava-badge {
     position: absolute; right: -3px; bottom: -3px;
-    width: 18px; height: 18px; border-radius: 50%;
+    width: 18px; height: 18px; border-radius: var(--ava-r, 50%);
     background: var(--danger); color: #fff;
     display: grid; place-items: center;
     border: 2px solid var(--bg-surface);

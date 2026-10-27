@@ -81,6 +81,7 @@
   import { loadReactionPack } from "./lib/reactionPack";
   import UpdateBanner from "./lib/components/UpdateBanner.svelte";
   import { startUpdates } from "./lib/updates";
+  import { initDesktop } from "./lib/desktop";
 
   // Entry: an account registered on this device goes straight in (after
   // the app passcode, if one is set) — no "Continue as" window. The
@@ -132,6 +133,7 @@
   });
 
   onMount(() => {
+    initDesktop();
     // Notifications are on by default: ask the system once, on first start.
     try {
       if (!localStorage.getItem("aqua.notifyAsked")) {

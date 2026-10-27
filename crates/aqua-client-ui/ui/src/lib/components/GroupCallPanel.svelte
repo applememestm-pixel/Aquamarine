@@ -200,7 +200,7 @@
   .tile.speaking { border-color: #3ddc84; box-shadow: 0 0 0 2px rgba(61, 220, 132, 0.25), 0 0 22px -4px rgba(61, 220, 132, 0.6); }
   .tile video { width: 100%; height: 100%; object-fit: cover; background: #000; }
   .tile video.mirror { transform: scaleX(-1); }
-  .ava { width: 56px; height: 56px; border-radius: 50%; overflow: hidden; display: grid; place-items: center; font-weight: 800; font-size: 22px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070c; }
+  .ava { width: 56px; height: 56px; border-radius: var(--ava-r, 50%); overflow: hidden; display: grid; place-items: center; font-weight: 800; font-size: 22px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070c; }
   .ava img { width: 100%; height: 100%; object-fit: cover; }
   .name { position: absolute; left: 8px; bottom: 6px; display: flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: calc(6px * var(--rk, 1)); background: rgba(0, 0, 0, 0.55); color: #fff; }
   .name svg { width: 12px; height: 12px; color: #ff6b6b; }

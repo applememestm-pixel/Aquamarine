@@ -21,6 +21,12 @@
   import { archived, mutedChats, setArchived, setMuted, pinnedChats, togglePin, movePin, MAX_PINS } from "../chatPrefs";
   import { parseJoinLink } from "../groupRules";
   import { groupMap, requestJoinGroup } from "../groups";
+  import { roomsOf } from "../groupRules";
+  import { rolesOn, hasPerm } from "../roles";
+  import { activeGroupCalls } from "../groupCall";
+  import { openRoomRequest } from "../roomNav";
+  import { openPopout } from "../popouts";
+  import type { Room } from "../types";
   import { peerPresence, activityVerb } from "../presence";
   import { icons } from "../icons";
   import { info, search, visibleChats, activeId, selectChat, startChat, chats, connect, backToList } from "../stores";
@@ -252,7 +258,7 @@
   const DESKTOP = typeof navigator !== "undefined" && !/android|iphone|ipad/i.test(navigator.userAgent);
   function popOut(id: string, name: string) {
     ctx = null;
-    void api.openChatWindow(id, name).catch((e) => showToast(String(e)));
+    void openPopout(id, name).catch((e) => showToast(String(e)));
   }
 
   // Lists move (a chat jumps to the top) and appear with a short glide.
@@ -277,8 +283,34 @@
   function peekCancel() {
     if (peekTimer) { clearTimeout(peekTimer); peekTimer = null; }
   }
+  // ---- A server (supergroup with rooms): holding its icon lists every
+  // room you can open right now — text rooms ("chats") first, then voice.
+  let roomsPop = $state<{ gid: string; x: number; y: number } | null>(null);
+  const popRooms = $derived.by(() => {
+    if (!roomsPop) return { text: [] as Room[], voice: [] as Room[] };
+    const g = $groupMap[roomsPop.gid];
+    const me = $info?.username ?? "";
+    const rs = roomsOf(g).filter((r) => !rolesOn(g) || hasPerm(g, me, r.kind === "voice" ? "connect" : "view_room", r));
+    return { text: rs.filter((r) => r.kind === "text"), voice: rs.filter((r) => r.kind === "voice") };
+  });
+  function goRoom(r: Room) {
+    const gid = roomsPop?.gid;
+    roomsPop = null;
+    if (!gid) return;
+    openRoomRequest.set({ gid, room: r.id });
+    void selectChat(gid);
+  }
+  $effect(() => { if (roomsPop) return onBack(() => (roomsPop = null)); });
+
   async function openPeek(id: string) {
     if ($chatLocks[id] && !$unlocked[id]) return;            // a locked chat stays closed
+    if (roomsOf($groupMap[id]).length) {
+      peekFired = true;
+      suppressClick = true; setTimeout(() => (suppressClick = false), 600);
+      try { navigator.vibrate?.(12); } catch { /* no vibration */ }
+      roomsPop = { gid: id, x: peekStart.x, y: peekStart.y };
+      return;
+    }
     peekFired = true;
     dragPin = null;
     suppressClick = true; setTimeout(() => (suppressClick = false), 600);
@@ -809,6 +841,32 @@
     </div>
   {/if}
 
+  {#if roomsPop}
+    {@const g = $groupMap[roomsPop.gid]}
+    <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+    <div class="rp-veil" onclick={() => (roomsPop = null)} oncontextmenu={(e) => e.preventDefault()}></div>
+    <div class="rp" role="menu" aria-label={$t("Rooms")}
+      style:left="{Math.min(roomsPop.x + 8, innerWidth - 268)}px" style:top="{Math.max(8, Math.min(roomsPop.y - 20, innerHeight - 380))}px">
+      <div class="rp-title">{g?.title ?? ""}</div>
+      {#if popRooms.text.length}<div class="rp-sec">{$t("Chats")}</div>{/if}
+      {#each popRooms.text as r (r.id)}
+        <button class="rp-row" role="menuitem" onclick={() => goRoom(r)}>
+          <span class="rp-ic" style:color={r.color}>{r.emoji ?? "#"}</span>
+          <span class="rp-name">{r.name}{#if r.topic}<small>{r.topic}</small>{/if}</span>
+          {#if r.readonly}<span class="rp-tag">{$t("read-only")}</span>{/if}
+        </button>
+      {/each}
+      {#if popRooms.voice.length}<div class="rp-sec">{$t("Voice")}</div>{/if}
+      {#each popRooms.voice as r (r.id)}
+        {@const live = $activeGroupCalls[roomsPop.gid]}
+        <button class="rp-row" role="menuitem" onclick={() => goRoom(r)}>
+          <span class="rp-ic">{r.emoji ?? "🔊"}</span>
+          <span class="rp-name">{r.name}{#if live?.users?.length}<small>{tr("{n} in the room", { n: live.users.length })}</small>{/if}</span>
+        </button>
+      {/each}
+      {#if !popRooms.text.length && !popRooms.voice.length}<div class="rp-empty">{$t("No rooms you can open")}</div>{/if}
+    </div>
+  {/if}
   {#if peek}
     {@const pc = $chats.find((x) => x.id === peek!.id)}
     {@const pid = peek.id}
@@ -909,6 +967,21 @@
 </aside>
 
 <style>
+  .rp-veil { position: fixed; inset: 0; z-index: 140; }
+  .rp { position: fixed; z-index: 141; width: 260px; max-height: 70vh; overflow-y: auto; padding: 6px;
+    background: color-mix(in srgb, var(--accent) 4%, var(--bg-shell)); border: 1px solid var(--border-strong);
+    border-radius: calc(14px * var(--rk, 1)); box-shadow: 0 22px 50px -16px rgba(0,0,0,.7); animation: rp-in .14s ease-out; }
+  @keyframes rp-in { from { opacity: 0; transform: scale(.96); } }
+  .rp-title { font-weight: 800; font-size: 14px; padding: 6px 8px 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rp-sec { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-dim); padding: 8px 8px 2px; }
+  .rp-row { width: 100%; display: flex; align-items: center; gap: 10px; padding: 7px 8px; border: none; background: none; color: var(--fg);
+    border-radius: calc(9px * var(--rk, 1)); font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; }
+  .rp-row:hover, .rp-row:focus-visible { background: var(--accent-soft); outline: none; }
+  .rp-ic { width: 22px; text-align: center; color: var(--fg-muted); font-weight: 700; flex-shrink: 0; }
+  .rp-name { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .rp-name small { color: var(--fg-dim); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rp-tag { font-size: 10.5px; color: var(--fg-dim); border: 1px solid var(--border); border-radius: 6px; padding: 0 5px; }
+  .rp-empty { padding: 10px 8px; color: var(--fg-dim); font-size: 13px; }
   .avatar.lk { filter: saturate(0.3); }
   .lk-ic { position: absolute; inset: 0; display: grid; place-items: center; color: rgba(255,255,255,0.9); }
   .lk-ic :global(svg) { width: 18px; height: 18px; }
@@ -945,7 +1018,7 @@
     background: color-mix(in srgb, var(--accent) 7%, transparent);
   }
   .jc-ava {
-    width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0; display: grid; place-items: center;
+    width: 40px; height: 40px; border-radius: var(--ava-r, 50%); flex-shrink: 0; display: grid; place-items: center;
     background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070C; font-weight: 800;
   }
   .jc-body { flex: 1; min-width: 0; }
@@ -1182,7 +1255,7 @@
   .dir-row:hover { background: var(--bg-hover); }
   .dir-avatar {
     width: 36px; height: 36px;
-    border-radius: 50%;
+    border-radius: var(--ava-r, 50%);
     background: linear-gradient(135deg, var(--accent), var(--accent-2));
     display: grid; place-items: center;
     font-weight: 800; font-size: 14px; color: #06070C;
@@ -1458,7 +1531,7 @@
     .acc-row { display: flex; align-items: center; gap: 4px; border-radius: calc(16px * var(--rk, 1)); }
     .acc-row.on { background: var(--accent-soft); }
     .acc-pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: none; background: transparent; color: var(--fg); text-align: left; border-radius: calc(16px * var(--rk, 1)); }
-    .acc-ava { width: 42px; height: 42px; border-radius: 50%; flex-shrink: 0; position: relative; overflow: hidden; display: grid; place-items: center;
+    .acc-ava { width: 42px; height: 42px; border-radius: var(--ava-r, 50%); flex-shrink: 0; position: relative; overflow: hidden; display: grid; place-items: center;
       font-weight: 800; color: #06070c; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
     .acc-ava img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
     .acc-who { display: flex; flex-direction: column; min-width: 0; flex: 1; }

@@ -122,7 +122,7 @@
   .pr-val { font-size: 13px; color: var(--accent); white-space: nowrap; }
   .pr-chev { color: var(--fg-dim); font-size: 18px; line-height: 1; }
   .pr-ava {
-    width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0; overflow: hidden; display: grid; place-items: center;
+    width: 30px; height: 30px; border-radius: var(--ava-r, 50%); flex-shrink: 0; overflow: hidden; display: grid; place-items: center;
     background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070C; font-weight: 800; font-size: 13px;
   }
   .pr-ava img { width: 100%; height: 100%; object-fit: cover; }

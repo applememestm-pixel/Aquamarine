@@ -24,6 +24,10 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    // Everything the server keeps lives in one folder: find it (or ask on
+    // the first start) and work from there.
+    let data = aqua_server::datadir::choose_and_enter();
+
     let listen = std::env::var("AQUA_LISTEN").unwrap_or_else(|_| "127.0.0.1:7777".into());
     let addr: SocketAddr = listen.parse()?;
 
@@ -51,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
     let host_port = addr.port();
     let local = format!("http://127.0.0.1:{host_port}");
     let panel = token.as_ref().map(|t| format!("{local}/admin#token={t}"));
-    banner(ansi, &addr, host_port, &local, panel.as_deref());
+    banner(ansi, &addr, host_port, &local, panel.as_deref(), &data);
 
     if let (Some(url), true) = (panel.as_ref(), std::env::var("AQUA_OPEN_PANEL").map(|v| v == "1").unwrap_or(false)) {
         open_in_browser(url);
@@ -70,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn banner(ansi: bool, addr: &SocketAddr, port: u16, local: &str, panel: Option<&str>) {
+fn banner(ansi: bool, addr: &SocketAddr, port: u16, local: &str, panel: Option<&str>, data: &std::path::Path) {
     let paint = |s: &str, st: Style| if ansi { st.paint(s).to_string() } else { s.to_string() };
     let teal = Color::Rgb(0, 229, 199).bold();
     let violet = Color::Rgb(123, 92, 255).normal();
@@ -94,6 +98,7 @@ fn banner(ansi: bool, addr: &SocketAddr, port: u16, local: &str, panel: Option<&
     if aqua_server::site::enabled() {
         println!("  {}  {}", paint("Website     ", dim), paint(&format!("{local}/"), fg));
     }
+    println!("  {}  {}", paint("Data folder ", dim), paint(&data.display().to_string(), fg));
     match panel {
         Some(p) => println!("  {}  {}", paint("Admin panel ", dim), paint(p, teal)),
         None => println!("  {}  {}", paint("Admin panel ", dim), paint("off", dim)),

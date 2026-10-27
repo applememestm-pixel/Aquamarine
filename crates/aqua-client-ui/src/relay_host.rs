@@ -1,7 +1,9 @@
 //! "Server on this device": the relay (aqua-server) running inside the app,
 //! on a PC or a phone. Friends connect to it by this device's address; on
 //! Android a foreground service (AquaRelay.kt) keeps the process alive with
-//! the screen off. The relay's files live in `<app data>/relay/`.
+//! the screen off. The relay's files live in `<app data>/relay/` unless a
+//! folder was chosen (Settings → Server on this device → Data folder; asked
+//! on the first start), remembered in `<app data>/relay-dir.txt`.
 
 use std::path::PathBuf;
 use std::sync::Mutex as StdMutex;
@@ -31,6 +33,8 @@ pub struct RelayHostStatus {
     /// The admin panel of this relay (opens on this device only).
     admin_url: Option<String>,
     dir: String,
+    /// The folder was chosen (or data is already there): no need to ask.
+    dir_chosen: bool,
     error: Option<String>,
     /// Android keeps it running with the screen off (a notification shows).
     background: bool,
@@ -38,8 +42,52 @@ pub struct RelayHostStatus {
 
 /// The server belongs to the device, not to whichever account is open:
 /// it lives in the app's base data directory (accounts.rs).
+const DIR_FILE: &str = "relay-dir.txt";
+
 fn relay_dir(base: &State<'_, crate::accounts::Base>) -> Result<PathBuf, String> {
-    Ok(base.0.join("relay"))
+    Ok(chosen_dir(&base.0).unwrap_or_else(|| base.0.join("relay")))
+}
+
+fn chosen_dir(base: &std::path::Path) -> Option<PathBuf> {
+    let s = std::fs::read_to_string(base.join(DIR_FILE)).ok()?;
+    let p = PathBuf::from(s.trim());
+    (!s.trim().is_empty() && p.is_absolute()).then_some(p)
+}
+
+fn dir_chosen(base: &std::path::Path) -> bool {
+    chosen_dir(base).is_some() || aqua_server::datadir::has_data(&base.join("relay"))
+}
+
+/// Pick the relay's data folder. Not while it runs. `copy`: bring the
+/// current data along (the old folder is left as it is).
+#[tauri::command]
+pub fn relay_host_set_dir(base: State<'_, crate::accounts::Base>, path: String, copy: bool) -> Result<RelayHostStatus, String> {
+    if RUNNING.lock().map(|r| r.is_some()).unwrap_or(false) {
+        return Err("stop the server first".into());
+    }
+    let to = if path.trim().is_empty() { base.0.join("relay") } else { PathBuf::from(path.trim()) };
+    if !to.is_absolute() { return Err("choose a folder".into()); }
+    let from = relay_dir(&base)?;
+    std::fs::create_dir_all(&to).map_err(|e| format!("{}: {e}", to.display()))?;
+    let canon = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    if copy && canon(&from) != canon(&to) && aqua_server::datadir::has_data(&from) {
+        if canon(&to).starts_with(canon(&from)) { return Err("the new folder can't be inside the current one".into()); }
+        copy_tree(&from, &to).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(base.0.join(DIR_FILE), to.display().to_string()).map_err(|e| e.to_string())?;
+    let mut st = status_now(to.display().to_string());
+    st.dir_chosen = true;
+    Ok(st)
+}
+
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for e in std::fs::read_dir(from)?.flatten() {
+        let (src, dst) = (e.path(), to.join(e.file_name()));
+        let md = e.metadata()?;
+        if md.is_dir() { copy_tree(&src, &dst)?; } else if md.is_file() { std::fs::copy(&src, &dst)?; }
+    }
+    Ok(())
 }
 
 fn status_now(dir: String) -> RelayHostStatus {
@@ -54,6 +102,7 @@ fn status_now(dir: String) -> RelayHostStatus {
             public_url: Some(aqua_server::public::url()).filter(|u| !u.is_empty()),
             admin_url: Some(format!("http://127.0.0.1:{port}/admin#token={tok}")),
             dir,
+            dir_chosen: true,
             error: None,
             background: cfg!(target_os = "android"),
         },
@@ -64,6 +113,7 @@ fn status_now(dir: String) -> RelayHostStatus {
             public_url: None,
             admin_url: None,
             dir,
+            dir_chosen: true,
             error: Some(err).filter(|e| !e.is_empty()),
             background: cfg!(target_os = "android"),
         },
@@ -73,7 +123,9 @@ fn status_now(dir: String) -> RelayHostStatus {
 #[tauri::command]
 pub fn relay_host_status(base: State<'_, crate::accounts::Base>) -> Result<RelayHostStatus, String> {
     let dir = relay_dir(&base)?;
-    Ok(status_now(dir.display().to_string()))
+    let mut st = status_now(dir.display().to_string());
+    st.dir_chosen = dir_chosen(&base.0);
+    Ok(st)
 }
 
 #[tauri::command]

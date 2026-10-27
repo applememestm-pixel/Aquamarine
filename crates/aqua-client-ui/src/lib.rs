@@ -25,6 +25,8 @@ pub mod relay_host;
 pub mod gallery;
 pub mod accounts;
 pub mod updates;
+pub mod storage;
+pub mod tray;
 
 use anyhow::Result;
 use tauri::Manager;
@@ -48,6 +50,8 @@ pub fn run() -> Result<()> {
     let builder = builder.plugin(mesh::android_plugin()).plugin(relay_host::android::plugin()).plugin(gallery::android::plugin()).plugin(updates::android::plugin());
     #[cfg(mobile)]
     let builder = builder.plugin(tauri_plugin_biometric::init());
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None));
     // WebKitGTK denies camera / mic / screen capture unless the app answers
     // its permission request ("Mic test failed: NotAllowedError" on Linux).
     // The webview only ever shows our own UI, so grant what calls need.
@@ -92,6 +96,7 @@ pub fn run() -> Result<()> {
             // through the asset protocol — also when AQUA_DATA_DIR points
             // outside the default scope (test clients on another drive).
             let _ = app.asset_protocol_scope().allow_directory(&data_dir, true);
+            let _ = app.asset_protocol_scope().allow_directory(crate::storage::downloads_dir(&data_dir), true);
             let state = state::AppState::boot(data_dir)?;
             app.manage(state);
             // Write changed chat history to the encrypted vault every few seconds.
@@ -120,6 +125,15 @@ pub fn run() -> Result<()> {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        // Closing the window with the tray icon on only hides it (Telegram-like).
+        .on_window_event(|w, e| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = e {
+                if w.label() == "main" && tray::keeps_running() {
+                    api.prevent_close();
+                    let _ = w.hide();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             mesh::mesh_status,
             mesh::mesh_set_enabled,
@@ -173,6 +187,7 @@ pub fn run() -> Result<()> {
             personal::delete_wallpaper,
             commands::fed_peers,
             relay_host::relay_host_status,
+            relay_host::relay_host_set_dir,
             relay_host::relay_host_start,
             relay_host::relay_host_stop,
             gallery::gallery_recent,
@@ -279,6 +294,13 @@ pub fn run() -> Result<()> {
             commands::attach_bytes,
             commands::download_file,
             commands::open_saved_file,
+            storage::storage_get,
+            storage::storage_set,
+            storage::storage_stats,
+            storage::storage_clear,
+            storage::storage_trim,
+            storage::export_chats,
+            tray::tray_set,
             commands::send_call_signal,
             commands::send_control,
             commands::send_sticker,

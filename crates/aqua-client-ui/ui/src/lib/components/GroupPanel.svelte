@@ -1187,7 +1187,7 @@
   .body { flex: 1; overflow-y: auto; padding: 12px 14px 18px; }
 
   .hero { display: flex; gap: 14px; align-items: center; padding: 6px 4px 10px; }
-  .ava { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0;
+  .ava { width: 64px; height: 64px; border-radius: var(--ava-r, 50%); display: grid; place-items: center; flex-shrink: 0;
          color: #06070C; font-weight: 800; font-size: 26px; box-shadow: 0 0 0 3px var(--ring, transparent); }
   .ava.img { object-fit: cover; background: var(--bg-surface); }
   .gb-vid { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; z-index: 0; }
@@ -1220,7 +1220,7 @@
             background: rgba(0,0,0,.55); color: #fff; backdrop-filter: blur(6px); }
   .me-btn.ghost { background: rgba(0,0,0,.3); }
   .me-photo { display: flex; align-items: center; gap: 12px; padding: 0 12px; margin-top: -30px; }
-  .me-ava { position: relative; width: 72px; height: 72px; border-radius: 50%; padding: 0; border: 4px solid var(--bg-surface);
+  .me-ava { position: relative; width: 72px; height: 72px; border-radius: var(--ava-r, 50%); padding: 0; border: 4px solid var(--bg-surface);
             overflow: hidden; cursor: pointer; background: none; flex-shrink: 0; }
   .me-ava img, .me-ava span { width: 100%; height: 100%; object-fit: cover; display: grid; place-items: center;
             font-weight: 800; font-size: 26px; color: #06070C; }
@@ -1330,7 +1330,7 @@
           color: inherit; text-align: left; font: inherit; }
   .mrow.click { cursor: pointer; }
   .mrow.click:hover .m-name { color: var(--accent); }
-  .m-ava { border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--accent-2)); display: grid; place-items: center;
+  .m-ava { border-radius: var(--ava-r, 50%); background: linear-gradient(135deg, var(--accent), var(--accent-2)); display: grid; place-items: center;
            font-weight: 800; font-size: 13px; color: #06070C; flex-shrink: 0; }
   .m-name { flex: 1; min-width: 0; font-size: 13.5px; color: var(--fg); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .m-name.big { font-size: 16px; font-weight: 800; }

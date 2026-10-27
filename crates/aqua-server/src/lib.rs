@@ -37,6 +37,7 @@ pub mod site;
 pub mod public;
 pub mod discovery;
 pub mod journal;
+pub mod datadir;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
 pub use auth::{AuthState, Caller};
@@ -2057,6 +2058,36 @@ async fn admin_stats(
     }))
 }
 
+/// The data folder: where it is, how big, the default for a new one.
+async fn admin_get_datadir(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    admin_authed(&state, &headers)?;
+    let dir = datadir::current();
+    let d2 = dir.clone();
+    let size = tokio::task::spawn_blocking(move || datadir::size_of(&d2)).await.unwrap_or(0);
+    Ok(Json(serde_json::json!({ "path": dir.display().to_string(), "bytes": size, "suggest": datadir::default_dir().display().to_string() })))
+}
+
+#[derive(Deserialize)]
+struct MoveDir { path: String }
+
+/// Copy the data to another folder; the server uses it from the next start.
+async fn admin_move_datadir(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<MoveDir>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    admin_authed(&state, &headers).map_err(|c| (c, "unauthorized".into()))?;
+    let to = std::path::PathBuf::from(body.path.trim().trim_matches('"'));
+    let r = tokio::task::spawn_blocking(move || datadir::move_to(&to)).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    match r {
+        Ok(n) => { journal::log("admin", "datadir", format!("copied {n} files")); Ok(Json(serde_json::json!({ "copied": n }))) }
+        Err(e) => Err((StatusCode::BAD_REQUEST, e)),
+    }
+}
+
 /// What a stat tile of the panel opens: `online`, `files`, `bots`,
 /// `visitors` (relays and people of the federation since the start),
 /// `journal` (online / offline / sign-ins).
@@ -2217,6 +2248,7 @@ pub fn app(state: AppState) -> Router {
         .route("/admin", get(admin_page))
         .route("/v1/admin/stats", get(admin_stats))
         .route("/v1/admin/detail/:what", get(admin_detail))
+        .route("/v1/admin/datadir", get(admin_get_datadir).post(admin_move_datadir))
         .route("/v1/admin/config", post(admin_set_config))
         .route("/v1/admin/smtp", get(admin_get_smtp).post(admin_set_smtp))
         .route("/v1/admin/smtp/test", post(admin_test_smtp))

@@ -305,7 +305,7 @@ input[type="checkbox"]:disabled, input[type="radio"]:disabled { opacity: .5; cur
 
 /* Small utility for reused Svelte components — keeps per-component CSS lean */
 .avatar {
-  border-radius: 50%;
+  border-radius: var(--ava-r, 50%);
   display: grid;
   place-items: center;
   font-weight: 700;
@@ -319,7 +319,7 @@ input[type="checkbox"]:disabled, input[type="radio"]:disabled { opacity: .5; cur
 .avatar > .ava-img {
   position: absolute; inset: 0;
   width: 100%; height: 100%;
-  border-radius: 50%;
+  border-radius: var(--ava-r, 50%);
   object-fit: cover;
 }
 .avatar.sz-44 { width: 44px; height: 44px; font-size: 15px; }
@@ -330,7 +330,7 @@ input[type="checkbox"]:disabled, input[type="radio"]:disabled { opacity: .5; cur
   position: absolute;
   right: -1px; bottom: -1px;
   width: 12px; height: 12px;
-  border-radius: 50%;
+  border-radius: var(--ava-r, 50%);
   background: var(--online);
   border: 2.5px solid var(--bg-list);
 }
@@ -427,3 +427,8 @@ html.contrast-rows[data-theme="light"] .alt:not(.active):not(:hover):not(.kb):no
 /* Selected text in the app's colours, not the system blue. */
 ::selection { background: color-mix(in srgb, var(--accent) 34%, transparent); color: inherit; }
 .msg.out .bubble ::selection { background: color-mix(in srgb, var(--accent) 45%, transparent); }
+
+/* Power saving (Settings → Advanced). */
+html.ps-ui *, html.ps-ui *::before, html.ps-ui *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; scroll-behavior: auto !important; }
+html.ps-chat .messages *, html.ps-chat .messages *::before, html.ps-chat .messages *::after { animation: none !important; transition: none !important; }
+html.ps-calls .stage *, html.ps-calls .stage *::before, html.ps-calls .stage *::after, html.ps-calls .gc *, html.ps-calls .gc *::before { animation: none !important; transition: none !important; }

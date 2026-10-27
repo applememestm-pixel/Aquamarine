@@ -202,7 +202,28 @@ export interface Settings {
   soundVolume: number;     // 0–1
   /** Per chat (peer / group id) sound, same ids as messageSound; "none" = silent. */
   chatSounds?: Record<string, string>;
+  // --- Data and storage ---
+  /** Automatic media download by kind of chat, up to `limitMb`. */
+  autoDl?: { private: boolean; groups: boolean; channels: boolean; limitMb: number };
+  /** Ask where to save every downloaded file. */
+  askDownloadPath?: boolean;
+  // --- Look of avatars ---
+  /** Corner of avatars in % of their size: 50 = circle, 0 = square. */
+  avatarRadius?: number;
+  // --- Window title bar (desktop) ---
+  titleChatName?: boolean;
+  titleAccount?: boolean;
+  titleUnread?: boolean;
+  // --- System integration (desktop) ---
+  tray?: boolean;
+  trayMono?: boolean;
+  restoreWindows?: boolean;
+  // --- Power saving: what may move ---
+  power?: { stickers: boolean; emoji: boolean; chat: boolean; calls: boolean; ui: boolean };
 }
+
+export const POWER_DEFAULT = { stickers: true, emoji: true, chat: true, calls: true, ui: true };
+export const AUTODL_DEFAULT = { private: true, groups: true, channels: true, limitMb: 25 };
 
 /** See-through menus: how solid they are unless the slider says otherwise —
  *  mostly glass, a little matte. */
@@ -407,6 +428,12 @@ function apply(s: Settings) {
   root.classList.toggle("glass-menus", !!s.glassMenus);
   root.classList.toggle("contrast-rows", !!s.contrastRows);
   root.style.setProperty("--rk", String(s.corners ?? 1));
+  root.style.setProperty("--ava-r", `${Math.max(0, Math.min(50, s.avatarRadius ?? 50))}%`);
+  const pw = { ...POWER_DEFAULT, ...(s.power ?? {}) };
+  root.classList.toggle("ps-ui", !pw.ui);
+  root.classList.toggle("ps-chat", !pw.chat);
+  root.classList.toggle("ps-calls", !pw.calls);
+  root.classList.toggle("ps-emoji", !pw.emoji);
   root.style.setProperty("--menu-alpha", `${Math.round((s.menuAlpha ?? MENU_ALPHA) * 100)}%`);
 
   // Custom UI font loaded from a file the user picked.

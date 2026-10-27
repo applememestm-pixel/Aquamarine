@@ -457,6 +457,7 @@
 | `GET /admin` | Веб-панель |
 | `GET /v1/admin/stats` | Адрес, IP в локальной сети, счётчики, объём вложений, время работы, последние коды подтверждения (в режиме разработки; просроченные — старше 10 минут — не показываются), режим приглашений |
 | `GET /v1/admin/detail/:what` | Что открывает плитка панели: `online` — @имена в сети; `files` — `[{kind, count, bytes}]` по типам (без метки — `unknown`); `bots` — `[{username, name}]`; `visitors` — серверы и люди федерации, обращавшиеся к узлу с момента запуска; `journal` — последние 500 событий `{at, user, ev, note}` (`online`, `offline`, `login`, `register`). Журнал дописывается и в файл `AQUA_JOURNAL` (по умолчанию `aqua-journal.log`, `off` — не писать) |
+| `GET` / `POST /v1/admin/datadir` | Папка данных: `{path, bytes, suggest}`. `POST {"path": "…"}` копирует данные в другую папку и запоминает её — она используется со следующего запуска; старая остаётся |
 | `POST /v1/admin/config` | `{"invite_only", "allow": [адреса]}` — режим «только по приглашению» |
 | `GET`, `POST /v1/admin/smtp` | Настройки почтового сервера (пароль в ответе не возвращается) |
 | `POST /v1/admin/smtp/test` | `{"to"}` — отправить пробное письмо |
@@ -559,6 +560,7 @@ x-aqua-fed: <unix_ms>.<hex HMAC-SHA256(secret, METHOD "\n" PATH "\n" unix_ms "\n
 | GET | `/admin` | админ | 15 |
 | GET | `/v1/admin/stats` | админ | 15 |
 | GET | `/v1/admin/detail/:what` | админ | 15 |
+| GET, POST | `/v1/admin/datadir` | админ | 15 |
 | POST | `/v1/admin/config` | админ | 15 |
 | GET, POST | `/v1/admin/smtp` | админ | 15 |
 | POST | `/v1/admin/smtp/test` | админ | 15 |

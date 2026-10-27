@@ -5,6 +5,10 @@
 
 <script lang="ts">
   import Select from "./Select.svelte";
+  import { AUTODL_DEFAULT, POWER_DEFAULT } from "../theme";
+  import { autostartEnabled, setAutostart } from "../desktop";
+  import { pickFolder } from "../dialog";
+  const PHONE_UI = /android|iphone|ipad/i.test(navigator.userAgent);
   import { ATTACH_ITEMS, attachFront, toggleAttachFront, resetAttachMenu } from "../attachMenu";
   import { chatLocks } from "../chatLocks";
   import { askSetLock, askRemoveLock, askChangeLock } from "../chatLockUi";
@@ -62,7 +66,7 @@
   import { meshStatus, meshSyncNow, meshSetEnabled, refreshMesh } from "../mesh";
 
   // ---- Section navigation ----
-  type Sec = "network" | "nearby" | "host" | "ghost" | "language" | "appearance" | "theme" | "behaviour" | "notifications" | "voice" | "wallpaper" | "accent" | "bots" | "account" | "updates" | "about" | "privacy" | "stickers" | "backups" | "devices";
+  type Sec = "network" | "nearby" | "host" | "ghost" | "language" | "appearance" | "theme" | "behaviour" | "notifications" | "voice" | "wallpaper" | "accent" | "bots" | "account" | "updates" | "about" | "privacy" | "stickers" | "backups" | "devices" | "storage" | "advanced";
   let section = $state<Sec>("notifications");
   // Telegram-mobile style: coloured icon tiles in grouped lists.
   interface Item { id: Sec | "profile" | "shortcuts"; label: string; color: string; icon: string; hint?: string }
@@ -82,6 +86,7 @@
       { id: "behaviour", label: "Chat settings", color: "#007AFF", icon: ic(`<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>`) },
       { id: "voice", label: "Voice & Video", color: "#34C759", icon: ic(`<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/>`) },
       { id: "language", label: "Language", color: "#AF52DE", icon: ic(`<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>`) },
+      { id: "storage", label: "Data and storage", color: "#30D158", icon: ic(`<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>`) },
       { id: "stickers", label: "Stickers & Emoji", color: "#FF9500", icon: ic(`<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>`) },
     ],
     [
@@ -90,6 +95,7 @@
     [
       { id: "shortcuts", label: "Keyboard shortcuts", color: "#5AC8FA", icon: ic(`<rect x="2" y="6" width="20" height="12" rx="2"/><line x1="6" y1="10" x2="6.01" y2="10"/><line x1="10" y1="10" x2="10.01" y2="10"/><line x1="14" y1="10" x2="14.01" y2="10"/><line x1="18" y1="10" x2="18.01" y2="10"/><line x1="7" y1="14" x2="17" y2="14"/>`), hint: "Ctrl+/" },
       { id: "bots", label: "Bots", color: "#00C7BE", icon: ic(`<rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4"/><circle cx="12" cy="3" r="1"/><line x1="9" y1="13" x2="9.01" y2="13"/><line x1="15" y1="13" x2="15.01" y2="13"/>`) },
+      { id: "advanced", label: "Advanced", color: "#636366", icon: ic(`<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>`) },
       { id: "network", label: "Network & proxy", color: "#5856D6", icon: ic(`<circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20"/><path d="M12 2a15 15 0 0 0 0 20"/>`) },
       { id: "account", label: "Account & server", color: "#007AFF", icon: ic(`<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>`) },
       { id: "updates", label: "Updates", color: "#34C759", icon: ic(`<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>`) },
@@ -279,7 +285,7 @@
   }
   $effect(() => { if ($settingsOpen && section === "devices") void loadDevices(); });
   // ---- Server on this device: the relay inside the app ----
-  type HostStatus = { running: boolean; port: number; lan_url: string | null; public_url: string | null; admin_url: string | null; dir: string; error: string | null; background: boolean };
+  type HostStatus = { running: boolean; port: number; lan_url: string | null; public_url: string | null; admin_url: string | null; dir: string; dir_chosen?: boolean; error: string | null; background: boolean };
   let host = $state<HostStatus | null>(null);
   let hostBusy = $state(false);
   let hostPort = $state(7777);
@@ -292,6 +298,93 @@
       try { localStorage.setItem("aqua.hostRelay", host.running ? String(host.port) : ""); } catch { /* ignore */ }
     } catch (e) { showToast(String(e)); await hostRefresh(); }
     hostBusy = false;
+  }
+
+  // ---- Data and storage (Telegram's "Download path" + "Local storage") ----
+  type StConf = { mode: "default" | "temp" | "custom"; custom: string; total_mb: number; cache_mb: number; max_days: number };
+  type StInfo = { conf: StConf; downloads: string; default_dir: string; temp_dir: string };
+  type StStats = { images: number; videos: number; audio: number; stickers: number; files: number; cache: number; count: number };
+  let st = $state<StInfo | null>(null);
+  let stStats = $state<StStats | null>(null);
+  let stPick = $state<Record<string, boolean>>({ images: true, videos: true, audio: true, stickers: true, files: true, cache: true });
+  let stBusy = $state(false);
+  async function stLoad() {
+    try { st = await invoke<StInfo>("storage_get"); stStats = await invoke<StStats>("storage_stats"); } catch (e) { console.warn(e); }
+  }
+  async function stSave(patch: Partial<StConf>) {
+    if (!st) return;
+    try { st = await invoke<StInfo>("storage_set", { conf: { ...st.conf, ...patch } }); await invoke("storage_trim"); stStats = await invoke<StStats>("storage_stats"); }
+    catch (e) { showToast(String(e)); }
+  }
+  async function stPickFolder() {
+    const p = await pickFolder(tr("Folder for downloaded files"));
+    if (p) await stSave({ mode: "custom", custom: p });
+  }
+  async function stClear() {
+    const kinds = Object.keys(stPick).filter((k) => stPick[k]);
+    if (!kinds.length) return;
+    const ok = await askConfirm({ title: tr("Clear {size}?", { size: fmtBytes(stSelected) }), text: tr("The files are deleted from this device only. In chats they can be downloaded again while the server keeps them."), ok: tr("Clear"), danger: true });
+    if (!ok) return;
+    stBusy = true;
+    try { const n = await invoke<number>("storage_clear", { kinds }); showToast(tr("Freed {size}", { size: fmtBytes(n) })); await stLoad(); }
+    catch (e) { showToast(String(e)); }
+    stBusy = false;
+  }
+  const ST_KINDS = [
+    { id: "images", label: "Images", color: "#4FA3FF" },
+    { id: "videos", label: "Videos", color: "#B66BFF" },
+    { id: "audio", label: "Music & voice", color: "#3DDC97" },
+    { id: "stickers", label: "Stickers & GIFs", color: "#FF9F43" },
+    { id: "files", label: "Files", color: "#FF6B8B" },
+    { id: "cache", label: "Media cache", color: "#8E8E93" },
+  ] as const;
+  const stTotal = $derived(stStats ? ST_KINDS.reduce((n, k) => n + stStats![k.id], 0) : 0);
+  const stSelected = $derived(stStats ? ST_KINDS.reduce((n, k) => n + (stPick[k.id] ? stStats![k.id] : 0), 0) : 0);
+  /** Donut segments: [offset, length, colour] on a circle of length 100. */
+  const stArcs = $derived.by(() => {
+    if (!stStats || !stTotal) return [] as { off: number; len: number; color: string }[];
+    let off = 0;
+    return ST_KINDS.filter((k) => stStats![k.id] > 0).map((k) => { const len = (stStats![k.id] / stTotal) * 100; const a = { off, len, color: k.color }; off += len; return a; });
+  });
+  function fmtBytes(n: number): string {
+    if (n < 1024) return `${n} B`;
+    if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`;
+    if (n < 1073741824) return `${(n / 1048576).toFixed(1)} MB`;
+    return `${(n / 1073741824).toFixed(2)} GB`;
+  }
+  $effect(() => { if ($settingsOpen && section === "storage") void stLoad(); });
+  async function exportChats() {
+    try {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const dest = await save({ defaultPath: `aquamarine-${$info?.username ?? "chats"}-${new Date().toISOString().slice(0, 10)}.json`, filters: [{ name: "JSON", extensions: ["json"] }] });
+      if (!dest) return;
+      const n = await invoke<number>("export_chats", { dest });
+      showToast(tr("Exported: {size}", { size: fmtBytes(n) }));
+    } catch (e) { showToast(String(e)); }
+  }
+  function setAutoDl(k: "private" | "groups" | "channels" | "limitMb", v: boolean | number) {
+    settings.update((x) => ({ ...x, autoDl: { ...AUTODL_DEFAULT, ...(x.autoDl ?? {}), [k]: v } }));
+  }
+  const pw = $derived({ ...POWER_DEFAULT, ...($settings.power ?? {}) });
+  function setPower(k: keyof typeof POWER_DEFAULT, v: boolean) {
+    settings.update((x) => ({ ...x, power: { ...POWER_DEFAULT, ...(x.power ?? {}), [k]: v } }));
+  }
+  // ---- Advanced: launch at start-up ----
+  let autostart = $state(false);
+  $effect(() => { if ($settingsOpen && section === "advanced") void autostartEnabled().then((v) => (autostart = v)); });
+  async function toggleAutostart() {
+    try { autostart = await setAutostart(!autostart); } catch (e) { showToast(String(e)); }
+  }
+
+  /** The server's data folder: chosen on the first start, changeable while it's off. */
+  async function hostSetDir(path: string | null, copy = true) {
+    if (path === null) return;
+    try { host = await invoke<HostStatus>("relay_host_set_dir", { path, copy }); showToast(tr("Server data folder: {p}", { p: host.dir })); }
+    catch (e) { showToast(String(e)); }
+  }
+  async function hostPickDir() {
+    const p = await pickFolder(tr("Folder for the server's data"));
+    if (p) await hostSetDir(p.replace(/[\\/]+$/, "") + (/[\\/]Aquamarine Server$/i.test(p) ? "" : (p.includes("\\") ? "\\" : "/") + "Aquamarine Server"));
   }
   async function hostCopy(u: string | null) {
     if (!u) return;
@@ -331,9 +424,6 @@
   function fmtWhen(sec: number): string {
     const d = new Date(sec * 1000);
     return d.toLocaleString();
-  }
-  function fmtBytes(n: number): string {
-    return n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
   }
   async function bkEnable() {
     if (bkPw.length < 8) { showToast(tr("Password must be at least 8 characters")); return; }
@@ -1591,11 +1681,175 @@
       </section>
       {/if}
 
+      {#if section === "storage"}
+      <section class="group">
+        <div class="label">{$t("Download path")}</div>
+        {#if st}
+          <button class="radio-row" class:on={st.conf.mode === "default"} onclick={() => stSave({ mode: "default" })}>
+            <span class="rd"></span><span class="tr-text"><span class="tr-title">{$t(PHONE_UI ? "In the app" : "Aquamarine folder in the system “Downloads”")}</span><span class="tr-sub mono">{st.default_dir}</span></span>
+          </button>
+          <button class="radio-row" class:on={st.conf.mode === "temp"} onclick={() => stSave({ mode: "temp" })}>
+            <span class="rd"></span><span class="tr-text"><span class="tr-title">{$t("Temporary folder, cleared when you log out")}</span><span class="tr-sub mono">{st.temp_dir}</span></span>
+          </button>
+          {#if !PHONE_UI}
+            <button class="radio-row" class:on={st.conf.mode === "custom"} onclick={() => (st?.conf.custom ? stSave({ mode: "custom" }) : stPickFolder())}>
+              <span class="rd"></span><span class="tr-text"><span class="tr-title">{$t("Your folder, cleared only by you")}</span><span class="tr-sub mono">{st.conf.custom || $t("not chosen yet")}</span></span>
+              <span class="mini-btn" role="presentation" onclick={(e) => { e.stopPropagation(); void stPickFolder(); }}>{$t("Choose…")}</span>
+            </button>
+            <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, askDownloadPath: !x.askDownloadPath }))}>
+              <div class="tr-text"><div class="tr-title">{$t("Ask where to save each file")}</div><div class="tr-sub">{$t("After a download, a “Save as” window opens.")}</div></div>
+              <span class="switch" class:on={!!$settings.askDownloadPath}></span>
+            </button>
+          {/if}
+          <div class="foot-note">{$t("New files go there; files already saved stay where they are.")}</div>
+        {/if}
+      </section>
+      <section class="group">
+        <div class="label">{$t("Automatic media download")}</div>
+        <button class="toggle-row" onclick={() => toggle("autoDownloadMedia")}>
+          <div class="tr-text"><div class="tr-title">{$t("Auto-download media")}</div><div class="tr-sub">{$t("Fetch images / voice / video automatically on receive")}</div></div>
+          <span class="switch" class:on={$settings.autoDownloadMedia}></span>
+        </button>
+        {#if $settings.autoDownloadMedia}
+          {@const ad = { ...AUTODL_DEFAULT, ...($settings.autoDl ?? {}) }}
+          {#each [["private", "In private chats"], ["groups", "In groups"], ["channels", "In channels"]] as [k, l] (k)}
+            <button class="toggle-row" onclick={() => setAutoDl(k as "private", !ad[k as "private"])}>
+              <div class="tr-text"><div class="tr-title">{$t(l)}</div></div>
+              <span class="switch" class:on={ad[k as "private"]}></span>
+            </button>
+          {/each}
+          <div class="row">
+            <span class="row-label">{$t("Up to")}</span>
+            <SegFit label={$t("Up to")} value={ad.limitMb} onpick={(v) => setAutoDl("limitMb", v)}
+              options={[1, 5, 25, 100, 500].map((v) => ({ id: v, label: `${v} ${$t("MB")}` }))} />
+          </div>
+        {/if}
+      </section>
+      <section class="group">
+        <div class="label">{$t("Local storage")}</div>
+        {#if stStats}
+          <div class="st-top">
+            <svg class="st-donut" viewBox="0 0 42 42" aria-hidden="true">
+              <circle cx="21" cy="21" r="15.915" fill="none" stroke="var(--bg-input)" stroke-width="6" />
+              {#each stArcs as a, i (i)}
+                <circle cx="21" cy="21" r="15.915" fill="none" stroke={a.color} stroke-width="6" stroke-dasharray="{Math.max(0, a.len - 0.6)} {100 - Math.max(0, a.len - 0.6)}" stroke-dashoffset={25 - a.off} />
+              {/each}
+            </svg>
+            <div class="st-sum"><b>{fmtBytes(stTotal)}</b><span>{tr("{n} files", { n: stStats.count })}</span></div>
+          </div>
+          {#each ST_KINDS as k (k.id)}
+            <button class="st-row" onclick={() => (stPick = { ...stPick, [k.id]: !stPick[k.id] })}>
+              <span class="st-check" class:on={stPick[k.id]} style:--c={k.color}>✓</span>
+              <span class="st-name">{$t(k.label)}{#if stTotal}<small>{Math.round((stStats[k.id] / stTotal) * 100)}%</small>{/if}</span>
+              <span class="st-size">{fmtBytes(stStats[k.id])}</span>
+            </button>
+          {/each}
+          <button class="st-clear" disabled={stBusy || !stSelected} onclick={stClear}>{$t("Clear")} {fmtBytes(stSelected)}</button>
+          <div class="foot-note">{$t("Only files Aquamarine saved itself are deleted. In chats they can be downloaded again while the server keeps them.")}</div>
+        {:else}
+          <div class="foot-note">{$t("Counting…")}</div>
+        {/if}
+      </section>
+      {#if st}
+      <section class="group">
+        <div class="label">{$t("Limits")}</div>
+        <div class="row">
+          <span class="row-label">{$t("Total size")}</span>
+          <SegFit label={$t("Total size")} value={st.conf.total_mb} onpick={(v) => stSave({ total_mb: v })}
+            options={[[1024, "1 GB"], [2048, "2 GB"], [5120, "5 GB"], [10240, "10 GB"], [0, "∞"]].map(([id, l]) => ({ id: id as number, label: String(l) }))} />
+        </div>
+        <div class="row">
+          <span class="row-label">{$t("Media cache")}</span>
+          <SegFit label={$t("Media cache")} value={st.conf.cache_mb} onpick={(v) => stSave({ cache_mb: v })}
+            options={[[256, "256 MB"], [512, "512 MB"], [1024, "1 GB"], [4096, "4 GB"], [0, "∞"]].map(([id, l]) => ({ id: id as number, label: String(l) }))} />
+        </div>
+        <div class="row">
+          <span class="row-label">{$t("Clear files older than")}</span>
+          <SegFit label={$t("Clear files older than")} value={st.conf.max_days} onpick={(v) => stSave({ max_days: v })}
+            options={[[7, "1 week"], [30, "1 month"], [90, "3 months"], [365, "1 year"], [0, "Never"]].map(([id, l]) => ({ id: id as number, label: $t(String(l)) }))} />
+        </div>
+        <div class="foot-note">{$t("When files take more, the ones unused the longest go first.")}</div>
+      </section>
+      {/if}
+      <section class="group">
+        <div class="label">{$t("Export")}</div>
+        <button class="mini-btn" onclick={exportChats}>{$t("Export my chats (JSON)")}</button>
+        <div class="foot-note">{$t("All your chats with texts, times and names of files — to keep or move elsewhere. The file isn't encrypted: keep it safe.")}</div>
+      </section>
+      {/if}
+
+      {#if section === "advanced"}
+      <section class="group">
+        <div class="label">{$t("Avatar corners")} <span class="pill-tag">{($settings.avatarRadius ?? 50) >= 50 ? $t("Circle") : ($settings.avatarRadius ?? 50) <= 0 ? $t("Square") : `${$settings.avatarRadius}%`}</span></div>
+        <div class="ava-prev"><span class="ava-demo">{($info?.username ?? "A").slice(0, 2).toUpperCase()}</span><span class="tr-text"><b>{$profile.display_name}</b><small>@{$info?.username ?? ""}</small></span></div>
+        <div class="range"><input type="range" min="0" max="50" step="1" value={$settings.avatarRadius ?? 50}
+          oninput={(e) => settings.update((x) => ({ ...x, avatarRadius: parseInt((e.target as HTMLInputElement).value) }))} /></div>
+      </section>
+      {#if !PHONE_UI}
+      <section class="group">
+        <div class="label">{$t("Window title bar")}</div>
+        {#each [["titleChatName", "Show chat name", true], ["titleAccount", "Show active account", false], ["titleUnread", "Total unread count", true]] as [k, l, def] (k)}
+          {@const on = ($settings as unknown as Record<string, boolean | undefined>)[k as string] ?? def}
+          <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, [k as string]: !on }))}>
+            <div class="tr-text"><div class="tr-title">{$t(String(l))}</div></div>
+            <span class="switch" class:on={on}></span>
+          </button>
+        {/each}
+      </section>
+      <section class="group">
+        <div class="label">{$t("System integration")}</div>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, tray: !x.tray }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Show tray icon")}</div><div class="tr-sub">{$t("Closing the window then hides it to the tray; “Quit” in the icon's menu closes the app.")}</div></div>
+          <span class="switch" class:on={!!$settings.tray}></span>
+        </button>
+        {#if $settings.tray}
+          <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, trayMono: !x.trayMono }))}>
+            <div class="tr-text"><div class="tr-title">{$t("Use monochrome icon")}</div></div>
+            <span class="switch" class:on={!!$settings.trayMono}></span>
+          </button>
+        {/if}
+        <button class="toggle-row" onclick={toggleAutostart}>
+          <div class="tr-text"><div class="tr-title">{$t("Launch Aquamarine when the system starts")}</div></div>
+          <span class="switch" class:on={autostart}></span>
+        </button>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, restoreWindows: !x.restoreWindows }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Restore last opened windows")}</div><div class="tr-sub">{$t("Chats opened in their own windows open again on start.")}</div></div>
+          <span class="switch" class:on={!!$settings.restoreWindows}></span>
+        </button>
+      </section>
+      {/if}
+      <section class="group">
+        <div class="label">{$t("Power saving")}</div>
+        {#each [["stickers", "Animated stickers"], ["emoji", "Animated emoji"], ["chat", "Animations in chats"], ["calls", "Animations in calls"], ["ui", "Interface animations"]] as [k, l] (k)}
+          <button class="toggle-row" onclick={() => setPower(k as "ui", !pw[k as "ui"])}>
+            <div class="tr-text"><div class="tr-title">{$t(l)}</div></div>
+            <span class="switch" class:on={pw[k as "ui"]}></span>
+          </button>
+        {/each}
+        <div class="foot-note">{$t("Off: less movement, less battery and CPU. Stickers and emoji then play on hover.")}</div>
+      </section>
+      <section class="group">
+        <div class="label">{$t("Export")}</div>
+        <button class="mini-btn" onclick={exportChats}>{$t("Export my chats (JSON)")}</button>
+      </section>
+      {/if}
+
       {#if section === "host"}
       <section class="group">
         <div class="label">{$t("Your own server, right here")}</div>
         <div class="bots-note">{$t("This device becomes an Aquamarine server: you and your friends sign in to its address. Messages stay end-to-end encrypted — the server only passes sealed envelopes along. Keep the device on and connected; on a phone a notification shows while it runs.")}</div>
-        <button class="toggle-row" disabled={hostBusy} onclick={hostToggle}>
+        {#if host && host.dir_chosen === false && !host.running}
+          <div class="host-first">
+            <b>{$t("Where should the server keep its data?")}</b>
+            <span>{$t("Accounts, encrypted files and settings of the server go to one folder. You can move it later.")}</span>
+            <div class="host-first-btns">
+              <button class="mini-btn primary" onclick={() => hostSetDir("", false)}>{$t("In the app's folder")}</button>
+              {#if !PHONE_UI}<button class="mini-btn" onclick={hostPickDir}>{$t("Choose a folder…")}</button>{/if}
+            </div>
+            <code class="host-dir">{host.dir}</code>
+          </div>
+        {/if}
+        <button class="toggle-row" disabled={hostBusy || (host?.dir_chosen === false && !host?.running)} onclick={hostToggle}>
           <div class="tr-text">
             <div class="tr-title">{$t("Run the server")}</div>
             <div class="tr-sub">{hostBusy ? "…" : host?.running ? $t("Running on port {p}.", { p: host.port }) : host?.error ? host.error : $t("Off.")}</div>
@@ -1604,6 +1858,12 @@
         </button>
         {#if !host?.running}
           <label class="host-port">{$t("Port")} <input class="txt" type="number" min="1024" max="65535" bind:value={hostPort} /></label>
+        {/if}
+        {#if host && host.dir_chosen !== false}
+          <div class="host-addr"><span>{$t("Data folder")}</span><code title={host.dir}>{host.dir}</code>
+            {#if !PHONE_UI}<button class="mesh-btn" disabled={host.running} title={host.running ? $t("Stop the server first") : ""} onclick={hostPickDir}>{$t("Change…")}</button>{/if}
+          </div>
+          {#if !PHONE_UI && !host.running}<div class="bots-note">{$t("Changing it copies the server's data to the new folder; the old one stays until you delete it.")}</div>{/if}
         {/if}
       </section>
       {#if host?.running}
@@ -1852,6 +2112,33 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
 {/if}
 
 <style>
+  .radio-row { width: 100%; display: flex; align-items: center; gap: 12px; padding: 9px 4px; border: none; background: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; border-radius: calc(10px * var(--rk, 1)); }
+  .radio-row:hover { background: var(--bg-hover); }
+  .radio-row .rd { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--fg-dim); flex-shrink: 0; position: relative; }
+  .radio-row.on .rd { border-color: var(--accent); }
+  .radio-row.on .rd::after { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--accent); }
+  .radio-row .tr-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .tr-sub.mono { font-family: var(--font-mono); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .st-top { display: flex; align-items: center; gap: 18px; margin: 4px 0 10px; }
+  .st-donut { width: 110px; height: 110px; transform: rotate(-90deg); flex-shrink: 0; }
+  .st-sum { display: flex; flex-direction: column; } .st-sum b { font-size: 24px; } .st-sum span { color: var(--fg-dim); font-size: 12.5px; }
+  .st-row { width: 100%; display: flex; align-items: center; gap: 10px; padding: 7px 4px; border: none; background: none; color: var(--fg); font: inherit; cursor: pointer; text-align: left; }
+  .st-check { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 900; color: transparent; border: 2px solid var(--c); flex-shrink: 0; }
+  .st-check.on { background: var(--c); color: #fff; }
+  .st-name { flex: 1; font-size: 13.5px; } .st-name small { margin-left: 6px; color: var(--fg-dim); font-weight: 700; }
+  .st-size { color: var(--accent); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  .st-clear { width: 100%; margin-top: 8px; padding: 10px; border: none; border-radius: calc(12px * var(--rk, 1)); background: var(--accent); color: #06070C; font: inherit; font-weight: 800; cursor: pointer; }
+  .st-clear:disabled { opacity: .45; cursor: default; }
+  .pill-tag { font-size: 10px; font-weight: 800; padding: 1px 6px; border-radius: 5px; background: var(--accent); color: #06070C; margin-left: 6px; text-transform: uppercase; }
+  .ava-prev { display: flex; align-items: center; gap: 12px; margin: 6px 0 10px; }
+  .ava-prev .tr-text { display: flex; flex-direction: column; } .ava-prev small { color: var(--fg-dim); }
+  .ava-demo { width: 52px; height: 52px; display: grid; place-items: center; font-weight: 800; color: #fff; border-radius: var(--ava-r, 50%);
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+  .host-first { display: flex; flex-direction: column; gap: 6px; padding: 12px; margin: 6px 0 10px; border-radius: calc(12px * var(--rk, 1));
+    background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); font-size: 13px; }
+  .host-first span { color: var(--fg-muted); }
+  .host-first-btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+  .host-dir { font-size: 11.5px; color: var(--fg-dim); word-break: break-all; }
   .backdrop {
     position: fixed; inset: 0;
     background: rgba(6, 7, 12, 0.55);
@@ -1896,7 +2183,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   }
   .me-card:hover { background: var(--bg-hover); }
   .me-ava {
-    position: relative; width: 58px; height: 58px; border-radius: 50%; flex-shrink: 0;
+    position: relative; width: 58px; height: 58px; border-radius: var(--ava-r, 50%); flex-shrink: 0;
     display: grid; place-items: center; font-size: 22px; font-weight: 800; color: rgba(6, 7, 12, 0.85); overflow: hidden;
   }
   .me-ava img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
@@ -2041,7 +2328,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .ap-div span { font-size: 11px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-muted); }
   .pv-card { border: 1px solid var(--border-strong); border-radius: calc(16px * var(--rk, 1)); overflow: hidden; background: var(--bg-shell); display: flex; flex-direction: column; height: min(560px, calc(93vh - 140px)); }
   .pv-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--bg-list); border-bottom: 1px solid var(--border); }
-  .pv-ava { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 14px; color: #06070C; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+  .pv-ava { width: 32px; height: 32px; border-radius: var(--ava-r, 50%); display: grid; place-items: center; font-weight: 800; font-size: 14px; color: #06070C; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
   .pv-meta { display: flex; flex-direction: column; line-height: 1.2; }
   .pv-meta b { font-size: 13.5px; color: var(--fg); }
   .pv-meta span { font-size: 11px; color: var(--accent); }
@@ -2296,7 +2583,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   }
   .bot-head { display: flex; align-items: center; gap: 10px; }
   .bot-ava {
-    width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
+    width: 34px; height: 34px; border-radius: var(--ava-r, 50%); flex-shrink: 0;
     display: grid; place-items: center; font-weight: 700; font-size: 14px;
     background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: var(--accent-ink, #06070C);
   }

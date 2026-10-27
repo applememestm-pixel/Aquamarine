@@ -257,7 +257,7 @@
   .shake { animation: shake 0.42s; }
   @keyframes shake { 20%, 60% { transform: translateX(-8px); } 40%, 80% { transform: translateX(8px); } }
   .ava {
-    width: 92px; height: 92px; border-radius: 50%; overflow: hidden; display: grid; place-items: center; margin-top: -50px;
+    width: 92px; height: 92px; border-radius: var(--ava-r, 50%); overflow: hidden; display: grid; place-items: center; margin-top: -50px;
     background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070c; font-size: 36px; font-weight: 900;
     border: 5px solid var(--bg-shell); box-shadow: 0 0 24px -4px var(--accent-glow);
   }

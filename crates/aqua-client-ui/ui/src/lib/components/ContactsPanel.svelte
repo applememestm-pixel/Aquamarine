@@ -250,7 +250,7 @@
   }
   .avatar {
     width: 36px; height: 36px;
-    border-radius: 50%;
+    border-radius: var(--ava-r, 50%);
     background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
     display: grid; place-items: center;
     font-weight: 800;

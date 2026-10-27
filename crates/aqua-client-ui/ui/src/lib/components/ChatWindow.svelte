@@ -16,6 +16,9 @@
   import { openFingerprint, verifiedKeys, keyState } from "./FingerprintModal.svelte";
   import { showToast } from "./Toast.svelte";
   import { ATTACH_ITEMS, attachFront, type AttachId } from "../attachMenu";
+  import { openRoomRequest } from "../roomNav";
+  import { AUTODL_DEFAULT } from "../theme";
+  import { openPopout } from "../popouts";
   import { startOutgoingCall, callState } from "./CallModal.svelte";
   import { openMediaPicker, closeMediaPicker, pickerState, panelClaimsDrop } from "./MediaPicker.svelte";
   import AnimatedMedia from "./AnimatedMedia.svelte";
@@ -263,6 +266,11 @@
     const msgs = $activeMessages;
     if (!chat) return;
     if (!$settings.autoDownloadMedia) return;
+    // Data and storage → Automatic media download: by kind of chat, up to a size.
+    const ad = { ...AUTODL_DEFAULT, ...($settings.autoDl ?? {}) };
+    const where = chat.channel ? ad.channels : chat.id.startsWith("grp_") ? ad.groups : ad.private;
+    if (!where) return;
+    const mediaCap = Math.min(AUTO_DOWNLOAD_MEDIA_LIMIT * 40, ad.limitMb * 1024 * 1024);
     for (const m of msgs) {
       if (m.kind.type !== "file") continue;
       // Mine too: sent from the other device, or restored from a backup
@@ -276,7 +284,7 @@
       // / shows without a manual click. Plain files only auto-download
       // when small.
       const isInlineMedia = kind !== "file";
-      const within = isInlineMedia ? size <= AUTO_DOWNLOAD_MEDIA_LIMIT : size <= AUTO_DOWNLOAD_LIMIT;
+      const within = isInlineMedia ? size <= mediaCap : size <= Math.min(AUTO_DOWNLOAD_LIMIT, mediaCap);
       if (within) {
         autoTriggered.add(m.id);
         void autoDownload(chat.id, m.id);
@@ -860,7 +868,9 @@
     try {
       const res = await api.downloadFile(chat.id, messageId);
       await loadActiveMessages();
-      showToast(`Saved to ${res.saved_path}`);
+      // "Ask where to save each file": the save dialog right after.
+      if ($settings.askDownloadPath) { await saveFileAs(res.saved_path, res.saved_path.split(/[\\/]/).pop() ?? "file"); return; }
+      showToast(tr("Saved to {path}", { path: res.saved_path }));
     } catch (e) {
       showToast(`Download failed: ${e}`);
     }
@@ -1439,7 +1449,7 @@
     if (c.id !== "__saved__" && !isBotChat) out.push({ id: "cal", label: tr("Calendar"), sub: tr("Events and reminders of this chat"), icon: IC.cal, on: $calendarFor === c.id, run: () => calendarFor.set($calendarFor === c.id ? null : c.id) });
     if (ttlEditable || chatTtl) out.push({ id: "ttl", label: tr("Auto-delete & read receipts"), sub: chatTtl ? tr("Auto-delete: {t}", { t: ttlLabel(chatTtl) }) : tr("Off"), icon: IC.ttl, on: chatTtl > 0, run: () => (ttlMenu = true) });
     if (amChanAdmin) out.push({ id: "stats", label: tr("Channel statistics"), sub: tr("Views, reactions, comments"), icon: IC.stats, on: $statsFor === c.id, run: () => statsFor.set($statsFor === c.id ? null : c.id) });
-    if (DESKTOP_APP && !POPOUT) out.push({ id: "win", label: tr("Open in a new window"), sub: "Ctrl + " + tr("click"), icon: IC.win, run: () => void api.openChatWindow(c.id, c.name).catch((e) => showToast(String(e))) });
+    if (DESKTOP_APP && !POPOUT) out.push({ id: "win", label: tr("Open in a new window"), sub: "Ctrl + " + tr("click"), icon: IC.win, run: () => void openPopout(c.id, c.name).catch((e) => showToast(String(e))) });
     return out;
   });
   $effect(() => { void $activeChat?.id; callMenu = false; toolsMenu = false; });
@@ -1570,6 +1580,14 @@
     roomPick = { ...roomPick, [activeGroup.id]: r.id };
     try { localStorage.setItem(ROOM_KEY, JSON.stringify(roomPick)); } catch { /* ignore */ }
   }
+  // A room picked from the server icon's list in the chat list.
+  $effect(() => {
+    const req = $openRoomRequest, g = activeGroup;
+    if (!req || !g || g.id !== req.gid) return;
+    const r = rooms.find((x) => x.id === req.room);
+    openRoomRequest.set(null);
+    if (r) untrack(() => pickRoom(r));
+  });
   const MUTE_KEY = "aqua.rooms.muted.v1";
   let roomMuted = $state<Record<string, boolean>>(readJson(MUTE_KEY, {}));
   const isRoomMuted = (r: Room) => !!activeGroup && !!roomMuted[`${activeGroup.id}/${r.id}`];
@@ -2708,7 +2726,7 @@
 
 {#snippet richText(str: string)}
   {#each richParts(str) as part}
-    {#if part.t === "text"}{part.v}{:else if emojiMap[part.key]}<span class="inline-emoji" title={ceFallback(part.key)}><AnimatedMedia src={emojiMap[part.key].url} mime={emojiMap[part.key].mime} alt={ceFallback(part.key)} play="auto" /></span>{:else}{ceFallback(part.key)}{/if}
+    {#if part.t === "text"}{part.v}{:else if emojiMap[part.key]}<span class="inline-emoji" title={ceFallback(part.key)}><AnimatedMedia emoji src={emojiMap[part.key].url} mime={emojiMap[part.key].mime} alt={ceFallback(part.key)} play="auto" /></span>{:else}{ceFallback(part.key)}{/if}
   {/each}
 {/snippet}
 

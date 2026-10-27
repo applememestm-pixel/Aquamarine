@@ -66,6 +66,12 @@ Aquamarine — мессенджер со сквозным шифрованием
     - Звонок на телефоне: слой `.watch` (поворот CSS-ом, пинч).
     - Файлы: `open_saved_file`, повторное скачивание того же `cid` не делается, `sanitize_name`.
     - Аккаунты на ПК — `UserPanel.svelte`. Приватность: `chatLockUi.ts`. Отпечаток: `tauri-plugin-biometric` (только mobile, `capabilities/mobile.json`), `lock.ts::unlockBiometric`.
+  - Список 27.10:
+    - Комнаты по зажатию иконки сервера: `ChatList.svelte` (`roomsPop`) → `roomNav.ts::openRoomRequest` → `ChatWindow::pickRoom`.
+    - «Данные и память»: `src/storage.rs` (`storage.json` в папке аккаунта; `downloads_dir` теперь отсюда; лимиты — `trim` после каждой загрузки и при старте; удаляются только файлы с `saved_at`), `export_chats`.
+    - Сервер: `aqua-server/src/datadir.rs` выбирает папку и делает её текущей до всего остального (все файлы сервера — относительные пути). `/v1/admin/datadir`. Встроенный: `relay_host_set_dir`, `relay-dir.txt`.
+    - Трей и автозапуск: `src/tray.rs` (фича `tray-icon`), `tauri-plugin-autostart` (только desktop, `capabilities/desktop.json`), `lib/desktop.ts`. Окна чатов: `lib/popouts.ts`.
+    - Аватарки: `border-radius: var(--ava-r, 50%)` (настройка `avatarRadius`). Энергосбережение — классы `ps-*` на `<html>`.
 
 ## Открытые вопросы
 

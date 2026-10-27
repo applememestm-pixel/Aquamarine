@@ -164,7 +164,7 @@
 <style>
   .mi-head { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-dim); padding: 4px 10px 2px; }
   .menu-item.acc:disabled { opacity: 1; cursor: default; }
-  .acc-ava { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0; font-weight: 800; font-size: 12px;
+  .acc-ava { width: 26px; height: 26px; border-radius: var(--ava-r, 50%); display: grid; place-items: center; flex-shrink: 0; font-weight: 800; font-size: 12px;
     background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070C; }
   .acc-ava.plus { background: var(--accent-soft); color: var(--accent); font-size: 16px; }
   .acc-tick { margin-left: auto; color: var(--accent); font-weight: 800; }
@@ -189,11 +189,11 @@
   .who:hover { background: var(--bg-hover); }
   .ava {
     position: relative; flex-shrink: 0;
-    width: 34px; height: 34px; border-radius: 50%;
+    width: 34px; height: 34px; border-radius: var(--ava-r, 50%);
     display: grid; place-items: center;
     color: rgba(6, 7, 12, 0.85); font-weight: 700; font-size: 14px;
   }
-  .ava img { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
+  .ava img { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: var(--ava-r, 50%); object-fit: cover; }
   .ava.big { width: 76px; height: 76px; font-size: 30px; border: 5px solid var(--bg-surface); box-sizing: content-box; }
   .dot {
     position: absolute; right: -2px; bottom: -2px;

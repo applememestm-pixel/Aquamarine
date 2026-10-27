@@ -50,6 +50,7 @@ pub fn complete_registration(
 #[tauri::command]
 pub fn log_out(state: State<'_, StdMutex<AppState>>) -> Result<InitInfo, String> {
     let mut s = state.lock().map_err(|e| e.to_string())?;
+    crate::storage::on_log_out(&mut s);
     s.log_out();
     Ok(s.init_info())
 }
@@ -1867,21 +1868,7 @@ pub fn read_media_bytes(
 /// writable without MediaStore, and the webview's asset protocol can only
 /// show files inside the app dirs — media saved there never appeared.)
 pub(crate) fn downloads_dir(data_dir: &std::path::Path) -> PathBuf {
-    #[cfg(target_os = "android")]
-    {
-        return data_dir.join("downloads");
-    }
-    #[cfg(target_os = "ios")]
-    {
-        return data_dir.join("Downloads");
-    }
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        let _ = data_dir;
-        dirs::download_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("Aquamarine")
-    }
+    crate::storage::downloads_dir(data_dir)
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -1971,6 +1958,8 @@ pub async fn download_file(
     };
     let saved_str = save_path.to_string_lossy().to_string();
     set_saved_at(&state, &peer_id, &message_id, &saved_str)?;
+    // Keep within the limits (Settings → Data and storage).
+    if let Ok(mut s) = state.lock() { crate::storage::trim(&mut s); }
     let _ = app.emit("aqua://chats_updated", ());
     Ok(DownloadResult { saved_path: saved_str })
 }
@@ -1996,11 +1985,13 @@ pub fn open_saved_file(state: State<'_, StdMutex<AppState>>, path: String) -> Re
         let known = s.chats.values().flat_map(|b| b.messages.iter()).any(|m| matches!(&m.kind, MessageKind::File { saved_at: Some(p), .. } if *p == path));
         (s.data_dir.clone(), known)
     };
-    let p = std::path::Path::new(&path).canonicalize().map_err(|e| e.to_string())?;
-    let under = |d: PathBuf| d.canonicalize().map(|d| p.starts_with(d)).unwrap_or(false);
-    if !known || !(under(downloads_dir(&data_dir)) || under(data_dir.clone())) {
+    // Only a path the app itself wrote for a message (`saved_at` is local,
+    // never sent by anyone) — wherever the download folder was at the time.
+    let _ = &data_dir;
+    if !known {
         return Err("not a file saved by Aquamarine".into());
     }
+    let p = std::path::Path::new(&path).canonicalize().map_err(|e| e.to_string())?;
     #[cfg(target_os = "linux")]
     let r = std::process::Command::new("xdg-open").arg(&p).spawn();
     #[cfg(target_os = "macos")]
@@ -2015,7 +2006,7 @@ pub fn open_saved_file(state: State<'_, StdMutex<AppState>>, path: String) -> Re
 // ---- Article media (videos in carousels, music playlists) ---------------
 
 fn media_cache_dir(data_dir: &std::path::Path) -> PathBuf {
-    data_dir.join("media-cache")
+    crate::storage::media_cache_dir(data_dir)
 }
 
 fn media_ext(mime: Option<&str>, name: &str) -> String {

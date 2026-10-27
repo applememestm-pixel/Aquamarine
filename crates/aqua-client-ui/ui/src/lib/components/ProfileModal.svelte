@@ -1069,7 +1069,7 @@
   .avatar-wrap { position: relative; width: 88px; margin-bottom: 14px; }
   .avatar {
     width: 88px; height: 88px;
-    border-radius: 50%;
+    border-radius: var(--ava-r, 50%);
     display: grid; place-items: center;
     font-size: 36px;
     font-weight: 800;

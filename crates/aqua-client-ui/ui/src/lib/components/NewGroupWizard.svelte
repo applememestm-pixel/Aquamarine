@@ -178,7 +178,7 @@
             border: none; background: transparent; cursor: pointer; text-align: left; }
   .member:hover { background: var(--bg-hover); }
   .member.on { background: var(--accent-soft); }
-  .m-ava { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
+  .m-ava { width: 28px; height: 28px; border-radius: var(--ava-r, 50%); display: grid; place-items: center;
            color: #06070C; font-weight: 700; font-size: 12px; flex-shrink: 0; }
   .m-name { flex: 1; font-size: 13.5px; color: var(--fg); }
   .m-check { color: var(--accent); font-weight: 700; }

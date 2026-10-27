@@ -235,7 +235,7 @@
   .nc-row { width: 100%; display: flex; align-items: center; gap: 12px; padding: 7px 10px; border: none; border-radius: calc(12px * var(--rk, 1)); background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
   .nc-row:hover, .nc-row:focus-visible { background: var(--bg-hover); outline: none; }
   .nc-row.act b { color: var(--accent); font-weight: 600; }
-  .nc-ava { width: 42px; height: 42px; border-radius: 50%; flex-shrink: 0; display: grid; place-items: center; font-weight: 800; font-size: 17px; color: #06070C;
+  .nc-ava { width: 42px; height: 42px; border-radius: var(--ava-r, 50%); flex-shrink: 0; display: grid; place-items: center; font-weight: 800; font-size: 17px; color: #06070C;
     background: linear-gradient(135deg, var(--accent), var(--accent-2)); background-size: cover; background-position: center; }
   .nc-ava.ic { background: var(--accent-soft); color: var(--accent); }
   .nc-ava.ic svg { width: 21px; height: 21px; }
