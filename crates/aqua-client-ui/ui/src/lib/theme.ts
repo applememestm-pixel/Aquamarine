@@ -221,6 +221,8 @@ export interface Settings {
   tray?: boolean;
   trayMono?: boolean;
   restoreWindows?: boolean;
+  /** Privacy rules: suggest people while typing a username (default on). */
+  privSuggest?: boolean;
   /** "What's new" after an update (default on). */
   whatsNew?: boolean;
   // --- Power saving: what may move ---

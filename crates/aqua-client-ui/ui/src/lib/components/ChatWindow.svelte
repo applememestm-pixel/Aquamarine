@@ -89,7 +89,8 @@
   import { capsuleComposer } from "./CapsuleComposer.svelte";
   import { parseCapsule } from "../capsules";
   import { btSheet } from "../bluetooth";
-  import { chatLocks, unlocked, unlockChat, noteLeft } from "../chatLocks";
+  import { chatLocks, unlocked, unlockChat, noteLeft, unlockChatTrusted } from "../chatLocks";
+  import { biometricAvailable, confirmBiometric } from "../lock";
   import ThreadPanel, { type ThreadItem } from "./ThreadPanel.svelte";
   import { unsupportedKind } from "../compat";
   import { checkUpdates } from "../updates";
@@ -1416,6 +1417,20 @@
       if (id && $unlocked[id]) unlocked.update((u) => ({ ...u, [id]: Date.now() }));
     });
   });
+  // The fingerprint opens a locked chat too (phones that have it).
+  let bioForChat = $state(false);
+  $effect(() => { if (lockedNow) void biometricAvailable().then((v) => (bioForChat = v)); });
+  let bioAsked = "";
+  $effect(() => {
+    // Ask once when the chat is opened, like the app's own lock screen.
+    const id = $activeChat?.id ?? "";
+    if (lockedNow && bioForChat && id && bioAsked !== id) { bioAsked = id; void bioUnlock(); }
+  });
+  async function bioUnlock() {
+    const id = $activeChat?.id;
+    if (!id) return;
+    if (await confirmBiometric(tr("Open the chat"))) unlockChatTrusted(id);
+  }
   async function tryUnlock() {
     if (!$activeChat || lockBusy) return;
     lockBusy = true;
@@ -2914,6 +2929,12 @@
           {#if lockErr}<span class="lg-err">{$t("Wrong password")}</span>{/if}
           {#if $chatLocks[$activeChat.id]?.hint}<span class="lg-hint">{$t("Hint")}: {$chatLocks[$activeChat.id].hint}</span>{/if}
           <button class="lg-btn" onclick={tryUnlock} disabled={lockBusy || !lockPass}>{lockBusy ? "…" : $t("Unlock")}</button>
+          {#if bioForChat}
+            <button class="lg-bio" onclick={bioUnlock} aria-label={$t("Unlock with fingerprint")}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 11v3a8 8 0 0 1-1.5 4.7M8.5 7.7A5 5 0 0 1 17 11v1.5M7 11a5 5 0 0 1 .3-1.7M14.6 20.4A12 12 0 0 0 16 15M4 15.5A12 12 0 0 0 5 11a7 7 0 0 1 12.2-4.7M20 13a19 19 0 0 1-.7 4.5M9.7 21a12 12 0 0 1 .3-1.5"/></svg>
+              {$t("Fingerprint")}
+            </button>
+          {/if}
         </div>
       </div>
     {/if}
@@ -4105,6 +4126,8 @@
   .lg-in:focus { border-color: var(--accent); }
   .lg-in.err { border-color: #ff5c5c; animation: lg-shake 0.3s; }
   .lg-err { font-size: 12.5px; color: #ff5c5c; }
+  .lg-bio { display: inline-flex; align-items: center; gap: 8px; margin-top: 4px; border: none; background: none; color: var(--accent); font: 600 14px var(--font-ui); cursor: pointer; padding: 8px; }
+  .lg-bio svg { width: 26px; height: 26px; }
   .lg-btn { width: 100%; border: none; border-radius: calc(12px * var(--rk, 1)); padding: 11px; background: var(--accent); color: #06070C; font: inherit; font-weight: 800; cursor: pointer; }
   .lg-btn:disabled { opacity: 0.6; }
   @keyframes lg-shake { 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }

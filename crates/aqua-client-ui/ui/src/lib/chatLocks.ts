@@ -58,6 +58,11 @@ export async function unlockChat(chat: string, pass: string): Promise<boolean> {
   return ok;
 }
 
+/** Opened another way (fingerprint). */
+export function unlockChatTrusted(chat: string) {
+  unlocked.update((u) => ({ ...u, [chat]: Date.now() }));
+}
+
 export function lockNowChat(chat: string) {
   unlocked.update((u) => { const n = { ...u }; delete n[chat]; return n; });
 }

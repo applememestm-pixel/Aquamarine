@@ -86,6 +86,25 @@ export async function unlockBiometric(reason: string): Promise<boolean> {
   } catch { return false; }
 }
 
+/** Check the app's passcode without touching the lock (removing a chat's
+ *  password asks for it). */
+export async function checkPasscode(pass: string): Promise<boolean> {
+  const c = get(lockConf);
+  if (!c?.hash) return false;
+  return (await derive(pass, c.salt)) === c.hash;
+}
+
+/** Fingerprint / face as proof that it's the owner (a locked chat, removing
+ *  a chat's password). Works whenever the device has it. */
+export async function confirmBiometric(reason: string): Promise<boolean> {
+  if (!(await biometricAvailable())) return false;
+  try {
+    const { authenticate } = await import("@tauri-apps/plugin-biometric");
+    await authenticate(reason, { allowDeviceCredential: false, cancelTitle: "", fallbackTitle: "" });
+    return true;
+  } catch { return false; }
+}
+
 export function lockNow() { if (hasPasscode()) locked.set(true); }
 
 // ---- inactivity timer ----
