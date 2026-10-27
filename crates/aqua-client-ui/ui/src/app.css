@@ -177,7 +177,7 @@ html.wk-lowfx .eq i:nth-child(3) { transform: scaleY(0.75); }
 *::-webkit-scrollbar { width: 10px; height: 10px; }
 *::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--fg-dim) 55%, transparent);
-  border-radius: 8px;
+  border-radius: calc(8px * var(--rk, 1));
   border: 3px solid transparent;
   background-clip: padding-box;
   transition: background 0.15s ease;
@@ -269,7 +269,7 @@ select {
 }
 select:where(:not([class])) {
   background-color: var(--bg-input); color: var(--fg); border: 1px solid var(--border);
-  border-radius: 10px; padding: 8px 12px; font: inherit; font-size: 13px;
+  border-radius: calc(10px * var(--rk, 1)); padding: 8px 12px; font: inherit; font-size: 13px;
 }
 select:hover { border-color: var(--border-strong); }
 option, optgroup { background: var(--bg-shell); color: var(--fg); }
@@ -279,7 +279,7 @@ input[type="checkbox"], input[type="radio"] {
   display: inline-grid; place-content: center; vertical-align: middle;
   transition: background-color .15s, border-color .15s;
 }
-input[type="checkbox"] { border-radius: 5px; }
+input[type="checkbox"] { border-radius: calc(5px * var(--rk, 1)); }
 input[type="radio"] { border-radius: 50%; }
 input[type="checkbox"]:hover, input[type="radio"]:hover { border-color: var(--accent); }
 input[type="checkbox"]:checked, input[type="radio"]:checked { background: var(--accent); border-color: var(--accent); }
@@ -292,7 +292,7 @@ input[type="checkbox"]:disabled, input[type="radio"]:disabled { opacity: .5; cur
 /* Plain buttons that nobody styled: a neutral "secondary" button, not GTK grey. */
 :where(button:not([class])) {
   background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong);
-  border-radius: 10px; padding: 7px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
+  border-radius: calc(10px * var(--rk, 1)); padding: 7px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
 }
 :where(button:not([class])):hover { border-color: var(--accent); color: var(--accent); }
 
@@ -305,7 +305,7 @@ input[type="checkbox"]:disabled, input[type="radio"]:disabled { opacity: .5; cur
 
 /* Small utility for reused Svelte components — keeps per-component CSS lean */
 .avatar {
-  border-radius: 50%;
+  border-radius: var(--ava-r, 50%);
   display: grid;
   place-items: center;
   font-weight: 700;
@@ -319,7 +319,7 @@ input[type="checkbox"]:disabled, input[type="radio"]:disabled { opacity: .5; cur
 .avatar > .ava-img {
   position: absolute; inset: 0;
   width: 100%; height: 100%;
-  border-radius: 50%;
+  border-radius: var(--ava-r, 50%);
   object-fit: cover;
 }
 .avatar.sz-44 { width: 44px; height: 44px; font-size: 15px; }
@@ -330,7 +330,7 @@ input[type="checkbox"]:disabled, input[type="radio"]:disabled { opacity: .5; cur
   position: absolute;
   right: -1px; bottom: -1px;
   width: 12px; height: 12px;
-  border-radius: 50%;
+  border-radius: var(--ava-r, 50%);
   background: var(--online);
   border: 2.5px solid var(--bg-list);
 }
@@ -391,6 +391,9 @@ html.autoscrolling.as-down, html.autoscrolling.as-down * { cursor: url("data:ima
     box-sizing: border-box;
   }
   [role="dialog"][aria-modal="true"] { overflow-x: hidden; }
+  /* …except the ones that ARE the whole screen (photo viewer): capped, they
+     stopped 16px short and sat shifted to the left. */
+  [role="dialog"][aria-modal="true"].fullscreen-layer { max-width: none !important; max-height: none !important; }
 }
 
 /* Settings → Appearance → See-through menus: frosted glass for menus,
@@ -424,3 +427,8 @@ html.contrast-rows[data-theme="light"] .alt:not(.active):not(:hover):not(.kb):no
 /* Selected text in the app's colours, not the system blue. */
 ::selection { background: color-mix(in srgb, var(--accent) 34%, transparent); color: inherit; }
 .msg.out .bubble ::selection { background: color-mix(in srgb, var(--accent) 45%, transparent); }
+
+/* Power saving (Settings → Advanced). */
+html.ps-ui *, html.ps-ui *::before, html.ps-ui *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; scroll-behavior: auto !important; }
+html.ps-chat .messages *, html.ps-chat .messages *::before, html.ps-chat .messages *::after { animation: none !important; transition: none !important; }
+html.ps-calls .stage *, html.ps-calls .stage *::before, html.ps-calls .stage *::after, html.ps-calls .gc *, html.ps-calls .gc *::before { animation: none !important; transition: none !important; }

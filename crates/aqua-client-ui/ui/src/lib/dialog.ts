@@ -10,3 +10,11 @@ export function openFileDialog<T extends OpenDialogOptions>(opts: T): ReturnType
   if (q && q.length) return Promise.resolve(q.shift()) as ReturnType<typeof open<T>>;
   return open(opts);
 }
+
+/** Pick a folder; null when cancelled (or on phones, where apps keep their
+ *  files in their own space). */
+export async function pickFolder(title: string): Promise<string | null> {
+  if (/android|iphone|ipad/i.test(navigator.userAgent)) return null;
+  const r = await openFileDialog({ directory: true, multiple: false, title });
+  return Array.isArray(r) ? (r[0] ?? null) : (r ?? null);
+}

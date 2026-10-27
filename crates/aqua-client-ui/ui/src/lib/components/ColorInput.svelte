@@ -137,27 +137,27 @@
 {/if}
 
 <style>
-  .cp-swatch { border-radius: 9px; border: 2px solid var(--border-strong); cursor: pointer; padding: 0; flex-shrink: 0;
+  .cp-swatch { border-radius: calc(9px * var(--rk, 1)); border: 2px solid var(--border-strong); cursor: pointer; padding: 0; flex-shrink: 0;
     box-shadow: inset 0 0 0 2px rgba(0,0,0,.15); transition: transform .15s, border-color .15s; }
   .cp-swatch:hover:not(:disabled) { transform: scale(1.06); border-color: var(--accent); }
   .cp-swatch:disabled { opacity: .5; cursor: not-allowed; }
-  .cp-pop { position: fixed; z-index: 10050; width: 232px; padding: 10px; border-radius: 14px; background: var(--bg-shell);
+  .cp-pop { position: fixed; z-index: 10050; width: 232px; padding: 10px; border-radius: calc(14px * var(--rk, 1)); background: var(--bg-shell);
     border: 1px solid var(--border-strong); box-shadow: 0 24px 60px -16px rgba(0,0,0,.7); display: flex; flex-direction: column; gap: 10px;
     animation: cp-in .2s cubic-bezier(.2,.9,.25,1.1); }
   @keyframes cp-in { from { opacity: 0; transform: translateY(-4px) scale(.97); } }
-  .cp-sv { position: relative; height: 150px; border-radius: 10px; cursor: crosshair; touch-action: none;
+  .cp-sv { position: relative; height: 150px; border-radius: calc(10px * var(--rk, 1)); cursor: crosshair; touch-action: none;
     background-image: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent); }
   .cp-knob { position: absolute; width: 14px; height: 14px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.5);
     transform: translate(-50%, -50%); pointer-events: none; }
-  .cp-hue { position: relative; height: 14px; border-radius: 7px; cursor: pointer; touch-action: none;
+  .cp-hue { position: relative; height: 14px; border-radius: calc(7px * var(--rk, 1)); cursor: pointer; touch-action: none;
     background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00); }
-  .cp-hknob { position: absolute; top: 50%; width: 10px; height: 18px; border-radius: 5px; background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.5);
+  .cp-hknob { position: absolute; top: 50%; width: 10px; height: 18px; border-radius: calc(5px * var(--rk, 1)); background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.5);
     transform: translate(-50%, -50%); pointer-events: none; }
   .cp-fields { display: flex; gap: 8px; align-items: center; }
-  .cp-prev { width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--border-strong); flex-shrink: 0; }
+  .cp-prev { width: 32px; height: 32px; border-radius: calc(8px * var(--rk, 1)); border: 1px solid var(--border-strong); flex-shrink: 0; }
   .cp-hex, .cp-rgb label { display: flex; flex-direction: column; gap: 2px; font-size: 10px; font-weight: 800; color: var(--fg-dim); flex: 1; }
   .cp-rgb { display: flex; gap: 6px; }
-  .cp-pop input { width: 100%; box-sizing: border-box; background: var(--bg-input); border: 1px solid var(--border); border-radius: 7px;
+  .cp-pop input { width: 100%; box-sizing: border-box; background: var(--bg-input); border: 1px solid var(--border); border-radius: calc(7px * var(--rk, 1));
     color: var(--fg); font: inherit; font-size: 12px; padding: 5px 6px; outline: none; font-family: var(--font-mono, monospace); }
   .cp-pop input:focus { border-color: var(--accent); }
   .cp-pop input::-webkit-inner-spin-button { opacity: .4; }

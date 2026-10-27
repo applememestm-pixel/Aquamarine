@@ -114,13 +114,13 @@
   }
   .sheet {
     width: min(820px, 96vw); max-height: 86vh; overflow: auto;
-    background: var(--bg-shell); border: 1px solid var(--border); border-radius: 16px;
+    background: var(--bg-shell); border: 1px solid var(--border); border-radius: calc(16px * var(--rk, 1));
     box-shadow: 0 32px 80px -16px rgba(0, 0, 0, 0.6);
     padding: 18px 22px 22px;
    animation: aq-pop .3s var(--ease-spring, ease-out); }
   .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
   h2 { margin: 0; font-size: 18px; color: var(--fg); }
-  .close { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--fg-dim); font-size: 18px; cursor: pointer; }
+  .close { width: 30px; height: 30px; border-radius: calc(8px * var(--rk, 1)); border: 1px solid var(--border); background: transparent; color: var(--fg-dim); font-size: 18px; cursor: pointer; }
   .cols { columns: 2 340px; column-gap: 28px; }
   section { break-inside: avoid; margin-top: 12px; }
   .g { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); margin-bottom: 6px; }
@@ -130,15 +130,15 @@
   .hint { font-size: 12px; color: var(--fg-dim); margin-left: 12px; }
   .grow { flex: 1; }
   .head { gap: 8px; }
-  .hbtn { border: 1px solid var(--border-strong); background: transparent; color: var(--fg-muted); border-radius: 8px; padding: 5px 10px; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .hbtn { border: 1px solid var(--border-strong); background: transparent; color: var(--fg-muted); border-radius: calc(8px * var(--rk, 1)); padding: 5px 10px; font-size: 12px; font-weight: 600; cursor: pointer; }
   .hbtn:hover { color: var(--accent); border-color: var(--accent); }
-  .combo-btn { display: flex; align-items: center; gap: 4px; border: 1px solid transparent; background: transparent; border-radius: 8px; padding: 2px 4px; cursor: pointer; }
+  .combo-btn { display: flex; align-items: center; gap: 4px; border: 1px solid transparent; background: transparent; border-radius: calc(8px * var(--rk, 1)); padding: 2px 4px; cursor: pointer; }
   .combo-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
-  .mini { width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--fg-dim); font-size: 12px; cursor: pointer; opacity: 0; transition: opacity .15s; }
+  .mini { width: 22px; height: 22px; border-radius: calc(6px * var(--rk, 1)); border: 1px solid var(--border); background: transparent; color: var(--fg-dim); font-size: 12px; cursor: pointer; opacity: 0; transition: opacity .15s; }
   .row:hover .mini, .row.capturing .mini, .mini:focus-visible { opacity: 1; }
   .mini:hover { color: var(--accent); border-color: var(--accent); }
   .row.custom .what::after { content: " •"; color: var(--accent); }
-  .row.capturing { background: var(--accent-soft); border-radius: 8px; padding-left: 8px; padding-right: 4px; }
+  .row.capturing { background: var(--accent-soft); border-radius: calc(8px * var(--rk, 1)); padding-left: 8px; padding-right: 4px; }
   .press { font-size: 12px; font-weight: 700; color: var(--accent); animation: blink 1s ease-in-out infinite; }
   @keyframes blink { 50% { opacity: .45; } }
   .none { font-size: 11.5px; color: var(--fg-dim); font-style: italic; }
@@ -146,7 +146,7 @@
   .or { color: var(--fg-dim); font-size: 11px; margin: 0 2px; }
   kbd {
     font-family: var(--font-mono, monospace); font-size: 11px; font-weight: 700;
-    padding: 2px 6px; border-radius: 6px;
+    padding: 2px 6px; border-radius: calc(6px * var(--rk, 1));
     background: var(--bg-input); color: var(--fg-muted);
     border: 1px solid var(--border-strong); border-bottom-width: 2px;
   }

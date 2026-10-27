@@ -113,7 +113,7 @@
   .dialog {
     background: var(--bg-surface);
     border: 1px solid var(--border-strong);
-    border-radius: 16px;
+    border-radius: calc(16px * var(--rk, 1));
     padding: 24px;
     max-width: 420px;
     width: 100%;
@@ -129,7 +129,7 @@
   input {
     background: var(--bg-input);
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     padding: 10px 12px;
     color: var(--fg);
     font-family: inherit;
@@ -147,13 +147,13 @@
     font-size: 12.5px;
     padding: 8px 10px;
     background: rgba(255,77,109,0.08);
-    border-radius: 8px;
+    border-radius: calc(8px * var(--rk, 1));
     word-break: break-word;
   }
   .actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 4px; }
   .btn {
     padding: 9px 16px;
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     border: 1px solid var(--border-strong);
     background: var(--bg-input);
     color: var(--fg);

@@ -78,6 +78,7 @@
 </script>
 
 <script lang="ts">
+  import Select from "./Select.svelte";
   import { t, tr } from "../i18n";
   import { avatars } from "../people";
   import { onMount } from "svelte";
@@ -88,6 +89,7 @@
   import { showToast } from "./Toast.svelte";
   import { allowed } from "../privacy";
   import { openSettings } from "../panels/settings";
+  import { onBack } from "../back";
   import { callSettings, iceServersFor, patchCallSettings, keyLabel } from "../callSettings";
   import {
     tuneSdp, orderCodecs, tuneSendParameters, displayMediaOptions, screenVideoConstraints,
@@ -556,7 +558,10 @@
     const kbps = st.width && st.height
       ? kbpsForFrame(st.width, st.height, liveCfg.fps, get(callSettings).maxVideoKbps)
       : targetVideoKbps(liveCfg.res, liveCfg.fps, get(callSettings).maxVideoKbps);
-    return { maxKbps: kbps, maxFps: liveCfg.fps, hint: liveCfg.hint };
+    // 60 fps asked for: keep the frame rate and lower the resolution when the
+    // link or the encoder can't keep up (with "text & detail" it used to drop
+    // to ~30 fps instead).
+    return { maxKbps: kbps, maxFps: liveCfg.fps, hint: liveCfg.fps >= 50 ? "motion" : liveCfg.hint };
   }
 
   async function retuneAll() {
@@ -761,7 +766,7 @@
       const { stream: s, camera } = await captureScreenOrCamera(displayMediaOptions(cfg.res, cfg.fps, cfg.audio), cfg.fps);
       if (camera) showToast(tr("Phones can't share the screen — streaming your camera instead"), 4000);
       const v = s.getVideoTracks()[0];
-      try { v.contentHint = cfg.hint === "detail" ? "detail" : "motion"; } catch { /* ignore */ }
+      try { v.contentHint = cfg.hint === "detail" && cfg.fps < 50 ? "detail" : "motion"; } catch { /* ignore */ }
       await tx[T_SCR].sender.replaceTrack(v);
       const a = s.getAudioTracks()[0];
       if (a && tx[T_SCRA]) {
@@ -786,7 +791,7 @@
     const v = screenStream?.getVideoTracks()[0];
     if (!v) return;
     try { await v.applyConstraints(screenVideoConstraints(cfg.res, cfg.fps)); } catch (e) { console.warn("applyConstraints", e); }
-    try { v.contentHint = cfg.hint === "detail" ? "detail" : "motion"; } catch { /* ignore */ }
+    try { v.contentHint = cfg.hint === "detail" && cfg.fps < 50 ? "detail" : "motion"; } catch { /* ignore */ }
     liveCfg = { ...cfg, audio: !!screenStream?.getAudioTracks().length };
     await retuneAll();
     sendMedia();
@@ -824,21 +829,31 @@
       zoom = { ...zoom, s: Math.min(5, Math.max(1, pinch.s * (dist(t) / pinch.d))) };
     } else if (zoom.s > 1) {
       e.preventDefault();
-      zoom = { ...zoom, x: pinch.x + (t[0].clientX - pinch.px), y: pinch.y + (t[0].clientY - pinch.py) };
+      const dx = t[0].clientX - pinch.px, dy = t[0].clientY - pinch.py;
+      // Turned sideways: the picture's axes are the screen's, rotated.
+      zoom = watchSideways ? { ...zoom, x: pinch.x + dy, y: pinch.y - dx } : { ...zoom, x: pinch.x + dx, y: pinch.y + dy };
     }
   }
+  // Phones: the shared screen opens in its own layer over everything —
+  // turned sideways when it's wide and the phone is upright (Android's
+  // webview can't lock the orientation), pinch to zoom, tap for controls.
+  let watch = $state(false);
+  let watchUi = $state(true);
+  let watchSideways = $state(false);
+  function openWatch() {
+    const v = rScreen?.getVideoTracks()[0]?.getSettings();
+    const wide = !!(v?.width && v?.height && v.width > v.height);
+    watchSideways = wide && innerHeight > innerWidth;
+    zoom = { s: 1, x: 0, y: 0 };
+    watch = true; watchUi = true;
+  }
+  function closeWatch() { watch = false; zoom = { s: 1, x: 0, y: 0 }; }
+  $effect(() => { if (watch) return onBack(closeWatch); });
+  $effect(() => { if (watch && !rScreen) closeWatch(); });
   function zoomEnd(e: TouchEvent) {
     if (e.touches.length) { zoomStart(e); return; }
     pinch = null;
     if (zoom.s <= 1.05) zoom = { s: 1, x: 0, y: 0 };
-  }
-  /** Tap on the shared screen: whole screen, turned sideways if it's wide. */
-  async function watchFullscreen() {
-    if (!fullscreen) await toggleFullscreen();
-    const v = rScreen?.getVideoTracks()[0]?.getSettings();
-    if (v?.width && v?.height && v.width > v.height) {
-      try { await (screen.orientation as unknown as { lock(o: string): Promise<void> }).lock("landscape"); } catch { /* not allowed here */ }
-    }
   }
   $effect(() => {
     if (!fullscreen) {
@@ -1181,8 +1196,9 @@
     tabindex="0"
     title={$t(big ? "Double-click for fullscreen" : "Click to focus")}
     onclick={() => {
+      if (touchUi && id === "r-screen") { openWatch(); return; }
       if (!big && id !== "r-ava") focus = id;
-      else if (touchUi && big && id === "r-screen" && !fullscreen && zoom.s === 1) void watchFullscreen();
+      else if (touchUi && id === "r-screen") openWatch();
     }}
     onkeydown={(e) => { if (e.key === "Enter" && !big && id !== "r-ava") focus = id; }}
     ondblclick={() => { if (big) void toggleFullscreen(); }}
@@ -1194,7 +1210,7 @@
       <video
         use:srcObject={id === "r-screen" ? rScreen : id === "r-cam" ? rCam : id === "l-screen" ? screenStream : camStream}
         class:mirror={id === "l-cam" && facing === "user"}
-        class:contain={id === "r-screen" || id === "l-screen"}
+        class:contain={id === "r-screen" || id === "l-screen" || (big && id === "r-cam")}
         style:transform={id === "r-screen" && big && zoom.s > 1 ? `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.s})` : undefined}
         ontouchstart={id === "r-screen" && big ? zoomStart : undefined}
         ontouchmove={id === "r-screen" && big ? zoomMove : undefined}
@@ -1252,16 +1268,14 @@
 {#snippet devicesPanel()}
   <div class="pop dev" role="dialog" aria-label={$t("Microphone and sound")}>
     <div class="pop-label">{$t("Microphone")}</div>
-    <select class="pop-select" value={$callSettings.micId} onchange={(e) => void switchMic((e.target as HTMLSelectElement).value)}>
-      <option value="default">{$t("System default")}</option>
-      {#each devices.mics.filter((d) => d.deviceId && d.deviceId !== "default") as d (d.deviceId)}<option value={d.deviceId}>{d.label || $t("Microphone")}</option>{/each}
-    </select>
+    <Select class="pop-select" value={$callSettings.micId}
+      options={[{ value: "default", label: $t("System default") }, ...devices.mics.filter((d) => d.deviceId && d.deviceId !== "default").map((d) => ({ value: d.deviceId, label: d.label || $t("Microphone") }))]}
+      onchange={(v) => void switchMic(v)} />
     {#if canPickSpeaker}
       <div class="pop-label">{$t("Speaker")}</div>
-      <select class="pop-select" value={$callSettings.speakerId} onchange={(e) => callSettings.update((c) => ({ ...c, speakerId: (e.target as HTMLSelectElement).value }))}>
-        <option value="default">{$t("System default")}</option>
-        {#each devices.speakers.filter((d) => d.deviceId && d.deviceId !== "default") as d (d.deviceId)}<option value={d.deviceId}>{d.label || $t("Speaker")}</option>{/each}
-      </select>
+      <Select class="pop-select" value={$callSettings.speakerId}
+        options={[{ value: "default", label: $t("System default") }, ...devices.speakers.filter((d) => d.deviceId && d.deviceId !== "default").map((d) => ({ value: d.deviceId, label: d.label || $t("Speaker") }))]}
+        onchange={(v) => callSettings.update((c) => ({ ...c, speakerId: v }))} />
     {/if}
     <div class="pop-label">{$t("Microphone volume")}</div>
     <div class="pop-range">
@@ -1343,6 +1357,27 @@
     {/if}
   </div>
 {/snippet}
+
+{#if watch && rScreen}
+  <div class="watch" role="dialog" aria-label={$t("Screen share")}>
+    <div class="watch-in" class:sideways={watchSideways}>
+      <!-- svelte-ignore a11y_media_has_caption -->
+      <video use:srcObject={rScreen} autoplay playsinline muted
+        style:transform={zoom.s > 1 ? `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.s})` : undefined}
+        ontouchstart={zoomStart} ontouchmove={zoomMove} ontouchend={zoomEnd}
+        onclick={() => (watchUi = !watchUi)}></video>
+    </div>
+    {#if watchUi}
+      <div class="watch-bar">
+        <button onclick={closeWatch} aria-label={$t("Close")}>×</button>
+        <span>{tileTitle("r-screen")}</span>
+        <button class:on={watchSideways} onclick={() => { watchSideways = !watchSideways; zoom = { s: 1, x: 0, y: 0 }; }} aria-label={$t("Rotate")} title={$t("Rotate")}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+        </button>
+      </div>
+    {/if}
+  </div>
+{/if}
 
 {#if showStage}
   <div class="stage" class:fs={fullscreen} role="dialog" aria-label={$t("Call")}>
@@ -1426,7 +1461,7 @@
   /* ---------- shared ---------- */
   .ava {
     position: relative;
-    border-radius: 50%;
+    border-radius: var(--ava-r, 50%);
     background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
     display: grid; place-items: center;
     color: #06070C; font-weight: 700; letter-spacing: -0.02em;
@@ -1440,7 +1475,7 @@
   .ava.speaking { box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 4px #3BA55D; }
   .ava-badge {
     position: absolute; right: -3px; bottom: -3px;
-    width: 18px; height: 18px; border-radius: 50%;
+    width: 18px; height: 18px; border-radius: var(--ava-r, 50%);
     background: var(--danger); color: #fff;
     display: grid; place-items: center;
     border: 2px solid var(--bg-surface);
@@ -1457,7 +1492,7 @@
 
   .live {
     background: #ED4245; color: #fff; font-size: 10px; font-weight: 800;
-    letter-spacing: 0.06em; padding: 1px 5px; border-radius: 4px;
+    letter-spacing: 0.06em; padding: 1px 5px; border-radius: calc(4px * var(--rk, 1));
   }
   .live.sm { margin-left: 6px; font-size: 9px; }
   .recon { color: #FAA61A; font-weight: 600; }
@@ -1479,14 +1514,14 @@
   .cb.off { background: rgba(237, 66, 69, 0.16); color: #ED4245; }
   .cb.on { background: var(--accent-soft); color: var(--accent); }
   .cb.live { background: #ED4245; color: #fff; }
-  .cb.hang { background: #ED4245; color: #fff; width: 52px; border-radius: 22px; }
+  .cb.hang { background: #ED4245; color: #fff; width: 52px; border-radius: calc(22px * var(--rk, 1)); }
   .cb.hang:hover { background: #C93B3E; }
-  .cb.accept { background: #3BA55D; color: #fff; width: 52px; border-radius: 22px; }
+  .cb.accept { background: #3BA55D; color: #fff; width: 52px; border-radius: calc(22px * var(--rk, 1)); }
   .ptt {
     position: absolute; bottom: -4px; left: 50%; transform: translateX(-50%);
     font-size: 8.5px; font-weight: 800; letter-spacing: 0.05em;
     background: var(--bg-surface); color: var(--fg-dim);
-    border: 1px solid var(--border-strong); border-radius: 4px; padding: 0 3px;
+    border: 1px solid var(--border-strong); border-radius: calc(4px * var(--rk, 1)); padding: 0 3px;
   }
   .ptt.held { color: #3BA55D; border-color: #3BA55D; }
 
@@ -1496,7 +1531,7 @@
     width: 300px;
     background: var(--bg-surface);
     border: 1px solid var(--border-strong);
-    border-radius: 12px;
+    border-radius: calc(12px * var(--rk, 1));
     padding: 14px;
     box-shadow: 0 18px 40px -10px rgba(0, 0, 0, 0.7);
     z-index: 5;
@@ -1504,7 +1539,7 @@
   }
   .pop.vol { width: 240px; }
   .pop.dev { width: 280px; left: auto; right: -40px; transform: none; }
-  .pop-select { width: 100%; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--border-strong); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 13px; }
+  .pop-select { width: 100%; padding: 8px 10px; border-radius: calc(9px * var(--rk, 1)); border: 1px solid var(--border-strong); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 13px; }
   .pop-check { display: flex; align-items: center; gap: 8px; margin: 12px 0 4px; font-size: 13px; color: var(--fg); cursor: pointer; }
   .pop-check input { accent-color: var(--accent); }
   .pop.dev .pop-btn { width: 100%; margin-top: 10px; }
@@ -1512,9 +1547,9 @@
   .controls :global(.cb) { flex: 0 0 auto; }
   .pop-title { font-weight: 700; font-size: 14px; color: var(--fg); margin-bottom: 8px; }
   .pop-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-dim); margin: 10px 0 6px; }
-  .pop-seg { display: flex; gap: 4px; background: var(--bg-input); border-radius: 8px; padding: 3px; }
+  .pop-seg { display: flex; gap: 4px; background: var(--bg-input); border-radius: calc(8px * var(--rk, 1)); padding: 3px; }
   .pop-seg button {
-    flex: 1; padding: 6px 4px; border: none; border-radius: 6px; background: transparent;
+    flex: 1; padding: 6px 4px; border: none; border-radius: calc(6px * var(--rk, 1)); background: transparent;
     color: var(--fg-muted); font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
   }
   .pop-seg button:hover { color: var(--fg); }
@@ -1524,7 +1559,7 @@
   .pop-check input { accent-color: var(--accent); }
   .pop-est { margin-top: 8px; font-size: 11.5px; color: var(--fg-dim); }
   .pop-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
-  .pop-btn { border: none; border-radius: 8px; padding: 8px 14px; font-weight: 700; font-size: 13px; cursor: pointer; }
+  .pop-btn { border: none; border-radius: calc(8px * var(--rk, 1)); padding: 8px 14px; font-weight: 700; font-size: 13px; cursor: pointer; }
   .pop-btn.primary { background: var(--accent); color: #06070C; }
   .pop-btn.danger { background: rgba(237, 66, 69, 0.16); color: #ED4245; }
   .pop-range { display: flex; align-items: center; gap: 10px; }
@@ -1537,7 +1572,7 @@
     width: 340px;
     background: var(--bg-surface);
     border: 1px solid var(--border-strong);
-    border-radius: 16px;
+    border-radius: calc(16px * var(--rk, 1));
     padding: 14px;
     box-shadow: 0 24px 48px -12px rgba(0, 0, 0, 0.6), var(--shadow-accent);
     display: flex; flex-direction: column; gap: 12px;
@@ -1550,11 +1585,11 @@
   .mini-name { font-weight: 700; font-size: 15px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .mini-status { font-size: 12.5px; color: var(--fg-muted); display: flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
   .mini-me { margin-right: 2px; }
-  .mini-video { position: relative; border-radius: 10px; overflow: hidden; aspect-ratio: 16 / 9; background: #000; }
+  .mini-video { position: relative; border-radius: calc(10px * var(--rk, 1)); overflow: hidden; aspect-ratio: 16 / 9; background: #000; }
   .mini-video .tile { width: 100%; height: 100%; border-radius: 0; }
   .mini-expand {
     position: absolute; top: 8px; right: 8px;
-    width: 30px; height: 30px; border-radius: 8px; border: none;
+    width: 30px; height: 30px; border-radius: calc(8px * var(--rk, 1)); border: none;
     background: rgba(0, 0, 0, 0.55); color: #fff; cursor: pointer; display: grid; place-items: center;
   }
   .mini-expand :global(svg) { width: 16px; height: 16px; }
@@ -1577,7 +1612,7 @@
     position: fixed; inset: 14px; z-index: 250;
     background: #0B0C10;
     border: 1px solid var(--border-strong);
-    border-radius: 16px;
+    border-radius: calc(16px * var(--rk, 1));
     box-shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.8);
     display: grid;
     grid-template-rows: auto minmax(0, 1fr) auto auto;
@@ -1585,13 +1620,23 @@
     animation: slide-in 0.18s ease-out;
   }
   .stage.fs { inset: 0; border-radius: 0; border: none; }
+  .watch { position: fixed; inset: 0; z-index: 2000; background: #000; overflow: hidden; touch-action: none; }
+  .watch-in { position: absolute; inset: 0; display: grid; place-items: center; overflow: hidden; }
+  .watch-in.sideways { inset: auto; top: 50%; left: 50%; width: 100vh; height: 100vw; transform: translate(-50%, -50%) rotate(90deg); }
+  .watch video { width: 100%; height: 100%; object-fit: contain; transform-origin: center; }
+  .watch-bar { position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: center; gap: 10px;
+    padding: calc(env(safe-area-inset-top, 0px) + 10px) 12px 18px; background: linear-gradient(rgba(0,0,0,.65), transparent); color: #fff; }
+  .watch-bar span { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .watch-bar button { width: 42px; height: 42px; border-radius: 50%; border: none; background: rgba(255,255,255,.14); color: #fff; font-size: 24px; display: grid; place-items: center; }
+  .watch-bar button.on { background: var(--accent); color: #06070C; }
+  .watch-bar svg { width: 20px; height: 20px; }
   .st-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; }
   .st-peer { display: flex; align-items: center; gap: 10px; min-width: 0; }
   .st-name { font-weight: 700; color: #fff; font-size: 14px; }
   .st-time { color: rgba(255, 255, 255, 0.55); font-size: 12.5px; font-variant-numeric: tabular-nums; }
   .st-tools { display: flex; align-items: center; gap: 6px; }
   .tb {
-    width: 32px; height: 32px; border-radius: 8px; border: none;
+    width: 32px; height: 32px; border-radius: calc(8px * var(--rk, 1)); border: none;
     background: transparent; color: rgba(255, 255, 255, 0.7); cursor: pointer;
     display: grid; place-items: center;
   }
@@ -1614,7 +1659,7 @@
   .tile {
     position: relative;
     background: #15171C;
-    border-radius: 12px;
+    border-radius: calc(12px * var(--rk, 1));
     overflow: hidden;
     min-width: 0; min-height: 0;
     cursor: pointer;
@@ -1633,7 +1678,7 @@
     display: flex; align-items: center; gap: 6px;
     max-width: calc(100% - 16px);
     background: rgba(0, 0, 0, 0.6); color: #fff;
-    padding: 3px 8px; border-radius: 6px;
+    padding: 3px 8px; border-radius: calc(6px * var(--rk, 1));
     font-size: 12px; font-weight: 600;
   }
   .tile-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1642,7 +1687,7 @@
   .tile-res {
     position: absolute; right: 8px; top: 8px;
     background: rgba(0, 0, 0, 0.6); color: rgba(255, 255, 255, 0.85);
-    padding: 2px 7px; border-radius: 6px; font-size: 11px; font-variant-numeric: tabular-nums;
+    padding: 2px 7px; border-radius: calc(6px * var(--rk, 1)); font-size: 11px; font-variant-numeric: tabular-nums;
   }
 
   .stats {
@@ -1650,7 +1695,7 @@
     width: min(460px, calc(100% - 48px));
     background: rgba(0, 0, 0, 0.72);
     border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     padding: 8px 10px;
     font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 11px; line-height: 1.6;

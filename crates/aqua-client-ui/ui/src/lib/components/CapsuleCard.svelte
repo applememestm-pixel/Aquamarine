@@ -74,7 +74,7 @@
   @keyframes cp-reveal { from { opacity: 0; filter: blur(6px); } }
   .cp-state { font-size: 12.5px; color: var(--fg-muted); }
   .cp-state.warn { color: #ffb84d; }
-  .cp-btn { border: none; border-radius: 10px; padding: 8px 14px; background: var(--accent); color: #06070C; font: inherit; font-weight: 700; cursor: pointer; align-self: flex-start; }
+  .cp-btn { border: none; border-radius: calc(10px * var(--rk, 1)); padding: 8px 14px; background: var(--accent); color: #06070C; font: inherit; font-weight: 700; cursor: pointer; align-self: flex-start; }
   .cp-btn.ghost { background: var(--bg-input); color: var(--fg); }
   .cp-btn:disabled { opacity: 0.6; }
 </style>

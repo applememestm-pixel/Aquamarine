@@ -254,28 +254,28 @@
   .pm-veil { position: fixed; inset: 0; z-index: 265; background: rgba(4, 6, 12, .55); display: grid; place-items: center; animation: pm-fade .16s ease-out; }
   @keyframes pm-fade { from { opacity: 0; } }
   .pm { width: min(620px, calc(100vw - 32px)); max-height: calc(100vh - 48px); display: flex; flex-direction: column; gap: 10px; padding: 14px;
-    border-radius: 18px; background: var(--bg-shell); border: 1px solid var(--border-strong); box-shadow: 0 30px 80px -20px rgba(0,0,0,.75);
+    border-radius: calc(18px * var(--rk, 1)); background: var(--bg-shell); border: 1px solid var(--border-strong); box-shadow: 0 30px 80px -20px rgba(0,0,0,.75);
     animation: pm-in .22s cubic-bezier(.2,.9,.25,1.1); }
   @keyframes pm-in { from { opacity: 0; transform: translateY(8px) scale(.98); } }
   .pm-head { display: flex; align-items: center; gap: 12px; }
-  .pm-ico { width: 48px; height: 48px; flex-shrink: 0; border-radius: 12px; background: var(--bg-input); display: grid; place-items: center; font-size: 24px; overflow: hidden; }
+  .pm-ico { width: 48px; height: 48px; flex-shrink: 0; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-input); display: grid; place-items: center; font-size: 24px; overflow: hidden; }
   .pm-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-  .pm-title input { background: transparent; border: 1px solid transparent; border-radius: 8px; color: var(--fg); font: inherit; font-size: 16px; font-weight: 800; padding: 4px 6px; outline: none; }
+  .pm-title input { background: transparent; border: 1px solid transparent; border-radius: calc(8px * var(--rk, 1)); color: var(--fg); font: inherit; font-size: 16px; font-weight: 800; padding: 4px 6px; outline: none; }
   .pm-title input:hover { border-color: var(--border); }
   .pm-title input:focus { border-color: var(--accent); background: var(--bg-input); }
   .pm-sub { font-size: 12px; color: var(--fg-dim); padding-left: 7px; }
-  .pm-x { width: 32px; height: 32px; border-radius: 9px; border: none; background: transparent; color: var(--fg-muted); font-size: 22px; cursor: pointer; }
+  .pm-x { width: 32px; height: 32px; border-radius: calc(9px * var(--rk, 1)); border: none; background: transparent; color: var(--fg-muted); font-size: 22px; cursor: pointer; }
   .pm-x:hover { background: var(--bg-input); color: var(--fg); }
   .pm-tools, .pm-acts, .pm-emrow { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
   .grow { flex: 1; }
-  .pm-btn { border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); border-radius: 9px; padding: 7px 11px; font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+  .pm-btn { border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); border-radius: calc(9px * var(--rk, 1)); padding: 7px 11px; font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; }
   .pm-btn:hover:not(:disabled) { border-color: var(--border-strong); }
   .pm-btn:disabled { opacity: .45; cursor: default; }
   .pm-btn.primary { background: var(--accent); border-color: var(--accent); color: #06070c; }
   .pm-btn.danger { color: #ff6b6b; }
   .pm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; overflow-y: auto; min-height: 120px; max-height: 46vh; padding: 2px; touch-action: none; }
   .pm-grid.emoji { grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); }
-  .pm-cell { position: relative; aspect-ratio: 1; border-radius: 12px; border: 2px solid transparent; background: var(--bg-input); padding: 6px; cursor: grab; user-select: none; transition: border-color .12s, transform .12s; }
+  .pm-cell { position: relative; aspect-ratio: 1; border-radius: calc(12px * var(--rk, 1)); border: 2px solid transparent; background: var(--bg-input); padding: 6px; cursor: grab; user-select: none; transition: border-color .12s, transform .12s; }
   .pm-cell:hover { border-color: var(--border-strong); }
   .pm-cell.sel { border-color: var(--accent); background: var(--accent-soft); }
   .pm-cell.dragging { opacity: .5; transform: scale(.94); cursor: grabbing; }
@@ -283,16 +283,16 @@
   .pm-cell.add { display: grid; place-items: center; font-size: 26px; color: var(--fg-dim); border: 2px dashed var(--border-strong); background: transparent; cursor: pointer; }
   .pm-cell.add:hover { color: var(--accent); border-color: var(--accent); }
   .pm-em { position: absolute; right: 4px; bottom: 2px; font-size: 14px; filter: drop-shadow(0 1px 1px rgba(0,0,0,.6)); }
-  .pm-empty { text-align: center; color: var(--fg-dim); font-size: 13px; padding: 26px 20px; border: 2px dashed var(--border); border-radius: 14px; }
+  .pm-empty { text-align: center; color: var(--fg-dim); font-size: 13px; padding: 26px 20px; border: 2px dashed var(--border); border-radius: calc(14px * var(--rk, 1)); }
   .pm-empty-big { font-size: 40px; margin-bottom: 8px; }
-  .pm-sel { display: flex; gap: 14px; padding: 10px; border-radius: 14px; background: var(--bg-surface); animation: pm-in .18s ease-out; }
+  .pm-sel { display: flex; gap: 14px; padding: 10px; border-radius: calc(14px * var(--rk, 1)); background: var(--bg-surface); animation: pm-in .18s ease-out; }
   .pm-pv { width: 132px; height: 132px; flex-shrink: 0; }
   .pm-side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
   .pm-lbl { font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: var(--fg-dim); }
-  .pm-eminput { width: 90px; background: var(--bg-input); border: 1px solid var(--border); border-radius: 9px; color: var(--fg); font-size: 20px; text-align: center; padding: 3px 6px; outline: none; }
+  .pm-eminput { width: 90px; background: var(--bg-input); border: 1px solid var(--border); border-radius: calc(9px * var(--rk, 1)); color: var(--fg); font-size: 20px; text-align: center; padding: 3px 6px; outline: none; }
   .pm-eminput:focus { border-color: var(--accent); }
   .pm-quick { display: grid; grid-template-columns: repeat(12, 1fr); gap: 2px; }
-  .pm-quick button { border: 1px solid transparent; background: transparent; border-radius: 8px; font-size: 18px; padding: 2px 0; cursor: pointer; }
+  .pm-quick button { border: 1px solid transparent; background: transparent; border-radius: calc(8px * var(--rk, 1)); font-size: 18px; padding: 2px 0; cursor: pointer; }
   .pm-quick button:hover { background: var(--bg-input); }
   .pm-quick button.on { border-color: var(--accent); background: var(--accent-soft); }
   .pm-hint { font-size: 12px; color: var(--fg-dim); text-align: center; padding: 4px 0 2px; }

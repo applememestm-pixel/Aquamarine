@@ -241,6 +241,7 @@ export const api = {
   cacheRemoteMedia:   (url: string, max_mb?: number): Promise<CachedMedia>         => invoke("cache_remote_media", { url, maxMb: max_mb ?? null }),
   telegraphPage:      (path: string): Promise<TelegraphPage>                        => invoke("telegraph_page", { path }),
   openExternal:       (url: string): Promise<void>                                  => invoke("open_external", { url }),
+  openSavedFile:      (path: string): Promise<void>                                 => invoke("open_saved_file", { path }),
   uploadAttachment:   (peer_id: string, file_path: string, keep?: boolean): Promise<ArticleMedia> => invoke("upload_attachment", { peerId: peer_id, filePath: file_path, keep: keep ?? null }),
   prepareBannerVideo: (path: string): Promise<string>                                  => invoke("prepare_banner_video", { path }),
   gpuStatus:          (): Promise<GpuStatus> => invoke("gpu_status"),

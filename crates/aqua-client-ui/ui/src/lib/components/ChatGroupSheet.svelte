@@ -128,10 +128,10 @@
     background: rgba(0,0,0,.45); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); animation: fade .18s ease-out; }
   @keyframes fade { from { opacity: 0; } }
   .sheet { position: relative; width: min(420px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; padding: 22px 16px 16px;
-    background: var(--bg-shell); border: 1px solid var(--border-strong); border-radius: 18px; box-shadow: 0 30px 70px -24px rgba(0,0,0,.75);
+    background: var(--bg-shell); border: 1px solid var(--border-strong); border-radius: calc(18px * var(--rk, 1)); box-shadow: 0 30px 70px -24px rgba(0,0,0,.75);
     animation: pop .26s cubic-bezier(.2,.9,.25,1.12); }
   @keyframes pop { from { opacity: 0; transform: scale(.92) translateY(8px); } }
-  .x { position: absolute; top: 12px; right: 12px; width: 30px; height: 30px; border: none; border-radius: 9px; background: transparent; color: var(--fg-muted); cursor: pointer; font-size: 14px; }
+  .x { position: absolute; top: 12px; right: 12px; width: 30px; height: 30px; border: none; border-radius: calc(9px * var(--rk, 1)); background: transparent; color: var(--fg-muted); cursor: pointer; font-size: 14px; }
   .x:hover { background: var(--bg-hover); color: var(--fg); }
   .head { display: flex; flex-direction: column; align-items: center; gap: 6px; margin-bottom: 14px; }
   .stack { position: relative; width: 44px; height: 44px; flex-shrink: 0; }
@@ -144,39 +144,39 @@
   .pen { font-size: 13px; color: var(--fg-dim); }
   .count { font-size: 12.5px; color: var(--fg-dim); }
   .tools { display: flex; gap: 8px; margin-bottom: 10px; }
-  .tool { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px; border-radius: 12px; border: 1px solid var(--border);
+  .tool { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px; border-radius: calc(12px * var(--rk, 1)); border: 1px solid var(--border);
     background: var(--bg-input); color: var(--fg-muted); font: inherit; font-size: 12px; cursor: pointer; }
   .tool svg { width: 18px; height: 18px; }
   .tool:hover, .tool.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
-  .q { width: 100%; box-sizing: border-box; margin-bottom: 10px; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; outline: none; }
+  .q { width: 100%; box-sizing: border-box; margin-bottom: 10px; padding: 9px 12px; border-radius: calc(10px * var(--rk, 1)); border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; outline: none; }
   .q:focus { border-color: var(--accent); }
-  .toggle { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 12px; border-radius: 12px; border: none;
+  .toggle { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 12px; border-radius: calc(12px * var(--rk, 1)); border: none;
     background: var(--bg-input); color: var(--fg); font: inherit; font-size: 14px; cursor: pointer; }
-  .switch { width: 38px; height: 22px; border-radius: 11px; background: var(--border-strong); position: relative; flex-shrink: 0; transition: background .2s; }
+  .switch { width: 38px; height: 22px; border-radius: calc(11px * var(--rk, 1)); background: var(--border-strong); position: relative; flex-shrink: 0; transition: background .2s; }
   .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .2s cubic-bezier(.2,.9,.3,1.2); }
   .switch.on { background: var(--accent); }
   .switch.on::after { transform: translateX(16px); }
   .hint { font-size: 12px; color: var(--fg-dim); padding: 6px 4px 0; }
   .sec { margin: 14px 4px 6px; font-size: 12px; font-weight: 700; color: var(--accent); }
   .list { display: flex; flex-direction: column; gap: 2px; }
-  .row { display: flex; align-items: center; gap: 4px; border-radius: 12px; }
+  .row { display: flex; align-items: center; gap: 4px; border-radius: calc(12px * var(--rk, 1)); }
   button.row { width: 100%; gap: 11px; padding: 8px; border: none; background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
   .row:hover { background: var(--bg-hover); }
-  .open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 11px; padding: 8px; border: none; background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer; border-radius: 12px; }
+  .open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 11px; padding: 8px; border: none; background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer; border-radius: calc(12px * var(--rk, 1)); }
   .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .r1 { display: flex; gap: 8px; align-items: baseline; }
   .r1 b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
   .time { font-size: 11.5px; color: var(--fg-dim); }
   .r2 { display: flex; gap: 8px; align-items: center; font-size: 12.5px; color: var(--fg-muted); }
   .pv { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .badge { min-width: 18px; padding: 0 6px; height: 18px; border-radius: 9px; background: var(--accent); color: #06070C; font-size: 11px; font-weight: 800; display: grid; place-items: center; }
+  .badge { min-width: 18px; padding: 0 6px; height: 18px; border-radius: calc(9px * var(--rk, 1)); background: var(--accent); color: #06070C; font-size: 11px; font-weight: 800; display: grid; place-items: center; }
   .badge.muted { background: var(--fg-dim); }
-  .rm { width: 28px; height: 28px; flex-shrink: 0; border: none; border-radius: 8px; background: transparent; color: var(--fg-dim); cursor: pointer; opacity: 0; }
+  .rm { width: 28px; height: 28px; flex-shrink: 0; border: none; border-radius: calc(8px * var(--rk, 1)); background: transparent; color: var(--fg-dim); cursor: pointer; opacity: 0; }
   .row:hover .rm, .rm:focus-visible { opacity: 1; }
   @media (hover: none) { .rm { opacity: .7; } }
   .rm:hover { color: #F23F43; background: var(--bg-input); }
   .plus { color: var(--accent); font-size: 18px; }
   .empty { padding: 14px; text-align: center; color: var(--fg-dim); font-size: 13px; }
-  .ungroup { width: 100%; margin-top: 14px; padding: 10px; border-radius: 12px; border: 1px solid var(--border); background: transparent; color: #F23F43; font: inherit; font-size: 13px; cursor: pointer; }
+  .ungroup { width: 100%; margin-top: 14px; padding: 10px; border-radius: calc(12px * var(--rk, 1)); border: 1px solid var(--border); background: transparent; color: #F23F43; font: inherit; font-size: 13px; cursor: pointer; }
   .ungroup:hover { background: color-mix(in srgb, #F23F43 10%, transparent); }
 </style>

@@ -1,6 +1,6 @@
 [package]
 name        = "aqua-client-ui"
-version     = "1.0.61"
+version     = "1.0.62"
 edition     = "2021"
 license     = "MIT OR Apache-2.0"
 description = "Aquamarine desktop shell — Tauri 2 + Svelte + TypeScript."
@@ -23,7 +23,7 @@ aqua-client-core = { path = "../aqua-client-core" }
 # "Server on this device": the relay runs inside the app (relay_host.rs).
 aqua-server      = { path = "../aqua-server" }
 
-tauri               = { version = "2", features = ["protocol-asset"] }
+tauri               = { version = "2", features = ["protocol-asset", "tray-icon", "image-png"] }
 tauri-plugin-log    = { version = "2" }
 log = "0.4"
 futures-util = "0.3"
@@ -51,8 +51,13 @@ reqwest      = { version = "0.12", default-features = false, features = ["rustls
 tiny_http    = "0.12"
 rand         = "0.8"
 
+# Fingerprint / face unlock of the passcode lock (phones only).
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-plugin-biometric = "2"
+
 # OS keychain on desktop only (phones keep the key in the app sandbox).
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-autostart = "2"   # "Launch Aquamarine when the system starts"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 
 # Linux: tune the WebKitGTK webview (WebRTC is off there by default).

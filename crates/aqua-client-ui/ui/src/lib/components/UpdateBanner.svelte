@@ -57,14 +57,14 @@
     position: fixed; z-index: 290; left: 50%; transform: translateX(-50%);
     top: calc(var(--tb-h, 0px) + env(safe-area-inset-top, 0px) + 10px);
     width: min(520px, calc(100vw - 20px)); box-sizing: border-box;
-    display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 14px; border-radius: 18px;
+    display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 14px; border-radius: calc(18px * var(--rk, 1));
     background: color-mix(in srgb, var(--bg-surface) 80%, transparent);
     backdrop-filter: blur(22px) saturate(1.5); -webkit-backdrop-filter: blur(22px) saturate(1.5);
     border: 1px solid var(--border-strong); box-shadow: 0 18px 44px -18px rgba(0,0,0,.85);
     animation: upd-in .4s cubic-bezier(.22,1,.36,1);
   }
   @keyframes upd-in { from { opacity: 0; transform: translateX(-50%) translateY(-14px); } }
-  .upd-ic { width: 38px; height: 38px; flex-shrink: 0; border-radius: 12px; display: grid; place-items: center; color: #06070c;
+  .upd-ic { width: 38px; height: 38px; flex-shrink: 0; border-radius: calc(12px * var(--rk, 1)); display: grid; place-items: center; color: #06070c;
     background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
   .upd-ic svg { width: 20px; height: 20px; }
   .upd-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--fg-muted); }
@@ -74,7 +74,7 @@
   .bar { display: block; height: 5px; border-radius: 3px; background: var(--bg-input); overflow: hidden; margin: 2px 0; }
   .bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .25s ease; }
   .upd-act { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
-  .upd-act button, .upd-act a { border: none; border-radius: 12px; padding: 8px 14px; font: 700 13.5px var(--font-ui); cursor: pointer; text-align: center; text-decoration: none; }
+  .upd-act button, .upd-act a { border: none; border-radius: calc(12px * var(--rk, 1)); padding: 8px 14px; font: 700 13.5px var(--font-ui); cursor: pointer; text-align: center; text-decoration: none; }
   .go { color: #06070c; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
   .later { color: var(--fg-muted); background: transparent; }
 </style>

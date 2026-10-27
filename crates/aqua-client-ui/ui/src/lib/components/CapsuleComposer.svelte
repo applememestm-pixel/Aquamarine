@@ -4,6 +4,7 @@
 </script>
 
 <script lang="ts">
+  import Select from "./Select.svelte";
   /** Write a sealed message to the person in this chat. */
   import { t, tr } from "../i18n";
   import { api } from "../tauri";
@@ -17,6 +18,7 @@
   let kind = $state<"date" | "inactive">("date");
   let date = $state(new Date(Date.now() + 365 * 86_400_000));
   let hh = $state(12);
+  let mi = $state(0);
   let days = $state(30);
   let grace = $state(48);
   let busy = $state(false);
@@ -28,7 +30,7 @@
     const peer = $capsuleComposer;
     if (!peer || busy) return;
     if (!text.trim()) { showToast(tr("Write the message first")); return; }
-    const at = new Date(date.getFullYear(), date.getMonth(), date.getDate(), hh, 0).getTime();
+    const at = new Date(date.getFullYear(), date.getMonth(), date.getDate(), hh, mi).getTime();
     if (kind === "date" && at <= Date.now()) { showToast(tr("Pick a date in the future")); return; }
     busy = true;
     try {
@@ -60,7 +62,11 @@
         {#if kind === "date"}
           <div class="cc-date">
             <MonthGrid bind:selected={date} />
-            <label class="cc-time">{$t("Time")} <select bind:value={hh}>{#each Array(24) as _, h (h)}<option value={h}>{String(h).padStart(2, "0")}:00</option>{/each}</select></label>
+            <div class="cc-time">{$t("Time")}
+              <Select compact bind:value={hh} label={$t("Hour")} options={Array.from({ length: 24 }, (_, h) => ({ value: h, label: String(h).padStart(2, "0") }))} />
+              <span>:</span>
+              <Select compact bind:value={mi} label={$t("Minutes")} options={Array.from({ length: 12 }, (_, i) => ({ value: i * 5, label: String(i * 5).padStart(2, "0") }))} />
+            </div>
           </div>
         {:else}
           <div class="cc-seg">
@@ -83,23 +89,23 @@
 
 <style>
   .cc-veil { position: fixed; inset: 0; z-index: 900; display: grid; place-items: center; background: rgba(4, 6, 12, 0.5); }
-  .cc { width: min(520px, calc(100vw - 20px)); max-height: calc(100dvh - 24px); display: flex; flex-direction: column; background: var(--bg-shell); border: 1px solid var(--border-strong); border-radius: 18px; overflow: hidden; animation: cc-pop 0.18s cubic-bezier(.2,.9,.3,1.12); }
+  .cc { width: min(520px, calc(100vw - 20px)); max-height: calc(100dvh - 24px); display: flex; flex-direction: column; background: var(--bg-shell); border: 1px solid var(--border-strong); border-radius: calc(18px * var(--rk, 1)); overflow: hidden; animation: cc-pop 0.18s cubic-bezier(.2,.9,.3,1.12); }
   @keyframes cc-pop { from { opacity: 0; transform: translateY(12px) scale(0.97); } }
   .cc-head { display: flex; align-items: center; padding: 14px 16px 10px; border-bottom: 1px solid var(--border); }
   .cc-head b { flex: 1; font-size: 15.5px; }
   .cc-x { width: 30px; height: 30px; border-radius: 50%; border: none; background: var(--bg-hover); color: var(--fg-muted); cursor: pointer; }
   .cc-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
   .cc-note { margin: 0; font-size: 12.5px; color: var(--fg-dim); line-height: 1.5; }
-  .cc-body textarea, .cc-body input, .cc-body select { padding: 9px 11px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 14px; outline: none; resize: vertical; }
+  .cc-body textarea, .cc-body input, .cc-body select { padding: 9px 11px; border-radius: calc(10px * var(--rk, 1)); border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 14px; outline: none; resize: vertical; }
   .cc-body textarea:focus, .cc-body input:focus { border-color: var(--accent); }
-  .cc-seg { display: flex; gap: 4px; padding: 3px; border-radius: 10px; background: var(--bg-input); flex-wrap: wrap; }
-  .cc-seg button { flex: 1; border: none; background: none; color: var(--fg-muted); font: inherit; font-size: 12.5px; font-weight: 600; padding: 7px 6px; border-radius: 8px; cursor: pointer; white-space: nowrap; }
+  .cc-seg { display: flex; gap: 4px; padding: 3px; border-radius: calc(10px * var(--rk, 1)); background: var(--bg-input); flex-wrap: wrap; }
+  .cc-seg button { flex: 1; border: none; background: none; color: var(--fg-muted); font: inherit; font-size: 12.5px; font-weight: 600; padding: 7px 6px; border-radius: calc(8px * var(--rk, 1)); cursor: pointer; white-space: nowrap; }
   .cc-seg button.on { background: var(--bg-shell); color: var(--accent); box-shadow: 0 0 0 1px var(--border-strong); }
   .cc-date { display: flex; flex-direction: column; gap: 8px; }
   .cc-time { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--fg-muted); }
   .cc-lbl { font-size: 11.5px; font-weight: 700; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-top: 4px; }
   .cc-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); }
-  .cc-btn { border: none; border-radius: 10px; padding: 9px 18px; background: var(--accent); color: #06070C; font: inherit; font-weight: 700; cursor: pointer; }
+  .cc-btn { border: none; border-radius: calc(10px * var(--rk, 1)); padding: 9px 18px; background: var(--accent); color: #06070C; font: inherit; font-weight: 700; cursor: pointer; }
   .cc-btn.ghost { background: var(--bg-input); color: var(--fg); }
   .cc-btn:disabled { opacity: 0.6; }
 </style>

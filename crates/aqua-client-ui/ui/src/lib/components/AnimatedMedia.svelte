@@ -105,10 +105,13 @@
     class?: string;
     /** Big grids (the picker): let the browser load images as they scroll in. */
     lazy?: boolean;
+    /** A custom emoji (Power saving → "Animated emoji" decides, not stickers). */
+    emoji?: boolean;
   }
-  let { src, mime = null, alt = "", play: playProp = "auto", fit = "contain", class: klass = "", lazy = false }: Props = $props();
-  // "Animated stickers & emoji" off → they play on hover only.
-  const play = $derived(playProp === "auto" && !$settings.autoplayStickers ? "hover" : playProp);
+  let { src, mime = null, alt = "", play: playProp = "auto", fit = "contain", class: klass = "", lazy = false, emoji = false }: Props = $props();
+  // Power saving: animated stickers / emoji off → they play on hover only.
+  const allowed = $derived(emoji ? ($settings.power?.emoji ?? true) : $settings.autoplayStickers && ($settings.power?.stickers ?? true));
+  const play = $derived(playProp === "auto" && !allowed ? "hover" : playProp);
 
   const kind = $derived(mediaKind(src, mime));
   let box: HTMLDivElement | undefined = $state();

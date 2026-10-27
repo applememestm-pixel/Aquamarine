@@ -211,29 +211,29 @@
     display: flex; flex-direction: column;
     background: var(--bg-shell);
     border: 1px solid var(--border-strong);
-    border-radius: 16px;
+    border-radius: calc(16px * var(--rk, 1));
     overflow: hidden;
     animation: fw-pop 0.18s cubic-bezier(.2,.9,.3,1.1);
   }
   .fw-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
   .fw-head h3 { margin: 0; font-size: 14.5px; font-weight: 700; flex: 1; }
   .fw-count { font-size: 11.5px; color: var(--fg-dim); }
-  .fw-close { width: 28px; height: 28px; background: transparent; border: 1px solid var(--border); border-radius: 8px; color: var(--fg-dim); font-size: 17px; cursor: pointer; }
+  .fw-close { width: 28px; height: 28px; background: transparent; border: 1px solid var(--border); border-radius: calc(8px * var(--rk, 1)); color: var(--fg-dim); font-size: 17px; cursor: pointer; }
   .fw-close:hover { color: var(--fg); background: var(--bg-hover); }
-  .fw-prev { display: flex; align-items: center; gap: 10px; margin: 12px 14px 0; padding: 10px 12px; border-radius: 12px; background: var(--bg-input); border-left: 3px solid var(--accent); }
+  .fw-prev { display: flex; align-items: center; gap: 10px; margin: 12px 14px 0; padding: 10px 12px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-input); border-left: 3px solid var(--accent); }
   .fw-pav { width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0; display: grid; place-items: center; font-weight: 800; font-size: 14px; color: #06070C; background: linear-gradient(135deg, var(--accent), var(--accent-2)); background-size: cover; background-position: center; }
   .fw-pav.anon { background: var(--bg-hover); color: var(--fg-muted); }
   .fw-ptext { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .fw-ptext b { font-size: 12.5px; color: var(--accent); }
   .fw-ptext span { font-size: 12.5px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .fw-opts { display: flex; gap: 4px; margin: 10px 14px 0; padding: 3px; border-radius: 10px; background: var(--bg-input); }
-  .fw-seg { flex: 1; border: none; background: none; color: var(--fg-muted); font: inherit; font-size: 12.5px; font-weight: 600; padding: 7px; border-radius: 8px; cursor: pointer; }
+  .fw-opts { display: flex; gap: 4px; margin: 10px 14px 0; padding: 3px; border-radius: calc(10px * var(--rk, 1)); background: var(--bg-input); }
+  .fw-seg { flex: 1; border: none; background: none; color: var(--fg-muted); font: inherit; font-size: 12.5px; font-weight: 600; padding: 7px; border-radius: calc(8px * var(--rk, 1)); cursor: pointer; }
   .fw-seg.on { background: var(--bg-shell); color: var(--accent); box-shadow: 0 0 0 1px var(--border-strong); }
-  .fw-search { margin: 10px 14px 6px; padding: 8px 11px; background: var(--bg-input); border: 1px solid var(--border); border-radius: 9px; color: var(--fg); font-family: inherit; font-size: 13px; outline: none; }
+  .fw-search { margin: 10px 14px 6px; padding: 8px 11px; background: var(--bg-input); border: 1px solid var(--border); border-radius: calc(9px * var(--rk, 1)); color: var(--fg); font-family: inherit; font-size: 13px; outline: none; }
   .fw-search:focus { border-color: var(--accent); }
   .fw-list { overflow-y: auto; padding: 4px 8px 6px; min-height: 120px; }
   .fw-empty { padding: 24px; text-align: center; color: var(--fg-dim); font-size: 13px; }
-  .fw-row { display: flex; align-items: center; gap: 11px; width: 100%; padding: 7px 10px; background: transparent; border: none; border-radius: 10px; cursor: pointer; text-align: left; color: var(--fg); }
+  .fw-row { display: flex; align-items: center; gap: 11px; width: 100%; padding: 7px 10px; background: transparent; border: none; border-radius: calc(10px * var(--rk, 1)); cursor: pointer; text-align: left; color: var(--fg); }
   .fw-row:hover:not(:disabled) { background: var(--bg-hover); }
   .fw-row.on { background: var(--accent-soft); }
   .fw-row:disabled { opacity: 0.5; cursor: default; }
@@ -244,8 +244,8 @@
   .fw-check.on { background: var(--accent); border-color: var(--accent); }
   .fw-check.on::after { content: ""; position: absolute; left: 5px; top: 1px; width: 5px; height: 10px; border: solid #06070C; border-width: 0 2px 2px 0; transform: rotate(45deg); }
   .fw-foot { display: flex; gap: 8px; padding: 8px 14px 4px; border-top: 1px solid var(--border); }
-  .fw-comment { flex: 1; padding: 9px 11px; background: var(--bg-input); border: 1px solid var(--border); border-radius: 9px; color: var(--fg); font: inherit; font-size: 13px; outline: none; }
+  .fw-comment { flex: 1; padding: 9px 11px; background: var(--bg-input); border: 1px solid var(--border); border-radius: calc(9px * var(--rk, 1)); color: var(--fg); font: inherit; font-size: 13px; outline: none; }
   .fw-comment:focus { border-color: var(--accent); }
-  .fw-send { border: none; border-radius: 9px; padding: 0 14px; background: var(--accent); color: #06070C; font: inherit; font-weight: 700; font-size: 13px; cursor: pointer; }
+  .fw-send { border: none; border-radius: calc(9px * var(--rk, 1)); padding: 0 14px; background: var(--accent); color: #06070C; font: inherit; font-weight: 700; font-size: 13px; cursor: pointer; }
   .fw-hint { padding: 2px 14px 10px; font-size: 11px; color: var(--fg-dim); }
 </style>

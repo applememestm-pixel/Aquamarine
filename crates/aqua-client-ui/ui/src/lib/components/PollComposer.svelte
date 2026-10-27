@@ -167,23 +167,23 @@
   .pc-sheet {
     width: min(460px, 94vw); max-height: 88vh; display: flex; flex-direction: column;
     background: var(--bg-shell); border: 1px solid var(--border);
-    border-radius: 16px; overflow: hidden; box-shadow: 0 32px 80px -16px rgba(0,0,0,0.6);
+    border-radius: calc(16px * var(--rk, 1)); overflow: hidden; box-shadow: 0 32px 80px -16px rgba(0,0,0,0.6);
   }
   .pc-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--border); }
   .pc-head h3 { margin: 0; font-size: 14.5px; font-weight: 700; }
-  .pc-close { width: 28px; height: 28px; background: transparent; border: 1px solid var(--border); border-radius: 8px; color: var(--fg-dim); font-size: 17px; cursor: pointer; }
+  .pc-close { width: 28px; height: 28px; background: transparent; border: 1px solid var(--border); border-radius: calc(8px * var(--rk, 1)); color: var(--fg-dim); font-size: 17px; cursor: pointer; }
   .pc-close:hover { color: var(--fg); background: var(--bg-hover); }
   .pc-body { padding: 14px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
   .pc-field { display: flex; flex-direction: column; gap: 5px; }
   .pc-field span, .pc-lbl { font-size: 11px; font-weight: 700; color: var(--fg-dim); text-transform: uppercase; letter-spacing: 0.06em; }
   .pc-field input, .pc-opt input {
-    background: var(--bg-input); border: 1px solid var(--border); border-radius: 9px;
+    background: var(--bg-input); border: 1px solid var(--border); border-radius: calc(9px * var(--rk, 1));
     color: var(--fg); font-family: inherit; font-size: 13.5px; padding: 9px 11px; outline: none; width: 100%;
   }
   .pc-field input:focus, .pc-opt input:focus { border-color: var(--accent); }
   .pc-opts { display: flex; flex-direction: column; gap: 7px; }
   .pc-opt { display: flex; align-items: center; gap: 6px; }
-  .pc-rm { width: 30px; height: 34px; flex-shrink: 0; background: transparent; border: 1px solid var(--border); border-radius: 8px; color: var(--danger); font-size: 15px; cursor: pointer; }
+  .pc-rm { width: 30px; height: 34px; flex-shrink: 0; background: transparent; border: 1px solid var(--border); border-radius: calc(8px * var(--rk, 1)); color: var(--danger); font-size: 15px; cursor: pointer; }
   .pc-add { align-self: flex-start; background: transparent; border: none; color: var(--accent); font-size: 12.5px; font-weight: 600; cursor: pointer; padding: 2px 0; }
   .pc-lbl em { font-style: normal; color: var(--fg-dim); font-weight: 600; margin-left: 4px; }
   .pc-opt.right input { border-color: #3ddc84; }
@@ -196,7 +196,7 @@
   .pc-settings { display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--border); padding-top: 10px; }
   .pc-toggle {
     display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 4px;
-    background: none; border: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; border-radius: 8px;
+    background: none; border: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; border-radius: calc(8px * var(--rk, 1));
   }
   .pc-toggle:hover:not(:disabled) { background: var(--bg-hover); }
   .pc-toggle:disabled { opacity: 0.45; cursor: default; }
@@ -213,7 +213,7 @@
   .pc-check input { accent-color: var(--accent); width: 16px; height: 16px; }
   .pc-check span { font-size: 13px; color: var(--fg-muted); }
   .pc-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border); }
-  .pc-ghost, .pc-create { padding: 8px 16px; border-radius: 9px; font-size: 13px; font-weight: 700; cursor: pointer; border: none; }
+  .pc-ghost, .pc-create { padding: 8px 16px; border-radius: calc(9px * var(--rk, 1)); font-size: 13px; font-weight: 700; cursor: pointer; border: none; }
   .pc-ghost { background: transparent; border: 1px solid var(--border); color: var(--fg-muted); }
   .pc-ghost:hover { color: var(--fg); border-color: var(--border-strong); }
   .pc-create { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070C; }

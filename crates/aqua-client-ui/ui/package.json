@@ -1,7 +1,7 @@
 {
   "name": "aqua-client-ui-frontend",
   "private": true,
-  "version": "1.0.61",
+  "version": "1.0.62",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,8 +11,12 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/plugin-autostart": "^2.7.0",
+    "@tauri-apps/plugin-biometric": "^2.5.0",
     "@tauri-apps/plugin-dialog": "^2.0.0",
-    "@tauri-apps/plugin-notification": "^2.7.0"
+    "@tauri-apps/plugin-notification": "^2.7.0",
+    "jsqr": "^1.4.0",
+    "qrcode-generator": "^1.4.4"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^4.0.0",

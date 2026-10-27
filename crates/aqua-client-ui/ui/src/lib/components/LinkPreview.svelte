@@ -141,7 +141,7 @@
     margin-top: 6px;
     padding: 6px 10px 8px;
     border-left: 3px solid var(--accent);
-    border-radius: 6px;
+    border-radius: calc(6px * var(--rk, 1));
     background: color-mix(in srgb, var(--accent) 8%, transparent);
     max-width: 420px;
     display: flex; flex-direction: column; gap: 3px;
@@ -158,14 +158,14 @@
     white-space: pre-line;
   }
   .lp-media { margin-top: 5px; position: relative; }
-  .video16 { aspect-ratio: 16 / 9; overflow: hidden; border-radius: 8px; }
+  .video16 { aspect-ratio: 16 / 9; overflow: hidden; border-radius: calc(8px * var(--rk, 1)); }
   .video16 > .lp-thumb { position: absolute; inset: 0; min-height: 0; }
   .lp-media iframe {
-    width: 100%; height: 100%; border: none; border-radius: 8px; display: block; background: #000;
+    width: 100%; height: 100%; border: none; border-radius: calc(8px * var(--rk, 1)); display: block; background: #000;
   }
   .lp-thumb {
     all: unset; position: relative; display: block; cursor: pointer;
-    width: 100%; height: 100%; min-height: 120px; border-radius: 8px; overflow: hidden; background: #0b0d14;
+    width: 100%; height: 100%; min-height: 120px; border-radius: calc(8px * var(--rk, 1)); overflow: hidden; background: #0b0d14;
   }
   .lp-thumb.vid { aspect-ratio: 16 / 9; display: grid; place-items: center; }
   .lp-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -175,11 +175,11 @@
     display: grid; place-items: center;
     background: rgba(0, 0, 0, 0.6); color: #fff;
   }
-  .play.yt { width: 64px; height: 44px; border-radius: 12px; background: #ff0033; }
+  .play.yt { width: 64px; height: 44px; border-radius: calc(12px * var(--rk, 1)); background: #ff0033; }
   .play svg { width: 26px; height: 26px; }
   .vlabel {
     position: absolute; left: 8px; bottom: 8px;
-    padding: 2px 8px; border-radius: 8px; background: rgba(0, 0, 0, 0.6); color: #fff;
+    padding: 2px 8px; border-radius: calc(8px * var(--rk, 1)); background: rgba(0, 0, 0, 0.6); color: #fff;
     font-size: 11.5px; font-weight: 600;
   }
   .spin {
@@ -189,14 +189,14 @@
     animation: lp-spin 0.8s linear infinite;
   }
   @keyframes lp-spin { to { transform: rotate(360deg); } }
-  .lp-img { all: unset; cursor: zoom-in; display: block; margin-top: 5px; border-radius: 8px; overflow: hidden; }
+  .lp-img { all: unset; cursor: zoom-in; display: block; margin-top: 5px; border-radius: calc(8px * var(--rk, 1)); overflow: hidden; }
   .lp-img img { width: 100%; max-height: 240px; object-fit: cover; display: block; }
   .lp-img.small img { max-height: 120px; }
   .lp-ext { all: unset; cursor: pointer; margin-top: 4px; font-size: 12px; color: var(--accent); font-weight: 600; }
   .lp-err { font-size: 11.5px; color: var(--danger); margin-top: 4px; }
   .iv {
     margin-top: 6px; align-self: stretch;
-    padding: 7px 10px; border-radius: 8px; border: none; cursor: pointer;
+    padding: 7px 10px; border-radius: calc(8px * var(--rk, 1)); border: none; cursor: pointer;
     background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent);
     font-weight: 800; font-size: 12.5px; letter-spacing: 0.04em; text-transform: uppercase;
   }

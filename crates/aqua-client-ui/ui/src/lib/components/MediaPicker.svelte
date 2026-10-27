@@ -750,7 +750,7 @@
     display: flex; flex-direction: column;
     background: var(--bg-surface);
     border: 1px solid var(--border-strong);
-    border-radius: 14px;
+    border-radius: calc(14px * var(--rk, 1));
     box-shadow: 0 22px 60px -14px rgba(0, 0, 0, 0.65);
     overflow: hidden;
     animation: pop 0.14s ease-out;
@@ -761,24 +761,24 @@
   .top { display: flex; align-items: center; justify-content: space-between; padding: 8px 8px 4px 10px; }
   .tabs { display: flex; gap: 2px; }
   .tab {
-    padding: 6px 12px; border-radius: 16px; border: none; background: transparent;
+    padding: 6px 12px; border-radius: calc(16px * var(--rk, 1)); border: none; background: transparent;
     color: var(--fg-muted); font-size: 13.5px; font-weight: 600; cursor: pointer;
   }
   .tab:hover { color: var(--fg); }
   .tab.active { background: var(--accent-soft); color: var(--accent); }
   .more-wrap { position: relative; }
-  .icon { width: 30px; height: 30px; border-radius: 8px; border: none; background: transparent; color: var(--fg-muted); cursor: pointer; display: grid; place-items: center; }
+  .icon { width: 30px; height: 30px; border-radius: calc(8px * var(--rk, 1)); border: none; background: transparent; color: var(--fg-muted); cursor: pointer; display: grid; place-items: center; }
   .icon:hover { background: var(--bg-hover); color: var(--fg); }
   .icon svg { width: 18px; height: 18px; }
   .menu {
     position: absolute; right: 0; top: calc(100% + 4px); z-index: 3; min-width: 230px;
-    background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: 10px;
+    background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: calc(10px * var(--rk, 1));
     box-shadow: 0 12px 30px -8px rgba(0, 0, 0, 0.6); padding: 4px;
   }
   .menu button {
     width: 100%; display: flex; justify-content: space-between; gap: 10px; align-items: center;
     background: transparent; border: none; color: var(--fg); text-align: left;
-    padding: 8px 10px; border-radius: 6px; font-size: 13px; cursor: pointer;
+    padding: 8px 10px; border-radius: calc(6px * var(--rk, 1)); font-size: 13px; cursor: pointer;
   }
   .menu button span { color: var(--fg-dim); font-size: 11px; }
   .menu button:hover { background: var(--accent-soft); color: var(--accent); }
@@ -786,7 +786,7 @@
   .search {
     display: flex; align-items: center; gap: 8px;
     margin: 4px 10px 6px; padding: 0 10px; height: 34px;
-    background: var(--bg-input); border-radius: 17px; color: var(--fg-dim);
+    background: var(--bg-input); border-radius: calc(17px * var(--rk, 1)); color: var(--fg-dim);
   }
   .search svg { width: 15px; height: 15px; flex-shrink: 0; }
   .search input { flex: 1; min-width: 0; background: transparent; border: none; outline: none; color: var(--fg); font-size: 13.5px; font-family: inherit; }
@@ -797,11 +797,11 @@
   .sec-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tg { width: 14px; height: 14px; flex-shrink: 0; display: inline-grid; }
   .tg :global(svg) { width: 14px; height: 14px; }
-  .sec-act { width: 22px; height: 22px; flex-shrink: 0; border-radius: 6px; border: none; background: var(--bg-input); color: var(--fg-muted); cursor: pointer; font-size: 13px; line-height: 1; display: grid; place-items: center; }
+  .sec-act { width: 22px; height: 22px; flex-shrink: 0; border-radius: calc(6px * var(--rk, 1)); border: none; background: var(--bg-input); color: var(--fg-muted); cursor: pointer; font-size: 13px; line-height: 1; display: grid; place-items: center; }
   .sec-act:hover:not(:disabled) { background: var(--bg-input); color: var(--accent); }
   .sec-act.spin { animation: sec-spin .9s linear infinite; }
   @keyframes sec-spin { to { transform: rotate(360deg); } }
-  .add-cell { display: grid; place-items: center; font-size: 22px; color: var(--fg-dim); border: 2px dashed var(--border-strong) !important; border-radius: 10px; }
+  .add-cell { display: grid; place-items: center; font-size: 22px; color: var(--fg-dim); border: 2px dashed var(--border-strong) !important; border-radius: calc(10px * var(--rk, 1)); }
   .add-cell:hover { color: var(--accent); border-color: var(--accent) !important; }
   .sec-title {
     position: sticky; top: 0; z-index: 1;
@@ -811,15 +811,15 @@
   .grid { display: grid; grid-template-columns: repeat(9, 1fr); gap: 0; }
   .grid.stickers { grid-template-columns: repeat(5, 1fr); gap: 4px; }
   .cell {
-    aspect-ratio: 1; border: none; background: transparent; border-radius: 8px; cursor: pointer;
+    aspect-ratio: 1; border: none; background: transparent; border-radius: calc(8px * var(--rk, 1)); cursor: pointer;
     display: grid; place-items: center; padding: 3px; min-width: 0;
   }
   .cell.e { font-size: 26px; line-height: 1; font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; }
-  .cell.s { padding: 4px; border-radius: 10px; }
+  .cell.s { padding: 4px; border-radius: calc(10px * var(--rk, 1)); }
   .cell:hover { background: var(--bg-hover); }
   .cell.s:hover { transform: scale(1.06); background: transparent; }
   .gifs { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; padding-top: 4px; }
-  .gif { aspect-ratio: 4 / 3; border: none; padding: 0; border-radius: 8px; overflow: hidden; background: var(--bg-input); cursor: pointer; }
+  .gif { aspect-ratio: 4 / 3; border: none; padding: 0; border-radius: calc(8px * var(--rk, 1)); overflow: hidden; background: var(--bg-input); cursor: pointer; }
   .gif:hover { outline: 2px solid var(--accent); }
 
   .bar {
@@ -827,7 +827,7 @@
     border-top: 1px solid var(--border); flex-shrink: 0;
   }
   .bar-btn {
-    flex-shrink: 0; width: 34px; height: 34px; border: none; border-radius: 8px; background: transparent;
+    flex-shrink: 0; width: 34px; height: 34px; border: none; border-radius: calc(8px * var(--rk, 1)); background: transparent;
     cursor: pointer; display: grid; place-items: center; padding: 4px; opacity: 0.55; filter: grayscale(0.8);
   }
   .bar-btn:hover { opacity: 0.9; filter: none; background: var(--bg-hover); }
@@ -838,19 +838,19 @@
   .empty-big { font-size: 34px; font-weight: 800; color: var(--fg-dim); margin-bottom: 8px; }
   .empty-hint { margin-top: 8px; font-size: 12px; color: var(--fg-dim); line-height: 1.5; }
 
-  .import { margin: 0 10px 6px; padding: 10px; border-radius: 10px; background: var(--bg-input); display: flex; flex-direction: column; gap: 6px; }
+  .import { margin: 0 10px 6px; padding: 10px; border-radius: calc(10px * var(--rk, 1)); background: var(--bg-input); display: flex; flex-direction: column; gap: 6px; }
   .imp-title { font-size: 12px; font-weight: 700; color: var(--fg); }
-  .import input { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 7px; color: var(--fg); padding: 6px 8px; font-size: 12px; min-width: 0; flex: 1; }
+  .import input { background: var(--bg-surface); border: 1px solid var(--border); border-radius: calc(7px * var(--rk, 1)); color: var(--fg); padding: 6px 8px; font-size: 12px; min-width: 0; flex: 1; }
   .import input:focus { outline: none; border-color: var(--accent); }
   .imp-line { display: flex; gap: 6px; }
-  .imp-go { border: none; border-radius: 7px; background: var(--accent); color: #06070C; font-weight: 700; font-size: 12px; padding: 0 12px; cursor: pointer; }
+  .imp-go { border: none; border-radius: calc(7px * var(--rk, 1)); background: var(--accent); color: #06070C; font-weight: 700; font-size: 12px; padding: 0 12px; cursor: pointer; }
   .imp-hint { font-size: 10.5px; color: var(--fg-dim); line-height: 1.4; }
   .import input { height: 32px; box-sizing: border-box; }
   .imp-line { align-items: stretch; }
   .imp-line .imp-go { height: 32px; }
   .imp-foot { display: flex; align-items: center; gap: 8px; }
   .imp-foot .imp-hint { flex: 1; }
-  .imp-close { flex: 0 0 auto; height: 26px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--border); background: transparent; color: var(--fg-muted); font-size: 11.5px; font-weight: 600; cursor: pointer; }
+  .imp-close { flex: 0 0 auto; height: 26px; padding: 0 10px; border-radius: calc(7px * var(--rk, 1)); border: 1px solid var(--border); background: transparent; color: var(--fg-muted); font-size: 11.5px; font-weight: 600; cursor: pointer; }
   .imp-close:hover { color: var(--fg); background: var(--bg-hover); }
   .imp-busy { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--fg-muted); line-height: 1.4; }
   .imp-spin {
@@ -861,7 +861,7 @@
   @keyframes imp-spin { to { transform: rotate(360deg); } }
   .imp-note {
     font-size: 11.5px; line-height: 1.45; color: var(--fg-muted);
-    padding: 8px 10px; border-radius: 8px;
+    padding: 8px 10px; border-radius: calc(8px * var(--rk, 1));
     background: color-mix(in srgb, var(--accent) 7%, transparent);
     border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
   }
@@ -879,7 +879,7 @@
     position: absolute; inset: 0; z-index: 5; display: grid; place-items: center;
     background: color-mix(in srgb, var(--accent) 16%, rgba(0, 0, 0, 0.55));
     color: #fff; font-weight: 800; font-size: 15px; pointer-events: none;
-    border: 2px dashed var(--accent); border-radius: 14px;
+    border: 2px dashed var(--accent); border-radius: calc(14px * var(--rk, 1));
   }
 
   /* ---- Phones: docked where the keyboard was, tabs as a pill below ---- */
@@ -893,8 +893,8 @@
       box-shadow: 0 -10px 30px -18px rgba(0,0,0,.7);
     }
     .panel.docked .top { order: 9; justify-content: center; position: relative; padding: 6px 10px 8px; }
-    .panel.docked .tabs { padding: 4px; border-radius: 22px; background: var(--bg-surface-2, var(--bg-input)); box-shadow: 0 6px 18px -10px rgba(0,0,0,.7); }
-    .panel.docked .tab { padding: 8px 18px; font-size: 15px; border-radius: 18px; }
+    .panel.docked .tabs { padding: 4px; border-radius: calc(22px * var(--rk, 1)); background: var(--bg-surface-2, var(--bg-input)); box-shadow: 0 6px 18px -10px rgba(0,0,0,.7); }
+    .panel.docked .tab { padding: 8px 18px; font-size: 15px; border-radius: calc(18px * var(--rk, 1)); }
     .panel.docked .more-wrap { position: absolute; right: 10px; }
     .panel.docked .menu { top: auto; bottom: calc(100% + 6px); }
   }

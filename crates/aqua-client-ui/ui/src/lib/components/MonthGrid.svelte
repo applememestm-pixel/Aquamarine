@@ -49,11 +49,11 @@
   .mg { display: flex; flex-direction: column; gap: 6px; user-select: none; }
   .mg-head { display: flex; align-items: center; gap: 6px; }
   .mg-title { flex: 1; text-align: center; font-weight: 700; font-size: 13.5px; text-transform: capitalize; }
-  .mg-nav { width: 28px; height: 28px; border-radius: 8px; border: none; background: var(--bg-hover); color: var(--fg); font-size: 16px; cursor: pointer; }
+  .mg-nav { width: 28px; height: 28px; border-radius: calc(8px * var(--rk, 1)); border: none; background: var(--bg-hover); color: var(--fg); font-size: 16px; cursor: pointer; }
   .mg-nav:hover { background: var(--bg-active); }
   .mg-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
   .mg-wd { text-align: center; font-size: 10.5px; font-weight: 700; color: var(--fg-dim); text-transform: uppercase; padding: 2px 0 4px; }
-  .mg-day { position: relative; aspect-ratio: 1; border: none; border-radius: 9px; background: none; color: var(--fg); font: inherit; font-size: 12.5px; cursor: pointer; }
+  .mg-day { position: relative; aspect-ratio: 1; border: none; border-radius: calc(9px * var(--rk, 1)); background: none; color: var(--fg); font: inherit; font-size: 12.5px; cursor: pointer; }
   .mg-day:hover { background: var(--bg-hover); }
   .mg-day.other { color: var(--fg-dim); opacity: 0.6; }
   .mg-day.today { color: var(--accent); font-weight: 800; }

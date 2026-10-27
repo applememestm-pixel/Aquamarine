@@ -5,6 +5,7 @@
 </script>
 
 <script lang="ts">
+  import Select from "./Select.svelte";
   import ColorInput from "./ColorInput.svelte";
   /**
    * Telegram-style sticker editor.
@@ -631,9 +632,7 @@
           <div class="sec">
             <div class="lbl">{$t("Pack")}</div>
             {#if packs.length && !newPack}
-              <select class="inp" bind:value={packName}>
-                {#each packs as p (p)}<option value={p}>{p}</option>{/each}
-              </select>
+              <Select class="inp" bind:value={packName} options={packs.map((p) => ({ value: p, label: p }))} />
               <button class="link" onclick={() => { newPack = true; packName = ""; }}>＋ {$t("New pack")}</button>
             {:else}
               <input class="inp" bind:value={packName} placeholder={$t("My stickers")} maxlength="48" />
@@ -663,14 +662,14 @@
   .backdrop { position: fixed; inset: 0; background: rgba(6, 7, 12, 0.72); backdrop-filter: blur(6px);
     display: grid; place-items: center; z-index: 275; padding: 16px; animation: fade .2s ease-out; }
   .sheet { width: min(940px, 96vw); max-height: 95vh; display: flex; flex-direction: column; background: var(--bg-shell);
-    border: 1px solid var(--border-strong); border-radius: 18px; box-shadow: 0 40px 90px -20px rgba(0,0,0,.7); overflow: hidden;
+    border: 1px solid var(--border-strong); border-radius: calc(18px * var(--rk, 1)); box-shadow: 0 40px 90px -20px rgba(0,0,0,.7); overflow: hidden;
     animation: pop .32s cubic-bezier(.2,.9,.25,1.1); }
   @keyframes fade { from { opacity: 0; } }
   @keyframes pop { from { opacity: 0; transform: translateY(14px) scale(.97); } }
   .head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
   .head h2 { margin: 0; font-size: 15px; font-weight: 800; flex: 1; }
   .hist { display: flex; gap: 4px; }
-  .ib { width: 32px; height: 32px; border-radius: 9px; border: 1px solid var(--border); background: transparent; color: var(--fg-muted);
+  .ib { width: 32px; height: 32px; border-radius: calc(9px * var(--rk, 1)); border: 1px solid var(--border); background: transparent; color: var(--fg-muted);
     font-size: 17px; cursor: pointer; transition: background .15s, color .15s; }
   .ib:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
   .ib.x { font-size: 20px; }
@@ -679,12 +678,12 @@
   .left { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
   .tools { display: flex; gap: 6px; flex-wrap: wrap; }
   .tool { flex: 1; min-width: 64px; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 7px 4px;
-    border: 1px solid var(--border); border-radius: 11px; background: var(--bg-input); color: var(--fg-muted); font-size: 11px; cursor: pointer;
+    border: 1px solid var(--border); border-radius: calc(11px * var(--rk, 1)); background: var(--bg-input); color: var(--fg-muted); font-size: 11px; cursor: pointer;
     transition: transform .2s cubic-bezier(.2,.8,.2,1), background .2s, color .2s, border-color .2s; }
   .tool svg { width: 18px; height: 18px; }
   .tool:hover:not(:disabled) { transform: translateY(-1px); color: var(--fg); }
   .tool.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
-  .stage { position: relative; aspect-ratio: 1; width: min(100%, 60vh); margin: 0 auto; border-radius: 14px; overflow: hidden;
+  .stage { position: relative; aspect-ratio: 1; width: min(100%, 60vh); margin: 0 auto; border-radius: calc(14px * var(--rk, 1)); overflow: hidden;
     background: repeating-conic-gradient(#1a1f2b 0 25%, #11151e 0 50%) 0 / 22px 22px; touch-action: none; }
   .stage canvas { width: 100%; height: 100%; display: block; cursor: grab; }
   .stage canvas:active { cursor: grabbing; }
@@ -694,7 +693,7 @@
   .hint { text-align: center; font-size: 11.5px; color: var(--fg-dim); }
 
   .right { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-  .sec { background: var(--bg-surface, var(--bg-input)); border: 1px solid var(--border); border-radius: 12px; padding: 10px;
+  .sec { background: var(--bg-surface, var(--bg-input)); border: 1px solid var(--border); border-radius: calc(12px * var(--rk, 1)); padding: 10px;
     display: flex; flex-direction: column; gap: 8px; animation: slide .25s cubic-bezier(.2,.8,.2,1); }
   @keyframes slide { from { opacity: 0; transform: translateX(8px); } }
   .sl { display: flex; flex-direction: column; gap: 4px; font-size: 11px; font-weight: 700; color: var(--fg-dim); text-transform: uppercase; letter-spacing: .05em; }
@@ -705,10 +704,10 @@
   .lbl b { color: var(--fg); font-size: 15px; text-transform: none; }
   .btns, .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
   .row input[type=range] { flex: 1; accent-color: var(--accent); }
-  .chip { border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); border-radius: 9px; padding: 6px 10px; font-size: 12px; cursor: pointer; }
+  .chip { border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); border-radius: calc(9px * var(--rk, 1)); padding: 6px 10px; font-size: 12px; cursor: pointer; }
   .chip:hover:not(:disabled) { border-color: var(--border-strong); }
   .chip.danger { color: #ff6b6b; }
-  .big { border: none; border-radius: 11px; padding: 10px; font-weight: 800; font-size: 13px; cursor: pointer;
+  .big { border: none; border-radius: calc(11px * var(--rk, 1)); padding: 10px; font-weight: 800; font-size: 13px; cursor: pointer;
     background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070c; transition: transform .2s, box-shadow .2s; }
   .big:hover { transform: translateY(-1px); box-shadow: 0 8px 20px -8px var(--accent-glow); }
   .colors { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
@@ -716,15 +715,15 @@
   .cc.sm { width: 18px; height: 18px; }
   .cc.on { border-color: var(--accent); transform: scale(1.15); }
   .colors input[type=color] { width: 26px; height: 26px; border: none; background: none; padding: 0; }
-  .inp { background: var(--bg-input); border: 1px solid var(--border); border-radius: 9px; color: var(--fg); font: inherit; font-size: 13px; padding: 7px 10px; outline: none; width: 100%; box-sizing: border-box; }
+  .inp { background: var(--bg-input); border: 1px solid var(--border); border-radius: calc(9px * var(--rk, 1)); color: var(--fg); font: inherit; font-size: 13px; padding: 7px 10px; outline: none; width: 100%; box-sizing: border-box; }
   .inp:focus { border-color: var(--accent); }
   .inp.sm { padding: 5px 9px; font-size: 12px; }
-  .seg { display: flex; gap: 3px; background: var(--bg-input); padding: 3px; border-radius: 9px; }
-  .seg button { flex: 1; border: none; background: transparent; color: var(--fg-muted); border-radius: 7px; padding: 5px; font-size: 12px; font-weight: 700; cursor: pointer; }
+  .seg { display: flex; gap: 3px; background: var(--bg-input); padding: 3px; border-radius: calc(9px * var(--rk, 1)); }
+  .seg button { flex: 1; border: none; background: transparent; color: var(--fg-muted); border-radius: calc(7px * var(--rk, 1)); padding: 5px; font-size: 12px; font-weight: 700; cursor: pointer; }
   .seg button.active { background: var(--accent-soft); color: var(--accent); }
   .tg { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
   .egrid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; max-height: 112px; overflow-y: auto; }
-  .em { aspect-ratio: 1; border: 1px solid transparent; border-radius: 7px; background: none; font-size: 18px; cursor: pointer; padding: 0; transition: transform .12s; }
+  .em { aspect-ratio: 1; border: 1px solid transparent; border-radius: calc(7px * var(--rk, 1)); background: none; font-size: 18px; cursor: pointer; padding: 0; transition: transform .12s; }
   .em:hover { background: var(--bg-hover); transform: scale(1.12); }
   .em.on { background: var(--accent-soft); border-color: var(--accent); }
   .link { align-self: flex-start; border: none; background: none; color: var(--accent); font-size: 12px; cursor: pointer; padding: 0; }
@@ -734,7 +733,7 @@
   .q-dot.done { background: var(--accent); opacity: .6; }
   .q-dot.cur { background: var(--accent); width: 30px; }
   .foot { display: flex; justify-content: flex-end; gap: 10px; padding: 10px 14px; border-top: 1px solid var(--border); background: var(--bg-list); }
-  .btn-ghost, .btn-primary { padding: 8px 18px; border-radius: 10px; font-size: 13px; font-weight: 700; cursor: pointer; border: none; }
+  .btn-ghost, .btn-primary { padding: 8px 18px; border-radius: calc(10px * var(--rk, 1)); font-size: 13px; font-weight: 700; cursor: pointer; border: none; }
   .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--fg-muted); }
   .btn-primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070C; box-shadow: 0 6px 16px -4px var(--accent-glow); transition: transform .2s; }
   .btn-primary:hover:not(:disabled) { transform: translateY(-1px); }

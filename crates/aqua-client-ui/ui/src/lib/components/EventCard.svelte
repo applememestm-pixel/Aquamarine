@@ -119,7 +119,7 @@
   .ev.out { border-color: color-mix(in srgb, var(--accent) 30%, transparent); background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 14%, transparent), transparent), var(--bg-bubble-in); }
   .ev.past { opacity: 0.75; }
   .ev-top { display: flex; gap: 12px; }
-  .ev-date { width: 50px; height: 54px; flex-shrink: 0; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: linear-gradient(160deg, var(--accent), var(--accent-2)); color: #06070C; }
+  .ev-date { width: 50px; height: 54px; flex-shrink: 0; border-radius: calc(12px * var(--rk, 1)); display: flex; flex-direction: column; align-items: center; justify-content: center; background: linear-gradient(160deg, var(--accent), var(--accent-2)); color: #06070C; }
   .ev-date b { font-size: 22px; line-height: 1; }
   .ev-date span { font-size: 11px; font-weight: 700; text-transform: uppercase; }
   .ev-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -135,7 +135,7 @@
   .ev-av:first-child { margin-left: 0; }
   .ev-count { font-size: 12px; color: var(--fg-muted); }
   .ev-btns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
-  .ev-btns button { border: 1px solid var(--border); border-radius: 9px; background: var(--bg-input); color: var(--fg); font: inherit; font-size: 12.5px; font-weight: 700; padding: 7px 4px; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
+  .ev-btns button { border: 1px solid var(--border); border-radius: calc(9px * var(--rk, 1)); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 12.5px; font-weight: 700; padding: 7px 4px; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
   .ev-btns button:hover { border-color: var(--border-strong); }
   .ev-btns button.on { background: var(--accent); border-color: var(--accent); color: #06070C; }
   .ev-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 10px; }

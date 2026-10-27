@@ -634,7 +634,7 @@
     display: flex; flex-direction: column;
     background: var(--bg-shell);
     border: 1px solid var(--border);
-    border-radius: 16px;
+    border-radius: calc(16px * var(--rk, 1));
     box-shadow: 0 32px 80px -16px rgba(0,0,0,0.6);
     overflow: hidden;
     animation: slide-up 0.22s ease-out;
@@ -646,17 +646,17 @@
     border-bottom: 1px solid var(--border);
   }
   .head h2 { margin: 0; font-size: 15.5px; font-weight: 700; }
-  .segmented { display: flex; background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; padding: 3px; gap: 2px; }
-  .segmented button { background: transparent; border: none; padding: 5px 12px; border-radius: 7px; color: var(--fg-muted); font-weight: 600; font-size: 12.5px; cursor: pointer; }
+  .segmented { display: flex; background: var(--bg-input); border: 1px solid var(--border); border-radius: calc(10px * var(--rk, 1)); padding: 3px; gap: 2px; }
+  .segmented button { background: transparent; border: none; padding: 5px 12px; border-radius: calc(7px * var(--rk, 1)); color: var(--fg-muted); font-weight: 600; font-size: 12.5px; cursor: pointer; }
   .segmented button.active { background: var(--accent-soft); color: var(--accent); }
-  .close { width: 30px; height: 30px; background: transparent; border: 1px solid var(--border); border-radius: 8px; color: var(--fg-dim); font-size: 18px; cursor: pointer; }
+  .close { width: 30px; height: 30px; background: transparent; border: 1px solid var(--border); border-radius: calc(8px * var(--rk, 1)); color: var(--fg-dim); font-size: 18px; cursor: pointer; }
 
   .body { flex: 1; min-height: 0; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
   .cover-row { display: flex; }
-  .cover { width: 100%; aspect-ratio: 16 / 6; border-radius: 12px; background-size: cover; background-position: center; position: relative; flex-shrink: 0; }
+  .cover { width: 100%; aspect-ratio: 16 / 6; border-radius: calc(12px * var(--rk, 1)); background-size: cover; background-position: center; position: relative; flex-shrink: 0; }
   .cover-remove { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; background: rgba(0,0,0,0.55); border: none; border-radius: 50%; color: #fff; font-size: 16px; cursor: pointer; }
-  .cover-change { position: absolute; bottom: 8px; right: 8px; padding: 4px 10px; background: rgba(0,0,0,0.55); border: none; border-radius: 8px; color: #fff; font-size: 12px; font-weight: 600; cursor: pointer; }
-  .cover-pick { width: 100%; padding: 14px; background: var(--bg-input); border: 1px dashed var(--border-strong); border-radius: 12px; color: var(--fg-dim); font-size: 13px; cursor: pointer; }
+  .cover-change { position: absolute; bottom: 8px; right: 8px; padding: 4px 10px; background: rgba(0,0,0,0.55); border: none; border-radius: calc(8px * var(--rk, 1)); color: #fff; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .cover-pick { width: 100%; padding: 14px; background: var(--bg-input); border: 1px dashed var(--border-strong); border-radius: calc(12px * var(--rk, 1)); color: var(--fg-dim); font-size: 13px; cursor: pointer; }
   .cover-pick:hover { color: var(--accent); border-color: var(--accent); }
 
   .title-input, .sub-input { background: transparent; border: none; outline: none; font-family: inherit; color: var(--fg); padding: 4px 0; }
@@ -668,13 +668,13 @@
   .toolbar {
     position: sticky; top: -16px; z-index: 2;
     display: flex; flex-wrap: wrap; align-items: center; gap: 3px;
-    padding: 5px; border-radius: 10px;
+    padding: 5px; border-radius: calc(10px * var(--rk, 1));
     background: var(--bg-list); border: 1px solid var(--border);
   }
   .tool {
     min-width: 30px; height: 28px; padding: 0 7px;
     display: inline-flex; align-items: center; justify-content: center; gap: 5px;
-    border: none; border-radius: 7px; background: transparent;
+    border: none; border-radius: calc(7px * var(--rk, 1)); background: transparent;
     color: var(--fg-muted); font-size: 13px; font-weight: 700; cursor: pointer;
   }
   .tool:hover { background: var(--bg-hover); color: var(--fg); }
@@ -688,29 +688,29 @@
 
   .body-input {
     flex: 1; min-height: 260px;
-    background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; outline: none;
+    background: var(--bg-input); border: 1px solid var(--border); border-radius: calc(10px * var(--rk, 1)); outline: none;
     color: var(--fg); font-family: inherit; font-size: 14.5px; line-height: 1.6;
     padding: 12px 14px; resize: none;
   }
   .body-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 
-  .tray { border: 1px solid var(--border); border-radius: 10px; padding: 8px; background: var(--bg-list); }
+  .tray { border: 1px solid var(--border); border-radius: calc(10px * var(--rk, 1)); padding: 8px; background: var(--bg-list); }
   .tray-head { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 700; color: var(--fg-muted); margin-bottom: 6px; }
   .tray-hint { font-weight: 500; color: var(--fg-dim); }
   .tray-list { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; }
-  .ph { position: relative; flex: 0 0 96px; height: 72px; border-radius: 8px; overflow: hidden; background: var(--bg-input); }
+  .ph { position: relative; flex: 0 0 96px; height: 72px; border-radius: calc(8px * var(--rk, 1)); overflow: hidden; background: var(--bg-input); }
   .ph.orphan { outline: 2px dashed var(--border-strong); outline-offset: -2px; }
   .ph.loading { background: linear-gradient(90deg, var(--bg-input), var(--bg-hover), var(--bg-input)); }
   .ph-img { all: unset; cursor: pointer; display: block; width: 100%; height: 100%; }
   .ph-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .ph-n { position: absolute; left: 4px; top: 4px; padding: 0 5px; border-radius: 6px; background: rgba(0,0,0,0.6); color: #fff; font-size: 10.5px; font-weight: 700; }
+  .ph-n { position: absolute; left: 4px; top: 4px; padding: 0 5px; border-radius: calc(6px * var(--rk, 1)); background: rgba(0,0,0,0.6); color: #fff; font-size: 10.5px; font-weight: 700; }
   .ph-x { position: absolute; right: 3px; top: 3px; width: 20px; height: 20px; border-radius: 50%; border: none; background: rgba(0,0,0,0.6); color: #fff; cursor: pointer; font-size: 13px; line-height: 1; }
   .ph.vid .ph-play { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-size: 18px; text-shadow: 0 0 6px #000; pointer-events: none; }
   .ph-icon { display: grid; place-items: center; width: 100%; height: 100%; font-size: 26px; }
   .ph.aud { flex-basis: 150px; display: flex; align-items: center; gap: 6px; padding: 0 26px 0 8px; }
   .ph.aud .ph-icon { width: auto; height: auto; font-size: 20px; }
   .aud-name { font-size: 11.5px; color: var(--fg-muted); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; word-break: break-all; }
-  .pv-music { font-size: 13px; color: var(--fg-muted); padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 14px; }
+  .pv-music { font-size: 13px; color: var(--fg-muted); padding: 8px 12px; border: 1px solid var(--border); border-radius: calc(10px * var(--rk, 1)); margin-bottom: 14px; }
   .up { color: var(--accent); font-weight: 700; }
   .ph-move { position: absolute; left: 0; right: 0; bottom: 0; display: flex; justify-content: space-between; opacity: 0; transition: opacity 0.15s; }
   .ph:hover .ph-move { opacity: 1; }
@@ -728,7 +728,7 @@
   .hint { font-size: 11.5px; color: var(--fg-dim); }
   .hint.warn { color: var(--warning, #f5a524); }
   .foot > div { display: flex; gap: 10px; }
-  .btn-ghost, .btn-primary { padding: 8px 18px; border-radius: 10px; font-size: 13px; font-weight: 700; cursor: pointer; border: none; }
+  .btn-ghost, .btn-primary { padding: 8px 18px; border-radius: calc(10px * var(--rk, 1)); font-size: 13px; font-weight: 700; cursor: pointer; border: none; }
   .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--fg-muted); }
   .btn-ghost:hover:not(:disabled) { color: var(--fg); border-color: var(--border-strong); }
   .btn-primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070C; box-shadow: 0 6px 16px -4px var(--accent-glow); }

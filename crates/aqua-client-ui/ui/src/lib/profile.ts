@@ -39,6 +39,10 @@ export interface Profile {
   game_note?: string;
   /** Profile version — bumped on every publish so peers refetch the card. */
   pv?: number;
+  /** Colour of the whole profile card; "" = taken from the banner. */
+  card?: string;
+  /** An emoji repeated over the banner in a soft pattern (Telegram-style). */
+  pattern?: string;
   /** Discord-style server tag I'm wearing (from a group I'm in). */
   clan?: { text: string; badge: string; color: string; gid?: string; title?: string; owner?: string };
 }

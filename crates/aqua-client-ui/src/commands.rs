@@ -50,6 +50,7 @@ pub fn complete_registration(
 #[tauri::command]
 pub fn log_out(state: State<'_, StdMutex<AppState>>) -> Result<InitInfo, String> {
     let mut s = state.lock().map_err(|e| e.to_string())?;
+    crate::storage::on_log_out(&mut s);
     s.log_out();
     Ok(s.init_info())
 }
@@ -1867,21 +1868,7 @@ pub fn read_media_bytes(
 /// writable without MediaStore, and the webview's asset protocol can only
 /// show files inside the app dirs — media saved there never appeared.)
 pub(crate) fn downloads_dir(data_dir: &std::path::Path) -> PathBuf {
-    #[cfg(target_os = "android")]
-    {
-        return data_dir.join("downloads");
-    }
-    #[cfg(target_os = "ios")]
-    {
-        return data_dir.join("Downloads");
-    }
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        let _ = data_dir;
-        dirs::download_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("Aquamarine")
-    }
+    crate::storage::downloads_dir(data_dir)
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -1925,6 +1912,22 @@ pub async fn download_file(
         }
     };
 
+    // The same file (same blob) already saved for another message — a
+    // sticker sent twice, a forwarded photo: point at that copy instead of
+    // downloading it again as "name (1).jpg".
+    let have = {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        s.chats.values().flat_map(|b| b.messages.iter()).find_map(|m| match &m.kind {
+            MessageKind::File { cid, saved_at: Some(p), .. } if *cid == envelope.cid && std::path::Path::new(p).is_file() => Some(p.clone()),
+            _ => None,
+        })
+    };
+    if let Some(saved_str) = have {
+        set_saved_at(&state, &peer_id, &message_id, &saved_str)?;
+        let _ = app.emit("aqua://chats_updated", ());
+        return Ok(DownloadResult { saved_path: saved_str });
+    }
+
     // Download blob.
     let transport = {
         let s = state.lock().map_err(|e| e.to_string())?;
@@ -1944,29 +1947,66 @@ pub async fn download_file(
     };
     let base = downloads_dir(&data_dir);
     std::fs::create_dir_all(&base).map_err(|e| format!("mkdir: {e}"))?;
-    let save_path = pick_unique_path(&base, &envelope.filename);
-    std::fs::write(&save_path, &plaintext).map_err(|e| format!("write: {e}"))?;
+    // A file of that name with exactly these bytes is already there: reuse it.
+    let same = base.join(sanitize_name(&envelope.filename));
+    let save_path = if std::fs::read(&same).map(|b| b == plaintext).unwrap_or(false) {
+        same
+    } else {
+        let p = pick_unique_path(&base, &envelope.filename);
+        std::fs::write(&p, &plaintext).map_err(|e| format!("write: {e}"))?;
+        p
+    };
     let saved_str = save_path.to_string_lossy().to_string();
+    set_saved_at(&state, &peer_id, &message_id, &saved_str)?;
+    // Keep within the limits (Settings → Data and storage).
+    if let Ok(mut s) = state.lock() { crate::storage::trim(&mut s); }
+    let _ = app.emit("aqua://chats_updated", ());
+    Ok(DownloadResult { saved_path: saved_str })
+}
 
-    // Update the message's saved_at.
-    {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
-        if let Some(book) = s.chats.get_mut(&peer_id) {
-            if let Some(msg) = book.messages.iter_mut().find(|m| m.id == message_id) {
-                if let MessageKind::File { saved_at, .. } = &mut msg.kind {
-                    *saved_at = Some(saved_str.clone());
-                }
+fn set_saved_at(state: &State<'_, StdMutex<AppState>>, peer_id: &str, message_id: &str, path: &str) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| e.to_string())?;
+    if let Some(book) = s.chats.get_mut(peer_id) {
+        if let Some(msg) = book.messages.iter_mut().find(|m| m.id == message_id) {
+            if let MessageKind::File { saved_at, .. } = &mut msg.kind {
+                *saved_at = Some(path.to_string());
             }
         }
     }
-    let _ = app.emit("aqua://chats_updated", ());
-    Ok(DownloadResult { saved_path: saved_str })
+    Ok(())
+}
+
+/// Open a received file in the system's app for it (PDF viewer, player…).
+/// Only files the app saved itself — never an arbitrary path.
+#[tauri::command]
+pub fn open_saved_file(state: State<'_, StdMutex<AppState>>, path: String) -> Result<(), String> {
+    let (data_dir, known) = {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        let known = s.chats.values().flat_map(|b| b.messages.iter()).any(|m| matches!(&m.kind, MessageKind::File { saved_at: Some(p), .. } if *p == path));
+        (s.data_dir.clone(), known)
+    };
+    // Only a path the app itself wrote for a message (`saved_at` is local,
+    // never sent by anyone) — wherever the download folder was at the time.
+    let _ = &data_dir;
+    if !known {
+        return Err("not a file saved by Aquamarine".into());
+    }
+    let p = std::path::Path::new(&path).canonicalize().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "linux")]
+    let r = std::process::Command::new("xdg-open").arg(&p).spawn();
+    #[cfg(target_os = "macos")]
+    let r = std::process::Command::new("open").arg(&p).spawn();
+    #[cfg(target_os = "windows")]
+    let r = std::process::Command::new("explorer").arg(&p).spawn();
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    let r: std::io::Result<std::process::Child> = Err(std::io::Error::other("opening files is not supported here"));
+    r.map(|_| ()).map_err(|e| e.to_string())
 }
 
 // ---- Article media (videos in carousels, music playlists) ---------------
 
 fn media_cache_dir(data_dir: &std::path::Path) -> PathBuf {
-    data_dir.join("media-cache")
+    crate::storage::media_cache_dir(data_dir)
 }
 
 fn media_ext(mime: Option<&str>, name: &str) -> String {
@@ -2148,7 +2188,16 @@ fn mime_from_extension(path: &std::path::Path) -> Option<String> {
     })
 }
 
+/// Only the last part of a sender-chosen name: no folders, no "..".
+fn sanitize_name(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or("").trim();
+    let clean: String = base.chars().filter(|c| !c.is_control() && !matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|')).collect();
+    let clean = clean.trim_matches('.').trim().to_string();
+    if clean.is_empty() { "file".into() } else { clean.chars().take(180).collect() }
+}
+
 fn pick_unique_path(dir: &std::path::Path, filename: &str) -> PathBuf {
+    let filename = &sanitize_name(filename);
     let mut candidate = dir.join(filename);
     if !candidate.exists() {
         return candidate;
@@ -3153,9 +3202,14 @@ async fn on_incoming_initial(
         s.sessions.insert(addr.clone(), session);
     }
     crate::multidev::note_sender(&addr);
+    // Presence, typing, group traffic… may open a session too (a new device
+    // of theirs): handle it like any other envelope, never as a bubble.
+    // The same path covers my own devices and blocked people.
     let from = crate::multidev::base_user(&addr).to_string();
-    if state.lock().ok().and_then(|s| s.username.clone()).as_deref() == Some(from.as_str()) {
-        crate::multidev::handle_own_device(app, &plain_text);
+    let mine = state.lock().ok().and_then(|s| s.username.clone()).as_deref() == Some(from.as_str());
+    let blocked = state.lock().map(|s| s.prefs.blocked.contains(&from)).unwrap_or(false);
+    if mine || blocked || is_control_text(&plain_text) {
+        on_incoming_text(app, &addr, plain_text).await;
         return;
     }
 
@@ -3164,16 +3218,6 @@ async fn on_incoming_initial(
     {
         let mut s = match state.lock() { Ok(s) => s, Err(_) => return };
         is_new_chat = !s.chats.contains_key(&from);
-        // A group payload may ride as the very first X3DH message (that's how
-        // a new member learns the group exists). Route it rather than opening
-        // a 1:1 chat. The session we just stored stays — it's reused for
-        // subsequent fan-out both ways.
-        let is_group = plain_text.starts_with(GRPINFO_PREFIX) || plain_text.starts_with(GRPMSG_PREFIX);
-        if is_group {
-            drop(s);
-            route_group_payload(app, &from, &plain_text);
-            return;
-        }
         if is_new_chat {
             let (letter, gradient) = gradient_for(&from);
             let summary = ChatSummary {
@@ -3227,7 +3271,25 @@ async fn on_incoming_envelope(
         }
         String::from_utf8_lossy(&plain).to_string()
     };
-    let from = crate::multidev::base_user(&addr).to_string();
+    on_incoming_text(app, &addr, text).await;
+}
+
+/// Is this a control payload (presence, typing, edits, group traffic…)
+/// rather than a message to show? Those must never become a bubble, even
+/// when one happens to open a new session (X3DH initial message).
+pub(crate) fn is_control_text(text: &str) -> bool {
+    text.starts_with(CALL_PREFIX)
+        || [POLLVOTE_PREFIX, POLLCLOSE_PREFIX, SEEN_PREFIX, STATUS_PREFIX, REACT_PREFIX, TYPING_PREFIX,
+            EDIT_PREFIX, DEL_PREFIX, REN_PREFIX, CTL_PREFIX, GCALL_PREFIX, GRPINFO_PREFIX, GRPSELF_PREFIX,
+            GRPJOIN_PREFIX, GRPLEAVE_PREFIX, GRPCTL_PREFIX, GRPMSG_PREFIX, crate::autodelete::TTL_PREFIX]
+            .iter().any(|p| text.starts_with(p))
+}
+
+/// A decrypted payload from `addr` (a device of some account): control
+/// messages are applied, the rest lands in the chat.
+async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
+    let state: State<'_, StdMutex<AppState>> = app.state();
+    let from = crate::multidev::base_user(addr).to_string();
     // Sent by another device of mine.
     if state.lock().ok().and_then(|s| s.username.clone()).as_deref() == Some(from.as_str()) {
         crate::multidev::handle_own_device(app, &text);
@@ -3827,6 +3889,29 @@ fn push_replies(s: &mut AppState, text: String, time: &str) {
 #[cfg(test)]
 mod replies_tests {
     use super::reply_note;
+    #[test]
+    fn file_names_stay_in_their_folder() {
+        assert_eq!(super::sanitize_name("../../.bashrc"), "bashrc");
+        assert_eq!(super::sanitize_name("C:\\Windows\\evil.exe"), "evil.exe");
+        assert_eq!(super::sanitize_name("photo.jpg"), "photo.jpg");
+        assert_eq!(super::sanitize_name(".."), "file");
+    }
+
+    #[test]
+    fn control_payloads_never_become_bubbles() {
+        assert!(super::is_control_text(r#"[status:v1]{"online":"offline","pp":{"birthday":"27 февраля"}}"#));
+        assert!(super::is_control_text("[typing:v1]"));
+        assert!(super::is_control_text("AQUA-CALL:v1:{}"));
+        assert!(super::is_control_text(r#"[grpmsg:v1]{"gid":"g"}"#));
+        assert!(!super::is_control_text("привет"));
+        assert!(!super::is_control_text(r#"[reply:v1]{"q":"x","t":"y"}"#));
+        let m = crate::state::ChatMessage {
+            id: "1".into(), from: "vpst".into(), time: "18:22".into(),
+            kind: crate::state::MessageKind::Text { text: "[status:v1]{}".into() }, meta: None,
+        };
+        assert!(crate::state::stray_control(&m));
+    }
+
     #[test]
     fn replies_finds_what_is_for_me() {
         let r = reply_note("bob", "ann", "Club", r#"[reply:v1]{"quoted_author":"bob","quoted_text":"hi","text":"hey"}"#).unwrap();

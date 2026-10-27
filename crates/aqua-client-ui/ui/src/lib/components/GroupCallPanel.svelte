@@ -161,7 +161,7 @@
   .live-dot { width: 8px; height: 8px; border-radius: 50%; background: #3ddc84; box-shadow: 0 0 10px #3ddc84; animation: pulse 1.6s ease-in-out infinite; flex-shrink: 0; }
   @keyframes pulse { 50% { opacity: 0.45; } }
   .stage {
-    margin: 8px 12px 0; border-radius: 16px; border: 1px solid var(--border-strong); overflow: hidden;
+    margin: 8px 12px 0; border-radius: calc(16px * var(--rk, 1)); border: 1px solid var(--border-strong); overflow: hidden;
     background: radial-gradient(600px 220px at 50% 0%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 70%), var(--bg-shell);
     box-shadow: 0 18px 40px -22px rgba(0, 0, 0, 0.8);
   }
@@ -177,14 +177,14 @@
   .stage.full .st-head { padding: 12px 18px; font-size: 14px; }
   .fu-room { font-size: 15px; }
   .fu-chat { display: flex; align-items: center; gap: 6px; border: 1px solid var(--border-strong); background: var(--bg-input); color: var(--fg);
-    border-radius: 10px; padding: 7px 12px; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; transition: background .2s, color .2s, border-color .2s; }
+    border-radius: calc(10px * var(--rk, 1)); padding: 7px 12px; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; transition: background .2s, color .2s, border-color .2s; }
   .fu-chat svg { width: 16px; height: 16px; }
   .fu-chat:hover, .fu-chat.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
   .stage.full .grid { flex: 1; max-height: none; padding: 8px 24px; align-content: center; gap: 12px;
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
   .stage.full .grid.solo { grid-template-columns: minmax(0, min(100%, 760px)); }
   .stage.full .grid.focus { grid-template-columns: 1fr; }
-  .stage.full .tile { border-radius: 16px; background: #15171f; animation: tile-in .35s cubic-bezier(.2,.9,.25,1.1) both; }
+  .stage.full .tile { border-radius: calc(16px * var(--rk, 1)); background: #15171f; animation: tile-in .35s cubic-bezier(.2,.9,.25,1.1) both; }
   @keyframes tile-in { from { opacity: 0; transform: scale(.94); } }
   .stage.full .ava { width: 96px; height: 96px; font-size: 38px; position: relative; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
   .stage.full .tile.speaking .ava { box-shadow: 0 0 0 4px #3ddc84, 0 10px 30px rgba(0,0,0,.5); }
@@ -194,15 +194,15 @@
   .stage.full .cb { width: 50px; height: 50px; }
   .grid.focus { grid-template-columns: 1fr; }
   .tile {
-    position: relative; aspect-ratio: 16 / 9; border-radius: 12px; background: var(--bg-input); border: 2px solid transparent;
+    position: relative; aspect-ratio: 16 / 9; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-input); border: 2px solid transparent;
     display: grid; place-items: center; overflow: hidden; cursor: pointer; padding: 0; color: var(--fg); transition: border-color 0.12s, box-shadow 0.12s;
   }
   .tile.speaking { border-color: #3ddc84; box-shadow: 0 0 0 2px rgba(61, 220, 132, 0.25), 0 0 22px -4px rgba(61, 220, 132, 0.6); }
   .tile video { width: 100%; height: 100%; object-fit: cover; background: #000; }
   .tile video.mirror { transform: scaleX(-1); }
-  .ava { width: 56px; height: 56px; border-radius: 50%; overflow: hidden; display: grid; place-items: center; font-weight: 800; font-size: 22px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070c; }
+  .ava { width: 56px; height: 56px; border-radius: var(--ava-r, 50%); overflow: hidden; display: grid; place-items: center; font-weight: 800; font-size: 22px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070c; }
   .ava img { width: 100%; height: 100%; object-fit: cover; }
-  .name { position: absolute; left: 8px; bottom: 6px; display: flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 6px; background: rgba(0, 0, 0, 0.55); color: #fff; }
+  .name { position: absolute; left: 8px; bottom: 6px; display: flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: calc(6px * var(--rk, 1)); background: rgba(0, 0, 0, 0.55); color: #fff; }
   .name svg { width: 12px; height: 12px; color: #ff6b6b; }
   .conn { position: absolute; top: 6px; right: 8px; font-size: 10.5px; color: var(--fg-dim); }
   .empty { grid-column: 1 / -1; padding: 24px; text-align: center; color: var(--fg-muted); font-size: 13px; }
@@ -218,7 +218,7 @@
   .cb.leave, .pb.leave { background: #ed4245; border-color: #ed4245; color: #fff; }
   .cb.leave:hover, .pb.leave:hover { box-shadow: 0 0 16px -2px rgba(237, 66, 69, 0.8); color: #fff; }
   .join-bar {
-    display: flex; align-items: center; gap: 10px; margin: 8px 12px 0; padding: 9px 12px; border-radius: 12px;
+    display: flex; align-items: center; gap: 10px; margin: 8px 12px 0; padding: 9px 12px; border-radius: calc(12px * var(--rk, 1));
     border: 1px solid color-mix(in srgb, #3ddc84 35%, transparent); background: color-mix(in srgb, #3ddc84 8%, var(--bg-shell));
     font-size: 13px; color: var(--fg);
   }
@@ -227,9 +227,9 @@
   .jb-avas { display: flex; }
   .mini { width: 24px; height: 24px; border-radius: 50%; margin-left: -6px; border: 2px solid var(--bg-shell); overflow: hidden; display: grid; place-items: center; font-size: 10px; font-weight: 800; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070c; }
   .mini img { width: 100%; height: 100%; object-fit: cover; }
-  .jb-btn { border: none; border-radius: 9px; padding: 7px 16px; font: inherit; font-weight: 800; font-size: 13px; cursor: pointer; background: #3ddc84; color: #06070c; }
+  .jb-btn { border: none; border-radius: calc(9px * var(--rk, 1)); padding: 7px 16px; font: inherit; font-weight: 800; font-size: 13px; cursor: pointer; background: #3ddc84; color: #06070c; }
   .pill {
-    display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 12px; margin: 0 8px 8px;
+    display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: calc(12px * var(--rk, 1)); margin: 0 8px 8px;
     background: var(--bg-shell); border: 1px solid color-mix(in srgb, #3ddc84 40%, transparent);
   }
   .pill-main { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; background: none; border: none; color: var(--fg); cursor: pointer; font: inherit; text-align: left; }

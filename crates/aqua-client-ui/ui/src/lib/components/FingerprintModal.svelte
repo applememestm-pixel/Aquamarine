@@ -34,6 +34,22 @@
   import { t, tr } from "../i18n";
   import { onMount } from "svelte";
   import { showToast } from "./Toast.svelte";
+  import QrCode from "./QrCode.svelte";
+  import { scanQr } from "./QrScanner.svelte";
+  import { keyQr, parseQr } from "../qr";
+  import { info } from "../stores";
+
+  let showQr = $state(false);
+  /** Signal-style: scan the code on their screen; it must be the same. */
+  async function scanTheirs() {
+    const text = await scanQr();
+    const v = get(view);
+    if (!text || !v) return;
+    const r = parseQr(text);
+    if (!r || r.kind !== "key") { showToast(tr("That QR code isn't a key check")); return; }
+    if (r.code.toLowerCase() === v.hex.replace(/\s+/g, "").toLowerCase()) markVerified();
+    else showToast(tr("The codes are different — this is not the same key. Don't trust this chat until you find out why."), 8000);
+  }
 
   onMount(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeFingerprint(); };
@@ -41,7 +57,7 @@
     return () => document.removeEventListener("keydown", onKey);
   });
 
-  const state = $derived($view && $peer ? keyState($peer, $view.peer_key, $verifiedKeys) : "unverified");
+  const kstate = $derived($view && $peer ? keyState($peer, $view.peer_key, $verifiedKeys) : "unverified");
 
   function markVerified() {
     const v = get(view), id = get(peer);
@@ -67,9 +83,9 @@
   >
     <div class="modal" role="dialog" aria-modal="true">
       <h2>{$t("Verify {name}'s key", { name: $view.peer_name })}</h2>
-      {#if state === "changed"}
+      {#if kstate === "changed"}
         <p class="fp-warn">{$t("{name}'s key has changed since you verified it. That happens after reinstalling the app or signing in anew — or when someone is trying to read the chat. Compare the words again.", { name: $view.peer_name })}</p>
-      {:else if state === "verified"}
+      {:else if kstate === "verified"}
         <p class="fp-ok">{$t("Verified: these words matched on both phones.")}</p>
       {/if}
       <p>{$t("Open this window in the same chat on {name}'s device — in person, or over a call where you know the voice. If the words are the same on both screens, nobody stands between you.", { name: $view.peer_name })}</p>
@@ -78,12 +94,19 @@
           <div class="word">{w}</div>
         {/each}
       </div>
+      {#if showQr}
+        <div class="fp-qr"><QrCode text={keyQr($info?.username ?? "", $view.hex)} size={200} letter="🔒" /></div>
+      {/if}
+      <div class="fp-qr-btns">
+        <button class="btn" onclick={() => (showQr = !showQr)}>{showQr ? $t("Hide my QR") : $t("Show my QR")}</button>
+        <button class="btn" onclick={scanTheirs}>{$t("Scan their QR")}</button>
+      </div>
       <div class="fp-instruction">
         {$t("Safety code:")}
         <span class="hex">{$view.hex}</span>
       </div>
       <div class="modal-actions">
-        {#if state === "verified"}
+        {#if kstate === "verified"}
           <button class="btn" onclick={unverify}>{$t("Mark as not verified")}</button>
           <button class="btn primary" onclick={closeFingerprint}>{$t("Done")}</button>
         {:else}
@@ -96,6 +119,9 @@
 {/if}
 
 <style>
+  .fp-qr { display: grid; place-items: center; margin: -6px 0 14px; }
+  .fp-qr-btns { display: flex; gap: 8px; margin-bottom: 16px; }
+  .fp-qr-btns .btn { flex: 1; }
   .fp-warn { color: #F0B232; font-weight: 600; }
   .fp-ok { color: #3BD671; font-weight: 600; }
   .modal-bg {
@@ -111,7 +137,7 @@
   .modal {
     background: var(--bg-surface);
     border: 1px solid var(--border-strong);
-    border-radius: 16px;
+    border-radius: calc(16px * var(--rk, 1));
     padding: 28px;
     max-width: 420px;
     width: 100%;
@@ -126,7 +152,7 @@
     padding: 16px;
     background: var(--bg-input);
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: calc(12px * var(--rk, 1));
     font-family: var(--font-mono);
     font-size: 15px;
     letter-spacing: 0.03em;
@@ -137,7 +163,7 @@
     font-weight: 500;
     padding: 4px 10px;
     background: color-mix(in srgb, var(--accent) 6%, transparent);
-    border-radius: 6px;
+    border-radius: calc(6px * var(--rk, 1));
     text-align: center;
   }
   .word:nth-child(even) { color: var(--accent-2); background: color-mix(in srgb, var(--accent-2) 6%, transparent); }
@@ -146,7 +172,7 @@
     color: var(--fg-muted);
     padding: 10px 12px;
     background: rgba(0,0,0,0.2);
-    border-radius: 8px;
+    border-radius: calc(8px * var(--rk, 1));
     border-left: 2px solid var(--accent);
     margin-bottom: 20px;
     word-break: break-all;
@@ -159,7 +185,7 @@
   .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
   .btn {
     padding: 10px 18px;
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     border: 1px solid var(--border-strong);
     background: var(--bg-input);
     color: var(--fg);

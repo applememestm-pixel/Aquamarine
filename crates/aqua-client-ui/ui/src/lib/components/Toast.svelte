@@ -32,7 +32,7 @@
     border: 1px solid var(--border-strong);
     color: var(--fg);
     padding: 10px 18px;
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     font-size: 13px;
     opacity: 0;
     transition: all 0.25s ease;

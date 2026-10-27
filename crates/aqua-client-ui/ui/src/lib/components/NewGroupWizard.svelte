@@ -152,33 +152,33 @@
   .backdrop { position: fixed; inset: 0; background: rgba(6,7,12,0.6); backdrop-filter: blur(4px);
               display: grid; place-items: center; z-index: 130; padding: 20px; }
   .sheet { width: min(460px, 94vw); max-height: 88vh; overflow-y: auto; background: var(--bg-shell);
-           border: 1px solid var(--border-strong); border-radius: 18px; padding: 20px;
+           border: 1px solid var(--border-strong); border-radius: calc(18px * var(--rk, 1)); padding: 20px;
            box-shadow: 0 40px 90px -24px rgba(0,0,0,0.7);  animation: aq-pop .3s var(--ease-spring, ease-out); }
   .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
   .head h2 { margin: 0; font-size: 18px; font-weight: 800; }
-  .x { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--border);
+  .x { width: 30px; height: 30px; border-radius: calc(8px * var(--rk, 1)); border: 1px solid var(--border);
        background: transparent; color: var(--fg-dim); font-size: 18px; cursor: pointer; }
   .x:hover { color: var(--fg); background: var(--bg-hover); }
 
-  .seg { display: flex; gap: 4px; background: var(--bg-input); border-radius: 10px; padding: 4px; }
+  .seg { display: flex; gap: 4px; background: var(--bg-input); border-radius: calc(10px * var(--rk, 1)); padding: 4px; }
   .seg button { flex: 1; padding: 7px; border: none; background: transparent; color: var(--fg-muted);
-                font-size: 12.5px; font-weight: 600; border-radius: 7px; cursor: pointer; }
+                font-size: 12.5px; font-weight: 600; border-radius: calc(7px * var(--rk, 1)); cursor: pointer; }
   .seg button.active { background: var(--accent-soft); color: var(--accent); }
   .hint { font-size: 12px; color: var(--fg-dim); margin: 8px 2px 14px; line-height: 1.5; }
 
   .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
   .field > span { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-dim); }
   .field input, .field textarea { background: var(--bg-input); border: 1px solid var(--border);
-    border-radius: 10px; color: var(--fg); font: inherit; font-size: 14px; padding: 9px 12px; outline: none; resize: vertical; }
+    border-radius: calc(10px * var(--rk, 1)); color: var(--fg); font: inherit; font-size: 14px; padding: 9px 12px; outline: none; resize: vertical; }
   .field input:focus, .field textarea:focus { border-color: var(--accent); }
 
   .members { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto;
-             border: 1px solid var(--border); border-radius: 10px; padding: 6px; }
-  .member { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 8px;
+             border: 1px solid var(--border); border-radius: calc(10px * var(--rk, 1)); padding: 6px; }
+  .member { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: calc(8px * var(--rk, 1));
             border: none; background: transparent; cursor: pointer; text-align: left; }
   .member:hover { background: var(--bg-hover); }
   .member.on { background: var(--accent-soft); }
-  .m-ava { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
+  .m-ava { width: 28px; height: 28px; border-radius: var(--ava-r, 50%); display: grid; place-items: center;
            color: #06070C; font-weight: 700; font-size: 12px; flex-shrink: 0; }
   .m-name { flex: 1; font-size: 13.5px; color: var(--fg); }
   .m-check { color: var(--accent); font-weight: 700; }
@@ -186,7 +186,7 @@
   .empty { font-size: 13px; color: var(--fg-dim); padding: 8px 2px; }
 
   .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
-  .ghost, .primary { padding: 9px 18px; border-radius: 10px; font-size: 13px; font-weight: 700; cursor: pointer; border: none; }
+  .ghost, .primary { padding: 9px 18px; border-radius: calc(10px * var(--rk, 1)); font-size: 13px; font-weight: 700; cursor: pointer; border: none; }
   .ghost { background: transparent; border: 1px solid var(--border); color: var(--fg-muted); }
   .primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070C; }
   .primary:disabled { opacity: 0.5; cursor: default; }

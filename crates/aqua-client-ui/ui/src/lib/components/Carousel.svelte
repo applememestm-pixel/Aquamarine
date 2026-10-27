@@ -198,7 +198,7 @@
     aspect-ratio: var(--ar);
     max-height: 70vh;
     overflow: hidden;
-    border-radius: 12px;
+    border-radius: calc(12px * var(--rk, 1));
     background: #05060a;
     touch-action: pan-y;
     user-select: none;
@@ -235,7 +235,7 @@
   @keyframes c-spin { to { transform: rotate(360deg); } }
   .vlabel {
     position: absolute; left: 10px; bottom: 10px; max-width: calc(100% - 20px);
-    padding: 2px 8px; border-radius: 8px; background: rgba(0, 0, 0, 0.6); color: #fff;
+    padding: 2px 8px; border-radius: calc(8px * var(--rk, 1)); background: rgba(0, 0, 0, 0.6); color: #fff;
     font-size: 11.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .nav {
@@ -251,7 +251,7 @@
   .next { right: 10px; }
   .count {
     position: absolute; top: 10px; right: 10px;
-    padding: 2px 9px; border-radius: 10px;
+    padding: 2px 9px; border-radius: calc(10px * var(--rk, 1));
     background: rgba(0, 0, 0, 0.55); color: #fff;
     font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums;
     pointer-events: none;
@@ -269,7 +269,7 @@
   .thumbs { display: flex; gap: 6px; margin-top: 8px; overflow-x: auto; padding-bottom: 2px; }
   .thumb {
     position: relative; flex: 0 0 64px; height: 48px; padding: 0;
-    border-radius: 8px; overflow: hidden; cursor: pointer;
+    border-radius: calc(8px * var(--rk, 1)); overflow: hidden; cursor: pointer;
     border: 2px solid transparent; background: var(--bg-input); opacity: 0.6;
   }
   .thumb.on { border-color: var(--accent); opacity: 1; }

@@ -45,7 +45,7 @@ export function setPeerPresence(peer: string, p: Presence) {
 /** Peers re-announce presence every HEARTBEAT; silence for longer than
  *  STALE means they closed the app / lost the connection. */
 const HEARTBEAT_MS = 90_000;
-const STALE_MS = 4 * 60_000;
+const STALE_MS = 200_000;
 /** Ticks every 30 s so "online" dots expire without other UI activity. */
 export const presenceNow = readable(Date.now(), (set) => {
   const t = setInterval(() => set(Date.now()), 30_000);
@@ -171,6 +171,14 @@ export function initPresence() {
   // and say goodbye when the window closes.
   setInterval(() => broadcastPresence(), HEARTBEAT_MS);
   window.addEventListener("beforeunload", () => broadcastOffline());
+  // Phones: the app in the background is "offline" right away, like
+  // Telegram — not a lingering "online"/"away" until it goes stale.
+  if (document.documentElement.classList.contains("phone")) {
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") broadcastOffline();
+      else broadcastPresence();
+    });
+  }
 }
 
 /** Best-effort "I'm gone" to every live chat (app closing). */

@@ -529,7 +529,7 @@
     overflow-y: auto;
     overflow-x: hidden;
     padding: 28px 28px 20px;
-    border-radius: 22px;
+    border-radius: calc(22px * var(--rk, 1));
     background:
       radial-gradient(120% 60% at 50% 0%, var(--accent-soft), transparent 60%),
       var(--bg-shell);
@@ -566,7 +566,7 @@
   .mp-cover img, .mp-tile {
     position: relative;
     width: 100%; height: 100%;
-    border-radius: 18px;
+    border-radius: calc(18px * var(--rk, 1));
     border: 1px solid var(--border-strong);
     object-fit: cover;
     display: block;
@@ -660,7 +660,7 @@
   .mp-seek .bubble {
     position: absolute; bottom: calc(100% + 6px);
     transform: translateX(-50%);
-    padding: 3px 7px; border-radius: 6px;
+    padding: 3px 7px; border-radius: calc(6px * var(--rk, 1));
     background: var(--bg-surface); border: 1px solid var(--border-strong);
     font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
     color: var(--accent);
@@ -719,7 +719,7 @@
     width: 32px; height: 32px; padding: 0;
     display: grid; place-items: center;
     flex-shrink: 0;
-    border-radius: 8px;
+    border-radius: calc(8px * var(--rk, 1));
     border: 1px solid transparent; background: transparent;
     color: var(--fg-muted); cursor: pointer;
   }
@@ -757,14 +757,14 @@
   .chips {
     display: flex; gap: 4px; flex-wrap: wrap;
     padding: 3px;
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     background: var(--bg-input);
     border: 1px solid var(--border);
   }
   .chip {
     min-width: 40px;
     padding: 4px 7px;
-    border-radius: 7px;
+    border-radius: calc(7px * var(--rk, 1));
     border: 1px solid transparent;
     background: transparent;
     color: var(--fg-muted);

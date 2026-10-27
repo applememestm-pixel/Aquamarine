@@ -155,7 +155,7 @@
   .pill { display: none; }
   .brand {
     width: 40px; height: 40px;
-    border-radius: 12px;
+    border-radius: calc(12px * var(--rk, 1));
     display: block; object-fit: cover;
     margin-bottom: 10px;
     box-shadow: 0 0 24px -4px var(--accent-glow);
@@ -166,7 +166,7 @@
     display: grid; place-items: center;
     background: transparent;
     border: none;
-    border-radius: 12px;
+    border-radius: calc(12px * var(--rk, 1));
     color: var(--fg-muted);
     cursor: pointer;
     transition: background-color .15s ease, color .15s ease;
@@ -198,7 +198,7 @@
     border: 1px solid var(--border-strong);
     color: var(--fg);
     padding: 6px 10px;
-    border-radius: 8px;
+    border-radius: calc(8px * var(--rk, 1));
     font-size: 12px;
     font-weight: 500;
     white-space: nowrap;
@@ -220,7 +220,7 @@
       padding: 4px;
       gap: 0;
       border: 1px solid var(--border-strong);
-      border-radius: 24px;
+      border-radius: calc(24px * var(--rk, 1));
       /* Frosted glass: the list shows through, softly. */
       background: color-mix(in srgb, var(--bg-surface, #12151d) 58%, transparent);
       backdrop-filter: blur(22px) saturate(1.6);
@@ -242,7 +242,7 @@
       flex-direction: column; justify-content: center; align-items: center;
       display: flex; gap: 1px;
       padding: 0;
-      border-radius: 20px;
+      border-radius: calc(20px * var(--rk, 1));
       background: transparent !important;
       z-index: 1;
     }
@@ -255,7 +255,7 @@
       display: block; position: absolute; top: 4px; bottom: 4px;
       width: calc((100% - 8px) / var(--n));
       left: calc(4px + var(--i) * (100% - 8px) / var(--n));
-      border-radius: 20px;
+      border-radius: calc(20px * var(--rk, 1));
       background: var(--accent-soft);
       box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent) inset;
       transition: left .42s cubic-bezier(.22,1,.36,1), transform .25s cubic-bezier(.22,1,.36,1), width .2s ease;

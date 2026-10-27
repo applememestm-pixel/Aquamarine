@@ -87,15 +87,15 @@
   @keyframes cal-in { from { transform: translateX(30px); opacity: 0; } }
   .cal-head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 10px 16px; border-bottom: 1px solid var(--border); }
   .cal-head b { font-size: 15px; }
-  .cal-seg { flex: 1; display: flex; gap: 2px; padding: 2px; border-radius: 9px; background: var(--bg-input); margin-left: 6px; }
-  .cal-seg button { flex: 1; border: none; background: none; color: var(--fg-muted); font: inherit; font-size: 11.5px; font-weight: 600; padding: 5px 4px; border-radius: 7px; cursor: pointer; }
+  .cal-seg { flex: 1; display: flex; gap: 2px; padding: 2px; border-radius: calc(9px * var(--rk, 1)); background: var(--bg-input); margin-left: 6px; }
+  .cal-seg button { flex: 1; border: none; background: none; color: var(--fg-muted); font: inherit; font-size: 11.5px; font-weight: 600; padding: 5px 4px; border-radius: calc(7px * var(--rk, 1)); cursor: pointer; }
   .cal-seg button.on { background: var(--bg-shell); color: var(--accent); }
   .cal-x { width: 28px; height: 28px; border-radius: 50%; border: none; background: var(--bg-hover); color: var(--fg-muted); cursor: pointer; }
   .cal-body { flex: 1; overflow-y: auto; padding: 12px 14px 20px; display: flex; flex-direction: column; gap: 8px; }
-  .cal-new { border: 1px dashed var(--accent); border-radius: 10px; background: var(--accent-soft); color: var(--accent); font: inherit; font-weight: 700; font-size: 13px; padding: 9px; cursor: pointer; }
+  .cal-new { border: 1px dashed var(--accent); border-radius: calc(10px * var(--rk, 1)); background: var(--accent-soft); color: var(--accent); font: inherit; font-weight: 700; font-size: 13px; padding: 9px; cursor: pointer; }
   .cal-lbl { margin-top: 8px; font-size: 11.5px; font-weight: 800; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.04em; }
   .cal-empty { font-size: 12.5px; color: var(--fg-dim); line-height: 1.5; }
-  .cal-ev { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 11px; border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+  .cal-ev { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: calc(11px * var(--rk, 1)); border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
   .cal-ev:hover { border-color: var(--accent); }
   .cal-t { width: 62px; flex-shrink: 0; font-size: 11.5px; font-weight: 700; color: var(--accent); line-height: 1.35; }
   .cal-m { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }

@@ -387,6 +387,15 @@
           <div class="note" id="lanNote"></div>
         </div>
         <div class="card rv">
+          <h2><span data-t="Data folder">Data folder</span> <span class="hint" id="ddSize"></span></h2>
+          <div class="addr"><code id="ddPath" style="word-break:break-all">—</code><button class="copy" id="ddCopy" data-t="Copy">Copy</button></div>
+          <div class="fields mt">
+            <div class="full"><label data-t="Move to another folder">Move to another folder</label><input id="ddNew" placeholder="" /></div>
+          </div>
+          <div class="row mt"><button class="btn ghost" onclick="moveData()" data-t="Copy there and use from the next start">Copy there and use from the next start</button></div>
+          <div class="note" id="ddMsg"></div>
+        </div>
+        <div class="card rv">
           <h2><span data-t="Latest codes">Latest codes</span> <span class="hint"><a href="#codes" data-t="all →">all →</a></span></h2>
           <div class="codes" id="codesMini"></div>
         </div>
@@ -562,7 +571,7 @@
     "The token is printed in the server window.":"Токен напечатан в окне сервера.","paste the token":"вставьте токен","Unlock":"Войти",
     "Overview":"Обзор","Email codes":"Коды из писем","Access":"Доступ","Email delivery":"Почта","Stickers":"Стикеры","Federation":"Федерация",
     "E2EE: the relay only forwards encrypted envelopes — nothing here can read messages.":"Сквозное шифрование: ретранслятор только пересылает зашифрованные конверты — отсюда сообщения не прочитать.",
-    "Relay":"Ретранслятор","Online, last minutes":"В сети за последние минуты","Connect":"Подключение","type this into the app's Server field":"впишите в поле «Сервер» в приложении",
+    "Relay":"Ретранслятор","Online, last minutes":"В сети за последние минуты","Connect":"Подключение","Data folder":"Папка с данными","Move to another folder":"Перенести в другую папку","Copy there and use from the next start":"Скопировать туда и работать оттуда со следующего запуска","Copied {n} files. Restart the server — it will run from the new folder. The old one stays; delete it once all is well.":"Скопировано файлов: {n}. Перезапустите сервер — он будет работать из новой папки. Старая остаётся, удалите её, когда всё заработает.","type this into the app's Server field":"впишите в поле «Сервер» в приложении",
     "Latest codes":"Последние коды","all →":"все →","Sign-up":"Регистрация","Who may register":"Кто может зарегистрироваться",
     "This list only decides who may create an account on this relay; encryption is unchanged.":"Список решает только, кто может создать аккаунт на этом ретрансляторе; шифрование от этого не меняется.",
     "Invite-only (solo mode)":"Только по приглашениям","Only emails on the list below may register. Off = open relay.":"Регистрироваться могут только адреса из списка. Выключено — открытый сервер.",
@@ -818,12 +827,28 @@
   let booted = false;
   function bootDone(){ if (booted) return; booted = true; $("boot").classList.add("gone"); setTimeout(()=>$("boot").remove(), 500); }
 
+  async function loadDataDir(){
+    try {
+      const d = await api("/v1/admin/datadir");
+      $("ddPath").textContent = d.path; $("ddCopy").dataset.copy = d.path;
+      $("ddSize").textContent = human(d.bytes);
+      if (!$("ddNew").value) $("ddNew").placeholder = d.suggest;
+    } catch { /* older relay */ }
+  }
+  async function moveData(){
+    const path = $("ddNew").value.trim() || $("ddNew").placeholder;
+    try {
+      const r = await api("/v1/admin/datadir", { method: "POST", body: JSON.stringify({ path }) });
+      msg("ddMsg", T("Copied {n} files. Restart the server — it will run from the new folder. The old one stays; delete it once all is well.").replace("{n}", r.copied), "ok");
+    } catch (e) { msg("ddMsg", String(e.message || e), "bad"); }
+  }
   async function refresh(){
     const s = await api("/v1/admin/stats");
     $("gate").classList.add("hide"); $("dash").classList.remove("hide"); $("lockBtn").classList.remove("hide");
     pill("live", T("running") + " · " + dur(s.uptime_secs));
 
     renderStats(s);
+    if (!refresh.dd) { refresh.dd = true; void loadDataDir(); }
     $("heroUp").textContent = dur(s.uptime_secs);
     $("heroOn").textContent = s.online;
     pushSpark(s.online);

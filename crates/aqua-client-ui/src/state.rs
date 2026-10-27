@@ -68,6 +68,16 @@ pub struct ChatMessage {
     pub meta: Option<MsgMeta>,
 }
 
+/// A control payload stored as a message by an older version.
+pub(crate) fn stray_control(m: &ChatMessage) -> bool {
+    let t = match &m.kind {
+        MessageKind::Text { text } => text.as_str(),
+        MessageKind::Code { code, .. } => code.as_str(),
+        _ => return false,
+    };
+    m.from != "me" && crate::commands::is_control_text(t.trim_start())
+}
+
 /// AyuGram-style local history: what a message used to say, and whether the
 /// sender deleted it (kept on this device when "Keep deleted" is on).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -860,7 +870,10 @@ impl AppState {
 
         // Stored history (encrypted in the vault): messages + summaries.
         let mut hist_hashes = HashMap::new();
-        for (id, summary, messages) in crate::history::load_all(&vault) {
+        for (id, summary, mut messages) in crate::history::load_all(&vault) {
+            // Older versions could store a presence or typing signal that
+            // opened a session as a bubble ("[status:v1]{…}"). Drop those.
+            messages.retain(|m| !stray_control(m));
             // Not "written" yet as far as the flush knows: 0 never matches.
             hist_hashes.insert(id.clone(), 0);
             match chats.get_mut(&id) {

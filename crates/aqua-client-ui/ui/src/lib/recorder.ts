@@ -35,3 +35,29 @@ export function extFor(mime: string, fallback: string): string {
   if (m.includes("webm")) return m.startsWith("audio") ? "weba" : "webm";
   return fallback;
 }
+
+/** A microphone stream for voice messages. WebKitGTK sometimes rejects the
+ *  plain `{ audio: true }` with "Invalid constraint" (OverconstrainedError)
+ *  while a concrete device still works — so try the chosen microphone, the
+ *  plain request, then every microphone the system lists. */
+export async function openMic(preferredId?: string): Promise<MediaStream> {
+  const md = navigator.mediaDevices;
+  if (!md?.getUserMedia) throw new Error("no microphone access in this window");
+  const tries: MediaStreamConstraints[] = [];
+  if (preferredId && preferredId !== "default") tries.push({ audio: { deviceId: { ideal: preferredId } } });
+  tries.push({ audio: true }, { audio: {} as MediaTrackConstraints });
+  let last: unknown = null;
+  for (const c of tries) {
+    try { return await md.getUserMedia(c); } catch (e) {
+      last = e;
+      if ((e as DOMException)?.name === "NotAllowedError") throw e;
+    }
+  }
+  try {
+    const mics = (await md.enumerateDevices()).filter((d) => d.kind === "audioinput" && d.deviceId);
+    for (const d of mics) {
+      try { return await md.getUserMedia({ audio: { deviceId: { exact: d.deviceId } } }); } catch (e) { last = e; }
+    }
+  } catch { /* no list */ }
+  throw last ?? new Error("no microphone");
+}

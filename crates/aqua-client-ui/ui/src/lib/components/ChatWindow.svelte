@@ -15,6 +15,10 @@
   import { api, assetUrl, sendChatControl } from "../tauri";
   import { openFingerprint, verifiedKeys, keyState } from "./FingerprintModal.svelte";
   import { showToast } from "./Toast.svelte";
+  import { ATTACH_ITEMS, attachFront, type AttachId } from "../attachMenu";
+  import { openRoomRequest } from "../roomNav";
+  import { AUTODL_DEFAULT } from "../theme";
+  import { openPopout } from "../popouts";
   import { startOutgoingCall, callState } from "./CallModal.svelte";
   import { openMediaPicker, closeMediaPicker, pickerState, panelClaimsDrop } from "./MediaPicker.svelte";
   import AnimatedMedia from "./AnimatedMedia.svelte";
@@ -73,7 +77,9 @@
   import { t, tr, tn } from "../i18n";
   import { mutedChats, setMuted } from "../chatPrefs";
   import { insertToComposer } from "../composerBus";
-  import { startRecorder, AUDIO_TYPES } from "../recorder";
+  import { startRecorder, AUDIO_TYPES, openMic } from "../recorder";
+  import { get } from "svelte/store";
+  import { callSettings } from "../callSettings";
   import { groupMap, refreshGroups } from "../groups";
   import Markup from "./Markup.svelte";
   import LinkPreview from "./LinkPreview.svelte";
@@ -152,9 +158,10 @@
       if (m.kind.type !== "file" || !m.kind.content.saved_at) continue;
       const c = m.kind.content;
       const rk = renderKind(c);
-      if (rk !== "image" && rk !== "video" && rk !== "gif") continue;
+      const doc = rk === "file" ? docMedia(c) : null;
+      if (rk !== "image" && rk !== "video" && rk !== "gif" && !doc) continue;
       out.push({
-        url: assetUrl(c.saved_at!), kind: rk === "video" ? "video" : "image", name: c.name,
+        url: assetUrl(c.saved_at!), kind: rk === "video" || doc === "video" ? "video" : "image", name: c.name,
         path: c.saved_at, size: c.size ?? undefined, from: m.outgoing ? $t("You") : m.from, time: m.time,
       });
     }
@@ -197,6 +204,49 @@
     return "file";
   }
 
+  let attachMore = $state(false);
+  $effect(() => { if (!attachMenuOpen) attachMore = false; });
+  function attachAvailable(id: AttachId): boolean {
+    if (id === "bluetooth") return DESKTOP_APP;
+    if (id === "sealed") return !!$activeChat && !isGroup && !isBotChat && $activeChat.id !== "__saved__";
+    return true;
+  }
+  function runAttach(id: AttachId) {
+    attachMenuOpen = false;
+    const chat = $activeChat;
+    switch (id) {
+      case "media": pickAndSendFile("media"); break;
+      case "file": pickAndSendFile("file"); break;
+      case "bluetooth": btSheet.set([]); break;
+      case "article": if (chat) openArticleComposer(chat.id); break;
+      case "poll": if (!canSendKind(activeGroup, myUsername, "poll")) { showToast(tr("Only admins can create polls here")); return; } openPollComposer(); break;
+      case "event": if (chat) openPlanner("event", chat.id); break;
+      case "document": void newDoc(); break;
+      case "board": void newBoard(); break;
+      case "checklist": if (chat) openPlanner("tasks", chat.id); break;
+      case "sealed": if (chat) capsuleComposer.set(chat.id); break;
+    }
+  }
+
+  /** A photo / video sent "as a file": still viewable in the gallery. */
+  function docMedia(c: { mime: string | null; name: string }): "image" | "video" | null {
+    const mime = (c.mime ?? "").toLowerCase(), n = c.name.toLowerCase();
+    if (mime.startsWith("image/") && mime !== "image/svg+xml" || /\.(png|jpe?g|webp|gif|bmp|avif|heic)$/.test(n)) return "image";
+    if (mime.startsWith("video/") || /\.(mp4|webm|mov|mkv|m4v)$/.test(n)) return "video";
+    return null;
+  }
+  async function openDoc(m: { id: string }, c: { saved_at: string | null; mime: string | null; name: string }) {
+    let path = c.saved_at;
+    if (!path) {
+      const chat = $activeChat;
+      if (!chat) return;
+      try { path = (await api.downloadFile(chat.id, m.id)).saved_path; await loadActiveMessages(); }
+      catch (e) { showToast(tr("Could not download: {e}", { e: String(e) })); return; }
+    }
+    if (docMedia(c)) openInGallery(path);
+    else api.openSavedFile(path).catch((e) => showToast(String(e)));
+  }
+
   /** The type AnimatedMedia needs: a .tgs often travels as gzip / octet-stream. */
   function stickerMime(content: { mime: string | null; name: string }): string | null {
     const n = content.name.toLowerCase();
@@ -216,6 +266,11 @@
     const msgs = $activeMessages;
     if (!chat) return;
     if (!$settings.autoDownloadMedia) return;
+    // Data and storage → Automatic media download: by kind of chat, up to a size.
+    const ad = { ...AUTODL_DEFAULT, ...($settings.autoDl ?? {}) };
+    const where = chat.channel ? ad.channels : chat.id.startsWith("grp_") ? ad.groups : ad.private;
+    if (!where) return;
+    const mediaCap = Math.min(AUTO_DOWNLOAD_MEDIA_LIMIT * 40, ad.limitMb * 1024 * 1024);
     for (const m of msgs) {
       if (m.kind.type !== "file") continue;
       // Mine too: sent from the other device, or restored from a backup
@@ -229,7 +284,7 @@
       // / shows without a manual click. Plain files only auto-download
       // when small.
       const isInlineMedia = kind !== "file";
-      const within = isInlineMedia ? size <= AUTO_DOWNLOAD_MEDIA_LIMIT : size <= AUTO_DOWNLOAD_LIMIT;
+      const within = isInlineMedia ? size <= mediaCap : size <= Math.min(AUTO_DOWNLOAD_LIMIT, mediaCap);
       if (within) {
         autoTriggered.add(m.id);
         void autoDownload(chat.id, m.id);
@@ -350,7 +405,7 @@
     if (voiceBlocked(chat.id)) return;
     if (recording) return;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await openMic(get(callSettings).micId);
       recordedChunks = [];
       // Prefer opus in webm — tiny files and good quality; whatever starts.
       let st;
@@ -374,7 +429,11 @@
       }, 250);
       recording = true;
     } catch (e) {
-      showToast(`${tr("Voice recording failed")}: ${e instanceof Error ? e.message : e}`, 8000);
+      const name = (e as DOMException)?.name;
+      const why = name === "NotAllowedError" ? tr("the app isn't allowed to use the microphone")
+        : name === "NotFoundError" || name === "OverconstrainedError" ? tr("no microphone found — check that one is plugged in and allowed for apps")
+        : e instanceof Error ? e.message : String(e);
+      showToast(`${tr("Voice recording failed")}: ${why}`, 8000);
     }
   }
 
@@ -809,7 +868,9 @@
     try {
       const res = await api.downloadFile(chat.id, messageId);
       await loadActiveMessages();
-      showToast(`Saved to ${res.saved_path}`);
+      // "Ask where to save each file": the save dialog right after.
+      if ($settings.askDownloadPath) { await saveFileAs(res.saved_path, res.saved_path.split(/[\\/]/).pop() ?? "file"); return; }
+      showToast(tr("Saved to {path}", { path: res.saved_path }));
     } catch (e) {
       showToast(`Download failed: ${e}`);
     }
@@ -1388,7 +1449,7 @@
     if (c.id !== "__saved__" && !isBotChat) out.push({ id: "cal", label: tr("Calendar"), sub: tr("Events and reminders of this chat"), icon: IC.cal, on: $calendarFor === c.id, run: () => calendarFor.set($calendarFor === c.id ? null : c.id) });
     if (ttlEditable || chatTtl) out.push({ id: "ttl", label: tr("Auto-delete & read receipts"), sub: chatTtl ? tr("Auto-delete: {t}", { t: ttlLabel(chatTtl) }) : tr("Off"), icon: IC.ttl, on: chatTtl > 0, run: () => (ttlMenu = true) });
     if (amChanAdmin) out.push({ id: "stats", label: tr("Channel statistics"), sub: tr("Views, reactions, comments"), icon: IC.stats, on: $statsFor === c.id, run: () => statsFor.set($statsFor === c.id ? null : c.id) });
-    if (DESKTOP_APP && !POPOUT) out.push({ id: "win", label: tr("Open in a new window"), sub: "Ctrl + " + tr("click"), icon: IC.win, run: () => void api.openChatWindow(c.id, c.name).catch((e) => showToast(String(e))) });
+    if (DESKTOP_APP && !POPOUT) out.push({ id: "win", label: tr("Open in a new window"), sub: "Ctrl + " + tr("click"), icon: IC.win, run: () => void openPopout(c.id, c.name).catch((e) => showToast(String(e))) });
     return out;
   });
   $effect(() => { void $activeChat?.id; callMenu = false; toolsMenu = false; });
@@ -1519,6 +1580,14 @@
     roomPick = { ...roomPick, [activeGroup.id]: r.id };
     try { localStorage.setItem(ROOM_KEY, JSON.stringify(roomPick)); } catch { /* ignore */ }
   }
+  // A room picked from the server icon's list in the chat list.
+  $effect(() => {
+    const req = $openRoomRequest, g = activeGroup;
+    if (!req || !g || g.id !== req.gid) return;
+    const r = rooms.find((x) => x.id === req.room);
+    openRoomRequest.set(null);
+    if (r) untrack(() => pickRoom(r));
+  });
   const MUTE_KEY = "aqua.rooms.muted.v1";
   let roomMuted = $state<Record<string, boolean>>(readJson(MUTE_KEY, {}));
   const isRoomMuted = (r: Room) => !!activeGroup && !!roomMuted[`${activeGroup.id}/${r.id}`];
@@ -2657,7 +2726,7 @@
 
 {#snippet richText(str: string)}
   {#each richParts(str) as part}
-    {#if part.t === "text"}{part.v}{:else if emojiMap[part.key]}<span class="inline-emoji" title={ceFallback(part.key)}><AnimatedMedia src={emojiMap[part.key].url} mime={emojiMap[part.key].mime} alt={ceFallback(part.key)} play="auto" /></span>{:else}{ceFallback(part.key)}{/if}
+    {#if part.t === "text"}{part.v}{:else if emojiMap[part.key]}<span class="inline-emoji" title={ceFallback(part.key)}><AnimatedMedia emoji src={emojiMap[part.key].url} mime={emojiMap[part.key].mime} alt={ceFallback(part.key)} play="auto" /></span>{:else}{ceFallback(part.key)}{/if}
   {/each}
 {/snippet}
 
@@ -2850,13 +2919,13 @@
           {#if typingPeers.has($activeChat.id)}
             <span class="typing-ind">{$t("typing…")}</span>
             <span class="sep">·</span>
-          {:else if $peerPresence[$activeChat.id]?.activity?.[0]}
+          {:else if $peerPresence[$activeChat.id]?.activity?.[0] && peerStatus($peerPresence[$activeChat.id], $presenceNow) !== "offline"}
             {@const a = $peerPresence[$activeChat.id].activity![0]}
             <span class="activity-ind" title={a.details ? `${a.details}${a.state ? " — " + a.state : ""}` : a.name}>{activityVerb(a)} <b>{a.name}</b>{#if a.details}: {a.details}{/if}</span>
             <span class="sep">·</span>
           {:else if chatOnline($activeChat, $peerPresence, $presenceNow)}
             {@const st = peerStatus($peerPresence[$activeChat.id], $presenceNow)}
-            <span><span class="dot"></span>{$t(st === "idle" ? "away" : st === "dnd" ? "do not disturb" : "online")}</span>
+            <span><span class="dot {st}"></span>{$t(st === "idle" ? "away" : st === "dnd" ? "do not disturb" : "online")}</span>
             <span class="sep">·</span>
           {/if}
           {#if $activeChat.live && !$activeChat.has_lock}
@@ -3224,8 +3293,13 @@
                   </div>
                 {:else}
                   {@const ext = (content.name.split(".").pop() ?? "").toUpperCase().slice(0, 4)}
+                  {@const dm = docMedia(content)}
                   <div class="bubble file-bubble">
-                    <div class="file-badge">{ext || "FILE"}</div>
+                    {#if dm === "image" && content.saved_at}
+                      <button class="file-thumb" onclick={() => openDoc(m, content)} title={$t("Open")}><img src={assetUrl(content.saved_at)} alt="" loading="lazy" /></button>
+                    {:else}
+                      <button class="file-badge" onclick={() => openDoc(m, content)} title={$t("Open")}>{dm === "video" ? "▶" : ext || "FILE"}</button>
+                    {/if}
                     <div class="file-meta">
                       <div class="file-name" title={content.name}>{content.name}</div>
                       <div class="file-sub">
@@ -3238,9 +3312,12 @@
                           <button class="file-dl" onclick={() => saveFileAs(content.saved_at, content.name)}>{$t("Save as…")}</button>
                         </div>
                       {:else if content.saved_at}
-                        <button class="file-dl" onclick={() => saveFileAs(content.saved_at, content.name)}>
-                          {$t("Save as…")}
-                        </button>
+                        <div class="file-btns">
+                          <button class="file-dl primary" onclick={() => openDoc(m, content)}>{$t("Open")}</button>
+                          <button class="file-dl" onclick={() => saveFileAs(content.saved_at, content.name)}>{$t("Save as…")}</button>
+                        </div>
+                      {:else if dm}
+                        <button class="file-dl" onclick={() => openDoc(m, content)}>{$t(dm === "image" ? "Show photo" : "Watch video")}</button>
                       {:else}
                         <button class="file-dl" onclick={() => downloadAttachment(m.id)}>
                           {$t("Download")}
@@ -3723,49 +3800,33 @@
             {/if}
           {/if}
         {/if}
+        {#snippet attachIcon(id: string)}
+          {#if id === "media"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>
+          {:else if id === "file"}{@html icons.attach}
+          {:else if id === "bluetooth"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 7 17 17 12 22 12 2 17 7 7 17"/></svg>
+          {:else if id === "article"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h12a3 3 0 0 1 3 3v14H7a3 3 0 0 1-3-3V4z"/><path d="M19 7v14"/><line x1="7" y1="9" x2="15" y2="9"/><line x1="7" y1="13" x2="15" y2="13"/></svg>
+          {:else if id === "poll"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="20" x2="6" y2="12"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="18" y1="20" x2="18" y2="9"/></svg>
+          {:else if id === "event"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="16" y1="3" x2="16" y2="7"/></svg>
+          {:else if id === "document"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>
+          {:else if id === "board"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
+          {:else if id === "checklist"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 6 9 10 5"/><line x1="13" y1="7" x2="20" y2="7"/><polyline points="4 15 6 17 10 13"/><line x1="13" y1="15" x2="20" y2="15"/></svg>
+          {:else if id === "sealed"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><polyline points="3 7 12 13 21 7"/><circle cx="18" cy="17" r="3" fill="var(--bg-shell)"/><path d="M18 15.5v1.6l1 .7"/></svg>
+          {/if}
+        {/snippet}
         {#snippet attachActions()}
+            <!-- A few actions right away, the rest under "More" (what goes
+                 where: Settings → Chat settings → Attach menu). -->
+            {@const avail = ATTACH_ITEMS.filter((it) => attachAvailable(it.id))}
+            {@const front = avail.filter((it) => $attachFront.includes(it.id))}
+            {@const rest = avail.filter((it) => !$attachFront.includes(it.id))}
             <div class="ap-items">
-            <button class="ap-item" onclick={() => { attachMenuOpen = false; pickAndSendFile("media"); }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>
-              <span>{$t("Photo or video")}</span>
-            </button>
-            <button class="ap-item" onclick={() => { attachMenuOpen = false; pickAndSendFile("file"); }}>
-              {@html icons.attach}<span>{$t("File")}</span>
-            </button>
-            {#if DESKTOP_APP}
-              <button class="ap-item" onclick={() => { attachMenuOpen = false; btSheet.set([]); }}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 7 17 17 12 22 12 2 17 7 7 17"/></svg>
-                <span>{$t("Bluetooth")}</span>
-              </button>
-            {/if}
-            <button class="ap-item" onclick={() => { attachMenuOpen = false; if ($activeChat) openArticleComposer($activeChat.id); }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h12a3 3 0 0 1 3 3v14H7a3 3 0 0 1-3-3V4z"/><path d="M19 7v14"/><line x1="7" y1="9" x2="15" y2="9"/><line x1="7" y1="13" x2="15" y2="13"/></svg>
-              <span>{$t("Article")}</span>
-            </button>
-            <button class="ap-item" onclick={() => { attachMenuOpen = false; if (!canSendKind(activeGroup, myUsername, "poll")) { showToast("Only admins can create polls here"); return; } openPollComposer(); }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="20" x2="6" y2="12"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="18" y1="20" x2="18" y2="9"/></svg>
-              <span>{$t("Poll")}</span>
-            </button>
-            <button class="ap-item" onclick={() => { attachMenuOpen = false; if ($activeChat) openPlanner("event", $activeChat.id); }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="16" y1="3" x2="16" y2="7"/></svg>
-              <span>{$t("Event")}</span>
-            </button>
-            <button class="ap-item" onclick={() => { attachMenuOpen = false; void newDoc(); }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>
-              <span>{$t("Document")}</span>
-            </button>
-            <button class="ap-item" onclick={() => { attachMenuOpen = false; void newBoard(); }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
-              <span>{$t("Board")}</span>
-            </button>
-            <button class="ap-item" onclick={() => { attachMenuOpen = false; if ($activeChat) openPlanner("tasks", $activeChat.id); }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 6 9 10 5"/><line x1="13" y1="7" x2="20" y2="7"/><polyline points="4 15 6 17 10 13"/><line x1="13" y1="15" x2="20" y2="15"/></svg>
-              <span>{$t("Checklist")}</span>
-            </button>
-            {#if $activeChat && !isGroup && !isBotChat && $activeChat.id !== "__saved__"}
-              <button class="ap-item" onclick={() => { attachMenuOpen = false; if ($activeChat) capsuleComposer.set($activeChat.id); }}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><polyline points="3 7 12 13 21 7"/><circle cx="18" cy="17" r="3" fill="var(--bg-shell)"/><path d="M18 15.5v1.6l1 .7"/></svg>
-                <span>{$t("Sealed message")}</span>
+            {#each (attachMore ? avail : front) as it (it.id)}
+              <button class="ap-item" onclick={() => runAttach(it.id)}>{@render attachIcon(it.id)}<span>{$t(it.label)}</span></button>
+            {/each}
+            {#if rest.length && !attachMore}
+              <button class="ap-item more" onclick={() => (attachMore = true)}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg>
+                <span>{$t("More")} · {rest.length}</span>
               </button>
             {/if}
             </div>
@@ -3866,11 +3927,11 @@
   .lg-ic :global(svg) { width: 28px; height: 28px; }
   .lg-card b { font-size: 17px; }
   .lg-sub, .lg-hint { font-size: 13px; color: var(--fg-muted); }
-  .lg-in { width: 100%; box-sizing: border-box; margin-top: 6px; padding: 11px 14px; border-radius: 12px; border: 1px solid var(--border-strong); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 15px; text-align: center; outline: none; }
+  .lg-in { width: 100%; box-sizing: border-box; margin-top: 6px; padding: 11px 14px; border-radius: calc(12px * var(--rk, 1)); border: 1px solid var(--border-strong); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 15px; text-align: center; outline: none; }
   .lg-in:focus { border-color: var(--accent); }
   .lg-in.err { border-color: #ff5c5c; animation: lg-shake 0.3s; }
   .lg-err { font-size: 12.5px; color: #ff5c5c; }
-  .lg-btn { width: 100%; border: none; border-radius: 12px; padding: 11px; background: var(--accent); color: #06070C; font: inherit; font-weight: 800; cursor: pointer; }
+  .lg-btn { width: 100%; border: none; border-radius: calc(12px * var(--rk, 1)); padding: 11px; background: var(--accent); color: #06070C; font: inherit; font-weight: 800; cursor: pointer; }
   .lg-btn:disabled { opacity: 0.6; }
   @keyframes lg-shake { 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
   .ctx-emoji.fav { position: relative; }
@@ -3906,7 +3967,7 @@
   .ikb-row { display: flex; gap: 4px; }
   .ikb-btn {
     flex: 1; min-width: 0; position: relative; display: flex; align-items: center; justify-content: center; gap: 6px;
-    padding: 8px 10px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+    padding: 8px 10px; border-radius: calc(10px * var(--rk, 1)); border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
     background: color-mix(in srgb, var(--bg-bubble-in) 82%, var(--accent) 18%); color: var(--fg);
     font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; transition: background 0.12s, transform 0.08s;
   }
@@ -3920,18 +3981,18 @@
   .rkb { display: flex; flex-direction: column; gap: 5px; padding: 8px 12px 4px; animation: ttl-pop 0.14s ease-out; }
   .rkb.many { max-height: 190px; overflow-y: auto; }
   .rkb-row { display: flex; gap: 5px; }
-  .rkb-btn { flex: 1; min-width: 0; padding: 10px 8px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rkb-btn { flex: 1; min-width: 0; padding: 10px 8px; border-radius: calc(10px * var(--rk, 1)); border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rkb-btn:hover { background: var(--bg-hover); border-color: var(--border-strong); }
   .rkb-toggle.on { color: var(--accent); }
-  .bot-menu-btn { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; height: 36px; padding: 0 12px; border-radius: 10px; border: none; background: var(--accent); color: #06070C; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; max-width: 160px; }
+  .bot-menu-btn { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; height: 36px; padding: 0 12px; border-radius: calc(10px * var(--rk, 1)); border: none; background: var(--accent); color: #06070C; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; max-width: 160px; }
   .bot-menu-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bot-menu-btn svg { width: 16px; height: 16px; flex-shrink: 0; }
   .ttl-wrap { position: relative; display: inline-flex; }
   .hm-pop { width: 270px; padding: 6px; display: flex; flex-direction: column; gap: 2px; }
-  .hm-item { display: flex; align-items: center; gap: 11px; width: 100%; padding: 8px 10px; border: none; border-radius: 10px; background: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; transition: background 0.12s; }
+  .hm-item { display: flex; align-items: center; gap: 11px; width: 100%; padding: 8px 10px; border: none; border-radius: calc(10px * var(--rk, 1)); background: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; transition: background 0.12s; }
   .hm-item:hover { background: var(--bg-hover); }
   .hm-item.on .hm-ic { color: var(--accent); background: var(--accent-soft); }
-  .hm-ic { width: 32px; height: 32px; flex-shrink: 0; border-radius: 9px; display: grid; place-items: center; background: var(--bg-input); color: var(--fg-muted); }
+  .hm-ic { width: 32px; height: 32px; flex-shrink: 0; border-radius: calc(9px * var(--rk, 1)); display: grid; place-items: center; background: var(--bg-input); color: var(--fg-muted); }
   .hm-ic :global(svg) { width: 17px; height: 17px; }
   .hm-tx { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
   .hm-tx b { font-size: 13.5px; font-weight: 600; }
@@ -3941,17 +4002,17 @@
   .hm-caret { position: absolute; right: 3px; bottom: 4px; width: 0; height: 0; border-left: 3px solid transparent; border-right: 3px solid transparent; border-top: 4px solid currentColor; opacity: 0.6; }
   .ttl-btn { position: relative; }
   .ttl-btn.on { color: var(--accent); }
-  .ttl-badge { position: absolute; right: -2px; bottom: 0; font-size: 9px; font-weight: 800; line-height: 1; padding: 2px 3px; border-radius: 6px; background: var(--accent); color: #06070C; pointer-events: none; }
+  .ttl-badge { position: absolute; right: -2px; bottom: 0; font-size: 9px; font-weight: 800; line-height: 1; padding: 2px 3px; border-radius: calc(6px * var(--rk, 1)); background: var(--accent); color: #06070C; pointer-events: none; }
   .ttl-pop {
     position: absolute; top: calc(100% + 8px); right: 0; z-index: 40; width: 290px;
-    background: var(--bg-shell); border: 1px solid var(--border-strong); border-radius: 14px; padding: 12px;
+    background: var(--bg-shell); border: 1px solid var(--border-strong); border-radius: calc(14px * var(--rk, 1)); padding: 12px;
     box-shadow: 0 18px 40px -12px rgba(0, 0, 0, 0.55); animation: ttl-pop 0.16s cubic-bezier(.2,.9,.3,1.15); transform-origin: top right;
     cursor: default;
   }
   @keyframes ttl-pop { from { opacity: 0; transform: translateY(-6px) scale(0.97); } }
   .ttl-h { font-size: 12px; font-weight: 800; color: var(--accent); margin-bottom: 8px; }
   .ttl-opts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
-  .ttl-opts button { border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); border-radius: 9px; padding: 7px 4px; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
+  .ttl-opts button { border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); border-radius: calc(9px * var(--rk, 1)); padding: 7px 4px; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
   .ttl-opts button:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border-strong); }
   .ttl-opts button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
   .ttl-opts button:disabled { opacity: 0.55; cursor: default; }
@@ -3961,7 +4022,7 @@
   .ttl-tt { flex: 1; display: flex; flex-direction: column; gap: 2px; }
   .ttl-tt b { font-size: 13px; }
   .ttl-tt span { font-size: 11.5px; color: var(--fg-dim); }
-  .ttl-sw { width: 34px; height: 20px; border-radius: 10px; background: var(--bg-hover); border: 1px solid var(--border-strong); position: relative; flex-shrink: 0; transition: background 0.15s; }
+  .ttl-sw { width: 34px; height: 20px; border-radius: calc(10px * var(--rk, 1)); background: var(--bg-hover); border: 1px solid var(--border-strong); position: relative; flex-shrink: 0; transition: background 0.15s; }
   .ttl-sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--fg-muted); transition: transform 0.15s, background 0.15s; }
   .ttl-sw.on { background: var(--accent); border-color: transparent; }
   .ttl-sw.on::after { transform: translateX(14px); background: #fff; }
@@ -4003,7 +4064,7 @@
     width: 36px; height: 36px;
     background: transparent; border: none;
     color: var(--fg-muted); cursor: pointer;
-    border-radius: 9px; flex-shrink: 0;
+    border-radius: calc(9px * var(--rk, 1)); flex-shrink: 0;
     align-items: center; justify-content: center;
   }
   .back-btn:hover { background: var(--bg-hover); color: var(--fg); }
@@ -4068,6 +4129,8 @@
     box-shadow: 0 0 6px var(--online);
     display: inline-block;
   }
+  .peer-status .dot.idle { background: #FAA61A; box-shadow: 0 0 6px #FAA61A; }
+  .peer-status .dot.dnd { background: #ED4245; box-shadow: 0 0 6px #ED4245; }
   .peer-status .sep { color: var(--fg-dim); }
   .peer-status .e2ee {
     display: inline-flex;
@@ -4085,13 +4148,13 @@
   .group-sub:hover { color: var(--accent); }
   .channel-locked {
     display: flex; align-items: center; justify-content: center; gap: 8px;
-    padding: 16px; margin: 10px 14px; border-radius: 12px;
+    padding: 16px; margin: 10px 14px; border-radius: calc(12px * var(--rk, 1));
     background: var(--bg-input); border: 1px solid var(--border);
     color: var(--fg-muted); font-size: 13px;
   }
   .channel-locked :global(svg) { width: 14px; height: 14px; color: var(--fg-dim); }
   .channel-mute {
-    margin: 10px 14px; padding: 13px; border-radius: 12px; cursor: pointer;
+    margin: 10px 14px; padding: 13px; border-radius: calc(12px * var(--rk, 1)); cursor: pointer;
     background: var(--bg-input); border: 1px solid var(--border);
     color: var(--accent); font: inherit; font-weight: 800; font-size: 14px; letter-spacing: 0.02em;
     transition: background 0.15s;
@@ -4099,7 +4162,7 @@
   .channel-mute:hover { background: color-mix(in srgb, var(--accent) 10%, var(--bg-input)); }
   .messages.protected { user-select: none; -webkit-user-select: none; }
   .member-tag {
-    font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: 5px;
+    font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: calc(5px * var(--rk, 1));
     color: var(--fg-muted); background: var(--bg-input); border: 1px solid var(--border);
   }
   .member-tag.admin { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
@@ -4131,7 +4194,7 @@
     display: grid; place-items: center;
     background: transparent;
     border: none;
-    border-radius: 8px;
+    border-radius: calc(8px * var(--rk, 1));
     color: var(--fg-muted);
     cursor: pointer;
     transition: all 0.12s ease;
@@ -4150,12 +4213,12 @@
   .search-bar .sb-ic :global(svg) { width: 15px; height: 15px; }
   .sb-input {
     flex: 1; min-width: 0; background: var(--bg-input); border: 1px solid var(--border);
-    border-radius: 9px; color: var(--fg); font: inherit; font-size: 13.5px; padding: 7px 11px; outline: none;
+    border-radius: calc(9px * var(--rk, 1)); color: var(--fg); font: inherit; font-size: 13.5px; padding: 7px 11px; outline: none;
   }
   .sb-input:focus { border-color: var(--accent); }
   .sb-count { font-size: 12px; color: var(--fg-dim); font-variant-numeric: tabular-nums; min-width: 34px; text-align: center; }
   .sb-btn {
-    width: 28px; height: 28px; border-radius: 7px; border: 1px solid var(--border);
+    width: 28px; height: 28px; border-radius: calc(7px * var(--rk, 1)); border: 1px solid var(--border);
     background: transparent; color: var(--fg-muted); cursor: pointer; font-size: 15px; line-height: 1;
   }
   .sb-btn:hover:not(:disabled) { color: var(--fg); border-color: var(--border-strong); }
@@ -4333,10 +4396,13 @@
     max-width: 420px;
     padding: 10px 14px;
   }
+  .file-thumb { width: 56px; height: 56px; border-radius: calc(10px * var(--rk, 1)); overflow: hidden; padding: 0; border: none; cursor: pointer; flex-shrink: 0; background: #000; }
+  .file-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .file-badge {
+    border: none; cursor: pointer; flex-shrink: 0;
     display: grid; place-items: center;
     width: 40px; height: 40px;
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     background: linear-gradient(135deg, var(--accent), var(--accent-2));
     color: #06070C;
     font-size: 10px;
@@ -4346,7 +4412,7 @@
   .file-icon {
     display: grid; place-items: center;
     width: 40px; height: 40px;
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     background: color-mix(in srgb, var(--accent) 10%, transparent);
     color: var(--accent);
   }
@@ -4372,7 +4438,7 @@
     padding: 4px 10px;
     font-size: 11.5px;
     font-weight: 600;
-    border-radius: 6px;
+    border-radius: calc(6px * var(--rk, 1));
     border: 1px solid var(--accent-soft);
     background: var(--accent-soft);
     color: var(--accent);
@@ -4411,7 +4477,7 @@
     border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
     color: var(--fg);
     padding: 14px 24px;
-    border-radius: 14px;
+    border-radius: calc(14px * var(--rk, 1));
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -4457,7 +4523,7 @@
     animation: msg-in 0.25s ease-out;
   }
   .msg.out .sticker-wrap { align-items: flex-end; }
-  .sticker-btn { border: none; background: transparent; padding: 0; cursor: pointer; display: block; border-radius: 12px; transition: transform 0.15s ease; }
+  .sticker-btn { border: none; background: transparent; padding: 0; cursor: pointer; display: block; border-radius: calc(12px * var(--rk, 1)); transition: transform 0.15s ease; }
   .sticker-btn:hover { transform: scale(1.04); }
   .sticker-btn:active { transform: scale(0.97); }
   .sticker-img {
@@ -4470,7 +4536,7 @@
   }
   .sticker-placeholder {
     width: var(--sticker-size, 128px); height: var(--sticker-size, 128px);
-    border-radius: 14px;
+    border-radius: calc(14px * var(--rk, 1));
     background: linear-gradient(90deg, var(--bg-input), var(--bg-hover), var(--bg-input));
     background-size: 200% 100%;
     animation: shimmer 1.4s linear infinite;
@@ -4518,7 +4584,7 @@
   }
   .media-img-btn {
     border: none; padding: 0; margin: 0; background: transparent;
-    cursor: zoom-in; display: block; border-radius: 10px; overflow: hidden;
+    cursor: zoom-in; display: block; border-radius: calc(10px * var(--rk, 1)); overflow: hidden;
   }
   .media-img {
     max-width: 100%;
@@ -4526,7 +4592,7 @@
     width: auto;
     object-fit: contain;
     display: block;
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     background: #0A0D14;
   }
   .media-video {
@@ -4534,12 +4600,12 @@
     max-height: 400px;
     width: 100%;
     display: block;
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     background: #000;
   }
   .media-placeholder {
     width: 100%;
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     background: linear-gradient(90deg, var(--bg-input), var(--bg-hover), var(--bg-input));
     background-size: 200% 100%;
     animation: shimmer 1.4s linear infinite;
@@ -4572,12 +4638,12 @@
     padding: 5px;
     background: var(--bg-surface-2, var(--bg-list));
     border: 1px solid var(--border-strong);
-    border-radius: 12px;
+    border-radius: calc(12px * var(--rk, 1));
     box-shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.55);
   }
   .slash-item {
     width: 100%; display: flex; align-items: baseline; gap: 12px;
-    padding: 7px 10px; border: none; border-radius: 8px;
+    padding: 7px 10px; border: none; border-radius: calc(8px * var(--rk, 1));
     background: transparent; color: var(--fg); text-align: left; cursor: pointer;
   }
   .slash-item.on { background: var(--accent-soft); }
@@ -4600,7 +4666,7 @@
     border-bottom: 1px solid var(--border);
   }
   .art-carousel { padding: 6px 6px 0; }
-  .art-carousel :global(.stage) { border-radius: 10px; }
+  .art-carousel :global(.stage) { border-radius: calc(10px * var(--rk, 1)); }
   .art-body { padding: 12px 14px 4px; cursor: pointer; }
   .art-tag {
     font-size: 11px; font-weight: 700; color: var(--accent);
@@ -4615,7 +4681,7 @@
   .art-music { padding: 0 8px; }
   .art-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px 10px 14px; }
   .art-read {
-    padding: 6px 12px; border-radius: 8px; border: none; cursor: pointer;
+    padding: 6px 12px; border-radius: calc(8px * var(--rk, 1)); border: none; cursor: pointer;
     background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent);
     font-weight: 800; font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase;
   }
@@ -4630,7 +4696,7 @@
     margin: 0 20px 10px;
     background: linear-gradient(135deg, rgba(255, 77, 109, 0.15), rgba(255, 77, 109, 0.08));
     border: 1px solid rgba(255, 77, 109, 0.3);
-    border-radius: 12px;
+    border-radius: calc(12px * var(--rk, 1));
     color: var(--fg);
     font-size: 13px;
     animation: rec-in 0.18s ease-out;
@@ -4683,7 +4749,7 @@
     min-width: 180px;
     background: var(--bg-surface-2);
     border: 1px solid var(--border-strong);
-    border-radius: 12px; padding: 5px;
+    border-radius: calc(12px * var(--rk, 1)); padding: 5px;
     box-shadow: 0 16px 40px -10px rgba(0,0,0,0.6);
     z-index: 30;
     animation: ap-in 0.12s ease-out;
@@ -4721,7 +4787,7 @@
   .ap-bar { display: flex; align-items: center; gap: 6px; padding: 0 12px 8px 8px; min-height: 44px; }
   .ap-close { width: 40px; height: 40px; border-radius: 50%; border: none; background: transparent; color: var(--fg-muted); display: grid; place-items: center; flex-shrink: 0; }
   .ap-close svg { width: 20px; height: 20px; }
-  .ap-album { display: inline-flex; align-items: center; gap: 6px; border: none; background: transparent; color: var(--fg); font: 700 18px var(--font-ui); padding: 6px 10px; border-radius: 14px; min-width: 0; }
+  .ap-album { display: inline-flex; align-items: center; gap: 6px; border: none; background: transparent; color: var(--fg); font: 700 18px var(--font-ui); padding: 6px 10px; border-radius: calc(14px * var(--rk, 1)); min-width: 0; }
   .ap-album span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ap-album svg { width: 18px; height: 18px; flex-shrink: 0; transition: transform .25s cubic-bezier(.22,1,.36,1); color: var(--fg-muted); }
   .ap-album.open svg { transform: rotate(180deg); }
@@ -4731,14 +4797,14 @@
   /* Albums: a menu under the title, like the system picker's. */
   .ap-albums-veil { position: absolute; inset: 0; z-index: 3; }
   .ap-albums { position: absolute; z-index: 4; top: 62px; left: 10px; width: min(330px, calc(100% - 20px)); max-height: min(60dvh, 480px); overflow-y: auto;
-    padding: 6px; border-radius: 20px; border: 1px solid var(--border-strong);
+    padding: 6px; border-radius: calc(20px * var(--rk, 1)); border: 1px solid var(--border-strong);
     background: color-mix(in srgb, var(--bg-surface) 82%, transparent);
     backdrop-filter: blur(22px) saturate(1.5); -webkit-backdrop-filter: blur(22px) saturate(1.5);
     box-shadow: 0 22px 50px -18px rgba(0,0,0,.85); transform-origin: top left; animation: ap-menu .22s cubic-bezier(.22,1,.36,1); }
   @keyframes ap-menu { from { opacity: 0; transform: scale(.94) translateY(-6px); } }
-  .ap-alb { display: flex; align-items: center; gap: 14px; width: 100%; padding: 7px 10px 7px 7px; border: none; border-radius: 14px; background: transparent; color: var(--fg); text-align: left; font: 500 16px var(--font-ui); }
+  .ap-alb { display: flex; align-items: center; gap: 14px; width: 100%; padding: 7px 10px 7px 7px; border: none; border-radius: calc(14px * var(--rk, 1)); background: transparent; color: var(--fg); text-align: left; font: 500 16px var(--font-ui); }
   .ap-alb.on, .ap-alb:active { background: var(--accent-soft); }
-  .ap-alb-cover { width: 46px; height: 46px; border-radius: 10px; overflow: hidden; flex-shrink: 0; background: var(--bg-surface-2); }
+  .ap-alb-cover { width: 46px; height: 46px; border-radius: calc(10px * var(--rk, 1)); overflow: hidden; flex-shrink: 0; background: var(--bg-surface-2); }
   .ap-alb-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .ap-alb-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ap-alb-n { color: var(--fg-dim); font-size: 14px; font-variant-numeric: tabular-nums; }
@@ -4747,18 +4813,18 @@
   .ap-gallery { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
     grid-auto-rows: max-content; gap: 3px; padding: 0 3px calc(92px + env(safe-area-inset-bottom, 0px) + var(--rest)); align-content: start; }
   .attach-pop.sheet.full .ap-gallery { padding-bottom: calc(92px + env(safe-area-inset-bottom, 0px)); }
-  .ap-tile { position: relative; aspect-ratio: 1 / 1; width: 100%; height: auto; min-height: 0; border: none; padding: 0; overflow: hidden; background: var(--bg-surface-2); color: var(--fg-muted); border-radius: 4px; }
+  .ap-tile { position: relative; aspect-ratio: 1 / 1; width: 100%; height: auto; min-height: 0; border: none; padding: 0; overflow: hidden; background: var(--bg-surface-2); color: var(--fg-muted); border-radius: calc(4px * var(--rk, 1)); }
   .ap-tile img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .22s cubic-bezier(.22,1,.36,1), border-radius .22s ease; }
-  .ap-tile.on img { transform: scale(.86); border-radius: 8px; }
+  .ap-tile.on img { transform: scale(.86); border-radius: calc(8px * var(--rk, 1)); }
   .ap-pick, .ap-allow { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; font-size: 13px; font-weight: 600; }
   .ap-pick :global(svg) { width: 34px; height: 34px; }
   .ap-allow { color: var(--accent); padding: 8px; text-align: center; }
   .ap-check { position: absolute; top: 7px; right: 7px; width: 24px; height: 24px; box-sizing: border-box; border-radius: 50%; border: 2px solid #fff; background: rgba(0,0,0,.25);
     display: grid; place-items: center; font-size: 12.5px; font-weight: 800; color: #06070c; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
   .ap-tile.on .ap-check { background: var(--accent); border-color: var(--accent); }
-  .ap-dur { position: absolute; left: 6px; bottom: 6px; font-size: 11px; font-weight: 700; color: #fff; background: rgba(0,0,0,.5); padding: 1px 6px; border-radius: 8px; }
+  .ap-dur { position: absolute; left: 6px; bottom: 6px; font-size: 11px; font-weight: 700; color: #fff; background: rgba(0,0,0,.5); padding: 1px 6px; border-radius: calc(8px * var(--rk, 1)); }
   .ap-send { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(84px + env(safe-area-inset-bottom, 0px)); z-index: 73;
-    padding: 12px 26px; border-radius: 26px; border: none; font: 700 15px var(--font-ui, inherit); color: #06070c;
+    padding: 12px 26px; border-radius: calc(26px * var(--rk, 1)); border: none; font: 700 15px var(--font-ui, inherit); color: #06070c;
     background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 12px 28px -10px var(--accent-glow);
     animation: ap-send-in .3s cubic-bezier(.22,1,.36,1); transition: opacity .2s ease; }
   .ap-send.closing { opacity: 0; }
@@ -4768,13 +4834,13 @@
   .ap-dock.closing { transform: translateY(140%); opacity: 0; }
   @keyframes ap-dock-in { from { transform: translateY(140%); } }
   .ap-dock .ap-items {
-    display: flex; gap: 0; overflow-x: auto; scrollbar-width: none; padding: 5px; border-radius: 26px;
+    display: flex; gap: 0; overflow-x: auto; scrollbar-width: none; padding: 5px; border-radius: calc(26px * var(--rk, 1));
     background: color-mix(in srgb, var(--bg-surface-2) 62%, transparent); border: 1px solid var(--border-strong);
     backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6); box-shadow: 0 14px 34px -14px rgba(0,0,0,.8);
     overscroll-behavior-x: contain;
   }
   .ap-dock .ap-items::-webkit-scrollbar { display: none; }
-  .ap-dock .ap-item { flex: 0 0 66px; width: 66px; flex-direction: column; justify-content: center; gap: 2px; padding: 6px 2px; border-radius: 20px; font-size: 10.5px; text-align: center; }
+  .ap-dock .ap-item { flex: 0 0 66px; width: 66px; flex-direction: column; justify-content: center; gap: 2px; padding: 6px 2px; border-radius: calc(20px * var(--rk, 1)); font-size: 10.5px; text-align: center; }
   .ap-dock .ap-item span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
   .ap-dock .ap-item :global(svg) { width: 21px; height: 21px; }
   .ap-dock .ap-item:hover { background: transparent; color: inherit; }
@@ -4783,7 +4849,7 @@
     display: flex; align-items: center; gap: 10px; width: 100%;
     padding: 9px 12px; border: none; background: transparent;
     color: var(--fg); font-size: 13px; font-weight: 500;
-    border-radius: 8px; cursor: pointer; text-align: left;
+    border-radius: calc(8px * var(--rk, 1)); cursor: pointer; text-align: left;
   }
   .ap-item:hover { background: var(--accent-soft); color: var(--accent); }
   .ap-item :global(svg) { width: 18px; height: 18px; flex-shrink: 0; }
@@ -4885,7 +4951,7 @@
   .sel-actions { display: flex; align-items: center; gap: 4px; min-width: 0; }
   .sel-act {
     display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0;
-    padding: 7px 10px; border-radius: 10px; border: none; background: transparent;
+    padding: 7px 10px; border-radius: calc(10px * var(--rk, 1)); border: none; background: transparent;
     color: var(--fg-muted); font-size: 12.5px; font-weight: 600; cursor: pointer;
   }
   .sel-act svg { width: 19px; height: 19px; }
@@ -4895,8 +4961,8 @@
   .sel-more-wrap { position: relative; }
   .sel-more-veil { position: fixed; inset: 0; z-index: 30; }
   .sel-more { position: absolute; right: 0; top: calc(100% + 6px); z-index: 31; min-width: 170px; padding: 5px; display: flex; flex-direction: column;
-    background: var(--bg-surface-2); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: 0 16px 40px -10px rgba(0,0,0,.6); }
-  .sel-more button { text-align: left; padding: 10px 12px; border: none; border-radius: 8px; background: transparent; color: var(--fg); font: inherit; font-size: 14px; cursor: pointer; }
+    background: var(--bg-surface-2); border: 1px solid var(--border-strong); border-radius: calc(12px * var(--rk, 1)); box-shadow: 0 16px 40px -10px rgba(0,0,0,.6); }
+  .sel-more button { text-align: left; padding: 10px 12px; border: none; border-radius: calc(8px * var(--rk, 1)); background: transparent; color: var(--fg); font: inherit; font-size: 14px; cursor: pointer; }
   .sel-more button:hover { background: var(--accent-soft); color: var(--accent); }
   /* Phones: the bar replaces the chat header; icons only, big targets. */
   @media (max-width: 720px) {
@@ -4926,7 +4992,7 @@
   .msg { position: relative; }
   .sel-check { position: absolute; left: 0; top: 50%; transform: translateY(-50%); }
   .msg { transition: background-color .14s ease; }
-  .msg.selected { background: var(--accent-soft); border-radius: 10px; }
+  .msg.selected { background: var(--accent-soft); border-radius: calc(10px * var(--rk, 1)); }
   .messages.dragging { cursor: default; }
   .sel-check {
     align-self: center;
@@ -4950,7 +5016,7 @@
     min-width: 170px;
     background: var(--bg-surface-2);
     border: 1px solid var(--border-strong);
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     padding: 5px;
     box-shadow: 0 16px 40px -10px rgba(0,0,0,0.6);
     animation: ctx-in 0.1s ease-out;
@@ -4960,7 +5026,7 @@
   .ctx-menu.touch {
     transform-origin: top left;
     animation: ctx-pop 0.22s cubic-bezier(0.2, 0.9, 0.25, 1.12);
-    border-radius: 14px;
+    border-radius: calc(14px * var(--rk, 1));
   }
   .ctx-menu.touch :global(.ctx-item) { padding-top: 11px; padding-bottom: 11px; }
   @keyframes ctx-pop {
@@ -4970,14 +5036,14 @@
   }
   .mesh-bar {
     display: flex; align-items: center; gap: 10px; margin: 0 12px 6px; padding: 8px 10px 8px 12px;
-    border-radius: 12px; font-size: 12.5px; line-height: 1.35; color: var(--fg-muted);
+    border-radius: calc(12px * var(--rk, 1)); font-size: 12.5px; line-height: 1.35; color: var(--fg-muted);
     background: color-mix(in srgb, #0A84FF 12%, var(--bg-surface)); border: 1px solid color-mix(in srgb, #0A84FF 35%, transparent);
     animation: veil-in .2s ease-out;
   }
   .mesh-ic { width: 18px; height: 18px; color: #0A84FF; flex-shrink: 0; }
   .mesh-ic svg { width: 100%; height: 100%; }
   .mesh-tx { flex: 1; min-width: 0; }
-  .mesh-go { border: none; border-radius: 9px; padding: 6px 11px; background: #0A84FF; color: #fff; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+  .mesh-go { border: none; border-radius: calc(9px * var(--rk, 1)); padding: 6px 11px; background: #0A84FF; color: #fff; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
   .mesh-go:disabled { opacity: .6; }
   .ctx-veil {
     position: fixed; inset: 0; z-index: 119;
@@ -4992,7 +5058,7 @@
     display: block; width: 100%; text-align: left;
     padding: 8px 12px; border: none; background: transparent;
     color: var(--fg); font-size: 13px; font-weight: 500;
-    border-radius: 7px; cursor: pointer;
+    border-radius: calc(7px * var(--rk, 1)); cursor: pointer;
   }
   .ctx-item:hover { background: var(--accent-soft); color: var(--accent); }
   .ctx-item.danger { color: #ff8f8f; }
@@ -5004,7 +5070,7 @@
   }
   .ctx-emoji {
     width: 30px; height: 30px; border: none; background: transparent;
-    border-radius: 8px; font-size: 17px; cursor: pointer; line-height: 1;
+    border-radius: calc(8px * var(--rk, 1)); font-size: 17px; cursor: pointer; line-height: 1;
   }
   .ctx-emoji:hover { background: var(--bg-hover); transform: scale(1.15); }
   .ctx-emoji.pack { padding: 2px; }
@@ -5030,7 +5096,7 @@
   .ce-preview {
     position: absolute; left: 0; right: 0; bottom: calc(100% + 6px);
     max-height: 96px; overflow: auto;
-    padding: 6px 10px; border-radius: 10px;
+    padding: 6px 10px; border-radius: calc(10px * var(--rk, 1));
     background: var(--bg-surface); border: 1px solid var(--border);
     font-size: 14px; line-height: 1.45; color: var(--fg);
     white-space: pre-wrap; word-break: break-word; pointer-events: none;
@@ -5051,13 +5117,13 @@
     display: flex; align-items: center; gap: 10px;
     padding: 8px 16px; margin: 0 20px 8px;
     background: var(--bg-list); border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
   }
   .rb-line { width: 3px; align-self: stretch; background: var(--accent); border-radius: 3px; flex-shrink: 0; }
   .rb-body { flex: 1; min-width: 0; }
   .rb-author { font-size: 11.5px; font-weight: 700; color: var(--accent); }
   .rb-text { font-size: 12.5px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .rb-x { width: 28px; height: 28px; background: transparent; border: 1px solid var(--border); border-radius: 8px; color: var(--fg-dim); font-size: 16px; cursor: pointer; flex-shrink: 0; }
+  .rb-x { width: 28px; height: 28px; background: transparent; border: 1px solid var(--border); border-radius: calc(8px * var(--rk, 1)); color: var(--fg-dim); font-size: 16px; cursor: pointer; flex-shrink: 0; }
   .rb-x:hover { color: var(--fg); background: var(--bg-hover); }
 
   .reaction-row { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
@@ -5099,12 +5165,12 @@
   .rooms-head { display: flex; align-items: center; gap: 10px; height: 64px; padding: 0 14px; border: none; border-bottom: 1px solid var(--border);
     background: transparent; color: var(--fg); cursor: pointer; text-align: left; }
   .rooms-head:hover { background: var(--bg-hover); }
-  .rooms-head img, .rh-ava { width: 30px; height: 30px; border-radius: 9px; object-fit: cover; display: grid; place-items: center; font-weight: 800; color: #06070c; flex-shrink: 0; }
+  .rooms-head img, .rh-ava { width: 30px; height: 30px; border-radius: calc(9px * var(--rk, 1)); object-fit: cover; display: grid; place-items: center; font-weight: 800; color: #06070c; flex-shrink: 0; }
   .rh-name { flex: 1; font-weight: 800; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rh-chev { color: var(--fg-dim); }
   .rooms-list { flex: 1; overflow-y: auto; padding: 8px; }
   .rooms-cat { font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-dim); padding: 12px 8px 6px; }
-  .room { width: 100%; display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: none; border-radius: 8px; background: transparent;
+  .room { width: 100%; display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: none; border-radius: calc(8px * var(--rk, 1)); background: transparent;
     color: var(--fg-muted); font-size: 14px; cursor: pointer; text-align: left; transition: background .15s, color .15s, transform .15s; }
   .room:hover { background: var(--bg-hover); color: var(--fg); }
   .room:active { transform: scale(.98); }
@@ -5115,25 +5181,25 @@
     background: var(--tint); box-shadow: 0 2px 6px -2px var(--tint); }
   .room.muted { opacity: .55; }
   .room-topic { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); }
-  .room-menu { position: fixed; z-index: 400; width: 220px; padding: 6px; border-radius: 12px; background: var(--bg-shell);
+  .room-menu { position: fixed; z-index: 400; width: 220px; padding: 6px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-shell);
     border: 1px solid var(--border-strong); box-shadow: 0 18px 50px -12px rgba(0,0,0,.7); display: flex; flex-direction: column; gap: 1px;
     animation: rm-in .16s cubic-bezier(.2,.9,.25,1.1); transform-origin: top left; }
   @keyframes rm-in { from { opacity: 0; transform: scale(.95); } }
   .rm-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px 8px; font-size: 13px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
   .rm-head b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .room-menu button { text-align: left; border: none; background: transparent; color: var(--fg); font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 8px; cursor: pointer; }
+  .room-menu button { text-align: left; border: none; background: transparent; color: var(--fg); font: inherit; font-size: 13px; padding: 7px 10px; border-radius: calc(8px * var(--rk, 1)); cursor: pointer; }
   .room-menu button:hover { background: var(--bg-hover, var(--bg-input)); }
   .room-menu button.danger { color: #ff6b6b; }
   .rm-sep { height: 1px; background: var(--border); margin: 4px 2px; }
   .room-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .room-lock { font-size: 11px; opacity: .7; }
-  .room-badge { min-width: 18px; padding: 0 6px; height: 18px; border-radius: 9px; background: var(--accent); color: #06070c; font-size: 11px; font-weight: 800; display: grid; place-items: center; }
+  .room-badge { min-width: 18px; padding: 0 6px; height: 18px; border-radius: calc(9px * var(--rk, 1)); background: var(--accent); color: #06070c; font-size: 11px; font-weight: 800; display: grid; place-items: center; }
   .room-people { display: flex; flex-direction: column; gap: 4px; padding: 2px 0 6px 34px; }
   .rp { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-muted); }
   .rp img, .rp { --s: 20px; }
   .rp img { width: 20px; height: 20px; border-radius: 50%; }
   .rp i { font-style: normal; }
-  .room-switch { border: none; background: var(--accent-soft); color: var(--accent); border-radius: 8px; padding: 1px 8px; font: inherit; font-weight: 800; cursor: pointer; margin-right: 6px;
+  .room-switch { border: none; background: var(--accent-soft); color: var(--accent); border-radius: calc(8px * var(--rk, 1)); padding: 1px 8px; font: inherit; font-weight: 800; cursor: pointer; margin-right: 6px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: 62%; flex-shrink: 1; }
   .group-name-btn.dim { color: var(--fg-muted); font-weight: 600; font-size: .85em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex-shrink: 1; }
   .peer-name { min-width: 0; }
@@ -5164,7 +5230,7 @@
   .rules-bar summary { cursor: pointer; color: var(--acc); font-weight: 700; }
   .rules-bar summary::marker { color: var(--acc); }
   .rules-bar p { margin: 6px 0 0; white-space: pre-wrap; line-height: 1.45; max-height: 30vh; overflow-y: auto; }
-  .rb-ok { border: none; border-radius: 8px; padding: 6px 12px; background: var(--acc); color: #06070c; font-weight: 700; cursor: pointer; }
+  .rb-ok { border: none; border-radius: calc(8px * var(--rk, 1)); padding: 6px 12px; background: var(--acc); color: #06070c; font-weight: 700; cursor: pointer; }
   @keyframes rb-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
   .pin-bar {
     display: flex; align-items: center; gap: 6px;
@@ -5181,7 +5247,7 @@
   .pin-text { min-width: 0; }
   .pin-title { font-size: 11px; font-weight: 700; color: var(--accent); }
   .pin-preview { font-size: 12.5px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .pin-x { width: 28px; height: 28px; background: transparent; border: 1px solid var(--border); border-radius: 8px; color: var(--fg-dim); font-size: 16px; cursor: pointer; flex-shrink: 0; }
+  .pin-x { width: 28px; height: 28px; background: transparent; border: 1px solid var(--border); border-radius: calc(8px * var(--rk, 1)); color: var(--fg-dim); font-size: 16px; cursor: pointer; flex-shrink: 0; }
   .pin-x:hover { color: var(--fg); background: var(--bg-hover); }
 
   /* Poll bubble */
@@ -5199,7 +5265,7 @@
     border: 2px solid var(--border-strong);
   }
   .poll-mark.on { background: var(--accent); border-color: var(--accent); box-shadow: inset 0 0 0 3px var(--bg-bubble-in); }
-  .poll-mark.sq { border-radius: 5px; }
+  .poll-mark.sq { border-radius: calc(5px * var(--rk, 1)); }
   .poll-opt:disabled { cursor: default; }
   .poll-opt.results .poll-pct { min-width: 34px; font-weight: 800; color: var(--fg); }
   .poll-opt.lead .poll-fill { box-shadow: 0 0 10px var(--accent-glow); }
@@ -5211,9 +5277,9 @@
   .poll-who { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
   .pw { font-size: 10.5px; padding: 1px 6px; border-radius: 100px; background: var(--bg-input); color: var(--fg-muted); border: 1px solid var(--border); }
   .pw.more { color: var(--fg-dim); }
-  .poll-expl { display: flex; gap: 7px; font-size: 12.5px; color: var(--fg-muted); background: var(--bg-input); border-radius: 9px; padding: 8px 10px; margin-top: 8px; line-height: 1.45; }
+  .poll-expl { display: flex; gap: 7px; font-size: 12.5px; color: var(--fg-muted); background: var(--bg-input); border-radius: calc(9px * var(--rk, 1)); padding: 8px 10px; margin-top: 8px; line-height: 1.45; }
   .poll-submit {
-    margin-top: 8px; border: none; border-radius: 9px; padding: 8px; font: inherit; font-weight: 800; font-size: 13px; cursor: pointer;
+    margin-top: 8px; border: none; border-radius: calc(9px * var(--rk, 1)); padding: 8px; font: inherit; font-weight: 800; font-size: 13px; cursor: pointer;
     background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070C;
   }
   .poll-submit:disabled { opacity: 0.45; cursor: default; }
@@ -5247,7 +5313,7 @@
   .not-live-banner {
     margin: 0 20px 10px;
     padding: 12px 16px;
-    border-radius: 12px;
+    border-radius: calc(12px * var(--rk, 1));
     background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, transparent), color-mix(in srgb, var(--accent-2) 8%, transparent));
     border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
     color: var(--fg);
@@ -5296,7 +5362,7 @@
     display: grid; place-items: center;
     background: var(--bg-input);
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     color: var(--fg-muted);
     cursor: pointer;
     transition: all 0.12s ease;
@@ -5322,7 +5388,7 @@
     align-items: flex-end;
     background: var(--bg-input);
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: calc(12px * var(--rk, 1));
     padding: 2px 4px 2px 12px;
     transition: border-color 0.15s ease, box-shadow 0.15s ease;
     min-width: 0;
@@ -5357,7 +5423,7 @@
     display: grid; place-items: center;
     background: var(--bg-input);
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     color: var(--fg-dim);
     cursor: pointer;
     transition: all 0.15s ease;

@@ -1,4 +1,5 @@
 <script lang="ts" generics="T extends string | number">
+  import Select from "./Select.svelte";
   /**
    * A segmented control that never pushes the page sideways: while all its
    * buttons fit the space it's given they show side by side; when they don't
@@ -39,10 +40,8 @@
       {/each}
     </div>
   {:else}
-    <select class="seg-select" aria-label={label} value={String(current)}
-      onchange={(e) => onpick(options[Number((e.target as HTMLSelectElement).value)].id)}>
-      {#each options as o, i (o.id)}<option value={String(i)}>{o.label}</option>{/each}
-    </select>
+    <Select class="seg-select" label={label} value={current} options={options.map((o, i) => ({ value: i, label: o.label }))}
+      onchange={(i) => onpick(options[i].id)} />
   {/if}
 </div>
 
@@ -53,7 +52,7 @@
     display: flex;
     background: var(--bg-input);
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     padding: 3px;
     gap: 2px;
   }
@@ -62,7 +61,7 @@
     padding: 5px 12px;
     background: transparent;
     border: none;
-    border-radius: 7px;
+    border-radius: calc(7px * var(--rk, 1));
     color: var(--fg-muted);
     font-size: 12.5px;
     font-weight: 600;
@@ -79,7 +78,7 @@
   .seg-select {
     max-width: 100%; min-width: 0;
     background-color: var(--bg-input); color: var(--accent); border: 1px solid var(--border);
-    border-radius: 10px; padding: 8px 12px; font: inherit; font-size: 14px; font-weight: 600;
+    border-radius: calc(10px * var(--rk, 1)); padding: 8px 12px; font: inherit; font-size: 14px; font-weight: 600;
   }
   @media (max-width: 720px) {
     .seg-opt { padding: 8px 12px; font-size: 13.5px; }

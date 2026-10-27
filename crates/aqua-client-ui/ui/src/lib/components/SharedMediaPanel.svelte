@@ -183,26 +183,26 @@
   @keyframes sm-in { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: translateX(0); } }
   .sm-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--border); }
   .sm-head h3 { margin: 0; font-size: 14px; font-weight: 700; }
-  .sm-close { width: 28px; height: 28px; background: transparent; border: 1px solid var(--border); border-radius: 8px; color: var(--fg-dim); font-size: 17px; cursor: pointer; }
+  .sm-close { width: 28px; height: 28px; background: transparent; border: 1px solid var(--border); border-radius: calc(8px * var(--rk, 1)); color: var(--fg-dim); font-size: 17px; cursor: pointer; }
   .sm-close:hover { color: var(--fg); background: var(--bg-hover); }
   .sm-tabs { display: flex; gap: 3px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
-  .sm-tab { flex: 1; padding: 6px 4px; border-radius: 7px; background: transparent; border: none; color: var(--fg-muted); font-size: 12px; font-weight: 600; cursor: pointer; }
+  .sm-tab { flex: 1; padding: 6px 4px; border-radius: calc(7px * var(--rk, 1)); background: transparent; border: none; color: var(--fg-muted); font-size: 12px; font-weight: 600; cursor: pointer; }
   .sm-tab:hover { color: var(--fg); background: var(--bg-hover); }
   .sm-tab.active { color: var(--accent); background: var(--accent-soft); }
   .sm-body { flex: 1; overflow-y: auto; padding: 8px; }
   .sm-status { padding: 36px 16px; text-align: center; color: var(--fg-dim); font-size: 12.5px; }
 
   .sm-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
-  .sm-cell { position: relative; aspect-ratio: 1; border: none; padding: 0; border-radius: 8px; overflow: hidden; background: var(--bg-input); cursor: pointer; }
+  .sm-cell { position: relative; aspect-ratio: 1; border: none; padding: 0; border-radius: calc(8px * var(--rk, 1)); overflow: hidden; background: var(--bg-input); cursor: pointer; }
   .sm-cell img, .sm-cell video { width: 100%; height: 100%; object-fit: cover; display: block; }
   .sm-ph { width: 100%; height: 100%; background: var(--bg-input); }
   .sm-playmark { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-size: 18px; text-shadow: 0 1px 4px rgba(0,0,0,0.6); }
 
-  .sm-row { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 9px; }
+  .sm-row { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: calc(9px * var(--rk, 1)); }
   .sm-row:hover { background: var(--bg-hover); }
   .sm-row-main { display: flex; align-items: center; gap: 10px; width: 100%; background: transparent; border: none; cursor: pointer; color: inherit; text-align: left; padding: 0; }
   .sm-ic {
-    width: 34px; height: 34px; flex-shrink: 0; border-radius: 9px;
+    width: 34px; height: 34px; flex-shrink: 0; border-radius: calc(9px * var(--rk, 1));
     background: var(--bg-input); border: 1px solid var(--border);
     display: grid; place-items: center; font-size: 11px; font-weight: 700; color: var(--accent);
   }
@@ -210,7 +210,7 @@
   .sm-row-name { font-size: 13px; font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sm-row-sub { font-size: 11px; color: var(--fg-dim); }
 
-  .sm-link { display: block; padding: 8px 10px; border-radius: 9px; text-decoration: none; }
+  .sm-link { display: block; padding: 8px 10px; border-radius: calc(9px * var(--rk, 1)); text-decoration: none; }
   .sm-link:hover { background: var(--bg-hover); }
   .sm-link-host { display: block; font-size: 13px; font-weight: 600; color: var(--accent); }
   .sm-link-url { display: block; font-size: 11px; color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

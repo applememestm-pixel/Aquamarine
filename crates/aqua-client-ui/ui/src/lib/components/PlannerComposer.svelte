@@ -6,6 +6,7 @@
 </script>
 
 <script lang="ts">
+  import Select from "./Select.svelte";
   import { t, tr } from "../i18n";
   import { api } from "../tauri";
   import { chats, activeId, loadActiveMessages } from "../stores";
@@ -89,14 +90,12 @@
             <div class="pc-side">
               <div class="pc-lbl">{$t("Time")}</div>
               <div class="pc-time">
-                <select bind:value={hh}>{#each Array(24) as _, h (h)}<option value={h}>{pad(h)}</option>{/each}</select>
+                <Select compact bind:value={hh} options={Array.from({ length: 24 }, (_, h) => ({ value: h, label: pad(h) }))} />
                 <span>:</span>
-                <select bind:value={mm}>{#each Array(12) as _, i (i)}<option value={i * 5}>{pad(i * 5)}</option>{/each}</select>
+                <Select compact bind:value={mm} options={Array.from({ length: 12 }, (_, i) => ({ value: i * 5, label: pad(i * 5) }))} />
               </div>
               <div class="pc-lbl">{$t("Duration")}</div>
-              <select bind:value={dur}>
-                {#each [[0, "—"], [15, "15 min"], [30, "30 min"], [60, "1 h"], [90, "1.5 h"], [120, "2 h"], [180, "3 h"], [240, "4 h"], [480, "8 h"], [1440, "1 d"]] as [v, l] (v)}<option value={v}>{$t(String(l))}</option>{/each}
-              </select>
+              <Select bind:value={dur} options={([[0, "—"], [15, "15 min"], [30, "30 min"], [60, "1 h"], [90, "1.5 h"], [120, "2 h"], [180, "3 h"], [240, "4 h"], [480, "8 h"], [1440, "1 d"]] as [number, string][]).map(([v, l]) => ({ value: v, label: $t(l) }))} />
               <div class="pc-lbl">{$t("Remind everyone")}</div>
               <div class="pc-chips">
                 {#each [0, ...REMIND_PRESETS] as m (m)}
@@ -152,12 +151,12 @@
 
 <style>
   .pc-veil { position: fixed; inset: 0; z-index: 900; display: grid; place-items: center; background: rgba(4, 6, 12, 0.5); animation: pc-fade 0.14s ease-out; }
-  .pc { width: min(560px, calc(100vw - 20px)); max-height: calc(100dvh - 24px); display: flex; flex-direction: column; background: var(--bg-shell); border: 1px solid var(--border-strong); border-radius: 18px; overflow: hidden; animation: pc-pop 0.18s cubic-bezier(.2,.9,.3,1.15); }
+  .pc { width: min(560px, calc(100vw - 20px)); max-height: calc(100dvh - 24px); display: flex; flex-direction: column; background: var(--bg-shell); border: 1px solid var(--border-strong); border-radius: calc(18px * var(--rk, 1)); overflow: hidden; animation: pc-pop 0.18s cubic-bezier(.2,.9,.3,1.15); }
   .pc-head { display: flex; align-items: center; padding: 14px 16px 10px; border-bottom: 1px solid var(--border); }
   .pc-head b { flex: 1; font-size: 15.5px; }
   .pc-x { width: 30px; height: 30px; border-radius: 50%; border: none; background: var(--bg-hover); color: var(--fg-muted); cursor: pointer; }
   .pc-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
-  .pc-body input:not([type=range]), .pc-body textarea, .pc-body select { padding: 9px 11px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 14px; outline: none; resize: vertical; }
+  .pc-body input:not([type=range]), .pc-body textarea, .pc-body select { padding: 9px 11px; border-radius: calc(10px * var(--rk, 1)); border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 14px; outline: none; resize: vertical; }
   .pc-body input:focus, .pc-body textarea:focus { border-color: var(--accent); }
   .pc-title { font-size: 16px !important; font-weight: 700; }
   .pc-cols { display: grid; grid-template-columns: 1fr 190px; gap: 14px; }
@@ -166,7 +165,7 @@
   .pc-lbl { font-size: 11.5px; font-weight: 700; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-top: 4px; }
   .pc-exp { font-size: 10px; text-transform: none; letter-spacing: 0; color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 0 6px; margin-left: 4px; }
   .pc-time { display: flex; align-items: center; gap: 4px; }
-  .pc-time select { flex: 1; }
+  .pc-time :global(.aq-select) { flex: 1; justify-content: space-between; }
   .pc-chips { display: flex; flex-wrap: wrap; gap: 5px; }
   .pc-chips button { border: 1px solid var(--border); border-radius: 999px; background: none; color: var(--fg-muted); font: inherit; font-size: 11.5px; padding: 4px 9px; cursor: pointer; }
   .pc-chips button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
@@ -175,11 +174,11 @@
   .pc-item { display: flex; align-items: center; gap: 8px; }
   .pc-item input { flex: 1; min-width: 0; }
   .pc-num { width: 20px; text-align: right; font-size: 12px; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
-  .pc-rm { width: 28px; height: 28px; border-radius: 8px; border: none; background: none; color: var(--fg-dim); cursor: pointer; }
+  .pc-rm { width: 28px; height: 28px; border-radius: calc(8px * var(--rk, 1)); border: none; background: none; color: var(--fg-dim); cursor: pointer; }
   .pc-rm:hover { background: var(--bg-hover); color: var(--fg); }
   .pc-addi { align-self: flex-start; border: none; background: none; color: var(--accent); font: inherit; font-weight: 600; font-size: 13px; cursor: pointer; padding: 4px 28px; }
-  .pc-seg { display: flex; gap: 4px; padding: 3px; border-radius: 10px; background: var(--bg-input); }
-  .pc-seg button { flex: 1; border: none; background: none; color: var(--fg-muted); font: inherit; font-size: 12.5px; font-weight: 600; padding: 7px 4px; border-radius: 8px; cursor: pointer; }
+  .pc-seg { display: flex; gap: 4px; padding: 3px; border-radius: calc(10px * var(--rk, 1)); background: var(--bg-input); }
+  .pc-seg button { flex: 1; border: none; background: none; color: var(--fg-muted); font: inherit; font-size: 12.5px; font-weight: 600; padding: 7px 4px; border-radius: calc(8px * var(--rk, 1)); cursor: pointer; }
   .pc-seg button.on { background: var(--bg-shell); color: var(--accent); box-shadow: 0 0 0 1px var(--border-strong); }
   .pc-n { display: flex; align-items: center; gap: 10px; }
   .pc-n input { flex: 1; }
@@ -188,12 +187,12 @@
   .pc-toggle > span:first-child { flex: 1; display: flex; flex-direction: column; gap: 2px; }
   .pc-toggle b { font-size: 13.5px; }
   .pc-toggle i { font-style: normal; font-size: 12px; color: var(--fg-dim); }
-  .pc-sw { width: 36px; height: 21px; border-radius: 11px; background: var(--bg-hover); border: 1px solid var(--border-strong); position: relative; flex-shrink: 0; }
+  .pc-sw { width: 36px; height: 21px; border-radius: calc(11px * var(--rk, 1)); background: var(--bg-hover); border: 1px solid var(--border-strong); position: relative; flex-shrink: 0; }
   .pc-sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 15px; height: 15px; border-radius: 50%; background: var(--fg-muted); transition: transform 0.15s; }
   .pc-sw.on { background: var(--accent); border-color: transparent; }
   .pc-sw.on::after { transform: translateX(15px); background: #fff; }
   .pc-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); }
-  .pc-btn { border: none; border-radius: 10px; padding: 9px 18px; background: var(--accent); color: #06070C; font: inherit; font-weight: 700; cursor: pointer; }
+  .pc-btn { border: none; border-radius: calc(10px * var(--rk, 1)); padding: 9px 18px; background: var(--accent); color: #06070C; font: inherit; font-weight: 700; cursor: pointer; }
   .pc-btn.ghost { background: var(--bg-input); color: var(--fg); }
   .pc-btn:disabled { opacity: 0.6; }
   @keyframes pc-fade { from { opacity: 0; } }

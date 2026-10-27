@@ -118,6 +118,11 @@ pub async fn send_to_address(app: &AppHandle, addr: &str, payload: &str) -> Resu
         }
         return Ok(());
     }
+    // Presence, typing and read marks never open a session: an older app
+    // on a new device of theirs would show them as a message.
+    if opens_no_session(payload) {
+        return Err("no session yet".into());
+    }
     let (transport, identity) = {
         let s = state.lock().map_err(|e| e.to_string())?;
         (s.transport.clone().ok_or("not connected")?, s.identity.clone())
@@ -131,6 +136,11 @@ pub async fn send_to_address(app: &AppHandle, addr: &str, payload: &str) -> Resu
     let _ = s.vault.save_session(addr, &session);
     s.sessions.insert(addr.to_string(), session);
     Ok(())
+}
+
+fn opens_no_session(payload: &str) -> bool {
+    use crate::commands::{SEEN_PREFIX, STATUS_PREFIX, TYPING_PREFIX};
+    [STATUS_PREFIX, TYPING_PREFIX, SEEN_PREFIX].iter().any(|p| payload.starts_with(p))
 }
 
 /// Typing, presence, call signalling and handoff only matter right now;

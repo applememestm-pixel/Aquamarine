@@ -12,6 +12,7 @@
 </script>
 
 <script lang="ts">
+  import { adoptMyCard } from "../people";
   import { appIconUrl } from "../appIcon";
   import ServerPicker from "./ServerPicker.svelte";
   import { t, tr } from "../i18n";
@@ -55,6 +56,35 @@
       if (isLocal) u = "http://" + m[1];
     }
     return u;
+  }
+
+  /** A server's error in plain words, plus what to do about it. */
+  function explainNet(m: string, url: string): string | null {
+    const local = /\/\/(127\.0\.0\.1|localhost|\[?::1\]?)(?=[:/]|$)/i.test(url);
+    if (/10061|ECONNREFUSED|Connection refused|actively refused|отверг/i.test(m))
+      return local
+        ? tr("Nothing answers at {u}: that's this computer, and no Aquamarine server runs on it. Pick a server from the list or type the address your friend gave you.", { u: url })
+        : tr("The server at {u} doesn't answer: it's off, the port is closed, or the address is wrong.", { u: url });
+    if (/InvalidContentType|wrong version number|tls|ssl|certificate/i.test(m))
+      return tr("{u} doesn't speak HTTPS. Try the address with http:// instead.", { u: url });
+    if (/timed out|timeout/i.test(m)) return tr("The server at {u} takes too long to answer — check the address and your connection.", { u: url });
+    if (/dns|resolve|lookup|No such host|getaddrinfo/i.test(m)) return tr("There's no such address: {u}. Check the spelling.", { u: url });
+    return null;
+  }
+  /** Run a server request; an https:// address that turns out to be a plain
+   *  HTTP server is retried once with http:// (and kept). */
+  async function withServer<T>(fn: (url: string) => Promise<T>): Promise<T> {
+    try { return await fn(serverUrl.trim()); }
+    catch (e) {
+      const m = String(e);
+      if (/^https:\/\//i.test(serverUrl.trim()) && /InvalidContentType|wrong version number|tls|ssl/i.test(m)) {
+        const alt = serverUrl.trim().replace(/^https:/i, "http:");
+        const r = await fn(alt);
+        serverUrl = alt;
+        return r;
+      }
+      throw e;
+    }
   }
 
   // One-click re-entry for an already-registered account on this device.
@@ -159,7 +189,7 @@
     existsHint = false;
     try {
       nonce = newNonce();
-      const r = await api.requestEmailCode(serverUrl.trim(), email.trim(), mode, nonce);
+      const r = await withServer((u) => api.requestEmailCode(u, email.trim(), mode, nonce));
       devCode = r.dev_code; mailFailed = r.delivery_failed ? (r.error || "?") : null;
       step = 2;
       if (devCode) code = devCode; // prefill in dev mode for convenience
@@ -168,7 +198,7 @@
       const m = String(e);
       if (/already exists/i.test(m)) { error = tr("An account with this e-mail already exists."); existsHint = true; }
       else if (/no account with this e-mail/i.test(m)) error = tr("There's no account with this e-mail on this server.");
-      else error = tr("Could not send code: {e}", { e: m });
+      else error = explainNet(m, serverUrl.trim()) ?? tr("Could not send code: {e}", { e: m });
     } finally {
       busy = false;
     }
@@ -258,6 +288,7 @@
       const err = await connect(serverUrl.trim(), u);
       if (err) { error = err; return; }
       try { info.set(await api.completeRegistration(u, email.trim() || null)); } catch { /* non-fatal */ }
+      await adoptMyCard(u);
       try { chats.set(await api.listChats()); } catch { /* non-fatal */ }
       if (!restored) { try { await api.backupEnable(password); } catch { /* non-fatal */ } }
       void refreshBackup();
@@ -281,6 +312,7 @@
       const err = await connect(serverUrl.trim(), u);
       if (err) { error = err; return; }
       try { info.set(await api.completeRegistration(u, email.trim() || null)); } catch { /* non-fatal */ }
+      await adoptMyCard(u);
       try { await api.backupEnable(password); } catch { /* non-fatal */ }
       closeRegistration();
     } catch (e) { error = String(e); }
@@ -542,20 +574,20 @@
   .link { align-self: flex-start; border: none; background: none; padding: 0; color: var(--accent); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
   .link:hover { text-decoration: underline; }
   .link.forgot { margin-top: 6px; font-weight: 500; }
-  .err-act { display: block; margin-top: 8px; border: 1px solid currentColor; background: none; color: inherit; font: inherit; font-weight: 700; font-size: 13px; padding: 6px 12px; border-radius: 8px; cursor: pointer; }
+  .err-act { display: block; margin-top: 8px; border: 1px solid currentColor; background: none; color: inherit; font: inherit; font-weight: 700; font-size: 13px; padding: 6px 12px; border-radius: calc(8px * var(--rk, 1)); cursor: pointer; }
   .note.dim { opacity: 0.75; font-size: 12.5px; }
   .rk-title { font-size: 18px; }
-  .rk-words { list-style: none; margin: 4px 0 0; padding: 12px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px 10px; background: var(--bg-input); border-radius: 12px; border: 1px solid var(--border); font-family: var(--font-mono, ui-monospace, monospace); font-size: 13.5px; user-select: text; }
+  .rk-words { list-style: none; margin: 4px 0 0; padding: 12px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px 10px; background: var(--bg-input); border-radius: calc(12px * var(--rk, 1)); border: 1px solid var(--border); font-family: var(--font-mono, ui-monospace, monospace); font-size: 13.5px; user-select: text; }
   .rk-words li { display: flex; gap: 6px; align-items: baseline; }
   .rk-words li span { color: var(--fg-dim); font-size: 11px; min-width: 16px; text-align: right; }
   .rk-ok { display: flex; align-items: center; gap: 8px; font-size: 13.5px; cursor: pointer; }
-  .mode-tabs { display: flex; gap: 4px; background: var(--bg-input); border-radius: 12px; padding: 4px; margin-bottom: 14px; }
-  .mode-tabs button { flex: 1; border: none; background: none; color: var(--fg-muted); font: inherit; font-weight: 700; font-size: 13.5px; padding: 9px; border-radius: 9px; cursor: pointer; }
+  .mode-tabs { display: flex; gap: 4px; background: var(--bg-input); border-radius: calc(12px * var(--rk, 1)); padding: 4px; margin-bottom: 14px; }
+  .mode-tabs button { flex: 1; border: none; background: none; color: var(--fg-muted); font: inherit; font-weight: 700; font-size: 13.5px; padding: 9px; border-radius: calc(9px * var(--rk, 1)); cursor: pointer; }
   .mode-tabs button.on { background: var(--bg-shell); color: var(--accent); box-shadow: 0 0 0 1px var(--border-strong), 0 4px 14px -6px var(--accent-glow); }
   .pw { position: relative; display: flex; }
   .pw input { flex: 1; padding-right: 38px; }
   .pw-eye { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--fg-dim); font-size: 16px; cursor: pointer; }
-  .pw-meter { display: block; height: 4px; border-radius: 4px; background: var(--bg-input); overflow: hidden; margin-top: 6px; }
+  .pw-meter { display: block; height: 4px; border-radius: calc(4px * var(--rk, 1)); background: var(--bg-input); overflow: hidden; margin-top: 6px; }
   .pw-meter i { display: block; height: 100%; background: #ff6b6b; transition: width 0.2s, background 0.2s; }
   .pw-meter i.ok { background: var(--accent); }
   .backdrop {
@@ -572,7 +604,7 @@
     width: min(460px, 94vw);
     background: var(--bg-shell);
     border: 1px solid var(--border-strong);
-    border-radius: 20px;
+    border-radius: calc(20px * var(--rk, 1));
     box-shadow: 0 40px 100px -20px rgba(0,0,0,0.75);
     padding: 26px;
     animation: slide-up 0.24s ease-out;
@@ -594,7 +626,7 @@
     display: flex; flex-direction: column;
   }
   .logo-lg {
-    width: 56px; height: 56px; border-radius: 16px;
+    width: 56px; height: 56px; border-radius: calc(16px * var(--rk, 1));
     display: block;
     box-shadow: 0 0 30px -4px var(--accent-glow);
     margin-bottom: 18px;
@@ -615,7 +647,7 @@
   .brand-row { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
   .logo {
     width: 48px; height: 48px;
-    border-radius: 14px;
+    border-radius: calc(14px * var(--rk, 1));
     background: linear-gradient(135deg, var(--accent), var(--accent-2));
     display: grid; place-items: center;
     font-weight: 800; font-size: 22px; color: #06070C;
@@ -641,14 +673,14 @@
     background: rgba(255,77,109,0.12);
     border: 1px solid rgba(255,77,109,0.3);
     color: #ff9fb0;
-    padding: 8px 12px; border-radius: 10px;
+    padding: 8px 12px; border-radius: calc(10px * var(--rk, 1));
     font-size: 12.5px; margin-bottom: 12px;
   }
 
   .continue-box { margin-bottom: 14px; }
   .cb-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-dim); margin-bottom: 8px; }
   .continue-btn {
-    width: 100%; padding: 12px 16px; border-radius: 12px; border: none; cursor: pointer;
+    width: 100%; padding: 12px 16px; border-radius: calc(12px * var(--rk, 1)); border: none; cursor: pointer;
     font-size: 14.5px; font-weight: 700; color: #06070C;
     background: linear-gradient(135deg, var(--accent), var(--accent-2));
     box-shadow: 0 6px 16px -4px var(--accent-glow);
@@ -664,7 +696,7 @@
   .field input, .field textarea {
     background: var(--bg-input);
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: calc(10px * var(--rk, 1));
     color: var(--fg);
     font-family: inherit;
     font-size: 14px;
@@ -686,7 +718,7 @@
   .note.dev b { font-family: var(--font-mono); }
 
   .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
-  .ghost, .primary { padding: 9px 18px; border-radius: 10px; font-size: 13px; font-weight: 700; cursor: pointer; border: none; }
+  .ghost, .primary { padding: 9px 18px; border-radius: calc(10px * var(--rk, 1)); font-size: 13px; font-weight: 700; cursor: pointer; border: none; }
   .ghost { background: transparent; border: 1px solid var(--border); color: var(--fg-muted); }
   .ghost:hover { color: var(--fg); border-color: var(--border-strong); }
   .primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070C; box-shadow: 0 6px 16px -4px var(--accent-glow); }

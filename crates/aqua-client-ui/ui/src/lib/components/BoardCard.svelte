@@ -71,20 +71,20 @@
   .bd-head b { flex: 1; font-size: 15px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bd-n { font-size: 11.5px; color: var(--fg-dim); }
   .bd-cols { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(150px, 1fr); gap: 8px; overflow-x: auto; padding-bottom: 2px; }
-  .bd-col { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: 10px; background: var(--bg-input); min-height: 80px; transition: box-shadow 0.12s; }
+  .bd-col { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: calc(10px * var(--rk, 1)); background: var(--bg-input); min-height: 80px; transition: box-shadow 0.12s; }
   .bd-col.over:hover { box-shadow: inset 0 0 0 2px var(--accent); }
   .bd-ch { font-size: 12px; font-weight: 800; color: var(--fg-muted); display: flex; justify-content: space-between; }
   .bd-ch i { font-style: normal; color: var(--fg-dim); font-weight: 600; }
-  .bd-card { padding: 7px 8px; border-radius: 8px; background: var(--bg-shell); border: 1px solid var(--border); display: flex; flex-direction: column; gap: 4px; cursor: grab; animation: bd-in 0.16s ease-out; }
+  .bd-card { padding: 7px 8px; border-radius: calc(8px * var(--rk, 1)); background: var(--bg-shell); border: 1px solid var(--border); display: flex; flex-direction: column; gap: 4px; cursor: grab; animation: bd-in 0.16s ease-out; }
   .bd-card:hover { border-color: var(--border-strong); }
   @keyframes bd-in { from { opacity: 0; transform: translateY(4px); } }
   .bd-t { color: var(--fg); font-size: 13px; line-height: 1.4; word-wrap: break-word; max-height: 160px; overflow: hidden; }
   .bd-acts { display: flex; gap: 2px; justify-content: flex-end; opacity: 0; transition: opacity 0.12s; }
   .bd-card:hover .bd-acts { opacity: 1; }
-  .bd-acts button { width: 22px; height: 22px; border-radius: 6px; border: none; background: var(--bg-hover); color: var(--fg-muted); cursor: pointer; font-size: 13px; line-height: 1; }
+  .bd-acts button { width: 22px; height: 22px; border-radius: calc(6px * var(--rk, 1)); border: none; background: var(--bg-hover); color: var(--fg-muted); cursor: pointer; font-size: 13px; line-height: 1; }
   .bd-acts button:hover { color: var(--accent); }
   .bd-acts .del:hover { color: #ff5c5c; }
-  .bd-add { border: 1px dashed var(--border-strong); border-radius: 8px; background: none; color: var(--fg-dim); font: inherit; font-size: 12.5px; padding: 6px; cursor: pointer; }
+  .bd-add { border: 1px dashed var(--border-strong); border-radius: calc(8px * var(--rk, 1)); background: none; color: var(--fg-dim); font: inherit; font-size: 12.5px; padding: 6px; cursor: pointer; }
   .bd-add:hover { color: var(--accent); border-color: var(--accent); }
-  .bd-new, .bd-card textarea { width: 100%; box-sizing: border-box; resize: none; border: 1px solid var(--accent); border-radius: 8px; background: var(--bg-shell); color: var(--fg); font: inherit; font-size: 13px; padding: 6px 8px; outline: none; }
+  .bd-new, .bd-card textarea { width: 100%; box-sizing: border-box; resize: none; border: 1px solid var(--accent); border-radius: calc(8px * var(--rk, 1)); background: var(--bg-shell); color: var(--fg); font: inherit; font-size: 13px; padding: 6px 8px; outline: none; }
 </style>

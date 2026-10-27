@@ -100,7 +100,7 @@
   .th-n { flex: 1; font-size: 12px; color: var(--fg-dim); }
   .th-x { width: 28px; height: 28px; border-radius: 50%; border: none; background: var(--bg-hover); color: var(--fg-muted); cursor: pointer; }
   .th-list { flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
-  .th-root { padding: 12px; border-radius: 12px; background: var(--bg-input); border-left: 3px solid var(--accent); }
+  .th-root { padding: 12px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-input); border-left: 3px solid var(--accent); }
   .th-meta { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
   .th-meta b { color: var(--accent); font-size: 12.5px; }
   .th-meta span { color: var(--fg-dim); font-size: 11px; }
@@ -122,7 +122,7 @@
   .th-reply b { color: var(--accent); }
   .th-reply button { border: none; background: none; color: var(--fg-dim); cursor: pointer; }
   .th-row { display: flex; gap: 8px; align-items: flex-end; }
-  .th-row textarea { flex: 1; min-width: 0; resize: none; max-height: 120px; padding: 9px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 13.5px; outline: none; }
+  .th-row textarea { flex: 1; min-width: 0; resize: none; max-height: 120px; padding: 9px 12px; border-radius: calc(12px * var(--rk, 1)); border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 13.5px; outline: none; }
   .th-row textarea:focus { border-color: var(--accent); }
   .th-send { width: 38px; height: 38px; border-radius: 50%; border: none; background: var(--accent); color: #06070C; display: grid; place-items: center; cursor: pointer; flex-shrink: 0; }
   .th-send svg { width: 16px; height: 16px; }

@@ -15,6 +15,7 @@
   function start() { value = $info?.username ?? ""; err = null; editing = true; }
   async function save() {
     if (!valid || busy) return;
+    if (!$info?.connected) { err = tr("Connect to your server first."); return; }
     if (clean === $info?.username) { editing = false; return; }
     busy = true; err = null;
     try {
@@ -34,7 +35,8 @@
 {#if !editing}
   <div class="ue-row">
     <span class="ue-at">@{$info?.username ?? "—"}</span>
-    <button class="ue-btn" onclick={start} disabled={!$info?.connected}>{$t("Change")}</button>
+    <!-- Always clickable: being offline is explained when you save. -->
+    <button type="button" class="ue-btn" onclick={start}>{$t("Change")}</button>
   </div>
 {:else}
   <form class="ue-form" onsubmit={(e) => { e.preventDefault(); void save(); }}>
@@ -53,12 +55,12 @@
 <style>
   .ue-row { display: flex; align-items: center; gap: 10px; }
   .ue-at { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
-  .ue-btn { border: 1px solid var(--border); background: transparent; color: var(--accent); border-radius: 9px; padding: 6px 12px; font: 600 13px var(--font-ui); cursor: pointer; }
+  .ue-btn { border: 1px solid var(--border); background: transparent; color: var(--accent); border-radius: calc(9px * var(--rk, 1)); padding: 6px 12px; font: 600 13px var(--font-ui); cursor: pointer; }
   .ue-btn:disabled { opacity: .5; cursor: default; }
   .ue-btn.primary { background: var(--accent); color: #06070c; border-color: transparent; }
   .ue-btn.ghost { color: var(--fg-muted); }
   .ue-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .ue-in { flex: 1 1 180px; display: flex; align-items: center; gap: 2px; background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; padding: 0 10px; }
+  .ue-in { flex: 1 1 180px; display: flex; align-items: center; gap: 2px; background: var(--bg-input); border: 1px solid var(--border); border-radius: calc(10px * var(--rk, 1)); padding: 0 10px; }
   .ue-in:focus-within { border-color: var(--accent); }
   .ue-in i { font-style: normal; color: var(--fg-dim); font-weight: 700; }
   .ue-in input { flex: 1; min-width: 0; border: none; background: transparent; color: var(--fg); font: inherit; padding: 8px 0; outline: none; }

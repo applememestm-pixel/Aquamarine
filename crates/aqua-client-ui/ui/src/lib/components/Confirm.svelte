@@ -59,7 +59,7 @@
   .cf {
     width: min(380px, 92vw);
     padding: 20px 20px 16px;
-    border-radius: 14px;
+    border-radius: calc(14px * var(--rk, 1));
     background: var(--bg-shell);
     border: 1px solid var(--border-strong);
     box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
@@ -68,7 +68,7 @@
   p { margin: 0 0 4px; font-size: 13.5px; color: var(--fg-muted); line-height: 1.45; }
   .cf-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
   .cf-btn {
-    height: 34px; padding: 0 16px; border-radius: 9px;
+    height: 34px; padding: 0 16px; border-radius: calc(9px * var(--rk, 1));
     border: 1px solid var(--border-strong); background: transparent;
     color: var(--fg); font-size: 13.5px; font-weight: 600; cursor: pointer;
   }
