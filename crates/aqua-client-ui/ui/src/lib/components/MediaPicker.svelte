@@ -128,7 +128,7 @@
   });
   // Back closes the panel (lib/back.ts).
   $effect(() => { if ($pickerState.open && phone()) return onBack(() => closeMediaPicker()); });
-  const dockH = $derived(Math.max(280, Math.min(kbH || 0, 480)) || 300);
+  const dockH = $derived(Math.max(330, Math.min(kbH || 0, 480)) || 330);
   $effect(() => {
     const docked = $pickerState.open && phone();
     const r = document.documentElement;
@@ -907,9 +907,18 @@
       animation: dock-up .2s cubic-bezier(.2,.8,.2,1);
       box-shadow: 0 -10px 30px -18px rgba(0,0,0,.7);
     }
-    .panel.docked .top { order: 9; justify-content: center; position: relative; padding: 6px 10px 8px; }
-    .panel.docked .tabs { padding: 4px; border-radius: calc(22px * var(--rk, 1)); background: var(--bg-surface-2, var(--bg-input)); box-shadow: 0 6px 18px -10px rgba(0,0,0,.7); }
-    .panel.docked .tab { padding: 8px 18px; font-size: 15px; border-radius: calc(18px * var(--rk, 1)); }
+    /* Phone, like Telegram: search, then the packs, then a big grid; the
+       tabs are a slim strip at the bottom (it was a tall pill that ate the
+       grid and overlapped the pack bar). */
+    .panel.docked .search { order: 1; margin: 8px 10px 4px; height: 34px; }
+    .panel.docked .bar { order: 2; border-top: none; border-bottom: 1px solid var(--border); padding: 2px 6px 4px; }
+    .panel.docked .bar-btn { width: 34px; height: 34px; }
+    .panel.docked .body { order: 3; }
+    .panel.docked .top { order: 9; justify-content: center; position: relative; padding: 0 44px 2px; border-bottom: none; border-top: 1px solid var(--border); }
+    .panel.docked .tabs { justify-content: space-around; }
+    .panel.docked .tab { padding: 8px 10px 9px; font-size: 13.5px; }
+    .panel.docked .grid { grid-template-columns: repeat(8, 1fr); }
+    .panel.docked .grid.stickers { grid-template-columns: repeat(4, 1fr); }
     .panel.docked .more-wrap { position: absolute; right: 10px; }
     .panel.docked .menu { top: auto; bottom: calc(100% + 6px); }
   }

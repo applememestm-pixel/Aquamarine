@@ -5,6 +5,19 @@
   export function openPackSheet(ref: string, from?: string, path?: string | null) {
     packSheet.set({ ref, from, path });
   }
+  // Hold a sticker: it shows big until the finger lets go (or a tap).
+  type BigItem = { src: Promise<string> | string; mime?: string | null; emoji?: string };
+  let big = $state<BigItem | null>(null);
+  let held = false;
+  let holdT: ReturnType<typeof setTimeout> | null = null;
+  function holdStart(e: PointerEvent, it: BigItem) {
+    if (e.button !== 0 && e.pointerType === "mouse") return;
+    holdT = setTimeout(() => { held = true; big = it; navigator.vibrate?.(12); }, 380);
+  }
+  function holdEnd() {
+    if (holdT) { clearTimeout(holdT); holdT = null; }
+    if (big && held) setTimeout(() => (big = null), 0);
+  }
 </script>
 
 <script lang="ts">
@@ -121,7 +134,10 @@
       {:else}
         <div class="ps-grid">
           {#each items as it (it.key)}
-            <button class="ps-cell" class:disabled={!it.path} title={it.emoji} onclick={() => send(it)}>
+            <button class="ps-cell" class:disabled={!it.path} title={it.emoji}
+              onclick={() => { if (held) { held = false; return; } send(it); }}
+              onpointerdown={(e) => holdStart(e, it)} onpointerup={holdEnd} onpointerleave={holdEnd} onpointercancel={holdEnd}
+              oncontextmenu={(e) => e.preventDefault()}>
               {#await it.src}
                 <span class="skel"></span>
               {:then src}
@@ -131,6 +147,14 @@
               {/await}
             </button>
           {/each}
+        </div>
+      {/if}
+
+      {#if big}
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+        <div class="ps-big" onclick={() => (big = null)}>
+          {#await big.src then src}<div class="ps-big-media"><AnimatedMedia {src} mime={big.mime} alt={big.emoji} play="auto" /></div>{/await}
+          {#if big.emoji}<span class="ps-big-emoji">{big.emoji}</span>{/if}
         </div>
       {/if}
 
@@ -153,7 +177,7 @@
   .ps {
     width: min(560px, calc(100vw - 24px)); max-height: min(640px, calc(100dvh - 24px));
     display: flex; flex-direction: column; background: var(--bg-shell); border: 1px solid var(--border-strong);
-    border-radius: calc(18px * var(--rk, 1)); overflow: hidden; animation: ps-pop 0.18s cubic-bezier(.2,.9,.3,1.2);
+    border-radius: calc(18px * var(--rk, 1)); overflow: hidden; position: relative; animation: ps-pop 0.18s cubic-bezier(.2,.9,.3,1.2);
   }
   .ps-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px 10px; border-bottom: 1px solid var(--border); }
   .ps-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -161,7 +185,13 @@
   .ps-sub { font-size: 12px; color: var(--fg-dim); }
   .ps-x { width: 30px; height: 30px; border-radius: 50%; border: none; background: var(--bg-hover); color: var(--fg-muted); cursor: pointer; }
   .ps-x:hover { color: var(--fg); }
-  .ps-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 6px; padding: 12px; overflow-y: auto; }
+  /* Five in a row, like Telegram; hold one to see it big. */
+  .ps-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; padding: 10px; overflow-y: auto; }
+  .ps-big { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+    background: color-mix(in srgb, var(--bg-shell) 70%, transparent); backdrop-filter: blur(10px); animation: ps-big-in .18s cubic-bezier(.2,.9,.3,1.2); }
+  .ps-big-media { width: min(72%, 320px); aspect-ratio: 1; }
+  .ps-big-emoji { font-size: 30px; }
+  @keyframes ps-big-in { from { opacity: 0; transform: scale(.9); } }
   .ps-cell { aspect-ratio: 1; border: none; background: transparent; border-radius: calc(12px * var(--rk, 1)); padding: 6px; cursor: pointer; display: grid; place-items: center; transition: background 0.12s, transform 0.12s; }
   .ps-cell:hover { background: var(--bg-hover); transform: scale(1.04); }
   .ps-cell.disabled { cursor: default; }
