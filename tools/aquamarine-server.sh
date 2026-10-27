@@ -9,8 +9,9 @@ cd "$(dirname "$(readlink -f "$0")")"
 pkill -x aqua-server 2>/dev/null && sleep 1 || true
 
 port_busy() { command -v ss >/dev/null 2>&1 && [ -n "$(ss -ltnH 'sport = :7777' 2>/dev/null)" ]; }
-# The relay used to be offered as a Docker container ("aquamarine", restarts
-# by itself) — it holds 7777 too. The relay runs natively now: remove it.
+# An old Docker container "aquamarine" (restarts by itself) holds 7777 too:
+# remove it. The current image runs as "aquamarine-server" (docs/docker.md)
+# and is left alone — stop it yourself if you'd rather run natively.
 if port_busy && command -v docker >/dev/null 2>&1; then
   echo "[i] Port 7777 is taken - removing the old Docker container \"aquamarine\"..."
   docker rm -f aquamarine >/dev/null 2>&1 || sudo docker rm -f aquamarine >/dev/null 2>&1 || true
@@ -19,6 +20,9 @@ fi
 if port_busy; then
   echo "[X] Port 7777 is still taken by:" >&2
   ss -ltnpH 'sport = :7777' >&2 || true
+  if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx aquamarine-server; then
+    echo "    It's the relay in Docker (docs/docker.md): docker stop aquamarine-server" >&2
+  fi
   echo "    Stop that program and run this script again." >&2
   exit 1
 fi

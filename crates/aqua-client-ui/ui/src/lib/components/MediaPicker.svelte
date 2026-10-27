@@ -65,6 +65,7 @@
   let scroller: HTMLDivElement | undefined = $state();
   let searchEl: HTMLInputElement | undefined = $state();
   let pos = $state({ left: 12, bottom: 80 });
+  let fromRight = $state(false);
   let dropHover = $state(false);
   let menuOpen = $state(false);
   let activeSection = $state("");
@@ -153,10 +154,14 @@
       return;
     }
     const anchor = document.querySelector("[data-emoji-anchor]")?.getBoundingClientRect();
-    const W = 392;
+    const W = 440;
     if (anchor) {
+      // The button sits at the right of the field (like Telegram): the
+      // panel grows up and to the left from it.
+      const right = anchor.left > window.innerWidth / 2;
+      fromRight = right;
       pos = {
-        left: Math.max(8, Math.min(anchor.left - 6, window.innerWidth - W - 8)),
+        left: Math.max(8, Math.min(right ? anchor.right + 6 - W : anchor.left - 6, window.innerWidth - W - 8)),
         bottom: Math.max(8, window.innerHeight - anchor.top + 10),
       };
     }
@@ -572,9 +577,11 @@
 {#if $pickerState.open}
   <div
     bind:this={panel}
+    data-media-picker
     class="panel"
     class:drop={dropHover}
     class:docked={phone()}
+    class:from-right={fromRight && !phone()}
     style:left="{pos.left}px"
     style:bottom="{pos.bottom}px"
     role="dialog"
@@ -746,26 +753,34 @@
 
   .panel {
     position: fixed; z-index: 95;
-    width: 392px; height: min(460px, 70vh);
+    width: 440px; height: min(560px, 74vh);
     display: flex; flex-direction: column;
     background: var(--bg-surface);
     border: 1px solid var(--border-strong);
     border-radius: calc(14px * var(--rk, 1));
     box-shadow: 0 22px 60px -14px rgba(0, 0, 0, 0.65);
     overflow: hidden;
-    animation: pop 0.14s ease-out;
+    animation: pop 0.24s cubic-bezier(.2, .9, .25, 1);
     transform-origin: bottom left;
   }
-  @keyframes pop { from { opacity: 0; transform: translateY(8px) scale(0.98); } to { opacity: 1; transform: none; } }
-  .panel.drop { border-color: var(--accent); }
-  .top { display: flex; align-items: center; justify-content: space-between; padding: 8px 8px 4px 10px; }
-  .tabs { display: flex; gap: 2px; }
-  .tab {
-    padding: 6px 12px; border-radius: calc(16px * var(--rk, 1)); border: none; background: transparent;
-    color: var(--fg-muted); font-size: 13.5px; font-weight: 600; cursor: pointer;
+  .panel.from-right { transform-origin: bottom right; }
+  /* Unfolds from the emoji button, like Telegram's panel. */
+  @keyframes pop {
+    from { opacity: 0; transform: translateY(10px) scale(0.86); clip-path: inset(35% 0 0 0 round 14px); }
+    to { opacity: 1; transform: none; clip-path: inset(0 0 0 0 round 14px); }
   }
+  .panel.drop { border-color: var(--accent); }
+  .top { display: flex; align-items: center; justify-content: space-between; padding: 4px 8px 0 10px; border-bottom: 1px solid var(--border); }
+  /* Telegram-like: plain tabs across the top, the open one underlined. */
+  .tabs { display: flex; gap: 2px; flex: 1; justify-content: space-around; }
+  .tab {
+    position: relative; padding: 10px 14px 11px; border: none; background: transparent;
+    color: var(--fg-muted); font-size: 14px; font-weight: 600; cursor: pointer; transition: color .15s;
+  }
+  .tab::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 3px; border-radius: 3px 3px 0 0; background: var(--accent); transform: scaleX(0); transition: transform .2s cubic-bezier(.2,.9,.3,1); }
   .tab:hover { color: var(--fg); }
-  .tab.active { background: var(--accent-soft); color: var(--accent); }
+  .tab.active { color: var(--accent); }
+  .tab.active::after { transform: scaleX(1); }
   .more-wrap { position: relative; }
   .icon { width: 30px; height: 30px; border-radius: calc(8px * var(--rk, 1)); border: none; background: transparent; color: var(--fg-muted); cursor: pointer; display: grid; place-items: center; }
   .icon:hover { background: var(--bg-hover); color: var(--fg); }
@@ -785,7 +800,7 @@
 
   .search {
     display: flex; align-items: center; gap: 8px;
-    margin: 4px 10px 6px; padding: 0 10px; height: 34px;
+    margin: 8px 10px 6px; padding: 0 12px; height: 36px;
     background: var(--bg-input); border-radius: calc(17px * var(--rk, 1)); color: var(--fg-dim);
   }
   .search svg { width: 15px; height: 15px; flex-shrink: 0; }
@@ -809,7 +824,7 @@
     background: linear-gradient(var(--bg-surface) 70%, transparent);
   }
   .grid { display: grid; grid-template-columns: repeat(9, 1fr); gap: 0; }
-  .grid.stickers { grid-template-columns: repeat(5, 1fr); gap: 4px; }
+  .grid.stickers { grid-template-columns: repeat(5, 1fr); gap: 6px; padding: 0 2px; }
   .cell {
     aspect-ratio: 1; border: none; background: transparent; border-radius: calc(8px * var(--rk, 1)); cursor: pointer;
     display: grid; place-items: center; padding: 3px; min-width: 0;
@@ -827,7 +842,7 @@
     border-top: 1px solid var(--border); flex-shrink: 0;
   }
   .bar-btn {
-    flex-shrink: 0; width: 34px; height: 34px; border: none; border-radius: calc(8px * var(--rk, 1)); background: transparent;
+    flex-shrink: 0; width: 38px; height: 38px; border: none; border-radius: calc(8px * var(--rk, 1)); background: transparent;
     cursor: pointer; display: grid; place-items: center; padding: 4px; opacity: 0.55; filter: grayscale(0.8);
   }
   .bar-btn:hover { opacity: 0.9; filter: none; background: var(--bg-hover); }

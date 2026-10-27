@@ -1,0 +1,22 @@
+# Aquamarine relay in Docker (docs/docker.md):
+#   docker compose -f compose.relay.yml up -d      start (and after a reboot)
+#   docker compose -f compose.relay.yml pull && docker compose -f compose.relay.yml up -d   update
+#   docker compose -f compose.relay.yml logs -f    the log (the admin-panel link is at the top)
+# Data (accounts, files, settings) lives in the Docker volume "aquamarine-data".
+services:
+  relay:
+    image: ghcr.io/applememestm-pixel/aquamarine-server:latest
+    container_name: aquamarine-server
+    restart: unless-stopped
+    ports:
+      - "7777:7777"
+    volumes:
+      - aquamarine-data:/data
+    environment:
+      # Your own long password for the admin panel (http://<host>:7777/admin).
+      # Leave it empty and a new one is printed in the log on every start.
+      AQUA_ADMIN_TOKEN: ""
+      # Optional: the address people use from the internet, e.g. https://chat.example.org
+      # AQUA_PUBLIC_URL: ""
+volumes:
+  aquamarine-data:

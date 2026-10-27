@@ -73,82 +73,127 @@
   <div class="wrap">
     <div class="sec-head">
       <span class="eyebrow" data-i="tour.eyebrow">В деле</span>
-      <h2 data-i="tour.h2">Листайте — и смотрите, как это выглядит.</h2>
+      <h2 data-i="tour.h2">Листайте стрелками — и смотрите, как это выглядит.</h2>
     </div>
-    <div class="tour">
-      <div class="tour-steps">
-        <article class="tour-card" data-step="gif">
-          <span class="tour-n">01</span>
-          <h3 data-i="tour.gif">GIF за секунду</h3>
-          <p data-i="tour.gifp">Поиск GIF прямо в поле ввода: выбрали — и он уже в чате. Без сторонних клавиатур и копирования ссылок.</p>
-        </article>
-        <article class="tour-card" data-step="emoji">
-          <span class="tour-n">02</span>
-          <h3 data-i="tour.emoji">Эмодзи и реакции</h3>
-          <p data-i="tour.emojip">Свои эмодзи прямо в тексте, реакции одним касанием, большие эмодзи без пузыря — как в Telegram.</p>
-        </article>
-        <article class="tour-card" data-step="stickers">
-          <span class="tour-n">03</span>
-          <h3 data-i="tour.stickers">Стикеры</h3>
-          <p data-i="tour.stickersp">Наборы из Telegram по ссылке и свои — редактор сам вырежет фон. Отправляются целиком, как картинка, но живут в наборе.</p>
-        </article>
-        <article class="tour-card" data-step="new">
-          <span class="tour-n">04</span>
-          <h3 data-i="tour.new">Новое в 1.0</h3>
-          <p data-i="tour.newp">Группы чатов как сообщества, контрастные строки, выделение сообщений как в Telegram и доставка без интернета — по Wi-Fi и Bluetooth.</p>
-        </article>
+    <div class="tour" tabindex="0" aria-roledescription="carousel">
+      <button class="tour-arrow prev" type="button" aria-label="Back / Назад"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <div class="tour-text">
+        <article class="tour-card" data-step="gif"><span class="tour-n">01</span><h3 data-i="tour.gif">GIF за секунду</h3><p data-i="tour.gifp">Поиск GIF прямо в поле ввода: выбрали — и он уже в чате. Без сторонних клавиатур и копирования ссылок.</p></article>
+        <article class="tour-card" data-step="emoji"><span class="tour-n">02</span><h3 data-i="tour.emoji">Живые эмодзи и реакции</h3><p data-i="tour.emojip">Анимированные эмодзи прямо в тексте, реакции одним касанием, большие эмодзи без пузыря. Панель раскрывается при наведении — как в Telegram.</p></article>
+        <article class="tour-card" data-step="stickers"><span class="tour-n">03</span><h3 data-i="tour.stickers">Стикеры</h3><p data-i="tour.stickersp">Наборы из Telegram по ссылке и свои — редактор сам вырежет фон. Анимированные .tgs и .webm, чёткие на любом экране.</p></article>
+        <article class="tour-card" data-step="rooms"><span class="tour-n">04</span><h3 data-i="tour.rooms">Серверы и комнаты</h3><p data-i="tour.roomsp">Зажмите иконку сервера — и все комнаты и чаты под рукой. Текстовые и голосовые комнаты, роли с правами, каналы с комментариями.</p></article>
+        <article class="tour-card" data-step="profile"><span class="tour-n">05</span><h3 data-i="tour.profile">Профиль под себя</h3><p data-i="tour.profilep">Цвет карточки и узор из эмодзи, баннер, трек и игры. Анимированный эмодзи-статус рядом с именем и форма аватарок — от круга до квадрата.</p></article>
+        <article class="tour-card" data-step="calls"><span class="tour-n">06</span><h3 data-i="tour.calls">Звонки</h3><p data-i="tour.callsp">Аудио, видео и демонстрация экрана напрямую, без посредника. Объёмный звук: голоса звучат с разных сторон. На телефоне — передняя и задняя камера.</p></article>
+        <article class="tour-card" data-step="storage"><span class="tour-n">07</span><h3 data-i="tour.storage">Данные и память</h3><p data-i="tour.storagep">Видно, что занимает место и откуда пришло: наведите на кусок — он выедет с подписью, нажмите — покажет чаты. Лимиты и автозагрузка по типам чатов.</p></article>
+        <article class="tour-card" data-step="new"><span class="tour-n">08</span><h3 data-i="tour.new">Чаты как надо</h3><p data-i="tour.newp">Папки и группы чатов, выделение как в Telegram, приватные чаты под паролем и доставка без интернета — по Wi-Fi и Bluetooth.</p></article>
+        <article class="tour-card" data-step="whatsnew"><span class="tour-n">09</span><h3 data-i="tour.wn">Что нового</h3><p data-i="tour.wnp">После каждого обновления — короткое окно с тем, что изменилось. Не нужно — выключается в настройках.</p></article>
+        <div class="tour-dots" role="tablist"></div>
       </div>
       <div class="tour-stage" aria-hidden="true">
         <div class="tour-phone" data-on="gif">
-          <div class="tp-bar"><div class="mock-ava"></div><div><div class="mock-name">Roma</div><div class="mock-sub">● online</div></div><div class="mock-lock">🔒</div></div>
+          <div class="tp-bar"><img class="tp-ava img" src="assets/avatars/roma.svg" alt=""><div><div class="mock-name">Roma <img class="es" src="assets/emoji/1f60e.webp" alt="" loading="lazy"></div><div class="mock-sub">● online</div></div><div class="mock-lock">🔒</div></div>
 
           <div class="tp-screen" data-screen="gif">
             <div class="tp-msgs">
               <div class="bubble b-in">как прошёл релиз?</div>
-              <div class="tp-gif-sent"><div class="gif-art g-a"><span>GIF</span></div></div>
+              <div class="tp-gif-sent"><div class="gif"><img src="assets/gifs/horse.webp" alt="" loading="lazy"><span>GIF</span></div></div>
             </div>
             <div class="tp-picker">
-              <div class="tp-search">🔍 <span class="tp-typed" data-text="party"></span></div>
+              <div class="tp-search">🔍 <span class="tp-typed" data-text="race"></span></div>
               <div class="tp-gifs">
-                <div class="gif-art g-a"><span>GIF</span></div><div class="gif-art g-b"><span>GIF</span></div>
-                <div class="gif-art g-c"><span>GIF</span></div><div class="gif-art g-d"><span>GIF</span></div>
-                <div class="gif-art g-e"><span>GIF</span></div><div class="gif-art g-f"><span>GIF</span></div>
+                <div class="gif"><img src="assets/gifs/horse.webp" alt="" loading="lazy"></div><div class="gif"><img src="assets/gifs/cradle.webp" alt="" loading="lazy"></div>
+                <div class="gif"><img src="assets/gifs/earth.webp" alt="" loading="lazy"></div><div class="gif"><img src="assets/gifs/sort.webp" alt="" loading="lazy"></div>
+                <div class="gif emo"><img class="ae" src="assets/emoji/1f602.webp" alt="" loading="lazy"></div><div class="gif emo"><img class="ae" src="assets/emoji/1f973.webp" alt="" loading="lazy"></div>
               </div>
             </div>
           </div>
 
           <div class="tp-screen" data-screen="emoji">
             <div class="tp-msgs">
-              <div class="bubble b-in">смотри, кастомные эмодзи работают 😎</div>
-              <div class="tp-big">🎉</div>
-              <div class="bubble b-out">огонь <span class="ce">✦</span><span class="ce ce2">◆</span><span class="b-meta">21:04 ✓✓</span></div>
-              <div class="tp-reacts"><span class="rx">🔥 3</span><span class="rx">❤️ 2</span><span class="rx rx-new">😂 1</span></div>
+              <div class="bubble b-in">смотри, живые эмодзи работают <img class="ae" src="assets/emoji/1f60e.webp" alt="" loading="lazy"></div>
+              <div class="tp-big"><img class="" src="assets/emoji/1f389.webp" alt="" loading="lazy"></div>
+              <div class="bubble b-out">огонь <img class="ae" src="assets/emoji/1f525.webp" alt="" loading="lazy"><img class="ae" src="assets/emoji/2728.webp" alt="" loading="lazy"><span class="b-meta">21:04 ✓✓</span></div>
+              <div class="tp-reacts"><span class="rx"><img class="ae" src="assets/emoji/1f525.webp" alt="" loading="lazy"> 3</span><span class="rx"><img class="ae" src="assets/emoji/2764_fe0f.webp" alt="" loading="lazy"> 2</span><span class="rx rx-new"><img class="ae" src="assets/emoji/1f602.webp" alt="" loading="lazy"> 1</span></div>
             </div>
-            <div class="tp-emoji-bar"><span>😀</span><span>🥹</span><span>🔥</span><span>✨</span><span>💀</span><span>🫶</span><span>👀</span></div>
+            <div class="tp-emoji-bar" data-pack="emoji"><img class="ae" src="assets/emoji/1f602.webp" alt="" loading="lazy"><img class="ae" src="assets/emoji/1f979.webp" alt="" loading="lazy"><img class="ae" src="assets/emoji/1f525.webp" alt="" loading="lazy"><img class="ae" src="assets/emoji/2728.webp" alt="" loading="lazy"><img class="ae" src="assets/emoji/1f480.webp" alt="" loading="lazy"><img class="ae" src="assets/emoji/1f440.webp" alt="" loading="lazy"><img class="ae" src="assets/emoji/1fae0.webp" alt="" loading="lazy"></div>
           </div>
 
           <div class="tp-screen" data-screen="stickers">
             <div class="tp-msgs">
               <div class="bubble b-in">кинь стикер 👉👈</div>
-              <div class="tp-sticker-sent">🐙</div>
+              <div class="tp-sticker-sent" data-pack-sent><img class="" src="assets/emoji/1f63c.webp" alt="" loading="lazy"></div>
             </div>
-            <div class="tp-stickers">
-              <div class="st">🐙</div><div class="st">🦊</div><div class="st">🐸</div><div class="st">🐧</div>
-              <div class="st">🐱</div><div class="st">🦄</div><div class="st">🐳</div><div class="st">🍄</div>
+            <div class="tp-stickers" data-pack="sticker">
+              <div class="st"><img class="" src="assets/emoji/1f63c.webp" alt="" loading="lazy"></div><div class="st"><img class="" src="assets/emoji/1f47b.webp" alt="" loading="lazy"></div><div class="st"><img class="" src="assets/emoji/1f680.webp" alt="" loading="lazy"></div><div class="st"><img class="" src="assets/emoji/1f92f.webp" alt="" loading="lazy"></div>
+              <div class="st"><img class="" src="assets/emoji/1f60d.webp" alt="" loading="lazy"></div><div class="st"><img class="" src="assets/emoji/1f62d.webp" alt="" loading="lazy"></div><div class="st"><img class="" src="assets/emoji/1f64f.webp" alt="" loading="lazy"></div><div class="st"><img class="" src="assets/emoji/1f4af.webp" alt="" loading="lazy"></div>
+            </div>
+          </div>
+
+          <div class="tp-screen" data-screen="rooms">
+            <div class="tp-rooms">
+              <div class="tp-rail"><i class="srv on">Ce</i><i class="srv">VP</i><i class="srv">🎮</i><i class="srv add">+</i></div>
+              <div class="tp-roomlist">
+                <small>CeZeOs · зажато</small>
+                <div class="room on"># general <b>5</b></div>
+                <div class="room"># news</div>
+                <div class="room"># мемы <img class="ae" src="assets/emoji/1f480.webp" alt="" loading="lazy"></div>
+                <div class="room">📢 announcements</div>
+                <div class="room">🔊 Голосовая <em><img class="tp-ava img" src="assets/avatars/katya.svg" alt=""><img class="tp-ava img" src="assets/avatars/dima.svg" alt=""></em></div>
+                <div class="room">🔊 Игры</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="tp-screen" data-screen="profile">
+            <div class="tp-prof">
+              <div class="tp-banner"><span><img class="ae" src="assets/emoji/2728.webp" alt="" loading="lazy"></span><span><img class="ae" src="assets/emoji/1f525.webp" alt="" loading="lazy"></span><span><img class="ae" src="assets/emoji/2728.webp" alt="" loading="lazy"></span><span><img class="ae" src="assets/emoji/1f525.webp" alt="" loading="lazy"></span></div>
+              <img class="tp-pava" src="assets/avatars/vlad.svg" alt="">
+              <div class="tp-pname">Vlad <img class="es" src="assets/emoji/1f47b.webp" alt="" loading="lazy"></div>
+              <div class="tp-psub">@vpst27 · ● в сети · 🎧 Telecastic</div>
+              <div class="tp-shapes"><img src="assets/avatars/alisa.svg" alt=""><img src="assets/avatars/boris.svg" alt=""><img src="assets/avatars/mika.svg" alt=""><span class="tp-slider"><i></i></span></div>
+            </div>
+          </div>
+
+          <div class="tp-screen" data-screen="calls">
+            <div class="tp-call">
+              <div class="tile talk"><img class="tp-ava img" src="assets/avatars/roma.svg" alt=""><small>Roma</small></div>
+              <div class="tile"><img class="tp-ava img" src="assets/avatars/alisa.svg" alt=""><small>Алиса</small></div>
+              <div class="tile talk2"><img class="tp-ava img" src="assets/avatars/sasha.svg" alt=""><small>Саша</small></div>
+              <div class="tile screen"><span>🖥️ экран</span></div>
+              <div class="tp-callbar"><i>🎙️</i><i>📷</i><i>🖥️</i><i class="end">✕</i></div>
+            </div>
+          </div>
+
+          <div class="tp-screen" data-screen="storage">
+            <div class="tp-store">
+              <div class="donut"><div class="hole"><b>1.4 GB</b><small>на устройстве</small></div></div>
+              <div class="legend"><span><i style="background:#00E5C7"></i>Видео 52%</span><span><i style="background:#7B5CFF"></i>Фото 21%</span><span><i style="background:#ff6bd6"></i>Стикеры 12%</span><span><i style="background:#ffb347"></i>Файлы 15%</span></div>
+              <div class="from">откуда пришло: <b>CeZeOs</b> · <b>Roma</b> · <b>news</b></div>
             </div>
           </div>
 
           <div class="tp-screen" data-screen="new">
             <div class="tp-list">
-              <div class="tp-row"><div class="tp-ava a1">A</div><div class="tp-txt"><b>Алиса</b><small>до завтра!</small></div><span class="tp-badge">2</span></div>
-              <div class="tp-row alt"><div class="tp-stack"><i></i><i></i></div><div class="tp-txt"><b>CeZeOs <em>2</em></b><small>news: релиз вышел 🚀</small></div><span class="tp-badge">5</span></div>
-              <div class="tp-row sel"><div class="tp-check">✓</div><div class="tp-ava a3">Б</div><div class="tp-txt"><b>Борис</b><small>выделено как в Telegram</small></div></div>
-              <div class="tp-row alt sel"><div class="tp-check">✓</div><div class="tp-ava a4">Д</div><div class="tp-txt"><b>Дима</b><small>и это тоже</small></div></div>
-              <div class="tp-row"><div class="tp-ava a5">К</div><div class="tp-txt"><b>Катя</b><small>📶 без интернета · Bluetooth</small></div></div>
+              <div class="tp-row"><img class="tp-ava img" src="assets/avatars/alisa.svg" alt=""><div class="tp-txt"><b>Алиса <img class="es" src="assets/emoji/1f979.webp" alt="" loading="lazy"></b><small>до завтра!</small></div><span class="tp-badge">2</span></div>
+              <div class="tp-row alt"><div class="tp-stack"><i></i><i></i></div><div class="tp-txt"><b>CeZeOs <em>2</em></b><small>news: релиз вышел <img class="ae sm" src="assets/emoji/1f680.webp" alt="" loading="lazy"></small></div><span class="tp-badge">5</span></div>
+              <div class="tp-row sel"><div class="tp-check">✓</div><img class="tp-ava img" src="assets/avatars/boris.svg" alt=""><div class="tp-txt"><b>Борис</b><small>выделено как в Telegram</small></div></div>
+              <div class="tp-row alt sel"><div class="tp-check">✓</div><img class="tp-ava img" src="assets/avatars/dima.svg" alt=""><div class="tp-txt"><b>Дима <img class="es" src="assets/emoji/1f525.webp" alt="" loading="lazy"></b><small>и это тоже</small></div></div>
+              <div class="tp-row"><img class="tp-ava img" src="assets/avatars/katya.svg" alt=""><div class="tp-txt"><b>Катя</b><small>📶 без интернета · Bluetooth</small></div></div>
+              <div class="tp-row"><img class="tp-ava img" src="assets/avatars/mika.svg" alt=""><div class="tp-txt"><b>Мика 🔒</b><small>чат под паролем</small></div></div>
+            </div>
+          </div>
+
+          <div class="tp-screen" data-screen="whatsnew">
+            <div class="tp-wn">
+              <div class="wn-h"><b>Что нового</b><small>27 октября 2026</small></div>
+              <div class="wn-art"><b>1.1.0</b><span>AQUAMARINE</span></div>
+              <ul><li>Эмодзи-статус рядом с именем <img class="ae sm" src="assets/emoji/1f47b.webp" alt="" loading="lazy"></li><li>Форма аватарок для людей, групп и каналов</li><li>Память: куда ушло и откуда пришло</li><li>Панель стикеров как в Telegram</li></ul>
+              <div class="wn-foot">Отключить: Настройки → Дополнительно</div>
             </div>
           </div>
         </div>
       </div>
+      <button class="tour-arrow next" type="button" aria-label="Next / Вперёд"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
     </div>
   </div>
 </section>
@@ -185,13 +230,20 @@
         <p data-i="host.p">Aquamarine подключается к любому ретранслятору по адресу. Поднимите свой — на сервере, ПК или Raspberry Pi — и объедините несколько в сеть: учётные записи и копии реплицируются, клиенты сами переходят на живой узел.</p>
       </div>
       <div class="steps">
-        <div class="step"><div class="step-n">1</div><div><h3 data-i="host.s1">Запустите ретранслятор</h3><p data-i="host.s1p">Один исполняемый файл без зависимостей. Для HTTPS поставьте перед ним Caddy или nginx.</p></div></div>
+        <div class="step"><div class="step-n">1</div><div><h3 data-i="host.s1">Запустите ретранслятор</h3><p data-i="host.s1p">Одной командой в Docker — на Windows, macOS и Linux одинаково — или одним файлом без зависимостей. Для HTTPS поставьте перед ним Caddy или nginx.</p></div></div>
         <div class="step"><div class="step-n">2</div><div><h3 data-i="host.s2">Дайте адрес друзьям</h3><p data-i="host.s2p">Все вводят один адрес сервера при входе — IP в локальной сети или публичное имя.</p></div></div>
         <div class="step"><div class="step-n">3</div><div><h3 data-i="host.s3">Общайтесь</h3><p data-i="host.s3p">Сервер только пересылает запечатанные конверты. Прочитать их он не может.</p></div></div>
       </div>
-      <p style="margin-top:22px"><a class="btn btn-ghost" href="docs.html?d=deployment" data-i="host.more">Развёртывание и настройка</a></p>
+      <p style="margin-top:22px"><a class="btn btn-primary" href="docs.html?d=docker" data-i="host.docker">Docker: как поставить и запустить</a> <a class="btn btn-ghost" href="docs.html?d=deployment" data-i="host.more">Развёртывание и настройка</a></p>
     </div>
-    <div class="code"><span class="c"># relay: one binary</span>
+    <div class="code"><span class="c"># relay in Docker: Windows, macOS, Linux</span>
+<span class="p">docker</span> run -d --name aquamarine-server \
+  --restart unless-stopped -p 7777:7777 \
+  -v aquamarine-data:/data \
+  -e <span class="p">AQUA_ADMIN_TOKEN</span>=<span class="v">your-panel-password</span> \
+  ghcr.io/applememestm-pixel/aquamarine-server
+
+<span class="c"># or one binary</span>
 <span class="p">AQUA_LISTEN</span>=0.0.0.0:7777 ./aqua-server-linux-x64
 
 <span class="c"># HTTPS in front (Caddyfile)</span>
@@ -271,7 +323,15 @@ POST /v1/bot/send   {"to":"alice","text":"hi"}
         <a href="docs.html?d=security-model" data-i="foot.security">Безопасность</a>
         <a href="#" id="foot-gh">GitHub</a>
       </div>
-      <div class="foot-copy" data-i="foot.copy">Открытый исходный код, MIT OR Apache-2.0. Для тех, кто предпочитает свой сервер.</div>
+      <div class="foot-contacts">
+        <span class="fc-h" data-i="foot.contact">Связаться</span>
+        <a href="https://t.me/ShadowIn_TheNight" target="_blank" rel="noopener"><svg viewBox="0 0 24 24"><path d="M21.9 4.3 18.6 20c-.2 1.1-.9 1.4-1.8.9l-5-3.7-2.4 2.3c-.3.3-.5.5-1 .5l.4-5.1 9.2-8.3c.4-.4-.1-.6-.6-.2L6 13.6 1.1 12c-1.1-.3-1.1-1.1.2-1.6L20.5 3c.9-.3 1.7.2 1.4 1.3Z"/></svg>@ShadowIn_TheNight</a>
+        <a href="https://t.me/+IA-5SVnogZRhOTdi" target="_blank" rel="noopener"><svg viewBox="0 0 24 24"><path d="M21.9 4.3 18.6 20c-.2 1.1-.9 1.4-1.8.9l-5-3.7-2.4 2.3c-.3.3-.5.5-1 .5l.4-5.1 9.2-8.3c.4-.4-.1-.6-.6-.2L6 13.6 1.1 12c-1.1-.3-1.1-1.1.2-1.6L20.5 3c.9-.3 1.7.2 1.4 1.3Z"/></svg><span data-i="foot.group">Группа в Telegram</span></a>
+        <a href="https://x.com/vpst27" target="_blank" rel="noopener"><svg viewBox="0 0 24 24"><path d="M17.8 3h3.1l-6.8 7.8 8 10.2h-6.3l-4.9-6.4L5.3 21H2.2l7.3-8.3L1.8 3h6.4l4.4 5.9L17.8 3Zm-1.1 16.2h1.7L7.2 4.7H5.4l11.3 14.5Z"/></svg>@vpst27</a>
+        <a href="mailto:applememestm@gmail.com"><svg viewBox="0 0 24 24"><path d="M3 5h18v14H3z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m3 6 9 7 9-7" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>applememestm@gmail.com</a>
+        <a href="mailto:vladstalker2027@gmail.com"><svg viewBox="0 0 24 24"><path d="M3 5h18v14H3z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m3 6 9 7 9-7" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>vladstalker2027@gmail.com</a>
+      </div>
+      <div class="foot-copy"><span data-i="foot.copy">Открытый исходный код, MIT OR Apache-2.0. Для тех, кто предпочитает свой сервер.</span> <span class="foot-credits" data-i="foot.credits">Анимированные эмодзи — Noto Emoji (Google, CC BY 4.0); аватарки — DiceBear Lorelei (CC0); GIF — Wikimedia Commons.</span></div>
     </div>
   </div>
 </footer>
@@ -281,7 +341,7 @@ POST /v1/bot/send   {"to":"alice","text":"hi"}
      under these exact names). A copy of the site with its own ./downloads/
      (filled by build-all) offers those files instead. */
   const REPO = "https://github.com/applememestm-pixel/Aquamarine";
-  const VERSION = "1.0.62";
+  const VERSION = "1.1.0";
   let DIR = REPO + "/releases/latest/download/";
   // The public site (GitHub Pages, also under the project domain) always
   // offers the release; a local copy may have its own downloads/.
@@ -295,11 +355,17 @@ POST /v1/bot/send   {"to":"alice","text":"hi"}
   // ---------------------------------------------------------------- i18n
   const T = {
     en: {
-      "tour.eyebrow": "In action", "tour.h2": "Scroll — and see what it looks like.",
+      "tour.eyebrow": "In action", "tour.h2": "Flip through with the arrows — and see what it looks like.",
       "tour.gif": "A GIF in a second", "tour.gifp": "Search GIFs right in the message field: pick one and it's already in the chat. No third-party keyboards, no pasting links.",
-      "tour.emoji": "Emoji and reactions", "tour.emojip": "Your own emoji inside the text, reactions in one tap, big emoji without a bubble — like Telegram.",
-      "tour.stickers": "Stickers", "tour.stickersp": "Telegram packs by link and your own — the editor cuts the background out. Sent whole like a picture, but they live in a pack.",
-      "tour.new": "New in 1.0", "tour.newp": "Chat groups like communities, contrast rows, Telegram-style message selection and delivery without internet — over Wi-Fi and Bluetooth.",
+      "tour.emoji": "Living emoji and reactions", "tour.emojip": "Animated emoji inside the text, reactions in one tap, big emoji without a bubble. The panel unfolds on hover — like Telegram.",
+      "tour.stickers": "Stickers", "tour.stickersp": "Telegram packs by link and your own — the editor cuts the background out. Animated .tgs and .webm, sharp on any screen.",
+      "tour.rooms": "Servers and rooms", "tour.roomsp": "Hold a server's icon and every room and chat is at hand. Text and voice rooms, roles with permissions, channels with comments.",
+      "tour.profile": "A profile of your own", "tour.profilep": "Card colour and an emoji pattern, a banner, your track and games. An animated emoji status next to your name, avatar shapes from circle to square.",
+      "tour.calls": "Calls", "tour.callsp": "Audio, video and screen sharing, direct, no middleman. Spatial sound: voices come from around you. On a phone — front and back camera.",
+      "tour.storage": "Data and storage", "tour.storagep": "See what takes the space and where it came from: hover a slice and it slides out with a label, click it for the chats. Limits and auto-download per chat type.",
+      "tour.new": "Chats done right", "tour.newp": "Folders and chat groups, Telegram-style selection, password-locked chats and delivery without internet — over Wi-Fi and Bluetooth.",
+      "tour.wn": "What's new", "tour.wnp": "After each update — a short window with what changed. Don't want it — turn it off in settings.",
+      "foot.contact": "Contact", "foot.group": "Telegram group", "foot.credits": "Animated emoji — Noto Emoji (Google, CC BY 4.0); avatars — DiceBear Lorelei (CC0); GIFs — Wikimedia Commons.",
       "nav.features": "Features", "nav.download": "Download", "nav.selfhost": "Self-host", "nav.bots": "Bots", "nav.docs": "Docs", "nav.cta": "Get the app",
       "hero.eyebrow": "Open · End-to-end encrypted", "hero.h1a": "Your words. Your keys.", "hero.h1b": "Your server.",
       "hero.lede": "A messenger with everything you're used to — servers with rooms and roles, channels, stickers, calls, bots and mini apps — while the encryption keys never leave your devices.",
@@ -308,7 +374,7 @@ POST /v1/bot/send   {"to":"alice","text":"hi"}
       "dl.eyebrow": "Download", "dl.h2": "Pick your platform.", "dl.p": "Builds for every desktop, Android and iOS. No store, no store account.",
       "dl.foot1": "Want the newest features?", "dl.nightly": "Nightly builds", "dl.foot2": "are rebuilt for every platform after each change. Every release ships SHA256SUMS.txt. Prefer to build it yourself —", "dl.build": "build instructions",
       "host.eyebrow": "Self-host", "host.h2": "Own the relay.", "host.p": "Aquamarine talks to any relay by address. Run yours — on a server, a PC or a Raspberry Pi — and join several into a network: accounts and backups replicate, clients move to a live node by themselves.",
-      "host.s1": "Start the relay", "host.s1p": "One binary, no dependencies. Put Caddy or nginx in front for HTTPS.", "host.s2": "Share the address", "host.s2p": "Everyone enters the same server address when signing in — a LAN IP or a public host.", "host.s3": "Chat", "host.s3p": "The relay only forwards sealed envelopes. It can't read a thing.", "host.more": "Deployment guide",
+      "host.s1": "Start the relay", "host.s1p": "One command in Docker — the same on Windows, macOS and Linux — or one binary with no dependencies. Put Caddy or nginx in front for HTTPS.", "host.docker": "Docker: install and run", "host.s2": "Share the address", "host.s2p": "Everyone enters the same server address when signing in — a LAN IP or a public host.", "host.s3": "Chat", "host.s3p": "The relay only forwards sealed envelopes. It can't read a thing.", "host.more": "Deployment guide",
       "bots.eyebrow": "Bots", "bots.h2": "Telegram bots work as they are.", "bots.p": "The relay speaks the Telegram Bot API: point your library at your relay instead of api.telegram.org, and a bot written with aiogram, python-telegram-bot, telegraf or grammY runs — with buttons, webhooks and mini apps.",
       "bots.s1": "Create a bot", "bots.s1p": "Settings → Bots: a name and a token. The relay keeps only the token's hash.", "bots.s2": "Plug in your library", "bots.s2p": "The native HTTP API or the Telegram layer — <code>/bot&lt;token&gt;/&lt;method&gt;</code>.", "bots.s3": "Or no code at all", "bots.s3p": "<code>aquabot run</code> — a ready AI bot on a local model; <code>aqua-console.py</code> — a chat in your terminal.", "bots.more": "Bot guide",
       "docs.eyebrow": "Documentation", "docs.h2": "Every part is open and written down.", "docs.p": "The technical passport, protocol, threat model and API reference. The documents live next to the code and change with it (in Russian).",

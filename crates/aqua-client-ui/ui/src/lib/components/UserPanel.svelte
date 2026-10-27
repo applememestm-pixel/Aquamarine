@@ -1,4 +1,5 @@
 <script lang="ts">
+  import EmojiStatus from "./EmojiStatus.svelte";
   import { accounts, loadAccounts, switchAccount } from "../accounts";
   import { t, tr } from "../i18n";
   /**
@@ -146,7 +147,7 @@
       <span class="dot {$info?.connected ? $myOnline : 'offline'}"></span>
     </div>
     <div class="who-text">
-      <div class="who-name">{name}</div>
+      <div class="who-name">{name}<EmojiStatus token={$profile.estatus} size={15} /></div>
       <div class="who-sub">{subline}</div>
     </div>
   </button>

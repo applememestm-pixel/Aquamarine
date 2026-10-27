@@ -5,6 +5,8 @@
 
 <script lang="ts">
   import Select from "./Select.svelte";
+  import Donut from "./Donut.svelte";
+  import { NOTES, openWhatsNew } from "./WhatsNew.svelte";
   import { AUTODL_DEFAULT, POWER_DEFAULT } from "../theme";
   import { autostartEnabled, setAutostart } from "../desktop";
   import { pickFolder } from "../dialog";
@@ -308,8 +310,14 @@
   let stStats = $state<StStats | null>(null);
   let stPick = $state<Record<string, boolean>>({ images: true, videos: true, audio: true, stickers: true, files: true, cache: true });
   let stBusy = $state(false);
+  type TRow = { chat: string; name: string; bytes: number; count: number };
+  type Traffic = { received: Record<string, TRow[]>; sent: Record<string, TRow[]> };
+  let stTx = $state<Traffic | null>(null);
+  let stOpen = $state<{ side: "rx" | "tx"; kind: string } | null>(null);
+  const sumOf = (rows: TRow[] | undefined) => (rows ?? []).reduce((n, r) => n + r.bytes, 0);
+  const stTxTotal = $derived(stTx ? Object.values(stTx.sent).reduce((n, rows) => n + sumOf(rows), 0) : 0);
   async function stLoad() {
-    try { st = await invoke<StInfo>("storage_get"); stStats = await invoke<StStats>("storage_stats"); } catch (e) { console.warn(e); }
+    try { st = await invoke<StInfo>("storage_get"); stStats = await invoke<StStats>("storage_stats"); stTx = await invoke<Traffic>("storage_traffic"); } catch (e) { console.warn(e); }
   }
   async function stSave(patch: Partial<StConf>) {
     if (!st) return;
@@ -1729,14 +1737,30 @@
         <div class="label">{$t("Local storage")}</div>
         {#if stStats}
           <div class="st-top">
-            <svg class="st-donut" viewBox="0 0 42 42" aria-hidden="true">
-              <circle cx="21" cy="21" r="15.915" fill="none" stroke="var(--bg-input)" stroke-width="6" />
-              {#each stArcs as a, i (i)}
-                <circle cx="21" cy="21" r="15.915" fill="none" stroke={a.color} stroke-width="6" stroke-dasharray="{Math.max(0, a.len - 0.6)} {100 - Math.max(0, a.len - 0.6)}" stroke-dashoffset={25 - a.off} />
-              {/each}
-            </svg>
-            <div class="st-sum"><b>{fmtBytes(stTotal)}</b><span>{tr("{n} files", { n: stStats.count })}</span></div>
+            <Donut size={150} title={fmtBytes(stTotal)} sub={tr("{n} files", { n: stStats.count })} fmt={fmtBytes} picked={stOpen?.side === "rx" ? stOpen.kind : ""}
+              segs={ST_KINDS.map((k) => ({ id: k.id, label: $t(k.label), color: k.color, value: stStats![k.id] }))}
+              onpick={(id) => (stOpen = stOpen?.side === "rx" && stOpen.kind === id ? null : { side: "rx", kind: id })} />
+            <div class="st-side">
+              <div class="st-cap">{$t("On this device")}</div>
+              {#if stTx}
+                <Donut size={110} title={fmtBytes(stTxTotal)} sub={$t("sent")} fmt={fmtBytes} picked={stOpen?.side === "tx" ? stOpen.kind : ""}
+                  segs={ST_KINDS.filter((k) => k.id !== "cache").map((k) => ({ id: k.id, label: $t(k.label), color: k.color, value: sumOf(stTx!.sent[k.id]) }))}
+                  onpick={(id) => (stOpen = stOpen?.side === "tx" && stOpen.kind === id ? null : { side: "tx", kind: id })} />
+                <div class="st-cap">{$t("Sent by you")}</div>
+              {/if}
+            </div>
           </div>
+          {#if stOpen && stTx}
+            {@const rows = (stOpen.side === "rx" ? stTx.received : stTx.sent)[stOpen.kind] ?? []}
+            {@const kk = ST_KINDS.find((k) => k.id === stOpen?.kind)}
+            <div class="st-drill" style:--c={kk?.color}>
+              <div class="st-drill-h"><i></i><b>{$t(kk?.label ?? "")}</b><span>{stOpen.side === "rx" ? $t("came from") : $t("went to")}</span><button class="x" onclick={() => (stOpen = null)} aria-label={$t("Close")}>×</button></div>
+              {#if !rows.length}<div class="foot-note">{$t(stOpen.kind === "cache" ? "Article videos and music played in the app." : "Nothing here yet.")}</div>{/if}
+              {#each rows as r (r.chat)}
+                <div class="st-drow"><span class="st-dn">{r.name}</span><span class="st-dbar"><span style:width="{Math.max(3, (r.bytes / Math.max(1, rows[0].bytes)) * 100)}%"></span></span><span class="st-dv">{fmtBytes(r.bytes)} · {r.count}</span></div>
+              {/each}
+            </div>
+          {/if}
           {#each ST_KINDS as k (k.id)}
             <button class="st-row" onclick={() => (stPick = { ...stPick, [k.id]: !stPick[k.id] })}>
               <span class="st-check" class:on={stPick[k.id]} style:--c={k.color}>✓</span>
@@ -1780,10 +1804,18 @@
 
       {#if section === "advanced"}
       <section class="group">
-        <div class="label">{$t("Avatar corners")} <span class="pill-tag">{($settings.avatarRadius ?? 50) >= 50 ? $t("Circle") : ($settings.avatarRadius ?? 50) <= 0 ? $t("Square") : `${$settings.avatarRadius}%`}</span></div>
-        <div class="ava-prev"><span class="ava-demo">{($info?.username ?? "A").slice(0, 2).toUpperCase()}</span><span class="tr-text"><b>{$profile.display_name}</b><small>@{$info?.username ?? ""}</small></span></div>
-        <div class="range"><input type="range" min="0" max="50" step="1" value={$settings.avatarRadius ?? 50}
-          oninput={(e) => settings.update((x) => ({ ...x, avatarRadius: parseInt((e.target as HTMLInputElement).value) }))} /></div>
+        <div class="label">{$t("Avatar corners")}</div>
+        {#each [["avatarRadius", "People", "ava-p"], ["avatarRadiusGroup", "Groups and servers", "ava-g"], ["avatarRadiusChannel", "Channels", "ava-c"]] as [k, l, cls] (k)}
+          {@const v = (($settings as unknown as Record<string, number | undefined>)[k] ?? (k === "avatarRadius" ? undefined : $settings.avatarRadius)) ?? 50}
+          <div class="ava-row">
+            <span class="ava-demo {cls}" style:border-radius="{v}%">{l === "People" ? ($info?.username ?? "A").slice(0, 2).toUpperCase() : l === "Channels" ? "📢" : "👥"}</span>
+            <div class="ava-ctl">
+              <div class="ava-head"><b>{$t(l)}</b><span class="pill-tag">{v >= 50 ? $t("Circle") : v <= 0 ? $t("Square") : `${v}%`}</span></div>
+              <div class="range"><input type="range" min="0" max="50" step="1" value={v}
+                oninput={(e) => settings.update((x) => ({ ...x, [k]: parseInt((e.target as HTMLInputElement).value) }))} /></div>
+            </div>
+          </div>
+        {/each}
       </section>
       {#if !PHONE_UI}
       <section class="group">
@@ -1818,6 +1850,14 @@
         </button>
       </section>
       {/if}
+      <section class="group">
+        <div class="label">{$t("What's new")}</div>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, whatsNew: x.whatsNew === false }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Show what's new after updates")}</div><div class="tr-sub">{$t("A window with the release notes once after each update.")}</div></div>
+          <span class="switch" class:on={$settings.whatsNew !== false}></span>
+        </button>
+        {#if NOTES.md}<button class="mini-btn" onclick={() => { closeSettings(); openWhatsNew(); }}>{$t("Open what's new")} · {NOTES.version}</button>{/if}
+      </section>
       <section class="group">
         <div class="label">{$t("Power saving")}</div>
         {#each [["stickers", "Animated stickers"], ["emoji", "Animated emoji"], ["chat", "Animations in chats"], ["calls", "Animations in calls"], ["ui", "Interface animations"]] as [k, l] (k)}
@@ -2120,8 +2160,20 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .radio-row .tr-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
   .tr-sub.mono { font-family: var(--font-mono); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .st-top { display: flex; align-items: center; gap: 18px; margin: 4px 0 10px; }
-  .st-donut { width: 110px; height: 110px; transform: rotate(-90deg); flex-shrink: 0; }
-  .st-sum { display: flex; flex-direction: column; } .st-sum b { font-size: 24px; } .st-sum span { color: var(--fg-dim); font-size: 12.5px; }
+  .st-top { flex-wrap: wrap; justify-content: center; }
+  .st-side { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .st-cap { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-dim); }
+  .st-drill { margin: 4px 0 10px; padding: 10px 12px; border-radius: calc(12px * var(--rk, 1)); background: color-mix(in srgb, var(--c) 10%, var(--bg-input));
+    border: 1px solid color-mix(in srgb, var(--c) 35%, transparent); animation: drill-in .2s ease-out; }
+  @keyframes drill-in { from { opacity: 0; transform: translateY(-4px); } }
+  .st-drill-h { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 13.5px; }
+  .st-drill-h i { width: 10px; height: 10px; border-radius: 3px; background: var(--c); }
+  .st-drill-h span { color: var(--fg-dim); flex: 1; } .st-drill-h .x { border: none; background: none; color: var(--fg-dim); font-size: 18px; cursor: pointer; }
+  .st-drow { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 12.5px; }
+  .st-dn { flex: 0 0 34%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .st-dbar { flex: 1; height: 6px; border-radius: 3px; background: var(--bg-shell); overflow: hidden; }
+  .st-dbar span { display: block; height: 100%; background: var(--c); border-radius: 3px; transition: width .3s; }
+  .st-dv { color: var(--fg-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .st-row { width: 100%; display: flex; align-items: center; gap: 10px; padding: 7px 4px; border: none; background: none; color: var(--fg); font: inherit; cursor: pointer; text-align: left; }
   .st-check { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 900; color: transparent; border: 2px solid var(--c); flex-shrink: 0; }
   .st-check.on { background: var(--c); color: #fff; }
@@ -2130,9 +2182,12 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .st-clear { width: 100%; margin-top: 8px; padding: 10px; border: none; border-radius: calc(12px * var(--rk, 1)); background: var(--accent); color: #06070C; font: inherit; font-weight: 800; cursor: pointer; }
   .st-clear:disabled { opacity: .45; cursor: default; }
   .pill-tag { font-size: 10px; font-weight: 800; padding: 1px 6px; border-radius: 5px; background: var(--accent); color: #06070C; margin-left: 6px; text-transform: uppercase; }
+  .ava-row { display: flex; align-items: center; gap: 14px; margin: 8px 0; }
+  .ava-ctl { flex: 1; min-width: 0; } .ava-head { display: flex; align-items: center; gap: 6px; font-size: 13.5px; }
+  .ava-demo.ava-g { background: linear-gradient(135deg, #ff7cac, #7b5cff); } .ava-demo.ava-c { background: linear-gradient(135deg, #ffb067, #ff5f6d); }
   .ava-prev { display: flex; align-items: center; gap: 12px; margin: 6px 0 10px; }
   .ava-prev .tr-text { display: flex; flex-direction: column; } .ava-prev small { color: var(--fg-dim); }
-  .ava-demo { width: 52px; height: 52px; display: grid; place-items: center; font-weight: 800; color: #fff; border-radius: var(--ava-r, 50%);
+  .ava-demo { width: 48px; height: 48px; flex-shrink: 0; display: grid; place-items: center; font-weight: 800; color: #fff; border-radius: var(--ava-r, 50%);
     background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
   .host-first { display: flex; flex-direction: column; gap: 6px; padding: 12px; margin: 6px 0 10px; border-radius: calc(12px * var(--rk, 1));
     background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); font-size: 13px; }

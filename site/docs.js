@@ -32,6 +32,7 @@
     ["Эксплуатация", "Operations", [
       ["api", "HTTP API", "HTTP API"],
       ["federation", "Федерация", "Federation"],
+      ["docker", "Docker: сервер одной командой", "Docker: a relay in one command"],
       ["deployment", "Развёртывание", "Deployment"],
       ["building", "Сборка и выпуск", "Building & releases"],
       ["licenses", "Лицензии", "Licenses"],

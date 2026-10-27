@@ -1573,13 +1573,47 @@ async fn update_profile(
     State(state): State<AppState>,
     Caller(dh_pub): Caller,
     Path(user): Path<UserId>,
-    Json(body): Json<UpdateProfileBody>,
+    Json(mut body): Json<UpdateProfileBody>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    // The emoji next to the name ("es"): one custom emoji token or a plain
+    // emoji; "-" / "" / null = none. Changing it is limited per hour.
+    if let Some(serde_json::Value::Object(map)) = body.extra.as_mut() {
+        let es = match map.get("es") {
+            Some(serde_json::Value::String(v)) => {
+                let v = v.trim();
+                if v.is_empty() || v == "-" { None } else if v.len() > 160 || v.contains(['\n', '<', '>']) {
+                    return Err((StatusCode::BAD_REQUEST, "bad emoji status".into()));
+                } else { Some(v.to_string()) }
+            }
+            _ => None,
+        };
+        map.insert("es".into(), es.clone().map(serde_json::Value::String).unwrap_or(serde_json::Value::Null));
+        if !emoji_status_change_ok(&user, es.as_deref()) {
+            return Err((StatusCode::TOO_MANY_REQUESTS, "the emoji status was changed too often — try again in a while".into()));
+        }
+    }
     state
         .directory
         .update_profile_full(&user, &dh_pub, &body.display_name, &body.about, &body.phone, body.extra.as_ref())
         .map_err(|e| (dir_err_status(&e), e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// At most `ES_PER_HOUR` changes of the emoji status per account per hour
+/// (re-sending the same one doesn't count).
+const ES_PER_HOUR: usize = 30;
+static ES_LOG: std::sync::Mutex<Option<std::collections::HashMap<String, (Option<String>, Vec<u64>)>>> = std::sync::Mutex::new(None);
+fn emoji_status_change_ok(user: &str, es: Option<&str>) -> bool {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let Ok(mut g) = ES_LOG.lock() else { return true };
+    let m = g.get_or_insert_with(std::collections::HashMap::new);
+    let e = m.entry(user.to_lowercase()).or_insert((None, Vec::new()));
+    if e.0.as_deref() == es { return true; }
+    e.1.retain(|t| now.saturating_sub(*t) < 3600);
+    if e.1.len() >= ES_PER_HOUR { return false; }
+    e.1.push(now);
+    e.0 = es.map(str::to_string);
+    true
 }
 
 // ---------- Public profile images (avatar / banner) -------------------------

@@ -11,7 +11,7 @@
 | Параметр | Значение |
 |---|---|
 | Назначение | Личные и групповые чаты, каналы, файлы, голосовые и видеосообщения, звонки и голосовые комнаты, боты и мини-приложения |
-| Версия | 1.0.62 (клиент и ретранслятор) |
+| Версия | 1.1.0 (клиент и ретранслятор) |
 | Версия протокола | `v1` (метки KDF `Aquamarine/… v1`, API `/v1/*`) |
 | Клиентские платформы | Windows 10/11, macOS (ARM и Intel), Linux x86-64, Android 7+, iOS (без подписи) |
 | Платформы ретранслятора | Windows x64, macOS ARM64, Linux x86-64, Linux ARM64 |
@@ -84,6 +84,7 @@
 | Боты и мини-приложения | [bots.md](docs/bots.md) |
 | **HTTP API ретранслятора** | [api.md](docs/api.md) |
 | Федерация | [federation.md](docs/federation.md) |
+| Сервер в Docker (установка на любую систему) | [docker.md](docs/docker.md) |
 | Развёртывание ретранслятора | [deployment.md](docs/deployment.md) |
 | Сборка, тесты, выпуск | [building.md](docs/building.md) |
 | Лицензии зависимостей | [licenses.md](docs/licenses.md) |
@@ -108,6 +109,14 @@ Linux: для воспроизведения нужны `gst-plugins-good`, `gst
 
 ```bash
 AQUA_LISTEN=0.0.0.0:7777 ./aqua-server-linux-x64
+```
+
+Или в Docker, на Windows, macOS и Linux одинаково (как поставить сам Docker — [docs/docker.md](docs/docker.md)):
+
+```bash
+docker run -d --name aquamarine-server --restart unless-stopped -p 7777:7777 \
+  -v aquamarine-data:/data -e AQUA_ADMIN_TOKEN=ваш-пароль-для-панели \
+  ghcr.io/applememestm-pixel/aquamarine-server:latest
 ```
 
 Сайт с документацией можно держать под рукой где угодно, хоть в Termux на телефоне: `tools/aquamarine-site.sh` (или контейнер `ghcr.io/applememestm-pixel/aquamarine-site`). Для `https://` и `wss://` перед ним ставится обратный прокси (Caddy, nginx). Переменные окружения, файлы, systemd и панель администратора — [docs/deployment.md](docs/deployment.md); объединение ретрансляторов в сеть — [docs/federation.md](docs/federation.md).

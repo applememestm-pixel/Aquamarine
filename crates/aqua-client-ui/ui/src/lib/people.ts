@@ -162,6 +162,7 @@ function myExtra(p: Profile): Record<string, unknown> {
     music_title: p.music_ver ? (p.music_title ?? "") : "",
     clan: p.clan ?? null,
     card: /^#[0-9a-f]{6}$/i.test(p.card ?? "") ? p.card : "",
+    es: (p.estatus ?? "").trim() && p.estatus !== "-" ? p.estatus : null,
     pattern: (p.pattern ?? "").slice(0, 16),
     links: (p.links ?? []).filter((l) => /^https?:\/\//i.test(l.url)).slice(0, 8),
     games: (p.games ?? []).slice(0, 12),
@@ -196,6 +197,7 @@ export async function adoptMyCard(username: string): Promise<void> {
     if (fresh && typeof x.banner_b === "string") patch.banner_b = x.banner_b;
     if (fresh && typeof x.card === "string") patch.card = x.card;
     if (fresh && typeof x.pattern === "string") patch.pattern = x.pattern;
+    if (fresh && typeof x.es === "string") patch.estatus = x.es;
     if (Object.keys(patch).length) updateProfile(patch);
   } catch { /* offline: keep what we have */ }
 }
@@ -368,3 +370,10 @@ function onPrivacyChanged() {
 }
 privacy.subscribe(onPrivacyChanged);
 contactSet.subscribe(onPrivacyChanged);
+
+
+/** Someone's emoji status from their public card ("" when none). */
+export function emojiStatusOf(cards: Record<string, { extra?: Record<string, unknown> } | undefined>, user: string): string {
+  const v = cards[user]?.extra?.es;
+  return typeof v === "string" ? v : "";
+}
