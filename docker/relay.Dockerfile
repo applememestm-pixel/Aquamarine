@@ -11,7 +11,10 @@
 FROM rust:1-bookworm AS build
 WORKDIR /src
 COPY . .
-RUN cargo build --release -p aqua-server --locked \
+# The image's own stable Rust is enough: without the toolchain file rustup
+# doesn't download another copy (with clippy and rustfmt) first.
+RUN rm -f rust-toolchain.toml \
+ && cargo build --release -p aqua-server --locked \
  && cp target/release/aqua-server /aqua-server
 
 FROM debian:bookworm-slim
