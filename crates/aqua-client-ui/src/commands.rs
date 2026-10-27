@@ -1094,8 +1094,9 @@ pub async fn attach_file(
     app: AppHandle,
     peer_id: String,
     file_path: String,
+    caption: Option<String>,
 ) -> Result<AttachResult, String> {
-    attach_file_impl(state, app, peer_id, file_path, None, None).await
+    attach_file_fwd(state, app, peer_id, file_path, None, None, None, caption).await
 }
 
 /// Send a file the way the user chose in the send dialog:
@@ -1110,9 +1111,10 @@ pub async fn attach_file_as(
     peer_id: String,
     file_path: String,
     mode: String,
+    caption: Option<String>,
 ) -> Result<AttachResult, String> {
     match mode.as_str() {
-        "file" => attach_file_impl(state, app, peer_id, file_path, Some("document".into()), None).await,
+        "file" => attach_file_fwd(state, app, peer_id, file_path, Some("document".into()), None, None, caption).await,
         "compressed" => {
             let out_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.join("outbox") };
             std::fs::create_dir_all(&out_dir).map_err(|e| format!("mkdir outbox: {e}"))?;
@@ -1136,9 +1138,9 @@ pub async fn attach_file_as(
             if !res.status.success() {
                 return Err(format!("ffmpeg failed: {}", String::from_utf8_lossy(&res.stderr).lines().last().unwrap_or("")));
             }
-            attach_file_impl(state, app, peer_id, out.display().to_string(), None, Some("video/mp4".into())).await
+            attach_file_fwd(state, app, peer_id, out.display().to_string(), None, Some("video/mp4".into()), None, caption).await
         }
-        _ => attach_file_impl(state, app, peer_id, file_path, None, None).await,
+        _ => attach_file_fwd(state, app, peer_id, file_path, None, None, None, caption).await,
     }
 }
 
@@ -1151,12 +1153,13 @@ pub async fn attach_bytes(
     name: String,
     mime: String,
     bytes: Vec<u8>,
+    caption: Option<String>,
 ) -> Result<AttachResult, String> {
     let out_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.join("outbox") };
     std::fs::create_dir_all(&out_dir).map_err(|e| format!("mkdir outbox: {e}"))?;
     let out = out_dir.join(name.replace(['/', '\\', ':'], "_"));
     tokio::fs::write(&out, &bytes).await.map_err(|e| format!("write: {e}"))?;
-    attach_file_impl(state, app, peer_id, out.display().to_string(), None, Some(mime)).await
+    attach_file_fwd(state, app, peer_id, out.display().to_string(), None, Some(mime), None, caption).await
 }
 
 #[tauri::command]
@@ -1565,7 +1568,7 @@ async fn attach_file_impl(
     category: Option<String>,
     mime_override: Option<String>,
 ) -> Result<AttachResult, String> {
-    attach_file_fwd(state, app, peer_id, file_path, category, mime_override, None).await
+    attach_file_fwd(state, app, peer_id, file_path, category, mime_override, None, None).await
 }
 
 /// Forward a file (re-sent from this device) with a "Forwarded from" header.
@@ -1578,7 +1581,7 @@ pub async fn forward_file(
     header: Option<String>,
 ) -> Result<AttachResult, String> {
     let header = header.filter(|h| crate::state::split_fwd(&format!("{}{h}\nx", crate::state::FWD_PREFIX)).0.is_some());
-    attach_file_fwd(state, app, peer_id, file_path, None, None, header).await
+    attach_file_fwd(state, app, peer_id, file_path, None, None, header, None).await
 }
 
 async fn attach_file_fwd(
@@ -1589,7 +1592,9 @@ async fn attach_file_fwd(
     category: Option<String>,
     mime_override: Option<String>,
     fwd: Option<String>,
+    caption: Option<String>,
 ) -> Result<AttachResult, String> {
+    let caption = caption.map(|c| c.trim().chars().take(4096).collect::<String>()).filter(|c| !c.is_empty());
     // 1. Read the file from disk (phone picks arrive as content:// URIs).
     let file_path = if is_uri_pick(&file_path) {
         let data_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.clone() };
@@ -1660,6 +1665,7 @@ async fn attach_file_fwd(
                 category: category.clone(),
                 pack: if category.as_deref() == Some("sticker") { sticker_pack_ref(&path) } else { None },
                 saved_at: Some(saved_path),
+                caption: caption.clone(),
             },
         };
         let message_id = msg.id.clone();
@@ -1684,6 +1690,7 @@ async fn attach_file_fwd(
     if category.as_deref() == Some("sticker") {
         envelope.pack = sticker_pack_ref(&path);
     }
+    envelope.caption = caption;
     let cid = envelope.cid.clone();
     let size = envelope.size;
 
@@ -1906,6 +1913,7 @@ pub async fn download_file(
                     mime: mime.clone(),
                     category: category.clone(),
                     pack: None,
+                    caption: None,
                 }
             }
             _ => return Err("message is not a file".into()),
@@ -2137,7 +2145,7 @@ pub async fn fetch_attachment(
     let envelope = FileEnvelope {
         cid: media.cid.clone(), key, nonce,
         filename: media.name.clone(), size: media.size,
-        mime: media.mime.clone(), category: Some(media.kind.clone()), pack: None,
+        mime: media.mime.clone(), category: Some(media.kind.clone()), pack: None, caption: None,
     };
     let transport = {
         let s = state.lock().map_err(|e| e.to_string())?;

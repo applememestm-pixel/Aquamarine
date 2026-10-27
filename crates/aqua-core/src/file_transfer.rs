@@ -82,6 +82,9 @@ pub struct FileEnvelope {
     /// pack anyone can add) or `own:<title>` (the sender's own pack).
     /// Older clients ignore it.
     pub pack: Option<String>,
+    /// Text under a photo / video / file, sent in the same message (like
+    /// Telegram). Older clients show the file without it.
+    pub caption: Option<String>,
 }
 
 // On the wire, the envelope is a small compact JSON object. Fields kept
@@ -99,6 +102,8 @@ struct WireEnvelope<'a> {
     cat:   Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pack:  Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cap:   Option<&'a str>,
 }
 
 impl FileEnvelope {
@@ -113,6 +118,7 @@ impl FileEnvelope {
             mime:  self.mime.as_deref(),
             cat:   self.category.as_deref(),
             pack:  self.pack.as_deref(),
+            cap:   self.caption.as_deref().filter(|c| !c.is_empty()),
         };
         let json = serde_json::to_string(&wire).expect("wire envelope serializes");
         format!("{OFFER_PREFIX}{json}")
@@ -139,6 +145,8 @@ impl FileEnvelope {
             cat: Option<String>,
             #[serde(default)]
             pack: Option<String>,
+            #[serde(default)]
+            cap: Option<String>,
         }
         let w: Owned = serde_json::from_str(payload)
             .map_err(|e| FileError::BadJson(e.to_string()))?;
@@ -159,6 +167,7 @@ impl FileEnvelope {
             mime: w.mime,
             category: w.cat,
             pack: w.pack.filter(|p| p.len() <= 128),
+            caption: w.cap.map(|c| c.chars().take(4096).collect::<String>()).filter(|c| !c.trim().is_empty()),
         })
     }
 }
@@ -209,6 +218,7 @@ pub fn encrypt_file_with_category(
             mime,
             category,
             pack: None,
+            caption: None,
         },
         ciphertext,
     ))

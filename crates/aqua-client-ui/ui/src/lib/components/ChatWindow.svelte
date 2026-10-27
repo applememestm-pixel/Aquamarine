@@ -1,5 +1,20 @@
 <script lang="ts">
   import { power } from "../power";
+  // Hold a sticker: it pops up big until the finger lets go (Telegram).
+  let peek = $state<{ url: string; mime: string | null } | null>(null);
+  let peekHeld = false;
+  let peekT: ReturnType<typeof setTimeout> | null = null;
+  function peekStart(e: PointerEvent, url: string | null, mime: string | null) {
+    if (!url || (e.pointerType === "mouse" && e.button !== 0)) return;
+    // On a phone the hold means "show it big", not the message menu (that
+    // stays on a tap of the time / a swipe to reply).
+    if (e.pointerType === "touch") e.stopPropagation();
+    peekT = setTimeout(() => { peekHeld = true; peek = { url, mime }; navigator.vibrate?.(12); }, 380);
+  }
+  function peekEnd() {
+    if (peekT) { clearTimeout(peekT); peekT = null; }
+    if (peek) setTimeout(() => (peek = null), 0);
+  }
   import { emojiStatusOf } from "../people";
   import EmojiStatus from "./EmojiStatus.svelte";
   import { tick, onMount, untrack } from "svelte";
@@ -677,24 +692,28 @@
     let ok = 0;
     let fail = 0;
     let lastErr = "";
+    // The caption travels inside the first file's message (like Telegram),
+    // not as a text of its own after it.
+    let cap: string | undefined = choice.caption?.trim() || undefined;
     for (const p of paths) {
       try {
         if (choice.mode === "file") {
-          await api.attachFileAs(peerId, p, "file");
+          await api.attachFileAs(peerId, p, "file", cap);
         } else if (isImagePath(p)) {
-          await sendCompressedPhoto(peerId, p);
+          await sendCompressedPhoto(peerId, p, cap);
         } else if (VIDEO_RE.test(p) && choice.mode === "compressed") {
           showToast(tr("Compressing {name}…", { name: p.split(/[\\/]/).pop() ?? "" }), 60000);
           try {
-            await api.attachFileAs(peerId, p, "compressed");
+            await api.attachFileAs(peerId, p, "compressed", cap);
           } catch (e) {
             // No ffmpeg / odd file: send the original rather than nothing.
             showToast(tr("Could not compress ({e}) — sending the original", { e: String(e) }), 6000);
-            await api.attachFile(peerId, p);
+            await api.attachFile(peerId, p, cap);
           }
         } else {
-          await api.attachFile(peerId, p);
+          await api.attachFile(peerId, p, cap);
         }
+        cap = undefined;
         ok++;
       } catch (e) {
         console.error("attach failed for", p, e);
@@ -702,7 +721,8 @@
         fail++;
       }
     }
-    if (choice.caption && ok) await sendCurrent(choice.caption);
+    // Nothing went out: keep the caption as a message rather than lose it.
+    if (cap && ok) await sendCurrent(cap);
     await loadActiveMessages();
     if (fail === 0) {
       showToast(ok === 1 ? tr("File sent") : `${ok} files sent`);
@@ -738,8 +758,8 @@
     if (paths.length) await sendFiles(chat.id, paths);
   }
 
-  async function sendCompressedPhoto(peerId: string, path: string) {
-    if (/\.gif$/i.test(path)) { await api.attachFile(peerId, path); return; }
+  async function sendCompressedPhoto(peerId: string, path: string, caption?: string) {
+    if (/\.gif$/i.test(path)) { await api.attachFile(peerId, path, caption); return; }
     const bytes = await api.readUserImage(path);
     const url = await shrinkImage(new Blob([new Uint8Array(bytes)]), 2560, 0.86);
     const mime = url.slice(5, url.indexOf(";"));
@@ -747,9 +767,9 @@
     const out = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
     // Bigger than the original (already small / well compressed)? Send the original.
-    if (out.length >= bytes.length) { await api.attachFile(peerId, path); return; }
+    if (out.length >= bytes.length) { await api.attachFile(peerId, path, caption); return; }
     const base = (path.split(/[\\/]/).pop() ?? "photo").replace(/\.[^.]+$/, "");
-    await api.attachBytes(peerId, `${base}.${mime === "image/webp" ? "webp" : "jpg"}`, mime, Array.from(out));
+    await api.attachBytes(peerId, `${base}.${mime === "image/webp" ? "webp" : "jpg"}`, mime, Array.from(out), caption);
   }
 
   function isImagePath(p: string): boolean {
@@ -3227,7 +3247,9 @@
                 {#if rk === "sticker"}
                   <div class="sticker-wrap">
                     {#if url}
-                      <button class="sticker-btn" title={$t("Show the pack")} onclick={() => openPackSheet(content.pack ?? "own:-", m.outgoing ? undefined : m.from, content.saved_at)}>
+                      <button class="sticker-btn" title={$t("Show the pack")}
+                        onclick={() => { if (peekHeld) { peekHeld = false; return; } openPackSheet(content.pack ?? "own:-", m.outgoing ? undefined : m.from, content.saved_at); }}
+                        onpointerdown={(e) => peekStart(e, url, stickerMime(content))} onpointerup={peekEnd} onpointerleave={peekEnd} onpointercancel={peekEnd}>
                         <!-- .tgs (Lottie) and .webm stickers play; plain images stay images. -->
                         <span class="sticker-img"><AnimatedMedia src={url} mime={stickerMime(content)} alt={$t("Sticker")} play="auto" /></span>
                       </button>
@@ -3256,14 +3278,14 @@
                     {:else}
                       <div class="media-placeholder" style="aspect-ratio: 4/3;"></div>
                     {/if}
-                    <div class="media-footer">
-                      <span class="media-name" title={content.name}>{content.name}</span>
-                      <span class="media-sub">{fmtSize(content.size)}</span>
-                      <span class="bubble-meta inline-meta">
-                        {m.time}
-                        {@render statusTick(m.outgoing)}
-                      </span>
-                    </div>
+                    <!-- Like Telegram: no file name under a photo; the time sits on
+                         the picture, or after the caption when there is one. -->
+                    {#if content.caption}
+                      <div class="media-caption"><Markup src={content.caption} resolveEmoji={(k) => emojiMap[k]} compact />
+                        <span class="bubble-meta inline-meta">{m.time}{@render statusTick(m.outgoing)}</span></div>
+                    {:else}
+                      <span class="photo-meta">{m.time}{@render statusTick(m.outgoing)}</span>
+                    {/if}
                   </div>
                 {:else if rk === "circle"}
                   <div class="circle-wrap">
@@ -3323,6 +3345,7 @@
                         {/if}
                       </div>
                     {/if}
+                    {#if content.caption}<div class="media-caption"><Markup src={content.caption} resolveEmoji={(k) => emojiMap[k]} compact /></div>{/if}
                     <div class="media-footer">
                       <span class="media-name" title={content.name}>{content.name}</span>
                       <span class="media-sub">{fmtSize(content.size)}</span>
@@ -3343,6 +3366,7 @@
                     {/if}
                     <div class="file-meta">
                       <div class="file-name" title={content.name}>{content.name}</div>
+                      {#if content.caption}<div class="file-caption"><Markup src={content.caption} resolveEmoji={(k) => emojiMap[k]} compact /></div>{/if}
                       <div class="file-sub">
                         {fmtSize(content.size)}
                         {#if content.mime}· {content.mime}{/if}
@@ -3949,6 +3973,11 @@
       {/if}
     </div>
     {/if}
+  {/if}
+  {#if peek}
+    <div class="sticker-peek" aria-hidden="true">
+      <div class="sp-media"><AnimatedMedia src={peek.url} mime={peek.mime} play="auto" /></div>
+    </div>
   {/if}
 </main>
 
@@ -4617,7 +4646,18 @@
   .sticker-meta :global(svg) { width: 12px; height: 12px; }
 
   /* Media bubble — images, GIFs, videos. */
+  .file-caption { font-size: 13.5px; margin: 2px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .sticker-peek { position: fixed; inset: 0; z-index: 400; display: grid; place-items: center; pointer-events: none;
+    background: rgba(6, 7, 12, .55); backdrop-filter: blur(8px); animation: sp-in .18s cubic-bezier(.2,.9,.3,1.25); }
+  .sp-media { width: min(70vw, 340px); aspect-ratio: 1; }
+  @keyframes sp-in { from { opacity: 0; transform: scale(.85); } }
+  .media-caption { padding: 6px 8px 3px; font-size: calc(14.5px * var(--font-scale, 1)); line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .photo-meta { position: absolute; right: 10px; bottom: 10px; display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px;
+    border-radius: 999px; background: rgba(0,0,0,.5); color: #fff; font-size: 11px; pointer-events: none; }
+  .photo-meta :global(svg) { width: 12px; height: 12px; }
   .bubble.media-bubble {
+    position: relative;
+    width: fit-content;
     padding: 4px;
     overflow: hidden;
     display: flex;

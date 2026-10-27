@@ -205,6 +205,9 @@ pub enum MessageKind {
         /// and decrypted the blob, OR the sender's own source path for
         /// outgoing attachments. Lets the UI render inline previews.
         saved_at: Option<String>,
+        /// Text under the photo / video / file (FileEnvelope.caption).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
     },
     /// Long-form "article" message — Telegram-style post with a title
     /// and a markdown body. On the wire this travels as a plain text
@@ -1111,7 +1114,7 @@ pub fn one_line_preview(kind: &MessageKind) -> String {
     match kind {
         MessageKind::Text { text } => humanize_tokens(text.lines().next().unwrap_or("")),
         MessageKind::Code { .. } => "📄 code snippet".into(),
-        MessageKind::File { name, category, .. } => {
+        MessageKind::File { name, category, caption, .. } => {
             let icon = match category.as_deref() {
                 Some("sticker") => return "🎨 Sticker".into(),
                 Some("gif")     => "🎞️",
@@ -1119,7 +1122,11 @@ pub fn one_line_preview(kind: &MessageKind) -> String {
                 Some("video")   => "📹",
                 _               => "📎",
             };
-            format!("{icon} {name}")
+            // The caption says more than "photo-1793….jpg".
+            match caption.as_deref().map(|c| c.lines().next().unwrap_or("").trim()).filter(|c| !c.is_empty()) {
+                Some(c) => format!("{icon} {}", humanize_tokens(c)),
+                None => format!("{icon} {name}"),
+            }
         }
         MessageKind::Article { title, .. } => format!("📰 {title}"),
         MessageKind::Poll { question, .. } => format!("📊 {question}"),
@@ -1620,6 +1627,7 @@ pub fn classify_kind(text: &str) -> MessageKind {
             category: env.category,
             pack: env.pack,
             saved_at: None,
+            caption: env.caption,
         },
         Err(_) => MessageKind::Text { text: text.into() },
     }

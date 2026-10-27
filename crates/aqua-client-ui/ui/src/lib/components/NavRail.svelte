@@ -10,8 +10,8 @@
   import { appIconUrl } from "../appIcon";
   import { t } from "../i18n";
   import { icons } from "../icons";
-  import { activeTab, type NavTab } from "../stores";
-  import { openSettings } from "../panels/settings";
+  import { activeTab, activeId, type NavTab } from "../stores";
+  import { openSettings, settingsOpen } from "../panels/settings";
 
   type Item = { id: string; label: string; svg: string; tab?: NavTab; mobileOnly?: boolean; desktopOnly?: boolean };
   // Phones get four: Chats, Files, Contacts (with recent calls inside, like
@@ -95,6 +95,9 @@
       const y = el.scrollTop;
       const prev = last.get(el) ?? y;
       last.set(el, y);
+      // Only a list long enough to scroll back up may hide it — in a short
+      // one the bar stayed away with no way to bring it back.
+      if (el.scrollHeight - el.clientHeight < 200 || !el.isConnected) { hidden = false; return; }
       if (y < 40) hidden = false;
       else if (y - prev > 6) hidden = true;
       else if (prev - y > 6) hidden = false;
@@ -103,7 +106,7 @@
     return () => document.removeEventListener("scroll", onScroll, { capture: true });
   });
   // A new section starts with the bar in view.
-  $effect(() => { void $activeTab; hidden = false; });
+  $effect(() => { void $activeTab; void $activeId; void $settingsOpen; hidden = false; });
   $effect(() => { document.documentElement.classList.toggle("dock-hidden", hidden); });
 </script>
 
