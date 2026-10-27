@@ -69,6 +69,10 @@
     if (reason === "local-error") status = "failed";
 
     logCall({ peer_id: peer, direction, status, started_at: placedAt, duration_seconds: durationSeconds });
+    // …and a line in the chat itself, like Telegram (1:1 calls).
+    if (peer && !peer.startsWith("grp_")) {
+      void import("../tauri").then(({ api }) => api.noteCall(peer, direction, status, durationSeconds, false)).catch(() => {});
+    }
 
     const ended: CallState = { kind: "ended", peer, reason };
     callState.set(ended);
@@ -1414,7 +1418,8 @@
         <button class="mini-expand" onclick={() => (expanded = true)} title={$t("Expand")}>{@html I.expand}</button>
       </div>
     {/if}
-    <div class="mini-top">
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div class="mini-top" onclick={() => { if ($callState.kind === "connected" && matchMedia("(max-width: 720px)").matches) expanded = true; }}>
       {@render avatar(peerLetter, speakingPeer, "md", remote.muted, remote.deaf, $avatars[peerId] ?? "")}
       <div class="mini-text">
         <div class="mini-name">{$callState.kind === "ended" ? "Call ended" : peerName}</div>
@@ -1567,6 +1572,18 @@
   .pop-range span { min-width: 38px; text-align: right; font-size: 12px; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
 
   /* ---------- mini card ---------- */
+  /* Phones: a slim strip under the chat's header (Telegram's "return to
+     call" bar) — the card sat on top of the message field. Tap → full. */
+  @media (max-width: 720px) {
+    .mini { top: calc(env(safe-area-inset-top, 0px) + 64px); bottom: auto; left: 8px; right: 8px; width: auto;
+      flex-direction: row; align-items: center; gap: 8px; padding: 6px 8px 6px 10px; border-radius: calc(14px * var(--rk, 1)); }
+    .mini-top { flex: 1; min-width: 0; gap: 8px; cursor: pointer; }
+    .mini-video, .mini-me, .mini-statsbtn, .mini .bars, .mini .stats { display: none !important; }
+    .mini .ava { transform: scale(.8); }
+    .mini .controls { gap: 6px; margin: 0; flex-wrap: nowrap; }
+    .mini .controls .cb { width: 36px; height: 36px; }
+    .mini .controls .cb:not(.hang):not(.accept):not(:first-child) { display: none; }
+  }
   .mini {
     position: fixed; right: 20px; bottom: 20px; z-index: 250;
     width: 340px;

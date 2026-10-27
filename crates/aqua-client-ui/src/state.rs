@@ -1131,6 +1131,20 @@ pub fn one_line_preview(kind: &MessageKind) -> String {
         MessageKind::Article { title, .. } => format!("📰 {title}"),
         MessageKind::Poll { question, .. } => format!("📊 {question}"),
         MessageKind::Reply { text, .. } => text.clone(),
+        MessageKind::System { text } if text.starts_with("[call:v1]") => {
+            let v: serde_json::Value = serde_json::from_str(&text["[call:v1]".len()..]).unwrap_or_default();
+            let st = v.get("status").and_then(|x| x.as_str()).unwrap_or("");
+            let out = v.get("dir").and_then(|x| x.as_str()) == Some("out");
+            let what = match (st, out) {
+                ("completed", true) => "Outgoing call",
+                ("completed", false) => "Incoming call",
+                ("missed", false) => "Missed call",
+                ("rejected", false) => "Declined call",
+                ("missed" | "rejected", true) => "Cancelled call",
+                _ => "Call",
+            };
+            format!("📞 {what}")
+        }
         MessageKind::System { text } => text.clone(),
         MessageKind::DateSeparator { label } => label.clone(),
     }
@@ -1663,7 +1677,7 @@ pub fn preview_for(kind: &MessageKind) -> String {
     match kind {
         MessageKind::Text { text } => special_preview(text).unwrap_or_else(|| humanize_tokens(&strip_bot_keyboard(text))),
         MessageKind::Code { .. }   => "[code]".into(),
-        MessageKind::File { name, category, mime, .. } => {
+        MessageKind::File { name, category, mime, caption, .. } => {
             let icon = match category.as_deref() {
                 Some("sticker") => return "🎨 Sticker".into(),
                 Some("gif") => "🎞️",
@@ -1673,12 +1687,15 @@ pub fn preview_for(kind: &MessageKind) -> String {
                     _ => "📎",
                 },
             };
-            format!("{icon} {name}")
+            match caption.as_deref().map(|c| c.lines().next().unwrap_or("").trim()).filter(|c| !c.is_empty()) {
+                Some(c) => format!("{icon} {}", humanize_tokens(c)),
+                None => format!("{icon} {name}"),
+            }
         }
         MessageKind::Article { title, .. } => format!("📰 {title}"),
         MessageKind::Poll { question, .. } => format!("📊 {question}"),
         MessageKind::Reply { text, .. } => text.clone(),
-        MessageKind::System { text } => text.clone(),
+        MessageKind::System { .. } => one_line_preview(kind),
         MessageKind::DateSeparator { label } => label.clone(),
     }
 }

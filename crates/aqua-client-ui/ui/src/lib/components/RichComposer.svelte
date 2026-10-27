@@ -244,8 +244,11 @@
     if (!r || document.activeElement !== el) { fmtBar = null; return; }
     const rect = r.getBoundingClientRect();
     if (!rect.width && !rect.height) { fmtBar = null; return; }
-    const below = rect.top < 60;
-    fmtBar = { x: Math.max(150, Math.min(window.innerWidth - 150, rect.left + rect.width / 2)), y: below ? rect.bottom + 8 : rect.top - 8, below };
+    // Touch screens: the system's Cut / Copy / Paste bar sits right above
+    // the selection — ours goes one row higher instead of on top of it.
+    const lift = matchMedia("(pointer: coarse)").matches ? 64 : 0;
+    const below = rect.top - lift < 60;
+    fmtBar = { x: Math.max(150, Math.min(window.innerWidth - 150, rect.left + rect.width / 2)), y: below ? rect.bottom + 8 + lift : rect.top - 8 - lift, below };
   }
 
   /** Wrap / unwrap the selection with Telegram markers (or prefix lines). */

@@ -1,5 +1,17 @@
 <script lang="ts">
   import { power } from "../power";
+  /** `[call:v1]{dir,status,dur}` (commands.rs::note_call) → what the line says. */
+  function callLine(text: string): { label: string; out: boolean; missed: boolean; dur: string } {
+    let v: { dir?: string; status?: string; dur?: number } = {};
+    try { v = JSON.parse(text.slice("[call:v1]".length)); } catch { /* old / broken */ }
+    const out = v.dir === "out";
+    const done = v.status === "completed";
+    const label = done ? (out ? "Outgoing call" : "Incoming call")
+      : out ? "Cancelled call" : v.status === "rejected" ? "Declined call" : "Missed call";
+    const d = Math.max(0, Number(v.dur) || 0);
+    const dur = done && d ? (d >= 3600 ? `${Math.floor(d / 3600)}:${String(Math.floor(d / 60) % 60).padStart(2, "0")}:${String(d % 60).padStart(2, "0")}` : `${Math.floor(d / 60)}:${String(d % 60).padStart(2, "0")}`) : "";
+    return { label, out, missed: !done && !out, dur };
+  }
   // Hold a sticker: it pops up big until the finger lets go (Telegram).
   let peek = $state<{ url: string; mime: string | null } | null>(null);
   let peekHeld = false;
@@ -1339,7 +1351,9 @@
   function jumpToQuoted(fromId: string, quoted: string) {
     const at = rows.findIndex((r) => r.id === fromId);
     for (let i = (at < 0 ? rows.length : at) - 1; i >= 0; i--) {
-      if (quoteOf(rows[i]) === quoted) { window.dispatchEvent(new CustomEvent("aqua:jump", { detail: rows[i].id })); return; }
+      // A quote of part of a message (Telegram's "Quote") is inside it.
+      const q = quoteOf(rows[i]);
+      if (q === quoted || (quoted.length >= 3 && snippetOf(rows[i]).includes(quoted))) { window.dispatchEvent(new CustomEvent("aqua:jump", { detail: rows[i].id })); return; }
     }
     showToast(tr("The original message isn't here any more"));
   }
@@ -1951,10 +1965,51 @@
     }
     e.preventDefault();
     e.stopPropagation();
+    menuQuote = selectedIn(row);
     // Clamp so the menu stays on screen (approx 190x220).
     const x = e.clientX, y = e.clientY; // keepOnScreen pulls it back inside
     menu = { open: true, x, y, row };
   }
+  // ---- Quote: reply with just the selected part of a message ----
+  let menuQuote = $state("");
+  /** The text selected inside this message's bubble, if any. */
+  function selectedIn(row: Row): string {
+    const sel = getSelection();
+    const txt = sel && !sel.isCollapsed ? String(sel).trim() : "";
+    if (!txt || !sel?.anchorNode) return "";
+    const el = (sel.anchorNode.nodeType === 1 ? sel.anchorNode as Element : sel.anchorNode.parentElement)?.closest("[data-id]");
+    return el?.getAttribute("data-id") === String(row.id) ? txt.slice(0, 400) : "";
+  }
+  function quoteRow(row: Row, text: string) {
+    replyTarget = { author: authorOf(row), text: text.slice(0, 400) };
+    getSelection()?.removeAllRanges();
+    closeMenu();
+    quoteChip = null;
+    queueMicrotask(() => composerEl?.focus());
+  }
+  // Phones: selecting words in a message shows a small "Quote" button under
+  // them (the system's Copy / Paste bar stays above).
+  let quoteChip = $state<{ x: number; y: number; row: Row; text: string } | null>(null);
+  onMount(() => {
+    let t: ReturnType<typeof setTimeout> | null = null;
+    const on = () => {
+      if (t) clearTimeout(t);
+      t = setTimeout(() => {
+        const sel = getSelection();
+        if (!sel || sel.isCollapsed || !sel.rangeCount || !messagesEl) { quoteChip = null; return; }
+        const node = sel.anchorNode;
+        const el = (node?.nodeType === 1 ? node as Element : node?.parentElement)?.closest("[data-id]");
+        if (!el || !messagesEl.contains(el)) { quoteChip = null; return; }
+        const row = rows.find((r) => String(r.id) === el.getAttribute("data-id"));
+        const text = String(sel).trim();
+        if (!row || !text || protectedChat) { quoteChip = null; return; }
+        const r = sel.getRangeAt(0).getBoundingClientRect();
+        quoteChip = { x: Math.min(innerWidth - 60, Math.max(60, r.left + r.width / 2)), y: Math.min(innerHeight - 120, r.bottom + 10), row, text: text.slice(0, 400) };
+      }, 180);
+    };
+    document.addEventListener("selectionchange", on);
+    return () => document.removeEventListener("selectionchange", on);
+  });
   function closeMenu() { menu = { open: false, x: 0, y: 0, row: null }; }
   /** Touch screens: a long press opens the menu, so text is selected from
    *  here (Telegram's "Select text"); the system handles then adjust it. */
@@ -2725,6 +2780,35 @@
     await ensureShown(pinned.id);
     const el = messagesEl.querySelector(`[data-id="${pinned.id}"]`);
     el?.scrollIntoView({ behavior: "smooth", block: "center" });
+    // Show which one it was, like Telegram: a short glow on it.
+    el?.classList.remove("flash");
+    void (el as HTMLElement | null)?.offsetWidth;
+    el?.classList.add("flash");
+    setTimeout(() => el?.classList.remove("flash"), 1400);
+  }
+
+  /** One readable line for a message: the pinned bar, quotes, previews.
+   *  Boards, events, docs… are shown by their titles, not as their JSON. */
+  function previewLine(m: ChatMessage): string {
+    const k = m.kind;
+    if (k.type === "file") {
+      const c = k.content;
+      const cap = c.caption?.split("\n")[0]?.trim();
+      const rk = renderKind(c);
+      const icon = rk === "image" ? "🖼️" : rk === "video" ? "📹" : rk === "gif" ? "🎞️" : rk === "sticker" ? "🎨" : rk === "voice" ? "🎙️" : rk === "circle" ? "⏺️" : "📎";
+      if (rk === "sticker") return `${icon} ${tr("Sticker")}`;
+      return `${icon} ${cap || (rk === "image" ? tr("Photo") : rk === "video" ? tr("Video") : rk === "voice" ? tr("Voice message") : rk === "circle" ? tr("Video message") : c.name)}`;
+    }
+    if (k.type === "poll") return `📊 ${k.content.question}`;
+    const t = textOf(m) ?? "";
+    const sp = /^\[([a-z]+):v\d+\](\{.*)$/s.exec(t);
+    if (sp) {
+      const icons: Record<string, string> = { board: "🗂️", event: "📅", tasks: "☑️", doc: "📄", capsule: "✉️", poll: "📊", game: "🎮", status: "•" };
+      let title = "";
+      try { const j = JSON.parse(sp[2]); title = String(j.title ?? j.t ?? j.q ?? ""); } catch { /* not ours */ }
+      return `${icons[sp[1]] ?? "▫️"} ${title || tr(sp[1] === "capsule" ? "Sealed message" : sp[1] === "board" ? "Board" : sp[1] === "event" ? "Event" : sp[1] === "tasks" ? "Checklist" : sp[1] === "doc" ? "Document" : "Message")}`;
+    }
+    return t.split("\n")[0].replace(/:[a-z0-9_]+\/[^\s:]+:/gi, "◆").slice(0, 200) || tr("Message");
   }
 
   // ---- Read receipts (chat-level "seen") ----
@@ -3097,7 +3181,7 @@
     {/if}
 
     {#if pinned}
-      {@const pv = textOf(pinned) ?? (pinned.kind.type === "poll" ? pinned.kind.content.question : "Message")}
+      {@const pv = previewLine(pinned)}
       <div class="pin-bar">
         <button class="pin-main" onclick={scrollToPinned} title={$t("Go to pinned message")}>
           <svg class="pin-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14l-1.5-5V5a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7z"/></svg>
@@ -3188,6 +3272,14 @@
       {#each shownRows as m (m.id)}
         {#if m.kind.type === "date_separator"}
           <div class="date-sep">{m.kind.content.label}</div>
+        {:else if m.kind.type === "system" && m.kind.content.text.startsWith("[call:v1]")}
+          {@const cl = callLine(m.kind.content.text)}
+          <div class="call-line" class:out={cl.out}>
+            <button class="cl-pill" class:missed={cl.missed} onclick={() => startVoiceCall(false)} title={$t("Call back")}>
+              <span class="cl-ic">{@html icons.phone}</span>
+              <span class="cl-txt"><b>{$t(cl.label)}</b><small>{m.time}{cl.dur ? ` · ${cl.dur}` : ""}</small></span>
+            </button>
+          </div>
         {:else if m.kind.type === "system"}
           {@const tn2 = ttlNote(m.kind.content.text)}
           <div class="sys" class:ttl={!!tn2}>{@html icons.lock}<span>{@html tn2 ?? m.kind.content.text}</span></div>
@@ -3651,6 +3743,7 @@
           {/if}
         </div>
         <button class="ctx-item" role="menuitem" onclick={() => replyRow(row)}>{$t("Reply")}</button>
+        {#if menuQuote}<button class="ctx-item" role="menuitem" onclick={() => quoteRow(row, menuQuote)}>{$t("Quote")}</button>{/if}
         <button class="ctx-item" role="menuitem" onclick={() => openThread(row)}>{$t(isGroup && commentsAllowed ? "Comments & thread" : "Thread")}</button>
         {#if row.kind.type === "file" && row.kind.content.saved_at && !row.outgoing && !protectedChat}
           {@const rk = renderKind(row.kind.content)}
@@ -3974,6 +4067,14 @@
     </div>
     {/if}
   {/if}
+  {#if quoteChip && !menu.open}
+    {@const qc = quoteChip}
+    <button class="quote-chip" style:left="{qc.x}px" style:top="{qc.y}px"
+      onpointerdown={(e) => e.preventDefault()} onclick={() => quoteRow(qc.row, qc.text)}>
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 7H6a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h2v2a2 2 0 0 1-2 2v1a3 3 0 0 0 3-3v-8a2 2 0 0 0 0-2Zm9 0h-4a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h2v2a2 2 0 0 1-2 2v1a3 3 0 0 0 3-3V9a2 2 0 0 0 1-2Z"/></svg>
+      {$t("Quote")}
+    </button>
+  {/if}
   {#if peek}
     <div class="sticker-peek" aria-hidden="true">
       <div class="sp-media"><AnimatedMedia src={peek.url} mime={peek.mime} play="auto" /></div>
@@ -4018,6 +4119,9 @@
   .sbr-media :global(img), .sbr-media :global(video), .sbr-media :global(canvas) { width: 18px; height: 18px; object-fit: contain; }
   .card-meta { font-size: 10.5px; color: var(--fg-dim); padding: 2px 6px 0; font-variant-numeric: tabular-nums; }
   :global(.flash) .bubble, :global(.flash) .ev, :global(.flash) .tl { animation: msg-flash 1.3s ease-out; }
+  /* The whole row lights up too (boards, documents, stickers have no bubble). */
+  :global(.msg.flash) { animation: row-flash 1.4s ease-out; border-radius: calc(12px * var(--rk, 1)); }
+  @keyframes row-flash { 0%, 35% { background: color-mix(in srgb, var(--accent) 22%, transparent); } 100% { background: transparent; } }
   @keyframes msg-flash { 0%, 30% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
   /* "Forwarded from" — the author's avatar in the corner. */
   .fwd-tag {
@@ -4647,6 +4751,19 @@
 
   /* Media bubble — images, GIFs, videos. */
   .file-caption { font-size: 13.5px; margin: 2px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .call-line { display: flex; padding: 4px 16px; justify-content: flex-start; }
+  .call-line.out { justify-content: flex-end; }
+  .cl-pill { display: inline-flex; align-items: center; gap: 10px; padding: 8px 14px 8px 10px; border-radius: calc(16px * var(--rk, 1));
+    border: 1px solid var(--border); background: var(--bg-surface); color: var(--fg); cursor: pointer; font: inherit; text-align: left; }
+  .call-line.out .cl-pill { background: color-mix(in srgb, var(--accent) 14%, var(--bg-surface)); }
+  .cl-ic { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+  .cl-pill.missed .cl-ic { background: color-mix(in srgb, #ff4d6d 18%, transparent); color: #ff4d6d; }
+  .cl-ic :global(svg) { width: 16px; height: 16px; }
+  .cl-txt { display: flex; flex-direction: column; } .cl-txt b { font-size: 13.5px; } .cl-txt small { font-size: 11.5px; color: var(--fg-dim); }
+  .quote-chip { position: fixed; z-index: 380; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 6px;
+    padding: 7px 14px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--bg-shell); color: var(--accent);
+    font: 600 13.5px var(--font-ui); box-shadow: 0 10px 28px -10px rgba(0,0,0,.7); cursor: pointer; animation: sp-in .15s ease-out; }
+  .quote-chip svg { width: 15px; height: 15px; }
   .sticker-peek { position: fixed; inset: 0; z-index: 400; display: grid; place-items: center; pointer-events: none;
     background: rgba(6, 7, 12, .55); backdrop-filter: blur(8px); animation: sp-in .18s cubic-bezier(.2,.9,.3,1.25); }
   .sp-media { width: min(70vw, 340px); aspect-ratio: 1; }

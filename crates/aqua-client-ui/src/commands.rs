@@ -3472,6 +3472,41 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
 
 // ---------- Local chat mutations ------------------------------------------
 
+/// A call in the chat's history, like Telegram ("Outgoing call · 2:15",
+/// "Missed call"): a local line on this device, `[call:v1]{dir,status,dur}`
+/// as a system message — the UI draws it, nothing is sent.
+#[tauri::command]
+pub fn note_call(
+    state: State<'_, StdMutex<AppState>>,
+    app: AppHandle,
+    peer_id: String,
+    direction: String,
+    status: String,
+    duration: u64,
+    video: bool,
+) -> Result<(), String> {
+    let dir = if direction == "in" { "in" } else { "out" };
+    let status = match status.as_str() { "completed" | "missed" | "rejected" | "failed" => status, _ => "missed".into() };
+    let text = format!("[call:v1]{}", serde_json::json!({ "dir": dir, "status": status, "dur": duration.min(86_400 * 3), "video": video }));
+    let msg = ChatMessage {
+        meta: None,
+        id: format!("call-{}", crate::state::uuid_like()),
+        from: "system".into(),
+        time: hhmm_now(),
+        kind: MessageKind::System { text: text.clone() },
+    };
+    {
+        let mut s = state.lock().map_err(|e| e.to_string())?;
+        if !s.chats.contains_key(&peer_id) { return Ok(()); }
+        push_own_message(&mut s, &peer_id, msg, &text);
+        if let Some(b) = s.chats.get_mut(&peer_id) {
+            b.summary.preview_by_me = dir == "out";
+        }
+    }
+    let _ = app.emit("aqua://chats_updated", ());
+    Ok(())
+}
+
 fn push_own_message(s: &mut AppState, peer_id: &str, msg: ChatMessage, _text: &str) {
     if let Some(book) = s.chats.get_mut(peer_id) {
         book.summary.preview = preview_for(&msg.kind);
