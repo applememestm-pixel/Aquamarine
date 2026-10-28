@@ -290,6 +290,7 @@ pub fn run() -> Result<()> {
             commands::mark_chat_read,
             commands::set_tz_offset,
             commands::change_username,
+            commands::follow_peer_by_uid,
             commands::attach_file,
             commands::attach_file_as,
             commands::attach_bytes,

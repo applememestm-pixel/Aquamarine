@@ -325,6 +325,18 @@ pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
+/// An account's @name changed: move what's in memory — keys, queued
+/// envelopes and the identity binding, for the account and each of its
+/// devices (old~dev → new~dev).
+pub fn move_live(state: &AppState, old: &str, new: &str) {
+    let keys: Vec<String> = state.users.iter().map(|e| e.key().clone()).filter(|k| base_user(k) == old).collect();
+    for k in keys {
+        let nk = format!("{new}{}", &k[old.len()..]);
+        if let Some((_, v)) = state.users.remove(&k) { state.users.insert(nk.clone(), v); }
+        if let Some((_, b)) = state.bindings.remove(&k) { state.bindings.insert(nk, b); }
+    }
+}
+
 pub fn base_user(addr: &str) -> &str {
     addr.split('~').next().unwrap_or(addr)
 }
@@ -1244,6 +1256,21 @@ async fn my_devices(State(state): State<AppState>, Caller(dh): Caller) -> Result
     device_views(&state, &me, Some(&dh)).await.map(Json).ok_or((StatusCode::NOT_FOUND, "no such account".into()))
 }
 
+/// `GET /v1/me` — the caller's account: `{username, uid}`. The @name can
+/// change without the app (another relay's older account took it when the
+/// relays joined), the ID never does.
+async fn whoami(State(state): State<AppState>, Caller(dh): Caller) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    let uid = state.directory.uid_of(&me).unwrap_or_default();
+    Ok(Json(serde_json::json!({ "username": me, "uid": uid })))
+}
+
+/// `GET /v1/users/by-id/:uid` — the @username an account ID has now.
+async fn user_by_id(State(state): State<AppState>, Path(uid): Path<String>) -> Result<Json<serde_json::Value>, StatusCode> {
+    let name = state.directory.username_by_uid(&uid).ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(serde_json::json!({ "username": name, "uid": uid })))
+}
+
 #[derive(Deserialize)]
 struct UsernameBody { username: String }
 
@@ -1261,14 +1288,7 @@ async fn change_username(
         (st, e.to_string())
     })?;
     if new != old {
-        // In memory: keys, queued envelopes and the identity binding, for the
-        // account and each of its devices (old~dev → new~dev).
-        let keys: Vec<String> = state.users.iter().map(|e| e.key().clone()).filter(|k| base_user(k) == old).collect();
-        for k in keys {
-            let nk = format!("{new}{}", &k[old.len()..]);
-            if let Some((_, v)) = state.users.remove(&k) { state.users.insert(nk.clone(), v); }
-            if let Some((_, b)) = state.bindings.remove(&k) { state.bindings.insert(nk, b); }
-        }
+        move_live(&state, &old, &new);
         tracing::info!(%old, %new, "@username changed");
         state.fed_kick.notify_waiters();
     }
@@ -2322,6 +2342,8 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/devices/:user",      get(get_devices))
         .route("/v1/me/devices",         get(my_devices))
         .route("/v1/me/username",        post(change_username))
+        .route("/v1/me",                 get(whoami))
+        .route("/v1/users/by-id/:uid",   get(user_by_id))
         .route("/v1/me/devices/:id",     post(rename_device).delete(remove_device))
         .route("/v1/users/:user/password", post(set_password))
         .route("/v1/users/:user/profile", get(get_profile).post(update_profile))

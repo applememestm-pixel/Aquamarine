@@ -282,6 +282,20 @@ pub async fn connect_to_server(
         let mut s = state.lock().map_err(|e| e.to_string())?;
         // What the old connection sent but the relay never confirmed goes
         // out again (the recipient drops copies by id).
+        // The relay knows this account under another @name now: an older
+        // account had the same one when relays joined. Ours follows it.
+        let username = match transport.renamed_from() {
+            Some(old) if old == username => {
+                let new = transport.username().to_string();
+                tracing::warn!(%old, %new, "the relay renamed this account");
+                rename_member_everywhere(&mut s, old, &new);
+                let email = s.email.clone();
+                if s.registered { s.mark_registered(new.clone(), email); }
+                let _ = app.emit("aqua://displaced", serde_json::json!({ "old": old, "new": new }));
+                new
+            }
+            _ => username,
+        };
         if let Some(old) = s.transport.take().filter(|t| t.username() == username) {
             let lost = old.take_unconfirmed();
             if !lost.is_empty() {
@@ -457,6 +471,8 @@ pub struct DirProfile {
     pub avatar_ver: i64,
     pub banner_ver: i64,
     pub music_ver: i64,
+    /// The account's ID ("" with an older relay).
+    pub uid: String,
 }
 
 impl From<aqua_client_core::ProfileCard> for DirProfile {
@@ -471,8 +487,25 @@ impl From<aqua_client_core::ProfileCard> for DirProfile {
             avatar_ver: c.avatar_ver,
             banner_ver: c.banner_ver,
             music_ver: c.music_ver,
+            uid: c.uid,
         }
     }
+}
+
+/// A contact's ID now belongs to another @name than the one their chat is
+/// under (they were renamed when relays joined, or renamed while I was
+/// away): the chat follows the ID. Returns the name it has now.
+#[tauri::command]
+pub async fn follow_peer_by_uid(app: AppHandle, state: State<'_, StdMutex<AppState>>, old: String, uid: String) -> Result<Option<String>, String> {
+    let transport = state.lock().map_err(|e| e.to_string())?.transport.clone().ok_or("not connected")?;
+    let Some(new) = transport.username_by_uid(&uid).await.map_err(|e| e.to_string())? else { return Ok(None) };
+    if new != old {
+        if let Ok(mut s) = state.lock() { apply_peer_rename(&mut s, &old, &new); }
+        crate::multidev::invalidate(&old);
+        let _ = app.emit("aqua://renamed", serde_json::json!({ "old": old, "new": new }));
+        let _ = app.emit("aqua://chats_updated", ());
+    }
+    Ok(Some(new))
 }
 
 #[tauri::command]
@@ -2244,8 +2277,16 @@ pub async fn start_chat_with(
     if peer_username.is_empty() || peer_username.starts_with("__") || peer_username.starts_with("grp_") {
         return Err("No such user".into());
     }
-    let known = matches!(transport.get_profile(&peer_username).await, Ok(Some(_)))
+    let mut known = matches!(transport.get_profile(&peer_username).await, Ok(Some(_)))
         || transport.fetch_bundle(&peer_username).await.is_ok();
+    // An account ID (10 digits) instead of a @name.
+    let mut peer_username = peer_username;
+    if !known && peer_username.len() == 10 && peer_username.bytes().all(|b| b.is_ascii_digit()) {
+        if let Ok(Some(name)) = transport.username_by_uid(&peer_username).await {
+            peer_username = name;
+            known = true;
+        }
+    }
     if !known {
         return Err(format!("No user @{peer_username} on this server"));
     }

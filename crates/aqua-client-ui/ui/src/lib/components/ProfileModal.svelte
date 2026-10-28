@@ -199,6 +199,8 @@
   let editing = $state(false);
   let activeUsername = $derived($profileState ?? "");
   let isMe = $derived(activeUsername === "__me__");
+  /** The account's ID (never changes, unlike the @name). */
+  let uid = $derived(isMe ? ($info?.uid ?? "") : ($peerCards[activeUsername]?.uid ?? ""));
 
   // Build the display view for a contact OR the current user.
   interface View {
@@ -656,6 +658,10 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 14h3v3M21 14v.01M17 21h4v-4M14 18v3"/></svg>
             </button>{/if}
           </div>
+          {#if uid}
+            <button class="uid-chip" title={$t("Account ID — it never changes, even when the @name does. Tap to copy.")}
+              onclick={() => { void navigator.clipboard?.writeText(uid); showToast(tr("ID copied")); }}>ID {uid}</button>
+          {/if}
           {#if showQr}
             <div class="qr-pop" role="presentation" onclick={() => (showQr = false)}>
               <div class="qr-card" role="presentation" onclick={(e) => e.stopPropagation()}>
@@ -988,6 +994,9 @@
   .pat.on { border-color: var(--accent); filter: none; }
   .field input.pat-own { width: 92px; padding: 6px 8px; font-size: 13px; }
   .username { display: flex; align-items: center; gap: 6px; }
+  .uid-chip { margin-top: 4px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border); background: transparent;
+    color: var(--fg-dim); font: 600 11.5px var(--font-mono, monospace); letter-spacing: .04em; cursor: pointer; }
+  .uid-chip:hover { color: var(--fg); border-color: var(--border-strong); }
   .qr-btn { border: none; background: none; padding: 2px; color: var(--fg-dim); cursor: pointer; display: grid; place-items: center; }
   .qr-btn:hover { color: var(--accent); }
   .qr-btn svg { width: 16px; height: 16px; }

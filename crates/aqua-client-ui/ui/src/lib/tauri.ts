@@ -151,6 +151,7 @@ export const api = {
   registerUsername:   (ticket: string, username: string, display_name: string, about: string, phone: string): Promise<void> => invoke("register_username", { ticket, username, displayName: display_name, about, phone }),
   searchDirectory:    (query: string): Promise<DirProfile[]>                        => invoke("search_directory", { query }),
   fetchDirectoryProfile: (username: string): Promise<DirProfile | null>            => invoke("fetch_directory_profile", { username }),
+  followPeerByUid: (old: string, uid: string): Promise<string | null>                => invoke("follow_peer_by_uid", { old, uid }),
   publishProfile:     (display_name: string, about: string, phone: string): Promise<void> => invoke("publish_profile", { displayName: display_name, about, phone }),
   publishProfileFull: (display_name: string, about: string, phone: string, extra: Record<string, unknown>): Promise<void> =>
     invoke("publish_profile_full", { displayName: display_name, about, phone, extra }),

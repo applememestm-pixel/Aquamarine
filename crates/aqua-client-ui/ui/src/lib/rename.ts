@@ -14,6 +14,8 @@ import { info, activeId, chats, connect } from "./stores";
 import { api } from "./tauri";
 import { contacts } from "./contacts";
 import { archived, mutedChats, pinnedChats } from "./chatPrefs";
+import { showToast } from "./components/Toast.svelte";
+import { tr } from "./i18n";
 
 export const USERNAME_RE = /^[a-z0-9_.]{3,32}$/;
 
@@ -52,9 +54,16 @@ export function startRenames(): () => void {
     const url = get(info)?.server_url;
     if (url) await connect(url, e.payload.new);
   }).then((u) => (un2 = u));
+  // The relays joined and an older account already had my @name: the
+  // relay moved me to name_1234 (same account, same ID). Pick a new name.
+  let un3: (() => void) | null = null;
+  void listen<{ old: string; new: string }>("aqua://displaced", (e) => {
+    info.update((i) => (i ? { ...i, username: e.payload.new } : i));
+    showToast(tr("@{old} belongs to an older account in your server network. Your account is safe and is now @{new} — choose a new name in your profile.", { old: e.payload.old, new: e.payload.new }), 15000);
+  }).then((u) => (un3 = u));
   void listen<{ old: string; new: string }>("aqua://renamed", async (e) => {
     moveKey(e.payload.old, e.payload.new);
     try { chats.set(await api.listChats()); } catch { /* next refresh */ }
   }).then((u) => (un = u));
-  return () => { un?.(); un2?.(); }
+  return () => { un?.(); un2?.(); un3?.(); }
 }
