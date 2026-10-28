@@ -197,6 +197,16 @@ pub async fn password_reset(server_url: String, ticket: String, email: String, p
     })
 }
 
+/// The recovery key (24 words) → the check the relay knows; "" for none.
+pub async fn recovery_check_of(phrase: Option<String>) -> Result<String, String> {
+    match phrase.map(|p| p.trim().to_string()).filter(|p| !p.is_empty()) {
+        None => Ok(String::new()),
+        Some(p) => tokio::task::spawn_blocking(move || backup::recovery_check(&p).map_err(|e| e.to_string()))
+            .await
+            .map_err(|e| e.to_string())?,
+    }
+}
+
 #[tauri::command]
 pub fn backup_phrase(state: State<'_, StdMutex<AppState>>) -> Result<Option<String>, String> {
     let s = state.lock().map_err(|e| e.to_string())?;
@@ -297,12 +307,19 @@ pub async fn backup_restore(
     password: String,
     email: String,
     phrase: Option<String>,
+    totp: Option<String>,
+    recovery: Option<String>,
 ) -> Result<Restored, String> {
     let secret = backup::auth_secret(&password, &email);
-    let blob = match Transport::fetch_backup(&server_url, &ticket, &secret).await {
+    let totp = totp.unwrap_or_default();
+    let check = recovery_check_of(recovery).await?;
+    let blob = match Transport::fetch_backup_checked(&server_url, &ticket, &secret, &totp, &check).await {
         Ok(b) => b,
         // Accounts made before secrets: the relay knows the raw password.
-        Err(_) => Transport::fetch_backup(&server_url, &ticket, &password).await.map_err(|e| e.to_string())?,
+        Err(e) if e.to_string().contains("wrong email or password") => {
+            Transport::fetch_backup_checked(&server_url, &ticket, &password, &totp, &check).await.map_err(|e| e.to_string())?
+        }
+        Err(e) => return Err(e.to_string()),
     };
     let Some(blob) = blob else {
         return Ok(Restored { found: false, need_phrase: false, username: None, email: None, ui: String::new() });

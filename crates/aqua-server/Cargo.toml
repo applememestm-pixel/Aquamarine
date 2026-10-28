@@ -20,6 +20,7 @@ dashmap             = { workspace = true }
 
 # Auth crypto
 hmac                = { workspace = true }
+sha1                = { version = "0.10", default-features = false }
 sha2                = { workspace = true }
 subtle              = { workspace = true }
 rand_core           = { workspace = true }

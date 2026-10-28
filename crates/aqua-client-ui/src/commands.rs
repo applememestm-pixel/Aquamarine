@@ -319,6 +319,9 @@ pub async fn connect_to_server(
         s.save_connection_hints();
     }
 
+    // Which of my devices get my chats (a new one waits for approval).
+    crate::devtrust::start(&app).await;
+
     // Spawn incoming task.
     let app_bg = app.clone();
     tokio::spawn(async move {
@@ -422,24 +425,29 @@ pub async fn login_account(
     ticket: String,
     password: String,
     email: Option<String>,
+    totp: Option<String>,
+    recovery: Option<String>,
 ) -> Result<String, String> {
     let identity = {
         let s = state.lock().map_err(|e| e.to_string())?;
         s.identity.clone()
     };
+    let totp = totp.unwrap_or_default();
+    let check = crate::backups::recovery_check_of(recovery).await?;
+    let name = crate::multidev::this_device_name();
     let Some(email) = email.filter(|e| !e.trim().is_empty()) else {
-        return Transport::login_account_named(&server_url, &identity, &ticket, &password, &crate::multidev::this_device_name()).await.map_err(|e| e.to_string());
+        return Transport::login_account_checked(&server_url, &identity, &ticket, &password, &name, &totp, &check).await.map_err(|e| e.to_string());
     };
     let secret = {
         let (p, e) = (password.clone(), email.clone());
         tokio::task::spawn_blocking(move || aqua_client_core::backup::auth_secret(&p, &e)).await.map_err(|e| e.to_string())?
     };
-    match Transport::login_account_named(&server_url, &identity, &ticket, &secret, &crate::multidev::this_device_name()).await {
+    match Transport::login_account_checked(&server_url, &identity, &ticket, &secret, &name, &totp, &check).await {
         Ok(u) => Ok(u),
         Err(e) if e.to_string().contains("wrong email or password") => {
             // An account from before hashed sign-in: try the raw password once,
             // then switch it to the hash so the relay stops seeing it.
-            let u = Transport::login_account_named(&server_url, &identity, &ticket, &password, &crate::multidev::this_device_name()).await.map_err(|e| e.to_string())?;
+            let u = Transport::login_account_checked(&server_url, &identity, &ticket, &password, &name, &totp, &check).await.map_err(|e| e.to_string())?;
             if let Err(e) = Transport::set_password_with(&server_url, &identity, &u, &secret).await {
                 tracing::warn!(error = %e, "could not upgrade the stored password");
             }
@@ -3249,7 +3257,8 @@ async fn on_incoming_plaintext(app: &AppHandle, from: String, text: String) {
     // devices never get a chat of their own.
     let from = crate::multidev::base_user(&from).to_string();
     if state.lock().ok().and_then(|s| s.username.clone()).as_deref() == Some(from.as_str()) {
-        crate::multidev::handle_own_device(app, &text);
+        // My devices always encrypt: an unencrypted one "from me" is forged.
+        tracing::warn!("an unencrypted message from my own account — dropped");
         return;
     }
     let is_new_chat;
@@ -3466,6 +3475,7 @@ pub(crate) fn is_control_text(text: &str) -> bool {
             EDIT_PREFIX, DEL_PREFIX, REN_PREFIX, CTL_PREFIX, GCALL_PREFIX, GRPINFO_PREFIX, GRPSELF_PREFIX,
             GRPJOIN_PREFIX, GRPLEAVE_PREFIX, GRPCTL_PREFIX, GRPMSG_PREFIX, CDM_PREFIX, crate::autodelete::TTL_PREFIX,
             crate::history_sync::HPOKE_PREFIX, crate::history_sync::HKEYREQ_PREFIX, crate::history_sync::HKEY_PREFIX,
+            crate::devtrust::DEVOK_PREFIX, crate::devtrust::DEVNO_PREFIX,
             "[hist:v1]", "[histack:v1]"]
             .iter().any(|p| text.starts_with(p))
 }
@@ -3477,6 +3487,21 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
     let from = crate::multidev::base_user(addr).to_string();
     // Sent by another device of mine.
     if state.lock().ok().and_then(|s| s.username.clone()).as_deref() == Some(from.as_str()) {
+        // Only from my devices that are approved (devtrust.rs): a device the
+        // relay or a password thief added gets nothing and says nothing.
+        let trusted = state.lock().ok().map(|s| match crate::devtrust::session_id(&s, addr) {
+            Some(id) => crate::devtrust::is_trusted(&s, &id),
+            None => false,
+        }).unwrap_or(false);
+        if !trusted {
+            tracing::info!(%addr, "a message from my device that isn't approved — ignored");
+            crate::devtrust::untrusted_seen(app);
+            return;
+        }
+        if text.starts_with(crate::devtrust::DEVOK_PREFIX) || text.starts_with(crate::devtrust::DEVNO_PREFIX) {
+            crate::devtrust::on_control(app, &text);
+            return;
+        }
         // The shared history of my devices (history_sync.rs).
         // 1.1.0-5 sent history device to device; that's on the relay now.
         if text.starts_with("[hist:v1]") || text.starts_with("[histack:v1]") {

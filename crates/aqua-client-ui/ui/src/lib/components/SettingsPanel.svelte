@@ -59,6 +59,8 @@
   import { myOnline, shareActivity, myActivity, activityVerb } from "../presence";
   import { reactionPack, quickReactions, reactionUrl, parseReaction, importReactionPack, REACTION_PACK_LINK } from "../reactionPack";
   import PrivacyRules from "./PrivacyRules.svelte";
+  import SignInProtection from "./SignInProtection.svelte";
+  import { deviceTrust } from "./DeviceApproval.svelte";
   import { ghost, blocked, setBlocked } from "../ghost";
   import { lockConf, setAutoLock, lockNow, passcodeSetupOpen, biometricAvailable, setBiometric } from "../lock";
   import { t, lang, LANGS, tr } from "../i18n";
@@ -292,7 +294,7 @@
   let devErr = $state<string | null>(null);
   async function loadDevices() {
     devErr = null;
-    try { devices = await api.listDevices(); }
+    try { devices = await api.listDevices(); deviceTrust.set(await api.deviceTrust().catch(() => null)); }
     catch (e) { devices = null; devErr = String(e); }
   }
   $effect(() => { if ($settingsOpen && section === "devices") void loadDevices(); });
@@ -1002,6 +1004,7 @@
           <button class="mini-btn" onclick={() => passcodeSetupOpen.set(true)}>{$t("Set a passcode")}</button>
         {/if}
       </section>
+      {#if $info?.registered}<SignInProtection />{/if}
       <section class="group">
         <div class="label">{$t("Blocked users")}</div>
         {#if $blocked.size === 0}
@@ -1725,6 +1728,7 @@
       <section class="group">
         <div class="label">{$t("Devices")}</div>
         <div class="bots-note">{$t("Your account works on several devices at once: phone, computer, tablet. Each device has its own encryption keys and gets every message. To add one, open Aquamarine there and choose “Sign in” with your e-mail and password.")}</div>
+        <div class="bots-note">{$t("A new device gets your chats only after you approve it on one of your devices (“It's me”). Two-step codes and turning off sign-in on new devices: Privacy & Security.")}</div>
         {#if devErr}
           <div class="bots-note">{$t("Couldn't load the list: {e}", { e: devErr })}</div>
         {:else if !devices}
@@ -1749,11 +1753,13 @@
                     {d.name || (d.primary ? $t("Main device") : $t("Device {id}", { id: d.id.slice(0, 6) }))}
                     {#if d.current}<span class="dev-tag">{$t("this device")}</span>{/if}
                     {#if d.primary}<span class="dev-tag dim">{$t("main")}</span>{/if}
+                    {#if $deviceTrust?.pending.some((p) => p.id === d.id)}<span class="dev-tag wait">{$t("waiting for approval")}</span>{/if}
                   </div>
                   <div class="dev-sub">{d.online ? $t("online") : $t("offline")}{d.added ? " · " + tr("added {d}", { d: devAdded(d.added) }) : ""} · {d.id}</div>
                   {/if}
                 </div>
                 {#if !d.primary && devEdit !== d.id}<button class="bot-link" onclick={() => { devName = d.name; devEdit = d.id; }}>{$t("Rename")}</button>{/if}
+                {#if $deviceTrust?.pending.some((p) => p.id === d.id)}<button class="bot-link" onclick={async () => { await api.deviceApprove(d.id).catch((e) => showToast(String(e))); await loadDevices(); }}>{$t("It's me")}</button>{/if}
                 {#if !d.current}<button class="bot-link danger" onclick={() => devRemove(d)}>{$t("Sign out")}</button>{/if}
               </div>
             {/each}
@@ -2867,6 +2873,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .dev-sub { font-size: 12px; color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dev-tag { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: calc(6px * var(--rk, 1)); padding: 1px 6px; }
   .dev-tag.dim { color: var(--fg-dim); background: color-mix(in srgb, var(--fg-dim) 14%, transparent); }
+  .dev-tag.wait { color: #F0B232; background: color-mix(in srgb, #F0B232 16%, transparent); }
   .bk-row .txt { flex: 1; min-width: 0; }
   .bk-stat { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 10px 0 6px; }
   .bk-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fg-dim); }

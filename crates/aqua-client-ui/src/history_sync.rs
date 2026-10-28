@@ -206,7 +206,7 @@ pub fn on_key_request(app: &AppHandle, from_addr: &str) {
     let payload = format!("{HKEY_PREFIX}{}", serde_json::json!({ "k": base64::engine::general_purpose::STANDARD.encode(key) }));
     let (app, addr) = (app.clone(), from_addr.to_string());
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = crate::multidev::send_to_address(&app, &addr, &payload).await {
+        if let Err(e) = crate::multidev::send_to_own(&app, &addr, &payload).await {
             tracing::warn!(%e, "history key not sent to my device");
         }
     });

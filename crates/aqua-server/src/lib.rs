@@ -38,6 +38,7 @@ pub mod public;
 pub mod discovery;
 pub mod journal;
 pub mod datadir;
+pub mod totp;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
 pub use auth::{AuthState, Caller};
@@ -1072,6 +1073,12 @@ struct LoginBody {
     /// "Pixel 8", "vpst (Linux)"… shown in the account's device list.
     #[serde(default)]
     device_name: String,
+    /// Two-step code or a backup code, when the account has them on.
+    #[serde(default)]
+    totp: String,
+    /// The recovery key's check: opens "no new devices" and two-step codes.
+    #[serde(default)]
+    recovery: String,
 }
 
 #[derive(serde::Serialize)]
@@ -1086,7 +1093,7 @@ async fn login_user(
 ) -> Result<Json<LoginResp>, (StatusCode, String)> {
     let username = state
         .directory
-        .login_named(&body.ticket, &body.password, &dh_pub, &body.device_name)
+        .login_checked(&body.ticket, &body.password, &dh_pub, &body.device_name, &body.totp, &body.recovery)
         .map_err(|e| (dir_err_status(&e), e.to_string()))?;
     tracing::info!(user = %username, device = %directory::device_id(&dh_pub), "signed in on another device");
     journal::log(&username, "login", body.device_name.clone());
@@ -1224,6 +1231,62 @@ struct RecoveryBody { check: String }
 
 #[derive(serde::Serialize)]
 struct RecoveryState { set: bool }
+
+// ---------- Sign-in protection (two-step codes, no new devices) --------------------
+
+/// `GET /v1/me/security` → `{lock, totp, backup_left}`.
+async fn security_get(State(state): State<AppState>, Caller(dh): Caller) -> Result<Json<directory::SecurityState>, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    Ok(Json(state.directory.security_state(&me)))
+}
+
+#[derive(Deserialize)]
+struct LockBody { lock: bool, #[serde(default)] code: String }
+
+/// `PUT /v1/me/security` `{lock, code?}` — sign-in on new devices off / on.
+async fn security_put(State(state): State<AppState>, Caller(dh): Caller, Json(b): Json<LockBody>) -> Result<Json<directory::SecurityState>, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    state.directory.set_device_lock(&me, b.lock, &b.code).map_err(|e| (dir_err_status(&e), e.to_string()))?;
+    journal::log(&me, if b.lock { "devices-lock" } else { "devices-unlock" }, "");
+    state.fed_kick.notify_waiters();
+    Ok(Json(state.directory.security_state(&me)))
+}
+
+#[derive(Deserialize)]
+struct CodeBody { #[serde(default)] code: String }
+
+/// `POST /v1/me/2fa/setup` → `{secret, uri}` for the authenticator app.
+async fn totp_setup(State(state): State<AppState>, Caller(dh): Caller) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    let secret = state.directory.totp_setup(&me).map_err(|e| (dir_err_status(&e), e.to_string()))?;
+    Ok(Json(serde_json::json!({ "secret": secret, "uri": totp::uri(&secret, &format!("@{me}"), "Aquamarine") })))
+}
+
+/// `POST /v1/me/2fa/enable` `{code}` → `{backup: [...]}` (shown once).
+async fn totp_enable(State(state): State<AppState>, Caller(dh): Caller, Json(b): Json<CodeBody>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    let backup = state.directory.totp_enable(&me, &b.code).map_err(|e| (dir_err_status(&e), e.to_string()))?;
+    journal::log(&me, "2fa-on", "");
+    state.fed_kick.notify_waiters();
+    Ok(Json(serde_json::json!({ "backup": backup })))
+}
+
+/// `POST /v1/me/2fa/disable` `{code}`.
+async fn totp_disable(State(state): State<AppState>, Caller(dh): Caller, Json(b): Json<CodeBody>) -> Result<StatusCode, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    state.directory.totp_disable(&me, &b.code).map_err(|e| (dir_err_status(&e), e.to_string()))?;
+    journal::log(&me, "2fa-off", "");
+    state.fed_kick.notify_waiters();
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /v1/me/2fa/backup` `{code}` → a new set of backup codes.
+async fn totp_backup(State(state): State<AppState>, Caller(dh): Caller, Json(b): Json<CodeBody>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    let backup = state.directory.totp_new_backup(&me, &b.code).map_err(|e| (dir_err_status(&e), e.to_string()))?;
+    state.fed_kick.notify_waiters();
+    Ok(Json(serde_json::json!({ "backup": backup })))
+}
 
 /// `GET /v1/me/recovery` — does my account have a recovery key?
 async fn recovery_get(State(state): State<AppState>, Caller(dh): Caller) -> Result<Json<RecoveryState>, (StatusCode, String)> {
@@ -1654,7 +1717,14 @@ async fn backup_delete(
 }
 
 #[derive(Deserialize)]
-struct BackupFetchBody { ticket: String, password: String }
+struct BackupFetchBody {
+    ticket: String,
+    password: String,
+    #[serde(default)]
+    totp: String,
+    #[serde(default)]
+    recovery: String,
+}
 
 /// New device: e-mail ticket + password → the encrypted backup (the ticket
 /// stays valid for the sign-in that follows).
@@ -1664,6 +1734,8 @@ async fn backup_fetch(
 ) -> Result<axum::response::Response, (StatusCode, String)> {
     use axum::response::IntoResponse;
     let (user, _) = state.directory.check_login(&b.ticket, &b.password).map_err(|e| (dir_err_status(&e), e.to_string()))?;
+    // The backup holds the account's keys: the same protection as signing in.
+    state.directory.sign_in_gate(&b.ticket, &user, None, &b.totp, &b.recovery).map_err(|e| (dir_err_status(&e), e.to_string()))?;
     match state.directory.get_backup(&user) {
         Some(data) => Ok(([(axum::http::header::CONTENT_TYPE, "application/octet-stream")], data).into_response()),
         None => Err((StatusCode::NOT_FOUND, "no backup for this account".into())),
@@ -1720,6 +1792,8 @@ struct UpdateProfileBody {
 fn dir_err_status(e: &directory::DirError) -> StatusCode {
     match e {
         directory::DirError::NotOwner => StatusCode::FORBIDDEN,
+        directory::DirError::DevicesLocked => StatusCode::FORBIDDEN,
+        directory::DirError::NeedTotp | directory::DirError::BadTotp => StatusCode::UNAUTHORIZED,
         directory::DirError::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
         _ => StatusCode::BAD_REQUEST,
     }
@@ -2469,6 +2543,11 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/capsules/:id/stop",  post(capsule_stop))
         .route("/v1/webapp/menu/:bot",   get(webapp_menu))
         .route("/v1/me/recovery",        get(recovery_get).put(recovery_put))
+        .route("/v1/me/security",        get(security_get).put(security_put))
+        .route("/v1/me/2fa/setup",       post(totp_setup))
+        .route("/v1/me/2fa/enable",      post(totp_enable))
+        .route("/v1/me/2fa/disable",     post(totp_disable))
+        .route("/v1/me/2fa/backup",      post(totp_backup))
         .route("/v1/devices/:user",      get(get_devices))
         .route("/v1/me/devices",         get(my_devices))
         .route("/v1/me/username",        post(change_username))

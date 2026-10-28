@@ -13,6 +13,8 @@ pub mod media_server;
 pub mod personal;
 pub mod history;
 pub mod history_sync;
+pub mod devtrust;
+pub mod security;
 pub mod backups;
 pub mod gpu;
 pub mod stickers;
@@ -261,6 +263,15 @@ pub fn run() -> Result<()> {
             commands::set_local_prefs,
             commands::login_account,
             multidev::list_devices,
+            devtrust::device_trust,
+            devtrust::device_approve,
+            devtrust::device_decline,
+            security::security_get,
+            security::security_set_lock,
+            security::totp_setup,
+            security::totp_enable,
+            security::totp_disable,
+            security::totp_backup,
             multidev::remove_device,
             multidev::rename_device,
             commands::delete_group_message_of,
