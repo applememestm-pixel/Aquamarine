@@ -81,7 +81,7 @@ export interface GpuStatus { mode: "auto" | "on" | "off"; software: boolean; rea
 /** One device of my account (Settings → Devices). */
 export interface PendingDevice { id: string; name: string; addr: string; at: number; added: number }
 export interface DeviceTrust { pending: PendingDevice[]; trusted: string[]; this: string }
-export interface SecurityState { lock: boolean; totp: boolean; backup_left: number }
+export interface SecurityState { lock: boolean; totp: boolean; backup_left: number; /** The server requires two-step codes (1.2.0). */ required?: boolean }
 
 export interface DeviceInfo {
   addr: string; id: string; primary: boolean; name: string; added: number; online: boolean; current: boolean;
@@ -120,10 +120,11 @@ export const api = {
   deviceApprove:      (id: string): Promise<void> => invoke("device_approve", { id }),
   deviceDecline:      (id: string): Promise<void> => invoke("device_decline", { id }),
   /** Sign-in protection: two-step codes and "no new devices" (security.rs). */
-  securityGet:        (): Promise<SecurityState> => invoke("security_get"),
+  securityGet:        (serverUrl?: string): Promise<SecurityState> => invoke("security_get", { serverUrl: serverUrl || null }),
   securitySetLock:    (lock: boolean, code?: string): Promise<SecurityState> => invoke("security_set_lock", { lock, code: code || null }),
-  totpSetup:          (): Promise<{ secret: string; uri: string }> => invoke("totp_setup"),
-  totpEnable:         (code: string): Promise<{ backup: string[] }> => invoke("totp_enable", { code }),
+  /** `code`: with codes already on, a current one moves them to another app. */
+  totpSetup:          (serverUrl?: string, code?: string): Promise<{ secret: string; uri: string }> => invoke("totp_setup", { serverUrl: serverUrl || null, code: code || null }),
+  totpEnable:         (code: string, serverUrl?: string): Promise<{ backup: string[] }> => invoke("totp_enable", { code, serverUrl: serverUrl || null }),
   totpDisable:        (code: string): Promise<void> => invoke("totp_disable", { code }),
   totpBackup:         (code: string): Promise<{ backup: string[] }> => invoke("totp_backup", { code }),
   removeDevice:       (id: string): Promise<void> => invoke("remove_device", { id }),

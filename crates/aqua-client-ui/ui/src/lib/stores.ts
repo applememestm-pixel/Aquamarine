@@ -211,6 +211,13 @@ export async function connect(server_url: string, username: string): Promise<str
     await tryOne(server_url);
     return null;
   } catch (e) {
+    // The server requires two-step codes and this account has none yet:
+    // set them up now (TwoFactorGate), then connect again.
+    if (/two-step verification required/i.test(String(e))) {
+      const { requireTwoFactor } = await import("./components/TwoFactorGate.svelte");
+      await requireTwoFactor(server_url);
+      try { await tryOne(server_url); return null; } catch (e2) { return String(e2); }
+    }
     // Federated: the same account works on any of the relays we know —
     // unless the user locked this one (then only its own other addresses).
     const { lockedServer } = await import("./network");
@@ -222,6 +229,10 @@ export async function connect(server_url: string, username: string): Promise<str
         console.info(`[aqua] ${server_url} is down — switched to ${alt}`);
         return null;
       } catch { /* next */ }
+    }
+    if (/server is too old/i.test(String(e))) {
+      const { tr } = await import("./i18n");
+      return tr("The server at {u} runs an old Aquamarine. Since 1.2.0 the app works only with servers 1.2.0 or newer — ask its owner to update it.", { u: server_url });
     }
     return String(e);
   }

@@ -76,6 +76,14 @@
       await load();
     });
   }
+  /** New phone: the codes move to another authenticator app (a current
+   *  code or a backup code first; the old app works until the new one is
+   *  confirmed). */
+  function moveApp() {
+    askCode(tr("Move the codes to another app?"), tr("Enter a code from the current app (or a backup code). The current app keeps working until the new one is set up."), tr("Continue"), async (c) => {
+      setup = await api.totpSetup(undefined, c); setupCode = ""; setupErr = null;
+    });
+  }
   async function setLock(lock: boolean) {
     if (!sec) return;
     if (!lock && sec.totp) {
@@ -101,7 +109,7 @@
   {:else if !sec}
     <div class="foot-note">…</div>
   {:else}
-    <button class="toggle-row" disabled={busy} onclick={() => (sec?.totp ? turnOff() : setup ? (setup = null) : startSetup())}>
+    <button class="toggle-row" disabled={busy} onclick={() => (sec?.totp ? (sec.required ? showToast(tr("This server requires two-step verification — it can't be turned off")) : turnOff()) : setup ? (setup = null) : startSetup())}>
       <div class="tr-text">
         <div class="tr-title">{$t("Two-step verification")}</div>
         <div class="tr-sub">{$t("On a new device, after the e-mail code and the password, the account asks for a 6-digit code from an authenticator app — Google Authenticator, Aegis, 2FAS, Bitwarden…")}</div>
@@ -140,7 +148,9 @@
       <div class="info-row">
         <span class="v">{$t("Backup codes left: {n}", { n: sec.backup_left })}</span>
         <button class="mini-btn" onclick={newCodes}>{$t("New codes")}</button>
+        <button class="mini-btn" onclick={moveApp}>{$t("Another app")}</button>
       </div>
+      {#if sec.required}<div class="foot-note">{$t("Required on this server: it stays on. New phone? “Another app” moves the codes to it.")}</div>{/if}
     {/if}
 
     <button class="toggle-row" disabled={busy} onclick={() => setLock(!sec?.lock)}>

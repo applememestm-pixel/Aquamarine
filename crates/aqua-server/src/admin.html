@@ -427,6 +427,11 @@
             <div class="s" data-t="Only emails on the list below may register. Off = open relay.">Only emails on the list below may register. Off = open relay.</div></div>
           <div id="sw" class="sw"></div>
         </div>
+        <div class="toggle" onclick="toggle2fa()">
+          <div><div class="t" data-t="Two-step verification is required">Two-step verification is required</div>
+            <div class="s" data-t="Every account sets up codes from an authenticator app and can't turn them off. Off = it's up to each person.">Every account sets up codes from an authenticator app and can't turn them off. Off = it's up to each person.</div></div>
+          <div id="sw2fa" class="sw"></div>
+        </div>
         <div class="mt">
           <label data-t="Allowed emails — one per line">Allowed emails — one per line</label>
           <textarea id="allow" placeholder="alice@example.com&#10;bob@example.com"></textarea>
@@ -604,6 +609,8 @@
     "Latest codes":"Последние коды","all →":"все →","Sign-up":"Регистрация","Who may register":"Кто может зарегистрироваться",
     "This list only decides who may create an account on this relay; encryption is unchanged.":"Список решает только, кто может создать аккаунт на этом ретрансляторе; шифрование от этого не меняется.",
     "Invite-only (solo mode)":"Только по приглашениям",
+    "Two-step verification is required":"Двухэтапная проверка обязательна",
+    "Every account sets up codes from an authenticator app and can't turn them off. Off = it's up to each person.":"Каждый аккаунт настраивает коды из приложения-аутентификатора и не может их выключить. Выключено — на усмотрение каждого.",
     "Invitations":"Приглашения", "invHint":"Код (или его QR) даёт зарегистрироваться здесь без того, чтобы вы вписывали адрес почты: человек сканирует его в приложении и регистрируется. Каждый код работает заданное число раз.",
     "for whom (optional)":"для кого (необязательно)", "New invitation":"Новое приглашение", "Invitation":"Приглашение", "No invitations yet.":"Приглашений пока нет.",
     "invQrNote":"Отсканируйте в Aquamarine: вход → «Сканировать QR» или Настройки → Сеть → «Сканировать QR».",
@@ -692,6 +699,7 @@
 
   let TOKEN = "";
   let inviteOnly = false;
+  let require2fa = true;
   let editingAllow = false;
   $("host").textContent = location.host;
 
@@ -926,11 +934,14 @@
     inviteOnly = s.invite_only;
     $("sw").className = "sw" + (inviteOnly?" on":"");
     $("accessSt").className = "st" + (inviteOnly?" on":"");
+    require2fa = s.require_2fa !== false;
+    $("sw2fa").className = "sw" + (require2fa?" on":"");
     if (!editingAllow) $("allow").value = (s.allow||[]).join("\n");
   }
   $("allow").addEventListener("focus", () => editingAllow = true);
   $("allow").addEventListener("blur", () => editingAllow = false);
   function toggleInvite(){ inviteOnly=!inviteOnly; $("sw").className="sw"+(inviteOnly?" on":""); }
+  function toggle2fa(){ require2fa=!require2fa; $("sw2fa").className="sw"+(require2fa?" on":""); }
 
   // ---- invitations (QR aqua:join?s=…&c=…) ----
   function joinUrl(code){ return "aqua:join?s=" + encodeURIComponent((window.__pub || location.origin).replace(/\/+$/, "")) + "&c=" + code; }
@@ -963,7 +974,7 @@
 
   async function saveCfg(){
     const allow = $("allow").value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
-    try{ await api("/v1/admin/config",{method:"POST",body:JSON.stringify({invite_only:inviteOnly,allow})});
+    try{ await api("/v1/admin/config",{method:"POST",body:JSON.stringify({invite_only:inviteOnly,allow,optional_2fa:!require2fa})});
       msg("cfgMsg", T("Saved."), "ok"); editingAllow=false; refresh(); }
     catch(e){ msg("cfgMsg", T("Failed: ")+e.message, "err"); }
   }

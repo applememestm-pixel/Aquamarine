@@ -163,6 +163,10 @@ pub struct AdminConfig {
     /// signs up with one gets on `allow`, without the admin typing an email.
     #[serde(default)]
     pub invites: Vec<Invite>,
+    /// Two-step verification may be turned off (and skipped). Off by
+    /// default: since 1.2.0 every account has to set it up.
+    #[serde(default)]
+    pub optional_2fa: bool,
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -530,6 +534,10 @@ async fn ws_upgrade(
         tracing::warn!(user = %q.user, token = %token_fp, existing = ?existing, error = %e,
             "WS REJECT: claim_or_check failed — username bound to different identity");
         return Err((e.status(), e.to_string()));
+    }
+    if needs_2fa(&state, base_user(&q.user)) {
+        tracing::info!(user = %q.user, "WS REJECT: two-step verification not set up");
+        return Err((StatusCode::FORBIDDEN, "two-step verification required — set it up in the app".into()));
     }
     let me = state.address_for(&q.user, &dh_pub);
     tracing::info!(user = %q.user, addr = %me, token = %token_fp, "WS OK: upgrading to WebSocket");
@@ -1234,10 +1242,21 @@ struct RecoveryState { set: bool }
 
 // ---------- Sign-in protection (two-step codes, no new devices) --------------------
 
-/// `GET /v1/me/security` → `{lock, totp, backup_left}`.
+/// Does this relay require two-step verification?
+fn require_2fa(state: &AppState) -> bool {
+    !state.admin.read().map(|c| c.optional_2fa).unwrap_or(false)
+}
+
+fn security_view(state: &AppState, me: &str) -> directory::SecurityState {
+    let mut v = state.directory.security_state(me);
+    v.required = require_2fa(state);
+    v
+}
+
+/// `GET /v1/me/security` → `{lock, totp, backup_left, required}`.
 async fn security_get(State(state): State<AppState>, Caller(dh): Caller) -> Result<Json<directory::SecurityState>, (StatusCode, String)> {
     let me = caller_username(&state, &dh)?;
-    Ok(Json(state.directory.security_state(&me)))
+    Ok(Json(security_view(&state, &me)))
 }
 
 #[derive(Deserialize)]
@@ -1249,16 +1268,19 @@ async fn security_put(State(state): State<AppState>, Caller(dh): Caller, Json(b)
     state.directory.set_device_lock(&me, b.lock, &b.code).map_err(|e| (dir_err_status(&e), e.to_string()))?;
     journal::log(&me, if b.lock { "devices-lock" } else { "devices-unlock" }, "");
     state.fed_kick.notify_waiters();
-    Ok(Json(state.directory.security_state(&me)))
+    Ok(Json(security_view(&state, &me)))
 }
 
 #[derive(Deserialize)]
 struct CodeBody { #[serde(default)] code: String }
 
-/// `POST /v1/me/2fa/setup` → `{secret, uri}` for the authenticator app.
-async fn totp_setup(State(state): State<AppState>, Caller(dh): Caller) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+/// `POST /v1/me/2fa/setup` `{code?}` → `{secret, uri}` for the authenticator
+/// app. With two-step codes already on, a current code moves them to a new
+/// app (the old one works until the new one is confirmed).
+async fn totp_setup(State(state): State<AppState>, Caller(dh): Caller, body: Option<Json<CodeBody>>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let me = caller_username(&state, &dh)?;
-    let secret = state.directory.totp_setup(&me).map_err(|e| (dir_err_status(&e), e.to_string()))?;
+    let code = body.map(|b| b.0.code).unwrap_or_default();
+    let secret = state.directory.totp_setup_with(&me, &code).map_err(|e| (dir_err_status(&e), e.to_string()))?;
     Ok(Json(serde_json::json!({ "secret": secret, "uri": totp::uri(&secret, &format!("@{me}"), "Aquamarine") })))
 }
 
@@ -1274,6 +1296,9 @@ async fn totp_enable(State(state): State<AppState>, Caller(dh): Caller, Json(b):
 /// `POST /v1/me/2fa/disable` `{code}`.
 async fn totp_disable(State(state): State<AppState>, Caller(dh): Caller, Json(b): Json<CodeBody>) -> Result<StatusCode, (StatusCode, String)> {
     let me = caller_username(&state, &dh)?;
+    if require_2fa(&state) {
+        return Err((StatusCode::FORBIDDEN, "two-step verification is required on this server".into()));
+    }
     state.directory.totp_disable(&me, &b.code).map_err(|e| (dir_err_status(&e), e.to_string()))?;
     journal::log(&me, "2fa-off", "");
     state.fed_kick.notify_waiters();
@@ -1362,7 +1387,16 @@ async fn my_devices(State(state): State<AppState>, Caller(dh): Caller) -> Result
 async fn whoami(State(state): State<AppState>, Caller(dh): Caller) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let me = caller_username(&state, &dh)?;
     let uid = state.directory.uid_of(&me).unwrap_or_default();
-    Ok(Json(serde_json::json!({ "username": me, "uid": uid })))
+    Ok(Json(serde_json::json!({ "username": me, "uid": uid, "need_2fa": needs_2fa(&state, &me) })))
+}
+
+/// This relay requires two-step codes and the account hasn't set them up
+/// yet: it may sign in and set them up, but not connect (no messages).
+fn needs_2fa(state: &AppState, username: &str) -> bool {
+    require_2fa(state)
+        && state.directory.identity_for(username).is_some()
+        && !state.directory.is_bot(username)
+        && !state.directory.security_state(username).totp
 }
 
 /// `GET /v1/users/by-id/:uid` — the @username an account ID has now.
@@ -2167,6 +2201,9 @@ struct StatsResp {
     /// This relay process's random id: lets a relay (or a client) tell
     /// whether an address leads to this very relay.
     instance: &'static str,
+    /// This relay's version, and the oldest app it still serves.
+    version: &'static str,
+    min_client: &'static str,
 }
 
 /// Lightweight, unauthenticated server stats for the admin GUI: how many
@@ -2213,7 +2250,8 @@ async fn server_stats(State(state): State<AppState>) -> Json<StatsResp> {
     let (users, bots) = state.directory.counts();
     // Count users with at least one live WS sender.
     let online = online_people(&state).await;
-    Json(StatsResp { ok: true, users, bots, online, require_registration: state.require_registration, instance: crate::public::instance() })
+    Json(StatsResp { ok: true, users, bots, online, require_registration: state.require_registration, instance: crate::public::instance(),
+        version: env!("CARGO_PKG_VERSION"), min_client: MIN_VERSION })
 }
 
 // ---------- Admin panel ------------------------------------------------------
@@ -2267,6 +2305,8 @@ struct AdminStats {
     require_registration: bool,
     invite_only: bool,
     allow: Vec<String>,
+    /// Two-step verification is required on this relay.
+    require_2fa: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -2319,6 +2359,7 @@ async fn admin_stats(
         require_registration: state.require_registration,
         invite_only: cfg.invite_only,
         allow: cfg.allow,
+        require_2fa: !cfg.optional_2fa,
     }))
 }
 
@@ -2384,6 +2425,7 @@ async fn admin_set_config(
     let invites = state.admin.read().map(|c| c.invites.clone()).unwrap_or_default();
     let clean = AdminConfig {
         invites,
+        optional_2fa: body.optional_2fa,
         invite_only: body.invite_only,
         allow: body
             .allow
@@ -2509,6 +2551,69 @@ async fn admin_page(State(state): State<AppState>) -> impl IntoResponse {
     )
 }
 
+// ---------- Versions this relay still serves -------------------------------
+
+/// Apps and relays older than this are no longer served (1.2.0: two-step
+/// codes are required, and older apps and relays don't know them).
+pub const MIN_VERSION: &str = "1.2.0";
+
+/// `1.1.0-7` → (1, 1, 0, 7). Our pre-releases come AFTER their release
+/// (1.1.0-1 > 1.1.0), so the number after "-" just counts up.
+fn version_key(v: &str) -> Option<(u32, u32, u32, u32)> {
+    let v = v.trim().trim_start_matches('v');
+    let v = v.split(|c: char| c == '+' || c.is_whitespace()).next()?;
+    let (main, pre) = v.split_once('-').unwrap_or((v, "0"));
+    let mut it = main.split('.').map(|x| x.parse::<u32>().ok());
+    Some((it.next()??, it.next().flatten().unwrap_or(0), it.next().flatten().unwrap_or(0), pre.parse().unwrap_or(0)))
+}
+
+/// Is version `v` (of an app or a relay) still served?
+pub fn version_ok(v: &str) -> bool {
+    match (version_key(v), version_key(MIN_VERSION)) {
+        (Some(have), Some(min)) => have >= min,
+        _ => false,
+    }
+}
+
+/// The version an app or relay says it is: the `x-aqua-version` header, the
+/// user agent (`aqua-client-core/1.2.0`, `aqua-server/1.2.0`) or `?v=` (the
+/// WebSocket).
+pub(crate) fn caller_version(headers: &axum::http::HeaderMap, query: Option<&str>) -> Option<String> {
+    if let Some(v) = headers.get("x-aqua-version").and_then(|v| v.to_str().ok()) {
+        return Some(v.to_string());
+    }
+    if let Some(ua) = headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok()) {
+        for p in ["aqua-client-core/", "aqua-server/"] {
+            if let Some(rest) = ua.split(p).nth(1) {
+                return Some(rest.split_whitespace().next().unwrap_or("").to_string());
+            }
+        }
+    }
+    query?.split('&').find_map(|kv| kv.strip_prefix("v=")).map(str::to_string)
+}
+
+/// The doors an app comes in through: sign-in, e-mail codes, the backup,
+/// the WebSocket. An app older than [`MIN_VERSION`] (or one that doesn't
+/// say) gets 426 there. Profiles, files, bots, the site and the admin panel
+/// stay as they are.
+fn app_door(path: &str) -> bool {
+    matches!(path, "/v1/auth/challenge" | "/v1/auth/verify" | "/v1/auth/email/request" | "/v1/auth/email/verify"
+        | "/v1/auth/email/poll" | "/v1/users/register" | "/v1/users/login" | "/v1/users/reset" | "/v1/backup/fetch" | "/v1/ws")
+}
+
+pub const TOO_OLD: &str = "this version of Aquamarine is no longer supported — update the app to 1.2.0 or newer";
+
+async fn version_gate(req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
+    if app_door(req.uri().path()) {
+        let v = caller_version(req.headers(), req.uri().query());
+        if !v.as_deref().is_some_and(version_ok) {
+            tracing::info!(path = %req.uri().path(), version = ?v, "an app that's too old — refused");
+            return (StatusCode::UPGRADE_REQUIRED, TOO_OLD).into_response();
+        }
+    }
+    next.run(req).await
+}
+
 // ---------- Public router constructor ----------------------------------------
 
 pub fn app(state: AppState) -> Router {
@@ -2618,6 +2723,7 @@ pub fn app(state: AppState) -> Router {
         )
         // Everything else: the optional website (AQUA_SITE_DIR, see site.rs).
         .fallback(site::fallback)
+        .layer(axum::middleware::from_fn(version_gate))
         .with_state(state)
 }
 
@@ -2649,12 +2755,32 @@ pub async fn serve_embedded(
 }
 
 #[cfg(test)]
+mod version_tests {
+    use super::*;
+
+    #[test]
+    fn versions_before_1_2_0_are_refused() {
+        for v in ["1.2.0", "1.2.0-3", "1.2.1", "1.2.11", "1.3.0", "2.0.0", "v1.2.0"] {
+            assert!(version_ok(v), "{v}");
+        }
+        for v in ["1.1.0-7", "1.1.9", "1.0.62", "0.9.0", "", "garbage"] {
+            assert!(!version_ok(v), "{v}");
+        }
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(header::USER_AGENT, "aqua-client-core/1.2.0".parse().unwrap());
+        assert_eq!(caller_version(&h, None).as_deref(), Some("1.2.0"));
+        assert_eq!(caller_version(&axum::http::HeaderMap::new(), Some("user=a&token=b&v=1.1.0-7")).as_deref(), Some("1.1.0-7"));
+        assert!(caller_version(&axum::http::HeaderMap::new(), Some("user=a")).is_none());
+    }
+}
+
+#[cfg(test)]
 mod invite_tests {
     use super::{AdminConfig, Invite};
 
     #[test]
     fn an_invitation_lets_its_number_of_people_in() {
-        let mut c = AdminConfig { invite_only: true, allow: vec![], invites: vec![Invite { code: "abc123def456".into(), uses: 1, expires: 0, note: String::new() }] };
+        let mut c = AdminConfig { invite_only: true, allow: vec![], optional_2fa: false, invites: vec![Invite { code: "abc123def456".into(), uses: 1, expires: 0, note: String::new() }] };
         assert!(!c.permits("a@x.com"));
         assert!(!c.redeem("wrong", "a@x.com"));
         assert!(c.redeem("abc123def456", "A@x.com"));

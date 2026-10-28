@@ -35,7 +35,17 @@ use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 
+/// HTTP as the app does it: it says its version (the relay refuses apps
+/// older than 1.2.0).
+fn test_http() -> reqwest::Client {
+    reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap()
+}
+
 async fn spawn_server() -> SocketAddr {
+    spawn_server_with(false).await
+}
+
+async fn spawn_server_with(require_2fa: bool) -> SocketAddr {
     // A fresh directory DB per test run (not the repo's aqua-directory.sqlite,
     // which kept "owner" from the last run and failed the register step).
     static DB: std::sync::Once = std::sync::Once::new();
@@ -49,6 +59,10 @@ async fn spawn_server() -> SocketAddr {
     // Open signup: the e2e test exercises the raw relay with ad-hoc
     // usernames that are never email-registered.
     let state = AppState::new_open();
+    // Two-step codes are left to each account here (the raw relay tests
+    // connect accounts that have none); `two_step_codes_are_required` turns
+    // them back on.
+    state.admin.write().unwrap().optional_2fa = !require_2fa;
     tokio::spawn(async move {
         axum::serve(listener, app(state)).await.unwrap();
     });
@@ -129,7 +143,7 @@ impl Client {
 async fn full_authenticated_e2e_conversation() {
     let addr = spawn_server().await;
     let base = format!("http://{addr}");
-    let http = reqwest::Client::new();
+    let http = test_http();
 
     // ------- 1. Both parties log in and get tokens -------
     let mut alice = Client::new("alice");
@@ -171,16 +185,16 @@ async fn full_authenticated_e2e_conversation() {
 
     // ------- 3. Open WebSockets with tokens -------
     let (mut a_ws, _) = tokio_tungstenite::connect_async(format!(
-        "ws://{addr}/v1/ws?user=alice&token={}",
+        "ws://{addr}/v1/ws?user=alice&token={}&v=1.2.0",
         alice.token
     )).await.unwrap();
     let (mut b_ws, _) = tokio_tungstenite::connect_async(format!(
-        "ws://{addr}/v1/ws?user=bob&token={}",
+        "ws://{addr}/v1/ws?user=bob&token={}&v=1.2.0",
         bob.token
     )).await.unwrap();
 
     // WS with no token → refused.
-    let bad = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=alice&token=")).await;
+    let bad = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=alice&token=&v=1.2.0")).await;
     assert!(bad.is_err(), "empty token must be rejected");
 
     // ------- 4. Alice fetches Bob's bundle (public, no token) -------
@@ -259,7 +273,7 @@ async fn full_authenticated_e2e_conversation() {
 async fn bundle_upload_without_token_is_refused() {
     let addr = spawn_server().await;
     let base = format!("http://{addr}");
-    let http = reqwest::Client::new();
+    let http = test_http();
     let mut alice = Client::new("alice");
     let bundle = alice.fresh_bundle(1);
     let r = http
@@ -273,7 +287,7 @@ async fn bundle_upload_without_token_is_refused() {
 async fn verify_rejects_wrong_signature() {
     let addr = spawn_server().await;
     let base = format!("http://{addr}");
-    let http = reqwest::Client::new();
+    let http = test_http();
     let alice = IdentityKeyPair::generate();
     let attacker = IdentityKeyPair::generate();
 
@@ -327,7 +341,7 @@ async fn recv_relay(
 async fn profile_media_is_public_and_owner_only() {
     let addr = spawn_server().await;
     let base = format!("http://{addr}");
-    let http = reqwest::Client::new();
+    let http = test_http();
 
     let mut owner = Client::new("owner");
     let mut other = Client::new("other");
@@ -411,7 +425,7 @@ async fn profile_media_is_public_and_owner_only() {
 async fn bot_lifecycle_and_console_script() {
     let addr = spawn_server().await;
     let base = format!("http://{addr}");
-    let http = reqwest::Client::new();
+    let http = test_http();
     let mut owner = Client::new("botowner");
     let mut other = Client::new("botother");
     owner.login(&http, &base).await;
@@ -529,7 +543,7 @@ async fn encrypted_backup_moves_an_account_to_a_new_device() {
     use aqua_client_core::backup;
     let addr = spawn_server().await;
     let base = format!("http://{addr}");
-    let http = reqwest::Client::new();
+    let http = test_http();
     let email = "move@x.com";
     let password = "correct horse battery";
     let secret = backup::auth_secret(password, email);
@@ -578,7 +592,7 @@ async fn encrypted_backup_moves_an_account_to_a_new_device() {
 async fn one_account_on_two_devices() {
     let addr = spawn_server().await;
     let base = format!("http://{addr}");
-    let http = reqwest::Client::new();
+    let http = test_http();
     let email = "multi@x.com";
     let secret = "multi-secret-hash";
 
@@ -637,13 +651,13 @@ async fn one_account_on_two_devices() {
     // A stranger's key can't use the account.
     let mut eve = Client::new("eve");
     eve.login(&http, &base).await;
-    assert!(tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=multi&token={}", eve.token)).await.is_err());
+    assert!(tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=multi&token={}&v=1.2.0", eve.token)).await.is_err());
 
-    let (mut a_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=multi&token={}", a.token)).await.unwrap();
-    let (mut b_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=multi&token={}", b.token)).await.unwrap();
+    let (mut a_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=multi&token={}&v=1.2.0", a.token)).await.unwrap();
+    let (mut b_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=multi&token={}&v=1.2.0", b.token)).await.unwrap();
     let mut peer = Client::new("mpeer");
     peer.login(&http, &base).await;
-    let (mut p_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=mpeer&token={}", peer.token)).await.unwrap();
+    let (mut p_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=mpeer&token={}&v=1.2.0", peer.token)).await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // The peer encrypts once per device.
@@ -723,6 +737,15 @@ async fn one_account_on_two_devices() {
     assert_eq!(r.status().as_u16(), 401);
     let r = http.put(format!("{base}/v1/me/security")).bearer_auth(&b.token).json(&serde_json::json!({ "lock": false, "code": backup[2] })).send().await.unwrap();
     assert!(r.status().is_success());
+    // Moved to another app, with a code.
+    let r = http.post(format!("{base}/v1/me/2fa/setup")).bearer_auth(&b.token).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 401);
+    let moved: serde_json::Value = http.post(format!("{base}/v1/me/2fa/setup")).bearer_auth(&b.token).json(&serde_json::json!({ "code": backup[4] })).send().await.unwrap().json().await.unwrap();
+    let new_secret = moved["secret"].as_str().unwrap();
+    assert_ne!(new_secret, secret_b32);
+    let code = format!("{:06}", aqua_server::totp::code_at(&aqua_server::totp::unbase32(new_secret).unwrap(), aqua_server::totp::now_step()));
+    let r = http.post(format!("{base}/v1/me/2fa/enable")).bearer_auth(&b.token).json(&serde_json::json!({ "code": code })).send().await.unwrap();
+    assert!(r.status().is_success());
     // A stranger can't touch it.
     assert_eq!(http.get(format!("{base}/v1/me/security")).bearer_auth(&eve.token).send().await.unwrap().status().as_u16(), 403);
 }
@@ -734,7 +757,7 @@ async fn one_account_on_two_devices() {
 async fn telegram_bot_api_compat() {
     let addr = spawn_server().await;
     let base = format!("http://{addr}");
-    let http = reqwest::Client::new();
+    let http = test_http();
     let mut owner = Client::new("tgowner");
     owner.login(&http, &base).await;
     let reg: serde_json::Value = http.post(format!("{base}/v1/bot/register")).bearer_auth(&owner.token)
@@ -756,7 +779,7 @@ async fn telegram_bot_api_compat() {
     // A user writes /start.
     let mut user = Client::new("tguser");
     user.login(&http, &base).await;
-    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=tguser&token={}", user.token)).await.unwrap();
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=tguser&token={}&v=1.2.0", user.token)).await.unwrap();
     let say = |text: &str| RelayMessage { from: String::new(), to: "tgcompat_bot".into(), payload: text.as_bytes().to_vec(), kind: PayloadKind::Plaintext, ts: None, id: None };
     ws.send(Message::Binary(serde_json::to_vec(&say("/start hello")).unwrap().into())).await.unwrap();
 
@@ -866,7 +889,7 @@ async fn telegram_bot_api_compat() {
 async fn native_bot_api_extras() {
     let addr = spawn_server().await;
     let base = format!("http://{addr}");
-    let http = reqwest::Client::new();
+    let http = test_http();
     let mut owner = Client::new("xowner");
     owner.login(&http, &base).await;
     let reg: serde_json::Value = http.post(format!("{base}/v1/bot/register")).bearer_auth(&owner.token)
@@ -883,7 +906,7 @@ async fn native_bot_api_extras() {
 
     let mut user = Client::new("xuser");
     user.login(&http, &base).await;
-    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=xuser&token={}", user.token)).await.unwrap();
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=xuser&token={}&v=1.2.0", user.token)).await.unwrap();
     let say = |text: &str| RelayMessage { from: String::new(), to: "extras_bot".into(), payload: text.as_bytes().to_vec(), kind: PayloadKind::Plaintext, ts: None, id: None };
     ws.send(Message::Binary(serde_json::to_vec(&say("/start")).unwrap().into())).await.unwrap();
     let _ = get("/v1/bot/updates?timeout=5").send().await.unwrap();
@@ -952,7 +975,7 @@ async fn signup_conflict_and_password_reset() {
     use aqua_client_core::backup;
     let addr = spawn_server().await;
     let base = format!("http://{addr}");
-    let http = reqwest::Client::new();
+    let http = test_http();
     let email = "reset@x.com";
     let req = |purpose: &'static str, email: &'static str| {
         let http = http.clone();
@@ -1022,7 +1045,7 @@ async fn telegram_mini_apps() {
     use sha2::Sha256;
     let addr = spawn_server().await;
     let base = format!("http://{addr}");
-    let http = reqwest::Client::new();
+    let http = test_http();
     // A registered user.
     let mut user = Client::new("maker");
     user.login(&http, &base).await;
@@ -1067,7 +1090,7 @@ async fn telegram_mini_apps() {
     let query_id = pairs.iter().find(|(k, _)| k == "query_id").unwrap().1.clone();
 
     // sendData → web_app_data.
-    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=maker&token={}", user.token)).await.unwrap();
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=maker&token={}&v=1.2.0", user.token)).await.unwrap();
     let say = |text: &str| RelayMessage { from: String::new(), to: "shop_bot".into(), payload: text.as_bytes().to_vec(), kind: PayloadKind::Plaintext, ts: None, id: None };
     ws.send(Message::Binary(serde_json::to_vec(&say(r#"[wad:v1]{"t":"Order","d":"{\"item\":3}"}"#)).unwrap().into())).await.unwrap();
     let ups: serde_json::Value = http.post(format!("{api}/getUpdates")).json(&serde_json::json!({ "timeout": 5 })).send().await.unwrap().json().await.unwrap();
@@ -1094,7 +1117,7 @@ async fn telegram_mini_apps() {
 async fn sealed_messages_open_on_their_condition() {
     let addr = spawn_server().await;
     let base = format!("http://{addr}");
-    let http = reqwest::Client::new();
+    let http = test_http();
     async fn register(http: &reqwest::Client, base: &str, name: &str) -> Client {
         let mut c = Client::new(name);
         c.login(http, base).await;
@@ -1148,7 +1171,7 @@ async fn sealed_messages_open_on_their_condition() {
 async fn changing_the_username_moves_the_account() {
     let addr = spawn_server().await;
     let base = format!("http://{addr}");
-    let http = reqwest::Client::new();
+    let http = test_http();
     let mut me = Client::new("before");
     let mut other = Client::new("someone");
     me.login(&http, &base).await;
@@ -1185,12 +1208,12 @@ async fn changing_the_username_moves_the_account() {
 async fn acks_redeliver_until_confirmed() {
     let addr = spawn_server().await;
     let base = format!("http://{addr}");
-    let http = reqwest::Client::new();
+    let http = test_http();
     let mut a = Client::new("acka");
     a.login(&http, &base).await;
     let mut b = Client::new("ackb");
     b.login(&http, &base).await;
-    let url = |user: &str, token: &str| format!("ws://{addr}/v1/ws?user={user}&token={token}&ack=1");
+    let url = |user: &str, token: &str| format!("ws://{addr}/v1/ws?user={user}&token={token}&ack=1&v=1.2.0");
     let ack = |id: &str| Message::Binary(serde_json::to_vec(&RelayMessage::ack(Some(id.into()))).unwrap().into());
 
     // Both get the greeting that says the relay speaks acks.
@@ -1229,7 +1252,7 @@ async fn acks_redeliver_until_confirmed() {
     // Without acks (an older client) nothing changes: no greeting, no ack.
     let mut c = Client::new("ackc");
     c.login(&http, &base).await;
-    let (mut c_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=ackc&token={}", c.token)).await.unwrap();
+    let (mut c_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=ackc&token={}&v=1.2.0", c.token)).await.unwrap();
     let m = RelayMessage { from: String::new(), to: "acka".into(), payload: b"old".to_vec(), kind: PayloadKind::Envelope, ts: None, id: None };
     c_ws.send(Message::Binary(serde_json::to_vec(&m).unwrap().into())).await.unwrap();
     let got = recv_relay(&mut a_ws).await;
@@ -1237,4 +1260,57 @@ async fn acks_redeliver_until_confirmed() {
     assert!(got.id.is_some(), "the relay gives it an id for the ack-speaking recipient");
     let quiet = tokio::time::timeout(Duration::from_millis(400), recv_relay(&mut c_ws)).await;
     assert!(quiet.is_err(), "an older client gets no acks: {quiet:?}");
+}
+
+/// 1.2.0: two-step codes are required. An account without them signs in and
+/// sets them up, but can't connect; then it can — and can't turn them off.
+/// Apps older than 1.2.0 aren't served at all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_step_codes_are_required() {
+    let addr = spawn_server_with(true).await;
+    let base = format!("http://{addr}");
+    let http = test_http();
+    let email = "req2fa@x.com";
+    let code: serde_json::Value = http.post(format!("{base}/v1/auth/email/request")).json(&serde_json::json!({ "email": email })).send().await.unwrap().json().await.unwrap();
+    let t: serde_json::Value = http.post(format!("{base}/v1/auth/email/verify")).json(&serde_json::json!({ "email": email, "code": code["dev_code"] })).send().await.unwrap().json().await.unwrap();
+    let mut a = Client::new("req2fa");
+    a.login(&http, &base).await;
+    let r = http.post(format!("{base}/v1/users/register")).bearer_auth(&a.token)
+        .json(&serde_json::json!({ "ticket": t["ticket"], "username": "req2fa", "display_name": "R", "password": "req-secret" }))
+        .send().await.unwrap();
+    assert!(r.status().is_success(), "{}", r.text().await.unwrap());
+
+    // Signed in, but no connection until the codes are set up.
+    let me: serde_json::Value = http.get(format!("{base}/v1/me")).bearer_auth(&a.token).send().await.unwrap().json().await.unwrap();
+    assert_eq!(me["need_2fa"], true);
+    let ws = format!("ws://{addr}/v1/ws?user=req2fa&token={}&v=1.2.0", a.token);
+    assert!(tokio_tungstenite::connect_async(&ws).await.is_err());
+    let st: serde_json::Value = http.get(format!("{base}/v1/me/security")).bearer_auth(&a.token).send().await.unwrap().json().await.unwrap();
+    assert_eq!((st["required"].as_bool(), st["totp"].as_bool()), (Some(true), Some(false)));
+
+    // The app does it without a connection (signs in over HTTP itself).
+    let setup = aqua_client_core::Transport::me_call_at(&base, &a.identity, "POST", "2fa/setup", Some(serde_json::json!({}))).await.unwrap();
+    let secret = setup["secret"].as_str().unwrap();
+    let code = format!("{:06}", aqua_server::totp::code_at(&aqua_server::totp::unbase32(secret).unwrap(), aqua_server::totp::now_step()));
+    let on = aqua_client_core::Transport::me_call_at(&base, &a.identity, "POST", "2fa/enable", Some(serde_json::json!({ "code": code }))).await.unwrap();
+    let backup: Vec<String> = serde_json::from_value(on["backup"].clone()).unwrap();
+    let me: serde_json::Value = http.get(format!("{base}/v1/me")).bearer_auth(&a.token).send().await.unwrap().json().await.unwrap();
+    assert_eq!(me["need_2fa"], false);
+    assert!(tokio_tungstenite::connect_async(&ws).await.is_ok());
+    // ...and they stay on.
+    let r = http.post(format!("{base}/v1/me/2fa/disable")).bearer_auth(&a.token).json(&serde_json::json!({ "code": backup[0] })).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 403);
+
+    // An app older than 1.2.0 (or one that doesn't say) isn't served.
+    let old = reqwest::Client::builder().user_agent("aqua-client-core/1.1.0-7").build().unwrap();
+    let r = old.post(format!("{base}/v1/auth/challenge")).json(&serde_json::json!({ "identity_dh_pub": "x" })).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 426);
+    assert!(r.text().await.unwrap().contains("no longer supported"));
+    let r = reqwest::Client::new().post(format!("{base}/v1/auth/email/request")).json(&serde_json::json!({ "email": email })).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 426);
+    assert!(tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=req2fa&token={}", a.token)).await.is_err());
+    // Profiles and the stats stay open; the stats say the version.
+    let st: serde_json::Value = reqwest::get(format!("{base}/v1/stats")).await.unwrap().json().await.unwrap();
+    assert_eq!(st["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(st["min_client"], "1.2.0");
 }

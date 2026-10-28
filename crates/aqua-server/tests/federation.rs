@@ -44,7 +44,7 @@ async fn register(http: &reqwest::Client, base: &str, id: &IdentityKeyPair, user
 type Ws = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 async fn ws(addr: &str, user: &str, tok: &str) -> Ws {
-    tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user={user}&token={tok}")).await.unwrap().0
+    tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user={user}&token={tok}&v=1.2.0")).await.unwrap().0
 }
 
 async fn recv(ws: &mut Ws) -> RelayMessage {
@@ -72,10 +72,12 @@ async fn two_relays_act_as_one() {
     let cfg = |me: &str, peer: &str| FedConfig { secret: SECRET.into(), peers: vec![peer.into()], public_url: me.into(), ..Default::default() };
     let sa = AppState::isolated(tmp.path().join("a"), Some(cfg(&ua, &ub)));
     let sb = AppState::isolated(tmp.path().join("b"), Some(cfg(&ub, &ua)));
+    // These accounts connect without two-step codes.
+    for s in [&sa, &sb] { s.admin.write().unwrap().optional_2fa = true; }
     { let s = sa.clone(); tokio::spawn(async move { axum::serve(la, app(s)).await.unwrap() }); }
     { let s = sb.clone(); tokio::spawn(async move { axum::serve(lb, app(s)).await.unwrap() }); }
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let http = reqwest::Client::new();
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
 
     // Unsigned federation calls are refused.
     let r = http.post(format!("{ua}/v1/fed/deliver")).body("{}").send().await.unwrap();
@@ -150,12 +152,14 @@ async fn changes_are_pushed_to_peers() {
     let cfg = |me: &str, peer: &str| FedConfig { secret: SECRET.into(), peers: vec![peer.into()], public_url: me.into(), ..Default::default() };
     let sa = AppState::isolated(tmp.path().join("a"), Some(cfg(&ua, &ub)));
     let sb = AppState::isolated(tmp.path().join("b"), Some(cfg(&ub, &ua)));
+    // These accounts connect without two-step codes.
+    for s in [&sa, &sb] { s.admin.write().unwrap().optional_2fa = true; }
     { let s = sa.clone(); tokio::spawn(async move { axum::serve(la, app(s)).await.unwrap() }); }
     { let s = sb.clone(); tokio::spawn(async move { axum::serve(lb, app(s)).await.unwrap() }); }
     fed::spawn_sync(sa.clone());
     fed::spawn_sync(sb.clone());
     tokio::time::sleep(Duration::from_millis(300)).await;
-    let http = reqwest::Client::new();
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
 
     // Unsigned pokes are refused.
     assert_eq!(http.post(format!("{ua}/v1/fed/poke")).body("{}").send().await.unwrap().status().as_u16(), 401);

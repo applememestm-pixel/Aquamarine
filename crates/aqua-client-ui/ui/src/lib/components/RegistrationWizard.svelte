@@ -62,6 +62,7 @@
 
   /** A server's error in plain words, plus what to do about it. */
   function explainNet(m: string, url: string): string | null {
+    if (/server is too old/i.test(m)) return tr("The server at {u} runs an old Aquamarine. Since 1.2.0 the app works only with servers 1.2.0 or newer — ask its owner to update it.", { u: url });
     const local = /\/\/(127\.0\.0\.1|localhost|\[?::1\]?)(?=[:/]|$)/i.test(url);
     if (/10061|ECONNREFUSED|Connection refused|actively refused|отверг/i.test(m))
       return local
