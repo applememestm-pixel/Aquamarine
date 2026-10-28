@@ -7,6 +7,20 @@
   import { showToast } from "./Toast.svelte";
   import { addManualServer, forgetServer, aliasesOf, federationOf } from "../servers";
   import { api } from "../tauri";
+  import QrCode from "./QrCode.svelte";
+  import { scanQr } from "./QrScanner.svelte";
+  import { parseQr, serverQr, saveInvite } from "../qr";
+
+  // ---- Share a server as a QR / add one by scanning ----
+  let qrFor = $state<string | null>(null);
+  async function scanServer() {
+    const text = await scanQr();
+    if (!text) return;
+    const r = parseQr(text);
+    if (r?.kind === "join") { saveInvite(r.url, r.code); newServer = r.url; await addServer(); showToast(tr("Invitation saved: sign up on {u} with it", { u: short(r.url) })); }
+    else if (r?.kind === "server") { newServer = r.url; await addServer(); }
+    else showToast(tr("That QR code isn't an Aquamarine server or invitation"));
+  }
 
   // ---- Add a server by hand / forget one ----
   let newServer = $state("");
@@ -110,6 +124,9 @@
           <span class="ns-ms {msClass(ms)}">{busy === u ? "…" : msLabel(ms)}</span>
           {#if u === locked}<span class="ns-lock" title={$t("Locked")}>🔒</span>{:else if u === cur}<span class="ns-tick">✓</span>{/if}
         </button>
+        <button class="ns-x ns-qr" onclick={() => (qrFor = u)} title={$t("QR code")} aria-label={$t("QR code")}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 14h3v3M21 14v.01M17 21h4v-4M14 18v3"/></svg>
+        </button>
         {#if u !== cur}<button class="ns-x" onclick={() => forget(u)} title={$t("Forget this server")} aria-label={$t("Forget this server")}>×</button>{/if}
       </div>
     {:else}
@@ -119,7 +136,22 @@
   <form class="ns-add" onsubmit={(e) => { e.preventDefault(); void addServer(); }}>
     <input bind:value={newServer} placeholder="192.168.1.39:7777" spellcheck="false" autocomplete="off" autocapitalize="off" />
     <button type="submit" disabled={!newServer.trim() || srvBusy}>{srvBusy ? "…" : $t("Add server")}</button>
+    <button type="button" class="ns-scan" onclick={scanServer} title={$t("Scan QR")} aria-label={$t("Scan QR")}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg>
+    </button>
   </form>
+  {#if qrFor}
+    {@const q = qrFor}
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div class="ns-qrpop" role="dialog" aria-modal="true" tabindex="-1" onclick={() => (qrFor = null)}>
+      <button class="close" data-x hidden onclick={() => (qrFor = null)} aria-label={$t("Close")}></button>
+      <div class="ns-qrcard" onclick={(e) => e.stopPropagation()}>
+        <QrCode text={serverQr(q)} />
+        <b>{short(q)}</b>
+        <small>{$t("Scan it in Aquamarine: Settings → Network & proxy → Scan QR, or on the sign-in screen.")}</small>
+      </div>
+    </div>
+  {/if}
   {#if srvErr}<div class="ns-note bad">{srvErr}</div>{/if}
   <label class="ns-switch">
     <span><b>{$t("Stay on this server")}</b><small>{locked ? $t("Locked to {u}. The app never moves to another server — if this one goes down, you're offline until it's back.", { u: short(locked) }) : $t("Never move to another server by itself, not even when this one stops answering.")}</small></span>
@@ -200,4 +232,11 @@
   .ns-add button:disabled { opacity: .5; }
   .ns-note { font-size: 12px; color: var(--fg-dim); line-height: 1.45; margin-top: 6px; }
   .ns-note.bad { color: var(--danger, #FF4D6D); }
+  .ns-scan { flex: none; width: 40px; display: grid; place-items: center; border-radius: calc(10px * var(--rk, 1)); border: 1px solid var(--border); background: var(--bg-input); color: var(--accent); cursor: pointer; }
+  .ns-scan svg, .ns-qr svg { width: 18px; height: 18px; }
+  .ns-qr:hover { color: var(--accent); }
+  .ns-qrpop { position: fixed; inset: 0; z-index: 950; display: grid; place-items: center; background: rgba(4,6,12,.6); backdrop-filter: blur(8px); }
+  .ns-qrcard { width: min(320px, calc(100vw - 32px)); display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 18px; text-align: center;
+    border-radius: calc(18px * var(--rk, 1)); background: var(--bg-shell); border: 1px solid var(--border-strong); }
+  .ns-qrcard small { color: var(--fg-dim); font-size: 12px; }
 </style>

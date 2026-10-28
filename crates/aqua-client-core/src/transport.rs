@@ -227,9 +227,14 @@ pub async fn request_email_code_ex(server_url: &str, email: &str, purpose: &str)
 /// With `nonce` (random, from this app): the e-mail also carries an "It's
 /// me" link, and `poll_email_code` gets the code once it's tapped.
 pub async fn request_email_code_nonce(server_url: &str, email: &str, purpose: &str, nonce: &str) -> Result<CodeRequest, TransportError> {
+    request_email_code_invite(server_url, email, purpose, nonce, "").await
+}
+
+/// The same, with an invitation code of an invite-only relay (QR `aqua:join`).
+pub async fn request_email_code_invite(server_url: &str, email: &str, purpose: &str, nonce: &str, invite: &str) -> Result<CodeRequest, TransportError> {
     let http = http_client()?;
     let url = format!("{}/v1/auth/email/request", server_url.trim_end_matches('/'));
-    let r = http.post(&url).json(&serde_json::json!({ "email": email, "purpose": purpose, "nonce": nonce })).send().await?;
+    let r = http.post(&url).json(&serde_json::json!({ "email": email, "purpose": purpose, "nonce": nonce, "invite": invite })).send().await?;
     if !r.status().is_success() {
         return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
     }

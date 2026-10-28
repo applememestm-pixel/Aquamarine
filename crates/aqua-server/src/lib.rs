@@ -158,6 +158,22 @@ pub struct AdminConfig {
     /// `invite_only` is on.
     #[serde(default)]
     pub allow: Vec<String>,
+    /// Invitation codes for an invite-only relay (QR `aqua:join`): whoever
+    /// signs up with one gets on `allow`, without the admin typing an email.
+    #[serde(default)]
+    pub invites: Vec<Invite>,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct Invite {
+    pub code: String,
+    /// Sign-ups left (0 = used up).
+    pub uses: u32,
+    /// Unix seconds; 0 = never.
+    #[serde(default)]
+    pub expires: i64,
+    #[serde(default)]
+    pub note: String,
 }
 
 const ADMIN_FILE: &str = "aqua-admin.json";
@@ -170,10 +186,26 @@ impl AdminConfig {
             .unwrap_or_default()
     }
     fn save(&self) {
+        if cfg!(test) { return; }
         if let Ok(b) = serde_json::to_vec_pretty(self) {
             let _ = std::fs::write(ADMIN_FILE, b);
         }
     }
+    /// Use one sign-up of an invitation code for this email (it goes on
+    /// `allow`). False if the code is unknown, used up or expired.
+    fn redeem(&mut self, code: &str, email: &str) -> bool {
+        let now = directory::now_secs() as i64;
+        let code = code.trim();
+        let Some(i) = self.invites.iter_mut().find(|i| !code.is_empty() && i.code == code && i.uses > 0 && (i.expires == 0 || i.expires > now)) else {
+            return false;
+        };
+        i.uses -= 1;
+        let e = email.trim().to_lowercase();
+        if !self.allow.contains(&e) { self.allow.push(e); }
+        self.save();
+        true
+    }
+
     /// Is this email allowed to register?
     fn permits(&self, email: &str) -> bool {
         if !self.invite_only {
@@ -862,6 +894,9 @@ struct EmailRequestBody {
     /// link is tapped.
     #[serde(default)]
     nonce: String,
+    /// An invitation code (QR `aqua:join?s=…&c=…`) for an invite-only relay.
+    #[serde(default)]
+    invite: String,
 }
 
 #[derive(serde::Serialize)]
@@ -894,7 +929,9 @@ async fn email_request(
     Json(body): Json<EmailRequestBody>,
 ) -> Result<Json<EmailRequestResp>, (StatusCode, String)> {
     // Invite-only (solo) relays: refuse before sending a code.
-    if !state.admin.read().map(|c| c.permits(&body.email)).unwrap_or(true) {
+    if !state.admin.read().map(|c| c.permits(&body.email)).unwrap_or(true)
+        && !state.admin.write().map(|mut c| c.redeem(&body.invite, &body.email)).unwrap_or(false)
+    {
         return Err((StatusCode::FORBIDDEN, "this relay is invite-only — ask the admin to add your email".into()));
     }
     let exists = state.directory.email_registered(&body.email);
@@ -1416,6 +1453,49 @@ async fn admin_fed_invite(State(state): State<AppState>, headers: axum::http::He
     admin_authed(&state, &headers)?;
     let c = fed::FedConfig::load();
     Ok(Json(serde_json::json!({ "invite": fed::invite(&c) })))
+}
+
+/// `GET /v1/admin/invites` — invitation codes of this invite-only relay.
+async fn admin_invites(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Result<Json<Vec<Invite>>, StatusCode> {
+    admin_authed(&state, &headers)?;
+    Ok(Json(state.admin.read().map(|c| c.invites.clone()).unwrap_or_default()))
+}
+
+#[derive(Deserialize)]
+struct NewInvite {
+    #[serde(default = "one")]
+    uses: u32,
+    #[serde(default)]
+    days: u32,
+    #[serde(default)]
+    note: String,
+}
+fn one() -> u32 { 1 }
+
+/// `POST /v1/admin/invites` `{uses, days, note}` — a new code; the panel
+/// shows it as a QR (`aqua:join?s=<this relay>&c=<code>`).
+async fn admin_invite_new(State(state): State<AppState>, headers: axum::http::HeaderMap, Json(b): Json<NewInvite>) -> Result<Json<Invite>, StatusCode> {
+    admin_authed(&state, &headers)?;
+    let mut raw = [0u8; 9];
+    rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut raw);
+    let inv = Invite {
+        code: hex::encode(raw),
+        uses: b.uses.clamp(1, 1000),
+        expires: if b.days == 0 { 0 } else { directory::now_secs() as i64 + b.days.min(365) as i64 * 86400 },
+        note: b.note.trim().chars().take(60).collect(),
+    };
+    let mut c = state.admin.write().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    c.invites.push(inv.clone());
+    c.save();
+    Ok(Json(inv))
+}
+
+async fn admin_invite_del(State(state): State<AppState>, headers: axum::http::HeaderMap, Path(code): Path<String>) -> Result<StatusCode, StatusCode> {
+    admin_authed(&state, &headers)?;
+    let mut c = state.admin.write().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    c.invites.retain(|i| i.code != code);
+    c.save();
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
@@ -2182,7 +2262,9 @@ async fn admin_set_config(
     Json(body): Json<AdminConfig>,
 ) -> Result<Json<AdminConfig>, StatusCode> {
     admin_authed(&state, &headers)?;
+    let invites = state.admin.read().map(|c| c.invites.clone()).unwrap_or_default();
     let clean = AdminConfig {
+        invites,
         invite_only: body.invite_only,
         allow: body
             .allow
@@ -2301,7 +2383,10 @@ async fn admin_page(State(state): State<AppState>) -> impl IntoResponse {
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
         // The app icon, inlined so the panel needs nothing but this response.
-        include_str!("admin.html").replace("__LOGO__", concat!("data:image/webp;base64,", include_str!("admin-logo.b64"))),
+        include_str!("admin.html")
+            .replace("__LOGO__", concat!("data:image/webp;base64,", include_str!("admin-logo.b64")))
+            // QR codes for invitations (qrcode-generator, MIT, Kazuhiko Arase).
+            .replace("__QRLIB__", include_str!("qrcode-generator.js")),
     )
 }
 
@@ -2379,6 +2464,8 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/fed/ping", get(fed::h_ping))
         .route("/v1/fed/mail", post(fed::h_mail))
         .route("/v1/admin/fed/invite", get(admin_fed_invite))
+        .route("/v1/admin/invites",    get(admin_invites).post(admin_invite_new))
+        .route("/v1/admin/invites/:code", axum::routing::delete(admin_invite_del))
         .route("/v1/admin/fed/join", post(admin_fed_join))
         .route("/v1/admin/servers", get(admin_servers))
         .route("/v1/fed/deliver", post(fed::h_deliver))
@@ -2431,4 +2518,21 @@ pub async fn serve_embedded(
     fed::spawn_sync(state.clone());
     tgapi::resume_webhooks(state.clone());
     axum::serve(listener, app(state)).with_graceful_shutdown(shutdown).await
+}
+
+#[cfg(test)]
+mod invite_tests {
+    use super::{AdminConfig, Invite};
+
+    #[test]
+    fn an_invitation_lets_its_number_of_people_in() {
+        let mut c = AdminConfig { invite_only: true, allow: vec![], invites: vec![Invite { code: "abc123def456".into(), uses: 1, expires: 0, note: String::new() }] };
+        assert!(!c.permits("a@x.com"));
+        assert!(!c.redeem("wrong", "a@x.com"));
+        assert!(c.redeem("abc123def456", "A@x.com"));
+        assert!(c.permits("a@x.com"), "the email is on the list now");
+        assert!(!c.redeem("abc123def456", "b@x.com"), "used up");
+        c.invites.push(Invite { code: "old0000000000".into(), uses: 5, expires: 1, note: String::new() });
+        assert!(!c.redeem("old0000000000", "b@x.com"), "expired");
+    }
 }

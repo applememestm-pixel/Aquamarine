@@ -336,8 +336,8 @@ pub async fn connect_to_server(
 // ---------- User directory: email registration + search --------------------
 
 #[tauri::command]
-pub async fn request_email_code(server_url: String, email: String, purpose: Option<String>, nonce: Option<String>) -> Result<aqua_client_core::CodeRequest, String> {
-    aqua_client_core::request_email_code_nonce(&server_url, &email, purpose.as_deref().unwrap_or(""), nonce.as_deref().unwrap_or(""))
+pub async fn request_email_code(server_url: String, email: String, purpose: Option<String>, nonce: Option<String>, invite: Option<String>) -> Result<aqua_client_core::CodeRequest, String> {
+    aqua_client_core::transport::request_email_code_invite(&server_url, &email, purpose.as_deref().unwrap_or(""), nonce.as_deref().unwrap_or(""), invite.as_deref().unwrap_or(""))
         .await
         .map_err(|e| e.to_string())
 }

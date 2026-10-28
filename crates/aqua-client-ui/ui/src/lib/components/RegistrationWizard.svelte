@@ -15,6 +15,8 @@
   import { adoptMyCard } from "../people";
   import { appIconUrl } from "../appIcon";
   import ServerPicker from "./ServerPicker.svelte";
+  import { scanQr } from "./QrScanner.svelte";
+  import { parseQr, saveInvite, inviteFor } from "../qr";
   import { t, tr } from "../i18n";
   import { api } from "../tauri";
   import { info, chats } from "../stores";
@@ -179,6 +181,16 @@
     if (d.length === 6 && !busy) void checkCode();
   }
 
+  /** A server's QR or an invitation from an invite-only server's admin. */
+  async function scanInvite() {
+    const text = await scanQr();
+    if (!text) return;
+    const r = parseQr(text);
+    if (r?.kind === "join") { saveInvite(r.url, r.code); serverUrl = r.url; mode = "signup"; showToast(tr("Invitation accepted — create your account on this server")); }
+    else if (r?.kind === "server") { serverUrl = r.url; }
+    else showToast(tr("That QR code isn't an Aquamarine server or invitation"));
+  }
+
   async function sendCode() {
     error = null;
     if (!email.includes("@")) { error = tr("Enter a valid email"); return; }
@@ -189,7 +201,7 @@
     existsHint = false;
     try {
       nonce = newNonce();
-      const r = await withServer((u) => api.requestEmailCode(u, email.trim(), mode, nonce));
+      const r = await withServer((u) => api.requestEmailCode(u, email.trim(), mode, nonce, inviteFor(u) || undefined));
       devCode = r.dev_code; mailFailed = r.delivery_failed ? (r.error || "?") : null;
       step = 2;
       if (devCode) code = devCode; // prefill in dev mode for convenience
@@ -244,7 +256,7 @@
     busy = true;
     try {
       nonce = newNonce();
-      const r = await api.requestEmailCode(serverUrl.trim(), email.trim(), mode, nonce);
+      const r = await api.requestEmailCode(serverUrl.trim(), email.trim(), mode, nonce, inviteFor(serverUrl.trim()) || undefined);
       devCode = r.dev_code; mailFailed = r.delivery_failed ? (r.error || "?") : null;
       if (devCode) code = devCode;
       startResendCooldown();
@@ -447,6 +459,10 @@
             <span>{$t("Server")}</span>
             <ServerPicker bind:value={serverUrl} placeholder={DEFAULT_SERVER}
               defaults={IS_ANDROID ? ["http://10.0.2.2:7777"] : ["http://127.0.0.1:7777"]} />
+            <button class="scan-inv" type="button" onclick={scanInvite}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg>
+              {inviteFor(serverUrl) ? $t("Invitation for this server ✓") : $t("Scan a server or invitation QR")}
+            </button>
           </div>
           <label class="field">
             <span>{$t("Email")}</span>
@@ -725,4 +741,8 @@
   .primary:hover:not(:disabled) { transform: translateY(-1px); }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
   .note.warn { color: #ffb454; line-height: 1.45; }
+  .scan-inv { margin-top: 6px; display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; padding: 5px 10px; border-radius: calc(9px * var(--rk, 1));
+    border: 1px dashed var(--border-strong); background: transparent; color: var(--fg-muted); font: 600 12px var(--font-ui); cursor: pointer; }
+  .scan-inv:hover { color: var(--accent); border-color: var(--accent); }
+  .scan-inv svg { width: 15px; height: 15px; }
 </style>

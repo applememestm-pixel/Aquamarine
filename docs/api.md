@@ -223,7 +223,7 @@
 { "email": "user@example.com", "purpose": "signup", "nonce": "9f2c…" }
 ```
 
-`purpose` — `signup`, `signin` или `reset` (поле необязательно). `nonce` — случайная строка приложения длиной 16–128 символов (необязательно): с ним в письме появляется кнопка «Это я — подставить код», ведущая на `GET /v1/auth/email/link/{token}` по адресу, через который приложение обратилось к ретранслятору (или по `AQUA_PUBLIC_URL`). Ответ:
+`purpose` — `signup`, `signin` или `reset` (поле необязательно). `invite` — код приглашения (необязательно): на сервере «только по приглашениям» адрес, которого нет в списке, проходит с действующим кодом и попадает в список (у кода убавляется одно использование). `nonce` — случайная строка приложения длиной 16–128 символов (необязательно): с ним в письме появляется кнопка «Это я — подставить код», ведущая на `GET /v1/auth/email/link/{token}` по адресу, через который приложение обратилось к ретранслятору (или по `AQUA_PUBLIC_URL`). Ответ:
 
 ```json
 { "ok": true, "dev_code": null }
@@ -462,6 +462,9 @@
 | `GET /v1/admin/detail/:what` | Что открывает плитка панели: `online` — @имена в сети; `files` — `[{kind, count, bytes}]` по типам (без метки — `unknown`); `bots` — `[{username, name}]`; `visitors` — серверы и люди федерации, обращавшиеся к узлу с момента запуска; `journal` — последние 500 событий `{at, user, ev, note}` (`online`, `offline`, `login`, `register`). Журнал дописывается и в файл `AQUA_JOURNAL` (по умолчанию `aqua-journal.log`, `off` — не писать) |
 | `GET` / `POST /v1/admin/datadir` | Папка данных: `{path, bytes, suggest}`. `POST {"path": "…"}` копирует данные в другую папку и запоминает её — она используется со следующего запуска; старая остаётся |
 | `POST /v1/admin/config` | `{"invite_only", "allow": [адреса]}` — режим «только по приглашению» |
+| `GET /v1/admin/invites` | Коды приглашений: `[{"code", "uses", "expires", "note"}]` |
+| `POST /v1/admin/invites` | `{"uses", "days", "note"}` → новый код. Панель показывает его QR: `aqua:join?s=<адрес сервера>&c=<код>` |
+| `DELETE /v1/admin/invites/:code` | Удалить код |
 | `GET`, `POST /v1/admin/smtp` | Настройки почтового сервера (пароль в ответе не возвращается) |
 | `POST /v1/admin/smtp/test` | `{"to"}` — отправить пробное письмо |
 | `GET`, `POST /v1/admin/telegram` | Токен бота Telegram для импорта наборов: `{"token"}` |
@@ -567,6 +570,8 @@ x-aqua-fed: <unix_ms>.<hex HMAC-SHA256(secret, METHOD "\n" PATH "\n" unix_ms "\n
 | GET | `/v1/admin/detail/:what` | админ | 15 |
 | GET, POST | `/v1/admin/datadir` | админ | 15 |
 | POST | `/v1/admin/config` | админ | 15 |
+| GET, POST | `/v1/admin/invites` | админ | 15 |
+| DELETE | `/v1/admin/invites/:code` | админ | 15 |
 | GET, POST | `/v1/admin/smtp` | админ | 15 |
 | POST | `/v1/admin/smtp/test` | админ | 15 |
 | GET, POST | `/v1/admin/telegram` | админ | 15 |
