@@ -12,6 +12,7 @@ pub mod web;
 pub mod media_server;
 pub mod personal;
 pub mod history;
+pub mod history_sync;
 pub mod backups;
 pub mod gpu;
 pub mod stickers;

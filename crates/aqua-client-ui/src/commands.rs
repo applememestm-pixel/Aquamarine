@@ -327,6 +327,8 @@ pub async fn connect_to_server(
         }
         tracing::info!("incoming stream ended");
     });
+    // My other devices get what they lack of my chats, and I get theirs.
+    crate::history_sync::start(&app);
     // Messages written while offline go out now (mesh.rs).
     crate::mesh::relay_back();
     {
@@ -3462,7 +3464,8 @@ pub(crate) fn is_control_text(text: &str) -> bool {
     text.starts_with(CALL_PREFIX)
         || [POLLVOTE_PREFIX, POLLCLOSE_PREFIX, SEEN_PREFIX, STATUS_PREFIX, REACT_PREFIX, TYPING_PREFIX,
             EDIT_PREFIX, DEL_PREFIX, REN_PREFIX, CTL_PREFIX, GCALL_PREFIX, GRPINFO_PREFIX, GRPSELF_PREFIX,
-            GRPJOIN_PREFIX, GRPLEAVE_PREFIX, GRPCTL_PREFIX, GRPMSG_PREFIX, CDM_PREFIX, crate::autodelete::TTL_PREFIX]
+            GRPJOIN_PREFIX, GRPLEAVE_PREFIX, GRPCTL_PREFIX, GRPMSG_PREFIX, CDM_PREFIX, crate::autodelete::TTL_PREFIX,
+            crate::history_sync::HIST_PREFIX, crate::history_sync::HISTACK_PREFIX]
             .iter().any(|p| text.starts_with(p))
 }
 
@@ -3473,6 +3476,15 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
     let from = crate::multidev::base_user(addr).to_string();
     // Sent by another device of mine.
     if state.lock().ok().and_then(|s| s.username.clone()).as_deref() == Some(from.as_str()) {
+        // My chats from my other device (history_sync.rs).
+        if let Some(body) = text.strip_prefix(crate::history_sync::HIST_PREFIX) {
+            crate::history_sync::on_snapshot(app, body);
+            return;
+        }
+        if let Some(body) = text.strip_prefix(crate::history_sync::HISTACK_PREFIX) {
+            crate::history_sync::on_ack(app, Some(addr), body);
+            return;
+        }
         crate::multidev::handle_own_device(app, &text);
         return;
     }
@@ -3763,12 +3775,13 @@ fn apply_delete_ex(s: &mut AppState, chat_id: &str, author: &str, text_match: &s
                 book.messages[pos].meta.get_or_insert_with(Default::default).deleted = true;
                 return true;
             }
-            book.messages.remove(pos);
+            let gone = book.messages.remove(pos);
             book.summary.preview = book
                 .messages
                 .last()
                 .map(|m| preview_for(&m.kind))
                 .unwrap_or_default();
+            crate::history_sync::tombstone(s, chat_id, &[gone]);
             return true;
         }
     }
@@ -3827,6 +3840,7 @@ pub fn delete_messages_local(
     let data_dir = s.data_dir.clone();
     let Some(book) = s.chats.get_mut(&peer_id) else { return Ok(0) };
     let before = book.messages.len();
+    let gone: Vec<ChatMessage> = book.messages.iter().filter(|m| ids.contains(&m.id)).cloned().collect();
     book.messages.retain(|m| !ids.contains(&m.id));
     let removed = before - book.messages.len();
     if removed > 0 {
@@ -3834,6 +3848,7 @@ pub fn delete_messages_local(
         if peer_id == crate::state::SAVED_MESSAGES_ID {
             crate::state::save_saved_messages(&data_dir, &book.messages);
         }
+        crate::history_sync::tombstone(&s, &peer_id, &gone);
     }
     Ok(removed)
 }
@@ -3969,14 +3984,19 @@ pub fn delete_chat(state: State<'_, StdMutex<AppState>>, peer_id: String) -> Res
     }
     if peer_id == crate::state::SAVED_MESSAGES_ID {
         let data_dir = s.data_dir.clone();
+        let gone = s.chats.get(&peer_id).map(|b| b.messages.clone()).unwrap_or_default();
         if let Some(book) = s.chats.get_mut(&peer_id) {
             book.messages.clear();
             book.summary.preview = String::new();
             book.summary.unread = 0;
             crate::state::save_saved_messages(&data_dir, &book.messages);
         }
+        crate::history_sync::tombstone(&s, &peer_id, &gone);
         return Ok(());
     }
+    // On my other devices it goes too (history_sync.rs).
+    let gone = s.chats.get(&peer_id).map(|b| b.messages.clone()).unwrap_or_default();
+    crate::history_sync::tombstone(&s, &peer_id, &gone);
     s.chats.remove(&peer_id);
     s.chat_order.retain(|c| c != &peer_id);
     Ok(())
