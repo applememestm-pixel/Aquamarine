@@ -60,10 +60,15 @@ pub fn log_out(state: State<'_, StdMutex<AppState>>) -> Result<InitInfo, String>
 #[tauri::command]
 pub fn list_chats(state: State<'_, StdMutex<AppState>>) -> Result<Vec<ChatSummary>, String> {
     let s = state.lock().map_err(|e| e.to_string())?;
+    let me = s.username.clone().unwrap_or_default();
     Ok(s.chat_order
         .iter()
         // "user~device" rows came from an older build: a device isn't a chat.
-        .filter(|id| !id.contains('~'))
+        // (A channel's direct messages, "dm~…", are.)
+        .filter(|id| id.starts_with("dm~") || !id.contains('~'))
+        // Never a chat with myself: that's Saved Messages. One showed up on a
+        // second device as "vpst" (a copy from my other device addressed to me).
+        .filter(|id| me.is_empty() || **id != me)
         .filter_map(|id| s.chats.get(id).map(|c| c.summary.clone()))
         .collect())
 }
@@ -2870,6 +2875,8 @@ pub fn own_device_message(app: &AppHandle, to: &str, inner: &str) {
         let _ = app.emit("aqua://own_sent", serde_json::json!({ "peer_id": to }));
         return;
     }
+    // Something "to me" from my own other device isn't a chat with myself.
+    if to == me || to.is_empty() { return; }
     // Per-device state (typing, read marks, presence…) isn't mirrored.
     for p in [CALL_PREFIX, POLLVOTE_PREFIX, POLLCLOSE_PREFIX, SEEN_PREFIX, STATUS_PREFIX, REACT_PREFIX, TYPING_PREFIX] {
         if inner.starts_with(p) { return; }

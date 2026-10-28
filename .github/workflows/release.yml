@@ -151,6 +151,15 @@ jobs:
         # macOS runners sometimes fail to mount / detach the .dmg image
         # ("Resource busy" in bundle_dmg.sh): try again, the compile is cached.
         run: |
+          # RPM refuses "-" in a version, and pre-releases are 1.1.0-N (CLAUDE.md):
+          # AppImage + deb get the version as it is, the .rpm gets 1.1.0+N —
+          # valid for RPM and newer than 1.1.0, older than 1.1.1, as it should be.
+          v=$(node -p "require('./tauri.conf.json').version")
+          if [ "$RUNNER_OS" = "Linux" ] && [[ "$v" == *-* ]]; then
+            cargo tauri build --target ${{ matrix.rust-target }} --bundles appimage,deb || exit 1
+            cargo tauri build --target ${{ matrix.rust-target }} --bundles rpm --config "{\"version\":\"${v/-/+}\"}" || exit 1
+            exit 0
+          fi
           for i in 1 2 3; do
             cargo tauri build --target ${{ matrix.rust-target }} && exit 0
             [ "$RUNNER_OS" = "macOS" ] || exit 1
