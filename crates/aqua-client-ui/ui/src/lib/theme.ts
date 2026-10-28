@@ -215,6 +215,9 @@ export interface Settings {
   avatarRadiusChannel?: number;
   /** Phones: floating see-through panels (header, message field, tab bar)
    *  like the new Telegram, and how opaque they are (0 — only the outline). */
+  /** Experimental: a bot's keyboard floats over the chat — drag it
+   *  anywhere, make it bigger or smaller. */
+  floatKb?: boolean;
   /** Android widget: show the last message's text (off: names and counts). */
   widgetText?: boolean;
   glass?: boolean;

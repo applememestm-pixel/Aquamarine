@@ -1533,6 +1533,42 @@
     return null;
   });
   let replyKbHidden = $state(false);
+  // ---- Experimental: the bot keyboard as a floating panel (Settings →
+  // Experimental). Drag it by the strip on top, resize by the corner; the
+  // place and size are kept for every chat. ----
+  const FKB_KEY = "aqua.floatKb.v1";
+  let fkb = $state<{ x: number; y: number; s: number }>((() => {
+    try { const v = JSON.parse(localStorage.getItem(FKB_KEY) || "null"); if (v && typeof v.x === "number") return v; } catch { /* none */ }
+    return { x: 24, y: 140, s: 1 };
+  })());
+  function fkbSave() { try { localStorage.setItem(FKB_KEY, JSON.stringify(fkb)); } catch { /* ignore */ } }
+  function fkbClamp(el?: HTMLElement | null) {
+    const w = (el?.offsetWidth ?? 320) * fkb.s, h = (el?.offsetHeight ?? 160) * fkb.s;
+    // Always whole on the screen: the corner must stay reachable.
+    fkb = { ...fkb, x: Math.max(4, Math.min(innerWidth - w - 4, fkb.x)), y: Math.max(4, Math.min(innerHeight - h - 4, fkb.y)) };
+  }
+  function fkbDrag(e: PointerEvent, mode: "move" | "size") {
+    e.preventDefault(); e.stopPropagation();
+    const el = (e.currentTarget as HTMLElement).closest(".rkb") as HTMLElement | null;
+    const start = { px: e.clientX, py: e.clientY, ...fkb };
+    const base = el?.offsetWidth ?? 320;
+    const move = (ev: PointerEvent) => {
+      if (mode === "move") fkb = { ...fkb, x: start.x + ev.clientX - start.px, y: start.y + ev.clientY - start.py };
+      else fkb = { ...fkb, s: Math.max(0.55, Math.min(1.8, start.s + (ev.clientX - start.px + ev.clientY - start.py) / (base * 1.4))) };
+    };
+    const up = () => { removeEventListener("pointermove", move); removeEventListener("pointerup", up); removeEventListener("pointercancel", up); fkbClamp(el); fkbSave(); };
+    addEventListener("pointermove", move); addEventListener("pointerup", up); addEventListener("pointercancel", up);
+  }
+  // Two fingers on it: pinch to resize.
+  let fkbPinch: { d: number; s: number } | null = null;
+  const tdist = (t: TouchList) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  function fkbTouchStart(e: TouchEvent) { if (e.touches.length === 2) fkbPinch = { d: tdist(e.touches), s: fkb.s }; }
+  function fkbTouchMove(e: TouchEvent) {
+    if (!fkbPinch || e.touches.length !== 2) return;
+    e.preventDefault();
+    fkb = { ...fkb, s: Math.max(0.55, Math.min(1.8, fkbPinch.s * tdist(e.touches) / fkbPinch.d)) };
+  }
+  function fkbTouchEnd(e: TouchEvent) { if (fkbPinch && e.touches.length < 2) { fkbPinch = null; fkbClamp((e.currentTarget as HTMLElement)); fkbSave(); } }
   $effect(() => { void replyKb; replyKbHidden = false; });
   let botMenu = $state<{ text: string; url: string } | null>(null);
   $effect(() => {
@@ -3983,7 +4019,17 @@
       {/if}
     {:else}
     {#if replyKb && !replyKbHidden}
-      <div class="rkb" class:many={(replyKb.rows?.length ?? 0) > 3}>
+      <div class="rkb" role="group" aria-label={$t("Bot keyboard")} class:many={(replyKb.rows?.length ?? 0) > 3} class:float={!!$settings.floatKb}
+        style:left={$settings.floatKb ? `${fkb.x}px` : undefined} style:top={$settings.floatKb ? `${fkb.y}px` : undefined}
+        style:--fkb-s={$settings.floatKb ? fkb.s : undefined}
+        ontouchstart={$settings.floatKb ? fkbTouchStart : undefined} ontouchmove={$settings.floatKb ? fkbTouchMove : undefined} ontouchend={$settings.floatKb ? fkbTouchEnd : undefined}>
+        {#if $settings.floatKb}
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div class="fkb-grip" onpointerdown={(e) => fkbDrag(e, "move")} ondblclick={() => { fkb = { ...fkb, s: 1 }; fkbSave(); }}>
+            <span></span>
+            <button class="fkb-x" onpointerdown={(e) => e.stopPropagation()} onclick={() => (replyKbHidden = true)} aria-label={$t("Hide")}>✕</button>
+          </div>
+        {/if}
         {#each replyKb.rows ?? [] as row, ri (ri)}
           <div class="rkb-row">
             {#each row as b, bi (bi)}
@@ -3991,6 +4037,10 @@
             {/each}
           </div>
         {/each}
+        {#if $settings.floatKb}
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div class="fkb-size" onpointerdown={(e) => fkbDrag(e, "size")} title={$t("Drag to resize")}></div>
+        {/if}
       </div>
     {/if}
     {#if $activeChat && !$info?.connected && ($meshStatus?.per_chat?.[$activeChat.id] ?? 0) > 0}
@@ -4319,6 +4369,20 @@
   .rkb-btn { flex: 1; min-width: 0; padding: 10px 8px; border-radius: calc(10px * var(--rk, 1)); border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rkb-btn:hover { background: var(--bg-hover); border-color: var(--border-strong); }
   .rkb-toggle.on { color: var(--accent); }
+  /* Experimental: the keyboard floats — a card you drag and resize. */
+  .rkb.float {
+    position: fixed; z-index: 70; width: min(340px, calc(100vw - 32px)); max-height: none; padding: 0 10px 12px;
+    transform: scale(var(--fkb-s, 1)); transform-origin: top left; touch-action: none;
+    background: color-mix(in srgb, var(--bg-surface, #12151d) 82%, transparent); border: 1px solid var(--border-strong);
+    border-radius: calc(18px * var(--rk, 1)); box-shadow: 0 18px 44px -14px rgba(0,0,0,.75);
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  }
+  .fkb-grip { display: flex; align-items: center; justify-content: center; height: 24px; cursor: grab; position: relative; touch-action: none; }
+  .fkb-grip:active { cursor: grabbing; }
+  .fkb-grip > span { width: 38px; height: 4px; border-radius: 4px; background: var(--fg-dim); opacity: .6; }
+  .fkb-x { position: absolute; right: -4px; top: 2px; width: 22px; height: 22px; border: none; border-radius: 50%; background: transparent; color: var(--fg-dim); cursor: pointer; font-size: 12px; }
+  .fkb-size { position: absolute; right: 2px; bottom: 2px; width: 18px; height: 18px; cursor: nwse-resize; touch-action: none;
+    background: linear-gradient(135deg, transparent 50%, var(--fg-dim) 50%, var(--fg-dim) 58%, transparent 58%, transparent 70%, var(--fg-dim) 70%, var(--fg-dim) 78%, transparent 78%); opacity: .7; }
   .bot-menu-btn { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; height: 36px; padding: 0 12px; border-radius: calc(10px * var(--rk, 1)); border: none; background: var(--accent); color: #06070C; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; max-width: 160px; }
   .bot-menu-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bot-menu-btn svg { width: 16px; height: 16px; flex-shrink: 0; }

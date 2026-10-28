@@ -12,7 +12,6 @@
   import { icons } from "../icons";
   import { activeTab, activeId, type NavTab } from "../stores";
   import { openSettings, settingsOpen } from "../panels/settings";
-  import { navConf } from "../navBar";
 
   type Item = { id: string; label: string; svg: string; tab?: NavTab; mobileOnly?: boolean; desktopOnly?: boolean };
   // Phones get four: Chats, Files, Contacts (with recent calls inside, like
@@ -31,10 +30,7 @@
     mq?.addEventListener("change", on);
     return () => mq?.removeEventListener("change", on);
   });
-  // Phones: the tabs, order and visibility from Settings → Appearance → Tab bar.
-  const items = $derived(phone
-    ? $navConf.order.filter((id) => !$navConf.hidden.includes(id)).map((id) => all.find((i) => i.id === id)).filter((i): i is Item => !!i)
-    : all.filter((i) => !i.mobileOnly));
+  const items = $derived(all.filter((i) => (phone ? !i.desktopOnly : !i.mobileOnly)));
 
   function activate(it: Item) {
     if (it.tab) activeTab.set(it.tab);
@@ -93,7 +89,7 @@
   onMount(() => {
     const last = new WeakMap<EventTarget, number>();
     const onScroll = (e: Event) => {
-      if (!mobile() || !$navConf.autoHide) return;
+      if (!mobile()) return;
       const el = e.target as HTMLElement;
       if (!el || !(el instanceof HTMLElement) || el.closest(".main-pane, .rail, [role=dialog]")) return;
       const y = el.scrollTop;
@@ -116,8 +112,6 @@
 
 <aside
   class="rail"
-  class:off={phone && !$navConf.on}
-  class:no-labels={phone && !$navConf.labels}
   class:hidden
   class:dragging={dragX != null}
   bind:this={bar}
@@ -241,9 +235,6 @@
       -webkit-user-select: none;
       transition: transform .38s cubic-bezier(.22,1,.36,1), opacity .3s ease;
     }
-    .rail.off { display: none; }
-    .rail.no-labels .nav-lbl { display: none; }
-    .rail.no-labels .nav-btn :global(svg) { width: 22px; height: 22px; }
     .rail.hidden:not(.dragging) { transform: translateX(-50%) translateY(calc(100% + 24px)); opacity: 0; pointer-events: none; }
     .brand, .rail-divider, .rail-spacer { display: none; }
     .nav-btn.mobile-only { display: flex; margin-top: 0; }
