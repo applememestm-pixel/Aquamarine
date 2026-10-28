@@ -13,7 +13,8 @@
   import { autostartEnabled, setAutostart } from "../desktop";
   import { pickFolder } from "../dialog";
   const PHONE_UI = /android|iphone|ipad/i.test(navigator.userAgent);
-  import { ATTACH_ITEMS, attachFront, toggleAttachFront, resetAttachMenu } from "../attachMenu";
+  import { NAV_ITEMS, navConf, moveNav, toggleNavHidden, resetNav } from "../navBar";
+  import { ATTACH_ITEMS, attachFront, attachHidden, attachDock, attachBots, toggleAttachFront, toggleAttachHidden, moveAttach, toggleAttachBot, resetAttachMenu } from "../attachMenu";
   import { chatLocks } from "../chatLocks";
   import { askSetLock, askRemoveLock, askChangeLock } from "../chatLockUi";
   let blockPick = $state("");
@@ -1463,17 +1464,90 @@
           </div>
         {/each}
       </section>
+      {#if phone}
+      <section class="group">
+        <div class="label">{$t("Glass panels")}</div>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, glass: !x.glass }))}>
+          <div class="tr-text"><div class="tr-title">{$t("See-through floating panels")}</div><div class="tr-sub">{$t("The chat header, the message field and the tab bar float over the chat, like in the new Telegram")}</div></div>
+          <span class="switch" class:on={!!$settings.glass}></span>
+        </button>
+        {#if $settings.glass}
+          {@const ga = $settings.glassAlpha ?? 55}
+          <div class="ava-row">
+            <div class="ava-ctl">
+              <div class="ava-head"><b>{$t("Opacity")}</b><span class="pill-tag">{ga === 0 ? $t("Outline only") : `${ga}%`}</span></div>
+              <div class="range"><input type="range" min="0" max="100" step="5" value={ga}
+                oninput={(e) => settings.update((x) => ({ ...x, glassAlpha: parseInt((e.target as HTMLInputElement).value) }))} /></div>
+            </div>
+          </div>
+        {/if}
+      </section>
+      <section class="group">
+        <div class="label">{$t("Tab bar")}</div>
+        <button class="toggle-row" onclick={() => navConf.update((c) => ({ ...c, on: !c.on }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Show the tab bar")}</div><div class="tr-sub">{$t("Off: swipe left and right between tabs; Settings is the gear at the top")}</div></div>
+          <span class="switch" class:on={$navConf.on}></span>
+        </button>
+        {#if $navConf.on}
+          {#each $navConf.order as id, i (id)}
+            {@const it = NAV_ITEMS.find((x) => x.id === id)}
+            {@const hid = $navConf.hidden.includes(id)}
+            <div class="toggle-row am-row" class:off={hid}>
+              <div class="tr-text"><div class="tr-title">{$t(it?.label ?? id)}</div></div>
+              <button class="am-btn" disabled={i === 0} onclick={() => moveNav(id, -1)} aria-label={$t("Move up")}>↑</button>
+              <button class="am-btn" disabled={i === $navConf.order.length - 1} onclick={() => moveNav(id, 1)} aria-label={$t("Move down")}>↓</button>
+              <button class="switch-btn" disabled={id === "chats"} onclick={() => toggleNavHidden(id)} aria-label={$t("Show")}><span class="switch" class:on={!hid}></span></button>
+            </div>
+          {/each}
+          <button class="toggle-row" onclick={() => navConf.update((c) => ({ ...c, labels: !c.labels }))}>
+            <div class="tr-text"><div class="tr-title">{$t("Tab names")}</div></div>
+            <span class="switch" class:on={$navConf.labels}></span>
+          </button>
+          <button class="toggle-row" onclick={() => navConf.update((c) => ({ ...c, autoHide: !c.autoHide }))}>
+            <div class="tr-text"><div class="tr-title">{$t("Hide while scrolling")}</div><div class="tr-sub">{$t("Slips away as you scroll down, comes back when you scroll up")}</div></div>
+            <span class="switch" class:on={$navConf.autoHide}></span>
+          </button>
+        {/if}
+        <button class="mini-btn" onclick={resetNav}>{$t("Reset")}</button>
+      </section>
+      {/if}
       {/if}
 
       {#if section === "behaviour"}
       <section class="group">
         <div class="label">{$t("Attach menu")}</div>
-        <div class="foot-note" style="margin:0 0 8px">{$t("What the 📎 button shows right away. The rest waits under “More”.")}</div>
-        {#each ATTACH_ITEMS as it (it.id)}
-          <button class="toggle-row" onclick={() => toggleAttachFront(it.id)}>
-            <div class="tr-text"><div class="tr-title">{$t(it.label)}</div></div>
-            <span class="switch" class:on={$attachFront.includes(it.id)}></span>
+        <div class="foot-note" style="margin:0 0 8px">{$t("What the 📎 button shows right away and in what order. The rest waits under “More”; hidden ones aren't shown at all.")}</div>
+        {#each [...$attachFront.map((id) => ATTACH_ITEMS.find((x) => x.id === id)).filter((x) => !!x), ...ATTACH_ITEMS.filter((x) => !$attachFront.includes(x.id))] as it, i (it.id)}
+          {@const front = $attachFront.includes(it.id)}
+          {@const hid = $attachHidden.includes(it.id)}
+          <div class="toggle-row am-row" class:off={hid}>
+            <div class="tr-text"><div class="tr-title">{$t(it.label)}</div>
+              <div class="tr-sub">{hid ? $t("Hidden") : front ? $t("Right away") : $t("Under “More”")}</div></div>
+            {#if front}
+              <button class="am-btn" disabled={i === 0} onclick={() => moveAttach(it.id, -1)} aria-label={$t("Move up")}>↑</button>
+              <button class="am-btn" disabled={i === $attachFront.length - 1} onclick={() => moveAttach(it.id, 1)} aria-label={$t("Move down")}>↓</button>
+            {/if}
+            <button class="am-btn" onclick={() => toggleAttachHidden(it.id)} title={$t(hid ? "Show" : "Hide")} aria-label={$t(hid ? "Show" : "Hide")}>
+              {#if hid}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.1A9.8 9.8 0 0 1 12 5c5 0 9 4.5 10 7-.4 1-1.2 2.3-2.4 3.5M6.2 6.2C4.3 7.5 2.9 9.4 2 12c1 2.5 5 7 10 7 1.7 0 3.3-.5 4.6-1.3"/></svg>
+              {:else}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 12c1-2.5 5-7 10-7s9 4.5 10 7c-1 2.5-5 7-10 7S3 14.5 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>{/if}
+            </button>
+            <button class="switch-btn" onclick={() => toggleAttachFront(it.id)} aria-label={$t("Right away")}><span class="switch" class:on={front}></span></button>
+          </div>
+        {/each}
+        {#if phone}
+          <button class="toggle-row" onclick={() => attachDock.update((v) => !v)}>
+            <div class="tr-text"><div class="tr-title">{$t("Floating action bar")}</div><div class="tr-sub">{$t("On phones the actions float at the bottom; off — they sit in the sheet under the gallery")}</div></div>
+            <span class="switch" class:on={$attachDock}></span>
           </button>
+        {/if}
+        <div class="label" style="margin-top:12px">{$t("Bots in the attach menu")}</div>
+        {#each $attachBots as b (b.bot)}
+          <div class="toggle-row am-row">
+            <div class="tr-text"><div class="tr-title">{b.title}</div><div class="tr-sub">@{b.bot}</div></div>
+            <button class="mini-btn" onclick={() => toggleAttachBot(b)}>{$t("Remove")}</button>
+          </div>
+        {:else}
+          <div class="foot-note" style="margin:0 0 8px">{$t("Open a bot with a mini app → ⋯ → “Add to attach menu”.")}</div>
         {/each}
         <button class="mini-btn" onclick={resetAttachMenu}>{$t("Reset")}</button>
       </section>
@@ -2639,6 +2713,15 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     border-bottom: 1px solid var(--border);
   }
   .toggle-row:last-child { border-bottom: none; }
+  /* Attach menu / nav bar rows: name, then small controls on the right. */
+  .am-row { cursor: default; gap: 6px; }
+  .am-row .tr-text { flex: 1; }
+  .am-row.off .tr-title { color: var(--fg-dim); text-decoration: line-through; }
+  .am-btn { width: 30px; height: 30px; flex-shrink: 0; display: grid; place-items: center; border-radius: calc(8px * var(--rk, 1));
+    border: 1px solid var(--border); background: var(--bg-input); color: var(--fg-muted); cursor: pointer; font: 700 14px var(--font-ui); }
+  .am-btn:disabled { opacity: .35; cursor: default; }
+  .am-btn svg { width: 16px; height: 16px; }
+  .switch-btn { background: none; border: none; padding: 0; cursor: pointer; display: flex; }
   .tr-text { min-width: 0; }
   .tr-title { font-size: 13.5px; font-weight: 600; color: var(--fg); }
   .tr-sub { font-size: 11.5px; color: var(--fg-dim); margin-top: 2px; }
