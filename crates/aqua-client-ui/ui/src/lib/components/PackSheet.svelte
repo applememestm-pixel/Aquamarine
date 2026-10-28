@@ -5,18 +5,28 @@
   export function openPackSheet(ref: string, from?: string, path?: string | null) {
     packSheet.set({ ref, from, path });
   }
-  // Hold a sticker: it shows big until the finger lets go (or a tap).
-  type BigItem = { src: Promise<string> | string; mime?: string | null; emoji?: string };
+  // Hold a sticker: it shows big until the finger lets go; sliding the
+  // finger over the others shows each of them big in turn (Telegram).
+  type BigItem = { key?: string; src: Promise<string> | string; mime?: string | null; emoji?: string };
   let big = $state<BigItem | null>(null);
   let held = false;
   let holdT: ReturnType<typeof setTimeout> | null = null;
   function holdStart(e: PointerEvent, it: BigItem) {
     if (e.button !== 0 && e.pointerType === "mouse") return;
-    holdT = setTimeout(() => { held = true; big = it; navigator.vibrate?.(12); }, 380);
+    holdT = setTimeout(() => {
+      if (document.documentElement.classList.contains("pinching")) return; // two fingers: a pinch
+      held = true; big = it; navigator.vibrate?.(12);
+    }, 380);
   }
+  /** Before the hold fires, moving away cancels it (it's a scroll). */
+  function holdLeave() { if (holdT) { clearTimeout(holdT); holdT = null; } }
   function holdEnd() {
     if (holdT) { clearTimeout(holdT); holdT = null; }
-    if (big && held) setTimeout(() => (big = null), 0);
+    if (big && held) {
+      setTimeout(() => (big = null), 0);
+      // The click that follows the release must not send a sticker; later taps must.
+      setTimeout(() => (held = false), 350);
+    }
   }
 </script>
 
@@ -43,6 +53,26 @@
     preview = null; error = null; items = [];
     if (!s) return;
     void load(s.ref);
+  });
+
+  function slide(e: PointerEvent) {
+    if (!big || !held) return;
+    const cell = (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)?.closest<HTMLElement>("[data-pk]");
+    const it = cell ? items.find((x) => x.key === cell.dataset.pk) : undefined;
+    if (it && it.key !== big.key) { big = it; navigator.vibrate?.(6); }
+  }
+  $effect(() => {
+    if (!$packSheet) return;
+    const up = () => holdEnd();
+    const noScroll = (e: TouchEvent) => { if (big && held) e.preventDefault(); };
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    window.addEventListener("pointermove", slide);
+    document.addEventListener("touchmove", noScroll, { passive: false });
+    return () => {
+      window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up);
+      window.removeEventListener("pointermove", slide); document.removeEventListener("touchmove", noScroll);
+    };
   });
 
   async function load(ref: string) {
@@ -134,9 +164,9 @@
       {:else}
         <div class="ps-grid">
           {#each items as it (it.key)}
-            <button class="ps-cell" class:disabled={!it.path} title={it.emoji}
+            <button class="ps-cell" class:disabled={!it.path} title={it.emoji} data-pk={it.key}
               onclick={() => { if (held) { held = false; return; } send(it); }}
-              onpointerdown={(e) => holdStart(e, it)} onpointerup={holdEnd} onpointerleave={holdEnd} onpointercancel={holdEnd}
+              onpointerdown={(e) => holdStart(e, it)} onpointerleave={holdLeave}
               oncontextmenu={(e) => e.preventDefault()}>
               {#await it.src}
                 <span class="skel"></span>
@@ -151,8 +181,7 @@
       {/if}
 
       {#if big}
-        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-        <div class="ps-big" onclick={() => (big = null)}>
+        <div class="ps-big">
           {#await big.src then src}<div class="ps-big-media"><AnimatedMedia {src} mime={big.mime} alt={big.emoji} play="auto" /></div>{/await}
           {#if big.emoji}<span class="ps-big-emoji">{big.emoji}</span>{/if}
         </div>
@@ -187,7 +216,8 @@
   .ps-x:hover { color: var(--fg); }
   /* Five in a row, like Telegram; hold one to see it big. */
   .ps-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; padding: 10px; overflow-y: auto; }
-  .ps-big { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  /* No pointer events: the finger under it keeps finding the stickers to slide over. */
+  .ps-big { pointer-events: none; position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
     background: color-mix(in srgb, var(--bg-shell) 70%, transparent); backdrop-filter: blur(10px); animation: ps-big-in .18s cubic-bezier(.2,.9,.3,1.2); }
   .ps-big-media { width: min(72%, 320px); aspect-ratio: 1; }
   .ps-big-emoji { font-size: 30px; }

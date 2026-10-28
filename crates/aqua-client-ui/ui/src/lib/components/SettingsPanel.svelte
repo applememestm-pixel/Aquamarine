@@ -1886,11 +1886,6 @@
       <section class="group">
         <div class="label">{$t("Experimental")}</div>
         <div class="bots-note">{$t("Features that are still being tried out. They may change, break or disappear in the next versions.")}</div>
-        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, floatKb: !x.floatKb }))}>
-          <div class="tr-text"><div class="tr-title">{$t("Floating bot keyboard")}</div>
-            <div class="tr-sub">{$t("A bot's buttons float over the chat: drag them anywhere by the strip on top, resize by the corner or with two fingers (double-tap the strip — normal size).")}</div></div>
-          <span class="switch" class:on={!!$settings.floatKb}></span>
-        </button>
       </section>
       <section class="group">
         <div class="label">🧩 {$t("Plugins")}</div>
