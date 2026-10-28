@@ -158,7 +158,11 @@ impl Fed {
         if !cfg.active() {
             return None;
         }
-        let http = reqwest::Client::builder().timeout(Duration::from_secs(15)).build().ok()?;
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(15))
+            .user_agent(concat!("aqua-server/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .ok()?;
         Some(Arc::new(Self { cfg, http }))
     }
 
@@ -178,12 +182,43 @@ impl Fed {
         subtle::ConstantTimeEq::ct_eq(want.as_bytes(), sig.as_bytes()).into()
     }
 
+    /// Is `peer` a relay we still talk to (1.2.0 or newer)? Asked once in a
+    /// while (`/v1/stats` says its version; older relays don't say).
+    async fn modern(&self, peer: &str) -> bool {
+        static SEEN: std::sync::Mutex<Option<std::collections::HashMap<String, (std::time::Instant, bool)>>> = std::sync::Mutex::new(None);
+        if let Some((at, ok)) = SEEN.lock().ok().and_then(|m| m.as_ref().and_then(|m| m.get(peer).copied())) {
+            if at.elapsed() < Duration::from_secs(if ok { 600 } else { 120 }) {
+                return ok;
+            }
+        }
+        let ok = match self.http.get(format!("{peer}/v1/stats")).timeout(Duration::from_secs(5)).send().await {
+            Ok(r) => r.json::<serde_json::Value>().await.ok()
+                .and_then(|v| v["version"].as_str().map(crate::version_ok))
+                .unwrap_or(false),
+            // Unreachable now: don't decide for 10 minutes on that.
+            Err(_) => return false,
+        };
+        if !ok {
+            tracing::warn!(%peer, "federation: this relay is older than {} — not talking to it", crate::MIN_VERSION);
+        }
+        if let Ok(mut m) = SEEN.lock() {
+            m.get_or_insert_with(std::collections::HashMap::new).insert(peer.to_string(), (std::time::Instant::now(), ok));
+        }
+        ok
+    }
+
     async fn get(&self, peer: &str, path: &str) -> Option<reqwest::Response> {
+        if !self.modern(peer).await {
+            return None;
+        }
         let r = self.http.get(format!("{peer}{path}")).header("x-aqua-fed", self.header("GET", path, b"")).send().await.ok()?;
         r.status().is_success().then_some(r)
     }
 
     async fn post(&self, peer: &str, path: &str, body: Vec<u8>) -> Option<reqwest::Response> {
+        if !self.modern(peer).await {
+            return None;
+        }
         let r = self.http.post(format!("{peer}{path}"))
             .header("x-aqua-fed", self.header("POST", path, &body))
             .header("content-type", "application/json")
@@ -309,7 +344,15 @@ pub fn current(state: &AppState) -> Option<Arc<Fed>> {
 
 fn check(state: &AppState, headers: &HeaderMap, method: &str, path: &str, body: &[u8]) -> Result<Arc<Fed>, StatusCode> {
     let fed = current(state).ok_or(StatusCode::NOT_FOUND)?;
-    if fed.verify(headers, method, path, body) { Ok(fed) } else { Err(StatusCode::UNAUTHORIZED) }
+    if !fed.verify(headers, method, path, body) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    // Relays older than 1.2.0 don't know two-step codes: an account copied
+    // there could be signed into without one. They're not served.
+    if !crate::caller_version(headers, None).as_deref().is_some_and(crate::version_ok) {
+        return Err(StatusCode::UPGRADE_REQUIRED);
+    }
+    Ok(fed)
 }
 
 // ------------------------------------------------------------------ handlers

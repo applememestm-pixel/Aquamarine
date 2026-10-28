@@ -117,7 +117,13 @@ pub fn http_client() -> Result<reqwest::Client, TransportError> {
         // A home relay's LAN address from outside the home network never
         // answers: give up soon so the next known address gets its turn.
         .connect_timeout(std::time::Duration::from_secs(8))
-        .user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION")));
+        .user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION")))
+        // The relay serves only apps from 1.2.0 on (see aqua-server `MIN_VERSION`).
+        .default_headers({
+            let mut h = reqwest::header::HeaderMap::new();
+            h.insert("x-aqua-version", reqwest::header::HeaderValue::from_static(env!("CARGO_PKG_VERSION")));
+            h
+        });
     if let Some(p) = proxy() {
         b = b.proxy(reqwest::Proxy::all(&p).map_err(TransportError::Http)?);
     } else {
@@ -233,6 +239,7 @@ pub async fn request_email_code_nonce(server_url: &str, email: &str, purpose: &s
 /// The same, with an invitation code of an invite-only relay (QR `aqua:join`).
 pub async fn request_email_code_invite(server_url: &str, email: &str, purpose: &str, nonce: &str, invite: &str) -> Result<CodeRequest, TransportError> {
     let http = http_client()?;
+    check_server(&http, server_url).await?;
     let url = format!("{}/v1/auth/email/request", server_url.trim_end_matches('/'));
     let r = http.post(&url).json(&serde_json::json!({ "email": email, "purpose": purpose, "nonce": nonce, "invite": invite })).send().await?;
     if !r.status().is_success() {
@@ -353,9 +360,15 @@ impl Transport {
         let token = sign_in(&http, server_url, identity).await?;
         // The relay's name for this account: it can differ from ours when
         // relays joined and an older account had the same @name.
-        let (uid, renamed_from, username) = match whoami(&http, server_url, &token).await {
-            Some((name, uid)) if !name.is_empty() && name != username => (uid, Some(username.to_string()), name),
-            Some((_, uid)) => (uid, None, username.to_string()),
+        let me = whoami(&http, server_url, &token).await;
+        // Two-step codes are required here and this account has none yet:
+        // the app sets them up (signed in over HTTP), then connects again.
+        if me.as_ref().is_some_and(|m| m.2) {
+            return Err(TransportError::Server { status: 403, body: NEED_2FA.into() });
+        }
+        let (uid, renamed_from, username) = match me {
+            Some((name, uid, _)) if !name.is_empty() && name != username => (uid, Some(username.to_string()), name),
+            Some((_, uid, _)) => (uid, None, username.to_string()),
             None => (String::new(), None, username.to_string()),
         };
         let username = username.as_str();
@@ -1184,6 +1197,29 @@ impl Transport {
         Ok(())
     }
 
+    /// [`Self::me_call`] without a connection (signs in over HTTP): for
+    /// setting up two-step codes before the relay lets the app connect.
+    pub async fn me_call_at(server_url: &str, identity: &IdentityKeyPair, method: &str, path: &str, body: Option<serde_json::Value>) -> Result<serde_json::Value, TransportError> {
+        let http = http_client()?;
+        let token = sign_in(&http, server_url, identity).await?;
+        let url = format!("{}/v1/me/{}", server_url.trim_end_matches('/'), path.trim_start_matches('/'));
+        let req = match method {
+            "PUT" => http.put(&url),
+            "POST" => http.post(&url),
+            _ => http.get(&url),
+        }
+        .bearer_auth(&token);
+        let req = match body { Some(b) => req.json(&b), None => req };
+        let r = req.send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        if r.status().as_u16() == 204 {
+            return Ok(serde_json::Value::Null);
+        }
+        Ok(r.json().await.unwrap_or(serde_json::Value::Null))
+    }
+
     /// Sign-in protection of my account: `GET` (body `None`) or `PUT`/`POST`
     /// `/v1/me/<path>` with a JSON body → the JSON answer (`null` for 204).
     pub async fn me_call(&self, method: &str, path: &str, body: Option<serde_json::Value>) -> Result<serde_json::Value, TransportError> {
@@ -1284,14 +1320,58 @@ impl Transport {
 
 /// `GET /v1/me`: (username, uid) of the signed-in account; None with an
 /// older relay or an account it doesn't know.
-async fn whoami(http: &reqwest::Client, server_url: &str, token: &str) -> Option<(String, String)> {
+async fn whoami(http: &reqwest::Client, server_url: &str, token: &str) -> Option<(String, String, bool)> {
     let url = format!("{}/v1/me", server_url.trim_end_matches('/'));
     let r = http.get(&url).bearer_auth(token).send().await.ok()?;
     if !r.status().is_success() {
         return None;
     }
     let v: serde_json::Value = r.json().await.ok()?;
-    Some((v["username"].as_str()?.to_string(), v["uid"].as_str().unwrap_or("").to_string()))
+    Some((v["username"].as_str()?.to_string(), v["uid"].as_str().unwrap_or("").to_string(), v["need_2fa"].as_bool().unwrap_or(false)))
+}
+
+/// The oldest relay this app talks to: 1.2.0 made two-step codes required,
+/// and older relays don't know them.
+pub const MIN_SERVER: &str = "1.2.0";
+
+/// What the app says when the relay asks for two-step codes first.
+pub const NEED_2FA: &str = "two-step verification required";
+
+/// `1.1.0-7` → (1, 1, 0, 7): our pre-releases come after their release.
+fn version_key(v: &str) -> Option<(u32, u32, u32, u32)> {
+    let v = v.trim().trim_start_matches('v');
+    let (main, pre) = v.split_once('-').unwrap_or((v, "0"));
+    let mut it = main.split('.').map(|x| x.parse::<u32>().ok());
+    Some((it.next()??, it.next().flatten().unwrap_or(0), it.next().flatten().unwrap_or(0), pre.parse().unwrap_or(0)))
+}
+
+/// Is a relay of version `v` new enough?
+pub fn server_version_ok(v: &str) -> bool {
+    matches!((version_key(v), version_key(MIN_SERVER)), (Some(a), Some(b)) if a >= b)
+}
+
+/// Refuse a relay older than [`MIN_SERVER`] (its `/v1/stats` says its
+/// version; older ones don't). Remembered for a while per address.
+async fn check_server(http: &reqwest::Client, server_url: &str) -> Result<(), TransportError> {
+    static OK: std::sync::Mutex<Option<std::collections::HashMap<String, std::time::Instant>>> = std::sync::Mutex::new(None);
+    let base = server_url.trim_end_matches('/').to_string();
+    if OK.lock().ok().and_then(|m| m.as_ref().and_then(|m| m.get(&base).copied())).is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(600)) {
+        return Ok(());
+    }
+    let r = http.get(format!("{base}/v1/stats")).timeout(std::time::Duration::from_secs(8)).send().await?;
+    let v: serde_json::Value = r.json().await.unwrap_or_default();
+    let ver = v["version"].as_str().unwrap_or("").to_string();
+    if !server_version_ok(&ver) {
+        let was = if ver.is_empty() { "older than 1.2.0".to_string() } else { ver };
+        return Err(TransportError::Server {
+            status: 426,
+            body: format!("the server is too old ({was}) — it needs to be updated to Aquamarine {MIN_SERVER} or newer"),
+        });
+    }
+    if let Ok(mut m) = OK.lock() {
+        m.get_or_insert_with(std::collections::HashMap::new).insert(base, std::time::Instant::now());
+    }
+    Ok(())
 }
 
 async fn sign_in(
@@ -1299,6 +1379,7 @@ async fn sign_in(
     server_url: &str,
     identity: &IdentityKeyPair,
 ) -> Result<String, TransportError> {
+    check_server(http, server_url).await?;
     let base = server_url.trim_end_matches('/');
     let pub_id = identity.public();
     let dh_pub_b64 = URL_SAFE_NO_PAD.encode(pub_id.dh_pub.as_bytes());
@@ -1402,7 +1483,7 @@ fn build_ws_url(server_url: &str, username: &str, token: &str) -> Result<String,
         )));
     };
     // Percent-encode the token (base64url is URL-safe already, but be defensive).
-    Ok(format!("{ws_base}/v1/ws?user={username}&token={token}&ack=1"))
+    Ok(format!("{ws_base}/v1/ws?user={username}&token={token}&ack=1&v={}", env!("CARGO_PKG_VERSION")))
 }
 
 fn dispatch_frame(tx: &mpsc::UnboundedSender<Incoming>, acks: &Acks, out: &mpsc::UnboundedSender<RelayMessage>, bytes: &[u8]) {

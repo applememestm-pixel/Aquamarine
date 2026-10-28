@@ -168,6 +168,8 @@ pub struct SecurityState {
     pub lock: bool,
     pub totp: bool,
     pub backup_left: usize,
+    /// The relay requires two-step verification (set by the caller).
+    pub required: bool,
 }
 
 /// An account's ID, like Telegram's: a 10-digit number that never changes,
@@ -1295,7 +1297,7 @@ impl Directory {
     pub fn security_state(&self, username: &str) -> SecurityState {
         let db = self.db.lock().unwrap();
         let sec = Self::security_of(&db, username).unwrap_or_default();
-        SecurityState { lock: sec.lock, totp: !sec.totp.is_empty(), backup_left: sec.backup.len() }
+        SecurityState { lock: sec.lock, totp: !sec.totp.is_empty(), backup_left: sec.backup.len(), required: false }
     }
 
     /// Turn sign-in on new devices off or back on. Turning it back on asks
@@ -1315,10 +1317,16 @@ impl Directory {
 
     /// Start setting up two-step codes: a new secret (base32) for the app.
     pub fn totp_setup(&self, username: &str) -> Result<String, DirError> {
+        self.totp_setup_with(username, "")
+    }
+
+    /// [`Self::totp_setup`]; with codes already on, a current `code` starts
+    /// moving them to a new app (the old secret works until it's confirmed).
+    pub fn totp_setup_with(&self, username: &str, code: &str) -> Result<String, DirError> {
         let db = self.db.lock().unwrap();
         let mut sec = Self::security_of(&db, username)?;
-        if !sec.totp.is_empty() {
-            return Err(DirError::BadProfile("two-step verification is already on".into()));
+        if !sec.totp.is_empty() && !Self::check_code(&mut sec, code) {
+            return Err(if code.trim().is_empty() { DirError::NeedTotp } else { DirError::BadTotp });
         }
         sec.pending = crate::totp::new_secret();
         Self::put_security(&db, username, &sec)?;
