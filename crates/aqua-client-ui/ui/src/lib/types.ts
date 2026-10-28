@@ -293,6 +293,8 @@ export interface GroupSettings {
   ttl?: number;
   /** Comments under posts / messages (default on). */
   comments?: boolean;
+  /** Channels: subscribers may write privately to the admins (dm~gid~user chats). */
+  direct?: boolean;
   /** Temporary event room: ends at this time (ms) — then read-only. */
   ends_at?: number;
   /** What happens to the room on each device when it ends. */

@@ -227,8 +227,10 @@ export const api = {
     invoke("send_call_signal", { peerId: peer_id, signalJson: JSON.stringify(signal) }),
   // Raw control payload over the E2EE session, never shown as a bubble
   // (poll votes, read receipts).
+  // A channel's direct messages (dm~…) carry text only: no typing, edits or reactions.
   sendControl:        (peer_id: string, payload: string): Promise<void> =>
-    invoke("send_control", { peerId: peer_id, payload }),
+    peer_id.startsWith("dm~") ? Promise.resolve() : invoke("send_control", { peerId: peer_id, payload }),
+  channelDmOpen:      (gid: string, user?: string): Promise<string> => invoke("channel_dm_open", { gid, user: user ?? null }),
 
   // Local media (stickers + GIFs)
   sendSticker:        (peer_id: string, path: string): Promise<AttachResult>       => invoke("send_sticker", { peerId: peer_id, filePath: path }),

@@ -3906,9 +3906,18 @@
         <button class="channel-mute danger-txt" onclick={() => setBlocked(cid, false)}>{$t("Unblock")}</button>
       {:else if postBlocked === "channel" && $activeChat}
         {@const cid = $activeChat.id}
-        <button class="channel-mute" onclick={() => setMuted(cid)}>
-          {$t($mutedChats.has(cid) ? "Unmute" : "Mute")}
-        </button>
+        <div class="chan-foot">
+          <button class="channel-mute" onclick={() => setMuted(cid)}>
+            {$t($mutedChats.has(cid) ? "Unmute" : "Mute")}
+          </button>
+          {#if activeGroup?.settings.direct === true}
+            <!-- Telegram's channel direct messages: privately to the admins. -->
+            <button class="chan-dm" title={$t("Message the channel")} aria-label={$t("Message the channel")}
+              onclick={async () => { try { const id = await api.channelDmOpen(cid); chats.set(await api.listChats()); activeId.set(id); } catch (e) { showToast(String(e)); } }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z"/></svg>
+            </button>
+          {/if}
+        </div>
       {:else}
         <div class="channel-locked">
           {@html icons.lock}
@@ -4051,6 +4060,7 @@
         {/snippet}
         <button
           class="attach-btn"
+          class:dm-hide={$activeChat?.id.startsWith("dm~")}
           class:disabled={!liveChat}
           class:open={attachMenuOpen}
           title={$t(liveChat ? "Attach — media, article, poll" : "Start a real chat first")}
@@ -4865,6 +4875,12 @@
   .cp-b b { font-size: 12px; color: var(--accent); } .cp-b span { font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; } .cp-b small { font-size: 10.5px; color: var(--fg-dim); align-self: flex-end; }
   .cp-empty { color: var(--fg-dim); text-align: center; padding: 20px; }
   .cp-open { margin: 8px 12px 12px; padding: 10px; border: none; border-radius: calc(12px * var(--rk, 1)); background: var(--accent); color: #06070C; font: 700 14px var(--font-ui); cursor: pointer; }
+  .attach-btn.dm-hide { display: none; }
+  .chan-foot { display: flex; align-items: stretch; gap: 8px; margin: 10px 14px; }
+  .chan-foot .channel-mute { flex: 1; margin: 0; }
+  .chan-dm { flex: none; width: 48px; border-radius: calc(12px * var(--rk, 1)); border: 1px solid var(--border); background: var(--bg-input);
+    color: var(--accent); display: grid; place-items: center; cursor: pointer; }
+  .chan-dm svg { width: 22px; height: 22px; }
   .quote-chip { position: fixed; z-index: 380; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 6px;
     padding: 7px 14px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--bg-shell); color: var(--accent);
     font: 600 13.5px var(--font-ui); box-shadow: 0 10px 28px -10px rgba(0,0,0,.7); cursor: pointer; animation: sp-in .15s ease-out; }
