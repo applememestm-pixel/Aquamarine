@@ -120,8 +120,15 @@
 
   // Steps: 1 email → 2 code → 3 username+profile → done
   // 4 = recovery key for the backup, 5 = recovery key for a password
-  // reset, 6 = "save your recovery key" after sign-up.
-  let step = $state<1 | 2 | 3 | 4 | 5 | 6>(1);
+  // reset, 6 = "save your recovery key" after sign-up, 7 = two-step code,
+  // 8 = recovery key to get past "no new devices" / a lost code phone.
+  let step = $state<1 | 2 | 3 | 4 | 5 | 6 | 7 | 8>(1);
+  /** Step 7: the code from the authenticator app (or a backup code). */
+  let totp = $state("");
+  /** Step 8: sign in with the recovery key instead of the code. */
+  let useRecovery = $state(false);
+  /** Step 8 because sign-in on new devices is off (not a lost code phone). */
+  let locked = $state(false);
   let recoveryWords = $state("");
   let savedWords = $state(false);
   /** Step 4: the backup didn't open with the password — recovery key. */
@@ -285,18 +292,32 @@
 
   /** Existing account → restore its encrypted backup (if any), move it to
    *  this device, connect, done. */
+  /** The account's sign-in protection said no: ask for what it wants. */
+  function gate(e: unknown): boolean {
+    const m = String(e);
+    if (/two-step verification code required/i.test(m)) { step = 7; error = null; return true; }
+    if (/wrong two-step/i.test(m)) { step = 7; totp = ""; error = tr("Wrong code — try the next one from the app, or a backup code"); return true; }
+    if (/turned off for this account/i.test(m)) { step = 8; locked = true; useRecovery = false; error = null; return true; }
+    if (/recovery key doesn't match/i.test(m) && useRecovery) { step = 8; useRecovery = false; error = tr("That recovery key doesn't match this account"); return true; }
+    if (/ticket is invalid/i.test(m) && (step === 7 || step === 8)) { step = 1; totp = ""; error = tr("Too many wrong codes — start again"); return true; }
+    return false;
+  }
+
   async function finishSignIn(withPhrase = false) {
     let restored = false;
+    const code = step === 7 ? totp.trim() : undefined;
+    const rec = useRecovery ? phrase.trim() : undefined;
     try {
-      const r = await api.backupRestore(serverUrl.trim(), ticket, password, email.trim(), withPhrase ? phrase.trim() : undefined);
+      const r = await api.backupRestore(serverUrl.trim(), ticket, password, email.trim(), withPhrase ? phrase.trim() : undefined, code, rec);
       if (r.found && r.need_phrase) { step = 4; error = withPhrase ? tr("That recovery key doesn't open the backup") : null; return; }
       if (r.found) { applyUiState(r.ui); restored = true; }
     } catch (e) {
+      if (gate(e)) return;
       // No backup / old relay: carry on with a fresh device.
       console.warn("backup restore", e);
     }
     try {
-      const u = await api.loginAccount(serverUrl.trim(), ticket, password, email.trim());
+      const u = await api.loginAccount(serverUrl.trim(), ticket, password, email.trim(), code, rec);
       const err = await connect(serverUrl.trim(), u);
       if (err) { error = err; return; }
       try { info.set(await api.completeRegistration(u, email.trim() || null)); } catch { /* non-fatal */ }
@@ -309,6 +330,7 @@
       // Restored settings (theme, folders…) apply on a fresh start of the UI.
       if (restored) setTimeout(() => location.reload(), 600);
     } catch (e) {
+      if (gate(e)) return;
       const m = String(e);
       error = /wrong email or password/i.test(m) ? tr("Wrong email or password") : tr("Could not sign in: {e}", { e: m });
       if (mode === "reset") mode = "signin";
@@ -316,11 +338,19 @@
     }
   }
 
+  /** Step 7 / 8: try again with the code or the recovery key. */
+  async function retrySignIn(withRecovery: boolean) {
+    error = null;
+    useRecovery = withRecovery;
+    busy = true;
+    try { await finishSignIn(withRecovery); } finally { busy = false; }
+  }
+
   /** Recovery key step: give up on the backup and start fresh. */
   async function skipRestore() {
     phrase = "";
     try {
-      const u = await api.loginAccount(serverUrl.trim(), ticket, password, email.trim());
+      const u = await api.loginAccount(serverUrl.trim(), ticket, password, email.trim(), totp.trim() || undefined, useRecovery ? phrase.trim() : undefined);
       const err = await connect(serverUrl.trim(), u);
       if (err) { error = err; return; }
       try { info.set(await api.completeRegistration(u, email.trim() || null)); } catch { /* non-fatal */ }
@@ -540,6 +570,42 @@
           <label class="rk-ok"><input type="checkbox" bind:checked={savedWords} /> {$t("I've saved the recovery key")}</label>
           <div class="actions">
             <button class="primary" onclick={() => { recoveryWords = ""; closeRegistration(); }} disabled={!savedWords}>{$t("Done")}</button>
+          </div>
+        </div>
+      {:else if step === 7}
+        <div class="form">
+          <b class="rk-title">{$t("Two-step verification")}</b>
+          <p class="note">{$t("This account asks for a code from the authenticator app on a new device. Open the app and enter the 6-digit code for Aquamarine.")}</p>
+          <label class="field">
+            <span>{$t("Code")}</span>
+            <!-- svelte-ignore a11y_autofocus -->
+            <input bind:value={totp} placeholder="123456" class="code-input" autocomplete="one-time-code" autofocus
+                   onkeydown={(e) => e.key === "Enter" && totp.trim() && retrySignIn(false)} />
+          </label>
+          <p class="note dim">{$t("No phone with the app? Enter one of the backup codes you saved, or use the recovery key.")}</p>
+          <button class="link" onclick={() => { phrase = ""; error = null; locked = false; step = 8; }}>{$t("Use the recovery key")}</button>
+          <div class="actions">
+            <button class="ghost" onclick={() => { totp = ""; step = 1; }}>{$t("Back")}</button>
+            <button class="primary" onclick={() => retrySignIn(false)} disabled={busy || !totp.trim()}>{$t(busy ? "Checking…" : "Sign in")}</button>
+          </div>
+        </div>
+      {:else if step === 8}
+        <div class="form">
+          {#if locked}
+            <b class="rk-title">{$t("Sign-in on new devices is off")}</b>
+            <p class="note">{$t("The owner of this account turned off sign-in on new devices. Turn it on in Settings → Privacy & Security on a device that's signed in, then try again.")}</p>
+            <p class="note dim">{$t("Lost every device? The 24-word recovery key opens the account (and the phone with the codes isn't needed).")}</p>
+          {:else}
+            <b class="rk-title">{$t("Sign in with the recovery key")}</b>
+            <p class="note">{$t("The 24-word recovery key you saved when you created the account opens it without a code from the app.")}</p>
+          {/if}
+          <label class="field">
+            <span>{$t("Recovery key")}</span>
+            <textarea bind:value={phrase} rows="4" spellcheck="false" autocomplete="off" placeholder="word word word …"></textarea>
+          </label>
+          <div class="actions">
+            <button class="ghost" onclick={() => { phrase = ""; step = 1; }}>{$t("Back")}</button>
+            <button class="primary" onclick={() => retrySignIn(true)} disabled={busy || phrase.trim().split(/\s+/).length !== 24}>{$t(busy ? "Checking…" : "Sign in")}</button>
           </div>
         </div>
       {:else if step === 4}

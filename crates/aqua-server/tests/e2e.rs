@@ -692,6 +692,39 @@ async fn one_account_on_two_devices() {
     // A's key is out.
     let r = http.post(format!("{base}/v1/bundle/multi")).bearer_auth(&a.token).json(&a.fresh_bundle(0)).send().await.unwrap();
     assert_eq!(r.status().as_u16(), 403);
+
+    // Two-step codes, set up from B.
+    let setup: serde_json::Value = http.post(format!("{base}/v1/me/2fa/setup")).bearer_auth(&b.token).send().await.unwrap().json().await.unwrap();
+    let secret_b32 = setup["secret"].as_str().unwrap().to_string();
+    assert!(setup["uri"].as_str().unwrap().starts_with("otpauth://totp/Aquamarine:%40multi?"));
+    let code = format!("{:06}", aqua_server::totp::code_at(&aqua_server::totp::unbase32(&secret_b32).unwrap(), aqua_server::totp::now_step()));
+    let on: serde_json::Value = http.post(format!("{base}/v1/me/2fa/enable")).bearer_auth(&b.token).json(&serde_json::json!({ "code": code })).send().await.unwrap().json().await.unwrap();
+    let backup: Vec<String> = serde_json::from_value(on["backup"].clone()).unwrap();
+    assert_eq!(backup.len(), 10);
+    // A new device: no code → 401, asked for one; the backup copy too.
+    let c = Client::new("multi-c");
+    let t = ticket(&http, &base, email).await;
+    let e = aqua_client_core::Transport::login_account_checked(&base, &c.identity, &t, secret, "Laptop", "", "").await.unwrap_err();
+    assert!(e.to_string().contains("two-step verification code required"), "{e}");
+    let e = aqua_client_core::Transport::fetch_backup_checked(&base, &t, secret, "", "").await.unwrap_err();
+    assert!(e.to_string().contains("two-step verification code required"), "{e}");
+    // With a backup code: the backup fetch passes it, the sign-in follows.
+    assert!(aqua_client_core::Transport::fetch_backup_checked(&base, &t, secret, &backup[0], "").await.unwrap().is_none());
+    assert_eq!(aqua_client_core::Transport::login_account_checked(&base, &c.identity, &t, secret, "Laptop", "", "").await.unwrap(), "multi");
+    // No new devices: refused even with a code; B sees the state.
+    let st: serde_json::Value = http.put(format!("{base}/v1/me/security")).bearer_auth(&b.token).json(&serde_json::json!({ "lock": true })).send().await.unwrap().json().await.unwrap();
+    assert_eq!((st["lock"].as_bool(), st["totp"].as_bool(), st["backup_left"].as_u64()), (Some(true), Some(true), Some(9)));
+    let d = Client::new("multi-d");
+    let t = ticket(&http, &base, email).await;
+    let e = aqua_client_core::Transport::login_account_checked(&base, &d.identity, &t, secret, "", &backup[1], "").await.unwrap_err();
+    assert!(e.to_string().contains("turned off"), "{e}");
+    // Back on only with a code.
+    let r = http.put(format!("{base}/v1/me/security")).bearer_auth(&b.token).json(&serde_json::json!({ "lock": false })).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 401);
+    let r = http.put(format!("{base}/v1/me/security")).bearer_auth(&b.token).json(&serde_json::json!({ "lock": false, "code": backup[2] })).send().await.unwrap();
+    assert!(r.status().is_success());
+    // A stranger can't touch it.
+    assert_eq!(http.get(format!("{base}/v1/me/security")).bearer_auth(&eve.token).send().await.unwrap().status().as_u16(), 403);
 }
 
 /// A bot written for Telegram, talking to this relay through the Telegram

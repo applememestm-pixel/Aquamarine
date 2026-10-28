@@ -50,6 +50,7 @@
   import { startChannelStats } from "./lib/channelStats";
   import { startHandoff } from "./lib/handoff";
   import HandoffBanner from "./lib/components/HandoffBanner.svelte";
+  import DeviceApproval from "./lib/components/DeviceApproval.svelte";
   import CapsuleComposer from "./lib/components/CapsuleComposer.svelte";
   import CapsuleAlerts from "./lib/components/CapsuleAlerts.svelte";
   import { startCapsules } from "./lib/capsules";
@@ -378,6 +379,7 @@
 <PlannerComposer />
 <DocEditor />
 <HandoffBanner />
+{#if $info?.registered}<DeviceApproval />{/if}
 <CapsuleComposer />
 <CapsuleAlerts />
 <BluetoothSheet />

@@ -132,6 +132,42 @@ pub struct FedUser {
     /// The account's ID (see [`uid_for`]); older relays don't send it.
     #[serde(default)]
     pub uid: String,
+    /// Sign-in protection ([`Security`], JSON); older relays don't send it.
+    #[serde(default)]
+    pub security: String,
+}
+
+/// Sign-in protection of an account: two-step codes and "no new devices".
+/// Kept as JSON in `users.security` and replicated with the account.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct Security {
+    /// Sign-in on new devices is turned off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lock: bool,
+    /// TOTP secret (base32); empty = two-step verification is off.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub totp: String,
+    /// A secret being set up (until the first code confirms it).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub pending: String,
+    /// Unused backup codes (hashes, see [`crate::totp::backup_hash`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub backup: Vec<String>,
+    /// The last time step whose code was used (a code works once).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub last: u64,
+}
+
+fn is_zero(v: &u64) -> bool {
+    *v == 0
+}
+
+/// What a signed-in device sees of [`Security`].
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SecurityState {
+    pub lock: bool,
+    pub totp: bool,
+    pub backup_left: usize,
 }
 
 /// An account's ID, like Telegram's: a 10-digit number that never changes,
@@ -218,7 +254,16 @@ pub enum DirError {
     Conflict,
     #[error("the account's stored history is full")]
     TooLarge,
+    #[error("sign-in on new devices is turned off for this account")]
+    DevicesLocked,
+    #[error("two-step verification code required")]
+    NeedTotp,
+    #[error("wrong two-step verification code")]
+    BadTotp,
 }
+
+/// Wrong two-step codes per e-mail ticket before the ticket is dropped.
+const MAX_MFA_FAILS: i64 = 5;
 
 /// After a @username change the old name forwards to the new one (and stays
 /// reserved for its owner) this long — Telegram keeps old names a while too.
@@ -515,6 +560,12 @@ impl Directory {
             "ALTER TABLE users ADD COLUMN recovery TEXT NOT NULL DEFAULT ''",
             // The account's ID (see `uid_for`); filled by `fill_uids`.
             "ALTER TABLE users ADD COLUMN uid TEXT NOT NULL DEFAULT ''",
+            // Two-step codes and "no new devices" (JSON, see `Security`).
+            "ALTER TABLE users ADD COLUMN security TEXT NOT NULL DEFAULT '{}'",
+            // The ticket passed the two-step code (1) or the recovery key (2).
+            "ALTER TABLE email_codes ADD COLUMN mfa INTEGER NOT NULL DEFAULT 0",
+            // Wrong two-step codes with this ticket.
+            "ALTER TABLE email_codes ADD COLUMN mfa_fail INTEGER NOT NULL DEFAULT 0",
         ] {
             if let Err(e) = db.execute(stmt, []) {
                 if !e.to_string().contains("duplicate column") {
@@ -769,7 +820,7 @@ impl Directory {
             db.execute(
                 "INSERT INTO email_codes (email, code, ticket, issued_at, verified_at)
                  VALUES (?1, ?2, NULL, ?3, NULL)
-                 ON CONFLICT(email) DO UPDATE SET code=?2, ticket=NULL, issued_at=?3, verified_at=NULL",
+                 ON CONFLICT(email) DO UPDATE SET code=?2, ticket=NULL, issued_at=?3, verified_at=NULL, mfa=0, mfa_fail=0",
                 rusqlite::params![email, code, now_secs() as i64],
             )?;
         }
@@ -798,7 +849,7 @@ impl Directory {
         OsRng.fill_bytes(&mut t);
         let ticket = hex::encode(t);
         db.execute(
-            "UPDATE email_codes SET ticket=?1, verified_at=?2 WHERE email=?3",
+            "UPDATE email_codes SET ticket=?1, verified_at=?2, mfa=0, mfa_fail=0 WHERE email=?3",
             rusqlite::params![ticket, now_secs() as i64, email],
         )?;
         Ok(ticket)
@@ -1136,12 +1187,192 @@ impl Directory {
     }
 
     pub fn login_named(&self, ticket: &str, password: &str, identity_dh: &[u8; 32], name: &str) -> Result<String, DirError> {
+        self.login_checked(ticket, password, identity_dh, name, "", "")
+    }
+
+    /// [`Self::login_named`] with the two-step `code` and/or the recovery
+    /// key's check (see [`Self::sign_in_gate`]).
+    pub fn login_checked(&self, ticket: &str, password: &str, identity_dh: &[u8; 32], name: &str, code: &str, recovery: &str) -> Result<String, DirError> {
         let (username, _) = self.check_login(ticket, password)?;
+        self.sign_in_gate(ticket, &username, Some(identity_dh), code, recovery)?;
         self.add_device(&username, identity_dh, name)?;
         let db = self.db.lock().unwrap();
         // One-time ticket.
         db.execute("UPDATE email_codes SET ticket=NULL WHERE ticket=?1", rusqlite::params![ticket])?;
         Ok(username)
+    }
+
+    /// Sign-in protection for a device that isn't on the account yet:
+    /// "no new devices" ([`Security::lock`]) and the two-step code. Passed
+    /// once for an e-mail `ticket`, it isn't asked again for that ticket
+    /// (the backup is fetched, then the device signs in). `recovery` — the
+    /// recovery key's check — opens both: the way back for someone who lost
+    /// every device and the phone with the codes.
+    pub fn sign_in_gate(&self, ticket: &str, username: &str, identity_dh: Option<&[u8; 32]>, code: &str, recovery: &str) -> Result<(), DirError> {
+        if identity_dh.is_some_and(|dh| self.device_role(username, dh).is_some()) {
+            return Ok(());
+        }
+        let db = self.db.lock().unwrap();
+        let (mfa, fails): (i64, i64) = db
+            .query_row("SELECT mfa, mfa_fail FROM email_codes WHERE ticket=?1", rusqlite::params![ticket], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|_| DirError::BadTicket)?;
+        if mfa == 2 {
+            return Ok(());
+        }
+        let (json, rec): (String, String) = db
+            .query_row("SELECT security, recovery FROM users WHERE username=?1", rusqlite::params![username], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|_| DirError::BadLogin)?;
+        let mut sec: Security = serde_json::from_str(&json).unwrap_or_default();
+        let fail = |db: &Connection| -> DirError {
+            let n = fails + 1;
+            let _ = db.execute("UPDATE email_codes SET mfa_fail=?2 WHERE ticket=?1", rusqlite::params![ticket, n]);
+            if n >= MAX_MFA_FAILS {
+                let _ = db.execute("UPDATE email_codes SET ticket=NULL WHERE ticket=?1", rusqlite::params![ticket]);
+            }
+            DirError::BadTotp
+        };
+        if fails >= MAX_MFA_FAILS {
+            let _ = db.execute("UPDATE email_codes SET ticket=NULL WHERE ticket=?1", rusqlite::params![ticket]);
+            return Err(DirError::BadTicket);
+        }
+        if !recovery.trim().is_empty() {
+            if !rec.is_empty() && subtle_eq(recovery_hash(recovery.trim()).as_bytes(), rec.as_bytes()) {
+                db.execute("UPDATE email_codes SET mfa=2 WHERE ticket=?1", rusqlite::params![ticket])?;
+                tracing::info!(%username, "sign-in protection opened with the recovery key");
+                return Ok(());
+            }
+            let _ = fail(&db);
+            return Err(DirError::BadRecovery);
+        }
+        if sec.lock {
+            return Err(DirError::DevicesLocked);
+        }
+        if sec.totp.is_empty() || mfa == 1 {
+            return Ok(());
+        }
+        if code.trim().is_empty() {
+            return Err(DirError::NeedTotp);
+        }
+        if !Self::check_code(&mut sec, code) {
+            return Err(fail(&db));
+        }
+        db.execute("UPDATE users SET security=?2 WHERE username=?1", rusqlite::params![username, serde_json::to_string(&sec).unwrap_or_default()])?;
+        db.execute("UPDATE email_codes SET mfa=1 WHERE ticket=?1", rusqlite::params![ticket])?;
+        Ok(())
+    }
+
+    /// A two-step code or an unused backup code (which is used up).
+    fn check_code(sec: &mut Security, code: &str) -> bool {
+        if crate::totp::looks_like_backup(code) {
+            let h = crate::totp::backup_hash(code);
+            if let Some(i) = sec.backup.iter().position(|b| subtle_eq(b.as_bytes(), h.as_bytes())) {
+                sec.backup.remove(i);
+                return true;
+            }
+            return false;
+        }
+        match crate::totp::verify(&sec.totp, code, sec.last) {
+            Some(step) => {
+                sec.last = step;
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn security_of(db: &Connection, username: &str) -> Result<Security, DirError> {
+        let json: String = db
+            .query_row("SELECT security FROM users WHERE username=?1", rusqlite::params![username], |r| r.get(0))
+            .map_err(|_| DirError::NotOwner)?;
+        Ok(serde_json::from_str(&json).unwrap_or_default())
+    }
+
+    fn put_security(db: &Connection, username: &str, sec: &Security) -> Result<(), DirError> {
+        db.execute("UPDATE users SET security=?2 WHERE username=?1", rusqlite::params![username, serde_json::to_string(sec).unwrap_or_default()])?;
+        Ok(())
+    }
+
+    pub fn security_state(&self, username: &str) -> SecurityState {
+        let db = self.db.lock().unwrap();
+        let sec = Self::security_of(&db, username).unwrap_or_default();
+        SecurityState { lock: sec.lock, totp: !sec.totp.is_empty(), backup_left: sec.backup.len() }
+    }
+
+    /// Turn sign-in on new devices off or back on. Turning it back on asks
+    /// for a two-step code when those are on.
+    pub fn set_device_lock(&self, username: &str, lock: bool, code: &str) -> Result<(), DirError> {
+        let db = self.db.lock().unwrap();
+        let mut sec = Self::security_of(&db, username)?;
+        if sec.lock == lock {
+            return Ok(());
+        }
+        if !lock && !sec.totp.is_empty() && !Self::check_code(&mut sec, code) {
+            return Err(if code.trim().is_empty() { DirError::NeedTotp } else { DirError::BadTotp });
+        }
+        sec.lock = lock;
+        Self::put_security(&db, username, &sec)
+    }
+
+    /// Start setting up two-step codes: a new secret (base32) for the app.
+    pub fn totp_setup(&self, username: &str) -> Result<String, DirError> {
+        let db = self.db.lock().unwrap();
+        let mut sec = Self::security_of(&db, username)?;
+        if !sec.totp.is_empty() {
+            return Err(DirError::BadProfile("two-step verification is already on".into()));
+        }
+        sec.pending = crate::totp::new_secret();
+        Self::put_security(&db, username, &sec)?;
+        Ok(sec.pending)
+    }
+
+    /// The first code from the app confirms the secret: two-step codes are
+    /// on. Returns the backup codes (shown once).
+    pub fn totp_enable(&self, username: &str, code: &str) -> Result<Vec<String>, DirError> {
+        let db = self.db.lock().unwrap();
+        let mut sec = Self::security_of(&db, username)?;
+        if sec.pending.is_empty() {
+            return Err(DirError::BadProfile("start the setup first".into()));
+        }
+        let Some(step) = crate::totp::verify(&sec.pending, code, 0) else { return Err(DirError::BadTotp) };
+        let (shown, stored) = crate::totp::new_backup_codes();
+        sec.totp = std::mem::take(&mut sec.pending);
+        sec.last = step;
+        sec.backup = stored;
+        Self::put_security(&db, username, &sec)?;
+        Ok(shown)
+    }
+
+    /// Turn two-step codes off (a current code or a backup code).
+    pub fn totp_disable(&self, username: &str, code: &str) -> Result<(), DirError> {
+        let db = self.db.lock().unwrap();
+        let mut sec = Self::security_of(&db, username)?;
+        if sec.totp.is_empty() {
+            return Ok(());
+        }
+        if !Self::check_code(&mut sec, code) {
+            return Err(DirError::BadTotp);
+        }
+        sec.totp.clear();
+        sec.pending.clear();
+        sec.backup.clear();
+        sec.last = 0;
+        Self::put_security(&db, username, &sec)
+    }
+
+    /// A new set of backup codes (the old ones stop working).
+    pub fn totp_new_backup(&self, username: &str, code: &str) -> Result<Vec<String>, DirError> {
+        let db = self.db.lock().unwrap();
+        let mut sec = Self::security_of(&db, username)?;
+        if sec.totp.is_empty() {
+            return Err(DirError::BadProfile("two-step verification is off".into()));
+        }
+        if !Self::check_code(&mut sec, code) {
+            return Err(DirError::BadTotp);
+        }
+        let (shown, stored) = crate::totp::new_backup_codes();
+        sec.backup = stored;
+        Self::put_security(&db, username, &sec)?;
+        Ok(shown)
     }
 
     // ---- account recovery ----
@@ -1431,7 +1662,7 @@ impl Directory {
         let db = self.db.lock().unwrap();
         let Ok(mut st) = db.prepare(
             "SELECT username, identity_dh, email, display_name, about, phone, is_bot, created_at,
-                    extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices, recovery, uid
+                    extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices, recovery, uid, security
              FROM users WHERE updated_at > ?1 AND is_bot = 0 ORDER BY updated_at LIMIT 500",
         ) else { return Vec::new() };
         st.query_map(rusqlite::params![since], |r| {
@@ -1454,6 +1685,7 @@ impl Directory {
                 devices: r.get(15)?,
                 recovery: r.get(16)?,
                 uid: r.get(17)?,
+                security: r.get(18)?,
             })
         })
         .map(|rows| rows.flatten().collect())
@@ -1543,14 +1775,15 @@ impl Directory {
         out.name = name.clone();
         out.applied = db.execute(
             "INSERT INTO users (username, identity_dh, email, display_name, about, phone, is_bot, created_at,
-                                extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices, recovery, uid)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+                                extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices, recovery, uid, security)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, CASE WHEN ?19 = '' THEN '{}' ELSE ?19 END)
              ON CONFLICT(username) DO UPDATE SET identity_dh=?2, email=?3, display_name=?4, about=?5, phone=?6,
                  is_bot=?7, created_at=?8, extra=?9, avatar_ver=?10, banner_ver=?11, media_acl=?12, password=?13,
                  music_ver=?14, updated_at=?15, devices=?16,
-                 recovery=CASE WHEN ?17 = '' THEN recovery ELSE ?17 END, uid=?18",
+                 recovery=CASE WHEN ?17 = '' THEN recovery ELSE ?17 END, uid=?18,
+                 security=CASE WHEN ?19 = '' THEN security ELSE ?19 END",
             rusqlite::params![name, dh, u.email, u.display_name, u.about, u.phone, u.is_bot as i64, u.created_at,
-                u.extra, u.avatar_ver, u.banner_ver, u.media_acl, u.password, u.music_ver, u.updated_at, u.devices, u.recovery, uid],
+                u.extra, u.avatar_ver, u.banner_ver, u.media_acl, u.password, u.music_ver, u.updated_at, u.devices, u.recovery, uid, u.security],
         )
         .is_ok();
         out
@@ -2511,6 +2744,78 @@ mod tests {
         assert_eq!(d.search("vps", 10).len(), 1);
         assert_eq!(d.search("vlad", 10).len(), 1);
         assert_eq!(d.search("nobody", 10).len(), 0);
+    }
+
+    #[test]
+    fn two_step_codes_and_no_new_devices() {
+        use crate::totp;
+        let d = dir();
+        let id = [7u8; 32];
+        let code = d.request_code("s@x.com").unwrap().unwrap();
+        let t = d.verify_code("s@x.com", &code).unwrap();
+        d.register("sec", &id, &t, "Sec", "", "").unwrap();
+        d.set_password("sec", &id, "correct horse").unwrap();
+        let ticket = |d: &Directory| {
+            let c = d.request_code("s@x.com").unwrap().unwrap();
+            d.verify_code("s@x.com", &c).unwrap()
+        };
+        let now_code = |secret: &str| format!("{:06}", totp::code_at(&totp::unbase32(secret).unwrap(), totp::now_step()));
+
+        // Two-step codes on: the first code from the app confirms the secret.
+        let secret = d.totp_setup("sec").unwrap();
+        assert!(matches!(d.totp_enable("sec", "000000x"), Err(DirError::BadTotp)));
+        let backup = d.totp_enable("sec", &now_code(&secret)).unwrap();
+        assert_eq!(backup.len(), totp::BACKUP_CODES);
+        assert!(d.security_state("sec").totp);
+        // That code is used up: signing in needs a new one — a backup code here.
+        let t2 = ticket(&d);
+        let phone = [8u8; 32];
+        assert!(matches!(d.login_checked(&t2, "correct horse", &phone, "Phone", "", ""), Err(DirError::NeedTotp)));
+        assert!(matches!(d.login_checked(&t2, "correct horse", &phone, "Phone", "123456", ""), Err(DirError::BadTotp)));
+        // The wrong password is refused before the code is even looked at.
+        assert!(matches!(d.login_checked(&t2, "wrong pass!", &phone, "Phone", &backup[0], ""), Err(DirError::BadLogin)));
+        // The backup fetch passes the code once; the sign-in after it doesn't ask again.
+        d.sign_in_gate(&t2, "sec", None, &backup[0], "").unwrap();
+        assert_eq!(d.login_checked(&t2, "correct horse", &phone, "Phone", "", "").unwrap(), "sec");
+        assert_eq!(d.security_state("sec").backup_left, totp::BACKUP_CODES - 1);
+        // A backup code works once.
+        let t3 = ticket(&d);
+        assert!(matches!(d.login_checked(&t3, "correct horse", &[9u8; 32], "", &backup[0], ""), Err(DirError::BadTotp)));
+        // Five wrong codes drop the ticket.
+        for _ in 0..4 {
+            let _ = d.login_checked(&t3, "correct horse", &[9u8; 32], "", "111111", "");
+        }
+        assert!(d.login_checked(&t3, "correct horse", &[9u8; 32], "", &backup[1], "").is_err());
+
+        // No new devices: even the right code doesn't help; devices already
+        // on the account still sign in.
+        d.set_device_lock("sec", true, "").unwrap();
+        let t4 = ticket(&d);
+        assert!(matches!(d.login_checked(&t4, "correct horse", &[10u8; 32], "", &backup[1], ""), Err(DirError::DevicesLocked)));
+        assert!(matches!(d.sign_in_gate(&t4, "sec", None, &backup[1], ""), Err(DirError::DevicesLocked)));
+        assert_eq!(d.login_checked(&t4, "correct horse", &phone, "Phone", "", "").unwrap(), "sec");
+        // Turning it back on asks for a code.
+        assert!(matches!(d.set_device_lock("sec", false, ""), Err(DirError::NeedTotp)));
+        // The recovery key opens both.
+        let check = "c".repeat(64);
+        d.set_recovery("sec", &id, &check).unwrap();
+        let t5 = ticket(&d);
+        assert!(matches!(d.login_checked(&t5, "correct horse", &[11u8; 32], "", "", &"x".repeat(64)), Err(DirError::BadRecovery)));
+        assert_eq!(d.login_checked(&t5, "correct horse", &[11u8; 32], "Laptop", "", &check).unwrap(), "sec");
+
+        // Replicated with the account.
+        let row = d.fed_users_since(0).into_iter().find(|u| u.username == "sec").unwrap();
+        let sec: Security = serde_json::from_str(&row.security).unwrap();
+        assert!(sec.lock && !sec.totp.is_empty());
+        let other = dir();
+        assert!(other.fed_apply_user(&row).applied);
+        assert!(other.security_state("sec").lock);
+
+        // Off again with a backup code.
+        d.totp_disable("sec", &backup[2]).unwrap();
+        d.set_device_lock("sec", false, "").unwrap();
+        let st = d.security_state("sec");
+        assert!(!st.lock && !st.totp && st.backup_left == 0);
     }
 
     #[test]

@@ -79,6 +79,10 @@ export interface IncomingPayload {
 export interface GpuStatus { mode: "auto" | "on" | "off"; software: boolean; reason: string; dmabuf?: boolean; dmabuf_pending?: boolean }
 
 /** One device of my account (Settings → Devices). */
+export interface PendingDevice { id: string; name: string; addr: string; at: number; added: number }
+export interface DeviceTrust { pending: PendingDevice[]; trusted: string[]; this: string }
+export interface SecurityState { lock: boolean; totp: boolean; backup_left: number }
+
 export interface DeviceInfo {
   addr: string; id: string; primary: boolean; name: string; added: number; online: boolean; current: boolean;
 }
@@ -111,9 +115,21 @@ export const api = {
   verifyEmailCode:    (server_url: string, email: string, code: string): Promise<string> => invoke("verify_email_code", { serverUrl: server_url, email, code }),
   registerAccount:    (server_url: string, username: string, ticket: string, display_name: string, about: string, phone: string, password?: string, email?: string): Promise<void> => invoke("register_account", { serverUrl: server_url, username, ticket, displayName: display_name, about, phone, password: password || null, email: email || null }),
   listDevices:        (): Promise<DeviceInfo[]> => invoke("list_devices"),
+  /** Devices of my account waiting for approval here (devtrust.rs). */
+  deviceTrust:        (): Promise<DeviceTrust> => invoke("device_trust"),
+  deviceApprove:      (id: string): Promise<void> => invoke("device_approve", { id }),
+  deviceDecline:      (id: string): Promise<void> => invoke("device_decline", { id }),
+  /** Sign-in protection: two-step codes and "no new devices" (security.rs). */
+  securityGet:        (): Promise<SecurityState> => invoke("security_get"),
+  securitySetLock:    (lock: boolean, code?: string): Promise<SecurityState> => invoke("security_set_lock", { lock, code: code || null }),
+  totpSetup:          (): Promise<{ secret: string; uri: string }> => invoke("totp_setup"),
+  totpEnable:         (code: string): Promise<{ backup: string[] }> => invoke("totp_enable", { code }),
+  totpDisable:        (code: string): Promise<void> => invoke("totp_disable", { code }),
+  totpBackup:         (code: string): Promise<{ backup: string[] }> => invoke("totp_backup", { code }),
   removeDevice:       (id: string): Promise<void> => invoke("remove_device", { id }),
   renameDevice:       (id: string, name: string): Promise<void> => invoke("rename_device", { id, name }),
-  loginAccount:       (server_url: string, ticket: string, password: string, email?: string): Promise<string> => invoke("login_account", { serverUrl: server_url, ticket, password, email: email || null }),
+  loginAccount:       (server_url: string, ticket: string, password: string, email?: string, totp?: string, recovery?: string): Promise<string> =>
+    invoke("login_account", { serverUrl: server_url, ticket, password, email: email || null, totp: totp || null, recovery: recovery || null }),
   fedPeers:           (server_url: string): Promise<{ federated: boolean; self?: string; servers: string[] }> => invoke("fed_peers", { serverUrl: server_url }),
   probeServers:       (urls: string[]): Promise<ServerProbe[]>                  => invoke("probe_servers", { urls }),
   publicServers:      (): Promise<{ url: string; name: string | null; note: string | null }[]> => invoke("public_servers"),
@@ -146,8 +162,8 @@ export const api = {
     invoke("password_reset", { serverUrl: server_url, ticket, email, phrase, password }),
   backupNow:          (ui: string, force: boolean): Promise<BackupStatus> => invoke("backup_now", { ui, force }),
   backupDisable:      (): Promise<void> => invoke("backup_disable"),
-  backupRestore:      (server_url: string, ticket: string, password: string, email: string, phrase?: string): Promise<{ found: boolean; need_phrase: boolean; username: string | null; email: string | null; ui: string }> =>
-    invoke("backup_restore", { serverUrl: server_url, ticket, password, email, phrase: phrase || null }),
+  backupRestore:      (server_url: string, ticket: string, password: string, email: string, phrase?: string, totp?: string, recovery?: string): Promise<{ found: boolean; need_phrase: boolean; username: string | null; email: string | null; ui: string }> =>
+    invoke("backup_restore", { serverUrl: server_url, ticket, password, email, phrase: phrase || null, totp: totp || null, recovery: recovery || null }),
   registerUsername:   (ticket: string, username: string, display_name: string, about: string, phone: string): Promise<void> => invoke("register_username", { ticket, username, displayName: display_name, about, phone }),
   searchDirectory:    (query: string): Promise<DirProfile[]>                        => invoke("search_directory", { query }),
   fetchDirectoryProfile: (username: string): Promise<DirProfile | null>            => invoke("fetch_directory_profile", { username }),
@@ -339,6 +355,7 @@ export const events = {
   onGroupCall:       (fn: (p: { from: string; gid: string; signal: Record<string, unknown> }) => void) =>
     listen<{ from: string; gid: string; signal: Record<string, unknown> }>("aqua://gcall", (e) => fn(e.payload)),
   onTyping:          (fn: (p: { from: string; gid?: string }) => void)   => listen<{ from: string; gid?: string }>("aqua://typing", (e) => fn(e.payload)),
+  onDevicePending:   (fn: () => void)                      => listen("aqua://device_pending", () => fn()),
 };
 
 /**

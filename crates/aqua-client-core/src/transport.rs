@@ -723,12 +723,27 @@ impl Transport {
         password: &str,
         device_name: &str,
     ) -> Result<String, TransportError> {
+        Self::login_account_checked(server_url, identity, ticket, password, device_name, "", "").await
+    }
+
+    /// [`Self::login_account_named`] with the two-step code (or a backup
+    /// code) and/or the recovery key's check ([`crate::backup::recovery_check`]),
+    /// for accounts that have sign-in protection on.
+    pub async fn login_account_checked(
+        server_url: &str,
+        identity: &IdentityKeyPair,
+        ticket: &str,
+        password: &str,
+        device_name: &str,
+        totp: &str,
+        recovery: &str,
+    ) -> Result<String, TransportError> {
         #[derive(serde::Deserialize)]
         struct Resp { username: String }
         let http = http_client()?;
         let token = sign_in(&http, server_url, identity).await?;
         let url = format!("{}/v1/users/login", server_url.trim_end_matches('/'));
-        let body = serde_json::json!({ "ticket": ticket, "password": password, "device_name": device_name });
+        let body = serde_json::json!({ "ticket": ticket, "password": password, "device_name": device_name, "totp": totp, "recovery": recovery });
         let r = http.post(&url).bearer_auth(&token).json(&body).send().await?;
         if !r.status().is_success() {
             return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
@@ -771,9 +786,14 @@ impl Transport {
     }
 
     pub async fn fetch_backup(server_url: &str, ticket: &str, secret: &str) -> Result<Option<Vec<u8>>, TransportError> {
+        Self::fetch_backup_checked(server_url, ticket, secret, "", "").await
+    }
+
+    /// [`Self::fetch_backup`] with the two-step code / recovery check.
+    pub async fn fetch_backup_checked(server_url: &str, ticket: &str, secret: &str, totp: &str, recovery: &str) -> Result<Option<Vec<u8>>, TransportError> {
         let http = http_client()?;
         let url = format!("{}/v1/backup/fetch", server_url.trim_end_matches('/'));
-        let r = http.post(&url).json(&serde_json::json!({ "ticket": ticket, "password": secret })).send().await?;
+        let r = http.post(&url).json(&serde_json::json!({ "ticket": ticket, "password": secret, "totp": totp, "recovery": recovery })).send().await?;
         if r.status().as_u16() == 404 {
             return Ok(None);
         }
@@ -1162,6 +1182,27 @@ impl Transport {
             return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
         }
         Ok(())
+    }
+
+    /// Sign-in protection of my account: `GET` (body `None`) or `PUT`/`POST`
+    /// `/v1/me/<path>` with a JSON body → the JSON answer (`null` for 204).
+    pub async fn me_call(&self, method: &str, path: &str, body: Option<serde_json::Value>) -> Result<serde_json::Value, TransportError> {
+        let url = format!("{}/v1/me/{}", self.server_url.trim_end_matches('/'), path.trim_start_matches('/'));
+        let req = match method {
+            "PUT" => self.http.put(&url),
+            "POST" => self.http.post(&url),
+            _ => self.http.get(&url),
+        }
+        .bearer_auth(self.bearer().await?);
+        let req = match body { Some(b) => req.json(&b), None => req };
+        let r = req.send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        if r.status().as_u16() == 204 {
+            return Ok(serde_json::Value::Null);
+        }
+        Ok(r.json().await.unwrap_or(serde_json::Value::Null))
     }
 
     /// Sign another device of this account out.

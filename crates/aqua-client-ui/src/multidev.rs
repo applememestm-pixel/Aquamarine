@@ -29,6 +29,12 @@ pub const SYNC_PREFIX: &str = "[sync:v1]";
 
 const CACHE_TTL: Duration = Duration::from_secs(45);
 
+const NOT_APPROVED: &str = "this device of mine isn't approved yet";
+
+/// Key id last seen in the bundle of one of my addresses (see [`send_to_own`]).
+static KEY_OF: StdMutex<Option<HashMap<String, (Instant, String)>>> = StdMutex::new(None);
+const KEY_OF_TTL: Duration = Duration::from_secs(300);
+
 static CACHE: StdMutex<Option<HashMap<String, (Instant, Vec<String>)>>> = StdMutex::new(None);
 
 /// `alice~a1b2c3` → `alice`.
@@ -93,9 +99,26 @@ pub fn my_address(s: &AppState, devices_of_me: &[String]) -> String {
 /// Encrypt `payload` for one device address and send it, starting an X3DH
 /// session with that device first if there is none.
 pub async fn send_to_address(app: &AppHandle, addr: &str, payload: &str) -> Result<(), String> {
+    send_inner(app, addr, payload, false).await
+}
+
+/// [`send_to_address`] for a device of MY account: only if it's approved
+/// (see devtrust.rs) — checked against the key the payload is encrypted to.
+pub async fn send_to_own(app: &AppHandle, addr: &str, payload: &str) -> Result<(), String> {
+    send_inner(app, addr, payload, true).await
+}
+
+async fn send_inner(app: &AppHandle, addr: &str, payload: &str, own: bool) -> Result<(), String> {
     let state: State<'_, StdMutex<AppState>> = app.state();
     let fast = {
         let mut s = state.lock().map_err(|e| e.to_string())?;
+        if own {
+            if let Some(id) = crate::devtrust::session_id(&s, addr) {
+                if !crate::devtrust::is_trusted(&s, &id) {
+                    return Err(NOT_APPROVED.into());
+                }
+            }
+        }
         if let Some(session) = s.sessions.get_mut(addr) {
             let env = session.encrypt(payload.as_bytes()).map_err(|e| format!("encrypt: {e}"))?;
             if let Some(session) = s.sessions.get(addr) {
@@ -123,12 +146,35 @@ pub async fn send_to_address(app: &AppHandle, addr: &str, payload: &str) -> Resu
     if opens_no_session(payload) {
         return Err("no session yet".into());
     }
+    if own {
+        // Known not to be approved: don't even fetch its keys (that would
+        // use up its one-time prekeys every couple of seconds). `user~id`
+        // names its key id; for `user` the last fetched key is remembered.
+        let claimed = addr.split_once('~').map(|(_, id)| id.to_string()).or_else(|| {
+            KEY_OF.lock().ok().and_then(|m| m.as_ref().and_then(|m| m.get(addr)).filter(|(t, _)| t.elapsed() < KEY_OF_TTL).map(|(_, id)| id.clone()))
+        });
+        if let Some(id) = claimed {
+            if !state.lock().map(|s| crate::devtrust::is_trusted(&s, &id)).unwrap_or(false) {
+                return Err(NOT_APPROVED.into());
+            }
+        }
+    }
     let (transport, identity) = {
         let s = state.lock().map_err(|e| e.to_string())?;
         (s.transport.clone().ok_or("not connected")?, s.identity.clone())
     };
     let bundle = transport.fetch_bundle(addr).await.map_err(|e| format!("fetch_bundle: {e}"))?;
     bundle.verify().map_err(|e| format!("bad bundle: {e}"))?;
+    if own {
+        let id = device_id(bundle.identity.dh_pub.as_bytes());
+        if let Ok(mut m) = KEY_OF.lock() {
+            m.get_or_insert_with(HashMap::new).insert(addr.to_string(), (Instant::now(), id.clone()));
+        }
+        let ok = state.lock().map(|s| crate::devtrust::is_trusted(&s, &id)).unwrap_or(false);
+        if !ok {
+            return Err(NOT_APPROVED.into());
+        }
+    }
     let (session, initial) = Session::start_as_initiator(&identity, &bundle, payload.as_bytes())
         .map_err(|e| format!("start_as_initiator: {e}"))?;
     transport.send_initial(addr, &initial).map_err(|e| format!("send_initial: {e}"))?;
@@ -223,8 +269,14 @@ async fn fanout_offline(app: &AppHandle, peer: &str, me: &str, payload: &str, sy
     }
     if (sync || peer == me) && !me.is_empty() {
         let copy = if peer == me { payload.to_string() } else { wrap_sync(peer, payload) };
-        for addr in offline_addresses(app, me) {
-            let _ = send_to_address(app, &addr, &copy).await;
+        let mine = offline_addresses(app, me);
+        let my_addr = {
+            let state: State<'_, StdMutex<AppState>> = app.state();
+            let s = state.lock().map_err(|e| e.to_string())?;
+            my_address(&s, &mine)
+        };
+        for addr in mine.into_iter().filter(|a| *a != my_addr) {
+            let _ = send_to_own(app, &addr, &copy).await;
         }
         if peer == me {
             return Ok(());
@@ -248,7 +300,7 @@ pub async fn to_my_devices(app: &AppHandle, transport: &Transport, me: &str, pay
         my_address(&s, &mine)
     };
     for addr in mine.iter().filter(|a| **a != my_addr) {
-        if let Err(e) = send_to_address(app, addr, payload).await {
+        if let Err(e) = send_to_own(app, addr, payload).await {
             tracing::debug!(%addr, %e, "sync to own device skipped");
         }
     }
