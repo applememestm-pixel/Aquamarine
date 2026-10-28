@@ -1,86 +1,86 @@
-//! The same chats on every device of an account, by themselves.
+//! The same chats on every device of an account — stored by the relay,
+//! encrypted so that only the account's devices can read them.
 //!
-//! History lives on the devices (end-to-end encryption: the relay never has
-//! it), so a second device used to start empty, and a message that reached
-//! only one device — a contact on an old app writes to the main device
-//! only, a chat started while the other device was off — stayed there.
+//! History lives on the devices (end-to-end encryption), so a second device
+//! used to start empty, and a message that reached only one device (a
+//! contact on an old app writes to the main device only) stayed there. Now:
 //!
-//! Now each device, a few seconds after it connects and then every few
-//! minutes, sends its other devices what changed in its chats since they
-//! last confirmed: the changed chats (summary + messages) and the groups,
-//! as JSON → DEFLATE → a file encrypted with a fresh key (like any
-//! attachment) on the relay, and the key in a `[hist:v1]` message over the
-//! E2EE session to that device. The device downloads it, merges every chat
-//! (missing messages go in at their place, nothing is doubled) and confirms
-//! with `[histack:v1]` and the versions it took. Without a confirmation the
-//! same chats go again later (the file on the relay may have expired).
+//! * The account has a **history key** (32 random bytes) that only its
+//!   devices know: the first device makes it and the relay keeps just its id
+//!   (`kid`); a new device asks my other devices for it over E2EE
+//!   (`[hkeyreq:v1]` → `[hkey:v1]`), or finds it in the backup it restored.
+//! * Every chat is stored on the relay as pages of 200 messages plus a card
+//!   (name, look, deletions), and the groups as one record — each JSON →
+//!   DEFLATE → ChaCha20-Poly1305 with the history key; the record's name is
+//!   a keyed hash, so the relay doesn't learn who the chats are with.
+//!   `PUT /v1/me/hist/:k`; the relay numbers every change (`seq`).
+//! * A device uploads what changed within ~2 s and pokes my other devices
+//!   (`[hpoke:v1]` over E2EE); they fetch "everything since N" at once. A new
+//!   device fetches everything right after signing in. Every minute it looks
+//!   anyway, in case a poke was missed.
+//! * Merging puts the messages it doesn't have at their place, never twice.
+//!   Deleted chats and messages leave tombstones (8 bytes of a hash) in the
+//!   chat's card, so the other devices delete them too and nothing returns.
 //!
-//! Deletions travel too: a deleted chat or message leaves a tombstone (a
-//! short hash of the message) that goes with every snapshot, so the other
-//! device deletes it as well and nobody sends it back.
-//!
-//! Only my own devices are ever sent this or believed: the payload is
-//! taken only when it comes from my own account (`commands::on_incoming_text`).
+//! Only my own devices are believed: the control messages are taken only
+//! from my account (`commands::on_incoming_text`).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex as StdMutex;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::state::{AppState, ChatBook, ChatMessage, ChatSummary, Group, MessageKind};
 
-pub const HIST_PREFIX: &str = "[hist:v1]";
-pub const HISTACK_PREFIX: &str = "[histack:v1]";
+pub const HKEYREQ_PREFIX: &str = "[hkeyreq:v1]";
+pub const HKEY_PREFIX: &str = "[hkey:v1]";
+pub const HPOKE_PREFIX: &str = "[hpoke:v1]";
 
+const KEY_REC: &str = "histsync:key";
 const FILE: &str = "hist-sync.json";
-const FIRST_DELAY: Duration = Duration::from_secs(8);
-const EVERY: Duration = Duration::from_secs(4 * 60);
-/// Sent but not confirmed: wait this long before sending again.
-const RETRY_AFTER: u64 = 3 * 3600;
+const PAGE: usize = 200;
+/// Per chat at most this many tombstones (the oldest go first).
+const TOMB_MAX: usize = 20_000;
 
-/// What each of my other devices has confirmed: chat id → version.
+static PULL_NOW: tokio::sync::Notify = tokio::sync::Notify::const_new();
+/// chat id → (version of what was last checked for upload); "\0groups" too.
+static PUSHED: StdMutex<Option<HashMap<String, u64>>> = StdMutex::new(None);
+
 #[derive(Default, Serialize, Deserialize)]
 struct SyncState {
+    /// server url → the last seq seen there.
     #[serde(default)]
-    acked: HashMap<String, HashMap<String, String>>,
-    /// device → unix seconds of the last unconfirmed send.
+    cursor: HashMap<String, i64>,
+    /// record key → hash of what's on the relay (as far as this device knows).
     #[serde(default)]
-    pending: HashMap<String, u64>,
+    uploaded: HashMap<String, u64>,
     /// Deleted here or on another device of mine: chat id → message hashes.
     #[serde(default)]
     tomb: HashMap<String, Vec<u64>>,
 }
 
-/// The tombstones' "version" among the chat versions.
-const TOMB_KEY: &str = "\u{0}tomb";
-
-/// Per chat at most this many tombstones (the oldest go first).
-const TOMB_MAX: usize = 20_000;
-
-#[derive(Serialize, Deserialize)]
-struct ChatSnap {
-    summary: ChatSummary,
-    messages: Vec<ChatMessage>,
+/// The lasting part of a chat's card (not unread counts, previews, online…).
+#[derive(Clone, Serialize, Deserialize, Hash)]
+struct Card {
+    id: String,
+    name: String,
+    letter: String,
+    gradient: String,
+    has_lock: bool,
+    verified: bool,
+    channel: bool,
+    live: bool,
 }
 
 #[derive(Serialize, Deserialize)]
-struct Snapshot {
-    /// Who sent it (to confirm back to).
-    from_dev: String,
-    chats: Vec<ChatSnap>,
-    #[serde(default)]
-    groups: Vec<Group>,
-    /// chat id → version, echoed in the confirmation.
-    vers: HashMap<String, String>,
-    /// Deleted messages (see [`tombstone`]).
-    #[serde(default)]
-    tomb: HashMap<String, Vec<u64>>,
-}
-
-fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+#[serde(tag = "t")]
+enum Rec {
+    Page { chat: String, page: u32, msgs: Vec<ChatMessage> },
+    Meta { chat: String, card: Option<Card>, #[serde(default)] tomb: Vec<u64> },
+    Groups { groups: Vec<Group> },
 }
 
 fn load(s: &AppState) -> SyncState {
@@ -96,6 +96,12 @@ fn save(s: &AppState, st: &SyncState) {
 /// Chats worth syncing: not devices, not on-the-fly ones.
 fn syncable(id: &str) -> bool {
     id != "welcome" && (id.starts_with("dm~") || !id.contains('~'))
+}
+
+fn h64(bytes: &[u8]) -> u64 {
+    use sha2::Digest;
+    let d = sha2::Sha256::digest(bytes);
+    u64::from_be_bytes([d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]])
 }
 
 /// The same message on two devices, whatever local id it got: who, what,
@@ -115,13 +121,125 @@ fn key_of(m: &ChatMessage, me: &str) -> String {
 
 /// A short hash of a message, the same on every device and build.
 fn hash_of(m: &ChatMessage, me: &str) -> u64 {
+    h64(key_of(m, me).as_bytes())
+}
+
+/// What changed in a chat, cheaply: count, last message, card.
+fn version(book: &ChatBook, me: &str) -> u64 {
+    let last = book.messages.last().map(|m| key_of(m, me)).unwrap_or_default();
+    let card = serde_json::to_string(&card_of(&book.summary)).unwrap_or_default();
+    h64(format!("{}\u{1}{last}\u{1}{card}", book.messages.len()).as_bytes())
+}
+
+fn card_of(s: &ChatSummary) -> Card {
+    Card { id: s.id.clone(), name: s.name.clone(), letter: s.letter.clone(), gradient: s.gradient.clone(),
+           has_lock: s.has_lock, verified: s.verified, channel: s.channel, live: s.live }
+}
+
+// ---------- the history key ----------
+
+fn history_key(s: &AppState) -> Option<[u8; 32]> {
+    s.vault.get_record(KEY_REC).ok().flatten().and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok())
+}
+
+fn kid_of(key: &[u8; 32]) -> String {
     use sha2::Digest;
-    let d = sha2::Sha256::digest(key_of(m, me).as_bytes());
-    u64::from_be_bytes([d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]])
+    hex::encode(&sha2::Sha256::new().chain_update(b"aqua-hist-kid\0").chain_update(key).finalize()[..16])
+}
+
+/// The relay's name for a record: a keyed hash, so it can't tell the chats.
+fn rec_key(key: &[u8; 32], label: &str) -> String {
+    use sha2::Digest;
+    hex::encode(&sha2::Sha256::new().chain_update(key).chain_update(b"\0").chain_update(label.as_bytes()).finalize()[..20])
+}
+
+fn seal(key: &[u8; 32], k: &str, plain: &[u8]) -> Option<Vec<u8>> {
+    let mut nonce = [0u8; 12];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce);
+    let ct = aqua_core::crypto::aead_encrypt(key, &nonce, k.as_bytes(), &crate::history::compress(plain)).ok()?;
+    Some([nonce.as_slice(), &ct].concat())
+}
+
+fn open(key: &[u8; 32], k: &str, blob: &[u8]) -> Option<Vec<u8>> {
+    if blob.len() < 12 { return None; }
+    let nonce: [u8; 12] = blob[..12].try_into().ok()?;
+    let packed = aqua_core::crypto::aead_decrypt(key, &nonce, k.as_bytes(), &blob[12..]).ok()?;
+    crate::history::decompress(&packed)
+}
+
+/// Make sure this device has the account's history key: it's here, or it's
+/// made now (first device), or my other devices are asked for it.
+async fn ensure_key(app: &AppHandle, transport: &aqua_client_core::Transport, me: &str) -> Option<[u8; 32]> {
+    let state: State<'_, StdMutex<AppState>> = app.state();
+    if let Some(k) = state.lock().ok().and_then(|s| history_key(&s)) {
+        return Some(k);
+    }
+    match transport.hist_get("kid").await {
+        Ok(None) => {
+            let mut key = [0u8; 32];
+            rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut key);
+            match transport.hist_put("kid", kid_of(&key).into_bytes()).await {
+                Ok(_) => {
+                    let s = state.lock().ok()?;
+                    s.vault.put_record(KEY_REC, &key).ok()?;
+                    tracing::info!("history key made (first device of the account)");
+                    return Some(key);
+                }
+                Err(e) => tracing::info!(%e, "history key: another device was first"),
+            }
+        }
+        Ok(Some(_)) => {}
+        Err(e) => {
+            tracing::warn!(%e, "history store not reachable (older relay?)");
+            return None;
+        }
+    }
+    // Another device has it: ask them (they answer within seconds if online).
+    crate::multidev::to_my_devices(app, transport, me, HKEYREQ_PREFIX).await;
+    None
+}
+
+/// `[hkeyreq:v1]` from my other device: give it the key.
+pub fn on_key_request(app: &AppHandle, from_addr: &str) {
+    let state: State<'_, StdMutex<AppState>> = app.state();
+    let Some(key) = state.lock().ok().and_then(|s| history_key(&s)) else { return };
+    let payload = format!("{HKEY_PREFIX}{}", serde_json::json!({ "k": base64::engine::general_purpose::STANDARD.encode(key) }));
+    let (app, addr) = (app.clone(), from_addr.to_string());
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = crate::multidev::send_to_address(&app, &addr, &payload).await {
+            tracing::warn!(%e, "history key not sent to my device");
+        }
+    });
+}
+
+/// `[hkey:v1]` from my other device: keep it if it's the account's key.
+pub fn on_key(app: &AppHandle, body: &str) {
+    let v: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+    let Some(key) = v["k"].as_str()
+        .and_then(|b| base64::engine::general_purpose::STANDARD.decode(b).ok())
+        .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok()) else { return };
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state: State<'_, StdMutex<AppState>> = app.state();
+        let Some(t) = state.lock().ok().and_then(|s| s.transport.clone()) else { return };
+        // Only the key whose id the relay has (the account's one).
+        let ok = matches!(t.hist_get("kid").await, Ok(Some(kid)) if kid == kid_of(&key).as_bytes());
+        if !ok { return; }
+        if let Ok(s) = state.lock() {
+            if history_key(&s).is_none() { let _ = s.vault.put_record(KEY_REC, &key); }
+        }
+        tracing::info!("history key received from my other device");
+        PULL_NOW.notify_one();
+    });
+}
+
+/// `[hpoke:v1]` from my other device: it just stored something — fetch now.
+pub fn on_poke() {
+    PULL_NOW.notify_one();
 }
 
 /// These messages of `chat` were deleted on this device: my other devices
-/// delete them too and never send them back.
+/// delete them too and never bring them back.
 pub fn tombstone(s: &AppState, chat: &str, msgs: &[ChatMessage]) {
     if msgs.is_empty() || !syncable(chat) { return; }
     let me = s.username.clone().unwrap_or_default();
@@ -132,17 +250,8 @@ pub fn tombstone(s: &AppState, chat: &str, msgs: &[ChatMessage]) {
         if !t.contains(&h) { t.push(h); }
     }
     if t.len() > TOMB_MAX { let cut = t.len() - TOMB_MAX; t.drain(..cut); }
-    // The chat changed: everyone gets it again (with the tombstones).
-    for a in st.acked.values_mut() { a.remove(chat); }
     save(s, &st);
-}
-
-/// A chat's version: how many messages and what the last one is.
-fn version(book: &ChatBook, me: &str) -> String {
-    let last = book.messages.last().map(|m| key_of(m, me)).unwrap_or_default();
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    std::hash::Hash::hash(&last, &mut h);
-    format!("{}:{:x}", book.messages.len(), std::hash::Hasher::finish(&h))
+    if let Ok(mut p) = PUSHED.lock() { p.get_or_insert_with(HashMap::new).remove(chat); }
 }
 
 /// Merge `theirs` into `ours`, keeping our order and putting each message we
@@ -195,216 +304,242 @@ pub(crate) fn merge(ours: &mut Vec<ChatMessage>, theirs: Vec<ChatMessage>, me: &
     n
 }
 
-/// Start the background sync (after connecting; safe to call again).
+
+// ---------- the loop ----------
+
+/// Start syncing (after connecting; calling it again just syncs now).
 pub fn start(app: &AppHandle) {
     static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    PULL_NOW.notify_one();
     if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        // Already running: just sync soon (a new connection).
-        let app = app.clone();
-        tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(FIRST_DELAY).await;
-            sync_now(&app).await;
-        });
         return;
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(FIRST_DELAY).await;
+        let mut last_pull = std::time::Instant::now() - Duration::from_secs(3600);
         loop {
-            sync_now(&app).await;
-            tokio::time::sleep(EVERY).await;
-        }
-    });
-}
-
-/// Send my other devices the chats they haven't confirmed in this version.
-pub async fn sync_now(app: &AppHandle) {
-    let state: State<'_, StdMutex<AppState>> = app.state();
-    let Some((transport, me)) = state.lock().ok().and_then(|s| Some((s.transport.clone()?, s.username.clone()?))) else { return };
-    let addrs = crate::multidev::addresses(&transport, &me).await;
-    let mine = match state.lock() { Ok(s) => crate::multidev::my_address(&s, &addrs), Err(_) => return };
-    let others: Vec<String> = addrs.into_iter().filter(|a| *a != mine && crate::multidev::base_user(a) == me).collect();
-    if others.is_empty() {
-        return;
-    }
-    for dev in others {
-        // What this device lacks, as of now.
-        let snap = {
-            let Ok(s) = state.lock() else { return };
-            let st = load(&s);
-            if st.pending.get(&dev).is_some_and(|t| now().saturating_sub(*t) < RETRY_AFTER) {
+            let pull_due = last_pull.elapsed() >= Duration::from_secs(60);
+            let poked = tokio::time::timeout(Duration::from_secs(2), PULL_NOW.notified()).await.is_ok();
+            let state: State<'_, StdMutex<AppState>> = app.state();
+            let Some((t, me)) = state.lock().ok().and_then(|s| Some((s.transport.clone()?, s.username.clone()?))) else { continue };
+            let Some(key) = ensure_key(&app, &t, &me).await else {
+                // Waiting for the key from my other device.
+                tokio::time::sleep(Duration::from_secs(8)).await;
                 continue;
+            };
+            if poked || pull_due {
+                if let Err(e) = pull(&app, &t, &key).await { tracing::warn!(%e, "history: fetch failed"); }
+                last_pull = std::time::Instant::now();
             }
-            match collect(&s, &st, &dev, &mine) { Some(x) => x, None => continue }
-        };
-        let n = snap.chats.len();
-        match send_snapshot(app, &transport, &dev, &snap).await {
-            Ok(()) => {
-                tracing::info!(device = %dev, chats = n, "history sent to my other device");
-                if let Ok(s) = state.lock() {
-                    let mut st = load(&s);
-                    st.pending.insert(dev.clone(), now());
-                    save(&s, &st);
+            match push(&app, &t, &key).await {
+                Ok(0) => {}
+                Ok(n) => {
+                    tracing::info!(records = n, "history stored on the relay");
+                    crate::multidev::to_my_devices(&app, &t, &me, HPOKE_PREFIX).await;
                 }
+                Err(e) => tracing::warn!(%e, "history: store failed"),
             }
-            Err(e) => tracing::warn!(device = %dev, %e, "history sync: not sent"),
-        }
-    }
-}
-
-/// What `dev` hasn't confirmed: changed chats, all groups, tombstones.
-fn collect(s: &AppState, st: &SyncState, dev: &str, mine: &str) -> Option<Snapshot> {
-    let me = s.username.clone().unwrap_or_default();
-    let acked = st.acked.get(dev);
-    let mut chats = Vec::new();
-    let mut vers = HashMap::new();
-    for (id, book) in &s.chats {
-        if !syncable(id) || book.messages.is_empty() || *id == me { continue; }
-        let v = version(book, &me);
-        if acked.and_then(|a| a.get(id)) == Some(&v) { continue; }
-        vers.insert(id.clone(), v);
-        chats.push(ChatSnap { summary: book.summary.clone(), messages: book.messages.clone() });
-    }
-    // Deletions alone are worth a snapshot too.
-    let tomb_n: usize = st.tomb.values().map(|v| v.len()).sum();
-    let tomb_v = tomb_n.to_string();
-    if tomb_n > 0 && acked.and_then(|a| a.get(TOMB_KEY)) != Some(&tomb_v) { vers.insert(TOMB_KEY.to_string(), tomb_v); }
-    if chats.is_empty() && !vers.contains_key(TOMB_KEY) { return None; }
-    Some(Snapshot { from_dev: mine.to_string(), chats, groups: s.groups.values().cloned().collect(), vers, tomb: st.tomb.clone() })
-}
-
-async fn send_snapshot(app: &AppHandle, transport: &aqua_client_core::Transport, dev: &str, snap: &Snapshot) -> Result<(), String> {
-    let json = serde_json::to_vec(snap).map_err(|e| e.to_string())?;
-    let packed = crate::history::compress(&json);
-    let (env, cipher) = aqua_core::file_transfer::encrypt_file(&packed, "aqua-history.json.deflate", Some("application/octet-stream".into()))
-        .map_err(|e| e.to_string())?;
-    transport.upload_blob_kind(&env.cid, cipher, false, Some("file")).await.map_err(|e| e.to_string())?;
-    let payload = format!("{HIST_PREFIX}{}", env.to_message_text());
-    crate::multidev::send_to_address(app, dev, &payload).await
-}
-
-/// `[hist:v1]…` from my other device: fetch, merge, confirm.
-pub fn on_snapshot(app: &AppHandle, body: &str) {
-    let Ok(env) = aqua_core::file_transfer::FileEnvelope::from_message_text(body) else { return };
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        if let Err(e) = receive(&app, env).await {
-            tracing::warn!(%e, "history from my other device: not taken");
         }
     });
 }
 
-async fn receive(app: &AppHandle, env: aqua_core::file_transfer::FileEnvelope) -> Result<(), String> {
+/// One record to store: key, plaintext, its hash.
+type Out = (String, Vec<u8>, u64);
+
+/// What's new here goes to the relay. Returns how many records went.
+async fn push(app: &AppHandle, t: &aqua_client_core::Transport, key: &[u8; 32]) -> Result<usize, String> {
     let state: State<'_, StdMutex<AppState>> = app.state();
-    let transport = state.lock().map_err(|e| e.to_string())?.transport.clone().ok_or("not connected")?;
-    let cipher = transport.download_blob(&env.cid).await.map_err(|e| e.to_string())?;
-    let packed = aqua_core::file_transfer::decrypt_file(&env, &cipher).map_err(|e| e.to_string())?;
-    let json = crate::history::decompress(&packed).ok_or("bad history file")?;
-    let snap: Snapshot = serde_json::from_slice(&json).map_err(|e| e.to_string())?;
-    let (added, chats) = {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
-        let r = apply(&mut s, snap.chats, snap.groups, &snap.tomb);
-        r
+    let (outs, versions) = {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        let me = s.username.clone().unwrap_or_default();
+        let st = load(&s);
+        let pushed = PUSHED.lock().map_err(|e| e.to_string())?.clone().unwrap_or_default();
+        let mut outs: Vec<Out> = Vec::new();
+        let mut versions = HashMap::new();
+        let add = |label: String, rec: &Rec, outs: &mut Vec<Out>| {
+            let Ok(plain) = serde_json::to_vec(rec) else { return };
+            let k = rec_key(key, &label);
+            let h = h64(&plain);
+            if st.uploaded.get(&k) != Some(&h) { outs.push((k, plain, h)); }
+        };
+        for (id, book) in &s.chats {
+            if !syncable(id) || *id == me { continue; }
+            let v = version(book, &me);
+            if pushed.get(id) == Some(&v) { continue; }
+            versions.insert(id.clone(), v);
+            for (i, chunk) in book.messages.chunks(PAGE).enumerate() {
+                add(format!("p:{id}:{i}"), &Rec::Page { chat: id.clone(), page: i as u32, msgs: chunk.to_vec() }, &mut outs);
+            }
+            let tomb = st.tomb.get(id).cloned().unwrap_or_default();
+            add(format!("m:{id}"), &Rec::Meta { chat: id.clone(), card: Some(card_of(&book.summary)), tomb }, &mut outs);
+        }
+        // Chats deleted here: their card carries the tombstones.
+        for (id, tomb) in &st.tomb {
+            if s.chats.contains_key(id) || pushed.contains_key(&format!("\u{0}gone:{id}")) { continue; }
+            versions.insert(format!("\u{0}gone:{id}"), tomb.len() as u64);
+            add(format!("m:{id}"), &Rec::Meta { chat: id.clone(), card: None, tomb: tomb.clone() }, &mut outs);
+        }
+        let mut groups: Vec<&Group> = s.groups.values().collect();
+        groups.sort_by(|a, b| a.id.cmp(&b.id));
+        let gv = h64(&serde_json::to_vec(&groups).unwrap_or_default());
+        if pushed.get("\u{0}groups") != Some(&gv) {
+            versions.insert("\u{0}groups".into(), gv);
+            add("groups".into(), &Rec::Groups { groups: groups.into_iter().cloned().collect() }, &mut outs);
+        }
+        (outs, versions)
     };
-    if added > 0 || chats > 0 {
-        tracing::info!(added, chats, "history merged from my other device");
+    let mut sent = 0usize;
+    let mut done: Vec<(String, u64)> = Vec::new();
+    for (k, plain, h) in outs {
+        let Some(blob) = seal(key, &k, &plain) else { continue };
+        match t.hist_put(&k, blob).await {
+            Ok(_) => { done.push((k, h)); sent += 1; }
+            Err(e) => {
+                // Not stored: try again next round (versions aren't marked).
+                save_uploaded(app, &done);
+                return Err(e.to_string());
+            }
+        }
+    }
+    save_uploaded(app, &done);
+    if let Ok(mut p) = PUSHED.lock() { p.get_or_insert_with(HashMap::new).extend(versions); }
+    Ok(sent)
+}
+
+fn save_uploaded(app: &AppHandle, done: &[(String, u64)]) {
+    if done.is_empty() { return; }
+    let state: State<'_, StdMutex<AppState>> = app.state();
+    if let Ok(s) = state.lock() {
+        let mut st = load(&s);
+        for (k, h) in done { st.uploaded.insert(k.clone(), *h); }
+        save(&s, &st);
+    };
+}
+
+/// Everything stored since we last looked, merged in.
+async fn pull(app: &AppHandle, t: &aqua_client_core::Transport, key: &[u8; 32]) -> Result<(), String> {
+    let state: State<'_, StdMutex<AppState>> = app.state();
+    let server = t.server_url().trim_end_matches('/').to_string();
+    let mut st = state.lock().map(|s| load(&s)).map_err(|e| e.to_string())?;
+    let mut since = st.cursor.get(&server).copied().unwrap_or(0);
+    let mut changed = false;
+    loop {
+        let list = t.hist_list(since).await.map_err(|e| e.to_string())?;
+        if list.is_empty() { break; }
+        let n = list.len();
+        for (k, seq) in list {
+            since = since.max(seq);
+            if k == "kid" { continue; }
+            let Ok(Some(blob)) = t.hist_get(&k).await else { continue };
+            let Some(plain) = open(key, &k, &blob) else { continue };
+            let Ok(rec) = serde_json::from_slice::<Rec>(&plain) else { continue };
+            let mut s = state.lock().map_err(|e| e.to_string())?;
+            let local = apply(&mut s, &mut st, rec, key);
+            // What's on the relay is what we have now (or we upload the
+            // merge next round — once, then it settles).
+            st.uploaded.insert(k.clone(), local.unwrap_or_else(|| h64(&plain)));
+            changed = true;
+        }
+        st.cursor.insert(server.clone(), since);
+        if let Ok(s) = state.lock() {
+            // Tombstones made meanwhile on this device stay.
+            let disk = load(&s);
+            for (chat, t) in disk.tomb {
+                let mine = st.tomb.entry(chat).or_default();
+                for h in t { if !mine.contains(&h) { mine.push(h); } }
+            }
+            save(&s, &st);
+        }
+        if n < 2000 { break; }
+    }
+    if changed {
         let _ = app.emit("aqua://chats_updated", ());
         let _ = app.emit("aqua://groups_updated", ());
     }
-    // Confirm what was taken, so the same version isn't sent again.
-    let ack = format!("{HISTACK_PREFIX}{}", serde_json::json!({ "vers": snap.vers }));
-    crate::multidev::send_to_address(app, &snap.from_dev, &ack).await
+    Ok(())
 }
 
-/// Merge chats and groups from another device of mine. Returns (messages
-/// added, chats created).
-fn apply(s: &mut AppState, chats: Vec<ChatSnap>, groups: Vec<Group>, their_tomb: &HashMap<String, Vec<u64>>) -> (usize, usize) {
+/// Merge one record. Returns the hash of the local record with the same
+/// key if the merge changed nothing here (so it isn't uploaded back).
+fn apply(s: &mut AppState, st: &mut SyncState, rec: Rec, key: &[u8; 32]) -> Option<u64> {
     let me = s.username.clone().unwrap_or_default();
-    // Their deletions become ours: drop those messages here, remember them.
-    let mut st = load(s);
-    for (chat, hashes) in their_tomb {
-        let t = st.tomb.entry(chat.clone()).or_default();
-        for h in hashes { if !t.contains(h) { t.push(*h); } }
-        if t.len() > TOMB_MAX { let cut = t.len() - TOMB_MAX; t.drain(..cut); }
-    }
-    let tomb: HashMap<String, HashSet<u64>> = st.tomb.iter().map(|(k, v)| (k.clone(), v.iter().copied().collect())).collect();
-    save(s, &st);
-    let mut emptied = Vec::new();
-    for (chat, dead) in &tomb {
-        let Some(book) = s.chats.get_mut(chat) else { continue };
-        let before = book.messages.len();
-        book.messages.retain(|m| !dead.contains(&hash_of(m, &me)));
-        if book.messages.len() != before {
-            book.summary.preview = book.messages.last().map(|m| crate::state::preview_for(&m.kind)).unwrap_or_default();
-            if book.messages.is_empty() && !chat.starts_with("grp_") && chat != crate::state::SAVED_MESSAGES_ID { emptied.push(chat.clone()); }
+    match rec {
+        Rec::Groups { groups } => {
+            for g in groups {
+                let newer = s.groups.get(&g.id).map(|cur| g.version > cur.version).unwrap_or(true);
+                if newer { s.groups.insert(g.id.clone(), g); }
+            }
+            None
         }
-    }
-    for chat in &emptied {
-        // A chat deleted on my other device.
-        s.chats.remove(chat);
-        s.chat_order.retain(|c| c != chat);
-    }
-    // Groups first: a group chat without its group is just a list.
-    for g in groups {
-        let newer = s.groups.get(&g.id).map(|cur| g.version > cur.version).unwrap_or(true);
-        if newer { s.groups.insert(g.id.clone(), g); }
-    }
-    let (mut added, mut created) = (0usize, 0usize);
-    for mut c in chats {
-        let id = c.summary.id.clone();
-        if !syncable(&id) || id == me { continue; }
-        if let Some(dead) = tomb.get(&id) {
-            c.messages.retain(|m| !dead.contains(&hash_of(m, &me)));
-            if c.messages.is_empty() { continue; }
-        }
-        match s.chats.get_mut(&id) {
-            Some(book) => {
-                let n = merge(&mut book.messages, c.messages, &me);
-                if n > 0 {
-                    added += n;
-                    if let Some(last) = book.messages.last() {
-                        book.summary.preview = crate::state::preview_for(&last.kind);
-                        book.summary.preview_by_me = last.from == "me" || last.from == me;
-                        book.summary.time = last.time.clone();
-                    }
-                    crate::history::mark_dirty(s, &id);
+        Rec::Meta { chat, card, tomb } => {
+            if !syncable(&chat) || chat == me { return None; }
+            let t = st.tomb.entry(chat.clone()).or_default();
+            for h in &tomb { if !t.contains(h) { t.push(*h); } }
+            if t.len() > TOMB_MAX { let cut = t.len() - TOMB_MAX; t.drain(..cut); }
+            let dead: HashSet<u64> = t.iter().copied().collect();
+            let mut removed = false;
+            if let Some(book) = s.chats.get_mut(&chat) {
+                let before = book.messages.len();
+                book.messages.retain(|m| !dead.contains(&hash_of(m, &me)));
+                if book.messages.len() != before {
+                    book.summary.preview = book.messages.last().map(|m| crate::state::preview_for(&m.kind)).unwrap_or_default();
+                    crate::history::mark_dirty(s, &chat);
+                    removed = s.chats.get(&chat).is_some_and(|b| b.messages.is_empty());
                 }
             }
-            None => {
-                let mut messages = Vec::new();
-                added += merge(&mut messages, c.messages, &me);
-                let mut summary = c.summary;
-                summary.preview_is_typing = false;
-                s.chats.insert(id.clone(), ChatBook { summary, messages });
-                if !s.chat_order.contains(&id) { s.chat_order.push(id.clone()); }
-                created += 1;
+            if removed && card.is_none() && !chat.starts_with("grp_") && chat != crate::state::SAVED_MESSAGES_ID {
+                // Deleted on my other device.
+                s.chats.remove(&chat);
+                s.chat_order.retain(|c| *c != chat);
+                return None;
+            }
+            match (s.chats.get_mut(&chat), card) {
+                (Some(book), Some(c)) => {
+                    // Their card names the chat; the rest stays ours.
+                    if book.summary.name == book.summary.id && c.name != c.id { book.summary.name = c.name; }
+                    let local = Rec::Meta { chat: chat.clone(), card: Some(card_of(&book.summary)), tomb: st.tomb.get(&chat).cloned().unwrap_or_default() };
+                    serde_json::to_vec(&local).ok().map(|p| h64(&p))
+                }
+                (None, Some(c)) if !c.id.is_empty() => {
+                    let mut summary = crate::state::summary_for(&chat, "", false, false);
+                    summary.name = c.name; summary.letter = c.letter; summary.gradient = c.gradient;
+                    summary.has_lock = c.has_lock; summary.verified = c.verified; summary.channel = c.channel; summary.live = c.live;
+                    s.chats.insert(chat.clone(), ChatBook { summary, messages: Vec::new() });
+                    if !s.chat_order.contains(&chat) { s.chat_order.push(chat.clone()); }
+                    None
+                }
+                _ => None,
             }
         }
-    }
-    (added, created)
-}
-
-/// `[histack:v1]{vers}` from my other device: these versions are there now.
-pub fn on_ack(app: &AppHandle, from_dev: Option<&str>, body: &str) {
-    let state: State<'_, StdMutex<AppState>> = app.state();
-    let Ok(s) = state.lock() else { return };
-    let v: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
-    let Some(vers) = v.get("vers").and_then(|x| x.as_object()) else { return };
-    let mut st = load(&s);
-    // Without the sender's address (older path), confirm for every device
-    // that has a send pending — there's rarely more than one.
-    let devs: Vec<String> = match from_dev {
-        Some(d) => vec![d.to_string()],
-        None => st.pending.keys().cloned().collect(),
-    };
-    for dev in devs {
-        let e = st.acked.entry(dev.clone()).or_default();
-        for (id, ver) in vers {
-            if let Some(ver) = ver.as_str() { e.insert(id.clone(), ver.to_string()); }
+        Rec::Page { chat, page, mut msgs } => {
+            if !syncable(&chat) || chat == me { return None; }
+            if let Some(dead) = st.tomb.get(&chat) {
+                let dead: HashSet<u64> = dead.iter().copied().collect();
+                msgs.retain(|m| !dead.contains(&hash_of(m, &me)));
+            }
+            if !s.chats.contains_key(&chat) {
+                if msgs.is_empty() { return None; }
+                let summary = crate::state::summary_for(&chat, "", false, false);
+                s.chats.insert(chat.clone(), ChatBook { summary, messages: Vec::new() });
+                if !s.chat_order.contains(&chat) { s.chat_order.push(chat.clone()); }
+            }
+            let book = s.chats.get_mut(&chat)?;
+            let n = merge(&mut book.messages, msgs, &me);
+            if n > 0 {
+                if let Some(last) = book.messages.last() {
+                    book.summary.preview = crate::state::preview_for(&last.kind);
+                    book.summary.preview_by_me = last.from == "me" || last.from == me;
+                    book.summary.time = last.time.clone();
+                }
+                crate::history::mark_dirty(s, &chat);
+                return None;
+            }
+            // Nothing new: our page with this number counts as stored.
+            let chunk = book.messages.chunks(PAGE).nth(page as usize)?.to_vec();
+            let _ = key;
+            serde_json::to_vec(&Rec::Page { chat, page, msgs: chunk }).ok().map(|p| h64(&p))
         }
-        st.pending.remove(&dev);
     }
-    save(&s, &st);
 }
 
 #[cfg(test)]
@@ -428,68 +563,9 @@ mod tests {
         ];
         assert_eq!(merge(&mut ours, theirs, "vlad"), 3);
         assert_eq!(texts(&ours), ["a", "b", "c", "d", "e", "f"]);
-        // Again: nothing new.
         let again = ours.clone();
         assert_eq!(merge(&mut ours, again, "vlad"), 0);
         assert_eq!(ours.len(), 6);
-    }
-
-    fn device(name: &str) -> AppState {
-        let dir = std::env::temp_dir().join(format!("aqua-hs-{name}-{}", crate::state::uuid_like()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let s = AppState::boot(dir).unwrap().into_inner().unwrap();
-        let mut s = s;
-        s.username = Some("vlad".into());
-        s
-    }
-    fn chat(s: &mut AppState, id: &str, msgs: Vec<ChatMessage>) {
-        let summary = crate::state::summary_for(id, "", false, false);
-        s.chats.insert(id.into(), ChatBook { summary, messages: msgs });
-        s.chat_order.push(id.into());
-    }
-    fn sync(from: &AppState, to: &mut AppState) -> (usize, usize) {
-        let st = load(from);
-        let Some(snap) = collect(from, &st, "vlad~b", "vlad") else { return (0, 0) };
-        apply(to, snap.chats, snap.groups, &snap.tomb)
-    }
-
-    /// A phone joins: it gets the PC's chats; what only the phone had goes to
-    /// the PC; a chat deleted on the PC goes from the phone too.
-    #[test]
-    fn two_devices_end_up_with_the_same_chats() {
-        let (mut pc, mut phone) = (device("pc"), device("phone"));
-        chat(&mut pc, "ann", vec![msg("ann", "09:00", "hi"), msg("me", "09:01", "hello"), msg("ann", "09:02", "how are you")]);
-        chat(&mut pc, "bob", vec![msg("bob", "11:00", "yo")]);
-        chat(&mut phone, "ann", vec![msg("ann", "09:00", "hi"), msg("ann", "09:30", "only on the phone")]);
-        chat(&mut phone, "ppp", vec![msg("vlad", "08:00", "board")]);
-
-        assert_eq!(sync(&pc, &mut phone), (3, 1));
-        assert_eq!(texts(&phone.chats["ann"].messages), ["hi", "hello", "how are you", "only on the phone"]);
-        assert!(phone.chats.contains_key("bob"));
-        assert_eq!(sync(&phone, &mut pc), (2, 1));
-        assert!(pc.chats.contains_key("ppp"));
-        assert_eq!(pc.chats["ann"].messages.len(), 4);
-        // Nothing new either way now.
-        assert_eq!(sync(&pc, &mut phone).0, 0);
-
-        // Deleted on the PC: gone on the phone, and the phone doesn't bring it back.
-        let gone = pc.chats["bob"].messages.clone();
-        tombstone(&pc, "bob", &gone);
-        pc.chats.remove("bob");
-        sync(&pc, &mut phone);
-        assert!(!phone.chats.contains_key("bob"));
-        assert_eq!(sync(&phone, &mut pc).1, 0);
-        assert!(!pc.chats.contains_key("bob"));
-        // No chat with myself.
-        chat(&mut phone, "vlad", vec![msg("vlad", "07:00", "x")]);
-        sync(&phone, &mut pc);
-        assert!(!pc.chats.contains_key("vlad"));
-    }
-
-    #[test]
-    fn hashes_are_the_same_with_or_without_seconds() {
-        assert_eq!(hash_of(&msg("me", "10:01", "b"), "vlad"), hash_of(&msg("vlad", "10:01:59", "b"), "vlad"));
-        assert_ne!(hash_of(&msg("ann", "10:01", "b"), "vlad"), hash_of(&msg("ann", "10:02", "b"), "vlad"));
     }
 
     #[test]
@@ -498,5 +574,83 @@ mod tests {
         let theirs = vec![msg("ann", "10:00", "ok"), msg("ann", "10:00", "ok")];
         assert_eq!(merge(&mut ours, theirs, "me"), 1);
         assert_eq!(ours.len(), 2);
+    }
+
+    #[test]
+    fn records_open_only_with_the_key_and_their_own_name() {
+        let key = [7u8; 32];
+        let k = rec_key(&key, "p:ann:0");
+        let blob = seal(&key, &k, b"hello").unwrap();
+        assert_eq!(open(&key, &k, &blob).as_deref(), Some(&b"hello"[..]));
+        assert!(open(&[8u8; 32], &k, &blob).is_none(), "another key");
+        assert!(open(&key, &rec_key(&key, "p:bob:0"), &blob).is_none(), "moved to another name");
+        assert_ne!(rec_key(&key, "p:ann:0"), rec_key(&[8u8; 32], "p:ann:0"), "names depend on the key");
+    }
+
+    fn device(name: &str) -> AppState {
+        let dir = std::env::temp_dir().join(format!("aqua-hs-{name}-{}", crate::state::uuid_like()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = AppState::boot(dir).unwrap().into_inner().unwrap();
+        s.username = Some("vlad".into());
+        s
+    }
+    fn chat(s: &mut AppState, id: &str, msgs: Vec<ChatMessage>) {
+        let summary = crate::state::summary_for(id, "", false, false);
+        s.chats.insert(id.into(), ChatBook { summary, messages: msgs });
+        s.chat_order.push(id.into());
+    }
+    /// What `push` would store (all records of `from`), applied on `to` like `pull`.
+    fn relay(from: &AppState, to: &mut AppState) {
+        let key = [1u8; 32];
+        let me = "vlad";
+        let st_from = load(from);
+        let mut recs: Vec<Rec> = Vec::new();
+        for (id, book) in &from.chats {
+            if !syncable(id) || id == me { continue; }
+            for (i, c) in book.messages.chunks(PAGE).enumerate() { recs.push(Rec::Page { chat: id.clone(), page: i as u32, msgs: c.to_vec() }); }
+            recs.push(Rec::Meta { chat: id.clone(), card: Some(card_of(&book.summary)), tomb: st_from.tomb.get(id).cloned().unwrap_or_default() });
+        }
+        for (id, tomb) in &st_from.tomb {
+            if !from.chats.contains_key(id) { recs.push(Rec::Meta { chat: id.clone(), card: None, tomb: tomb.clone() }); }
+        }
+        let mut st = load(to);
+        for r in recs { apply(to, &mut st, r, &key); }
+        save(to, &st);
+    }
+
+    /// A phone joins: it gets the PC's chats, the PC gets what only the
+    /// phone had, a chat deleted on the PC goes from the phone too and
+    /// doesn't come back, and nothing becomes a chat with myself.
+    #[test]
+    fn two_devices_end_up_with_the_same_chats() {
+        let (mut pc, mut phone) = (device("pc"), device("phone"));
+        chat(&mut pc, "ann", vec![msg("ann", "09:00", "hi"), msg("me", "09:01", "hello"), msg("ann", "09:02", "how are you")]);
+        chat(&mut pc, "bob", vec![msg("bob", "11:00", "yo")]);
+        let long: Vec<ChatMessage> = (0..450).map(|i| msg("cat", &format!("12:{:02}", i % 60), &format!("m{i}"))).collect();
+        chat(&mut pc, "cat", long);
+        chat(&mut phone, "ann", vec![msg("ann", "09:00", "hi"), msg("ann", "09:30", "only on the phone")]);
+        chat(&mut phone, "ppp", vec![msg("vlad", "08:00", "board")]);
+
+        relay(&pc, &mut phone);
+        assert_eq!(texts(&phone.chats["ann"].messages), ["hi", "hello", "how are you", "only on the phone"]);
+        assert!(phone.chats.contains_key("bob"));
+        assert_eq!(phone.chats["cat"].messages.len(), 450, "all three pages");
+        relay(&phone, &mut pc);
+        assert!(pc.chats.contains_key("ppp"));
+        assert_eq!(pc.chats["ann"].messages.len(), 4);
+        relay(&pc, &mut phone);
+        assert_eq!(phone.chats["ann"].messages.len(), 4, "nothing doubled");
+
+        let gone = pc.chats["bob"].messages.clone();
+        tombstone(&pc, "bob", &gone);
+        pc.chats.remove("bob");
+        relay(&pc, &mut phone);
+        assert!(!phone.chats.contains_key("bob"));
+        relay(&phone, &mut pc);
+        assert!(!pc.chats.contains_key("bob"), "doesn't come back");
+
+        chat(&mut phone, "vlad", vec![msg("vlad", "07:00", "x")]);
+        relay(&phone, &mut pc);
+        assert!(!pc.chats.contains_key("vlad"));
     }
 }

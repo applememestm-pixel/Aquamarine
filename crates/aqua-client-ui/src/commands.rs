@@ -3465,7 +3465,8 @@ pub(crate) fn is_control_text(text: &str) -> bool {
         || [POLLVOTE_PREFIX, POLLCLOSE_PREFIX, SEEN_PREFIX, STATUS_PREFIX, REACT_PREFIX, TYPING_PREFIX,
             EDIT_PREFIX, DEL_PREFIX, REN_PREFIX, CTL_PREFIX, GCALL_PREFIX, GRPINFO_PREFIX, GRPSELF_PREFIX,
             GRPJOIN_PREFIX, GRPLEAVE_PREFIX, GRPCTL_PREFIX, GRPMSG_PREFIX, CDM_PREFIX, crate::autodelete::TTL_PREFIX,
-            crate::history_sync::HIST_PREFIX, crate::history_sync::HISTACK_PREFIX]
+            crate::history_sync::HPOKE_PREFIX, crate::history_sync::HKEYREQ_PREFIX, crate::history_sync::HKEY_PREFIX,
+            "[hist:v1]", "[histack:v1]"]
             .iter().any(|p| text.starts_with(p))
 }
 
@@ -3476,13 +3477,21 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
     let from = crate::multidev::base_user(addr).to_string();
     // Sent by another device of mine.
     if state.lock().ok().and_then(|s| s.username.clone()).as_deref() == Some(from.as_str()) {
-        // My chats from my other device (history_sync.rs).
-        if let Some(body) = text.strip_prefix(crate::history_sync::HIST_PREFIX) {
-            crate::history_sync::on_snapshot(app, body);
+        // The shared history of my devices (history_sync.rs).
+        // 1.1.0-5 sent history device to device; that's on the relay now.
+        if text.starts_with("[hist:v1]") || text.starts_with("[histack:v1]") {
             return;
         }
-        if let Some(body) = text.strip_prefix(crate::history_sync::HISTACK_PREFIX) {
-            crate::history_sync::on_ack(app, Some(addr), body);
+        if text.starts_with(crate::history_sync::HPOKE_PREFIX) {
+            crate::history_sync::on_poke();
+            return;
+        }
+        if text.starts_with(crate::history_sync::HKEYREQ_PREFIX) {
+            crate::history_sync::on_key_request(app, addr);
+            return;
+        }
+        if let Some(body) = text.strip_prefix(crate::history_sync::HKEY_PREFIX) {
+            crate::history_sync::on_key(app, body);
             return;
         }
         crate::multidev::handle_own_device(app, &text);

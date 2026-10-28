@@ -214,11 +214,18 @@ pub enum DirError {
     BadRecovery,
     #[error("the @username can be changed once a day")]
     RenameTooSoon,
+    #[error("another value is already stored there")]
+    Conflict,
+    #[error("the account's stored history is full")]
+    TooLarge,
 }
 
 /// After a @username change the old name forwards to the new one (and stays
 /// reserved for its owner) this long — Telegram keeps old names a while too.
 pub const RENAME_KEEP_SECS: u64 = 30 * 24 * 3600;
+
+/// All of one account's stored history together, at most.
+pub const HIST_LIMIT: i64 = 1024 * 1024 * 1024;
 
 impl From<rusqlite::Error> for DirError {
     fn from(e: rusqlite::Error) -> Self { DirError::Db(e.to_string()) }
@@ -471,6 +478,19 @@ impl Directory {
             );
             -- @username changes: for RENAME_KEEP_SECS the old name forwards
             -- to the new one and nobody else can take it.
+            -- Encrypted chat history of an account, shared by its devices
+            -- (client history_sync.rs): opaque keys and blobs; `seq` grows
+            -- per account so a device asks "what changed since N".
+            CREATE TABLE IF NOT EXISTS hist_store (
+                username   TEXT NOT NULL,
+                k          TEXT NOT NULL,
+                seq        INTEGER NOT NULL,
+                data       BLOB NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (username, k)
+            );
+            CREATE INDEX IF NOT EXISTS idx_hist_seq ON hist_store(username, seq);
+            CREATE INDEX IF NOT EXISTS idx_hist_upd ON hist_store(updated_at);
             CREATE TABLE IF NOT EXISTS renames (
                 old_name TEXT PRIMARY KEY,
                 new_name TEXT NOT NULL,
@@ -851,6 +871,9 @@ impl Directory {
     // ---- registration ----
 
     /// Validate a username slug.
+    /// A @username as it may appear in a path (federation).
+    pub fn valid_name(u: &str) -> bool { Self::valid_username(u) }
+
     fn valid_username(u: &str) -> bool {
         let len = u.chars().count();
         len >= 3 && len <= 32
@@ -1540,7 +1563,7 @@ impl Directory {
         let tx = db.transaction()?;
         tx.execute("UPDATE users SET username=?1 WHERE username=?2", rusqlite::params![new, old])?;
         for (table, col) in [("last_seen", "username"), ("backups", "username"), ("prekeys", "username"), ("profile_media", "username"),
-                             ("capsules", "owner"), ("capsules", "recipient"), ("bot_peers", "user")] {
+                             ("capsules", "owner"), ("capsules", "recipient"), ("bot_peers", "user"), ("hist_store", "username")] {
             tx.execute(&format!("UPDATE OR IGNORE {table} SET {col}=?1 WHERE {col}=?2"), rusqlite::params![new, old])?;
         }
         // Waiting envelopes, to the account and to each of its devices (user~dev).
@@ -1562,6 +1585,84 @@ impl Directory {
             tx.execute("DELETE FROM renames WHERE old_name=?1", rusqlite::params![old])?;
         }
         tx.commit()
+    }
+
+    // ---- encrypted history shared by an account's devices ----
+
+    /// Store one record. `only_new`: refuse to replace a different value
+    /// (the key id, `kid`: the first device's key wins). Returns the seq.
+    pub fn hist_put(&self, username: &str, k: &str, data: &[u8], only_new: bool) -> Result<i64, DirError> {
+        let db = self.db.lock().unwrap();
+        if only_new {
+            let cur: Option<Vec<u8>> = db
+                .query_row("SELECT data FROM hist_store WHERE username=?1 AND k=?2", rusqlite::params![username, k], |r| r.get(0))
+                .ok();
+            if let Some(cur) = cur {
+                return if cur == data {
+                    db.query_row("SELECT seq FROM hist_store WHERE username=?1 AND k=?2", rusqlite::params![username, k], |r| r.get(0)).map_err(Into::into)
+                } else {
+                    Err(DirError::Conflict)
+                };
+            }
+        }
+        let total: i64 = db
+            .query_row("SELECT COALESCE(SUM(length(data)), 0) FROM hist_store WHERE username=?1 AND k<>?2", rusqlite::params![username, k], |r| r.get(0))
+            .unwrap_or(0);
+        if total + data.len() as i64 > HIST_LIMIT {
+            return Err(DirError::TooLarge);
+        }
+        let seq: i64 = db
+            .query_row("SELECT COALESCE(MAX(seq), 0) + 1 FROM hist_store WHERE username=?1", rusqlite::params![username], |r| r.get(0))
+            .unwrap_or(1);
+        db.execute(
+            "INSERT INTO hist_store (username, k, seq, data, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(username, k) DO UPDATE SET seq=?3, data=?4, updated_at=?5",
+            rusqlite::params![username, k, seq, data, crate::now_ms()],
+        )?;
+        Ok(seq)
+    }
+
+    /// Records changed after `since`: (key, seq, size), oldest first.
+    pub fn hist_list(&self, username: &str, since: i64, limit: usize) -> Vec<(String, i64, i64)> {
+        let db = self.db.lock().unwrap();
+        let Ok(mut st) = db.prepare("SELECT k, seq, length(data) FROM hist_store WHERE username=?1 AND seq>?2 ORDER BY seq LIMIT ?3") else { return Vec::new() };
+        st.query_map(rusqlite::params![username, since, limit as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
+    pub fn hist_get(&self, username: &str, k: &str) -> Option<Vec<u8>> {
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT data FROM hist_store WHERE username=?1 AND k=?2", rusqlite::params![username, k], |r| r.get(0)).ok()
+    }
+
+    /// Federation: (username, key, updated_at) changed after `since` (ms).
+    pub fn fed_hist_since(&self, since: i64) -> Vec<(String, String, i64)> {
+        let db = self.db.lock().unwrap();
+        let Ok(mut st) = db.prepare("SELECT username, k, updated_at FROM hist_store WHERE updated_at > ?1 ORDER BY updated_at LIMIT 1000") else { return Vec::new() };
+        st.query_map(rusqlite::params![since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
+    /// Federation: a peer's record, if newer than ours (it gets a new local seq).
+    pub fn fed_apply_hist(&self, username: &str, k: &str, data: &[u8], updated_at: i64) -> bool {
+        let db = self.db.lock().unwrap();
+        let ours: Option<i64> = db
+            .query_row("SELECT updated_at FROM hist_store WHERE username=?1 AND k=?2", rusqlite::params![username, k], |r| r.get(0))
+            .ok();
+        if ours.is_some_and(|t| t >= updated_at) {
+            return false;
+        }
+        let seq: i64 = db
+            .query_row("SELECT COALESCE(MAX(seq), 0) + 1 FROM hist_store WHERE username=?1", rusqlite::params![username], |r| r.get(0))
+            .unwrap_or(1);
+        db.execute(
+            "INSERT INTO hist_store (username, k, seq, data, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(username, k) DO UPDATE SET seq=?3, data=?4, updated_at=?5",
+            rusqlite::params![username, k, seq, data, updated_at],
+        )
+        .is_ok()
     }
 
     /// (username, updated_at) of backups changed after `since` (seconds).
@@ -2354,6 +2455,26 @@ mod tests {
         assert_eq!(y.username_by_uid(&un).as_deref(), Some("fresh"));
         assert!(!y.user_exists(&moved));
         assert_eq!(y.username_by_uid(&uo).as_deref(), Some("same"));
+    }
+
+    #[test]
+    fn history_records_are_listed_by_seq_and_the_key_id_is_written_once() {
+        let d = dir();
+        assert_eq!(d.hist_put("vlad", "kid", b"K1", true).unwrap(), 1);
+        assert!(matches!(d.hist_put("vlad", "kid", b"K2", true), Err(DirError::Conflict)));
+        assert_eq!(d.hist_put("vlad", "kid", b"K1", true).unwrap(), 1, "the same value is fine");
+        assert_eq!(d.hist_put("vlad", "a1", b"page", false).unwrap(), 2);
+        assert_eq!(d.hist_put("vlad", "b2", b"meta", false).unwrap(), 3);
+        assert_eq!(d.hist_put("vlad", "a1", b"page v2", false).unwrap(), 4);
+        let all: Vec<String> = d.hist_list("vlad", 0, 100).into_iter().map(|r| r.0).collect();
+        assert_eq!(all, ["kid", "b2", "a1"]);
+        assert_eq!(d.hist_list("vlad", 3, 100).len(), 1);
+        assert_eq!(d.hist_get("vlad", "a1").as_deref(), Some(&b"page v2"[..]));
+        assert!(d.hist_list("ann", 0, 100).is_empty(), "per account");
+        // Federation: a newer copy comes in with a fresh local seq.
+        assert!(d.fed_apply_hist("vlad", "b2", b"meta v2", crate::now_ms() + 1000));
+        assert!(!d.fed_apply_hist("vlad", "b2", b"old", 1));
+        assert_eq!(d.hist_list("vlad", 4, 100)[0].0, "b2");
     }
 
     #[tokio::test]
