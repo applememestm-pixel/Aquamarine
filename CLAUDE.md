@@ -95,10 +95,13 @@ Aquamarine — мессенджер со сквозным шифрованием
   - ID аккаунта: `users.uid` = `uid_for(identity_dh)` (детерминированно — у старых строк одинаков на всех узлах; у ботов в хеш подмешано имя). `fed_apply_user` ищет строку по `uid`; тот же @ник с другим ID — старший сохраняет имя, младший получает `displaced_name` (`имя_` + хвост ID) везде; локальный — через `move_account` + `move_live` (без пересылки старого имени). Клиент: `Transport::connect` спрашивает `/v1/me` и переходит на имя от сервера (`aqua://displaced`); `people.ts` помнит `uid` собеседника и при смене зовёт `follow_peer_by_uid`.
   - Директ канала: `CDM_PREFIX`, `channel_dm_open`, отправка — через `send_message` для `dm~…` (только текст; `sendControl` для `dm~` ничего не шлёт). Включается `settings.direct` канала.
   - `attachMenu.ts` (порядок = порядок `attachFront`, `attachHidden`, `attachDock`, `attachBots`). **Основную нижнюю панель (`NavRail`) владелец просил не трогать** — «нижний бар» в его списках значит панель в чате (📎).
-  - «Дичь с пре-релизов» = экспериментальные функции вроде плавающей клавиатуры бота (`settings.floatKb`, `.rkb.float`, место и размер — `aqua.floatKb.v1`). Стекло: `html.glass`, `--glass-a`, `--glass-blur`; в чате `--above-h`/`--below-h` меряются по соседям `.msg-stage`, им ставится `data-gf`.
+  - Стекло: `html.glass`, `--glass-a`, `--glass-blur`; в чате `--above-h`/`--below-h` меряются по соседям `.msg-stage`, им ставится `data-gf`.
   - Плагины: Web Worker из Blob (CSP `worker-src 'self' blob:`), до кода плагина из воркера удаляются `fetch`/XHR/WebSocket/… Хуки: `onSend`, `onIncoming`, `command`; встроенные `/команды` плагин занять не может.
   - Виджет: `android/widget` (Kotlin + res), копируется в CI и `patch-project.*`; данные — JSON через `widget_update` (`lib/widget.ts`). iOS-виджет не сделан: нужен отдельный WidgetKit-таргет, App Group и подпись, а iOS-сборка у нас неподписанная.
   - QR: `qr.ts` (`aqua:srv`, `aqua:join`, `saveInvite`/`inviteFor`), коды приглашений — `AdminConfig.invites`, `redeem` при запросе кода на почту. В `admin.html` встроен `qrcode-generator.js` (MIT) через `__QRLIB__`.
+
+- **1.1.0-3** (пре-выпуск): основная панель вкладок снова без настроек (`navBar.ts` удалён), ссылка на YouTube (`links.ts`, подвал сайта).
+  - «Дичь с пре-релизов» — это экспериментальные функции вроде плавающей клавиатуры бота (`settings.floatKb`, `.rkb.float`, место и размер — `aqua.floatKb.v1`; щипок — touch-события, `touch-action: none`). **Раздел «Экспериментальное» — для таких штук.**
 
 ## Открытые вопросы
 
