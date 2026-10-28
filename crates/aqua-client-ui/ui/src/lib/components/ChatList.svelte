@@ -20,7 +20,8 @@
   import { avatars, peerCards, clans } from "../people";
   import ClanTag from "./ClanTag.svelte";
   import { keepOnScreen } from "../actions";
-  import { archived, mutedChats, setArchived, setMuted, pinnedChats, togglePin, movePin, MAX_PINS } from "../chatPrefs";
+  import { archived, mutedChats, setArchived, setMuted, pinnedChats, togglePin, movePin, MAX_PINS, markedUnread, setMarkedUnread } from "../chatPrefs";
+  import { folders as allFolders, isInFolder, toggleChatInFolder } from "../folders";
   import { parseJoinLink } from "../groupRules";
   import { groupMap, requestJoinGroup } from "../groups";
   import { roomsOf } from "../groupRules";
@@ -329,7 +330,21 @@
   const peekSettled = () => Date.now() - peekAt > 650;
   function closePeek() { peek = null; }
   function dismissPeek() { if (peekSettled()) peek = null; }
-  function openFromPeek() { if (!peekSettled()) return; const id = peek?.id; peek = null; if (id) void selectChat(id); }
+  // Opening from the peek: the card grows to the whole window first
+  // (Telegram), then the chat is there.
+  let peekGrow = $state(false);
+  function openFromPeek() {
+    if (!peekSettled()) return;
+    const id = peek?.id;
+    if (!id) return;
+    if (calm) { peek = null; void selectChat(id); return; }
+    peekGrow = true;
+    void selectChat(id);
+    setTimeout(() => { peek = null; peekGrow = false; }, 240);
+  }
+  let peekFolders = $state(false);
+  // Opening a chat takes its "unread" mark off.
+  $effect(() => { const id = $activeId; if (id && $markedUnread.has(id)) setMarkedUnread(id, false); });
   let peekScroll = $state<HTMLElement | null>(null);
   $effect(() => { if (peek && peekScroll) peekScroll.scrollTop = peekScroll.scrollHeight; });
   function isMine(m: ChatMessage) { return m.from === "me" || (!!$info?.username && m.from === $info.username); }
@@ -718,7 +733,7 @@
         class:pinned={!g && $pinnedChats.includes(c.id)}
         class:dragging={!g && dragPin?.active && dragPin.id === c.id}
         class:drop-before={!g && dragPin?.active && dragPin.id !== c.id && $pinnedChats.indexOf(c.id) === dragPin.over}
-        onpointerdown={(e) => { if (!g) pinDown(e, c.id); }}
+        onpointerdown={(e) => { if (!g) { pinDown(e, c.id); if (e.pointerType === "touch") peekDown(e, c.id); } }}
         onpointermove={(e) => { peekMove(e); pinMove(e); }}
         onpointerup={() => { peekCancel(); pinUp(); }}
         onpointercancel={() => { peekCancel(); dragPin = null; }}
@@ -750,7 +765,7 @@
           </div>
         {:else}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="avatar sz-44" class:lk class:ava-grp={c.id.startsWith("grp_") && !c.channel} class:ava-chan={c.channel} style="--gradient: {c.gradient}" onpointerdown={(e) => peekDown(e, c.id)} title={compact ? undefined : $t("Hold to peek")}>
+        <div class="avatar sz-44" class:lk class:ava-grp={c.id.startsWith("grp_") && !c.channel} class:ava-chan={c.channel} style="--gradient: {c.gradient}" onpointerdown={(e) => { if (e.pointerType !== "touch") peekDown(e, c.id); }} title={compact ? undefined : $t("Hold to peek")}>
           {lk ? "" : c.letter}
           {#if $avatars[c.id] && !lk}<img class="ava-img" src={$avatars[c.id]} alt="" loading="lazy" />{/if}
           {#if lk}<span class="lk-ic">{@html icons.lock}</span>{/if}
@@ -783,6 +798,8 @@
             {/if}
             {#if c.unread > 0 && c.id !== $activeId}
               {#key c.unread}<span class="chat-badge" class:muted={c.channel || $mutedChats.has(c.id)} in:scaleIn={{ start: 0.4, duration: 260, easing: backOut }}>{c.unread}</span>{/key}
+            {:else if $markedUnread.has(c.id) && c.id !== $activeId}
+              <span class="chat-badge mark" title={$t("Marked as unread")}></span>
             {:else if $pinnedChats.includes(c.id)}
               <span class="pin-ic" title={$t("Pinned")}><svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 3l5 5-3 1-4 4 1 5-2 2-4-4-5 5-1-1 5-5-4-4 2-2 5 1 4-4z"/></svg></span>
             {/if}
@@ -875,7 +892,7 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div class="peek-veil" onclick={dismissPeek} oncontextmenu={(e) => e.preventDefault()}>
-      <div class="peek" onclick={(e) => e.stopPropagation()}>
+      <div class="peek" class:grow={peekGrow} onclick={(e) => e.stopPropagation()}>
         <button class="peek-card" onclick={openFromPeek} title={$t("Open")}>
           <div class="peek-head">
             <div class="avatar sz-40" style="--gradient: {pc?.gradient ?? ''}">
@@ -907,12 +924,22 @@
           </div>
         </button>
         <div class="peek-menu" role="menu">
+          {#if peekFolders}
+            {#each $allFolders as f (f.id)}
+              <button onclick={() => toggleChatInFolder(f.id, pid)}>{isInFolder(f.id, pid) ? "✓ " : ""}{f.name}</button>
+            {/each}
+            <button onclick={() => { peekFolders = false; closePeek(); openFolderManager(); }}>{$t("New folder…")}</button>
+            <button onclick={() => (peekFolders = false)}>‹ {$t("Back")}</button>
+          {:else}
           <button onclick={openFromPeek}>{$t("Open")}</button>
-          {#if (pc?.unread ?? 0) > 0}<button onclick={() => { markRead(pid); closePeek(); }}>{$t("Mark as read")}</button>{/if}
+          <button onclick={() => { if ($allFolders.length) peekFolders = true; else { closePeek(); openFolderManager(); } }}>{$t("Add to folder")}</button>
+          {#if (pc?.unread ?? 0) > 0 || $markedUnread.has(pid)}<button onclick={() => { markRead(pid); setMarkedUnread(pid, false); closePeek(); }}>{$t("Mark as read")}</button>
+          {:else}<button onclick={() => { setMarkedUnread(pid, true); closePeek(); }}>{$t("Mark as unread")}</button>{/if}
           <button onclick={() => { pinChat(pid); closePeek(); }}>{$t($pinnedChats.includes(pid) ? "Unpin" : "Pin to top")}</button>
           <button onclick={() => { setMuted(pid); closePeek(); }}>{$t($mutedChats.has(pid) ? "Unmute" : "Mute notifications")}</button>
           <button onclick={() => { archiveChat(pid); closePeek(); }}>{$t($archived.has(pid) ? "Unarchive" : "Archive")}</button>
           {#if !pid.startsWith("grp_")}<button class="danger" onclick={() => void deleteChat(pid)}>{$t(pid === "__saved__" ? "Clear history" : "Delete chat")}</button>{/if}
+          {/if}
         </div>
       </div>
     </div>
@@ -1058,6 +1085,10 @@
     animation: peek-pop 0.26s cubic-bezier(0.2, 0.9, 0.25, 1.12);
   }
   @keyframes peek-pop { from { opacity: 0; transform: scale(0.88); } to { opacity: 1; transform: scale(1); } }
+  .chat-badge.mark { min-width: 12px; width: 12px; height: 12px; padding: 0; }
+  .peek.grow { animation: peek-grow .24s cubic-bezier(.3,.7,.2,1) forwards; }
+  .peek.grow .peek-menu { opacity: 0; transition: opacity .12s; }
+  @keyframes peek-grow { to { transform: scale(1.18); opacity: 0; } }
   .peek-card {
     display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto;
     padding: 0; border: 1px solid var(--border-strong); border-radius: calc(18px * var(--rk, 1)); overflow: hidden;

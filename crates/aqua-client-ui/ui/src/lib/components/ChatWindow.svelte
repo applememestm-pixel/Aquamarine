@@ -1384,6 +1384,23 @@
     return out;
   });
   let commentsAllowed = $derived(!!activeGroup && activeGroup.settings.comments !== false);
+  // Hold "Comments": a peek at just that post's comments (not the whole
+  // chat), like the long press on a chat in the list.
+  let cmtPeek = $state<Row | null>(null);
+  let cmtHeld = false;
+  let cmtT: ReturnType<typeof setTimeout> | null = null;
+  function cmtDown(e: PointerEvent, m: Row) {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    e.stopPropagation();
+    cmtT = setTimeout(() => { cmtHeld = true; cmtPeek = m; navigator.vibrate?.(12); }, 380);
+  }
+  function cmtUp() { if (cmtT) { clearTimeout(cmtT); cmtT = null; } }
+  const cmtPeekItems = $derived.by(() => {
+    if (!cmtPeek) return [];
+    const key = reactionKey(cmtPeek);
+    return comments.filter((c) => c.to === key).slice(-30);
+  });
+  $effect(() => { if (cmtPeek) return onBack(() => (cmtPeek = null)); });
   function openThread(row: Row, kind?: "comments" | "replies") {
     closeMenu();
     const k = kind ?? (activeGroup?.kind === "channel" ? "comments" : "replies");
@@ -3164,6 +3181,25 @@
         <button class="icon-btn" title={$t("Shared media & files")} onclick={toggleSharedMedia}>{@html icons.info}</button>
       </div>
     </header>
+    {#if phoneUI && rooms.length > 1 && activeGroup}
+      <!-- Phones: every room of the server as tabs under the header (like
+           Telegram's topics), not hidden behind the room switch. -->
+      <div class="room-tabs" data-hscroll role="tablist" aria-label={$t("Rooms")}>
+        {#each textRooms as r (r.id)}
+          {@const n = roomUnread(r)}
+          <button class="rt" class:on={activeRoom?.id === r.id && !fullVoice} role="tab" aria-selected={activeRoom?.id === r.id}
+            onclick={() => pickRoom(r)} oncontextmenu={(e) => openRoomMenu(e, r)}>
+            <span class="rt-ic">{r.emoji ?? "#"}</span>{r.name}{#if n > 0}<b>{n > 99 ? "99+" : n}</b>{/if}
+          </button>
+        {/each}
+        {#each rooms.filter((r) => r.kind === "voice") as r (r.id)}
+          {@const live = $activeGroupCalls[activeGroup.id]}
+          <button class="rt voice" class:on={fullVoice && voiceView[activeGroup.id] === r.id} role="tab" onclick={() => pickRoom(r)} oncontextmenu={(e) => openRoomMenu(e, r)}>
+            <span class="rt-ic">{r.emoji ?? "🔊"}</span>{r.name}{#if live?.users?.length}<i>{live.users.length}</i>{/if}
+          </button>
+        {/each}
+      </div>
+    {/if}
     {#if isGroup && activeGroup && !fullVoice}<GroupCallPanel gid={activeGroup.id} onExpand={rooms.length ? openVoiceFull : undefined} />{/if}
     {#if fullVoice && activeGroup}
       <div class="voice-full" class:with-chat={voiceChat} style:top="{headerH}px">
@@ -3678,7 +3714,10 @@
                 {@const vk = reactionKey(m)}
                 {#if isGroup && commentsAllowed && activeGroup?.kind === "channel"}
                   <!-- Telegram: a bar under every post — who commented, how many, "Leave a comment". -->
-                  <button class="cmt-bar" class:out={m.outgoing} onclick={() => openThread(m, "comments")}>
+                  <button class="cmt-bar" class:out={m.outgoing}
+                    onclick={() => { if (cmtHeld) { cmtHeld = false; return; } openThread(m, "comments"); }}
+                    onpointerdown={(e) => cmtDown(e, m)} onpointerup={cmtUp} onpointerleave={cmtUp} onpointercancel={cmtUp}
+                    oncontextmenu={(e) => { if (cmtPeek) e.preventDefault(); }}>
                     {#if nc}
                       <span class="cmt-avas">
                         {#each commentAuthors.get(vk) ?? [] as a (a)}
@@ -4087,6 +4126,27 @@
       {/if}
     </div>
     {/if}
+  {/if}
+  {#if cmtPeek}
+    {@const root = cmtPeek}
+    <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+    <div class="cp-veil" onclick={() => (cmtPeek = null)}>
+      <div class="cp-card" onclick={(e) => e.stopPropagation()}>
+        <div class="cp-head"><b>{$t("Comments")}</b><small>{cmtPeekItems.length}</small></div>
+        <div class="cp-root">{previewLine(root)}</div>
+        <div class="cp-list">
+          {#each cmtPeekItems as c (c.id)}
+            <div class="cp-row" class:mine={c.outgoing}>
+              <span class="cp-av" style:background-image={$avatars[c.from] ? `url("${$avatars[c.from]}")` : undefined}>{$avatars[c.from] ? "" : c.from.slice(0, 1).toUpperCase()}</span>
+              <div class="cp-b"><b>{c.from}</b><span>{c.t}</span><small>{c.time}</small></div>
+            </div>
+          {:else}
+            <div class="cp-empty">{$t("No comments yet")}</div>
+          {/each}
+        </div>
+        <button class="cp-open" onclick={() => { const r = root; cmtPeek = null; openThread(r, "comments"); }}>{$t("Open comments")}</button>
+      </div>
+    </div>
   {/if}
   {#if quoteChip && !menu.open}
     {@const qc = quoteChip}
@@ -4783,6 +4843,28 @@
   .cl-pill.missed .cl-ic { background: color-mix(in srgb, #ff4d6d 18%, transparent); color: #ff4d6d; }
   .cl-ic :global(svg) { width: 16px; height: 16px; }
   .cl-txt { display: flex; flex-direction: column; } .cl-txt b { font-size: 13.5px; } .cl-txt small { font-size: 11.5px; color: var(--fg-dim); }
+  .room-tabs { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 6px 10px 8px; border-bottom: 1px solid var(--border); flex-shrink: 0; overscroll-behavior-x: contain; }
+  .room-tabs::-webkit-scrollbar { display: none; }
+  .rt { flex-shrink: 0; display: inline-flex; align-items: center; gap: 5px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--border);
+    background: var(--bg-input); color: var(--fg-muted); font: 600 13px var(--font-ui); white-space: nowrap; cursor: pointer; }
+  .rt.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 45%, transparent); color: var(--accent); }
+  .rt b { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: #06070C; font-size: 11px; display: grid; place-items: center; }
+  .rt i { font-style: normal; font-size: 11px; color: #3BD671; }
+  .rt-ic { opacity: .8; }
+  .cp-veil { position: fixed; inset: 0; z-index: 390; display: grid; place-items: center; padding: 16px; background: rgba(0,0,0,.35);
+    backdrop-filter: blur(14px); animation: sp-in .2s ease-out; }
+  .cp-card { width: min(420px, 100%); max-height: min(70vh, 560px); display: flex; flex-direction: column; border-radius: calc(18px * var(--rk, 1));
+    background: var(--bg-chat, var(--bg-surface)); border: 1px solid var(--border-strong); overflow: hidden; box-shadow: 0 24px 60px -18px rgba(0,0,0,.7); }
+  .cp-head { display: flex; align-items: baseline; gap: 8px; padding: 12px 16px 4px; } .cp-head small { color: var(--fg-dim); }
+  .cp-root { margin: 4px 16px 8px; padding: 6px 10px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 6px; font-size: 13px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cp-list { flex: 1; overflow-y: auto; padding: 4px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .cp-row { display: flex; gap: 8px; align-items: flex-end; }
+  .cp-av { width: 28px; height: 28px; border-radius: var(--ava-r, 50%); flex-shrink: 0; background: var(--bg-input) center/cover; display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+  .cp-b { display: flex; flex-direction: column; gap: 1px; padding: 6px 10px; border-radius: 12px; background: var(--bg-input); max-width: 85%; }
+  .cp-row.mine .cp-b { background: color-mix(in srgb, var(--accent) 16%, var(--bg-input)); }
+  .cp-b b { font-size: 12px; color: var(--accent); } .cp-b span { font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; } .cp-b small { font-size: 10.5px; color: var(--fg-dim); align-self: flex-end; }
+  .cp-empty { color: var(--fg-dim); text-align: center; padding: 20px; }
+  .cp-open { margin: 8px 12px 12px; padding: 10px; border: none; border-radius: calc(12px * var(--rk, 1)); background: var(--accent); color: #06070C; font: 700 14px var(--font-ui); cursor: pointer; }
   .quote-chip { position: fixed; z-index: 380; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 6px;
     padding: 7px 14px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--bg-shell); color: var(--accent);
     font: 600 13.5px var(--font-ui); box-shadow: 0 10px 28px -10px rgba(0,0,0,.7); cursor: pointer; animation: sp-in .15s ease-out; }
