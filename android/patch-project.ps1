@@ -57,6 +57,16 @@ if ($ma) {
   # Server on this device (crates\aqua-client-ui\src\relay_host.rs).
   Copy-Item (Join-Path $PSScriptRoot 'AquaRelay.kt') (Join-Path $ma.DirectoryName 'AquaRelay.kt') -Force
   Write-Host '[patch] AquaRelay.kt (server on this device)'
+  # Home-screen widget (android\widget).
+  Copy-Item (Join-Path $PSScriptRoot 'widget\AquaWidget.kt') (Join-Path $ma.DirectoryName 'AquaWidget.kt') -Force
+  Copy-Item (Join-Path $PSScriptRoot 'widget\res\*') (Join-Path $app 'src\main\res') -Recurse -Force
+  Write-Host '[patch] AquaWidget.kt (home-screen widget)'
+}
+$x = [IO.File]::ReadAllText($m)
+if ($x -notmatch 'AquaWidget') {
+  $x = $x.Replace('</application>', '<receiver android:name=".AquaWidget" android:exported="false"><intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter><meta-data android:name="android.appwidget.provider" android:resource="@xml/aqua_widget_info" /></receiver>' + "`n    </application>")
+  [IO.File]::WriteAllText($m, $x)
+  Write-Host '[patch] home-screen widget receiver added'
 }
 $x = [IO.File]::ReadAllText($m)
 if ($x -notmatch 'AquaRelayService') {

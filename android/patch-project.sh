@@ -57,6 +57,18 @@ if ! grep -q AquaRelayService "$M"; then
     </application>' perl -0pi -e 's|</application>|$ENV{AQ_SVC}|' "$M"
   echo '[patch] foreground service for the server added'
 fi
+# 1c'''. Home-screen widget (android/widget).
+if [ -n "$MA" ]; then
+  cp -f "$HERE/widget/AquaWidget.kt" "$(dirname "$MA")/AquaWidget.kt"
+  mkdir -p "$APP/src/main/res"
+  cp -rf "$HERE/widget/res/." "$APP/src/main/res/"
+  echo '[patch] AquaWidget.kt (home-screen widget)'
+fi
+if ! grep -q AquaWidget "$M"; then
+  AQ_WDG='<receiver android:name=".AquaWidget" android:exported="false"><intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter><meta-data android:name="android.appwidget.provider" android:resource="@xml/aqua_widget_info" /></receiver>
+    </application>' perl -0pi -e 's|</application>|$ENV{AQ_WDG}|' "$M"
+  echo '[patch] home-screen widget receiver added'
+fi
 if ! grep -q BLUETOOTH_CONNECT "$M"; then
   AQ_BT='<uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />

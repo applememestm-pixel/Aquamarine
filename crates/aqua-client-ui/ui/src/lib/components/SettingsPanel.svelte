@@ -13,6 +13,7 @@
   import { autostartEnabled, setAutostart } from "../desktop";
   import { pickFolder } from "../dialog";
   const PHONE_UI = /android|iphone|ipad/i.test(navigator.userAgent);
+  import { hasWidget } from "../widget";
   import { plugins, pluginsOn, installPlugin, removePlugin, togglePlugin, EXAMPLE_PLUGIN } from "../plugins";
   import { NAV_ITEMS, navConf, moveNav, toggleNavHidden, resetNav } from "../navBar";
   import { ATTACH_ITEMS, attachFront, attachHidden, attachDock, attachBots, toggleAttachFront, toggleAttachHidden, moveAttach, toggleAttachBot, resetAttachMenu } from "../attachMenu";
@@ -1630,6 +1631,16 @@
       {/if}
 
       {#if section === "notifications"}
+      {#if hasWidget}
+      <section class="group">
+        <div class="label">{$t("Home-screen widget")}</div>
+        <div class="foot-note" style="margin:0 0 8px">{$t("Hold an empty spot on the home screen → Widgets → Aquamarine. It shows the chats with unread messages; with an app passcode — only how many.")}</div>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, widgetText: !x.widgetText }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Message text in the widget")}</div><div class="tr-sub">{$t("Off: only names and counts — anyone who sees your screen won't read your messages")}</div></div>
+          <span class="switch" class:on={!!$settings.widgetText}></span>
+        </button>
+      </section>
+      {/if}
       <section class="group">
         <div class="label">{$t("Notifications")}</div>
         <button class="toggle-row" onclick={() => toggle("notifySound")}>
