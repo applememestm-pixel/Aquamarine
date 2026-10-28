@@ -197,6 +197,22 @@
   <div class="ns-note">{$t("The ping is the time to your server through each proxy. Aquamarine doesn't run proxies itself: point it at one you have (a SOCKS5 tunnel, a VPN client's local port, a proxy from a friend). Messages are end-to-end encrypted either way.")}</div>
 </section>
 
+<section class="group">
+  <div class="label">{$t("DNS, VPN, zapret")}</div>
+  <details class="ns-faq">
+    <summary>{$t("Do they affect the connection?")}</summary>
+    <ul>
+      <li>{$t("Encryption — never. They only decide whether the app reaches the server.")}</li>
+      <li><b>DNS</b> — {$t("only when the server address is a domain name. An address made of numbers doesn't use DNS at all.")}</li>
+      <li><b>VPN</b> — {$t("with a VPN on, a home server at 192.168.… is usually out of reach: turn on split tunnelling or “Allow LAN”. A server on the internet works through a VPN, just slower.")}</li>
+      <li><b>{$t("VPN on the server's computer")}</b> — {$t("breaks incoming connections: leave aqua-server out of the VPN.")}</li>
+      <li><b>zapret / GoodbyeDPI</b> — {$t("usually no: they touch websites on ports 80 and 443, the app talks to port 7777.")}</li>
+      <li><b>{$t("Router")}</b> — {$t("from outside your Wi-Fi the server needs port 7777 forwarded (and a public IP).")}</li>
+    </ul>
+    <button class="ns-more" onclick={() => void api.openExternal("https://github.com/applememestm-pixel/Aquamarine/blob/main/docs/network.md")}>{$t("More, and how to check")} →</button>
+  </details>
+</section>
+
 <style>
   .ns-list { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 8px; }
   .ns-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; border: none; border-radius: calc(12px * var(--rk, 1)); background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
@@ -239,4 +255,7 @@
   .ns-qrcard { width: min(320px, calc(100vw - 32px)); display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 18px; text-align: center;
     border-radius: calc(18px * var(--rk, 1)); background: var(--bg-shell); border: 1px solid var(--border-strong); }
   .ns-qrcard small { color: var(--fg-dim); font-size: 12px; }
+  .ns-faq summary { cursor: pointer; font-weight: 600; font-size: 13.5px; padding: 6px 0; }
+  .ns-faq ul { margin: 6px 0 8px; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--fg-muted); line-height: 1.45; }
+  .ns-more { border: none; background: none; color: var(--accent); font: 600 12.5px var(--font-ui); cursor: pointer; padding: 4px 0; }
 </style>
