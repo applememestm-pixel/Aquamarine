@@ -994,7 +994,7 @@
   .pat.on { border-color: var(--accent); filter: none; }
   .field input.pat-own { width: 92px; padding: 6px 8px; font-size: 13px; }
   .username { display: flex; align-items: center; gap: 6px; }
-  .uid-chip { margin-top: 4px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border); background: transparent;
+  .uid-chip { margin: 6px 0 12px; align-self: flex-start; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border); background: transparent;
     color: var(--fg-dim); font: 600 11.5px var(--font-mono, monospace); letter-spacing: .04em; cursor: pointer; }
   .uid-chip:hover { color: var(--fg); border-color: var(--border-strong); }
   .qr-btn { border: none; background: none; padding: 2px; color: var(--fg-dim); cursor: pointer; display: grid; place-items: center; }

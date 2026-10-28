@@ -90,7 +90,14 @@ Aquamarine — мессенджер со сквозным шифрованием
   - `lib/power.ts` — энергосбережение (`power` — производный стор, классы `ps-*`); `lib/tabSwipe.ts`; `lib/links.ts` (YouTube пуст, пока владелец не даст адрес).
   - Почта: `directory.rs::send_smtp_any_port` (IPv4 первым), при неудаче — `fed::send_mail` к соседу.
   - Версии после 1.1.0: `1.1.0-N`. Android `versionCode` у `1.1.0-N` тот же, что у 1.1.0 (Tauri берёт только X.Y.Z) — установка поверх работает.
-  - Не сделано из списка: директ канала, боты и настройка нижней панели вложений, настройка нижней навигации, полупрозрачные панели, платформа плагинов (раздел «Экспериментальное» пока пуст), виджеты Android/iOS, QR серверов и приглашений.
+
+- **1.1.0-2** (пре-выпуск) — «доделай всё» 28.10:
+  - ID аккаунта: `users.uid` = `uid_for(identity_dh)` (детерминированно — у старых строк одинаков на всех узлах; у ботов в хеш подмешано имя). `fed_apply_user` ищет строку по `uid`; тот же @ник с другим ID — старший сохраняет имя, младший получает `displaced_name` (`имя_` + хвост ID) везде; локальный — через `move_account` + `move_live` (без пересылки старого имени). Клиент: `Transport::connect` спрашивает `/v1/me` и переходит на имя от сервера (`aqua://displaced`); `people.ts` помнит `uid` собеседника и при смене зовёт `follow_peer_by_uid`.
+  - Директ канала: `CDM_PREFIX`, `channel_dm_open`, отправка — через `send_message` для `dm~…` (только текст; `sendControl` для `dm~` ничего не шлёт). Включается `settings.direct` канала.
+  - `attachMenu.ts` (порядок = порядок `attachFront`, `attachHidden`, `attachDock`, `attachBots`), `navBar.ts` (`navConf`). Стекло: `html.glass`, `--glass-a`, `--glass-blur`; в чате `--above-h`/`--below-h` меряются по соседям `.msg-stage`, им ставится `data-gf`.
+  - Плагины: Web Worker из Blob (CSP `worker-src 'self' blob:`), до кода плагина из воркера удаляются `fetch`/XHR/WebSocket/… Хуки: `onSend`, `onIncoming`, `command`; встроенные `/команды` плагин занять не может.
+  - Виджет: `android/widget` (Kotlin + res), копируется в CI и `patch-project.*`; данные — JSON через `widget_update` (`lib/widget.ts`). iOS-виджет не сделан: нужен отдельный WidgetKit-таргет, App Group и подпись, а iOS-сборка у нас неподписанная.
+  - QR: `qr.ts` (`aqua:srv`, `aqua:join`, `saveInvite`/`inviteFor`), коды приглашений — `AdminConfig.invites`, `redeem` при запросе кода на почту. В `admin.html` встроен `qrcode-generator.js` (MIT) через `__QRLIB__`.
 
 ## Открытые вопросы
 

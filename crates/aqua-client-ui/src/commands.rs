@@ -2385,7 +2385,8 @@ fn direct_on(g: &Group) -> bool {
 fn ensure_cdm_book(s: &mut AppState, g: &Group, user: &str) -> String {
     let id = cdm_chat_id(&g.id, user);
     let me = s.username.clone().unwrap_or_default();
-    let name = if user == me { format!("{} · Direct", g.title) } else { format!("{user} · {}", g.title) };
+    // Names without words, so they read the same in every language.
+    let name = if user == me { format!("✉ {}", g.title) } else { format!("{user} → {}", g.title) };
     match s.chats.get_mut(&id) {
         Some(b) => { b.summary.name = name; }
         None => {
@@ -4112,6 +4113,9 @@ mod replies_tests {
         assert!(super::is_control_text("AQUA-CALL:v1:{}"));
         assert!(super::is_control_text(r#"[grpmsg:v1]{"gid":"g"}"#));
         assert!(!super::is_control_text("привет"));
+        assert!(super::is_control_text(r#"[cdm:v1]{"gid":"grp_x","user":"ann","body":"hi"}"#));
+        assert_eq!(super::parse_cdm_chat_id(&super::cdm_chat_id("grp_ab12", "ann")), Some(("grp_ab12".into(), "ann".into())));
+        assert_eq!(super::parse_cdm_chat_id("dm~grp_x"), None);
         assert!(!super::is_control_text(r#"[reply:v1]{"q":"x","t":"y"}"#));
         let m = crate::state::ChatMessage {
             id: "1".into(), from: "vpst".into(), time: "18:22".into(),
