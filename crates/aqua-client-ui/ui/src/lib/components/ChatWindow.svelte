@@ -21,7 +21,11 @@
     // On a phone the hold means "show it big", not the message menu (that
     // stays on a tap of the time / a swipe to reply).
     if (e.pointerType === "touch") e.stopPropagation();
-    peekT = setTimeout(() => { peekHeld = true; peek = { url, mime }; navigator.vibrate?.(12); }, 380);
+    peekT = setTimeout(() => {
+      // A second finger came: that's a pinch (pinchZoom.ts), not a hold.
+      if (document.documentElement.classList.contains("pinching")) return;
+      peekHeld = true; peek = { url, mime }; navigator.vibrate?.(12);
+    }, 380);
   }
   function peekEnd() {
     if (peekT) { clearTimeout(peekT); peekT = null; }

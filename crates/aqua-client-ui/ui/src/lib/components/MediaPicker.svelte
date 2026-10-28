@@ -284,7 +284,11 @@
   function holdStart(e: PointerEvent, it: EItem | SItem) {
     if (it.kind === "unicode" || e.button !== 0) return;
     if (holdTimer) clearTimeout(holdTimer);
-    holdTimer = setTimeout(() => { preview = it; suppressClick = true; holdTimer = null; }, 320);
+    holdTimer = setTimeout(() => {
+      holdTimer = null;
+      if (document.documentElement.classList.contains("pinching")) return; // two fingers: a pinch
+      preview = it; suppressClick = true;
+    }, 320);
   }
   function holdMove(e: PointerEvent) {
     if (!preview) return;
@@ -294,7 +298,11 @@
   }
   function holdEnd() {
     if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
-    if (preview) preview = null;
+    if (preview) {
+      preview = null;
+      // Released over another sticker: no click comes to clear this.
+      setTimeout(() => (suppressClick = false), 350);
+    }
   }
   function pickGuarded(it: EItem | SItem) {
     if (suppressClick) { suppressClick = false; return; }
@@ -522,12 +530,16 @@
     finally { importing = false; }
   }
 
-  // Releasing anywhere ends a press-and-hold preview.
+  // Releasing anywhere ends a press-and-hold preview. While it's open the
+  // finger slides from sticker to sticker: the list must not scroll then —
+  // a scroll cancelled the touch, and the preview closed on the first move.
   onMount(() => {
     const up = () => holdEnd();
+    const noScroll = (e: TouchEvent) => { if (preview) e.preventDefault(); };
     window.addEventListener("pointerup", up);
     window.addEventListener("pointercancel", up);
-    return () => { window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up); };
+    document.addEventListener("touchmove", noScroll, { passive: false });
+    return () => { window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up); document.removeEventListener("touchmove", noScroll); };
   });
 
   // ---- outside click / drag & drop ----

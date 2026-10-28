@@ -15,7 +15,6 @@
   const PHONE_UI = /android|iphone|ipad/i.test(navigator.userAgent);
   import { hasWidget } from "../widget";
   import { plugins, pluginsOn, installPlugin, removePlugin, togglePlugin, EXAMPLE_PLUGIN } from "../plugins";
-  import { NAV_ITEMS, navConf, moveNav, toggleNavHidden, resetNav } from "../navBar";
   import { ATTACH_ITEMS, attachFront, attachHidden, attachDock, attachBots, toggleAttachFront, toggleAttachHidden, moveAttach, toggleAttachBot, resetAttachMenu } from "../attachMenu";
   import { chatLocks } from "../chatLocks";
   import { askSetLock, askRemoveLock, askChangeLock } from "../chatLockUi";
@@ -1485,34 +1484,6 @@
             </div>
           </div>
         {/if}
-      </section>
-      <section class="group">
-        <div class="label">{$t("Tab bar")}</div>
-        <button class="toggle-row" onclick={() => navConf.update((c) => ({ ...c, on: !c.on }))}>
-          <div class="tr-text"><div class="tr-title">{$t("Show the tab bar")}</div><div class="tr-sub">{$t("Off: swipe left and right between tabs; Settings is the gear at the top")}</div></div>
-          <span class="switch" class:on={$navConf.on}></span>
-        </button>
-        {#if $navConf.on}
-          {#each $navConf.order as id, i (id)}
-            {@const it = NAV_ITEMS.find((x) => x.id === id)}
-            {@const hid = $navConf.hidden.includes(id)}
-            <div class="toggle-row am-row" class:off={hid}>
-              <div class="tr-text"><div class="tr-title">{$t(it?.label ?? id)}</div></div>
-              <button class="am-btn" disabled={i === 0} onclick={() => moveNav(id, -1)} aria-label={$t("Move up")}>↑</button>
-              <button class="am-btn" disabled={i === $navConf.order.length - 1} onclick={() => moveNav(id, 1)} aria-label={$t("Move down")}>↓</button>
-              <button class="switch-btn" disabled={id === "chats"} onclick={() => toggleNavHidden(id)} aria-label={$t("Show")}><span class="switch" class:on={!hid}></span></button>
-            </div>
-          {/each}
-          <button class="toggle-row" onclick={() => navConf.update((c) => ({ ...c, labels: !c.labels }))}>
-            <div class="tr-text"><div class="tr-title">{$t("Tab names")}</div></div>
-            <span class="switch" class:on={$navConf.labels}></span>
-          </button>
-          <button class="toggle-row" onclick={() => navConf.update((c) => ({ ...c, autoHide: !c.autoHide }))}>
-            <div class="tr-text"><div class="tr-title">{$t("Hide while scrolling")}</div><div class="tr-sub">{$t("Slips away as you scroll down, comes back when you scroll up")}</div></div>
-            <span class="switch" class:on={$navConf.autoHide}></span>
-          </button>
-        {/if}
-        <button class="mini-btn" onclick={resetNav}>{$t("Reset")}</button>
       </section>
       {/if}
       {/if}
