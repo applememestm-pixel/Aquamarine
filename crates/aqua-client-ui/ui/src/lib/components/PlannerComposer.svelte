@@ -80,7 +80,7 @@
     <div class="pc" role="dialog" aria-modal="true" aria-label={$t($plannerComposer.kind === "event" ? "New event" : "New checklist")}>
       <header class="pc-head">
         <b>{$plannerComposer.kind === "event" ? "📅 " + $t("New event") : "☑️ " + $t("New checklist")}</b>
-        <button class="pc-x" onclick={close} aria-label={$t("Close")}>✕</button>
+        <button data-x class="pc-x" onclick={close} aria-label={$t("Close")}>✕</button>
       </header>
       <div class="pc-body">
         <input class="pc-title" placeholder={$plannerComposer.kind === "event" ? $t("What's happening?") : $t("Checklist title")} bind:value={title} maxlength="120" />

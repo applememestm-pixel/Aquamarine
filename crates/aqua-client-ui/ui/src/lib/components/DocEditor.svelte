@@ -66,7 +66,7 @@
           <button class:on={!preview} onclick={() => (preview = false)}>{$t("Edit")}</button>
           <button class:on={preview} onclick={() => (preview = true)}>{$t("Preview")}</button>
         </div>
-        <button class="de-x" onclick={close} aria-label={$t("Close")}>✕</button>
+        <button data-x class="de-x" onclick={close} aria-label={$t("Close")}>✕</button>
       </header>
       {#if newer}
         <div class="de-newer">{tr("{u} saved a newer version.", { u: newer.by })} <button onclick={reload}>{$t("Load it")}</button></div>

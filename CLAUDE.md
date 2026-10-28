@@ -83,6 +83,15 @@ Aquamarine — мессенджер со сквозным шифрованием
   - Docker: сервер снова в образе `ghcr.io/<owner>/aquamarine-server` (job `relay-image` в `release.yml` берёт готовые linux-x64/arm64 бинарники, `docker/relay-bin.Dockerfile`; из исходников — `docker/relay.Dockerfile` со своим `.dockerignore`). Данные — том `/data`, контейнер `aquamarine-server`. Инструкция — `docs/docker.md` (и на сайте). Корневой `Dockerfile` — по-прежнему только сайт.
   - Сайт: тур — карусель (`motion.js`, `.tour`), ассеты в `site/assets` (Noto CC BY 4.0, DiceBear CC0, Wikimedia), наборы владельца — `tools/site-packs.sh` → `site/assets/packs/manifest.json`. Telegram-наборы без токена бота отсюда не скачать.
 
+- **1.1.0-1** (пре-выпуск) — список 27–28.10:
+  - Подпись к файлу: `FileEnvelope.caption` (провод — `cap`), `MessageKind::File.caption`, параметр `caption` у `attach_file*`/`attach_bytes`.
+  - Звонки в истории: `note_call` пишет системную строку `[call:v1]{dir,status,dur,video}`; `ChatWindow::callLine`.
+  - Телефон: `lib/back.ts` закрывает любой `[role=dialog][aria-modal=true]` и `[data-back]` (Esc → клик по `[data-x]`/`.close`). **Новое окно: крестик помечай `data-x`, боковую панель — `data-back`.** На Android `[data-x]` скрыт (`html.android`). Полноэкранный на телефоне диалог — `data-phone-full`.
+  - `lib/power.ts` — энергосбережение (`power` — производный стор, классы `ps-*`); `lib/tabSwipe.ts`; `lib/links.ts` (YouTube пуст, пока владелец не даст адрес).
+  - Почта: `directory.rs::send_smtp_any_port` (IPv4 первым), при неудаче — `fed::send_mail` к соседу.
+  - Версии после 1.1.0: `1.1.0-N`. Android `versionCode` у `1.1.0-N` тот же, что у 1.1.0 (Tauri берёт только X.Y.Z) — установка поверх работает.
+  - Не сделано из списка: директ канала, боты и настройка нижней панели вложений, настройка нижней навигации, полупрозрачные панели, платформа плагинов (раздел «Экспериментальное» пока пуст), виджеты Android/iOS, QR серверов и приглашений.
+
 ## Открытые вопросы
 
 - Подлагивание при смене чата и «зависание при открытии профиля» (24.10) не воспроизведены: список сообщений уже рисуется окнами по 40. Нужен лог `[aqua-fps]` / `[aqua-click]` с устройства владельца.

@@ -50,7 +50,7 @@
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="cc-veil" onclick={(e) => { if (e.target === e.currentTarget) close(); }}>
     <div class="cc" role="dialog" aria-modal="true" aria-label={$t("Sealed message")}>
-      <header class="cc-head"><b>✉️ {$t("Sealed message")}</b><button class="cc-x" onclick={close} aria-label={$t("Close")}>✕</button></header>
+      <header class="cc-head"><b>✉️ {$t("Sealed message")}</b><button data-x class="cc-x" onclick={close} aria-label={$t("Close")}>✕</button></header>
       <div class="cc-body">
         <p class="cc-note">{$t("It reaches them now but stays sealed until the condition is met. The text is encrypted here; the server keeps only the key and gives it to them when the time comes — neither can read it alone before.")}</p>
         <textarea rows="5" placeholder={$t("Your message…")} bind:value={text} maxlength="20000"></textarea>

@@ -6,6 +6,7 @@ import { showToast } from "./components/Toast.svelte";
 import { tr } from "./i18n";
 import { activeId } from "./stores";
 import { setChatLock, removeChatLock, unlockChat, lockNowChat } from "./chatLocks";
+import { hasPasscode, checkPasscode, confirmBiometric } from "./lock";
 
 export function askSetLock(id: string) {
   askInput({
@@ -25,16 +26,23 @@ export function askSetLock(id: string) {
   });
 }
 
-export function askRemoveLock(id: string) {
+/** Taking a chat's password off asks for the app's passcode (the one the
+ *  whole messenger opens with) — or the fingerprint — not the chat's own:
+ *  it's the owner's decision, like Telegram. With no app passcode set, the
+ *  chat's password still does. */
+export async function askRemoveLock(id: string) {
+  const done = () => { removeChatLock(id); closeInput(); showToast(tr("Password removed")); };
+  if (await confirmBiometric(tr("Remove the password"))) { done(); return; }
+  const app = hasPasscode();
   askInput({
     title: tr("Remove the password"),
-    fields: [{ label: tr("Current password"), secret: true }],
+    description: app ? tr("Enter the passcode of Aquamarine.") : undefined,
+    fields: [{ label: app ? tr("App passcode") : tr("Current password"), secret: true }],
     submitLabel: tr("Remove"),
     onSubmit: async ([p]) => {
-      if (!(await unlockChat(id, p ?? ""))) return tr("Wrong password");
-      removeChatLock(id);
-      closeInput();
-      showToast(tr("Password removed"));
+      const ok = app ? await checkPasscode(p ?? "") : await unlockChat(id, p ?? "");
+      if (!ok) return tr(app ? "Wrong passcode" : "Wrong password");
+      done();
       return null;
     },
   });

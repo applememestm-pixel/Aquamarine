@@ -26,6 +26,9 @@ function toggleIn(store: typeof archived, id: string, on?: boolean) {
 }
 export const setArchived = (id: string, on?: boolean) => toggleIn(archived, id, on);
 export const setMuted = (id: string, on?: boolean) => toggleIn(mutedChats, id, on);
+/** "Mark as unread" (Telegram): a dot on the chat until it's opened again. */
+export const markedUnread = persistedSet("aqua.markedUnread");
+export const setMarkedUnread = (id: string, on?: boolean) => toggleIn(markedUnread, id, on);
 export const isMuted = (id: string) => get(mutedChats).has(id);
 
 /** Pinned chats, in pin order (Telegram: up to 10, newest pin on top). */

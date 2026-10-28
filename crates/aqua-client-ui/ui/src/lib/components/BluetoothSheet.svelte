@@ -60,7 +60,7 @@
       <header class="bt-head">
         <span class="bt-logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 7 17 17 12 22 12 2 17 7 7 17"/></svg></span>
         <b>{$t("Send via Bluetooth")}</b>
-        <button class="bt-x" onclick={close} aria-label={$t("Close")}>✕</button>
+        <button data-x class="bt-x" onclick={close} aria-label={$t("Close")}>✕</button>
       </header>
       <div class="bt-body">
         <div class="bt-files">

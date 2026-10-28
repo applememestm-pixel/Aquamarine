@@ -54,6 +54,11 @@ class RelayArgs {
   var port: Int = 7777
 }
 
+@InvokeArg
+class UrlArgs {
+  var url: String = ""
+}
+
 @TauriPlugin
 class AquaRelayPlugin(private val activity: Activity) : Plugin(activity) {
   @Command
@@ -72,6 +77,20 @@ class AquaRelayPlugin(private val activity: Activity) : Plugin(activity) {
   fun stop(invoke: Invoke) {
     activity.stopService(Intent(activity, AquaRelayService::class.java))
     invoke.resolve(JSObject().put("ok", true))
+  }
+
+  /** A web or mail link in the browser / mail app ("What's new", About,
+   *  links in messages): Rust can't spawn xdg-open here. */
+  @Command
+  fun openUrl(invoke: Invoke) {
+    val args = invoke.parseArgs(UrlArgs::class.java)
+    try {
+      val i = Intent(Intent.ACTION_VIEW, Uri.parse(args.url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      activity.runOnUiThread { activity.startActivity(i) }
+      invoke.resolve(JSObject().put("ok", true))
+    } catch (e: Exception) {
+      invoke.reject("no app can open this link")
+    }
   }
 
   /** Start the app over in a fresh process: another account was picked and

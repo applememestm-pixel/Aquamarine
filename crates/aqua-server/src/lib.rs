@@ -907,10 +907,21 @@ async fn email_request(
                 .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()));
         }
     }
-    match state.directory.request_code_delivered_ex(&body.email, nonce, base.as_deref()).await {
-        Ok(d) => Ok(Json(EmailRequestResp { ok: true, dev_code: d.dev_code, delivery_failed: d.delivery_failed, error: d.error })),
-        Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
+    let (email, code, link) = state.directory.prepare_code(&body.email, nonce, base.as_deref())
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let d = state.directory.deliver_code(email.clone(), code.clone(), link.clone()).await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    // Our own mail server couldn't be reached (the provider blocks the
+    // port, a VPN…): a relay of the network with mail sends it instead.
+    if d.delivery_failed {
+        if let Some(f) = fed::current(&state) {
+            if f.send_mail(&email, &code, link.as_deref()).await {
+                state.directory.forget_unsent(&email, &code);
+                return Ok(Json(EmailRequestResp { ok: true, dev_code: None, delivery_failed: false, error: None }));
+            }
+        }
     }
+    Ok(Json(EmailRequestResp { ok: true, dev_code: d.dev_code, delivery_failed: d.delivery_failed, error: d.error }))
 }
 
 #[derive(Deserialize)]

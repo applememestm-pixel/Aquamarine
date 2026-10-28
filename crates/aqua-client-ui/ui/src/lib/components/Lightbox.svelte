@@ -252,9 +252,12 @@
     if (touches.size < 2) pinch = null;
   }
 
+  // Not zoomed in: a sideways swipe goes to the next / previous photo.
+  let swipe: { id: number; x: number; y: number } | null = null;
   function onPointerDown(e: PointerEvent) {
-    if (pinchDown(e)) return;
+    if (pinchDown(e)) { swipe = null; return; }
     suppressClick = false;
+    if (e.pointerType === "touch" && !canPan && total > 1) swipe = { id: e.pointerId, x: e.clientX, y: e.clientY };
     if (e.button !== 0 || !canPan) return;
     if ((e.target as HTMLElement).closest("button")) return;
     drag = { id: e.pointerId, x: e.clientX, y: e.clientY, tx: panX, ty: panY, moved: false };
@@ -272,6 +275,15 @@
   }
   function onPointerUp(e: PointerEvent) {
     pinchUp(e);
+    if (swipe && e.pointerId === swipe.id) {
+      const dx = e.clientX - swipe.x, dy = e.clientY - swipe.y;
+      swipe = null;
+      if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.4 && touches.size === 0) {
+        suppressClick = true;
+        go(dx < 0 ? 1 : -1);
+        return;
+      }
+    }
     if (!drag || e.pointerId !== drag.id) return;
     suppressClick = drag.moved;
     try { stageEl?.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
@@ -422,10 +434,14 @@
     };
   });
 
+  // A big photo drawn at its full size and scaled down tore into tiles on
+  // Android after zooming in and out (one huge GPU layer): it's laid out at
+  // most 2048 px on its long side and the scale makes up the rest.
+  const layoutK = $derived(natW && natH ? Math.min(1, 2048 / Math.max(natW, natH)) : 1);
   const imgStyle = $derived(
     natW
-      ? `width:${natW}px;height:${natH}px;` +
-        `transform:translate(-50%,-50%) translate(${panX}px,${panY}px) rotate(${rot}deg) scale(${zoom});` +
+      ? `width:${natW * layoutK}px;height:${natH * layoutK}px;` +
+        `transform:translate(-50%,-50%) translate(${panX}px,${panY}px) rotate(${rot}deg) scale(${zoom / layoutK});` +
         `transition:${dragging || !settled ? "none" : "transform 0.18s cubic-bezier(.2,.7,.2,1)"};`
       : "transform:translate(-50%,-50%);",
   );
@@ -473,7 +489,7 @@
             {@render ico("M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5")}
           {/if}
         </button>
-        <button class="gbtn close" onclick={closeLightbox} title={$t("Close (Esc)")} aria-label={$t("Close")}>
+        <button data-x class="gbtn close" onclick={closeLightbox} title={$t("Close (Esc)")} aria-label={$t("Close")}>
           {@render ico("M6 6l12 12M18 6L6 18")}
         </button>
       </div>
@@ -697,7 +713,6 @@
     position: absolute; left: 50%; top: 50%;
     max-width: none; max-height: none;
     transform-origin: center center;
-    will-change: transform;
     border-radius: calc(4px * var(--rk, 1));
     box-shadow: 0 10px 60px rgba(0, 0, 0, 0.55);
     -webkit-user-drag: none;

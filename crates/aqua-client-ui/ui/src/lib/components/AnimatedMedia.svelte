@@ -84,6 +84,7 @@
 
 <script lang="ts">
   import { settings } from "../theme";
+  import { power } from "../power";
   import { mediaSupport, streamSrc } from "../media";
   /**
    * One element for every kind of sticker / emoji / GIF we show: static
@@ -110,7 +111,7 @@
   }
   let { src, mime = null, alt = "", play: playProp = "auto", fit = "contain", class: klass = "", lazy = false, emoji = false }: Props = $props();
   // Power saving: animated stickers / emoji off → they play on hover only.
-  const allowed = $derived(emoji ? ($settings.power?.emoji ?? true) : $settings.autoplayStickers && ($settings.power?.stickers ?? true));
+  const allowed = $derived(emoji ? $power.emoji : $settings.autoplayStickers && $power.stickers);
   const play = $derived(playProp === "auto" && !allowed ? "hover" : playProp);
 
   const kind = $derived(mediaKind(src, mime));

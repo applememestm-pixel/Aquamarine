@@ -216,11 +216,11 @@ export const api = {
   deleteMessagesLocal: (peerId: string, ids: string[]): Promise<number> => invoke("delete_messages_local", { peerId, ids }),
   deleteChat:         (peerId: string): Promise<void> => invoke("delete_chat", { peerId }),
   markChatRead:       (peerId: string): Promise<void> => invoke("mark_chat_read", { peerId }),
-  attachFile:         (peer_id: string, file_path: string): Promise<AttachResult>  => invoke("attach_file", { peerId: peer_id, filePath: file_path }),
+  attachFile:         (peer_id: string, file_path: string, caption?: string): Promise<AttachResult>  => invoke("attach_file", { peerId: peer_id, filePath: file_path, caption: caption || null }),
   /** Re-send a file with a "Forwarded from" header (JSON). */
   forwardFile:        (peer_id: string, file_path: string, header: string): Promise<AttachResult> => invoke("forward_file", { peerId: peer_id, filePath: file_path, header }),
-  attachFileAs:       (peerId: string, filePath: string, mode: "file" | "media" | "compressed"): Promise<AttachResult> => invoke("attach_file_as", { peerId, filePath, mode }),
-  attachBytes:        (peerId: string, name: string, mime: string, bytes: number[]): Promise<AttachResult> => invoke("attach_bytes", { peerId, name, mime, bytes }),
+  attachFileAs:       (peerId: string, filePath: string, mode: "file" | "media" | "compressed", caption?: string): Promise<AttachResult> => invoke("attach_file_as", { peerId, filePath, mode, caption: caption || null }),
+  attachBytes:        (peerId: string, name: string, mime: string, bytes: number[], caption?: string): Promise<AttachResult> => invoke("attach_bytes", { peerId, name, mime, bytes, caption: caption || null }),
   downloadFile:       (peer_id: string, message_id: string): Promise<DownloadResult> => invoke("download_file", { peerId: peer_id, messageId: message_id }),
   sendCallSignal:     (peer_id: string, signal: object): Promise<void> =>
     invoke("send_call_signal", { peerId: peer_id, signalJson: JSON.stringify(signal) }),
@@ -241,6 +241,7 @@ export const api = {
   cacheRemoteMedia:   (url: string, max_mb?: number): Promise<CachedMedia>         => invoke("cache_remote_media", { url, maxMb: max_mb ?? null }),
   telegraphPage:      (path: string): Promise<TelegraphPage>                        => invoke("telegraph_page", { path }),
   openExternal:       (url: string): Promise<void>                                  => invoke("open_external", { url }),
+  noteCall:           (peerId: string, direction: "in" | "out", status: string, duration: number, video: boolean): Promise<void> => invoke("note_call", { peerId, direction, status, duration, video }),
   openSavedFile:      (path: string): Promise<void>                                 => invoke("open_saved_file", { path }),
   uploadAttachment:   (peer_id: string, file_path: string, keep?: boolean): Promise<ArticleMedia> => invoke("upload_attachment", { peerId: peer_id, filePath: file_path, keep: keep ?? null }),
   prepareBannerVideo: (path: string): Promise<string>                                  => invoke("prepare_banner_video", { path }),

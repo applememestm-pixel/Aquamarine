@@ -41,6 +41,9 @@
 }
 
 html, body { height: 100%; }
+/* Fields with width:100% and padding stayed inside their box (they ran out
+   of dialogs on phones — the new-poll window). */
+input, textarea, select { box-sizing: border-box; }
 body {
   margin: 0;
   background: var(--bg-void);
@@ -396,7 +399,7 @@ html.autoscrolling.as-down, html.autoscrolling.as-down * { cursor: url("data:ima
   [role="dialog"][aria-modal="true"] { overflow-x: hidden; }
   /* …except the ones that ARE the whole screen (photo viewer): capped, they
      stopped 16px short and sat shifted to the left. */
-  [role="dialog"][aria-modal="true"].fullscreen-layer { max-width: none !important; max-height: none !important; }
+  [role="dialog"][aria-modal="true"]:is(.fullscreen-layer, [data-phone-full]) { max-width: none !important; max-height: none !important; }
 }
 
 /* Settings → Appearance → See-through menus: frosted glass for menus,
@@ -435,3 +438,11 @@ html.contrast-rows[data-theme="light"] .alt:not(.active):not(:hover):not(.kb):no
 html.ps-ui *, html.ps-ui *::before, html.ps-ui *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; scroll-behavior: auto !important; }
 html.ps-chat .messages *, html.ps-chat .messages *::before, html.ps-chat .messages *::after { animation: none !important; transition: none !important; }
 html.ps-calls .stage *, html.ps-calls .stage *::before, html.ps-calls .stage *::after, html.ps-calls .gc *, html.ps-calls .gc *::before { animation: none !important; transition: none !important; }
+
+/* Android: windows close with Back (the button or the gesture), like
+   Telegram — no × on them (lib/back.ts closes them, data-x marks the
+   buttons it presses). iOS has no Back, so it keeps them. */
+html.android [data-x] { display: none !important; }
+
+/* Power saving → Particles: the ambient glows behind the app stay still. */
+html.ps-particles body::before, html.ps-particles body::after { animation: none !important; }

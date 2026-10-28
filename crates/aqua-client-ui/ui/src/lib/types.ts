@@ -42,6 +42,8 @@ export type MessageKind =
       category: string | null;
       /** Stickers: their pack, `tg:<name>` or `own:<folder>`. */
       pack?: string | null;
+      /** Text under the photo / video / file, sent in the same message. */
+      caption?: string | null;
     } }
   | { type: "article";         content: {
       title: string;

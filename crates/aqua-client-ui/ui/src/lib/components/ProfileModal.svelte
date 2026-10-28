@@ -426,10 +426,10 @@
     onclick={onBackdrop}
     onkeydown={(e) => { if (e.target === e.currentTarget && (e.key === "Escape" || e.key === "Enter")) closeProfile(); }}
   >
-    <div class="sheet" class:wide={!editing && !privPage} class:ed={editing && isMe && !!draft} style:--card={cardColor} role="dialog" aria-modal="true" tabindex="-1">
+    <div class="sheet" data-phone-full class:wide={!editing && !privPage} class:ed={editing && isMe && !!draft} style:--card={cardColor} role="dialog" aria-modal="true" tabindex="-1">
       <!-- Close stays put; banner + body scroll together, so the avatar is
            never clipped under the banner when the form is long. -->
-      <button class="close" onclick={closeProfile} title={$t("Close (Esc)")}>×</button>
+      <button data-x class="close" onclick={closeProfile} title={$t("Close (Esc)")}>×</button>
       <div class="scroll">
       <div class="banner" style:background={shownBanner && !isVideoUrl(shownBanner) ? `center / cover no-repeat url("${shownBanner}")` : `linear-gradient(135deg, ${bannerA}, ${bannerB})`}>
         {#if shownBanner && isVideoUrl(shownBanner)}
@@ -922,6 +922,14 @@
   .eg-x { position: absolute; top: 4px; right: 4px; width: 20px; height: 20px; border-radius: 50%; border: none; cursor: pointer;
     background: rgba(0,0,0,.6); color: #fff; font-size: 13px; line-height: 1; opacity: 0; transition: opacity .15s; }
   .ed-game:hover .eg-x, .eg-x:focus-visible { opacity: 1; }
+  /* Phones: the profile is a page of its own — the whole screen, no ×
+     (Back closes it), like Telegram. */
+  @media (max-width: 720px) {
+    .backdrop { padding: 0 !important; place-items: stretch; }
+    .sheet, .sheet.wide, .sheet.ed { width: 100% !important; max-width: none !important; height: 100% !important; max-height: none !important;
+      border-radius: 0; border: none; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+    .close { display: none; }
+  }
   @media (max-width: 760px) {
     .sheet.ed { height: auto; }
     .sheet.ed .scroll { display: block; overflow-y: auto; }
@@ -959,11 +967,11 @@
   /* The whole card takes its colour (from the banner unless set by hand). */
   .sheet {
     background:
-      linear-gradient(180deg, color-mix(in srgb, var(--card) 34%, var(--bg-shell)) 0%, color-mix(in srgb, var(--card) 12%, var(--bg-shell)) 55%, color-mix(in srgb, var(--card) 8%, var(--bg-shell)) 100%) !important;
+      linear-gradient(180deg, color-mix(in srgb, var(--card) 62%, var(--bg-shell)) 0%, color-mix(in srgb, var(--card) 38%, var(--bg-shell)) 50%, color-mix(in srgb, var(--card) 26%, var(--bg-shell)) 100%) !important;
     border-color: color-mix(in srgb, var(--card) 35%, var(--border)) !important;
   }
   .sheet :global(.section), .sheet .card, .sheet .act-card {
-    background: color-mix(in srgb, var(--card) 14%, rgba(0, 0, 0, 0.22)) !important;
+    background: color-mix(in srgb, var(--card) 22%, rgba(0, 0, 0, 0.30)) !important;
     border-color: color-mix(in srgb, var(--card) 22%, transparent) !important;
   }
   .sheet .avatar { border-color: color-mix(in srgb, var(--card) 34%, var(--bg-shell)); }
@@ -971,7 +979,7 @@
   .pattern { position: absolute; inset: 0; pointer-events: none; background-size: 168px 112px; opacity: 0.32; mix-blend-mode: soft-light; }
   .card-row, .pat-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .es-pick { display: flex; flex-wrap: wrap; gap: 4px; max-height: 132px; overflow-y: auto; padding: 2px; }
-  .es-opt { filter: none; display: grid; place-items: center; }
+  .pat.es-opt { filter: none; opacity: 1; display: grid; place-items: center; }
   .es-opt :global(.es) { margin: 0; }
   .field small.es-note { font-size: 11.5px; color: var(--fg-dim); text-transform: none; letter-spacing: 0; font-weight: 400; }
   .chip { border: 1px solid var(--border); background: none; color: var(--fg-muted); border-radius: 100px; padding: 5px 11px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }

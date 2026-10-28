@@ -13,6 +13,8 @@
   import { openRegistration, closeRegistration, registrationDismissed, wizardHold } from "./lib/components/RegistrationWizard.svelte";
   import { initTheme, settings } from "./lib/theme";
   import { get } from "svelte/store";
+  import { startPower } from "./lib/power";
+  import { startTabSwipe } from "./lib/tabSwipe";
   import NavRail from "./lib/components/NavRail.svelte";
   import ChatList from "./lib/components/ChatList.svelte";
   import ChatWindow from "./lib/components/ChatWindow.svelte";
@@ -184,6 +186,8 @@
     window.addEventListener("contextmenu", noNativeMenu);
     initGroupCalls();
     initTheme();
+    startPower();
+    startTabSwipe();
     maybeShowWhatsNew(get(settings).whatsNew !== false);
     // Message times in this device's time zone (Rust can't ask Android for it).
     void api.setTzOffset(-new Date().getTimezoneOffset()).catch(() => {});

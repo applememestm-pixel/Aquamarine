@@ -21,6 +21,10 @@ class MainActivity : TauriActivity() {
   override fun onWebViewCreate(webView: WebView) {
     webView.settings.useWideViewPort = true
     webView.settings.loadWithOverviewMode = false
+    // The system's font size made every text bigger than the layout around
+    // it (rows wrapped word by word, buttons ran off the screen). The app
+    // has its own text size and interface scale (Appearance) instead.
+    webView.settings.textZoom = 100
   }
 
   // Android 17 (targetSdk 37) blocks connections to local / private addresses

@@ -94,10 +94,10 @@
 </script>
 
 {#if $sharedMediaOpen}
-  <aside class="sm">
+  <aside class="sm" data-back>
     <div class="sm-head">
       <h3>{$t("Shared media")}</h3>
-      <button class="sm-close" onclick={closeSharedMedia} title={$t("Close")}>×</button>
+      <button data-x class="sm-close" onclick={closeSharedMedia} title={$t("Close")}>×</button>
     </div>
     <div class="sm-tabs">
       {#each [["media","Media"],["files","Files"],["voice","Voice"],["links","Links"]] as t}

@@ -606,7 +606,7 @@
         {#if page === "info" && admin}
           <button class="ib" onclick={() => { resetDrafts(group); go("manage"); }} title={$t("Manage")} aria-label={$t("Manage")}>{@html I.pencil}</button>
         {/if}
-        <button class="ib x" onclick={closeGroupPanel} aria-label={$t("Close")}>×</button>
+        <button data-x class="ib x" onclick={closeGroupPanel} aria-label={$t("Close")}>×</button>
       </div>
 
       <div class="body">

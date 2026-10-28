@@ -190,7 +190,7 @@
           <input bind:value={title} maxlength="64" onblur={rename} onkeydown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} aria-label={$t("Pack name")} />
           <span class="pm-sub">{isEmoji ? $t("Emoji pack") : $t("Sticker pack")} · {items.length}/{LIMIT[isEmoji ? "emoji" : "sticker"]}</span>
         </div>
-        <button class="pm-x" onclick={closePackManager} aria-label={$t("Close")}>×</button>
+        <button data-x class="pm-x" onclick={closePackManager} aria-label={$t("Close")}>×</button>
       </header>
 
       <div class="pm-tools">

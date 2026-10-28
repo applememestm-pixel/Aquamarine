@@ -49,11 +49,11 @@
   }
 </script>
 
-<aside class="th" aria-label={title}>
+<aside class="th" data-back aria-label={title}>
   <header class="th-head">
     <b>{title}</b>
     <span class="th-n">{items.length}</span>
-    <button class="th-x" onclick={onClose} aria-label={$t("Close")}>✕</button>
+    <button data-x class="th-x" onclick={onClose} aria-label={$t("Close")}>✕</button>
   </header>
   <div class="th-list" bind:this={listEl}>
     <div class="th-root">

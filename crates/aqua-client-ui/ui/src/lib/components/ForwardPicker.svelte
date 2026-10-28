@@ -140,7 +140,7 @@
       <div class="fw-head">
         <h3>{$t("Forward to…")}</h3>
         <span class="fw-count">{tr("{n} selected", { n: items.length })}</span>
-        <button class="fw-close" onclick={closeForward} title={$t("Close (Esc)")}>×</button>
+        <button data-x class="fw-close" onclick={closeForward} title={$t("Close (Esc)")}>×</button>
       </div>
 
       <!-- Preview of what goes out, with the author in the corner (Telegram). -->

@@ -126,7 +126,15 @@ export function reactionSource(r: string): { pack: string; title: string; local:
 /** Image/animation URL for a reaction, or null if it's a plain emoji / unknown file. */
 export function reactionUrl(r: string, items = get(reactionPack).items): { url: string; mime: string } | null {
   const { file, pack } = parseReaction(r);
-  if (!file) return null;
+  if (!file) {
+    // A plain emoji next to the pixel-art pack stood out: the pack's own
+    // picture for it if there is one, else a pixelated copy.
+    if (!items.length || !r || r.length > 16) return null;
+    const same = items.find((i) => strip(i.emoji) === strip(r));
+    if (same) return { url: same.url, mime: same.mime };
+    const px = pixelEmoji(r);
+    return px ? { url: px, mime: "image/png" } : null;
+  }
   if (!pack || pack === REACTION_PACK) {
     const it = items.find((x) => x.file === file);
     if (it) return { url: it.url, mime: it.mime };
@@ -219,4 +227,32 @@ export async function importReactionPack(token: string): Promise<number> {
   try { localStorage.setItem("aqua.tgBotToken", token); } catch { /* ignore */ }
   await loadReactionPack();
   return r.imported;
+}
+
+/** An emoji redrawn as pixel art (16×16, scaled up without smoothing). */
+const pixelCache = new Map<string, string>();
+export function pixelEmoji(e: string): string {
+  const hit = pixelCache.get(e);
+  if (hit !== undefined) return hit;
+  let out = "";
+  try {
+    const small = document.createElement("canvas");
+    small.width = small.height = 16;
+    const c = small.getContext("2d");
+    if (c) {
+      c.textAlign = "center"; c.textBaseline = "middle";
+      c.font = '14px "Noto Color Emoji", "Apple Color Emoji", "Segoe UI Emoji", sans-serif';
+      c.fillText(e, 8, 9);
+      // Hard edges: alpha either on or off, like the pack's pixels.
+      const img = c.getImageData(0, 0, 16, 16);
+      for (let i = 3; i < img.data.length; i += 4) img.data[i] = img.data[i] > 90 ? 255 : 0;
+      c.putImageData(img, 0, 0);
+      const big = document.createElement("canvas");
+      big.width = big.height = 64;
+      const b = big.getContext("2d");
+      if (b) { b.imageSmoothingEnabled = false; b.drawImage(small, 0, 0, 64, 64); out = big.toDataURL("image/png"); }
+    }
+  } catch { out = ""; }
+  pixelCache.set(e, out);
+  return out;
 }

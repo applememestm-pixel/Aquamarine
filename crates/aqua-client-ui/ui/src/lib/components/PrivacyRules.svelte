@@ -12,6 +12,25 @@
   import { avatars } from "../people";
   import { openProfile } from "./ProfileModal.svelte";
   import { t, tn } from "../i18n";
+  import { chats } from "../stores";
+  import { contacts } from "../contacts";
+  import { settings } from "../theme";
+
+  // Typing a name: people you know, starting with @ (Settings switch below).
+  const suggestOn = $derived($settings.privSuggest !== false);
+  const known = $derived.by(() => {
+    const m = new Map<string, string>();
+    for (const c of $chats) if (!c.id.startsWith("grp_") && !c.id.startsWith("__") && c.id !== "me") m.set(c.id, c.name);
+    for (const [u, c] of Object.entries($contacts)) if (!m.has(u)) m.set(u, (c as { name?: string }).name ?? u);
+    return [...m.entries()];
+  });
+  function hits(q: string, taken: string[]): [string, string][] {
+    const s = q.trim().replace(/^@/, "").toLowerCase();
+    if (!suggestOn || !s) return [];
+    return known.filter(([u, n]) => !taken.includes(u) && (u.toLowerCase().includes(s) || n.toLowerCase().includes(s))).slice(0, 6);
+  }
+  /** Keep the @ in front while typing (the field is for usernames). */
+  function atFirst(v: string): string { const x = v.replace(/^@+/, ""); return x ? "@" + x : ""; }
 
   let open = $state<PrivKey | null>(null);
   let addAllow = $state(""), addDeny = $state("");
@@ -30,7 +49,7 @@
   function add(kind: "allow" | "deny") {
     if (!open) return;
     const raw = kind === "allow" ? addAllow : addDeny;
-    for (const u of raw.split(/[\s,]+/)) if (u.trim()) setException(open, u.trim().toLowerCase(), kind);
+    for (const u of raw.split(/[\s,]+/)) if (u.trim().replace(/^@/, "")) setException(open, u.trim().replace(/^@/, "").toLowerCase(), kind);
     if (kind === "allow") addAllow = ""; else addDeny = "";
   }
   const AUD: [Audience, string][] = [["everybody", "Everybody"], ["contacts", "My contacts"], ["nobody", "Nobody"]];
@@ -85,9 +104,16 @@
         </div>
       {/each}
       <div class="pr-add">
-        <input placeholder={$t("Add username…")} bind:value={addDeny} onkeydown={(e) => { if (e.key === "Enter") add("deny"); }} />
+        <input placeholder="@username" value={addDeny} oninput={(e) => (addDeny = atFirst((e.currentTarget as HTMLInputElement).value))}
+          autocapitalize="off" autocomplete="off" spellcheck="false" onkeydown={(e) => { if (e.key === "Enter") add("deny"); }} />
         <button onclick={() => add("deny")}>{$t("Add")}</button>
       </div>
+      {#each hits(addDeny, rule.deny) as [u, n] (u)}
+        <button class="pr-row pr-hit" onclick={() => { if (open) setException(open, u, "deny"); addDeny = ""; }}>
+          <span class="pr-ava">{#if $avatars[u]}<img src={$avatars[u]} alt="" />{:else}{u.charAt(0).toUpperCase()}{/if}</span>
+          <span class="pr-name">{n} <small>@{u}</small></span>
+        </button>
+      {/each}
     </section>
   {/if}
   {#if rule.who !== "everybody"}
@@ -101,11 +127,24 @@
         </div>
       {/each}
       <div class="pr-add">
-        <input placeholder={$t("Add username…")} bind:value={addAllow} onkeydown={(e) => { if (e.key === "Enter") add("allow"); }} />
+        <input placeholder="@username" value={addAllow} oninput={(e) => (addAllow = atFirst((e.currentTarget as HTMLInputElement).value))}
+          autocapitalize="off" autocomplete="off" spellcheck="false" onkeydown={(e) => { if (e.key === "Enter") add("allow"); }} />
         <button onclick={() => add("allow")}>{$t("Add")}</button>
       </div>
+      {#each hits(addAllow, rule.allow) as [u, n] (u)}
+        <button class="pr-row pr-hit" onclick={() => { if (open) setException(open, u, "allow"); addAllow = ""; }}>
+          <span class="pr-ava">{#if $avatars[u]}<img src={$avatars[u]} alt="" />{:else}{u.charAt(0).toUpperCase()}{/if}</span>
+          <span class="pr-name">{n} <small>@{u}</small></span>
+        </button>
+      {/each}
     </section>
   {/if}
+  <section class="pr-group">
+    <button class="pr-row" onclick={() => settings.update((x) => ({ ...x, privSuggest: x.privSuggest === false }))}>
+      <span class="pr-name">{$t("Suggest people while typing")}</span>
+      <span class="pr-val">{suggestOn ? $t("On") : $t("Off")}</span>
+    </button>
+  </section>
   <div class="pr-note pad">{$t("You can also set these for one person from their profile → Privacy for this person.")}</div>
 {/if}
 
@@ -117,6 +156,8 @@
     background: none; border: none; color: var(--fg); font: inherit; font-size: 14px; text-align: left; cursor: pointer;
   }
   .pr-person { cursor: default; }
+  .pr-hit { padding: 6px 10px; }
+  .pr-hit small { color: var(--fg-dim); margin-left: 4px; }
   .pr-row:hover { background: var(--bg-hover); }
   .pr-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pr-val { font-size: 13px; color: var(--accent); white-space: nowrap; }
