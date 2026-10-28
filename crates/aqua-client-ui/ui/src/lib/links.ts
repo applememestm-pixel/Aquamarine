@@ -17,6 +17,5 @@ export const LINKS: Link[] = ([
   { id: "tg", label: "Telegram", sub: "Channel", url: "https://t.me/+IA-5SVnogZRhOTdi", icon: TG },
   { id: "tg-dev", label: "Telegram", sub: "Developer", url: "https://t.me/ShadowIn_TheNight", icon: TG },
   { id: "x", label: "X", sub: "Developer", url: "https://x.com/vpst27", icon: X },
-  // The channel's address isn't known yet: the row shows once it's set.
-  { id: "yt", label: "YouTube", sub: "Channel", url: "", icon: YT },
+  { id: "yt", label: "YouTube", sub: "Channel", url: "https://www.youtube.com/@VPST27", icon: YT },
 ] as Link[]).filter((l) => l.url);
