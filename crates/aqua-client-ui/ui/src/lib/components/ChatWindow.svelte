@@ -45,6 +45,7 @@
   import { api, assetUrl, sendChatControl } from "../tauri";
   import { openFingerprint, verifiedKeys, keyState } from "./FingerprintModal.svelte";
   import { showToast } from "./Toast.svelte";
+  import { pluginCommands, pluginsOnSend, runPluginCommand } from "../plugins";
   import { ATTACH_ITEMS, attachFront, attachHidden, attachDock, attachBots, toggleAttachBot, type AttachId } from "../attachMenu";
   import { openRoomRequest } from "../roomNav";
   import { AUTODL_DEFAULT } from "../theme";
@@ -1026,7 +1027,7 @@
   function autoresize() {}
 
   async function submit() {
-    const t = text.trim();
+    let t = text.trim();
     if (!t) return;
     const chat = $activeChat;
 
@@ -1068,6 +1069,20 @@
       }
     }
     const original = text;
+    // Plugins (Settings → Experimental): "/cmd args" of a plugin runs it and
+    // sends its answer; then every plugin's onSend may change the text.
+    const pc = /^\/([a-z0-9_]+)(?:\s+([\s\S]*))?$/i.exec(t);
+    const plug = pc ? $pluginCommands.find((c) => c.cmd === pc[1].toLowerCase()) : undefined;
+    if (plug && chat) {
+      const out = await runPluginCommand(plug, (pc?.[2] ?? "").trim(), chat.id);
+      if (!out) { text = ""; return; }
+      t = out;
+    }
+    if (chat) {
+      const tp = await pluginsOnSend(chat.id, t);
+      if (tp === null) { showToast(tr("A plugin stopped this message")); return; }
+      t = tp;
+    }
     const rt = replyTarget;
     text = "";
     replyTarget = null;
@@ -1189,7 +1204,9 @@
     { cmd: "lenny", desc: "( ͡° ͜ʖ ͡°)", run: () => replaceText("( ͡° ͜ʖ ͡°) ") },
     { cmd: "spoiler", desc: $t("Hidden text: ||like this||"), run: () => replaceText("||") },
     { cmd: "help", desc: $t("Keyboard shortcuts and formatting"), run: () => { text = ""; shortcutsOpen.set(true); } },
-  ]);
+  ].concat($pluginCommands.map((c) => ({ cmd: c.cmd, desc: "🧩 " + (c.desc || c.plugin), run: () => replaceText(`/${c.cmd} `) })))
+    // A plugin can't take a built-in command's name, nor two plugins one name.
+    .filter((c, i, all) => all.findIndex((x) => x.cmd === c.cmd) === i));
   let slashIdx = $state(0);
   let slashHidden = $state("");
   let slashMatches = $derived.by(() => {

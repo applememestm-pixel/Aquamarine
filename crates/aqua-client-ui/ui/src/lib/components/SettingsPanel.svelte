@@ -13,6 +13,7 @@
   import { autostartEnabled, setAutostart } from "../desktop";
   import { pickFolder } from "../dialog";
   const PHONE_UI = /android|iphone|ipad/i.test(navigator.userAgent);
+  import { plugins, pluginsOn, installPlugin, removePlugin, togglePlugin, EXAMPLE_PLUGIN } from "../plugins";
   import { NAV_ITEMS, navConf, moveNav, toggleNavHidden, resetNav } from "../navBar";
   import { ATTACH_ITEMS, attachFront, attachHidden, attachDock, attachBots, toggleAttachFront, toggleAttachHidden, moveAttach, toggleAttachBot, resetAttachMenu } from "../attachMenu";
   import { chatLocks } from "../chatLocks";
@@ -122,6 +123,8 @@
   let detail = $state(false);
   // Phones have no keyboard shortcuts — hide that row there.
   let phone = $state(isPhone());
+  /** Settings → Experimental → Plugins: code being pasted (null: closed). */
+  let pluginPaste = $state<string | null>(null);
   onMount(() => {
     const mq = window.matchMedia("(max-width: 720px)");
     const on = () => { phone = mq.matches; };
@@ -1902,6 +1905,43 @@
         <div class="label">{$t("Experimental")}</div>
         <div class="bots-note">{$t("Features that are still being tried out. They may change, break or disappear in the next versions.")}</div>
       </section>
+      <section class="group">
+        <div class="label">🧩 {$t("Plugins")}</div>
+        <button class="toggle-row" onclick={() => pluginsOn.update((v) => !v)}>
+          <div class="tr-text"><div class="tr-title">{$t("Plugins")}</div>
+            <div class="tr-sub">{$t("Small JavaScript add-ons, like in exteraGram: commands, changing what you send, reacting to messages.")}</div></div>
+          <span class="switch" class:on={$pluginsOn}></span>
+        </button>
+        {#if $pluginsOn}
+          <div class="bots-note">{$t("A plugin sees the messages it's given, but runs locked away: no network, no access to your keys, files or the rest of the app. Install only plugins you trust.")}</div>
+          {#each $plugins as pl (pl.id)}
+            <div class="toggle-row am-row" class:off={!pl.enabled}>
+              <div class="tr-text"><div class="tr-title">{pl.name} <span class="pill-tag">{pl.version}</span></div>
+                <div class="tr-sub">{pl.description || "—"}{pl.author ? ` · ${pl.author}` : ""}</div></div>
+              <button class="mini-btn" onclick={() => { if (confirm(tr("Remove the plugin “{n}”?", { n: pl.name }))) removePlugin(pl.id); }}>{$t("Remove")}</button>
+              <button class="switch-btn" onclick={() => togglePlugin(pl.id)} aria-label={$t("On")}><span class="switch" class:on={pl.enabled}></span></button>
+            </div>
+          {:else}
+            <div class="foot-note" style="margin:0 0 8px">{$t("No plugins yet.")}</div>
+          {/each}
+          <div class="pl-acts">
+            <label class="mini-btn">{$t("Install from file…")}
+              <input type="file" accept=".js,.mjs,.txt,text/javascript" hidden onchange={async (e) => {
+                const f = (e.currentTarget as HTMLInputElement).files?.[0];
+                if (!f) return;
+                try { const p = installPlugin(await f.text()); showToast(tr("Plugin “{n}” installed", { n: p.name })); } catch (err) { showToast(String(err)); }
+                (e.currentTarget as HTMLInputElement).value = "";
+              }} />
+            </label>
+            <button class="mini-btn" onclick={() => (pluginPaste = pluginPaste == null ? "" : null)}>{$t("Paste code")}</button>
+            <button class="mini-btn" onclick={() => { const p = installPlugin(EXAMPLE_PLUGIN); showToast(tr("Plugin “{n}” installed", { n: p.name })); }}>{$t("Example plugin")}</button>
+          </div>
+          {#if pluginPaste != null}
+            <textarea class="pl-code" rows="8" spellcheck="false" placeholder={"// @name My plugin\naqua.command(\"hi\", \"Say hi\", () => \"Hi!\");"} bind:value={pluginPaste}></textarea>
+            <button class="mini-btn" disabled={!pluginPaste.trim()} onclick={() => { try { const p = installPlugin(pluginPaste ?? ""); pluginPaste = null; showToast(tr("Plugin “{n}” installed", { n: p.name })); } catch (err) { showToast(String(err)); } }}>{$t("Install")}</button>
+          {/if}
+        {/if}
+      </section>
       {/if}
 
       {#if section === "power"}
@@ -2721,6 +2761,9 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     border: 1px solid var(--border); background: var(--bg-input); color: var(--fg-muted); cursor: pointer; font: 700 14px var(--font-ui); }
   .am-btn:disabled { opacity: .35; cursor: default; }
   .am-btn svg { width: 16px; height: 16px; }
+  .pl-acts { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+  .pl-code { width: 100%; font: 12px/1.5 var(--font-mono, monospace); background: var(--bg-input); color: var(--fg); border: 1px solid var(--border);
+    border-radius: calc(10px * var(--rk, 1)); padding: 8px 10px; margin-bottom: 8px; resize: vertical; }
   .switch-btn { background: none; border: none; padding: 0; cursor: pointer; display: flex; }
   .tr-text { min-width: 0; }
   .tr-title { font-size: 13.5px; font-weight: 600; color: var(--fg); }
