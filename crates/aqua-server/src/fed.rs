@@ -383,6 +383,17 @@ pub struct Hello { url: String, #[serde(default)] peers: Vec<String> }
 
 /// A relay of the network says hello: it's added to our peers if new, and
 /// gets the list of relays we know (that's how they find each other).
+/// History records changed after `since` (ms): `[[user, key, updated_at]]`.
+pub async fn h_hist_list(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<Since>) -> Result<impl IntoResponse, StatusCode> {
+    check(&state, &headers, "GET", &format!("/v1/fed/hist?since={}", q.since), b"")?;
+    Ok(Json(state.directory.fed_hist_since(q.since)))
+}
+
+pub async fn h_hist_get(State(state): State<AppState>, headers: HeaderMap, Path((user, k)): Path<(String, String)>) -> Result<impl IntoResponse, StatusCode> {
+    check(&state, &headers, "GET", &format!("/v1/fed/hist/{user}/{k}"), b"")?;
+    state.directory.hist_get(&user, &k).ok_or(StatusCode::NOT_FOUND)
+}
+
 pub async fn h_hello(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Result<Json<serde_json::Value>, StatusCode> {
     let fed = check(&state, &headers, "POST", "/v1/fed/hello", &body)?;
     let h: Hello = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -514,13 +525,38 @@ pub fn spawn_announcer(state: AppState) {
 pub struct Cursors {
     users: std::collections::HashMap<String, i64>,
     backups: std::collections::HashMap<String, i64>,
+    hist: std::collections::HashMap<String, i64>,
 }
 
 pub async fn sync_once(state: &AppState, cursors: &mut Cursors) {
     if let Some(fed) = current(state) {
         for peer in fed.cfg.peers.clone() {
             sync_peer(state, &fed, &peer, &mut cursors.users, &mut cursors.backups).await;
+            sync_hist(state, &fed, &peer, &mut cursors.hist).await;
         }
+    }
+}
+
+/// Encrypted chat history of accounts (client history_sync.rs): a device may
+/// talk to any relay of the network and still find it.
+async fn sync_hist(state: &AppState, fed: &Fed, peer: &str, since: &mut std::collections::HashMap<String, i64>) {
+    loop {
+        let from = *since.get(peer).unwrap_or(&0);
+        let Some(r) = fed.get(peer, &format!("/v1/fed/hist?since={from}")).await else { return };
+        let Ok(rows) = r.json::<Vec<(String, String, i64)>>().await else { return };
+        if rows.is_empty() { return; }
+        let mut last = from;
+        for (user, k, at) in &rows {
+            last = last.max(*at);
+            if !crate::directory::Directory::valid_name(user) || k.len() > 64 { continue; }
+            if let Some(b) = fed.get(peer, &format!("/v1/fed/hist/{user}/{k}")).await {
+                if let Ok(bytes) = b.bytes().await {
+                    state.directory.fed_apply_hist(user, k, &bytes, *at);
+                }
+            }
+        }
+        since.insert(peer.to_string(), last);
+        if rows.len() < 1000 { return; }
     }
 }
 

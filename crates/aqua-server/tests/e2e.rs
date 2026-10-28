@@ -662,6 +662,22 @@ async fn one_account_on_two_devices() {
     let gp = recv(&mut p_ws).await;
     assert_eq!(gp.from, b_addr);
 
+    // The account's encrypted history: A stores, B (same account) reads it
+    // right away; the key id is written once; a stranger sees nothing.
+    let put = |c: &Client, k: &str, body: &'static [u8]| http.put(format!("{base}/v1/me/hist/{k}")).bearer_auth(c.token.clone()).body(body).send();
+    assert!(put(&a, "kid", b"k-a").await.unwrap().status().is_success());
+    assert_eq!(put(&b, "kid", b"k-b").await.unwrap().status().as_u16(), 409, "the first device's key stays");
+    let r: serde_json::Value = put(&a, "abc123", b"sealed page").await.unwrap().json().await.unwrap();
+    let seq = r["seq"].as_i64().unwrap();
+    let list: serde_json::Value = http.get(format!("{base}/v1/me/hist?since=0")).bearer_auth(&b.token).send().await.unwrap().json().await.unwrap();
+    assert_eq!(list.as_array().unwrap().iter().map(|x| x["k"].as_str().unwrap()).collect::<Vec<_>>(), ["kid", "abc123"]);
+    let got = http.get(format!("{base}/v1/me/hist/abc123")).bearer_auth(&b.token).send().await.unwrap().bytes().await.unwrap();
+    assert_eq!(&got[..], b"sealed page");
+    let none: serde_json::Value = http.get(format!("{base}/v1/me/hist?since={seq}")).bearer_auth(&b.token).send().await.unwrap().json().await.unwrap();
+    assert!(none.as_array().unwrap().is_empty());
+    assert_eq!(http.get(format!("{base}/v1/me/hist/abc123")).bearer_auth(&eve.token).send().await.unwrap().status().as_u16(), 403);
+    assert_eq!(http.put(format!("{base}/v1/me/hist/BAD!")).bearer_auth(&a.token).body("x").send().await.unwrap().status().as_u16(), 400);
+
     // B's view of the account; B signs A (the primary) out and takes over.
     let mine: serde_json::Value = http.get(format!("{base}/v1/me/devices")).bearer_auth(&b.token).send().await.unwrap().json().await.unwrap();
     assert_eq!(mine.as_array().unwrap().iter().filter(|d| d["current"] == true).count(), 1);

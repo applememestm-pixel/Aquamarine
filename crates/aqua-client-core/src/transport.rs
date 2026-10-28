@@ -591,6 +591,46 @@ impl Transport {
         Ok(())
     }
 
+    // ---- Encrypted history shared by my devices (/v1/me/hist) ----
+
+    /// Records changed after `since`: (key, seq).
+    pub async fn hist_list(&self, since: i64) -> Result<Vec<(String, i64)>, TransportError> {
+        let url = format!("{}/v1/me/hist?since={since}", self.server_url.trim_end_matches('/'));
+        let r = self.http.get(&url).bearer_auth(self.bearer().await?).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        let rows: Vec<serde_json::Value> = r.json().await?;
+        Ok(rows.into_iter().filter_map(|v| Some((v["k"].as_str()?.to_string(), v["seq"].as_i64()?))).collect())
+    }
+
+    /// One record; None if there's none.
+    pub async fn hist_get(&self, k: &str) -> Result<Option<Vec<u8>>, TransportError> {
+        let url = format!("{}/v1/me/hist/{k}", self.server_url.trim_end_matches('/'));
+        let r = self.http.get(&url).bearer_auth(self.bearer().await?).send().await?;
+        if r.status().as_u16() == 404 {
+            return Ok(None);
+        }
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(Some(r.bytes().await?.to_vec()))
+    }
+
+    /// Store a record → its seq. 409 (`Server{status: 409}`) for a `kid`
+    /// that's already there with another value.
+    pub async fn hist_put(&self, k: &str, data: Vec<u8>) -> Result<i64, TransportError> {
+        let url = format!("{}/v1/me/hist/{k}", self.server_url.trim_end_matches('/'));
+        let r = self.http.put(&url).bearer_auth(self.bearer().await?).body(data).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        let v: serde_json::Value = r.json().await?;
+        Ok(v["seq"].as_i64().unwrap_or(0))
+    }
+
+    pub fn server_url(&self) -> &str { &self.server_url }
+
     /// Download an encrypted blob by CID. The caller is expected to
     /// re-verify the SHA-256 before trusting the bytes.
     pub async fn download_blob(&self, cid: &str) -> Result<Vec<u8>, TransportError> {

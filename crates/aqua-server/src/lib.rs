@@ -1588,6 +1588,51 @@ async fn backup_put(
     Ok(Json(serde_json::json!({ "size": size, "updated_at": at })))
 }
 
+// ---------- Encrypted history shared by an account's devices ----------------
+//
+// The client (history_sync.rs) keeps its chats here, encrypted with a key
+// only the account's devices have; keys are opaque hashes. A new device
+// downloads everything at once, the others ask "what changed since N".
+
+/// One record (a page of a chat, a chat's card, the groups) at most.
+pub const HIST_RECORD_LIMIT: usize = 8 * 1024 * 1024;
+
+fn hist_key_ok(k: &str) -> bool {
+    (1..=64).contains(&k.len()) && k.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
+
+#[derive(Deserialize)]
+struct HistSince { #[serde(default)] since: i64 }
+
+/// `GET /v1/me/hist?since=N` — `[{"k", "seq", "size"}]`, oldest first, ≤ 2000.
+async fn hist_list(State(state): State<AppState>, Caller(dh): Caller, Query(q): Query<HistSince>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let user = caller_username(&state, &dh)?;
+    let rows = state.directory.hist_list(&user, q.since, 2000);
+    Ok(Json(serde_json::json!(rows.into_iter().map(|(k, seq, size)| serde_json::json!({ "k": k, "seq": seq, "size": size })).collect::<Vec<_>>())))
+}
+
+/// `GET /v1/me/hist/:k` — the encrypted record.
+async fn hist_get(State(state): State<AppState>, Caller(dh): Caller, Path(k): Path<String>) -> Result<Vec<u8>, (StatusCode, String)> {
+    let user = caller_username(&state, &dh)?;
+    if !hist_key_ok(&k) { return Err((StatusCode::BAD_REQUEST, "bad key".into())); }
+    state.directory.hist_get(&user, &k).ok_or((StatusCode::NOT_FOUND, String::new()))
+}
+
+/// `PUT /v1/me/hist/:k` — store a record → `{"seq"}`. The key `kid` (the id
+/// of the account's history key) is written once: another value → 409.
+async fn hist_put(State(state): State<AppState>, Caller(dh): Caller, Path(k): Path<String>, body: Bytes) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let user = caller_username(&state, &dh)?;
+    if !hist_key_ok(&k) { return Err((StatusCode::BAD_REQUEST, "bad key".into())); }
+    if body.is_empty() || body.len() > HIST_RECORD_LIMIT { return Err((StatusCode::PAYLOAD_TOO_LARGE, "record too large".into())); }
+    let seq = state.directory.hist_put(&user, &k, &body, k == "kid").map_err(|e| match e {
+        directory::DirError::Conflict => (StatusCode::CONFLICT, e.to_string()),
+        directory::DirError::TooLarge => (StatusCode::INSUFFICIENT_STORAGE, e.to_string()),
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    })?;
+    state.fed_kick.notify_waiters();
+    Ok(Json(serde_json::json!({ "seq": seq })))
+}
+
 async fn backup_meta(
     State(state): State<AppState>,
     Caller(dh_pub): Caller,
@@ -2459,6 +2504,10 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/backup", axum::routing::put(backup_put).get(backup_meta).delete(backup_delete)
             .layer(DefaultBodyLimit::max(BACKUP_LIMIT + 1024)))
         .route("/v1/backup/fetch", post(backup_fetch))
+        .route("/v1/me/hist",            get(hist_list))
+        .route("/v1/me/hist/:k",         get(hist_get).put(hist_put).layer(DefaultBodyLimit::max(HIST_RECORD_LIMIT + 1024)))
+        .route("/v1/fed/hist",           get(fed::h_hist_list))
+        .route("/v1/fed/hist/:user/:k",  get(fed::h_hist_get))
         .route("/v1/fed/peers", get(fed::h_peers))
         .route("/v1/fed/hello", post(fed::h_hello))
         .route("/v1/fed/ping", get(fed::h_ping))
