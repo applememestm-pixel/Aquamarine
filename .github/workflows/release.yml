@@ -257,6 +257,12 @@ jobs:
           svc='<service android:name=".AquaRelayService" android:exported="false" android:foregroundServiceType="specialUse"><property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Hosts the Aquamarine relay server for the user and their contacts" /></service>\n    </application>'
           sed -i "s#</application>#${svc}#" "$m"
           grep -n 'AquaRelayService\|FOREGROUND' "$m"
+          # Home-screen widget: unread chats (android/widget)
+          cp ../../android/widget/AquaWidget.kt "$(dirname "$(find gen/android/app/src/main/java -name MainActivity.kt | head -1)")/AquaWidget.kt"
+          cp -r ../../android/widget/res/* gen/android/app/src/main/res/
+          wdg='<receiver android:name=".AquaWidget" android:exported="false"><intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter><meta-data android:name="android.appwidget.provider" android:resource="@xml/aqua_widget_info" /></receiver>\n    </application>'
+          sed -i "s#</application>#${wdg}#" "$m"
+          grep -n 'AquaWidget' "$m"
           # In-app updates (updates.rs) hand the downloaded APK to the installer
           sed -i '0,/<application/s##<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />\n    <application#' "$m"
           grep -n REQUEST_INSTALL_PACKAGES "$m"

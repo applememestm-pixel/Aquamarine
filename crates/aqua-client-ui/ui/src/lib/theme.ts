@@ -213,6 +213,12 @@ export interface Settings {
   /** The same for groups / servers and for channels. */
   avatarRadiusGroup?: number;
   avatarRadiusChannel?: number;
+  /** Phones: floating see-through panels (header, message field, tab bar)
+   *  like the new Telegram, and how opaque they are (0 — only the outline). */
+  /** Android widget: show the last message's text (off: names and counts). */
+  widgetText?: boolean;
+  glass?: boolean;
+  glassAlpha?: number;
   // --- Window title bar (desktop) ---
   titleChatName?: boolean;
   titleAccount?: boolean;
@@ -449,6 +455,16 @@ function apply(s: Settings) {
   root.style.setProperty("--ava-r", pct(s.avatarRadius));
   root.style.setProperty("--ava-r-group", pct(s.avatarRadiusGroup ?? s.avatarRadius));
   root.style.setProperty("--ava-r-chan", pct(s.avatarRadiusChannel ?? s.avatarRadius));
+  // Glass panels: opacity of the panel fill and a blur that fades with it.
+  root.classList.toggle("glass", !!s.glass);
+  if (s.glass) {
+    const a = Math.max(0, Math.min(100, s.glassAlpha ?? 55));
+    root.style.setProperty("--glass-a", `${a}%`);
+    root.style.setProperty("--glass-blur", a === 0 ? "0px" : `${Math.round(6 + a * 0.18)}px`);
+  } else {
+    root.style.removeProperty("--glass-a");
+    root.style.removeProperty("--glass-blur");
+  }
   // Power saving classes: lib/power.ts (it also watches the battery).
   root.style.setProperty("--menu-alpha", `${Math.round((s.menuAlpha ?? MENU_ALPHA) * 100)}%`);
 

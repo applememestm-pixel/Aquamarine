@@ -129,6 +129,32 @@ pub struct FedUser {
     /// Hash of the recovery check; older relays don't send it.
     #[serde(default)]
     pub recovery: String,
+    /// The account's ID (see [`uid_for`]); older relays don't send it.
+    #[serde(default)]
+    pub uid: String,
+}
+
+/// An account's ID, like Telegram's: a 10-digit number that never changes,
+/// whatever the @username. Relays compare accounts by it when they join, so
+/// two different people with the same @name both keep their accounts.
+/// Derived from the identity key the account was created with, so every
+/// relay computes the same ID for rows from before IDs existed.
+pub fn uid_for(identity_dh: &[u8]) -> String {
+    use sha2::Digest;
+    let h = sha2::Sha256::new().chain_update(b"aqua-uid\0").chain_update(identity_dh).finalize();
+    let n = u64::from_be_bytes([h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7]]);
+    (1_000_000_000 + n % 9_000_000_000).to_string()
+}
+
+/// What applying a peer's account row did here.
+#[derive(Debug, Default, PartialEq)]
+pub struct FedApplied {
+    pub applied: bool,
+    /// The @name the row has here (another one when it was displaced).
+    pub name: String,
+    /// A local account lost its @name to an older account with the same
+    /// name from the peer: (old name, the name it has now).
+    pub displaced: Option<(String, String)>,
 }
 
 fn no_devices() -> String { "[]".into() }
@@ -217,11 +243,13 @@ pub struct Profile {
     pub banner_ver: i64,
     /// Version of the "favourite track" audio file; 0 = none.
     pub music_ver: i64,
+    /// The account's ID (never changes; see [`uid_for`]).
+    pub uid: String,
 }
 
 /// Columns selected for a [`Profile`], in the order `profile_from_row` reads.
 const PROFILE_COLS: &str =
-    "username, display_name, about, phone, is_bot, created_at, extra, avatar_ver, banner_ver, music_ver";
+    "username, display_name, about, phone, is_bot, created_at, extra, avatar_ver, banner_ver, music_ver, uid";
 
 fn profile_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Profile> {
     let extra: String = r.get(6)?;
@@ -236,6 +264,7 @@ fn profile_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Profile> {
         avatar_ver: r.get(7)?,
         banner_ver: r.get(8)?,
         music_ver: r.get(9)?,
+        uid: r.get(10)?,
     })
 }
 
@@ -342,7 +371,7 @@ impl MediaKind {
     }
 }
 
-fn now_secs() -> u64 {
+pub(crate) fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
@@ -464,6 +493,8 @@ impl Directory {
             "ALTER TABLE users ADD COLUMN devices TEXT NOT NULL DEFAULT '[]'",
             // SHA-256 of the account's recovery check (see `set_recovery`).
             "ALTER TABLE users ADD COLUMN recovery TEXT NOT NULL DEFAULT ''",
+            // The account's ID (see `uid_for`); filled by `fill_uids`.
+            "ALTER TABLE users ADD COLUMN uid TEXT NOT NULL DEFAULT ''",
         ] {
             if let Err(e) = db.execute(stmt, []) {
                 if !e.to_string().contains("duplicate column") {
@@ -501,9 +532,58 @@ impl Directory {
             WHEN NEW.updated_at = OLD.updated_at
             BEGIN UPDATE users SET updated_at = max(OLD.updated_at + 1, CAST(strftime('%s','now') AS INTEGER) * 1000) WHERE username = NEW.username; END;
             CREATE INDEX IF NOT EXISTS idx_users_updated ON users(updated_at);
+            CREATE INDEX IF NOT EXISTS idx_users_uid ON users(uid);
             "#,
         )?;
+        Self::fill_uids(db);
         Ok(())
+    }
+
+    /// Give every account without an ID its ID (new rows, rows from before
+    /// IDs). Peers compute the same IDs, so this changes nothing between them.
+    fn fill_uids(db: &Connection) {
+        let rows: Vec<(String, Vec<u8>, i64)> = match db.prepare("SELECT username, identity_dh, is_bot FROM users WHERE uid = ''") {
+            Ok(mut st) => st
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .map(|rows| rows.flatten().collect())
+                .unwrap_or_default(),
+            Err(_) => return,
+        };
+        for (name, dh, bot) in rows {
+            // A bot's key is its owner's: its ID mixes in its name.
+            let uid = if bot != 0 { uid_for(&[dh.as_slice(), b"bot:", name.as_bytes()].concat()) } else { uid_for(&dh) };
+            let _ = db.execute("UPDATE users SET uid=?1 WHERE username=?2", rusqlite::params![uid, name]);
+        }
+    }
+
+    /// The account's ID.
+    pub fn uid_of(&self, username: &str) -> Option<String> {
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT uid FROM users WHERE username=?1", rusqlite::params![username.trim().to_lowercase()], |r| r.get(0)).ok()
+    }
+
+    /// The @username an ID has now (people find each other by ID too).
+    pub fn username_by_uid(&self, uid: &str) -> Option<String> {
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT username FROM users WHERE uid=?1", rusqlite::params![uid.trim()], |r| r.get(0)).ok()
+    }
+
+    /// A free @name for an account that lost its own to an older account
+    /// when relays joined: `name_1234` (the end of its ID), longer if taken.
+    /// The same on every relay, so they agree without asking each other.
+    fn displaced_name(db: &Connection, name: &str, uid: &str) -> String {
+        for n in [4usize, 6, uid.len()] {
+            let tail = &uid[uid.len().saturating_sub(n)..];
+            let base: String = name.chars().take(32 - tail.len() - 1).collect();
+            let cand = format!("{base}_{tail}");
+            let other: Option<String> = db
+                .query_row("SELECT uid FROM users WHERE username=?1", rusqlite::params![cand], |r| r.get(0))
+                .ok();
+            if other.is_none_or(|o| o == uid) {
+                return cand;
+            }
+        }
+        format!("u{uid}")
     }
 
     pub fn open() -> anyhow::Result<Self> {
@@ -859,6 +939,7 @@ impl Directory {
                 now_secs() as i64,
             ],
         )?;
+        Self::fill_uids(&db);
         // Consume the ticket so it can't be reused.
         let _ = db.execute("UPDATE email_codes SET ticket=NULL WHERE ticket=?1", rusqlite::params![ticket]);
         tracing::info!(%username, "user registered");
@@ -1327,7 +1408,7 @@ impl Directory {
         let db = self.db.lock().unwrap();
         let Ok(mut st) = db.prepare(
             "SELECT username, identity_dh, email, display_name, about, phone, is_bot, created_at,
-                    extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices, recovery
+                    extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices, recovery, uid
              FROM users WHERE updated_at > ?1 AND is_bot = 0 ORDER BY updated_at LIMIT 500",
         ) else { return Vec::new() };
         st.query_map(rusqlite::params![since], |r| {
@@ -1349,72 +1430,138 @@ impl Directory {
                 updated_at: r.get(14)?,
                 devices: r.get(15)?,
                 recovery: r.get(16)?,
+                uid: r.get(17)?,
             })
         })
         .map(|rows| rows.flatten().collect())
         .unwrap_or_default()
     }
 
-    /// Apply a peer's row if it is newer than ours. Returns true if applied.
-    pub fn fed_apply_user(&self, u: &FedUser) -> bool {
-        let Ok(dh) = hex::decode(&u.identity_dh) else { return false };
+    /// Apply a peer's row if it is newer than ours.
+    ///
+    /// Accounts are matched by ID ([`uid_for`]), not by @name: the same ID
+    /// under a new name is a rename; the same name under another ID is a
+    /// different person (two relays that ran alone and then joined). Then
+    /// both accounts stay: the older one keeps the name, the newer one gets
+    /// `name_1234` on every relay and its owner picks a new name.
+    pub fn fed_apply_user(&self, u: &FedUser) -> FedApplied {
+        let mut out = FedApplied::default();
+        let Ok(dh) = hex::decode(&u.identity_dh) else { return out };
         if dh.len() != 32 || !Self::valid_username(&u.username) {
-            return false;
+            return out;
         }
-        let db = self.db.lock().unwrap();
-        let ours: Option<i64> = db
-            .query_row("SELECT updated_at FROM users WHERE username=?1", rusqlite::params![u.username], |r| r.get(0))
+        let uid = if u.uid.len() == 10 && u.uid.bytes().all(|b| b.is_ascii_digit()) { u.uid.clone() } else { uid_for(&dh) };
+        let mut db = self.db.lock().unwrap();
+        // This account here, under whatever name.
+        let mine: Option<(String, i64)> = db
+            .query_row("SELECT username, updated_at FROM users WHERE uid=?1 AND is_bot=0", rusqlite::params![uid], |r| Ok((r.get(0)?, r.get(1)?)))
             .ok();
-        if ours.is_some_and(|t| t >= u.updated_at) {
-            return false;
+        if mine.as_ref().is_some_and(|(_, t)| *t >= u.updated_at) {
+            return out;
         }
-        // The same @name, but someone else's account (a relay that ran alone
-        // and then joined): the older account keeps the name.
-        if let Ok((their_dh, devices, created)) = db.query_row(
-            "SELECT identity_dh, devices, created_at FROM users WHERE username=?1",
-            rusqlite::params![u.username],
-            |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)),
-        ) {
-            let same = their_dh == dh || devices.contains(&u.identity_dh);
-            if !same && created <= u.created_at {
-                tracing::warn!(user = %u.username, "federation: another account already has this name here — kept the older one");
-                return false;
+        // Someone else here with this @name?
+        let mut name = u.username.clone();
+        let holder: Option<(String, i64, i64)> = db
+            .query_row(
+                "SELECT uid, created_at, is_bot FROM users WHERE username=?1",
+                rusqlite::params![name],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .ok();
+        if let Some((their_uid, their_created, bot)) = holder.filter(|h| h.0 != uid) {
+            // Older account keeps the name; on a tie, the smaller ID.
+            let they_win = bot != 0 || (their_created, their_uid.as_str()) <= (u.created_at, uid.as_str());
+            if they_win {
+                name = Self::displaced_name(&db, &u.username, &uid);
+                if mine.as_ref().is_some_and(|(n, _)| *n == name) {
+                    // Already here under that name: just update it below.
+                } else if db.query_row("SELECT 1 FROM users WHERE username=?1", rusqlite::params![name], |_| Ok(())).is_ok() {
+                    return out;
+                }
+            } else {
+                // Ours must move: rename it everywhere it's stored here.
+                let to = Self::displaced_name(&db, &u.username, &their_uid);
+                if Self::move_account(&mut db, &u.username, &to, false).is_err() {
+                    return out;
+                }
+                tracing::warn!(user = %u.username, %to, "federation: an older account from a peer has this name — ours is renamed");
+                out.displaced = Some((u.username.clone(), to));
             }
         }
-        // The same account under a new @username (renamed on its home relay):
-        // the old row goes, and the old name forwards here too.
+        // The same account under another name here (renamed on its home
+        // relay, or displaced): the old row goes, the old name forwards —
+        // unless it now belongs to someone else.
+        if let Some((old, _)) = mine.filter(|(n, _)| *n != name) {
+            let _ = db.execute("DELETE FROM users WHERE username=?1", rusqlite::params![old]);
+            if out.displaced.as_ref().is_none_or(|(n, _)| *n != old) && old != u.username {
+                let _ = db.execute(
+                    "INSERT INTO renames (old_name, new_name, at) VALUES (?1, ?2, ?3) ON CONFLICT(old_name) DO UPDATE SET new_name=?2, at=?3",
+                    rusqlite::params![old, name, now_secs() as i64],
+                );
+            }
+        }
+        // Legacy rows (no ID match) of the same identity under another name.
         let renamed: Vec<String> = {
-            let mut st = match db.prepare("SELECT username FROM users WHERE identity_dh=?1 AND username<>?2 AND is_bot=0") {
+            let mut st = match db.prepare("SELECT username FROM users WHERE identity_dh=?1 AND username<>?2 AND is_bot=0 AND uid=?3") {
                 Ok(st) => st,
-                Err(_) => return false,
+                Err(_) => return out,
             };
-            st.query_map(rusqlite::params![dh, u.username], |r| r.get::<_, String>(0))
+            st.query_map(rusqlite::params![dh, name, uid], |r| r.get::<_, String>(0))
                 .map(|rows| rows.flatten().collect())
                 .unwrap_or_default()
         };
         for old in renamed {
             let _ = db.execute("DELETE FROM users WHERE username=?1", rusqlite::params![old]);
-            let _ = db.execute(
-                "INSERT INTO renames (old_name, new_name, at) VALUES (?1, ?2, ?3) ON CONFLICT(old_name) DO UPDATE SET new_name=?2, at=?3",
-                rusqlite::params![old, u.username, now_secs() as i64],
-            );
         }
         // An e-mail moving to another username elsewhere: drop it here first.
         if let Some(email) = &u.email {
-            let _ = db.execute("UPDATE users SET email=NULL WHERE email=?1 AND username<>?2", rusqlite::params![email, u.username]);
+            let _ = db.execute("UPDATE users SET email=NULL WHERE email=?1 AND username<>?2", rusqlite::params![email, name]);
         }
-        db.execute(
+        out.name = name.clone();
+        out.applied = db.execute(
             "INSERT INTO users (username, identity_dh, email, display_name, about, phone, is_bot, created_at,
-                                extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices, recovery)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+                                extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices, recovery, uid)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
              ON CONFLICT(username) DO UPDATE SET identity_dh=?2, email=?3, display_name=?4, about=?5, phone=?6,
                  is_bot=?7, created_at=?8, extra=?9, avatar_ver=?10, banner_ver=?11, media_acl=?12, password=?13,
                  music_ver=?14, updated_at=?15, devices=?16,
-                 recovery=CASE WHEN ?17 = '' THEN recovery ELSE ?17 END",
-            rusqlite::params![u.username, dh, u.email, u.display_name, u.about, u.phone, u.is_bot as i64, u.created_at,
-                u.extra, u.avatar_ver, u.banner_ver, u.media_acl, u.password, u.music_ver, u.updated_at, u.devices, u.recovery],
+                 recovery=CASE WHEN ?17 = '' THEN recovery ELSE ?17 END, uid=?18",
+            rusqlite::params![name, dh, u.email, u.display_name, u.about, u.phone, u.is_bot as i64, u.created_at,
+                u.extra, u.avatar_ver, u.banner_ver, u.media_acl, u.password, u.music_ver, u.updated_at, u.devices, u.recovery, uid],
         )
-        .is_ok()
+        .is_ok();
+        out
+    }
+
+    /// Move everything stored under `old` to `new` (account row, queues,
+    /// backups, keys, media). `forward` keeps `old` pointing at `new`.
+    fn move_account(db: &mut Connection, old: &str, new: &str, forward: bool) -> rusqlite::Result<()> {
+        let now = now_secs() as i64;
+        let tx = db.transaction()?;
+        tx.execute("UPDATE users SET username=?1 WHERE username=?2", rusqlite::params![new, old])?;
+        for (table, col) in [("last_seen", "username"), ("backups", "username"), ("prekeys", "username"), ("profile_media", "username"),
+                             ("capsules", "owner"), ("capsules", "recipient"), ("bot_peers", "user")] {
+            tx.execute(&format!("UPDATE OR IGNORE {table} SET {col}=?1 WHERE {col}=?2"), rusqlite::params![new, old])?;
+        }
+        // Waiting envelopes, to the account and to each of its devices (user~dev).
+        tx.execute("UPDATE inbox SET user=?1 WHERE user=?2", rusqlite::params![new, old])?;
+        tx.execute(
+            "UPDATE inbox SET user=?1 || substr(user, length(?2) + 1) WHERE substr(user, 1, length(?2) + 1) = ?2 || '~'",
+            rusqlite::params![new, old],
+        )?;
+        // Older names of this account now point at the newest one.
+        tx.execute("UPDATE renames SET new_name=?1 WHERE new_name=?2", rusqlite::params![new, old])?;
+        tx.execute("DELETE FROM renames WHERE old_name=?1", rusqlite::params![new])?;
+        if forward {
+            tx.execute(
+                "INSERT INTO renames (old_name, new_name, at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(old_name) DO UPDATE SET new_name=?2, at=?3",
+                rusqlite::params![old, new, now],
+            )?;
+        } else {
+            tx.execute("DELETE FROM renames WHERE old_name=?1", rusqlite::params![old])?;
+        }
+        tx.commit()
     }
 
     /// (username, updated_at) of backups changed after `since` (seconds).
@@ -1658,27 +1805,7 @@ impl Directory {
         if last.is_some_and(|t| now - t < 24 * 3600) {
             return Err(DirError::RenameTooSoon);
         }
-        let tx = db.transaction()?;
-        tx.execute("UPDATE users SET username=?1 WHERE username=?2", rusqlite::params![new, old])?;
-        for (table, col) in [("last_seen", "username"), ("backups", "username"), ("prekeys", "username"), ("profile_media", "username"),
-                             ("capsules", "owner"), ("capsules", "recipient"), ("bot_peers", "user")] {
-            tx.execute(&format!("UPDATE OR IGNORE {table} SET {col}=?1 WHERE {col}=?2"), rusqlite::params![new, old])?;
-        }
-        // Waiting envelopes, to the account and to each of its devices (user~dev).
-        tx.execute("UPDATE inbox SET user=?1 WHERE user=?2", rusqlite::params![new, old])?;
-        tx.execute(
-            "UPDATE inbox SET user=?1 || substr(user, length(?2) + 1) WHERE substr(user, 1, length(?2) + 1) = ?2 || '~'",
-            rusqlite::params![new, old],
-        )?;
-        // Older names of this account now point at the newest one.
-        tx.execute("UPDATE renames SET new_name=?1 WHERE new_name=?2", rusqlite::params![new, old])?;
-        tx.execute("DELETE FROM renames WHERE old_name=?1", rusqlite::params![new])?;
-        tx.execute(
-            "INSERT INTO renames (old_name, new_name, at) VALUES (?1, ?2, ?3)
-             ON CONFLICT(old_name) DO UPDATE SET new_name=?2, at=?3",
-            rusqlite::params![old, new, now],
-        )?;
-        tx.commit()?;
+        Self::move_account(&mut db, &old, &new, true)?;
         Ok(new)
     }
 
@@ -1729,8 +1856,8 @@ impl Directory {
         let db = self.db.lock().unwrap();
         let sql = format!(
             "SELECT {PROFILE_COLS} FROM users
-             WHERE username LIKE ?1 ESCAPE '\\' OR lower(display_name) LIKE ?1 ESCAPE '\\' OR username = ?4
-             ORDER BY (username = ?3 OR username = ?4) DESC, username LIMIT ?2"
+             WHERE username LIKE ?1 ESCAPE '\\' OR lower(display_name) LIKE ?1 ESCAPE '\\' OR username = ?4 OR uid = ?3
+             ORDER BY (username = ?3 OR username = ?4 OR uid = ?3) DESC, username LIMIT ?2"
         );
         let mut stmt = match db.prepare(&sql) {
             Ok(s) => s,
@@ -1790,6 +1917,7 @@ impl Directory {
              ON CONFLICT(username) DO UPDATE SET display_name=?3, is_bot=1",
             rusqlite::params![username, owner_dh.as_slice(), display_name, now_secs() as i64],
         )?;
+        Self::fill_uids(&db);
         // Rotate any old token for this bot, mint a fresh one.
         db.execute("DELETE FROM bot_keys WHERE username=?1", rusqlite::params![username])?;
         let mut t = [0u8; 24];
@@ -2178,6 +2306,54 @@ mod tests {
         assert!(d.search("new_name", 5).is_empty(), "_ is a literal, not a wildcard");
         // Once a day.
         assert!(matches!(d.rename_user("newname", &a, "third"), Err(DirError::RenameTooSoon)));
+    }
+
+    fn reg(d: &Directory, name: &str, id: &[u8; 32], email: &str, created: i64) {
+        let code = d.request_code(email).unwrap().unwrap();
+        let t = d.verify_code(email, &code).unwrap();
+        d.register(name, id, &t, "", "", "").unwrap();
+        d.db.lock().unwrap().execute("UPDATE users SET created_at=?1 WHERE username=?2", rusqlite::params![created, name]).unwrap();
+    }
+
+    fn sync(from: &Directory, to: &Directory) -> Vec<FedApplied> {
+        from.fed_users_since(0).iter().map(|u| to.fed_apply_user(u)).collect()
+    }
+
+    /// Two relays ran alone, each got its own @same, then they joined: both
+    /// people keep their accounts (matched by ID); the older one keeps the
+    /// name, the newer becomes same_NNNN — the same on both relays.
+    #[test]
+    fn joining_relays_keep_both_accounts_with_one_name() {
+        let (x, y) = (dir(), dir());
+        let (old, new) = ([3u8; 32], [4u8; 32]);
+        reg(&x, "same", &new, "new@x.com", 2000);
+        reg(&y, "same", &old, "old@y.com", 1000);
+        let (uo, un) = (uid_for(&old), uid_for(&new));
+        assert_eq!(uo.len(), 10);
+        assert_eq!(x.uid_of("same"), Some(un.clone()));
+        // Y learns X's newer account: it lands under the displaced name.
+        let r = sync(&x, &y);
+        let moved = format!("same_{}", &un[6..]);
+        assert_eq!(r[0].name, moved);
+        assert!(r[0].displaced.is_none());
+        assert_eq!(y.username_by_uid(&un), Some(moved.clone()));
+        assert_eq!(y.username_by_uid(&uo).as_deref(), Some("same"));
+        // X learns Y's older account: its own one moves, the name goes to it.
+        let r = sync(&y, &x);
+        assert!(r.iter().any(|a| a.displaced == Some(("same".into(), moved.clone()))));
+        assert_eq!(x.username_by_uid(&un), Some(moved.clone()));
+        assert_eq!(x.username_by_uid(&uo).as_deref(), Some("same"));
+        assert_eq!(x.username_for_identity(&new), Some(moved.clone()));
+        assert!(x.renamed_to("same").is_none(), "the name isn't forwarded to the moved account");
+        // Search by ID.
+        assert_eq!(x.search(&un, 5).first().map(|p| p.username.clone()), Some(moved.clone()));
+        // The moved account picks a new name; peers follow it by ID.
+        x.db.lock().unwrap().execute("DELETE FROM renames", []).unwrap();
+        assert_eq!(x.rename_user(&moved, &new, "fresh").unwrap(), "fresh");
+        sync(&x, &y);
+        assert_eq!(y.username_by_uid(&un).as_deref(), Some("fresh"));
+        assert!(!y.user_exists(&moved));
+        assert_eq!(y.username_by_uid(&uo).as_deref(), Some("same"));
     }
 
     #[tokio::test]

@@ -45,7 +45,8 @@
   import { api, assetUrl, sendChatControl } from "../tauri";
   import { openFingerprint, verifiedKeys, keyState } from "./FingerprintModal.svelte";
   import { showToast } from "./Toast.svelte";
-  import { ATTACH_ITEMS, attachFront, type AttachId } from "../attachMenu";
+  import { pluginCommands, pluginsOnSend, runPluginCommand } from "../plugins";
+  import { ATTACH_ITEMS, attachFront, attachHidden, attachDock, attachBots, toggleAttachBot, type AttachId } from "../attachMenu";
   import { openRoomRequest } from "../roomNav";
   import { AUTODL_DEFAULT } from "../theme";
   import { openPopout } from "../popouts";
@@ -1026,7 +1027,7 @@
   function autoresize() {}
 
   async function submit() {
-    const t = text.trim();
+    let t = text.trim();
     if (!t) return;
     const chat = $activeChat;
 
@@ -1068,6 +1069,20 @@
       }
     }
     const original = text;
+    // Plugins (Settings → Experimental): "/cmd args" of a plugin runs it and
+    // sends its answer; then every plugin's onSend may change the text.
+    const pc = /^\/([a-z0-9_]+)(?:\s+([\s\S]*))?$/i.exec(t);
+    const plug = pc ? $pluginCommands.find((c) => c.cmd === pc[1].toLowerCase()) : undefined;
+    if (plug && chat) {
+      const out = await runPluginCommand(plug, (pc?.[2] ?? "").trim(), chat.id);
+      if (!out) { text = ""; return; }
+      t = out;
+    }
+    if (chat) {
+      const tp = await pluginsOnSend(chat.id, t);
+      if (tp === null) { showToast(tr("A plugin stopped this message")); return; }
+      t = tp;
+    }
     const rt = replyTarget;
     text = "";
     replyTarget = null;
@@ -1189,7 +1204,9 @@
     { cmd: "lenny", desc: "( ͡° ͜ʖ ͡°)", run: () => replaceText("( ͡° ͜ʖ ͡°) ") },
     { cmd: "spoiler", desc: $t("Hidden text: ||like this||"), run: () => replaceText("||") },
     { cmd: "help", desc: $t("Keyboard shortcuts and formatting"), run: () => { text = ""; shortcutsOpen.set(true); } },
-  ]);
+  ].concat($pluginCommands.map((c) => ({ cmd: c.cmd, desc: "🧩 " + (c.desc || c.plugin), run: () => replaceText(`/${c.cmd} `) })))
+    // A plugin can't take a built-in command's name, nor two plugins one name.
+    .filter((c, i, all) => all.findIndex((x) => x.cmd === c.cmd) === i));
   let slashIdx = $state(0);
   let slashHidden = $state("");
   let slashMatches = $derived.by(() => {
@@ -1383,6 +1400,41 @@
     }
     return out;
   });
+  // ---- Glass panels (phones, Settings → Appearance): the chat runs on
+  // under the message field, which floats over it. What sits under the
+  // messages (reply bar, field, keyboard…) is measured, and the message list
+  // reaches that far down with as much padding, so nothing hides behind. ----
+  $effect(() => {
+    const root = chatRoot;
+    if (!root || !phoneUI || !$settings.glass) { root?.style.removeProperty("--below-h"); root?.style.removeProperty("--above-h"); return; }
+    let raf = 0;
+    const measure = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const stage = root.querySelector(":scope > .msg-stage");
+        if (!stage) return;
+        const sum = (dir: "previousElementSibling" | "nextElementSibling") => {
+          let h = 0;
+          for (let el = stage[dir] as HTMLElement | null; el; el = el[dir] as HTMLElement | null) {
+            const cs = getComputedStyle(el);
+            if (cs.position === "absolute" || cs.position === "fixed" || cs.display === "none") continue;
+            h += el.offsetHeight + parseFloat(cs.marginTop) + parseFloat(cs.marginBottom);
+            el.setAttribute("data-gf", "");
+          }
+          return Math.round(h);
+        };
+        root.style.setProperty("--above-h", `${sum("previousElementSibling")}px`);
+        root.style.setProperty("--below-h", `${sum("nextElementSibling")}px`);
+      });
+    };
+    const ro = new ResizeObserver(measure);
+    const watch = () => { ro.disconnect(); ro.observe(root); for (const el of Array.from(root.children)) ro.observe(el); measure(); };
+    const mo = new MutationObserver(watch);
+    mo.observe(root, { childList: true });
+    watch();
+    return () => { ro.disconnect(); mo.disconnect(); cancelAnimationFrame(raf); root.style.removeProperty("--below-h"); root.style.removeProperty("--above-h"); };
+  });
+
   let commentsAllowed = $derived(!!activeGroup && activeGroup.settings.comments !== false);
   // Hold "Comments": a peek at just that post's comments (not the whole
   // chat), like the long press on a chat in the list.
@@ -1556,6 +1608,11 @@
     if (c.id !== "__saved__" && !isBotChat) out.push({ id: "cal", label: tr("Calendar"), sub: tr("Events and reminders of this chat"), icon: IC.cal, on: $calendarFor === c.id, run: () => calendarFor.set($calendarFor === c.id ? null : c.id) });
     if (ttlEditable || chatTtl) out.push({ id: "ttl", label: tr("Auto-delete & read receipts"), sub: chatTtl ? tr("Auto-delete: {t}", { t: ttlLabel(chatTtl) }) : tr("Off"), icon: IC.ttl, on: chatTtl > 0, run: () => (ttlMenu = true) });
     if (amChanAdmin) out.push({ id: "stats", label: tr("Channel statistics"), sub: tr("Views, reactions, comments"), icon: IC.stats, on: $statsFor === c.id, run: () => statsFor.set($statsFor === c.id ? null : c.id) });
+    if (isBotChat && botMenu) {
+      const bm = botMenu, added = $attachBots.some((b) => b.bot === c.id);
+      out.push({ id: "attachbot", label: tr(added ? "Remove from attach menu" : "Add to attach menu"), sub: tr("Open {b} from the 📎 menu in any chat", { b: bm.text }), icon: icons.attach, on: added,
+        run: () => { toggleAttachBot({ bot: c.id, title: c.name || bm.text, url: bm.url }); showToast(tr(added ? "Removed from the attach menu" : "Added to the attach menu")); } });
+    }
     if (DESKTOP_APP && !POPOUT) out.push({ id: "win", label: tr("Open in a new window"), sub: "Ctrl + " + tr("click"), icon: IC.win, run: () => void openPopout(c.id, c.name).catch((e) => showToast(String(e))) });
     return out;
   });
@@ -3906,9 +3963,18 @@
         <button class="channel-mute danger-txt" onclick={() => setBlocked(cid, false)}>{$t("Unblock")}</button>
       {:else if postBlocked === "channel" && $activeChat}
         {@const cid = $activeChat.id}
-        <button class="channel-mute" onclick={() => setMuted(cid)}>
-          {$t($mutedChats.has(cid) ? "Unmute" : "Mute")}
-        </button>
+        <div class="chan-foot">
+          <button class="channel-mute" onclick={() => setMuted(cid)}>
+            {$t($mutedChats.has(cid) ? "Unmute" : "Mute")}
+          </button>
+          {#if activeGroup?.settings.direct === true}
+            <!-- Telegram's channel direct messages: privately to the admins. -->
+            <button class="chan-dm" title={$t("Message the channel")} aria-label={$t("Message the channel")}
+              onclick={async () => { try { const id = await api.channelDmOpen(cid); chats.set(await api.listChats()); activeId.set(id); } catch (e) { showToast(String(e)); } }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z"/></svg>
+            </button>
+          {/if}
+        </div>
       {:else}
         <div class="channel-locked">
           {@html icons.lock}
@@ -3989,6 +4055,7 @@
                   {/each}
                 </div>
               {/if}
+              {#if !$attachDock}<div class="ap-inline">{@render attachActions()}</div>{/if}
               <div class="ap-gallery">
                 <button class="ap-tile ap-pick" onclick={() => { attachMenuOpen = false; pickAndSendFile("media"); }}>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>
@@ -4010,7 +4077,7 @@
               {@render attachActions()}
             {/if}
           </div>
-          {#if phoneUI}
+          {#if phoneUI && $attachDock}
             <!-- Phones: the actions as a floating tab bar, the send button above it. -->
             <div class="ap-dock" class:closing={sheetClosing}>{@render attachActions()}</div>
             {#if gallerySel.length}
@@ -4034,12 +4101,19 @@
         {#snippet attachActions()}
             <!-- A few actions right away, the rest under "More" (what goes
                  where: Settings → Chat settings → Attach menu). -->
-            {@const avail = ATTACH_ITEMS.filter((it) => attachAvailable(it.id))}
-            {@const front = avail.filter((it) => $attachFront.includes(it.id))}
+            {@const avail = ATTACH_ITEMS.filter((it) => attachAvailable(it.id) && !$attachHidden.includes(it.id))}
+            {@const front = $attachFront.map((id) => avail.find((it) => it.id === id)).filter((it) => !!it)}
             {@const rest = avail.filter((it) => !$attachFront.includes(it.id))}
             <div class="ap-items">
-            {#each (attachMore ? avail : front) as it (it.id)}
+            {#each (attachMore ? [...front, ...rest] : front) as it (it.id)}
               <button class="ap-item" onclick={() => runAttach(it.id)}>{@render attachIcon(it.id)}<span>{$t(it.label)}</span></button>
+            {/each}
+            {#each $attachBots as b (b.bot)}
+                <!-- A bot's mini app (added from its chat), like Telegram's attachment-menu bots. -->
+                <button class="ap-item ap-bot" title={"@" + b.bot} onclick={() => { attachMenuOpen = false; openMiniApp({ bot: b.bot, url: b.url, from: "menu" }); }}>
+                  <span class="ap-bot-ava" style:background-image={$avatars[b.bot] ? `url("${$avatars[b.bot]}")` : undefined}>{$avatars[b.bot] ? "" : (b.title || b.bot).charAt(0).toUpperCase()}</span>
+                  <span>{b.title || b.bot}</span>
+                </button>
             {/each}
             {#if rest.length && !attachMore}
               <button class="ap-item more" onclick={() => (attachMore = true)}>
@@ -4051,6 +4125,7 @@
         {/snippet}
         <button
           class="attach-btn"
+          class:dm-hide={$activeChat?.id.startsWith("dm~")}
           class:disabled={!liveChat}
           class:open={attachMenuOpen}
           title={$t(liveChat ? "Attach — media, article, poll" : "Start a real chat first")}
@@ -4504,6 +4579,27 @@
      scrolling moves only the messages (a background on the scroller itself
      with attachment:local was re-rasterised on every scroll step). */
   .msg-stage { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; isolation: isolate; }
+  /* Glass panels on phones: header and field are floating see-through
+     cards; the messages scroll on under the field. */
+  @media (max-width: 720px) {
+    :global(html.glass) .msg-stage { margin-bottom: calc(-1 * var(--below-h, 0px)); margin-top: calc(-1 * var(--above-h, 0px)); }
+    :global(html.glass) .messages { padding-bottom: calc(var(--below-h, 0px) + 10px); padding-top: calc(var(--above-h, 0px) + 10px); }
+    :global(html.glass) .active-chat > :global([data-gf]) { position: relative; z-index: 3; }
+    :global(html.glass) .chat-header, :global(html.glass) .composer {
+      margin: 6px 8px; border: 1px solid color-mix(in srgb, var(--fg) 16%, transparent);
+      background: color-mix(in srgb, var(--bg-surface, #12151d) var(--glass-a, 55%), transparent);
+      box-shadow: 0 10px 30px -16px rgba(0,0,0,.7);
+    }
+    :global(html.glass) .chat-header { border-radius: calc(22px * var(--rk, 1)); z-index: 4; }
+    :global(html.glass) .composer { border-radius: calc(26px * var(--rk, 1)); margin-bottom: calc(6px + env(safe-area-inset-bottom, 0px)); padding: 6px 8px; }
+    :global(html.glass) .chat-header::before, :global(html.glass) .composer::before {
+      border-radius: inherit; backdrop-filter: blur(var(--glass-blur, 12px)) saturate(1.5); -webkit-backdrop-filter: blur(var(--glass-blur, 12px)) saturate(1.5);
+    }
+    :global(html.glass) .ap-dock .ap-items {
+      background: color-mix(in srgb, var(--bg-surface-2, #1a1e29) var(--glass-a, 62%), transparent);
+      backdrop-filter: blur(var(--glass-blur, 20px)) saturate(1.6); -webkit-backdrop-filter: blur(var(--glass-blur, 20px)) saturate(1.6);
+    }
+  }
   .chat-wall {
     position: absolute; inset: 0; z-index: 0; pointer-events: none;
     background: var(--chat-wallpaper, transparent);
@@ -4865,6 +4961,12 @@
   .cp-b b { font-size: 12px; color: var(--accent); } .cp-b span { font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; } .cp-b small { font-size: 10.5px; color: var(--fg-dim); align-self: flex-end; }
   .cp-empty { color: var(--fg-dim); text-align: center; padding: 20px; }
   .cp-open { margin: 8px 12px 12px; padding: 10px; border: none; border-radius: calc(12px * var(--rk, 1)); background: var(--accent); color: #06070C; font: 700 14px var(--font-ui); cursor: pointer; }
+  .attach-btn.dm-hide { display: none; }
+  .chan-foot { display: flex; align-items: stretch; gap: 8px; margin: 10px 14px; }
+  .chan-foot .channel-mute { flex: 1; margin: 0; }
+  .chan-dm { flex: none; width: 48px; border-radius: calc(12px * var(--rk, 1)); border: 1px solid var(--border); background: var(--bg-input);
+    color: var(--accent); display: grid; place-items: center; cursor: pointer; }
+  .chan-dm svg { width: 22px; height: 22px; }
   .quote-chip { position: fixed; z-index: 380; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 6px;
     padding: 7px 14px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--bg-shell); color: var(--accent);
     font: 600 13.5px var(--font-ui); box-shadow: 0 10px 28px -10px rgba(0,0,0,.7); cursor: pointer; animation: sp-in .15s ease-out; }
@@ -5135,6 +5237,14 @@
     animation: ap-send-in .3s cubic-bezier(.22,1,.36,1); transition: opacity .2s ease; }
   .ap-send.closing { opacity: 0; }
   @keyframes ap-send-in { from { opacity: 0; transform: translateX(-50%) translateY(14px) scale(.9); } }
+  /* Floating bar switched off: the actions sit in the sheet, under the gallery. */
+  .ap-inline { border-bottom: 1px solid var(--border); padding: 4px 4px 8px; flex-shrink: 0; }
+  .ap-inline .ap-items { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+  .ap-inline .ap-item { flex-direction: column; justify-content: center; gap: 4px; padding: 8px 2px; min-width: 0; font-size: 11.5px; text-align: center; border-radius: calc(14px * var(--rk, 1)); }
+  .ap-inline .ap-item > span:last-child { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ap-inline .ap-item :global(svg) { width: 22px; height: 22px; }
+  .ap-bot-ava { width: 26px; height: 26px; border-radius: var(--ava-r, 50%); background: var(--accent-soft) center/cover; color: var(--accent);
+    display: grid; place-items: center; font-weight: 800; font-size: 13px; }
   .ap-dock { position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); z-index: 72;
     animation: ap-dock-in .42s cubic-bezier(.22,1,.36,1); transition: transform .26s cubic-bezier(.4,0,1,1), opacity .26s ease; }
   .ap-dock.closing { transform: translateY(140%); opacity: 0; }

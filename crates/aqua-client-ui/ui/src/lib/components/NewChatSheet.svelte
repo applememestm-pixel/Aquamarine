@@ -171,7 +171,7 @@
     {:else}
       <div class="nc-search">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-        <input bind:this={inputEl} bind:value={q} placeholder={$t("@username or name")} autocomplete="off" autocapitalize="off" spellcheck="false" />
+        <input bind:this={inputEl} bind:value={q} placeholder={$t("@username, name or ID")} autocomplete="off" autocapitalize="off" spellcheck="false" />
         {#if searching}<span class="nc-spin"></span>{/if}
       </div>
       <div class="nc-list">

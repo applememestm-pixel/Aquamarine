@@ -4,17 +4,26 @@
  *  - a person: `aqua:@name` (+ `?s=<server>` when known), like Telegram's
  *    profile QR — scanning opens a chat with them;
  *  - a key check: `aqua:key:<name>:<code>`, like Signal's safety number —
- *    scanning theirs compares it with the code on this device.
+ *    scanning theirs compares it with the code on this device;
+ *  - a server: `aqua:srv?u=<address>` (a plain http(s) address works too) —
+ *    scanning adds it to Settings → Network & proxy;
+ *  - an invitation to an invite-only server: `aqua:join?s=<address>&c=<code>`
+ *    (the server's admin panel makes them) — scanning picks that server for
+ *    signing up and passes the code along.
  */
 import qrcode from "qrcode-generator";
 
 export type QrPayload =
   | { kind: "user"; username: string; server: string }
   | { kind: "key"; username: string; code: string }
-  | { kind: "server"; url: string };
+  | { kind: "server"; url: string }
+  | { kind: "join"; url: string; code: string };
 
 export function userQr(username: string, server = ""): string {
   return `aqua:@${username}` + (server ? `?s=${encodeURIComponent(server)}` : "");
+}
+export function serverQr(url: string): string {
+  return `aqua:srv?u=${encodeURIComponent(url)}`;
 }
 export function keyQr(username: string, code: string): string {
   return `aqua:key:${username}:${code.replace(/\s+/g, "")}`;
@@ -26,6 +35,10 @@ export function parseQr(text: string): QrPayload | null {
   if (m) return { kind: "user", username: m[1].toLowerCase(), server: m[2] ? decodeURIComponent(m[2]) : "" };
   m = /^aqua:key:([a-z0-9_.]{3,32}):([0-9a-z]+)$/i.exec(t);
   if (m) return { kind: "key", username: m[1].toLowerCase(), code: m[2] };
+  m = /^aqua:srv\?u=([^&\s]+)$/i.exec(t);
+  if (m) { const url = decodeURIComponent(m[1]); if (/^https?:\/\/[^\s]+$/i.test(url)) return { kind: "server", url }; }
+  m = /^aqua:join\?s=([^&\s]+)&c=([0-9a-f]{8,64})$/i.exec(t);
+  if (m) { const url = decodeURIComponent(m[1]); if (/^https?:\/\/[^\s]+$/i.test(url)) return { kind: "join", url, code: m[2].toLowerCase() }; }
   if (/^https?:\/\/[^\s]+$/i.test(t)) return { kind: "server", url: t };
   return null;
 }
@@ -59,4 +72,17 @@ export async function readQr(video: HTMLVideoElement, canvas: HTMLCanvasElement)
   const { default: jsQR } = await import("jsqr");
   const img = g.getImageData(0, 0, w, h);
   return jsQR(img.data, w, h, { inversionAttempts: "attemptBoth" })?.data ?? null;
+}
+
+// ---- An invitation scanned before signing up: used by the sign-up form ----
+const INV_KEY = "aqua.joinInvite.v1";
+export function saveInvite(url: string, code: string) {
+  try { localStorage.setItem(INV_KEY, JSON.stringify({ url: url.replace(/\/+$/, ""), code })); } catch { /* ignore */ }
+}
+/** The invitation code for this server, if one was scanned. */
+export function inviteFor(url: string): string {
+  try {
+    const v = JSON.parse(localStorage.getItem(INV_KEY) || "null") as { url: string; code: string } | null;
+    return v && v.url === url.replace(/\/+$/, "") ? v.code : "";
+  } catch { return ""; }
 }

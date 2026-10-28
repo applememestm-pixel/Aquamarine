@@ -84,6 +84,7 @@
 | Ресурс | Лицензия | Статус в поставке |
 |---|---|---|
 | lottie-web (`ui/public/vendor/lottie_light_canvas.min.js`) | MIT, © 2015 Bodymovin | Включён; текст лицензии — `ui/public/vendor/lottie-LICENSE.md` |
+| qrcode-generator 1.4.4 (`crates/aqua-server/src/qrcode-generator.js`) | MIT, © 2009 Kazuhiko Arase | Встроен в панель администратора (QR приглашений); уведомление об авторских правах — в начале файла |
 | emojibase-data (источник `emojiData.ts`) | MIT | Производные данные включены |
 | Словарь BIP-0039 English (`bip39_english.txt`, SHA-256 `2f5eed53…`) | Документ BIP-0039 отдельной лицензии не указывает; словарь общеупотребителен в реализациях под MIT и Apache-2.0 | Включён без изменений |
 | Шрифты Onest, JetBrains Mono | SIL Open Font License 1.1 | Не включены; загружаются с Google Fonts |

@@ -126,6 +126,11 @@ pub async fn send_message(
         return Ok(SendResult { id: msg_id, time: msg_time });
     }
 
+    // A channel's direct messages: to its admins and the subscriber.
+    if peer_id.starts_with("dm~") {
+        return channel_dm_send(&app, &peer_id, &text).await;
+    }
+
     // Bot chat (plaintext, no E2EE): live && !has_lock. Send the text
     // un-encrypted through the relay; no session / ratchet.
     {
@@ -282,6 +287,20 @@ pub async fn connect_to_server(
         let mut s = state.lock().map_err(|e| e.to_string())?;
         // What the old connection sent but the relay never confirmed goes
         // out again (the recipient drops copies by id).
+        // The relay knows this account under another @name now: an older
+        // account had the same one when relays joined. Ours follows it.
+        let username = match transport.renamed_from() {
+            Some(old) if old == username => {
+                let new = transport.username().to_string();
+                tracing::warn!(%old, %new, "the relay renamed this account");
+                rename_member_everywhere(&mut s, old, &new);
+                let email = s.email.clone();
+                if s.registered { s.mark_registered(new.clone(), email); }
+                let _ = app.emit("aqua://displaced", serde_json::json!({ "old": old, "new": new }));
+                new
+            }
+            _ => username,
+        };
         if let Some(old) = s.transport.take().filter(|t| t.username() == username) {
             let lost = old.take_unconfirmed();
             if !lost.is_empty() {
@@ -317,8 +336,8 @@ pub async fn connect_to_server(
 // ---------- User directory: email registration + search --------------------
 
 #[tauri::command]
-pub async fn request_email_code(server_url: String, email: String, purpose: Option<String>, nonce: Option<String>) -> Result<aqua_client_core::CodeRequest, String> {
-    aqua_client_core::request_email_code_nonce(&server_url, &email, purpose.as_deref().unwrap_or(""), nonce.as_deref().unwrap_or(""))
+pub async fn request_email_code(server_url: String, email: String, purpose: Option<String>, nonce: Option<String>, invite: Option<String>) -> Result<aqua_client_core::CodeRequest, String> {
+    aqua_client_core::transport::request_email_code_invite(&server_url, &email, purpose.as_deref().unwrap_or(""), nonce.as_deref().unwrap_or(""), invite.as_deref().unwrap_or(""))
         .await
         .map_err(|e| e.to_string())
 }
@@ -457,6 +476,8 @@ pub struct DirProfile {
     pub avatar_ver: i64,
     pub banner_ver: i64,
     pub music_ver: i64,
+    /// The account's ID ("" with an older relay).
+    pub uid: String,
 }
 
 impl From<aqua_client_core::ProfileCard> for DirProfile {
@@ -471,8 +492,25 @@ impl From<aqua_client_core::ProfileCard> for DirProfile {
             avatar_ver: c.avatar_ver,
             banner_ver: c.banner_ver,
             music_ver: c.music_ver,
+            uid: c.uid,
         }
     }
+}
+
+/// A contact's ID now belongs to another @name than the one their chat is
+/// under (they were renamed when relays joined, or renamed while I was
+/// away): the chat follows the ID. Returns the name it has now.
+#[tauri::command]
+pub async fn follow_peer_by_uid(app: AppHandle, state: State<'_, StdMutex<AppState>>, old: String, uid: String) -> Result<Option<String>, String> {
+    let transport = state.lock().map_err(|e| e.to_string())?.transport.clone().ok_or("not connected")?;
+    let Some(new) = transport.username_by_uid(&uid).await.map_err(|e| e.to_string())? else { return Ok(None) };
+    if new != old {
+        if let Ok(mut s) = state.lock() { apply_peer_rename(&mut s, &old, &new); }
+        crate::multidev::invalidate(&old);
+        let _ = app.emit("aqua://renamed", serde_json::json!({ "old": old, "new": new }));
+        let _ = app.emit("aqua://chats_updated", ());
+    }
+    Ok(Some(new))
 }
 
 #[tauri::command]
@@ -2244,8 +2282,16 @@ pub async fn start_chat_with(
     if peer_username.is_empty() || peer_username.starts_with("__") || peer_username.starts_with("grp_") {
         return Err("No such user".into());
     }
-    let known = matches!(transport.get_profile(&peer_username).await, Ok(Some(_)))
+    let mut known = matches!(transport.get_profile(&peer_username).await, Ok(Some(_)))
         || transport.fetch_bundle(&peer_username).await.is_ok();
+    // An account ID (10 digits) instead of a @name.
+    let mut peer_username = peer_username;
+    if !known && peer_username.len() == 10 && peer_username.bytes().all(|b| b.is_ascii_digit()) {
+        if let Ok(Some(name)) = transport.username_by_uid(&peer_username).await {
+            peer_username = name;
+            known = true;
+        }
+    }
     if !known {
         return Err(format!("No user @{peer_username} on this server"));
     }
@@ -2316,6 +2362,86 @@ pub const GCALL_PREFIX: &str = "[gcall:v1]";
 /// A group chat message: JSON `{gid, author, body}` where `body` is the
 /// usual tagged text (plain / `[reply:v1]` / `[poll:v1]` / custom emoji).
 pub const GRPMSG_PREFIX: &str = "[grpmsg:v1]";
+/// Channel direct messages: `{gid, user, body}` — a subscriber (`user`)
+/// writes privately to a channel's admins; the admins answer in the same
+/// thread. Goes to the admins and to `user` only, never to other subscribers.
+pub const CDM_PREFIX: &str = "[cdm:v1]";
+
+/// The chat of one subscriber's direct messages with a channel.
+pub fn cdm_chat_id(gid: &str, user: &str) -> String { format!("dm~{gid}~{user}") }
+
+fn parse_cdm_chat_id(id: &str) -> Option<(String, String)> {
+    let rest = id.strip_prefix("dm~")?;
+    let (gid, user) = rest.split_once('~')?;
+    (!gid.is_empty() && !user.is_empty()).then(|| (gid.to_string(), user.to_string()))
+}
+
+/// The channel takes direct messages (an admin switched it on).
+fn direct_on(g: &Group) -> bool {
+    g.kind == "channel" && g.settings.extra.get("direct").and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
+/// Make sure the direct-messages chat exists here.
+fn ensure_cdm_book(s: &mut AppState, g: &Group, user: &str) -> String {
+    let id = cdm_chat_id(&g.id, user);
+    let me = s.username.clone().unwrap_or_default();
+    // Names without words, so they read the same in every language.
+    let name = if user == me { format!("✉ {}", g.title) } else { format!("{user} → {}", g.title) };
+    match s.chats.get_mut(&id) {
+        Some(b) => { b.summary.name = name; }
+        None => {
+            let mut summary = crate::state::summary_for(&id, "", false, false);
+            summary.name = name;
+            summary.letter = g.title.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "#".into());
+            if !g.gradient.is_empty() { summary.gradient = g.gradient.clone(); }
+            s.chats.insert(id.clone(), crate::state::ChatBook { summary, messages: Vec::new() });
+            s.chat_order.insert(0, id.clone());
+        }
+    }
+    id
+}
+
+/// Open (create) my direct-messages chat with a channel; admins open a
+/// subscriber's thread with `user`.
+#[tauri::command]
+pub fn channel_dm_open(state: State<'_, StdMutex<AppState>>, gid: String, user: Option<String>) -> Result<String, String> {
+    let mut s = state.lock().map_err(|e| e.to_string())?;
+    let me = s.username.clone().ok_or("not registered")?;
+    let g = s.groups.get(&gid).cloned().ok_or("unknown channel")?;
+    if !direct_on(&g) { return Err("This channel doesn't take direct messages.".into()); }
+    let user = user.filter(|u| !u.is_empty()).unwrap_or_else(|| me.clone());
+    if user != me && !g.is_admin(&me) { return Err("not an admin".into()); }
+    if g.is_banned(&user) { return Err("banned".into()); }
+    Ok(ensure_cdm_book(&mut s, &g, &user))
+}
+
+/// Send a direct message in a channel's thread (`dm~gid~user`).
+async fn channel_dm_send(app: &AppHandle, chat_id: &str, text: &str) -> Result<SendResult, String> {
+    let (gid, user) = parse_cdm_chat_id(chat_id).ok_or("bad chat")?;
+    let state: State<'_, StdMutex<AppState>> = app.state();
+    let (me, g, out) = {
+        let mut s = state.lock().map_err(|e| e.to_string())?;
+        let me = s.username.clone().ok_or("not registered")?;
+        let g = s.groups.get(&gid).cloned().ok_or("unknown channel")?;
+        if !direct_on(&g) { return Err("This channel doesn't take direct messages.".into()); }
+        if g.is_banned(&me) || (user != me && !g.is_admin(&me)) { return Err("You can't write here.".into()); }
+        ensure_cdm_book(&mut s, &g, &user);
+        let msg = text_msg_from_me(text);
+        let out = SendResult { id: msg.id.clone(), time: msg.time.clone() };
+        push_own_message(&mut s, chat_id, msg, text);
+        (me, g, out)
+    };
+    let wire = format!("{CDM_PREFIX}{}", serde_json::json!({ "gid": gid, "user": user, "body": text }));
+    let mut to: Vec<String> = g.members.iter().filter(|m| g.is_admin(&m.username)).map(|m| m.username.clone()).collect();
+    if !to.contains(&user) { to.push(user.clone()); }
+    for m in to.iter().filter(|m| **m != me) {
+        if let Err(e) = deliver_to_member(app, m, &wire).await {
+            tracing::warn!(member = %m, %e, "channel dm: delivery failed");
+        }
+    }
+    crate::multidev::sync_raw(app, &wire).await;
+    Ok(out)
+}
 
 /// Send a raw control payload to a peer over the E2EE session WITHOUT
 /// recording it as a chat message. Used for poll votes and read
@@ -2763,6 +2889,46 @@ pub fn own_device_message(app: &AppHandle, to: &str, inner: &str) {
 }
 
 fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
+    if let Some(body) = text.strip_prefix(CDM_PREFIX) {
+        let state: State<'_, StdMutex<AppState>> = app.state();
+        let v: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+        let (gid, user, inner) = (v["gid"].as_str().unwrap_or(""), v["user"].as_str().unwrap_or(""), v["body"].as_str().unwrap_or(""));
+        if gid.is_empty() || user.is_empty() || inner.is_empty() || inner.len() > 16 * 1024 { return true; }
+        let (chat, time) = {
+            let mut s = match state.lock() { Ok(s) => s, Err(_) => return true };
+            let me = s.username.clone().unwrap_or_default();
+            let Some(g) = s.groups.get(gid).cloned() else { return true };
+            // The subscriber themselves or an admin wrote it; it's for me
+            // as an admin, or as that subscriber.
+            let sender_ok = (from == user && !g.is_banned(user)) || g.is_admin(from);
+            let mine_to_see = me == user || g.is_admin(&me);
+            if !direct_on(&g) || !sender_ok || !mine_to_see { return true; }
+            let chat = ensure_cdm_book(&mut s, &g, user);
+            let time = hhmm_now();
+            if from == me {
+                push_own_message(&mut s, &chat, text_msg_from_me(inner), inner);
+            } else {
+                let (kind, meta) = crate::state::classify_full(inner, None);
+                let len = s.chats.get(&chat).map(|b| b.messages.len()).unwrap_or(0);
+                if let Some(book) = s.chats.get_mut(&chat) {
+                    book.messages.push(ChatMessage { meta, id: format!("d-{time}-{len}"), from: from.to_string(), time: time.clone(), kind });
+                    book.summary.preview = preview_for(&book.messages.last().unwrap().kind);
+                    book.summary.preview_by_me = false;
+                    book.summary.time = time.clone();
+                    book.summary.unread += 1;
+                }
+                if let Some(pos) = s.chat_order.iter().position(|id| *id == chat) {
+                    if pos > 0 { s.chat_order.remove(pos); s.chat_order.insert(0, chat.clone()); }
+                }
+            }
+            (chat, time)
+        };
+        if from != state.lock().ok().and_then(|s| s.username.clone()).unwrap_or_default() {
+            let _ = app.emit("aqua://incoming", IncomingEventPayload { peer_id: chat, text: inner.to_string(), time, is_new_chat: false });
+        }
+        let _ = app.emit("aqua://chats_updated", ());
+        return true;
+    }
     if let Some(body) = text.strip_prefix(GRPINFO_PREFIX) {
         let state: State<'_, StdMutex<AppState>> = app.state();
         if let Ok(g) = serde_json::from_str::<Group>(body) {
@@ -3289,7 +3455,7 @@ pub(crate) fn is_control_text(text: &str) -> bool {
     text.starts_with(CALL_PREFIX)
         || [POLLVOTE_PREFIX, POLLCLOSE_PREFIX, SEEN_PREFIX, STATUS_PREFIX, REACT_PREFIX, TYPING_PREFIX,
             EDIT_PREFIX, DEL_PREFIX, REN_PREFIX, CTL_PREFIX, GCALL_PREFIX, GRPINFO_PREFIX, GRPSELF_PREFIX,
-            GRPJOIN_PREFIX, GRPLEAVE_PREFIX, GRPCTL_PREFIX, GRPMSG_PREFIX, crate::autodelete::TTL_PREFIX]
+            GRPJOIN_PREFIX, GRPLEAVE_PREFIX, GRPCTL_PREFIX, GRPMSG_PREFIX, CDM_PREFIX, crate::autodelete::TTL_PREFIX]
             .iter().any(|p| text.starts_with(p))
 }
 
@@ -3947,6 +4113,9 @@ mod replies_tests {
         assert!(super::is_control_text("AQUA-CALL:v1:{}"));
         assert!(super::is_control_text(r#"[grpmsg:v1]{"gid":"g"}"#));
         assert!(!super::is_control_text("привет"));
+        assert!(super::is_control_text(r#"[cdm:v1]{"gid":"grp_x","user":"ann","body":"hi"}"#));
+        assert_eq!(super::parse_cdm_chat_id(&super::cdm_chat_id("grp_ab12", "ann")), Some(("grp_ab12".into(), "ann".into())));
+        assert_eq!(super::parse_cdm_chat_id("dm~grp_x"), None);
         assert!(!super::is_control_text(r#"[reply:v1]{"q":"x","t":"y"}"#));
         let m = crate::state::ChatMessage {
             id: "1".into(), from: "vpst".into(), time: "18:22".into(),

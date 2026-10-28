@@ -846,6 +846,9 @@
         <div class="card">
           <div class="ct">{$t("Comments")}</div>
           {@render toggle($t("Comments under posts and messages"), $t("Everyone may discuss a post in its thread — even in a channel where only admins post."), group.settings.comments !== false, () => commit((g) => { g.settings.comments = g.settings.comments === false; }, group.settings.comments === false ? "turned comments on" : "turned comments off"), busy)}
+          {#if group.kind === "channel"}
+            {@render toggle($t("Direct messages"), $t("Subscribers can write to the channel privately; only admins see and answer it."), group.settings.direct === true, () => commit((g) => { g.settings.direct = g.settings.direct !== true; }, group.settings.direct === true ? "turned direct messages off" : "turned direct messages on"), busy)}
+          {/if}
         </div>
 
       {:else if page === "reactions"}

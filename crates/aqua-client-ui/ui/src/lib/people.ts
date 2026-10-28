@@ -34,6 +34,8 @@ export interface PeerCard {
   fetched: number;
   /** Highest profile version we've seen announced in presence. */
   pv: number;
+  /** The account's ID (never changes, unlike the @name). */
+  uid?: string;
 }
 
 const KEY = "aqua.peerCards.v1";
@@ -103,6 +105,16 @@ export function refreshPeer(username: string, force = false): Promise<void> {
         peerCards.update((m) => ({ ...m, [username]: { ...(m[username] ?? blank(username)), fetched: Date.now() } }));
         return;
       }
+      // The @name now belongs to another account (relays joined and an
+      // older account had it): the chat follows the ID to its new name.
+      if (cur?.uid && card.uid && card.uid !== cur.uid) {
+        const now = await api.followPeerByUid(username, cur.uid).catch(() => null);
+        if (now && now !== username) {
+          peerCards.update((m) => { const n = { ...m }; delete n[username]; return n; });
+          void refreshPeer(now, true);
+          return;
+        }
+      }
       const av = card.avatar_ver ?? 0, bv = card.banner_ver ?? 0, mv = card.music_ver ?? 0;
       let music = cur && cur.music_ver === mv ? (cur.music ?? "") : "";
       if (mv && !music) music = assetUrl(await api.profileMediaPath(username, "music", mv).catch(() => null));
@@ -123,6 +135,7 @@ export function refreshPeer(username: string, force = false): Promise<void> {
           avatar: av ? avatar : "", banner: bv ? banner : "", music: mv ? music : "",
           fetched: Date.now(),
           pv: m[username]?.pv ?? 0,
+          uid: card.uid || cur?.uid,
         },
       }));
     } catch { /* offline — keep the cached card */ }

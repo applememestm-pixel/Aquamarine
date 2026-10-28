@@ -12,6 +12,7 @@
   import { icons } from "../icons";
   import { activeTab, activeId, type NavTab } from "../stores";
   import { openSettings, settingsOpen } from "../panels/settings";
+  import { navConf } from "../navBar";
 
   type Item = { id: string; label: string; svg: string; tab?: NavTab; mobileOnly?: boolean; desktopOnly?: boolean };
   // Phones get four: Chats, Files, Contacts (with recent calls inside, like
@@ -30,7 +31,10 @@
     mq?.addEventListener("change", on);
     return () => mq?.removeEventListener("change", on);
   });
-  const items = $derived(all.filter((i) => (phone ? !i.desktopOnly : !i.mobileOnly)));
+  // Phones: the tabs, order and visibility from Settings → Appearance → Tab bar.
+  const items = $derived(phone
+    ? $navConf.order.filter((id) => !$navConf.hidden.includes(id)).map((id) => all.find((i) => i.id === id)).filter((i): i is Item => !!i)
+    : all.filter((i) => !i.mobileOnly));
 
   function activate(it: Item) {
     if (it.tab) activeTab.set(it.tab);
@@ -89,7 +93,7 @@
   onMount(() => {
     const last = new WeakMap<EventTarget, number>();
     const onScroll = (e: Event) => {
-      if (!mobile()) return;
+      if (!mobile() || !$navConf.autoHide) return;
       const el = e.target as HTMLElement;
       if (!el || !(el instanceof HTMLElement) || el.closest(".main-pane, .rail, [role=dialog]")) return;
       const y = el.scrollTop;
@@ -112,6 +116,8 @@
 
 <aside
   class="rail"
+  class:off={phone && !$navConf.on}
+  class:no-labels={phone && !$navConf.labels}
   class:hidden
   class:dragging={dragX != null}
   bind:this={bar}
@@ -225,9 +231,9 @@
       border: 1px solid var(--border-strong);
       border-radius: calc(24px * var(--rk, 1));
       /* Frosted glass: the list shows through, softly. */
-      background: color-mix(in srgb, var(--bg-surface, #12151d) 58%, transparent);
-      backdrop-filter: blur(22px) saturate(1.6);
-      -webkit-backdrop-filter: blur(22px) saturate(1.6);
+      background: color-mix(in srgb, var(--bg-surface, #12151d) var(--glass-a, 58%), transparent);
+      backdrop-filter: blur(var(--glass-blur, 22px)) saturate(1.6);
+      -webkit-backdrop-filter: blur(var(--glass-blur, 22px)) saturate(1.6);
       box-shadow: 0 18px 40px -18px rgba(0,0,0,.8), 0 1px 0 rgba(255,255,255,.05) inset;
       z-index: 60;
       touch-action: pan-y;
@@ -235,6 +241,9 @@
       -webkit-user-select: none;
       transition: transform .38s cubic-bezier(.22,1,.36,1), opacity .3s ease;
     }
+    .rail.off { display: none; }
+    .rail.no-labels .nav-lbl { display: none; }
+    .rail.no-labels .nav-btn :global(svg) { width: 22px; height: 22px; }
     .rail.hidden:not(.dragging) { transform: translateX(-50%) translateY(calc(100% + 24px)); opacity: 0; pointer-events: none; }
     .brand, .rail-divider, .rail-spacer { display: none; }
     .nav-btn.mobile-only { display: flex; margin-top: 0; }

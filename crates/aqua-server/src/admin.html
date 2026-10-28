@@ -436,7 +436,23 @@
           <span id="cfgMsg" class="note" style="margin:0"></span>
         </div>
       </div>
+      <div class="card rv">
+        <label data-t="Invitations">Invitations</label>
+        <div class="note" data-t="invHint">A code (or its QR) lets someone sign up here without you typing their email: they scan it in the app and register. Each code works the set number of times.</div>
+        <div id="invList" class="dl"></div>
+        <div class="row mt">
+          <input id="invUses" type="number" min="1" max="1000" value="1" style="width:80px" title="uses" />
+          <select id="invDays"><option value="1">1 d</option><option value="7" selected>7 d</option><option value="30">30 d</option><option value="0">∞</option></select>
+          <input id="invNote" data-tp="for whom (optional)" placeholder="for whom (optional)" style="flex:1;min-width:140px" />
+          <button class="btn" onclick="newInvite()" data-t="New invitation">New invitation</button>
+        </div>
+        <span id="invMsg" class="note" style="margin:0"></span>
+      </div>
     </section>
+    <div id="qrPop" class="qr-pop hide" onclick="if(event.target===this)this.classList.add('hide')">
+      <div class="qr-card"><b id="qrTitle"></b><div id="qrBox"></div><code id="qrText"></code><div class="note" id="qrNote"></div>
+        <button class="btn" onclick="$('qrPop').classList.add('hide')" data-t="Close">Close</button></div>
+    </div>
 
     <!-- Mail -->
     <section class="page hide" data-page="mail">
@@ -507,7 +523,7 @@
         <div class="mstate" id="fState"><span class="d"></span><span id="fStateText">…</span></div>
         <div id="netBox" class="hide">
           <label data-t="Invitation into this network">Invitation into this network</label>
-          <div class="invite"><code id="inviteCode">…</code><button class="copy" id="inviteCopy" data-t="Copy">Copy</button></div>
+          <div class="invite"><code id="inviteCode">…</code><button class="copy" id="inviteCopy" data-t="Copy">Copy</button><button class="copy" onclick="inviteText && showQr(inviteText, T('Invitation into this network'), T('qrSecret'))">QR</button></div>
           <div class="note" data-th="inviteNote">Give it to the admin of another relay: they paste it below on their panel, and the relays add each other — and from then on find every other relay of the network by themselves. It holds the network's secret: send it privately.</div>
           <div class="mt"><label data-t="Join a network by an invitation">Join a network by an invitation</label>
             <div class="row"><input id="joinInv" placeholder="aquafed:…" style="flex:1;min-width:200px" autocomplete="off" /><button class="btn" onclick="joinNet()" data-t="Join">Join</button></div></div>
@@ -558,6 +574,19 @@
   </div>
 </div>
 
+<script>__QRLIB__</script>
+<style>
+  .qr-pop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: rgba(0,0,0,.55); backdrop-filter: blur(6px); }
+  .qr-pop.hide { display: none; }
+  .qr-card { background: #11151f; border: 1px solid rgba(255,255,255,.12); border-radius: 18px; padding: 18px; display: flex; flex-direction: column; gap: 10px; align-items: center; max-width: min(92vw, 380px); }
+  #qrBox { background: #fff; border-radius: 12px; padding: 10px; line-height: 0; }
+  #qrBox svg { width: min(70vw, 280px); height: auto; }
+  #qrText { font-size: 11px; word-break: break-all; opacity: .7; text-align: center; }
+  #invDays { background: rgba(255,255,255,.04); color: inherit; border: 1px solid rgba(255,255,255,.14); border-radius: 10px; padding: 0 10px; height: 40px; font: inherit; }
+  #invDays option { background: #11151f; }
+  .inv-row { display: flex; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.06); }
+  .inv-row code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+</style>
 <script>
   const $ = (id) => document.getElementById(id);
   const store = { get(k){ try { return localStorage.getItem(k) || ""; } catch { return ""; } },
@@ -574,7 +603,11 @@
     "Relay":"Ретранслятор","Online, last minutes":"В сети за последние минуты","Connect":"Подключение","Data folder":"Папка с данными","Move to another folder":"Перенести в другую папку","Copy there and use from the next start":"Скопировать туда и работать оттуда со следующего запуска","Copied {n} files. Restart the server — it will run from the new folder. The old one stays; delete it once all is well.":"Скопировано файлов: {n}. Перезапустите сервер — он будет работать из новой папки. Старая остаётся, удалите её, когда всё заработает.","type this into the app's Server field":"впишите в поле «Сервер» в приложении",
     "Latest codes":"Последние коды","all →":"все →","Sign-up":"Регистрация","Who may register":"Кто может зарегистрироваться",
     "This list only decides who may create an account on this relay; encryption is unchanged.":"Список решает только, кто может создать аккаунт на этом ретрансляторе; шифрование от этого не меняется.",
-    "Invite-only (solo mode)":"Только по приглашениям","Only emails on the list below may register. Off = open relay.":"Регистрироваться могут только адреса из списка. Выключено — открытый сервер.",
+    "Invite-only (solo mode)":"Только по приглашениям",
+    "Invitations":"Приглашения", "invHint":"Код (или его QR) даёт зарегистрироваться здесь без того, чтобы вы вписывали адрес почты: человек сканирует его в приложении и регистрируется. Каждый код работает заданное число раз.",
+    "for whom (optional)":"для кого (необязательно)", "New invitation":"Новое приглашение", "Invitation":"Приглашение", "No invitations yet.":"Приглашений пока нет.",
+    "invQrNote":"Отсканируйте в Aquamarine: вход → «Сканировать QR» или Настройки → Сеть → «Сканировать QR».",
+    "qrSecret":"В этом QR секрет сети — показывайте его только админу другого сервера.", "Invitation into this network":"Приглашение в эту сеть", "Close":"Закрыть","Only emails on the list below may register. Off = open relay.":"Регистрироваться могут только адреса из списка. Выключено — открытый сервер.",
     "Allowed emails — one per line":"Разрешённые адреса — по одному в строке","Save access policy":"Сохранить",
     "Until mail is set up the relay runs in dev mode: codes are shown here instead of being sent.":"Пока почта не настроена, сервер работает в режиме разработки: коды показываются здесь, а не отправляются.",
     "SMTP server":"SMTP-сервер","Port":"Порт","Login (your mailbox)":"Логин (ваш ящик)","App password":"Пароль приложения",
@@ -626,7 +659,8 @@
     "mailHere":"Почта настроена здесь — этот сервер отправляет коды и за серверы сети без почты (пароль остаётся тут).",
     "accounts":"аккаунтов","online":"в сети",
   };
-  const T = (s) => (RU && DICT[s]) || ({lanOn:"Phones must be on the same Wi-Fi. If they can't connect, allow <b>aqua-server</b> in the firewall.",
+  const T = (s) => (RU && DICT[s]) || ({invQrNote:"Scan it in Aquamarine: sign-in → “Scan QR”, or Settings → Network & proxy → “Scan QR”.",
+    qrSecret:"This QR holds the network's secret — show it only to the admin of another relay.", lanOn:"Phones must be on the same Wi-Fi. If they can't connect, allow <b>aqua-server</b> in the firewall.",
     lanOff:"The relay only accepts connections from this PC.", codesMailed:"Codes are e-mailed to users, so they don't show up here. If an e-mail can't be sent, its code appears here.",
     notSent:"These e-mails could NOT be sent — pass the code on to the person yourself.",
     noCodes:"No codes yet. When someone taps <b>Send code</b> in the app, it appears here.",
@@ -887,6 +921,8 @@
     markCodesSeen();
     if (store.get("aqua.admin.tab") === "journal" && !document.hidden) loadJournal();
 
+    if (s.public_url) window.__pub = s.public_url;
+    if (!window.__invLoaded) { window.__invLoaded = true; loadInvites(); }
     inviteOnly = s.invite_only;
     $("sw").className = "sw" + (inviteOnly?" on":"");
     $("accessSt").className = "st" + (inviteOnly?" on":"");
@@ -895,6 +931,35 @@
   $("allow").addEventListener("focus", () => editingAllow = true);
   $("allow").addEventListener("blur", () => editingAllow = false);
   function toggleInvite(){ inviteOnly=!inviteOnly; $("sw").className="sw"+(inviteOnly?" on":""); }
+
+  // ---- invitations (QR aqua:join?s=…&c=…) ----
+  function joinUrl(code){ return "aqua:join?s=" + encodeURIComponent((window.__pub || location.origin).replace(/\/+$/, "")) + "&c=" + code; }
+  function showQr(text, title, note){
+    const q = qrcode(0, "Q"); q.addData(text, "Byte"); q.make();
+    $("qrBox").innerHTML = q.createSvgTag({ cellSize: 6, margin: 2, scalable: true });
+    $("qrTitle").textContent = title || ""; $("qrText").textContent = text.length > 90 ? text.slice(0, 40) + "…" : text;
+    $("qrNote").textContent = note || ""; $("qrPop").classList.remove("hide");
+  }
+  async function loadInvites(){
+    try {
+      const list = await api("/v1/admin/invites");
+      const now = Date.now() / 1000;
+      $("invList").innerHTML = list.length ? list.map((i) => {
+        const dead = !i.uses || (i.expires && i.expires < now);
+        const left = (RU ? "осталось " : "left ") + i.uses + (i.expires ? " · " + (RU ? "до " : "until ") + new Date(i.expires * 1000).toLocaleDateString() : "");
+        return `<div class="inv-row" style="${dead ? "opacity:.45" : ""}"><code>${esc(i.code)}</code><span class="note" style="margin:0">${esc(left)}${i.note ? " · " + esc(i.note) : ""}</span>`
+          + (dead ? "" : `<button class="copy" onclick="showQr(joinUrl('${esc(i.code)}'), T('Invitation'), T('invQrNote'))">QR</button><button class="copy" onclick="copy(joinUrl('${esc(i.code)}'))">${T("Copy")}</button>`)
+          + `<button class="copy" onclick="delInvite('${esc(i.code)}')">✕</button></div>`;
+      }).join("") : `<div class="note">${T("No invitations yet.")}</div>`;
+    } catch {}
+  }
+  async function newInvite(){
+    try {
+      const i = await api("/v1/admin/invites", { method: "POST", body: JSON.stringify({ uses: parseInt($("invUses").value) || 1, days: parseInt($("invDays").value) || 0, note: $("invNote").value }) });
+      $("invNote").value = ""; await loadInvites(); showQr(joinUrl(i.code), T("Invitation"), T("invQrNote"));
+    } catch(e){ msg("invMsg", T("Failed: ") + e.message, "err"); }
+  }
+  async function delInvite(code){ try { await fetch("/v1/admin/invites/" + code, { method: "DELETE", headers: { "Authorization": "Bearer " + TOKEN } }); loadInvites(); } catch {} }
 
   async function saveCfg(){
     const allow = $("allow").value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);

@@ -101,6 +101,8 @@ export interface InitInfo {
   server_url?: string | null;
   proxy?: string | null;
   data_dir?: string;
+  /** The account's ID (never changes, unlike the @name). */
+  uid?: string | null;
 }
 
 /** Mirrors `FingerprintView` in the Rust backend. */
@@ -192,6 +194,8 @@ export interface DirProfile {
   banner_ver?: number;
   /** "Favourite track" audio version; 0 = none. */
   music_ver?: number;
+  /** The account's ID ("" with an older relay). */
+  uid?: string;
 }
 
 /** Discord-style activity detected on this PC (or shared by a peer). */
@@ -289,6 +293,8 @@ export interface GroupSettings {
   ttl?: number;
   /** Comments under posts / messages (default on). */
   comments?: boolean;
+  /** Channels: subscribers may write privately to the admins (dm~gid~user chats). */
+  direct?: boolean;
   /** Temporary event room: ends at this time (ms) — then read-only. */
   ends_at?: number;
   /** What happens to the room on each device when it ends. */

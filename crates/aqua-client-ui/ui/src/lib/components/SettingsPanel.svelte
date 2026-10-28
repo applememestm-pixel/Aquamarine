@@ -13,7 +13,10 @@
   import { autostartEnabled, setAutostart } from "../desktop";
   import { pickFolder } from "../dialog";
   const PHONE_UI = /android|iphone|ipad/i.test(navigator.userAgent);
-  import { ATTACH_ITEMS, attachFront, toggleAttachFront, resetAttachMenu } from "../attachMenu";
+  import { hasWidget } from "../widget";
+  import { plugins, pluginsOn, installPlugin, removePlugin, togglePlugin, EXAMPLE_PLUGIN } from "../plugins";
+  import { NAV_ITEMS, navConf, moveNav, toggleNavHidden, resetNav } from "../navBar";
+  import { ATTACH_ITEMS, attachFront, attachHidden, attachDock, attachBots, toggleAttachFront, toggleAttachHidden, moveAttach, toggleAttachBot, resetAttachMenu } from "../attachMenu";
   import { chatLocks } from "../chatLocks";
   import { askSetLock, askRemoveLock, askChangeLock } from "../chatLockUi";
   let blockPick = $state("");
@@ -121,6 +124,8 @@
   let detail = $state(false);
   // Phones have no keyboard shortcuts — hide that row there.
   let phone = $state(isPhone());
+  /** Settings → Experimental → Plugins: code being pasted (null: closed). */
+  let pluginPaste = $state<string | null>(null);
   onMount(() => {
     const mq = window.matchMedia("(max-width: 720px)");
     const on = () => { phone = mq.matches; };
@@ -1463,17 +1468,90 @@
           </div>
         {/each}
       </section>
+      {#if phone}
+      <section class="group">
+        <div class="label">{$t("Glass panels")}</div>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, glass: !x.glass }))}>
+          <div class="tr-text"><div class="tr-title">{$t("See-through floating panels")}</div><div class="tr-sub">{$t("The chat header, the message field and the tab bar float over the chat, like in the new Telegram")}</div></div>
+          <span class="switch" class:on={!!$settings.glass}></span>
+        </button>
+        {#if $settings.glass}
+          {@const ga = $settings.glassAlpha ?? 55}
+          <div class="ava-row">
+            <div class="ava-ctl">
+              <div class="ava-head"><b>{$t("Opacity")}</b><span class="pill-tag">{ga === 0 ? $t("Outline only") : `${ga}%`}</span></div>
+              <div class="range"><input type="range" min="0" max="100" step="5" value={ga}
+                oninput={(e) => settings.update((x) => ({ ...x, glassAlpha: parseInt((e.target as HTMLInputElement).value) }))} /></div>
+            </div>
+          </div>
+        {/if}
+      </section>
+      <section class="group">
+        <div class="label">{$t("Tab bar")}</div>
+        <button class="toggle-row" onclick={() => navConf.update((c) => ({ ...c, on: !c.on }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Show the tab bar")}</div><div class="tr-sub">{$t("Off: swipe left and right between tabs; Settings is the gear at the top")}</div></div>
+          <span class="switch" class:on={$navConf.on}></span>
+        </button>
+        {#if $navConf.on}
+          {#each $navConf.order as id, i (id)}
+            {@const it = NAV_ITEMS.find((x) => x.id === id)}
+            {@const hid = $navConf.hidden.includes(id)}
+            <div class="toggle-row am-row" class:off={hid}>
+              <div class="tr-text"><div class="tr-title">{$t(it?.label ?? id)}</div></div>
+              <button class="am-btn" disabled={i === 0} onclick={() => moveNav(id, -1)} aria-label={$t("Move up")}>↑</button>
+              <button class="am-btn" disabled={i === $navConf.order.length - 1} onclick={() => moveNav(id, 1)} aria-label={$t("Move down")}>↓</button>
+              <button class="switch-btn" disabled={id === "chats"} onclick={() => toggleNavHidden(id)} aria-label={$t("Show")}><span class="switch" class:on={!hid}></span></button>
+            </div>
+          {/each}
+          <button class="toggle-row" onclick={() => navConf.update((c) => ({ ...c, labels: !c.labels }))}>
+            <div class="tr-text"><div class="tr-title">{$t("Tab names")}</div></div>
+            <span class="switch" class:on={$navConf.labels}></span>
+          </button>
+          <button class="toggle-row" onclick={() => navConf.update((c) => ({ ...c, autoHide: !c.autoHide }))}>
+            <div class="tr-text"><div class="tr-title">{$t("Hide while scrolling")}</div><div class="tr-sub">{$t("Slips away as you scroll down, comes back when you scroll up")}</div></div>
+            <span class="switch" class:on={$navConf.autoHide}></span>
+          </button>
+        {/if}
+        <button class="mini-btn" onclick={resetNav}>{$t("Reset")}</button>
+      </section>
+      {/if}
       {/if}
 
       {#if section === "behaviour"}
       <section class="group">
         <div class="label">{$t("Attach menu")}</div>
-        <div class="foot-note" style="margin:0 0 8px">{$t("What the 📎 button shows right away. The rest waits under “More”.")}</div>
-        {#each ATTACH_ITEMS as it (it.id)}
-          <button class="toggle-row" onclick={() => toggleAttachFront(it.id)}>
-            <div class="tr-text"><div class="tr-title">{$t(it.label)}</div></div>
-            <span class="switch" class:on={$attachFront.includes(it.id)}></span>
+        <div class="foot-note" style="margin:0 0 8px">{$t("What the 📎 button shows right away and in what order. The rest waits under “More”; hidden ones aren't shown at all.")}</div>
+        {#each [...$attachFront.map((id) => ATTACH_ITEMS.find((x) => x.id === id)).filter((x) => !!x), ...ATTACH_ITEMS.filter((x) => !$attachFront.includes(x.id))] as it, i (it.id)}
+          {@const front = $attachFront.includes(it.id)}
+          {@const hid = $attachHidden.includes(it.id)}
+          <div class="toggle-row am-row" class:off={hid}>
+            <div class="tr-text"><div class="tr-title">{$t(it.label)}</div>
+              <div class="tr-sub">{hid ? $t("Hidden") : front ? $t("Right away") : $t("Under “More”")}</div></div>
+            {#if front}
+              <button class="am-btn" disabled={i === 0} onclick={() => moveAttach(it.id, -1)} aria-label={$t("Move up")}>↑</button>
+              <button class="am-btn" disabled={i === $attachFront.length - 1} onclick={() => moveAttach(it.id, 1)} aria-label={$t("Move down")}>↓</button>
+            {/if}
+            <button class="am-btn" onclick={() => toggleAttachHidden(it.id)} title={$t(hid ? "Show" : "Hide")} aria-label={$t(hid ? "Show" : "Hide")}>
+              {#if hid}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.1A9.8 9.8 0 0 1 12 5c5 0 9 4.5 10 7-.4 1-1.2 2.3-2.4 3.5M6.2 6.2C4.3 7.5 2.9 9.4 2 12c1 2.5 5 7 10 7 1.7 0 3.3-.5 4.6-1.3"/></svg>
+              {:else}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 12c1-2.5 5-7 10-7s9 4.5 10 7c-1 2.5-5 7-10 7S3 14.5 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>{/if}
+            </button>
+            <button class="switch-btn" onclick={() => toggleAttachFront(it.id)} aria-label={$t("Right away")}><span class="switch" class:on={front}></span></button>
+          </div>
+        {/each}
+        {#if phone}
+          <button class="toggle-row" onclick={() => attachDock.update((v) => !v)}>
+            <div class="tr-text"><div class="tr-title">{$t("Floating action bar")}</div><div class="tr-sub">{$t("On phones the actions float at the bottom; off — they sit in the sheet under the gallery")}</div></div>
+            <span class="switch" class:on={$attachDock}></span>
           </button>
+        {/if}
+        <div class="label" style="margin-top:12px">{$t("Bots in the attach menu")}</div>
+        {#each $attachBots as b (b.bot)}
+          <div class="toggle-row am-row">
+            <div class="tr-text"><div class="tr-title">{b.title}</div><div class="tr-sub">@{b.bot}</div></div>
+            <button class="mini-btn" onclick={() => toggleAttachBot(b)}>{$t("Remove")}</button>
+          </div>
+        {:else}
+          <div class="foot-note" style="margin:0 0 8px">{$t("Open a bot with a mini app → ⋯ → “Add to attach menu”.")}</div>
         {/each}
         <button class="mini-btn" onclick={resetAttachMenu}>{$t("Reset")}</button>
       </section>
@@ -1553,6 +1631,16 @@
       {/if}
 
       {#if section === "notifications"}
+      {#if hasWidget}
+      <section class="group">
+        <div class="label">{$t("Home-screen widget")}</div>
+        <div class="foot-note" style="margin:0 0 8px">{$t("Hold an empty spot on the home screen → Widgets → Aquamarine. It shows the chats with unread messages; with an app passcode — only how many.")}</div>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, widgetText: !x.widgetText }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Message text in the widget")}</div><div class="tr-sub">{$t("Off: only names and counts — anyone who sees your screen won't read your messages")}</div></div>
+          <span class="switch" class:on={!!$settings.widgetText}></span>
+        </button>
+      </section>
+      {/if}
       <section class="group">
         <div class="label">{$t("Notifications")}</div>
         <button class="toggle-row" onclick={() => toggle("notifySound")}>
@@ -1827,6 +1915,43 @@
       <section class="group">
         <div class="label">{$t("Experimental")}</div>
         <div class="bots-note">{$t("Features that are still being tried out. They may change, break or disappear in the next versions.")}</div>
+      </section>
+      <section class="group">
+        <div class="label">🧩 {$t("Plugins")}</div>
+        <button class="toggle-row" onclick={() => pluginsOn.update((v) => !v)}>
+          <div class="tr-text"><div class="tr-title">{$t("Plugins")}</div>
+            <div class="tr-sub">{$t("Small JavaScript add-ons, like in exteraGram: commands, changing what you send, reacting to messages.")}</div></div>
+          <span class="switch" class:on={$pluginsOn}></span>
+        </button>
+        {#if $pluginsOn}
+          <div class="bots-note">{$t("A plugin sees the messages it's given, but runs locked away: no network, no access to your keys, files or the rest of the app. Install only plugins you trust.")}</div>
+          {#each $plugins as pl (pl.id)}
+            <div class="toggle-row am-row" class:off={!pl.enabled}>
+              <div class="tr-text"><div class="tr-title">{pl.name} <span class="pill-tag">{pl.version}</span></div>
+                <div class="tr-sub">{pl.description || "—"}{pl.author ? ` · ${pl.author}` : ""}</div></div>
+              <button class="mini-btn" onclick={() => { if (confirm(tr("Remove the plugin “{n}”?", { n: pl.name }))) removePlugin(pl.id); }}>{$t("Remove")}</button>
+              <button class="switch-btn" onclick={() => togglePlugin(pl.id)} aria-label={$t("On")}><span class="switch" class:on={pl.enabled}></span></button>
+            </div>
+          {:else}
+            <div class="foot-note" style="margin:0 0 8px">{$t("No plugins yet.")}</div>
+          {/each}
+          <div class="pl-acts">
+            <label class="mini-btn">{$t("Install from file…")}
+              <input type="file" accept=".js,.mjs,.txt,text/javascript" hidden onchange={async (e) => {
+                const f = (e.currentTarget as HTMLInputElement).files?.[0];
+                if (!f) return;
+                try { const p = installPlugin(await f.text()); showToast(tr("Plugin “{n}” installed", { n: p.name })); } catch (err) { showToast(String(err)); }
+                (e.currentTarget as HTMLInputElement).value = "";
+              }} />
+            </label>
+            <button class="mini-btn" onclick={() => (pluginPaste = pluginPaste == null ? "" : null)}>{$t("Paste code")}</button>
+            <button class="mini-btn" onclick={() => { const p = installPlugin(EXAMPLE_PLUGIN); showToast(tr("Plugin “{n}” installed", { n: p.name })); }}>{$t("Example plugin")}</button>
+          </div>
+          {#if pluginPaste != null}
+            <textarea class="pl-code" rows="8" spellcheck="false" placeholder={"// @name My plugin\naqua.command(\"hi\", \"Say hi\", () => \"Hi!\");"} bind:value={pluginPaste}></textarea>
+            <button class="mini-btn" disabled={!pluginPaste.trim()} onclick={() => { try { const p = installPlugin(pluginPaste ?? ""); pluginPaste = null; showToast(tr("Plugin “{n}” installed", { n: p.name })); } catch (err) { showToast(String(err)); } }}>{$t("Install")}</button>
+          {/if}
+        {/if}
       </section>
       {/if}
 
@@ -2639,6 +2764,18 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     border-bottom: 1px solid var(--border);
   }
   .toggle-row:last-child { border-bottom: none; }
+  /* Attach menu / nav bar rows: name, then small controls on the right. */
+  .am-row { cursor: default; gap: 6px; }
+  .am-row .tr-text { flex: 1; }
+  .am-row.off .tr-title { color: var(--fg-dim); text-decoration: line-through; }
+  .am-btn { width: 30px; height: 30px; flex-shrink: 0; display: grid; place-items: center; border-radius: calc(8px * var(--rk, 1));
+    border: 1px solid var(--border); background: var(--bg-input); color: var(--fg-muted); cursor: pointer; font: 700 14px var(--font-ui); }
+  .am-btn:disabled { opacity: .35; cursor: default; }
+  .am-btn svg { width: 16px; height: 16px; }
+  .pl-acts { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+  .pl-code { width: 100%; font: 12px/1.5 var(--font-mono, monospace); background: var(--bg-input); color: var(--fg); border: 1px solid var(--border);
+    border-radius: calc(10px * var(--rk, 1)); padding: 8px 10px; margin-bottom: 8px; resize: vertical; }
+  .switch-btn { background: none; border: none; padding: 0; cursor: pointer; display: flex; }
   .tr-text { min-width: 0; }
   .tr-title { font-size: 13.5px; font-weight: 600; color: var(--fg); }
   .tr-sub { font-size: 11.5px; color: var(--fg-dim); margin-top: 2px; }

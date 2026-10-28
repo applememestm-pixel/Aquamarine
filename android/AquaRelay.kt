@@ -59,6 +59,11 @@ class UrlArgs {
   var url: String = ""
 }
 
+@InvokeArg
+class WidgetArgs {
+  var data: String = "{}"
+}
+
 @TauriPlugin
 class AquaRelayPlugin(private val activity: Activity) : Plugin(activity) {
   @Command
@@ -90,6 +95,18 @@ class AquaRelayPlugin(private val activity: Activity) : Plugin(activity) {
       invoke.resolve(JSObject().put("ok", true))
     } catch (e: Exception) {
       invoke.reject("no app can open this link")
+    }
+  }
+
+  /** What the home-screen widget shows (AquaWidget.kt): unread chats. */
+  @Command
+  fun updateWidget(invoke: Invoke) {
+    val args = invoke.parseArgs(WidgetArgs::class.java)
+    try {
+      AquaWidget.store(activity.applicationContext, args.data)
+      invoke.resolve(JSObject().put("ok", true))
+    } catch (e: Exception) {
+      invoke.reject("widget: ${e.message}")
     }
   }
 

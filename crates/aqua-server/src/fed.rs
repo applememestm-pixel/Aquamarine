@@ -542,7 +542,11 @@ async fn sync_peer(
         let mut applied = 0;
         for u in &rows {
             let before = state.directory.media_versions(&u.username).unwrap_or((0, 0, 0));
-            if state.directory.fed_apply_user(u) {
+            let res = state.directory.fed_apply_user(u);
+            if let Some((old, new)) = &res.displaced {
+                crate::move_live(state, old, new);
+            }
+            if res.applied {
                 applied += 1;
                 // Profile media travels with the account, so it is here
                 // even if the other relay goes away.
@@ -554,7 +558,7 @@ async fn sync_peer(
                     if let Some(r) = fed.get(peer, &format!("/v1/fed/media/{}/{kind}", u.username)).await {
                         let mime = r.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("application/octet-stream").to_string();
                         if let Ok(b) = r.bytes().await {
-                            state.directory.fed_store_media(&u.username, k, &mime, &b);
+                            state.directory.fed_store_media(&res.name, k, &mime, &b);
                         }
                     }
                 }

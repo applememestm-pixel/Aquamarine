@@ -288,6 +288,9 @@ pub struct InitInfo {
     /// have distinct identities (different directories ⇒ different
     /// vault.sqlite ⇒ different identity).
     pub data_dir: String,
+    /// The account's ID on the relay (never changes; None offline or with
+    /// an older relay).
+    pub uid: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1064,6 +1067,7 @@ impl AppState {
             server_url: self.server_url.clone(),
             proxy: aqua_client_core::transport::proxy(),
             data_dir: self.data_dir.display().to_string(),
+            uid: self.transport.as_ref().map(|t| t.uid().to_string()).filter(|u| !u.is_empty()),
         }
     }
 }

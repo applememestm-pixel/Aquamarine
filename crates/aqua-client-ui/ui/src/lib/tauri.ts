@@ -106,7 +106,7 @@ export const api = {
 
   // Email registration + user directory
   /** purpose: the relay answers at once if the e-mail already has an account (signup) or has none (signin/reset). */
-  requestEmailCode:   (server_url: string, email: string, purpose?: "signup" | "signin" | "reset", nonce?: string): Promise<{ dev_code: string | null; delivery_failed: boolean; error: string | null }> => invoke("request_email_code", { serverUrl: server_url, email, purpose: purpose ?? null, nonce: nonce ?? null }),
+  requestEmailCode:   (server_url: string, email: string, purpose?: "signup" | "signin" | "reset", nonce?: string, invite?: string): Promise<{ dev_code: string | null; delivery_failed: boolean; error: string | null }> => invoke("request_email_code", { serverUrl: server_url, email, purpose: purpose ?? null, nonce: nonce ?? null, invite: invite ?? null }),
   pollEmailCode:      (server_url: string, email: string, nonce: string): Promise<string | null> => invoke("poll_email_code", { serverUrl: server_url, email, nonce }),
   verifyEmailCode:    (server_url: string, email: string, code: string): Promise<string> => invoke("verify_email_code", { serverUrl: server_url, email, code }),
   registerAccount:    (server_url: string, username: string, ticket: string, display_name: string, about: string, phone: string, password?: string, email?: string): Promise<void> => invoke("register_account", { serverUrl: server_url, username, ticket, displayName: display_name, about, phone, password: password || null, email: email || null }),
@@ -151,6 +151,7 @@ export const api = {
   registerUsername:   (ticket: string, username: string, display_name: string, about: string, phone: string): Promise<void> => invoke("register_username", { ticket, username, displayName: display_name, about, phone }),
   searchDirectory:    (query: string): Promise<DirProfile[]>                        => invoke("search_directory", { query }),
   fetchDirectoryProfile: (username: string): Promise<DirProfile | null>            => invoke("fetch_directory_profile", { username }),
+  followPeerByUid: (old: string, uid: string): Promise<string | null>                => invoke("follow_peer_by_uid", { old, uid }),
   publishProfile:     (display_name: string, about: string, phone: string): Promise<void> => invoke("publish_profile", { displayName: display_name, about, phone }),
   publishProfileFull: (display_name: string, about: string, phone: string, extra: Record<string, unknown>): Promise<void> =>
     invoke("publish_profile_full", { displayName: display_name, about, phone, extra }),
@@ -226,8 +227,10 @@ export const api = {
     invoke("send_call_signal", { peerId: peer_id, signalJson: JSON.stringify(signal) }),
   // Raw control payload over the E2EE session, never shown as a bubble
   // (poll votes, read receipts).
+  // A channel's direct messages (dm~…) carry text only: no typing, edits or reactions.
   sendControl:        (peer_id: string, payload: string): Promise<void> =>
-    invoke("send_control", { peerId: peer_id, payload }),
+    peer_id.startsWith("dm~") ? Promise.resolve() : invoke("send_control", { peerId: peer_id, payload }),
+  channelDmOpen:      (gid: string, user?: string): Promise<string> => invoke("channel_dm_open", { gid, user: user ?? null }),
 
   // Local media (stickers + GIFs)
   sendSticker:        (peer_id: string, path: string): Promise<AttachResult>       => invoke("send_sticker", { peerId: peer_id, filePath: path }),

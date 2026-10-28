@@ -192,6 +192,9 @@ pub struct ProfileCard {
     /// "Favourite track" audio version (0 = none; older servers omit it).
     #[serde(default)]
     pub music_ver: i64,
+    /// The account's ID, like Telegram's (older relays: "").
+    #[serde(default)]
+    pub uid: String,
 }
 
 /// Request an email verification code (no auth required). Returns the
@@ -224,9 +227,14 @@ pub async fn request_email_code_ex(server_url: &str, email: &str, purpose: &str)
 /// With `nonce` (random, from this app): the e-mail also carries an "It's
 /// me" link, and `poll_email_code` gets the code once it's tapped.
 pub async fn request_email_code_nonce(server_url: &str, email: &str, purpose: &str, nonce: &str) -> Result<CodeRequest, TransportError> {
+    request_email_code_invite(server_url, email, purpose, nonce, "").await
+}
+
+/// The same, with an invitation code of an invite-only relay (QR `aqua:join`).
+pub async fn request_email_code_invite(server_url: &str, email: &str, purpose: &str, nonce: &str, invite: &str) -> Result<CodeRequest, TransportError> {
     let http = http_client()?;
     let url = format!("{}/v1/auth/email/request", server_url.trim_end_matches('/'));
-    let r = http.post(&url).json(&serde_json::json!({ "email": email, "purpose": purpose, "nonce": nonce })).send().await?;
+    let r = http.post(&url).json(&serde_json::json!({ "email": email, "purpose": purpose, "nonce": nonce, "invite": invite })).send().await?;
     if !r.status().is_success() {
         return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
     }
@@ -303,6 +311,11 @@ pub enum Incoming {
 pub struct Transport {
     server_url: String,
     username: String,
+    /// The account's ID (empty with relays from before IDs).
+    uid: String,
+    /// The @name the app asked for, when the relay knows the account under
+    /// another one now (an older account took it when relays joined).
+    renamed_from: Option<String>,
     /// Bearer token + when it was issued. The server's tokens live one
     /// hour; [`Transport::bearer`] signs in again before that.
     token: std::sync::Mutex<(String, std::time::Instant)>,
@@ -338,6 +351,14 @@ impl Transport {
 
         // ---- 1. Sign in ----
         let token = sign_in(&http, server_url, identity).await?;
+        // The relay's name for this account: it can differ from ours when
+        // relays joined and an older account had the same @name.
+        let (uid, renamed_from, username) = match whoami(&http, server_url, &token).await {
+            Some((name, uid)) if !name.is_empty() && name != username => (uid, Some(username.to_string()), name),
+            Some((_, uid)) => (uid, None, username.to_string()),
+            None => (String::new(), None, username.to_string()),
+        };
+        let username = username.as_str();
 
         // ---- 2. Open the WS (direct, or through the SOCKS5 proxy) ----
         let ws_url = build_ws_url(server_url, username, &token)?;
@@ -436,6 +457,8 @@ impl Transport {
             Self {
                 server_url: server_url.to_string(),
                 username: username.to_string(),
+                uid,
+                renamed_from,
                 token: std::sync::Mutex::new((token, std::time::Instant::now())),
                 identity: identity.clone(),
                 http,
@@ -466,6 +489,27 @@ impl Transport {
     }
 
     pub fn username(&self) -> &str { &self.username }
+    /// The account's ID ("" with an older relay).
+    pub fn uid(&self) -> &str { &self.uid }
+    /// The @name asked for, if the relay knows this account under another.
+    pub fn renamed_from(&self) -> Option<&str> { self.renamed_from.as_deref() }
+
+    /// The @username an account ID has now.
+    pub async fn username_by_uid(&self, uid: &str) -> Result<Option<String>, TransportError> {
+        if uid.is_empty() || !uid.bytes().all(|b| b.is_ascii_digit()) {
+            return Ok(None);
+        }
+        let url = format!("{}/v1/users/by-id/{}", self.server_url.trim_end_matches('/'), uid);
+        let r = self.http.get(&url).send().await?;
+        if r.status().as_u16() == 404 {
+            return Ok(None);
+        }
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        let v: serde_json::Value = r.json().await?;
+        Ok(v["username"].as_str().map(str::to_string))
+    }
     /// The current bearer token (may be close to expiry — prefer [`Self::bearer`]).
     pub fn token(&self) -> String { self.token.lock().map(|t| t.0.clone()).unwrap_or_default() }
 
@@ -1156,6 +1200,18 @@ impl Transport {
 }
 
 // ---------- Helpers -------------------------------------------------------
+
+/// `GET /v1/me`: (username, uid) of the signed-in account; None with an
+/// older relay or an account it doesn't know.
+async fn whoami(http: &reqwest::Client, server_url: &str, token: &str) -> Option<(String, String)> {
+    let url = format!("{}/v1/me", server_url.trim_end_matches('/'));
+    let r = http.get(&url).bearer_auth(token).send().await.ok()?;
+    if !r.status().is_success() {
+        return None;
+    }
+    let v: serde_json::Value = r.json().await.ok()?;
+    Some((v["username"].as_str()?.to_string(), v["uid"].as_str().unwrap_or("").to_string()))
+}
 
 async fn sign_in(
     http: &reqwest::Client,

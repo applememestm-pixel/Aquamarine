@@ -17,6 +17,7 @@
   import { chatStatus, presenceNow } from "../presence";
   import { unsupportedKind } from "../compat";
   import { t, tr } from "../i18n";
+  import { navConf } from "../navBar";
   import { fly, scale as scaleIn } from "svelte/transition";
   import { flip } from "svelte/animate";
   import { cubicOut, backOut } from "svelte/easing";
@@ -35,6 +36,7 @@
   import type { Room } from "../types";
   import { peerPresence, activityVerb } from "../presence";
   import { icons } from "../icons";
+  import { openSettings } from "../panels/settings";
   import { info, search, visibleChats, activeId, selectChat, startChat, chats, connect, backToList } from "../stores";
   import { askConfirm } from "./Confirm.svelte";
   import { showToast } from "./Toast.svelte";
@@ -580,6 +582,10 @@
         {:else if $ping != null}{$ping} {$t("ms")}
         {:else}<span class="m-dot"></span>{$t("online")}{/if}
       </button>
+    {/if}
+    {#if !$navConf.on || $navConf.hidden.includes("settings")}
+      <!-- No Settings tab at the bottom (Settings → Appearance → Tab bar): the gear lives here. -->
+      <button class="m-menu m-gear" onclick={() => openSettings()} aria-label={$t("Settings")}>{@html icons.settings}</button>
     {/if}
     <button class="m-menu" onclick={() => (plusMenuOpen = !plusMenuOpen)} aria-label={$t("New")}>
       <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
@@ -1583,6 +1589,7 @@
     .m-menu { margin-left: auto; width: 34px; height: 34px; border-radius: 50%; border: none; background: transparent; color: var(--fg); display: grid; place-items: center; }
     .m-menu svg { width: 18px; height: 18px; }
     .m-menu:active { background: var(--bg-hover); }
+    .m-gear + .m-menu { margin-left: 0; }
     .list-header { padding: 2px 14px 8px; }
     .plus-btn { display: none; }
     .plus-pop { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 46px); right: 14px; min-width: 200px; border-radius: calc(16px * var(--rk, 1)); padding: 6px; }
