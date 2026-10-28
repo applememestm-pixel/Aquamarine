@@ -7,6 +7,9 @@
   /** Chat-list line without formatting markers (spoilers stay hidden). */
   function previewText(p: string): string {
     if (p && unsupportedKind(p)) return tr("Unsupported message — update the app");
+    // "📞 Missed call" etc. come from the backend in English.
+    const call = p?.match(/^📞 ((?:Outgoing|Incoming|Missed|Declined|Cancelled) call|Call)$/);
+    if (call) return "📞 " + tr(call[1]);
     // [ce:pack/😏_001.webp] → 😏 (the backend does it too; old previews don't)
     const q = p ? p.replace(/\[ce:[^\]\s]*?\/([^\]\s/_]+)_[^\]\s]*\]/g, "$1").replace(/\[ce:[^\]]*$/, "…") : p;
     return q && hasMarkup(q) ? plainText(q).replace(/\s*\n\s*/g, " ") : q;
@@ -360,7 +363,7 @@
       case "text": return previewText(k.content.text);
       case "reply": return previewText(k.content.text);
       case "code": return k.content.code.split("\n").slice(0, 4).join("\n");
-      case "system": return k.content.text;
+      case "system": return k.content.text.startsWith("[call:v1]") ? "📞 " + tr("Call") : k.content.text;
       case "article": return "📰 " + k.content.title;
       case "poll": return "📊 " + k.content.question;
       case "file": {
