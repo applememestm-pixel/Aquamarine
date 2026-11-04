@@ -63,3 +63,10 @@ pub async fn totp_disable(state: State<'_, StdMutex<AppState>>, code: String) ->
 pub async fn totp_backup(state: State<'_, StdMutex<AppState>>, code: String) -> Result<serde_json::Value, String> {
     call(&state, None, "POST", "2fa/backup", Some(serde_json::json!({ "code": code }))).await
 }
+
+/// A pass for a private (solo) server of my network: `{pass, expires, home}`.
+/// Valid 10 minutes, once (see `aqua-server`: `pass_create`).
+#[tauri::command]
+pub async fn pass_create(state: State<'_, StdMutex<AppState>>) -> Result<serde_json::Value, String> {
+    call(&state, None, "POST", "pass", Some(serde_json::json!({}))).await
+}

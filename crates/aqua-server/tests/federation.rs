@@ -253,3 +253,67 @@ async fn relays_find_each_other_by_hello() {
     assert_eq!(fed::parse_invite(&inv), Some((urls[0].clone(), SECRET.to_string())));
     assert_eq!(fed::parse_invite("aquafed:garbage"), None);
 }
+
+/// 1.2.0-2: a solo relay that joined a network "for names" shares only the
+/// registry of (ID, @name) with it. A name is taken once across both, but
+/// neither side gets the other's accounts or finds them in search. A pass
+/// from a relay of the network lets its person into the private relay.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn solo_relay_shares_only_names() {
+    let la = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ls = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (a, s) = (la.local_addr().unwrap().to_string(), ls.local_addr().unwrap().to_string());
+    let (ua, us) = (format!("http://{a}"), format!("http://{s}"));
+    let tmp = tempfile::tempdir().unwrap();
+    let sa = AppState::isolated(tmp.path().join("a"), Some(FedConfig { secret: SECRET.into(), peers: vec![], public_url: ua.clone(), mode: "network".into(), ..Default::default() }));
+    let ss = AppState::isolated(tmp.path().join("s"), Some(FedConfig { secret: SECRET.into(), peers: vec![ua.clone()], public_url: us.clone(), mode: "solo".into(), ..Default::default() }));
+    assert!(fed::current(&ss).is_none(), "a solo relay isn't in the network");
+    assert!(fed::registry(&ss).is_some());
+    { let s = sa.clone(); tokio::spawn(async move { axum::serve(la, app(s)).await.unwrap() }); }
+    { let s = ss.clone(); tokio::spawn(async move { axum::serve(ls, app(s)).await.unwrap() }); }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    async fn signup(http: &reqwest::Client, base: &str, user: &str, invite: &str) -> (u16, String) {
+        let id = IdentityKeyPair::generate();
+        let tok = token(http, base, &id).await;
+        let r = http.post(format!("{base}/v1/users/signup")).bearer_auth(&tok)
+            .json(&serde_json::json!({ "username": user, "password": "a-good-secret", "invite": invite })).send().await.unwrap();
+        (r.status().as_u16(), tok)
+    }
+    let search = |base: String, q: &'static str| { let http = http.clone(); async move {
+        http.get(format!("{base}/v1/users/search?q={q}")).send().await.unwrap().json::<serde_json::Value>().await.unwrap().as_array().map(|a| a.len()).unwrap_or(0)
+    }};
+
+    // @bob in the network; the solo relay learns only the name.
+    let (st, bob_tok) = signup(&http, &ua, "bob", "").await;
+    assert_eq!(st, 204);
+    fed::sync_once(&ss, &mut Default::default()).await;
+    assert_eq!(signup(&http, &us, "bob", "").await.0, 409, "taken in the network");
+    assert!(ss.directory.identity_for("bob").is_none(), "no account copied to the solo relay");
+    assert_eq!(search(us.clone(), "bob").await, 0);
+
+    // @zed on the solo relay; the network learns only the name.
+    assert_eq!(signup(&http, &us, "zed", "").await.0, 204);
+    let reg = fed::registry(&ss).unwrap();
+    fed::names_hello(&reg).await;
+    fed::sync_once(&sa, &mut Default::default()).await;
+    assert_eq!(signup(&http, &ua, "zed", "").await.0, 409, "taken on the solo relay");
+    assert!(sa.directory.identity_for("zed").is_none());
+    assert_eq!(search(ua.clone(), "zed").await, 0);
+    assert_eq!(search(ua.clone(), "bob").await, 1);
+
+    // The solo relay is private: only people from A, with a pass.
+    {
+        let mut c = ss.admin.write().unwrap();
+        c.invite_only = true;
+        c.allow = vec![format!("*@{}", aqua_server::host_of(&ua))];
+    }
+    assert_eq!(signup(&http, &us, "bobby", "").await.0, 403);
+    let r: serde_json::Value = http.post(format!("{ua}/v1/me/pass")).bearer_auth(&bob_tok).json(&serde_json::json!({})).send().await.unwrap().json().await.unwrap();
+    let pass = r["pass"].as_str().unwrap().to_string();
+    assert!(pass.starts_with("aqpass:"));
+    let forged = format!("{}x", &pass[..pass.len() - 1]);
+    assert_eq!(signup(&http, &us, "bobby", &forged).await.0, 403, "a changed pass doesn't work");
+    assert_eq!(signup(&http, &us, "bobby", &pass).await.0, 204);
+    assert_eq!(signup(&http, &us, "bobby2", &pass).await.0, 403, "a pass works once");
+}

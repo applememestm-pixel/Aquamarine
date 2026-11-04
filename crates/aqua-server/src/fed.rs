@@ -53,6 +53,10 @@ pub struct FedConfig {
     /// a secret and peers from before counts as "network").
     #[serde(default)]
     pub mode: String,
+    /// Solo relays that share the name registry with us (they said hello
+    /// at `/v1/fed/names/hello`): only their (uid, @name) list is pulled.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub solo_peers: Vec<String>,
     /// Kept in memory only (tests): peers learnt later aren't written to disk.
     #[serde(skip)]
     pub ephemeral: bool,
@@ -81,6 +85,11 @@ impl FedConfig {
     /// they say hello and get added by themselves).
     pub fn active(&self) -> bool {
         self.mode != "solo" && self.secret.len() >= 16 && (self.mode == "network" || !self.peers.is_empty())
+    }
+    /// A solo relay that shares only the name registry with a network
+    /// (joined with an invitation, but stays solo).
+    pub fn registry(&self) -> bool {
+        self.mode == "solo" && self.secret.len() >= 16 && !self.peers.is_empty()
     }
     /// "solo" / "network" / "" — what the panel shows.
     pub fn effective_mode(&self) -> &str {
@@ -155,7 +164,7 @@ fn mac(secret: &str, method: &str, path: &str, ts: i64, body: &[u8]) -> String {
 
 impl Fed {
     pub fn new(cfg: FedConfig) -> Option<Arc<Self>> {
-        if !cfg.active() {
+        if !cfg.active() && !cfg.registry() {
             return None;
         }
         let http = reqwest::Client::builder()
@@ -338,8 +347,101 @@ impl Fed {
     }
 }
 
+/// The network this relay is part of (not a solo relay's name registry).
 pub fn current(state: &AppState) -> Option<Arc<Fed>> {
+    state.fed.read().ok().and_then(|g| g.clone()).filter(|f| f.cfg.active())
+}
+
+/// Whoever we share the name registry with: the network, or — for a solo
+/// relay — the network it reserves names in.
+pub fn registry(state: &AppState) -> Option<Arc<Fed>> {
     state.fed.read().ok().and_then(|g| g.clone())
+}
+
+/// Signed by our secret, from a relay new enough — for the name registry,
+/// which solo relays use too.
+fn check_registry(state: &AppState, headers: &HeaderMap, method: &str, path: &str, body: &[u8]) -> Result<Arc<Fed>, StatusCode> {
+    let fed = registry(state).ok_or(StatusCode::NOT_FOUND)?;
+    if !fed.verify(headers, method, path, body) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    if !crate::caller_version(headers, None).as_deref().is_some_and(crate::version_ok) {
+        return Err(StatusCode::UPGRADE_REQUIRED);
+    }
+    Ok(fed)
+}
+
+fn my_url(cfg: &FedConfig) -> String {
+    if cfg.public_url.is_empty() { crate::public::url() } else { cfg.public_url.clone() }
+}
+
+/// `GET /v1/fed/names?since=T` — the name registry (see
+/// [`crate::directory::Directory::names_since`]).
+pub async fn h_names(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<Since>) -> Result<impl IntoResponse, StatusCode> {
+    let fed = check_registry(&state, &headers, "GET", &format!("/v1/fed/names?since={}", q.since), b"")
+        .or_else(|_| check_registry(&state, &headers, "GET", "/v1/fed/names", b""))?;
+    let dir = state.directory.clone();
+    let names = tokio::task::spawn_blocking(move || dir.names_since(q.since, 1000)).await.unwrap_or_default();
+    Ok(Json(serde_json::json!({ "home": my_url(&fed.cfg), "mode": if fed.cfg.active() { "network" } else { "solo" }, "names": names })))
+}
+
+/// `POST /v1/fed/names/hello {url}` — a solo relay shares the name registry
+/// with us; it learns our peers (to reserve its names with all of them).
+pub async fn h_names_hello(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Result<Json<serde_json::Value>, StatusCode> {
+    let fed = check_registry(&state, &headers, "POST", "/v1/fed/names/hello", &body)?;
+    let v: serde_json::Value = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let url = v["url"].as_str().unwrap_or("").trim().trim_end_matches('/').to_string();
+    if fed.cfg.active() && url.starts_with("http") && url != my_url(&fed.cfg) && !fed.cfg.solo_peers.contains(&url) && fed.cfg.solo_peers.len() < 256 {
+        let mut c = fed.cfg.clone();
+        c.solo_peers.push(url.clone());
+        if c.ephemeral || c.save().is_ok() {
+            if let Ok(mut g) = state.fed.write() { *g = Fed::new(c); }
+            tracing::info!(%url, "name registry: a solo relay joined");
+        }
+    }
+    Ok(Json(serde_json::json!({ "self": my_url(&fed.cfg), "peers": fed.cfg.peers })))
+}
+
+/// A solo relay: say hello to the network for the name registry. Returns
+/// the relays it told us about that we didn't know.
+pub async fn names_hello(fed: &Fed) -> Vec<String> {
+    let me = my_url(&fed.cfg);
+    let body = serde_json::to_vec(&serde_json::json!({ "url": me })).unwrap_or_default();
+    let mut known = Vec::new();
+    for p in &fed.cfg.peers {
+        if let Some(r) = fed.post(p, "/v1/fed/names/hello", body.clone()).await {
+            if let Ok(v) = r.json::<serde_json::Value>().await {
+                for x in v["peers"].as_array().into_iter().flatten().chain(std::iter::once(&v["self"])) {
+                    if let Some(u) = x.as_str() { known.push(u.trim_end_matches('/').to_string()); }
+                }
+            }
+        }
+    }
+    known.sort();
+    known.dedup();
+    known.retain(|u| *u != me && !fed.cfg.peers.contains(u));
+    known
+}
+
+/// Pull the name registry from one relay (paged).
+async fn sync_names(state: &AppState, fed: &Fed, peer: &str, since: &mut std::collections::HashMap<String, i64>) {
+    for _ in 0..50 {
+        let from = *since.get(peer).unwrap_or(&0);
+        let Some(r) = fed.get(peer, &format!("/v1/fed/names?since={from}")).await else { return };
+        let Ok(v) = r.json::<serde_json::Value>().await else { return };
+        let home = v["home"].as_str().unwrap_or(peer).trim_end_matches('/').to_string();
+        let Ok(rows) = serde_json::from_value::<Vec<crate::directory::NameRow>>(v["names"].clone()) else { return };
+        if rows.is_empty() { return; }
+        let n = rows.len();
+        let last = rows.iter().map(|r| r.updated_at).max().unwrap_or(from);
+        let dir = state.directory.clone();
+        let moved = tokio::task::spawn_blocking(move || rows.iter().filter_map(|r| dir.fed_apply_name(r, &home)).collect::<Vec<_>>()).await.unwrap_or_default();
+        for (old, new) in &moved {
+            crate::move_live(state, old, new);
+        }
+        since.insert(peer.to_string(), last);
+        if n < 1000 { return; }
+    }
 }
 
 fn check(state: &AppState, headers: &HeaderMap, method: &str, path: &str, body: &[u8]) -> Result<Arc<Fed>, StatusCode> {
@@ -542,6 +644,9 @@ pub fn spawn_announcer(state: AppState) {
                     if fed.same_network(&u).await { new.push(u); }
                 }
                 if !add_peers(&st, &new).is_empty() { st.fed_kick.notify_one(); }
+            } else if let Some(fed) = registry(&st) {
+                let new = names_hello(&fed).await;
+                if !add_peers(&st, &new).is_empty() { st.fed_kick.notify_one(); }
             }
             tokio::time::sleep(Duration::from_secs(180)).await;
         }
@@ -569,13 +674,24 @@ pub struct Cursors {
     users: std::collections::HashMap<String, i64>,
     backups: std::collections::HashMap<String, i64>,
     hist: std::collections::HashMap<String, i64>,
+    names: std::collections::HashMap<String, i64>,
 }
 
 pub async fn sync_once(state: &AppState, cursors: &mut Cursors) {
-    if let Some(fed) = current(state) {
+    let Some(fed) = registry(state) else { return };
+    if fed.cfg.active() {
         for peer in fed.cfg.peers.clone() {
             sync_peer(state, &fed, &peer, &mut cursors.users, &mut cursors.backups).await;
             sync_hist(state, &fed, &peer, &mut cursors.hist).await;
+        }
+        // Solo relays: only their names.
+        for peer in fed.cfg.solo_peers.clone() {
+            sync_names(state, &fed, &peer, &mut cursors.names).await;
+        }
+    } else {
+        // A solo relay in the name registry: the network's names, nothing else.
+        for peer in fed.cfg.peers.clone() {
+            sync_names(state, &fed, &peer, &mut cursors.names).await;
         }
     }
 }

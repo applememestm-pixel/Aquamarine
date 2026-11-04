@@ -274,6 +274,7 @@ pub fn run() -> Result<()> {
             security::totp_enable,
             security::totp_disable,
             security::totp_backup,
+            security::pass_create,
             multidev::remove_device,
             multidev::rename_device,
             commands::delete_group_message_of,
