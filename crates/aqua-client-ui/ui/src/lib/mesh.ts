@@ -18,6 +18,27 @@ export interface MeshStatus {
 
 export const meshStatus = writable<MeshStatus | null>(null);
 
+/** Seconds a contact counts as "nearby" after the last mesh session. */
+export const NEARBY_SECS = 180;
+
+/** How we reach the others right now without the relay: "bt" / "lan", or
+ *  null (relay up, mesh off, or nothing ready). */
+export function offlineLink(s: MeshStatus | null, connected: boolean): "bt" | "lan" | null {
+  if (connected || !s?.enabled) return null;
+  if (s.lan_ready) return "lan";
+  if (s.bt_ready) return "bt";
+  return null;
+}
+
+/** A contact we swapped messages with directly a moment ago. */
+export function nearbyVia(s: MeshStatus | null, chatId: string): "bt" | "lan" | null {
+  if (!s?.peers?.length) return null;
+  const now = Date.now() / 1000;
+  const p = s.peers.find((x) => x.name === chatId && now - x.last < NEARBY_SECS);
+  if (!p) return null;
+  return p.addr.startsWith("lan:") ? "lan" : "bt";
+}
+
 let started = false;
 export function startMesh() {
   if (started) return;

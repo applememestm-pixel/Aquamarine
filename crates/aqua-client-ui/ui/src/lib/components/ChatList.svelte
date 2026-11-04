@@ -58,6 +58,7 @@
   import { openProfile } from "./ProfileModal.svelte";
   import { profile } from "../profile";
   import { ping } from "../ping";
+  import { meshStatus, offlineLink } from "../mesh";
   import ServerPicker from "./ServerPicker.svelte";
   import { accounts, loadAccounts, switchAccount } from "../accounts";
 
@@ -576,7 +577,10 @@
     {#if $info}
       <button class="m-net" class:off={!$info.connected} class:slow={$info.connected && ($ping ?? 0) >= 150} class:bad={$info.connected && ($ping ?? 0) >= 400}
         onclick={openServers} title={$t("Server")} aria-label={$t("Server")}>
-        {#if !$info.connected}<span class="m-spin"></span>{$t("Connecting…")}
+        {#if !$info.connected && offlineLink($meshStatus, false)}
+          <!-- No relay, but contacts nearby get messages directly. -->
+          <span class="m-off-link" title={$t("No internet — messages go directly to contacts nearby")}>{offlineLink($meshStatus, false) === "bt" ? "BT" : "LAN"}</span>{$t("nearby")}
+        {:else if !$info.connected}<span class="m-spin"></span>{$t("Connecting…")}
         {:else if $ping != null}{$ping} {$t("ms")}
         {:else}<span class="m-dot"></span>{$t("online")}{/if}
       </button>
@@ -1540,6 +1544,7 @@
     .m-net.slow { color: #F0B232; }
     .m-net.bad { color: var(--danger, #FF4D6D); }
     .m-net.off { color: var(--fg-muted); font-weight: 600; }
+    .m-off-link { font-size: 10px; font-weight: 800; letter-spacing: .04em; padding: 2px 5px; border-radius: calc(6px * var(--rk, 1)); background: color-mix(in srgb, #0A84FF 22%, transparent); color: #5AB0FF; }
     .m-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
     .m-spin { width: 10px; height: 10px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: m-spin .8s linear infinite; }
     /* The servers sheet */

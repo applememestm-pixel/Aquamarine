@@ -115,7 +115,7 @@
     ],
   ];
   /** Sections for experienced users: shown under "Advanced settings". */
-  const ADVANCED = new Set<string>(["ghost", "power", "window", "network", "host", "nearby", "bots", "shortcuts", "advanced"]);
+  const ADVANCED = new Set<string>(["ghost", "power", "window", "network", "host", "bots", "shortcuts", "advanced"]);
   const shown = (x: Item) => !((x.id === "shortcuts" || x.id === "window") && (phone || TOUCH));
   const BASIC_GROUPS = GROUPS.map((g) => g.filter((x) => !ADVANCED.has(x.id))).filter((g) => g.length);
   const ADVANCED_ITEMS = GROUPS.flat().filter((x) => ADVANCED.has(x.id));
@@ -2052,6 +2052,7 @@
       <section class="group">
         <div class="label">{$t("Your own server, right here")}</div>
         <div class="bots-note">{$t("This device becomes an Aquamarine server: you and your friends sign in to its address. Messages stay end-to-end encrypted — the server only passes sealed envelopes along. Keep the device on and connected; on a phone a notification shows while it runs.")}</div>
+        <button class="bot-link" onclick={() => void api.openExternal("https://applememestm-pixel.github.io/Aquamarine/docs.html?d=self-hosting")}>{$t("Step by step: friends from the internet, the router, what to do without a public IP ›")}</button>
         {#if host && host.dir_chosen === false && !host.running}
           <div class="host-first">
             <b>{$t("Where should the server keep its data?")}</b>
