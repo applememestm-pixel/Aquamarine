@@ -223,7 +223,7 @@ impl AdminConfig {
     }
 
     /// May someone with a pass from `host` as `@user` sign up here?
-    /// Rules on `allow` (1.2.0-2): `*@host` — anyone from that relay,
+    /// Rules on `allow` (1.2.0-4): `*@host` — anyone from that relay,
     /// `@user@host` — that one account.
     fn permits_pass(&self, user: &str, host: &str) -> bool {
         let host = host_of(host);
@@ -1136,7 +1136,7 @@ async fn signup_user(
     Ok(StatusCode::NO_CONTENT)
 }
 
-// ---------- Passes: "I have an account on relay X" (1.2.0-2) ------------------------
+// ---------- Passes: "I have an account on relay X" (1.2.0-4) ------------------------
 //
 // A relay of a network signs a short-lived pass for one of its accounts; a
 // solo relay that shares the name registry with that network (same secret)
@@ -1740,7 +1740,7 @@ async fn admin_invite_del(State(state): State<AppState>, headers: axum::http::He
 #[derive(Deserialize)]
 struct JoinBody {
     invite: String,
-    /// Stay solo: share only the name registry with that network (1.2.0-2).
+    /// Stay solo: share only the name registry with that network (1.2.0-4).
     #[serde(default)]
     names_only: bool,
 }

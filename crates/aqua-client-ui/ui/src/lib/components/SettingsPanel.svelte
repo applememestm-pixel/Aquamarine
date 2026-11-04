@@ -185,7 +185,7 @@
     enterDetail();
   }
 
-  // ---- Pass for a private server (1.2.0-2) ----
+  // ---- Pass for a private server (1.2.0-4) ----
   let passCode = $state<string | null>(null);
   let passBusy = $state(false);
   async function makePass() {

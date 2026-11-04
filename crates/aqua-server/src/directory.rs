@@ -544,7 +544,7 @@ impl Directory {
                 at   INTEGER NOT NULL,
                 PRIMARY KEY (bot, user)
             );
-            -- Names reserved by accounts of other relays (1.2.0-2): solo
+            -- Names reserved by accounts of other relays (1.2.0-4): solo
             -- relays and the network share only (uid, @name), so one @name
             -- belongs to one account everywhere. Never shown in search.
             CREATE TABLE IF NOT EXISTS fed_names (
