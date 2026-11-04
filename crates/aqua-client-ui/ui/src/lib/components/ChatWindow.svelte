@@ -34,6 +34,7 @@
   import { emojiStatusOf } from "../people";
   import EmojiStatus from "./EmojiStatus.svelte";
   import { tick, onMount, untrack } from "svelte";
+  import { slide } from "svelte/transition";
   import { SvelteSet } from "svelte/reactivity";
   import { askConfirm, askConfirmCheck } from "./Confirm.svelte";
   import { askSend, VIDEO_RE, type SendMode } from "./SendDialog.svelte";
@@ -3076,6 +3077,23 @@
     {/if}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    {#snippet ttlPanel(cid: string)}
+      <div class="ttl-h">{$t("Auto-delete messages")}</div>
+      <div class="ttl-opts">
+        {#each TTL_PRESETS as v (v)}
+          <button role="menuitemradio" aria-checked={chatTtl === v} class:on={chatTtl === v} disabled={!ttlEditable} onclick={() => setTtl(v)}>{ttlLabel(v)}</button>
+        {/each}
+      </div>
+      <div class="ttl-note">{ttlEditable ? $t("New messages disappear for everyone in the chat after this time. Messages already here stay.") : $t("Only admins can change the timer.")}</div>
+      {#if !isGroup}
+        <div class="ttl-sep"></div>
+        <button class="ttl-toggle" role="menuitemcheckbox" aria-checked={!$noReceiptChats.has(cid)} onclick={() => setReceipts(cid, $noReceiptChats.has(cid))}>
+          <span class="ttl-tt"><b>{$t("Read receipts")}</b><span>{$noReceiptChats.has(cid) ? $t("Off — they won't see when you've read their messages") : $t("On — they see ✓✓ when you open the chat")}</span></span>
+          <span class="ttl-sw" class:on={!$noReceiptChats.has(cid) && !$ghost.noReadReceipts}></span>
+        </button>
+        {#if $ghost.noReadReceipts}<div class="ttl-note">{$t("Ghost mode is on: no read receipts are sent anywhere.")}</div>{/if}
+      {/if}
+    {/snippet}
     <header
       bind:this={headerEl}
       class="chat-header"
@@ -3194,7 +3212,7 @@
           <div class="ttl-wrap hdr-menu">
             <button class="icon-btn call-btn" class:active={callMenu} class:live={callChoices.some((c) => c.on)} title={$t("Call")} aria-haspopup="menu" aria-expanded={callMenu}
               onclick={() => { callMenu = !callMenu; toolsMenu = false; ttlMenu = false; }}>{@html icons.phone}<span class="hm-caret"></span></button>
-            {#if callMenu}
+            {#if callMenu && !phoneUI}
               <div class="ttl-pop hm-pop" role="menu" tabindex="-1">
                 {#each callChoices as c (c.id)}
                   <button class="hm-item" class:on={c.on} role="menuitem" onclick={() => { callMenu = false; c.run(); }}><span class="hm-ic">{@html c.icon}</span><span class="hm-tx"><b>{c.label}</b>{#if c.sub}<small>{c.sub}</small>{/if}</span></button>
@@ -3211,37 +3229,40 @@
               {@html IC.tools}
               {#if chatTtl}<span class="ttl-badge">{ttlShort(chatTtl)}</span>{/if}
             </button>
-            {#if toolsMenu}
+            {#if toolsMenu && !phoneUI}
               <div class="ttl-pop hm-pop" role="menu" tabindex="-1">
                 {#each toolItems as it (it.id)}
                   <button class="hm-item" class:on={it.on} role="menuitem" onclick={() => { toolsMenu = false; it.run(); }}><span class="hm-ic">{@html it.icon}</span><span class="hm-tx"><b>{it.label}</b>{#if it.sub}<small>{it.sub}</small>{/if}</span></button>
                 {/each}
               </div>
             {/if}
-            {#if ttlMenu}
+            {#if ttlMenu && !phoneUI}
               <div class="ttl-pop" role="menu" tabindex="-1">
-                <div class="ttl-h">{$t("Auto-delete messages")}</div>
-                <div class="ttl-opts">
-                  {#each TTL_PRESETS as v (v)}
-                    <button role="menuitemradio" aria-checked={chatTtl === v} class:on={chatTtl === v} disabled={!ttlEditable} onclick={() => setTtl(v)}>{ttlLabel(v)}</button>
-                  {/each}
-                </div>
-                <div class="ttl-note">{ttlEditable ? $t("New messages disappear for everyone in the chat after this time. Messages already here stay.") : $t("Only admins can change the timer.")}</div>
-                {#if !isGroup}
-                  <div class="ttl-sep"></div>
-                  <button class="ttl-toggle" role="menuitemcheckbox" aria-checked={!$noReceiptChats.has(cid)} onclick={() => setReceipts(cid, $noReceiptChats.has(cid))}>
-                    <span class="ttl-tt"><b>{$t("Read receipts")}</b><span>{$noReceiptChats.has(cid) ? $t("Off — they won't see when you've read their messages") : $t("On — they see ✓✓ when you open the chat")}</span></span>
-                    <span class="ttl-sw" class:on={!$noReceiptChats.has(cid) && !$ghost.noReadReceipts}></span>
-                  </button>
-                  {#if $ghost.noReadReceipts}<div class="ttl-note">{$t("Ghost mode is on: no read receipts are sent anywhere.")}</div>{/if}
-                {/if}
+                {@render ttlPanel(cid)}
               </div>
             {/if}
           </div>
         {/if}
-        <button class="icon-btn" title={$t("Shared media & files")} onclick={toggleSharedMedia}>{@html icons.info}</button>
+        {#if !phoneUI}
+          <!-- Phones: the header itself opens the chat info (and its media). -->
+          <button class="icon-btn" title={$t("Shared media & files")} onclick={toggleSharedMedia}>{@html icons.info}</button>
+        {/if}
       </div>
     </header>
+    {#if phoneUI && (callMenu || toolsMenu || ttlMenu)}
+      <!-- Phones: the header menus open under the header and push the room
+           tabs and the pinned message down (like the search bar), instead of
+           floating over them; they fold back up when closed. -->
+      <div class="ttl-wrap hm-drop" role="menu" tabindex="-1" transition:slide={{ duration: 170 }}>
+        {#if ttlMenu}
+          <div class="hm-drop-ttl">{@render ttlPanel($activeChat.id)}</div>
+        {:else}
+          {#each callMenu ? callChoices : toolItems as it (it.id)}
+            <button class="hm-item" class:on={it.on} role="menuitem" onclick={() => { callMenu = false; toolsMenu = false; it.run(); }}><span class="hm-ic">{@html it.icon}</span><span class="hm-tx"><b>{it.label}</b>{#if it.sub}<small>{it.sub}</small>{/if}</span></button>
+          {/each}
+        {/if}
+      </div>
+    {/if}
     {#if phoneUI && rooms.length > 1 && activeGroup}
       <!-- Phones: every room of the server as tabs under the header (like
            Telegram's topics), not hidden behind the room switch. -->
@@ -4327,6 +4348,9 @@
   .bot-menu-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bot-menu-btn svg { width: 16px; height: 16px; flex-shrink: 0; }
   .ttl-wrap { position: relative; display: inline-flex; }
+  .hm-drop { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; border-bottom: 1px solid var(--border); background: var(--bg-list); flex-shrink: 0; overflow: hidden; }
+  .hm-drop .hm-item { padding: 10px; }
+  .hm-drop-ttl { padding: 6px 6px 4px; }
   .hm-pop { width: 270px; padding: 6px; display: flex; flex-direction: column; gap: 2px; }
   .hm-item { display: flex; align-items: center; gap: 11px; width: 100%; padding: 8px 10px; border: none; border-radius: calc(10px * var(--rk, 1)); background: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; transition: background 0.12s; }
   .hm-item:hover { background: var(--bg-hover); }
@@ -4589,6 +4613,10 @@
     :global(html.glass) .msg-stage { margin-bottom: calc(-1 * var(--below-h, 0px)); margin-top: calc(-1 * var(--above-h, 0px)); }
     :global(html.glass) .messages { padding-bottom: calc(var(--below-h, 0px) + 10px); padding-top: calc(var(--above-h, 0px) + 10px); }
     :global(html.glass) .active-chat > :global([data-gf]) { position: relative; z-index: 3; }
+    :global(html.glass) .hm-drop {
+      margin: 0 8px 6px; border: 1px solid color-mix(in srgb, var(--fg) 16%, transparent); border-radius: calc(18px * var(--rk, 1));
+      background: color-mix(in srgb, var(--bg-surface, #12151d) 92%, transparent); box-shadow: 0 10px 30px -16px rgba(0,0,0,.7);
+    }
     :global(html.glass) .chat-header, :global(html.glass) .composer {
       margin: 6px 8px; border: 1px solid color-mix(in srgb, var(--fg) 16%, transparent);
       background: color-mix(in srgb, var(--bg-surface, #12151d) var(--glass-a, 55%), transparent);
@@ -5632,8 +5660,11 @@
   @media (max-width: 720px) {
     .group-name-btn.dim { display: none; }
     .room-switch { max-width: 100%; }
-    .grp-title-m { display: inline; color: var(--fg); font-weight: 600; margin-right: 6px; }
+    .grp-title-m { display: inline; color: var(--fg); font-weight: 600; margin-right: 6px; min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .grp-title-m::after { content: "·"; margin-left: 6px; color: var(--fg-dim); }
+    /* "Group · 3 members" always fits: the group name gives way first. */
+    .peer-status { min-width: 0; overflow: hidden; white-space: nowrap; }
+    .peer-status .group-sub { flex-shrink: 0; white-space: nowrap; }
     .active-chat.with-rooms .chat-actions .group-gear { display: none; }
   }
   @media (min-width: 761px) { .room-switch { pointer-events: none; } }

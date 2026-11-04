@@ -310,16 +310,23 @@ pub async fn backup_restore(
     totp: Option<String>,
     recovery: Option<String>,
 ) -> Result<Restored, String> {
-    let secret = backup::auth_secret(&password, &email);
     let totp = totp.unwrap_or_default();
     let check = recovery_check_of(recovery).await?;
-    let blob = match Transport::fetch_backup_checked(&server_url, &ticket, &secret, &totp, &check).await {
-        Ok(b) => b,
-        // Accounts made before secrets: the relay knows the raw password.
-        Err(e) if e.to_string().contains("wrong email or password") => {
-            Transport::fetch_backup_checked(&server_url, &ticket, &password, &totp, &check).await.map_err(|e| e.to_string())?
+    // Since 1.2.0-1: no e-mail ticket — this device has just signed in
+    // (signin_plain) and fetches the backup as a device of the account.
+    let blob = if ticket.trim().is_empty() {
+        let identity = state.lock().map_err(|e| e.to_string())?.identity.clone();
+        Transport::fetch_my_backup(&server_url, &identity).await.map_err(|e| e.to_string())?
+    } else {
+        let secret = backup::auth_secret(&password, &email);
+        match Transport::fetch_backup_checked(&server_url, &ticket, &secret, &totp, &check).await {
+            Ok(b) => b,
+            // Accounts made before secrets: the relay knows the raw password.
+            Err(e) if e.to_string().contains("wrong email or password") => {
+                Transport::fetch_backup_checked(&server_url, &ticket, &password, &totp, &check).await.map_err(|e| e.to_string())?
+            }
+            Err(e) => return Err(e.to_string()),
         }
-        Err(e) => return Err(e.to_string()),
     };
     let Some(blob) = blob else {
         return Ok(Restored { found: false, need_phrase: false, username: None, email: None, ui: String::new() });

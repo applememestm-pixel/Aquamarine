@@ -717,6 +717,61 @@ impl Transport {
         Ok(())
     }
 
+    /// Sign-up without e-mail (relays 1.2.0-1+): `@username` + the password
+    /// secret ([`crate::backup::auth_secret`] salted with `@username`).
+    pub async fn signup_account(server_url: &str, identity: &IdentityKeyPair, username: &str, secret: &str, display_name: &str, invite: &str) -> Result<(), TransportError> {
+        let http = http_client()?;
+        check_server(&http, server_url).await?;
+        let token = sign_in(&http, server_url, identity).await?;
+        let url = format!("{}/v1/users/signup", server_url.trim_end_matches('/'));
+        let body = serde_json::json!({ "username": username, "password": secret, "display_name": display_name, "invite": invite });
+        let r = http.post(&url).bearer_auth(&token).json(&body).send().await?;
+        if r.status().as_u16() == 404 || r.status().as_u16() == 405 {
+            return Err(TransportError::Server { status: 426, body: NO_PLAIN_SIGNUP.into() });
+        }
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(())
+    }
+
+    /// Add this device to an account with two-step verification
+    /// (`@username` or, for old accounts, the e-mail + password secret +
+    /// code / recovery check). Returns the username.
+    pub async fn signin_account(server_url: &str, identity: &IdentityKeyPair, login: &str, secret: &str, device_name: &str, totp: &str, recovery: &str) -> Result<String, TransportError> {
+        #[derive(serde::Deserialize)]
+        struct Resp { username: String }
+        let http = http_client()?;
+        check_server(&http, server_url).await?;
+        let token = sign_in(&http, server_url, identity).await?;
+        let url = format!("{}/v1/users/signin", server_url.trim_end_matches('/'));
+        let body = serde_json::json!({ "username": login, "password": secret, "device_name": device_name, "totp": totp, "recovery": recovery });
+        let r = http.post(&url).bearer_auth(&token).json(&body).send().await?;
+        if r.status().as_u16() == 404 || r.status().as_u16() == 405 {
+            return Err(TransportError::Server { status: 426, body: NO_PLAIN_SIGNUP.into() });
+        }
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(r.json::<Resp>().await?.username)
+    }
+
+    /// The account's backup, for a device already on the account.
+    /// `Ok(None)` = there is none.
+    pub async fn fetch_my_backup(server_url: &str, identity: &IdentityKeyPair) -> Result<Option<Vec<u8>>, TransportError> {
+        let http = http_client()?;
+        let token = sign_in(&http, server_url, identity).await?;
+        let url = format!("{}/v1/me/backup", server_url.trim_end_matches('/'));
+        let r = http.get(&url).bearer_auth(&token).send().await?;
+        if r.status().as_u16() == 404 {
+            return Ok(None);
+        }
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(Some(r.bytes().await?.to_vec()))
+    }
+
     /// Sign in on this device with an email ticket + password; the server
     /// adds this identity to the account as one more device. Returns the username.
     pub async fn login_account(
@@ -1335,6 +1390,9 @@ async fn whoami(http: &reqwest::Client, server_url: &str, token: &str) -> Option
 pub const MIN_SERVER: &str = "1.2.0";
 
 /// What the app says when the relay asks for two-step codes first.
+/// A relay older than 1.2.0-1: it still signs up with an e-mail only.
+pub const NO_PLAIN_SIGNUP: &str = "this server still needs an e-mail to sign up — it has to be updated to Aquamarine 1.2.0-1 or newer";
+
 pub const NEED_2FA: &str = "two-step verification required";
 
 /// `1.1.0-7` → (1, 1, 0, 7): our pre-releases come after their release.

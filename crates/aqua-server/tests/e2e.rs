@@ -42,10 +42,6 @@ fn test_http() -> reqwest::Client {
 }
 
 async fn spawn_server() -> SocketAddr {
-    spawn_server_with(false).await
-}
-
-async fn spawn_server_with(require_2fa: bool) -> SocketAddr {
     // A fresh directory DB per test run (not the repo's aqua-directory.sqlite,
     // which kept "owner" from the last run and failed the register step).
     static DB: std::sync::Once = std::sync::Once::new();
@@ -59,10 +55,6 @@ async fn spawn_server_with(require_2fa: bool) -> SocketAddr {
     // Open signup: the e2e test exercises the raw relay with ad-hoc
     // usernames that are never email-registered.
     let state = AppState::new_open();
-    // Two-step codes are left to each account here (the raw relay tests
-    // connect accounts that have none); `two_step_codes_are_required` turns
-    // them back on.
-    state.admin.write().unwrap().optional_2fa = !require_2fa;
     tokio::spawn(async move {
         axum::serve(listener, app(state)).await.unwrap();
     });
@@ -1262,54 +1254,78 @@ async fn acks_redeliver_until_confirmed() {
     assert!(quiet.is_err(), "an older client gets no acks: {quiet:?}");
 }
 
-/// 1.2.0: two-step codes are required. An account without them signs in and
-/// sets them up, but can't connect; then it can — and can't turn them off.
-/// Apps older than 1.2.0 aren't served at all.
+/// 1.2.0-1: sign-up with @username + password; two-step verification is
+/// the user's choice, and only with it does an account move to other devices.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn two_step_codes_are_required() {
-    let addr = spawn_server_with(true).await;
+async fn plain_accounts_and_optional_two_step() {
+    let addr = spawn_server().await;
     let base = format!("http://{addr}");
     let http = test_http();
-    let email = "req2fa@x.com";
-    let code: serde_json::Value = http.post(format!("{base}/v1/auth/email/request")).json(&serde_json::json!({ "email": email })).send().await.unwrap().json().await.unwrap();
-    let t: serde_json::Value = http.post(format!("{base}/v1/auth/email/verify")).json(&serde_json::json!({ "email": email, "code": code["dev_code"] })).send().await.unwrap().json().await.unwrap();
-    let mut a = Client::new("req2fa");
+
+    // Sign-up: @username + password, no e-mail. 2FA isn't asked for.
+    let mut a = Client::new("plainone");
     a.login(&http, &base).await;
-    let r = http.post(format!("{base}/v1/users/register")).bearer_auth(&a.token)
-        .json(&serde_json::json!({ "ticket": t["ticket"], "username": "req2fa", "display_name": "R", "password": "req-secret" }))
+    let r = http.post(format!("{base}/v1/users/signup")).bearer_auth(&a.token)
+        .json(&serde_json::json!({ "username": "PlainOne", "password": "plain-secret", "display_name": "P" }))
         .send().await.unwrap();
-    assert!(r.status().is_success(), "{}", r.text().await.unwrap());
-
-    // Signed in, but no connection until the codes are set up.
+    assert_eq!(r.status().as_u16(), 204, "{}", r.text().await.unwrap());
     let me: serde_json::Value = http.get(format!("{base}/v1/me")).bearer_auth(&a.token).send().await.unwrap().json().await.unwrap();
-    assert_eq!(me["need_2fa"], true);
-    let ws = format!("ws://{addr}/v1/ws?user=req2fa&token={}&v=1.2.0", a.token);
-    assert!(tokio_tungstenite::connect_async(&ws).await.is_err());
-    let st: serde_json::Value = http.get(format!("{base}/v1/me/security")).bearer_auth(&a.token).send().await.unwrap().json().await.unwrap();
-    assert_eq!((st["required"].as_bool(), st["totp"].as_bool()), (Some(true), Some(false)));
-
-    // The app does it without a connection (signs in over HTTP itself).
-    let setup = aqua_client_core::Transport::me_call_at(&base, &a.identity, "POST", "2fa/setup", Some(serde_json::json!({}))).await.unwrap();
-    let secret = setup["secret"].as_str().unwrap();
-    let code = format!("{:06}", aqua_server::totp::code_at(&aqua_server::totp::unbase32(secret).unwrap(), aqua_server::totp::now_step()));
-    let on = aqua_client_core::Transport::me_call_at(&base, &a.identity, "POST", "2fa/enable", Some(serde_json::json!({ "code": code }))).await.unwrap();
-    let backup: Vec<String> = serde_json::from_value(on["backup"].clone()).unwrap();
-    let me: serde_json::Value = http.get(format!("{base}/v1/me")).bearer_auth(&a.token).send().await.unwrap().json().await.unwrap();
-    assert_eq!(me["need_2fa"], false);
+    assert_eq!((me["username"].as_str(), me["need_2fa"].as_bool(), me["has_2fa"].as_bool()), (Some("plainone"), Some(false), Some(false)));
+    let ws = format!("ws://{addr}/v1/ws?user=plainone&token={}&v={}", a.token, env!("CARGO_PKG_VERSION"));
     assert!(tokio_tungstenite::connect_async(&ws).await.is_ok());
-    // ...and they stay on.
-    let r = http.post(format!("{base}/v1/me/2fa/disable")).bearer_auth(&a.token).json(&serde_json::json!({ "code": backup[0] })).send().await.unwrap();
+    let st: serde_json::Value = http.get(format!("{base}/v1/me/security")).bearer_auth(&a.token).send().await.unwrap().json().await.unwrap();
+    assert_eq!((st["required"].as_bool(), st["totp"].as_bool()), (Some(false), Some(false)));
+
+    // The name is taken now; a short password is refused.
+    let mut c = Client::new("other");
+    c.login(&http, &base).await;
+    let r = http.post(format!("{base}/v1/users/signup")).bearer_auth(&c.token)
+        .json(&serde_json::json!({ "username": "plainone", "password": "plain-secret" })).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 409);
+    let r = http.post(format!("{base}/v1/users/signup")).bearer_auth(&c.token)
+        .json(&serde_json::json!({ "username": "plaintwo", "password": "short" })).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 400);
+
+    // Without 2FA: no copy on the server, and the account stays on its device.
+    let r = http.put(format!("{base}/v1/backup")).bearer_auth(&a.token).body(b"AQBK1-test".to_vec()).send().await.unwrap();
     assert_eq!(r.status().as_u16(), 403);
+    let mut b = Client::new("plainone-2");
+    b.login(&http, &base).await;
+    let signin = |pw: &str, code: &str| serde_json::json!({ "username": "@plainone", "password": pw, "device_name": "Phone", "totp": code });
+    let r = http.post(format!("{base}/v1/users/signin")).bearer_auth(&b.token).json(&signin("plain-secret", "")).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 403);
+    assert!(r.text().await.unwrap().contains("lives on one device"));
+    let r = http.post(format!("{base}/v1/users/signin")).bearer_auth(&b.token).json(&signin("wrong-secret", "")).send().await.unwrap();
+    assert!(r.text().await.unwrap().contains("wrong @username or password"));
+
+    // The user turns 2FA on in the settings.
+    let setup = aqua_client_core::Transport::me_call_at(&base, &a.identity, "POST", "2fa/setup", Some(serde_json::json!({}))).await.unwrap();
+    let secret = aqua_server::totp::unbase32(setup["secret"].as_str().unwrap()).unwrap();
+    let now = || format!("{:06}", aqua_server::totp::code_at(&secret, aqua_server::totp::now_step()));
+    let on = aqua_client_core::Transport::me_call_at(&base, &a.identity, "POST", "2fa/enable", Some(serde_json::json!({ "code": now() }))).await.unwrap();
+    let backup: Vec<String> = serde_json::from_value(on["backup"].clone()).unwrap();
+
+    // Now another device can join: password, then a backup code (the app
+    // code of this time step is already used up by `enable`).
+    let r = http.post(format!("{base}/v1/users/signin")).bearer_auth(&b.token).json(&signin("plain-secret", "")).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 401);
+    let r = http.post(format!("{base}/v1/users/signin")).bearer_auth(&b.token).json(&signin("plain-secret", &backup[0])).send().await.unwrap();
+    assert!(r.status().is_success(), "{}", r.text().await.unwrap());
+    let v: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(v["username"], "plainone");
+    let r = http.get(format!("{base}/v1/me/backup")).bearer_auth(&b.token).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 404);
+
+    // ...and the user may turn it off again.
+    let r = http.post(format!("{base}/v1/me/2fa/disable")).bearer_auth(&a.token).json(&serde_json::json!({ "code": backup[1] })).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 204, "{}", r.text().await.unwrap());
 
     // An app older than 1.2.0 (or one that doesn't say) isn't served.
     let old = reqwest::Client::builder().user_agent("aqua-client-core/1.1.0-7").build().unwrap();
     let r = old.post(format!("{base}/v1/auth/challenge")).json(&serde_json::json!({ "identity_dh_pub": "x" })).send().await.unwrap();
     assert_eq!(r.status().as_u16(), 426);
-    assert!(r.text().await.unwrap().contains("no longer supported"));
-    let r = reqwest::Client::new().post(format!("{base}/v1/auth/email/request")).json(&serde_json::json!({ "email": email })).send().await.unwrap();
+    let r = reqwest::Client::new().post(format!("{base}/v1/users/signup")).json(&serde_json::json!({})).send().await.unwrap();
     assert_eq!(r.status().as_u16(), 426);
-    assert!(tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=req2fa&token={}", a.token)).await.is_err());
-    // Profiles and the stats stay open; the stats say the version.
     let st: serde_json::Value = reqwest::get(format!("{base}/v1/stats")).await.unwrap().json().await.unwrap();
     assert_eq!(st["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(st["min_client"], "1.2.0");

@@ -114,6 +114,11 @@
       { id: "about", label: "About Aquamarine", color: "#8E8E93", icon: ic(`<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>`) },
     ],
   ];
+  /** Sections for experienced users: shown under "Advanced settings". */
+  const ADVANCED = new Set<string>(["ghost", "power", "window", "network", "host", "nearby", "bots", "shortcuts", "advanced"]);
+  const shown = (x: Item) => !((x.id === "shortcuts" || x.id === "window") && (phone || TOUCH));
+  const BASIC_GROUPS = GROUPS.map((g) => g.filter((x) => !ADVANCED.has(x.id))).filter((g) => g.length);
+  const ADVANCED_ITEMS = GROUPS.flat().filter((x) => ADVANCED.has(x.id));
   const SECTIONS = GROUPS.flat().filter((x) => x.id !== "profile" && x.id !== "shortcuts") as (Item & { id: Sec })[];
   const sectionItem = $derived(GROUPS.flat().find((x) => x.id === section));
   const sectionTitle = $derived(sectionItem?.label ?? "Settings");
@@ -909,18 +914,31 @@
               <span class="me-online" class:off={!$info?.connected}>{$info?.connected ? ($myOnline === "invisible" ? "invisible" : $myOnline === "dnd" ? "do not disturb" : $myOnline) : "offline"}</span>
             </span>
           </button>
-          {#each GROUPS as g, gi}
+          {#snippet navItem(it: Item)}
+            <button class="nav-item" class:active={section === it.id} onclick={() => openItem(it)}>
+              <span class="tile" style:background={it.color}>{@html it.icon}</span>
+              <span class="nav-lbl">{$t(it.label)}</span>
+              {#if it.id === "language"}<span class="nav-hint">{LANGS.find((l) => l.id === $lang)?.native}</span>{:else if it.hint}<span class="nav-hint">{it.hint}</span>{/if}
+              <span class="chev">›</span>
+            </button>
+          {/snippet}
+          {#each BASIC_GROUPS as g, gi (gi)}
             <div class="nav-group">
-              {#each g.filter((x) => !((x.id === "shortcuts" || x.id === "window") && (phone || TOUCH))) as it}
-                <button class="nav-item" class:active={section === it.id} onclick={() => openItem(it)}>
-                  <span class="tile" style:background={it.color}>{@html it.icon}</span>
-                  <span class="nav-lbl">{$t(it.label)}</span>
-                  {#if it.id === "language"}<span class="nav-hint">{LANGS.find((l) => l.id === $lang)?.native}</span>{:else if it.hint}<span class="nav-hint">{it.hint}</span>{/if}
-                  <span class="chev">›</span>
-                </button>
-              {/each}
+              {#each g.filter(shown) as it (it.id)}{@render navItem(it)}{/each}
             </div>
           {/each}
+          <div class="nav-group">
+            <button class="nav-item adv-toggle" onclick={() => settings.update((x) => ({ ...x, advancedSettings: !x.advancedSettings }))}>
+              <span class="tile" style:background="#636366">{@html ic(`<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>`)}</span>
+              <span class="nav-lbl">{$t("Advanced settings")}<small class="adv-sub">{$t("Network, your own server, ghost mode, bots, experiments")}</small></span>
+              <span class="adv-sw" class:on={$settings.advancedSettings}></span>
+            </button>
+          </div>
+          {#if $settings.advancedSettings}
+            <div class="nav-group">
+              {#each ADVANCED_ITEMS.filter(shown) as it (it.id)}{@render navItem(it)}{/each}
+            </div>
+          {/if}
         </nav>
 
         <div class="content">
@@ -1727,7 +1745,7 @@
       {#if section === "devices"}
       <section class="group">
         <div class="label">{$t("Devices")}</div>
-        <div class="bots-note">{$t("Your account works on several devices at once: phone, computer, tablet. Each device has its own encryption keys and gets every message. To add one, open Aquamarine there and choose “Sign in” with your e-mail and password.")}</div>
+        <div class="bots-note">{$t("Your account works on several devices at once: phone, computer, tablet. Each device has its own encryption keys and gets every message. To add one, turn on two-step verification (Privacy & Security), then open Aquamarine there and choose “Sign in” with your @username, password and the code.")}</div>
         <div class="bots-note">{$t("A new device gets your chats only after you approve it on one of your devices (“It's me”). Two-step codes and turning off sign-in on new devices: Privacy & Security.")}</div>
         {#if devErr}
           <div class="bots-note">{$t("Couldn't load the list: {e}", { e: devErr })}</div>
@@ -2095,7 +2113,7 @@
       {#if section === "backups"}
       <section class="group">
         <div class="label">{$t("Encrypted backup")}</div>
-        <div class="bots-note">{$t("Your keys, chats, groups and settings are sealed on this device and kept on your server — and, in a federated network, copied to every other server within seconds. None of them can read it. Sign in on a new device with your e-mail and password and everything comes back. Photos and videos are not included.")}</div>
+        <div class="bots-note">{$t("Your keys, chats, groups and settings are sealed on this device and kept on your server — and, in a federated network, copied to every other server within seconds. None of them can read it. Sign in on a new device with your @username, password and the code and everything comes back. Photos and videos are not included. Needs two-step verification: without it the account can't leave this device, so the server keeps no copy.")}</div>
         {#if !$backupState?.enabled}
           <div class="bk-row">
             <input class="txt" type="password" placeholder={$t("Account password")} bind:value={bkPw} onkeydown={(e) => { if (e.key === "Enter") void bkEnable(); }} />
@@ -2117,12 +2135,12 @@
       </section>
       <section class="group">
         <div class="label">{$t("Recovery key")}</div>
-        <div class="bots-note">{$t("24 words that reset a forgotten password and open your encrypted backup. The server keeps only a check derived from them — it can't reproduce the words.")}</div>
+        <div class="bots-note">{$t("24 words that open your encrypted backup and, with two-step verification on, let you in on a new device when the phone with the codes is lost. The server keeps only a check derived from them — it can't reproduce the words.")}</div>
         <div class="bk-stat">
           <span class="bk-dot" class:on={rc?.server === true}></span>
           <span>
-            {#if rc?.server === true}{$t("Set — a forgotten password is reset with the e-mail code plus these words")}
-            {:else if rc?.server === false}{$t("Not set — whoever gets into your e-mail can reset the password")}
+            {#if rc?.server === true}{$t("Set")}
+            {:else if rc?.server === false}{$t("Not set")}
             {:else}{$t("Connect to the server to check")}{/if}
           </span>
         </div>
@@ -2133,7 +2151,7 @@
           <div class="bk-phrase">
             <div class="bk-ph-title">{$t("Recovery key — write it down and keep it offline")}</div>
             <ol>{#each bkPhrase.split(" ") as w, i (i)}<li>{w}</li>{/each}</ol>
-            <div class="bots-note">{$t("If you forget the password: Sign in → Forgot password?, the e-mail code and these 24 words. Nobody, including the server admin, can recover the backup without the password or the words.")}</div>
+            <div class="bots-note">{$t("Nobody, including the server admin, can open the backup without the password or these words.")}</div>
             <button class="bot-link" onclick={() => navigator.clipboard?.writeText(bkPhrase ?? "").then(() => showToast(tr("Recovery key copied")))}>{$t("Copy")}</button>
             <button class="bot-link" onclick={() => (bkPhrase = null)}>{$t("Hide")}</button>
           </div>
@@ -2398,6 +2416,12 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .me-online { font-size: 12px; color: var(--accent); }
   .me-online.off { color: var(--fg-dim); }
   .nav-group { background: var(--bg-surface); border-radius: calc(14px * var(--rk, 1)); overflow: hidden; }
+  .adv-toggle .nav-lbl { display: flex; flex-direction: column; gap: 1px; }
+  .adv-sub { font-size: 11.5px; color: var(--fg-dim); font-weight: 400; }
+  .adv-sw { width: 34px; height: 20px; border-radius: calc(10px * var(--rk, 1)); background: var(--bg-hover); border: 1px solid var(--border-strong); position: relative; flex-shrink: 0; transition: background 0.15s; }
+  .adv-sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--fg-muted); transition: transform 0.15s, background 0.15s; }
+  .adv-sw.on { background: var(--accent); border-color: transparent; }
+  .adv-sw.on::after { transform: translateX(14px); background: #fff; }
   .nav-item {
     width: 100%;
     display: flex; align-items: center; gap: 12px;

@@ -112,7 +112,9 @@
     <button class="toggle-row" disabled={busy} onclick={() => (sec?.totp ? (sec.required ? showToast(tr("This server requires two-step verification — it can't be turned off")) : turnOff()) : setup ? (setup = null) : startSetup())}>
       <div class="tr-text">
         <div class="tr-title">{$t("Two-step verification")}</div>
-        <div class="tr-sub">{$t("On a new device, after the e-mail code and the password, the account asks for a 6-digit code from an authenticator app — Google Authenticator, Aegis, 2FAS, Bitwarden…")}</div>
+        <div class="tr-sub">{sec.totp
+          ? $t("On: your account can move to other phones and computers — @username, password and a 6-digit code from the authenticator app (or a backup code). The server keeps your whole history and an encrypted backup.")
+          : $t("Off: the account lives only on this device. Lose it — lose the account, there's no recovery; the server keeps just a small part of your history. Turn it on with an authenticator app — Google Authenticator, Aegis, 2FAS, Bitwarden…")}</div>
       </div>
       <span class="switch" class:on={sec.totp || !!setup}></span>
     </button>
@@ -153,15 +155,17 @@
       {#if sec.required}<div class="foot-note">{$t("Required on this server: it stays on. New phone? “Another app” moves the codes to it.")}</div>{/if}
     {/if}
 
+    {#if sec.totp}
     <button class="toggle-row" disabled={busy} onclick={() => setLock(!sec?.lock)}>
       <div class="tr-text">
         <div class="tr-title">{$t("Sign-in on new devices")}</div>
         <div class="tr-sub">{sec.lock
           ? $t("Off: nobody can sign in to your account on another phone or computer — not even with the password and the code. Your devices keep working. To add one, turn this on for a minute.")
-          : $t("On: you can sign in on another phone or computer with your e-mail and password.")}</div>
+          : $t("On: you can sign in on another phone or computer with your @username, password and the code.")}</div>
       </div>
       <span class="switch" class:on={!sec.lock}></span>
     </button>
+    {/if}
     <div class="foot-note">{$t("Either way, a new device gets your chats only after you approve it on one of your devices. Lost every device? The 24-word recovery key opens both.")}</div>
   {/if}
 </section>

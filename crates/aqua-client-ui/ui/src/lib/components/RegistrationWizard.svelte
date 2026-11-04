@@ -63,6 +63,7 @@
   /** A server's error in plain words, plus what to do about it. */
   function explainNet(m: string, url: string): string | null {
     if (/server is too old/i.test(m)) return tr("The server at {u} runs an old Aquamarine. Since 1.2.0 the app works only with servers 1.2.0 or newer — ask its owner to update it.", { u: url });
+    if (/needs an e-mail to sign up/i.test(m)) return tr("This server runs an Aquamarine older than 1.2.0-1 and still asks for an e-mail — ask its owner to update it.");
     const local = /\/\/(127\.0\.0\.1|localhost|\[?::1\]?)(?=[:/]|$)/i.test(url);
     if (/10061|ECONNREFUSED|Connection refused|actively refused|отверг/i.test(m))
       return local
@@ -104,9 +105,10 @@
       } else if (/different identity|already claimed|\b403\b|forbidden/i.test(err)) {
         // The relay answers 403 when @name is bound to another device's key
         // (registered from a phone / emulator, or this device's keys were reset).
-        // "Sign in" with the account's email + password moves it to this device.
+        // "Sign in" with the account's password (+ code) adds this device.
         mode = "signin";
-        error = tr("@{name} isn't linked to this device yet (it was signed up or signed in on another one). Sign in below with this account's e-mail and password — this device is added to the account, the others stay signed in.", { name: i.username });
+        username = i.username;
+        error = tr("@{name} isn't linked to this device yet. Sign in below with its password — this device is added to the account (that needs two-step verification on it), the others stay signed in.", { name: i.username });
       } else if (/not regist/i.test(err)) {
         error = tr("@{name} isn't registered on this server. Register below to set it up.", { name: i.username });
       } else {
@@ -119,38 +121,29 @@
     }
   }
 
-  // Steps: 1 email → 2 code → 3 username+profile → done
-  // 4 = recovery key for the backup, 5 = recovery key for a password
-  // reset, 6 = "save your recovery key" after sign-up, 7 = two-step code,
-  // 8 = recovery key to get past "no new devices" / a lost code phone.
-  let step = $state<1 | 2 | 3 | 4 | 5 | 6 | 7 | 8>(1);
+  // Since 1.2.0-1 there is no e-mail: step 1 is @username + password.
+  // 4 = recovery key for the backup, 7 = two-step code, 8 = recovery key
+  // to get past "no new devices" / a lost code phone.
+  let step = $state<1 | 4 | 7 | 8>(1);
   /** Step 7: the code from the authenticator app (or a backup code). */
   let totp = $state("");
   /** Step 8: sign in with the recovery key instead of the code. */
   let useRecovery = $state(false);
   /** Step 8 because sign-in on new devices is off (not a lost code phone). */
   let locked = $state(false);
-  let recoveryWords = $state("");
-  let savedWords = $state(false);
   /** Step 4: the backup didn't open with the password — recovery key. */
   let phrase = $state("");
   let serverUrl = $state(DEFAULT_SERVER);
-  let email = $state("");
-  let code = $state("");
-  let devCode = $state<string | null>(null);
-  /** The relay couldn't e-mail the code (its mail server refused). */
-  let mailFailed = $state<string | null>(null);
-  let ticket = $state("");
+  /** @username (or, for an account from before 1.2.0-1, its e-mail). */
   let username = $state("");
   let displayName = $state("");
-  let about = $state("");
-  let phone = $state("");
   let busy = $state(false);
   let error = $state<string | null>(null);
-  /** Discord / Spotify style: create an account, or sign in to one. */
-  let mode = $state<"signup" | "signin" | "reset">("signup");
-  /** The relay said the e-mail already has an account: offer to sign in. */
+  let mode = $state<"signup" | "signin">("signup");
+  /** The @username is taken: offer to sign in. */
   let existsHint = $state(false);
+  /** The account lives on another device (no two-step verification). */
+  let boundHint = $state(false);
   let password = $state("");
   let password2 = $state("");
   let showPw = $state(false);
@@ -158,36 +151,7 @@
     (password.length >= 8 ? 1 : 0) + (password.length >= 12 ? 1 : 0) +
     (/[A-ZА-Я]/.test(password) && /[a-zа-я]/.test(password) ? 1 : 0) + (/\d/.test(password) ? 1 : 0) + (/[^\w\s]/.test(password) ? 1 : 0),
   );
-
-  // ---- The code fills in by itself ----
-  // The request carries a random nonce; the e-mail then has an "It's me"
-  // button, and while this screen is open we ask the relay whether it was
-  // tapped — then the code comes back here and is checked. Typing it works
-  // as before, and a complete 6-digit code is checked without pressing Next.
-  let nonce = "";
-  const newNonce = () => [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
-  $effect(() => {
-    if (step !== 2 || !nonce) return;
-    let stop = false;
-    const look = async () => {
-      if (stop || busy || code.trim().length === 6) return;
-      try {
-        const c = await api.pollEmailCode(serverUrl.trim(), email.trim(), nonce);
-        if (c && !stop && !busy) { code = c; void checkCode(); }
-      } catch { /* offline for a moment */ }
-    };
-    const iv = setInterval(look, 2500);
-    // Back from the mail app: look right away.
-    const vis = () => { if (document.visibilityState === "visible") void look(); };
-    document.addEventListener("visibilitychange", vis);
-    window.addEventListener("focus", vis);
-    return () => { stop = true; clearInterval(iv); document.removeEventListener("visibilitychange", vis); window.removeEventListener("focus", vis); };
-  });
-  function onCodeInput() {
-    const d = code.replace(/\D/g, "").slice(0, 6);
-    if (d !== code) code = d;
-    if (d.length === 6 && !busy) void checkCode();
-  }
+  const login = $derived(username.trim().replace(/^@/, "").toLowerCase());
 
   /** A server's QR or an invitation from an invite-only server's admin. */
   async function scanInvite() {
@@ -199,100 +163,49 @@
     else showToast(tr("That QR code isn't an Aquamarine server or invitation"));
   }
 
-  async function sendCode() {
-    error = null;
-    if (!email.includes("@")) { error = tr("Enter a valid email"); return; }
+  function plainError(m: string): string {
+    if (/already taken/i.test(m)) { existsHint = true; return tr("@{u} is already taken.", { u: login }); }
+    if (/lives on one device/i.test(m)) { boundHint = true; return tr("@{u} lives on another device: it has no two-step verification, so it can't be moved. Turn it on there (Settings → Privacy & Security), then sign in here.", { u: login }); }
+    if (/wrong @username or password/i.test(m)) return tr("Wrong @username or password");
+    if (/too many wrong/i.test(m)) return tr("Too many wrong attempts — try again in 15 minutes");
+    if (/invite-only/i.test(m)) return tr("This server is invite-only — scan the invitation QR from its admin.");
+    if (/needs an e-mail to sign up/i.test(m)) return tr("This server runs an Aquamarine older than 1.2.0-1 and still asks for an e-mail — ask its owner to update it.");
+    if (/username must be/i.test(m)) return tr("@username: 3–32 characters, a-z 0-9 _ . only");
+    return explainNet(m, serverUrl.trim()) ?? m;
+  }
+
+  async function submit() {
+    error = null; existsHint = false; boundHint = false;
+    if (mode === "signup" && !/^[a-z0-9_.]{3,32}$/.test(login)) { error = tr("@username: 3–32 characters, a-z 0-9 _ . only"); return; }
+    if (mode === "signin" && !login) { error = tr("Enter your @username"); return; }
     if (password.length < 8) { error = tr("Password must be at least 8 characters"); return; }
-    if (mode !== "signin" && password !== password2) { error = tr("Passwords don't match"); return; }
-    serverUrl = normalizeServer(serverUrl); // fix https→http for local relays, reflect it
+    if (mode === "signup" && password !== password2) { error = tr("Passwords don't match"); return; }
+    serverUrl = normalizeServer(serverUrl);
+    if (mode === "signup") await signUp(); else await signIn();
+  }
+
+  async function signUp() {
     busy = true;
-    existsHint = false;
+    wizardHold.set(true);
+    const u = login;
     try {
-      nonce = newNonce();
-      const r = await withServer((u) => api.requestEmailCode(u, email.trim(), mode, nonce, inviteFor(u) || undefined));
-      devCode = r.dev_code; mailFailed = r.delivery_failed ? (r.error || "?") : null;
-      step = 2;
-      if (devCode) code = devCode; // prefill in dev mode for convenience
-      startResendCooldown();
+      await withServer((url) => api.signupPlain(url, u, password, displayName.trim() || undefined, inviteFor(url) || undefined));
+      const err = await connect(serverUrl.trim(), u);
+      if (err) { error = plainError(err); wizardHold.set(false); return; }
+      updateProfile({ display_name: displayName.trim() || u, about: "An Aquamarine user.", phone: "" });
+      try { await api.publishProfile(displayName.trim() || u, "", ""); } catch { /* non-fatal */ }
+      try { info.set(await api.completeRegistration(u, null)); } catch { /* non-fatal */ }
+      try { chats.set(await api.listChats()); } catch { /* non-fatal */ }
+      showToast(tr("Registered as @{u}", { u }));
+      closeRegistration();
     } catch (e) {
-      const m = String(e);
-      if (/already exists/i.test(m)) { error = tr("An account with this e-mail already exists."); existsHint = true; }
-      else if (/no account with this e-mail/i.test(m)) error = tr("There's no account with this e-mail on this server.");
-      else error = explainNet(m, serverUrl.trim()) ?? tr("Could not send code: {e}", { e: m });
+      error = plainError(String(e));
+      wizardHold.set(false);
     } finally {
       busy = false;
     }
   }
 
-  /** Forgotten password: e-mail ticket + recovery key → new password, then
-   *  the usual sign-in (restoring the backup with the key). */
-  async function doReset() {
-    error = null;
-    busy = true;
-    try {
-      await api.passwordReset(serverUrl.trim(), ticket, email.trim(), phrase.trim(), password);
-      showToast(tr("Password changed"));
-      await finishSignIn(!!phrase.trim());
-    } catch (e) {
-      const m = String(e);
-      error = /recovery key/i.test(m) ? tr("This recovery key doesn't match the account. Check the words (they're in the order they were shown).")
-        : /expected 24 words|unknown word|checksum/i.test(m) ? tr("The recovery key is mistyped: {e}", { e: m.replace(/^.*recovery key: /, "") })
-        : tr("Could not reset the password: {e}", { e: m });
-    } finally {
-      busy = false;
-    }
-  }
-
-  async function copyWords() {
-    try { await navigator.clipboard.writeText(recoveryWords); showToast(tr("Recovery key copied")); } catch { /* ignore */ }
-  }
-
-  // Resend code with a 45-second cooldown.
-  let resendIn = $state(0);
-  let resendTimer: ReturnType<typeof setInterval> | null = null;
-  function startResendCooldown() {
-    resendIn = 45;
-    if (resendTimer) clearInterval(resendTimer);
-    resendTimer = setInterval(() => {
-      resendIn -= 1;
-      if (resendIn <= 0 && resendTimer) { clearInterval(resendTimer); resendTimer = null; }
-    }, 1000);
-  }
-  async function resendCode() {
-    if (resendIn > 0 || busy) return;
-    error = null;
-    busy = true;
-    try {
-      nonce = newNonce();
-      const r = await api.requestEmailCode(serverUrl.trim(), email.trim(), mode, nonce, inviteFor(serverUrl.trim()) || undefined);
-      devCode = r.dev_code; mailFailed = r.delivery_failed ? (r.error || "?") : null;
-      if (devCode) code = devCode;
-      startResendCooldown();
-    } catch (e) {
-      error = `Could not resend: ${e}`;
-    } finally {
-      busy = false;
-    }
-  }
-
-  async function checkCode() {
-    error = null;
-    if (code.trim().length < 4) { error = "Enter the 6-digit code"; return; }
-    busy = true;
-    try {
-      ticket = await api.verifyEmailCode(serverUrl.trim(), email.trim(), code.trim());
-      if (mode === "signin") { await finishSignIn(); return; }
-      if (mode === "reset") { phrase = ""; step = 5; return; }
-      step = 3;
-    } catch (e) {
-      error = `Wrong or expired code: ${e}`;
-    } finally {
-      busy = false;
-    }
-  }
-
-  /** Existing account → restore its encrypted backup (if any), move it to
-   *  this device, connect, done. */
   /** The account's sign-in protection said no: ask for what it wants. */
   function gate(e: unknown): boolean {
     const m = String(e);
@@ -300,118 +213,62 @@
     if (/wrong two-step/i.test(m)) { step = 7; totp = ""; error = tr("Wrong code — try the next one from the app, or a backup code"); return true; }
     if (/turned off for this account/i.test(m)) { step = 8; locked = true; useRecovery = false; error = null; return true; }
     if (/recovery key doesn't match/i.test(m) && useRecovery) { step = 8; useRecovery = false; error = tr("That recovery key doesn't match this account"); return true; }
-    if (/ticket is invalid/i.test(m) && (step === 7 || step === 8)) { step = 1; totp = ""; error = tr("Too many wrong codes — start again"); return true; }
     return false;
   }
 
-  async function finishSignIn(withPhrase = false) {
-    let restored = false;
-    const code = step === 7 ? totp.trim() : undefined;
-    const rec = useRecovery ? phrase.trim() : undefined;
+  /** Existing account with two-step verification: add this device, take
+   *  the encrypted backup (if any), connect, done. */
+  async function signIn(withPhrase = false) {
+    busy = true;
+    let u = "";
     try {
-      const r = await api.backupRestore(serverUrl.trim(), ticket, password, email.trim(), withPhrase ? phrase.trim() : undefined, code, rec);
-      if (r.found && r.need_phrase) { step = 4; error = withPhrase ? tr("That recovery key doesn't open the backup") : null; return; }
-      if (r.found) { applyUiState(r.ui); restored = true; }
+      const code = step === 7 ? totp.trim() : undefined;
+      const rec = useRecovery ? phrase.trim() : undefined;
+      u = await withServer((url) => api.signinPlain(url, username.trim(), password, code, rec));
     } catch (e) {
+      busy = false;
       if (gate(e)) return;
-      // No backup / old relay: carry on with a fresh device.
-      console.warn("backup restore", e);
+      error = plainError(String(e));
+      step = 1;
+      return;
+    }
+    await afterSignIn(u, withPhrase);
+    busy = false;
+  }
+
+  async function afterSignIn(u: string, withPhrase: boolean, skipBackup = false) {
+    let restored = false;
+    if (!skipBackup) {
+      try {
+        const r = await api.backupRestore(serverUrl.trim(), "", password, "", withPhrase ? phrase.trim() : undefined);
+        if (r.found && r.need_phrase) { step = 4; error = withPhrase ? tr("That recovery key doesn't open the backup") : null; signedAs = u; return; }
+        if (r.found) { applyUiState(r.ui); restored = true; }
+      } catch (e) { console.warn("backup restore", e); }
     }
     try {
-      const u = await api.loginAccount(serverUrl.trim(), ticket, password, email.trim(), code, rec);
       const err = await connect(serverUrl.trim(), u);
       if (err) { error = err; return; }
-      try { info.set(await api.completeRegistration(u, email.trim() || null)); } catch { /* non-fatal */ }
+      try { info.set(await api.completeRegistration(u, null)); } catch { /* non-fatal */ }
       await adoptMyCard(u);
       try { chats.set(await api.listChats()); } catch { /* non-fatal */ }
       if (!restored) { try { await api.backupEnable(password); } catch { /* non-fatal */ } }
       void refreshBackup();
       showToast(restored ? tr("Signed in as @{u} — chats restored from your backup", { u }) : tr("Signed in as @{u}", { u }));
       closeRegistration();
-      // Restored settings (theme, folders…) apply on a fresh start of the UI.
       if (restored) setTimeout(() => location.reload(), 600);
     } catch (e) {
-      if (gate(e)) return;
-      const m = String(e);
-      error = /wrong email or password/i.test(m) ? tr("Wrong email or password") : tr("Could not sign in: {e}", { e: m });
-      if (mode === "reset") mode = "signin";
+      error = tr("Could not sign in: {e}", { e: String(e) });
       step = 1;
     }
   }
+  /** Step 4 keeps the username the relay gave back. */
+  let signedAs = "";
 
   /** Step 7 / 8: try again with the code or the recovery key. */
   async function retrySignIn(withRecovery: boolean) {
     error = null;
     useRecovery = withRecovery;
-    busy = true;
-    try { await finishSignIn(withRecovery); } finally { busy = false; }
-  }
-
-  /** Recovery key step: give up on the backup and start fresh. */
-  async function skipRestore() {
-    phrase = "";
-    try {
-      const u = await api.loginAccount(serverUrl.trim(), ticket, password, email.trim(), totp.trim() || undefined, useRecovery ? phrase.trim() : undefined);
-      const err = await connect(serverUrl.trim(), u);
-      if (err) { error = err; return; }
-      try { info.set(await api.completeRegistration(u, email.trim() || null)); } catch { /* non-fatal */ }
-      await adoptMyCard(u);
-      try { await api.backupEnable(password); } catch { /* non-fatal */ }
-      closeRegistration();
-    } catch (e) { error = String(e); }
-  }
-
-  async function finish() {
-    error = null;
-    const u = username.trim().toLowerCase();
-    if (!/^[a-z0-9_.]{3,32}$/.test(u)) {
-      error = "Username: 3–32 chars, a-z 0-9 _ . only";
-      return;
-    }
-    busy = true;
-    wizardHold.set(true);
-    try {
-      // 1. Register the account FIRST (HTTP sign-in + directory write). The
-      //    server now requires a registered username before it will accept a
-      //    bundle upload or a WebSocket, so this must precede connect.
-      await api.registerAccount(serverUrl.trim(), u, ticket, displayName.trim(), about.trim(), phone.trim(), password, email.trim());
-      // 2. Connect (signs in + opens WS + uploads bundle), which also
-      //    saves the auto-reconnect hints.
-      const err = await connect(serverUrl.trim(), u);
-      if (err) { error = err; busy = false; wizardHold.set(false); return; }
-      // 3. Mirror into the local profile store so the sidebar + profile
-      //    modal reflect it immediately.
-      updateProfile({
-        display_name: displayName.trim() || u,
-        about: about.trim() || "An Aquamarine user.",
-        phone: phone.trim(),
-      });
-      // 4. Publish profile to the directory (idempotent with register,
-      //    but covers the display-name-only edit path).
-      try { await api.publishProfile(displayName.trim() || u, about.trim(), phone.trim()); } catch { /* non-fatal */ }
-      // 5. Persist the account record — this is what flips the entry gate
-      //    off permanently on this device. Refresh the info store so the
-      //    gate ($info.registered) closes immediately.
-      try { info.set(await api.completeRegistration(u, email.trim() || null)); } catch { /* non-fatal */ }
-      try { chats.set(await api.listChats()); } catch { /* non-fatal */ }
-      // Encrypted backups on by default (the password opens them).
-      try { await api.backupEnable(password); void refreshBackup(); } catch { /* non-fatal */ }
-      showToast(tr("Registered as @{u}", { u }));
-      // The 24-word recovery key: shown once now, registered on the relay
-      // (only a check derived from it) so a forgotten password can be reset.
-      try {
-        recoveryWords = await api.recoveryCreate();
-        savedWords = false;
-        step = 6;
-      } catch {
-        closeRegistration();
-      }
-    } catch (e) {
-      error = `Registration failed: ${e}`;
-      wizardHold.set(false);
-    } finally {
-      busy = false;
-    }
+    await signIn(withRecovery);
   }
 
   function skipForNow() {
@@ -437,14 +294,6 @@
       </aside>
 
       <div class="panel">
-      <div class="steps">
-        <span class="dot" class:active={step >= 1} class:done={step > 1}>1</span>
-        <span class="bar" class:done={step > 1}></span>
-        <span class="dot" class:active={step >= 2} class:done={step > 2}>2</span>
-        <span class="bar" class:done={step > 2}></span>
-        <span class="dot" class:active={step >= 3}>{step === 6 ? "✓" : 3}</span>
-      </div>
-
       {#if error}
         <div class="err">
           {error}
@@ -458,7 +307,7 @@
         <div class="continue-box">
           <div class="cb-label">{$t("Already registered on this device")}</div>
           <button class="continue-btn" onclick={continueAs} disabled={busy}>
-            {busy ? "Signing in…" : `Continue as @${$info.username}`}
+            {busy ? $t("Signing in…") : $t("Continue as @{name}", { name: $info.username ?? "" })}
           </button>
           <div class="cb-or"><span>{$t("or register / log in below")}</span></div>
         </div>
@@ -473,106 +322,63 @@
       {/if}
 
       {#if step === 1}
-        {#if mode === "reset"}
-          <div class="reset-head">
-            <button class="link" onclick={() => { mode = "signin"; error = null; }}>← {$t("Sign in")}</button>
-            <b>{$t("Reset password")}</b>
-            <p class="note">{$t("We'll send a code to your e-mail. Then enter your 24-word recovery key and a new password — your chats come back from the encrypted backup.")}</p>
-          </div>
-        {:else}
-          <div class="mode-tabs">
-            <button class:on={mode === "signup"} onclick={() => { mode = "signup"; error = null; existsHint = false; }}>{$t("Create account")}</button>
-            <button class:on={mode === "signin"} onclick={() => { mode = "signin"; error = null; existsHint = false; }}>{$t("Sign in")}</button>
-          </div>
-        {/if}
-        <div class="form">
-          <div class="field">
-            <span>{$t("Server")}</span>
-            <ServerPicker bind:value={serverUrl} placeholder={DEFAULT_SERVER}
-              defaults={IS_ANDROID ? ["http://10.0.2.2:7777"] : ["http://127.0.0.1:7777"]} />
-            <button class="scan-inv" type="button" onclick={scanInvite}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg>
-              {inviteFor(serverUrl) ? $t("Invitation for this server ✓") : $t("Scan a server or invitation QR")}
-            </button>
-          </div>
+        <div class="mode-tabs">
+          <button class:on={mode === "signup"} onclick={() => { mode = "signup"; error = null; existsHint = false; boundHint = false; }}>{$t("Create account")}</button>
+          <button class:on={mode === "signin"} onclick={() => { mode = "signin"; error = null; existsHint = false; boundHint = false; }}>{$t("Sign in")}</button>
+        </div>
+        <form class="form" onsubmit={(e) => { e.preventDefault(); void submit(); }}>
           <label class="field">
-            <span>{$t("Email")}</span>
-            <input bind:value={email} type="email" autocomplete="email" placeholder={$t("you@example.com")} />
-          </label>
-          <label class="field">
-            <span>{mode === "reset" ? $t("New password") : $t("Password")}</span>
-            <div class="pw">
-              <input bind:value={password} type={showPw ? "text" : "password"} autocomplete={mode === "signin" ? "current-password" : "new-password"}
-                     placeholder={mode === "signin" ? "" : $t("At least 8 characters")} onkeydown={(e) => e.key === "Enter" && mode === "signin" && sendCode()} />
-              <button class="pw-eye" type="button" onclick={() => (showPw = !showPw)} title={showPw ? $t("Hide") : $t("Show")}>{showPw ? "◉" : "◎"}</button>
+            <span>@username</span>
+            <div class="at-in"><i>@</i>
+              <input bind:value={username} autocomplete="username" autocapitalize="none" spellcheck="false"
+                     placeholder={mode === "signup" ? $t("ivan2027") : $t("username")} oninput={() => { if (mode === "signup") username = username.toLowerCase().replace(/^@/, ""); }} />
             </div>
-            {#if mode !== "signin" && password}
-              <span class="pw-meter"><i style:width="{pwScore * 20}%" class:ok={pwScore >= 3}></i></span>
-            {/if}
-            {#if mode === "signin"}
-              <button class="link forgot" type="button" onclick={() => { mode = "reset"; error = null; password = ""; password2 = ""; }}>{$t("Forgot password?")}</button>
-            {/if}
           </label>
-          {#if mode !== "signin"}
+          {#if mode === "signup"}
             <label class="field">
-              <span>{$t("Repeat password")}</span>
-              <input bind:value={password2} type={showPw ? "text" : "password"} autocomplete="new-password" onkeydown={(e) => e.key === "Enter" && sendCode()} />
+              <span>{$t("Name (optional)")}</span>
+              <input bind:value={displayName} autocomplete="nickname" placeholder="Иван" />
             </label>
           {/if}
-          <p class="note">{$t("We'll send a 6-digit verification code. In dev mode the code appears on the next screen automatically.")}</p>
-          <div class="actions">
-            <button class="ghost" onclick={skipForNow}>{$t("Skip")}</button>
-            <button class="primary" onclick={sendCode} disabled={busy}>{$t(busy ? "Sending…" : "Send code")}</button>
-          </div>
-        </div>
-      {:else if step === 2}
-        <div class="form">
           <label class="field">
-            <span>{$t("Verification code")}</span>
-            <input bind:value={code} placeholder="123456" maxlength="6" class="code-input" autocomplete="one-time-code" inputmode="numeric"
-                   oninput={onCodeInput} onkeydown={(e) => e.key === "Enter" && checkCode()} />
+            <span>{$t("Password")}</span>
+            <div class="pw">
+              <input bind:value={password} type={showPw ? "text" : "password"} autocomplete={mode === "signin" ? "current-password" : "new-password"}
+                     placeholder={mode === "signin" ? "" : $t("At least 8 characters")} />
+              <button class="pw-eye" type="button" onclick={() => (showPw = !showPw)} title={showPw ? $t("Hide") : $t("Show")}>{showPw ? "◉" : "◎"}</button>
+            </div>
+            {#if mode === "signup" && password}
+              <span class="pw-meter"><i style:width="{pwScore * 20}%" class:ok={pwScore >= 3}></i></span>
+            {/if}
           </label>
-          {#if devCode}
-            <p class="note dev">{$t("Dev mode — your code is")} <b>{devCode}</b> {$t("(also printed in the server console).")}</p>
-          {:else if mailFailed}
-            <p class="note warn">{$t("The server couldn't send the e-mail ({e}). The code is shown in the server window and in its admin panel — if this is your server, take it from there; otherwise ask the server's owner.", { e: mailFailed })}</p>
+          {#if mode === "signup"}
+            <label class="field">
+              <span>{$t("Repeat password")}</span>
+              <input bind:value={password2} type={showPw ? "text" : "password"} autocomplete="new-password" />
+            </label>
+            <p class="note">{$t("No e-mail or phone needed. The account lives on this device; to use it on others and keep your chats on the server, turn on two-step verification later in Settings → Privacy & Security.")}</p>
+            <p class="note dim">{$t("Without two-step verification a lost device means a lost account — there is no recovery.")}</p>
           {:else}
-            <p class="note">{$t("Check your inbox at {email}.", { email })} {$t("Tap “It's me” in the e-mail — the code fills in here by itself.")}</p>
+            <p class="note">{$t("A new device can be added only to an account with two-step verification: you'll be asked for a code from your authenticator app.")}</p>
           {/if}
-          <button class="resend" onclick={resendCode} disabled={resendIn > 0 || busy}>
-            {resendIn > 0 ? $t("Resend code in {n}s", { n: resendIn }) : $t("Resend code")}
-          </button>
+          <details class="srv">
+            <summary>{$t("Server")}: <b>{serverUrl.replace(/^https?:\/\//, "")}</b> {inviteFor(serverUrl) ? "· " + $t("invitation ✓") : ""}</summary>
+            <div class="field">
+              <ServerPicker bind:value={serverUrl} placeholder={DEFAULT_SERVER}
+                defaults={IS_ANDROID ? ["http://10.0.2.2:7777"] : ["http://127.0.0.1:7777"]} />
+              <button class="scan-inv" type="button" onclick={scanInvite}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg>
+                {$t("Scan a server or invitation QR")}
+              </button>
+            </div>
+          </details>
           <div class="actions">
-            <button class="ghost" onclick={() => (step = 1)}>{$t("Back")}</button>
-            <button class="primary" onclick={checkCode} disabled={busy}>{$t(busy ? "Verifying…" : "Verify")}</button>
+            <button class="ghost" type="button" onclick={skipForNow}>{$t("Skip")}</button>
+            <button class="primary" type="submit" disabled={busy}>
+              {busy ? $t(mode === "signup" ? "Registering…" : "Signing in…") : $t(mode === "signup" ? "Create account" : "Sign in")}
+            </button>
           </div>
-        </div>
-      {:else if step === 5}
-        <div class="form">
-          <p class="note">{$t("Enter the 24-word recovery key you saved when you created the account (Settings → Backups → Recovery key shows it on a signed-in device).")}</p>
-          <label class="field">
-            <span>{$t("Recovery key")}</span>
-            <textarea bind:value={phrase} rows="4" spellcheck="false" autocomplete="off" placeholder="word word word …"></textarea>
-          </label>
-          <p class="note dim">{$t("Never saved one? Leave it empty: if the account has no recovery key, the e-mail confirms it's you — but the encrypted backup can't be opened, chats start fresh.")}</p>
-          <div class="actions">
-            <button class="ghost" onclick={() => (step = 2)}>{$t("Back")}</button>
-            <button class="primary" onclick={doReset} disabled={busy || (phrase.trim() !== "" && phrase.trim().split(/\s+/).length !== 24)}>{$t(busy ? "Checking…" : "Set the new password")}</button>
-          </div>
-        </div>
-      {:else if step === 6}
-        <div class="form">
-          <b class="rk-title">{$t("Save your recovery key")}</b>
-          <p class="note">{$t("These 24 words are the only way back in if you forget the password. Write them down or keep them in a password manager — nobody, not even the server, can restore them.")}</p>
-          <ol class="rk-words">
-            {#each recoveryWords.split(/\s+/) as w, i (i)}<li><span>{i + 1}</span>{w}</li>{/each}
-          </ol>
-          <button class="resend" onclick={copyWords}>{$t("Copy")}</button>
-          <label class="rk-ok"><input type="checkbox" bind:checked={savedWords} /> {$t("I've saved the recovery key")}</label>
-          <div class="actions">
-            <button class="primary" onclick={() => { recoveryWords = ""; closeRegistration(); }} disabled={!savedWords}>{$t("Done")}</button>
-          </div>
-        </div>
+        </form>
       {:else if step === 7}
         <div class="form">
           <b class="rk-title">{$t("Two-step verification")}</b>
@@ -617,31 +423,8 @@
             <textarea bind:value={phrase} rows="4" spellcheck="false" placeholder="word word word …"></textarea>
           </label>
           <div class="actions">
-            <button class="ghost" onclick={skipRestore} disabled={busy}>{$t("Start without the backup")}</button>
-            <button class="primary" onclick={() => finishSignIn(true)} disabled={busy || phrase.trim().split(/\s+/).length !== 24}>{$t("Restore")}</button>
-          </div>
-        </div>
-      {:else}
-        <div class="form">
-          <label class="field">
-            <span>@username *</span>
-            <input bind:value={username} placeholder={$t("ivan2027")} oninput={() => (username = username.toLowerCase())} />
-          </label>
-          <label class="field">
-            <span>{$t("Display name")}</span>
-            <input bind:value={displayName} placeholder="Иван Иванов" />
-          </label>
-          <label class="field">
-            <span>{$t("About")}</span>
-            <textarea bind:value={about} rows="2" placeholder={$t("A little about you…")}></textarea>
-          </label>
-          <label class="field">
-            <span>{$t("Phone (optional)")}</span>
-            <input bind:value={phone} placeholder="+7 999 123-45-67" />
-          </label>
-          <div class="actions">
-            <button class="ghost" onclick={() => (step = 2)}>{$t("Back")}</button>
-            <button class="primary" onclick={finish} disabled={busy}>{$t(busy ? "Registering…" : "Finish")}</button>
+            <button class="ghost" onclick={() => { busy = true; void afterSignIn(signedAs, false, true).finally(() => (busy = false)); }} disabled={busy}>{$t("Start without the backup")}</button>
+            <button class="primary" onclick={() => { busy = true; void afterSignIn(signedAs, true).finally(() => (busy = false)); }} disabled={busy || phrase.trim().split(/\s+/).length !== 24}>{$t("Restore")}</button>
           </div>
         </div>
       {/if}
@@ -651,6 +434,14 @@
 {/if}
 
 <style>
+  .at-in { position: relative; display: flex; }
+  .at-in i { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); font-style: normal; color: var(--fg-dim); font-weight: 700; pointer-events: none; }
+  .at-in input { flex: 1; padding-left: 28px; }
+  .srv { font-size: 12.5px; color: var(--fg-dim); }
+  .srv summary { cursor: pointer; list-style: none; padding: 4px 0; }
+  .srv summary::-webkit-details-marker { display: none; }
+  .srv summary b { color: var(--fg-muted); font-weight: 600; }
+  .srv[open] summary { margin-bottom: 6px; }
   .other-acc { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
   .reset-head { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
   .reset-head b { font-size: 18px; }

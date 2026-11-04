@@ -403,6 +403,58 @@ pub async fn register_account(
     .map_err(|e| e.to_string())
 }
 
+/// What the password is salted with: `@username` for accounts made since
+/// 1.2.0-1, the e-mail for older ones (the login typed is an e-mail).
+pub fn login_salt(login: &str) -> String {
+    let l = login.trim().to_lowercase();
+    if !l.starts_with('@') && l.contains('@') { l } else { format!("@{}", l.trim_start_matches('@')) }
+}
+
+async fn secret_for(password: &str, login: &str) -> Result<String, String> {
+    let (p, salt) = (password.to_string(), login_salt(login));
+    tokio::task::spawn_blocking(move || aqua_client_core::backup::auth_secret(&p, &salt)).await.map_err(|e| e.to_string())
+}
+
+/// Sign-up without e-mail: @username + password (1.2.0-1). The account
+/// lives on this device until two-step verification is turned on.
+#[tauri::command]
+pub async fn signup_plain(
+    state: State<'_, StdMutex<AppState>>,
+    server_url: String,
+    username: String,
+    password: String,
+    display_name: Option<String>,
+    invite: Option<String>,
+) -> Result<(), String> {
+    if password.chars().count() < 8 { return Err("password must be at least 8 characters".into()); }
+    let identity = state.lock().map_err(|e| e.to_string())?.identity.clone();
+    let name = username.trim().trim_start_matches('@').to_lowercase();
+    let secret = secret_for(&password, &name).await?;
+    Transport::signup_account(&server_url, &identity, &name, &secret, display_name.as_deref().unwrap_or(""), invite.as_deref().unwrap_or(""))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Sign in on this device: @username (or an old account's e-mail) +
+/// password + two-step code / recovery key. Returns the username.
+#[tauri::command]
+pub async fn signin_plain(
+    state: State<'_, StdMutex<AppState>>,
+    server_url: String,
+    login: String,
+    password: String,
+    totp: Option<String>,
+    recovery: Option<String>,
+) -> Result<String, String> {
+    let identity = state.lock().map_err(|e| e.to_string())?.identity.clone();
+    let check = crate::backups::recovery_check_of(recovery).await?;
+    let secret = secret_for(&password, &login).await?;
+    let name = crate::multidev::this_device_name();
+    Transport::signin_account(&server_url, &identity, login.trim(), &secret, &name, &totp.unwrap_or_default(), &check)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Federated relays: `{ federated, self, servers }` from GET /v1/fed/peers.
 #[tauri::command]
 pub async fn fed_peers(server_url: String) -> Result<serde_json::Value, String> {

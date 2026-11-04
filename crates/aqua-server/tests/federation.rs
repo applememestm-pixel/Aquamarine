@@ -73,7 +73,6 @@ async fn two_relays_act_as_one() {
     let sa = AppState::isolated(tmp.path().join("a"), Some(cfg(&ua, &ub)));
     let sb = AppState::isolated(tmp.path().join("b"), Some(cfg(&ub, &ua)));
     // These accounts connect without two-step codes.
-    for s in [&sa, &sb] { s.admin.write().unwrap().optional_2fa = true; }
     { let s = sa.clone(); tokio::spawn(async move { axum::serve(la, app(s)).await.unwrap() }); }
     { let s = sb.clone(); tokio::spawn(async move { axum::serve(lb, app(s)).await.unwrap() }); }
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -153,7 +152,6 @@ async fn changes_are_pushed_to_peers() {
     let sa = AppState::isolated(tmp.path().join("a"), Some(cfg(&ua, &ub)));
     let sb = AppState::isolated(tmp.path().join("b"), Some(cfg(&ub, &ua)));
     // These accounts connect without two-step codes.
-    for s in [&sa, &sb] { s.admin.write().unwrap().optional_2fa = true; }
     { let s = sa.clone(); tokio::spawn(async move { axum::serve(la, app(s)).await.unwrap() }); }
     { let s = sb.clone(); tokio::spawn(async move { axum::serve(lb, app(s)).await.unwrap() }); }
     fed::spawn_sync(sa.clone());

@@ -163,9 +163,10 @@ pub struct AdminConfig {
     /// signs up with one gets on `allow`, without the admin typing an email.
     #[serde(default)]
     pub invites: Vec<Invite>,
-    /// Two-step verification may be turned off (and skipped). Off by
-    /// default: since 1.2.0 every account has to set it up.
-    #[serde(default)]
+    /// Left from 1.2.0 (two-step verification required by the relay). Since
+    /// 1.2.0-1 it is the user's own choice and the relay never asks for it;
+    /// the field is only kept so old `aqua-admin.json` files still load.
+    #[serde(default, skip_serializing)]
     pub optional_2fa: bool,
 }
 
@@ -209,6 +210,16 @@ impl AdminConfig {
         if !self.allow.contains(&e) { self.allow.push(e); }
         self.save();
         true
+    }
+
+    /// Is this @username allowed to sign up? `allow` may list e-mails (old
+    /// accounts) and @usernames (since 1.2.0-1, "@name" or "name").
+    fn permits_name(&self, username: &str) -> bool {
+        if !self.invite_only {
+            return true;
+        }
+        let n = username.trim().trim_start_matches('@').to_lowercase();
+        self.allow.iter().any(|a| a.trim().trim_start_matches('@').to_lowercase() == n)
     }
 
     /// Is this email allowed to register?
@@ -534,10 +545,6 @@ async fn ws_upgrade(
         tracing::warn!(user = %q.user, token = %token_fp, existing = ?existing, error = %e,
             "WS REJECT: claim_or_check failed — username bound to different identity");
         return Err((e.status(), e.to_string()));
-    }
-    if needs_2fa(&state, base_user(&q.user)) {
-        tracing::info!(user = %q.user, "WS REJECT: two-step verification not set up");
-        return Err((StatusCode::FORBIDDEN, "two-step verification required — set it up in the app".into()));
     }
     let me = state.address_for(&q.user, &dh_pub);
     tracing::info!(user = %q.user, addr = %me, token = %token_fp, "WS OK: upgrading to WebSocket");
@@ -1074,6 +1081,69 @@ async fn register_user(
 }
 
 #[derive(Deserialize)]
+struct SignupBody {
+    username: String,
+    /// The Argon2id-derived secret, never the password itself.
+    password: String,
+    #[serde(default)]
+    display_name: String,
+    /// Invitation code of an invite-only relay.
+    #[serde(default)]
+    invite: String,
+}
+
+/// `POST /v1/users/signup` `{username, password, display_name?, invite?}` —
+/// sign-up without e-mail (1.2.0-1). The account belongs to the caller's
+/// identity key; see [`directory::Directory::register_plain`].
+async fn signup_user(
+    State(state): State<AppState>,
+    Caller(dh_pub): Caller,
+    Json(body): Json<SignupBody>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let name = body.username.trim().trim_start_matches('@').to_lowercase();
+    if !state.admin.read().map(|c| c.permits_name(&name)).unwrap_or(true)
+        && !state.admin.write().map(|mut c| c.redeem(&body.invite, &format!("@{name}"))).unwrap_or(false)
+    {
+        return Err((StatusCode::FORBIDDEN, "this relay is invite-only — ask the admin for an invitation".into()));
+    }
+    state
+        .directory
+        .register_plain(&name, &dh_pub, &body.password, &body.display_name)
+        .map_err(|e| (match e { directory::DirError::UsernameTaken => StatusCode::CONFLICT, _ => dir_err_status(&e) }, e.to_string()))?;
+    journal::log(&name, "register", "");
+    state.fed_kick.notify_waiters();
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct SigninBody {
+    username: String,
+    password: String,
+    #[serde(default)]
+    device_name: String,
+    #[serde(default)]
+    totp: String,
+    #[serde(default)]
+    recovery: String,
+}
+
+/// `POST /v1/users/signin` `{username, password, device_name?, totp?, recovery?}`
+/// — add the caller's device to an account with two-step verification.
+async fn signin_user(
+    State(state): State<AppState>,
+    Caller(dh_pub): Caller,
+    Json(body): Json<SigninBody>,
+) -> Result<Json<LoginResp>, (StatusCode, String)> {
+    let username = state
+        .directory
+        .sign_in_plain(&body.username, &body.password, &dh_pub, &body.device_name, &body.totp, &body.recovery)
+        .map_err(|e| (dir_err_status(&e), e.to_string()))?;
+    journal::log(&username, "login", body.device_name.clone());
+    state.fed_kick.notify_waiters();
+    Ok(Json(LoginResp { username }))
+}
+
+#[derive(Deserialize)]
 struct LoginBody {
     ticket: String,
     #[serde(default)]
@@ -1242,15 +1312,10 @@ struct RecoveryState { set: bool }
 
 // ---------- Sign-in protection (two-step codes, no new devices) --------------------
 
-/// Does this relay require two-step verification?
-fn require_2fa(state: &AppState) -> bool {
-    !state.admin.read().map(|c| c.optional_2fa).unwrap_or(false)
-}
-
+/// Two-step verification is the user's own protection: no relay requires
+/// it (1.2.0 did; 1.2.0-1 dropped that).
 fn security_view(state: &AppState, me: &str) -> directory::SecurityState {
-    let mut v = state.directory.security_state(me);
-    v.required = require_2fa(state);
-    v
+    state.directory.security_state(me)
 }
 
 /// `GET /v1/me/security` → `{lock, totp, backup_left, required}`.
@@ -1296,9 +1361,6 @@ async fn totp_enable(State(state): State<AppState>, Caller(dh): Caller, Json(b):
 /// `POST /v1/me/2fa/disable` `{code}`.
 async fn totp_disable(State(state): State<AppState>, Caller(dh): Caller, Json(b): Json<CodeBody>) -> Result<StatusCode, (StatusCode, String)> {
     let me = caller_username(&state, &dh)?;
-    if require_2fa(&state) {
-        return Err((StatusCode::FORBIDDEN, "two-step verification is required on this server".into()));
-    }
     state.directory.totp_disable(&me, &b.code).map_err(|e| (dir_err_status(&e), e.to_string()))?;
     journal::log(&me, "2fa-off", "");
     state.fed_kick.notify_waiters();
@@ -1387,17 +1449,9 @@ async fn my_devices(State(state): State<AppState>, Caller(dh): Caller) -> Result
 async fn whoami(State(state): State<AppState>, Caller(dh): Caller) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let me = caller_username(&state, &dh)?;
     let uid = state.directory.uid_of(&me).unwrap_or_default();
-    Ok(Json(serde_json::json!({ "username": me, "uid": uid, "need_2fa": needs_2fa(&state, &me) })))
+    Ok(Json(serde_json::json!({ "username": me, "uid": uid, "need_2fa": false, "has_2fa": state.directory.has_2fa(&me) })))
 }
 
-/// This relay requires two-step codes and the account hasn't set them up
-/// yet: it may sign in and set them up, but not connect (no messages).
-fn needs_2fa(state: &AppState, username: &str) -> bool {
-    require_2fa(state)
-        && state.directory.identity_for(username).is_some()
-        && !state.directory.is_bot(username)
-        && !state.directory.security_state(username).totp
-}
 
 /// `GET /v1/users/by-id/:uid` — the @username an account ID has now.
 async fn user_by_id(State(state): State<AppState>, Path(uid): Path<String>) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -1680,6 +1734,11 @@ async fn backup_put(
     if !body.starts_with(b"AQBK1") {
         return Err((StatusCode::BAD_REQUEST, "not an encrypted backup".into()));
     }
+    // Without two-step verification an account can't be moved or
+    // recovered, so a copy on the relay would be of no use to anyone.
+    if !state.directory.has_2fa(&user) {
+        return Err((StatusCode::FORBIDDEN, "turn on two-step verification to keep a copy on the server".into()));
+    }
     state.directory.put_backup(&user, &body).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let (size, at) = state.directory.backup_meta(&user).unwrap_or((0, 0));
     Ok(Json(serde_json::json!({ "size": size, "updated_at": at })))
@@ -1728,6 +1787,17 @@ async fn hist_put(State(state): State<AppState>, Caller(dh): Caller, Path(k): Pa
     })?;
     state.fed_kick.notify_waiters();
     Ok(Json(serde_json::json!({ "seq": seq })))
+}
+
+/// `GET /v1/me/backup` — the account's backup, for a device of the account
+/// (one just signed in with `/v1/users/signin`).
+async fn backup_mine(State(state): State<AppState>, Caller(dh_pub): Caller) -> Result<axum::response::Response, (StatusCode, String)> {
+    use axum::response::IntoResponse;
+    let user = caller_username(&state, &dh_pub)?;
+    match state.directory.get_backup(&user) {
+        Some(data) => Ok(([(axum::http::header::CONTENT_TYPE, "application/octet-stream")], data).into_response()),
+        None => Err((StatusCode::NOT_FOUND, "no backup for this account".into())),
+    }
 }
 
 async fn backup_meta(
@@ -1826,7 +1896,8 @@ struct UpdateProfileBody {
 fn dir_err_status(e: &directory::DirError) -> StatusCode {
     match e {
         directory::DirError::NotOwner => StatusCode::FORBIDDEN,
-        directory::DirError::DevicesLocked => StatusCode::FORBIDDEN,
+        directory::DirError::DevicesLocked | directory::DirError::DeviceBound => StatusCode::FORBIDDEN,
+        directory::DirError::TooManyTries => StatusCode::TOO_MANY_REQUESTS,
         directory::DirError::NeedTotp | directory::DirError::BadTotp => StatusCode::UNAUTHORIZED,
         directory::DirError::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
         _ => StatusCode::BAD_REQUEST,
@@ -2305,8 +2376,6 @@ struct AdminStats {
     require_registration: bool,
     invite_only: bool,
     allow: Vec<String>,
-    /// Two-step verification is required on this relay.
-    require_2fa: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -2359,7 +2428,6 @@ async fn admin_stats(
         require_registration: state.require_registration,
         invite_only: cfg.invite_only,
         allow: cfg.allow,
-        require_2fa: !cfg.optional_2fa,
     }))
 }
 
@@ -2425,7 +2493,7 @@ async fn admin_set_config(
     let invites = state.admin.read().map(|c| c.invites.clone()).unwrap_or_default();
     let clean = AdminConfig {
         invites,
-        optional_2fa: body.optional_2fa,
+        optional_2fa: false,
         invite_only: body.invite_only,
         allow: body
             .allow
@@ -2598,7 +2666,7 @@ pub(crate) fn caller_version(headers: &axum::http::HeaderMap, query: Option<&str
 /// stay as they are.
 fn app_door(path: &str) -> bool {
     matches!(path, "/v1/auth/challenge" | "/v1/auth/verify" | "/v1/auth/email/request" | "/v1/auth/email/verify"
-        | "/v1/auth/email/poll" | "/v1/users/register" | "/v1/users/login" | "/v1/users/reset" | "/v1/backup/fetch" | "/v1/ws")
+        | "/v1/auth/email/poll" | "/v1/users/register" | "/v1/users/signup" | "/v1/users/signin" | "/v1/users/login" | "/v1/users/reset" | "/v1/backup/fetch" | "/v1/ws")
 }
 
 pub const TOO_OLD: &str = "this version of Aquamarine is no longer supported — update the app to 1.2.0 or newer";
@@ -2639,6 +2707,9 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/auth/email/poll",    post(email_poll))
         .route("/v1/auth/email/link/:token", get(email_link_page).post(email_link_confirm))
         .route("/v1/users/register",     post(register_user))
+        .route("/v1/users/signup",       post(signup_user))
+        .route("/v1/users/signin",       post(signin_user))
+        .route("/v1/me/backup",          get(backup_mine))
         .route("/v1/users/search",       get(search_users))
         .route("/v1/users/login",        post(login_user))
         .route("/v1/users/reset",        post(reset_password))
