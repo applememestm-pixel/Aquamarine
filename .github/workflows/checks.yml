@@ -53,6 +53,10 @@ jobs:
         with:
           workspaces: crates/aqua-client-ui -> target
           shared-key: checks-app
-      - name: cargo check (desktop app)
+      - name: IPC names match (UI ↔ Rust)
+        run: python3 tools/check-invokes.py
+      - name: cargo check + unit tests (desktop app)
         working-directory: crates/aqua-client-ui
-        run: cargo check
+        run: |
+          cargo check
+          cargo test --lib
