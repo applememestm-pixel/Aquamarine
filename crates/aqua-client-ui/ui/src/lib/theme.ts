@@ -219,6 +219,9 @@ export interface Settings {
   widgetText?: boolean;
   glass?: boolean;
   glassAlpha?: number;
+  /** Settings: show the sections for experienced users (network, own
+   *  server, ghost mode, bots…). Off: only what everyone needs. */
+  advancedSettings?: boolean;
   // --- Window title bar (desktop) ---
   titleChatName?: boolean;
   titleAccount?: boolean;

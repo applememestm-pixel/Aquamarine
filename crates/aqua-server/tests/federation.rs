@@ -62,6 +62,15 @@ fn msg(from: &str, to: &str, body: &[u8]) -> Message {
     Message::Binary(serde_json::to_vec(&RelayMessage { from: from.into(), to: to.into(), payload: body.to_vec(), kind: PayloadKind::Envelope, ts: None, id: None }).unwrap().into())
 }
 
+/// A copy on the relay is kept only for accounts with two-step verification
+/// (1.2.0-1): turn it on, as the user would in the settings.
+async fn turn_on_2fa(base: &str, id: &IdentityKeyPair) {
+    let setup = aqua_client_core::Transport::me_call_at(base, id, "POST", "2fa/setup", Some(serde_json::json!({}))).await.unwrap();
+    let secret = aqua_server::totp::unbase32(setup["secret"].as_str().unwrap()).unwrap();
+    let code = format!("{:06}", aqua_server::totp::code_at(&secret, aqua_server::totp::now_step()));
+    aqua_client_core::Transport::me_call_at(base, id, "POST", "2fa/enable", Some(serde_json::json!({ "code": code }))).await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_relays_act_as_one() {
     let la = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -72,8 +81,6 @@ async fn two_relays_act_as_one() {
     let cfg = |me: &str, peer: &str| FedConfig { secret: SECRET.into(), peers: vec![peer.into()], public_url: me.into(), ..Default::default() };
     let sa = AppState::isolated(tmp.path().join("a"), Some(cfg(&ua, &ub)));
     let sb = AppState::isolated(tmp.path().join("b"), Some(cfg(&ub, &ua)));
-    // These accounts connect without two-step codes.
-    for s in [&sa, &sb] { s.admin.write().unwrap().optional_2fa = true; }
     { let s = sa.clone(); tokio::spawn(async move { axum::serve(la, app(s)).await.unwrap() }); }
     { let s = sb.clone(); tokio::spawn(async move { axum::serve(lb, app(s)).await.unwrap() }); }
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -133,6 +140,7 @@ async fn two_relays_act_as_one() {
     assert_eq!(got.bytes().await.unwrap().to_vec(), blob);
 
     // Backups replicate too.
+    turn_on_2fa(&ua, &ida).await;
     assert!(http.put(format!("{ua}/v1/backup")).bearer_auth(&ta).body(b"AQBK1 sealed".to_vec()).send().await.unwrap().status().is_success());
     fed::sync_once(&sb, &mut Default::default()).await;
     assert_eq!(sb.directory.get_backup("alice").unwrap(), b"AQBK1 sealed");
@@ -152,8 +160,6 @@ async fn changes_are_pushed_to_peers() {
     let cfg = |me: &str, peer: &str| FedConfig { secret: SECRET.into(), peers: vec![peer.into()], public_url: me.into(), ..Default::default() };
     let sa = AppState::isolated(tmp.path().join("a"), Some(cfg(&ua, &ub)));
     let sb = AppState::isolated(tmp.path().join("b"), Some(cfg(&ub, &ua)));
-    // These accounts connect without two-step codes.
-    for s in [&sa, &sb] { s.admin.write().unwrap().optional_2fa = true; }
     { let s = sa.clone(); tokio::spawn(async move { axum::serve(la, app(s)).await.unwrap() }); }
     { let s = sb.clone(); tokio::spawn(async move { axum::serve(lb, app(s)).await.unwrap() }); }
     fed::spawn_sync(sa.clone());
@@ -184,6 +190,7 @@ async fn changes_are_pushed_to_peers() {
     assert!(until(Box::new(move || sb3.directory.get_media("dora", aqua_server::directory::MediaKind::Avatar).is_some())).await, "avatar copied to B");
 
     // Backups too.
+    turn_on_2fa(&ua, &ida).await;
     assert!(http.put(format!("{ua}/v1/backup")).bearer_auth(&ta).body(b"AQBK1 v2".to_vec()).send().await.unwrap().status().is_success());
     let sb4 = sb.clone();
     assert!(until(Box::new(move || sb4.directory.get_backup("dora").as_deref() == Some(&b"AQBK1 v2"[..]))).await, "backup copied to B");

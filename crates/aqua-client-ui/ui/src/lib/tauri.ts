@@ -113,6 +113,10 @@ export const api = {
   requestEmailCode:   (server_url: string, email: string, purpose?: "signup" | "signin" | "reset", nonce?: string, invite?: string): Promise<{ dev_code: string | null; delivery_failed: boolean; error: string | null }> => invoke("request_email_code", { serverUrl: server_url, email, purpose: purpose ?? null, nonce: nonce ?? null, invite: invite ?? null }),
   pollEmailCode:      (server_url: string, email: string, nonce: string): Promise<string | null> => invoke("poll_email_code", { serverUrl: server_url, email, nonce }),
   verifyEmailCode:    (server_url: string, email: string, code: string): Promise<string> => invoke("verify_email_code", { serverUrl: server_url, email, code }),
+  /** Sign-up without e-mail (relays 1.2.0-1+): @username + password. */
+  signupPlain:        (server_url: string, username: string, password: string, display_name?: string, invite?: string): Promise<void> => invoke("signup_plain", { serverUrl: server_url, username, password, displayName: display_name ?? null, invite: invite ?? null }),
+  /** Add this device to an account with two-step verification. */
+  signinPlain:        (server_url: string, login: string, password: string, totp?: string, recovery?: string): Promise<string> => invoke("signin_plain", { serverUrl: server_url, login, password, totp: totp ?? null, recovery: recovery ?? null }),
   registerAccount:    (server_url: string, username: string, ticket: string, display_name: string, about: string, phone: string, password?: string, email?: string): Promise<void> => invoke("register_account", { serverUrl: server_url, username, ticket, displayName: display_name, about, phone, password: password || null, email: email || null }),
   listDevices:        (): Promise<DeviceInfo[]> => invoke("list_devices"),
   /** Devices of my account waiting for approval here (devtrust.rs). */

@@ -248,6 +248,8 @@ pub fn run() -> Result<()> {
             commands::verify_email_code,
             commands::poll_email_code,
             commands::register_account,
+            commands::signup_plain,
+            commands::signin_plain,
             commands::register_username,
             commands::search_directory,
             commands::fetch_directory_profile,

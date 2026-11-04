@@ -424,17 +424,12 @@
       <div class="card rv">
         <div class="toggle" onclick="toggleInvite()">
           <div><div class="t" data-t="Invite-only (solo mode)">Invite-only (solo mode)</div>
-            <div class="s" data-t="Only emails on the list below may register. Off = open relay.">Only emails on the list below may register. Off = open relay.</div></div>
+            <div class="s" data-t="Only @usernames on the list below (or with an invitation) may register. Off = open relay.">Only @usernames on the list below (or with an invitation) may register. Off = open relay.</div></div>
           <div id="sw" class="sw"></div>
         </div>
-        <div class="toggle" onclick="toggle2fa()">
-          <div><div class="t" data-t="Two-step verification is required">Two-step verification is required</div>
-            <div class="s" data-t="Every account sets up codes from an authenticator app and can't turn them off. Off = it's up to each person.">Every account sets up codes from an authenticator app and can't turn them off. Off = it's up to each person.</div></div>
-          <div id="sw2fa" class="sw"></div>
-        </div>
         <div class="mt">
-          <label data-t="Allowed emails — one per line">Allowed emails — one per line</label>
-          <textarea id="allow" placeholder="alice@example.com&#10;bob@example.com"></textarea>
+          <label data-t="Allowed @usernames — one per line">Allowed @usernames — one per line</label>
+          <textarea id="allow" placeholder="@alice&#10;@bob"></textarea>
         </div>
         <div class="row mt">
           <button class="btn" onclick="saveCfg()" data-t="Save access policy">Save access policy</button>
@@ -443,7 +438,7 @@
       </div>
       <div class="card rv">
         <label data-t="Invitations">Invitations</label>
-        <div class="note" data-t="invHint">A code (or its QR) lets someone sign up here without you typing their email: they scan it in the app and register. Each code works the set number of times.</div>
+        <div class="note" data-t="invHint">A code (or its QR) lets someone sign up here without you typing their @username: they scan it in the app and register. Each code works the set number of times.</div>
         <div id="invList" class="dl"></div>
         <div class="row mt">
           <input id="invUses" type="number" min="1" max="1000" value="1" style="width:80px" title="uses" />
@@ -611,11 +606,11 @@
     "Invite-only (solo mode)":"Только по приглашениям",
     "Two-step verification is required":"Двухэтапная проверка обязательна",
     "Every account sets up codes from an authenticator app and can't turn them off. Off = it's up to each person.":"Каждый аккаунт настраивает коды из приложения-аутентификатора и не может их выключить. Выключено — на усмотрение каждого.",
-    "Invitations":"Приглашения", "invHint":"Код (или его QR) даёт зарегистрироваться здесь без того, чтобы вы вписывали адрес почты: человек сканирует его в приложении и регистрируется. Каждый код работает заданное число раз.",
+    "Invitations":"Приглашения", "invHint":"Код (или его QR) даёт зарегистрироваться здесь без того, чтобы вы вписывали его @имя: человек сканирует его в приложении и регистрируется. Каждый код работает заданное число раз.",
     "for whom (optional)":"для кого (необязательно)", "New invitation":"Новое приглашение", "Invitation":"Приглашение", "No invitations yet.":"Приглашений пока нет.",
     "invQrNote":"Отсканируйте в Aquamarine: вход → «Сканировать QR» или Настройки → Сеть → «Сканировать QR».",
-    "qrSecret":"В этом QR секрет сети — показывайте его только админу другого сервера.", "Invitation into this network":"Приглашение в эту сеть", "Close":"Закрыть","Only emails on the list below may register. Off = open relay.":"Регистрироваться могут только адреса из списка. Выключено — открытый сервер.",
-    "Allowed emails — one per line":"Разрешённые адреса — по одному в строке","Save access policy":"Сохранить",
+    "qrSecret":"В этом QR секрет сети — показывайте его только админу другого сервера.", "Invitation into this network":"Приглашение в эту сеть", "Close":"Закрыть","Only @usernames on the list below (or with an invitation) may register. Off = open relay.":"Регистрироваться могут только @имена из списка или по приглашению. Выключено — открытый сервер.",
+    "Allowed @usernames — one per line":"Разрешённые @имена — по одному в строке","Save access policy":"Сохранить",
     "Until mail is set up the relay runs in dev mode: codes are shown here instead of being sent.":"Пока почта не настроена, сервер работает в режиме разработки: коды показываются здесь, а не отправляются.",
     "SMTP server":"SMTP-сервер","Port":"Порт","Login (your mailbox)":"Логин (ваш ящик)","App password":"Пароль приложения",
     "Send as (optional)":"Отправитель (необязательно)","same as login":"как логин","Save &amp; send real codes":"Сохранить и отправлять коды",
@@ -699,7 +694,6 @@
 
   let TOKEN = "";
   let inviteOnly = false;
-  let require2fa = true;
   let editingAllow = false;
   $("host").textContent = location.host;
 
@@ -934,14 +928,11 @@
     inviteOnly = s.invite_only;
     $("sw").className = "sw" + (inviteOnly?" on":"");
     $("accessSt").className = "st" + (inviteOnly?" on":"");
-    require2fa = s.require_2fa !== false;
-    $("sw2fa").className = "sw" + (require2fa?" on":"");
     if (!editingAllow) $("allow").value = (s.allow||[]).join("\n");
   }
   $("allow").addEventListener("focus", () => editingAllow = true);
   $("allow").addEventListener("blur", () => editingAllow = false);
   function toggleInvite(){ inviteOnly=!inviteOnly; $("sw").className="sw"+(inviteOnly?" on":""); }
-  function toggle2fa(){ require2fa=!require2fa; $("sw2fa").className="sw"+(require2fa?" on":""); }
 
   // ---- invitations (QR aqua:join?s=…&c=…) ----
   function joinUrl(code){ return "aqua:join?s=" + encodeURIComponent((window.__pub || location.origin).replace(/\/+$/, "")) + "&c=" + code; }
@@ -974,7 +965,7 @@
 
   async function saveCfg(){
     const allow = $("allow").value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
-    try{ await api("/v1/admin/config",{method:"POST",body:JSON.stringify({invite_only:inviteOnly,allow,optional_2fa:!require2fa})});
+    try{ await api("/v1/admin/config",{method:"POST",body:JSON.stringify({invite_only:inviteOnly,allow})});
       msg("cfgMsg", T("Saved."), "ok"); editingAllow=false; refresh(); }
     catch(e){ msg("cfgMsg", T("Failed: ")+e.message, "err"); }
   }

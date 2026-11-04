@@ -29,6 +29,7 @@
 //!    reserved forever to that identity.
 
 use std::{
+    collections::HashMap,
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -262,6 +263,12 @@ pub enum DirError {
     NeedTotp,
     #[error("wrong two-step verification code")]
     BadTotp,
+    #[error("wrong @username or password")]
+    BadNameLogin,
+    #[error("this account lives on one device — turn on two-step verification there to sign in on another one")]
+    DeviceBound,
+    #[error("too many wrong attempts — try again in 15 minutes")]
+    TooManyTries,
 }
 
 /// Wrong two-step codes per e-mail ticket before the ticket is dropped.
@@ -273,6 +280,18 @@ pub const RENAME_KEEP_SECS: u64 = 30 * 24 * 3600;
 
 /// All of one account's stored history together, at most.
 pub const HIST_LIMIT: i64 = 1024 * 1024 * 1024;
+/// Stored history of an account without two-step verification: it lives on
+/// one device and can't be moved, so it gets a small share of the space.
+pub const HIST_LIMIT_PLAIN: i64 = 64 * 1024 * 1024;
+
+/// Wrong passwords / codes per @username before sign-in is paused.
+const MAX_NAME_FAILS: u32 = 10;
+const NAME_FAIL_WINDOW: u64 = 15 * 60;
+
+fn name_fails() -> &'static Mutex<HashMap<String, (u32, u64)>> {
+    static F: std::sync::OnceLock<Mutex<HashMap<String, (u32, u64)>>> = std::sync::OnceLock::new();
+    F.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 impl From<rusqlite::Error> for DirError {
     fn from(e: rusqlite::Error) -> Self { DirError::Db(e.to_string()) }
@@ -1192,6 +1211,130 @@ impl Directory {
         self.login_checked(ticket, password, identity_dh, name, "", "")
     }
 
+    /// Sign-up without e-mail: an @username and a password. The account is
+    /// bound to this device's identity key; it can be moved to other
+    /// devices only after two-step verification is on ([`Self::sign_in_plain`]).
+    pub fn register_plain(&self, username: &str, identity_dh: &[u8; 32], password: &str, display_name: &str) -> Result<(), DirError> {
+        let username = username.trim().to_lowercase();
+        if !Self::valid_username(&username) {
+            return Err(DirError::BadUsername);
+        }
+        if password.chars().count() < 8 {
+            return Err(DirError::WeakPassword);
+        }
+        let db = self.db.lock().unwrap();
+        let reserved = db
+            .query_row(
+                "SELECT 1 FROM renames WHERE old_name=?1 AND at > ?2",
+                rusqlite::params![username, now_secs() as i64 - RENAME_KEEP_SECS as i64],
+                |_| Ok(()),
+            )
+            .is_ok();
+        if reserved {
+            return Err(DirError::UsernameTaken);
+        }
+        if let Ok(owner) = db.query_row("SELECT identity_dh FROM users WHERE username=?1", rusqlite::params![username], |r| r.get::<_, Vec<u8>>(0)) {
+            if owner.as_slice() != identity_dh.as_slice() {
+                return Err(DirError::UsernameTaken);
+            }
+        }
+        // One account per identity key.
+        if let Ok(other) = db.query_row("SELECT username FROM users WHERE identity_dh=?1", rusqlite::params![identity_dh.as_slice()], |r| r.get::<_, String>(0)) {
+            if other != username {
+                return Err(DirError::UsernameTaken);
+            }
+        }
+        db.execute(
+            "INSERT INTO users (username, identity_dh, email, display_name, about, phone, is_bot, created_at, password)
+             VALUES (?1, ?2, NULL, ?3, '', '', 0, ?4, ?5)
+             ON CONFLICT(username) DO UPDATE SET display_name=?3, password=?5",
+            rusqlite::params![username, identity_dh.as_slice(), display_name.trim(), now_secs() as i64, hash_password(password)],
+        )?;
+        Self::fill_uids(&db);
+        tracing::info!(%username, "user registered (no e-mail)");
+        Ok(())
+    }
+
+    /// Sign in on another device with @username + password. Only accounts
+    /// with two-step verification can do this (and need the code, a backup
+    /// code or the recovery key); without it an account stays on the device
+    /// it was made on — there is no way to recover it.
+    pub fn sign_in_plain(&self, username: &str, password: &str, identity_dh: &[u8; 32], name: &str, code: &str, recovery: &str) -> Result<String, DirError> {
+        // Accounts from before 1.2.0-1 may still sign in with their e-mail.
+        let login = username.trim().to_lowercase();
+        let username = if !login.starts_with('@') && login.contains('@') {
+            let db = self.db.lock().unwrap();
+            db.query_row("SELECT username FROM users WHERE email=?1 AND is_bot=0", rusqlite::params![login], |r| r.get::<_, String>(0))
+                .unwrap_or(login)
+        } else {
+            login.trim_start_matches('@').to_string()
+        };
+        let now = now_secs();
+        {
+            let mut f = name_fails().lock().unwrap();
+            f.retain(|_, (_, at)| now.saturating_sub(*at) < NAME_FAIL_WINDOW);
+            if f.get(&username).is_some_and(|(n, _)| *n >= MAX_NAME_FAILS) {
+                return Err(DirError::TooManyTries);
+            }
+        }
+        let fail = |e: DirError| -> DirError {
+            let mut f = name_fails().lock().unwrap();
+            let v = f.entry(username.clone()).or_insert((0, now));
+            v.0 += 1;
+            v.1 = now;
+            e
+        };
+        let db = self.db.lock().unwrap();
+        let row: Option<(String, String, String)> = db
+            .query_row(
+                "SELECT password, security, recovery FROM users WHERE username=?1 AND is_bot=0",
+                rusqlite::params![username],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .ok();
+        let Some((stored, json, rec)) = row else { return Err(fail(DirError::BadNameLogin)) };
+        if stored.is_empty() || !verify_password(password, &stored) {
+            return Err(fail(DirError::BadNameLogin));
+        }
+        drop(db);
+        if self.device_role(&username, identity_dh).is_some() {
+            return Ok(username);
+        }
+        let db = self.db.lock().unwrap();
+        let mut sec: Security = serde_json::from_str(&json).unwrap_or_default();
+        if sec.totp.is_empty() {
+            return Err(DirError::DeviceBound);
+        }
+        let by_recovery = !recovery.trim().is_empty();
+        if by_recovery {
+            if rec.is_empty() || !subtle_eq(recovery_hash(recovery.trim()).as_bytes(), rec.as_bytes()) {
+                return Err(fail(DirError::BadRecovery));
+            }
+        } else {
+            if sec.lock {
+                return Err(DirError::DevicesLocked);
+            }
+            if code.trim().is_empty() {
+                return Err(DirError::NeedTotp);
+            }
+            if !Self::check_code(&mut sec, code) {
+                return Err(fail(DirError::BadTotp));
+            }
+            Self::put_security(&db, &username, &sec)?;
+        }
+        drop(db);
+        self.add_device(&username, identity_dh, name)?;
+        name_fails().lock().unwrap().remove(&username);
+        tracing::info!(%username, "signed in on another device (no e-mail)");
+        Ok(username)
+    }
+
+    /// Two-step verification is on for this account.
+    pub fn has_2fa(&self, username: &str) -> bool {
+        let db = self.db.lock().unwrap();
+        Self::security_of(&db, username).map(|s| !s.totp.is_empty()).unwrap_or(false)
+    }
+
     /// [`Self::login_named`] with the two-step `code` and/or the recovery
     /// key's check (see [`Self::sign_in_gate`]).
     pub fn login_checked(&self, ticket: &str, password: &str, identity_dh: &[u8; 32], name: &str, code: &str, recovery: &str) -> Result<String, DirError> {
@@ -1849,7 +1992,8 @@ impl Directory {
         let total: i64 = db
             .query_row("SELECT COALESCE(SUM(length(data)), 0) FROM hist_store WHERE username=?1 AND k<>?2", rusqlite::params![username, k], |r| r.get(0))
             .unwrap_or(0);
-        if total + data.len() as i64 > HIST_LIMIT {
+        let limit = if Self::security_of(&db, username).map(|s| !s.totp.is_empty()).unwrap_or(false) { HIST_LIMIT } else { HIST_LIMIT_PLAIN };
+        if total + data.len() as i64 > limit {
             return Err(DirError::TooLarge);
         }
         let seq: i64 = db
