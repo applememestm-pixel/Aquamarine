@@ -555,6 +555,15 @@ async fn encrypted_backup_moves_an_account_to_a_new_device() {
     let blob = backup::seal(&keys, b"vault dump + chats");
     let r = http.put(format!("{base}/v1/backup")).bearer_auth(&old.token).body(b"plain text".to_vec()).send().await.unwrap();
     assert_eq!(r.status().as_u16(), 400, "only sealed backups are accepted");
+    // 1.2.0-1: a copy on the relay only for an account with two-step
+    // verification (without it the account never leaves its device).
+    let r = http.put(format!("{base}/v1/backup")).bearer_auth(&old.token).body(blob.clone()).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 403);
+    let setup = aqua_client_core::Transport::me_call_at(&base, &old.identity, "POST", "2fa/setup", Some(serde_json::json!({}))).await.unwrap();
+    let totp = aqua_server::totp::unbase32(setup["secret"].as_str().unwrap()).unwrap();
+    let code = format!("{:06}", aqua_server::totp::code_at(&totp, aqua_server::totp::now_step()));
+    let on = aqua_client_core::Transport::me_call_at(&base, &old.identity, "POST", "2fa/enable", Some(serde_json::json!({ "code": code }))).await.unwrap();
+    let backup_codes: Vec<String> = serde_json::from_value(on["backup"].clone()).unwrap();
     let r = http.put(format!("{base}/v1/backup")).bearer_auth(&old.token).body(blob.clone()).send().await.unwrap();
     assert!(r.status().is_success());
     let meta: serde_json::Value = http.get(format!("{base}/v1/backup")).bearer_auth(&old.token).send().await.unwrap().json().await.unwrap();
@@ -565,7 +574,9 @@ async fn encrypted_backup_moves_an_account_to_a_new_device() {
     let t: serde_json::Value = http.post(format!("{base}/v1/auth/email/verify")).json(&serde_json::json!({ "email": email, "code": code["dev_code"] })).send().await.unwrap().json().await.unwrap();
     let ticket = t["ticket"].as_str().unwrap();
     assert!(aqua_client_core::Transport::fetch_backup(&base, ticket, "wrong").await.is_err());
-    let got = aqua_client_core::Transport::fetch_backup(&base, ticket, &secret).await.unwrap().unwrap();
+    // The backup holds the keys: the same two-step code as signing in.
+    assert!(aqua_client_core::Transport::fetch_backup(&base, ticket, &secret).await.is_err());
+    let got = aqua_client_core::Transport::fetch_backup_checked(&base, ticket, &secret, &backup_codes[0], "").await.unwrap().unwrap();
     assert_eq!(got, blob);
     assert_eq!(backup::open_with_password(&got, password).unwrap().0, b"vault dump + chats");
     assert_eq!(backup::open_with_recovery(&got, &phrase).unwrap().0, b"vault dump + chats");
