@@ -720,11 +720,17 @@ impl Transport {
     /// Sign-up without e-mail (relays 1.2.0-1+): `@username` + the password
     /// secret ([`crate::backup::auth_secret`] salted with `@username`).
     pub async fn signup_account(server_url: &str, identity: &IdentityKeyPair, username: &str, secret: &str, display_name: &str, invite: &str) -> Result<(), TransportError> {
+        Self::signup_account_tg(server_url, identity, username, secret, display_name, invite, "").await
+    }
+
+    /// [`Self::signup_account`] linked to a confirmed Telegram sign-in.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn signup_account_tg(server_url: &str, identity: &IdentityKeyPair, username: &str, secret: &str, display_name: &str, invite: &str, tg_ticket: &str) -> Result<(), TransportError> {
         let http = http_client()?;
         check_server(&http, server_url).await?;
         let token = sign_in(&http, server_url, identity).await?;
         let url = format!("{}/v1/users/signup", server_url.trim_end_matches('/'));
-        let body = serde_json::json!({ "username": username, "password": secret, "display_name": display_name, "invite": invite });
+        let body = serde_json::json!({ "username": username, "password": secret, "display_name": display_name, "invite": invite, "tg_ticket": tg_ticket });
         let r = http.post(&url).bearer_auth(&token).json(&body).send().await?;
         if r.status().as_u16() == 404 || r.status().as_u16() == 405 {
             return Err(TransportError::Server { status: 426, body: NO_PLAIN_SIGNUP.into() });
@@ -739,13 +745,19 @@ impl Transport {
     /// (`@username` or, for old accounts, the e-mail + password secret +
     /// code / recovery check). Returns the username.
     pub async fn signin_account(server_url: &str, identity: &IdentityKeyPair, login: &str, secret: &str, device_name: &str, totp: &str, recovery: &str) -> Result<String, TransportError> {
+        Self::signin_account_tg(server_url, identity, login, secret, device_name, totp, recovery, "").await
+    }
+
+    /// [`Self::signin_account`] with a confirmed Telegram sign-in as the second factor.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn signin_account_tg(server_url: &str, identity: &IdentityKeyPair, login: &str, secret: &str, device_name: &str, totp: &str, recovery: &str, tg_ticket: &str) -> Result<String, TransportError> {
         #[derive(serde::Deserialize)]
         struct Resp { username: String }
         let http = http_client()?;
         check_server(&http, server_url).await?;
         let token = sign_in(&http, server_url, identity).await?;
         let url = format!("{}/v1/users/signin", server_url.trim_end_matches('/'));
-        let body = serde_json::json!({ "username": login, "password": secret, "device_name": device_name, "totp": totp, "recovery": recovery });
+        let body = serde_json::json!({ "username": login, "password": secret, "device_name": device_name, "totp": totp, "recovery": recovery, "tg_ticket": tg_ticket });
         let r = http.post(&url).bearer_auth(&token).json(&body).send().await?;
         if r.status().as_u16() == 404 || r.status().as_u16() == 405 {
             return Err(TransportError::Server { status: 426, body: NO_PLAIN_SIGNUP.into() });
@@ -754,6 +766,26 @@ impl Transport {
             return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
         }
         Ok(r.json::<Resp>().await?.username)
+    }
+
+    /// Start a sign-in with Telegram: `{code, link, bot}` (`link` opens the relay's bot).
+    pub async fn tg_start(server_url: &str) -> Result<serde_json::Value, TransportError> {
+        let http = http_client()?;
+        let r = http.post(format!("{}/v1/auth/tg/start", server_url.trim_end_matches('/'))).json(&serde_json::json!({})).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(r.json().await?)
+    }
+
+    /// `{done: false}` until the person taps Start, then `{done: true, ticket, name}`.
+    pub async fn tg_poll(server_url: &str, code: &str) -> Result<serde_json::Value, TransportError> {
+        let http = http_client()?;
+        let r = http.post(format!("{}/v1/auth/tg/poll", server_url.trim_end_matches('/'))).json(&serde_json::json!({ "code": code })).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(r.json().await?)
     }
 
     /// The account's backup, for a device already on the account.
@@ -1261,6 +1293,7 @@ impl Transport {
         let req = match method {
             "PUT" => http.put(&url),
             "POST" => http.post(&url),
+            "DELETE" => http.delete(&url),
             _ => http.get(&url),
         }
         .bearer_auth(&token);
@@ -1282,6 +1315,7 @@ impl Transport {
         let req = match method {
             "PUT" => self.http.put(&url),
             "POST" => self.http.post(&url),
+            "DELETE" => self.http.delete(&url),
             _ => self.http.get(&url),
         }
         .bearer_auth(self.bearer().await?);

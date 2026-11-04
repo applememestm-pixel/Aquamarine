@@ -39,6 +39,7 @@ pub mod discovery;
 pub mod journal;
 pub mod datadir;
 pub mod totp;
+pub mod tglogin;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
 pub use auth::{AuthState, Caller};
@@ -1106,6 +1107,9 @@ struct SignupBody {
     /// Invitation code of an invite-only relay.
     #[serde(default)]
     invite: String,
+    /// A confirmed Telegram sign-in (`tglogin`): the account is linked to it.
+    #[serde(default)]
+    tg_ticket: String,
 }
 
 /// `POST /v1/users/signup` `{username, password, display_name?, invite?}` —
@@ -1127,10 +1131,18 @@ async fn signup_user(
     {
         return Err((StatusCode::FORBIDDEN, "this relay is invite-only — ask the admin for an invitation".into()));
     }
+    let tg = if body.tg_ticket.trim().is_empty() {
+        None
+    } else {
+        Some(tglogin::take(&body.tg_ticket).ok_or((StatusCode::BAD_REQUEST, "the Telegram confirmation has expired — confirm again".to_string()))?)
+    };
     state
         .directory
         .register_plain(&name, &dh_pub, &body.password, &body.display_name)
         .map_err(|e| (match e { directory::DirError::UsernameTaken => StatusCode::CONFLICT, _ => dir_err_status(&e) }, e.to_string()))?;
+    if let Some((id, tg_name)) = tg {
+        state.directory.tg_link(&name, &id, &tg_name).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
     journal::log(&name, "register", "");
     state.fed_kick.notify_waiters();
     Ok(StatusCode::NO_CONTENT)
@@ -1202,6 +1214,28 @@ fn check_pass(state: &AppState, pass: &str) -> Option<(String, String)> {
 }
 
 #[derive(Deserialize)]
+struct TgLinkBody { ticket: String }
+
+/// `POST /v1/me/tg {ticket}` — link the Telegram account a `tglogin` ticket confirmed.
+async fn tg_link(State(state): State<AppState>, Caller(dh): Caller, Json(b): Json<TgLinkBody>) -> Result<Json<directory::SecurityState>, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    let (id, name) = tglogin::take(&b.ticket).ok_or((StatusCode::BAD_REQUEST, "the Telegram confirmation has expired — confirm again".into()))?;
+    state.directory.tg_link(&me, &id, &name).map_err(|e| (dir_err_status(&e), e.to_string()))?;
+    journal::log(&me, "tg-link", name);
+    state.fed_kick.notify_waiters();
+    Ok(Json(security_view(&state, &me)))
+}
+
+/// `DELETE /v1/me/tg` — unlink Telegram.
+async fn tg_unlink(State(state): State<AppState>, Caller(dh): Caller) -> Result<Json<directory::SecurityState>, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    state.directory.tg_unlink(&me).map_err(|e| (dir_err_status(&e), e.to_string()))?;
+    journal::log(&me, "tg-unlink", "");
+    state.fed_kick.notify_waiters();
+    Ok(Json(security_view(&state, &me)))
+}
+
+#[derive(Deserialize)]
 struct SigninBody {
     username: String,
     password: String,
@@ -1211,6 +1245,9 @@ struct SigninBody {
     totp: String,
     #[serde(default)]
     recovery: String,
+    /// A confirmed Telegram sign-in: a second factor for an account linked to it.
+    #[serde(default)]
+    tg_ticket: String,
 }
 
 /// `POST /v1/users/signin` `{username, password, device_name?, totp?, recovery?}`
@@ -1220,9 +1257,14 @@ async fn signin_user(
     Caller(dh_pub): Caller,
     Json(body): Json<SigninBody>,
 ) -> Result<Json<LoginResp>, (StatusCode, String)> {
+    let tg = if body.tg_ticket.trim().is_empty() {
+        None
+    } else {
+        Some(tglogin::take(&body.tg_ticket).ok_or((StatusCode::BAD_REQUEST, "the Telegram confirmation has expired — confirm again".to_string()))?)
+    };
     let username = state
         .directory
-        .sign_in_plain(&body.username, &body.password, &dh_pub, &body.device_name, &body.totp, &body.recovery)
+        .sign_in_plain_tg(&body.username, &body.password, &dh_pub, &body.device_name, &body.totp, &body.recovery, tg.as_ref().map(|(id, _)| id.as_str()))
         .map_err(|e| (dir_err_status(&e), e.to_string()))?;
     journal::log(&username, "login", body.device_name.clone());
     state.fed_kick.notify_waiters();
@@ -1991,7 +2033,7 @@ fn dir_err_status(e: &directory::DirError) -> StatusCode {
         directory::DirError::NotOwner => StatusCode::FORBIDDEN,
         directory::DirError::DevicesLocked | directory::DirError::DeviceBound => StatusCode::FORBIDDEN,
         directory::DirError::TooManyTries => StatusCode::TOO_MANY_REQUESTS,
-        directory::DirError::NeedTotp | directory::DirError::BadTotp => StatusCode::UNAUTHORIZED,
+        directory::DirError::NeedTotp | directory::DirError::BadTotp | directory::DirError::NeedTelegram | directory::DirError::WrongTelegram => StatusCode::UNAUTHORIZED,
         directory::DirError::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
         _ => StatusCode::BAD_REQUEST,
     }
@@ -2368,6 +2410,8 @@ struct StatsResp {
     /// This relay's version, and the oldest app it still serves.
     version: &'static str,
     min_client: &'static str,
+    /// Sign-in with Telegram works here (the relay has a bot).
+    telegram: bool,
 }
 
 /// Lightweight, unauthenticated server stats for the admin GUI: how many
@@ -2415,7 +2459,7 @@ async fn server_stats(State(state): State<AppState>) -> Json<StatsResp> {
     // Count users with at least one live WS sender.
     let online = online_people(&state).await;
     Json(StatsResp { ok: true, users, bots, online, require_registration: state.require_registration, instance: crate::public::instance(),
-        version: env!("CARGO_PKG_VERSION"), min_client: MIN_VERSION })
+        version: env!("CARGO_PKG_VERSION"), min_client: MIN_VERSION, telegram: tglogin::available() })
 }
 
 // ---------- Admin panel ------------------------------------------------------
@@ -2759,7 +2803,7 @@ pub(crate) fn caller_version(headers: &axum::http::HeaderMap, query: Option<&str
 /// stay as they are.
 fn app_door(path: &str) -> bool {
     matches!(path, "/v1/auth/challenge" | "/v1/auth/verify" | "/v1/auth/email/request" | "/v1/auth/email/verify"
-        | "/v1/auth/email/poll" | "/v1/users/register" | "/v1/users/signup" | "/v1/users/signin" | "/v1/users/login" | "/v1/users/reset" | "/v1/backup/fetch" | "/v1/ws")
+        | "/v1/auth/email/poll" | "/v1/users/register" | "/v1/users/signup" | "/v1/users/signin" | "/v1/auth/tg/start" | "/v1/auth/tg/poll" | "/v1/users/login" | "/v1/users/reset" | "/v1/backup/fetch" | "/v1/ws")
 }
 
 pub const TOO_OLD: &str = "this version of Aquamarine is no longer supported — update the app to 1.2.0 or newer";
@@ -2804,6 +2848,9 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/users/signin",       post(signin_user))
         .route("/v1/me/backup",          get(backup_mine))
         .route("/v1/me/pass",            post(pass_create))
+        .route("/v1/me/tg",              post(tg_link).delete(tg_unlink))
+        .route("/v1/auth/tg/start",      post(tglogin::start))
+        .route("/v1/auth/tg/poll",       post(tglogin::poll))
         .route("/v1/fed/names",          get(fed::h_names))
         .route("/v1/fed/names/hello",    post(fed::h_names_hello))
         .route("/v1/users/search",       get(search_users))

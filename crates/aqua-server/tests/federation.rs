@@ -254,7 +254,7 @@ async fn relays_find_each_other_by_hello() {
     assert_eq!(fed::parse_invite("aquafed:garbage"), None);
 }
 
-/// 1.2.0-2: a solo relay that joined a network "for names" shares only the
+/// 1.2.0-4: a solo relay that joined a network "for names" shares only the
 /// registry of (ID, @name) with it. A name is taken once across both, but
 /// neither side gets the other's accounts or finds them in search. A pass
 /// from a relay of the network lets its person into the private relay.

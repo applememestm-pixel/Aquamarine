@@ -81,7 +81,7 @@ export interface GpuStatus { mode: "auto" | "on" | "off"; software: boolean; rea
 /** One device of my account (Settings → Devices). */
 export interface PendingDevice { id: string; name: string; addr: string; at: number; added: number }
 export interface DeviceTrust { pending: PendingDevice[]; trusted: string[]; this: string }
-export interface SecurityState { lock: boolean; totp: boolean; backup_left: number; /** The server requires two-step codes (1.2.0). */ required?: boolean }
+export interface SecurityState { lock: boolean; totp: boolean; backup_left: number; /** The server requires two-step codes (1.2.0). */ required?: boolean; /** Linked Telegram (@name), 1.2.0-4. */ tg?: string | null }
 
 export interface DeviceInfo {
   addr: string; id: string; primary: boolean; name: string; added: number; online: boolean; current: boolean;
@@ -116,9 +116,14 @@ export const api = {
   /** A pass for a private server of my network (10 minutes, once). */
   passCreate:         (): Promise<{ pass: string; expires: number; home: string }> => invoke("pass_create"),
   /** Sign-up without e-mail (relays 1.2.0-1+): @username + password. */
-  signupPlain:        (server_url: string, username: string, password: string, display_name?: string, invite?: string): Promise<void> => invoke("signup_plain", { serverUrl: server_url, username, password, displayName: display_name ?? null, invite: invite ?? null }),
+  signupPlain:        (server_url: string, username: string, password: string, display_name?: string, invite?: string, tg_ticket?: string): Promise<void> => invoke("signup_plain", { serverUrl: server_url, username, password, displayName: display_name ?? null, invite: invite ?? null, tgTicket: tg_ticket ?? null }),
   /** Add this device to an account with two-step verification. */
-  signinPlain:        (server_url: string, login: string, password: string, totp?: string, recovery?: string): Promise<string> => invoke("signin_plain", { serverUrl: server_url, login, password, totp: totp ?? null, recovery: recovery ?? null }),
+  signinPlain:        (server_url: string, login: string, password: string, totp?: string, recovery?: string, tg_ticket?: string): Promise<string> => invoke("signin_plain", { serverUrl: server_url, login, password, totp: totp ?? null, recovery: recovery ?? null, tgTicket: tg_ticket ?? null }),
+  /** Telegram sign-in (the relay's bot): start → open `link` → poll. */
+  tgLoginStart:       (server_url: string): Promise<{ code: string; link: string; bot: string }> => invoke("tg_login_start", { serverUrl: server_url }),
+  tgLoginPoll:        (server_url: string, code: string): Promise<{ done: boolean; ticket?: string; name?: string }> => invoke("tg_login_poll", { serverUrl: server_url, code }),
+  tgLink:             (ticket: string): Promise<SecurityState> => invoke("tg_link", { ticket }),
+  tgUnlink:           (): Promise<SecurityState> => invoke("tg_unlink"),
   registerAccount:    (server_url: string, username: string, ticket: string, display_name: string, about: string, phone: string, password?: string, email?: string): Promise<void> => invoke("register_account", { serverUrl: server_url, username, ticket, displayName: display_name, about, phone, password: password || null, email: email || null }),
   listDevices:        (): Promise<DeviceInfo[]> => invoke("list_devices"),
   /** Devices of my account waiting for approval here (devtrust.rs). */

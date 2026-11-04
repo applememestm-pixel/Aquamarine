@@ -70,3 +70,15 @@ pub async fn totp_backup(state: State<'_, StdMutex<AppState>>, code: String) -> 
 pub async fn pass_create(state: State<'_, StdMutex<AppState>>) -> Result<serde_json::Value, String> {
     call(&state, None, "POST", "pass", Some(serde_json::json!({}))).await
 }
+
+/// Link the Telegram account a confirmed sign-in ticket names.
+#[tauri::command]
+pub async fn tg_link(state: State<'_, StdMutex<AppState>>, ticket: String) -> Result<serde_json::Value, String> {
+    call(&state, None, "POST", "tg", Some(serde_json::json!({ "ticket": ticket }))).await
+}
+
+/// Unlink Telegram.
+#[tauri::command]
+pub async fn tg_unlink(state: State<'_, StdMutex<AppState>>) -> Result<serde_json::Value, String> {
+    call(&state, None, "DELETE", "tg", None).await
+}

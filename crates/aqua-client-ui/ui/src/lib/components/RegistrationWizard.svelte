@@ -26,6 +26,7 @@
   import { icons } from "../icons";
   import { applyUiState, refreshBackup } from "../backup";
   import { accounts, loadAccounts, switchAccount } from "../accounts";
+  import { confirmWithTelegram } from "../tgLogin";
 
   // Opened by "Add account": the other accounts on this device stay one tap away.
   $effect(() => { if ($wizardOpen) void loadAccounts(); });
@@ -124,7 +125,28 @@
   // Since 1.2.0-1 there is no e-mail: step 1 is @username + password.
   // 4 = recovery key for the backup, 7 = two-step code, 8 = recovery key
   // to get past "no new devices" / a lost code phone.
-  let step = $state<1 | 4 | 7 | 8>(1);
+  // 9 = confirm the sign-in in Telegram.
+  let step = $state<1 | 4 | 7 | 8 | 9>(1);
+  /** A confirmed Telegram sign-in (sign-up links it; sign-in uses it). */
+  let tg = $state<{ ticket: string; name: string } | null>(null);
+  let tgWaiting = $state(false);
+  let tgStop = { aborted: false };
+  async function telegram(then: "signup" | "signin") {
+    error = null;
+    serverUrl = normalizeServer(serverUrl);
+    tgWaiting = true;
+    tgStop = { aborted: false };
+    try {
+      tg = await confirmWithTelegram(serverUrl.trim(), tgStop);
+      if (then === "signup" && !username.trim() && /^@[a-z0-9_]{3,32}$/i.test(tg.name)) username = tg.name.slice(1).toLowerCase();
+      if (then === "signin") { await signIn(); }
+    } catch (e) {
+      const m = String(e);
+      if (!/cancelled/.test(m)) error = /no Telegram bot/i.test(m) ? tr("This server has no Telegram bot — sign in with the password and an authenticator app, or ask the server's admin to add a bot.") : m;
+    } finally {
+      tgWaiting = false;
+    }
+  }
   /** Step 7: the code from the authenticator app (or a backup code). */
   let totp = $state("");
   /** Step 8: sign in with the recovery key instead of the code. */
@@ -191,7 +213,8 @@
     wizardHold.set(true);
     const u = login;
     try {
-      await withServer((url) => api.signupPlain(url, u, password, displayName.trim() || undefined, inviteText.trim() || inviteFor(url) || undefined));
+      await withServer((url) => api.signupPlain(url, u, password, displayName.trim() || undefined, inviteText.trim() || inviteFor(url) || undefined, tg?.ticket));
+      tg = null;
       const err = await connect(serverUrl.trim(), u);
       if (err) { error = plainError(err); wizardHold.set(false); return; }
       updateProfile({ display_name: displayName.trim() || u, about: "An Aquamarine user.", phone: "" });
@@ -212,6 +235,9 @@
   function gate(e: unknown): boolean {
     const m = String(e);
     if (/two-step verification code required/i.test(m)) { step = 7; error = null; return true; }
+    if (/confirm the sign-in in Telegram/i.test(m)) { step = 9; error = null; tg = null; return true; }
+    if (/not the Telegram account linked/i.test(m)) { step = 9; tg = null; error = tr("That's another Telegram account — confirm in the one linked to @{u}", { u: login }); return true; }
+    if (/Telegram confirmation has expired/i.test(m)) { step = 9; tg = null; error = tr("The Telegram confirmation has expired — confirm again"); return true; }
     if (/wrong two-step/i.test(m)) { step = 7; totp = ""; error = tr("Wrong code — try the next one from the app, or a backup code"); return true; }
     if (/turned off for this account/i.test(m)) { step = 8; locked = true; useRecovery = false; error = null; return true; }
     if (/recovery key doesn't match/i.test(m) && useRecovery) { step = 8; useRecovery = false; error = tr("That recovery key doesn't match this account"); return true; }
@@ -226,7 +252,8 @@
     try {
       const code = step === 7 ? totp.trim() : undefined;
       const rec = useRecovery ? phrase.trim() : undefined;
-      u = await withServer((url) => api.signinPlain(url, username.trim(), password, code, rec));
+      u = await withServer((url) => api.signinPlain(url, username.trim(), password, code, rec, step === 9 ? tg?.ticket : undefined));
+      tg = null;
     } catch (e) {
       busy = false;
       if (gate(e)) return;
@@ -359,7 +386,15 @@
               <input bind:value={password2} type={showPw ? "text" : "password"} autocomplete="new-password" />
             </label>
             <p class="note">{$t("No e-mail or phone needed. The account lives on this device; to use it on others and keep your chats on the server, turn on two-step verification later in Settings → Privacy & Security.")}</p>
-            <p class="note dim">{$t("Without two-step verification a lost device means a lost account — there is no recovery.")}</p>
+            {#if tg}
+              <p class="note tg-ok">✓ {$t("Telegram {name} will be linked: it confirms sign-ins on new devices, and the account isn't tied to this device.", { name: tg.name })}</p>
+            {:else}
+              <p class="note dim">{$t("Without two-step verification a lost device means a lost account — there is no recovery.")}</p>
+              <button class="tg-btn" type="button" disabled={tgWaiting} onclick={() => telegram("signup")}>
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21.9 4.6 18.7 19.7c-.2 1-.9 1.3-1.8.8l-4.9-3.6-2.4 2.3c-.3.3-.5.5-1 .5l.3-5 9.1-8.2c.4-.4-.1-.6-.6-.2L6.2 13.4l-4.8-1.5c-1-.3-1-1 .2-1.5L20.6 3.3c.9-.3 1.6.2 1.3 1.3z"/></svg>
+                {tgWaiting ? $t("Waiting for Telegram… tap Start in the bot") : $t("Link Telegram — it lets you sign in on other devices")}
+              </button>
+            {/if}
           {:else}
             <p class="note">{$t("A new device can be added only to an account with two-step verification: you'll be asked for a code from your authenticator app.")}</p>
           {/if}
@@ -400,6 +435,19 @@
           <div class="actions">
             <button class="ghost" onclick={() => { totp = ""; step = 1; }}>{$t("Back")}</button>
             <button class="primary" onclick={() => retrySignIn(false)} disabled={busy || !totp.trim()}>{$t(busy ? "Checking…" : "Sign in")}</button>
+          </div>
+        </div>
+      {:else if step === 9}
+        <div class="form">
+          <b class="rk-title">{$t("Confirm in Telegram")}</b>
+          <p class="note">{$t("This account is linked to Telegram. Open the server's bot and tap Start — then this device is added to the account.")}</p>
+          <button class="tg-btn big" type="button" disabled={tgWaiting || busy} onclick={() => telegram("signin")}>
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21.9 4.6 18.7 19.7c-.2 1-.9 1.3-1.8.8l-4.9-3.6-2.4 2.3c-.3.3-.5.5-1 .5l.3-5 9.1-8.2c.4-.4-.1-.6-.6-.2L6.2 13.4l-4.8-1.5c-1-.3-1-1 .2-1.5L20.6 3.3c.9-.3 1.6.2 1.3 1.3z"/></svg>
+            {tgWaiting ? $t("Waiting for Telegram… tap Start in the bot") : $t("Open Telegram")}
+          </button>
+          <button class="link" onclick={() => { tgStop.aborted = true; phrase = ""; error = null; locked = false; step = 8; }}>{$t("Use the recovery key")}</button>
+          <div class="actions">
+            <button class="ghost" onclick={() => { tgStop.aborted = true; step = 1; }}>{$t("Back")}</button>
           </div>
         </div>
       {:else if step === 8}
@@ -444,6 +492,11 @@
   .at-in i { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); font-style: normal; color: var(--fg-dim); font-weight: 700; pointer-events: none; }
   .at-in input { flex: 1; padding-left: 28px; }
   .inv-in { margin-top: 6px; }
+  .tg-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; align-self: flex-start; padding: 8px 14px; border-radius: calc(10px * var(--rk, 1)); border: 1px solid color-mix(in srgb, #2AABEE 55%, transparent); background: color-mix(in srgb, #2AABEE 14%, transparent); color: #5CC3F5; font: 600 13px var(--font-ui); cursor: pointer; }
+  .tg-btn.big { align-self: stretch; padding: 12px; font-size: 14px; }
+  .tg-btn svg { width: 17px; height: 17px; }
+  .tg-btn:disabled { opacity: .7; cursor: progress; }
+  .note.tg-ok { color: #5CC3F5; }
   .srv { font-size: 12.5px; color: var(--fg-dim); }
   .srv summary { cursor: pointer; list-style: none; padding: 4px 0; }
   .srv summary::-webkit-details-marker { display: none; }

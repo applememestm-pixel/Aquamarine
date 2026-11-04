@@ -425,12 +425,13 @@ pub async fn signup_plain(
     password: String,
     display_name: Option<String>,
     invite: Option<String>,
+    tg_ticket: Option<String>,
 ) -> Result<(), String> {
     if password.chars().count() < 8 { return Err("password must be at least 8 characters".into()); }
     let identity = state.lock().map_err(|e| e.to_string())?.identity.clone();
     let name = username.trim().trim_start_matches('@').to_lowercase();
     let secret = secret_for(&password, &name).await?;
-    Transport::signup_account(&server_url, &identity, &name, &secret, display_name.as_deref().unwrap_or(""), invite.as_deref().unwrap_or(""))
+    Transport::signup_account_tg(&server_url, &identity, &name, &secret, display_name.as_deref().unwrap_or(""), invite.as_deref().unwrap_or(""), tg_ticket.as_deref().unwrap_or(""))
         .await
         .map_err(|e| e.to_string())
 }
@@ -445,14 +446,27 @@ pub async fn signin_plain(
     password: String,
     totp: Option<String>,
     recovery: Option<String>,
+    tg_ticket: Option<String>,
 ) -> Result<String, String> {
     let identity = state.lock().map_err(|e| e.to_string())?.identity.clone();
     let check = crate::backups::recovery_check_of(recovery).await?;
     let secret = secret_for(&password, &login).await?;
     let name = crate::multidev::this_device_name();
-    Transport::signin_account(&server_url, &identity, login.trim(), &secret, &name, &totp.unwrap_or_default(), &check)
+    Transport::signin_account_tg(&server_url, &identity, login.trim(), &secret, &name, &totp.unwrap_or_default(), &check, tg_ticket.as_deref().unwrap_or(""))
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Start a sign-in with Telegram on `server_url`: `{code, link, bot}`.
+#[tauri::command]
+pub async fn tg_login_start(server_url: String) -> Result<serde_json::Value, String> {
+    Transport::tg_start(&server_url).await.map_err(|e| e.to_string())
+}
+
+/// `{done, ticket?, name?}` of a Telegram sign-in.
+#[tauri::command]
+pub async fn tg_login_poll(server_url: String, code: String) -> Result<serde_json::Value, String> {
+    Transport::tg_poll(&server_url, &code).await.map_err(|e| e.to_string())
 }
 
 /// Federated relays: `{ federated, self, servers }` from GET /v1/fed/peers.
