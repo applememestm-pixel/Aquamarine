@@ -222,6 +222,22 @@ impl AdminConfig {
         self.allow.iter().any(|a| a.trim().trim_start_matches('@').to_lowercase() == n)
     }
 
+    /// May someone with a pass from `host` as `@user` sign up here?
+    /// Rules on `allow` (1.2.0-2): `*@host` — anyone from that relay,
+    /// `@user@host` — that one account.
+    fn permits_pass(&self, user: &str, host: &str) -> bool {
+        let host = host_of(host);
+        let user = user.trim().trim_start_matches('@').to_lowercase();
+        self.allow.iter().any(|a| {
+            let a = a.trim().trim_start_matches('@').to_lowercase();
+            match a.rsplit_once('@') {
+                Some(("*", h)) => host_of(h) == host,
+                Some((u, h)) => u == user && host_of(h) == host,
+                None => false,
+            }
+        })
+    }
+
     /// Is this email allowed to register?
     fn permits(&self, email: &str) -> bool {
         if !self.invite_only {
@@ -1101,7 +1117,12 @@ async fn signup_user(
     Json(body): Json<SignupBody>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     let name = body.username.trim().trim_start_matches('@').to_lowercase();
+    let by_pass = || {
+        let (user, host) = check_pass(&state, &body.invite)?;
+        state.admin.read().ok()?.permits_pass(&user, &host).then_some(())
+    };
     if !state.admin.read().map(|c| c.permits_name(&name)).unwrap_or(true)
+        && by_pass().is_none()
         && !state.admin.write().map(|mut c| c.redeem(&body.invite, &format!("@{name}"))).unwrap_or(false)
     {
         return Err((StatusCode::FORBIDDEN, "this relay is invite-only — ask the admin for an invitation".into()));
@@ -1113,6 +1134,71 @@ async fn signup_user(
     journal::log(&name, "register", "");
     state.fed_kick.notify_waiters();
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------- Passes: "I have an account on relay X" (1.2.0-2) ------------------------
+//
+// A relay of a network signs a short-lived pass for one of its accounts; a
+// solo relay that shares the name registry with that network (same secret)
+// checks it and lets the person sign up if its rules say `*@X` or
+// `@name@X`. `aqpass:` + base64url(JSON {u, h, x, n}) + "." + hex HMAC.
+
+const PASS_SECS: i64 = 10 * 60;
+
+/// `host[:port]` of a relay address, lowercase ("https://A.b:7777/" → "a.b:7777").
+pub fn host_of(url: &str) -> String {
+    let u = url.trim().to_lowercase();
+    let u = u.split_once("://").map(|(_, r)| r.to_string()).unwrap_or(u);
+    u.split('/').next().unwrap_or("").to_string()
+}
+
+fn pass_mac(secret: &str, payload: &str) -> String {
+    hex::encode(aqua_core::crypto::hmac_sha256(secret.as_bytes(), format!("aqpass|{payload}").as_bytes()))
+}
+
+/// `POST /v1/me/pass` → `{"pass", "expires", "home"}` — a pass for this
+/// account, valid 10 minutes, once.
+async fn pass_create(State(state): State<AppState>, Caller(dh): Caller) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    use base64::Engine;
+    let me = caller_username(&state, &dh)?;
+    let fed = fed::registry(&state).ok_or((StatusCode::CONFLICT, "this server isn't part of a network — a pass works only between servers of one network".into()))?;
+    let home = if fed.cfg.public_url.is_empty() { public::url() } else { fed.cfg.public_url.clone() };
+    let mut n = [0u8; 9];
+    rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut n);
+    let exp = directory::now_secs() as i64 + PASS_SECS;
+    let json = serde_json::json!({ "u": me, "h": host_of(&home), "x": exp, "n": hex::encode(n) }).to_string();
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json);
+    let pass = format!("aqpass:{payload}.{}", pass_mac(&fed.cfg.secret, &payload));
+    journal::log(&me, "pass", "");
+    Ok(Json(serde_json::json!({ "pass": pass, "expires": exp, "home": home })))
+}
+
+/// A pass signed by our network's secret, not expired, not used before →
+/// `(@user, host)`. Using it uses it up.
+fn check_pass(state: &AppState, pass: &str) -> Option<(String, String)> {
+    use base64::Engine;
+    static USED: std::sync::Mutex<Option<std::collections::HashMap<String, i64>>> = std::sync::Mutex::new(None);
+    let fed = fed::registry(state)?;
+    let (payload, mac) = pass.trim().strip_prefix("aqpass:")?.split_once('.')?;
+    let want = pass_mac(&fed.cfg.secret, payload);
+    if !bool::from(subtle::ConstantTimeEq::ct_eq(want.as_bytes(), mac.as_bytes())) {
+        return None;
+    }
+    let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&raw).ok()?;
+    let now = directory::now_secs() as i64;
+    let exp = v["x"].as_i64()?;
+    if exp < now || exp > now + PASS_SECS + 60 {
+        return None;
+    }
+    let nonce = v["n"].as_str()?.to_string();
+    let mut g = USED.lock().ok()?;
+    let used = g.get_or_insert_with(std::collections::HashMap::new);
+    used.retain(|_, x| *x >= now);
+    if used.insert(nonce, exp).is_some() {
+        return None;
+    }
+    Some((v["u"].as_str()?.to_string(), v["h"].as_str()?.to_string()))
 }
 
 #[derive(Deserialize)]
@@ -1544,6 +1630,8 @@ async fn admin_get_fed(State(state): State<AppState>, headers: axum::http::Heade
         "smtp": state.directory.has_smtp(),
         "active": fed::current(&state).is_some(),
         "has_secret": !c.secret.is_empty(),
+        "registry": c.registry(),
+        "solo_peers": c.solo_peers.len(),
         "peers": c.peers,
         "public_url": c.public_url,
         "detected_url": crate::public::url(),
@@ -1650,7 +1738,12 @@ async fn admin_invite_del(State(state): State<AppState>, headers: axum::http::He
 }
 
 #[derive(Deserialize)]
-struct JoinBody { invite: String }
+struct JoinBody {
+    invite: String,
+    /// Stay solo: share only the name registry with that network (1.2.0-2).
+    #[serde(default)]
+    names_only: bool,
+}
 
 /// Join the network an invitation is from: take its secret, add its relay,
 /// say hello (it adds us; we learn the rest of the network).
@@ -1663,7 +1756,7 @@ async fn admin_fed_join(
     let (url, secret) = fed::parse_invite(&b.invite).ok_or((StatusCode::BAD_REQUEST, "that's not an invitation (aquafed:…)".into()))?;
     let mut c = fed::FedConfig::load();
     c.secret = secret;
-    c.mode = "network".into();
+    c.mode = if b.names_only { "solo".into() } else { "network".into() };
     if !c.peers.contains(&url) { c.peers.push(url.clone()); }
     // Not saved: a detected address can change (and may be re-detected).
     c.save().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -1673,7 +1766,7 @@ async fn admin_fed_join(
     if !f.same_network(&url).await {
         return Err((StatusCode::BAD_GATEWAY, format!("{url} doesn't answer or doesn't accept this secret")));
     }
-    let new = f.hello_all().await;
+    let new = if b.names_only { fed::names_hello(&f).await } else { f.hello_all().await };
     fed::add_peers(&state, &new);
     state.fed_kick.notify_one();
     Ok(Json(serde_json::json!({ "ok": true, "peers": fed::FedConfig::load().peers })))
@@ -2710,6 +2803,9 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/users/signup",       post(signup_user))
         .route("/v1/users/signin",       post(signin_user))
         .route("/v1/me/backup",          get(backup_mine))
+        .route("/v1/me/pass",            post(pass_create))
+        .route("/v1/fed/names",          get(fed::h_names))
+        .route("/v1/fed/names/hello",    post(fed::h_names_hello))
         .route("/v1/users/search",       get(search_users))
         .route("/v1/users/login",        post(login_user))
         .route("/v1/users/reset",        post(reset_password))

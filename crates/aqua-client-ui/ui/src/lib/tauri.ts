@@ -113,6 +113,8 @@ export const api = {
   requestEmailCode:   (server_url: string, email: string, purpose?: "signup" | "signin" | "reset", nonce?: string, invite?: string): Promise<{ dev_code: string | null; delivery_failed: boolean; error: string | null }> => invoke("request_email_code", { serverUrl: server_url, email, purpose: purpose ?? null, nonce: nonce ?? null, invite: invite ?? null }),
   pollEmailCode:      (server_url: string, email: string, nonce: string): Promise<string | null> => invoke("poll_email_code", { serverUrl: server_url, email, nonce }),
   verifyEmailCode:    (server_url: string, email: string, code: string): Promise<string> => invoke("verify_email_code", { serverUrl: server_url, email, code }),
+  /** A pass for a private server of my network (10 minutes, once). */
+  passCreate:         (): Promise<{ pass: string; expires: number; home: string }> => invoke("pass_create"),
   /** Sign-up without e-mail (relays 1.2.0-1+): @username + password. */
   signupPlain:        (server_url: string, username: string, password: string, display_name?: string, invite?: string): Promise<void> => invoke("signup_plain", { serverUrl: server_url, username, password, displayName: display_name ?? null, invite: invite ?? null }),
   /** Add this device to an account with two-step verification. */

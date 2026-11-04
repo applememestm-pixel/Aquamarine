@@ -185,6 +185,19 @@
     enterDetail();
   }
 
+  // ---- Pass for a private server (1.2.0-2) ----
+  let passCode = $state<string | null>(null);
+  let passBusy = $state(false);
+  async function makePass() {
+    passBusy = true;
+    try { passCode = (await api.passCreate()).pass; }
+    catch (e) {
+      const m = String(e);
+      showToast(/isn't part of a network/i.test(m) ? tr("Your server isn't in a network: a pass works only between servers of one network.") : m, 5000);
+    }
+    passBusy = false;
+  }
+
   // ---- Privacy ----
   async function copyFp() {
     try { await navigator.clipboard.writeText($info?.session_fingerprint ?? ""); showToast(tr("Fingerprint copied")); }
@@ -1733,6 +1746,19 @@
         </div>
       </section>
       <section class="group">
+        <div class="label">{$t("Pass for a private server")}</div>
+        <div class="bots-note">{$t("A private server of your network may let in people from this server. Make a pass and paste it there when you create the account — it proves you're @{name} from here. It works once, for 10 minutes.", { name: $info?.username ?? "" })}</div>
+        {#if passCode}
+          <div class="bk-phrase">
+            <code class="pass-code">{passCode}</code>
+            <button class="bot-link" onclick={() => navigator.clipboard?.writeText(passCode ?? "").then(() => showToast(tr("Copied")))}>{$t("Copy")}</button>
+            <button class="bot-link" onclick={() => (passCode = null)}>{$t("Hide")}</button>
+          </div>
+        {:else}
+          <button class="mini-btn" disabled={passBusy || !$info?.connected} onclick={makePass}>{passBusy ? "…" : $t("Make a pass")}</button>
+        {/if}
+      </section>
+      <section class="group">
         <div class="label">{$t("Proxy")}</div>
         <button class="mini-btn" onclick={() => { section = "network"; }}>{$t("Network & proxy")} ›</button>
       </section>
@@ -2415,6 +2441,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .me-sub { font-size: 12.5px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .me-online { font-size: 12px; color: var(--accent); }
   .me-online.off { color: var(--fg-dim); }
+  .pass-code { display: block; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; word-break: break-all; user-select: all; margin-bottom: 6px; }
   .nav-group { background: var(--bg-surface); border-radius: calc(14px * var(--rk, 1)); overflow: hidden; }
   .adv-toggle .nav-lbl { display: flex; flex-direction: column; gap: 1px; }
   .adv-sub { font-size: 11.5px; color: var(--fg-dim); font-weight: 400; }

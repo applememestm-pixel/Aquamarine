@@ -185,6 +185,20 @@ pub fn uid_for(identity_dh: &[u8]) -> String {
     (1_000_000_000 + n % 9_000_000_000).to_string()
 }
 
+/// One reserved @name of the name registry (`/v1/fed/names`): what solo
+/// relays and the network tell each other about their accounts — no keys,
+/// no profile, just enough that a name isn't taken twice.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct NameRow {
+    pub username: String,
+    pub uid: String,
+    /// The relay the account lives on ("" = the one answering).
+    #[serde(default)]
+    pub home: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 /// What applying a peer's account row did here.
 #[derive(Debug, Default, PartialEq)]
 pub struct FedApplied {
@@ -530,6 +544,18 @@ impl Directory {
                 at   INTEGER NOT NULL,
                 PRIMARY KEY (bot, user)
             );
+            -- Names reserved by accounts of other relays (1.2.0-2): solo
+            -- relays and the network share only (uid, @name), so one @name
+            -- belongs to one account everywhere. Never shown in search.
+            CREATE TABLE IF NOT EXISTS fed_names (
+                username   TEXT PRIMARY KEY,
+                uid        TEXT NOT NULL,
+                home       TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_fed_names_upd ON fed_names(updated_at);
+            CREATE INDEX IF NOT EXISTS idx_fed_names_uid ON fed_names(uid);
             CREATE TABLE IF NOT EXISTS prekeys (
                 username   TEXT PRIMARY KEY,
                 data       TEXT NOT NULL,
@@ -1004,7 +1030,7 @@ impl Directory {
                 |_| Ok(()),
             )
             .is_ok();
-        if reserved {
+        if reserved || Self::reserved_elsewhere(&db, &username, &uid_for(identity_dh)) {
             return Err(DirError::UsernameTaken);
         }
 
@@ -1244,6 +1270,9 @@ impl Directory {
                 return Err(DirError::UsernameTaken);
             }
         }
+        if Self::reserved_elsewhere(&db, &username, &uid_for(identity_dh)) {
+            return Err(DirError::UsernameTaken);
+        }
         db.execute(
             "INSERT INTO users (username, identity_dh, email, display_name, about, phone, is_bot, created_at, password)
              VALUES (?1, ?2, NULL, ?3, '', '', 0, ?4, ?5)
@@ -1327,6 +1356,71 @@ impl Directory {
         name_fails().lock().unwrap().remove(&username);
         tracing::info!(%username, "signed in on another device (no e-mail)");
         Ok(username)
+    }
+
+    /// `name` belongs to an account of another relay (name registry).
+    fn reserved_elsewhere(db: &Connection, name: &str, my_uid: &str) -> bool {
+        db.query_row("SELECT uid FROM fed_names WHERE username=?1", rusqlite::params![name], |r| r.get::<_, String>(0))
+            .is_ok_and(|uid| uid != my_uid)
+    }
+
+    /// The name registry as this relay knows it, changed after `since`:
+    /// its own accounts (and, in a network, the network's — `home` "") and
+    /// the names it learnt from other relays. Oldest change first.
+    pub fn names_since(&self, since: i64, limit: usize) -> Vec<NameRow> {
+        let db = self.db.lock().unwrap();
+        let Ok(mut st) = db.prepare(
+            "SELECT username, uid, '' AS home, created_at, updated_at FROM users WHERE is_bot=0 AND uid IS NOT NULL AND uid<>'' AND updated_at > ?1
+             UNION ALL
+             SELECT username, uid, home, created_at, updated_at FROM fed_names WHERE updated_at > ?1
+             ORDER BY 5 LIMIT ?2",
+        ) else { return Vec::new() };
+        st.query_map(rusqlite::params![since, limit as i64], |r| {
+            Ok(NameRow { username: r.get(0)?, uid: r.get(1)?, home: r.get(2)?, created_at: r.get(3)?, updated_at: r.get(4)? })
+        })
+        .map(|it| it.flatten().collect())
+        .unwrap_or_default()
+    }
+
+    /// A reserved name from another relay. The older account keeps a name
+    /// (on a tie, the smaller ID): when that's theirs and an account HERE
+    /// has the name, ours is renamed (`имя_` + the end of its ID) and
+    /// `(old, new)` is returned so live connections follow.
+    pub fn fed_apply_name(&self, n: &NameRow, home: &str) -> Option<(String, String)> {
+        let name = n.username.trim().to_lowercase();
+        if !Self::valid_username(&name) || n.uid.len() != 10 || !n.uid.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let mut db = self.db.lock().unwrap();
+        // One of ours (it came back to us through another relay).
+        if db.query_row("SELECT 1 FROM users WHERE uid=?1", rusqlite::params![n.uid], |_| Ok(())).is_ok() {
+            return None;
+        }
+        let home = if n.home.is_empty() { home } else { n.home.as_str() };
+        // Renamed there: its old name is free again.
+        let _ = db.execute("DELETE FROM fed_names WHERE uid=?1 AND username<>?2", rusqlite::params![n.uid, name]);
+        let _ = db.execute(
+            "INSERT INTO fed_names (username, uid, home, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(username) DO UPDATE SET uid=excluded.uid, home=excluded.home, created_at=excluded.created_at, updated_at=excluded.updated_at
+             WHERE fed_names.uid = excluded.uid AND fed_names.home <> excluded.home
+                OR excluded.created_at < fed_names.created_at
+                OR (excluded.created_at = fed_names.created_at AND excluded.uid < fed_names.uid)",
+            rusqlite::params![name, n.uid, home, n.created_at, crate::now_ms()],
+        );
+        let holder: Option<(String, i64, i64)> = db
+            .query_row("SELECT uid, created_at, is_bot FROM users WHERE username=?1", rusqlite::params![name], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .ok();
+        let (local_uid, local_created, bot) = holder?;
+        let we_win = bot != 0 || (local_created, local_uid.as_str()) <= (n.created_at, n.uid.as_str());
+        if we_win {
+            return None;
+        }
+        let to = Self::displaced_name(&db, &name, &local_uid);
+        if Self::move_account(&mut db, &name, &to, false).is_err() {
+            return None;
+        }
+        tracing::warn!(user = %name, %to, %home, "name registry: an older account elsewhere has this name — ours is renamed");
+        Some((name, to))
     }
 
     /// Two-step verification is on for this account.
@@ -2270,7 +2364,8 @@ impl Directory {
         let mut db = self.db.lock().unwrap();
         // Taken by someone, or someone's recent old name.
         let taken: bool = db.query_row("SELECT 1 FROM users WHERE username=?1", rusqlite::params![new], |_| Ok(())).is_ok();
-        if taken {
+        let my_uid: String = db.query_row("SELECT uid FROM users WHERE username=?1", rusqlite::params![old], |r| r.get(0)).unwrap_or_default();
+        if taken || Self::reserved_elsewhere(&db, &new, &my_uid) {
             return Err(DirError::UsernameTaken);
         }
         let reserved_for: Option<String> = db

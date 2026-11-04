@@ -148,6 +148,11 @@ Aquamarine — мессенджер со сквозным шифрованием
   - Настройки: `settings.advancedSettings`, множество `ADVANCED` в `SettingsPanel.svelte`. **Новый «сложный» раздел → добавь его id в `ADVANCED`.**
   - CI: `.github/workflows/checks.yml` на каждый PR. В облачной сессии crates.io и npm могут быть закрыты — тогда проверка только там (`gh run view --log-failed`).
 
+- **1.2.0-2** (пре-выпуск) — п. 2 и 3 списка 04.11:
+  - Реестр имён: `FedConfig::registry()` = соло + секрет + `peers`. `Fed::new` создаёт `Fed` и для него; **`fed::current()` — только полноценная сеть, `fed::registry()` — любая** (для имён и пропусков). Таблица `fed_names` (`Directory::names_since`, `fed_apply_name`, `reserved_elsewhere` — проверяется в `register`, `register_plain`, `rename_user`). Соло-сервер: `names_hello` раз в 3 мин, `sync_names` с `peers`. Сеть: `FedConfig.solo_peers` (из `/v1/fed/names/hello`), `sync_names` с них. **Соло-сервер ничего, кроме имён, не отдаёт и не берёт.**
+  - Пропуск: `/v1/me/pass` → `aqpass:<b64url {u,h,x,n}>.<hex HMAC(секрет, "aqpass|"…)>`, 10 мин, одноразовый (`check_pass`, в памяти). Правила `AdminConfig::permits_pass`: `*@host`, `@name@host`, `host_of` убирает схему и путь. Клиент: `security::pass_create`, Настройки → «Аккаунт и сервер», поле `inviteText` в мастере.
+  - Защита от подмены ключей (подписанный список устройств) — следующий PR.
+
 ## Открытые вопросы
 
 - Подлагивание при смене чата и «зависание при открытии профиля» (24.10) не воспроизведены: список сообщений уже рисуется окнами по 40. Нужен лог `[aqua-fps]` / `[aqua-click]` с устройства владельца.

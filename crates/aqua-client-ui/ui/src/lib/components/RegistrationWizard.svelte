@@ -137,6 +137,8 @@
   /** @username (or, for an account from before 1.2.0-1, its e-mail). */
   let username = $state("");
   let displayName = $state("");
+  /** An invitation code or a pass from another server (private servers). */
+  let inviteText = $state("");
   let busy = $state(false);
   let error = $state<string | null>(null);
   let mode = $state<"signup" | "signin">("signup");
@@ -168,7 +170,7 @@
     if (/lives on one device/i.test(m)) { boundHint = true; return tr("@{u} lives on another device: it has no two-step verification, so it can't be moved. Turn it on there (Settings → Privacy & Security), then sign in here.", { u: login }); }
     if (/wrong @username or password/i.test(m)) return tr("Wrong @username or password");
     if (/too many wrong/i.test(m)) return tr("Too many wrong attempts — try again in 15 minutes");
-    if (/invite-only/i.test(m)) return tr("This server is invite-only — scan the invitation QR from its admin.");
+    if (/invite-only/i.test(m)) return tr("This server is private: scan the invitation QR from its admin, or paste a pass from your server (Settings → Account & server → Pass).");
     if (/needs an e-mail to sign up/i.test(m)) return tr("This server runs an Aquamarine older than 1.2.0-1 and still asks for an e-mail — ask its owner to update it.");
     if (/username must be/i.test(m)) return tr("@username: 3–32 characters, a-z 0-9 _ . only");
     return explainNet(m, serverUrl.trim()) ?? m;
@@ -189,7 +191,7 @@
     wizardHold.set(true);
     const u = login;
     try {
-      await withServer((url) => api.signupPlain(url, u, password, displayName.trim() || undefined, inviteFor(url) || undefined));
+      await withServer((url) => api.signupPlain(url, u, password, displayName.trim() || undefined, inviteText.trim() || inviteFor(url) || undefined));
       const err = await connect(serverUrl.trim(), u);
       if (err) { error = plainError(err); wizardHold.set(false); return; }
       updateProfile({ display_name: displayName.trim() || u, about: "An Aquamarine user.", phone: "" });
@@ -366,6 +368,10 @@
             <div class="field">
               <ServerPicker bind:value={serverUrl} placeholder={DEFAULT_SERVER}
                 defaults={IS_ANDROID ? ["http://10.0.2.2:7777"] : ["http://127.0.0.1:7777"]} />
+              {#if mode === "signup"}
+                <input class="inv-in" bind:value={inviteText} autocomplete="off" spellcheck="false"
+                       placeholder={$t("Invitation code or pass (private servers)")} />
+              {/if}
               <button class="scan-inv" type="button" onclick={scanInvite}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg>
                 {$t("Scan a server or invitation QR")}
@@ -437,6 +443,7 @@
   .at-in { position: relative; display: flex; }
   .at-in i { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); font-style: normal; color: var(--fg-dim); font-weight: 700; pointer-events: none; }
   .at-in input { flex: 1; padding-left: 28px; }
+  .inv-in { margin-top: 6px; }
   .srv { font-size: 12.5px; color: var(--fg-dim); }
   .srv summary { cursor: pointer; list-style: none; padding: 4px 0; }
   .srv summary::-webkit-details-marker { display: none; }

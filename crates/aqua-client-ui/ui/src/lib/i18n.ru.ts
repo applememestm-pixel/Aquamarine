@@ -2446,4 +2446,10 @@ export const RU: Record<string, string> = {
   "24 words that open your encrypted backup and, with two-step verification on, let you in on a new device when the phone with the codes is lost. The server keeps only a check derived from them — it can't reproduce the words.": "24 слова, которые открывают зашифрованную копию и — при включённой двухэтапной проверке — впускают на новом устройстве, если телефон с кодами потерян. Сервер хранит только проверку, выведенную из них, — восстановить слова он не может.",
   "Not set": "Не задан",
   "Nobody, including the server admin, can open the backup without the password or these words.": "Никто, включая администратора сервера, не откроет копию без пароля или этих слов.",
+  "Pass for a private server": "Пропуск на приватный сервер",
+  "A private server of your network may let in people from this server. Make a pass and paste it there when you create the account — it proves you're @{name} from here. It works once, for 10 minutes.": "Приватный сервер вашей сети может пускать людей с этого сервера. Сделайте пропуск и вставьте его там при создании аккаунта — он подтверждает, что вы @{name} отсюда. Работает один раз, 10 минут.",
+  "Make a pass": "Сделать пропуск",
+  "Your server isn't in a network: a pass works only between servers of one network.": "Ваш сервер не в сети: пропуск работает только между серверами одной сети.",
+  "Invitation code or pass (private servers)": "Код приглашения или пропуск (приватные серверы)",
+  "This server is private: scan the invitation QR from its admin, or paste a pass from your server (Settings → Account & server → Pass).": "Это приватный сервер: отсканируйте QR-приглашение от его администратора или вставьте пропуск со своего сервера (Настройки → Аккаунт и сервер → Пропуск).",
 };

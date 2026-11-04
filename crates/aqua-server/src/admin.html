@@ -424,12 +424,12 @@
       <div class="card rv">
         <div class="toggle" onclick="toggleInvite()">
           <div><div class="t" data-t="Invite-only (solo mode)">Invite-only (solo mode)</div>
-            <div class="s" data-t="Only @usernames on the list below (or with an invitation) may register. Off = open relay.">Only @usernames on the list below (or with an invitation) may register. Off = open relay.</div></div>
+            <div class="s" data-th="accessRules">Only these may register: <b>@name</b> — that @name; <b>*@server</b> — anyone with a pass from that server of your network; <b>@name@server</b> — that person from that server. Plus anyone with an invitation code. Off = open relay.</div></div>
           <div id="sw" class="sw"></div>
         </div>
         <div class="mt">
           <label data-t="Allowed @usernames — one per line">Allowed @usernames — one per line</label>
-          <textarea id="allow" placeholder="@alice&#10;@bob"></textarea>
+          <textarea id="allow" placeholder="@alice&#10;*@relay.example.com&#10;@bob@other.example:7777"></textarea>
         </div>
         <div class="row mt">
           <button class="btn" onclick="saveCfg()" data-t="Save access policy">Save access policy</button>
@@ -529,6 +529,12 @@
             <div class="row"><input id="joinInv" placeholder="aquafed:…" style="flex:1;min-width:200px" autocomplete="off" /><button class="btn" onclick="joinNet()" data-t="Join">Join</button></div></div>
           <div class="note" id="mailVia"></div>
         </div>
+        <div id="soloBox" class="hide mt">
+          <label data-t="Reserve names in a network">Reserve names in a network</label>
+          <div class="note" data-th="soloNamesNote">The relay stays alone: its people talk only to each other and nobody else finds them. It shares with the network only <b>account IDs and @names</b>, so one @name belongs to one person everywhere. It also lets you admit people from servers of that network (<b>*@server</b> on the Access page).</div>
+          <div class="row"><input id="joinNames" placeholder="aquafed:…" style="flex:1;min-width:200px" autocomplete="off" /><button class="btn" onclick="joinNames()" data-t="Join for names">Join for names</button></div>
+          <div class="note" id="regState"></div>
+        </div>
         <div class="note" id="fMsg"></div>
       </div>
       <div class="card rv">
@@ -609,7 +615,9 @@
     "Invitations":"Приглашения", "invHint":"Код (или его QR) даёт зарегистрироваться здесь без того, чтобы вы вписывали его @имя: человек сканирует его в приложении и регистрируется. Каждый код работает заданное число раз.",
     "for whom (optional)":"для кого (необязательно)", "New invitation":"Новое приглашение", "Invitation":"Приглашение", "No invitations yet.":"Приглашений пока нет.",
     "invQrNote":"Отсканируйте в Aquamarine: вход → «Сканировать QR» или Настройки → Сеть → «Сканировать QR».",
-    "qrSecret":"В этом QR секрет сети — показывайте его только админу другого сервера.", "Invitation into this network":"Приглашение в эту сеть", "Close":"Закрыть","Only @usernames on the list below (or with an invitation) may register. Off = open relay.":"Регистрироваться могут только @имена из списка или по приглашению. Выключено — открытый сервер.",
+    "qrSecret":"В этом QR секрет сети — показывайте его только админу другого сервера.", "Invitation into this network":"Приглашение в эту сеть", "Close":"Закрыть","accessRules":"Регистрироваться могут только: <b>@имя</b> — это @имя; <b>*@сервер</b> — любой с пропуском от этого сервера вашей сети; <b>@имя@сервер</b> — этот человек с этого сервера. И все, у кого есть код приглашения. Выключено — открытый сервер.",
+    "Reserve names in a network":"Резервировать имена в сети", "Join for names":"Вступить ради имён", "regOn":"Имена резервируются в сети, серверов: ",
+    "soloNamesNote":"Сервер остаётся один: его люди общаются только между собой, и никто другой их не найдёт. С сетью он делится только <b>ID аккаунтов и @именами</b>, чтобы одно @имя везде было у одного человека. А ещё так можно пускать людей с серверов этой сети (<b>*@сервер</b> на странице «Доступ»).",
     "Allowed @usernames — one per line":"Разрешённые @имена — по одному в строке","Save access policy":"Сохранить",
     "Until mail is set up the relay runs in dev mode: codes are shown here instead of being sent.":"Пока почта не настроена, сервер работает в режиме разработки: коды показываются здесь, а не отправляются.",
     "SMTP server":"SMTP-сервер","Port":"Порт","Login (your mailbox)":"Логин (ваш ящик)","App password":"Пароль приложения",
@@ -662,6 +670,7 @@
     "accounts":"аккаунтов","online":"в сети",
   };
   const T = (s) => (RU && DICT[s]) || ({invQrNote:"Scan it in Aquamarine: sign-in → “Scan QR”, or Settings → Network & proxy → “Scan QR”.",
+    regOn:"Names are reserved in the network, servers: ",
     qrSecret:"This QR holds the network's secret — show it only to the admin of another relay.", lanOn:"Phones must be on the same Wi-Fi. If they can't connect, allow <b>aqua-server</b> in the firewall.",
     lanOff:"The relay only accepts connections from this PC.", codesMailed:"Codes are e-mailed to users, so they don't show up here. If an e-mail can't be sent, its code appears here.",
     notSent:"These e-mails could NOT be sent — pass the code on to the person yourself.",
@@ -1055,6 +1064,8 @@
     document.querySelectorAll("#modeSeg button").forEach((b) => b.classList.toggle("on", b.dataset.mode === fedMode));
     const net = fedMode === "network";
     $("netBox").classList.toggle("hide", !net);
+    $("soloBox").classList.toggle("hide", fedMode !== "solo");
+    $("regState").textContent = fedMode === "solo" && v.registry ? T("regOn") + (v.peers || []).length : "";
     $("fState").className = "mstate" + (v.active ? " on" : "");
     $("fedSt").className = "st" + (v.active ? " on" : "");
     $("fStateText").innerHTML = !net ? T("soloState") : (v.peers.length ? T("netState") + `<b>${v.peers.length}</b>` : T("netNoPeers"));
@@ -1083,6 +1094,14 @@
       $("inviteCode").textContent = inviteText ? inviteText.slice(0, 18) + "•••••••••••••" : (RU ? "нужен публичный адрес (вручную, ниже)" : "needs a public address (By hand, below)"); } catch {}
   }
   $("inviteCopy").addEventListener("click", () => inviteText && copy(inviteText));
+  async function joinNames(){
+    const invite = $("joinNames").value.trim();
+    if (!invite) return;
+    msg("fMsg", T("Sending…"));
+    try { await api("/v1/admin/fed/join", { method: "POST", body: JSON.stringify({ invite, names_only: true }) });
+      $("joinNames").value = ""; msg("fMsg", T("joined"), "ok"); await loadFed(); }
+    catch(e){ msg("fMsg", T("Failed: ") + e.message, "err"); }
+  }
   async function joinNet(){
     const invite = $("joinInv").value.trim();
     if (!invite) return;
