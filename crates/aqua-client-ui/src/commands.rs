@@ -1259,8 +1259,62 @@ pub async fn attach_file_as(
             }
             attach_file_fwd(state, app, peer_id, out.display().to_string(), None, Some("video/mp4".into()), None, caption).await
         }
+        // Live photos (Telegram Tips, 1.2.0-4): a short video shown like a
+        // photo — once, looped, or forward-and-back. An Android Motion Photo
+        // (a JPEG with the clip inside) sends its clip.
+        "live" | "live-loop" | "live-bounce" => {
+            let path = if is_motion_photo_path(&file_path) {
+                let out_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.join("outbox") };
+                std::fs::create_dir_all(&out_dir).map_err(|e| format!("mkdir outbox: {e}"))?;
+                let bytes = read_picked_bytes(&app, &file_path)?;
+                let clip = motion_photo_clip(&bytes).ok_or("this photo has no motion clip inside")?;
+                let stem = PathBuf::from(&file_path).file_stem().and_then(|s| s.to_str()).unwrap_or("live").replace(['/', '\\', ':'], "_");
+                let out = out_dir.join(format!("{stem}.mp4"));
+                std::fs::write(&out, clip).map_err(|e| e.to_string())?;
+                out.display().to_string()
+            } else {
+                file_path
+            };
+            attach_file_fwd(state, app, peer_id, path, Some(mode.clone()), Some("video/mp4".into()), None, caption).await
+        }
         _ => attach_file_fwd(state, app, peer_id, file_path, None, None, None, caption).await,
     }
+}
+
+fn is_motion_photo_path(p: &str) -> bool {
+    let l = p.to_lowercase();
+    l.ends_with(".jpg") || l.ends_with(".jpeg") || l.ends_with(".heic")
+}
+
+/// The MP4 clip of an Android Motion Photo / Samsung Motion Photo: a JPEG
+/// with an MP4 file appended after it. Found by the MP4's `ftyp` box after
+/// the JPEG's end (the clip runs to the end of the file).
+pub(crate) fn motion_photo_clip(bytes: &[u8]) -> Option<&[u8]> {
+    if bytes.len() < 32 {
+        return None;
+    }
+    let mut i = 4usize;
+    while i + 8 <= bytes.len() {
+        if &bytes[i..i + 4] == b"ftyp" {
+            let start = i - 4;
+            let size = u32::from_be_bytes([bytes[start], bytes[start + 1], bytes[start + 2], bytes[start + 3]]) as usize;
+            // A real box: 16..=256 bytes, followed by another box header.
+            if (16..=256).contains(&size) && start + size + 8 <= bytes.len() && bytes[start + size + 4..start + size + 8].iter().all(|b| b.is_ascii_alphanumeric()) {
+                return Some(&bytes[start..]);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Does this picked photo carry a motion clip (so it can go as a live photo)?
+#[tauri::command]
+pub fn has_motion_clip(app: AppHandle, path: String) -> bool {
+    if !is_motion_photo_path(&path) {
+        return false;
+    }
+    read_picked_bytes(&app, &path).map(|b| motion_photo_clip(&b).is_some()).unwrap_or(false)
 }
 
 /// Send bytes made in the UI (a compressed photo) as a file named `name`.
@@ -1599,6 +1653,7 @@ pub async fn send_gif(
     app: AppHandle,
     peer_id: String,
     file_path: String,
+    caption: Option<String>,
 ) -> Result<AttachResult, String> {
     {
         let s = state.lock().map_err(|e| e.to_string())?;
@@ -1607,7 +1662,8 @@ pub async fn send_gif(
             return Err(format!("gif path must be under {}", allowed.display()));
         }
     }
-    attach_file_impl(state, app, peer_id, file_path, Some("gif".into()), None).await
+    // A caption rides in the same message (Telegram: "Captions for GIFs").
+    attach_file_fwd(state, app, peer_id, file_path, Some("gif".into()), None, None, caption).await
 }
 
 // ---------- Picked files on phones -----------------------------------------
@@ -4260,5 +4316,24 @@ mod replies_tests {
         assert!(reply_note("bob", "ann", "Club", "ping @bob, look").is_some());
         assert!(reply_note("bob", "ann", "Club", "ping @bobby").is_none());
         assert!(reply_note("bob", "ann", "Club", "just text").is_none());
+    }
+}
+
+#[cfg(test)]
+mod live_photo_tests {
+    use super::motion_photo_clip;
+
+    #[test]
+    fn finds_the_clip_after_the_jpeg() {
+        let mut f = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        f.extend_from_slice(b"...exif... ftyp in text should not count ...");
+        f.extend_from_slice(&[0xFF, 0xD9]);
+        let clip_at = f.len();
+        f.extend_from_slice(&[0, 0, 0, 24]);
+        f.extend_from_slice(b"ftypmp42\0\0\0\0isommp42");
+        f.extend_from_slice(&[0, 0, 0, 8]);
+        f.extend_from_slice(b"moov");
+        assert_eq!(motion_photo_clip(&f).map(|c| c.len()), Some(f.len() - clip_at));
+        assert!(motion_photo_clip(&[0xFF, 0xD8, 0xFF, 0xD9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]).is_none());
     }
 }

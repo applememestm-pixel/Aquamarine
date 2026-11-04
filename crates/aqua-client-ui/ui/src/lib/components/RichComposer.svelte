@@ -11,6 +11,7 @@
   import { mediaKind, tgsSnapshot } from "./AnimatedMedia.svelte";
   import { askInput } from "./InputPrompt.svelte";
   import { tr } from "../i18n";
+  import { fmtDate, dateToken } from "../markup";
 
   interface Props {
     value: string;
@@ -64,14 +65,33 @@
     return span;
   }
 
+  /** `<t:UNIX>` shown as a date chip (each reader sees their own time). */
+  function dateNode(token: string, at: number): HTMLElement {
+    const span = document.createElement("span");
+    span.className = "rc-date";
+    span.contentEditable = "false";
+    span.dataset.token = token;
+    span.textContent = "📅 " + fmtDate(at);
+    return span;
+  }
+
   function fragmentOf(str: string): DocumentFragment {
     const frag = document.createDocumentFragment();
-    const pushText = (t: string) => {
+    const pushPlain = (t: string) => {
       const lines = t.split("\n");
       lines.forEach((ln, i) => {
         if (i > 0) frag.appendChild(document.createElement("br"));
         if (ln) frag.appendChild(document.createTextNode(ln));
       });
+    };
+    const pushText = (t: string) => {
+      let at = 0;
+      for (const m of t.matchAll(/<t:(\d{9,11})>/g)) {
+        pushPlain(t.slice(at, m.index));
+        frag.appendChild(dateNode(m[0], Number(m[1])));
+        at = (m.index ?? 0) + m[0].length;
+      }
+      pushPlain(t.slice(at));
     };
     let last = 0;
     for (const m of str.matchAll(TOKEN)) {
@@ -252,6 +272,22 @@
   }
 
   /** Wrap / unwrap the selection with Telegram markers (or prefix lines). */
+  // ---- Date (Telegram's "Date" formatting, 1.2.0-4) ----
+  let dateIn: HTMLInputElement | undefined = $state();
+  function pickDate() {
+    if (!dateIn) return;
+    rememberRange();
+    const d = new Date(Date.now() + 3600_000);
+    d.setMinutes(0, 0, 0);
+    dateIn.value = new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+    try { dateIn.showPicker(); } catch { dateIn.focus(); dateIn.click(); }
+  }
+  function dateChosen() {
+    const tok = dateIn?.value ? dateToken(dateIn.value) : null;
+    fmtBar = null;
+    if (tok) insert(tok + " ");
+  }
+
   export function format(kind: Fmt) {
     const r = selectionInside() ?? (savedRange && el?.contains(savedRange.commonAncestorContainer) && !savedRange.collapsed ? savedRange : null);
     if (!r) return;
@@ -363,6 +399,8 @@
   }
 </script>
 
+<input class="rc-date-in" type="datetime-local" bind:this={dateIn} onchange={dateChosen} tabindex="-1" aria-hidden="true" />
+
 <svelte:document onselectionchange={() => { rememberRange(); placeBar(); }} />
 <svelte:window onscroll={() => (fmtBar = null)} onresize={() => (fmtBar = null)} />
 
@@ -377,6 +415,7 @@
     <button title={tr("Monospace") + " (Ctrl+Shift+M)"} onclick={() => format("code")} class="mono">&lt;/&gt;</button>
     <button title={tr("Quote") + " (Ctrl+Shift+.)"} onclick={() => format("quote")}>❝</button>
     <button title={tr("Link") + " (Ctrl+K)"} onclick={() => format("link")}>🔗</button>
+    <button title={tr("Date — everyone sees it in their own time zone")} onclick={pickDate}>📅</button>
     <span class="fsep"></span>
     <button title={tr("Clear formatting") + " (Ctrl+Shift+N)"} onclick={() => format("clear")}>⌫</button>
   </div>
@@ -457,4 +496,6 @@
   .fmt-bar .mono { font-family: var(--font-mono); font-size: 11.5px; }
   .fmt-bar .sp { color: var(--fg-dim); }
   .fsep { width: 1px; height: 18px; background: var(--border-strong); margin: 0 2px; }
+  :global(.rc-date) { color: var(--accent); font-weight: 600; white-space: nowrap; }
+  .rc-date-in { position: fixed; left: -9999px; top: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 </style>

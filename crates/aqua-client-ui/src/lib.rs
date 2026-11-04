@@ -278,6 +278,7 @@ pub fn run() -> Result<()> {
             security::tg_link,
             security::tg_unlink,
             commands::tg_login_start,
+            commands::has_motion_clip,
             commands::tg_login_poll,
             multidev::remove_device,
             multidev::rename_device,
