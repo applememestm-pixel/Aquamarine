@@ -75,6 +75,9 @@ pub struct BotUpdate {
     /// Message the keyboard belonged to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub callback_msg: Option<i64>,
+    /// Written by another bot (bot-to-bot, 1.2.0-4).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub from_bot: bool,
 }
 
 #[derive(Default)]
@@ -784,8 +787,10 @@ async fn deliver(state: &AppState, msg: RelayMessage) {
         let mut q = q.lock().await;
         let id = q.next_id;
         q.next_id += 1;
+        let from_bot = state.directory.is_bot(&msg.from);
         q.updates.push_back(BotUpdate {
             id,
+            from_bot,
             from: msg.from.clone(),
             callback: callback.as_ref().map(|c| c.0.clone()),
             callback_msg: callback.map(|c| c.1),
@@ -2343,7 +2348,13 @@ async fn bot_send(
     // session table knows (open-signup relays).
     let owner_online = state.directory.bot_owner(&bot)
         .is_some_and(|o| state.bindings.get(&to).is_some_and(|b| b.as_slice() == o.as_slice()));
-    if !owner_online && !state.directory.bot_may_message(&bot, &to) {
+    // Bot-to-bot (1.2.0-4): a bot may write to another bot first, like in
+    // Telegram's agent workflows — slowly, so two bots can't spin forever.
+    let to_bot = to != bot && state.directory.is_bot(&to);
+    if to_bot && !state.bot_limits.take(&format!("b2b:{bot}>{to}"), 20.0, 0.2) {
+        return Err((StatusCode::TOO_MANY_REQUESTS, "slow down: bots talk to each other at most once every 5 seconds".into()));
+    }
+    if !owner_online && !to_bot && !state.directory.bot_may_message(&bot, &to) {
         return Err((StatusCode::FORBIDDEN, format!("@{to} hasn't written to this bot (or sent /stop)")));
     }
     if !state.bot_limits.take(&format!("send:{bot}"), 30.0, 30.0)

@@ -1393,3 +1393,30 @@ async fn telegram_is_a_second_factor() {
         assert_eq!(r.status().as_u16(), 404);
     }
 }
+
+/// 1.2.0-4: bots may write to other bots (agent workflows), slowly; the
+/// other bot sees the message is from a bot.
+#[tokio::test]
+async fn bots_talk_to_bots() {
+    let addr = spawn_server().await;
+    let base = format!("http://{addr}");
+    let http = test_http();
+    let mut owner = Client::new("b2bowner");
+    owner.login(&http, &base).await;
+    let mut toks = Vec::new();
+    for name in ["b2b_devbot", "b2b_gitbot"] {
+        let v: serde_json::Value = http.post(format!("{base}/v1/bot/register")).bearer_auth(&owner.token)
+            .json(&serde_json::json!({ "username": name, "display_name": name })).send().await.unwrap().json().await.unwrap();
+        toks.push(v["token"].as_str().unwrap().to_string());
+    }
+    let r = http.post(format!("{base}/v1/bot/send")).header("Authorization", format!("Bot {}", toks[0]))
+        .json(&serde_json::json!({ "to": "b2b_gitbot", "text": "@b2b_gitbot can you test my latest commit?" })).send().await.unwrap();
+    assert!(r.status().is_success(), "{}", r.status());
+    let ups: serde_json::Value = http.get(format!("{base}/v1/bot/updates?token={}&after=0&timeout=2", toks[1])).send().await.unwrap().json().await.unwrap();
+    let u = ups.as_array().unwrap().iter().find(|u| u["from"] == "b2b_devbot").expect("the other bot got it");
+    assert_eq!(u["from_bot"], true);
+    // And it may answer.
+    let r = http.post(format!("{base}/v1/bot/send")).header("Authorization", format!("Bot {}", toks[1]))
+        .json(&serde_json::json!({ "to": "b2b_devbot", "text": "Tests passed!" })).send().await.unwrap();
+    assert!(r.status().is_success());
+}

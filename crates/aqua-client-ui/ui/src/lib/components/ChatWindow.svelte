@@ -1822,6 +1822,7 @@
   let canPost = $derived(postBlocked === null && !peerBlocked && $activeChat?.id !== "__replies__");
   /** Channel / group forbids forwarding, copying and saving. */
   startNoShare();
+  void import("../botHelpers").then((m) => m.startBotHelpers());
   /** 1:1 chat with "Disable sharing" on (either person turned it on). */
   let dmNoShare = $derived(!isGroup && !!$activeChat && $noShare.has($activeChat.id));
   let protectedChat = $derived((!!activeGroup?.settings.protected_content && !isAdmin(activeGroup, myUsername)) || dmNoShare);

@@ -268,7 +268,7 @@ pub fn web_app_data(text: &str) -> Option<(String, String)> {
 /// A queued update in Telegram's shape.
 fn update_json(state: &AppState, bot: &str, u: &BotUpdate) -> Value {
     let update_id = u.id as i64 + 1;
-    let from = user_json(state, &u.from, false);
+    let from = user_json(state, &u.from, u.from_bot);
     let chat = chat_json(state, &u.from);
     if let Some(data) = &u.callback {
         let kb_text = state

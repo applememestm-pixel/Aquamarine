@@ -2491,4 +2491,13 @@ export const RU: Record<string, string> = {
   "Bounce — forward and reverse": "Туда-обратно — вперёд и назад",
   "Live": "Живое",
   "Bounce": "Туда-обратно",
+  "@{b} isn't a bot": "@{b} — не бот",
+  "@{b} answers for you now": "Теперь за вас отвечает @{b}",
+  "Bot secretary": "Бот-секретарь",
+  "A bot answers people for you: their message goes to the bot, and its answer is sent to them from your account.": "Бот отвечает людям за вас: их сообщение уходит боту, а его ответ отправляется им от вашего аккаунта.",
+  "Bots aren't end-to-end encrypted: the messages the bot gets, its owner and the server can read.": "Боты не шифруются сквозным шифрованием: сообщения, которые получает бот, могут прочитать его владелец и сервер.",
+  "Only new chats": "Только новые чаты",
+  "People not in my contacts": "Те, кого нет в контактах",
+  "Everyone": "Все",
+  "The secretary is off": "Секретарь выключен",
 };

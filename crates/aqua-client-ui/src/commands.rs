@@ -3460,6 +3460,21 @@ pub async fn bot_send_raw(state: State<'_, StdMutex<AppState>>, peer_id: String,
     transport.send_plaintext(&peer_id, &text).map_err(|e| format!("send: {e}"))
 }
 
+/// Hand one message to a bot without a chat with it (1.2.0-4): a guest bot
+/// mentioned in another chat, or the bot secretary of my account. Bots
+/// aren't end-to-end encrypted — the UI says so before turning these on.
+#[tauri::command]
+pub async fn bot_hand_over(state: State<'_, StdMutex<AppState>>, bot: String, text: String) -> Result<(), String> {
+    let bot = bot.trim().trim_start_matches('@').to_lowercase();
+    let transport = { state.lock().map_err(|e| e.to_string())?.transport.clone().ok_or("not connected to a server")? };
+    let card = transport.get_profile(&bot).await.map_err(|e| e.to_string())?;
+    if !card.is_some_and(|c| c.is_bot) {
+        return Err(format!("@{bot} isn't a bot"));
+    }
+    let text: String = text.chars().take(4000).collect();
+    transport.send_plaintext(&bot, &text).map_err(|e| format!("send: {e}"))
+}
+
 #[derive(serde::Serialize)]
 pub struct WebAppInit { pub init_data: String, pub signed: bool }
 

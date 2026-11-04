@@ -153,6 +153,8 @@ export const api = {
   backupPhrase:       (): Promise<string | null> => invoke("backup_phrase"),
   /** Auto-delete timer of a chat in seconds (0 = off). */
   /** Send to a bot without showing it in the chat (button press / mini app data). */
+  /** One message to a bot, without a chat with it (guest bots, the secretary). */
+  botHandOver:        (bot: string, text: string): Promise<void> => invoke("bot_hand_over", { bot, text }),
   botSendRaw:         (peer_id: string, text: string): Promise<void> => invoke("bot_send_raw", { peerId: peer_id, text }),
   /** Signed initData for a bot's mini app. */
   webappInit:         (bot: string, start_param?: string): Promise<{ init_data: string; signed: boolean }> => invoke("webapp_init", { bot, startParam: start_param ?? null }),
