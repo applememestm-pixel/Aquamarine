@@ -44,7 +44,7 @@
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { icons } from "../icons";
   import { activeChat, activeMessages, drafts, activeId, sendCurrent, loadActiveMessages, info, chats } from "../stores";
-  import { meshStatus, meshSyncNow } from "../mesh";
+  import { meshStatus, meshSyncNow, nearbyVia } from "../mesh";
   import Welcome from "./Welcome.svelte";
   import { settings } from "../theme";
   import { api, assetUrl, sendChatControl } from "../tauri";
@@ -2941,6 +2941,7 @@
 </script>
 
 {#snippet msgFlags(m: ChatMessage)}
+  {#if m.meta?.via}<span class="mflag via" title={$t(m.meta.via === "bt" ? "Came over Bluetooth, without the internet" : "Came over the local network, without the internet")}>{m.meta.via === "bt" ? "BT" : "LAN"}</span>{/if}
   {#if m.meta?.deleted}<span class="mflag del" title={$t("Deleted by the sender — kept on this device")}>{$t("deleted")}</span>{/if}
   {#if m.meta?.edits?.length}<span class="mflag pen" role="img" aria-label={$t("edited")} title={$t("Earlier versions:") + "\n" + m.meta.edits.join("\n— ")}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>{/if}
 {/snippet}
@@ -3188,6 +3189,11 @@
           {:else if chatOnline($activeChat, $peerPresence, $presenceNow)}
             {@const st = peerStatus($peerPresence[$activeChat.id], $presenceNow)}
             <span><span class="dot {st}"></span>{$t(st === "idle" ? "away" : st === "dnd" ? "do not disturb" : "online")}</span>
+            <span class="sep">·</span>
+          {/if}
+          {#if nearbyVia($meshStatus, $activeChat.id)}
+            {@const nv = nearbyVia($meshStatus, $activeChat.id)}
+            <span class="near-badge" title={$t("Nearby: messages go directly, without the internet")}>{nv === "bt" ? "BT" : "LAN"}</span>
             <span class="sep">·</span>
           {/if}
           {#if $activeChat.live && !$activeChat.has_lock}
@@ -4532,6 +4538,7 @@
   .admin-title { font-size: 11px; color: var(--fg-dim); font-style: italic; }
   .mflag { font-size: 10.5px; font-style: italic; color: var(--fg-dim); margin-right: 4px; cursor: help; }
   .mflag.del { color: #ff8f8f; }
+  .mflag.via, .near-badge { font-style: normal; font-size: 9.5px; font-weight: 800; letter-spacing: .04em; padding: 1px 4px; border-radius: calc(5px * var(--rk, 1)); background: color-mix(in srgb, #0A84FF 22%, transparent); color: #5AB0FF; }
   /* "Edited": a small pencil by the time instead of a word (Telegram). */
   .mflag.pen { display: inline-flex; vertical-align: -1px; font-style: normal; opacity: .75; }
   .mflag.pen svg { width: 11px; height: 11px; }

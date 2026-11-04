@@ -93,6 +93,9 @@ pub struct MsgMeta {
     /// carried as a `[fwd:v1]{…}\n` first line in front of any payload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fwd: Option<serde_json::Value>,
+    /// Came without the relay: "bt" (Bluetooth) or "lan" (same Wi-Fi).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
 }
 
 pub const FWD_PREFIX: &str = "[fwd:v1]";
@@ -121,7 +124,8 @@ pub fn split_fwd(text: &str) -> (Option<serde_json::Value>, &str) {
 /// Kind + local extras for a payload (forward header split off).
 pub fn classify_full(text: &str, room: Option<String>) -> (MessageKind, Option<MsgMeta>) {
     let (fwd, body) = split_fwd(text);
-    let meta = if fwd.is_some() || room.is_some() { Some(MsgMeta { room, fwd, ..Default::default() }) } else { None };
+    let via = crate::mesh::via_now().map(str::to_string);
+    let meta = if fwd.is_some() || room.is_some() || via.is_some() { Some(MsgMeta { room, fwd, via, ..Default::default() }) } else { None };
     (classify_kind(body), meta)
 }
 

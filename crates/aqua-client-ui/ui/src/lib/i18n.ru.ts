@@ -2452,4 +2452,10 @@ export const RU: Record<string, string> = {
   "Your server isn't in a network: a pass works only between servers of one network.": "Ваш сервер не в сети: пропуск работает только между серверами одной сети.",
   "Invitation code or pass (private servers)": "Код приглашения или пропуск (приватные серверы)",
   "This server is private: scan the invitation QR from its admin, or paste a pass from your server (Settings → Account & server → Pass).": "Это приватный сервер: отсканируйте QR-приглашение от его администратора или вставьте пропуск со своего сервера (Настройки → Аккаунт и сервер → Пропуск).",
+  "No internet — messages go directly to contacts nearby": "Нет интернета — сообщения идут напрямую людям рядом",
+  "nearby": "рядом",
+  "Came over Bluetooth, without the internet": "Пришло по Bluetooth, без интернета",
+  "Came over the local network, without the internet": "Пришло по локальной сети, без интернета",
+  "Nearby: messages go directly, without the internet": "Рядом: сообщения идут напрямую, без интернета",
+  "Step by step: friends from the internet, the router, what to do without a public IP ›": "Пошагово: друзья из интернета, роутер, что делать без белого IP ›",
 };

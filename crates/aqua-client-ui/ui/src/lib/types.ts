@@ -24,7 +24,7 @@ export interface ChatMessage {
   time: string;
   kind: MessageKind;
   /** Local history: deleted by the sender (kept), previous versions. */
-  meta?: { deleted?: boolean; edits?: string[]; room?: string; fwd?: { from?: string; name: string; at?: string; chat?: string } } | null;
+  meta?: { deleted?: boolean; edits?: string[]; room?: string; fwd?: { from?: string; name: string; at?: string; chat?: string }; via?: "bt" | "lan" } | null;
 }
 
 export type MessageKind =

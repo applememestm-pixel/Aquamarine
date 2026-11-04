@@ -32,6 +32,17 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::state::AppState;
 
+tokio::task_local! {
+    /// How the message being received right now came: "bt" / "lan" while a
+    /// mesh session hands envelopes to the normal receive path.
+    static VIA: &'static str;
+}
+
+/// "bt" / "lan" when the message being stored came without the relay.
+pub fn via_now() -> Option<&'static str> {
+    VIA.try_with(|v| *v).ok()
+}
+
 /// RFCOMM service of Aquamarine (SDP record on both platforms).
 pub const SERVICE_UUID: &str = "a9a1e5c0-7b3d-4f2e-9c61-5e2d8b0f4a17";
 const MAGIC: &[u8] = b"aqua-mesh-v1";
@@ -435,7 +446,8 @@ fn me(app: &AppHandle) -> Result<Me, String> {
 /// blocking thread.
 pub fn run_session<S: Read + Write>(app: &AppHandle, link: &mut S, dialled: bool, device: &str) -> SyncReport {
     let mut rep = SyncReport { at: now(), device: device.to_string(), ..Default::default() };
-    match exchange(&AppCtx(app), link, dialled, &mut rep) {
+    let via = if device.starts_with("lan:") { "lan" } else { "bt" };
+    match exchange(&AppCtx(app, via), link, dialled, &mut rep) {
         Ok(()) => {}
         Err(e) => {
             tracing::info!(%device, %e, "mesh session ended");
@@ -471,7 +483,7 @@ trait Ctx {
     fn deliver(&self, from: String, envelope: Envelope);
 }
 
-struct AppCtx<'a>(&'a AppHandle);
+struct AppCtx<'a>(&'a AppHandle, &'static str);
 
 impl Ctx for AppCtx<'_> {
     fn me(&self) -> Result<Me, String> {
@@ -491,9 +503,10 @@ impl Ctx for AppCtx<'_> {
     }
     fn deliver(&self, from: String, envelope: Envelope) {
         let app = self.0.clone();
-        tauri::async_runtime::block_on(async move {
+        let via = self.1;
+        tauri::async_runtime::block_on(VIA.scope(via, async move {
             crate::commands::handle_incoming(&app, aqua_client_core::Incoming::Envelope { from, envelope, ts: None }).await;
-        });
+        }));
     }
 }
 
@@ -678,6 +691,14 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn messages_from_a_mesh_session_are_tagged() {
+        assert_eq!(via_now(), None);
+        assert_eq!(VIA.scope("bt", async { via_now() }).await, Some("bt"));
+        assert_eq!(VIA.scope("lan", async { crate::state::classify_full("hi", None).1.and_then(|m| m.via) }).await.as_deref(), Some("lan"));
+        assert!(crate::state::classify_full("hi", None).1.is_none());
+    }
 
     #[test]
     fn frames_roundtrip() {
