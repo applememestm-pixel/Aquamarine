@@ -1341,3 +1341,82 @@ async fn plain_accounts_and_optional_two_step() {
     assert_eq!(st["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(st["min_client"], "1.2.0");
 }
+
+/// 1.2.0-4: Telegram as the second factor. An account signed up with a
+/// confirmed Telegram sign-in can move to another device: password +
+/// confirming in that same Telegram account.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn telegram_is_a_second_factor() {
+    let addr = spawn_server().await;
+    let base = format!("http://{addr}");
+    let http = test_http();
+    let mut a = Client::new("tgone");
+    a.login(&http, &base).await;
+    let t = aqua_server::tglogin::test_ticket("424242", "@tgperson");
+    let r = http.post(format!("{base}/v1/users/signup")).bearer_auth(&a.token)
+        .json(&serde_json::json!({ "username": "tgone", "password": "tg-secret-1", "tg_ticket": t })).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 204, "{}", r.text().await.unwrap());
+    let st: serde_json::Value = http.get(format!("{base}/v1/me/security")).bearer_auth(&a.token).send().await.unwrap().json().await.unwrap();
+    assert_eq!((st["tg"].as_str(), st["totp"].as_bool()), (Some("@tgperson"), Some(false)));
+    // Portable: a copy on the relay is kept.
+    let r = http.put(format!("{base}/v1/backup")).bearer_auth(&a.token).body(b"AQBK1-tg".to_vec()).send().await.unwrap();
+    assert!(r.status().is_success());
+
+    let mut b = Client::new("tgone-2");
+    b.login(&http, &base).await;
+    let signin = |tg: &str| serde_json::json!({ "username": "tgone", "password": "tg-secret-1", "tg_ticket": tg });
+    let r = http.post(format!("{base}/v1/users/signin")).bearer_auth(&b.token).json(&signin("")).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 401);
+    assert!(r.text().await.unwrap().contains("confirm the sign-in in Telegram"));
+    let other = aqua_server::tglogin::test_ticket("999", "@someone");
+    let r = http.post(format!("{base}/v1/users/signin")).bearer_auth(&b.token).json(&signin(&other)).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 401);
+    let used = aqua_server::tglogin::test_ticket("424242", "@tgperson");
+    let r = http.post(format!("{base}/v1/users/signin")).bearer_auth(&b.token).json(&signin(&used)).send().await.unwrap();
+    assert!(r.status().is_success(), "{}", r.text().await.unwrap());
+    // A ticket works once.
+    let r = http.post(format!("{base}/v1/users/signin")).bearer_auth(&b.token).json(&signin(&used)).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 400);
+    let got = http.get(format!("{base}/v1/me/backup")).bearer_auth(&b.token).send().await.unwrap().bytes().await.unwrap();
+    assert_eq!(&got[..], b"AQBK1-tg");
+
+    // Unlinked: bound to its devices again.
+    let r = http.delete(format!("{base}/v1/me/tg")).bearer_auth(&a.token).send().await.unwrap();
+    assert!(r.status().is_success());
+    let mut c = Client::new("tgone-3");
+    c.login(&http, &base).await;
+    let r = http.post(format!("{base}/v1/users/signin")).bearer_auth(&c.token).json(&signin("")).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 403);
+    // No bot on this relay: the start says so.
+    if std::env::var("AQUA_TG_BOT_TOKEN").is_err() && !std::path::Path::new("aqua-telegram.json").exists() {
+        let r = http.post(format!("{base}/v1/auth/tg/start")).json(&serde_json::json!({})).send().await.unwrap();
+        assert_eq!(r.status().as_u16(), 404);
+    }
+}
+
+/// 1.2.0-4: bots may write to other bots (agent workflows), slowly; the
+/// other bot sees the message is from a bot.
+#[tokio::test]
+async fn bots_talk_to_bots() {
+    let addr = spawn_server().await;
+    let base = format!("http://{addr}");
+    let http = test_http();
+    let mut owner = Client::new("b2bowner");
+    owner.login(&http, &base).await;
+    let mut toks = Vec::new();
+    for name in ["b2b_devbot", "b2b_gitbot"] {
+        let v: serde_json::Value = http.post(format!("{base}/v1/bot/register")).bearer_auth(&owner.token)
+            .json(&serde_json::json!({ "username": name, "display_name": name })).send().await.unwrap().json().await.unwrap();
+        toks.push(v["token"].as_str().unwrap().to_string());
+    }
+    let r = http.post(format!("{base}/v1/bot/send")).header("Authorization", format!("Bot {}", toks[0]))
+        .json(&serde_json::json!({ "to": "b2b_gitbot", "text": "@b2b_gitbot can you test my latest commit?" })).send().await.unwrap();
+    assert!(r.status().is_success(), "{}", r.status());
+    let ups: serde_json::Value = http.get(format!("{base}/v1/bot/updates?token={}&after=0&timeout=2", toks[1])).send().await.unwrap().json().await.unwrap();
+    let u = ups.as_array().unwrap().iter().find(|u| u["from"] == "b2b_devbot").expect("the other bot got it");
+    assert_eq!(u["from_bot"], true);
+    // And it may answer.
+    let r = http.post(format!("{base}/v1/bot/send")).header("Authorization", format!("Bot {}", toks[1]))
+        .json(&serde_json::json!({ "to": "b2b_devbot", "text": "Tests passed!" })).send().await.unwrap();
+    assert!(r.status().is_success());
+}

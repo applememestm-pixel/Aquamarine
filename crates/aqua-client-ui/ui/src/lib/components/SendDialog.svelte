@@ -1,7 +1,7 @@
 <script module lang="ts">
   import { writable } from "svelte/store";
   export type SendMode = "media" | "compressed" | "file";
-  export interface SendChoice { mode: SendMode; caption: string; edit: boolean }
+  export interface SendChoice { mode: SendMode; caption: string; edit: boolean; /** Send as a live photo (1.2.0-4). */ live?: import("../liveMotion").LiveStyle }
   interface Ask { paths: string[]; preset?: SendMode; resolve: (v: SendChoice | null) => void }
   const pending = writable<Ask | null>(null);
   const LAST = "aqua.sendMode.v1";
@@ -21,11 +21,15 @@
   import { t, tr } from "../i18n";
   import { api, assetUrl } from "../tauri";
   import { fmtSize } from "../media";
+  import { LIVE_STYLES, type LiveStyle } from "../liveMotion";
 
   const nameOf = (p: string) => p.split(/[\\/]/).pop() ?? p;
   let mode = $state<SendMode>("media");
   let compressVideo = $state(true);
   let caption = $state("");
+  /** Live photo: off, or how it plays. Offered for one short clip or a Motion Photo. */
+  let live = $state<LiveStyle | null>(null);
+  let canLive = $state(false);
   let thumbs = $state<Record<string, string>>({});
   let sizes = $state<Record<string, number>>({});
 
@@ -43,6 +47,13 @@
     } catch { /* defaults */ }
     if ($pending?.preset) mode = $pending.preset === "file" ? "file" : "media";
     caption = "";
+    live = null;
+    canLive = false;
+    if (list.length === 1 && VIDEO_RE.test(list[0])) {
+      void api.probeMediaFile(list[0], "video").then((r) => { canLive = (r?.duration ?? 0) <= 15; }).catch(() => {});
+    } else if (list.length === 1 && /\.(jpe?g|heic)$/i.test(list[0])) {
+      void api.hasMotionClip(list[0]).then((y) => { canLive = y; }).catch(() => {});
+    }
     thumbs = {};
     sizes = {};
     for (const p of list) {
@@ -63,7 +74,7 @@
     if (!send) { a.resolve(null); return; }
     try { localStorage.setItem(LAST, JSON.stringify({ mode, compressVideo })); } catch { /* ignore */ }
     const m: SendMode = mode === "file" ? "file" : hasVideos && compressVideo ? "compressed" : "media";
-    a.resolve({ mode: m, caption: caption.trim(), edit });
+    a.resolve({ mode: m, caption: caption.trim(), edit, live: canLive && live && mode !== "file" ? live : undefined });
   }
   function key(e: KeyboardEvent) {
     if (!$pending) return;
@@ -118,6 +129,16 @@
         {/if}
       {/if}
 
+      {#if canLive && mode !== "file"}
+        <div class="live-row">
+          <span class="live-lbl">◎ {$t("Live photo")}</span>
+          <button class:on={live === null} onclick={() => (live = null)}>{$t("Off")}</button>
+          {#each LIVE_STYLES as st (st.id)}
+            <button class:on={live === st.id} title={$t(st.label)} onclick={() => (live = st.id)}>{$t(st.label.split(" — ")[0])}</button>
+          {/each}
+        </div>
+      {/if}
+
       <input class="cap" placeholder={$t("Add a caption…")} bind:value={caption} />
 
       <div class="row">
@@ -133,6 +154,10 @@
 {/if}
 
 <style>
+  .live-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12.5px; }
+  .live-lbl { font-weight: 700; color: var(--fg-muted); margin-right: 4px; }
+  .live-row button { border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); padding: 5px 10px; border-radius: calc(9px * var(--rk, 1)); font: inherit; cursor: pointer; }
+  .live-row button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
   .sd-back { position: fixed; inset: 0; z-index: 10090; display: grid; place-items: center; background: rgba(0, 0, 0, 0.55); }
   .sd {
     width: min(460px, 94vw); max-height: 88vh;

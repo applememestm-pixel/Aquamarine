@@ -20,7 +20,10 @@ export type Inline =
   | { t: "b" | "i" | "u" | "s" | "spoiler"; c: Inline[] }
   | { t: "link"; href: string; c: Inline[] }
   | { t: "mention"; v: string }
-  | { t: "hashtag"; v: string };
+  | { t: "hashtag"; v: string }
+  /** `<t:UNIX>` — a moment in time, shown in the reader's own time zone
+   *  (Telegram's "Date" formatting, 1.2.0-4). */
+  | { t: "date"; at: number };
 
 export type Block =
   | { t: "p"; c: Inline[] }
@@ -98,6 +101,11 @@ export function parseInline(s: string, mode: Mode = "message"): Inline[] {
       const marker = n1 === "`" || n1 === "[" || n1 === "\\" || n1 === "@" || n1 === "#"
         || ("*_~|+".includes(n1) && n2 === n1) || (mode === "article" && n1 === "*");
       if (marker) { buf += n1; i += 2; continue; }
+    }
+    // <t:1731000000> — a date and time, in each reader's time zone
+    if (ch === "<" && s.startsWith("<t:", i)) {
+      const m = /^<t:(\d{9,11})>/.exec(s.slice(i));
+      if (m) { flush(); out.push({ t: "date", at: Number(m[1]) }); i += m[0].length; continue; }
     }
     // `inline code` (no formatting inside)
     if (ch === "`" && !s.startsWith("```", i)) {
@@ -269,6 +277,7 @@ function inlineText(c: Inline[]): string {
       case "code": return x.v;
       case "mention": return "@" + x.v;
       case "hashtag": return "#" + x.v;
+      case "date": return fmtDate(x.at);
       case "spoiler": return "▒▒▒";
       default: return inlineText(x.c);
     }
@@ -448,4 +457,20 @@ export function excerptOf(src: string, max = 260): string {
   }
   const out = parts.join(" ");
   return out.length > max ? out.slice(0, max).trimEnd() + "…" : out;
+}
+
+/** A `<t:UNIX>` date as this reader sees it ("14 Aug, 22:00"; the year when
+ *  it isn't this one). */
+export function fmtDate(at: number): string {
+  const d = new Date(at * 1000);
+  const now = new Date();
+  const opts: Intl.DateTimeFormatOptions = { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" };
+  if (d.getFullYear() !== now.getFullYear()) opts.year = "numeric";
+  try { return d.toLocaleString(undefined, opts); } catch { return d.toISOString(); }
+}
+
+/** The `<t:UNIX>` token for a local date and time (`<input type=datetime-local>` value). */
+export function dateToken(local: string): string | null {
+  const ms = new Date(local).getTime();
+  return Number.isFinite(ms) ? `<t:${Math.round(ms / 1000)}>` : null;
 }

@@ -157,6 +157,21 @@ pub struct Security {
     /// The last time step whose code was used (a code works once).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub last: u64,
+    /// Linked Telegram account (user id): confirming a sign-in in Telegram
+    /// is a second factor too (1.2.0-4, `tglogin.rs`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tg: String,
+    /// Its @username or name, to show in the settings.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tg_name: String,
+}
+
+impl Security {
+    /// A second factor is on (authenticator app or Telegram): the account
+    /// may move to other devices and keep its data on the relay.
+    pub fn portable(&self) -> bool {
+        !self.totp.is_empty() || !self.tg.is_empty()
+    }
 }
 
 fn is_zero(v: &u64) -> bool {
@@ -171,6 +186,9 @@ pub struct SecurityState {
     pub backup_left: usize,
     /// The relay requires two-step verification (set by the caller).
     pub required: bool,
+    /// Linked Telegram (@username or name), if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tg: Option<String>,
 }
 
 /// An account's ID, like Telegram's: a 10-digit number that never changes,
@@ -283,6 +301,10 @@ pub enum DirError {
     DeviceBound,
     #[error("too many wrong attempts — try again in 15 minutes")]
     TooManyTries,
+    #[error("confirm the sign-in in Telegram")]
+    NeedTelegram,
+    #[error("that's not the Telegram account linked to this account")]
+    WrongTelegram,
 }
 
 /// Wrong two-step codes per e-mail ticket before the ticket is dropped.
@@ -544,7 +566,7 @@ impl Directory {
                 at   INTEGER NOT NULL,
                 PRIMARY KEY (bot, user)
             );
-            -- Names reserved by accounts of other relays (1.2.0-2): solo
+            -- Names reserved by accounts of other relays (1.2.0-4): solo
             -- relays and the network share only (uid, @name), so one @name
             -- belongs to one account everywhere. Never shown in search.
             CREATE TABLE IF NOT EXISTS fed_names (
@@ -1289,6 +1311,13 @@ impl Directory {
     /// code or the recovery key); without it an account stays on the device
     /// it was made on — there is no way to recover it.
     pub fn sign_in_plain(&self, username: &str, password: &str, identity_dh: &[u8; 32], name: &str, code: &str, recovery: &str) -> Result<String, DirError> {
+        self.sign_in_plain_tg(username, password, identity_dh, name, code, recovery, None)
+    }
+
+    /// [`Self::sign_in_plain`]; `tg` — the Telegram user id a `tglogin`
+    /// ticket confirmed (a second factor when it's the linked one).
+    #[allow(clippy::too_many_arguments)]
+    pub fn sign_in_plain_tg(&self, username: &str, password: &str, identity_dh: &[u8; 32], name: &str, code: &str, recovery: &str, tg: Option<&str>) -> Result<String, DirError> {
         // Accounts from before 1.2.0-1 may still sign in with their e-mail.
         let login = username.trim().to_lowercase();
         let username = if !login.starts_with('@') && login.contains('@') {
@@ -1331,17 +1360,28 @@ impl Directory {
         }
         let db = self.db.lock().unwrap();
         let mut sec: Security = serde_json::from_str(&json).unwrap_or_default();
-        if sec.totp.is_empty() {
+        if !sec.portable() {
             return Err(DirError::DeviceBound);
         }
         let by_recovery = !recovery.trim().is_empty();
+        let by_tg = tg.is_some_and(|t| !sec.tg.is_empty() && t == sec.tg);
         if by_recovery {
             if rec.is_empty() || !subtle_eq(recovery_hash(recovery.trim()).as_bytes(), rec.as_bytes()) {
                 return Err(fail(DirError::BadRecovery));
             }
+        } else if by_tg {
+            if sec.lock {
+                return Err(DirError::DevicesLocked);
+            }
         } else {
             if sec.lock {
                 return Err(DirError::DevicesLocked);
+            }
+            if tg.is_some() {
+                return Err(fail(DirError::WrongTelegram));
+            }
+            if sec.totp.is_empty() {
+                return Err(DirError::NeedTelegram);
             }
             if code.trim().is_empty() {
                 return Err(DirError::NeedTotp);
@@ -1426,7 +1466,26 @@ impl Directory {
     /// Two-step verification is on for this account.
     pub fn has_2fa(&self, username: &str) -> bool {
         let db = self.db.lock().unwrap();
-        Self::security_of(&db, username).map(|s| !s.totp.is_empty()).unwrap_or(false)
+        Self::security_of(&db, username).map(|s| s.portable()).unwrap_or(false)
+    }
+
+    /// Link a Telegram account (from a confirmed `tglogin` ticket).
+    pub fn tg_link(&self, username: &str, tg_id: &str, tg_name: &str) -> Result<(), DirError> {
+        let db = self.db.lock().unwrap();
+        let mut sec = Self::security_of(&db, username)?;
+        sec.tg = tg_id.to_string();
+        sec.tg_name = tg_name.chars().take(64).collect();
+        Self::put_security(&db, username, &sec)
+    }
+
+    /// Unlink Telegram. Without the authenticator app too, the account
+    /// becomes bound to its devices again.
+    pub fn tg_unlink(&self, username: &str) -> Result<(), DirError> {
+        let db = self.db.lock().unwrap();
+        let mut sec = Self::security_of(&db, username)?;
+        sec.tg.clear();
+        sec.tg_name.clear();
+        Self::put_security(&db, username, &sec)
     }
 
     /// [`Self::login_named`] with the two-step `code` and/or the recovery
@@ -1534,7 +1593,8 @@ impl Directory {
     pub fn security_state(&self, username: &str) -> SecurityState {
         let db = self.db.lock().unwrap();
         let sec = Self::security_of(&db, username).unwrap_or_default();
-        SecurityState { lock: sec.lock, totp: !sec.totp.is_empty(), backup_left: sec.backup.len(), required: false }
+        SecurityState { lock: sec.lock, totp: !sec.totp.is_empty(), backup_left: sec.backup.len(), required: false,
+            tg: (!sec.tg.is_empty()).then(|| if sec.tg_name.is_empty() { "Telegram".to_string() } else { sec.tg_name.clone() }) }
     }
 
     /// Turn sign-in on new devices off or back on. Turning it back on asks
@@ -2086,7 +2146,7 @@ impl Directory {
         let total: i64 = db
             .query_row("SELECT COALESCE(SUM(length(data)), 0) FROM hist_store WHERE username=?1 AND k<>?2", rusqlite::params![username, k], |r| r.get(0))
             .unwrap_or(0);
-        let limit = if Self::security_of(&db, username).map(|s| !s.totp.is_empty()).unwrap_or(false) { HIST_LIMIT } else { HIST_LIMIT_PLAIN };
+        let limit = if Self::security_of(&db, username).map(|s| s.portable()).unwrap_or(false) { HIST_LIMIT } else { HIST_LIMIT_PLAIN };
         if total + data.len() as i64 > limit {
             return Err(DirError::TooLarge);
         }

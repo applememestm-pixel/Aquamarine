@@ -326,14 +326,33 @@
     } catch (e) { showToast(`Send failed: ${e}`); }
   }
 
-  async function sendGif(g: GifItem) {
+  async function sendGif(g: GifItem, caption?: string) {
     const s = $pickerState;
     if (!s.peer) return;
     try {
-      await api.sendGif(s.peer, g.path);
+      await api.sendGif(s.peer, g.path, caption);
       await loadActiveMessages();
     } catch (e) { showToast(`Send failed: ${e}`); }
   }
+
+  /** Hold or right-click a GIF: send it with a caption, as one message. */
+  function gifWithCaption(g: GifItem) {
+    askInput({
+      title: tr("GIF with a caption"),
+      description: tr("The caption goes in the same message, under the GIF."),
+      fields: [{ label: tr("Caption"), placeholder: tr("Write a caption…") }],
+      submitLabel: tr("Send"),
+      onSubmit: async ([c]) => { await sendGif(g, c.trim() || undefined); return null; },
+    });
+  }
+  let gifHold: ReturnType<typeof setTimeout> | null = null;
+  let gifHeld = false;
+  function gifDown(g: GifItem) {
+    gifHeld = false;
+    if (gifHold) clearTimeout(gifHold);
+    gifHold = setTimeout(() => { gifHeld = true; gifWithCaption(g); }, 500);
+  }
+  function gifUp() { if (gifHold) { clearTimeout(gifHold); gifHold = null; } }
 
   function firstHit() {
     if (tab === "gifs") { if (gifs[0]) void sendGif(gifs[0]); return; }
@@ -686,7 +705,10 @@
         {:else}
           <div class="gifs">
             {#each gifs as g (g.id)}
-              <button class="gif" title={g.name} onclick={() => sendGif(g)}>
+              <button class="gif" title={g.name + " · " + tr("hold — with a caption")}
+                onclick={() => { if (gifHeld) { gifHeld = false; return; } void sendGif(g); }}
+                oncontextmenu={(e) => { e.preventDefault(); gifUp(); gifWithCaption(g); }}
+                onpointerdown={() => gifDown(g)} onpointerup={gifUp} onpointerleave={gifUp} onpointercancel={gifUp}>
                 <AnimatedMedia src={assetUrl(g.path)} mime={g.mime ?? "image/gif"} alt={g.name} fit="cover" play="auto" />
               </button>
             {/each}

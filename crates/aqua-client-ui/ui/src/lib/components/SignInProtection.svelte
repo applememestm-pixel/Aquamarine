@@ -10,6 +10,8 @@
   import { showToast } from "./Toast.svelte";
   import { askInput } from "./InputPrompt.svelte";
   import QrCode from "./QrCode.svelte";
+  import { confirmWithTelegram } from "../tgLogin";
+  import { info } from "../stores";
 
   let sec = $state<SecurityState | null>(null);
   let err = $state<string | null>(null);
@@ -97,6 +99,26 @@
     catch (e) { showToast(msg(e)); }
     busy = false;
   }
+  // ---- Telegram as the second factor (1.2.0-4) ----
+  let tgWaiting = $state(false);
+  async function linkTelegram() {
+    tgWaiting = true;
+    try {
+      const c = await confirmWithTelegram($info?.server_url ?? "");
+      sec = await api.tgLink(c.ticket);
+      showToast(tr("Telegram {name} linked", { name: c.name }));
+    } catch (e) {
+      const m = String(e);
+      showToast(/no Telegram bot/i.test(m) ? tr("This server has no Telegram bot — its admin can add one in the panel.") : msg(e), 5000);
+    }
+    tgWaiting = false;
+  }
+  async function unlinkTelegram() {
+    busy = true;
+    try { sec = await api.tgUnlink(); showToast(tr("Telegram unlinked")); } catch (e) { showToast(msg(e)); }
+    busy = false;
+  }
+
   async function copy(text: string) {
     try { await navigator.clipboard.writeText(text); showToast(tr("Copied")); } catch { /* no clipboard */ }
   }
@@ -155,7 +177,21 @@
       {#if sec.required}<div class="foot-note">{$t("Required on this server: it stays on. New phone? “Another app” moves the codes to it.")}</div>{/if}
     {/if}
 
-    {#if sec.totp}
+    <div class="toggle-row tg-row">
+      <div class="tr-text">
+        <div class="tr-title">Telegram</div>
+        <div class="tr-sub">{sec.tg
+          ? $t("Linked: {name}. A new device is added after you confirm in Telegram (with the password).", { name: sec.tg })
+          : $t("Instead of (or besides) the authenticator app: confirm sign-ins on new devices in Telegram, through this server's bot.")}</div>
+      </div>
+      {#if sec.tg}
+        <button class="mini-btn" disabled={busy} onclick={unlinkTelegram}>{$t("Unlink")}</button>
+      {:else}
+        <button class="mini-btn primary" disabled={tgWaiting} onclick={linkTelegram}>{tgWaiting ? $t("Tap Start in the bot…") : $t("Link")}</button>
+      {/if}
+    </div>
+
+    {#if sec.totp || sec.tg}
     <button class="toggle-row" disabled={busy} onclick={() => setLock(!sec?.lock)}>
       <div class="tr-text">
         <div class="tr-title">{$t("Sign-in on new devices")}</div>
@@ -198,4 +234,5 @@
   .sp-err { color: #e5484d; font-size: 12.5px; }
   .sp-codes { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 12px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 14px; user-select: text; }
   .sp-ok { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; margin-right: auto; }
+  .tg-row { cursor: default; }
 </style>

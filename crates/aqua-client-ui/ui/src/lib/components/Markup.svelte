@@ -3,7 +3,7 @@
    * Renders formatted text (lib/markup.ts) — chat messages, articles and
    * Telegraph pages. Plain Svelte elements only (no {@html}).
    */
-  import { parseBlocks, type Block, type Inline, type Mode, type GalleryRef } from "../markup";
+  import { parseBlocks, fmtDate, type Block, type Inline, type Mode, type GalleryRef } from "../markup";
   import type { ArticleMedia } from "../types";
   import { objectUrl, mediaUrl, fmtDuration } from "../media";
   import { openLink } from "../reader";
@@ -85,7 +85,7 @@
     {#if n.t === "text"}{n.v}{:else if n.t === "br"}<br />{:else if n.t === "emoji"}
       {@const m = resolveEmoji?.(n.key)}
       {#if m}<span class="mk-emoji" title={emojiFallback(n.key)}><AnimatedMedia src={m.url} mime={m.mime} alt={emojiFallback(n.key)} play="auto" /></span>{:else}{emojiFallback(n.key)}{/if}
-    {:else if n.t === "code"}<code class="mk-code">{n.v}</code>{:else if n.t === "b"}<strong>{@render inl(n.c)}</strong>{:else if n.t === "i"}<em>{@render inl(n.c)}</em>{:else if n.t === "u"}<u>{@render inl(n.c)}</u>{:else if n.t === "s"}<s>{@render inl(n.c)}</s>{:else if n.t === "spoiler"}<!-- svelte-ignore a11y_click_events_have_key_events --><span class="mk-spoiler" role="button" tabindex="0" title={tr("Spoiler — click to show")} onclick={reveal}>{@render inl(n.c)}</span>{:else if n.t === "link"}<a class="mk-link" href={n.href} title={n.href} onclick={(e) => click(e, n.href)}>{@render inl(n.c)}</a>{:else if n.t === "mention"}<button class="mk-mention" onclick={(e) => { e.stopPropagation(); openProfile(n.v); }}>@{n.v}</button>{:else if n.t === "hashtag"}<span class="mk-tag">#{n.v}</span>{/if}
+    {:else if n.t === "code"}<code class="mk-code">{n.v}</code>{:else if n.t === "b"}<strong>{@render inl(n.c)}</strong>{:else if n.t === "i"}<em>{@render inl(n.c)}</em>{:else if n.t === "u"}<u>{@render inl(n.c)}</u>{:else if n.t === "s"}<s>{@render inl(n.c)}</s>{:else if n.t === "spoiler"}<!-- svelte-ignore a11y_click_events_have_key_events --><span class="mk-spoiler" role="button" tabindex="0" title={tr("Spoiler — click to show")} onclick={reveal}>{@render inl(n.c)}</span>{:else if n.t === "link"}<a class="mk-link" href={n.href} title={n.href} onclick={(e) => click(e, n.href)}>{@render inl(n.c)}</a>{:else if n.t === "mention"}<button class="mk-mention" onclick={(e) => { e.stopPropagation(); openProfile(n.v); }}>@{n.v}</button>{:else if n.t === "hashtag"}<span class="mk-tag">#{n.v}</span>{:else if n.t === "date"}<span class="mk-date" title={new Date(n.at * 1000).toString()}>📅 {fmtDate(n.at)}</span>{/if}
   {/each}
 {/snippet}
 
@@ -184,6 +184,7 @@
   .mk-fig figcaption { font-size: 0.86em; color: var(--fg-dim); text-align: center; margin-top: 6px; }
   .mk-link { color: var(--accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent); cursor: pointer; word-break: break-word; }
   .mk-link:hover { text-decoration-color: var(--accent); }
+  .mk-date { color: var(--accent); font-weight: 600; text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; white-space: nowrap; }
   .mk-mention { all: unset; color: var(--accent); cursor: pointer; font-weight: 600; }
   .mk-mention:hover { text-decoration: underline; }
   .mk-tag { color: var(--accent); }

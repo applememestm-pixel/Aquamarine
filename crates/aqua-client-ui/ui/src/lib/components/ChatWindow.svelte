@@ -45,6 +45,8 @@
   import { icons } from "../icons";
   import { activeChat, activeMessages, drafts, activeId, sendCurrent, loadActiveMessages, info, chats } from "../stores";
   import { meshStatus, meshSyncNow, nearbyVia } from "../mesh";
+  import { noShare, setNoShare, startNoShare } from "../noShare";
+  import { isLive, livePlay } from "../liveMotion";
   import Welcome from "./Welcome.svelte";
   import { settings } from "../theme";
   import { api, assetUrl, sendChatControl } from "../tauri";
@@ -225,8 +227,9 @@
     category: string | null;
     mime: string | null;
     name: string;
-  }): "sticker" | "gif" | "image" | "video" | "audio" | "voice" | "circle" | "file" {
+  }): "sticker" | "gif" | "image" | "video" | "audio" | "voice" | "circle" | "live" | "file" {
     const cat = (content.category ?? "").toLowerCase();
+    if (isLive(cat)) return "live";
     if (cat === "sticker" || content.name.toLowerCase().endsWith(".tgs") || (content.mime ?? "").toLowerCase() === "application/x-tgsticker") return "sticker";
     if (cat === "gif") return "gif";
     if (cat === "voice") return "voice";
@@ -704,7 +707,7 @@
     // Telegram-style sheet: previews + "as photo/video" or "as file".
     const choice = await askSend(paths, preset);
     if (!choice) return;
-    if (choice.edit && paths.length === 1 && isImagePath(paths[0])) {
+    if (choice.edit && !choice.live && paths.length === 1 && isImagePath(paths[0])) {
       const edited = await maybeEditThenSend(peerId, paths[0]);
       if (edited) { if (choice.caption) await sendCurrent(choice.caption); return; }
     }
@@ -716,7 +719,9 @@
     let cap: string | undefined = choice.caption?.trim() || undefined;
     for (const p of paths) {
       try {
-        if (choice.mode === "file") {
+        if (choice.live) {
+          await api.attachFileAs(peerId, p, choice.live, cap);
+        } else if (choice.mode === "file") {
           await api.attachFileAs(peerId, p, "file", cap);
         } else if (isImagePath(p)) {
           await sendCompressedPhoto(peerId, p, cap);
@@ -1612,6 +1617,11 @@
     const out: HdrItem[] = [];
     if (c.id !== "__saved__" && !isBotChat) out.push({ id: "cal", label: tr("Calendar"), sub: tr("Events and reminders of this chat"), icon: IC.cal, on: $calendarFor === c.id, run: () => calendarFor.set($calendarFor === c.id ? null : c.id) });
     if (ttlEditable || chatTtl) out.push({ id: "ttl", label: tr("Auto-delete & read receipts"), sub: chatTtl ? tr("Auto-delete: {t}", { t: ttlLabel(chatTtl) }) : tr("Off"), icon: IC.ttl, on: chatTtl > 0, run: () => (ttlMenu = true) });
+    if (!isGroup && !isBotChat && c.id !== "__saved__" && c.id !== "__replies__" && c.live) {
+      const on = $noShare.has(c.id);
+      out.push({ id: "noshare", label: tr(on ? "Allow sharing" : "Disable sharing"), sub: tr(on ? "Forwarding, copying and saving are off for both of you" : "No forwarding, copying or saving — for both of you"), icon: icons.lock, on,
+        run: () => void setNoShare(c.id, !on).then(() => showToast(tr(on ? "Sharing is allowed again" : "Sharing is off in this chat — for both of you. A modified app or a camera can still copy."), 5000)) });
+    }
     if (amChanAdmin) out.push({ id: "stats", label: tr("Channel statistics"), sub: tr("Views, reactions, comments"), icon: IC.stats, on: $statsFor === c.id, run: () => statsFor.set($statsFor === c.id ? null : c.id) });
     if (isBotChat && botMenu) {
       const bm = botMenu, added = $attachBots.some((b) => b.bot === c.id);
@@ -1811,7 +1821,11 @@
   let peerBlocked = $derived(!!$activeChat && !activeGroup && !$activeChat.channel && $blocked.has($activeChat.id));
   let canPost = $derived(postBlocked === null && !peerBlocked && $activeChat?.id !== "__replies__");
   /** Channel / group forbids forwarding, copying and saving. */
-  let protectedChat = $derived(!!activeGroup?.settings.protected_content && !isAdmin(activeGroup, myUsername));
+  startNoShare();
+  void import("../botHelpers").then((m) => m.startBotHelpers());
+  /** 1:1 chat with "Disable sharing" on (either person turned it on). */
+  let dmNoShare = $derived(!isGroup && !!$activeChat && $noShare.has($activeChat.id));
+  let protectedChat = $derived((!!activeGroup?.settings.protected_content && !isAdmin(activeGroup, myUsername)) || dmNoShare);
   /** Reactions the chat allows (null = any). */
   let allowedReactions = $derived.by((): string[] | null => {
     const g = activeGroup;
@@ -3524,6 +3538,23 @@
                       <span class="photo-meta">{m.time}{@render statusTick(m.outgoing)}</span>
                     {/if}
                   </div>
+                {:else if rk === "live"}
+                  <!-- Live photo: a muted clip that plays like a photo. -->
+                  <div class="bubble media-bubble live-bubble">
+                    {#if url}
+                      <!-- svelte-ignore a11y_media_has_caption -->
+                      <video class="media-img live-vid" use:streamSrc={url} use:livePlay={content.category ?? "live"} playsinline autoplay={$power.videos} muted></video>
+                      <span class="live-badge" title={$t("Live photo")}>◎ LIVE</span>
+                    {:else}
+                      <div class="media-placeholder" style="aspect-ratio: 4/3;"></div>
+                    {/if}
+                    {#if content.caption}
+                      <div class="media-caption"><Markup src={content.caption} resolveEmoji={(k) => emojiMap[k]} compact />
+                        <span class="bubble-meta inline-meta">{m.time}{@render statusTick(m.outgoing)}</span></div>
+                    {:else}
+                      <span class="photo-meta">{m.time}{@render statusTick(m.outgoing)}</span>
+                    {/if}
+                  </div>
                 {:else if rk === "circle"}
                   <div class="circle-wrap">
                     {#if url}
@@ -3616,7 +3647,7 @@
                       {:else if content.saved_at}
                         <div class="file-btns">
                           <button class="file-dl primary" onclick={() => openDoc(m, content)}>{$t("Open")}</button>
-                          <button class="file-dl" onclick={() => saveFileAs(content.saved_at, content.name)}>{$t("Save as…")}</button>
+                          {#if !protectedChat}<button class="file-dl" onclick={() => saveFileAs(content.saved_at, content.name)}>{$t("Save as…")}</button>{/if}
                         </div>
                       {:else if dm}
                         <button class="file-dl" onclick={() => openDoc(m, content)}>{$t(dm === "image" ? "Show photo" : "Watch video")}</button>
@@ -4538,6 +4569,9 @@
   .admin-title { font-size: 11px; color: var(--fg-dim); font-style: italic; }
   .mflag { font-size: 10.5px; font-style: italic; color: var(--fg-dim); margin-right: 4px; cursor: help; }
   .mflag.del { color: #ff8f8f; }
+  .live-bubble { position: relative; }
+  .live-vid { display: block; cursor: pointer; }
+  .live-badge { position: absolute; left: 8px; top: 8px; font-size: 10px; font-weight: 800; letter-spacing: .05em; padding: 2px 6px; border-radius: calc(8px * var(--rk, 1)); background: rgba(0,0,0,.45); color: #fff; pointer-events: none; }
   .mflag.via, .near-badge { font-style: normal; font-size: 9.5px; font-weight: 800; letter-spacing: .04em; padding: 1px 4px; border-radius: calc(5px * var(--rk, 1)); background: color-mix(in srgb, #0A84FF 22%, transparent); color: #5AB0FF; }
   /* "Edited": a small pencil by the time instead of a word (Telegram). */
   .mflag.pen { display: inline-flex; vertical-align: -1px; font-style: normal; opacity: .75; }

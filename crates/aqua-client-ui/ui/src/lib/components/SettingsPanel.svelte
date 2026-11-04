@@ -5,6 +5,7 @@
 
 <script lang="ts">
   import Select from "./Select.svelte";
+  import { secretary } from "../botHelpers";
   import Donut from "./Donut.svelte";
   import { LINKS } from "../links";
   import { NOTES, openWhatsNew } from "./WhatsNew.svelte";
@@ -185,7 +186,22 @@
     enterDetail();
   }
 
-  // ---- Pass for a private server (1.2.0-2) ----
+  // ---- Bot secretary (1.2.0-4) ----
+  let secBot = $state("");
+  let secScope = $state<"all" | "new" | "noncontacts">("new");
+  $effect(() => { const c = $secretary; if (c) { secBot = c.bot; secScope = c.scope; } });
+  async function secretaryOn() {
+    const bot = secBot.trim().replace(/^@/, "").toLowerCase();
+    if (!bot) return;
+    try {
+      const card = await api.fetchDirectoryProfile(bot);
+      if (!card?.is_bot) { showToast(tr("@{b} isn't a bot", { b: bot })); return; }
+    } catch (e) { showToast(String(e)); return; }
+    secretary.set({ bot, scope: secScope });
+    showToast(tr("@{b} answers for you now", { b: bot }));
+  }
+
+  // ---- Pass for a private server (1.2.0-4) ----
   let passCode = $state<string | null>(null);
   let passBusy = $state(false);
   async function makePass() {
@@ -1746,6 +1762,20 @@
         </div>
       </section>
       <section class="group">
+        <div class="label">{$t("Bot secretary")}</div>
+        <div class="bots-note">{$t("A bot answers people for you: their message goes to the bot, and its answer is sent to them from your account.")}</div>
+        <div class="bots-note warn-note">{$t("Bots aren't end-to-end encrypted: the messages the bot gets, its owner and the server can read.")}</div>
+        <div class="bk-row">
+          <input class="txt" placeholder="@mybot" bind:value={secBot} disabled={!!$secretary} />
+          <Select value={secScope} disabled={!!$secretary} options={[{ value: "new" as const, label: $t("Only new chats") }, { value: "noncontacts" as const, label: $t("People not in my contacts") }, { value: "all" as const, label: $t("Everyone") }]} onchange={(v) => (secScope = v)} />
+          {#if $secretary}
+            <button class="bot-btn" onclick={() => { secretary.set(null); showToast(tr("The secretary is off")); }}>{$t("Turn off")}</button>
+          {:else}
+            <button class="bot-btn primary" disabled={!secBot.trim()} onclick={secretaryOn}>{$t("Turn on")}</button>
+          {/if}
+        </div>
+      </section>
+      <section class="group">
         <div class="label">{$t("Pass for a private server")}</div>
         <div class="bots-note">{$t("A private server of your network may let in people from this server. Make a pass and paste it there when you create the account — it proves you're @{name} from here. It works once, for 10 minutes.", { name: $info?.username ?? "" })}</div>
         {#if passCode}
@@ -2442,6 +2472,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .me-sub { font-size: 12.5px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .me-online { font-size: 12px; color: var(--accent); }
   .me-online.off { color: var(--fg-dim); }
+  .warn-note { color: #ffb454; }
   .pass-code { display: block; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; word-break: break-all; user-select: all; margin-bottom: 6px; }
   .nav-group { background: var(--bg-surface); border-radius: calc(14px * var(--rk, 1)); overflow: hidden; }
   .adv-toggle .nav-lbl { display: flex; flex-direction: column; gap: 1px; }

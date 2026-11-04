@@ -81,7 +81,7 @@ export interface GpuStatus { mode: "auto" | "on" | "off"; software: boolean; rea
 /** One device of my account (Settings → Devices). */
 export interface PendingDevice { id: string; name: string; addr: string; at: number; added: number }
 export interface DeviceTrust { pending: PendingDevice[]; trusted: string[]; this: string }
-export interface SecurityState { lock: boolean; totp: boolean; backup_left: number; /** The server requires two-step codes (1.2.0). */ required?: boolean }
+export interface SecurityState { lock: boolean; totp: boolean; backup_left: number; /** The server requires two-step codes (1.2.0). */ required?: boolean; /** Linked Telegram (@name), 1.2.0-4. */ tg?: string | null }
 
 export interface DeviceInfo {
   addr: string; id: string; primary: boolean; name: string; added: number; online: boolean; current: boolean;
@@ -116,9 +116,16 @@ export const api = {
   /** A pass for a private server of my network (10 minutes, once). */
   passCreate:         (): Promise<{ pass: string; expires: number; home: string }> => invoke("pass_create"),
   /** Sign-up without e-mail (relays 1.2.0-1+): @username + password. */
-  signupPlain:        (server_url: string, username: string, password: string, display_name?: string, invite?: string): Promise<void> => invoke("signup_plain", { serverUrl: server_url, username, password, displayName: display_name ?? null, invite: invite ?? null }),
+  signupPlain:        (server_url: string, username: string, password: string, display_name?: string, invite?: string, tg_ticket?: string): Promise<void> => invoke("signup_plain", { serverUrl: server_url, username, password, displayName: display_name ?? null, invite: invite ?? null, tgTicket: tg_ticket ?? null }),
   /** Add this device to an account with two-step verification. */
-  signinPlain:        (server_url: string, login: string, password: string, totp?: string, recovery?: string): Promise<string> => invoke("signin_plain", { serverUrl: server_url, login, password, totp: totp ?? null, recovery: recovery ?? null }),
+  signinPlain:        (server_url: string, login: string, password: string, totp?: string, recovery?: string, tg_ticket?: string): Promise<string> => invoke("signin_plain", { serverUrl: server_url, login, password, totp: totp ?? null, recovery: recovery ?? null, tgTicket: tg_ticket ?? null }),
+  /** An Android Motion Photo (JPEG with a clip inside) — can go as a live photo. */
+  hasMotionClip:      (path: string): Promise<boolean> => invoke("has_motion_clip", { path }),
+  /** Telegram sign-in (the relay's bot): start → open `link` → poll. */
+  tgLoginStart:       (server_url: string): Promise<{ code: string; link: string; bot: string }> => invoke("tg_login_start", { serverUrl: server_url }),
+  tgLoginPoll:        (server_url: string, code: string): Promise<{ done: boolean; ticket?: string; name?: string }> => invoke("tg_login_poll", { serverUrl: server_url, code }),
+  tgLink:             (ticket: string): Promise<SecurityState> => invoke("tg_link", { ticket }),
+  tgUnlink:           (): Promise<SecurityState> => invoke("tg_unlink"),
   registerAccount:    (server_url: string, username: string, ticket: string, display_name: string, about: string, phone: string, password?: string, email?: string): Promise<void> => invoke("register_account", { serverUrl: server_url, username, ticket, displayName: display_name, about, phone, password: password || null, email: email || null }),
   listDevices:        (): Promise<DeviceInfo[]> => invoke("list_devices"),
   /** Devices of my account waiting for approval here (devtrust.rs). */
@@ -146,6 +153,8 @@ export const api = {
   backupPhrase:       (): Promise<string | null> => invoke("backup_phrase"),
   /** Auto-delete timer of a chat in seconds (0 = off). */
   /** Send to a bot without showing it in the chat (button press / mini app data). */
+  /** One message to a bot, without a chat with it (guest bots, the secretary). */
+  botHandOver:        (bot: string, text: string): Promise<void> => invoke("bot_hand_over", { bot, text }),
   botSendRaw:         (peer_id: string, text: string): Promise<void> => invoke("bot_send_raw", { peerId: peer_id, text }),
   /** Signed initData for a bot's mini app. */
   webappInit:         (bot: string, start_param?: string): Promise<{ init_data: string; signed: boolean }> => invoke("webapp_init", { bot, startParam: start_param ?? null }),
@@ -243,7 +252,7 @@ export const api = {
   attachFile:         (peer_id: string, file_path: string, caption?: string): Promise<AttachResult>  => invoke("attach_file", { peerId: peer_id, filePath: file_path, caption: caption || null }),
   /** Re-send a file with a "Forwarded from" header (JSON). */
   forwardFile:        (peer_id: string, file_path: string, header: string): Promise<AttachResult> => invoke("forward_file", { peerId: peer_id, filePath: file_path, header }),
-  attachFileAs:       (peerId: string, filePath: string, mode: "file" | "media" | "compressed", caption?: string): Promise<AttachResult> => invoke("attach_file_as", { peerId, filePath, mode, caption: caption || null }),
+  attachFileAs:       (peerId: string, filePath: string, mode: "file" | "media" | "compressed" | "live" | "live-loop" | "live-bounce", caption?: string): Promise<AttachResult> => invoke("attach_file_as", { peerId, filePath, mode, caption: caption || null }),
   attachBytes:        (peerId: string, name: string, mime: string, bytes: number[], caption?: string): Promise<AttachResult> => invoke("attach_bytes", { peerId, name, mime, bytes, caption: caption || null }),
   downloadFile:       (peer_id: string, message_id: string): Promise<DownloadResult> => invoke("download_file", { peerId: peer_id, messageId: message_id }),
   sendCallSignal:     (peer_id: string, signal: object): Promise<void> =>
@@ -257,7 +266,7 @@ export const api = {
 
   // Local media (stickers + GIFs)
   sendSticker:        (peer_id: string, path: string): Promise<AttachResult>       => invoke("send_sticker", { peerId: peer_id, filePath: path }),
-  sendGif:            (peer_id: string, path: string): Promise<AttachResult>       => invoke("send_gif", { peerId: peer_id, filePath: path }),
+  sendGif:            (peer_id: string, path: string, caption?: string): Promise<AttachResult> => invoke("send_gif", { peerId: peer_id, filePath: path, caption: caption || null }),
   listLocalMedia:     (): Promise<LocalMediaList>                                  => invoke("list_local_media"),
   readMediaBytes:     (path: string): Promise<number[]>                            => invoke("read_media_bytes", { path }),
   readUserFont:       (path: string): Promise<number[]>                            => invoke("read_user_font", { path }),

@@ -384,6 +384,8 @@ export async function sendCurrent(text: string): Promise<string | null> {
     } else {
       await api.sendMessage(id, text);
     }
+    // A bot mentioned in it gets this one message (guest bots).
+    void import("./botHelpers").then((m) => m.routeGuestMentions(id, text)).catch(() => {});
     // Refresh both messages and chat list (backend bumps chat to top).
     const [msgs, updated] = await Promise.all([api.getMessages(id), api.listChats()]);
     activeMessages.set(reuseUnchanged(get(activeMessages), msgs));

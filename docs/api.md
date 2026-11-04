@@ -1,6 +1,6 @@
 # HTTP API ретранслятора
 
-> Часть [технической документации](README.md). Описание соответствует `aqua-server` 1.2.0-3 и версии протокола `v1`.
+> Часть [технической документации](README.md). Описание соответствует `aqua-server` 1.2.0-4 и версии протокола `v1`.
 
 Ретранслятор (`aqua-server`) предоставляет HTTP API и канал WebSocket. Клиент Aquamarine работает только через них, поэтому API позволяет написать совместимый клиент, бота или инструмент администрирования.
 
@@ -244,9 +244,12 @@
 
 | Метод и путь | Доступ | Тело | Ответ |
 |---|---|---|---|
-| `POST /v1/users/signup` | сеанс | `{"username", "password", "display_name"?, "invite"?}` | `204`; имя занято — `409` |
-| `POST /v1/users/signin` | сеанс | `{"username", "password", "device_name"?, "totp"?, "recovery"?}` | `{"username"}` |
+| `POST /v1/users/signup` | сеанс | `{"username", "password", "display_name"?, "invite"?, "tg_ticket"?}` | `204`; имя занято — `409` |
+| `POST /v1/users/signin` | сеанс | `{"username", "password", "device_name"?, "totp"?, "recovery"?, "tg_ticket"?}` | `{"username"}` |
 | `GET /v1/me/backup` | сеанс | — | Резервная копия учётной записи (для её устройства); `404` — нет |
+| `POST /v1/auth/tg/start` | открытый | — | `{"code", "link", "bot"}` — вход через Telegram; бота нет — `404` ([accounts.md](accounts.md)) |
+| `POST /v1/auth/tg/poll` | открытый | `{"code"}` | `{"done": false}` или `{"done": true, "ticket", "name"}` |
+| `POST /v1/me/tg` / `DELETE /v1/me/tg` | сеанс | `{"ticket"}` / — | Привязать / отвязать Telegram → `{"lock", "totp", "backup_left", "tg"}` |
 | `POST /v1/me/pass` | сеанс | — | `{"pass", "expires", "home"}` — пропуск на приватный сервер сети, 10 минут, один раз; сервер не в сети — `409` ([federation.md](federation.md), раздел 5) |
 | `POST /v1/users/register` | сеанс | `{"ticket", "username", "password", "display_name", "about", "phone"}` | `204` (вход по почте, до 1.2.0-1) |
 | `POST /v1/users/login` | сеанс | `{"ticket", "password", "device_name", "totp"?, "recovery"?}` | `{"username"}` |
