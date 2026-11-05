@@ -2511,4 +2511,10 @@ export const RU: Record<string, string> = {
   "@{u} started their device list over: all the old devices are gone. If you didn't expect this, compare the safety code with them.": "@{u} начал список устройств заново: все старые устройства пропали. Если вы этого не ждали — сверьте с ним код безопасности.",
   "A device of @{u} that their own devices didn't approve was ignored ({why}).": "Устройство @{u}, которое не подтвердили его же устройства, проигнорировано ({why}).",
   "from your server": "с вашего сервера",
+  "Your own server": "Свой сервер",
+  "The server is an app of its own now: Aquamarine Server. Install it on the computer or phone that will host — it starts the server when it opens, shows the addresses to give your friends and the admin panel. Messages stay end-to-end encrypted: the server only passes sealed envelopes along.": "Сервер теперь отдельное приложение — Aquamarine Server. Поставьте его на компьютер или телефон, который будет сервером: при открытии он запускает сервер, показывает адреса для друзей и панель администратора. Сообщения остаются со сквозным шифрованием: сервер лишь передаёт запечатанные конверты.",
+  "Had the server running inside this app before? Aquamarine Server on this computer takes its data folder by itself — every account stays.": "Раньше запускали сервер внутри этого приложения? Aquamarine Server на этом компьютере сам подхватит его папку данных — все аккаунты сохранятся.",
+  "Download Aquamarine Server": "Скачать Aquamarine Server",
+  "Open with the smiley in the message box. Import any Telegram sticker or emoji pack with +, and hold a sticker or GIF in a chat to save it.": "Откройте смайликом в поле ввода. Любой набор стикеров или эмодзи из Telegram импортируется кнопкой +, а чтобы сохранить стикер или GIF из чата — зажмите его.",
+  "Off: Enter makes a newline, the send button sends": "Выключено: Enter — новая строка, отправка — кнопкой",
 };

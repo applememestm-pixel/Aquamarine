@@ -12,6 +12,8 @@ members = [
 # inside `crates/aqua-client-ui/`.
 exclude = [
     "crates/aqua-client-ui",
+    # The server as its own app (Tauri, like the client): built from inside it.
+    "crates/aqua-server-app",
 ]
 
 [workspace.package]

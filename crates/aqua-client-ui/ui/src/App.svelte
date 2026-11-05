@@ -150,11 +150,6 @@
         void import("./lib/notify").then((n) => n.ensureNotifyPermission(true));
       }
     } catch { /* storage blocked */ }
-    // "Server on this device" was on: bring the relay back with the app.
-    try {
-      const port = Number(localStorage.getItem("aqua.hostRelay") || 0);
-      if (port) void import("@tauri-apps/api/core").then((c) => c.invoke("relay_host_start", { port })).catch((e) => console.warn("[aqua] relay host:", e));
-    } catch { /* storage blocked */ }
     startPlanner();
     startWorkspace();
     startCapsules();

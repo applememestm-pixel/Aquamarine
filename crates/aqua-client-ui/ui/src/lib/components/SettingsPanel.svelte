@@ -5,6 +5,7 @@
 
 <script lang="ts">
   import Select from "./Select.svelte";
+  import { IS_MOBILE, IS_DESKTOP } from "../platform";
   import { secretary } from "../botHelpers";
   import Donut from "./Donut.svelte";
   import { LINKS } from "../links";
@@ -103,7 +104,7 @@
     [
       { id: "account", label: "Account & server", color: "#007AFF", icon: ic(`<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>`) },
       { id: "network", label: "Network & proxy", color: "#5856D6", icon: ic(`<circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20"/><path d="M12 2a15 15 0 0 0 0 20"/>`) },
-      { id: "host", label: "Server on this device", color: "#00C7BE", icon: ic(`<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><line x1="7" y1="6.5" x2="7.01" y2="6.5"/><line x1="7" y1="17.5" x2="7.01" y2="17.5"/><path d="M14 6.5h3M14 17.5h3"/>`) },
+      { id: "host", label: "Your own server", color: "#00C7BE", icon: ic(`<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><line x1="7" y1="6.5" x2="7.01" y2="6.5"/><line x1="7" y1="17.5" x2="7.01" y2="17.5"/><path d="M14 6.5h3M14 17.5h3"/>`) },
       { id: "nearby", label: "Without internet", color: "#0A84FF", icon: ic(`<path d="M7 7l10 10-5 5V2l5 5L7 17"/>`) },
       { id: "backups", label: "Backups", color: "#30B0C7", icon: ic(`<path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/><path d="M22 2v6h-6"/>`) },
       { id: "bots", label: "Bots", color: "#00C7BE", icon: ic(`<rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4"/><circle cx="12" cy="3" r="1"/><line x1="9" y1="13" x2="9.01" y2="13"/><line x1="15" y1="13" x2="15.01" y2="13"/>`) },
@@ -117,7 +118,8 @@
   ];
   /** Sections for experienced users: shown under "Advanced settings". */
   const ADVANCED = new Set<string>(["ghost", "power", "window", "network", "host", "bots", "shortcuts", "advanced"]);
-  const shown = (x: Item) => !((x.id === "shortcuts" || x.id === "window") && (phone || TOUCH));
+  // Computer-only sections never show on a phone (and nothing phone-only on a PC).
+  const shown = (x: Item) => !((x.id === "shortcuts" || x.id === "window") && IS_MOBILE);
   const BASIC_GROUPS = GROUPS.map((g) => g.filter((x) => !ADVANCED.has(x.id))).filter((g) => g.length);
   const ADVANCED_ITEMS = GROUPS.flat().filter((x) => ADVANCED.has(x.id));
   const SECTIONS = GROUPS.flat().filter((x) => x.id !== "profile" && x.id !== "shortcuts") as (Item & { id: Sec })[];
@@ -341,125 +343,12 @@
     catch (e) { showToast(String(e)); }
   }
   $effect(() => { if ($settingsOpen && section === "devices") void loadDevices(); });
-  // ---- Server on this device: the relay inside the app ----
-  type HostStatus = { running: boolean; port: number; lan_url: string | null; public_url: string | null; admin_url: string | null; dir: string; dir_chosen?: boolean; error: string | null; background: boolean };
-  let host = $state<HostStatus | null>(null);
-  let hostBusy = $state(false);
-  let hostPort = $state(7777);
   const invoke = async <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => (await import("@tauri-apps/api/core")).invoke<T>(cmd, args);
-  async function hostRefresh() { try { host = await invoke<HostStatus>("relay_host_status"); } catch (e) { host = null; } }
-  async function hostToggle() {
-    hostBusy = true;
-    try {
-      host = await invoke<HostStatus>(host?.running ? "relay_host_stop" : "relay_host_start", host?.running ? {} : { port: hostPort });
-      try { localStorage.setItem("aqua.hostRelay", host.running ? String(host.port) : ""); } catch { /* ignore */ }
-    } catch (e) { showToast(String(e)); await hostRefresh(); }
-    hostBusy = false;
-  }
-
-  // ---- Data and storage (Telegram's "Download path" + "Local storage") ----
-  type StConf = { mode: "default" | "temp" | "custom"; custom: string; total_mb: number; cache_mb: number; max_days: number };
-  type StInfo = { conf: StConf; downloads: string; default_dir: string; temp_dir: string };
-  type StStats = { images: number; videos: number; audio: number; stickers: number; files: number; cache: number; count: number };
-  let st = $state<StInfo | null>(null);
-  let stStats = $state<StStats | null>(null);
-  let stPick = $state<Record<string, boolean>>({ images: true, videos: true, audio: true, stickers: true, files: true, cache: true });
-  let stBusy = $state(false);
-  type TRow = { chat: string; name: string; bytes: number; count: number };
-  type Traffic = { received: Record<string, TRow[]>; sent: Record<string, TRow[]> };
-  let stTx = $state<Traffic | null>(null);
-  let stOpen = $state<{ side: "rx" | "tx"; kind: string } | null>(null);
-  const sumOf = (rows: TRow[] | undefined) => (rows ?? []).reduce((n, r) => n + r.bytes, 0);
-  const stTxTotal = $derived(stTx ? Object.values(stTx.sent).reduce((n, rows) => n + sumOf(rows), 0) : 0);
-  async function stLoad() {
-    try { st = await invoke<StInfo>("storage_get"); stStats = await invoke<StStats>("storage_stats"); stTx = await invoke<Traffic>("storage_traffic"); } catch (e) { console.warn(e); }
-  }
-  async function stSave(patch: Partial<StConf>) {
-    if (!st) return;
-    try { st = await invoke<StInfo>("storage_set", { conf: { ...st.conf, ...patch } }); await invoke("storage_trim"); stStats = await invoke<StStats>("storage_stats"); }
-    catch (e) { showToast(String(e)); }
-  }
-  async function stPickFolder() {
-    const p = await pickFolder(tr("Folder for downloaded files"));
-    if (p) await stSave({ mode: "custom", custom: p });
-  }
-  async function stClear() {
-    const kinds = Object.keys(stPick).filter((k) => stPick[k]);
-    if (!kinds.length) return;
-    const ok = await askConfirm({ title: tr("Clear {size}?", { size: fmtBytes(stSelected) }), text: tr("The files are deleted from this device only. In chats they can be downloaded again while the server keeps them."), ok: tr("Clear"), danger: true });
-    if (!ok) return;
-    stBusy = true;
-    try { const n = await invoke<number>("storage_clear", { kinds }); showToast(tr("Freed {size}", { size: fmtBytes(n) })); await stLoad(); }
-    catch (e) { showToast(String(e)); }
-    stBusy = false;
-  }
-  const ST_KINDS = [
-    { id: "images", label: "Images", color: "#4FA3FF" },
-    { id: "videos", label: "Videos", color: "#B66BFF" },
-    { id: "audio", label: "Music & voice", color: "#3DDC97" },
-    { id: "stickers", label: "Stickers & GIFs", color: "#FF9F43" },
-    { id: "files", label: "Files", color: "#FF6B8B" },
-    { id: "cache", label: "Media cache", color: "#8E8E93" },
-  ] as const;
-  const stTotal = $derived(stStats ? ST_KINDS.reduce((n, k) => n + stStats![k.id], 0) : 0);
-  const stSelected = $derived(stStats ? ST_KINDS.reduce((n, k) => n + (stPick[k.id] ? stStats![k.id] : 0), 0) : 0);
-  /** Donut segments: [offset, length, colour] on a circle of length 100. */
-  const stArcs = $derived.by(() => {
-    if (!stStats || !stTotal) return [] as { off: number; len: number; color: string }[];
-    let off = 0;
-    return ST_KINDS.filter((k) => stStats![k.id] > 0).map((k) => { const len = (stStats![k.id] / stTotal) * 100; const a = { off, len, color: k.color }; off += len; return a; });
-  });
-  function fmtBytes(n: number): string {
-    if (n < 1024) return `${n} B`;
-    if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`;
-    if (n < 1073741824) return `${(n / 1048576).toFixed(1)} MB`;
-    return `${(n / 1073741824).toFixed(2)} GB`;
-  }
-  $effect(() => { if ($settingsOpen && section === "storage") void stLoad(); });
-  async function exportChats() {
-    try {
-      const { save } = await import("@tauri-apps/plugin-dialog");
-      const dest = await save({ defaultPath: `aquamarine-${$info?.username ?? "chats"}-${new Date().toISOString().slice(0, 10)}.json`, filters: [{ name: "JSON", extensions: ["json"] }] });
-      if (!dest) return;
-      const n = await invoke<number>("export_chats", { dest });
-      showToast(tr("Exported: {size}", { size: fmtBytes(n) }));
-    } catch (e) { showToast(String(e)); }
-  }
-  function setAutoDl(k: "private" | "groups" | "channels" | "limitMb", v: boolean | number) {
-    settings.update((x) => ({ ...x, autoDl: { ...AUTODL_DEFAULT, ...(x.autoDl ?? {}), [k]: v } }));
-  }
-  const pw = $derived({ ...POWER_DEFAULT, ...($settings.power ?? {}) });
-  const pwMode = $derived(powerMode($settings));
-  function setPower(k: keyof typeof POWER_DEFAULT, v: boolean) {
-    settings.update((x) => ({ ...x, power: { ...POWER_DEFAULT, ...(x.power ?? {}), [k]: v } }));
-  }
-  // ---- Advanced: launch at start-up ----
-  let autostart = $state(false);
   $effect(() => { if ($settingsOpen && section === "window") void autostartEnabled().then((v) => (autostart = v)); });
   async function toggleAutostart() {
     try { autostart = await setAutostart(!autostart); } catch (e) { showToast(String(e)); }
   }
 
-  /** The server's data folder: chosen on the first start, changeable while it's off. */
-  async function hostSetDir(path: string | null, copy = true) {
-    if (path === null) return;
-    try { host = await invoke<HostStatus>("relay_host_set_dir", { path, copy }); showToast(tr("Server data folder: {p}", { p: host.dir })); }
-    catch (e) { showToast(String(e)); }
-  }
-  async function hostPickDir() {
-    const p = await pickFolder(tr("Folder for the server's data"));
-    if (p) await hostSetDir(p.replace(/[\\/]+$/, "") + (/[\\/]Aquamarine Server$/i.test(p) ? "" : (p.includes("\\") ? "\\" : "/") + "Aquamarine Server"));
-  }
-  async function hostCopy(u: string | null) {
-    if (!u) return;
-    try { await navigator.clipboard.writeText(u); showToast(tr("Copied")); } catch { showToast(u); }
-  }
-  $effect(() => {
-    if (!($settingsOpen && section === "host")) return;
-    void hostRefresh();
-    const id = setInterval(hostRefresh, 5000);
-    return () => clearInterval(id);
-  });
   let meshBusy = $state(false);
   $effect(() => { if ($settingsOpen && section === "nearby") void refreshMesh(); });
   async function devRemove(d: DeviceInfo) {
@@ -1052,7 +941,7 @@
               <span class="switch" class:on={!!$lockConf?.bio}></span>
             </button>
           {/if}
-          <div class="info-row"><span class="v">{$t("Ctrl+L locks the app any time.")}</span>
+          <div class="info-row">{#if IS_DESKTOP}<span class="v">{$t("Ctrl+L locks the app any time.")}</span>{/if}
             <button class="mini-btn" onclick={() => { closeSettings(); lockNow(); }}>{$t("Lock now")}</button>
             <button class="mini-btn" onclick={() => { lockConf.set(null); passcodeSetupOpen.set(true); }}>{$t("Change")}</button>
           </div>
@@ -1238,7 +1127,11 @@
       <section class="group">
         <div class="label">{$t("Panel")}</div>
         <div class="foot-note">
-          {$t("Open with the smiley in the message box or")} <b>{$t("Ctrl+E")}</b>{$t(". Drop GIF / PNG / TGS files onto the panel to add them, import any Telegram sticker or emoji pack from")} <b>+</b>{$t(", and right-click a sticker or GIF in a chat to save it.")}
+          {#if IS_DESKTOP}
+            {$t("Open with the smiley in the message box or")} <b>{$t("Ctrl+E")}</b>{$t(". Drop GIF / PNG / TGS files onto the panel to add them, import any Telegram sticker or emoji pack from")} <b>+</b>{$t(", and right-click a sticker or GIF in a chat to save it.")}
+          {:else}
+            {$t("Open with the smiley in the message box. Import any Telegram sticker or emoji pack with +, and hold a sticker or GIF in a chat to save it.")}
+          {/if}
         </div>
       </section>
       {/if}
@@ -1526,7 +1419,7 @@
           </div>
         {/each}
       </section>
-      {#if phone}
+      {#if IS_MOBILE}
       <section class="group">
         <div class="label">{$t("Glass panels")}</div>
         <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, glass: !x.glass }))}>
@@ -1568,7 +1461,7 @@
             <button class="switch-btn" onclick={() => toggleAttachFront(it.id)} aria-label={$t("Right away")}><span class="switch" class:on={front}></span></button>
           </div>
         {/each}
-        {#if phone}
+        {#if IS_MOBILE}
           <button class="toggle-row" onclick={() => attachDock.update((v) => !v)}>
             <div class="tr-text"><div class="tr-title">{$t("Floating action bar")}</div><div class="tr-sub">{$t("On phones the actions float at the bottom; off — they sit in the sheet under the gallery")}</div></div>
             <span class="switch" class:on={$attachDock}></span>
@@ -1632,7 +1525,7 @@
         <button class="toggle-row" onclick={() => toggle("enterToSend")}>
           <div class="tr-text">
             <div class="tr-title">{$t("Enter to send")}</div>
-            <div class="tr-sub">{$t("Off: Enter makes a newline, Ctrl/⌘+Enter sends")}</div>
+            <div class="tr-sub">{IS_DESKTOP ? $t("Off: Enter makes a newline, Ctrl/⌘+Enter sends") : $t("Off: Enter makes a newline, the send button sends")}</div>
           </div>
           <span class="switch" class:on={$settings.enterToSend}></span>
         </button>
@@ -2100,46 +1993,13 @@
 
       {#if section === "host"}
       <section class="group">
-        <div class="label">{$t("Your own server, right here")}</div>
-        <div class="bots-note">{$t("This device becomes an Aquamarine server: you and your friends sign in to its address. Messages stay end-to-end encrypted — the server only passes sealed envelopes along. Keep the device on and connected; on a phone a notification shows while it runs.")}</div>
-        <button class="bot-link" onclick={() => void api.openExternal("https://applememestm-pixel.github.io/Aquamarine/docs.html?d=self-hosting")}>{$t("Step by step: friends from the internet, the router, what to do without a public IP ›")}</button>
-        {#if host && host.dir_chosen === false && !host.running}
-          <div class="host-first">
-            <b>{$t("Where should the server keep its data?")}</b>
-            <span>{$t("Accounts, encrypted files and settings of the server go to one folder. You can move it later.")}</span>
-            <div class="host-first-btns">
-              <button class="mini-btn primary" onclick={() => hostSetDir("", false)}>{$t("In the app's folder")}</button>
-              {#if !PHONE_UI}<button class="mini-btn" onclick={hostPickDir}>{$t("Choose a folder…")}</button>{/if}
-            </div>
-            <code class="host-dir">{host.dir}</code>
-          </div>
-        {/if}
-        <button class="toggle-row" disabled={hostBusy || (host?.dir_chosen === false && !host?.running)} onclick={hostToggle}>
-          <div class="tr-text">
-            <div class="tr-title">{$t("Run the server")}</div>
-            <div class="tr-sub">{hostBusy ? "…" : host?.running ? $t("Running on port {p}.", { p: host.port }) : host?.error ? host.error : $t("Off.")}</div>
-          </div>
-          <span class="switch" class:on={host?.running}></span>
-        </button>
-        {#if !host?.running}
-          <label class="host-port">{$t("Port")} <input class="txt" type="number" min="1024" max="65535" bind:value={hostPort} /></label>
-        {/if}
-        {#if host && host.dir_chosen !== false}
-          <div class="host-addr"><span>{$t("Data folder")}</span><code title={host.dir}>{host.dir}</code>
-            {#if !PHONE_UI}<button class="mesh-btn" disabled={host.running} title={host.running ? $t("Stop the server first") : ""} onclick={hostPickDir}>{$t("Change…")}</button>{/if}
-          </div>
-          {#if !PHONE_UI && !host.running}<div class="bots-note">{$t("Changing it copies the server's data to the new folder; the old one stays until you delete it.")}</div>{/if}
-        {/if}
-      </section>
-      {#if host?.running}
-      <section class="group">
-        <div class="label">{$t("Addresses")}</div>
-        <div class="host-addr"><span>{$t("Same Wi-Fi")}</span><code>{host.lan_url ?? "—"}</code><button class="mesh-btn" onclick={() => hostCopy(host?.lan_url ?? null)}>{$t("Copy")}</button></div>
-        <div class="host-addr"><span>{$t("Internet")}</span><code>{host.public_url ?? $t("looking it up…")}</code><button class="mesh-btn" onclick={() => hostCopy(host?.public_url ?? null)} disabled={!host.public_url}>{$t("Copy")}</button></div>
-        <div class="bots-note">{$t("The internet address works once the router forwards TCP port {p} to this device (and the provider gives you a white IP). On a phone, mobile networks almost never allow it — use Wi-Fi.", { p: host.port })}</div>
-        {#if host.admin_url}
-          <button class="bot-btn" onclick={() => void api.openExternal(host!.admin_url!).catch(() => hostCopy(host?.admin_url ?? null))}>{$t("Open the admin panel")}</button>
-        {/if}
+        <div class="label">{$t("Your own server")}</div>
+        <div class="bots-note">{$t("The server is an app of its own now: Aquamarine Server. Install it on the computer or phone that will host — it starts the server when it opens, shows the addresses to give your friends and the admin panel. Messages stay end-to-end encrypted: the server only passes sealed envelopes along.")}</div>
+        <div class="bots-note">{$t("Had the server running inside this app before? Aquamarine Server on this computer takes its data folder by itself — every account stays.")}</div>
+        <div class="bot-actions">
+          <button class="bot-btn primary" onclick={() => void api.openExternal("https://github.com/applememestm-pixel/Aquamarine/releases/latest")}>{$t("Download Aquamarine Server")}</button>
+          <button class="bot-link" onclick={() => void api.openExternal("https://applememestm-pixel.github.io/Aquamarine/docs.html?d=self-hosting")}>{$t("Step by step: friends from the internet, the router, what to do without a public IP ›")}</button>
+        </div>
       </section>
       {/if}
       {/if}

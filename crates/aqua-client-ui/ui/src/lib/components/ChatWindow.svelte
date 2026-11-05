@@ -47,6 +47,7 @@
   import { meshStatus, meshSyncNow, nearbyVia } from "../mesh";
   import { noShare, setNoShare, startNoShare } from "../noShare";
   import { isLive, livePlay } from "../liveMotion";
+  import { IS_DESKTOP, IS_MOBILE } from "../platform";
   import Welcome from "./Welcome.svelte";
   import { settings } from "../theme";
   import { api, assetUrl, sendChatControl } from "../tauri";
@@ -1213,7 +1214,8 @@
     { cmd: "unflip", desc: "┬─┬ノ( º _ ºノ)", run: () => replaceText("┬─┬ノ( º _ ºノ) ") },
     { cmd: "lenny", desc: "( ͡° ͜ʖ ͡°)", run: () => replaceText("( ͡° ͜ʖ ͡°) ") },
     { cmd: "spoiler", desc: $t("Hidden text: ||like this||"), run: () => replaceText("||") },
-    { cmd: "help", desc: $t("Keyboard shortcuts and formatting"), run: () => { text = ""; shortcutsOpen.set(true); } },
+    // Keyboard shortcuts are a computer thing: no /help on phones.
+    ...(IS_DESKTOP ? [{ cmd: "help", desc: $t("Keyboard shortcuts and formatting"), run: () => { text = ""; shortcutsOpen.set(true); } }] : []),
   ].concat($pluginCommands.map((c) => ({ cmd: c.cmd, desc: "🧩 " + (c.desc || c.plugin), run: () => replaceText(`/${c.cmd} `) })))
     // A plugin can't take a built-in command's name, nor two plugins one name.
     .filter((c, i, all) => all.findIndex((x) => x.cmd === c.cmd) === i));
@@ -4131,7 +4133,7 @@
                   {/each}
                 </div>
               {/if}
-              {#if !$attachDock}<div class="ap-inline">{@render attachActions()}</div>{/if}
+              {#if !(IS_MOBILE && $attachDock)}<div class="ap-inline">{@render attachActions()}</div>{/if}
               <div class="ap-gallery">
                 <button class="ap-tile ap-pick" onclick={() => { attachMenuOpen = false; pickAndSendFile("media"); }}>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>
@@ -4153,7 +4155,7 @@
               {@render attachActions()}
             {/if}
           </div>
-          {#if phoneUI && $attachDock}
+          {#if phoneUI && IS_MOBILE && $attachDock}
             <!-- Phones: the actions as a floating tab bar, the send button above it. -->
             <div class="ap-dock" class:closing={sheetClosing}>{@render attachActions()}</div>
             {#if gallerySel.length}

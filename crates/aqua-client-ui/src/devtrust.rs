@@ -192,7 +192,6 @@ pub struct TrustView {
     pub this: String,
 }
 
-#[tauri::command]
 /// Bring my signed device list (devlists.rs) up to date with the devices I
 /// approved — in the background, an older relay just says no.
 fn republish(app: &AppHandle) {
@@ -204,6 +203,7 @@ fn republish(app: &AppHandle) {
     });
 }
 
+#[tauri::command]
 pub fn device_trust(state: State<'_, StdMutex<AppState>>) -> Result<TrustView, String> {
     let s = state.lock().map_err(|e| e.to_string())?;
     let t = load(&s);

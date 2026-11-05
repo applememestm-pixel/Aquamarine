@@ -11,6 +11,7 @@
   import { mediaKind, tgsSnapshot } from "./AnimatedMedia.svelte";
   import { askInput } from "./InputPrompt.svelte";
   import { tr } from "../i18n";
+  import { kbd } from "../platform";
   import { fmtDate, dateToken } from "../markup";
 
   interface Props {
@@ -407,17 +408,17 @@
 {#if fmtBar}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div use:portal class="fmt-bar" class:below={fmtBar.below} style={`left:${fmtBar.x}px; top:${fmtBar.y}px;`} onmousedown={(e) => e.preventDefault()}>
-    <button title={tr("Bold") + " (Ctrl+B)"} onclick={() => format("b")}><b>B</b></button>
-    <button title={tr("Italic") + " (Ctrl+I)"} onclick={() => format("i")}><i>I</i></button>
-    <button title={tr("Underline") + " (Ctrl+U)"} onclick={() => format("u")}><u>U</u></button>
-    <button title={tr("Strikethrough") + " (Ctrl+Shift+X)"} onclick={() => format("s")}><s>S</s></button>
-    <button title={tr("Spoiler") + " (Ctrl+Shift+P)"} onclick={() => format("spoiler")} class="sp">▒</button>
-    <button title={tr("Monospace") + " (Ctrl+Shift+M)"} onclick={() => format("code")} class="mono">&lt;/&gt;</button>
-    <button title={tr("Quote") + " (Ctrl+Shift+.)"} onclick={() => format("quote")}>❝</button>
-    <button title={tr("Link") + " (Ctrl+K)"} onclick={() => format("link")}>🔗</button>
+    <button title={tr("Bold") + kbd("Ctrl+B")} onclick={() => format("b")}><b>B</b></button>
+    <button title={tr("Italic") + kbd("Ctrl+I")} onclick={() => format("i")}><i>I</i></button>
+    <button title={tr("Underline") + kbd("Ctrl+U")} onclick={() => format("u")}><u>U</u></button>
+    <button title={tr("Strikethrough") + kbd("Ctrl+Shift+X")} onclick={() => format("s")}><s>S</s></button>
+    <button title={tr("Spoiler") + kbd("Ctrl+Shift+P")} onclick={() => format("spoiler")} class="sp">▒</button>
+    <button title={tr("Monospace") + kbd("Ctrl+Shift+M")} onclick={() => format("code")} class="mono">&lt;/&gt;</button>
+    <button title={tr("Quote") + kbd("Ctrl+Shift+.")} onclick={() => format("quote")}>❝</button>
+    <button title={tr("Link") + kbd("Ctrl+K")} onclick={() => format("link")}>🔗</button>
     <button title={tr("Date — everyone sees it in their own time zone")} onclick={pickDate}>📅</button>
     <span class="fsep"></span>
-    <button title={tr("Clear formatting") + " (Ctrl+Shift+N)"} onclick={() => format("clear")}>⌫</button>
+    <button title={tr("Clear formatting") + kbd("Ctrl+Shift+N")} onclick={() => format("clear")}>⌫</button>
   </div>
 {/if}
 

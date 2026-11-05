@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Aquamarine Server</title>
+<style>
+  :root {
+    --bg: #06070C; --card: #0E121B; --line: #1E2533; --fg: #E8EEF7; --dim: #8A96A8;
+    --accent: #2EE6C5; --accent2: #6C8CFF; --bad: #FF6B81; --warn: #F0B232;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 12px; padding: calc(12px + env(safe-area-inset-top)) 16px 12px; border-bottom: 1px solid var(--line); }
+  header .logo { width: 34px; height: 34px; border-radius: 10px; background: linear-gradient(135deg, var(--accent), var(--accent2)); display: grid; place-items: center; font-weight: 800; color: #06070C; }
+  header h1 { margin: 0; font-size: 16px; font-weight: 800; flex: 1; }
+  .state { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; font-size: 13px; color: var(--dim); }
+  .state i { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); }
+  .state.on { color: var(--accent); } .state.on i { background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+  .state.err { color: var(--bad); } .state.err i { background: var(--bad); }
+  main { flex: 1; min-height: 0; display: grid; grid-template-columns: 340px 1fr; }
+  aside { padding: 16px; overflow-y: auto; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 12px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .card h2 { margin: 0; font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--dim); }
+  .addr { display: flex; flex-direction: column; gap: 2px; }
+  .addr b { font-size: 12px; color: var(--dim); font-weight: 600; }
+  .addr .row { display: flex; align-items: center; gap: 8px; }
+  .addr code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 13px ui-monospace, SFMono-Regular, Consolas, monospace; color: var(--fg); user-select: all; }
+  button { font: inherit; cursor: pointer; border-radius: 10px; border: 1px solid var(--line); background: #151B27; color: var(--fg); padding: 8px 12px; font-weight: 600; }
+  button:hover { border-color: #33405A; }
+  button.primary { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #06070C; border: none; }
+  button.danger { color: var(--bad); }
+  button.mini { padding: 4px 9px; font-size: 12px; }
+  button:disabled { opacity: .5; cursor: default; }
+  .row2 { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  input[type=number] { width: 96px; background: #0A0D14; border: 1px solid var(--line); color: var(--fg); border-radius: 9px; padding: 7px 9px; font: inherit; }
+  .note { font-size: 12px; color: var(--dim); }
+  .err { font-size: 12.5px; color: var(--bad); }
+  .dir { font: 12px ui-monospace, Consolas, monospace; word-break: break-all; color: var(--fg); }
+  label.sw { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; }
+  label.sw input { width: 36px; height: 20px; accent-color: var(--accent); }
+  .panel { position: relative; min-height: 0; }
+  .panel iframe { width: 100%; height: 100%; border: 0; background: var(--bg); }
+  .panel .empty { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; color: var(--dim); padding: 24px; }
+  a { color: var(--accent); }
+  @media (max-width: 820px) {
+    main { grid-template-columns: 1fr; overflow-y: auto; }
+    aside { border-right: 0; overflow: visible; }
+    .panel { height: 80vh; border-top: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">A</div>
+  <h1>Aquamarine Server</h1>
+  <span class="state" id="state"><i></i><span id="stateText">…</span></span>
+</header>
+<main>
+  <aside>
+    <div class="card">
+      <h2 data-t="Connect to it">Connect to it</h2>
+      <div class="addr" id="aLan"><b data-t="Phones and computers on this Wi-Fi">Phones and computers on this Wi-Fi</b><div class="row"><code id="lan">—</code><button class="mini" data-copy="lan" data-t="Copy">Copy</button></div></div>
+      <div class="addr" id="aPub"><b data-t="From the internet">From the internet</b><div class="row"><code id="pub">—</code><button class="mini" data-copy="pub" data-t="Copy">Copy</button></div></div>
+      <div class="addr"><b data-t="This device">This device</b><div class="row"><code id="loc">—</code><button class="mini" data-copy="loc" data-t="Copy">Copy</button></div></div>
+      <div class="note" data-t="hint">In Aquamarine: sign-in window → Server → paste the address. Friends outside your Wi-Fi need the internet address: the port forwarded on the router, or a VPS.</div>
+      <a href="#" id="guide" data-t="Step by step: router, public IP, what to do without one">Step by step: router, public IP, what to do without one</a>
+    </div>
+    <div class="card">
+      <h2 data-t="Server">Server</h2>
+      <div class="row2">
+        <button class="primary" id="toggle">…</button>
+        <span class="note" data-t="Port">Port</span>
+        <input type="number" id="port" min="1024" max="65535" />
+        <button class="mini" id="portSave" data-t="Apply">Apply</button>
+      </div>
+      <div class="err" id="err" hidden></div>
+      <button class="mini" id="adminWin" hidden data-t="Admin panel in its own window">Admin panel in its own window</button>
+    </div>
+    <div class="card" id="dataCard">
+      <h2 data-t="Data folder">Data folder</h2>
+      <div class="dir" id="dir">—</div>
+      <div class="note" data-t="dataNote">Accounts, encrypted files and settings. The console server uses the same folder — switching to the app keeps everyone's accounts.</div>
+      <div class="row2" id="dirBtns">
+        <button class="mini" id="useDir" data-t="Use another folder…">Use another folder…</button>
+        <button class="mini" id="moveDir" data-t="Move the data to…">Move the data to…</button>
+      </div>
+    </div>
+    <div class="card" id="sysCard">
+      <h2 data-t="This computer">This computer</h2>
+      <label class="sw"><span data-t="Start with the system">Start with the system</span><input type="checkbox" id="auto" /></label>
+      <label class="sw"><span data-t="Keep running when the window is closed">Keep running when the window is closed</span><input type="checkbox" id="tray" /></label>
+    </div>
+    <div class="card" id="mobCard" hidden>
+      <div class="note" data-t="mobNote">The server keeps running with the screen off — Android shows a notification. If the phone closes it anyway: Settings → Apps → Aquamarine Server → Battery → Unrestricted.</div>
+    </div>
+  </aside>
+  <section class="panel">
+    <iframe id="admin" title="Admin panel" hidden></iframe>
+    <div class="empty" id="adminEmpty" data-t="The admin panel appears here when the server is running.">The admin panel appears here when the server is running.</div>
+  </section>
+</main>
+<script>
+  const RU = /^ru|^uk|^be/i.test(navigator.language || "");
+  const T = {
+    "Connect to it": "Как подключиться", "Phones and computers on this Wi-Fi": "Телефоны и компьютеры в этой Wi-Fi", "From the internet": "Из интернета",
+    "This device": "Это устройство", "Copy": "Копировать", "Copied": "Скопировано",
+    "hint": "В Aquamarine: окно входа → Сервер → вставьте адрес. Друзьям вне вашей Wi-Fi нужен адрес из интернета: проброс порта на роутере или VPS.",
+    "Step by step: router, public IP, what to do without one": "Пошагово: роутер, белый IP, что делать без него",
+    "Server": "Сервер", "Port": "Порт", "Apply": "Применить", "Start": "Запустить", "Stop": "Остановить",
+    "Running": "Работает", "Stopped": "Остановлен", "Error": "Ошибка",
+    "Data folder": "Папка данных", "Use another folder…": "Другая папка…", "Move the data to…": "Перенести данные в…",
+    "dataNote": "Аккаунты, зашифрованные файлы и настройки. Консольный сервер использует ту же папку — при переходе на приложение все аккаунты сохраняются.",
+    "This computer": "Этот компьютер", "Start with the system": "Запускать вместе с системой", "Keep running when the window is closed": "Работать в фоне при закрытом окне",
+    "mobNote": "Сервер работает и с выключенным экраном — Android показывает уведомление. Если телефон всё равно его закрывает: Настройки → Приложения → Aquamarine Server → Батарея → Без ограничений.",
+    "The admin panel appears here when the server is running.": "Когда сервер работает, здесь его панель администратора.",
+    "Admin panel in its own window": "Панель администратора в отдельном окне",
+    "not yet — forward the port on the router": "пока нет — пробросьте порт на роутере", "Stop the server first": "Сначала остановите сервер",
+  };
+  const t = (k) => (RU && T[k]) || k;
+  if (RU) document.querySelectorAll("[data-t]").forEach((e) => { const k = e.getAttribute("data-t"); if (T[k]) e.textContent = T[k]; });
+  const $ = (id) => document.getElementById(id);
+  const invoke = (c, a) => window.__TAURI__.core.invoke(c, a);
+  let st = null, adminSrc = "";
+
+  function show(s) {
+    st = s;
+    const el = $("state");
+    el.className = "state" + (s.running ? " on" : s.error ? " err" : "");
+    $("stateText").textContent = s.running ? t("Running") : s.error ? t("Error") : t("Stopped");
+    $("toggle").textContent = s.running ? t("Stop") : t("Start");
+    $("toggle").className = s.running ? "danger" : "primary";
+    if (document.activeElement !== $("port")) $("port").value = s.port;
+    $("lan").textContent = s.lan_url || "—";
+    $("pub").textContent = s.public_url || (s.running ? t("not yet — forward the port on the router") : "—");
+    $("loc").textContent = s.local_url || "—";
+    $("err").hidden = !s.error; $("err").textContent = s.error || "";
+    $("dir").textContent = s.dir;
+    $("dirBtns").hidden = s.mobile;
+    $("sysCard").hidden = s.mobile;
+    $("mobCard").hidden = !s.mobile;
+    $("adminWin").hidden = s.mobile || !s.running;
+    $("auto").checked = !!s.autostart; $("tray").checked = !!s.tray;
+    if (s.admin_url && s.admin_url !== adminSrc) { adminSrc = s.admin_url; $("admin").src = s.admin_url; }
+    $("admin").hidden = !s.running; $("adminEmpty").hidden = s.running;
+    if (!s.running) adminSrc = "";
+  }
+  async function refresh() { try { show(await invoke("status")); } catch (e) { console.warn(e); } }
+  async function act(p) { $("err").hidden = true; try { show(await p); } catch (e) { $("err").hidden = false; $("err").textContent = String(e); } }
+
+  $("toggle").onclick = () => act(invoke(st?.running ? "stop" : "start", {}));
+  $("portSave").onclick = () => act(invoke("set_port", { port: Number($("port").value) }));
+  $("auto").onchange = (e) => act(invoke("set_autostart", { on: e.target.checked }));
+  $("tray").onchange = (e) => act(invoke("set_tray", { on: e.target.checked }));
+  async function chooseDir(copy) {
+    if (st?.running) { $("err").hidden = false; $("err").textContent = t("Stop the server first"); return; }
+    const p = await invoke("pick_dir");
+    if (p) await act(invoke("set_dir", { path: p, copy }));
+  }
+  $("adminWin").onclick = () => act(invoke("open_admin_window").then(() => invoke("status")));
+  $("useDir").onclick = () => chooseDir(false);
+  $("moveDir").onclick = () => chooseDir(true);
+  document.querySelectorAll("[data-copy]").forEach((b) => b.onclick = async () => {
+    const v = $(b.getAttribute("data-copy")).textContent;
+    if (!/^https?:/.test(v)) return;
+    try { await navigator.clipboard.writeText(v); b.textContent = t("Copied"); setTimeout(() => (b.textContent = t("Copy")), 1500); } catch {}
+  });
+  $("guide").onclick = (e) => { e.preventDefault(); void invoke("open_guide"); };
+  refresh();
+  setInterval(refresh, 3000);
+</script>
+</body>
+</html>

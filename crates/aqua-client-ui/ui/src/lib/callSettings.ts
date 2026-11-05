@@ -3,6 +3,7 @@
  * engine at call time; edited in Settings → Voice & Video.
  */
 import { writable } from "svelte/store";
+import { IS_MOBILE } from "./platform";
 import type { CodecPref, ContentHint, FpsPreset, ResPreset } from "./rtcQuality";
 
 export interface CallSettings {
@@ -81,7 +82,9 @@ const KEY = "aqua.call.v1";
 function load(): CallSettings {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return { ...DEFAULT_CALL_SETTINGS, ...JSON.parse(raw) };
+    // Push-to-talk needs a keyboard: never on a phone, even if a PC's
+    // settings came over with a backup.
+    if (raw) return { ...DEFAULT_CALL_SETTINGS, ...JSON.parse(raw), ...(IS_MOBILE ? { pushToTalk: false } : {}) };
   } catch { /* ignore */ }
   return { ...DEFAULT_CALL_SETTINGS };
 }

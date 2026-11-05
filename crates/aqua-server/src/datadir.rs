@@ -46,7 +46,9 @@ pub fn has_data(dir: &Path) -> bool {
     MARKERS.iter().any(|m| dir.join(m).exists())
 }
 
-fn remembered() -> Option<PathBuf> {
+/// The folder chosen earlier (`server-data.txt`), shared by the console
+/// server and the Aquamarine Server app.
+pub fn remembered() -> Option<PathBuf> {
     let f = config_file()?;
     let s = std::fs::read_to_string(f).ok()?;
     let p = PathBuf::from(s.trim());
