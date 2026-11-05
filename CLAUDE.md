@@ -23,7 +23,7 @@ Aquamarine — мессенджер со сквозным шифрованием
 
 ## Версии и выпуски
 
-- Версия задаётся в `Cargo.toml` → `[workspace.package] version`. Её же меняй в `crates/aqua-client-ui/Cargo.toml`, `tauri.conf.json`, `ui/package.json` (+ `package-lock.json`), `README.md`, `docs/README.md`, `docs/api.md`, `site/index.html`, `.github/ISSUE_TEMPLATE/bug_report.yml`. Lock-файлы обновит `cargo metadata --offline` (по разу на каждый workspace).
+- Версия задаётся в `Cargo.toml` → `[workspace.package] version`. Её же меняй в `crates/aqua-client-ui/Cargo.toml`, `crates/aqua-server-app/Cargo.toml` и `tauri.conf.json` обоих приложений, `ui/package.json` (+ `package-lock.json`), `README.md`, `docs/README.md`, `docs/api.md`, `site/index.html`, `.github/ISSUE_TEMPLATE/bug_report.yml`. Lock-файлы обновит `cargo metadata --offline` (по разу на каждый workspace: корень, клиент, серверное приложение).
 - Когда новая версия попадает в `main`, `autotag.yml` ставит тег `vX.Y.Z` и запускает `release.yml`.
 - **Выпуск или пре-выпуск** задаёт `Cargo.toml` → `[workspace.metadata.aqua] prerelease`:
   - `false` — полноценный выпуск (Latest). Так выпускаются крупные («глобальные») обновления — владелец говорит об этом прямо.
@@ -166,12 +166,19 @@ Aquamarine — мессенджер со сквозным шифрованием
   - Живые фото: категория `live`/`live-loop`/`live-bounce`, `attach_file_as` с этими режимами, `motion_photo_clip`, `has_motion_clip`, `lib/liveMotion.ts::livePlay`, выбор в `SendDialog`.
   - Боты: сервер пускает бот→бот (`b2b:` лимит, `BotUpdate.from_bot`); клиент `lib/botHelpers.ts` — гости по @упоминанию и секретарь (`bot_hand_over`). Секретарь отвечает последнему написавшему — для нескольких людей сразу нужна очередь. Конструктора ботов нет.
 
+- **1.2.0-5** (пре-выпуск) — владелец: «делай все крупные шаги; сервер — отдельным приложением; функции телефона и ПК не смешивать; регаться 1 раз»:
+  - Подписанный список устройств: `aqua-core/src/devlist.rs` (цепочка подписей, `Accepted::{First,Chained,Reset}`), сервер `users.devlist` + `put_devlist` (проверяет подпись, что подписант — устройство учётной записи, версию), клиент `devlists.rs`: `allowed`/`allowed_id` (в `multidev::send_inner` для чужих — по ключу сеанса/пакета, в `fanout` — по id), проверка в `on_incoming_text`, `publish` из `devtrust` (`republish` при старте, раз в 3 мин, после подтверждения/отказа). **Список меняет только устройство, уже стоящее в нём; удаляет устройство из списка, только когда его нет на ретрансляторе.** `dev-lists.json` — принятые списки. Сброс — `devlist_reset`.
+  - Регистрация один раз: пропуск теперь несёт `i` (uid); `signup` с пропуском и пустым @именем → `Directory::register_joined` (то же имя и uid, пароль необязателен), ответ JSON `{username, joined}`. Клиент: `passUserOf` в мастере читает имя из пропуска, `signup_plain` возвращает имя. Тест `a_new_relay_knows_everyone_after_its_first_sync`.
+  - **Aquamarine Server** — `crates/aqua-server-app` (отдельный Cargo workspace, исключён из корневого; страница `ui/index.html` без сборки, `withGlobalTauri`). Запуск при открытии (`server-app.json`: port, dir, run, tray), трей + автозапуск (`--hidden`), Android — `android/AquaServer.kt` (`AquaServerPlugin`/`AquaServerService`, пакет `app.aquamarine.server`). Папка данных: своя → `datadir::remembered()` (общая с консольным) → папка встроенного сервера мессенджера (`app.aquamarine.desktop/relay`) → `~/Aquamarine Server`. Панель администратора — iframe и «в отдельном окне». CI: `release.yml` (`server-app`, `server-app-android`), `checks.yml` (`server-app`), `server-app-android.yml` (APK на PR, если тронут сервер).
+  - Мессенджер: `relay_host.rs` — только Android-плагин (ссылки, виджет, перезапуск); команды `relay_host_*`, автостарт в `App.svelte` и зависимость `aqua-server` удалены. Kotlin-служба `AquaRelayService` в клиенте осталась мёртвым кодом.
+  - ПК/телефон: `lib/platform.ts` (`IS_MOBILE`/`IS_DESKTOP`, `kbd()`). **Функцию одной платформы прячь по `IS_MOBILE`/`IS_DESKTOP`, а не по ширине окна; настройку, пришедшую с другой платформы, гаси при применении** (как `glass` в `theme.ts`, `pushToTalk` в `callSettings.ts`).
+
 ## Открытые вопросы
 
 - Подлагивание при смене чата и «зависание при открытии профиля» (24.10) не воспроизведены: список сообщений уже рисуется окнами по 40. Нужен лог `[aqua-fps]` / `[aqua-click]` с устройства владельца.
 - Отпечаток пальца (`tauri-plugin-biometric`) и сканер QR на Android собраны, но не проверены на живом телефоне.
 - Настоящая демонстрация экрана с Android требует нативного плагина (MediaProjection) — не сделано.
-- Запрет скриншотов в чатах с запретом пересылки (Android FLAG_SECURE) и конструктор ботов без кода — не сделаны. Подписанный список устройств (защита от подмены ключей сервером) — следующий большой шаг.
+- Запрет скриншотов в чатах с запретом пересылки (Android FLAG_SECURE) и конструктор ботов без кода — не сделаны. Серверное приложение и подписанный список устройств проверены только сборкой и тестами — на живых устройствах их ещё никто не запускал.
 - Ретранслятор владельца определял свой белый IP через VPN (195.178.4.x — Франкфурт). С 1.0.61 такой адрес не объявляется; если панель пишет «не ведёт сюда», нужен проброс порта на роутере или выключенный VPN.
 - Стикеры владельца (CeZeOs_NaVeKa, ThatsLife7, …) и эмодзи eltaller47 на сайте — заглушки, пока владелец не запустит `tools/site-packs.sh` на машине с сервером.
 - Домен сайта: DNS верный, но GitHub Pages не выпустил сертификат — владельцу советовали удалить и снова добавить домен в Settings → Pages и включить Enforce HTTPS.

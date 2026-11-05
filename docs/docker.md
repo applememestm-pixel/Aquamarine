@@ -56,7 +56,7 @@ sudo usermod -aG docker "$USER"   # затем выйти и войти снов
 
 ### Android (Termux)
 
-Docker на телефоне не работает. Используйте встроенный сервер приложения: **Настройки → Сервер на устройстве**.
+Docker на телефоне не работает. Поставьте приложение **Aquamarine Server** (`AquamarineServer.apk`, [self-hosting.md](self-hosting.md)).
 
 ## 2. Запустить ретранслятор
 
