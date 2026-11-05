@@ -37,7 +37,8 @@
   import QrCode from "./QrCode.svelte";
   import EmojiStatus from "./EmojiStatus.svelte";
   import { reactionPack, emojiPacks, loadEmojiPacks } from "../reactionPack";
-  import { averageColor, mixHex, patternUrl, PATTERN_EMOJI } from "../cardStyle";
+  import { averageColor, mixHex, patternUrl, PATTERN_EMOJI, cardLook, shellColor, CARD_SWATCHES, CARD_INTENSITY, CARD_LENGTH } from "../cardStyle";
+  import EmojiPick from "./EmojiPick.svelte";
   import { userQr } from "../qr";
   import { gameIds, gameIcons, gameCovers, resolveGame, rememberGame, iconFor, coverFor } from "../games";
 
@@ -231,6 +232,9 @@
     played: { n: string; h: number }[];
     /** Card colour set by hand ("" = from the banner) and banner emoji. */
     card: string;
+    /** How strong the card colour is / how far down it fades (0–100). */
+    card_i: number;
+    card_g: number;
     pattern: string;
     estatus: string;
   }
@@ -255,17 +259,16 @@
   });
   let cardSet = $derived((editing && isMe && draft) ? (draft.card ?? "") : (view?.card ?? ""));
   let cardColor = $derived(cardSet || sampled || mixHex(bannerA, bannerB));
+  let cardI = $derived((editing && isMe && draft) ? (draft.card_i ?? CARD_INTENSITY) : (view?.card_i ?? CARD_INTENSITY));
+  let cardG = $derived((editing && isMe && draft) ? (draft.card_g ?? CARD_LENGTH) : (view?.card_g ?? CARD_LENGTH));
+  const shell = shellColor();
+  /** Background of the whole card and whether its text must be dark. */
+  let look = $derived(cardLook(cardColor, cardI, cardG, shell));
+  let esOpen = $state(false);
+  let patOpen = $state(false);
   let patternEmoji = $derived((editing && isMe && draft) ? (draft.pattern ?? "") : (view?.pattern ?? ""));
   let patternBg = $derived(patternEmoji ? patternUrl(patternEmoji) : "");
   let showQr = $state(false);
-  // Emoji status choices: the bundled pack, then the user's emoji packs.
-  const esChoices = $derived.by(() => {
-    const out = $reactionPack.items.slice(0, 40).map((i) => i.token);
-    for (const p of $emojiPacks) for (const i of p.items.slice(0, 24)) out.push(i.token);
-    if (!out.length) out.push("⭐", "🔥", "💎", "🌸", "🎮", "🎵", "👑", "🦋", "🍀", "🌙", "⚡", "❤️");
-    return out.slice(0, 96);
-  });
-  let patternInput = $state("");
 
   // Now-playing to show on the card: our own when viewing self, else the
   // peer's last-broadcast presence.
@@ -312,6 +315,8 @@
         game_note: (me.game_note ?? "").slice(0, 140),
         played: getStore(shareActivity) ? playedTop(12).map((g) => ({ n: g.name, h: Math.round(g.secs / 360) / 10 })) : [],
         card: me.card ?? "",
+        card_i: me.card_i ?? CARD_INTENSITY,
+        card_g: me.card_g ?? CARD_LENGTH,
         pattern: me.pattern ?? "",
         estatus: me.estatus ?? "",
       };
@@ -349,6 +354,8 @@
       game_note: str(x.game_note).slice(0, 140),
       played: asPlayed(x.played),
       card: /^#[0-9a-f]{6}$/i.test(str(x.card)) ? str(x.card) : "",
+      card_i: typeof x.ci === "number" ? x.ci : CARD_INTENSITY,
+      card_g: typeof x.cg === "number" ? x.cg : CARD_LENGTH,
       pattern: str(x.pattern).slice(0, 16),
       estatus: str(x.es),
     };
@@ -428,7 +435,7 @@
     onclick={onBackdrop}
     onkeydown={(e) => { if (e.target === e.currentTarget && (e.key === "Escape" || e.key === "Enter")) closeProfile(); }}
   >
-    <div class="sheet" data-phone-full class:wide={!editing && !privPage} class:ed={editing && isMe && !!draft} style:--card={cardColor} role="dialog" aria-modal="true" tabindex="-1">
+    <div class="sheet" data-phone-full class:wide={!editing && !privPage} class:ed={editing && isMe && !!draft} class:light={look.light} style:--card={cardColor} style:--card-bg={look.background} style:--card-base={look.base} style:--card-top={look.top} style:--card-line={look.border} role="dialog" aria-modal="true" tabindex="-1">
       <!-- Close stays put; banner + body scroll together, so the avatar is
            never clipped under the banner when the form is long. -->
       <button data-x class="close" onclick={closeProfile} title={$t("Close (Esc)")}>×</button>
@@ -446,8 +453,11 @@
         {/if}
         {#if editing && isMe && draft}
           <div class="banner-tools">
-            <button class="bn-btn" onclick={() => pickImage("banner")} disabled={!!uploading}>{uploading === "banner" ? $t("Uploading…") : shownBanner ? $t("Change banner") : $t("Upload banner")}</button>
-            {#if shownBanner}<button class="bn-btn" onclick={() => removeImage("banner")} disabled={!!uploading}>{$t("Remove")}</button>{/if}
+            <button class="bn-btn" onclick={() => pickImage("banner")} disabled={!!uploading}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+              {uploading === "banner" ? $t("Uploading…") : shownBanner ? $t("Change banner") : $t("Upload banner")}</button>
+            {#if shownBanner}<button class="bn-btn icon" onclick={() => removeImage("banner")} disabled={!!uploading} title={$t("Remove the banner")} aria-label={$t("Remove the banner")}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>{/if}
           </div>
         {/if}
       </div>
@@ -463,7 +473,8 @@
           </div>
           {#if view.online}<span class="presence {view.online}" title={view.online}></span>{/if}
           {#if editing && isMe && draft}
-            <button class="av-edit" onclick={() => pickImage("avatar")} title={$t("Change avatar")} disabled={!!uploading}>{$t(uploading === "avatar" ? "…" : "Change")}</button>
+            <button class="av-edit" onclick={() => pickImage("avatar")} title={$t("Change avatar")} aria-label={$t("Change avatar")} disabled={!!uploading}>
+              {#if uploading === "avatar"}…{:else}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>{/if}</button>
             {#if draft.avatar_url}
               <button class="av-remove" onclick={() => removeImage("avatar")} title={$t("Remove avatar")} disabled={!!uploading}>×</button>
             {/if}
@@ -489,44 +500,62 @@
             <span>{$t("About")}</span>
             <textarea bind:value={draft.about} rows="4" placeholder={$t("Tell people a little about yourself...")}></textarea>
           </label>
-          <div class="row">
-            <label class="field half">
-              <span>{$t("Banner A")}</span>
-              <ColorInput bind:value={draft.banner_a} size={36} />
-            </label>
-            <label class="field half">
-              <span>{$t("Banner B")}</span>
-              <ColorInput bind:value={draft.banner_b} size={36} />
-            </label>
+          <div class="field">
+            <span>{$t("Emoji next to your name")}</span>
+            <div class="es-row">
+              <button class="es-cur" onclick={() => (esOpen = !esOpen)} title={$t("Choose an emoji")} aria-expanded={esOpen}>
+                {#if draft.estatus}<EmojiStatus token={draft.estatus} size={30} />{:else}<span class="es-none">+</span>{/if}
+              </button>
+              <div class="es-txt">
+                <button class="lnk" onclick={() => (esOpen = !esOpen)}>{draft.estatus ? $t("Change") : $t("Choose an emoji")}</button>
+                {#if draft.estatus}<button class="lnk dim" onclick={() => draft && (draft = { ...draft, estatus: "" })}>{$t("Remove")}</button>{/if}
+              </div>
+              {#if esOpen}<EmojiPick value={draft.estatus} onpick={(tok) => draft && (draft = { ...draft, estatus: tok })} onclose={() => (esOpen = false)} />{/if}
+            </div>
+            <small class="es-note">{$t("Any emoji, or one from your emoji and sticker packs. A tap on it shows it big.")}</small>
           </div>
           <div class="field">
             <span>{$t("Card colour")}</span>
-            <div class="card-row">
-              <button class="chip" class:on={!draft.card} onclick={() => draft && (draft = { ...draft, card: "" })}>{$t("From the banner")}</button>
-              <ColorInput value={draft.card || cardColor} size={30} oninput={(v) => draft && (draft = { ...draft, card: v })} />
-            </div>
-          </div>
-          <div class="field">
-            <span>{$t("Emoji next to your name")}</span>
-            <div class="es-pick">
-              <button class="pat" class:on={!draft.estatus} onclick={() => draft && (draft = { ...draft, estatus: "" })} title={$t("None")}>—</button>
-              {#each esChoices as tok (tok)}
-                <button class="pat es-opt" class:on={draft.estatus === tok} onclick={() => draft && (draft = { ...draft, estatus: tok })}><EmojiStatus token={tok} size={22} /></button>
+            <div class="sw-grid">
+              <button class="sw auto" class:on={!draft.card} onclick={() => draft && (draft = { ...draft, card: "" })} title={$t("From the banner")}
+                style:background={sampled || mixHex(draft.banner_a, draft.banner_b)}><span>{$t("Auto")}</span></button>
+              {#each CARD_SWATCHES as c (c)}
+                <button class="sw" class:on={draft.card?.toLowerCase() === c.toLowerCase()} style:background={c} onclick={() => draft && (draft = { ...draft, card: c })} aria-label={c}></button>
               {/each}
+              <span class="sw-own" title={$t("Any colour")}><ColorInput value={draft.card || cardColor} size={30} oninput={(v) => draft && (draft = { ...draft, card: v })} /></span>
             </div>
-            <small class="es-note">{$t("One emoji, animated ones too. Everyone sees it next to your name; the server may limit how often it changes.")}</small>
+            <label class="slider"><span>{$t("Intensity")}</span>
+              <input type="range" min="10" max="100" value={draft.card_i ?? CARD_INTENSITY} oninput={(e) => draft && (draft = { ...draft, card_i: +(e.target as HTMLInputElement).value })} />
+              <b>{draft.card_i ?? CARD_INTENSITY}%</b></label>
+            <label class="slider"><span>{$t("Gradient length")}</span>
+              <input type="range" min="0" max="100" value={draft.card_g ?? CARD_LENGTH} oninput={(e) => draft && (draft = { ...draft, card_g: +(e.target as HTMLInputElement).value })} />
+              <b>{(draft.card_g ?? CARD_LENGTH) === 0 ? $t("solid") : `${draft.card_g ?? CARD_LENGTH}%`}</b></label>
           </div>
           <div class="field">
             <span>{$t("Banner pattern")}</span>
-            <div class="pat-row">
-              <button class="pat" class:on={!draft.pattern} onclick={() => draft && (draft = { ...draft, pattern: "" })} title={$t("No pattern")}>∅</button>
+            <div class="pat-grid">
+              <button class="pat" class:on={!draft.pattern} onclick={() => draft && (draft = { ...draft, pattern: "" })} title={$t("No pattern")}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8"/><path d="M6.5 17.5l11-11"/></svg></button>
               {#each PATTERN_EMOJI as e (e)}
                 <button class="pat" class:on={draft.pattern === e} onclick={() => draft && (draft = { ...draft, pattern: e })}>{e}</button>
               {/each}
-              <input class="pat-own" bind:value={patternInput} maxlength="8" placeholder={$t("Your emoji")}
-                oninput={() => { const v = [...patternInput.trim()].slice(0, 4).join(""); if (draft && v) draft = { ...draft, pattern: v }; }} />
+              <span class="pat-own-wrap">
+                <button class="pat own" class:on={!!draft.pattern && !PATTERN_EMOJI.includes(draft.pattern)} onclick={() => (patOpen = !patOpen)} title={$t("Any emoji")}>
+                  {#if draft.pattern && !PATTERN_EMOJI.includes(draft.pattern)}{draft.pattern}{:else}+{/if}</button>
+                {#if patOpen}<EmojiPick plain value={draft.pattern} onpick={(tok) => draft && (draft = { ...draft, pattern: tok })} onclose={() => (patOpen = false)} />{/if}
+              </span>
             </div>
           </div>
+          {#if !shownBanner}
+            <div class="field">
+              <span>{$t("Banner colours (without a picture)")}</span>
+              <div class="row bn-cols">
+                <ColorInput bind:value={draft.banner_a} size={30} />
+                <span class="bn-arrow">→</span>
+                <ColorInput bind:value={draft.banner_b} size={30} />
+              </div>
+            </div>
+          {/if}
           <div class="pub-note">{$t("Avatar and banner are published to the server — everyone you chat with sees them.")}</div>
           </div>
           <div class="ed-right">
@@ -647,7 +676,7 @@
         <div class="pf-grid">
         <div class="pf-left">
           <h2 class="name">
-            {view.display_name}<EmojiStatus token={view.estatus} size={22} />
+            {view.display_name}<EmojiStatus token={view.estatus} size={24} zoom />
             {#if view.verified}<span class="badge" title={$t("Verified identity")}>{@html icons.verified}</span>{/if}
             {#if view.is_bot}<span class="bot-tag">BOT</span>{/if}
 
@@ -908,15 +937,15 @@
 
   /* ---- editor: two columns (card on the left, details on the right) ---- */
   .sheet.ed { width: min(980px, 96vw); height: min(720px, 92vh); max-height: 92vh; }
-  .sheet.ed .scroll { display: grid; grid-template-columns: minmax(280px, 340px) 1fr; grid-template-rows: 120px auto minmax(0, 1fr); overflow: hidden; }
-  .sheet.ed .banner { grid-column: 1; grid-row: 1; }
+  .sheet.ed .scroll { display: grid; grid-template-columns: minmax(300px, 360px) 1fr; grid-template-rows: 150px auto minmax(0, 1fr); overflow: hidden; }
+  .sheet.ed .banner { grid-column: 1 / span 2; grid-row: 1; height: 150px; }
   .sheet.ed .body { display: contents; }
-  .sheet.ed .avatar-wrap { grid-column: 1; grid-row: 2; margin: -44px 0 18px 22px; }
+  .sheet.ed .avatar-wrap { grid-column: 1; grid-row: 2; margin: -52px 0 14px 24px; z-index: 2; }
   .field .track-name { text-transform: none; letter-spacing: normal; font-size: 13px; font-weight: 400; color: var(--fg-muted); }
   .ed-left { grid-column: 1; grid-row: 3; padding: 0 22px 18px; overflow-y: auto; min-height: 0; }
-  .ed-right { grid-column: 2; grid-row: 1 / span 3; padding: 26px 26px 18px; border-left: 1px solid var(--border); overflow-y: auto; min-height: 0;
+  .ed-right { grid-column: 2; grid-row: 2 / span 2; padding: 18px 26px 18px; border-left: 1px solid var(--border); overflow-y: auto; min-height: 0;
     display: flex; flex-direction: column; }
-  .ed-right .buttons { margin-top: auto; padding-top: 16px; position: sticky; bottom: -18px; background: var(--bg-shell); padding-bottom: 2px; }
+  .ed-right .buttons { margin-top: auto; padding-top: 16px; }
   .ed-games { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 8px; margin: 2px 0 8px; }
   .ed-game { position: relative; animation: fade-in .2s ease-out; }
   .ed-game.first :global(.gp) { box-shadow: 0 0 0 2px #FFD45C; }
@@ -939,6 +968,7 @@
   @media (max-width: 760px) {
     .sheet.ed { height: auto; }
     .sheet.ed .scroll { display: block; overflow-y: auto; }
+    .sheet.ed .banner { height: 130px; }
     .sheet.ed .body { display: block; padding: 0 18px 18px; margin-top: -44px; }
     .sheet.ed .avatar-wrap { margin: 0 0 14px; }
     .ed-left, .ed-right { padding: 0; border: none; overflow: visible; }
@@ -972,27 +1002,64 @@
 
   /* The whole card takes its colour (from the banner unless set by hand). */
   .sheet {
-    background:
-      linear-gradient(180deg, color-mix(in srgb, var(--card) 62%, var(--bg-shell)) 0%, color-mix(in srgb, var(--card) 38%, var(--bg-shell)) 50%, color-mix(in srgb, var(--card) 26%, var(--bg-shell)) 100%) !important;
-    border-color: color-mix(in srgb, var(--card) 35%, var(--border)) !important;
+    background: var(--card-bg) !important;
+    border-color: color-mix(in srgb, var(--card-line) 40%, transparent) !important;
   }
+  /* A pale card: dark text and controls, so everything stays readable. */
+  .sheet.light {
+    --fg: #15171d; --fg-muted: #383d48; --fg-dim: #5a606d;
+    --border: rgba(0, 0, 0, 0.14); --border-strong: rgba(0, 0, 0, 0.24);
+    --bg-input: rgba(255, 255, 255, 0.55); --bg-hover: rgba(0, 0, 0, 0.06);
+    --bg-shell: #f5f6f8; --accent-soft: rgba(0, 0, 0, 0.07);
+    color: var(--fg);
+  }
+  .sheet.light :global(input), .sheet.light :global(textarea) { color: var(--fg); }
+  .sheet.light :global(input::placeholder), .sheet.light :global(textarea::placeholder) { color: var(--fg-dim); }
   .sheet :global(.section), .sheet .card, .sheet .act-card {
     background: color-mix(in srgb, var(--card) 22%, rgba(0, 0, 0, 0.30)) !important;
     border-color: color-mix(in srgb, var(--card) 22%, transparent) !important;
   }
-  .sheet .avatar { border-color: color-mix(in srgb, var(--card) 34%, var(--bg-shell)); }
-  .sheet.ed .ed-right .buttons { background: color-mix(in srgb, var(--card) 10%, var(--bg-shell)); }
-  .pattern { position: absolute; inset: 0; pointer-events: none; background-size: 168px 112px; opacity: 0.32; mix-blend-mode: soft-light; }
-  .card-row, .pat-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-  .es-pick { display: flex; flex-wrap: wrap; gap: 4px; max-height: 132px; overflow-y: auto; padding: 2px; }
-  .pat.es-opt { filter: none; opacity: 1; display: grid; place-items: center; }
-  .es-opt :global(.es) { margin: 0; }
-  .field small.es-note { font-size: 11.5px; color: var(--fg-dim); text-transform: none; letter-spacing: 0; font-weight: 400; }
-  .chip { border: 1px solid var(--border); background: none; color: var(--fg-muted); border-radius: 100px; padding: 5px 11px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
-  .chip.on { border-color: var(--accent); color: var(--accent); }
-  .pat { width: 32px; height: 32px; border-radius: calc(9px * var(--rk, 1)); border: 1px solid transparent; background: color-mix(in srgb, var(--card) 14%, transparent); font-size: 16px; cursor: pointer; color: var(--fg-muted); filter: grayscale(1); }
-  .pat.on { border-color: var(--accent); filter: none; }
-  .field input.pat-own { width: 92px; padding: 6px 8px; font-size: 13px; }
+  .sheet .avatar, .sheet .presence { border-color: var(--card-top); }
+  .pattern { position: absolute; inset: 0; pointer-events: none; background-size: 150px 100px; opacity: 0.22; mix-blend-mode: overlay; }
+  .field small.es-note { font-size: 11.5px; color: var(--fg-dim); text-transform: none; letter-spacing: 0; font-weight: 400; line-height: 1.4; }
+  /* Emoji next to the name */
+  .es-row { position: relative; display: flex; align-items: center; gap: 12px; }
+  .es-cur { width: 48px; height: 48px; flex-shrink: 0; border-radius: calc(12px * var(--rk, 1)); border: 1px dashed var(--border-strong); background: var(--bg-input);
+    display: grid; place-items: center; cursor: pointer; color: var(--fg-muted); transition: border-color .15s, transform .15s; }
+  .es-cur:hover { border-color: var(--accent); transform: scale(1.04); }
+  .es-cur :global(.es) { margin: 0; }
+  .es-none { font-size: 22px; font-weight: 300; }
+  .es-txt { display: flex; gap: 12px; }
+  .lnk { border: none; background: none; padding: 0; font: inherit; font-size: 13px; font-weight: 700; color: var(--accent); cursor: pointer; text-transform: none; letter-spacing: 0; }
+  .sheet.light .lnk { color: var(--fg); text-decoration: underline; }
+  .lnk.dim { color: var(--fg-dim); }
+  .lnk:hover { text-decoration: underline; }
+  /* Card colour */
+  .sw-grid { display: grid; grid-template-columns: repeat(7, 30px); gap: 8px; align-items: center; }
+  .sw { width: 30px; height: 30px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.14); cursor: pointer; padding: 0; position: relative;
+    transition: transform .12s; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18); }
+  .sw:hover { transform: scale(1.1); }
+  .sw.on { border-color: var(--fg); box-shadow: 0 0 0 2px var(--card-base), 0 0 0 4px var(--fg); }
+  .sw.auto span { position: absolute; inset: 0; display: grid; place-items: center; font-size: 8.5px; font-weight: 800; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.6); text-transform: uppercase; letter-spacing: .02em; }
+  .sw-own { display: grid; place-items: center; }
+  .slider { display: grid; grid-template-columns: 116px 1fr 48px; align-items: center; gap: 10px; margin-top: 8px; text-transform: none; letter-spacing: 0; }
+  .slider span { font-size: 12.5px; font-weight: 600; color: var(--fg-muted); }
+  .slider b { font-size: 12px; color: var(--fg-muted); text-align: right; font-variant-numeric: tabular-nums; }
+  .slider input[type="range"] { width: 100%; accent-color: var(--accent); }
+  .sheet.light .slider input[type="range"] { accent-color: #15171d; }
+  /* Banner pattern */
+  .pat-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; }
+  .pat { aspect-ratio: 1; min-width: 0; border-radius: calc(10px * var(--rk, 1)); border: 1px solid var(--border); background: var(--bg-input);
+    font-size: 17px; line-height: 1; cursor: pointer; color: var(--fg-muted); display: grid; place-items: center; padding: 0;
+    font-family: "Noto Color Emoji", "Apple Color Emoji", "Segoe UI Emoji", sans-serif; transition: transform .12s, border-color .12s; }
+  .pat svg { width: 16px; height: 16px; }
+  .pat:hover { transform: translateY(-1px); border-color: var(--border-strong); }
+  .pat.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); background: var(--accent-soft); }
+  .sheet.light .pat.on { border-color: var(--fg); box-shadow: 0 0 0 1px var(--fg); }
+  .pat.own { font-family: inherit; font-weight: 600; }
+  .pat-own-wrap { position: relative; display: grid; }
+  .bn-cols { display: flex; align-items: center; gap: 10px; }
+  .bn-arrow { color: var(--fg-dim); }
   .username { display: flex; align-items: center; gap: 6px; }
   .uid-chip { margin: 6px 0 12px; align-self: flex-start; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border); background: transparent;
     color: var(--fg-dim); font: 600 11.5px var(--font-mono, monospace); letter-spacing: .04em; cursor: pointer; }
@@ -1053,11 +1120,14 @@
     padding: 6px 12px; border-radius: calc(10px * var(--rk, 1)); backdrop-filter: blur(6px); }
   .banner-hit:hover { background: rgba(0,0,0,.25); }
   .banner-hit:hover span, .banner-hit:focus-visible span { opacity: 1; transform: none; }
-  .banner-tools { z-index: 3; position: absolute; right: 12px; bottom: 12px; display: flex; gap: 6px; align-items: center; }
+  .banner-tools { z-index: 3; position: absolute; right: 14px; bottom: 12px; display: flex; gap: 6px; align-items: center; }
   .bn-btn {
-    background: rgba(0, 0, 0, 0.55); color: #fff; border: none; border-radius: calc(8px * var(--rk, 1));
-    padding: 5px 10px; font-size: 12px; font-weight: 700; cursor: pointer; backdrop-filter: blur(6px);
+    display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(10, 12, 18, 0.5); color: #fff; border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 100px;
+    padding: 6px 12px; font-size: 12px; font-weight: 700; cursor: pointer; backdrop-filter: blur(10px);
   }
+  .bn-btn svg { width: 14px; height: 14px; }
+  .bn-btn.icon { padding: 6px; }
   .bn-btn:hover:not(:disabled) { background: rgba(0, 0, 0, 0.75); }
   .bn-btn:disabled { opacity: 0.6; cursor: default; }
   .pv-back { background: none; border: none; color: var(--accent); font: inherit; font-weight: 700; font-size: 13px; padding: 0 0 6px; cursor: pointer; }
@@ -1137,22 +1207,27 @@
   .presence.dnd { background: #ED4245; }
   .av-edit {
     position: absolute;
-    left: 50%; bottom: -6px; transform: translateX(-50%);
-    padding: 3px 10px;
+    right: -2px; bottom: 0;
+    width: 30px; height: 30px; padding: 0;
+    display: grid; place-items: center;
     background: var(--accent); color: #06070C;
-    border: 2px solid var(--bg-shell); border-radius: 100px;
-    font-size: 10.5px; font-weight: 700; cursor: pointer;
-    white-space: nowrap;
+    border: 3px solid var(--card-top); border-radius: 50%;
+    font-size: 12px; font-weight: 700; cursor: pointer;
+    box-shadow: 0 4px 10px -2px rgba(0, 0, 0, 0.4);
   }
+  .av-edit svg { width: 14px; height: 14px; }
+  .sheet.ed .presence { display: none; }
   .av-edit:hover { filter: brightness(1.08); }
   .av-remove {
     position: absolute;
     right: -2px; top: -2px;
     width: 22px; height: 22px;
     background: var(--danger); color: #fff;
-    border: 2px solid var(--bg-shell); border-radius: 50%;
+    border: 2px solid var(--card-base); border-radius: 50%;
     font-size: 13px; line-height: 1; cursor: pointer;
+    opacity: 0; transition: opacity .15s;
   }
+  .avatar-wrap:hover .av-remove, .av-remove:focus-visible { opacity: 1; }
 
   .bot-tag {
     font-size: 9.5px; font-weight: 800; letter-spacing: 0.06em;

@@ -28,11 +28,19 @@
     if (num) { day = +num[1]; month = +num[2] - 1; year = num[3] ? +(num[3].length === 2 ? "19" + num[3] : num[3]) : 0; return; }
     day = d ? +d[1] : 0; month = m; year = y ? +y[1] : 0;
   }
+  // Nominative month names — for a month without a day ("март 1998").
+  const RU_NOM = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"];
+  /** Any part may be missing: just the day, just the month, just the year. */
   function compose() {
-    if (!day || month < 0) return;
-    const names = $lang === "ru" ? RU : EN;
-    value = `${day} ${names[month]}${year ? " " + year : ""}`;
+    const ru = $lang === "ru";
+    const parts: string[] = [];
+    if (day && month >= 0) parts.push(`${day} ${(ru ? RU : EN)[month]}`);
+    else if (month >= 0) parts.push(ru ? RU_NOM[month] : EN[month]);
+    else if (day) parts.push(ru ? `${day}-е число` : `day ${day}`);
+    if (year) parts.push(String(year));
+    value = parts.join(" ");
   }
+  function clearAll() { day = 0; month = -1; year = 0; value = ""; }
   function daysIn(m: number, y: number) { return m < 0 ? 31 : new Date(y || 2000, m + 1, 0).getDate(); }
 
   function toggle() { if (!open) parse(value); open = !open; }
@@ -48,22 +56,25 @@
 
 <div class="bd" bind:this={wrap}>
   <input bind:value placeholder={$t("15 March 1998")} />
+  {#if value}<button type="button" class="bd-x" onclick={clearAll} title={$t("Clear the date")} aria-label={$t("Clear the date")}>×</button>{/if}
   <button type="button" class="bd-btn" onclick={toggle} title={$t("Pick a date")} aria-label={$t("Pick a date")} aria-expanded={open}>📅</button>
   {#if open}
     <div class="bd-pop" role="dialog">
+      <div class="bd-hint">{$t("Any part can stay empty — tap a picked one again to unpick it.")}</div>
       <div class="bd-months">
         {#each ($lang === "ru" ? RU_SHORT : EN.map((m) => m.slice(0, 3))) as m, i (i)}
-          <button type="button" class:on={month === i} onclick={() => { month = i; if (day > daysIn(i, year)) day = daysIn(i, year); compose(); }}>{m}</button>
+          <button type="button" class:on={month === i} onclick={() => { month = month === i ? -1 : i; if (month >= 0 && day > daysIn(month, year)) day = daysIn(month, year); compose(); }}>{m}</button>
         {/each}
       </div>
       <div class="bd-days">
         {#each Array.from({ length: daysIn(month, year) }, (_, i) => i + 1) as d (d)}
-          <button type="button" class:on={day === d} onclick={() => { day = d; compose(); }}>{d}</button>
+          <button type="button" class:on={day === d} onclick={() => { day = day === d ? 0 : d; compose(); }}>{d}</button>
         {/each}
       </div>
       <div class="bd-foot">
         <Select compact value={year} options={[{ value: 0, label: $t("No year") }, ...YEARS.map((y) => ({ value: y, label: String(y) }))]}
           onchange={(v) => { year = v; compose(); }} />
+        <button type="button" class="bd-clr" onclick={clearAll} title={$t("Clear the date")}>{$t("Clear")}</button>
         <button type="button" class="bd-ok" onclick={() => { compose(); open = false; }}>{$t("Done")}</button>
       </div>
     </div>
@@ -75,6 +86,9 @@
   .bd input { flex: 1; min-width: 0; background: var(--bg-input); border: 1px solid var(--border); border-radius: calc(9px * var(--rk, 1)); color: var(--fg);
     font: inherit; font-size: 13.5px; padding: 9px 12px; outline: none; }
   .bd input:focus { border-color: var(--accent); }
+  .bd-x { position: absolute; right: 50px; top: 50%; transform: translateY(-50%); width: 22px; height: 22px; border-radius: 50%; border: none;
+    background: var(--bg-hover, rgba(255,255,255,.08)); color: var(--fg-muted); cursor: pointer; font-size: 14px; line-height: 1; }
+  .bd-x:hover { color: var(--fg); }
   .bd-btn { flex-shrink: 0; width: 38px; border-radius: calc(9px * var(--rk, 1)); border: 1px solid var(--border); background: var(--bg-input); cursor: pointer; font-size: 16px; }
   .bd-btn:hover { border-color: var(--accent); }
   .bd-pop { position: absolute; z-index: 50; right: 0; top: calc(100% + 6px); width: 280px; padding: 10px; border-radius: calc(14px * var(--rk, 1));
@@ -88,5 +102,7 @@
   .bd-pop button.on { background: var(--accent); color: #06070c; font-weight: 800; }
   .bd-foot { display: flex; gap: 6px; }
   .bd-foot :global(.aq-select) { flex: 1; }
+  .bd-hint { font-size: 11.5px; color: var(--fg-dim); line-height: 1.35; }
+  .bd-pop .bd-clr { padding: 5px 10px; color: var(--fg-muted); }
   .bd-pop .bd-ok { padding: 5px 14px; background: var(--accent-soft); color: var(--accent); font-weight: 800; }
 </style>

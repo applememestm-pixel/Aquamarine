@@ -44,6 +44,10 @@ export interface Profile {
   estatus?: string;
   /** Colour of the whole profile card; "" = taken from the banner. */
   card?: string;
+  /** How strong the card colour is at the top, 0–100 (default 62). */
+  card_i?: number;
+  /** How far down the colour fades, 0–100 (0 = solid, default 60). */
+  card_g?: number;
   /** An emoji repeated over the banner in a soft pattern (Telegram-style). */
   pattern?: string;
   /** Discord-style server tag I'm wearing (from a group I'm in). */
