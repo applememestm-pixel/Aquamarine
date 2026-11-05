@@ -6,7 +6,7 @@ import { onBack } from "./back";
 import { contacts, contactMatches, displayName, saveContact } from "./contacts";
 import { settings } from "./theme";
 import { playSound, soundFor } from "./sounds";
-import { tr } from "./i18n";
+import { tr, lang } from "./i18n";
 import { osNotify, appInFront } from "./notify";
 
 /** Play a short chime + optional desktop notification for an incoming
@@ -28,6 +28,13 @@ export const info = writable<InitInfo | null>(null);
 
 /** All chats, in server order. */
 export const chats = writable<ChatSummary[]>([]);
+// Service chats ("Saved Messages", "Replies") are named in the UI language
+// when the list loads (tauri.ts::listChats): reload it when the language changes.
+let langSeen: string | null = null;
+lang.subscribe((l) => {
+  if (langSeen !== null && langSeen !== l && get(chats).length) void api.listChats().then((c) => chats.set(c)).catch(() => {});
+  langSeen = l;
+});
 
 /** Selected chat id. */
 export const activeId = writable<string>("roma");

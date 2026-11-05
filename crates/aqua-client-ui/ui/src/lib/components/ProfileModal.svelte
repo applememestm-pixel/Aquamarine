@@ -942,9 +942,10 @@
   .sheet.ed .body { display: contents; }
   .sheet.ed .avatar-wrap { grid-column: 1; grid-row: 2; margin: -52px 0 14px 24px; z-index: 2; }
   .field .track-name { text-transform: none; letter-spacing: normal; font-size: 13px; font-weight: 400; color: var(--fg-muted); }
-  .ed-left { grid-column: 1; grid-row: 3; padding: 0 22px 18px; overflow-y: auto; min-height: 0; }
-  .ed-right { grid-column: 2; grid-row: 2 / span 2; padding: 18px 26px 18px; border-left: 1px solid var(--border); overflow-y: auto; min-height: 0;
-    display: flex; flex-direction: column; }
+  /* Both columns start on the same line (under the avatar), same side padding. */
+  .ed-left { grid-column: 1; grid-row: 3; padding: 0 24px 18px; overflow-y: auto; min-height: 0; scrollbar-width: thin; scrollbar-gutter: stable; }
+  .ed-right { grid-column: 2; grid-row: 3; padding: 0 24px 18px; border-left: 1px solid var(--border); overflow-y: auto; min-height: 0;
+    display: flex; flex-direction: column; scrollbar-width: thin; }
   .ed-right .buttons { margin-top: auto; padding-top: 16px; }
   .ed-games { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 8px; margin: 2px 0 8px; }
   .ed-game { position: relative; animation: fade-in .2s ease-out; }
@@ -1035,15 +1036,19 @@
   .lnk.dim { color: var(--fg-dim); }
   .lnk:hover { text-decoration: underline; }
   /* Card colour */
-  .sw-grid { display: grid; grid-template-columns: repeat(7, 30px); gap: 8px; align-items: center; }
+  .sw-grid { display: grid; grid-template-columns: repeat(7, 30px); justify-content: space-between; row-gap: 10px; align-items: center; }
   .sw { width: 30px; height: 30px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.14); cursor: pointer; padding: 0; position: relative;
     transition: transform .12s; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18); }
   .sw:hover { transform: scale(1.1); }
   .sw.on { border-color: var(--fg); box-shadow: 0 0 0 2px var(--card-base), 0 0 0 4px var(--fg); }
   .sw.auto span { position: absolute; inset: 0; display: grid; place-items: center; font-size: 8.5px; font-weight: 800; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.6); text-transform: uppercase; letter-spacing: .02em; }
   .sw-own { display: grid; place-items: center; }
-  .slider { display: grid; grid-template-columns: 116px 1fr 48px; align-items: center; gap: 10px; margin-top: 8px; text-transform: none; letter-spacing: 0; }
-  .slider span { font-size: 12.5px; font-weight: 600; color: var(--fg-muted); }
+  /* Label and value on one line, the slider under them at full width. */
+  .slider { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "l v" "r r"; align-items: center; column-gap: 10px; row-gap: 4px; margin-top: 12px; text-transform: none; letter-spacing: 0; }
+  .slider > span { grid-area: l; }
+  .slider > b { grid-area: v; }
+  .slider > input { grid-area: r; margin: 0; }
+  .field .slider > span { text-transform: none; letter-spacing: 0; font-size: 12.5px; font-weight: 600; color: var(--fg-muted); }
   .slider b { font-size: 12px; color: var(--fg-muted); text-align: right; font-variant-numeric: tabular-nums; }
   .slider input[type="range"] { width: 100%; accent-color: var(--accent); }
   .sheet.light .slider input[type="range"] { accent-color: #15171d; }

@@ -188,6 +188,27 @@
 <script src="qrcode.js"></script>
 <script>
 "use strict";
+// Tauri adds a nonce to script-src, and with a nonce the WebView ignores
+// 'unsafe-inline' for onclick="…" attributes: every such button was dead in
+// the app (fine in a plain browser). So each on…="" attribute is turned into
+// a real listener as soon as it shows up (needs 'unsafe-eval' in the CSP).
+const ARMED_EVENTS = ["click", "input", "change", "keydown"];
+function armOne(el) {
+  for (const ev of ARMED_EVENTS) {
+    const code = el.getAttribute && el.getAttribute("on" + ev);
+    if (code == null) continue;
+    el.removeAttribute("on" + ev);
+    let fn; try { fn = new Function("event", code); } catch (e) { console.warn("handler", code, e); continue; }
+    el.addEventListener(ev, function (e) { return fn.call(this, e); });
+  }
+}
+function armAll(root) {
+  if (root.nodeType !== 1) return;
+  armOne(root);
+  root.querySelectorAll(ARMED_EVENTS.map((e) => `[on${e}]`).join(",")).forEach(armOne);
+}
+new MutationObserver((ms) => { for (const m of ms) m.addedNodes.forEach(armAll); }).observe(document.documentElement, { subtree: true, childList: true });
+document.addEventListener("DOMContentLoaded", () => armAll(document.body));
 // ======================================================================
 // Language
 // ======================================================================

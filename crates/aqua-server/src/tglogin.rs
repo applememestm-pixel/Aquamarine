@@ -46,7 +46,24 @@ struct Book {
     codes: HashMap<String, Pending>,
     tickets: HashMap<String, Ticket>,
     polling: bool,
-    bot: Option<String>,
+    /// (token, @username): asked again when the token changes.
+    bot: Option<(String, String)>,
+    /// Why reading the bot's messages fails right now (shown to whoever waits).
+    error: Option<String>,
+}
+
+/// Telegram's refusal in words a person can act on.
+fn explain(e: &str) -> String {
+    let l = e.to_lowercase();
+    if l.contains("webhook") {
+        "the server's Telegram bot has a webhook set, so the server can't read its messages — remove the webhook (another program uses this bot) or give the server its own bot".into()
+    } else if l.contains("terminated by other getupdates") || l.contains("conflict") {
+        "another program reads this Telegram bot's messages (a second server or script with the same token) — stop it or give this server its own bot".into()
+    } else if l.contains("unauthorized") || l.contains("not found") {
+        "the server's Telegram bot token is invalid (revoked?) — the server's admin has to set a new one".into()
+    } else {
+        format!("the server can't reach Telegram: {e}")
+    }
 }
 
 fn rand_hex(n: usize) -> String {
@@ -70,12 +87,14 @@ async fn call(token: &str, method: &str, body: serde_json::Value) -> Result<serd
 
 /// The bot's @username (asked once).
 async fn bot_name(token: &str) -> Result<String, String> {
-    if let Some(b) = state().bot.clone() {
-        return Ok(b);
+    if let Some((t, b)) = state().bot.clone() {
+        if t == token {
+            return Ok(b);
+        }
     }
     let me = call(token, "getMe", serde_json::json!({})).await?;
     let name = me["username"].as_str().ok_or("the bot has no username")?.to_string();
-    state().bot = Some(name.clone());
+    state().bot = Some((token.to_string(), name.clone()));
     Ok(name)
 }
 
@@ -103,8 +122,12 @@ fn ensure_polling(token: String) {
             }
             let body = serde_json::json!({ "offset": offset, "timeout": 25, "allowed_updates": ["message"] });
             let updates = match call(&token, "getUpdates", body).await {
-                Ok(v) => v,
+                Ok(v) => {
+                    state().error = None;
+                    v
+                }
                 Err(e) => {
+                    state().error = Some(explain(&e));
                     tracing::warn!(error = %e, "telegram sign-in: getUpdates failed (is a webhook set on this bot?)");
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     continue;
@@ -170,6 +193,9 @@ pub async fn start() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
             return Err((StatusCode::TOO_MANY_REQUESTS, "too many sign-ins waiting — try again in a minute".into()));
         }
         b.codes.insert(code.clone(), Pending { at: Instant::now(), who: None, ticket: None });
+        if !b.polling {
+            b.error = None;
+        }
     }
     ensure_polling(token);
     Ok(Json(serde_json::json!({ "code": code, "bot": bot, "link": format!("https://t.me/{bot}?start=aq{code}") })))
@@ -186,7 +212,7 @@ pub async fn poll(Json(b): Json<PollBody>) -> Result<Json<serde_json::Value>, (S
     let Some(p) = book.codes.get(&b.code).cloned() else {
         return Err((StatusCode::NOT_FOUND, "this Telegram sign-in has expired — start again".into()));
     };
-    let Some((tg_id, tg_name)) = p.who else { return Ok(Json(serde_json::json!({ "done": false }))) };
+    let Some((tg_id, tg_name)) = p.who else { return Ok(Json(serde_json::json!({ "done": false, "error": book.error }))) };
     let ticket = match p.ticket {
         Some(t) => t,
         None => {

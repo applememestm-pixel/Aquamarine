@@ -1015,6 +1015,7 @@ export const RU: Record<string, string> = {
   "Import": "Импорт",
   "Importing…": "Импорт…",
   "Invisible": "Невидимка",
+  "In a call": "В звонке",
   "Invite users via link": "Приглашать по ссылке",
   "Join requests": "Заявки на вступление",
   "Let's check": "Проверим",
@@ -2536,4 +2537,9 @@ export const RU: Record<string, string> = {
   "Objects": "Предметы",
   "Symbols": "Символы",
   "Flags": "Флаги",
+  "the server's Telegram bot has a webhook set, so the server can't read its messages — remove the webhook (another program uses this bot) or give the server its own bot": "у Telegram-бота сервера включён вебхук, и сервер не видит его сообщений — уберите вебхук (этого бота использует другая программа) или дайте серверу отдельного бота",
+  "another program reads this Telegram bot's messages (a second server or script with the same token) — stop it or give this server its own bot": "сообщения этого Telegram-бота уже читает другая программа (второй сервер или скрипт с тем же токеном) — остановите её или дайте серверу отдельного бота",
+  "the server's Telegram bot token is invalid (revoked?) — the server's admin has to set a new one": "токен Telegram-бота на сервере недействителен (отозван?) — администратор сервера должен задать новый",
+  "Open the bot again": "Открыть бота ещё раз",
+  "the server can't reach Telegram: ": "сервер не может достучаться до Telegram: ",
 };

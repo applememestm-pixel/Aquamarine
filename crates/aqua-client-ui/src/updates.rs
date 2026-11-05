@@ -10,7 +10,7 @@
 //!   * Android — the system installer (AquaUpdatePlugin in android/AquaRelay.kt);
 //!     Android only installs it over the current app when both are signed
 //!     with the same key (release.yml: ANDROID_KEYSTORE_B64);
-//!   * Windows — runs the NSIS installer and closes the app;
+//!   * Windows — the NSIS installer runs silently (`/S`) and the new version starts;
 //!   * Linux AppImage — swaps the AppImage file and starts the new one;
 //!   * macOS and other Linux packages — opens the downloaded file.
 
@@ -298,8 +298,17 @@ pub async fn update_install(app: AppHandle, path: String) -> Result<String, Stri
     }
     #[cfg(target_os = "windows")]
     {
-        // The NSIS installer replaces the app in place: let it, and step aside.
-        std::process::Command::new(&p).spawn().map_err(|e| e.to_string())?;
+        // Like Telegram: no installer window. The NSIS installer runs silently
+        // over this copy (`/S`) and the new version starts. A detached cmd
+        // does it — this process has to be gone for the files to change.
+        use std::os::windows::process::CommandExt;
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let line = format!("/C \"ping -n 3 127.0.0.1 >nul & \"{}\" /S & start \"\" \"{}\"\"", p.display(), exe.display());
+        std::process::Command::new("cmd")
+            .raw_arg(line)
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .spawn()
+            .map_err(|e| e.to_string())?;
         app.exit(0);
         return Ok("started".into());
     }
