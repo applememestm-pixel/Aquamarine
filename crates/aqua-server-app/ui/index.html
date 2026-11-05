@@ -6,169 +6,817 @@
 <title>Aquamarine Server</title>
 <style>
   :root {
-    --bg: #06070C; --card: #0E121B; --line: #1E2533; --fg: #E8EEF7; --dim: #8A96A8;
-    --accent: #2EE6C5; --accent2: #6C8CFF; --bad: #FF6B81; --warn: #F0B232;
+    --bg: #06070C; --side: #0A0D14; --card: #0E121B; --card2: #121826; --line: #1E2533; --line2: #2A3346;
+    --fg: #E8EEF7; --dim: #8A96A8; --dim2: #5E6A7D;
+    --accent: #2EE6C5; --accent2: #6C8CFF; --bad: #FF6B81; --warn: #F0B232; --ok: #3DDC97;
+    --r: 14px;
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  body { display: flex; flex-direction: column; }
-  header { display: flex; align-items: center; gap: 12px; padding: calc(12px + env(safe-area-inset-top)) 16px 12px; border-bottom: 1px solid var(--line); }
-  header .logo { width: 34px; height: 34px; border-radius: 10px; background: linear-gradient(135deg, var(--accent), var(--accent2)); display: grid; place-items: center; font-weight: 800; color: #06070C; }
-  header h1 { margin: 0; font-size: 16px; font-weight: 800; flex: 1; }
-  .state { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; font-size: 13px; color: var(--dim); }
-  .state i { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); }
-  .state.on { color: var(--accent); } .state.on i { background: var(--accent); box-shadow: 0 0 10px var(--accent); }
-  .state.err { color: var(--bad); } .state.err i { background: var(--bad); }
-  main { flex: 1; min-height: 0; display: grid; grid-template-columns: 340px 1fr; }
-  aside { padding: 16px; overflow-y: auto; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 12px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
-  .card h2 { margin: 0; font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--dim); }
-  .addr { display: flex; flex-direction: column; gap: 2px; }
-  .addr b { font-size: 12px; color: var(--dim); font-weight: 600; }
-  .addr .row { display: flex; align-items: center; gap: 8px; }
-  .addr code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 13px ui-monospace, SFMono-Regular, Consolas, monospace; color: var(--fg); user-select: all; }
-  button { font: inherit; cursor: pointer; border-radius: 10px; border: 1px solid var(--line); background: #151B27; color: var(--fg); padding: 8px 12px; font-weight: 600; }
-  button:hover { border-color: #33405A; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-tap-highlight-color: transparent; }
+  body { display: grid; grid-template-columns: 220px 1fr; overflow: hidden; }
+  [hidden] { display: none !important; }
+  svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* ---- navigation ---- */
+  nav { background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; padding: calc(14px + env(safe-area-inset-top)) 10px 14px; gap: 2px; min-height: 0; }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 16px; }
+  .logo { width: 34px; height: 34px; border-radius: 10px; background: linear-gradient(135deg, var(--accent), var(--accent2)); display: grid; place-items: center; font-weight: 800; color: #06070C; flex: none; }
+  .brand b { font-size: 14.5px; line-height: 1.15; }
+  .brand small { display: block; color: var(--dim); font-size: 11.5px; font-weight: 600; }
+  .nav-btn { display: flex; align-items: center; gap: 11px; width: 100%; padding: 9px 11px; border: 0; border-radius: 10px; background: none; color: var(--dim); font: inherit; font-weight: 600; text-align: left; cursor: pointer; position: relative; }
+  .nav-btn:hover { background: #121826; color: var(--fg); }
+  .nav-btn.on { background: linear-gradient(90deg, rgba(46,230,197,.14), rgba(46,230,197,.02)); color: var(--fg); }
+  .nav-btn.on svg { color: var(--accent); }
+  .nav-btn .badge { margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: #06070C; font-size: 11px; font-weight: 800; display: grid; place-items: center; }
+  .nav-foot { margin-top: auto; padding: 10px 8px 0; display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--dim); font-weight: 600; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim2); flex: none; }
+  .dot.on { background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+  .dot.err { background: var(--bad); }
+
+  /* ---- pages ---- */
+  main { min-height: 0; overflow-y: auto; padding: calc(22px + env(safe-area-inset-top)) 28px 40px; }
+  .page { max-width: 880px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; animation: in .22s ease; }
+  @keyframes in { from { opacity: 0; transform: translateY(6px); } }
+  h1 { margin: 0 0 4px; font-size: 22px; font-weight: 800; letter-spacing: -.01em; }
+  .lead { color: var(--dim); margin: -2px 0 6px; max-width: 640px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--r); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .card h2 { margin: 0; font-size: 12px; letter-spacing: .07em; text-transform: uppercase; color: var(--dim); font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .card h2 .grow { flex: 1; }
+  .note { font-size: 12.5px; color: var(--dim); }
+  .note b { color: var(--fg); }
+  .msg { font-size: 13px; }
+  .msg.ok { color: var(--ok); } .msg.err { color: var(--bad); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  a { color: var(--accent); cursor: pointer; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  button { font: inherit; cursor: pointer; border-radius: 10px; border: 1px solid var(--line2); background: #151B27; color: var(--fg); padding: 8px 13px; font-weight: 600; display: inline-flex; align-items: center; gap: 7px; }
+  button:hover { border-color: #3A4763; }
   button.primary { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #06070C; border: none; }
   button.danger { color: var(--bad); }
-  button.mini { padding: 4px 9px; font-size: 12px; }
-  button:disabled { opacity: .5; cursor: default; }
-  .row2 { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  input[type=number] { width: 96px; background: #0A0D14; border: 1px solid var(--line); color: var(--fg); border-radius: 9px; padding: 7px 9px; font: inherit; }
-  .note { font-size: 12px; color: var(--dim); }
-  .err { font-size: 12.5px; color: var(--bad); }
-  .dir { font: 12px ui-monospace, Consolas, monospace; word-break: break-all; color: var(--fg); }
-  label.sw { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; }
-  label.sw input { width: 36px; height: 20px; accent-color: var(--accent); }
-  .panel { position: relative; min-height: 0; }
-  .panel iframe { width: 100%; height: 100%; border: 0; background: var(--bg); }
-  .panel .empty { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; color: var(--dim); padding: 24px; }
-  a { color: var(--accent); }
-  @media (max-width: 820px) {
-    main { grid-template-columns: 1fr; overflow-y: auto; }
-    aside { border-right: 0; overflow: visible; }
-    .panel { height: 80vh; border-top: 1px solid var(--line); }
+  button.mini { padding: 5px 10px; font-size: 12.5px; border-radius: 8px; }
+  button.ghost { background: none; border-color: transparent; color: var(--dim); }
+  button.ghost:hover { color: var(--fg); background: #121826; }
+  button:disabled { opacity: .45; cursor: default; }
+  input[type=text], input[type=number], input[type=password], input[type=email], textarea {
+    background: #0A0D14; border: 1px solid var(--line2); color: var(--fg); border-radius: 10px; padding: 9px 11px; font: inherit; width: 100%; outline: none; }
+  input:focus, textarea:focus { border-color: var(--accent); }
+  textarea { min-height: 96px; resize: vertical; font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+  label.f { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--dim); font-weight: 600; flex: 1; min-width: 140px; }
+  code, .mono { font: 13px ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+  /* switch row */
+  .sw { display: flex; align-items: center; gap: 14px; cursor: pointer; padding: 2px 0; }
+  .sw .t { flex: 1; }
+  .sw .t b { display: block; font-weight: 650; }
+  .sw .t span { font-size: 12.5px; color: var(--dim); }
+  .tog { width: 42px; height: 24px; border-radius: 12px; background: #263044; position: relative; flex: none; transition: background .15s; }
+  .tog::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: transform .15s; }
+  .tog.on { background: var(--accent); }
+  .tog.on::after { transform: translateX(18px); }
+
+  /* segmented */
+  .seg { align-self: flex-start; display: inline-flex; background: #0A0D14; border: 1px solid var(--line2); border-radius: 11px; padding: 3px; gap: 3px; flex-wrap: wrap; }
+  .seg button { border: 0; background: none; color: var(--dim); padding: 7px 14px; border-radius: 8px; }
+  .seg button.on { background: #1C2433; color: var(--fg); }
+
+  /* hero */
+  .hero { display: flex; flex-direction: row; align-items: center; gap: 18px; padding: 20px; background: radial-gradient(120% 140% at 0% 0%, rgba(46,230,197,.12), transparent 55%), var(--card); }
+  .pulse { width: 54px; height: 54px; border-radius: 50%; display: grid; place-items: center; background: #151B27; flex: none; position: relative; }
+  .pulse i { width: 16px; height: 16px; border-radius: 50%; background: var(--dim2); }
+  .pulse.on i { background: var(--accent); box-shadow: 0 0 16px var(--accent); }
+  .pulse.on::after { content: ""; position: absolute; inset: 0; border-radius: 50%; border: 2px solid var(--accent); animation: ring 2s ease-out infinite; }
+  @keyframes ring { from { transform: scale(.6); opacity: .8; } to { transform: scale(1.25); opacity: 0; } }
+  .pulse.err i { background: var(--bad); }
+  .hero .t { flex: 1; min-width: 0; }
+  .hero .t b { font-size: 19px; font-weight: 800; display: block; }
+  .hero .t span { color: var(--dim); font-size: 13px; }
+  .hero button { padding: 11px 20px; font-size: 14.5px; }
+
+  /* stat tiles */
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: var(--r); padding: 14px; cursor: pointer; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; color: var(--fg); font-weight: 400; transition: border-color .15s, transform .15s; }
+  .stat:hover { border-color: #3A4763; transform: translateY(-1px); }
+  .stat .ic { color: var(--accent); }
+  .stat .n { font-size: 24px; font-weight: 800; letter-spacing: -.02em; }
+  .stat .l { font-size: 12.5px; color: var(--dim); font-weight: 600; }
+
+  /* addresses */
+  .addr { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #0A0D14; border: 1px solid var(--line); border-radius: 11px; }
+  .addr .k { width: 150px; flex: none; font-size: 12.5px; color: var(--dim); font-weight: 600; }
+  .addr code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: all; }
+  .addr.off code { color: var(--dim2); font-family: inherit; font-size: 12.5px; white-space: normal; }
+
+  /* lists */
+  .list { display: flex; flex-direction: column; }
+  .li { display: flex; align-items: center; gap: 10px; padding: 9px 4px; border-bottom: 1px solid var(--line); min-width: 0; }
+  .li:last-child { border-bottom: 0; }
+  .li .main { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .li .sub { color: var(--dim); font-size: 12.5px; flex: none; }
+  .ava { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 13px; color: #06070C; flex: none; }
+  .ev { font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: 7px; background: #1C2433; color: var(--dim); flex: none; }
+  .ev.online, .ev.login { color: var(--accent); background: rgba(46,230,197,.1); }
+  .ev.register { color: var(--accent2); background: rgba(108,140,255,.12); }
+  .bar { width: 120px; height: 6px; border-radius: 3px; background: #1C2433; overflow: hidden; flex: none; }
+  .bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+  .empty { color: var(--dim); text-align: center; padding: 22px 8px; font-size: 13px; }
+  .tag { font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: 7px; background: #1C2433; color: var(--dim); }
+  .tag.net { color: var(--accent); background: rgba(46,230,197,.1); }
+  .code-big { font: 800 20px ui-monospace, Consolas, monospace; letter-spacing: .12em; color: var(--accent); }
+
+  /* off-state placeholder */
+  .off-box { text-align: center; padding: 40px 20px; display: flex; flex-direction: column; align-items: center; gap: 12px; color: var(--dim); }
+  .off-box svg { width: 40px; height: 40px; color: var(--dim2); }
+
+  /* packs */
+  .packs { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .pack { background: #0A0D14; border: 1px solid var(--line); border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .pack .pv { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+  .pack .pv img, .pack .pv video, .pack .pv span { width: 100%; aspect-ratio: 1; object-fit: contain; border-radius: 6px; background: #121826; display: grid; place-items: center; font-size: 10px; color: var(--dim); }
+  .pack b { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pack small { color: var(--dim); font-size: 12px; }
+
+  /* modal & toast */
+  .modal { position: fixed; inset: 0; background: rgba(3,4,8,.72); display: grid; place-items: center; z-index: 20; padding: 16px; animation: fade .15s; }
+  @keyframes fade { from { opacity: 0; } }
+  .modal .box { background: var(--card); border: 1px solid var(--line2); border-radius: 18px; padding: 20px; width: min(440px, 100%); max-height: 86vh; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+  .modal .box h3 { margin: 0; font-size: 17px; display: flex; align-items: center; }
+  .modal .box h3 span { flex: 1; }
+  .qr { background: #fff; border-radius: 14px; padding: 12px; align-self: center; width: min(280px, 100%); }
+  .qr svg { display: block; width: 100%; height: auto; }
+  .choice { display: flex; gap: 12px; padding: 14px; border: 1px solid var(--line2); border-radius: 14px; cursor: pointer; text-align: left; background: #0A0D14; color: var(--fg); font-weight: 400; align-items: flex-start; }
+  .choice:hover { border-color: var(--accent); }
+  .choice svg { width: 26px; height: 26px; color: var(--accent); }
+  .choice b { display: block; font-size: 15px; margin-bottom: 2px; }
+  .choice span { color: var(--dim); font-size: 13px; }
+  #toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translate(-50%, 20px); background: #1C2433; border: 1px solid var(--line2); padding: 9px 16px; border-radius: 12px; font-weight: 600; opacity: 0; pointer-events: none; transition: .2s; z-index: 30; }
+  #toast.on { opacity: 1; transform: translate(-50%, 0); }
+  details summary { cursor: pointer; color: var(--dim); font-weight: 600; font-size: 13px; }
+  details[open] summary { margin-bottom: 12px; }
+
+  /* ---- phones and narrow windows: tabs at the bottom ---- */
+  @media (max-width: 760px) {
+    body { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
+    nav { grid-row: 2; flex-direction: row; border-right: 0; border-top: 1px solid var(--line); padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); overflow-x: auto; gap: 0; }
+    .brand, .nav-foot { display: none; }
+    .nav-btn { flex-direction: column; gap: 3px; font-size: 10px; padding: 6px 2px; min-width: 0; flex: 1 1 0; text-align: center; justify-content: center; }
+    .nav-btn.on { background: none; color: var(--accent); }
+    .nav-btn span:not(.badge) { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .nav-btn .badge { position: absolute; top: 2px; right: 6px; margin: 0; }
+    main { grid-row: 1; padding: calc(16px + env(safe-area-inset-top)) 16px 24px; }
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .grid2 { grid-template-columns: 1fr; }
+    .addr { flex-wrap: wrap; }
+    .addr .k { width: 100%; }
+    .hero { flex-wrap: wrap; }
+    .hero button { width: 100%; justify-content: center; }
+    .bar { width: 70px; }
   }
 </style>
 </head>
 <body>
-<header>
-  <div class="logo">A</div>
-  <h1>Aquamarine Server</h1>
-  <span class="state" id="state"><i></i><span id="stateText">…</span></span>
-</header>
-<main>
-  <aside>
-    <div class="card">
-      <h2 data-t="Connect to it">Connect to it</h2>
-      <div class="addr" id="aLan"><b data-t="Phones and computers on this Wi-Fi">Phones and computers on this Wi-Fi</b><div class="row"><code id="lan">—</code><button class="mini" data-copy="lan" data-t="Copy">Copy</button></div></div>
-      <div class="addr" id="aPub"><b data-t="From the internet">From the internet</b><div class="row"><code id="pub">—</code><button class="mini" data-copy="pub" data-t="Copy">Copy</button></div></div>
-      <div class="addr"><b data-t="This device">This device</b><div class="row"><code id="loc">—</code><button class="mini" data-copy="loc" data-t="Copy">Copy</button></div></div>
-      <div class="note" data-t="hint">In Aquamarine: sign-in window → Server → paste the address. Friends outside your Wi-Fi need the internet address: the port forwarded on the router, or a VPS.</div>
-      <a href="#" id="guide" data-t="Step by step: router, public IP, what to do without one">Step by step: router, public IP, what to do without one</a>
-    </div>
-    <div class="card">
-      <h2 data-t="Server">Server</h2>
-      <div class="row2">
-        <button class="primary" id="toggle">…</button>
-        <span class="note" data-t="Port">Port</span>
-        <input type="number" id="port" min="1024" max="65535" />
-        <button class="mini" id="portSave" data-t="Apply">Apply</button>
-      </div>
-      <div class="err" id="err" hidden></div>
-      <button class="mini" id="adminWin" hidden data-t="Admin panel in its own window">Admin panel in its own window</button>
-    </div>
-    <div class="card" id="dataCard">
-      <h2 data-t="Data folder">Data folder</h2>
-      <div class="dir" id="dir">—</div>
-      <div class="note" data-t="dataNote">Accounts, encrypted files and settings. The console server uses the same folder — switching to the app keeps everyone's accounts.</div>
-      <div class="row2" id="dirBtns">
-        <button class="mini" id="useDir" data-t="Use another folder…">Use another folder…</button>
-        <button class="mini" id="moveDir" data-t="Move the data to…">Move the data to…</button>
-      </div>
-    </div>
-    <div class="card" id="sysCard">
-      <h2 data-t="This computer">This computer</h2>
-      <label class="sw"><span data-t="Start with the system">Start with the system</span><input type="checkbox" id="auto" /></label>
-      <label class="sw"><span data-t="Keep running when the window is closed">Keep running when the window is closed</span><input type="checkbox" id="tray" /></label>
-    </div>
-    <div class="card" id="mobCard" hidden>
-      <div class="note" data-t="mobNote">The server keeps running with the screen off — Android shows a notification. If the phone closes it anyway: Settings → Apps → Aquamarine Server → Battery → Unrestricted.</div>
-    </div>
-  </aside>
-  <section class="panel">
-    <iframe id="admin" title="Admin panel" hidden></iframe>
-    <div class="empty" id="adminEmpty" data-t="The admin panel appears here when the server is running.">The admin panel appears here when the server is running.</div>
-  </section>
-</main>
+<nav id="nav">
+  <div class="brand"><div class="logo">A</div><div><b>Aquamarine</b><small>Server</small></div></div>
+</nav>
+<main id="main"></main>
+<div id="modal"></div>
+<div id="toast"></div>
+<script src="qrcode.js"></script>
 <script>
-  const RU = /^ru|^uk|^be/i.test(navigator.language || "");
-  const T = {
-    "Connect to it": "Как подключиться", "Phones and computers on this Wi-Fi": "Телефоны и компьютеры в этой Wi-Fi", "From the internet": "Из интернета",
-    "This device": "Это устройство", "Copy": "Копировать", "Copied": "Скопировано",
-    "hint": "В Aquamarine: окно входа → Сервер → вставьте адрес. Друзьям вне вашей Wi-Fi нужен адрес из интернета: проброс порта на роутере или VPS.",
-    "Step by step: router, public IP, what to do without one": "Пошагово: роутер, белый IP, что делать без него",
-    "Server": "Сервер", "Port": "Порт", "Apply": "Применить", "Start": "Запустить", "Stop": "Остановить",
-    "Running": "Работает", "Stopped": "Остановлен", "Error": "Ошибка",
-    "Data folder": "Папка данных", "Use another folder…": "Другая папка…", "Move the data to…": "Перенести данные в…",
-    "dataNote": "Аккаунты, зашифрованные файлы и настройки. Консольный сервер использует ту же папку — при переходе на приложение все аккаунты сохраняются.",
-    "This computer": "Этот компьютер", "Start with the system": "Запускать вместе с системой", "Keep running when the window is closed": "Работать в фоне при закрытом окне",
-    "mobNote": "Сервер работает и с выключенным экраном — Android показывает уведомление. Если телефон всё равно его закрывает: Настройки → Приложения → Aquamarine Server → Батарея → Без ограничений.",
-    "The admin panel appears here when the server is running.": "Когда сервер работает, здесь его панель администратора.",
-    "Admin panel in its own window": "Панель администратора в отдельном окне",
-    "not yet — forward the port on the router": "пока нет — пробросьте порт на роутере", "Stop the server first": "Сначала остановите сервер",
-  };
-  const t = (k) => (RU && T[k]) || k;
-  if (RU) document.querySelectorAll("[data-t]").forEach((e) => { const k = e.getAttribute("data-t"); if (T[k]) e.textContent = T[k]; });
-  const $ = (id) => document.getElementById(id);
-  const invoke = (c, a) => window.__TAURI__.core.invoke(c, a);
-  let st = null, adminSrc = "";
+"use strict";
+// ======================================================================
+// Language
+// ======================================================================
+const RU = /^(ru|uk|be)/i.test(navigator.language || "");
+const RU_DICT = {
+  "Home": "Главная", "People": "Люди", "Access": "Доступ", "Network": "Сеть", "Mail": "Почта", "Stickers": "Стикеры", "Settings": "Настройки",
+  "Running": "Работает", "Stopped": "Остановлен", "Starting…": "Запускается…", "Error": "Ошибка",
+  "Start": "Запустить", "Stop": "Остановить", "Start the server": "Запустить сервер",
+  "for {t}": "уже {t}", "The server is off — nobody can connect.": "Сервер выключен — подключиться нельзя.",
+  "Online now": "Сейчас в сети", "Accounts": "Аккаунтов", "Bots": "Ботов", "Files": "Файлов", "Storage": "Хранилище", "Uptime": "Работает",
+  "How to connect": "Как подключиться",
+  "connectHint": "В Aquamarine: окно входа → «Сервер» → вставьте адрес или отсканируйте QR. Друзьям вне вашей Wi-Fi нужен адрес из интернета.",
+  "This device": "Это устройство", "Same Wi-Fi": "Та же Wi-Fi", "Internet": "Интернет", "Android emulator": "Эмулятор Android",
+  "no address in the local network": "адрес в локальной сети не найден",
+  "notForwarded": "не ведёт сюда: включён VPN или порт не проброшен на роутере",
+  "noPublic": "пока нет — пробросьте порт на роутере или возьмите VPS",
+  "Step by step: router, public IP, what to do without one": "Пошагово: роутер, белый IP, что делать без него",
+  "Copy": "Копировать", "Copied": "Скопировано", "QR": "QR", "Close": "Закрыть", "Save": "Сохранить", "Saved.": "Сохранено.", "Failed: ": "Ошибка: ",
+  "Scan it in Aquamarine: sign-in → Scan QR.": "Отсканируйте в Aquamarine: окно входа → «Сканировать QR».",
+  "Server address": "Адрес сервера",
+  "How will this server work?": "Как будет работать этот сервер?",
+  "Alone": "Один", "soloText": "Свои аккаунты и чаты, с другими серверами ничего не делится. В сеть можно вступить позже.",
+  "In a network": "В сети", "netText": "Вместе с другими серверами: аккаунты и резервные копии общие, люди на связи, даже когда один сервер выключен.",
+  "Choose later": "Решу потом",
+  "Online": "В сети", "Journal": "Журнал", "From other servers": "С других серверов",
+  "filter by @name": "фильтр по @имени", "Nobody": "Никого", "No bots": "Ботов нет", "No events yet": "Событий пока нет", "No one yet": "Пока никого",
+  "online": "в сети", "offline": "вышел", "login": "вход", "register": "регистрация", "user": "человек", "times": "раз", "was online": "был в сети",
+  "journalHint": "Кто заходил и выходил, входил с нового устройства или регистрировался. Пишется и в aqua-journal.log в папке данных.",
+  "Files by type": "Файлы по типам", "filesHint": "Файлы зашифрованы — сервер знает только тип, который сообщило приложение.", "No files": "Файлов нет",
+  "photo": "Фото", "video": "Видео", "sticker": "Стикеры", "gif": "GIF", "emoji": "Эмодзи", "voice": "Голосовые", "audio": "Музыка", "file": "Другие файлы", "unknown": "Без метки (старые версии)",
+  "Who can sign up": "Кто может зарегистрироваться",
+  "Invite only": "Только по приглашениям",
+  "inviteOnlySub": "Выключено — регистрироваться может любой, кто знает адрес.",
+  "Allowed — one per line": "Разрешённые — по одному в строке",
+  "accessRules": "<b>@имя</b> — этот человек; <b>*@сервер</b> — любой с пропуском от этого сервера вашей сети; <b>@имя@сервер</b> — этот человек с того сервера. И все, у кого есть приглашение.",
+  "accessNote": "Список решает только, кто может создать аккаунт. Шифрование от этого не меняется.",
+  "Invitations": "Приглашения", "invHint": "Код или его QR даёт зарегистрироваться здесь: человек сканирует его в приложении. Каждый код работает заданное число раз.",
+  "Uses": "Сколько раз", "Days (0 = forever)": "Дней (0 — бессрочно)", "For whom (optional)": "Для кого (необязательно)",
+  "Create": "Создать", "Invitation": "Приглашение", "No invitations yet.": "Приглашений пока нет.", "left {n}": "осталось {n}", "until {d}": "до {d}",
+  "Delete": "Удалить",
+  "How this server works": "Как работает сервер",
+  "soloState": "Сервер работает сам по себе.", "netState": "В сети, других серверов: {n}.", "netNoPeers": "В сети — пока один. Передайте приглашение админу другого сервера.",
+  "Reserve names in a network": "Резервировать имена в сети",
+  "soloNamesNote": "Сервер остаётся один, но делится с сетью только ID аккаунтов и @именами — чтобы одно @имя везде было у одного человека. И так можно пускать людей с серверов этой сети (*@сервер в «Доступе»).",
+  "paste a network invitation": "вставьте приглашение сети", "Join for names": "Вступить ради имён",
+  "regOn": "Имена резервируются в сети, серверов: {n}.",
+  "Invitation into this network": "Приглашение в эту сеть",
+  "inviteNote": "Передайте его админу другого сервера: он вставит его у себя, и серверы добавят друг друга. В приглашении секрет сети — пересылайте лично.",
+  "needs a public address — set it below": "нужен публичный адрес — укажите его ниже",
+  "Join a network by an invitation": "Вступить в сеть по приглашению", "Join": "Вступить",
+  "joined": "Готово — серверы добавили друг друга.", "Sending…": "Отправляю…",
+  "Servers around": "Серверы вокруг", "Search again": "Искать снова", "Looking for servers…": "Ищу серверы…", "No other servers in sight.": "Других серверов не видно.",
+  "in the network": "в сети", "separate server": "другой сервер", "local network": "локальная сеть", "public": "публичный", "not answering": "не отвечает", "accounts": "аккаунтов",
+  "By hand": "Вручную", "This server's public address": "Публичный адрес этого сервера", "Other servers (one per line)": "Другие серверы (по одному в строке)",
+  "Shared secret (16+ characters)": "Общий секрет (от 16 символов)", "paste or generate": "вставьте или сгенерируйте", "saved — paste a new one to replace": "сохранён — вставьте новый, чтобы заменить",
+  "Generate": "Сгенерировать", "copySecret": "Скопируйте секрет в другие серверы и нажмите «Сохранить» там.",
+  "mailVia": "Почты здесь нет — коды отправит сервер сети, у которого она есть. Пароль от почты никуда не передаётся.",
+  "mailHere": "Почта настроена здесь — этот сервер отправляет коды и за серверы сети без почты.",
+  "Mail for sign-in codes": "Почта для кодов",
+  "mailOld": "Новые версии приложения регистрируются без почты. Почта нужна только старым версиям (до 1.2.0-1), которые входят по коду из письма.",
+  "devMode": "<b>Режим разработки</b> — письма не отправляются, коды видны ниже.",
+  "mailOn": "Коды отправляются с <b>{from}</b> через {host}.",
+  "mailEnvDev": "Почта настроена ({host}), но режим разработки включён через AQUA_DEV_CODES=1.",
+  "mailEnv": "Задано переменными AQUA_SMTP_* — меняйте их там.",
+  "SMTP server": "SMTP-сервер", "Port": "Порт", "Login (your mailbox)": "Логин (ваш ящик)", "App password": "Пароль приложения",
+  "Send as (optional)": "Отправитель (необязательно)", "same as login": "как логин",
+  "Save and send real codes": "Сохранить и отправлять письма", "Back to dev mode": "Вернуть режим разработки",
+  "saved — leave empty to keep": "сохранён — оставьте пустым", "16-letter app password": "пароль приложения из 16 букв",
+  "gmailNote": "Gmail: включите двухэтапную проверку и создайте пароль приложения на myaccount.google.com/apppasswords — не обычный пароль.",
+  "Test e-mail": "Тестовое письмо", "Send test": "Отправить тест", "Type an address first.": "Сначала впишите адрес.", "Sent to {to} — check the inbox and spam.": "Отправлено на {to} — проверьте входящие и спам.",
+  "savedMail": "Сохранено. Отправьте тест, чтобы проверить.", "Back to dev mode.": "Режим разработки включён.",
+  "Codes": "Коды", "noCodes": "Кодов пока нет.", "notSent": "Эти письма НЕ ушли — передайте код человеку сами.",
+  "Telegram bot": "Бот Telegram",
+  "tgNote": "С токеном бота люди на этом сервере добавляют любой набор ссылкой t.me/addstickers/… или t.me/addemoji/… — сервер скачивает его один раз для всех. Токен выдаёт @BotFather → /newbot.",
+  "tgSecret": "Токен — секрет. Никому его не показывайте; если он попал на скриншот — смените его в @BotFather (Revoke).",
+  "Bot token": "Токен бота", "Remove token": "Удалить токен", "Paste the token first.": "Сначала вставьте токен.", "Token removed.": "Токен удалён.", "savedTg": "Сохранено. Наборы по умолчанию скачиваются в фоне.",
+  "tgOn": "Токен задан · наборов на сервере: <b>{n}</b>", "tgEnv": " (через AQUA_TG_BOT_TOKEN)", "tgOff": "<b>Токена нет</b> — люди добавляют наборы со своим токеном.",
+  "Packs on this server": "Наборы на сервере", "noPacks": "Наборов пока нет — вставьте ссылку t.me/addstickers/… в приложении.", "emoji ": "эмодзи", "stickers ": "стикеры",
+  "Server": "Сервер", "Apply": "Применить", "portNote": "Порт меняется сразу — сервер перезапустится.",
+  "Data folder": "Папка данных", "dataNote": "Аккаунты, зашифрованные файлы и настройки сервера. Консольный сервер использует ту же папку — аккаунты сохраняются.",
+  "Use another folder…": "Другая папка…", "Move the data to…": "Перенести данные в…", "Stop the server first": "Сначала остановите сервер",
+  "This computer": "Этот компьютер", "Start with the system": "Запускать вместе с системой", "autoSub": "Сервер работает с момента входа в систему, окно не открывается.",
+  "Keep running when the window is closed": "Работать в фоне при закрытом окне", "traySub": "Значок в трее: оттуда окно открывается снова.",
+  "mobNote": "Сервер работает и с выключенным экраном — Android показывает уведомление. Если телефон всё равно его закрывает: Настройки → Приложения → Aquamarine Server → Батарея → Без ограничений.",
+  "About": "О приложении", "Version": "Версия",
+  "serverOff": "Сервер выключен", "serverOffSub": "Эта страница заработает, когда сервер запущен.",
+  "s ago": " с назад", "m ago": " мин назад", "h ago": " ч назад", "d ago": " д назад",
+};
+const t = (k, vars) => { let s = (RU && RU_DICT[k]) || EN[k] || k; if (vars) for (const [a, b] of Object.entries(vars)) s = s.split("{" + a + "}").join(b); return s; };
+const EN = {
+  connectHint: "In Aquamarine: sign-in window → Server → paste the address or scan the QR. Friends outside your Wi-Fi need the internet address.",
+  notForwarded: "doesn't lead back here: a VPN is on, or the port isn't forwarded on the router",
+  noPublic: "not yet — forward the port on the router, or use a VPS",
+  soloText: "Its own accounts and chats; nothing is shared with other servers. You can join a network later.",
+  netText: "Together with other servers: accounts and backups are shared, people stay reachable when one server is down.",
+  journalHint: "Who came online and left, signed in from a new device or signed up. Also written to aqua-journal.log in the data folder.",
+  filesHint: "Files are encrypted — the server only knows the type the app reported.",
+  photo: "Photos", video: "Videos", sticker: "Stickers", gif: "GIFs", emoji: "Emoji", voice: "Voice messages", audio: "Music", file: "Other files", unknown: "Unlabelled (older apps)",
+  inviteOnlySub: "Off: anyone who knows the address can sign up.",
+  accessRules: "<b>@name</b> — this person; <b>*@server</b> — anyone with a pass from that server of your network; <b>@name@server</b> — this person from that server. Plus everyone with an invitation.",
+  accessNote: "This list only decides who may create an account. Encryption doesn't change.",
+  invHint: "A code (or its QR) lets someone sign up here: they scan it in the app. Each code works the number of times you set.",
+  soloState: "This server works by itself.", netState: "In a network, other servers: {n}.", netNoPeers: "In a network — on its own so far. Give the invitation to another server's admin.",
+  soloNamesNote: "The server stays alone but shares only account IDs and @names with a network, so one @name means one person everywhere. It also lets people from that network in (*@server in Access).",
+  regOn: "Names are reserved in the network, servers: {n}.",
+  inviteNote: "Give it to another server's admin: they paste it on their side and the servers add each other. It holds the network's secret — send it privately.",
+  joined: "Done — the servers added each other.",
+  copySecret: "Copy the secret to the other servers and press Save there.",
+  mailVia: "No mail here — a server of the network that has mail sends the codes. The mail password never leaves it.",
+  mailHere: "Mail is set up here — this server also sends codes for servers of the network without mail.",
+  mailOld: "New versions of the app sign up without e-mail. Mail is only for older versions (before 1.2.0-1) that sign in with an e-mailed code.",
+  devMode: "<b>Dev mode</b> — no mail is sent, codes show up below.",
+  mailOn: "Codes are sent from <b>{from}</b> via {host}.", mailEnvDev: "Mail is set up ({host}) but dev mode is forced by AQUA_DEV_CODES=1.", mailEnv: "Set by AQUA_SMTP_* environment variables — change them there.",
+  gmailNote: "Gmail: turn on 2-step verification and create an app password at myaccount.google.com/apppasswords — not your usual password.",
+  savedMail: "Saved. Send a test to check.", noCodes: "No codes yet.", notSent: "These e-mails could NOT be sent — pass the code on yourself.",
+  tgNote: "With a bot token people on this server add any pack by pasting a t.me/addstickers/… or t.me/addemoji/… link — the server downloads it once for everyone. @BotFather → /newbot gives you a token.",
+  tgSecret: "The token is a secret. Don't show it to anyone; if it ended up in a screenshot, revoke it in @BotFather.",
+  savedTg: "Saved. Default packs are downloading in the background.",
+  tgOn: "Token set · packs on this server: <b>{n}</b>", tgEnv: " (by AQUA_TG_BOT_TOKEN)", tgOff: "<b>No token</b> — people import packs with their own token.",
+  noPacks: "No packs yet — paste a t.me/addstickers/… link in the app.", "emoji ": "emoji", "stickers ": "stickers",
+  portNote: "The port changes right away — the server restarts.",
+  dataNote: "Accounts, encrypted files and the server's settings. The console server uses the same folder, so accounts are kept.",
+  autoSub: "The server runs from sign-in, without opening the window.", traySub: "An icon in the tray brings the window back.",
+  mobNote: "The server keeps running with the screen off — Android shows a notification. If the phone closes it anyway: Settings → Apps → Aquamarine Server → Battery → Unrestricted.",
+  serverOff: "The server is off", serverOffSub: "This page works while the server is running.",
+  "for {t}": "for {t}",
+};
+document.documentElement.lang = RU ? "ru" : "en";
 
-  function show(s) {
-    st = s;
-    const el = $("state");
-    el.className = "state" + (s.running ? " on" : s.error ? " err" : "");
-    $("stateText").textContent = s.running ? t("Running") : s.error ? t("Error") : t("Stopped");
-    $("toggle").textContent = s.running ? t("Stop") : t("Start");
-    $("toggle").className = s.running ? "danger" : "primary";
-    if (document.activeElement !== $("port")) $("port").value = s.port;
-    $("lan").textContent = s.lan_url || "—";
-    $("pub").textContent = s.public_url || (s.running ? t("not yet — forward the port on the router") : "—");
-    $("loc").textContent = s.local_url || "—";
-    $("err").hidden = !s.error; $("err").textContent = s.error || "";
-    $("dir").textContent = s.dir;
-    $("dirBtns").hidden = s.mobile;
-    $("sysCard").hidden = s.mobile;
-    $("mobCard").hidden = !s.mobile;
-    $("adminWin").hidden = s.mobile || !s.running;
-    $("auto").checked = !!s.autostart; $("tray").checked = !!s.tray;
-    if (s.admin_url && s.admin_url !== adminSrc) { adminSrc = s.admin_url; $("admin").src = s.admin_url; }
-    $("admin").hidden = !s.running; $("adminEmpty").hidden = s.running;
-    if (!s.running) adminSrc = "";
-  }
-  async function refresh() { try { show(await invoke("status")); } catch (e) { console.warn(e); } }
-  async function act(p) { $("err").hidden = true; try { show(await p); } catch (e) { $("err").hidden = false; $("err").textContent = String(e); } }
+// ======================================================================
+// Helpers
+// ======================================================================
+const $ = (id) => document.getElementById(id);
+const invoke = (c, a) => window.__TAURI__.core.invoke(c, a);
+const api = (path, method = "GET", body) => invoke("admin", { method, path, body: body ?? null });
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const human = (n) => n < 1024 ? n + (RU ? " Б" : " B") : n < 1048576 ? (n / 1024).toFixed(1) + (RU ? " КБ" : " KB") : n < 1073741824 ? (n / 1048576).toFixed(1) + (RU ? " МБ" : " MB") : (n / 1073741824).toFixed(2) + (RU ? " ГБ" : " GB");
+function dur(s) { const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  const [D, H, M] = RU ? ["д", "ч", "мин"] : ["d", "h", "m"]; return d ? `${d}${D} ${h}${H}` : h ? `${h}${H} ${m}${M}` : `${m} ${M}`; }
+function ago(at) { const s = Math.max(0, Math.floor(Date.now() / 1000 - at));
+  return s < 60 ? s + t("s ago") : s < 3600 ? Math.floor(s / 60) + t("m ago") : s < 86400 ? Math.floor(s / 3600) + t("h ago") : Math.floor(s / 86400) + t("d ago"); }
+function toast(s) { const el = $("toast"); el.textContent = s; el.classList.add("on"); clearTimeout(toast.h); toast.h = setTimeout(() => el.classList.remove("on"), 1800); }
+async function copy(s) { try { await navigator.clipboard.writeText(s); toast(t("Copied")); } catch { toast(s); } }
+function color(name) { let h = 0; for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0; return `hsl(${h % 360} 70% 65%)`; }
+const ava = (name) => `<span class="ava" style="background:${color(name)}">${esc((name[0] || "?").toUpperCase())}</span>`;
+function setMsg(id, text, cls) { const el = $(id); if (!el) return; el.className = "msg " + (cls || ""); el.innerHTML = text; }
+const errText = (e) => String(e?.message || e || "").slice(0, 300);
 
-  $("toggle").onclick = () => act(invoke(st?.running ? "stop" : "start", {}));
-  $("portSave").onclick = () => act(invoke("set_port", { port: Number($("port").value) }));
-  $("auto").onchange = (e) => act(invoke("set_autostart", { on: e.target.checked }));
-  $("tray").onchange = (e) => act(invoke("set_tray", { on: e.target.checked }));
-  async function chooseDir(copy) {
-    if (st?.running) { $("err").hidden = false; $("err").textContent = t("Stop the server first"); return; }
-    const p = await invoke("pick_dir");
-    if (p) await act(invoke("set_dir", { path: p, copy }));
+const I = (d) => `<svg class="i" viewBox="0 0 24 24">${d}</svg>`;
+const IC = {
+  home: I('<path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>'),
+  users: I('<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>'),
+  people: I('<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>'),
+  access: I('<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'),
+  network: I('<circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="19" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="M12 7.5v4M12 11.5l-5.5 5.5M12 11.5l5.5 5.5"/>'),
+  mail: I('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>'),
+  stickers: I('<path d="M21 12a9 9 0 1 1-9-9h4l5 5z"/><path d="M8.5 14.5a4 4 0 0 0 7 0"/><path d="M9 9.5h.01M15 9.5h.01"/>'),
+  settings: I('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'),
+  online: I('<path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1"/>'),
+  bots: I('<rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4"/><circle cx="12" cy="3" r="1"/><path d="M9 13h.01M15 13h.01"/>'),
+  files: I('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>'),
+  disk: I('<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/>'),
+  time: I('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
+  power: I('<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/>'),
+  copy: I('<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>'),
+  qr: I('<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M17 20h4v-3"/>'),
+  x: I('<path d="M18 6 6 18M6 6l12 12"/>'),
+  user: I('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'),
+  globe: I('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>'),
+  refresh: I('<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>'),
+};
+
+// ======================================================================
+// State
+// ======================================================================
+let st = null;          // status from the app (running, port, addresses, folder…)
+let stats = null;       // /v1/admin/stats while running
+let fed = null;         // /v1/admin/federation
+let page = "home";
+let version = "";
+let busy = false;
+const PAGES = [["home", "Home"], ["people", "People"], ["access", "Access"], ["network", "Network"], ["mail", "Mail"], ["stickers", "Stickers"], ["settings", "Settings"]];
+try { page = localStorage.getItem("aqs.page") || "home"; } catch {}
+if (!PAGES.some(([id]) => id === page)) page = "home";
+
+function buildNav() {
+  const nav = $("nav");
+  nav.querySelectorAll(".nav-btn, .nav-foot").forEach((e) => e.remove());
+  for (const [id, label] of PAGES) {
+    const b = document.createElement("button");
+    b.className = "nav-btn" + (id === page ? " on" : ""); b.dataset.page = id;
+    b.innerHTML = IC[id] + `<span>${t(label)}</span>` + (id === "mail" ? `<span class="badge" id="codesBadge" hidden></span>` : "");
+    b.onclick = () => go(id);
+    nav.appendChild(b);
   }
-  $("adminWin").onclick = () => act(invoke("open_admin_window").then(() => invoke("status")));
-  $("useDir").onclick = () => chooseDir(false);
-  $("moveDir").onclick = () => chooseDir(true);
-  document.querySelectorAll("[data-copy]").forEach((b) => b.onclick = async () => {
-    const v = $(b.getAttribute("data-copy")).textContent;
-    if (!/^https?:/.test(v)) return;
-    try { await navigator.clipboard.writeText(v); b.textContent = t("Copied"); setTimeout(() => (b.textContent = t("Copy")), 1500); } catch {}
-  });
-  $("guide").onclick = (e) => { e.preventDefault(); void invoke("open_guide"); };
-  refresh();
-  setInterval(refresh, 3000);
+  const f = document.createElement("div"); f.className = "nav-foot"; f.innerHTML = `<span class="dot" id="navDot"></span><span id="navText">…</span>`;
+  nav.appendChild(f);
+}
+function go(id) {
+  page = id; try { localStorage.setItem("aqs.page", id); } catch {}
+  document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("on", b.dataset.page === id));
+  $("main").scrollTop = 0;
+  render();
+}
+
+// ======================================================================
+// Rendering: each page is a function that fills <main>
+// ======================================================================
+function render() {
+  const fn = { home: pageHome, people: pagePeople, access: pageAccess, network: pageNetwork, mail: pageMail, stickers: pageStickers, settings: pageSettings }[page];
+  $("main").innerHTML = `<div class="page" id="pg"></div>`;
+  fn($("pg"));
+}
+const offBox = () => `<div class="card off-box">${IC.power}<b style="color:var(--fg)">${t("serverOff")}</b><span>${t("serverOffSub")}</span><button class="primary" onclick="toggleServer()">${t("Start the server")}</button></div>`;
+const needRunning = (el, title, lead) => { el.innerHTML = `<div><h1>${t(title)}</h1>${lead ? `<p class="lead">${lead}</p>` : ""}</div>` + offBox(); };
+
+// ---------------------------------------------------------------- Home
+function pageHome(el) {
+  el.innerHTML = `
+    <div class="card hero"><div class="pulse" id="hPulse"><i></i></div>
+      <div class="t"><b id="hState">…</b><span id="hSub"></span></div>
+      <button id="hBtn" onclick="toggleServer()"></button></div>
+    <div class="msg err" id="hErr" hidden></div>
+    <div id="modeAsk"></div>
+    <div class="stats" id="stats"></div>
+    <div class="card"><h2>${t("How to connect")}</h2><div id="addrs"></div>
+      <div class="note">${t("connectHint")}</div>
+      <a onclick="invoke('open_guide')">${t("Step by step: router, public IP, what to do without one")} →</a></div>`;
+  paintHome();
+}
+const STAT_TILES = [["online", "Online now", "online"], ["users", "Accounts", "journal"], ["bots", "Bots", "bots"], ["files", "Files", "files"], ["disk", "Storage", "files"], ["time", "Uptime", "visitors"]];
+function paintHome() {
+  if (page !== "home" || !$("hBtn") || !st) return;
+  const on = st.running;
+  $("hPulse").className = "pulse" + (on ? " on" : st.error ? " err" : "");
+  $("hState").textContent = busy ? t("Starting…") : on ? t("Running") : st.error ? t("Error") : t("Stopped");
+  $("hSub").textContent = on ? (stats ? t("for {t}", { t: dur(stats.uptime_secs) }) + " · " + (RU ? "порт " : "port ") + st.port : (RU ? "порт " : "port ") + st.port) : t("The server is off — nobody can connect.");
+  $("hBtn").className = on ? "danger" : "primary";
+  $("hBtn").innerHTML = IC.power + (on ? t("Stop") : t("Start"));
+  $("hBtn").disabled = busy;
+  $("hErr").hidden = !st.error; $("hErr").textContent = st.error || "";
+  // Stat tiles
+  const box = $("stats");
+  if (!on) { box.innerHTML = ""; } else {
+    if (!box.children.length) box.innerHTML = STAT_TILES.map(([k, l, d]) => `<button class="stat" onclick="openDetail('${d}')"><span class="ic">${IC[k]}</span><span class="n" id="s-${k}">—</span><span class="l">${t(l)}</span></button>`).join("");
+    if (stats) {
+      $("s-online").textContent = stats.online; $("s-users").textContent = stats.users; $("s-bots").textContent = stats.bots;
+      $("s-files").textContent = stats.blobs; $("s-disk").textContent = human(stats.blob_bytes); $("s-time").textContent = dur(stats.uptime_secs);
+    }
+  }
+  // Addresses
+  const rows = [];
+  const row = (k, url, off) => `<div class="addr ${off ? "off" : ""}"><span class="k">${t(k)}</span><code>${esc(off ? t(url) : url)}</code>${off ? "" :
+    `<button class="mini" onclick="copy('${esc(url)}')">${IC.copy}</button><button class="mini" onclick="showQr('${esc(url)}')">${IC.qr}</button>`}</div>`;
+  if (on) {
+    rows.push(st.lan_url ? row("Same Wi-Fi", st.lan_url) : row("Same Wi-Fi", "no address in the local network", true));
+    if (st.public_url) rows.push(row("Internet", st.public_url));
+    else if (stats?.public_unverified) rows.push(`<div class="addr off"><span class="k">${t("Internet")}</span><code>${esc(stats.public_unverified)} — ${t("notForwarded")}</code></div>`);
+    else rows.push(row("Internet", "noPublic", true));
+    rows.push(row("This device", st.local_url));
+    if (!st.mobile) rows.push(row("Android emulator", `http://10.0.2.2:${st.port}`));
+  } else rows.push(`<div class="note">${t("The server is off — nobody can connect.")}</div>`);
+  const html = rows.join("");
+  if ($("addrs").dataset.h !== html) { $("addrs").dataset.h = html; $("addrs").innerHTML = html; }
+  // First start: solo or network?
+  const ask = on && fed && !fed.mode && !sessionStorage.getItem("aqs.modeLater");
+  $("modeAsk").innerHTML = ask ? `<div class="card"><h2>${t("How will this server work?")}</h2>
+      <button class="choice" onclick="setMode('solo')">${IC.user}<div><b>${t("Alone")}</b><span>${t("soloText")}</span></div></button>
+      <button class="choice" onclick="setMode('network')">${IC.network}<div><b>${t("In a network")}</b><span>${t("netText")}</span></div></button>
+      <div><button class="ghost mini" onclick="sessionStorage.setItem('aqs.modeLater','1'); paintHome()">${t("Choose later")}</button></div></div>` : "";
+}
+
+async function toggleServer() {
+  if (busy || !st) return;
+  busy = true; paintAll();
+  try { st = await invoke(st.running ? "stop" : "start", {}); if (!st.running) { stats = null; fed = null; } }
+  catch (e) { st = await invoke("status"); st.error = st.error || errText(e); }
+  busy = false;
+  await poll(true);
+  render();
+}
+
+// ---------------------------------------------------------------- details modal
+async function openDetail(what) {
+  if (what === "journal") { peopleTab = "journal"; go("people"); return; }
+  const titles = { online: "Online now", files: "Files by type", bots: "Bots", visitors: "From other servers" };
+  modal(`<h3><span>${t(titles[what])}</span><button class="ghost mini" onclick="closeModal()">${IC.x}</button></h3>
+    ${what === "files" ? `<div class="note">${t("filesHint")}</div>` : ""}<div class="list" id="detList"><div class="empty">…</div></div>`);
+  try { $("detList").innerHTML = detailHtml(what, await api("/v1/admin/detail/" + what)); }
+  catch (e) { $("detList").innerHTML = `<div class="empty">${esc(errText(e))}</div>`; }
+}
+function detailHtml(what, d) {
+  if (what === "online") return d.map((u) => `<div class="li">${ava(u)}<span class="main">@${esc(u)}</span></div>`).join("") || `<div class="empty">${t("Nobody")}</div>`;
+  if (what === "bots") return d.map((b) => `<div class="li">${ava(b.username)}<span class="main">@${esc(b.username)}</span><span class="sub">${esc(b.name || "")}</span></div>`).join("") || `<div class="empty">${t("No bots")}</div>`;
+  if (what === "files") { const max = Math.max(1, ...d.map((f) => f.bytes));
+    return d.map((f) => `<div class="li"><span class="main">${t(f.kind)}</span><span class="bar"><i style="width:${(f.bytes / max * 100).toFixed(1)}%"></i></span><span class="sub">${f.count} · ${human(f.bytes)}</span></div>`).join("") || `<div class="empty">${t("No files")}</div>`; }
+  if (what === "visitors") return d.map((v) => `<div class="li">${ava(v.who)}<span class="main">${v.kind === "user" ? "@" : ""}${esc(v.who)}</span><span class="sub">${t(v.kind)} · ${v.count} ${t("times")} · ${ago(v.last)}</span></div>`).join("") || `<div class="empty">${t("No one yet")}</div>`;
+  return "";
+}
+function modal(html) { $("modal").innerHTML = `<div class="modal" onclick="if(event.target===this)closeModal()"><div class="box">${html}</div></div>`; }
+function closeModal() { $("modal").innerHTML = ""; }
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
+function showQr(text, title, note) {
+  // A plain address goes into the QR as aqua:srv?u=… — the app's scanner takes it as a server.
+  const data = /^https?:/.test(text) ? `aqua:srv?u=${encodeURIComponent(text)}` : text;
+  let svg = "";
+  try { const q = qrcode(0, "Q"); q.addData(data, "Byte"); q.make(); svg = q.createSvgTag({ cellSize: 6, margin: 2, scalable: true }); } catch {}
+  modal(`<h3><span>${esc(title || t("Server address"))}</span><button class="ghost mini" onclick="closeModal()">${IC.x}</button></h3>
+    <div class="qr">${svg}</div><code style="text-align:center;word-break:break-all">${esc(text.length > 90 ? text.slice(0, 44) + "…" : text)}</code>
+    <div class="note" style="text-align:center">${esc(note || t("Scan it in Aquamarine: sign-in → Scan QR."))}</div>
+    <button onclick="copy(${esc(JSON.stringify(text))})" style="align-self:center">${IC.copy}${t("Copy")}</button>`);
+}
+
+// ---------------------------------------------------------------- People
+let peopleTab = "online", journal = [], jq = "";
+function pagePeople(el) {
+  if (!st?.running) return needRunning(el, "People");
+  el.innerHTML = `<div><h1>${t("People")}</h1></div>
+    <div class="seg" id="pSeg">${[["online", "Online"], ["journal", "Journal"], ["bots", "Bots"], ["visitors", "From other servers"]].map(([k, l]) =>
+      `<button data-k="${k}" class="${k === peopleTab ? "on" : ""}" onclick="peopleTab='${k}'; render()">${t(l)}</button>`).join("")}</div>
+    <div class="card">${peopleTab === "journal" ? `<input type="text" id="jq" placeholder="${t("filter by @name")}" value="${esc(jq)}" oninput="jq=this.value; paintJournal()"><div class="note">${t("journalHint")}</div>` : ""}
+      <div class="list" id="pList"><div class="empty">…</div></div></div>`;
+  loadPeople();
+}
+async function loadPeople() {
+  if (page !== "people" || !st?.running) return;
+  try {
+    if (peopleTab === "journal") { journal = await api("/v1/admin/detail/journal"); paintJournal(); }
+    else { const d = await api("/v1/admin/detail/" + peopleTab); const h = detailHtml(peopleTab, d); if ($("pList") && $("pList").dataset.h !== h) { $("pList").dataset.h = h; $("pList").innerHTML = h; } }
+  } catch (e) { if ($("pList")) $("pList").innerHTML = `<div class="empty">${esc(errText(e))}</div>`; }
+}
+function paintJournal() {
+  if (!$("pList")) return;
+  const q = jq.trim().replace(/^@/, "").toLowerCase();
+  const list = q ? journal.filter((e) => e.user.toLowerCase().includes(q)) : journal;
+  $("pList").innerHTML = list.map((e) => `<div class="li"><span class="ev ${esc(e.ev)}">${t(e.ev)}</span><span class="main">@${esc(e.user)}${e.note ? ` <span class="sub">${e.ev === "offline" ? t("was online") + " " : ""}${esc(e.note)}</span>` : ""}</span>
+    <span class="sub" title="${new Date(e.at * 1000).toLocaleString()}">${new Date(e.at * 1000).toLocaleString([], { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</span></div>`).join("")
+    || `<div class="empty">${t("No events yet")}</div>`;
+}
+
+// ---------------------------------------------------------------- Access
+let inviteOnly = false;
+function pageAccess(el) {
+  if (!st?.running) return needRunning(el, "Access");
+  inviteOnly = !!stats?.invite_only;
+  el.innerHTML = `<div><h1>${t("Access")}</h1><p class="lead">${t("accessNote")}</p></div>
+    <div class="card"><h2>${t("Who can sign up")}</h2>
+      <div class="sw" onclick="inviteOnly=!inviteOnly; $('ioTog').classList.toggle('on', inviteOnly); $('allowBox').hidden=!inviteOnly">
+        <div class="t"><b>${t("Invite only")}</b><span>${t("inviteOnlySub")}</span></div><span class="tog ${inviteOnly ? "on" : ""}" id="ioTog"></span></div>
+      <div id="allowBox" ${inviteOnly ? "" : "hidden"} style="display:flex;flex-direction:column;gap:8px">
+        <label class="f">${t("Allowed — one per line")}<textarea id="allow" placeholder="@friend&#10;*@relay.example.org">${esc((stats?.allow || []).join("\n"))}</textarea></label>
+        <div class="note">${t("accessRules")}</div></div>
+      <div class="row"><button class="primary" onclick="saveAccess()">${t("Save")}</button><span class="msg" id="accMsg"></span></div></div>
+    <div class="card"><h2>${t("Invitations")}</h2><div class="note">${t("invHint")}</div>
+      <div class="row" style="align-items:flex-end">
+        <label class="f" style="max-width:120px">${t("Uses")}<input type="number" id="invUses" min="1" value="1"></label>
+        <label class="f" style="max-width:170px">${t("Days (0 = forever)")}<input type="number" id="invDays" min="0" value="7"></label>
+        <label class="f">${t("For whom (optional)")}<input type="text" id="invNote"></label>
+        <button class="primary" onclick="newInvite()">${t("Create")}</button></div>
+      <span class="msg" id="invMsg"></span>
+      <div class="list" id="invList"><div class="empty">…</div></div></div>`;
+  loadInvites();
+}
+async function saveAccess() {
+  const allow = ($("allow")?.value || "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+  try { await api("/v1/admin/config", "POST", { invite_only: inviteOnly, allow }); setMsg("accMsg", t("Saved."), "ok"); await poll(true); }
+  catch (e) { setMsg("accMsg", t("Failed: ") + esc(errText(e)), "err"); }
+}
+const joinUrl = (code) => "aqua:join?s=" + encodeURIComponent((st.public_url || st.lan_url || st.local_url || "").replace(/\/+$/, "")) + "&c=" + code;
+async function loadInvites() {
+  try {
+    const list = await api("/v1/admin/invites"); const now = Date.now() / 1000;
+    $("invList").innerHTML = list.length ? list.map((i) => {
+      const dead = !i.uses || (i.expires && i.expires < now);
+      const left = t("left {n}", { n: i.uses }) + (i.expires ? " · " + t("until {d}", { d: new Date(i.expires * 1000).toLocaleDateString() }) : "");
+      return `<div class="li" style="${dead ? "opacity:.45" : ""}"><code class="code-big" style="font-size:15px">${esc(i.code)}</code><span class="main" style="color:var(--dim);font-size:12.5px">${esc(left)}${i.note ? " · " + esc(i.note) : ""}</span>`
+        + (dead ? "" : `<button class="mini" onclick="showQr(joinUrl('${esc(i.code)}'), t('Invitation'))">${IC.qr}</button><button class="mini" onclick="copy(joinUrl('${esc(i.code)}'))">${IC.copy}</button>`)
+        + `<button class="mini danger" title="${t("Delete")}" onclick="delInvite('${esc(i.code)}')">${IC.x}</button></div>`;
+    }).join("") : `<div class="empty">${t("No invitations yet.")}</div>`;
+  } catch (e) { $("invList").innerHTML = `<div class="empty">${esc(errText(e))}</div>`; }
+}
+async function newInvite() {
+  try {
+    const i = await api("/v1/admin/invites", "POST", { uses: parseInt($("invUses").value) || 1, days: parseInt($("invDays").value) || 0, note: $("invNote").value });
+    $("invNote").value = ""; await loadInvites(); showQr(joinUrl(i.code), t("Invitation"));
+  } catch (e) { setMsg("invMsg", t("Failed: ") + esc(errText(e)), "err"); }
+}
+async function delInvite(code) { try { await api("/v1/admin/invites/" + code, "DELETE"); } catch {} loadInvites(); }
+
+// ---------------------------------------------------------------- Network
+let inviteText = "";
+function pageNetwork(el) {
+  if (!st?.running) return needRunning(el, "Network");
+  el.innerHTML = `<div><h1>${t("Network")}</h1></div>
+    <div class="card"><h2>${t("How this server works")}</h2>
+      <div class="seg" id="modeSeg"><button data-m="solo" onclick="setMode('solo')">${t("Alone")}</button><button data-m="network" onclick="setMode('network')">${t("In a network")}</button></div>
+      <div class="note" id="fState"></div><div class="note" id="mailVia"></div><span class="msg" id="fMsg"></span></div>
+    <div class="card" id="soloBox" hidden><h2>${t("Reserve names in a network")}</h2><div class="note">${t("soloNamesNote")}</div>
+      <div class="row"><input type="text" id="joinNames" placeholder="${t("paste a network invitation")}" style="flex:1;min-width:200px"><button onclick="joinNet(true)">${t("Join for names")}</button></div>
+      <div class="note" id="regState"></div></div>
+    <div id="netBox" hidden style="display:flex;flex-direction:column;gap:14px">
+      <div class="card"><h2>${t("Invitation into this network")}</h2>
+        <div class="addr"><code id="inviteCode">…</code><button class="mini" onclick="inviteText && copy(inviteText)">${IC.copy}</button><button class="mini" onclick="inviteText && showQr(inviteText, t('Invitation into this network'), '')">${IC.qr}</button></div>
+        <div class="note">${t("inviteNote")}</div></div>
+      <div class="card"><h2>${t("Join a network by an invitation")}</h2>
+        <div class="row"><input type="text" id="joinInv" placeholder="aquafed:…" style="flex:1;min-width:200px"><button class="primary" onclick="joinNet(false)">${t("Join")}</button></div></div>
+    </div>
+    <div class="card"><h2><span class="grow">${t("Servers around")}</span><button class="mini" id="srvRe" onclick="loadServers(true)">${IC.refresh}${t("Search again")}</button></h2>
+      <div class="list" id="servers"><div class="empty">${t("Looking for servers…")}</div></div></div>
+    <div class="card"><details><summary>${t("By hand")}</summary>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <label class="f">${t("This server's public address")}<input type="text" id="fSelf"></label>
+        <label class="f">${t("Other servers (one per line)")}<textarea id="fPeers"></textarea></label>
+        <label class="f">${t("Shared secret (16+ characters)")}<div class="row" style="flex-wrap:nowrap"><input type="password" id="fSecret"><button class="mini" onclick="genSecret()">${t("Generate")}</button></div></label>
+        <div class="row"><button class="primary" onclick="saveFed()">${t("Save")}</button><span class="msg" id="fMsg2"></span></div></div></details></div>`;
+  loadFed().then(() => paintFed(true));
+  loadServers(false);
+}
+async function loadFed() { try { fed = await api("/v1/admin/federation"); } catch {} }
+function paintFed(fill) {
+  if (page !== "network" || !fed || !$("modeSeg")) return;
+  const net = fed.mode === "network";
+  $("modeSeg").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.m === fed.mode));
+  $("netBox").hidden = !net; $("soloBox").hidden = fed.mode !== "solo";
+  $("fState").innerHTML = !net ? (fed.mode ? t("soloState") : "") : (fed.peers?.length ? t("netState", { n: `<b>${fed.peers.length}</b>` }) : t("netNoPeers"));
+  $("mailVia").textContent = net ? t(fed.smtp ? "mailHere" : "mailVia") : "";
+  $("regState").textContent = fed.mode === "solo" && fed.registry ? t("regOn", { n: (fed.peers || []).length }) : "";
+  if (fill) {
+    $("fSelf").value = fed.public_url || fed.detected_url || st.public_url || "";
+    $("fPeers").value = (fed.peers || []).join("\n");
+    $("fSecret").placeholder = fed.has_secret ? "•••••••• " + t("saved — paste a new one to replace") : t("paste or generate");
+  }
+  if (net) loadInvite();
+}
+async function loadInvite() {
+  try { const r = await api("/v1/admin/fed/invite"); inviteText = r.invite || "";
+    if ($("inviteCode")) $("inviteCode").textContent = inviteText ? inviteText.slice(0, 18) + "•••••••••••••" : t("needs a public address — set it below"); } catch {}
+}
+async function setMode(mode) {
+  try {
+    const cur = await api("/v1/admin/federation");
+    await api("/v1/admin/federation", "POST", { mode, public_url: cur.public_url || cur.detected_url || "", peers: cur.peers || [] });
+    await loadFed();
+    if (page === "home") { if (mode === "network") go("network"); else paintHome(); } else paintFed(true);
+  } catch (e) { setMsg("fMsg", t("Failed: ") + esc(errText(e)), "err"); toast(t("Failed: ") + errText(e)); }
+}
+async function joinNet(namesOnly) {
+  const invite = $(namesOnly ? "joinNames" : "joinInv").value.trim();
+  if (!invite) return;
+  setMsg("fMsg", t("Sending…"));
+  try { await api("/v1/admin/fed/join", "POST", namesOnly ? { invite, names_only: true } : { invite });
+    $(namesOnly ? "joinNames" : "joinInv").value = ""; setMsg("fMsg", t("joined"), "ok"); await loadFed(); paintFed(true); loadServers(true); }
+  catch (e) { setMsg("fMsg", t("Failed: ") + esc(errText(e)), "err"); }
+}
+let serversBusy = false, serversAt = 0, serversHtml = "";
+async function loadServers(force) {
+  if (serversHtml && $("servers")) $("servers").innerHTML = serversHtml;
+  if (serversBusy || (!force && Date.now() - serversAt < 60000)) return;
+  serversBusy = true; if ($("srvRe")) $("srvRe").disabled = true;
+  if (force && $("servers")) $("servers").innerHTML = `<div class="empty">${t("Looking for servers…")}</div>`;
+  try {
+    const r = await api("/v1/admin/servers"); serversAt = Date.now();
+    const list = (r.servers || []).sort((a, b) => (b.same_network - a.same_network) || (b.ok - a.ok) || ((a.ms ?? 1e9) - (b.ms ?? 1e9)));
+    serversHtml = list.length ? list.map((x) => `<div class="li"><span class="dot ${x.ok ? "on" : ""}"></span><span class="main mono">${esc(x.url.replace(/^https?:\/\//, ""))}</span>
+      ${x.same_network ? `<span class="tag net">${t("in the network")}</span>` : x.ok ? `<span class="tag">${t("separate server")}</span>` : ""}
+      ${x.found === "lan" ? `<span class="tag">${t("local network")}</span>` : x.found === "public" ? `<span class="tag">${t("public")}</span>` : ""}
+      ${x.ok && x.users != null ? `<span class="sub">${x.users} ${t("accounts")} · ${x.online ?? 0} ${t("online")}</span>` : ""}
+      <span class="sub">${x.ok ? x.ms + " ms" : t("not answering")}</span></div>`).join("") : `<div class="empty">${t("No other servers in sight.")}</div>`;
+  } catch (e) { serversHtml = `<div class="empty">${esc(errText(e))}</div>`; }
+  serversBusy = false;
+  if ($("servers")) $("servers").innerHTML = serversHtml;
+  if ($("srvRe")) $("srvRe").disabled = false;
+}
+function genSecret() {
+  const b = new Uint8Array(24); crypto.getRandomValues(b);
+  $("fSecret").type = "text"; $("fSecret").value = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  setMsg("fMsg2", t("copySecret"));
+}
+async function saveFed() {
+  const body = { public_url: $("fSelf").value.trim(), peers: $("fPeers").value.split(/\s+/).filter(Boolean), secret: $("fSecret").value.trim() || null };
+  try { await api("/v1/admin/federation", "POST", body); $("fSecret").value = ""; $("fSecret").type = "password"; await loadFed(); paintFed(true); setMsg("fMsg2", t("Saved."), "ok"); }
+  catch (e) { setMsg("fMsg2", t("Failed: ") + esc(errText(e)), "err"); }
+}
+
+// ---------------------------------------------------------------- Mail
+function pageMail(el) {
+  if (!st?.running) return needRunning(el, "Mail", t("mailOld"));
+  el.innerHTML = `<div><h1>${t("Mail")}</h1><p class="lead">${t("mailOld")}</p></div>
+    <div class="card"><h2>${t("Codes")}</h2><div class="note" id="codesHint"></div><div class="list" id="codes"></div></div>
+    <div class="card"><h2>${t("Mail for sign-in codes")}</h2><div class="note" id="mState">…</div>
+      <div class="row"><button class="mini" onclick="preset('smtp.gmail.com',587)">Gmail</button><button class="mini" onclick="preset('smtp.yandex.ru',465)">${RU ? "Яндекс" : "Yandex"}</button><button class="mini" onclick="preset('smtp.mail.ru',465)">Mail.ru</button><button class="mini" onclick="preset('smtp.office365.com',587)">Outlook</button></div>
+      <div class="row"><label class="f" style="flex:3">${t("SMTP server")}<input type="text" id="mHost" placeholder="smtp.gmail.com"></label><label class="f" style="max-width:110px">${t("Port")}<input type="number" id="mPort" placeholder="587"></label></div>
+      <div class="row"><label class="f">${t("Login (your mailbox)")}<input type="email" id="mUser"></label><label class="f">${t("App password")}<input type="password" id="mPass"></label></div>
+      <label class="f">${t("Send as (optional)")}<input type="text" id="mFrom" placeholder="${t("same as login")}"></label>
+      <div class="note">${t("gmailNote")}</div>
+      <div class="row"><button class="primary" onclick="saveMail(true)">${t("Save and send real codes")}</button><button id="mOff" onclick="saveMail(false)">${t("Back to dev mode")}</button></div>
+      <span class="msg" id="mMsg"></span></div>
+    <div class="card"><h2>${t("Test e-mail")}</h2><div class="row"><input type="email" id="mTo" style="flex:1;min-width:200px"><button onclick="testMail()">${t("Send test")}</button></div><span class="msg" id="mMsg2"></span></div>`;
+  paintCodes();
+  api("/v1/admin/smtp").then(showMail).catch(() => {});
+}
+function preset(h, p) { $("mHost").value = h; $("mPort").value = p; }
+function showMail(m) {
+  if (!$("mState")) return;
+  const env = m.source === "env";
+  $("mState").innerHTML = m.source === "none" ? t("devMode") : m.dev_codes ? t("mailEnvDev", { host: esc(m.host) }) : t("mailOn", { from: esc(m.from || m.user), host: esc(m.host) });
+  for (const id of ["mHost", "mPort", "mUser", "mPass", "mFrom"]) $(id).disabled = env;
+  $("mOff").disabled = env || m.source === "none";
+  if (env) setMsg("mMsg", t("mailEnv"));
+  $("mHost").value = m.host || ""; $("mPort").value = m.host ? m.port : ""; $("mUser").value = m.user || "";
+  $("mFrom").value = m.from && m.from !== m.user ? m.from : "";
+  $("mPass").value = ""; $("mPass").placeholder = m.has_password ? "•••••••• " + t("saved — leave empty to keep") : t("16-letter app password");
+  if (!$("mTo").value && m.user) $("mTo").value = m.user;
+}
+async function saveMail(enabled) {
+  const body = { enabled, host: $("mHost").value.trim(), port: +$("mPort").value || 0, user: $("mUser").value.trim(), from: $("mFrom").value.trim(), pass: $("mPass").value };
+  try { showMail(await api("/v1/admin/smtp", "POST", body)); setMsg("mMsg", enabled ? t("savedMail") : t("Back to dev mode."), "ok"); poll(true); }
+  catch (e) { setMsg("mMsg", t("Failed: ") + esc(errText(e)), "err"); }
+}
+async function testMail() {
+  const to = $("mTo").value.trim();
+  if (!to) return setMsg("mMsg2", t("Type an address first."), "err");
+  setMsg("mMsg2", t("Sending…"));
+  try { await api("/v1/admin/smtp/test", "POST", { to }); setMsg("mMsg2", t("Sent to {to} — check the inbox and spam.", { to: esc(to) }), "ok"); }
+  catch (e) { setMsg("mMsg2", t("Failed: ") + esc(errText(e)), "err"); }
+}
+let seenCodes = new Set(); try { seenCodes = new Set(JSON.parse(localStorage.getItem("aqs.codes") || "[]")); } catch {}
+function paintCodes() {
+  const codes = stats?.codes || [];
+  const badge = $("codesBadge");
+  if (page === "mail") { codes.forEach((c) => seenCodes.add(c.email + c.code + c.at)); try { localStorage.setItem("aqs.codes", JSON.stringify([...seenCodes].slice(-200))); } catch {} }
+  const unseen = codes.filter((c) => !seenCodes.has(c.email + c.code + c.at)).length;
+  if (badge) { badge.hidden = !unseen; badge.textContent = unseen; }
+  if (!$("codes")) return;
+  $("codesHint").innerHTML = stats?.dev_codes ? t("devMode") : (codes.length ? t("notSent") : "");
+  const h = codes.length ? codes.map((c) => `<div class="li"><span class="code-big">${esc(c.code)}</span><span class="main">${esc(c.email)}</span><span class="sub">${ago(c.at)}</span><button class="mini" onclick="copy('${esc(c.code)}')">${IC.copy}</button></div>`).join("") : `<div class="empty">${t("noCodes")}</div>`;
+  if ($("codes").dataset.h !== h) { $("codes").dataset.h = h; $("codes").innerHTML = h; }
+}
+
+// ---------------------------------------------------------------- Stickers
+function pageStickers(el) {
+  if (!st?.running) return needRunning(el, "Stickers");
+  el.innerHTML = `<div><h1>${t("Stickers")}</h1></div>
+    <div class="card"><h2>${t("Telegram bot")}</h2><div class="note" id="tState">…</div>
+      <div class="note">${t("tgNote")}</div>
+      <div class="row"><label class="f" style="flex:1">${t("Bot token")}<input type="password" id="tTok" autocomplete="off"></label></div>
+      <div class="note" style="color:var(--warn)">${t("tgSecret")}</div>
+      <div class="row"><button class="primary" onclick="saveTg(false)">${t("Save")}</button><button class="danger" id="tDel" onclick="saveTg(true)">${t("Remove token")}</button><span class="msg" id="tMsg"></span></div></div>
+    <div class="card"><h2>${t("Packs on this server")} <span id="packsN"></span></h2><div class="packs" id="packs"></div></div>`;
+  api("/v1/admin/telegram").then(showTg).catch((e) => setMsg("tMsg", esc(errText(e)), "err"));
+}
+function showTg(v) {
+  if (!$("tState")) return;
+  $("tState").innerHTML = v.has_token ? t("tgOn", { n: v.packs }) + (v.source === "env" ? t("tgEnv") : "") : t("tgOff");
+  $("tTok").disabled = v.source === "env"; $("tDel").disabled = !v.has_token || v.source === "env";
+  $("tTok").placeholder = v.has_token ? "•••••••• " + t("saved — paste a new one to replace") : "123456789:AA…";
+  const base = st.local_url || "";
+  const packs = v.list || [];
+  $("packsN").textContent = packs.length ? "· " + packs.length : "";
+  $("packs").innerHTML = packs.length ? packs.map((p) => `<div class="pack"><div class="pv">${(p.preview || []).map(([f, mime]) => {
+      const src = `${base}/v1/packs/${encodeURIComponent(p.name)}/${encodeURIComponent(f)}`;
+      return mime.startsWith("video/") ? `<video src="${src}" muted loop autoplay playsinline></video>` : mime.startsWith("image/") ? `<img src="${src}" alt="" loading="lazy">` : `<span>TGS</span>`; }).join("")}</div>
+      <b>${esc(p.title || p.name)}</b><small>${p.count} · ${t(p.kind === "custom_emoji" ? "emoji " : "stickers ")}</small></div>`).join("")
+    : `<div class="empty" style="grid-column:1/-1">${t("noPacks")}</div>`;
+}
+async function saveTg(remove) {
+  const token = remove ? "" : $("tTok").value.trim();
+  if (!remove && !token) return setMsg("tMsg", t("Paste the token first."), "err");
+  try { const v = await api("/v1/admin/telegram", "POST", { token }); $("tTok").value = ""; showTg(v); setMsg("tMsg", remove ? t("Token removed.") : t("savedTg"), "ok"); }
+  catch (e) { setMsg("tMsg", t("Failed: ") + esc(errText(e)), "err"); }
+}
+
+// ---------------------------------------------------------------- Settings
+function pageSettings(el) {
+  const s = st || {};
+  el.innerHTML = `<div><h1>${t("Settings")}</h1></div>
+    <div class="card"><h2>${t("Server")}</h2>
+      <div class="row" style="align-items:flex-end"><label class="f" style="max-width:140px">${t("Port")}<input type="number" id="port" min="1024" max="65535" value="${s.port || 7777}"></label>
+        <button onclick="setPort()">${t("Apply")}</button></div>
+      <div class="note">${t("portNote")}</div><span class="msg" id="portMsg"></span></div>
+    <div class="card"><h2>${t("Data folder")}</h2><code style="word-break:break-all">${esc(s.dir || "—")}</code><div class="note" id="ddSize"></div>
+      <div class="note">${t("dataNote")}</div>
+      ${s.mobile ? "" : `<div class="row"><button class="mini" onclick="chooseDir(false)">${t("Use another folder…")}</button><button class="mini" onclick="chooseDir(true)">${t("Move the data to…")}</button></div>`}
+      <span class="msg" id="dirMsg"></span></div>
+    ${s.mobile ? `<div class="card"><div class="note">${t("mobNote")}</div></div>` : `
+    <div class="card"><h2>${t("This computer")}</h2>
+      <div class="sw" onclick="setSys('set_autostart', !st.autostart)"><div class="t"><b>${t("Start with the system")}</b><span>${t("autoSub")}</span></div><span class="tog ${s.autostart ? "on" : ""}"></span></div>
+      <div class="sw" onclick="setSys('set_tray', !st.tray)"><div class="t"><b>${t("Keep running when the window is closed")}</b><span>${t("traySub")}</span></div><span class="tog ${s.tray ? "on" : ""}"></span></div></div>`}
+    <div class="card"><h2>${t("About")}</h2><div class="note">Aquamarine Server · ${t("Version")} ${esc(version)}</div>
+      <a onclick="invoke('open_guide')">${t("Step by step: router, public IP, what to do without one")} →</a></div>`;
+  if (s.running) api("/v1/admin/datadir").then((d) => { if ($("ddSize")) $("ddSize").textContent = human(d.bytes); }).catch(() => {});
+}
+async function setPort() {
+  try { st = await invoke("set_port", { port: Number($("port").value) }); setMsg("portMsg", t("Saved."), "ok"); paintAll(); }
+  catch (e) { setMsg("portMsg", t("Failed: ") + esc(errText(e)), "err"); }
+}
+async function chooseDir(copyData) {
+  if (st?.running) return setMsg("dirMsg", t("Stop the server first"), "err");
+  const p = await invoke("pick_dir"); if (!p) return;
+  try { st = await invoke("set_dir", { path: p, copy: copyData }); render(); }
+  catch (e) { setMsg("dirMsg", t("Failed: ") + esc(errText(e)), "err"); }
+}
+async function setSys(cmd, on) { try { st = await invoke(cmd, { on }); } catch (e) { toast(errText(e)); } render(); }
+
+// ======================================================================
+// Polling
+// ======================================================================
+function paintAll() {
+  const on = st?.running;
+  if ($("navDot")) { $("navDot").className = "dot" + (on ? " on" : st?.error ? " err" : ""); $("navText").textContent = busy ? t("Starting…") : on ? t("Running") + (stats ? " · " + (stats.online) + " " + t("online") : "") : t("Stopped"); }
+  paintHome(); paintCodes();
+}
+let wasRunning = null;
+async function poll(force) {
+  try { st = await invoke("status"); } catch (e) { console.warn(e); return; }
+  if (st.running) {
+    try { stats = await api("/v1/admin/stats"); } catch { stats = null; }
+    if (!fed || force) await loadFed();
+  } else { stats = null; }
+  // The server came up or went down: pages that need it redraw.
+  if (wasRunning !== null && wasRunning !== st.running && page !== "home" && page !== "settings") render();
+  wasRunning = st.running;
+  paintAll();
+  if (page === "people") loadPeople();
+}
+(async () => {
+  try { version = await window.__TAURI__.app.getVersion(); } catch {}
+  buildNav();
+  await poll(true);
+  render();
+  setInterval(() => { if (!document.hidden) poll(false); }, 4000);
+})();
 </script>
 </body>
 </html>

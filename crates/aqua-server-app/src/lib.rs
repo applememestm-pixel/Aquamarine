@@ -115,8 +115,6 @@ pub struct Status {
     lan_url: Option<String>,
     /// From the internet, once the relay knows its address (port forwarded).
     public_url: Option<String>,
-    /// The relay's own admin panel, with this run's token.
-    admin_url: Option<String>,
     dir: String,
     has_data: bool,
     error: Option<String>,
@@ -147,7 +145,6 @@ fn status_of(app: &AppHandle) -> Status {
         local_url: running.then(|| format!("http://127.0.0.1:{port}")),
         lan_url: if running { aqua_server::lan_ip().map(|ip| format!("http://{ip}:{port}")) } else { None },
         public_url: if running { Some(aqua_server::public::url()).filter(|u| !u.is_empty()) } else { None },
-        admin_url: cur.map(|(p, t)| format!("http://127.0.0.1:{p}/admin#token={t}")),
         has_data: aqua_server::datadir::has_data(&dir),
         dir: dir.display().to_string(),
         error: (!running && !err.is_empty()).then_some(err),
@@ -362,26 +359,37 @@ fn set_tray(app: AppHandle, on: bool) -> Status {
     status_of(&app)
 }
 
-/// Computers: the admin panel in a window of its own (where a page inside
-/// the app's window isn't allowed to show a plain-HTTP panel).
+/// The window's own panel talks to the running relay through this: one call
+/// to `/v1/admin/…` with this run's token. No browser, no web page inside.
 #[tauri::command]
-fn open_admin_window(app: AppHandle) -> Result<(), String> {
-    let url = status_of(&app).admin_url.ok_or("the server isn't running")?;
-    #[cfg(desktop)]
-    {
-        if let Some(w) = app.get_webview_window("admin") {
-            let _ = w.close();
-        }
-        let u = url.parse::<tauri::Url>().map_err(|e| e.to_string())?;
-        tauri::WebviewWindowBuilder::new(&app, "admin", tauri::WebviewUrl::External(u))
-            .title("Aquamarine Server — admin panel")
-            .inner_size(1100.0, 800.0)
-            .build()
-            .map_err(|e| e.to_string())?;
+async fn admin(method: String, path: String, body: Option<serde_json::Value>) -> Result<serde_json::Value, String> {
+    if !path.starts_with("/v1/admin/") || path.contains("..") {
+        return Err("not an admin path".into());
     }
-    #[cfg(mobile)]
-    let _ = url;
-    Ok(())
+    let (port, token) = RUNNING
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|r| (r.port, r.token.clone())))
+        .ok_or("the server isn't running")?;
+    let url = format!("http://127.0.0.1:{port}{path}");
+    let c = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let m = reqwest::Method::from_bytes(method.to_uppercase().as_bytes()).map_err(|e| e.to_string())?;
+    let mut rq = c.request(m, &url).bearer_auth(&token);
+    if let Some(b) = body {
+        rq = rq.json(&b);
+    }
+    let r = rq.send().await.map_err(|e| e.to_string())?;
+    let ok = r.status().is_success();
+    let code = r.status().as_u16();
+    let text = r.text().await.unwrap_or_default();
+    if !ok {
+        return Err(if text.trim().is_empty() { format!("HTTP {code}") } else { text });
+    }
+    Ok(serde_json::from_str(&text).unwrap_or(serde_json::Value::Null))
 }
 
 /// The step-by-step guide (router, public IP) in the browser.
@@ -511,7 +519,7 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![status, start, stop, set_port, set_dir, pick_dir, set_autostart, set_tray, open_guide, open_admin_window])
+        .invoke_handler(tauri::generate_handler![status, start, stop, set_port, set_dir, pick_dir, set_autostart, set_tray, open_guide, admin])
         .run(tauri::generate_context!());
     if let Err(e) = res {
         eprintln!("aquamarine server: {e:?}");
