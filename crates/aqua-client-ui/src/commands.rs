@@ -426,11 +426,14 @@ pub async fn signup_plain(
     display_name: Option<String>,
     invite: Option<String>,
     tg_ticket: Option<String>,
-) -> Result<(), String> {
-    if password.chars().count() < 8 { return Err("password must be at least 8 characters".into()); }
+) -> Result<String, String> {
+    // Joining with a pass from my server: my @name from there, and the
+    // password may be left empty (the server keeps none then).
+    let joining = invite.as_deref().is_some_and(|i| i.trim().starts_with("aqpass:"));
+    if !(joining && password.is_empty()) && password.chars().count() < 8 { return Err("password must be at least 8 characters".into()); }
     let identity = state.lock().map_err(|e| e.to_string())?.identity.clone();
     let name = username.trim().trim_start_matches('@').to_lowercase();
-    let secret = secret_for(&password, &name).await?;
+    let secret = if password.is_empty() { String::new() } else { secret_for(&password, &name).await? };
     Transport::signup_account_tg(&server_url, &identity, &name, &secret, display_name.as_deref().unwrap_or(""), invite.as_deref().unwrap_or(""), tg_ticket.as_deref().unwrap_or(""))
         .await
         .map_err(|e| e.to_string())
@@ -3658,6 +3661,22 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
         }
         crate::multidev::handle_own_device(app, &text);
         return;
+    }
+    // A device of theirs that their own devices never signed onto their list
+    // (devlists.rs): the relay could have added it. Look once more — the
+    // list may just be new — then drop the message.
+    let peer_dh = state.lock().ok().and_then(|s| s.sessions.get(addr).map(|x| x.peer.dh_pub.as_bytes().to_vec()));
+    if let Some(dh) = peer_dh {
+        if !crate::devlists::allowed(app, &from, &dh) {
+            if let Some(t) = state.lock().ok().and_then(|s| s.transport.clone()) {
+                crate::devlists::refresh(app, &t, &from, true).await;
+            }
+            if !crate::devlists::allowed(app, &from, &dh) {
+                tracing::warn!(%addr, "a message from a device that isn't on the sender's signed list — dropped");
+                let _ = app.emit("aqua://devlist_refused", serde_json::json!({ "user": from, "why": "unlisted device" }));
+                return;
+            }
+        }
     }
 
     // Blocked people: everything is dropped except group traffic (their

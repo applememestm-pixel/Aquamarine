@@ -316,4 +316,63 @@ async fn solo_relay_shares_only_names() {
     assert_eq!(signup(&http, &us, "bobby", &forged).await.0, 403, "a changed pass doesn't work");
     assert_eq!(signup(&http, &us, "bobby", &pass).await.0, 204);
     assert_eq!(signup(&http, &us, "bobby2", &pass).await.0, 403, "a pass works once");
+
+    // Register once: with a fresh pass and no name, bob joins as @bob — the
+    // same name and ID as on A, even though the name is reserved here.
+    let r: serde_json::Value = http.post(format!("{ua}/v1/me/pass")).bearer_auth(&bob_tok).json(&serde_json::json!({})).send().await.unwrap().json().await.unwrap();
+    let pass2 = r["pass"].as_str().unwrap().to_string();
+    let id = IdentityKeyPair::generate();
+    let tok = token(&http, &us, &id).await;
+    let r = http.post(format!("{us}/v1/users/signup")).bearer_auth(&tok)
+        .json(&serde_json::json!({ "username": "", "password": "", "invite": pass2 })).send().await.unwrap();
+    assert!(r.status().is_success(), "{}", r.status());
+    let v: serde_json::Value = r.json().await.unwrap();
+    assert_eq!((v["username"].as_str(), v["joined"].as_bool()), (Some("bob"), Some(true)));
+    assert_eq!(ss.directory.uid_of("bob"), sa.directory.uid_of("bob"));
+    let me: serde_json::Value = http.get(format!("{us}/v1/me")).bearer_auth(&tok).send().await.unwrap().json().await.unwrap();
+    assert_eq!(me["username"], "bob");
+    // The network sees it as its own @bob, not a clash.
+    fed::names_hello(&fed::registry(&ss).unwrap()).await;
+    fed::sync_once(&sa, &mut Default::default()).await;
+    assert!(sa.directory.identity_for("bob").is_some());
+    assert_eq!(sa.directory.username_by_uid(&sa.directory.uid_of("bob").unwrap()).as_deref(), Some("bob"));
+}
+
+/// Register once (1.2.0-5): a relay that joins the network later takes every
+/// account on its first sync, and people sign in there without signing up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_new_relay_knows_everyone_after_its_first_sync() {
+    let la = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let lb = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (a, b) = (la.local_addr().unwrap().to_string(), lb.local_addr().unwrap().to_string());
+    let (ua, ub) = (format!("http://{a}"), format!("http://{b}"));
+    let tmp = tempfile::tempdir().unwrap();
+    let sa = AppState::isolated(tmp.path().join("a"), Some(FedConfig { secret: SECRET.into(), peers: vec![], public_url: ua.clone(), mode: "network".into(), ..Default::default() }));
+    { let s = sa.clone(); tokio::spawn(async move { axum::serve(la, app(s)).await.unwrap() }); }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    // People sign up on A before B exists.
+    let mut ids = Vec::new();
+    for n in 0..30 {
+        let id = IdentityKeyPair::generate();
+        let tok = token(&http, &ua, &id).await;
+        let r = http.post(format!("{ua}/v1/users/signup")).bearer_auth(&tok)
+            .json(&serde_json::json!({ "username": format!("early{n}"), "password": "a-good-secret" })).send().await.unwrap();
+        assert_eq!(r.status().as_u16(), 204);
+        ids.push(id);
+    }
+    // B starts and joins.
+    let sb = AppState::isolated(tmp.path().join("b"), Some(FedConfig { secret: SECRET.into(), peers: vec![ua.clone()], public_url: ub.clone(), mode: "network".into(), ..Default::default() }));
+    { let s = sb.clone(); tokio::spawn(async move { axum::serve(lb, app(s)).await.unwrap() }); }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    fed::sync_once(&sb, &mut Default::default()).await;
+    for n in 0..30 {
+        assert!(sb.directory.identity_for(&format!("early{n}")).is_some(), "early{n} reached B");
+    }
+    // early7 connects to B with the same key: no sign-up there.
+    let tok = token(&http, &ub, &ids[7]).await;
+    let me: serde_json::Value = http.get(format!("{ub}/v1/me")).bearer_auth(&tok).send().await.unwrap().json().await.unwrap();
+    assert_eq!(me["username"], "early7");
+    let w = tokio_tungstenite::connect_async(format!("ws://{b}/v1/ws?user=early7&token={tok}&v=1.2.0")).await;
+    assert!(w.is_ok());
 }

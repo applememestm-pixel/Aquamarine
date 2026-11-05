@@ -1823,6 +1823,20 @@
   /** Channel / group forbids forwarding, copying and saving. */
   startNoShare();
   void import("../botHelpers").then((m) => m.startBotHelpers());
+  // Someone's devices changed without their old devices signing it.
+  onMount(() => {
+    const offs: Array<() => void> = [];
+    void import("@tauri-apps/api/event").then(({ listen }) => {
+      void listen<{ user: string }>("aqua://devlist_reset", (e) => {
+        showToast(tr("@{u} started their device list over: all the old devices are gone. If you didn't expect this, compare the safety code with them.", { u: e.payload.user }), 9000);
+        void api.devlistResetSeen(e.payload.user).catch(() => {});
+      }).then((f) => offs.push(f));
+      void listen<{ user: string; why: string }>("aqua://devlist_refused", (e) => {
+        showToast(tr("A device of @{u} that their own devices didn't approve was ignored ({why}).", { u: e.payload.user, why: e.payload.why }), 8000);
+      }).then((f) => offs.push(f));
+    }).catch(() => {});
+    return () => offs.forEach((f) => f());
+  });
   /** 1:1 chat with "Disable sharing" on (either person turned it on). */
   let dmNoShare = $derived(!isGroup && !!$activeChat && $noShare.has($activeChat.id));
   let protectedChat = $derived((!!activeGroup?.settings.protected_content && !isAdmin(activeGroup, myUsername)) || dmNoShare);

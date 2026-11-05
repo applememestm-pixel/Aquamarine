@@ -1124,14 +1124,22 @@ async fn signup_user(
     State(state): State<AppState>,
     Caller(dh_pub): Caller,
     Json(body): Json<SignupBody>,
-) -> Result<StatusCode, (StatusCode, String)> {
-    let name = body.username.trim().trim_start_matches('@').to_lowercase();
-    let by_pass = || {
-        let (user, host) = check_pass(&state, &body.invite)?;
-        state.admin.read().ok()?.permits_pass(&user, &host).then_some(())
-    };
-    if !state.admin.read().map(|c| c.permits_name(&name)).unwrap_or(true)
-        && by_pass().is_none()
+) -> Result<axum::response::Response, (StatusCode, String)> {
+    use axum::response::IntoResponse;
+    // A pass from a relay of our network: the person already has an account
+    // there, so they join with it — same @name and ID, nothing to choose
+    // (1.2.0-5: "register once").
+    let pass = if body.invite.trim().starts_with("aqpass:") { check_pass(&state, &body.invite) } else { None };
+    if body.invite.trim().starts_with("aqpass:") && pass.is_none() {
+        return Err((StatusCode::FORBIDDEN, "this pass is wrong, used or expired — make a new one on your server".into()));
+    }
+    let asked = body.username.trim().trim_start_matches('@').to_lowercase();
+    let joined = pass.as_ref().filter(|p| asked.is_empty() || asked == p.user);
+    let name = joined.map(|p| p.user.clone()).unwrap_or(asked);
+    let invite_only = state.admin.read().map(|c| c.invite_only).unwrap_or(false);
+    let pass_ok = pass.as_ref().is_some_and(|p| !invite_only || state.admin.read().is_ok_and(|c| c.permits_pass(&p.user, &p.host)));
+    if !pass_ok
+        && !state.admin.read().map(|c| c.permits_name(&name)).unwrap_or(true)
         && !state.admin.write().map(|mut c| c.redeem(&body.invite, &format!("@{name}"))).unwrap_or(false)
     {
         return Err((StatusCode::FORBIDDEN, "this relay is invite-only — ask the admin for an invitation".into()));
@@ -1141,16 +1149,20 @@ async fn signup_user(
     } else {
         Some(tglogin::take(&body.tg_ticket).ok_or((StatusCode::BAD_REQUEST, "the Telegram confirmation has expired — confirm again".to_string()))?)
     };
-    state
-        .directory
-        .register_plain(&name, &dh_pub, &body.password, &body.display_name)
-        .map_err(|e| (match e { directory::DirError::UsernameTaken => StatusCode::CONFLICT, _ => dir_err_status(&e) }, e.to_string()))?;
+    let res = match joined {
+        Some(p) => state.directory.register_joined(&name, &p.uid, &dh_pub, &body.password, &body.display_name),
+        None => state.directory.register_plain(&name, &dh_pub, &body.password, &body.display_name),
+    };
+    res.map_err(|e| (match e { directory::DirError::UsernameTaken => StatusCode::CONFLICT, _ => dir_err_status(&e) }, e.to_string()))?;
     if let Some((id, tg_name)) = tg {
         state.directory.tg_link(&name, &id, &tg_name).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
-    journal::log(&name, "register", "");
+    journal::log(&name, if joined.is_some() { "join" } else { "register" }, "");
     state.fed_kick.notify_waiters();
-    Ok(StatusCode::NO_CONTENT)
+    if joined.is_some() {
+        return Ok(Json(serde_json::json!({ "username": name, "joined": true })).into_response());
+    }
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 // ---------- Passes: "I have an account on relay X" (1.2.0-4) ------------------------
@@ -1183,16 +1195,20 @@ async fn pass_create(State(state): State<AppState>, Caller(dh): Caller) -> Resul
     let mut n = [0u8; 9];
     rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut n);
     let exp = directory::now_secs() as i64 + PASS_SECS;
-    let json = serde_json::json!({ "u": me, "h": host_of(&home), "x": exp, "n": hex::encode(n) }).to_string();
+    let uid = state.directory.uid_of(&me).unwrap_or_default();
+    let json = serde_json::json!({ "u": me, "i": uid, "h": host_of(&home), "x": exp, "n": hex::encode(n) }).to_string();
     let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json);
     let pass = format!("aqpass:{payload}.{}", pass_mac(&fed.cfg.secret, &payload));
     journal::log(&me, "pass", "");
     Ok(Json(serde_json::json!({ "pass": pass, "expires": exp, "home": home })))
 }
 
-/// A pass signed by our network's secret, not expired, not used before →
-/// `(@user, host)`. Using it uses it up.
-fn check_pass(state: &AppState, pass: &str) -> Option<(String, String)> {
+/// What a checked pass says.
+struct PassInfo { user: String, uid: String, host: String }
+
+/// A pass signed by our network's secret, not expired, not used before.
+/// Using it uses it up.
+fn check_pass(state: &AppState, pass: &str) -> Option<PassInfo> {
     use base64::Engine;
     static USED: std::sync::Mutex<Option<std::collections::HashMap<String, i64>>> = std::sync::Mutex::new(None);
     let fed = fed::registry(state)?;
@@ -1215,7 +1231,7 @@ fn check_pass(state: &AppState, pass: &str) -> Option<(String, String)> {
     if used.insert(nonce, exp).is_some() {
         return None;
     }
-    Some((v["u"].as_str()?.to_string(), v["h"].as_str()?.to_string()))
+    Some(PassInfo { user: v["u"].as_str()?.to_string(), uid: v["i"].as_str().unwrap_or("").to_string(), host: v["h"].as_str()?.to_string() })
 }
 
 #[derive(Deserialize)]
@@ -1927,6 +1943,30 @@ async fn hist_put(State(state): State<AppState>, Caller(dh): Caller, Path(k): Pa
     })?;
     state.fed_kick.notify_waiters();
     Ok(Json(serde_json::json!({ "seq": seq })))
+}
+
+/// `PUT /v1/me/devlist` — publish the account's signed device list.
+async fn devlist_put(State(state): State<AppState>, Caller(dh): Caller, body: String) -> Result<StatusCode, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    if body.len() > 32 * 1024 {
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, "device list too large".into()));
+    }
+    state.directory.put_devlist(&me, &body).map_err(|e| (match e {
+        directory::DirError::Conflict => StatusCode::CONFLICT,
+        directory::DirError::NotOwner => StatusCode::FORBIDDEN,
+        _ => StatusCode::BAD_REQUEST,
+    }, e.to_string()))?;
+    state.fed_kick.notify_waiters();
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET /v1/devlist/:user` — the signed device list (JSON) or 404.
+async fn devlist_get(State(state): State<AppState>, Path(user): Path<String>) -> Result<axum::response::Response, StatusCode> {
+    use axum::response::IntoResponse;
+    let user = user.trim().trim_start_matches('@').to_lowercase();
+    let user = if state.directory.user_exists(&user) { user } else { state.directory.renamed_to(&user).unwrap_or(user) };
+    let json = state.directory.devlist(&user).ok_or(StatusCode::NOT_FOUND)?;
+    Ok(([(header::CONTENT_TYPE, "application/json")], json).into_response())
 }
 
 /// `GET /v1/me/backup` — the account's backup, for a device of the account
@@ -2859,6 +2899,8 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/users/signin",       post(signin_user))
         .route("/v1/me/backup",          get(backup_mine))
         .route("/v1/me/pass",            post(pass_create))
+        .route("/v1/me/devlist",         axum::routing::put(devlist_put))
+        .route("/v1/devlist/:user",      get(devlist_get))
         .route("/v1/me/tg",              post(tg_link).delete(tg_unlink))
         .route("/v1/auth/tg/start",      post(tglogin::start))
         .route("/v1/auth/tg/poll",       post(tglogin::poll))

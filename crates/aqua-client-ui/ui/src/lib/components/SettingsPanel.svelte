@@ -330,6 +330,15 @@
     devErr = null;
     try { devices = await api.listDevices(); deviceTrust.set(await api.deviceTrust().catch(() => null)); }
     catch (e) { devices = null; devErr = String(e); }
+    devList = await api.devlistStatus().catch(() => null);
+  }
+  /** My signed device list (devlists.rs). */
+  let devList = $state<{ published: boolean; ver: number | null; devices: number; this_listed: boolean } | null>(null);
+  async function devListReset() {
+    const ok = await askConfirm({ title: tr("Start the device list over?"), text: tr("Only if every old device is lost. Your contacts will see a warning that your devices changed, like a changed safety code."), ok: tr("Start over"), danger: true });
+    if (!ok) return;
+    try { await api.devlistReset(); showToast(tr("The device list now has only this device")); devList = await api.devlistStatus().catch(() => null); }
+    catch (e) { showToast(String(e)); }
   }
   $effect(() => { if ($settingsOpen && section === "devices") void loadDevices(); });
   // ---- Server on this device: the relay inside the app ----
@@ -1803,6 +1812,17 @@
         <div class="label">{$t("Devices")}</div>
         <div class="bots-note">{$t("Your account works on several devices at once: phone, computer, tablet. Each device has its own encryption keys and gets every message. To add one, turn on two-step verification (Privacy & Security), then open Aquamarine there and choose “Sign in” with your @username, password and the code.")}</div>
         <div class="bots-note">{$t("A new device gets your chats only after you approve it on one of your devices (“It's me”). Two-step codes and turning off sign-in on new devices: Privacy & Security.")}</div>
+        {#if devList}
+          <div class="bk-stat">
+            <span class="bk-dot" class:on={devList.published && devList.this_listed}></span>
+            <span>{devList.published
+              ? (devList.this_listed ? tr("Signed device list: {n} devices (version {v}). Contacts encrypt only to these.", { n: devList.devices, v: devList.ver ?? 0 }) : tr("This device isn't on your signed list yet — approve it on one of your other devices."))
+              : tr("No signed device list yet — it appears by itself in a moment.")}</span>
+          </div>
+          {#if devList.published && !devList.this_listed}
+            <button class="bot-link danger" onclick={devListReset}>{$t("My old devices are lost — start the list over")}</button>
+          {/if}
+        {/if}
         {#if devErr}
           <div class="bots-note">{$t("Couldn't load the list: {e}", { e: devErr })}</div>
         {:else if !devices}

@@ -134,6 +134,7 @@ pub async fn refresh(app: &AppHandle) {
 pub async fn start(app: &AppHandle) {
     static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     refresh(app).await;
+    republish(app);
     if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
@@ -142,6 +143,7 @@ pub async fn start(app: &AppHandle) {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(180)).await;
             refresh(&app).await;
+            republish(&app);
         }
     });
 }
@@ -191,6 +193,17 @@ pub struct TrustView {
 }
 
 #[tauri::command]
+/// Bring my signed device list (devlists.rs) up to date with the devices I
+/// approved — in the background, an older relay just says no.
+fn republish(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = crate::devlists::publish(&app, false).await {
+            tracing::debug!(%e, "device list not published");
+        }
+    });
+}
+
 pub fn device_trust(state: State<'_, StdMutex<AppState>>) -> Result<TrustView, String> {
     let s = state.lock().map_err(|e| e.to_string())?;
     let t = load(&s);
@@ -211,6 +224,7 @@ pub async fn device_approve(app: AppHandle, id: String) -> Result<(), String> {
     };
     tracing::info!(%id, "device approved");
     crate::multidev::sync_raw(&app, &format!("{DEVOK_PREFIX}{}", serde_json::json!({ "id": id }))).await;
+    republish(&app);
     if let Some(addr) = addr {
         crate::history_sync::on_key_request(&app, &addr);
     }
@@ -238,6 +252,7 @@ pub async fn device_decline(app: AppHandle, id: String) -> Result<(), String> {
     }
     tracing::warn!(%id, "device declined and signed out");
     crate::multidev::sync_raw(&app, &format!("{DEVNO_PREFIX}{}", serde_json::json!({ "id": id }))).await;
+    republish(&app);
     let _ = app.emit("aqua://device_pending", ());
     Ok(())
 }
