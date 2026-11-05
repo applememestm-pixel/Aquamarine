@@ -145,20 +145,27 @@ export interface CardLook {
 export function cardLook(card: string, intensity = CARD_INTENSITY, length = CARD_LENGTH, shell = "#0E1117"): CardLook {
   const top = Math.max(0, Math.min(100, intensity));
   const bottom = top * (1 - Math.max(0, Math.min(100, length)) / 100 * 0.8);
-  const a = mixPct(card, shell, top), b = mixPct(card, shell, (top + bottom) / 2), c = mixPct(card, shell, bottom);
-  // Dark or light text: whichever keeps the worst spot of the gradient more
-  // readable (contrast ratio, WCAG).
   const ratio = (x: number, y: number) => (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
-  const ls = [a, b, c].map(luminance);
-  const dark = Math.min(...ls.map((l) => ratio(l, 0.012)));   // ~#16181e
-  const white = Math.min(...ls.map((l) => ratio(l, 0.93)));   // ~#f4f6fa
-  const light = dark > white;
+  // The colour fades either into the dark app background or into a pale
+  // neutral. Fading a pale colour into the dark one gave a grey middle where
+  // neither white nor dark text reads, so take whichever fade keeps the
+  // worst spot of the gradient most readable (WCAG contrast).
+  const variant = (into: string) => {
+    const a = mixPct(card, into, top), b = mixPct(card, into, (top + bottom) / 2), c = mixPct(card, into, bottom);
+    const ls = [a, b, c].map(luminance);
+    const dark = Math.min(...ls.map((l) => ratio(l, 0.012)));   // ~#16181e text
+    const white = Math.min(...ls.map((l) => ratio(l, 0.93)));   // ~#f4f6fa text
+    return { a, b, c, light: dark > white, score: Math.max(dark, white) };
+  };
+  const onDark = variant(shell), onPale = variant("#F4F5F8");
+  // The dark fade is the look of the app: keep it unless it reads clearly worse.
+  const v = onDark.score >= 4.5 || onDark.score >= onPale.score ? onDark : onPale;
   return {
-    background: `linear-gradient(180deg, ${a} 0%, ${b} 50%, ${c} 100%)`,
-    base: b,
-    top: a,
-    light,
-    border: mixPct(card, light ? "#000000" : "#ffffff", 70),
+    background: `linear-gradient(180deg, ${v.a} 0%, ${v.b} 50%, ${v.c} 100%)`,
+    base: v.b,
+    top: v.a,
+    light: v.light,
+    border: mixPct(card, v.light ? "#000000" : "#ffffff", 70),
   };
 }
 

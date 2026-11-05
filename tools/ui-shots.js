@@ -51,8 +51,8 @@ window.__TAURI_INTERNALS__ = {
   await shot('1-main');
   const steps = [
     ['2-panel', async () => { await p.locator('.user-panel .who, .user-panel button').first().click(); }],
-    ['3-view', async () => { await p.getByText(/Редактировать профиль|Изменить профиль|Edit profile/).first().click(); }],
-    ['4-edit', async () => { await p.getByText(/Редактировать мой профиль|Изменить мой профиль|Edit my profile/).first().click(); }],
+    ['3-view', async () => { await p.getByText(/^(Мой профиль|Edit profile)$/).first().click(); }],
+    ['4-edit', async () => { await p.getByText(/^(Редактировать профиль|Edit my profile)$/).first().click(); }],
     ['5-edit-down', async () => { await p.locator('.ed-left').evaluate((e) => e.scrollTo(0, 9999)); }],
     ['6-pick', async () => { await p.locator('.ed-left').evaluate((e) => e.scrollTo(0, 0)); await p.locator('.es-cur').click(); }],
     ['7-date', async () => { await p.keyboard.press('Escape'); await p.locator('.bd-btn').click(); }],
