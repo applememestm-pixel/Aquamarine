@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { IS_DESKTOP } from "../platform";
   import Select from "./Select.svelte";
   import { t } from "../i18n";
   import { onMount, onDestroy } from "svelte";
@@ -245,6 +246,7 @@
   <div class="note small">{$t("Changes apply from the next call.")}</div>
 </section>
 
+{#if IS_DESKTOP}
 <section class="group">
   <div class="label">{$t("Input mode")}</div>
   <div class="row">
@@ -264,6 +266,7 @@
     <div class="note small">{$t("Works while the Aquamarine window is focused. Ctrl+Shift+M mutes, Ctrl+Shift+D deafens.")}</div>
   {/if}
 </section>
+{/if}
 
 <section class="group">
   <div class="label">{$t("Voice quality")}</div>

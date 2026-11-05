@@ -176,6 +176,19 @@
     (/[A-ZА-Я]/.test(password) && /[a-zа-я]/.test(password) ? 1 : 0) + (/\d/.test(password) ? 1 : 0) + (/[^\w\s]/.test(password) ? 1 : 0),
   );
   const login = $derived(username.trim().replace(/^@/, "").toLowerCase());
+  /** A pass from my server (Settings → Account & server): I join this
+   *  private server with my account there — same @name, nothing to choose. */
+  function passUserOf(text: string): string | null {
+    const m = /^aqpass:([A-Za-z0-9_-]+)\./.exec(text.trim());
+    if (!m) return null;
+    try {
+      const b = m[1].replace(/-/g, "+").replace(/_/g, "/");
+      const v = JSON.parse(atob(b + "=".repeat((4 - (b.length % 4)) % 4)));
+      return typeof v.u === "string" ? v.u : null;
+    } catch { return null; }
+  }
+  const passUser = $derived(mode === "signup" ? passUserOf(inviteText) : null);
+  $effect(() => { if (passUser) username = passUser; });
 
   /** A server's QR or an invitation from an invite-only server's admin. */
   async function scanInvite() {
@@ -202,7 +215,7 @@
     error = null; existsHint = false; boundHint = false;
     if (mode === "signup" && !/^[a-z0-9_.]{3,32}$/.test(login)) { error = tr("@username: 3–32 characters, a-z 0-9 _ . only"); return; }
     if (mode === "signin" && !login) { error = tr("Enter your @username"); return; }
-    if (password.length < 8) { error = tr("Password must be at least 8 characters"); return; }
+    if (!(passUser && !password) && password.length < 8) { error = tr("Password must be at least 8 characters"); return; }
     if (mode === "signup" && password !== password2) { error = tr("Passwords don't match"); return; }
     serverUrl = normalizeServer(serverUrl);
     if (mode === "signup") await signUp(); else await signIn();
@@ -211,9 +224,9 @@
   async function signUp() {
     busy = true;
     wizardHold.set(true);
-    const u = login;
+    let u = login;
     try {
-      await withServer((url) => api.signupPlain(url, u, password, displayName.trim() || undefined, inviteText.trim() || inviteFor(url) || undefined, tg?.ticket));
+      u = await withServer((url) => api.signupPlain(url, u, password, displayName.trim() || undefined, inviteText.trim() || inviteFor(url) || undefined, tg?.ticket)) || u;
       tg = null;
       const err = await connect(serverUrl.trim(), u);
       if (err) { error = plainError(err); wizardHold.set(false); return; }
@@ -357,9 +370,9 @@
         </div>
         <form class="form" onsubmit={(e) => { e.preventDefault(); void submit(); }}>
           <label class="field">
-            <span>@username</span>
+            <span>@username{passUser ? " · " + $t("from your server") : ""}</span>
             <div class="at-in"><i>@</i>
-              <input bind:value={username} autocomplete="username" autocapitalize="none" spellcheck="false"
+              <input bind:value={username} autocomplete="username" autocapitalize="none" spellcheck="false" readonly={!!passUser}
                      placeholder={mode === "signup" ? $t("ivan2027") : $t("username")} oninput={() => { if (mode === "signup") username = username.toLowerCase().replace(/^@/, ""); }} />
             </div>
           </label>

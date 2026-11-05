@@ -1,0 +1,31 @@
+name: release retry
+
+# GitHub's macOS runners are often out of capacity: the iOS (and sometimes a
+# macOS) job of a release waits ~25 min and is cancelled with "The job was not
+# acquired by Runner of type hosted". Nothing is wrong with the code then, so
+# re-run only the failed / cancelled jobs, up to two more attempts.
+on:
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+
+permissions:
+  actions: write
+
+jobs:
+  retry:
+    if: >-
+      (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'cancelled')
+      && github.event.workflow_run.run_attempt < 3
+      && startsWith(github.event.workflow_run.head_branch, 'v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Re-run failed jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ github.event.workflow_run.id }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN/jobs?per_page=100" \
+            --jq '.jobs[]|select(.conclusion!="success" and .conclusion!="skipped")|"\(.name): \(.conclusion)"'
+          sleep 60
+          gh run rerun "$RUN" --failed -R "$GITHUB_REPOSITORY"

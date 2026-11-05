@@ -60,3 +60,22 @@ jobs:
         run: |
           cargo check
           cargo test --lib
+
+  server-app:
+    name: server app (cargo check)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux deps (GTK / WebKitGTK)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libgtk-3-dev pkg-config build-essential
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/aqua-server-app -> target
+          shared-key: checks-server-app
+      - name: cargo check (Aquamarine Server)
+        working-directory: crates/aqua-server-app
+        run: cargo check

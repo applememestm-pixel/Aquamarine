@@ -116,7 +116,7 @@ export const api = {
   /** A pass for a private server of my network (10 minutes, once). */
   passCreate:         (): Promise<{ pass: string; expires: number; home: string }> => invoke("pass_create"),
   /** Sign-up without e-mail (relays 1.2.0-1+): @username + password. */
-  signupPlain:        (server_url: string, username: string, password: string, display_name?: string, invite?: string, tg_ticket?: string): Promise<void> => invoke("signup_plain", { serverUrl: server_url, username, password, displayName: display_name ?? null, invite: invite ?? null, tgTicket: tg_ticket ?? null }),
+  signupPlain:        (server_url: string, username: string, password: string, display_name?: string, invite?: string, tg_ticket?: string): Promise<string> => invoke("signup_plain", { serverUrl: server_url, username, password, displayName: display_name ?? null, invite: invite ?? null, tgTicket: tg_ticket ?? null }),
   /** Add this device to an account with two-step verification. */
   signinPlain:        (server_url: string, login: string, password: string, totp?: string, recovery?: string, tg_ticket?: string): Promise<string> => invoke("signin_plain", { serverUrl: server_url, login, password, totp: totp ?? null, recovery: recovery ?? null, tgTicket: tg_ticket ?? null }),
   /** An Android Motion Photo (JPEG with a clip inside) — can go as a live photo. */
@@ -153,6 +153,11 @@ export const api = {
   backupPhrase:       (): Promise<string | null> => invoke("backup_phrase"),
   /** Auto-delete timer of a chat in seconds (0 = off). */
   /** Send to a bot without showing it in the chat (button press / mini app data). */
+  /** My signed device list (1.2.0-5). */
+  devlistStatus:      (): Promise<{ published: boolean; ver: number | null; devices: number; this_listed: boolean }> => invoke("devlist_status"),
+  devlistReset:       (): Promise<void> => invoke("devlist_reset"),
+  devlistResets:      (): Promise<string[]> => invoke("devlist_resets"),
+  devlistResetSeen:   (user: string): Promise<void> => invoke("devlist_reset_seen", { user }),
   /** One message to a bot, without a chat with it (guest bots, the secretary). */
   botHandOver:        (bot: string, text: string): Promise<void> => invoke("bot_hand_over", { bot, text }),
   botSendRaw:         (peer_id: string, text: string): Promise<void> => invoke("bot_send_raw", { peerId: peer_id, text }),

@@ -30,6 +30,7 @@ pub const SYNC_PREFIX: &str = "[sync:v1]";
 const CACHE_TTL: Duration = Duration::from_secs(45);
 
 const NOT_APPROVED: &str = "this device of mine isn't approved yet";
+const NOT_LISTED: &str = "this device isn't on the account's signed device list";
 
 /// Key id last seen in the bundle of one of my addresses (see [`send_to_own`]).
 static KEY_OF: StdMutex<Option<HashMap<String, (Instant, String)>>> = StdMutex::new(None);
@@ -110,6 +111,15 @@ pub async fn send_to_own(app: &AppHandle, addr: &str, payload: &str) -> Result<(
 
 async fn send_inner(app: &AppHandle, addr: &str, payload: &str, own: bool) -> Result<(), String> {
     let state: State<'_, StdMutex<AppState>> = app.state();
+    // Someone else's device: only if their signed list has it (devlists.rs).
+    if !own {
+        let key = state.lock().map_err(|e| e.to_string())?.sessions.get(addr).map(|x| x.peer.dh_pub.as_bytes().to_vec());
+        if let Some(dh) = key {
+            if !crate::devlists::allowed(app, base_user(addr), &dh) {
+                return Err(NOT_LISTED.into());
+            }
+        }
+    }
     let fast = {
         let mut s = state.lock().map_err(|e| e.to_string())?;
         if own {
@@ -165,6 +175,9 @@ async fn send_inner(app: &AppHandle, addr: &str, payload: &str, own: bool) -> Re
     };
     let bundle = transport.fetch_bundle(addr).await.map_err(|e| format!("fetch_bundle: {e}"))?;
     bundle.verify().map_err(|e| format!("bad bundle: {e}"))?;
+    if !own && !crate::devlists::allowed(app, base_user(addr), bundle.identity.dh_pub.as_bytes()) {
+        return Err(NOT_LISTED.into());
+    }
     if own {
         let id = device_id(bundle.identity.dh_pub.as_bytes());
         if let Ok(mut m) = KEY_OF.lock() {
@@ -228,7 +241,15 @@ pub async fn fanout(app: &AppHandle, peer: &str, payload: &str, sync: bool) -> R
     let mut first_err: Option<String> = None;
     let mut ok = 0usize;
     if peer != me {
+        crate::devlists::refresh(app, &transport, &peer, false).await;
         for addr in addresses(&transport, &peer).await {
+            // `user~id`: skip devices their signed list doesn't have.
+            if let Some((_, id)) = addr.split_once('~') {
+                if !crate::devlists::allowed_id(app, &peer, id) {
+                    tracing::warn!(%addr, "fanout: not on the signed device list — skipped");
+                    continue;
+                }
+            }
             match send_to_address(app, &addr, payload).await {
                 Ok(()) => ok += 1,
                 Err(e) => {

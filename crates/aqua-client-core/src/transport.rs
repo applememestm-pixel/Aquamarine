@@ -719,13 +719,15 @@ impl Transport {
 
     /// Sign-up without e-mail (relays 1.2.0-1+): `@username` + the password
     /// secret ([`crate::backup::auth_secret`] salted with `@username`).
-    pub async fn signup_account(server_url: &str, identity: &IdentityKeyPair, username: &str, secret: &str, display_name: &str, invite: &str) -> Result<(), TransportError> {
+    pub async fn signup_account(server_url: &str, identity: &IdentityKeyPair, username: &str, secret: &str, display_name: &str, invite: &str) -> Result<String, TransportError> {
         Self::signup_account_tg(server_url, identity, username, secret, display_name, invite, "").await
     }
 
     /// [`Self::signup_account`] linked to a confirmed Telegram sign-in.
     #[allow(clippy::too_many_arguments)]
-    pub async fn signup_account_tg(server_url: &str, identity: &IdentityKeyPair, username: &str, secret: &str, display_name: &str, invite: &str, tg_ticket: &str) -> Result<(), TransportError> {
+    /// Returns the @username the account got: the one asked for, or — joining
+    /// with a pass from a relay of the network — the account's name there.
+    pub async fn signup_account_tg(server_url: &str, identity: &IdentityKeyPair, username: &str, secret: &str, display_name: &str, invite: &str, tg_ticket: &str) -> Result<String, TransportError> {
         let http = http_client()?;
         check_server(&http, server_url).await?;
         let token = sign_in(&http, server_url, identity).await?;
@@ -738,7 +740,8 @@ impl Transport {
         if !r.status().is_success() {
             return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
         }
-        Ok(())
+        let v: serde_json::Value = r.json().await.unwrap_or_default();
+        Ok(v["username"].as_str().map(str::to_string).unwrap_or_else(|| username.to_string()))
     }
 
     /// Add this device to an account with two-step verification
@@ -1183,6 +1186,28 @@ impl Transport {
             404 | 405 => Ok(None),
             s => Err(TransportError::Server { status: s, body: r.text().await.unwrap_or_default() }),
         }
+    }
+
+    /// The signed device list of `user` (JSON), `None` if there is none or
+    /// the relay predates 1.2.0-5.
+    pub async fn get_devlist(&self, user: &str) -> Result<Option<String>, TransportError> {
+        let url = format!("{}/v1/devlist/{}", self.server_url.trim_end_matches('/'), user);
+        let r = self.http.get(&url).send().await?;
+        match r.status().as_u16() {
+            200 => Ok(Some(r.text().await?)),
+            404 | 405 => Ok(None),
+            s => Err(TransportError::Server { status: s, body: r.text().await.unwrap_or_default() }),
+        }
+    }
+
+    /// Publish this account's signed device list.
+    pub async fn put_devlist(&self, json: String) -> Result<(), TransportError> {
+        let url = format!("{}/v1/me/devlist", self.server_url.trim_end_matches('/'));
+        let r = self.http.put(&url).bearer_auth(self.bearer().await?).header("content-type", "application/json").body(json).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(())
     }
 
     /// This account's devices (the asking one has `current = true`).

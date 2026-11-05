@@ -34,6 +34,7 @@ pub mod ratchet;
 pub mod wire;
 pub mod session;
 pub mod file_transfer;
+pub mod devlist;
 
 pub use crypto::CryptoError;
 pub use file_transfer::{decrypt_file, encrypt_file, encrypt_file_with_category, hex_sha256, FileEnvelope, FileError, MAX_FILE_SIZE, OFFER_PREFIX};

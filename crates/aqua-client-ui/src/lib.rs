@@ -24,6 +24,7 @@ pub mod windows;
 pub mod bluetooth;
 pub mod servers;
 pub mod mesh;
+pub mod devlists;
 pub mod relay_host;
 pub mod gallery;
 pub mod accounts;
@@ -189,10 +190,6 @@ pub fn run() -> Result<()> {
             personal::list_wallpapers,
             personal::delete_wallpaper,
             commands::fed_peers,
-            relay_host::relay_host_status,
-            relay_host::relay_host_set_dir,
-            relay_host::relay_host_start,
-            relay_host::relay_host_stop,
             gallery::gallery_recent,
             gallery::gallery_ask,
             gallery::gallery_albums,
@@ -280,6 +277,10 @@ pub fn run() -> Result<()> {
             commands::tg_login_start,
             commands::has_motion_clip,
             commands::bot_hand_over,
+            devlists::devlist_resets,
+            devlists::devlist_reset_seen,
+            devlists::devlist_reset,
+            devlists::devlist_status,
             commands::tg_login_poll,
             multidev::remove_device,
             multidev::rename_device,

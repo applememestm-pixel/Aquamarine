@@ -8,6 +8,7 @@
  * presets with a dark default, two palette knobs and a density toggle.
  */
 
+import { IS_MOBILE } from "./platform";
 import { writable, get } from "svelte/store";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
@@ -459,7 +460,9 @@ function apply(s: Settings) {
   root.style.setProperty("--ava-r-group", pct(s.avatarRadiusGroup ?? s.avatarRadius));
   root.style.setProperty("--ava-r-chan", pct(s.avatarRadiusChannel ?? s.avatarRadius));
   // Glass panels: opacity of the panel fill and a blur that fades with it.
-  root.classList.toggle("glass", !!s.glass);
+  // Glass panels are a phone thing: a PC never turns them on, even when the
+  // setting came over from a phone (backup / settings sync).
+  root.classList.toggle("glass", !!s.glass && IS_MOBILE);
   if (s.glass) {
     const a = Math.max(0, Math.min(100, s.glassAlpha ?? 55));
     root.style.setProperty("--glass-a", `${a}%`);

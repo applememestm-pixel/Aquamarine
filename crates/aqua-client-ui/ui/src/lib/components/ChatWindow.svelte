@@ -47,6 +47,7 @@
   import { meshStatus, meshSyncNow, nearbyVia } from "../mesh";
   import { noShare, setNoShare, startNoShare } from "../noShare";
   import { isLive, livePlay } from "../liveMotion";
+  import { IS_DESKTOP, IS_MOBILE } from "../platform";
   import Welcome from "./Welcome.svelte";
   import { settings } from "../theme";
   import { api, assetUrl, sendChatControl } from "../tauri";
@@ -1213,7 +1214,8 @@
     { cmd: "unflip", desc: "┬─┬ノ( º _ ºノ)", run: () => replaceText("┬─┬ノ( º _ ºノ) ") },
     { cmd: "lenny", desc: "( ͡° ͜ʖ ͡°)", run: () => replaceText("( ͡° ͜ʖ ͡°) ") },
     { cmd: "spoiler", desc: $t("Hidden text: ||like this||"), run: () => replaceText("||") },
-    { cmd: "help", desc: $t("Keyboard shortcuts and formatting"), run: () => { text = ""; shortcutsOpen.set(true); } },
+    // Keyboard shortcuts are a computer thing: no /help on phones.
+    ...(IS_DESKTOP ? [{ cmd: "help", desc: $t("Keyboard shortcuts and formatting"), run: () => { text = ""; shortcutsOpen.set(true); } }] : []),
   ].concat($pluginCommands.map((c) => ({ cmd: c.cmd, desc: "🧩 " + (c.desc || c.plugin), run: () => replaceText(`/${c.cmd} `) })))
     // A plugin can't take a built-in command's name, nor two plugins one name.
     .filter((c, i, all) => all.findIndex((x) => x.cmd === c.cmd) === i));
@@ -1823,6 +1825,20 @@
   /** Channel / group forbids forwarding, copying and saving. */
   startNoShare();
   void import("../botHelpers").then((m) => m.startBotHelpers());
+  // Someone's devices changed without their old devices signing it.
+  onMount(() => {
+    const offs: Array<() => void> = [];
+    void import("@tauri-apps/api/event").then(({ listen }) => {
+      void listen<{ user: string }>("aqua://devlist_reset", (e) => {
+        showToast(tr("@{u} started their device list over: all the old devices are gone. If you didn't expect this, compare the safety code with them.", { u: e.payload.user }), 9000);
+        void api.devlistResetSeen(e.payload.user).catch(() => {});
+      }).then((f) => offs.push(f));
+      void listen<{ user: string; why: string }>("aqua://devlist_refused", (e) => {
+        showToast(tr("A device of @{u} that their own devices didn't approve was ignored ({why}).", { u: e.payload.user, why: e.payload.why }), 8000);
+      }).then((f) => offs.push(f));
+    }).catch(() => {});
+    return () => offs.forEach((f) => f());
+  });
   /** 1:1 chat with "Disable sharing" on (either person turned it on). */
   let dmNoShare = $derived(!isGroup && !!$activeChat && $noShare.has($activeChat.id));
   let protectedChat = $derived((!!activeGroup?.settings.protected_content && !isAdmin(activeGroup, myUsername)) || dmNoShare);
@@ -4117,7 +4133,7 @@
                   {/each}
                 </div>
               {/if}
-              {#if !$attachDock}<div class="ap-inline">{@render attachActions()}</div>{/if}
+              {#if !(IS_MOBILE && $attachDock)}<div class="ap-inline">{@render attachActions()}</div>{/if}
               <div class="ap-gallery">
                 <button class="ap-tile ap-pick" onclick={() => { attachMenuOpen = false; pickAndSendFile("media"); }}>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>
@@ -4139,7 +4155,7 @@
               {@render attachActions()}
             {/if}
           </div>
-          {#if phoneUI && $attachDock}
+          {#if phoneUI && IS_MOBILE && $attachDock}
             <!-- Phones: the actions as a floating tab bar, the send button above it. -->
             <div class="ap-dock" class:closing={sheetClosing}>{@render attachActions()}</div>
             {#if gallerySel.length}

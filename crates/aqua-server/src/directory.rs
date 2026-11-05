@@ -136,6 +136,9 @@ pub struct FedUser {
     /// Sign-in protection ([`Security`], JSON); older relays don't send it.
     #[serde(default)]
     pub security: String,
+    /// Signed device list (JSON, `aqua_core::devlist`); older relays don't send it.
+    #[serde(default)]
+    pub devlist: String,
 }
 
 /// Sign-in protection of an account: two-step codes and "no new devices".
@@ -631,6 +634,8 @@ impl Directory {
             "ALTER TABLE users ADD COLUMN uid TEXT NOT NULL DEFAULT ''",
             // Two-step codes and "no new devices" (JSON, see `Security`).
             "ALTER TABLE users ADD COLUMN security TEXT NOT NULL DEFAULT '{}'",
+            // The account's device list signed by its devices (1.2.0-5, JSON).
+            "ALTER TABLE users ADD COLUMN devlist TEXT NOT NULL DEFAULT ''",
             // The ticket passed the two-step code (1) or the recovery key (2).
             "ALTER TABLE email_codes ADD COLUMN mfa INTEGER NOT NULL DEFAULT 0",
             // Wrong two-step codes with this ticket.
@@ -1306,6 +1311,43 @@ impl Directory {
         Ok(())
     }
 
+    /// Join a relay with an account of the network (a checked pass): the
+    /// same @name and ID as there, this device's key. The password is
+    /// optional (the account lives on this device until 2FA is on here).
+    pub fn register_joined(&self, username: &str, uid: &str, identity_dh: &[u8; 32], password: &str, display_name: &str) -> Result<(), DirError> {
+        let username = username.trim().to_lowercase();
+        if !Self::valid_username(&username) {
+            return Err(DirError::BadUsername);
+        }
+        if !password.is_empty() && password.chars().count() < 8 {
+            return Err(DirError::WeakPassword);
+        }
+        let uid = if uid.len() == 10 && uid.bytes().all(|b| b.is_ascii_digit()) { uid.to_string() } else { uid_for(identity_dh) };
+        let db = self.db.lock().unwrap();
+        if let Ok((owner, their_uid)) = db.query_row("SELECT identity_dh, uid FROM users WHERE username=?1", rusqlite::params![username], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, String>(1)?))) {
+            if owner.as_slice() != identity_dh.as_slice() && their_uid != uid {
+                return Err(DirError::UsernameTaken);
+            }
+        }
+        if let Ok(other) = db.query_row("SELECT username FROM users WHERE identity_dh=?1", rusqlite::params![identity_dh.as_slice()], |r| r.get::<_, String>(0)) {
+            if other != username {
+                return Err(DirError::UsernameTaken);
+            }
+        }
+        if Self::reserved_elsewhere(&db, &username, &uid) {
+            return Err(DirError::UsernameTaken);
+        }
+        let pw = if password.is_empty() { String::new() } else { hash_password(password) };
+        db.execute(
+            "INSERT INTO users (username, identity_dh, email, display_name, about, phone, is_bot, created_at, password, uid)
+             VALUES (?1, ?2, NULL, ?3, '', '', 0, ?4, ?5, ?6)
+             ON CONFLICT(username) DO UPDATE SET identity_dh=?2, display_name=?3, password=CASE WHEN ?5 = '' THEN password ELSE ?5 END, uid=?6",
+            rusqlite::params![username, identity_dh.as_slice(), display_name.trim(), now_secs() as i64, pw, uid],
+        )?;
+        tracing::info!(%username, %uid, "joined with an account of the network");
+        Ok(())
+    }
+
     /// Sign in on another device with @username + password. Only accounts
     /// with two-step verification can do this (and need the code, a backup
     /// code or the recovery key); without it an account stays on the device
@@ -1461,6 +1503,38 @@ impl Directory {
         }
         tracing::warn!(user = %name, %to, %home, "name registry: an older account elsewhere has this name — ours is renamed");
         Some((name, to))
+    }
+
+    /// The account's signed device list (JSON), if one was published.
+    pub fn devlist(&self, username: &str) -> Option<String> {
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT devlist FROM users WHERE username=?1", rusqlite::params![username], |r| r.get::<_, String>(0))
+            .ok()
+            .filter(|s| !s.is_empty())
+    }
+
+    /// Store a signed device list a device of the account published. The
+    /// relay can't sign one; it only refuses obvious junk: a list for
+    /// another account, a bad signature, a signer that isn't a device of the
+    /// account, or an older version (unless it's a reset).
+    pub fn put_devlist(&self, username: &str, json: &str) -> Result<(), DirError> {
+        let list: aqua_core::devlist::SignedDeviceList = serde_json::from_str(json).map_err(|_| DirError::BadProfile("not a device list".into()))?;
+        if list.user != username {
+            return Err(DirError::NotOwner);
+        }
+        list.verify_self().map_err(|e| DirError::BadProfile(e.to_string()))?;
+        let signer: [u8; 32] = hex::decode(&list.signer.dh).ok().and_then(|b| b.try_into().ok()).ok_or(DirError::BadProfile("bad signer key".into()))?;
+        if self.device_role(username, &signer).is_none() {
+            return Err(DirError::NotOwner);
+        }
+        if let Some(cur) = self.devlist(username).and_then(|j| serde_json::from_str::<aqua_core::devlist::SignedDeviceList>(&j).ok()) {
+            if list.ver <= cur.ver {
+                return Err(DirError::Conflict);
+            }
+        }
+        let db = self.db.lock().unwrap();
+        db.execute("UPDATE users SET devlist=?2 WHERE username=?1", rusqlite::params![username, json])?;
+        Ok(())
     }
 
     /// Two-step verification is on for this account.
@@ -1967,7 +2041,7 @@ impl Directory {
         let db = self.db.lock().unwrap();
         let Ok(mut st) = db.prepare(
             "SELECT username, identity_dh, email, display_name, about, phone, is_bot, created_at,
-                    extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices, recovery, uid, security
+                    extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices, recovery, uid, security, devlist
              FROM users WHERE updated_at > ?1 AND is_bot = 0 ORDER BY updated_at LIMIT 500",
         ) else { return Vec::new() };
         st.query_map(rusqlite::params![since], |r| {
@@ -1991,6 +2065,7 @@ impl Directory {
                 recovery: r.get(16)?,
                 uid: r.get(17)?,
                 security: r.get(18)?,
+                devlist: r.get(19)?,
             })
         })
         .map(|rows| rows.flatten().collect())
@@ -2080,15 +2155,16 @@ impl Directory {
         out.name = name.clone();
         out.applied = db.execute(
             "INSERT INTO users (username, identity_dh, email, display_name, about, phone, is_bot, created_at,
-                                extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices, recovery, uid, security)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, CASE WHEN ?19 = '' THEN '{}' ELSE ?19 END)
+                                extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices, recovery, uid, security, devlist)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, CASE WHEN ?19 = '' THEN '{}' ELSE ?19 END, ?20)
              ON CONFLICT(username) DO UPDATE SET identity_dh=?2, email=?3, display_name=?4, about=?5, phone=?6,
                  is_bot=?7, created_at=?8, extra=?9, avatar_ver=?10, banner_ver=?11, media_acl=?12, password=?13,
                  music_ver=?14, updated_at=?15, devices=?16,
                  recovery=CASE WHEN ?17 = '' THEN recovery ELSE ?17 END, uid=?18,
-                 security=CASE WHEN ?19 = '' THEN security ELSE ?19 END",
+                 security=CASE WHEN ?19 = '' THEN security ELSE ?19 END,
+                 devlist=CASE WHEN ?20 = '' THEN devlist ELSE ?20 END",
             rusqlite::params![name, dh, u.email, u.display_name, u.about, u.phone, u.is_bot as i64, u.created_at,
-                u.extra, u.avatar_ver, u.banner_ver, u.media_acl, u.password, u.music_ver, u.updated_at, u.devices, u.recovery, uid, u.security],
+                u.extra, u.avatar_ver, u.banner_ver, u.media_acl, u.password, u.music_ver, u.updated_at, u.devices, u.recovery, uid, u.security, u.devlist],
         )
         .is_ok();
         out
