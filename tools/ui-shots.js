@@ -42,6 +42,12 @@ window.__TAURI_INTERNALS__ = {
   await p.addInitScript(mock(card));
   await p.goto('http://127.0.0.1:5199/');
   await p.waitForTimeout(2500);
+  // First-start offers (passcode…): "Not now".
+  for (let i = 0; i < 3; i++) {
+    const later = p.getByText(/^(Не сейчас|Not now)$/).first();
+    if (!(await later.count())) break;
+    await later.click().catch(() => {}); await p.waitForTimeout(600);
+  }
   await shot('1-main');
   const steps = [
     ['2-panel', async () => { await p.locator('.user-panel .who, .user-panel button').first().click(); }],
