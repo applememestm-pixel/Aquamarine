@@ -101,3 +101,74 @@ export function patternUrl(emoji: string): string {
     return "";
   }
 }
+
+/** Mix `a` into `b`: pct = how much of `a` (0–100). */
+export function mixPct(a: string, b: string, pct: number): string {
+  const x = rgb(a), y = rgb(b), k = Math.max(0, Math.min(100, pct)) / 100;
+  return "#" + x.map((v, i) => Math.round(v * k + y[i] * (1 - k)).toString(16).padStart(2, "0")).join("");
+}
+
+/** Relative luminance (WCAG), 0 = black, 1 = white. */
+export function luminance(hex: string): number {
+  const lin = (v: number) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+  const [r, g, b] = rgb(hex);
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+}
+
+/** Colours offered for the card, besides "from the banner" and any colour. */
+export const CARD_SWATCHES = [
+  "#2EE6C5", "#4F7AFE", "#7B5CFF", "#C04CFD", "#FF5CA8", "#FF5A5F",
+  "#FF8A3D", "#FFC83D", "#7BD957", "#1FB57A", "#3A4A63", "#F2EEE6",
+];
+
+export const CARD_INTENSITY = 62;
+export const CARD_LENGTH = 60;
+
+export interface CardLook {
+  /** CSS background for the whole card. */
+  background: string;
+  /** The colour most of the text sits on — for picking dark or light text. */
+  base: string;
+  /** The colour at the very top (under the avatar). */
+  top: string;
+  /** Dark text reads better than light on it. */
+  light: boolean;
+  border: string;
+}
+
+/**
+ * The card's background: `intensity` (0–100) is how strong the colour is at
+ * the top, `length` (0–100) how far down it fades into the app background
+ * (0 = one solid colour, 100 = fades almost out). Text colour follows the
+ * result, so a pale card gets dark text.
+ */
+export function cardLook(card: string, intensity = CARD_INTENSITY, length = CARD_LENGTH, shell = "#0E1117"): CardLook {
+  const top = Math.max(0, Math.min(100, intensity));
+  const bottom = top * (1 - Math.max(0, Math.min(100, length)) / 100 * 0.8);
+  const a = mixPct(card, shell, top), b = mixPct(card, shell, (top + bottom) / 2), c = mixPct(card, shell, bottom);
+  // Dark or light text: whichever keeps the worst spot of the gradient more
+  // readable (contrast ratio, WCAG).
+  const ratio = (x: number, y: number) => (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+  const ls = [a, b, c].map(luminance);
+  const dark = Math.min(...ls.map((l) => ratio(l, 0.012)));   // ~#16181e
+  const white = Math.min(...ls.map((l) => ratio(l, 0.93)));   // ~#f4f6fa
+  const light = dark > white;
+  return {
+    background: `linear-gradient(180deg, ${a} 0%, ${b} 50%, ${c} 100%)`,
+    base: b,
+    top: a,
+    light,
+    border: mixPct(card, light ? "#000000" : "#ffffff", 70),
+  };
+}
+
+/** The app's background colour, for mixing the card into it. */
+export function shellColor(): string {
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue("--bg-shell").trim();
+    if (/^#[0-9a-f]{6}$/i.test(v)) return v;
+    const m = /rgba?\((\d+)\D+(\d+)\D+(\d+)/.exec(v);
+    if (m) return "#" + [m[1], m[2], m[3]].map((x) => (+x).toString(16).padStart(2, "0")).join("");
+  } catch { /* not in a browser */ }
+  return "#0E1117";
+}

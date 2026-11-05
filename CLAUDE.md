@@ -178,6 +178,13 @@ Aquamarine — мессенджер со сквозным шифрованием
   - `aqua-server-app/ui/index.html` — своя панель (разделы-функции `pageHome`, `pagePeople`, `pageAccess`, `pageNetwork`, `pageMail`, `pageStickers`, `pageSettings`; опрос `poll` раз в 4 с). Данные — те же `/v1/admin/*`, что у `admin.html`, через команду `admin(method, path, body)` в `lib.rs` (только пути `/v1/admin/`, токен остаётся в Rust). iframe, `open_admin_window` и `Status.admin_url` удалены. QR — `ui/qrcode.js` (копия `aqua-server/src/qrcode-generator.js`). **Новая настройка сервера в `admin.html` → добавь её и сюда.**
   - Переводы — словарь `RU_DICT` прямо в странице (язык — `navigator.language`).
 
+- **1.2.0-7** (пре-выпуск) — владелец: «колхозно выглядит баннер» + список по профилю:
+  - Карточка: `cardStyle.ts::cardLook(card, intensity, length, shell)` → фон, `top`/`base`, `light` (тёмный текст, если он контрастнее на худшем участке градиента). `Profile.card_i`/`card_g` (публикуются как `extra.ci`/`extra.cg`). Класс `.light` у `.sheet` (`ProfileModal`) и `.card` (`UserPanel`) переопределяет `--fg*`, `--border*`, `--bg-input`. **Новый элемент в карточке профиля → цвета только через переменные, иначе на светлой карточке он пропадёт.**
+  - `EmojiPick.svelte` — выбор любого эмодзи / элемента наборов (`emojiPacks` — это все наборы с `source`, и стикеры тоже); вешается в `<body>` с `position: fixed` (колонки редактора прокручиваются и обрезали бы его). `EmojiStatus zoom` — крупный просмотр (тоже в `<body>`).
+  - `BirthdayInput`: значение может быть «март», «1998», «15-е число»; разбор `parse` это понимает.
+  - Чат `welcome` удалён (`state.rs`), `listChats` его отфильтровывает у старых установок.
+  - Обновления: `updateId` сравнивает версии нумерованных выпусков, коммит — только для `nightly`.
+
 ## Открытые вопросы
 
 - Подлагивание при смене чата и «зависание при открытии профиля» (24.10) не воспроизведены: список сообщений уже рисуется окнами по 40. Нужен лог `[aqua-fps]` / `[aqua-click]` с устройства владельца.

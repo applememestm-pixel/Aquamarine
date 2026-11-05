@@ -15,6 +15,7 @@
   import { openSettings } from "../panels/settings";
   import { openProfile } from "./ProfileModal.svelte";
   import { showToast } from "./Toast.svelte";
+  import { averageColor, mixHex, patternUrl, cardLook, shellColor, CARD_INTENSITY, CARD_LENGTH } from "../cardStyle";
 
   let menuOpen = $state(false);
   let statusDraft = $state("");
@@ -29,6 +30,15 @@
 
   const name = $derived($profile.display_name && $profile.display_name !== "You" ? $profile.display_name : ($info?.username ?? "you"));
   const letter = $derived(name.charAt(0).toUpperCase() || "?");
+  // The same colours as the profile card: colour, intensity, gradient, pattern.
+  let sampled = $state("");
+  $effect(() => {
+    const u = $profile.banner_url && !/\.(mp4|webm|mov)(\?|$)/i.test($profile.banner_url) ? $profile.banner_url : "";
+    sampled = "";
+    if (u) void averageColor(u).then((c) => { if (u === $profile.banner_url) sampled = c; });
+  });
+  const look = $derived(cardLook($profile.card || sampled || mixHex($profile.banner_a, $profile.banner_b), $profile.card_i ?? CARD_INTENSITY, $profile.card_g ?? CARD_LENGTH, shellColor()));
+  const pat = $derived($profile.pattern ? patternUrl($profile.pattern) : "");
   const act = $derived($shareActivity ? $myActivity[0] : undefined);
   const subline = $derived.by(() => {
     if ($callState.kind === "connected") return "In a call";
@@ -87,8 +97,10 @@
 
 <div class="user-panel" bind:this={root}>
   {#if menuOpen}
-    <div class="card" role="dialog" aria-label={$t("Your status")}>
-      <div class="card-banner" style:background={$profile.banner_url ? `center / cover no-repeat url("${$profile.banner_url}")` : `linear-gradient(135deg, ${$profile.banner_a}, ${$profile.banner_b})`}></div>
+    <div class="card" class:light={look.light} role="dialog" aria-label={$t("Your status")} style:--card-bg={look.background} style:--card-top={look.top}>
+      <div class="card-banner" style:background={$profile.banner_url ? `center / cover no-repeat url("${$profile.banner_url}")` : `linear-gradient(135deg, ${$profile.banner_a}, ${$profile.banner_b})`}>
+        {#if pat}<div class="card-pat" style:background-image={`url("${pat}")`}></div>{/if}
+      </div>
       <div class="card-ava-wrap">
         <div class="ava big" style:background={`linear-gradient(135deg, ${$profile.banner_a}, ${$profile.banner_b})`}>
           {#if $profile.avatar_url}<img src={$profile.avatar_url} alt="" />{:else}{letter}{/if}
@@ -96,7 +108,7 @@
         </div>
       </div>
       <div class="card-body">
-        <div class="card-name">{name}</div>
+        <div class="card-name">{name}<EmojiStatus token={$profile.estatus} size={20} zoom /></div>
         <button class="card-user" onclick={copyUsername} title={$t("Copy username")}>@{$info?.username ?? ""}</button>
         {#if act}
           <div class="card-act">
@@ -233,7 +245,14 @@
     animation: pop 0.14s ease-out;
   }
   @keyframes pop { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-  .card-banner { height: 64px; }
+  .card { background: var(--card-bg, var(--bg-surface)); }
+  .card.light {
+    --fg: #15171d; --fg-muted: #383d48; --fg-dim: #5a606d; --border: rgba(0,0,0,.14); --border-strong: rgba(0,0,0,.24);
+    --bg-input: rgba(255,255,255,.55); --bg-hover: rgba(0,0,0,.06);
+  }
+  .card-banner { height: 72px; position: relative; overflow: hidden; }
+  .card-pat { position: absolute; inset: 0; background-size: 150px 100px; opacity: .22; mix-blend-mode: overlay; pointer-events: none; }
+  .card .ava.big { border-color: var(--card-top, var(--bg-surface)); }
   .card-ava-wrap { margin: -40px 0 0 14px; }
   .card-body { padding: 8px 14px 12px; }
   .card-name { font-size: 18px; font-weight: 800; color: var(--fg); }

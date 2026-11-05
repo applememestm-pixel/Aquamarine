@@ -175,6 +175,8 @@ function myExtra(p: Profile): Record<string, unknown> {
     music_title: p.music_ver ? (p.music_title ?? "") : "",
     clan: p.clan ?? null,
     card: /^#[0-9a-f]{6}$/i.test(p.card ?? "") ? p.card : "",
+    ci: Number.isFinite(p.card_i) ? Math.round(p.card_i as number) : null,
+    cg: Number.isFinite(p.card_g) ? Math.round(p.card_g as number) : null,
     es: (p.estatus ?? "").trim() && p.estatus !== "-" ? p.estatus : null,
     pattern: (p.pattern ?? "").slice(0, 16),
     links: (p.links ?? []).filter((l) => /^https?:\/\//i.test(l.url)).slice(0, 8),
@@ -210,6 +212,8 @@ export async function adoptMyCard(username: string): Promise<void> {
     if (fresh && typeof x.banner_b === "string") patch.banner_b = x.banner_b;
     if (fresh && typeof x.card === "string") patch.card = x.card;
     if (fresh && typeof x.pattern === "string") patch.pattern = x.pattern;
+    if (fresh && typeof x.ci === "number") patch.card_i = x.ci;
+    if (fresh && typeof x.cg === "number") patch.card_g = x.cg;
     if (fresh && typeof x.es === "string") patch.estatus = x.es;
     if (Object.keys(patch).length) updateProfile(patch);
   } catch { /* offline: keep what we have */ }

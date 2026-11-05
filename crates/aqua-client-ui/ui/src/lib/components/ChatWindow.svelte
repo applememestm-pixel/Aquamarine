@@ -3161,7 +3161,7 @@
             {/if}
             <span class="group-name-btn" class:dim={!!activeRoom}>{$activeChat.name}</span>
           {:else}
-            {$activeChat.name}<EmojiStatus token={emojiStatusOf($peerCards, $activeChat.id)} size={18} />
+            {$activeChat.name}<EmojiStatus token={emojiStatusOf($peerCards, $activeChat.id)} size={18} zoom />
             {#if $clans[$activeChat.id]}<span class="hdr-clan"><ClanTag tag={$clans[$activeChat.id]} /></span>{/if}
           {/if}
           {#if e2eePeer}

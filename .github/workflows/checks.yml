@@ -48,6 +48,13 @@ jobs:
           npm ci --no-audit --no-fund
           npx svelte-check --threshold error
           npm run build
+      # The built UI, for looking at it with a mocked Tauri (Playwright) from
+      # a session where npm isn't reachable.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-dist
+          path: crates/aqua-client-ui/ui/dist
+          retention-days: 3
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:

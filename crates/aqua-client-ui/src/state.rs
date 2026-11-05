@@ -955,40 +955,6 @@ impl AppState {
             chat_order.insert(0, SAVED_MESSAGES_ID.into());
         }
 
-        // If nothing but Saved Messages, seed a small on-boarding welcome.
-        if chats.len() == 1 && chats.contains_key(SAVED_MESSAGES_ID) {
-            let welcome = ChatBook {
-                summary: ChatSummary {
-                    id: "welcome".into(),
-                    name: "Welcome".into(),
-                    letter: "◆".into(),
-                    gradient: "linear-gradient(135deg, #00E5C7 0%, #7B5CFF 100%)".into(),
-                    preview: "click Connect at the bottom, then start a chat".into(),
-                    preview_is_typing: false, preview_by_me: false, has_lock: false,
-                    time: "now".into(), unread: 0, online: false, verified: true,
-                    channel: true, live: false,
-                },
-                messages: vec![
-                    date("w-date", "Getting started"),
-                    system_msg("w-sys",
-                        "Session initialised. Identity + prekey material stored in your local encrypted vault."),
-                    text_from("w1", "welcome", "0",
-                        "Just want to try everything right now? Open <b>☁ Saved Messages</b> at the top of the sidebar — \
-                         it's a self-chat that always works, no server needed. Send text, files, stickers, GIFs — everything renders inline. \
-                         Nothing leaves your device."),
-                    text_from("w2", "welcome", "0",
-                        "To chat with someone else: start the relay with <code>cargo run -p aqua-server</code> (or <code>.\\run-server.ps1</code>), \
-                         click the plug icon at the bottom of the sidebar to Connect, then hit the <b>+</b> next to the search bar to add a contact."),
-                    text_from("w3", "welcome", "0",
-                        "Attach files with the <b>paperclip</b> (Ctrl / Shift for multiple), or drag &amp; drop from your file explorer anywhere into the chat. \
-                         Images, GIFs and videos preview inline; everything else lands as a download card. The sticker icon opens your local stickers / GIFs — \
-                         drop files into the folders shown there and reopen the picker."),
-                ],
-            };
-            chats.insert("welcome".into(), welcome);
-            chat_order.push("welcome".into());
-        }
-
         // Load groups/channels and surface each as a sidebar chat.
         let groups = crate::history::load_groups(&vault).unwrap_or_else(|| load_groups(&data_dir));
         for g in groups.values() {

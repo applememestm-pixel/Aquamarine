@@ -65,6 +65,10 @@ export function newer(a: string, b: string): boolean {
 /** The id of the release if it's not the build we are, else null. */
 function updateId(info: UpdateInfo, channel: Channel): string | null {
   if (channel === "stable") return info.version && (!BUILD.version || newer(info.version, BUILD.version)) ? "v" + info.version : null;
+  // A numbered release (v1.2.0-5): its number decides. The commit list
+  // (BUILDS.json) is only uploaded at the very end of a release run, and
+  // without it the newest pre-release looked like "you have the newest build".
+  if (info.version && BUILD.version && info.version !== BUILD.version) return newer(info.version, BUILD.version) ? "v" + info.version : null;
   if (!info.commit) return null;
   return BUILD.commit.startsWith(info.commit) ? null : info.commit;
 }
