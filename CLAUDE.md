@@ -185,6 +185,11 @@ Aquamarine — мессенджер со сквозным шифрованием
   - Чат `welcome` удалён (`state.rs`), `listChats` его отфильтровывает у старых установок.
   - Обновления: `updateId` сравнивает версии нумерованных выпусков, коммит — только для `nightly`.
 
+- **1.2.0-8** (пре-выпуск) — владелец: «надо чтобы была автообнова»:
+  - `aqua-server-app/src/updates.rs`: цикл (20 с после старта, потом раз в 3 ч; 15 мин, пока файла выпуска ещё нет), `newer` — копия `updates.ts::newer` с тестом. Файлы: `AquamarineServer-Setup.exe` / `.dmg` / `.AppImage` / `aquamarine-server.deb` / `.apk`; без строки в `SHA256SUMS.txt` не ставится. Windows: `cmd /C "ping … & setup /S & start exe [--hidden]"` (`raw_arg`, `CREATE_NO_WINDOW`), затем `app.exit(0)`. Команды `update_status`, `update_now(install)`, `set_auto_update`, `open_notes`; `Conf.auto_update`.
+  - В панели (`ui/index.html`) блоки, которые обновляет `poll`, перерисовывай только при изменении (`dataset.h`), иначе клики теряются — так было с выбором режима.
+  - `checksums` в `release.yml` ждёт и серверное приложение; `release-retry.yml` перезапускает `main`, только если это последний коммит.
+
 ## Открытые вопросы
 
 - Подлагивание при смене чата и «зависание при открытии профиля» (24.10) не воспроизведены: список сообщений уже рисуется окнами по 40. Нужен лог `[aqua-fps]` / `[aqua-click]` с устройства владельца.

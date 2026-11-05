@@ -43,6 +43,9 @@
   .card h2 { margin: 0; font-size: 12px; letter-spacing: .07em; text-transform: uppercase; color: var(--dim); font-weight: 700; display: flex; align-items: center; gap: 8px; }
   .card h2 .grow { flex: 1; }
   .note { font-size: 12.5px; color: var(--dim); }
+  .card.upd { flex-direction: row; align-items: center; gap: 14px; border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+  .card.upd .t { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .card.upd .t span { font-size: 12.5px; color: var(--dim); }
   .note b { color: var(--fg); }
   .msg { font-size: 13px; }
   .msg.ok { color: var(--ok); } .msg.err { color: var(--bad); }
@@ -266,6 +269,14 @@ const RU_DICT = {
   "Server": "Сервер", "Apply": "Применить", "portNote": "Порт меняется сразу — сервер перезапустится.",
   "Data folder": "Папка данных", "dataNote": "Аккаунты, зашифрованные файлы и настройки сервера. Консольный сервер использует ту же папку — аккаунты сохраняются.",
   "Use another folder…": "Другая папка…", "Move the data to…": "Перенести данные в…", "Stop the server first": "Сначала остановите сервер",
+  "Updates": "Обновления", "Update automatically": "Обновляться автоматически",
+  "autoUpdSub": "Новые версии скачиваются и ставятся сами; сервер выключается только на несколько секунд перезапуска.",
+  "Checking for updates…": "Проверяю обновления…", "This is the latest version.": "Это последняя версия.",
+  "Version {v} is out, its file for this device is still being built.": "Вышла версия {v}, файл для этого устройства ещё собирается.",
+  "Downloading {v}…": "Скачиваю {v}…", "Version {v} is downloaded.": "Версия {v} скачана.", "Version {v} is ready to install.": "Версию {v} можно установить.",
+  "Installing — the server will be back in a few seconds…": "Устанавливаю — сервер вернётся через несколько секунд…",
+  "Couldn't check for updates: ": "Не удалось проверить обновления: ", "Update now": "Обновить сейчас", "Check now": "Проверить",
+  "What's new": "Что нового", "A new version: {v}": "Новая версия: {v}",
   "This computer": "Этот компьютер", "Start with the system": "Запускать вместе с системой", "autoSub": "Сервер работает с момента входа в систему, окно не открывается.",
   "Keep running when the window is closed": "Работать в фоне при закрытом окне", "traySub": "Значок в трее: оттуда окно открывается снова.",
   "mobNote": "Сервер работает и с выключенным экраном — Android показывает уведомление. Если телефон всё равно его закрывает: Настройки → Приложения → Aquamarine Server → Батарея → Без ограничений.",
@@ -311,6 +322,7 @@ const EN = {
   mobNote: "The server keeps running with the screen off — Android shows a notification. If the phone closes it anyway: Settings → Apps → Aquamarine Server → Battery → Unrestricted.",
   serverOff: "The server is off", serverOffSub: "This page works while the server is running.",
   "for {t}": "for {t}",
+  autoUpdSub: "New versions download and install by themselves; the server is off only for the few seconds of the restart.",
 };
 document.documentElement.lang = RU ? "ru" : "en";
 
@@ -408,6 +420,7 @@ function pageHome(el) {
       <div class="t"><b id="hState">…</b><span id="hSub"></span></div>
       <button id="hBtn" onclick="toggleServer()"></button></div>
     <div class="msg err" id="hErr" hidden></div>
+    <div id="updBox"></div>
     <div id="modeAsk"></div>
     <div class="stats" id="stats"></div>
     <div class="card"><h2>${t("How to connect")}</h2><div id="addrs"></div>
@@ -451,10 +464,13 @@ function paintHome() {
   if ($("addrs").dataset.h !== html) { $("addrs").dataset.h = html; $("addrs").innerHTML = html; }
   // First start: solo or network?
   const ask = on && fed && !fed.mode && !sessionStorage.getItem("aqs.modeLater");
-  $("modeAsk").innerHTML = ask ? `<div class="card"><h2>${t("How will this server work?")}</h2>
+  // Only when it changes: redrawing it on every poll ate clicks.
+  const askHtml = ask ? `<div class="card"><h2>${t("How will this server work?")}</h2>
       <button class="choice" onclick="setMode('solo')">${IC.user}<div><b>${t("Alone")}</b><span>${t("soloText")}</span></div></button>
       <button class="choice" onclick="setMode('network')">${IC.network}<div><b>${t("In a network")}</b><span>${t("netText")}</span></div></button>
       <div><button class="ghost mini" onclick="sessionStorage.setItem('aqs.modeLater','1'); paintHome()">${t("Choose later")}</button></div></div>` : "";
+  if ($("modeAsk").dataset.h !== askHtml) { $("modeAsk").dataset.h = askHtml; $("modeAsk").innerHTML = askHtml; }
+  paintUpd();
 }
 
 async function toggleServer() {
@@ -773,8 +789,12 @@ function pageSettings(el) {
     <div class="card"><h2>${t("This computer")}</h2>
       <div class="sw" onclick="setSys('set_autostart', !st.autostart)"><div class="t"><b>${t("Start with the system")}</b><span>${t("autoSub")}</span></div><span class="tog ${s.autostart ? "on" : ""}"></span></div>
       <div class="sw" onclick="setSys('set_tray', !st.tray)"><div class="t"><b>${t("Keep running when the window is closed")}</b><span>${t("traySub")}</span></div><span class="tog ${s.tray ? "on" : ""}"></span></div></div>`}
+    <div class="card"><h2>${t("Updates")}</h2>
+      <div class="sw" onclick="setAutoUpd(!upd?.auto)"><div class="t"><b>${t("Update automatically")}</b><span>${t("autoUpdSub")}</span></div><span class="tog ${upd?.auto ? "on" : ""}" id="updTog"></span></div>
+      <div id="updSet"></div></div>
     <div class="card"><h2>${t("About")}</h2><div class="note">Aquamarine Server · ${t("Version")} ${esc(version)}</div>
       <a onclick="invoke('open_guide')">${t("Step by step: router, public IP, what to do without one")} →</a></div>`;
+  paintUpd();
   if (s.running) api("/v1/admin/datadir").then((d) => { if ($("ddSize")) $("ddSize").textContent = human(d.bytes); }).catch(() => {});
 }
 async function setPort() {
@@ -789,17 +809,60 @@ async function chooseDir(copyData) {
 }
 async function setSys(cmd, on) { try { st = await invoke(cmd, { on }); } catch (e) { toast(errText(e)); } render(); }
 
+// ---------------------------------------------------------------- updates
+let upd = null;
+function updLine() {
+  const u = upd; if (!u) return "";
+  const v = u.version ? esc(u.version) : "";
+  switch (u.state) {
+    case "checking": return t("Checking for updates…");
+    case "latest": return t("This is the latest version.");
+    case "waiting": return t("Version {v} is out, its file for this device is still being built.", { v });
+    case "downloading": return t("Downloading {v}…", { v }) + (u.total ? ` ${Math.floor(u.done * 100 / u.total)}%` : "");
+    case "ready": return u.can_self_install ? t("Version {v} is downloaded.", { v }) : t("Version {v} is ready to install.", { v });
+    case "installing": return t("Installing — the server will be back in a few seconds…");
+    case "error": return t("Couldn't check for updates: ") + esc(u.error || "");
+    default: return "";
+  }
+}
+function updButtons() {
+  const u = upd; if (!u) return "";
+  if (u.state === "ready") return `<button class="primary mini" onclick="updNow(true)">${IC.refresh}${t("Update now")}</button>`;
+  if (["checking", "downloading", "installing"].includes(u.state)) return "";
+  return `<button class="mini" onclick="updNow(false)">${IC.refresh}${t("Check now")}</button>`;
+}
+function paintUpd() {
+  const set = $("updSet");
+  if (set) { const h = `<div class="note">${t("Version")} ${esc(upd?.current || version)} · ${updLine()}</div><div class="row">${updButtons()}${upd?.notes_url && upd?.version ? `<a onclick="invoke('open_notes').catch(()=>{})">${t("What's new")} →</a>` : ""}</div>`;
+    if (set.dataset.h !== h) { set.dataset.h = h; set.innerHTML = h; } }
+  if ($("updTog")) $("updTog").className = "tog" + (upd?.auto ? " on" : "");
+  const box = $("updBox");
+  if (box) {
+    const show = upd && upd.version && ["waiting", "downloading", "ready", "installing"].includes(upd.state) && !(upd.state === "waiting");
+    const h = show ? `<div class="card upd"><div class="t"><b>${t("A new version: {v}", { v: esc(upd.version) })}</b><span>${updLine()}</span></div>${updButtons()}</div>` : "";
+    if (box.dataset.h !== h) { box.dataset.h = h; box.innerHTML = h; }
+  }
+}
+async function setAutoUpd(on) { try { upd = await invoke("set_auto_update", { on }); } catch (e) { toast(errText(e)); } paintUpd(); }
+async function updNow(install) {
+  if (install) { upd = { ...upd, state: "installing" }; paintUpd(); }
+  else { upd = { ...upd, state: "checking" }; paintUpd(); }
+  try { upd = await invoke("update_now", { install }); } catch (e) { upd = { ...upd, state: "error", error: errText(e) }; }
+  paintUpd();
+}
+
 // ======================================================================
 // Polling
 // ======================================================================
 function paintAll() {
   const on = st?.running;
   if ($("navDot")) { $("navDot").className = "dot" + (on ? " on" : st?.error ? " err" : ""); $("navText").textContent = busy ? t("Starting…") : on ? t("Running") + (stats ? " · " + (stats.online) + " " + t("online") : "") : t("Stopped"); }
-  paintHome(); paintCodes();
+  paintHome(); paintCodes(); paintUpd();
 }
 let wasRunning = null;
 async function poll(force) {
   try { st = await invoke("status"); } catch (e) { console.warn(e); return; }
+  try { upd = await invoke("update_status"); } catch {}
   if (st.running) {
     try { stats = await api("/v1/admin/stats"); } catch { stats = null; }
     if (!fed || force) await loadFed();

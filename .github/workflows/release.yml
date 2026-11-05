@@ -819,7 +819,7 @@ jobs:
   checksums:
     name: checksums
     if: ${{ always() && needs.notes.result == 'success' }}
-    needs: [notes, desktop, android, ios, server, site]
+    needs: [notes, desktop, android, ios, server, server-app, server-app-android, site]
     runs-on: ubuntu-latest
     steps:
       # Nightly: drop files an older build left behind (renamed bundles),
