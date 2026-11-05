@@ -68,6 +68,26 @@ jobs:
           cargo check
           cargo test --lib
 
+  ui-shots:
+    name: ui screenshots (log)
+    needs: app
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ui-dist
+          path: ui-dist
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Screenshots of the profile editor (base64 in this log)
+        run: |
+          sudo apt-get update && sudo apt-get install -y fonts-noto-color-emoji
+          mkdir -p /tmp/pw && (cd /tmp/pw && npm init -y >/dev/null && npm i --no-audit --no-fund playwright@1.48.2)
+          (cd /tmp/pw && npx playwright install --with-deps chromium)
+          NODE_PATH=/tmp/pw/node_modules node tools/ui-shots.js ui-dist /tmp/shots "#F2EEE6"
+
   server-app:
     name: server app (cargo check)
     runs-on: ubuntu-22.04
