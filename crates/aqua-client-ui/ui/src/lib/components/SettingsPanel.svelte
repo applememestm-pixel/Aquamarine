@@ -344,6 +344,84 @@
   }
   $effect(() => { if ($settingsOpen && section === "devices") void loadDevices(); });
   const invoke = async <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => (await import("@tauri-apps/api/core")).invoke<T>(cmd, args);
+  // ---- Data and storage (Telegram's "Download path" + "Local storage") ----
+  type StConf = { mode: "default" | "temp" | "custom"; custom: string; total_mb: number; cache_mb: number; max_days: number };
+  type StInfo = { conf: StConf; downloads: string; default_dir: string; temp_dir: string };
+  type StStats = { images: number; videos: number; audio: number; stickers: number; files: number; cache: number; count: number };
+  let st = $state<StInfo | null>(null);
+  let stStats = $state<StStats | null>(null);
+  let stPick = $state<Record<string, boolean>>({ images: true, videos: true, audio: true, stickers: true, files: true, cache: true });
+  let stBusy = $state(false);
+  type TRow = { chat: string; name: string; bytes: number; count: number };
+  type Traffic = { received: Record<string, TRow[]>; sent: Record<string, TRow[]> };
+  let stTx = $state<Traffic | null>(null);
+  let stOpen = $state<{ side: "rx" | "tx"; kind: string } | null>(null);
+  const sumOf = (rows: TRow[] | undefined) => (rows ?? []).reduce((n, r) => n + r.bytes, 0);
+  const stTxTotal = $derived(stTx ? Object.values(stTx.sent).reduce((n, rows) => n + sumOf(rows), 0) : 0);
+  async function stLoad() {
+    try { st = await invoke<StInfo>("storage_get"); stStats = await invoke<StStats>("storage_stats"); stTx = await invoke<Traffic>("storage_traffic"); } catch (e) { console.warn(e); }
+  }
+  async function stSave(patch: Partial<StConf>) {
+    if (!st) return;
+    try { st = await invoke<StInfo>("storage_set", { conf: { ...st.conf, ...patch } }); await invoke("storage_trim"); stStats = await invoke<StStats>("storage_stats"); }
+    catch (e) { showToast(String(e)); }
+  }
+  async function stPickFolder() {
+    const p = await pickFolder(tr("Folder for downloaded files"));
+    if (p) await stSave({ mode: "custom", custom: p });
+  }
+  async function stClear() {
+    const kinds = Object.keys(stPick).filter((k) => stPick[k]);
+    if (!kinds.length) return;
+    const ok = await askConfirm({ title: tr("Clear {size}?", { size: fmtBytes(stSelected) }), text: tr("The files are deleted from this device only. In chats they can be downloaded again while the server keeps them."), ok: tr("Clear"), danger: true });
+    if (!ok) return;
+    stBusy = true;
+    try { const n = await invoke<number>("storage_clear", { kinds }); showToast(tr("Freed {size}", { size: fmtBytes(n) })); await stLoad(); }
+    catch (e) { showToast(String(e)); }
+    stBusy = false;
+  }
+  const ST_KINDS = [
+    { id: "images", label: "Images", color: "#4FA3FF" },
+    { id: "videos", label: "Videos", color: "#B66BFF" },
+    { id: "audio", label: "Music & voice", color: "#3DDC97" },
+    { id: "stickers", label: "Stickers & GIFs", color: "#FF9F43" },
+    { id: "files", label: "Files", color: "#FF6B8B" },
+    { id: "cache", label: "Media cache", color: "#8E8E93" },
+  ] as const;
+  const stTotal = $derived(stStats ? ST_KINDS.reduce((n, k) => n + stStats![k.id], 0) : 0);
+  const stSelected = $derived(stStats ? ST_KINDS.reduce((n, k) => n + (stPick[k.id] ? stStats![k.id] : 0), 0) : 0);
+  /** Donut segments: [offset, length, colour] on a circle of length 100. */
+  const stArcs = $derived.by(() => {
+    if (!stStats || !stTotal) return [] as { off: number; len: number; color: string }[];
+    let off = 0;
+    return ST_KINDS.filter((k) => stStats![k.id] > 0).map((k) => { const len = (stStats![k.id] / stTotal) * 100; const a = { off, len, color: k.color }; off += len; return a; });
+  });
+  function fmtBytes(n: number): string {
+    if (n < 1024) return `${n} B`;
+    if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`;
+    if (n < 1073741824) return `${(n / 1048576).toFixed(1)} MB`;
+    return `${(n / 1073741824).toFixed(2)} GB`;
+  }
+  $effect(() => { if ($settingsOpen && section === "storage") void stLoad(); });
+  async function exportChats() {
+    try {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const dest = await save({ defaultPath: `aquamarine-${$info?.username ?? "chats"}-${new Date().toISOString().slice(0, 10)}.json`, filters: [{ name: "JSON", extensions: ["json"] }] });
+      if (!dest) return;
+      const n = await invoke<number>("export_chats", { dest });
+      showToast(tr("Exported: {size}", { size: fmtBytes(n) }));
+    } catch (e) { showToast(String(e)); }
+  }
+  function setAutoDl(k: "private" | "groups" | "channels" | "limitMb", v: boolean | number) {
+    settings.update((x) => ({ ...x, autoDl: { ...AUTODL_DEFAULT, ...(x.autoDl ?? {}), [k]: v } }));
+  }
+  const pw = $derived({ ...POWER_DEFAULT, ...($settings.power ?? {}) });
+  const pwMode = $derived(powerMode($settings));
+  function setPower(k: keyof typeof POWER_DEFAULT, v: boolean) {
+    settings.update((x) => ({ ...x, power: { ...POWER_DEFAULT, ...(x.power ?? {}), [k]: v } }));
+  }
+  // ---- Advanced: launch at start-up ----
+  let autostart = $state(false);
   $effect(() => { if ($settingsOpen && section === "window") void autostartEnabled().then((v) => (autostart = v)); });
   async function toggleAutostart() {
     try { autostart = await setAutostart(!autostart); } catch (e) { showToast(String(e)); }
