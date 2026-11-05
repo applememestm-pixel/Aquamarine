@@ -2002,7 +2002,6 @@
         </div>
       </section>
       {/if}
-      {/if}
 
       {#if section === "nearby"}
       {@const ms = $meshStatus}
