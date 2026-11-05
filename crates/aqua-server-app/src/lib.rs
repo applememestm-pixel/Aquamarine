@@ -12,6 +12,8 @@
 //!   switching to the app keeps every account. On a first start it also
 //!   takes over the folder of the old in-app server of the messenger.
 
+mod updates;
+
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -35,6 +37,9 @@ struct Conf {
     /// Computers: closing the window keeps the server in the tray.
     #[serde(default = "yes")]
     tray: bool,
+    /// Install new versions of this app by itself (updates.rs).
+    #[serde(default = "yes")]
+    auto_update: bool,
 }
 
 fn yes() -> bool {
@@ -43,7 +48,7 @@ fn yes() -> bool {
 
 impl Default for Conf {
     fn default() -> Self {
-        Self { port: DEFAULT_PORT, dir: String::new(), run: true, tray: true }
+        Self { port: DEFAULT_PORT, dir: String::new(), run: true, tray: true, auto_update: true }
     }
 }
 
@@ -392,6 +397,45 @@ async fn admin(method: String, path: String, body: Option<serde_json::Value>) ->
     Ok(serde_json::from_str(&text).unwrap_or(serde_json::Value::Null))
 }
 
+#[derive(Serialize)]
+struct UpdateView {
+    #[serde(flatten)]
+    st: updates::UpdState,
+    auto: bool,
+}
+
+#[tauri::command]
+fn update_status(app: AppHandle) -> UpdateView {
+    UpdateView { st: updates::snapshot(), auto: load(&app).auto_update }
+}
+
+#[tauri::command]
+fn set_auto_update(app: AppHandle, on: bool) -> UpdateView {
+    let mut c = load(&app);
+    c.auto_update = on;
+    save(&app, &c);
+    update_status(app)
+}
+
+/// "Check now" / "Update": check, download, and install when asked.
+#[tauri::command]
+async fn update_now(app: AppHandle, install: bool) -> Result<UpdateView, String> {
+    if install && updates::snapshot().state == "ready" {
+        updates::install_now(&app)?;
+    } else {
+        updates::run_once(&app, install).await;
+    }
+    Ok(update_status(app))
+}
+
+/// The release page of the newer version.
+#[tauri::command]
+fn open_notes(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let url = updates::snapshot().notes_url.filter(|u| u.starts_with("https://github.com/")).ok_or("no release page")?;
+    app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
+}
+
 /// The step-by-step guide (router, public IP) in the browser.
 #[tauri::command]
 fn open_guide(app: AppHandle) -> Result<(), String> {
@@ -502,6 +546,7 @@ pub fn run() {
                     }
                 }
             }
+            updates::spawn(handle.clone(), |a| load(a).auto_update);
             if c.run {
                 tauri::async_runtime::spawn(async move {
                     if let Err(e) = start_inner(&handle, None).await {
@@ -519,7 +564,7 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![status, start, stop, set_port, set_dir, pick_dir, set_autostart, set_tray, open_guide, admin])
+        .invoke_handler(tauri::generate_handler![status, start, stop, set_port, set_dir, pick_dir, set_autostart, set_tray, open_guide, admin, update_status, set_auto_update, update_now, open_notes])
         .run(tauri::generate_context!());
     if let Err(e) = res {
         eprintln!("aquamarine server: {e:?}");
