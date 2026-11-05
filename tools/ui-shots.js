@@ -18,7 +18,6 @@ const mock = (card) => `
 localStorage.setItem("aqua.lang", "ru");
 localStorage.setItem("aqua-profile", JSON.stringify({ display_name: "apple", about: "Привет!", phone: "+7 999 123-45-67", birthday: "25 сентября", favourite_music: "",
   banner_a: "#ffffff", banner_b: "#ffffff", card: "${card}", card_i: 62, card_g: 60, pattern: "🌸", estatus: "⭐", status: "" }));
-localStorage.setItem("aqua.whatsNew.seen", "9.9.9");
 let n = 0;
 window.__TAURI_INTERNALS__ = {
   metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main", windowLabel: "main" } },
