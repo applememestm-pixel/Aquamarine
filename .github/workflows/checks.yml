@@ -86,3 +86,25 @@ jobs:
       - name: cargo check (Aquamarine Server)
         working-directory: crates/aqua-server-app
         run: cargo check
+
+  ui-shots:
+    name: ui screenshots (log)
+    needs: app
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ui-dist
+          path: ui-dist
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # The UI with a mocked Tauri, a few screens as JPEG in the log (between
+      # "=====SHOT" and "=====END") — tools/ui-shots.js.
+      - name: Screenshots
+        run: |
+          sudo apt-get install -y fonts-noto-color-emoji >/dev/null
+          mkdir -p /tmp/pw && cd /tmp/pw && npm init -y >/dev/null && npm i playwright@1.48.2 --no-audit --no-fund >/dev/null
+          npx playwright install --with-deps chromium >/dev/null
+          cd "$GITHUB_WORKSPACE" && NODE_PATH=/tmp/pw/node_modules node tools/ui-shots.js ui-dist /tmp/shots "#F2EEE6"
