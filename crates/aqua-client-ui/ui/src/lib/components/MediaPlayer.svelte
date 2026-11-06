@@ -15,6 +15,9 @@
   export const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
   /** Only one player plays at a time (starting one pauses the others). */
   let active: HTMLMediaElement | null = null;
+  /** Small ↔ big: the player that opens next for the same file starts
+   *  where this one was (and keeps playing if it was). */
+  const handoff = new Map<string, { t: number; playing: boolean }>();
 </script>
 
 <script lang="ts">
@@ -45,8 +48,10 @@
     autoplay?: boolean;
     /** Fill the parent box (lightbox / carousel slide) instead of sizing to the video. */
     fill?: boolean;
+    /** The big viewer's player (hands its place back to the small one on close). */
+    viewer?: boolean;
   }
-  let { src, kind = "audio", onExpand, poster, name, size, autoplay = false, fill = false }: Props = $props();
+  let { src, kind = "audio", onExpand, poster, name, size, autoplay = false, fill = false, viewer = false }: Props = $props();
 
   // Local files stream over loopback HTTP (see lib/media.ts::streamUrl).
   let playSrc = $state("");
@@ -103,6 +108,12 @@
   function onMeta() {
     if (!media) return;
     readDuration();
+    const h = handoff.get(src);
+    if (h) {
+      handoff.delete(src);
+      try { media.currentTime = h.t; } catch { /* ignore */ }
+      if (h.playing) { started = true; void media.play().catch(() => {}); }
+    }
     media.playbackRate = speed;
     media.volume = volume;
     media.muted = muted;
@@ -205,6 +216,22 @@
   let theater = $state(false);
   let isFs = $state(false);
   let home: { parent: Node; next: Node | null } | null = null;
+  /** Picture-in-picture: the webview's own where it has one (Windows,
+   *  macOS); on Android the whole app becomes the floating window, with the
+   *  video filling it (relay_host::pip_enter). */
+  const ANDROID = typeof navigator !== "undefined" && /android/i.test(navigator.userAgent);
+  const canPip = kind === "video" && (ANDROID || (typeof document !== "undefined" && "pictureInPictureEnabled" in document && (document as any).pictureInPictureEnabled));
+  async function pip() {
+    const v = media as HTMLVideoElement | null;
+    if (!v) return;
+    try {
+      if (!ANDROID && v.requestPictureInPicture) { if (v.paused) await v.play(); await v.requestPictureInPicture(); return; }
+      setTheater(true);
+      if (v.paused) await v.play().catch(() => {});
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("pip_enter", { w: v.videoWidth || 16, h: v.videoHeight || 9 });
+    } catch (e) { showToast(tr("Picture-in-picture isn't available: {e}", { e: String(e) })); }
+  }
   function setTheater(on: boolean) {
     if (!box || on === theater) return;
     // Out of the chat's stacking contexts (transforms / filters would
@@ -264,7 +291,25 @@
     document.addEventListener("fullscreenchange", on);
     return () => document.removeEventListener("fullscreenchange", on);
   });
+  // The viewer closed (or a player went away while playing): the one still
+  // on screen for this file picks up from here.
+  const onResume = (e: Event) => {
+    const d = (e as CustomEvent<{ src: string; t: number; playing: boolean }>).detail;
+    if (!media || viewer || d.src !== src) return;
+    try { media.currentTime = d.t; } catch { /* ignore */ }
+    if (d.playing) { started = true; void media.play().catch(() => {}); }
+  };
+  if (typeof window !== "undefined") window.addEventListener("aqua-media-resume", onResume);
+  function expand() {
+    if (media && media.currentTime > 0) { handoff.set(src, { t: media.currentTime, playing: !media.paused }); media.pause(); }
+    onExpand?.();
+  }
   onDestroy(() => {
+    window.removeEventListener("aqua-media-resume", onResume);
+    if (viewer && media && media.currentTime > 0) {
+      const detail = { src, t: media.currentTime, playing: !media.paused };
+      setTimeout(() => window.dispatchEvent(new CustomEvent("aqua-media-resume", { detail })), 0);
+    }
     if (home && box) { try { box.remove(); } catch { /* ignore */ } }
     if (active === media) active = null;
   });
@@ -364,6 +409,7 @@
     vol: "M4 9.5h3.5L12 5.5v13l-4.5-4H4zM15 8.5a5 5 0 0 1 0 7M17.5 6a8.5 8.5 0 0 1 0 12",
     mute: "M4 9.5h3.5L12 5.5v13l-4.5-4H4zM16 9.5l5 5M21 9.5l-5 5",
     loop: "M17 3l3 3-3 3M4 11V9a3 3 0 0 1 3-3h13M7 21l-3-3 3-3M20 13v2a3 3 0 0 1-3 3H4",
+    pip: "M3 6.5A1.5 1.5 0 0 1 4.5 5h15A1.5 1.5 0 0 1 21 6.5v11a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5zM12 12h7v5h-7z",
     theater: "M3 6.5A1.5 1.5 0 0 1 4.5 5h15A1.5 1.5 0 0 1 21 6.5v11a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5zM7 9h10v6H7z",
     fs: "M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5",
     fsx: "M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5",
@@ -488,8 +534,9 @@
           {#if infoOpen}<div class="menu info">{infoLine || $t("Video")}</div>{/if}
         </div>
         {#if onExpand && !theater && !isFs}
-          <button class="ib" onclick={onExpand} title={$t("Open in viewer")}>{@render ico(I.expand)}</button>
+          <button class="ib" onclick={expand} title={$t("Open in viewer")}>{@render ico(I.expand)}</button>
         {/if}
+        {#if canPip}<button class="ib" onclick={() => void pip()} title={$t("Picture in picture")}>{@render ico(I.pip)}</button>{/if}
         <button class="ib" class:on={theater} onclick={() => setTheater(!theater)} title={$t(theater ? "Exit window mode (W)" : "Fill the window (W)")}>{@render ico(I.theater)}</button>
         <button class="ib" onclick={() => void toggleFs()} title={$t(isFs ? "Exit full screen (F)" : "Full screen (F)")}>{@render ico(isFs ? I.fsx : I.fs)}</button>
       </div>

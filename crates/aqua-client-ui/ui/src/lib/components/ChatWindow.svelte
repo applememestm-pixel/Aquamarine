@@ -2204,7 +2204,7 @@
     const author = fwdAuthorOf(m);
     if (k.type === "text") return { kind: "text", text: k.content.text, author };
     if (k.type === "code") return { kind: "text", text: "```" + (k.content.language || "") + "\n" + k.content.code + "\n```", author };
-    if (k.type === "article") return { kind: "text", text: `${k.content.title}\n\n${k.content.body}`, author };
+    if (k.type === "article") return { kind: "text", text: [k.content.title, k.content.body].filter(Boolean).join("\n\n"), author };
     if (k.type === "reply") return { kind: "text", text: k.content.text, author };
     if (k.type === "file") {
       if (k.content.saved_at) return { kind: "file", path: k.content.saved_at, name: k.content.name, author };
@@ -2217,7 +2217,7 @@
     const k = m.kind;
     if (k.type === "text") return k.content.text;
     if (k.type === "code") return k.content.code;
-    if (k.type === "article") return `${k.content.title}\n\n${k.content.body}`;
+    if (k.type === "article") return [k.content.title, k.content.body].filter(Boolean).join("\n\n");
     if (k.type === "reply") return k.content.text;
     if (k.type === "poll") return k.content.question;
     return null;
@@ -3722,7 +3722,7 @@
                   <!-- svelte-ignore a11y_no_static_element_interactions -->
                   <div class="art-body" onclick={openIt}>
                     <div class="art-tag">📰 {$t("Article")} · {$t("{n} min read", { n: card.readMin })}{card.photos ? ` · ${$t("{n} photos", { n: card.photos })}` : ""}{card.videos ? ` · ${$t("{n} videos", { n: card.videos })}` : ""}</div>
-                    <h3 class="art-title">{art.title}</h3>
+                    {#if art.title}<h3 class="art-title">{art.title}</h3>{/if}
                     {#if art.subtitle}<div class="art-sub">{art.subtitle}</div>{/if}
                     {#if card.excerpt}<p class="art-excerpt">{card.excerpt}</p>{/if}
                   </div>
@@ -5117,7 +5117,7 @@
   .bubble.media-bubble {
     position: relative;
     width: fit-content;
-    padding: 4px;
+    padding: 2px; /* a hairline frame around photos/videos, like Telegram */
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -5208,9 +5208,9 @@
     background-position: center;
     border-bottom: 1px solid var(--border);
   }
-  .art-carousel { padding: 6px 6px 0; }
+  .art-carousel { padding: 2px 2px 0; }
   .art-carousel :global(.stage) { border-radius: calc(10px * var(--rk, 1)); }
-  .art-body { padding: 12px 14px 4px; cursor: pointer; }
+  .art-body { padding: 9px 12px 3px; cursor: pointer; }
   .art-tag {
     font-size: 11px; font-weight: 700; color: var(--accent);
     text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px;

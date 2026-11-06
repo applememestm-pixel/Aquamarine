@@ -60,6 +60,12 @@ class UrlArgs {
 }
 
 @InvokeArg
+class PipArgs {
+  var w: Int = 16
+  var h: Int = 9
+}
+
+@InvokeArg
 class WidgetArgs {
   var data: String = "{}"
 }
@@ -82,6 +88,20 @@ class AquaRelayPlugin(private val activity: Activity) : Plugin(activity) {
   fun stop(invoke: Invoke) {
     activity.stopService(Intent(activity, AquaRelayService::class.java))
     invoke.resolve(JSObject().put("ok", true))
+  }
+
+  /** Picture-in-picture: the app shrinks into a floating window while a
+   *  video plays (the page made the video fill the window first). */
+  @Command
+  fun enterPip(invoke: Invoke) {
+    val a = invoke.parseArgs(PipArgs::class.java)
+    if (Build.VERSION.SDK_INT < 26) { invoke.reject("picture-in-picture needs Android 8"); return }
+    // Android allows ratios between 1:2.39 and 2.39:1.
+    val w = a.w.coerceAtLeast(1); val h = a.h.coerceAtLeast(1)
+    val r = (w.toDouble() / h).coerceIn(1 / 2.39, 2.39)
+    val ratio = if (r >= 1) android.util.Rational((r * 1000).toInt(), 1000) else android.util.Rational(1000, (1000 / r).toInt())
+    val ok = activity.enterPictureInPictureMode(android.app.PictureInPictureParams.Builder().setAspectRatio(ratio).build())
+    if (ok) invoke.resolve(JSObject().put("ok", true)) else invoke.reject("picture-in-picture was refused")
   }
 
   /** A web or mail link in the browser / mail app ("What's new", About,

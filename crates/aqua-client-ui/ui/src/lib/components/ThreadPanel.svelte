@@ -12,6 +12,7 @@
 </script>
 
 <script lang="ts">
+  import { sideResize } from "../sideResize";
   /** A message with everything said about it: replies (groups, chats) or
    *  comments (channel posts) — with answers to answers. */
   import { t, tr } from "../i18n";
@@ -49,7 +50,7 @@
   }
 </script>
 
-<aside class="th" data-back aria-label={title}>
+<aside class="th" use:sideResize={"threadpanel"} data-back aria-label={title}>
   <header class="th-head">
     <b>{title}</b>
     <span class="th-n">{items.length}</span>

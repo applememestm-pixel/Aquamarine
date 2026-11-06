@@ -7,6 +7,7 @@
 </script>
 
 <script lang="ts">
+  import { sideResize } from "../sideResize";
   import { streamSrc } from "../media";
   import { t } from "../i18n";
   import { activeChat } from "../stores";
@@ -94,7 +95,7 @@
 </script>
 
 {#if $sharedMediaOpen}
-  <aside class="sm" data-back>
+  <aside class="sm" use:sideResize={"sharedmediapanel"} data-back>
     <div class="sm-head">
       <h3>{$t("Shared media")}</h3>
       <button data-x class="sm-close" onclick={closeSharedMedia} title={$t("Close")}>×</button>

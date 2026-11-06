@@ -27,6 +27,11 @@ if ! grep -q ACCESS_LOCAL_NETWORK "$M"; then
   perl -0pi -e 's|(<uses-permission android:name="android.permission.RECORD_AUDIO" />)|<uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />\n    $1|' "$M"
   echo '[patch] ACCESS_LOCAL_NETWORK added'
 fi
+# 1b2. Videos in picture-in-picture (MediaPlayer → AquaRelay.enterPip).
+if ! grep -q supportsPictureInPicture "$M"; then
+  perl -0pi -e 's/<activity/<activity android:supportsPictureInPicture="true"/' "$M"
+  echo '[patch] picture-in-picture allowed'
+fi
 # 1c. MainActivity that asks for local-network access on Android 17+.
 MA="$(find "$APP/src/main/java" -name MainActivity.kt 2>/dev/null | head -1)"
 if [ -n "$MA" ]; then

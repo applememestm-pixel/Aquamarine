@@ -415,7 +415,7 @@
   async function send() {
     const s = $articleState;
     if (!s || sending) return;
-    if (!title.trim()) { showToast(tr("Give the article a title first")); return; }
+    // A title is optional (like a Telegraph post without one).
     if (!body.trim() && images.length === 0) { showToast(tr("Write something first")); return; }
     if (bytes > MAX_BYTES) { showToast(tr("The article is too big ({size}) — remove some photos", { size: mb(bytes) }), 6000); return; }
     const chat = $chats.find((c) => c.id === s.peerId);

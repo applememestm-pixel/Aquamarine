@@ -326,6 +326,7 @@ pub fn run() -> Result<()> {
             commands::follow_peer_by_uid,
             commands::channel_dm_open,
             relay_host::widget_update,
+            relay_host::pip_enter,
             commands::attach_file,
             commands::attach_file_as,
             commands::attach_bytes,
