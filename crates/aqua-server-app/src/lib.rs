@@ -579,8 +579,19 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![status, start, stop, set_port, set_dir, pick_dir, set_autostart, set_tray, open_guide, admin, update_status, set_auto_update, update_now, open_notes])
-        .run(tauri::generate_context!());
-    if let Err(e) = res {
-        eprintln!("aquamarine server: {e:?}");
+        .build(tauri::generate_context!());
+    match res {
+        Ok(app) => app.run(|_, ev| {
+            // Quitting with the server on: the file cache goes, people's data
+            // stays (aqua_server::blobstore::clear_cache; the working folder
+            // is the server's data folder while it runs).
+            if let tauri::RunEvent::Exit = ev {
+                if RUNNING.lock().map(|r| r.is_some()).unwrap_or(false) {
+                    let n = aqua_server::blobstore::BlobStore::from_env().clear_cache();
+                    tracing::info!(removed = n, "quit: file cache cleared");
+                }
+            }
+        }),
+        Err(e) => eprintln!("aquamarine server: {e:?}"),
     }
 }

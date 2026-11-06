@@ -76,7 +76,16 @@ async fn main() -> anyhow::Result<()> {
     state.blobs.spawn_sweeper();
     aqua_server::fed::spawn_sync(state.clone());
     aqua_server::tgapi::resume_webhooks(state.clone());
-    axum::serve(listener, app(state)).await?;
+    // Ctrl+C / closing the console: stop cleanly, then drop the file cache
+    // (people's data stays — blobstore::clear_cache).
+    let blobs = state.blobs.clone();
+    axum::serve(listener, app(state))
+        .with_graceful_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await?;
+    let n = blobs.clear_cache();
+    tracing::info!(removed = n, "server stopped: file cache cleared");
     Ok(())
 }
 

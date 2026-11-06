@@ -3,7 +3,8 @@
 //! Content-addressed by the SHA-256 of the ciphertext, one file per blob
 //! under `aqua-blobs/` (`AQUA_BLOB_DIR`). They are a delivery cache, not an
 //! archive: anything older than `AQUA_BLOB_TTL_HOURS` (72 by default) is
-//! swept hourly. Survives restarts, unlike the in-memory map it replaces.
+//! swept hourly, and the whole cache is cleared when the server stops
+//! (`clear_cache`); kept blobs (`keep/`) and people's data stay.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -140,6 +141,23 @@ impl BlobStore {
         sweep_dir(&self.dir, self.ttl) + sweep_dir(&self.keep, KEEP_TTL)
     }
 
+    /// The server is shutting down: the delivery cache goes (photos, videos,
+    /// files waiting to be fetched), so a stopped server keeps nothing but
+    /// what matters — accounts, history, settings, and the kept group
+    /// photos/banners (`keep/`). Owner's choice (06.11): "при выключении кэш
+    /// очищается, данные пользователей хранятся".
+    pub fn clear_cache(&self) -> usize {
+        let mut removed = 0;
+        if let Ok(rd) = std::fs::read_dir(&self.dir) {
+            for e in rd.flatten() {
+                if e.metadata().is_ok_and(|m| m.is_file()) && std::fs::remove_file(e.path()).is_ok() {
+                    removed += 1;
+                }
+            }
+        }
+        removed
+    }
+
     /// Hourly sweep in the background.
     pub fn spawn_sweeper(&self) {
         let me = self.clone();
@@ -178,6 +196,16 @@ fn sweep_dir(dir: &Path, ttl: Duration) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shutdown_clears_the_cache_but_keeps_kept_blobs() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = BlobStore::new(dir.path().to_path_buf(), Duration::from_secs(3600));
+        std::fs::write(dir.path().join("a".repeat(64)), b"x").unwrap();
+        std::fs::write(dir.path().join("keep").join("b".repeat(64)), b"y").unwrap();
+        assert_eq!(s.clear_cache(), 1);
+        assert!(dir.path().join("keep").join("b".repeat(64)).exists());
+    }
     #[test]
     fn put_get_sweep() {
         let dir = tempfile::tempdir().unwrap();
