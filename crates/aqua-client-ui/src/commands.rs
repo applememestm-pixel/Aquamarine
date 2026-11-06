@@ -1047,7 +1047,7 @@ pub fn delete_media_item(
         s.data_dir.clone()
     };
     let p = PathBuf::from(&path);
-    let inside = media::path_is_within(&data_dir.join("stickers"), &p) || media::path_is_within(&data_dir.join("gifs"), &p);
+    let inside = media::path_is_within(&crate::accounts::shared_root(&data_dir).join("stickers"), &p) || media::path_is_within(&crate::accounts::shared_root(&data_dir).join("gifs"), &p);
     if !inside {
         return Err("not a library item".into());
     }
@@ -1350,7 +1350,7 @@ pub async fn send_sticker(
     // Only allow sources from inside the local stickers dir.
     {
         let s = state.lock().map_err(|e| e.to_string())?;
-        let allowed = s.data_dir.join("stickers");
+        let allowed = crate::accounts::shared_root(&s.data_dir).join("stickers");
         if !media::path_is_within(&allowed, &PathBuf::from(&file_path)) {
             return Err(format!(
                 "sticker path must be under {}",
@@ -1421,7 +1421,7 @@ pub fn save_sticker(
         let s = state.lock().map_err(|e| e.to_string())?;
         s.data_dir.clone()
     };
-    let pack_dir = data_dir.join("stickers").join(&pack_safe);
+    let pack_dir = crate::accounts::shared_root(&data_dir).join("stickers").join(&pack_safe);
     if crate::media::is_telegram_pack(&pack_dir) {
         return Err("packs from Telegram can't be changed — pick one of yours".into());
     }
@@ -1449,7 +1449,7 @@ pub fn save_sticker(
 
 fn own_pack_dir(state: &State<'_, StdMutex<AppState>>, title: &str) -> Result<PathBuf, String> {
     let data_dir = state.lock().map_err(|e| e.to_string())?.data_dir.clone();
-    let root = data_dir.join("stickers");
+    let root = crate::accounts::shared_root(&data_dir).join("stickers");
     let t = title.trim();
     if t.is_empty() || t.contains(['/', '\\']) || t.starts_with('.') {
         return Err("bad pack name".into());
@@ -1502,7 +1502,7 @@ pub async fn import_telegram_stickers(
 ) -> Result<aqua_client_core::ImportReport, String> {
     let stickers_root = {
         let s = state.lock().map_err(|e| e.to_string())?;
-        s.data_dir.join("stickers")
+        crate::accounts::shared_root(&s.data_dir).join("stickers")
     };
     std::fs::create_dir_all(&stickers_root).map_err(|e| format!("mkdir stickers: {e}"))?;
     aqua_client_core::import_telegram_pack(&bot_token, &pack_ref, &stickers_root).await
@@ -1524,7 +1524,7 @@ pub async fn import_pack_via_server(
 ) -> Result<aqua_client_core::ImportReport, String> {
     let (t, root) = {
         let s = state.lock().map_err(|e| e.to_string())?;
-        (s.transport.clone().ok_or("not connected")?, s.data_dir.join("stickers"))
+        (s.transport.clone().ok_or("not connected")?, crate::accounts::shared_root(&s.data_dir).join("stickers"))
     };
     let m = t.import_pack(&link).await.map_err(|e| match e {
         aqua_client_core::TransportError::Server { body, .. } if !body.is_empty() => body,
@@ -1662,7 +1662,7 @@ pub async fn send_gif(
 ) -> Result<AttachResult, String> {
     {
         let s = state.lock().map_err(|e| e.to_string())?;
-        let allowed = s.data_dir.join("gifs");
+        let allowed = crate::accounts::shared_root(&s.data_dir).join("gifs");
         if !media::path_is_within(&allowed, &PathBuf::from(&file_path)) {
             return Err(format!("gif path must be under {}", allowed.display()));
         }
@@ -2053,8 +2053,11 @@ pub fn read_media_bytes(
     let candidate = PathBuf::from(&path);
     // Preferred: files inside our own dirs (stickers/gifs/voice/circles/
     // images/saved-media/downloads cache). Those are always allowed.
+    let shared = crate::accounts::shared_root(&data_dir);
     let in_scope = media::path_is_within(&data_dir, &candidate)
-        || media::path_is_within(&downloads, &candidate);
+        || media::path_is_within(&downloads, &candidate)
+        || media::path_is_within(&shared.join("stickers"), &candidate)
+        || media::path_is_within(&shared.join("gifs"), &candidate);
     // Fallback: a media file the user themselves attached from anywhere
     // on disk, so the SENDER's own inline preview works. This is the
     // user's own machine and they already explicitly picked the file

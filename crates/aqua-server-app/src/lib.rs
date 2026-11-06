@@ -532,7 +532,13 @@ pub fn run() {
             .try_init();
     }
     aqua_server::report::install_panic_hook("aquamarine-server-app");
-    let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init()).plugin(tauri_plugin_opener::init());
+    let builder = tauri::Builder::default();
+    // One copy at a time: the autostart one and a click on the shortcut
+    // used to race for the port ("port busy", then fine after a restart).
+    // A second launch just brings the running window forward.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)));
+    let builder = builder.plugin(tauri_plugin_dialog::init()).plugin(tauri_plugin_opener::init());
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--hidden"])));
     #[cfg(target_os = "android")]

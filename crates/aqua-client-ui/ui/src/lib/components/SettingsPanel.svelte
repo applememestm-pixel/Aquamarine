@@ -1764,20 +1764,7 @@
           <span class="v mono dir">{$info?.data_dir ?? "—"}</span>
         </div>
       </section>
-      <section class="group">
-        <div class="label">{$t("Bot secretary")}</div>
-        <div class="bots-note">{$t("A bot answers people for you: their message goes to the bot, and its answer is sent to them from your account.")}</div>
-        <div class="bots-note warn-note">{$t("Bots aren't end-to-end encrypted: the messages the bot gets, its owner and the server can read.")}</div>
-        <div class="bk-row">
-          <input class="txt" placeholder="@mybot" bind:value={secBot} disabled={!!$secretary} />
-          <Select value={secScope} disabled={!!$secretary} options={[{ value: "new" as const, label: $t("Only new chats") }, { value: "noncontacts" as const, label: $t("People not in my contacts") }, { value: "all" as const, label: $t("Everyone") }]} onchange={(v) => (secScope = v)} />
-          {#if $secretary}
-            <button class="bot-btn" onclick={() => { secretary.set(null); showToast(tr("The secretary is off")); }}>{$t("Turn off")}</button>
-          {:else}
-            <button class="bot-btn primary" disabled={!secBot.trim()} onclick={secretaryOn}>{$t("Turn on")}</button>
-          {/if}
-        </div>
-      </section>
+      {#if $settings.advancedSettings}
       <section class="group">
         <div class="label">{$t("Pass for a private server")}</div>
         <div class="bots-note">{$t("A private server of your network may let in people from this server. Make a pass and paste it there when you create the account — it proves you're @{name} from here. It works once, for 10 minutes.", { name: $info?.username ?? "" })}</div>
@@ -1791,6 +1778,7 @@
           <button class="mini-btn" disabled={passBusy || !$info?.connected} onclick={makePass}>{passBusy ? "…" : $t("Make a pass")}</button>
         {/if}
       </section>
+      {/if}
       <section class="group">
         <div class="label">{$t("Proxy")}</div>
         <button class="mini-btn" onclick={() => { section = "network"; }}>{$t("Network & proxy")} ›</button>
@@ -2260,6 +2248,20 @@
             {/each}
           </div>
         {/if}
+      </section>
+      <section class="group">
+        <div class="label">{$t("Bot secretary")}</div>
+        <div class="bots-note">{$t("A bot answers people for you: their message goes to the bot, and its answer is sent to them from your account.")}</div>
+        <div class="bots-note warn-note">{$t("Bots aren't end-to-end encrypted: the messages the bot gets, its owner and the server can read.")}</div>
+        <div class="bk-row">
+          <input class="txt" placeholder="@mybot" bind:value={secBot} disabled={!!$secretary} />
+          <Select value={secScope} disabled={!!$secretary} options={[{ value: "new" as const, label: $t("Only new chats") }, { value: "noncontacts" as const, label: $t("People not in my contacts") }, { value: "all" as const, label: $t("Everyone") }]} onchange={(v) => (secScope = v)} />
+          {#if $secretary}
+            <button class="bot-btn" onclick={() => { secretary.set(null); showToast(tr("The secretary is off")); }}>{$t("Turn off")}</button>
+          {:else}
+            <button class="bot-btn primary" disabled={!secBot.trim()} onclick={secretaryOn}>{$t("Turn on")}</button>
+          {/if}
+        </div>
       </section>
       {:else}
       <!-- One bot: its token, how to run it, and removing it. -->

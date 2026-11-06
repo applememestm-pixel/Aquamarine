@@ -140,11 +140,11 @@ pub const ADD_LIMIT: u64 = 25 * 1024 * 1024;
 /// many files were added. Unsupported / oversized files are skipped.
 pub fn add_files(data_dir: &Path, target: &str, pack: Option<&str>, paths: &[String]) -> Result<usize, String> {
     let dest = match target {
-        "gifs" => data_dir.join("gifs"),
+        "gifs" => crate::accounts::shared_root(&data_dir).join("gifs"),
         "stickers" | "emoji" => {
             let default = if target == "emoji" { "My emoji" } else { "My stickers" };
             let title = sanitize_name(pack.unwrap_or(default));
-            let dir = data_dir.join("stickers").join(&title);
+            let dir = crate::accounts::shared_root(&data_dir).join("stickers").join(&title);
             fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
             if target == "emoji" && !dir.join("pack.json").exists() {
                 let _ = fs::write(dir.join("pack.json"), r#"{"type":"custom_emoji"}"#);
@@ -216,8 +216,8 @@ pub struct LocalMediaList {
 /// Create the stickers/ and gifs/ subdirs under data_dir with README
 /// files. Idempotent — safe to call on every boot.
 pub fn ensure_dirs(data_dir: &Path) {
-    let stickers = data_dir.join("stickers");
-    let gifs = data_dir.join("gifs");
+    let stickers = crate::accounts::shared_root(&data_dir).join("stickers");
+    let gifs = crate::accounts::shared_root(&data_dir).join("gifs");
     let _ = fs::create_dir_all(&stickers);
     let _ = fs::create_dir_all(&gifs);
     let s_readme = stickers.join("README.md");
@@ -232,8 +232,8 @@ pub fn ensure_dirs(data_dir: &Path) {
 
 /// Scan the media directories and build the picker catalogue.
 pub fn scan(data_dir: &Path) -> LocalMediaList {
-    let stickers_dir = data_dir.join("stickers");
-    let gifs_dir = data_dir.join("gifs");
+    let stickers_dir = crate::accounts::shared_root(&data_dir).join("stickers");
+    let gifs_dir = crate::accounts::shared_root(&data_dir).join("gifs");
 
     let packs = scan_sticker_packs(&stickers_dir);
     let gifs = scan_gifs(&gifs_dir);

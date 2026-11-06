@@ -34,6 +34,7 @@ reqwest     = { version = "0.12", default-features = false, features = ["json", 
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"   # "Start with the system"
+tauri-plugin-single-instance = "2"   # a second launch shows the running window (no "port busy")
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

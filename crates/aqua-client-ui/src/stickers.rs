@@ -20,7 +20,7 @@ use crate::media::{self, is_telegram_pack, read_pack_json, write_pack_json};
 use crate::state::AppState;
 
 fn root(state: &State<'_, StdMutex<AppState>>) -> Result<PathBuf, String> {
-    Ok(state.lock().map_err(|e| e.to_string())?.data_dir.join("stickers"))
+    Ok(crate::accounts::shared_root(&state.lock().map_err(|e| e.to_string())?.data_dir).join("stickers"))
 }
 
 fn bad_title(t: &str) -> bool {
@@ -264,7 +264,7 @@ pub async fn apply_manifest(t: &aqua_client_core::Transport, dir: &Path, m: &ser
 
 fn transport_and_root(state: &State<'_, StdMutex<AppState>>) -> Result<(std::sync::Arc<aqua_client_core::Transport>, PathBuf), String> {
     let s = state.lock().map_err(|e| e.to_string())?;
-    Ok((s.transport.clone().ok_or("not connected")?, s.data_dir.join("stickers")))
+    Ok((s.transport.clone().ok_or("not connected")?, crate::accounts::shared_root(&s.data_dir).join("stickers")))
 }
 
 /// "Update" on a Telegram pack: the relay re-checks it on Telegram now.
