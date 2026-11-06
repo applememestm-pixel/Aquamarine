@@ -446,3 +446,6 @@ html.android [data-x] { display: none !important; }
 
 /* Power saving → Particles: the ambient glows behind the app stay still. */
 html.ps-particles body::before, html.ps-particles body::after { animation: none !important; }
+
+/* Our middle-button auto-scroll (main.ts): only the cursor shows it. */
+html.aq-autoscroll, html.aq-autoscroll * { cursor: all-scroll !important; user-select: none !important; }
