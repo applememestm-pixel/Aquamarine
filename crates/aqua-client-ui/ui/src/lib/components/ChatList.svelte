@@ -405,6 +405,60 @@
 
   // ---- Right-click a chat: archive / mute ----
   let ctx = $state<{ x: number; y: number; id: string } | null>(null);
+  // ---- Hold a row (not the avatar) on a phone: select chats, Telegram's
+  // bar on top acts on all of them. Holding the avatar peeks instead. ----
+  let sel = $state<string[]>([]);
+  let selTimer: ReturnType<typeof setTimeout> | null = null;
+  let selStart = { x: 0, y: 0 };
+  let selFired = false;
+  let selMore = $state(false);
+  function selDown(e: PointerEvent, id: string) {
+    if (e.button !== 0) return;
+    selFired = false;
+    selStart = { x: e.clientX, y: e.clientY };
+    if (selTimer) clearTimeout(selTimer);
+    selTimer = setTimeout(() => {
+      selTimer = null; selFired = true; dragPin = null;
+      suppressClick = true; setTimeout(() => (suppressClick = false), 600);
+      try { navigator.vibrate?.(12); } catch { /* no vibration */ }
+      if (!sel.includes(id)) sel = [...sel, id];
+    }, 420);
+  }
+  function selMove(e: PointerEvent) {
+    if (selTimer && Math.hypot(e.clientX - selStart.x, e.clientY - selStart.y) > 8) { clearTimeout(selTimer); selTimer = null; }
+  }
+  function selCancel() { if (selTimer) { clearTimeout(selTimer); selTimer = null; } }
+  function toggleSel(id: string) { sel = sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]; }
+  function selDone() { sel = []; selMore = false; }
+  $effect(() => { if (sel.length) return onBack(selDone); });
+  const selAllMuted = $derived(sel.length > 0 && sel.every((id) => $mutedChats.has(id)));
+  const selAllPinned = $derived(sel.length > 0 && sel.every((id) => $pinnedChats.includes(id)));
+  function selMute() { const on = !selAllMuted; for (const id of sel) setMuted(id, on); showToast(tr(on ? "Notifications off" : "Notifications on")); selDone(); }
+  function selArchive() { for (const id of sel) setArchived(id, !$archived.has(id)); showToast(tr("Done")); selDone(); }
+  function selPin() {
+    const on = !selAllPinned;
+    for (const id of sel) if ($pinnedChats.includes(id) !== on && !togglePin(id)) { showToast(tr("You can pin up to {n} chats", { n: MAX_PINS })); break; }
+    selDone();
+  }
+  function selRead() { markAllRead([...sel]); selDone(); }
+  async function selDelete() {
+    const ids = sel.filter((id) => !id.startsWith("grp_"));
+    selMore = false;
+    if (!ids.length) { selDone(); return; }
+    const ok = await askConfirm({
+      title: tr("Delete {n} chat(s)?", { n: ids.length }),
+      text: tr("The messages are removed from this device. This can't be undone."),
+      ok: tr("Delete"),
+      danger: true,
+    });
+    if (!ok) return;
+    for (const id of ids) {
+      try { await api.deleteChat(id); setArchived(id, false); if ($activeId === id) { backToList(); activeId.set(""); } } catch (e) { showToast(String(e)); }
+    }
+    try { chats.set(await api.listChats()); } catch { /* next refresh */ }
+    selDone();
+  }
+
   function openCtx(e: MouseEvent, id: string) {
     e.preventDefault();
     ctx = { x: Math.min(e.clientX, window.innerWidth - 200), y: Math.min(e.clientY, window.innerHeight - 140), id };
@@ -589,6 +643,26 @@
       <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
     </button>
   </div>
+  {#if sel.length}
+    <div class="sel-bar" role="toolbar">
+      <button class="sel-btn" onclick={selDone} aria-label={$t("Cancel")}><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      <span class="sel-n">{sel.length}</span>
+      <button class="sel-btn" onclick={selMute} title={$t(selAllMuted ? "Unmute" : "Mute notifications")} aria-label={$t(selAllMuted ? "Unmute" : "Mute notifications")}>
+        {#if selAllMuted}<svg viewBox="0 0 24 24"><path d="M11 5L6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 010 7M18.5 5.5a9 9 0 010 13"/></svg>
+        {:else}<svg viewBox="0 0 24 24"><path d="M11 5L6 9H3v6h3l5 4V5z"/><path d="M22 9l-6 6M16 9l6 6"/></svg>{/if}
+      </button>
+      <button class="sel-btn" onclick={selArchive} title={$t("Archive")} aria-label={$t("Archive")}><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10a1 1 0 001 1h12a1 1 0 001-1V9M10 13h4"/></svg></button>
+      <button class="sel-btn" onclick={() => void selDelete()} title={$t("Delete chat")} aria-label={$t("Delete chat")}><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button>
+      <button class="sel-btn" onclick={() => (selMore = !selMore)} aria-label={$t("More")}><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></svg></button>
+      {#if selMore}
+        <div class="sel-more" role="menu">
+          <button onclick={selPin}>{$t(selAllPinned ? "Unpin" : "Pin to top")}</button>
+          <button onclick={selRead}>{$t("Mark as read")}</button>
+          <button onclick={() => { const ids = $visibleChats.map((c) => c.id).filter((id) => !id.startsWith("grp_") || !$groupMap[id]); sel = [...new Set([...sel, ...ids])]; selMore = false; }}>{$t("Select all")}</button>
+        </div>
+      {/if}
+    </div>
+  {/if}
   <div class="list-header">
     {#if inServer && !compact}
       <button class="collapse-btn" onclick={() => (compactPinned = false)} title={$t("Collapse to avatars")} aria-label={$t("Collapse to avatars")}>
@@ -740,12 +814,13 @@
         class:pinned={!g && $pinnedChats.includes(c.id)}
         class:dragging={!g && dragPin?.active && dragPin.id === c.id}
         class:drop-before={!g && dragPin?.active && dragPin.id !== c.id && $pinnedChats.indexOf(c.id) === dragPin.over}
-        onpointerdown={(e) => { if (!g) { pinDown(e, c.id); if (e.pointerType === "touch") peekDown(e, c.id); } }}
-        onpointermove={(e) => { peekMove(e); pinMove(e); }}
-        onpointerup={() => { peekCancel(); pinUp(); }}
-        onpointercancel={() => { peekCancel(); dragPin = null; }}
-        onclick={(e) => { if (suppressClick) return; if (g) { openGroupId.set(g.id); return; } if ((e.ctrlKey || e.metaKey) && DESKTOP) { popOut(c.id, c.name); return; } void selectChat(c.id); }}
-        oncontextmenu={(e) => { if (g) { e.preventDefault(); openGroupId.set(g.id); return; } if (peekFired || peek) { e.preventDefault(); return; } if ((e.ctrlKey || e.metaKey) && DESKTOP) { e.preventDefault(); popOut(c.id, c.name); return; } openCtx(e, c.id); }}
+        class:selected={!g && sel.includes(c.id)}
+        onpointerdown={(e) => { if (!g) { pinDown(e, c.id); if (e.pointerType === "touch") { if ((e.target as Element).closest?.(".avatar")) peekDown(e, c.id); else selDown(e, c.id); } } }}
+        onpointermove={(e) => { peekMove(e); selMove(e); pinMove(e); }}
+        onpointerup={() => { peekCancel(); selCancel(); pinUp(); }}
+        onpointercancel={() => { peekCancel(); selCancel(); dragPin = null; }}
+        onclick={(e) => { if (suppressClick) return; if (sel.length && !g) { toggleSel(c.id); return; } if (g) { openGroupId.set(g.id); return; } if ((e.ctrlKey || e.metaKey) && DESKTOP) { popOut(c.id, c.name); return; } void selectChat(c.id); }}
+        oncontextmenu={(e) => { if (g) { e.preventDefault(); openGroupId.set(g.id); return; } if (peekFired || peek || selFired || sel.length) { e.preventDefault(); return; } if ((e.ctrlKey || e.metaKey) && DESKTOP) { e.preventDefault(); popOut(c.id, c.name); return; } openCtx(e, c.id); }}
       >
         {#if g}
           {@const n = groupUnread(en)}
@@ -1021,6 +1096,21 @@
   .avatar.lk { filter: saturate(0.3); }
   .lk-ic { position: absolute; inset: 0; display: grid; place-items: center; color: rgba(255,255,255,0.9); }
   .lk-ic :global(svg) { width: 18px; height: 18px; }
+  /* Selection (hold a row on a phone): Telegram's bar over the header. */
+  .sel-bar { position: absolute; top: 0; left: 0; right: 0; z-index: 30; height: 58px; display: flex; align-items: center; gap: 4px;
+    padding: 0 8px; background: var(--bg-panel, var(--bg)); border-bottom: 1px solid var(--border); }
+  .sel-n { flex: 1; font-size: 18px; font-weight: 700; color: var(--fg); padding-left: 6px; }
+  .sel-btn { width: 44px; height: 44px; display: grid; place-items: center; border: none; background: transparent; color: var(--fg);
+    border-radius: calc(12px * var(--rk, 1)); cursor: pointer; }
+  .sel-btn:active { background: color-mix(in srgb, var(--fg) 10%, transparent); }
+  .sel-btn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .sel-more { position: absolute; top: 54px; right: 8px; min-width: 190px; display: flex; flex-direction: column; padding: 6px;
+    background: var(--bg-elev, var(--bg-panel)); border: 1px solid var(--border); border-radius: calc(14px * var(--rk, 1)); box-shadow: 0 12px 32px rgba(0,0,0,.35); }
+  .sel-more button { text-align: left; padding: 11px 12px; border: none; background: transparent; color: var(--fg); font-size: 15px; border-radius: calc(9px * var(--rk, 1)); }
+  .sel-more button:active { background: color-mix(in srgb, var(--fg) 10%, transparent); }
+  .chat-item.selected { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+  .chat-item.selected .avatar::after { content: "✓"; position: absolute; right: -2px; bottom: -2px; width: 20px; height: 20px; border-radius: 50%;
+    display: grid; place-items: center; font-size: 12px; font-weight: 800; color: #fff; background: var(--accent); border: 2px solid var(--bg-panel, var(--bg)); }
   .lk-blur { filter: blur(3px); letter-spacing: 2px; user-select: none; }
   .lk-prev { color: var(--fg-dim); font-style: italic; }
   .ctx-kbd { float: right; margin-left: 12px; font-size: 11px; color: var(--fg-dim); }

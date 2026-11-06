@@ -1037,7 +1037,9 @@
   .field small.es-note { font-size: 11.5px; color: var(--fg-dim); text-transform: none; letter-spacing: 0; font-weight: 400; line-height: 1.4; }
   /* Emoji next to the name */
   .es-row { position: relative; display: flex; align-items: center; gap: 12px; }
-  .es-cur { width: 48px; height: 48px; flex-shrink: 0; border-radius: calc(12px * var(--rk, 1)); border: 1px dashed var(--border-strong); background: var(--bg-input);
+  /* One column grid for the whole editor: the emoji box, the colours and the
+     patterns are all 1/8 of the width, so their edges line up. */
+  .es-cur { width: calc((100% - 42px) / 8); aspect-ratio: 1; height: auto; flex-shrink: 0; border-radius: calc(12px * var(--rk, 1)); border: 1px dashed var(--border-strong); background: var(--bg-input);
     display: grid; place-items: center; cursor: pointer; color: var(--fg-muted); transition: border-color .15s, transform .15s; }
   .es-cur:hover { border-color: var(--accent); transform: scale(1.04); }
   .es-cur :global(.es) { margin: 0; }
@@ -1048,15 +1050,16 @@
   .lnk.dim { color: var(--fg-dim); }
   .lnk:hover { text-decoration: underline; }
   /* Card colour */
-  .sw-grid { display: grid; grid-template-columns: repeat(7, 30px); justify-content: space-between; row-gap: 10px; align-items: center; }
-  .sw { width: 30px; height: 30px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.14); cursor: pointer; padding: 0; position: relative;
+  .sw-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; align-items: center; justify-items: center; }
+  .sw { width: 100%; aspect-ratio: 1; height: auto; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.14); cursor: pointer; padding: 0; position: relative;
     transition: transform .12s; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18); }
   .sw:hover { transform: scale(1.1); }
   .sw.on { border-color: var(--fg); box-shadow: 0 0 0 2px var(--card-base), 0 0 0 4px var(--fg); }
   /* "Auto" sits on the banner colour, which can be white: a dark chip of its own keeps it readable. */
   .sw.auto { border-color: var(--border-strong); }
-  .sw.auto span { position: absolute; inset: 5px; display: grid; place-items: center; border-radius: 50%; background: rgba(10, 12, 18, .62); font-size: 7.5px; font-weight: 800; color: #fff; text-transform: uppercase; letter-spacing: .02em; }
-  .sw-own { display: grid; place-items: center; }
+  .sw.auto span { position: absolute; inset: 18%; display: grid; place-items: center; border-radius: 50%; background: rgba(10, 12, 18, .62); font-size: 8px; font-weight: 800; color: #fff; text-transform: uppercase; letter-spacing: .02em; }
+  .sw-own { display: grid; place-items: center; width: 100%; }
+  .sw-own :global(.cp-swatch) { width: 100% !important; height: auto !important; aspect-ratio: 1; border-radius: 50%; }
   /* Label and value on one line, the slider under them at full width. */
   .slider { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "l v" "r r"; align-items: center; column-gap: 10px; row-gap: 4px; margin-top: 12px; text-transform: none; letter-spacing: 0; }
   .slider > span { grid-area: l; }

@@ -2589,4 +2589,10 @@ export const RU: Record<string, string> = {
   "Your messages and theirs, in every chat. A chat's own theme (chat menu → Chat theme) wins over this.": "Ваши сообщения и собеседника — во всех чатах. Собственная тема чата (меню чата → «Тема чата») важнее этой настройки.",
   "Picture in picture": "Картинка в картинке",
   "Picture-in-picture isn't available: {e}": "Картинка в картинке недоступна: {e}",
+  "Translate": "Перевести",
+  "Show the original": "Показать оригинал",
+  "Delete {n} chat(s)?": "Удалить чатов: {n}?",
+  "Select all": "Выбрать все",
+  "Notifications off": "Уведомления выключены",
+  "Notifications on": "Уведомления включены",
 };

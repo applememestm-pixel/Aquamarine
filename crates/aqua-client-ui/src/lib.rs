@@ -150,6 +150,7 @@ pub fn run() -> Result<()> {
             crashreport::report_error,
             crashreport::report_config,
             bgnotify::notify_front,
+            commands::translate_text,
             commands::picked_preview,
             commands::meet_qr,
             commands::meet_accept,

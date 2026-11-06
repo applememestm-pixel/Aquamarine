@@ -4501,3 +4501,22 @@ mod live_photo_tests {
         assert!(motion_photo_clip(&[0xFF, 0xD8, 0xFF, 0xD9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]).is_none());
     }
 }
+
+/// Machine translation of public text (the "What's new" notes) through
+/// Google's free endpoint. Nothing private goes here: the notes are public.
+#[tauri::command]
+pub async fn translate_text(text: String, to: String) -> Result<String, String> {
+    if text.len() > 20_000 { return Err("too long".into()); }
+    let to: String = to.chars().filter(|c| c.is_ascii_alphabetic() || *c == '-').take(8).collect();
+    let body = reqwest::Client::new()
+        .post("https://translate.googleapis.com/translate_a/single")
+        .query(&[("client", "gtx"), ("sl", "auto"), ("tl", to.as_str()), ("dt", "t")])
+        .form(&[("q", text.as_str())])
+        .timeout(std::time::Duration::from_secs(20))
+        .send().await.map_err(|e| e.to_string())?
+        .error_for_status().map_err(|e| e.to_string())?
+        .text().await.map_err(|e| e.to_string())?;
+    let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    let out: String = v.get(0).and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|s| s.get(0)?.as_str()).collect()).unwrap_or_default();
+    if out.is_empty() { Err("no translation".into()) } else { Ok(out) }
+}

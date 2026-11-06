@@ -86,10 +86,10 @@ pub async fn import_pack(
         .get(&set_url)
         .send()
         .await
-        .map_err(|e| format!("getStickerSet: {e}"))?
+        .map_err(|e| format!("getStickerSet: {}", e.without_url()))?
         .json()
         .await
-        .map_err(|e| format!("getStickerSet decode: {e}"))?;
+        .map_err(|e| format!("getStickerSet decode: {}", e.without_url()))?;
 
     if !set["ok"].as_bool().unwrap_or(false) {
         let desc = set["description"].as_str().unwrap_or("Telegram API error");

@@ -77,7 +77,7 @@ fn http() -> reqwest::Client {
 }
 
 async fn call(token: &str, method: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
-    let r = http().post(format!("https://api.telegram.org/bot{token}/{method}")).json(&body).send().await.map_err(|e| e.to_string())?;
+    let r = http().post(format!("https://api.telegram.org/bot{token}/{method}")).json(&body).send().await.map_err(|e| e.without_url().to_string())?;
     let v: serde_json::Value = r.json().await.map_err(|e| e.to_string())?;
     if v["ok"].as_bool() != Some(true) {
         return Err(v["description"].as_str().unwrap_or("Telegram said no").to_string());

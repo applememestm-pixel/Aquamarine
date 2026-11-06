@@ -6,7 +6,7 @@
    * (a phone, a long translation) it turns into a drop-down.
    */
   let { options, value, onpick, label }: {
-    options: readonly { id: T; label: string }[];
+    options: readonly { id: T; label: string; img?: string | null }[];
     value: T;
     onpick: (id: T) => void;
     label?: string;
@@ -31,12 +31,12 @@
 
 <div class="seg-fit" bind:this={wrap}>
   <div class="seg probe" bind:this={probe} aria-hidden="true">
-    {#each options as o (o.id)}<span class="seg-opt">{o.label}</span>{/each}
+    {#each options as o (o.id)}<span class="seg-opt">{#if o.img}<img class="seg-img" src={o.img} alt="" />{:else}{o.label}{/if}</span>{/each}
   </div>
   {#if fits}
     <div class="seg" role="radiogroup" aria-label={label}>
       {#each options as o (o.id)}
-        <button class="seg-opt" class:active={o.id === value} role="radio" aria-checked={o.id === value} onclick={() => onpick(o.id)}>{o.label}</button>
+        <button class="seg-opt" class:active={o.id === value} role="radio" aria-checked={o.id === value} onclick={() => onpick(o.id)} title={o.img ? o.label : undefined}>{#if o.img}<img class="seg-img" src={o.img} alt={o.label} />{:else}{o.label}{/if}</button>
       {/each}
     </div>
   {:else}
@@ -56,6 +56,8 @@
     padding: 3px;
     gap: 2px;
   }
+  /* A picture instead of text (pixel-art emoji): crisp, the height of a line. */
+  .seg-img { width: 18px; height: 18px; display: block; image-rendering: pixelated; object-fit: contain; }
   .seg.probe { position: absolute; left: 0; top: 0; width: max-content; visibility: hidden; pointer-events: none; }
   .seg-opt {
     padding: 5px 12px;

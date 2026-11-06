@@ -61,7 +61,7 @@
   import { shortcutsOpen } from "../shortcuts";
   import { profile } from "../profile";
   import { myOnline, shareActivity, myActivity, activityVerb } from "../presence";
-  import { reactionPack, quickReactions, reactionUrl, parseReaction, importReactionPack, REACTION_PACK_LINK } from "../reactionPack";
+  import { reactionPack, quickReactions, reactionUrl, pixelEmoji, parseReaction, importReactionPack, REACTION_PACK_LINK } from "../reactionPack";
   import PrivacyRules from "./PrivacyRules.svelte";
   import SignInProtection from "./SignInProtection.svelte";
   import { deviceTrust } from "./DeviceApproval.svelte";
@@ -1605,7 +1605,7 @@
         <div class="row">
           <span class="row-label">{$t("Save-to-favourites reaction")}</span>
           <SegFit label={$t("Save-to-favourites reaction")} value={$settings.favReaction ?? "⭐"} onpick={(e) => settings.update((x) => ({ ...x, favReaction: e }))}
-            options={["⭐", "🔖", "📌", "💾", ""].map((e) => ({ id: e, label: e || $t("Off") }))} />
+            options={["⭐", "🔖", "📌", "💾", ""].map((e) => ({ id: e, label: e || $t("Off"), img: e ? pixelEmoji(e) : null }))} />
         </div>
         <div class="foot-note" style="margin:0 0 8px">{$t("React with it and the message is copied to Saved Messages. Only you see this reaction.")}</div>
         <button class="toggle-row" onclick={() => setFlag("autoplayGifs")}>
