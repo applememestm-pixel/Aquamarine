@@ -53,6 +53,10 @@ pub struct Manifest {
     /// Bumped whenever the set of files or their order changes.
     #[serde(default)]
     pub rev: u64,
+    /// Uploaded on this server (Aquamarine Server → Stickers), not from
+    /// Telegram: never checked against Telegram.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub local: bool,
 }
 
 /// A stored pack older than this is checked against Telegram again.
@@ -198,7 +202,7 @@ pub async fn import(pack_ref: &str) -> Result<Manifest, String> {
 
 /// Check a stored pack against Telegram in the background when it's old.
 pub fn refresh_if_stale(m: &Manifest) {
-    if now_secs().saturating_sub(m.updated) < STALE_SECS || bot_token().is_none() {
+    if m.local || now_secs().saturating_sub(m.updated) < STALE_SECS || bot_token().is_none() {
         return;
     }
     let name = m.name.clone();
@@ -217,6 +221,9 @@ pub async fn sync(name: &str, refresh: bool) -> Result<Manifest, String> {
     let lock = pack_lock(&name.to_ascii_lowercase());
     let _guard = lock.lock().await;
     let old = load_manifest(name);
+    if let Some(m) = old.as_ref().filter(|m| m.local) {
+        return Ok(m.clone());
+    }
     if let Some(m) = &old {
         // Someone else just did it while we waited for the lock.
         if !refresh || now_secs().saturating_sub(m.updated) < REFRESH_MIN_SECS {
@@ -290,7 +297,7 @@ pub async fn sync(name: &str, refresh: bool) -> Result<Manifest, String> {
         o.title == title && o.files.len() == files.len() && o.files.iter().zip(&files).all(|(a, b)| a.file == b.file && a.emoji == b.emoji)
     });
     let rev = old.as_ref().map(|o| o.rev + u64::from(!same)).unwrap_or(1);
-    let m = Manifest { name: real.clone(), title, kind, files, updated: now_secs(), rev };
+    let m = Manifest { name: real.clone(), title, kind, files, updated: now_secs(), rev, local: false };
     std::fs::write(tmp.join("manifest.json"), serde_json::to_vec(&m).unwrap_or_default()).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::rename(&tmp, &dir).map_err(|e| e.to_string())?;
@@ -396,6 +403,8 @@ pub struct PackBrief {
     pub count: usize,
     pub preview: Vec<(String, String)>,
     pub updated: u64,
+    /// Uploaded here, not from Telegram.
+    pub local: bool,
 }
 
 fn briefs() -> Vec<PackBrief> {
@@ -408,6 +417,7 @@ fn briefs() -> Vec<PackBrief> {
             title: m.title,
             kind: m.kind,
             updated: m.updated,
+            local: m.local,
         })
         .collect()
 }
@@ -498,4 +508,116 @@ mod tests {
         assert_eq!(short_name("../../etc"), "etc");
         assert_eq!(short_name("a b"), "ab");
     }
+}
+
+// ---------- Aquamarine Server → Stickers: add / upload / remove ------------
+
+#[derive(Deserialize)]
+pub struct AdminImport {
+    pub link: String,
+}
+
+/// The admin adds a Telegram pack by its link.
+pub async fn admin_import(State(state): State<AppState>, headers: axum::http::HeaderMap, Json(b): Json<AdminImport>) -> Result<Json<Manifest>, (StatusCode, String)> {
+    admin_authed(&state, &headers).map_err(|c| (c, "admin only".into()))?;
+    import(&b.link).await.map(Json).map_err(|e| (StatusCode::BAD_GATEWAY, e))
+}
+
+#[derive(Deserialize)]
+pub struct UploadFile {
+    pub name: String,
+    /// base64
+    pub data: String,
+    #[serde(default)]
+    pub emoji: String,
+}
+
+#[derive(Deserialize)]
+pub struct AdminUpload {
+    pub title: String,
+    /// "regular" (stickers) | "custom_emoji"
+    #[serde(default)]
+    pub kind: String,
+    /// Add to this uploaded pack instead of making a new one.
+    #[serde(default)]
+    pub to: Option<String>,
+    pub files: Vec<UploadFile>,
+}
+
+/// Admin uploads: whole sizes per request is capped by the route's body limit.
+pub const UPLOAD_LIMIT: usize = 64 * 1024 * 1024;
+
+/// Pictures (png/webp/gif), Telegram animations (.tgs) and videos (.webm)
+/// from the admin's computer become a pack every app on this server sees.
+pub async fn admin_upload(State(state): State<AppState>, headers: axum::http::HeaderMap, Json(b): Json<AdminUpload>) -> Result<Json<Manifest>, (StatusCode, String)> {
+    use base64::Engine;
+    admin_authed(&state, &headers).map_err(|c| (c, "admin only".into()))?;
+    let bad = |m: &str| (StatusCode::BAD_REQUEST, m.to_string());
+    if b.files.is_empty() {
+        return Err(bad("no files"));
+    }
+    let mut m = match b.to.as_deref().map(short_name).filter(|n| !n.is_empty()) {
+        Some(n) => load_manifest(&n).filter(|m| m.local).ok_or_else(|| bad("no such uploaded pack"))?,
+        None => {
+            let title = b.title.trim();
+            if title.is_empty() {
+                return Err(bad("the pack needs a name"));
+            }
+            let slug: String = title.chars().filter(|c| c.is_ascii_alphanumeric()).take(24).collect::<String>().to_ascii_lowercase();
+            let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+            let tail = format!("{:06x}", (nanos ^ (nanos >> 24)) as u32 & 0xff_ffff);
+            Manifest {
+                name: format!("my_{}{tail}", if slug.is_empty() { "pack_".into() } else { slug + "_" }),
+                title: title.chars().take(64).collect(),
+                kind: if b.kind == "custom_emoji" { "custom_emoji".into() } else { "regular".into() },
+                files: Vec::new(),
+                updated: now_secs(),
+                rev: 0,
+                local: true,
+            }
+        }
+    };
+    let dir = pack_dir(&m.name);
+    std::fs::create_dir_all(&dir).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    for f in b.files {
+        if m.files.len() >= MAX_STICKERS {
+            break;
+        }
+        let ext = f.name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+        let ext = match ext.as_str() {
+            "png" | "webp" | "gif" | "tgs" | "webm" => ext,
+            "jpg" | "jpeg" => return Err(bad("JPEG has no transparency — use PNG or WebP")),
+            _ => return Err(bad("only PNG, WebP, GIF, TGS and WebM")),
+        };
+        let bytes = base64::engine::general_purpose::STANDARD.decode(f.data.as_bytes()).map_err(|_| bad("bad file data"))?;
+        if bytes.is_empty() || bytes.len() > MAX_FILE {
+            return Err(bad("each file up to 2 MB"));
+        }
+        let file = format!("{}_{}.{ext}", m.files.len() + 1, now_secs() % 100_000);
+        std::fs::write(dir.join(&file), &bytes).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let emoji = f.emoji.chars().take(8).collect::<String>();
+        m.files.push(PackFile { mime: mime_of(&file).into(), file, emoji: if emoji.is_empty() { "🙂".into() } else { emoji }, id: String::new() });
+    }
+    m.rev += 1;
+    m.updated = now_secs();
+    let json = serde_json::to_vec_pretty(&m).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    std::fs::write(dir.join("manifest.json"), json).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(m))
+}
+
+/// One pack, whole, for the panel.
+pub async fn admin_manifest(State(state): State<AppState>, headers: axum::http::HeaderMap, UrlPath(name): UrlPath<String>) -> Result<Json<Manifest>, StatusCode> {
+    admin_authed(&state, &headers)?;
+    load_manifest(&short_name(&name)).map(Json).ok_or(StatusCode::NOT_FOUND)
+}
+
+/// Remove a pack from this server (apps that already have it keep their copy).
+pub async fn admin_delete(State(state): State<AppState>, headers: axum::http::HeaderMap, UrlPath(name): UrlPath<String>) -> Result<StatusCode, StatusCode> {
+    admin_authed(&state, &headers)?;
+    let name = short_name(&name);
+    if name.is_empty() || load_manifest(&name).is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    std::fs::remove_dir_all(pack_dir(&name)).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::NO_CONTENT)
 }

@@ -6,6 +6,8 @@
 <script lang="ts">
   import Select from "./Select.svelte";
   import { IS_MOBILE, IS_DESKTOP } from "../platform";
+  import { GUIDE } from "../errorCodes";
+  import { meetOpen } from "./MeetSheet.svelte";
   import { secretary } from "../botHelpers";
   import Donut from "./Donut.svelte";
   import { LINKS } from "../links";
@@ -601,6 +603,10 @@
     } catch (e) { showToast(String(e)); }
   }
   let apiOpen = $state(false);
+  // Bots page: the list, or one bot (BotFather-like).
+  let botSel = $state<string | null>(null);
+  let botNew = $state(false);
+  let botHow = $state<"console" | "tg" | "http">("console");
 
   // Load bots whenever the panel opens.
   $effect(() => {
@@ -2084,6 +2090,11 @@
       {#if section === "nearby"}
       {@const ms = $meshStatus}
       <section class="group">
+        <div class="label">{$t("Meet nearby")}</div>
+        <div class="bots-note">{$t("Start a chat with someone right next to you without the internet: one shows a QR, the other scans it.")}</div>
+        <div class="bot-actions"><button class="bot-btn primary" onclick={() => { meetOpen.set(true); }}>{$t("Meet nearby")}</button></div>
+      </section>
+      <section class="group">
         <div class="label">{$t("Wi-Fi and Bluetooth, like Briar")}</div>
         <div class="bots-note">{$t("No internet or the server is down? Messages to your contacts wait on this device, and as soon as their phone or computer is on the same Wi-Fi (or hotspot) or within Bluetooth range, the two devices swap them directly. When the server is back, whatever is still waiting goes through it. Everything stays end-to-end encrypted; only contacts you've already chatted with can connect.")}</div>
         <button class="toggle-row" onclick={() => meshSetEnabled(!(ms?.enabled ?? true))}>
@@ -2174,12 +2185,18 @@
       {/if}
 
       {#if section === "bots"}
+      {@const sel = bots.find((x) => x.username === botSel)}
+      {#if !$info?.connected}
+        <section class="group"><div class="bots-note">{$t("Connect to a server to create bots.")}</div></section>
+      {:else if !sel}
+      <!-- Like BotFather: a list of your bots; a tap opens one. -->
       <section class="group">
-        <div class="label">{$t("Your bots")}</div>
-        {#if !$info?.connected}
-          <div class="bots-note">{$t("Connect to a server to create bots.")}</div>
-        {:else}
-          <form class="bot-create" onsubmit={(e) => { e.preventDefault(); void createBot(); }}>
+        <div class="bots-head">
+          <div class="label">{$t("Your bots")}</div>
+          <button class="bot-btn primary" onclick={() => (botNew = !botNew)}>{botNew ? $t("Cancel") : "+ " + $t("New bot")}</button>
+        </div>
+        {#if botNew || bots.length === 0}
+          <form class="bot-create" onsubmit={(e) => { e.preventDefault(); void createBot().then(() => { if (!botError) botNew = false; }); }}>
             <label class="bc-field">
               <span>{$t("Username")}</span>
               <div class="bc-at"><i>@</i><input bind:value={botUsername} placeholder="weatherbot" spellcheck="false" autocomplete="off" oninput={() => (botUsername = botUsername.toLowerCase())} /></div>
@@ -2191,51 +2208,52 @@
             <button class="bot-add" type="submit" disabled={botBusy || !botUsername.trim()}>{botBusy ? "…" : $t("Create")}</button>
           </form>
           {#if botError}<div class="bots-note err">{botError}</div>{/if}
-          {#if bots.length === 0}
-            <div class="bots-note">{$t("No bots yet. A bot is an account driven by a program over HTTP — create one and you get its token.")}</div>
-          {:else}
-            <div class="bot-list">
+        {/if}
+        {#if bots.length === 0}
+          <div class="bots-note">{$t("No bots yet. A bot is an account driven by a program over HTTP — create one and you get its token.")}</div>
+        {:else}
+          <div class="bot-rows">
             {#each bots as b (b.username)}
-              <div class="bot-card">
-                <div class="bot-head">
-                  <div class="bot-ava">{(b.display_name || b.username).slice(0, 1).toUpperCase()}</div>
-                  <div class="bot-main">
-                    <div class="bot-name">{b.display_name || b.username} <span class="bot-tag">BOT</span></div>
-                    <div class="bot-user">@{b.username}</div>
-                  </div>
-                  <button class="bot-btn primary" onclick={() => openBotChat(b)}>{$t("Open chat")}</button>
-                </div>
-                <div class="bot-tokrow">
-                  <code class="bot-token" title={botShown.has(b.username) ? b.token : ""}>{botShown.has(b.username) && b.token ? b.token : maskToken(b.token, b.hint)}</code>
-                  {#if b.token}
-                    <button class="bot-btn" onclick={() => toggleToken(b.username)}>{botShown.has(b.username) ? $t("Hide") : $t("Show")}</button>
-                    <button class="bot-btn" onclick={() => copyToken(b.token)}>{$t("Copy")}</button>
-                    <button class="bot-btn" title={$t("For bots written for Telegram")} onclick={() => copyTgToken(b.username, b.token)}>{$t("Telegram token")}</button>
-                  {/if}
-                </div>
-                {#if !b.token}<div class="bots-note">{$t("The server keeps only a fingerprint of the token, and this device doesn't have it. Reset the token to get a new one.")}</div>{/if}
-                <div class="bot-actions">
-                  <span class="bot-sp"></span>
-                  <button class="bot-link" onclick={() => resetBotToken(b)}>{$t("Reset token")}</button>
-                  <button class="bot-link danger" onclick={() => deleteBot(b)}>{$t("Delete")}</button>
-                </div>
-              </div>
+              <button class="bot-row" onclick={() => { botSel = b.username; botHow = "console"; }}>
+                <span class="bot-ava">{(b.display_name || b.username).slice(0, 1).toUpperCase()}</span>
+                <span class="bot-main"><span class="bot-name">{b.display_name || b.username} <span class="bot-tag">BOT</span></span><span class="bot-user">@{b.username}</span></span>
+                <span class="bot-chev">›</span>
+              </button>
             {/each}
-            </div>
-          {/if}
+          </div>
         {/if}
       </section>
-
+      {:else}
+      <!-- One bot: its token, how to run it, and removing it. -->
       <section class="group">
-        <div class="label">{$t("Bots written for Telegram")}</div>
-        <div class="bots-note">{$t("This server speaks the Telegram Bot API too: an existing Telegram bot works here unchanged — copy its “Telegram token” above and point the library at this server instead of api.telegram.org. Inline buttons appear as a numbered list; the user answers with the number and the bot gets the button press.")}</div>
-        <div class="bot-cmd"><code>python-telegram-bot: .base_url("{tgBase}/bot")</code><button class="bot-btn" onclick={() => copyText(`.base_url("${tgBase}/bot")`, tr("Copied"))}>{$t("Copy")}</button></div>
-        <div class="bot-cmd"><code>aiogram: TelegramAPIServer.from_base("{tgBase}")</code><button class="bot-btn" onclick={() => copyText(`TelegramAPIServer.from_base("${tgBase}")`, tr("Copied"))}>{$t("Copy")}</button></div>
-        <div class="bot-cmd"><code>telegraf / grammY: apiRoot: "{tgBase}"</code><button class="bot-btn" onclick={() => copyText(`apiRoot: "${tgBase}"`, tr("Copied"))}>{$t("Copy")}</button></div>
+        <button class="bot-back" onclick={() => (botSel = null)}>‹ {$t("All bots")}</button>
+        <div class="bot-hero">
+          <span class="bot-ava big">{(sel.display_name || sel.username).slice(0, 1).toUpperCase()}</span>
+          <div class="bot-main"><div class="bot-name">{sel.display_name || sel.username} <span class="bot-tag">BOT</span></div><div class="bot-user">@{sel.username}</div></div>
+          <button class="bot-btn primary" onclick={() => openBotChat(sel)}>{$t("Open chat")}</button>
+        </div>
       </section>
-
       <section class="group">
-        <div class="label">{$t("Console chat")}</div>
+        <div class="label">{$t("Token")}</div>
+        <div class="bots-note">{$t("The key of the bot's program. Keep it secret: whoever has it controls the bot.")}</div>
+        <div class="bot-tokrow">
+          <code class="bot-token" title={botShown.has(sel.username) ? sel.token : ""}>{botShown.has(sel.username) && sel.token ? sel.token : maskToken(sel.token, sel.hint)}</code>
+          {#if sel.token}
+            <button class="bot-btn" onclick={() => toggleToken(sel.username)}>{botShown.has(sel.username) ? $t("Hide") : $t("Show")}</button>
+            <button class="bot-btn" onclick={() => copyToken(sel.token)}>{$t("Copy")}</button>
+          {/if}
+        </div>
+        {#if !sel.token}<div class="bots-note">{$t("The server keeps only a fingerprint of the token, and this device doesn't have it. Reset the token to get a new one.")}</div>{/if}
+        <div class="bot-actions"><button class="bot-link" onclick={() => resetBotToken(sel)}>{$t("Reset token")}</button></div>
+      </section>
+      <section class="group">
+        <div class="label">{$t("Run it")}</div>
+        <div class="bot-tabs" role="tablist">
+          <button role="tab" class:on={botHow === "console"} onclick={() => (botHow = "console")}>{$t("Console chat")}</button>
+          <button role="tab" class:on={botHow === "tg"} onclick={() => (botHow = "tg")}>{$t("Telegram libraries")}</button>
+          <button role="tab" class:on={botHow === "http"} onclick={() => (botHow = "http")}>HTTP API</button>
+        </div>
+        {#if botHow === "console"}
         <div class="bots-note">{$t("A ready-made bot: it prints a chat in your terminal and sends whatever you type. Write to your bot in Aquamarine (or let friends write to it) and answer from the console. Room mode forwards every message to everyone who joined — a tiny chat room. Needs only Python 3.")}</div>
         <div class="bot-cmd">
           <code>{consoleCmd}</code>
@@ -2246,13 +2264,13 @@
           <button class="bot-link" onclick={() => api.openExternal("https://github.com/applememestm-pixel/Aquamarine/blob/main/tools/aqua-console.py").catch(() => {})}>{$t("View source")}</button>
         </div>
         <div class="bots-note">{$t("It asks for the token with hidden input. Commands: /to <user>, /who, /room, /quit. Bot chats are not end-to-end encrypted.")}</div>
-      </section>
-
-      <section class="group">
-        <button class="bot-api-toggle" onclick={() => (apiOpen = !apiOpen)} aria-expanded={apiOpen}>
-          <span>{$t("HTTP API for your own bots")}</span><span class="chev" class:open={apiOpen}>›</span>
-        </button>
-        {#if apiOpen}
+        {:else if botHow === "tg"}
+        <div class="bots-note">{$t("This server speaks the Telegram Bot API too: a bot written for Telegram works here unchanged — give it this token and point the library at this server.")}</div>
+        {#if sel.token}<div class="bot-cmd"><code>{$t("Telegram token")}</code><button class="bot-btn" onclick={() => copyTgToken(sel.username, sel.token)}>{$t("Copy")}</button></div>{/if}
+        <div class="bot-cmd"><code>python-telegram-bot: .base_url("{tgBase}/bot")</code><button class="bot-btn" onclick={() => copyText(`.base_url("${tgBase}/bot")`, tr("Copied"))}>{$t("Copy")}</button></div>
+        <div class="bot-cmd"><code>aiogram: TelegramAPIServer.from_base("{tgBase}")</code><button class="bot-btn" onclick={() => copyText(`TelegramAPIServer.from_base("${tgBase}")`, tr("Copied"))}>{$t("Copy")}</button></div>
+        <div class="bot-cmd"><code>telegraf / grammY: apiRoot: "{tgBase}"</code><button class="bot-btn" onclick={() => copyText(`apiRoot: "${tgBase}"`, tr("Copied"))}>{$t("Copy")}</button></div>
+        {:else}
 <pre class="bot-api">Authorization: Bot TOKEN
 GET  /v1/bot/me
      → {"{"} "username", "display_name" {"}"}
@@ -2260,9 +2278,13 @@ GET  /v1/bot/updates?after=ID&amp;timeout=25
      → [{"{"} "id", "from", "text", "ts" {"}"}]   (long poll, pass last id + 1)
 POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
      403 — they never wrote to the bot · 429 — 30/s per bot, 1/s per chat</pre>
-          <div class="bots-note">{$t("Users start a bot by searching its @username; the first message is /start.")}</div>
+        <div class="bots-note">{$t("Users start a bot by searching its @username; the first message is /start.")}</div>
         {/if}
       </section>
+      <section class="group">
+        <div class="bot-actions"><button class="bot-link danger" onclick={() => void deleteBot(sel).then(() => { if (!bots.some((x) => x.username === sel.username)) botSel = null; })}>{$t("Delete bot")}</button></div>
+      </section>
+      {/if}
       {/if}
 
       {#if section === "updates"}
@@ -2301,6 +2323,15 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
       {/if}
 
       {#if section === "about"}
+      <section class="group">
+        <div class="label">{$t("Error reports")}</div>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, reportErrors: x.reportErrors === false }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Send error reports")}</div>
+            <div class="tr-sub">{$t("When something breaks, the developer and your server get the error, the app version and the device — never your messages. That's how bugs get fixed fast.")}</div></div>
+          <span class="switch" class:on={$settings.reportErrors !== false}></span>
+        </button>
+        <button class="bot-link" onclick={() => void api.openExternal(GUIDE)}>{$t("What error codes mean ›")}</button>
+      </section>
       <section class="group">
         <div class="label">{$t("About")}</div>
         <div class="about">
@@ -2845,6 +2876,18 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   }
   .bot-add:disabled { opacity: 0.5; cursor: not-allowed; }
   .bot-list { display: flex; flex-direction: column; gap: 8px; }
+  .bots-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+  .bots-head .label { margin: 0; }
+  .bot-rows { display: flex; flex-direction: column; gap: 2px; }
+  .bot-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px; border: none; background: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; border-radius: calc(12px * var(--rk, 1)); }
+  .bot-row:hover { background: var(--bg-hover); }
+  .bot-chev { margin-left: auto; color: var(--fg-dim); font-size: 20px; }
+  .bot-back { border: none; background: none; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; padding: 0 0 10px; }
+  .bot-hero { display: flex; align-items: center; gap: 14px; }
+  .bot-ava.big { width: 56px; height: 56px; font-size: 24px; }
+  .bot-tabs { display: flex; gap: 4px; padding: 3px; border-radius: calc(11px * var(--rk, 1)); background: var(--bg-input); border: 1px solid var(--border); margin-bottom: 10px; flex-wrap: wrap; }
+  .bot-tabs button { flex: 1; border: none; background: none; color: var(--fg-muted); font: inherit; font-size: 13px; font-weight: 600; padding: 7px 10px; border-radius: calc(8px * var(--rk, 1)); cursor: pointer; white-space: nowrap; }
+  .bot-tabs button.on { background: var(--accent-soft); color: var(--fg); }
   .bot-card {
     padding: 10px 12px; background: var(--bg-input);
     border: 1px solid var(--border); border-radius: calc(12px * var(--rk, 1));

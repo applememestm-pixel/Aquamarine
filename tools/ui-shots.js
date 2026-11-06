@@ -64,6 +64,14 @@ window.__TAURI_INTERNALS__ = {
     try { await fn(); await p.waitForTimeout(700); await shot(name); }
     catch (e) { errs.push(name + ': ' + e.message.split('\n')[0]); break; }
   }
+  // The same main screen in the light theme: nothing may stay dark-on-dark.
+  try {
+    await p.keyboard.press('Escape'); await p.keyboard.press('Escape');
+    await p.evaluate(() => { const s = JSON.parse(localStorage.getItem('aqua-settings') || '{}'); s.mode = 'light'; localStorage.setItem('aqua-settings', JSON.stringify(s)); });
+    await p.reload(); await p.waitForTimeout(2500);
+    for (let i = 0; i < 3; i++) { const l = p.getByText(/^(Не сейчас|Not now)$/).first(); if (!(await l.count())) break; await l.click().catch(() => {}); await p.waitForTimeout(500); }
+    await shot('8-light');
+  } catch (e) { errs.push('8-light: ' + e.message.split('\n')[0]); }
   console.log(errs.join('\n') || 'no errors');
   for (const f of fs.readdirSync(out).filter((f) => f.endsWith('.jpg')).sort()) {
     console.log('=====SHOT ' + f);

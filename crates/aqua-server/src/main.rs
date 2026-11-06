@@ -15,14 +15,20 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(not(windows))]
     let ansi = true;
 
-    tracing_subscriber::fmt()
-        .with_ansi(ansi)
-        .with_target(false)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,aqua_server=info")),
-        )
-        .init();
+    {
+        use tracing_subscriber::prelude::*;
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::fmt::layer().with_ansi(ansi).with_target(false).with_filter(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,aqua_server=info")),
+                ),
+            )
+            // Server failures go to the developer right away (report.rs).
+            .with(aqua_server::report::ErrorLayer { app: "aqua-server" })
+            .init();
+    }
+    aqua_server::report::install_panic_hook("aqua-server");
 
     // Everything the server keeps lives in one folder: find it (or ask on
     // the first start) and work from there.

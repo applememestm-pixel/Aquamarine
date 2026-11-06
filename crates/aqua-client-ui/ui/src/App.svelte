@@ -17,6 +17,7 @@
   import { startTabSwipe } from "./lib/tabSwipe";
   import { startPlugins } from "./lib/plugins";
   import { startBgNotify } from "./lib/notify";
+  import { startReports } from "./lib/reports";
   import { startWidget } from "./lib/widget";
   import { startPinchZoom } from "./lib/pinchZoom";
   import NavRail from "./lib/components/NavRail.svelte";
@@ -28,6 +29,7 @@
   import FingerprintModal from "./lib/components/FingerprintModal.svelte";
   import InputPrompt from "./lib/components/InputPrompt.svelte";
   import NewChatSheet from "./lib/components/NewChatSheet.svelte";
+  import MeetSheet from "./lib/components/MeetSheet.svelte";
   import QrScanner from "./lib/components/QrScanner.svelte";
   import WhatsNew, { maybeShowWhatsNew } from "./lib/components/WhatsNew.svelte";
   import Toast, { showToast } from "./lib/components/Toast.svelte";
@@ -192,6 +194,7 @@
     startPlugins();
     startWidget();
     startBgNotify();
+    startReports();
     startPinchZoom();
     maybeShowWhatsNew(get(settings).whatsNew !== false);
     // Message times in this device's time zone (Rust can't ask Android for it).
@@ -349,6 +352,7 @@
 <FingerprintModal />
 <InputPrompt />
 <NewChatSheet />
+<MeetSheet />
 <QrScanner />
 <WhatsNew />
 <CallModal />

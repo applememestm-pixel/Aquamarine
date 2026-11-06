@@ -40,6 +40,7 @@ pub mod journal;
 pub mod datadir;
 pub mod totp;
 pub mod tglogin;
+pub mod report;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
 pub use auth::{AuthState, Caller};
@@ -2877,12 +2878,17 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/stats", get(server_stats))
         .route("/admin", get(admin_page))
         .route("/v1/admin/stats", get(admin_stats))
+        .route("/v1/admin/reports", get(report::admin_list))
+        .route("/v1/report", post(report::receive))
         .route("/v1/admin/detail/:what", get(admin_detail))
         .route("/v1/admin/datadir", get(admin_get_datadir).post(admin_move_datadir))
         .route("/v1/admin/config", post(admin_set_config))
         .route("/v1/admin/smtp", get(admin_get_smtp).post(admin_set_smtp))
         .route("/v1/admin/smtp/test", post(admin_test_smtp))
         .route("/v1/admin/telegram", get(packs::admin_get).post(packs::admin_set))
+        .route("/v1/admin/packs/import", post(packs::admin_import))
+        .route("/v1/admin/packs/upload", post(packs::admin_upload).layer(DefaultBodyLimit::max(packs::UPLOAD_LIMIT)))
+        .route("/v1/admin/packs/:name", get(packs::admin_manifest).delete(packs::admin_delete))
         .route("/v1/packs", get(packs::list))
         .route("/v1/packs/import", post(packs::import_http))
         .route("/v1/packs/:name", get(packs::manifest))

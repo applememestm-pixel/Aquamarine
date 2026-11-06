@@ -218,6 +218,8 @@ export interface Settings {
    *  like the new Telegram, and how opaque they are (0 — only the outline). */
   /** Android widget: show the last message's text (off: names and counts). */
   widgetText?: boolean;
+  /** Send error reports to the developer and to your server (on unless false). */
+  reportErrors?: boolean;
   glass?: boolean;
   glassAlpha?: number;
   /** Settings: show the sections for experienced users (network, own

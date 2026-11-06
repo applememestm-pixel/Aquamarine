@@ -35,6 +35,9 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
 
 env:
+  # The developer's error-report service (tools/report-worker), baked into
+  # the apps at build time (option_env!). Repo → Settings → Variables.
+  AQUA_REPORT_URL: ${{ vars.AQUA_REPORT_URL }}
   # Which release the files go to.
   REL_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'nightly' }}
   NIGHTLY: ${{ startsWith(github.ref, 'refs/tags/v') && 'false' || 'true' }}

@@ -25,6 +25,7 @@
   import { openNewGroup } from "./NewGroupWizard.svelte";
   import { scanQr } from "./QrScanner.svelte";
   import { parseQr } from "../qr";
+  import { meetOpen, acceptMeet } from "./MeetSheet.svelte";
 
   let q = $state("");
   let who = $state<DirProfile | null>(null);
@@ -92,6 +93,8 @@
   async function scan() {
     const text = await scanQr();
     if (!text) return;
+    // Someone's "Meet nearby" code: an encrypted chat without the internet.
+    if (text.startsWith("aqua:meet?")) { try { close(); await acceptMeet(text); } catch (e) { err = String(e); } return; }
     const r = parseQr(text);
     if (!r || r.kind !== "user") { err = tr("That QR code isn't an Aquamarine profile"); return; }
     const p = await api.fetchDirectoryProfile(r.username).catch(() => null);
@@ -183,6 +186,10 @@
           <button class="nc-row act" onclick={() => { close(); openNewGroup("channel"); }}>
             <span class="nc-ava ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg></span>
             <span class="nc-main"><b>{$t("New channel")}</b></span>
+          </button>
+          <button class="nc-row act" onclick={() => { close(); meetOpen.set(true); }}>
+            <span class="nc-ava ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 7 10 10-5 5V2l5 5L7 17"/></svg></span>
+            <span class="nc-main"><b>{$t("Meet nearby")}</b><small>{$t("Without the internet — by QR, over Bluetooth / Wi-Fi")}</small></span>
           </button>
           <button class="nc-row act" onclick={scan}>
             <span class="nc-ava ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 14h3v3M21 14v.01M17 21h4v-4M14 18v3"/></svg></span>

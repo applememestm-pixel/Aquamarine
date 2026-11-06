@@ -169,6 +169,30 @@ async fn send_inner(app: &AppHandle, addr: &str, payload: &str, own: bool) -> Re
             }
         }
     }
+    // Met by QR (meet.rs / mesh.rs): their keys came in the QR — start the
+    // session from them, no relay needed. Without a relay the first message
+    // waits for Bluetooth / the same Wi-Fi.
+    let met = MET.lock().ok().and_then(|m| m.as_ref().and_then(|m| m.get(addr).cloned()));
+    if let Some(bundle) = met {
+        let (transport, identity) = {
+            let s = state.lock().map_err(|e| e.to_string())?;
+            (s.transport.clone(), s.identity.clone())
+        };
+        let (session, initial) = Session::start_as_initiator(&identity, &bundle, payload.as_bytes())
+            .map_err(|e| format!("start_as_initiator: {e}"))?;
+        if !transport.map(|t| t.send_initial(addr, &initial).is_ok()).unwrap_or(false) {
+            crate::mesh::queue_initial(app, addr, &initial);
+        }
+        let mut s = state.lock().map_err(|e| e.to_string())?;
+        let _ = s.vault.save_session(addr, &session);
+        s.sessions.insert(addr.to_string(), session);
+        if let Ok(mut g) = MET.lock() {
+            if let Some(m) = g.as_mut() {
+                m.remove(addr);
+            }
+        }
+        return Ok(());
+    }
     let (transport, identity) = {
         let s = state.lock().map_err(|e| e.to_string())?;
         (s.transport.clone().ok_or("not connected")?, s.identity.clone())
@@ -197,6 +221,21 @@ async fn send_inner(app: &AppHandle, addr: &str, payload: &str, own: bool) -> Re
     Ok(())
 }
 
+/// Keys of people met by QR (device address → their bundle), until the
+/// first message starts a session with them.
+static MET: StdMutex<Option<HashMap<String, aqua_core::keys::PreKeyBundle>>> = StdMutex::new(None);
+
+pub fn remember_met(addr: &str, bundle: aqua_core::keys::PreKeyBundle) {
+    if let Ok(mut m) = MET.lock() {
+        m.get_or_insert_with(HashMap::new).insert(addr.to_string(), bundle);
+    }
+}
+
+/// For the nearby handshake: these count as contacts (mesh.rs::me).
+pub fn met_identities() -> Vec<(String, aqua_core::keys::IdentityPublic)> {
+    MET.lock().ok().and_then(|m| m.as_ref().map(|m| m.iter().map(|(a, b)| (a.clone(), b.identity)).collect())).unwrap_or_default()
+}
+
 fn opens_no_session(payload: &str) -> bool {
     use crate::commands::{SEEN_PREFIX, STATUS_PREFIX, TYPING_PREFIX};
     [STATUS_PREFIX, TYPING_PREFIX, SEEN_PREFIX].iter().any(|p| payload.starts_with(p))
@@ -221,6 +260,12 @@ fn offline_addresses(app: &AppHandle, user: &str) -> Vec<String> {
     let state: State<'_, StdMutex<AppState>> = app.state();
     let Ok(s) = state.lock() else { return Vec::new() };
     let mut v: Vec<String> = s.sessions.keys().filter(|a| base_user(a) == user).cloned().collect();
+    // Met by QR: no session yet, but their keys are here.
+    for (a, _) in met_identities() {
+        if base_user(&a) == user && !v.contains(&a) {
+            v.push(a);
+        }
+    }
     v.sort();
     v
 }
@@ -235,6 +280,18 @@ pub async fn fanout(app: &AppHandle, peer: &str, payload: &str, sync: bool) -> R
         (s.transport.clone(), s.username.clone().unwrap_or_default())
     };
     let peer = base_user(peer).to_string();
+    // Met by QR and no session yet: straight to the device from the QR
+    // (relay if it knows them, else Bluetooth / Wi-Fi — send_inner decides).
+    let met: Vec<String> = met_identities().into_iter().map(|(a, _)| a).filter(|a| base_user(a) == peer).collect();
+    if !met.is_empty() && peer != me {
+        let mut ok = 0;
+        for a in met {
+            if send_to_address(app, &a, payload).await.is_ok() {
+                ok += 1;
+            }
+        }
+        return if ok > 0 { Ok(()) } else { Err("couldn't start the chat".into()) };
+    }
     let Some(transport) = transport else {
         return fanout_offline(app, &peer, &me, payload, sync).await;
     };

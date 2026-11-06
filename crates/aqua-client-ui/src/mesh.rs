@@ -24,7 +24,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aqua_core::keys::IdentityPublic;
-use aqua_core::wire::Envelope;
+use aqua_core::wire::{Envelope, InitialMessage};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -61,9 +61,12 @@ struct Item {
     id: String,
     /// Device address the envelope is for (`bob` or `bob~a1b2c3`).
     to: String,
-    /// bincode(Envelope), base64.
+    /// bincode(Envelope), base64 — or bincode(InitialMessage) when `kind` is "i"
+    /// (the first message to someone met by QR, no relay yet: meet below).
     payload: String,
     at: u64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    kind: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -173,13 +176,70 @@ pub fn queue(app: &AppHandle, to: &str, env: &Envelope) {
         if b.items.iter().any(|i| i.id == id) {
             return;
         }
-        b.items.push(Item { id, to: to.to_string(), payload: B64.encode(bytes), at: now() });
+        b.items.push(Item { id, to: to.to_string(), payload: B64.encode(bytes), at: now(), kind: String::new() });
         b.save();
     }
     emit_status(app);
     if enabled(app) {
         kick(app.clone());
     }
+}
+
+/// The first (X3DH) message to someone met by QR while there's no relay.
+pub fn queue_initial(app: &AppHandle, to: &str, m: &InitialMessage) {
+    let Ok(bytes) = bincode::serialize(m) else { return };
+    let id = item_id(&bytes);
+    {
+        let mut b = book(app);
+        if b.items.iter().any(|i| i.id == id) {
+            return;
+        }
+        b.items.push(Item { id, to: to.to_string(), payload: B64.encode(bytes), at: now(), kind: "i".into() });
+        b.save();
+    }
+    emit_status(app);
+    if enabled(app) {
+        kick(app.clone());
+    }
+}
+
+// ---------- meeting someone without a relay (QR) -----------------------------
+//
+// The person showing the QR (lib/meet.ts) gets a one-time pass, valid 15
+// minutes. Whoever scanned it presents the pass in `hello`, so a device that
+// isn't a contact yet is let in once; the X3DH initial message it then
+// delivers proves its identity like any first message would.
+
+const MEET_SECS: u64 = 15 * 60;
+/// Passes I handed out (in my QR).
+static ISSUED: Mutex<Vec<(String, u64)>> = Mutex::new(Vec::new());
+/// Passes I got from someone's QR.
+static HELD: Mutex<Vec<(String, u64)>> = Mutex::new(Vec::new());
+
+pub fn issue_meet() -> String {
+    let tok = hex::encode(rand::random::<[u8; 12]>());
+    if let Ok(mut v) = ISSUED.lock() {
+        v.retain(|(_, at)| now().saturating_sub(*at) < MEET_SECS);
+        v.push((tok.clone(), now()));
+    }
+    tok
+}
+
+pub fn hold_meet(tok: &str) {
+    if let Ok(mut v) = HELD.lock() {
+        v.retain(|(_, at)| now().saturating_sub(*at) < MEET_SECS);
+        if !v.iter().any(|(t, _)| t == tok) {
+            v.push((tok.to_string(), now()));
+        }
+    }
+}
+
+fn held_meets() -> Vec<String> {
+    HELD.lock().map(|v| v.iter().filter(|(_, at)| now().saturating_sub(*at) < MEET_SECS).map(|(t, _)| t.clone()).collect()).unwrap_or_default()
+}
+
+fn issued_ok(toks: &[String]) -> bool {
+    ISSUED.lock().map(|v| v.iter().any(|(t, at)| now().saturating_sub(*at) < MEET_SECS && toks.contains(t))).unwrap_or(false)
 }
 
 /// Connected to a relay again: hand it everything still waiting.
@@ -197,8 +257,14 @@ pub async fn flush_to_relay(app: &AppHandle) {
     let mut sent = Vec::new();
     for it in &items {
         let Ok(raw) = B64.decode(&it.payload) else { sent.push(it.id.clone()); continue };
-        let Ok(env) = bincode::deserialize::<Envelope>(&raw) else { sent.push(it.id.clone()); continue };
-        if t.send_envelope(&it.to, &env).is_ok() {
+        let ok = if it.kind == "i" {
+            let Ok(m) = bincode::deserialize::<InitialMessage>(&raw) else { sent.push(it.id.clone()); continue };
+            t.send_initial(&it.to, &m).is_ok()
+        } else {
+            let Ok(env) = bincode::deserialize::<Envelope>(&raw) else { sent.push(it.id.clone()); continue };
+            t.send_envelope(&it.to, &env).is_ok()
+        };
+        if ok {
             sent.push(it.id.clone());
         } else {
             break;
@@ -376,7 +442,16 @@ fn kick(app: AppHandle) {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 enum Frame {
-    Hello { v: u32, addrs: Vec<String>, nonce: String, sign_pub: String, dh_pub: String },
+    Hello {
+        v: u32,
+        addrs: Vec<String>,
+        nonce: String,
+        sign_pub: String,
+        dh_pub: String,
+        /// One-time passes from a QR (meet above).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        meet: Vec<String>,
+    },
     Auth { addr: String, sig: String },
     Batch { items: Vec<WireItem> },
     Ack { ids: Vec<String> },
@@ -388,6 +463,8 @@ struct WireItem {
     id: String,
     to: String,
     payload: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    k: String,
 }
 
 fn send_frame(w: &mut impl Write, f: &Frame) -> Result<(), String> {
@@ -437,7 +514,13 @@ fn me(app: &AppHandle) -> Result<Me, String> {
     Ok(Me {
         addrs: vec![format!("{user}~{dev}"), user],
         identity: s.identity.clone(),
-        contacts: s.sessions.iter().map(|(a, sess)| (a.clone(), sess.peer)).collect(),
+        contacts: s
+            .sessions
+            .iter()
+            .map(|(a, sess)| (a.clone(), sess.peer))
+            // Met by QR, no session yet: their keys came in the QR.
+            .chain(crate::multidev::met_identities())
+            .collect(),
     })
 }
 
@@ -481,6 +564,15 @@ trait Ctx {
     fn first_time(&self, id: &str) -> bool;
     /// Hand an envelope to the normal receive path.
     fn deliver(&self, from: String, envelope: Envelope);
+    /// A first (X3DH) message from someone met by QR.
+    fn deliver_initial(&self, _from: String, _message: InitialMessage) {}
+    /// Passes I hold / did I issue one of these?
+    fn held(&self) -> Vec<String> {
+        Vec::new()
+    }
+    fn issued(&self, _toks: &[String]) -> bool {
+        false
+    }
 }
 
 struct AppCtx<'a>(&'a AppHandle, &'static str);
@@ -491,7 +583,7 @@ impl Ctx for AppCtx<'_> {
     }
     fn outbox_for(&self, addr: &str) -> Vec<WireItem> {
         book(self.0).items.iter().filter(|i| i.to == addr)
-            .map(|i| WireItem { id: i.id.clone(), to: i.to.clone(), payload: i.payload.clone() }).collect()
+            .map(|i| WireItem { id: i.id.clone(), to: i.to.clone(), payload: i.payload.clone(), k: i.kind.clone() }).collect()
     }
     fn acked(&self, ids: &[String]) {
         let mut b = book(self.0);
@@ -508,6 +600,19 @@ impl Ctx for AppCtx<'_> {
             crate::commands::handle_incoming(&app, aqua_client_core::Incoming::Envelope { from, envelope, ts: None }).await;
         }));
     }
+    fn deliver_initial(&self, from: String, message: InitialMessage) {
+        let app = self.0.clone();
+        let via = self.1;
+        tauri::async_runtime::block_on(VIA.scope(via, async move {
+            crate::commands::handle_incoming(&app, aqua_client_core::Incoming::Initial { from, message, ts: None }).await;
+        }));
+    }
+    fn held(&self) -> Vec<String> {
+        held_meets()
+    }
+    fn issued(&self, toks: &[String]) -> bool {
+        issued_ok(toks)
+    }
 }
 
 fn exchange<S: Read + Write, C: Ctx>(ctx: &C, link: &mut S, dialled: bool, rep: &mut SyncReport) -> Result<(), String> {
@@ -520,6 +625,7 @@ fn exchange<S: Read + Write, C: Ctx>(ctx: &C, link: &mut S, dialled: bool, rep: 
         nonce: B64.encode(my_nonce),
         sign_pub: B64.encode(pubk.sign_pub.as_bytes()),
         dh_pub: B64.encode(pubk.dh_pub.as_bytes()),
+        meet: ctx.held(),
     };
     // 1. Hello both ways. The dialled side checks the caller is a contact
     // before it says who it is, so a stranger learns nothing.
@@ -529,7 +635,7 @@ fn exchange<S: Read + Write, C: Ctx>(ctx: &C, link: &mut S, dialled: bool, rep: 
     } else {
         read_frame(link)?
     };
-    let Frame::Hello { v, addrs, nonce, sign_pub, dh_pub } = theirs else { return Err("expected hello".into()) };
+    let Frame::Hello { v, addrs, nonce, sign_pub, dh_pub, meet } = theirs else { return Err("expected hello".into()) };
     if v != 1 {
         return Err(format!("protocol v{v}"));
     }
@@ -542,11 +648,30 @@ fn exchange<S: Read + Write, C: Ctx>(ctx: &C, link: &mut S, dialled: bool, rep: 
         .take(4)
         .find(|a| me.contacts.get(*a).map(|id| id.sign_pub.as_bytes() == &sp && id.dh_pub.as_bytes() == &dp).unwrap_or(false))
         .cloned();
-    let Some(peer_addr) = peer_addr else {
-        let _ = send_frame(link, &Frame::Bye { reason: "not a contact".into() });
-        return Err("not one of your contacts".into());
+    // Not a contact, but holding a pass from my QR: let them in once. Their
+    // device address must match their key, so the pass can't be replayed
+    // under someone else's name.
+    let (peer_addr, their_id) = match peer_addr {
+        Some(a) => {
+            let id = me.contacts[&a];
+            (a, id)
+        }
+        None => {
+            let dev_addr = addrs.first().filter(|a| {
+                a.split_once('~').is_some_and(|(_, d)| d == crate::multidev::device_id(&dp))
+            });
+            match dev_addr {
+                Some(a) if !meet.is_empty() && ctx.issued(&meet) => (
+                    a.clone(),
+                    IdentityPublic { sign_pub: aqua_core::crypto::SignPublic::from_bytes(sp), dh_pub: aqua_core::crypto::DhPublic::from_bytes(dp) },
+                ),
+                _ => {
+                    let _ = send_frame(link, &Frame::Bye { reason: "not a contact".into() });
+                    return Err("not one of your contacts".into());
+                }
+            }
+        }
     };
-    let their_id = me.contacts[&peer_addr];
     if !dialled {
         send_frame(link, &hello)?;
     }
@@ -595,6 +720,16 @@ fn exchange<S: Read + Write, C: Ctx>(ctx: &C, link: &mut S, dialled: bool, rep: 
             }
             let Ok(raw) = B64.decode(&it.payload) else { continue };
             if item_id(&raw) != it.id {
+                continue;
+            }
+            if it.k == "i" {
+                let Ok(m) = bincode::deserialize::<InitialMessage>(&raw) else { continue };
+                // Only from the device that proved this very key.
+                if m.sender_identity != their_id {
+                    continue;
+                }
+                ctx.deliver_initial(peer_addr.clone(), m);
+                got += 1;
                 continue;
             }
             let Ok(envelope) = bincode::deserialize::<Envelope>(&raw) else { continue };
@@ -738,7 +873,7 @@ mod tests {
         fn queue(&self, to: &str, text: &str) {
             let env = self.sessions.borrow_mut().get_mut(to).unwrap().encrypt(text.as_bytes()).unwrap();
             let raw = bincode::serialize(&env).unwrap();
-            self.outbox.borrow_mut().push(WireItem { id: item_id(&raw), to: to.into(), payload: B64.encode(raw) });
+            self.outbox.borrow_mut().push(WireItem { id: item_id(&raw), to: to.into(), payload: B64.encode(raw), k: String::new() });
         }
     }
     impl Ctx for T {
@@ -750,7 +885,7 @@ mod tests {
             })
         }
         fn outbox_for(&self, addr: &str) -> Vec<WireItem> {
-            self.outbox.borrow().iter().filter(|i| i.to == addr).map(|i| WireItem { id: i.id.clone(), to: i.to.clone(), payload: i.payload.clone() }).collect()
+            self.outbox.borrow().iter().filter(|i| i.to == addr).map(|i| WireItem { id: i.id.clone(), to: i.to.clone(), payload: i.payload.clone(), k: i.k.clone() }).collect()
         }
         fn acked(&self, ids: &[String]) {
             self.outbox.borrow_mut().retain(|i| !ids.contains(&i.id));
@@ -808,6 +943,71 @@ mod tests {
         // A second meeting has nothing new to swap.
         let (ra, _) = run(&a, &b);
         assert_eq!(ra.unwrap().sent, 0);
+    }
+
+    /// Bob scanned Alice's "meet nearby" QR: her keys + pass "p1". He's not
+    /// her contact, yet with the pass his first (X3DH) message gets through.
+    fn meet(pass: &'static str) -> (Result<(), String>, Vec<InitialMessage>, T, SignedPreKey) {
+        let mk = |user| T { user, id: IdentityKeyPair::generate(), sessions: Default::default(), outbox: Default::default(), seen: Default::default(), got: Default::default() };
+        let (alice, bob) = (mk("alice"), mk("bob"));
+        let spk = SignedPreKey::generate(1, &alice.id);
+        let bundle = PreKeyBundle { identity: alice.id.public(), signed_prekey: spk.public(), one_time_prekey: None };
+        let (sb, init) = Session::start_as_initiator(&bob.id, &bundle, b"hi").unwrap();
+        bob.sessions.borrow_mut().insert(alice.addr(), sb);
+        let raw = bincode::serialize(&init).unwrap();
+        bob.outbox.borrow_mut().push(WireItem { id: item_id(&raw), to: alice.addr(), payload: B64.encode(raw), k: "i".into() });
+
+        struct Shower<'a>(&'a T, RefCell<Vec<InitialMessage>>);
+        unsafe impl Sync for Shower<'_> {}
+        impl Ctx for Shower<'_> {
+            fn me(&self) -> Result<Me, String> { self.0.me() }
+            fn outbox_for(&self, a: &str) -> Vec<WireItem> { self.0.outbox_for(a) }
+            fn acked(&self, ids: &[String]) { self.0.acked(ids) }
+            fn first_time(&self, id: &str) -> bool { self.0.first_time(id) }
+            fn deliver(&self, _: String, _: Envelope) { panic!("no session yet") }
+            fn deliver_initial(&self, _from: String, m: InitialMessage) { self.1.borrow_mut().push(m) }
+            fn issued(&self, toks: &[String]) -> bool { toks.iter().any(|t| t == "p1") }
+        }
+        struct Scanner<'a>(&'a T, &'static str);
+        unsafe impl Sync for Scanner<'_> {}
+        impl Ctx for Scanner<'_> {
+            fn me(&self) -> Result<Me, String> { self.0.me() }
+            fn outbox_for(&self, a: &str) -> Vec<WireItem> { self.0.outbox_for(a) }
+            fn acked(&self, ids: &[String]) { self.0.acked(ids) }
+            fn first_time(&self, id: &str) -> bool { self.0.first_time(id) }
+            fn deliver(&self, f: String, e: Envelope) { self.0.deliver(f, e) }
+            fn held(&self) -> Vec<String> { vec![self.1.to_string()] }
+        }
+        let shower = Shower(&alice, RefCell::new(Vec::new()));
+        let scanner = Scanner(&bob, pass);
+        let (mut la, mut lb) = std::os::unix::net::UnixStream::pair().unwrap();
+        let r = std::thread::scope(|sc| {
+            let h = sc.spawn(|| { let mut r = SyncReport::default(); exchange(&shower, &mut la, false, &mut r) });
+            let mut r = SyncReport::default();
+            let rb = exchange(&scanner, &mut lb, true, &mut r);
+            let ra = h.join().unwrap();
+            ra.and(rb)
+        });
+        let got = shower.1.into_inner();
+        (r, got, bob, spk)
+    }
+
+    #[test]
+    fn a_pass_from_a_qr_lets_a_new_person_in() {
+        let (r, got, bob, spk) = meet("p1");
+        r.unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].sender_identity, bob.id.public());
+        assert!(bob.outbox.borrow().is_empty(), "delivered and acknowledged");
+        let _ = spk;
+    }
+
+    #[test]
+    fn a_wrong_pass_is_turned_away() {
+        let (r, got, bob, _) = meet("nope");
+        assert!(r.is_err());
+        assert!(got.is_empty());
+        assert_eq!(bob.outbox.borrow().len(), 1, "nothing left for a stranger");
     }
 
     #[test]

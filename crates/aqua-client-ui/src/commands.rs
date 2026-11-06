@@ -2491,6 +2491,98 @@ pub async fn start_chat_with(
     Ok(summary)
 }
 
+// ---------- Meeting without a relay (QR) ----------------------------------
+//
+// "Show my QR" carries my keys (identity + signed prekey, no one-time key)
+// and a one-time pass for nearby delivery (mesh.rs). Whoever scans it starts
+// an E2EE chat from those keys alone; the first message reaches me over
+// Bluetooth / the same Wi-Fi when we're close, or through a relay that knows
+// both of us. Nothing secret is in the QR — it's what the relay would hand
+// out anyway, plus a 15-minute pass.
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct MeetCard {
+    v: u8,
+    /// @username and device address (`user~dev`).
+    u: String,
+    a: String,
+    /// Display name, for the chat.
+    #[serde(default)]
+    n: String,
+    /// bincode(PreKeyBundle), base64url.
+    b: String,
+    /// The one-time pass.
+    k: String,
+}
+
+#[tauri::command]
+pub fn meet_qr(state: State<'_, StdMutex<AppState>>, name: Option<String>) -> Result<String, String> {
+    use base64::Engine;
+    let s = state.lock().map_err(|e| e.to_string())?;
+    let user = s.username.clone().ok_or("sign in first")?;
+    let (spk, _) = s.vault.latest_signed_prekey().map_err(|e| e.to_string())?.ok_or("no keys yet — connect to a server once")?;
+    let bundle = aqua_core::keys::PreKeyBundle { identity: s.identity.public(), signed_prekey: spk.public(), one_time_prekey: None };
+    let dev = crate::multidev::device_id(s.identity.public().dh_pub.as_bytes());
+    let card = MeetCard {
+        v: 1,
+        a: format!("{user}~{dev}"),
+        u: user,
+        n: name.unwrap_or_default().chars().take(40).collect(),
+        b: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bincode::serialize(&bundle).map_err(|e| e.to_string())?),
+        k: crate::mesh::issue_meet(),
+    };
+    let json = serde_json::to_vec(&card).map_err(|e| e.to_string())?;
+    Ok(format!("aqua:meet?d={}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)))
+}
+
+/// Scanned someone's meet QR: remember their keys and pass, say hi.
+/// Returns their @username (the chat's id).
+#[tauri::command]
+pub async fn meet_accept(app: AppHandle, state: State<'_, StdMutex<AppState>>, code: String) -> Result<String, String> {
+    use base64::Engine;
+    let d = code.trim().strip_prefix("aqua:meet?d=").ok_or("not an Aquamarine meet code")?;
+    let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let card: MeetCard = serde_json::from_slice(&b64.decode(d).map_err(|_| "damaged code")?).map_err(|_| "damaged code")?;
+    if card.v != 1 {
+        return Err("this code is from a newer app — update Aquamarine".into());
+    }
+    let bundle: aqua_core::keys::PreKeyBundle = bincode::deserialize(&b64.decode(&card.b).map_err(|_| "damaged code")?).map_err(|_| "damaged code")?;
+    bundle.verify().map_err(|_| "the keys in this code don't check out")?;
+    let dev = crate::multidev::device_id(bundle.identity.dh_pub.as_bytes());
+    if card.a != format!("{}~{dev}", card.u) || card.u.is_empty() {
+        return Err("the keys in this code don't check out".into());
+    }
+    if state.lock().map_err(|e| e.to_string())?.username.as_deref() == Some(card.u.as_str()) {
+        return Err("that's your own code".into());
+    }
+    crate::multidev::remember_met(&card.a, bundle);
+    crate::mesh::hold_meet(&card.k);
+    let hello = "👋";
+    let had = state.lock().map_err(|e| e.to_string())?.chats.contains_key(&card.u);
+    crate::multidev::fanout(&app, &card.u, hello, true).await?;
+    {
+        let mut s = state.lock().map_err(|e| e.to_string())?;
+        if !had {
+            let mut summary = summary_for(&card.u, hello, true, false);
+            if !card.n.trim().is_empty() {
+                summary.name = card.n.clone();
+            }
+            s.chats.insert(card.u.clone(), ChatBook { summary, messages: vec![text_msg_from_me(hello)] });
+        } else if let Some(book) = s.chats.get_mut(&card.u) {
+            book.messages.push(text_msg_from_me(hello));
+        }
+        s.chat_order.retain(|id| id != &card.u);
+        s.chat_order.insert(0, card.u.clone());
+    }
+    let _ = app.emit("aqua://chats_updated", ());
+    // Look for them nearby right away.
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = crate::mesh::mesh_sync_now(app2).await;
+    });
+    Ok(card.u)
+}
+
 // ---------- Call signaling ------------------------------------------------
 
 /// Magic prefix for a WebRTC call signal piggybacked on the E2EE text
