@@ -49,6 +49,16 @@ fn set_active(base: &Path, slot: &str) -> Result<(), String> {
 }
 
 /// The data directory of the account the app starts with.
+/// Stickers, GIFs and emoji packs are the device's, not an account's: every
+/// account (on any server) sees the same ones. The first account lives in
+/// the base folder itself, the others in `accounts/<slot>` — both map to it.
+pub fn shared_root(data_dir: &Path) -> PathBuf {
+    match data_dir.parent() {
+        Some(p) if p.file_name().is_some_and(|n| n == "accounts") => p.parent().map(Path::to_path_buf).unwrap_or_else(|| data_dir.to_path_buf()),
+        _ => data_dir.to_path_buf(),
+    }
+}
+
 pub fn resolve(base: &Path) -> PathBuf {
     dir_of(base, &active(base))
 }

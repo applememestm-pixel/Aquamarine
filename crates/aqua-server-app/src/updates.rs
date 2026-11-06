@@ -359,13 +359,15 @@ pub fn install_now(app: &AppHandle) -> Result<(), String> {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
             std::fs::rename(&tmp, &img).map_err(|e| e.to_string())?;
-            let mut cmd = std::process::Command::new(&img);
+            // The old copy must let go of the port (and of the one-copy lock)
+            // first: the new one starts two seconds after this one exits.
+            let mut cmd = std::process::Command::new("sh");
+            cmd.arg("-c").arg(r#"sleep 2; exec "$0" "$@""#).arg(&img);
             if hidden {
                 cmd.arg("--hidden");
             }
-            // The old copy must let go of the port first: start the new one a moment later.
-            app.exit(0);
             cmd.spawn().map_err(|e| e.to_string())?;
+            app.exit(0);
             return Ok(());
         }
         std::process::Command::new("xdg-open").arg(&path).spawn().map_err(|e| e.to_string())?;

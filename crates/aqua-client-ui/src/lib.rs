@@ -104,6 +104,10 @@ pub fn run() -> Result<()> {
             // through the asset protocol — also when AQUA_DATA_DIR points
             // outside the default scope (test clients on another drive).
             let _ = app.asset_protocol_scope().allow_directory(&data_dir, true);
+            // Stickers / GIFs are shared by every account on this device.
+            let shared = crate::accounts::shared_root(&data_dir);
+            let _ = app.asset_protocol_scope().allow_directory(shared.join("stickers"), true);
+            let _ = app.asset_protocol_scope().allow_directory(shared.join("gifs"), true);
             let _ = app.asset_protocol_scope().allow_directory(crate::storage::downloads_dir(&data_dir), true);
             let state = state::AppState::boot(data_dir)?;
             app.manage(state);
@@ -326,6 +330,7 @@ pub fn run() -> Result<()> {
             commands::follow_peer_by_uid,
             commands::channel_dm_open,
             relay_host::widget_update,
+            relay_host::pip_enter,
             commands::attach_file,
             commands::attach_file_as,
             commands::attach_bytes,

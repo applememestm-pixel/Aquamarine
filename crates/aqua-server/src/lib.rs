@@ -3024,7 +3024,12 @@ pub async fn serve_embedded(
     state.blobs.spawn_sweeper();
     fed::spawn_sync(state.clone());
     tgapi::resume_webhooks(state.clone());
-    axum::serve(listener, app(state)).with_graceful_shutdown(shutdown).await
+    let blobs = state.blobs.clone();
+    let r = axum::serve(listener, app(state)).with_graceful_shutdown(shutdown).await;
+    // Stopped: the file cache goes, people's data stays (blobstore::clear_cache).
+    let n = blobs.clear_cache();
+    tracing::info!(removed = n, "server stopped: file cache cleared");
+    r
 }
 
 #[cfg(test)]

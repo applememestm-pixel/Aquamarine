@@ -5,6 +5,7 @@
 </script>
 
 <script lang="ts">
+  import { sideResize } from "../sideResize";
   import { t, tr, lang } from "../i18n";
   import { activeMessages, chats, selectChat } from "../stores";
   import { knownEvents, parseSpecial, rsvps, ME, type EventMsg } from "../planner";
@@ -43,7 +44,7 @@
 </script>
 
 {#if $calendarFor}
-  <aside class="cal" data-back aria-label={$t("Calendar")}>
+  <aside class="cal" use:sideResize={"chatcalendar"} data-back aria-label={$t("Calendar")}>
     <header class="cal-head">
       <b>📅 {$t("Calendar")}</b>
       <div class="cal-seg">

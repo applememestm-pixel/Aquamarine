@@ -539,7 +539,7 @@
         <!-- Video fills the whole viewer; the player has window / full-screen modes too. -->
         <div class="lb-video">
           {#key cur.url + "#" + index}
-            <MediaPlayer src={cur.url} kind="video" fill autoplay name={fileName(cur)} size={cur.size} />
+            <MediaPlayer src={cur.url} kind="video" fill viewer autoplay name={fileName(cur)} size={cur.size} />
           {/key}
         </div>
       {/if}

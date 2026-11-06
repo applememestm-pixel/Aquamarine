@@ -267,7 +267,8 @@
   .who span { font-size: 13px; color: var(--fg-muted); }
   .form { width: 100%; display: flex; flex-direction: column; gap: 10px; }
   .pw { position: relative; }
-  .pw input { padding-right: 44px; }
+  /* Same room on both sides, so the dots sit in the middle (the eye is on the right). */
+  .pw input { padding-left: 44px; padding-right: 44px; }
   .eye { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 34px; height: 34px; border: none; border-radius: calc(8px * var(--rk, 1)); background: none; color: var(--fg-dim); cursor: pointer; display: grid; place-items: center; }
   .eye:hover { color: var(--fg); }
   .eye svg { width: 18px; height: 18px; }
@@ -287,7 +288,7 @@
   .err { color: #ff8f8f; font-size: 12.5px; }
   .primary {
     width: 100%; border: none; border-radius: calc(10px * var(--rk, 1)); padding: 11px; font: inherit; font-weight: 800; font-size: 14px; cursor: pointer;
-    background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070c; margin-top: 4px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, .25); margin-top: 4px;
   }
   .primary:disabled { opacity: 0.6; }
   .auto { width: 100%; display: flex; flex-direction: column; gap: 6px; margin-top: 2px; }

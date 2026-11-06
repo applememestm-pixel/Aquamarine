@@ -603,6 +603,34 @@
     } catch (e) { showToast(String(e)); }
   }
   let apiOpen = $state(false);
+  /** Appearance: each block opens by its title, the others fold away —
+   *  the page was one very long scroll. */
+  function accordion(node: HTMLElement) {
+    const setup = () => {
+      const secs = [...node.querySelectorAll<HTMLElement>(":scope > section.group")];
+      secs.forEach((sec, i) => {
+        if (sec.dataset.acc) return;
+        sec.dataset.acc = "1";
+        sec.classList.add("acc");
+        if (i === 0) sec.classList.add("open");
+        const lab = sec.querySelector<HTMLElement>(":scope > .label");
+        if (!lab) { sec.classList.add("open"); return; }
+        lab.setAttribute("role", "button");
+        lab.tabIndex = 0;
+        const toggle = () => {
+          const was = sec.classList.contains("open");
+          node.querySelectorAll(":scope > section.acc.open").forEach((x) => x.classList.remove("open"));
+          if (!was) { sec.classList.add("open"); requestAnimationFrame(() => sec.scrollIntoView({ block: "nearest", behavior: "smooth" })); }
+        };
+        lab.addEventListener("click", toggle);
+        lab.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
+      });
+    };
+    setup();
+    const mo = new MutationObserver(setup);
+    mo.observe(node, { childList: true });
+    return { destroy: () => mo.disconnect() };
+  }
   // Bots page: the list, or one bot (BotFather-like).
   let botSel = $state<string | null>(null);
   let botNew = $state(false);
@@ -1222,7 +1250,7 @@
 
       {#if section === "appearance"}
       <div class="ap-split">
-      <div class="ap-controls">
+      <div class="ap-controls" use:accordion>
       <section class="group">
         <div class="label">{$t("Themes")}</div>
         <div class="themes">
@@ -1331,6 +1359,16 @@
         </div>
       </section>
       <div class="ap-div" id="ap-wallpaper"><span>{$t("Chat wallpaper")}</span></div>
+      <section class="group">
+        <div class="label">{$t("Message colours")}</div>
+        <div class="bots-note">{$t("Your messages and theirs, in every chat. A chat's own theme (chat menu → Chat theme) wins over this.")}</div>
+        <div class="row"><span class="row-label">{$t("My messages")}</span>
+          <ColorInput value={$settings.bubbleOut || "#1E5A84"} size={30} oninput={(v) => settings.update((x) => ({ ...x, bubbleOut: v }))} />
+          {#if $settings.bubbleOut}<button class="bot-link" onclick={() => settings.update((x) => ({ ...x, bubbleOut: undefined }))}>{$t("Reset")}</button>{/if}</div>
+        <div class="row"><span class="row-label">{$t("Their messages")}</span>
+          <ColorInput value={$settings.bubbleIn || "#141825"} size={30} oninput={(v) => settings.update((x) => ({ ...x, bubbleIn: v }))} />
+          {#if $settings.bubbleIn}<button class="bot-link" onclick={() => settings.update((x) => ({ ...x, bubbleIn: undefined }))}>{$t("Reset")}</button>{/if}</div>
+      </section>
       <section class="group">
         <div class="label">{$t("Chat wallpaper")}</div>
         <div class="walls">
@@ -1726,20 +1764,7 @@
           <span class="v mono dir">{$info?.data_dir ?? "—"}</span>
         </div>
       </section>
-      <section class="group">
-        <div class="label">{$t("Bot secretary")}</div>
-        <div class="bots-note">{$t("A bot answers people for you: their message goes to the bot, and its answer is sent to them from your account.")}</div>
-        <div class="bots-note warn-note">{$t("Bots aren't end-to-end encrypted: the messages the bot gets, its owner and the server can read.")}</div>
-        <div class="bk-row">
-          <input class="txt" placeholder="@mybot" bind:value={secBot} disabled={!!$secretary} />
-          <Select value={secScope} disabled={!!$secretary} options={[{ value: "new" as const, label: $t("Only new chats") }, { value: "noncontacts" as const, label: $t("People not in my contacts") }, { value: "all" as const, label: $t("Everyone") }]} onchange={(v) => (secScope = v)} />
-          {#if $secretary}
-            <button class="bot-btn" onclick={() => { secretary.set(null); showToast(tr("The secretary is off")); }}>{$t("Turn off")}</button>
-          {:else}
-            <button class="bot-btn primary" disabled={!secBot.trim()} onclick={secretaryOn}>{$t("Turn on")}</button>
-          {/if}
-        </div>
-      </section>
+      {#if $settings.advancedSettings}
       <section class="group">
         <div class="label">{$t("Pass for a private server")}</div>
         <div class="bots-note">{$t("A private server of your network may let in people from this server. Make a pass and paste it there when you create the account — it proves you're @{name} from here. It works once, for 10 minutes.", { name: $info?.username ?? "" })}</div>
@@ -1753,6 +1778,7 @@
           <button class="mini-btn" disabled={passBusy || !$info?.connected} onclick={makePass}>{passBusy ? "…" : $t("Make a pass")}</button>
         {/if}
       </section>
+      {/if}
       <section class="group">
         <div class="label">{$t("Proxy")}</div>
         <button class="mini-btn" onclick={() => { section = "network"; }}>{$t("Network & proxy")} ›</button>
@@ -2222,6 +2248,20 @@
             {/each}
           </div>
         {/if}
+      </section>
+      <section class="group">
+        <div class="label">{$t("Bot secretary")}</div>
+        <div class="bots-note">{$t("A bot answers people for you: their message goes to the bot, and its answer is sent to them from your account.")}</div>
+        <div class="bots-note warn-note">{$t("Bots aren't end-to-end encrypted: the messages the bot gets, its owner and the server can read.")}</div>
+        <div class="bk-row">
+          <input class="txt" placeholder="@mybot" bind:value={secBot} disabled={!!$secretary} />
+          <Select value={secScope} disabled={!!$secretary} options={[{ value: "new" as const, label: $t("Only new chats") }, { value: "noncontacts" as const, label: $t("People not in my contacts") }, { value: "all" as const, label: $t("Everyone") }]} onchange={(v) => (secScope = v)} />
+          {#if $secretary}
+            <button class="bot-btn" onclick={() => { secretary.set(null); showToast(tr("The secretary is off")); }}>{$t("Turn off")}</button>
+          {:else}
+            <button class="bot-btn primary" disabled={!secBot.trim()} onclick={secretaryOn}>{$t("Turn on")}</button>
+          {/if}
+        </div>
       </section>
       {:else}
       <!-- One bot: its token, how to run it, and removing it. -->
@@ -2876,6 +2916,10 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   }
   .bot-add:disabled { opacity: 0.5; cursor: not-allowed; }
   .bot-list { display: flex; flex-direction: column; gap: 8px; }
+  :global(section.group.acc) > :global(.label) { cursor: pointer; display: flex; align-items: center; user-select: none; }
+  :global(section.group.acc) > :global(.label)::after { content: "›"; margin-left: auto; font-size: 16px; transition: transform .15s; }
+  :global(section.group.acc.open) > :global(.label)::after { transform: rotate(90deg); }
+  :global(section.group.acc:not(.open)) > :global(:not(.label)) { display: none !important; }
   .bots-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
   .bots-head .label { margin: 0; }
   .bot-rows { display: flex; flex-direction: column; gap: 2px; }

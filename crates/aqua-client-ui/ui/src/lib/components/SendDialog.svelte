@@ -1,7 +1,7 @@
 <script module lang="ts">
   import { writable } from "svelte/store";
   export type SendMode = "media" | "compressed" | "file";
-  export interface SendChoice { mode: SendMode; caption: string; edit: boolean; /** Send as a live photo (1.2.0-4). */ live?: import("../liveMotion").LiveStyle }
+  export interface SendChoice { mode: SendMode; caption: string; edit: boolean; /** The files, with any added in the sheet ("+"). */ paths: string[]; /** Send as a live photo (1.2.0-4). */ live?: import("../liveMotion").LiveStyle }
   interface Ask { paths: string[]; preset?: SendMode; resolve: (v: SendChoice | null) => void }
   const pending = writable<Ask | null>(null);
   const LAST = "aqua.sendMode.v1";
@@ -33,7 +33,19 @@
   let thumbs = $state<Record<string, string>>({});
   let sizes = $state<Record<string, number>>({});
 
-  let paths = $derived($pending?.paths ?? []);
+  /** Files added with "+" in the sheet, on top of the ones it opened with. */
+  let extra = $state<string[]>([]);
+  let paths = $derived([...($pending?.paths ?? []), ...extra]);
+  $effect(() => { void $pending; extra = []; });
+  async function addMore() {
+    try {
+      const { openFileDialog } = await import("../dialog");
+      const r = await openFileDialog({ multiple: true });
+      const list = (Array.isArray(r) ? r : r ? [r] : []).map(String).filter((p) => !paths.includes(p));
+      if (list.length) extra = [...extra, ...list];
+    } catch { /* cancelled */ }
+  }
+  const AUDIO_RE = /\.(mp3|wav|ogg|oga|flac|m4a|opus|aac|wma)$/i;
   /** Phone picks (content://…) have no extension: their type is sniffed (picked_preview). */
   let kinds = $state<Record<string, string>>({});
   const isImg = (p: string) => IMAGE_RE.test(p) || kinds[p] === "image";
@@ -86,7 +98,7 @@
     if (!send) { a.resolve(null); return; }
     try { localStorage.setItem(LAST, JSON.stringify({ mode, compressVideo })); } catch { /* ignore */ }
     const m: SendMode = mode === "file" ? "file" : hasVideos && compressVideo ? "compressed" : "media";
-    a.resolve({ mode: m, caption: caption.trim(), edit, live: canLive && live && mode !== "file" ? live : undefined });
+    a.resolve({ mode: m, caption: caption.trim(), edit, paths: [...paths], live: canLive && live && mode !== "file" ? live : undefined });
   }
   function key(e: KeyboardEvent) {
     if (!$pending) return;
@@ -114,7 +126,7 @@
               <img src={thumbs[p]} alt="" />
               {#if isVid(p)}<span class="vmark">▶</span>{/if}
             {:else}
-              <span class="ficon">{isVid(p) ? "🎬" : isImg(p) ? "🖼" : "📄"}</span>
+              <span class="ficon">{isVid(p) ? "🎬" : isImg(p) ? "🖼" : AUDIO_RE.test(p) ? "🎵" : "📄"}</span>
             {/if}
             <span class="nm" title={nameOf(p)}>{nameOf(p)}</span>
             {#if sizes[p]}<span class="sz">{fmtSize(sizes[p])}</span>{/if}
@@ -157,6 +169,7 @@
         {#if paths.length === 1 && IMAGE_RE.test(paths[0]) && mode === "media"}
           <button class="btn ghost" onclick={() => done(true, true)}>{$t("Edit")}</button>
         {/if}
+        <button class="btn ghost add" onclick={addMore} title={$t("Add files")} aria-label={$t("Add files")}>+</button>
         <span class="grow"></span>
         <button class="btn" onclick={() => done(false)}>{$t("Cancel")}</button>
         <button class="btn ok" onclick={() => done(true)}>{$t("Send")}</button>
@@ -166,6 +179,7 @@
 {/if}
 
 <style>
+  .btn.add { font-size: 20px; line-height: 1; padding: 6px 12px; }
   .live-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12.5px; }
   .live-lbl { font-weight: 700; color: var(--fg-muted); margin-right: 4px; }
   .live-row button { border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); padding: 5px 10px; border-radius: calc(9px * var(--rk, 1)); font: inherit; cursor: pointer; }

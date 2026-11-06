@@ -431,6 +431,8 @@ jobs:
           perms='<uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />\n    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />\n    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />\n    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />\n    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />\n    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />\n    <application'
           sed -i "0,/<application/s##${perms}#" "$m"
           grep -n 'permission' "$m"
+          # Videos keep playing in a small window (picture-in-picture, MediaPlayer)
+          sed -i '0,/<activity/s##<activity android:supportsPictureInPicture="true"#' "$m"
           # Launcher icon
           cp -r icons/android/* gen/android/app/src/main/res/
           # MainActivity asking for Android 17 local-network access

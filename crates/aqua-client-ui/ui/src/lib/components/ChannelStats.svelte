@@ -6,6 +6,7 @@
 </script>
 
 <script lang="ts">
+  import { sideResize } from "../sideResize";
   /** Channel statistics for admins: views (who and when, for a month),
    *  reactions and comments per post, and how a post was read over time. */
   import { t, tr, tn, lang } from "../i18n";
@@ -28,7 +29,7 @@
   const when = (ms: number) => new Date(ms).toLocaleString(loc(), { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 </script>
 
-<aside class="cs" data-back aria-label={$t("Channel statistics")}>
+<aside class="cs" use:sideResize={"channelstats"} data-back aria-label={$t("Channel statistics")}>
   <header class="cs-head">
     {#if cur}<button class="cs-back" onclick={() => (sel = null)} aria-label={$t("Back")}>‹</button>{/if}
     <b>📊 {cur ? $t("Post") : $t("Statistics")}</b>

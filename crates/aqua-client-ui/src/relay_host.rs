@@ -50,12 +50,36 @@ pub mod android {
             .map_err(|e| e.to_string())
     }
 
+    /// Shrink the app into a picture-in-picture window (a video plays on).
+    pub fn enter_pip(w: u32, h: u32) -> Result<(), String> {
+        let hd = HANDLE.get().ok_or("picture-in-picture is not available")?;
+        hd.run_mobile_plugin::<serde_json::Value>("enterPip", serde_json::json!({ "w": w, "h": h }))
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
     /// Start the app over in a fresh process (another account was picked).
     pub fn relaunch() {
         let Some(h) = HANDLE.get() else { return };
         if let Err(e) = h.run_mobile_plugin::<serde_json::Value>("relaunch", serde_json::json!({})) {
             tracing::warn!(%e, "relaunch");
         }
+    }
+}
+
+/// Phones: the app goes into a small floating window, like a video in
+/// Telegram (MediaPlayer's picture-in-picture button; the video fills the
+/// app first). Elsewhere the webview's own picture-in-picture is used.
+#[tauri::command]
+pub fn pip_enter(w: u32, h: u32) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        return android::enter_pip(w.max(1), h.max(1));
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = (w, h);
+        Err("picture-in-picture is only on Android here".into())
     }
 }
 
