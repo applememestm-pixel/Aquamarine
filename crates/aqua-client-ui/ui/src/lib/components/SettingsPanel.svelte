@@ -2286,8 +2286,6 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
       </section>
       {/if}
       {/if}
-      </section>
-      {/if}
 
       {#if section === "updates"}
       <section class="group">
