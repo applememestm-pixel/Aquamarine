@@ -16,6 +16,7 @@
   import { startPower } from "./lib/power";
   import { startTabSwipe } from "./lib/tabSwipe";
   import { startPlugins } from "./lib/plugins";
+  import { startBgNotify } from "./lib/notify";
   import { startWidget } from "./lib/widget";
   import { startPinchZoom } from "./lib/pinchZoom";
   import NavRail from "./lib/components/NavRail.svelte";
@@ -190,6 +191,7 @@
     startTabSwipe();
     startPlugins();
     startWidget();
+    startBgNotify();
     startPinchZoom();
     maybeShowWhatsNew(get(settings).whatsNew !== false);
     // Message times in this device's time zone (Rust can't ask Android for it).

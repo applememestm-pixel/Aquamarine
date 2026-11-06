@@ -439,6 +439,9 @@
       <!-- Close stays put; banner + body scroll together, so the avatar is
            never clipped under the banner when the form is long. -->
       <button data-x class="close" onclick={closeProfile} title={$t("Close (Esc)")}>×</button>
+      <!-- Phones: the profile is a whole screen and × is hidden there — an
+           explicit "back" like Telegram's, so it can always be left. -->
+      <button class="p-back" onclick={closeProfile} aria-label={$t("Back")}>{@html icons.back}</button>
       <div class="scroll">
       <div class="banner" style:background={shownBanner && !isVideoUrl(shownBanner) ? `center / cover no-repeat url("${shownBanner}")` : `linear-gradient(135deg, ${bannerA}, ${bannerB})`}>
         {#if shownBanner && isVideoUrl(shownBanner)}
@@ -935,6 +938,9 @@
   .fg-chip { font-size: 11.5px; font-weight: 600; padding: 3px 8px; border-radius: calc(7px * var(--rk, 1)); border: 1px solid var(--border-strong); color: var(--fg-muted); }
   .fg-chip.live { color: #3ddc84; border-color: color-mix(in srgb, #3ddc84 40%, transparent); }
 
+  .p-back { display: none; position: absolute; z-index: 6; top: calc(10px + env(safe-area-inset-top, 0px)); left: 10px; width: 38px; height: 38px;
+    place-items: center; border: none; border-radius: 50%; background: rgba(0, 0, 0, .45); color: #fff; cursor: pointer; backdrop-filter: blur(6px); }
+  .p-back :global(svg) { width: 22px; height: 22px; }
   /* ---- editor: two columns (card on the left, details on the right) ---- */
   .sheet.ed { width: min(980px, 96vw); height: min(720px, 92vh); max-height: 92vh; }
   .sheet.ed .scroll { display: grid; grid-template-columns: minmax(300px, 360px) 1fr; grid-template-rows: 150px auto minmax(0, 1fr); overflow: hidden; }
@@ -942,9 +948,10 @@
   .sheet.ed .body { display: contents; }
   .sheet.ed .avatar-wrap { grid-column: 1; grid-row: 2; margin: -52px 0 14px 24px; z-index: 2; }
   .field .track-name { text-transform: none; letter-spacing: normal; font-size: 13px; font-weight: 400; color: var(--fg-muted); }
-  .ed-left { grid-column: 1; grid-row: 3; padding: 0 22px 18px; overflow-y: auto; min-height: 0; }
-  .ed-right { grid-column: 2; grid-row: 2 / span 2; padding: 18px 26px 18px; border-left: 1px solid var(--border); overflow-y: auto; min-height: 0;
-    display: flex; flex-direction: column; }
+  /* Both columns start on the same line (under the avatar), same side padding. */
+  .ed-left { grid-column: 1; grid-row: 3; padding: 0 24px 18px; overflow-y: auto; min-height: 0; scrollbar-width: thin; scrollbar-gutter: stable; }
+  .ed-right { grid-column: 2; grid-row: 3; padding: 0 24px 18px; border-left: 1px solid var(--border); overflow-y: auto; min-height: 0;
+    display: flex; flex-direction: column; scrollbar-width: thin; }
   .ed-right .buttons { margin-top: auto; padding-top: 16px; }
   .ed-games { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 8px; margin: 2px 0 8px; }
   .ed-game { position: relative; animation: fade-in .2s ease-out; }
@@ -964,6 +971,7 @@
     .sheet, .sheet.wide, .sheet.ed { width: 100% !important; max-width: none !important; height: 100% !important; max-height: none !important;
       border-radius: 0; border: none; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
     .close { display: none; }
+    .p-back { display: grid; }
   }
   @media (max-width: 760px) {
     .sheet.ed { height: auto; }
@@ -1035,15 +1043,19 @@
   .lnk.dim { color: var(--fg-dim); }
   .lnk:hover { text-decoration: underline; }
   /* Card colour */
-  .sw-grid { display: grid; grid-template-columns: repeat(7, 30px); gap: 8px; align-items: center; }
+  .sw-grid { display: grid; grid-template-columns: repeat(7, 30px); justify-content: space-between; row-gap: 10px; align-items: center; }
   .sw { width: 30px; height: 30px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.14); cursor: pointer; padding: 0; position: relative;
     transition: transform .12s; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18); }
   .sw:hover { transform: scale(1.1); }
   .sw.on { border-color: var(--fg); box-shadow: 0 0 0 2px var(--card-base), 0 0 0 4px var(--fg); }
   .sw.auto span { position: absolute; inset: 0; display: grid; place-items: center; font-size: 8.5px; font-weight: 800; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.6); text-transform: uppercase; letter-spacing: .02em; }
   .sw-own { display: grid; place-items: center; }
-  .slider { display: grid; grid-template-columns: 116px 1fr 48px; align-items: center; gap: 10px; margin-top: 8px; text-transform: none; letter-spacing: 0; }
-  .slider span { font-size: 12.5px; font-weight: 600; color: var(--fg-muted); }
+  /* Label and value on one line, the slider under them at full width. */
+  .slider { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "l v" "r r"; align-items: center; column-gap: 10px; row-gap: 4px; margin-top: 12px; text-transform: none; letter-spacing: 0; }
+  .slider > span { grid-area: l; }
+  .slider > b { grid-area: v; }
+  .slider > input { grid-area: r; margin: 0; }
+  .field .slider > span { text-transform: none; letter-spacing: 0; font-size: 12.5px; font-weight: 600; color: var(--fg-muted); }
   .slider b { font-size: 12px; color: var(--fg-muted); text-align: right; font-variant-numeric: tabular-nums; }
   .slider input[type="range"] { width: 100%; accent-color: var(--accent); }
   .sheet.light .slider input[type="range"] { accent-color: #15171d; }

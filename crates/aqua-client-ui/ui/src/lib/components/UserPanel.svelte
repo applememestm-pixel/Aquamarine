@@ -160,7 +160,7 @@
     </div>
     <div class="who-text">
       <div class="who-name">{name}<EmojiStatus token={$profile.estatus} size={15} /></div>
-      <div class="who-sub">{subline}</div>
+      <div class="who-sub">{$t(subline)}</div>
     </div>
   </button>
   <div class="btns">

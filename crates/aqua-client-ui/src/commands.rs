@@ -128,6 +128,8 @@ pub async fn send_message(
             }
             out
         };
+        // The list shows the last message: tell it (it kept the old one).
+        let _ = app.emit("aqua://chats_updated", ());
         return Ok(SendResult { id: msg_id, time: msg_time });
     }
 
@@ -1698,6 +1700,36 @@ pub(crate) fn read_picked_bytes(app: &AppHandle, path: &str) -> Result<Vec<u8>, 
         .map_err(|e| format!("read picked file: {e}"))
 }
 
+/// Preview of a phone pick (`content://…`, no extension to go by): the type
+/// is sniffed from the bytes. `{kind, url}` — `url` is a data: URL for images.
+#[derive(serde::Serialize)]
+pub struct PickedPreview {
+    kind: &'static str,
+    url: Option<String>,
+}
+
+#[tauri::command]
+pub async fn picked_preview(app: AppHandle, path: String) -> Result<PickedPreview, String> {
+    use base64::Engine;
+    if !is_uri_pick(&path) {
+        return Err("not a picked URI".into());
+    }
+    let bytes = tauri::async_runtime::spawn_blocking(move || read_picked_bytes(&app, &path))
+        .await
+        .map_err(|e| e.to_string())??;
+    let k = infer::get(&bytes);
+    let kind = match k.map(|k| k.matcher_type()) {
+        Some(infer::MatcherType::Image) => "image",
+        Some(infer::MatcherType::Video) => "video",
+        Some(infer::MatcherType::Audio) => "audio",
+        _ => "file",
+    };
+    let url = (kind == "image" && bytes.len() <= 12 * 1024 * 1024).then(|| {
+        format!("data:{};base64,{}", k.map(|k| k.mime_type()).unwrap_or("image/jpeg"), base64::engine::general_purpose::STANDARD.encode(&bytes))
+    });
+    Ok(PickedPreview { kind, url })
+}
+
 /// A real local path for a picked file (copies URI picks into the app dir).
 fn materialize_picked(app: &AppHandle, data_dir: &std::path::Path, path: &str) -> Result<String, String> {
     if !is_uri_pick(path) {
@@ -3171,6 +3203,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                     }
                 }
             }
+            crate::bgnotify::incoming(&app, &gid);
             let _ = app.emit("aqua://incoming", IncomingEventPayload {
                 peer_id: gid,
                 text: inner,
@@ -3410,6 +3443,7 @@ async fn on_incoming_plaintext(app: &AppHandle, from: String, text: String) {
             if let Some(b) = s.chats.get_mut(&from) { b.summary.preview = crate::state::strip_bot_keyboard(&text); }
         }
     }
+    crate::bgnotify::incoming(&app, &from);
     let _ = app.emit("aqua://incoming", IncomingEventPayload {
         peer_id: from,
         text: crate::state::strip_bot_keyboard(&text),
@@ -3568,6 +3602,7 @@ async fn on_incoming_initial(
         push_peer_message(&mut s, &from, plain_text.clone(), &time);
     }
 
+    crate::bgnotify::incoming(&app, &from);
     let _ = app.emit("aqua://incoming", IncomingEventPayload {
         peer_id: from.clone(),
         text: plain_text,

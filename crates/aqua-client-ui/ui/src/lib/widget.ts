@@ -1,7 +1,7 @@
 /**
- * Android home-screen widget (android/widget/AquaWidget.kt): the unread
- * chats. Names and counts only, unless Settings → Notifications → "Message
- * text in the widget" is on; with an app passcode set, only the count.
+ * Android home-screen widget: the unread chats — who wrote and what (the
+ * text can be turned off: Settings → Notifications → "Message text in the
+ * widget"). With an app passcode set, names only, no text.
  */
 import { derived } from "svelte/store";
 import { invoke } from "@tauri-apps/api/core";
@@ -27,10 +27,10 @@ export function startWidget(): () => void {
       const data = JSON.stringify({
         title: "Aquamarine",
         unread: total,
-        empty: hidden && total ? tr("{n} unread", { n: total }) : tr("No new messages"),
-        rows: hidden ? [] : unreadChats.slice(0, 3).map((c) => ({
+        empty: tr("No new messages"),
+        rows: unreadChats.slice(0, 3).map((c) => ({
           n: c.name,
-          p: s.widgetText ? (c.preview ?? "").replace(/\s+/g, " ").slice(0, 80) : "",
+          p: !hidden && s.widgetText !== false ? (c.preview ?? "").replace(/\s+/g, " ").slice(0, 80) : "",
           u: c.unread,
         })),
       });

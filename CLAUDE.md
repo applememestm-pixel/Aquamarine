@@ -1,201 +1,41 @@
-# CLAUDE.md — памятка для Claude
+# CLAUDE.md
 
-Файл для ИИ-помощника (Claude Code), который работает над этим репозиторием. Здесь — как владелец хочет вести работу и что уже сделано. Читай его в начале каждой сессии и дополняй журнал в конце.
+Только правила и ловушки. Что и где менялось — `CHANGELOG.md` и код; сюда не пересказывать. Дописывай строку, только если без неё что-то сломается.
 
-## Проект
+## Работа с владельцем
+- Пишет по-русски, коротко, со скриншотами. Отвечай по-русски, по делу.
+- Каждая порция — новый PR в `main` по `.github/pull_request_template.md`, заголовок «Pre-release X.Y.Z-N». Мёржит владелец, без force-push. Смёржен — новая ветка от свежего `main`.
+- В PR: версия, `CHANGELOG.md`, `docs/releases/vX.md` (это текст окна «Что нового» — для людей).
+- Строки UI — по-английски через `$t()`/`tr()`, перевод в `crates/aqua-client-ui/ui/src/lib/i18n.ru.ts` (без дублей ключей).
+- Секреты в репозиторий не попадают; секрет в чате → посоветовать сменить.
+- `NavRail` (основная нижняя панель) не трогать. `MIN_VERSION` (`aqua-server/src/lib.rs`) поднимать только по прямой просьбе.
 
-Aquamarine — мессенджер со сквозным шифрованием (X3DH + Double Ratchet) и собственным ретранслятором.
+## Проверка (npm и crates.io локально закрыты — всё в CI)
+- `.github/workflows/checks.yml`. Лог: `gh api repos/applememestm-pixel/Aquamarine/actions/jobs/<id>/logs`.
+- Снимки UI: задача `ui screenshots (log)` → `tools/ui-shots.js` (base64 JPEG между `=====SHOT`/`=====END`).
+- Панель сервера (`crates/aqua-server-app/ui/index.html`) — Playwright с моком `window.__TAURI__`, **с CSP с nonce**, как у Tauri.
+- «Упал выпуск»: пустые шаги или HTTP 5xx при выкладке — это GitHub, `release-retry.yml` перезапустит.
 
-- `crates/aqua-core` — протокол и криптография; `wire.rs` описывает формат кадров (`RelayMessage`).
-- `crates/aqua-client-core` — транспорт (`transport.rs`: WebSocket, подтверждения, повторная отправка), хранилище, резервные копии.
-- `crates/aqua-client-ui` — приложение на Tauri 2: Rust (`src/`) и Svelte 5 (`ui/src/lib`). **Это отдельный Cargo workspace со своим `Cargo.lock`.**
-- `crates/aqua-server` — ретранслятор на axum 0.7 (`lib.rs`, `fed.rs` — федерация, `discovery.rs` — поиск серверов, `admin.html` — панель администратора).
-- `site/` — сайт; `docs/` — документация на русском; `docs/releases/vX.Y.Z.md` — описание выпуска.
+## Версии
+- Менять: `Cargo.toml`, `crates/aqua-client-ui/{Cargo.toml,Cargo.lock,tauri.conf.json,ui/package.json,ui/package-lock.json}`, `crates/aqua-server-app/{Cargo.toml,Cargo.lock,tauri.conf.json}`, `Cargo.lock`, `README.md`, `docs/README.md`, `docs/api.md`, `site/index.html`, `.github/ISSUE_TEMPLATE/bug_report.yml` (`sed` старой версии).
+- Схема: `X.Y.0-N` → выпуск `X.Y.1` → `X.Y.11`, `X.Y.12`… Сравнение: `ui/src/lib/updates.ts::newer` (= `aqua-server-app/src/updates.rs::newer`). Пре-выпуск: `[workspace.metadata.aqua] prerelease = true`.
+- RPM не принимает «-»: для него `X.Y.0+N` (`release.yml`).
 
-## Как работать с владельцем
+## Где что
+- `crates/aqua-core` — протокол; `crates/aqua-client-core` — транспорт/хранилище.
+- `crates/aqua-client-ui` — мессенджер (отдельный workspace): Rust `src/`, Svelte `ui/src/lib`.
+- `crates/aqua-server` — ретранслятор; `crates/aqua-server-app` — его приложение (отдельный workspace).
 
-- Владелец — энтузиаст, проект делает в одиночку. Пишет по-русски, коротко, часто присылает скриншоты. Отвечай по-русски, по делу, без канцелярита и «корпоративщины» (SECURITY.md нарочно короткий и человеческий).
-- Каждая порция работы — **новый pull request** в `main` по шаблону `.github/pull_request_template.md` (разделы «Что меняется / Как проверено / Совместимость и документация»). Мёржит владелец, не ты. Force-push не делать.
-- Если PR уже смёржен, новую работу начинай с новой ветки от свежего `main` (или пересоздай свою ветку от `main`) — в смёрженный PR не дописывать.
-- Перед пушем: `cargo test -p aqua-server`, `cargo test --workspace --exclude aqua-server`, `(cd crates/aqua-client-ui && cargo check)`, `(cd crates/aqua-client-ui/ui && npx svelte-check --threshold error)`. Интерфейс проверяй через Playwright с моком Tauri (`window.__TAURI_INTERNALS__.invoke`) на `npx vite --port 5199`.
-- Строки интерфейса — по-английски через `$t()` / `tr()`, перевод — в `ui/src/lib/i18n.ru.ts`. Интерфейс у владельца русский: каждую новую строку переводи.
-- Секреты (ключ подписи APK, пароли, токены ботов) в репозиторий не попадают никогда. Если владелец вставил секрет в чат — посоветуй его сменить.
+## Ловушки
+- Новый формат сообщения → `compat.ts::KNOWN`. Служебная приставка → `commands.rs::is_control_text`.
+- Удаление сообщений → `history_sync::tombstone`. Отправка своим устройствам → `multidev::send_to_own`.
+- Списки — только `Select.svelte`. Скругления — `calc(Npx * var(--rk, 1))`. Окна: крестик `data-x`, панель `data-back` (`lib/back.ts`).
+- «Сложная» настройка → `SettingsPanel.svelte::ADVANCED`. Платформа — `lib/platform.ts` (`IS_MOBILE`/`IS_DESKTOP`), не ширина окна.
+- Цвета — только через переменные темы (`theme.ts`), карточка профиля — `cardStyle.ts::cardLook` + класс `.light`.
+- Сервер: `fed::current()` — полная сеть, `fed::registry()` — любая; соло отдаёт только имена. Метка mesh `VIA` живёт в своей задаче — не `spawn`.
+- Панель сервера: `onclick="…"` работают только через `armAll`; блоки из `poll` перерисовывать только при изменении (`dataset.h`); новая настройка в `aqua-server/src/admin.html` → и сюда.
+- Обновления на Windows — тихий NSIS `/S` + перезапуск (`src/updates.rs` в обоих приложениях); без строки в `SHA256SUMS.txt` не ставится.
 
-## Версии и выпуски
-
-- Версия задаётся в `Cargo.toml` → `[workspace.package] version`. Её же меняй в `crates/aqua-client-ui/Cargo.toml`, `crates/aqua-server-app/Cargo.toml` и `tauri.conf.json` обоих приложений, `ui/package.json` (+ `package-lock.json`), `README.md`, `docs/README.md`, `docs/api.md`, `site/index.html`, `.github/ISSUE_TEMPLATE/bug_report.yml`. Lock-файлы обновит `cargo metadata --offline` (по разу на каждый workspace: корень, клиент, серверное приложение).
-- Когда новая версия попадает в `main`, `autotag.yml` ставит тег `vX.Y.Z` и запускает `release.yml`.
-- **Выпуск или пре-выпуск** задаёт `Cargo.toml` → `[workspace.metadata.aqua] prerelease`:
-  - `false` — полноценный выпуск (Latest). Так выпускаются крупные («глобальные») обновления — владелец говорит об этом прямо.
-  - `true` — пронумерованный пре-выпуск: отдельный выпуск на GitHub с пометкой Pre-release. **Каждый обычный PR — новый пре-выпуск.** В заголовке PR пиши «Pre-release 1.0.61» и, какой будет следующая версия.
-- **Нумерация:** после выпуска `1.0.6` пре-выпуски идут как `1.0.61`, `1.0.62`, `1.0.63`… (не `1.0.7`!). Следующий полноценный выпуск — `1.0.7`, после него `1.0.71`, `1.0.72`… Приложение понимает эту схему (`ui/src/lib/updates.ts::newer`: 1.0.7 > 1.0.62 > 1.0.61 > 1.0.6). Поэтому номер выпуска больше `X.Y.9` не бывает: после `1.0.9` следует `1.1.0`.
-- **1.2.0 — полноценный выпуск** (владелец: «пушь 1.2.0»). Следующие пре-выпуски — `1.2.0-1`, `1.2.0-2`…, следующий полноценный — `1.2.1`.
-- Список 04.11: 1.2.0-1 (2FA, регистрация, вёрстка, настройки), 1.2.0-4 (реестр имён и доступ к соло-серверу, индикатор «не через интернет», инструкции по своему серверу, фишки Telegram Tips, вход через Telegram). Дальше — подписанный список устройств (защита от подмены ключей). Владелец: соло-сервер отдаёт сети только uid и ник; без 2FA — «аккаунт на устройство», без восстановления.
-- **После `X.Y.0`** (с 1.1.0): номер `1.1.01` Cargo не принимает (ведущий ноль), поэтому пре-выпуски идут как `1.1.0-1`, `1.1.0-2`, … `1.1.0-10`, следующий полноценный — `1.1.1`, после него снова `1.1.11`, `1.1.12`… `newer` это понимает (1.1.1 > 1.1.0-12 > 1.1.0-1 > 1.1.0). Заголовок PR: «Pre-release 1.1.0-1».
-- В каждом PR: раздел в `CHANGELOG.md` и `docs/releases/vX.Y.Z.md` (его текст станет описанием выпуска на GitHub).
-- Старый движущийся выпуск `nightly` всё ещё пересобирается при каждом пуше в `main` (для старых версий приложения). Новое приложение в канале «каждая сборка» берёт самый свежий опубликованный выпуск, включая пре-выпуски.
-
-## Журнал: что уже сделано
-
-- **1.0.3** — жесты и «Назад» как в Telegram, смена @имени, «Сеть и прокси», удаление сообщений и чатов, код из письма подставляется сам, подпись APK постоянным ключом.
-- **1.0.4** — местное время отправки (метку ставит ретранслятор, `RelayMessage.ts`), настройка секунд, «Прочитать» везде, `BUILDS.json` для обновлений.
-- **1.0.5** — режим сервера (один / в сети), сеть по коду приглашения `aquafed:`, серверы сами знакомятся (`/v1/fed/hello`), список серверов в панели, почта через соседа (пароль SMTP не передаётся), @имя при слиянии остаётся за более старой учётной записью, «Не уходить с этого сервера», ответ двойным кликом на ПК.
-- **1.0.6** (выпуск):
-  - Подтверждения доставки (`ack=1`, `PayloadKind::Ack`, `RelayMessage.id`). Причина «половина сообщений не доходит»: молча умершее соединение телефона. Ретранслятор держит конверт в очереди на диске до подтверждения, клиент повторяет неподтверждённое и отбрасывает повторы.
-  - Клиент переключается только между серверами федерации своего сервера (`servers.ts`). Раньше брал любой сервер, где когда-то бывал.
-  - Сверка ключей: код безопасности из обоих ключей, щит на каждом зашифрованном личном чате, отметка о сверке сохраняется, при смене ключа — предупреждение. Раньше щит был только у демо-чатов, и найти сверку было нельзя.
-  - Анимированные стикеры (.tgs, .webm) в сообщениях: раньше показывались через `<img>` и были «битыми».
-  - Звонки: на телефоне вместо демонстрации экрана — переключение передней и задней камеры. Демонстрацию с ПК на телефоне можно открыть на весь экран, повернуть и увеличить двумя пальцами.
-  - Пре-выпуски с номерами, короткий SECURITY.md, схема в README в рамках, этот файл.
-
-- **1.0.61** (пре-выпуск) — список владельца от 24.10:
-  - Обновления: `update_download` докачивает (`.part` + `.part.sha256`, Range); Android сравнивает подписи до установки (`AquaRelay.kt` → `signatureMismatch`) и просит разовую переустановку. Секрет `ANDROID_KEYSTORE` в CI задан — несовпадение только у старых установок.
-  - Уведомления: `tauri-plugin-notification`, `ui/src/lib/notify.ts`, по умолчанию включены (`notifyOnV2`).
-  - Ретранслятор объявляет внешний адрес, только если тот ведёт на него же (`public.rs`: `instance` в `/v1/stats`) — так ушли адреса выхода VPN («Франкфурт»). Клиент: «Добавить сервер» / «Забыть» (`servers.ts`).
-  - Код-пароль: `LockConf.kind = "pin"` — 4 цифры и экранная клавиатура (`LockScreen.svelte`).
-  - «Новое сообщение» — `NewChatSheet.svelte`; `start_chat_with` проверяет, что @ник существует (профиль или ключи).
-  - «Ответы» — служебный чат `__replies__` (`commands.rs::reply_note/push_replies`), только чтение.
-  - Комментарии под постами канала — полоса `.cmt-bar`; цитаты ответов — цвет автора, переход к исходному.
-  - Совместимость: `ui/src/lib/compat.ts` — неизвестный `[kind:vN]` показывается как «обновите приложение». **Новый формат сообщения → добавь его в `KNOWN`.**
-  - Панель: `/v1/admin/detail/:what`, `journal.rs` (`aqua-journal.log`, `AQUA_JOURNAL`), метка `kind` у блобов (`.k.<cid>` рядом с блобом).
-
-- **1.0.62** (пре-выпуск) — служебный `[status:v1]` (с днём рождения из профиля) показывался как сообщение: он приходил первым пакетом X3DH (`on_incoming_initial`), который сохранялся без разбора. Теперь все расшифрованные пакеты идут через `commands.rs::on_incoming_text`, а служебные приставки перечислены в `is_control_text`. **Новая служебная приставка → добавь её туда.** `multidev::send_to_address` не открывает сеанс статусом, «печатает» или прочтением; `state::stray_control` чистит историю при запуске.
-  - Список 24–26.10:
-    - `Select.svelte` вместо всех `<select>` (владелец: «никаких серых меню»). **Новый выпадающий список — только через него.** Список рендерится в `<body>`, так что «клик снаружи» в попапах должен пропускать `.aq-list`.
-    - Профиль: `card` и `pattern` в `Profile` и в публичной карточке; `cardStyle.ts`; заготовка «You» не публикуется (`people.ts::myPublicName`, `adoptMyCard` при входе).
-    - QR: `qr.ts`, `QrCode.svelte`, `QrScanner.svelte`. Уровень «Q» и квадратные модули: круглые точки не читались.
-    - Радиусы: `border-radius: calc(Npx * var(--rk, 1))`, `--rk` задаёт настройка «Форма» (`theme.ts` → `corners`). **Новые скругления пиши так же.**
-    - `app.css`: на телефоне модальные окна ужаты до `100vw − 16px`. Полноэкранным слоям нужен класс `fullscreen-layer`.
-    - Звонок на телефоне: слой `.watch` (поворот CSS-ом, пинч).
-    - Файлы: `open_saved_file`, повторное скачивание того же `cid` не делается, `sanitize_name`.
-    - Аккаунты на ПК — `UserPanel.svelte`. Приватность: `chatLockUi.ts`. Отпечаток: `tauri-plugin-biometric` (только mobile, `capabilities/mobile.json`), `lock.ts::unlockBiometric`.
-  - Список 27.10:
-    - Комнаты по зажатию иконки сервера: `ChatList.svelte` (`roomsPop`) → `roomNav.ts::openRoomRequest` → `ChatWindow::pickRoom`.
-    - «Данные и память»: `src/storage.rs` (`storage.json` в папке аккаунта; `downloads_dir` теперь отсюда; лимиты — `trim` после каждой загрузки и при старте; удаляются только файлы с `saved_at`), `export_chats`.
-    - Сервер: `aqua-server/src/datadir.rs` выбирает папку и делает её текущей до всего остального (все файлы сервера — относительные пути). `/v1/admin/datadir`. Встроенный: `relay_host_set_dir`, `relay-dir.txt`.
-    - Трей и автозапуск: `src/tray.rs` (фича `tray-icon`), `tauri-plugin-autostart` (только desktop, `capabilities/desktop.json`), `lib/desktop.ts`. Окна чатов: `lib/popouts.ts`.
-    - Аватарки: `border-radius: var(--ava-r, 50%)` (настройка `avatarRadius`). Энергосбережение — классы `ps-*` на `<html>`.
-
-- **1.1.0** (выпуск, «играем по-крупному»):
-  - «Что нового»: `WhatsNew.svelte` (`maybeShowWhatsNew` в `App.svelte`, ключ `aqua.whatsNew.seen`, настройка `whatsNew`). Текст вшивается при сборке: `vite.config.ts::notes` берёт `docs/releases/v<version>.md` и дату из CHANGELOG → `__AQ_NOTES__`. **Описание выпуска = текст окна, пиши его для людей.**
-  - Эмодзи-статус: `profile.estatus` → `extra.es` в карточке, `people.ts::emojiStatusOf`, `EmojiStatus.svelte`; сервер (`update_profile`) нормализует «-»/«» в null и ограничивает 30 смен в час (`ES_PER_HOUR`).
-  - Аватарки: `--ava-r` (люди), `--ava-r-group`, `--ava-r-chan` (классы `ava-grp`/`ava-chan`). Память: `Donut.svelte`, `storage.rs::storage_traffic`.
-  - Поле ввода: кнопка эмодзи `.emoji-in` внутри `.input-wrap` справа (`data-emoji-anchor` — по нему ставится панель), отправка — самолётик (`icons.send`). Lottie рисуется с `dpr ≥ 2`.
-  - CI Android: методы окна, которые есть только на ПК (`unminimize` и т. п.), — под `#[cfg(desktop)]`. Локально под Android не собрать (нет NDK), лог CI: `gh api repos/…/actions/jobs/<id>/logs`.
-  - Docker: сервер снова в образе `ghcr.io/<owner>/aquamarine-server` (job `relay-image` в `release.yml` берёт готовые linux-x64/arm64 бинарники, `docker/relay-bin.Dockerfile`; из исходников — `docker/relay.Dockerfile` со своим `.dockerignore`). Данные — том `/data`, контейнер `aquamarine-server`. Инструкция — `docs/docker.md` (и на сайте). Корневой `Dockerfile` — по-прежнему только сайт.
-  - Сайт: тур — карусель (`motion.js`, `.tour`), ассеты в `site/assets` (Noto CC BY 4.0, DiceBear CC0, Wikimedia), наборы владельца — `tools/site-packs.sh` → `site/assets/packs/manifest.json`. Telegram-наборы без токена бота отсюда не скачать.
-
-- **1.1.0-1** (пре-выпуск) — список 27–28.10:
-  - Подпись к файлу: `FileEnvelope.caption` (провод — `cap`), `MessageKind::File.caption`, параметр `caption` у `attach_file*`/`attach_bytes`.
-  - Звонки в истории: `note_call` пишет системную строку `[call:v1]{dir,status,dur,video}`; `ChatWindow::callLine`.
-  - Телефон: `lib/back.ts` закрывает любой `[role=dialog][aria-modal=true]` и `[data-back]` (Esc → клик по `[data-x]`/`.close`). **Новое окно: крестик помечай `data-x`, боковую панель — `data-back`.** На Android `[data-x]` скрыт (`html.android`). Полноэкранный на телефоне диалог — `data-phone-full`.
-  - `lib/power.ts` — энергосбережение (`power` — производный стор, классы `ps-*`); `lib/tabSwipe.ts`; `lib/links.ts`.
-  - Почта: `directory.rs::send_smtp_any_port` (IPv4 первым), при неудаче — `fed::send_mail` к соседу.
-  - Версии после 1.1.0: `1.1.0-N`. Android `versionCode` у `1.1.0-N` тот же, что у 1.1.0 (Tauri берёт только X.Y.Z) — установка поверх работает.
-
-- **1.1.0-2** (пре-выпуск) — «доделай всё» 28.10:
-  - ID аккаунта: `users.uid` = `uid_for(identity_dh)` (детерминированно — у старых строк одинаков на всех узлах; у ботов в хеш подмешано имя). `fed_apply_user` ищет строку по `uid`; тот же @ник с другим ID — старший сохраняет имя, младший получает `displaced_name` (`имя_` + хвост ID) везде; локальный — через `move_account` + `move_live` (без пересылки старого имени). Клиент: `Transport::connect` спрашивает `/v1/me` и переходит на имя от сервера (`aqua://displaced`); `people.ts` помнит `uid` собеседника и при смене зовёт `follow_peer_by_uid`.
-  - Директ канала: `CDM_PREFIX`, `channel_dm_open`, отправка — через `send_message` для `dm~…` (только текст; `sendControl` для `dm~` ничего не шлёт). Включается `settings.direct` канала.
-  - `attachMenu.ts` (порядок = порядок `attachFront`, `attachHidden`, `attachDock`, `attachBots`). **Основную нижнюю панель (`NavRail`) владелец просил не трогать** — «нижний бар» в его списках значит панель в чате (📎).
-  - Стекло: `html.glass`, `--glass-a`, `--glass-blur`; в чате `--above-h`/`--below-h` меряются по соседям `.msg-stage`, им ставится `data-gf`.
-  - Плагины: Web Worker из Blob (CSP `worker-src 'self' blob:`), до кода плагина из воркера удаляются `fetch`/XHR/WebSocket/… Хуки: `onSend`, `onIncoming`, `command`; встроенные `/команды` плагин занять не может.
-  - Виджет: `android/widget` (Kotlin + res), копируется в CI и `patch-project.*`; данные — JSON через `widget_update` (`lib/widget.ts`). iOS-виджет не сделан: нужен отдельный WidgetKit-таргет, App Group и подпись, а iOS-сборка у нас неподписанная.
-  - QR: `qr.ts` (`aqua:srv`, `aqua:join`, `saveInvite`/`inviteFor`), коды приглашений — `AdminConfig.invites`, `redeem` при запросе кода на почту. В `admin.html` встроен `qrcode-generator.js` (MIT) через `__QRLIB__`.
-
-- **1.1.0-3** (пре-выпуск): основная панель вкладок снова без настроек (`navBar.ts` удалён), ссылка на YouTube (`links.ts`, подвал сайта).
-  - «Дичь» со скриншота владельца — это **увеличение двумя пальцами любого медиа прямо в чате** (`lib/pinchZoom.ts`: копия поверх всего, растёт под пальцами, возвращается на место; на время жеста у `<html>` класс `pinching` — таймеры зажатия его проверяют). Плавающую клавиатуру бота сделал по ошибке и убрал.
-  - Зажатый стикер/эмодзи: палец ведёт по соседним (`elementFromPoint` + `[data-pk]`), прокрутку на это время гасит `touchmove` с `preventDefault` (иначе `pointercancel` закрывал просмотр). Оверлей просмотра — `pointer-events: none`.
-
-- **1.1.0-4** (пре-выпуск):
-  - CI Linux: RPM не принимает «-» в версии → для `1.1.0-N` сначала `--bundles appimage,deb`, потом `--bundles rpm --config '{"version":"1.1.0+N"}'`. **Номера `X.Y.0-N` ломают только RPM; MSI на Windows их принимает (цифры после «-»).**
-  - Чаты на нескольких устройствах (до 1.1.0-5): история хранилась на каждом устройстве своя. Новое устройство получает только то, что пришло после его подключения, и то, что было в резервной копии. Старые клиенты собеседников шлют только на основное устройство (`user`), без `user~id`. `own_device_message` больше не создаёт чат с собственным @ником; `list_chats` его не показывает и пропускает `dm~…` (раньше фильтр `~` их прятал).
-  - `docs/network.md` + блок в `NetworkSettings.svelte`: DNS, VPN, zapret, роутер.
-
-- **1.1.0-5** (пре-выпуск, заменён в 1.1.0-6) — владелец: «обязательно, без кнопок, автоматом»:
-  - `history_sync.rs`: через 8 с после подключения и каждые 4 мин каждому своему устройству — чаты, которые оно не подтвердило в этой версии (`version` = число сообщений + хеш последнего), все группы и надгробия. JSON → DEFLATE → `encrypt_file` → блоб на ретрансляторе; ключ — `[hist:v1]` по E2EE на конкретный адрес. Приём только от своего аккаунта (`on_incoming_text`, ветка «my other device»), ответ `[histack:v1]{vers}`. Без ответа — повтор через 3 ч. Состояние — `hist-sync.json` в папке аккаунта.
-  - Слияние `merge`: ключ сообщения = автор («me» = моё имя) + время до минуты + текст (у правленого — первый вариант) / CID файла. Недостающее вставляется после последнего общего, одинаковые считаются поштучно. Чужой `saved_at`, которого нет на диске, обнуляется.
-  - Удаления: `tombstone()` (вызывают `delete_chat`, `delete_messages_local`, `apply_delete_ex`) — SHA-256 ключа, первые 8 байт. Другое устройство удаляет совпадающее и не вставляет его снова; опустевший чат удаляется.
-  - **Новое место, где удаляются сообщения, → вызови `history_sync::tombstone`, иначе удалённое вернётся с другого устройства.**
-
-- **1.1.0-6** (пре-выпуск) — владелец: «пусть всё хранит сервер, хоть зашифрованным; какие 4 минуты?!». Обмен напрямую из 1.1.0-5 заменён хранилищем на ретрансляторе:
-  - Сервер: таблица `hist_store(username, k, seq, data, updated_at)`, `/v1/me/hist` (список с `since`), `/v1/me/hist/:k` (GET/PUT, ≤ 8 МБ, ≤ 1 ГБ на учётную запись, `kid` — только первая запись, иначе 409). Федерация: `/v1/fed/hist`, `fed::sync_hist`. Переименование переносит записи (`move_account`).
-  - Клиент `history_sync.rs`:
-    - Ключ истории — 32 байта, запись `histsync:key` в хранилище. Первое устройство делает его и пишет `kid`. Новое берёт из резервной копии или получает `[hkeyreq:v1]` → `[hkey:v1]` от своего устройства, со сверкой с `kid`.
-    - Записи: страницы чата по 200 (`p:<chat>:<n>`), карточка (`m:<chat>`: имя/вид + надгробия), `groups`. Имя записи — `sha256(key‖0‖label)[..20]`. Содержимое — JSON → DEFLATE → ChaCha20-Poly1305 (AAD = имя).
-    - Цикл: каждые 2 с выгрузка изменённого (по `version`) + `[hpoke:v1]` своим устройствам; загрузка по толчку, при подключении и раз в минуту.
-    - `hist-sync.json`: курсор по адресу сервера, хеши выгруженного, надгробия.
-    - Если загрузка страницы ничего не добавила, своя страница с тем же номером считается выгруженной — без «пинг-понга» между устройствами.
-  - Слияние и надгробия — как в 1.1.0-5 (`merge`, `tombstone`).
-
-- **1.1.0-7** (пре-выпуск) — владелец: «2fa и настройку в шифровку — отключить подключение устройств, обязательно»:
-  - Сервер: `totp.rs` (RFC 6238, HMAC-SHA1, base32, резервные коды — SHA-256), колонка `users.security` (JSON `Security`: `lock`, `totp`, `pending`, `backup`, `last`) — в `FedUser.security`, копируется по федерации. `Directory::sign_in_gate` — после пароля, только для ключа, которого ещё нет в учётной записи; зовут `login_checked` и `backup_fetch`. Пройденная проверка помечается за тикетом (`email_codes.mfa` = 1 код / 2 ключ восстановления), 5 неверных (`mfa_fail`) — тикет сгорает. `recovery` (check ключа восстановления) открывает и запрет, и код. API: `/v1/me/security`, `/v1/me/2fa/{setup,enable,disable,backup}`.
-  - Клиент: `devtrust.rs` — доверие своим устройствам по id ключа (сессия `peer.dh_pub` или пакет ключей), `dev-trust.json`. Первый взгляд (`init`) доверяет всем текущим устройствам. `multidev::send_to_own` (через неё `to_my_devices`, свои копии в `fanout_offline`, ключ истории) не шлёт неподтверждённым и не тянет их пакет ключей повторно (`KEY_OF`). В `on_incoming_text` свои сообщения от неподтверждённого устройства отбрасываются. Незашифрованное «от себя» отбрасывается всегда. `[devok:v1]`/`[devno:v1]` — в `is_control_text`. **Новая отправка своим устройствам → только через `send_to_own`/`to_my_devices`.**
-  - UI: `DeviceApproval.svelte` (окно, событие `aqua://device_pending`), `SignInProtection.svelte` (стили скопированы — у `SettingsPanel` они scoped), шаги 7 (код) и 8 (ключ восстановления) в `RegistrationWizard`, функция `gate()` разбирает ответы сервера.
-  - Не закрыто: собеседники шифруют для всех устройств из списка ретранслятора — нужен подписанный список устройств.
-
-- **1.2.0** (выпуск) — владелец: «пушь 1.2.0 и сделай 2fa обязательной, прекрати поддержку всех версий до 1.2.0»:
-  - Обязательная 2FA: `AdminConfig.optional_2fa` (по умолчанию `false` = обязательна, переключатель в `admin.html`). `lib.rs::needs_2fa` — есть учётная запись, не бот, нет TOTP → `/v1/ws` 403, `/v1/me` `need_2fa`. `disable` → 403; перенос в другое приложение — `totp_setup_with(code)`.
-  - Клиент: `Transport::connect` при `need_2fa` возвращает `NEED_2FA`; `Transport::me_call_at` входит по HTTP сам (без соединения). `security.rs::call` — через соединение или по `server_url`. `stores.ts::connect` ловит ошибку, ждёт `requireTwoFactor` (`TwoFactorGate.svelte`) и подключается снова — так продолжаются и шаги мастера входа.
-  - Версии: `lib.rs::MIN_VERSION = "1.2.0"`, `version_gate` (middleware) — 426 на «дверях» приложения (`app_door`), версия из `x-aqua-version` / `User-Agent` / `?v=`. Схема номеров: `X.Y.Z-N` новее `X.Y.Z`. Клиент: `http_client` шлёт заголовок, WS — `&v=`, `check_server` (в `sign_in` и запросе кода) требует `version` ≥ 1.2.0 в `/v1/stats`. Федерация: `Fed` шлёт `User-Agent: aqua-server/…`, `fed::check` → 426 старым, `Fed::modern` не ходит к старым соседям. **Поднимаешь `MIN_VERSION` — это снова отрезает старые версии; только по прямой просьбе владельца.**
-  - Тесты: в e2e/federation клиент — `test_http()` с версией, у WS `&v=`, 2FA в них необязательна (`spawn_server_with(false)`), отдельный `two_step_codes_are_required`.
-
-- **1.2.0-1** (пре-выпуск) — список владельца 04.11 (п. 1, 4, 5, 8, 13):
-  - 2FA по выбору: `needs_2fa` и `require_2fa` удалены, `/v1/ws` её не проверяет, `disable` работает, переключателя в `admin.html` нет. `AdminConfig.optional_2fa` оставлен только для чтения старых файлов (`skip_serializing`). `TwoFactorGate` остался — для серверов 1.2.0.
-  - Регистрация без почты: `Directory::register_plain` / `sign_in_plain`, `/v1/users/signup`, `/v1/users/signin`, `/v1/me/backup`. **Без TOTP учётная запись привязана к устройству**: `signin` → `DeviceBound` (403), `PUT /v1/backup` → 403, история `HIST_LIMIT_PLAIN` = 64 МБ. Счётчик неверных входов по имени — в памяти (`name_fails`, 10 за 15 мин → 429). Соль `auth_secret` — `@имя` (`commands.rs::login_salt`), для старых — почта (сервер ищет учётную запись по почте, если логин похож на адрес). Клиент: `signup_plain`, `signin_plain`, `backup_restore` с пустым `ticket` берёт копию через `fetch_my_backup`.
-  - `AdminConfig::permits_name` — список «Разрешённые» принимает @имена; `redeem` пишет туда `@имя`.
-  - `RegistrationWizard.svelte` переписан: шаги 1 (форма), 4 (ключ к копии), 7 (код), 8 (ключ восстановления). Почтовые шаги и сброс пароля удалены (сервер их ещё держит для 1.2.0).
-  - Шапка чата на телефоне: меню звонка/88/таймера — `.hm-drop` в потоке под шапкой (`slide`), а не `.ttl-pop` поверх; тело таймера — сниппет `ttlPanel`. ⓘ на телефоне скрыта. **Новое меню шапки на телефоне — тоже в `.hm-drop`.**
-  - Настройки: `settings.advancedSettings`, множество `ADVANCED` в `SettingsPanel.svelte`. **Новый «сложный» раздел → добавь его id в `ADVANCED`.**
-  - CI: `.github/workflows/checks.yml` на каждый PR. В облачной сессии crates.io и npm могут быть закрыты — тогда проверка только там (`gh run view --log-failed`).
-
-- **1.2.0-4** (пре-выпуск; номера 1.2.0-2 и 1.2.0-3 не выпускались — владелец: «объедини всё в 1.2.0-4», PR #28 и #29 закрыты) — п. 2 и 3 списка 04.11:
-  - Реестр имён: `FedConfig::registry()` = соло + секрет + `peers`. `Fed::new` создаёт `Fed` и для него; **`fed::current()` — только полноценная сеть, `fed::registry()` — любая** (для имён и пропусков). Таблица `fed_names` (`Directory::names_since`, `fed_apply_name`, `reserved_elsewhere` — проверяется в `register`, `register_plain`, `rename_user`). Соло-сервер: `names_hello` раз в 3 мин, `sync_names` с `peers`. Сеть: `FedConfig.solo_peers` (из `/v1/fed/names/hello`), `sync_names` с них. **Соло-сервер ничего, кроме имён, не отдаёт и не берёт.**
-  - Пропуск: `/v1/me/pass` → `aqpass:<b64url {u,h,x,n}>.<hex HMAC(секрет, "aqpass|"…)>`, 10 мин, одноразовый (`check_pass`, в памяти). Правила `AdminConfig::permits_pass`: `*@host`, `@name@host`, `host_of` убирает схему и путь. Клиент: `security::pass_create`, Настройки → «Аккаунт и сервер», поле `inviteText` в мастере.
-  - Защита от подмены ключей (подписанный список устройств) — следующий PR.
-
-- **1.2.0-4**, продолжение — п. 6 и 7 списка 04.11:
-  - Метка «без интернета»: `mesh.rs` — `tokio::task_local! VIA` («bt»/«lan», по имени устройства `lan:…`), `AppCtx.deliver` оборачивает приём в `VIA.scope`, `state::classify_full` пишет `MsgMeta.via`. UI: `mesh.ts::offlineLink` (главная, вместо мс), `nearbyVia` (шапка чата, `NEARBY_SECS` = 180), флаг в `msgFlags`. **Если приём из mesh станет `spawn`-ить задачи, метка потеряется — `VIA` живёт только в этой задаче.**
-  - Настоящая передача по Bluetooth уже была (`mesh*.rs`, как Briar); ограничения — `docs/bluetooth.md`.
-  - `docs/self-hosting.md` — инструкция для новичков (на сайте `docs.html?d=self-hosting`, ссылка в «Сервер на устройстве»). Пути меню роутеров приблизительные, в тексте сказано. Двойной щелчок по `aqua-server` слушает только `127.0.0.1` (`AQUA_LISTEN` по умолчанию) — в инструкции это сказано.
-
-- **1.2.0-4**, Telegram (п. 10–11):
-  - Вход через Telegram: `aqua-server/src/tglogin.rs` (`/v1/auth/tg/start|poll`, тикеты в памяти, `getUpdates` только пока кто-то ждёт; токен — `packs::bot_token()`). `Security.tg`/`tg_name`, **`Security::portable()` = TOTP или Telegram** — от неё зависят перенос, копия и объём истории. `sign_in_plain_tg`, `/v1/me/tg`. Клиент: `lib/tgLogin.ts::confirmWithTelegram`, шаг 9 мастера, строка в `SignInProtection`. Тест — `tglogin::test_ticket`.
-  - Запрет пересылки в 1:1: `lib/noShare.ts` (`[ctl:v1]{"t":"noshare"}`), `protectedChat` в `ChatWindow` теперь и для личных чатов. Скриншоты на Android не запрещены (нужен FLAG_SECURE в нативном коде).
-  - Дата: токен `<t:UNIX>` (`markup.ts`, тип `date`, `fmtDate`/`dateToken`), чип в `RichComposer`, кнопка 📅 на панели форматирования.
-  - GIF с подписью: `send_gif(caption)`, зажатие/правый клик в `MediaPicker`.
-  - Живые фото: категория `live`/`live-loop`/`live-bounce`, `attach_file_as` с этими режимами, `motion_photo_clip`, `has_motion_clip`, `lib/liveMotion.ts::livePlay`, выбор в `SendDialog`.
-  - Боты: сервер пускает бот→бот (`b2b:` лимит, `BotUpdate.from_bot`); клиент `lib/botHelpers.ts` — гости по @упоминанию и секретарь (`bot_hand_over`). Секретарь отвечает последнему написавшему — для нескольких людей сразу нужна очередь. Конструктора ботов нет.
-
-- **1.2.0-5** (пре-выпуск) — владелец: «делай все крупные шаги; сервер — отдельным приложением; функции телефона и ПК не смешивать; регаться 1 раз»:
-  - Подписанный список устройств: `aqua-core/src/devlist.rs` (цепочка подписей, `Accepted::{First,Chained,Reset}`), сервер `users.devlist` + `put_devlist` (проверяет подпись, что подписант — устройство учётной записи, версию), клиент `devlists.rs`: `allowed`/`allowed_id` (в `multidev::send_inner` для чужих — по ключу сеанса/пакета, в `fanout` — по id), проверка в `on_incoming_text`, `publish` из `devtrust` (`republish` при старте, раз в 3 мин, после подтверждения/отказа). **Список меняет только устройство, уже стоящее в нём; удаляет устройство из списка, только когда его нет на ретрансляторе.** `dev-lists.json` — принятые списки. Сброс — `devlist_reset`.
-  - Регистрация один раз: пропуск теперь несёт `i` (uid); `signup` с пропуском и пустым @именем → `Directory::register_joined` (то же имя и uid, пароль необязателен), ответ JSON `{username, joined}`. Клиент: `passUserOf` в мастере читает имя из пропуска, `signup_plain` возвращает имя. Тест `a_new_relay_knows_everyone_after_its_first_sync`.
-  - **Aquamarine Server** — `crates/aqua-server-app` (отдельный Cargo workspace, исключён из корневого; страница `ui/index.html` без сборки, `withGlobalTauri`). Запуск при открытии (`server-app.json`: port, dir, run, tray), трей + автозапуск (`--hidden`), Android — `android/AquaServer.kt` (`AquaServerPlugin`/`AquaServerService`, пакет `app.aquamarine.server`). Папка данных: своя → `datadir::remembered()` (общая с консольным) → папка встроенного сервера мессенджера (`app.aquamarine.desktop/relay`) → `~/Aquamarine Server`. Панель администратора — с 1.2.0-6 своя (см. ниже). CI: `release.yml` (`server-app`, `server-app-android`), `checks.yml` (`server-app`), `server-app-android.yml` (APK на PR, если тронут сервер).
-  - Мессенджер: `relay_host.rs` — только Android-плагин (ссылки, виджет, перезапуск); команды `relay_host_*`, автостарт в `App.svelte` и зависимость `aqua-server` удалены. Kotlin-служба `AquaRelayService` в клиенте осталась мёртвым кодом.
-  - «Падают телефоны и маки при мёрже»: это задача `mobile (ios, unsigned)` — `cancelled` с «The job was not acquired by Runner of type hosted» (у GitHub нет свободных macOS-машин). Код ни при чём. `release-retry.yml` перезапускает упавшие задачи выпуска (`gh run rerun --failed`, до 3 попыток). **Прежде чем чинить «упавший выпуск», смотри `steps` и аннотации задачи — пустые шаги = машину не дали.**
-  - ПК/телефон: `lib/platform.ts` (`IS_MOBILE`/`IS_DESKTOP`, `kbd()`). **Функцию одной платформы прячь по `IS_MOBILE`/`IS_DESKTOP`, а не по ширине окна; настройку, пришедшую с другой платформы, гаси при применении** (как `glass` в `theme.ts`, `pushToTalk` в `callSettings.ts`).
-
-- **1.2.0-6** (пре-выпуск) — владелец: «не сайт открываться, а в приложухе через таури рисовать, полностью user-friendly»:
-  - `aqua-server-app/ui/index.html` — своя панель (разделы-функции `pageHome`, `pagePeople`, `pageAccess`, `pageNetwork`, `pageMail`, `pageStickers`, `pageSettings`; опрос `poll` раз в 4 с). Данные — те же `/v1/admin/*`, что у `admin.html`, через команду `admin(method, path, body)` в `lib.rs` (только пути `/v1/admin/`, токен остаётся в Rust). iframe, `open_admin_window` и `Status.admin_url` удалены. QR — `ui/qrcode.js` (копия `aqua-server/src/qrcode-generator.js`). **Новая настройка сервера в `admin.html` → добавь её и сюда.**
-  - Переводы — словарь `RU_DICT` прямо в странице (язык — `navigator.language`).
-
-- **1.2.0-7** (пре-выпуск) — владелец: «колхозно выглядит баннер» + список по профилю:
-  - Карточка: `cardStyle.ts::cardLook(card, intensity, length, shell)` → фон, `top`/`base`, `light` (тёмный текст, если он контрастнее на худшем участке градиента). `Profile.card_i`/`card_g` (публикуются как `extra.ci`/`extra.cg`). Класс `.light` у `.sheet` (`ProfileModal`) и `.card` (`UserPanel`) переопределяет `--fg*`, `--border*`, `--bg-input`. **Новый элемент в карточке профиля → цвета только через переменные, иначе на светлой карточке он пропадёт.**
-  - `EmojiPick.svelte` — выбор любого эмодзи / элемента наборов (`emojiPacks` — это все наборы с `source`, и стикеры тоже); вешается в `<body>` с `position: fixed` (колонки редактора прокручиваются и обрезали бы его). `EmojiStatus zoom` — крупный просмотр (тоже в `<body>`).
-  - `BirthdayInput`: значение может быть «март», «1998», «15-е число»; разбор `parse` это понимает.
-  - Чат `welcome` удалён (`state.rs`), `listChats` его отфильтровывает у старых установок.
-  - Обновления: `updateId` сравнивает версии нумерованных выпусков, коммит — только для `nightly`.
-
-- **1.2.0-8** (пре-выпуск) — владелец: «надо чтобы была автообнова»:
-  - `aqua-server-app/src/updates.rs`: цикл (20 с после старта, потом раз в 3 ч; 15 мин, пока файла выпуска ещё нет), `newer` — копия `updates.ts::newer` с тестом. Файлы: `AquamarineServer-Setup.exe` / `.dmg` / `.AppImage` / `aquamarine-server.deb` / `.apk`; без строки в `SHA256SUMS.txt` не ставится. Windows: `cmd /C "ping … & setup /S & start exe [--hidden]"` (`raw_arg`, `CREATE_NO_WINDOW`), затем `app.exit(0)`. Команды `update_status`, `update_now(install)`, `set_auto_update`, `open_notes`; `Conf.auto_update`.
-  - В панели (`ui/index.html`) блоки, которые обновляет `poll`, перерисовывай только при изменении (`dataset.h`), иначе клики теряются — так было с выбором режима.
-  - `checksums` в `release.yml` ждёт и серверное приложение; `release-retry.yml` перезапускает `main`, только если это последний коммит.
-
-## Открытые вопросы
-
-- Подлагивание при смене чата и «зависание при открытии профиля» (24.10) не воспроизведены: список сообщений уже рисуется окнами по 40. Нужен лог `[aqua-fps]` / `[aqua-click]` с устройства владельца.
-- Отпечаток пальца (`tauri-plugin-biometric`) и сканер QR на Android собраны, но не проверены на живом телефоне.
-- Настоящая демонстрация экрана с Android требует нативного плагина (MediaProjection) — не сделано.
-- Запрет скриншотов в чатах с запретом пересылки (Android FLAG_SECURE) и конструктор ботов без кода — не сделаны. Серверное приложение и подписанный список устройств проверены только сборкой и тестами — на живых устройствах их ещё никто не запускал.
-- Ретранслятор владельца определял свой белый IP через VPN (195.178.4.x — Франкфурт). С 1.0.61 такой адрес не объявляется; если панель пишет «не ведёт сюда», нужен проброс порта на роутере или выключенный VPN.
-- Стикеры владельца (CeZeOs_NaVeKa, ThatsLife7, …) и эмодзи eltaller47 на сайте — заглушки, пока владелец не запустит `tools/site-packs.sh` на машине с сервером.
-- Домен сайта: DNS верный, но GitHub Pages не выпустил сертификат — владельцу советовали удалить и снова добавить домен в Settings → Pages и включить Enforce HTTPS.
+## Открыто
+- Не проверено на устройствах: биометрия, сканер QR, список устройств, автообновление.
+- Не сделано: демонстрация экрана с Android, FLAG_SECURE, конструктор ботов.

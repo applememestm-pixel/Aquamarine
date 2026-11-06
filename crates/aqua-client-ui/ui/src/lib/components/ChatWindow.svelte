@@ -1895,6 +1895,23 @@
   const WINDOW_STEP = 80;
   let shownCount = $state(WINDOW_FIRST);
   let shownRows = $derived(rows.length > shownCount ? rows.slice(rows.length - shownCount) : rows);
+  // Only messages that arrive while this chat is open animate in, like
+  // Telegram: every bubble used to replay its entrance on each redraw
+  // (switching chats, loading history) — the jitter people saw.
+  let freshChat = "";
+  let freshKnown = new Set<string>();
+  let fresh = $state(new Set<string>());
+  $effect(() => {
+    const chat = $activeId ?? "";
+    const ids = rows.map((r) => r.id);
+    untrack(() => {
+      if (chat !== freshChat) { freshChat = chat; freshKnown = new Set(ids); fresh = new Set(); return; }
+      const added = ids.filter((x) => !freshKnown.has(x));
+      for (const x of added) freshKnown.add(x);
+      // Many at once = history loading in, not new messages.
+      if (added.length && added.length <= 3) fresh = new Set([...fresh, ...added].slice(-12));
+    });
+  });
   $effect(() => {
     void $activeChat?.id;
     untrack(() => { shownCount = WINDOW_FIRST; });
@@ -3467,6 +3484,7 @@
             data-vkey={isChannel ? reactionKey(m) : undefined}
             class:first={m.first}
             class:last={m.last}
+            class:fresh={fresh.has(m.id)}
             class:selected={selected.has(m.id)}
             class:search-hit={searchOpen && searchHitSet.has(m.id)}
             class:search-current={searchOpen && m.id === currentHitId}
@@ -4225,7 +4243,7 @@
         <RichComposer
           bind:this={composerEl}
           bind:value={text}
-          placeholder={liveChat ? (activeRoom ? `Написать в #${activeRoom.name}…` : `Написать ${$activeChat.name.split(" ")[0]}...`) : "Start a real chat first — see the banner above"}
+          placeholder={liveChat ? (activeRoom ? $t("Message #{room}…", { room: activeRoom.name }) : $t("Message {name}…", { name: $activeChat.name.split(" ")[0] })) : $t("Start a real chat first — see the banner above")}
           resolve={(k) => emojiMap[k]}
           oninput={onComposerInput}
           onkeydown={onKey}
@@ -4470,7 +4488,7 @@
     gap: 12px;
     padding: 12px 20px;
     border-bottom: 1px solid var(--border);
-    background: rgba(12,15,23,0.7);
+    background: color-mix(in srgb, var(--bg-shell) 70%, transparent);
     position: relative;
     flex-shrink: 0;
   }
@@ -4650,6 +4668,7 @@
   .messages {
     flex: 1;
     overflow-y: auto;
+    overflow-x: hidden; /* no sideways scroll (its bar flashed as a light strip on phones) */
     padding: 12px 0 8px;
     display: flex;
     flex-direction: column;
@@ -4778,13 +4797,24 @@
     color: var(--fg);
     border: 1px solid var(--border);
     box-shadow: var(--shadow-lift);
-    animation: msg-in 0.34s cubic-bezier(.2,.9,.25,1.08);
     transform-origin: bottom left;
   }
   .msg.out .bubble { transform-origin: bottom right; }
+  /* Incoming while the chat is open: a soft rise. */
+  .msg.fresh :is(.circle-wrap, .sticker-wrap) { animation: msg-in 0.3s cubic-bezier(.16, 1, .3, 1); }
+  .msg.out.fresh :is(.circle-wrap, .sticker-wrap) { animation: msg-send 0.42s cubic-bezier(.16, 1, .3, 1); }
+  .msg.fresh .bubble { animation: msg-in 0.3s cubic-bezier(.16, 1, .3, 1); }
+  /* Sent: floats up out of the message field and settles — no overshoot,
+     transform/opacity only (stays on the compositor, no layout jank). */
+  .msg.out.fresh .bubble { animation: msg-send 0.42s cubic-bezier(.16, 1, .3, 1); }
   @keyframes msg-in {
-    from { opacity: 0; transform: translateY(8px) scale(0.97); }
-    to   { opacity: 1; transform: translateY(0) scale(1); }
+    from { opacity: 0; transform: translateY(10px) scale(0.98); }
+    to   { opacity: 1; transform: none; }
+  }
+  @keyframes msg-send {
+    0%   { opacity: 0; transform: translateY(56px) scale(0.92); }
+    35%  { opacity: 1; }
+    100% { opacity: 1; transform: none; }
   }
   .msg:not(.first) .bubble { border-top-left-radius: var(--bubble-r, 14px); }
 
@@ -4941,7 +4971,6 @@
     flex-direction: column;
     align-items: flex-start;
     gap: 2px;
-    animation: msg-in 0.25s ease-out;
   }
   .msg.out .circle-wrap { align-items: flex-end; }
   .circle-vid {
@@ -4965,7 +4994,6 @@
     flex-direction: column;
     align-items: flex-start;
     gap: 2px;
-    animation: msg-in 0.25s ease-out;
   }
   .msg.out .sticker-wrap { align-items: flex-end; }
   .sticker-btn { border: none; background: transparent; padding: 0; cursor: pointer; display: block; border-radius: calc(12px * var(--rk, 1)); transition: transform 0.15s ease; }
@@ -5852,9 +5880,14 @@
     gap: 8px;
     padding: 8px 16px 10px;
     border-top: 1px solid var(--border);
-    background: rgba(12,15,23,0.7);
+    background: color-mix(in srgb, var(--bg-shell) 70%, transparent);
     position: relative;
     flex-shrink: 0;
+  }
+  /* Computers: the account card (UserPanel, 54px + 8px margin) sits to the
+     left of this bar — same top line, same bottom edge. */
+  @media (min-width: 721px) {
+    :global(html:not(.glass)) .composer { box-sizing: border-box; min-height: 62px; padding: 13px 16px 8px; }
   }
   /* The blur lives on a pseudo-layer: a backdrop-filter on the bar itself would make it a
      "backdrop root", and popups inside it (attach menu, room list) couldn't blur the chat. */
@@ -5963,7 +5996,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    background: rgba(12,15,23,0.7);
+    background: color-mix(in srgb, var(--bg-shell) 70%, transparent);
     margin-top: -8px;
     backdrop-filter: blur(12px);
   }

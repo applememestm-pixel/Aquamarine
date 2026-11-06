@@ -123,7 +123,7 @@ export const api = {
   hasMotionClip:      (path: string): Promise<boolean> => invoke("has_motion_clip", { path }),
   /** Telegram sign-in (the relay's bot): start → open `link` → poll. */
   tgLoginStart:       (server_url: string): Promise<{ code: string; link: string; bot: string }> => invoke("tg_login_start", { serverUrl: server_url }),
-  tgLoginPoll:        (server_url: string, code: string): Promise<{ done: boolean; ticket?: string; name?: string }> => invoke("tg_login_poll", { serverUrl: server_url, code }),
+  tgLoginPoll:        (server_url: string, code: string): Promise<{ done: boolean; ticket?: string; name?: string; error?: string | null }> => invoke("tg_login_poll", { serverUrl: server_url, code }),
   tgLink:             (ticket: string): Promise<SecurityState> => invoke("tg_link", { ticket }),
   tgUnlink:           (): Promise<SecurityState> => invoke("tg_unlink"),
   registerAccount:    (server_url: string, username: string, ticket: string, display_name: string, about: string, phone: string, password?: string, email?: string): Promise<void> => invoke("register_account", { serverUrl: server_url, username, ticket, displayName: display_name, about, phone, password: password || null, email: email || null }),
@@ -305,6 +305,7 @@ export const api = {
   deleteSound:        (id: string): Promise<void>                                  => invoke("delete_sound", { id }),
   writeThemeFile:     (path: string, text: string): Promise<void>                   => invoke("write_theme_file", { path, text }),
   readThemeFile:      (path: string): Promise<string>                               => invoke("read_theme_file", { path }),
+  pickedPreview:      (path: string): Promise<{ kind: "image" | "video" | "audio" | "file"; url: string | null }> => invoke("picked_preview", { path }),
   probeMediaFile:     (path: string, kind: "video" | "audio" | "size"): Promise<{ poster?: string | null; duration?: number | null; size: number; too_big: boolean }> => invoke("probe_media", { path, kind }),
   copyFileTo:         (source: string, dest: string): Promise<void>                => invoke("copy_file_to", { source, dest }),
 

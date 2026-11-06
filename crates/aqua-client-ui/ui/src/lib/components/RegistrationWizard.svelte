@@ -131,13 +131,15 @@
   let tg = $state<{ ticket: string; name: string } | null>(null);
   let tgWaiting = $state(false);
   let tgStop = { aborted: false };
+  /** The bot link of the sign-in in progress (to open it again). */
+  let tgLink = $state("");
   async function telegram(then: "signup" | "signin") {
     error = null;
     serverUrl = normalizeServer(serverUrl);
     tgWaiting = true;
     tgStop = { aborted: false };
     try {
-      tg = await confirmWithTelegram(serverUrl.trim(), tgStop);
+      tg = await confirmWithTelegram(serverUrl.trim(), tgStop, (l) => (tgLink = l));
       if (then === "signup" && !username.trim() && /^@[a-z0-9_]{3,32}$/i.test(tg.name)) username = tg.name.slice(1).toLowerCase();
       if (then === "signin") { await signIn(); }
     } catch (e) {
@@ -145,6 +147,7 @@
       if (!/cancelled/.test(m)) error = /no Telegram bot/i.test(m) ? tr("This server has no Telegram bot — sign in with the password and an authenticator app, or ask the server's admin to add a bot.") : m;
     } finally {
       tgWaiting = false;
+      tgLink = "";
     }
   }
   /** Step 7: the code from the authenticator app (or a backup code). */
@@ -407,12 +410,13 @@
                 <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21.9 4.6 18.7 19.7c-.2 1-.9 1.3-1.8.8l-4.9-3.6-2.4 2.3c-.3.3-.5.5-1 .5l.3-5 9.1-8.2c.4-.4-.1-.6-.6-.2L6.2 13.4l-4.8-1.5c-1-.3-1-1 .2-1.5L20.6 3.3c.9-.3 1.6.2 1.3 1.3z"/></svg>
                 {tgWaiting ? $t("Waiting for Telegram… tap Start in the bot") : $t("Link Telegram — it lets you sign in on other devices")}
               </button>
+              {#if tgWaiting && tgLink}<button class="link" type="button" onclick={() => api.openExternal(tgLink).catch(() => {})}>{$t("Open the bot again")} →</button>{/if}
             {/if}
           {:else}
             <p class="note">{$t("A new device can be added only to an account with two-step verification: you'll be asked for a code from your authenticator app.")}</p>
           {/if}
           <details class="srv">
-            <summary>{$t("Server")}: <b>{serverUrl.replace(/^https?:\/\//, "")}</b> {inviteFor(serverUrl) ? "· " + $t("invitation ✓") : ""}</summary>
+            <summary><span class="srv-k">{$t("Server")}</span> <b>{serverUrl.replace(/^https?:\/\//, "")}</b> {inviteFor(serverUrl) ? "· " + $t("invitation ✓") : ""}<span class="srv-ch">{$t("Change")}</span></summary>
             <div class="field">
               <ServerPicker bind:value={serverUrl} placeholder={DEFAULT_SERVER}
                 defaults={IS_ANDROID ? ["http://10.0.2.2:7777"] : ["http://127.0.0.1:7777"]} />
@@ -458,6 +462,7 @@
             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21.9 4.6 18.7 19.7c-.2 1-.9 1.3-1.8.8l-4.9-3.6-2.4 2.3c-.3.3-.5.5-1 .5l.3-5 9.1-8.2c.4-.4-.1-.6-.6-.2L6.2 13.4l-4.8-1.5c-1-.3-1-1 .2-1.5L20.6 3.3c.9-.3 1.6.2 1.3 1.3z"/></svg>
             {tgWaiting ? $t("Waiting for Telegram… tap Start in the bot") : $t("Open Telegram")}
           </button>
+          {#if tgWaiting && tgLink}<button class="link" type="button" onclick={() => api.openExternal(tgLink).catch(() => {})}>{$t("Open the bot again")} →</button>{/if}
           <button class="link" onclick={() => { tgStop.aborted = true; phrase = ""; error = null; locked = false; step = 8; }}>{$t("Use the recovery key")}</button>
           <div class="actions">
             <button class="ghost" onclick={() => { tgStop.aborted = true; step = 1; }}>{$t("Back")}</button>
@@ -503,7 +508,7 @@
 <style>
   .at-in { position: relative; display: flex; }
   .at-in i { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); font-style: normal; color: var(--fg-dim); font-weight: 700; pointer-events: none; }
-  .at-in input { flex: 1; padding-left: 28px; }
+  .field .at-in input { flex: 1; padding-left: 28px; }
   .inv-in { margin-top: 6px; }
   .tg-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; align-self: flex-start; padding: 8px 14px; border-radius: calc(10px * var(--rk, 1)); border: 1px solid color-mix(in srgb, #2AABEE 55%, transparent); background: color-mix(in srgb, #2AABEE 14%, transparent); color: #5CC3F5; font: 600 13px var(--font-ui); cursor: pointer; }
   .tg-btn.big { align-self: stretch; padding: 12px; font-size: 14px; }
@@ -511,9 +516,15 @@
   .tg-btn:disabled { opacity: .7; cursor: progress; }
   .note.tg-ok { color: #5CC3F5; }
   .srv { font-size: 12.5px; color: var(--fg-dim); }
-  .srv summary { cursor: pointer; list-style: none; padding: 4px 0; }
+  /* A visible control, not a line of small print: which server is the first thing people look for. */
+  .srv summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+    border: 1px solid var(--border-strong); border-radius: calc(10px * var(--rk, 1)); background: var(--bg-input); }
+  .srv summary:hover { border-color: var(--accent); }
+  .srv-k { color: var(--fg-dim); }
+  .srv-ch { margin-left: auto; color: var(--accent); font-weight: 700; }
+  .srv[open] .srv-ch { visibility: hidden; }
   .srv summary::-webkit-details-marker { display: none; }
-  .srv summary b { color: var(--fg-muted); font-weight: 600; }
+  .srv summary b { color: var(--fg); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .srv[open] summary { margin-bottom: 6px; }
   .other-acc { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
   .reset-head { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
@@ -532,7 +543,7 @@
   .mode-tabs button { flex: 1; border: none; background: none; color: var(--fg-muted); font: inherit; font-weight: 700; font-size: 13.5px; padding: 9px; border-radius: calc(9px * var(--rk, 1)); cursor: pointer; }
   .mode-tabs button.on { background: var(--bg-shell); color: var(--accent); box-shadow: 0 0 0 1px var(--border-strong), 0 4px 14px -6px var(--accent-glow); }
   .pw { position: relative; display: flex; }
-  .pw input { flex: 1; padding-right: 38px; }
+  .field .pw input, .pw input { flex: 1; padding-right: 38px; }
   .pw-eye { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--fg-dim); font-size: 16px; cursor: pointer; }
   .pw-meter { display: block; height: 4px; border-radius: calc(4px * var(--rk, 1)); background: var(--bg-input); overflow: hidden; margin-top: 6px; }
   .pw-meter i { display: block; height: 100%; background: #ff6b6b; transition: width 0.2s, background 0.2s; }

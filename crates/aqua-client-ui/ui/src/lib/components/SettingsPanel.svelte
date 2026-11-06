@@ -731,7 +731,7 @@
     if (!ok) return;
     try { await api.setDmabuf(on); await api.restartApp(); } catch (e) { showToast(String(e)); }
   }
-  $effect(() => { if (section === "behaviour" && !gpu) void api.gpuStatus().then((g) => (gpu = g)).catch(() => {}); });
+  $effect(() => { if (section === "window" && !gpu) void api.gpuStatus().then((g) => (gpu = g)).catch(() => {}); });
   async function setGpu(mode: "auto" | "on" | "off") {
     try { await api.setGpuMode(mode); if (gpu) gpu = { ...gpu, mode }; showToast(tr("Restart Aquamarine to apply")); }
     catch (e) { showToast(String(e)); }
@@ -1577,27 +1577,6 @@
           <span class="switch" class:on={$settings.autoplayVideos}></span>
         </button>
       </section>
-      {#if gpu}
-      <section class="group">
-        <div class="label">{$t("Graphics")}</div>
-        <div class="row">
-          <span class="row-label">{$t("Drawing")}</span>
-          <SegFit label={$t("Drawing")} value={gpu.mode} onpick={(id) => setGpu(id)}
-            options={([["auto", "Auto"], ["on", "Graphics card"], ["off", "CPU"]] as const).map(([id, l]) => ({ id, label: $t(l) }))} />
-        </div>
-        <div class="foot-note" style="margin:4px 0 0">
-          {gpu.software ? $t("Now: drawn by the CPU (no GPU compositing).") : $t("Now: the graphics card composites the window.")}
-          {gpu.reason === "nvidia-mismatch" ? " " + $t("The NVIDIA driver was updated without a restart — restart the computer to get the graphics card back.") : ""}
-          {$t("Auto switches to the CPU when the graphics driver can't be used. Takes effect after restarting Aquamarine.")}
-        </div>
-        {#if isLinuxWk && !gpu.software}
-          <button class="toggle-row" onclick={toggleDmabuf}>
-            <div class="tr-text"><div class="tr-title">{$t("Direct GPU rendering (DMA-BUF)")}</div><div class="tr-sub">{$t("Smoother scrolling on Linux. If the window turns blank, it switches back by itself.")}</div></div>
-            <span class="switch" class:on={!!gpu.dmabuf}></span>
-          </button>
-        {/if}
-      </section>
-      {/if}
       <section class="group">
         <div class="label">{$t("Behaviour")}</div>
         <button class="toggle-row" onclick={() => toggle("enterToSend")}>
@@ -1636,9 +1615,9 @@
       <section class="group">
         <div class="label">{$t("Home-screen widget")}</div>
         <div class="foot-note" style="margin:0 0 8px">{$t("Hold an empty spot on the home screen → Widgets → Aquamarine. It shows the chats with unread messages; with an app passcode — only how many.")}</div>
-        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, widgetText: !x.widgetText }))}>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, widgetText: x.widgetText === false }))}>
           <div class="tr-text"><div class="tr-title">{$t("Message text in the widget")}</div><div class="tr-sub">{$t("Off: only names and counts — anyone who sees your screen won't read your messages")}</div></div>
-          <span class="switch" class:on={!!$settings.widgetText}></span>
+          <span class="switch" class:on={$settings.widgetText !== false}></span>
         </button>
       </section>
       {/if}
@@ -2036,6 +2015,27 @@
       {/if}
 
       {#if section === "window"}
+      {#if gpu && IS_DESKTOP}
+      <section class="group">
+        <div class="label">{$t("Graphics")}</div>
+        <div class="row">
+          <span class="row-label">{$t("Drawing")}</span>
+          <SegFit label={$t("Drawing")} value={gpu.mode} onpick={(id) => setGpu(id)}
+            options={([["auto", "Auto"], ["on", "Graphics card"], ["off", "CPU"]] as const).map(([id, l]) => ({ id, label: $t(l) }))} />
+        </div>
+        <div class="foot-note" style="margin:4px 0 0">
+          {gpu.software ? $t("Now: drawn by the CPU (no GPU compositing).") : $t("Now: the graphics card composites the window.")}
+          {gpu.reason === "nvidia-mismatch" ? " " + $t("The NVIDIA driver was updated without a restart — restart the computer to get the graphics card back.") : ""}
+          {$t("Auto switches to the CPU when the graphics driver can't be used. Takes effect after restarting Aquamarine.")}
+        </div>
+        {#if isLinuxWk && !gpu.software}
+          <button class="toggle-row" onclick={toggleDmabuf}>
+            <div class="tr-text"><div class="tr-title">{$t("Direct GPU rendering (DMA-BUF)")}</div><div class="tr-sub">{$t("Smoother scrolling on Linux. If the window turns blank, it switches back by itself.")}</div></div>
+            <span class="switch" class:on={!!gpu.dmabuf}></span>
+          </button>
+        {/if}
+      </section>
+      {/if}
       <section class="group">
         <div class="label">{$t("Window title bar")}</div>
         {#each [["titleChatName", "Show chat name", true], ["titleAccount", "Show active account", false], ["titleUnread", "Total unread count", true]] as [k, l, def] (k)}
