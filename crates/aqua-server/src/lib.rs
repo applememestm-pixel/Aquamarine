@@ -40,6 +40,7 @@ pub mod journal;
 pub mod datadir;
 pub mod totp;
 pub mod tglogin;
+pub mod report;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
 pub use auth::{AuthState, Caller};
@@ -2877,6 +2878,8 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/stats", get(server_stats))
         .route("/admin", get(admin_page))
         .route("/v1/admin/stats", get(admin_stats))
+        .route("/v1/admin/reports", get(report::admin_list))
+        .route("/v1/report", post(report::receive))
         .route("/v1/admin/detail/:what", get(admin_detail))
         .route("/v1/admin/datadir", get(admin_get_datadir).post(admin_move_datadir))
         .route("/v1/admin/config", post(admin_set_config))

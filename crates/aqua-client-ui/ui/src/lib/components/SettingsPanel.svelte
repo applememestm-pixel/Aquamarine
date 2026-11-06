@@ -6,6 +6,7 @@
 <script lang="ts">
   import Select from "./Select.svelte";
   import { IS_MOBILE, IS_DESKTOP } from "../platform";
+  import { GUIDE } from "../errorCodes";
   import { secretary } from "../botHelpers";
   import Donut from "./Donut.svelte";
   import { LINKS } from "../links";
@@ -2301,6 +2302,15 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
       {/if}
 
       {#if section === "about"}
+      <section class="group">
+        <div class="label">{$t("Error reports")}</div>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, reportErrors: x.reportErrors === false }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Send error reports")}</div>
+            <div class="tr-sub">{$t("When something breaks, the developer and your server get the error, the app version and the device — never your messages. That's how bugs get fixed fast.")}</div></div>
+          <span class="switch" class:on={$settings.reportErrors !== false}></span>
+        </button>
+        <button class="bot-link" onclick={() => void api.openExternal(GUIDE)}>{$t("What error codes mean ›")}</button>
+      </section>
       <section class="group">
         <div class="label">{$t("About")}</div>
         <div class="about">

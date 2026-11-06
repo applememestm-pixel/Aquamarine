@@ -32,6 +32,7 @@ pub mod updates;
 pub mod storage;
 pub mod tray;
 pub mod bgnotify;
+pub mod crashreport;
 
 use anyhow::Result;
 use tauri::Manager;
@@ -84,6 +85,8 @@ pub fn run() -> Result<()> {
                 .build(),
         )
         .setup(|app| {
+            // Crashes of this side go to the developer (crashreport.rs).
+            crashreport::install(app.handle());
             // Priority: AQUA_DATA_DIR env var > OS app-data dir > temp dir.
             // The env var is how you run two independent clients on the
             // same machine (each with its own identity + vault): set
@@ -140,6 +143,8 @@ pub fn run() -> Result<()> {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            crashreport::report_error,
+            crashreport::report_config,
             bgnotify::notify_front,
             commands::picked_preview,
             bgnotify::notify_prefs,

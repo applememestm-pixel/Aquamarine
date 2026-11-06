@@ -2545,4 +2545,8 @@ export const RU: Record<string, string> = {
   "Message #{room}…": "Написать в #{room}…",
   "Message {name}…": "Написать {name}…",
   "Start a real chat first — see the banner above": "Сначала начните настоящий чат — см. плашку выше",
+  "Error reports": "Отчёты об ошибках",
+  "Send error reports": "Отправлять отчёты об ошибках",
+  "When something breaks, the developer and your server get the error, the app version and the device — never your messages. That's how bugs get fixed fast.": "Если что-то сломалось, разработчик и ваш сервер получат ошибку, версию приложения и устройство — но никогда не ваши сообщения. Так ошибки чинятся быстро.",
+  "What error codes mean ›": "Что значат коды ошибок ›",
 };

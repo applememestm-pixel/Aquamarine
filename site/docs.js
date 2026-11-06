@@ -34,6 +34,7 @@
       ["federation", "Федерация", "Federation"],
       ["network", "Сеть: DNS, VPN, zapret", "Network: DNS, VPN, DPI bypass"],
       ["self-hosting", "Свой сервер: пошагово", "Your own server, step by step"],
+      ["errors", "Коды ошибок: что делать", "Error codes: what to do"],
       ["docker", "Docker: сервер одной командой", "Docker: a relay in one command"],
       ["deployment", "Развёртывание", "Deployment"],
       ["building", "Сборка и выпуск", "Building & releases"],

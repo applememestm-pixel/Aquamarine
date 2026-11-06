@@ -438,10 +438,12 @@ fn open_notes(app: AppHandle) -> Result<(), String> {
 
 /// The step-by-step guide (router, public IP) in the browser.
 #[tauri::command]
-fn open_guide(app: AppHandle) -> Result<(), String> {
+fn open_guide(app: AppHandle, page: Option<String>) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
+    // Only our own guides: self-hosting (default) or the error codes.
+    let d = if page.as_deref() == Some("errors") { "errors" } else { "self-hosting" };
     app.opener()
-        .open_url("https://applememestm-pixel.github.io/Aquamarine/docs.html?d=self-hosting", None::<&str>)
+        .open_url(format!("https://applememestm-pixel.github.io/Aquamarine/docs.html?d={d}"), None::<&str>)
         .map_err(|e| e.to_string())
 }
 
@@ -521,9 +523,15 @@ mod android {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .try_init();
+    {
+        use tracing_subscriber::prelude::*;
+        let _ = tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer().with_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into())))
+            // Server failures go to the developer right away (aqua_server::report).
+            .with(aqua_server::report::ErrorLayer { app: "aquamarine-server-app" })
+            .try_init();
+    }
+    aqua_server::report::install_panic_hook("aquamarine-server-app");
     let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init()).plugin(tauri_plugin_opener::init());
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--hidden"])));
