@@ -101,12 +101,13 @@
   .ctrls { display: flex; height: 100%; }
   .wb {
     width: 46px; height: 100%;
-    border: none; background: transparent; color: var(--fg-muted);
+    border: none; background: transparent; color: var(--fg);
     display: grid; place-items: center; cursor: pointer;
     transition: background 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
   }
   .wb svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.3; }
-  .wb:hover { background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); }
+  /* Window buttons stay white (the theme's text colour) — no accent tint on hover. */
+  .wb:hover { background: color-mix(in srgb, var(--fg) 10%, transparent); color: var(--fg); }
   .wb.close:hover { background: #E81123; color: #fff; box-shadow: 0 0 16px -2px rgba(232, 17, 35, 0.7); }
   @media (max-width: 720px) { :global(html:not(.popout)) .titlebar { display: none; } }
   :global(html.phone) .titlebar { display: none; }

@@ -237,9 +237,12 @@
     if (cat === "gif") return "gif";
     if (cat === "voice") return "voice";
     if (cat === "circle") return "circle";
-    if (cat === "document") return "file"; // "send as file": never inline
     const mime = (content.mime ?? "").toLowerCase();
     const name = content.name.toLowerCase();
+    // Music is always the player, however it was sent (like Telegram) —
+    // and never a video: .m4a/.mp4 audio comes as "audio/mp4".
+    if (mime.startsWith("audio/") || /\.(mp3|wav|ogg|oga|flac|m4a|opus|aac|wma|alac)$/.test(name)) return "audio";
+    if (cat === "document") return "file"; // "send as file": never inline
     if (mime === "image/gif" || name.endsWith(".gif")) return "gif";
     if (mime.startsWith("image/")) return "image";
     if (mime.startsWith("video/")) return "video";
@@ -710,6 +713,7 @@
     // Telegram-style sheet: previews + "as photo/video" or "as file".
     const choice = await askSend(paths, preset);
     if (!choice) return;
+    paths = choice.paths?.length ? choice.paths : paths;
     if (choice.edit && !choice.live && paths.length === 1 && isImagePath(paths[0])) {
       const edited = await maybeEditThenSend(peerId, paths[0]);
       if (edited) { if (choice.caption) await sendCurrent(choice.caption); return; }
@@ -4386,17 +4390,18 @@
   @keyframes row-flash { 0%, 35% { background: color-mix(in srgb, var(--accent) 22%, transparent); } 100% { background: transparent; } }
   @keyframes msg-flash { 0%, 30% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
   /* "Forwarded from" — the author's avatar in the corner. */
+  /* Forwarded: one quiet line over the bubble (no pill, no avatar) — the
+     pills stacked over every message looked heavy. */
   .fwd-tag {
-    display: inline-flex; align-items: center; gap: 7px; max-width: min(100%, 420px);
-    margin: 0 0 2px; padding: 3px 10px 3px 3px; border-radius: 999px;
-    border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
-    background: color-mix(in srgb, var(--bg-bubble-in) 85%, var(--accent) 15%);
-    color: var(--fg-muted); font: inherit; font-size: 12px; cursor: pointer; text-align: left;
+    display: inline-flex; align-items: center; gap: 5px; max-width: min(100%, 420px);
+    margin: 0 4px 1px; padding: 0; border: none; background: none;
+    color: var(--accent); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; text-align: left;
   }
+  .fwd-tag::before { content: "↪"; font-size: 13px; }
   .fwd-tag.out { align-self: flex-end; }
   .fwd-tag:disabled { cursor: default; }
-  .fwd-tag:not(:disabled):hover { border-color: var(--accent); }
-  .fwd-av { width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0; display: grid; place-items: center; font-size: 10px; font-weight: 800; color: #06070C; background: linear-gradient(135deg, var(--accent), var(--accent-2)); background-size: cover; background-position: center; }
+  .fwd-tag:not(:disabled):hover .fwd-txt b { text-decoration: underline; }
+  .fwd-av { display: none; }
   .fwd-txt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .fwd-txt i { font-style: normal; color: var(--fg-dim); }
   .fwd-txt b { color: var(--accent); }
@@ -4838,9 +4843,10 @@
     border-radius: var(--bubble-r, 14px) 4px var(--bubble-r, 14px) var(--bubble-r, 14px);
     color: var(--fg);
   }
-  /* A chat theme with its own bubble colours (chatTheme.ts): solid, readable text. */
-  .themed .msg.out .bubble { background: var(--bubble-out, linear-gradient(135deg, color-mix(in srgb, var(--accent) 16%, transparent), color-mix(in srgb, var(--accent-2) 14%, transparent)), var(--bg-bubble-in)); color: var(--bubble-out-fg, var(--fg)); }
-  .themed .msg:not(.out) .bubble { color: var(--bubble-in-fg, var(--fg)); }
+  /* Own message colours — Settings → Appearance (theme.ts) or a chat theme
+     (chatTheme.ts): solid, with text that picks itself. */
+  .msg.out .bubble { background: var(--bubble-out, linear-gradient(135deg, color-mix(in srgb, var(--accent) 16%, transparent), color-mix(in srgb, var(--accent-2) 14%, transparent)), var(--bg-bubble-in)); color: var(--bubble-out-fg, var(--fg)); }
+  .msg:not(.out) .bubble { color: var(--bubble-in-fg, var(--fg)); }
   .msg.out:not(.first) .bubble { border-top-right-radius: var(--bubble-r, 14px); }
 
   .bubble-meta {
@@ -5912,8 +5918,10 @@
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
   }
+  /* 📎 and 🎤/➤ — the same square as the message field is tall (39px), so
+     the bar's three parts line up like Telegram's. */
   .attach-btn {
-    width: 36px; height: 36px;
+    width: 39px; height: 39px;
     display: grid; place-items: center;
     background: var(--bg-input);
     border: 1px solid var(--border);
@@ -5976,11 +5984,11 @@
   /* Telegram-like: a round button; with text in the field, a paper plane
      in the accent colour that pops in. */
   .send-btn {
-    width: 38px; height: 38px;
+    width: 39px; height: 39px;
     display: grid; place-items: center;
-    background: transparent;
-    border: none;
-    border-radius: 50%;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: calc(10px * var(--rk, 1));
     color: var(--fg-muted);
     cursor: pointer;
     transition: color 0.15s ease, background 0.15s ease, transform 0.15s ease;

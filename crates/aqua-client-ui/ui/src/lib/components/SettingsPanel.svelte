@@ -603,6 +603,34 @@
     } catch (e) { showToast(String(e)); }
   }
   let apiOpen = $state(false);
+  /** Appearance: each block opens by its title, the others fold away —
+   *  the page was one very long scroll. */
+  function accordion(node: HTMLElement) {
+    const setup = () => {
+      const secs = [...node.querySelectorAll<HTMLElement>(":scope > section.group")];
+      secs.forEach((sec, i) => {
+        if (sec.dataset.acc) return;
+        sec.dataset.acc = "1";
+        sec.classList.add("acc");
+        if (i === 0) sec.classList.add("open");
+        const lab = sec.querySelector<HTMLElement>(":scope > .label");
+        if (!lab) { sec.classList.add("open"); return; }
+        lab.setAttribute("role", "button");
+        lab.tabIndex = 0;
+        const toggle = () => {
+          const was = sec.classList.contains("open");
+          node.querySelectorAll(":scope > section.acc.open").forEach((x) => x.classList.remove("open"));
+          if (!was) { sec.classList.add("open"); requestAnimationFrame(() => sec.scrollIntoView({ block: "nearest", behavior: "smooth" })); }
+        };
+        lab.addEventListener("click", toggle);
+        lab.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
+      });
+    };
+    setup();
+    const mo = new MutationObserver(setup);
+    mo.observe(node, { childList: true });
+    return { destroy: () => mo.disconnect() };
+  }
   // Bots page: the list, or one bot (BotFather-like).
   let botSel = $state<string | null>(null);
   let botNew = $state(false);
@@ -1222,7 +1250,7 @@
 
       {#if section === "appearance"}
       <div class="ap-split">
-      <div class="ap-controls">
+      <div class="ap-controls" use:accordion>
       <section class="group">
         <div class="label">{$t("Themes")}</div>
         <div class="themes">
@@ -1331,6 +1359,16 @@
         </div>
       </section>
       <div class="ap-div" id="ap-wallpaper"><span>{$t("Chat wallpaper")}</span></div>
+      <section class="group">
+        <div class="label">{$t("Message colours")}</div>
+        <div class="bots-note">{$t("Your messages and theirs, in every chat. A chat's own theme (chat menu → Chat theme) wins over this.")}</div>
+        <div class="row"><span class="row-label">{$t("My messages")}</span>
+          <ColorInput value={$settings.bubbleOut || "#1E5A84"} size={30} oninput={(v) => settings.update((x) => ({ ...x, bubbleOut: v }))} />
+          {#if $settings.bubbleOut}<button class="bot-link" onclick={() => settings.update((x) => ({ ...x, bubbleOut: undefined }))}>{$t("Reset")}</button>{/if}</div>
+        <div class="row"><span class="row-label">{$t("Their messages")}</span>
+          <ColorInput value={$settings.bubbleIn || "#141825"} size={30} oninput={(v) => settings.update((x) => ({ ...x, bubbleIn: v }))} />
+          {#if $settings.bubbleIn}<button class="bot-link" onclick={() => settings.update((x) => ({ ...x, bubbleIn: undefined }))}>{$t("Reset")}</button>{/if}</div>
+      </section>
       <section class="group">
         <div class="label">{$t("Chat wallpaper")}</div>
         <div class="walls">
@@ -2876,6 +2914,10 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   }
   .bot-add:disabled { opacity: 0.5; cursor: not-allowed; }
   .bot-list { display: flex; flex-direction: column; gap: 8px; }
+  :global(section.group.acc) > :global(.label) { cursor: pointer; display: flex; align-items: center; user-select: none; }
+  :global(section.group.acc) > :global(.label)::after { content: "›"; margin-left: auto; font-size: 16px; transition: transform .15s; }
+  :global(section.group.acc.open) > :global(.label)::after { transform: rotate(90deg); }
+  :global(section.group.acc:not(.open)) > :global(:not(.label)) { display: none !important; }
   .bots-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
   .bots-head .label { margin: 0; }
   .bot-rows { display: flex; flex-direction: column; gap: 2px; }

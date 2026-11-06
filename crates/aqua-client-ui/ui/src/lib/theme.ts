@@ -220,6 +220,9 @@ export interface Settings {
   widgetText?: boolean;
   /** Send error reports to the developer and to your server (on unless false). */
   reportErrors?: boolean;
+  /** Message colours in every chat (a chat theme can still override them). */
+  bubbleOut?: string;
+  bubbleIn?: string;
   glass?: boolean;
   glassAlpha?: number;
   /** Settings: show the sections for experienced users (network, own
@@ -346,6 +349,18 @@ function apply(s: Settings) {
 
   // Resolve palette
   const p = PALETTES.find((x) => x.id === s.palette) ?? PALETTES[0];
+  // Message colours for every chat; the text on them picks itself.
+  {
+    const lum = (hex: string) => {
+      const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim()); if (!m) return 0;
+      const n = parseInt(m[1], 16), ch = (v: number) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+      return 0.2126 * ch((n >> 16) & 255) + 0.7152 * ch((n >> 8) & 255) + 0.0722 * ch(n & 255);
+    };
+    for (const [v, c] of [["out", s.bubbleOut], ["in", s.bubbleIn]] as const) {
+      if (c) { root.style.setProperty(`--bubble-${v}`, c); root.style.setProperty(`--bubble-${v}-fg`, lum(c) > 0.4 ? "#15181F" : "#F2F5FA"); }
+      else { root.style.removeProperty(`--bubble-${v}`); root.style.removeProperty(`--bubble-${v}-fg`); }
+    }
+  }
   root.style.setProperty("--accent",       p.accent);
   root.style.setProperty("--accent-2",     p.accent2);
   root.style.setProperty("--accent-soft",  p.accentSoft);

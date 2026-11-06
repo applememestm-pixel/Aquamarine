@@ -2584,4 +2584,7 @@ export const RU: Record<string, string> = {
   "That's not a “meet nearby” code — ask them to open Meet nearby too.": "Это не код «Познакомиться рядом» — попросите собеседника тоже открыть «Познакомиться рядом».",
   "Chat started. Messages go over Bluetooth or the same Wi-Fi while you're close.": "Чат начат. Пока вы рядом, сообщения идут по Bluetooth или через общий Wi-Fi.",
   "Start a chat with someone right next to you without the internet: one shows a QR, the other scans it.": "Начать чат с человеком рядом без интернета: один показывает QR, другой сканирует.",
+  "Add files": "Добавить файлы",
+  "Message colours": "Цвета сообщений",
+  "Your messages and theirs, in every chat. A chat's own theme (chat menu → Chat theme) wins over this.": "Ваши сообщения и собеседника — во всех чатах. Собственная тема чата (меню чата → «Тема чата») важнее этой настройки.",
 };
