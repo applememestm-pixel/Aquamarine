@@ -205,6 +205,8 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for ErrorLayer {
         r.code = format!("SRV:{}", ev.metadata().target());
         r.msg = v.0;
         r.detail = format!("{}:{}", ev.metadata().file().unwrap_or("?"), ev.metadata().line().unwrap_or(0));
+        // The admin sees the server's own failures in "Errors" too.
+        keep(Report { at: now(), ..r.clone() });
         send(r);
     }
 }
@@ -261,6 +263,17 @@ pub async fn receive(headers: axum::http::HeaderMap, body: axum::body::Bytes) ->
         }
     }
     StatusCode::NO_CONTENT
+}
+
+/// Into the list of "Errors" (memory only; the log file is for apps' reports).
+fn keep(r: Report) {
+    if let Ok(mut g) = INBOX.lock() {
+        let g = g.get_or_insert_with(|| Inbox { list: VecDeque::new(), per_ip: HashMap::new() });
+        g.list.push_back(r);
+        while g.list.len() > KEEP {
+            g.list.pop_front();
+        }
+    }
 }
 
 /// The newest reports first (for Aquamarine Server → "Errors").
