@@ -945,6 +945,71 @@ mod tests {
         assert_eq!(ra.unwrap().sent, 0);
     }
 
+    /// Bob scanned Alice's "meet nearby" QR: her keys + pass "p1". He's not
+    /// her contact, yet with the pass his first (X3DH) message gets through.
+    fn meet(pass: &'static str) -> (Result<(), String>, Vec<InitialMessage>, T, SignedPreKey) {
+        let mk = |user| T { user, id: IdentityKeyPair::generate(), sessions: Default::default(), outbox: Default::default(), seen: Default::default(), got: Default::default() };
+        let (alice, bob) = (mk("alice"), mk("bob"));
+        let spk = SignedPreKey::generate(1, &alice.id);
+        let bundle = PreKeyBundle { identity: alice.id.public(), signed_prekey: spk.public(), one_time_prekey: None };
+        let (sb, init) = Session::start_as_initiator(&bob.id, &bundle, b"hi").unwrap();
+        bob.sessions.borrow_mut().insert(alice.addr(), sb);
+        let raw = bincode::serialize(&init).unwrap();
+        bob.outbox.borrow_mut().push(WireItem { id: item_id(&raw), to: alice.addr(), payload: B64.encode(raw), k: "i".into() });
+
+        struct Shower<'a>(&'a T, RefCell<Vec<InitialMessage>>);
+        unsafe impl Sync for Shower<'_> {}
+        impl Ctx for Shower<'_> {
+            fn me(&self) -> Result<Me, String> { self.0.me() }
+            fn outbox_for(&self, a: &str) -> Vec<WireItem> { self.0.outbox_for(a) }
+            fn acked(&self, ids: &[String]) { self.0.acked(ids) }
+            fn first_time(&self, id: &str) -> bool { self.0.first_time(id) }
+            fn deliver(&self, _: String, _: Envelope) { panic!("no session yet") }
+            fn deliver_initial(&self, _from: String, m: InitialMessage) { self.1.borrow_mut().push(m) }
+            fn issued(&self, toks: &[String]) -> bool { toks.iter().any(|t| t == "p1") }
+        }
+        struct Scanner<'a>(&'a T, &'static str);
+        unsafe impl Sync for Scanner<'_> {}
+        impl Ctx for Scanner<'_> {
+            fn me(&self) -> Result<Me, String> { self.0.me() }
+            fn outbox_for(&self, a: &str) -> Vec<WireItem> { self.0.outbox_for(a) }
+            fn acked(&self, ids: &[String]) { self.0.acked(ids) }
+            fn first_time(&self, id: &str) -> bool { self.0.first_time(id) }
+            fn deliver(&self, f: String, e: Envelope) { self.0.deliver(f, e) }
+            fn held(&self) -> Vec<String> { vec![self.1.to_string()] }
+        }
+        let shower = Shower(&alice, RefCell::new(Vec::new()));
+        let scanner = Scanner(&bob, pass);
+        let (mut la, mut lb) = std::os::unix::net::UnixStream::pair().unwrap();
+        let r = std::thread::scope(|sc| {
+            let h = sc.spawn(|| { let mut r = SyncReport::default(); exchange(&shower, &mut la, false, &mut r) });
+            let mut r = SyncReport::default();
+            let rb = exchange(&scanner, &mut lb, true, &mut r);
+            let ra = h.join().unwrap();
+            ra.and(rb)
+        });
+        let got = shower.1.into_inner();
+        (r, got, bob, spk)
+    }
+
+    #[test]
+    fn a_pass_from_a_qr_lets_a_new_person_in() {
+        let (r, got, bob, spk) = meet("p1");
+        r.unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].sender_identity, bob.id.public());
+        assert!(bob.outbox.borrow().is_empty(), "delivered and acknowledged");
+        let _ = spk;
+    }
+
+    #[test]
+    fn a_wrong_pass_is_turned_away() {
+        let (r, got, bob, _) = meet("nope");
+        assert!(r.is_err());
+        assert!(got.is_empty());
+        assert_eq!(bob.outbox.borrow().len(), 1, "nothing left for a stranger");
+    }
+
     #[test]
     fn a_stranger_is_turned_away() {
         let (a, _b) = pair();
