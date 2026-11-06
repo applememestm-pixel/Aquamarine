@@ -2568,4 +2568,12 @@ export const RU: Record<string, string> = {
   "Desert": "Пустыня",
   "Ice": "Лёд",
   "Paper": "Бумага",
+  "New bot": "Новый бот",
+  "All bots": "Все боты",
+  "Token": "Токен",
+  "The key of the bot's program. Keep it secret: whoever has it controls the bot.": "Ключ программы бота. Держите в секрете: у кого токен — тот и управляет ботом.",
+  "Run it": "Как запустить",
+  "Telegram libraries": "Библиотеки Telegram",
+  "This server speaks the Telegram Bot API too: a bot written for Telegram works here unchanged — give it this token and point the library at this server.": "Сервер понимает и Telegram Bot API: бот, написанный для Telegram, работает здесь без изменений — дайте ему этот токен и укажите библиотеке адрес этого сервера.",
+  "Delete bot": "Удалить бота",
 };
