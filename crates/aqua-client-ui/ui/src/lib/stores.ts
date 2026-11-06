@@ -7,7 +7,7 @@ import { contacts, contactMatches, displayName, saveContact } from "./contacts";
 import { settings } from "./theme";
 import { playSound, soundFor } from "./sounds";
 import { tr, lang } from "./i18n";
-import { osNotify, appInFront } from "./notify";
+import { osNotify, appInFront, justResumed } from "./notify";
 
 /** Play a short chime + optional desktop notification for an incoming
  *  message, honouring the user's notification settings. */
@@ -16,6 +16,8 @@ function notifyIncoming(peerId: string, text: string) {
   if (s.notifySound) void playSound(soundFor(peerId));
   // A banner only when the user isn't already reading that chat.
   if (appInFront() && get(activeId) === peerId) return;
+  // Phone, back from the background: these were announced by src/bgnotify.rs.
+  if (justResumed()) return;
   // A chat with a password: nothing of it in the notification.
   let lockedChat = false;
   try { lockedChat = !!JSON.parse(localStorage.getItem("aqua.chatLocks.v1") ?? "{}")[peerId]; } catch { /* ignore */ }

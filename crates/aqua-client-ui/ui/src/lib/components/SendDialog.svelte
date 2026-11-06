@@ -34,8 +34,12 @@
   let sizes = $state<Record<string, number>>({});
 
   let paths = $derived($pending?.paths ?? []);
-  let hasImages = $derived(paths.some((p) => IMAGE_RE.test(p)));
-  let hasVideos = $derived(paths.some((p) => VIDEO_RE.test(p)));
+  /** Phone picks (content://…) have no extension: their type is sniffed (picked_preview). */
+  let kinds = $state<Record<string, string>>({});
+  const isImg = (p: string) => IMAGE_RE.test(p) || kinds[p] === "image";
+  const isVid = (p: string) => VIDEO_RE.test(p) || kinds[p] === "video";
+  let hasImages = $derived(paths.some(isImg));
+  let hasVideos = $derived(paths.some(isVid));
   let total = $derived(Object.values(sizes).reduce((a, b) => a + b, 0));
 
   $effect(() => {
@@ -56,7 +60,15 @@
     }
     thumbs = {};
     sizes = {};
+    kinds = {};
     for (const p of list) {
+      if (/^(content|file):\/\//.test(p)) {
+        void api.pickedPreview(p).then((r) => {
+          kinds = { ...kinds, [p]: r.kind };
+          if (r.url) thumbs = { ...thumbs, [p]: r.url };
+        }).catch(() => {});
+        continue;
+      }
       if (IMAGE_RE.test(p)) {
         void api.allowMediaPreview(p).then(() => { thumbs = { ...thumbs, [p]: assetUrl(p) }; }).catch(() => {});
       }
@@ -100,9 +112,9 @@
           <div class="it" class:file={mode === "file"}>
             {#if mode !== "file" && thumbs[p]}
               <img src={thumbs[p]} alt="" />
-              {#if VIDEO_RE.test(p)}<span class="vmark">▶</span>{/if}
+              {#if isVid(p)}<span class="vmark">▶</span>{/if}
             {:else}
-              <span class="ficon">{VIDEO_RE.test(p) ? "🎬" : IMAGE_RE.test(p) ? "🖼" : "📄"}</span>
+              <span class="ficon">{isVid(p) ? "🎬" : isImg(p) ? "🖼" : "📄"}</span>
             {/if}
             <span class="nm" title={nameOf(p)}>{nameOf(p)}</span>
             {#if sizes[p]}<span class="sz">{fmtSize(sizes[p])}</span>{/if}
@@ -159,6 +171,11 @@
   .live-row button { border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); padding: 5px 10px; border-radius: calc(9px * var(--rk, 1)); font: inherit; cursor: pointer; }
   .live-row button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
   .sd-back { position: fixed; inset: 0; z-index: 10090; display: grid; place-items: center; background: rgba(0, 0, 0, 0.55); }
+  /* Phones: a sheet from the bottom, like Telegram — not a box in the middle of the chat. */
+  :global(html.phone) .sd-back { place-items: end stretch; }
+  :global(html.phone) .sd { width: 100%; max-height: 92vh; border-radius: calc(18px * var(--rk, 1)) calc(18px * var(--rk, 1)) 0 0;
+    padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px)); animation: sd-up .22s cubic-bezier(.2, .9, .25, 1); }
+  @keyframes sd-up { from { transform: translateY(40px); opacity: 0; } }
   .sd {
     width: min(460px, 94vw); max-height: 88vh;
     display: flex; flex-direction: column; gap: 12px;

@@ -8,6 +8,10 @@ if (/android|iphone|ipad/i.test(navigator.userAgent)) document.documentElement.c
 // Android: windows close with Back, no × on them (app.css, lib/back.ts).
 if (/android/i.test(navigator.userAgent)) document.documentElement.classList.add("android");
 
+// Middle button: no browser auto-scroll (its marker stayed on screen and the
+// page crept along). Middle-click on links still works (auxclick).
+addEventListener("mousedown", (e) => { if (e.button === 1) e.preventDefault(); }, true);
+
 // Linux desktop = WebKitGTK, which paints CSS blur on the CPU every frame
 // (no Chrome in the UA there; Android's WebView and Windows' WebView2 have it,
 // macOS WKWebView isn't Linux). Lighter effects keep it smooth — see app.css.

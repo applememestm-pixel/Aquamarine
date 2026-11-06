@@ -305,6 +305,7 @@ export const api = {
   deleteSound:        (id: string): Promise<void>                                  => invoke("delete_sound", { id }),
   writeThemeFile:     (path: string, text: string): Promise<void>                   => invoke("write_theme_file", { path, text }),
   readThemeFile:      (path: string): Promise<string>                               => invoke("read_theme_file", { path }),
+  pickedPreview:      (path: string): Promise<{ kind: "image" | "video" | "audio" | "file"; url: string | null }> => invoke("picked_preview", { path }),
   probeMediaFile:     (path: string, kind: "video" | "audio" | "size"): Promise<{ poster?: string | null; duration?: number | null; size: number; too_big: boolean }> => invoke("probe_media", { path, kind }),
   copyFileTo:         (source: string, dest: string): Promise<void>                => invoke("copy_file_to", { source, dest }),
 

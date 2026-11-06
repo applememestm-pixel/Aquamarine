@@ -416,7 +416,7 @@
             <p class="note">{$t("A new device can be added only to an account with two-step verification: you'll be asked for a code from your authenticator app.")}</p>
           {/if}
           <details class="srv">
-            <summary>{$t("Server")}: <b>{serverUrl.replace(/^https?:\/\//, "")}</b> {inviteFor(serverUrl) ? "· " + $t("invitation ✓") : ""}</summary>
+            <summary><span class="srv-k">{$t("Server")}</span> <b>{serverUrl.replace(/^https?:\/\//, "")}</b> {inviteFor(serverUrl) ? "· " + $t("invitation ✓") : ""}<span class="srv-ch">{$t("Change")}</span></summary>
             <div class="field">
               <ServerPicker bind:value={serverUrl} placeholder={DEFAULT_SERVER}
                 defaults={IS_ANDROID ? ["http://10.0.2.2:7777"] : ["http://127.0.0.1:7777"]} />
@@ -516,9 +516,15 @@
   .tg-btn:disabled { opacity: .7; cursor: progress; }
   .note.tg-ok { color: #5CC3F5; }
   .srv { font-size: 12.5px; color: var(--fg-dim); }
-  .srv summary { cursor: pointer; list-style: none; padding: 4px 0; }
+  /* A visible control, not a line of small print: which server is the first thing people look for. */
+  .srv summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+    border: 1px solid var(--border-strong); border-radius: calc(10px * var(--rk, 1)); background: var(--bg-input); }
+  .srv summary:hover { border-color: var(--accent); }
+  .srv-k { color: var(--fg-dim); }
+  .srv-ch { margin-left: auto; color: var(--accent); font-weight: 700; }
+  .srv[open] .srv-ch { visibility: hidden; }
   .srv summary::-webkit-details-marker { display: none; }
-  .srv summary b { color: var(--fg-muted); font-weight: 600; }
+  .srv summary b { color: var(--fg); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .srv[open] summary { margin-bottom: 6px; }
   .other-acc { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
   .reset-head { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }

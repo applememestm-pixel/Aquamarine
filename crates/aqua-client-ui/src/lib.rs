@@ -31,6 +31,7 @@ pub mod accounts;
 pub mod updates;
 pub mod storage;
 pub mod tray;
+pub mod bgnotify;
 
 use anyhow::Result;
 use tauri::Manager;
@@ -139,6 +140,9 @@ pub fn run() -> Result<()> {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            bgnotify::notify_front,
+            commands::picked_preview,
+            bgnotify::notify_prefs,
             mesh::mesh_status,
             mesh::mesh_set_enabled,
             mesh::mesh_sync_now,

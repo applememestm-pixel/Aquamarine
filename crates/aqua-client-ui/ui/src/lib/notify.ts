@@ -50,3 +50,45 @@ export async function osNotify(title: string, body: string): Promise<void> {
 export function appInFront(): boolean {
   return document.visibilityState === "visible" && document.hasFocus();
 }
+
+/**
+ * Phones: Android pauses this page in the background, so the Rust side
+ * (src/bgnotify.rs) announces messages then. Keep it told whether we're on
+ * screen and what the user wants notified.
+ */
+const PHONE = typeof navigator !== "undefined" && /android|iphone|ipad/i.test(navigator.userAgent);
+let backAt = 0;
+/** Right after coming back, the paused events arrive at once — Rust has
+ *  already shown those, so the page doesn't repeat them. */
+export function justResumed(): boolean {
+  return PHONE && performance.now() - backAt < 3000;
+}
+export function startBgNotify(): () => void {
+  if (!PHONE || !inTauri()) return () => {};
+  const send = (cmd: string, args: Record<string, unknown>) =>
+    void import("@tauri-apps/api/core").then((c) => c.invoke(cmd, args)).catch(() => {});
+  const vis = () => {
+    const front = document.visibilityState === "visible";
+    if (front) backAt = performance.now();
+    send("notify_front", { front });
+  };
+  document.addEventListener("visibilitychange", vis);
+  vis();
+  let un = () => {};
+  void Promise.all([import("./chatPrefs"), import("./i18n")]).then(([cp, i18n]) => {
+    const push = () => {
+      let locked: string[] = [];
+      try { locked = Object.keys(JSON.parse(localStorage.getItem("aqua.chatLocks.v1") ?? "{}")); } catch { /* ignore */ }
+      send("notify_prefs", { prefs: {
+        enabled: !!get(settings).notifyDesktop,
+        muted: [...get(cp.mutedChats)],
+        locked,
+        locked_text: i18n.tr("New message in a locked chat"),
+      } });
+    };
+    const a = settings.subscribe(push), b = cp.mutedChats.subscribe(push);
+    window.addEventListener("storage", push);
+    un = () => { a(); b(); window.removeEventListener("storage", push); };
+  });
+  return () => { document.removeEventListener("visibilitychange", vis); un(); };
+}

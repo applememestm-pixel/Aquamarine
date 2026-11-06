@@ -2542,4 +2542,7 @@ export const RU: Record<string, string> = {
   "the server's Telegram bot token is invalid (revoked?) — the server's admin has to set a new one": "токен Telegram-бота на сервере недействителен (отозван?) — администратор сервера должен задать новый",
   "Open the bot again": "Открыть бота ещё раз",
   "the server can't reach Telegram: ": "сервер не может достучаться до Telegram: ",
+  "Message #{room}…": "Написать в #{room}…",
+  "Message {name}…": "Написать {name}…",
+  "Start a real chat first — see the banner above": "Сначала начните настоящий чат — см. плашку выше",
 };
