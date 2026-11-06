@@ -1048,7 +1048,9 @@
     transition: transform .12s; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18); }
   .sw:hover { transform: scale(1.1); }
   .sw.on { border-color: var(--fg); box-shadow: 0 0 0 2px var(--card-base), 0 0 0 4px var(--fg); }
-  .sw.auto span { position: absolute; inset: 0; display: grid; place-items: center; font-size: 8.5px; font-weight: 800; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.6); text-transform: uppercase; letter-spacing: .02em; }
+  /* "Auto" sits on the banner colour, which can be white: a dark chip of its own keeps it readable. */
+  .sw.auto { border-color: var(--border-strong); }
+  .sw.auto span { position: absolute; inset: 5px; display: grid; place-items: center; border-radius: 50%; background: rgba(10, 12, 18, .62); font-size: 7.5px; font-weight: 800; color: #fff; text-transform: uppercase; letter-spacing: .02em; }
   .sw-own { display: grid; place-items: center; }
   /* Label and value on one line, the slider under them at full width. */
   .slider { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "l v" "r r"; align-items: center; column-gap: 10px; row-gap: 4px; margin-top: 12px; text-transform: none; letter-spacing: 0; }
