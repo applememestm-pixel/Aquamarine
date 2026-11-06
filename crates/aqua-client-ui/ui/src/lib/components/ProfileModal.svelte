@@ -5,7 +5,12 @@
   // or "__me__" for the current user.
   export const profileState = writable<string | null>(null);
 
-  export function openProfile(username = "__me__") { profileState.set(username); }
+  import { info as me } from "../stores";
+  // Our own name (a reply, a forward, a mention of us) opens our own profile.
+  export function openProfile(username = "__me__") {
+    const mine = getStore(me)?.username;
+    profileState.set(mine && username.replace(/^@/, "").toLowerCase() === mine.toLowerCase() ? "__me__" : username);
+  }
   export function closeProfile() { profileState.set(null); }
 </script>
 

@@ -291,7 +291,16 @@ async function flushPendingImages() {
     }
   } finally { flushing = false; }
 }
-info.subscribe((i) => { if (i?.connected) void flushPendingImages(); });
+// Each new connection (start, reconnect, another server or account): pending
+// pictures up, then our card — edits made offline or on another relay would
+// otherwise never reach this one, and people saw a bare profile.
+let syncedFor = "";
+info.subscribe((i) => {
+  if (!i?.connected) { syncedFor = ""; return; }
+  void flushPendingImages();
+  const key = `${i.server_url}|${i.username}`;
+  if (key !== syncedFor) { syncedFor = key; setTimeout(() => void syncMyProfileOnConnect(), 0); }
+});
 
 function applyMyImage(kind: "avatar" | "banner", r: { ver: number; path: string }) {
   const url = assetUrl(r.path) + `?v=${r.ver}`;
