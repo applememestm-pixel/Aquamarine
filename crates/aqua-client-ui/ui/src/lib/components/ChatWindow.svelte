@@ -34,6 +34,8 @@
   import { emojiStatusOf } from "../people";
   import EmojiStatus from "./EmojiStatus.svelte";
   import { tick, onMount, untrack } from "svelte";
+  import { chatThemes, themeStyle } from "../chatTheme";
+  import ChatThemeSheet from "./ChatThemeSheet.svelte";
   import { slide } from "svelte/transition";
   import { SvelteSet } from "svelte/reactivity";
   import { askConfirm, askConfirmCheck } from "./Confirm.svelte";
@@ -1592,6 +1594,7 @@
     cal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="16" y1="3" x2="16" y2="7"/></svg>',
     ttl: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2"/><path d="M9.5 2.5h5"/><path d="M12 2.5V5"/></svg>',
     stats: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="20" x2="6" y2="12"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="18" y1="20" x2="18" y2="9"/></svg>',
+    palette: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.9 1.8-1.9 0-.5-.2-.9-.5-1.3-.3-.3-.5-.8-.5-1.3 0-1 .8-1.8 1.8-1.8H17a4 4 0 0 0 4-4C21 6.4 17 3 12 3Z"/><circle cx="7.5" cy="11" r="1.2"/><circle cx="10.5" cy="7" r="1.2"/><circle cx="15" cy="7.5" r="1.2"/></svg>',
     win: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="14" height="14" rx="2"/><path d="M14 3h7v7"/><path d="M21 3l-8 8"/></svg>',
   };
   type HdrItem = { id: string; label: string; sub?: string; icon: string; on?: boolean; run: () => void };
@@ -1617,6 +1620,7 @@
     const c = $activeChat;
     if (!c) return [];
     const out: HdrItem[] = [];
+    out.push({ id: "theme", label: tr("Chat theme"), sub: tr("Colours and background of this chat"), icon: IC.palette, on: !!$chatThemes[c.id], run: () => (themeFor = c.id) });
     if (c.id !== "__saved__" && !isBotChat) out.push({ id: "cal", label: tr("Calendar"), sub: tr("Events and reminders of this chat"), icon: IC.cal, on: $calendarFor === c.id, run: () => calendarFor.set($calendarFor === c.id ? null : c.id) });
     if (ttlEditable || chatTtl) out.push({ id: "ttl", label: tr("Auto-delete & read receipts"), sub: chatTtl ? tr("Auto-delete: {t}", { t: ttlLabel(chatTtl) }) : tr("Off"), icon: IC.ttl, on: chatTtl > 0, run: () => (ttlMenu = true) });
     if (!isGroup && !isBotChat && c.id !== "__saved__" && c.id !== "__replies__" && c.live) {
@@ -1894,6 +1898,9 @@
   const WINDOW_FIRST = 40;
   const WINDOW_STEP = 80;
   let shownCount = $state(WINDOW_FIRST);
+  // This chat's own look (chatTheme.ts): CSS variables on <main>.
+  let themeFor = $state<string | null>(null);
+  let chatLook = $derived(themeStyle($chatThemes[$activeChat?.id ?? ""]));
   let shownRows = $derived(rows.length > shownCount ? rows.slice(rows.length - shownCount) : rows);
   // Only messages that arrive while this chat is open animate in, like
   // Telegram: every bubble used to replay its entrance on each redraw
@@ -3023,7 +3030,7 @@
   {:else}<span class="room-ic">{r.kind === "voice" ? "🔊" : "#"}</span>{/if}
 {/snippet}
 
-<main class="active-chat" bind:this={chatRoot} class:with-rooms={rooms.length > 0} class:voice-on={fullVoice} class:voice-chat={fullVoice && voiceChat}>
+<main class="active-chat" bind:this={chatRoot} class:themed={!!chatLook} style={chatLook} class:with-rooms={rooms.length > 0} class:voice-on={fullVoice} class:voice-chat={fullVoice && voiceChat}>
   {#if !$activeChat}
     <Welcome />
   {:else}
@@ -4332,6 +4339,7 @@
       <div class="sp-media"><AnimatedMedia src={peek.url} mime={peek.mime} play="auto" /></div>
     </div>
   {/if}
+  {#if themeFor}<ChatThemeSheet chat={themeFor} name={$activeChat?.name ?? ""} onclose={() => (themeFor = null)} />{/if}
 </main>
 
 <svelte:window onmousedown={(e) => { if ((ttlMenu || callMenu || toolsMenu) && !(e.target as HTMLElement).closest?.(".ttl-wrap")) { ttlMenu = false; callMenu = false; toolsMenu = false; } }} />
@@ -4786,7 +4794,8 @@
   .msg-time { font-size: 11px; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
 
   .bubble {
-    background: var(--bg-bubble-in);
+    /* --bubble-in / --bubble-out: a chat theme (chatTheme.ts) */
+    background: var(--bubble-in, var(--bg-bubble-in));
     padding: 8px 12px;
     border-radius: 4px var(--bubble-r, 14px) var(--bubble-r, 14px) var(--bubble-r, 14px);
     max-width: 620px;
@@ -4829,6 +4838,9 @@
     border-radius: var(--bubble-r, 14px) 4px var(--bubble-r, 14px) var(--bubble-r, 14px);
     color: var(--fg);
   }
+  /* A chat theme with its own bubble colours (chatTheme.ts): solid, readable text. */
+  .themed .msg.out .bubble { background: var(--bubble-out, linear-gradient(135deg, color-mix(in srgb, var(--accent) 16%, transparent), color-mix(in srgb, var(--accent-2) 14%, transparent)), var(--bg-bubble-in)); color: var(--bubble-out-fg, var(--fg)); }
+  .themed .msg:not(.out) .bubble { color: var(--bubble-in-fg, var(--fg)); }
   .msg.out:not(.first) .bubble { border-top-right-radius: var(--bubble-r, 14px); }
 
   .bubble-meta {
