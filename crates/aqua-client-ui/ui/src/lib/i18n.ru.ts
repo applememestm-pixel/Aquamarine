@@ -2576,4 +2576,12 @@ export const RU: Record<string, string> = {
   "Telegram libraries": "Библиотеки Telegram",
   "This server speaks the Telegram Bot API too: a bot written for Telegram works here unchanged — give it this token and point the library at this server.": "Сервер понимает и Telegram Bot API: бот, написанный для Telegram, работает здесь без изменений — дайте ему этот токен и укажите библиотеке адрес этого сервера.",
   "Delete bot": "Удалить бота",
+  "Meet nearby": "Познакомиться рядом",
+  "Without the internet — by QR, over Bluetooth / Wi-Fi": "Без интернета — по QR, через Bluetooth / Wi-Fi",
+  "No internet needed. One of you shows the code, the other scans it — and you can write to each other over Bluetooth or the same Wi-Fi. Encrypted end to end, like any chat.": "Интернет не нужен. Один показывает код, другой сканирует — и можно переписываться по Bluetooth или через общий Wi-Fi. Сквозное шифрование, как в любом чате.",
+  "The code works for 15 minutes.": "Код действует 15 минут.",
+  "Scan their code": "Сканировать их код",
+  "That's not a “meet nearby” code — ask them to open Meet nearby too.": "Это не код «Познакомиться рядом» — попросите собеседника тоже открыть «Познакомиться рядом».",
+  "Chat started. Messages go over Bluetooth or the same Wi-Fi while you're close.": "Чат начат. Пока вы рядом, сообщения идут по Bluetooth или через общий Wi-Fi.",
+  "Start a chat with someone right next to you without the internet: one shows a QR, the other scans it.": "Начать чат с человеком рядом без интернета: один показывает QR, другой сканирует.",
 };

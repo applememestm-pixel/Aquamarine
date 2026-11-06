@@ -29,6 +29,7 @@
   import FingerprintModal from "./lib/components/FingerprintModal.svelte";
   import InputPrompt from "./lib/components/InputPrompt.svelte";
   import NewChatSheet from "./lib/components/NewChatSheet.svelte";
+  import MeetSheet from "./lib/components/MeetSheet.svelte";
   import QrScanner from "./lib/components/QrScanner.svelte";
   import WhatsNew, { maybeShowWhatsNew } from "./lib/components/WhatsNew.svelte";
   import Toast, { showToast } from "./lib/components/Toast.svelte";
@@ -351,6 +352,7 @@
 <FingerprintModal />
 <InputPrompt />
 <NewChatSheet />
+<MeetSheet />
 <QrScanner />
 <WhatsNew />
 <CallModal />

@@ -147,6 +147,8 @@ pub fn run() -> Result<()> {
             crashreport::report_config,
             bgnotify::notify_front,
             commands::picked_preview,
+            commands::meet_qr,
+            commands::meet_accept,
             bgnotify::notify_prefs,
             mesh::mesh_status,
             mesh::mesh_set_enabled,

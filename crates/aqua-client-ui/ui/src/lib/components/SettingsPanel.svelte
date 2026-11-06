@@ -7,6 +7,7 @@
   import Select from "./Select.svelte";
   import { IS_MOBILE, IS_DESKTOP } from "../platform";
   import { GUIDE } from "../errorCodes";
+  import { meetOpen } from "./MeetSheet.svelte";
   import { secretary } from "../botHelpers";
   import Donut from "./Donut.svelte";
   import { LINKS } from "../links";
@@ -2088,6 +2089,11 @@
 
       {#if section === "nearby"}
       {@const ms = $meshStatus}
+      <section class="group">
+        <div class="label">{$t("Meet nearby")}</div>
+        <div class="bots-note">{$t("Start a chat with someone right next to you without the internet: one shows a QR, the other scans it.")}</div>
+        <div class="bot-actions"><button class="bot-btn primary" onclick={() => { meetOpen.set(true); }}>{$t("Meet nearby")}</button></div>
+      </section>
       <section class="group">
         <div class="label">{$t("Wi-Fi and Bluetooth, like Briar")}</div>
         <div class="bots-note">{$t("No internet or the server is down? Messages to your contacts wait on this device, and as soon as their phone or computer is on the same Wi-Fi (or hotspot) or within Bluetooth range, the two devices swap them directly. When the server is back, whatever is still waiting goes through it. Everything stays end-to-end encrypted; only contacts you've already chatted with can connect.")}</div>
