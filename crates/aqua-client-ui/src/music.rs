@@ -403,3 +403,42 @@ mod tests {
         assert_eq!(tag_of("https://Music.example/"), tag_of("http://music.example"));
     }
 }
+
+/// `aqua.fetch` of a plugin (ui/src/lib/plugins.ts): the app checked that the
+/// host is one the user allowed for that plugin. Text answers up to 2 MB.
+#[tauri::command]
+pub async fn plugin_fetch(
+    url: String,
+    method: String,
+    headers: Option<std::collections::BTreeMap<String, String>>,
+    body: Option<String>,
+) -> Result<Value, String> {
+    let u = reqwest::Url::parse(&url).map_err(|e| e.to_string())?;
+    if !matches!(u.scheme(), "http" | "https") {
+        return Err("http(s) only".into());
+    }
+    let m = reqwest::Method::from_bytes(method.to_uppercase().as_bytes()).map_err(|e| e.to_string())?;
+    let mut req = plain_client().request(m, u).timeout(std::time::Duration::from_secs(20));
+    for (k, v) in headers.unwrap_or_default().into_iter().take(32) {
+        let lk = k.to_ascii_lowercase();
+        if matches!(lk.as_str(), "host" | "cookie" | "content-length") { continue; }
+        req = req.header(k, v);
+    }
+    if let Some(b) = body {
+        req = req.body(b);
+    }
+    let mut r = req.send().await.map_err(|e| e.without_url().to_string())?;
+    let status = r.status().as_u16();
+    let mut hs = serde_json::Map::new();
+    for (k, v) in r.headers() {
+        if let Ok(v) = v.to_str() { hs.insert(k.as_str().to_string(), json!(v)); }
+    }
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(c) = r.chunk().await.map_err(|e| e.without_url().to_string())? {
+        if buf.len() + c.len() > 2 * 1024 * 1024 {
+            return Err("the answer is larger than 2 MB".into());
+        }
+        buf.extend_from_slice(&c);
+    }
+    Ok(json!({ "status": status, "headers": hs, "body": String::from_utf8_lossy(&buf) }))
+}

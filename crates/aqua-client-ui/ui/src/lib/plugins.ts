@@ -14,6 +14,9 @@
  *   aqua.command("name", "description", (args, chat) => string | void)  // "/name" in the field
  *   aqua.toast(text)
  *   aqua.storage.get(key) / aqua.storage.set(key, value)   // the plugin's own, saved
+ *   aqua.button({ id, label, icon }, (ctx) => …)  // its own item in the 📎 menu (1.2.11)
+ *   aqua.music.open() / .search(q) / .play(song) / .send(chat, song)   // the Navidrome player
+ *   aqua.fetch(url, { method, headers, body })    // only to hosts in "// @connect", if the user allowed
  *
  * Handlers may be async; each call gets at most 800 ms, then the message goes
  * on unchanged. See docs/plugins.md.
@@ -22,9 +25,14 @@ import { writable, get, derived } from "svelte/store";
 import { showToast } from "./components/Toast.svelte";
 import { events } from "./tauri";
 
-export interface PluginMeta { name: string; version: string; description: string; author: string }
-export interface Plugin extends PluginMeta { id: string; code: string; enabled: boolean; installed: number; data: Record<string, unknown> }
+export interface PluginMeta { name: string; version: string; description: string; author: string; connect: string[] }
+export interface Plugin extends PluginMeta {
+  id: string; code: string; enabled: boolean; installed: number; data: Record<string, unknown>;
+  /** Hosts from `// @connect` the user allowed at install (others: no network). */
+  allowed?: string[];
+}
 export interface PluginCommand { plugin: string; cmd: string; desc: string }
+export interface PluginButton { plugin: string; id: string; label: string; icon: string }
 
 const KEY = "aqua.plugins.v1";
 const ON_KEY = "aqua.pluginsOn.v1";
@@ -44,19 +52,26 @@ plugins.subscribe((v) => save(KEY, v));
 /** Slash commands registered by running plugins. */
 const commands = writable<PluginCommand[]>([]);
 export const pluginCommands = derived([commands, pluginsOn], ([c, on]) => (on ? c : []));
+/** 📎 menu items registered by running plugins (`aqua.button`). */
+const buttons = writable<PluginButton[]>([]);
+export const pluginButtons = derived([buttons, pluginsOn], ([b, on]) => (on ? b : []));
 
 /** `// @name Foo` style header → metadata (before the code runs). */
 export function parseMeta(code: string): PluginMeta {
   const tag = (k: string) => new RegExp(`^\\s*//\\s*@${k}\\s+(.+)$`, "m").exec(code)?.[1]?.trim() ?? "";
-  return { name: tag("name") || "Untitled plugin", version: tag("version") || "1.0", description: tag("description"), author: tag("author") };
+  const connect = tag("connect").split(/[\s,]+/).map((h) => h.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "")).filter(Boolean).slice(0, 16);
+  return { name: tag("name") || "Untitled plugin", version: tag("version") || "1.0", description: tag("description"), author: tag("author"), connect };
 }
 
-export function installPlugin(code: string): Plugin {
+/** `allow` decides about the `// @connect` hosts (the settings page asks the user). */
+export function installPlugin(code: string, allow: (hosts: string[], name: string) => boolean = () => false): Plugin {
   if (code.length > MAX_CODE) throw new Error("plugin is too large");
   const meta = parseMeta(code);
   const id = meta.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "plugin";
   const prev = get(plugins).find((p) => p.id === id);
-  const p: Plugin = { ...meta, id, code, enabled: true, installed: Date.now(), data: prev?.data ?? {} };
+  const same = !!prev?.allowed && meta.connect.every((h) => prev.allowed!.includes(h));
+  const allowed = meta.connect.length ? (same || allow(meta.connect, meta.name) ? meta.connect : []) : [];
+  const p: Plugin = { ...meta, id, code, enabled: true, installed: Date.now(), data: prev?.data ?? {}, allowed };
   plugins.update((l) => [...l.filter((x) => x.id !== id), p]);
   return p;
 }
@@ -82,8 +97,10 @@ const BOOT = `
   void P;
   let ready = false; const queue = [];
   const send = (m) => (ready ? post(m) : queue.push(m));
-  const h = { send: [], incoming: [], cmd: {} };
+  const h = { send: [], incoming: [], cmd: {}, btn: {} };
   const store = {};
+  const calls = new Map(); let cseq = 1;
+  const call = (fn, args) => new Promise((res, rej) => { const cid = cseq++; calls.set(cid, [res, rej]); send({ t: "call", cid, fn, args }); });
   self.aqua = {
     register: (meta) => send({ t: "meta", meta }),
     onSend: (f) => { h.send.push(f); send({ t: "hook", hook: "send" }); },
@@ -91,16 +108,27 @@ const BOOT = `
     command: (cmd, desc, f) => { cmd = String(cmd).toLowerCase().replace(/[^a-z0-9_]/g, ""); if (!cmd) return; h.cmd[cmd] = f; send({ t: "cmd", cmd, desc: String(desc || "") }); },
     toast: (text) => send({ t: "toast", text: String(text).slice(0, 300) }),
     storage: { get: (k) => store[k], set: (k, v) => { store[k] = v; send({ t: "store", k: String(k), v }); } },
+    button: (o, f) => { o = o || {}; const id = String(o.id || o.label || "").slice(0, 40); if (!id || typeof f !== "function") return; h.btn[id] = f;
+      send({ t: "button", id, label: String(o.label || id).slice(0, 40), icon: String(o.icon || "🧩").slice(0, 8) }); },
+    fetch: (url, o) => { o = o || {}; return call("fetch", { url: String(url), method: String(o.method || "GET"), headers: o.headers || {}, body: o.body == null ? null : String(o.body) }); },
+    music: {
+      open: () => call("music.open", {}),
+      search: (q) => call("music.search", { q: String(q || "") }),
+      play: (song) => call("music.play", { song }),
+      send: (chat, song) => call("music.send", { chat: String(chat || ""), song }),
+    },
   };
   const run = async (fs, arg) => { let cur = arg.text; for (const f of fs) { const r = await f({ ...arg, text: cur }); if (r === false) return false; if (typeof r === "string") cur = r; } return cur; };
   self.onmessage = async (ev) => {
     const m = ev.data || {};
     if (m.t === "init") { Object.assign(store, m.data || {}); ready = true; for (const q of queue.splice(0)) post(q); return; }
+    if (m.t === "result") { const c = calls.get(m.cid); if (c) { calls.delete(m.cid); m.ok ? c[0](m.value) : c[1](new Error(m.error || "failed")); } return; }
     let out = null;
     try {
       if (m.t === "send") out = await run(h.send, m.arg);
       else if (m.t === "incoming") { for (const f of h.incoming) await f(m.arg); }
       else if (m.t === "cmd" && h.cmd[m.cmd]) { const r = await h.cmd[m.cmd](m.args, m.chat); out = typeof r === "string" ? r : null; }
+      else if (m.t === "button" && h.btn[m.bid]) await h.btn[m.bid]({ chat: m.chat });
     } catch (err) { send({ t: "error", text: String(err && err.message || err) }); }
     if (m.id) send({ t: "reply", id: m.id, out });
   };
@@ -129,6 +157,7 @@ function stop(id: string) {
   URL.revokeObjectURL(h.url);
   hosts.delete(id);
   commands.update((l) => l.filter((c) => c.plugin !== id));
+  buttons.update((l) => l.filter((b) => b.plugin !== id));
 }
 
 function onPluginMessage(h: Host, m: { t?: string; [k: string]: unknown }) {
@@ -139,6 +168,12 @@ function onPluginMessage(h: Host, m: { t?: string; [k: string]: unknown }) {
       break;
     }
     case "toast": showToast(`🧩 ${String(m.text ?? "")}`); break;
+    case "button": {
+      const id = String(m.id ?? ""), label = String(m.label ?? id).slice(0, 40), icon = String(m.icon ?? "🧩").slice(0, 8);
+      buttons.update((l) => [...l.filter((b) => !(b.plugin === h.id && b.id === id)), { plugin: h.id, id, label, icon }]);
+      break;
+    }
+    case "call": void hostCall(h, Number(m.cid), String(m.fn ?? ""), (m.args ?? {}) as Record<string, any>); break;
     case "store":
       plugins.update((l) => l.map((p) => (p.id === h.id ? { ...p, data: { ...p.data, [String(m.k)]: m.v } } : p)));
       break;
@@ -154,6 +189,54 @@ function ask(h: Host, msg: Record<string, unknown>, ms = 800): Promise<unknown> 
     h.pending.set(id, (v) => { clearTimeout(timer); resolve(v); });
     h.worker.postMessage({ ...msg, id });
   });
+}
+
+/** What a plugin may ask of the app (`aqua.fetch`, `aqua.music.*`). */
+async function hostCall(h: Host, cid: number, fn: string, a: Record<string, any>) {
+  const reply = (ok: boolean, value?: unknown, error?: string) => h.worker.postMessage({ t: "result", cid, ok, value, error });
+  try {
+    if (fn === "fetch") {
+      const p = get(plugins).find((x) => x.id === h.id);
+      let host = "";
+      try { const u = new URL(String(a.url)); if (!/^https?:$/.test(u.protocol)) throw 0; host = u.hostname.toLowerCase(); } catch { return reply(false, null, "bad URL"); }
+      const ok = (p?.allowed ?? []).some((x) => x === host || (x.startsWith("*.") && (host === x.slice(2) || host.endsWith(x.slice(1)))));
+      if (!ok) return reply(false, null, `not allowed: ${host} (add it to // @connect and reinstall)`);
+      const { invoke } = await import("@tauri-apps/api/core");
+      const headers: Record<string, string> = {};
+      for (const [k, v] of Object.entries(a.headers ?? {})) headers[String(k)] = String(v);
+      const r = await invoke("plugin_fetch", { url: String(a.url), method: String(a.method || "GET"), headers, body: a.body ?? null });
+      return reply(true, r);
+    }
+    const music = await import("./music");
+    const { get: g } = await import("svelte/store");
+    const src = (g(music.musicSources) as string[]).includes(g(music.musicSource)) ? g(music.musicSource) : (g(music.musicSources)[0] ?? null);
+    if (fn === "music.open") { music.openMusic(); return reply(true, true); }
+    if (!src) return reply(false, null, "no Navidrome is connected");
+    if (fn === "music.search") {
+      const r = await music.search(src, String(a.q ?? ""));
+      return reply(true, r.songs.slice(0, 50));
+    }
+    const song = a.song && typeof a.song === "object" && typeof a.song.id === "string"
+      ? { ...music.cardSong({ id: a.song.id, title: String(a.song.title ?? ""), artist: a.song.artist, album: a.song.album, dur: Number(a.song.duration ?? a.song.dur ?? 0), cover: a.song.coverArt ?? a.song.cover, src, nd: "" }, (a.song.src === "own" || a.song.src === "server") ? a.song.src : src) }
+      : null;
+    if (!song) return reply(false, null, "song needed (one from aqua.music.search)");
+    if (fn === "music.play") { await music.playSongs([song], 0); return reply(true, true); }
+    if (fn === "music.send") {
+      const chat = String(a.chat ?? "");
+      if (!chat) return reply(false, null, "chat needed");
+      await music.sendCard(chat, song);
+      return reply(true, true);
+    }
+    reply(false, null, `unknown call ${fn}`);
+  } catch (e) {
+    reply(false, null, String(e instanceof Error ? e.message : e));
+  }
+}
+
+/** A plugin's 📎 button was pressed in `chat`. */
+export function pressPluginButton(b: PluginButton, chat: string) {
+  const h = hosts.get(b.plugin);
+  if (h) h.worker.postMessage({ t: "button", bid: b.id, chat });
 }
 
 /** Keep the running sandboxes in step with the list and the switch. */

@@ -55,7 +55,7 @@
   import { api, assetUrl, sendChatControl } from "../tauri";
   import { openFingerprint, verifiedKeys, keyState } from "./FingerprintModal.svelte";
   import { showToast } from "./Toast.svelte";
-  import { pluginCommands, pluginsOnSend, runPluginCommand } from "../plugins";
+  import { pluginCommands, pluginsOnSend, runPluginCommand, pluginButtons, pressPluginButton } from "../plugins";
   import { ATTACH_ITEMS, attachFront, attachHidden, attachDock, attachBots, toggleAttachBot, type AttachId } from "../attachMenu";
   import { openRoomRequest } from "../roomNav";
   import { AUTODL_DEFAULT } from "../theme";
@@ -4230,6 +4230,12 @@
                   <span>{b.title || b.bot}</span>
                 </button>
             {/each}
+            {#each $pluginButtons as pb (pb.plugin + ":" + pb.id)}
+                <!-- A plugin's own item (aqua.button, lib/plugins.ts). -->
+                <button class="ap-item" title={"🧩 " + pb.plugin} onclick={() => { attachMenuOpen = false; if ($activeChat) pressPluginButton(pb, $activeChat.id); }}>
+                  <span class="ap-emoji">{pb.icon}</span><span>{pb.label}</span>
+                </button>
+            {/each}
             {#if rest.length && !attachMore}
               <button class="ap-item more" onclick={() => (attachMore = true)}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg>
@@ -6064,4 +6070,5 @@
   .uns-body b { font-weight: 600; font-size: 14px; }
   .uns-up { border: none; padding: 0; background: none; color: var(--accent); font: inherit; font-size: 13.5px; font-weight: 700; cursor: pointer; }
   .uns-up:hover { text-decoration: underline; }
+  .ap-emoji { font-size: 20px; line-height: 1; width: 22px; text-align: center; }
 </style>

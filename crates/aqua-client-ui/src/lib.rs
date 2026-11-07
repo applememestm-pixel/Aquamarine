@@ -158,6 +158,7 @@ pub fn run() -> Result<()> {
             music::music_api,
             music::music_url,
             music::music_save,
+            music::plugin_fetch,
             commands::picked_preview,
             commands::meet_qr,
             commands::meet_accept,

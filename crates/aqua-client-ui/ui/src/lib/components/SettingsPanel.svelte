@@ -155,6 +155,9 @@
   async function clearOwnNd() {
     try { await invoke("music_clear_own"); ndUrl = ""; ndUser = ""; ndPass = ""; ndMsg = ""; await refreshMusic(); } catch (e) { showToast(String(e)); }
   }
+  /** A plugin's `// @connect` hosts: the user says yes or no at install. */
+  const askConnect = (hosts: string[], name: string) =>
+    confirm(tr("The plugin “{n}” wants to connect to: {h}. It could send there what you give it. Allow?", { n: name, h: hosts.join(", ") }));
   /** Settings → Experimental → Plugins: code being pasted (null: closed). */
   let pluginPaste = $state<string | null>(null);
   onMount(() => {
@@ -2019,7 +2022,7 @@
               <input type="file" accept=".js,.mjs,.txt,text/javascript" hidden onchange={async (e) => {
                 const f = (e.currentTarget as HTMLInputElement).files?.[0];
                 if (!f) return;
-                try { const p = installPlugin(await f.text()); showToast(tr("Plugin “{n}” installed", { n: p.name })); } catch (err) { showToast(String(err)); }
+                try { const p = installPlugin(await f.text(), askConnect); showToast(tr("Plugin “{n}” installed", { n: p.name })); } catch (err) { showToast(String(err)); }
                 (e.currentTarget as HTMLInputElement).value = "";
               }} />
             </label>
@@ -2028,7 +2031,7 @@
           </div>
           {#if pluginPaste != null}
             <textarea class="pl-code" rows="8" spellcheck="false" placeholder={"// @name My plugin\naqua.command(\"hi\", \"Say hi\", () => \"Hi!\");"} bind:value={pluginPaste}></textarea>
-            <button class="mini-btn" disabled={!pluginPaste.trim()} onclick={() => { try { const p = installPlugin(pluginPaste ?? ""); pluginPaste = null; showToast(tr("Plugin “{n}” installed", { n: p.name })); } catch (err) { showToast(String(err)); } }}>{$t("Install")}</button>
+            <button class="mini-btn" disabled={!pluginPaste.trim()} onclick={() => { try { const p = installPlugin(pluginPaste ?? "", askConnect); pluginPaste = null; showToast(tr("Plugin “{n}” installed", { n: p.name })); } catch (err) { showToast(String(err)); } }}>{$t("Install")}</button>
           {/if}
         {/if}
       </section>
