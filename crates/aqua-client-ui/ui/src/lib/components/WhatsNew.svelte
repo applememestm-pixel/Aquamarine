@@ -64,7 +64,24 @@
     closeLists(0);
     return out.join("");
   }
-  const html = $derived(md(NOTES.md));
+  // Translate (the notes are written in Russian): Google's free endpoint
+  // through Rust; a second tap goes back to the original.
+  let tr_md = $state(""), tr_busy = $state(false), tr_err = $state("");
+  async function translate() {
+    if (tr_md) { tr_md = ""; return; }
+    tr_busy = true; tr_err = "";
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const out = await invoke<string>("translate_text", { text: NOTES.md, to: $lang === "ru" ? "en" : $lang });
+      // The service sometimes loosens the Markdown: put it back.
+      tr_md = out.split("\n").map((l) => l
+        .replace(/^(#+)(?=[^#\s])/, "$1 ")
+        .replace(/^(\s*)[-•](?=\S)/, "$1- ")
+        .replace(/\*\* *([^*]+?) *\*\*/g, "**$1**")).join("\n");
+    } catch (e) { tr_err = String(e); }
+    tr_busy = false;
+  }
+  const html = $derived(md(tr_md || NOTES.md));
   const date = $derived(NOTES.date ? new Date(NOTES.date + "T12:00:00").toLocaleDateString($lang === "ru" ? "ru-RU" : "en-GB", { day: "numeric", month: "long", year: "numeric" }) : "");
   function click(e: MouseEvent) {
     const a = (e.target as Element).closest?.("a[data-ext]") as HTMLAnchorElement | null;
@@ -78,6 +95,10 @@
     <div class="wn" data-phone-full role="dialog" aria-modal="true" aria-label={$t("What's new")}>
       <header>
         <button data-x class="x" onclick={close} aria-label={$t("Close")}>×</button>
+        <button class="tr" class:on={!!tr_md} onclick={() => void translate()} disabled={tr_busy}
+          title={tr_err || $t(tr_md ? "Show the original" : "Translate")} aria-label={$t(tr_md ? "Show the original" : "Translate")}>
+          {#if tr_busy}<span class="spin"></span>{:else}<svg viewBox="0 0 24 24"><path d="M4 5h9M8.5 3v2M6 5c.6 3.2 2.6 5.6 5.5 7M11 5c-.7 3.6-3.1 6.6-6.5 8.5"/><path d="M13 21l4-9 4 9M14.4 18h5.2"/></svg>{/if}
+        </button>
         <div class="ttl"><b>{$t("What's new")}</b>{#if date}<small>{date}</small>{/if}</div>
       </header>
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
@@ -109,10 +130,17 @@
     background: var(--bg-shell); border: 1px solid var(--border-strong); border-radius: calc(18px * var(--rk, 1));
     box-shadow: 0 40px 90px -20px rgba(0,0,0,.75); animation: wn-pop .3s cubic-bezier(.2,.9,.25,1.05); }
   @keyframes wn-pop { from { opacity: 0; transform: translateY(16px) scale(.97); } }
-  header { position: relative; padding: 14px 52px; border-bottom: 1px solid var(--border); text-align: center; }
+  header { position: relative; padding: 14px 92px; border-bottom: 1px solid var(--border); text-align: center; }
   .ttl { display: flex; flex-direction: column; } .ttl b { font-size: 18px; } .ttl small { color: var(--fg-dim); font-size: 12.5px; }
   .x { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); width: 34px; height: 34px; border: none; background: none; color: var(--fg); font-size: 26px; cursor: pointer; border-radius: 50%; }
   .x:hover { background: var(--bg-hover); }
+  .tr { position: absolute; left: 50px; top: 50%; transform: translateY(-50%); width: 34px; height: 34px; border: none; background: none; color: var(--fg-muted);
+    cursor: pointer; border-radius: 50%; display: grid; place-items: center; }
+  .tr:hover { background: var(--bg-hover); color: var(--fg); }
+  .tr.on { color: var(--accent); background: var(--accent-soft); }
+  .tr svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .tr .spin { width: 16px; height: 16px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: tr-spin .8s linear infinite; }
+  @keyframes tr-spin { to { transform: rotate(360deg); } }
   .body { overflow-y: auto; padding: 18px 22px 8px; overscroll-behavior: contain; }
   .art { position: relative; height: 170px; border-radius: calc(14px * var(--rk, 1)); overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center;
     background: radial-gradient(120% 140% at 0% 0%, var(--accent) 0%, transparent 55%), radial-gradient(120% 140% at 100% 100%, var(--accent-2) 0%, transparent 60%), #0b1020; color: #fff; }

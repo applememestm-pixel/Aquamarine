@@ -240,8 +240,11 @@ pub async fn sync(name: &str, refresh: bool) -> Result<Manifest, String> {
     let base = base.trim_end_matches('/').to_string();
     let set: serde_json::Value = http
         .get(format!("{base}/bot{token}/getStickerSet?name={}", urlenc(name)))
-        .send().await.map_err(|e| format!("Telegram: {e}"))?
-        .json().await.map_err(|e| format!("Telegram: {e}"))?;
+        .send().await.map_err(|e| if e.is_connect() || e.is_timeout() {
+            // Never the URL: it carries the bot token, and this goes to clients.
+            "this server can't reach api.telegram.org (blocked in its network?) — give it a proxy: HTTPS_PROXY=… or AQUA_TG_API=…".to_string()
+        } else { format!("Telegram: {}", e.without_url()) })?
+        .json().await.map_err(|e| format!("Telegram: {}", e.without_url()))?;
     if !set["ok"].as_bool().unwrap_or(false) {
         return Err(format!("Telegram: {}", set["description"].as_str().unwrap_or("error")));
     }

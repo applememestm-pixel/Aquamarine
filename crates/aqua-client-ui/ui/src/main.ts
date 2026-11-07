@@ -1,6 +1,7 @@
 import App from "./App.svelte";
 import { mount } from "svelte";
 import "./app.css";
+import { IS_DESKTOP } from "./lib/platform";
 
 // Phones and tablets: no desktop title bar even when the screen is turned
 // sideways and wider than the phone layout's breakpoint.
@@ -147,3 +148,17 @@ const app = pop
   ? mount((await import("./Popout.svelte")).default, { target, props: { chat: decodeURIComponent(pop[1]) } })
   : mount(App, { target });
 export default app;
+
+// F11: the whole window full screen, like any desktop app. The media viewer
+// handles F11 itself first (and marks the key as handled).
+if (IS_DESKTOP) {
+  window.addEventListener("keydown", async (e) => {
+    if (e.key !== "F11" || e.defaultPrevented || e.repeat) return;
+    e.preventDefault();
+    try {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      const w = getCurrentWindow();
+      await w.setFullscreen(!(await w.isFullscreen()));
+    } catch { /* not in the app */ }
+  });
+}

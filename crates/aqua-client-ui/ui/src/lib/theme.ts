@@ -220,6 +220,10 @@ export interface Settings {
   widgetText?: boolean;
   /** Send error reports to the developer and to your server (on unless false). */
   reportErrors?: boolean;
+  /** The Navidrome add-on (lib/music.ts): music tab, player, track cards. */
+  navidrome?: boolean;
+  /** Show what I play from Navidrome as my activity ("Listening to …"). */
+  musicShare?: boolean;
   /** Message colours in every chat (a chat theme can still override them). */
   bubbleOut?: string;
   bubbleIn?: string;

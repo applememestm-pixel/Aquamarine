@@ -41,6 +41,7 @@ pub mod datadir;
 pub mod totp;
 pub mod tglogin;
 pub mod report;
+pub mod music;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
 pub use auth::{AuthState, Caller};
@@ -2889,6 +2890,13 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/admin/packs/import", post(packs::admin_import))
         .route("/v1/admin/packs/upload", post(packs::admin_upload).layer(DefaultBodyLimit::max(packs::UPLOAD_LIMIT)))
         .route("/v1/admin/packs/:name", get(packs::admin_manifest).delete(packs::admin_delete))
+        .route("/v1/admin/music", get(music::admin_get).post(music::admin_set))
+        .route("/v1/admin/music/test", post(music::admin_test))
+        .route("/v1/music", get(music::info))
+        .route("/v1/music/rest/:method", get(music::rest))
+        .route("/v1/music/stream/:id", get(music::stream))
+        .route("/v1/music/download/:id", get(music::download))
+        .route("/v1/music/cover/:id", get(music::cover))
         .route("/v1/packs", get(packs::list))
         .route("/v1/packs/import", post(packs::import_http))
         .route("/v1/packs/:name", get(packs::manifest))
@@ -3024,6 +3032,7 @@ pub async fn serve_embedded(
     state.blobs.spawn_sweeper();
     fed::spawn_sync(state.clone());
     tgapi::resume_webhooks(state.clone());
+    music::spawn_bot(state.clone());
     let blobs = state.blobs.clone();
     let r = axum::serve(listener, app(state)).with_graceful_shutdown(shutdown).await;
     // Stopped: the file cache goes, people's data stays (blobstore::clear_cache).

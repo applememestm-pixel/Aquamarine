@@ -12,6 +12,7 @@ import { chats } from "./stores";
 import { api, events } from "./tauri";
 import type { Activity } from "./types";
 import { allowed, isPublic, privacy } from "./privacy";
+import { musicActivity } from "./music";
 
 export type OnlineStatus = "online" | "idle" | "dnd" | "invisible";
 
@@ -112,7 +113,7 @@ export function myPresence(peer = ""): Presence {
     status: hidden ? "" : (p.status ?? ""),
     listening: act && p.listening && p.listening.title ? p.listening : null,
     online: hidden ? "offline" : online,
-    activity: act && get(shareActivity) ? get(myActivity) : [],
+    activity: act && get(shareActivity) ? [...get(myActivity), ...get(musicActivity)] : [],
     pv: p.pv ?? 0,
   };
   if (peer) {
@@ -165,6 +166,8 @@ export function initPresence() {
     if (!on) myActivity.set([]);
     else void api.currentActivity().then((a) => myActivity.set(Array.isArray(a) ? a : [])).catch(() => {});
   });
+  let firstMusic = true;
+  musicActivity.subscribe(() => { if (firstMusic) { firstMusic = false; return; } if (get(shareActivity)) broadcastPresence(); });
   let first = true;
   myOnline.subscribe(() => { if (first) { first = false; return; } broadcastPresence(); });
   // Keep peers' "online" fresh (they expire it after STALE_MS of silence),

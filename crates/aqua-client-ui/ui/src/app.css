@@ -168,7 +168,7 @@ html.wk-lowfx .eq i:nth-child(3) { transform: scaleY(0.75); }
   html.kb-open body.chat-open .main-pane { padding-bottom: var(--kb, 0px); }
   /* Emoji / stickers panel open: it sits where the keyboard was, the
      conversation and the composer stay above it. */
-  html.picker-docked body.chat-open .main-pane { padding-bottom: calc(var(--dock-h, 300px) + env(safe-area-inset-bottom, 0px)); }
+  html.picker-docked body.chat-open .main-pane { padding-bottom: calc(var(--dock-h, 300px) + env(safe-area-inset-bottom, 0px) + var(--dock-gap, 0px)); }
 }
 /* Phones: the conversation slides in over the list, and back. */
 @media (max-width: 720px) and (prefers-reduced-motion: no-preference) {
@@ -369,8 +369,6 @@ html.phone { --tb-h: 0px; }
 /* Middle-button autoscroll anchor (lib/autoscroll.ts). */
 /* Middle-button autoscroll: the pointer itself turns into the scroll badge
    (bright arrow = the way it's scrolling); a faint dot marks where it began. */
-.aq-autoscroll { position: fixed; z-index: 99999; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%;
-  background: var(--accent); opacity: .55; pointer-events: none; box-shadow: 0 0 0 3px rgba(0,0,0,.35); }
 html.autoscrolling, html.autoscrolling * { cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='%230A0C14' fill-opacity='.72' stroke='%23fff' stroke-width='2'/><circle cx='16' cy='16' r='2' fill='%2300E5C7'/><path d='M16 6l5 6H11z' fill='%23fff' fill-opacity='.45'/><path d='M16 26l-5-6h10z' fill='%23fff' fill-opacity='.45'/></svg>") 16 16, all-scroll !important; user-select: none !important; }
 html.autoscrolling.as-up, html.autoscrolling.as-up * { cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='%230A0C14' fill-opacity='.72' stroke='%23fff' stroke-width='2'/><circle cx='16' cy='16' r='2' fill='%2300E5C7'/><path d='M16 6l5 6H11z' fill='%23fff' fill-opacity='1'/><path d='M16 26l-5-6h10z' fill='%23fff' fill-opacity='.45'/></svg>") 16 16, all-scroll !important; }
 html.autoscrolling.as-down, html.autoscrolling.as-down * { cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='%230A0C14' fill-opacity='.72' stroke='%23fff' stroke-width='2'/><circle cx='16' cy='16' r='2' fill='%2300E5C7'/><path d='M16 6l5 6H11z' fill='%23fff' fill-opacity='.45'/><path d='M16 26l-5-6h10z' fill='%23fff' fill-opacity='1'/></svg>") 16 16, all-scroll !important; }

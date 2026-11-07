@@ -118,7 +118,7 @@ export function luminance(hex: string): number {
 /** Colours offered for the card, besides "from the banner" and any colour. */
 export const CARD_SWATCHES = [
   "#2EE6C5", "#4F7AFE", "#7B5CFF", "#C04CFD", "#FF5CA8", "#FF5A5F",
-  "#FF8A3D", "#FFC83D", "#7BD957", "#1FB57A", "#3A4A63", "#F2EEE6",
+  "#FF8A3D", "#FFC83D", "#7BD957", "#1FB57A", "#3A4A63", "#F2EEE6", "#38BDF8", "#16181F",
 ];
 
 export const CARD_INTENSITY = 62;

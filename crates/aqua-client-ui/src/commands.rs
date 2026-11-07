@@ -2599,6 +2599,9 @@ pub const POLLVOTE_PREFIX: &str = "[pollvote:v1]";
 pub const POLLCLOSE_PREFIX: &str = "[pollclose:v1]";
 pub const SEEN_PREFIX: &str = "[seen:v1]";
 pub const STATUS_PREFIX: &str = "[status:v1]";
+/// "Listen together" (ui/src/lib/music.ts): the host's player state —
+/// track, position, play/pause — for the peers following along.
+pub const LISTEN_PREFIX: &str = "[listen:v1]";
 pub const REACT_PREFIX: &str = "[react:v1]";
 /// Group metadata snapshot (title, members, roles, settings), fanned out
 /// to members so everyone converges on the newest `version`.
@@ -3140,7 +3143,7 @@ pub fn own_device_message(app: &AppHandle, to: &str, inner: &str) {
     // Something "to me" from my own other device isn't a chat with myself.
     if to == me || to.is_empty() { return; }
     // Per-device state (typing, read marks, presence…) isn't mirrored.
-    for p in [CALL_PREFIX, POLLVOTE_PREFIX, POLLCLOSE_PREFIX, SEEN_PREFIX, STATUS_PREFIX, REACT_PREFIX, TYPING_PREFIX] {
+    for p in [CALL_PREFIX, POLLVOTE_PREFIX, POLLCLOSE_PREFIX, SEEN_PREFIX, STATUS_PREFIX, REACT_PREFIX, TYPING_PREFIX, LISTEN_PREFIX] {
         if inner.starts_with(p) { return; }
     }
     if !s.chats.contains_key(to) {
@@ -3741,7 +3744,7 @@ async fn on_incoming_envelope(
 /// when one happens to open a new session (X3DH initial message).
 pub(crate) fn is_control_text(text: &str) -> bool {
     text.starts_with(CALL_PREFIX)
-        || [POLLVOTE_PREFIX, POLLCLOSE_PREFIX, SEEN_PREFIX, STATUS_PREFIX, REACT_PREFIX, TYPING_PREFIX,
+        || [POLLVOTE_PREFIX, POLLCLOSE_PREFIX, SEEN_PREFIX, STATUS_PREFIX, LISTEN_PREFIX, REACT_PREFIX, TYPING_PREFIX,
             EDIT_PREFIX, DEL_PREFIX, REN_PREFIX, CTL_PREFIX, GCALL_PREFIX, GRPINFO_PREFIX, GRPSELF_PREFIX,
             GRPJOIN_PREFIX, GRPLEAVE_PREFIX, GRPCTL_PREFIX, GRPMSG_PREFIX, CDM_PREFIX, crate::autodelete::TTL_PREFIX,
             crate::history_sync::HPOKE_PREFIX, crate::history_sync::HKEYREQ_PREFIX, crate::history_sync::HKEY_PREFIX,
@@ -3883,6 +3886,12 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
     if let Some(body) = text.strip_prefix(STATUS_PREFIX) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
             let _ = app.emit("aqua://presence", serde_json::json!({ "from": from, "presence": v }));
+        }
+        return;
+    }
+    if let Some(body) = text.strip_prefix(LISTEN_PREFIX) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
+            let _ = app.emit("aqua://listen", serde_json::json!({ "from": from, "data": v }));
         }
         return;
     }
@@ -4500,4 +4509,23 @@ mod live_photo_tests {
         assert_eq!(motion_photo_clip(&f).map(|c| c.len()), Some(f.len() - clip_at));
         assert!(motion_photo_clip(&[0xFF, 0xD8, 0xFF, 0xD9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]).is_none());
     }
+}
+
+/// Machine translation of public text (the "What's new" notes) through
+/// Google's free endpoint. Nothing private goes here: the notes are public.
+#[tauri::command]
+pub async fn translate_text(text: String, to: String) -> Result<String, String> {
+    if text.len() > 20_000 { return Err("too long".into()); }
+    let to: String = to.chars().filter(|c| c.is_ascii_alphabetic() || *c == '-').take(8).collect();
+    let body = reqwest::Client::new()
+        .post("https://translate.googleapis.com/translate_a/single")
+        .query(&[("client", "gtx"), ("sl", "auto"), ("tl", to.as_str()), ("dt", "t")])
+        .form(&[("q", text.as_str())])
+        .timeout(std::time::Duration::from_secs(20))
+        .send().await.map_err(|e| e.to_string())?
+        .error_for_status().map_err(|e| e.to_string())?
+        .text().await.map_err(|e| e.to_string())?;
+    let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    let out: String = v.get(0).and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|s| s.get(0)?.as_str()).collect()).unwrap_or_default();
+    if out.is_empty() { Err("no translation".into()) } else { Ok(out) }
 }

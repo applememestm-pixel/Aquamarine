@@ -269,11 +269,11 @@ jobs:
         run: |
           mkdir -p dist
           base="crates/aqua-server-app/target/${{ matrix.rust-target }}/release/bundle"
-          shopt -s nullglob globstar
-          for f in "$base"/**/*-setup.exe; do cp "$f" dist/AquamarineServer-Setup.exe; done
-          for f in "$base"/**/*.dmg; do case "$f" in *rw.*) ;; *) cp "$f" dist/AquamarineServer.dmg ;; esac; done
-          for f in "$base"/**/*.AppImage; do cp "$f" dist/AquamarineServer.AppImage; done
-          for f in "$base"/**/*.deb; do cp "$f" dist/aquamarine-server.deb; done
+          shopt -s nullglob  # bash 3.2 on macOS has no globstar; bundles sit one level deep
+          for f in "$base"/*/*-setup.exe; do cp "$f" dist/AquamarineServer-Setup.exe; done
+          for f in "$base"/*/*.dmg; do case "$f" in *rw.*) ;; *) cp "$f" dist/AquamarineServer.dmg ;; esac; done
+          for f in "$base"/*/*.AppImage; do cp "$f" dist/AquamarineServer.AppImage; done
+          for f in "$base"/*/*.deb; do cp "$f" dist/aquamarine-server.deb; done
           ls -la dist
 
       - uses: actions/upload-artifact@v4

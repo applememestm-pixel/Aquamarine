@@ -28,6 +28,7 @@
       ["stickers", "Стикеры и реакции", "Stickers & reactions"],
       ["profiles", "Профили и игры", "Profiles & games"],
       ["bots", "Боты и мини-приложения", "Bots & mini apps"],
+      ["music", "Музыка: Navidrome", "Music: Navidrome"],
     ]],
     ["Эксплуатация", "Operations", [
       ["api", "HTTP API", "HTTP API"],

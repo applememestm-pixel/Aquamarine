@@ -134,6 +134,20 @@
     const r = document.documentElement;
     r.classList.toggle("picker-docked", docked);
     if (docked) r.style.setProperty("--dock-h", `${dockH}px`);
+    if (!docked) { r.style.removeProperty("--dock-gap"); return; }
+    // The page can run a little past the visible screen on Android (100vh vs
+    // the real height, the gesture bar), so padding by the panel height alone
+    // left the composer under the panel's top edge. Measure and make up for it.
+    const fit = () => requestAnimationFrame(() => {
+      const comp = document.querySelector<HTMLElement>(".composer");
+      if (!comp || !panel) return;
+      const over = comp.getBoundingClientRect().bottom - panel.getBoundingClientRect().top;
+      const cur = parseFloat(r.style.getPropertyValue("--dock-gap")) || 0;
+      if (Math.abs(over) > 1) r.style.setProperty("--dock-gap", `${Math.max(0, cur + over + 4)}px`);
+    });
+    fit(); const t = setTimeout(fit, 260);
+    window.addEventListener("resize", fit);
+    return () => { clearTimeout(t); window.removeEventListener("resize", fit); };
   });
   // The message field gets the finger: keyboard up, panel down.
   onMount(() => {

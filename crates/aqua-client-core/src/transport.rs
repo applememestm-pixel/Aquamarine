@@ -643,6 +643,9 @@ impl Transport {
     }
 
     pub fn server_url(&self) -> &str { &self.server_url }
+    /// The HTTP client (proxy settings applied) — for relay endpoints the
+    /// app calls itself, like `/v1/music/*`.
+    pub fn http(&self) -> &reqwest::Client { &self.http }
 
     /// Download an encrypted blob by CID. The caller is expected to
     /// re-verify the SHA-256 before trusting the bytes.

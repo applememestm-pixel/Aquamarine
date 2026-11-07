@@ -11,7 +11,9 @@
   } from "../player";
   import { t } from "../i18n";
   import MusicPlayer from "./MusicPlayer.svelte";
-  import { untrack, tick } from "svelte";
+  import { untrack, tick, onMount } from "svelte";
+  import { prevTrack } from "../player";
+  import { bindAudio } from "../music";
 
   const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
   const VOL_KEY = "aqua.player.volume";
@@ -88,6 +90,39 @@
         audio.play().catch((e) => console.warn("top player: play() failed", e)); // user can press play
       }).catch((e) => showToast(e instanceof Error ? e.message : String(e), 12000));
     }
+  });
+
+  // Listening together follows / drives this element (lib/music.ts).
+  $effect(() => bindAudio(audio));
+  // The system's media controls (Windows' media flyout, keyboard media
+  // keys, Linux MPRIS where the webview offers it, phones' WebView):
+  $effect(() => {
+    const tr = $nowPlaying;
+    const ms = typeof navigator !== "undefined" ? navigator.mediaSession : undefined;
+    if (!ms) return;
+    try {
+      ms.metadata = tr ? new MediaMetadata({
+        title: tr.title, artist: tr.nd?.artist ?? tr.sub ?? "", album: tr.nd?.album ?? "",
+        artwork: tr.cover ? [{ src: tr.cover, sizes: "600x600" }] : [],
+      }) : null;
+    } catch { /* not supported */ }
+  });
+  $effect(() => {
+    const ms = typeof navigator !== "undefined" ? navigator.mediaSession : undefined;
+    if (ms) try { ms.playbackState = $nowPlaying ? (playing ? "playing" : "paused") : "none"; } catch { /* ignore */ }
+  });
+  onMount(() => {
+    const ms = navigator.mediaSession;
+    if (!ms) return;
+    const set = (a: MediaSessionAction, h: MediaSessionActionHandler | null) => { try { ms.setActionHandler(a, h); } catch { /* unsupported action */ } };
+    set("play", () => void audio?.play().catch(() => {}));
+    set("pause", () => audio?.pause());
+    set("previoustrack", () => { if (audio && audio.currentTime > 3) audio.currentTime = 0; else prevTrack(); });
+    set("nexttrack", () => { nextTrack(); });
+    set("seekto", (d) => { if (audio && d.seekTime != null) audio.currentTime = d.seekTime; });
+    set("seekbackward", (d) => { if (audio) audio.currentTime = Math.max(0, audio.currentTime - (d.seekOffset ?? 10)); });
+    set("seekforward", (d) => { if (audio) audio.currentTime = audio.currentTime + (d.seekOffset ?? 10); });
+    return () => { for (const a of ["play", "pause", "previoustrack", "nexttrack", "seekto", "seekbackward", "seekforward"] as MediaSessionAction[]) set(a, null); };
   });
 
   function toggle() {

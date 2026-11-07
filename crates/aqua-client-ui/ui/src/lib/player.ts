@@ -21,6 +21,9 @@ export interface Track {
   sub?: string;
   /** Optional cover art URL; a neon gradient tile is shown otherwise. */
   cover?: string;
+  /** From Navidrome (lib/music.ts): where it plays from, for cards,
+   *  "listening to", scrobbles and listening together. */
+  nd?: { src: "server" | "own"; id: string; artist?: string; album?: string; dur?: number; coverArt?: string };
 }
 
 /** Currently loaded track, or null when nothing is playing. */
@@ -51,10 +54,18 @@ export function playQueue(tracks: Track[], index = 0) {
   nowPlaying.set(tracks[i]);
 }
 
+/** Start the queue over after its last track. */
+export const repeatAll = writable<boolean>(false);
+
 /** Advance to the next queued track. Returns false at the end of the queue. */
 export function nextTrack(): boolean {
   const q = get(queue);
   const i = get(queueIndex);
+  if (i >= 0 && i + 1 >= q.length && q.length > 1 && get(repeatAll)) {
+    queueIndex.set(0);
+    nowPlaying.set(q[0]);
+    return true;
+  }
   if (i < 0 || i + 1 >= q.length) return false;
   queueIndex.set(i + 1);
   nowPlaying.set(q[i + 1]);

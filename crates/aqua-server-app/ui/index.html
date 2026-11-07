@@ -72,11 +72,13 @@
   button.ghost { background: none; border-color: transparent; color: var(--dim); }
   button.ghost:hover { color: var(--fg); background: #121826; }
   button:disabled { opacity: .45; cursor: default; }
-  input[type=text], input[type=number], input[type=password], input[type=email], textarea {
+  input:not([type]), input[type=text], input[type=url], input[type=search], input[type=number], input[type=password], input[type=email], textarea {
     background: #0A0D14; border: 1px solid var(--line2); color: var(--fg); border-radius: 10px; padding: 9px 11px; font: inherit; width: 100%; outline: none; }
   input:focus, textarea:focus { border-color: var(--accent); }
   textarea { min-height: 96px; resize: vertical; font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
   label.f { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--dim); font-weight: 600; flex: 1; min-width: 140px; }
+  label.chk { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--fg); cursor: pointer; }
+  label.chk input { width: 16px; height: 16px; accent-color: var(--accent); }
   code, .mono { font: 13px ui-monospace, SFMono-Regular, Consolas, monospace; }
 
   /* switch row */
@@ -133,7 +135,7 @@
   .ev.register { color: var(--accent2); background: rgba(108,140,255,.12); }
   .bar { width: 120px; height: 6px; border-radius: 3px; background: #1C2433; overflow: hidden; flex: none; }
   .bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); }
-  .empty { color: var(--dim); text-align: center; padding: 22px 8px; font-size: 13px; }
+  .empty { color: var(--dim); text-align: center; padding: 22px 8px; font-size: 13px; grid-column: 1 / -1; }
   .tag { font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: 7px; background: #1C2433; color: var(--dim); }
   .tag.net { color: var(--accent); background: rgba(46,230,197,.1); }
   .code-big { font: 800 20px ui-monospace, Consolas, monospace; letter-spacing: .12em; color: var(--accent); }
@@ -317,6 +319,12 @@ const RU_DICT = {
   "Errors": "Ошибки", "errorsSub": "Сбои приложений людей на этом сервере и самого сервера. Текста переписки здесь нет — только ошибка, версия и устройство.",
   "Refresh": "Обновить", "What the codes mean": "Что значат коды", "Also sent to the developer": "Разработчик тоже получает их",
   "No errors — all good.": "Ошибок нет — всё хорошо.",
+  "Music": "Музыка", "Address": "Адрес", "Login": "Логин", "Password": "Пароль", "Check": "Проверить", "Turn off": "Отключить",
+  "Checking…": "Проверяю…", "Turned off.": "Отключено.", "How people use it": "Как этим пользоваться",
+  "ndNote": "Подключите свой Navidrome (или любой Subsonic-сервер) — и все на этом сервере смогут слушать и скачивать из него музыку в приложении. Звук идёт через сервер напрямую, ничего не сохраняется.",
+  "ndBot": "Бот @{b}: пишешь название — он присылает треки", "ndSafe": "Логин и пароль хранятся только на этом сервере; людям они не видны. Через сервер можно только читать и слушать — ничего не удалить и не изменить.",
+  "ndEnv": "Задано переменными AQUA_NAVIDROME_* — меняйте их там.", "ndOk": "Работает: {v}.", "ndNeed": "Нужны адрес и логин.",
+  "ndHow": "В приложении: Настройки → Плагины → Navidrome (или «Музыка» в меню скрепки). Музыка этого сервера появится сама. Карточки треков можно отправлять в чаты — у всех на этом сервере они играют.",
   "Add from Telegram": "Добавить из Telegram", "addTgNote": "Ссылка на набор стикеров или эмодзи (t.me/addstickers/… или t.me/addemoji/…). Сервер скачает его один раз — и все приложения на этом сервере его увидят. Нужен токен бота выше.",
   "Upload your own": "Загрузить свои", "uploadNote": "PNG или WebP с прозрачностью, GIF, анимации Telegram (.tgs) и видео-стикеры (.webm) — до 2 МБ каждый, до 200 в наборе.",
   "Emoji": "Эмодзи", "Pack name": "Название набора", "Choose files…": "Выбрать файлы…", "Add": "Добавить", "uploaded": "загружен здесь",
@@ -369,6 +377,10 @@ const EN = {
   mobNote: "The server keeps running with the screen off — Android shows a notification. If the phone closes it anyway: Settings → Apps → Aquamarine Server → Battery → Unrestricted.",
   serverOff: "The server is off", serverOffSub: "This page works while the server is running.",
   "for {t}": "for {t}",
+  ndNote: "Connect your Navidrome (or any Subsonic server) and everyone on this server can listen to and download its music in the app. Audio passes through the server; nothing is stored.",
+  ndBot: "Bot @{b}: write a title, it sends the tracks", ndSafe: "The login and password stay on this server; people never see them. Through the server music can only be read and played — nothing can be deleted or changed.",
+  ndEnv: "Set by AQUA_NAVIDROME_* variables — change them there.", ndOk: "Works: {v}.", ndNeed: "An address and a login are needed.",
+  ndHow: "In the app: Settings → Plugins → Navidrome (or «Music» in the paperclip menu). This server's music appears by itself. Track cards can be sent to chats — they play for everyone on this server.",
   addTgNote: "A link to a sticker or emoji pack (t.me/addstickers/… or t.me/addemoji/…). The server downloads it once — every app on this server sees it. Needs the bot token above.",
   uploadNote: "PNG or WebP with transparency, GIF, Telegram animations (.tgs) and video stickers (.webm) — up to 2 MB each, up to 200 in a pack.",
   packsNote: "Click a pack to open all of it.",
@@ -405,6 +417,7 @@ const IC = {
   network: I('<circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="19" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="M12 7.5v4M12 11.5l-5.5 5.5M12 11.5l5.5 5.5"/>'),
   mail: I('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>'),
   errors: I('<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>'),
+  music: I('<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>'),
   stickers: I('<path d="M21 12a9 9 0 1 1-9-9h4l5 5z"/><path d="M8.5 14.5a4 4 0 0 0 7 0"/><path d="M9 9.5h.01M15 9.5h.01"/>'),
   settings: I('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'),
   online: I('<path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1"/>'),
@@ -430,7 +443,7 @@ let fed = null;         // /v1/admin/federation
 let page = "home";
 let version = "";
 let busy = false;
-const PAGES = [["home", "Home"], ["people", "People"], ["access", "Access"], ["network", "Network"], ["mail", "Mail"], ["stickers", "Stickers"], ["errors", "Errors"], ["settings", "Settings"]];
+const PAGES = [["home", "Home"], ["people", "People"], ["access", "Access"], ["network", "Network"], ["mail", "Mail"], ["stickers", "Stickers"], ["music", "Music"], ["errors", "Errors"], ["settings", "Settings"]];
 try { page = localStorage.getItem("aqs.page") || "home"; } catch {}
 if (!PAGES.some(([id]) => id === page)) page = "home";
 
@@ -458,7 +471,7 @@ function go(id) {
 // Rendering: each page is a function that fills <main>
 // ======================================================================
 function render() {
-  const fn = { home: pageHome, people: pagePeople, access: pageAccess, network: pageNetwork, mail: pageMail, stickers: pageStickers, errors: pageErrors, settings: pageSettings }[page];
+  const fn = { home: pageHome, people: pagePeople, access: pageAccess, network: pageNetwork, mail: pageMail, stickers: pageStickers, music: pageMusic, errors: pageErrors, settings: pageSettings }[page];
   $("main").innerHTML = `<div class="page" id="pg"></div>`;
   fn($("pg"));
 }
@@ -855,6 +868,47 @@ async function saveTg(remove) {
   if (!remove && !token) return setMsg("tMsg", t("Paste the token first."), "err");
   try { const v = await api("/v1/admin/telegram", "POST", { token }); $("tTok").value = ""; showTg(v); setMsg("tMsg", remove ? t("Token removed.") : t("savedTg"), "ok"); }
   catch (e) { setMsg("tMsg", t("Failed: ") + esc(errText(e)), "err"); }
+}
+
+// Music: Navidrome behind the server (aqua-server/src/music.rs).
+function pageMusic(el) {
+  if (!st?.running) return needRunning(el, "Music");
+  el.innerHTML = `<div><h1>${t("Music")}</h1></div>
+    <div class="card"><h2>Navidrome</h2><div class="note">${t("ndNote")}</div>
+      <div class="row"><label class="f" style="flex:1">${t("Address")}<input id="ndUrl" placeholder="http://192.168.1.10:4533" autocomplete="off"></label></div>
+      <div class="row"><label class="f" style="flex:1">${t("Login")}<input id="ndUser" autocomplete="off"></label>
+        <label class="f" style="flex:1">${t("Password")}<input type="password" id="ndPass" autocomplete="new-password"></label></div>
+      <div class="row"><label class="chk"><input type="checkbox" id="ndBot" checked> <span id="ndBotL">${t("ndBot", { b: "music" })}</span></label></div>
+      <div class="note">${t("ndSafe")}</div>
+      <div class="row"><button class="primary" onclick="saveNd(false)">${t("Save")}</button><button onclick="testNd()">${t("Check")}</button><button class="danger" id="ndDel" onclick="saveNd(true)">${t("Turn off")}</button><span class="msg" id="ndMsg"></span></div></div>
+    <div class="card"><h2>${t("How people use it")}</h2><div class="note">${t("ndHow")}</div></div>`;
+  api("/v1/admin/music").then(showNd).catch((e) => setMsg("ndMsg", esc(errText(e)), "err"));
+}
+function showNd(v) {
+  if (!$("ndUrl")) return;
+  $("ndUrl").value = v.url || ""; $("ndUser").value = v.user || ""; $("ndBot").checked = !!v.bot;
+  $("ndPass").placeholder = v.has_password ? "•••••••• " + t("saved — leave empty to keep") : "";
+  $("ndBotL").textContent = t("ndBot", { b: v.bot_name || "music" });
+  for (const id of ["ndUrl", "ndUser", "ndPass", "ndBot"]) $(id).disabled = !!v.from_env;
+  $("ndDel").disabled = !v.url || !!v.from_env;
+  if (v.from_env) setMsg("ndMsg", t("ndEnv"), "");
+}
+function ndTest(r) {
+  if (!r) return "";
+  return r.ok ? t("ndOk", { v: [r.server, r.version].filter(Boolean).join(" ") }) : t("Failed: ") + esc(r.error || "");
+}
+async function saveNd(off) {
+  const body = off ? { url: "", user: "", password: "", bot: false } : { url: $("ndUrl").value.trim(), user: $("ndUser").value.trim(), password: $("ndPass").value, bot: $("ndBot").checked };
+  if (!off && (!body.url || !body.user)) return setMsg("ndMsg", t("ndNeed"), "err");
+  setMsg("ndMsg", t("Checking…"), "");
+  try { const r = await api("/v1/admin/music", "POST", body); $("ndPass").value = ""; showNd(r.view);
+    setMsg("ndMsg", off ? t("Turned off.") : ndTest(r.test), off || r.test?.ok ? "ok" : "err"); }
+  catch (e) { setMsg("ndMsg", t("Failed: ") + esc(errText(e)), "err"); }
+}
+async function testNd() {
+  setMsg("ndMsg", t("Checking…"), "");
+  try { const r = await api("/v1/admin/music/test", "POST", {}); setMsg("ndMsg", ndTest(r), r.ok ? "ok" : "err"); }
+  catch (e) { setMsg("ndMsg", t("Failed: ") + esc(errText(e)), "err"); }
 }
 
 // Sticker packs: add from Telegram, upload, open, remove (packs.rs admin_*).

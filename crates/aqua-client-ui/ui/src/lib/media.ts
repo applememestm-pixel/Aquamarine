@@ -114,6 +114,12 @@ export function localPathOf(url: string): string {
 
 /** Turn an asset: URL of a video / audio file into a streaming URL. */
 export async function streamable(url: string): Promise<string> {
+  // Navidrome (lib/music.ts): `nd:<src>:<id>` → a loopback stream.
+  if (url.startsWith("nd:")) {
+    const [, src, ...id] = url.split(":");
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<string>("music_url", { src, kind: "stream", id: id.join(":") });
+  }
   const m = ASSET_URL.exec(url);
   if (!m) return url;
   let path = "";

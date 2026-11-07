@@ -12,6 +12,7 @@
   import { icons } from "../icons";
   import { activeTab, activeId, type NavTab } from "../stores";
   import { openSettings, settingsOpen } from "../panels/settings";
+  import { musicOn } from "../music";
 
   type Item = { id: string; label: string; svg: string; tab?: NavTab; mobileOnly?: boolean; desktopOnly?: boolean };
   // Phones get four: Chats, Files, Contacts (with recent calls inside, like
@@ -30,7 +31,9 @@
     mq?.addEventListener("change", on);
     return () => mq?.removeEventListener("change", on);
   });
-  const items = $derived(all.filter((i) => (phone ? !i.desktopOnly : !i.mobileOnly)));
+  // The Navidrome add-on (lib/music.ts) adds Music, on phones, only while it's on.
+  const music: Item = { id: "music", label: "Music", svg: icons.music, tab: "music", mobileOnly: true };
+  const items = $derived((phone && $musicOn ? [...all.slice(0, -1), music, all[all.length - 1]] : all).filter((i) => (phone ? !i.desktopOnly : !i.mobileOnly)));
 
   function activate(it: Item) {
     if (it.tab) activeTab.set(it.tab);

@@ -5,7 +5,7 @@
  */
 import { writable } from "svelte/store";
 
-export type AttachId = "media" | "file" | "poll" | "event" | "sealed" | "article" | "document" | "board" | "checklist" | "bluetooth";
+export type AttachId = "media" | "file" | "poll" | "event" | "sealed" | "article" | "document" | "board" | "checklist" | "bluetooth" | "music";
 
 export const ATTACH_ITEMS: { id: AttachId; label: string }[] = [
   { id: "media", label: "Photo or video" },
@@ -18,6 +18,7 @@ export const ATTACH_ITEMS: { id: AttachId; label: string }[] = [
   { id: "document", label: "Document" },
   { id: "board", label: "Board" },
   { id: "bluetooth", label: "Bluetooth" },
+  { id: "music", label: "Music" },
 ];
 
 /** Shown right away; the rest go under "More". */

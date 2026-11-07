@@ -33,6 +33,7 @@ pub mod storage;
 pub mod tray;
 pub mod bgnotify;
 pub mod crashreport;
+pub mod music;
 
 use anyhow::Result;
 use tauri::Manager;
@@ -150,6 +151,14 @@ pub fn run() -> Result<()> {
             crashreport::report_error,
             crashreport::report_config,
             bgnotify::notify_front,
+            commands::translate_text,
+            music::music_status,
+            music::music_set_own,
+            music::music_clear_own,
+            music::music_api,
+            music::music_url,
+            music::music_save,
+            music::plugin_fetch,
             commands::picked_preview,
             commands::meet_qr,
             commands::meet_accept,

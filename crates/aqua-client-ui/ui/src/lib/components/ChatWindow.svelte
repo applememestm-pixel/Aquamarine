@@ -55,7 +55,7 @@
   import { api, assetUrl, sendChatControl } from "../tauri";
   import { openFingerprint, verifiedKeys, keyState } from "./FingerprintModal.svelte";
   import { showToast } from "./Toast.svelte";
-  import { pluginCommands, pluginsOnSend, runPluginCommand } from "../plugins";
+  import { pluginCommands, pluginsOnSend, runPluginCommand, pluginButtons, pressPluginButton } from "../plugins";
   import { ATTACH_ITEMS, attachFront, attachHidden, attachDock, attachBots, toggleAttachBot, type AttachId } from "../attachMenu";
   import { openRoomRequest } from "../roomNav";
   import { AUTODL_DEFAULT } from "../theme";
@@ -92,6 +92,8 @@
   import { TTL_PRESETS, ttlLabel, ttlShort, ttlNote } from "../ttl";
   import { parseBotText, type BotKb, type KbButton } from "../botkb";
   import { openMiniApp } from "./MiniApp.svelte";
+  import TrackCardView from "./TrackCard.svelte";
+  import { musicOn, openMusic, parseTrack } from "../music";
   import { parseSpecial, newId as plannerId } from "../planner";
   import { parseDoc, parseBoard, newWsId } from "../workspace";
   import DocCard, { docEditor } from "./DocCard.svelte";
@@ -254,6 +256,7 @@
   $effect(() => { if (!attachMenuOpen) attachMore = false; });
   function attachAvailable(id: AttachId): boolean {
     if (id === "bluetooth") return DESKTOP_APP;
+    if (id === "music") return $musicOn;
     if (id === "sealed") return !!$activeChat && !isGroup && !isBotChat && $activeChat.id !== "__saved__";
     return true;
   }
@@ -271,6 +274,7 @@
       case "board": void newBoard(); break;
       case "checklist": if (chat) openPlanner("tasks", chat.id); break;
       case "sealed": if (chat) capsuleComposer.set(chat.id); break;
+      case "music": if (chat) openMusic(chat.id); break;
     }
   }
 
@@ -3812,6 +3816,9 @@
                     {@render statusTick(m.outgoing)}
                   </span>
                 </div>
+              {:else if m.kind.type === "text" && m.kind.content.text.startsWith("[track:v1]") && parseTrack(m.kind.content.text)}
+                <TrackCardView card={parseTrack(m.kind.content.text)!} outgoing={m.outgoing} chat={$activeChat?.id ?? ""} from={m.outgoing ? myUsername : ($activeChat?.id ?? "")} />
+                <span class="card-meta">{m.time}</span>
               {:else if m.kind.type === "text" && m.kind.content.text.startsWith("[doc:v1]") && parseDoc(m.kind.content.text) && $activeChat}
                 <DocCard doc={parseDoc(m.kind.content.text)!} chat={$activeChat.id} outgoing={m.outgoing} />
                 <span class="card-meta">{m.time}</span>
@@ -4195,6 +4202,7 @@
         {#snippet attachIcon(id: string)}
           {#if id === "media"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>
           {:else if id === "file"}{@html icons.attach}
+          {:else if id === "music"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
           {:else if id === "bluetooth"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 7 17 17 12 22 12 2 17 7 7 17"/></svg>
           {:else if id === "article"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h12a3 3 0 0 1 3 3v14H7a3 3 0 0 1-3-3V4z"/><path d="M19 7v14"/><line x1="7" y1="9" x2="15" y2="9"/><line x1="7" y1="13" x2="15" y2="13"/></svg>
           {:else if id === "poll"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="20" x2="6" y2="12"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="18" y1="20" x2="18" y2="9"/></svg>
@@ -4220,6 +4228,12 @@
                 <button class="ap-item ap-bot" title={"@" + b.bot} onclick={() => { attachMenuOpen = false; openMiniApp({ bot: b.bot, url: b.url, from: "menu" }); }}>
                   <span class="ap-bot-ava" style:background-image={$avatars[b.bot] ? `url("${$avatars[b.bot]}")` : undefined}>{$avatars[b.bot] ? "" : (b.title || b.bot).charAt(0).toUpperCase()}</span>
                   <span>{b.title || b.bot}</span>
+                </button>
+            {/each}
+            {#each $pluginButtons as pb (pb.plugin + ":" + pb.id)}
+                <!-- A plugin's own item (aqua.button, lib/plugins.ts). -->
+                <button class="ap-item" title={"🧩 " + pb.plugin} onclick={() => { attachMenuOpen = false; if ($activeChat) pressPluginButton(pb, $activeChat.id); }}>
+                  <span class="ap-emoji">{pb.icon}</span><span>{pb.label}</span>
                 </button>
             {/each}
             {#if rest.length && !attachMore}
@@ -6056,4 +6070,5 @@
   .uns-body b { font-weight: 600; font-size: 14px; }
   .uns-up { border: none; padding: 0; background: none; color: var(--accent); font: inherit; font-size: 13.5px; font-weight: 700; cursor: pointer; }
   .uns-up:hover { text-decoration: underline; }
+  .ap-emoji { font-size: 20px; line-height: 1; width: 22px; text-align: center; }
 </style>

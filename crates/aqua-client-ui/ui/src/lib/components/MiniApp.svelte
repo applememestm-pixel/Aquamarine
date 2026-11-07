@@ -16,7 +16,11 @@
     startParam?: string;
   }
   export const miniApp = writable<MiniAppOpen | null>(null);
-  export function openMiniApp(o: MiniAppOpen) { miniApp.set(o); }
+  export function openMiniApp(o: MiniAppOpen) {
+    // The relay's @music bot: its "mini app" is the app's own player (lib/music.ts).
+    if (o.url.startsWith("aqua:music")) { void import("../music").then((m) => m.openMusic()); return; }
+    miniApp.set(o);
+  }
 </script>
 
 <script lang="ts">

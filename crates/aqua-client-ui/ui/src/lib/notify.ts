@@ -74,6 +74,11 @@ export function startBgNotify(): () => void {
   };
   document.addEventListener("visibilitychange", vis);
   vis();
+  // Heartbeat: a paused page goes quiet and Rust takes over (bgnotify.rs).
+  const beat = setInterval(() => { if (document.visibilityState === "visible") send("notify_front", { front: true }); }, 1500);
+  // Asked once at first start; a dismissed Android 13 prompt left them off
+  // for good. Ask again on start while notifications are on in settings.
+  if (get(settings).notifyDesktop) void ensureNotifyPermission(true);
   let un = () => {};
   void Promise.all([import("./chatPrefs"), import("./i18n")]).then(([cp, i18n]) => {
     const push = () => {
@@ -84,11 +89,14 @@ export function startBgNotify(): () => void {
         muted: [...get(cp.mutedChats)],
         locked,
         locked_text: i18n.tr("New message in a locked chat"),
+        archived: [...get(cp.archived)],
+        widget_text: get(settings).widgetText !== false,
+        widget_empty: i18n.tr("No new messages"),
       } });
     };
-    const a = settings.subscribe(push), b = cp.mutedChats.subscribe(push);
+    const a = settings.subscribe(push), b = cp.mutedChats.subscribe(push), c = cp.archived.subscribe(push);
     window.addEventListener("storage", push);
-    un = () => { a(); b(); window.removeEventListener("storage", push); };
+    un = () => { a(); b(); c(); window.removeEventListener("storage", push); };
   });
-  return () => { document.removeEventListener("visibilitychange", vis); un(); };
+  return () => { clearInterval(beat); document.removeEventListener("visibilitychange", vis); un(); };
 }
