@@ -1632,6 +1632,12 @@ pub fn special_preview(text: &str) -> Option<String> {
         let t: String = v.get("t").and_then(|t| t.as_str()).unwrap_or("").chars().take(80).collect();
         return Some(format!("💬 {}", humanize_tokens(&t)));
     }
+    if let Some(b) = text.strip_prefix("[track:v1]") {
+        let v: serde_json::Value = serde_json::from_str(b).ok()?;
+        let title: String = v.get("title").and_then(|t| t.as_str()).unwrap_or("").chars().take(60).collect();
+        let artist: String = v.get("artist").and_then(|t| t.as_str()).unwrap_or("").chars().take(40).collect();
+        return Some(if artist.is_empty() { format!("🎵 {title}") } else { format!("🎵 {title} — {artist}") });
+    }
     let (icon, body) = [("[event:v1]", "📅"), ("[tasks:v1]", "☑️"), ("[doc:v1]", "📄"), ("[board:v1]", "🗂")]
         .iter()
         .find_map(|(p, i)| text.strip_prefix(p).map(|b| (*i, b)))?;

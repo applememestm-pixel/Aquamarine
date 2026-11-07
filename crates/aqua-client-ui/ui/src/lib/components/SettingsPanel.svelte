@@ -19,6 +19,8 @@
   const PHONE_UI = /android|iphone|ipad/i.test(navigator.userAgent);
   import { hasWidget } from "../widget";
   import { plugins, pluginsOn, installPlugin, removePlugin, togglePlugin, EXAMPLE_PLUGIN } from "../plugins";
+  import { musicStatus, refreshMusic, openMusic } from "../music";
+  import { invoke } from "@tauri-apps/api/core";
   import { ATTACH_ITEMS, attachFront, attachHidden, attachDock, attachBots, toggleAttachFront, toggleAttachHidden, moveAttach, toggleAttachBot, resetAttachMenu } from "../attachMenu";
   import { chatLocks } from "../chatLocks";
   import { askSetLock, askRemoveLock, askChangeLock } from "../chatLockUi";
@@ -78,7 +80,7 @@
   import { meshStatus, meshSyncNow, meshSetEnabled, refreshMesh } from "../mesh";
 
   // ---- Section navigation ----
-  type Sec = "network" | "nearby" | "host" | "ghost" | "language" | "appearance" | "theme" | "behaviour" | "notifications" | "voice" | "wallpaper" | "accent" | "bots" | "account" | "updates" | "about" | "privacy" | "stickers" | "backups" | "devices" | "storage" | "advanced" | "power" | "window";
+  type Sec = "network" | "nearby" | "host" | "ghost" | "language" | "appearance" | "theme" | "behaviour" | "notifications" | "voice" | "wallpaper" | "accent" | "bots" | "account" | "updates" | "about" | "privacy" | "stickers" | "backups" | "devices" | "storage" | "advanced" | "power" | "window" | "music";
   let section = $state<Sec>("notifications");
   // Telegram-mobile style: coloured icon tiles in grouped lists.
   interface Item { id: Sec | "profile" | "shortcuts"; label: string; color: string; icon: string; hint?: string }
@@ -95,6 +97,7 @@
       { id: "behaviour", label: "Chat settings", color: "#007AFF", icon: ic(`<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>`) },
       { id: "storage", label: "Data and storage", color: "#30D158", icon: ic(`<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>`) },
       { id: "power", label: "Power saving", color: "#FFCC00", icon: ic(`<rect x="2" y="7" width="17" height="10" rx="2"/><line x1="22" y1="11" x2="22" y2="13"/><path d="M10 9l-2 3h3l-2 3"/>`) },
+      { id: "music", label: "Music", color: "#FF2D55", icon: ic(`<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>`) },
       { id: "stickers", label: "Stickers & Emoji", color: "#FF9500", icon: ic(`<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>`) },
       { id: "voice", label: "Voice & Video", color: "#34C759", icon: ic(`<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/>`) },
       { id: "language", label: "Language", color: "#AF52DE", icon: ic(`<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>`) },
@@ -135,6 +138,23 @@
   let detail = $state(false);
   // Phones have no keyboard shortcuts — hide that row there.
   let phone = $state(isPhone());
+  // Settings → Music: the user's own Navidrome (src/music.rs, kept in the vault).
+  let ndUrl = $state(""), ndUser = $state(""), ndPass = $state(""), ndBusy = $state(false), ndMsg = $state(""), ndOk = $state(false);
+  $effect(() => { const o = $musicStatus.own; if (o) { ndUrl = o.url; ndUser = o.user; } });
+  async function saveOwnNd() {
+    if (!ndUrl.trim() || !ndUser.trim()) { ndMsg = tr("An address and a login are needed"); ndOk = false; return; }
+    ndBusy = true; ndMsg = "";
+    try {
+      const r = await invoke<{ server?: string; version?: string }>("music_set_own", { url: ndUrl, user: ndUser, password: ndPass });
+      ndPass = ""; ndOk = true;
+      ndMsg = tr("Connected: {v}", { v: [r.server, r.version].filter(Boolean).join(" ") || "Subsonic" });
+      await refreshMusic();
+    } catch (e) { ndOk = false; ndMsg = String(e); }
+    ndBusy = false;
+  }
+  async function clearOwnNd() {
+    try { await invoke("music_clear_own"); ndUrl = ""; ndUser = ""; ndPass = ""; ndMsg = ""; await refreshMusic(); } catch (e) { showToast(String(e)); }
+  }
   /** Settings → Experimental → Plugins: code being pasted (null: closed). */
   let pluginPaste = $state<string | null>(null);
   onMount(() => {
@@ -1976,6 +1996,12 @@
             <div class="tr-sub">{$t("Small JavaScript add-ons, like in exteraGram: commands, changing what you send, reacting to messages.")}</div></div>
           <span class="switch" class:on={$pluginsOn}></span>
         </button>
+        <div class="toggle-row am-row" class:off={!$settings.navidrome}>
+          <div class="tr-text"><div class="tr-title">Navidrome <span class="pill-tag">{$t("built-in")}</span></div>
+            <div class="tr-sub">{$t("Music tab, player, track cards, listening together")}</div></div>
+          <button class="mini-btn" onclick={() => (section = "music")}>{$t("Settings")}</button>
+          <button class="switch-btn" onclick={() => settings.update((s) => ({ ...s, navidrome: !s.navidrome }))} aria-label={$t("On")}><span class="switch" class:on={!!$settings.navidrome}></span></button>
+        </div>
         {#if $pluginsOn}
           <div class="bots-note">{$t("A plugin sees the messages it's given, but runs locked away: no network, no access to your keys, files or the rest of the app. Install only plugins you trust.")}</div>
           {#each $plugins as pl (pl.id)}
@@ -2006,6 +2032,47 @@
           {/if}
         {/if}
       </section>
+      {/if}
+
+      {#if section === "music"}
+      <section class="group">
+        <div class="label">🎵 Navidrome</div>
+        <button class="toggle-row" onclick={() => settings.update((s) => ({ ...s, navidrome: !s.navidrome }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Navidrome add-on")}</div>
+            <div class="tr-sub">{$t("Music from Navidrome (or any Subsonic server): a music tab, the player, track cards in chats and listening together.")}</div></div>
+          <span class="switch" class:on={!!$settings.navidrome}></span>
+        </button>
+      </section>
+      {#if $settings.navidrome}
+      <section class="group">
+        <div class="label">{$t("This server's music")}</div>
+        {#if $musicStatus.server?.enabled}
+          <div class="bots-note">✅ {$t("This server has Navidrome — everyone here can listen. Its login stays on the server.")}{$musicStatus.server.bot ? " " + tr("Bot: @{b}", { b: $musicStatus.server.bot }) : ""}</div>
+        {:else}
+          <div class="foot-note">{$t("This server has no Navidrome. Its owner connects one in Aquamarine Server → Music.")}</div>
+        {/if}
+      </section>
+      <section class="group">
+        <div class="label">{$t("Your own Navidrome")}</div>
+        <div class="field-col"><span>{$t("Address")}</span><input class="txt" bind:value={ndUrl} placeholder="https://music.example.com" autocomplete="off" spellcheck="false" /></div>
+        <div class="field-col"><span>{$t("Login")}</span><input class="txt" bind:value={ndUser} autocomplete="off" spellcheck="false" /></div>
+        <div class="field-col"><span>{$t("Password")}</span><input class="txt" type="password" bind:value={ndPass} autocomplete="new-password" placeholder={$musicStatus.own ? tr("saved — leave empty to keep") : ""} /></div>
+        <div class="pl-acts">
+          <button class="mini-btn" disabled={ndBusy} onclick={saveOwnNd}>{ndBusy ? $t("Checking…") : $t("Connect")}</button>
+          {#if $musicStatus.own}<button class="mini-btn" onclick={clearOwnNd}>{$t("Disconnect")}</button>{/if}
+        </div>
+        {#if ndMsg}<div class="foot-note" style:color={ndOk ? "var(--success, #3DDC97)" : "var(--danger, #FF6B81)"}>{ndMsg}</div>{/if}
+        <div class="foot-note">{$t("The password is kept encrypted on this device and goes only to your Navidrome.")}</div>
+      </section>
+      <section class="group">
+        <button class="toggle-row" onclick={() => settings.update((s) => ({ ...s, musicShare: s.musicShare === false }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Show what I'm listening to")}</div>
+            <div class="tr-sub">{$t("“Listening to …” in your profile for people you chat with (with activity sharing on).")}</div></div>
+          <span class="switch" class:on={$settings.musicShare !== false}></span>
+        </button>
+        <button class="mini-btn" onclick={() => { closeSettings(); openMusic(); }}>🎵 {$t("Open music")}</button>
+      </section>
+      {/if}
       {/if}
 
       {#if section === "power"}
@@ -3147,4 +3214,8 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .host-addr { display: flex; align-items: center; gap: 10px; padding: 8px 14px; }
   .host-addr span { width: 84px; flex-shrink: 0; font-size: 13px; color: var(--fg-dim); }
   .host-addr code { flex: 1; min-width: 0; font-family: var(--font-mono, monospace); font-size: 13px; overflow-wrap: anywhere; user-select: all; }
+  /* Settings → Music: own Navidrome form. */
+  .field-col { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+  .field-col > span { font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+  .field-col .txt { width: 100%; box-sizing: border-box; }
 </style>

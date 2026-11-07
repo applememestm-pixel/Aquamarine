@@ -20,8 +20,21 @@ use std::sync::{Mutex, OnceLock};
 use rand::RngCore;
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
+/// A remote stream fetched at request time (music from Navidrome, see
+/// music.rs): called with the request's `Range`, answers status, headers
+/// and a body read chunk by chunk — nothing is written to disk.
+pub struct Remote {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub len: Option<usize>,
+    pub body: Box<dyn Read + Send>,
+}
+pub type RemoteFn = std::sync::Arc<dyn Fn(Option<String>) -> Result<Remote, String> + Send + Sync>;
+
 struct State {
     port: u16,
+    remote: Mutex<HashMap<String, RemoteFn>>,
+    remote_keys: Mutex<HashMap<String, String>>,
     by_token: Mutex<HashMap<String, PathBuf>>,
     by_path: Mutex<HashMap<PathBuf, String>>,
 }
@@ -46,7 +59,13 @@ fn state() -> Result<&'static State, String> {
                     })
                     .map_err(|e| e.to_string())?;
             }
-            Ok(State { port, by_token: Mutex::new(HashMap::new()), by_path: Mutex::new(HashMap::new()) })
+            Ok(State {
+                port,
+                remote: Mutex::new(HashMap::new()),
+                remote_keys: Mutex::new(HashMap::new()),
+                by_token: Mutex::new(HashMap::new()),
+                by_path: Mutex::new(HashMap::new()),
+            })
         })
         .as_ref()
         .map_err(|e| e.clone())
@@ -100,6 +119,52 @@ pub fn url_for(path: &Path) -> Result<String, String> {
     Ok(format!("http://127.0.0.1:{}/m/{token}.{ext}", st.port))
 }
 
+/// Loopback URL for a remote stream; the same `key` gets the same URL (so
+/// the webview's cache and the player's position survive re-renders).
+pub fn remote_url(key: &str, ext: &str, f: RemoteFn) -> Result<String, String> {
+    let st = state()?;
+    let mut keys = st.remote_keys.lock().map_err(|e| e.to_string())?;
+    let token = match keys.get(key) {
+        Some(t) => t.clone(),
+        None => {
+            let mut b = [0u8; 16];
+            rand::rngs::OsRng.fill_bytes(&mut b);
+            let t = hex::encode(b);
+            keys.insert(key.to_string(), t.clone());
+            t
+        }
+    };
+    st.remote.lock().map_err(|e| e.to_string())?.insert(token.clone(), f);
+    let ext: String = ext.chars().filter(|c| c.is_ascii_alphanumeric()).take(5).collect();
+    Ok(format!("http://127.0.0.1:{}/r/{token}.{}", st.port, if ext.is_empty() { "bin" } else { &ext }))
+}
+
+fn serve_remote(req: tiny_http::Request, token: &str) {
+    let f = STATE.get().and_then(|s| s.as_ref().ok()).and_then(|s| s.remote.lock().ok()?.get(token).cloned());
+    let Some(f) = f else {
+        let _ = req.respond(Response::empty(StatusCode(404)));
+        return;
+    };
+    let range = req.headers().iter().find(|h| h.field.equiv("Range")).map(|h| h.value.as_str().to_string());
+    match f(range) {
+        Ok(r) => {
+            let head = *req.method() == Method::Head;
+            let body: Box<dyn Read + Send> = if head { Box::new(std::io::empty()) } else { r.body };
+            let mut resp = Response::new(StatusCode(r.status), vec![], body, r.len, None)
+                .with_header(header("Access-Control-Allow-Origin", "*"));
+            for (k, v) in &r.headers {
+                if let Ok(h) = Header::from_bytes(k.as_bytes(), v.as_bytes()) {
+                    resp = resp.with_header(h);
+                }
+            }
+            let _ = req.respond(resp);
+        }
+        Err(e) => {
+            let _ = req.respond(Response::from_string(e).with_status_code(StatusCode(502)).with_header(header("Access-Control-Allow-Origin", "*")));
+        }
+    }
+}
+
 /// `AQUA_MEDIA_LOG=1` (set by tools/aquamarine.sh): log every media request.
 fn media_log() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
@@ -116,6 +181,14 @@ fn serve(req: tiny_http::Request) {
     };
     if !matches!(req.method(), Method::Get | Method::Head) {
         return respond_err(req, 405);
+    }
+    // /r/<32 hex>.<ext>: a remote stream (music).
+    if let Some(r) = req.url().strip_prefix("/r/") {
+        let token = r.split('.').next().unwrap_or("").to_string();
+        if token.len() == 32 && token.chars().all(|c| c.is_ascii_hexdigit()) {
+            return serve_remote(req, &token);
+        }
+        return respond_err(req, 404);
     }
     // /m/<32 hex>.<ext>
     let token = req.url().strip_prefix("/m/").and_then(|r| r.split('.').next()).unwrap_or("").to_string();

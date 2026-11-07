@@ -42,7 +42,7 @@ lang.subscribe((l) => {
 export const activeId = writable<string>("roma");
 
 /** Which nav tab is active — drives what the middle column renders. */
-export type NavTab = "chats" | "calls" | "files" | "contacts";
+export type NavTab = "chats" | "calls" | "files" | "contacts" | "music";
 export const activeTab = writable<NavTab>("chats");
 
 /** Messages of the currently-active chat. */

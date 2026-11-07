@@ -25,6 +25,7 @@
   import ChatWindow from "./lib/components/ChatWindow.svelte";
   import CallsPanel from "./lib/components/CallsPanel.svelte";
   import FilesPanel from "./lib/components/FilesPanel.svelte";
+  import MusicPanel from "./lib/components/MusicPanel.svelte";
   import ContactsPanel from "./lib/components/ContactsPanel.svelte";
   import FingerprintModal from "./lib/components/FingerprintModal.svelte";
   import InputPrompt from "./lib/components/InputPrompt.svelte";
@@ -339,6 +340,8 @@
       <FilesPanel />
     {:else if $activeTab === "contacts"}
       <ContactsPanel />
+    {:else if $activeTab === "music"}
+      <MusicPanel />
     {/if}
     <div class="main-pane">
       <ChatWindow />
