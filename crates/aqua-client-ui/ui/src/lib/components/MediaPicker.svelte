@@ -135,19 +135,35 @@
     r.classList.toggle("picker-docked", docked);
     if (docked) r.style.setProperty("--dock-h", `${dockH}px`);
     if (!docked) { r.style.removeProperty("--dock-gap"); return; }
-    // The page can run a little past the visible screen on Android (100vh vs
-    // the real height, the gesture bar), so padding by the panel height alone
-    // left the composer under the panel's top edge. Measure and make up for it.
-    const fit = () => requestAnimationFrame(() => {
-      const comp = document.querySelector<HTMLElement>(".composer");
-      if (!comp || !panel) return;
-      const over = comp.getBoundingClientRect().bottom - panel.getBoundingClientRect().top;
+    // The composer rides exactly on the panel's top edge, frame by frame —
+    // also while the panel slides up. Padding by the panel's height alone
+    // missed by the page's own offsets (100vh vs the real screen, the
+    // gesture bar, glass margins) and the composer ended up under it.
+    const comp = () => document.querySelector<HTMLElement>("body.chat-open .main-pane .composer") ?? document.querySelector<HTMLElement>(".main-pane .composer");
+    const fit = () => {
+      const c = comp();
+      if (!c || !panel) return;
+      const over = c.getBoundingClientRect().bottom - panel.getBoundingClientRect().top;
+      if (Math.abs(over) < 0.5) return;
       const cur = parseFloat(r.style.getPropertyValue("--dock-gap")) || 0;
-      if (Math.abs(over) > 1) r.style.setProperty("--dock-gap", `${Math.max(0, cur + over + 4)}px`);
-    });
-    fit(); const t = setTimeout(fit, 260);
+      r.style.setProperty("--dock-gap", `${cur + over}px`);
+    };
+    // Every frame for the slide-in, then on any size change.
+    let raf = 0;
+    const until = performance.now() + 700;
+    const tick = () => { fit(); if (performance.now() < until) raf = requestAnimationFrame(tick); };
+    raf = requestAnimationFrame(tick);
+    const ro = new ResizeObserver(() => requestAnimationFrame(fit));
+    if (panel) ro.observe(panel);
+    const c0 = comp();
+    if (c0) ro.observe(c0);
     window.addEventListener("resize", fit);
-    return () => { clearTimeout(t); window.removeEventListener("resize", fit); };
+    window.visualViewport?.addEventListener("resize", fit);
+    return () => {
+      cancelAnimationFrame(raf); ro.disconnect();
+      window.removeEventListener("resize", fit);
+      window.visualViewport?.removeEventListener("resize", fit);
+    };
   });
   // The message field gets the finger: keyboard up, panel down.
   onMount(() => {

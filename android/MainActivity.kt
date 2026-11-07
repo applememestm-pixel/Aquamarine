@@ -4,14 +4,32 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.webkit.WebView
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 
 // Copied over the Tauri-generated file by android/patch-project.ps1 and CI.
 class MainActivity : TauriActivity() {
+  private var web: WebView? = null
+
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     requestLocalNetworkAccess()
+    // Back / the back gesture. With targetSdk 33+ Android no longer sends
+    // the Back key to the WebView (predictive back), so the page's history
+    // never saw it and the app simply closed. Now the page decides
+    // (ui/src/lib/back.ts, window.__aquaBack): close what's open on top, the
+    // chat, another tab… With nothing left, the app goes to the background
+    // like Home — it keeps running (notifications, music) instead of exiting.
+    onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+      override fun handleOnBackPressed() {
+        val w = web
+        if (w == null) { moveTaskToBack(true); return }
+        w.evaluateJavascript("(function(){try{return !!(window.__aquaBack&&window.__aquaBack())}catch(e){return false}})()") { r ->
+          if (r != "true") moveTaskToBack(true)
+        }
+      }
+    })
   }
 
   // Let the page's viewport tag set the zoom: Settings → Appearance →
@@ -19,6 +37,7 @@ class MainActivity : TauriActivity() {
   // page zoom. The tag keeps width=device-width otherwise, so nothing else
   // changes.
   override fun onWebViewCreate(webView: WebView) {
+    web = webView
     webView.settings.useWideViewPort = true
     webView.settings.loadWithOverviewMode = false
     // The system's font size made every text bigger than the layout around
