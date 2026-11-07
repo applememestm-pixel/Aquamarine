@@ -168,7 +168,7 @@ html.wk-lowfx .eq i:nth-child(3) { transform: scaleY(0.75); }
   html.kb-open body.chat-open .main-pane { padding-bottom: var(--kb, 0px); }
   /* Emoji / stickers panel open: it sits where the keyboard was, the
      conversation and the composer stay above it. */
-  html.picker-docked body.chat-open .main-pane { padding-bottom: calc(var(--dock-h, 300px) + env(safe-area-inset-bottom, 0px)); }
+  html.picker-docked body.chat-open .main-pane { padding-bottom: calc(var(--dock-h, 300px) + env(safe-area-inset-bottom, 0px) + var(--dock-gap, 0px)); }
 }
 /* Phones: the conversation slides in over the list, and back. */
 @media (max-width: 720px) and (prefers-reduced-motion: no-preference) {
