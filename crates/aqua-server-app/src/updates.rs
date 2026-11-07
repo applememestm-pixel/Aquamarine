@@ -116,7 +116,61 @@ struct Found {
     asset: Option<(String, String, u64, Option<String>)>, // name, url, size, sha256
 }
 
+/// GitHub's API: 60 requests an hour per address without a login (shared
+/// addresses run out of it — "403"). Then the plain website instead.
 async fn find(c: &reqwest::Client) -> Result<Option<Found>, String> {
+    match find_api(c).await {
+        Ok(f) => Ok(f),
+        Err(e) => find_web(c).await.map_err(|w| format!("{e}; {w}")),
+    }
+}
+
+/// The releases feed (every release, newest first) and download links.
+async fn find_web(c: &reqwest::Client) -> Result<Option<Found>, String> {
+    let base = format!("https://github.com/{REPO}");
+    let feed = c.get(format!("{base}/releases.atom")).timeout(std::time::Duration::from_secs(30)).send().await
+        .map_err(|e| e.without_url().to_string())?;
+    if !feed.status().is_success() {
+        return Err(format!("github.com: HTTP {}", feed.status()));
+    }
+    let feed = feed.text().await.map_err(|e| e.to_string())?;
+    let cur = env!("CARGO_PKG_VERSION");
+    let best = feed
+        .split("href=\"")
+        .skip(1)
+        .filter_map(|r| r.split('"').next())
+        .filter_map(|l| l.rsplit_once("/releases/tag/v").map(|(_, v)| v.to_string()))
+        .filter(|v| v.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .reduce(|a, b| if newer(&b, &a) { b } else { a });
+    let Some(version) = best else { return Ok(None) };
+    if !newer(&version, cur) {
+        return Ok(None);
+    }
+    let dl = |f: &str| format!("{base}/releases/download/v{version}/{f}");
+    let mut asset = None;
+    if let Some(name) = wanted() {
+        let sums = match c.get(dl("SHA256SUMS.txt")).timeout(std::time::Duration::from_secs(30)).send().await {
+            Ok(r) if r.status().is_success() => r.text().await.unwrap_or_default(),
+            _ => String::new(),
+        };
+        let sha = sums.lines().find_map(|l| {
+            let mut it = l.split_whitespace();
+            let h = it.next()?;
+            (it.next()?.trim_start_matches('*') == name && h.len() == 64).then(|| h.to_ascii_lowercase())
+        });
+        if sha.is_some() {
+            let size = match c.get(dl(name)).header(reqwest::header::RANGE, "bytes=0-0").timeout(std::time::Duration::from_secs(30)).send().await {
+                Ok(r) => r.headers().get(reqwest::header::CONTENT_RANGE).and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.rsplit('/').next()).and_then(|n| n.parse().ok()).unwrap_or(0),
+                Err(_) => 0,
+            };
+            asset = Some((name.to_string(), dl(name), size, sha));
+        }
+    }
+    Ok(Some(Found { version: version.clone(), notes_url: format!("{base}/releases/tag/v{version}"), asset }))
+}
+
+async fn find_api(c: &reqwest::Client) -> Result<Option<Found>, String> {
     let r = c
         .get(format!("https://api.github.com/repos/{REPO}/releases?per_page=20"))
         .header("Accept", "application/vnd.github+json")
