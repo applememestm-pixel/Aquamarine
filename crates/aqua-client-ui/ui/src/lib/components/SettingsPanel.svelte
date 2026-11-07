@@ -2442,7 +2442,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
         <button class="bot-link" onclick={() => void api.openExternal(GUIDE)}>{$t("What error codes mean ›")}</button>
       </section>
       <section class="group">
-        <div class="label">{$t("About")}</div>
+        <div class="label">{$t("About the app")}</div>
         <div class="about">
           <b>{$t("Aquamarine")}</b> {$t("— an end-to-end encrypted messenger.")} <span class="ab-ver">{BUILD.version || ""}</span><br />
           {$t("X3DH · Double Ratchet · ChaCha20-Poly1305 · your keys never leave this device.")}
@@ -2753,7 +2753,9 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   @media (prefers-reduced-motion: reduce) { .content .group, .content .ap-div, .content .ap-preview { animation: none; } }
   /* Global inside the panel: sections drawn by child components
      (NetworkSettings, VoiceVideoSettings) look like the rest. */
+  /* Icon, then the text from the left edge, the arrow at the far right. */
   .ab-link { gap: 12px; }
+  .ab-link .tr-text { flex: 1; }
   .ab-ic { width: 34px; height: 34px; border-radius: calc(10px * var(--rk, 1)); background: var(--bg-input); display: grid; place-items: center; color: var(--fg); flex-shrink: 0; }
   .ab-ic svg { width: 19px; height: 19px; }
   .ab-go { color: var(--fg-dim); font-size: 20px; }
@@ -2933,7 +2935,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .pl-code { width: 100%; font: 12px/1.5 var(--font-mono, monospace); background: var(--bg-input); color: var(--fg); border: 1px solid var(--border);
     border-radius: calc(10px * var(--rk, 1)); padding: 8px 10px; margin-bottom: 8px; resize: vertical; }
   .switch-btn { background: none; border: none; padding: 0; cursor: pointer; display: flex; }
-  .tr-text { min-width: 0; }
+  .tr-text { min-width: 0; text-align: left; }
   .tr-title { font-size: 13.5px; font-weight: 600; color: var(--fg); }
   .tr-sub { font-size: 11.5px; color: var(--fg-dim); margin-top: 2px; }
   .switch {

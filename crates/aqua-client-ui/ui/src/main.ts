@@ -151,6 +151,7 @@ export default app;
 
 // F11: the whole window full screen, like any desktop app. The media viewer
 // handles F11 itself first (and marks the key as handled).
+let fsWasMax = false;
 if (IS_DESKTOP) {
   window.addEventListener("keydown", async (e) => {
     if (e.key !== "F11" || e.defaultPrevented || e.repeat) return;
@@ -158,7 +159,19 @@ if (IS_DESKTOP) {
     try {
       const { getCurrentWindow } = await import("@tauri-apps/api/window");
       const w = getCurrentWindow();
-      await w.setFullscreen(!(await w.isFullscreen()));
+      if (!(await w.isFullscreen())) {
+        // Straight from "maximised" Windows kept the old size for the page
+        // (a black strip at the bottom) and the frameless shadow drew a line
+        // round the screen: un-maximise and drop the shadow first.
+        fsWasMax = await w.isMaximized();
+        if (fsWasMax) await w.unmaximize();
+        await w.setShadow(false).catch(() => {});
+        await w.setFullscreen(true);
+      } else {
+        await w.setFullscreen(false);
+        await w.setShadow(true).catch(() => {});
+        if (fsWasMax) await w.maximize();
+      }
     } catch { /* not in the app */ }
   });
 }

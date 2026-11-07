@@ -109,7 +109,8 @@
   /* Minimise / restore follow the theme; only the cross stays white. */
   .wb:hover { background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); }
   .wb.close { color: var(--fg); }
-  .wb.close:hover { background: #E81123; color: #fff; box-shadow: 0 0 16px -2px rgba(232, 17, 35, 0.7); }
+  /* The same look as its neighbours, in red. */
+  .wb.close:hover { background: color-mix(in srgb, var(--danger, #FF5A6E) 16%, transparent); color: var(--danger, #FF5A6E); box-shadow: inset 0 -2px 0 var(--danger, #FF5A6E); }
   @media (max-width: 720px) { :global(html:not(.popout)) .titlebar { display: none; } }
   :global(html.phone) .titlebar { display: none; }
 </style>
