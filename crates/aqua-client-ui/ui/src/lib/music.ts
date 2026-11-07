@@ -64,6 +64,14 @@ export interface TrackCard {
 export const TRACK_PREFIX = "[track:v1]";
 const LISTEN_PREFIX = "[listen:v1]";
 
+// Declared first: store subscriptions below run right away and use them.
+/** We host "listen together" in this 1:1 chat. */
+export const hosting = writable<string | null>(null);
+/** We follow `host` in `chat`. */
+export const following = writable<{ chat: string; host: string } | null>(null);
+let audioEl: HTMLAudioElement | null = null;
+let pushTimer: ReturnType<typeof setTimeout> | null = null;
+
 // ---------------------------------------------------------------- status
 
 export const musicOn = derived(settings, (s) => !!s.navidrome);
@@ -290,12 +298,6 @@ nowPlaying.subscribe((t) => {
 
 // --------------------------------------------------------- listen together
 
-/** We host "listen together" in this 1:1 chat. */
-export const hosting = writable<string | null>(null);
-/** We follow `host` in `chat`. */
-export const following = writable<{ chat: string; host: string } | null>(null);
-
-let audioEl: HTMLAudioElement | null = null;
 /** TopPlayer hands over its element (position, pause, seek). */
 export function bindAudio(a: HTMLAudioElement | null) {
   if (audioEl === a) return;
@@ -312,7 +314,6 @@ function stateMsg(): string | null {
   });
 }
 
-let pushTimer: ReturnType<typeof setTimeout> | null = null;
 function pushListen() {
   const chat = get(hosting);
   if (!chat) return;
