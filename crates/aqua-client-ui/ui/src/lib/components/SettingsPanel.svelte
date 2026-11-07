@@ -2442,7 +2442,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
         <button class="bot-link" onclick={() => void api.openExternal(GUIDE)}>{$t("What error codes mean ›")}</button>
       </section>
       <section class="group">
-        <div class="label">{$t("About")}</div>
+        <div class="label">{$t("About the app")}</div>
         <div class="about">
           <b>{$t("Aquamarine")}</b> {$t("— an end-to-end encrypted messenger.")} <span class="ab-ver">{BUILD.version || ""}</span><br />
           {$t("X3DH · Double Ratchet · ChaCha20-Poly1305 · your keys never leave this device.")}
