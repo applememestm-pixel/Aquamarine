@@ -23,7 +23,22 @@ window.__TAURI_INTERNALS__ = {
   metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main", windowLabel: "main" } },
   transformCallback: (cb) => { const id = ++n; window["_" + id] = cb; return id; },
   convertFileSrc: (p) => p,
-  invoke: async (cmd) => {
+  invoke: async (cmd, args) => {
+    // Navidrome add-on (lib/music.ts): a relay with music, a few albums.
+    if (cmd === "music_status") return { server: { enabled: true, tag: "t1", bot: "music" }, own: null };
+    if (cmd === "music_url") return "";
+    if (cmd === "music_api") {
+      const al = (i) => ({ id: "a" + i, name: ["Night Drive", "Blue World", "Glass Garden", "Neon Rain", "Paper Moon", "Low Tide"][i], artist: ["Ave Mujica", "Kino", "Aurora", "M83", "Grimes", "Cigarettes"][i], year: 2019 + i, songCount: 9 });
+      const so = (i) => ({ id: "s" + i, title: ["The Whole Blue World", "Gruppa krovi", "Runaway", "Midnight City"][i % 4], artist: ["Ave Mujica", "Kino", "Aurora", "M83"][i % 4], album: "Blue World", duration: 200 + i * 17 });
+      const m = args && args.method;
+      if (m === "getAlbumList2") return { albumList2: { album: [0, 1, 2, 3, 4, 5].map(al) } };
+      if (m === "getPlaylists") return { playlists: { playlist: [{ id: "p1", name: "Chill", songCount: 12 }, { id: "p2", name: "Gym", songCount: 30 }] } };
+      if (m === "getStarred2") return { starred2: { song: [0, 1, 2].map(so) } };
+      if (m === "search3") return { searchResult3: { song: [0, 1, 2, 3].map(so), album: [al(1)], artist: [{ id: "r1", name: "Kino" }] } };
+      return {};
+    }
+    if (cmd === "get_messages" && window.__shotTrack) return [{ id: "m1", from: "apple", time: "12:00", meta: null,
+      kind: { type: "text", content: { text: '[track:v1]{"id":"s0","title":"The Whole Blue World","artist":"Ave Mujica","album":"Blue World","dur":260,"src":"server","nd":"t1"}' } } }];
     if (cmd === "init_app") return { has_identity: true, registered: true, username: "apple", session_fingerprint: "ab12 cd34", opk_available: 10, spk_rotates_in_days: 5, connected: true, server_url: "http://127.0.0.1:7777", uid: "A1B2C3D4" };
     if (cmd === "list_chats") return [{ id: "__saved__", name: "Saved Messages", letter: "☁", gradient: "linear-gradient(135deg,#7B5CFF,#00E5C7)", preview: "Note to self — only you see this", preview_is_typing: false, preview_by_me: true, has_lock: true, time: "", unread: 0, online: true, verified: true, channel: false, live: true }];
     if (cmd === "list_local_media") return { packs: [], gifs: [], stickers_dir: "", gifs_dir: "" };
@@ -72,6 +87,18 @@ window.__TAURI_INTERNALS__ = {
     for (let i = 0; i < 3; i++) { const l = p.getByText(/^(Не сейчас|Not now)$/).first(); if (!(await l.count())) break; await l.click().catch(() => {}); await p.waitForTimeout(500); }
     await shot('8-light');
   } catch (e) { errs.push('8-light: ' + e.message.split('\n')[0]); }
+  // Navidrome: a track card in Saved Messages, then the music page from 📎.
+  try {
+    await p.evaluate(() => { const s = JSON.parse(localStorage.getItem('aqua-settings') || '{}'); s.mode = 'dark'; s.navidrome = true; localStorage.setItem('aqua-settings', JSON.stringify(s)); });
+    await p.addInitScript(() => { window.__shotTrack = true; });
+    await p.reload(); await p.waitForTimeout(2500);
+    for (let i = 0; i < 3; i++) { const l = p.getByText(/^(Не сейчас|Not now)$/).first(); if (!(await l.count())) break; await l.click().catch(() => {}); await p.waitForTimeout(500); }
+    await p.getByText(/^(Saved Messages|Избранное)$/).first().click(); await p.waitForTimeout(1200);
+    await shot('9-track');
+    await p.locator('.attach-btn').first().click(); await p.waitForTimeout(600);
+    await p.getByText(/^(Музыка|Music)$/).first().click(); await p.waitForTimeout(1500);
+    await shot('10-music');
+  } catch (e) { errs.push('music: ' + e.message.split('\n')[0]); }
   console.log(errs.join('\n') || 'no errors');
   for (const f of fs.readdirSync(out).filter((f) => f.endsWith('.jpg')).sort()) {
     console.log('=====SHOT ' + f);

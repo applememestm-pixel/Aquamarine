@@ -468,6 +468,21 @@
 
 ---
 
+## 13a. Музыка (Navidrome)
+
+| Метод и путь | Доступ | Назначение |
+|---|---|---|
+| `GET /v1/music` | сеанс | `{"enabled", "tag", "bot"}` — подключён ли Navidrome, его тег, имя бота |
+| `GET /v1/music/rest/:method` | сеанс | Subsonic-вызов только для чтения (`search3`, `getAlbumList2`, `getAlbum`, `getPlaylists`…); ответ без обёртки `subsonic-response`. Прочие методы — `403` |
+| `GET /v1/music/stream/:id` | сеанс | Поток насквозь, с `Range`; ничего не сохраняется |
+| `GET /v1/music/download/:id` | сеанс | Исходный файл |
+| `GET /v1/music/cover/:id?size=` | сеанс | Обложка |
+| `GET`, `POST /v1/admin/music`; `POST /v1/admin/music/test` | админ | Адрес, логин, пароль, бот; проверка связи |
+
+Подробно — [music.md](music.md).
+
+---
+
 ## 14. Каталог игр
 
 | Метод и путь | Доступ | Назначение |

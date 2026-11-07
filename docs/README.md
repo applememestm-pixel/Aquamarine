@@ -25,6 +25,7 @@
 | [sealed-messages.md](sealed-messages.md) | Запечатанные послания: разделение знания, условия, окно для отказа |
 | [bluetooth.md](bluetooth.md) | Сообщения без интернета по Bluetooth (как в Briar) и передача файлов (OBEX) |
 | [stickers.md](stickers.md) | Наборы стикеров и эмодзи, редактор, реакции |
+| [music.md](music.md) | Музыка из Navidrome: сервер, бот @music, плеер, «слушать вместе» |
 | [profiles.md](profiles.md) | Профиль, статусы, активность, карточки игр |
 | [bots.md](bots.md) | Боты, мини-приложения, совместимость с Telegram Bot API |
 | [plugins.md](plugins.md) | Плагины на JavaScript (экспериментально): песочница, API, пример |

@@ -40,6 +40,35 @@
 
 Обработчики могут быть `async`.
 
+### С версии 1.2.11
+
+| Вызов | Что делает |
+|---|---|
+| `aqua.button({ id, label, icon }, ({ chat }) => {})` | Свой пункт в меню 📎. `icon` — эмодзи. Обработчик получает чат, в котором нажали |
+| `aqua.music.open()` | Открыть музыкальную страницу (дополнение Navidrome, [music.md](music.md)) |
+| `aqua.music.search(текст)` | Песни из подключённого Navidrome: `[{ id, title, artist, album, duration, coverArt, src }]` |
+| `aqua.music.play(песня)` | Включить песню из `search` во встроенном плеере |
+| `aqua.music.send(чат, песня)` | Отправить карточку трека в чат |
+| `aqua.fetch(адрес, { method, headers, body })` | HTTP-запрос → `{ status, headers, body }` (текст, до 2 МБ). Только к адресам из заголовка `// @connect` |
+
+`// @connect api.example.com, *.example.org` в заголовке перечисляет, куда плагину можно ходить. При установке приложение спрашивает разрешения; без него `aqua.fetch` отвечает ошибкой. Запрос делает приложение, не воркер: у самого плагина сети по-прежнему нет.
+
+Вызовы `aqua.music.*` и `aqua.fetch` возвращают обещания (`Promise`).
+
+## Пример: своя кнопка с музыкой
+
+```js
+// @name Random track
+// @version 1.0
+// @description 🎲 в меню 📎 — случайная песня из Navidrome прямо в чат
+
+aqua.button({ id: "dice", label: "Random track", icon: "🎲" }, async ({ chat }) => {
+  const songs = await aqua.music.search("a");
+  if (!songs.length) return aqua.toast("Nothing found");
+  await aqua.music.send(chat, songs[Math.floor(Math.random() * songs.length)]);
+});
+```
+
 ## Пример
 
 ```js
