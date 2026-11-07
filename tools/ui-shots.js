@@ -99,6 +99,12 @@ window.__TAURI_INTERNALS__ = {
     await p.getByText(/^(Музыка|Music)$/).first().click(); await p.waitForTimeout(1500);
     await shot('10-music');
   } catch (e) { errs.push('music: ' + e.message.split('\n')[0]); }
+  // Settings → About: the links must start at the left edge.
+  try {
+    await p.locator('.user-panel button[aria-label="Настройки"], .user-panel button[aria-label="Settings"]').first().click(); await p.waitForTimeout(900);
+    await p.getByText(/^(Об Aquamarine|About Aquamarine)$/).first().click(); await p.waitForTimeout(800);
+    await shot('11-about');
+  } catch (e) { errs.push('about: ' + e.message.split('\n')[0]); }
   console.log(errs.join('\n') || 'no errors');
   for (const f of fs.readdirSync(out).filter((f) => f.endsWith('.jpg')).sort()) {
     console.log('=====SHOT ' + f);
