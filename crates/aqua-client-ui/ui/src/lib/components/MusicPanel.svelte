@@ -19,6 +19,7 @@
     type Src, type Song, type Album, type Artist, type Playlist,
   } from "../music";
   import { settings } from "../theme";
+  import { icons } from "../icons";
 
   type View =
     | { kind: "home" }
@@ -159,13 +160,13 @@
       </div>
     {/if}
     <button class="ic-btn" onclick={() => openSettings("music")} title={$t("Settings")} aria-label={$t("Settings")}>
-      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>
+      {@html icons.settings}
     </button>
   </div>
 
   {#if sendTo}
     <div class="send-to">
-      <span>{$t("Pick a track for {n}", { n: sendName })}</span>
+      <span>{$t("Pick a track to send to “{n}”", { n: sendName })}</span>
       <button onclick={() => { musicSendTo.set(null); activeTab.set("chats"); }}>{$t("Cancel")}</button>
     </div>
   {/if}
@@ -325,7 +326,7 @@
     border-radius: calc(10px * var(--rk, 1)); cursor: pointer; }
   .ic-btn:hover { background: var(--bg-hover); color: var(--fg); }
   .ic-btn.on, .ic-btn.accent { color: var(--accent); }
-  .ic-btn svg, .search svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+  .ic-btn :global(svg), .search svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
   .srcs { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: calc(10px * var(--rk, 1)); }
   .srcs button { border: none; background: transparent; color: var(--fg-muted); font: inherit; font-size: 12px; font-weight: 600; padding: 4px 9px; border-radius: calc(8px * var(--rk, 1)); cursor: pointer; }
   .srcs button.on { background: var(--accent-soft); color: var(--accent); }
@@ -371,7 +372,7 @@
   .tile:hover { background: var(--bg-hover); }
   .tile b, .tile small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tile b { font-size: 13px; } .tile small { font-size: 11.5px; color: var(--fg-muted); }
-  .art { display: block; aspect-ratio: 1; border-radius: calc(10px * var(--rk, 1)); overflow: hidden;
+  .art { display: block; width: 100%; aspect-ratio: 1; border-radius: calc(10px * var(--rk, 1)); overflow: hidden;
     background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 35%, transparent), color-mix(in srgb, var(--accent-2) 35%, transparent)); }
   .art img, .thumb img, .hero img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity .2s; }
   .panel :global(img.ok) { opacity: 1 !important; }

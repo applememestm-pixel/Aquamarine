@@ -2623,7 +2623,7 @@ export const RU: Record<string, string> = {
   "No music here yet: this server has no Navidrome, and yours isn't connected.": "Музыки пока нет: на этом сервере нет Navidrome, а свой не подключён.",
   "Open a one-to-one chat, then press it again": "Откройте личный чат и нажмите ещё раз",
   "Open music": "Открыть музыку",
-  "Pick a track for {n}": "Выберите трек для {n}",
+  "Pick a track to send to “{n}”": "Выберите трек — он уйдёт в чат «{n}»",
   "Play something from Navidrome first": "Сначала включите что-нибудь из Navidrome",
   "Playing": "Играет",
   "Playlists": "Плейлисты",

@@ -2,7 +2,15 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/); версии — [семантические](https://semver.org/lang/ru/). Подробные описания выпусков — в [docs/releases](docs/releases/).
 
-## [1.2.11-1] — 2026-11-06 (пре-выпуск)
+## [1.2.11] — 2026-11-07
+
+### Добавлено
+- Navidrome (Subsonic) на сервере: `aqua-server/src/music.rs` — `/v1/music/*` (только чтение, поток насквозь с `Range`, без кэша), настройки `/v1/admin/music` и `AQUA_NAVIDROME_*`, встроенный бот `@music`; страница «Музыка» в Aquamarine Server и в веб-панели.
+- Дополнение Navidrome в клиенте: `src/music.rs` (свой Navidrome в хранилище, `music_*`, поток через `media_server::remote_url`), `lib/music.ts`, `MusicPanel.svelte`, `TrackCard.svelte` (`[track:v1]`), вкладка в `NavRail` (только с дополнением), пункт 📎 «Музыка», «Настройки → Музыка».
+- «Слушает …» в активности (`musicActivity` → `presence.ts`), «слушать вместе» по `[listen:v1]` (`commands.rs::LISTEN_PREFIX`), Media Session в `TopPlayer`, повтор очереди (`player.ts::repeatAll`).
+- API плагинов: `aqua.button`, `aqua.music.*`, `aqua.fetch` с `// @connect` и разрешением при установке (`plugins.ts`, `music.rs::plugin_fetch`).
+- Документация: `docs/music.md`, разделы в `plugins.md`, `api.md`.
+
 
 ### Исправлено
 - Свой профиль публикуется на сервер при каждом подключении (`people.ts`: `syncMyProfileOnConnect` был, но не вызывался).
