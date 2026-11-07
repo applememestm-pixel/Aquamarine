@@ -105,6 +105,22 @@ window.__TAURI_INTERNALS__ = {
     await p.getByText(/^(Об Aquamarine|About Aquamarine)$/).first().click(); await p.waitForTimeout(800);
     await shot('11-about');
   } catch (e) { errs.push('about: ' + e.message.split('\n')[0]); }
+  // Phone: the emoji panel docked, the composer must sit right on its top edge.
+  try {
+    const ph = await b.newPage({ viewport: { width: 412, height: 915 }, locale: 'ru-RU', userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36' });
+    ph.on('pageerror', (e) => errs.push('phone: ' + e.message));
+    await ph.addInitScript(mock(card));
+    await ph.goto('http://127.0.0.1:5199/'); await ph.waitForTimeout(2500);
+    for (let i = 0; i < 3; i++) { const l = ph.getByText(/^(Не сейчас|Not now)$/).first(); if (!(await l.count())) break; await l.click().catch(() => {}); await ph.waitForTimeout(500); }
+    await ph.getByText(/^(Saved Messages|Избранное)$/).first().click(); await ph.waitForTimeout(1000);
+    await ph.locator('[data-emoji-anchor]').first().click(); await ph.waitForTimeout(1200);
+    console.log('dock', JSON.stringify(await ph.evaluate(() => {
+      const c = document.querySelector('.main-pane .composer')?.getBoundingClientRect();
+      const pnl = document.querySelector('.panel.docked')?.getBoundingClientRect();
+      return { composerBottom: c && c.bottom, panelTop: pnl && pnl.top };
+    })));
+    await ph.screenshot({ path: path.join(out, '12-phone-picker.jpg'), type: 'jpeg', quality: 72 });
+  } catch (e) { errs.push('phone: ' + e.message.split('\n')[0]); }
   console.log(errs.join('\n') || 'no errors');
   for (const f of fs.readdirSync(out).filter((f) => f.endsWith('.jpg')).sort()) {
     console.log('=====SHOT ' + f);
