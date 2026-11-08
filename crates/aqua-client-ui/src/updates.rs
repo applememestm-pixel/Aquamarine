@@ -97,9 +97,101 @@ fn parse_sums(text: &str, file: &str) -> Option<String> {
 
 /// The newest release of `channel` ("nightly" | "stable") and its file for
 /// this platform.
+///
+/// GitHub's API allows 60 requests an hour per address without a login, and
+/// phones on mobile networks share one address with thousands of others: the
+/// API answered "403 Forbidden" forever. Then the same is read from the
+/// plain website (the releases feed and download links), which has no such
+/// limit.
 #[tauri::command]
 pub async fn update_check(channel: String) -> Result<UpdateInfo, String> {
     let http = aqua_client_core::transport::http_client().map_err(|e| e.to_string())?;
+    match api_check(&http, &channel).await {
+        Ok(i) => Ok(i),
+        Err(api_err) => web_check(&http, &channel).await.map_err(|e| format!("{api_err}; {e}")),
+    }
+}
+
+/// Text of the first `<tag>…</tag>` in `s`.
+fn xml_tag<'a>(s: &'a str, tag: &str) -> Option<&'a str> {
+    let open = format!("<{tag}");
+    let i = s.find(&open)?;
+    let j = i + s[i..].find('>')? + 1;
+    let k = j + s[j..].find(&format!("</{tag}>"))?;
+    Some(&s[j..k])
+}
+
+fn xml_unescape(s: &str) -> String {
+    s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&amp;", "&")
+}
+
+/// The same answer as `api_check`, from github.com pages instead of the API.
+async fn web_check(http: &reqwest::Client, channel: &str) -> Result<UpdateInfo, String> {
+    let base = format!("https://github.com/{REPO}");
+    let get = |u: String| {
+        let http = http.clone();
+        async move {
+            let r = http.get(&u).timeout(std::time::Duration::from_secs(20)).send().await.map_err(|e| e.without_url().to_string())?;
+            if !r.status().is_success() {
+                return Err(format!("github.com: HTTP {}", r.status()));
+            }
+            Ok::<reqwest::Response, String>(r)
+        }
+    };
+    let (tag, name, published_at) = if channel == "stable" {
+        // …/releases/latest redirects to …/releases/tag/<tag>.
+        let r = get(format!("{base}/releases/latest")).await?;
+        let tag = r.url().path().rsplit_once("/tag/").map(|(_, t)| t.to_string()).ok_or("no releases yet")?;
+        (tag.clone(), tag, String::new())
+    } else {
+        // The feed lists every release, pre-releases too, newest first.
+        let feed = get(format!("{base}/releases.atom")).await?.text().await.map_err(|e| e.to_string())?;
+        let entry = xml_tag(&feed, "entry").ok_or("no releases yet")?;
+        let link = entry.split("href=\"").nth(1).and_then(|r| r.split('"').next()).unwrap_or_default();
+        let tag = link.rsplit_once("/tag/").map(|(_, t)| t.to_string()).ok_or("no releases yet")?;
+        let name = xml_unescape(xml_tag(entry, "title").unwrap_or(&tag));
+        (tag, name, xml_tag(entry, "updated").unwrap_or_default().to_string())
+    };
+    let dl = |f: &str| format!("{base}/releases/download/{tag}/{f}");
+    let sums = match get(dl("SHA256SUMS.txt")).await {
+        Ok(r) => r.text().await.unwrap_or_default(),
+        Err(_) => String::new(),
+    };
+    let builds: Option<serde_json::Value> = match get(dl("BUILDS.json")).await {
+        Ok(r) => r.json().await.ok(),
+        Err(_) => None,
+    };
+    let mut asset = None;
+    let mut built_from = None;
+    for want in wanted_assets() {
+        // Without the API there's no file list: a file is there when the
+        // checksum list names it.
+        let Some(sha) = parse_sums(&sums, want) else { continue };
+        // The size: one byte asked for, the total from Content-Range.
+        let size = match http.get(dl(want)).header(reqwest::header::RANGE, "bytes=0-0").timeout(std::time::Duration::from_secs(20)).send().await {
+            Ok(r) => r.headers().get(reqwest::header::CONTENT_RANGE).and_then(|v| v.to_str().ok())
+                .and_then(|v| v.rsplit('/').next()).and_then(|n| n.parse().ok())
+                .or_else(|| r.content_length().filter(|&n| n > 1)).unwrap_or(0),
+            Err(_) => 0,
+        };
+        built_from = builds.as_ref().and_then(|b| b[*want].as_str()).map(|c| c.to_ascii_lowercase());
+        asset = Some(UpdateAsset { name: want.to_string(), url: dl(want), size, sha256: Some(sha) });
+        break;
+    }
+    Ok(UpdateInfo {
+        commit: if channel == "stable" { None } else { built_from.or_else(|| short_commit(&name)) },
+        version: tag.starts_with('v').then(|| tag.trim_start_matches('v').to_string()),
+        published_at,
+        notes: String::new(),
+        html_url: format!("{base}/releases/tag/{tag}"),
+        tag,
+        name,
+        asset,
+    })
+}
+
+async fn api_check(http: &reqwest::Client, channel: &str) -> Result<UpdateInfo, String> {
+    let http = http.clone();
     let rel = if channel == "stable" {
         get_json(&http, &format!("https://api.github.com/repos/{REPO}/releases/latest")).await?
     } else {
@@ -362,6 +454,23 @@ pub mod android {
 
     pub fn call(cmd: &str, args: serde_json::Value) -> Result<serde_json::Value, String> {
         HANDLE.get().ok_or("update plugin not loaded")?.run_mobile_plugin::<serde_json::Value>(cmd, args).map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod web_tests {
+    use super::*;
+
+    #[test]
+    fn feed_entry() {
+        let feed = r#"<feed><title>Release notes</title><entry><id>x</id><updated>2026-11-07T10:00:00Z</updated>
+<link rel="alternate" type="text/html" href="https://github.com/applememestm-pixel/Aquamarine/releases/tag/v1.2.11"/>
+<title>Aquamarine 1.2.11 &amp; more</title></entry><entry><title>old</title></entry></feed>"#;
+        let e = xml_tag(feed, "entry").unwrap();
+        assert_eq!(xml_unescape(xml_tag(e, "title").unwrap()), "Aquamarine 1.2.11 & more");
+        assert_eq!(xml_tag(e, "updated").unwrap(), "2026-11-07T10:00:00Z");
+        let link = e.split("href=\"").nth(1).and_then(|r| r.split('"').next()).unwrap();
+        assert!(link.ends_with("/tag/v1.2.11"));
     }
 }
 

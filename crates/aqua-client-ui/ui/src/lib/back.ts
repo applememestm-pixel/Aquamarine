@@ -65,6 +65,16 @@ export function startBack(): () => void {
     if (stack.length) ensureGuard();
   };
   window.addEventListener("popstate", onPop);
+  // Android (MainActivity.kt) asks here first: the system no longer hands
+  // Back to the WebView's history on new Android versions, the app closed.
+  // true: we closed something; false: nothing open, the app goes to the
+  // background.
+  (window as unknown as { __aquaBack?: () => boolean }).__aquaBack = () => {
+    // Settings walks its own history entries (section → list → closed).
+    if (settingsOpen()) { history.back(); return true; }
+    // The guard entry stays; onBack's release takes it away once all is closed.
+    return backOnce();
+  };
 
   // Any modal dialog counts as "open on top": Back sends it the Esc it
   // already understands.
@@ -101,5 +111,8 @@ export function startBack(): () => void {
   mo.observe(document.body, { childList: true, subtree: true });
   scan();
 
-  return () => { window.removeEventListener("popstate", onPop); mo.disconnect(); };
+  return () => {
+    window.removeEventListener("popstate", onPop); mo.disconnect();
+    delete (window as unknown as { __aquaBack?: () => boolean }).__aquaBack;
+  };
 }
