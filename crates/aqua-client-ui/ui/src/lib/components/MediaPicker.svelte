@@ -37,6 +37,8 @@
    *    Esc clears / closes.
    */
   import { onMount, tick, untrack } from "svelte";
+  import { flip } from "svelte/animate";
+  import { cubicOut } from "svelte/easing";
   import type { LocalMediaList, StickerItem, GifItem, StickerPack } from "../types";
   import type { EmojiCat } from "../emojiData";
   import { api, assetUrl } from "../tauri";
@@ -82,6 +84,14 @@
   }
   let reorder = $state(false);
   let dragId = $state<string | null>(null);
+  /** How far the dragged icon is off its place, following the finger (px). */
+  let dragDx = $state(0);
+  let dragEl: HTMLElement | null = null;
+  function followFinger(x: number) {
+    if (!dragEl) return;
+    const r = dragEl.getBoundingClientRect();
+    dragDx = x - (r.left + r.width / 2 - dragDx);
+  }
   function saveOrder(kind: string, ids: string[]) {
     packOrder = { ...packOrder, [kind]: ids };
     try { localStorage.setItem("aqua.packOrder", JSON.stringify(packOrder)); } catch { /* private mode */ }
@@ -92,7 +102,10 @@
     if (!reorder || id === "recent") return;
     e.preventDefault();
     dragId = id;
-    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    dragEl = e.currentTarget as HTMLElement;
+    dragDx = 0;
+    followFinger(e.clientX);
+    dragEl.setPointerCapture?.(e.pointerId);
   }
   function barMove(e: PointerEvent) {
     if (!dragId || !bar) return;
@@ -102,14 +115,19 @@
     let to = btns.findIndex((b) => { const r = b.getBoundingClientRect(); return e.clientX < r.left + r.width / 2; });
     if (to < 0) to = btns.length - 1;
     const from = ids.indexOf(dragId);
+    const x = e.clientX;
+    followFinger(x);
+    const r = bar.getBoundingClientRect();
+    if (x < r.left + 24) bar.scrollLeft -= 12; else if (x > r.right - 24) bar.scrollLeft += 12;
     if (from < 0 || to === from) return;
     ids.splice(from, 1);
     ids.splice(to, 0, dragId);
     saveOrder(kind, ids);
-    const r = bar.getBoundingClientRect();
-    if (e.clientX < r.left + 24) bar.scrollLeft -= 12; else if (e.clientX > r.right - 24) bar.scrollLeft += 12;
+    // The icon moved to its new place: keep it under the finger.
+    void tick().then(() => followFinger(x));
   }
-  function barUp() { dragId = null; }
+  /** Let go: the icon glides into its place. */
+  function barUp() { dragId = null; dragEl = null; dragDx = 0; }
   function moveBy(id: string, d: number) {
     const ids = sections.map((x) => x.id).filter((x) => x !== "recent");
     const i = ids.indexOf(id), j = i + d;
@@ -838,6 +856,8 @@
       <div class="bar" class:reorder bind:this={bar} onpointermove={barMove} onpointerup={barUp} onpointercancel={barUp}>
         {#each sections as sec (sec.id)}
           <button class="bar-btn" data-bar={sec.id} class:active={!reorder && activeSection === sec.id} class:dragging={dragId === sec.id}
+            animate:flip={{ duration: dragId === sec.id ? 0 : 240, easing: cubicOut }}
+            style:translate={dragId === sec.id ? `${dragDx}px 0` : undefined}
             class:fixed={reorder && sec.id === "recent"}
             title={reorder ? $t("Drag to move · ← → keys") : sec.title}
             onpointerdown={(e) => barDown(e, sec.id)}
@@ -976,8 +996,12 @@
   }
   .bar.reorder .bar-btn:not(.fixed) { opacity: 1; filter: none; cursor: grab; touch-action: none; animation: wiggle .5s ease-in-out infinite alternate; }
   .bar.reorder .bar-btn.fixed { opacity: .3; }
-  .bar-btn.dragging { background: var(--accent-soft); outline: 2px solid var(--accent); cursor: grabbing; animation: none !important; }
-  @keyframes wiggle { from { transform: rotate(-3deg); } to { transform: rotate(3deg); } }
+  /* The dragged icon is lifted and follows the finger; the others slide
+     aside (animate:flip); let go — it glides into its place. */
+  .bar-btn { transition: translate .22s cubic-bezier(.2, .9, .3, 1.2), scale .18s ease, box-shadow .18s ease; }
+  .bar-btn.dragging { background: var(--accent-soft); outline: 2px solid var(--accent); cursor: grabbing; animation: none !important;
+    scale: 1.1; z-index: 2; position: relative; box-shadow: 0 8px 18px -6px rgba(0,0,0,.6); transition: scale .18s ease, box-shadow .18s ease; }
+  @keyframes wiggle { from { rotate: -3deg; } to { rotate: 3deg; } }
   .bar-edit { opacity: .7; filter: none; color: var(--fg-muted); margin-right: 4px; }
   .bar-edit svg { width: 18px; height: 18px; }
   .bar-edit.on { opacity: 1; color: var(--accent); background: var(--accent-soft); }
