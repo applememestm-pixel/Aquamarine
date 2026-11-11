@@ -679,10 +679,48 @@
         if (!lab) { sec.classList.add("open"); return; }
         lab.setAttribute("role", "button");
         lab.tabIndex = 0;
+        // Opening one block folds the other: both glide (height), and the
+        // title you tapped stays where it was on screen — before, the page
+        // jumped up and down.
         const toggle = () => {
           const was = sec.classList.contains("open");
-          node.querySelectorAll(":scope > section.acc.open").forEach((x) => x.classList.remove("open"));
-          if (!was) { sec.classList.add("open"); requestAnimationFrame(() => sec.scrollIntoView({ block: "nearest", behavior: "smooth" })); }
+          const closing = [...node.querySelectorAll<HTMLElement>(":scope > section.acc.open")];
+          const opening = was ? null : sec;
+          const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+          const scroller = (() => {
+            let p = node.parentElement;
+            while (p && !/(auto|scroll)/.test(getComputedStyle(p).overflowY)) p = p.parentElement;
+            return p;
+          })();
+          const anchor = lab.getBoundingClientRect().top;
+          const heightOf = (el: HTMLElement, open: boolean) => {
+            const had = el.classList.contains("open");
+            el.classList.toggle("open", open);
+            const h = el.getBoundingClientRect().height;
+            el.classList.toggle("open", had);
+            return h;
+          };
+          const plan = [
+            ...closing.map((el) => ({ el, from: el.getBoundingClientRect().height, to: heightOf(el, false), open: false })),
+            ...(opening ? [{ el: opening, from: opening.getBoundingClientRect().height, to: heightOf(opening, true), open: true }] : []),
+          ];
+          const DUR = reduce ? 0 : 260;
+          for (const p of plan) {
+            // Opening shows its content at once (clipped); closing keeps it until the end.
+            if (p.open) p.el.classList.add("open");
+            if (!DUR) { if (!p.open) p.el.classList.remove("open"); continue; }
+            p.el.style.overflow = "hidden";
+            const an = p.el.animate([{ height: `${p.from}px` }, { height: `${p.to}px` }], { duration: DUR, easing: "cubic-bezier(.2,.8,.2,1)" });
+            an.onfinish = an.oncancel = () => { p.el.style.overflow = ""; if (!p.open) p.el.classList.remove("open"); };
+          }
+          if (!scroller) return;
+          const t0 = performance.now();
+          const keep = () => {
+            const d = lab.getBoundingClientRect().top - anchor;
+            if (Math.abs(d) > 0.5) scroller.scrollTop += d;
+            if (performance.now() - t0 < DUR + 40) requestAnimationFrame(keep);
+          };
+          requestAnimationFrame(keep);
         };
         lab.addEventListener("click", toggle);
         lab.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
@@ -2269,7 +2307,7 @@
       {@const ms = $meshStatus}
       <section class="group">
         <div class="label">{$t("Meet nearby")}</div>
-        <div class="bots-note">{$t("Start a chat with someone right next to you without the internet: one shows a QR, the other scans it.")}</div>
+        <div class="bots-note">{$t("Start a chat with someone right next to you without the internet: one shows a QR, the other scans it. The code carries the Bluetooth address — the devices connect directly, no pairing, like Briar.")}</div>
         <div class="bot-actions"><button class="bot-btn primary" onclick={() => { meetOpen.set(true); }}>{$t("Meet nearby")}</button></div>
       </section>
       <section class="group">
@@ -2309,7 +2347,7 @@
       {/if}
       <section class="group">
         <div class="label">{$t("How to start")}</div>
-        <div class="bots-note">{$t("1. Chat with the person at least once through a server — that's when your devices exchange keys. 2. Be on the same Wi-Fi (a phone's hotspot works without internet), or keep Bluetooth on: Android finds nearby phones by itself; on Linux and Windows pair the devices once in the system Bluetooth settings. 3. Messages are swapped automatically every couple of minutes while the server is away, or right now with “Find contacts nearby”.")}</div>
+        <div class="bots-note">{$t("1. Connect by QR code: one of you shows the code, the other scans it — that exchanges the keys and the Bluetooth address, like Briar; or chat once through a server. 2. Keep Bluetooth on (the device from the QR is dialled directly, no pairing) or be on the same Wi-Fi. 3. Messages are swapped automatically every couple of minutes while the server is away, or right now with “Find contacts nearby”.")}</div>
       </section>
       {/if}
 
@@ -3096,7 +3134,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .bot-add:disabled { opacity: 0.5; cursor: not-allowed; }
   .bot-list { display: flex; flex-direction: column; gap: 8px; }
   :global(section.group.acc) > :global(.label) { cursor: pointer; display: flex; align-items: center; user-select: none; }
-  :global(section.group.acc) > :global(.label)::after { content: "›"; margin-left: auto; font-size: 16px; transition: transform .15s; }
+  :global(section.group.acc) > :global(.label)::after { content: "›"; margin-left: auto; font-size: 16px; transition: transform .26s cubic-bezier(.2,.8,.2,1); }
   :global(section.group.acc.open) > :global(.label)::after { transform: rotate(90deg); }
   :global(section.group.acc:not(.open)) > :global(:not(.label)) { display: none !important; }
   .bots-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }

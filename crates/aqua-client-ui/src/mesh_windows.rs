@@ -19,7 +19,7 @@ use windows::Foundation::TypedEventHandler;
 use windows::Networking::Sockets::{SocketProtectionLevel, StreamSocket, StreamSocketListener, StreamSocketListenerConnectionReceivedEventArgs};
 use windows::Storage::Streams::{DataReader, DataWriter, InputStreamOptions};
 
-use super::{book, run_session};
+use super::{book, direct_addrs, note_attempt, run_session};
 
 pub const SUPPORTED: bool = true;
 
@@ -149,7 +149,7 @@ pub async fn listen(app: &AppHandle) -> Result<(), String> {
     let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
     let app2 = app.clone();
     // The provider and listener live on this thread for as long as we listen.
-    std::thread::spawn(move || match serve(app2) {
+    std::thread::spawn(move || match { read_own_address(); serve(app2) } {
         Ok((provider, listener)) => {
             let _ = tx.send(Ok(()));
             while !STOP.load(Ordering::Relaxed) {
@@ -177,9 +177,34 @@ pub async fn stop(_app: &AppHandle) {
     READY.store(false, Ordering::Relaxed);
 }
 
-/// Devices to try: paired ones, plus (on a manual search) those in range.
-fn candidates(scan: bool) -> windows::core::Result<Vec<(u64, BluetoothDevice)>> {
+/// This PC's Bluetooth address (for my QR), read on the Bluetooth thread
+/// when listening starts — never on the UI thread.
+static OWN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+pub fn own_address() -> Option<String> {
+    OWN.lock().ok().and_then(|g| g.clone())
+}
+fn read_own_address() {
+    let a = windows::Devices::Bluetooth::BluetoothAdapter::GetDefaultAsync().and_then(|op| op.join()).and_then(|ad| ad.BluetoothAddress());
+    if let (Ok(a), Ok(mut g)) = (a, OWN.lock()) {
+        *g = Some(mac(a));
+    }
+}
+
+fn parse_mac(m: &str) -> Option<u64> {
+    let hex: String = m.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+    (hex.len() == 12).then(|| u64::from_str_radix(&hex, 16).ok()).flatten()
+}
+
+/// Devices to try: ones from QR codes and ones we've met (dialled directly,
+/// no pairing — like Briar), paired ones, and (on a manual search) those in range.
+fn candidates(scan: bool, direct: &[String]) -> windows::core::Result<Vec<(u64, BluetoothDevice)>> {
     let mut out = Vec::new();
+    for m in direct {
+        let Some(a) = parse_mac(m) else { continue };
+        if let Ok(dev) = BluetoothDevice::FromBluetoothAddressAsync(a).and_then(|op| op.join()) {
+            out.push((a, dev));
+        }
+    }
     let mut sels = vec![BluetoothDevice::GetDeviceSelectorFromPairingState(true)?];
     if scan {
         sels.push(BluetoothDevice::GetDeviceSelectorFromPairingState(false)?);
@@ -198,9 +223,27 @@ fn candidates(scan: bool) -> windows::core::Result<Vec<(u64, BluetoothDevice)>> 
     Ok(out)
 }
 
-fn dial(dev: &BluetoothDevice) -> windows::core::Result<Option<StreamSocket>> {
+/// Why a device gave nothing: the service lookup's own error (out of range,
+/// access denied, not paired…) or "no Aquamarine there".
+fn dial(dev: &BluetoothDevice) -> Result<StreamSocket, String> {
+    dial_inner(dev).map_err(err)?.ok_or_else(|| "Aquamarine isn't open there (or Bluetooth delivery is off on it)".to_string())
+}
+
+fn dial_inner(dev: &BluetoothDevice) -> windows::core::Result<Option<StreamSocket>> {
     let sid = RfcommServiceId::FromUuid(SERVICE)?;
     let res = dev.GetRfcommServicesForIdWithCacheModeAsync(&sid, BluetoothCacheMode::Uncached)?.join()?;
+    // Windows says why it found nothing (the device is away, access denied).
+    let code = res.Error()?;
+    if code != windows::Devices::Bluetooth::BluetoothError::Success {
+        let why = match code {
+            windows::Devices::Bluetooth::BluetoothError::RadioNotAvailable => "Bluetooth is off",
+            windows::Devices::Bluetooth::BluetoothError::DeviceNotConnected => "the device is out of range or asleep",
+            windows::Devices::Bluetooth::BluetoothError::ConsentRequired => "Windows asks for permission — allow Bluetooth for the app",
+            windows::Devices::Bluetooth::BluetoothError::NotSupported => "this device has no Bluetooth Classic",
+            _ => "the device didn't answer",
+        };
+        return Err(windows::core::Error::new(windows::core::HRESULT(0x8000_4005u32 as i32), why));
+    }
     let services = res.Services()?;
     if services.Size()? == 0 {
         return Ok(None);
@@ -214,21 +257,41 @@ fn dial(dev: &BluetoothDevice) -> windows::core::Result<Option<StreamSocket>> {
 pub async fn sync_round(app: &AppHandle, scan: bool) -> Result<(), String> {
     listen(app).await?;
     let known: std::collections::HashMap<String, u64> = book(app).peers.iter().map(|(k, p)| (k.clone(), p.last)).collect();
+    let direct = direct_addrs(app);
     let app2 = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut devs = candidates(scan).map_err(err)?;
-        devs.sort_by_key(|(a, _)| std::cmp::Reverse(known.get(&mac(*a)).copied().unwrap_or(0)));
-        devs.dedup_by_key(|(a, _)| *a);
+        let mut devs = candidates(scan, &direct).map_err(err)?;
+        // From a QR first, then the ones met most recently.
+        devs.sort_by_key(|(a, _)| (!direct.contains(&mac(*a)), std::cmp::Reverse(known.get(&mac(*a)).copied().unwrap_or(0))));
+        let mut seen = std::collections::HashSet::new();
+        devs.retain(|(a, _)| seen.insert(*a));
+        if devs.is_empty() {
+            return Err("nobody to dial yet — scan the other device's QR (Contacts → Meet nearby) or pair it once in Windows Settings".to_string());
+        }
         let mut met = 0;
+        let mut why = String::new();
         for (addr, dev) in devs.into_iter().take(10) {
-            let Ok(Some(sock)) = dial(&dev) else { continue };
-            let Ok(mut link) = Link::new(sock) else { continue };
+            let name = dev.Name().map(|n| n.to_string()).unwrap_or_default();
+            let label = if name.is_empty() { mac(addr) } else { format!("{} ({name})", mac(addr)) };
+            let sock = match dial(&dev) {
+                Ok(s) => s,
+                Err(e) => {
+                    // Only on a search by hand: the background rounds would fill the list.
+                    if scan { note_attempt(&app2, &label, &e); }
+                    why = e;
+                    continue;
+                }
+            };
+            let mut link = match Link::new(sock) {
+                Ok(l) => l,
+                Err(e) => { why = err(e); if scan { note_attempt(&app2, &label, &why); } continue; }
+            };
             if run_session(&app2, &mut link, true, &mac(addr)).error.is_none() {
                 met += 1;
             }
         }
         if met == 0 && scan {
-            return Err("no contacts with Aquamarine answered nearby".to_string());
+            return Err(if why.is_empty() { "no contacts with Aquamarine answered nearby".to_string() } else { why });
         }
         Ok(())
     })
