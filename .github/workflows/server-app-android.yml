@@ -61,5 +61,11 @@ jobs:
 
       - name: Build APK
         working-directory: crates/aqua-server-app
-        run: cargo tauri android build --apk --target aarch64 --target armv7 --ci
+        run: |
+          # versionCode in the order of the in-app updater (tools/android_version_code.py):
+          # Tauri's own rule made 1.2.2 "older" than 1.2.11 and Android refused the update.
+          code=$(python3 "$GITHUB_WORKSPACE/tools/android_version_code.py" "$(jq -r .version tauri.conf.json)")
+          jq --argjson c "$code" '.bundle.android.versionCode = $c' tauri.conf.json > tauri.conf.json.tmp && mv tauri.conf.json.tmp tauri.conf.json
+          cargo tauri android build --apk --target aarch64 --target armv7 --ci
+          grep -q "versionCode=$code" gen/android/app/tauri.properties || { echo "::error::versionCode $code didn't reach the build"; cat gen/android/app/tauri.properties; exit 1; }
 
