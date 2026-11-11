@@ -2738,6 +2738,10 @@ struct MeetCard {
     b: String,
     /// The one-time pass.
     k: String,
+    /// My Bluetooth address (Briar-style): the other side dials it directly,
+    /// no pairing. Empty where the system hides it (Android).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    bt: String,
 }
 
 #[tauri::command]
@@ -2755,6 +2759,7 @@ pub fn meet_qr(state: State<'_, StdMutex<AppState>>, name: Option<String>) -> Re
         n: name.unwrap_or_default().chars().take(40).collect(),
         b: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bincode::serialize(&bundle).map_err(|e| e.to_string())?),
         k: crate::mesh::issue_meet(),
+        bt: crate::mesh::own_bt_address().unwrap_or_default(),
     };
     let json = serde_json::to_vec(&card).map_err(|e| e.to_string())?;
     Ok(format!("aqua:meet?d={}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)))
@@ -2782,6 +2787,9 @@ pub async fn meet_accept(app: AppHandle, state: State<'_, StdMutex<AppState>>, c
     }
     crate::multidev::remember_met(&card.a, bundle);
     crate::mesh::hold_meet(&card.k);
+    if !card.bt.is_empty() {
+        crate::mesh::add_direct(&app, &card.bt);
+    }
     let hello = "👋";
     let had = state.lock().map_err(|e| e.to_string())?.chats.contains_key(&card.u);
     crate::multidev::fanout(&app, &card.u, hello, true).await?;

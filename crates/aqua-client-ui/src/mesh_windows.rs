@@ -19,7 +19,7 @@ use windows::Foundation::TypedEventHandler;
 use windows::Networking::Sockets::{SocketProtectionLevel, StreamSocket, StreamSocketListener, StreamSocketListenerConnectionReceivedEventArgs};
 use windows::Storage::Streams::{DataReader, DataWriter, InputStreamOptions};
 
-use super::{book, note_attempt, run_session};
+use super::{book, direct_addrs, note_attempt, run_session};
 
 pub const SUPPORTED: bool = true;
 
@@ -149,7 +149,7 @@ pub async fn listen(app: &AppHandle) -> Result<(), String> {
     let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
     let app2 = app.clone();
     // The provider and listener live on this thread for as long as we listen.
-    std::thread::spawn(move || match serve(app2) {
+    std::thread::spawn(move || match { read_own_address(); serve(app2) } {
         Ok((provider, listener)) => {
             let _ = tx.send(Ok(()));
             while !STOP.load(Ordering::Relaxed) {
@@ -177,9 +177,34 @@ pub async fn stop(_app: &AppHandle) {
     READY.store(false, Ordering::Relaxed);
 }
 
-/// Devices to try: paired ones, plus (on a manual search) those in range.
-fn candidates(scan: bool) -> windows::core::Result<Vec<(u64, BluetoothDevice)>> {
+/// This PC's Bluetooth address (for my QR), read on the Bluetooth thread
+/// when listening starts — never on the UI thread.
+static OWN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+pub fn own_address() -> Option<String> {
+    OWN.lock().ok().and_then(|g| g.clone())
+}
+fn read_own_address() {
+    let a = windows::Devices::Bluetooth::BluetoothAdapter::GetDefaultAsync().and_then(|op| op.join()).and_then(|ad| ad.BluetoothAddress());
+    if let (Ok(a), Ok(mut g)) = (a, OWN.lock()) {
+        *g = Some(mac(a));
+    }
+}
+
+fn parse_mac(m: &str) -> Option<u64> {
+    let hex: String = m.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+    (hex.len() == 12).then(|| u64::from_str_radix(&hex, 16).ok()).flatten()
+}
+
+/// Devices to try: ones from QR codes and ones we've met (dialled directly,
+/// no pairing — like Briar), paired ones, and (on a manual search) those in range.
+fn candidates(scan: bool, direct: &[String]) -> windows::core::Result<Vec<(u64, BluetoothDevice)>> {
     let mut out = Vec::new();
+    for m in direct {
+        let Some(a) = parse_mac(m) else { continue };
+        if let Ok(dev) = BluetoothDevice::FromBluetoothAddressAsync(a).and_then(|op| op.join()) {
+            out.push((a, dev));
+        }
+    }
     let mut sels = vec![BluetoothDevice::GetDeviceSelectorFromPairingState(true)?];
     if scan {
         sels.push(BluetoothDevice::GetDeviceSelectorFromPairingState(false)?);
@@ -232,13 +257,16 @@ fn dial_inner(dev: &BluetoothDevice) -> windows::core::Result<Option<StreamSocke
 pub async fn sync_round(app: &AppHandle, scan: bool) -> Result<(), String> {
     listen(app).await?;
     let known: std::collections::HashMap<String, u64> = book(app).peers.iter().map(|(k, p)| (k.clone(), p.last)).collect();
+    let direct = direct_addrs(app);
     let app2 = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut devs = candidates(scan).map_err(err)?;
-        devs.sort_by_key(|(a, _)| std::cmp::Reverse(known.get(&mac(*a)).copied().unwrap_or(0)));
-        devs.dedup_by_key(|(a, _)| *a);
+        let mut devs = candidates(scan, &direct).map_err(err)?;
+        // From a QR first, then the ones met most recently.
+        devs.sort_by_key(|(a, _)| (!direct.contains(&mac(*a)), std::cmp::Reverse(known.get(&mac(*a)).copied().unwrap_or(0))));
+        let mut seen = std::collections::HashSet::new();
+        devs.retain(|(a, _)| seen.insert(*a));
         if devs.is_empty() {
-            return Err("no paired devices — pair the phone or the computer once in Windows Settings → Bluetooth".to_string());
+            return Err("nobody to dial yet — scan the other device's QR (Contacts → Meet nearby) or pair it once in Windows Settings".to_string());
         }
         let mut met = 0;
         let mut why = String::new();

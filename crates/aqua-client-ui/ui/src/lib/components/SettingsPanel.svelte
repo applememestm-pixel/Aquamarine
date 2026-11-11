@@ -2307,7 +2307,7 @@
       {@const ms = $meshStatus}
       <section class="group">
         <div class="label">{$t("Meet nearby")}</div>
-        <div class="bots-note">{$t("Start a chat with someone right next to you without the internet: one shows a QR, the other scans it.")}</div>
+        <div class="bots-note">{$t("Start a chat with someone right next to you without the internet: one shows a QR, the other scans it. The code carries the Bluetooth address — the devices connect directly, no pairing, like Briar.")}</div>
         <div class="bot-actions"><button class="bot-btn primary" onclick={() => { meetOpen.set(true); }}>{$t("Meet nearby")}</button></div>
       </section>
       <section class="group">
@@ -2347,7 +2347,7 @@
       {/if}
       <section class="group">
         <div class="label">{$t("How to start")}</div>
-        <div class="bots-note">{$t("1. Chat with the person at least once through a server — that's when your devices exchange keys. 2. Be on the same Wi-Fi (a phone's hotspot works without internet), or keep Bluetooth on: Android finds nearby phones by itself; on Linux and Windows pair the devices once in the system Bluetooth settings. 3. Messages are swapped automatically every couple of minutes while the server is away, or right now with “Find contacts nearby”.")}</div>
+        <div class="bots-note">{$t("1. Connect by QR code: one of you shows the code, the other scans it — that exchanges the keys and the Bluetooth address, like Briar; or chat once through a server. 2. Keep Bluetooth on (the device from the QR is dialled directly, no pairing) or be on the same Wi-Fi. 3. Messages are swapped automatically every couple of minutes while the server is away, or right now with “Find contacts nearby”.")}</div>
       </section>
       {/if}
 
