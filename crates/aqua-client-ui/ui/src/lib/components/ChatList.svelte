@@ -57,6 +57,38 @@
     fabOpen = false;
     if (k === "chat") openNewChatDialog(); else openNewGroup(k);
   }
+  /** The unfolded pencil: one panel of icons with a slider, like the tab
+   *  bar's. Touch an icon — the slider goes there and its name shows beside
+   *  it; touch it again to make one. Or slide the finger along the panel and
+   *  let go on the one you want. */
+  const FAB_ITEMS = [["channel", "New channel"], ["supergroup", "New server"], ["group", "New group"], ["chat", "New chat"]] as const;
+  const FAB_CELL = 46;
+  let fabSel = $state<number | null>(null);
+  let fabDrag: { id: number; y0: number; moved: boolean; before: number | null } | null = null;
+  $effect(() => { if (!fabOpen) fabSel = null; });
+  function fabIndexAt(el: HTMLElement, y: number) {
+    const r = el.getBoundingClientRect();
+    return Math.max(0, Math.min(FAB_ITEMS.length - 1, Math.floor((y - r.top - 5) / FAB_CELL)));
+  }
+  function fabDown(e: PointerEvent) {
+    const el = e.currentTarget as HTMLElement;
+    try { el.setPointerCapture(e.pointerId); } catch { /* fine */ }
+    fabDrag = { id: e.pointerId, y0: e.clientY, moved: false, before: fabSel };
+    fabSel = fabIndexAt(el, e.clientY);
+  }
+  function fabMove(e: PointerEvent) {
+    if (!fabDrag || fabDrag.id !== e.pointerId) return;
+    if (Math.abs(e.clientY - fabDrag.y0) > 8) fabDrag.moved = true;
+    const i = fabIndexAt(e.currentTarget as HTMLElement, e.clientY);
+    if (i !== fabSel) { fabSel = i; try { navigator.vibrate?.(8); } catch { /* no vibration */ } }
+  }
+  function fabUp(e: PointerEvent) {
+    const d = fabDrag;
+    fabDrag = null;
+    if (!d || d.id !== e.pointerId || fabSel == null) return;
+    // Slid onto it, or touched the one already chosen: make it.
+    if (d.moved || d.before === fabSel) fabPick(FAB_ITEMS[fabSel][0]);
+  }
   import { contacts, saveContact, displayName } from "../contacts";
   import { chatLines } from "../listLook";
   import { botMenus } from "../botMenus";
@@ -1100,17 +1132,24 @@
     {/if}
     <div class="fab-wrap" class:open={fabOpen}>
       {#if fabOpen}
-        <div class="fab-items" role="menu">
-          {#each [["channel", "New channel"], ["supergroup", "New server"], ["group", "New group"], ["chat", "New chat"]] as [k, label], i (k)}
-            <button class="fab-item" role="menuitem" style:--i={3 - i} onclick={() => fabPick(k as "chat" | "group" | "supergroup" | "channel")}>
-              <span>{$t(label)}</span>
-              <i>{#if k === "chat"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>{:else if k === "group"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 19c.6-3.2 3-5 6-5s5.4 1.8 6 5"/><path d="M16 5.2a3 3 0 0 1 0 5.6M18 14.2c1.6.6 2.7 2.2 3 4.8"/></svg>{:else if k === "supergroup"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M8 9h8M8 13h5M3 8h0"/></svg>{:else}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v4a1 1 0 0 0 1 1h3l6 4V5L7 9H4a1 1 0 0 0-1 1z"/><path d="M17 8.5a5 5 0 0 1 0 7"/></svg>{/if}</i>
-            </button>
-          {/each}
+        <div class="fab-panel">
+          {#if fabSel != null}
+            {#key fabSel}<span class="fab-label" style:top="{5 + fabSel * FAB_CELL + FAB_CELL / 2}px">{$t(FAB_ITEMS[fabSel][1])}</span>{/key}
+          {/if}
+          <div class="fab-items" role="menu" tabindex="-1" onpointerdown={fabDown} onpointermove={fabMove} onpointerup={fabUp} onpointercancel={() => (fabDrag = null)}>
+            <span class="fab-thumb" class:on={fabSel != null} style:transform="translateY({(fabSel ?? 0) * FAB_CELL}px)"></span>
+            {#each FAB_ITEMS as [k, label], i (k)}
+              <!-- Touch is handled by the panel; a click with detail 0 is the keyboard. -->
+              <button class="fab-item" class:sel={fabSel === i} role="menuitem" aria-label={$t(label)} style:--i={FAB_ITEMS.length - 1 - i}
+                onclick={(e) => { if (e.detail === 0) fabPick(k); }}>
+                {#if k === "chat"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>{:else if k === "group"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 19c.6-3.2 3-5 6-5s5.4 1.8 6 5"/><path d="M16 5.2a3 3 0 0 1 0 5.6M18 14.2c1.6.6 2.7 2.2 3 4.8"/></svg>{:else if k === "supergroup"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M8 9h8M8 13h5M3 8h0"/></svg>{:else}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v4a1 1 0 0 0 1 1h3l6 4V5L7 9H4a1 1 0 0 0-1 1z"/><path d="M17 8.5a5 5 0 0 1 0 7"/></svg>{/if}
+              </button>
+            {/each}
+          </div>
         </div>
       {/if}
       <button class="fab" onclick={() => (fabOpen = !fabOpen)} aria-label={$t("New chat, group or channel")} aria-expanded={fabOpen}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path class="fab-line" d="M12 20h9"/><path class="fab-pen" d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
       </button>
     </div>
   {/if}
@@ -1720,16 +1759,27 @@
     transition: transform .25s cubic-bezier(.3,1.4,.5,1), border-radius .25s ease; }
   .fab svg { width: 24px; height: 24px; transition: transform .25s ease; }
   .fab:active { transform: scale(.92); }
-  .fab-wrap.open .fab svg { transform: rotate(-45deg); }
+  /* Open: the pencil turns, the line it writes on stays put. */
+  .fab .fab-pen { transform-box: fill-box; transform-origin: center; transition: transform .25s cubic-bezier(.3,1.3,.5,1); }
+  .fab-wrap.open .fab .fab-pen { transform: rotate(-45deg); }
   .fab-veil { position: fixed; inset: 0; z-index: 59; background: rgba(0,0,0,.35); animation: fab-veil .2s ease; }
   @keyframes fab-veil { from { opacity: 0; } }
-  .fab-items { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
-  .fab-item { display: flex; align-items: center; gap: 10px; border: none; background: transparent; padding: 0; color: var(--fg); font: 600 14.5px var(--font-ui, inherit);
-    animation: fab-in .26s cubic-bezier(.22,1.2,.36,1) both; animation-delay: calc(var(--i) * 35ms); }
-  .fab-item span { padding: 7px 12px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-surface); border: 1px solid var(--border-strong); box-shadow: 0 8px 20px -10px rgba(0,0,0,.7); }
-  .fab-item i { width: 46px; height: 46px; border-radius: calc(15px * var(--rk, 1)); display: grid; place-items: center; background: var(--bg-surface-2); color: var(--accent); border: 1px solid var(--border-strong); margin-right: 5px; }
-  .fab-item i svg { width: 22px; height: 22px; }
-  .fab-item:active i { transform: scale(.92); }
+  /* One panel with a slider, like the tab bar's (see fabDown). */
+  .fab-panel { position: relative; margin-right: 4px; animation: fab-in .26s cubic-bezier(.22,1.2,.36,1) both; transform-origin: bottom center; }
+  .fab-items { position: relative; display: flex; flex-direction: column; padding: 5px; border-radius: calc(26px * var(--rk, 1));
+    background: var(--bg-surface); border: 1px solid var(--border-strong); box-shadow: 0 14px 34px -14px rgba(0,0,0,.75); touch-action: none; user-select: none; -webkit-user-select: none; }
+  .fab-thumb { position: absolute; left: 5px; top: 5px; width: 46px; height: 46px; border-radius: calc(21px * var(--rk, 1));
+    background: color-mix(in srgb, var(--accent) 18%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    opacity: 0; transition: transform .24s cubic-bezier(.3,1.3,.5,1), opacity .15s ease; pointer-events: none; }
+  .fab-thumb.on { opacity: 1; }
+  .fab-item { position: relative; width: 46px; height: 46px; display: grid; place-items: center; border: none; background: transparent; padding: 0; color: var(--fg-muted);
+    transition: color .15s ease, transform .15s ease; animation: fab-in .26s cubic-bezier(.22,1.2,.36,1) both; animation-delay: calc(var(--i) * 30ms); }
+  .fab-item svg { width: 22px; height: 22px; }
+  .fab-item.sel { color: var(--accent); transform: scale(1.08); }
+  .fab-label { position: absolute; right: calc(100% + 10px); transform: translateY(-50%); white-space: nowrap; padding: 7px 12px;
+    border-radius: calc(12px * var(--rk, 1)); background: var(--bg-surface); border: 1px solid var(--border-strong); box-shadow: 0 8px 20px -10px rgba(0,0,0,.7);
+    color: var(--fg); font: 600 14.5px var(--font-ui, inherit); pointer-events: none; animation: fab-label .18s ease both; }
+  @keyframes fab-label { from { opacity: 0; transform: translate(8px, -50%); } }
   @keyframes fab-in { from { opacity: 0; transform: translateY(14px) scale(.85); } }
   .bot-open { flex-shrink: 0; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 3px 11px; border-radius: calc(12px * var(--rk, 1));
     background: var(--accent); color: #06070c; font-size: 12px; font-weight: 700; cursor: pointer; transition: transform .12s ease, filter .12s ease; }
