@@ -1665,7 +1665,13 @@
             <div class="ava-ctl">
               <div class="ava-head"><b>{$t(l)}</b><span class="pill-tag">{v >= 50 ? $t("Circle") : v <= 0 ? $t("Square") : `${v}%`}</span></div>
               <div class="range"><input type="range" min="0" max="50" step="1" value={v}
-                oninput={(e) => settings.update((x) => ({ ...x, [k]: parseInt((e.target as HTMLInputElement).value) }))} /></div>
+                oninput={(e) => settings.update((x) => {
+                  // Groups and channels used to follow "People" until moved
+                  // themselves: each slider is on its own — the ones never
+                  // touched keep what they show now.
+                  const base = x.avatarRadius ?? 50;
+                  return { ...x, avatarRadius: base, avatarRadiusGroup: x.avatarRadiusGroup ?? base, avatarRadiusChannel: x.avatarRadiusChannel ?? base, [k]: parseInt((e.target as HTMLInputElement).value) };
+                })} /></div>
             </div>
           </div>
         {/each}
