@@ -7,6 +7,11 @@
     peer: string | null;
   }
   export const pickerState = writable<PickerState>({ open: false, peer: null });
+  /** The picker's last tab — the message field's button shows it (Telegram:
+   *  a smile, a sticker or "GIF"). */
+  export const pickerTab = writable<"emoji" | "stickers" | "gifs">(((): "emoji" | "stickers" | "gifs" => {
+    try { const v = localStorage.getItem("aqua.picker.tab"); return v === "stickers" || v === "gifs" ? v : "emoji"; } catch { return "emoji"; }
+  })());
   /** True while an OS file drag hovers the panel — the chat must not
    *  also treat that drop as "send these files". */
   export const panelClaimsDrop = writable(false);
@@ -57,7 +62,7 @@
   type Tab = "emoji" | "stickers" | "gifs";
   const TAB_KEY = "aqua.picker.tab";
   let tab = $state<Tab>(((): Tab => { try { return (localStorage.getItem(TAB_KEY) as Tab) || "emoji"; } catch { return "emoji"; } })());
-  $effect(() => { try { localStorage.setItem(TAB_KEY, tab); } catch { /* ignore */ } });
+  $effect(() => { try { localStorage.setItem(TAB_KEY, tab); } catch { /* ignore */ } pickerTab.set(tab); });
 
   let query = $state("");
   let catalogue = $state<LocalMediaList | null>(null);

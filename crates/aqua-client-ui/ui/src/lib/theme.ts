@@ -381,6 +381,10 @@ function apply(s: Settings) {
     root.style.setProperty("--bg-hover",      "rgba(0, 0, 0, 0.04)");
     root.style.setProperty("--bg-active",     "rgba(0, 0, 0, 0.06)");
     root.style.setProperty("--bg-bubble-in",  "#FFFFFF");
+    // Cards, menus and the floating glass panels (the tab bar, the chat's
+    // header): without this the dark default stayed, and in light mode they
+    // were murky grey.
+    root.style.setProperty("--bg-surface",    "#FFFFFF");
     root.style.setProperty("--bg-surface-2",  "#FFFFFF");
     root.style.setProperty("--border",        "rgba(0, 0, 0, 0.08)");
     root.style.setProperty("--border-strong", "rgba(0, 0, 0, 0.16)");
@@ -396,6 +400,7 @@ function apply(s: Settings) {
     root.style.setProperty("--bg-hover",      "rgba(255, 255, 255, 0.04)");
     root.style.setProperty("--bg-active",     "rgba(0, 229, 199, 0.08)");
     root.style.setProperty("--bg-bubble-in",  "#141825");
+    root.style.setProperty("--bg-surface",    "#171C28");
     root.style.setProperty("--bg-surface-2",  "#1A1F2E");
     root.style.setProperty("--border",        "rgba(255, 255, 255, 0.06)");
     root.style.setProperty("--border-strong", "rgba(255, 255, 255, 0.14)");

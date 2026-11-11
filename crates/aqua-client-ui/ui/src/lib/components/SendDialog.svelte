@@ -153,7 +153,7 @@
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="sd-back" onclick={() => done(false)}>
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-    <div class="sd" role="dialog" aria-modal="true" tabindex="-1" aria-label={$t("Send files")} onclick={(e) => e.stopPropagation()}>
+    <div class="sd" role="dialog" aria-modal="true" tabindex="-1" aria-label={$t("Send files")} onclick={(e) => e.stopPropagation()} onkeydown={key}>
       <header>
         <button class="x" data-x data-keep-x onclick={() => done(false)} aria-label={$t("Close")}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
@@ -243,7 +243,9 @@
         <button class="add" onclick={addMore} title={$t("Add files")} aria-label={$t("Add files")}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         </button>
-        <textarea bind:this={capEl} class="cap" rows="1" placeholder={$t("Add a caption…")} bind:value={caption} oninput={grow}></textarea>
+        <!-- Enter sends right from the caption too: the window-level handler
+             alone didn't always get the key (the dialog stayed open). -->
+        <textarea bind:this={capEl} class="cap" rows="1" placeholder={$t("Add a caption…")} bind:value={caption} oninput={grow} onkeydown={key}></textarea>
         <button class="go" onclick={() => done(true)} title={$t("Send")} aria-label={$t("Send")}>
           {@html icons.send}
           {#if paths.length > 1}<span class="cnt">{paths.length}</span>{/if}

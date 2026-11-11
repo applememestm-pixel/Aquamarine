@@ -187,7 +187,7 @@
   .stage.full .tile { border-radius: calc(16px * var(--rk, 1)); background: #15171f; animation: tile-in .35s cubic-bezier(.2,.9,.25,1.1) both; }
   @keyframes tile-in { from { opacity: 0; transform: scale(.94); } }
   .stage.full .ava { width: 96px; height: 96px; font-size: 38px; position: relative; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
-  .stage.full .tile.speaking .ava { box-shadow: 0 0 0 4px #3ddc84, 0 10px 30px rgba(0,0,0,.5); }
+  .stage.full .tile.speaking .ava { box-shadow: 0 0 0 4px var(--accent), 0 0 30px 6px var(--accent-glow, color-mix(in srgb, var(--accent) 55%, transparent)), 0 10px 30px rgba(0,0,0,.5); }
   .tile-bg { position: absolute; inset: -20%; width: 140%; height: 140%; object-fit: cover; filter: blur(30px) brightness(.45) saturate(1.3); }
   .stage.full .name { font-size: 13px; left: 12px; bottom: 10px; }
   .stage.full .ctrls { padding: 14px 0 20px; }
@@ -197,7 +197,8 @@
     position: relative; aspect-ratio: 16 / 9; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-input); border: 2px solid transparent;
     display: grid; place-items: center; overflow: hidden; cursor: pointer; padding: 0; color: var(--fg); transition: border-color 0.12s, box-shadow 0.12s;
   }
-  .tile.speaking { border-color: #3ddc84; box-shadow: 0 0 0 2px rgba(61, 220, 132, 0.25), 0 0 22px -4px rgba(61, 220, 132, 0.6); }
+  /* Who's talking: the tile lights up in the theme's colour. */
+  .tile.speaking { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent), 0 0 26px -4px var(--accent-glow, color-mix(in srgb, var(--accent) 60%, transparent)); }
   .tile video { width: 100%; height: 100%; object-fit: cover; background: #000; }
   .tile video.mirror { transform: scaleX(-1); }
   .ava { width: 56px; height: 56px; border-radius: var(--ava-r, 50%); overflow: hidden; display: grid; place-items: center; font-weight: 800; font-size: 22px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070c; }

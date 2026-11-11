@@ -1320,6 +1320,11 @@
   .mrow { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 0; background: transparent; border: none;
           color: inherit; text-align: left; font: inherit; }
   .mrow.click { cursor: pointer; }
+  /* Rows reach the card's edges a little, rounded, so the "contrast rows"
+     stripe (app.css, made for the chat list's background) is a soft band
+     inside the card instead of a black slab with hard ends. */
+  .mrow { width: calc(100% + 12px); margin: 0 -6px; padding: 8px 6px; border-radius: calc(10px * var(--rk, 1)); }
+  :global(html.contrast-rows) .mrow.alt:not(:hover) { background: color-mix(in srgb, var(--fg) 5%, transparent) !important; }
   .mrow.click:hover .m-name { color: var(--accent); }
   .m-ava { border-radius: var(--ava-r, 50%); background: linear-gradient(135deg, var(--accent), var(--accent-2)); display: grid; place-items: center;
            font-weight: 800; font-size: 13px; color: #06070C; flex-shrink: 0; }

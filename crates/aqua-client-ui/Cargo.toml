@@ -68,6 +68,9 @@ windows = { version = "0.62", features = [
   "Devices_Bluetooth", "Devices_Bluetooth_Rfcomm", "Devices_Enumeration",
   "Networking", "Networking_Sockets", "Storage_Streams",
 ] }
+# The webview's own permission prompt (microphone / camera): see win_webview in lib.rs.
+# Same version as tauri's (wry) — it shares the `windows` crate above.
+webview2-com = "0.39"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = { version = "2.0.2", features = ["v2_38"] }
