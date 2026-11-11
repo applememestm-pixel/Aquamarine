@@ -98,6 +98,10 @@ struct Book {
     peers: HashMap<String, Peer>,
     #[serde(default)]
     last: Vec<SyncReport>,
+    /// Bluetooth addresses from QR codes (Briar-style): dialled directly,
+    /// no pairing in the system settings.
+    #[serde(default)]
+    direct: Vec<String>,
     #[serde(skip)]
     seen: VecDeque<String>,
     #[serde(skip)]
@@ -553,6 +557,44 @@ pub fn run_session<S: Read + Write>(app: &AppHandle, link: &mut S, dialled: bool
     rep
 }
 
+/// `AA:BB:CC:DD:EE:FF`, upper case, or None.
+pub fn norm_mac(s: &str) -> Option<String> {
+    let m = s.trim().to_uppercase().replace('-', ":");
+    let ok = m.len() == 17 && m.split(':').count() == 6 && m.split(':').all(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_hexdigit()));
+    (ok && m != "00:00:00:00:00:00" && m != "02:00:00:00:00:00").then_some(m)
+}
+
+/// Remember a Bluetooth address from someone's QR: from now on it's dialled
+/// directly, like a paired device.
+pub fn add_direct(app: &AppHandle, mac: &str) {
+    let Some(m) = norm_mac(mac) else { return };
+    let mut b = book(app);
+    b.direct.retain(|x| *x != m);
+    b.direct.insert(0, m);
+    b.direct.truncate(64);
+    b.save();
+}
+
+/// Bluetooth addresses to dial without pairing: from QR codes and from
+/// devices we've already swapped messages with.
+#[allow(dead_code)]
+pub(crate) fn direct_addrs(app: &AppHandle) -> Vec<String> {
+    let b = book(app);
+    let mut out: Vec<String> = b.direct.clone();
+    for k in b.peers.keys() {
+        if let Some(m) = norm_mac(k) {
+            if !out.contains(&m) { out.push(m); }
+        }
+    }
+    out
+}
+
+/// This device's own Bluetooth address, for my QR (None where the system
+/// doesn't tell it — Android hides it from apps).
+pub fn own_bt_address() -> Option<String> {
+    bt::own_address().and_then(|m| norm_mac(&m))
+}
+
 /// A Bluetooth try that didn't get to a session (no Aquamarine there,
 /// couldn't connect): it shows in "Recent meetings" with the reason, so
 /// it's clear what Bluetooth did.
@@ -794,6 +836,7 @@ mod bt {
     pub async fn listen(_app: &AppHandle) -> Result<(), String> { Err("Bluetooth delivery isn't available on this platform yet".into()) }
     pub async fn stop(_app: &AppHandle) {}
     pub async fn sync_round(_app: &AppHandle, _scan: bool) -> Result<(), String> { Err("Bluetooth delivery isn't available on this platform yet".into()) }
+    pub fn own_address() -> Option<String> { None }
 }
 
 /// Both transports together: the local network everywhere, Bluetooth where

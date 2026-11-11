@@ -57,7 +57,7 @@
   <div class="mt-back" onclick={(e) => { if (e.target === e.currentTarget) meetOpen.set(false); }}>
     <div class="mt" role="dialog" aria-modal="true" aria-label={$t("Meet nearby")} tabindex="-1">
       <header><h3>{$t("Meet nearby")}</h3><button data-x class="x" onclick={() => meetOpen.set(false)} aria-label={$t("Close")}>×</button></header>
-      <p class="note">{$t("No internet needed. One of you shows the code, the other scans it — and you can write to each other over Bluetooth or the same Wi-Fi. Encrypted end to end, like any chat.")}</p>
+      <p class="note">{$t("No internet and no pairing needed, like Briar. One of you shows the code, the other scans it: the code carries the keys and the Bluetooth address, so the devices connect directly over Bluetooth or the same Wi-Fi. Encrypted end to end, like any chat.")}</p>
       <div class="qr">
         {#if code}<QrCode text={code} size={230} />{:else if !err}<div class="ph">…</div>{/if}
       </div>

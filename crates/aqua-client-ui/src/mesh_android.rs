@@ -186,12 +186,20 @@ pub async fn sync_round(app: &AppHandle, scan: bool) -> Result<(), String> {
     listen(app).await?;
     let devs: Devs = call_async("devices", serde_json::json!({ "scanSecs": if scan { 8 } else { 0 } })).await?;
     let known: std::collections::HashMap<String, u64> = book(app).peers.iter().map(|(k, p)| (k.clone(), p.last)).collect();
+    // Addresses from QR codes (Briar-style): dialled directly, even if a
+    // scan didn't see them and nobody paired anything.
+    let direct = super::direct_addrs(app);
     let mut cands: Vec<(u64, String)> = devs
         .devices
         .into_iter()
-        .filter(|d| d.bonded || known.contains_key(&d.address) || scan)
+        .filter(|d| d.bonded || known.contains_key(&d.address) || direct.contains(&d.address.to_uppercase()) || scan)
         .map(|d| (known.get(&d.address).copied().unwrap_or(0), d.address))
         .collect();
+    for m in &direct {
+        if !cands.iter().any(|(_, a)| a.eq_ignore_ascii_case(m)) {
+            cands.push((u64::MAX, m.clone()));
+        }
+    }
     cands.sort_by(|a, b| b.0.cmp(&a.0));
     if cands.is_empty() {
         return Err("no Bluetooth devices nearby".into());
@@ -217,4 +225,10 @@ pub async fn sync_round(app: &AppHandle, scan: bool) -> Result<(), String> {
         return Err("no contacts with Aquamarine answered nearby".into());
     }
     Ok(())
+}
+
+/// Android doesn't tell apps their own Bluetooth address: the other side
+/// learns it from the first connection.
+pub fn own_address() -> Option<String> {
+    None
 }

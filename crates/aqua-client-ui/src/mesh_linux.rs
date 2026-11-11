@@ -197,6 +197,9 @@ pub async fn sync_round(app: &AppHandle, scan: bool) -> Result<(), String> {
         .map(|(p, m)| (p.clone(), b(iface(m, "org.bluez.Adapter1").and_then(|a| a.get("Powered")))))
         .min_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
     let Some((adapter, powered)) = adapter else { return Err("no Bluetooth adapter".into()) };
+    if let Some(m) = objs.get(&adapter).and_then(|m| iface(m, "org.bluez.Adapter1")) {
+        if let Ok(mut g) = OWN.lock() { *g = Some(s(m.get("Address"))); }
+    }
     if !powered {
         return Err("Bluetooth is off".into());
     }
@@ -263,4 +266,10 @@ pub async fn sync_round(app: &AppHandle, scan: bool) -> Result<(), String> {
         return Err("no contacts with Aquamarine answered nearby".into());
     }
     Ok(())
+}
+
+/// The adapter's address, learned when listening (for my QR).
+static OWN: Mutex<Option<String>> = Mutex::new(None);
+pub fn own_address() -> Option<String> {
+    OWN.lock().ok().and_then(|g| g.clone())
 }
