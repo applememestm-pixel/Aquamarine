@@ -77,6 +77,7 @@ async fn main() -> anyhow::Result<()> {
     aqua_server::fed::spawn_sync(state.clone());
     aqua_server::tgapi::resume_webhooks(state.clone());
     aqua_server::music::spawn_bot(state.clone());
+    aqua_server::verify::spawn_bot(state.clone());
     // Ctrl+C / closing the console: stop cleanly, then drop the file cache
     // (people's data stays — blobstore::clear_cache).
     let blobs = state.blobs.clone();

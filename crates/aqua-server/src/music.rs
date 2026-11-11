@@ -366,6 +366,11 @@ async fn pass(headers: &HeaderMap, method: &str, params: Vec<(String, String)>, 
 
 // ------------------------------------------------------------------- @music
 
+/// The relay's own bots (@music, @verify) belong to a fixed owner key nobody holds.
+pub fn relay_bot_owner() -> [u8; 32] {
+    bot_owner()
+}
+
 /// The bot belongs to the relay itself: a fixed owner key nobody holds.
 fn bot_owner() -> [u8; 32] {
     use sha2::{Digest, Sha256};

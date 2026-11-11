@@ -136,10 +136,15 @@
     }
   }
 
+  let userBreak = false;
   function sync() {
     if (!el) return;
     let v = serialize(el);
-    if (v === "\n" && el.childNodes.length <= 2 && !el.querySelector("[data-token]")) { el.replaceChildren(); v = ""; }
+    // A lone line break the browser leaves behind when everything is deleted
+    // is dropped — but not one typed on purpose (Shift+Enter in an empty
+    // field: the first line stays empty, the caret goes to the second).
+    if (v === "\n" && !userBreak && el.childNodes.length <= 2 && !el.querySelector("[data-token]")) { el.replaceChildren(); v = ""; }
+    userBreak = false;
     fixTail();
     lastValue = v;
     if (v !== value) value = v;
@@ -365,6 +370,7 @@
     if (e.defaultPrevented) return;
     if (e.key === "Enter" && !e.isComposing) {
       e.preventDefault();
+      userBreak = true;
       insert("\n");
     }
   }

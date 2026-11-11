@@ -572,6 +572,8 @@ pub struct DirProfile {
     pub music_ver: i64,
     /// The account's ID ("" with an older relay).
     pub uid: String,
+    /// Check mark from the relay's @verify bot.
+    pub verified: bool,
 }
 
 impl From<aqua_client_core::ProfileCard> for DirProfile {
@@ -587,6 +589,7 @@ impl From<aqua_client_core::ProfileCard> for DirProfile {
             banner_ver: c.banner_ver,
             music_ver: c.music_ver,
             uid: c.uid,
+            verified: c.verified,
         }
     }
 }

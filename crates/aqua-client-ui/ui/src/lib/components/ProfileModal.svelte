@@ -44,6 +44,7 @@
   import EmojiStatus from "./EmojiStatus.svelte";
   import { reactionPack, emojiPacks, loadEmojiPacks } from "../reactionPack";
   import SharedMedia from "./SharedMedia.svelte";
+  import OfficialMark from "./OfficialMark.svelte";
   import { NAME_COLORS } from "../people";
   import { averageColor, mixHex, patternRingUrl, PATTERN_EMOJI, cardLook, shellColor, CARD_SWATCHES, CARD_INTENSITY, CARD_LENGTH } from "../cardStyle";
   import EmojiPick from "./EmojiPick.svelte";
@@ -744,7 +745,7 @@
         <div class="pf-grid">
         <div class="pf-left">
           <h2 class="name">
-            {view.display_name}<EmojiStatus token={view.estatus} size={24} zoom />
+            {view.display_name}{#if !isMe && $peerCards[activeUsername]?.verified}<OfficialMark size={22} />{/if}<EmojiStatus token={view.estatus} size={24} zoom />
             {#if view.verified}<span class="badge" title={$t("Verified identity")}>{@html icons.verified}</span>{/if}
             {#if view.is_bot}<span class="bot-tag">BOT</span>{/if}
 

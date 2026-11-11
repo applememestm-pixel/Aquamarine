@@ -357,11 +357,14 @@ pub struct Profile {
     pub music_ver: i64,
     /// The account's ID (never changes; see [`uid_for`]).
     pub uid: String,
+    /// Confirmed by this relay's @verify bot (a check mark by the name).
+    pub verified: bool,
 }
 
 /// Columns selected for a [`Profile`], in the order `profile_from_row` reads.
 const PROFILE_COLS: &str =
-    "username, display_name, about, phone, is_bot, created_at, extra, avatar_ver, banner_ver, music_ver, uid";
+    "username, display_name, about, phone, is_bot, created_at, extra, avatar_ver, banner_ver, music_ver, uid, \
+     EXISTS(SELECT 1 FROM verified v WHERE v.uid = users.uid AND users.uid <> '')";
 
 fn profile_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Profile> {
     let extra: String = r.get(6)?;
@@ -377,6 +380,7 @@ fn profile_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Profile> {
         banner_ver: r.get(8)?,
         music_ver: r.get(9)?,
         uid: r.get(10)?,
+        verified: r.get::<_, i64>(11).unwrap_or(0) != 0,
     })
 }
 
@@ -612,6 +616,12 @@ impl Directory {
                 old_name TEXT PRIMARY KEY,
                 new_name TEXT NOT NULL,
                 at       INTEGER NOT NULL
+            );
+            -- Accounts confirmed by the @verify bot (verify.rs), by account ID,
+            -- so a rename keeps the check mark. Each relay keeps its own.
+            CREATE TABLE IF NOT EXISTS verified (
+                uid TEXT PRIMARY KEY,
+                at  INTEGER NOT NULL
             );
             "#,
         )?;
@@ -2524,6 +2534,37 @@ impl Directory {
         }
         Self::move_account(&mut db, &old, &new, true)?;
         Ok(new)
+    }
+
+    // ---- check marks (verify.rs) ----
+
+    /// Give or take the check mark; false when there's no such account.
+    pub fn set_verified(&self, username: &str, on: bool) -> bool {
+        let Some(uid) = self.uid_of(username).filter(|u| !u.is_empty()) else { return false };
+        let db = self.db.lock().unwrap();
+        let r = if on {
+            db.execute("INSERT INTO verified (uid, at) VALUES (?1, ?2) ON CONFLICT(uid) DO NOTHING", rusqlite::params![uid, now_secs() as i64])
+        } else {
+            db.execute("DELETE FROM verified WHERE uid=?1", rusqlite::params![uid])
+        };
+        r.is_ok()
+    }
+
+    /// Who has a check mark here (current @names).
+    pub fn verified_names(&self) -> Vec<String> {
+        let db = self.db.lock().unwrap();
+        let Ok(mut st) = db.prepare("SELECT u.username FROM verified v JOIN users u ON u.uid = v.uid ORDER BY v.at") else { return Vec::new() };
+        st.query_map([], |r| r.get::<_, String>(0)).map(|it| it.filter_map(|x| x.ok()).collect()).unwrap_or_default()
+    }
+
+    /// The account's e-mail (lower-case), if it signed up with one.
+    pub fn email_of(&self, username: &str) -> Option<String> {
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT email FROM users WHERE username=?1", rusqlite::params![username.trim().to_lowercase()], |r| r.get::<_, Option<String>>(0))
+            .ok()
+            .flatten()
+            .map(|e| e.trim().to_lowercase())
+            .filter(|e| !e.is_empty())
     }
 
     /// The current name of a renamed account (`old` forwards for a while).

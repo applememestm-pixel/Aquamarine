@@ -201,6 +201,9 @@ pub struct ProfileCard {
     /// The account's ID, like Telegram's (older relays: "").
     #[serde(default)]
     pub uid: String,
+    /// Check mark from this relay's @verify bot.
+    #[serde(default)]
+    pub verified: bool,
 }
 
 /// Request an email verification code (no auth required). Returns the

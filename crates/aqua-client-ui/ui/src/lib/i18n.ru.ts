@@ -2758,4 +2758,5 @@ export const RU: Record<string, string> = {
   "Night mode": "Ночной режим",
   "Day mode": "Дневной режим",
   "Invite link · admin @{admin}": "Ссылка-приглашение · админ @{admin}",
+  "Verified by Aquamarine": "Подтверждён Aquamarine",
 };

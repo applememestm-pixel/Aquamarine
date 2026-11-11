@@ -42,6 +42,7 @@ pub mod totp;
 pub mod tglogin;
 pub mod report;
 pub mod music;
+pub mod verify;
 pub mod fedtunnel;
 pub mod tgnet;
 // Re-export the wire types so tests + external callers keep working.
@@ -3029,6 +3030,7 @@ pub async fn serve_embedded(
     fed::spawn_sync(state.clone());
     tgapi::resume_webhooks(state.clone());
     music::spawn_bot(state.clone());
+    verify::spawn_bot(state.clone());
     let blobs = state.blobs.clone();
     let r = axum::serve(listener, app(state)).with_graceful_shutdown(shutdown).await;
     // Stopped: the file cache goes, people's data stays (blobstore::clear_cache).

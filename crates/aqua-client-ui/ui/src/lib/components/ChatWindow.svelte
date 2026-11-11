@@ -93,6 +93,7 @@
   import { TTL_PRESETS, ttlLabel, ttlShort, ttlNote } from "../ttl";
   import { parseBotText, type BotKb, type KbButton } from "../botkb";
   import { openMiniApp } from "./MiniApp.svelte";
+  import OfficialMark from "./OfficialMark.svelte";
   import { rememberBotMenu } from "../botMenus";
   import TrackCardView from "./TrackCard.svelte";
   import { musicOn, openMusic, parseTrack } from "../music";
@@ -3298,7 +3299,7 @@
             {/if}
             <span class="group-name-btn" class:dim={!!activeRoom}>{$activeChat.name}</span>
           {:else}
-            {$activeChat.name}<EmojiStatus token={emojiStatusOf($peerCards, $activeChat.id)} size={18} zoom />
+            {$activeChat.name}{#if $peerCards[$activeChat.id]?.verified}<OfficialMark size={17} />{/if}<EmojiStatus token={emojiStatusOf($peerCards, $activeChat.id)} size={18} zoom />
             {#if $clans[$activeChat.id]}<span class="hdr-clan"><ClanTag tag={$clans[$activeChat.id]} /></span>{/if}
           {/if}
           {#if e2eePeer}
@@ -3628,7 +3629,7 @@
               {#if m.first && !m.outgoing && $activeChat}
                 {@const mt = isGroup ? tagOf(activeGroup, m.from) : null}
                 <div class="msg-header">
-                  <span class="msg-author" style:color={isGroup ? roleColor(activeGroup, m.from) || peerColor(m.from) : null}>{isGroup ? m.from : $activeChat.name.split(' ')[0]}</span>
+                  <span class="msg-author" style:color={isGroup ? roleColor(activeGroup, m.from) || peerColor(m.from) : null}>{isGroup ? m.from : $activeChat.name.split(' ')[0]}</span>{#if $peerCards[m.from]?.verified}<OfficialMark size={13} />{/if}
                   {#if $clans[m.from]}<ClanTag tag={$clans[m.from]} />{/if}
                   {#if mt?.tag}<span class="member-tag" class:admin={mt.admin}>{mt.tag}</span>{/if}
                   {#if mt?.title}<span class="admin-title">{mt.title}</span>{/if}

@@ -36,6 +36,8 @@ export interface PeerCard {
   pv: number;
   /** The account's ID (never changes, unlike the @name). */
   uid?: string;
+  /** Check mark from the relay's @verify bot. */
+  verified?: boolean;
 }
 
 const KEY = "aqua.peerCards.v1";
@@ -136,6 +138,7 @@ export function refreshPeer(username: string, force = false): Promise<void> {
           fetched: Date.now(),
           pv: m[username]?.pv ?? 0,
           uid: card.uid || cur?.uid,
+          verified: !!(card as { verified?: boolean }).verified,
         },
       }));
     } catch { /* offline — keep the cached card */ }
