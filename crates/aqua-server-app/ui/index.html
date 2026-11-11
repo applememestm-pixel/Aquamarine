@@ -279,7 +279,7 @@ const RU_DICT = {
   "Join a network by an invitation": "Вступить в сеть по приглашению", "Join": "Вступить",
   "joined": "Готово — серверы добавили друг друга.", "Sending…": "Отправляю…",
   "Servers around": "Серверы вокруг", "Search again": "Искать снова", "Looking for servers…": "Ищу серверы…", "No other servers in sight.": "Других серверов не видно.",
-  "in the network": "в сети", "separate server": "другой сервер", "local network": "локальная сеть", "public": "публичный", "not answering": "не отвечает", "accounts": "аккаунтов",
+  "in the network": "в сети", "separate server": "другой сервер", "local network": "локальная сеть", "public": "публичный", "not answering": "не отвечает", "reverse link": "обратный канал", "server behind a router": "сервер за роутером", "accounts": "аккаунтов",
   "By hand": "Вручную", "This server's public address": "Публичный адрес этого сервера", "Other servers (one per line)": "Другие серверы (по одному в строке)",
   "Shared secret (16+ characters)": "Общий секрет (от 16 символов)", "paste or generate": "вставьте или сгенерируйте", "saved — paste a new one to replace": "сохранён — вставьте новый, чтобы заменить",
   "Generate": "Сгенерировать", "copySecret": "Скопируйте секрет в другие серверы и нажмите «Сохранить» там.",
@@ -729,11 +729,11 @@ async function loadServers(force) {
   try {
     const r = await api("/v1/admin/servers"); serversAt = Date.now();
     const list = (r.servers || []).sort((a, b) => (b.same_network - a.same_network) || (b.ok - a.ok) || ((a.ms ?? 1e9) - (b.ms ?? 1e9)));
-    serversHtml = list.length ? list.map((x) => `<div class="li"><span class="dot ${x.ok ? "on" : ""}"></span><span class="main mono">${esc(x.url.replace(/^https?:\/\//, ""))}</span>
+    serversHtml = list.length ? list.map((x) => `<div class="li"><span class="dot ${x.ok ? "on" : ""}"></span><span class="main mono">${esc(x.via === "tunnel" ? (x.label ? x.label.replace(/^https?:\/\//, "") : t("server behind a router")) : x.url.replace(/^https?:\/\//, ""))}</span>
       ${x.same_network ? `<span class="tag net">${t("in the network")}</span>` : x.ok ? `<span class="tag">${t("separate server")}</span>` : ""}
       ${x.found === "lan" ? `<span class="tag">${t("local network")}</span>` : x.found === "public" ? `<span class="tag">${t("public")}</span>` : ""}
       ${x.ok && x.users != null ? `<span class="sub">${x.users} ${t("accounts")} · ${x.online ?? 0} ${t("online")}</span>` : ""}
-      <span class="sub">${x.ok ? x.ms + " ms" : t("not answering")}</span></div>`).join("") : `<div class="empty">${t("No other servers in sight.")}</div>`;
+      <span class="sub">${x.via === "tunnel" ? (x.ok ? t("reverse link") : t("not answering")) : x.ok ? x.ms + " ms" : t("not answering")}</span></div>`).join("") : `<div class="empty">${t("No other servers in sight.")}</div>`;
   } catch (e) { serversHtml = `<div class="empty">${esc(errText(e))}</div>`; }
   serversBusy = false;
   if ($("servers")) $("servers").innerHTML = serversHtml;

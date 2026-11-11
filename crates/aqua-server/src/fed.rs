@@ -57,6 +57,10 @@ pub struct FedConfig {
     /// at `/v1/fed/names/hello`): only their (uid, @name) list is pulled.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub solo_peers: Vec<String>,
+    /// A lasting id of this relay: how a relay without a reachable address
+    /// is known to its peers (`tunnel:<node>`, see fedtunnel.rs).
+    #[serde(default)]
+    pub node: String,
     /// Kept in memory only (tests): peers learnt later aren't written to disk.
     #[serde(skip)]
     pub ephemeral: bool,
@@ -76,6 +80,14 @@ impl FedConfig {
             if !u.trim().is_empty() { c.public_url = u.trim().trim_end_matches('/').to_string(); }
         }
         c.peers.retain(|p| !p.is_empty() && p.trim_end_matches('/') != c.public_url);
+        if c.node.is_empty() {
+            let mut b = [0u8; 8];
+            rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut b);
+            c.node = hex::encode(b);
+            if std::path::Path::new(FILE).exists() {
+                let _ = c.save();
+            }
+        }
         c
     }
     pub fn save(&self) -> std::io::Result<()> {
@@ -124,11 +136,11 @@ pub fn parse_invite(s: &str) -> Option<(String, String)> {
 /// Returns the ones that were new.
 pub fn add_peers(state: &AppState, urls: &[String]) -> Vec<String> {
     let mut c = current(state).map(|f| f.cfg.clone()).unwrap_or_else(FedConfig::load);
-    let me = if c.public_url.is_empty() { crate::public::url() } else { c.public_url.clone() };
+    let me = my_id(&c);
     let mut added = Vec::new();
     for u in urls {
         let u = u.trim().trim_end_matches('/').to_string();
-        if !u.starts_with("http") || u == me || c.peers.contains(&u) || c.peers.len() >= 64 {
+        if !(u.starts_with("http") || u.starts_with("tunnel:")) || u == me || c.peers.contains(&u) || c.peers.len() >= 64 {
             continue;
         }
         c.peers.push(u.clone());
@@ -140,6 +152,56 @@ pub fn add_peers(state: &AppState, urls: &[String]) -> Vec<String> {
         tracing::info!(?added, "federation: new peers");
     }
     added
+}
+
+/// How this relay is known to its peers: its address, or `tunnel:<node>`
+/// when it has none that answers (behind a router; fedtunnel.rs).
+pub fn my_id(cfg: &FedConfig) -> String {
+    if !cfg.public_url.is_empty() {
+        return cfg.public_url.clone();
+    }
+    let u = crate::public::url();
+    if !u.is_empty() { u } else { format!("tunnel:{}", cfg.node) }
+}
+
+/// A peer polling us over a reverse link (fedtunnel.rs): keep it in the
+/// list under `id`, dropping `addr` — the address of it that never answered.
+pub fn adopt_peer(state: &AppState, id: &str, addr: &str) {
+    let Some(f) = current(state) else { return };
+    let has = f.cfg.peers.iter().any(|p| p == id);
+    let stale = !addr.is_empty() && addr != id && f.cfg.peers.iter().any(|p| p == addr);
+    if has && !stale {
+        return;
+    }
+    let mut c = f.cfg.clone();
+    if stale {
+        c.peers.retain(|p| p != addr);
+    }
+    if !has && c.peers.len() < 64 && id != my_id(&c) {
+        c.peers.push(id.to_string());
+    }
+    if c.ephemeral || c.save().is_ok() {
+        let next = Fed::new(c);
+        if let Ok(mut g) = state.fed.write() { *g = next; }
+        tracing::info!(peer = %id, "federation: a peer behind a router linked back to us");
+        state.fed_kick.notify_one();
+    }
+}
+
+/// Direct requests to these peers failed lately: use their reverse link.
+fn down() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>> {
+    static D: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>> = std::sync::OnceLock::new();
+    D.get_or_init(Default::default)
+}
+fn mark_down(peer: &str) {
+    if let Ok(mut d) = down().lock() { d.insert(peer.to_string(), std::time::Instant::now()); }
+}
+/// The direct way to `peer` failed lately (the panel shows its reverse link).
+pub fn tunnel_preferred(peer: &str) -> bool {
+    is_down(peer)
+}
+fn is_down(peer: &str) -> bool {
+    down().lock().ok().and_then(|d| d.get(peer).map(|t| t.elapsed() < Duration::from_secs(300))).unwrap_or(false)
 }
 
 pub struct Fed {
@@ -175,6 +237,23 @@ impl Fed {
         Some(Arc::new(Self { cfg, http }))
     }
 
+    /// The `x-aqua-fed` header for a request (fedtunnel.rs signs its polls).
+    pub fn sign(&self, method: &str, path: &str, body: &[u8]) -> String {
+        self.header(method, path, body)
+    }
+
+    /// Over the peer's reverse link, when that's the way to it: it has no
+    /// address, or its address stopped answering and it polls us.
+    async fn via_tunnel(&self, peer: &str, method: &str, path: &str, body: &[u8], wait: Duration) -> Option<Option<reqwest::Response>> {
+        let tunnel_only = peer.starts_with("tunnel:");
+        if !tunnel_only && !(is_down(peer) && crate::fedtunnel::active(peer)) {
+            return None;
+        }
+        let sig = self.header(method, path, body);
+        let r = crate::fedtunnel::request(peer, method, path, body.to_vec(), sig, wait).await;
+        Some(r.filter(|r| r.status().is_success()))
+    }
+
     fn header(&self, method: &str, path: &str, body: &[u8]) -> String {
         let ts = now_ms();
         format!("{ts}.{}", mac(&self.cfg.secret, method, path, ts, body))
@@ -194,6 +273,9 @@ impl Fed {
     /// Is `peer` a relay we still talk to (1.2.0 or newer)? Asked once in a
     /// while (`/v1/stats` says its version; older relays don't say).
     async fn modern(&self, peer: &str) -> bool {
+        if peer.starts_with("tunnel:") {
+            return false;
+        }
         static SEEN: std::sync::Mutex<Option<std::collections::HashMap<String, (std::time::Instant, bool)>>> = std::sync::Mutex::new(None);
         if let Some((at, ok)) = SEEN.lock().ok().and_then(|m| m.as_ref().and_then(|m| m.get(peer).copied())) {
             if at.elapsed() < Duration::from_secs(if ok { 600 } else { 120 }) {
@@ -205,7 +287,7 @@ impl Fed {
                 .and_then(|v| v["version"].as_str().map(crate::version_ok))
                 .unwrap_or(false),
             // Unreachable now: don't decide for 10 minutes on that.
-            Err(_) => return false,
+            Err(_) => { mark_down(peer); return false }
         };
         if !ok {
             tracing::warn!(%peer, "federation: this relay is older than {} — not talking to it", crate::MIN_VERSION);
@@ -217,23 +299,44 @@ impl Fed {
     }
 
     async fn get(&self, peer: &str, path: &str) -> Option<reqwest::Response> {
-        if !self.modern(peer).await {
-            return None;
+        if let Some(r) = self.via_tunnel(peer, "GET", path, b"", Duration::from_secs(30)).await {
+            return r;
         }
-        let r = self.http.get(format!("{peer}{path}")).header("x-aqua-fed", self.header("GET", path, b"")).send().await.ok()?;
-        r.status().is_success().then_some(r)
+        if !self.modern(peer).await {
+            return self.tunnel_fallback(peer, "GET", path, b"").await;
+        }
+        match self.http.get(format!("{peer}{path}")).header("x-aqua-fed", self.header("GET", path, b"")).send().await {
+            Ok(r) => r.status().is_success().then_some(r),
+            Err(_) => { mark_down(peer); self.tunnel_fallback(peer, "GET", path, b"").await }
+        }
     }
 
     async fn post(&self, peer: &str, path: &str, body: Vec<u8>) -> Option<reqwest::Response> {
-        if !self.modern(peer).await {
-            return None;
+        if let Some(r) = self.via_tunnel(peer, "POST", path, &body, Duration::from_secs(8)).await {
+            return r;
         }
-        let r = self.http.post(format!("{peer}{path}"))
+        if !self.modern(peer).await {
+            return self.tunnel_fallback(peer, "POST", path, &body).await;
+        }
+        let sent = self.http.post(format!("{peer}{path}"))
             .header("x-aqua-fed", self.header("POST", path, &body))
             .header("content-type", "application/json")
             .timeout(Duration::from_secs(4))
-            .body(body).send().await.ok()?;
-        r.status().is_success().then_some(r)
+            .body(body.clone()).send().await;
+        match sent {
+            Ok(r) => r.status().is_success().then_some(r),
+            Err(_) => { mark_down(peer); self.tunnel_fallback(peer, "POST", path, &body).await }
+        }
+    }
+
+    /// The direct way failed: the reverse link, if the peer keeps one.
+    async fn tunnel_fallback(&self, peer: &str, method: &str, path: &str, body: &[u8]) -> Option<reqwest::Response> {
+        if !crate::fedtunnel::active(peer) {
+            return None;
+        }
+        mark_down(peer);
+        let sig = self.header(method, path, body);
+        crate::fedtunnel::request(peer, method, path, body.to_vec(), sig, Duration::from_secs(30)).await.filter(|r| r.status().is_success())
     }
 
     /// Try to hand an envelope to whichever peer has the recipient online.
@@ -255,7 +358,7 @@ impl Fed {
     /// learn whom they know (same secret — the reply is signed by it).
     /// Returns relays that were new to us.
     pub async fn hello_all(&self) -> Vec<String> {
-        let me = if self.cfg.public_url.is_empty() { crate::public::url() } else { self.cfg.public_url.clone() };
+        let me = my_id(&self.cfg);
         let body = serde_json::to_vec(&serde_json::json!({ "url": me, "peers": self.cfg.peers })).unwrap_or_default();
         let tries = self.cfg.peers.iter().map(|p| {
             let body = body.clone();
@@ -444,6 +547,11 @@ async fn sync_names(state: &AppState, fed: &Fed, peer: &str, since: &mut std::co
     }
 }
 
+/// `check` for other modules (fedtunnel.rs).
+pub fn check_pub(state: &AppState, headers: &HeaderMap, method: &str, path: &str, body: &[u8]) -> Result<Arc<Fed>, StatusCode> {
+    check(state, headers, method, path, body)
+}
+
 fn check(state: &AppState, headers: &HeaderMap, method: &str, path: &str, body: &[u8]) -> Result<Arc<Fed>, StatusCode> {
     let fed = current(state).ok_or(StatusCode::NOT_FOUND)?;
     if !fed.verify(headers, method, path, body) {
@@ -557,8 +665,7 @@ pub async fn h_hello(State(state): State<AppState>, headers: HeaderMap, body: By
         }
         if !add_peers(&st, &ok).is_empty() { st.fed_kick.notify_one(); }
     });
-    let me = if fed.cfg.public_url.is_empty() { crate::public::url() } else { fed.cfg.public_url.clone() };
-    Ok(Json(serde_json::json!({ "self": me, "peers": fed.cfg.peers })))
+    Ok(Json(serde_json::json!({ "self": my_id(&fed.cfg), "peers": fed.cfg.peers })))
 }
 
 /// "Do you accept our signature?" — 204 for relays of the same network.
@@ -604,7 +711,8 @@ pub async fn h_peers(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "federated": cfg.is_some(),
         "self": cfg.as_ref().map(|c| c.public_url.clone()).filter(|u| !u.is_empty()).unwrap_or_else(crate::public::url),
-        "servers": cfg.map(|c| c.peers).unwrap_or_default(),
+        // Clients connect by address: relays known only by a reverse link aren't listed.
+        "servers": cfg.map(|c| c.peers.into_iter().filter(|p| p.starts_with("http")).collect::<Vec<_>>()).unwrap_or_default(),
     }))
 }
 
@@ -628,6 +736,7 @@ pub fn spawn_sync(state: AppState) {
             }
         }
     });
+    crate::fedtunnel::spawn(state.clone());
     spawn_announcer(state);
 }
 
@@ -785,4 +894,31 @@ async fn sync_peer(
             }
         }
     }
+}
+
+/// All relay-to-relay routes: mounted in the app, and run in-process for
+/// requests that come over a reverse link (fedtunnel.rs).
+pub fn routes() -> axum::Router<AppState> {
+    use axum::routing::{get, post};
+    axum::Router::new()
+        .route("/v1/fed/names", get(h_names))
+        .route("/v1/fed/names/hello", post(h_names_hello))
+        .route("/v1/fed/hist", get(h_hist_list))
+        .route("/v1/fed/hist/:user/:k", get(h_hist_get))
+        .route("/v1/fed/peers", get(h_peers))
+        .route("/v1/fed/hello", post(h_hello))
+        .route("/v1/fed/ping", get(h_ping))
+        .route("/v1/fed/mail", post(h_mail))
+        .route("/v1/fed/deliver", post(h_deliver))
+        .route("/v1/fed/poke", post(h_poke))
+        .route("/v1/fed/inbox/:user", get(h_inbox))
+        .route("/v1/fed/bundle/:user", get(h_bundle))
+        .route("/v1/fed/blob/:cid", get(h_blob))
+        .route("/v1/fed/users", get(h_users))
+        .route("/v1/fed/backups", get(h_backups))
+        .route("/v1/fed/backup/:user", get(h_backup))
+        .route("/v1/fed/media/:user/:kind", get(h_media))
+        .route("/v1/fed/tunnel", post(crate::fedtunnel::h_poll))
+        .route("/v1/fed/tunnel/reply", post(crate::fedtunnel::h_reply)
+            .layer(axum::extract::DefaultBodyLimit::max(96 * 1024 * 1024)))
 }

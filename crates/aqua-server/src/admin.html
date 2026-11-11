@@ -688,7 +688,7 @@
     "netText":"Вместе с другими ретрансляторами: аккаунты и резервные копии общие, люди на связи, даже когда один сервер выключен, а сервер с почтой отправляет коды за всех.",
     "soloState":"<b>Один</b> — сервер работает сам по себе","netState":"<b>В сети</b> · других серверов: ",
     "netNoPeers":"<b>В сети</b> — пока один: передайте приглашение админу другого сервера",
-    "inNet":"в сети","otherNet":"другой сервер","lan":"локальная сеть","public":"публичный","peerDown":"не отвечает",
+    "inNet":"в сети","otherNet":"другой сервер","lan":"локальная сеть","public":"публичный","peerDown":"не отвечает","revLink":"обратный канал","natPeer":"сервер за роутером",
     "noServers":"Других серверов не видно.","joined":"Готово — серверы добавили друг друга.",
     "mailVia":"Почта здесь не настроена — коды отправит сервер сети, у которого она есть. Пароль от почты никуда не передаётся.",
     "mailHere":"Почта настроена здесь — этот сервер отправляет коды и за серверы сети без почты (пароль остаётся тут).",
@@ -704,7 +704,7 @@
     copySecret:"Copy this secret to the other servers' panels too, then Save.",
     soloState:"<b>Alone</b> — this server works by itself", netState:"<b>In a network</b> · other servers: ",
     netNoPeers:"<b>In a network</b> — on its own so far: give the invitation to another relay's admin",
-    inNet:"in the network", otherNet:"separate server", lan:"local network", public:"public", peerDown:"not answering",
+    inNet:"in the network", otherNet:"separate server", lan:"local network", public:"public", peerDown:"not answering", revLink:"reverse link", natPeer:"server behind a router",
     noServers:"No other servers in sight.", joined:"Done — the relays added each other.",
     mailVia:"No mail here — a relay of the network that has mail sends the codes. The mail password never leaves it.",
     mailHere:"Mail is set up here — this relay also sends codes for relays of the network without mail (the password stays here).",
@@ -1161,11 +1161,11 @@
       serversAt = Date.now();
       const list = (r.servers || []).sort((a, b) => (b.same_network - a.same_network) || (b.ok - a.ok) || ((a.ms ?? 1e9) - (b.ms ?? 1e9)));
       $("servers").innerHTML = list.length ? list.map((x) => `<div class="srv"><span class="d ${x.ok ? "ok" : ""}"></span>
-        <span class="u">${esc(x.url.replace(/^https?:\/\//, ""))}</span>
+        <span class="u">${esc(x.via === "tunnel" ? (x.label ? x.label.replace(/^https?:\/\//, "") : T("natPeer")) : x.url.replace(/^https?:\/\//, ""))}</span>
         <span class="tags">${x.same_network ? `<span class="tg net">${T("inNet")}</span>` : x.ok ? `<span class="tg">${T("otherNet")}</span>` : ""}
           ${x.found === "lan" ? `<span class="tg">${T("lan")}</span>` : x.found === "public" ? `<span class="tg">${T("public")}</span>` : ""}
           ${x.ok && x.users != null ? `<span class="tg">${x.users} ${T("accounts")} · ${x.online ?? 0} ${T("online")}</span>` : ""}</span>
-        <span class="ms ${x.ok ? "" : "off"}">${x.ok ? x.ms + " ms" : T("peerDown")}</span></div>`).join("")
+        <span class="ms ${x.ok ? "" : "off"}">${x.via === "tunnel" ? (x.ok ? T("revLink") : T("peerDown")) : x.ok ? x.ms + " ms" : T("peerDown")}</span></div>`).join("")
         : `<div class="empty">${T("noServers")}</div>`;
     } catch(e){ $("servers").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
     serversBusy = false; $("srvRe").disabled = false;
