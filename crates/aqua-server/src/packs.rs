@@ -231,18 +231,14 @@ pub async fn sync(name: &str, refresh: bool) -> Result<Manifest, String> {
         }
     }
     let token = bot_token().ok_or("this server has no Telegram bot token — ask its admin to add one in the admin panel")?;
-    let http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(40))
-        .build()
-        .map_err(|e| e.to_string())?;
-    // AQUA_TG_API: another Bot API endpoint (a local bot-api server, tests).
-    let base = std::env::var("AQUA_TG_API").unwrap_or_else(|_| "https://api.telegram.org".into());
-    let base = base.trim_end_matches('/').to_string();
+    // Direct, or through the proxy / API address set in the panel (tgnet.rs).
+    let http = crate::tgnet::client(40);
+    let base = crate::tgnet::base();
     let set: serde_json::Value = http
         .get(format!("{base}/bot{token}/getStickerSet?name={}", urlenc(name)))
         .send().await.map_err(|e| if e.is_connect() || e.is_timeout() {
             // Never the URL: it carries the bot token, and this goes to clients.
-            "this server can't reach api.telegram.org (blocked in its network?) — give it a proxy: HTTPS_PROXY=… or AQUA_TG_API=…".to_string()
+            "this server can't reach Telegram (blocked in its network?) — its admin sets a proxy in Aquamarine Server → Stickers → Telegram network".to_string()
         } else { format!("Telegram: {}", e.without_url()) })?
         .json().await.map_err(|e| format!("Telegram: {}", e.without_url()))?;
     if !set["ok"].as_bool().unwrap_or(false) {

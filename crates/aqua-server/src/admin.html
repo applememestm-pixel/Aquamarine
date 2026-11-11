@@ -506,6 +506,19 @@
           <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a> → /newbot. Saved in <b>aqua-telegram.json</b>.</div>
       </div>
       <div class="card rv">
+        <h2 data-t="Telegram network">Telegram network</h2>
+        <div class="note" data-t="tgNetNote">If Telegram is blocked where this server runs: an HTTP proxy (http://user:pass@host:port) or another Bot API address (e.g. your Cloudflare Worker …/tg). Empty: direct.</div>
+        <label data-t="Proxy">Proxy</label>
+        <input id="nProxy" autocomplete="off" placeholder="http://host:3128" />
+        <label data-t="Bot API address">Bot API address</label>
+        <input id="nApi" autocomplete="off" placeholder="https://api.telegram.org" />
+        <div class="row mt">
+          <button class="btn" onclick="saveNet()" data-t="Save">Save</button>
+          <button class="btn ghost" onclick="testNet()" data-t="Check">Check</button>
+        </div>
+        <div class="note" id="nMsg"></div>
+      </div>
+      <div class="card rv">
         <h2><span data-t="Packs on this server">Packs on this server</span> <span class="hint" id="packsCount"></span></h2>
         <div class="packs" id="packs"></div>
         <div class="note" data-t="packsNote">Apps download a pack once and keep its files on the device; this list is what the server keeps for everyone.</div>
@@ -646,6 +659,8 @@
     "Send as (optional)":"Отправитель (необязательно)","same as login":"как логин","Save &amp; send real codes":"Сохранить и отправлять коды",
     "Save & send real codes":"Сохранить и отправлять коды","Back to dev mode":"Вернуть режим разработки","send a test to…":"куда отправить тест…","Send test":"Отправить тест",
     "Stickers &amp; emoji from Telegram":"Стикеры и эмодзи из Telegram","Stickers & emoji from Telegram":"Стикеры и эмодзи из Telegram",
+    "Telegram network":"Сеть Telegram","Proxy":"Прокси","Bot API address":"Адрес Bot API",
+    "tgNetNote":"Если в стране сервера Telegram заблокирован: HTTP-прокси (http://логин:пароль@адрес:порт) или другой адрес Bot API (например, свой Cloudflare Worker …/tg). Пусто — напрямую.",
     "Music":"Музыка","Address":"Адрес","Login":"Логин","Password":"Пароль","Check":"Проверить","Turn off":"Отключить",
     "ndNote":"Подключите Navidrome (или любой Subsonic-сервер): все на этом сервере слушают и скачивают из него музыку в приложении. Звук идёт через сервер, ничего не сохраняется.",
     "ndBot":"Бот @music: пишешь название — он присылает треки",
@@ -771,7 +786,20 @@
     return d?`${d}${D} ${h}${H}`:h?`${h}${H} ${m}${M}`:`${m}${M}`; }
   function ago(t){ const s=Math.max(0,Math.floor(Date.now()/1000-t));
     return s<60?`${s}${T("s ago")}`:s<3600?`${Math.floor(s/60)}${T("m ago")}`:`${Math.floor(s/3600)}${T("h ago")}`; }
-  function copy(text){ navigator.clipboard?.writeText(text).then(()=>toast(T("Copied")), ()=>toast(text)); }
+  // On plain http:// (a server by its IP) the browser has no clipboard API:
+  // copy through a hidden text field instead.
+  function copyOld(text){
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.setAttribute("readonly", ""); ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;pointer-events:none";
+    document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, text.length);
+    let ok = false; try { ok = document.execCommand("copy"); } catch {}
+    ta.remove(); return ok;
+  }
+  function copy(text){
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(()=>toast(T("Copied")), ()=>{ copyOld(text) ? toast(T("Copied")) : toast(text); });
+    } else { copyOld(text) ? toast(T("Copied")) : toast(text); }
+  }
   document.addEventListener("click", (e) => { const b = e.target.closest("[data-copy]"); if (b) copy(b.dataset.copy); });
 
   async function signIn(){
@@ -1071,7 +1099,17 @@
     $("tTok").placeholder = v.has_token ? (RU ? "•••••••• сохранён — вставьте новый, чтобы заменить" : "•••••••• saved — paste a new one to replace") : "123456789:AA…";
     tgLoaded = true;
   }
-  async function loadTg(){ try { showTg(await api("/v1/admin/telegram")); } catch {} }
+  async function loadTg(){ try { showTg(await api("/v1/admin/telegram")); } catch {} try { showNet((await api("/v1/admin/telegram/net")).net); } catch {} }
+  // How the server reaches Telegram (tgnet.rs).
+  function showNet(n){ if (!n) return; $("nProxy").value = $("nProxy").defaultValue = n.proxy || ""; $("nApi").value = n.api || ""; $("nProxy").disabled = $("nApi").disabled = !!n.from_env; }
+  const netRes = (r) => r.ok ? (RU ? "Telegram доступен (" : "Telegram is reachable (") + r.ms + (RU ? " мс)" : " ms)") : (RU ? "Ошибка: " : "Failed: ") + (r.error || "");
+  async function saveNet(){
+    const proxy = $("nProxy").value.trim(); const body = { api: $("nApi").value.trim() };
+    if (proxy !== $("nProxy").defaultValue) body.proxy = proxy;
+    try { const r = await api("/v1/admin/telegram/net", { method: "POST", body: JSON.stringify(body) }); showNet(r.net); msg("nMsg", netRes(r.test), r.test.ok ? "ok" : "err"); }
+    catch(e){ msg("nMsg", T("Not saved: ") + e.message, "err"); }
+  }
+  async function testNet(){ try { const r = await api("/v1/admin/telegram/net/test", { method: "POST", body: "{}" }); msg("nMsg", netRes(r), r.ok ? "ok" : "err"); } catch(e){ msg("nMsg", e.message, "err"); } }
   async function saveTg(remove){
     const token = remove ? "" : $("tTok").value.trim();
     if (!remove && !token) { msg("tMsg", T("Paste the token first."), "err"); return; }

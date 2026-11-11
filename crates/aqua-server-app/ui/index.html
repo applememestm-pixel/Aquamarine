@@ -319,6 +319,9 @@ const RU_DICT = {
   "Errors": "Ошибки", "errorsSub": "Сбои приложений людей на этом сервере и самого сервера. Текста переписки здесь нет — только ошибка, версия и устройство.",
   "Refresh": "Обновить", "What the codes mean": "Что значат коды", "Also sent to the developer": "Разработчик тоже получает их",
   "No errors — all good.": "Ошибок нет — всё хорошо.",
+  "Telegram network": "Сеть Telegram", "Proxy": "Прокси", "Bot API address": "Адрес Bot API",
+  "tgNetNote": "Если в стране сервера Telegram заблокирован, стикеры из Telegram и вход через Telegram не работают. Укажите HTTP-прокси (http://логин:пароль@адрес:порт) или другой адрес Bot API — например, свой Cloudflare Worker (…/tg). Пустые поля — напрямую.",
+  "tgNetOk": "Telegram доступен ({ms} мс).",
   "Music": "Музыка", "Address": "Адрес", "Login": "Логин", "Password": "Пароль", "Check": "Проверить", "Turn off": "Отключить",
   "Checking…": "Проверяю…", "Turned off.": "Отключено.", "How people use it": "Как этим пользоваться",
   "ndNote": "Подключите свой Navidrome (или любой Subsonic-сервер) — и все на этом сервере смогут слушать и скачивать из него музыку в приложении. Звук идёт через сервер напрямую, ничего не сохраняется.",
@@ -377,6 +380,8 @@ const EN = {
   mobNote: "The server keeps running with the screen off — Android shows a notification. If the phone closes it anyway: Settings → Apps → Aquamarine Server → Battery → Unrestricted.",
   serverOff: "The server is off", serverOffSub: "This page works while the server is running.",
   "for {t}": "for {t}",
+  tgNetNote: "If Telegram is blocked where this server runs, stickers from Telegram and Telegram sign-in don't work. Set an HTTP proxy (http://user:pass@host:port) or another Bot API address — e.g. your own Cloudflare Worker (…/tg). Empty fields: direct.",
+  tgNetOk: "Telegram is reachable ({ms} ms).",
   ndNote: "Connect your Navidrome (or any Subsonic server) and everyone on this server can listen to and download its music in the app. Audio passes through the server; nothing is stored.",
   ndBot: "Bot @{b}: write a title, it sends the tracks", ndSafe: "The login and password stay on this server; people never see them. Through the server music can only be read and played — nothing can be deleted or changed.",
   ndEnv: "Set by AQUA_NAVIDROME_* variables — change them there.", ndOk: "Works: {v}.", ndNeed: "An address and a login are needed.",
@@ -402,7 +407,14 @@ function dur(s) { const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 36
 function ago(at) { const s = Math.max(0, Math.floor(Date.now() / 1000 - at));
   return s < 60 ? s + t("s ago") : s < 3600 ? Math.floor(s / 60) + t("m ago") : s < 86400 ? Math.floor(s / 3600) + t("h ago") : Math.floor(s / 86400) + t("d ago"); }
 function toast(s) { const el = $("toast"); el.textContent = s; el.classList.add("on"); clearTimeout(toast.h); toast.h = setTimeout(() => el.classList.remove("on"), 1800); }
-async function copy(s) { try { await navigator.clipboard.writeText(s); toast(t("Copied")); } catch { toast(s); } }
+async function copy(s) {
+  try { await navigator.clipboard.writeText(s); toast(t("Copied")); return; } catch {}
+  // No clipboard API: a hidden text field and the old copy command.
+  const ta = document.createElement("textarea");
+  ta.value = s; ta.style.cssText = "position:fixed;top:0;left:0;opacity:0"; document.body.appendChild(ta); ta.select();
+  let ok = false; try { ok = document.execCommand("copy"); } catch {}
+  ta.remove(); toast(ok ? t("Copied") : s);
+}
 function color(name) { let h = 0; for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0; return `hsl(${h % 360} 70% 65%)`; }
 const ava = (name) => `<span class="ava" style="background:${color(name)}">${esc((name[0] || "?").toUpperCase())}</span>`;
 function setMsg(id, text, cls) { const el = $(id); if (!el) return; el.className = "msg " + (cls || ""); el.innerHTML = text; }
@@ -837,6 +849,10 @@ function pageStickers(el) {
       <div class="row"><label class="f" style="flex:1">${t("Bot token")}<input type="password" id="tTok" autocomplete="off"></label></div>
       <div class="note" style="color:var(--warn)">${t("tgSecret")}</div>
       <div class="row"><button class="primary" onclick="saveTg(false)">${t("Save")}</button><button class="danger" id="tDel" onclick="saveTg(true)">${t("Remove token")}</button><span class="msg" id="tMsg"></span></div></div>
+    <div class="card"><h2>${t("Telegram network")}</h2><div class="note">${t("tgNetNote")}</div>
+      <div class="row"><label class="f" style="flex:1">${t("Proxy")}<input id="nProxy" placeholder="http://host:3128" autocomplete="off"></label></div>
+      <div class="row"><label class="f" style="flex:1">${t("Bot API address")}<input id="nApi" placeholder="https://api.telegram.org" autocomplete="off"></label></div>
+      <div class="row"><button class="primary" onclick="saveNet()">${t("Save")}</button><button onclick="testNet()">${t("Check")}</button><span class="msg" id="nMsg"></span></div></div>
     <div class="card"><h2>${t("Add from Telegram")}</h2>
       <div class="note">${t("addTgNote")}</div>
       <div class="row"><input id="pLink" placeholder="t.me/addstickers/…" style="flex:1"><button class="primary" onclick="addTgPack()">${t("Add")}</button><span class="msg" id="pMsg"></span></div></div>
@@ -848,6 +864,28 @@ function pageStickers(el) {
       <input type="file" id="uFiles" multiple accept=".png,.webp,.gif,.tgs,.webm" hidden onchange="uploadPack(this.files)"></div>
     <div class="card"><h2>${t("Packs on this server")} <span id="packsN"></span></h2><div class="note">${t("packsNote")}</div><div class="packs" id="packs"></div></div>`;
   api("/v1/admin/telegram").then(showTg).catch((e) => setMsg("tMsg", esc(errText(e)), "err"));
+  api("/v1/admin/telegram/net").then((r) => showNet(r.net)).catch(() => {});
+}
+// How the server reaches Telegram (aqua-server/src/tgnet.rs).
+function showNet(n) {
+  if (!$("nProxy") || !n) return;
+  $("nProxy").value = $("nProxy").defaultValue = n.proxy || ""; $("nApi").value = n.api || "";
+  $("nProxy").disabled = $("nApi").disabled = !!n.from_env;
+}
+const netRes = (r) => r.ok ? t("tgNetOk", { ms: r.ms }) : t("Failed: ") + esc(r.error || "");
+async function saveNet() {
+  setMsg("nMsg", t("Checking…"), "");
+  // A proxy shown without its password ("http://host:port") is sent only if it was changed.
+  const proxy = $("nProxy").value.trim();
+  const body = { api: $("nApi").value.trim() };
+  if (proxy !== ($("nProxy").defaultValue || "")) body.proxy = proxy;
+  try { const r = await api("/v1/admin/telegram/net", "POST", body); showNet(r.net); setMsg("nMsg", netRes(r.test), r.test.ok ? "ok" : "err"); }
+  catch (e) { setMsg("nMsg", t("Failed: ") + esc(errText(e)), "err"); }
+}
+async function testNet() {
+  setMsg("nMsg", t("Checking…"), "");
+  try { const r = await api("/v1/admin/telegram/net/test", "POST", {}); setMsg("nMsg", netRes(r), r.ok ? "ok" : "err"); }
+  catch (e) { setMsg("nMsg", t("Failed: ") + esc(errText(e)), "err"); }
 }
 function showTg(v) {
   if (!$("tState")) return;

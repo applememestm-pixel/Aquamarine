@@ -43,6 +43,7 @@ pub mod tglogin;
 pub mod report;
 pub mod music;
 pub mod fedtunnel;
+pub mod tgnet;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
 pub use auth::{AuthState, Caller};
@@ -2896,6 +2897,8 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/admin/smtp", get(admin_get_smtp).post(admin_set_smtp))
         .route("/v1/admin/smtp/test", post(admin_test_smtp))
         .route("/v1/admin/telegram", get(packs::admin_get).post(packs::admin_set))
+        .route("/v1/admin/telegram/net", get(tgnet::admin_get).post(tgnet::admin_set))
+        .route("/v1/admin/telegram/net/test", post(tgnet::admin_test))
         .route("/v1/admin/packs/import", post(packs::admin_import))
         .route("/v1/admin/packs/upload", post(packs::admin_upload).layer(DefaultBodyLimit::max(packs::UPLOAD_LIMIT)))
         .route("/v1/admin/packs/:name", get(packs::admin_manifest).delete(packs::admin_delete))
