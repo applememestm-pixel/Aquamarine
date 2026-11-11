@@ -46,7 +46,7 @@
   import SharedMedia from "./SharedMedia.svelte";
   import OfficialMark from "./OfficialMark.svelte";
   import { NAME_COLORS } from "../people";
-  import { averageColor, mixHex, patternRingUrl, PATTERN_EMOJI, cardLook, shellColor, CARD_SWATCHES, CARD_INTENSITY, CARD_LENGTH } from "../cardStyle";
+  import { averageColor, mixHex, mixPct, patternRingUrl, PATTERN_EMOJI, cardLook, shellColor, CARD_SWATCHES, CARD_INTENSITY, CARD_LENGTH } from "../cardStyle";
   import EmojiPick from "./EmojiPick.svelte";
   import { userQr } from "../qr";
   import { gameIds, gameIcons, gameCovers, resolveGame, rememberGame, iconFor, coverFor } from "../games";
@@ -288,9 +288,18 @@
   });
   let cardSet = $derived((editing && isMe && draft) ? (draft.card ?? "") : (view?.card ?? ""));
   let cardColor = $derived(cardSet || sampled || mixHex(bannerA, bannerB));
-  let cardI = $derived((editing && isMe && draft) ? (draft.card_i ?? CARD_INTENSITY) : (view?.card_i ?? CARD_INTENSITY));
-  let cardG = $derived((editing && isMe && draft) ? (draft.card_g ?? CARD_LENGTH) : (view?.card_g ?? CARD_LENGTH));
   const shell = shellColor();
+  // Nobody chose anything (no card colour, no banner picture, the default
+  // banner pair): a quiet look instead of the loud default gradient
+  // flooding the whole card — the banner toned down, the card only tinted.
+  const DEFAULT_PAIRS = [["#00e5c7", "#7b5cff"], ["#4f7afe", "#9b6cff"]];
+  let ownI = $derived((editing && isMe && draft) ? draft.card_i : view?.card_i);
+  let plain = $derived(!cardSet && !shownBanner && (ownI == null || ownI === CARD_INTENSITY) && DEFAULT_PAIRS.some(([a, b]) => (bannerA ?? "").toLowerCase() === a && (bannerB ?? "").toLowerCase() === b));
+  let cardI = $derived(plain ? 16 : (editing && isMe && draft) ? (draft.card_i ?? CARD_INTENSITY) : (view?.card_i ?? CARD_INTENSITY));
+  let cardG = $derived((editing && isMe && draft) ? (draft.card_g ?? CARD_LENGTH) : (view?.card_g ?? CARD_LENGTH));
+  let bannerBg = $derived(shownBanner && !isVideoUrl(shownBanner) ? `center / cover no-repeat url("${shownBanner}")`
+    : plain ? `linear-gradient(135deg, ${mixPct(bannerA, shell, 42)}, ${mixPct(bannerB, shell, 42)})`
+    : `linear-gradient(135deg, ${bannerA}, ${bannerB})`);
   /** Background of the whole card and whether its text must be dark. */
   let look = $derived(cardLook(cardColor, cardI, cardG, shell));
   let esOpen = $state(false);
@@ -472,7 +481,7 @@
            explicit "back" like Telegram's, so it can always be left. -->
       <button class="p-back" onclick={closeProfile} aria-label={$t("Back")}>{@html icons.back}</button>
       <div class="scroll">
-      <div class="banner" style:background={shownBanner && !isVideoUrl(shownBanner) ? `center / cover no-repeat url("${shownBanner}")` : `linear-gradient(135deg, ${bannerA}, ${bannerB})`}>
+      <div class="banner" style:background={bannerBg}>
         {#if shownBanner && isVideoUrl(shownBanner)}
           <!-- Animated banner: silent short loop. -->
           <video class="banner-vid" use:streamSrc={shownBanner} muted loop autoplay playsinline></video>
