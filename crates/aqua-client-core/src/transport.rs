@@ -328,7 +328,7 @@ pub struct Transport {
     renamed_from: Option<String>,
     /// Bearer token + when it was issued. The server's tokens live one
     /// hour; [`Transport::bearer`] signs in again before that.
-    token: std::sync::Mutex<(String, std::time::Instant)>,
+    token: std::sync::Mutex<(String, std::time::Instant, std::time::SystemTime)>,
     /// Kept to re-sign the auth challenge when the token gets old.
     identity: IdentityKeyPair,
     http: reqwest::Client,
@@ -475,7 +475,7 @@ impl Transport {
                 username: username.to_string(),
                 uid,
                 renamed_from,
-                token: std::sync::Mutex::new((token, std::time::Instant::now())),
+                token: std::sync::Mutex::new((token, std::time::Instant::now(), std::time::SystemTime::now())),
                 identity: identity.clone(),
                 http,
                 ws_out: out_tx,
@@ -533,16 +533,28 @@ impl Transport {
     /// 45 minutes (they expire after 60) are renewed by signing a fresh
     /// challenge. Without this every request failed with "token has
     /// expired" once the app had been open for an hour.
+    ///
+    /// The age is taken from both clocks: `Instant` stands still while the
+    /// computer or phone sleeps (Linux/Android), so after a night's sleep an
+    /// hour-old token looked a minute old and every request got "401 token
+    /// has expired"; the wall clock counts the sleep (a clock set back makes
+    /// the token "old" too — one extra sign-in, nothing worse).
     pub async fn bearer(&self) -> Result<String, TransportError> {
         const RENEW_AFTER: std::time::Duration = std::time::Duration::from_secs(45 * 60);
         if let Ok(t) = self.token.lock() {
-            if t.1.elapsed() < RENEW_AFTER {
+            let wall = std::time::SystemTime::now().duration_since(t.2).unwrap_or(RENEW_AFTER);
+            if t.1.elapsed() < RENEW_AFTER && wall < RENEW_AFTER {
                 return Ok(t.0.clone());
             }
         }
+        self.renew_token().await
+    }
+
+    /// Sign a fresh challenge now (also after a "token has expired" answer).
+    pub async fn renew_token(&self) -> Result<String, TransportError> {
         let fresh = sign_in(&self.http, &self.server_url, &self.identity).await?;
         if let Ok(mut t) = self.token.lock() {
-            *t = (fresh.clone(), std::time::Instant::now());
+            *t = (fresh.clone(), std::time::Instant::now(), std::time::SystemTime::now());
         }
         Ok(fresh)
     }
@@ -1362,15 +1374,22 @@ impl Transport {
     /// `/v1/me/<path>` with a JSON body → the JSON answer (`null` for 204).
     pub async fn me_call(&self, method: &str, path: &str, body: Option<serde_json::Value>) -> Result<serde_json::Value, TransportError> {
         let url = format!("{}/v1/me/{}", self.server_url.trim_end_matches('/'), path.trim_start_matches('/'));
-        let req = match method {
-            "PUT" => self.http.put(&url),
-            "POST" => self.http.post(&url),
-            "DELETE" => self.http.delete(&url),
-            _ => self.http.get(&url),
+        let send = |token: String| {
+            let req = match method {
+                "PUT" => self.http.put(&url),
+                "POST" => self.http.post(&url),
+                "DELETE" => self.http.delete(&url),
+                _ => self.http.get(&url),
+            }
+            .bearer_auth(token);
+            match &body { Some(b) => req.json(b), None => req }.send()
+        };
+        let mut r = send(self.bearer().await?).await?;
+        // The relay says the token is no good (expired, or the relay
+        // restarted with a new key): sign in afresh and try once more.
+        if r.status() == reqwest::StatusCode::UNAUTHORIZED {
+            r = send(self.renew_token().await?).await?;
         }
-        .bearer_auth(self.bearer().await?);
-        let req = match body { Some(b) => req.json(&b), None => req };
-        let r = req.send().await?;
         if !r.status().is_success() {
             return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
         }
