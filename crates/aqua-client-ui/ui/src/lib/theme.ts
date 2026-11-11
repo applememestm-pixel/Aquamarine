@@ -530,7 +530,7 @@ function applyCustomFont(s: Settings) {
     }
     root.style.setProperty(
       "--font-ui",
-      `"${CUSTOM_FONT_FAMILY}", "Onest", ui-sans-serif, system-ui, sans-serif`,
+      `"${CUSTOM_FONT_FAMILY}", "Onest", ui-sans-serif, system-ui, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`,
     );
   } else {
     root.style.removeProperty("--font-ui");

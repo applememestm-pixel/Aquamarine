@@ -31,7 +31,9 @@
   --online:         #35D399;
   --danger:         #FF4D6D;
 
-  --font-ui:   "Onest", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Colour emoji fonts before the generic family: otherwise a system's
+     black-and-white symbol glyphs win and emoji sit off the text line. */
+  --font-ui:   "Onest", ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
   --shadow-lift:   0 1px 0 rgba(255,255,255,0.04) inset, 0 8px 24px -8px rgba(0,0,0,0.4);
