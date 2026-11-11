@@ -5748,8 +5748,10 @@
 
   /* Read-receipt tick */
   .rr { display: inline-flex; align-items: center; }
-  .rr :global(svg) { width: 14px; height: 14px; color: var(--fg-dim); }
-  .rr.read :global(svg) { color: var(--accent); }
+  /* Delivered: plain light ticks; read: accent double ticks, a bit bigger
+     so the difference is seen at a glance. */
+  .rr :global(svg) { width: 15px; height: 15px; color: color-mix(in srgb, var(--fg) 85%, transparent); }
+  .rr.read :global(svg) { width: 18px; height: 18px; color: var(--accent); }
 
   /* Pinned-message bar */
   .plain-note { color: #f5b14c; }
