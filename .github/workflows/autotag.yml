@@ -55,12 +55,17 @@ jobs:
           git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null || exit 0
           tagsha=$(git rev-list -n1 "$TAG" 2>/dev/null || true)
           [ "$tagsha" = "$GITHUB_SHA" ] && exit 0
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx SHA256SUMS.txt; then
-            echo "$TAG is a finished release - leaving it"; exit 0
-          fi
-          if gh run list --workflow release.yml --branch "$TAG" --repo "$GITHUB_REPOSITORY" --json status --jq '.[].status' | grep -qvx completed; then
-            echo "$TAG is still building - leaving it"; exit 0
-          fi
+          # The newest release run of the tag decides: success = finished
+          # (leave it), still running = leave it, cancelled / failed = rebuild.
+          # (Its checksum list alone says nothing: the checksums job runs even
+          # when the app builds were cancelled.)
+          last=$(gh run list --workflow release.yml --branch "$TAG" --repo "$GITHUB_REPOSITORY" --limit 1 --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"' 2>/dev/null || true)
+          case "$last" in
+            "completed success") echo "$TAG is a finished release - leaving it"; exit 0;;
+            completed*|"") ;;
+            *) echo "$TAG is still building ($last) - leaving it"; exit 0;;
+          esac
+          [ -n "$last" ] || { echo "no release run found for $TAG - leaving it"; exit 0; }
           echo "::warning::$TAG never finished building; main has newer commits for it - building it again from $GITHUB_SHA"
           gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
           git push origin ":refs/tags/$TAG" 2>/dev/null || true
