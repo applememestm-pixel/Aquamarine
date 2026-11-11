@@ -47,6 +47,11 @@
   let plusMenuOpen = $state(false);
   /** Phones: the pencil at the bottom (Telegram) unfolds into what to make. */
   let fabOpen = $state(false);
+  /** "My story" tapped with none up: camera or gallery. */
+  let storyAdd = $state(false);
+  const showStories = $derived(!compact && !searchMode && !showArchive && ($storyOwners.length > 0 || $myLiveStories.length > 0));
+  function storyUsers(): string[] { return [...($myLiveStories.length ? [""] : []), ...$storyOwners.map((o) => o.user)]; }
+  function tapMine() { if ($myLiveStories.length) openStories(storyUsers(), ""); else storyAdd = !storyAdd; }
   $effect(() => { if (fabOpen) return onBack(() => (fabOpen = false)); });
   function fabPick(k: "chat" | "group" | "supergroup" | "channel") {
     fabOpen = false;
@@ -55,6 +60,9 @@
   import { contacts, saveContact, displayName } from "../contacts";
   import { chatLines } from "../listLook";
   import { botMenus } from "../botMenus";
+  import { meCardOpen } from "./MeCard.svelte";
+  import { storyOwners, myLiveStories, storyRing, addStory } from "../storyFeed";
+  import { openStories } from "../stories";
   import { openMiniApp } from "./MiniApp.svelte";
   import { api } from "../tauri";
   import { blocked, setBlocked } from "../ghost";
@@ -88,7 +96,8 @@
     meTimer = setTimeout(() => { meTimer = null; meHeld = true; openAccounts(); }, 420);
   }
   function meCancel() { if (meTimer) { clearTimeout(meTimer); meTimer = null; } }
-  function meClick() { meCancel(); if (meHeld) { meHeld = false; return; } openProfile(); }
+  // Phones: your card in the middle of the screen (status, profile, stories, settings).
+  function meClick() { meCancel(); if (meHeld) { meHeld = false; return; } if (IS_MOBILE) meCardOpen.set(true); else openProfile(); }
   function openAccounts() {
     try { navigator.vibrate?.(12); } catch { /* no vibration */ }
     accountsOpen = true;
@@ -783,6 +792,7 @@
           <button onclick={() => { plusMenuOpen = false; openNewChatDialog(); }}>{$t("New chat")}</button>
           <button onclick={() => { plusMenuOpen = false; openNewGroup("group"); }}>{$t("New group")}</button>
           <button onclick={() => { plusMenuOpen = false; openNewGroup("supergroup"); }}>{$t("New server")}</button>
+          <button onclick={() => { plusMenuOpen = false; void addStory(IS_MOBILE ? "camera" : "gallery"); }}>{$t("Add a story")}</button>
           <button onclick={() => { plusMenuOpen = false; openNewGroup("channel"); }}>{$t("New channel")}</button>
           {#if $chats.some((c) => c.unread > 0)}<button onclick={() => { plusMenuOpen = false; markAllRead(); }}>{$t("Mark all as read")}</button>{/if}
         </div>
@@ -828,6 +838,34 @@
   {/if}
 
   <div class="chats" class:home={searchHome}>
+    {#if showStories}
+      <!-- Stories (Telegram): scrolls away with the list; pull down to see it again. -->
+      <div class="stories" role="list" aria-label={$t("Stories")}>
+        <div class="st-item" role="listitem">
+          <button class="st-ava" class:ring={$myLiveStories.length > 0} onclick={tapMine} aria-label={$t("My story")}>
+            <span class="st-pic" style:background-image={$profile.avatar_url ? `url("${$profile.avatar_url}")` : undefined}>{$profile.avatar_url ? "" : meLetter}</span>
+            <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+            <span class="st-plus" role="button" tabindex="-1" title={$t("Add a story")} onclick={(e) => { e.stopPropagation(); storyAdd = !storyAdd; }}>+</span>
+          </button>
+          <span class="st-nm">{$t("My story")}</span>
+          {#if storyAdd}
+            <div class="st-menu" role="menu">
+              <button role="menuitem" onclick={() => { storyAdd = false; void addStory("camera"); }}>{$t("Camera")}</button>
+              <button role="menuitem" onclick={() => { storyAdd = false; void addStory("gallery"); }}>{$t("Photo or video")}</button>
+            </div>
+          {/if}
+        </div>
+        {#each $storyOwners as o (o.user)}
+          {@const ch = $chats.find((x) => x.id === o.user)}
+          <div class="st-item" role="listitem">
+            <button class="st-ava ring" class:seen={!o.unseen} onclick={() => openStories(storyUsers(), o.user)} aria-label={ch?.name ?? o.user}>
+              <span class="st-pic" style:--gradient={ch?.gradient} style:background-image={$avatars[o.user] ? `url("${$avatars[o.user]}")` : undefined}>{$avatars[o.user] ? "" : (ch?.letter ?? o.user.charAt(0).toUpperCase())}</span>
+            </button>
+            <span class="st-nm">{(ch?.name ?? o.user).split(" ")[0]}</span>
+          </div>
+        {/each}
+      </div>
+    {/if}
     {#if searchHome}
       <div class="search-home" role="presentation" onpointerdown={(e) => e.preventDefault()}>
         {#if frequent.length}
@@ -970,7 +1008,11 @@
           </div>
         {:else}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="avatar sz-44" class:lk class:ava-grp={c.id.startsWith("grp_") && !c.channel} class:ava-chan={c.channel} style="--gradient: {c.gradient}" onpointerdown={(e) => { if (e.pointerType !== "touch") peekDown(e, c.id); }} title={compact ? undefined : $t("Hold to peek")}>
+        <div class="avatar sz-44" class:lk class:ava-grp={c.id.startsWith("grp_") && !c.channel} class:ava-chan={c.channel}
+          class:story-ring={!lk && !!$storyRing[c.id]} class:story-seen={$storyRing[c.id] === "seen"}
+          style="--gradient: {c.gradient}" onpointerdown={(e) => { if (e.pointerType !== "touch") peekDown(e, c.id); }}
+          onclick={(e) => { if (!lk && $storyRing[c.id] && !sel.length) { e.stopPropagation(); openStories(storyUsers(), c.id); } }}
+          title={compact ? undefined : $t("Hold to peek")}>
           {lk ? "" : c.letter}
           {#if $avatars[c.id] && !lk}<img class="ava-img" src={$avatars[c.id]} alt="" loading="lazy" />{/if}
           {#if lk}<span class="lk-ic">{@html icons.lock}</span>{/if}
@@ -1632,6 +1674,26 @@
   .folder-tab:hover { color: var(--fg); background: var(--bg-hover); }
   .folder-tab.active { color: var(--accent); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 25%, transparent); }
   .ft-emoji { margin-right: 4px; }
+  /* Stories strip. */
+  .stories { display: flex; gap: 14px; padding: 6px 12px 10px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+  .stories::-webkit-scrollbar { display: none; }
+  .st-item { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; width: 62px; flex-shrink: 0; }
+  .st-ava { position: relative; width: 58px; height: 58px; border-radius: var(--ava-r, 50%); border: none; padding: 3px; background: transparent; cursor: pointer; }
+  .st-ava.ring { background: conic-gradient(from 210deg, var(--accent), var(--accent-2), var(--accent)); }
+  .st-ava.ring.seen { background: var(--border-strong); }
+  .st-pic { display: grid; place-items: center; width: 100%; height: 100%; box-sizing: border-box; border-radius: var(--ava-r, 50%); border: 2.5px solid var(--bg-list);
+    background: var(--gradient, var(--bg-surface-2)) center / cover; color: rgba(6,7,12,.85); font: 800 19px var(--font-ui, inherit); }
+  .st-ava:not(.ring) .st-pic { border-color: transparent; }
+  .st-plus { position: absolute; right: -1px; bottom: -1px; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: #06070c;
+    font: 800 15px/1 var(--font-ui, inherit); border: 2px solid var(--bg-list); }
+  .st-nm { max-width: 62px; font-size: 11.5px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .st-menu { position: absolute; top: 66px; left: 0; z-index: 20; min-width: 160px; padding: 5px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-surface); border: 1px solid var(--border-strong);
+    box-shadow: 0 14px 30px -12px rgba(0,0,0,.8); display: flex; flex-direction: column; }
+  .st-menu button { padding: 9px 12px; border: none; background: transparent; color: var(--fg); text-align: left; font: 500 14px var(--font-ui, inherit); border-radius: calc(8px * var(--rk, 1)); cursor: pointer; }
+  .st-menu button:hover { background: var(--bg-hover); }
+  /* Unseen story: a ring in the theme colour around the avatar (Telegram). */
+  .avatar.story-ring { box-shadow: 0 0 0 2px var(--bg-list), 0 0 0 4px var(--accent); cursor: pointer; }
+  .avatar.story-ring.story-seen { box-shadow: 0 0 0 2px var(--bg-list), 0 0 0 4px var(--border-strong); }
   /* Phones: the pencil (Telegram) above the bottom bar; it unfolds upwards. */
   .fab-wrap { position: fixed; right: 16px; bottom: calc(92px + env(safe-area-inset-bottom, 0px)); z-index: 60; display: flex; flex-direction: column; align-items: flex-end; gap: 12px; }
   :global(body.chat-open) .fab-wrap, :global(body.chat-open) .fab-veil { display: none; }

@@ -13,6 +13,7 @@ import { api, events } from "./tauri";
 import type { Activity } from "./types";
 import { allowed, isPublic, privacy } from "./privacy";
 import { musicActivity } from "./music";
+import { storiesForPresence } from "./stories";
 
 export type OnlineStatus = "online" | "idle" | "dnd" | "invisible";
 
@@ -32,6 +33,8 @@ export interface Presence {
   ni?: boolean;
   /** "You may link to my account when forwarding my messages" (when that isn't public). */
   fl?: boolean;
+  /** Live stories (stories.ts): references to encrypted files, 24 h. */
+  st?: unknown;
   /** Local receive time (ms) — not sent; used to expire stale "online". */
   at?: number;
 }
@@ -126,6 +129,8 @@ export function myPresence(peer = ""): Presence {
     if (!ok("voice")) out.nv = true;
     if (!ok("invites")) out.ni = true;
     if (!isPublic("forwards", rules) && ok("forwards")) out.fl = true;
+    const st = storiesForPresence();
+    if (st.length) out.st = st;
   }
   return out;
 }
