@@ -44,7 +44,9 @@ pub async fn open_chat_window(app: AppHandle, peer_id: String, title: String) ->
             .map_err(|e| format!("window: {e}"))?;
         #[cfg(target_os = "linux")]
         crate::linux_webview::configure_window(&win);
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(windows)]
+        crate::win_webview::allow_media(&win);
+        #[cfg(not(any(target_os = "linux", windows)))]
         let _ = win;
         Ok(())
     }

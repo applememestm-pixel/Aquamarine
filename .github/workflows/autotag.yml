@@ -43,6 +43,29 @@ jobs:
           echo "prerelease=$pre" >> "$GITHUB_OUTPUT"
           echo "Cargo.toml version: $v (pre-release: $pre)"
 
+      # A release of this version that never finished (cancelled while still
+      # in the queue, the owner wanted more in it) and main has moved on: take
+      # it down and build the version again from main. A finished release
+      # (SHA256SUMS.txt is uploaded last) or one still building is left alone.
+      - name: Replace an unfinished release of this version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null || exit 0
+          tagsha=$(git rev-list -n1 "$TAG" 2>/dev/null || true)
+          [ "$tagsha" = "$GITHUB_SHA" ] && exit 0
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx SHA256SUMS.txt; then
+            echo "$TAG is a finished release - leaving it"; exit 0
+          fi
+          if gh run list --workflow release.yml --branch "$TAG" --repo "$GITHUB_REPOSITORY" --json status --jq '.[].status' | grep -qvx completed; then
+            echo "$TAG is still building - leaving it"; exit 0
+          fi
+          echo "::warning::$TAG never finished building; main has newer commits for it - building it again from $GITHUB_SHA"
+          gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          git push origin ":refs/tags/$TAG" 2>/dev/null || true
+          git tag -d "$TAG" 2>/dev/null || true
+
       - name: Create the tag if it's new
         id: mk
         env:

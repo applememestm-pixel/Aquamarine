@@ -140,6 +140,10 @@ pub fn run() -> Result<()> {
             }
             #[cfg(target_os = "linux")]
             linux_webview::configure(app);
+            #[cfg(windows)]
+            if let Some(win) = app.get_webview_window("main") {
+                win_webview::allow_media(&win);
+            }
             Ok(())
         })
         .plugin(tauri_plugin_fs::init())
@@ -399,6 +403,56 @@ pub fn run() -> Result<()> {
         })
         .map_err(anyhow::Error::from)?;
     Ok(())
+}
+
+/// WebView2 asked "http://tauri.localhost wants to use your microphone",
+/// and a "Block" there stayed saved for good: calls went silent and nothing
+/// in the app could undo it. Our own windows (the app, popped-out chats —
+/// not the built-in browser's `web-*` windows) get the microphone and
+/// camera without asking: a saved decision is set back to "allow", and new
+/// requests are allowed by the handler.
+#[cfg(windows)]
+pub mod win_webview {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2Profile4, ICoreWebView2_13, COREWEBVIEW2_PERMISSION_KIND, COREWEBVIEW2_PERMISSION_KIND_CAMERA,
+        COREWEBVIEW2_PERMISSION_KIND_MICROPHONE, COREWEBVIEW2_PERMISSION_STATE_ALLOW,
+    };
+    use webview2_com::{PermissionRequestedEventHandler, SetPermissionStateCompletedHandler};
+    use windows::core::Interface;
+
+    pub fn allow_media(win: &tauri::WebviewWindow) {
+        let res = win.with_webview(|wv| unsafe {
+            let Ok(core) = wv.controller().CoreWebView2() else { return };
+            // A "Block" saved in the profile: back to "allow" for our origin.
+            if let Ok(profile) = core.cast::<ICoreWebView2_13>().and_then(|c| c.Profile()).and_then(|p| p.cast::<ICoreWebView2Profile4>()) {
+                for origin in [windows::core::w!("http://tauri.localhost"), windows::core::w!("https://tauri.localhost")] {
+                    for kind in [COREWEBVIEW2_PERMISSION_KIND_MICROPHONE, COREWEBVIEW2_PERMISSION_KIND_CAMERA] {
+                        let done = SetPermissionStateCompletedHandler::create(Box::new(|_| Ok(())));
+                        if let Err(e) = profile.SetPermissionState(kind, origin, COREWEBVIEW2_PERMISSION_STATE_ALLOW, &done) {
+                            tracing::warn!("WebView2: can't reset a saved permission: {e}");
+                        }
+                    }
+                }
+            }
+            let handler = PermissionRequestedEventHandler::create(Box::new(|_, args| {
+                if let Some(args) = args {
+                    let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
+                    args.PermissionKind(&mut kind)?;
+                    if kind == COREWEBVIEW2_PERMISSION_KIND_MICROPHONE || kind == COREWEBVIEW2_PERMISSION_KIND_CAMERA {
+                        args.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW)?;
+                    }
+                }
+                Ok(())
+            }));
+            let mut token = 0i64;
+            if let Err(e) = core.add_PermissionRequested(&handler, &mut token) {
+                tracing::warn!("WebView2: no permission handler: {e}");
+            }
+        });
+        if let Err(e) = res {
+            tracing::warn!("could not set up the WebView2 permissions: {e}");
+        }
+    }
 }
 
 /// WebKitGTK ships with WebRTC switched off; calls need it (plus media
