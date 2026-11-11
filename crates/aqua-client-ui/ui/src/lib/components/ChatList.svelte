@@ -25,7 +25,7 @@
   import { avatars, peerCards, clans } from "../people";
   import ClanTag from "./ClanTag.svelte";
   import OfficialMark from "./OfficialMark.svelte";
-  import { keepOnScreen } from "../actions";
+  import { keepOnScreen, scrollX } from "../actions";
   import { archived, mutedChats, setArchived, setMuted, pinnedChats, togglePin, movePin, MAX_PINS, markedUnread, setMarkedUnread } from "../chatPrefs";
   import { folders as allFolders, folderHas, updateFolder, folderTags, FOLDER_COLORS, type Folder, type ChatFacts } from "../folders";
   import { parseJoinLink } from "../groupRules";
@@ -850,14 +850,14 @@
   </div>
 
   {#if searchMode}
-    <div class="folder-strip search-tabs" role="tablist">
+    <div class="folder-strip search-tabs" role="tablist" use:scrollX>
       {#each [["all", "All"], ["people", "Chats"], ["groups", "Groups"], ["channels", "Channels"]] as [id, label] (id)}
         <button class="folder-tab" class:active={searchTab === id} role="tab" aria-selected={searchTab === id}
           onpointerdown={(e) => e.preventDefault()} onclick={() => (searchTab = id as SearchTab)}>{$t(label)}</button>
       {/each}
     </div>
   {:else if $folders.length > 0}
-    <div class="folder-strip">
+    <div class="folder-strip" use:scrollX>
       <button class="folder-tab" class:active={$activeFolder === "all"} onclick={() => activeFolder.set("all")} oncontextmenu={(e) => openFolderMenu(e, "all")}>{$t("All")}</button>
       {#each $folders as f (f.id)}
         {@const unread = $visibleChats.filter((c) => (c.unread > 0) && !$mutedChats.has(c.id) && folderHas(f, factsOf(c))).length}
@@ -887,7 +887,7 @@
   <div class="chats" class:home={searchHome}>
     {#if showStories}
       <!-- Stories (Telegram): scrolls away with the list; pull down to see it again. -->
-      <div class="stories" role="list" aria-label={$t("Stories")}>
+      <div class="stories" role="list" aria-label={$t("Stories")} use:scrollX>
         <div class="st-item" role="listitem">
           <button class="st-ava" class:ring={$myLiveStories.length > 0} onclick={tapMine} aria-label={$t("My story")}>
             <span class="st-pic" style:background-image={$profile.avatar_url ? `url("${$profile.avatar_url}")` : undefined}>{$profile.avatar_url ? "" : meLetter}</span>
@@ -917,7 +917,7 @@
       <div class="search-home" role="presentation" onpointerdown={(e) => e.preventDefault()}>
         {#if frequent.length}
           <div class="sh-title">{$t("Frequent contacts")}</div>
-          <div class="sh-freq">
+          <div class="sh-freq" use:scrollX>
             {#each frequent as c (c.id)}
               <button class="sh-person" onclick={() => openFromSearch(c.id)}>
                 <span class="avatar sz-44" style="--gradient: {c.gradient}">{c.letter}{#if $avatars[c.id]}<img class="ava-img" src={$avatars[c.id]} alt="" loading="lazy" />{/if}</span>
@@ -1866,12 +1866,14 @@
   .type-ic { display: inline-grid; place-items: center; width: 15px; height: 15px; flex-shrink: 0; color: var(--fg-muted); margin-right: 1px; }
   .type-ic svg { width: 15px; height: 15px; }
   .chat-item.active .type-ic { color: currentColor; }
-  /* Three lines (Settings → Appearance → Chat list): a bigger avatar, the
-     sender on a line of its own, two lines of text. */
-  .list.lines3 .chat-item { grid-template-columns: 54px 1fr; padding-top: 9px; padding-bottom: 9px; }
-  .list.lines3 .chat-item .avatar.sz-44 { width: 54px; height: 54px; font-size: 20px; }
-  .list.lines3 .chat-row-2 { align-items: flex-start; }
-  .list.lines3 .chat-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; white-space: normal; line-height: 1.32; overflow-wrap: anywhere; }
+  /* Three lines (Settings → Appearance → Chat list): the sender on a line of
+     its own, two lines of text — in the same row height and avatar size as
+     two lines: the lines get tighter, the row doesn't grow. */
+  .list.lines3 .chat-item { padding-top: 8px; padding-bottom: 8px; }
+  .list.lines3 .chat-name { line-height: 1.2; }
+  .list.lines3 .chat-row-2 { align-items: flex-start; margin-top: 1px; }
+  .list.lines3 .chat-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; white-space: normal;
+    font-size: calc(12.5px * var(--font-scale, 1)); line-height: 1.18; overflow-wrap: anywhere; }
   .list.lines3 .chat-preview .from-prefix { display: block; max-width: none; white-space: nowrap; }
   .list.lines3 .chat-preview .from-prefix i { display: none; }
   .list.lines3 .chat-preview:has(.from-prefix) { -webkit-line-clamp: 2; }
@@ -2056,8 +2058,7 @@
     .chats { padding: 4px 6px calc(68px + env(safe-area-inset-bottom, 0px)); }
     .chat-item { grid-template-columns: 48px 1fr; gap: 12px; padding: 7px 10px; border-radius: calc(16px * var(--rk, 1)); }
     .chat-item .avatar.sz-44 { width: 48px; height: 48px; font-size: 18px; }
-    .list.lines3 .chat-item { grid-template-columns: 58px 1fr; padding-top: 8px; padding-bottom: 8px; }
-    .list.lines3 .chat-item .avatar.sz-44 { width: 58px; height: 58px; font-size: 21px; }
+    .list.lines3 .chat-item { padding-top: 7px; padding-bottom: 7px; }
     .chat-item.active { background: transparent; width: 100%; margin-right: 0; border-radius: calc(16px * var(--rk, 1)); }
     .chat-item.active::before, .chat-item.active::after { display: none; }
     .chat-item.active .chat-time { color: var(--fg-dim); }

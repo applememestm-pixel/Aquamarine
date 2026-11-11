@@ -37,3 +37,48 @@ export function keepOnScreen(node: HTMLElement, margin = 8) {
   window.addEventListener("resize", fit);
   return { destroy() { cancelAnimationFrame(raf); ro.disconnect(); window.removeEventListener("resize", fit); } };
 }
+
+/** A horizontal strip a mouse can scroll: the wheel moves it sideways, and
+ *  it can be dragged (a click after a drag is swallowed). Touch scrolls it
+ *  natively already. */
+export function scrollX(node: HTMLElement) {
+  const wheel = (e: WheelEvent) => {
+    if (node.scrollWidth <= node.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+    e.preventDefault();
+    node.scrollBy({ left: e.deltaY, behavior: e.deltaMode === 0 && Math.abs(e.deltaY) < 60 ? "auto" : "smooth" });
+  };
+  let drag: { x: number; left: number; moved: boolean } | null = null;
+  const down = (e: PointerEvent) => {
+    if (e.pointerType !== "mouse" || e.button !== 0) return;
+    drag = { x: e.clientX, left: node.scrollLeft, moved: false };
+  };
+  const move = (e: PointerEvent) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x;
+    if (!drag.moved && Math.abs(dx) > 5) { drag.moved = true; try { node.setPointerCapture(e.pointerId); } catch { /* fine */ } }
+    if (drag.moved) node.scrollLeft = drag.left - dx;
+  };
+  const up = () => {
+    if (drag?.moved) {
+      // The click that ends a drag doesn't open anything.
+      const stop = (ev: Event) => { ev.stopPropagation(); ev.preventDefault(); };
+      node.addEventListener("click", stop, { capture: true, once: true });
+      setTimeout(() => node.removeEventListener("click", stop, { capture: true }), 0);
+    }
+    drag = null;
+  };
+  node.addEventListener("wheel", wheel, { passive: false });
+  node.addEventListener("pointerdown", down);
+  node.addEventListener("pointermove", move);
+  node.addEventListener("pointerup", up);
+  node.addEventListener("pointercancel", up);
+  return {
+    destroy() {
+      node.removeEventListener("wheel", wheel);
+      node.removeEventListener("pointerdown", down);
+      node.removeEventListener("pointermove", move);
+      node.removeEventListener("pointerup", up);
+      node.removeEventListener("pointercancel", up);
+    },
+  };
+}
