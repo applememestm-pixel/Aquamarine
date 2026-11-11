@@ -260,6 +260,7 @@
   let groupPick = $state<{ x: number; y: number; id: string } | null>(null);
   function newGroupFor(id: string) {
     groupPick = null;
+    ctx = null;
     askInput({
       title: tr("New chat group"),
       description: tr("Chats of a group can be shown as one row of the list."),
@@ -1118,7 +1119,7 @@
     {@const cid = ctx.id}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div class="ctx-scrim" onclick={() => (ctx = null)} oncontextmenu={(e) => { e.preventDefault(); ctx = null; }}></div>
+    <div class="ctx-scrim" onclick={() => { ctx = null; groupPick = null; }} oncontextmenu={(e) => { e.preventDefault(); ctx = null; groupPick = null; }}></div>
     <div class="chat-ctx" use:keepOnScreen style:left="{ctx.x}px" style:top="{ctx.y}px" role="menu">
       <button onclick={() => pinChat(cid)}>{$t($pinnedChats.includes(cid) ? "Unpin" : "Pin to top")}</button>
       {#if $pinnedChats.includes(cid) && $pinnedChats.length > 1}
@@ -1133,7 +1134,7 @@
         <button onclick={() => { ctx = null; openGroupId.set(cg.id); }}>{$t("Open group “{name}”", { name: cg.name })}</button>
         <button onclick={() => { removeFromGroup(cid); ctx = null; }}>{$t("Remove from the group")}</button>
       {:else}
-        <button onclick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); groupPick = { x: r.right + 4, y: r.top, id: cid }; ctx = null; }}>{$t("Add to a group…")} ›</button>
+        <button onclick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); groupPick = groupPick ? null : { x: r.right + 4, y: r.top, id: cid }; }}>{$t("Add to a group…")} ›</button>
       {/if}
       <button onclick={() => { setMuted(cid); ctx = null; }}>{$t($mutedChats.has(cid) ? "Unmute" : "Mute notifications")}</button>
       <button onclick={() => { void selectChat(cid); ctx = null; }}>{$t("Open")}</button>
@@ -1155,10 +1156,10 @@
     {@const gp = groupPick}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div class="ctx-scrim" onclick={() => (groupPick = null)} oncontextmenu={(e) => { e.preventDefault(); groupPick = null; }}></div>
-    <div class="chat-ctx" use:keepOnScreen style:left="{gp.x}px" style:top="{gp.y}px" role="menu">
+    {#if !ctx}<div class="ctx-scrim" onclick={() => (groupPick = null)} oncontextmenu={(e) => { e.preventDefault(); groupPick = null; }}></div>{/if}
+    <div class="chat-ctx sub" use:keepOnScreen style:left="{gp.x}px" style:top="{gp.y}px" role="menu">
       {#each $chatGroups as cg (cg.id)}
-        <button onclick={() => { addToGroup(cg.id, gp.id); groupPick = null; showToast(tr("Added to “{name}”", { name: cg.name })); }}>{cg.emoji ?? "▣"} {cg.name} <span class="ctx-kbd">{cg.chatIds.length}</span></button>
+        <button onclick={() => { addToGroup(cg.id, gp.id); groupPick = null; ctx = null; showToast(tr("Added to “{name}”", { name: cg.name })); }}>{cg.emoji ?? "▣"} {cg.name} <span class="ctx-kbd">{cg.chatIds.length}</span></button>
       {/each}
       <button onclick={() => newGroupFor(gp.id)}>＋ {$t("New group…")}</button>
     </div>
@@ -1321,19 +1322,20 @@
   .lk-ic :global(svg) { width: 18px; height: 18px; }
   /* Selection (hold a row on a phone): Telegram's bar over the header. */
   .sel-bar { position: absolute; top: 0; left: 0; right: 0; z-index: 30; height: 58px; display: flex; align-items: center; gap: 4px;
-    padding: 0 8px; background: var(--bg-panel, var(--bg)); border-bottom: 1px solid var(--border); }
+    /* Solid: it covers the title row (the colour it used isn't a theme colour — the title showed through). */
+    padding: 0 8px; background: var(--bg-list); border-bottom: 1px solid var(--border); box-shadow: 0 6px 16px -10px rgba(0,0,0,.6); }
   .sel-n { flex: 1; font-size: 18px; font-weight: 700; color: var(--fg); padding-left: 6px; }
   .sel-btn { width: 44px; height: 44px; display: grid; place-items: center; border: none; background: transparent; color: var(--fg);
     border-radius: calc(12px * var(--rk, 1)); cursor: pointer; }
   .sel-btn:active { background: color-mix(in srgb, var(--fg) 10%, transparent); }
   .sel-btn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   .sel-more { position: absolute; top: 54px; right: 8px; min-width: 190px; display: flex; flex-direction: column; padding: 6px;
-    background: var(--bg-elev, var(--bg-panel)); border: 1px solid var(--border); border-radius: calc(14px * var(--rk, 1)); box-shadow: 0 12px 32px rgba(0,0,0,.35); }
+    background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: calc(14px * var(--rk, 1)); box-shadow: 0 12px 32px rgba(0,0,0,.35); }
   .sel-more button { text-align: left; padding: 11px 12px; border: none; background: transparent; color: var(--fg); font-size: 15px; border-radius: calc(9px * var(--rk, 1)); }
   .sel-more button:active { background: color-mix(in srgb, var(--fg) 10%, transparent); }
   .chat-item.selected { background: color-mix(in srgb, var(--accent) 16%, transparent); }
   .chat-item.selected .avatar::after { content: "✓"; position: absolute; right: -2px; bottom: -2px; width: 20px; height: 20px; border-radius: 50%;
-    display: grid; place-items: center; font-size: 12px; font-weight: 800; color: #fff; background: var(--accent); border: 2px solid var(--bg-panel, var(--bg)); }
+    display: grid; place-items: center; font-size: 12px; font-weight: 800; color: #fff; background: var(--accent); border: 2px solid var(--bg-list); }
   .lk-blur { filter: blur(3px); letter-spacing: 2px; user-select: none; }
   .lk-prev { color: var(--fg-dim); font-style: italic; }
   .ctx-kbd { float: right; margin-left: 12px; font-size: 11px; color: var(--fg-dim); }
@@ -1376,6 +1378,7 @@
   .jc-btn { border: none; border-radius: calc(8px * var(--rk, 1)); padding: 7px 11px; background: var(--accent); color: #06070C; font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; white-space: nowrap; }
   .jc-done { font-size: 12px; color: var(--fg-muted); font-weight: 700; }
   .ctx-scrim { position: fixed; inset: 0; z-index: 70; }
+  .chat-ctx.sub { z-index: 72; }
   /* chat groups */
   .gstack { position: relative; width: 44px; height: 44px; flex-shrink: 0; }
   .gmini { position: absolute; width: 28px; height: 28px; font-size: 11px; border: 2px solid var(--bg-list);

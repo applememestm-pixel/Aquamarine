@@ -4,13 +4,18 @@
    *  level "Q": round dots and a bigger hole didn't scan reliably. */
   import { qrMatrix } from "../qr";
 
-  let { text, color = "#00e5c7", avatar = "", letter = "", size = 220 }:
-    { text: string; color?: string; avatar?: string; letter?: string; size?: number } = $props();
+  let { text, color = "#00e5c7", avatar = "", letter = "", size = 220, plain = false }:
+    { text: string; color?: string; avatar?: string; letter?: string; size?: number; plain?: boolean } = $props();
 
-  const m = $derived(qrMatrix(text));
+  // `plain` (long codes — meet nearby): black on white, nothing in the
+  // middle, the lowest error correction — the fewest, biggest squares.
+  const m = $derived(qrMatrix(text, plain ? "L" : "Q"));
   const n = $derived(m.length);
+  const ink = $derived(plain ? "#0b0e14" : color);
+  /** White margin: the standard 4 squares for camera scans of long codes. */
+  const qz = $derived(plain ? 4 : 2);
   // Space in the middle for the avatar (kept small: "M" survives ~15 %).
-  const hole = $derived(Math.floor(n * 0.2) | 1);
+  const hole = $derived(plain ? 0 : Math.floor(n * 0.2) | 1);
   const h0 = $derived(Math.floor((n - hole) / 2));
   function finder(r: number, c: number): boolean {
     return (r < 7 && c < 7) || (r < 7 && c >= n - 7) || (r >= n - 7 && c < 7);
@@ -21,23 +26,25 @@
 </script>
 
 <div class="qr" style:width="{size}px" style:height="{size}px" style:--qc={color}>
-  <svg viewBox="-2 -2 {n + 4} {n + 4}" width={size} height={size} aria-label="QR">
-    <rect x="-2" y="-2" width={n + 4} height={n + 4} rx="3" fill="#fff" />
+  <svg viewBox="{-qz} {-qz} {n + 2 * qz} {n + 2 * qz}" width={size} height={size} aria-label="QR">
+    <rect x={-qz} y={-qz} width={n + 2 * qz} height={n + 2 * qz} rx="3" fill="#fff" />
     {#each m as row, r (r)}
       {#each row as dark, c (c)}
         {#if dark && !finder(r, c) && !inHole(r, c)}
-          <rect x={c - 0.01} y={r - 0.01} width="1.02" height="1.02" fill={color} />
+          <rect x={c - 0.01} y={r - 0.01} width="1.02" height="1.02" fill={ink} />
         {/if}
       {/each}
     {/each}
     {#each [[0, 0], [0, n - 7], [n - 7, 0]] as [r, c] (r + "," + c)}
-      <rect x={c + 0.5} y={r + 0.5} width="6" height="6" rx="1.8" fill="none" stroke={color} stroke-width="1" />
-      <rect x={c + 2} y={r + 2} width="3" height="3" rx="0.9" fill={color} />
+      <rect x={c + 0.5} y={r + 0.5} width="6" height="6" rx="1.8" fill="none" stroke={ink} stroke-width="1" />
+      <rect x={c + 2} y={r + 2} width="3" height="3" rx="0.9" fill={ink} />
     {/each}
   </svg>
+  {#if !plain}
   <div class="mid" style:width="{(hole / (n + 4)) * size}px" style:height="{(hole / (n + 4)) * size}px">
     {#if avatar}<img src={avatar} alt="" />{:else}<span>{letter}</span>{/if}
   </div>
+  {/if}
 </div>
 
 <style>

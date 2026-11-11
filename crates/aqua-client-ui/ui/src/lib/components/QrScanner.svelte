@@ -72,7 +72,7 @@
 {/if}
 
 <style>
-  .qs-bg { position: fixed; inset: 0; z-index: 400; background: rgba(4, 6, 10, 0.72); backdrop-filter: blur(6px); display: grid; place-items: center; padding: 16px; }
+  .qs-bg { position: fixed; inset: 0; z-index: 10120; background: rgba(4, 6, 10, 0.72); backdrop-filter: blur(6px); display: grid; place-items: center; padding: 16px; }
   .qs { width: min(420px, 100%); background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: calc(18px * var(--rk, 1)); padding: 14px; display: flex; flex-direction: column; gap: 12px; }
   .qs-head { display: flex; align-items: center; justify-content: space-between; }
   .x { border: none; background: none; color: var(--fg-muted); font-size: 22px; cursor: pointer; }

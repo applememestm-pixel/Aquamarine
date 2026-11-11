@@ -2158,13 +2158,32 @@
       {/if}
 
       {#if section === "music"}
-      <section class="group">
-        <div class="label">🎵 Navidrome</div>
-        <button class="toggle-row" onclick={() => settings.update((s) => ({ ...s, navidrome: !s.navidrome }))}>
-          <div class="tr-text"><div class="tr-title">{$t("Navidrome add-on")}</div>
-            <div class="tr-sub">{$t("Music from Navidrome (or any Subsonic server): a music tab, the player, track cards in chats and listening together.")}</div></div>
-          <span class="switch" class:on={!!$settings.navidrome}></span>
-        </button>
+      <!-- An add-on card, like a plugin in a store: what it is, what it gives,
+           what it needs — and one button to switch it on. -->
+      <section class="group addon" class:on={!!$settings.navidrome}>
+        <div class="ad-head">
+          <span class="ad-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></span>
+          <div class="ad-t">
+            <b>Navidrome</b>
+            <small>{$t("Add-on · music")} · {$settings.navidrome ? $t("Installed") : $t("Not installed")}</small>
+          </div>
+          <button class="ad-btn" class:off={!!$settings.navidrome} onclick={() => settings.update((s) => ({ ...s, navidrome: !s.navidrome }))}>
+            {$settings.navidrome ? $t("Turn off") : $t("Install")}
+          </button>
+        </div>
+        <p class="ad-desc">{$t("Your own music library inside Aquamarine. Navidrome is a free music server you run at home or on a VPS (any Subsonic server works too): Aquamarine plays from it like a streaming app — and lets you share it in chats.")}</p>
+        <ul class="ad-feats">
+          <li><span>🎧</span><div><b>{$t("Music tab and player")}</b><small>{$t("Search, new and frequent albums, playlists, favourites; queue, repeat, shuffle, system media keys.")}</small></div></li>
+          <li><span>💬</span><div><b>{$t("Tracks in chats")}</b><small>{$t("Send a track as a card with its cover and ▶ — whoever can reach the same Navidrome plays it right away.")}</small></div></li>
+          <li><span>👥</span><div><b>{$t("Listen together")}</b><small>{$t("Invite someone in a chat — their player follows yours.")}</small></div></li>
+          <li><span>🤖</span><div><b>{$t("@music bot")}</b><small>{$t("On servers with Navidrome: write it a song or an artist and get cards back.")}</small></div></li>
+          <li><span>🔒</span><div><b>{$t("Private")}</b><small>{$t("A server's Navidrome login never leaves the server; your own password is kept encrypted on this device.")}</small></div></li>
+        </ul>
+        <div class="ad-need">
+          <b>{$t("What it needs")}</b>
+          <span>{$t("Either the server you're on has Navidrome (its owner connects it in Aquamarine Server → Music), or you connect your own below.")}</span>
+          <a href="https://www.navidrome.org/docs/installation/" target="_blank" rel="noopener noreferrer">{$t("How to install Navidrome")} ›</a>
+        </div>
       </section>
       {#if $settings.navidrome}
       <section class="group">
@@ -2680,6 +2699,27 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     background: var(--bg-surface); color: inherit;
   }
   .me-card:hover { background: var(--bg-hover); }
+  .addon { display: flex; flex-direction: column; gap: 12px; }
+  .ad-head { display: flex; align-items: center; gap: 14px; }
+  .ad-ic { width: 56px; height: 56px; flex-shrink: 0; border-radius: calc(16px * var(--rk, 1)); display: grid; place-items: center; color: #fff;
+    background: linear-gradient(135deg, #ff2d55, #af52de); box-shadow: 0 10px 24px -12px rgba(255,45,85,.7); }
+  .ad-ic svg { width: 28px; height: 28px; }
+  .ad-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .ad-t b { font-size: 18px; font-weight: 800; }
+  .ad-t small { font-size: 12.5px; color: var(--fg-dim); }
+  .addon.on .ad-t small { color: var(--accent); }
+  .ad-btn { padding: 9px 18px; border: none; border-radius: calc(18px * var(--rk, 1)); background: var(--accent); color: #06070c; font: 700 14px var(--font-ui, inherit); cursor: pointer; }
+  .ad-btn.off { background: var(--bg-input); color: var(--fg-muted); border: 1px solid var(--border-strong); }
+  .ad-desc { margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--fg-muted); }
+  .ad-feats { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  .ad-feats li { display: flex; gap: 12px; align-items: flex-start; }
+  .ad-feats li > span { width: 32px; height: 32px; flex-shrink: 0; border-radius: calc(10px * var(--rk, 1)); display: grid; place-items: center; background: var(--bg-input); font-size: 16px; }
+  .ad-feats li div { display: flex; flex-direction: column; gap: 2px; }
+  .ad-feats b { font-size: 13.5px; }
+  .ad-feats small { font-size: 12px; color: var(--fg-dim); line-height: 1.4; }
+  .ad-need { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-input); font-size: 12.5px; color: var(--fg-muted); }
+  .ad-need b { color: var(--fg); font-size: 13px; }
+  .ad-need a { color: var(--accent); text-decoration: none; font-weight: 600; }
   .nav-search { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px; border-radius: calc(19px * var(--rk, 1)); background: var(--bg-surface); color: var(--fg-dim); }
   .nav-search svg { width: 17px; height: 17px; flex-shrink: 0; }
   .nav-search input { flex: 1; min-width: 0; border: none; outline: none; background: transparent; color: var(--fg); font: 14px var(--font-ui, inherit); }

@@ -2761,8 +2761,83 @@ pub fn meet_qr(state: State<'_, StdMutex<AppState>>, name: Option<String>) -> Re
         k: crate::mesh::issue_meet(),
         bt: crate::mesh::own_bt_address().unwrap_or_default(),
     };
-    let json = serde_json::to_vec(&card).map_err(|e| e.to_string())?;
-    Ok(format!("aqua:meet?d={}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)))
+    // Compact (v2): bytes in base32 capitals, so the QR uses its dense
+    // alphanumeric mode — the JSON-in-base64 one was too fine to scan.
+    let _ = &card.a;
+    Ok(format!("AQUA:M2:{}", base32_encode(&meet_pack(&card)?)))
+}
+
+const B32: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+fn base32_encode(data: &[u8]) -> String {
+    let mut out = String::with_capacity(data.len() * 8 / 5 + 1);
+    let (mut buf, mut bits) = (0u32, 0u32);
+    for &b in data {
+        buf = (buf << 8) | b as u32;
+        bits += 8;
+        while bits >= 5 {
+            out.push(B32[((buf >> (bits - 5)) & 31) as usize] as char);
+            bits -= 5;
+        }
+    }
+    if bits > 0 {
+        out.push(B32[((buf << (5 - bits)) & 31) as usize] as char);
+    }
+    out
+}
+
+fn base32_decode(s: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(s.len() * 5 / 8);
+    let (mut buf, mut bits) = (0u32, 0u32);
+    for c in s.trim().bytes() {
+        let v = B32.iter().position(|&x| x == c.to_ascii_uppercase())? as u32;
+        buf = ((buf << 5) | v) & 0xFFFF;
+        bits += 5;
+        if bits >= 8 {
+            out.push((buf >> (bits - 8)) as u8);
+            bits -= 8;
+        }
+    }
+    Some(out)
+}
+
+/// v2 bytes: 2 ‖ pass(12) ‖ bt(6, zeros = none) ‖ len+user ‖ len+name ‖ bincode(bundle).
+fn meet_pack(c: &MeetCard) -> Result<Vec<u8>, String> {
+    let mut out = vec![2u8];
+    let pass = hex::decode(&c.k).map_err(|e| e.to_string())?;
+    if pass.len() != 12 { return Err("bad pass".into()); }
+    out.extend_from_slice(&pass);
+    let mut bt = [0u8; 6];
+    let hexs: String = c.bt.chars().filter(|x| x.is_ascii_hexdigit()).collect();
+    if let Ok(b) = hex::decode(&hexs) { if b.len() == 6 { bt.copy_from_slice(&b); } }
+    out.extend_from_slice(&bt);
+    let u = c.u.as_bytes();
+    if u.len() > 64 { return Err("name too long".into()); }
+    out.push(u.len() as u8);
+    out.extend_from_slice(u);
+    // The display name, cut to 24 bytes on a character boundary.
+    let mut n = String::new();
+    for ch in c.n.chars() { if n.len() + ch.len_utf8() > 24 { break; } n.push(ch); }
+    out.push(n.len() as u8);
+    out.extend_from_slice(n.as_bytes());
+    use base64::Engine;
+    out.extend_from_slice(&base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&c.b).map_err(|e| e.to_string())?);
+    Ok(out)
+}
+
+fn meet_unpack(b: &[u8]) -> Option<MeetCard> {
+    use base64::Engine;
+    if b.first() != Some(&2) || b.len() < 1 + 12 + 6 + 2 { return None; }
+    let k = hex::encode(&b[1..13]);
+    let btb = &b[13..19];
+    let bt = if btb.iter().all(|x| *x == 0) { String::new() } else { btb.iter().map(|x| format!("{x:02X}")).collect::<Vec<_>>().join(":") };
+    let mut i = 19;
+    let ul = *b.get(i)? as usize; i += 1;
+    let u = std::str::from_utf8(b.get(i..i + ul)?).ok()?.to_string(); i += ul;
+    let nl = *b.get(i)? as usize; i += 1;
+    let n = std::str::from_utf8(b.get(i..i + nl)?).ok()?.to_string(); i += nl;
+    let bundle = b.get(i..)?;
+    Some(MeetCard { v: 2, a: String::new(), u, n, b: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bundle), k, bt })
 }
 
 /// Scanned someone's meet QR: remember their keys and pass, say hi.
@@ -2770,15 +2845,25 @@ pub fn meet_qr(state: State<'_, StdMutex<AppState>>, name: Option<String>) -> Re
 #[tauri::command]
 pub async fn meet_accept(app: AppHandle, state: State<'_, StdMutex<AppState>>, code: String) -> Result<String, String> {
     use base64::Engine;
-    let d = code.trim().strip_prefix("aqua:meet?d=").ok_or("not an Aquamarine meet code")?;
     let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    let card: MeetCard = serde_json::from_slice(&b64.decode(d).map_err(|_| "damaged code")?).map_err(|_| "damaged code")?;
-    if card.v != 1 {
-        return Err("this code is from a newer app — update Aquamarine".into());
-    }
+    let code = code.trim();
+    let mut card: MeetCard = if let Some(d) = code.strip_prefix("AQUA:M2:").or_else(|| code.strip_prefix("aqua:m2:")) {
+        base32_decode(d).and_then(|b| meet_unpack(&b)).ok_or("damaged code")?
+    } else {
+        let d = code.strip_prefix("aqua:meet?d=").ok_or("not an Aquamarine meet code")?;
+        let c: MeetCard = serde_json::from_slice(&b64.decode(d).map_err(|_| "damaged code")?).map_err(|_| "damaged code")?;
+        if c.v != 1 {
+            return Err("this code is from a newer app — update Aquamarine".into());
+        }
+        c
+    };
     let bundle: aqua_core::keys::PreKeyBundle = bincode::deserialize(&b64.decode(&card.b).map_err(|_| "damaged code")?).map_err(|_| "damaged code")?;
     bundle.verify().map_err(|_| "the keys in this code don't check out")?;
     let dev = crate::multidev::device_id(bundle.identity.dh_pub.as_bytes());
+    // v2 doesn't carry the device address: it follows from the keys.
+    if card.v == 2 {
+        card.a = format!("{}~{dev}", card.u);
+    }
     if card.a != format!("{}~{dev}", card.u) || card.u.is_empty() {
         return Err("the keys in this code don't check out".into());
     }
@@ -4807,4 +4892,21 @@ pub async fn translate_text(text: String, to: String) -> Result<String, String> 
     let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
     let out: String = v.get(0).and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|s| s.get(0)?.as_str()).collect()).unwrap_or_default();
     if out.is_empty() { Err("no translation".into()) } else { Ok(out) }
+}
+
+#[cfg(test)]
+mod meet_code_tests {
+    #[test]
+    fn meet_code_v2_round_trip() {
+        use base64::Engine;
+        let c = super::MeetCard { v: 1, a: String::new(), u: "vpst".into(), n: "Влад ✨ очень длинное имя".into(),
+            b: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([7u8; 150]),
+            k: "00112233445566778899aabb".into(), bt: "AA:BB:CC:DD:EE:FF".into() };
+        let packed = super::meet_pack(&c).unwrap();
+        let text = super::base32_encode(&packed);
+        assert!(text.chars().all(|x| x.is_ascii_uppercase() || ('2'..='7').contains(&x)));
+        let back = super::meet_unpack(&super::base32_decode(&text).unwrap()).unwrap();
+        assert_eq!((back.u.as_str(), back.k.as_str(), back.bt.as_str(), back.b.as_str()), ("vpst", c.k.as_str(), "AA:BB:CC:DD:EE:FF", c.b.as_str()));
+        assert!(back.n.len() <= 24 && c.n.starts_with(&back.n));
+    }
 }

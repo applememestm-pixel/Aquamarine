@@ -117,12 +117,37 @@ struct Found {
 }
 
 /// GitHub's API: 60 requests an hour per address without a login (shared
-/// addresses run out of it — "403"). Then the plain website instead.
+/// addresses run out of it — "403", and github.com's pages answer the same
+/// there). Then `updates.json` on the project site (GitHub Pages behind a
+/// CDN; pages.yml writes it after every release run, checksums included),
+/// and github.com's pages last.
 async fn find(c: &reqwest::Client) -> Result<Option<Found>, String> {
-    match find_api(c).await {
-        Ok(f) => Ok(f),
-        Err(e) => find_web(c).await.map_err(|w| format!("{e}; {w}")),
+    let e = match find_api(c).await {
+        Ok(f) => return Ok(f),
+        Err(e) => e,
+    };
+    let f = match find_feed(c).await {
+        Ok(f) => return Ok(f),
+        Err(f) => f,
+    };
+    find_web(c).await.map_err(|w| format!("{e}; {f}; {w}"))
+}
+
+const FEEDS: &[&str] = &["https://aquamarinemessenger.pw/updates.json", "https://applememestm-pixel.github.io/Aquamarine/updates.json"];
+
+async fn find_feed(c: &reqwest::Client) -> Result<Option<Found>, String> {
+    let mut last = String::from("site: no feed");
+    for url in FEEDS {
+        match c.get(*url).header("Cache-Control", "no-cache").timeout(std::time::Duration::from_secs(30)).send().await {
+            Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
+                Ok(feed) => return pick(c, &feed["releases"]).await,
+                Err(e) => last = format!("site: {}", e.without_url()),
+            },
+            Ok(r) => last = format!("site: HTTP {}", r.status()),
+            Err(e) => last = format!("site: {}", e.without_url()),
+        }
     }
+    Err(last)
 }
 
 /// The releases feed (every release, newest first) and download links.
@@ -182,6 +207,12 @@ async fn find_api(c: &reqwest::Client) -> Result<Option<Found>, String> {
         return Err(format!("GitHub: HTTP {}", r.status()));
     }
     let list: serde_json::Value = r.json().await.map_err(|e| e.to_string())?;
+    pick(c, &list).await
+}
+
+/// The newest release in a list (the API's, or the feed's — whose releases
+/// also carry `sums`, the text of SHA256SUMS.txt) if it's newer than this app.
+async fn pick(c: &reqwest::Client, list: &serde_json::Value) -> Result<Option<Found>, String> {
     let cur = env!("CARGO_PKG_VERSION");
     let best = list
         .as_array()
@@ -204,15 +235,20 @@ async fn find_api(c: &reqwest::Client) -> Result<Option<Found>, String> {
             if let Some(sums) = by("SHA256SUMS.txt") {
                 // Sums older than the file belong to an earlier upload of it.
                 if sums["updated_at"].as_str().unwrap_or_default() >= a["updated_at"].as_str().unwrap_or_default() {
-                    if let Some(u) = sums["browser_download_url"].as_str() {
-                        if let Ok(r) = c.get(u).timeout(std::time::Duration::from_secs(30)).send().await {
-                            let t = r.text().await.unwrap_or_default();
-                            sha = t.lines().find_map(|l| {
-                                let mut it = l.split_whitespace();
-                                let h = it.next()?;
-                                (it.next()?.trim_start_matches('*') == name && h.len() == 64).then(|| h.to_ascii_lowercase())
-                            });
-                        }
+                    let text = match (rel["sums"].as_str(), sums["browser_download_url"].as_str()) {
+                        (Some(t), _) => Some(t.to_string()),
+                        (None, Some(u)) => match c.get(u).timeout(std::time::Duration::from_secs(30)).send().await {
+                            Ok(r) => Some(r.text().await.unwrap_or_default()),
+                            Err(_) => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some(t) = text {
+                        sha = t.lines().find_map(|l| {
+                            let mut it = l.split_whitespace();
+                            let h = it.next()?;
+                            (it.next()?.trim_start_matches('*') == name && h.len() == 64).then(|| h.to_ascii_lowercase())
+                        });
                     }
                 }
             }

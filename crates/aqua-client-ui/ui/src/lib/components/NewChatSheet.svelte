@@ -94,7 +94,7 @@
     const text = await scanQr();
     if (!text) return;
     // Someone's "Meet nearby" code: an encrypted chat without the internet.
-    if (text.startsWith("aqua:meet?")) { try { close(); await acceptMeet(text); } catch (e) { err = String(e); } return; }
+    if (/^(aqua:meet\?|AQUA:M2:)/i.test(text)) { try { close(); await acceptMeet(text); } catch (e) { err = String(e); } return; }
     const r = parseQr(text);
     if (!r || r.kind !== "user") { err = tr("That QR code isn't an Aquamarine profile"); return; }
     const p = await api.fetchDirectoryProfile(r.username).catch(() => null);
