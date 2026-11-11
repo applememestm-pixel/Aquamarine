@@ -169,6 +169,9 @@
     });
   });
   let navMenu = $state(false);
+  /** Phones: the search field shows from the 🔍 in the top bar (Telegram). */
+  let phoneSearch = $state(false);
+  let navSearchEl = $state<HTMLInputElement | null>(null);
 
   // ---- Phone layout (<= 720px): Telegram-style list of tiles; tapping one
   //      opens that section full-screen with  ‹ [icon] Title  on top. The
@@ -1039,11 +1042,20 @@
       <div class="sz-grip" onpointerdown={startSheetResize} ondblclick={() => setSheetSize(null)} title={$t("Drag to resize the window · double-click to reset")}></div>
       <div class="layout">
         <nav class="nav">
+          <!-- Phones: Telegram's top bar — my QR on the left, search and ⋮ in
+               a pill on the right; no title (the profile below is the title). -->
           <div class="list-head phone-only">
-            <h2>{$t("Settings")}</h2>
-            <button class="more" onclick={() => (navMenu = !navMenu)} aria-label={$t("More")} aria-expanded={navMenu}>
-              <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+            <button class="tg-round" onclick={() => meetOpen.set(true)} aria-label={$t("My QR code")}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 14h3v3M21 14v.01M14 21h.01M17.5 21H21v-3.5"/></svg>
             </button>
+            <div class="tg-pill">
+              <button onclick={() => { phoneSearch = !phoneSearch; if (phoneSearch) setTimeout(() => navSearchEl?.focus(), 30); else navQuery = ""; }} aria-label={$t("Search settings")} aria-pressed={phoneSearch}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+              </button>
+              <button class="more" onclick={() => (navMenu = !navMenu)} aria-label={$t("More")} aria-expanded={navMenu}>
+                <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+              </button>
+            </div>
             <button data-x class="close" onclick={closeAll} title={$t("Close")}>×</button>
             {#if navMenu}
               <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
@@ -1056,18 +1068,21 @@
             {/if}
           </div>
           <button class="me-card" onclick={() => { closeAll(); openProfile(); }} title={$t("Edit profile")}>
+            {#if $profile.banner_url}<span class="me-banner" style:background-image={`url("${$profile.banner_url}")`} aria-hidden="true"></span>{/if}
             <span class="me-ava" style:background={`linear-gradient(135deg, ${$profile.banner_a}, ${$profile.banner_b})`}>
               {#if $profile.avatar_url}<img src={$profile.avatar_url} alt="" />{:else}{($profile.display_name !== "You" ? $profile.display_name : $info?.username ?? "?").charAt(0).toUpperCase()}{/if}
             </span>
+            <!-- Phones: a camera on the avatar, like Telegram (opens the profile to change it). -->
+            <span class="me-cam phone-only" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></span>
             <span class="me-text">
               <span class="me-name">{$profile.display_name !== "You" ? $profile.display_name : ($info?.username ?? "")}</span>
-              <span class="me-sub">@{$info?.username ?? "—"}{$profile.phone ? ` · ${$profile.phone}` : ""}</span>
+              <span class="me-sub">{$profile.phone ? `${$profile.phone} • ` : ""}@{$info?.username ?? "—"}</span>
               <span class="me-online" class:off={!$info?.connected}>{$info?.connected ? ($myOnline === "invisible" ? "invisible" : $myOnline === "dnd" ? "do not disturb" : $myOnline) : "offline"}</span>
             </span>
           </button>
-          <label class="nav-search">
+          <label class="nav-search" class:open={phoneSearch || !!navQuery}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-            <input placeholder={$t("Search settings")} bind:value={navQuery} />
+            <input placeholder={$t("Search settings")} bind:value={navQuery} bind:this={navSearchEl} />
             {#if navQuery}<button onclick={() => (navQuery = "")} aria-label={$t("Clear")}>×</button>{/if}
           </label>
           {#snippet navItem(it: Item)}
@@ -1665,7 +1680,13 @@
             <div class="ava-ctl">
               <div class="ava-head"><b>{$t(l)}</b><span class="pill-tag">{v >= 50 ? $t("Circle") : v <= 0 ? $t("Square") : `${v}%`}</span></div>
               <div class="range"><input type="range" min="0" max="50" step="1" value={v}
-                oninput={(e) => settings.update((x) => ({ ...x, [k]: parseInt((e.target as HTMLInputElement).value) }))} /></div>
+                oninput={(e) => settings.update((x) => {
+                  // Groups and channels used to follow "People" until moved
+                  // themselves: each slider is on its own — the ones never
+                  // touched keep what they show now.
+                  const base = x.avatarRadius ?? 50;
+                  return { ...x, avatarRadius: base, avatarRadiusGroup: x.avatarRadiusGroup ?? base, avatarRadiusChannel: x.avatarRadiusChannel ?? base, [k]: parseInt((e.target as HTMLInputElement).value) };
+                })} /></div>
             </div>
           </div>
         {/each}
@@ -2158,13 +2179,32 @@
       {/if}
 
       {#if section === "music"}
-      <section class="group">
-        <div class="label">🎵 Navidrome</div>
-        <button class="toggle-row" onclick={() => settings.update((s) => ({ ...s, navidrome: !s.navidrome }))}>
-          <div class="tr-text"><div class="tr-title">{$t("Navidrome add-on")}</div>
-            <div class="tr-sub">{$t("Music from Navidrome (or any Subsonic server): a music tab, the player, track cards in chats and listening together.")}</div></div>
-          <span class="switch" class:on={!!$settings.navidrome}></span>
-        </button>
+      <!-- An add-on card, like a plugin in a store: what it is, what it gives,
+           what it needs — and one button to switch it on. -->
+      <section class="group addon" class:on={!!$settings.navidrome}>
+        <div class="ad-head">
+          <span class="ad-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></span>
+          <div class="ad-t">
+            <b>Navidrome</b>
+            <small>{$t("Add-on · music")} · {$settings.navidrome ? $t("Installed") : $t("Not installed")}</small>
+          </div>
+          <button class="ad-btn" class:off={!!$settings.navidrome} onclick={() => settings.update((s) => ({ ...s, navidrome: !s.navidrome }))}>
+            {$settings.navidrome ? $t("Turn off") : $t("Install")}
+          </button>
+        </div>
+        <p class="ad-desc">{$t("Your own music library inside Aquamarine. Navidrome is a free music server you run at home or on a VPS (any Subsonic server works too): Aquamarine plays from it like a streaming app — and lets you share it in chats.")}</p>
+        <ul class="ad-feats">
+          <li><span>🎧</span><div><b>{$t("Music tab and player")}</b><small>{$t("Search, new and frequent albums, playlists, favourites; queue, repeat, shuffle, system media keys.")}</small></div></li>
+          <li><span>💬</span><div><b>{$t("Tracks in chats")}</b><small>{$t("Send a track as a card with its cover and ▶ — whoever can reach the same Navidrome plays it right away.")}</small></div></li>
+          <li><span>👥</span><div><b>{$t("Listen together")}</b><small>{$t("Invite someone in a chat — their player follows yours.")}</small></div></li>
+          <li><span>🤖</span><div><b>{$t("@music bot")}</b><small>{$t("On servers with Navidrome: write it a song or an artist and get cards back.")}</small></div></li>
+          <li><span>🔒</span><div><b>{$t("Private")}</b><small>{$t("A server's Navidrome login never leaves the server; your own password is kept encrypted on this device.")}</small></div></li>
+        </ul>
+        <div class="ad-need">
+          <b>{$t("What it needs")}</b>
+          <span>{$t("Either the server you're on has Navidrome (its owner connects it in Aquamarine Server → Music), or you connect your own below.")}</span>
+          <a href="https://www.navidrome.org/docs/installation/" target="_blank" rel="noopener noreferrer">{$t("How to install Navidrome")} ›</a>
+        </div>
       </section>
       {#if $settings.navidrome}
       <section class="group">
@@ -2680,6 +2720,27 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     background: var(--bg-surface); color: inherit;
   }
   .me-card:hover { background: var(--bg-hover); }
+  .addon { display: flex; flex-direction: column; gap: 12px; }
+  .ad-head { display: flex; align-items: center; gap: 14px; }
+  .ad-ic { width: 56px; height: 56px; flex-shrink: 0; border-radius: calc(16px * var(--rk, 1)); display: grid; place-items: center; color: #fff;
+    background: linear-gradient(135deg, #ff2d55, #af52de); box-shadow: 0 10px 24px -12px rgba(255,45,85,.7); }
+  .ad-ic svg { width: 28px; height: 28px; }
+  .ad-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .ad-t b { font-size: 18px; font-weight: 800; }
+  .ad-t small { font-size: 12.5px; color: var(--fg-dim); }
+  .addon.on .ad-t small { color: var(--accent); }
+  .ad-btn { padding: 9px 18px; border: none; border-radius: calc(18px * var(--rk, 1)); background: var(--accent); color: #06070c; font: 700 14px var(--font-ui, inherit); cursor: pointer; }
+  .ad-btn.off { background: var(--bg-input); color: var(--fg-muted); border: 1px solid var(--border-strong); }
+  .ad-desc { margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--fg-muted); }
+  .ad-feats { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  .ad-feats li { display: flex; gap: 12px; align-items: flex-start; }
+  .ad-feats li > span { width: 32px; height: 32px; flex-shrink: 0; border-radius: calc(10px * var(--rk, 1)); display: grid; place-items: center; background: var(--bg-input); font-size: 16px; }
+  .ad-feats li div { display: flex; flex-direction: column; gap: 2px; }
+  .ad-feats b { font-size: 13.5px; }
+  .ad-feats small { font-size: 12px; color: var(--fg-dim); line-height: 1.4; }
+  .ad-need { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-input); font-size: 12.5px; color: var(--fg-muted); }
+  .ad-need b { color: var(--fg); font-size: 13px; }
+  .ad-need a { color: var(--accent); text-decoration: none; font-weight: 600; }
   .nav-search { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px; border-radius: calc(19px * var(--rk, 1)); background: var(--bg-surface); color: var(--fg-dim); }
   .nav-search svg { width: 17px; height: 17px; flex-shrink: 0; }
   .nav-search input { flex: 1; min-width: 0; border: none; outline: none; background: transparent; color: var(--fg); font: 14px var(--font-ui, inherit); }
@@ -2696,13 +2757,36 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .nm button { padding: 11px 12px; border: none; background: transparent; color: var(--fg); text-align: left; font: 500 14.5px var(--font-ui, inherit); border-radius: calc(9px * var(--rk, 1)); }
   .nm button:active { background: var(--bg-hover); }
   .nm .danger { color: var(--danger); }
-  /* Phones (Telegram): the profile on top in the middle over its colours,
-     subtitles under the rows. */
-  :global(html.phone) .me-card { flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 22px 12px 16px;
-    background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 22%, var(--bg-surface)), var(--bg-surface)); }
-  :global(html.phone) .me-card .me-ava { width: 96px; height: 96px; font-size: 36px; box-shadow: 0 10px 30px -12px rgba(0,0,0,.7); }
-  :global(html.phone) .me-card .me-text { align-items: center; }
-  :global(html.phone) .me-card .me-name { font-size: 21px; }
+  /* Phones (Telegram): a QR button and a search/⋮ pill on top; the profile
+     in the middle with no card under it — a big avatar with a camera, the
+     name, "phone • @name"; my banner faintly behind, if I have one. */
+  /* The avatar rises between the buttons (the card pulls up under the bar):
+     the bar lets taps through except on its buttons. */
+  :global(html.phone) .list-head { padding: 0 0 2px; z-index: 2; pointer-events: none; }
+  :global(html.phone) .list-head > * { pointer-events: auto; }
+  .tg-pill .more { margin-left: 0; width: 38px; height: 38px; color: var(--fg); }
+  .tg-round { width: 44px; height: 44px; border-radius: 50%; border: none; display: grid; place-items: center; background: var(--bg-surface); color: var(--fg); flex-shrink: 0; }
+  .tg-round svg { width: 22px; height: 22px; }
+  .tg-pill { display: flex; align-items: center; gap: 2px; margin-left: auto; padding: 0 4px; height: 44px; border-radius: 22px; background: var(--bg-surface); }
+  .tg-pill button { width: 38px; height: 38px; display: grid; place-items: center; border: none; border-radius: 50%; background: transparent; color: var(--fg); margin: 0; }
+  .tg-pill button svg { width: 21px; height: 21px; }
+  .tg-pill button[aria-pressed="true"] { color: var(--accent); }
+  :global(html.phone) .nav-search:not(.open) { display: none; }
+  :global(html.phone) .me-card { position: relative; flex-direction: column; align-items: center; text-align: center; gap: 6px; padding: 4px 12px 14px;
+    background: transparent; margin-top: -40px; overflow: visible; }
+  :global(html.phone) .me-card:hover, :global(html.phone) .me-card:active { background: transparent; }
+  .me-banner { position: absolute; inset: -60px -12px 30% -12px; z-index: 0; background-size: cover; background-position: center; opacity: .35; pointer-events: none;
+    -webkit-mask-image: linear-gradient(180deg, #000 30%, transparent); mask-image: linear-gradient(180deg, #000 30%, transparent); }
+  :global(html:not(.phone)) .me-banner { display: none; }
+  :global(html.phone) .me-card > :not(.me-banner) { position: relative; z-index: 1; }
+  :global(html.phone) .me-card .me-ava { width: 108px; height: 108px; font-size: 40px; box-shadow: 0 12px 34px -14px rgba(0,0,0,.8); }
+  .me-cam { position: absolute !important; top: 78px; left: calc(50% + 24px); width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; align-items: center; justify-content: center;
+    background: var(--accent); color: #06070c; border: 3px solid var(--bg-shell); }
+  .me-cam svg { width: 17px; height: 17px; }
+  :global(html.phone) .me-card .me-text { align-items: center; margin-top: 4px; }
+  :global(html.phone) .me-card .me-name { font-size: 26px; font-weight: 700; }
+  :global(html.phone) .me-card .me-sub { font-size: 14.5px; color: var(--fg-dim); }
+  :global(html.phone) .me-card .me-online { display: none; }
   :global(html.phone) .nav-sub { display: block; }
   :global(html.phone) .nav-lbl { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
   .me-ava {

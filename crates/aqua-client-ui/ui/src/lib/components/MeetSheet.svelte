@@ -46,7 +46,7 @@
   async function scan() {
     const text = await scanQr();
     if (!text) return;
-    if (!text.startsWith("aqua:meet?")) { err = tr("That's not a “meet nearby” code — ask them to open Meet nearby too."); return; }
+    if (!/^(aqua:meet\?|AQUA:M2:)/i.test(text)) { err = tr("That's not a “meet nearby” code — ask them to open Meet nearby too."); return; }
     busy = true; err = "";
     try { await acceptMeet(text); } catch (e) { err = String(e); } finally { busy = false; }
   }
@@ -59,7 +59,7 @@
       <header><h3>{$t("Meet nearby")}</h3><button data-x class="x" onclick={() => meetOpen.set(false)} aria-label={$t("Close")}>×</button></header>
       <p class="note">{$t("No internet and no pairing needed, like Briar. One of you shows the code, the other scans it: the code carries the keys and the Bluetooth address, so the devices connect directly over Bluetooth or the same Wi-Fi. Encrypted end to end, like any chat.")}</p>
       <div class="qr">
-        {#if code}<QrCode text={code} size={230} />{:else if !err}<div class="ph">…</div>{/if}
+        {#if code}<QrCode text={code} size={260} plain />{:else if !err}<div class="ph">…</div>{/if}
       </div>
       <p class="hint">{$t("The code works for 15 minutes.")}</p>
       <button class="btn ok" onclick={scan} disabled={busy}>{busy ? "…" : $t("Scan their code")}</button>

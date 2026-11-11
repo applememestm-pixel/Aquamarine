@@ -297,7 +297,7 @@ pub async fn fanout(app: &AppHandle, peer: &str, payload: &str, sync: bool) -> R
                 ok += 1;
             }
         }
-        return if ok > 0 { Ok(()) } else { Err("couldn't start the chat".into()) };
+        return if ok > 0 || opens_no_session(payload) { Ok(()) } else { Err("couldn't start the chat".into()) };
     }
     let Some(transport) = transport else {
         return fanout_offline(app, &peer, &me, payload, sync).await;
@@ -329,6 +329,13 @@ pub async fn fanout(app: &AppHandle, peer: &str, payload: &str, sync: bool) -> R
         if peer == me {
             return Ok(());
         }
+    }
+    // Presence, typing and read marks never open a session (send_inner):
+    // with none yet, nothing goes out and that's as meant — not an error for
+    // the UI (it ended up in crash reports as "no session yet" by the
+    // hundred), and no reason to fetch their device list again.
+    if ok == 0 && opens_no_session(payload) {
+        return Ok(());
     }
     if ok == 0 && peer != me {
         // Nothing went out. Their devices or their signed list may have just

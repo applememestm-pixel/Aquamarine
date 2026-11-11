@@ -100,16 +100,57 @@ fn parse_sums(text: &str, file: &str) -> Option<String> {
 ///
 /// GitHub's API allows 60 requests an hour per address without a login, and
 /// phones on mobile networks share one address with thousands of others: the
-/// API answered "403 Forbidden" forever. Then the same is read from the
-/// plain website (the releases feed and download links), which has no such
-/// limit.
+/// API answers "403 Forbidden" there for hours — and so do github.com's own
+/// pages (the releases feed). So next comes `updates.json` on the project
+/// site: GitHub Pages behind a CDN, no such limit; pages.yml writes it after
+/// every release run, with the same release objects the API gives plus the
+/// checksums already read. github.com pages are the last resort.
 #[tauri::command]
 pub async fn update_check(channel: String) -> Result<UpdateInfo, String> {
     let http = aqua_client_core::transport::http_client().map_err(|e| e.to_string())?;
-    match api_check(&http, &channel).await {
-        Ok(i) => Ok(i),
-        Err(api_err) => web_check(&http, &channel).await.map_err(|e| format!("{api_err}; {e}")),
+    let api_err = match api_check(&http, &channel).await {
+        Ok(i) => return Ok(i),
+        Err(e) => e,
+    };
+    let feed_err = match feed_check(&http, &channel).await {
+        Ok(i) => return Ok(i),
+        Err(e) => e,
+    };
+    web_check(&http, &channel).await.map_err(|e| format!("{api_err}; {feed_err}; {e}"))
+}
+
+/// Where pages.yml puts the feed: the site's own domain, then the
+/// github.io address (in case the domain is down or blocked).
+const FEEDS: &[&str] = &["https://aquamarinemessenger.pw/updates.json", "https://applememestm-pixel.github.io/Aquamarine/updates.json"];
+
+async fn feed_check(http: &reqwest::Client, channel: &str) -> Result<UpdateInfo, String> {
+    let mut last = String::from("site: no feed");
+    for url in FEEDS {
+        let r = match http.get(*url).header("Cache-Control", "no-cache").timeout(std::time::Duration::from_secs(20)).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                last = format!("site: {}", e.without_url());
+                continue;
+            }
+        };
+        if !r.status().is_success() {
+            last = format!("site: HTTP {}", r.status());
+            continue;
+        }
+        let feed: serde_json::Value = match r.json().await {
+            Ok(v) => v,
+            Err(e) => {
+                last = format!("site: {}", e.without_url());
+                continue;
+            }
+        };
+        let rel = &feed[if channel == "stable" { "stable" } else { "latest" }];
+        if !rel.is_object() {
+            return Err("no releases yet".into());
+        }
+        return release_info(http, rel, channel).await;
     }
+    Err(last)
 }
 
 /// Text of the first `<tag>…</tag>` in `s`.
@@ -206,6 +247,13 @@ async fn api_check(http: &reqwest::Client, channel: &str) -> Result<UpdateInfo, 
             .cloned()
             .ok_or("no releases yet")?
     };
+    release_info(&http, &rel, channel).await
+}
+
+/// UpdateInfo from a release object (the API's, or the feed's — which also
+/// carries `sums`, the text of SHA256SUMS.txt, and `builds`, BUILDS.json, so
+/// nothing more is fetched).
+async fn release_info(http: &reqwest::Client, rel: &serde_json::Value, channel: &str) -> Result<UpdateInfo, String> {
     let s = |k: &str| rel[k].as_str().unwrap_or_default().to_string();
     let (tag, name) = (s("tag_name"), s("name"));
     let assets = rel["assets"].as_array().cloned().unwrap_or_default();
@@ -222,7 +270,9 @@ async fn api_check(http: &reqwest::Client, channel: &str) -> Result<UpdateInfo, 
             if let Some(sums) = find("SHA256SUMS.txt") {
                 // ISO 8601 in UTC: string order is time order.
                 if sums["updated_at"].as_str().unwrap_or_default() >= updated.as_str() {
-                    if let Some(u) = sums["browser_download_url"].as_str() {
+                    if let Some(t) = rel["sums"].as_str() {
+                        sha256 = parse_sums(t, want);
+                    } else if let Some(u) = sums["browser_download_url"].as_str() {
                         if let Ok(r) = http.get(u).timeout(std::time::Duration::from_secs(20)).send().await {
                             if let Ok(t) = r.text().await {
                                 sha256 = parse_sums(&t, want);
@@ -231,7 +281,9 @@ async fn api_check(http: &reqwest::Client, channel: &str) -> Result<UpdateInfo, 
                     }
                 }
             }
-            if let Some(u) = find("BUILDS.json").and_then(|b| b["browser_download_url"].as_str().map(str::to_string)) {
+            if rel["builds"].is_object() {
+                built_from = rel["builds"][*want].as_str().map(|c| c.to_ascii_lowercase());
+            } else if let Some(u) = find("BUILDS.json").and_then(|b| b["browser_download_url"].as_str().map(str::to_string)) {
                 if let Ok(r) = http.get(u).timeout(std::time::Duration::from_secs(20)).send().await {
                     if let Ok(v) = r.json::<serde_json::Value>().await {
                         built_from = v[*want].as_str().map(|c| c.to_ascii_lowercase());

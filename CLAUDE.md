@@ -20,6 +20,7 @@
 - Менять: `Cargo.toml`, `crates/aqua-client-ui/{Cargo.toml,Cargo.lock,tauri.conf.json,ui/package.json,ui/package-lock.json}`, `crates/aqua-server-app/{Cargo.toml,Cargo.lock,tauri.conf.json}`, `Cargo.lock`, `README.md`, `docs/README.md`, `docs/api.md`, `site/index.html`, `.github/ISSUE_TEMPLATE/bug_report.yml` (`sed` старой версии).
 - Схема: `X.Y.0-N` → выпуск `X.Y.1` → `X.Y.11`, `X.Y.12`… Сравнение: `ui/src/lib/updates.ts::newer` (= `aqua-server-app/src/updates.rs::newer`). Пре-выпуск: `[workspace.metadata.aqua] prerelease = true`.
 - RPM не принимает «-»: для него `X.Y.0+N` (`release.yml`).
+- Android `versionCode` — только `tools/android_version_code.py` (порядок как у `newer`); правило Tauri делало 1.2.2 «ниже» 1.2.11, и обновление не ставилось.
 
 ## Где что
 - `crates/aqua-core` — протокол; `crates/aqua-client-core` — транспорт/хранилище.

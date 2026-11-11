@@ -284,12 +284,17 @@
 
   async function afterSignIn(u: string, withPhrase: boolean, skipBackup = false) {
     let restored = false;
+    // The restore failed (network, server): there may be a copy on the
+    // server that this device couldn't read. Then backups stay off here —
+    // turning them on would upload this empty device over that copy, and the
+    // chats in it would be gone for good.
+    let restoreError = "";
     if (!skipBackup) {
       try {
         const r = await api.backupRestore(serverUrl.trim(), "", password, "", withPhrase ? phrase.trim() : undefined);
         if (r.found && r.need_phrase) { step = 4; error = withPhrase ? tr("That recovery key doesn't open the backup") : null; signedAs = u; return; }
         if (r.found) { applyUiState(r.ui); restored = true; }
-      } catch (e) { console.warn("backup restore", e); }
+      } catch (e) { console.warn("backup restore", e); restoreError = String(e); }
     }
     try {
       const err = await connect(serverUrl.trim(), u);
@@ -297,9 +302,11 @@
       try { info.set(await api.completeRegistration(u, null)); } catch { /* non-fatal */ }
       await adoptMyCard(u);
       try { chats.set(await api.listChats()); } catch { /* non-fatal */ }
-      if (!restored) { try { await api.backupEnable(password); } catch { /* non-fatal */ } }
+      if (!restored && !restoreError) { try { await api.backupEnable(password); } catch { /* non-fatal */ } }
       void refreshBackup();
-      showToast(restored ? tr("Signed in as @{u} — chats restored from your backup", { u }) : tr("Signed in as @{u}", { u }));
+      showToast(restored ? tr("Signed in as @{u} — chats restored from your backup", { u })
+        : restoreError ? tr("Signed in as @{u}, but the chats backup couldn't be read: {e}. Sign out and sign in again to retry — until then this device doesn't touch the backup.", { u, e: restoreError })
+        : tr("Signed in as @{u}", { u }));
       closeRegistration();
       if (restored) setTimeout(() => location.reload(), 600);
     } catch (e) {

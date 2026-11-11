@@ -1,6 +1,6 @@
 /**
  * How rows in the chat list look (Settings → Appearance → Chat list):
- * two lines, or three like Telegram — a bigger avatar, the sender of a
+ * two lines, or three like Telegram — same row height, the sender of a
  * group's last message on a line of its own, and two lines of the text.
  */
 import { writable } from "svelte/store";

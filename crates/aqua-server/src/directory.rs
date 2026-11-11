@@ -160,6 +160,10 @@ pub struct Security {
     /// The last time step whose code was used (a code works once).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub last: u64,
+    /// How many 30-second steps the account's authenticator runs ahead of
+    /// (or behind) this relay's clock — see [`crate::totp::verify_near`].
+    #[serde(default, skip_serializing_if = "is_zero_i64")]
+    pub drift: i64,
     /// Linked Telegram account (user id): confirming a sign-in in Telegram
     /// is a second factor too (1.2.0-4, `tglogin.rs`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -178,6 +182,10 @@ impl Security {
 }
 
 fn is_zero(v: &u64) -> bool {
+    *v == 0
+}
+
+fn is_zero_i64(v: &i64) -> bool {
     *v == 0
 }
 
@@ -1653,9 +1661,10 @@ impl Directory {
             }
             return false;
         }
-        match crate::totp::verify(&sec.totp, code, sec.last) {
+        match crate::totp::verify_near(&sec.totp, code, sec.last, sec.drift, 2) {
             Some(step) => {
                 sec.last = step;
+                sec.drift = crate::totp::drift_of(step);
                 true
             }
             None => false,
@@ -1722,10 +1731,13 @@ impl Directory {
         if sec.pending.is_empty() {
             return Err(DirError::BadProfile("start the setup first".into()));
         }
-        let Some(step) = crate::totp::verify(&sec.pending, code, 0) else { return Err(DirError::BadTotp) };
+        // The first code may come from a phone whose clock differs from
+        // this relay's by minutes: look ±5 minutes and remember the gap.
+        let Some(step) = crate::totp::verify_near(&sec.pending, code, 0, 0, 10) else { return Err(DirError::BadTotp) };
         let (shown, stored) = crate::totp::new_backup_codes();
         sec.totp = std::mem::take(&mut sec.pending);
         sec.last = step;
+        sec.drift = crate::totp::drift_of(step);
         sec.backup = stored;
         Self::put_security(&db, username, &sec)?;
         Ok(shown)

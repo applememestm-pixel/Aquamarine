@@ -7,7 +7,14 @@ name: pages
 on:
   push:
     branches: [main]
-    paths: ["site/**", "docs/**", "README.md", ".github/workflows/pages.yml"]
+    paths: ["site/**", "docs/**", "README.md", ".github/workflows/pages.yml", "tools/updates_feed.py"]
+  # updates.json (below) follows every release run — and once in a while, in
+  # case a release was edited by hand.
+  workflow_run:
+    workflows: [release, release retry]
+    types: [completed]
+  schedule:
+    - cron: "17 */6 * * *"
   workflow_dispatch:
 
 permissions:
@@ -33,6 +40,12 @@ jobs:
           mkdir -p site/docs
           cp docs/*.md site/docs/
           cp README.md site/docs/passport.md
+      # What the apps read when GitHub's API answers 403 (shared mobile
+      # addresses): tools/updates_feed.py.
+      - name: Add the update feed
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 tools/updates_feed.py "$GITHUB_REPOSITORY" site/updates.json
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site

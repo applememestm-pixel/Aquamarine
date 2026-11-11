@@ -200,28 +200,60 @@ export function myPublicName(p: Profile = get(profile)): string {
 
 /** Signed in on a new device: take my name, bio and colours from the card
  *  already on the server instead of publishing the "You" placeholder. */
-export async function adoptMyCard(username: string): Promise<void> {
+/** Take my card from the server: the pictures always when the server has
+ *  newer ones (they live there — uploaded from whichever device), the name,
+ *  bio and look when the card is at least as new as my last edit here (`pt`).
+ *  Returns whether the card won (then there's nothing to publish). */
+export async function adoptMyCard(username: string): Promise<boolean> {
   try {
     const card = await api.fetchDirectoryProfile(username);
-    if (!card) return;
+    if (!card) return false;
     const p = get(profile);
     const x = (card.extra ?? {}) as Record<string, unknown>;
-    const patch: Partial<Profile> = {};
-    const fresh = !p.display_name || p.display_name === "You";
-    if (fresh && card.display_name && card.display_name !== "You") patch.display_name = card.display_name;
-    if (fresh && card.about && (!p.about || p.about === "An Aquamarine user.")) patch.about = card.about;
-    if (fresh && card.phone && !p.phone) patch.phone = card.phone;
-    if (fresh && typeof x.birthday === "string" && !p.birthday) patch.birthday = x.birthday;
-    if (fresh && typeof x.banner_a === "string") patch.banner_a = x.banner_a;
-    if (fresh && typeof x.banner_b === "string") patch.banner_b = x.banner_b;
-    if (fresh && typeof x.card === "string") patch.card = x.card;
-    if (fresh && typeof x.pattern === "string") patch.pattern = x.pattern;
-    if (fresh && typeof x.nc === "string") patch.name_color = x.nc;
-    if (fresh && typeof x.ci === "number") patch.card_i = x.ci;
-    if (fresh && typeof x.cg === "number") patch.card_g = x.cg;
-    if (fresh && typeof x.es === "string") patch.estatus = x.es;
-    if (Object.keys(patch).length) updateProfile(patch);
-  } catch { /* offline: keep what we have */ }
+    const media: Partial<Profile> = {};
+    for (const kind of ["avatar", "banner"] as const) {
+      const ver = (kind === "avatar" ? card.avatar_ver : card.banner_ver) ?? 0;
+      const have = (kind === "avatar" ? p.avatar_ver : p.banner_ver) ?? 0;
+      // A picture still waiting to go up (data: URL, no version) stays.
+      const pendingHere = (kind === "avatar" ? p.avatar_url : p.banner_url)?.startsWith("data:") && !have;
+      if (ver > 0 && ver !== have && !pendingHere) {
+        const path = await api.profileMediaPath(username, kind, ver).catch(() => null);
+        if (path) {
+          const url = assetUrl(path) + `?v=${ver}`;
+          if (kind === "avatar") { media.avatar_ver = ver; media.avatar_url = url; } else { media.banner_ver = ver; media.banner_url = url; }
+        }
+      }
+    }
+    if (Object.keys(media).length) updateProfile(media, true);
+    const serverAt = typeof x.pt === "number" ? x.pt : 0;
+    const blank = !p.display_name || p.display_name === "You";
+    if (!(blank || (p.edited ?? 0) <= serverAt)) return false;
+    const patch: Partial<Profile> = { edited: serverAt };
+    if (card.display_name && card.display_name !== "You") patch.display_name = card.display_name;
+    // Bio, phone and birthday may be private (off the card): only a value on it counts.
+    if (card.about) patch.about = card.about;
+    if (card.phone) patch.phone = card.phone;
+    const str = (k: string) => (typeof x[k] === "string" ? (x[k] as string) : undefined);
+    const num = (k: string) => (typeof x[k] === "number" ? (x[k] as number) : undefined);
+    if (str("birthday")) patch.birthday = str("birthday");
+    if (str("banner_a")) patch.banner_a = str("banner_a");
+    if (str("banner_b")) patch.banner_b = str("banner_b");
+    if (str("status") !== undefined) patch.status = str("status");
+    if (str("pronouns") !== undefined) patch.pronouns = str("pronouns");
+    if (str("favourite_music") !== undefined) patch.favourite_music = str("favourite_music");
+    if (str("avatar_emoji") !== undefined) patch.avatar_emoji = str("avatar_emoji");
+    if (str("card") !== undefined) patch.card = str("card");
+    if (str("pattern") !== undefined) patch.pattern = str("pattern");
+    if (str("nc") !== undefined) patch.name_color = str("nc");
+    if (num("ci") !== undefined) patch.card_i = num("ci");
+    if (num("cg") !== undefined) patch.card_g = num("cg");
+    patch.estatus = str("es") ?? "";
+    if (Array.isArray(x.links)) patch.links = x.links as Profile["links"];
+    if (Array.isArray(x.games)) patch.games = x.games as string[];
+    if (str("game_note") !== undefined) patch.game_note = str("game_note");
+    updateProfile(patch, true);
+    return true;
+  } catch { return false; /* offline: keep what we have */ }
 }
 
 /** Push our card (name, bio, extras) to the server and tell peers. */
@@ -231,7 +263,7 @@ export async function publishMyProfile(): Promise<void> {
     myPublicName(p),
     isPublic("bio") ? p.about : "",
     isPublic("phone") ? p.phone : "",
-    myExtra(p),
+    { ...myExtra(p), pt: p.edited ?? 0 },
   );
   updateProfile({ pv: Date.now() });
   broadcastPresence();
@@ -359,7 +391,12 @@ export async function syncMyProfileOnConnect(): Promise<void> {
       const d = dataUrlToBytes(p.avatar_url);
       if (d) await setMyImageBytes("avatar", d.mime, d.bytes);
     }
-    await publishMyProfile();
+    // A newer card on the server (set up on another device, or this one is
+    // new): take it rather than publish this device's older one over it.
+    const me = get(info)?.username;
+    const adopted = me ? await adoptMyCard(me) : false;
+    if (!adopted) await publishMyProfile();
+    else broadcastPresence();
     await syncPhotoPrivacy();
   } catch (e) {
     console.warn("profile sync", e);

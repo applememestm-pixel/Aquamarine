@@ -43,10 +43,13 @@ export function parseQr(text: string): QrPayload | null {
   return null;
 }
 
-/** The modules of a QR code (true = dark), error correction "Q" (the avatar in the middle hides some). */
-export function qrMatrix(text: string): boolean[][] {
-  const q = qrcode(0, "Q");
-  q.addData(text, "Byte");
+/** The modules of a QR code (true = dark). Error correction "Q" when an
+ *  avatar covers the middle; long codes (meet nearby) use "L" and, when the
+ *  text allows, the denser alphanumeric mode — fewer, bigger squares that a
+ *  phone camera reads from a screen. */
+export function qrMatrix(text: string, ecc: "L" | "M" | "Q" | "H" = "Q"): boolean[][] {
+  const q = qrcode(0, ecc);
+  q.addData(text, /^[0-9A-Z $%*+\-./:]+$/.test(text) ? "Alphanumeric" : "Byte");
   q.make();
   const n = q.getModuleCount();
   return Array.from({ length: n }, (_, r) => Array.from({ length: n }, (_, c) => q.isDark(r, c)));

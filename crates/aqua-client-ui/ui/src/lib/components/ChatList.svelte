@@ -25,7 +25,7 @@
   import { avatars, peerCards, clans } from "../people";
   import ClanTag from "./ClanTag.svelte";
   import OfficialMark from "./OfficialMark.svelte";
-  import { keepOnScreen } from "../actions";
+  import { keepOnScreen, scrollX } from "../actions";
   import { archived, mutedChats, setArchived, setMuted, pinnedChats, togglePin, movePin, MAX_PINS, markedUnread, setMarkedUnread } from "../chatPrefs";
   import { folders as allFolders, folderHas, updateFolder, folderTags, FOLDER_COLORS, type Folder, type ChatFacts } from "../folders";
   import { parseJoinLink } from "../groupRules";
@@ -56,6 +56,38 @@
   function fabPick(k: "chat" | "group" | "supergroup" | "channel") {
     fabOpen = false;
     if (k === "chat") openNewChatDialog(); else openNewGroup(k);
+  }
+  /** The unfolded pencil: one panel of icons with a slider, like the tab
+   *  bar's. Touch an icon — the slider goes there and its name shows beside
+   *  it; touch it again to make one. Or slide the finger along the panel and
+   *  let go on the one you want. */
+  const FAB_ITEMS = [["channel", "New channel"], ["supergroup", "New server"], ["group", "New group"], ["chat", "New chat"]] as const;
+  const FAB_CELL = 46;
+  let fabSel = $state<number | null>(null);
+  let fabDrag: { id: number; y0: number; moved: boolean; before: number | null } | null = null;
+  $effect(() => { if (!fabOpen) fabSel = null; });
+  function fabIndexAt(el: HTMLElement, y: number) {
+    const r = el.getBoundingClientRect();
+    return Math.max(0, Math.min(FAB_ITEMS.length - 1, Math.floor((y - r.top - 5) / FAB_CELL)));
+  }
+  function fabDown(e: PointerEvent) {
+    const el = e.currentTarget as HTMLElement;
+    try { el.setPointerCapture(e.pointerId); } catch { /* fine */ }
+    fabDrag = { id: e.pointerId, y0: e.clientY, moved: false, before: fabSel };
+    fabSel = fabIndexAt(el, e.clientY);
+  }
+  function fabMove(e: PointerEvent) {
+    if (!fabDrag || fabDrag.id !== e.pointerId) return;
+    if (Math.abs(e.clientY - fabDrag.y0) > 8) fabDrag.moved = true;
+    const i = fabIndexAt(e.currentTarget as HTMLElement, e.clientY);
+    if (i !== fabSel) { fabSel = i; try { navigator.vibrate?.(8); } catch { /* no vibration */ } }
+  }
+  function fabUp(e: PointerEvent) {
+    const d = fabDrag;
+    fabDrag = null;
+    if (!d || d.id !== e.pointerId || fabSel == null) return;
+    // Slid onto it, or touched the one already chosen: make it.
+    if (d.moved || d.before === fabSel) fabPick(FAB_ITEMS[fabSel][0]);
   }
   import { contacts, saveContact, displayName } from "../contacts";
   import { chatLines } from "../listLook";
@@ -260,6 +292,7 @@
   let groupPick = $state<{ x: number; y: number; id: string } | null>(null);
   function newGroupFor(id: string) {
     groupPick = null;
+    ctx = null;
     askInput({
       title: tr("New chat group"),
       description: tr("Chats of a group can be shown as one row of the list."),
@@ -817,14 +850,14 @@
   </div>
 
   {#if searchMode}
-    <div class="folder-strip search-tabs" role="tablist">
+    <div class="folder-strip search-tabs" role="tablist" use:scrollX>
       {#each [["all", "All"], ["people", "Chats"], ["groups", "Groups"], ["channels", "Channels"]] as [id, label] (id)}
         <button class="folder-tab" class:active={searchTab === id} role="tab" aria-selected={searchTab === id}
           onpointerdown={(e) => e.preventDefault()} onclick={() => (searchTab = id as SearchTab)}>{$t(label)}</button>
       {/each}
     </div>
   {:else if $folders.length > 0}
-    <div class="folder-strip">
+    <div class="folder-strip" use:scrollX>
       <button class="folder-tab" class:active={$activeFolder === "all"} onclick={() => activeFolder.set("all")} oncontextmenu={(e) => openFolderMenu(e, "all")}>{$t("All")}</button>
       {#each $folders as f (f.id)}
         {@const unread = $visibleChats.filter((c) => (c.unread > 0) && !$mutedChats.has(c.id) && folderHas(f, factsOf(c))).length}
@@ -854,7 +887,7 @@
   <div class="chats" class:home={searchHome}>
     {#if showStories}
       <!-- Stories (Telegram): scrolls away with the list; pull down to see it again. -->
-      <div class="stories" role="list" aria-label={$t("Stories")}>
+      <div class="stories" role="list" aria-label={$t("Stories")} use:scrollX>
         <div class="st-item" role="listitem">
           <button class="st-ava" class:ring={$myLiveStories.length > 0} onclick={tapMine} aria-label={$t("My story")}>
             <span class="st-pic" style:background-image={$profile.avatar_url ? `url("${$profile.avatar_url}")` : undefined}>{$profile.avatar_url ? "" : meLetter}</span>
@@ -884,7 +917,7 @@
       <div class="search-home" role="presentation" onpointerdown={(e) => e.preventDefault()}>
         {#if frequent.length}
           <div class="sh-title">{$t("Frequent contacts")}</div>
-          <div class="sh-freq">
+          <div class="sh-freq" use:scrollX>
             {#each frequent as c (c.id)}
               <button class="sh-person" onclick={() => openFromSearch(c.id)}>
                 <span class="avatar sz-44" style="--gradient: {c.gradient}">{c.letter}{#if $avatars[c.id]}<img class="ava-img" src={$avatars[c.id]} alt="" loading="lazy" />{/if}</span>
@@ -1099,17 +1132,24 @@
     {/if}
     <div class="fab-wrap" class:open={fabOpen}>
       {#if fabOpen}
-        <div class="fab-items" role="menu">
-          {#each [["channel", "New channel"], ["supergroup", "New server"], ["group", "New group"], ["chat", "New chat"]] as [k, label], i (k)}
-            <button class="fab-item" role="menuitem" style:--i={3 - i} onclick={() => fabPick(k as "chat" | "group" | "supergroup" | "channel")}>
-              <span>{$t(label)}</span>
-              <i>{#if k === "chat"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>{:else if k === "group"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 19c.6-3.2 3-5 6-5s5.4 1.8 6 5"/><path d="M16 5.2a3 3 0 0 1 0 5.6M18 14.2c1.6.6 2.7 2.2 3 4.8"/></svg>{:else if k === "supergroup"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M8 9h8M8 13h5M3 8h0"/></svg>{:else}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v4a1 1 0 0 0 1 1h3l6 4V5L7 9H4a1 1 0 0 0-1 1z"/><path d="M17 8.5a5 5 0 0 1 0 7"/></svg>{/if}</i>
-            </button>
-          {/each}
+        <div class="fab-panel">
+          {#if fabSel != null}
+            {#key fabSel}<span class="fab-label" style:top="{5 + fabSel * FAB_CELL + FAB_CELL / 2}px">{$t(FAB_ITEMS[fabSel][1])}</span>{/key}
+          {/if}
+          <div class="fab-items" role="menu" tabindex="-1" onpointerdown={fabDown} onpointermove={fabMove} onpointerup={fabUp} onpointercancel={() => (fabDrag = null)}>
+            <span class="fab-thumb" class:on={fabSel != null} style:transform="translateY({(fabSel ?? 0) * FAB_CELL}px)"></span>
+            {#each FAB_ITEMS as [k, label], i (k)}
+              <!-- Touch is handled by the panel; a click with detail 0 is the keyboard. -->
+              <button class="fab-item" class:sel={fabSel === i} role="menuitem" aria-label={$t(label)} style:--i={FAB_ITEMS.length - 1 - i}
+                onclick={(e) => { if (e.detail === 0) fabPick(k); }}>
+                {#if k === "chat"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>{:else if k === "group"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 19c.6-3.2 3-5 6-5s5.4 1.8 6 5"/><path d="M16 5.2a3 3 0 0 1 0 5.6M18 14.2c1.6.6 2.7 2.2 3 4.8"/></svg>{:else if k === "supergroup"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M8 9h8M8 13h5M3 8h0"/></svg>{:else}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v4a1 1 0 0 0 1 1h3l6 4V5L7 9H4a1 1 0 0 0-1 1z"/><path d="M17 8.5a5 5 0 0 1 0 7"/></svg>{/if}
+              </button>
+            {/each}
+          </div>
         </div>
       {/if}
       <button class="fab" onclick={() => (fabOpen = !fabOpen)} aria-label={$t("New chat, group or channel")} aria-expanded={fabOpen}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path class="fab-line" d="M12 20h9"/><path class="fab-pen" d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
       </button>
     </div>
   {/if}
@@ -1118,7 +1158,7 @@
     {@const cid = ctx.id}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div class="ctx-scrim" onclick={() => (ctx = null)} oncontextmenu={(e) => { e.preventDefault(); ctx = null; }}></div>
+    <div class="ctx-scrim" onclick={() => { ctx = null; groupPick = null; }} oncontextmenu={(e) => { e.preventDefault(); ctx = null; groupPick = null; }}></div>
     <div class="chat-ctx" use:keepOnScreen style:left="{ctx.x}px" style:top="{ctx.y}px" role="menu">
       <button onclick={() => pinChat(cid)}>{$t($pinnedChats.includes(cid) ? "Unpin" : "Pin to top")}</button>
       {#if $pinnedChats.includes(cid) && $pinnedChats.length > 1}
@@ -1133,7 +1173,7 @@
         <button onclick={() => { ctx = null; openGroupId.set(cg.id); }}>{$t("Open group “{name}”", { name: cg.name })}</button>
         <button onclick={() => { removeFromGroup(cid); ctx = null; }}>{$t("Remove from the group")}</button>
       {:else}
-        <button onclick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); groupPick = { x: r.right + 4, y: r.top, id: cid }; ctx = null; }}>{$t("Add to a group…")} ›</button>
+        <button onclick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); groupPick = groupPick ? null : { x: r.right + 4, y: r.top, id: cid }; }}>{$t("Add to a group…")} ›</button>
       {/if}
       <button onclick={() => { setMuted(cid); ctx = null; }}>{$t($mutedChats.has(cid) ? "Unmute" : "Mute notifications")}</button>
       <button onclick={() => { void selectChat(cid); ctx = null; }}>{$t("Open")}</button>
@@ -1155,10 +1195,10 @@
     {@const gp = groupPick}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div class="ctx-scrim" onclick={() => (groupPick = null)} oncontextmenu={(e) => { e.preventDefault(); groupPick = null; }}></div>
-    <div class="chat-ctx" use:keepOnScreen style:left="{gp.x}px" style:top="{gp.y}px" role="menu">
+    {#if !ctx}<div class="ctx-scrim" onclick={() => (groupPick = null)} oncontextmenu={(e) => { e.preventDefault(); groupPick = null; }}></div>{/if}
+    <div class="chat-ctx sub" use:keepOnScreen style:left="{gp.x}px" style:top="{gp.y}px" role="menu">
       {#each $chatGroups as cg (cg.id)}
-        <button onclick={() => { addToGroup(cg.id, gp.id); groupPick = null; showToast(tr("Added to “{name}”", { name: cg.name })); }}>{cg.emoji ?? "▣"} {cg.name} <span class="ctx-kbd">{cg.chatIds.length}</span></button>
+        <button onclick={() => { addToGroup(cg.id, gp.id); groupPick = null; ctx = null; showToast(tr("Added to “{name}”", { name: cg.name })); }}>{cg.emoji ?? "▣"} {cg.name} <span class="ctx-kbd">{cg.chatIds.length}</span></button>
       {/each}
       <button onclick={() => newGroupFor(gp.id)}>＋ {$t("New group…")}</button>
     </div>
@@ -1321,19 +1361,20 @@
   .lk-ic :global(svg) { width: 18px; height: 18px; }
   /* Selection (hold a row on a phone): Telegram's bar over the header. */
   .sel-bar { position: absolute; top: 0; left: 0; right: 0; z-index: 30; height: 58px; display: flex; align-items: center; gap: 4px;
-    padding: 0 8px; background: var(--bg-panel, var(--bg)); border-bottom: 1px solid var(--border); }
+    /* Solid: it covers the title row (the colour it used isn't a theme colour — the title showed through). */
+    padding: 0 8px; background: var(--bg-list); border-bottom: 1px solid var(--border); box-shadow: 0 6px 16px -10px rgba(0,0,0,.6); }
   .sel-n { flex: 1; font-size: 18px; font-weight: 700; color: var(--fg); padding-left: 6px; }
   .sel-btn { width: 44px; height: 44px; display: grid; place-items: center; border: none; background: transparent; color: var(--fg);
     border-radius: calc(12px * var(--rk, 1)); cursor: pointer; }
   .sel-btn:active { background: color-mix(in srgb, var(--fg) 10%, transparent); }
   .sel-btn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   .sel-more { position: absolute; top: 54px; right: 8px; min-width: 190px; display: flex; flex-direction: column; padding: 6px;
-    background: var(--bg-elev, var(--bg-panel)); border: 1px solid var(--border); border-radius: calc(14px * var(--rk, 1)); box-shadow: 0 12px 32px rgba(0,0,0,.35); }
+    background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: calc(14px * var(--rk, 1)); box-shadow: 0 12px 32px rgba(0,0,0,.35); }
   .sel-more button { text-align: left; padding: 11px 12px; border: none; background: transparent; color: var(--fg); font-size: 15px; border-radius: calc(9px * var(--rk, 1)); }
   .sel-more button:active { background: color-mix(in srgb, var(--fg) 10%, transparent); }
   .chat-item.selected { background: color-mix(in srgb, var(--accent) 16%, transparent); }
   .chat-item.selected .avatar::after { content: "✓"; position: absolute; right: -2px; bottom: -2px; width: 20px; height: 20px; border-radius: 50%;
-    display: grid; place-items: center; font-size: 12px; font-weight: 800; color: #fff; background: var(--accent); border: 2px solid var(--bg-panel, var(--bg)); }
+    display: grid; place-items: center; font-size: 12px; font-weight: 800; color: #fff; background: var(--accent); border: 2px solid var(--bg-list); }
   .lk-blur { filter: blur(3px); letter-spacing: 2px; user-select: none; }
   .lk-prev { color: var(--fg-dim); font-style: italic; }
   .ctx-kbd { float: right; margin-left: 12px; font-size: 11px; color: var(--fg-dim); }
@@ -1376,6 +1417,7 @@
   .jc-btn { border: none; border-radius: calc(8px * var(--rk, 1)); padding: 7px 11px; background: var(--accent); color: #06070C; font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; white-space: nowrap; }
   .jc-done { font-size: 12px; color: var(--fg-muted); font-weight: 700; }
   .ctx-scrim { position: fixed; inset: 0; z-index: 70; }
+  .chat-ctx.sub { z-index: 72; }
   /* chat groups */
   .gstack { position: relative; width: 44px; height: 44px; flex-shrink: 0; }
   .gmini { position: absolute; width: 28px; height: 28px; font-size: 11px; border: 2px solid var(--bg-list);
@@ -1717,16 +1759,27 @@
     transition: transform .25s cubic-bezier(.3,1.4,.5,1), border-radius .25s ease; }
   .fab svg { width: 24px; height: 24px; transition: transform .25s ease; }
   .fab:active { transform: scale(.92); }
-  .fab-wrap.open .fab svg { transform: rotate(-45deg); }
+  /* Open: the pencil turns, the line it writes on stays put. */
+  .fab .fab-pen { transform-box: fill-box; transform-origin: center; transition: transform .25s cubic-bezier(.3,1.3,.5,1); }
+  .fab-wrap.open .fab .fab-pen { transform: rotate(-45deg); }
   .fab-veil { position: fixed; inset: 0; z-index: 59; background: rgba(0,0,0,.35); animation: fab-veil .2s ease; }
   @keyframes fab-veil { from { opacity: 0; } }
-  .fab-items { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
-  .fab-item { display: flex; align-items: center; gap: 10px; border: none; background: transparent; padding: 0; color: var(--fg); font: 600 14.5px var(--font-ui, inherit);
-    animation: fab-in .26s cubic-bezier(.22,1.2,.36,1) both; animation-delay: calc(var(--i) * 35ms); }
-  .fab-item span { padding: 7px 12px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-surface); border: 1px solid var(--border-strong); box-shadow: 0 8px 20px -10px rgba(0,0,0,.7); }
-  .fab-item i { width: 46px; height: 46px; border-radius: calc(15px * var(--rk, 1)); display: grid; place-items: center; background: var(--bg-surface-2); color: var(--accent); border: 1px solid var(--border-strong); margin-right: 5px; }
-  .fab-item i svg { width: 22px; height: 22px; }
-  .fab-item:active i { transform: scale(.92); }
+  /* One panel with a slider, like the tab bar's (see fabDown). */
+  .fab-panel { position: relative; margin-right: 4px; animation: fab-in .26s cubic-bezier(.22,1.2,.36,1) both; transform-origin: bottom center; }
+  .fab-items { position: relative; display: flex; flex-direction: column; padding: 5px; border-radius: calc(26px * var(--rk, 1));
+    background: var(--bg-surface); border: 1px solid var(--border-strong); box-shadow: 0 14px 34px -14px rgba(0,0,0,.75); touch-action: none; user-select: none; -webkit-user-select: none; }
+  .fab-thumb { position: absolute; left: 5px; top: 5px; width: 46px; height: 46px; border-radius: calc(21px * var(--rk, 1));
+    background: color-mix(in srgb, var(--accent) 18%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    opacity: 0; transition: transform .24s cubic-bezier(.3,1.3,.5,1), opacity .15s ease; pointer-events: none; }
+  .fab-thumb.on { opacity: 1; }
+  .fab-item { position: relative; width: 46px; height: 46px; display: grid; place-items: center; border: none; background: transparent; padding: 0; color: var(--fg-muted);
+    transition: color .15s ease, transform .15s ease; animation: fab-in .26s cubic-bezier(.22,1.2,.36,1) both; animation-delay: calc(var(--i) * 30ms); }
+  .fab-item svg { width: 22px; height: 22px; }
+  .fab-item.sel { color: var(--accent); transform: scale(1.08); }
+  .fab-label { position: absolute; right: calc(100% + 10px); transform: translateY(-50%); white-space: nowrap; padding: 7px 12px;
+    border-radius: calc(12px * var(--rk, 1)); background: var(--bg-surface); border: 1px solid var(--border-strong); box-shadow: 0 8px 20px -10px rgba(0,0,0,.7);
+    color: var(--fg); font: 600 14.5px var(--font-ui, inherit); pointer-events: none; animation: fab-label .18s ease both; }
+  @keyframes fab-label { from { opacity: 0; transform: translate(8px, -50%); } }
   @keyframes fab-in { from { opacity: 0; transform: translateY(14px) scale(.85); } }
   .bot-open { flex-shrink: 0; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 3px 11px; border-radius: calc(12px * var(--rk, 1));
     background: var(--accent); color: #06070c; font-size: 12px; font-weight: 700; cursor: pointer; transition: transform .12s ease, filter .12s ease; }
@@ -1813,12 +1866,14 @@
   .type-ic { display: inline-grid; place-items: center; width: 15px; height: 15px; flex-shrink: 0; color: var(--fg-muted); margin-right: 1px; }
   .type-ic svg { width: 15px; height: 15px; }
   .chat-item.active .type-ic { color: currentColor; }
-  /* Three lines (Settings → Appearance → Chat list): a bigger avatar, the
-     sender on a line of its own, two lines of text. */
-  .list.lines3 .chat-item { grid-template-columns: 54px 1fr; padding-top: 9px; padding-bottom: 9px; }
-  .list.lines3 .chat-item .avatar.sz-44 { width: 54px; height: 54px; font-size: 20px; }
-  .list.lines3 .chat-row-2 { align-items: flex-start; }
-  .list.lines3 .chat-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; white-space: normal; line-height: 1.32; overflow-wrap: anywhere; }
+  /* Three lines (Settings → Appearance → Chat list): the sender on a line of
+     its own, two lines of text — in the same row height and avatar size as
+     two lines: the lines get tighter, the row doesn't grow. */
+  .list.lines3 .chat-item { padding-top: 8px; padding-bottom: 8px; }
+  .list.lines3 .chat-name { line-height: 1.2; }
+  .list.lines3 .chat-row-2 { align-items: flex-start; margin-top: 1px; }
+  .list.lines3 .chat-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; white-space: normal;
+    font-size: calc(12.5px * var(--font-scale, 1)); line-height: 1.18; overflow-wrap: anywhere; }
   .list.lines3 .chat-preview .from-prefix { display: block; max-width: none; white-space: nowrap; }
   .list.lines3 .chat-preview .from-prefix i { display: none; }
   .list.lines3 .chat-preview:has(.from-prefix) { -webkit-line-clamp: 2; }
@@ -2003,8 +2058,7 @@
     .chats { padding: 4px 6px calc(68px + env(safe-area-inset-bottom, 0px)); }
     .chat-item { grid-template-columns: 48px 1fr; gap: 12px; padding: 7px 10px; border-radius: calc(16px * var(--rk, 1)); }
     .chat-item .avatar.sz-44 { width: 48px; height: 48px; font-size: 18px; }
-    .list.lines3 .chat-item { grid-template-columns: 58px 1fr; padding-top: 8px; padding-bottom: 8px; }
-    .list.lines3 .chat-item .avatar.sz-44 { width: 58px; height: 58px; font-size: 21px; }
+    .list.lines3 .chat-item { padding-top: 7px; padding-bottom: 7px; }
     .chat-item.active { background: transparent; width: 100%; margin-right: 0; border-radius: calc(16px * var(--rk, 1)); }
     .chat-item.active::before, .chat-item.active::after { display: none; }
     .chat-item.active .chat-time { color: var(--fg-dim); }
