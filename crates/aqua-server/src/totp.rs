@@ -74,21 +74,34 @@ pub fn now_step() -> u64 {
 /// drift). Returns the matching step, which must be newer than `last` — a
 /// code works once.
 pub fn verify(secret_b32: &str, code: &str, last: u64) -> Option<u64> {
+    verify_near(secret_b32, code, last, 0, 1)
+}
+
+/// The same around `now + drift` steps, `radius` steps either way. `drift`
+/// is how far this account's phone runs from this relay's clock (learnt when
+/// two-step codes are turned on, and followed at each sign-in): a relay on a
+/// home PC whose clock is two minutes off used to turn every right code away.
+pub fn verify_near(secret_b32: &str, code: &str, last: u64, drift: i64, radius: u64) -> Option<u64> {
     let secret = unbase32(secret_b32)?;
     let code: String = code.chars().filter(|c| c.is_ascii_digit()).collect();
     if code.len() != DIGITS as usize {
         return None;
     }
     let want: u32 = code.parse().ok()?;
-    let now = now_step();
+    let centre = now_step().saturating_add_signed(drift);
     let mut hit = None;
-    for step in [now.saturating_sub(1), now, now + 1] {
+    for step in centre.saturating_sub(radius)..=centre.saturating_add(radius) {
         // Compare every candidate (no early exit on the first match).
         if subtle::ConstantTimeEq::ct_eq(&code_at(&secret, step).to_be_bytes()[..], &want.to_be_bytes()[..]).into() && step > last {
             hit = Some(step);
         }
     }
     hit
+}
+
+/// How far `step` is from this relay's current one.
+pub fn drift_of(step: u64) -> i64 {
+    step as i64 - now_step() as i64
 }
 
 /// `otpauth://` link for the authenticator app (shown as a QR code).
@@ -158,6 +171,13 @@ mod tests {
         let code = format!("{:06}", code_at(&unbase32(&s).unwrap(), now_step()));
         let step = verify(&s, &code, 0).expect("current code");
         assert!(verify(&s, &code, step).is_none(), "the same code twice");
+        // A phone three minutes ahead: found with a wide radius, then by its drift.
+        let sec = unbase32(&s).unwrap();
+        let ahead = format!("{:06}", code_at(&sec, now_step() + 6));
+        assert!(verify(&s, &ahead, 0).is_none());
+        let st = verify_near(&s, &ahead, 0, 0, 10).expect("wide radius");
+        assert_eq!(drift_of(st), 6);
+        assert!(verify_near(&s, &ahead, 0, 6, 1).is_some());
         assert!(verify(&s, "12345", 0).is_none());
         let (shown, stored) = new_backup_codes();
         assert_eq!(shown.len(), BACKUP_CODES);
