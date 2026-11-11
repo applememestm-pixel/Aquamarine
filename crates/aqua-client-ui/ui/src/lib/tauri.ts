@@ -260,6 +260,8 @@ export const api = {
   attachFileAs:       (peerId: string, filePath: string, mode: "file" | "media" | "compressed" | "live" | "live-loop" | "live-bounce" | "once", caption?: string): Promise<AttachResult> => invoke("attach_file_as", { peerId, filePath, mode, caption: caption || null }),
   attachBytes:        (peerId: string, name: string, mime: string, bytes: number[], caption?: string): Promise<AttachResult> => invoke("attach_bytes", { peerId, name, mime, bytes, caption: caption || null }),
   downloadFile:       (peer_id: string, message_id: string): Promise<DownloadResult> => invoke("download_file", { peerId: peer_id, messageId: message_id }),
+  /** A video sealed in pieces: a URL that plays while it downloads (saved when done). */
+  streamFile:         (peerId: string, messageId: string): Promise<string> => invoke("stream_file", { peerId, messageId }),
   sendCallSignal:     (peer_id: string, signal: object): Promise<void> =>
     invoke("send_call_signal", { peerId: peer_id, signalJson: JSON.stringify(signal) }),
   // Raw control payload over the E2EE session, never shown as a bubble

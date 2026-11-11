@@ -1890,6 +1890,7 @@ async fn attach_file_fwd(
                 pack: if category.as_deref() == Some("sticker") { sticker_pack_ref(&path) } else { None },
                 saved_at: Some(saved_path),
                 caption: caption.clone(),
+                chunk: None,
             },
         };
         let message_id = msg.id.clone();
@@ -1906,10 +1907,25 @@ async fn attach_file_fwd(
         return Ok(AttachResult { message_id, cid: fake_cid, size });
     }
 
-    // 2. Encrypt + get CID + envelope.
-    let (envelope, ciphertext) =
+    // 2. Encrypt + get CID + envelope. Videos are sealed in pieces so they
+    //    play while downloading (aqua_core::encrypt_file_streaming).
+    let streamed = bytes.len() > 1024 * 1024
+        && category.as_deref() != Some("once")
+        && (mime.as_deref().is_some_and(|m| m.starts_with("video/")) || category.as_deref().is_some_and(|c| c == "video" || c == "compressed"));
+    // Played while downloading, an MP4 needs its index first ("faststart");
+    // phone videos keep it at the end. Moved without re-encoding, if ffmpeg
+    // is there; else the file goes as it is.
+    let bytes = if streamed && matches!(mime.as_deref(), Some("video/mp4") | Some("video/quicktime")) {
+        faststart(&state, &path).await.unwrap_or(bytes)
+    } else {
+        bytes
+    };
+    let (envelope, ciphertext) = if streamed {
+        aqua_core::encrypt_file_streaming(&bytes, &filename, mime, category.clone())
+    } else {
         encrypt_file_with_category(&bytes, &filename, mime, category.clone())
-            .map_err(|e| format!("encrypt_file: {e}"))?;
+    }
+    .map_err(|e| format!("encrypt_file: {e}"))?;
     let mut envelope = envelope;
     if category.as_deref() == Some("sticker") {
         envelope.pack = sticker_pack_ref(&path);
@@ -2124,7 +2140,7 @@ pub async fn download_file(
         let msg = book.messages.iter().find(|m| m.id == message_id)
             .ok_or("unknown message id")?;
         match &msg.kind {
-            MessageKind::File { cid, key_b64, nonce_b64, name, size, mime, category, .. } => {
+            MessageKind::File { cid, key_b64, nonce_b64, name, size, mime, category, chunk, .. } => {
                 let key = URL_SAFE_NO_PAD.decode(key_b64)
                     .map_err(|e| format!("bad key: {e}"))?;
                 let nonce = URL_SAFE_NO_PAD.decode(nonce_b64)
@@ -2141,6 +2157,7 @@ pub async fn download_file(
                     category: category.clone(),
                     pack: None,
                     caption: None,
+                    chunk: *chunk,
                 }
             }
             _ => return Err("message is not a file".into()),
@@ -2211,6 +2228,195 @@ fn set_saved_at(state: &State<'_, StdMutex<AppState>>, peer_id: &str, message_id
         }
     }
     Ok(())
+}
+
+// ---------- Streamed video: plays while it downloads ------------------------
+
+/// How far a streamed file has come.
+struct StreamProg {
+    path: PathBuf,
+    avail: u64,
+    done: bool,
+    err: Option<String>,
+}
+type StreamSlot = Arc<(StdMutex<StreamProg>, std::sync::Condvar)>;
+
+fn streams() -> &'static StdMutex<std::collections::HashMap<String, (StreamSlot, String)>> {
+    static S: std::sync::OnceLock<StdMutex<std::collections::HashMap<String, (StreamSlot, String)>>> = std::sync::OnceLock::new();
+    S.get_or_init(|| StdMutex::new(std::collections::HashMap::new()))
+}
+
+/// Reads a streamed file from `pos` to `end`, waiting for bytes that
+/// haven't arrived yet.
+struct WaitReader {
+    slot: StreamSlot,
+    file: Option<std::fs::File>,
+    pos: u64,
+    end: u64,
+}
+
+impl std::io::Read for WaitReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        use std::io::{Read as _, Seek, SeekFrom};
+        if self.pos > self.end || buf.is_empty() {
+            return Ok(0);
+        }
+        let (lock, cv) = &*self.slot;
+        let (avail, path) = {
+            let mut g = lock.lock().map_err(|_| std::io::Error::other("stream"))?;
+            let started = std::time::Instant::now();
+            while g.avail <= self.pos && !g.done && g.err.is_none() {
+                let (ng, _) = cv.wait_timeout(g, std::time::Duration::from_secs(5)).map_err(|_| std::io::Error::other("stream"))?;
+                g = ng;
+                if started.elapsed() > std::time::Duration::from_secs(120) {
+                    return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "the download stalled"));
+                }
+            }
+            if g.avail <= self.pos {
+                return match &g.err { Some(e) => Err(std::io::Error::other(e.clone())), None => Ok(0) };
+            }
+            (g.avail, g.path.clone())
+        };
+        if self.file.is_none() {
+            self.file = Some(std::fs::File::open(&path)?);
+        }
+        let f = self.file.as_mut().expect("opened");
+        f.seek(SeekFrom::Start(self.pos))?;
+        let want = (buf.len() as u64).min(avail - self.pos).min(self.end + 1 - self.pos) as usize;
+        let n = f.read(&mut buf[..want])?;
+        self.pos += n as u64;
+        Ok(n)
+    }
+}
+
+/// A video sealed in pieces (FileEnvelope.chunk): a loopback URL that plays
+/// it while it downloads; the finished file is saved like a download. A
+/// file that's already here gets its plain URL.
+#[tauri::command]
+pub async fn stream_file(
+    state: State<'_, StdMutex<AppState>>,
+    app: AppHandle,
+    peer_id: String,
+    message_id: String,
+) -> Result<String, String> {
+    let (envelope, saved) = {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        let book = s.chats.get(&peer_id).ok_or("unknown peer")?;
+        let msg = book.messages.iter().find(|m| m.id == message_id).ok_or("unknown message id")?;
+        match &msg.kind {
+            MessageKind::File { cid, key_b64, nonce_b64, name, size, mime, category, chunk, saved_at, .. } => {
+                let key: [u8; 32] = URL_SAFE_NO_PAD.decode(key_b64).map_err(|e| format!("bad key: {e}"))?
+                    .try_into().map_err(|_| "bad key length".to_string())?;
+                let nonce: [u8; 12] = URL_SAFE_NO_PAD.decode(nonce_b64).map_err(|e| format!("bad nonce: {e}"))?
+                    .try_into().map_err(|_| "bad nonce length".to_string())?;
+                (FileEnvelope { cid: cid.clone(), key, nonce, filename: name.clone(), size: *size, mime: mime.clone(),
+                    category: category.clone(), pack: None, caption: None, chunk: *chunk }, saved_at.clone())
+            }
+            _ => return Err("message is not a file".into()),
+        }
+    };
+    if let Some(p) = saved.filter(|p| std::path::Path::new(p).is_file()) {
+        return crate::media_server::url_for(std::path::Path::new(&p));
+    }
+    let chunk = envelope.chunk.ok_or("this file isn't streamed")?;
+    let ext: String = std::path::Path::new(&envelope.filename).extension().and_then(|e| e.to_str()).unwrap_or("mp4").chars().filter(|c| c.is_ascii_alphanumeric()).take(5).collect();
+    let mime = envelope.mime.clone().unwrap_or_else(|| "video/mp4".into());
+    if let Some((_, url)) = streams().lock().map_err(|e| e.to_string())?.get(&envelope.cid) {
+        return Ok(url.clone());
+    }
+
+    let data_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.clone() };
+    let base = downloads_dir(&data_dir);
+    std::fs::create_dir_all(&base).map_err(|e| format!("mkdir: {e}"))?;
+    let part = base.join(format!(".{}.aqpart", &envelope.cid[..16.min(envelope.cid.len())]));
+    std::fs::write(&part, b"").map_err(|e| format!("write: {e}"))?;
+    let slot: StreamSlot = Arc::new((StdMutex::new(StreamProg { path: part.clone(), avail: 0, done: false, err: None }), std::sync::Condvar::new()));
+
+    // The loopback URL: Range requests read the part file, waiting as needed.
+    let total = envelope.size;
+    let sl = slot.clone();
+    let mime2 = mime.clone();
+    let f: crate::media_server::RemoteFn = Arc::new(move |range: Option<String>| {
+        let (start, end, partial) = match range.as_deref().and_then(|r| crate::media_server::parse_range(r, total)) {
+            Some((a, b)) => (a, b, true),
+            None => (0, total.saturating_sub(1), false),
+        };
+        let n = end + 1 - start;
+        let mut headers = vec![
+            ("Content-Type".to_string(), mime2.clone()),
+            ("Accept-Ranges".to_string(), "bytes".to_string()),
+            ("Cache-Control".to_string(), "no-store".to_string()),
+        ];
+        if partial { headers.push(("Content-Range".to_string(), format!("bytes {start}-{end}/{total}"))); }
+        Ok(crate::media_server::Remote {
+            status: if partial { 206 } else { 200 },
+            headers,
+            len: Some(n as usize),
+            body: Box::new(WaitReader { slot: sl.clone(), file: None, pos: start, end }),
+        })
+    });
+    let url = crate::media_server::remote_url(&format!("stream:{}", envelope.cid), &ext, f)?;
+    streams().lock().map_err(|e| e.to_string())?.insert(envelope.cid.clone(), (slot.clone(), url.clone()));
+
+    let transport = { state.lock().map_err(|e| e.to_string())?.transport.clone().ok_or("not connected")? };
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        use sha2::Digest;
+        use std::io::Write;
+        let (lock, cv) = &*slot;
+        let fail = |e: String| {
+            if let Ok(mut g) = lock.lock() { g.err = Some(e); }
+            cv.notify_all();
+        };
+        let mut out = match std::fs::OpenOptions::new().append(true).open(&part) {
+            Ok(f) => f,
+            Err(e) => { fail(format!("write: {e}")); return; }
+        };
+        let piece = chunk as usize + aqua_core::CHUNK_TAG;
+        let pieces = aqua_core::chunk_count(envelope.size, chunk);
+        let mut hasher = sha2::Sha256::new();
+        let mut buf: Vec<u8> = Vec::with_capacity(piece * 2);
+        let mut i: u64 = 0;
+        let mut written: u64 = 0;
+        let mut broken: Option<String> = None;
+        let mut open_ready = |buf: &mut Vec<u8>, i: &mut u64, written: &mut u64, at_end: bool| -> Result<(), String> {
+            while buf.len() >= piece || (at_end && !buf.is_empty()) {
+                let take = buf.len().min(piece);
+                let sealed: Vec<u8> = buf.drain(..take).collect();
+                let plain = aqua_core::decrypt_chunk(&envelope, *i, &sealed).map_err(|e| format!("decrypt: {e}"))?;
+                out.write_all(&plain).map_err(|e| format!("write: {e}"))?;
+                *written += plain.len() as u64;
+                *i += 1;
+                if let Ok(mut g) = lock.lock() { g.avail = *written; }
+                cv.notify_all();
+            }
+            Ok(())
+        };
+        let r = transport.download_blob_with(&envelope.cid, |bytes| {
+            hasher.update(bytes);
+            buf.extend_from_slice(bytes);
+            if let Err(e) = open_ready(&mut buf, &mut i, &mut written, false) { broken = Some(e); return false; }
+            true
+        }).await;
+        if let Some(e) = broken { fail(e); return; }
+        if let Err(e) = r { fail(format!("download: {e}")); return; }
+        if let Err(e) = open_ready(&mut buf, &mut i, &mut written, true) { fail(e); return; }
+        if i != pieces || written != envelope.size || hex::encode(hasher.finalize()) != envelope.cid {
+            fail("the file arrived damaged".into());
+            return;
+        }
+        drop(out);
+        // Done: give it its real name, like a normal download.
+        let dest = pick_unique_path(&base, &envelope.filename);
+        let final_path = if std::fs::rename(&part, &dest).is_ok() { dest } else { part.clone() };
+        if let Ok(mut g) = lock.lock() { g.path = final_path.clone(); g.done = true; }
+        cv.notify_all();
+        let st = app2.state::<StdMutex<AppState>>();
+        let _ = set_saved_at(&st, &peer_id, &message_id, &final_path.to_string_lossy());
+        let _ = app2.emit("aqua://chats_updated", ());
+        if let Ok(mut m) = streams().lock() { m.remove(&envelope.cid); }
+    });
+    Ok(url)
 }
 
 /// Open a received file in the system's app for it (PDF viewer, player…).
@@ -2374,7 +2580,7 @@ pub async fn fetch_attachment(
     let envelope = FileEnvelope {
         cid: media.cid.clone(), key, nonce,
         filename: media.name.clone(), size: media.size,
-        mime: media.mime.clone(), category: Some(media.kind.clone()), pack: None, caption: None,
+        mime: media.mime.clone(), category: Some(media.kind.clone()), pack: None, caption: None, chunk: None,
     };
     let transport = {
         let s = state.lock().map_err(|e| e.to_string())?;
@@ -4402,6 +4608,28 @@ fn push_peer_message(s: &mut AppState, peer_id: &str, text: String, time: &str) 
 
 /// What the relay's admin panel counts a file as (only this label leaves
 /// the device in the clear — never the name or the content).
+/// The MP4 / MOV with its index moved to the front (`-c copy -movflags
+/// +faststart`); None when ffmpeg isn't there or fails.
+async fn faststart(state: &State<'_, StdMutex<AppState>>, path: &std::path::Path) -> Option<Vec<u8>> {
+    let out_dir = { state.lock().ok()?.data_dir.join("outbox") };
+    std::fs::create_dir_all(&out_dir).ok()?;
+    let out = out_dir.join(format!("fs-{}.mp4", crate::state::uuid_like()));
+    let mut cmd = tokio::process::Command::new("ffmpeg");
+    cmd.args(["-v", "error", "-nostdin", "-y", "-i"]).arg(path)
+        .args(["-map", "0", "-c", "copy", "-movflags", "+faststart"])
+        .arg(&out)
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(0x0800_0000);
+    }
+    let ok = cmd.output().await.ok().is_some_and(|o| o.status.success());
+    let bytes = if ok { tokio::fs::read(&out).await.ok().filter(|b| !b.is_empty()) } else { None };
+    let _ = tokio::fs::remove_file(&out).await;
+    bytes
+}
+
 fn blob_kind(category: Option<&str>, mime: Option<&str>, name: &str) -> &'static str {
     let lower = name.to_ascii_lowercase();
     match category {

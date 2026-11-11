@@ -378,7 +378,8 @@
       const within = isInlineMedia ? size <= mediaCap : size <= Math.min(AUTO_DOWNLOAD_LIMIT, mediaCap);
       if (within) {
         autoTriggered.add(m.id);
-        void autoDownload(chat.id, m.id);
+        if (kind === "video" && m.kind.content.chunk) void startStream(chat.id, m.id);
+        else void autoDownload(chat.id, m.id);
       }
     }
   });
@@ -414,6 +415,22 @@
     void api.screenSecure(on).catch(() => {});
     return () => { if (on) void api.screenSecure(false).catch(() => {}); };
   });
+
+  // Streamed videos (sealed in pieces): play while downloading, Telegram-fast.
+  let streamUrls = $state<Record<string, string>>({});
+  async function startStream(peerId: string, messageId: string) {
+    if (streamUrls[messageId]) return;
+    try {
+      const u = await api.streamFile(peerId, messageId);
+      if ($activeChat?.id === peerId) streamUrls = { ...streamUrls, [messageId]: u };
+    } catch (e) {
+      console.warn("stream failed", e);
+      await autoDownload(peerId, messageId);
+    }
+  }
+  let streamChat = "";
+  let streamTapped = $state<string[]>([]);
+  $effect(() => { const id = $activeChat?.id ?? ""; if (id !== streamChat) { streamChat = id; streamUrls = {}; streamTapped = []; } });
 
   async function autoDownload(peerId: string, messageId: string) {
     try {
@@ -3770,8 +3787,16 @@
                   </div>
                 {:else if rk === "video"}
                   <div class="bubble media-bubble">
-                    {#if url}
+                    {#if streamUrls[m.id]}
+                      <!-- Plays while it downloads; kept until the chat changes so the position isn't lost. -->
+                      <MediaPlayer src={streamUrls[m.id]} kind="video" name={content.name} size={content.size} autoplay={streamTapped.includes(m.id)} onExpand={() => content.saved_at && openInGallery(content.saved_at)} />
+                    {:else if url}
                       <MediaPlayer src={url} kind="video" name={content.name} size={content.size} onExpand={() => openInGallery(content.saved_at)} />
+                    {:else if content.chunk && !m.outgoing && $activeChat}
+                      {@const cid = $activeChat.id}
+                      <button class="media-placeholder stream-play" style="aspect-ratio: 16/9;" onclick={() => { streamTapped = [...streamTapped, m.id]; void startStream(cid, m.id); }} title={$t("Play")}>
+                        <span class="sp-ic"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg></span>
+                      </button>
                     {:else if content.saved_at}
                       <div class="media-placeholder" style="aspect-ratio: 16/9;"></div>
                     {:else}
@@ -6196,6 +6221,9 @@
   .emoji-in.disabled { opacity: .4; cursor: help; }
   .emoji-in :global(svg) { width: 21px; height: 21px; }
   .cam-in { margin-left: 0; }
+  .stream-play { display: grid; place-items: center; width: 100%; border: none; cursor: pointer; }
+  .sp-ic { width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; color: #fff; background: rgba(0,0,0,.5); }
+  .sp-ic svg { width: 26px; height: 26px; margin-left: 3px; }
   .once-bubble { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px 6px; min-width: 190px; }
   .once-btn { display: flex; align-items: center; gap: 10px; border: none; background: transparent; color: inherit; padding: 0; text-align: left; font: inherit; cursor: pointer; }
   .once-btn:disabled { cursor: default; }

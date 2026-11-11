@@ -357,6 +357,7 @@ pub fn run() -> Result<()> {
             commands::attach_file_as,
             commands::attach_bytes,
             commands::download_file,
+            commands::stream_file,
             commands::open_saved_file,
             storage::storage_get,
             storage::storage_set,

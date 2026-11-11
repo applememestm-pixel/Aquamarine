@@ -46,6 +46,8 @@ export type MessageKind =
       pack?: string | null;
       /** Text under the photo / video / file, sent in the same message. */
       caption?: string | null;
+      /** Sealed in pieces: plays while downloading (stream_file). */
+      chunk?: number | null;
     } }
   | { type: "article";         content: {
       title: string;

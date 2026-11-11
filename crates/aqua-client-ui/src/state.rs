@@ -215,6 +215,10 @@ pub enum MessageKind {
         /// Text under the photo / video / file (FileEnvelope.caption).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         caption: Option<String>,
+        /// Sealed in pieces of this size (FileEnvelope.chunk): plays while
+        /// downloading (`stream_file`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        chunk: Option<u32>,
     },
     /// Long-form "article" message — Telegram-style post with a title
     /// and a markdown body. On the wire this travels as a plain text
@@ -1619,6 +1623,7 @@ pub fn classify_kind(text: &str) -> MessageKind {
             pack: env.pack,
             saved_at: None,
             caption: env.caption,
+            chunk: env.chunk,
         },
         Err(_) => MessageKind::Text { text: text.into() },
     }
