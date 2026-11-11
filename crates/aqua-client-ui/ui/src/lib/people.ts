@@ -36,6 +36,8 @@ export interface PeerCard {
   pv: number;
   /** The account's ID (never changes, unlike the @name). */
   uid?: string;
+  /** Check mark from the relay's @verify bot. */
+  verified?: boolean;
 }
 
 const KEY = "aqua.peerCards.v1";
@@ -136,6 +138,7 @@ export function refreshPeer(username: string, force = false): Promise<void> {
           fetched: Date.now(),
           pv: m[username]?.pv ?? 0,
           uid: card.uid || cur?.uid,
+          verified: !!(card as { verified?: boolean }).verified,
         },
       }));
     } catch { /* offline — keep the cached card */ }
@@ -179,7 +182,8 @@ function myExtra(p: Profile): Record<string, unknown> {
     cg: Number.isFinite(p.card_g) ? Math.round(p.card_g as number) : null,
     es: (p.estatus ?? "").trim() && p.estatus !== "-" ? p.estatus : null,
     pattern: (p.pattern ?? "").slice(0, 16),
-    links: (p.links ?? []).filter((l) => /^https?:\/\//i.test(l.url)).slice(0, 8),
+    nc: /^#[0-9a-f]{6}$/i.test(p.name_color ?? "") ? p.name_color : "",
+    links: (p.links ?? []).filter((l) => /^https?:\/\//i.test(l.url)).slice(0, 12),
     games: (p.games ?? []).slice(0, 12),
     game_ids: Object.fromEntries(Object.entries(p.game_ids ?? {}).filter(([n]) => (p.games ?? []).includes(n)).slice(0, 12)),
     game_note: (p.game_note ?? "").slice(0, 140),
@@ -212,6 +216,7 @@ export async function adoptMyCard(username: string): Promise<void> {
     if (fresh && typeof x.banner_b === "string") patch.banner_b = x.banner_b;
     if (fresh && typeof x.card === "string") patch.card = x.card;
     if (fresh && typeof x.pattern === "string") patch.pattern = x.pattern;
+    if (fresh && typeof x.nc === "string") patch.name_color = x.nc;
     if (fresh && typeof x.ci === "number") patch.card_i = x.ci;
     if (fresh && typeof x.cg === "number") patch.card_g = x.cg;
     if (fresh && typeof x.es === "string") patch.estatus = x.es;
@@ -399,6 +404,14 @@ contactSet.subscribe(onPrivacyChanged);
 
 
 /** Someone's emoji status from their public card ("" when none). */
+/** Name and quote colours people can pick (Telegram's profile colours). */
+export const NAME_COLORS = ["#FF6B6B", "#FFA94D", "#FFD43B", "#51CF66", "#3BC9DB", "#4DABF7", "#845EF7", "#F783AC", "#20C997", "#ADB5BD"];
+/** Someone's chosen name colour (their card, `extra.nc`), or "". */
+export function nameColorOf(cards: Record<string, { extra?: Record<string, unknown> } | undefined>, user: string): string {
+  const v = cards[user]?.extra?.nc;
+  return typeof v === "string" && /^#[0-9a-f]{6}$/i.test(v) ? v : "";
+}
+
 export function emojiStatusOf(cards: Record<string, { extra?: Record<string, unknown> } | undefined>, user: string): string {
   const v = cards[user]?.extra?.es;
   return typeof v === "string" ? v : "";

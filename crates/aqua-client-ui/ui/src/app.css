@@ -31,7 +31,9 @@
   --online:         #35D399;
   --danger:         #FF4D6D;
 
-  --font-ui:   "Onest", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Colour emoji fonts before the generic family: otherwise a system's
+     black-and-white symbol glyphs win and emoji sit off the text line. */
+  --font-ui:   "Onest", ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
   --shadow-lift:   0 1px 0 rgba(255,255,255,0.04) inset, 0 8px 24px -8px rgba(0,0,0,0.4);
@@ -440,10 +442,20 @@ html.ps-calls .stage *, html.ps-calls .stage *::before, html.ps-calls .stage *::
 /* Android: windows close with Back (the button or the gesture), like
    Telegram — no × on them (lib/back.ts closes them, data-x marks the
    buttons it presses). iOS has no Back, so it keeps them. */
-html.android [data-x] { display: none !important; }
+html.android [data-x]:not([data-keep-x]) { display: none !important; }
 
 /* Power saving → Particles: the ambient glows behind the app stay still. */
 html.ps-particles body::before, html.ps-particles body::after { animation: none !important; }
 
 /* Our middle-button auto-scroll (main.ts): only the cursor shows it. */
 html.aq-autoscroll, html.aq-autoscroll * { cursor: all-scroll !important; user-select: none !important; }
+
+/* Press feedback everywhere (the send button already had it): buttons give
+   a little under the finger and spring back. The `scale` property adds to
+   a button's own transform (centring, rotation) instead of replacing it. */
+@media (pointer: coarse) {
+  button:not(:disabled):not(.no-press):active { scale: .94; filter: brightness(1.12); }
+}
+@media (pointer: fine) {
+  button:not(:disabled):not(.no-press):active { filter: brightness(1.12); }
+}

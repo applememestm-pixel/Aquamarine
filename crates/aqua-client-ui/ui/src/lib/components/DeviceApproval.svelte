@@ -17,6 +17,8 @@
   import { t, tr } from "../i18n";
   import { showToast } from "./Toast.svelte";
   import { askConfirm } from "./Confirm.svelte";
+  import { openSettings } from "../panels/settings";
+  import { info } from "../stores";
 
   /** "Later" for this run of the app. */
   let later = $state<Set<string>>(new Set());
@@ -30,6 +32,23 @@
     let un: (() => void) | null = null;
     void events.onDevicePending(() => void load()).then((u) => (un = u)).catch(() => {});
     return () => un?.();
+  });
+
+  /** This device isn't on my account's signed list: people's messages
+   *  don't reach it and its own are ignored (devlists.rs). The list heals
+   *  by itself when the old devices are gone; otherwise say so. */
+  let unlisted = $state(false);
+  let unlistedSeen = $state(false);
+  let checkT: ReturnType<typeof setTimeout> | undefined;
+  async function checkListed() {
+    try { const st = await api.devlistStatus(); unlisted = st.published && !st.this_listed; } catch { /* offline */ }
+  }
+  $effect(() => {
+    if (!$info?.connected) return;
+    clearTimeout(checkT);
+    // After the app had its chance to publish / repair the list.
+    checkT = setTimeout(() => void checkListed(), 25_000);
+    return () => clearTimeout(checkT);
   });
 
   const cur = $derived(($deviceTrust?.pending ?? []).find((p) => !later.has(p.id)) ?? null);
@@ -64,6 +83,14 @@
     await load();
   }
 </script>
+
+{#if unlisted && !unlistedSeen && !cur}
+  <div class="da-bar" role="status">
+    <span>{$t("This device isn't confirmed by your account yet: messages don't reach it. Confirm it on another device of yours (“It's me”) — or, if there is none, start the device list over.")}</span>
+    <button class="da-btn ok" onclick={() => { unlistedSeen = true; openSettings("devices"); }}>{$t("Devices")}</button>
+    <button class="da-later" data-x onclick={() => (unlistedSeen = true)} aria-label={$t("Close")}>✕</button>
+  </div>
+{/if}
 
 {#if cur}
   <div class="da-back">
@@ -104,4 +131,7 @@
   .da-btn:disabled { opacity: 0.6; cursor: default; }
   .da-later { border: none; background: none; color: var(--fg-muted); font: inherit; font-size: 12.5px; padding: 6px; cursor: pointer; }
   .da-later:hover { color: var(--fg); }
+  .da-bar { position: fixed; z-index: 10040; left: 50%; top: calc(44px + env(safe-area-inset-top, 0px)); transform: translateX(-50%); width: min(560px, calc(100% - 24px)); display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: calc(14px * var(--rk, 1)); background: var(--bg-shell); border: 1px solid color-mix(in srgb, var(--danger) 55%, var(--border-strong)); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45); font-size: 13px; line-height: 1.4; color: var(--fg); }
+  .da-bar span { flex: 1; min-width: 0; }
+  .da-bar .da-btn { flex: none; min-height: 34px; }
 </style>

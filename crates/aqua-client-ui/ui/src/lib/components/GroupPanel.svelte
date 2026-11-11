@@ -169,27 +169,10 @@
     await commit((g) => { g[kind] = null; }, kind === "photo" ? "removed the photo" : "removed the banner");
   }
 
-  // ---- group ⇄ supergroup ----------------------------------------------
+  // A group's kind is chosen when it's made (group / server / channel) and
+  // isn't switched afterwards; a group that outgrows 200 members becomes a
+  // server by itself, like Telegram's supergroups.
   const BASIC_LIMIT = 200;
-  async function setKind(k: "group" | "supergroup") {
-    if (!group || group.kind === k || !owner) return;
-    if (k === "group") {
-      if (group.members.length > BASIC_LIMIT) { showToast(tr("A group can have at most 200 members — this one is bigger"), 5000); return; }
-      const ok = await askConfirm({
-        title: tr("Turn into a regular group?"),
-        text: tr("Regular groups are private and small: the public link, server tag, slow mode, hidden member list and admin log are switched off. Settings are kept and come back if you upgrade again."),
-        ok: tr("Convert"),
-      });
-      if (!ok) return;
-      await commit((g) => { g.kind = "group"; g.settings.is_public = false; }, "converted the server to a group");
-    } else {
-      await commit((g) => {
-        g.kind = "supergroup";
-        if (!(g.rooms ?? []).length) { S(g).rooms_enabled = true; g.rooms = DEFAULT_ROOMS.map((r) => ({ ...r })); }
-      }, "turned the group into a server");
-      showToast(tr("Now a server: rooms like Discord channels, public link, server tag, slow mode and admin log"), 5000);
-    }
-  }
 
   // ---- rooms (Discord-style channels) -----------------------------------
   let roomList = $derived<Room[]>(group?.rooms ?? []);
@@ -404,7 +387,7 @@
     const u = addUser.trim().toLowerCase().replace(/^@/, "");
     if (!u || !group) return;
     if (group.members.some((m) => m.username === u)) { showToast(tr("Already here")); return; }
-    if (basic && group.members.length >= BASIC_LIMIT) { showToast(tr("A group can have at most 200 members — turn it into a server in Edit → Group type"), 6000); return; }
+    const grow = basic && group.members.length >= BASIC_LIMIT;
     if (get(peerPresence)[u]?.ni) {
       try { await navigator.clipboard.writeText(shareLink(group)); } catch { /* ignore */ }
       showToast(`@${u} only lets certain people add them to groups — the invite link is copied, send it to them`, 7000);
@@ -412,6 +395,7 @@
     }
     addUser = "";
     await commit((g) => {
+      if (grow) { g.kind = "supergroup"; if (!(g.rooms ?? []).length) { S(g).rooms_enabled = true; g.rooms = DEFAULT_ROOMS.map((r) => ({ ...r })); } }
       g.members.push({ username: u, role: "member" });
       g.banned = (g.banned ?? []).filter((b) => b !== u);
       g.requests = (g.requests ?? []).filter((r) => r.username !== u);
@@ -458,8 +442,16 @@
     if (isChannel) return r !== "manage_tags" && r !== "anonymous" && r !== "pin_messages";
     return r !== "post_messages" && r !== "edit_messages";
   }
+  /** Telegram's rule: the owner sets anything; an admin who may add admins
+   *  only hands out rights they have themselves, and never edits their own. */
+  function rightEditable(r: keyof AdminRights): boolean {
+    if (!group || !editMember) return false;
+    if (owner) return true;
+    if (editMember.username === me || editMember.role === "owner") return false;
+    return can(group, me, "add_admins") && can(group, me, r);
+  }
   async function toggleRight(r: keyof AdminRights) {
-    if (!editMember) return;
+    if (!editMember || !rightEditable(r)) return;
     const rights = { ...defaultRights(), ...(editMember.rights ?? {}) };
     rights[r] = !rights[r];
     await setMemberField(editMember.username, { rights }, `changed @${editMember.username}'s admin rights`);
@@ -484,8 +476,11 @@
     { key: "edit_own_tags", label: "Edit own tags" },
   ];
   const isOn = (g: Group, key: string) => (S(g)[key] ?? "all") !== "admins";
+  /** Who may change what members can do: the owner and admins with the
+   *  "Ban users" right — not every admin, and never a plain member. */
+  const canPerms = $derived(!!group && (owner || (isAdmin(group, me) && can(group, me, "ban_users"))));
   async function togglePerm(key: string, label: string) {
-    if (!group) return;
+    if (!group || !canPerms) return;
     const on = isOn(group, key);
     await commit((g) => { S(g)[key] = (on ? "admins" : "all") as Perm; }, `${on ? "restricted" : "allowed"} “${label}” for members`);
   }
@@ -628,6 +623,9 @@
           </div>
         </div>
         {#if group.description}<p class="desc">{group.description}</p>{/if}
+        {#if admin && group.requests?.length}
+          <div class="card">{@render row("Join requests", `${group.requests.length}`, () => go("requests"), "#FF2D55")}</div>
+        {/if}
 
         {#if group.rules}
           <details class="card rules" style:--acc={group.accent ?? "var(--accent)"}>
@@ -638,12 +636,13 @@
 
         {#if stats && stats.total > 0 && !isChannel}
           <div class="card">
-            <div class="ct">{$t("This week")}</div>
+            <div class="ct">{$t("Activity")}</div>
             <div class="stat-row">
               <div class="stat"><b>{stats.today}</b><span>{$t("messages today")}</span></div>
               <div class="stat"><b>{stats.total}</b><span>{$t("in history")}</span></div>
               {#if stats.ageDays !== null}<div class="stat"><b>{stats.ageDays}</b><span>{$t("days old")}</span></div>{/if}
             </div>
+            {#if stats.top.length}<div class="ct sub-ct">{$t("This week")}</div>{/if}
             {#each stats.top as [u, n], i (u)}
               <div class="leader">
                 <span class="medal">{["🥇", "🥈", "🥉", "4", "5"][i]}</span>
@@ -750,25 +749,13 @@
           </div>
           {#if can(group, me, "change_info")}<button class="btn wide" onclick={saveInfo} disabled={busy}>{$t("Save")}</button>{/if}
         </div>
-        {#if !isChannel && owner}
-          <div class="card">
-            <div class="ct">{$t("Chat type")}</div>
-            <div class="seg">
-              <button class:active={basic} onclick={() => setKind("group")} disabled={busy}>{$t("Group")}</button>
-              <button class:active={!basic} onclick={() => setKind("supergroup")} disabled={busy}>{$t("Server")}</button>
-            </div>
-            <div class="note">{$t(basic
-              ? "Group: private, up to 200 members. Upgrade for a public link, server tag, slow mode, hidden members and the admin log."
-              : "Server: up to 200 000 members, rooms, public link, server tag, slow mode, hidden members and the admin log.")}</div>
-          </div>
-        {/if}
         <div class="card">
           {#if !basic}{@render row(isChannel ? "Channel type" : "Group type", group.settings.is_public ? "Public" : "Private", () => go("type"), "#007AFF")}{/if}
           {#if !isChannel}{@render row("Permissions", `${PERM_ROWS.filter((p) => isOn(group, p.key)).length}/${PERM_ROWS.length}`, () => go("perms"), "#34C759")}{/if}
           {@render row("Reactions", group.settings.reactions === "none" ? "Off" : group.settings.reactions === "some" ? `${group.settings.allowed_reactions?.length ?? 0}` : "All", () => go("reactions"), "#FF9500")}
           {@render row("Administrators", `${admins.length}`, () => go("admins"), "#5856D6")}
           {@render row(isChannel ? "Subscribers" : "Members", `${group.members.length}`, () => go("members"), "#32ADE6")}
-          {#if !basic}{@render row("Join requests", `${group.requests?.length ?? 0}`, () => go("requests"), "#FF2D55")}{/if}
+          {#if !basic || group.requests?.length}{@render row("Join requests", `${group.requests?.length ?? 0}`, () => go("requests"), "#FF2D55")}{/if}
           {@render row("Removed users", `${group.banned?.length ?? 0}`, () => go("banned"), "#FF3B30")}
           {#if !basic && !isChannel}
             {@render row("Roles", rolesOn(group) ? `${roleList.length - 1}` : "Off", () => go("roles"), "#EB459E")}
@@ -816,7 +803,7 @@
         <div class="card">
           <div class="ct">{$t("What can members of this group do?")}</div>
           {#each PERM_ROWS as p (p.key)}
-            {@render toggle(p.label, "", isOn(group, p.key), () => togglePerm(p.key, p.label), busy)}
+            {@render toggle(p.label, "", isOn(group, p.key), () => togglePerm(p.key, p.label), busy || !canPerms)}
           {/each}
         </div>
         <div class="card" class:hidden={basic}>
@@ -876,7 +863,7 @@
       {:else if page === "admins"}
         <div class="card">
           {#each admins as m (m.username)}
-            <button class="mrow click" onclick={() => { if (m.role !== "owner" && (owner || can(group, me, "add_admins"))) { editUser = m.username; go("admin-edit"); } }}>
+            <button class="mrow click" onclick={() => { if (m.role !== "owner" && (owner || (can(group, me, "add_admins") && m.username !== me))) { editUser = m.username; go("admin-edit"); } }}>
               {@render memberAva(m.username)}
               <span class="m-name">{m.username}</span>
               <span class="m-role" class:owner={m.role === "owner"}>{m.title || m.role}</span>
@@ -896,7 +883,7 @@
         <div class="card">
           <div class="ct">{$t("What can this admin do?")}</div>
           {#each ALL_RIGHTS.filter(rightsVisible) as r (r)}
-            {@render toggle(RIGHT_LABELS[r], "", can(group, editMember.username, r), () => toggleRight(r), busy)}
+            {@render toggle(RIGHT_LABELS[r], "", can(group, editMember.username, r), () => toggleRight(r), busy || !rightEditable(r))}
           {/each}
         </div>
         <button class="danger-btn" onclick={async () => { await setMemberField(editMember!.username, { role: "member", rights: undefined, title: "" }, `dismissed @${editMember!.username}`); back(); }}>{$t("Dismiss admin")}</button>
@@ -1175,6 +1162,7 @@
 {/if}
 
 <style>
+  .sub-ct { margin-top: 10px; }
   .backdrop { position: fixed; inset: 0; background: rgba(6,7,12,0.6); backdrop-filter: blur(4px);
               display: grid; place-items: center; z-index: 130; padding: 20px; }
   .sheet { width: min(500px, 95vw); height: min(720px, 90vh); display: flex; flex-direction: column;

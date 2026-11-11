@@ -21,6 +21,18 @@ export default {
   async fetch(req, env) {
     const url = new URL(req.url);
     if (req.method === "GET" && url.pathname === "/") return new Response("aquamarine reports: ok");
+    // Telegram Bot API forwarding for relays in countries where Telegram is
+    // blocked: Aquamarine Server → Stickers → Telegram network → Bot API
+    // address = https://<worker>/tg/<TG_RELAY_KEY>. Off unless the secret
+    // TG_RELAY_KEY is set (so nobody else proxies their bots through you).
+    if (url.pathname.startsWith("/tg/")) {
+      const [, , key, ...rest] = url.pathname.split("/");
+      if (!env.TG_RELAY_KEY || key !== env.TG_RELAY_KEY || !rest.length) return new Response("not found", { status: 404 });
+      const target = "https://api.telegram.org/" + rest.join("/") + url.search;
+      const init = { method: req.method, headers: { "content-type": req.headers.get("content-type") || "application/json" } };
+      if (req.method !== "GET" && req.method !== "HEAD") init.body = await req.arrayBuffer();
+      return fetch(target, init);
+    }
     if (req.method !== "POST" || url.pathname !== "/report") return new Response("not found", { status: 404 });
     const body = await req.text();
     if (body.length > MAX) return new Response("too big", { status: 413 });

@@ -85,6 +85,10 @@ pub struct FileEnvelope {
     /// Text under a photo / video / file, sent in the same message (like
     /// Telegram). Older clients show the file without it.
     pub caption: Option<String>,
+    /// Streamed encryption: the plaintext is sealed in pieces of this many
+    /// bytes, each on its own (see [`encrypt_file_streaming`]), so a video
+    /// plays while it is still downloading. `None`: one sealed piece.
+    pub chunk: Option<u32>,
 }
 
 // On the wire, the envelope is a small compact JSON object. Fields kept
@@ -104,6 +108,8 @@ struct WireEnvelope<'a> {
     pack:  Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cap:   Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ch:    Option<u32>,
 }
 
 impl FileEnvelope {
@@ -119,6 +125,7 @@ impl FileEnvelope {
             cat:   self.category.as_deref(),
             pack:  self.pack.as_deref(),
             cap:   self.caption.as_deref().filter(|c| !c.is_empty()),
+            ch:    self.chunk,
         };
         let json = serde_json::to_string(&wire).expect("wire envelope serializes");
         format!("{OFFER_PREFIX}{json}")
@@ -147,6 +154,8 @@ impl FileEnvelope {
             pack: Option<String>,
             #[serde(default)]
             cap: Option<String>,
+            #[serde(default)]
+            ch: Option<u32>,
         }
         let w: Owned = serde_json::from_str(payload)
             .map_err(|e| FileError::BadJson(e.to_string()))?;
@@ -168,6 +177,7 @@ impl FileEnvelope {
             category: w.cat,
             pack: w.pack.filter(|p| p.len() <= 128),
             caption: w.cap.map(|c| c.chars().take(4096).collect::<String>()).filter(|c| !c.trim().is_empty()),
+            chunk: w.ch.filter(|c| (MIN_CHUNK..=MAX_CHUNK).contains(c)),
         })
     }
 }
@@ -219,9 +229,94 @@ pub fn encrypt_file_with_category(
             category,
             pack: None,
             caption: None,
+            chunk: None,
         },
         ciphertext,
     ))
+}
+
+// ---------- Streamed encryption (1.2.12-2) ---------------------------------
+//
+// The plaintext is cut into pieces of `chunk` bytes; piece i is sealed on
+// its own with the same key, the nonce with i XOR-ed into its last 8 bytes,
+// and associated data `name ‖ i (u64 BE) ‖ last (1 byte)`. Each sealed piece
+// is `chunk + 16` bytes (the last one shorter). A piece can't be moved,
+// swapped or cut off at the end without failing to open, and the CID still
+// covers the whole blob. Receivers open pieces as they arrive, so a video
+// starts playing before it's all downloaded.
+
+/// Plaintext bytes per piece for streamed files.
+pub const STREAM_CHUNK: u32 = 512 * 1024;
+const MIN_CHUNK: u32 = 4 * 1024;
+const MAX_CHUNK: u32 = 8 * 1024 * 1024;
+/// Bytes a sealed piece adds (the Poly1305 / GCM tag).
+pub const CHUNK_TAG: usize = 16;
+
+fn chunk_nonce(base: &[u8; AEAD_NONCE_LEN], i: u64) -> [u8; AEAD_NONCE_LEN] {
+    let mut n = *base;
+    let at = AEAD_NONCE_LEN - 8;
+    for (k, b) in i.to_be_bytes().iter().enumerate() {
+        n[at + k] ^= b;
+    }
+    n
+}
+
+fn chunk_aad(name: &str, i: u64, last: bool) -> Vec<u8> {
+    let mut a = Vec::with_capacity(name.len() + 9);
+    a.extend_from_slice(name.as_bytes());
+    a.extend_from_slice(&i.to_be_bytes());
+    a.push(last as u8);
+    a
+}
+
+/// How many pieces a streamed file of `size` plaintext bytes has (≥ 1).
+pub fn chunk_count(size: u64, chunk: u32) -> u64 {
+    if size == 0 { 1 } else { size.div_ceil(chunk as u64) }
+}
+
+/// Like [`encrypt_file_with_category`], sealed in pieces (see above).
+pub fn encrypt_file_streaming(
+    plaintext: &[u8],
+    filename: &str,
+    mime: Option<String>,
+    category: Option<String>,
+) -> Result<(FileEnvelope, Vec<u8>), FileError> {
+    if plaintext.len() as u64 > MAX_FILE_SIZE {
+        return Err(FileError::TooLarge);
+    }
+    let mut key = [0u8; AEAD_KEY_LEN];
+    let mut nonce = [0u8; AEAD_NONCE_LEN];
+    OsRng.fill_bytes(&mut key);
+    OsRng.fill_bytes(&mut nonce);
+    let cs = STREAM_CHUNK as usize;
+    let n = chunk_count(plaintext.len() as u64, STREAM_CHUNK);
+    let mut ciphertext = Vec::with_capacity(plaintext.len() + n as usize * CHUNK_TAG);
+    for i in 0..n {
+        let a = (i as usize) * cs;
+        let b = (a + cs).min(plaintext.len());
+        let last = i + 1 == n;
+        let ct = aead_encrypt(&key, &chunk_nonce(&nonce, i), &chunk_aad(filename, i, last), &plaintext[a..b])?;
+        ciphertext.extend_from_slice(&ct);
+    }
+    let cid = hex_sha256(&ciphertext);
+    Ok((
+        FileEnvelope {
+            cid, key, nonce,
+            filename: filename.to_string(),
+            size: plaintext.len() as u64,
+            mime, category, pack: None, caption: None,
+            chunk: Some(STREAM_CHUNK),
+        },
+        ciphertext,
+    ))
+}
+
+/// Open piece `i` of a streamed file (its sealed bytes, `chunk + 16` long,
+/// shorter for the last). Fails if anything was changed or moved.
+pub fn decrypt_chunk(envelope: &FileEnvelope, i: u64, sealed: &[u8]) -> Result<Vec<u8>, FileError> {
+    let chunk = envelope.chunk.ok_or(FileError::BadLength)?;
+    let last = i + 1 == chunk_count(envelope.size, chunk);
+    Ok(aead_decrypt(&envelope.key, &chunk_nonce(&envelope.nonce, i), &chunk_aad(&envelope.filename, i, last), sealed)?)
 }
 
 /// Decrypt a downloaded blob against its envelope. Verifies the CID
@@ -236,6 +331,23 @@ pub fn decrypt_file(
             expected: envelope.cid.clone(),
             got: actual,
         });
+    }
+    if let Some(chunk) = envelope.chunk {
+        let piece = chunk as usize + CHUNK_TAG;
+        let n = chunk_count(envelope.size, chunk);
+        let mut out = Vec::with_capacity(envelope.size as usize);
+        for i in 0..n {
+            let a = i as usize * piece;
+            if a > ciphertext.len() {
+                return Err(FileError::BadLength);
+            }
+            let b = (a + piece).min(ciphertext.len());
+            out.extend_from_slice(&decrypt_chunk(envelope, i, &ciphertext[a..b])?);
+        }
+        if (n as usize) * piece < ciphertext.len() {
+            return Err(FileError::BadLength);
+        }
+        return Ok(out);
     }
     let pt = aead_decrypt(
         &envelope.key,
@@ -256,6 +368,27 @@ pub fn hex_sha256(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn streamed_round_trip_and_pieces() {
+        let data: Vec<u8> = (0..(super::STREAM_CHUNK as usize * 2 + 1234)).map(|i| (i % 251) as u8).collect();
+        let (env, ct) = super::encrypt_file_streaming(&data, "v.mp4", Some("video/mp4".into()), Some("video".into())).unwrap();
+        assert_eq!(env.chunk, Some(super::STREAM_CHUNK));
+        assert_eq!(super::decrypt_file(&env, &ct).unwrap(), data);
+        // Piece by piece, as a stream.
+        let piece = super::STREAM_CHUNK as usize + super::CHUNK_TAG;
+        let p1 = super::decrypt_chunk(&env, 1, &ct[piece..2 * piece]).unwrap();
+        assert_eq!(p1, data[super::STREAM_CHUNK as usize..2 * super::STREAM_CHUNK as usize]);
+        // Swapped pieces don't open.
+        assert!(super::decrypt_chunk(&env, 0, &ct[piece..2 * piece]).is_err());
+        // Cut off after a full piece: the new "last" piece fails.
+        let mut short = env.clone();
+        short.size = 2 * super::STREAM_CHUNK as u64;
+        assert!(super::decrypt_chunk(&short, 1, &ct[piece..2 * piece]).is_err());
+        // The envelope keeps the piece size on the wire.
+        let back = super::FileEnvelope::from_message_text(&env.to_message_text()).unwrap();
+        assert_eq!(back.chunk, env.chunk);
+    }
+
     use super::*;
 
     #[test]

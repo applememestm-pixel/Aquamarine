@@ -447,6 +447,28 @@ pub async fn telegraph_page(path: String) -> Result<serde_json::Value, String> {
     telegraph_fetch(path.trim(), true).await
 }
 
+/// "Show in folder": the file manager opens on a received file, selected
+/// (desktop). Only an existing regular file.
+#[tauri::command]
+pub fn show_in_folder(path: String) -> Result<(), String> {
+    let p = std::path::PathBuf::from(&path);
+    if !p.is_file() {
+        return Err("the file is not on this device".into());
+    }
+    #[cfg(target_os = "windows")]
+    let r = {
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("explorer").raw_arg(format!("/select,\"{}\"", p.display())).spawn()
+    };
+    #[cfg(target_os = "macos")]
+    let r = std::process::Command::new("open").arg("-R").arg(&p).spawn();
+    #[cfg(target_os = "linux")]
+    let r = std::process::Command::new("xdg-open").arg(p.parent().unwrap_or(&p)).spawn();
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    let r: std::io::Result<std::process::Child> = Err(std::io::Error::other("there's no file manager here"));
+    r.map(|_| ()).map_err(|e| e.to_string())
+}
+
 /// Open an http(s) / mailto link in the system browser / mail app.
 #[tauri::command]
 pub fn open_external(url: String) -> Result<(), String> {

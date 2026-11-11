@@ -15,6 +15,7 @@
 </script>
 
 <script lang="ts">
+  import { openLightbox } from "./Lightbox.svelte";
   import UsernameEdit from "./UsernameEdit.svelte";
   import BirthdayInput from "./BirthdayInput.svelte";
   import ColorInput from "./ColorInput.svelte";
@@ -42,12 +43,16 @@
   import QrCode from "./QrCode.svelte";
   import EmojiStatus from "./EmojiStatus.svelte";
   import { reactionPack, emojiPacks, loadEmojiPacks } from "../reactionPack";
-  import { averageColor, mixHex, patternUrl, PATTERN_EMOJI, cardLook, shellColor, CARD_SWATCHES, CARD_INTENSITY, CARD_LENGTH } from "../cardStyle";
+  import SharedMedia from "./SharedMedia.svelte";
+  import OfficialMark from "./OfficialMark.svelte";
+  import { NAME_COLORS } from "../people";
+  import { averageColor, mixHex, patternRingUrl, PATTERN_EMOJI, cardLook, shellColor, CARD_SWATCHES, CARD_INTENSITY, CARD_LENGTH } from "../cardStyle";
   import EmojiPick from "./EmojiPick.svelte";
   import { userQr } from "../qr";
   import { gameIds, gameIcons, gameCovers, resolveGame, rememberGame, iconFor, coverFor } from "../games";
+  import { SERVICES, serviceOf, type Service } from "../services";
 
-  let pfTab = $state<"board" | "activity">("board");
+  let pfTab = $state<"board" | "activity" | "media">("board");
   function hostOf(url: string): string {
     try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
   }
@@ -64,7 +69,7 @@
     return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/></svg>`;
   }
   function asLinks(v: unknown): { label: string; url: string }[] {
-    return Array.isArray(v) ? v.filter((l) => l && typeof l.url === "string" && /^https?:\/\//i.test(l.url)).slice(0, 8).map((l) => ({ label: String(l.label ?? "").slice(0, 40), url: String(l.url) })) : [];
+    return Array.isArray(v) ? v.filter((l) => l && typeof l.url === "string" && /^https?:\/\//i.test(l.url)).slice(0, 12).map((l) => ({ label: String(l.label ?? "").slice(0, 40), url: String(l.url) })) : [];
   }
   function asGames(v: unknown): string[] {
     return Array.isArray(v) ? v.filter((g) => typeof g === "string" && g.trim()).slice(0, 12).map((g) => g.slice(0, 60)) : [];
@@ -79,8 +84,24 @@
     links[i] = { ...(links[i] ?? { label: "", url: "" }), [field]: value };
     draft = { ...draft, links };
   }
-  function addLink() { if (draft && (draft.links ?? []).length < 8) draft = { ...draft, links: [...(draft.links ?? []), { label: "", url: "https://" }] }; }
+  function addLink() { if (draft && (draft.links ?? []).length < 12) draft = { ...draft, links: [...(draft.links ?? []), { label: "", url: "https://" }] }; }
   function removeLink(i: number) { if (draft) draft = { ...draft, links: (draft.links ?? []).filter((_, j) => j !== i) }; }
+  // Connections (lib/services.ts): a service + a name there → a profile link.
+  let connPick = $state(false);
+  let connSvc = $state<Service | null>(null);
+  let connHandle = $state("");
+  function addConn() {
+    const hd = connHandle.trim().replace(/^@/, "");
+    if (!draft || !connSvc || !hd || (draft.links ?? []).length >= 12) return;
+    draft = { ...draft, links: [...(draft.links ?? []), { label: connSvc.name, url: connSvc.url(hd) }] };
+    connSvc = null; connHandle = "";
+  }
+  /** Readable text on a service's colour. */
+  function onColor(hex: string): string {
+    const n = parseInt(hex.slice(1), 16);
+    const l = (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+    return l > 0.6 ? "#111" : "#fff";
+  }
   let gameInput = $state("");
   let gameHits = $state<{ id: string; name: string; has_icon: boolean }[]>([]);
   let gameTimer: ReturnType<typeof setTimeout> | null = null;
@@ -244,6 +265,9 @@
     estatus: string;
   }
   let view = $derived<View | null>((void $played, buildView(activeUsername, $profile, $contacts, $info, $peerCards, $peerPresence, $myActivity)));
+  // Links to a known service show as connections, the rest as links.
+  const conns = $derived((view?.links ?? []).map((l) => ({ url: l.url, ...(serviceOf(l.url) ?? { s: null, handle: "" }) })).filter((c) => !!c.s) as { url: string; s: Service; handle: string }[]);
+  const plainLinks = $derived((view?.links ?? []).filter((l) => !serviceOf(l.url)));
   // Which avatar image to show: the live draft when editing myself, else
   // the stored/served one.
   let shownAvatar = $derived(
@@ -272,7 +296,7 @@
   let esOpen = $state(false);
   let patOpen = $state(false);
   let patternEmoji = $derived((editing && isMe && draft) ? (draft.pattern ?? "") : (view?.pattern ?? ""));
-  let patternBg = $derived(patternEmoji ? patternUrl(patternEmoji) : "");
+  let patternBg = $derived(patternEmoji ? patternRingUrl(patternEmoji) : "");
   let showQr = $state(false);
 
   // Now-playing to show on the card: our own when viewing self, else the
@@ -474,7 +498,9 @@
         <div class="avatar-wrap">
           <div class="avatar" style={`background: linear-gradient(135deg, ${bannerA}, ${bannerB});`}>
             {#if shownAvatar}
-              <img src={shownAvatar} alt={view.display_name} />
+              <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+              <img src={shownAvatar} alt={view.display_name} class:zoomable={!editing}
+                onclick={() => { if (!editing && shownAvatar) openLightbox({ url: shownAvatar, kind: /\.(mp4|webm)(\?|$)/i.test(shownAvatar) ? "video" : "image", name: view?.display_name, from: view?.display_name }); }} />
             {:else}
               {view.display_name.charAt(0).toUpperCase()}
             {/if}
@@ -540,6 +566,19 @@
               <b>{(draft.card_g ?? CARD_LENGTH) === 0 ? $t("solid") : `${draft.card_g ?? CARD_LENGTH}%`}</b></label>
           </div>
           <div class="field">
+            <span>{$t("Name and reply colour")}</span>
+            <div class="nc-row">
+              <button class="nc" class:on={!draft.name_color} onclick={() => draft && (draft = { ...draft, name_color: "" })} title={$t("Automatic")} aria-label={$t("Automatic")}>A</button>
+              {#each NAME_COLORS as c (c)}
+                <button class="nc" class:on={draft.name_color?.toLowerCase() === c.toLowerCase()} style:--nc={c} onclick={() => draft && (draft = { ...draft, name_color: c })} aria-label={c}></button>
+              {/each}
+            </div>
+            <div class="nc-prev" style:--nc={draft.name_color || "var(--accent)"}>
+              <b>{draft.display_name || $t("You")}</b>
+              <span class="nc-q"><b>{draft.display_name || $t("You")}</b><i>{$t("Reply to your message looks like this")}</i></span>
+            </div>
+          </div>
+          <div class="field">
             <span>{$t("Banner pattern")}</span>
             <div class="pat-grid">
               <button class="pat" class:on={!draft.pattern} onclick={() => draft && (draft = { ...draft, pattern: "" })} title={$t("No pattern")}>
@@ -586,7 +625,29 @@
                 <button class="btn-ghost small" onclick={() => removeLink(i)} title={$t("Remove")}>×</button>
               </div>
             {/each}
-            {#if (draft.links ?? []).length < 8}<button class="btn-ghost small add-row" onclick={addLink}>+ {$t("Add link")}</button>{/if}
+            {#if (draft.links ?? []).length < 12}<button class="btn-ghost small add-row" onclick={addLink}>+ {$t("Add link")}</button>{/if}
+          </div>
+          <div class="field">
+            <span>{$t("Connections")}</span>
+            {#if connSvc}
+              <div class="link-edit">
+                <span class="svc-dot" style:background={connSvc.color} style:color={onColor(connSvc.color)}>{connSvc.name.charAt(0)}</span>
+                <input class="le-url" bind:value={connHandle} placeholder={tr("Your name on {s}", { s: connSvc.name })} autocomplete="off" spellcheck="false"
+                  onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); addConn(); } if (e.key === "Escape") connSvc = null; }} />
+                <button class="btn-ghost small" onclick={addConn} disabled={!connHandle.trim()}>{$t("Add")}</button>
+                <button class="btn-ghost small" onclick={() => (connSvc = null)} title={$t("Cancel")}>×</button>
+              </div>
+            {:else if connPick}
+              <div class="svc-grid">
+                {#each SERVICES as sv (sv.id)}
+                  <button class="svc" onclick={() => { connSvc = sv; connPick = false; connHandle = ""; }}>
+                    <span class="svc-dot" style:background={sv.color} style:color={onColor(sv.color)}>{sv.name.charAt(0)}</span>{sv.name}
+                  </button>
+                {/each}
+              </div>
+            {:else if (draft.links ?? []).length < 12}
+              <button class="btn-ghost small add-row" onclick={() => (connPick = true)}>+ {$t("Connect a service")}</button>
+            {/if}
           </div>
           <div class="field">
             <span>{$t("Favourite games")}</span>
@@ -684,7 +745,7 @@
         <div class="pf-grid">
         <div class="pf-left">
           <h2 class="name">
-            {view.display_name}<EmojiStatus token={view.estatus} size={24} zoom />
+            {view.display_name}{#if !isMe && $peerCards[activeUsername]?.verified}<OfficialMark size={22} />{/if}<EmojiStatus token={view.estatus} size={24} zoom />
             {#if view.verified}<span class="badge" title={$t("Verified identity")}>{@html icons.verified}</span>{/if}
             {#if view.is_bot}<span class="bot-tag">BOT</span>{/if}
 
@@ -719,11 +780,24 @@
             </section>
           {/if}
 
-          {#if view.links.length}
+          {#if conns.length}
+            <section class="section">
+              <div class="section-label">{$t("Connections")}</div>
+              <div class="conns">
+                {#each conns as c, i (i)}
+                  <button class="conn" onclick={() => api.openExternal(c.url).catch(() => {})} title={c.url}>
+                    <span class="svc-dot" style:background={c.s.color} style:color={onColor(c.s.color)}>{c.s.name.charAt(0)}</span>
+                    <span class="conn-t"><b>{c.handle}</b><small>{c.s.name}</small></span>
+                  </button>
+                {/each}
+              </div>
+            </section>
+          {/if}
+          {#if plainLinks.length}
             <section class="section">
               <div class="section-label">{$t("Links")}</div>
               <div class="links">
-                {#each view.links as l, i (i)}
+                {#each plainLinks as l, i (i)}
                   <button class="link-row" onclick={() => api.openExternal(l.url).catch(() => {})} title={l.url}>
                     <span class="link-ic">{@html linkIcon(l.url)}</span>
                     <span class="link-txt">{l.label || hostOf(l.url)}</span>
@@ -775,7 +849,14 @@
           <div class="pf-tabs" role="tablist">
             <button role="tab" class:on={pfTab === "board"} aria-selected={pfTab === "board"} onclick={() => (pfTab = "board")}>{$t("Board")}</button>
             <button role="tab" class:on={pfTab === "activity"} aria-selected={pfTab === "activity"} onclick={() => (pfTab = "activity")}>{$t("Activity")}</button>
+            {#if !isMe && activeUsername}
+              <!-- Your shared photos, files, voice and links (Telegram's profile tabs). -->
+              <button role="tab" class:on={pfTab === "media"} aria-selected={pfTab === "media"} onclick={() => (pfTab = "media")}>{$t("Shared media")}</button>
+            {/if}
           </div>
+          {#if pfTab === "media" && !isMe && activeUsername}
+            <div class="pf-media">{#key activeUsername}<SharedMedia peerId={activeUsername} title={view.display_name} />{/key}</div>
+          {/if}
 
           {#if pfTab === "board"}
             {#each view.activity.filter((a, i, all) => all.findIndex((b) => b.kind + b.name === a.kind + a.name) === i) as a (a.kind + a.name)}
@@ -832,12 +913,17 @@
                 <section class="card">
                   <div class="section-label">{$t("My favourite games")}</div>
                   <div class="games">
-                    {#each view.games.slice(1, showAllGames ? 12 : 9) as g (g)}
+                    <!-- Every starred game, the main one too; the name under the poster
+                         (on the poster it was cut off by the card's edge). -->
+                    {#each view.games.slice(0, showAllGames ? 16 : 8) as g (g)}
                       {@const pl = view.played.find((x) => x.n === g)}
-                      <GamePoster name={g} cover={coverFor(g, $gameIds, $gameCovers, view.game_ids)} icon={iconFor(g, $gameIds, $gameIcons, view.game_ids)} hours={pl?.h ?? 0} />
+                      <div class="g-item" title={g}>
+                        <GamePoster name={g} bare cover={coverFor(g, $gameIds, $gameCovers, view.game_ids)} icon={iconFor(g, $gameIds, $gameIcons, view.game_ids)} hours={pl?.h ?? 0} />
+                        <span class="g-name">{g}</span>
+                      </div>
                     {/each}
                   </div>
-                  {#if view.games.length > 9}<button class="more-games" onclick={() => (showAllGames = !showAllGames)}>{showAllGames ? $t("Show less") : $t("Show more")}</button>{/if}
+                  {#if view.games.length > 8}<button class="more-games" onclick={() => (showAllGames = !showAllGames)}>{showAllGames ? $t("Show less") : $t("Show more")}</button>{/if}
                 </section>
               {/if}
             {/if}
@@ -869,7 +955,7 @@
             {#if !view.activity.length && !np && !view.music_url && !view.games.length && !view.played.length && !view.favourite_music}
               <div class="pf-empty">{isMe ? $t("Add a favourite track, games and links in “Edit profile”.") : $t("Nothing here yet.")}</div>
             {/if}
-          {:else}
+          {:else if pfTab === "activity"}
             {#each view.activity as a (a.kind + a.name)}
               <div class="act-card">
                 <div class="act-ic" data-k={a.kind}>{a.kind === "playing" ? "🎮" : a.kind === "listening" ? "🎧" : "📺"}</div>
@@ -904,11 +990,15 @@
 {/if}
 
 <style>
+  .avatar img.zoomable { cursor: zoom-in; }
   /* Wide, two-column profile (view mode) */
   .sheet.wide { width: min(880px, 96vw) !important; }
   .pf-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 22px; align-items: start; }
   .pf-left { min-width: 0; }
   .pf-right { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+  .pf-media { min-height: 240px; max-height: 60vh; display: flex; flex-direction: column; border-radius: calc(14px * var(--rk, 1)); overflow: hidden;
+    background: color-mix(in srgb, var(--bg-shell) 40%, transparent); border: 1px solid var(--border); }
+  :global(html.phone) .pf-media { max-height: none; }
   @media (max-width: 760px) { .pf-grid { grid-template-columns: 1fr; } }
   .pf-tabs { display: flex; gap: 18px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
   .pf-tabs button {
@@ -920,6 +1010,19 @@
   .card { padding: 12px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-input); border: 1px solid var(--border); }
   .pf-empty { font-size: 12.5px; color: var(--fg-dim); padding: 18px 4px; text-align: center; }
   .links { display: flex; flex-direction: column; gap: 2px; }
+  /* Connections: a chip per service account. */
+  .conns { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+  .conn { display: flex; align-items: center; gap: 9px; padding: 7px 9px; border: 1px solid var(--border); border-radius: calc(10px * var(--rk, 1));
+    background: var(--bg-input); color: var(--fg); cursor: pointer; text-align: left; min-width: 0; transition: border-color .12s; }
+  .conn:hover { border-color: var(--accent); }
+  .conn-t { min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
+  .conn-t b, .conn-t small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conn-t b { font-size: 13px; } .conn-t small { font-size: 11px; color: var(--fg-muted); }
+  .svc-dot { width: 24px; height: 24px; flex: none; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 800; }
+  .svc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; }
+  .svc { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: calc(10px * var(--rk, 1));
+    background: transparent; color: var(--fg); font: inherit; font-size: 12.5px; cursor: pointer; text-align: left; }
+  .svc:hover { border-color: var(--accent); }
   .link-row {
     display: flex; align-items: center; gap: 10px; padding: 7px 8px; border: none; border-radius: calc(8px * var(--rk, 1));
     background: none; color: var(--fg); cursor: pointer; text-align: left; font-size: 13px;
@@ -930,7 +1033,12 @@
   .link-ic :global(svg) { width: 18px; height: 18px; }
   .link-txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .link-go { color: var(--fg-dim); font-size: 12px; }
-  .games { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 8px; }
+  /* Bigger posters: 3 a row in the profile window, 4 on a phone's full width. */
+  .games { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 10px; margin-top: 8px; }
+  :global(html.phone) .games { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 8px; }
+  .g-item { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .g-name { font-size: 12px; font-weight: 600; line-height: 1.25; color: var(--fg); text-align: center;
+    overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
   .game-star { color: #FFD45C; font-size: 11px; }
   .more-games { margin-top: 10px; border: none; background: none; color: var(--fg-muted); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; padding: 0; }
   .more-games:hover { color: var(--accent); text-decoration: underline; }
@@ -977,6 +1085,7 @@
       border-radius: 0; border: none; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
     .close { display: none; }
     .p-back { display: grid; }
+    .sheet:not(.ed) .banner { height: 210px; }
   }
   @media (max-width: 760px) {
     .sheet.ed { height: auto; }
@@ -1033,7 +1142,9 @@
     border-color: color-mix(in srgb, var(--card) 22%, transparent) !important;
   }
   .sheet .avatar, .sheet .presence { border-color: var(--card-top); }
-  .pattern { position: absolute; inset: 0; pointer-events: none; background-size: 150px 100px; opacity: 0.22; mix-blend-mode: overlay; }
+  /* Rings of the emoji around the avatar (Telegram), clearly visible. */
+  .pattern { position: absolute; inset: 0; pointer-events: none; background-size: auto 100%; background-repeat: no-repeat; background-position: left top; opacity: 0.5; mix-blend-mode: overlay; }
+  .sheet.light .pattern { mix-blend-mode: normal; opacity: 0.35; filter: invert(1); }
   .field small.es-note { font-size: 11.5px; color: var(--fg-dim); text-transform: none; letter-spacing: 0; font-weight: 400; line-height: 1.4; }
   /* Emoji next to the name */
   .es-row { position: relative; display: flex; align-items: center; gap: 12px; }
@@ -1044,7 +1155,8 @@
   .es-cur:hover { border-color: var(--accent); transform: scale(1.04); }
   .es-cur :global(.es) { margin: 0; }
   .es-none { font-size: 22px; font-weight: 300; }
-  .es-txt { display: flex; gap: 12px; }
+  .es-txt { display: flex; align-items: center; gap: 12px; align-self: stretch; }
+  .es-txt .lnk { line-height: 1.2; padding: 6px 0; }
   .lnk { border: none; background: none; padding: 0; font: inherit; font-size: 13px; font-weight: 700; color: var(--accent); cursor: pointer; text-transform: none; letter-spacing: 0; }
   .sheet.light .lnk { color: var(--fg); text-decoration: underline; }
   .lnk.dim { color: var(--fg-dim); }
@@ -1069,6 +1181,15 @@
   .slider b { font-size: 12px; color: var(--fg-muted); text-align: right; font-variant-numeric: tabular-nums; }
   .slider input[type="range"] { width: 100%; accent-color: var(--accent); }
   .sheet.light .slider input[type="range"] { accent-color: #15171d; }
+  .nc-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .nc { width: 28px; height: 28px; border-radius: 50%; border: none; cursor: pointer; background: var(--nc, var(--bg-input)); color: var(--fg-muted); font: 700 12px var(--font-ui, inherit);
+    box-shadow: 0 0 0 2px var(--card-bg, var(--bg-shell)); transition: transform .15s, box-shadow .15s; }
+  .nc.on { box-shadow: 0 0 0 2px var(--card-bg, var(--bg-shell)), 0 0 0 4px var(--nc, var(--fg-muted)); transform: scale(1.05); }
+  .nc-prev { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-input); }
+  .nc-prev > b { color: var(--nc); font-size: 13.5px; }
+  .nc-q { display: flex; flex-direction: column; padding: 4px 8px; border-left: 3px solid var(--nc); border-radius: calc(6px * var(--rk, 1)); background: color-mix(in srgb, var(--nc) 14%, transparent); font-size: 12.5px; }
+  .nc-q b { color: var(--nc); }
+  .nc-q i { font-style: normal; color: var(--fg-muted); }
   /* Banner pattern */
   .pat-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; }
   .pat { aspect-ratio: 1; min-width: 0; border-radius: calc(10px * var(--rk, 1)); border: 1px solid var(--border); background: var(--bg-input);
@@ -1124,8 +1245,9 @@
     to   { opacity: 1; transform: translateY(0); }
   }
 
+  /* A bigger banner (was 120 px). */
   .banner {
-    height: 120px;
+    height: 180px;
     position: relative;
     flex-shrink: 0;
     overflow: hidden;
@@ -1199,15 +1321,15 @@
   .body {
     position: relative;
     padding: 0 22px 22px;
-    margin-top: -44px;
+    margin-top: -52px;
   }
 
-  .avatar-wrap { position: relative; width: 88px; margin-bottom: 14px; }
+  .avatar-wrap { position: relative; width: 104px; margin-bottom: 14px; }
   .avatar {
-    width: 88px; height: 88px;
+    width: 104px; height: 104px;
     border-radius: var(--ava-r, 50%);
     display: grid; place-items: center;
-    font-size: 36px;
+    font-size: 40px;
     font-weight: 800;
     color: #06070C;
     border: 5px solid var(--bg-shell);
@@ -1290,6 +1412,8 @@
     letter-spacing: -0.01em;
     display: flex; align-items: center; gap: 6px;
   }
+  /* The emoji sits right after the name (its own 4px margin + the gap was a hole). */
+  .name :global(.es) { margin-left: -2px; }
   .badge :global(svg) { width: 16px; height: 16px; color: var(--accent); filter: drop-shadow(0 0 4px var(--accent-glow)); }
   .username {
     font-family: var(--font-mono);

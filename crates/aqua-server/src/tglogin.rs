@@ -62,7 +62,7 @@ fn explain(e: &str) -> String {
     } else if l.contains("unauthorized") || l.contains("not found") {
         "the server's Telegram bot token is invalid (revoked?) — the server's admin has to set a new one".into()
     } else {
-        format!("the server can't reach Telegram: {e}")
+        format!("the server can't reach Telegram ({e}) — its admin sets a proxy in Aquamarine Server → Stickers → Telegram network")
     }
 }
 
@@ -73,11 +73,11 @@ fn rand_hex(n: usize) -> String {
 }
 
 fn http() -> reqwest::Client {
-    reqwest::Client::builder().timeout(Duration::from_secs(40)).build().unwrap_or_default()
+    crate::tgnet::client(40)
 }
 
 async fn call(token: &str, method: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
-    let r = http().post(format!("https://api.telegram.org/bot{token}/{method}")).json(&body).send().await.map_err(|e| e.without_url().to_string())?;
+    let r = http().post(format!("{}/bot{token}/{method}", crate::tgnet::base())).json(&body).send().await.map_err(|e| e.without_url().to_string())?;
     let v: serde_json::Value = r.json().await.map_err(|e| e.to_string())?;
     if v["ok"].as_bool() != Some(true) {
         return Err(v["description"].as_str().unwrap_or("Telegram said no").to_string());

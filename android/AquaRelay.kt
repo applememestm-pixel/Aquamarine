@@ -66,6 +66,11 @@ class PipArgs {
 }
 
 @InvokeArg
+class SecureArgs {
+  var on: Boolean = false
+}
+
+@InvokeArg
 class WidgetArgs {
   var data: String = "{}"
 }
@@ -102,6 +107,18 @@ class AquaRelayPlugin(private val activity: Activity) : Plugin(activity) {
     val ratio = if (r >= 1) android.util.Rational((r * 1000).toInt(), 1000) else android.util.Rational(1000, (1000 / r).toInt())
     val ok = activity.enterPictureInPictureMode(android.app.PictureInPictureParams.Builder().setAspectRatio(ratio).build())
     if (ok) invoke.resolve(JSObject().put("ok", true)) else invoke.reject("picture-in-picture was refused")
+  }
+
+  /** No screenshots or screen recording while a view-once photo is open
+   *  or in a chat with sharing off (FLAG_SECURE). */
+  @Command
+  fun secure(invoke: Invoke) {
+    val a = invoke.parseArgs(SecureArgs::class.java)
+    activity.runOnUiThread {
+      val f = android.view.WindowManager.LayoutParams.FLAG_SECURE
+      if (a.on) activity.window.addFlags(f) else activity.window.clearFlags(f)
+    }
+    invoke.resolve(JSObject().put("ok", true))
   }
 
   /** A web or mail link in the browser / mail app ("What's new", About,

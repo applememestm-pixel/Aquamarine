@@ -12,6 +12,7 @@
   import { t, tr } from "../i18n";
   import { askConfirm } from "./Confirm.svelte";
   import { showToast } from "./Toast.svelte";
+  import { IS_MOBILE } from "../platform";
 
   let pass = $state("");
   let pass2 = $state("");
@@ -32,7 +33,9 @@
   // ---- Telegram's passcode: 4 digits in boxes, a keypad below ----
   const PIN_LEN = 4;
   const KEYS: [string, string][] = [["1", ""], ["2", "ABC"], ["3", "DEF"], ["4", "GHI"], ["5", "JKL"], ["6", "MNO"], ["7", "PQRS"], ["8", "TUV"], ["9", "WXYZ"]];
-  let usePassword = $state(false);                 // setup: "use a password instead"
+  // Setup: phones get Telegram's 4 digits with a keypad; a PC keeps the
+  // ordinary password field (a keypad to click with the mouse was clumsy).
+  let usePassword = $state(!IS_MOBILE);
   let pinStep = $state<1 | 2>(1);                  // setup: enter, then repeat
   let pinFirst = "";
   const pinMode = $derived($locked ? $lockConf?.kind === "pin" : !usePassword);
@@ -70,7 +73,7 @@
     if ($info?.registered && !$wizardOpen && !$lockConf?.hash && !$lockConf?.skipped) passcodeSetupOpen.set(true);
   });
   $effect(() => {
-    if ($locked || $passcodeSetupOpen) { pass = ""; pass2 = ""; err = ""; forgotStep = 0; code = ""; pinStep = 1; pinFirst = ""; void tick().then(() => input?.focus()); }
+    if ($locked || $passcodeSetupOpen) { pass = ""; pass2 = ""; err = ""; forgotStep = 0; code = ""; pinStep = 1; pinFirst = ""; if (!$locked) usePassword = !IS_MOBILE; void tick().then(() => input?.focus()); }
   });
 
   // Fingerprint / face: asked for right away when the lock shows (phones,
@@ -168,7 +171,8 @@
           {#each Array(PIN_LEN) as _, i (i)}<span class="pin-box" class:filled={pass.length > i} class:cur={pass.length === i}></span>{/each}
         </div>
         {#if err}<div class="err">{err}</div>{/if}
-        <div class="keypad">
+        {#if !IS_MOBILE}<div class="hint">{$t("Type the digits on the keyboard")}</div>{/if}
+        <div class="keypad" class:hidden={!IS_MOBILE}>
           {#each KEYS as [d, l] (d)}<button class="key" onclick={() => pinKey(d)} disabled={busy}><b>{d}</b><small>{l}</small></button>{/each}
           {#if $locked && bioOk}
             <button class="key bio" onclick={tryBio} aria-label={$t("Fingerprint")} title={$t("Fingerprint")}>
@@ -319,4 +323,5 @@
     .keypad { margin-top: auto; }
     .pair { flex-wrap: wrap; }
   }
+  .keypad.hidden { display: none; }
 </style>

@@ -13,6 +13,7 @@
 </script>
 
 <script lang="ts">
+  import AuthApps from "./AuthApps.svelte";
   import { api } from "../tauri";
   import { t, tr } from "../i18n";
   import QrCode from "./QrCode.svelte";
@@ -73,6 +74,7 @@
         <h3>{$t("Turn on two-step verification")}</h3>
         <p>{$t("Since 1.2.0 every account needs it: whoever learns your password still can't sign in without a code from your phone. Until it's on, this server doesn't let the app connect.")}</p>
         <p class="dim">{$t("You need an authenticator app: Google Authenticator, Aegis, 2FAS, Bitwarden — any of them.")}</p>
+        <AuthApps />
         {#if setup}
           <p class="step">{$t("1. Scan the code in the authenticator app (or add the key by hand).")}</p>
           <div class="tf-qr"><QrCode text={setup.uri} size={180} color="#0b1220" letter="2" /></div>

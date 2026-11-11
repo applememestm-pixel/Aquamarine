@@ -54,3 +54,36 @@ pub async fn open_chat_window(app: AppHandle, peer_id: String, title: String) ->
         Err("separate windows are a desktop feature".into())
     }
 }
+
+/// The built-in browser (desktop): a web link opens in a window of the app
+/// instead of the system browser. It is a plain web page — no capability
+/// covers `web-*` windows, so the page gets no access to the app (no IPC),
+/// and it may only go to http(s) addresses.
+#[tauri::command]
+pub async fn open_browser_window(app: AppHandle, url: String) -> Result<(), String> {
+    let u = tauri::Url::parse(url.trim()).map_err(|_| "not a valid link".to_string())?;
+    if !matches!(u.scheme(), "http" | "https") {
+        return Err("only web links open in the built-in browser".into());
+    }
+    #[cfg(desktop)]
+    {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static N: AtomicU32 = AtomicU32::new(0);
+        let label = format!("web-{}", N.fetch_add(1, Ordering::Relaxed));
+        let host = u.host_str().unwrap_or("").to_string();
+        let win = tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::External(u))
+            .title(if host.is_empty() { "Aquamarine".to_string() } else { format!("{host} — Aquamarine") })
+            .inner_size(1100.0, 780.0)
+            .min_inner_size(360.0, 400.0)
+            .on_navigation(|nav| matches!(nav.scheme(), "http" | "https" | "about" | "blob" | "data"))
+            .build()
+            .map_err(|e| format!("window: {e}"))?;
+        let _ = win.set_focus();
+        Ok(())
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = (app, u);
+        Err("the built-in browser is a desktop feature".into())
+    }
+}

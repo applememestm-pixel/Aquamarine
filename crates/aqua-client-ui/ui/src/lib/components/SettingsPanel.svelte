@@ -5,6 +5,8 @@
 
 <script lang="ts">
   import Select from "./Select.svelte";
+  import { chatLines } from "../listLook";
+  import { inAppBrowser } from "../browser";
   import { IS_MOBILE, IS_DESKTOP } from "../platform";
   import { GUIDE } from "../errorCodes";
   import { meetOpen } from "./MeetSheet.svelte";
@@ -129,6 +131,44 @@
   const SECTIONS = GROUPS.flat().filter((x) => x.id !== "profile" && x.id !== "shortcuts") as (Item & { id: Sec })[];
   const sectionItem = $derived(GROUPS.flat().find((x) => x.id === section));
   const sectionTitle = $derived(sectionItem?.label ?? "Settings");
+  /** What each section holds — a subtitle under the row (Telegram) and words the search finds it by. */
+  const SUBS: Record<string, [string, string]> = {
+    profile: ["Name, photo, bio, banner, colours", "avatar about username banner colour pattern links games"],
+    devices: ["Phones and computers on your account", "sessions qr link device list approve"],
+    privacy: ["Who sees what, passcode, two-step", "last seen online phone birthday calls voice forwards block passcode 2fa two-step authenticator"],
+    ghost: ["Read without being seen", "ghost invisible typing read receipts"],
+    notifications: ["Sounds, previews, quiet hours", "sound vibration reminder mute preview"],
+    behaviour: ["Enter to send, attach menu, links", "enter send attach menu link previews seconds built-in browser"],
+    storage: ["Downloads, cache, auto-download", "cache downloads folder auto-download media size"],
+    power: ["Animations, autoplay, battery", "battery animations gifs videos autoplay"],
+    music: ["Navidrome, the player", "navidrome subsonic player tracks"],
+    stickers: ["Packs, emoji, Telegram import", "stickers emoji packs telegram import gifs"],
+    voice: ["Microphone, camera, noise", "microphone camera speaker noise echo push to talk"],
+    language: ["Interface language", "language translate english russian"],
+    appearance: ["Theme, text size, chat list, wallpaper", "theme dark light font text size scale bubbles media wallpaper chat list lines density icon accent"],
+    window: ["Tray, start with the system", "tray autostart window close minimize"],
+    account: ["Server, @name, log out", "server username log out sign out delete account"],
+    network: ["Proxy, connection", "proxy socks tor network connection"],
+    host: ["Run a server on this device", "own server host relay"],
+    nearby: ["Wi-Fi and Bluetooth without the internet", "offline mesh bluetooth wifi nearby"],
+    backups: ["Save and restore chats", "backup restore export import"],
+    bots: ["Your bots", "bots token api"],
+    shortcuts: ["Keys for everything", "keyboard shortcuts hotkeys"],
+    updates: ["New versions", "update version download"],
+    advanced: ["Plugins and experiments", "plugins experimental debug"],
+    about: ["Version, licences, links", "about version licence github"],
+  };
+  // Settings search (Telegram's): by name, subtitle and what's inside.
+  let navQuery = $state("");
+  const navHits = $derived.by(() => {
+    const q = navQuery.trim().toLowerCase();
+    if (!q) return [];
+    return GROUPS.flat().filter(shown).filter((it) => {
+      const sub = SUBS[it.id] ?? ["", ""];
+      return [it.label, tr(it.label), sub[0], tr(sub[0]), sub[1]].some((x) => x.toLowerCase().includes(q));
+    });
+  });
+  let navMenu = $state(false);
 
   // ---- Phone layout (<= 720px): Telegram-style list of tiles; tapping one
   //      opens that section full-screen with  ‹ [icon] Title  on top. The
@@ -963,7 +1003,19 @@
         <nav class="nav">
           <div class="list-head phone-only">
             <h2>{$t("Settings")}</h2>
+            <button class="more" onclick={() => (navMenu = !navMenu)} aria-label={$t("More")} aria-expanded={navMenu}>
+              <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+            </button>
             <button data-x class="close" onclick={closeAll} title={$t("Close")}>×</button>
+            {#if navMenu}
+              <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+              <div class="nm-veil" onclick={() => (navMenu = false)}></div>
+              <div class="nm" role="menu">
+                <button role="menuitem" onclick={() => { navMenu = false; closeAll(); openProfile(); }}>{$t("Edit profile")}</button>
+                <button role="menuitem" onclick={() => { navMenu = false; openItem(GROUPS.flat().find((x) => x.id === "account")!); }}>{$t("Account & server")}</button>
+                <button role="menuitem" class="danger" onclick={() => { navMenu = false; void logOut(); }}>{$t("Log out")}</button>
+              </div>
+            {/if}
           </div>
           <button class="me-card" onclick={() => { closeAll(); openProfile(); }} title={$t("Edit profile")}>
             <span class="me-ava" style:background={`linear-gradient(135deg, ${$profile.banner_a}, ${$profile.banner_b})`}>
@@ -975,14 +1027,24 @@
               <span class="me-online" class:off={!$info?.connected}>{$info?.connected ? ($myOnline === "invisible" ? "invisible" : $myOnline === "dnd" ? "do not disturb" : $myOnline) : "offline"}</span>
             </span>
           </button>
+          <label class="nav-search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input placeholder={$t("Search settings")} bind:value={navQuery} />
+            {#if navQuery}<button onclick={() => (navQuery = "")} aria-label={$t("Clear")}>×</button>{/if}
+          </label>
           {#snippet navItem(it: Item)}
-            <button class="nav-item" class:active={section === it.id} onclick={() => openItem(it)}>
+            <button class="nav-item" class:active={section === it.id} onclick={() => { navQuery = ""; openItem(it); }}>
               <span class="tile" style:background={it.color}>{@html it.icon}</span>
-              <span class="nav-lbl">{$t(it.label)}</span>
+              <span class="nav-lbl">{$t(it.label)}{#if SUBS[it.id]}<small class="nav-sub">{$t(SUBS[it.id][0])}</small>{/if}</span>
               {#if it.id === "language"}<span class="nav-hint">{LANGS.find((l) => l.id === $lang)?.native}</span>{:else if it.hint}<span class="nav-hint">{it.hint}</span>{/if}
               <span class="chev">›</span>
             </button>
           {/snippet}
+          {#if navQuery.trim()}
+            <div class="nav-group">
+              {#each navHits as it (it.id)}{@render navItem(it)}{:else}<div class="nav-none">{$t("Nothing found")}</div>{/each}
+            </div>
+          {:else}
           {#each BASIC_GROUPS as g, gi (gi)}
             <div class="nav-group">
               {#each g.filter(shown) as it (it.id)}{@render navItem(it)}{/each}
@@ -999,6 +1061,7 @@
             <div class="nav-group">
               {#each ADVANCED_ITEMS.filter(shown) as it (it.id)}{@render navItem(it)}{/each}
             </div>
+          {/if}
           {/if}
         </nav>
 
@@ -1331,6 +1394,12 @@
         </div>
 
         <div class="row">
+          <span class="row-label">{$t("Chat list")}</span>
+          <SegFit label={$t("Chat list")} value={String($chatLines)} onpick={(v) => chatLines.set(v === "3" ? 3 : 2)}
+            options={[{ id: "2", label: $t("Two lines") }, { id: "3", label: $t("Three lines") }]} />
+        </div>
+
+        <div class="row">
           <span class="row-label">{$t("Text size")}</span>
           <div class="range">
             <input
@@ -1566,11 +1635,16 @@
       {#if IS_MOBILE}
       <section class="group">
         <div class="label">{$t("Glass panels")}</div>
-        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, glass: !x.glass }))}>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, glass: !(x.glass ?? true) }))}>
           <div class="tr-text"><div class="tr-title">{$t("See-through floating panels")}</div><div class="tr-sub">{$t("The chat header, the message field and the tab bar float over the chat, like in the new Telegram")}</div></div>
-          <span class="switch" class:on={!!$settings.glass}></span>
+          <span class="switch" class:on={$settings.glass ?? true}></span>
         </button>
-        {#if $settings.glass}
+        <div class="row">
+          <span class="row-label">{$t("Panel shape")}</span>
+          <SegFit label={$t("Panel shape")} value={$settings.panelShape ?? "round"} onpick={(v) => settings.update((x) => ({ ...x, panelShape: v }))}
+            options={[{ id: "round" as const, label: $t("Rounded") }, { id: "square" as const, label: $t("Square") }]} />
+        </div>
+        {#if $settings.glass ?? true}
           {@const ga = $settings.glassAlpha ?? 55}
           <div class="ava-row">
             <div class="ava-ctl">
@@ -1666,6 +1740,15 @@
           </div>
           <span class="switch" class:on={$settings.linkPreviews}></span>
         </button>
+        {#if IS_DESKTOP}
+          <button class="toggle-row" onclick={() => inAppBrowser.update((v) => !v)}>
+            <div class="tr-text">
+              <div class="tr-title">{$t("Built-in browser")}</div>
+              <div class="tr-sub">{$t("Links open in a window of the app, not in your browser. The page gets no access to the app.")}</div>
+            </div>
+            <span class="switch" class:on={$inAppBrowser}></span>
+          </button>
+        {/if}
         <button class="toggle-row" onclick={() => { toggle("showSeconds"); void loadActiveMessages(); void api.listChats().then((c) => chats.set(c)).catch(() => {}); }}>
           <div class="tr-text">
             <div class="tr-title">{$t("Seconds in message times")}</div>
@@ -1820,7 +1903,7 @@
           <div class="bk-stat">
             <span class="bk-dot" class:on={devList.published && devList.this_listed}></span>
             <span>{devList.published
-              ? (devList.this_listed ? tr("Signed device list: {n} devices (version {v}). Contacts encrypt only to these.", { n: devList.devices, v: devList.ver ?? 0 }) : tr("This device isn't on your signed list yet — approve it on one of your other devices."))
+              ? (devList.this_listed ? tr("Signed device list: {n} devices. Contacts encrypt only to these.", { n: devList.devices }) : tr("This device isn't on your signed list yet — approve it on one of your other devices."))
               : tr("No signed device list yet — it appears by itself in a moment.")}</span>
           </div>
           {#if devList.published && !devList.this_listed}
@@ -2559,6 +2642,31 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     background: var(--bg-surface); color: inherit;
   }
   .me-card:hover { background: var(--bg-hover); }
+  .nav-search { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px; border-radius: calc(19px * var(--rk, 1)); background: var(--bg-surface); color: var(--fg-dim); }
+  .nav-search svg { width: 17px; height: 17px; flex-shrink: 0; }
+  .nav-search input { flex: 1; min-width: 0; border: none; outline: none; background: transparent; color: var(--fg); font: 14px var(--font-ui, inherit); }
+  .nav-search button { border: none; background: transparent; color: var(--fg-dim); font-size: 18px; cursor: pointer; }
+  .nav-sub { display: none; font-size: 12px; font-weight: 400; color: var(--fg-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .nav-none { padding: 18px; text-align: center; font-size: 13px; color: var(--fg-dim); }
+  .list-head { position: relative; }
+  .list-head .more { display: grid; place-items: center; width: 34px; height: 34px; margin-left: auto; border: none; border-radius: 50%; background: transparent; color: var(--fg-muted); }
+  .list-head .more svg { width: 20px; height: 20px; }
+  .nm-veil { position: fixed; inset: 0; z-index: 30; }
+  .nm { position: absolute; right: 8px; top: 44px; z-index: 31; min-width: 200px; padding: 6px; border-radius: calc(14px * var(--rk, 1)); background: var(--bg-surface); border: 1px solid var(--border-strong);
+    box-shadow: 0 18px 40px -14px rgba(0,0,0,.8); display: flex; flex-direction: column; animation: nm-in .18s cubic-bezier(.2,.9,.3,1.1); transform-origin: top right; }
+  @keyframes nm-in { from { opacity: 0; transform: scale(.92); } }
+  .nm button { padding: 11px 12px; border: none; background: transparent; color: var(--fg); text-align: left; font: 500 14.5px var(--font-ui, inherit); border-radius: calc(9px * var(--rk, 1)); }
+  .nm button:active { background: var(--bg-hover); }
+  .nm .danger { color: var(--danger); }
+  /* Phones (Telegram): the profile on top in the middle over its colours,
+     subtitles under the rows. */
+  :global(html.phone) .me-card { flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 22px 12px 16px;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 22%, var(--bg-surface)), var(--bg-surface)); }
+  :global(html.phone) .me-card .me-ava { width: 96px; height: 96px; font-size: 36px; box-shadow: 0 10px 30px -12px rgba(0,0,0,.7); }
+  :global(html.phone) .me-card .me-text { align-items: center; }
+  :global(html.phone) .me-card .me-name { font-size: 21px; }
+  :global(html.phone) .nav-sub { display: block; }
+  :global(html.phone) .nav-lbl { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
   .me-ava {
     position: relative; width: 58px; height: 58px; border-radius: var(--ava-r, 50%); flex-shrink: 0;
     display: grid; place-items: center; font-size: 22px; font-weight: 800; color: rgba(6, 7, 12, 0.85); overflow: hidden;

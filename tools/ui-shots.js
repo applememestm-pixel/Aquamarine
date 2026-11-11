@@ -95,6 +95,13 @@ window.__TAURI_INTERNALS__ = {
     for (let i = 0; i < 3; i++) { const l = p.getByText(/^(Не сейчас|Not now)$/).first(); if (!(await l.count())) break; await l.click().catch(() => {}); await p.waitForTimeout(500); }
     await p.getByText(/^(Saved Messages|Избранное)$/).first().click(); await p.waitForTimeout(1200);
     await shot('9-track');
+    // Shift+Enter must make a new line in the message box, not send.
+    try {
+      const box = p.locator('.composer [contenteditable="true"]').first();
+      await box.click(); await p.keyboard.type('one'); await p.keyboard.press('Shift+Enter'); await p.keyboard.type('two');
+      console.log('shiftEnter', JSON.stringify(await box.evaluate((e) => ({ html: e.innerHTML, text: e.innerText, h: e.getBoundingClientRect().height }))));
+      await p.keyboard.press('Control+A'); await p.keyboard.press('Delete');
+    } catch (e) { errs.push('shiftEnter: ' + e.message.split('\n')[0]); }
     await p.locator('.attach-btn').first().click(); await p.waitForTimeout(600);
     await p.getByText(/^(Музыка|Music)$/).first().click(); await p.waitForTimeout(1500);
     await shot('10-music');

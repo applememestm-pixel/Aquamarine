@@ -32,6 +32,8 @@ use crate::state::AppState;
 
 const FILE: &str = "dev-lists.json";
 const FRESH: Duration = Duration::from_secs(60);
+/// List versions from here on are unix seconds (see [`publish`]).
+const TIME_VER: u64 = 1_000_000_000;
 
 #[derive(Default, Serialize, Deserialize)]
 struct Book {
@@ -105,7 +107,19 @@ pub async fn refresh(app: &AppHandle, transport: &Transport, user: &str, force: 
     if prev.as_ref() == Some(&list) {
         return;
     }
-    match list.accept(user, prev.as_ref()) {
+    // An account registered again under the same name (other keys, the
+    // count starting over) or a list whose earlier versions I never saw:
+    // signed later than the one I hold, by a device that one doesn't have.
+    // The old devices can't vouch for it — take it like a reset, with the
+    // warning, instead of ignoring the person for good. (Whoever could forge
+    // this could set the reset flag as well; an old copy replayed by the
+    // relay is signed earlier and stays refused.)
+    let verdict = match list.accept(user, prev.as_ref()) {
+        Err(aqua_core::devlist::ListError::Stale) | Err(aqua_core::devlist::ListError::UnknownSigner)
+            if prev.as_ref().is_some_and(|p| list.at > p.at && !p.devices.contains(&list.signer)) => Ok(Accepted::Reset),
+        other => other,
+    };
+    match verdict {
         Ok(how) => {
             with_book(app, |b| {
                 b.lists.insert(user.to_string(), list.clone());
@@ -120,6 +134,11 @@ pub async fn refresh(app: &AppHandle, transport: &Transport, user: &str, force: 
             crate::multidev::invalidate(user);
         }
         Err(aqua_core::devlist::ListError::Stale) => {}
+        // Still signed under their old @username (they renamed and their app
+        // hasn't re-signed it yet): nothing to warn about, it just doesn't count.
+        Err(aqua_core::devlist::ListError::WrongUser) => {
+            tracing::debug!(%user, "device list still under an old name — ignored");
+        }
         Err(e) => {
             tracing::warn!(%user, %e, "a device list was refused — the accepted one stays");
             let _ = app.emit("aqua://devlist_refused", serde_json::json!({ "user": user, "why": e.to_string() }));
@@ -176,12 +195,26 @@ pub async fn publish(app: &AppHandle, reset: bool) -> Result<bool, String> {
         Err(e) => return Err(e.to_string()),
     };
     let mine = DeviceKey::of(&identity.public());
-    if !reset && cur.as_ref().is_some_and(|c| !c.devices.contains(&mine)) {
-        // Not on the list yet: one of my approved devices adds me.
-        return Ok(false);
-    }
     let devs = t.my_devices().await.map_err(|e| e.to_string())?;
     let on_relay: std::collections::HashSet<String> = devs.iter().map(|d| d.id.clone()).collect();
+    let mut reset = reset;
+    if !reset && cur.as_ref().is_some_and(|c| !c.devices.contains(&mine)) {
+        // Not on the list. If a listed device is still signed in, it adds me
+        // ("It's me"). If none is — the account was registered again, or
+        // every old device signed out — nobody ever will, and people would
+        // go on encrypting to devices that are gone: start the list over.
+        let alive = cur.as_ref().is_some_and(|c| c.devices.iter().any(|d| d.id() != mine.id() && on_relay.contains(&d.id())));
+        if alive {
+            return Ok(false);
+        }
+        tracing::warn!("device list: none of its devices is signed in any more — starting it over");
+        reset = true;
+    }
+    // Versions used to count 1, 2, 3…: an account registered again under
+    // the same name began at 1 once more, and everyone who knew the old list
+    // took the new one for an old copy. A version is now the time of signing;
+    // a list still on the old count is signed again once.
+    let legacy = cur.as_ref().is_some_and(|c| c.ver < TIME_VER);
     let (known, wanted_ids) = {
         let s = state.lock().map_err(|e| e.to_string())?;
         let known = known_keys(&s, &me, cur.as_ref());
@@ -215,13 +248,16 @@ pub async fn publish(app: &AppHandle, reset: bool) -> Result<bool, String> {
         if let Some(c) = &cur {
             let mut have = c.devices.clone();
             have.sort();
-            if have == keys {
+            if have == keys && !legacy {
                 return Ok(false);
             }
         }
     }
-    let ver = cur.as_ref().map(|c| c.ver + 1).unwrap_or(1);
-    let list = SignedDeviceList::sign(&identity, &me, ver, now(), reset, keys);
+    let ver = cur.as_ref().map(|c| c.ver + 1).unwrap_or(1).max(now().max(0) as u64);
+    // "reset" on the first list and on the one-time re-signing too: whoever
+    // still holds a list this device isn't on takes it (with a warning)
+    // instead of refusing it for good; everyone else sees no difference.
+    let list = SignedDeviceList::sign(&identity, &me, ver, now(), reset || cur.is_none() || legacy, keys);
     let json = serde_json::to_string(&list).map_err(|e| e.to_string())?;
     t.put_devlist(json).await.map_err(|e| e.to_string())?;
     with_book(app, |b| { b.lists.insert(me.clone(), list.clone()); });

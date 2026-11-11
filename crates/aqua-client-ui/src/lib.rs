@@ -5,6 +5,8 @@
 //! [`state::AppState`] in a `Mutex` for cross-command access.
 
 pub mod state;
+#[cfg(desktop)]
+pub mod single;
 pub mod commands;
 pub mod media;
 pub mod activity;
@@ -96,6 +98,11 @@ pub fn run() -> Result<()> {
                 .map(std::path::PathBuf::from)
                 .or_else(|| app.path().app_data_dir().ok())
                 .unwrap_or_else(|| std::env::temp_dir().join("aquamarine-dev"));
+            // Already running on this data folder: show that window, quit.
+            #[cfg(desktop)]
+            if !single::claim(app.handle(), &base_dir) {
+                std::process::exit(0);
+            }
             // Several accounts on this device: each has its own directory
             // (accounts.rs); the first one is the base directory itself.
             let data_dir = accounts::resolve(&base_dir);
@@ -173,6 +180,7 @@ pub fn run() -> Result<()> {
             bluetooth::bt_answer,
             bluetooth::bt_receive,
             bluetooth::bt_show_inbox,
+            bluetooth::bt_system_wizard,
             web::link_preview,
             commands::upload_attachment,
             commands::prepare_banner_video,
@@ -204,6 +212,7 @@ pub fn run() -> Result<()> {
             personal::save_console_bot,
             personal::save_temp_file,
             personal::set_window_icon,
+            personal::set_shortcut_icon,
             personal::save_wallpaper,
             personal::games_search,
             personal::game_icon,
@@ -243,6 +252,7 @@ pub fn run() -> Result<()> {
             commands::forward_file,
             personal::write_text_file,
             windows::open_chat_window,
+            windows::open_browser_window,
             commands::note_call,
             commands::webapp_init,
             commands::webapp_menu,
@@ -255,6 +265,7 @@ pub fn run() -> Result<()> {
             web::cache_remote_media,
             web::telegraph_page,
             web::open_external,
+            web::show_in_folder,
             commands::init_app,
             commands::complete_registration,
             commands::log_out,
@@ -340,10 +351,13 @@ pub fn run() -> Result<()> {
             commands::channel_dm_open,
             relay_host::widget_update,
             relay_host::pip_enter,
+            relay_host::screen_secure,
+            commands::once_burn,
             commands::attach_file,
             commands::attach_file_as,
             commands::attach_bytes,
             commands::download_file,
+            commands::stream_file,
             commands::open_saved_file,
             storage::storage_get,
             storage::storage_set,

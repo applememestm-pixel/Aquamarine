@@ -257,9 +257,11 @@ export const api = {
   attachFile:         (peer_id: string, file_path: string, caption?: string): Promise<AttachResult>  => invoke("attach_file", { peerId: peer_id, filePath: file_path, caption: caption || null }),
   /** Re-send a file with a "Forwarded from" header (JSON). */
   forwardFile:        (peer_id: string, file_path: string, header: string): Promise<AttachResult> => invoke("forward_file", { peerId: peer_id, filePath: file_path, header }),
-  attachFileAs:       (peerId: string, filePath: string, mode: "file" | "media" | "compressed" | "live" | "live-loop" | "live-bounce", caption?: string): Promise<AttachResult> => invoke("attach_file_as", { peerId, filePath, mode, caption: caption || null }),
+  attachFileAs:       (peerId: string, filePath: string, mode: "file" | "media" | "compressed" | "live" | "live-loop" | "live-bounce" | "once", caption?: string): Promise<AttachResult> => invoke("attach_file_as", { peerId, filePath, mode, caption: caption || null }),
   attachBytes:        (peerId: string, name: string, mime: string, bytes: number[], caption?: string): Promise<AttachResult> => invoke("attach_bytes", { peerId, name, mime, bytes, caption: caption || null }),
   downloadFile:       (peer_id: string, message_id: string): Promise<DownloadResult> => invoke("download_file", { peerId: peer_id, messageId: message_id }),
+  /** A video sealed in pieces: a URL that plays while it downloads (saved when done). */
+  streamFile:         (peerId: string, messageId: string): Promise<string> => invoke("stream_file", { peerId, messageId }),
   sendCallSignal:     (peer_id: string, signal: object): Promise<void> =>
     invoke("send_call_signal", { peerId: peer_id, signalJson: JSON.stringify(signal) }),
   // Raw control payload over the E2EE session, never shown as a bubble
@@ -274,6 +276,13 @@ export const api = {
   sendGif:            (peer_id: string, path: string, caption?: string): Promise<AttachResult> => invoke("send_gif", { peerId: peer_id, filePath: path, caption: caption || null }),
   listLocalMedia:     (): Promise<LocalMediaList>                                  => invoke("list_local_media"),
   readMediaBytes:     (path: string): Promise<number[]>                            => invoke("read_media_bytes", { path }),
+  /** A view-once photo / video was looked at: wipe it from this device. */
+  /** The built-in browser window (desktop). */
+  openBrowserWindow:  (url: string): Promise<void>                                 => invoke("open_browser_window", { url }),
+  showInFolder:       (path: string): Promise<void>                                => invoke("show_in_folder", { path }),
+  onceBurn:           (peerId: string, messageId: string): Promise<void>           => invoke("once_burn", { peerId, messageId }),
+  /** No screenshots / screen recording (Android FLAG_SECURE, Windows / macOS). Resolves false where it can't. */
+  screenSecure:       (on: boolean): Promise<boolean>                              => invoke("screen_secure", { on }),
   readUserFont:       (path: string): Promise<number[]>                            => invoke("read_user_font", { path }),
   readUserImage:      (path: string): Promise<number[]>                            => invoke("read_user_image", { path }),
   // Open web: link previews, cached remote media, Telegraph pages, external links.

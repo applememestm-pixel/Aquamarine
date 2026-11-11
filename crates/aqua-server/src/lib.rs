@@ -42,6 +42,9 @@ pub mod totp;
 pub mod tglogin;
 pub mod report;
 pub mod music;
+pub mod verify;
+pub mod fedtunnel;
+pub mod tgnet;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
 pub use auth::{AuthState, Caller};
@@ -1729,7 +1732,7 @@ async fn admin_set_fed(
         }
         c.secret = sec.trim().to_string();
     }
-    c.peers = u.peers.into_iter().map(|p| p.trim().trim_end_matches('/').to_string()).filter(|p| p.starts_with("http")).collect();
+    c.peers = u.peers.into_iter().map(|p| p.trim().trim_end_matches('/').to_string()).filter(|p| p.starts_with("http") || p.starts_with("tunnel:")).collect();
     c.public_url = u.public_url.trim().trim_end_matches('/').to_string();
     if let Some(m) = u.mode.filter(|m| m == "solo" || m == "network") {
         // Into a network: a secret is needed to sign with — make one.
@@ -1858,6 +1861,14 @@ async fn admin_servers(State(state): State<AppState>, headers: axum::http::Heade
         let f = fed_now.clone();
         let is_peer = cfg.peers.iter().any(|p| p == u.trim_end_matches('/'));
         async move {
+            // A peer behind a router, linked back to us (fedtunnel.rs): it
+            // can't be probed directly, but it's here.
+            if u.starts_with("tunnel:") || (fed::tunnel_preferred(&u) && fedtunnel::active(&u)) {
+                let label = fedtunnel::list().into_iter().find(|(id, _)| id == &u).map(|(_, l)| l).unwrap_or_default();
+                let up = fedtunnel::active(&u);
+                return serde_json::json!({ "url": u, "label": label, "found": from, "peer": is_peer, "ok": up, "ms": serde_json::Value::Null,
+                    "via": "tunnel", "users": serde_json::Value::Null, "online": serde_json::Value::Null, "same_network": up });
+            }
             let (ok, ms, users, online) = discovery::probe(&u).await;
             let same = match (&f, ok) { (Some(f), true) => f.same_network(&u).await, _ => false };
             serde_json::json!({ "url": u, "found": from, "peer": is_peer, "ok": ok, "ms": ms, "users": users, "online": online, "same_network": same })
@@ -2887,6 +2898,8 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/admin/smtp", get(admin_get_smtp).post(admin_set_smtp))
         .route("/v1/admin/smtp/test", post(admin_test_smtp))
         .route("/v1/admin/telegram", get(packs::admin_get).post(packs::admin_set))
+        .route("/v1/admin/telegram/net", get(tgnet::admin_get).post(tgnet::admin_set))
+        .route("/v1/admin/telegram/net/test", post(tgnet::admin_test))
         .route("/v1/admin/packs/import", post(packs::admin_import))
         .route("/v1/admin/packs/upload", post(packs::admin_upload).layer(DefaultBodyLimit::max(packs::UPLOAD_LIMIT)))
         .route("/v1/admin/packs/:name", get(packs::admin_manifest).delete(packs::admin_delete))
@@ -2918,8 +2931,6 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/me/tg",              post(tg_link).delete(tg_unlink))
         .route("/v1/auth/tg/start",      post(tglogin::start))
         .route("/v1/auth/tg/poll",       post(tglogin::poll))
-        .route("/v1/fed/names",          get(fed::h_names))
-        .route("/v1/fed/names/hello",    post(fed::h_names_hello))
         .route("/v1/users/search",       get(search_users))
         .route("/v1/users/login",        post(login_user))
         .route("/v1/users/reset",        post(reset_password))
@@ -2971,26 +2982,11 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/backup/fetch", post(backup_fetch))
         .route("/v1/me/hist",            get(hist_list))
         .route("/v1/me/hist/:k",         get(hist_get).put(hist_put).layer(DefaultBodyLimit::max(HIST_RECORD_LIMIT + 1024)))
-        .route("/v1/fed/hist",           get(fed::h_hist_list))
-        .route("/v1/fed/hist/:user/:k",  get(fed::h_hist_get))
-        .route("/v1/fed/peers", get(fed::h_peers))
-        .route("/v1/fed/hello", post(fed::h_hello))
-        .route("/v1/fed/ping", get(fed::h_ping))
-        .route("/v1/fed/mail", post(fed::h_mail))
         .route("/v1/admin/fed/invite", get(admin_fed_invite))
         .route("/v1/admin/invites",    get(admin_invites).post(admin_invite_new))
         .route("/v1/admin/invites/:code", axum::routing::delete(admin_invite_del))
         .route("/v1/admin/fed/join", post(admin_fed_join))
         .route("/v1/admin/servers", get(admin_servers))
-        .route("/v1/fed/deliver", post(fed::h_deliver))
-        .route("/v1/fed/poke", post(fed::h_poke))
-        .route("/v1/fed/inbox/:user", get(fed::h_inbox))
-        .route("/v1/fed/bundle/:user", get(fed::h_bundle))
-        .route("/v1/fed/blob/:cid", get(fed::h_blob))
-        .route("/v1/fed/users", get(fed::h_users))
-        .route("/v1/fed/backups", get(fed::h_backups))
-        .route("/v1/fed/backup/:user", get(fed::h_backup))
-        .route("/v1/fed/media/:user/:kind", get(fed::h_media))
         .route("/v1/admin/federation", get(admin_get_fed).post(admin_set_fed))
         .route("/v1/bundle/:user",   post(upload_bundle).get(fetch_bundle))
         .route("/v1/ws",             get(ws_upgrade))
@@ -3003,6 +2999,7 @@ pub fn app(state: AppState) -> Router {
                 .layer(DefaultBodyLimit::max(BLOB_LIMIT)),
         )
         // Everything else: the optional website (AQUA_SITE_DIR, see site.rs).
+        .merge(fed::routes())
         .fallback(site::fallback)
         .layer(axum::middleware::from_fn(version_gate))
         .with_state(state)
@@ -3033,6 +3030,7 @@ pub async fn serve_embedded(
     fed::spawn_sync(state.clone());
     tgapi::resume_webhooks(state.clone());
     music::spawn_bot(state.clone());
+    verify::spawn_bot(state.clone());
     let blobs = state.blobs.clone();
     let r = axum::serve(listener, app(state)).with_graceful_shutdown(shutdown).await;
     // Stopped: the file cache goes, people's data stays (blobstore::clear_cache).

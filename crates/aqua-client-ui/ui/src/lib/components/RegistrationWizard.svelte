@@ -37,10 +37,11 @@
     try { await switchAccount(slot); } catch (e) { leaving = false; showToast(String(e)); }
   }
 
-  // On Android, 127.0.0.1 is the phone itself. The emulator reaches the PC's
-  // relay at 10.0.2.2; a real phone needs the PC's LAN IP or a public relay.
   const IS_ANDROID = typeof navigator !== "undefined" && /android/i.test(navigator.userAgent);
-  const DEFAULT_SERVER = IS_ANDROID ? "http://10.0.2.2:7777" : "http://127.0.0.1:7777";
+  // The project's public relay: a new device signs up there unless another
+  // server is chosen (a home relay on 127.0.0.1 / the LAN is still in the list).
+  const PUBLIC_SERVER = "http://193.233.245.196:7777";
+  const DEFAULT_SERVER = PUBLIC_SERVER;
 
   // The self-hosted relay speaks plain HTTP by default. A loopback/LAN
   // address typed with https:// can never connect (TLS handshake fails), so
@@ -419,7 +420,7 @@
             <summary><span class="srv-k">{$t("Server")}</span> <b>{serverUrl.replace(/^https?:\/\//, "")}</b> {inviteFor(serverUrl) ? "· " + $t("invitation ✓") : ""}<span class="srv-ch">{$t("Change")}</span></summary>
             <div class="field">
               <ServerPicker bind:value={serverUrl} placeholder={DEFAULT_SERVER}
-                defaults={IS_ANDROID ? ["http://10.0.2.2:7777"] : ["http://127.0.0.1:7777"]} />
+                defaults={[PUBLIC_SERVER, IS_ANDROID ? "http://10.0.2.2:7777" : "http://127.0.0.1:7777"]} />
               {#if mode === "signup"}
                 <input class="inv-in" bind:value={inviteText} autocomplete="off" spellcheck="false"
                        placeholder={$t("Invitation code or pass (private servers)")} />

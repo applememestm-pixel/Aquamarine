@@ -40,6 +40,7 @@
   import { SvelteSet } from "svelte/reactivity";
   import { askConfirm, askConfirmCheck } from "./Confirm.svelte";
   import { askSend, VIDEO_RE, type SendMode } from "./SendDialog.svelte";
+  import { openCamera } from "./CameraCapture.svelte";
   import { shrinkImage } from "../imageTools";
   import { applyThemeFromPath } from "../themeShare";
   import { openFileDialog } from "../dialog";
@@ -81,7 +82,7 @@
   import { events } from "../tauri";
   import { pollStates, castVote, retractVote, applyRemoteVote, closePoll, viewPoll, ME as POLL_ME, type PollView } from "../polls";
   import { peerPresence, setPeerPresence, broadcastPresenceTo, activityVerb, chatOnline, peerStatus, presenceNow } from "../presence";
-  import { notePeerProfileVersion, avatars, clans, peerCards } from "../people";
+  import { notePeerProfileVersion, avatars, clans, peerCards, nameColorOf } from "../people";
   import { profile as myProfile } from "../profile";
   import { isPublic } from "../privacy";
   import { fwdHeader, type ForwardAuthor } from "./ForwardPicker.svelte";
@@ -92,6 +93,8 @@
   import { TTL_PRESETS, ttlLabel, ttlShort, ttlNote } from "../ttl";
   import { parseBotText, type BotKb, type KbButton } from "../botkb";
   import { openMiniApp } from "./MiniApp.svelte";
+  import OfficialMark from "./OfficialMark.svelte";
+  import { rememberBotMenu } from "../botMenus";
   import TrackCardView from "./TrackCard.svelte";
   import { musicOn, openMusic, parseTrack } from "../music";
   import { parseSpecial, newId as plannerId } from "../planner";
@@ -232,8 +235,9 @@
     category: string | null;
     mime: string | null;
     name: string;
-  }): "sticker" | "gif" | "image" | "video" | "audio" | "voice" | "circle" | "live" | "file" {
+  }): "sticker" | "gif" | "image" | "video" | "audio" | "voice" | "circle" | "live" | "once" | "file" {
     const cat = (content.category ?? "").toLowerCase();
+    if (cat === "once" || cat === "once-seen") return "once";
     if (isLive(cat)) return "live";
     if (cat === "sticker" || content.name.toLowerCase().endsWith(".tgs") || (content.mime ?? "").toLowerCase() === "application/x-tgsticker") return "sticker";
     if (cat === "gif") return "gif";
@@ -264,6 +268,7 @@
     attachMenuOpen = false;
     const chat = $activeChat;
     switch (id) {
+      case "camera": void shoot(); break;
       case "media": pickAndSendFile("media"); break;
       case "file": pickAndSendFile("file"); break;
       case "bluetooth": btSheet.set([]); break;
@@ -373,10 +378,59 @@
       const within = isInlineMedia ? size <= mediaCap : size <= Math.min(AUTO_DOWNLOAD_LIMIT, mediaCap);
       if (within) {
         autoTriggered.add(m.id);
-        void autoDownload(chat.id, m.id);
+        if (kind === "video" && m.kind.content.chunk) void startStream(chat.id, m.id);
+        else void autoDownload(chat.id, m.id);
       }
     }
   });
+
+  // ---- View once (Telegram): opened one time in a viewer of its own — no
+  // gallery, no saving, no forwarding, screenshots blocked where the system
+  // allows — then wiped from this device. ----
+  let onceView = $state<{ url: string; video: boolean; chat: string; id: string } | null>(null);
+  async function openOnce(m: { id: string; outgoing: boolean }, content: { saved_at: string | null; mime: string | null; name: string }) {
+    const chat = $activeChat;
+    if (!chat || m.outgoing) return;
+    let path = content.saved_at;
+    if (!path) {
+      try { path = (await api.downloadFile(chat.id, m.id)).saved_path; } catch (e) { showToast(`${tr("Could not open")}: ${e}`, 5000); return; }
+    }
+    if (!path) return;
+    try { await api.screenSecure(true); } catch { /* not here */ }
+    const video = (content.mime ?? "").startsWith("video/") || /\.(mp4|webm|mov|m4v|mkv)$/i.test(content.name);
+    onceView = { url: assetUrl(path), video, chat: chat.id, id: m.id };
+  }
+  async function closeOnce() {
+    const v = onceView;
+    onceView = null;
+    if (!protectedChat) { try { await api.screenSecure(false); } catch { /* not here */ } }
+    if (!v) return;
+    try { await api.onceBurn(v.chat, v.id); } catch { /* already gone */ }
+    if ($activeChat?.id === v.chat) await loadActiveMessages();
+  }
+  $effect(() => { if (onceView) return onBack(() => void closeOnce()); });
+  // Sharing off in this chat: screenshots are blocked too, where possible.
+  $effect(() => {
+    const on = protectedChat;
+    void api.screenSecure(on).catch(() => {});
+    return () => { if (on) void api.screenSecure(false).catch(() => {}); };
+  });
+
+  // Streamed videos (sealed in pieces): play while downloading, Telegram-fast.
+  let streamUrls = $state<Record<string, string>>({});
+  async function startStream(peerId: string, messageId: string) {
+    if (streamUrls[messageId]) return;
+    try {
+      const u = await api.streamFile(peerId, messageId);
+      if ($activeChat?.id === peerId) streamUrls = { ...streamUrls, [messageId]: u };
+    } catch (e) {
+      console.warn("stream failed", e);
+      await autoDownload(peerId, messageId);
+    }
+  }
+  let streamChat = "";
+  let streamTapped = $state<string[]>([]);
+  $effect(() => { const id = $activeChat?.id ?? ""; if (id !== streamChat) { streamChat = id; streamUrls = {}; streamTapped = []; } });
 
   async function autoDownload(peerId: string, messageId: string) {
     try {
@@ -409,6 +463,18 @@
     startOutgoingCall(chat.id, video);
   }
 
+  /** The in-app camera: tap for a photo, hold for a video, then the send sheet. */
+  async function shoot() {
+    const chat = $activeChat;
+    if (!chat?.live) return;
+    if (chat.id.startsWith("grp_") && !canSendKind(activeGroup, myUsername, "media")) {
+      showToast(tr("Admins don't allow media in this chat"));
+      return;
+    }
+    attachMenuOpen = false;
+    const p = await openCamera();
+    if (p) await sendFiles(chat.id, [p], "media");
+  }
   async function pickAndSendFile(preset?: SendMode) {
     const chat = $activeChat;
     if (!chat) {
@@ -619,20 +685,46 @@
   function galleryToggle(uri: string) {
     gallerySel = gallerySel.includes(uri) ? gallerySel.filter((u) => u !== uri) : [...gallerySel, uri];
   }
+  /** Caption typed under the picked photos (Telegram: right in the sheet). */
+  let galCap = $state("");
   async function gallerySend() {
     const chat = $activeChat;
     const pick = gallerySel;
+    const cap = galCap.trim() || text.trim();
+    if (!galCap.trim() && text.trim()) text = "";
     attachMenuOpen = false;
     gallerySel = [];
-    if (chat && pick.length) await sendFiles(chat.id, pick, "media");
+    galCap = "";
+    if (chat && pick.length) await sendFiles(chat.id, pick, "media", { caption: cap });
   }
   function fmtDur(ms: number) { const s = Math.round(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
   $effect(() => {
     if (attachMenuOpen && phoneUI) {
-      gallerySel = []; sheetFull = false; sheetDy = 0; albumMenu = false; album = "";
+      gallerySel = []; galCap = ""; sheetFull = false; sheetDy = 0; albumMenu = false; album = "";
       void galleryLoad(); void albumsLoad();
     }
   });
+  // Video messages, like Telegram: a silent loop until tapped; a tap plays
+  // it with sound from the start, the next tap pauses (before, a tap only
+  // toggled the sound and the circle never stopped), at the end it goes
+  // back to the silent loop. One circle sounds at a time.
+  function circleTap(v: HTMLVideoElement) {
+    if (v.muted) {
+      for (const o of document.querySelectorAll<HTMLVideoElement>("video.circle-vid.live")) if (o !== v) circleDone(o);
+      v.muted = false; v.loop = false; v.currentTime = 0;
+      v.classList.add("live");
+      void v.play().catch(() => {});
+    } else if (v.paused) {
+      void v.play().catch(() => {});
+    } else {
+      v.pause();
+    }
+  }
+  function circleDone(v: HTMLVideoElement) {
+    v.classList.remove("live");
+    v.muted = true; v.loop = true;
+    if ($power.videos) void v.play().catch(() => {}); else v.pause();
+  }
   let mediaMode = $state<"voice" | "circle">("voice");
   let holdTimer: ReturnType<typeof setTimeout> | null = null;
   let holdFired = false;
@@ -712,11 +804,17 @@
   // Special case: a single image → the PhotoEditor modal opens first.
   // The user can rotate / tweak / "Send original" / "Send edited".
   // "Send original" falls through to the normal attach pipeline.
-  async function sendFiles(peerId: string, paths: string[], preset?: SendMode) {
+  async function sendFiles(peerId: string, paths: string[], preset?: SendMode, direct?: { caption: string }) {
     if (!paths.length) return;
-    // Telegram-style sheet: previews + "as photo/video" or "as file".
-    const choice = await askSend(paths, preset);
+    // Telegram-style sheet: previews + "as photo/video" or "as file". What
+    // was already typed in the chat comes along as the caption (before, it
+    // stayed in the chat's field and the sheet's caption started empty).
+    const draft = direct ? "" : text.trim();
+    const choice = direct
+      ? { mode: "media" as SendMode, caption: direct.caption, edit: false, paths, live: undefined }
+      : await askSend(paths, preset, draft);
     if (!choice) return;
+    if (draft && $activeChat?.id === peerId) text = "";
     paths = choice.paths?.length ? choice.paths : paths;
     if (choice.edit && !choice.live && paths.length === 1 && isImagePath(paths[0])) {
       const edited = await maybeEditThenSend(peerId, paths[0]);
@@ -730,7 +828,9 @@
     let cap: string | undefined = choice.caption?.trim() || undefined;
     for (const p of paths) {
       try {
-        if (choice.live) {
+        if ("once" in choice && choice.once) {
+          await api.attachFileAs(peerId, p, "once", cap);
+        } else if (choice.live) {
           await api.attachFileAs(peerId, p, choice.live, cap);
         } else if (choice.mode === "file") {
           await api.attachFileAs(peerId, p, "file", cap);
@@ -1123,7 +1223,7 @@
       text = original;
       replyTarget = rt;
       queueMicrotask(() => autoresize());
-      showToast(err, 5000);
+      showToast(tr(err), 6000);
     } else if (chat?.id.startsWith("grp_")) {
       armSlowMode(chat.id);
     }
@@ -1383,6 +1483,9 @@
   /** Telegram's seven name colours, picked by the name. */
   const PEER_COLORS = ["#FF6B6B", "#FFA94D", "#B197FC", "#51CF66", "#3BC9DB", "#4DABF7", "#F783AC"];
   function peerColor(name: string): string {
+    // Their own pick (profile colour, Telegram), mine from my profile.
+    const own = name === myUsername ? ($myProfile.name_color ?? "") : nameColorOf($peerCards, name);
+    if (/^#[0-9a-f]{6}$/i.test(own)) return own;
     let h = 0;
     for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) | 0;
     return PEER_COLORS[Math.abs(h) % PEER_COLORS.length];
@@ -1428,7 +1531,7 @@
   // reaches that far down with as much padding, so nothing hides behind. ----
   $effect(() => {
     const root = chatRoot;
-    if (!root || !phoneUI || !$settings.glass) { root?.style.removeProperty("--below-h"); root?.style.removeProperty("--above-h"); return; }
+    if (!root || !phoneUI || !($settings.glass ?? true)) { root?.style.removeProperty("--below-h"); root?.style.removeProperty("--above-h"); return; }
     let raf = 0;
     const measure = () => {
       cancelAnimationFrame(raf);
@@ -1562,7 +1665,9 @@
     botMenu = null;
     if (!id || !isBotChat) return;
     api.webappMenu(id).then((m) => {
-      if ($activeChat?.id === id && m?.type === "web_app" && m.web_app?.url) botMenu = { text: m.text || tr("Open"), url: m.web_app.url };
+      const menu = m?.type === "web_app" && m.web_app?.url && /^https:\/\//.test(m.web_app.url) ? { text: m.text || tr("Open"), url: m.web_app.url } : null;
+      rememberBotMenu(id, menu);
+      if ($activeChat?.id === id && menu) botMenu = menu;
     }).catch(() => {});
   });
   async function pressKb(b: KbButton, kb: BotKb) {
@@ -2031,6 +2136,9 @@
   $effect(() => { if (selecting) return onBack(() => clearSelection()); });
   $effect(() => { if (menu.open) return onBack(() => closeMenu()); });
   $effect(() => { if (searchOpen) return onBack(() => closeSearch()); });
+  // The header menus (tools, calls, timer) are part of this chat: Back folds
+  // them, it doesn't leave the chat.
+  $effect(() => { if (toolsMenu || callMenu || ttlMenu) return onBack(() => { toolsMenu = false; callMenu = false; ttlMenu = false; }); });
 
   function selectedCount() { return selected.size; }
   let selMore = $state(false);
@@ -2951,6 +3059,7 @@
       const c = k.content;
       const cap = c.caption?.split("\n")[0]?.trim();
       const rk = renderKind(c);
+      if (rk === "once") return `① ${tr("View-once media")}`;
       const icon = rk === "image" ? "🖼️" : rk === "video" ? "📹" : rk === "gif" ? "🎞️" : rk === "sticker" ? "🎨" : rk === "voice" ? "🎙️" : rk === "circle" ? "⏺️" : "📎";
       if (rk === "sticker") return `${icon} ${tr("Sticker")}`;
       return `${icon} ${cap || (rk === "image" ? tr("Photo") : rk === "video" ? tr("Video") : rk === "voice" ? tr("Voice message") : rk === "circle" ? tr("Video message") : c.name)}`;
@@ -2970,6 +3079,19 @@
   // ---- Read receipts (chat-level "seen") ----
   let seenByPeer = $state<Record<string, boolean>>({});
   let peerSeen = $derived(seenByPeer[$activeChat?.id ?? ""] ?? false);
+  /** My messages followed by a message of theirs: they've seen those, even
+   *  with read receipts off on their side (a reply means "read"). */
+  let answeredIds = $derived.by(() => {
+    const out = new Set<string>();
+    const list = rows;
+    let answered = false;
+    for (let i = list.length - 1; i >= 0; i--) {
+      const m = list[i];
+      if (!m.outgoing) answered = true;
+      else if (answered) out.add(m.id);
+    }
+    return out;
+  });
 
   // Tell the peer we've seen their messages when we open/scroll a live
   // chat that has incoming messages.
@@ -3008,9 +3130,10 @@
   {#if m.meta?.edits?.length}<span class="mflag pen" role="img" aria-label={$t("edited")} title={$t("Earlier versions:") + "\n" + m.meta.edits.join("\n— ")}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>{/if}
 {/snippet}
 
-{#snippet statusTick(outgoing: boolean)}
+{#snippet statusTick(outgoing: boolean, id?: string)}
   {#if outgoing}
-    <span class="rr" class:read={peerSeen}>{@html peerSeen ? icons.checkDouble : icons.check}</span>
+    {@const rd = peerSeen || (id !== undefined && answeredIds.has(id))}
+    <span class="rr" class:read={rd}>{@html rd ? icons.checkDouble : icons.check}</span>
   {/if}
 {/snippet}
 
@@ -3193,7 +3316,7 @@
             {/if}
             <span class="group-name-btn" class:dim={!!activeRoom}>{$activeChat.name}</span>
           {:else}
-            {$activeChat.name}<EmojiStatus token={emojiStatusOf($peerCards, $activeChat.id)} size={18} zoom />
+            {$activeChat.name}{#if $peerCards[$activeChat.id]?.verified}<OfficialMark size={17} />{/if}<EmojiStatus token={emojiStatusOf($peerCards, $activeChat.id)} size={18} zoom />
             {#if $clans[$activeChat.id]}<span class="hdr-clan"><ClanTag tag={$clans[$activeChat.id]} /></span>{/if}
           {/if}
           {#if e2eePeer}
@@ -3523,7 +3646,7 @@
               {#if m.first && !m.outgoing && $activeChat}
                 {@const mt = isGroup ? tagOf(activeGroup, m.from) : null}
                 <div class="msg-header">
-                  <span class="msg-author" style:color={isGroup ? roleColor(activeGroup, m.from) || null : null}>{isGroup ? m.from : $activeChat.name.split(' ')[0]}</span>
+                  <span class="msg-author" style:color={isGroup ? roleColor(activeGroup, m.from) || peerColor(m.from) : null}>{isGroup ? m.from : $activeChat.name.split(' ')[0]}</span>{#if $peerCards[m.from]?.verified}<OfficialMark size={13} />{/if}
                   {#if $clans[m.from]}<ClanTag tag={$clans[m.from]} />{/if}
                   {#if mt?.tag}<span class="member-tag" class:admin={mt.admin}>{mt.tag}</span>{/if}
                   {#if mt?.title}<span class="admin-title">{mt.title}</span>{/if}
@@ -3544,7 +3667,21 @@
                 {@const content = m.kind.content}
                 {@const rk = renderKind(content)}
                 {@const url = inlineUrl(content.saved_at, content.mime)}
-                {#if rk === "sticker"}
+                {#if rk === "once"}
+                  {@const seen = content.category === "once-seen"}
+                  {@const vid = (content.mime ?? "").startsWith("video/")}
+                  <div class="bubble once-bubble">
+                    <button class="once-btn" class:seen disabled={seen || m.outgoing} onclick={() => openOnce(m, content)}>
+                      <span class="once-ic">{#if seen}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg>{:else}<b>1</b>{/if}</span>
+                      <span class="once-tx">
+                        <b>{$t(vid ? "Video" : "Photo")}</b>
+                        <small>{seen ? $t("Opened") : m.outgoing ? $t("View once") : $t("View once — tap to open")}</small>
+                      </span>
+                    </button>
+                    {#if content.caption}<div class="once-cap">{content.caption}</div>{/if}
+                    <span class="once-meta">{m.time}{@render statusTick(m.outgoing, m.id)}</span>
+                  </div>
+                {:else if rk === "sticker"}
                   <div class="sticker-wrap">
                     {#if url}
                       <button class="sticker-btn" title={$t("Show the pack")}
@@ -3558,7 +3695,7 @@
                     {/if}
                     <span class="sticker-meta">
                       {m.time}
-                      {@render statusTick(m.outgoing)}
+                      {@render statusTick(m.outgoing, m.id)}
                     </span>
                   </div>
                 {:else if rk === "gif" || rk === "image"}
@@ -3582,9 +3719,9 @@
                          the picture, or after the caption when there is one. -->
                     {#if content.caption}
                       <div class="media-caption"><Markup src={content.caption} resolveEmoji={(k) => emojiMap[k]} compact />
-                        <span class="bubble-meta inline-meta">{m.time}{@render statusTick(m.outgoing)}</span></div>
+                        <span class="bubble-meta inline-meta">{m.time}{@render statusTick(m.outgoing, m.id)}</span></div>
                     {:else}
-                      <span class="photo-meta">{m.time}{@render statusTick(m.outgoing)}</span>
+                      <span class="photo-meta">{m.time}{@render statusTick(m.outgoing, m.id)}</span>
                     {/if}
                   </div>
                 {:else if rk === "live"}
@@ -3599,9 +3736,9 @@
                     {/if}
                     {#if content.caption}
                       <div class="media-caption"><Markup src={content.caption} resolveEmoji={(k) => emojiMap[k]} compact />
-                        <span class="bubble-meta inline-meta">{m.time}{@render statusTick(m.outgoing)}</span></div>
+                        <span class="bubble-meta inline-meta">{m.time}{@render statusTick(m.outgoing, m.id)}</span></div>
                     {:else}
-                      <span class="photo-meta">{m.time}{@render statusTick(m.outgoing)}</span>
+                      <span class="photo-meta">{m.time}{@render statusTick(m.outgoing, m.id)}</span>
                     {/if}
                   </div>
                 {:else if rk === "circle"}
@@ -3609,14 +3746,15 @@
                     {#if url}
                       <!-- svelte-ignore a11y_media_has_caption -->
                       <video class="circle-vid" use:streamSrc={url} loop playsinline autoplay={$power.videos} muted
-                        onclick={(e) => { const v = e.currentTarget as HTMLVideoElement; v.muted = !v.muted; }}
-                        title={$t("Click to toggle sound")}></video>
+                        onclick={(e) => circleTap(e.currentTarget as HTMLVideoElement)}
+                        onended={(e) => circleDone(e.currentTarget as HTMLVideoElement)}
+                        title={$t("Tap: play with sound / pause")}></video>
                     {:else}
                       <div class="circle-placeholder"></div>
                     {/if}
                     <span class="sticker-meta">
                       {m.time}
-                      {@render statusTick(m.outgoing)}
+                      {@render statusTick(m.outgoing, m.id)}
                     </span>
                   </div>
                 {:else if rk === "voice" || rk === "audio"}
@@ -3642,15 +3780,23 @@
                         <span class="media-sub">{fmtSize(content.size)}</span>
                         <span class="bubble-meta inline-meta">
                           {m.time}
-                          {@render statusTick(m.outgoing)}
+                          {@render statusTick(m.outgoing, m.id)}
                         </span>
                       </div>
                     </div>
                   </div>
                 {:else if rk === "video"}
                   <div class="bubble media-bubble">
-                    {#if url}
+                    {#if streamUrls[m.id]}
+                      <!-- Plays while it downloads; kept until the chat changes so the position isn't lost. -->
+                      <MediaPlayer src={streamUrls[m.id]} kind="video" name={content.name} size={content.size} autoplay={streamTapped.includes(m.id)} onExpand={() => content.saved_at && openInGallery(content.saved_at)} />
+                    {:else if url}
                       <MediaPlayer src={url} kind="video" name={content.name} size={content.size} onExpand={() => openInGallery(content.saved_at)} />
+                    {:else if content.chunk && !m.outgoing && $activeChat}
+                      {@const cid = $activeChat.id}
+                      <button class="media-placeholder stream-play" style="aspect-ratio: 16/9;" onclick={() => { streamTapped = [...streamTapped, m.id]; void startStream(cid, m.id); }} title={$t("Play")}>
+                        <span class="sp-ic"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg></span>
+                      </button>
                     {:else if content.saved_at}
                       <div class="media-placeholder" style="aspect-ratio: 16/9;"></div>
                     {:else}
@@ -3668,7 +3814,7 @@
                       <span class="media-sub">{fmtSize(content.size)}</span>
                       <span class="bubble-meta inline-meta">
                         {m.time}
-                        {@render statusTick(m.outgoing)}
+                        {@render statusTick(m.outgoing, m.id)}
                       </span>
                     </div>
                   </div>
@@ -3696,7 +3842,8 @@
                       {:else if content.saved_at}
                         <div class="file-btns">
                           <button class="file-dl primary" onclick={() => openDoc(m, content)}>{$t("Open")}</button>
-                          {#if !protectedChat}<button class="file-dl" onclick={() => saveFileAs(content.saved_at, content.name)}>{$t("Save as…")}</button>{/if}
+                          <!-- "Save as" moved to the message menu; here — where the file already is. -->
+                          {#if DESKTOP_APP && content.saved_at}<button class="file-dl" onclick={() => api.showInFolder(content.saved_at!).catch((e) => showToast(String(e)))}>{$t("Show in folder")}</button>{/if}
                         </div>
                       {:else if dm}
                         <button class="file-dl" onclick={() => openDoc(m, content)}>{$t(dm === "image" ? "Show photo" : "Watch video")}</button>
@@ -3708,7 +3855,7 @@
                     </div>
                     <span class="bubble-meta">
                       {m.time}
-                      {@render statusTick(m.outgoing)}
+                      {@render statusTick(m.outgoing, m.id)}
                     </span>
                   </div>
                 {/if}
@@ -3737,7 +3884,7 @@
                     <button class="art-read" onclick={openIt}>⚡ {$t("Read article")}</button>
                     <span class="bubble-meta inline-meta">
                       {m.time}
-                      {@render statusTick(m.outgoing)}
+                      {@render statusTick(m.outgoing, m.id)}
                     </span>
                   </div>
                 </div>
@@ -3797,7 +3944,7 @@
                       {#if voted && !pv.closed && !poll.quiz}<button onclick={() => retractPoll(poll)}>{$t("Retract vote")}</button>{/if}
                       {#if m.outgoing && !pv.closed}<button onclick={() => stopPoll(poll)}>{$t("Stop poll")}</button>{/if}
                     </span>
-                    <span class="bubble-meta inline-meta">{m.time} {@render statusTick(m.outgoing)}</span>
+                    <span class="bubble-meta inline-meta">{m.time} {@render statusTick(m.outgoing, m.id)}</span>
                   </div>
                 </div>
               {:else if m.kind.type === "reply"}
@@ -3813,7 +3960,7 @@
                   <span class="bubble-meta">
                     {@render msgFlags(m)}
                     {m.time}
-                    {@render statusTick(m.outgoing)}
+                    {@render statusTick(m.outgoing, m.id)}
                   </span>
                 </div>
               {:else if m.kind.type === "text" && m.kind.content.text.startsWith("[track:v1]") && parseTrack(m.kind.content.text)}
@@ -3874,7 +4021,7 @@
                   <span class="bubble-meta">
                     {@render msgFlags(m)}
                     {m.time}
-                    {@render statusTick(m.outgoing)}
+                    {@render statusTick(m.outgoing, m.id)}
                   </span>
                 </div>
               {/if}
@@ -3989,10 +4136,14 @@
         {#if textOf(row) != null && /\[ce:[^\]]+\]/.test(textOf(row) ?? "")}
           <button class="ctx-item" role="menuitem" onclick={() => saveEmojiFromRow(row)}>{$t("Add these emoji to my collection")}</button>
         {/if}
-        {#if !protectedChat}
+        {#if !protectedChat && !(row.kind.type === "file" && renderKind(row.kind.content) === "once")}
         <button class="ctx-item" role="menuitem" onclick={() => forwardRow(row)}>{$t("Forward")}</button>
         {/if}
-        {#if DESKTOP_APP && !protectedChat && row.kind.type === "file" && row.kind.content.saved_at}
+        {#if !protectedChat && row.kind.type === "file" && row.kind.content.saved_at && renderKind(row.kind.content) !== "once"}
+          {@const fc = row.kind.content}
+          <button class="ctx-item" role="menuitem" onclick={() => { closeMenu(); void saveFileAs(fc.saved_at, fc.name); }}>{$t("Save as…")}</button>
+        {/if}
+        {#if DESKTOP_APP && !protectedChat && row.kind.type === "file" && row.kind.content.saved_at && renderKind(row.kind.content) !== "once"}
           {@const p = row.kind.content.saved_at}
           <button class="ctx-item" role="menuitem" onclick={() => { closeMenu(); btSheet.set([p]); }}>{$t("Send via Bluetooth")}</button>
         {/if}
@@ -4171,6 +4322,10 @@
               {/if}
               {#if !(IS_MOBILE && $attachDock)}<div class="ap-inline">{@render attachActions()}</div>{/if}
               <div class="ap-gallery">
+                <button class="ap-tile ap-pick ap-cam" onclick={() => void shoot()}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-3l-2-3H9L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><circle cx="12" cy="13" r="3.6"/></svg>
+                  <span>{$t("Camera")}</span>
+                </button>
                 <button class="ap-tile ap-pick" onclick={() => { attachMenuOpen = false; pickAndSendFile("media"); }}>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>
                   <span>{$t("Gallery")}</span>
@@ -4194,13 +4349,21 @@
           {#if phoneUI && IS_MOBILE && $attachDock}
             <!-- Phones: the actions as a floating tab bar, the send button above it. -->
             <div class="ap-dock" class:closing={sheetClosing}>{@render attachActions()}</div>
-            {#if gallerySel.length}
-              <button class="ap-send" class:closing={sheetClosing} onclick={gallerySend}>{$t("Send {n}", { n: gallerySel.length })}</button>
-            {/if}
           {/if}
+          {#if phoneUI && gallerySel.length}{@render galBar()}{/if}
         {/if}
+        {#snippet galBar()}
+          <!-- Picked in the gallery: a caption and the send button, like Telegram. -->
+          <div class="ap-capbar" class:closing={sheetClosing} class:docked={IS_MOBILE && $attachDock}>
+            <input class="ap-cap" placeholder={$t("Add a caption…")} bind:value={galCap} onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); void gallerySend(); } }} />
+            <button class="ap-go" onclick={gallerySend} aria-label={$t("Send {n}", { n: gallerySel.length })} title={$t("Send {n}", { n: gallerySel.length })}>
+              {@html icons.send}<span class="ap-go-n">{gallerySel.length}</span>
+            </button>
+          </div>
+        {/snippet}
         {#snippet attachIcon(id: string)}
-          {#if id === "media"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>
+          {#if id === "camera"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-3l-2-3H9L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><circle cx="12" cy="13" r="3.6"/></svg>
+          {:else if id === "media"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>
           {:else if id === "file"}{@html icons.attach}
           {:else if id === "music"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
           {:else if id === "bluetooth"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 7 17 17 12 22 12 2 17 7 7 17"/></svg>
@@ -4290,6 +4453,12 @@
             } else if (liveChat && $activeChat) openMediaPicker($activeChat.id);
           }}
         >{#if $pickerState.open}<span class="kb-ico">{@html KEYBOARD_ICON}</span>{:else}{@html SMILE_ICON}{/if}</button>
+        {#if IS_MOBILE && liveChat && text.trim().length === 0}
+          <!-- The camera right in the message field (AyuGram): photo or video in one tap. -->
+          <button class="emoji-in cam-in" title={$t("Camera")} aria-label={$t("Camera")} onclick={() => void shoot()}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-3l-2-3H9L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><circle cx="12" cy="13" r="3.6"/></svg>
+          </button>
+        {/if}
       </div>
       {#if text.trim().length === 0 && liveChat}
         <!-- One button: tap switches mic↔camera, hold to record -->
@@ -4355,6 +4524,19 @@
   {#if peek}
     <div class="sticker-peek" aria-hidden="true">
       <div class="sp-media"><AnimatedMedia src={peek.url} mime={peek.mime} play="auto" /></div>
+    </div>
+  {/if}
+  {#if onceView}
+    {@const ov = onceView}
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div class="once-view" role="dialog" aria-modal="true" data-own-back aria-label={$t("View once")} onclick={() => void closeOnce()} oncontextmenu={(e) => e.preventDefault()}>
+      {#if ov.video}
+        <!-- svelte-ignore a11y_media_has_caption -->
+        <video use:streamSrc={ov.url} autoplay playsinline controlslist="nodownload noplaybackrate" disablepictureinpicture onended={() => void closeOnce()} onclick={(e) => e.stopPropagation()}></video>
+      {:else}
+        <img src={ov.url} alt="" draggable="false" />
+      {/if}
+      <div class="once-hint">① {$t("View once — tap to close; it's gone after that")}</div>
     </div>
   {/if}
   {#if themeFor}<ChatThemeSheet chat={themeFor} name={$activeChat?.name ?? ""} onclose={() => (themeFor = null)} />{/if}
@@ -4585,7 +4767,7 @@
     gap: 6px;
   }
   .peer-status .dot {
-    width: 6px; height: 6px; border-radius: 50%;
+    width: 6px; height: 6px; border-radius: 50%; margin-right: 5px; vertical-align: 1px;
     background: var(--online);
     box-shadow: 0 0 6px var(--online);
     display: inline-block;
@@ -4649,10 +4831,10 @@
     font-variant-numeric: tabular-nums;
     color: var(--fg-muted);
   }
+  /* The @handle in the UI font (the mono one looked squeezed next to the name). */
   .peer-status .username {
-    font-family: var(--font-mono);
     color: var(--fg-dim);
-    font-size: 11.5px;
+    font-size: inherit;
   }
   .icon-btn {
     width: 34px; height: 34px;
@@ -4730,6 +4912,10 @@
     :global(html.glass) .chat-header::before, :global(html.glass) .composer::before {
       border-radius: inherit; backdrop-filter: blur(var(--glass-blur, 12px)) saturate(1.5); -webkit-backdrop-filter: blur(var(--glass-blur, 12px)) saturate(1.5);
     }
+    /* Square panels (Appearance → Panel shape): same floating look, small corners. */
+    :global(html.glass.panels-square) .chat-header, :global(html.glass.panels-square) .composer { border-radius: calc(8px * var(--rk, 1)); }
+    :global(html.panels-square) .input-wrap { border-radius: calc(6px * var(--rk, 1)); }
+    :global(html.panels-square) .send-btn { border-radius: calc(8px * var(--rk, 1)); }
     :global(html.glass) .ap-dock .ap-items {
       background: color-mix(in srgb, var(--bg-surface-2, #1a1e29) var(--glass-a, 62%), transparent);
       backdrop-filter: blur(var(--glass-blur, 20px)) saturate(1.6); -webkit-backdrop-filter: blur(var(--glass-blur, 20px)) saturate(1.6);
@@ -5012,6 +5198,7 @@
     background: #000;
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent), 0 10px 24px -6px rgba(0,0,0,0.5);
   }
+  .circle-vid:global(.live) { box-shadow: 0 0 0 3px var(--accent); }
   .circle-placeholder {
     width: 220px; height: 220px;
     border-radius: 50%;
@@ -5380,12 +5567,21 @@
     display: grid; place-items: center; font-size: 12.5px; font-weight: 800; color: #06070c; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
   .ap-tile.on .ap-check { background: var(--accent); border-color: var(--accent); }
   .ap-dur { position: absolute; left: 6px; bottom: 6px; font-size: 11px; font-weight: 700; color: #fff; background: rgba(0,0,0,.5); padding: 1px 6px; border-radius: calc(8px * var(--rk, 1)); }
-  .ap-send { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(84px + env(safe-area-inset-bottom, 0px)); z-index: 73;
-    padding: 12px 26px; border-radius: calc(26px * var(--rk, 1)); border: none; font: 700 15px var(--font-ui, inherit); color: #06070c;
-    background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 12px 28px -10px var(--accent-glow);
-    animation: ap-send-in .3s cubic-bezier(.22,1,.36,1); transition: opacity .2s ease; }
-  .ap-send.closing { opacity: 0; }
-  @keyframes ap-send-in { from { opacity: 0; transform: translateX(-50%) translateY(14px) scale(.9); } }
+  .ap-capbar { position: fixed; left: 10px; right: 10px; bottom: calc(10px + env(safe-area-inset-bottom, 0px)); z-index: 73; display: flex; align-items: center; gap: 8px;
+    padding: 5px 5px 5px 16px; border-radius: calc(24px * var(--rk, 1)); border: 1px solid var(--border-strong);
+    background: color-mix(in srgb, var(--bg-surface-2) 82%, transparent); backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    box-shadow: 0 14px 34px -14px rgba(0,0,0,.8); animation: ap-cap-in .28s cubic-bezier(.22,1,.36,1); transition: opacity .2s ease, transform .2s ease; }
+  .ap-capbar.docked { bottom: calc(84px + env(safe-area-inset-bottom, 0px)); }
+  .ap-capbar.closing { opacity: 0; transform: translateY(20px); }
+  @keyframes ap-cap-in { from { opacity: 0; transform: translateY(16px) scale(.97); } }
+  .ap-cap { flex: 1; min-width: 0; height: 40px; border: none; outline: none; background: transparent; color: var(--fg); font: 15px var(--font-ui, inherit); }
+  .ap-cap::placeholder { color: var(--fg-dim); }
+  .ap-go { position: relative; width: 42px; height: 42px; flex-shrink: 0; border: none; border-radius: 50%; display: grid; place-items: center; color: #06070c;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 8px 20px -10px var(--accent-glow); transition: transform .15s ease; }
+  .ap-go:active { transform: scale(.92); }
+  .ap-go :global(svg) { width: 20px; height: 20px; margin-left: 2px; }
+  .ap-go-n { position: absolute; top: -5px; right: -5px; min-width: 19px; height: 19px; padding: 0 5px; box-sizing: border-box; border-radius: 10px;
+    background: var(--bg-shell); color: var(--accent); border: 1.5px solid var(--accent); font: 800 11px/16px var(--font-ui, inherit); text-align: center; }
   /* Floating bar switched off: the actions sit in the sheet, under the gallery. */
   .ap-inline { border-bottom: 1px solid var(--border); padding: 4px 4px 8px; flex-shrink: 0; }
   .ap-inline .ap-items { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
@@ -5708,8 +5904,10 @@
 
   /* Read-receipt tick */
   .rr { display: inline-flex; align-items: center; }
-  .rr :global(svg) { width: 14px; height: 14px; color: var(--fg-dim); }
-  .rr.read :global(svg) { color: var(--accent); }
+  /* Delivered: plain light ticks; read: accent double ticks, a bit bigger
+     so the difference is seen at a glance. */
+  .rr :global(svg) { width: 15px; height: 15px; color: color-mix(in srgb, var(--fg) 85%, transparent); }
+  .rr.read :global(svg) { width: 18px; height: 18px; color: var(--accent); }
 
   /* Pinned-message bar */
   .plain-note { color: #f5b14c; }
@@ -6022,6 +6220,28 @@
   .emoji-in:hover { color: var(--accent); background: var(--accent-soft); }
   .emoji-in.disabled { opacity: .4; cursor: help; }
   .emoji-in :global(svg) { width: 21px; height: 21px; }
+  .cam-in { margin-left: 0; }
+  .stream-play { display: grid; place-items: center; width: 100%; border: none; cursor: pointer; }
+  .sp-ic { width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; color: #fff; background: rgba(0,0,0,.5); }
+  .sp-ic svg { width: 26px; height: 26px; margin-left: 3px; }
+  .once-bubble { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px 6px; min-width: 190px; }
+  .once-btn { display: flex; align-items: center; gap: 10px; border: none; background: transparent; color: inherit; padding: 0; text-align: left; font: inherit; cursor: pointer; }
+  .once-btn:disabled { cursor: default; }
+  .once-ic { width: 42px; height: 42px; flex-shrink: 0; border-radius: 50%; display: grid; place-items: center; color: var(--accent);
+    border: 2px dashed currentColor; background: var(--accent-soft); }
+  .once-ic b { font-size: 17px; font-weight: 800; }
+  .once-ic svg { width: 20px; height: 20px; }
+  .once-btn.seen .once-ic { color: var(--fg-dim); border-style: solid; background: transparent; }
+  .once-tx { display: flex; flex-direction: column; gap: 1px; }
+  .once-tx b { font-size: 14px; }
+  .once-tx small { font-size: 12px; color: var(--fg-muted); }
+  .once-cap { font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .once-meta { align-self: flex-end; display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--fg-dim); }
+  .once-view { position: fixed; inset: 0; z-index: 10096; background: #000; display: grid; place-items: center; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+  .once-view img, .once-view video { max-width: 100vw; max-height: 100dvh; object-fit: contain; pointer-events: none; }
+  .once-view video { pointer-events: auto; }
+  .once-hint { position: absolute; left: 50%; bottom: calc(22px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); padding: 7px 14px; border-radius: calc(16px * var(--rk, 1));
+    background: rgba(0,0,0,.6); color: #fff; font-size: 13px; white-space: nowrap; }
 
   .composer-note {
     padding: 0 20px 12px;

@@ -314,6 +314,82 @@ pub fn set_window_icon(window: tauri::WebviewWindow, rgba: Vec<u8>, size: u32) -
     }
 }
 
+/// Windows: the desktop / Start-menu shortcuts take the chosen logo too
+/// (before, only the window changed and the desktop kept the old icon).
+/// `png`: the picture (≤ 2 MB, PNG); none: back to the app's own icon.
+/// The shortcuts that point at this exe get an `.ico` next to the app's
+/// data; the shell is told to drop its icon cache. Elsewhere a no-op.
+#[tauri::command]
+pub fn set_shortcut_icon(app: tauri::AppHandle, png: Option<Vec<u8>>) -> Result<(), String> {
+    if let Some(p) = &png {
+        if p.len() > 2_000_000 || !p.starts_with(b"\x89PNG\r\n\x1a\n") {
+            return Err("bad icon".into());
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        use tauri::Manager;
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let loc = match png {
+            Some(p) => {
+                let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                // A new name each time: Explorer caches icons by path.
+                for old in std::fs::read_dir(&dir).map(|r| r.flatten().collect::<Vec<_>>()).unwrap_or_default() {
+                    let n = old.file_name().to_string_lossy().to_string();
+                    if n.starts_with("shortcut-icon-") && n.ends_with(".ico") { let _ = std::fs::remove_file(old.path()); }
+                }
+                let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                let ico = dir.join(format!("shortcut-icon-{stamp}.ico"));
+                std::fs::write(&ico, png_to_ico(&p)).map_err(|e| e.to_string())?;
+                format!("{},0", ico.display())
+            }
+            None => format!("{},0", exe.display()),
+        };
+        let q = |s: &str| s.replace('\'', "''");
+        let script = format!(
+            "$exe='{exe}';$loc='{loc}';$sh=New-Object -ComObject WScript.Shell;\
+             foreach($k in 'Desktop','CommonDesktopDirectory','Programs','CommonPrograms','StartMenu'){{$d=[Environment]::GetFolderPath($k);if(-not $d){{continue}};\
+             Get-ChildItem -LiteralPath $d -Filter *.lnk -Recurse -ErrorAction SilentlyContinue|ForEach-Object{{try{{$l=$sh.CreateShortcut($_.FullName);\
+             if($l.TargetPath -ieq $exe){{$l.IconLocation=$loc;$l.Save()}}}}catch{{}}}}}};\
+             $tb=Join-Path $env:APPDATA 'Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar';\
+             if(Test-Path $tb){{Get-ChildItem -LiteralPath $tb -Filter *.lnk|ForEach-Object{{try{{$l=$sh.CreateShortcut($_.FullName);if($l.TargetPath -ieq $exe){{$l.IconLocation=$loc;$l.Save()}}}}catch{{}}}}}};\
+             try{{ie4uinit.exe -show}}catch{{}}",
+            exe = q(&exe.display().to_string()),
+            loc = q(&loc),
+        );
+        std::thread::spawn(move || {
+            let _ = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &script])
+                .creation_flags(0x0800_0000)
+                .status();
+        });
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (app, png);
+        Ok(())
+    }
+}
+
+/// One PNG wrapped as an .ico (Vista+ reads PNG entries); 256 px → size byte 0.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+fn png_to_ico(png: &[u8]) -> Vec<u8> {
+    let (w, h) = if png.len() >= 24 {
+        (u32::from_be_bytes([png[16], png[17], png[18], png[19]]), u32::from_be_bytes([png[20], png[21], png[22], png[23]]))
+    } else { (256, 256) };
+    let b = |v: u32| if v >= 256 { 0u8 } else { v as u8 };
+    let mut out = Vec::with_capacity(png.len() + 22);
+    out.extend_from_slice(&[0, 0, 1, 0, 1, 0]);
+    out.extend_from_slice(&[b(w), b(h), 0, 0, 1, 0, 32, 0]);
+    out.extend_from_slice(&(png.len() as u32).to_le_bytes());
+    out.extend_from_slice(&22u32.to_le_bytes());
+    out.extend_from_slice(png);
+    out
+}
+
 /// The console-chat bot script (tools/aqua-console.py), bundled so the
 /// Bots tab can save a copy next to the user's other files.
 const CONSOLE_BOT: &str = include_str!("../../../tools/aqua-console.py");
@@ -336,6 +412,17 @@ pub fn save_console_bot(path: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ico_wraps_png() {
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        png.extend_from_slice(&256u32.to_be_bytes());
+        png.extend_from_slice(&256u32.to_be_bytes());
+        let ico = png_to_ico(&png);
+        assert_eq!(&ico[..6], &[0, 0, 1, 0, 1, 0]);
+        assert_eq!(ico[6], 0);
+        assert_eq!(u32::from_le_bytes([ico[18], ico[19], ico[20], ico[21]]), 22);
+        assert_eq!(&ico[22..], &png[..]);
+    }
     #[test]
     fn names() {
         assert_eq!(safe_name("../../etc/passwd"), "_.._etc_passwd");

@@ -116,7 +116,14 @@ async fn send_inner(app: &AppHandle, addr: &str, payload: &str, own: bool) -> Re
         let key = state.lock().map_err(|e| e.to_string())?.sessions.get(addr).map(|x| x.peer.dh_pub.as_bytes().to_vec());
         if let Some(dh) = key {
             if !crate::devlists::allowed(app, base_user(addr), &dh) {
-                return Err(NOT_LISTED.into());
+                // The session is with a device their account doesn't list any
+                // more (a new phone, the account registered again). It's of
+                // no use: forget it and start from the device's current keys
+                // below — those are checked against the list too.
+                let mut s = state.lock().map_err(|e| e.to_string())?;
+                s.sessions.remove(addr);
+                let _ = s.vault.delete_session(addr);
+                tracing::warn!(%addr, "session with a device that's off the signed list — dropped");
             }
         }
     }
@@ -321,6 +328,25 @@ pub async fn fanout(app: &AppHandle, peer: &str, payload: &str, sync: bool) -> R
         to_my_devices(app, &transport, &me, &copy).await;
         if peer == me {
             return Ok(());
+        }
+    }
+    if ok == 0 && peer != me {
+        // Nothing went out. Their devices or their signed list may have just
+        // changed (a new phone, the account registered again): look at both
+        // right now and try once more before giving up.
+        invalidate(&peer);
+        crate::devlists::refresh(app, &transport, &peer, true).await;
+        for addr in addresses(&transport, &peer).await {
+            if let Some((_, id)) = addr.split_once('~') {
+                if !crate::devlists::allowed_id(app, &peer, id) {
+                    first_err.get_or_insert(NOT_LISTED.into());
+                    continue;
+                }
+            }
+            match send_to_address(app, &addr, payload).await {
+                Ok(()) => ok += 1,
+                Err(e) => { first_err = Some(e); }
+            }
         }
     }
     if ok == 0 {

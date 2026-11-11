@@ -1,4 +1,5 @@
 <script lang="ts">
+  import AuthApps from "./AuthApps.svelte";
   /**
    * Settings → Privacy & Security → Sign-in protection: two-step codes
    * (TOTP, any authenticator app) and "sign-in on new devices" — both kept
@@ -144,6 +145,7 @@
     {#if setup}
       <div class="sp-setup">
         <p>{$t("1. Scan the code in the authenticator app (or add the key by hand).")}</p>
+        <AuthApps />
         <div class="sp-qr"><QrCode text={setup.uri} size={190} color="#0b1220" letter="2" /></div>
         <button class="sp-key" onclick={() => copy(setup!.secret)} title={$t("Copy")}>{setup.secret.replace(/(.{4})/g, "$1 ").trim()}</button>
         <p>{$t("2. Enter the 6-digit code it shows.")}</p>

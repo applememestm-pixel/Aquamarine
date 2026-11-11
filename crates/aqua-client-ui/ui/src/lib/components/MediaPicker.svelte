@@ -70,6 +70,59 @@
   let menuOpen = $state(false);
   let activeSection = $state("");
 
+  // ---- my own order of packs (pencil in the pack bar) ----
+  /** Pack ids in the order the user put them; packs not in it keep the
+   *  catalogue's order after them. Nothing reorders them by use. */
+  let packOrder = $state<Record<string, string[]>>((() => { try { return JSON.parse(localStorage.getItem("aqua.packOrder") ?? "{}"); } catch { return {}; } })());
+  function ordered<T extends { id: string }>(kind: string, list: T[]): T[] {
+    const o = packOrder[kind];
+    if (!o?.length) return list;
+    const at = new Map(o.map((id, i) => [id, i]));
+    return list.map((x, i) => ({ x, i })).sort((a, b) => (at.get(a.x.id) ?? 1e6 + a.i) - (at.get(b.x.id) ?? 1e6 + b.i)).map((e) => e.x);
+  }
+  let reorder = $state(false);
+  let dragId = $state<string | null>(null);
+  function saveOrder(kind: string, ids: string[]) {
+    packOrder = { ...packOrder, [kind]: ids };
+    try { localStorage.setItem("aqua.packOrder", JSON.stringify(packOrder)); } catch { /* private mode */ }
+  }
+  /** Pointer-dragging an icon along the bar (HTML drag & drop doesn't work
+   *  in the app's window: the file drop handler takes it). */
+  function barDown(e: PointerEvent, id: string) {
+    if (!reorder || id === "recent") return;
+    e.preventDefault();
+    dragId = id;
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  }
+  function barMove(e: PointerEvent) {
+    if (!dragId || !bar) return;
+    const kind = tab;
+    const ids = sections.map((x) => x.id).filter((x) => x !== "recent");
+    const btns = [...bar.querySelectorAll<HTMLElement>("[data-bar]")].filter((b) => b.dataset.bar !== "recent");
+    let to = btns.findIndex((b) => { const r = b.getBoundingClientRect(); return e.clientX < r.left + r.width / 2; });
+    if (to < 0) to = btns.length - 1;
+    const from = ids.indexOf(dragId);
+    if (from < 0 || to === from) return;
+    ids.splice(from, 1);
+    ids.splice(to, 0, dragId);
+    saveOrder(kind, ids);
+    const r = bar.getBoundingClientRect();
+    if (e.clientX < r.left + 24) bar.scrollLeft -= 12; else if (e.clientX > r.right - 24) bar.scrollLeft += 12;
+  }
+  function barUp() { dragId = null; }
+  function moveBy(id: string, d: number) {
+    const ids = sections.map((x) => x.id).filter((x) => x !== "recent");
+    const i = ids.indexOf(id), j = i + d;
+    if (i < 0 || j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    saveOrder(tab, ids);
+  }
+  function clearRecent() {
+    const kind = tab === "emoji" ? "emoji" : "stickers";
+    if (kind === "emoji") recentEmoji = []; else recentStickers = [];
+    try { localStorage.removeItem(`aqua.recent.${kind}`); } catch { /* private mode */ }
+  }
+
   // ---- recents ----
   function loadList(key: string): string[] {
     try { return JSON.parse(localStorage.getItem(key) ?? "[]"); } catch { return []; }
@@ -229,9 +282,9 @@
         items: $reactionPack.items.map((r) => ({ kind: "custom", key: `${REACTION_PACK}/${r.file}`, token: `[ce:${REACTION_PACK}/${r.file}]`, url: r.url, mime: r.mime, emoji: r.emoji, path: r.file })),
       });
     }
-    return out;
+    return ordered("emoji", out);
   });
-  const stickerPacks = $derived((catalogue?.packs ?? []).filter((p) => p.kind !== "emoji"));
+  const stickerPacks = $derived(ordered("stickers", (catalogue?.packs ?? []).filter((p) => p.kind !== "emoji")));
 
   // emoji char → search words, for matching custom emoji / stickers by meaning
   const wordsByEmoji = $derived.by(() => {
@@ -739,7 +792,7 @@
                 onclick={() => { if (gifHeld) { gifHeld = false; return; } void sendGif(g); }}
                 oncontextmenu={(e) => { e.preventDefault(); gifUp(); gifWithCaption(g); }}
                 onpointerdown={() => gifDown(g)} onpointerup={gifUp} onpointerleave={gifUp} onpointercancel={gifUp}>
-                <AnimatedMedia src={assetUrl(g.path)} mime={g.mime ?? "image/gif"} alt={g.name} fit="cover" play="auto" />
+                <AnimatedMedia lazy src={assetUrl(g.path)} mime={g.mime ?? "image/gif"} alt={g.name} fit="cover" play="auto" />
               </button>
             {/each}
           </div>
@@ -759,6 +812,9 @@
           <div class="sec-title">
             {#if sec.pack?.source}<span class="tg" title={$t("From Telegram — read-only")}>{@html TG_ICON}</span>{/if}
             <span class="sec-name">{sec.id === "recent" ? $t(sec.title) : sec.title}</span>
+            {#if sec.id === "recent"}
+              <button class="sec-act" onclick={clearRecent} title={$t("Clear recently used")} aria-label={$t("Clear recently used")}>✕</button>
+            {/if}
             {#if sec.pack?.source}
               <button class="sec-act" class:spin={syncing === sec.pack.title} onclick={() => syncPack(sec.pack!)} title={$t("Check for new stickers in Telegram")} aria-label={$t("Update")} disabled={!!syncing}>↻</button>
             {:else if sec.pack?.editable}
@@ -778,13 +834,25 @@
     </div>
 
     {#if tab !== "gifs" && sections.length > 1 && !query}
-      <div class="bar" bind:this={bar}>
+      <div class="bar-row">
+      <div class="bar" class:reorder bind:this={bar} onpointermove={barMove} onpointerup={barUp} onpointercancel={barUp}>
         {#each sections as sec (sec.id)}
-          <button class="bar-btn" data-bar={sec.id} class:active={activeSection === sec.id} title={sec.title} onclick={() => jumpTo(sec.id)}>
+          <button class="bar-btn" data-bar={sec.id} class:active={!reorder && activeSection === sec.id} class:dragging={dragId === sec.id}
+            class:fixed={reorder && sec.id === "recent"}
+            title={reorder ? $t("Drag to move · ← → keys") : sec.title}
+            onpointerdown={(e) => barDown(e, sec.id)}
+            onkeydown={(e) => { if (reorder && (e.key === "ArrowLeft" || e.key === "ArrowRight")) { e.preventDefault(); moveBy(sec.id, e.key === "ArrowLeft" ? -1 : 1); } }}
+            onclick={() => { if (!reorder) jumpTo(sec.id); }}>
             {#if sec.icon.emoji}<span class="bar-emoji">{sec.icon.emoji}</span>
-            {:else if sec.icon.item}<AnimatedMedia src={sec.icon.item.url} mime={sec.icon.item.mime} play="never" />{/if}
+            {:else if sec.icon.item}<AnimatedMedia lazy src={sec.icon.item.url} mime={sec.icon.item.mime} play="never" />{/if}
           </button>
         {/each}
+      </div>
+      <button class="bar-btn bar-edit" class:on={reorder} onclick={() => { reorder = !reorder; dragId = null; }}
+        title={$t(reorder ? "Done" : "Change the order of packs")} aria-label={$t(reorder ? "Done" : "Change the order of packs")}>
+        {#if reorder}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>
+        {:else}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>{/if}
+      </button>
       </div>
     {/if}
 
@@ -871,7 +939,7 @@
   .search input { flex: 1; min-width: 0; background: transparent; border: none; outline: none; color: var(--fg); font-size: 13.5px; font-family: inherit; }
   .clear { background: none; border: none; color: var(--fg-dim); font-size: 18px; cursor: pointer; line-height: 1; }
 
-  .body { flex: 1; overflow-y: auto; padding: 0 6px 8px; position: relative; scrollbar-width: thin; }
+  .body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; padding: 0 6px 8px; position: relative; scrollbar-width: thin; }
   .sec-title { display: flex; align-items: center; gap: 6px; }
   .sec-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tg { width: 14px; height: 14px; flex-shrink: 0; display: inline-grid; }
@@ -901,10 +969,20 @@
   .gif { aspect-ratio: 4 / 3; border: none; padding: 0; border-radius: calc(8px * var(--rk, 1)); overflow: hidden; background: var(--bg-input); cursor: pointer; }
   .gif:hover { outline: 2px solid var(--accent); }
 
+  .bar-row { display: flex; align-items: center; border-top: 1px solid var(--border); flex-shrink: 0; min-width: 0; }
   .bar {
     display: flex; gap: 2px; padding: 4px 6px; overflow-x: auto; scrollbar-width: none;
-    border-top: 1px solid var(--border); flex-shrink: 0;
+    flex: 1; min-width: 0;
   }
+  .bar.reorder .bar-btn:not(.fixed) { opacity: 1; filter: none; cursor: grab; touch-action: none; animation: wiggle .5s ease-in-out infinite alternate; }
+  .bar.reorder .bar-btn.fixed { opacity: .3; }
+  .bar-btn.dragging { background: var(--accent-soft); outline: 2px solid var(--accent); cursor: grabbing; animation: none !important; }
+  @keyframes wiggle { from { transform: rotate(-3deg); } to { transform: rotate(3deg); } }
+  .bar-edit { opacity: .7; filter: none; color: var(--fg-muted); margin-right: 4px; }
+  .bar-edit svg { width: 18px; height: 18px; }
+  .bar-edit.on { opacity: 1; color: var(--accent); background: var(--accent-soft); }
+  .import { max-height: 55%; overflow-y: auto; flex-shrink: 0; }
+  .imp-srv { max-height: 112px; overflow-y: auto; }
   .bar-btn {
     flex-shrink: 0; width: 38px; height: 38px; border: none; border-radius: calc(8px * var(--rk, 1)); background: transparent;
     cursor: pointer; display: grid; place-items: center; padding: 4px; opacity: 0.55; filter: grayscale(0.8);
@@ -975,7 +1053,8 @@
        tabs are a slim strip at the bottom (it was a tall pill that ate the
        grid and overlapped the pack bar). */
     .panel.docked .search { order: 1; margin: 8px 10px 4px; height: 34px; }
-    .panel.docked .bar { order: 2; border-top: none; border-bottom: 1px solid var(--border); padding: 2px 6px 4px; }
+    .panel.docked .bar-row { order: 2; border-top: none; border-bottom: 1px solid var(--border); }
+    .panel.docked .bar { padding: 2px 6px 4px; }
     .panel.docked .bar-btn { width: 34px; height: 34px; }
     .panel.docked .body { order: 3; }
     .panel.docked .top { order: 9; justify-content: center; position: relative; padding: 0 44px 2px; border-bottom: none; border-top: 1px solid var(--border); }

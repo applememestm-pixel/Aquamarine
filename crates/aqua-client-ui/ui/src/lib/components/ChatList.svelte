@@ -2,6 +2,8 @@
   import { emojiStatusOf } from "../people";
   import EmojiStatus from "./EmojiStatus.svelte";
   import { onBack } from "../back";
+  import { untrack } from "svelte";
+  import { IS_MOBILE } from "../platform";
   import AnimatedMedia from "./AnimatedMedia.svelte";
   import { hasMarkup, plainText } from "../markup";
   /** Chat-list line without formatting markers (spoilers stay hidden). */
@@ -22,9 +24,10 @@
   import { cubicOut, backOut } from "svelte/easing";
   import { avatars, peerCards, clans } from "../people";
   import ClanTag from "./ClanTag.svelte";
+  import OfficialMark from "./OfficialMark.svelte";
   import { keepOnScreen } from "../actions";
   import { archived, mutedChats, setArchived, setMuted, pinnedChats, togglePin, movePin, MAX_PINS, markedUnread, setMarkedUnread } from "../chatPrefs";
-  import { folders as allFolders, isInFolder, toggleChatInFolder } from "../folders";
+  import { folders as allFolders, folderHas, updateFolder, folderTags, FOLDER_COLORS, type Folder, type ChatFacts } from "../folders";
   import { parseJoinLink } from "../groupRules";
   import { groupMap, requestJoinGroup } from "../groups";
   import { roomsOf } from "../groupRules";
@@ -43,7 +46,25 @@
   import { openNewGroup } from "./NewGroupWizard.svelte";
 
   let plusMenuOpen = $state(false);
-  import { contacts, saveContact } from "../contacts";
+  /** Phones: the pencil at the bottom (Telegram) unfolds into what to make. */
+  let fabOpen = $state(false);
+  /** "My story" tapped with none up: camera or gallery. */
+  let storyAdd = $state(false);
+  function storyUsers(): string[] { return [...($myLiveStories.length ? [""] : []), ...$storyOwners.map((o) => o.user)]; }
+  function tapMine() { if ($myLiveStories.length) openStories(storyUsers(), ""); else storyAdd = !storyAdd; }
+  $effect(() => { if (fabOpen) return onBack(() => (fabOpen = false)); });
+  function fabPick(k: "chat" | "group" | "supergroup" | "channel") {
+    fabOpen = false;
+    if (k === "chat") openNewChatDialog(); else openNewGroup(k);
+  }
+  import { contacts, saveContact, displayName } from "../contacts";
+  import { chatLines } from "../listLook";
+  import { botMenus } from "../botMenus";
+  import { settings as themeSettings } from "../theme";
+  import { meCardOpen } from "./MeCard.svelte";
+  import { storyOwners, myLiveStories, storyRing, addStory } from "../storyFeed";
+  import { openStories } from "../stories";
+  import { openMiniApp } from "./MiniApp.svelte";
   import { api } from "../tauri";
   import { blocked, setBlocked } from "../ghost";
   import { chatLocks, unlocked, lockNowChat } from "../chatLocks";
@@ -76,7 +97,8 @@
     meTimer = setTimeout(() => { meTimer = null; meHeld = true; openAccounts(); }, 420);
   }
   function meCancel() { if (meTimer) { clearTimeout(meTimer); meTimer = null; } }
-  function meClick() { meCancel(); if (meHeld) { meHeld = false; return; } openProfile(); }
+  // Phones: your card in the middle of the screen (status, profile, stories, settings).
+  function meClick() { meCancel(); if (meHeld) { meHeld = false; return; } if (IS_MOBILE) meCardOpen.set(true); else openProfile(); }
   function openAccounts() {
     try { navigator.vibrate?.(12); } catch { /* no vibration */ }
     accountsOpen = true;
@@ -120,6 +142,70 @@
   let archivedUnread = $derived(archivedChats.filter((c) => c.unread > 0 && !$mutedChats.has(c.id)).length);
   $effect(() => { if (showArchive && archivedChats.length === 0) showArchive = false; });
 
+  // ---- Search, like Telegram: tabs, frequent contacts, recent ----
+  type SearchTab = "all" | "people" | "groups" | "channels";
+  let searchTab = $state<SearchTab>("all");
+  let searchFocused = $state(false);
+  let searchInput: HTMLInputElement | undefined = $state();
+  /** The search is "open": typed in, or the field has the focus. */
+  const searchMode = $derived(searchFocused || !!$search.trim());
+  /** Empty field with the focus: frequent contacts + recent, not the list. */
+  const searchHome = $derived(searchFocused && !$search.trim());
+  function kindOfChat(c: ChatSummary): SearchTab {
+    if (c.channel || $groupMap[c.id]?.kind === "channel") return "channels";
+    if (c.id.startsWith("grp_")) return "groups";
+    return "people";
+  }
+  function closeSearch() {
+    search.set("");
+    searchTab = "all";
+    searchFocused = false;
+    searchInput?.blur();
+  }
+  // Phone: Back closes the search (it used to need the name erased by hand).
+  $effect(() => { if (IS_MOBILE && searchMode) return onBack(closeSearch); });
+  let recentSearch = $state<string[]>((() => { try { return JSON.parse(localStorage.getItem("aqua.recentSearch") ?? "[]"); } catch { return []; } })());
+  function rememberSearch(id: string) {
+    recentSearch = [id, ...recentSearch.filter((x) => x !== id)].slice(0, 12);
+    try { localStorage.setItem("aqua.recentSearch", JSON.stringify(recentSearch)); } catch { /* private mode */ }
+  }
+  function clearRecentSearch() {
+    recentSearch = [];
+    try { localStorage.removeItem("aqua.recentSearch"); } catch { /* private mode */ }
+  }
+  // A chat opened while searching goes to "Recent".
+  $effect(() => { const id = $activeId; if (id && searchMode) untrack(() => rememberSearch(id)); });
+  const recentChats = $derived(recentSearch.map((id) => $visibleChats.find((c) => c.id === id)).filter(Boolean) as ChatSummary[]);
+  /** People you write to most lately (the list is newest first). */
+  const frequent = $derived($visibleChats.filter((c) => kindOfChat(c) === "people" && !c.id.startsWith("__")).slice(0, 12));
+  function openFromSearch(id: string) {
+    rememberSearch(id);
+    void selectChat(id);
+    closeSearch();
+  }
+
+  /** What the folder rules look at (folders.ts::folderHas). */
+  function factsOf(c: ChatSummary): ChatFacts {
+    return { id: c.id, kind: kindOfChat(c) === "channels" ? "channels" : kindOfChat(c) === "groups" ? "groups" : "people",
+      contact: !!$contacts[c.id], muted: $mutedChats.has(c.id), unread: c.unread > 0 || $markedUnread.has(c.id), archived: $archived.has(c.id) };
+  }
+  /** In or out of a folder from a chat's menu: by hand, and left out when a rule still takes it in. */
+  function toggleInFolder(f: Folder, c: ChatSummary | undefined, id: string) {
+    const facts = c ? factsOf(c) : { id, kind: "people" as const, contact: false, muted: false, unread: false, archived: false };
+    if (folderHas(f, facts)) {
+      const chatIds = f.chatIds.filter((x) => x !== id);
+      const still = folderHas({ ...f, chatIds }, facts);
+      updateFolder(f.id, { chatIds, excludeIds: still ? [...(f.excludeIds ?? []), id] : f.excludeIds });
+    } else {
+      updateFolder(f.id, { chatIds: [...f.chatIds, id], excludeIds: (f.excludeIds ?? []).filter((x) => x !== id) });
+    }
+  }
+  /** Folder tags under a row in "All" (Telegram). */
+  function tagsOf(c: ChatSummary): Folder[] {
+    if (!$folderTags || $activeFolder !== "all" || searchMode) return [];
+    const facts = factsOf(c);
+    return $folders.filter((f) => f.color != null && f.color >= 0 && folderHas(f, facts)).slice(0, 3);
+  }
   // Chats filtered by archive + the active folder ("all" shows everything).
   // A search looks through archived chats too.
   let shownChats = $derived.by(() => {
@@ -128,8 +214,10 @@
     if (!$search.trim()) list = list.filter((c) => (showArchive ? $archived.has(c.id) : !$archived.has(c.id)));
     if (af !== "all" && !showArchive) {
       const f = $folders.find((x) => x.id === af);
-      if (f) { const set = new Set(f.chatIds); list = list.filter((c) => set.has(c.id)); }
+      // A folder's rules see the archive too ("exclude archived" is a rule).
+      if (f) list = $visibleChats.filter((c) => folderHas(f, factsOf(c)));
     }
+    if ($search.trim() && searchTab !== "all") list = list.filter((c) => kindOfChat(c) === searchTab);
     // Pinned chats on top, in pin order (not while searching).
     if ($search.trim() || !$pinnedChats.length) return list;
     const rank = new Map($pinnedChats.map((id, i) => [id, i]));
@@ -236,6 +324,7 @@
   let lastFolder = $activeFolder;
   $effect(() => { const f = $activeFolder; if (f !== lastFolder) { lastFolder = f; if (inServer) compactPinned = true; } });
   $effect(() => { document.documentElement.classList.toggle("list-compact", compact); });
+  const showStories = $derived(!compact && !searchMode && !showArchive && ($storyOwners.length > 0 || $myLiveStories.length > 0));
 
   // ---- Resizable list (drag the right edge) ----
   const LW_KEY = "aqua.listWidth";
@@ -493,7 +582,13 @@
   }
 
   // ---- Invite links pasted into the search box ----
-  let joinLink = $derived(parseJoinLink($search ?? ""));
+  // The title in a link is the one it was made with: a group we know shows its name now.
+  let joinLink = $derived.by(() => {
+    const j = parseJoinLink($search ?? "");
+    if (!j) return null;
+    const known = $groupMap[j.gid]?.title || $chats.find((c) => c.id === j.gid)?.name;
+    return known ? { ...j, title: known } : j;
+  });
   let joinIsMember = $derived(!!joinLink && !!$groupMap[joinLink.gid]?.members.some((m) => m.username === $info?.username));
   let joinSent = $state("");
   async function requestJoin() {
@@ -611,7 +706,7 @@
   }
 </script>
 
-<aside class="list" class:resizing class:compact class:has-active={!!$activeId}>
+<aside class="list" class:resizing class:compact class:lines3={$chatLines === 3} class:has-active={!!$activeId}>
   {#if compact}
     <button class="compact-expand" onclick={() => (compactPinned = true)} title={$t("Show the chat list")} aria-label={$t("Show the chat list")}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
@@ -673,13 +768,21 @@
       {@html icons.search}
       <input
         id="search"
+        bind:this={searchInput}
         placeholder={$t("Search by name, phone or @username")}
         autocomplete="off"
         bind:value={$search}
         onkeydown={onSearchKey}
-        onblur={() => (kbIndex = -1)}
+        onfocus={() => (searchFocused = true)}
+        onblur={() => { kbIndex = -1; setTimeout(() => { if (document.activeElement !== searchInput) searchFocused = false; }, 150); }}
       />
-      <span class="search-kbd">{$t("Ctrl K")}</span>
+      {#if searchMode}
+        <button class="search-x" data-x onpointerdown={(e) => e.preventDefault()} onclick={closeSearch} aria-label={$t("Close search")}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      {:else}
+        <span class="search-kbd">{$t("Ctrl K")}</span>
+      {/if}
     </label>
     <div class="plus-wrap">
       <button
@@ -696,6 +799,14 @@
         <div class="plus-pop" role="menu" tabindex="-1">
           <button onclick={() => { plusMenuOpen = false; openNewChatDialog(); }}>{$t("New chat")}</button>
           <button onclick={() => { plusMenuOpen = false; openNewGroup("group"); }}>{$t("New group")}</button>
+          <button onclick={() => { plusMenuOpen = false; openNewGroup("supergroup"); }}>{$t("New server")}</button>
+          <button onclick={() => { plusMenuOpen = false; void addStory(IS_MOBILE ? "camera" : "gallery"); }}>{$t("Add a story")}</button>
+          {#if IS_MOBILE}
+            <!-- Telegram's ⋮: Saved Messages, day / night, the server. -->
+            <button onclick={() => { plusMenuOpen = false; void selectChat("__saved__"); }}>{$t("Saved Messages")}</button>
+            <button onclick={() => { plusMenuOpen = false; themeSettings.update((x) => ({ ...x, mode: x.mode === "light" ? "dark" : "light" })); }}>{$t($themeSettings.mode === "light" ? "Night mode" : "Day mode")}</button>
+            <button onclick={() => { plusMenuOpen = false; openServers(); }}>{$t("Server")}</button>
+          {/if}
           <button onclick={() => { plusMenuOpen = false; openNewGroup("channel"); }}>{$t("New channel")}</button>
           {#if $chats.some((c) => c.unread > 0)}<button onclick={() => { plusMenuOpen = false; markAllRead(); }}>{$t("Mark all as read")}</button>{/if}
         </div>
@@ -705,12 +816,20 @@
     </div>
   </div>
 
-  {#if $folders.length > 0}
+  {#if searchMode}
+    <div class="folder-strip search-tabs" role="tablist">
+      {#each [["all", "All"], ["people", "Chats"], ["groups", "Groups"], ["channels", "Channels"]] as [id, label] (id)}
+        <button class="folder-tab" class:active={searchTab === id} role="tab" aria-selected={searchTab === id}
+          onpointerdown={(e) => e.preventDefault()} onclick={() => (searchTab = id as SearchTab)}>{$t(label)}</button>
+      {/each}
+    </div>
+  {:else if $folders.length > 0}
     <div class="folder-strip">
       <button class="folder-tab" class:active={$activeFolder === "all"} onclick={() => activeFolder.set("all")} oncontextmenu={(e) => openFolderMenu(e, "all")}>{$t("All")}</button>
       {#each $folders as f (f.id)}
+        {@const unread = $visibleChats.filter((c) => (c.unread > 0) && !$mutedChats.has(c.id) && folderHas(f, factsOf(c))).length}
         <button class="folder-tab" class:active={$activeFolder === f.id} onclick={() => activeFolder.set(f.id)} oncontextmenu={(e) => openFolderMenu(e, f.id)}>
-          {f.name}{#if f.chatIds.length > 0}<span class="ft-count">{f.chatIds.length}</span>{/if}
+          {#if f.emoji}<span class="ft-emoji">{f.emoji}</span>{/if}{f.name}{#if unread > 0}<span class="ft-count">{unread}</span>{/if}
         </button>
       {/each}
       <button class="folder-edit" onclick={openFolderManager} title={$t("Manage folders")}>+</button>
@@ -726,18 +845,74 @@
     <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
     <div class="ctx-scrim" onclick={() => (folderMenu = null)} oncontextmenu={(e) => { e.preventDefault(); folderMenu = null; }}></div>
     <div class="chat-ctx" use:keepOnScreen style:left="{fm.x}px" style:top="{fm.y}px" role="menu">
-      <button onclick={() => { markAllRead(fm.id === "all" ? undefined : $folders.find((f) => f.id === fm.id)?.chatIds ?? []); folderMenu = null; }}>{$t("Mark all as read")}</button>
+      <button onclick={() => { const f = $folders.find((x) => x.id === fm.id); markAllRead(fm.id === "all" ? undefined : f ? $chats.filter((c) => folderHas(f, factsOf(c))).map((c) => c.id) : []); folderMenu = null; }}>{$t("Mark all as read")}</button>
+      {#if fm.id !== "all"}<button onclick={() => { const id = fm.id; folderMenu = null; openFolderManager(id); }}>{$t("Edit folder")}</button>{/if}
       <button onclick={() => { folderMenu = null; openFolderManager(); }}>{$t("Manage folders")}</button>
     </div>
   {/if}
 
-  <div class="chats">
+  <div class="chats" class:home={searchHome}>
+    {#if showStories}
+      <!-- Stories (Telegram): scrolls away with the list; pull down to see it again. -->
+      <div class="stories" role="list" aria-label={$t("Stories")}>
+        <div class="st-item" role="listitem">
+          <button class="st-ava" class:ring={$myLiveStories.length > 0} onclick={tapMine} aria-label={$t("My story")}>
+            <span class="st-pic" style:background-image={$profile.avatar_url ? `url("${$profile.avatar_url}")` : undefined}>{$profile.avatar_url ? "" : meLetter}</span>
+            <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+            <span class="st-plus" role="button" tabindex="-1" title={$t("Add a story")} onclick={(e) => { e.stopPropagation(); storyAdd = !storyAdd; }}>+</span>
+          </button>
+          <span class="st-nm">{$t("My story")}</span>
+          {#if storyAdd}
+            <div class="st-menu" role="menu">
+              <button role="menuitem" onclick={() => { storyAdd = false; void addStory("camera"); }}>{$t("Camera")}</button>
+              <button role="menuitem" onclick={() => { storyAdd = false; void addStory("gallery"); }}>{$t("Photo or video")}</button>
+            </div>
+          {/if}
+        </div>
+        {#each $storyOwners as o (o.user)}
+          {@const ch = $chats.find((x) => x.id === o.user)}
+          <div class="st-item" role="listitem">
+            <button class="st-ava ring" class:seen={!o.unseen} onclick={() => openStories(storyUsers(), o.user)} aria-label={ch?.name ?? o.user}>
+              <span class="st-pic" style:--gradient={ch?.gradient} style:background-image={$avatars[o.user] ? `url("${$avatars[o.user]}")` : undefined}>{$avatars[o.user] ? "" : (ch?.letter ?? o.user.charAt(0).toUpperCase())}</span>
+            </button>
+            <span class="st-nm">{(ch?.name ?? o.user).split(" ")[0]}</span>
+          </div>
+        {/each}
+      </div>
+    {/if}
+    {#if searchHome}
+      <div class="search-home" role="presentation" onpointerdown={(e) => e.preventDefault()}>
+        {#if frequent.length}
+          <div class="sh-title">{$t("Frequent contacts")}</div>
+          <div class="sh-freq">
+            {#each frequent as c (c.id)}
+              <button class="sh-person" onclick={() => openFromSearch(c.id)}>
+                <span class="avatar sz-44" style="--gradient: {c.gradient}">{c.letter}{#if $avatars[c.id]}<img class="ava-img" src={$avatars[c.id]} alt="" loading="lazy" />{/if}</span>
+                <span class="sh-name">{c.name.split(" ")[0]}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+        {#if recentChats.length}
+          <div class="sh-title sh-row"><span>{$t("Recent")}</span><button class="sh-clear" onclick={clearRecentSearch}>{$t("Clear")}</button></div>
+          {#each recentChats as c (c.id)}
+            <button class="sh-recent" onclick={() => openFromSearch(c.id)}>
+              <span class="avatar sz-40" class:ava-grp={c.id.startsWith("grp_") && !c.channel} class:ava-chan={c.channel} style="--gradient: {c.gradient}">{c.letter}{#if $avatars[c.id]}<img class="ava-img" src={$avatars[c.id]} alt="" loading="lazy" />{/if}</span>
+              <span class="sh-txt"><b>{c.name}</b><span>{peekStatus(c.id) || (c.id.startsWith("grp_") ? "" : "@" + c.id)}</span></span>
+            </button>
+          {/each}
+        {/if}
+        {#if !frequent.length && !recentChats.length}
+          <div class="sh-title">{$t("Type a name, @username or paste an invite link")}</div>
+        {/if}
+      </div>
+    {/if}
     {#if joinLink}
       <div class="join-card">
         <div class="jc-ava">{joinLink.title.charAt(0).toUpperCase()}</div>
         <div class="jc-body">
           <div class="jc-title">{joinLink.title}</div>
-          <div class="jc-sub">Invite link · admin @{joinLink.admin}</div>
+          <div class="jc-sub">{$t("Invite link · admin @{admin}", { admin: joinLink.admin })}</div>
         </div>
         {#if joinIsMember}
           <button class="jc-btn" onclick={() => { const id = joinLink!.gid; search.set(""); void selectChat(id); }}>{$t("Open")}</button>
@@ -847,7 +1022,11 @@
           </div>
         {:else}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="avatar sz-44" class:lk class:ava-grp={c.id.startsWith("grp_") && !c.channel} class:ava-chan={c.channel} style="--gradient: {c.gradient}" onpointerdown={(e) => { if (e.pointerType !== "touch") peekDown(e, c.id); }} title={compact ? undefined : $t("Hold to peek")}>
+        <div class="avatar sz-44" class:lk class:ava-grp={c.id.startsWith("grp_") && !c.channel} class:ava-chan={c.channel}
+          class:story-ring={!lk && !!$storyRing[c.id]} class:story-seen={$storyRing[c.id] === "seen"}
+          style="--gradient: {c.gradient}" onpointerdown={(e) => { if (e.pointerType !== "touch") peekDown(e, c.id); }}
+          onclick={(e) => { if (!lk && $storyRing[c.id] && !sel.length) { e.stopPropagation(); openStories(storyUsers(), c.id); } }}
+          title={compact ? undefined : $t("Hold to peek")}>
           {lk ? "" : c.letter}
           {#if $avatars[c.id] && !lk}<img class="ava-img" src={$avatars[c.id]} alt="" loading="lazy" />{/if}
           {#if lk}<span class="lk-ic">{@html icons.lock}</span>{/if}
@@ -857,10 +1036,20 @@
         <div class="chat-body">
           <div class="chat-row-1">
             <span class="chat-name">
+              {#if !lk && (c.id.startsWith("grp_") || c.channel)}
+                <!-- What kind of chat (Telegram): people for a group, a megaphone for a channel. -->
+                <span class="type-ic" title={$t(c.channel ? "Channel" : "Group")}>{#if c.channel}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v4a1 1 0 0 0 1 1h3l6 4V5L7 9H4a1 1 0 0 0-1 1z"/><path d="M17 8.5a5 5 0 0 1 0 7"/></svg>{:else}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 19c.6-3.2 3-5 6-5s5.4 1.8 6 5"/><path d="M16 5.2a3 3 0 0 1 0 5.6M18 14.2c1.6.6 2.7 2.2 3 4.8"/></svg>{/if}</span>
+              {/if}
               <span class="cn-text" class:lk-blur={lk}>{lk ? "•••••••" : c.name}</span>{#if !lk && !c.id.startsWith("grp_")}<EmojiStatus token={emojiStatusOf($peerCards, c.id)} size={16} />{/if}
               {#if inGroup}<!-- svelte-ignore a11y_no_static_element_interactions --><!-- svelte-ignore a11y_click_events_have_key_events --><span class="g-tag" onclick={(e) => { e.stopPropagation(); openGroupId.set(inGroup.id); }} title={$t("Chat group")}>{inGroup.emoji ?? "▣"} {inGroup.name}</span>{/if}
               {#if c.verified}<span class="verified-badge">{@html icons.verified}</span>{/if}
+              {#if !lk && $peerCards[c.id]?.verified}<OfficialMark size={15} />{/if}
               {#if $clans[c.id]}<ClanTag tag={$clans[c.id]} />{/if}
+              {#if !lk && $peerPresence[c.id]?.activity?.[0]}
+                {@const a = $peerPresence[c.id].activity![0]}
+                <!-- What they're doing sits by the name; the last message stays visible. -->
+                <span class="act-tag" title={`${activityVerb(a)} ${a.name}${a.details ? " — " + a.details : ""}`}>{a.name}</span>
+              {/if}
               {#if $mutedChats.has(c.id)}<span class="muted-ic" title={$t("Muted")}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg></span>{/if}
             </span>
             <span class="chat-time">{c.time}</span>
@@ -870,13 +1059,17 @@
               <span class="chat-preview lk-prev">{$t("Locked chat")}</span>
             {:else if c.preview_is_typing}
               <span class="chat-preview typing">{c.preview}</span>
-            {:else if $peerPresence[c.id]?.activity?.[0]}
-              {@const a = $peerPresence[c.id].activity![0]}
-              <span class="chat-preview activity" title={`${activityVerb(a)} ${a.name}${a.details ? " — " + a.details : ""}`}>{activityVerb(a)} <b>{a.name}</b></span>
             {:else}
               <span class="chat-preview">
-                {#if c.preview_by_me}<span class="me-prefix">{$t("you:")}</span>{/if}{previewText(c.preview)}
+                {#if c.preview_by_me}<span class="me-prefix">{$t("you:")}</span>{:else if c.preview_from && !c.channel}<span class="from-prefix">{displayName(c.preview_from, c.preview_from)}<i>:</i></span>{/if}<span class="pv-t">{previewText(c.preview)}</span>
               </span>
+            {/if}
+            {#if $botMenus[c.id] && !lk}
+              <!-- A bot's mini app, straight from the list (Telegram's "Open"). -->
+              <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+              <span class="bot-open" role="button" tabindex="-1" title={$botMenus[c.id].url}
+                onpointerdown={(e) => e.stopPropagation()}
+                onclick={(e) => { e.stopPropagation(); openMiniApp({ bot: c.id, url: $botMenus[c.id].url, from: "menu" }); }}>{$botMenus[c.id].text || $t("Open")}</span>
             {/if}
             {#if c.unread > 0 && c.id !== $activeId}
               {#key c.unread}<span class="chat-badge" class:muted={c.channel || $mutedChats.has(c.id)} in:scaleIn={{ start: 0.4, duration: 260, easing: backOut }}>{c.unread}</span>{/key}
@@ -886,11 +1079,40 @@
               <span class="pin-ic" title={$t("Pinned")}><svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 3l5 5-3 1-4 4 1 5-2 2-4-4-5 5-1-1 5-5-4-4 2-2 5 1 4-4z"/></svg></span>
             {/if}
           </div>
+          {#if !lk && !compact}
+            {@const tags = tagsOf(c)}
+            {#if tags.length}
+              <!-- Which folders the chat is in, like Telegram's folder tags. -->
+              <div class="ftags">{#each tags as f (f.id)}<span class="ftag" style:--fc={FOLDER_COLORS[f.color ?? 0]}>{f.name}</span>{/each}</div>
+            {/if}
+          {/if}
         </div>
         {/if}
       </button>
     {/each}
   </div>
+
+  {#if IS_MOBILE && !searchMode && !sel.length}
+    {#if fabOpen}
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+      <div class="fab-veil" onclick={() => (fabOpen = false)}></div>
+    {/if}
+    <div class="fab-wrap" class:open={fabOpen}>
+      {#if fabOpen}
+        <div class="fab-items" role="menu">
+          {#each [["channel", "New channel"], ["supergroup", "New server"], ["group", "New group"], ["chat", "New chat"]] as [k, label], i (k)}
+            <button class="fab-item" role="menuitem" style:--i={3 - i} onclick={() => fabPick(k as "chat" | "group" | "supergroup" | "channel")}>
+              <span>{$t(label)}</span>
+              <i>{#if k === "chat"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>{:else if k === "group"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 19c.6-3.2 3-5 6-5s5.4 1.8 6 5"/><path d="M16 5.2a3 3 0 0 1 0 5.6M18 14.2c1.6.6 2.7 2.2 3 4.8"/></svg>{:else if k === "supergroup"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M8 9h8M8 13h5M3 8h0"/></svg>{:else}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v4a1 1 0 0 0 1 1h3l6 4V5L7 9H4a1 1 0 0 0-1 1z"/><path d="M17 8.5a5 5 0 0 1 0 7"/></svg>{/if}</i>
+            </button>
+          {/each}
+        </div>
+      {/if}
+      <button class="fab" onclick={() => (fabOpen = !fabOpen)} aria-label={$t("New chat, group or channel")} aria-expanded={fabOpen}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+      </button>
+    </div>
+  {/if}
 
   {#if ctx}
     {@const cid = ctx.id}
@@ -1008,7 +1230,8 @@
         <div class="peek-menu" role="menu">
           {#if peekFolders}
             {#each $allFolders as f (f.id)}
-              <button onclick={() => toggleChatInFolder(f.id, pid)}>{isInFolder(f.id, pid) ? "✓ " : ""}{f.name}</button>
+              {@const fc = $chats.find((x) => x.id === pid)}
+              <button onclick={() => toggleInFolder(f, fc, pid)}>{(fc ? folderHas(f, factsOf(fc)) : f.chatIds.includes(pid)) ? "✓ " : ""}{f.emoji ? f.emoji + " " : ""}{f.name}</button>
             {/each}
             <button onclick={() => { peekFolders = false; closePeek(); openFolderManager(); }}>{$t("New folder…")}</button>
             <button onclick={() => (peekFolders = false)}>‹ {$t("Back")}</button>
@@ -1245,6 +1468,7 @@
   .chat-ctx button.danger, .peek-menu button.danger { color: var(--danger, #FF4D6D); }
   .chat-ctx button.danger:hover, .peek-menu button.danger:hover { background: color-mix(in srgb, var(--danger, #FF4D6D) 14%, transparent); color: var(--danger, #FF4D6D); }
   .chat-preview.activity { color: var(--accent); }
+  .act-tag { flex: 0 1 auto; min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 700; color: var(--accent); padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 14%, transparent); margin-left: 4px; }
   .chat-preview.activity b { font-weight: 700; }
   /* Compact: avatars only (a server is open). */
   .list.compact .list-header, .list.compact .folder-strip, .list.compact .chat-body,
@@ -1275,6 +1499,24 @@
     align-items: center;
     gap: 10px;
   }
+  .search-x { flex: none; width: 22px; height: 22px; display: grid; place-items: center; padding: 0; border: none; border-radius: 50%; background: color-mix(in srgb, var(--fg) 10%, transparent); color: var(--fg-muted); cursor: pointer; }
+  .search-x:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 18%, transparent); }
+  .search-x svg { width: 12px; height: 12px; }
+  .chats.home > :not(.search-home) { display: none !important; }
+  .search-home { display: flex; flex-direction: column; padding: 4px 2px 12px; }
+  .sh-title { font-size: 12px; font-weight: 700; color: var(--fg-muted); padding: 10px 10px 6px; }
+  .sh-row { display: flex; align-items: center; justify-content: space-between; background: color-mix(in srgb, var(--fg) 4%, transparent); border-radius: calc(8px * var(--rk, 1)); }
+  .sh-clear { border: none; background: none; color: var(--fg-muted); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; padding: 0; }
+  .sh-clear:hover { color: var(--accent); }
+  .sh-freq { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 2px 6px 8px; }
+  .sh-person { flex: 0 0 auto; width: 64px; display: flex; flex-direction: column; align-items: center; gap: 5px; border: none; background: none; color: var(--fg); cursor: pointer; padding: 4px 0; border-radius: calc(10px * var(--rk, 1)); }
+  .sh-person:hover { background: var(--bg-hover); }
+  .sh-name { font-size: 11.5px; max-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sh-recent { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 10px; border: none; background: none; color: var(--fg); text-align: left; cursor: pointer; border-radius: calc(10px * var(--rk, 1)); }
+  .sh-recent:hover { background: var(--bg-hover); }
+  .sh-txt { display: flex; flex-direction: column; min-width: 0; }
+  .sh-txt b { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sh-txt span { font-size: 12px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .search {
     flex: 1;
     min-width: 0;
@@ -1446,6 +1688,53 @@
   }
   .folder-tab:hover { color: var(--fg); background: var(--bg-hover); }
   .folder-tab.active { color: var(--accent); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 25%, transparent); }
+  .ft-emoji { margin-right: 4px; }
+  /* Stories strip. */
+  .stories { display: flex; gap: 14px; padding: 6px 12px 10px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+  .stories::-webkit-scrollbar { display: none; }
+  .st-item { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; width: 62px; flex-shrink: 0; }
+  .st-ava { position: relative; width: 58px; height: 58px; border-radius: var(--ava-r, 50%); border: none; padding: 3px; background: transparent; cursor: pointer; }
+  .st-ava.ring { background: conic-gradient(from 210deg, var(--accent), var(--accent-2), var(--accent)); }
+  .st-ava.ring.seen { background: var(--border-strong); }
+  .st-pic { display: grid; place-items: center; width: 100%; height: 100%; box-sizing: border-box; border-radius: var(--ava-r, 50%); border: 2.5px solid var(--bg-list);
+    background: var(--gradient, var(--bg-surface-2)) center / cover; color: rgba(6,7,12,.85); font: 800 19px var(--font-ui, inherit); }
+  .st-ava:not(.ring) .st-pic { border-color: transparent; }
+  .st-plus { position: absolute; right: -1px; bottom: -1px; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: #06070c;
+    font: 800 15px/1 var(--font-ui, inherit); border: 2px solid var(--bg-list); }
+  .st-nm { max-width: 62px; font-size: 11.5px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .st-menu { position: absolute; top: 66px; left: 0; z-index: 20; min-width: 160px; padding: 5px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-surface); border: 1px solid var(--border-strong);
+    box-shadow: 0 14px 30px -12px rgba(0,0,0,.8); display: flex; flex-direction: column; }
+  .st-menu button { padding: 9px 12px; border: none; background: transparent; color: var(--fg); text-align: left; font: 500 14px var(--font-ui, inherit); border-radius: calc(8px * var(--rk, 1)); cursor: pointer; }
+  .st-menu button:hover { background: var(--bg-hover); }
+  /* Unseen story: a ring in the theme colour around the avatar (Telegram). */
+  .avatar.story-ring { box-shadow: 0 0 0 2px var(--bg-list), 0 0 0 4px var(--accent); cursor: pointer; }
+  .avatar.story-ring.story-seen { box-shadow: 0 0 0 2px var(--bg-list), 0 0 0 4px var(--border-strong); }
+  /* Phones: the pencil (Telegram) above the bottom bar; it unfolds upwards. */
+  .fab-wrap { position: fixed; right: 16px; bottom: calc(92px + env(safe-area-inset-bottom, 0px)); z-index: 60; display: flex; flex-direction: column; align-items: flex-end; gap: 12px; }
+  :global(body.chat-open) .fab-wrap, :global(body.chat-open) .fab-veil { display: none; }
+  .fab { width: 56px; height: 56px; border-radius: calc(18px * var(--rk, 1)); border: none; display: grid; place-items: center; color: #06070c;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 12px 28px -10px var(--accent-glow), 0 2px 6px rgba(0,0,0,.3);
+    transition: transform .25s cubic-bezier(.3,1.4,.5,1), border-radius .25s ease; }
+  .fab svg { width: 24px; height: 24px; transition: transform .25s ease; }
+  .fab:active { transform: scale(.92); }
+  .fab-wrap.open .fab svg { transform: rotate(-45deg); }
+  .fab-veil { position: fixed; inset: 0; z-index: 59; background: rgba(0,0,0,.35); animation: fab-veil .2s ease; }
+  @keyframes fab-veil { from { opacity: 0; } }
+  .fab-items { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+  .fab-item { display: flex; align-items: center; gap: 10px; border: none; background: transparent; padding: 0; color: var(--fg); font: 600 14.5px var(--font-ui, inherit);
+    animation: fab-in .26s cubic-bezier(.22,1.2,.36,1) both; animation-delay: calc(var(--i) * 35ms); }
+  .fab-item span { padding: 7px 12px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-surface); border: 1px solid var(--border-strong); box-shadow: 0 8px 20px -10px rgba(0,0,0,.7); }
+  .fab-item i { width: 46px; height: 46px; border-radius: calc(15px * var(--rk, 1)); display: grid; place-items: center; background: var(--bg-surface-2); color: var(--accent); border: 1px solid var(--border-strong); margin-right: 5px; }
+  .fab-item i svg { width: 22px; height: 22px; }
+  .fab-item:active i { transform: scale(.92); }
+  @keyframes fab-in { from { opacity: 0; transform: translateY(14px) scale(.85); } }
+  .bot-open { flex-shrink: 0; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 3px 11px; border-radius: calc(12px * var(--rk, 1));
+    background: var(--accent); color: #06070c; font-size: 12px; font-weight: 700; cursor: pointer; transition: transform .12s ease, filter .12s ease; }
+  .bot-open:hover { filter: brightness(1.08); }
+  .bot-open:active { transform: scale(.94); }
+  .ftags { display: flex; gap: 4px; margin-top: 3px; min-width: 0; overflow: hidden; }
+  .ftag { font-size: calc(10.5px * var(--font-scale, 1)); font-weight: 700; line-height: 1; padding: 2px 6px 3px; border-radius: calc(5px * var(--rk, 1)); white-space: nowrap;
+    color: var(--fc); background: color-mix(in srgb, var(--fc) 16%, transparent); max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
   .ft-count {
     font-size: 10px; font-variant-numeric: tabular-nums;
     background: var(--bg-input); color: var(--fg-dim);
@@ -1518,6 +1807,23 @@
   }
   .chat-time { font-size: 11.5px; color: var(--fg-dim); flex-shrink: 0; font-variant-numeric: tabular-nums; }
   .chat-item.active .chat-time { color: var(--accent); }
+  /* Who wrote the last message in a group (Telegram). */
+  .from-prefix { color: var(--fg); font-weight: 600; flex-shrink: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
+  .pv-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .type-ic { display: inline-grid; place-items: center; width: 15px; height: 15px; flex-shrink: 0; color: var(--fg-muted); margin-right: 1px; }
+  .type-ic svg { width: 15px; height: 15px; }
+  .chat-item.active .type-ic { color: currentColor; }
+  /* Three lines (Settings → Appearance → Chat list): a bigger avatar, the
+     sender on a line of its own, two lines of text. */
+  .list.lines3 .chat-item { grid-template-columns: 54px 1fr; padding-top: 9px; padding-bottom: 9px; }
+  .list.lines3 .chat-item .avatar.sz-44 { width: 54px; height: 54px; font-size: 20px; }
+  .list.lines3 .chat-row-2 { align-items: flex-start; }
+  .list.lines3 .chat-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; white-space: normal; line-height: 1.32; overflow-wrap: anywhere; }
+  .list.lines3 .chat-preview .from-prefix { display: block; max-width: none; white-space: nowrap; }
+  .list.lines3 .chat-preview .from-prefix i { display: none; }
+  .list.lines3 .chat-preview:has(.from-prefix) { -webkit-line-clamp: 2; }
+  .list.lines3 .chat-badge, .list.lines3 .pin-ic { margin-top: 2px; }
+  .from-prefix i { font-style: normal; }
   .chat-row-2 {
     display: flex;
     align-items: center;
@@ -1697,6 +2003,8 @@
     .chats { padding: 4px 6px calc(68px + env(safe-area-inset-bottom, 0px)); }
     .chat-item { grid-template-columns: 48px 1fr; gap: 12px; padding: 7px 10px; border-radius: calc(16px * var(--rk, 1)); }
     .chat-item .avatar.sz-44 { width: 48px; height: 48px; font-size: 18px; }
+    .list.lines3 .chat-item { grid-template-columns: 58px 1fr; padding-top: 8px; padding-bottom: 8px; }
+    .list.lines3 .chat-item .avatar.sz-44 { width: 58px; height: 58px; font-size: 21px; }
     .chat-item.active { background: transparent; width: 100%; margin-right: 0; border-radius: calc(16px * var(--rk, 1)); }
     .chat-item.active::before, .chat-item.active::after { display: none; }
     .chat-item.active .chat-time { color: var(--fg-dim); }

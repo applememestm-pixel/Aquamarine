@@ -201,6 +201,9 @@ pub struct ProfileCard {
     /// The account's ID, like Telegram's (older relays: "").
     #[serde(default)]
     pub uid: String,
+    /// Check mark from this relay's @verify bot.
+    #[serde(default)]
+    pub verified: bool,
 }
 
 /// Request an email verification code (no auth required). Returns the
@@ -659,6 +662,25 @@ impl Transport {
             });
         }
         Ok(r.bytes().await?.to_vec())
+    }
+
+    /// The blob as it arrives: `on` gets each piece of the body (return
+    /// false to stop). For playing a streamed video while it downloads.
+    pub async fn download_blob_with<F: FnMut(&[u8]) -> bool>(&self, cid: &str, mut on: F) -> Result<(), TransportError> {
+        let url = format!("{}/v1/blob/{}", self.server_url.trim_end_matches('/'), cid);
+        let mut r = self.http.get(&url).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server {
+                status: r.status().as_u16(),
+                body: r.text().await.unwrap_or_default(),
+            });
+        }
+        while let Some(piece) = r.chunk().await? {
+            if !on(&piece) {
+                break;
+            }
+        }
+        Ok(())
     }
 
     // ---- User directory (public profile cards + search) ----
