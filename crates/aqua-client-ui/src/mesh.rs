@@ -553,6 +553,19 @@ pub fn run_session<S: Read + Write>(app: &AppHandle, link: &mut S, dialled: bool
     rep
 }
 
+/// A Bluetooth try that didn't get to a session (no Aquamarine there,
+/// couldn't connect): it shows in "Recent meetings" with the reason, so
+/// it's clear what Bluetooth did.
+#[allow(dead_code)]
+pub fn note_attempt(app: &AppHandle, device: &str, error: &str) {
+    {
+        let mut b = book(app);
+        b.last.insert(0, SyncReport { at: now(), device: device.to_string(), error: Some(error.to_string()), ..Default::default() });
+        b.save();
+    }
+    emit_status(app);
+}
+
 /// What a session needs from the app (a trait so tests can run two ends).
 trait Ctx {
     fn me(&self) -> Result<Me, String>;
@@ -815,8 +828,10 @@ mod platform {
         let l = lan::sync_round(app, scan).await;
         let b = if bt::SUPPORTED { bt::sync_round(app, scan).await } else { Err(String::new()) };
         match (l, b) {
+            (Ok(n), Err(e)) if n > 0 && scan && !e.is_empty() => Err(format!("Bluetooth: {e}")),
             (Ok(n), _) if n > 0 => Ok(()),
             (_, Ok(())) => Ok(()),
+            (_, Err(e)) if scan && !e.is_empty() => Err(e),
             _ if !scan => Ok(()),
             _ => Err("no contacts with Aquamarine nearby — same Wi-Fi, or Bluetooth on".into()),
         }
