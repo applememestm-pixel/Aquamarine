@@ -169,6 +169,9 @@
     });
   });
   let navMenu = $state(false);
+  /** Phones: the search field shows from the 🔍 in the top bar (Telegram). */
+  let phoneSearch = $state(false);
+  let navSearchEl = $state<HTMLInputElement | null>(null);
 
   // ---- Phone layout (<= 720px): Telegram-style list of tiles; tapping one
   //      opens that section full-screen with  ‹ [icon] Title  on top. The
@@ -1039,11 +1042,20 @@
       <div class="sz-grip" onpointerdown={startSheetResize} ondblclick={() => setSheetSize(null)} title={$t("Drag to resize the window · double-click to reset")}></div>
       <div class="layout">
         <nav class="nav">
+          <!-- Phones: Telegram's top bar — my QR on the left, search and ⋮ in
+               a pill on the right; no title (the profile below is the title). -->
           <div class="list-head phone-only">
-            <h2>{$t("Settings")}</h2>
-            <button class="more" onclick={() => (navMenu = !navMenu)} aria-label={$t("More")} aria-expanded={navMenu}>
-              <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+            <button class="tg-round" onclick={() => meetOpen.set(true)} aria-label={$t("My QR code")}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 14h3v3M21 14v.01M14 21h.01M17.5 21H21v-3.5"/></svg>
             </button>
+            <div class="tg-pill">
+              <button onclick={() => { phoneSearch = !phoneSearch; if (phoneSearch) setTimeout(() => navSearchEl?.focus(), 30); else navQuery = ""; }} aria-label={$t("Search settings")} aria-pressed={phoneSearch}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+              </button>
+              <button class="more" onclick={() => (navMenu = !navMenu)} aria-label={$t("More")} aria-expanded={navMenu}>
+                <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+              </button>
+            </div>
             <button data-x class="close" onclick={closeAll} title={$t("Close")}>×</button>
             {#if navMenu}
               <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
@@ -1056,18 +1068,21 @@
             {/if}
           </div>
           <button class="me-card" onclick={() => { closeAll(); openProfile(); }} title={$t("Edit profile")}>
+            {#if $profile.banner_url}<span class="me-banner" style:background-image={`url("${$profile.banner_url}")`} aria-hidden="true"></span>{/if}
             <span class="me-ava" style:background={`linear-gradient(135deg, ${$profile.banner_a}, ${$profile.banner_b})`}>
               {#if $profile.avatar_url}<img src={$profile.avatar_url} alt="" />{:else}{($profile.display_name !== "You" ? $profile.display_name : $info?.username ?? "?").charAt(0).toUpperCase()}{/if}
             </span>
+            <!-- Phones: a camera on the avatar, like Telegram (opens the profile to change it). -->
+            <span class="me-cam phone-only" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></span>
             <span class="me-text">
               <span class="me-name">{$profile.display_name !== "You" ? $profile.display_name : ($info?.username ?? "")}</span>
-              <span class="me-sub">@{$info?.username ?? "—"}{$profile.phone ? ` · ${$profile.phone}` : ""}</span>
+              <span class="me-sub">{$profile.phone ? `${$profile.phone} • ` : ""}@{$info?.username ?? "—"}</span>
               <span class="me-online" class:off={!$info?.connected}>{$info?.connected ? ($myOnline === "invisible" ? "invisible" : $myOnline === "dnd" ? "do not disturb" : $myOnline) : "offline"}</span>
             </span>
           </button>
-          <label class="nav-search">
+          <label class="nav-search" class:open={phoneSearch || !!navQuery}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-            <input placeholder={$t("Search settings")} bind:value={navQuery} />
+            <input placeholder={$t("Search settings")} bind:value={navQuery} bind:this={navSearchEl} />
             {#if navQuery}<button onclick={() => (navQuery = "")} aria-label={$t("Clear")}>×</button>{/if}
           </label>
           {#snippet navItem(it: Item)}
@@ -2742,13 +2757,36 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .nm button { padding: 11px 12px; border: none; background: transparent; color: var(--fg); text-align: left; font: 500 14.5px var(--font-ui, inherit); border-radius: calc(9px * var(--rk, 1)); }
   .nm button:active { background: var(--bg-hover); }
   .nm .danger { color: var(--danger); }
-  /* Phones (Telegram): the profile on top in the middle over its colours,
-     subtitles under the rows. */
-  :global(html.phone) .me-card { flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 22px 12px 16px;
-    background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 22%, var(--bg-surface)), var(--bg-surface)); }
-  :global(html.phone) .me-card .me-ava { width: 96px; height: 96px; font-size: 36px; box-shadow: 0 10px 30px -12px rgba(0,0,0,.7); }
-  :global(html.phone) .me-card .me-text { align-items: center; }
-  :global(html.phone) .me-card .me-name { font-size: 21px; }
+  /* Phones (Telegram): a QR button and a search/⋮ pill on top; the profile
+     in the middle with no card under it — a big avatar with a camera, the
+     name, "phone • @name"; my banner faintly behind, if I have one. */
+  /* The avatar rises between the buttons (the card pulls up under the bar):
+     the bar lets taps through except on its buttons. */
+  :global(html.phone) .list-head { padding: 0 0 2px; z-index: 2; pointer-events: none; }
+  :global(html.phone) .list-head > * { pointer-events: auto; }
+  .tg-pill .more { margin-left: 0; width: 38px; height: 38px; color: var(--fg); }
+  .tg-round { width: 44px; height: 44px; border-radius: 50%; border: none; display: grid; place-items: center; background: var(--bg-surface); color: var(--fg); flex-shrink: 0; }
+  .tg-round svg { width: 22px; height: 22px; }
+  .tg-pill { display: flex; align-items: center; gap: 2px; margin-left: auto; padding: 0 4px; height: 44px; border-radius: 22px; background: var(--bg-surface); }
+  .tg-pill button { width: 38px; height: 38px; display: grid; place-items: center; border: none; border-radius: 50%; background: transparent; color: var(--fg); margin: 0; }
+  .tg-pill button svg { width: 21px; height: 21px; }
+  .tg-pill button[aria-pressed="true"] { color: var(--accent); }
+  :global(html.phone) .nav-search:not(.open) { display: none; }
+  :global(html.phone) .me-card { position: relative; flex-direction: column; align-items: center; text-align: center; gap: 6px; padding: 4px 12px 14px;
+    background: transparent; margin-top: -40px; overflow: visible; }
+  :global(html.phone) .me-card:hover, :global(html.phone) .me-card:active { background: transparent; }
+  .me-banner { position: absolute; inset: -60px -12px 30% -12px; z-index: 0; background-size: cover; background-position: center; opacity: .35; pointer-events: none;
+    -webkit-mask-image: linear-gradient(180deg, #000 30%, transparent); mask-image: linear-gradient(180deg, #000 30%, transparent); }
+  :global(html:not(.phone)) .me-banner { display: none; }
+  :global(html.phone) .me-card > :not(.me-banner) { position: relative; z-index: 1; }
+  :global(html.phone) .me-card .me-ava { width: 108px; height: 108px; font-size: 40px; box-shadow: 0 12px 34px -14px rgba(0,0,0,.8); }
+  .me-cam { position: absolute !important; top: 78px; left: calc(50% + 24px); width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; align-items: center; justify-content: center;
+    background: var(--accent); color: #06070c; border: 3px solid var(--bg-shell); }
+  .me-cam svg { width: 17px; height: 17px; }
+  :global(html.phone) .me-card .me-text { align-items: center; margin-top: 4px; }
+  :global(html.phone) .me-card .me-name { font-size: 26px; font-weight: 700; }
+  :global(html.phone) .me-card .me-sub { font-size: 14.5px; color: var(--fg-dim); }
+  :global(html.phone) .me-card .me-online { display: none; }
   :global(html.phone) .nav-sub { display: block; }
   :global(html.phone) .nav-lbl { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
   .me-ava {

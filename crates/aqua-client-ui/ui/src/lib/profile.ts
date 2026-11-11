@@ -39,6 +39,11 @@ export interface Profile {
   game_note?: string;
   /** Profile version — bumped on every publish so peers refetch the card. */
   pv?: number;
+  /** When I last changed my profile on this device (ms). Sent on the card as
+   *  `pt`: on connecting, the newer side wins — a new device takes the card
+   *  instead of publishing its blank one over it (see people.ts
+   *  syncMyProfileOnConnect). */
+  edited?: number;
   /** The emoji next to my name: a pack emoji token (`ce:pack/file|😀`) or a
    *  plain emoji; "" = none. */
   estatus?: string;
@@ -84,8 +89,25 @@ profile.subscribe((p) => {
   try { localStorage.setItem(KEY, JSON.stringify(p)); } catch { /* ignore */ }
 });
 
-export function updateProfile(patch: Partial<Profile>) {
-  profile.update((p) => ({ ...p, ...patch }));
+const NOT_EDITS = new Set<string>(["pv", "edited"]);
+/** `adopt`: the change came from the card on the server, not from me — it
+ *  doesn't count as an edit. */
+export function updateProfile(patch: Partial<Profile>, adopt = false) {
+  const edit = !adopt && Object.keys(patch).some((k) => !NOT_EDITS.has(k));
+  profile.update((p) => ({ ...p, ...patch, ...(edit ? { edited: Date.now() } : {}) }));
+}
+
+/** Before `edited` existed: a profile someone set up (a picture, colours, a
+ *  name) counts as edited a moment after 1970 — older than any real edit,
+ *  newer than a blank one — so a set-up device keeps its card and a blank
+ *  one takes it. */
+{
+  const p = get(profile);
+  if (p.edited === undefined) {
+    const setUp = !!(p.avatar_ver || p.banner_ver || p.avatar_url || p.banner_url || p.card || p.estatus || p.pattern || p.name_color
+      || (p.banner_a && p.banner_a !== DEFAULTS.banner_a) || (p.banner_b && p.banner_b !== DEFAULTS.banner_b));
+    profile.update((x) => ({ ...x, edited: setUp ? 1 : 0 }));
+  }
 }
 
 export function resetProfile() {

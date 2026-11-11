@@ -2794,4 +2794,5 @@ export const RU: Record<string, string> = {
   "Group “{name}” created": "Группа «{name}» создана",
   "Server “{name}” created": "Сервер «{name}» создан",
   "Channel “{name}” created": "Канал «{name}» создан",
+  "My QR code": "Мой QR-код",
 };
