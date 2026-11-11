@@ -62,7 +62,7 @@
   import { AUTODL_DEFAULT } from "../theme";
   import { openPopout } from "../popouts";
   import { startOutgoingCall, callState } from "./CallModal.svelte";
-  import { openMediaPicker, closeMediaPicker, pickerState, panelClaimsDrop } from "./MediaPicker.svelte";
+  import { openMediaPicker, closeMediaPicker, pickerState, pickerTab, panelClaimsDrop } from "./MediaPicker.svelte";
   import AnimatedMedia from "./AnimatedMedia.svelte";
   import RichComposer from "./RichComposer.svelte";
   import { openProfile } from "./ProfileModal.svelte";
@@ -1092,6 +1092,9 @@
   let composerEl: RichComposer | undefined = $state();
   // Telegram's smiley: emoji, stickers and GIFs live behind it.
   const SMILE_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><path d="M8 14.2s1.5 2.3 4 2.3 4-2.3 4-2.3"/><circle cx="9" cy="9.6" r=".6" fill="currentColor"/><circle cx="15" cy="9.6" r=".6" fill="currentColor"/></svg>`;
+  // The button shows the picker's last tab, like Telegram.
+  const STICKER_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.5V7a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v10a4 4 0 0 0 4 4h5.5"/><path d="M21 12.5 12.5 21c0-4.7 3.8-8.5 8.5-8.5z"/><circle cx="9" cy="10" r=".6" fill="currentColor"/><circle cx="15" cy="10" r=".6" fill="currentColor"/><path d="M8.5 14.5s1.2 1.5 3 1.5"/></svg>`;
+  const GIF_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="5" width="19" height="14" rx="3.5"/><path d="M10 10.2a2 2 0 0 0-1.6-.7c-1.3 0-2 1-2 2.5s.7 2.5 2 2.5c.9 0 1.6-.5 1.6-1.6v-.6H8.6M13 9.6v4.8M16.2 14.4V9.6h2.3M16.2 12h1.9"/></svg>`;
   const KEYBOARD_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="3"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M18 13h.01M9 15.5h6"/></svg>`;
   let text = $state("");
 
@@ -4452,7 +4455,7 @@
               if (matchMedia("(max-width: 720px)").matches) composerEl?.focus?.();
             } else if (liveChat && $activeChat) openMediaPicker($activeChat.id);
           }}
-        >{#if $pickerState.open}<span class="kb-ico">{@html KEYBOARD_ICON}</span>{:else}{@html SMILE_ICON}{/if}</button>
+        >{#if $pickerState.open}<span class="kb-ico">{@html KEYBOARD_ICON}</span>{:else}{@html $pickerTab === "stickers" ? STICKER_ICON : $pickerTab === "gifs" ? GIF_ICON : SMILE_ICON}{/if}</button>
         {#if IS_MOBILE && liveChat && text.trim().length === 0}
           <!-- The camera right in the message field (AyuGram): photo or video in one tap. -->
           <button class="emoji-in cam-in" title={$t("Camera")} aria-label={$t("Camera")} onclick={() => void shoot()}>
