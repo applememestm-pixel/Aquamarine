@@ -5,9 +5,10 @@
  */
 import { writable } from "svelte/store";
 
-export type AttachId = "media" | "file" | "poll" | "event" | "sealed" | "article" | "document" | "board" | "checklist" | "bluetooth" | "music";
+export type AttachId = "camera" | "media" | "file" | "poll" | "event" | "sealed" | "article" | "document" | "board" | "checklist" | "bluetooth" | "music";
 
 export const ATTACH_ITEMS: { id: AttachId; label: string }[] = [
+  { id: "camera", label: "Camera" },
   { id: "media", label: "Photo or video" },
   { id: "file", label: "File" },
   { id: "poll", label: "Poll" },

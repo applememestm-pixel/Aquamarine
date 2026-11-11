@@ -2,25 +2,30 @@
   import { writable } from "svelte/store";
   export type SendMode = "media" | "compressed" | "file";
   export interface SendChoice { mode: SendMode; caption: string; edit: boolean; /** The files, with any added in the sheet ("+"). */ paths: string[]; /** Send as a live photo (1.2.0-4). */ live?: import("../liveMotion").LiveStyle }
-  interface Ask { paths: string[]; preset?: SendMode; resolve: (v: SendChoice | null) => void }
+  interface Ask { paths: string[]; preset?: SendMode; caption?: string; resolve: (v: SendChoice | null) => void }
   const pending = writable<Ask | null>(null);
   const LAST = "aqua.sendMode.v1";
   /**
-   * Telegram-style "send files" sheet: previews, and how to send —
-   * as photo / video (compressed or original) or as a file (untouched,
-   * no preview on either side). Resolves null when cancelled.
+   * Telegram-style "send files" sheet: big previews (✕ takes one out, ✎
+   * edits a photo), a "compress" switch (off: as files, untouched), and a
+   * caption field with the send button like the chat's own. The text
+   * already typed in the chat comes along as the caption. Resolves null
+   * when cancelled.
    */
-  export function askSend(paths: string[], preset?: SendMode): Promise<SendChoice | null> {
-    return new Promise((resolve) => pending.set({ paths, preset, resolve }));
+  export function askSend(paths: string[], preset?: SendMode, caption?: string): Promise<SendChoice | null> {
+    return new Promise((resolve) => pending.set({ paths, preset, caption, resolve }));
   }
   export const IMAGE_RE = /\.(png|jpe?g|webp|bmp|gif|avif|heic)$/i;
   export const VIDEO_RE = /\.(mp4|m4v|webm|mov|mkv|avi|ogv)$/i;
 </script>
 
 <script lang="ts">
+  import { untrack } from "svelte";
   import { t, tr } from "../i18n";
   import { api, assetUrl } from "../tauri";
   import { fmtSize } from "../media";
+  import { icons } from "../icons";
+  import { IS_MOBILE } from "../platform";
   import { LIVE_STYLES, type LiveStyle } from "../liveMotion";
 
   const nameOf = (p: string) => p.split(/[\\/]/).pop() ?? p;
@@ -32,18 +37,25 @@
   let canLive = $state(false);
   let thumbs = $state<Record<string, string>>({});
   let sizes = $state<Record<string, number>>({});
+  let capEl = $state<HTMLTextAreaElement | null>(null);
 
   /** Files added with "+" in the sheet, on top of the ones it opened with. */
   let extra = $state<string[]>([]);
-  let paths = $derived([...($pending?.paths ?? []), ...extra]);
-  $effect(() => { void $pending; extra = []; });
+  /** Taken out with ✕. */
+  let removed = $state<string[]>([]);
+  let paths = $derived([...($pending?.paths ?? []), ...extra].filter((p) => !removed.includes(p)));
+  $effect(() => { void $pending; extra = []; removed = []; });
   async function addMore() {
     try {
       const { openFileDialog } = await import("../dialog");
       const r = await openFileDialog({ multiple: true });
       const list = (Array.isArray(r) ? r : r ? [r] : []).map(String).filter((p) => !paths.includes(p));
-      if (list.length) extra = [...extra, ...list];
+      if (list.length) { removed = removed.filter((p) => !list.includes(p)); extra = [...extra, ...list.filter((p) => !extra.includes(p))]; }
     } catch { /* cancelled */ }
+  }
+  function drop(p: string) {
+    removed = [...removed, p];
+    if (!paths.length) done(false);
   }
   const AUDIO_RE = /\.(mp3|wav|ogg|oga|flac|m4a|opus|aac|wma)$/i;
   /** Phone picks (content://…) have no extension: their type is sniffed (picked_preview). */
@@ -52,35 +64,50 @@
   const isVid = (p: string) => VIDEO_RE.test(p) || kinds[p] === "video";
   let hasImages = $derived(paths.some(isImg));
   let hasVideos = $derived(paths.some(isVid));
-  let total = $derived(Object.values(sizes).reduce((a, b) => a + b, 0));
+  let total = $derived(paths.reduce((a, p) => a + (sizes[p] ?? 0), 0));
+  let allMedia = $derived(paths.length > 0 && paths.every((p) => isImg(p) || isVid(p) || kinds[p] === ""));
 
+  // New files: settings, caption and previews once per opened sheet.
   $effect(() => {
-    const list = paths;
-    if (!list.length) return;
+    const a = $pending;
+    if (!a) return;
     try {
       const last = JSON.parse(localStorage.getItem(LAST) ?? "null");
       if (last) { mode = last.mode === "file" ? "file" : "media"; compressVideo = last.compressVideo !== false; }
     } catch { /* defaults */ }
-    if ($pending?.preset) mode = $pending.preset === "file" ? "file" : "media";
-    caption = "";
+    if (a.preset) mode = a.preset === "file" ? "file" : "media";
+    caption = a.caption ?? "";
     live = null;
+    canLive = false;
+    thumbs = {};
+    sizes = {};
+    kinds = {};
+    if (!IS_MOBILE) setTimeout(() => { capEl?.focus(); const n = capEl?.value.length ?? 0; capEl?.setSelectionRange(n, n); grow(); }, 30);
+    else setTimeout(grow, 30);
+  });
+  $effect(() => {
+    const list = paths;
+    if (!$pending || !list.length) return;
+    untrack(() => load(list));
+  });
+  function load(list: string[]) {
     canLive = false;
     if (list.length === 1 && VIDEO_RE.test(list[0])) {
       void api.probeMediaFile(list[0], "video").then((r) => { canLive = (r?.duration ?? 0) <= 15; }).catch(() => {});
     } else if (list.length === 1 && /\.(jpe?g|heic)$/i.test(list[0])) {
       void api.hasMotionClip(list[0]).then((y) => { canLive = y; }).catch(() => {});
     }
-    thumbs = {};
-    sizes = {};
-    kinds = {};
     for (const p of list) {
+      if (p in sizes || p in kinds || p in thumbs) continue;
       if (/^(content|file):\/\//.test(p)) {
+        kinds = { ...kinds, [p]: "" };
         void api.pickedPreview(p).then((r) => {
           kinds = { ...kinds, [p]: r.kind };
           if (r.url) thumbs = { ...thumbs, [p]: r.url };
         }).catch(() => {});
         continue;
       }
+      sizes = { ...sizes, [p]: 0 };
       if (IMAGE_RE.test(p)) {
         void api.allowMediaPreview(p).then(() => { thumbs = { ...thumbs, [p]: assetUrl(p) }; }).catch(() => {});
       }
@@ -89,13 +116,20 @@
         if (r?.poster) thumbs = { ...thumbs, [p]: r.poster };
       }).catch(() => {});
     }
-  });
+  }
+
+  function grow() {
+    const el = capEl;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+  }
 
   function done(send: boolean, edit = false) {
     const a = $pending;
     if (!a) return;
     pending.set(null);
-    if (!send) { a.resolve(null); return; }
+    if (!send || !paths.length) { a.resolve(null); return; }
     try { localStorage.setItem(LAST, JSON.stringify({ mode, compressVideo })); } catch { /* ignore */ }
     const m: SendMode = mode === "file" ? "file" : hasVideos && compressVideo ? "compressed" : "media";
     a.resolve({ mode: m, caption: caption.trim(), edit, paths: [...paths], live: canLive && live && mode !== "file" ? live : undefined });
@@ -103,8 +137,9 @@
   function key(e: KeyboardEvent) {
     if (!$pending) return;
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(false); }
-    else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); done(true); }
+    else if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !IS_MOBILE) { e.preventDefault(); e.stopPropagation(); done(true); }
   }
+  const asMedia = () => $t(hasVideos && !hasImages ? "As video" : hasImages && !hasVideos ? "As photo" : "As photo / video");
 </script>
 
 <svelte:window onkeydowncapture={key} />
@@ -115,42 +150,71 @@
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="sd" role="dialog" aria-modal="true" tabindex="-1" aria-label={$t("Send files")} onclick={(e) => e.stopPropagation()}>
       <header>
-        <h3>{paths.length === 1 ? $t("Send a file") : tr("Send {n} files", { n: paths.length })}</h3>
-        <span class="sub">{fmtSize(total)}</span>
+        <button class="x" data-x data-keep-x onclick={() => done(false)} aria-label={$t("Close")}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+        <h3>{paths.length === 1 ? $t(mode !== "file" && isImg(paths[0]) ? "Send a photo" : mode !== "file" && isVid(paths[0]) ? "Send a video" : "Send a file") : tr("Send {n} files", { n: paths.length })}</h3>
+        {#if total}<span class="sub">{fmtSize(total)}</span>{/if}
       </header>
 
-      <div class="grid" class:one={paths.length === 1}>
-        {#each paths as p (p)}
-          <div class="it" class:file={mode === "file"}>
-            {#if mode !== "file" && thumbs[p]}
-              <img src={thumbs[p]} alt="" />
-              {#if isVid(p)}<span class="vmark">▶</span>{/if}
-            {:else}
-              <span class="ficon">{isVid(p) ? "🎬" : isImg(p) ? "🖼" : AUDIO_RE.test(p) ? "🎵" : "📄"}</span>
-            {/if}
-            <span class="nm" title={nameOf(p)}>{nameOf(p)}</span>
-            {#if sizes[p]}<span class="sz">{fmtSize(sizes[p])}</span>{/if}
-          </div>
-        {/each}
-      </div>
+      {#if mode !== "file" && allMedia}
+        <div class="grid" class:one={paths.length === 1} class:two={paths.length === 2 || paths.length === 4}>
+          {#each paths as p (p)}
+            <div class="it">
+              {#if thumbs[p]}
+                <img src={thumbs[p]} alt="" />
+              {:else}
+                <span class="ficon">{isVid(p) ? "🎬" : "🖼"}</span>
+              {/if}
+              {#if isVid(p)}<span class="vmark"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg></span>{/if}
+              <div class="tools">
+                {#if paths.length === 1 && IMAGE_RE.test(p)}
+                  <button onclick={() => done(true, true)} title={$t("Edit")} aria-label={$t("Edit")}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                  </button>
+                {/if}
+                {#if paths.length > 1}
+                  <button onclick={() => drop(p)} title={$t("Remove")} aria-label={$t("Remove")}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+                  </button>
+                {/if}
+              </div>
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <div class="files">
+          {#each paths as p (p)}
+            <div class="fr">
+              <span class="fthumb">
+                {#if thumbs[p] && (isImg(p) || isVid(p))}<img src={thumbs[p]} alt="" />{:else}{isVid(p) ? "🎬" : isImg(p) ? "🖼" : AUDIO_RE.test(p) ? "🎵" : "📄"}{/if}
+              </span>
+              <span class="fmeta"><b title={nameOf(p)}>{nameOf(p)}</b>{#if sizes[p]}<small>{fmtSize(sizes[p])}</small>{/if}</span>
+              {#if paths.length > 1}
+                <button class="fx" onclick={() => drop(p)} title={$t("Remove")} aria-label={$t("Remove")}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+                </button>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      {/if}
 
       {#if hasImages || hasVideos}
-        <div class="modes" role="radiogroup" aria-label={$t("Send as")}>
-          <button role="radio" aria-checked={mode === "media"} class:on={mode === "media"} onclick={() => (mode = "media")}>
-            <b>{$t(hasVideos && !hasImages ? "As video" : hasImages && !hasVideos ? "As photo" : "As photo / video")}</b>
-            <span>{$t("Shown in the chat, plays inline")}</span>
-          </button>
-          <button role="radio" aria-checked={mode === "file"} class:on={mode === "file"} onclick={() => (mode = "file")}>
-            <b>{$t("As file")}</b>
-            <span>{$t("Original quality, no preview")}</span>
-          </button>
-        </div>
-        {#if mode === "media" && hasVideos}
-          <label class="chk">
-            <input type="checkbox" bind:checked={compressVideo} />
-            <span>{$t("Compress video (720p, much smaller; needs ffmpeg)")}</span>
+        <div class="opts">
+          <label class="sw">
+            <input type="checkbox" checked={mode !== "file"} onchange={(e) => (mode = (e.currentTarget as HTMLInputElement).checked ? "media" : "file")} />
+            <span class="knob"></span>
+            <span class="lbl"><b>{asMedia()}</b><small>{$t(mode === "file" ? "Off — as files, original quality, no preview" : "Shown in the chat, plays inline")}</small></span>
           </label>
-        {/if}
+          {#if mode === "media" && hasVideos}
+            <label class="sw">
+              <input type="checkbox" bind:checked={compressVideo} />
+              <span class="knob"></span>
+              <span class="lbl"><b>{$t("Compress video")}</b><small>{$t("720p, much smaller; needs ffmpeg")}</small></span>
+            </label>
+          {/if}
+        </div>
       {/if}
 
       {#if canLive && mode !== "file"}
@@ -163,95 +227,111 @@
         </div>
       {/if}
 
-      <input class="cap" placeholder={$t("Add a caption…")} bind:value={caption} />
-
-      <div class="row">
-        {#if paths.length === 1 && IMAGE_RE.test(paths[0]) && mode === "media"}
-          <button class="btn ghost" onclick={() => done(true, true)}>{$t("Edit")}</button>
-        {/if}
-        <button class="btn ghost add" onclick={addMore} title={$t("Add files")} aria-label={$t("Add files")}>+</button>
-        <span class="grow"></span>
-        <button class="btn" onclick={() => done(false)}>{$t("Cancel")}</button>
-        <button class="btn ok" onclick={() => done(true)}>{$t("Send")}</button>
+      <div class="capbar">
+        <button class="add" onclick={addMore} title={$t("Add files")} aria-label={$t("Add files")}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <textarea bind:this={capEl} class="cap" rows="1" placeholder={$t("Add a caption…")} bind:value={caption} oninput={grow}></textarea>
+        <button class="go" onclick={() => done(true)} title={$t("Send")} aria-label={$t("Send")}>
+          {@html icons.send}
+          {#if paths.length > 1}<span class="cnt">{paths.length}</span>{/if}
+        </button>
       </div>
     </div>
   </div>
 {/if}
 
 <style>
-  .btn.add { font-size: 20px; line-height: 1; padding: 6px 12px; }
-  .live-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12.5px; }
+  .live-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12.5px; padding: 0 2px; }
   .live-lbl { font-weight: 700; color: var(--fg-muted); margin-right: 4px; }
   .live-row button { border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); padding: 5px 10px; border-radius: calc(9px * var(--rk, 1)); font: inherit; cursor: pointer; }
   .live-row button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
-  .sd-back { position: fixed; inset: 0; z-index: 10090; display: grid; place-items: center; background: rgba(0, 0, 0, 0.55); }
-  /* Phones: a sheet from the bottom, like Telegram — not a box in the middle of the chat. */
-  :global(html.phone) .sd-back { place-items: end stretch; }
-  :global(html.phone) .sd { width: 100%; max-height: 92vh; border-radius: calc(18px * var(--rk, 1)) calc(18px * var(--rk, 1)) 0 0;
-    padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px)); animation: sd-up .22s cubic-bezier(.2, .9, .25, 1); }
-  @keyframes sd-up { from { transform: translateY(40px); opacity: 0; } }
+  .sd-back { position: fixed; inset: 0; z-index: 10090; display: grid; place-items: center; background: rgba(0, 0, 0, 0.55); animation: sd-fade .16s ease; }
+  @keyframes sd-fade { from { opacity: 0; } }
   .sd {
-    width: min(460px, 94vw); max-height: 88vh;
-    display: flex; flex-direction: column; gap: 12px;
-    padding: 18px;
+    width: min(440px, 94vw); max-height: 90vh;
+    display: flex; flex-direction: column; gap: 10px;
+    padding: 12px;
     border-radius: calc(16px * var(--rk, 1));
     background: var(--bg-shell);
     border: 1px solid var(--border-strong);
     box-shadow: 0 28px 70px rgba(0, 0, 0, 0.55);
+    animation: sd-pop .2s cubic-bezier(.2, .9, .25, 1.1);
   }
-  header { display: flex; align-items: baseline; gap: 10px; }
-  h3 { margin: 0; font-size: 16px; font-weight: 700; }
-  .sub { font-size: 12px; color: var(--fg-dim); }
-  .grid {
-    display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
-    overflow-y: auto; max-height: 44vh;
-  }
+  @keyframes sd-pop { from { transform: scale(.96); opacity: 0; } }
+  /* Phones: a sheet from the bottom, like Telegram — not a box in the middle of the chat. */
+  :global(html.phone) .sd-back { place-items: end stretch; }
+  :global(html.phone) .sd { width: 100%; box-sizing: border-box; max-height: 94dvh; border-radius: calc(18px * var(--rk, 1)) calc(18px * var(--rk, 1)) 0 0; border-bottom: none;
+    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); animation: sd-up .22s cubic-bezier(.2, .9, .25, 1); }
+  @keyframes sd-up { from { transform: translateY(40px); opacity: 0; } }
+  header { display: flex; align-items: center; gap: 8px; min-height: 34px; }
+  .x { width: 34px; height: 34px; flex-shrink: 0; border: none; border-radius: 50%; background: transparent; color: var(--fg-muted); display: grid; place-items: center; cursor: pointer; }
+  .x:hover { background: var(--bg-hover); color: var(--fg); }
+  .x svg { width: 18px; height: 18px; }
+  h3 { margin: 0; font-size: 16px; font-weight: 700; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sub { font-size: 12px; color: var(--fg-dim); font-variant-numeric: tabular-nums; padding-right: 6px; }
+
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; overflow-y: auto; max-height: 56vh; border-radius: calc(12px * var(--rk, 1)); flex-shrink: 1; min-height: 0; }
+  .grid.two { grid-template-columns: repeat(2, 1fr); }
   .grid.one { grid-template-columns: 1fr; }
-  .it {
-    position: relative; aspect-ratio: 1; border-radius: calc(10px * var(--rk, 1)); overflow: hidden;
-    background: var(--bg-input); display: grid; place-items: center;
-  }
-  .grid.one .it { aspect-ratio: 16 / 10; }
+  .it { position: relative; aspect-ratio: 1; overflow: hidden; background: var(--bg-input); display: grid; place-items: center; }
   .it img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-  .it.file { aspect-ratio: auto; display: flex; align-items: center; gap: 10px; padding: 10px; place-items: initial; }
-  .grid:has(.file) { grid-template-columns: 1fr; }
-  .ficon { font-size: 28px; }
-  .it:not(.file) .ficon { font-size: 34px; }
-  .vmark {
-    position: absolute; width: 38px; height: 38px; border-radius: 50%;
-    display: grid; place-items: center; background: rgba(0, 0, 0, 0.55); color: #fff; font-size: 14px;
-  }
-  .nm {
-    font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .it:not(.file) .nm, .it:not(.file) .sz { display: none; }
-  .it.file .nm { flex: 1; min-width: 0; }
-  .sz { font-size: 11.5px; color: var(--fg-dim); }
-  .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  .modes button {
-    display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
-    padding: 10px 12px; border-radius: calc(11px * var(--rk, 1));
-    border: 1.5px solid var(--border); background: var(--bg-input); color: var(--fg);
-    text-align: left; cursor: pointer;
-  }
-  .modes button b { font-size: 13.5px; }
-  .modes button span { font-size: 11.5px; color: var(--fg-dim); }
-  .modes button.on { border-color: var(--accent); background: var(--accent-soft); }
-  .chk { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--fg-muted); cursor: pointer; }
-  .chk input { accent-color: var(--accent); width: 16px; height: 16px; }
+  /* One photo: the whole picture, as big as fits (not a cropped strip). */
+  .grid.one .it { aspect-ratio: auto; min-height: 160px; max-height: 56vh; }
+  .grid.one .it img { position: static; display: block; width: 100%; height: auto; max-height: 56vh; object-fit: contain; background: #000; }
+  .ficon { font-size: 34px; }
+  .vmark { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 44px; height: 44px; border-radius: 50%;
+    display: grid; place-items: center; background: rgba(0, 0, 0, 0.5); color: #fff; pointer-events: none; }
+  .vmark svg { width: 20px; height: 20px; margin-left: 2px; }
+  .tools { position: absolute; top: 6px; right: 6px; display: flex; gap: 5px; }
+  .tools button { width: 30px; height: 30px; border-radius: 50%; border: none; display: grid; place-items: center; cursor: pointer;
+    color: #fff; background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); transition: background .15s, transform .15s; }
+  .tools button:hover { background: rgba(0, 0, 0, 0.72); transform: scale(1.06); }
+  .tools svg { width: 16px; height: 16px; }
+
+  .files { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; max-height: 50vh; }
+  .fr { display: flex; align-items: center; gap: 12px; padding: 6px 4px 6px 6px; border-radius: calc(10px * var(--rk, 1)); }
+  .fr:hover { background: var(--bg-hover); }
+  .fthumb { width: 46px; height: 46px; flex-shrink: 0; border-radius: calc(10px * var(--rk, 1)); overflow: hidden; display: grid; place-items: center; font-size: 22px;
+    background: var(--accent-soft); }
+  .fthumb img { width: 100%; height: 100%; object-fit: cover; }
+  .fmeta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .fmeta b { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fmeta small { font-size: 12px; color: var(--fg-dim); }
+  .fx { width: 30px; height: 30px; border: none; border-radius: 50%; background: transparent; color: var(--fg-dim); display: grid; place-items: center; cursor: pointer; }
+  .fx:hover { background: var(--bg-hover); color: var(--fg); }
+  .fx svg { width: 15px; height: 15px; }
+
+  .opts { display: flex; flex-direction: column; gap: 2px; }
+  .sw { display: flex; align-items: center; gap: 12px; padding: 7px 6px; border-radius: calc(10px * var(--rk, 1)); cursor: pointer; }
+  .sw:hover { background: var(--bg-hover); }
+  .sw input { position: absolute; opacity: 0; pointer-events: none; }
+  .knob { position: relative; width: 36px; height: 20px; flex-shrink: 0; border-radius: 10px; background: var(--border-strong); transition: background .18s; }
+  .knob::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .18s cubic-bezier(.3,.9,.3,1.2); box-shadow: 0 1px 3px rgba(0,0,0,.35); }
+  .sw input:checked + .knob { background: var(--accent); }
+  .sw input:checked + .knob::after { transform: translateX(16px); }
+  .sw input:focus-visible + .knob { box-shadow: 0 0 0 3px var(--accent-soft); }
+  .lbl { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .lbl b { font-size: 13.5px; font-weight: 600; }
+  .lbl small { font-size: 11.5px; color: var(--fg-dim); }
+
+  /* The caption: the chat's own message field, with its send button. */
+  .capbar { display: flex; align-items: flex-end; gap: 6px; }
+  .add { width: 40px; height: 40px; flex-shrink: 0; border: none; border-radius: 50%; background: transparent; color: var(--fg-muted); display: grid; place-items: center; cursor: pointer; transition: color .15s, background .15s; }
+  .add:hover { color: var(--accent); background: var(--accent-soft); }
+  .add svg { width: 22px; height: 22px; }
   .cap {
-    height: 38px; padding: 0 12px; border-radius: calc(10px * var(--rk, 1));
-    border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 14px;
+    flex: 1; min-width: 0; min-height: 40px; max-height: 140px; box-sizing: border-box; resize: none;
+    padding: 10px 14px; line-height: 1.35; border-radius: calc(20px * var(--rk, 1));
+    border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 14.5px;
+    transition: border-color .15s, box-shadow .15s;
   }
-  .cap:focus { outline: none; border-color: var(--accent); }
-  .row { display: flex; align-items: center; gap: 8px; }
-  .grow { flex: 1; }
-  .btn {
-    height: 36px; padding: 0 16px; border-radius: calc(10px * var(--rk, 1));
-    border: 1px solid var(--border-strong); background: transparent; color: var(--fg);
-    font-size: 13.5px; font-weight: 600; cursor: pointer;
-  }
-  .btn:hover { background: var(--bg-hover); }
-  .btn.ok { background: var(--accent); border-color: transparent; color: #06070c; }
-  .btn.ghost { border-color: transparent; color: var(--accent); }
+  .cap:focus { outline: none; border-color: var(--accent-soft); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .go { position: relative; width: 40px; height: 40px; flex-shrink: 0; border: none; border-radius: 50%; display: grid; place-items: center; cursor: pointer;
+    color: #06070c; background: var(--accent); box-shadow: 0 6px 16px -8px var(--accent-glow, var(--accent)); transition: transform .15s ease, filter .15s ease; }
+  .go:hover { filter: brightness(1.08); transform: translateX(1px); }
+  .go:active { transform: scale(.92); }
+  .go :global(svg) { width: 20px; height: 20px; margin-left: 2px; }
+  .cnt { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px;
+    background: var(--bg-shell); color: var(--accent); border: 1.5px solid var(--accent); font: 800 11px/15px var(--font-ui, inherit); text-align: center; }
 </style>

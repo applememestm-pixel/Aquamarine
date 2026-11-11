@@ -40,6 +40,7 @@
   import { SvelteSet } from "svelte/reactivity";
   import { askConfirm, askConfirmCheck } from "./Confirm.svelte";
   import { askSend, VIDEO_RE, type SendMode } from "./SendDialog.svelte";
+  import { openCamera } from "./CameraCapture.svelte";
   import { shrinkImage } from "../imageTools";
   import { applyThemeFromPath } from "../themeShare";
   import { openFileDialog } from "../dialog";
@@ -264,6 +265,7 @@
     attachMenuOpen = false;
     const chat = $activeChat;
     switch (id) {
+      case "camera": void shoot(); break;
       case "media": pickAndSendFile("media"); break;
       case "file": pickAndSendFile("file"); break;
       case "bluetooth": btSheet.set([]); break;
@@ -409,6 +411,18 @@
     startOutgoingCall(chat.id, video);
   }
 
+  /** The in-app camera: tap for a photo, hold for a video, then the send sheet. */
+  async function shoot() {
+    const chat = $activeChat;
+    if (!chat?.live) return;
+    if (chat.id.startsWith("grp_") && !canSendKind(activeGroup, myUsername, "media")) {
+      showToast(tr("Admins don't allow media in this chat"));
+      return;
+    }
+    attachMenuOpen = false;
+    const p = await openCamera();
+    if (p) await sendFiles(chat.id, [p], "media");
+  }
   async function pickAndSendFile(preset?: SendMode) {
     const chat = $activeChat;
     if (!chat) {
@@ -619,17 +633,22 @@
   function galleryToggle(uri: string) {
     gallerySel = gallerySel.includes(uri) ? gallerySel.filter((u) => u !== uri) : [...gallerySel, uri];
   }
+  /** Caption typed under the picked photos (Telegram: right in the sheet). */
+  let galCap = $state("");
   async function gallerySend() {
     const chat = $activeChat;
     const pick = gallerySel;
+    const cap = galCap.trim() || text.trim();
+    if (!galCap.trim() && text.trim()) text = "";
     attachMenuOpen = false;
     gallerySel = [];
-    if (chat && pick.length) await sendFiles(chat.id, pick, "media");
+    galCap = "";
+    if (chat && pick.length) await sendFiles(chat.id, pick, "media", { caption: cap });
   }
   function fmtDur(ms: number) { const s = Math.round(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
   $effect(() => {
     if (attachMenuOpen && phoneUI) {
-      gallerySel = []; sheetFull = false; sheetDy = 0; albumMenu = false; album = "";
+      gallerySel = []; galCap = ""; sheetFull = false; sheetDy = 0; albumMenu = false; album = "";
       void galleryLoad(); void albumsLoad();
     }
   });
@@ -733,11 +752,17 @@
   // Special case: a single image → the PhotoEditor modal opens first.
   // The user can rotate / tweak / "Send original" / "Send edited".
   // "Send original" falls through to the normal attach pipeline.
-  async function sendFiles(peerId: string, paths: string[], preset?: SendMode) {
+  async function sendFiles(peerId: string, paths: string[], preset?: SendMode, direct?: { caption: string }) {
     if (!paths.length) return;
-    // Telegram-style sheet: previews + "as photo/video" or "as file".
-    const choice = await askSend(paths, preset);
+    // Telegram-style sheet: previews + "as photo/video" or "as file". What
+    // was already typed in the chat comes along as the caption (before, it
+    // stayed in the chat's field and the sheet's caption started empty).
+    const draft = direct ? "" : text.trim();
+    const choice = direct
+      ? { mode: "media" as SendMode, caption: direct.caption, edit: false, paths, live: undefined }
+      : await askSend(paths, preset, draft);
     if (!choice) return;
+    if (draft && $activeChat?.id === peerId) text = "";
     paths = choice.paths?.length ? choice.paths : paths;
     if (choice.edit && !choice.live && paths.length === 1 && isImagePath(paths[0])) {
       const edited = await maybeEditThenSend(peerId, paths[0]);
@@ -4210,6 +4235,10 @@
               {/if}
               {#if !(IS_MOBILE && $attachDock)}<div class="ap-inline">{@render attachActions()}</div>{/if}
               <div class="ap-gallery">
+                <button class="ap-tile ap-pick ap-cam" onclick={() => void shoot()}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-3l-2-3H9L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><circle cx="12" cy="13" r="3.6"/></svg>
+                  <span>{$t("Camera")}</span>
+                </button>
                 <button class="ap-tile ap-pick" onclick={() => { attachMenuOpen = false; pickAndSendFile("media"); }}>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>
                   <span>{$t("Gallery")}</span>
@@ -4233,13 +4262,21 @@
           {#if phoneUI && IS_MOBILE && $attachDock}
             <!-- Phones: the actions as a floating tab bar, the send button above it. -->
             <div class="ap-dock" class:closing={sheetClosing}>{@render attachActions()}</div>
-            {#if gallerySel.length}
-              <button class="ap-send" class:closing={sheetClosing} onclick={gallerySend}>{$t("Send {n}", { n: gallerySel.length })}</button>
-            {/if}
           {/if}
+          {#if phoneUI && gallerySel.length}{@render galBar()}{/if}
         {/if}
+        {#snippet galBar()}
+          <!-- Picked in the gallery: a caption and the send button, like Telegram. -->
+          <div class="ap-capbar" class:closing={sheetClosing} class:docked={IS_MOBILE && $attachDock}>
+            <input class="ap-cap" placeholder={$t("Add a caption…")} bind:value={galCap} onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); void gallerySend(); } }} />
+            <button class="ap-go" onclick={gallerySend} aria-label={$t("Send {n}", { n: gallerySel.length })} title={$t("Send {n}", { n: gallerySel.length })}>
+              {@html icons.send}<span class="ap-go-n">{gallerySel.length}</span>
+            </button>
+          </div>
+        {/snippet}
         {#snippet attachIcon(id: string)}
-          {#if id === "media"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>
+          {#if id === "camera"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-3l-2-3H9L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><circle cx="12" cy="13" r="3.6"/></svg>
+          {:else if id === "media"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>
           {:else if id === "file"}{@html icons.attach}
           {:else if id === "music"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
           {:else if id === "bluetooth"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 7 17 17 12 22 12 2 17 7 7 17"/></svg>
@@ -4329,6 +4366,12 @@
             } else if (liveChat && $activeChat) openMediaPicker($activeChat.id);
           }}
         >{#if $pickerState.open}<span class="kb-ico">{@html KEYBOARD_ICON}</span>{:else}{@html SMILE_ICON}{/if}</button>
+        {#if IS_MOBILE && liveChat && text.trim().length === 0}
+          <!-- The camera right in the message field (AyuGram): photo or video in one tap. -->
+          <button class="emoji-in cam-in" title={$t("Camera")} aria-label={$t("Camera")} onclick={() => void shoot()}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-3l-2-3H9L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><circle cx="12" cy="13" r="3.6"/></svg>
+          </button>
+        {/if}
       </div>
       {#if text.trim().length === 0 && liveChat}
         <!-- One button: tap switches mic↔camera, hold to record -->
@@ -5420,12 +5463,21 @@
     display: grid; place-items: center; font-size: 12.5px; font-weight: 800; color: #06070c; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
   .ap-tile.on .ap-check { background: var(--accent); border-color: var(--accent); }
   .ap-dur { position: absolute; left: 6px; bottom: 6px; font-size: 11px; font-weight: 700; color: #fff; background: rgba(0,0,0,.5); padding: 1px 6px; border-radius: calc(8px * var(--rk, 1)); }
-  .ap-send { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(84px + env(safe-area-inset-bottom, 0px)); z-index: 73;
-    padding: 12px 26px; border-radius: calc(26px * var(--rk, 1)); border: none; font: 700 15px var(--font-ui, inherit); color: #06070c;
-    background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 12px 28px -10px var(--accent-glow);
-    animation: ap-send-in .3s cubic-bezier(.22,1,.36,1); transition: opacity .2s ease; }
-  .ap-send.closing { opacity: 0; }
-  @keyframes ap-send-in { from { opacity: 0; transform: translateX(-50%) translateY(14px) scale(.9); } }
+  .ap-capbar { position: fixed; left: 10px; right: 10px; bottom: calc(10px + env(safe-area-inset-bottom, 0px)); z-index: 73; display: flex; align-items: center; gap: 8px;
+    padding: 5px 5px 5px 16px; border-radius: calc(24px * var(--rk, 1)); border: 1px solid var(--border-strong);
+    background: color-mix(in srgb, var(--bg-surface-2) 82%, transparent); backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    box-shadow: 0 14px 34px -14px rgba(0,0,0,.8); animation: ap-cap-in .28s cubic-bezier(.22,1,.36,1); transition: opacity .2s ease, transform .2s ease; }
+  .ap-capbar.docked { bottom: calc(84px + env(safe-area-inset-bottom, 0px)); }
+  .ap-capbar.closing { opacity: 0; transform: translateY(20px); }
+  @keyframes ap-cap-in { from { opacity: 0; transform: translateY(16px) scale(.97); } }
+  .ap-cap { flex: 1; min-width: 0; height: 40px; border: none; outline: none; background: transparent; color: var(--fg); font: 15px var(--font-ui, inherit); }
+  .ap-cap::placeholder { color: var(--fg-dim); }
+  .ap-go { position: relative; width: 42px; height: 42px; flex-shrink: 0; border: none; border-radius: 50%; display: grid; place-items: center; color: #06070c;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 8px 20px -10px var(--accent-glow); transition: transform .15s ease; }
+  .ap-go:active { transform: scale(.92); }
+  .ap-go :global(svg) { width: 20px; height: 20px; margin-left: 2px; }
+  .ap-go-n { position: absolute; top: -5px; right: -5px; min-width: 19px; height: 19px; padding: 0 5px; box-sizing: border-box; border-radius: 10px;
+    background: var(--bg-shell); color: var(--accent); border: 1.5px solid var(--accent); font: 800 11px/16px var(--font-ui, inherit); text-align: center; }
   /* Floating bar switched off: the actions sit in the sheet, under the gallery. */
   .ap-inline { border-bottom: 1px solid var(--border); padding: 4px 4px 8px; flex-shrink: 0; }
   .ap-inline .ap-items { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
@@ -6064,6 +6116,7 @@
   .emoji-in:hover { color: var(--accent); background: var(--accent-soft); }
   .emoji-in.disabled { opacity: .4; cursor: help; }
   .emoji-in :global(svg) { width: 21px; height: 21px; }
+  .cam-in { margin-left: 0; }
 
   .composer-note {
     padding: 0 20px 12px;
