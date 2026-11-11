@@ -49,7 +49,9 @@
 
 <style>
   .es { display: inline-grid; place-items: center; flex-shrink: 0; vertical-align: -3px; line-height: 1; margin-left: 4px; }
-  .es :global(img), .es :global(video), .es :global(canvas) { width: 100%; height: 100%; object-fit: contain; }
+  .es :global(img), .es :global(video), .es :global(canvas) { width: 100%; height: 100%; object-fit: contain; display: block; }
+  /* The player's own box fills the square too, so the picture is centred in it. */
+  .es > :global(*) { width: 100%; height: 100%; }
   button.es { border: none; background: none; padding: 0; cursor: zoom-in; color: inherit; transition: transform .15s; }
   button.es:hover { transform: scale(1.15); }
   .es-big { position: fixed; inset: 0; z-index: 400; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
