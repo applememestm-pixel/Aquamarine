@@ -1150,10 +1150,13 @@
   .es-row { position: relative; display: flex; align-items: center; gap: 12px; }
   /* One column grid for the whole editor: the emoji box, the colours and the
      patterns are all 1/8 of the width, so their edges line up. */
-  .es-cur { width: calc((100% - 42px) / 8); aspect-ratio: 1; height: auto; flex-shrink: 0; border-radius: calc(12px * var(--rk, 1)); border: 1px dashed var(--border-strong); background: var(--bg-input);
-    display: grid; place-items: center; cursor: pointer; color: var(--fg-muted); transition: border-color .15s, transform .15s; }
+  /* A fixed square with no padding: the emoji sits exactly in its middle
+     (the button's own padding and a width in % pushed it off-centre). */
+  .es-cur { width: 46px; height: 46px; padding: 0; box-sizing: border-box; overflow: hidden; flex-shrink: 0; border-radius: calc(12px * var(--rk, 1)); border: 1px dashed var(--border-strong); background: var(--bg-input);
+    display: grid; place-items: center; cursor: pointer; color: var(--fg-muted); transition: border-color .15s, transform .15s; line-height: 0; }
   .es-cur:hover { border-color: var(--accent); transform: scale(1.04); }
-  .es-cur :global(.es) { margin: 0; }
+  .es-cur :global(.es) { margin: 0; vertical-align: 0; display: grid; place-items: center; }
+  .es-cur :global(.es > *) { width: 100%; height: 100%; display: grid; place-items: center; }
   .es-none { font-size: 22px; font-weight: 300; }
   .es-txt { display: flex; align-items: center; gap: 12px; align-self: stretch; }
   .es-txt .lnk { line-height: 1.2; padding: 6px 0; }
