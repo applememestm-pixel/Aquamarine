@@ -277,6 +277,7 @@ export const api = {
   /** A view-once photo / video was looked at: wipe it from this device. */
   /** The built-in browser window (desktop). */
   openBrowserWindow:  (url: string): Promise<void>                                 => invoke("open_browser_window", { url }),
+  showInFolder:       (path: string): Promise<void>                                => invoke("show_in_folder", { path }),
   onceBurn:           (peerId: string, messageId: string): Promise<void>           => invoke("once_burn", { peerId, messageId }),
   /** No screenshots / screen recording (Android FLAG_SECURE, Windows / macOS). Resolves false where it can't. */
   screenSecure:       (on: boolean): Promise<boolean>                              => invoke("screen_secure", { on }),

@@ -265,6 +265,7 @@ pub fn run() -> Result<()> {
             web::cache_remote_media,
             web::telegraph_page,
             web::open_external,
+            web::show_in_folder,
             commands::init_app,
             commands::complete_registration,
             commands::log_out,

@@ -3816,7 +3816,8 @@
                       {:else if content.saved_at}
                         <div class="file-btns">
                           <button class="file-dl primary" onclick={() => openDoc(m, content)}>{$t("Open")}</button>
-                          {#if !protectedChat}<button class="file-dl" onclick={() => saveFileAs(content.saved_at, content.name)}>{$t("Save as…")}</button>{/if}
+                          <!-- "Save as" moved to the message menu; here — where the file already is. -->
+                          {#if DESKTOP_APP && content.saved_at}<button class="file-dl" onclick={() => api.showInFolder(content.saved_at!).catch((e) => showToast(String(e)))}>{$t("Show in folder")}</button>{/if}
                         </div>
                       {:else if dm}
                         <button class="file-dl" onclick={() => openDoc(m, content)}>{$t(dm === "image" ? "Show photo" : "Watch video")}</button>
@@ -4111,6 +4112,10 @@
         {/if}
         {#if !protectedChat && !(row.kind.type === "file" && renderKind(row.kind.content) === "once")}
         <button class="ctx-item" role="menuitem" onclick={() => forwardRow(row)}>{$t("Forward")}</button>
+        {/if}
+        {#if !protectedChat && row.kind.type === "file" && row.kind.content.saved_at && renderKind(row.kind.content) !== "once"}
+          {@const fc = row.kind.content}
+          <button class="ctx-item" role="menuitem" onclick={() => { closeMenu(); void saveFileAs(fc.saved_at, fc.name); }}>{$t("Save as…")}</button>
         {/if}
         {#if DESKTOP_APP && !protectedChat && row.kind.type === "file" && row.kind.content.saved_at && renderKind(row.kind.content) !== "once"}
           {@const p = row.kind.content.saved_at}

@@ -2757,4 +2757,5 @@ export const RU: Record<string, string> = {
   "Rounded": "Скруглённые",
   "Night mode": "Ночной режим",
   "Day mode": "Дневной режим",
+  "Invite link · admin @{admin}": "Ссылка-приглашение · админ @{admin}",
 };

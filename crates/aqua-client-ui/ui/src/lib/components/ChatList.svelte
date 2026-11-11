@@ -581,7 +581,13 @@
   }
 
   // ---- Invite links pasted into the search box ----
-  let joinLink = $derived(parseJoinLink($search ?? ""));
+  // The title in a link is the one it was made with: a group we know shows its name now.
+  let joinLink = $derived.by(() => {
+    const j = parseJoinLink($search ?? "");
+    if (!j) return null;
+    const known = $groupMap[j.gid]?.title || $chats.find((c) => c.id === j.gid)?.name;
+    return known ? { ...j, title: known } : j;
+  });
   let joinIsMember = $derived(!!joinLink && !!$groupMap[joinLink.gid]?.members.some((m) => m.username === $info?.username));
   let joinSent = $state("");
   async function requestJoin() {
@@ -905,7 +911,7 @@
         <div class="jc-ava">{joinLink.title.charAt(0).toUpperCase()}</div>
         <div class="jc-body">
           <div class="jc-title">{joinLink.title}</div>
-          <div class="jc-sub">Invite link · admin @{joinLink.admin}</div>
+          <div class="jc-sub">{$t("Invite link · admin @{admin}", { admin: joinLink.admin })}</div>
         </div>
         {#if joinIsMember}
           <button class="jc-btn" onclick={() => { const id = joinLink!.gid; search.set(""); void selectChat(id); }}>{$t("Open")}</button>
