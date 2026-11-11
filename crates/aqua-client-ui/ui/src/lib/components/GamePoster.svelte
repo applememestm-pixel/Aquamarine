@@ -4,7 +4,8 @@
   import { gameGradient } from "../played";
   import { t } from "../i18n";
 
-  let { name, cover = "", icon = "", hours = 0, label = true }: { name: string; cover?: string; icon?: string; hours?: number; label?: boolean } = $props();
+  /** `bare`: no name on the poster at all (the profile grid prints it below). */
+  let { name, cover = "", icon = "", hours = 0, label = true, bare = false }: { name: string; cover?: string; icon?: string; hours?: number; label?: boolean; bare?: boolean } = $props();
   let broken = $state(false);
   let wide = $state(false);
   $effect(() => { void cover; broken = false; wide = false; });
@@ -25,7 +26,7 @@
   {:else}
     <span class="gp-ph">{name.charAt(0).toUpperCase()}</span>
   {/if}
-  {#if label || !src}<span class="gp-name">{name}</span>{/if}
+  {#if !bare && (label || !src)}<span class="gp-name">{name}</span>{/if}
   {#if hours > 0}<span class="gp-h">{hours} {$t("h")}</span>{/if}
 </div>
 

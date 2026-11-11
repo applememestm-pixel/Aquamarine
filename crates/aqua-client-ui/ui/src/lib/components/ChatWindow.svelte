@@ -633,6 +633,27 @@
       void galleryLoad(); void albumsLoad();
     }
   });
+  // Video messages, like Telegram: a silent loop until tapped; a tap plays
+  // it with sound from the start, the next tap pauses (before, a tap only
+  // toggled the sound and the circle never stopped), at the end it goes
+  // back to the silent loop. One circle sounds at a time.
+  function circleTap(v: HTMLVideoElement) {
+    if (v.muted) {
+      for (const o of document.querySelectorAll<HTMLVideoElement>("video.circle-vid.live")) if (o !== v) circleDone(o);
+      v.muted = false; v.loop = false; v.currentTime = 0;
+      v.classList.add("live");
+      void v.play().catch(() => {});
+    } else if (v.paused) {
+      void v.play().catch(() => {});
+    } else {
+      v.pause();
+    }
+  }
+  function circleDone(v: HTMLVideoElement) {
+    v.classList.remove("live");
+    v.muted = true; v.loop = true;
+    if ($power.videos) void v.play().catch(() => {}); else v.pause();
+  }
   let mediaMode = $state<"voice" | "circle">("voice");
   let holdTimer: ReturnType<typeof setTimeout> | null = null;
   let holdFired = false;
@@ -3609,8 +3630,9 @@
                     {#if url}
                       <!-- svelte-ignore a11y_media_has_caption -->
                       <video class="circle-vid" use:streamSrc={url} loop playsinline autoplay={$power.videos} muted
-                        onclick={(e) => { const v = e.currentTarget as HTMLVideoElement; v.muted = !v.muted; }}
-                        title={$t("Click to toggle sound")}></video>
+                        onclick={(e) => circleTap(e.currentTarget as HTMLVideoElement)}
+                        onended={(e) => circleDone(e.currentTarget as HTMLVideoElement)}
+                        title={$t("Tap: play with sound / pause")}></video>
                     {:else}
                       <div class="circle-placeholder"></div>
                     {/if}
@@ -5012,6 +5034,7 @@
     background: #000;
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent), 0 10px 24px -6px rgba(0,0,0,0.5);
   }
+  .circle-vid:global(.live) { box-shadow: 0 0 0 3px var(--accent); }
   .circle-placeholder {
     width: 220px; height: 220px;
     border-radius: 50%;

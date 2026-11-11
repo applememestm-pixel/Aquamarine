@@ -179,7 +179,7 @@ function myExtra(p: Profile): Record<string, unknown> {
     cg: Number.isFinite(p.card_g) ? Math.round(p.card_g as number) : null,
     es: (p.estatus ?? "").trim() && p.estatus !== "-" ? p.estatus : null,
     pattern: (p.pattern ?? "").slice(0, 16),
-    links: (p.links ?? []).filter((l) => /^https?:\/\//i.test(l.url)).slice(0, 8),
+    links: (p.links ?? []).filter((l) => /^https?:\/\//i.test(l.url)).slice(0, 12),
     games: (p.games ?? []).slice(0, 12),
     game_ids: Object.fromEntries(Object.entries(p.game_ids ?? {}).filter(([n]) => (p.games ?? []).includes(n)).slice(0, 12)),
     game_note: (p.game_note ?? "").slice(0, 140),

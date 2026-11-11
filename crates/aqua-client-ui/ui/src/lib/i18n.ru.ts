@@ -2651,4 +2651,9 @@ export const RU: Record<string, string> = {
   "“Listening to …” in your profile for people you chat with (with activity sharing on).": "«Слушает …» в профиле для собеседников (при включённом показе активности).",
   "The plugin “{n}” wants to connect to: {h}. It could send there what you give it. Allow?": "Плагин «{n}» хочет подключаться к: {h}. Он сможет отправлять туда то, что вы ему даёте. Разрешить?",
   "About the app": "О приложении",
+  "Tap: play with sound / pause": "Нажмите: со звуком / пауза",
+  "Type the digits on the keyboard": "Наберите цифры на клавиатуре",
+  "Connections": "Подключения",
+  "Connect a service": "Подключить сервис",
+  "Your name on {s}": "Ваше имя в {s}",
 };

@@ -46,6 +46,7 @@
   import EmojiPick from "./EmojiPick.svelte";
   import { userQr } from "../qr";
   import { gameIds, gameIcons, gameCovers, resolveGame, rememberGame, iconFor, coverFor } from "../games";
+  import { SERVICES, serviceOf, type Service } from "../services";
 
   let pfTab = $state<"board" | "activity">("board");
   function hostOf(url: string): string {
@@ -64,7 +65,7 @@
     return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/></svg>`;
   }
   function asLinks(v: unknown): { label: string; url: string }[] {
-    return Array.isArray(v) ? v.filter((l) => l && typeof l.url === "string" && /^https?:\/\//i.test(l.url)).slice(0, 8).map((l) => ({ label: String(l.label ?? "").slice(0, 40), url: String(l.url) })) : [];
+    return Array.isArray(v) ? v.filter((l) => l && typeof l.url === "string" && /^https?:\/\//i.test(l.url)).slice(0, 12).map((l) => ({ label: String(l.label ?? "").slice(0, 40), url: String(l.url) })) : [];
   }
   function asGames(v: unknown): string[] {
     return Array.isArray(v) ? v.filter((g) => typeof g === "string" && g.trim()).slice(0, 12).map((g) => g.slice(0, 60)) : [];
@@ -79,8 +80,24 @@
     links[i] = { ...(links[i] ?? { label: "", url: "" }), [field]: value };
     draft = { ...draft, links };
   }
-  function addLink() { if (draft && (draft.links ?? []).length < 8) draft = { ...draft, links: [...(draft.links ?? []), { label: "", url: "https://" }] }; }
+  function addLink() { if (draft && (draft.links ?? []).length < 12) draft = { ...draft, links: [...(draft.links ?? []), { label: "", url: "https://" }] }; }
   function removeLink(i: number) { if (draft) draft = { ...draft, links: (draft.links ?? []).filter((_, j) => j !== i) }; }
+  // Connections (lib/services.ts): a service + a name there → a profile link.
+  let connPick = $state(false);
+  let connSvc = $state<Service | null>(null);
+  let connHandle = $state("");
+  function addConn() {
+    const hd = connHandle.trim().replace(/^@/, "");
+    if (!draft || !connSvc || !hd || (draft.links ?? []).length >= 12) return;
+    draft = { ...draft, links: [...(draft.links ?? []), { label: connSvc.name, url: connSvc.url(hd) }] };
+    connSvc = null; connHandle = "";
+  }
+  /** Readable text on a service's colour. */
+  function onColor(hex: string): string {
+    const n = parseInt(hex.slice(1), 16);
+    const l = (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+    return l > 0.6 ? "#111" : "#fff";
+  }
   let gameInput = $state("");
   let gameHits = $state<{ id: string; name: string; has_icon: boolean }[]>([]);
   let gameTimer: ReturnType<typeof setTimeout> | null = null;
@@ -244,6 +261,9 @@
     estatus: string;
   }
   let view = $derived<View | null>((void $played, buildView(activeUsername, $profile, $contacts, $info, $peerCards, $peerPresence, $myActivity)));
+  // Links to a known service show as connections, the rest as links.
+  const conns = $derived((view?.links ?? []).map((l) => ({ url: l.url, ...(serviceOf(l.url) ?? { s: null, handle: "" }) })).filter((c) => !!c.s) as { url: string; s: Service; handle: string }[]);
+  const plainLinks = $derived((view?.links ?? []).filter((l) => !serviceOf(l.url)));
   // Which avatar image to show: the live draft when editing myself, else
   // the stored/served one.
   let shownAvatar = $derived(
@@ -586,7 +606,29 @@
                 <button class="btn-ghost small" onclick={() => removeLink(i)} title={$t("Remove")}>×</button>
               </div>
             {/each}
-            {#if (draft.links ?? []).length < 8}<button class="btn-ghost small add-row" onclick={addLink}>+ {$t("Add link")}</button>{/if}
+            {#if (draft.links ?? []).length < 12}<button class="btn-ghost small add-row" onclick={addLink}>+ {$t("Add link")}</button>{/if}
+          </div>
+          <div class="field">
+            <span>{$t("Connections")}</span>
+            {#if connSvc}
+              <div class="link-edit">
+                <span class="svc-dot" style:background={connSvc.color} style:color={onColor(connSvc.color)}>{connSvc.name.charAt(0)}</span>
+                <input class="le-url" bind:value={connHandle} placeholder={tr("Your name on {s}", { s: connSvc.name })} autocomplete="off" spellcheck="false"
+                  onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); addConn(); } if (e.key === "Escape") connSvc = null; }} />
+                <button class="btn-ghost small" onclick={addConn} disabled={!connHandle.trim()}>{$t("Add")}</button>
+                <button class="btn-ghost small" onclick={() => (connSvc = null)} title={$t("Cancel")}>×</button>
+              </div>
+            {:else if connPick}
+              <div class="svc-grid">
+                {#each SERVICES as sv (sv.id)}
+                  <button class="svc" onclick={() => { connSvc = sv; connPick = false; connHandle = ""; }}>
+                    <span class="svc-dot" style:background={sv.color} style:color={onColor(sv.color)}>{sv.name.charAt(0)}</span>{sv.name}
+                  </button>
+                {/each}
+              </div>
+            {:else if (draft.links ?? []).length < 12}
+              <button class="btn-ghost small add-row" onclick={() => (connPick = true)}>+ {$t("Connect a service")}</button>
+            {/if}
           </div>
           <div class="field">
             <span>{$t("Favourite games")}</span>
@@ -719,11 +761,24 @@
             </section>
           {/if}
 
-          {#if view.links.length}
+          {#if conns.length}
+            <section class="section">
+              <div class="section-label">{$t("Connections")}</div>
+              <div class="conns">
+                {#each conns as c, i (i)}
+                  <button class="conn" onclick={() => api.openExternal(c.url).catch(() => {})} title={c.url}>
+                    <span class="svc-dot" style:background={c.s.color} style:color={onColor(c.s.color)}>{c.s.name.charAt(0)}</span>
+                    <span class="conn-t"><b>{c.handle}</b><small>{c.s.name}</small></span>
+                  </button>
+                {/each}
+              </div>
+            </section>
+          {/if}
+          {#if plainLinks.length}
             <section class="section">
               <div class="section-label">{$t("Links")}</div>
               <div class="links">
-                {#each view.links as l, i (i)}
+                {#each plainLinks as l, i (i)}
                   <button class="link-row" onclick={() => api.openExternal(l.url).catch(() => {})} title={l.url}>
                     <span class="link-ic">{@html linkIcon(l.url)}</span>
                     <span class="link-txt">{l.label || hostOf(l.url)}</span>
@@ -832,12 +887,17 @@
                 <section class="card">
                   <div class="section-label">{$t("My favourite games")}</div>
                   <div class="games">
-                    {#each view.games.slice(1, showAllGames ? 12 : 9) as g (g)}
+                    <!-- Every starred game, the main one too; the name under the poster
+                         (on the poster it was cut off by the card's edge). -->
+                    {#each view.games.slice(0, showAllGames ? 16 : 8) as g (g)}
                       {@const pl = view.played.find((x) => x.n === g)}
-                      <GamePoster name={g} cover={coverFor(g, $gameIds, $gameCovers, view.game_ids)} icon={iconFor(g, $gameIds, $gameIcons, view.game_ids)} hours={pl?.h ?? 0} />
+                      <div class="g-item" title={g}>
+                        <GamePoster name={g} bare cover={coverFor(g, $gameIds, $gameCovers, view.game_ids)} icon={iconFor(g, $gameIds, $gameIcons, view.game_ids)} hours={pl?.h ?? 0} />
+                        <span class="g-name">{g}</span>
+                      </div>
                     {/each}
                   </div>
-                  {#if view.games.length > 9}<button class="more-games" onclick={() => (showAllGames = !showAllGames)}>{showAllGames ? $t("Show less") : $t("Show more")}</button>{/if}
+                  {#if view.games.length > 8}<button class="more-games" onclick={() => (showAllGames = !showAllGames)}>{showAllGames ? $t("Show less") : $t("Show more")}</button>{/if}
                 </section>
               {/if}
             {/if}
@@ -920,6 +980,19 @@
   .card { padding: 12px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-input); border: 1px solid var(--border); }
   .pf-empty { font-size: 12.5px; color: var(--fg-dim); padding: 18px 4px; text-align: center; }
   .links { display: flex; flex-direction: column; gap: 2px; }
+  /* Connections: a chip per service account. */
+  .conns { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+  .conn { display: flex; align-items: center; gap: 9px; padding: 7px 9px; border: 1px solid var(--border); border-radius: calc(10px * var(--rk, 1));
+    background: var(--bg-input); color: var(--fg); cursor: pointer; text-align: left; min-width: 0; transition: border-color .12s; }
+  .conn:hover { border-color: var(--accent); }
+  .conn-t { min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
+  .conn-t b, .conn-t small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conn-t b { font-size: 13px; } .conn-t small { font-size: 11px; color: var(--fg-muted); }
+  .svc-dot { width: 24px; height: 24px; flex: none; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 800; }
+  .svc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; }
+  .svc { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: calc(10px * var(--rk, 1));
+    background: transparent; color: var(--fg); font: inherit; font-size: 12.5px; cursor: pointer; text-align: left; }
+  .svc:hover { border-color: var(--accent); }
   .link-row {
     display: flex; align-items: center; gap: 10px; padding: 7px 8px; border: none; border-radius: calc(8px * var(--rk, 1));
     background: none; color: var(--fg); cursor: pointer; text-align: left; font-size: 13px;
@@ -930,7 +1003,12 @@
   .link-ic :global(svg) { width: 18px; height: 18px; }
   .link-txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .link-go { color: var(--fg-dim); font-size: 12px; }
-  .games { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 8px; }
+  /* Bigger posters: 3 a row in the profile window, 4 on a phone's full width. */
+  .games { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 10px; margin-top: 8px; }
+  :global(html.phone) .games { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 8px; }
+  .g-item { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .g-name { font-size: 12px; font-weight: 600; line-height: 1.25; color: var(--fg); text-align: center;
+    overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
   .game-star { color: #FFD45C; font-size: 11px; }
   .more-games { margin-top: 10px; border: none; background: none; color: var(--fg-muted); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; padding: 0; }
   .more-games:hover { color: var(--accent); text-decoration: underline; }
@@ -1044,7 +1122,8 @@
   .es-cur:hover { border-color: var(--accent); transform: scale(1.04); }
   .es-cur :global(.es) { margin: 0; }
   .es-none { font-size: 22px; font-weight: 300; }
-  .es-txt { display: flex; gap: 12px; }
+  .es-txt { display: flex; align-items: center; gap: 12px; align-self: stretch; }
+  .es-txt .lnk { line-height: 1.2; padding: 6px 0; }
   .lnk { border: none; background: none; padding: 0; font: inherit; font-size: 13px; font-weight: 700; color: var(--accent); cursor: pointer; text-transform: none; letter-spacing: 0; }
   .sheet.light .lnk { color: var(--fg); text-decoration: underline; }
   .lnk.dim { color: var(--fg-dim); }
@@ -1290,6 +1369,8 @@
     letter-spacing: -0.01em;
     display: flex; align-items: center; gap: 6px;
   }
+  /* The emoji sits right after the name (its own 4px margin + the gap was a hole). */
+  .name :global(.es) { margin-left: -2px; }
   .badge :global(svg) { width: 16px; height: 16px; color: var(--accent); filter: drop-shadow(0 0 4px var(--accent-glow)); }
   .username {
     font-family: var(--font-mono);
