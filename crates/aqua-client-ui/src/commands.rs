@@ -1247,6 +1247,9 @@ pub async fn attach_file_as(
 ) -> Result<AttachResult, String> {
     match mode.as_str() {
         "file" => attach_file_fwd(state, app, peer_id, file_path, Some("document".into()), None, None, caption).await,
+        // View once (Telegram): opened one time, no saving or forwarding,
+        // then gone from the device (`once_burn`).
+        "once" => attach_file_fwd(state, app, peer_id, file_path, Some("once".into()), None, None, caption).await,
         "compressed" => {
             let out_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.join("outbox") };
             std::fs::create_dir_all(&out_dir).map_err(|e| format!("mkdir outbox: {e}"))?;
@@ -2174,7 +2177,9 @@ pub async fn download_file(
         let s = state.lock().map_err(|e| e.to_string())?;
         s.data_dir.clone()
     };
-    let base = downloads_dir(&data_dir);
+    // View once: inside the app's own data, never in Downloads (and wiped
+    // once looked at, `once_burn`).
+    let base = if envelope.category.as_deref() == Some("once") { data_dir.join("once") } else { downloads_dir(&data_dir) };
     std::fs::create_dir_all(&base).map_err(|e| format!("mkdir: {e}"))?;
     // A file of that name with exactly these bytes is already there: reuse it.
     let same = base.join(sanitize_name(&envelope.filename));
@@ -4169,6 +4174,31 @@ pub fn delete_message(
 /// Remove messages from this device by id ("delete for me") — works for
 /// every kind (media, articles, polls…), unlike the text-matched
 /// `delete_message`, which also tells the peer.
+/// A view-once photo or video was looked at: its decrypted copy is wiped
+/// from this device and the message keeps only "opened". The sender's own
+/// copy is theirs (it was their file), only the message is marked.
+#[tauri::command]
+pub fn once_burn(state: State<'_, StdMutex<AppState>>, peer_id: String, message_id: String) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| e.to_string())?;
+    let data_dir = s.data_dir.clone();
+    let Some(book) = s.chats.get_mut(&peer_id) else { return Ok(()) };
+    let Some(m) = book.messages.iter_mut().find(|m| m.id == message_id) else { return Ok(()) };
+    if let MessageKind::File { category, saved_at, .. } = &mut m.kind {
+        if category.as_deref() != Some("once") { return Err("not a view-once message".into()); }
+        if let Some(p) = saved_at.take() {
+            let path = PathBuf::from(&p);
+            if media::path_is_within(&data_dir, &path) {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+        *category = Some("once-seen".into());
+    }
+    if peer_id == crate::state::SAVED_MESSAGES_ID {
+        crate::state::save_saved_messages(&data_dir, &book.messages);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn delete_messages_local(
     state: State<'_, StdMutex<AppState>>,

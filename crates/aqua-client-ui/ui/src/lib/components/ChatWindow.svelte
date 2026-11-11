@@ -233,8 +233,9 @@
     category: string | null;
     mime: string | null;
     name: string;
-  }): "sticker" | "gif" | "image" | "video" | "audio" | "voice" | "circle" | "live" | "file" {
+  }): "sticker" | "gif" | "image" | "video" | "audio" | "voice" | "circle" | "live" | "once" | "file" {
     const cat = (content.category ?? "").toLowerCase();
+    if (cat === "once" || cat === "once-seen") return "once";
     if (isLive(cat)) return "live";
     if (cat === "sticker" || content.name.toLowerCase().endsWith(".tgs") || (content.mime ?? "").toLowerCase() === "application/x-tgsticker") return "sticker";
     if (cat === "gif") return "gif";
@@ -378,6 +379,38 @@
         void autoDownload(chat.id, m.id);
       }
     }
+  });
+
+  // ---- View once (Telegram): opened one time in a viewer of its own — no
+  // gallery, no saving, no forwarding, screenshots blocked where the system
+  // allows — then wiped from this device. ----
+  let onceView = $state<{ url: string; video: boolean; chat: string; id: string } | null>(null);
+  async function openOnce(m: ChatMessage, content: { saved_at: string | null; mime: string | null; name: string }) {
+    const chat = $activeChat;
+    if (!chat || m.outgoing) return;
+    let path = content.saved_at;
+    if (!path) {
+      try { path = (await api.downloadFile(chat.id, m.id)).saved_path; } catch (e) { showToast(`${tr("Could not open")}: ${e}`, 5000); return; }
+    }
+    if (!path) return;
+    try { await api.screenSecure(true); } catch { /* not here */ }
+    const video = (content.mime ?? "").startsWith("video/") || /\.(mp4|webm|mov|m4v|mkv)$/i.test(content.name);
+    onceView = { url: assetUrl(path), video, chat: chat.id, id: m.id };
+  }
+  async function closeOnce() {
+    const v = onceView;
+    onceView = null;
+    if (!protectedChat) { try { await api.screenSecure(false); } catch { /* not here */ } }
+    if (!v) return;
+    try { await api.onceBurn(v.chat, v.id); } catch { /* already gone */ }
+    if ($activeChat?.id === v.chat) await loadActiveMessages();
+  }
+  $effect(() => { if (onceView) return onBack(() => void closeOnce()); });
+  // Sharing off in this chat: screenshots are blocked too, where possible.
+  $effect(() => {
+    const on = protectedChat;
+    void api.screenSecure(on).catch(() => {});
+    return () => { if (on) void api.screenSecure(false).catch(() => {}); };
   });
 
   async function autoDownload(peerId: string, messageId: string) {
@@ -776,7 +809,9 @@
     let cap: string | undefined = choice.caption?.trim() || undefined;
     for (const p of paths) {
       try {
-        if (choice.live) {
+        if ("once" in choice && choice.once) {
+          await api.attachFileAs(peerId, p, "once", cap);
+        } else if (choice.live) {
           await api.attachFileAs(peerId, p, choice.live, cap);
         } else if (choice.mode === "file") {
           await api.attachFileAs(peerId, p, "file", cap);
@@ -3000,6 +3035,7 @@
       const c = k.content;
       const cap = c.caption?.split("\n")[0]?.trim();
       const rk = renderKind(c);
+      if (rk === "once") return `① ${tr("View-once media")}`;
       const icon = rk === "image" ? "🖼️" : rk === "video" ? "📹" : rk === "gif" ? "🎞️" : rk === "sticker" ? "🎨" : rk === "voice" ? "🎙️" : rk === "circle" ? "⏺️" : "📎";
       if (rk === "sticker") return `${icon} ${tr("Sticker")}`;
       return `${icon} ${cap || (rk === "image" ? tr("Photo") : rk === "video" ? tr("Video") : rk === "voice" ? tr("Voice message") : rk === "circle" ? tr("Video message") : c.name)}`;
@@ -3607,7 +3643,21 @@
                 {@const content = m.kind.content}
                 {@const rk = renderKind(content)}
                 {@const url = inlineUrl(content.saved_at, content.mime)}
-                {#if rk === "sticker"}
+                {#if rk === "once"}
+                  {@const seen = content.category === "once-seen"}
+                  {@const vid = (content.mime ?? "").startsWith("video/")}
+                  <div class="bubble once-bubble">
+                    <button class="once-btn" class:seen disabled={seen || m.outgoing} onclick={() => openOnce(m, content)}>
+                      <span class="once-ic">{#if seen}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg>{:else}<b>1</b>{/if}</span>
+                      <span class="once-tx">
+                        <b>{$t(vid ? "Video" : "Photo")}</b>
+                        <small>{seen ? $t("Opened") : m.outgoing ? $t("View once") : $t("View once — tap to open")}</small>
+                      </span>
+                    </button>
+                    {#if content.caption}<div class="once-cap">{content.caption}</div>{/if}
+                    <span class="once-meta">{m.time}{@render statusTick(m.outgoing, m.id)}</span>
+                  </div>
+                {:else if rk === "sticker"}
                   <div class="sticker-wrap">
                     {#if url}
                       <button class="sticker-btn" title={$t("Show the pack")}
@@ -4053,10 +4103,10 @@
         {#if textOf(row) != null && /\[ce:[^\]]+\]/.test(textOf(row) ?? "")}
           <button class="ctx-item" role="menuitem" onclick={() => saveEmojiFromRow(row)}>{$t("Add these emoji to my collection")}</button>
         {/if}
-        {#if !protectedChat}
+        {#if !protectedChat && !(row.kind.type === "file" && renderKind(row.kind.content) === "once")}
         <button class="ctx-item" role="menuitem" onclick={() => forwardRow(row)}>{$t("Forward")}</button>
         {/if}
-        {#if DESKTOP_APP && !protectedChat && row.kind.type === "file" && row.kind.content.saved_at}
+        {#if DESKTOP_APP && !protectedChat && row.kind.type === "file" && row.kind.content.saved_at && renderKind(row.kind.content) !== "once"}
           {@const p = row.kind.content.saved_at}
           <button class="ctx-item" role="menuitem" onclick={() => { closeMenu(); btSheet.set([p]); }}>{$t("Send via Bluetooth")}</button>
         {/if}
@@ -4437,6 +4487,19 @@
   {#if peek}
     <div class="sticker-peek" aria-hidden="true">
       <div class="sp-media"><AnimatedMedia src={peek.url} mime={peek.mime} play="auto" /></div>
+    </div>
+  {/if}
+  {#if onceView}
+    {@const ov = onceView}
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div class="once-view" role="dialog" aria-modal="true" data-own-back aria-label={$t("View once")} onclick={() => void closeOnce()} oncontextmenu={(e) => e.preventDefault()}>
+      {#if ov.video}
+        <!-- svelte-ignore a11y_media_has_caption -->
+        <video use:streamSrc={ov.url} autoplay playsinline controlslist="nodownload noplaybackrate" disablepictureinpicture onended={() => void closeOnce()} onclick={(e) => e.stopPropagation()}></video>
+      {:else}
+        <img src={ov.url} alt="" draggable="false" />
+      {/if}
+      <div class="once-hint">① {$t("View once — tap to close; it's gone after that")}</div>
     </div>
   {/if}
   {#if themeFor}<ChatThemeSheet chat={themeFor} name={$activeChat?.name ?? ""} onclose={() => (themeFor = null)} />{/if}
@@ -6117,6 +6180,24 @@
   .emoji-in.disabled { opacity: .4; cursor: help; }
   .emoji-in :global(svg) { width: 21px; height: 21px; }
   .cam-in { margin-left: 0; }
+  .once-bubble { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px 6px; min-width: 190px; }
+  .once-btn { display: flex; align-items: center; gap: 10px; border: none; background: transparent; color: inherit; padding: 0; text-align: left; font: inherit; cursor: pointer; }
+  .once-btn:disabled { cursor: default; }
+  .once-ic { width: 42px; height: 42px; flex-shrink: 0; border-radius: 50%; display: grid; place-items: center; color: var(--accent);
+    border: 2px dashed currentColor; background: var(--accent-soft); }
+  .once-ic b { font-size: 17px; font-weight: 800; }
+  .once-ic svg { width: 20px; height: 20px; }
+  .once-btn.seen .once-ic { color: var(--fg-dim); border-style: solid; background: transparent; }
+  .once-tx { display: flex; flex-direction: column; gap: 1px; }
+  .once-tx b { font-size: 14px; }
+  .once-tx small { font-size: 12px; color: var(--fg-muted); }
+  .once-cap { font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .once-meta { align-self: flex-end; display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--fg-dim); }
+  .once-view { position: fixed; inset: 0; z-index: 10096; background: #000; display: grid; place-items: center; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+  .once-view img, .once-view video { max-width: 100vw; max-height: 100dvh; object-fit: contain; pointer-events: none; }
+  .once-view video { pointer-events: auto; }
+  .once-hint { position: absolute; left: 50%; bottom: calc(22px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); padding: 7px 14px; border-radius: calc(16px * var(--rk, 1));
+    background: rgba(0,0,0,.6); color: #fff; font-size: 13px; white-space: nowrap; }
 
   .composer-note {
     padding: 0 20px 12px;

@@ -349,6 +349,8 @@ pub fn run() -> Result<()> {
             commands::channel_dm_open,
             relay_host::widget_update,
             relay_host::pip_enter,
+            relay_host::screen_secure,
+            commands::once_burn,
             commands::attach_file,
             commands::attach_file_as,
             commands::attach_bytes,

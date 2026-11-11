@@ -2705,4 +2705,11 @@ export const RU: Record<string, string> = {
   "Colour {n}": "Цвет {n}",
   "No tag": "Без метки",
   "{n} chats in this folder now": "Сейчас в папке чатов: {n}",
+  "View once": "Однократный просмотр",
+  "Opens one time; no saving, forwarding or screenshots": "Открывается один раз; без сохранения, пересылки и скриншотов",
+  "View-once media": "Медиа на один просмотр",
+  "Opened": "Просмотрено",
+  "View once — tap to open": "Один просмотр — нажмите, чтобы открыть",
+  "View once — tap to close; it's gone after that": "Один просмотр — нажмите, чтобы закрыть; после этого он исчезнет",
+  "Could not open": "Не удалось открыть",
 };

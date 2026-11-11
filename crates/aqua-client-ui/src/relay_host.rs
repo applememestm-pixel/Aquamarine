@@ -58,6 +58,14 @@ pub mod android {
             .map_err(|e| e.to_string())
     }
 
+    /// FLAG_SECURE on / off (AquaRelay.kt → secure).
+    pub fn secure(on: bool) -> Result<(), String> {
+        let h = HANDLE.get().ok_or("screen protection is not available")?;
+        h.run_mobile_plugin::<serde_json::Value>("secure", serde_json::json!({ "on": on }))
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
     /// Start the app over in a fresh process (another account was picked).
     pub fn relaunch() {
         let Some(h) = HANDLE.get() else { return };
@@ -80,6 +88,27 @@ pub fn pip_enter(w: u32, h: u32) -> Result<(), String> {
     {
         let _ = (w, h);
         Err("picture-in-picture is only on Android here".into())
+    }
+}
+
+/// Keep the screen out of screenshots and recordings (view-once media, chats
+/// with sharing off): FLAG_SECURE on Android, content protection on Windows
+/// and macOS. Linux can't, so it says so.
+#[tauri::command]
+pub fn screen_secure(window: tauri::WebviewWindow, on: bool) -> Result<bool, String> {
+    #[cfg(target_os = "android")]
+    {
+        let _ = window;
+        return android::secure(on).map(|_| true);
+    }
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    {
+        return window.set_content_protected(on).map(|_| true).map_err(|e| e.to_string());
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = (window, on);
+        Ok(false)
     }
 }
 

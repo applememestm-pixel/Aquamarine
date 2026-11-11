@@ -1,7 +1,7 @@
 <script module lang="ts">
   import { writable } from "svelte/store";
   export type SendMode = "media" | "compressed" | "file";
-  export interface SendChoice { mode: SendMode; caption: string; edit: boolean; /** The files, with any added in the sheet ("+"). */ paths: string[]; /** Send as a live photo (1.2.0-4). */ live?: import("../liveMotion").LiveStyle }
+  export interface SendChoice { mode: SendMode; caption: string; edit: boolean; /** The files, with any added in the sheet ("+"). */ paths: string[]; /** Send as a live photo (1.2.0-4). */ live?: import("../liveMotion").LiveStyle; /** View once (no saving, no forwarding, gone after one look). */ once?: boolean }
   interface Ask { paths: string[]; preset?: SendMode; caption?: string; resolve: (v: SendChoice | null) => void }
   const pending = writable<Ask | null>(null);
   const LAST = "aqua.sendMode.v1";
@@ -35,6 +35,7 @@
   /** Live photo: off, or how it plays. Offered for one short clip or a Motion Photo. */
   let live = $state<LiveStyle | null>(null);
   let canLive = $state(false);
+  let once = $state(false);
   let thumbs = $state<Record<string, string>>({});
   let sizes = $state<Record<string, number>>({});
   let capEl = $state<HTMLTextAreaElement | null>(null);
@@ -65,6 +66,8 @@
   let hasImages = $derived(paths.some(isImg));
   let hasVideos = $derived(paths.some(isVid));
   let total = $derived(paths.reduce((a, p) => a + (sizes[p] ?? 0), 0));
+  /** View once: one photo or video, sent as media. */
+  let canOnce = $derived(paths.length === 1 && (isImg(paths[0]) || isVid(paths[0])) && mode !== "file");
   let allMedia = $derived(paths.length > 0 && paths.every((p) => isImg(p) || isVid(p) || kinds[p] === ""));
 
   // New files: settings, caption and previews once per opened sheet.
@@ -77,6 +80,7 @@
     } catch { /* defaults */ }
     if (a.preset) mode = a.preset === "file" ? "file" : "media";
     caption = a.caption ?? "";
+    once = false;
     live = null;
     canLive = false;
     thumbs = {};
@@ -132,7 +136,8 @@
     if (!send || !paths.length) { a.resolve(null); return; }
     try { localStorage.setItem(LAST, JSON.stringify({ mode, compressVideo })); } catch { /* ignore */ }
     const m: SendMode = mode === "file" ? "file" : hasVideos && compressVideo ? "compressed" : "media";
-    a.resolve({ mode: m, caption: caption.trim(), edit, paths: [...paths], live: canLive && live && mode !== "file" ? live : undefined });
+    const one = once && canOnce;
+    a.resolve({ mode: m, caption: caption.trim(), edit: edit && !one, paths: [...paths], live: !one && canLive && live && mode !== "file" ? live : undefined, once: one || undefined });
   }
   function key(e: KeyboardEvent) {
     if (!$pending) return;
@@ -207,7 +212,14 @@
             <span class="knob"></span>
             <span class="lbl"><b>{asMedia()}</b><small>{$t(mode === "file" ? "Off — as files, original quality, no preview" : "Shown in the chat, plays inline")}</small></span>
           </label>
-          {#if mode === "media" && hasVideos}
+          {#if canOnce}
+            <label class="sw">
+              <input type="checkbox" bind:checked={once} />
+              <span class="knob"></span>
+              <span class="lbl"><b>① {$t("View once")}</b><small>{$t("Opens one time; no saving, forwarding or screenshots")}</small></span>
+            </label>
+          {/if}
+          {#if mode === "media" && hasVideos && !once}
             <label class="sw">
               <input type="checkbox" bind:checked={compressVideo} />
               <span class="knob"></span>
@@ -217,7 +229,7 @@
         </div>
       {/if}
 
-      {#if canLive && mode !== "file"}
+      {#if canLive && mode !== "file" && !once}
         <div class="live-row">
           <span class="live-lbl">◎ {$t("Live photo")}</span>
           <button class:on={live === null} onclick={() => (live = null)}>{$t("Off")}</button>
