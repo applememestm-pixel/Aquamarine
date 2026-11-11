@@ -7,6 +7,8 @@ export interface ChatSummary {
   preview: string;
   preview_is_typing: boolean;
   preview_by_me: boolean;
+  /** Groups: who wrote the last message. */
+  preview_from?: string;
   has_lock: boolean;
   time: string;
   unread: number;

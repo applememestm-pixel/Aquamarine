@@ -26,7 +26,7 @@
   import ClanTag from "./ClanTag.svelte";
   import { keepOnScreen } from "../actions";
   import { archived, mutedChats, setArchived, setMuted, pinnedChats, togglePin, movePin, MAX_PINS, markedUnread, setMarkedUnread } from "../chatPrefs";
-  import { folders as allFolders, isInFolder, toggleChatInFolder } from "../folders";
+  import { folders as allFolders, folderHas, updateFolder, folderTags, FOLDER_COLORS, type Folder, type ChatFacts } from "../folders";
   import { parseJoinLink } from "../groupRules";
   import { groupMap, requestJoinGroup } from "../groups";
   import { roomsOf } from "../groupRules";
@@ -45,7 +45,8 @@
   import { openNewGroup } from "./NewGroupWizard.svelte";
 
   let plusMenuOpen = $state(false);
-  import { contacts, saveContact } from "../contacts";
+  import { contacts, saveContact, displayName } from "../contacts";
+  import { chatLines } from "../listLook";
   import { api } from "../tauri";
   import { blocked, setBlocked } from "../ghost";
   import { chatLocks, unlocked, lockNowChat } from "../chatLocks";
@@ -164,6 +165,28 @@
     closeSearch();
   }
 
+  /** What the folder rules look at (folders.ts::folderHas). */
+  function factsOf(c: ChatSummary): ChatFacts {
+    return { id: c.id, kind: kindOfChat(c) === "channels" ? "channels" : kindOfChat(c) === "groups" ? "groups" : "people",
+      contact: !!$contacts[c.id], muted: $mutedChats.has(c.id), unread: c.unread > 0 || $markedUnread.has(c.id), archived: $archived.has(c.id) };
+  }
+  /** In or out of a folder from a chat's menu: by hand, and left out when a rule still takes it in. */
+  function toggleInFolder(f: Folder, c: ChatSummary | undefined, id: string) {
+    const facts = c ? factsOf(c) : { id, kind: "people" as const, contact: false, muted: false, unread: false, archived: false };
+    if (folderHas(f, facts)) {
+      const chatIds = f.chatIds.filter((x) => x !== id);
+      const still = folderHas({ ...f, chatIds }, facts);
+      updateFolder(f.id, { chatIds, excludeIds: still ? [...(f.excludeIds ?? []), id] : f.excludeIds });
+    } else {
+      updateFolder(f.id, { chatIds: [...f.chatIds, id], excludeIds: (f.excludeIds ?? []).filter((x) => x !== id) });
+    }
+  }
+  /** Folder tags under a row in "All" (Telegram). */
+  function tagsOf(c: ChatSummary): Folder[] {
+    if (!$folderTags || $activeFolder !== "all" || searchMode) return [];
+    const facts = factsOf(c);
+    return $folders.filter((f) => f.color != null && f.color >= 0 && folderHas(f, facts)).slice(0, 3);
+  }
   // Chats filtered by archive + the active folder ("all" shows everything).
   // A search looks through archived chats too.
   let shownChats = $derived.by(() => {
@@ -172,7 +195,8 @@
     if (!$search.trim()) list = list.filter((c) => (showArchive ? $archived.has(c.id) : !$archived.has(c.id)));
     if (af !== "all" && !showArchive) {
       const f = $folders.find((x) => x.id === af);
-      if (f) { const set = new Set(f.chatIds); list = list.filter((c) => set.has(c.id)); }
+      // A folder's rules see the archive too ("exclude archived" is a rule).
+      if (f) list = $visibleChats.filter((c) => folderHas(f, factsOf(c)));
     }
     if ($search.trim() && searchTab !== "all") list = list.filter((c) => kindOfChat(c) === searchTab);
     // Pinned chats on top, in pin order (not while searching).
@@ -656,7 +680,7 @@
   }
 </script>
 
-<aside class="list" class:resizing class:compact class:has-active={!!$activeId}>
+<aside class="list" class:resizing class:compact class:lines3={$chatLines === 3} class:has-active={!!$activeId}>
   {#if compact}
     <button class="compact-expand" onclick={() => (compactPinned = true)} title={$t("Show the chat list")} aria-label={$t("Show the chat list")}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
@@ -769,8 +793,9 @@
     <div class="folder-strip">
       <button class="folder-tab" class:active={$activeFolder === "all"} onclick={() => activeFolder.set("all")} oncontextmenu={(e) => openFolderMenu(e, "all")}>{$t("All")}</button>
       {#each $folders as f (f.id)}
+        {@const unread = $visibleChats.filter((c) => (c.unread > 0) && !$mutedChats.has(c.id) && folderHas(f, factsOf(c))).length}
         <button class="folder-tab" class:active={$activeFolder === f.id} onclick={() => activeFolder.set(f.id)} oncontextmenu={(e) => openFolderMenu(e, f.id)}>
-          {f.name}{#if f.chatIds.length > 0}<span class="ft-count">{f.chatIds.length}</span>{/if}
+          {#if f.emoji}<span class="ft-emoji">{f.emoji}</span>{/if}{f.name}{#if unread > 0}<span class="ft-count">{unread}</span>{/if}
         </button>
       {/each}
       <button class="folder-edit" onclick={openFolderManager} title={$t("Manage folders")}>+</button>
@@ -786,7 +811,8 @@
     <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
     <div class="ctx-scrim" onclick={() => (folderMenu = null)} oncontextmenu={(e) => { e.preventDefault(); folderMenu = null; }}></div>
     <div class="chat-ctx" use:keepOnScreen style:left="{fm.x}px" style:top="{fm.y}px" role="menu">
-      <button onclick={() => { markAllRead(fm.id === "all" ? undefined : $folders.find((f) => f.id === fm.id)?.chatIds ?? []); folderMenu = null; }}>{$t("Mark all as read")}</button>
+      <button onclick={() => { const f = $folders.find((x) => x.id === fm.id); markAllRead(fm.id === "all" ? undefined : f ? $chats.filter((c) => folderHas(f, factsOf(c))).map((c) => c.id) : []); folderMenu = null; }}>{$t("Mark all as read")}</button>
+      {#if fm.id !== "all"}<button onclick={() => { const id = fm.id; folderMenu = null; openFolderManager(id); }}>{$t("Edit folder")}</button>{/if}
       <button onclick={() => { folderMenu = null; openFolderManager(); }}>{$t("Manage folders")}</button>
     </div>
   {/if}
@@ -944,6 +970,10 @@
         <div class="chat-body">
           <div class="chat-row-1">
             <span class="chat-name">
+              {#if !lk && (c.id.startsWith("grp_") || c.channel)}
+                <!-- What kind of chat (Telegram): people for a group, a megaphone for a channel. -->
+                <span class="type-ic" title={$t(c.channel ? "Channel" : "Group")}>{#if c.channel}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v4a1 1 0 0 0 1 1h3l6 4V5L7 9H4a1 1 0 0 0-1 1z"/><path d="M17 8.5a5 5 0 0 1 0 7"/></svg>{:else}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 19c.6-3.2 3-5 6-5s5.4 1.8 6 5"/><path d="M16 5.2a3 3 0 0 1 0 5.6M18 14.2c1.6.6 2.7 2.2 3 4.8"/></svg>{/if}</span>
+              {/if}
               <span class="cn-text" class:lk-blur={lk}>{lk ? "•••••••" : c.name}</span>{#if !lk && !c.id.startsWith("grp_")}<EmojiStatus token={emojiStatusOf($peerCards, c.id)} size={16} />{/if}
               {#if inGroup}<!-- svelte-ignore a11y_no_static_element_interactions --><!-- svelte-ignore a11y_click_events_have_key_events --><span class="g-tag" onclick={(e) => { e.stopPropagation(); openGroupId.set(inGroup.id); }} title={$t("Chat group")}>{inGroup.emoji ?? "▣"} {inGroup.name}</span>{/if}
               {#if c.verified}<span class="verified-badge">{@html icons.verified}</span>{/if}
@@ -964,7 +994,7 @@
               <span class="chat-preview typing">{c.preview}</span>
             {:else}
               <span class="chat-preview">
-                {#if c.preview_by_me}<span class="me-prefix">{$t("you:")}</span>{/if}{previewText(c.preview)}
+                {#if c.preview_by_me}<span class="me-prefix">{$t("you:")}</span>{:else if c.preview_from && !c.channel}<span class="from-prefix">{displayName(c.preview_from, c.preview_from)}<i>:</i></span>{/if}<span class="pv-t">{previewText(c.preview)}</span>
               </span>
             {/if}
             {#if c.unread > 0 && c.id !== $activeId}
@@ -975,6 +1005,13 @@
               <span class="pin-ic" title={$t("Pinned")}><svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 3l5 5-3 1-4 4 1 5-2 2-4-4-5 5-1-1 5-5-4-4 2-2 5 1 4-4z"/></svg></span>
             {/if}
           </div>
+          {#if !lk && !compact}
+            {@const tags = tagsOf(c)}
+            {#if tags.length}
+              <!-- Which folders the chat is in, like Telegram's folder tags. -->
+              <div class="ftags">{#each tags as f (f.id)}<span class="ftag" style:--fc={FOLDER_COLORS[f.color ?? 0]}>{f.name}</span>{/each}</div>
+            {/if}
+          {/if}
         </div>
         {/if}
       </button>
@@ -1097,7 +1134,8 @@
         <div class="peek-menu" role="menu">
           {#if peekFolders}
             {#each $allFolders as f (f.id)}
-              <button onclick={() => toggleChatInFolder(f.id, pid)}>{isInFolder(f.id, pid) ? "✓ " : ""}{f.name}</button>
+              {@const fc = $chats.find((x) => x.id === pid)}
+              <button onclick={() => toggleInFolder(f, fc, pid)}>{(fc ? folderHas(f, factsOf(fc)) : f.chatIds.includes(pid)) ? "✓ " : ""}{f.emoji ? f.emoji + " " : ""}{f.name}</button>
             {/each}
             <button onclick={() => { peekFolders = false; closePeek(); openFolderManager(); }}>{$t("New folder…")}</button>
             <button onclick={() => (peekFolders = false)}>‹ {$t("Back")}</button>
@@ -1554,6 +1592,10 @@
   }
   .folder-tab:hover { color: var(--fg); background: var(--bg-hover); }
   .folder-tab.active { color: var(--accent); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 25%, transparent); }
+  .ft-emoji { margin-right: 4px; }
+  .ftags { display: flex; gap: 4px; margin-top: 3px; min-width: 0; overflow: hidden; }
+  .ftag { font-size: calc(10.5px * var(--font-scale, 1)); font-weight: 700; line-height: 1; padding: 2px 6px 3px; border-radius: calc(5px * var(--rk, 1)); white-space: nowrap;
+    color: var(--fc); background: color-mix(in srgb, var(--fc) 16%, transparent); max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
   .ft-count {
     font-size: 10px; font-variant-numeric: tabular-nums;
     background: var(--bg-input); color: var(--fg-dim);
@@ -1626,6 +1668,23 @@
   }
   .chat-time { font-size: 11.5px; color: var(--fg-dim); flex-shrink: 0; font-variant-numeric: tabular-nums; }
   .chat-item.active .chat-time { color: var(--accent); }
+  /* Who wrote the last message in a group (Telegram). */
+  .from-prefix { color: var(--fg); font-weight: 600; flex-shrink: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
+  .pv-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .type-ic { display: inline-grid; place-items: center; width: 15px; height: 15px; flex-shrink: 0; color: var(--fg-muted); margin-right: 1px; }
+  .type-ic svg { width: 15px; height: 15px; }
+  .chat-item.active .type-ic { color: currentColor; }
+  /* Three lines (Settings → Appearance → Chat list): a bigger avatar, the
+     sender on a line of its own, two lines of text. */
+  .list.lines3 .chat-item { grid-template-columns: 54px 1fr; padding-top: 9px; padding-bottom: 9px; }
+  .list.lines3 .chat-item .avatar.sz-44 { width: 54px; height: 54px; font-size: 20px; }
+  .list.lines3 .chat-row-2 { align-items: flex-start; }
+  .list.lines3 .chat-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; white-space: normal; line-height: 1.32; overflow-wrap: anywhere; }
+  .list.lines3 .chat-preview .from-prefix { display: block; max-width: none; white-space: nowrap; }
+  .list.lines3 .chat-preview .from-prefix i { display: none; }
+  .list.lines3 .chat-preview:has(.from-prefix) { -webkit-line-clamp: 2; }
+  .list.lines3 .chat-badge, .list.lines3 .pin-ic { margin-top: 2px; }
+  .from-prefix i { font-style: normal; }
   .chat-row-2 {
     display: flex;
     align-items: center;
@@ -1805,6 +1864,8 @@
     .chats { padding: 4px 6px calc(68px + env(safe-area-inset-bottom, 0px)); }
     .chat-item { grid-template-columns: 48px 1fr; gap: 12px; padding: 7px 10px; border-radius: calc(16px * var(--rk, 1)); }
     .chat-item .avatar.sz-44 { width: 48px; height: 48px; font-size: 18px; }
+    .list.lines3 .chat-item { grid-template-columns: 58px 1fr; padding-top: 8px; padding-bottom: 8px; }
+    .list.lines3 .chat-item .avatar.sz-44 { width: 58px; height: 58px; font-size: 21px; }
     .chat-item.active { background: transparent; width: 100%; margin-right: 0; border-radius: calc(16px * var(--rk, 1)); }
     .chat-item.active::before, .chat-item.active::after { display: none; }
     .chat-item.active .chat-time { color: var(--fg-dim); }

@@ -5,6 +5,7 @@
 
 <script lang="ts">
   import Select from "./Select.svelte";
+  import { chatLines } from "../listLook";
   import { IS_MOBILE, IS_DESKTOP } from "../platform";
   import { GUIDE } from "../errorCodes";
   import { meetOpen } from "./MeetSheet.svelte";
@@ -1328,6 +1329,12 @@
           <span class="row-label">{$t("Density")}</span>
           <SegFit label={$t("Density")} value={$settings.density} onpick={(d) => setDensity(d)}
             options={(["comfortable", "compact"] as const).map((d) => ({ id: d, label: $t(d === "compact" ? "Compact" : "Comfortable") }))} />
+        </div>
+
+        <div class="row">
+          <span class="row-label">{$t("Chat list")}</span>
+          <SegFit label={$t("Chat list")} value={String($chatLines)} onpick={(v) => chatLines.set(v === "3" ? 3 : 2)}
+            options={[{ id: "2", label: $t("Two lines") }, { id: "3", label: $t("Three lines") }]} />
         </div>
 
         <div class="row">

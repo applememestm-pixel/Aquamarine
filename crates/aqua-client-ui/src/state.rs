@@ -46,6 +46,9 @@ pub struct ChatSummary {
     pub preview: String,
     pub preview_is_typing: bool,
     pub preview_by_me: bool,
+    /// Groups: who wrote the last message (shown above it in the list, like Telegram).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_from: Option<String>,
     pub has_lock: bool,
     pub time: String,
     pub unread: u32,
@@ -790,7 +793,7 @@ pub fn group_summary(g: &Group, preview: &str) -> ChatSummary {
     let letter = g.title.chars().next()
         .map(|c| c.to_uppercase().next().unwrap_or('#').to_string())
         .unwrap_or_else(|| "#".into());
-    ChatSummary {
+    ChatSummary { preview_from: None,
         id: g.id.clone(),
         name: g.title.clone(),
         letter,
@@ -940,7 +943,7 @@ impl AppState {
                 .last()
                 .map(|m| (one_line_preview(&m.kind), m.time.clone()))
                 .unwrap_or_else(|| ("Note to self — only you see this".into(), "".into()));
-            let summary = ChatSummary {
+            let summary = ChatSummary { preview_from: None,
                 id: SAVED_MESSAGES_ID.into(),
                 name: "Saved Messages".into(),
                 letter: "☁".into(),
@@ -1372,7 +1375,7 @@ pub fn hex_fingerprint_from(dh_pub: &[u8; 32]) -> String {
 
 pub fn summary_for(peer_id: &str, preview: &str, by_me: bool, typing: bool) -> ChatSummary {
     let (letter, gradient) = gradient_for(peer_id);
-    ChatSummary {
+    ChatSummary { preview_from: None,
         id: peer_id.into(),
         name: peer_id.into(),
         letter,

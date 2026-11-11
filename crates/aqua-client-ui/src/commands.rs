@@ -69,7 +69,15 @@ pub fn list_chats(state: State<'_, StdMutex<AppState>>) -> Result<Vec<ChatSummar
         // Never a chat with myself: that's Saved Messages. One showed up on a
         // second device as "vpst" (a copy from my other device addressed to me).
         .filter(|id| me.is_empty() || **id != me)
-        .filter_map(|id| s.chats.get(id).map(|c| c.summary.clone()))
+        .filter_map(|id| s.chats.get(id).map(|c| {
+            let mut sum = c.summary.clone();
+            // Groups: who wrote the last message, from the history itself
+            // (deletes / timers recompute the preview without it).
+            if id.starts_with("grp_") && !sum.preview_by_me && !sum.preview_is_typing {
+                sum.preview_from = c.messages.last().map(|m| m.from.clone()).filter(|f| !f.is_empty() && f != "system" && *f != me);
+            }
+            sum
+        }))
         .collect())
 }
 
@@ -2975,6 +2983,7 @@ pub async fn group_send(
         if let Some(book) = s.chats.get_mut(&gid) {
             book.summary.preview = preview_for(&msg.kind);
             book.summary.preview_by_me = true;
+            book.summary.preview_from = None;
             book.summary.time = msg.time.clone();
             book.messages.push(msg);
         }
@@ -3283,6 +3292,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                     // Posted from another device of mine: it's my message.
                     let mine = s_me.as_deref() == Some(author.as_str());
                     book.summary.preview_by_me = mine;
+                    book.summary.preview_from = if mine { None } else { Some(author.clone()) };
                     book.summary.time = time.clone();
                     let is_active = false; // UI decides unread via its own active id
                     if !is_active && !mine { book.summary.unread += 1; }
@@ -3523,7 +3533,7 @@ async fn on_incoming_plaintext(app: &AppHandle, from: String, text: String) {
         is_new_chat = !s.chats.contains_key(&from);
         if is_new_chat {
             let (letter, gradient) = gradient_for(&from);
-            let summary = ChatSummary {
+            let summary = ChatSummary { preview_from: None,
                 id: from.clone(),
                 name: from.clone(),
                 letter, gradient,
@@ -3684,7 +3694,7 @@ async fn on_incoming_initial(
         is_new_chat = !s.chats.contains_key(&from);
         if is_new_chat {
             let (letter, gradient) = gradient_for(&from);
-            let summary = ChatSummary {
+            let summary = ChatSummary { preview_from: None,
                 id: from.clone(),
                 name: from.clone(),
                 letter, gradient,
@@ -4428,7 +4438,7 @@ fn reply_note(me: &str, author: &str, group: &str, inner: &str) -> Option<String
 fn push_replies(s: &mut AppState, text: String, time: &str) {
     use crate::state::REPLIES_ID;
     if !s.chats.contains_key(REPLIES_ID) {
-        let summary = ChatSummary {
+        let summary = ChatSummary { preview_from: None,
             id: REPLIES_ID.into(),
             name: "Replies".into(),
             letter: "↩".into(),
