@@ -50,6 +50,8 @@ export interface Profile {
   card_g?: number;
   /** An emoji repeated over the banner in a soft pattern (Telegram-style). */
   pattern?: string;
+  /** My name and my quotes' colour in chats (Telegram's profile colour); "" = automatic. */
+  name_color?: string;
   /** Discord-style server tag I'm wearing (from a group I'm in). */
   clan?: { text: string; badge: string; color: string; gid?: string; title?: string; owner?: string };
 }

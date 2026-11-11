@@ -2715,4 +2715,7 @@ export const RU: Record<string, string> = {
   "Built-in browser": "Встроенный браузер",
   "Links open in a window of the app, not in your browser. The page gets no access to the app.": "Ссылки открываются в окне приложения, а не в браузере. Странице не даётся доступ к приложению.",
   "New server": "Новый сервер",
+  "Name and reply colour": "Цвет имени и ответов",
+  "Automatic": "Автоматически",
+  "Reply to your message looks like this": "Так выглядит ответ на ваше сообщение",
 };

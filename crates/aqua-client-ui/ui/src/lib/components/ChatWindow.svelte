@@ -82,7 +82,7 @@
   import { events } from "../tauri";
   import { pollStates, castVote, retractVote, applyRemoteVote, closePoll, viewPoll, ME as POLL_ME, type PollView } from "../polls";
   import { peerPresence, setPeerPresence, broadcastPresenceTo, activityVerb, chatOnline, peerStatus, presenceNow } from "../presence";
-  import { notePeerProfileVersion, avatars, clans, peerCards } from "../people";
+  import { notePeerProfileVersion, avatars, clans, peerCards, nameColorOf } from "../people";
   import { profile as myProfile } from "../profile";
   import { isPublic } from "../privacy";
   import { fwdHeader, type ForwardAuthor } from "./ForwardPicker.svelte";
@@ -1465,6 +1465,9 @@
   /** Telegram's seven name colours, picked by the name. */
   const PEER_COLORS = ["#FF6B6B", "#FFA94D", "#B197FC", "#51CF66", "#3BC9DB", "#4DABF7", "#F783AC"];
   function peerColor(name: string): string {
+    // Their own pick (profile colour, Telegram), mine from my profile.
+    const own = name === myUsername ? ($myProfile.name_color ?? "") : nameColorOf($peerCards, name);
+    if (/^#[0-9a-f]{6}$/i.test(own)) return own;
     let h = 0;
     for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) | 0;
     return PEER_COLORS[Math.abs(h) % PEER_COLORS.length];
@@ -3625,7 +3628,7 @@
               {#if m.first && !m.outgoing && $activeChat}
                 {@const mt = isGroup ? tagOf(activeGroup, m.from) : null}
                 <div class="msg-header">
-                  <span class="msg-author" style:color={isGroup ? roleColor(activeGroup, m.from) || null : null}>{isGroup ? m.from : $activeChat.name.split(' ')[0]}</span>
+                  <span class="msg-author" style:color={isGroup ? roleColor(activeGroup, m.from) || peerColor(m.from) : null}>{isGroup ? m.from : $activeChat.name.split(' ')[0]}</span>
                   {#if $clans[m.from]}<ClanTag tag={$clans[m.from]} />{/if}
                   {#if mt?.tag}<span class="member-tag" class:admin={mt.admin}>{mt.tag}</span>{/if}
                   {#if mt?.title}<span class="admin-title">{mt.title}</span>{/if}

@@ -44,6 +44,7 @@
   import EmojiStatus from "./EmojiStatus.svelte";
   import { reactionPack, emojiPacks, loadEmojiPacks } from "../reactionPack";
   import SharedMedia from "./SharedMedia.svelte";
+  import { NAME_COLORS } from "../people";
   import { averageColor, mixHex, patternRingUrl, PATTERN_EMOJI, cardLook, shellColor, CARD_SWATCHES, CARD_INTENSITY, CARD_LENGTH } from "../cardStyle";
   import EmojiPick from "./EmojiPick.svelte";
   import { userQr } from "../qr";
@@ -562,6 +563,19 @@
             <label class="slider"><span>{$t("Gradient length")}</span>
               <input type="range" min="0" max="100" value={draft.card_g ?? CARD_LENGTH} oninput={(e) => draft && (draft = { ...draft, card_g: +(e.target as HTMLInputElement).value })} />
               <b>{(draft.card_g ?? CARD_LENGTH) === 0 ? $t("solid") : `${draft.card_g ?? CARD_LENGTH}%`}</b></label>
+          </div>
+          <div class="field">
+            <span>{$t("Name and reply colour")}</span>
+            <div class="nc-row">
+              <button class="nc" class:on={!draft.name_color} onclick={() => draft && (draft = { ...draft, name_color: "" })} title={$t("Automatic")} aria-label={$t("Automatic")}>A</button>
+              {#each NAME_COLORS as c (c)}
+                <button class="nc" class:on={draft.name_color?.toLowerCase() === c.toLowerCase()} style:--nc={c} onclick={() => draft && (draft = { ...draft, name_color: c })} aria-label={c}></button>
+              {/each}
+            </div>
+            <div class="nc-prev" style:--nc={draft.name_color || "var(--accent)"}>
+              <b>{draft.display_name || $t("You")}</b>
+              <span class="nc-q"><b>{draft.display_name || $t("You")}</b><i>{$t("Reply to your message looks like this")}</i></span>
+            </div>
           </div>
           <div class="field">
             <span>{$t("Banner pattern")}</span>
@@ -1166,6 +1180,15 @@
   .slider b { font-size: 12px; color: var(--fg-muted); text-align: right; font-variant-numeric: tabular-nums; }
   .slider input[type="range"] { width: 100%; accent-color: var(--accent); }
   .sheet.light .slider input[type="range"] { accent-color: #15171d; }
+  .nc-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .nc { width: 28px; height: 28px; border-radius: 50%; border: none; cursor: pointer; background: var(--nc, var(--bg-input)); color: var(--fg-muted); font: 700 12px var(--font-ui, inherit);
+    box-shadow: 0 0 0 2px var(--card-bg, var(--bg-shell)); transition: transform .15s, box-shadow .15s; }
+  .nc.on { box-shadow: 0 0 0 2px var(--card-bg, var(--bg-shell)), 0 0 0 4px var(--nc, var(--fg-muted)); transform: scale(1.05); }
+  .nc-prev { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-input); }
+  .nc-prev > b { color: var(--nc); font-size: 13.5px; }
+  .nc-q { display: flex; flex-direction: column; padding: 4px 8px; border-left: 3px solid var(--nc); border-radius: calc(6px * var(--rk, 1)); background: color-mix(in srgb, var(--nc) 14%, transparent); font-size: 12.5px; }
+  .nc-q b { color: var(--nc); }
+  .nc-q i { font-style: normal; color: var(--fg-muted); }
   /* Banner pattern */
   .pat-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; }
   .pat { aspect-ratio: 1; min-width: 0; border-radius: calc(10px * var(--rk, 1)); border: 1px solid var(--border); background: var(--bg-input);
