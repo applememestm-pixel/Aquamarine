@@ -45,8 +45,17 @@
   import { openNewGroup } from "./NewGroupWizard.svelte";
 
   let plusMenuOpen = $state(false);
+  /** Phones: the pencil at the bottom (Telegram) unfolds into what to make. */
+  let fabOpen = $state(false);
+  $effect(() => { if (fabOpen) return onBack(() => (fabOpen = false)); });
+  function fabPick(k: "chat" | "group" | "supergroup" | "channel") {
+    fabOpen = false;
+    if (k === "chat") openNewChatDialog(); else openNewGroup(k);
+  }
   import { contacts, saveContact, displayName } from "../contacts";
   import { chatLines } from "../listLook";
+  import { botMenus } from "../botMenus";
+  import { openMiniApp } from "./MiniApp.svelte";
   import { api } from "../tauri";
   import { blocked, setBlocked } from "../ghost";
   import { chatLocks, unlocked, lockNowChat } from "../chatLocks";
@@ -773,6 +782,7 @@
         <div class="plus-pop" role="menu" tabindex="-1">
           <button onclick={() => { plusMenuOpen = false; openNewChatDialog(); }}>{$t("New chat")}</button>
           <button onclick={() => { plusMenuOpen = false; openNewGroup("group"); }}>{$t("New group")}</button>
+          <button onclick={() => { plusMenuOpen = false; openNewGroup("supergroup"); }}>{$t("New server")}</button>
           <button onclick={() => { plusMenuOpen = false; openNewGroup("channel"); }}>{$t("New channel")}</button>
           {#if $chats.some((c) => c.unread > 0)}<button onclick={() => { plusMenuOpen = false; markAllRead(); }}>{$t("Mark all as read")}</button>{/if}
         </div>
@@ -997,6 +1007,13 @@
                 {#if c.preview_by_me}<span class="me-prefix">{$t("you:")}</span>{:else if c.preview_from && !c.channel}<span class="from-prefix">{displayName(c.preview_from, c.preview_from)}<i>:</i></span>{/if}<span class="pv-t">{previewText(c.preview)}</span>
               </span>
             {/if}
+            {#if $botMenus[c.id] && !lk}
+              <!-- A bot's mini app, straight from the list (Telegram's "Open"). -->
+              <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+              <span class="bot-open" role="button" tabindex="-1" title={$botMenus[c.id].url}
+                onpointerdown={(e) => e.stopPropagation()}
+                onclick={(e) => { e.stopPropagation(); openMiniApp({ bot: c.id, url: $botMenus[c.id].url, from: "menu" }); }}>{$botMenus[c.id].text || $t("Open")}</span>
+            {/if}
             {#if c.unread > 0 && c.id !== $activeId}
               {#key c.unread}<span class="chat-badge" class:muted={c.channel || $mutedChats.has(c.id)} in:scaleIn={{ start: 0.4, duration: 260, easing: backOut }}>{c.unread}</span>{/key}
             {:else if $markedUnread.has(c.id) && c.id !== $activeId}
@@ -1017,6 +1034,28 @@
       </button>
     {/each}
   </div>
+
+  {#if IS_MOBILE && !searchMode && !sel.length}
+    {#if fabOpen}
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+      <div class="fab-veil" onclick={() => (fabOpen = false)}></div>
+    {/if}
+    <div class="fab-wrap" class:open={fabOpen}>
+      {#if fabOpen}
+        <div class="fab-items" role="menu">
+          {#each [["channel", "New channel"], ["supergroup", "New server"], ["group", "New group"], ["chat", "New chat"]] as [k, label], i (k)}
+            <button class="fab-item" role="menuitem" style:--i={3 - i} onclick={() => fabPick(k as "chat" | "group" | "supergroup" | "channel")}>
+              <span>{$t(label)}</span>
+              <i>{#if k === "chat"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>{:else if k === "group"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 19c.6-3.2 3-5 6-5s5.4 1.8 6 5"/><path d="M16 5.2a3 3 0 0 1 0 5.6M18 14.2c1.6.6 2.7 2.2 3 4.8"/></svg>{:else if k === "supergroup"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M8 9h8M8 13h5M3 8h0"/></svg>{:else}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v4a1 1 0 0 0 1 1h3l6 4V5L7 9H4a1 1 0 0 0-1 1z"/><path d="M17 8.5a5 5 0 0 1 0 7"/></svg>{/if}</i>
+            </button>
+          {/each}
+        </div>
+      {/if}
+      <button class="fab" onclick={() => (fabOpen = !fabOpen)} aria-label={$t("New chat, group or channel")} aria-expanded={fabOpen}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+      </button>
+    </div>
+  {/if}
 
   {#if ctx}
     {@const cid = ctx.id}
@@ -1593,6 +1632,29 @@
   .folder-tab:hover { color: var(--fg); background: var(--bg-hover); }
   .folder-tab.active { color: var(--accent); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 25%, transparent); }
   .ft-emoji { margin-right: 4px; }
+  /* Phones: the pencil (Telegram) above the bottom bar; it unfolds upwards. */
+  .fab-wrap { position: fixed; right: 16px; bottom: calc(92px + env(safe-area-inset-bottom, 0px)); z-index: 60; display: flex; flex-direction: column; align-items: flex-end; gap: 12px; }
+  :global(body.chat-open) .fab-wrap, :global(body.chat-open) .fab-veil { display: none; }
+  .fab { width: 56px; height: 56px; border-radius: calc(18px * var(--rk, 1)); border: none; display: grid; place-items: center; color: #06070c;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 12px 28px -10px var(--accent-glow), 0 2px 6px rgba(0,0,0,.3);
+    transition: transform .25s cubic-bezier(.3,1.4,.5,1), border-radius .25s ease; }
+  .fab svg { width: 24px; height: 24px; transition: transform .25s ease; }
+  .fab:active { transform: scale(.92); }
+  .fab-wrap.open .fab svg { transform: rotate(-45deg); }
+  .fab-veil { position: fixed; inset: 0; z-index: 59; background: rgba(0,0,0,.35); animation: fab-veil .2s ease; }
+  @keyframes fab-veil { from { opacity: 0; } }
+  .fab-items { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+  .fab-item { display: flex; align-items: center; gap: 10px; border: none; background: transparent; padding: 0; color: var(--fg); font: 600 14.5px var(--font-ui, inherit);
+    animation: fab-in .26s cubic-bezier(.22,1.2,.36,1) both; animation-delay: calc(var(--i) * 35ms); }
+  .fab-item span { padding: 7px 12px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-surface); border: 1px solid var(--border-strong); box-shadow: 0 8px 20px -10px rgba(0,0,0,.7); }
+  .fab-item i { width: 46px; height: 46px; border-radius: calc(15px * var(--rk, 1)); display: grid; place-items: center; background: var(--bg-surface-2); color: var(--accent); border: 1px solid var(--border-strong); margin-right: 5px; }
+  .fab-item i svg { width: 22px; height: 22px; }
+  .fab-item:active i { transform: scale(.92); }
+  @keyframes fab-in { from { opacity: 0; transform: translateY(14px) scale(.85); } }
+  .bot-open { flex-shrink: 0; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 3px 11px; border-radius: calc(12px * var(--rk, 1));
+    background: var(--accent); color: #06070c; font-size: 12px; font-weight: 700; cursor: pointer; transition: transform .12s ease, filter .12s ease; }
+  .bot-open:hover { filter: brightness(1.08); }
+  .bot-open:active { transform: scale(.94); }
   .ftags { display: flex; gap: 4px; margin-top: 3px; min-width: 0; overflow: hidden; }
   .ftag { font-size: calc(10.5px * var(--font-scale, 1)); font-weight: 700; line-height: 1; padding: 2px 6px 3px; border-radius: calc(5px * var(--rk, 1)); white-space: nowrap;
     color: var(--fc); background: color-mix(in srgb, var(--fc) 16%, transparent); max-width: 110px; overflow: hidden; text-overflow: ellipsis; }

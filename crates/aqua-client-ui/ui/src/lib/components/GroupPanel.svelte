@@ -169,27 +169,10 @@
     await commit((g) => { g[kind] = null; }, kind === "photo" ? "removed the photo" : "removed the banner");
   }
 
-  // ---- group ⇄ supergroup ----------------------------------------------
+  // A group's kind is chosen when it's made (group / server / channel) and
+  // isn't switched afterwards; a group that outgrows 200 members becomes a
+  // server by itself, like Telegram's supergroups.
   const BASIC_LIMIT = 200;
-  async function setKind(k: "group" | "supergroup") {
-    if (!group || group.kind === k || !owner) return;
-    if (k === "group") {
-      if (group.members.length > BASIC_LIMIT) { showToast(tr("A group can have at most 200 members — this one is bigger"), 5000); return; }
-      const ok = await askConfirm({
-        title: tr("Turn into a regular group?"),
-        text: tr("Regular groups are private and small: the public link, server tag, slow mode, hidden member list and admin log are switched off. Settings are kept and come back if you upgrade again."),
-        ok: tr("Convert"),
-      });
-      if (!ok) return;
-      await commit((g) => { g.kind = "group"; g.settings.is_public = false; }, "converted the server to a group");
-    } else {
-      await commit((g) => {
-        g.kind = "supergroup";
-        if (!(g.rooms ?? []).length) { S(g).rooms_enabled = true; g.rooms = DEFAULT_ROOMS.map((r) => ({ ...r })); }
-      }, "turned the group into a server");
-      showToast(tr("Now a server: rooms like Discord channels, public link, server tag, slow mode and admin log"), 5000);
-    }
-  }
 
   // ---- rooms (Discord-style channels) -----------------------------------
   let roomList = $derived<Room[]>(group?.rooms ?? []);
@@ -404,7 +387,7 @@
     const u = addUser.trim().toLowerCase().replace(/^@/, "");
     if (!u || !group) return;
     if (group.members.some((m) => m.username === u)) { showToast(tr("Already here")); return; }
-    if (basic && group.members.length >= BASIC_LIMIT) { showToast(tr("A group can have at most 200 members — turn it into a server in Edit → Group type"), 6000); return; }
+    const grow = basic && group.members.length >= BASIC_LIMIT;
     if (get(peerPresence)[u]?.ni) {
       try { await navigator.clipboard.writeText(shareLink(group)); } catch { /* ignore */ }
       showToast(`@${u} only lets certain people add them to groups — the invite link is copied, send it to them`, 7000);
@@ -412,6 +395,7 @@
     }
     addUser = "";
     await commit((g) => {
+      if (grow) { g.kind = "supergroup"; if (!(g.rooms ?? []).length) { S(g).rooms_enabled = true; g.rooms = DEFAULT_ROOMS.map((r) => ({ ...r })); } }
       g.members.push({ username: u, role: "member" });
       g.banned = (g.banned ?? []).filter((b) => b !== u);
       g.requests = (g.requests ?? []).filter((r) => r.username !== u);
@@ -765,18 +749,6 @@
           </div>
           {#if can(group, me, "change_info")}<button class="btn wide" onclick={saveInfo} disabled={busy}>{$t("Save")}</button>{/if}
         </div>
-        {#if !isChannel && owner}
-          <div class="card">
-            <div class="ct">{$t("Chat type")}</div>
-            <div class="seg">
-              <button class:active={basic} onclick={() => setKind("group")} disabled={busy}>{$t("Group")}</button>
-              <button class:active={!basic} onclick={() => setKind("supergroup")} disabled={busy}>{$t("Server")}</button>
-            </div>
-            <div class="note">{$t(basic
-              ? "Group: private, up to 200 members. Upgrade for a public link, server tag, slow mode, hidden members and the admin log."
-              : "Server: up to 200 000 members, rooms, public link, server tag, slow mode, hidden members and the admin log.")}</div>
-          </div>
-        {/if}
         <div class="card">
           {#if !basic}{@render row(isChannel ? "Channel type" : "Group type", group.settings.is_public ? "Public" : "Private", () => go("type"), "#007AFF")}{/if}
           {#if !isChannel}{@render row("Permissions", `${PERM_ROWS.filter((p) => isOn(group, p.key)).length}/${PERM_ROWS.length}`, () => go("perms"), "#34C759")}{/if}

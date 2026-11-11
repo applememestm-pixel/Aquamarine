@@ -93,6 +93,7 @@
   import { TTL_PRESETS, ttlLabel, ttlShort, ttlNote } from "../ttl";
   import { parseBotText, type BotKb, type KbButton } from "../botkb";
   import { openMiniApp } from "./MiniApp.svelte";
+  import { rememberBotMenu } from "../botMenus";
   import TrackCardView from "./TrackCard.svelte";
   import { musicOn, openMusic, parseTrack } from "../music";
   import { parseSpecial, newId as plannerId } from "../planner";
@@ -385,7 +386,7 @@
   // gallery, no saving, no forwarding, screenshots blocked where the system
   // allows — then wiped from this device. ----
   let onceView = $state<{ url: string; video: boolean; chat: string; id: string } | null>(null);
-  async function openOnce(m: ChatMessage, content: { saved_at: string | null; mime: string | null; name: string }) {
+  async function openOnce(m: { id: string; outgoing: boolean }, content: { saved_at: string | null; mime: string | null; name: string }) {
     const chat = $activeChat;
     if (!chat || m.outgoing) return;
     let path = content.saved_at;
@@ -1643,7 +1644,9 @@
     botMenu = null;
     if (!id || !isBotChat) return;
     api.webappMenu(id).then((m) => {
-      if ($activeChat?.id === id && m?.type === "web_app" && m.web_app?.url) botMenu = { text: m.text || tr("Open"), url: m.web_app.url };
+      const menu = m?.type === "web_app" && m.web_app?.url && /^https:\/\//.test(m.web_app.url) ? { text: m.text || tr("Open"), url: m.web_app.url } : null;
+      rememberBotMenu(id, menu);
+      if ($activeChat?.id === id && menu) botMenu = menu;
     }).catch(() => {});
   });
   async function pressKb(b: KbButton, kb: BotKb) {

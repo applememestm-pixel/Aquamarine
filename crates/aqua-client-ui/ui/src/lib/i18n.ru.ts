@@ -2714,4 +2714,5 @@ export const RU: Record<string, string> = {
   "Could not open": "Не удалось открыть",
   "Built-in browser": "Встроенный браузер",
   "Links open in a window of the app, not in your browser. The page gets no access to the app.": "Ссылки открываются в окне приложения, а не в браузере. Странице не даётся доступ к приложению.",
+  "New server": "Новый сервер",
 };

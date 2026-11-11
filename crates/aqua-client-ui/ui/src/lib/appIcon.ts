@@ -76,7 +76,7 @@ async function syncShortcuts(url: string) {
     if (!px) return;
     const c = document.createElement("canvas");
     c.width = c.height = 256;
-    c.getContext("2d")!.putImageData(new ImageData(px, 256, 256), 0, 0);
+    c.getContext("2d")!.putImageData(new ImageData(new Uint8ClampedArray(px), 256, 256), 0, 0);
     const blob = await new Promise<Blob | null>((r) => c.toBlob(r, "image/png"));
     if (!blob) return;
     png = Array.from(new Uint8Array(await blob.arrayBuffer()));
