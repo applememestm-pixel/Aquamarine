@@ -212,6 +212,7 @@ pub fn run() -> Result<()> {
             personal::save_console_bot,
             personal::save_temp_file,
             personal::set_window_icon,
+            personal::set_shortcut_icon,
             personal::save_wallpaper,
             personal::games_search,
             personal::game_icon,

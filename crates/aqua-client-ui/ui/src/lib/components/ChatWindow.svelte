@@ -4667,7 +4667,7 @@
     gap: 6px;
   }
   .peer-status .dot {
-    width: 6px; height: 6px; border-radius: 50%;
+    width: 6px; height: 6px; border-radius: 50%; margin-right: 5px; vertical-align: 1px;
     background: var(--online);
     box-shadow: 0 0 6px var(--online);
     display: inline-block;
@@ -4731,10 +4731,10 @@
     font-variant-numeric: tabular-nums;
     color: var(--fg-muted);
   }
+  /* The @handle in the UI font (the mono one looked squeezed next to the name). */
   .peer-status .username {
-    font-family: var(--font-mono);
     color: var(--fg-dim);
-    font-size: 11.5px;
+    font-size: inherit;
   }
   .icon-btn {
     width: 34px; height: 34px;
