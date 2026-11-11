@@ -1635,11 +1635,16 @@
       {#if IS_MOBILE}
       <section class="group">
         <div class="label">{$t("Glass panels")}</div>
-        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, glass: !x.glass }))}>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, glass: !(x.glass ?? true) }))}>
           <div class="tr-text"><div class="tr-title">{$t("See-through floating panels")}</div><div class="tr-sub">{$t("The chat header, the message field and the tab bar float over the chat, like in the new Telegram")}</div></div>
-          <span class="switch" class:on={!!$settings.glass}></span>
+          <span class="switch" class:on={$settings.glass ?? true}></span>
         </button>
-        {#if $settings.glass}
+        <div class="row">
+          <span class="row-label">{$t("Panel shape")}</span>
+          <SegFit label={$t("Panel shape")} value={$settings.panelShape ?? "round"} onpick={(v) => settings.update((x) => ({ ...x, panelShape: v }))}
+            options={[{ id: "round" as const, label: $t("Rounded") }, { id: "square" as const, label: $t("Square") }]} />
+        </div>
+        {#if $settings.glass ?? true}
           {@const ga = $settings.glassAlpha ?? 55}
           <div class="ava-row">
             <div class="ava-ctl">

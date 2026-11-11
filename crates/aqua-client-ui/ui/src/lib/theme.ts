@@ -228,6 +228,8 @@ export interface Settings {
   bubbleOut?: string;
   bubbleIn?: string;
   glass?: boolean;
+  /** Floating panels' shape (phones): rounded pills or nearly square. */
+  panelShape?: "round" | "square";
   glassAlpha?: number;
   /** Settings: show the sections for experienced users (network, own
    *  server, ghost mode, bots…). Off: only what everyone needs. */
@@ -483,8 +485,11 @@ function apply(s: Settings) {
   // Glass panels: opacity of the panel fill and a blur that fades with it.
   // Glass panels are a phone thing: a PC never turns them on, even when the
   // setting came over from a phone (backup / settings sync).
-  root.classList.toggle("glass", !!s.glass && IS_MOBILE);
-  if (s.glass) {
+  // On by default (one look for header, message field and tab bar); off only when switched off.
+  const glass = s.glass ?? true;
+  root.classList.toggle("glass", glass && IS_MOBILE);
+  root.classList.toggle("panels-square", s.panelShape === "square");
+  if (glass) {
     const a = Math.max(0, Math.min(100, s.glassAlpha ?? 55));
     root.style.setProperty("--glass-a", `${a}%`);
     root.style.setProperty("--glass-blur", a === 0 ? "0px" : `${Math.round(6 + a * 0.18)}px`);

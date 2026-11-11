@@ -449,3 +449,13 @@ html.ps-particles body::before, html.ps-particles body::after { animation: none 
 
 /* Our middle-button auto-scroll (main.ts): only the cursor shows it. */
 html.aq-autoscroll, html.aq-autoscroll * { cursor: all-scroll !important; user-select: none !important; }
+
+/* Press feedback everywhere (the send button already had it): buttons give
+   a little under the finger and spring back. The `scale` property adds to
+   a button's own transform (centring, rotation) instead of replacing it. */
+@media (pointer: coarse) {
+  button:not(:disabled):not(.no-press):active { scale: .94; filter: brightness(1.12); }
+}
+@media (pointer: fine) {
+  button:not(:disabled):not(.no-press):active { filter: brightness(1.12); }
+}

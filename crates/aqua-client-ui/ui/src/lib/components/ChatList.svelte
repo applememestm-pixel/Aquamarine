@@ -49,7 +49,6 @@
   let fabOpen = $state(false);
   /** "My story" tapped with none up: camera or gallery. */
   let storyAdd = $state(false);
-  const showStories = $derived(!compact && !searchMode && !showArchive && ($storyOwners.length > 0 || $myLiveStories.length > 0));
   function storyUsers(): string[] { return [...($myLiveStories.length ? [""] : []), ...$storyOwners.map((o) => o.user)]; }
   function tapMine() { if ($myLiveStories.length) openStories(storyUsers(), ""); else storyAdd = !storyAdd; }
   $effect(() => { if (fabOpen) return onBack(() => (fabOpen = false)); });
@@ -60,6 +59,7 @@
   import { contacts, saveContact, displayName } from "../contacts";
   import { chatLines } from "../listLook";
   import { botMenus } from "../botMenus";
+  import { settings as themeSettings } from "../theme";
   import { meCardOpen } from "./MeCard.svelte";
   import { storyOwners, myLiveStories, storyRing, addStory } from "../storyFeed";
   import { openStories } from "../stories";
@@ -323,6 +323,7 @@
   let lastFolder = $activeFolder;
   $effect(() => { const f = $activeFolder; if (f !== lastFolder) { lastFolder = f; if (inServer) compactPinned = true; } });
   $effect(() => { document.documentElement.classList.toggle("list-compact", compact); });
+  const showStories = $derived(!compact && !searchMode && !showArchive && ($storyOwners.length > 0 || $myLiveStories.length > 0));
 
   // ---- Resizable list (drag the right edge) ----
   const LW_KEY = "aqua.listWidth";
@@ -793,6 +794,12 @@
           <button onclick={() => { plusMenuOpen = false; openNewGroup("group"); }}>{$t("New group")}</button>
           <button onclick={() => { plusMenuOpen = false; openNewGroup("supergroup"); }}>{$t("New server")}</button>
           <button onclick={() => { plusMenuOpen = false; void addStory(IS_MOBILE ? "camera" : "gallery"); }}>{$t("Add a story")}</button>
+          {#if IS_MOBILE}
+            <!-- Telegram's ⋮: Saved Messages, day / night, the server. -->
+            <button onclick={() => { plusMenuOpen = false; void selectChat("__saved__"); }}>{$t("Saved Messages")}</button>
+            <button onclick={() => { plusMenuOpen = false; themeSettings.update((x) => ({ ...x, mode: x.mode === "light" ? "dark" : "light" })); }}>{$t($themeSettings.mode === "light" ? "Night mode" : "Day mode")}</button>
+            <button onclick={() => { plusMenuOpen = false; openServers(); }}>{$t("Server")}</button>
+          {/if}
           <button onclick={() => { plusMenuOpen = false; openNewGroup("channel"); }}>{$t("New channel")}</button>
           {#if $chats.some((c) => c.unread > 0)}<button onclick={() => { plusMenuOpen = false; markAllRead(); }}>{$t("Mark all as read")}</button>{/if}
         </div>

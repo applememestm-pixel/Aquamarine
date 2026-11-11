@@ -2753,4 +2753,8 @@ export const RU: Record<string, string> = {
   "Plugins and experiments": "Плагины и эксперименты",
   "Version, licences, links": "Версия, лицензии, ссылки",
   "Search settings": "Поиск по настройкам",
+  "Panel shape": "Форма панелей",
+  "Rounded": "Скруглённые",
+  "Night mode": "Ночной режим",
+  "Day mode": "Дневной режим",
 };

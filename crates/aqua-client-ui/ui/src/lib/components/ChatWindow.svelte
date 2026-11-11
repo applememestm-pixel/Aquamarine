@@ -1513,7 +1513,7 @@
   // reaches that far down with as much padding, so nothing hides behind. ----
   $effect(() => {
     const root = chatRoot;
-    if (!root || !phoneUI || !$settings.glass) { root?.style.removeProperty("--below-h"); root?.style.removeProperty("--above-h"); return; }
+    if (!root || !phoneUI || !($settings.glass ?? true)) { root?.style.removeProperty("--below-h"); root?.style.removeProperty("--above-h"); return; }
     let raf = 0;
     const measure = () => {
       cancelAnimationFrame(raf);
@@ -4881,6 +4881,10 @@
     :global(html.glass) .chat-header::before, :global(html.glass) .composer::before {
       border-radius: inherit; backdrop-filter: blur(var(--glass-blur, 12px)) saturate(1.5); -webkit-backdrop-filter: blur(var(--glass-blur, 12px)) saturate(1.5);
     }
+    /* Square panels (Appearance → Panel shape): same floating look, small corners. */
+    :global(html.glass.panels-square) .chat-header, :global(html.glass.panels-square) .composer { border-radius: calc(8px * var(--rk, 1)); }
+    :global(html.panels-square) .input-wrap { border-radius: calc(6px * var(--rk, 1)); }
+    :global(html.panels-square) .send-btn { border-radius: calc(8px * var(--rk, 1)); }
     :global(html.glass) .ap-dock .ap-items {
       background: color-mix(in srgb, var(--bg-surface-2, #1a1e29) var(--glass-a, 62%), transparent);
       backdrop-filter: blur(var(--glass-blur, 20px)) saturate(1.6); -webkit-backdrop-filter: blur(var(--glass-blur, 20px)) saturate(1.6);
