@@ -14,6 +14,8 @@ export const IS_IOS = /iphone|ipad|ipod/i.test(UA);
 export const IS_MOBILE = IS_ANDROID || IS_IOS;
 /** A computer (Windows, macOS, Linux). */
 export const IS_DESKTOP = !IS_MOBILE;
+/** Windows desktop (Bluetooth goes through the system wizard there). */
+export const IS_WINDOWS = IS_DESKTOP && /windows/i.test(UA);
 
 /** A keyboard-shortcut hint for a tooltip — nothing on phones. */
 export const kbd = (hint: string) => (IS_DESKTOP ? ` (${hint})` : "");

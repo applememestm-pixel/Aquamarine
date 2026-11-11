@@ -1144,7 +1144,7 @@
       text = original;
       replyTarget = rt;
       queueMicrotask(() => autoresize());
-      showToast(err, 5000);
+      showToast(tr(err), 6000);
     } else if (chat?.id.startsWith("grp_")) {
       armSlowMode(chat.id);
     }
@@ -2052,6 +2052,9 @@
   $effect(() => { if (selecting) return onBack(() => clearSelection()); });
   $effect(() => { if (menu.open) return onBack(() => closeMenu()); });
   $effect(() => { if (searchOpen) return onBack(() => closeSearch()); });
+  // The header menus (tools, calls, timer) are part of this chat: Back folds
+  // them, it doesn't leave the chat.
+  $effect(() => { if (toolsMenu || callMenu || ttlMenu) return onBack(() => { toolsMenu = false; callMenu = false; ttlMenu = false; }); });
 
   function selectedCount() { return selected.size; }
   let selMore = $state(false);
@@ -2991,6 +2994,19 @@
   // ---- Read receipts (chat-level "seen") ----
   let seenByPeer = $state<Record<string, boolean>>({});
   let peerSeen = $derived(seenByPeer[$activeChat?.id ?? ""] ?? false);
+  /** My messages followed by a message of theirs: they've seen those, even
+   *  with read receipts off on their side (a reply means "read"). */
+  let answeredIds = $derived.by(() => {
+    const out = new Set<string>();
+    const list = rows;
+    let answered = false;
+    for (let i = list.length - 1; i >= 0; i--) {
+      const m = list[i];
+      if (!m.outgoing) answered = true;
+      else if (answered) out.add(m.id);
+    }
+    return out;
+  });
 
   // Tell the peer we've seen their messages when we open/scroll a live
   // chat that has incoming messages.
@@ -3029,9 +3045,10 @@
   {#if m.meta?.edits?.length}<span class="mflag pen" role="img" aria-label={$t("edited")} title={$t("Earlier versions:") + "\n" + m.meta.edits.join("\n— ")}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>{/if}
 {/snippet}
 
-{#snippet statusTick(outgoing: boolean)}
+{#snippet statusTick(outgoing: boolean, id?: string)}
   {#if outgoing}
-    <span class="rr" class:read={peerSeen}>{@html peerSeen ? icons.checkDouble : icons.check}</span>
+    {@const rd = peerSeen || (id !== undefined && answeredIds.has(id))}
+    <span class="rr" class:read={rd}>{@html rd ? icons.checkDouble : icons.check}</span>
   {/if}
 {/snippet}
 
@@ -3579,7 +3596,7 @@
                     {/if}
                     <span class="sticker-meta">
                       {m.time}
-                      {@render statusTick(m.outgoing)}
+                      {@render statusTick(m.outgoing, m.id)}
                     </span>
                   </div>
                 {:else if rk === "gif" || rk === "image"}
@@ -3603,9 +3620,9 @@
                          the picture, or after the caption when there is one. -->
                     {#if content.caption}
                       <div class="media-caption"><Markup src={content.caption} resolveEmoji={(k) => emojiMap[k]} compact />
-                        <span class="bubble-meta inline-meta">{m.time}{@render statusTick(m.outgoing)}</span></div>
+                        <span class="bubble-meta inline-meta">{m.time}{@render statusTick(m.outgoing, m.id)}</span></div>
                     {:else}
-                      <span class="photo-meta">{m.time}{@render statusTick(m.outgoing)}</span>
+                      <span class="photo-meta">{m.time}{@render statusTick(m.outgoing, m.id)}</span>
                     {/if}
                   </div>
                 {:else if rk === "live"}
@@ -3620,9 +3637,9 @@
                     {/if}
                     {#if content.caption}
                       <div class="media-caption"><Markup src={content.caption} resolveEmoji={(k) => emojiMap[k]} compact />
-                        <span class="bubble-meta inline-meta">{m.time}{@render statusTick(m.outgoing)}</span></div>
+                        <span class="bubble-meta inline-meta">{m.time}{@render statusTick(m.outgoing, m.id)}</span></div>
                     {:else}
-                      <span class="photo-meta">{m.time}{@render statusTick(m.outgoing)}</span>
+                      <span class="photo-meta">{m.time}{@render statusTick(m.outgoing, m.id)}</span>
                     {/if}
                   </div>
                 {:else if rk === "circle"}
@@ -3638,7 +3655,7 @@
                     {/if}
                     <span class="sticker-meta">
                       {m.time}
-                      {@render statusTick(m.outgoing)}
+                      {@render statusTick(m.outgoing, m.id)}
                     </span>
                   </div>
                 {:else if rk === "voice" || rk === "audio"}
@@ -3664,7 +3681,7 @@
                         <span class="media-sub">{fmtSize(content.size)}</span>
                         <span class="bubble-meta inline-meta">
                           {m.time}
-                          {@render statusTick(m.outgoing)}
+                          {@render statusTick(m.outgoing, m.id)}
                         </span>
                       </div>
                     </div>
@@ -3690,7 +3707,7 @@
                       <span class="media-sub">{fmtSize(content.size)}</span>
                       <span class="bubble-meta inline-meta">
                         {m.time}
-                        {@render statusTick(m.outgoing)}
+                        {@render statusTick(m.outgoing, m.id)}
                       </span>
                     </div>
                   </div>
@@ -3730,7 +3747,7 @@
                     </div>
                     <span class="bubble-meta">
                       {m.time}
-                      {@render statusTick(m.outgoing)}
+                      {@render statusTick(m.outgoing, m.id)}
                     </span>
                   </div>
                 {/if}
@@ -3759,7 +3776,7 @@
                     <button class="art-read" onclick={openIt}>⚡ {$t("Read article")}</button>
                     <span class="bubble-meta inline-meta">
                       {m.time}
-                      {@render statusTick(m.outgoing)}
+                      {@render statusTick(m.outgoing, m.id)}
                     </span>
                   </div>
                 </div>
@@ -3819,7 +3836,7 @@
                       {#if voted && !pv.closed && !poll.quiz}<button onclick={() => retractPoll(poll)}>{$t("Retract vote")}</button>{/if}
                       {#if m.outgoing && !pv.closed}<button onclick={() => stopPoll(poll)}>{$t("Stop poll")}</button>{/if}
                     </span>
-                    <span class="bubble-meta inline-meta">{m.time} {@render statusTick(m.outgoing)}</span>
+                    <span class="bubble-meta inline-meta">{m.time} {@render statusTick(m.outgoing, m.id)}</span>
                   </div>
                 </div>
               {:else if m.kind.type === "reply"}
@@ -3835,7 +3852,7 @@
                   <span class="bubble-meta">
                     {@render msgFlags(m)}
                     {m.time}
-                    {@render statusTick(m.outgoing)}
+                    {@render statusTick(m.outgoing, m.id)}
                   </span>
                 </div>
               {:else if m.kind.type === "text" && m.kind.content.text.startsWith("[track:v1]") && parseTrack(m.kind.content.text)}
@@ -3896,7 +3913,7 @@
                   <span class="bubble-meta">
                     {@render msgFlags(m)}
                     {m.time}
-                    {@render statusTick(m.outgoing)}
+                    {@render statusTick(m.outgoing, m.id)}
                   </span>
                 </div>
               {/if}

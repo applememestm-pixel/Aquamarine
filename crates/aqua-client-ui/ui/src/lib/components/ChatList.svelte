@@ -2,6 +2,8 @@
   import { emojiStatusOf } from "../people";
   import EmojiStatus from "./EmojiStatus.svelte";
   import { onBack } from "../back";
+  import { untrack } from "svelte";
+  import { IS_MOBILE } from "../platform";
   import AnimatedMedia from "./AnimatedMedia.svelte";
   import { hasMarkup, plainText } from "../markup";
   /** Chat-list line without formatting markers (spoilers stay hidden). */
@@ -120,6 +122,48 @@
   let archivedUnread = $derived(archivedChats.filter((c) => c.unread > 0 && !$mutedChats.has(c.id)).length);
   $effect(() => { if (showArchive && archivedChats.length === 0) showArchive = false; });
 
+  // ---- Search, like Telegram: tabs, frequent contacts, recent ----
+  type SearchTab = "all" | "people" | "groups" | "channels";
+  let searchTab = $state<SearchTab>("all");
+  let searchFocused = $state(false);
+  let searchInput: HTMLInputElement | undefined = $state();
+  /** The search is "open": typed in, or the field has the focus. */
+  const searchMode = $derived(searchFocused || !!$search.trim());
+  /** Empty field with the focus: frequent contacts + recent, not the list. */
+  const searchHome = $derived(searchFocused && !$search.trim());
+  function kindOfChat(c: ChatSummary): SearchTab {
+    if (c.channel || $groupMap[c.id]?.kind === "channel") return "channels";
+    if (c.id.startsWith("grp_")) return "groups";
+    return "people";
+  }
+  function closeSearch() {
+    search.set("");
+    searchTab = "all";
+    searchFocused = false;
+    searchInput?.blur();
+  }
+  // Phone: Back closes the search (it used to need the name erased by hand).
+  $effect(() => { if (IS_MOBILE && searchMode) return onBack(closeSearch); });
+  let recentSearch = $state<string[]>((() => { try { return JSON.parse(localStorage.getItem("aqua.recentSearch") ?? "[]"); } catch { return []; } })());
+  function rememberSearch(id: string) {
+    recentSearch = [id, ...recentSearch.filter((x) => x !== id)].slice(0, 12);
+    try { localStorage.setItem("aqua.recentSearch", JSON.stringify(recentSearch)); } catch { /* private mode */ }
+  }
+  function clearRecentSearch() {
+    recentSearch = [];
+    try { localStorage.removeItem("aqua.recentSearch"); } catch { /* private mode */ }
+  }
+  // A chat opened while searching goes to "Recent".
+  $effect(() => { const id = $activeId; if (id && searchMode) untrack(() => rememberSearch(id)); });
+  const recentChats = $derived(recentSearch.map((id) => $visibleChats.find((c) => c.id === id)).filter(Boolean) as ChatSummary[]);
+  /** People you write to most lately (the list is newest first). */
+  const frequent = $derived($visibleChats.filter((c) => kindOfChat(c) === "people" && !c.id.startsWith("__")).slice(0, 12));
+  function openFromSearch(id: string) {
+    rememberSearch(id);
+    void selectChat(id);
+    closeSearch();
+  }
+
   // Chats filtered by archive + the active folder ("all" shows everything).
   // A search looks through archived chats too.
   let shownChats = $derived.by(() => {
@@ -130,6 +174,7 @@
       const f = $folders.find((x) => x.id === af);
       if (f) { const set = new Set(f.chatIds); list = list.filter((c) => set.has(c.id)); }
     }
+    if ($search.trim() && searchTab !== "all") list = list.filter((c) => kindOfChat(c) === searchTab);
     // Pinned chats on top, in pin order (not while searching).
     if ($search.trim() || !$pinnedChats.length) return list;
     const rank = new Map($pinnedChats.map((id, i) => [id, i]));
@@ -673,13 +718,21 @@
       {@html icons.search}
       <input
         id="search"
+        bind:this={searchInput}
         placeholder={$t("Search by name, phone or @username")}
         autocomplete="off"
         bind:value={$search}
         onkeydown={onSearchKey}
-        onblur={() => (kbIndex = -1)}
+        onfocus={() => (searchFocused = true)}
+        onblur={() => { kbIndex = -1; setTimeout(() => { if (document.activeElement !== searchInput) searchFocused = false; }, 150); }}
       />
-      <span class="search-kbd">{$t("Ctrl K")}</span>
+      {#if searchMode}
+        <button class="search-x" data-x onpointerdown={(e) => e.preventDefault()} onclick={closeSearch} aria-label={$t("Close search")}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      {:else}
+        <span class="search-kbd">{$t("Ctrl K")}</span>
+      {/if}
     </label>
     <div class="plus-wrap">
       <button
@@ -705,7 +758,14 @@
     </div>
   </div>
 
-  {#if $folders.length > 0}
+  {#if searchMode}
+    <div class="folder-strip search-tabs" role="tablist">
+      {#each [["all", "All"], ["people", "Chats"], ["groups", "Groups"], ["channels", "Channels"]] as [id, label] (id)}
+        <button class="folder-tab" class:active={searchTab === id} role="tab" aria-selected={searchTab === id}
+          onpointerdown={(e) => e.preventDefault()} onclick={() => (searchTab = id as SearchTab)}>{$t(label)}</button>
+      {/each}
+    </div>
+  {:else if $folders.length > 0}
     <div class="folder-strip">
       <button class="folder-tab" class:active={$activeFolder === "all"} onclick={() => activeFolder.set("all")} oncontextmenu={(e) => openFolderMenu(e, "all")}>{$t("All")}</button>
       {#each $folders as f (f.id)}
@@ -731,7 +791,34 @@
     </div>
   {/if}
 
-  <div class="chats">
+  <div class="chats" class:home={searchHome}>
+    {#if searchHome}
+      <div class="search-home" role="presentation" onpointerdown={(e) => e.preventDefault()}>
+        {#if frequent.length}
+          <div class="sh-title">{$t("Frequent contacts")}</div>
+          <div class="sh-freq">
+            {#each frequent as c (c.id)}
+              <button class="sh-person" onclick={() => openFromSearch(c.id)}>
+                <span class="avatar sz-44" style="--gradient: {c.gradient}">{c.letter}{#if $avatars[c.id]}<img class="ava-img" src={$avatars[c.id]} alt="" loading="lazy" />{/if}</span>
+                <span class="sh-name">{c.name.split(" ")[0]}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+        {#if recentChats.length}
+          <div class="sh-title sh-row"><span>{$t("Recent")}</span><button class="sh-clear" onclick={clearRecentSearch}>{$t("Clear")}</button></div>
+          {#each recentChats as c (c.id)}
+            <button class="sh-recent" onclick={() => openFromSearch(c.id)}>
+              <span class="avatar sz-40" class:ava-grp={c.id.startsWith("grp_") && !c.channel} class:ava-chan={c.channel} style="--gradient: {c.gradient}">{c.letter}{#if $avatars[c.id]}<img class="ava-img" src={$avatars[c.id]} alt="" loading="lazy" />{/if}</span>
+              <span class="sh-txt"><b>{c.name}</b><span>{peekStatus(c.id) || (c.id.startsWith("grp_") ? "" : "@" + c.id)}</span></span>
+            </button>
+          {/each}
+        {/if}
+        {#if !frequent.length && !recentChats.length}
+          <div class="sh-title">{$t("Type a name, @username or paste an invite link")}</div>
+        {/if}
+      </div>
+    {/if}
     {#if joinLink}
       <div class="join-card">
         <div class="jc-ava">{joinLink.title.charAt(0).toUpperCase()}</div>
@@ -861,6 +948,11 @@
               {#if inGroup}<!-- svelte-ignore a11y_no_static_element_interactions --><!-- svelte-ignore a11y_click_events_have_key_events --><span class="g-tag" onclick={(e) => { e.stopPropagation(); openGroupId.set(inGroup.id); }} title={$t("Chat group")}>{inGroup.emoji ?? "▣"} {inGroup.name}</span>{/if}
               {#if c.verified}<span class="verified-badge">{@html icons.verified}</span>{/if}
               {#if $clans[c.id]}<ClanTag tag={$clans[c.id]} />{/if}
+              {#if !lk && $peerPresence[c.id]?.activity?.[0]}
+                {@const a = $peerPresence[c.id].activity![0]}
+                <!-- What they're doing sits by the name; the last message stays visible. -->
+                <span class="act-tag" title={`${activityVerb(a)} ${a.name}${a.details ? " — " + a.details : ""}`}>{a.name}</span>
+              {/if}
               {#if $mutedChats.has(c.id)}<span class="muted-ic" title={$t("Muted")}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg></span>{/if}
             </span>
             <span class="chat-time">{c.time}</span>
@@ -870,9 +962,6 @@
               <span class="chat-preview lk-prev">{$t("Locked chat")}</span>
             {:else if c.preview_is_typing}
               <span class="chat-preview typing">{c.preview}</span>
-            {:else if $peerPresence[c.id]?.activity?.[0]}
-              {@const a = $peerPresence[c.id].activity![0]}
-              <span class="chat-preview activity" title={`${activityVerb(a)} ${a.name}${a.details ? " — " + a.details : ""}`}>{activityVerb(a)} <b>{a.name}</b></span>
             {:else}
               <span class="chat-preview">
                 {#if c.preview_by_me}<span class="me-prefix">{$t("you:")}</span>{/if}{previewText(c.preview)}
@@ -1245,6 +1334,7 @@
   .chat-ctx button.danger, .peek-menu button.danger { color: var(--danger, #FF4D6D); }
   .chat-ctx button.danger:hover, .peek-menu button.danger:hover { background: color-mix(in srgb, var(--danger, #FF4D6D) 14%, transparent); color: var(--danger, #FF4D6D); }
   .chat-preview.activity { color: var(--accent); }
+  .act-tag { flex: 0 1 auto; min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 700; color: var(--accent); padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 14%, transparent); margin-left: 4px; }
   .chat-preview.activity b { font-weight: 700; }
   /* Compact: avatars only (a server is open). */
   .list.compact .list-header, .list.compact .folder-strip, .list.compact .chat-body,
@@ -1275,6 +1365,24 @@
     align-items: center;
     gap: 10px;
   }
+  .search-x { flex: none; width: 22px; height: 22px; display: grid; place-items: center; padding: 0; border: none; border-radius: 50%; background: color-mix(in srgb, var(--fg) 10%, transparent); color: var(--fg-muted); cursor: pointer; }
+  .search-x:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 18%, transparent); }
+  .search-x svg { width: 12px; height: 12px; }
+  .chats.home > :not(.search-home) { display: none !important; }
+  .search-home { display: flex; flex-direction: column; padding: 4px 2px 12px; }
+  .sh-title { font-size: 12px; font-weight: 700; color: var(--fg-muted); padding: 10px 10px 6px; }
+  .sh-row { display: flex; align-items: center; justify-content: space-between; background: color-mix(in srgb, var(--fg) 4%, transparent); border-radius: calc(8px * var(--rk, 1)); }
+  .sh-clear { border: none; background: none; color: var(--fg-muted); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; padding: 0; }
+  .sh-clear:hover { color: var(--accent); }
+  .sh-freq { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 2px 6px 8px; }
+  .sh-person { flex: 0 0 auto; width: 64px; display: flex; flex-direction: column; align-items: center; gap: 5px; border: none; background: none; color: var(--fg); cursor: pointer; padding: 4px 0; border-radius: calc(10px * var(--rk, 1)); }
+  .sh-person:hover { background: var(--bg-hover); }
+  .sh-name { font-size: 11.5px; max-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sh-recent { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 10px; border: none; background: none; color: var(--fg); text-align: left; cursor: pointer; border-radius: calc(10px * var(--rk, 1)); }
+  .sh-recent:hover { background: var(--bg-hover); }
+  .sh-txt { display: flex; flex-direction: column; min-width: 0; }
+  .sh-txt b { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sh-txt span { font-size: 12px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .search {
     flex: 1;
     min-width: 0;

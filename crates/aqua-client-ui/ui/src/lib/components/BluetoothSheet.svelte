@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { invoke } from "@tauri-apps/api/core";
+  import { IS_WINDOWS } from "../platform";
   /** "Send via Bluetooth": choose a nearby device, send files, watch progress. */
   import { t, tr } from "../i18n";
   import { btSheet, btStatus, btTransfers, btGetStatus, btDevices, btPower, btSend, clearDone, type BtDevice } from "../bluetooth";
@@ -85,7 +87,15 @@
         {:else if !$btStatus}
           <div class="bt-note">{$t("Looking for Bluetooth…")}</div>
         {:else if !$btStatus.supported}
-          <div class="bt-warn">{$t("Bluetooth transfers work in the Linux app for now.")}</div>
+          {#if IS_WINDOWS}
+            <div class="bt-note">{$t("On Windows, files go over Bluetooth through the system's own transfer window: pick the phone there, then the files.")}</div>
+            <div class="bt-row2">
+              <button class="bt-btn" onclick={() => invoke("bt_system_wizard", { receive: false }).catch((e) => showToast(String(e)))}>{$t("Send files")}</button>
+              <button class="bt-ghost" onclick={() => invoke("bt_system_wizard", { receive: true }).catch((e) => showToast(String(e)))}>{$t("Receive files")}</button>
+            </div>
+          {:else}
+            <div class="bt-warn">{$t("Bluetooth transfers work in the Linux app for now.")}</div>
+          {/if}
         {:else if !$btStatus.adapter}
           <div class="bt-warn">{$btStatus.error ?? $t("No Bluetooth adapter found.")}</div>
         {:else if !$btStatus.powered}
@@ -113,6 +123,8 @@
 {/if}
 
 <style>
+  .bt-row2 { display: flex; gap: 8px; }
+  .bt-row2 > * { flex: 1; }
   .bt-veil { position: fixed; inset: 0; z-index: 905; display: grid; place-items: center; background: rgba(4, 6, 12, 0.5); }
   .bt { width: min(460px, calc(100vw - 20px)); max-height: calc(100dvh - 24px); display: flex; flex-direction: column; background: var(--bg-shell); border: 1px solid var(--border-strong); border-radius: calc(18px * var(--rk, 1)); overflow: hidden; animation: bt-pop 0.18s cubic-bezier(.2,.9,.3,1.12); }
   @keyframes bt-pop { from { opacity: 0; transform: translateY(12px) scale(0.97); } }

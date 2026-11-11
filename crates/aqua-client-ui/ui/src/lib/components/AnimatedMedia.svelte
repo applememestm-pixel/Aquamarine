@@ -125,6 +125,10 @@
     void mediaSupport().then((m) => { if (m.blocking.length) failed = true; else videoOk = true; });
   });
   let failed = $state(false);
+  /** Big grids: a player (Lottie canvas or video decoder) only for cells
+   *  near the screen. Building hundreds at once took gigabytes of memory
+   *  and froze the app when the sticker panel opened. */
+  let near = $state(!lazy);
   let visible = false;
   let hovering = false;
   let anim: { play(): void; pause(): void; goToAndStop(v: number, f?: boolean): void; destroy(): void } | null = null;
@@ -141,7 +145,7 @@
   // (Re)build the Lottie player whenever the source changes.
   $effect(() => {
     const url = src;
-    if (kind !== "tgs" || !box) return;
+    if (kind !== "tgs" || !box || !near) return;
     let cancelled = false;
     failed = false;
     (async () => {
@@ -170,6 +174,16 @@
   });
 
   onMount(() => {
+    if (!lazy || !box) return;
+    const io = new IntersectionObserver((ents) => {
+      const on = ents.some((e) => e.isIntersecting);
+      if (on !== near) near = on;
+    }, { rootMargin: "400px 0px" });
+    io.observe(box);
+    return () => io.disconnect();
+  });
+
+  onMount(() => {
     if (play !== "auto" || !box) return;
     const io = new IntersectionObserver((ents) => {
       visible = ents.some((e) => e.isIntersecting);
@@ -191,7 +205,7 @@
 >
   {#if kind === "image" || failed}
     {#if !failed}<img {src} {alt} draggable="false" loading={lazy ? "lazy" : "eager"} decoding="async" />{:else}<span class="fallback">{alt}</span>{/if}
-  {:else if kind === "video" && videoOk}
+  {:else if kind === "video" && videoOk && near}
     <!-- Local files go through the loopback media server: WebKitGTK hangs
          on <video> straight from the asset protocol (lib/media.ts). -->
     <video bind:this={video} use:streamSrc={src} muted loop playsinline preload="metadata"

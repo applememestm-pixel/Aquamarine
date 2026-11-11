@@ -14,7 +14,7 @@
  * Settings keeps its own entries (section → list → closed); while it's
  * open its pops are left to it.
  */
-type Closer = { id: number; close: () => void };
+type Closer = { id: number; close: () => void; el?: Element };
 const stack: Closer[] = [];
 let guard = false;
 let ignore = 0;
@@ -45,6 +45,13 @@ export function onBack(close: () => void): () => void {
 
 const settingsOpen = () => document.body.classList.contains("settings-open") || !!history.state?.aquaSettings;
 
+function onBackEl(el: Element, close: () => void): () => void {
+  const release = onBack(close);
+  const top = stack[stack.length - 1];
+  if (top) top.el = el;
+  return release;
+}
+
 /** Close the newest open thing, as Back does (Esc on a phone keyboard, a swipe…). */
 export function backOnce(): boolean {
   const top = stack.pop();
@@ -69,11 +76,25 @@ export function startBack(): () => void {
   // Back to the WebView's history on new Android versions, the app closed.
   // true: we closed something; false: nothing open, the app goes to the
   // background.
+  let exitAsked = 0;
   (window as unknown as { __aquaBack?: () => boolean }).__aquaBack = () => {
-    // Settings walks its own history entries (section → list → closed).
-    if (settingsOpen()) { history.back(); return true; }
+    // Settings walks its own history entries (section → list → closed) —
+    // unless something opened from Settings sits on top of it (a profile):
+    // that closes first, and you're back in Settings.
+    if (settingsOpen()) {
+      const top = stack[stack.length - 1];
+      if (top?.el && top.el.isConnected && !top.el.closest("[data-own-back]")) return backOnce();
+      history.back();
+      return true;
+    }
     // The guard entry stays; onBack's release takes it away once all is closed.
-    return backOnce();
+    if (backOnce()) return true;
+    // Main screen: leave only on a second Back within two seconds.
+    if (Date.now() - exitAsked < 2000) return false;
+    exitAsked = Date.now();
+    void Promise.all([import("./components/Toast.svelte"), import("./i18n")])
+      .then(([m, i]) => m.showToast(i.tr("Press Back again to exit"), 2000)).catch(() => {});
+    return true;
   };
 
   // Any modal dialog counts as "open on top": Back sends it the Esc it
@@ -84,7 +105,7 @@ export function startBack(): () => void {
     // opt in with data-back; their close button carries data-x.
     for (const el of document.querySelectorAll('[role="dialog"][aria-modal="true"], [data-back]')) {
       if (dialogs.has(el) || el.closest("[data-own-back]")) continue;
-      dialogs.set(el, onBack(() => {
+      dialogs.set(el, onBackEl(el, () => {
         // Back used this entry: forget it, so a dialog that is still open
         // afterwards gets a new one (else the next Back closed the app).
         dialogs.delete(el);

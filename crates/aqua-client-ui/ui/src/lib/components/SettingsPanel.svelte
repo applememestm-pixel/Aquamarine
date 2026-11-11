@@ -1820,7 +1820,7 @@
           <div class="bk-stat">
             <span class="bk-dot" class:on={devList.published && devList.this_listed}></span>
             <span>{devList.published
-              ? (devList.this_listed ? tr("Signed device list: {n} devices (version {v}). Contacts encrypt only to these.", { n: devList.devices, v: devList.ver ?? 0 }) : tr("This device isn't on your signed list yet — approve it on one of your other devices."))
+              ? (devList.this_listed ? tr("Signed device list: {n} devices. Contacts encrypt only to these.", { n: devList.devices }) : tr("This device isn't on your signed list yet — approve it on one of your other devices."))
               : tr("No signed device list yet — it appears by itself in a moment.")}</span>
           </div>
           {#if devList.published && !devList.this_listed}

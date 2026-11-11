@@ -458,8 +458,16 @@
     if (isChannel) return r !== "manage_tags" && r !== "anonymous" && r !== "pin_messages";
     return r !== "post_messages" && r !== "edit_messages";
   }
+  /** Telegram's rule: the owner sets anything; an admin who may add admins
+   *  only hands out rights they have themselves, and never edits their own. */
+  function rightEditable(r: keyof AdminRights): boolean {
+    if (!group || !editMember) return false;
+    if (owner) return true;
+    if (editMember.username === me || editMember.role === "owner") return false;
+    return can(group, me, "add_admins") && can(group, me, r);
+  }
   async function toggleRight(r: keyof AdminRights) {
-    if (!editMember) return;
+    if (!editMember || !rightEditable(r)) return;
     const rights = { ...defaultRights(), ...(editMember.rights ?? {}) };
     rights[r] = !rights[r];
     await setMemberField(editMember.username, { rights }, `changed @${editMember.username}'s admin rights`);
@@ -484,8 +492,11 @@
     { key: "edit_own_tags", label: "Edit own tags" },
   ];
   const isOn = (g: Group, key: string) => (S(g)[key] ?? "all") !== "admins";
+  /** Who may change what members can do: the owner and admins with the
+   *  "Ban users" right — not every admin, and never a plain member. */
+  const canPerms = $derived(!!group && (owner || (isAdmin(group, me) && can(group, me, "ban_users"))));
   async function togglePerm(key: string, label: string) {
-    if (!group) return;
+    if (!group || !canPerms) return;
     const on = isOn(group, key);
     await commit((g) => { S(g)[key] = (on ? "admins" : "all") as Perm; }, `${on ? "restricted" : "allowed"} “${label}” for members`);
   }
@@ -628,6 +639,9 @@
           </div>
         </div>
         {#if group.description}<p class="desc">{group.description}</p>{/if}
+        {#if admin && group.requests?.length}
+          <div class="card">{@render row("Join requests", `${group.requests.length}`, () => go("requests"), "#FF2D55")}</div>
+        {/if}
 
         {#if group.rules}
           <details class="card rules" style:--acc={group.accent ?? "var(--accent)"}>
@@ -638,12 +652,13 @@
 
         {#if stats && stats.total > 0 && !isChannel}
           <div class="card">
-            <div class="ct">{$t("This week")}</div>
+            <div class="ct">{$t("Activity")}</div>
             <div class="stat-row">
               <div class="stat"><b>{stats.today}</b><span>{$t("messages today")}</span></div>
               <div class="stat"><b>{stats.total}</b><span>{$t("in history")}</span></div>
               {#if stats.ageDays !== null}<div class="stat"><b>{stats.ageDays}</b><span>{$t("days old")}</span></div>{/if}
             </div>
+            {#if stats.top.length}<div class="ct sub-ct">{$t("This week")}</div>{/if}
             {#each stats.top as [u, n], i (u)}
               <div class="leader">
                 <span class="medal">{["🥇", "🥈", "🥉", "4", "5"][i]}</span>
@@ -768,7 +783,7 @@
           {@render row("Reactions", group.settings.reactions === "none" ? "Off" : group.settings.reactions === "some" ? `${group.settings.allowed_reactions?.length ?? 0}` : "All", () => go("reactions"), "#FF9500")}
           {@render row("Administrators", `${admins.length}`, () => go("admins"), "#5856D6")}
           {@render row(isChannel ? "Subscribers" : "Members", `${group.members.length}`, () => go("members"), "#32ADE6")}
-          {#if !basic}{@render row("Join requests", `${group.requests?.length ?? 0}`, () => go("requests"), "#FF2D55")}{/if}
+          {#if !basic || group.requests?.length}{@render row("Join requests", `${group.requests?.length ?? 0}`, () => go("requests"), "#FF2D55")}{/if}
           {@render row("Removed users", `${group.banned?.length ?? 0}`, () => go("banned"), "#FF3B30")}
           {#if !basic && !isChannel}
             {@render row("Roles", rolesOn(group) ? `${roleList.length - 1}` : "Off", () => go("roles"), "#EB459E")}
@@ -816,7 +831,7 @@
         <div class="card">
           <div class="ct">{$t("What can members of this group do?")}</div>
           {#each PERM_ROWS as p (p.key)}
-            {@render toggle(p.label, "", isOn(group, p.key), () => togglePerm(p.key, p.label), busy)}
+            {@render toggle(p.label, "", isOn(group, p.key), () => togglePerm(p.key, p.label), busy || !canPerms)}
           {/each}
         </div>
         <div class="card" class:hidden={basic}>
@@ -876,7 +891,7 @@
       {:else if page === "admins"}
         <div class="card">
           {#each admins as m (m.username)}
-            <button class="mrow click" onclick={() => { if (m.role !== "owner" && (owner || can(group, me, "add_admins"))) { editUser = m.username; go("admin-edit"); } }}>
+            <button class="mrow click" onclick={() => { if (m.role !== "owner" && (owner || (can(group, me, "add_admins") && m.username !== me))) { editUser = m.username; go("admin-edit"); } }}>
               {@render memberAva(m.username)}
               <span class="m-name">{m.username}</span>
               <span class="m-role" class:owner={m.role === "owner"}>{m.title || m.role}</span>
@@ -896,7 +911,7 @@
         <div class="card">
           <div class="ct">{$t("What can this admin do?")}</div>
           {#each ALL_RIGHTS.filter(rightsVisible) as r (r)}
-            {@render toggle(RIGHT_LABELS[r], "", can(group, editMember.username, r), () => toggleRight(r), busy)}
+            {@render toggle(RIGHT_LABELS[r], "", can(group, editMember.username, r), () => toggleRight(r), busy || !rightEditable(r))}
           {/each}
         </div>
         <button class="danger-btn" onclick={async () => { await setMemberField(editMember!.username, { role: "member", rights: undefined, title: "" }, `dismissed @${editMember!.username}`); back(); }}>{$t("Dismiss admin")}</button>
@@ -1175,6 +1190,7 @@
 {/if}
 
 <style>
+  .sub-ct { margin-top: 10px; }
   .backdrop { position: fixed; inset: 0; background: rgba(6,7,12,0.6); backdrop-filter: blur(4px);
               display: grid; place-items: center; z-index: 130; padding: 20px; }
   .sheet { width: min(500px, 95vw); height: min(720px, 90vh); display: flex; flex-direction: column;

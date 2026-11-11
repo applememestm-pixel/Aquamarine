@@ -15,6 +15,7 @@
 </script>
 
 <script lang="ts">
+  import { openLightbox } from "./Lightbox.svelte";
   import UsernameEdit from "./UsernameEdit.svelte";
   import BirthdayInput from "./BirthdayInput.svelte";
   import ColorInput from "./ColorInput.svelte";
@@ -494,7 +495,9 @@
         <div class="avatar-wrap">
           <div class="avatar" style={`background: linear-gradient(135deg, ${bannerA}, ${bannerB});`}>
             {#if shownAvatar}
-              <img src={shownAvatar} alt={view.display_name} />
+              <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+              <img src={shownAvatar} alt={view.display_name} class:zoomable={!editing}
+                onclick={() => { if (!editing && shownAvatar) openLightbox({ url: shownAvatar, kind: /\.(mp4|webm)(\?|$)/i.test(shownAvatar) ? "video" : "image", name: view?.display_name, from: view?.display_name }); }} />
             {:else}
               {view.display_name.charAt(0).toUpperCase()}
             {/if}
@@ -964,6 +967,7 @@
 {/if}
 
 <style>
+  .avatar img.zoomable { cursor: zoom-in; }
   /* Wide, two-column profile (view mode) */
   .sheet.wide { width: min(880px, 96vw) !important; }
   .pf-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 22px; align-items: start; }

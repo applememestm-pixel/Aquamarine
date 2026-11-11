@@ -2,6 +2,7 @@
  * Groups / supergroups / channels store. Mirrors the Rust-side group list;
  * refreshed on launch and whenever the backend emits `aqua://groups_updated`.
  */
+import { tr } from "./i18n";
 import { writable, get, derived } from "svelte/store";
 import type { Group } from "./types";
 import { api, events } from "./tauri";
@@ -120,7 +121,7 @@ async function onJoinRequest(gid: string, from: string) {
     }
     return;
   }
-  showToast(`@${from} asked to join “${g.title}” — open its settings → Join requests`, 6000);
+  showToast(tr("@{u} asked to join “{g}” — open the group's info: the request is at the top", { u: from, g: g.title }), 7000);
 }
 
 /** Wire the live refresh. Call once at startup. */

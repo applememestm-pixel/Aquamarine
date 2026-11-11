@@ -456,6 +456,19 @@ pub async fn bt_receive(app: tauri::AppHandle) -> Result<(), String> {
     { let _ = app; Err("not supported on this platform".into()) }
 }
 
+/// Windows: our own Bluetooth transfers aren't there yet — open the
+/// system's "Bluetooth File Transfer" wizard (fsquirt), which sends and
+/// receives files the same way phones do.
+#[tauri::command]
+pub fn bt_system_wizard(receive: bool) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("fsquirt.exe").arg(if receive { "-receive" } else { "-send" }).spawn().map(|_| ()).map_err(|e| e.to_string())
+    }
+    #[cfg(not(windows))]
+    { let _ = receive; Err("not supported on this platform".into()) }
+}
+
 /// Open the folder received files go to.
 #[tauri::command]
 pub fn bt_show_inbox() -> Result<(), String> {

@@ -5,6 +5,8 @@
 //! [`state::AppState`] in a `Mutex` for cross-command access.
 
 pub mod state;
+#[cfg(desktop)]
+pub mod single;
 pub mod commands;
 pub mod media;
 pub mod activity;
@@ -96,6 +98,11 @@ pub fn run() -> Result<()> {
                 .map(std::path::PathBuf::from)
                 .or_else(|| app.path().app_data_dir().ok())
                 .unwrap_or_else(|| std::env::temp_dir().join("aquamarine-dev"));
+            // Already running on this data folder: show that window, quit.
+            #[cfg(desktop)]
+            if !single::claim(app.handle(), &base_dir) {
+                std::process::exit(0);
+            }
             // Several accounts on this device: each has its own directory
             // (accounts.rs); the first one is the base directory itself.
             let data_dir = accounts::resolve(&base_dir);
@@ -173,6 +180,7 @@ pub fn run() -> Result<()> {
             bluetooth::bt_answer,
             bluetooth::bt_receive,
             bluetooth::bt_show_inbox,
+            bluetooth::bt_system_wizard,
             web::link_preview,
             commands::upload_attachment,
             commands::prepare_banner_video,
