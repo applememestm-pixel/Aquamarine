@@ -275,6 +275,8 @@ export const api = {
   listLocalMedia:     (): Promise<LocalMediaList>                                  => invoke("list_local_media"),
   readMediaBytes:     (path: string): Promise<number[]>                            => invoke("read_media_bytes", { path }),
   /** A view-once photo / video was looked at: wipe it from this device. */
+  /** The built-in browser window (desktop). */
+  openBrowserWindow:  (url: string): Promise<void>                                 => invoke("open_browser_window", { url }),
   onceBurn:           (peerId: string, messageId: string): Promise<void>           => invoke("once_burn", { peerId, messageId }),
   /** No screenshots / screen recording (Android FLAG_SECURE, Windows / macOS). Resolves false where it can't. */
   screenSecure:       (on: boolean): Promise<boolean>                              => invoke("screen_secure", { on }),

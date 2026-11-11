@@ -2712,4 +2712,6 @@ export const RU: Record<string, string> = {
   "View once — tap to open": "Один просмотр — нажмите, чтобы открыть",
   "View once — tap to close; it's gone after that": "Один просмотр — нажмите, чтобы закрыть; после этого он исчезнет",
   "Could not open": "Не удалось открыть",
+  "Built-in browser": "Встроенный браузер",
+  "Links open in a window of the app, not in your browser. The page gets no access to the app.": "Ссылки открываются в окне приложения, а не в браузере. Странице не даётся доступ к приложению.",
 };

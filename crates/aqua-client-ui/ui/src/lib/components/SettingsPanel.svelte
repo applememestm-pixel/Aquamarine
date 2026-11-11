@@ -6,6 +6,7 @@
 <script lang="ts">
   import Select from "./Select.svelte";
   import { chatLines } from "../listLook";
+  import { inAppBrowser } from "../browser";
   import { IS_MOBILE, IS_DESKTOP } from "../platform";
   import { GUIDE } from "../errorCodes";
   import { meetOpen } from "./MeetSheet.svelte";
@@ -1673,6 +1674,15 @@
           </div>
           <span class="switch" class:on={$settings.linkPreviews}></span>
         </button>
+        {#if IS_DESKTOP}
+          <button class="toggle-row" onclick={() => inAppBrowser.update((v) => !v)}>
+            <div class="tr-text">
+              <div class="tr-title">{$t("Built-in browser")}</div>
+              <div class="tr-sub">{$t("Links open in a window of the app, not in your browser. The page gets no access to the app.")}</div>
+            </div>
+            <span class="switch" class:on={$inAppBrowser}></span>
+          </button>
+        {/if}
         <button class="toggle-row" onclick={() => { toggle("showSeconds"); void loadActiveMessages(); void api.listChats().then((c) => chats.set(c)).catch(() => {}); }}>
           <div class="tr-text">
             <div class="tr-title">{$t("Seconds in message times")}</div>

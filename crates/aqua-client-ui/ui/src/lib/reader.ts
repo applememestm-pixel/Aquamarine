@@ -5,6 +5,9 @@
 import { writable } from "svelte/store";
 import { api } from "./tauri";
 import { telegraphPathOf } from "./markup";
+import { inAppBrowser } from "./browser";
+import { IS_DESKTOP } from "./platform";
+import { get } from "svelte/store";
 
 export interface ReaderArticle {
   title: string;
@@ -31,10 +34,14 @@ export function closeReader() {
   reader.set(null);
 }
 
-/** Telegraph links open in the reader; everything else in the system browser. */
+/** Telegraph links open in the reader; web links in the built-in browser
+ *  (computers, when on), everything else in the system browser. */
 export async function openLink(href: string): Promise<void> {
   const tp = telegraphPathOf(href);
   if (tp) { openTelegraph(tp, href); return; }
+  if (IS_DESKTOP && get(inAppBrowser) && /^https?:\/\//i.test(href)) {
+    try { await api.openBrowserWindow(href); return; } catch { /* fall back to the system browser */ }
+  }
   try {
     await api.openExternal(href);
   } catch {

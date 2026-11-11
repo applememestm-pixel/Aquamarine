@@ -252,6 +252,7 @@ pub fn run() -> Result<()> {
             commands::forward_file,
             personal::write_text_file,
             windows::open_chat_window,
+            windows::open_browser_window,
             commands::note_call,
             commands::webapp_init,
             commands::webapp_menu,
