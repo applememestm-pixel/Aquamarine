@@ -76,10 +76,13 @@ function loadDrafts(): Record<string, string> {
  *  chat with the stored display_name when available. */
 export const visibleChats = derived([chats, search, contacts], ([$chats, $search, _$c]) => {
   const q = $search.trim().replace(/^@+/, "");
-  const enriched = $chats.map((c) => ({
-    ...c,
-    name: displayName(c.id, c.name),
-  }));
+  const enriched = $chats.map((c) => {
+    const name = displayName(c.id, c.name);
+    // The letter on a photo-less avatar follows the name people see
+    // (it was the @username's first letter: "N" for "Андрей").
+    const ch = Array.from(name.replace(/^@+/, "").trim())[0];
+    return { ...c, name, letter: c.id.startsWith("__") || !ch ? c.letter : ch.toUpperCase() };
+  });
   if (!q) return enriched;
   const lower = q.toLowerCase();
   return enriched.filter((c) =>

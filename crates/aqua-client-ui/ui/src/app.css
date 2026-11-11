@@ -440,7 +440,7 @@ html.ps-calls .stage *, html.ps-calls .stage *::before, html.ps-calls .stage *::
 /* Android: windows close with Back (the button or the gesture), like
    Telegram — no × on them (lib/back.ts closes them, data-x marks the
    buttons it presses). iOS has no Back, so it keeps them. */
-html.android [data-x] { display: none !important; }
+html.android [data-x]:not([data-keep-x]) { display: none !important; }
 
 /* Power saving → Particles: the ambient glows behind the app stay still. */
 html.ps-particles body::before, html.ps-particles body::after { animation: none !important; }

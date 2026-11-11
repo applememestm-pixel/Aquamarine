@@ -94,7 +94,7 @@
   <div class="wn-bg" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) close(); }}>
     <div class="wn" data-phone-full role="dialog" aria-modal="true" aria-label={$t("What's new")}>
       <header>
-        <button data-x class="x" onclick={close} aria-label={$t("Close")}>×</button>
+        <button data-x data-keep-x class="x" onclick={close} aria-label={$t("Close")}>×</button>
         <button class="tr" class:on={!!tr_md} onclick={() => void translate()} disabled={tr_busy}
           title={tr_err || $t(tr_md ? "Show the original" : "Translate")} aria-label={$t(tr_md ? "Show the original" : "Translate")}>
           {#if tr_busy}<span class="spin"></span>{:else}<svg viewBox="0 0 24 24"><path d="M4 5h9M8.5 3v2M6 5c.6 3.2 2.6 5.6 5.5 7M11 5c-.7 3.6-3.1 6.6-6.5 8.5"/><path d="M13 21l4-9 4 9M14.4 18h5.2"/></svg>{/if}
@@ -132,9 +132,9 @@
   @keyframes wn-pop { from { opacity: 0; transform: translateY(16px) scale(.97); } }
   header { position: relative; padding: 14px 92px; border-bottom: 1px solid var(--border); text-align: center; }
   .ttl { display: flex; flex-direction: column; } .ttl b { font-size: 18px; } .ttl small { color: var(--fg-dim); font-size: 12.5px; }
-  .x { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); width: 34px; height: 34px; border: none; background: none; color: var(--fg); font-size: 26px; cursor: pointer; border-radius: 50%; }
+  .x { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); width: 34px; height: 34px; border: none; background: none; color: var(--fg); font-size: 26px; cursor: pointer; border-radius: 50%; }
   .x:hover { background: var(--bg-hover); }
-  .tr { position: absolute; left: 50px; top: 50%; transform: translateY(-50%); width: 34px; height: 34px; border: none; background: none; color: var(--fg-muted);
+  .tr { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); width: 34px; height: 34px; border: none; background: none; color: var(--fg-muted);
     cursor: pointer; border-radius: 50%; display: grid; place-items: center; }
   .tr:hover { background: var(--bg-hover); color: var(--fg); }
   .tr.on { color: var(--accent); background: var(--accent-soft); }

@@ -134,6 +134,11 @@ pub async fn refresh(app: &AppHandle, transport: &Transport, user: &str, force: 
             crate::multidev::invalidate(user);
         }
         Err(aqua_core::devlist::ListError::Stale) => {}
+        // Still signed under their old @username (they renamed and their app
+        // hasn't re-signed it yet): nothing to warn about, it just doesn't count.
+        Err(aqua_core::devlist::ListError::WrongUser) => {
+            tracing::debug!(%user, "device list still under an old name — ignored");
+        }
         Err(e) => {
             tracing::warn!(%user, %e, "a device list was refused — the accepted one stays");
             let _ = app.emit("aqua://devlist_refused", serde_json::json!({ "user": user, "why": e.to_string() }));
