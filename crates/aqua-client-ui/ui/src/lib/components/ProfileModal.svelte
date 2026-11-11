@@ -43,13 +43,14 @@
   import QrCode from "./QrCode.svelte";
   import EmojiStatus from "./EmojiStatus.svelte";
   import { reactionPack, emojiPacks, loadEmojiPacks } from "../reactionPack";
-  import { averageColor, mixHex, patternUrl, PATTERN_EMOJI, cardLook, shellColor, CARD_SWATCHES, CARD_INTENSITY, CARD_LENGTH } from "../cardStyle";
+  import SharedMedia from "./SharedMedia.svelte";
+  import { averageColor, mixHex, patternRingUrl, PATTERN_EMOJI, cardLook, shellColor, CARD_SWATCHES, CARD_INTENSITY, CARD_LENGTH } from "../cardStyle";
   import EmojiPick from "./EmojiPick.svelte";
   import { userQr } from "../qr";
   import { gameIds, gameIcons, gameCovers, resolveGame, rememberGame, iconFor, coverFor } from "../games";
   import { SERVICES, serviceOf, type Service } from "../services";
 
-  let pfTab = $state<"board" | "activity">("board");
+  let pfTab = $state<"board" | "activity" | "media">("board");
   function hostOf(url: string): string {
     try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
   }
@@ -293,7 +294,7 @@
   let esOpen = $state(false);
   let patOpen = $state(false);
   let patternEmoji = $derived((editing && isMe && draft) ? (draft.pattern ?? "") : (view?.pattern ?? ""));
-  let patternBg = $derived(patternEmoji ? patternUrl(patternEmoji) : "");
+  let patternBg = $derived(patternEmoji ? patternRingUrl(patternEmoji) : "");
   let showQr = $state(false);
 
   // Now-playing to show on the card: our own when viewing self, else the
@@ -833,7 +834,14 @@
           <div class="pf-tabs" role="tablist">
             <button role="tab" class:on={pfTab === "board"} aria-selected={pfTab === "board"} onclick={() => (pfTab = "board")}>{$t("Board")}</button>
             <button role="tab" class:on={pfTab === "activity"} aria-selected={pfTab === "activity"} onclick={() => (pfTab = "activity")}>{$t("Activity")}</button>
+            {#if !isMe && activeUsername}
+              <!-- Your shared photos, files, voice and links (Telegram's profile tabs). -->
+              <button role="tab" class:on={pfTab === "media"} aria-selected={pfTab === "media"} onclick={() => (pfTab = "media")}>{$t("Shared media")}</button>
+            {/if}
           </div>
+          {#if pfTab === "media" && !isMe && activeUsername}
+            <div class="pf-media">{#key activeUsername}<SharedMedia peerId={activeUsername} title={view.display_name} />{/key}</div>
+          {/if}
 
           {#if pfTab === "board"}
             {#each view.activity.filter((a, i, all) => all.findIndex((b) => b.kind + b.name === a.kind + a.name) === i) as a (a.kind + a.name)}
@@ -932,7 +940,7 @@
             {#if !view.activity.length && !np && !view.music_url && !view.games.length && !view.played.length && !view.favourite_music}
               <div class="pf-empty">{isMe ? $t("Add a favourite track, games and links in “Edit profile”.") : $t("Nothing here yet.")}</div>
             {/if}
-          {:else}
+          {:else if pfTab === "activity"}
             {#each view.activity as a (a.kind + a.name)}
               <div class="act-card">
                 <div class="act-ic" data-k={a.kind}>{a.kind === "playing" ? "🎮" : a.kind === "listening" ? "🎧" : "📺"}</div>
@@ -973,6 +981,9 @@
   .pf-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 22px; align-items: start; }
   .pf-left { min-width: 0; }
   .pf-right { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+  .pf-media { min-height: 240px; max-height: 60vh; display: flex; flex-direction: column; border-radius: calc(14px * var(--rk, 1)); overflow: hidden;
+    background: color-mix(in srgb, var(--bg-shell) 40%, transparent); border: 1px solid var(--border); }
+  :global(html.phone) .pf-media { max-height: none; }
   @media (max-width: 760px) { .pf-grid { grid-template-columns: 1fr; } }
   .pf-tabs { display: flex; gap: 18px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
   .pf-tabs button {
@@ -1059,6 +1070,7 @@
       border-radius: 0; border: none; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
     .close { display: none; }
     .p-back { display: grid; }
+    .sheet:not(.ed) .banner { height: 210px; }
   }
   @media (max-width: 760px) {
     .sheet.ed { height: auto; }
@@ -1115,7 +1127,9 @@
     border-color: color-mix(in srgb, var(--card) 22%, transparent) !important;
   }
   .sheet .avatar, .sheet .presence { border-color: var(--card-top); }
-  .pattern { position: absolute; inset: 0; pointer-events: none; background-size: 150px 100px; opacity: 0.22; mix-blend-mode: overlay; }
+  /* Rings of the emoji around the avatar (Telegram), clearly visible. */
+  .pattern { position: absolute; inset: 0; pointer-events: none; background-size: auto 100%; background-repeat: no-repeat; background-position: left top; opacity: 0.5; mix-blend-mode: overlay; }
+  .sheet.light .pattern { mix-blend-mode: normal; opacity: 0.35; filter: invert(1); }
   .field small.es-note { font-size: 11.5px; color: var(--fg-dim); text-transform: none; letter-spacing: 0; font-weight: 400; line-height: 1.4; }
   /* Emoji next to the name */
   .es-row { position: relative; display: flex; align-items: center; gap: 12px; }
@@ -1207,8 +1221,9 @@
     to   { opacity: 1; transform: translateY(0); }
   }
 
+  /* A bigger banner (was 120 px). */
   .banner {
-    height: 120px;
+    height: 180px;
     position: relative;
     flex-shrink: 0;
     overflow: hidden;
@@ -1282,15 +1297,15 @@
   .body {
     position: relative;
     padding: 0 22px 22px;
-    margin-top: -44px;
+    margin-top: -52px;
   }
 
-  .avatar-wrap { position: relative; width: 88px; margin-bottom: 14px; }
+  .avatar-wrap { position: relative; width: 104px; margin-bottom: 14px; }
   .avatar {
-    width: 88px; height: 88px;
+    width: 104px; height: 104px;
     border-radius: var(--ava-r, 50%);
     display: grid; place-items: center;
-    font-size: 36px;
+    font-size: 40px;
     font-weight: 800;
     color: #06070C;
     border: 5px solid var(--bg-shell);

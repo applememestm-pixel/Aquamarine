@@ -58,6 +58,64 @@ const patCache = new Map<string, string>();
 
 /** A tile of the emoji drawn in white (black-and-white), as a data URL for
  *  `background-image`. Drawn on a canvas so it looks the same everywhere. */
+/**
+ * Telegram's profile pattern: the emoji in rings around the avatar,
+ * biggest and brightest next to it, fading outwards. Drawn once per emoji
+ * for a banner 900×200 (shown at its height, anchored top-left, where the
+ * avatar sits: centre x 74, just under the banner's bottom edge).
+ */
+const ringCache = new Map<string, string>();
+export function patternRingUrl(emoji: string): string {
+  emoji = [...(emoji ?? "").trim()].slice(0, 4).join("");
+  if (!emoji) return "";
+  const hit = ringCache.get(emoji);
+  if (hit) return hit;
+  try {
+    const K = 2, W = 900, H = 200, CX = 74, CY = 206;
+    const c = document.createElement("canvas");
+    c.width = W * K; c.height = H * K;
+    const g = c.getContext("2d", { willReadFrequently: true });
+    if (!g) return "";
+    g.scale(K, K);
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    const rings = [84, 128, 176, 230, 290, 356, 428, 506, 590, 680, 776, 878];
+    rings.forEach((r, i) => {
+      const t = i / (rings.length - 1);
+      const size = 30 - 13 * t;
+      const n = Math.max(6, Math.floor((2 * Math.PI * r) / (size * 2.5)));
+      g.globalAlpha = 0.95 - 0.62 * t;
+      g.font = `${size}px "Noto Color Emoji","Apple Color Emoji","Segoe UI Emoji",sans-serif`;
+      for (let k = 0; k < n; k++) {
+        const a = ((k + (i % 2 ? 0.5 : 0)) / n) * Math.PI * 2;
+        const x = CX + Math.cos(a) * r, y = CY + Math.sin(a) * r * 0.9;
+        if (x < -20 || x > W + 20 || y < -20 || y > H + 10) continue;
+        g.save();
+        g.translate(x, y);
+        g.rotate(a + Math.PI / 2);
+        g.fillText(emoji, 0, 0);
+        g.restore();
+      }
+    });
+    g.globalAlpha = 1;
+    // White by brightness, as in the tiled pattern.
+    const img = g.getImageData(0, 0, W * K, H * K);
+    const d = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+      if (!d[i + 3]) continue;
+      const l = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      d[i + 3] = Math.round(d[i + 3] * (0.6 + 0.4 * (l / 255)));
+      d[i] = d[i + 1] = d[i + 2] = 255;
+    }
+    g.putImageData(img, 0, 0);
+    const url = c.toDataURL("image/png");
+    ringCache.set(emoji, url);
+    return url;
+  } catch {
+    return "";
+  }
+}
+
 export function patternUrl(emoji: string): string {
   emoji = [...(emoji ?? "").trim()].slice(0, 4).join("");
   if (!emoji) return "";
