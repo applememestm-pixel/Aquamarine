@@ -120,7 +120,7 @@ jobs:
       - name: Linux deps (GTK / WebKitGTK)
         if: runner.os == 'Linux'
         run: |
-          sudo timeout 300 apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update
+          sudo bash tools/apt-update.sh
           sudo timeout 600 apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
             librsvg2-dev patchelf libgtk-3-dev build-essential curl wget file
 
@@ -235,7 +235,7 @@ jobs:
       - name: Linux deps (GTK / WebKitGTK)
         if: runner.os == 'Linux'
         run: |
-          sudo timeout 300 apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update
+          sudo bash tools/apt-update.sh
           sudo timeout 600 apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
             librsvg2-dev patchelf libgtk-3-dev build-essential curl wget file
 
@@ -682,7 +682,7 @@ jobs:
       - name: ARM64 Linux cross-linker
         if: matrix.name == 'linux-arm64'
         run: |
-          sudo timeout 300 apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update
+          sudo bash tools/apt-update.sh
           sudo timeout 600 apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y gcc-aarch64-linux-gnu
           mkdir -p .cargo
           printf '[target.aarch64-unknown-linux-gnu]\nlinker = "aarch64-linux-gnu-gcc"\n' >> .cargo/config.toml
