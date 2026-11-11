@@ -34,7 +34,7 @@ def code(version: str) -> int:
 def check() -> None:
     # The order newer() gives (a "-N" counts as one more number: 1.2.21-1 is
     # after 1.2.21 — our releases never reuse a pre-release's base anyway).
-    order = ["1.2.0-5", "1.2.1", "1.2.11", "1.2.12-1", "1.2.12-2", "1.2.2", "1.2.21", "1.2.21-1", "1.2.22-1", "1.2.3", "1.3.0-1", "2.0.0"]
+    order = ["1.2.0-5", "1.2.1", "1.2.11", "1.2.12-1", "1.2.12-2", "1.2.2", "1.2.21", "1.2.21-1", "1.2.22-1", "1.2.3", "1.3.0-1", "1.20.0", "2.0.0"]
     codes = [code(v) for v in order]
     assert codes == sorted(codes) and len(set(codes)) == len(codes), list(zip(order, codes))
     assert code("1.2.21-1") > 1002012, "must install over Tauri's old codes"
