@@ -19,7 +19,7 @@ use windows::Foundation::TypedEventHandler;
 use windows::Networking::Sockets::{SocketProtectionLevel, StreamSocket, StreamSocketListener, StreamSocketListenerConnectionReceivedEventArgs};
 use windows::Storage::Streams::{DataReader, DataWriter, InputStreamOptions};
 
-use super::{book, run_session};
+use super::{book, note_attempt, run_session};
 
 pub const SUPPORTED: bool = true;
 
@@ -198,9 +198,27 @@ fn candidates(scan: bool) -> windows::core::Result<Vec<(u64, BluetoothDevice)>> 
     Ok(out)
 }
 
-fn dial(dev: &BluetoothDevice) -> windows::core::Result<Option<StreamSocket>> {
+/// Why a device gave nothing: the service lookup's own error (out of range,
+/// access denied, not paired…) or "no Aquamarine there".
+fn dial(dev: &BluetoothDevice) -> Result<StreamSocket, String> {
+    dial_inner(dev).map_err(err)?.ok_or_else(|| "Aquamarine isn't open there (or Bluetooth delivery is off on it)".to_string())
+}
+
+fn dial_inner(dev: &BluetoothDevice) -> windows::core::Result<Option<StreamSocket>> {
     let sid = RfcommServiceId::FromUuid(SERVICE)?;
     let res = dev.GetRfcommServicesForIdWithCacheModeAsync(&sid, BluetoothCacheMode::Uncached)?.join()?;
+    // Windows says why it found nothing (the device is away, access denied).
+    let code = res.Error()?;
+    if code != windows::Devices::Bluetooth::BluetoothError::Success {
+        let why = match code {
+            windows::Devices::Bluetooth::BluetoothError::RadioNotAvailable => "Bluetooth is off",
+            windows::Devices::Bluetooth::BluetoothError::DeviceNotConnected => "the device is out of range or asleep",
+            windows::Devices::Bluetooth::BluetoothError::ConsentRequired => "Windows asks for permission — allow Bluetooth for the app",
+            windows::Devices::Bluetooth::BluetoothError::NotSupported => "this device has no Bluetooth Classic",
+            _ => "the device didn't answer",
+        };
+        return Err(windows::core::Error::new(windows::core::HRESULT(0x8000_4005u32 as i32), why));
+    }
     let services = res.Services()?;
     if services.Size()? == 0 {
         return Ok(None);
@@ -219,16 +237,33 @@ pub async fn sync_round(app: &AppHandle, scan: bool) -> Result<(), String> {
         let mut devs = candidates(scan).map_err(err)?;
         devs.sort_by_key(|(a, _)| std::cmp::Reverse(known.get(&mac(*a)).copied().unwrap_or(0)));
         devs.dedup_by_key(|(a, _)| *a);
+        if devs.is_empty() {
+            return Err("no paired devices — pair the phone or the computer once in Windows Settings → Bluetooth".to_string());
+        }
         let mut met = 0;
+        let mut why = String::new();
         for (addr, dev) in devs.into_iter().take(10) {
-            let Ok(Some(sock)) = dial(&dev) else { continue };
-            let Ok(mut link) = Link::new(sock) else { continue };
+            let name = dev.Name().map(|n| n.to_string()).unwrap_or_default();
+            let label = if name.is_empty() { mac(addr) } else { format!("{} ({name})", mac(addr)) };
+            let sock = match dial(&dev) {
+                Ok(s) => s,
+                Err(e) => {
+                    // Only on a search by hand: the background rounds would fill the list.
+                    if scan { note_attempt(&app2, &label, &e); }
+                    why = e;
+                    continue;
+                }
+            };
+            let mut link = match Link::new(sock) {
+                Ok(l) => l,
+                Err(e) => { why = err(e); if scan { note_attempt(&app2, &label, &why); } continue; }
+            };
             if run_session(&app2, &mut link, true, &mac(addr)).error.is_none() {
                 met += 1;
             }
         }
         if met == 0 && scan {
-            return Err("no contacts with Aquamarine answered nearby".to_string());
+            return Err(if why.is_empty() { "no contacts with Aquamarine answered nearby".to_string() } else { why });
         }
         Ok(())
     })
