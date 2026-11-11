@@ -478,12 +478,8 @@
           <video class="banner-vid" use:streamSrc={shownBanner} muted loop autoplay playsinline></video>
         {/if}
         {#if patternBg}<div class="pattern" style:background-image={`url("${patternBg}")`}></div>{/if}
-        {#if isMe && !editing}
-          <button class="banner-hit" onclick={() => pickImage("banner")} disabled={!!uploading} aria-label={$t("Change banner")}>
-            <span>{uploading === "banner" ? $t("Uploading…") : $t("📷 Change banner — photo, GIF or video")}</span>
-          </button>
-        {/if}
-        {#if editing && isMe && draft}
+        {#if isMe}
+          <!-- My own profile: the small buttons right away, not only in "Edit". -->
           <div class="banner-tools">
             <button class="bn-btn" onclick={() => pickImage("banner")} disabled={!!uploading}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
@@ -505,11 +501,11 @@
               {view.display_name.charAt(0).toUpperCase()}
             {/if}
           </div>
-          {#if view.online}<span class="presence {view.online}" title={view.online}></span>{/if}
-          {#if editing && isMe && draft}
+          {#if view.online && !isMe}<span class="presence {view.online}" title={view.online}></span>{/if}
+          {#if isMe}
             <button class="av-edit" onclick={() => pickImage("avatar")} title={$t("Change avatar")} aria-label={$t("Change avatar")} disabled={!!uploading}>
               {#if uploading === "avatar"}…{:else}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>{/if}</button>
-            {#if draft.avatar_url}
+            {#if editing ? draft?.avatar_url : $profile.avatar_url}
               <button class="av-remove" onclick={() => removeImage("avatar")} title={$t("Remove avatar")} disabled={!!uploading}>×</button>
             {/if}
           {/if}
@@ -1261,12 +1257,6 @@
   .btn-ghost.small { padding: 5px 10px; font-size: 12px; }
   .fav-track { display: flex; flex-direction: column; gap: 4px; }
   .fav-title { font-size: 12.5px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .banner-hit { position: absolute; inset: 0; border: none; background: rgba(0,0,0,0); color: #fff; cursor: pointer;
-    display: grid; place-items: center; font: inherit; font-weight: 700; font-size: 13px; transition: background .2s; }
-  .banner-hit span { opacity: 0; transform: translateY(4px); transition: opacity .2s, transform .2s; background: rgba(0,0,0,.55);
-    padding: 6px 12px; border-radius: calc(10px * var(--rk, 1)); backdrop-filter: blur(6px); }
-  .banner-hit:hover { background: rgba(0,0,0,.25); }
-  .banner-hit:hover span, .banner-hit:focus-visible span { opacity: 1; transform: none; }
   .banner-tools { z-index: 3; position: absolute; right: 14px; bottom: 12px; display: flex; gap: 6px; align-items: center; }
   .bn-btn {
     display: inline-flex; align-items: center; gap: 6px;
