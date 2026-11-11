@@ -1477,7 +1477,12 @@
   .ava.lg { width: 96px; height: 96px; font-size: 38px; }
   .ava.md { width: 44px; height: 44px; font-size: 18px; }
   .ava.sm { width: 28px; height: 28px; font-size: 12px; }
-  .ava.speaking { box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 4px #3BA55D; }
+  /* Who's talking: a neon ring and glow in the theme's colour (the
+     Aquamarine theme — turquoise), breathing while they speak. */
+  .ava.speaking { box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 4px var(--accent), 0 0 18px 4px var(--accent-glow, color-mix(in srgb, var(--accent) 55%, transparent));
+    animation: talk 1.1s ease-in-out infinite alternate; }
+  .ava.sm.speaking { box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 3.5px var(--accent), 0 0 10px 2px var(--accent-glow, color-mix(in srgb, var(--accent) 55%, transparent)); }
+  @keyframes talk { to { filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 70%, transparent)); } }
   .ava-badge {
     position: absolute; right: -3px; bottom: -3px;
     width: 18px; height: 18px; border-radius: var(--ava-r, 50%);
@@ -1684,7 +1689,7 @@
     transition: box-shadow 0.12s ease;
   }
   .tile.big { cursor: default; }
-  .tile.speaking, .tile.me-speaking { box-shadow: inset 0 0 0 3px #3BA55D; }
+  .tile.speaking, .tile.me-speaking { box-shadow: inset 0 0 0 3px var(--accent), inset 0 0 26px -6px var(--accent), 0 0 22px -4px var(--accent-glow, color-mix(in srgb, var(--accent) 55%, transparent)); }
   .tile video { width: 100%; height: 100%; display: block; object-fit: cover; background: #000; }
   .tile video.contain { object-fit: contain; }
   .tile.big video.contain { touch-action: none; transform-origin: center; }

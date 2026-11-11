@@ -75,7 +75,7 @@
     transition: box-shadow 0.15s, transform 0.12s; touch-action: none; }
   .sm-p img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; pointer-events: none; }
   .sm-p small { position: absolute; top: 100%; left: 50%; transform: translateX(-50%); margin-top: 2px; font-size: 10px; font-weight: 700; color: var(--fg-muted); white-space: nowrap; pointer-events: none; }
-  .sm-p.speaking { box-shadow: 0 0 0 3px #3ddc84; }
+  .sm-p.speaking { box-shadow: 0 0 0 3px var(--accent), 0 0 14px 3px var(--accent-glow, color-mix(in srgb, var(--accent) 55%, transparent)); }
   .sm-p.drag { cursor: grabbing; transform: scale(1.12); z-index: 2; }
   .sm-empty { position: absolute; left: 0; right: 0; bottom: 18%; text-align: center; font-size: 11.5px; color: var(--fg-dim); }
   .sm-side { display: flex; flex-direction: column; gap: 8px; min-width: 180px; max-width: 240px; }
