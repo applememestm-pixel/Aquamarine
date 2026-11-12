@@ -2794,4 +2794,5 @@ export const RU: Record<string, string> = {
   "Server “{name}” created": "Сервер «{name}» создан",
   "Channel “{name}” created": "Канал «{name}» создан",
   "My QR code": "Мой QR-код",
+  "Too many tries. Try again in {s} s.": "Слишком много попыток. Повторите через {s} с.",
 };
