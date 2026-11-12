@@ -187,6 +187,9 @@ pub async fn send_message(
         push_own_message(&mut s, &peer_id, msg.clone(), &text);
         msg
     };
+    // Show it right away; the sending below can take a moment (a new device
+    // of theirs needs a session first).
+    let _ = app.emit("aqua://own_sent", serde_json::json!({ "peer_id": peer_id }));
     // Encrypted once per device of the peer, plus a copy for my other devices.
     crate::multidev::fanout(&app, &peer_id, &text, true).await?;
     Ok(SendResult { id: out_msg.id, time: out_msg.time })
@@ -3300,19 +3303,46 @@ pub async fn group_send(
         out
     };
 
-    // Fan out.
+    // The message shows in the chat now — not after it has gone to every
+    // member's every device one by one (seconds in a big group).
+    let _ = app.emit("aqua://own_sent", serde_json::json!({ "peer_id": gid }));
+
+    // Fan out in the background, to all members at once.
     let wire = format!(
         "{GRPMSG_PREFIX}{}",
         serde_json::json!({ "gid": gid, "author": me, "body": body, "room": room_id })
     );
-    for m in group.members.iter().filter(|m| m.username != me) {
-        if let Err(e) = deliver_to_member(&app, &m.username, &wire).await {
-            tracing::warn!(member = %m.username, %e, "group_send: delivery failed");
-        }
-    }
-    crate::multidev::sync_raw(&app, &wire).await;
+    let members: Vec<String> = group.members.iter().filter(|m| m.username != me).map(|m| m.username.clone()).collect();
+    group_outbox(&app).send((members, wire)).map_err(|_| "the sending queue stopped".to_string())?;
 
     Ok(SendResult { id: out.0, time: out.1 })
+}
+
+/// Group messages go out from one queue, in the order they were sent (two
+/// quick messages never arrive swapped): each to all members at once.
+type GroupJob = (Vec<String>, String);
+fn group_outbox(app: &AppHandle) -> tokio::sync::mpsc::UnboundedSender<GroupJob> {
+    static TX: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<GroupJob>> = std::sync::OnceLock::new();
+    TX.get_or_init(|| {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<GroupJob>();
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            while let Some((members, wire)) = rx.recv().await {
+                let sends = members.iter().map(|m| {
+                    let (app, wire) = (&app, &wire);
+                    async move {
+                        if let Err(e) = deliver_to_member(app, m, wire).await {
+                            tracing::warn!(member = %m, %e, "group_send: delivery failed");
+                        }
+                    }
+                });
+                futures_util::future::join_all(sends).await;
+                crate::multidev::sync_raw(&app, &wire).await;
+            }
+        });
+        tx
+    })
+    .clone()
 }
 
 /// The room the UI has open in a supergroup: group sends without an
