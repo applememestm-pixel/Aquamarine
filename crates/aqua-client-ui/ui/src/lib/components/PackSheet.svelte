@@ -152,7 +152,7 @@
       </header>
 
       {#if error}
-        <div class="ps-note">{error}</div>
+        <div class="ps-note">{/can't reach Telegram|Telegram is blocked/i.test(error) ? $t("Your server can't reach Telegram, so the whole pack doesn't load. This sticker can still be saved. (Server admin: Aquamarine Server → Stickers → Telegram network → proxy.)") : error}</div>
       {:else if !preview}
         <div class="ps-grid">
           {#each Array(12) as _, i (i)}<div class="ps-cell skel"></div>{/each}
@@ -193,7 +193,7 @@
           <button class="ps-btn ghost" onclick={() => { const tl = preview?.local?.title; close(); if (tl && !preview?.ref.startsWith("tg:")) openPackManager(tl); else openSettings("stickers"); }}>{$t("Manage packs")}</button>
         {:else if preview?.server}
           <button class="ps-btn primary" disabled={busy} onclick={add}>{busy ? "…" : tr("Add {n} stickers", { n: items.length })}</button>
-        {:else if preview && $packSheet.path}
+        {:else if (preview || error) && $packSheet.path}
           <button class="ps-btn primary" onclick={saveThis}>{$t("Add this sticker")}</button>
         {/if}
       </footer>

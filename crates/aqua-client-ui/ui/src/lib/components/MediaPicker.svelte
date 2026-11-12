@@ -28,6 +28,9 @@
   }
 </script>
 
+{#snippet bin()}<svg class="bin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>{/snippet}
+
+
 <script lang="ts">
   import { onBack } from "../back";
   import { t, tr } from "../i18n";
@@ -140,6 +143,29 @@
     [ids[i], ids[j]] = [ids[j], ids[i]];
     saveOrder(tab, ids);
   }
+  // ---- settings (the gear next to the pencil): delete packs and GIFs ----
+  let manageOpen = $state(false);
+  /** What waits for the second tap ("Delete?"). */
+  let armed = $state<string | null>(null);
+  $effect(() => { void tab; manageOpen = false; armed = null; });
+  const managedPacks = $derived(tab === "emoji" ? emojiPacks.filter((x) => x.pack).map((x) => x.pack!) : tab === "stickers" ? stickerPacks : []);
+  async function dropPack(p: StickerPack) {
+    if (armed !== p.id) { armed = p.id; return; }
+    armed = null;
+    try {
+      await api.deleteStickerPack(p.title);
+      showToast(tr("Deleted “{pack}”", { pack: p.title }));
+      await refreshCatalogue();
+      stickerLibraryTick.update((x) => x + 1);
+      if (p.kind === "emoji") void loadEmojiPacks();
+    } catch (e) { showToast(String(e)); }
+  }
+  async function dropGif(g: GifItem) {
+    if (armed !== g.id) { armed = g.id; return; }
+    armed = null;
+    try { await api.deleteGif(g.name); await refreshCatalogue(); } catch (e) { showToast(String(e)); }
+  }
+
   function clearRecent() {
     const kind = tab === "emoji" ? "emoji" : "stickers";
     if (kind === "emoji") recentEmoji = []; else recentStickers = [];
@@ -799,7 +825,36 @@
     {/if}
 
     <div class="body" bind:this={scroller} onscroll={onScroll}>
-      {#if tab === "gifs"}
+      {#if manageOpen}
+        <div class="mng">
+          <div class="mng-head">{$t(tab === "gifs" ? "Saved GIFs" : tab === "emoji" ? "Emoji packs" : "Sticker packs")}<span class="mng-hint">{$t("Tap the bin twice to delete.")}</span></div>
+          {#if tab === "gifs"}
+            {#if !(catalogue?.gifs ?? []).length}<div class="empty">{$t("No saved GIFs yet.")}</div>{/if}
+            <div class="gifs">
+              {#each catalogue?.gifs ?? [] as g (g.id)}
+                <div class="gif mng-gif">
+                  <AnimatedMedia lazy src={assetUrl(g.path)} mime={g.mime ?? "image/gif"} alt={g.name} fit="cover" play="never" />
+                  <button class="mng-del over" class:armed={armed === g.id} onclick={() => dropGif(g)} title={$t("Delete")} aria-label={$t("Delete")}>
+                    {#if armed === g.id}{$t("Delete?")}{:else}{@render bin()}{/if}
+                  </button>
+                </div>
+              {/each}
+            </div>
+          {:else}
+            {#if !managedPacks.length}<div class="empty">{$t("No packs yet.")}</div>{/if}
+            {#each managedPacks as p (p.id)}
+              <div class="mng-row">
+                <span class="mng-ico">{#if p.items[0]}<AnimatedMedia lazy src={assetUrl(p.items[0].path)} mime={p.items[0].mime} play="never" />{/if}</span>
+                <span class="mng-name">{#if p.source}<span class="tg">{@html TG_ICON}</span>{/if}{p.title}<small>{p.items.length}</small></span>
+                {#if p.editable}<button class="mng-act" onclick={() => manage(p)} title={$t("Edit pack")} aria-label={$t("Edit pack")}>✎</button>{/if}
+                <button class="mng-del" class:armed={armed === p.id} onclick={() => dropPack(p)} title={$t("Delete")} aria-label={$t("Delete")}>
+                  {#if armed === p.id}{$t("Delete?")}{:else}{@render bin()}{/if}
+                </button>
+              </div>
+            {/each}
+          {/if}
+        </div>
+      {:else if tab === "gifs"}
         {#if !catalogue && loading}
           <div class="empty">{$t("Loading…")}</div>
         {:else if gifs.length === 0}
@@ -856,8 +911,9 @@
       {/if}
     </div>
 
-    {#if tab !== "gifs" && sections.length > 1 && !query}
+    {#if !query}
       <div class="bar-row">
+      {#if tab !== "gifs" && sections.length > 1 && !manageOpen}
       <div class="bar" class:reorder bind:this={bar} onpointermove={barMove} onpointerup={barUp} onpointercancel={barUp}>
         {#each sections as sec (sec.id)}
           <button class="bar-btn" data-bar={sec.id} class:active={!reorder && activeSection === sec.id} class:dragging={dragId === sec.id}
@@ -877,6 +933,12 @@
         title={$t(reorder ? "Done" : "Change the order of packs")} aria-label={$t(reorder ? "Done" : "Change the order of packs")}>
         {#if reorder}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>
         {:else}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>{/if}
+      </button>
+      {:else}<span class="bar-fill"></span>{/if}
+      <button class="bar-btn bar-edit" class:on={manageOpen} onclick={() => { manageOpen = !manageOpen; reorder = false; armed = null; }}
+        title={$t(manageOpen ? "Done" : "Manage: delete packs and GIFs")} aria-label={$t(manageOpen ? "Done" : "Manage: delete packs and GIFs")}>
+        {#if manageOpen}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>
+        {:else}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>{/if}
       </button>
       </div>
     {/if}
@@ -997,6 +1059,23 @@
   .gif { aspect-ratio: 4 / 3; border: none; padding: 0; border-radius: calc(8px * var(--rk, 1)); overflow: hidden; background: var(--bg-input); cursor: pointer; }
   .gif:hover { outline: 2px solid var(--accent); }
 
+  .bar-fill { flex: 1; }
+  .mng { padding: 6px 8px 10px; }
+  .mng-head { display: flex; align-items: baseline; gap: 8px; font-weight: 600; font-size: 13px; padding: 4px 4px 8px; color: var(--fg); }
+  .mng-hint { font-weight: 400; font-size: 11.5px; color: var(--fg-muted); }
+  .mng-row { display: flex; align-items: center; gap: 10px; padding: 6px 4px; border-radius: calc(10px * var(--rk, 1)); }
+  .mng-row:hover { background: var(--bg-hover); }
+  .mng-ico { width: 36px; height: 36px; flex-shrink: 0; display: grid; place-items: center; overflow: hidden; border-radius: calc(8px * var(--rk, 1)); }
+  .mng-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 14px; }
+  .mng-name small { color: var(--fg-muted); font-size: 12px; }
+  .mng-act, .mng-del { flex-shrink: 0; height: 32px; min-width: 32px; padding: 0 8px; border: none; border-radius: calc(8px * var(--rk, 1)); background: transparent; color: var(--fg-muted); cursor: pointer; display: grid; place-items: center; font-size: 12.5px; font-weight: 600; transition: background .15s, color .15s; }
+  .mng-act:hover { background: var(--bg-hover); color: var(--fg); }
+  .mng-del:hover { color: var(--danger, #e5484d); background: var(--bg-hover); }
+  .mng-del.armed { background: var(--danger, #e5484d); color: #fff; }
+  .mng-del :global(.bin) { width: 17px; height: 17px; }
+  .mng-gif { position: relative; cursor: default; }
+  .mng-del.over { position: absolute; top: 4px; right: 4px; height: 28px; min-width: 28px; background: rgba(0, 0, 0, .55); color: #fff; backdrop-filter: blur(4px); }
+  .mng-del.over.armed { background: var(--danger, #e5484d); }
   .bar-row { display: flex; align-items: center; border-top: 1px solid var(--border); flex-shrink: 0; min-width: 0; }
   .bar {
     display: flex; gap: 2px; padding: 4px 6px; overflow-x: auto; scrollbar-width: none;

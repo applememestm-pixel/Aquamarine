@@ -84,6 +84,10 @@ impl SmtpConfig {
 pub struct Wipe {
     #[serde(default)]
     pub accounts: bool,
+    /// Every person's account and everything of theirs, but the bots (and
+    /// the chats people had with them) stay.
+    #[serde(default)]
+    pub people: bool,
     #[serde(default)]
     pub messages: bool,
     #[serde(default)]
@@ -2622,6 +2626,27 @@ impl Directory {
                 ("e-mail codes", "email_codes"), ("network names", "fed_names"), ("sign-up addresses", "signup_ips"),
             ] {
                 run(what, &format!("DELETE FROM {table}"));
+            }
+        } else if w.people {
+            // People go first; then whatever isn't a remaining (bot) account's.
+            const GONE: &str = "NOT IN (SELECT username FROM users)";
+            run("accounts", "DELETE FROM users WHERE is_bot=0");
+            for (what, sql) in [
+                ("keys", format!("DELETE FROM prekeys WHERE username {GONE}")),
+                ("profile pictures", format!("DELETE FROM profile_media WHERE username {GONE}")),
+                ("last seen", format!("DELETE FROM last_seen WHERE username {GONE}")),
+                ("backups", format!("DELETE FROM backups WHERE username {GONE}")),
+                ("synced history", format!("DELETE FROM hist_store WHERE username {GONE}")),
+                ("waiting messages", format!("DELETE FROM inbox WHERE user {GONE}")),
+                ("capsules", "DELETE FROM capsules".to_string()),
+                ("bot chats", format!("DELETE FROM bot_peers WHERE user {GONE}")),
+                ("renames", "DELETE FROM renames".to_string()),
+                ("check marks", "DELETE FROM verified WHERE uid NOT IN (SELECT uid FROM users)".to_string()),
+                ("e-mail codes", "DELETE FROM email_codes".to_string()),
+                ("network names", format!("DELETE FROM fed_names WHERE username {GONE}")),
+                ("sign-up addresses", "DELETE FROM signup_ips".to_string()),
+            ] {
+                run(what, &sql);
             }
         } else {
             if w.messages { run("waiting messages", "DELETE FROM inbox"); }

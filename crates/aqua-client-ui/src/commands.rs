@@ -1485,6 +1485,22 @@ pub fn delete_sticker_pack(state: State<'_, StdMutex<AppState>>, title: String) 
     std::fs::remove_dir_all(&dir).map_err(|e| format!("delete pack: {e}"))
 }
 
+/// Delete a saved GIF (a file in the device's `gifs/` folder, by name).
+#[tauri::command]
+pub fn delete_gif(state: State<'_, StdMutex<AppState>>, name: String) -> Result<(), String> {
+    let data_dir = state.lock().map_err(|e| e.to_string())?.data_dir.clone();
+    let root = crate::accounts::shared_root(&data_dir).join("gifs");
+    let n = name.trim();
+    if n.is_empty() || n.contains(['/', '\\']) || n.starts_with('.') {
+        return Err("bad name".into());
+    }
+    let path = root.join(n);
+    if !path.is_file() || !media::path_is_within(&root, &path) {
+        return Err("no such GIF".into());
+    }
+    std::fs::remove_file(&path).map_err(|e| format!("delete GIF: {e}"))
+}
+
 /// Rename a sticker pack (its folder).
 #[tauri::command]
 pub fn rename_sticker_pack(state: State<'_, StdMutex<AppState>>, title: String, new_title: String) -> Result<(), String> {
@@ -1806,9 +1822,13 @@ pub async fn forward_file(
     peer_id: String,
     file_path: String,
     header: Option<String>,
+    category: Option<String>,
 ) -> Result<AttachResult, String> {
     let header = header.filter(|h| crate::state::split_fwd(&format!("{}{h}\nx", crate::state::FWD_PREFIX)).0.is_some());
-    attach_file_fwd(state, app, peer_id, file_path, None, None, header, None).await
+    // A sticker / GIF / voice / round video stays one (it used to arrive as
+    // a plain video file); a view-once one isn't forwarded as such.
+    let category = category.filter(|c| matches!(c.as_str(), "sticker" | "gif" | "voice" | "circle" | "document"));
+    attach_file_fwd(state, app, peer_id, file_path, category, None, header, None).await
 }
 
 async fn attach_file_fwd(

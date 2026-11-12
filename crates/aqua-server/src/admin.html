@@ -646,6 +646,7 @@
   const DICT = {
     "Clear the server":"Очистить сервер","Clear…":"Очистить…",
     "wipeNote":"Стирает выбранное прямо сейчас, без возврата. Сервер продолжает работать. Не трогается: настройки, почта, Telegram, музыка, сеть серверов.",
+    "wpPeople":"Все люди — их аккаунты целиком, а боты и их чаты остаются","wipeConfirmPeople":"Стереть всех людей? Все выйдут и должны будут зарегистрироваться заново. Боты остаются. Отменить нельзя.",
     "wpAccounts":"Все аккаунты целиком — люди, ключи, профили, двухэтапные коды, копии чатов, история, недоставленные сообщения, капсулы, боты и галочки",
     "wpMessages":"Недоставленные сообщения","wpHistory":"История между устройствами","wpBackups":"Копии чатов","wpProfiles":"Аватарки и баннеры",
     "wpCapsules":"Капсулы времени","wpBots":"Боты (встроенные появятся снова)","wpMarks":"Галочки","wpCodes":"Коды из писем",
@@ -788,26 +789,29 @@
   function msg(id, text, cls){ $(id).className = "note " + (cls||""); $(id).textContent = text; if (id !== "gateMsg") $(id).style.marginTop = "10px"; }
 
   // "Clear the server" (POST /v1/admin/wipe; the app's panel has the same).
-  const WIPE_EN = { wpAccounts: "Every account, whole — people, keys, profiles, two-step codes, chat backups, history, undelivered messages, capsules, bots and check marks",
+  const WIPE_EN = { wpPeople: "Every person — their accounts, whole; the bots and their chats stay", wipeConfirmPeople: "Erase every person? Everyone is logged out and has to sign up again. The bots stay. This can't be undone.", wpAccounts: "Every account, whole — people, keys, profiles, two-step codes, chat backups, history, undelivered messages, capsules, bots and check marks",
     wpMessages: "Undelivered messages", wpHistory: "History synced between devices", wpBackups: "Chat backups", wpProfiles: "Avatars and banners",
     wpCapsules: "Time capsules", wpBots: "Bots (the built-in ones come back)", wpMarks: "Check marks", wpCodes: "E-mail codes",
     wpFiles: "Files from chats", wpPacks: "Sticker and emoji packs", wpLogs: "Journal and error reports",
     wipeConfirm: "Erase what's ticked from the server? This can't be undone.", wipeConfirmAll: "Erase ALL accounts? Everyone is logged out and has to sign up again. This can't be undone." };
   const WT = (k) => (RU ? T(k) : (WIPE_EN[k] || k));
-  const WIPE = [["accounts","wpAccounts",true],["messages","wpMessages",false],["history","wpHistory",false],["backups","wpBackups",false],
+  const WIPE = [["accounts","wpAccounts",true],["people","wpPeople",false],["messages","wpMessages",false],["history","wpHistory",false],["backups","wpBackups",false],
     ["profiles","wpProfiles",false],["capsules","wpCapsules",false],["bots","wpBots",false],["marks","wpMarks",false],["codes","wpCodes",false],
     ["files","wpFiles",true],["packs","wpPacks",false],["logs","wpLogs",true]];
   const PER_PERSON = ["messages","history","backups","profiles","capsules","bots","marks","codes"];
-  function wipeSync(){ const all = $("wp_accounts")?.checked;
-    for (const k of PER_PERSON){ const b=$("wp_"+k); if(!b) continue; b.disabled=!!all; if(all) b.checked=true; b.parentElement.style.opacity = all ? ".55" : ""; } }
+  function wipeSync(changed){
+    if (changed==="accounts" && $("wp_accounts")?.checked) $("wp_people").checked=false;
+    if (changed==="people" && $("wp_people")?.checked) $("wp_accounts").checked=false;
+    const all = $("wp_accounts")?.checked, ppl = $("wp_people")?.checked;
+    for (const k of PER_PERSON){ const b=$("wp_"+k); if(!b) continue; const lock=all||ppl; b.disabled=!!lock; if(lock) b.checked = all || k!=="bots"; b.parentElement.style.opacity = lock ? ".55" : ""; } }
   function paintWipe(){ const box=$("wipeBox"); if(!box || box.dataset.h) return; box.dataset.h="1";
-    box.innerHTML = WIPE.map(([k,l,on]) => `<label style="display:flex;gap:8px;align-items:flex-start;margin:6px 0;${k==="accounts"?"font-weight:600":""}"><input type="checkbox" id="wp_${k}" ${on?"checked":""}> <span>${esc(WT(l))}</span></label>`).join("");
-    for (const [k] of WIPE) $("wp_"+k).addEventListener("change", wipeSync);
+    box.innerHTML = WIPE.map(([k,l,on]) => `<label style="display:flex;gap:8px;align-items:flex-start;margin:6px 0;${k==="accounts"||k==="people"?"font-weight:600":""}"><input type="checkbox" id="wp_${k}" ${on?"checked":""}> <span>${esc(WT(l))}</span></label>`).join("");
+    for (const [k] of WIPE) $("wp_"+k).addEventListener("change", () => wipeSync(k));
     wipeSync(); }
   async function doWipe(){ const body={confirm:"WIPE"}; let any=false;
     for (const [k] of WIPE){ body[k]=!!$("wp_"+k)?.checked; any=any||body[k]; }
     if(!any){ $("wipeMsg").textContent=T("Nothing is ticked."); return; }
-    if(!confirm(WT(body.accounts?"wipeConfirmAll":"wipeConfirm"))) return;
+    if(!confirm(WT(body.accounts?"wipeConfirmAll":body.people?"wipeConfirmPeople":"wipeConfirm"))) return;
     try { const r = await api("/v1/admin/wipe",{method:"POST",body:JSON.stringify(body)});
       $("wipeMsg").textContent = T("Cleared:")+" "+((r.removed||[]).filter(x=>x.n>0).map(x=>x.what+": "+x.n).join(", ")||"—");
     } catch(e){ $("wipeMsg").textContent = String(e.message||e); } }

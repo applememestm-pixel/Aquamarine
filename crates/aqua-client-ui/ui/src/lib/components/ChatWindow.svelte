@@ -2421,7 +2421,7 @@
     if (k.type === "article") return { kind: "text", text: [k.content.title, k.content.body].filter(Boolean).join("\n\n"), author };
     if (k.type === "reply") return { kind: "text", text: k.content.text, author };
     if (k.type === "file") {
-      if (k.content.saved_at) return { kind: "file", path: k.content.saved_at, name: k.content.name, author };
+      if (k.content.saved_at) return { kind: "file", path: k.content.saved_at, name: k.content.name, author, category: k.content.category };
       return null; // not downloaded → can't re-send
     }
     return null;
@@ -3063,7 +3063,7 @@
     const h = fwdHeader(it.author);
     try {
       if (it.kind === "text") await api.sendMessage("__saved__", h ? `[fwd:v1]${h}\n${it.text}` : it.text);
-      else if (h) await api.forwardFile("__saved__", it.path, h);
+      else if (h || it.category) await api.forwardFile("__saved__", it.path, h, it.category);
       else await api.attachFile("__saved__", it.path);
       chats.set(await api.listChats());
       showToast(tr("Saved to Saved Messages"));

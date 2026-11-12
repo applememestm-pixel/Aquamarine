@@ -15,7 +15,7 @@
   /** One forwardable payload, extracted from a chat message. */
   export type ForwardItem =
     | { kind: "text"; text: string; author?: ForwardAuthor }
-    | { kind: "file"; path: string; name: string; author?: ForwardAuthor };
+    | { kind: "file"; path: string; name: string; author?: ForwardAuthor; /** sticker / gif / voice / circle: stays one when forwarded */ category?: string | null };
 
   interface ForwardState {
     open: boolean;
@@ -93,8 +93,8 @@
           try {
             if (it.kind === "text") {
               await sendText(peerId, h ? `[fwd:v1]${h}\n${it.text}` : it.text);
-            } else if (h) {
-              await api.forwardFile(peerId, it.path, h);
+            } else if (h || it.category) {
+              await api.forwardFile(peerId, it.path, h, it.category);
             } else {
               await api.attachFile(peerId, it.path);
             }

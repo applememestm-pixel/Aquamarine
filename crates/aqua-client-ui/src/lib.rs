@@ -349,6 +349,7 @@ pub fn run() -> Result<()> {
             commands::add_media_files,
             commands::delete_media_item,
             commands::delete_sticker_pack,
+            commands::delete_gif,
             commands::rename_sticker_pack,
             commands::set_activity_detection,
             commands::current_activity,

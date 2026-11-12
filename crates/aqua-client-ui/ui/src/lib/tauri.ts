@@ -208,6 +208,7 @@ export const api = {
   addMediaFiles:      (target: "gifs" | "stickers" | "emoji", pack: string | null, paths: string[]): Promise<number> => invoke("add_media_files", { target, pack, paths }),
   deleteMediaItem:    (path: string): Promise<void> => invoke("delete_media_item", { path }),
   deleteStickerPack:  (title: string): Promise<void> => invoke("delete_sticker_pack", { title }),
+  deleteGif:          (name: string): Promise<void> => invoke("delete_gif", { name }),
   createStickerPack:  (title: string, kind: "sticker" | "emoji"): Promise<string> => invoke("create_sticker_pack", { title, kind }),
   packAddFiles:       (title: string, paths: string[]): Promise<string[]> => invoke("pack_add_files", { title, paths }),
   packSetOrder:       (title: string, files: string[]): Promise<void> => invoke("pack_set_order", { title, files }),
@@ -260,7 +261,7 @@ export const api = {
   markChatRead:       (peerId: string): Promise<void> => invoke("mark_chat_read", { peerId }),
   attachFile:         (peer_id: string, file_path: string, caption?: string): Promise<AttachResult>  => invoke("attach_file", { peerId: peer_id, filePath: file_path, caption: caption || null }),
   /** Re-send a file with a "Forwarded from" header (JSON). */
-  forwardFile:        (peer_id: string, file_path: string, header: string): Promise<AttachResult> => invoke("forward_file", { peerId: peer_id, filePath: file_path, header }),
+  forwardFile:        (peer_id: string, file_path: string, header: string | null, category?: string | null): Promise<AttachResult> => invoke("forward_file", { peerId: peer_id, filePath: file_path, header, category: category ?? null }),
   attachFileAs:       (peerId: string, filePath: string, mode: "file" | "media" | "compressed" | "live" | "live-loop" | "live-bounce" | "once", caption?: string): Promise<AttachResult> => invoke("attach_file_as", { peerId, filePath, mode, caption: caption || null }),
   attachBytes:        (peerId: string, name: string, mime: string, bytes: number[], caption?: string): Promise<AttachResult> => invoke("attach_bytes", { peerId, name, mime, bytes, caption: caption || null }),
   downloadFile:       (peer_id: string, message_id: string): Promise<DownloadResult> => invoke("download_file", { peerId: peer_id, messageId: message_id }),

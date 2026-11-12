@@ -2924,6 +2924,14 @@ async fn admin_wipe(State(state): State<AppState>, headers: axum::http::HeaderMa
         state.bindings.clear();
         state.bot_queues.clear();
     }
+    else if w.people {
+        // Everyone but the bots is gone: their connections too.
+        let dir = state.directory.clone();
+        let before = state.users.len();
+        state.users.retain(|name, _| dir.is_bot(name));
+        state.bindings.retain(|name, _| dir.is_bot(name));
+        removed.push(("connections", before.saturating_sub(state.users.len())));
+    }
     if w.accounts || w.bots {
         verify::ensure_bot(&state);
         if stars::has_key() {

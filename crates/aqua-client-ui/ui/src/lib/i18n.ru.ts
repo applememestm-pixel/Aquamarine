@@ -2808,4 +2808,13 @@ export const RU: Record<string, string> = {
   "At most {n} accounts in one app. Log out of one to add another.": "В одном приложении не больше {n} аккаунтов. Выйдите из одного, чтобы добавить другой.",
   "{n} accounts at most": "Не больше {n} аккаунтов",
   "An account was already registered from this network. One per network — sign in to it instead.": "С этой сети уже зарегистрирован аккаунт. Один на сеть — войдите в него.",
+  "Your server can't reach Telegram, so the whole pack doesn't load. This sticker can still be saved. (Server admin: Aquamarine Server → Stickers → Telegram network → proxy.)": "Сервер не может достучаться до Telegram, поэтому весь набор не загружается. Этот стикер можно сохранить. (Администратору сервера: Aquamarine Server → Стикеры → Сеть Telegram → прокси.)",
+  "Deleted “{pack}”": "Удалён «{pack}»",
+  "Saved GIFs": "Сохранённые GIF",
+  "Emoji packs": "Наборы эмодзи",
+  "Sticker packs": "Наборы стикеров",
+  "Tap the bin twice to delete.": "Чтобы удалить, нажмите на корзину дважды.",
+  "Delete?": "Удалить?",
+  "No packs yet.": "Наборов пока нет.",
+  "Manage: delete packs and GIFs": "Управление: удалить наборы и GIF",
 };
