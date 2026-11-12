@@ -2661,7 +2661,7 @@ export const RU: Record<string, string> = {
   "this device isn't on the account's signed device list": "Устройство собеседника не подтверждено его аккаунтом — сообщение не отправлено. Пусть он обновит Aquamarine и откроет Настройки → Устройства.",
   "no device to send to": "У собеседника нет устройства, на которое можно отправить",
   "not connected": "Нет соединения с сервером",
-  "This device isn't confirmed by your account yet: messages don't reach it. Confirm it on another device of yours (“It's me”) — or, if there is none, start the device list over.": "Это устройство ещё не подтверждено вашим аккаунтом: сообщения на него не приходят. Подтвердите его на другом своём устройстве («Это я») — а если другого нет, начните список устройств заново.",
+  "This device isn't confirmed by your account yet: people don't receive your messages from it, and theirs don't reach it. Confirm it on another device of yours (“It's me”) — or, if there is none, start the device list over.": "Это устройство не подтверждено вашим аккаунтом: собеседники не получают ваши сообщения с него, а их сообщения не приходят сюда. Подтвердите его на другом своём устройстве («Это я») — а если другого нет, начните список устройств заново.",
   "Close search": "Закрыть поиск",
   "Frequent contacts": "Частые контакты",
   "Type a name, @username or paste an invite link": "Введите имя, @ник или вставьте ссылку-приглашение",

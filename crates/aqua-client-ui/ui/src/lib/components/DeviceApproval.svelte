@@ -47,7 +47,7 @@
     if (!$info?.connected) return;
     clearTimeout(checkT);
     // After the app had its chance to publish / repair the list.
-    checkT = setTimeout(() => void checkListed(), 25_000);
+    checkT = setTimeout(() => void checkListed(), 12_000);
     return () => clearTimeout(checkT);
   });
 
@@ -86,7 +86,7 @@
 
 {#if unlisted && !unlistedSeen && !cur}
   <div class="da-bar" role="status">
-    <span>{$t("This device isn't confirmed by your account yet: messages don't reach it. Confirm it on another device of yours (“It's me”) — or, if there is none, start the device list over.")}</span>
+    <span>{$t("This device isn't confirmed by your account yet: people don't receive your messages from it, and theirs don't reach it. Confirm it on another device of yours (“It's me”) — or, if there is none, start the device list over.")}</span>
     <button class="da-btn ok" onclick={() => { unlistedSeen = true; openSettings("devices"); }}>{$t("Devices")}</button>
     <button class="da-later" data-x onclick={() => (unlistedSeen = true)} aria-label={$t("Close")}>✕</button>
   </div>
