@@ -89,7 +89,7 @@ async fn main() -> anyhow::Result<()> {
     // Ctrl+C / closing the console: stop cleanly, then drop the file cache
     // (people's data stays — blobstore::clear_cache).
     let blobs = state.blobs.clone();
-    axum::serve(listener, app(state))
+    axum::serve(listener, app(state).into_make_service_with_connect_info::<std::net::SocketAddr>())
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })

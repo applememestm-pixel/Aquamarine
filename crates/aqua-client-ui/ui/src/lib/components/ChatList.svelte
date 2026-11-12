@@ -114,7 +114,7 @@
   import { ping } from "../ping";
   import { meshStatus, offlineLink } from "../mesh";
   import ServerPicker from "./ServerPicker.svelte";
-  import { accounts, loadAccounts, switchAccount } from "../accounts";
+  import { accounts, loadAccounts, switchAccount, accountsFull, MAX_ACCOUNTS } from "../accounts";
 
   // ---- Phones: your avatar in the title row. Tap — your profile; hold —
   // the accounts on this device (switch, or add one more). ----
@@ -1394,8 +1394,8 @@
           {/if}
         </div>
       {/each}
-      <button class="acc-add" disabled={switching} onclick={() => pickAccount("new")}>
-        <span class="acc-plus">+</span>{$t("Add account")}
+      <button class="acc-add" disabled={switching || $accountsFull} onclick={() => pickAccount("new")}>
+        <span class="acc-plus">+</span>{$accountsFull ? $t("{n} accounts at most", { n: MAX_ACCOUNTS }) : $t("Add account")}
       </button>
       {#if switching}<div class="acc-note">{$t("Opening the account…")}</div>
       {:else}<div class="acc-note">{$t("Each account keeps its own chats on this device. The app restarts to switch.")}</div>{/if}

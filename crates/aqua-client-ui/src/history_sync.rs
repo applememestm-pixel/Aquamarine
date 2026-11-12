@@ -119,6 +119,21 @@ fn key_of(m: &ChatMessage, me: &str) -> String {
     format!("{who}\u{1}{when}\u{1}{what}")
 }
 
+/// `key_of` without the time.
+fn loose_key(k: &str) -> String {
+    let mut p = k.splitn(3, '\u{1}');
+    let who = p.next().unwrap_or_default();
+    let _when = p.next();
+    format!("{who}\u{1}{}", p.next().unwrap_or_default())
+}
+
+/// "HH:MM…" → minutes since midnight.
+fn minutes(time: &str) -> Option<i32> {
+    let h: i32 = time.get(0..2)?.parse().ok()?;
+    let m: i32 = time.get(3..5)?.parse().ok()?;
+    Some(h * 60 + m)
+}
+
 /// A short hash of a message, the same on every device and build.
 fn hash_of(m: &ChatMessage, me: &str) -> u64 {
     h64(key_of(m, me).as_bytes())
@@ -264,13 +279,31 @@ pub(crate) fn merge(ours: &mut Vec<ChatMessage>, theirs: Vec<ChatMessage>, me: &
     for (i, k) in keys.iter().enumerate() {
         at.entry(k.as_str()).or_default().push(i);
     }
+    // The same message can carry another time on the other device (sent
+    // over Bluetooth / LAN and stamped when it reached the relay later):
+    // a message we have that theirs don't match exactly, with the same
+    // author and text and a time within three hours, is that one — it used
+    // to come in a second time, out of order.
+    let their_keys: HashSet<String> = theirs.iter().map(|m| key_of(m, me)).collect();
+    let mut loose: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, k) in keys.iter().enumerate() {
+        if !their_keys.contains(k) {
+            loose.entry(loose_key(k)).or_default().push(i);
+        }
+    }
     let mut used: HashSet<usize> = HashSet::new();
     let mut inserts: Vec<(usize, ChatMessage)> = Vec::new(); // (insert before index, message)
     let mut cursor = 0usize; // ours[..cursor] is matched up
     for m in theirs {
         let k = key_of(&m, me);
         let hit = at.get(k.as_str()).and_then(|v| v.iter().copied().find(|&i| !used.contains(&i) && i >= cursor))
-            .or_else(|| at.get(k.as_str()).and_then(|v| v.iter().copied().find(|&i| !used.contains(&i))));
+            .or_else(|| at.get(k.as_str()).and_then(|v| v.iter().copied().find(|&i| !used.contains(&i))))
+            .or_else(|| {
+                let mine = minutes(&m.time)?;
+                loose.get(&loose_key(&k))?.iter().copied().find(|&i| {
+                    !used.contains(&i) && minutes(&ours[i].time).is_some_and(|o| { let d = (o - mine).rem_euclid(1440); d.min(1440 - d) <= 180 })
+                })
+            });
         match hit {
             Some(i) => {
                 used.insert(i);
@@ -547,7 +580,7 @@ mod tests {
     use super::*;
 
     fn msg(from: &str, time: &str, text: &str) -> ChatMessage {
-        ChatMessage { id: format!("x-{text}"), from: from.into(), time: time.into(), kind: MessageKind::Text { text: text.into() }, meta: None }
+        ChatMessage { id: format!("x-{text}"), from: from.into(), time: time.into(), at: None, kind: MessageKind::Text { text: text.into() }, meta: None }
     }
     fn texts(v: &[ChatMessage]) -> Vec<String> {
         v.iter().map(|m| match &m.kind { MessageKind::Text { text } => text.clone(), _ => String::new() }).collect()
@@ -574,6 +607,19 @@ mod tests {
         let theirs = vec![msg("ann", "10:00", "ok"), msg("ann", "10:00", "ok")];
         assert_eq!(merge(&mut ours, theirs, "me"), 1);
         assert_eq!(ours.len(), 2);
+    }
+
+    #[test]
+    fn the_same_message_with_another_time_is_not_doubled() {
+        // Sent over Bluetooth at 21:13, reached the relay (and the other
+        // device's history) stamped 21:53.
+        let mut ours = vec![msg("ann", "21:10", "hi"), msg("ann", "21:53:10", "нет"), msg("me", "21:55", "ok")];
+        let theirs = vec![msg("ann", "21:10", "hi"), msg("ann", "21:13:40", "нет"), msg("me", "21:55", "ok")];
+        assert_eq!(merge(&mut ours, theirs, "me"), 0);
+        assert_eq!(ours.len(), 3);
+        // Hours apart: a new message.
+        let theirs = vec![msg("ann", "05:00", "нет")];
+        assert_eq!(merge(&mut ours, theirs, "me"), 1);
     }
 
     #[test]

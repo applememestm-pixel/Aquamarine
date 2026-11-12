@@ -209,6 +209,7 @@
     if (/lives on one device/i.test(m)) { boundHint = true; return tr("@{u} lives on another device: it has no two-step verification, so it can't be moved. Turn it on there (Settings → Privacy & Security), then sign in here.", { u: login }); }
     if (/wrong @username or password/i.test(m)) return tr("Wrong @username or password");
     if (/too many wrong/i.test(m)) return tr("Too many wrong attempts — try again in 15 minutes");
+    if (/already registered from this network/i.test(m)) { existsHint = true; return tr("An account was already registered from this network. One per network — sign in to it instead."); }
     if (/invite-only/i.test(m)) return tr("This server is private: scan the invitation QR from its admin, or paste a pass from your server (Settings → Account & server → Pass).");
     if (/needs an e-mail to sign up/i.test(m)) return tr("This server runs an Aquamarine older than 1.2.0-1 and still asks for an e-mail — ask its owner to update it.");
     if (/username must be/i.test(m)) return tr("@username: 3–32 characters, a-z 0-9 _ . only");

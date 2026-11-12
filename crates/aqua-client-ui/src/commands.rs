@@ -1882,6 +1882,7 @@ async fn attach_file_fwd(
             id: format!("m-{}", crate::state::uuid_like()),
             from: "me".into(),
             time: hhmm_now(),
+            at: crate::state::now_at(),
             kind: MessageKind::File {
                 cid: fake_cid.clone(),
                 key_b64: String::new(),
@@ -3287,6 +3288,7 @@ pub async fn group_send(
             id: format!("m-{}", crate::state::uuid_like()),
             from: me.clone(),
             time: hhmm_now(),
+            at: crate::state::now_at(),
             kind,
         };
         let out = (msg.id.clone(), msg.time.clone());
@@ -3529,7 +3531,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                 let (kind, meta) = crate::state::classify_full(inner, None);
                 let len = s.chats.get(&chat).map(|b| b.messages.len()).unwrap_or(0);
                 if let Some(book) = s.chats.get_mut(&chat) {
-                    book.messages.push(ChatMessage { meta, id: format!("d-{time}-{len}"), from: from.to_string(), time: time.clone(), kind });
+                    book.messages.push(ChatMessage { meta, id: format!("d-{time}-{len}"), from: from.to_string(), time: time.clone(), at: crate::state::now_at(), kind });
                     book.summary.preview = preview_for(&book.messages.last().unwrap().kind);
                     book.summary.preview_by_me = false;
                     book.summary.time = time.clone();
@@ -3623,6 +3625,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                         id: format!("g-{time}-{len}"),
                         from: author.clone(),
                         time: time.clone(),
+                        at: crate::state::now_at(),
                         kind,
                     });
                     book.summary.preview = preview;
@@ -4379,6 +4382,7 @@ pub fn note_call(
         id: format!("call-{}", crate::state::uuid_like()),
         from: "system".into(),
         time: hhmm_now(),
+        at: crate::state::now_at(),
         kind: MessageKind::System { text: text.clone() },
     };
     {
@@ -4742,6 +4746,7 @@ fn push_peer_message(s: &mut AppState, peer_id: &str, text: String, time: &str) 
             id: format!("in-{time}-{msg_len}"),
             from: peer_id.to_string(),
             time: time.to_string(),
+            at: crate::state::now_at(),
             kind,
         });
         book.summary.preview = preview;
@@ -4898,7 +4903,7 @@ mod replies_tests {
         assert_eq!(super::parse_cdm_chat_id("dm~grp_x"), None);
         assert!(!super::is_control_text(r#"[reply:v1]{"q":"x","t":"y"}"#));
         let m = crate::state::ChatMessage {
-            id: "1".into(), from: "vpst".into(), time: "18:22".into(),
+            id: "1".into(), from: "vpst".into(), time: "18:22".into(), at: None,
             kind: crate::state::MessageKind::Text { text: "[status:v1]{}".into() }, meta: None,
         };
         assert!(crate::state::stray_control(&m));

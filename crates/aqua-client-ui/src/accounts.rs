@@ -18,6 +18,9 @@ use tauri::{AppHandle, Manager};
 /// account's home, and where `accounts/` and the pointer live).
 pub struct Base(pub PathBuf);
 
+/// Accounts one app may hold at once (the owner's rule, 1.20.1-3).
+pub const MAX_ACCOUNTS: usize = 3;
+
 const POINTER: &str = "accounts.json";
 const STORE: &str = "webstore.json";
 
@@ -133,7 +136,16 @@ pub fn account_switch(app: AppHandle, slot: String, store: String) -> Result<Swi
     let base = base_of(&app)?;
     let cur = active(&base);
     let target = if slot == "new" {
-        (1..1000).map(|n| format!("a{n}")).find(|s| !dir_of(&base, s).exists()).ok_or("too many accounts")?
+        let all = slots(&base);
+        let registered = |s: &str| read_json(dir_of(&base, s).join("account.json"))["registered"].as_bool().unwrap_or(false);
+        // An "Add account" left unfinished: back to it, not one more.
+        if let Some(s) = all.iter().find(|s| **s != cur && !registered(s)) {
+            s.clone()
+        } else if all.len() >= MAX_ACCOUNTS {
+            return Err(format!("max-accounts:{MAX_ACCOUNTS}"));
+        } else {
+            (1..1000).map(|n| format!("a{n}")).find(|s| !dir_of(&base, s).exists()).ok_or("too many accounts")?
+        }
     } else {
         slot
     };

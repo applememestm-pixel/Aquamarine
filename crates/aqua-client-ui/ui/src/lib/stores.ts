@@ -21,8 +21,14 @@ function notifyIncoming(peerId: string, text: string) {
   // A chat with a password: nothing of it in the notification.
   let lockedChat = false;
   try { lockedChat = !!JSON.parse(localStorage.getItem("aqua.chatLocks.v1") ?? "{}")[peerId]; } catch { /* ignore */ }
-  if (lockedChat) void osNotify("Aquamarine", tr("New message in a locked chat"));
-  else void osNotify(displayName(peerId, peerId), text.slice(0, 120));
+  if (lockedChat) { void osNotify("Aquamarine", tr("New message in a locked chat")); return; }
+  // The chat's name (a group's, not its "grp_…" id) and what the chat list
+  // shows ("📎 report.pdf", not the raw file record); in a group — who wrote.
+  const c = get(chats).find((x) => x.id === peerId);
+  const title = displayName(peerId, c?.name || peerId);
+  let body = (c?.preview || "").trim() || (text.startsWith("[") ? "" : text);
+  if (c?.preview_from && !c.preview_by_me) body = `${displayName(c.preview_from, c.preview_from)}: ${body}`;
+  void osNotify(title, body.slice(0, 120) || tr("New message"));
 }
 
 /** Startup info from the backend. */

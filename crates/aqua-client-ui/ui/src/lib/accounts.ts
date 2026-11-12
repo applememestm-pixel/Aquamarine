@@ -1,5 +1,6 @@
-import { writable } from "svelte/store";
+import { writable, derived } from "svelte/store";
 import { api, type AccountSlot } from "./tauri";
+import { tr } from "./i18n";
 
 /**
  * Several accounts on one device (Rust: accounts.rs). Each one has its own
@@ -18,6 +19,12 @@ const DEVICE_KEYS = new Set([
 const OWNER = "aqua.acct";
 
 export const accounts = writable<AccountSlot[]>([]);
+
+/** Accounts one app may hold at once (accounts.rs::MAX_ACCOUNTS). */
+export const MAX_ACCOUNTS = 3;
+/** No room for one more: three already, none of them an unfinished sign-in
+ *  ("Add account" goes back to that one). */
+export const accountsFull = derived(accounts, (l) => l.length >= MAX_ACCOUNTS && l.every((a) => a.active || a.registered));
 
 export async function loadAccounts(): Promise<AccountSlot[]> {
   try { const l = await api.accountsList(); accounts.set(l); return l; } catch { return []; }
@@ -57,7 +64,8 @@ export async function switchAccount(slot: string): Promise<void> {
   // page still saved landed on top of it (the name and photo of one account
   // ended up on another).
   try { if (!localStorage.getItem(OWNER)) localStorage.setItem(OWNER, (await api.accountsList()).find((a) => a.active)?.slot ?? ""); } catch { /* storage blocked */ }
-  await api.accountSwitch(slot, snapshot());
+  try { await api.accountSwitch(slot, snapshot()); }
+  catch (e) { throw String(e).includes("max-accounts") ? tr("At most {n} accounts in one app. Log out of one to add another.", { n: MAX_ACCOUNTS }) : e; }
   // The app closes and opens again in that account (where a platform can't
   // reopen itself, the next start does).
   await api.appRelaunch();

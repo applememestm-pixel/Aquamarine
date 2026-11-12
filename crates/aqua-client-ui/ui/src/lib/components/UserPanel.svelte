@@ -1,6 +1,6 @@
 <script lang="ts">
   import EmojiStatus from "./EmojiStatus.svelte";
-  import { accounts, loadAccounts, switchAccount } from "../accounts";
+  import { accounts, loadAccounts, switchAccount, accountsFull, MAX_ACCOUNTS } from "../accounts";
   import { t, tr } from "../i18n";
   /**
    * Discord-style user panel (bottom-left): avatar with status, name,
@@ -143,8 +143,8 @@
             {#if a.active}<span class="acc-tick">✓</span>{/if}
           </button>
         {/each}
-        <button class="menu-item" disabled={switching} onclick={() => pickAccount("new")}>
-          <span class="acc-ava plus">+</span><span class="mi-label">{switching ? $t("Opening the account…") : $t("Add account")}</span>
+        <button class="menu-item" disabled={switching || $accountsFull} title={$accountsFull ? $t("At most {n} accounts in one app. Log out of one to add another.", { n: MAX_ACCOUNTS }) : undefined} onclick={() => pickAccount("new")}>
+          <span class="acc-ava plus">+</span><span class="mi-label">{switching ? $t("Opening the account…") : $accountsFull ? $t("{n} accounts at most", { n: MAX_ACCOUNTS }) : $t("Add account")}</span>
         </button>
         <button class="menu-item" onclick={() => { shareActivity.update((v) => !v); }}>
           <span class="mi-text"><span class="mi-label">{$t($shareActivity ? "Hide my activity" : "Share my activity")}</span><span class="mi-hint">{$t("Games, music and videos you have open")}</span></span>

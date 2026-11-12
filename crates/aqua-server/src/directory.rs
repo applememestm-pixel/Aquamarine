@@ -663,6 +663,13 @@ impl Directory {
                 uid TEXT PRIMARY KEY,
                 at  INTEGER NOT NULL
             );
+            -- Sign-ups per address (a hash of the IP, not the IP): one
+            -- account per address (lib.rs::signup_ip_check).
+            CREATE TABLE IF NOT EXISTS signup_ips (
+                ip TEXT PRIMARY KEY,
+                n  INTEGER NOT NULL,
+                at INTEGER NOT NULL
+            );
             "#,
         )?;
         // Columns added after the first release. SQLite has no
@@ -2612,7 +2619,7 @@ impl Directory {
                 ("accounts", "users"), ("keys", "prekeys"), ("profile pictures", "profile_media"), ("last seen", "last_seen"),
                 ("backups", "backups"), ("synced history", "hist_store"), ("waiting messages", "inbox"), ("capsules", "capsules"),
                 ("bot tokens", "bot_keys"), ("bot chats", "bot_peers"), ("renames", "renames"), ("check marks", "verified"),
-                ("e-mail codes", "email_codes"), ("network names", "fed_names"),
+                ("e-mail codes", "email_codes"), ("network names", "fed_names"), ("sign-up addresses", "signup_ips"),
             ] {
                 run(what, &format!("DELETE FROM {table}"));
             }
@@ -2799,6 +2806,48 @@ impl Directory {
         db.execute("DELETE FROM users WHERE username=?1 AND is_bot=1", rusqlite::params![username])?;
         tracing::info!(%username, "bot deleted");
         Ok(())
+    }
+
+    /// How many accounts were made from this address (`ip` is a hash).
+    pub fn signups_from(&self, ip: &str) -> u32 {
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT n FROM signup_ips WHERE ip=?1", rusqlite::params![ip], |r| r.get::<_, i64>(0)).map(|n| n as u32).unwrap_or(0)
+    }
+
+    /// An account was made from this address.
+    pub fn note_signup(&self, ip: &str) {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        let db = self.db.lock().unwrap();
+        let _ = db.execute(
+            "INSERT INTO signup_ips (ip, n, at) VALUES (?1, 1, ?2) ON CONFLICT(ip) DO UPDATE SET n = n + 1, at = ?2",
+            rusqlite::params![ip, now],
+        );
+    }
+
+    /// The server's admin deletes any bot (the panel → Bots). The relay's
+    /// own bots (`system`) are made again at start, so they stay.
+    pub fn admin_delete_bot(&self, username: &str, system: &[u8; 32]) -> Result<bool, DirError> {
+        let username = username.trim().to_lowercase();
+        let db = self.db.lock().unwrap();
+        let owner: Option<Vec<u8>> = db
+            .query_row("SELECT owner_dh FROM bot_keys WHERE username=?1", rusqlite::params![username], |r| r.get(0))
+            .ok();
+        if owner.as_deref() == Some(system.as_slice()) {
+            return Err(DirError::NotOwner);
+        }
+        db.execute("DELETE FROM bot_keys WHERE username=?1", rusqlite::params![username])?;
+        db.execute("DELETE FROM bot_peers WHERE bot=?1", rusqlite::params![username])?;
+        let n = db.execute("DELETE FROM users WHERE username=?1 AND is_bot=1", rusqlite::params![username])?;
+        tracing::info!(%username, "bot deleted by the admin");
+        Ok(n > 0)
+    }
+
+    /// The relay's own bots (verification, music, stars) — not deletable.
+    pub fn system_bots(&self, system: &[u8; 32]) -> Vec<String> {
+        let db = self.db.lock().unwrap();
+        let Ok(mut stmt) = db.prepare("SELECT username FROM bot_keys WHERE owner_dh=?1") else { return Vec::new() };
+        let rows = stmt.query_map(rusqlite::params![system.to_vec()], |r| r.get::<_, String>(0));
+        match rows { Ok(it) => it.filter_map(|r| r.ok()).collect(), Err(_) => Vec::new() }
     }
 
     /// `user` wrote to `bot`: from now on the bot may answer them.

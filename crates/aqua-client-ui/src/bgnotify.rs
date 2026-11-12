@@ -67,7 +67,12 @@ pub fn incoming(app: &AppHandle, chat: &str) {
         let Some(st) = app.try_state::<std::sync::Mutex<crate::state::AppState>>() else { return };
         let Ok(s) = st.lock() else { return };
         let Some(book) = s.chats.get(chat) else { return };
-        (book.summary.name.clone(), book.summary.preview.clone())
+        let body = match &book.summary.preview_from {
+            // A group: who wrote.
+            Some(who) if !book.summary.preview_by_me && !who.is_empty() => format!("{who}: {}", book.summary.preview),
+            _ => book.summary.preview.clone(),
+        };
+        (book.summary.name.clone(), body)
     };
     let (title, body) = if p.locked.iter().any(|m| m == chat) { ("Aquamarine".to_string(), p.locked_text) } else { (title, body) };
     use tauri_plugin_notification::NotificationExt;

@@ -2804,4 +2804,8 @@ export const RU: Record<string, string> = {
   "For both of us": "Для нас обоих",
   "{name} sees the same theme in this chat": "У {name} в этом чате будет такая же тема",
   "The other person sees the same theme in this chat": "У собеседника в этом чате будет такая же тема",
+  "Yesterday": "Вчера",
+  "At most {n} accounts in one app. Log out of one to add another.": "В одном приложении не больше {n} аккаунтов. Выйдите из одного, чтобы добавить другой.",
+  "{n} accounts at most": "Не больше {n} аккаунтов",
+  "An account was already registered from this network. One per network — sign in to it instead.": "С этой сети уже зарегистрирован аккаунт. Один на сеть — войдите в него.",
 };

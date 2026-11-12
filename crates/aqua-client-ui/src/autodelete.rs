@@ -89,6 +89,7 @@ fn system_note(s: &mut AppState, chat: &str, text: String) {
             id: format!("ttl-{}", crate::state::uuid_like()),
             from: "system".into(),
             time: String::new(),
+            at: crate::state::now_at(),
             kind: MessageKind::System { text },
             meta: None,
         });

@@ -689,7 +689,8 @@
     "Journal":"Журнал","Metrics":"Метрики","filter by @name":"фильтр по @имени","Close":"Закрыть",
     "journalHint":"Кто заходил в сеть и выходил, входил с нового устройства или регистрировался. Пишется и в aqua-journal.log рядом с сервером.",
     "Online now — who":"Сейчас в сети","Files by type":"Файлы по типам","Bots on this server":"Боты на сервере","From other servers since the start":"С других серверов с момента запуска",
-    "Nobody":"Никого","No files":"Файлов нет","No bots":"Ботов нет","No one yet":"Пока никого","No events yet":"Событий пока нет",
+    "Nobody":"Никого","No files":"Файлов нет","No bots":"Ботов нет","Delete bot":"Удалить бота","server's own":"сервера",
+    "Delete the bot @{n}? Its account and token stop working.":"Удалить бота @{n}? Его аккаунт и токен перестанут работать.","No one yet":"Пока никого","No events yet":"Событий пока нет",
     "photo":"Фото","video":"Видео","sticker":"Стикеры","gif":"GIF","emoji":"Эмодзи","voice":"Голосовые","audio":"Музыка","file":"Другие файлы","unknown":"Без метки (старые версии)",
     "user":"человек","offline":"вышел","login":"вход","register":"регистрация",
     "filesHint":"Файлы зашифрованы — сервер знает только тип, который сообщило приложение.","times":"раз","was online":"был в сети",
@@ -911,12 +912,20 @@
     const row = (main, sub, extra = "") => `<div class="dl-row"><span class="main">${main}</span>${extra}<span class="sub">${sub}</span></div>`;
     let html = "";
     if (what === "online") html = d.map((u) => row("@" + esc(u), "")).join("") || `<div class="empty">${T("Nobody")}</div>`;
-    else if (what === "bots") html = d.map((b) => row("@" + esc(b.username), esc(b.name || ""))).join("") || `<div class="empty">${T("No bots")}</div>`;
+    else if (what === "bots") html = d.map((b) => row("@" + esc(b.username), esc(b.name || "") + (b.system ? " · " + T("server's own") : ""),
+      b.system ? "" : `<button class="ghost" data-delbot="${esc(b.username)}" title="${T("Delete bot")}">✕</button>`)).join("") || `<div class="empty">${T("No bots")}</div>`;
     else if (what === "files") {
       const max = Math.max(1, ...d.map((f) => f.bytes));
       html = d.map((f) => row(T(f.kind), `${f.count} · ${human(f.bytes)}`, `<span class="bar"><i style="width:${(f.bytes / max * 100).toFixed(1)}%"></i></span>`)).join("") || `<div class="empty">${T("No files")}</div>`;
     } else if (what === "visitors") html = d.map((v) => row((v.kind === "user" ? "@" : "") + esc(v.who), `${T(v.kind)} · ${v.count} ${T("times")} · ${ago(v.last)}`)).join("") || `<div class="empty">${T("No one yet")}</div>`;
     $("detList").innerHTML = html;
+    $("detList").querySelectorAll("[data-delbot]").forEach((el) => el.addEventListener("click", async () => {
+      const name = el.dataset.delbot;
+      if (!confirm(T("Delete the bot @{n}? Its account and token stop working.").replace("{n}", name))) return;
+      const r = await fetch("/v1/admin/bots/" + encodeURIComponent(name), { method: "DELETE", headers: { "Authorization": "Bearer " + TOKEN } }).catch(() => null);
+      if (!r || !r.ok) alert(r ? (await r.text().catch(() => "")) || ("HTTP " + r.status) : "network");
+      openDetail("bots");
+    }));
   }
   function closeDetail(){ $("detModal").classList.add("hide"); }
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDetail(); });

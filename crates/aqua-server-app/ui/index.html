@@ -263,7 +263,8 @@ const RU_DICT = {
   "In a network": "В сети", "netText": "Вместе с другими серверами: аккаунты и резервные копии общие, люди на связи, даже когда один сервер выключен.",
   "Choose later": "Решу потом",
   "Online": "В сети", "Journal": "Журнал", "From other servers": "С других серверов",
-  "filter by @name": "фильтр по @имени", "Nobody": "Никого", "No bots": "Ботов нет", "No events yet": "Событий пока нет", "No one yet": "Пока никого",
+  "filter by @name": "фильтр по @имени", "Nobody": "Никого", "No bots": "Ботов нет", "Delete bot": "Удалить бота", "server's own": "сервера",
+  "Delete the bot @{n}? Its account and token stop working.": "Удалить бота @{n}? Его аккаунт и токен перестанут работать.", "No events yet": "Событий пока нет", "No one yet": "Пока никого",
   "online": "в сети", "offline": "вышел", "login": "вход", "register": "регистрация", "user": "человек", "times": "раз", "was online": "был в сети",
   "journalHint": "Кто заходил и выходил, входил с нового устройства или регистрировался. Пишется и в aqua-journal.log в папке данных.",
   "Files by type": "Файлы по типам", "filesHint": "Файлы зашифрованы — сервер знает только тип, который сообщило приложение.", "No files": "Файлов нет",
@@ -589,11 +590,18 @@ async function openDetail(what) {
 }
 function detailHtml(what, d) {
   if (what === "online") return d.map((u) => `<div class="li">${ava(u)}<span class="main">@${esc(u)}</span></div>`).join("") || `<div class="empty">${t("Nobody")}</div>`;
-  if (what === "bots") return d.map((b) => `<div class="li">${ava(b.username)}<span class="main">@${esc(b.username)}</span><span class="sub">${esc(b.name || "")}</span></div>`).join("") || `<div class="empty">${t("No bots")}</div>`;
+  if (what === "bots") return d.map((b) => `<div class="li">${ava(b.username)}<span class="main">@${esc(b.username)}</span><span class="sub">${esc(b.name || "")}${b.system ? " · " + t("server's own") : ""}</span>`
+    + (b.system ? "" : `<button class="mini danger" title="${t("Delete bot")}" onclick="delBot('${esc(b.username)}')">${IC.x}</button>`) + `</div>`).join("") || `<div class="empty">${t("No bots")}</div>`;
   if (what === "files") { const max = Math.max(1, ...d.map((f) => f.bytes));
     return d.map((f) => `<div class="li"><span class="main">${t(f.kind)}</span><span class="bar"><i style="width:${(f.bytes / max * 100).toFixed(1)}%"></i></span><span class="sub">${f.count} · ${human(f.bytes)}</span></div>`).join("") || `<div class="empty">${t("No files")}</div>`; }
   if (what === "visitors") return d.map((v) => `<div class="li">${ava(v.who)}<span class="main">${v.kind === "user" ? "@" : ""}${esc(v.who)}</span><span class="sub">${t(v.kind)} · ${v.count} ${t("times")} · ${ago(v.last)}</span></div>`).join("") || `<div class="empty">${t("No one yet")}</div>`;
   return "";
+}
+async function delBot(name) {
+  if (!confirm(t("Delete the bot @{n}? Its account and token stop working.").replace("{n}", name))) return;
+  try { await api(`/v1/admin/bots/${encodeURIComponent(name)}`, "DELETE"); } catch (e) { alert(errText(e)); }
+  if ($("detList")) { try { $("detList").innerHTML = detailHtml("bots", await api("/v1/admin/detail/bots")); } catch {} }
+  else loadPeople();
 }
 function modal(html) { $("modal").innerHTML = `<div class="modal" onclick="if(event.target===this)closeModal()"><div class="box">${html}</div></div>`; }
 function closeModal() { $("modal").innerHTML = ""; }
