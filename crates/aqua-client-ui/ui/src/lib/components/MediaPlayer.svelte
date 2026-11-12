@@ -518,27 +518,29 @@
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="ctl" onclick={(e) => e.stopPropagation()}>
+      <div class="dock">
       {@render seekbar()}
       <div class="row">
         <button class="ib main" onclick={toggle} title={$t(playing ? "Pause (K)" : "Play (K)")}>{@render ico(playing ? I.pause : I.play, true)}</button>
-        <button class="ib" onclick={() => skip(-10)} title={$t("Back 10 s (J)")}>{@render ico(I.back)}</button>
-        <button class="ib" onclick={() => skip(10)} title={$t("Forward 10 s (L)")}>{@render ico(I.fwd)}</button>
+        <button class="ib opt" onclick={() => skip(-10)} title={$t("Back 10 s (J)")}>{@render ico(I.back)}</button>
+        <button class="ib opt" onclick={() => skip(10)} title={$t("Forward 10 s (L)")}>{@render ico(I.fwd)}</button>
         {@render volume_()}
         <span class="time">{fmt(current)} <i>/</i> {fmt(duration)}</span>
         <span class="grow"></span>
-        {#if quality}<span class="badge" title={`${vw}×${vh}`}>{quality}</span>{/if}
+        {#if quality}<span class="badge opt" title={`${vw}×${vh}`}>{quality}</span>{/if}
         {@render speedMenu()}
-        <button class="ib" class:on={loop} onclick={setLoop} title={$t("Loop")}>{@render ico(I.loop)}</button>
-        <div class="spd">
+        <button class="ib opt" class:on={loop} onclick={setLoop} title={$t("Loop")}>{@render ico(I.loop)}</button>
+        <div class="spd opt">
           <button class="ib" class:on={infoOpen} onclick={() => (infoOpen = !infoOpen)} title={$t("Info")}>{@render ico(I.info)}</button>
           {#if infoOpen}<div class="menu info">{infoLine || $t("Video")}</div>{/if}
         </div>
         {#if onExpand && !theater && !isFs}
           <button class="ib" onclick={expand} title={$t("Open in viewer")}>{@render ico(I.expand)}</button>
         {/if}
-        {#if canPip}<button class="ib" onclick={() => void pip()} title={$t("Picture in picture")}>{@render ico(I.pip)}</button>{/if}
-        <button class="ib" class:on={theater} onclick={() => setTheater(!theater)} title={$t(theater ? "Exit window mode (W)" : "Fill the window (W)")}>{@render ico(I.theater)}</button>
+        {#if canPip}<button class="ib opt" onclick={() => void pip()} title={$t("Picture in picture")}>{@render ico(I.pip)}</button>{/if}
+        <button class="ib opt" class:on={theater} onclick={() => setTheater(!theater)} title={$t(theater ? "Exit window mode (W)" : "Fill the window (W)")}>{@render ico(I.theater)}</button>
         <button class="ib" onclick={() => void toggleFs()} title={$t(isFs ? "Exit full screen (F)" : "Full screen (F)")}>{@render ico(isFs ? I.fsx : I.fs)}</button>
+      </div>
       </div>
     </div>
   </div>
@@ -746,6 +748,90 @@
   }
   .spin.sm { width: 16px; height: 16px; border-width: 2px; border-color: rgba(6, 7, 12, 0.3); border-top-color: #06070c; }
   @keyframes vp-spin { to { transform: rotate(360deg); } }
+
+  /* ------------------------------------------- video: the glass dock (1.20.1-3)
+     Not the browser's look: a floating rounded panel with a blur over the
+     picture, the seek line in the accent colour, a big round play button. */
+  .vp { container-type: inline-size; isolation: isolate; }
+  .vp .ctl {
+    padding: 40px 10px 10px;
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.45));
+    transition: opacity 0.25s ease, transform 0.25s ease;
+  }
+  .vp.hide .ctl { transform: translateY(8px); }
+  .vp .dock {
+    display: flex; flex-direction: column; gap: 2px;
+    padding: 4px 8px 6px;
+    border-radius: calc(16px * var(--rk, 1));
+    background: rgba(14, 16, 24, 0.55);
+    backdrop-filter: blur(18px) saturate(1.4);
+    -webkit-backdrop-filter: blur(18px) saturate(1.4);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.09);
+  }
+  .vp .bar { height: 18px; }
+  .vp .rail { height: 4px; border-radius: 99px; background: rgba(255, 255, 255, 0.16); transition: height 0.15s; }
+  .vp .bar:hover .rail { height: 6px; }
+  .vp .buf { border-radius: 99px; background: rgba(255, 255, 255, 0.26); }
+  .vp .fill {
+    border-radius: 99px;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2, var(--accent)));
+    box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+  .vp .knob {
+    width: 14px; height: 14px; margin: -7px 0 0 -7px;
+    background: #fff;
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 40%, transparent), 0 2px 6px rgba(0, 0, 0, 0.4);
+    transform: scale(0.6); opacity: 0;
+    transition: transform 0.15s, opacity 0.15s;
+  }
+  .vp .bar:hover .knob, .vp:focus-within .knob { transform: scale(1); opacity: 1; }
+  .vp .tip { bottom: 22px; padding: 3px 8px; border-radius: calc(8px * var(--rk, 1)); background: rgba(14, 16, 24, 0.85); backdrop-filter: blur(8px); font-weight: 600; }
+  .vp .row { gap: 4px; }
+  .vp .ib { width: 34px; height: 34px; border-radius: 50%; color: rgba(255, 255, 255, 0.88); transition: background 0.15s, color 0.15s, transform 0.12s; }
+  .vp .ib:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+  .vp .ib:active { transform: scale(0.92); }
+  .vp .ib.main {
+    width: 38px; height: 38px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2, var(--accent)));
+    color: #06070c;
+    box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+  .vp .ib.main:hover { filter: brightness(1.08); color: #06070c; }
+  .vp .ib.main :global(svg) { width: 18px; height: 18px; }
+  .vp .time { font-size: 12.5px; font-weight: 600; letter-spacing: 0.01em; }
+  .vp .badge { padding: 3px 7px; border-radius: 99px; background: rgba(255, 255, 255, 0.12); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12); }
+  .vp .txt { border-radius: 99px; height: 30px; }
+  .vp .txt:hover { background: rgba(255, 255, 255, 0.12); }
+  .vp .menu {
+    bottom: calc(100% + 10px);
+    border-radius: calc(14px * var(--rk, 1));
+    background: rgba(14, 16, 24, 0.8);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+  }
+  .vp .vol-slider { background: linear-gradient(to right, var(--accent) var(--p), rgba(255, 255, 255, 0.22) var(--p)); }
+  .vp .vol-slider::-webkit-slider-thumb { background: #fff; }
+  .vp .big {
+    width: 72px; height: 72px;
+    background: rgba(14, 16, 24, 0.45);
+    backdrop-filter: blur(14px) saturate(1.4);
+    -webkit-backdrop-filter: blur(14px) saturate(1.4);
+    box-shadow: 0 10px 34px rgba(0, 0, 0, 0.4), inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+    transition: transform 0.18s cubic-bezier(.2, .9, .3, 1.3), background 0.18s, color 0.18s;
+  }
+  .vp .big :global(svg) { width: 30px; height: 30px; }
+  .vp .big:hover { transform: translate(-50%, -50%) scale(1.08); background: linear-gradient(135deg, var(--accent), var(--accent-2, var(--accent))); color: #06070c; }
+  .vp .top { padding: 16px 20px 40px; font-size: 15px; text-shadow: 0 1px 6px rgba(0, 0, 0, 0.5); }
+  /* A small bubble: only what's needed — play, volume, time, speed, full screen. */
+  @container (max-width: 440px) {
+    .vp .opt { display: none; }
+    .vp .ctl { padding: 30px 6px 6px; }
+    .vp .dock { padding: 2px 6px 4px; border-radius: calc(12px * var(--rk, 1)); }
+    .vp .ib { width: 30px; height: 30px; }
+    .vp .ib.main { width: 32px; height: 32px; }
+    .vp .big { width: 58px; height: 58px; }
+    .vp .big :global(svg) { width: 24px; height: 24px; }
+  }
 
   /* ---------------------------------------------------------------- audio */
   .ap {
