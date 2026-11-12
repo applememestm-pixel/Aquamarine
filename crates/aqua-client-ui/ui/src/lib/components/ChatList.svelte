@@ -19,7 +19,7 @@
   import { chatStatus, presenceNow } from "../presence";
   import { unsupportedKind } from "../compat";
   import { t, tr } from "../i18n";
-  import { fly, scale as scaleIn } from "svelte/transition";
+  import { fly, slide, scale as scaleIn } from "svelte/transition";
   import { flip } from "svelte/animate";
   import { cubicOut, backOut } from "svelte/easing";
   import { avatars, peerCards, clans } from "../people";
@@ -95,11 +95,13 @@
   import { chatLines } from "../listLook";
   import { botMenus } from "../botMenus";
   import { settings as themeSettings } from "../theme";
-  import { storyOwners, myLiveStories, storyRing, addStory } from "../storyFeed";
-  import { openStories } from "../stories";
+  import { storyOwners, myLiveStories, storyRing, addStory, setStoriesOff } from "../storyFeed";
+  import { openStories, storiesOff } from "../stories";
+  import { myOnline } from "../presence";
+  import { openSettings } from "../panels/settings";
   import { openMiniApp } from "./MiniApp.svelte";
   import { api } from "../tauri";
-  import { blocked, setBlocked } from "../ghost";
+  import { blocked, setBlocked, ghost } from "../ghost";
   import { chatLocks, unlocked, lockNowChat } from "../chatLocks";
   import { askSetLock, askRemoveLock } from "../chatLockUi";
   import { askInput, closeInput } from "./InputPrompt.svelte";
@@ -364,41 +366,49 @@
   let lastFolder = $activeFolder;
   $effect(() => { const f = $activeFolder; if (f !== lastFolder) { lastFolder = f; if (inServer) compactPinned = true; } });
   $effect(() => { document.documentElement.classList.toggle("list-compact", compact); });
-  // Phones always keep the strip ("My story" is the way to post one), tucked
-  // away above the list until it's pulled down (Telegram).
-  const showStories = $derived(!compact && !searchMode && !showArchive && (IS_MOBILE || $storyOwners.length > 0 || $myLiveStories.length > 0));
+  // Stories (Telegram): folded into a stack of small avatars in the header;
+  // pulling the list down at its top (or scrolling up past it, or tapping
+  // the stack) unfolds the strip, scrolling the list down folds it again.
+  const storiesHere = $derived(!$storiesOff && !compact && !searchMode && !showArchive);
+  const haveStories = $derived($storyOwners.length > 0 || $myLiveStories.length > 0);
+  let storiesOpen = $state(false);
+  const showStories = $derived(storiesHere && storiesOpen);
+  const showStack = $derived(storiesHere && !storiesOpen && haveStories);
+  $effect(() => { if (!storiesHere) storiesOpen = false; });
   let chatsEl = $state<HTMLDivElement | null>(null);
   let storiesEl = $state<HTMLDivElement | null>(null);
-  const tuckStories = $derived(IS_MOBILE && showStories);
-  // Hidden at start: the list opens scrolled just past the strip.
-  $effect(() => {
-    const el = chatsEl, st = storiesEl;
-    if (!tuckStories || !el || !st) return;
-    requestAnimationFrame(() => { if (el.scrollTop === 0) el.scrollTop = st.offsetHeight; });
-  });
-  // A short list gets room below the last chat, so the strip can still tuck away.
-  let tuckPad = $state(0);
-  $effect(() => {
-    void $visibleChats.length;
-    const el = chatsEl, st = storiesEl;
-    if (!tuckStories || !el || !st) { tuckPad = 0; return; }
-    const fit = () => { tuckPad = Math.max(0, el.clientHeight + st.offsetHeight - (el.scrollHeight - tuckPad)); };
-    requestAnimationFrame(fit);
-    const ro = new ResizeObserver(fit);
-    ro.observe(el);
-    return () => ro.disconnect();
-  });
-  // Let go half-way — it opens or closes the rest of the way.
-  let snapT: ReturnType<typeof setTimeout> | null = null;
-  function snapStories() {
-    if (!tuckStories || !chatsEl || !storiesEl) return;
-    if (snapT) clearTimeout(snapT);
-    snapT = setTimeout(() => {
-      const el = chatsEl, h = storiesEl?.offsetHeight ?? 0;
-      if (!el || !h || el.scrollTop <= 0 || el.scrollTop >= h) return;
-      el.scrollTo({ top: el.scrollTop < h / 2 ? 0 : h, behavior: "smooth" });
-    }, 140);
+  let wheelAcc = 0, wheelT: ReturnType<typeof setTimeout> | null = null;
+  function storiesWheel(e: WheelEvent) {
+    if (!storiesHere || !chatsEl || chatsEl.scrollTop > 0) { wheelAcc = 0; return; }
+    wheelAcc += e.deltaY;
+    if (wheelT) clearTimeout(wheelT);
+    wheelT = setTimeout(() => (wheelAcc = 0), 250);
+    if (!storiesOpen && wheelAcc < -60) { storiesOpen = true; wheelAcc = 0; }
+    else if (storiesOpen && wheelAcc > 40) { storiesOpen = false; wheelAcc = 0; }
   }
+  let pullY: number | null = null;
+  function storiesTouchStart(e: TouchEvent) { pullY = storiesHere && chatsEl && chatsEl.scrollTop <= 0 ? e.touches[0].clientY : null; }
+  function storiesTouchMove(e: TouchEvent) {
+    if (pullY == null) return;
+    const dy = e.touches[0].clientY - pullY;
+    if (!storiesOpen && dy > 56) { storiesOpen = true; pullY = null; try { navigator.vibrate?.(8); } catch { /* none */ } }
+    else if (storiesOpen && dy < -36) { storiesOpen = false; pullY = null; }
+  }
+  function storiesScroll() {
+    // Scrolled down past the strip: it folds back into the header.
+    if (storiesOpen && chatsEl && storiesEl && chatsEl.scrollTop > storiesEl.offsetHeight + 24) {
+      const h = storiesEl.offsetHeight;
+      storiesOpen = false;
+      requestAnimationFrame(() => { if (chatsEl) chatsEl.scrollTop = Math.max(0, chatsEl.scrollTop - h); });
+    }
+  }
+  let storyMenu = $state<{ x: number; y: number } | null>(null);
+  /** Ghost mode on (any part of it): a ghost in the header says so. */
+  const ghostOn = $derived($ghost.noReadReceipts || $ghost.noTyping || $myOnline === "invisible");
+  const stackOwners = $derived([
+    ...($myLiveStories.length ? [{ user: "", unseen: false }] : []),
+    ...$storyOwners.map((o) => ({ user: o.user, unseen: o.unseen })),
+  ].slice(0, 3));
 
   // ---- Resizable list (drag the right edge) ----
   const LW_KEY = "aqua.listWidth";
@@ -780,6 +790,24 @@
   }
 </script>
 
+{#snippet headExtras()}
+  {#if ghostOn}
+    <button class="ghost-on" onclick={() => openSettings("ghost")} title={$t("Ghost mode is on")} aria-label={$t("Ghost mode is on")}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 10h.01"/><path d="M15 10h.01"/><path d="M12 2a8 8 0 0 0-8 8v12l3-3 2.5 2.5L12 19l2.5 2.5L17 19l3 3V10a8 8 0 0 0-8-8z"/></svg>
+    </button>
+  {/if}
+  {#if showStack}
+    <button class="st-stack" onclick={() => (storiesOpen = true)} title={$t("Stories")} aria-label={$t("Stories")}
+      oncontextmenu={(e) => { e.preventDefault(); storyMenu = { x: e.clientX, y: e.clientY }; }}>
+      {#each stackOwners as o (o.user)}
+        {@const ch = o.user ? $chats.find((x) => x.id === o.user) : undefined}
+        {@const pic = o.user ? $avatars[o.user] : $profile.avatar_url}
+        <span class="ss" class:seen={!o.unseen && o.user !== ""} style:--gradient={ch?.gradient} style:background-image={pic ? `url("${pic}")` : undefined}>{pic ? "" : (o.user ? (ch?.letter ?? o.user.charAt(0).toUpperCase()) : meLetter)}</span>
+      {/each}
+    </button>
+  {/if}
+{/snippet}
+
 <aside class="list" class:resizing class:compact class:lines3={$chatLines === 3} class:has-active={!!$activeId}>
   {#if compact}
     <button class="compact-expand" onclick={() => (compactPinned = true)} title={$t("Show the chat list")} aria-label={$t("Show the chat list")}>
@@ -795,6 +823,7 @@
       {#if $profile.avatar_url}<img src={$profile.avatar_url} alt="" draggable="false" />{:else}{meLetter}{/if}
     </button>
     <span class="m-name">Aquamarine</span>
+    {#if IS_MOBILE}{@render headExtras()}{/if}
     <!-- The connection: ping when connected, "connecting" otherwise; tap —
          the servers sheet (switch server, see which ones answer). -->
     {#if $info}
@@ -833,6 +862,7 @@
     </div>
   {/if}
   <div class="list-header">
+    {#if !IS_MOBILE}{@render headExtras()}{/if}
     {#if inServer && !compact}
       <button class="collapse-btn" onclick={() => (compactPinned = false)} title={$t("Collapse to avatars")} aria-label={$t("Collapse to avatars")}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
@@ -877,7 +907,7 @@
             <button onclick={() => { plusMenuOpen = false; openNewGroup("group"); }}>{$t("New group")}</button>
             <button onclick={() => { plusMenuOpen = false; openNewGroup("supergroup"); }}>{$t("New server")}</button>
           {/if}
-          <button onclick={() => { plusMenuOpen = false; void addStory(IS_MOBILE ? "camera" : "gallery"); }}>{$t("Add a story")}</button>
+          {#if !$storiesOff}<button onclick={() => { plusMenuOpen = false; void addStory(IS_MOBILE ? "camera" : "gallery"); }}>{$t("Add a story")}</button>{/if}
           {#if IS_MOBILE}
             <!-- Telegram's ⋮: Saved Messages, day / night, the server. -->
             <button onclick={() => { plusMenuOpen = false; void selectChat("__saved__"); }}>{$t("Saved Messages")}</button>
@@ -928,10 +958,12 @@
     </div>
   {/if}
 
-  <div class="chats" class:home={searchHome} style:--tuck-pad="{tuckPad}px" bind:this={chatsEl} onscroll={snapStories}>
+  <div class="chats" class:home={searchHome} bind:this={chatsEl} onscroll={storiesScroll} onwheel={storiesWheel}
+    ontouchstart={storiesTouchStart} ontouchmove={storiesTouchMove} ontouchend={() => (pullY = null)}>
     {#if showStories}
-      <!-- Stories (Telegram): scrolls away with the list; pull down to see it again. -->
-      <div class="stories" role="list" aria-label={$t("Stories")} use:scrollX bind:this={storiesEl}>
+      <!-- Stories (Telegram): unfolded from the header's stack; scroll down — they fold back. -->
+      <div class="stories" role="list" aria-label={$t("Stories")} use:scrollX bind:this={storiesEl} transition:slide={{ duration: motionMs(220) }}
+        oncontextmenu={(e) => { e.preventDefault(); storyMenu = { x: e.clientX, y: e.clientY }; }}>
         <div class="st-item" role="listitem">
           <button class="st-ava" class:ring={$myLiveStories.length > 0} onclick={tapMine} aria-label={$t("My story")}>
             <span class="st-pic" style:background-image={$profile.avatar_url ? `url("${$profile.avatar_url}")` : undefined}>{$profile.avatar_url ? "" : meLetter}</span>
@@ -955,6 +987,22 @@
             <span class="st-nm">{(ch?.name ?? o.user).split(" ")[0]}</span>
           </div>
         {/each}
+        <div class="st-item" role="listitem">
+          <button class="st-ava st-fold" onclick={() => (storiesOpen = false)} aria-label={$t("Hide stories")} title={$t("Hide stories")}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>
+          </button>
+          <span class="st-nm">{$t("Hide")}</span>
+        </div>
+      </div>
+    {/if}
+    {#if storyMenu}
+      {@const sm = storyMenu}
+      <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+      <div class="ctx-scrim" onclick={() => (storyMenu = null)} oncontextmenu={(e) => { e.preventDefault(); storyMenu = null; }}></div>
+      <div class="chat-ctx" use:keepOnScreen style:left="{sm.x}px" style:top="{sm.y}px" role="menu">
+        <button onclick={() => { storyMenu = null; void addStory(IS_MOBILE ? "camera" : "gallery"); }}>{$t("Add a story")}</button>
+        <button onclick={() => { storyMenu = null; storiesOpen = false; }}>{$t("Hide stories")}</button>
+        <button class="danger" onclick={() => { storyMenu = null; void setStoriesOff(true); showToast(tr("Stories are off. Turn them back on in Settings → Chat settings.")); }}>{$t("Turn off stories")}</button>
       </div>
     {/if}
     {#if searchHome}
@@ -1090,7 +1138,7 @@
         onpointermove={(e) => { peekMove(e); selMove(e); pinMove(e); }}
         onpointerup={() => { peekCancel(); selCancel(); pinUp(); }}
         onpointercancel={() => { peekCancel(); selCancel(); dragPin = null; }}
-        onclick={(e) => { if (suppressClick) return; if (sel.length && !g) { toggleSel(c.id); return; } if (g) { openGroupId.set(g.id); return; } if ((e.ctrlKey || e.metaKey) && DESKTOP) { popOut(c.id, c.name); return; } void selectChat(c.id); }}
+        onclick={(e) => { if (suppressClick) return; if (sel.length && !g) { toggleSel(c.id); return; } if (g) { openGroupId.set(g.id); return; } if (e.altKey && DESKTOP) { e.preventDefault(); peekStart = { x: e.clientX, y: e.clientY }; void openPeek(c.id); return; } if ((e.ctrlKey || e.metaKey) && DESKTOP) { popOut(c.id, c.name); return; } void selectChat(c.id); }}
         oncontextmenu={(e) => { if (g) { e.preventDefault(); openGroupId.set(g.id); return; } if (peekFired || peek || selFired || sel.length) { e.preventDefault(); return; } if ((e.ctrlKey || e.metaKey) && DESKTOP) { e.preventDefault(); popOut(c.id, c.name); return; } openCtx(e, c.id); }}
       >
         {#if g}
@@ -1122,7 +1170,7 @@
           class:story-ring={!lk && !!$storyRing[c.id]} class:story-seen={$storyRing[c.id] === "seen"}
           style="--gradient: {c.gradient}" onpointerdown={(e) => { if (e.pointerType !== "touch") peekDown(e, c.id); }}
           onclick={(e) => { if (!lk && $storyRing[c.id] && !sel.length) { e.stopPropagation(); openStories(storyUsers(), c.id); } }}
-          title={compact ? undefined : $t("Hold to peek")}>
+          title={compact ? undefined : $t(DESKTOP ? "Hold or Alt+click to peek" : "Hold to peek")}>
           {lk ? "" : c.letter}
           {#if $avatars[c.id] && !lk}<img class="ava-img" src={$avatars[c.id]} alt="" loading="lazy" />{/if}
           {#if lk}<span class="lk-ic">{@html icons.lock}</span>{/if}
@@ -1797,7 +1845,19 @@
   /* Stories strip. */
   .stories { display: flex; gap: 14px; padding: 6px 12px 10px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
   .stories::-webkit-scrollbar { display: none; }
-  .chats::after { content: ""; display: block; height: var(--tuck-pad, 0px); }
+  .st-fold { display: grid; place-items: center; background: var(--bg-surface-2); color: var(--fg-muted); }
+  .st-fold svg { width: 24px; height: 24px; }
+  /* The folded strip: up to three small avatars, overlapping (Telegram). */
+  .st-stack { display: flex; align-items: center; flex-shrink: 0; border: none; background: transparent; padding: 0 2px; cursor: pointer; height: 32px; }
+  .st-stack .ss { width: 26px; height: 26px; border-radius: var(--ava-r, 50%); display: grid; place-items: center; margin-left: -9px; box-sizing: border-box;
+    background: var(--gradient, var(--bg-surface-2)) center / cover; color: rgba(6,7,12,.85); font: 800 11px var(--font-ui, inherit);
+    box-shadow: 0 0 0 2px var(--bg-list), 0 0 0 3.5px var(--accent); }
+  .st-stack .ss:first-child { margin-left: 0; }
+  .st-stack .ss.seen { box-shadow: 0 0 0 2px var(--bg-list), 0 0 0 3.5px var(--border-strong); }
+  .st-stack:hover .ss { filter: brightness(1.08); }
+  .ghost-on { flex-shrink: 0; width: 30px; height: 30px; border-radius: calc(10px * var(--rk, 1)); border: none; display: grid; place-items: center; cursor: pointer;
+    background: color-mix(in srgb, #5E5CE6 22%, transparent); color: #8F8DFF; }
+  .ghost-on svg { width: 18px; height: 18px; }
   .st-item { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; width: 62px; flex-shrink: 0; }
   .st-ava { position: relative; width: 58px; height: 58px; border-radius: var(--ava-r, 50%); border: none; padding: 3px; background: transparent; cursor: pointer; }
   .st-ava.ring { background: conic-gradient(from 210deg, var(--accent), var(--accent-2), var(--accent)); }

@@ -4,14 +4,15 @@
  */
 import { derived, get } from "svelte/store";
 import { peerPresence } from "./presence";
-import { myStories, seenStories, saneStories, storyClock, postStory, STORY_TTL_MS, type Story } from "./stories";
+import { myStories, seenStories, saneStories, storyClock, postStory, storiesOff, STORY_TTL_MS, type Story } from "./stories";
 import { tr } from "./i18n";
 
 export interface StoryOwner { user: string; stories: Story[]; unseen: boolean; last: number }
 
 /** People with live stories, unseen first, newest first. Not me. */
-export const storyOwners = derived([peerPresence, seenStories, storyClock], ([pres, seen, now]) => {
+export const storyOwners = derived([peerPresence, seenStories, storyClock, storiesOff], ([pres, seen, now, off]) => {
   const out: StoryOwner[] = [];
+  if (off) return out;
   for (const [user, p] of Object.entries(pres)) {
     const stories = saneStories(p?.st, now);
     if (!stories.length) continue;
@@ -21,7 +22,14 @@ export const storyOwners = derived([peerPresence, seenStories, storyClock], ([pr
 });
 
 /** My live stories. */
-export const myLiveStories = derived([myStories, storyClock], ([l, now]) => l.filter((s) => now - s.at < STORY_TTL_MS));
+export const myLiveStories = derived([myStories, storyClock, storiesOff], ([l, now, off]) => (off ? [] : l.filter((s) => now - s.at < STORY_TTL_MS)));
+
+/** Switch stories off or on; my presence is sent again so mine go away / come back. */
+export async function setStoriesOff(off: boolean) {
+  storiesOff.set(off);
+  const { broadcastPresence } = await import("./presence");
+  broadcastPresence();
+}
 
 /** user → "unseen" | "seen" (a ring around their avatar), absent = none. */
 export const storyRing = derived(storyOwners, (owners) => {

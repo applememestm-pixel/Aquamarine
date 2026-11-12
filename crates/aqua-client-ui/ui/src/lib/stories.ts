@@ -33,6 +33,10 @@ function persisted<T>(key: string, init: T) {
 
 const fresh = (list: Story[], now = Date.now()) => list.filter((s) => now - s.at < STORY_TTL_MS);
 
+/** Stories switched off altogether: none shown, none posted, mine leave
+ *  everyone's lists (Settings → Chat settings, or the strip's own menu). */
+export const storiesOff = persisted<boolean>("aqua.storiesOff.v1", false);
+
 /** My stories (newest last). */
 export const myStories = persisted<Story[]>("aqua.myStories.v1", []);
 myStories.update((l) => (Array.isArray(l) ? fresh(l) : []));
@@ -58,6 +62,7 @@ export function saneStories(x: unknown, now = Date.now()): Story[] {
 
 /** What goes into my presence (only live ones). */
 export function storiesForPresence(): Story[] {
+  if (get(storiesOff)) return [];
   return fresh(get(myStories)).slice(-MAX_STORIES);
 }
 
