@@ -57,7 +57,11 @@ export async function backupNow(force = true): Promise<BackupStatus> {
 //   * and at least every 6 hours.
 const NOISY = [/^aqua\.rooms\.(seen|active)/, /^aqua\.played/, /^aqua\.recent\./, /^aqua\.peerCards/, /^aqua\.listWidth/,
   /^aqua\.reader\./, /^aqua\.gameIds/, /^aqua\.call\./, /^aqua\.onlineStatus/];
-const MIN_GAP = 2 * 60_000, MSG_GAP = 20 * 60_000, QUIET = 20_000;
+/** After any change — a setting or a message — the backup is rewritten once
+ *  things have been quiet for QUIET, at most every MIN_GAP (the relay keeps
+ *  one backup per account and overwrites it; identical contents are skipped).
+ *  Chats also go to the relay page by page within ~2 s (history_sync.rs). */
+const MIN_GAP = 2 * 60_000, QUIET = 20_000;
 
 /** Settings writes since the last upload (set by a cheap localStorage hook,
  *  so nothing is re-read or hashed on a timer). */
@@ -120,7 +124,7 @@ export function startAutoBackup(): void {
     if ((imp !== lastImportant || uiDirty) && !changedAt) changedAt = now;
     if (msg !== lastMessages && !msgChangedAt) msgChangedAt = now;
     const importantDue = changedAt && now - changedAt >= QUIET && now - lastUpload >= MIN_GAP;
-    const messagesDue = msgChangedAt && now - lastUpload >= MSG_GAP;
+    const messagesDue = msgChangedAt && now - msgChangedAt >= QUIET && now - lastUpload >= MIN_GAP;
     if (importantDue || messagesDue) { await upload(); return; }
     // The 6-hour floor (backup_now without force checks the age itself).
     if (now - lastFloor > 30 * 60_000) {
