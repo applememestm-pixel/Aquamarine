@@ -38,7 +38,7 @@
   import ChatThemeSheet from "./ChatThemeSheet.svelte";
   import { slide } from "svelte/transition";
   import { SvelteSet } from "svelte/reactivity";
-  import { askConfirm, askConfirmCheck } from "./Confirm.svelte";
+  import { askConfirm } from "./Confirm.svelte";
   import { askSend, VIDEO_RE, type SendMode } from "./SendDialog.svelte";
   import { openCamera } from "./CameraCapture.svelte";
   import { shrinkImage } from "../imageTools";
@@ -83,7 +83,7 @@
   import { events } from "../tauri";
   import { pollStates, castVote, retractVote, applyRemoteVote, closePoll, viewPoll, ME as POLL_ME, type PollView } from "../polls";
   import { peerPresence, setPeerPresence, broadcastPresenceTo, activityVerb, chatOnline, peerStatus, presenceNow } from "../presence";
-  import { notePeerProfileVersion, avatars, clans, peerCards, nameColorOf } from "../people";
+  import { notePeerProfileVersion, avatars, clans, peerCards, nameColorsOf, parseNameColor, nameColorBar } from "../people";
   import { profile as myProfile } from "../profile";
   import { isPublic, requestIds, allowWriter } from "../privacy";
   import { fwdHeader, type ForwardAuthor } from "./ForwardPicker.svelte";
@@ -1275,7 +1275,7 @@
     kbReplyIdx = Math.max(0, Math.min(list.length, kbReplyIdx + dir));
     if (kbReplyIdx >= list.length) { replyTarget = null; kbReplyIdx = -1; return; }
     const row = list[kbReplyIdx];
-    replyTarget = { author: authorOf(row), text: snippetOf(row).slice(0, 180) };
+    replyTarget = { author: authorOf(row), text: snippetOf(row).slice(0, 180), who: whoOf(row) };
     void ensureShown(row.id).then(() =>
       document.querySelector(`[data-msg-id="${CSS.escape(row.id)}"]`)?.scrollIntoView({ block: "nearest" }));
   }
@@ -1519,13 +1519,21 @@
   const quoteOf = (m: ChatMessage) => snippetOf(m).slice(0, 180);
   /** Telegram's seven name colours, picked by the name. */
   const PEER_COLORS = ["#FF6B6B", "#FFA94D", "#B197FC", "#51CF66", "#3BC9DB", "#4DABF7", "#F783AC"];
-  function peerColor(name: string): string {
-    // Their own pick (profile colour, Telegram), mine from my profile.
-    const own = name === myUsername ? ($myProfile.name_color ?? "") : nameColorOf($peerCards, name);
-    if (/^#[0-9a-f]{6}$/i.test(own)) return own;
+  /** Everyone's own pick (profile → Name and reply colour): 1–3 colours. */
+  function peerColors(name: string): string[] {
+    const own = name === myUsername ? parseNameColor($myProfile.name_color) : nameColorsOf($peerCards, name);
+    if (own.length) return own;
     let h = 0;
     for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) | 0;
-    return PEER_COLORS[Math.abs(h) % PEER_COLORS.length];
+    return [PEER_COLORS[Math.abs(h) % PEER_COLORS.length]];
+  }
+  function peerColor(name: string): string { return peerColors(name)[0]; }
+  /** Who a quote's author is: replies carry a name as shown (in a 1:1 chat,
+   *  the chat's name), so map it back to the account for its colour. */
+  function quoteUser(qa: string): string {
+    if (qa === myUsername || qa === "You") return myUsername;
+    if (!isGroup && $activeChat && (qa === $activeChat.name || qa === $activeChat.id)) return $activeChat.id;
+    return qa;
   }
   /** Tap on a quote: to the message it quotes (the nearest one above). */
   function jumpToQuoted(fromId: string, quoted: string) {
@@ -2347,7 +2355,7 @@
     return el?.getAttribute("data-id") === String(row.id) ? txt.slice(0, 400) : "";
   }
   function quoteRow(row: Row, text: string) {
-    replyTarget = { author: authorOf(row), text: text.slice(0, 400) };
+    replyTarget = { author: authorOf(row), text: text.slice(0, 400), who: whoOf(row) };
     getSelection()?.removeAllRanges();
     closeMenu();
     quoteChip = null;
@@ -2499,7 +2507,11 @@
   }
 
   // ---- Quoted replies ----
-  let replyTarget = $state<{ author: string; text: string } | null>(null);
+  let replyTarget = $state<{ author: string; text: string; who?: string } | null>(null);
+  /** The account behind a message (for its colour). */
+  function whoOf(m: Row): string {
+    return m.outgoing ? myUsername : isGroup ? m.from : ($activeChat?.id ?? m.from);
+  }
   function authorOf(m: Row): string {
     return m.outgoing ? ($info?.username ?? "You") : isGroup ? m.from : ($activeChat?.name ?? "Peer");
   }
@@ -2529,7 +2541,7 @@
   }
 
   function replyRow(row: Row) {
-    replyTarget = { author: authorOf(row), text: snippetOf(row).slice(0, 180) };
+    replyTarget = { author: authorOf(row), text: snippetOf(row).slice(0, 180), who: whoOf(row) };
     closeMenu();
     queueMicrotask(() => composerEl?.focus());
   }
@@ -2548,64 +2560,41 @@
   }
   function cancelEdit() { editTarget = null; text = ""; queueMicrotask(() => autoresize()); }
 
-  /** Text messages are deleted on both sides (matched by text); media,
-   *  articles, polls… are removed on this device. */
+  /** Deleted means deleted for everyone in the chat, every kind of message
+   *  (owner's rule): in a 1:1 chat any message, in a group / channel my own
+   *  or — with the right — anyone's. The group's "Recent actions" keeps a
+   *  line about it. Saved Messages are only here. */
   async function deleteRows(list: Row[], ask = true) {
     closeMenu();
     const chat = $activeChat;
     if (!chat || list.length === 0) return;
-    // "Delete for everyone" is possible for your own text messages (and,
-    // in groups, for others' when you may moderate); the rest is local.
-    // In a 1:1 chat either side may delete any text message for both (Telegram).
-    const canAll = chat.id !== "__saved__" && list.some((r) => (r.kind.type === "text" || r.kind.type === "reply") && (r.outgoing || chat.id.startsWith("grp_") || (!isGroup && !r.outgoing)));
-    let forAll = canAll;
+    const grp = chat.id.startsWith("grp_");
+    const saved = chat.id === "__saved__";
+    const g = activeGroup;
+    const modOk = !!g && can(g, myUsername, "delete_messages");
+    // A group message of someone else without the right can't be deleted at all.
+    if (grp) list = list.filter((r) => r.outgoing || modOk);
+    if (!list.length) return;
     if (ask) {
       const title = list.length === 1 ? tr("Delete this message?") : tr("Delete {n} messages?", { n: list.length });
-      if (canAll) {
-        const r = await askConfirmCheck({
-          title,
-          text: tr("Media and articles are removed on this device only."),
-          check: chat.id.startsWith("grp_") ? tr("Also delete for all members") : tr("Also delete for {name}", { name: chat.name }),
-          checked: true,
-          ok: tr("Delete"),
-          danger: true,
-        });
-        if (!r.ok) return;
-        forAll = r.checked;
-      } else {
-        const ok = await askConfirm({ title, ok: tr("Delete"), danger: true });
-        if (!ok) return;
-      }
+      const text = saved ? undefined : grp ? tr("It disappears for all members.") : tr("It disappears for {name} too.", { name: chat.name });
+      if (!(await askConfirm({ title, text, ok: tr("Delete"), danger: true }))) return;
     }
-    if (!forAll) {
-      try { await api.deleteMessagesLocal(chat.id, list.map((r) => r.id)); } catch { showToast(tr("Some messages could not be deleted")); }
-      await loadActiveMessages();
-      chats.set(await api.listChats());
-      return;
-    }
-    const local: string[] = [];
     let failed = 0;
-    for (const row of list) {
-      const k = row.kind.type;
-      const t = k === "text" || k === "reply" ? textOf(row) : null;
-      if (t == null) { local.push(row.id); continue; }
-      if (!row.outgoing && !chat.id.startsWith("grp_")) {
-        // Their message in a 1:1 chat: gone here, and they're told to drop it too.
-        local.push(row.id);
-        void sendChatControl(chat.id, "[del:v1]" + JSON.stringify({ text: t, author: row.from === "me" ? myUsername : (row.from || chat.id) })).catch(() => {});
-        continue;
+    if (!saved) {
+      let keys: { id: string; key: string; author: string; preview: string }[] = [];
+      try { keys = await api.messageKeys(chat.id, list.map((r) => r.id)); } catch { failed++; }
+      for (const k of keys) {
+        try { await sendChatControl(chat.id, "[del:v1]" + JSON.stringify({ text: k.key, author: k.author })); } catch { failed++; }
       }
-      try {
-        if (!row.outgoing && chat.id.startsWith("grp_")) {
-          await api.deleteGroupMessageOf(chat.id, row.from, t);
-          void sendChatControl(chat.id, "[del:v1]" + JSON.stringify({ text: t, author: row.from })).catch(() => {});
-        } else {
-          await api.deleteMessage(chat.id, t);
-          if (chat.id !== "__saved__") void sendChatControl(chat.id, "[del:v1]" + JSON.stringify({ text: t })).catch(() => {});
-        }
-      } catch { failed++; local.push(row.id); }
+      if (grp && g && keys.length && isAdmin(g, myUsername)) {
+        const next = JSON.parse(JSON.stringify(g)) as typeof g;
+        const lines = keys.map((k) => ({ at: new Date().toLocaleString(), by: myUsername, text: `deleted a message of @${k.author}: «${k.preview.slice(0, 120)}»` }));
+        next.log = [...(next.log ?? []), ...lines].slice(-200);
+        void api.updateGroup(next).then(() => refreshGroups()).catch(() => {});
+      }
     }
-    if (local.length) { try { await api.deleteMessagesLocal(chat.id, local); } catch { failed++; } }
+    try { await api.deleteMessagesLocal(chat.id, list.map((r) => r.id)); } catch { failed++; }
     if (failed) showToast(tr("Some messages could not be deleted"));
     await loadActiveMessages();
     chats.set(await api.listChats());
@@ -4109,7 +4098,7 @@
                 {@const qt = m.kind.content.quoted_text}
                 <div class="bubble">
                   <!-- Telegram's quote: the author's colour, a bar, tap → to the original. -->
-                  <button class="reply-quote" style:--rq={peerColor(qa)} onclick={(e) => { e.stopPropagation(); jumpToQuoted(m.id, qt); }}>
+                  <button class="reply-quote" style:--rq={peerColor(quoteUser(qa))} style:--rq-bar={nameColorBar(peerColors(quoteUser(qa)))} onclick={(e) => { e.stopPropagation(); jumpToQuoted(m.id, qt); }}>
                     <span class="rq-author">{qa === myUsername ? $t("You") : !isGroup && qa === $activeChat?.id ? $activeChat.name : qa}</span>
                     <span class="rq-text">{@render richText(qt)}</span>
                   </button>
@@ -4336,8 +4325,8 @@
     {/if}
 
     {#if replyTarget}
-      <div class="reply-bar">
-        <div class="rb-line"></div>
+      <div class="reply-bar" style:--rq={replyTarget.who ? peerColor(replyTarget.who) : null}>
+        <div class="rb-line" style:background={replyTarget.who ? nameColorBar(peerColors(replyTarget.who)) : null}></div>
         <div class="rb-body">
           <div class="rb-author">{$t("Reply to {name}", { name: replyTarget.author })}</div>
           <div class="rb-text">{replyTarget.text}</div>
@@ -6023,12 +6012,14 @@
   .reply-quote {
     --rq: var(--accent);
     display: block; width: 100%; box-sizing: border-box; text-align: left; font: inherit; color: inherit; cursor: pointer;
-    border: none; border-left: 3px solid var(--rq);
-    padding: 4px 10px 5px 9px; margin-bottom: 6px;
+    border: none; position: relative; overflow: hidden;
+    padding: 4px 10px 5px 12px; margin-bottom: 6px;
     background: color-mix(in srgb, var(--rq) 13%, transparent);
     border-radius: 5px 9px 9px 5px; max-width: 100%;
     transition: background-color .12s;
   }
+  /* The bar: the author's colour, or their 2–3 colours in stripes (Telegram). */
+  .reply-quote::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--rq-bar, var(--rq)); }
   .reply-quote:hover { background: color-mix(in srgb, var(--rq) 20%, transparent); }
   .rq-author { display: block; font-size: 13px; font-weight: 700; color: var(--rq); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rq-text { display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; font-size: 13.5px; line-height: 1.3; color: var(--fg); opacity: .88; overflow: hidden; }
@@ -6061,7 +6052,7 @@
   }
   .rb-line { width: 3px; align-self: stretch; background: var(--accent); border-radius: 3px; flex-shrink: 0; }
   .rb-body { flex: 1; min-width: 0; }
-  .rb-author { font-size: 11.5px; font-weight: 700; color: var(--accent); }
+  .rb-author { font-size: 11.5px; font-weight: 700; color: var(--rq, var(--accent)); }
   .rb-text { font-size: 12.5px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rb-x { width: 28px; height: 28px; background: transparent; border: 1px solid var(--border); border-radius: calc(8px * var(--rk, 1)); color: var(--fg-dim); font-size: 16px; cursor: pointer; flex-shrink: 0; }
   .rb-x:hover { color: var(--fg); background: var(--bg-hover); }

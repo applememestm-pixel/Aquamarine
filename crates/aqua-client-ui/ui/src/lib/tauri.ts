@@ -257,6 +257,7 @@ export const api = {
   editMessage:        (peer_id: string, old_text: string, new_text: string): Promise<void> => invoke("edit_message", { peerId: peer_id, oldText: old_text, newText: new_text }),
   deleteMessage:      (peer_id: string, text: string): Promise<void>                    => invoke("delete_message", { peerId: peer_id, text }),
   deleteMessagesLocal: (peerId: string, ids: string[]): Promise<number> => invoke("delete_messages_local", { peerId, ids }),
+  messageKeys: (peerId: string, ids: string[]): Promise<{ id: string; key: string; author: string; preview: string }[]> => invoke("message_keys", { peerId, ids }),
   deleteChat:         (peerId: string): Promise<void> => invoke("delete_chat", { peerId }),
   markChatRead:       (peerId: string): Promise<void> => invoke("mark_chat_read", { peerId }),
   attachFile:         (peer_id: string, file_path: string, caption?: string): Promise<AttachResult>  => invoke("attach_file", { peerId: peer_id, filePath: file_path, caption: caption || null }),
@@ -390,6 +391,8 @@ export const events = {
   onReaction:        (fn: (p: { from: string; react: { key: string; emoji: string; add: boolean }; gid?: string }) => void) =>
     listen<{ from: string; react: { key: string; emoji: string; add: boolean }; gid?: string }>("aqua://reaction", (e) => fn(e.payload)),
   onGroupsUpdated:   (fn: () => void)                      => listen("aqua://groups_updated", () => fn()),
+  onGroupDeleted:    (fn: (p: { gid: string; by: string; author: string; preview: string }) => void) =>
+    listen<{ gid: string; by: string; author: string; preview: string }>("aqua://group_deleted", (e) => fn(e.payload)),
   onGroupJoinRequest: (fn: (p: { gid: string; from: string }) => void) => listen<{ gid: string; from: string }>("aqua://group_join_request", (e) => fn(e.payload)),
   onGroupCall:       (fn: (p: { from: string; gid: string; signal: Record<string, unknown> }) => void) =>
     listen<{ from: string; gid: string; signal: Record<string, unknown> }>("aqua://gcall", (e) => fn(e.payload)),

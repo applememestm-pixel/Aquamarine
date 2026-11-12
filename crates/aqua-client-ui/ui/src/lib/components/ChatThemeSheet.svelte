@@ -4,7 +4,10 @@
    * own — accent, background, my bubbles, their bubbles — each in a section
    * that folds open. Changes show at once (in the chat behind and the preview).
    */
-  import { PRESETS, chatThemes, setChatTheme as setLocal, themeStyle, resolve, sharedThemes, setThemeShared, themeChanged, type ChatTheme } from "../chatTheme";
+  import { PRESETS, chatThemes, setChatTheme as setLocal, themeStyle, resolve, sharedThemes, setThemeShared, setGroupThemeShared, themeChanged, type ChatTheme } from "../chatTheme";
+  import { groupMap } from "../groups";
+  import { info } from "../stores";
+  import { can } from "../groupRules";
   import { PALETTES, WALLPAPERS } from "../theme";
   import ColorInput from "./ColorInput.svelte";
   import { t, tr } from "../i18n";
@@ -14,6 +17,9 @@
   // Every change here also goes to the other person when "for both of us" is on.
   const setChatTheme = (id: string, th: ChatTheme | null) => { setLocal(id, th); themeChanged(id); };
   const oneToOne = $derived(!!chat && !chat.startsWith("grp_") && !chat.startsWith("__"));
+  const grp = $derived(chat.startsWith("grp_") ? $groupMap[chat] : undefined);
+  /** Groups and channels: admins who may change the info set it for everyone. */
+  const groupAdmin = $derived(!!grp && can(grp, $info?.username ?? "", "change_info"));
   const cur = $derived<ChatTheme>($chatThemes[chat] ?? {});
   const look = $derived(resolve(cur));
   const set = (patch: Partial<ChatTheme>) => setChatTheme(chat, { ...cur, ...patch });
@@ -40,6 +46,13 @@
         <input type="checkbox" checked={$sharedThemes.has(chat)} onchange={(e) => setThemeShared(chat, (e.currentTarget as HTMLInputElement).checked)} />
         <span><b>{$t("For both of us")}</b><small>{name ? tr("{name} sees the same theme in this chat", { name }) : $t("The other person sees the same theme in this chat")}</small></span>
       </label>
+    {:else if groupAdmin}
+      <label class="both">
+        <input type="checkbox" checked={$sharedThemes.has(chat)} onchange={(e) => setGroupThemeShared(chat, (e.currentTarget as HTMLInputElement).checked)} />
+        <span><b>{grp?.kind === "channel" ? $t("For all subscribers") : $t("For all members")}</b><small>{$t("Everyone sees this theme, including those who join later")}</small></span>
+      </label>
+    {:else if grp?.theme_at}
+      <div class="both"><span><small>{$t("The admins set this chat's theme for everyone; your changes stay on this device until they change it again.")}</small></span></div>
     {/if}
     <div class="presets">
       <button class="pr" class:on={!look} onclick={() => pick(null)}><span class="pr-sw none">✕</span><small>{$t("No theme")}</small></button>

@@ -46,7 +46,7 @@
   import SharedMedia from "./SharedMedia.svelte";
   import OfficialMark from "./OfficialMark.svelte";
   import StarMark from "./StarMark.svelte";
-  import { NAME_COLORS } from "../people";
+  import { NAME_COLORS, parseNameColor, nameColorBar } from "../people";
   import { averageColor, mixHex, mixPct, patternRingUrl, PATTERN_EMOJI, cardLook, shellColor, CARD_SWATCHES, CARD_INTENSITY, CARD_LENGTH } from "../cardStyle";
   import EmojiPick from "./EmojiPick.svelte";
   import { userQr } from "../qr";
@@ -576,10 +576,15 @@
             <div class="nc-row">
               <button class="nc" class:on={!draft.name_color} onclick={() => draft && (draft = { ...draft, name_color: "" })} title={$t("Automatic")} aria-label={$t("Automatic")}>A</button>
               {#each NAME_COLORS as c (c)}
-                <button class="nc" class:on={draft.name_color?.toLowerCase() === c.toLowerCase()} style:--nc={c} onclick={() => draft && (draft = { ...draft, name_color: c })} aria-label={c}></button>
+                {@const cs = c.split(",")}
+                <!-- Two / three colours: a striped quote bar, as in Telegram. -->
+                <button class="nc" class:on={draft.name_color?.toLowerCase() === c.toLowerCase()} style:--nc={cs[0]}
+                  style:background={cs.length > 1 ? `conic-gradient(${cs.map((x, i) => `${x} ${(i * 360) / cs.length}deg ${((i + 1) * 360) / cs.length}deg`).join(", ")})` : null}
+                  onclick={() => draft && (draft = { ...draft, name_color: c })} aria-label={c}></button>
               {/each}
+              <span class="nc-own" title={$t("Any colour")}><ColorInput value={parseNameColor(draft.name_color)[0] ?? "#4DABF7"} size={28} oninput={(v) => draft && (draft = { ...draft, name_color: v })} /></span>
             </div>
-            <div class="nc-prev" style:--nc={draft.name_color || "var(--accent)"}>
+            <div class="nc-prev" style:--nc={parseNameColor(draft.name_color)[0] || "var(--accent)"} style:--nc-bar={nameColorBar(parseNameColor(draft.name_color))}>
               <b>{draft.display_name || $t("You")}</b>
               <span class="nc-q"><b>{draft.display_name || $t("You")}</b><i>{$t("Reply to your message looks like this")}</i></span>
             </div>
@@ -1191,12 +1196,15 @@
   .slider input[type="range"] { width: 100%; accent-color: var(--accent); }
   .sheet.light .slider input[type="range"] { accent-color: #15171d; }
   .nc-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .nc-own { display: grid; place-items: center; width: 28px; height: 28px; }
+  .nc-own :global(.cp-swatch) { width: 28px !important; height: 28px !important; border-radius: 50%; }
   .nc { width: 28px; height: 28px; border-radius: 50%; border: none; cursor: pointer; background: var(--nc, var(--bg-input)); color: var(--fg-muted); font: 700 12px var(--font-ui, inherit);
     box-shadow: 0 0 0 2px var(--card-bg, var(--bg-shell)); transition: transform .15s, box-shadow .15s; }
   .nc.on { box-shadow: 0 0 0 2px var(--card-bg, var(--bg-shell)), 0 0 0 4px var(--nc, var(--fg-muted)); transform: scale(1.05); }
   .nc-prev { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-input); }
   .nc-prev > b { color: var(--nc); font-size: 13.5px; }
-  .nc-q { display: flex; flex-direction: column; padding: 4px 8px; border-left: 3px solid var(--nc); border-radius: calc(6px * var(--rk, 1)); background: color-mix(in srgb, var(--nc) 14%, transparent); font-size: 12.5px; }
+  .nc-q { display: flex; flex-direction: column; padding: 4px 8px 4px 11px; position: relative; overflow: hidden; border-radius: calc(6px * var(--rk, 1)); background: color-mix(in srgb, var(--nc) 14%, transparent); font-size: 12.5px; }
+  .nc-q::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--nc-bar, var(--nc)); }
   .nc-q b { color: var(--nc); }
   .nc-q i { font-style: normal; color: var(--fg-muted); }
   /* Banner pattern */

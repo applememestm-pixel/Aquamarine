@@ -1150,7 +1150,6 @@
       <section class="group">
         <div class="label">{$t("Spy mode")}</div>
         {#each ([
-          ["keepDeleted", "Keep deleted messages", "Messages the sender deletes stay here, marked “deleted”"],
           ["keepEdits", "Keep edit history", "Edited messages show “edited”; hover to see earlier versions"],
         ] as const) as [k, title, sub] (k)}
           <button class="toggle-row" onclick={() => ghost.update((g) => ({ ...g, [k]: !g[k] }))}>

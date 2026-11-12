@@ -189,7 +189,9 @@ function myExtra(p: Profile): Record<string, unknown> {
     cg: Number.isFinite(p.card_g) ? Math.round(p.card_g as number) : null,
     es: (p.estatus ?? "").trim() && p.estatus !== "-" ? p.estatus : null,
     pattern: (p.pattern ?? "").slice(0, 16),
-    nc: /^#[0-9a-f]{6}$/i.test(p.name_color ?? "") ? p.name_color : "",
+    // `nc`: one colour (what older apps read); `ncs`: all 2–3 of a striped one.
+    nc: parseNameColor(p.name_color)[0] ?? "",
+    ncs: parseNameColor(p.name_color).length > 1 ? parseNameColor(p.name_color).join(",") : "",
     links: (p.links ?? []).filter((l) => /^https?:\/\//i.test(l.url)).slice(0, 12),
     games: (p.games ?? []).slice(0, 12),
     game_ids: Object.fromEntries(Object.entries(p.game_ids ?? {}).filter(([n]) => (p.games ?? []).includes(n)).slice(0, 12)),
@@ -251,7 +253,8 @@ export async function adoptMyCard(username: string): Promise<boolean> {
     if (str("avatar_emoji") !== undefined) patch.avatar_emoji = str("avatar_emoji");
     if (str("card") !== undefined) patch.card = str("card");
     if (str("pattern") !== undefined) patch.pattern = str("pattern");
-    if (str("nc") !== undefined) patch.name_color = str("nc");
+    if (str("ncs")) patch.name_color = str("ncs");
+    else if (str("nc") !== undefined) patch.name_color = str("nc");
     if (num("ci") !== undefined) patch.card_i = num("ci");
     if (num("cg") !== undefined) patch.card_g = num("cg");
     patch.estatus = str("es") ?? "";
@@ -455,12 +458,35 @@ contactSet.subscribe(onPrivacyChanged);
 
 
 /** Someone's emoji status from their public card ("" when none). */
-/** Name and quote colours people can pick (Telegram's profile colours). */
-export const NAME_COLORS = ["#FF6B6B", "#FFA94D", "#FFD43B", "#51CF66", "#3BC9DB", "#4DABF7", "#845EF7", "#F783AC", "#20C997", "#ADB5BD"];
-/** Someone's chosen name colour (their card, `extra.nc`), or "". */
+/** Name and quote colours people can pick (Telegram's profile colours):
+ *  one colour, or two / three for a striped quote bar. A value is
+ *  "#rrggbb" or "#rrggbb,#rrggbb[,#rrggbb]". */
+export const NAME_COLORS = [
+  "#FF6B6B", "#FFA94D", "#FFD43B", "#51CF66", "#20C997", "#3BC9DB", "#4DABF7", "#845EF7", "#B197FC", "#F783AC", "#E599F7", "#ADB5BD",
+  "#FF6B6B,#FFC078", "#FFA94D,#FFE066", "#51CF66,#C0EB75", "#3BC9DB,#A5D8FF", "#4DABF7,#91A7FF", "#845EF7,#F783AC", "#F783AC,#FFC9C9", "#20C997,#FFD43B",
+  "#4DABF7,#FF6B6B,#F8F9FA", "#FF6B6B,#F8F9FA,#51CF66", "#FFD43B,#4DABF7,#FF6B6B", "#845EF7,#3BC9DB,#51CF66", "#FFA94D,#F783AC,#845EF7",
+];
+/** A name colour value → its 1–3 colours ([] when none / malformed). */
+export function parseNameColor(v: unknown): string[] {
+  if (typeof v !== "string") return [];
+  const parts = v.split(",").map((x) => x.trim()).filter(Boolean);
+  return parts.length >= 1 && parts.length <= 3 && parts.every((x) => /^#[0-9a-f]{6}$/i.test(x)) ? parts : [];
+}
+/** The quote bar: one colour, or Telegram-like stripes of two / three. */
+export function nameColorBar(cols: string[]): string {
+  if (cols.length < 2) return cols[0] ?? "var(--accent)";
+  const step = 6;
+  return `repeating-linear-gradient(180deg, ${cols.map((c, i) => `${c} ${i * step}px ${(i + 1) * step}px`).join(", ")})`;
+}
+/** Someone's chosen name colours (their card: `extra.ncs`, else `extra.nc`), or []. */
+export function nameColorsOf(cards: Record<string, { extra?: Record<string, unknown> } | undefined>, user: string): string[] {
+  const ex = cards[user]?.extra;
+  const multi = parseNameColor(ex?.ncs);
+  return multi.length ? multi : parseNameColor(ex?.nc).slice(0, 1);
+}
+/** Someone's chosen name colour (the first one), or "". */
 export function nameColorOf(cards: Record<string, { extra?: Record<string, unknown> } | undefined>, user: string): string {
-  const v = cards[user]?.extra?.nc;
-  return typeof v === "string" && /^#[0-9a-f]{6}$/i.test(v) ? v : "";
+  return nameColorsOf(cards, user)[0] ?? "";
 }
 
 export function emojiStatusOf(cards: Record<string, { extra?: Record<string, unknown> } | undefined>, user: string): string {

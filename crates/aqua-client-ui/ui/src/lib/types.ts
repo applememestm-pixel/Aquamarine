@@ -349,4 +349,7 @@ export interface Group {
   welcome?: string;
   /** Header tint. */
   accent?: string;
+  /** Chat theme for every member (admins set it; `theme_at` — when, ms). */
+  theme?: unknown;
+  theme_at?: number;
 }

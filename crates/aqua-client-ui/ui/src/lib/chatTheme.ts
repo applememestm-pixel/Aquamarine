@@ -125,13 +125,57 @@ export function setThemeShared(chat: string, on: boolean) {
 export function themeChanged(chat: string) {
   if (!get(sharedThemes).has(chat)) return;
   if (sendTimer) clearTimeout(sendTimer);
-  sendTimer = setTimeout(() => void sendTheme(chat), 700);
+  sendTimer = setTimeout(() => void (chat.startsWith("grp_") ? sendGroupTheme(chat) : sendTheme(chat)), 700);
+}
+
+// ---- Groups and channels: the theme is part of the group ---------------
+// An admin's "For all members" writes it into the group's data
+// (`theme`, `theme_at`), so every member — and whoever joins later — gets it
+// with the group itself. Taken through `clean` like the 1:1 one.
+
+const APPLIED_KEY = "aqua.groupThemeAt";
+function appliedAt(): Record<string, number> {
+  try { return JSON.parse(localStorage.getItem(APPLIED_KEY) ?? "{}"); } catch { return {}; }
+}
+async function sendGroupTheme(gid: string) {
+  const [{ api }, { groupById, refreshGroups }] = await Promise.all([import("./tauri"), import("./groups")]);
+  const g = groupById(gid);
+  if (!g) return;
+  const next = JSON.parse(JSON.stringify(g)) as typeof g;
+  next.theme = get(chatThemes)[gid] ?? null;
+  next.theme_at = Date.now();
+  const a = appliedAt(); a[gid] = next.theme_at;
+  try { localStorage.setItem(APPLIED_KEY, JSON.stringify(a)); } catch { /* ignore */ }
+  try { await api.updateGroup(next); await refreshGroups(); } catch (e) { console.warn("group theme", e); }
+}
+/** Admin: the group's theme for everyone on / off (on sends it now). */
+export function setGroupThemeShared(gid: string, on: boolean) {
+  sharedThemes.update((s) => { const n = new Set(s); if (on) n.add(gid); else n.delete(gid); return n; });
+  if (on) void sendGroupTheme(gid);
+}
+/** A group came with a newer theme than this device last applied. */
+function applyGroupThemes(list: { id: string; theme?: unknown; theme_at?: number }[]) {
+  const a = appliedAt();
+  let changed = false;
+  for (const g of list) {
+    if (!g.theme_at || (a[g.id] ?? 0) >= g.theme_at) continue;
+    a[g.id] = g.theme_at;
+    changed = true;
+    const th = clean(g.theme);
+    chatThemes.update((all) => {
+      const next = { ...all };
+      if (th) next[g.id] = th; else delete next[g.id];
+      return next;
+    });
+  }
+  if (changed) try { localStorage.setItem(APPLIED_KEY, JSON.stringify(a)); } catch { /* ignore */ }
 }
 
 let started = false;
 export function startChatThemes() {
   if (started) return;
   started = true;
+  void import("./groups").then(({ groups }) => groups.subscribe((list) => applyGroupThemes(list))).catch(() => {});
   void import("@tauri-apps/api/event").then(({ listen }) => listen<{ chat: string; body: Record<string, unknown>; own?: boolean }>("aqua://ctl", (e) => {
     const b = e.payload.body;
     const chat = e.payload.chat;

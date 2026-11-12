@@ -7,7 +7,7 @@ import { writable, get, derived } from "svelte/store";
 import type { Group } from "./types";
 import { api, events } from "./tauri";
 import { info } from "./stores";
-import { can } from "./groupRules";
+import { can, isAdmin } from "./groupRules";
 import { showToast } from "./components/Toast.svelte";
 import { allowed } from "./privacy";
 import { extraAvatars } from "./people";
@@ -141,9 +141,34 @@ function archiveEnded(list: Group[]) {
   if (changed) try { localStorage.setItem("aqua.endedArchived", JSON.stringify(done.slice(-500))); } catch { /* ignore */ }
 }
 
+/**
+ * A message was deleted in a group I own by someone who can't write the
+ * log (a member deleting their own): the owner's app adds the line to
+ * "Recent actions" — the only place a deleted message stays. Admins who
+ * delete write it themselves (ChatWindow::deleteRows).
+ */
+const loggedDel = new Set<string>();
+async function onGroupDeleted(p: { gid: string; by: string; author: string; preview: string }) {
+  const me = get(info)?.username ?? "";
+  const g = groupById(p.gid);
+  if (!g || !me || p.by === me || g.owner !== me || isAdmin(g, p.by)) return;
+  const text = p.by === p.author
+    ? `deleted their message: «${p.preview.slice(0, 120)}»`
+    : `deleted a message of @${p.author}: «${p.preview.slice(0, 120)}»`;
+  const id = `${p.gid}|${p.by}|${text}`;
+  if (loggedDel.has(id)) return;
+  loggedDel.add(id);
+  const next: Group = JSON.parse(JSON.stringify(g));
+  // Another device of mine may have written it already.
+  if ((next.log ?? []).slice(-20).some((l) => l.text === text)) return;
+  next.log = [...(next.log ?? []), { at: new Date().toLocaleString(), by: p.by, text }].slice(-200);
+  try { await api.updateGroup(next); await refreshGroups(); } catch (e) { console.warn("delete log", e); }
+}
+
 export function initGroups() {
   void refreshGroups();
   setInterval(() => archiveEnded(Object.values(get(groupMap))), 60_000);
   void events.onGroupsUpdated(() => refreshGroups());
   void events.onGroupJoinRequest((p) => { void onJoinRequest(p.gid, p.from); });
+  void events.onGroupDeleted((p) => { void onGroupDeleted(p); });
 }
