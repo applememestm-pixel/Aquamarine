@@ -8,6 +8,7 @@ import { settings } from "./theme";
 import { playSound, soundFor } from "./sounds";
 import { tr, lang } from "./i18n";
 import { osNotify, appInFront, justResumed } from "./notify";
+import { IS_MOBILE } from "./platform";
 
 /** Play a short chime + optional desktop notification for an incoming
  *  message, honouring the user's notification settings. */
@@ -16,6 +17,9 @@ function notifyIncoming(peerId: string, text: string) {
   if (s.notifySound) void playSound(soundFor(peerId));
   // A banner only when the user isn't already reading that chat.
   if (appInFront() && get(activeId) === peerId) return;
+  // A phone with the app open: the app's own sound has played — a system
+  // notification on top would add the system's sound (Telegram shows none).
+  if (IS_MOBILE && appInFront()) return;
   // Phone, back from the background: these were announced by src/bgnotify.rs.
   if (justResumed()) return;
   // A chat with a password: nothing of it in the notification.

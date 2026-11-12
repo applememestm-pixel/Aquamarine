@@ -273,6 +273,7 @@ pub fn run() -> Result<()> {
             commands::capsule_stop,
             commands::capsule_open,
             multidev::handoff,
+            multidev::sync_own,
             commands::group_control_admins,
             commands::forward_file,
             personal::write_text_file,

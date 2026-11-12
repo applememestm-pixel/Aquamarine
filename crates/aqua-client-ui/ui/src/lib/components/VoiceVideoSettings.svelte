@@ -54,6 +54,7 @@
     try {
       tStream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints($callSettings) });
       tCtx = new AudioContext();
+      if (tCtx.state === "suspended") await tCtx.resume().catch(() => {});
       const src = tCtx.createMediaStreamSource(tStream);
       tGain = tCtx.createGain();
       tGain.gain.value = $callSettings.inputVolume;
@@ -95,8 +96,11 @@
     levelDb = -100;
   }
 
-  $effect(() => { if (tGain) tGain.gain.value = $callSettings.inputVolume; });
-  $effect(() => { if (tMonitor) tMonitor.gain.value = loopback ? 1 : 0; });
+  // Read the values first: with the test off the nodes are null, and an
+  // effect that never read `loopback` never ran again — ticking "Hear
+  // myself" during a test did nothing.
+  $effect(() => { const v = $callSettings.inputVolume; if (tGain) tGain.gain.value = v; });
+  $effect(() => { const on = loopback; if (tMonitor) tMonitor.gain.value = on ? 1 : 0; if (on && tCtx?.state === "suspended") void tCtx.resume(); });
 
   // Meter: -80 dB … 0 dB → 0 … 100 %
   const pct = (db: number) => Math.max(0, Math.min(100, ((db + 80) / 80) * 100));

@@ -354,7 +354,7 @@
   .lt.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
   .lt-note { margin: -4px 14px 8px; font-size: 12px; color: var(--accent); }
 
-  .body { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px calc(16px + env(safe-area-inset-bottom, 0px)); }
+  .body { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px calc(16px + var(--sab, env(safe-area-inset-bottom, 0px))); }
   h4 { margin: 14px 8px 6px; font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--fg-muted); }
   .quick { display: flex; gap: 6px; padding: 4px 4px 0; }
   .quick button, .hero-acts button { flex: 1; height: 36px; border: 1px solid var(--border); background: transparent; color: var(--fg); font: inherit; font-size: 13px;

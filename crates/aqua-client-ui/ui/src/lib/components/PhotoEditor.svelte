@@ -793,6 +793,19 @@
     hover = { x: e.clientX - r.left, y: e.clientY - r.top };
   }
 
+  // ── stickers (Telegram's story editor): a big emoji, moved like text ──
+  const STICKERS = ["😀", "😂", "😍", "🥰", "😎", "🤔", "😭", "😡", "👍", "👎", "🙏", "👏", "🔥", "❤️", "💔", "✨", "🎉", "🎂", "🌸", "🌈", "☀️", "🌙", "⭐", "⚡", "🍕", "☕", "🎵", "📍", "💯", "✅", "❓", "👀"];
+  let stickerOpen = $state(false);
+  function addSticker(emo: string) {
+    stickerOpen = false;
+    if (!src) return;
+    checkpoint();
+    const id = ++textSeq;
+    texts.push({ id, x: view.x + view.w / 2, y: view.y + view.h / 2, text: emo, color: "#ffffff", size: Math.max(view.w, view.h) * 0.12, style: "plain" });
+    if (tool !== "text") setTool("text");
+    selectedId = id;
+  }
+
   // ── text ──
   function frameClick(e: MouseEvent) {
     if (tool !== "text" || !src) return;
@@ -1024,6 +1037,11 @@
       );
       const bytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
       const base = s.name.replace(/\.[^.]+$/, "") || "photo";
+      if (s.deliver) {
+        await s.deliver(`${base}-edited.${ext}`, mime, bytes);
+        closeEditor(true);
+        return;
+      }
       await api.sendEditedImage(s.peerId, `${base}-edited.${ext}`, mime, bytes);
       await loadActiveMessages();
       closeEditor(true);
@@ -1063,7 +1081,7 @@
 {/snippet}
 
 {#if $editorState}
-  <div class="pe-backdrop">
+  <div class="pe-backdrop" class:over={!!$editorState?.deliver}>
     <div class="pe" role="dialog" aria-modal="true" aria-label={$t("Edit photo")}>
       <header class="pe-head">
         <div class="title">{$t("Edit photo")}</div>
@@ -1269,6 +1287,18 @@
               {@render icon(id)}<span>{$t(label)}</span>
             </button>
           {/each}
+          <span class="sticker-wrap">
+            <button class="tb" class:on={stickerOpen} title={$t("Stickers")} aria-label={$t("Stickers")} onclick={() => (stickerOpen = !stickerOpen)} disabled={!src || processing} aria-pressed={stickerOpen}>
+              <i class="st-emo" aria-hidden="true">😀</i><span>{$t("Stickers")}</span>
+            </button>
+            {#if stickerOpen}
+              <div class="sticker-pop" role="menu">
+                {#each STICKERS as emo (emo)}
+                  <button onclick={() => addSticker(emo)}>{emo}</button>
+                {/each}
+              </div>
+            {/if}
+          </span>
           <span class="vsep"></span>
           <button class="tb icon" onclick={() => rotateBy(-1)} disabled={!src || processing} title={$t("Rotate left")} aria-label={$t("Rotate left")}>
             {@render icon("rotl")}
@@ -1286,7 +1316,7 @@
             {#if processing}
               <span class="spin"></span>{$t("Processing…")}
             {:else}
-              {@render icon("send", 15)}{$t("Send")}
+              {#if $editorState?.deliver}{$t($editorState.doneLabel ?? "Done")}{:else}{@render icon("send", 15)}{$t("Send")}{/if}
             {/if}
           </button>
         </div>
@@ -1296,6 +1326,7 @@
 {/if}
 
 <style>
+  .pe-backdrop.over { z-index: 10097; }
   .pe-backdrop {
     position: fixed; inset: var(--tb-h, 0px) 0 0 0;
     z-index: 210;
@@ -1535,6 +1566,12 @@
     border-top: 1px solid var(--border);
     background: var(--bg-shell);
   }
+  .sticker-wrap { position: relative; display: inline-flex; }
+  .st-emo { font-size: 17px; line-height: 1; font-style: normal; }
+  .sticker-pop { position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); z-index: 5; width: 272px; display: grid; grid-template-columns: repeat(8, 1fr);
+    gap: 2px; padding: 8px; border-radius: calc(14px * var(--rk, 1)); background: var(--bg-surface); border: 1px solid var(--border-strong); box-shadow: 0 14px 30px -12px rgba(0,0,0,.8); }
+  .sticker-pop button { border: none; background: transparent; font-size: 22px; padding: 4px 0; border-radius: 8px; cursor: pointer; }
+  .sticker-pop button:hover { background: var(--bg-hover); }
   .tools { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 4px; }
   .tb {
     height: 38px; padding: 0 12px;

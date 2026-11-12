@@ -623,7 +623,7 @@
   .lb-top {
     flex: none;
     display: flex; align-items: center; justify-content: space-between; gap: 16px;
-    padding: calc(12px + env(safe-area-inset-top, 0px)) calc(16px + env(safe-area-inset-right, 0px)) 12px calc(16px + env(safe-area-inset-left, 0px));
+    padding: calc(12px + var(--sat, env(safe-area-inset-top, 0px))) calc(16px + var(--sar, env(safe-area-inset-right, 0px))) 12px calc(16px + var(--sal, env(safe-area-inset-left, 0px)));
     background: linear-gradient(to bottom, rgba(2, 3, 6, 0.7), rgba(2, 3, 6, 0));
     position: relative; z-index: 3;
   }
@@ -807,10 +807,10 @@
 
   /* Phones: the name gets its own line above the buttons, nothing sits
      under the status bar, and the bottom bar clears the gesture strip. */
-  :global(html.phone) .lb-top { flex-wrap: wrap; gap: 8px; padding-top: calc(10px + max(env(safe-area-inset-top, 0px), var(--status-h, 24px))); }
+  :global(html.phone) .lb-top { flex-wrap: wrap; gap: 8px; padding-top: calc(10px + max(var(--sat, env(safe-area-inset-top, 0px)), var(--status-h, 24px))); }
   :global(html.phone) .lb-info { flex: 1 1 100%; order: 2; }
   :global(html.phone) .lb-actions { margin-left: auto; }
-  :global(html.phone) .lb-bottom { padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
+  :global(html.phone) .lb-bottom { padding-bottom: calc(10px + var(--sab, env(safe-area-inset-bottom, 0px))); }
   :global(html.phone) .lb-stage { touch-action: none; }
   @media (max-width: 560px) {
     .meta { display: none; }

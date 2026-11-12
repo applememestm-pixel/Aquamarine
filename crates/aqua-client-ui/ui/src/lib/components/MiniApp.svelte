@@ -249,7 +249,7 @@
 {#if $miniApp}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="ma-veil" onclick={(e) => { if (e.target === e.currentTarget) void close(); }}>
-    <div class="ma" class:full={fullscreen} role="dialog" aria-modal="true" aria-label={$t("Mini app")} style:background={bgColor ?? undefined}>
+    <div class="ma" class:full={fullscreen} data-phone-full={fullscreen || undefined} role="dialog" aria-modal="true" aria-label={$t("Mini app")} style:background={bgColor ?? undefined}>
       <header class="ma-head" style:background={headerColor ?? undefined}>
         <button data-x class="ma-ic ma-close" onclick={() => close()} aria-label={$t("Close")}>✕</button>
         {#if back}

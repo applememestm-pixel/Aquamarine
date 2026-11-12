@@ -10,12 +10,16 @@ export interface Started { recorder: MediaRecorder; mime: string }
 export const VIDEO_TYPES = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm", "video/mp4;codecs=avc1,mp4a", "video/mp4"];
 export const AUDIO_TYPES = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/ogg", "audio/mp4;codecs=mp4a", "audio/mp4", "audio/aac"];
 
-export function startRecorder(stream: MediaStream, types: string[], onData: (b: Blob) => void, timeslice?: number): Started {
+export function startRecorder(stream: MediaStream, types: string[], onData: (b: Blob) => void, timeslice?: number, videoBps?: number): Started {
   const tried: string[] = [];
   const list = [...types.filter((t) => { try { return MediaRecorder.isTypeSupported(t); } catch { return false; } }), ""];
   for (const t of list) {
     try {
-      const r = new MediaRecorder(stream, t ? { mimeType: t } : undefined);
+      // Video: a real bitrate when asked (some WebViews default to ~1 Mbit/s — a blurry clip).
+      const opts: MediaRecorderOptions = {};
+      if (t) opts.mimeType = t;
+      if (videoBps) opts.videoBitsPerSecond = videoBps;
+      const r = new MediaRecorder(stream, opts);
       r.ondataavailable = (e) => { if (e.data && e.data.size > 0) onData(e.data); };
       if (timeslice) r.start(timeslice); else r.start();
       return { recorder: r, mime: r.mimeType || t || "" };

@@ -7,6 +7,10 @@ export interface EditRequest {
   mime: string;
   name: string;
   peerId: string;
+  /** Hand the edited picture back instead of sending it (a story). */
+  deliver?: (name: string, mime: string, bytes: number[]) => Promise<void>;
+  /** The main button's label when `deliver` is set. */
+  doneLabel?: string;
   resolve: (sent: boolean) => void;
 }
 

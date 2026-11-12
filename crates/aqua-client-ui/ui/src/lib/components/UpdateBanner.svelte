@@ -55,7 +55,7 @@
 <style>
   .upd {
     position: fixed; z-index: 290; left: 50%; transform: translateX(-50%);
-    top: calc(var(--tb-h, 0px) + env(safe-area-inset-top, 0px) + 10px);
+    top: calc(var(--tb-h, 0px) + var(--sat, env(safe-area-inset-top, 0px)) + 10px);
     width: min(520px, calc(100vw - 20px)); box-sizing: border-box;
     display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 14px; border-radius: calc(18px * var(--rk, 1));
     background: color-mix(in srgb, var(--bg-surface) 80%, transparent);

@@ -39,10 +39,18 @@
     stop();
     err = "";
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-        audio: true,
-      }).catch(() => navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing } }, audio: false }));
+      // Full HD asked as a minimum of 720 lines too: some Android WebViews
+      // otherwise hand out 176×144 / 320×240 (the "144p" story), and without
+      // the microphone the second try used to ask for no size at all.
+      const vid: MediaTrackConstraints = { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } };
+      stream = await navigator.mediaDevices.getUserMedia({ video: vid, audio: true })
+        .catch(() => navigator.mediaDevices.getUserMedia({ video: vid, audio: false }))
+        .catch(() => navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing } }, audio: false }));
+      const tr0 = stream.getVideoTracks()[0];
+      const st = tr0?.getSettings?.();
+      if (tr0 && st && Math.min(st.width ?? 0, st.height ?? 0) < 720) {
+        await tr0.applyConstraints({ width: { min: 1280, ideal: 1920 }, height: { min: 720, ideal: 1080 } }).catch(() => {});
+      }
       if (video) { video.srcObject = stream; video.muted = true; void video.play().catch(() => {}); }
     } catch (e) {
       const name = (e as DOMException)?.name;
@@ -97,7 +105,7 @@
     if (!stream) return;
     chunks = [];
     try {
-      const st = startRecorder(stream, VIDEO_TYPES, (b) => chunks.push(b), 1000);
+      const st = startRecorder(stream, VIDEO_TYPES, (b) => chunks.push(b), 1000, 5_000_000);
       recorder = st.recorder;
       const mime = st.mime;
       recorder.onstop = async () => {
@@ -133,7 +141,7 @@
 </script>
 
 {#if $pending}
-  <div class="cam" data-own-back role="dialog" aria-modal="true" aria-label={$t("Camera")}>
+  <div class="cam" data-phone-full data-own-back role="dialog" aria-modal="true" aria-label={$t("Camera")}>
     <!-- svelte-ignore a11y_media_has_caption -->
     <video bind:this={video} class:mirror={facing === "user"} playsinline autoplay muted></video>
     {#if flash}<div class="flash"></div>{/if}
@@ -162,7 +170,7 @@
   video.mirror { transform: scaleX(-1); }
   .flash { position: absolute; inset: 0; background: #fff; opacity: .7; pointer-events: none; animation: fl .18s ease-out forwards; }
   @keyframes fl { to { opacity: 0; } }
-  .top { position: relative; display: flex; align-items: center; justify-content: space-between; padding: calc(12px + env(safe-area-inset-top, 0px)) 14px 12px;
+  .top { position: relative; display: flex; align-items: center; justify-content: space-between; padding: calc(12px + var(--sat, env(safe-area-inset-top, 0px))) 14px 12px;
     background: linear-gradient(rgba(0,0,0,.45), transparent); }
   .ic { width: 42px; height: 42px; border-radius: 50%; border: none; display: grid; place-items: center; color: #fff; background: rgba(0,0,0,.35); cursor: pointer; }
   .ic:disabled { opacity: .35; }
@@ -171,7 +179,7 @@
   .rec i { width: 9px; height: 9px; border-radius: 50%; background: #ff3b30; animation: blink 1s steps(2) infinite; }
   @keyframes blink { 50% { opacity: 0; } }
   .err { position: relative; margin: 0 20px; padding: 12px 14px; border-radius: calc(12px * var(--rk, 1)); background: rgba(0,0,0,.6); font-size: 14px; text-align: center; }
-  .bottom { position: relative; display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 20px 0 calc(28px + env(safe-area-inset-bottom, 0px));
+  .bottom { position: relative; display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 20px 0 calc(28px + var(--sab, env(safe-area-inset-bottom, 0px)));
     background: linear-gradient(transparent, rgba(0,0,0,.5)); }
   .hint { font-size: 13px; opacity: .85; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
   .shutter { width: 76px; height: 76px; border-radius: 50%; border: 4px solid #fff; background: transparent; padding: 0; display: grid; place-items: center; cursor: pointer; transition: transform .15s ease; }

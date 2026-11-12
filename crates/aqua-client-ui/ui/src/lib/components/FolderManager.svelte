@@ -224,7 +224,7 @@
   .fm-sheet { width: min(440px, 94vw); max-height: 86vh; display: flex; flex-direction: column; background: var(--bg-shell); border: 1px solid var(--border-strong);
     border-radius: calc(16px * var(--rk, 1)); overflow: hidden; box-shadow: 0 32px 80px -16px rgba(0,0,0,0.6); }
   :global(html.phone) .fm-backdrop { padding: 0; place-items: end stretch; }
-  :global(html.phone) .fm-sheet { width: 100%; max-height: 92dvh; border-radius: calc(18px * var(--rk, 1)) calc(18px * var(--rk, 1)) 0 0; padding-bottom: env(safe-area-inset-bottom, 0px); }
+  :global(html.phone) .fm-sheet { width: 100%; max-height: 92dvh; border-radius: calc(18px * var(--rk, 1)) calc(18px * var(--rk, 1)) 0 0; padding-bottom: var(--sab, env(safe-area-inset-bottom, 0px)); }
   .fm-head { display: flex; align-items: center; gap: 6px; padding: 10px 10px 10px 16px; border-bottom: 1px solid var(--border); }
   .fm-head:has(.fm-ic:first-child) { padding-left: 8px; }
   .fm-head h3 { margin: 0; flex: 1; font-size: 15.5px; font-weight: 700; }

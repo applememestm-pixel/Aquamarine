@@ -46,6 +46,22 @@ function audio(): AudioContext | null {
   return ctx;
 }
 
+// The page may not start sound before the person has touched it (autoplay
+// rules): a sound for a message that came while the window sat in the
+// background stayed silent, and only the system's own was heard. The first
+// tap or key unlocks the context for good.
+if (typeof window !== "undefined") {
+  const unlock = () => {
+    const c = audio();
+    if (c && c.state !== "suspended") {
+      window.removeEventListener("pointerdown", unlock, true);
+      window.removeEventListener("keydown", unlock, true);
+    }
+  };
+  window.addEventListener("pointerdown", unlock, true);
+  window.addEventListener("keydown", unlock, true);
+}
+
 function tone(c: AudioContext, freq: number, start: number, dur: number, vol: number, type: OscillatorType = "sine", glideTo?: number) {
   const o = c.createOscillator();
   const g = c.createGain();

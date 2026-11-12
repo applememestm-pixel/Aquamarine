@@ -1,5 +1,5 @@
 /**
- * Plugins (Settings → Experimental), like exteraGram's, but JavaScript.
+ * Plugins (Settings → Plugins), like exteraGram's, but JavaScript.
  *
  * Each enabled plugin runs in its own Web Worker: no page, no access to the
  * app, its storage or the Tauri bridge. Before the plugin's code runs, the
@@ -43,7 +43,7 @@ function load<T>(key: string, fallback: T): T {
 }
 function save(key: string, v: unknown) { try { localStorage.setItem(key, JSON.stringify(v)); } catch { /* full or blocked */ } }
 
-/** The whole feature is off until switched on in Experimental. */
+/** The whole feature is off until switched on in Settings → Plugins. */
 export const pluginsOn = writable<boolean>(load(ON_KEY, false));
 pluginsOn.subscribe((v) => save(ON_KEY, v));
 export const plugins = writable<Plugin[]>(load<Plugin[]>(KEY, []).filter((p) => p && typeof p.code === "string"));
@@ -75,6 +75,28 @@ export function installPlugin(code: string, allow: (hosts: string[], name: strin
   plugins.update((l) => [...l.filter((x) => x.id !== id), p]);
   return p;
 }
+/** What a plugin does, for grouping it in Settings → Plugins: its own
+ *  `// @category` if it names one of these, else read off the calls it makes. */
+export const PLUGIN_CATS = [
+  { id: "commands", label: "Commands", icon: "⌨️" },
+  { id: "sending", label: "Sending", icon: "✏️" },
+  { id: "incoming", label: "Incoming messages", icon: "📥" },
+  { id: "menu", label: "Attach menu", icon: "📎" },
+  { id: "music", label: "Music", icon: "🎵" },
+  { id: "other", label: "Other", icon: "🧩" },
+] as const;
+export type PluginCat = (typeof PLUGIN_CATS)[number]["id"];
+export function pluginCategory(code: string): PluginCat {
+  const tag = /^\s*\/\/\s*@category\s+(\w+)/m.exec(code)?.[1]?.toLowerCase();
+  if (tag && PLUGIN_CATS.some((c) => c.id === tag)) return tag as PluginCat;
+  if (/aqua\.music\./.test(code)) return "music";
+  if (/aqua\.button\s*\(/.test(code)) return "menu";
+  if (/aqua\.command\s*\(/.test(code)) return "commands";
+  if (/aqua\.onSend\s*\(/.test(code)) return "sending";
+  if (/aqua\.onIncoming\s*\(/.test(code)) return "incoming";
+  return "other";
+}
+
 export function removePlugin(id: string) { plugins.update((l) => l.filter((p) => p.id !== id)); }
 export function togglePlugin(id: string) { plugins.update((l) => l.map((p) => (p.id === id ? { ...p, enabled: !p.enabled } : p))); }
 
@@ -281,7 +303,7 @@ export async function runPluginCommand(c: PluginCommand, args: string, chat: str
   return typeof out === "string" && out.trim() ? out.slice(0, 16000) : null;
 }
 
-/** A small plugin to start from (Settings → Experimental → Example). */
+/** A small plugin to start from (Settings → Plugins → Example). */
 export const EXAMPLE_PLUGIN = `// @name Sparkle & Mock
 // @version 1.0
 // @author Aquamarine

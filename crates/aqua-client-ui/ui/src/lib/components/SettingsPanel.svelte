@@ -20,7 +20,9 @@
   import { pickFolder } from "../dialog";
   const PHONE_UI = /android|iphone|ipad/i.test(navigator.userAgent);
   import { hasWidget } from "../widget";
-  import { plugins, pluginsOn, installPlugin, removePlugin, togglePlugin, EXAMPLE_PLUGIN } from "../plugins";
+  import { storiesOff, storyNav, storyArchive, pinnedStories, openStories } from "../stories";
+  import { setStoriesOff } from "../storyFeed";
+  import { plugins, pluginsOn, installPlugin, removePlugin, togglePlugin, EXAMPLE_PLUGIN, PLUGIN_CATS, pluginCategory, type PluginCat } from "../plugins";
   import { musicStatus, refreshMusic, openMusic } from "../music";
   import { ATTACH_ITEMS, attachFront, attachHidden, attachDock, attachBots, toggleAttachFront, toggleAttachHidden, moveAttach, toggleAttachBot, resetAttachMenu } from "../attachMenu";
   import { chatLocks } from "../chatLocks";
@@ -81,7 +83,7 @@
   import { meshStatus, meshSyncNow, meshSetEnabled, refreshMesh } from "../mesh";
 
   // ---- Section navigation ----
-  type Sec = "network" | "nearby" | "host" | "ghost" | "language" | "appearance" | "theme" | "behaviour" | "notifications" | "voice" | "wallpaper" | "accent" | "bots" | "account" | "updates" | "about" | "privacy" | "stickers" | "backups" | "devices" | "storage" | "advanced" | "power" | "window" | "music";
+  type Sec = "network" | "nearby" | "host" | "ghost" | "language" | "appearance" | "theme" | "behaviour" | "notifications" | "voice" | "wallpaper" | "accent" | "bots" | "account" | "updates" | "about" | "privacy" | "stickers" | "backups" | "devices" | "storage" | "advanced" | "power" | "window" | "music" | "plugins";
   let section = $state<Sec>("notifications");
   // Telegram-mobile style: coloured icon tiles in grouped lists.
   interface Item { id: Sec | "profile" | "shortcuts"; label: string; color: string; icon: string; hint?: string }
@@ -121,12 +123,17 @@
       { id: "advanced", label: "Experimental", color: "#636366", icon: ic(`<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>`) },
       { id: "about", label: "About Aquamarine", color: "#8E8E93", icon: ic(`<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>`) },
     ],
+    [
+      { id: "plugins", label: "Plugins", color: "#BF5AF2", icon: ic(`<path d="M10 3h4v3a2 2 0 1 0 4 0V3h3v7h-3a2 2 0 1 0 0 4h3v7h-7v-3a2 2 0 1 0-4 0v3H3v-7h3a2 2 0 1 0 0-4H3V3h7z"/>`) },
+    ],
   ];
   /** Sections for experienced users: shown under "Advanced settings". */
   const ADVANCED = new Set<string>(["ghost", "power", "window", "network", "host", "bots", "shortcuts", "advanced"]);
   // Computer-only sections never show on a phone (and nothing phone-only on a PC).
   const shown = (x: Item) => !((x.id === "shortcuts" || x.id === "window") && IS_MOBILE);
-  const BASIC_GROUPS = GROUPS.map((g) => g.filter((x) => !ADVANCED.has(x.id))).filter((g) => g.length);
+  // Plugins: their own panel at the very bottom, under everything else.
+  const BASIC_GROUPS = GROUPS.map((g) => g.filter((x) => !ADVANCED.has(x.id) && x.id !== "plugins")).filter((g) => g.length);
+  const PLUGINS_ITEM = GROUPS.flat().find((x) => x.id === "plugins")!;
   const ADVANCED_ITEMS = GROUPS.flat().filter((x) => ADVANCED.has(x.id));
   const SECTIONS = GROUPS.flat().filter((x) => x.id !== "profile" && x.id !== "shortcuts") as (Item & { id: Sec })[];
   const sectionItem = $derived(GROUPS.flat().find((x) => x.id === section));
@@ -138,7 +145,7 @@
     privacy: ["Who sees what, passcode, two-step", "last seen online phone birthday calls voice forwards block passcode 2fa two-step authenticator"],
     ghost: ["Read without being seen", "ghost invisible typing read receipts"],
     notifications: ["Sounds, previews, quiet hours", "sound vibration reminder mute preview"],
-    behaviour: ["Enter to send, attach menu, links", "enter send attach menu link previews seconds built-in browser"],
+    behaviour: ["Stories, Enter to send, attach menu, links", "stories enter send attach menu link previews seconds built-in browser"],
     storage: ["Downloads, cache, auto-download", "cache downloads folder auto-download media size"],
     power: ["Animations, autoplay, battery", "battery animations gifs videos autoplay"],
     music: ["Navidrome, the player", "navidrome subsonic player tracks"],
@@ -155,7 +162,8 @@
     bots: ["Your bots", "bots token api"],
     shortcuts: ["Keys for everything", "keyboard shortcuts hotkeys"],
     updates: ["New versions", "update version download"],
-    advanced: ["Plugins and experiments", "plugins experimental debug"],
+    advanced: ["Features being tried out", "experimental debug"],
+    plugins: ["Add-ons: commands, music, menus", "plugins add-ons addons extensions navidrome catalogue javascript"],
     about: ["Version, licences, links", "about version licence github"],
   };
   // Settings search (Telegram's): by name, subtitle and what's inside.
@@ -202,6 +210,7 @@
     confirm(tr("The plugin “{n}” wants to connect to: {h}. It could send there what you give it. Allow?", { n: name, h: hosts.join(", ") }));
   /** Settings → Experimental → Plugins: code being pasted (null: closed). */
   let pluginPaste = $state<string | null>(null);
+  let plCat = $state<PluginCat | "all">("all");
   onMount(() => {
     const mq = window.matchMedia("(max-width: 720px)");
     const on = () => { phone = mq.matches; };
@@ -1035,7 +1044,7 @@
     onclick={(e) => { if ((e.target as HTMLElement).classList.contains("backdrop")) closeAll(); }}
     onkeydown={(e) => { if (e.target === e.currentTarget && (e.key === "Escape" || e.key === "Enter")) closeAll(); }}
   >
-    <div class="sheet" data-own-back class:detail class:wide={section === "appearance"} class:sized={!!sheetSize} role="dialog" aria-modal="true" tabindex="-1"
+    <div class="sheet" data-own-back data-phone-full class:detail class:wide={section === "appearance"} class:sized={!!sheetSize} role="dialog" aria-modal="true" tabindex="-1"
       style:width={sheetSize ? `min(${sheetSize.w}px, 98vw)` : undefined} style:height={sheetSize ? `min(${sheetSize.h}px, 96vh)` : undefined}>
       <!-- Drag the corner to resize (remembered); double-click — back to the default. -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -1115,6 +1124,7 @@
               {#each ADVANCED_ITEMS.filter(shown) as it (it.id)}{@render navItem(it)}{/each}
             </div>
           {/if}
+          <div class="nav-group">{@render navItem(PLUGINS_ITEM)}</div>
           {/if}
         </nav>
 
@@ -1148,7 +1158,7 @@
         </button>
       </section>
       <section class="group">
-        <div class="label">{$t("Spy mode")}</div>
+        <div class="label">{$t("Edited messages")}</div>
         {#each ([
           ["keepEdits", "Keep edit history", "Edited messages show “edited”; hover to see earlier versions"],
         ] as const) as [k, title, sub] (k)}
@@ -1157,7 +1167,7 @@
             <span class="switch" class:on={$ghost[k]}></span>
           </button>
         {/each}
-        <div class="foot-note">{$t("Everything here stays on this device. Like AyuGram, but built in.")}</div>
+        <div class="foot-note">{$t("Kept only on this device. Deleted messages are never kept: deleted means deleted, for everyone — copies forwarded elsewhere before stay.")}</div>
       </section>
       {/if}
 
@@ -1425,11 +1435,11 @@
         </button>
         {#if $settings.glassMenus}
           <div class="row">
-            <span class="row-label">{$t("Opacity")}</span>
+            <span class="row-label">{$t("Transparency")}</span>
             <div class="range">
-              <input type="range" min="0.35" max="0.95" step="0.05" value={$settings.menuAlpha ?? MENU_ALPHA}
-                oninput={(e) => settings.update((x) => ({ ...x, menuAlpha: +(e.target as HTMLInputElement).value }))} />
-              <span class="range-val">{Math.round(($settings.menuAlpha ?? MENU_ALPHA) * 100)}%</span>
+              <input type="range" min="5" max="65" step="5" value={Math.round((1 - ($settings.menuAlpha ?? MENU_ALPHA)) * 100)}
+                oninput={(e) => settings.update((x) => ({ ...x, menuAlpha: 1 - +(e.target as HTMLInputElement).value / 100 }))} />
+              <span class="range-val">{Math.round((1 - ($settings.menuAlpha ?? MENU_ALPHA)) * 100)}%</span>
             </div>
           </div>
         {/if}
@@ -1626,8 +1636,9 @@
           <div class="row">
             <span class="row-label">{$t(lbl)}</span>
             <div class="range">
-              <input type="range" min="0.3" max="1" step="0.02" value={$settings.alphas?.[k] ?? 1} oninput={(e) => setAlpha(k, +(e.target as HTMLInputElement).value)} />
-              <span class="range-val">{Math.round(($settings.alphas?.[k] ?? 1) * 100)}%</span>
+              <!-- Shown as transparency (0 % = solid, 100 % = see-through); stored as opacity. -->
+              <input type="range" min="0" max="100" step="2" value={Math.round((1 - ($settings.alphas?.[k] ?? 1)) * 100)} oninput={(e) => setAlpha(k, 1 - +(e.target as HTMLInputElement).value / 100)} />
+              <span class="range-val">{Math.round((1 - ($settings.alphas?.[k] ?? 1)) * 100)}%</span>
             </div>
           </div>
         {/each}
@@ -1706,9 +1717,9 @@
           {@const ga = $settings.glassAlpha ?? 55}
           <div class="ava-row">
             <div class="ava-ctl">
-              <div class="ava-head"><b>{$t("Opacity")}</b><span class="pill-tag">{ga === 0 ? $t("Outline only") : `${ga}%`}</span></div>
-              <div class="range"><input type="range" min="0" max="100" step="5" value={ga}
-                oninput={(e) => settings.update((x) => ({ ...x, glassAlpha: parseInt((e.target as HTMLInputElement).value) }))} /></div>
+              <div class="ava-head"><b>{$t("Transparency")}</b><span class="pill-tag">{ga === 0 ? $t("Outline only") : `${100 - ga}%`}</span></div>
+              <div class="range"><input type="range" min="0" max="100" step="5" value={100 - ga}
+                oninput={(e) => settings.update((x) => ({ ...x, glassAlpha: 100 - parseInt((e.target as HTMLInputElement).value) }))} /></div>
             </div>
           </div>
         {/if}
@@ -1717,6 +1728,26 @@
       {/if}
 
       {#if section === "behaviour"}
+      <section class="group">
+        <div class="label">{$t("Stories")}</div>
+        <button class="toggle-row" onclick={() => void setStoriesOff(!$storiesOff)}>
+          <div class="tr-text"><div class="tr-title">{$t("Stories")}</div>
+            <div class="tr-sub">{$t("Off: nobody's stories are shown, and yours disappear for everyone.")}</div></div>
+          <span class="switch" class:on={!$storiesOff}></span>
+        </button>
+        {#if !$storiesOff}
+          <div class="row">
+            <span class="row-label">{$t("Next person")}</span>
+            <Select class="sel" value={$storyNav || "cube"} options={[{ value: "cube", label: $t("Sideways (cube)") }, { value: "vertical", label: $t("Down (feed)") }]}
+              onchange={(v) => storyNav.set(v === "vertical" ? "vertical" : "cube")} />
+          </div>
+          <button class="toggle-row" onclick={() => { if ($storyArchive.length) openStories([""], "", "archive"); else showToast(tr("The archive is empty — stories land here when they run out")); }}>
+            <div class="tr-text"><div class="tr-title">{$t("Story archive")}{#if $storyArchive.length} · {$storyArchive.length}{/if}</div>
+              <div class="tr-sub">{$t("Your stories after they run out — only you see them. Pinned to profile: {n}.", { n: $pinnedStories.length })}</div></div>
+            <span class="chev">›</span>
+          </button>
+        {/if}
+      </section>
       <section class="group">
         <div class="label">{$t("Attach menu")}</div>
         <div class="foot-note" style="margin:0 0 8px">{$t("What the 📎 button shows right away and in what order. The rest waits under “More”; hidden ones aren't shown at all.")}</div>
@@ -2133,30 +2164,57 @@
         <div class="bots-note">{$t("Features that are still being tried out. They may change, break or disappear in the next versions.")}</div>
       </section>
       <section class="group">
-        <div class="label">🧩 {$t("Plugins")}</div>
-        <button class="toggle-row" onclick={() => pluginsOn.update((v) => !v)}>
-          <div class="tr-text"><div class="tr-title">{$t("Plugins")}</div>
-            <div class="tr-sub">{$t("Small JavaScript add-ons, like in exteraGram: commands, changing what you send, reacting to messages.")}</div></div>
-          <span class="switch" class:on={$pluginsOn}></span>
+        <button class="toggle-row" onclick={() => (section = "plugins")}>
+          <div class="tr-text"><div class="tr-title">🧩 {$t("Plugins")}</div><div class="tr-sub">{$t("Moved to their own section at the bottom of the list")}</div></div>
+          <span class="chev">›</span>
         </button>
+      </section>
+      {/if}
+
+      {#if section === "plugins"}
+      <section class="group">
+        <div class="label">🎵 {$t("Built-in add-ons")}</div>
         <div class="toggle-row am-row" class:off={!$settings.navidrome}>
           <div class="tr-text"><div class="tr-title">Navidrome <span class="pill-tag">{$t("built-in")}</span></div>
             <div class="tr-sub">{$t("Music tab, player, track cards, listening together")}</div></div>
           <button class="mini-btn" onclick={() => (section = "music")}>{$t("Settings")}</button>
           <button class="switch-btn" onclick={() => settings.update((s) => ({ ...s, navidrome: !s.navidrome }))} aria-label={$t("On")}><span class="switch" class:on={!!$settings.navidrome}></span></button>
         </div>
+      </section>
+      <section class="group">
+        <div class="label">{$t("Plugins")}</div>
+        <button class="toggle-row" onclick={() => pluginsOn.update((v) => !v)}>
+          <div class="tr-text"><div class="tr-title">{$t("Plugins")}</div>
+            <div class="tr-sub">{$t("Small JavaScript add-ons, like in exteraGram: commands, changing what you send, reacting to messages.")}</div></div>
+          <span class="switch" class:on={$pluginsOn}></span>
+        </button>
         {#if $pluginsOn}
           <div class="bots-note">{$t("A plugin sees the messages it's given, but runs locked away: no network, no access to your keys, files or the rest of the app. Install only plugins you trust.")}</div>
-          {#each $plugins as pl (pl.id)}
-            <div class="toggle-row am-row" class:off={!pl.enabled}>
-              <div class="tr-text"><div class="tr-title">{pl.name} <span class="pill-tag">{pl.version}</span></div>
-                <div class="tr-sub">{pl.description || "—"}{pl.author ? ` · ${pl.author}` : ""}</div></div>
-              <button class="mini-btn" onclick={() => { if (confirm(tr("Remove the plugin “{n}”?", { n: pl.name }))) removePlugin(pl.id); }}>{$t("Remove")}</button>
-              <button class="switch-btn" onclick={() => togglePlugin(pl.id)} aria-label={$t("On")}><span class="switch" class:on={pl.enabled}></span></button>
+          {#if $plugins.length}
+            <div class="pl-cats" role="tablist">
+              <button class="pl-cat" class:on={plCat === "all"} onclick={() => (plCat = "all")}>{$t("All")} <span>{$plugins.length}</span></button>
+              {#each PLUGIN_CATS.filter((c) => $plugins.some((p) => pluginCategory(p.code) === c.id)) as c (c.id)}
+                <button class="pl-cat" class:on={plCat === c.id} onclick={() => (plCat = c.id)}>{c.icon} {$t(c.label)} <span>{$plugins.filter((p) => pluginCategory(p.code) === c.id).length}</span></button>
+              {/each}
             </div>
-          {:else}
-            <div class="foot-note" style="margin:0 0 8px">{$t("No plugins yet.")}</div>
+          {/if}
+          {#each PLUGIN_CATS.filter((c) => plCat === "all" || plCat === c.id) as c (c.id)}
+            {@const list = $plugins.filter((p) => pluginCategory(p.code) === c.id).sort((a, b) => a.name.localeCompare(b.name))}
+            {#if list.length}
+              <div class="pl-head">{c.icon} {$t(c.label)}</div>
+              {#each list as pl (pl.id)}
+                <div class="toggle-row am-row" class:off={!pl.enabled}>
+                  <div class="tr-text"><div class="tr-title">{pl.name} <span class="pill-tag">{pl.version}</span></div>
+                    <div class="tr-sub">{pl.description || "—"}{pl.author ? ` · ${pl.author}` : ""}</div></div>
+                  <button class="mini-btn" onclick={() => { if (confirm(tr("Remove the plugin “{n}”?", { n: pl.name }))) removePlugin(pl.id); }}>{$t("Remove")}</button>
+                  <button class="switch-btn" onclick={() => togglePlugin(pl.id)} aria-label={$t("On")}><span class="switch" class:on={pl.enabled}></span></button>
+                </div>
+              {/each}
+            {/if}
           {/each}
+          {#if !$plugins.length}
+            <div class="foot-note" style="margin:0 0 8px">{$t("No plugins yet.")}</div>
+          {/if}
           <div class="pl-acts">
             <button class="mini-btn" onclick={() => void api.openExternal("https://applememestm-pixel.github.io/Aquamarine/addons.html").catch((e) => showToast(String(e)))}>{$t("Add-on catalogue")}</button>
             <label class="mini-btn">{$t("Install from file…")}
@@ -2890,8 +2948,8 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     .backdrop { padding: 0; background: var(--bg-shell); backdrop-filter: none; }
     .sheet {
       width: 100vw !important; height: 100% !important; border: none; border-radius: 0; box-shadow: none;
-      padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
-               env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+      padding: var(--sat, env(safe-area-inset-top, 0px)) var(--sar, env(safe-area-inset-right, 0px))
+               var(--sab, env(safe-area-inset-bottom, 0px)) var(--sal, env(safe-area-inset-left, 0px));
       box-sizing: border-box;
     }
     .layout { grid-template-columns: 1fr; }
@@ -3156,11 +3214,16 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   /* Attach menu / nav bar rows: name, then small controls on the right. */
   .am-row { cursor: default; gap: 6px; }
   .am-row .tr-text { flex: 1; }
-  .am-row.off .tr-title { color: var(--fg-dim); text-decoration: line-through; }
+  .am-row.off .tr-title { color: var(--fg-dim); }
   .am-btn { width: 30px; height: 30px; flex-shrink: 0; display: grid; place-items: center; border-radius: calc(8px * var(--rk, 1));
     border: 1px solid var(--border); background: var(--bg-input); color: var(--fg-muted); cursor: pointer; font: 700 14px var(--font-ui); }
   .am-btn:disabled { opacity: .35; cursor: default; }
   .am-btn svg { width: 16px; height: 16px; }
+  .pl-cats { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+  .pl-cat { border: 1px solid var(--border); background: var(--bg-elev, transparent); color: var(--fg-muted); border-radius: calc(100px * var(--rk, 1)); padding: 4px 10px; font-size: 12px; font-weight: 700; cursor: pointer; }
+  .pl-cat span { opacity: .6; margin-left: 2px; }
+  .pl-cat.on { background: var(--accent); border-color: var(--accent); color: #06070C; }
+  .pl-head { font-size: 11.5px; font-weight: 800; color: var(--fg-dim); text-transform: uppercase; letter-spacing: .04em; margin: 10px 0 4px; }
   .pl-acts { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
   .pl-code { width: 100%; font: 12px/1.5 var(--font-mono, monospace); background: var(--bg-input); color: var(--fg); border: 1px solid var(--border);
     border-radius: calc(10px * var(--rk, 1)); padding: 8px 10px; margin-bottom: 8px; resize: vertical; }

@@ -15,6 +15,7 @@
 </script>
 
 <script lang="ts">
+  import StoryTiles from "./StoryTiles.svelte";
   import { openLightbox } from "./Lightbox.svelte";
   import UsernameEdit from "./UsernameEdit.svelte";
   import BirthdayInput from "./BirthdayInput.svelte";
@@ -22,18 +23,20 @@
   import { onMount } from "svelte";
   import { profile, updateProfile, type Profile } from "../profile";
   import { contacts, saveContact, getContact } from "../contacts";
-  import { info, chats } from "../stores";
+  import { info, chats, selectChat } from "../stores";
+  import { mutedChats, setMuted } from "../chatPrefs";
+  import { startOutgoingCall } from "./CallModal.svelte";
   import { api, bytesToDataUrl } from "../tauri";
   import { icons } from "../icons";
   import { openFileDialog } from "../dialog";
   import { showToast } from "./Toast.svelte";
-  import { broadcastPresence, peerPresence, myActivity, shareActivity, myOnline, activityVerb, activityLine, peerStatus } from "../presence";
+  import { broadcastPresence, peerPresence, myActivity, shareActivity, myOnline, activityVerb, activityLine, peerStatus, presenceNow } from "../presence";
   import { peerCards, refreshPeer, publishMyProfile, setMyImage, setMyImageBytes, clearMyImage, setMyMediaFile, clearMyMusic, str, clans } from "../people";
   import MediaPlayer from "./MediaPlayer.svelte";
   import { streamSrc } from "../media";
   import ClanTag from "./ClanTag.svelte";
   import { privacy, PRIV_ITEMS, allowed, exceptionOf, setException, exceptionCount, contactSet, type PrivKey, type Exception } from "../privacy";
-  import { t, tr } from "../i18n";
+  import { t, tr, tn } from "../i18n";
   import { blocked, setBlocked } from "../ghost";
   import { cropImage } from "./ImageCropper.svelte";
   import type { Activity } from "../types";
@@ -54,6 +57,8 @@
   import { SERVICES, serviceOf, type Service } from "../services";
 
   let pfTab = $state<"board" | "activity" | "media">("board");
+  // Someone's profile opens on their shared media, as in Telegram.
+  $effect(() => { const u = activeUsername; if (u && u !== "__me__") pfTab = "media"; else pfTab = "board"; });
   function hostOf(url: string): string {
     try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
   }
@@ -308,6 +313,46 @@
   let patternEmoji = $derived((editing && isMe && draft) ? (draft.pattern ?? "") : (view?.pattern ?? ""));
   let patternBg = $derived(patternEmoji ? patternRingUrl(patternEmoji) : "");
   let showQr = $state(false);
+  /** Someone's profile: the ⋮ menu (block, privacy, edit contact). */
+  let moreOpen = $state(false);
+  // "online" / "last seen at 17:19" / "last seen recently" — Telegram's line.
+  const tgPres = $derived(!isMe ? $peerPresence[activeUsername] : undefined);
+  const tgOnline = $derived(!!tgPres && peerStatus(tgPres, $presenceNow) !== "offline");
+  const tgSeen = $derived.by(() => {
+    if (!view) return "";
+    if (view.is_bot) return tr("bot");
+    if (tgOnline) { const st = peerStatus(tgPres, $presenceNow); return tr(st === "idle" ? "away" : st === "dnd" ? "do not disturb" : "online"); }
+    const at = tgPres?.at;
+    if (!at) return tr("last seen recently");
+    const d = new Date(at), now = new Date($presenceNow);
+    const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    if (d.toDateString() === now.toDateString()) return tr("last seen at {t}", { t: hm });
+    const y = new Date(now); y.setDate(now.getDate() - 1);
+    if (d.toDateString() === y.toDateString()) return tr("last seen yesterday at {t}", { t: hm });
+    return tr("last seen {d} at {t}", { d: d.toLocaleDateString([], { day: "numeric", month: "short" }), t: hm });
+  });
+  /** Age from a birthday written with a year ("25.09.2001", "2001-09-25", "25 сентября 2001"). */
+  function ageOf(b: string | undefined): number | null {
+    if (!b) return null;
+    const y = /(19|20)\d\d/.exec(b);
+    if (!y) return null;
+    const year = +y[0];
+    const nums = b.replace(y[0], "").match(/\d+/g)?.map(Number) ?? [];
+    let day = 1, month = 0;
+    if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(b.trim())) { month = nums[0] - 1; day = nums[1]; }
+    else if (nums.length >= 2) { day = nums[0]; month = nums[1] - 1; }
+    else {
+      const M = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"], E = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+      const low = b.toLowerCase();
+      const i = M.findIndex((m) => low.includes(m)), j = E.findIndex((m) => low.includes(m));
+      month = i >= 0 ? i : j >= 0 ? j : 0;
+      day = nums[0] ?? 1;
+    }
+    const now = new Date();
+    let age = now.getFullYear() - year;
+    if (now.getMonth() < month || (now.getMonth() === month && now.getDate() < day)) age--;
+    return age >= 0 && age < 130 ? age : null;
+  }
 
   // Now-playing to show on the card: our own when viewing self, else the
   // peer's last-broadcast presence.
@@ -474,13 +519,28 @@
     onclick={onBackdrop}
     onkeydown={(e) => { if (e.target === e.currentTarget && (e.key === "Escape" || e.key === "Enter")) closeProfile(); }}
   >
-    <div class="sheet" data-phone-full class:wide={!editing && !privPage} class:ed={editing && isMe && !!draft} class:light={look.light} style:--card={cardColor} style:--card-bg={look.background} style:--card-base={look.base} style:--card-top={look.top} style:--card-line={look.border} role="dialog" aria-modal="true" tabindex="-1">
+    <div class="sheet" data-phone-full class:tgp={!isMe && !editing && !privPage} class:wide={!editing && !privPage} class:ed={editing && isMe && !!draft} class:light={look.light} style:--card={cardColor} style:--card-bg={look.background} style:--card-base={look.base} style:--card-top={look.top} style:--card-line={look.border} role="dialog" aria-modal="true" tabindex="-1">
       <!-- Close stays put; banner + body scroll together, so the avatar is
            never clipped under the banner when the form is long. -->
       <button data-x class="close" onclick={closeProfile} title={$t("Close (Esc)")}>×</button>
       <!-- Phones: the profile is a whole screen and × is hidden there — an
            explicit "back" like Telegram's, so it can always be left. -->
       <button class="p-back" onclick={closeProfile} aria-label={$t("Back")}>{@html icons.back}</button>
+      {#if !isMe && !editing && !privPage}
+        <button class="p-more" onclick={() => (moreOpen = !moreOpen)} aria-label={$t("More")} title={$t("More")}>
+          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
+        </button>
+        {#if moreOpen}
+          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+          <div class="p-more-scrim" onclick={() => (moreOpen = false)}></div>
+          <div class="p-more-menu" role="menu">
+            <button onclick={() => { moreOpen = false; startContactEdit(); }}>{$t("Edit contact")}</button>
+            <button onclick={() => { moreOpen = false; privPage = true; }}>{$t("Privacy for this person")}{#if privCount > 0} · {privCount}{/if}</button>
+            <button onclick={() => { moreOpen = false; void navigator.clipboard?.writeText("@" + (view?.username ?? "")); showToast(tr("Copied")); }}>{$t("Share contact")}</button>
+            <button class="danger" onclick={() => { moreOpen = false; setBlocked(activeUsername, !$blocked.has(activeUsername)); }}>{$blocked.has(activeUsername) ? $t("Unblock") : $t("Block")}</button>
+          </div>
+        {/if}
+      {/if}
       <div class="scroll">
       <div class="banner" style:background={bannerBg}>
         {#if shownBanner && isVideoUrl(shownBanner)}
@@ -755,6 +815,7 @@
         {:else}
         <div class="pf-grid">
         <div class="pf-left">
+          {#if isMe}
           <h2 class="name">
             {view.display_name}{#if !isMe && $peerCards[activeUsername]?.verified}<OfficialMark size={22} />{/if}{#if isMe ? $profile.star : $peerCards[activeUsername]?.star != null}<StarMark kind={(isMe ? $profile.star?.kind : $peerCards[activeUsername]?.star) ?? 0} size={22} />{/if}<EmojiStatus token={view.estatus} size={24} zoom />
             {#if view.verified}<span class="badge" title={$t("Verified identity")}>{@html icons.verified}</span>{/if}
@@ -784,6 +845,9 @@
             <div class="status-line">{view.status}</div>
           {/if}
 
+          {#if !editing && !privPage}
+            <StoryTiles user={isMe ? "" : activeUsername} onopen={closeProfile} />
+          {/if}
           {#if view.about}
             <section class="section">
               <div class="section-label">{$t("About me")}</div>
@@ -854,16 +918,97 @@
               <button class="btn-primary" onclick={startContactEdit}>{$t("Edit contact")}</button>
             {/if}
           </div>
+                  {:else}
+          <!-- Someone else's profile, the Telegram way: name and status in the
+               middle, four buttons, one card of facts, then the tabs. Ours on
+               top of it: banner, badges, server tag, stories, the board. -->
+          <h2 class="name tg-name">
+            {view.display_name}{#if $peerCards[activeUsername]?.verified}<OfficialMark size={22} />{/if}{#if $peerCards[activeUsername]?.star != null}<StarMark kind={$peerCards[activeUsername]?.star ?? 0} size={22} />{/if}<EmojiStatus token={view.estatus} size={24} zoom />
+            {#if view.verified}<span class="badge" title={$t("Verified identity")}>{@html icons.verified}</span>{/if}
+            {#if view.is_bot}<span class="bot-tag">BOT</span>{/if}
+            {#if $clans[activeUsername]}<ClanTag tag={$clans[activeUsername]} size="md" />{/if}
+          </h2>
+          <div class="tg-seen" class:on={tgOnline}>{tgSeen}</div>
+          {#if view.status}<div class="status-line tg-status">{view.status}</div>{/if}
+
+          <div class="tg-acts">
+            <button class="tg-act" onclick={() => { const u = activeUsername; closeProfile(); void selectChat(u); }}>
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3C6.5 3 2 6.9 2 11.6c0 2.5 1.3 4.8 3.4 6.4L4.6 21l3.6-1.9c1.2.4 2.5.6 3.8.6 5.5 0 10-3.9 10-8.6S17.5 3 12 3z"/></svg>
+              <span>{$t("Message")}</span></button>
+            <button class="tg-act" onclick={() => setMuted(activeUsername)}>
+              {#if $mutedChats.has(activeUsername)}
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 22a2.2 2.2 0 0 0 2.2-2.2H9.8A2.2 2.2 0 0 0 12 22zM18 16v-5c0-3-1.6-5.6-4.5-6.3V4a1.5 1.5 0 0 0-3 0v.7C7.6 5.4 6 8 6 11v5l-2 2v1h16v-1zM3.3 2.3 2 3.6l18.4 18.4 1.3-1.3z"/></svg>
+              {:else}
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 22a2.2 2.2 0 0 0 2.2-2.2H9.8A2.2 2.2 0 0 0 12 22zm6-6v-5c0-3-1.6-5.6-4.5-6.3V4a1.5 1.5 0 0 0-3 0v.7C7.6 5.4 6 8 6 11v5l-2 2v1h16v-1z"/></svg>
+              {/if}
+              <span>{$t($mutedChats.has(activeUsername) ? "Unmute" : "Mute")}</span></button>
+            {#if !view.is_bot}
+              <button class="tg-act" onclick={() => { const u = activeUsername; closeProfile(); startOutgoingCall(u, false); }}>
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1z"/></svg>
+                <span>{$t("Call")}</span></button>
+              <button class="tg-act" onclick={() => { const u = activeUsername; closeProfile(); startOutgoingCall(u, true); }}>
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11z"/></svg>
+                <span>{$t("Video")}</span></button>
+            {/if}
+          </div>
+
+          <div class="tg-card">
+            {#if view.phone}
+              <button class="tg-row" onclick={() => { void navigator.clipboard?.writeText(view.phone ?? ""); showToast(tr("Copied")); }}>
+                <span class="tg-v mono">{view.phone}</span><span class="tg-l">{$t("Mobile")}</span></button>
+            {/if}
+            <div class="tg-row with-ic">
+              <button class="tg-rb" onclick={() => { void navigator.clipboard?.writeText("@" + view.username); showToast(tr("Copied")); }}>
+                <span class="tg-v">@{view.username}</span><span class="tg-l">{$t("Username")}</span></button>
+              {#if !view.is_bot}<button class="tg-ic" onclick={() => (showQr = true)} title={$t("QR code")} aria-label={$t("QR code")}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 14h3v3M21 14v.01M17 21h4v-4M14 18v3"/></svg>
+              </button>{/if}
+            </div>
+            {#if view.about}
+              <div class="tg-row"><span class="tg-v pre">{view.about}</span><span class="tg-l">{$t("Bio")}</span></div>
+            {/if}
+            {#if view.birthday}
+              <div class="tg-row"><span class="tg-v">{view.birthday}{#if ageOf(view.birthday) != null} ({$tn(ageOf(view.birthday) ?? 0, "year old")}){/if}</span><span class="tg-l">{$t("Birthday")}</span></div>
+            {/if}
+            {#each conns as c, i (i)}
+              <button class="tg-row" onclick={() => api.openExternal(c.url).catch(() => {})} title={c.url}>
+                <span class="tg-v">{c.handle}</span><span class="tg-l">{c.s.name}</span></button>
+            {/each}
+            {#each plainLinks as l, i (i)}
+              <button class="tg-row" onclick={() => api.openExternal(l.url).catch(() => {})} title={l.url}>
+                <span class="tg-v link">{l.label || hostOf(l.url)}</span><span class="tg-l">{$t("Link")}</span></button>
+            {/each}
+            {#if uid}
+              <button class="tg-row" onclick={() => { void navigator.clipboard?.writeText(uid); showToast(tr("ID copied")); }}>
+                <span class="tg-v mono">{uid}</span><span class="tg-l">{$t("Account ID")}</span></button>
+            {/if}
+          </div>
+          {#if view.fingerprint}
+            <div class="tg-card"><div class="tg-row"><span class="tg-v mono small">{view.fingerprint}</span><span class="tg-l">{$t("Session fingerprint")}</span></div></div>
+          {/if}
+
+          <StoryTiles user={activeUsername} onopen={closeProfile} />
+
+          {#if showQr}
+            <div class="qr-pop" role="presentation" onclick={() => (showQr = false)}>
+              <div class="qr-card" role="presentation" onclick={(e) => e.stopPropagation()}>
+                <QrCode text={userQr(view.username, "")} color={cardColor} avatar={shownAvatar} letter={view.display_name.charAt(0).toUpperCase()} />
+                <b>@{view.username}</b>
+                <small>{$t("Scan it in Aquamarine: New message → Scan QR.")}</small>
+              </div>
+            </div>
+          {/if}
+          {/if}
         </div>
 
         <div class="pf-right">
           <div class="pf-tabs" role="tablist">
-            <button role="tab" class:on={pfTab === "board"} aria-selected={pfTab === "board"} onclick={() => (pfTab = "board")}>{$t("Board")}</button>
-            <button role="tab" class:on={pfTab === "activity"} aria-selected={pfTab === "activity"} onclick={() => (pfTab = "activity")}>{$t("Activity")}</button>
             {#if !isMe && activeUsername}
-              <!-- Your shared photos, files, voice and links (Telegram's profile tabs). -->
+              <!-- Your shared photos, files, voice and links (Telegram's profile tabs) — first, as there. -->
               <button role="tab" class:on={pfTab === "media"} aria-selected={pfTab === "media"} onclick={() => (pfTab = "media")}>{$t("Shared media")}</button>
             {/if}
+            <button role="tab" class:on={pfTab === "board"} aria-selected={pfTab === "board"} onclick={() => (pfTab = "board")}>{$t("Board")}</button>
+            <button role="tab" class:on={pfTab === "activity"} aria-selected={pfTab === "activity"} onclick={() => (pfTab = "activity")}>{$t("Activity")}</button>
           </div>
           {#if pfTab === "media" && !isMe && activeUsername}
             <div class="pf-media">{#key activeUsername}<SharedMedia peerId={activeUsername} title={view.display_name} />{/key}</div>
@@ -1062,9 +1207,51 @@
   .fg-chip { font-size: 11.5px; font-weight: 600; padding: 3px 8px; border-radius: calc(7px * var(--rk, 1)); border: 1px solid var(--border-strong); color: var(--fg-muted); }
   .fg-chip.live { color: #3ddc84; border-color: color-mix(in srgb, #3ddc84 40%, transparent); }
 
-  .p-back { display: none; position: absolute; z-index: 6; top: calc(10px + env(safe-area-inset-top, 0px)); left: 10px; width: 38px; height: 38px;
+  .p-back { display: none; position: absolute; z-index: 6; top: calc(10px + var(--sat, env(safe-area-inset-top, 0px))); left: 10px; width: 38px; height: 38px;
     place-items: center; border: none; border-radius: 50%; background: rgba(0, 0, 0, .45); color: #fff; cursor: pointer; backdrop-filter: blur(6px); }
   .p-back :global(svg) { width: 22px; height: 22px; }
+  /* ---- Someone's profile, Telegram style ---- */
+  .p-more { position: absolute; z-index: 6; top: 10px; right: 52px; width: 38px; height: 38px; display: grid; place-items: center; border: none; border-radius: 50%;
+    background: rgba(0, 0, 0, .45); color: #fff; cursor: pointer; backdrop-filter: blur(6px); }
+  .p-more svg { width: 20px; height: 20px; }
+  .p-more-scrim { position: absolute; inset: 0; z-index: 7; }
+  .p-more-menu { position: absolute; z-index: 8; top: 54px; right: 12px; min-width: 220px; padding: 6px; display: flex; flex-direction: column; border-radius: calc(14px * var(--rk, 1));
+    background: var(--bg-surface); border: 1px solid var(--border-strong); box-shadow: 0 18px 40px -14px rgba(0,0,0,.75); animation: slide-up .16s ease-out; }
+  .p-more-menu button { padding: 11px 14px; border: none; background: transparent; color: var(--fg); text-align: left; font: 500 14.5px var(--font-ui, inherit); border-radius: calc(9px * var(--rk, 1)); cursor: pointer; }
+  .p-more-menu button:hover { background: var(--bg-hover); }
+  .p-more-menu .danger { color: #FF5A6E; }
+  .sheet.tgp.wide { width: min(500px, 96vw) !important; }
+  .sheet.tgp .banner { height: 150px; }
+  .sheet.tgp .body { margin-top: -62px; }
+  .sheet.tgp .avatar-wrap { margin: 0 auto 10px; }
+  .sheet.tgp .pf-grid { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .tg-name { justify-content: center; text-align: center; flex-wrap: wrap; margin-bottom: 2px; }
+  .tg-seen { text-align: center; font-size: 14px; color: var(--fg-muted); margin-bottom: 4px; }
+  .tg-seen.on { color: var(--accent); }
+  .tg-status { text-align: center; }
+  .tg-acts { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 8px; margin: 14px 0 12px; }
+  .tg-act { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 11px 4px 9px; border: none; border-radius: calc(14px * var(--rk, 1));
+    background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); font: 600 12.5px var(--font-ui, inherit); cursor: pointer; transition: background .15s, transform .1s; }
+  .tg-act:hover { background: color-mix(in srgb, var(--fg) 13%, transparent); }
+  .tg-act:active { transform: scale(.97); }
+  .tg-act svg { width: 24px; height: 24px; color: var(--accent); }
+  .tg-card { display: flex; flex-direction: column; padding: 4px 0; margin-bottom: 10px; border-radius: calc(16px * var(--rk, 1)); background: color-mix(in srgb, var(--fg) 6%, transparent); }
+  .tg-row { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 9px 16px; border: none; background: transparent; color: var(--fg); text-align: left; font: inherit; width: 100%; box-sizing: border-box; }
+  button.tg-row, .tg-rb { cursor: pointer; border-radius: calc(12px * var(--rk, 1)); }
+  button.tg-row:hover, .tg-rb:hover { background: color-mix(in srgb, var(--fg) 5%, transparent); }
+  .tg-row.with-ic { flex-direction: row; align-items: center; padding: 0 8px 0 0; }
+  .tg-rb { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 9px 16px; border: none; background: transparent; color: var(--fg); text-align: left; font: inherit; }
+  .tg-ic { width: 40px; height: 40px; display: grid; place-items: center; border: none; border-radius: 50%; background: transparent; color: var(--accent); cursor: pointer; flex-shrink: 0; }
+  .tg-ic:hover { background: var(--accent-soft); }
+  .tg-ic svg { width: 22px; height: 22px; }
+  .tg-v { font-size: 15.5px; line-height: 1.35; overflow-wrap: anywhere; }
+  .tg-v.pre { white-space: pre-wrap; }
+  .tg-v.link { color: var(--accent); }
+  .tg-v.small { font-size: 12.5px; }
+  .tg-l { font-size: 13px; color: var(--fg-muted); }
+  .sheet.tgp .pf-tabs { gap: 4px; padding: 4px; border: none; border-radius: 999px; background: color-mix(in srgb, var(--fg) 7%, transparent); overflow-x: auto; scrollbar-width: none; }
+  .sheet.tgp .pf-tabs button { border: none; border-radius: 999px; padding: 7px 14px; margin: 0; white-space: nowrap; }
+  .sheet.tgp .pf-tabs button.on { background: var(--accent-soft); color: var(--accent); }
   /* ---- editor: two columns (card on the left, details on the right) ---- */
   .sheet.ed { width: min(980px, 96vw); height: min(720px, 92vh); max-height: 92vh; }
   .sheet.ed .scroll { display: grid; grid-template-columns: minmax(300px, 360px) 1fr; grid-template-rows: 150px auto minmax(0, 1fr); overflow: hidden; }
@@ -1093,9 +1280,11 @@
   @media (max-width: 720px) {
     .backdrop { padding: 0 !important; place-items: stretch; }
     .sheet, .sheet.wide, .sheet.ed { width: 100% !important; max-width: none !important; height: 100% !important; max-height: none !important;
-      border-radius: 0; border: none; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+      border-radius: 0; border: none; padding-top: var(--sat, env(safe-area-inset-top, 0px)); padding-bottom: var(--sab, env(safe-area-inset-bottom, 0px)); }
     .close { display: none; }
     .p-back { display: grid; }
+    .p-more { right: 10px; top: calc(10px + var(--sat, env(safe-area-inset-top, 0px))); }
+    .p-more-menu { top: calc(54px + var(--sat, env(safe-area-inset-top, 0px))); }
     .sheet:not(.ed) .banner { height: 210px; }
   }
   @media (max-width: 760px) {

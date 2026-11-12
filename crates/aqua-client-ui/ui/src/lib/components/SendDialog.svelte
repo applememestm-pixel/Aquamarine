@@ -132,12 +132,17 @@
   function done(send: boolean, edit = false) {
     const a = $pending;
     if (!a) return;
-    pending.set(null);
-    if (!send || !paths.length) { a.resolve(null); return; }
-    try { localStorage.setItem(LAST, JSON.stringify({ mode, compressVideo })); } catch { /* ignore */ }
+    // `paths` (and what hangs on it) is derived from `$pending`: read it all
+    // before closing, or the list is already empty and the send turns into a
+    // silent cancel (the sheet closed, nothing went out).
+    const list = [...paths];
     const m: SendMode = mode === "file" ? "file" : hasVideos && compressVideo ? "compressed" : "media";
     const one = once && canOnce;
-    a.resolve({ mode: m, caption: caption.trim(), edit: edit && !one, paths: [...paths], live: !one && canLive && live && mode !== "file" ? live : undefined, once: one || undefined });
+    const lv = !one && canLive && live && mode !== "file" ? live : undefined;
+    pending.set(null);
+    if (!send || !list.length) { a.resolve(null); return; }
+    try { localStorage.setItem(LAST, JSON.stringify({ mode, compressVideo })); } catch { /* ignore */ }
+    a.resolve({ mode: m, caption: caption.trim(), edit: edit && !one, paths: list, live: lv, once: one || undefined });
   }
   function key(e: KeyboardEvent) {
     if (!$pending) return;
@@ -276,7 +281,7 @@
   /* Phones: a sheet from the bottom, like Telegram — not a box in the middle of the chat. */
   :global(html.phone) .sd-back { place-items: end stretch; }
   :global(html.phone) .sd { width: 100%; box-sizing: border-box; max-height: 94dvh; border-radius: calc(18px * var(--rk, 1)) calc(18px * var(--rk, 1)) 0 0; border-bottom: none;
-    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); animation: sd-up .22s cubic-bezier(.2, .9, .25, 1); }
+    padding-bottom: calc(10px + var(--sab, env(safe-area-inset-bottom, 0px))); animation: sd-up .22s cubic-bezier(.2, .9, .25, 1); }
   @keyframes sd-up { from { transform: translateY(40px); opacity: 0; } }
   header { display: flex; align-items: center; gap: 8px; min-height: 34px; }
   .x { width: 34px; height: 34px; flex-shrink: 0; border: none; border-radius: 50%; background: transparent; color: var(--fg-muted); display: grid; place-items: center; cursor: pointer; }

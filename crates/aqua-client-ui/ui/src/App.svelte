@@ -38,6 +38,8 @@
   import SendDialog from "./lib/components/SendDialog.svelte";
   import CameraCapture from "./lib/components/CameraCapture.svelte";
   import StoryViewer from "./lib/components/StoryViewer.svelte";
+  import StoryComposer from "./lib/components/StoryComposer.svelte";
+  import { startStoryViews } from "./lib/stories";
   import { mediaSupport, installHint } from "./lib/media";
   import { tr } from "./lib/i18n";
   import CallModal from "./lib/components/CallModal.svelte";
@@ -55,6 +57,7 @@
   import { startWorkspace } from "./lib/workspace";
   import { startChannelStats } from "./lib/channelStats";
   import { startHandoff } from "./lib/handoff";
+  import { startOwnSync } from "./lib/ownSync";
   import HandoffBanner from "./lib/components/HandoffBanner.svelte";
   import DeviceApproval from "./lib/components/DeviceApproval.svelte";
   import TwoFactorGate from "./lib/components/TwoFactorGate.svelte";
@@ -163,6 +166,8 @@
     startMesh();
     startChannelStats();
     startHandoff();
+    startOwnSync();
+    startStoryViews();
     const stopIcon = startAppIcon();
     const stopUpdates = startUpdates();
     void migrateCustomWallpaper(api.saveWallpaper)
@@ -412,6 +417,7 @@
 <SendDialog />
 <CameraCapture />
 <StoryViewer />
+<StoryComposer />
 
 <style>
   .gpu-ask { position: fixed; inset: 0; z-index: 100000; display: grid; place-items: center; background: rgba(4, 6, 12, 0.55); }

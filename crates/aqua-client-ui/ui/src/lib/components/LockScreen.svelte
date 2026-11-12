@@ -304,7 +304,7 @@
   @media (max-width: 720px) {
     .lock { place-items: stretch; }
     .card { box-sizing: border-box; width: 100%; height: 100%; overflow-y: auto; border-radius: 0; border: none; box-shadow: none; gap: 8px;
-      padding: calc(28px + env(safe-area-inset-top, 0px)) 18px calc(18px + env(safe-area-inset-bottom, 0px)); }
+      padding: calc(28px + var(--sat, env(safe-area-inset-top, 0px))) 18px calc(18px + var(--sab, env(safe-area-inset-bottom, 0px))); }
     .banner { display: none; }
     .ava { margin-top: 0; width: 76px; height: 76px; font-size: 30px; border-width: 0; }
     .keypad { margin-top: auto; }

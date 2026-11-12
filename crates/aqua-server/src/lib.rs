@@ -823,9 +823,10 @@ async fn deliver(state: &AppState, msg: RelayMessage) {
         }
     }
     // Kept on disk until the recipient connects (survives restarts; a peer
-    // relay collects it if they connect there).
+    // relay collects it if they connect there — or right away, if they're
+    // connected there and the push above just didn't get through).
     match serde_json::to_vec(&msg) {
-        Ok(bytes) if state.directory.inbox_push(&msg.to, &bytes).is_ok() => {}
+        Ok(bytes) if state.directory.inbox_push(&msg.to, &bytes).is_ok() => fed::queued_for_absent(state),
         _ => {
             let recipient = state.user(&msg.to);
             recipient.lock().await.inbox.push_back(msg);
