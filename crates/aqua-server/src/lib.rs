@@ -46,6 +46,7 @@ pub mod verify;
 pub mod stars;
 pub mod fedtunnel;
 pub mod tgnet;
+pub mod host;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
 pub use auth::{AuthState, Caller};
@@ -2694,6 +2695,29 @@ async fn admin_stats(
 }
 
 /// The data folder: where it is, how big, the default for a new one.
+/// `GET /v1/admin/host` — the machine the relay runs on (host.rs).
+async fn admin_host(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Result<Json<serde_json::Value>, StatusCode> {
+    admin_authed(&state, &headers)?;
+    let dir = datadir::current();
+    Ok(Json(tokio::task::spawn_blocking(move || host::snapshot(&dir)).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?))
+}
+
+#[derive(Deserialize)]
+struct PowerReq { action: String }
+
+/// `POST /v1/admin/power` `{action: "stop" | "restart"}` — only the console
+/// server (inside the server app, its own Start / Stop do this).
+async fn admin_power(State(state): State<AppState>, headers: axum::http::HeaderMap, Json(b): Json<PowerReq>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    admin_authed(&state, &headers).map_err(|c| (c, String::new()))?;
+    if !host::STANDALONE.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err((StatusCode::CONFLICT, "this server runs inside Aquamarine Server — use its Start / Stop".into()));
+    }
+    let restart = match b.action.as_str() { "restart" => true, "stop" => false, _ => return Err((StatusCode::BAD_REQUEST, "action: stop | restart".into())) };
+    let blobs = state.blobs.clone();
+    host::power(restart, move || { let n = blobs.clear_cache(); tracing::info!(removed = n, "file cache cleared"); });
+    Ok(Json(serde_json::json!({ "ok": true, "systemd": host::systemd_unit() })))
+}
+
 async fn admin_get_datadir(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -3043,6 +3067,8 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/admin/config", post(admin_set_config))
         .route("/v1/admin/wipe", post(admin_wipe))
         .route("/v1/admin/bots/:name", axum::routing::delete(admin_delete_bot))
+        .route("/v1/admin/host", get(admin_host))
+        .route("/v1/admin/power", post(admin_power))
         .route("/v1/stars/:uid", get(stars::get_star))
         .route("/v1/admin/smtp", get(admin_get_smtp).post(admin_set_smtp))
         .route("/v1/admin/smtp/test", post(admin_test_smtp))

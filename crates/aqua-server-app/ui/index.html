@@ -127,6 +127,14 @@
   .addr.off code { color: var(--dim2); font-family: inherit; font-size: 12.5px; white-space: normal; }
 
   /* lists */
+  .hgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+  .hg { padding: 10px 12px; border-radius: calc(var(--r) * .7); background: var(--bg); border: 1px solid var(--line); min-width: 0; }
+  .hg .k { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); margin-bottom: 4px; }
+  .hg .v { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hg .s { font-size: 12px; color: var(--dim); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hm { height: 5px; border-radius: 99px; background: var(--line); margin-top: 7px; overflow: hidden; }
+  .hm i { display: block; height: 100%; border-radius: 99px; background: var(--accent); }
+  .hm i.hot { background: var(--bad); }
   .list { display: flex; flex-direction: column; }
   .li { display: flex; align-items: center; gap: 10px; padding: 9px 4px; border-bottom: 1px solid var(--line); min-width: 0; }
   .li:last-child { border-bottom: 0; }
@@ -235,6 +243,8 @@ document.addEventListener("DOMContentLoaded", () => armAll(document.body));
 // ======================================================================
 const RU = /^(ru|uk|be)/i.test(navigator.language || "");
 const RU_DICT = {
+  "Machine": "Машина", "server": "сервер", "PC": "компьютер", "phone": "телефон", "System": "Система", "Processor": "Процессор", "Memory": "Память",
+  "Disk": "Диск", "Network": "Сеть", "Machine is up": "Машина работает", "This server": "Этот сервер", "Load": "Нагрузка", "cores": "ядер", "of": "из", "free": "свободно",
   "Clear the server": "Очистить сервер", "Clear…": "Очистить…", "wipeNote": "Стирает выбранное прямо сейчас, без возврата. Сервер продолжает работать.",
   "wipeKeeps": "Не трогается: настройки сервера, почта, Telegram, музыка, сеть серверов, адрес и порт. В сети серверов аккаунты могут вернуться с других серверов — очистите и их или выйдите из сети.",
   "wpPeople": "Все люди — их аккаунты целиком, а боты и их чаты остаются", "wipeConfirmPeople": "Стереть всех людей? Все выйдут и должны будут зарегистрироваться заново. Боты остаются. Отменить нельзя.",
@@ -521,10 +531,36 @@ function pageHome(el) {
     <div id="updBox"></div>
     <div id="modeAsk"></div>
     <div class="stats" id="stats"></div>
+    <div class="card" id="hostCard" hidden><h2><span>${t("Machine")}</span> <span class="note" id="hostKind" style="font-weight:400"></span></h2><div class="hgrid" id="hostGrid"></div></div>
     <div class="card"><h2>${t("How to connect")}</h2><div id="addrs"></div>
       <div class="note">${t("connectHint")}</div>
       <a onclick="invoke('open_guide')">${t("Step by step: router, public IP, what to do without one")} →</a></div>`;
   paintHome();
+  hostAt = 0; void loadHost();
+}
+// The machine the server runs on (GET /v1/admin/host): PC, phone or server.
+let hostAt = 0;
+async function loadHost() {
+  if (page !== "home" || !st?.running || !$("hostGrid") || Date.now() - hostAt < 8000) return;
+  hostAt = Date.now();
+  let h; try { h = await api("/v1/admin/host"); } catch { return; }
+  if (!$("hostGrid")) return;
+  const pct = (a, b) => (a != null && b) ? Math.max(0, Math.min(100, a * 100 / b)) : null;
+  const meter = (p) => p == null ? "" : `<div class="hm"><i class="${p > 85 ? "hot" : ""}" style="width:${p.toFixed(1)}%"></i></div>`;
+  const cell = (k, v, sub = "", p = null) => `<div class="hg"><div class="k">${esc(t(k))}</div><div class="v" title="${esc(v || "")}">${esc(v || "—")}</div>${sub ? `<div class="s" title="${esc(sub)}">${esc(sub)}</div>` : ""}${meter(p)}</div>`;
+  const memUsed = h.mem_total != null && h.mem_avail != null ? h.mem_total - h.mem_avail : null;
+  $("hostKind").textContent = [t({ server: "server", pc: "PC", phone: "phone" }[h.kind] || h.kind), h.hostname].filter(Boolean).join(" · ");
+  const html = [
+    cell("System", h.os, [h.kernel, h.arch].filter(Boolean).join(" · ")),
+    cell("Processor", h.cpu_pct != null ? `${Math.round(h.cpu_pct)}%` : (h.cpu || "—"), [h.cpu, `${h.cores} ${t("cores")}`, h.load ? `${t("Load")} ${h.load.map((x) => x.toFixed(2)).join(" ")}` : ""].filter(Boolean).join(" · "), h.cpu_pct),
+    cell("Memory", memUsed != null ? `${human(memUsed)} ${t("of")} ${human(h.mem_total)}` : "—", "", pct(memUsed, h.mem_total)),
+    cell("Disk", h.disk_total ? `${human(h.disk_used)} ${t("of")} ${human(h.disk_total)}` : "—", h.disk_free != null ? `${human(h.disk_free)} ${t("free")}` : "", pct(h.disk_used, h.disk_total)),
+    h.net_rx != null ? cell("Network", `↓ ${human(h.net_rx)}  ↑ ${human(h.net_tx)}`) : "",
+    cell("Machine is up", h.host_uptime != null ? dur(h.host_uptime) : "—"),
+    cell("This server", h.proc_rss != null ? human(h.proc_rss) : `PID ${h.pid}`),
+  ].join("");
+  if ($("hostGrid").dataset.h !== html) { $("hostGrid").dataset.h = html; $("hostGrid").innerHTML = html; }
+  $("hostCard").hidden = false;
 }
 const STAT_TILES = [["online", "Online now", "online"], ["users", "Accounts", "journal"], ["bots", "Bots", "bots"], ["files", "Files", "files"], ["disk", "Storage", "files"], ["time", "Uptime", "visitors"]];
 function paintHome() {
@@ -1166,6 +1202,7 @@ async function poll(force) {
   wasRunning = st.running;
   paintAll();
   if (page === "people") loadPeople();
+  if (page === "home") void loadHost();
 }
 (async () => {
   try { version = await window.__TAURI__.app.getVersion(); } catch {}
