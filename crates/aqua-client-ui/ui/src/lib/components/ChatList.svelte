@@ -25,6 +25,7 @@
   import { avatars, peerCards, clans } from "../people";
   import ClanTag from "./ClanTag.svelte";
   import OfficialMark from "./OfficialMark.svelte";
+  import StarMark from "./StarMark.svelte";
   import { keepOnScreen, scrollX } from "../actions";
   import { requestIds } from "../privacy";
   import { archived, mutedChats, setArchived, setMuted, pinnedChats, togglePin, movePin, MAX_PINS, markedUnread, setMarkedUnread } from "../chatPrefs";
@@ -1138,7 +1139,7 @@
               <span class="cn-text" class:lk-blur={lk}>{lk ? "•••••••" : c.name}</span>{#if !lk && !c.id.startsWith("grp_")}<EmojiStatus token={emojiStatusOf($peerCards, c.id)} size={16} />{/if}
               {#if inGroup}<!-- svelte-ignore a11y_no_static_element_interactions --><!-- svelte-ignore a11y_click_events_have_key_events --><span class="g-tag" onclick={(e) => { e.stopPropagation(); openGroupId.set(inGroup.id); }} title={$t("Chat group")}>{inGroup.emoji ?? "▣"} {inGroup.name}</span>{/if}
               {#if c.verified}<span class="verified-badge">{@html icons.verified}</span>{/if}
-              {#if !lk && $peerCards[c.id]?.verified}<OfficialMark size={15} />{/if}
+              {#if !lk && $peerCards[c.id]?.verified}<OfficialMark size={15} />{/if}{#if !lk && $peerCards[c.id]?.star != null}<StarMark kind={$peerCards[c.id]?.star ?? 0} size={15} />{/if}
               {#if $clans[c.id]}<ClanTag tag={$clans[c.id]} />{/if}
               {#if !lk && $peerPresence[c.id]?.activity?.[0]}
                 {@const a = $peerPresence[c.id].activity![0]}

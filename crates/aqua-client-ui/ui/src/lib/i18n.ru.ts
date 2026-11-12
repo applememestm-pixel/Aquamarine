@@ -2799,4 +2799,6 @@ export const RU: Record<string, string> = {
   "Who can write to me?": "Кто может мне писать?",
   "Message requests": "Запросы на переписку",
   "Not on your list of who can write to you — no notifications from this chat.": "Этого человека нет в списке тех, кто может вам писать, — уведомлений из этого чата не будет.",
+  "Official star from Aquamarine": "Официальная звезда Aquamarine",
+  "Aquamarine supporter · level {n}": "Поддерживает Aquamarine · уровень {n}",
 };

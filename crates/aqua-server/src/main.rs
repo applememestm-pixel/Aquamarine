@@ -34,6 +34,13 @@ async fn main() -> anyhow::Result<()> {
     // the first start) and work from there.
     let data = aqua_server::datadir::choose_and_enter();
 
+    // `aqua-server star-key`: make this relay the one that hands out stars
+    // (stars.rs) — once; prints the public key to build into the apps.
+    if std::env::args().nth(1).as_deref() == Some("star-key") {
+        println!("{}", aqua_server::stars::keygen_cli());
+        return Ok(());
+    }
+
     let listen = std::env::var("AQUA_LISTEN").unwrap_or_else(|_| "127.0.0.1:7777".into());
     let addr: SocketAddr = listen.parse()?;
 
@@ -78,6 +85,7 @@ async fn main() -> anyhow::Result<()> {
     aqua_server::tgapi::resume_webhooks(state.clone());
     aqua_server::music::spawn_bot(state.clone());
     aqua_server::verify::spawn_bot(state.clone());
+    aqua_server::stars::spawn(state.clone());
     // Ctrl+C / closing the console: stop cleanly, then drop the file cache
     // (people's data stays — blobstore::clear_cache).
     let blobs = state.blobs.clone();

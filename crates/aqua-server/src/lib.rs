@@ -43,6 +43,7 @@ pub mod tglogin;
 pub mod report;
 pub mod music;
 pub mod verify;
+pub mod stars;
 pub mod fedtunnel;
 pub mod tgnet;
 // Re-export the wire types so tests + external callers keep working.
@@ -2843,6 +2844,9 @@ async fn admin_wipe(State(state): State<AppState>, headers: axum::http::HeaderMa
     }
     if w.accounts || w.bots {
         verify::ensure_bot(&state);
+        if stars::has_key() {
+            stars::ensure_bot(&state);
+        }
         if music::enabled() {
             music::ensure_bot(&state);
         }
@@ -2948,6 +2952,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/admin/datadir", get(admin_get_datadir).post(admin_move_datadir))
         .route("/v1/admin/config", post(admin_set_config))
         .route("/v1/admin/wipe", post(admin_wipe))
+        .route("/v1/stars/:uid", get(stars::get_star))
         .route("/v1/admin/smtp", get(admin_get_smtp).post(admin_set_smtp))
         .route("/v1/admin/smtp/test", post(admin_test_smtp))
         .route("/v1/admin/telegram", get(packs::admin_get).post(packs::admin_set))
@@ -3084,6 +3089,7 @@ pub async fn serve_embedded(
     tgapi::resume_webhooks(state.clone());
     music::spawn_bot(state.clone());
     verify::spawn_bot(state.clone());
+    stars::spawn(state.clone());
     let blobs = state.blobs.clone();
     let r = axum::serve(listener, app(state)).with_graceful_shutdown(shutdown).await;
     // Stopped: the file cache goes, people's data stays (blobstore::clear_cache).

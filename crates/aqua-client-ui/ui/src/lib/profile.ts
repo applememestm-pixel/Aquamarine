@@ -44,6 +44,8 @@ export interface Profile {
    *  instead of publishing its blank one over it (see people.ts
    *  syncMyProfileOnConnect). */
   edited?: number;
+  /** My star (signed by the project owner — src/stars.rs), put on my card as `st`. */
+  star?: { uid: string; kind: number; exp: number; sig: string } | null;
   /** The emoji next to my name: a pack emoji token (`ce:pack/file|😀`) or a
    *  plain emoji; "" = none. */
   estatus?: string;

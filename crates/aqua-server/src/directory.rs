@@ -2644,6 +2644,15 @@ impl Directory {
     }
 
     /// The account's e-mail (lower-case), if it signed up with one.
+    /// Accounts here with this e-mail (Boosty stars, stars.rs).
+    pub fn usernames_by_email(&self, email: &str) -> Vec<String> {
+        let db = self.db.lock().unwrap();
+        let Ok(mut q) = db.prepare("SELECT username FROM users WHERE lower(trim(email))=?1 AND is_bot=0") else { return Vec::new() };
+        q.query_map(rusqlite::params![email.trim().to_lowercase()], |r| r.get::<_, String>(0))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
     pub fn email_of(&self, username: &str) -> Option<String> {
         let db = self.db.lock().unwrap();
         db.query_row("SELECT email FROM users WHERE username=?1", rusqlite::params![username.trim().to_lowercase()], |r| r.get::<_, Option<String>>(0))

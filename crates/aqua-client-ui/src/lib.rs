@@ -6,6 +6,7 @@
 
 pub mod state;
 pub mod applock;
+pub mod stars;
 #[cfg(desktop)]
 pub mod single;
 pub mod commands;
@@ -176,6 +177,8 @@ pub fn run() -> Result<()> {
             applock::applock_unlock_bio,
             applock::applock_forgot_send,
             applock::applock_forgot_check,
+            stars::star_verify,
+            stars::my_star,
             crashreport::report_error,
             crashreport::report_config,
             bgnotify::notify_front,

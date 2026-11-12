@@ -103,6 +103,9 @@ export const api = {
   listChats:          (): Promise<ChatSummary[]>                                   => invoke<ChatSummary[]>("list_chats").then((l) => l.map((c) => ({ ...c, time: shownTime(c.time), ...(c.id === "__replies__" ? { name: tr("Replies") } : {}), ...(c.id === "__saved__" ? { name: tr("Saved Messages"), preview: c.preview === "Note to self — only you see this" ? tr(c.preview) : c.preview } : {}) })).filter((c) => c.id !== "welcome")),
   getMessages:        (peer_id: string): Promise<ChatMessage[]>                    => invoke<ChatMessage[]>("get_messages", { peerId: peer_id }).then((l) => l.map((m) => ({ ...m, time: shownTime(m.time) }))),
   setTzOffset:        (minutes: number): Promise<void> => invoke("set_tz_offset", { minutes }),
+  /** Stars (src/stars.rs): someone's statement → its kind if real; my own from my relay. */
+  starVerify:         (uid: string, star: unknown): Promise<number | null>          => invoke("star_verify", { uid, star }),
+  myStar:             (): Promise<{ uid: string; kind: number; exp: number; sig: string } | null> => invoke("my_star"),
   sendMessage:        (peer_id: string, text: string): Promise<SendResult>        => { noteWrote(peer_id); return invoke("send_message", { peerId: peer_id, text }); },
   verifyFingerprint:  (peer_id: string): Promise<FingerprintView>                  => invoke("verify_fingerprint", { peerId: peer_id }),
   sessionFingerprint: (): Promise<string>                                          => invoke("session_fingerprint"),
