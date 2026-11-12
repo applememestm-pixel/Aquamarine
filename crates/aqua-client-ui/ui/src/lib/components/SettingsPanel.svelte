@@ -691,6 +691,9 @@
   /** Appearance: each block opens by its title, the others fold away —
    *  the page was one very long scroll. */
   function accordion(node: HTMLElement) {
+    // Phone (Telegram): one plain page, every block open — folding blocks
+    // that jump open and shut was the "jerky" part.
+    if (IS_MOBILE) return;
     const setup = () => {
       const secs = [...node.querySelectorAll<HTMLElement>(":scope > section.group")];
       secs.forEach((sec, i) => {
@@ -1425,6 +1428,18 @@
             </button>
           {/each}
         </div>
+        <div class="row">
+          <span class="row-label">{$t("Mode")}</span>
+          <SegFit label={$t("Mode")} value={$settings.mode} onpick={(m) => setMode(m)}
+            options={(["dark", "light", "auto"] as const).map((m) => ({ id: m, label: $t(m === "dark" ? "Dark" : m === "light" ? "Light" : "Auto") }))} />
+        </div>
+        <!-- Telegram: the accent right under the themes, as a row of circles. -->
+        <div class="acc-row" role="radiogroup" aria-label={$t("Accent colour")}>
+          {#each PALETTES as p (p.id)}
+            <button class="acc-dot" class:on={$settings.palette === p.id} role="radio" aria-checked={$settings.palette === p.id} title={p.name} aria-label={p.name}
+              style={`--pa:${p.accent}; --pb:${p.accent2};`} onclick={() => setPalette(p.id)}></button>
+          {/each}
+        </div>
         <div class="foot-note">{$t("A theme sets every colour; the accent, theme editor and transparency still work on top. Share the whole look in Theme editor → Share.")}</div>
       </section>
       <section class="group">
@@ -1452,11 +1467,6 @@
             </div>
           </div>
         {/if}
-        <div class="row">
-          <span class="row-label">{$t("Mode")}</span>
-          <SegFit label={$t("Mode")} value={$settings.mode} onpick={(m) => setMode(m)}
-            options={(["dark", "light", "auto"] as const).map((m) => ({ id: m, label: $t(m === "dark" ? "Dark" : m === "light" ? "Light" : "Auto") }))} />
-        </div>
 
         <div class="row">
           <span class="row-label">{$t("Density")}</span>
@@ -3188,6 +3198,14 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   }
 
   .themes { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; }
+  /* Phone (Telegram): themes in one swipeable row of small cards. */
+  :global(html.phone) .themes { display: flex; overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity; margin: 0 -4px; padding: 2px 4px 4px; }
+  :global(html.phone) .theme-card { flex: 0 0 92px; scroll-snap-align: start; }
+  :global(html.phone) .tc-prev { height: 70px; }
+  .acc-row { display: flex; flex-wrap: wrap; gap: 10px; padding: 12px 2px 4px; }
+  .acc-dot { width: 32px; height: 32px; border-radius: 50%; border: none; padding: 0; cursor: pointer; background: linear-gradient(135deg, var(--pa), var(--pb));
+    box-shadow: 0 0 0 2px var(--bg-shell), 0 0 0 2px transparent; transition: box-shadow .15s, transform .15s; }
+  .acc-dot.on { box-shadow: 0 0 0 3px var(--bg-shell), 0 0 0 5px var(--pa); transform: scale(.9); }
   .theme-card {
     display: flex; flex-direction: column; gap: 6px; padding: 6px;
     border: 1.5px solid var(--border); border-radius: calc(12px * var(--rk, 1)); background: transparent;
