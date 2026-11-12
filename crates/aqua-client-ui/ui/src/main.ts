@@ -3,12 +3,15 @@ import { mount } from "svelte";
 import "./app.css";
 import { IS_DESKTOP } from "./lib/platform";
 import { accountBoot } from "./lib/accounts";
+import { startInsets } from "./lib/insets";
 
 // Phones and tablets: no desktop title bar even when the screen is turned
 // sideways and wider than the phone layout's breakpoint.
 if (/android|iphone|ipad/i.test(navigator.userAgent)) document.documentElement.classList.add("phone");
 // Android: windows close with Back, no × on them (app.css, lib/back.ts).
 if (/android/i.test(navigator.userAgent)) document.documentElement.classList.add("android");
+// Android: the system bars as the page really sees them (lib/insets.ts).
+startInsets();
 
 // Middle button: fast auto-scroll of our own. The browser's version left its
 // round marker painted on the screen; this one has no marker, only the

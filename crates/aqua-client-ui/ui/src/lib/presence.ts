@@ -129,7 +129,7 @@ export function myPresence(peer = ""): Presence {
     if (!ok("voice")) out.nv = true;
     if (!ok("invites")) out.ni = true;
     if (!isPublic("forwards", rules) && ok("forwards")) out.fl = true;
-    const st = storiesForPresence();
+    const st = storiesForPresence(peer);
     if (st.length) out.st = st;
   }
   return out;

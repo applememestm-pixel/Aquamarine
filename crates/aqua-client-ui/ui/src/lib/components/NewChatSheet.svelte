@@ -142,7 +142,7 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div class="nc-veil" onclick={close}></div>
-  <div class="nc" role="dialog" aria-modal="true" aria-label={$t("New message")} tabindex="-1" onkeydown={onKey}>
+  <div class="nc" data-phone-full role="dialog" aria-modal="true" aria-label={$t("New message")} tabindex="-1" onkeydown={onKey}>
     <header class="nc-head">
       <button class="nc-ic" onclick={back} aria-label={$t("Back")}>
         {#if who && !$req?.who}
@@ -266,7 +266,7 @@
   .nc-spin { width: 16px; height: 16px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: nc-rot .7s linear infinite; }
   @keyframes nc-rot { to { transform: rotate(360deg); } }
   @media (max-width: 720px) {
-    .nc { left: 0; top: 0; transform: none; width: 100vw; height: 100%; border-radius: 0; border: none; padding-top: env(safe-area-inset-top, 0px); animation: nc-up .26s cubic-bezier(.22,1,.36,1); }
+    .nc { left: 0; top: 0; transform: none; width: 100vw; height: 100%; border-radius: 0; border: none; padding-top: var(--sat, env(safe-area-inset-top, 0px)); animation: nc-up .26s cubic-bezier(.22,1,.36,1); }
     @keyframes nc-up { from { transform: translateY(24px); opacity: 0; } }
   }
 </style>

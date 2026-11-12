@@ -4686,7 +4686,7 @@
   {#if onceView}
     {@const ov = onceView}
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-    <div class="once-view" role="dialog" aria-modal="true" data-own-back aria-label={$t("View once")} onclick={() => void closeOnce()} oncontextmenu={(e) => e.preventDefault()}>
+    <div class="once-view" data-phone-full role="dialog" aria-modal="true" data-own-back aria-label={$t("View once")} onclick={() => void closeOnce()} oncontextmenu={(e) => e.preventDefault()}>
       {#if ov.video}
         <!-- svelte-ignore a11y_media_has_caption -->
         <video use:streamSrc={ov.url} autoplay playsinline controlslist="nodownload noplaybackrate" disablepictureinpicture onended={() => void closeOnce()} onclick={(e) => e.stopPropagation()}></video>
@@ -5668,7 +5668,7 @@
   /* The sheet is always full height; the half-open state is a transform, so
      opening, dragging and closing never re-lay out the grid. */
   .attach-pop.sheet {
-    --h-full: calc(100dvh - 28px - env(safe-area-inset-top, 0px));
+    --h-full: calc(100dvh - 28px - var(--sat, env(safe-area-inset-top, 0px)));
     --h-half: min(64dvh, 620px);
     --rest: calc(var(--h-full) - var(--h-half));
     position: fixed; left: 0; right: 0; bottom: 0; top: auto; z-index: 71;
@@ -5717,8 +5717,8 @@
   /* Square tiles. The rows are sized by the tiles (max-content): with "auto"
      rows a too-short container squeezed them into overlapping strips. */
   .ap-gallery { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); justify-items: stretch;
-    grid-auto-rows: max-content; gap: 3px; padding: 0 3px calc(92px + env(safe-area-inset-bottom, 0px) + var(--rest)); align-content: start; }
-  .attach-pop.sheet.full .ap-gallery { padding-bottom: calc(92px + env(safe-area-inset-bottom, 0px)); }
+    grid-auto-rows: max-content; gap: 3px; padding: 0 3px calc(92px + var(--sab, env(safe-area-inset-bottom, 0px)) + var(--rest)); align-content: start; }
+  .attach-pop.sheet.full .ap-gallery { padding-bottom: calc(92px + var(--sab, env(safe-area-inset-bottom, 0px))); }
   .ap-tile { position: relative; aspect-ratio: 1 / 1; width: 100%; height: auto; min-height: 0; min-width: 0; box-sizing: border-box; display: block; border: none; padding: 0; overflow: hidden; background: var(--bg-surface-2); color: var(--fg-muted); border-radius: calc(4px * var(--rk, 1)); }
   .ap-tile img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .22s cubic-bezier(.22,1,.36,1), border-radius .22s ease; }
   .ap-tile.on img { transform: scale(.86); border-radius: calc(8px * var(--rk, 1)); }
@@ -5733,11 +5733,11 @@
     display: grid; place-items: center; font-size: 12.5px; font-weight: 800; color: #06070c; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
   .ap-tile.on .ap-check { background: var(--accent); border-color: var(--accent); }
   .ap-dur { position: absolute; left: 6px; bottom: 6px; font-size: 11px; font-weight: 700; color: #fff; background: rgba(0,0,0,.5); padding: 1px 6px; border-radius: calc(8px * var(--rk, 1)); }
-  .ap-capbar { position: fixed; left: 10px; right: 10px; bottom: calc(10px + env(safe-area-inset-bottom, 0px)); z-index: 73; display: flex; align-items: center; gap: 8px;
+  .ap-capbar { position: fixed; left: 10px; right: 10px; bottom: calc(10px + var(--sab, env(safe-area-inset-bottom, 0px))); z-index: 73; display: flex; align-items: center; gap: 8px;
     padding: 5px 5px 5px 16px; border-radius: calc(24px * var(--rk, 1)); border: 1px solid var(--border-strong);
     background: color-mix(in srgb, var(--bg-surface-2) 82%, transparent); backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6);
     box-shadow: 0 14px 34px -14px rgba(0,0,0,.8); animation: ap-cap-in .28s cubic-bezier(.22,1,.36,1); transition: opacity .2s ease, transform .2s ease; }
-  .ap-capbar.docked { bottom: calc(84px + env(safe-area-inset-bottom, 0px)); }
+  .ap-capbar.docked { bottom: calc(84px + var(--sab, env(safe-area-inset-bottom, 0px))); }
   .ap-capbar.closing { opacity: 0; transform: translateY(20px); }
   @keyframes ap-cap-in { from { opacity: 0; transform: translateY(16px) scale(.97); } }
   .ap-cap { flex: 1; min-width: 0; height: 40px; border: none; outline: none; background: transparent; color: var(--fg); font: 15px var(--font-ui, inherit); }
@@ -5756,7 +5756,7 @@
   .ap-inline .ap-item :global(svg) { width: 22px; height: 22px; }
   .ap-bot-ava { width: 26px; height: 26px; border-radius: var(--ava-r, 50%); background: var(--accent-soft) center/cover; color: var(--accent);
     display: grid; place-items: center; font-weight: 800; font-size: 13px; }
-  .ap-dock { position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); z-index: 72;
+  .ap-dock { position: fixed; left: 12px; right: 12px; bottom: calc(12px + var(--sab, env(safe-area-inset-bottom, 0px))); z-index: 72;
     animation: ap-dock-in .42s cubic-bezier(.22,1,.36,1); transition: transform .26s cubic-bezier(.4,0,1,1), opacity .26s ease; }
   .ap-dock.closing { transform: translateY(140%); opacity: 0; }
   @keyframes ap-dock-in { from { transform: translateY(140%); } }
@@ -6420,7 +6420,7 @@
   .once-view { position: fixed; inset: 0; z-index: 10096; background: #000; display: grid; place-items: center; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
   .once-view img, .once-view video { max-width: 100vw; max-height: 100dvh; object-fit: contain; pointer-events: none; }
   .once-view video { pointer-events: auto; }
-  .once-hint { position: absolute; left: 50%; bottom: calc(22px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); padding: 7px 14px; border-radius: calc(16px * var(--rk, 1));
+  .once-hint { position: absolute; left: 50%; bottom: calc(22px + var(--sab, env(safe-area-inset-bottom, 0px))); transform: translateX(-50%); padding: 7px 14px; border-radius: calc(16px * var(--rk, 1));
     background: rgba(0,0,0,.6); color: #fff; font-size: 13px; white-space: nowrap; }
 
   .composer-note {

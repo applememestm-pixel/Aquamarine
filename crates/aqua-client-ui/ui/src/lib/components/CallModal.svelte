@@ -1580,7 +1580,7 @@
   /* Phones: a slim strip under the chat's header (Telegram's "return to
      call" bar) — the card sat on top of the message field. Tap → full. */
   @media (max-width: 720px) {
-    .mini { top: calc(env(safe-area-inset-top, 0px) + 64px); bottom: auto; left: 8px; right: 8px; width: auto;
+    .mini { top: calc(var(--sat, env(safe-area-inset-top, 0px)) + 64px); bottom: auto; left: 8px; right: 8px; width: auto;
       flex-direction: row; align-items: center; gap: 8px; padding: 6px 8px 6px 10px; border-radius: calc(14px * var(--rk, 1)); }
     .mini-top { flex: 1; min-width: 0; gap: 8px; cursor: pointer; }
     .mini-video, .mini-me, .mini-statsbtn, .mini .bars, .mini .stats { display: none !important; }
@@ -1647,7 +1647,7 @@
   .watch-in.sideways { inset: auto; top: 50%; left: 50%; width: 100vh; height: 100vw; transform: translate(-50%, -50%) rotate(90deg); }
   .watch video { width: 100%; height: 100%; object-fit: contain; transform-origin: center; }
   .watch-bar { position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: center; gap: 10px;
-    padding: calc(env(safe-area-inset-top, 0px) + 10px) 12px 18px; background: linear-gradient(rgba(0,0,0,.65), transparent); color: #fff; }
+    padding: calc(var(--sat, env(safe-area-inset-top, 0px)) + 10px) 12px 18px; background: linear-gradient(rgba(0,0,0,.65), transparent); color: #fff; }
   .watch-bar span { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .watch-bar button { width: 42px; height: 42px; border-radius: 50%; border: none; background: rgba(255,255,255,.14); color: #fff; font-size: 24px; display: grid; place-items: center; }
   .watch-bar button.on { background: var(--accent); color: #06070C; }

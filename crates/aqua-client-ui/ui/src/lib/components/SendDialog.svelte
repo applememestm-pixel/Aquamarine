@@ -281,7 +281,7 @@
   /* Phones: a sheet from the bottom, like Telegram — not a box in the middle of the chat. */
   :global(html.phone) .sd-back { place-items: end stretch; }
   :global(html.phone) .sd { width: 100%; box-sizing: border-box; max-height: 94dvh; border-radius: calc(18px * var(--rk, 1)) calc(18px * var(--rk, 1)) 0 0; border-bottom: none;
-    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); animation: sd-up .22s cubic-bezier(.2, .9, .25, 1); }
+    padding-bottom: calc(10px + var(--sab, env(safe-area-inset-bottom, 0px))); animation: sd-up .22s cubic-bezier(.2, .9, .25, 1); }
   @keyframes sd-up { from { transform: translateY(40px); opacity: 0; } }
   header { display: flex; align-items: center; gap: 8px; min-height: 34px; }
   .x { width: 34px; height: 34px; flex-shrink: 0; border: none; border-radius: 50%; background: transparent; color: var(--fg-muted); display: grid; place-items: center; cursor: pointer; }

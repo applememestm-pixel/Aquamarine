@@ -141,7 +141,7 @@
 </script>
 
 {#if $pending}
-  <div class="cam" data-own-back role="dialog" aria-modal="true" aria-label={$t("Camera")}>
+  <div class="cam" data-phone-full data-own-back role="dialog" aria-modal="true" aria-label={$t("Camera")}>
     <!-- svelte-ignore a11y_media_has_caption -->
     <video bind:this={video} class:mirror={facing === "user"} playsinline autoplay muted></video>
     {#if flash}<div class="flash"></div>{/if}
@@ -170,7 +170,7 @@
   video.mirror { transform: scaleX(-1); }
   .flash { position: absolute; inset: 0; background: #fff; opacity: .7; pointer-events: none; animation: fl .18s ease-out forwards; }
   @keyframes fl { to { opacity: 0; } }
-  .top { position: relative; display: flex; align-items: center; justify-content: space-between; padding: calc(12px + env(safe-area-inset-top, 0px)) 14px 12px;
+  .top { position: relative; display: flex; align-items: center; justify-content: space-between; padding: calc(12px + var(--sat, env(safe-area-inset-top, 0px))) 14px 12px;
     background: linear-gradient(rgba(0,0,0,.45), transparent); }
   .ic { width: 42px; height: 42px; border-radius: 50%; border: none; display: grid; place-items: center; color: #fff; background: rgba(0,0,0,.35); cursor: pointer; }
   .ic:disabled { opacity: .35; }
@@ -179,7 +179,7 @@
   .rec i { width: 9px; height: 9px; border-radius: 50%; background: #ff3b30; animation: blink 1s steps(2) infinite; }
   @keyframes blink { 50% { opacity: 0; } }
   .err { position: relative; margin: 0 20px; padding: 12px 14px; border-radius: calc(12px * var(--rk, 1)); background: rgba(0,0,0,.6); font-size: 14px; text-align: center; }
-  .bottom { position: relative; display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 20px 0 calc(28px + env(safe-area-inset-bottom, 0px));
+  .bottom { position: relative; display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 20px 0 calc(28px + var(--sab, env(safe-area-inset-bottom, 0px)));
     background: linear-gradient(transparent, rgba(0,0,0,.5)); }
   .hint { font-size: 13px; opacity: .85; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
   .shutter { width: 76px; height: 76px; border-radius: 50%; border: 4px solid #fff; background: transparent; padding: 0; display: grid; place-items: center; cursor: pointer; transition: transform .15s ease; }

@@ -1044,7 +1044,7 @@
     onclick={(e) => { if ((e.target as HTMLElement).classList.contains("backdrop")) closeAll(); }}
     onkeydown={(e) => { if (e.target === e.currentTarget && (e.key === "Escape" || e.key === "Enter")) closeAll(); }}
   >
-    <div class="sheet" data-own-back class:detail class:wide={section === "appearance"} class:sized={!!sheetSize} role="dialog" aria-modal="true" tabindex="-1"
+    <div class="sheet" data-own-back data-phone-full class:detail class:wide={section === "appearance"} class:sized={!!sheetSize} role="dialog" aria-modal="true" tabindex="-1"
       style:width={sheetSize ? `min(${sheetSize.w}px, 98vw)` : undefined} style:height={sheetSize ? `min(${sheetSize.h}px, 96vh)` : undefined}>
       <!-- Drag the corner to resize (remembered); double-click — back to the default. -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -2936,8 +2936,8 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     .backdrop { padding: 0; background: var(--bg-shell); backdrop-filter: none; }
     .sheet {
       width: 100vw !important; height: 100% !important; border: none; border-radius: 0; box-shadow: none;
-      padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
-               env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+      padding: var(--sat, env(safe-area-inset-top, 0px)) var(--sar, env(safe-area-inset-right, 0px))
+               var(--sab, env(safe-area-inset-bottom, 0px)) var(--sal, env(safe-area-inset-left, 0px));
       box-sizing: border-box;
     }
     .layout { grid-template-columns: 1fr; }

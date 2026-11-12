@@ -152,6 +152,15 @@ window.__TAURI_INTERNALS__ = {
       return { composerBottom: c && c.bottom, panelTop: pnl && pnl.top };
     })));
     await ph.screenshot({ path: path.join(out, '12-phone-picker.jpg'), type: 'jpeg', quality: 72 });
+    // Full-screen windows on a phone must reach every edge (a global cap
+    // used to stop them 16px short and shift them by the backdrop's 8px).
+    await ph.keyboard.press('Escape'); await ph.evaluate(() => window.__aquaBack && window.__aquaBack()); await ph.waitForTimeout(600);
+    await ph.evaluate(() => window.__aquaBack && window.__aquaBack()); await ph.waitForTimeout(600);
+    await ph.locator('.rail button').last().click().catch(() => {}); await ph.waitForTimeout(900);
+    const fit = await ph.evaluate(() => [...document.querySelectorAll('[role=dialog][aria-modal=true][data-phone-full]')].map((e) => {
+      const r = e.getBoundingClientRect(); return { c: e.className.split(' ')[0], ok: r.left <= 0.5 && r.top <= 0.5 && Math.abs(r.right - innerWidth) <= 0.5 && Math.abs(r.bottom - innerHeight) <= 0.5, r: [r.left, r.top, r.right, r.bottom] }; }));
+    console.log('phoneFull', JSON.stringify(fit));
+    if (fit.some((x) => !x.ok)) errs.push('phone: a full-screen window does not fill the screen ' + JSON.stringify(fit));
   } catch (e) { errs.push('phone: ' + e.message.split('\n')[0]); }
   console.log(errs.join('\n') || 'no errors');
   for (const f of fs.readdirSync(out).filter((f) => f.endsWith('.jpg')).sort()) {

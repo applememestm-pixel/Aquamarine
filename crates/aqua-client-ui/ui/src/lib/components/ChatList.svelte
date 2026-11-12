@@ -19,7 +19,7 @@
   import { chatStatus, presenceNow } from "../presence";
   import { unsupportedKind } from "../compat";
   import { t, tr } from "../i18n";
-  import { fly, slide, scale as scaleIn } from "svelte/transition";
+  import { scale as scaleIn } from "svelte/transition";
   import { flip } from "svelte/animate";
   import { cubicOut, backOut } from "svelte/easing";
   import { avatars, peerCards, clans } from "../people";
@@ -52,7 +52,6 @@
   let fabOpen = $state(false);
   /** "My story" tapped with none up: camera or gallery. */
   let storyAdd = $state(false);
-  function storyUsers(): string[] { return [...($myLiveStories.length ? [""] : []), ...$storyOwners.map((o) => o.user)]; }
   /** A tap on the story ring itself: it's a shadow outside the avatar, which
    *  takes no taps, so the row gets them — the avatar's box plus the ring. */
   function onRing(e: MouseEvent): boolean {
@@ -61,7 +60,17 @@
     const r = a.getBoundingClientRect(), pad = 10;
     return e.clientX >= r.left - pad && e.clientX <= r.right + pad && e.clientY >= r.top - pad && e.clientY <= r.bottom + pad;
   }
-  function tapMine() { if ($myLiveStories.length) openStories(storyUsers(), ""); else storyAdd = !storyAdd; }
+  function tapMine() { if ($myLiveStories.length) openStories(storyUsers(), ""); else void addStory(IS_MOBILE ? "camera" : "gallery"); }
+  /** A story circle held (phone) or right-clicked: its menu (Telegram). */
+  let stHold: ReturnType<typeof setTimeout> | null = null;
+  let stHeld = false;
+  function stDown(e: PointerEvent, user: string) {
+    stHeld = false;
+    if (e.pointerType !== "touch") return;
+    const x = e.clientX, y = e.clientY;
+    stHold = setTimeout(() => { stHold = null; stHeld = true; try { navigator.vibrate?.(10); } catch { /* none */ } storyMenu = { x, y, user }; }, 450);
+  }
+  function stUp() { if (stHold) { clearTimeout(stHold); stHold = null; } }
   $effect(() => { if (fabOpen) return onBack(() => (fabOpen = false)); });
   function fabPick(k: "chat" | "group" | "supergroup" | "channel") {
     fabOpen = false;
@@ -103,8 +112,8 @@
   import { chatLines } from "../listLook";
   import { botMenus } from "../botMenus";
   import { settings as themeSettings } from "../theme";
-  import { storyOwners, myLiveStories, storyRing, addStory, setStoriesOff } from "../storyFeed";
-  import { openStories, storiesOff } from "../stories";
+  import { storyOwners, hiddenOwners, myLiveStories, storyRing, addStory, setStoriesOff, storyUsers } from "../storyFeed";
+  import { openStories, storiesOff, toggleHidden, hiddenStories } from "../stories";
   import { myOnline } from "../presence";
   import { openSettings } from "../panels/settings";
   import { openMiniApp } from "./MiniApp.svelte";
@@ -377,12 +386,17 @@
   // Stories (Telegram): folded into a stack of small avatars in the header;
   // pulling the list down at its top (or scrolling up past it, or tapping
   // the stack) unfolds the strip, scrolling the list down folds it again.
-  const storiesHere = $derived(!$storiesOff && !compact && !searchMode && !showArchive);
-  const haveStories = $derived($storyOwners.length > 0 || $myLiveStories.length > 0);
+  const haveStories = $derived($storyOwners.length > 0 || $myLiveStories.length > 0 || $hiddenOwners.length > 0);
+  // Nobody has stories (me included): no strip at all, like Telegram.
+  const storiesHere = $derived(!$storiesOff && !compact && !searchMode && !showArchive && haveStories);
   let storiesOpen = $state(false);
-  const showStories = $derived(storiesHere && storiesOpen);
-  const showStack = $derived(storiesHere && !storiesOpen && haveStories);
-  $effect(() => { if (!storiesHere) storiesOpen = false; });
+  /** How far the list is being pulled down at its top (px, follows the finger). */
+  let pull = $state(0);
+  const ST_H = 96;
+  const stProgress = $derived(storiesOpen ? 1 : Math.min(1, pull / ST_H));
+  const showStories = $derived(storiesHere && (storiesOpen || pull > 0));
+  const showStack = $derived(storiesHere && stProgress < 0.98);
+  $effect(() => { if (!storiesHere) { storiesOpen = false; pull = 0; } });
   let chatsEl = $state<HTMLDivElement | null>(null);
   let storiesEl = $state<HTMLDivElement | null>(null);
   let wheelAcc = 0, wheelT: ReturnType<typeof setTimeout> | null = null;
@@ -394,13 +408,27 @@
     if (!storiesOpen && wheelAcc < -60) { storiesOpen = true; wheelAcc = 0; }
     else if (storiesOpen && wheelAcc > 40) { storiesOpen = false; wheelAcc = 0; }
   }
+  // Telegram's pull: at the list's top the strip comes out with the finger,
+  // past half its height it opens on release, otherwise it slides back.
   let pullY: number | null = null;
+  let pulling = $state(false);
   function storiesTouchStart(e: TouchEvent) { pullY = storiesHere && chatsEl && chatsEl.scrollTop <= 0 ? e.touches[0].clientY : null; }
   function storiesTouchMove(e: TouchEvent) {
     if (pullY == null) return;
     const dy = e.touches[0].clientY - pullY;
-    if (!storiesOpen && dy > 56) { storiesOpen = true; pullY = null; try { navigator.vibrate?.(8); } catch { /* none */ } }
-    else if (storiesOpen && dy < -36) { storiesOpen = false; pullY = null; }
+    if (!storiesOpen) {
+      if (dy <= 0) { if (pulling) pull = 0; return; }
+      pulling = true;
+      // A little resistance past the full height.
+      pull = dy <= ST_H ? dy : ST_H + (dy - ST_H) * 0.25;
+    } else if (dy < -36) { storiesOpen = false; pullY = null; }
+  }
+  function storiesTouchEnd() {
+    pullY = null;
+    if (!pulling) return;
+    pulling = false;
+    if (pull > ST_H * 0.5) { storiesOpen = true; try { navigator.vibrate?.(8); } catch { /* none */ } }
+    pull = 0;
   }
   function storiesScroll() {
     // Scrolled down past the strip: it folds back into the header.
@@ -410,7 +438,7 @@
       requestAnimationFrame(() => { if (chatsEl) chatsEl.scrollTop = Math.max(0, chatsEl.scrollTop - h); });
     }
   }
-  let storyMenu = $state<{ x: number; y: number } | null>(null);
+  let storyMenu = $state<{ x: number; y: number; user?: string } | null>(null);
   /** Ghost mode on (any part of it): a ghost in the header says so. */
   const ghostOn = $derived($ghost.noReadReceipts || $ghost.noTyping || $myOnline === "invisible");
   const stackOwners = $derived([
@@ -967,13 +995,15 @@
   {/if}
 
   <div class="chats" class:home={searchHome} bind:this={chatsEl} onscroll={storiesScroll} onwheel={storiesWheel}
-    ontouchstart={storiesTouchStart} ontouchmove={storiesTouchMove} ontouchend={() => (pullY = null)}>
+    ontouchstart={storiesTouchStart} ontouchmove={storiesTouchMove} ontouchend={storiesTouchEnd} ontouchcancel={storiesTouchEnd}>
     {#if showStories}
-      <!-- Stories (Telegram): unfolded from the header's stack; scroll down — they fold back. -->
-      <div class="stories" role="list" aria-label={$t("Stories")} use:scrollX bind:this={storiesEl} transition:slide={{ duration: motionMs(220) }}
+      <!-- Stories (Telegram): unfolded from the header's stack by pulling the
+           list down (it follows the finger); scroll down — they fold back. -->
+      <div class="stories-wrap" class:anim={!pulling} style:height="{storiesOpen ? ST_H : pull}px" style:--p={stProgress}>
+      <div class="stories" role="list" aria-label={$t("Stories")} use:scrollX bind:this={storiesEl}
         oncontextmenu={(e) => { e.preventDefault(); storyMenu = { x: e.clientX, y: e.clientY }; }}>
         <div class="st-item" role="listitem">
-          <button class="st-ava" class:ring={$myLiveStories.length > 0} onclick={tapMine} aria-label={$t("My story")}>
+          <button class="st-ava" class:ring={$myLiveStories.length > 0} class:seen={$myLiveStories.length > 0} onclick={tapMine} aria-label={$t("My story")}>
             <span class="st-pic" style:background-image={$profile.avatar_url ? `url("${$profile.avatar_url}")` : undefined}>{$profile.avatar_url ? "" : meLetter}</span>
             <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
             <span class="st-plus" role="button" tabindex="-1" title={$t("Add a story")} onclick={(e) => { e.stopPropagation(); storyAdd = !storyAdd; }}>+</span>
@@ -986,31 +1016,37 @@
             </div>
           {/if}
         </div>
-        {#each $storyOwners as o (o.user)}
+        {#each [...$storyOwners, ...$hiddenOwners] as o (o.user)}
           {@const ch = $chats.find((x) => x.id === o.user)}
-          <div class="st-item" role="listitem">
-            <button class="st-ava ring" class:seen={!o.unseen} onclick={() => openStories(storyUsers(), o.user)} aria-label={ch?.name ?? o.user}>
+          <div class="st-item" class:hid={o.hidden} role="listitem">
+            <button class="st-ava ring" class:seen={!o.unseen} class:close={o.close && o.unseen}
+              onpointerdown={(e) => stDown(e, o.user)} onpointerup={stUp} onpointercancel={stUp} onpointerleave={stUp}
+              onclick={() => { if (stHeld) { stHeld = false; return; } openStories(o.hidden ? [o.user] : storyUsers(), o.user); }}
+              oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); if (!stHeld) storyMenu = { x: e.clientX, y: e.clientY, user: o.user }; }}
+              aria-label={ch?.name ?? o.user}>
               <span class="st-pic" style:--gradient={ch?.gradient} style:background-image={$avatars[o.user] ? `url("${$avatars[o.user]}")` : undefined}>{$avatars[o.user] ? "" : (ch?.letter ?? o.user.charAt(0).toUpperCase())}</span>
             </button>
             <span class="st-nm">{(ch?.name ?? o.user).split(" ")[0]}</span>
           </div>
         {/each}
-        <div class="st-item" role="listitem">
-          <button class="st-ava st-fold" onclick={() => (storiesOpen = false)} aria-label={$t("Hide stories")} title={$t("Hide stories")}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>
-          </button>
-          <span class="st-nm">{$t("Hide")}</span>
-        </div>
+      </div>
       </div>
     {/if}
     {#if storyMenu}
       {@const sm = storyMenu}
+      {@const smUser = sm.user}
       <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
       <div class="ctx-scrim" onclick={() => (storyMenu = null)} oncontextmenu={(e) => { e.preventDefault(); storyMenu = null; }}></div>
       <div class="chat-ctx" use:keepOnScreen style:left="{sm.x}px" style:top="{sm.y}px" role="menu">
-        <button onclick={() => { storyMenu = null; void addStory(IS_MOBILE ? "camera" : "gallery"); }}>{$t("Add a story")}</button>
-        <button onclick={() => { storyMenu = null; storiesOpen = false; }}>{$t("Hide stories")}</button>
-        <button class="danger" onclick={() => { storyMenu = null; void setStoriesOff(true); showToast(tr("Stories are off. Turn them back on in Settings → Chat settings.")); }}>{$t("Turn off stories")}</button>
+        {#if smUser}
+          <button onclick={() => { storyMenu = null; void selectChat(smUser); }}>{$t("Send message")}</button>
+          <button onclick={() => { storyMenu = null; openStories([smUser], smUser); }}>{$t("Open stories")}</button>
+          <button onclick={() => { storyMenu = null; const was = $hiddenStories.includes(smUser); toggleHidden(smUser); showToast(tr(was ? "Stories are shown again" : "Stories hidden — they're now at the end of the strip")); }}>{$t($hiddenStories.includes(smUser) ? "Show stories" : "Hide stories")}</button>
+        {:else}
+          <button onclick={() => { storyMenu = null; void addStory(IS_MOBILE ? "camera" : "gallery"); }}>{$t("Add a story")}</button>
+          {#if storiesOpen}<button onclick={() => { storyMenu = null; storiesOpen = false; }}>{$t("Hide stories")}</button>{/if}
+          <button class="danger" onclick={() => { storyMenu = null; void setStoriesOff(true); showToast(tr("Stories are off. Turn them back on in Settings → Chat settings.")); }}>{$t("Turn off stories")}</button>
+        {/if}
       </div>
     {/if}
     {#if searchHome}
@@ -1134,7 +1170,6 @@
         class:grp={!!g}
         class:alt={ci % 2 === 1}
         animate:flip={{ duration: motionMs(260), easing: cubicOut }}
-        in:fly|global={{ y: 10, duration: motionMs(300), delay: Math.min(ci, 14) * 22, easing: cubicOut }}
         title={compact ? (g ? g.name : c.name) : undefined}
         class:active={!g && c.id === $activeId}
         class:kb={ci === kbIndex}
@@ -1175,7 +1210,7 @@
         {:else}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div class="avatar sz-44" class:lk class:ava-grp={c.id.startsWith("grp_") && !c.channel} class:ava-chan={c.channel}
-          class:story-ring={!lk && !!$storyRing[c.id]} class:story-seen={$storyRing[c.id] === "seen"}
+          class:story-ring={!lk && !!$storyRing[c.id]} class:story-seen={$storyRing[c.id] === "seen"} class:story-close={$storyRing[c.id] === "close"}
           style="--gradient: {c.gradient}" onpointerdown={(e) => { if (e.pointerType !== "touch") peekDown(e, c.id); }}
           onclick={(e) => { if (!lk && $storyRing[c.id] && !sel.length) { e.stopPropagation(); openStories(storyUsers(), c.id); } }}
           title={compact ? undefined : $t(DESKTOP ? "Hold or Alt+click to peek" : "Hold to peek")}>
@@ -1266,6 +1301,12 @@
             {/each}
           </div>
         </div>
+      {/if}
+      {#if !fabOpen && !$storiesOff}
+        <!-- Telegram: a small camera above the pencil — a new story. -->
+        <button class="fab-cam" onclick={() => void addStory("camera")} aria-label={$t("Add a story")} title={$t("Add a story")}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-2.5h6L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.6"/></svg>
+        </button>
       {/if}
       <button class="fab" onclick={() => (fabOpen = !fabOpen)} aria-label={$t("New chat, group or channel")} aria-expanded={fabOpen}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path class="fab-line" d="M12 20h9"/><path class="fab-pen" d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
@@ -1851,10 +1892,14 @@
   .folder-tab.active { color: var(--accent); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 25%, transparent); }
   .ft-emoji { margin-right: 4px; }
   /* Stories strip. */
-  .stories { display: flex; gap: 14px; padding: 6px 12px 10px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+  .stories-wrap { overflow: hidden; flex-shrink: 0; }
+  .stories-wrap.anim { transition: height .26s cubic-bezier(.2,.9,.25,1); }
+  .stories { display: flex; gap: 14px; padding: 6px 12px 10px; height: 96px; box-sizing: border-box; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--border);
+    opacity: var(--p, 1); transform: scale(calc(.55 + .45 * var(--p, 1))); transform-origin: 50% 0; }
+  .stories-wrap.anim .stories { transition: opacity .26s ease, transform .26s cubic-bezier(.2,.9,.25,1); }
   .stories::-webkit-scrollbar { display: none; }
-  .st-fold { display: grid; place-items: center; background: var(--bg-surface-2); color: var(--fg-muted); }
-  .st-fold svg { width: 24px; height: 24px; }
+  .st-item.hid { opacity: .45; }
+  .st-ava.ring.close { background: conic-gradient(from 210deg, #34C759, #9BE15D, #34C759); }
   /* The folded strip: up to three small avatars, overlapping (Telegram). */
   .st-stack { display: flex; align-items: center; flex-shrink: 0; border: none; background: transparent; padding: 0 2px; cursor: pointer; height: 32px; }
   .st-stack .ss { width: 26px; height: 26px; border-radius: var(--ava-r, 50%); display: grid; place-items: center; margin-left: -9px; box-sizing: border-box;
@@ -1883,9 +1928,14 @@
   /* Unseen story: a ring in the theme colour around the avatar (Telegram). */
   .avatar.story-ring { box-shadow: 0 0 0 2px var(--bg-list), 0 0 0 4px var(--accent); cursor: pointer; }
   .avatar.story-ring.story-seen { box-shadow: 0 0 0 2px var(--bg-list), 0 0 0 4px var(--border-strong); }
+  .avatar.story-ring.story-close { box-shadow: 0 0 0 2px var(--bg-list), 0 0 0 4px #34C759; }
   /* Phones: the pencil (Telegram) above the bottom bar; it unfolds upwards. */
-  .fab-wrap { position: fixed; right: 16px; bottom: calc(92px + env(safe-area-inset-bottom, 0px)); z-index: 60; display: flex; flex-direction: column; align-items: flex-end; gap: 12px; }
+  .fab-wrap { position: fixed; right: 16px; bottom: calc(92px + var(--sab, env(safe-area-inset-bottom, 0px))); z-index: 60; display: flex; flex-direction: column; align-items: flex-end; gap: 12px; }
   :global(body.chat-open) .fab-wrap, :global(body.chat-open) .fab-veil { display: none; }
+  .fab-cam { width: 44px; height: 44px; margin-right: 6px; border-radius: 50%; border: 1px solid var(--border-strong); display: grid; place-items: center; cursor: pointer;
+    background: var(--bg-surface); color: var(--fg); box-shadow: 0 8px 20px -10px rgba(0,0,0,.6); animation: fab-cam-in .22s cubic-bezier(.2,.9,.3,1.2); }
+  .fab-cam svg { width: 21px; height: 21px; }
+  @keyframes fab-cam-in { from { transform: scale(.4) translateY(20px); opacity: 0; } }
   .fab { width: 56px; height: 56px; border-radius: calc(18px * var(--rk, 1)); border: none; display: grid; place-items: center; color: #06070c;
     background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 12px 28px -10px var(--accent-glow), 0 2px 6px rgba(0,0,0,.3);
     transition: transform .25s cubic-bezier(.3,1.4,.5,1), border-radius .25s ease; }
@@ -2131,7 +2181,7 @@
     .m-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
     .m-spin { width: 10px; height: 10px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: m-spin .8s linear infinite; }
     /* The servers sheet */
-    .srv-sheet { max-height: calc(100dvh - 24px - env(safe-area-inset-top, 0px)); overflow-y: auto; }
+    .srv-sheet { max-height: calc(100dvh - 24px - var(--sat, env(safe-area-inset-top, 0px))); overflow-y: auto; }
     .srv-now { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: calc(14px * var(--rk, 1)); background: var(--accent-soft); }
     .srv-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--fg-dim); flex-shrink: 0; }
     .srv-dot.ok { background: var(--online, #35D399); box-shadow: 0 0 8px var(--online, #35D399); }
@@ -2145,7 +2195,7 @@
     /* Accounts: a sheet from the bottom. */
     .acc-scrim { display: block; position: fixed; inset: 0; z-index: 80; background: rgba(0,0,0,.35); animation: acc-fade .2s ease; }
     .acc-sheet { display: flex; flex-direction: column; gap: 2px; position: fixed; left: 8px; right: 8px; z-index: 81;
-      bottom: calc(8px + env(safe-area-inset-bottom, 0px)); padding: 6px 8px 12px; border-radius: calc(26px * var(--rk, 1));
+      bottom: calc(8px + var(--sab, env(safe-area-inset-bottom, 0px))); padding: 6px 8px 12px; border-radius: calc(26px * var(--rk, 1));
       background: color-mix(in srgb, var(--bg-shell) var(--menu-alpha, 82%), transparent);
       backdrop-filter: blur(24px) saturate(1.5); -webkit-backdrop-filter: blur(24px) saturate(1.5);
       border: 1px solid var(--border-strong); box-shadow: 0 20px 50px -20px rgba(0,0,0,.8);
@@ -2173,7 +2223,7 @@
     .m-menu:active { background: var(--bg-hover); }
     .list-header { padding: 2px 14px 8px; }
     .plus-btn { display: none; }
-    .plus-pop { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 46px); right: 14px; min-width: 200px; border-radius: calc(16px * var(--rk, 1)); padding: 6px; }
+    .plus-pop { position: fixed; top: calc(var(--sat, env(safe-area-inset-top, 0px)) + 46px); right: 14px; min-width: 200px; border-radius: calc(16px * var(--rk, 1)); padding: 6px; }
     .plus-pop button { padding: 12px 14px; font-size: 15px; border-radius: calc(11px * var(--rk, 1)); }
     .search { height: 36px; padding: 0 12px; border-radius: calc(18px * var(--rk, 1)); background: var(--bg-surface-2, var(--bg-input)); border-color: transparent; gap: 8px; }
     .search :global(svg) { width: 15px; height: 15px; }
@@ -2187,7 +2237,7 @@
     .folder-tab.active { background: var(--accent-soft); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 25%, transparent); }
     .folder-edit { padding: 5px 10px; font-size: 12.5px; border: none; }
     /* Rows: big avatars, roomy text, no notebook tab (one panel at a time). */
-    .chats { padding: 4px 6px calc(68px + env(safe-area-inset-bottom, 0px)); }
+    .chats { padding: 4px 6px calc(68px + var(--sab, env(safe-area-inset-bottom, 0px))); }
     .chat-item { grid-template-columns: 48px 1fr; gap: 12px; padding: 7px 10px; border-radius: calc(16px * var(--rk, 1)); }
     .chat-item .avatar.sz-44 { width: 48px; height: 48px; font-size: 18px; }
     .list.lines3 .chat-item { padding-top: 7px; padding-bottom: 7px; }

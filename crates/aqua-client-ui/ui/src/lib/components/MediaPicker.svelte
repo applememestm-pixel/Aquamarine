@@ -1154,8 +1154,8 @@
   @media (max-width: 720px) {
     .panel.docked {
       left: 0 !important; right: 0; bottom: 0 !important; width: auto;
-      height: calc(var(--dock-h, 300px) + env(safe-area-inset-bottom, 0px));
-      padding-bottom: env(safe-area-inset-bottom, 0px);
+      height: calc(var(--dock-h, 300px) + var(--sab, env(safe-area-inset-bottom, 0px)));
+      padding-bottom: var(--sab, env(safe-area-inset-bottom, 0px));
       border-radius: 20px 20px 0 0; border-left: none; border-right: none; border-bottom: none;
       animation: dock-up .2s cubic-bezier(.2,.8,.2,1);
       box-shadow: 0 -10px 30px -18px rgba(0,0,0,.7);

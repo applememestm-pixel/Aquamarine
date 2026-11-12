@@ -3,13 +3,34 @@ package app.aquamarine.messenger
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 
 // Copied over the Tauri-generated file by android/patch-project.ps1 and CI.
 class MainActivity : TauriActivity() {
   private var web: WebView? = null
+  // The system bars / cutout and the WebView's own size, in device pixels,
+  // as JSON for the page (ui/src/lib/insets.ts). The page works out the
+  // padding itself from these: env(safe-area-inset-*) came out wrong at an
+  // interface scale other than 100 % and with the 3-button navigation bar
+  // (the bottom bar and the composer rode high with a gap under them).
+  @Volatile private var insetsJson = ""
+  private var bars = intArrayOf(0, 0, 0, 0)
+
+  inner class InsetsBridge {
+    @JavascriptInterface fun insets(): String = insetsJson
+  }
+
+  private fun pushInsets(v: WebView) {
+    val json = "{\"l\":${bars[0]},\"t\":${bars[1]},\"r\":${bars[2]},\"b\":${bars[3]},\"w\":${v.width},\"h\":${v.height}}"
+    if (json == insetsJson) return
+    insetsJson = json
+    v.post { v.evaluateJavascript("window.__aquaInsets&&window.__aquaInsets($json)", null) }
+  }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
@@ -38,6 +59,15 @@ class MainActivity : TauriActivity() {
   // changes.
   override fun onWebViewCreate(webView: WebView) {
     web = webView
+    webView.addJavascriptInterface(InsetsBridge(), "AquaInsets")
+    ViewCompat.setOnApplyWindowInsetsListener(webView) { v, insets ->
+      val b = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+      bars = intArrayOf(b.left, b.top, b.right, b.bottom)
+      pushInsets(v as WebView)
+      // The WebView still gets them too (its own safe-area handling).
+      ViewCompat.onApplyWindowInsets(v, insets)
+    }
+    webView.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ -> pushInsets(v as WebView) }
     webView.settings.useWideViewPort = true
     webView.settings.loadWithOverviewMode = false
     // The system's font size made every text bigger than the layout around

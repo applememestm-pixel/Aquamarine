@@ -74,7 +74,7 @@
   .mt { width: min(400px, 94vw); max-height: 92vh; overflow-y: auto; display: flex; flex-direction: column; align-items: stretch; gap: 10px; padding: 18px;
     background: var(--bg-surface-2, var(--bg-list)); color: var(--fg); border: 1px solid var(--border-strong); border-radius: calc(16px * var(--rk, 1));
     animation: mt-in .2s cubic-bezier(.16, 1, .3, 1); }
-  :global(html.phone) .mt { width: 100%; border-radius: calc(18px * var(--rk, 1)) calc(18px * var(--rk, 1)) 0 0; padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px)); }
+  :global(html.phone) .mt { width: 100%; border-radius: calc(18px * var(--rk, 1)) calc(18px * var(--rk, 1)) 0 0; padding-bottom: calc(18px + var(--sab, env(safe-area-inset-bottom, 0px))); }
   @keyframes mt-in { from { opacity: 0; transform: translateY(16px); } }
   header { display: flex; align-items: center; }
   h3 { margin: 0; font-size: 17px; flex: 1; }

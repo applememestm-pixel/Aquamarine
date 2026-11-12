@@ -172,7 +172,7 @@
   @media (max-width: 720px) {
     .pc-backdrop { padding: 0 !important; place-items: stretch !important; }
     .pc-sheet { width: 100% !important; max-width: none !important; height: 100% !important; max-height: none !important; border-radius: 0 !important; border: none !important;
-      padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+      padding-top: var(--sat, env(safe-area-inset-top, 0px)); padding-bottom: var(--sab, env(safe-area-inset-bottom, 0px)); }
     .pc-body { flex: 1; }
   }
   .pc-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--border); }

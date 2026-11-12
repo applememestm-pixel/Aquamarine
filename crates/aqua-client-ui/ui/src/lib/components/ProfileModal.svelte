@@ -1062,7 +1062,7 @@
   .fg-chip { font-size: 11.5px; font-weight: 600; padding: 3px 8px; border-radius: calc(7px * var(--rk, 1)); border: 1px solid var(--border-strong); color: var(--fg-muted); }
   .fg-chip.live { color: #3ddc84; border-color: color-mix(in srgb, #3ddc84 40%, transparent); }
 
-  .p-back { display: none; position: absolute; z-index: 6; top: calc(10px + env(safe-area-inset-top, 0px)); left: 10px; width: 38px; height: 38px;
+  .p-back { display: none; position: absolute; z-index: 6; top: calc(10px + var(--sat, env(safe-area-inset-top, 0px))); left: 10px; width: 38px; height: 38px;
     place-items: center; border: none; border-radius: 50%; background: rgba(0, 0, 0, .45); color: #fff; cursor: pointer; backdrop-filter: blur(6px); }
   .p-back :global(svg) { width: 22px; height: 22px; }
   /* ---- editor: two columns (card on the left, details on the right) ---- */
@@ -1093,7 +1093,7 @@
   @media (max-width: 720px) {
     .backdrop { padding: 0 !important; place-items: stretch; }
     .sheet, .sheet.wide, .sheet.ed { width: 100% !important; max-width: none !important; height: 100% !important; max-height: none !important;
-      border-radius: 0; border: none; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+      border-radius: 0; border: none; padding-top: var(--sat, env(safe-area-inset-top, 0px)); padding-bottom: var(--sab, env(safe-area-inset-bottom, 0px)); }
     .close { display: none; }
     .p-back { display: grid; }
     .sheet:not(.ed) .banner { height: 210px; }

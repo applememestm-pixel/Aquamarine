@@ -221,7 +221,7 @@
       align-items: stretch;
       position: fixed;
       left: 50%; width: min(340px, calc(100% - 48px)); transform: translateX(-50%);
-      bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+      bottom: calc(8px + var(--sab, env(safe-area-inset-bottom, 0px)));
       height: 48px;
       padding: 4px;
       gap: 0;
