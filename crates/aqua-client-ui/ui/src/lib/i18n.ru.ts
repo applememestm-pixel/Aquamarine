@@ -2817,4 +2817,10 @@ export const RU: Record<string, string> = {
   "Delete?": "Удалить?",
   "No packs yet.": "Наборов пока нет.",
   "Manage: delete packs and GIFs": "Управление: удалить наборы и GIF",
+  "Connected to {s}": "Подключено к {s}",
+  "Connect to another server": "Подключиться к другому серверу",
+  "Server address": "Адрес сервера",
+  "Enter the server address": "Введите адрес сервера",
+  "not answering": "не отвечает",
+  "Another server…": "Другой сервер…",
 };

@@ -1070,12 +1070,12 @@
   .mng-name small { color: var(--fg-muted); font-size: 12px; }
   .mng-act, .mng-del { flex-shrink: 0; height: 32px; min-width: 32px; padding: 0 8px; border: none; border-radius: calc(8px * var(--rk, 1)); background: transparent; color: var(--fg-muted); cursor: pointer; display: grid; place-items: center; font-size: 12.5px; font-weight: 600; transition: background .15s, color .15s; }
   .mng-act:hover { background: var(--bg-hover); color: var(--fg); }
-  .mng-del:hover { color: var(--danger, #e5484d); background: var(--bg-hover); }
-  .mng-del.armed { background: var(--danger, #e5484d); color: #fff; }
+  .mng-del:hover { color: var(--danger); background: var(--bg-hover); }
+  .mng-del.armed { background: var(--danger); color: #fff; }
   .mng-del :global(.bin) { width: 17px; height: 17px; }
   .mng-gif { position: relative; cursor: default; }
   .mng-del.over { position: absolute; top: 4px; right: 4px; height: 28px; min-width: 28px; background: rgba(0, 0, 0, .55); color: #fff; backdrop-filter: blur(4px); }
-  .mng-del.over.armed { background: var(--danger, #e5484d); }
+  .mng-del.over.armed { background: var(--danger); }
   .bar-row { display: flex; align-items: center; border-top: 1px solid var(--border); flex-shrink: 0; min-width: 0; }
   .bar {
     display: flex; gap: 2px; padding: 4px 6px; overflow-x: auto; scrollbar-width: none;

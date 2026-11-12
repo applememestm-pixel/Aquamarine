@@ -8,7 +8,11 @@
    * the identity opens a mini card with the status picker.
    */
   import { onMount } from "svelte";
-  import { info } from "../stores";
+  import { info, connect } from "../stores";
+  import { api } from "../tauri";
+  import { ping } from "../ping";
+  import { aliasesOf, federationOf } from "../servers";
+  import { askInput } from "./InputPrompt.svelte";
   import { profile, updateProfile } from "../profile";
   import { myOnline, myActivity, shareActivity, activityVerb, activityLine, broadcastPresence, type OnlineStatus } from "../presence";
   import { callMuted, callDeafened, callState, toggleCallMute, toggleCallDeafen } from "./CallModal.svelte";
@@ -55,8 +59,46 @@
     switching = true;
     try { await switchAccount(slot); } catch (e) { switching = false; showToast(String(e)); }
   }
+  // ---- Quick server switch: the relays of my network (same account) ----
+  let srvList = $state<{ url: string; ms: number | null; ok: boolean | null }[]>([]);
+  let srvBusy = $state<string | null>(null);
+  const curServer = $derived(($info?.server_url ?? "").replace(/\/+$/, ""));
+  async function loadServers() {
+    const cur = curServer;
+    const urls = [...new Set([cur, ...aliasesOf(cur), ...federationOf(cur)].filter(Boolean))];
+    srvList = urls.map((url) => ({ url, ms: null, ok: null }));
+    try {
+      const got = await api.probeServers(urls);
+      srvList = urls.map((url) => { const p = got.find((x) => x.url.replace(/\/+$/, "") === url); return { url, ms: p?.ms ?? null, ok: p ? p.ok : false }; });
+    } catch { /* keep the list without times */ }
+  }
+  async function switchServer(url: string) {
+    const user = $info?.username;
+    if (!user || srvBusy || url === curServer) return;
+    srvBusy = url;
+    const err = await connect(url, user);
+    srvBusy = null;
+    if (err) showToast(err); else { showToast(tr("Connected to {s}", { s: hostOf(url) })); void loadServers(); }
+  }
+  function otherServer() {
+    menuOpen = false;
+    askInput({
+      title: tr("Connect to another server"),
+      description: tr("Your account works on every server of the network; switching changes only the route."),
+      fields: [{ label: tr("Server address"), placeholder: "http://…:7777", value: curServer }],
+      submitLabel: tr("Connect"),
+      onSubmit: async ([u]) => {
+        const url = u.trim().replace(/\/+$/, "");
+        const user = $info?.username;
+        if (!url || !user) return tr("Enter the server address");
+        return await connect(/^https?:\/\//.test(url) ? url : `http://${url}`, user);
+      },
+    });
+  }
+
   function toggleMenu() {
     menuOpen = !menuOpen;
+    if (menuOpen) void loadServers();
     if (menuOpen) void loadAccounts();
     if (menuOpen) statusDraft = $profile.status ?? "";
   }
@@ -135,6 +177,18 @@
         <div class="sep"></div>
         <button class="menu-item" onclick={() => { menuOpen = false; openProfile(); }}>{$t("Edit profile")}</button>
         <div class="sep"></div>
+        <div class="mi-head">{$t("Server")}</div>
+        {#each srvList as sv (sv.url)}
+          <button class="menu-item acc" class:active={sv.url === curServer} disabled={!!srvBusy || sv.url === curServer} onclick={() => switchServer(sv.url)}>
+            <span class="srv-dot" class:ok={sv.url === curServer ? !!$info?.connected : sv.ok === true} class:bad={sv.ok === false && sv.url !== curServer}></span>
+            <span class="mi-text"><span class="mi-label">{hostOf(sv.url)}</span><span class="mi-hint">{srvBusy === sv.url ? $t("Connecting…") : sv.url === curServer ? ($info?.connected ? ($ping != null ? `${$ping} ${$t("ms")}` : $t("online")) : $t("Connecting…")) : sv.ms != null ? `${sv.ms} ${$t("ms")}` : sv.ok === false ? $t("not answering") : "…"}</span></span>
+            {#if sv.url === curServer}<span class="acc-tick">✓</span>{/if}
+          </button>
+        {/each}
+        <button class="menu-item" disabled={!!srvBusy} onclick={otherServer}>
+          <span class="acc-ava plus">⇄</span><span class="mi-label">{$t("Another server…")}</span>
+        </button>
+        <div class="sep"></div>
         <div class="mi-head">{$t("Accounts")}</div>
         {#each $accounts as a (a.slot)}
           <button class="menu-item acc" class:active={a.active} disabled={switching || a.active} onclick={() => pickAccount(a.slot)}>
@@ -175,6 +229,9 @@
 </div>
 
 <style>
+  .srv-dot { width: 10px; height: 10px; margin: 0 8px; border-radius: 50%; flex-shrink: 0; background: var(--fg-dim); }
+  .srv-dot.ok { background: var(--online); box-shadow: 0 0 0 3px color-mix(in srgb, var(--online) 22%, transparent); }
+  .srv-dot.bad { background: var(--danger); }
   .mi-head { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-dim); padding: 4px 10px 2px; }
   .menu-item.acc:disabled { opacity: 1; cursor: default; }
   .acc-ava { width: 26px; height: 26px; border-radius: var(--ava-r, 50%); display: grid; place-items: center; flex-shrink: 0; font-weight: 800; font-size: 12px;
