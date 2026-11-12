@@ -64,7 +64,22 @@ async fn main() -> anyhow::Result<()> {
     // No Telegram token yet? Ask once, right here in the terminal.
     aqua_server::packs::prompt_for_token_if_missing();
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    // After a restart from the panel the old process may still hold the
+    // port for a moment: try a few times.
+    let listener = {
+        let mut tries = 0;
+        loop {
+            match tokio::net::TcpListener::bind(addr).await {
+                Ok(l) => break l,
+                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && tries < 20 => {
+                    tries += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    };
+    aqua_server::host::STANDALONE.store(true, std::sync::atomic::Ordering::Relaxed);
     let host_port = addr.port();
     let local = format!("http://127.0.0.1:{host_port}");
     let panel = token.as_ref().map(|t| format!("{local}/admin#token={t}"));
