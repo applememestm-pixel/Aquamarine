@@ -1659,11 +1659,24 @@ fn build_ws_url(server_url: &str, username: &str, token: &str) -> Result<String,
     Ok(format!("{ws_base}/v1/ws?user={username}&token={token}&ack=1&v={}", env!("CARGO_PKG_VERSION")))
 }
 
+/// One frame from the relay. A frame this app can't read (a kind a newer
+/// relay or app sends, a broken payload) is logged, confirmed and skipped —
+/// it used to be reported as `Incoming::Error`, which the app takes for a
+/// lost connection: it dropped the relay, showed "LAN nearby" and
+/// reconnected, and since the frame was never confirmed the relay sent it
+/// again on every reconnect — the connection flapped every few seconds and
+/// messages in flight got lost.
 fn dispatch_frame(tx: &mpsc::UnboundedSender<Incoming>, acks: &Acks, out: &mpsc::UnboundedSender<RelayMessage>, bytes: &[u8]) {
     let msg: RelayMessage = match serde_json::from_slice(bytes) {
         Ok(m) => m,
         Err(e) => {
-            let _ = tx.send(Incoming::Error(format!("decode relay: {e}")));
+            tracing::warn!("skipping a relay frame this app can't read: {e}");
+            // Confirm it anyway (if it has an id) so it isn't sent again.
+            if acks.on() {
+                if let Some(id) = serde_json::from_slice::<serde_json::Value>(bytes).ok().and_then(|v| v["id"].as_str().map(str::to_string)) {
+                    let _ = out.send(RelayMessage::ack(Some(id)));
+                }
+            }
             return;
         }
     };
@@ -1687,11 +1700,11 @@ fn dispatch_frame(tx: &mpsc::UnboundedSender<Incoming>, acks: &Acks, out: &mpsc:
         PayloadKind::Ack => {}
         PayloadKind::Initial => match bincode::deserialize::<InitialMessage>(&msg.payload) {
             Ok(initial) => { let _ = tx.send(Incoming::Initial { from: msg.from, message: initial, ts: msg.ts }); }
-            Err(e) => { let _ = tx.send(Incoming::Error(format!("decode initial: {e}"))); }
+            Err(e) => tracing::warn!(from = %msg.from, "skipping an unreadable first message: {e}"),
         },
         PayloadKind::Envelope => match bincode::deserialize::<Envelope>(&msg.payload) {
             Ok(envelope) => { let _ = tx.send(Incoming::Envelope { from: msg.from, envelope, ts: msg.ts }); }
-            Err(e) => { let _ = tx.send(Incoming::Error(format!("decode envelope: {e}"))); }
+            Err(e) => tracing::warn!(from = %msg.from, "skipping an unreadable message: {e}"),
         },
         PayloadKind::Plaintext => {
             let text = String::from_utf8_lossy(&msg.payload).to_string();

@@ -68,5 +68,9 @@ pub async fn probe(url: &str) -> (bool, Option<u64>, Option<u64>, Option<u64>) {
     let ms = t0.elapsed().as_millis() as u64;
     let Ok(v) = r.json::<serde_json::Value>().await else { return (false, None, None, None) };
     let ok = v["ok"].as_bool().unwrap_or(false);
-    (ok, ok.then_some(ms), v["users"].as_u64(), v["online"].as_u64())
+    // People, not bots: every relay has its own built-in bots (@verify, and
+    // @music only where Navidrome is connected), so two relays of one
+    // network showed different counts for the same accounts.
+    let people = v["users"].as_u64().map(|u| u.saturating_sub(v["bots"].as_u64().unwrap_or(0)));
+    (ok, ok.then_some(ms), people, v["online"].as_u64())
 }
