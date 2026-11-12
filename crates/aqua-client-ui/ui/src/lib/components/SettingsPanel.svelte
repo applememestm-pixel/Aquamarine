@@ -14,7 +14,7 @@
   import Donut from "./Donut.svelte";
   import { LINKS } from "../links";
   import { NOTES, openWhatsNew } from "./WhatsNew.svelte";
-  import { AUTODL_DEFAULT, POWER_DEFAULT } from "../theme";
+  import { AUTODL_DEFAULT, POWER_DEFAULT, type DblTap } from "../theme";
   import { powerActive, battery, powerMode } from "../power";
   import { autostartEnabled, setAutostart } from "../desktop";
   import { pickFolder } from "../dialog";
@@ -1094,7 +1094,7 @@
             <span class="me-cam phone-only" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></span>
             <span class="me-text">
               <span class="me-name">{$profile.display_name !== "You" ? $profile.display_name : ($info?.username ?? "")}</span>
-              <span class="me-sub">{$profile.phone ? `${$profile.phone} • ` : ""}@{$info?.username ?? "—"}</span>
+              <span class="me-sub">{$profile.phone && !$settings.hidePhone ? `${$profile.phone} • ` : ""}@{$info?.username ?? "—"}</span>
               <span class="me-online" class:off={!$info?.connected}>{$info?.connected ? ($myOnline === "invisible" ? "invisible" : $myOnline === "dnd" ? "do not disturb" : $myOnline) : "offline"}</span>
             </span>
           </button>
@@ -1497,6 +1497,46 @@
         </div>
       </section>
       <section class="group">
+        <div class="label">{$t("Chat list")}</div>
+        <div class="row">
+          <span class="row-label">{$t("Title")}</span>
+          <Select class="sel" value={$settings.listTitle ?? "app"} options={[{ value: "app", label: "Aquamarine" }, { value: "name", label: $t("My name") }, { value: "username", label: $t("My @username") }]}
+            onchange={(v) => settings.update((x) => ({ ...x, listTitle: v as "app" | "name" | "username" }))} />
+        </div>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, centerTitle: !x.centerTitle }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Title in the middle")}</div></div>
+          <span class="switch" class:on={!!$settings.centerTitle}></span>
+        </button>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, hideNetBadge: !x.hideNetBadge }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Hide the connection status")}</div>
+            <div class="tr-sub">{$t("No ping next to the title; “Connecting…” still shows when there's no connection.")}</div></div>
+          <span class="switch" class:on={!!$settings.hideNetBadge}></span>
+        </button>
+        <div class="row">
+          <span class="row-label">{$t("Folder tabs")}</span>
+          <Select class="sel" value={$settings.folderTabStyle ?? "chips"} options={[{ value: "chips", label: $t("Chips") }, { value: "pills", label: $t("Pills") }, { value: "text", label: $t("Text only") }]}
+            onchange={(v) => settings.update((x) => ({ ...x, folderTabStyle: v as "chips" | "pills" | "text" }))} />
+        </div>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, folderCounters: x.folderCounters === false }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Unread counters on folders")}</div></div>
+          <span class="switch" class:on={$settings.folderCounters !== false}></span>
+        </button>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, hideAllTab: !x.hideAllTab }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Hide “All chats”")}</div>
+            <div class="tr-sub">{$t("When you have folders, the list opens on the first one.")}</div></div>
+          <span class="switch" class:on={!!$settings.hideAllTab}></span>
+        </button>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, hidePhone: !x.hidePhone }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Hide my phone number")}</div>
+            <div class="tr-sub">{$t("In Settings, for screenshots. Who sees it is set in Privacy.")}</div></div>
+          <span class="switch" class:on={!!$settings.hidePhone}></span>
+        </button>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, snow: !x.snow }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Snow")} ❄</div></div>
+          <span class="switch" class:on={!!$settings.snow}></span>
+        </button>
+      </section>
+      <section class="group">
         <div class="label">{$t("Bubbles & media size")}</div>
         <div class="row">
           <span class="row-label">{$t("Stickers")}</span>
@@ -1754,6 +1794,26 @@
             <div class="tr-text"><div class="tr-title">{$t("Story archive")}{#if $storyArchive.length} · {$storyArchive.length}{/if}</div>
               <div class="tr-sub">{$t("Your stories after they run out — only you see them. Pinned to profile: {n}.", { n: $pinnedStories.length })}</div></div>
             <span class="chev">›</span>
+          </button>
+        {/if}
+      </section>
+      <section class="group">
+        <div class="label">{$t("Messages")}</div>
+        <div class="row">
+          <span class="row-label">{$t("Double tap — incoming")}</span>
+          <Select class="sel" value={$settings.dblTapIn ?? "auto"} options={[{ value: "auto", label: $t("Default") }, { value: "react", label: $t("Reaction") }, { value: "reply", label: $t("Reply") }, { value: "copy", label: $t("Copy") }, { value: "forward", label: $t("Forward") }, { value: "save", label: $t("Save to Saved Messages") }, { value: "edit", label: $t("Edit") }, { value: "delete", label: $t("Delete") }, { value: "none", label: $t("Nothing") }]}
+            onchange={(v) => settings.update((x) => ({ ...x, dblTapIn: v as DblTap }))} />
+        </div>
+        <div class="row">
+          <span class="row-label">{$t("Double tap — mine")}</span>
+          <Select class="sel" value={$settings.dblTapOut ?? "auto"} options={[{ value: "auto", label: $t("Default") }, { value: "react", label: $t("Reaction") }, { value: "reply", label: $t("Reply") }, { value: "copy", label: $t("Copy") }, { value: "forward", label: $t("Forward") }, { value: "save", label: $t("Save to Saved Messages") }, { value: "edit", label: $t("Edit") }, { value: "delete", label: $t("Delete") }, { value: "none", label: $t("Nothing") }]}
+            onchange={(v) => settings.update((x) => ({ ...x, dblTapOut: v as DblTap }))} />
+        </div>
+        <div class="foot-note" style="margin:0 0 8px">{$t("“Default”: with a mouse — reply, with a finger — ❤.")}</div>
+        {#if IS_MOBILE}
+          <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, hideKbOnScroll: !x.hideKbOnScroll }))}>
+            <div class="tr-text"><div class="tr-title">{$t("Hide the keyboard when scrolling")}</div></div>
+            <span class="switch" class:on={!!$settings.hideKbOnScroll}></span>
           </button>
         {/if}
       </section>

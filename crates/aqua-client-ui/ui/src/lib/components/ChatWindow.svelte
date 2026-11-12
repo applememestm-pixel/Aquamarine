@@ -60,7 +60,7 @@
   import { pluginCommands, pluginsOnSend, runPluginCommand, pluginButtons, pressPluginButton } from "../plugins";
   import { ATTACH_ITEMS, attachFront, attachHidden, attachDock, attachBots, toggleAttachBot, type AttachId } from "../attachMenu";
   import { openRoomRequest } from "../roomNav";
-  import { AUTODL_DEFAULT } from "../theme";
+  import { AUTODL_DEFAULT, type DblTap } from "../theme";
   import { openPopout } from "../popouts";
   import { startOutgoingCall, callState } from "./CallModal.svelte";
   import { openMediaPicker, closeMediaPicker, pickerState, pickerTab, panelClaimsDrop } from "./MediaPicker.svelte";
@@ -2317,14 +2317,45 @@
     if ((e.target as HTMLElement).closest(TAP_OWN)) return;
     const sel = getSelection();
     if (sel && !sel.isCollapsed && sel.toString().trim()) return;   // tapping off a text selection
-    openTouchMenu(row, e.clientX, e.clientY);
+    // A second tap on the same message soon after: the double-tap action
+    // (exteraGram). With one set, the menu waits a moment for that tap.
+    if (dblPending && dblPending.id === row.id && performance.now() - dblPending.t < 320) {
+      clearTimeout(dblPending.timer); dblPending = null;
+      runDbl(row, "touch");
+      return;
+    }
+    if (dblPending) { clearTimeout(dblPending.timer); dblPending = null; }
+    if (dblOf(row, "touch") === "none") { openTouchMenu(row, e.clientX, e.clientY); return; }
+    const x = e.clientX, y = e.clientY;
+    dblPending = { id: row.id, t: performance.now(), timer: setTimeout(() => { dblPending = null; openTouchMenu(row, x, y); }, 260) };
+  }
+  let dblPending: { id: string; t: number; timer: ReturnType<typeof setTimeout> } | null = null;
+  /** What a double tap on this message does (Settings → Chat settings). */
+  function dblOf(row: Row, by: "mouse" | "touch"): DblTap {
+    const v = (row.outgoing ? $settings.dblTapOut : $settings.dblTapIn) ?? "auto";
+    if (v === "auto") return by === "mouse" ? "reply" : "react";
+    if (v === "edit" && !row.outgoing) return "none";
+    return v;
+  }
+  function runDbl(row: Row, by: "mouse" | "touch") {
+    const a = dblOf(row, by);
+    if (a !== "none") { try { navigator.vibrate?.(8); } catch { /* none */ } }
+    switch (a) {
+      case "react": reactTo(row, "❤️"); break;
+      case "reply": replyRow(row); break;
+      case "copy": void copyRow(row); break;
+      case "forward": forwardRow(row); break;
+      case "save": void saveToFavorites(row, true); break;
+      case "edit": startEdit(row); break;
+      case "delete": void deleteRow(row); break;
+    }
   }
   /** Telegram Desktop: double-click a message to reply to it. */
   function onMsgDblClick(row: Row, e: MouseEvent) {
     if (lastPointerType !== "mouse" || selecting || e.shiftKey || e.ctrlKey || e.metaKey) return;
     if ((e.target as HTMLElement).closest(TAP_OWN)) return;
     getSelection()?.removeAllRanges();             // the word the double-click picked
-    replyRow(row);
+    runDbl(row, "mouse");
   }
   function onMsgContext(e: MouseEvent, row: Row) {
     if (lastPointerType === "touch") {
@@ -3735,6 +3766,7 @@
       bind:this={messagesEl}
       onscroll={onMessagesScroll}
       onpointermove={onMessagesPointerMove}
+      ontouchmove={() => { if ($settings.hideKbOnScroll) { const el = document.activeElement as HTMLElement | null; if (el && el.closest(".composer")) el.blur(); } }}
     >
       {#if draggingOver}
         <div class="drop-hint">

@@ -377,6 +377,9 @@
   });
   const compact = $derived(inServer && !compactPinned && !phone);
   $effect(() => { if (!inServer) compactPinned = false; });
+  const SNOW = Array.from({ length: 34 }, () => ({ x: Math.random() * 100, d: 7 + Math.random() * 9, dl: -Math.random() * 16, s: 2 + Math.random() * 4, dx: (Math.random() - 0.5) * 80 }));
+  // exteraGram "Hide All chats": with folders, open on the first one.
+  $effect(() => { if ($themeSettings.hideAllTab && $folders.length && $activeFolder === "all") activeFolder.set($folders[0].id); });
   // Opening the archive or switching folders means browsing the list:
   // show it wide, with avatars and names.
   $effect(() => { if (showArchive && inServer) compactPinned = true; });
@@ -904,6 +907,12 @@
 {/snippet}
 
 <aside class="list" class:resizing class:compact class:lines3={$chatLines === 3} class:has-active={!!$activeId}>
+  {#if $themeSettings.snow}
+    <!-- exteraGram's snow: a few flakes drifting over the list. -->
+    <div class="snow" aria-hidden="true">
+      {#each SNOW as f, i (i)}<i style:left="{f.x}%" style:--d="{f.d}s" style:--dl="{f.dl}s" style:--s="{f.s}px" style:--dx="{f.dx}px"></i>{/each}
+    </div>
+  {/if}
   {#if compact}
     <button class="compact-expand" onclick={() => (compactPinned = true)} title={$t("Show the chat list")} aria-label={$t("Show the chat list")}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
@@ -918,11 +927,11 @@
       {#if $profile.avatar_url}<img src={$profile.avatar_url} alt="" draggable="false" />{:else}{meLetter}{/if}
     </button>
     {#if IS_MOBILE}{@render stack()}{/if}
-    <span class="m-name">Aquamarine</span>
+    <span class="m-name" class:center={$themeSettings.centerTitle}>{$themeSettings.listTitle === "name" ? ($profile.display_name && $profile.display_name !== "You" ? $profile.display_name : "Aquamarine") : $themeSettings.listTitle === "username" && $info?.username ? "@" + $info.username : "Aquamarine"}</span>
     {#if IS_MOBILE}{@render headExtras()}{/if}
     <!-- The connection: ping when connected, "connecting" otherwise; tap —
          the servers sheet (switch server, see which ones answer). -->
-    {#if $info}
+    {#if $info && !($themeSettings.hideNetBadge && $info.connected)}
       <button class="m-net" class:off={!$info.connected} class:slow={$info.connected && ($ping ?? 0) >= 150} class:bad={$info.connected && ($ping ?? 0) >= 400}
         onclick={openServers} title={$t("Server")} aria-label={$t("Server")}>
         {#if !$info.connected && offlineLink($meshStatus, false)}
@@ -1064,12 +1073,12 @@
       {/each}
     </div>
   {:else if $folders.length > 0}
-    <div class="folder-strip" use:scrollX>
-      <button class="folder-tab" class:active={$activeFolder === "all"} onclick={() => activeFolder.set("all")} oncontextmenu={(e) => openFolderMenu(e, "all")}>{$t("All")}</button>
+    <div class="folder-strip" class:fs-pills={$themeSettings.folderTabStyle === "pills"} class:fs-text={$themeSettings.folderTabStyle === "text"} use:scrollX>
+      {#if !$themeSettings.hideAllTab}<button class="folder-tab" class:active={$activeFolder === "all"} onclick={() => activeFolder.set("all")} oncontextmenu={(e) => openFolderMenu(e, "all")}>{$t("All")}</button>{/if}
       {#each $folders as f (f.id)}
         {@const unread = $visibleChats.filter((c) => (c.unread > 0) && !$mutedChats.has(c.id) && folderHas(f, factsOf(c))).length}
         <button class="folder-tab" class:active={$activeFolder === f.id} onclick={() => activeFolder.set(f.id)} oncontextmenu={(e) => openFolderMenu(e, f.id)}>
-          {#if f.emoji}<span class="ft-emoji">{f.emoji}</span>{/if}{f.name}{#if unread > 0}<span class="ft-count">{unread}</span>{/if}
+          {#if f.emoji}<span class="ft-emoji">{f.emoji}</span>{/if}{f.name}{#if unread > 0 && $themeSettings.folderCounters !== false}<span class="ft-count">{unread}</span>{/if}
         </button>
       {/each}
       <button class="folder-edit" onclick={openFolderManager} title={$t("Manage folders")}>+</button>
@@ -1960,6 +1969,15 @@
   .folder-tab:hover { color: var(--fg); background: var(--bg-hover); }
   .folder-tab.active { color: var(--accent); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 25%, transparent); }
   .ft-emoji { margin-right: 4px; }
+  .snow { position: absolute; inset: 0; z-index: 4; pointer-events: none; overflow: hidden; }
+  .snow i { position: absolute; top: -10px; width: var(--s); height: var(--s); border-radius: 50%; background: #fff; opacity: .75; filter: blur(.4px);
+    animation: snow var(--d) linear var(--dl) infinite; }
+  @keyframes snow { to { transform: translate(var(--dx), calc(100vh + 20px)); } }
+  :global(html.reduce-motion) .snow { display: none; }
+  /* exteraGram's tab styles: round pills, or just words with an underline. */
+  .folder-strip.fs-pills .folder-tab { border-radius: 999px; }
+  .folder-strip.fs-text .folder-tab { background: transparent; border-color: transparent; border-radius: 0; padding-left: 6px; padding-right: 6px; box-shadow: inset 0 -2px 0 transparent; }
+  .folder-strip.fs-text .folder-tab.active { background: transparent; border-color: transparent; box-shadow: inset 0 -2.5px 0 var(--accent); }
   /* Stories strip. */
   .stories-wrap { overflow: hidden; flex-shrink: 0; }
   .stories-wrap.anim { transition: height .26s cubic-bezier(.2,.9,.25,1); }
@@ -2307,6 +2325,7 @@
     .acc-add { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: none; background: transparent; color: var(--accent); font: 600 16px var(--font-ui); border-radius: calc(16px * var(--rk, 1)); text-align: left; }
     .acc-plus { width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; font-size: 24px; background: var(--accent-soft); }
     .acc-note { font-size: 12.5px; color: var(--fg-dim); padding: 6px 12px 0; line-height: 1.4; }
+    .m-name.center { flex: 1; text-align: center; }
     .m-name { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; font-family: var(--font-display, inherit); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .m-menu { margin-left: auto; width: 34px; height: 34px; border-radius: 50%; border: none; background: transparent; color: var(--fg); display: grid; place-items: center; }
     .m-menu svg { width: 18px; height: 18px; }
