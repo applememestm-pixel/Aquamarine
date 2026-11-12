@@ -345,6 +345,7 @@ pub fn run() -> Result<()> {
             multidev::remove_device,
             multidev::rename_device,
             commands::delete_group_message_of,
+            commands::message_keys,
             commands::profile_media_path,
             commands::add_media_files,
             commands::delete_media_item,

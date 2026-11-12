@@ -108,8 +108,10 @@
     lazy?: boolean;
     /** A custom emoji (Power saving → "Animated emoji" decides, not stickers). */
     emoji?: boolean;
+    /** The picture didn't load (a file gone from disk): the alt text shows instead. */
+    onbroken?: (src: string) => void;
   }
-  let { src, mime = null, alt = "", play: playProp = "auto", fit = "contain", class: klass = "", lazy = false, emoji = false }: Props = $props();
+  let { src, mime = null, alt = "", play: playProp = "auto", fit = "contain", class: klass = "", lazy = false, emoji = false, onbroken }: Props = $props();
   // Power saving: animated stickers / emoji off → they play on hover only.
   const allowed = $derived(emoji ? $power.emoji : $settings.autoplayStickers && $power.stickers);
   const play = $derived(playProp === "auto" && !allowed ? "hover" : playProp);
@@ -125,6 +127,8 @@
     void mediaSupport().then((m) => { if (m.blocking.length) failed = true; else videoOk = true; });
   });
   let failed = $state(false);
+  // A new source gets its own try.
+  $effect(() => { void src; failed = false; });
   /** Big grids: a player (Lottie canvas or video decoder) only for cells
    *  near the screen. Building hundreds at once took gigabytes of memory
    *  and froze the app when the sticker panel opened. */
@@ -204,12 +208,12 @@
   onmouseleave={() => { hovering = false; if (play === "hover") sync(); }}
 >
   {#if kind === "image" || failed}
-    {#if !failed}<img {src} {alt} draggable="false" loading={lazy ? "lazy" : "eager"} decoding="async" />{:else}<span class="fallback">{alt}</span>{/if}
+    {#if !failed}<img {src} {alt} draggable="false" loading={lazy ? "lazy" : "eager"} decoding="async" onerror={() => { failed = true; onbroken?.(src); }} />{:else}<span class="fallback">{alt}</span>{/if}
   {:else if kind === "video" && videoOk && near}
     <!-- Local files go through the loopback media server: WebKitGTK hangs
          on <video> straight from the asset protocol (lib/media.ts). -->
     <video bind:this={video} use:streamSrc={src} muted loop playsinline preload="metadata"
-      onloadeddata={() => sync()} onerror={() => (failed = true)}></video>
+      onloadeddata={() => sync()} onerror={() => { failed = true; onbroken?.(src); }}></video>
   {/if}
 </div>
 

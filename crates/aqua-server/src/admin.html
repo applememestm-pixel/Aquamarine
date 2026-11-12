@@ -250,6 +250,15 @@
   #detHint,#jsum{font-size:12.5px;color:var(--fg-dim)}
   .stat.click .l::after{content:" ›";opacity:.5}
   .code-row.unseen{border-color:rgba(0,229,199,.55);box-shadow:0 0 22px -10px var(--accent-glow)}
+  .host-card{margin-bottom:18px}
+  .host-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;margin-top:10px}
+  .hg{padding:10px 12px;border-radius:11px;background:var(--void);border:1px solid var(--line);min-width:0}
+  .hg .k{font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--fg-dim,#8892A6);margin-bottom:4px}
+  .hg .v{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hg .s{font-size:12px;color:var(--fg-dim,#8892A6);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hg .m{height:5px;border-radius:99px;background:var(--line);margin-top:7px;overflow:hidden}
+  .hg .m i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--accent),#7B5CFF)}
+  .hg .m i.hot{background:linear-gradient(90deg,#FFB067,#FF4D6D)}
   .dl{display:flex;flex-direction:column;gap:6px;max-height:60vh;overflow:auto;margin-top:10px}
   .dl-row{display:flex;align-items:center;gap:12px;padding:9px 12px;border-radius:11px;background:var(--void);border:1px solid var(--line);font-size:13.5px}
   .dl-row .main{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -381,6 +390,15 @@
         </div>
       </div>
       <div class="stats" id="stats"></div>
+      <div class="card rv host-card">
+        <h2><span data-t="Machine">Machine</span> <span class="hint" id="hostKind"></span></h2>
+        <div class="host-grid" id="hostGrid"><div class="empty">…</div></div>
+        <div class="row mt" id="powerRow">
+          <button class="btn ghost" onclick="power('restart')" data-t="Restart the server">Restart the server</button>
+          <button class="btn ghost" style="color:#ff6b6b" onclick="power('stop')" data-t="Stop the server">Stop the server</button>
+        </div>
+        <div class="note" id="powerMsg"></div>
+      </div>
       <div class="two">
         <div class="card rv">
           <h2><span data-t="Connect">Connect</span> <span class="hint" data-t="type this into the app's Server field">type this into the app's Server field</span></h2>
@@ -644,6 +662,14 @@
   // ---- language: Russian when the browser is Russian ----
   const RU = /^ru\b/i.test(navigator.language || "");
   const DICT = {
+    "Machine":"Машина","Restart the server":"Перезапустить сервер","Stop the server":"Выключить сервер",
+    "server":"сервер","PC":"компьютер","phone":"телефон","System":"Система","Processor":"Процессор","Memory":"Память","Disk":"Диск","Network":"Сеть",
+    "Machine is up":"Машина работает","This server":"Этот сервер","Load":"Нагрузка","cores":"ядер","free":"свободно","of":"из","received":"принято","sent":"отправлено",
+    "threads":"потоков","under systemd":"через systemd","Restart the server? Everyone reconnects in a few seconds.":"Перезапустить сервер? Все переподключатся через несколько секунд.",
+    "Stop the server? Nobody can connect until it is started again on the machine.":"Выключить сервер? Никто не сможет подключиться, пока его снова не запустят на машине.",
+    "Restarting…":"Перезапуск…","Stopped. Start it again on the machine: systemctl start {u}":"Выключен. Запустить снова на машине: systemctl start {u}",
+    "Stopped. Start it again on the machine.":"Выключен. Запустите его снова на машине.",
+    "Stop and restart are in the server app here (Start / Stop).":"Здесь включение и выключение — в приложении сервера (Запустить / Остановить).",
     "Clear the server":"Очистить сервер","Clear…":"Очистить…",
     "wipeNote":"Стирает выбранное прямо сейчас, без возврата. Сервер продолжает работать. Не трогается: настройки, почта, Telegram, музыка, сеть серверов.",
     "wpPeople":"Все люди — их аккаунты целиком, а боты и их чаты остаются","wipeConfirmPeople":"Стереть всех людей? Все выйдут и должны будут зарегистрироваться заново. Боты остаются. Отменить нельзя.",
@@ -1276,9 +1302,44 @@
     } catch(e){ msg("fMsg", T("Not saved: ") + e.message, "err"); }
   }
 
+  // ---- the machine (GET /v1/admin/host) and stop / restart ----
+  let hostAt = 0;
+  async function loadHost(){
+    if (Date.now() - hostAt < 8000 || $("hostGrid").closest(".page")?.classList.contains("hide")) return;
+    hostAt = Date.now();
+    let h; try { h = await api("/v1/admin/host"); } catch { return; }
+    const pct = (a, b) => (a != null && b) ? Math.max(0, Math.min(100, a * 100 / b)) : null;
+    const meter = (p) => p == null ? "" : `<div class="m"><i class="${p > 85 ? "hot" : ""}" style="width:${p.toFixed(1)}%"></i></div>`;
+    const cell = (k, v, sub = "", p = null) => `<div class="hg"><div class="k">${esc(T(k))}</div><div class="v" title="${esc(v)}">${esc(v || "—")}</div>${sub ? `<div class="s" title="${esc(sub)}">${esc(sub)}</div>` : ""}${meter(p)}</div>`;
+    const kindName = { server: "server", pc: "PC", phone: "phone" }[h.kind] || h.kind;
+    $("hostKind").textContent = [T(kindName), h.hostname].filter(Boolean).join(" · ");
+    const memUsed = h.mem_total != null && h.mem_avail != null ? h.mem_total - h.mem_avail : null;
+    const cells = [
+      cell("System", h.os, [h.kernel, h.arch].filter(Boolean).join(" · ")),
+      cell("Processor", h.cpu_pct != null ? `${h.cpu_pct.toFixed(0)}%` : (h.cpu || "—"), [h.cpu, `${h.cores} ${T("cores")}`, h.load ? `${T("Load")} ${h.load.map((x) => x.toFixed(2)).join(" ")}` : ""].filter(Boolean).join(" · "), h.cpu_pct),
+      cell("Memory", memUsed != null ? `${human(memUsed)} ${T("of")} ${human(h.mem_total)}` : "—", h.swap_total ? `swap ${human(h.swap_total - (h.swap_free || 0))} ${T("of")} ${human(h.swap_total)}` : "", pct(memUsed, h.mem_total)),
+      cell("Disk", h.disk_total ? `${human(h.disk_used)} ${T("of")} ${human(h.disk_total)}` : "—", h.disk_free != null ? `${human(h.disk_free)} ${T("free")}` : "", pct(h.disk_used, h.disk_total)),
+      cell("Network", h.net_rx != null ? `↓ ${human(h.net_rx)}  ↑ ${human(h.net_tx)}` : "—", h.net_rx != null ? `${T("received")} / ${T("sent")}` : ""),
+      cell("Machine is up", h.host_uptime != null ? dur(h.host_uptime) : "—"),
+      cell("This server", h.proc_rss != null ? human(h.proc_rss) : "—", [`PID ${h.pid}`, h.proc_threads ? `${h.proc_threads} ${T("threads")}` : "", h.systemd ? `${T("under systemd")} (${h.systemd})` : ""].filter(Boolean).join(" · ")),
+    ];
+    $("hostGrid").innerHTML = cells.join("");
+    $("powerRow").classList.toggle("hide", !h.power);
+    if (!h.power) msg("powerMsg", T("Stop and restart are in the server app here (Start / Stop)."));
+    power.unit = h.systemd || "";
+  }
+  async function power(action){
+    const ask = action === "restart" ? "Restart the server? Everyone reconnects in a few seconds." : "Stop the server? Nobody can connect until it is started again on the machine.";
+    if (!confirm(T(ask))) return;
+    try {
+      await api("/v1/admin/power", { method: "POST", body: JSON.stringify({ action }) });
+      msg("powerMsg", action === "restart" ? T("Restarting…") : (power.unit ? T("Stopped. Start it again on the machine: systemctl start {u}").replace("{u}", power.unit.replace(/\.service$/, "")) : T("Stopped. Start it again on the machine.")), "ok");
+    } catch (e) { msg("powerMsg", String(e.message || e), "bad"); }
+  }
+
   async function tick(){
     if (!TOKEN) { $("gate").classList.remove("hide"); pill("", T("locked")); bootDone(); return; }
-    try { await refresh(); paintWipe(); if (!mailLoaded) loadMail(); if (!tgLoaded) loadTg(); if (!fedLoaded) loadFed(); }
+    try { await refresh(); paintWipe(); void loadHost(); if (!mailLoaded) loadMail(); if (!tgLoaded) loadTg(); if (!fedLoaded) loadFed(); }
     catch(e){
       if (e.message === "bad token") { signOut(); }
       else { pill("down", T("server not reachable")); bootDone(); }

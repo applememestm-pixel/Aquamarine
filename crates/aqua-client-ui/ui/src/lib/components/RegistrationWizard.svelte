@@ -27,6 +27,39 @@
   import { applyUiState, refreshBackup } from "../backup";
   import { accounts, loadAccounts, switchAccount } from "../accounts";
   import { confirmWithTelegram } from "../tgLogin";
+  import { fly, fade } from "svelte/transition";
+
+  /**
+   * Sign-up like Telegram: a welcome page, then one thing per page with
+   * "Next" — @username, name, password, server — and beside it one of the
+   * messenger's advantages per page, animated. The last page explains what
+   * a server is and how it's chosen.
+   */
+  let page = $state(0);
+  /** Which way the pages slide (1 forward, -1 back). */
+  let dir = $state(1);
+  const PAGES = 4;
+  function go(n: number) { dir = n >= page ? 1 : -1; error = null; existsHint = false; boundHint = false; page = Math.max(0, Math.min(PAGES, n)); }
+  $effect(() => { if ($wizardOpen) { page = 0; dir = 1; } });
+  /** "Next": check this page, then the next one (the last creates the account). */
+  function next() {
+    error = null;
+    if (page === 1 && !/^[a-z0-9_.]{3,32}$/.test(login)) { error = tr("@username: 3–32 characters, a-z 0-9 _ . only"); return; }
+    if (page === 3) {
+      if (!(passUser && !password) && password.length < 8) { error = tr("Password must be at least 8 characters"); return; }
+      if (password !== password2) { error = tr("Passwords don't match"); return; }
+    }
+    if (page < PAGES) { go(page + 1); return; }
+    void submit();
+  }
+  /** One advantage per page (the welcome page shows the first). */
+  const ADV = [
+    { ic: "lock", title: "Private by design", text: "Messages are end-to-end encrypted (X3DH · Double Ratchet). Not even the server can read them." },
+    { ic: "at", title: "No phone, no e-mail", text: "Just an @username. Nobody needs your number to write to you." },
+    { ic: "palette", title: "Make it yours", text: "Themes, name colours, stickers, emoji and wallpapers — for you and for the people you talk to." },
+    { ic: "key", title: "Your keys stay with you", text: "Keys are made and kept on this device. Two-step verification adds your other devices." },
+    { ic: "net", title: "Any server, one network", text: "The public server, a friend's or your own — your account works on every server of the network." },
+  ] as const;
 
   // Opened by "Add account": the other accounts on this device stay one tap away.
   $effect(() => { if ($wizardOpen) void loadAccounts(); });
@@ -168,6 +201,8 @@
   let busy = $state(false);
   let error = $state<string | null>(null);
   let mode = $state<"signup" | "signin">("signup");
+  /** The advantage beside this page (sign-in: "your keys stay with you"). */
+  const adv = $derived(ADV[mode === "signup" ? page : 3]);
   /** The @username is taken: offer to sign in. */
   let existsHint = $state(false);
   /** The account lives on another device (no two-step verification). */
@@ -243,6 +278,8 @@
       closeRegistration();
     } catch (e) {
       error = plainError(String(e));
+      // Back to the page the problem is on (the server page shows the rest).
+      if (/already taken|username must be|already registered from this network/i.test(String(e))) { const m = error; go(1); error = m; existsHint = /already/.test(String(e)); }
       wizardHold.set(false);
     } finally {
       busy = false;
@@ -337,14 +374,31 @@
   <div class="backdrop">
     <div class="sheet login" role="dialog" aria-modal="true" tabindex="-1">
       <aside class="hero">
-        <img class="logo-lg" src={$appIconUrl} alt="" draggable="false" />
-        <h1 class="hero-title">{$t("Aquamarine")}</h1>
-        <p class="hero-tag">{$t("An open, end-to-end encrypted messenger. Your keys never leave this device.")}</p>
-        <ul class="hero-feat">
-          <li>{@html icons.lock}<span>{$t("X3DH · Double Ratchet encryption")}</span></li>
-          <li><span class="hf-ic">⌁</span><span>{$t("Connect to any server by address — host your own")}</span></li>
-          <li><span class="hf-ic">✦</span><span>{$t("Stickers, polls, calls, themes — all yours")}</span></li>
-        </ul>
+        <div class="hero-brand"><img class="logo-lg" src={$appIconUrl} alt="" draggable="false" /><b class="hero-title">{$t("Aquamarine")}</b></div>
+        {#key adv.ic}
+          <div class="adv" in:fly={{ y: 16, duration: 380, delay: 80 }} out:fade={{ duration: 120 }}>
+            <div class="adv-ic {adv.ic}" aria-hidden="true">
+              {#if adv.ic === "lock"}
+                <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path class="shackle" d="M15 21v-6a9 9 0 0 1 18 0v6"/><rect x="10" y="21" width="28" height="20" rx="5"/><circle cx="24" cy="31" r="2.6" fill="currentColor"/></svg>
+              {:else if adv.ic === "at"}
+                <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><circle cx="24" cy="24" r="7"/><path class="ring" d="M31 24v3a5 5 0 0 0 10 0v-3a17 17 0 1 0-6.6 13.4"/></svg>
+              {:else if adv.ic === "palette"}
+                <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M24 6a18 18 0 0 0 0 36c2.5 0 3.5-2 2.6-4-1-2.4.6-4.6 3-4.6H34a8 8 0 0 0 8-8C42 14 34 6 24 6z"/><circle class="d1" cx="15" cy="21" r="2.8" fill="#FF6B6B" stroke="none"/><circle class="d2" cx="21" cy="13.5" r="2.8" fill="#FFD43B" stroke="none"/><circle class="d3" cx="30" cy="14" r="2.8" fill="#51CF66" stroke="none"/><circle class="d4" cx="34.5" cy="21.5" r="2.8" fill="#4DABF7" stroke="none"/></svg>
+              {:else if adv.ic === "key"}
+                <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="16" cy="30" r="8"/><path d="M22 24 38 8M32 14l5 5M28 18l4 4"/></svg>
+              {:else}
+                <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><circle cx="24" cy="10" r="5"/><circle cx="10" cy="36" r="5"/><circle cx="38" cy="36" r="5"/><path class="link1" d="M21.5 14.5 12.5 31.5M26.5 14.5l9 17M15 36h18"/></svg>
+              {/if}
+            </div>
+            <div class="adv-t">
+              <h2 class="adv-title">{$t(adv.title)}</h2>
+              <p class="adv-text">{$t(adv.text)}</p>
+            </div>
+          </div>
+        {/key}
+        {#if mode === "signup"}
+          <div class="hero-dots" aria-hidden="true">{#each ADV as _, i (i)}<i class:on={i === page}></i>{/each}</div>
+        {/if}
       </aside>
 
       <div class="panel">
@@ -357,55 +411,68 @@
         </div>
       {/if}
 
-      {#if step === 1 && $info?.registered && $info?.username}
-        <div class="continue-box">
-          <div class="cb-label">{$t("Already registered on this device")}</div>
-          <button class="continue-btn" onclick={continueAs} disabled={busy}>
-            {busy ? $t("Signing in…") : $t("Continue as @{name}", { name: $info.username ?? "" })}
-          </button>
-          <div class="cb-or"><span>{$t("or register / log in below")}</span></div>
-        </div>
-      {/if}
-
-      {#if step === 1 && otherAccounts.length && !$info?.registered}
-        <div class="other-acc">
-          {#each otherAccounts as a (a.slot)}
-            <button class="link" disabled={leaving} onclick={() => backTo(a.slot)}>← {$t("Back to @{name}", { name: a.username ?? "" })}</button>
-          {/each}
-        </div>
-      {/if}
-
-      {#if step === 1}
-        <div class="mode-tabs">
-          <button class:on={mode === "signup"} onclick={() => { mode = "signup"; error = null; existsHint = false; boundHint = false; }}>{$t("Create account")}</button>
-          <button class:on={mode === "signin"} onclick={() => { mode = "signin"; error = null; existsHint = false; boundHint = false; }}>{$t("Sign in")}</button>
-        </div>
-        <form class="form" onsubmit={(e) => { e.preventDefault(); void submit(); }}>
-          <label class="field">
-            <span>@username{passUser ? " · " + $t("from your server") : ""}</span>
-            <div class="at-in"><i>@</i>
-              <input bind:value={username} autocomplete="username" autocapitalize="none" spellcheck="false" readonly={!!passUser}
-                     placeholder={mode === "signup" ? $t("ivan2027") : $t("username")} oninput={() => { if (mode === "signup") username = username.toLowerCase().replace(/^@/, ""); }} />
+      {#if step === 1 && mode === "signup" && page === 0}
+        <!-- Welcome: Telegram's "Start Messaging" page. -->
+        <div class="intro" in:fly={{ x: -40 * dir, duration: 260 }}>
+          <img class="intro-logo" src={$appIconUrl} alt="" draggable="false" />
+          <h1>{$t("Welcome to Aquamarine")}</h1>
+          <p>{$t("A fast, private messenger with end-to-end encryption. It takes a minute to set up.")}</p>
+          {#if $info?.registered && $info?.username}
+            <button class="continue-btn" onclick={continueAs} disabled={busy}>
+              {busy ? $t("Signing in…") : $t("Continue as @{name}", { name: $info.username ?? "" })}
+            </button>
+          {/if}
+          {#if otherAccounts.length && !$info?.registered}
+            <div class="other-acc">
+              {#each otherAccounts as a (a.slot)}
+                <button class="link" disabled={leaving} onclick={() => backTo(a.slot)}>← {$t("Back to @{name}", { name: a.username ?? "" })}</button>
+              {/each}
             </div>
-          </label>
-          {#if mode === "signup"}
+          {/if}
+          <button class="primary big" onclick={() => go(1)}>{$t("Create account")}</button>
+          <button class="ghost big" onclick={() => { mode = "signin"; error = null; }}>{$t("I already have an account")}</button>
+          <button class="link skip" onclick={skipForNow}>{$t("Skip")}</button>
+        </div>
+      {:else if step === 1 && mode === "signup"}
+        <div class="pager">
+          <button class="pg-back" type="button" onclick={() => go(page - 1)} aria-label={$t("Back")}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+          <div class="pg-bar"><i style:width="{(page / PAGES) * 100}%"></i></div>
+          <span class="pg-n">{page} / {PAGES}</span>
+        </div>
+        <form class="form" onsubmit={(e) => { e.preventDefault(); next(); }}>
+          {#key page}
+          <div class="pg" in:fly={{ x: 46 * dir, duration: 260 }}>
+          {#if page === 1}
+            <h2 class="pg-title">{$t("Choose a @username")}</h2>
+            <p class="note">{$t("People find and write to you by it. 3–32 characters: a-z, 0-9, _ and dots.")}</p>
+            <label class="field">
+              <span>@username{passUser ? " · " + $t("from your server") : ""}</span>
+              <div class="at-in"><i>@</i>
+                <!-- svelte-ignore a11y_autofocus -->
+                <input bind:value={username} autocomplete="username" autocapitalize="none" spellcheck="false" readonly={!!passUser} autofocus
+                       placeholder={$t("ivan2027")} oninput={() => { username = username.toLowerCase().replace(/^@/, ""); }} />
+              </div>
+            </label>
+          {:else if page === 2}
+            <h2 class="pg-title">{$t("What's your name?")}</h2>
+            <p class="note">{$t("Shown in chats instead of the @username. You can skip it and change it any time.")}</p>
             <label class="field">
               <span>{$t("Name (optional)")}</span>
-              <input bind:value={displayName} autocomplete="nickname" placeholder="Иван" />
+              <!-- svelte-ignore a11y_autofocus -->
+              <input bind:value={displayName} autocomplete="nickname" placeholder="Иван" autofocus />
             </label>
-          {/if}
-          <label class="field">
-            <span>{$t("Password")}</span>
-            <div class="pw">
-              <input bind:value={password} type={showPw ? "text" : "password"} autocomplete={mode === "signin" ? "current-password" : "new-password"}
-                     placeholder={mode === "signin" ? "" : $t("At least 8 characters")} />
-              <button class="pw-eye" type="button" onclick={() => (showPw = !showPw)} title={showPw ? $t("Hide") : $t("Show")}>{showPw ? "◉" : "◎"}</button>
-            </div>
-            {#if mode === "signup" && password}
-              <span class="pw-meter"><i style:width="{pwScore * 20}%" class:ok={pwScore >= 3}></i></span>
-            {/if}
-          </label>
-          {#if mode === "signup"}
+          {:else if page === 3}
+            <h2 class="pg-title">{$t("Set a password")}</h2>
+            <label class="field">
+              <span>{$t("Password")}</span>
+              <div class="pw">
+                <!-- svelte-ignore a11y_autofocus -->
+                <input bind:value={password} type={showPw ? "text" : "password"} autocomplete="new-password" autofocus placeholder={$t("At least 8 characters")} />
+                <button class="pw-eye" type="button" onclick={() => (showPw = !showPw)} title={showPw ? $t("Hide") : $t("Show")}>{showPw ? "◉" : "◎"}</button>
+              </div>
+              {#if password}<span class="pw-meter"><i style:width="{pwScore * 20}%" class:ok={pwScore >= 3}></i></span>{/if}
+            </label>
             <label class="field">
               <span>{$t("Repeat password")}</span>
               <input bind:value={password2} type={showPw ? "text" : "password"} autocomplete="new-password" />
@@ -414,7 +481,6 @@
             {#if tg}
               <p class="note tg-ok">✓ {$t("Telegram {name} will be linked: it confirms sign-ins on new devices, and the account isn't tied to this device.", { name: tg.name })}</p>
             {:else}
-              <p class="note dim">{$t("Without two-step verification a lost device means a lost account — there is no recovery.")}</p>
               <button class="tg-btn" type="button" disabled={tgWaiting} onclick={() => telegram("signup")}>
                 <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21.9 4.6 18.7 19.7c-.2 1-.9 1.3-1.8.8l-4.9-3.6-2.4 2.3c-.3.3-.5.5-1 .5l.3-5 9.1-8.2c.4-.4-.1-.6-.6-.2L6.2 13.4l-4.8-1.5c-1-.3-1-1 .2-1.5L20.6 3.3c.9-.3 1.6.2 1.3 1.3z"/></svg>
                 {tgWaiting ? $t("Waiting for Telegram… tap Start in the bot") : $t("Link Telegram — it lets you sign in on other devices")}
@@ -422,17 +488,59 @@
               {#if tgWaiting && tgLink}<button class="link" type="button" onclick={() => api.openExternal(tgLink).catch(() => {})}>{$t("Open the bot again")} →</button>{/if}
             {/if}
           {:else}
-            <p class="note">{$t("A new device can be added only to an account with two-step verification: you'll be asked for a code from your authenticator app.")}</p>
+            <h2 class="pg-title">{$t("Choose a server")}</h2>
+            <!-- What a server is and how it's chosen — the question everyone has. -->
+            <ul class="srv-explain">
+              <li><b>{$t("What is it?")}</b> {$t("A server is the relay that passes your messages along. It can't read them: they're encrypted on your device and opened only on the other person's.")}</li>
+              <li><b>{$t("Which one?")}</b> {$t("Leave the public Aquamarine server if you don't know — it suits everyone. Got an address or a QR code from a friend, a community, or your own server? Use that.")}</li>
+              <li><b>{$t("Does it matter?")}</b> {$t("Servers join into networks: the account works on every server of its network, and people on other servers can still write to you. You can switch later — it changes only the route.")}</li>
+            </ul>
+            <div class="field">
+              <span>{$t("Server")} {inviteFor(serverUrl) ? "· " + $t("invitation ✓") : ""}</span>
+              <ServerPicker bind:value={serverUrl} placeholder={DEFAULT_SERVER}
+                defaults={[PUBLIC_SERVER, IS_ANDROID ? "http://10.0.2.2:7777" : "http://127.0.0.1:7777"]} />
+              <input class="inv-in" bind:value={inviteText} autocomplete="off" spellcheck="false"
+                     placeholder={$t("Invitation code or pass (private servers)")} />
+              <button class="scan-inv" type="button" onclick={scanInvite}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg>
+                {$t("Scan a server or invitation QR")}
+              </button>
+            </div>
           {/if}
+          </div>
+          {/key}
+          <div class="actions">
+            <button class="primary big" type="submit" disabled={busy}>
+              {busy ? $t("Registering…") : page < PAGES ? $t("Next") : $t("Create account")}
+            </button>
+          </div>
+        </form>
+      {:else if step === 1}
+        <div class="pager">
+          <button class="pg-back" type="button" onclick={() => { mode = "signup"; go(0); }} aria-label={$t("Back")}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+          <h2 class="pg-title inline">{$t("Sign in")}</h2>
+        </div>
+        <form class="form" onsubmit={(e) => { e.preventDefault(); void submit(); }} in:fly={{ x: 46, duration: 260 }}>
+          <label class="field">
+            <span>@username</span>
+            <div class="at-in"><i>@</i>
+              <input bind:value={username} autocomplete="username" autocapitalize="none" spellcheck="false" placeholder={$t("username")} />
+            </div>
+          </label>
+          <label class="field">
+            <span>{$t("Password")}</span>
+            <div class="pw">
+              <input bind:value={password} type={showPw ? "text" : "password"} autocomplete="current-password" />
+              <button class="pw-eye" type="button" onclick={() => (showPw = !showPw)} title={showPw ? $t("Hide") : $t("Show")}>{showPw ? "◉" : "◎"}</button>
+            </div>
+          </label>
+          <p class="note">{$t("A new device can be added only to an account with two-step verification: you'll be asked for a code from your authenticator app.")}</p>
           <details class="srv">
-            <summary><span class="srv-k">{$t("Server")}</span> <b>{serverUrl.replace(/^https?:\/\//, "")}</b> {inviteFor(serverUrl) ? "· " + $t("invitation ✓") : ""}<span class="srv-ch">{$t("Change")}</span></summary>
+            <summary><span class="srv-k">{$t("Server")}</span> <b>{serverUrl.replace(/^https?:\/\//, "")}</b><span class="srv-ch">{$t("Change")}</span></summary>
             <div class="field">
               <ServerPicker bind:value={serverUrl} placeholder={DEFAULT_SERVER}
                 defaults={[PUBLIC_SERVER, IS_ANDROID ? "http://10.0.2.2:7777" : "http://127.0.0.1:7777"]} />
-              {#if mode === "signup"}
-                <input class="inv-in" bind:value={inviteText} autocomplete="off" spellcheck="false"
-                       placeholder={$t("Invitation code or pass (private servers)")} />
-              {/if}
               <button class="scan-inv" type="button" onclick={scanInvite}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg>
                 {$t("Scan a server or invitation QR")}
@@ -440,10 +548,8 @@
             </div>
           </details>
           <div class="actions">
-            <button class="ghost" type="button" onclick={skipForNow}>{$t("Skip")}</button>
-            <button class="primary" type="submit" disabled={busy}>
-              {busy ? $t(mode === "signup" ? "Registering…" : "Signing in…") : $t(mode === "signup" ? "Create account" : "Sign in")}
-            </button>
+            <button class="ghost" type="button" onclick={() => { mode = "signup"; go(1); }}>{$t("Create account")}</button>
+            <button class="primary" type="submit" disabled={busy}>{busy ? $t("Signing in…") : $t("Sign in")}</button>
           </div>
         </form>
       {:else if step === 7}
@@ -548,9 +654,6 @@
   .rk-words li { display: flex; gap: 6px; align-items: baseline; }
   .rk-words li span { color: var(--fg-dim); font-size: 11px; min-width: 16px; text-align: right; }
   .rk-ok { display: flex; align-items: center; gap: 8px; font-size: 13.5px; cursor: pointer; }
-  .mode-tabs { display: flex; gap: 4px; background: var(--bg-input); border-radius: calc(12px * var(--rk, 1)); padding: 4px; margin-bottom: 14px; }
-  .mode-tabs button { flex: 1; border: none; background: none; color: var(--fg-muted); font: inherit; font-weight: 700; font-size: 13.5px; padding: 9px; border-radius: calc(9px * var(--rk, 1)); cursor: pointer; }
-  .mode-tabs button.on { background: var(--bg-shell); color: var(--accent); box-shadow: 0 0 0 1px var(--border-strong), 0 4px 14px -6px var(--accent-glow); }
   .pw { position: relative; display: flex; }
   .field .pw input, .pw input { flex: 1; padding-right: 38px; }
   .pw-eye { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--fg-dim); font-size: 16px; cursor: pointer; }
@@ -585,29 +688,85 @@
     overflow: hidden;
   }
   .hero {
-    padding: 34px 30px;
+    padding: 26px 30px;
+    gap: 14px;
     background:
       radial-gradient(600px 400px at 20% 0%, var(--accent-soft), transparent 60%),
       linear-gradient(160deg, color-mix(in srgb, var(--accent) 12%, var(--bg-list)), var(--bg-list));
     border-right: 1px solid var(--border);
     display: flex; flex-direction: column;
   }
+  .hero-brand { display: flex; align-items: center; gap: 10px; }
   .logo-lg {
-    width: 56px; height: 56px; border-radius: calc(16px * var(--rk, 1));
+    width: 34px; height: 34px; border-radius: calc(10px * var(--rk, 1));
     display: block;
-    box-shadow: 0 0 30px -4px var(--accent-glow);
-    margin-bottom: 18px;
+    box-shadow: 0 0 22px -4px var(--accent-glow);
   }
-  .hero-title { margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -0.02em; }
-  .hero-tag { margin: 8px 0 22px; font-size: 13px; color: var(--fg-muted); line-height: 1.55; }
-  .hero-feat { list-style: none; margin: auto 0 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
-  .hero-feat li { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--fg); }
-  .hero-feat :global(svg) { width: 16px; height: 16px; color: var(--accent); flex-shrink: 0; }
-  .hf-ic { width: 16px; text-align: center; color: var(--accent); flex-shrink: 0; }
+  .hero-title { font-size: 17px; font-weight: 800; letter-spacing: -0.01em; }
+  /* One advantage per page, animated (Telegram's intro). */
+  .adv { margin: auto 0; display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+  .adv-ic { width: 92px; height: 92px; display: grid; place-items: center; color: var(--accent); border-radius: calc(26px * var(--rk, 1));
+    background: radial-gradient(circle at 30% 25%, color-mix(in srgb, var(--accent) 30%, transparent), color-mix(in srgb, var(--accent) 8%, transparent));
+    box-shadow: 0 14px 40px -14px var(--accent-glow); animation: adv-bob 4s ease-in-out infinite; margin-bottom: 8px; }
+  .adv-ic svg { width: 52px; height: 52px; overflow: visible; }
+  @keyframes adv-bob { 50% { transform: translateY(-6px) rotate(-2deg); } }
+  .adv-ic.lock .shackle { animation: adv-shackle 2.6s ease-in-out infinite; transform-origin: 33px 21px; }
+  @keyframes adv-shackle { 0%, 55%, 100% { transform: translateY(0); } 70% { transform: translateY(-4px); } }
+  .adv-ic.at .ring { stroke-dasharray: 110; animation: adv-draw 2.8s ease-in-out infinite; }
+  @keyframes adv-draw { 0% { stroke-dashoffset: 110; } 50%, 100% { stroke-dashoffset: 0; } }
+  .adv-ic.palette circle { animation: adv-pop 2.4s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+  .adv-ic.palette .d2 { animation-delay: .2s; } .adv-ic.palette .d3 { animation-delay: .4s; } .adv-ic.palette .d4 { animation-delay: .6s; }
+  @keyframes adv-pop { 0%, 60%, 100% { transform: scale(1); } 30% { transform: scale(1.45); } }
+  .adv-ic.key svg { animation: adv-turn 3s ease-in-out infinite; transform-origin: 16px 30px; }
+  @keyframes adv-turn { 0%, 60%, 100% { transform: rotate(0); } 75% { transform: rotate(-18deg); } 90% { transform: rotate(6deg); } }
+  .adv-ic.net .link1 { stroke-dasharray: 4 5; animation: adv-flow 1s linear infinite; }
+  @keyframes adv-flow { to { stroke-dashoffset: -18; } }
+  .adv-t { display: flex; flex-direction: column; gap: 8px; }
+  .adv-title { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.15; }
+  .adv-text { margin: 0; font-size: 13.5px; color: var(--fg-muted); line-height: 1.55; max-width: 34ch; }
+  .hero-dots { display: flex; gap: 6px; }
+  .hero-dots i { width: 7px; height: 7px; border-radius: 4px; background: var(--border-strong); transition: width .3s, background .3s; }
+  .hero-dots i.on { width: 22px; background: var(--accent); }
+  /* Welcome page */
+  .intro { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; margin: auto 0; }
+  .intro-logo { width: 84px; height: 84px; border-radius: calc(24px * var(--rk, 1)); box-shadow: 0 0 40px -6px var(--accent-glow); animation: adv-bob 5s ease-in-out infinite; margin-bottom: 6px; }
+  .intro h1 { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.02em; }
+  .intro p { margin: 0 0 10px; font-size: 13.5px; color: var(--fg-muted); line-height: 1.5; max-width: 36ch; }
+  .intro .primary, .intro .ghost, .intro .continue-btn { width: 100%; }
+  .intro .other-acc { align-self: stretch; margin: 0; }
+  .link.skip { align-self: center; margin-top: 4px; color: var(--fg-dim); font-weight: 500; }
+  .primary.big, .ghost.big { padding: 12px 18px; font-size: 14.5px; border-radius: calc(12px * var(--rk, 1)); }
+  .actions .primary.big { flex: 1; }
+  /* Pages: back, progress, one thing at a time */
+  .pager { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+  .pg-back { width: 34px; height: 34px; flex-shrink: 0; display: grid; place-items: center; border-radius: 50%; border: 1px solid var(--border); background: none; color: var(--fg-muted); cursor: pointer; }
+  .pg-back:hover { color: var(--fg); border-color: var(--border-strong); }
+  .pg-back svg { width: 18px; height: 18px; }
+  .pg-bar { flex: 1; height: 4px; border-radius: 2px; background: var(--bg-input); overflow: hidden; }
+  .pg-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .35s cubic-bezier(.2, .8, .2, 1); }
+  .pg-n { font-size: 12px; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
+  .pg { display: flex; flex-direction: column; gap: 12px; }
+  .pg-title { margin: 0; font-size: 21px; font-weight: 800; letter-spacing: -0.01em; }
+  .pg-title.inline { font-size: 18px; }
+  .srv-explain { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .srv-explain li { font-size: 12.5px; line-height: 1.5; color: var(--fg-muted); padding: 9px 11px; border-radius: calc(10px * var(--rk, 1)); background: var(--bg-input); border: 1px solid var(--border); }
+  .srv-explain b { color: var(--fg); display: block; margin-bottom: 2px; }
+  @media (prefers-reduced-motion: reduce) { .adv-ic, .adv-ic *, .intro-logo { animation: none !important; } }
+  :global(html.wk-lowfx) .adv-ic, :global(html.wk-lowfx) .adv-ic *, :global(html.wk-lowfx) .intro-logo { animation: none !important; }
   .panel { padding: 26px; display: flex; flex-direction: column; overflow-y: auto; }
+  .sheet.login { min-height: min(560px, 92vh); max-height: 94vh; }
   @media (max-width: 680px) {
-    .sheet.login { grid-template-columns: 1fr; }
-    .hero { display: none; }
+    /* Phone: the advantage sits above the page, smaller. */
+    .sheet.login { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+    .hero { border-right: none; border-bottom: 1px solid var(--border); padding: 16px 20px; gap: 6px; }
+    .hero-brand { display: none; }
+    .adv { margin: 0; flex-direction: row; align-items: center; gap: 12px; }
+    .adv-ic { width: 54px; height: 54px; flex-shrink: 0; margin: 0; border-radius: calc(16px * var(--rk, 1)); }
+    .adv-ic svg { width: 32px; height: 32px; }
+    .adv-t { gap: 3px; }
+    .adv-title { font-size: 15.5px; }
+    .adv-text { font-size: 12px; }
+    .hero-dots { display: none; }
   }
   @keyframes slide-up { from { opacity: 0; transform: translateY(12px);} to { opacity: 1; transform: translateY(0);} }
 

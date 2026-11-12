@@ -3,7 +3,7 @@
    *  emoji the device doesn't have is fetched from the relay (reactionPack).
    *  `zoom`: a click shows it big, in full resolution (emoji or sticker). */
   import AnimatedMedia from "./AnimatedMedia.svelte";
-  import { reactionPack, reactionUrl, parseReaction, reactionSource } from "../reactionPack";
+  import { reactionPack, reactionUrl, parseReaction, reactionSource, brokenReaction } from "../reactionPack";
   import { t } from "../i18n";
 
   let { token = "", size = 18, zoom = false }: { token?: string | null; size?: number; zoom?: boolean } = $props();
@@ -30,17 +30,17 @@
   {#if zoom}
     <button type="button" class="es zoomable" style:width="{size}px" style:height="{size}px" style:font-size="{Math.round(size * 0.86)}px"
       title={plain} onclick={(e) => { e.stopPropagation(); big = true; }} aria-label={plain}>
-      {#if media}<AnimatedMedia emoji src={media.url} mime={media.mime} alt={plain} play="auto" />{:else}{plain}{/if}
+      {#if media}<AnimatedMedia emoji src={media.url} mime={media.mime} alt={plain} play="auto" onbroken={brokenReaction} />{:else}{plain}{/if}
     </button>
   {:else}
     <span class="es" style:width="{size}px" style:height="{size}px" style:font-size="{Math.round(size * 0.86)}px" title={plain}>
-      {#if media}<AnimatedMedia emoji src={media.url} mime={media.mime} alt={plain} play="auto" />{:else}{plain}{/if}
+      {#if media}<AnimatedMedia emoji src={media.url} mime={media.mime} alt={plain} play="auto" onbroken={brokenReaction} />{:else}{plain}{/if}
     </span>
   {/if}
   {#if big}
     <div class="es-big" use:portal role="presentation" onclick={() => (big = false)}>
       <div class="es-big-art">
-        {#if media}<AnimatedMedia src={media.url} mime={media.mime} alt={plain} play="auto" />{:else}<span class="es-big-txt">{plain}</span>{/if}
+        {#if media}<AnimatedMedia src={media.url} mime={media.mime} alt={plain} play="auto" onbroken={brokenReaction} />{:else}<span class="es-big-txt">{plain}</span>{/if}
       </div>
       {#if source}<div class="es-big-note">{$t("From the pack")} <b>{source.title}</b></div>{/if}
     </div>

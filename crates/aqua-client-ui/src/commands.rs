@@ -3488,7 +3488,7 @@ pub fn own_device_message(app: &AppHandle, to: &str, inner: &str) {
             let t = v.get("text").and_then(|x| x.as_str()).unwrap_or("");
             // The peer's message, deleted for both from my other device.
             let author = v.get("author").and_then(|x| x.as_str()).filter(|a| *a == to).unwrap_or(me.as_str()).to_string();
-            if !t.is_empty() { apply_delete_ex(&mut s, to, &author, t, false); }
+            if !t.is_empty() { apply_delete(&mut s, to, &author, t); }
         }
         drop(s);
         let _ = app.emit("aqua://chats_updated", ());
@@ -3788,7 +3788,16 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                 if !t.is_empty() {
                     if let Ok(mut s) = state.lock() {
                         let ok = target == from || s.groups.get(&gid).map(|g| crate::state::can_delete_others(g, from)).unwrap_or(false);
-                        if ok { apply_delete_ex(&mut s, &gid, &target, t, true); }
+                        // What it was, for the owner's "Recent actions".
+                        let me = s.username.clone();
+                        let was = s.chats.get(&gid).and_then(|b| b.messages.iter().rev()
+                            .find(|m| author_is(&me, &m.from, &target) && del_key(&m.kind) == t)
+                            .map(|m| preview_for(&m.kind)));
+                        if ok && apply_delete(&mut s, &gid, &target, t) {
+                            let _ = app.emit("aqua://group_deleted", serde_json::json!({
+                                "gid": gid, "by": from, "author": target, "preview": was.unwrap_or_default(),
+                            }));
+                        }
                     }
                     let _ = app.emit("aqua://chats_updated", ());
                     let _ = app.emit("aqua://incoming", IncomingEventPayload { peer_id: gid.clone(), text: String::new(), time: hhmm_now(), is_new_chat: false });
@@ -4334,9 +4343,9 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
                 let mine = v.get("author").and_then(|x| x.as_str())
                     .is_some_and(|a| s.username.as_deref() == Some(a));
                 if mine {
-                    apply_delete_ex(&mut s, &from, "me", t, false);
+                    apply_delete(&mut s, &from, "me", t);
                 } else {
-                    apply_delete_ex(&mut s, &from, &from, t, true);
+                    apply_delete(&mut s, &from, &from, t);
                 }
             }
             let _ = app.emit("aqua://chats_updated", ());
@@ -4478,28 +4487,29 @@ fn apply_edit(s: &mut AppState, chat_id: &str, author: &str, old: &str, new: &st
     changed
 }
 
-/// Remove the most recent message in `chat_id` authored by `author` whose
-/// current text equals `text_match`.
-fn apply_delete(s: &mut AppState, chat_id: &str, author: &str, text_match: &str) -> bool {
-    apply_delete_ex(s, chat_id, author, text_match, false)
+/// What both sides find a message by for "delete for everyone": the text of
+/// a text message or reply (old clients send only that), the blob of a file
+/// (photo, sticker, voice…), the id of a poll, a hash of anything else.
+pub fn del_key(kind: &MessageKind) -> String {
+    use sha2::Digest;
+    match kind {
+        MessageKind::Text { text } | MessageKind::Reply { text, .. } => text.clone(),
+        MessageKind::File { cid, .. } => format!("\u{1}file:{cid}"),
+        MessageKind::Poll { id, .. } => format!("\u{1}poll:{id}"),
+        other => {
+            let d = sha2::Sha256::digest(serde_json::to_string(other).unwrap_or_default().as_bytes());
+            format!("\u{1}h:{}", d[..12].iter().map(|b| format!("{b:02x}")).collect::<String>())
+        }
+    }
 }
 
-/// `remote`: the deletion came from someone else — with "keep deleted" on,
-/// the message stays, flagged as deleted.
-fn apply_delete_ex(s: &mut AppState, chat_id: &str, author: &str, text_match: &str, remote: bool) -> bool {
+/// Remove the most recent message in `chat_id` authored by `author` whose
+/// `del_key` is `key`. Deleted means deleted, on every side (owner's rule):
+/// nothing stays behind marked "deleted".
+fn apply_delete(s: &mut AppState, chat_id: &str, author: &str, key: &str) -> bool {
     let me = s.username.clone();
-    let keep = remote && s.prefs.keep_deleted;
     if let Some(book) = s.chats.get_mut(chat_id) {
-        if let Some(pos) = book.messages.iter().rposition(|m| {
-            author_is(&me, &m.from, author)
-                && !m.meta.as_ref().map(|x| x.deleted).unwrap_or(false)
-                && (matches!(&m.kind, MessageKind::Text { text } if text == text_match)
-                    || matches!(&m.kind, MessageKind::Reply { text, .. } if text == text_match))
-        }) {
-            if keep {
-                book.messages[pos].meta.get_or_insert_with(Default::default).deleted = true;
-                return true;
-            }
+        if let Some(pos) = book.messages.iter().rposition(|m| author_is(&me, &m.from, author) && del_key(&m.kind) == key) {
             let gone = book.messages.remove(pos);
             book.summary.preview = book
                 .messages
@@ -4511,6 +4521,24 @@ fn apply_delete_ex(s: &mut AppState, chat_id: &str, author: &str, text_match: &s
         }
     }
     false
+}
+
+/// For "delete for everyone": each message's key, author and preview
+/// (the group's "Recent actions" keeps the preview).
+#[tauri::command]
+pub fn message_keys(state: State<'_, StdMutex<AppState>>, peer_id: String, ids: Vec<String>) -> Result<Vec<serde_json::Value>, String> {
+    let s = state.lock().map_err(|e| e.to_string())?;
+    let me = s.username.clone().unwrap_or_default();
+    let Some(book) = s.chats.get(&peer_id) else { return Ok(vec![]) };
+    Ok(book
+        .messages
+        .iter()
+        .filter(|m| ids.contains(&m.id))
+        .map(|m| {
+            let author = if m.from == "me" { me.as_str() } else { m.from.as_str() };
+            serde_json::json!({ "id": m.id, "key": del_key(&m.kind), "author": author, "preview": preview_for(&m.kind) })
+        })
+        .collect())
 }
 
 /// Edit one of my own messages locally. The frontend separately relays an

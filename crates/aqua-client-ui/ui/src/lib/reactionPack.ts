@@ -114,6 +114,20 @@ function fetchRemote(pack: string, file: string) {
   }).catch(() => { /* not on the relay: plain emoji fallback */ });
 }
 
+/** A pack picture didn't load: the list cached from the last run points at
+ *  files that are gone (pack deleted, another account's folder, an older
+ *  install). Drop that list and build it again — once per run. */
+let rebuilt = false;
+export function brokenReaction(url: string): void {
+  // A relay copy that doesn't load: plain emoji from now on (no refetch loop).
+  for (const [k, v] of remote) if (v?.url === url) remote.set(k, null);
+  if (rebuilt || !get(reactionPack).items.some((i) => i.url === url)) return;
+  rebuilt = true;
+  try { localStorage.removeItem(CACHE_KEY); } catch { /* ignore */ }
+  reactionPack.set({ source: "none", items: [] });
+  void loadReactionPack();
+}
+
 /** Where a reaction comes from (for "this reaction is from …"). */
 export function reactionSource(r: string): { pack: string; title: string; local: boolean } | null {
   const { pack } = parseReaction(r);
