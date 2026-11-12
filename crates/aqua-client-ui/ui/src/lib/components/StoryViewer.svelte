@@ -16,7 +16,8 @@
   import { onBack } from "../back";
   import {
     storyViewer, myStories, saneStories, markSeen, deleteStory, isLive, sendStoryView, toggleLike, toggleHidden,
-    likedStories, seenStories, storyViews, hiddenStories, closeFriends, storyNav, type Story,
+    likedStories, seenStories, storyViews, hiddenStories, closeFriends, storyNav, storyArchive, pinnedStories,
+    pinStory, unpinStory, storyFile, openStories, type Story,
   } from "../stories";
   import { peerPresence } from "../presence";
   import { avatars, peerCards } from "../people";
@@ -31,7 +32,11 @@
   const QUICK = ["❤️", "🔥", "😂", "😮", "😢", "👍"];
 
   let v = $derived($storyViewer);
-  const storiesOf = (u: string): Story[] => (u === "" ? $myStories.filter((s) => isLive(s)) : saneStories($peerPresence[u]?.st));
+  /** Live stories, my archive (newest first), or the ones pinned to a profile. */
+  const src = $derived(v?.src ?? "live");
+  const storiesOf = (u: string): Story[] => src === "archive" ? $storyArchive.slice().reverse()
+    : src === "pinned" ? (u === "" ? $pinnedStories.slice().reverse() : saneStories($peerPresence[u]?.sp, Date.now(), true).reverse())
+    : u === "" ? $myStories.filter((s) => isLive(s)) : saneStories($peerPresence[u]?.st);
   let list = $derived<Story[]>(v ? storiesOf(v.user) : []);
   let cur = $derived(v ? list[v.index] ?? null : null);
   let url = $state("");
@@ -59,7 +64,9 @@
   async function load(s: Story): Promise<string> {
     const hit = cache.get(s.id);
     if (hit) return hit;
-    const u = assetUrl(await api.fetchAttachment(s.media));
+    // Mine (archive / pinned): the file on this device when the relay's copy is gone.
+    const own = $myStories.some((x) => x.id === s.id) || $storyArchive.some((x) => x.id === s.id) || $pinnedStories.some((x) => x.id === s.id);
+    const u = assetUrl(own ? await storyFile(s) : await api.fetchAttachment(s.media));
     cache.set(s.id, u);
     cacheTick++;
     return u;
@@ -93,7 +100,7 @@
       if (cur?.id !== s.id) return;
       url = u;
       loading = false;
-      if (owner) {
+      if (owner && src === "live") {
         const first = !$seenStories.includes(s.id);
         markSeen(s.id);
         if (first) sendStoryView(owner, s.id);
@@ -133,7 +140,7 @@
 
   /** Where to start in someone's stories: the first one not yet seen. */
   function startIndex(u: string): number {
-    if (u === "") return 0;
+    if (u === "" || src !== "live") return 0;
     const l = storiesOf(u);
     const i = l.findIndex((s) => !$seenStories.includes(s.id));
     return i < 0 ? 0 : i;
@@ -324,6 +331,28 @@
     replyEl?.blur();
     void sendReply(emo);
   }
+  const pinnedNow = $derived(!!cur && $pinnedStories.some((p) => p.id === cur!.id || p.from === cur!.id));
+  async function pin() {
+    const s = cur;
+    menu = false;
+    if (!s) return;
+    showToast(tr("Pinning to your profile…"), 20000);
+    try { await pinStory(s); showToast(tr("Pinned to your profile — people who may see it find it there"), 3500); }
+    catch (e) { showToast(`${tr("Could not pin")}: ${e}`, 6000); }
+  }
+  /** Send this story to a chat (Telegram's "Share"): as a photo / video. */
+  async function share() {
+    const s = cur, owner = v?.user ?? "";
+    menu = false;
+    if (!s) return;
+    try {
+      const path = owner === "" ? await storyFile(s) : await api.fetchAttachment(s.media);
+      const { openForward } = await import("./ForwardPicker.svelte");
+      const name = s.media.name || (s.media.kind === "video" ? "story.mp4" : "story.jpg");
+      close();
+      openForward([{ kind: "file", path, name, author: owner ? { from: owner, name: nameOf(owner) } : undefined }]);
+    } catch (e) { showToast(`${tr("Could not share")}: ${e}`, 5000); }
+  }
   async function remove() {
     const s = cur;
     if (!s) return;
@@ -446,19 +475,33 @@
             <div class="menu-scrim" onclick={() => (menu = false)}></div>
             <div class="menu" role="menu">
               {#if v.user === ""}
-                <button onclick={() => { menu = false; viewersOpen = true; }}>{$t("Viewers")}</button>
-                <button class="danger" onclick={remove}>{$t("Delete story")}</button>
+                {#if src === "live"}<button onclick={() => { menu = false; viewersOpen = true; }}>{$t("Viewers")}</button>{/if}
+                {#if src === "pinned"}
+                  <button onclick={() => { const s = cur; menu = false; if (s) void unpinStory(s.id).then(() => showToast(tr("Removed from your profile"))); }}>{$t("Remove from profile")}</button>
+                {:else if pinnedNow}
+                  <button onclick={() => { const s = cur; menu = false; if (s) void unpinStory(s.id).then(() => showToast(tr("Removed from your profile"))); }}>{$t("Remove from profile")}</button>
+                {:else}
+                  <button onclick={pin}>{$t("Pin to profile")}</button>
+                {/if}
+                <button onclick={share}>{$t("Share")}</button>
+                {#if src === "live"}<button onclick={() => { menu = false; openStories([""], "", "archive"); }}>{$t("Story archive")}</button>{/if}
+                {#if src !== "pinned"}<button class="danger" onclick={remove}>{$t("Delete story")}</button>{/if}
               {:else}
                 {@const u = v.user}
                 <button onclick={() => { menu = false; close(); void selectChat(u); }}>{$t("Send message")}</button>
-                <button onclick={() => { menu = false; const was = $hiddenStories.includes(u); toggleHidden(u); showToast(tr(was ? "Stories are shown again" : "Stories hidden — they're now at the end of the strip")); }}>{$t($hiddenStories.includes(u) ? "Show stories" : "Hide stories")}</button>
+                <button onclick={share}>{$t("Share")}</button>
+                {#if src === "live"}<button onclick={() => { menu = false; const was = $hiddenStories.includes(u); toggleHidden(u); showToast(tr(was ? "Stories are shown again" : "Stories hidden — they're now at the end of the strip")); }}>{$t($hiddenStories.includes(u) ? "Show stories" : "Hide stories")}</button>{/if}
               {/if}
             </div>
           {/if}
         </div>
 
         <div class="bottom" class:gone={held}>
-          {#if v.user === ""}
+          {#if v.user === "" && src !== "live"}
+            <span class="src-tag">{$t(src === "archive" ? "Story archive" : "Pinned to profile")}{#if src === "archive" && pinnedNow} · {$t("in profile")}{/if}</span>
+            <span class="grow"></span>
+            {#if src === "archive" && !pinnedNow}<button class="pin-btn" onclick={pin}>{$t("Pin to profile")}</button>{/if}
+          {:else if v.user === ""}
             <button class="views" onclick={() => (viewersOpen = true)}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
               {views.length ? $t("{n} views", { n: views.length }) : $t("No views yet")}
@@ -638,6 +681,9 @@
   .views svg { width: 20px; height: 20px; }
   .vr { opacity: .8; font-weight: 500; }
   .grow { flex: 1; }
+  .src-tag { font-size: 13.5px; opacity: .8; padding: 0 6px; }
+  .pin-btn { border: none; border-radius: 999px; padding: 9px 16px; background: rgba(255,255,255,.14); color: #fff; font: 600 13.5px var(--font-ui, inherit); cursor: pointer; }
+  .pin-btn:hover { background: rgba(255,255,255,.22); }
   .menu-scrim { position: absolute; inset: 0; z-index: 4; }
   .menu { position: absolute; top: 62px; right: 10px; z-index: 5; min-width: 200px; padding: 5px; border-radius: calc(12px * var(--rk, 1)); background: rgba(34,34,38,.97);
     box-shadow: 0 14px 30px -12px rgba(0,0,0,.9); display: flex; flex-direction: column; animation: q-in .14s ease-out; }

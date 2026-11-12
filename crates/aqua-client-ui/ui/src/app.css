@@ -456,8 +456,8 @@ html.android [data-x]:not([data-keep-x]) { display: none !important; }
    full-screen panels stopped short of the edges), and the window itself
    never scrolls. */
 html.phone { overflow: hidden; }
-html.phone, html.phone * { scrollbar-width: none; }
-html.phone ::-webkit-scrollbar { display: none; width: 0; height: 0; }
+html.phone, html.phone * { scrollbar-width: none !important; }
+html.phone ::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }
 
 /* Power saving → Particles: the ambient glows behind the app stay still. */
 html.ps-particles body::before, html.ps-particles body::after { animation: none !important; }

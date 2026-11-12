@@ -15,6 +15,7 @@
 </script>
 
 <script lang="ts">
+  import StoryTiles from "./StoryTiles.svelte";
   import { openLightbox } from "./Lightbox.svelte";
   import UsernameEdit from "./UsernameEdit.svelte";
   import BirthdayInput from "./BirthdayInput.svelte";
@@ -784,6 +785,9 @@
             <div class="status-line">{view.status}</div>
           {/if}
 
+          {#if !editing && !privPage}
+            <StoryTiles user={isMe ? "" : activeUsername} onopen={closeProfile} />
+          {/if}
           {#if view.about}
             <section class="section">
               <div class="section-label">{$t("About me")}</div>

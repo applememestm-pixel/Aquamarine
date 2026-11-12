@@ -13,7 +13,7 @@ import { api, events } from "./tauri";
 import type { Activity } from "./types";
 import { allowed, isPublic, privacy } from "./privacy";
 import { musicActivity } from "./music";
-import { storiesForPresence } from "./stories";
+import { storiesForPresence, pinnedForPresence } from "./stories";
 
 export type OnlineStatus = "online" | "idle" | "dnd" | "invisible";
 
@@ -35,6 +35,8 @@ export interface Presence {
   fl?: boolean;
   /** Live stories (stories.ts): references to encrypted files, 24 h. */
   st?: unknown;
+  /** Stories pinned to their profile. */
+  sp?: unknown;
   /** Local receive time (ms) — not sent; used to expire stale "online". */
   at?: number;
 }
@@ -131,6 +133,8 @@ export function myPresence(peer = ""): Presence {
     if (!isPublic("forwards", rules) && ok("forwards")) out.fl = true;
     const st = storiesForPresence(peer);
     if (st.length) out.st = st;
+    const sp = pinnedForPresence(peer);
+    if (sp.length) out.sp = sp;
   }
   return out;
 }

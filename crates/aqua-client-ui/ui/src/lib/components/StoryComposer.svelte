@@ -5,7 +5,8 @@
    * how long it lives (6 / 12 / 24 / 48 h). The choice is remembered.
    */
   import { t, tr } from "../i18n";
-  import { assetUrl } from "../tauri";
+  import { api, assetUrl } from "../tauri";
+  import { editAndSend } from "../panels/photoEditor";
   import { onBack } from "../back";
   import { chats } from "../stores";
   import { avatars } from "../people";
@@ -40,6 +41,22 @@
   const shown = $derived(q.trim() ? people.filter((c) => c.name.toLowerCase().includes(q.trim().toLowerCase()) || c.id.includes(q.trim().toLowerCase())) : people);
 
   function close() { storyDraft.set(null); }
+  /** Telegram's story editor: crop, draw, text, stickers, filters. */
+  let editing = $state(false);
+  async function edit() {
+    const d = draft;
+    if (!d || isVideo || editing) return;
+    editing = true;
+    try {
+      const bytes = await api.readUserImage(d.path);
+      const name = d.path.split(/[\\/]/).pop() || "story.jpg";
+      const mime = /\.png$/i.test(name) ? "image/png" : /\.webp$/i.test(name) ? "image/webp" : "image/jpeg";
+      await editAndSend({ path: d.path, bytes, mime, name, peerId: "__story__", doneLabel: "Done",
+        deliver: async (n, _m, b) => { const p = await api.saveTempFile(n, b); storyDraft.update((x) => (x ? { ...x, path: p } : x)); } });
+    } catch (e) {
+      showToast(`${tr("Could not open the editor")}: ${e}`, 5000);
+    } finally { editing = false; }
+  }
   function openPick(k: "close" | "selected") {
     picking = k;
     pickSet = k === "close" ? [...$closeFriends] : [...sel];
@@ -89,6 +106,12 @@
         </div>
         <div class="body">
           <div class="pv">
+            {#if !isVideo}
+              <button class="pv-edit" onclick={edit} disabled={editing} aria-label={$t("Edit")} title={$t("Draw, text, stickers, crop, filters")}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                {$t("Edit")}
+              </button>
+            {/if}
             {#if isVideo}
               <!-- svelte-ignore a11y_media_has_caption -->
               <video src={assetUrl(draft.path)} autoplay loop muted playsinline></video>
@@ -165,6 +188,10 @@
   .pv img, .pv video { grid-area: 1 / 1; width: 100%; height: 100%; object-fit: contain; }
   .pv img.bg { object-fit: cover; filter: blur(24px) brightness(.55); transform: scale(1.15); }
   .pv img.fg, .pv video { position: relative; z-index: 1; }
+  .pv-edit { position: absolute; z-index: 2; top: 10px; right: 10px; display: flex; align-items: center; gap: 6px; padding: 7px 12px; border: none; border-radius: 999px;
+    background: rgba(0,0,0,.55); color: #fff; font: 600 13px var(--font-ui, inherit); cursor: pointer; backdrop-filter: blur(6px); }
+  .pv-edit:hover { background: rgba(0,0,0,.72); }
+  .pv-edit svg { width: 15px; height: 15px; }
   .side { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; }
   .cap { width: 100%; padding: 11px 14px; border-radius: calc(12px * var(--rk, 1)); border: 1px solid var(--border-strong); background: var(--bg-surface); color: var(--fg); font: 15px var(--font-ui, inherit); outline: none; }
   .cap:focus { border-color: var(--accent); }

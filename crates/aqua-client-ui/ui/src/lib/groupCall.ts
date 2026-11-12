@@ -50,6 +50,12 @@ export interface GroupCallState {
 export const groupCall = writable<GroupCallState | null>(null);
 /** gid → people currently in that group's call (from join/leave/state). */
 export const activeGroupCalls = writable<Record<string, { callId: string; users: string[]; since: number }>>({});
+/** When each person in a call was last heard of (gid → user → ms). Someone
+ *  whose "leave" got lost — or my own other device, whose "leave" never
+ *  came here — used to stay "in the call" forever. */
+const lastSeen = new Map<string, Map<string, number>>();
+/** Heard of nobody for this long: out of the list (heartbeats come every 25 s). */
+const STALE_MS = 70_000;
 
 const pcs = new Map<string, RTCPeerConnection>();
 const pendingIce = new Map<string, RTCIceCandidateInit[]>();
@@ -68,6 +74,8 @@ function setPeer(user: string, p: Partial<Peer>) {
   patch((s) => { s.peers[user] = { ...(s.peers[user] ?? { user, stream: null, muted: false, video: false, speaking: false, state: "new" }), ...p }; });
 }
 function noteUsers(gid: string, callId: string, add?: string, remove?: string) {
+  if (add) { let m = lastSeen.get(gid); if (!m) lastSeen.set(gid, (m = new Map())); m.set(add, Date.now()); }
+  if (remove) lastSeen.get(gid)?.delete(remove);
   activeGroupCalls.update((m) => {
     const cur = m[gid] && m[gid].callId === callId ? m[gid] : { callId, users: [], since: Date.now() };
     let users = cur.users;
@@ -77,6 +85,29 @@ function noteUsers(gid: string, callId: string, add?: string, remove?: string) {
     if (users.length) next[gid] = { ...cur, users }; else delete next[gid];
     return next;
   });
+}
+
+/** Drop people not heard of lately (this device's own place in a call it's in stays). */
+function pruneStale() {
+  const now = Date.now();
+  const mine = get(groupCall);
+  activeGroupCalls.update((m) => {
+    let changed = false;
+    const next = { ...m };
+    for (const [gid, c] of Object.entries(m)) {
+      const seen = lastSeen.get(gid);
+      const users = c.users.filter((u) => (mine?.joined && mine.gid === gid && (u === me() || mine.peers[u])) || now - (seen?.get(u) ?? 0) < STALE_MS);
+      if (users.length === c.users.length) continue;
+      changed = true;
+      if (users.length) next[gid] = { ...c, users }; else { delete next[gid]; lastSeen.delete(gid); }
+    }
+    return changed ? next : m;
+  });
+}
+
+/** My other devices hear when this one joins / leaves (multidev::sync_own). */
+function tellOwn(gid: string, t: "join" | "leave", call: string) {
+  void import("@tauri-apps/api/core").then(({ invoke }) => invoke("sync_own", { body: JSON.stringify({ t: "gcall", gid, sig: { t, call } }) })).catch(() => {});
 }
 
 async function sendTo(gid: string, to: string, o: Record<string, unknown>) {
@@ -190,6 +221,7 @@ export async function joinGroupCall(gid: string, opts: { video?: boolean } = {})
   groupCall.set({ gid, callId, joined: true, listener, muted: false, deafened: false, camera: !!opts.video, screen: false, peers: {}, local, started: Date.now(), meSpeaking: false });
   if (local) watchLevel(me(), local);
   noteUsers(gid, callId, me());
+  tellOwn(gid, "join", callId);
   await broadcast(gid, { t: "join", call: callId, listener });
   heartbeat = setInterval(() => {
     const s = get(groupCall);
@@ -201,6 +233,7 @@ export async function leaveGroupCall() {
   const s = get(groupCall);
   if (!s) return;
   void broadcast(s.gid, { t: "leave", call: s.callId });
+  tellOwn(s.gid, "leave", s.callId);
   for (const pc of pcs.values()) pc.close();
   pcs.clear(); pendingIce.clear(); analysers.clear(); videoSenders.clear(); remoteStreams.clear();
   spatialReset();
@@ -328,6 +361,27 @@ let wired = false;
 export function initGroupCalls() {
   if (wired) return;
   wired = true;
-  void events.onGroupCall((p) => { void onSignal(p.from, p.gid, p.signal).catch((e) => console.warn("gcall", e)); });
+  void events.onGroupCall((p) => {
+    // My own name from someone's list or signal is my other device: never a link.
+    if (p.from === me()) return;
+    void onSignal(p.from, p.gid, p.signal).catch((e) => console.warn("gcall", e));
+  });
+  setInterval(pruneStale, 15_000);
+  // My other device joined / left a call. Joining one here while it's in
+  // one moves the call (Telegram): the other device leaves by itself —
+  // two devices under one name broke everyone's connections.
+  void import("@tauri-apps/api/event").then(({ listen }) => listen<{ body: Record<string, unknown>; own?: boolean }>("aqua://ctl", (e) => {
+    const b = e.payload?.body;
+    if (!e.payload?.own || !b || b.t !== "gcall") return;
+    const gid = String(b.gid ?? ""), sg = (b.sig ?? {}) as Record<string, unknown>, call = String(sg.call ?? "");
+    if (!gid) return;
+    const s = get(groupCall);
+    if (sg.t === "join") {
+      if (s?.joined) { void leaveGroupCall().then(() => showToast(tr("The call moved to your other device"), 4000)); }
+      noteUsers(gid, call, me());
+    } else if (sg.t === "leave" && !(s?.joined && s.gid === gid)) {
+      noteUsers(gid, call, undefined, me());
+    }
+  })).catch(() => {});
   window.addEventListener("beforeunload", () => { void leaveGroupCall(); });
 }

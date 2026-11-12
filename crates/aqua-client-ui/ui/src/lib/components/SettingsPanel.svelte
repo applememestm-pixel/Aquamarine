@@ -20,7 +20,7 @@
   import { pickFolder } from "../dialog";
   const PHONE_UI = /android|iphone|ipad/i.test(navigator.userAgent);
   import { hasWidget } from "../widget";
-  import { storiesOff, storyNav } from "../stories";
+  import { storiesOff, storyNav, storyArchive, pinnedStories, openStories } from "../stories";
   import { setStoriesOff } from "../storyFeed";
   import { plugins, pluginsOn, installPlugin, removePlugin, togglePlugin, EXAMPLE_PLUGIN, PLUGIN_CATS, pluginCategory, type PluginCat } from "../plugins";
   import { musicStatus, refreshMusic, openMusic } from "../music";
@@ -1741,6 +1741,11 @@
             <Select class="sel" value={$storyNav || "cube"} options={[{ value: "cube", label: $t("Sideways (cube)") }, { value: "vertical", label: $t("Down (feed)") }]}
               onchange={(v) => storyNav.set(v === "vertical" ? "vertical" : "cube")} />
           </div>
+          <button class="toggle-row" onclick={() => { if ($storyArchive.length) openStories([""], "", "archive"); else showToast(tr("The archive is empty — stories land here when they run out")); }}>
+            <div class="tr-text"><div class="tr-title">{$t("Story archive")}{#if $storyArchive.length} · {$storyArchive.length}{/if}</div>
+              <div class="tr-sub">{$t("Your stories after they run out — only you see them. Pinned to profile: {n}.", { n: $pinnedStories.length })}</div></div>
+            <span class="chev">›</span>
+          </button>
         {/if}
       </section>
       <section class="group">
