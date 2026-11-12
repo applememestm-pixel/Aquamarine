@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Дополнения — Aquamarine</title>
+<link rel="icon" href="favicon.png" type="image/png">
+<meta name="description" content="Каталог дополнений (плагинов) Aquamarine от авторов: команды, кнопки, обработка сообщений." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" />
+<link rel="stylesheet" href="style.css" />
+<script src="motion.js" defer></script>
+<style>
+  .ad-hero { padding-block: 54px 10px; }
+  .ad-hero h1 { font-size: clamp(34px, 5vw, 54px); margin-top: 16px; }
+  .ad-hero p { margin-top: 14px; color: var(--fg-muted); max-width: 70ch; font-size: 16.5px; }
+  .ad-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 26px 0 18px; }
+  .ad-bar input { flex: 1; min-width: 220px; height: 44px; padding: 0 16px; border-radius: 14px; border: 1px solid var(--line-str); background: var(--ink); color: var(--fg); font: inherit; outline: none; }
+  .ad-bar input:focus { border-color: var(--accent); }
+  .ad-count { color: var(--fg-dim); font-size: 13.5px; }
+  .ad-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 14px; }
+  .ad { display: flex; flex-direction: column; gap: 8px; padding: 18px 18px 16px; border-radius: 18px; border: 1px solid var(--line); background: var(--ink-2); min-width: 0; }
+  .ad h3 { font-size: 17px; margin: 0; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .ad .v { font: 500 12px var(--mono); color: var(--fg-dim); }
+  .ad .off { font: 700 10.5px var(--body); letter-spacing: .05em; text-transform: uppercase; color: var(--accent); background: var(--accent-soft); padding: 2px 7px; border-radius: 8px; }
+  .ad .by { font-size: 13px; color: var(--fg-dim); overflow-wrap: anywhere; }
+  .ad .by a { color: var(--fg-muted); }
+  .ad p { margin: 0; color: var(--fg-muted); font-size: 14.5px; overflow-wrap: anywhere; }
+  .ad .net { font-size: 12.5px; color: #F5B85A; overflow-wrap: anywhere; }
+  .ad .acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto; padding-top: 8px; }
+  .ad .acts a { font-size: 13.5px; padding: 8px 14px; }
+  .ad-empty { color: var(--fg-muted); padding: 30px 0; }
+  .ad-how { margin-top: 46px; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 14px; }
+  .ad-how .card ol { margin: 10px 0 0; padding-left: 20px; color: var(--fg-muted); font-size: 14.5px; }
+  .ad-how code { font-family: var(--mono); font-size: 13px; color: var(--accent); }
+</style>
+
+<nav>
+  <div class="wrap nav-in" style="width:min(1360px,100%)">
+    <a class="brand" href="index.html"><img class="logo" src="logo.png" alt="" width="28" height="28"> Aquamarine</a>
+    <div class="nav-links">
+      <a href="index.html#features">Возможности</a>
+      <a href="index.html#download">Скачать</a>
+      <a href="addons.html" class="on">Дополнения</a>
+      <a href="docs.html">Документация</a>
+      <a href="api.html">API</a>
+      <a href="https://github.com/applememestm-pixel/Aquamarine" target="_blank" rel="noopener">GitHub</a>
+    </div>
+    <a class="nav-cta" href="index.html#download">Скачать</a>
+  </div>
+</nav>
+
+<header class="wrap ad-hero" style="width:min(1360px,100%)">
+  <span class="eyebrow"><span class="dot"></span> Плагины от авторов</span>
+  <h1>Дополнения</h1>
+  <p>Небольшие дополнения на JavaScript: свои команды <code>/имя</code>, кнопки в меню 📎, обработка того, что вы отправляете. Каждое работает в изолированной песочнице — без доступа к ключам, файлам и сети (кроме адресов, которые вы разрешили при установке). Список собирается сам из репозиториев авторов на GitHub.</p>
+</header>
+
+<main class="wrap" style="width:min(1360px,100%);padding-bottom:80px">
+  <div class="ad-bar">
+    <input id="q" type="search" placeholder="Поиск по названию, автору, описанию" autocomplete="off" />
+    <span class="ad-count" id="count"></span>
+  </div>
+  <div class="ad-grid" id="list"><p class="ad-empty">Загрузка…</p></div>
+
+  <section class="ad-how">
+    <div class="card">
+      <h3>Как установить</h3>
+      <ol>
+        <li>Нажмите «Скачать .js» у дополнения.</li>
+        <li>В Aquamarine: <b>Настройки → Экспериментальное → Плагины</b>, включите плагины.</li>
+        <li><b>Установить из файла…</b> и выберите скачанный файл.</li>
+      </ol>
+      <p style="margin-top:10px">Ставьте только то, чему доверяете: плагин видит текст сообщений, которые ему передают.</p>
+    </div>
+    <div class="card">
+      <h3>Как выложить своё</h3>
+      <ol>
+        <li>Публичный репозиторий на GitHub с файлом <code>.js</code> и заголовком <code>// @name</code>, <code>// @version</code>, <code>// @author</code>, <code>// @description</code>.</li>
+        <li>Добавьте репозиторию тему <code>aquamarine-plugin</code> (About → ⚙ → Topics).</li>
+        <li>Через несколько часов дополнение появится здесь само. Обновления подтягиваются так же.</li>
+      </ol>
+      <p style="margin-top:10px"><a href="docs.html?d=plugins">API плагинов ›</a></p>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+  const list = document.getElementById("list"), q = document.getElementById("q"), count = document.getElementById("count");
+  let items = [];
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const safe = (u) => /^https:\/\/(raw\.githubusercontent\.com|github\.com)\//.test(u || "") ? u : "#";
+  const fileName = (p) => (p.path || "plugin.js").split("/").pop();
+  function render() {
+    const s = q.value.trim().toLowerCase();
+    const shown = items.filter((p) => !s || [p.name, p.author, p.description, p.repo].join(" ").toLowerCase().includes(s));
+    count.textContent = items.length ? `${shown.length} из ${items.length}` : "";
+    if (!shown.length) { list.innerHTML = `<p class="ad-empty">${items.length ? "Ничего не найдено." : "Пока пусто — станьте первым автором (ниже — как)."}</p>`; return; }
+    list.innerHTML = shown.map((p) => `
+      <article class="ad">
+        <h3>${esc(p.name)} <span class="v">${esc(p.version)}</span>${p.official ? '<span class="off">Aquamarine</span>' : ""}</h3>
+        <div class="by">${p.author ? esc(p.author) + " · " : ""}<a href="https://github.com/${esc(p.repo)}" target="_blank" rel="noopener">${esc(p.repo)}</a>${p.stars ? " · ★ " + Number(p.stars) : ""}</div>
+        <p>${esc(p.description) || "—"}</p>
+        ${p.connect && p.connect.length ? `<div class="net">Просит доступ к сети: ${p.connect.map(esc).join(", ")}</div>` : ""}
+        <div class="acts">
+          <a class="btn btn-primary" href="${esc(safe(p.url))}" download="${esc(fileName(p))}" data-dl="${esc(safe(p.url))}" data-name="${esc(fileName(p))}">Скачать .js</a>
+          <a class="btn btn-ghost" href="${esc(safe(p.page))}" target="_blank" rel="noopener">Код</a>
+        </div>
+      </article>`).join("");
+  }
+  // raw.githubusercontent.com is another origin: "download" is ignored there,
+  // so the file is fetched and saved from here.
+  list.addEventListener("click", async (e) => {
+    const a = e.target.closest("[data-dl]");
+    if (!a || a.dataset.dl === "#") return;
+    e.preventDefault();
+    try {
+      const r = await fetch(a.dataset.dl);
+      if (!r.ok) throw new Error(r.status);
+      const url = URL.createObjectURL(new Blob([await r.text()], { type: "text/javascript" }));
+      const t = Object.assign(document.createElement("a"), { href: url, download: a.dataset.name });
+      document.body.append(t); t.click(); t.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch { window.open(a.dataset.dl, "_blank", "noopener"); }
+  });
+  q.addEventListener("input", render);
+  fetch("addons.json", { cache: "no-cache" }).then((r) => r.json()).then((d) => { items = Array.isArray(d.items) ? d.items : []; render(); })
+    .catch(() => { list.innerHTML = '<p class="ad-empty">Каталог не загрузился. Обновите страницу позже.</p>'; });
+})();
+</script>

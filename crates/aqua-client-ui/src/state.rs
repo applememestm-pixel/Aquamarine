@@ -817,6 +817,9 @@ pub fn group_summary(g: &Group, preview: &str) -> ChatSummary {
 
 // ---------- App state ------------------------------------------------------
 
+/// Vault key suffix of a device's previous session (`AppState::prev_sessions`).
+pub const PREV_SESSION: &str = "#prev";
+
 pub struct AppState {
     pub data_dir: PathBuf,
     pub vault: Vault,
@@ -829,6 +832,10 @@ pub struct AppState {
     pub transport: Option<Arc<Transport>>,
     /// One live `Session` per peer.
     pub sessions: HashMap<String, Session>,
+    /// The session a new one replaced (both sides opened one at the same
+    /// time): messages already encrypted with it still decrypt. Stored in
+    /// the vault under `PREV_SESSION` after the device address.
+    pub prev_sessions: HashMap<String, Session>,
     /// UI-side chat store (summaries + messages).
     pub chats: HashMap<String, ChatBook>,
     pub chat_order: Vec<String>,
@@ -874,9 +881,14 @@ impl AppState {
 
         // Rehydrate existing sessions from disk into memory.
         let mut sessions = HashMap::new();
+        let mut prev_sessions = HashMap::new();
         let mut chats = HashMap::new();
         let mut chat_order = Vec::new();
         for peer_id in vault.list_session_peer_ids().unwrap_or_default() {
+            if let Some(addr) = peer_id.strip_suffix(PREV_SESSION) {
+                if let Ok(Some(sess)) = vault.load_session(&peer_id) { prev_sessions.insert(addr.to_string(), sess); }
+                continue;
+            }
             if let Ok(Some(sess)) = vault.load_session(&peer_id) {
                 let summary = summary_for(&peer_id, /*preview*/ "", /*by_me*/ false, /*typing*/ false);
                 chats.insert(peer_id.clone(), ChatBook { summary, messages: Vec::new() });
@@ -985,6 +997,7 @@ impl AppState {
             server_url: saved_url,
             transport: None,
             sessions,
+            prev_sessions,
             chats,
             chat_order,
             groups,

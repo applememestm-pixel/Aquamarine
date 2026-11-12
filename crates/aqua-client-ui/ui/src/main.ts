@@ -2,6 +2,7 @@ import App from "./App.svelte";
 import { mount } from "svelte";
 import "./app.css";
 import { IS_DESKTOP } from "./lib/platform";
+import { accountBoot } from "./lib/accounts";
 
 // Phones and tablets: no desktop title bar even when the screen is turned
 // sideways and wider than the phone layout's breakpoint.
@@ -144,7 +145,9 @@ if (!target) throw new Error("#app root not found");
 // A chat opened in its own window (Ctrl+click in the list): `#popout=<id>`.
 const pop = /^#popout=(.+)$/.exec(location.hash);
 if (pop) document.documentElement.classList.add("popout");
-const app = pop
+// Another account's storage left over from a switch: sorted out first.
+const reloading = !pop && await accountBoot();
+const app = reloading ? undefined : pop
   ? mount((await import("./Popout.svelte")).default, { target, props: { chat: decodeURIComponent(pop[1]) } })
   : mount(App, { target });
 export default app;

@@ -11,6 +11,10 @@ import { folders, activeFolder } from "./folders";
 
 const TABS: NavTab[] = ["chats", "files", "contacts"];
 
+/** A touch that starts this close to a side edge is the system's (Back
+ *  gesture, Xiaomi's sidebar, Samsung's edge panel): the app leaves it alone. */
+export const fromEdge = (x: number) => x < 24 || x > window.innerWidth - 24;
+
 export function startTabSwipe(): () => void {
   if (!/android|iphone|ipad/i.test(navigator.userAgent) && !matchMedia("(pointer: coarse)").matches) return () => {};
   let start: { x: number; y: number; t: number } | null = null;
@@ -19,7 +23,7 @@ export function startTabSwipe(): () => void {
   const down = (e: TouchEvent) => {
     if (e.touches.length !== 1 || get(activeId) || matchMedia("(min-width: 721px)").matches) { start = null; return; }
     const tg = e.target as Element | null;
-    if (skip(tg) || document.body.classList.contains("settings-open")) { start = null; return; }
+    if (fromEdge(e.touches[0].clientX) || skip(tg) || document.body.classList.contains("settings-open")) { start = null; return; }
     start = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: performance.now() };
   };
   const up = (e: TouchEvent) => {
@@ -43,7 +47,10 @@ export function startTabSwipe(): () => void {
   };
   document.addEventListener("touchstart", down, { passive: true });
   document.addEventListener("touchend", up, { passive: true });
+  const cancel = () => { start = null; };
+  document.addEventListener("touchcancel", cancel, { passive: true });
   return () => {
+    document.removeEventListener("touchcancel", cancel);
     document.removeEventListener("touchstart", down);
     document.removeEventListener("touchend", up);
   };

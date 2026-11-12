@@ -1,11 +1,10 @@
 //! Which of my own devices I trust with my chats.
 //!
-//! The relay keeps the account's device list, so a relay (or someone who
-//! got the password) could add a device of its own. Such a device would get
-//! the copies my devices send each other and the history key. So a new
-//! device of the account gets nothing from this device until it is approved
-//! here — "New device signed in: it's me / sign it out" — or on another
-//! approved device of mine (`[devok:v1]`).
+//! Like Telegram: a new device of the account works at once, and my other
+//! devices say "New device signed in: it's me / sign it out". Signed out
+//! here or on another device of mine (`[devno:v1]`) — it gets nothing from
+//! this device any more. (Until 1.20.1-1 a new device got nothing until it
+//! was approved; people found that a wall — the old phone was often gone.)
 //!
 //! Trust is by the device's key: the id is the first 6 bytes of its identity
 //! key ([`crate::multidev::device_id`]), checked against the key of the E2EE
@@ -40,6 +39,9 @@ struct Trust {
     ok: BTreeSet<String>,
     #[serde(default)]
     pending: BTreeMap<String, Pending>,
+    /// Devices I said "not me" to.
+    #[serde(default)]
+    no: BTreeSet<String>,
 }
 
 /// A device of my account waiting for approval.
@@ -79,8 +81,7 @@ pub fn is_trusted(s: &AppState, id: &str) -> bool {
     if id == my_id(s) {
         return true;
     }
-    let t = load(s);
-    !t.init || t.ok.contains(id)
+    !load(s).no.contains(id)
 }
 
 /// The key id of the device behind my session with `addr`, if there is one.
@@ -111,12 +112,12 @@ pub async fn refresh(app: &AppHandle) {
             tr.init = true;
             tracing::info!(devices = devs.len(), "device trust: the account's devices are trusted");
         } else {
-            for d in devs.iter().filter(|d| d.id != mine && !tr.ok.contains(&d.id)) {
-                if !tr.pending.contains_key(&d.id) {
-                    fresh = true;
-                    tracing::warn!(id = %d.id, name = %d.name, "a new device of my account waits for approval");
-                }
-                tr.pending.insert(d.id.clone(), Pending { id: d.id.clone(), name: d.name.clone(), addr: d.addr.clone(), at: tr.pending.get(&d.id).map(|p| p.at).unwrap_or_else(now), added: d.added });
+            // A new device works right away; the question is only "was it you?".
+            for d in devs.iter().filter(|d| d.id != mine && !tr.ok.contains(&d.id) && !tr.no.contains(&d.id)) {
+                fresh = true;
+                tracing::warn!(id = %d.id, name = %d.name, "a new device signed in to my account");
+                tr.ok.insert(d.id.clone());
+                tr.pending.insert(d.id.clone(), Pending { id: d.id.clone(), name: d.name.clone(), addr: d.addr.clone(), at: now(), added: d.added });
             }
         }
         // Signed out meanwhile: nothing to ask about.
@@ -126,6 +127,8 @@ pub async fn refresh(app: &AppHandle) {
     };
     if fresh {
         let _ = app.emit("aqua://device_pending", ());
+        // Onto my signed list now, so people take its messages.
+        republish(app);
     }
 }
 
@@ -177,8 +180,10 @@ pub fn on_control(app: &AppHandle, text: &str) {
         tr.pending.remove(id);
         if ok {
             tr.ok.insert(id.to_string());
+            tr.no.remove(id);
         } else {
             tr.ok.remove(id);
+            tr.no.insert(id.to_string());
         }
         save(&s, &tr);
     }
@@ -219,6 +224,7 @@ pub async fn device_approve(app: AppHandle, id: String) -> Result<(), String> {
         let mut tr = load(&s);
         let addr = tr.pending.remove(&id).map(|p| p.addr);
         tr.ok.insert(id.clone());
+        tr.no.remove(&id);
         save(&s, &tr);
         addr
     };
@@ -248,6 +254,7 @@ pub async fn device_decline(app: AppHandle, id: String) -> Result<(), String> {
         let mut tr = load(&s);
         tr.pending.remove(&id);
         tr.ok.remove(&id);
+        tr.no.insert(id.clone());
         save(&s, &tr);
     }
     tracing::warn!(%id, "device declined and signed out");
@@ -262,17 +269,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn devices_start_trusted_then_new_ones_wait() {
+    fn new_devices_work_until_signed_out() {
         let dir = tempfile::tempdir().unwrap();
         let s = AppState::boot(dir.path().to_path_buf()).unwrap().into_inner().unwrap();
-        // Before the first look: everything goes, as in older versions.
         assert!(is_trusted(&s, "aabbccddeeff"));
         let mut t = load(&s);
         t.init = true;
         t.ok.insert("111111111111".into());
         save(&s, &t);
         assert!(is_trusted(&s, "111111111111"));
-        assert!(!is_trusted(&s, "aabbccddeeff"));
+        assert!(is_trusted(&s, "aabbccddeeff"), "a new device works at once");
+        let mut t = load(&s);
+        t.no.insert("aabbccddeeff".into());
+        save(&s, &t);
+        assert!(!is_trusted(&s, "aabbccddeeff"), "not after \"not me\"");
         assert!(is_trusted(&s, &my_id(&s)), "this device always");
     }
 }

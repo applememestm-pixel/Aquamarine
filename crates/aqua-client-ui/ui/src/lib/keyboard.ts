@@ -22,8 +22,13 @@ export function startKeyboardInset(): () => void {
     const pinch = vv && Math.abs(vv.scale - 1) > 0.01;
     const kb = vv && !pinch ? Math.max(0, Math.round(window.innerHeight - vv.height)) : 0;
     const shrunk = tall - window.innerHeight;
-    const overlay = kb > 120;
-    const open = overlay || shrunk > 120;
+    // Only a focused field means a keyboard: a window made smaller by the
+    // system (Xiaomi's sidebar / floating window, split screen) isn't one —
+    // it lifted the composer and the page drifted.
+    const typing = !!document.activeElement?.closest("input, textarea, [contenteditable=true], [contenteditable='']");
+    const overlay = typing && kb > 120;
+    const open = overlay || (typing && shrunk > 120);
+    if (!typing && shrunk > 120 && kb <= 120) tall = window.innerHeight;
     root.style.setProperty("--kb", overlay ? `${kb}px` : "0px");
     root.classList.toggle("kb-open", open);
     // Undo the browser's own "scroll the caret into view": the room is ours now.
@@ -43,11 +48,16 @@ export function startKeyboardInset(): () => void {
   vv?.addEventListener("resize", schedule);
   vv?.addEventListener("scroll", schedule);
   window.addEventListener("resize", schedule);
+  // A field gained / lost focus: the keyboard check above depends on it.
+  document.addEventListener("focusin", schedule);
+  document.addEventListener("focusout", schedule);
   apply();
   return () => {
     vv?.removeEventListener("resize", schedule);
     vv?.removeEventListener("scroll", schedule);
     window.removeEventListener("resize", schedule);
+    document.removeEventListener("focusin", schedule);
+    document.removeEventListener("focusout", schedule);
     cancelAnimationFrame(raf);
   };
 }

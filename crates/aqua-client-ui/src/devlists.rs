@@ -4,9 +4,11 @@
 //! * Sending: once a contact has a signed list, this device encrypts only
 //!   to devices on it ([`allowed`], checked against the key of the session
 //!   or of the bundle a session starts with — see `multidev::send_inner`).
-//!   A device the relay lists but the account never signed gets nothing.
-//! * Receiving: a message from a device that isn't on the sender's signed
-//!   list is dropped (after one refresh — the list may just be new).
+//!   Since 1.20.1-1 a device the relay lists for the account counts too
+//!   (`multidev::device_ok`), like Telegram: a new phone works at once, and
+//!   the account's own devices put it on the list by themselves.
+//! * Receiving: a message from a device that is neither on the sender's
+//!   signed list (after one refresh) nor signed in to their account is dropped.
 //! * A new list replaces the accepted one only if a device of the accepted
 //!   list signed it. A reset (all the old devices gone) is taken, and the
 //!   UI warns, like a changed safety code. Anything else is refused and the
@@ -79,11 +81,6 @@ pub fn accepted(app: &AppHandle, user: &str) -> Option<SignedDeviceList> {
 /// (No signed list yet — an older app on their side: yes, as before.)
 pub fn allowed(app: &AppHandle, user: &str, dh: &[u8]) -> bool {
     accepted(app, user).is_none_or(|l| l.has_dh(dh))
-}
-
-/// Short-id form of [`allowed`], for the relay's device list.
-pub fn allowed_id(app: &AppHandle, user: &str, id: &str) -> bool {
-    accepted(app, user).is_none_or(|l| l.has_id(id))
 }
 
 /// Look at `user`'s list on the relay (at most once a minute unless

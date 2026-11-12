@@ -184,6 +184,29 @@ mod tests {
     }
 
     #[test]
+    fn crossed_sessions_keep_decrypting_with_the_previous_one() {
+        // Both open a session at the same moment; Bob's initial reaches
+        // Alice late, after Bob already answered on Alice's session. The
+        // client keeps the replaced session (`prev_sessions`): a failed
+        // decrypt leaves the current one intact, and the old one opens it.
+        let (alice, bob, bob_spk, bob_opk, bob_bundle) = setup();
+        let alice_spk = SignedPreKey::generate(1, &alice);
+        let alice_bundle = PreKeyBundle { identity: alice.public(), signed_prekey: alice_spk.public(), one_time_prekey: None };
+
+        let (mut a_first, a_init) = Session::start_as_initiator(&alice, &bob_bundle, b"hi").unwrap();
+        let (_b_first, b_init) = Session::start_as_initiator(&bob, &alice_bundle, b"hi").unwrap();
+        // Bob gets Alice's first and replies on it.
+        let (mut b_cur, _) = Session::accept_initial(&bob, bob_spk, Some(bob_opk), &a_init).unwrap();
+        let late = b_cur.encrypt(b"123").unwrap();
+        // Bob's own initial reaches Alice now: a new current session.
+        let (mut a_cur, _) = Session::accept_initial(&alice, alice_spk, None, &b_init).unwrap();
+        assert!(a_cur.decrypt(&late).is_err(), "not the session it was sent on");
+        assert_eq!(a_first.decrypt(&late).unwrap(), b"123");
+        // And the failed attempt didn't break the current one.
+        assert!(a_cur.encrypt(b"still ok").is_ok());
+    }
+
+    #[test]
     fn envelope_serde_roundtrip() {
         let (alice, bob, bob_spk, bob_opk, bundle) = setup();
         let (mut a_sess, initial) =

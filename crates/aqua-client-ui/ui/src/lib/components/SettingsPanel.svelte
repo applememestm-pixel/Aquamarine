@@ -1957,12 +1957,12 @@
       <section class="group">
         <div class="label">{$t("Devices")}</div>
         <div class="bots-note">{$t("Your account works on several devices at once: phone, computer, tablet. Each device has its own encryption keys and gets every message. To add one, turn on two-step verification (Privacy & Security), then open Aquamarine there and choose “Sign in” with your @username, password and the code.")}</div>
-        <div class="bots-note">{$t("A new device gets your chats only after you approve it on one of your devices (“It's me”). Two-step codes and turning off sign-in on new devices: Privacy & Security.")}</div>
+        <div class="bots-note">{$t("A new device works at once; your other devices ask whether it was you, and “Not me” signs it out. Two-step codes and turning off sign-in on new devices: Privacy & Security.")}</div>
         {#if devList}
           <div class="bk-stat">
             <span class="bk-dot" class:on={devList.published && devList.this_listed}></span>
             <span>{devList.published
-              ? (devList.this_listed ? tr("Signed device list: {n} devices. Contacts encrypt only to these.", { n: devList.devices }) : tr("This device isn't on your signed list yet — approve it on one of your other devices."))
+              ? (devList.this_listed ? tr("Signed device list: {n} devices. Contacts encrypt only to these.", { n: devList.devices }) : tr("This device isn't on your signed list yet — your other devices add it by themselves when they're online."))
               : tr("No signed device list yet — it appears by itself in a moment.")}</span>
           </div>
           {#if devList.published && !devList.this_listed}
@@ -1993,7 +1993,7 @@
                     {d.name || (d.primary ? $t("Main device") : $t("Device {id}", { id: d.id.slice(0, 6) }))}
                     {#if d.current}<span class="dev-tag">{$t("this device")}</span>{/if}
                     {#if d.primary}<span class="dev-tag dim">{$t("main")}</span>{/if}
-                    {#if $deviceTrust?.pending.some((p) => p.id === d.id)}<span class="dev-tag wait">{$t("waiting for approval")}</span>{/if}
+                    {#if $deviceTrust?.pending.some((p) => p.id === d.id)}<span class="dev-tag wait">{$t("new — was it you?")}</span>{/if}
                   </div>
                   <div class="dev-sub">{d.online ? $t("online") : $t("offline")}{d.added ? " · " + tr("added {d}", { d: devAdded(d.added) }) : ""} · {d.id}</div>
                   {/if}
@@ -2159,6 +2159,7 @@
             <div class="foot-note" style="margin:0 0 8px">{$t("No plugins yet.")}</div>
           {/each}
           <div class="pl-acts">
+            <button class="mini-btn" onclick={() => void api.openExternal("https://applememestm-pixel.github.io/Aquamarine/addons.html").catch((e) => showToast(String(e)))}>{$t("Add-on catalogue")}</button>
             <label class="mini-btn">{$t("Install from file…")}
               <input type="file" accept=".js,.mjs,.txt,text/javascript" hidden onchange={async (e) => {
                 const f = (e.currentTarget as HTMLInputElement).files?.[0];

@@ -301,6 +301,7 @@ export const api = {
   serverPing:         (url: string, via?: string): Promise<number> => invoke("server_ping", { url, via: via ?? null }),
   accountsList:       (): Promise<AccountSlot[]> => invoke("accounts_list"),
   accountSwitch:      (slot: string, store: string): Promise<{ slot: string; store: string | null }> => invoke("account_switch", { slot, store }),
+  accountBoot:        (owner: string | null, store: string): Promise<{ slot: string; store: string | null }> => invoke("account_boot", { owner, store }),
   accountForget:      (slot: string): Promise<void> => invoke("account_forget", { slot }),
   appRelaunch:        (): Promise<void> => invoke("app_relaunch"),
   setGpuMode:         (mode: "auto" | "on" | "off"): Promise<void>                     => invoke("set_gpu_mode", { mode }),

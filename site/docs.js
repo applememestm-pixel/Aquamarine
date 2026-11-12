@@ -29,6 +29,7 @@
       ["profiles", "Профили и игры", "Profiles & games"],
       ["bots", "Боты и мини-приложения", "Bots & mini apps"],
       ["music", "Музыка: Navidrome", "Music: Navidrome"],
+      ["plugins", "Плагины", "Plugins"],
     ]],
     ["Эксплуатация", "Operations", [
       ["api", "HTTP API", "HTTP API"],

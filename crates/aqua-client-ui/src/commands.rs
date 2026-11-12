@@ -3980,7 +3980,12 @@ async fn on_incoming_initial(
         if let Err(e) = s.vault.save_session(&addr, &session) {
             tracing::warn!(?e, "save_session on accept");
         }
-        s.sessions.insert(addr.clone(), session);
+        // Both sides opened a session at once: theirs arrives after ours was
+        // already in use. Keep ours — what they sent with it still decrypts.
+        if let Some(old) = s.sessions.insert(addr.clone(), session) {
+            let _ = s.vault.save_session(&format!("{addr}{}", crate::state::PREV_SESSION), &old);
+            s.prev_sessions.insert(addr.clone(), old);
+        }
     }
     crate::multidev::note_sender(&addr);
     // Presence, typing, group traffic… may open a session too (a new device
@@ -4043,7 +4048,23 @@ async fn on_incoming_envelope(
             };
             match session.decrypt(&envelope) {
                 Ok(p) => p,
-                Err(e) => { tracing::warn!(?e, "decrypt failed"); return }
+                // Sent with the session a crossing one replaced: it works —
+                // make it the current one again (Signal does the same), so
+                // both ends settle on one session.
+                Err(e) => match s.prev_sessions.get_mut(&addr).map(|p| p.decrypt(&envelope)) {
+                    Some(Ok(p)) => {
+                        let prev = s.prev_sessions.remove(&addr).expect("just used");
+                        if let Some(cur) = s.sessions.insert(addr.clone(), prev) {
+                            s.prev_sessions.insert(addr.clone(), cur);
+                        }
+                        if let Some(cur) = s.prev_sessions.get(&addr) {
+                            let _ = s.vault.save_session(&format!("{addr}{}", crate::state::PREV_SESSION), cur);
+                        }
+                        tracing::info!(peer = %addr, "message from the previous session — switched back to it");
+                        p
+                    }
+                    _ => { tracing::warn!(?e, "decrypt failed"); return }
+                },
             }
         };
         if let Some(session) = s.sessions.get(&addr) {
@@ -4118,10 +4139,14 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
     let peer_dh = state.lock().ok().and_then(|s| s.sessions.get(addr).map(|x| x.peer.dh_pub.as_bytes().to_vec()));
     if let Some(dh) = peer_dh {
         if !crate::devlists::allowed(app, &from, &dh) {
-            if let Some(t) = state.lock().ok().and_then(|s| s.transport.clone()) {
-                crate::devlists::refresh(app, &t, &from, true).await;
+            let t = state.lock().ok().and_then(|s| s.transport.clone());
+            if let Some(t) = &t {
+                crate::devlists::refresh(app, t, &from, true).await;
             }
-            if !crate::devlists::allowed(app, &from, &dh) {
+            // Not on the list yet, but signed in to their account: a new
+            // phone of theirs (multidev::device_ok).
+            let relay_has = match &t { Some(t) => crate::multidev::device_ok(app, t, &from, addr, &dh).await, None => false };
+            if !relay_has && !crate::devlists::allowed(app, &from, &dh) {
                 tracing::warn!(%addr, "a message from a device that isn't on the sender's signed list — dropped");
                 let _ = app.emit("aqua://devlist_refused", serde_json::json!({ "user": from, "why": "unlisted device" }));
                 return;
@@ -4629,8 +4654,13 @@ pub fn apply_peer_rename(s: &mut AppState, old: &str, new: &str) {
     s.chat_order.retain(|id| seen.insert(id.clone()));
     let mut keys: Vec<String> = s.sessions.keys().filter(|k| crate::multidev::base_user(k) == old).cloned().collect();
     for k in s.vault.list_session_peer_ids().unwrap_or_default() {
+        if let Some(a) = k.strip_suffix(crate::state::PREV_SESSION) {
+            if crate::multidev::base_user(a) == old { let _ = s.vault.delete_session(&k); }
+            continue;
+        }
         if crate::multidev::base_user(&k) == old && !keys.contains(&k) { keys.push(k); }
     }
+    s.prev_sessions.retain(|k, _| crate::multidev::base_user(k) != old);
     for k in keys {
         let nk = format!("{new}{}", &k[old.len()..]);
         let sess = s.sessions.remove(&k).or_else(|| s.vault.load_session(&k).ok().flatten());
