@@ -90,6 +90,27 @@ pub async fn addresses(transport: &Transport, user: &str) -> Vec<String> {
     list
 }
 
+/// Is `addr` (a device of `user` with identity key `dh`) one I may talk to?
+/// On their signed list — or, like Telegram, simply signed in to their
+/// account on the relay: a new phone works at once, before their other
+/// devices have put it on the list (they do that by themselves).
+pub async fn device_ok(app: &AppHandle, transport: &Transport, user: &str, addr: &str, dh: &[u8]) -> bool {
+    if crate::devlists::allowed(app, user, dh) {
+        return true;
+    }
+    // `user~id`: the id must be this key's, and the relay must list it now.
+    match addr.split_once('~') {
+        Some((_, id)) if id == device_id(dh) => {}
+        _ => return false,
+    }
+    if addresses(transport, user).await.iter().any(|a| a == addr) {
+        return true;
+    }
+    // Maybe just signed in: ask the relay afresh once.
+    invalidate(user);
+    addresses(transport, user).await.iter().any(|a| a == addr)
+}
+
 /// This device's own address.
 pub fn my_address(s: &AppState, devices_of_me: &[String]) -> String {
     let me = s.username.clone().unwrap_or_default();
@@ -114,8 +135,14 @@ async fn send_inner(app: &AppHandle, addr: &str, payload: &str, own: bool) -> Re
     // Someone else's device: only if their signed list has it (devlists.rs).
     if !own {
         let key = state.lock().map_err(|e| e.to_string())?.sessions.get(addr).map(|x| x.peer.dh_pub.as_bytes().to_vec());
-        if let Some(dh) = key {
-            if !crate::devlists::allowed(app, base_user(addr), &dh) {
+        let transport = state.lock().map_err(|e| e.to_string())?.transport.clone();
+        let ok = match (&key, &transport) {
+            (Some(dh), Some(t)) => crate::devlists::allowed(app, base_user(addr), dh) || device_ok(app, t, base_user(addr), addr, dh).await,
+            (Some(dh), None) => crate::devlists::allowed(app, base_user(addr), dh),
+            _ => true,
+        };
+        if key.is_some() {
+            if !ok {
                 // The session is with a device their account doesn't list any
                 // more (a new phone, the account registered again). It's of
                 // no use: forget it and start from the device's current keys
@@ -208,7 +235,7 @@ async fn send_inner(app: &AppHandle, addr: &str, payload: &str, own: bool) -> Re
     };
     let bundle = transport.fetch_bundle(addr).await.map_err(|e| format!("fetch_bundle: {e}"))?;
     bundle.verify().map_err(|e| format!("bad bundle: {e}"))?;
-    if !own && !crate::devlists::allowed(app, base_user(addr), bundle.identity.dh_pub.as_bytes()) {
+    if !own && !device_ok(app, &transport, base_user(addr), addr, bundle.identity.dh_pub.as_bytes()).await {
         return Err(NOT_LISTED.into());
     }
     if own {
@@ -308,14 +335,10 @@ pub async fn fanout(app: &AppHandle, peer: &str, payload: &str, sync: bool) -> R
     let mut ok = 0usize;
     if peer != me {
         crate::devlists::refresh(app, &transport, &peer, false).await;
+        // Every device the relay has for them (a new one isn't on their
+        // signed list yet — see `device_ok`; the key is checked when the
+        // session starts).
         for addr in addresses(&transport, &peer).await {
-            // `user~id`: skip devices their signed list doesn't have.
-            if let Some((_, id)) = addr.split_once('~') {
-                if !crate::devlists::allowed_id(app, &peer, id) {
-                    tracing::warn!(%addr, "fanout: not on the signed device list — skipped");
-                    continue;
-                }
-            }
             match send_to_address(app, &addr, payload).await {
                 Ok(()) => ok += 1,
                 Err(e) => {
@@ -346,12 +369,6 @@ pub async fn fanout(app: &AppHandle, peer: &str, payload: &str, sync: bool) -> R
         invalidate(&peer);
         crate::devlists::refresh(app, &transport, &peer, true).await;
         for addr in addresses(&transport, &peer).await {
-            if let Some((_, id)) = addr.split_once('~') {
-                if !crate::devlists::allowed_id(app, &peer, id) {
-                    first_err.get_or_insert(NOT_LISTED.into());
-                    continue;
-                }
-            }
             match send_to_address(app, &addr, payload).await {
                 Ok(()) => ok += 1,
                 Err(e) => { first_err = Some(e); }

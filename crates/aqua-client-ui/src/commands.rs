@@ -4139,10 +4139,14 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
     let peer_dh = state.lock().ok().and_then(|s| s.sessions.get(addr).map(|x| x.peer.dh_pub.as_bytes().to_vec()));
     if let Some(dh) = peer_dh {
         if !crate::devlists::allowed(app, &from, &dh) {
-            if let Some(t) = state.lock().ok().and_then(|s| s.transport.clone()) {
-                crate::devlists::refresh(app, &t, &from, true).await;
+            let t = state.lock().ok().and_then(|s| s.transport.clone());
+            if let Some(t) = &t {
+                crate::devlists::refresh(app, t, &from, true).await;
             }
-            if !crate::devlists::allowed(app, &from, &dh) {
+            // Not on the list yet, but signed in to their account: a new
+            // phone of theirs (multidev::device_ok).
+            let relay_has = match &t { Some(t) => crate::multidev::device_ok(app, t, &from, addr, &dh).await, None => false };
+            if !relay_has && !crate::devlists::allowed(app, &from, &dh) {
                 tracing::warn!(%addr, "a message from a device that isn't on the sender's signed list — dropped");
                 let _ = app.emit("aqua://devlist_refused", serde_json::json!({ "user": from, "why": "unlisted device" }));
                 return;
