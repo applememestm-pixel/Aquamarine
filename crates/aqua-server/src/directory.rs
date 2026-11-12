@@ -79,6 +79,38 @@ impl SmtpConfig {
     }
 }
 
+/// What "Clear the server" empties (see [`Directory::wipe`]).
+#[derive(Debug, Default, Clone, serde::Deserialize)]
+pub struct Wipe {
+    #[serde(default)]
+    pub accounts: bool,
+    #[serde(default)]
+    pub messages: bool,
+    #[serde(default)]
+    pub history: bool,
+    #[serde(default)]
+    pub backups: bool,
+    #[serde(default)]
+    pub profiles: bool,
+    #[serde(default)]
+    pub capsules: bool,
+    #[serde(default)]
+    pub bots: bool,
+    #[serde(default)]
+    pub marks: bool,
+    #[serde(default)]
+    pub codes: bool,
+    /// Files (photos, videos, documents in chats): the blob store.
+    #[serde(default)]
+    pub files: bool,
+    /// Sticker and emoji packs (aqua-packs).
+    #[serde(default)]
+    pub packs: bool,
+    /// The server's journal and error reports.
+    #[serde(default)]
+    pub logs: bool,
+}
+
 pub struct Directory {
     db: Mutex<Connection>,
     /// AQUA_DEV_CODES: Some(true) forces dev mode even with SMTP, Some(false)
@@ -2560,6 +2592,48 @@ impl Directory {
             db.execute("DELETE FROM verified WHERE uid=?1", rusqlite::params![uid])
         };
         r.is_ok()
+    }
+
+    /// "Clear the server" (panel → Settings): empties what's ticked.
+    /// `accounts` is everything people left here — the accounts with their
+    /// keys, profiles, two-step codes, backups, synced history, waiting
+    /// messages, capsules, bots and check marks; the rest are pieces of it.
+    /// Server settings (aqua-admin.json, mail, Telegram, music, network) stay.
+    /// Returns (what, rows removed).
+    pub fn wipe(&self, w: &Wipe) -> Vec<(&'static str, usize)> {
+        let db = self.db.lock().unwrap();
+        let mut out = Vec::new();
+        let mut run = |what: &'static str, sql: &str| {
+            let n = db.execute(sql, []).unwrap_or(0);
+            out.push((what, n));
+        };
+        if w.accounts {
+            for (what, table) in [
+                ("accounts", "users"), ("keys", "prekeys"), ("profile pictures", "profile_media"), ("last seen", "last_seen"),
+                ("backups", "backups"), ("synced history", "hist_store"), ("waiting messages", "inbox"), ("capsules", "capsules"),
+                ("bot tokens", "bot_keys"), ("bot chats", "bot_peers"), ("renames", "renames"), ("check marks", "verified"),
+                ("e-mail codes", "email_codes"), ("network names", "fed_names"),
+            ] {
+                run(what, &format!("DELETE FROM {table}"));
+            }
+        } else {
+            if w.messages { run("waiting messages", "DELETE FROM inbox"); }
+            if w.history { run("synced history", "DELETE FROM hist_store"); }
+            if w.backups { run("backups", "DELETE FROM backups"); }
+            if w.profiles { run("profile pictures", "DELETE FROM profile_media"); }
+            if w.capsules { run("capsules", "DELETE FROM capsules"); }
+            if w.bots {
+                run("bot chats", "DELETE FROM bot_peers");
+                run("bot tokens", "DELETE FROM bot_keys");
+                run("bots", "DELETE FROM users WHERE is_bot=1");
+            }
+            if w.marks { run("check marks", "DELETE FROM verified"); }
+            if w.codes { run("e-mail codes", "DELETE FROM email_codes"); }
+        }
+        drop(run);
+        // Give the space back to the disk.
+        let _ = db.execute_batch("VACUUM");
+        out
     }
 
     /// Who has a check mark here (current @names).

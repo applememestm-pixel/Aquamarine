@@ -30,7 +30,7 @@ pub fn is_owner(state: &AppState, username: &str) -> bool {
         .is_some_and(|e| hex::encode(Sha256::digest(e.as_bytes())) == OWNER_EMAIL_SHA256)
 }
 
-fn ensure_bot(state: &AppState) {
+pub(crate) fn ensure_bot(state: &AppState) {
     let name = bot_name();
     if state.directory.is_bot(&name) {
         return;

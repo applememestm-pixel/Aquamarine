@@ -2800,6 +2800,58 @@ async fn admin_test_smtp(
     }
 }
 
+/// `POST /v1/admin/wipe` — "Clear the server" (the panel, Settings): empties
+/// what's ticked; `confirm` must be "WIPE". Accounts ticked = everyone is
+/// logged out at once (their connections dropped) and has to sign up anew.
+/// The built-in bots come back right away.
+#[derive(serde::Deserialize)]
+struct WipeReq {
+    #[serde(flatten)]
+    what: directory::Wipe,
+    #[serde(default)]
+    confirm: String,
+}
+
+async fn admin_wipe(State(state): State<AppState>, headers: axum::http::HeaderMap, Json(b): Json<WipeReq>) -> Result<Json<serde_json::Value>, StatusCode> {
+    admin_authed(&state, &headers)?;
+    if b.confirm != "WIPE" {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let w = b.what;
+    let mut removed = {
+        let dir = state.directory.clone();
+        let w = w.clone();
+        tokio::task::spawn_blocking(move || dir.wipe(&w)).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    };
+    if w.files {
+        let blobs = state.blobs.clone();
+        removed.push(("files", tokio::task::spawn_blocking(move || blobs.clear_all()).await.unwrap_or(0)));
+    }
+    if w.packs {
+        removed.push(("sticker and emoji packs", tokio::task::spawn_blocking(packs::clear_all).await.unwrap_or(0)));
+    }
+    if w.logs {
+        journal::clear();
+        removed.push(("error reports", report::clear()));
+    }
+    if w.accounts {
+        // Drop every connection: their sockets end, and nobody is known any more.
+        removed.push(("connections", state.users.len()));
+        state.users.clear();
+        state.bindings.clear();
+        state.bot_queues.clear();
+    }
+    if w.accounts || w.bots {
+        verify::ensure_bot(&state);
+        if music::enabled() {
+            music::ensure_bot(&state);
+        }
+    }
+    tracing::warn!(?removed, "the server was cleared from the admin panel");
+    let list: Vec<serde_json::Value> = removed.into_iter().map(|(what, n)| serde_json::json!({ "what": what, "n": n })).collect();
+    Ok(Json(serde_json::json!({ "removed": list })))
+}
+
 async fn admin_page(State(state): State<AppState>) -> impl IntoResponse {
     if std::env::var("AQUA_ADMIN_TOKEN").unwrap_or_default().is_empty() {
         let _ = state;
@@ -2895,6 +2947,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/admin/detail/:what", get(admin_detail))
         .route("/v1/admin/datadir", get(admin_get_datadir).post(admin_move_datadir))
         .route("/v1/admin/config", post(admin_set_config))
+        .route("/v1/admin/wipe", post(admin_wipe))
         .route("/v1/admin/smtp", get(admin_get_smtp).post(admin_set_smtp))
         .route("/v1/admin/smtp/test", post(admin_test_smtp))
         .route("/v1/admin/telegram", get(packs::admin_get).post(packs::admin_set))

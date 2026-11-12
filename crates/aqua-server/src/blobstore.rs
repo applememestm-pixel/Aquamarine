@@ -158,6 +158,19 @@ impl BlobStore {
         removed
     }
 
+    /// "Clear the server": every file, the long-lived ones too.
+    pub fn clear_all(&self) -> usize {
+        let mut removed = self.clear_cache();
+        if let Ok(rd) = std::fs::read_dir(&self.keep) {
+            for e in rd.flatten() {
+                if e.metadata().is_ok_and(|m| m.is_file()) && std::fs::remove_file(e.path()).is_ok() {
+                    removed += 1;
+                }
+            }
+        }
+        removed
+    }
+
     /// Hourly sweep in the background.
     pub fn spawn_sweeper(&self) {
         let me = self.clone();

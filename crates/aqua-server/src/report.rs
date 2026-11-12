@@ -313,3 +313,13 @@ mod tests {
         assert!(r.msg.chars().all(|c| c == 'я'));
     }
 }
+
+/// "Clear the server": the reports apps sent here.
+pub fn clear() -> usize {
+    let n = INBOX.lock().ok().and_then(|g| g.as_ref().map(|i| i.list.len())).unwrap_or(0);
+    if let Ok(mut g) = INBOX.lock() {
+        *g = None;
+    }
+    let _ = std::fs::remove_file(LOG);
+    n
+}

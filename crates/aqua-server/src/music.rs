@@ -378,7 +378,7 @@ fn bot_owner() -> [u8; 32] {
 }
 
 /// Create (or keep) the bot account and its menu button "open the player".
-fn ensure_bot(state: &AppState) {
+pub(crate) fn ensure_bot(state: &AppState) {
     let name = bot_name();
     if !state.directory.is_bot(&name) {
         if let Err(e) = state.directory.register_bot(&name, &bot_owner(), "Music") {

@@ -620,3 +620,17 @@ pub async fn admin_delete(State(state): State<AppState>, headers: axum::http::He
     std::fs::remove_dir_all(pack_dir(&name)).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::NO_CONTENT)
 }
+
+/// "Clear the server" with packs ticked: every sticker and emoji pack here.
+pub fn clear_all() -> usize {
+    let Ok(rd) = std::fs::read_dir(PACKS_DIR) else { return 0 };
+    let mut n = 0;
+    for e in rd.flatten() {
+        let p = e.path();
+        let ok = if p.is_dir() { std::fs::remove_dir_all(&p).is_ok() } else { std::fs::remove_file(&p).is_ok() };
+        if ok {
+            n += 1;
+        }
+    }
+    n
+}

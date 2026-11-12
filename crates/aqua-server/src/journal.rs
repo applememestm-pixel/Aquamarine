@@ -114,3 +114,17 @@ mod tests {
         assert!(visitors().iter().any(|v| v.who == "http://peer" && v.count == 2));
     }
 }
+
+/// "Clear the server": the journal file and what's kept in memory.
+pub fn clear() {
+    let path = std::env::var("AQUA_JOURNAL").unwrap_or_else(|_| "aqua-journal.log".into());
+    if path != "off" {
+        let _ = std::fs::write(&path, b"");
+    }
+    if let Ok(mut l) = LOG.lock() {
+        l.clear();
+    }
+    if let Ok(mut s) = SINCE.lock() {
+        *s = None;
+    }
+}

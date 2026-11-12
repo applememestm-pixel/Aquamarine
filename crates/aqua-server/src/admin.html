@@ -397,6 +397,13 @@
           <div class="note" id="ddMsg"></div>
         </div>
         <div class="card rv">
+          <h2 data-t="Clear the server">Clear the server</h2>
+          <div class="note" data-t="wipeNote">Erases what's ticked right now, for good. The server keeps running. Kept: settings, mail, Telegram, music, the server network.</div>
+          <div class="wipe" id="wipeBox"></div>
+          <div class="row mt"><button class="btn ghost" style="color:#ff6b6b" onclick="doWipe()" data-t="Clear…">Clear…</button></div>
+          <div class="note" id="wipeMsg"></div>
+        </div>
+        <div class="card rv">
           <h2><span data-t="Latest codes">Latest codes</span> <span class="hint"><a href="#codes" data-t="all →">all →</a></span></h2>
           <div class="codes" id="codesMini"></div>
         </div>
@@ -637,6 +644,14 @@
   // ---- language: Russian when the browser is Russian ----
   const RU = /^ru\b/i.test(navigator.language || "");
   const DICT = {
+    "Clear the server":"Очистить сервер","Clear…":"Очистить…",
+    "wipeNote":"Стирает выбранное прямо сейчас, без возврата. Сервер продолжает работать. Не трогается: настройки, почта, Telegram, музыка, сеть серверов.",
+    "wpAccounts":"Все аккаунты целиком — люди, ключи, профили, двухэтапные коды, копии чатов, история, недоставленные сообщения, капсулы, боты и галочки",
+    "wpMessages":"Недоставленные сообщения","wpHistory":"История между устройствами","wpBackups":"Копии чатов","wpProfiles":"Аватарки и баннеры",
+    "wpCapsules":"Капсулы времени","wpBots":"Боты (встроенные появятся снова)","wpMarks":"Галочки","wpCodes":"Коды из писем",
+    "wpFiles":"Файлы из чатов","wpPacks":"Наборы стикеров и эмодзи","wpLogs":"Журнал и отчёты об ошибках",
+    "wipeConfirm":"Стереть выбранное с сервера? Это не отменить.","wipeConfirmAll":"Стереть ВСЕ аккаунты? Все выйдут и будут регистрироваться заново. Это не отменить.",
+    "Nothing is ticked.":"Ничего не выбрано.","Cleared:":"Стёрто:",
     "relay":"ретранслятор","Docs":"Документация","Lock":"Выйти","Admin sign-in":"Вход в панель",
     "The token is printed in the server window.":"Токен напечатан в окне сервера.","paste the token":"вставьте токен","Unlock":"Войти",
     "Overview":"Обзор","Email codes":"Коды из писем","Access":"Доступ","Email delivery":"Почта","Stickers":"Стикеры","Federation":"Федерация",
@@ -771,6 +786,30 @@
   function pill(state, text){ $("pill").className = "pill " + state; $("pillText").textContent = text; }
   function msg(id, text, cls){ $(id).className = "note " + (cls||""); $(id).textContent = text; if (id !== "gateMsg") $(id).style.marginTop = "10px"; }
 
+  // "Clear the server" (POST /v1/admin/wipe; the app's panel has the same).
+  const WIPE_EN = { wpAccounts: "Every account, whole — people, keys, profiles, two-step codes, chat backups, history, undelivered messages, capsules, bots and check marks",
+    wpMessages: "Undelivered messages", wpHistory: "History synced between devices", wpBackups: "Chat backups", wpProfiles: "Avatars and banners",
+    wpCapsules: "Time capsules", wpBots: "Bots (the built-in ones come back)", wpMarks: "Check marks", wpCodes: "E-mail codes",
+    wpFiles: "Files from chats", wpPacks: "Sticker and emoji packs", wpLogs: "Journal and error reports",
+    wipeConfirm: "Erase what's ticked from the server? This can't be undone.", wipeConfirmAll: "Erase ALL accounts? Everyone is logged out and has to sign up again. This can't be undone." };
+  const WT = (k) => (RU ? T(k) : (WIPE_EN[k] || k));
+  const WIPE = [["accounts","wpAccounts",true],["messages","wpMessages",false],["history","wpHistory",false],["backups","wpBackups",false],
+    ["profiles","wpProfiles",false],["capsules","wpCapsules",false],["bots","wpBots",false],["marks","wpMarks",false],["codes","wpCodes",false],
+    ["files","wpFiles",true],["packs","wpPacks",false],["logs","wpLogs",true]];
+  const PER_PERSON = ["messages","history","backups","profiles","capsules","bots","marks","codes"];
+  function wipeSync(){ const all = $("wp_accounts")?.checked;
+    for (const k of PER_PERSON){ const b=$("wp_"+k); if(!b) continue; b.disabled=!!all; if(all) b.checked=true; b.parentElement.style.opacity = all ? ".55" : ""; } }
+  function paintWipe(){ const box=$("wipeBox"); if(!box || box.dataset.h) return; box.dataset.h="1";
+    box.innerHTML = WIPE.map(([k,l,on]) => `<label style="display:flex;gap:8px;align-items:flex-start;margin:6px 0;${k==="accounts"?"font-weight:600":""}"><input type="checkbox" id="wp_${k}" ${on?"checked":""}> <span>${esc(WT(l))}</span></label>`).join("");
+    for (const [k] of WIPE) $("wp_"+k).addEventListener("change", wipeSync);
+    wipeSync(); }
+  async function doWipe(){ const body={confirm:"WIPE"}; let any=false;
+    for (const [k] of WIPE){ body[k]=!!$("wp_"+k)?.checked; any=any||body[k]; }
+    if(!any){ $("wipeMsg").textContent=T("Nothing is ticked."); return; }
+    if(!confirm(WT(body.accounts?"wipeConfirmAll":"wipeConfirm"))) return;
+    try { const r = await api("/v1/admin/wipe",{method:"POST",body:JSON.stringify(body)});
+      $("wipeMsg").textContent = T("Cleared:")+" "+((r.removed||[]).filter(x=>x.n>0).map(x=>x.what+": "+x.n).join(", ")||"—");
+    } catch(e){ $("wipeMsg").textContent = String(e.message||e); } }
   async function api(path, opts = {}) {
     const r = await fetch(path, { ...opts,
       headers: { "Authorization": "Bearer " + TOKEN, "Content-Type": "application/json", ...(opts.headers||{}) } });
@@ -1226,7 +1265,7 @@
 
   async function tick(){
     if (!TOKEN) { $("gate").classList.remove("hide"); pill("", T("locked")); bootDone(); return; }
-    try { await refresh(); if (!mailLoaded) loadMail(); if (!tgLoaded) loadTg(); if (!fedLoaded) loadFed(); }
+    try { await refresh(); paintWipe(); if (!mailLoaded) loadMail(); if (!tgLoaded) loadTg(); if (!fedLoaded) loadFed(); }
     catch(e){
       if (e.message === "bad token") { signOut(); }
       else { pill("down", T("server not reachable")); bootDone(); }
