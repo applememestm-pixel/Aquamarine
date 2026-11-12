@@ -73,6 +73,10 @@ export const hiddenStories = persisted<string[]>("aqua.hiddenStories.v1", []);
 export const storyViews = persisted<Record<string, StoryView[]>>("aqua.storyViews.v1", {});
 /** Stories I've reacted to (❤), so the heart stays red. */
 export const likedStories = persisted<string[]>("aqua.likedStories.v1", []);
+/** How to move between people: "cube" — sideways with a turning cube
+ *  (Telegram), "vertical" — the next one comes up from below, like a feed.
+ *  "" — not chosen yet: the viewer asks the first time. */
+export const storyNav = persisted<"" | "cube" | "vertical">("aqua.storyNav.v1", "");
 /** The audience and life last picked when posting (Telegram remembers it). */
 export const storyDefaults = persisted<{ aud: StoryAudience; sel: string[]; hours: number }>("aqua.storyDefaults.v1", { aud: "all", sel: [], hours: 24 });
 

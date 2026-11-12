@@ -20,7 +20,7 @@
   import { pickFolder } from "../dialog";
   const PHONE_UI = /android|iphone|ipad/i.test(navigator.userAgent);
   import { hasWidget } from "../widget";
-  import { storiesOff } from "../stories";
+  import { storiesOff, storyNav } from "../stories";
   import { setStoriesOff } from "../storyFeed";
   import { plugins, pluginsOn, installPlugin, removePlugin, togglePlugin, EXAMPLE_PLUGIN, PLUGIN_CATS, pluginCategory, type PluginCat } from "../plugins";
   import { musicStatus, refreshMusic, openMusic } from "../music";
@@ -1735,6 +1735,13 @@
             <div class="tr-sub">{$t("Off: nobody's stories are shown, and yours disappear for everyone.")}</div></div>
           <span class="switch" class:on={!$storiesOff}></span>
         </button>
+        {#if !$storiesOff}
+          <div class="row">
+            <span class="row-label">{$t("Next person")}</span>
+            <Select class="sel" value={$storyNav || "cube"} options={[{ value: "cube", label: $t("Sideways (cube)") }, { value: "vertical", label: $t("Down (feed)") }]}
+              onchange={(v) => storyNav.set(v === "vertical" ? "vertical" : "cube")} />
+          </div>
+        {/if}
       </section>
       <section class="group">
         <div class="label">{$t("Attach menu")}</div>

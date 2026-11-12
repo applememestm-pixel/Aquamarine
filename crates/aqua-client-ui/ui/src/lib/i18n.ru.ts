@@ -2891,4 +2891,13 @@ export const RU: Record<string, string> = {
   "{n} views": "Просмотров: {n}",
   "Stories hidden — they're now at the end of the strip": "Истории скрыты — теперь они в конце ленты",
   "Stories are shown again": "Истории снова показываются",
+  "How to flip through stories?": "Как листать истории?",
+  "Sideways": "Вбок",
+  "Swipe left — the next person comes in on a turning cube, like in Telegram": "Свайп влево — следующий человек появляется поворотом куба, как в Telegram",
+  "Swipe up — the next person comes up from below, like a feed": "Свайп вверх — следующий человек выезжает снизу, как лента",
+  "You can change it in Settings → Chat settings.": "Можно поменять в Настройки → Настройки чатов.",
+  "Next person": "Следующий человек",
+  "Sideways (cube)": "Вбок (куб)",
+  "Down (feed)": "Вниз (лента)",
+  "Downwards": "Вниз",
 };

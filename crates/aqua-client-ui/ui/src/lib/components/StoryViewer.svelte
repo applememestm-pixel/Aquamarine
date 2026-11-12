@@ -16,7 +16,7 @@
   import { onBack } from "../back";
   import {
     storyViewer, myStories, saneStories, markSeen, deleteStory, isLive, sendStoryView, toggleLike, toggleHidden,
-    likedStories, seenStories, storyViews, hiddenStories, closeFriends, type Story,
+    likedStories, seenStories, storyViews, hiddenStories, closeFriends, storyNav, type Story,
   } from "../stories";
   import { peerPresence } from "../presence";
   import { avatars, peerCards } from "../people";
@@ -47,7 +47,11 @@
   let menu = $state(false);
   let viewersOpen = $state(false);
   let hidden = $state(typeof document !== "undefined" && document.visibilityState === "hidden");
-  const paused = $derived(held || replyFocus || menu || viewersOpen || hidden);
+  /** People one after another downwards (a feed) instead of the cube. */
+  const vert = $derived($storyNav === "vertical");
+  /** First time: ask which way to move between people. */
+  const choosing = $derived(!!v && $storyNav === "");
+  const paused = $derived(held || replyFocus || menu || viewersOpen || hidden || choosing);
 
   /** Decrypted files, by story id (shared with the side previews). */
   const cache = new Map<string, string>();
@@ -158,7 +162,8 @@
   function next() {
     if (!v) return;
     if (v.index + 1 < list.length) storyViewer.set({ ...v, index: v.index + 1 });
-    else nextUser();
+    else if (neighbour(1) != null) advance(1);
+    else close();
   }
   function prev() {
     if (!v) return;
@@ -174,12 +179,16 @@
   let angle = $state(0);
   let turning = $state(false);
   let cubeW = $state(400);
+  let cubeH = $state(700);
+  /** Feed mode: how far the page is dragged up (−) / down (+), px. */
+  let offY = $state(0);
   function pdown(e: PointerEvent) {
     if ((e.target as HTMLElement).closest("button, input, .no-tap")) return;
     if (turning) return;
     const w = (e.currentTarget as HTMLElement).clientWidth;
     down = { x: e.clientX, y: e.clientY, t: performance.now(), w };
     cubeW = w;
+    cubeH = (e.currentTarget as HTMLElement).clientHeight;
     axis = "";
     (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
     holdT = setTimeout(() => (held = true), 220);
@@ -192,11 +201,15 @@
       if (holdT) { clearTimeout(holdT); holdT = null; }
     }
     if (axis === "x") {
+      if (vert) return;
       // Nobody that way: a little give, no more.
       const has = neighbour(dx < 0 ? 1 : -1) != null;
       angle = Math.max(-90, Math.min(90, (-dx / down.w) * 90 * (has ? 1 : 0.15)));
     } else if (axis === "y") {
-      dy = ddy;
+      // Feed: up — the next person, down — the previous one; down on the
+      // first person still closes, as in the cube mode.
+      if (vert && (ddy < 0 || neighbour(-1) != null)) { dy = 0; offY = ddy < 0 && neighbour(1) == null ? ddy * 0.15 : ddy; }
+      else { offY = 0; dy = ddy; }
     }
   }
   function pup(e: PointerEvent) {
@@ -207,7 +220,14 @@
     held = false;
     if (!d) return;
     const fast = performance.now() - d.t < 260;
+    if (vert && axis === "y" && offY !== 0) {
+      const dir = offY < 0 ? 1 : -1;
+      if ((Math.abs(offY) > cubeH * 0.18 || (fast && Math.abs(offY) > 40)) && neighbour(dir) != null) slide(dir);
+      else settleY();
+      return;
+    }
     if (axis === "x") {
+      if (vert) return;
       const dir = angle > 0 ? 1 : -1;
       if ((Math.abs(angle) > 22 || (fast && Math.abs(angle) > 8)) && neighbour(dir) != null) turn(dir);
       else settle();
@@ -236,17 +256,44 @@
     }, 300);
   }
   function settle() { turning = true; angle = 0; setTimeout(() => (turning = false), 300); }
-  /** Arrows / keys between people: the same cube, without a finger. */
+  /** Feed mode: the page slides away and the next / previous one takes its place. */
+  function slide(dir: 1 | -1) {
+    turning = true;
+    offY = -dir * cubeH;
+    setTimeout(() => {
+      const u = neighbour(dir);
+      if (u != null) goUser(u);
+      turning = false;
+      offY = 0;
+    }, 300);
+  }
+  function settleY() { turning = true; offY = 0; setTimeout(() => (turning = false), 300); }
+  /** To the next / previous person the chosen way (cube or feed). */
+  function advance(dir: 1 | -1) {
+    if (turning) return;
+    cubeW = cubeEl?.clientWidth ?? cubeW;
+    cubeH = cubeEl?.clientHeight ?? cubeH;
+    if (vert) slide(dir); else turn(dir);
+  }
+  /** Arrows / keys between people. */
   function stepUser(dir: 1 | -1) {
     if (turning) return;
     if (neighbour(dir) == null) { if (dir === 1) close(); return; }
-    cubeW = cubeEl?.clientWidth ?? cubeW;
-    turn(dir);
+    advance(dir);
+  }
+  // Computer, feed mode: the wheel goes from person to person.
+  let wheelAcc = 0, wheelAt = 0;
+  function wheel(e: WheelEvent) {
+    if (!vert || choosing || viewersOpen || (e.target as Element).closest?.(".sheet")) return;
+    const now = performance.now();
+    if (now - wheelAt < 450) return;
+    wheelAcc += e.deltaY;
+    if (Math.abs(wheelAcc) > 60) { const d = wheelAcc > 0 ? 1 : -1; wheelAcc = 0; wheelAt = now; stepUser(d); }
   }
   let cubeEl = $state<HTMLDivElement | null>(null);
 
   function key(e: KeyboardEvent) {
-    if (!v || replyFocus) return;
+    if (!v || replyFocus || choosing) return;
     if (e.key === "ArrowRight") { e.preventDefault(); if (e.shiftKey) stepUser(1); else next(); }
     else if (e.key === "ArrowLeft") { e.preventDefault(); if (e.shiftKey) stepUser(-1); else prev(); }
     else if (e.key === "ArrowDown") { e.preventDefault(); stepUser(1); }
@@ -300,7 +347,7 @@
   const sideL = $derived(v ? neighbour(-1) : null);
   const sideR = $derived(v ? neighbour(1) : null);
   /** The face turning in on the cube (its first story, if loaded). */
-  const turnTo = $derived(angle > 0 ? sideR : angle < 0 ? sideL : null);
+  const turnTo = $derived(vert ? (offY < 0 ? sideR : offY > 0 ? sideL : null) : angle > 0 ? sideR : angle < 0 ? sideL : null);
   const turnStory = $derived(turnTo != null ? storiesOf(turnTo)[startIndex(turnTo)] : undefined);
 </script>
 
@@ -359,7 +406,7 @@
 
 {#if v && cur}
   <div class="sv" class:desk={!IS_MOBILE} data-own-back data-phone-full role="dialog" aria-modal="true" aria-label={$t("Stories")}
-    style:--dy="{Math.max(0, dy)}px" style:--up="{Math.min(0, dy)}px">
+    style:--dy="{Math.max(0, dy)}px" style:--up="{Math.min(0, dy)}px" onwheel={wheel}>
     {#if !IS_MOBILE}
       <!-- The story's own blur behind everything (Telegram Desktop). -->
       {#if url && cur.media.kind !== "video"}<img class="sv-blur" src={url} alt="" aria-hidden="true" />{/if}
@@ -385,13 +432,13 @@
       {/if}
 
       <div class="col">
-        <div class="cube-wrap" bind:this={cubeEl}>
+        <div class="cube-wrap" class:vert bind:this={cubeEl}>
           <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div class="cube" class:anim={turning} style:--w="{cubeW}px" style:--a="{angle}deg"
+          <div class="cube" class:anim={turning} class:vert style:--w="{cubeW}px" style:--a="{angle}deg" style:--oy="{offY}px"
             onpointerdown={pdown} onpointermove={pmove} onpointerup={pup} onpointercancel={pup} oncontextmenu={(e) => e.preventDefault()}>
             <div class="face front">{@render face(v.user, cur, true)}</div>
             {#if turnTo != null}
-              <div class="face" class:right={angle > 0} class:left={angle < 0}>{@render face(turnTo, turnStory, false)}</div>
+              <div class="face" class:right={!vert && angle > 0} class:left={!vert && angle < 0} class:below={vert && offY < 0} class:above={vert && offY > 0}>{@render face(turnTo, turnStory, false)}</div>
             {/if}
           </div>
           {#if menu}
@@ -461,6 +508,27 @@
       {/if}
     </div>
 
+    {#if choosing}
+      <!-- First stories ever: which way to the next person? (Settings →
+           Chat settings → Stories changes it later.) -->
+      <div class="choose" role="dialog" aria-label={$t("How to flip through stories?")}>
+        <b class="ch-title">{$t("How to flip through stories?")}</b>
+        <div class="ch-opts">
+          <button class="ch-opt" onclick={() => storyNav.set("cube")}>
+            <span class="ch-pic cube-pic"><i></i><i></i></span>
+            <b>{$t("Sideways")}</b>
+            <small>{$t("Swipe left — the next person comes in on a turning cube, like in Telegram")}</small>
+          </button>
+          <button class="ch-opt" onclick={() => storyNav.set("vertical")}>
+            <span class="ch-pic feed-pic"><i></i><i></i></span>
+            <b>{$t("Downwards")}</b>
+            <small>{$t("Swipe up — the next person comes up from below, like a feed")}</small>
+          </button>
+        </div>
+        <small class="ch-note">{$t("You can change it in Settings → Chat settings.")}</small>
+      </div>
+    {/if}
+
     {#if viewersOpen}
       <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
       <div class="sheet-scrim" onclick={() => (viewersOpen = false)}></div>
@@ -497,6 +565,32 @@
   .face { position: absolute; inset: 0; backface-visibility: hidden; overflow: hidden; background: #000; border-radius: calc(12px * var(--rk, 1)); }
   .face.right { transform: translateZ(calc(var(--w) / -2)) rotateY(90deg) translateZ(calc(var(--w) / 2)); }
   .face.left { transform: translateZ(calc(var(--w) / -2)) rotateY(-90deg) translateZ(calc(var(--w) / 2)); }
+  /* Feed mode: people one under another. */
+  .cube-wrap.vert { overflow: hidden; perspective: none; }
+  .cube.vert { transform: translateY(var(--oy)); transform-style: flat; }
+  .face.below { transform: translateY(100%); }
+  .face.above { transform: translateY(-100%); }
+  .choose { position: absolute; inset: 0; z-index: 12; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; padding: 24px;
+    background: rgba(0,0,0,.72); backdrop-filter: blur(6px); text-align: center; animation: q-in .2s ease-out; }
+  .ch-title { font-size: 20px; }
+  .ch-opts { display: flex; gap: 12px; width: min(460px, 100%); }
+  .ch-opt { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 16px 12px; border-radius: calc(16px * var(--rk, 1));
+    border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.06); color: #fff; cursor: pointer; font: inherit; }
+  .ch-opt:hover { background: rgba(255,255,255,.12); border-color: var(--accent); }
+  .ch-opt b { font-size: 16px; }
+  .ch-opt small { font-size: 12.5px; opacity: .75; line-height: 1.35; }
+  .ch-note { font-size: 12.5px; opacity: .6; }
+  .ch-pic { position: relative; width: 64px; height: 96px; overflow: hidden; border-radius: 10px; background: rgba(255,255,255,.08); }
+  .ch-pic i { position: absolute; inset: 6px; border-radius: 6px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+  .ch-pic i + i { background: linear-gradient(135deg, #ff7a59, #e0457b); }
+  .cube-pic i { animation: cube-a 2.4s infinite cubic-bezier(.4,0,.2,1); transform-origin: 0 50%; }
+  .cube-pic i + i { animation-name: cube-b; transform-origin: 100% 50%; }
+  @keyframes cube-a { 0%, 35% { transform: none; } 55%, 100% { transform: translateX(-100%) scaleX(.2); } }
+  @keyframes cube-b { 0%, 35% { transform: translateX(100%) scaleX(.2); } 55%, 100% { transform: none; } }
+  .feed-pic i { animation: feed-a 2.4s infinite cubic-bezier(.4,0,.2,1); }
+  .feed-pic i + i { animation-name: feed-b; }
+  @keyframes feed-a { 0%, 35% { transform: none; } 55%, 100% { transform: translateY(-110%); } }
+  @keyframes feed-b { 0%, 35% { transform: translateY(110%); } 55%, 100% { transform: none; } }
   .face:not(.front) .media::after { content: ""; position: absolute; inset: 0; background: rgba(0,0,0,.25); }
   .media { position: absolute; inset: 0; display: grid; place-items: center; }
   .media img, .media video { grid-area: 1 / 1; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
