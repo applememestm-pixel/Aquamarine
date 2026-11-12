@@ -55,7 +55,7 @@ pub struct CachedMedia {
 static PREVIEWS: StdMutex<Option<HashMap<String, LinkPreview>>> = StdMutex::new(None);
 
 fn data_dir(state: &State<'_, StdMutex<AppState>>) -> Result<PathBuf, String> {
-    Ok(state.lock().map_err(|e| e.to_string())?.data_dir.clone())
+    Ok(state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.clone())
 }
 
 fn client() -> Result<reqwest::Client, String> {
@@ -405,12 +405,12 @@ async fn build_preview(dir: &Path, url: Url) -> Result<LinkPreview, String> {
 #[tauri::command]
 pub async fn link_preview(state: State<'_, StdMutex<AppState>>, url: String) -> Result<LinkPreview, String> {
     let u = parse_web_url(&url)?;
-    if let Some(p) = PREVIEWS.lock().ok().and_then(|g| g.as_ref().and_then(|m| m.get(u.as_str()).cloned())) {
+    if let Some(p) = PREVIEWS.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|g| g.as_ref().and_then(|m| m.get(u.as_str()).cloned())) {
         return Ok(p);
     }
     let dir = data_dir(&state)?;
     let p = build_preview(&dir, u.clone()).await?;
-    if let Ok(mut g) = PREVIEWS.lock() {
+    if let Ok(mut g) = PREVIEWS.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
         g.get_or_insert_with(HashMap::new).insert(u.to_string(), p.clone());
     }
     Ok(p)

@@ -88,6 +88,8 @@
   // Telegram-mobile style: coloured icon tiles in grouped lists.
   interface Item { id: Sec | "profile" | "shortcuts"; label: string; color: string; icon: string; hint?: string }
   const ic = (p: string) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
+  // Telegram: three groups — me; how the app works; account & the rest.
+  // (Phones showed seven groups of one or two rows — jumpy, not easier.)
   const GROUPS: Item[][] = [
     [
       { id: "profile", label: "Edit profile", color: "#007AFF", icon: ic(`<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>`) },
@@ -99,42 +101,38 @@
       { id: "notifications", label: "Notifications", color: "#FF3B30", icon: ic(`<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>`) },
       { id: "behaviour", label: "Chat settings", color: "#007AFF", icon: ic(`<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>`) },
       { id: "storage", label: "Data and storage", color: "#30D158", icon: ic(`<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>`) },
-      { id: "power", label: "Power saving", color: "#FFCC00", icon: ic(`<rect x="2" y="7" width="17" height="10" rx="2"/><line x1="22" y1="11" x2="22" y2="13"/><path d="M10 9l-2 3h3l-2 3"/>`) },
-      { id: "music", label: "Music", color: "#FF2D55", icon: ic(`<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>`) },
       { id: "stickers", label: "Stickers & Emoji", color: "#FF9500", icon: ic(`<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>`) },
       { id: "voice", label: "Voice & Video", color: "#34C759", icon: ic(`<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/>`) },
-      { id: "language", label: "Language", color: "#AF52DE", icon: ic(`<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>`) },
-    ],
-    [
       { id: "appearance", label: "Appearance", color: "#32ADE6", icon: ic(`<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>`) },
+      { id: "language", label: "Language", color: "#AF52DE", icon: ic(`<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>`) },
+      { id: "power", label: "Power saving", color: "#FFCC00", icon: ic(`<rect x="2" y="7" width="17" height="10" rx="2"/><line x1="22" y1="11" x2="22" y2="13"/><path d="M10 9l-2 3h3l-2 3"/>`) },
       { id: "window", label: "Window & system", color: "#64D2FF", icon: ic(`<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><circle cx="6.5" cy="6.5" r=".5"/>`) },
     ],
     [
       { id: "account", label: "Account & server", color: "#007AFF", icon: ic(`<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>`) },
+      { id: "backups", label: "Backups", color: "#30B0C7", icon: ic(`<path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/><path d="M22 2v6h-6"/>`) },
+      { id: "updates", label: "Updates", color: "#34C759", icon: ic(`<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>`) },
+      { id: "about", label: "About Aquamarine", color: "#8E8E93", icon: ic(`<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>`) },
       { id: "network", label: "Network & proxy", color: "#5856D6", icon: ic(`<circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20"/><path d="M12 2a15 15 0 0 0 0 20"/>`) },
       { id: "host", label: "Your own server", color: "#00C7BE", icon: ic(`<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><line x1="7" y1="6.5" x2="7.01" y2="6.5"/><line x1="7" y1="17.5" x2="7.01" y2="17.5"/><path d="M14 6.5h3M14 17.5h3"/>`) },
       { id: "nearby", label: "Without internet", color: "#0A84FF", icon: ic(`<path d="M7 7l10 10-5 5V2l5 5L7 17"/>`) },
-      { id: "backups", label: "Backups", color: "#30B0C7", icon: ic(`<path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/><path d="M22 2v6h-6"/>`) },
       { id: "bots", label: "Bots", color: "#00C7BE", icon: ic(`<rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4"/><circle cx="12" cy="3" r="1"/><line x1="9" y1="13" x2="9.01" y2="13"/><line x1="15" y1="13" x2="15.01" y2="13"/>`) },
-    ],
-    [
       { id: "shortcuts", label: "Keyboard shortcuts", color: "#5AC8FA", icon: ic(`<rect x="2" y="6" width="20" height="12" rx="2"/><line x1="6" y1="10" x2="6.01" y2="10"/><line x1="10" y1="10" x2="10.01" y2="10"/><line x1="14" y1="10" x2="14.01" y2="10"/><line x1="18" y1="10" x2="18.01" y2="10"/><line x1="7" y1="14" x2="17" y2="14"/>`), hint: "Ctrl+/" },
-      { id: "updates", label: "Updates", color: "#34C759", icon: ic(`<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>`) },
       { id: "advanced", label: "Experimental", color: "#636366", icon: ic(`<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>`) },
-      { id: "about", label: "About Aquamarine", color: "#8E8E93", icon: ic(`<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>`) },
-    ],
-    [
       { id: "plugins", label: "Plugins", color: "#BF5AF2", icon: ic(`<path d="M10 3h4v3a2 2 0 1 0 4 0V3h3v7h-3a2 2 0 1 0 0 4h3v7h-7v-3a2 2 0 1 0-4 0v3H3v-7h3a2 2 0 1 0 0-4H3V3h7z"/>`) },
+      { id: "music", label: "Music", color: "#FF2D55", icon: ic(`<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>`) },
     ],
   ];
   /** Sections for experienced users: shown under "Advanced settings". */
-  const ADVANCED = new Set<string>(["ghost", "power", "window", "network", "host", "bots", "shortcuts", "advanced"]);
+  const ADVANCED = new Set<string>(["ghost", "power", "window", "network", "host", "bots", "shortcuts", "advanced", "plugins"]);
+  /** Reached from another section only: Music (Navidrome) lives under Plugins. */
+  const HIDDEN = new Set<string>(["music"]);
   // Computer-only sections never show on a phone (and nothing phone-only on a PC).
   const shown = (x: Item) => !((x.id === "shortcuts" || x.id === "window") && IS_MOBILE);
   // Plugins: their own panel at the very bottom, under everything else.
-  const BASIC_GROUPS = GROUPS.map((g) => g.filter((x) => !ADVANCED.has(x.id) && x.id !== "plugins")).filter((g) => g.length);
+  const BASIC_GROUPS = GROUPS.map((g) => g.filter((x) => !ADVANCED.has(x.id) && !HIDDEN.has(x.id))).filter((g) => g.length);
   const PLUGINS_ITEM = GROUPS.flat().find((x) => x.id === "plugins")!;
-  const ADVANCED_ITEMS = GROUPS.flat().filter((x) => ADVANCED.has(x.id));
+  const ADVANCED_ITEMS = GROUPS.flat().filter((x) => ADVANCED.has(x.id) && x.id !== "plugins");
   const SECTIONS = GROUPS.flat().filter((x) => x.id !== "profile" && x.id !== "shortcuts") as (Item & { id: Sec })[];
   const sectionItem = $derived(GROUPS.flat().find((x) => x.id === section));
   const sectionTitle = $derived(sectionItem?.label ?? "Settings");
@@ -227,6 +225,19 @@
     if (history.state?.aquaSettings === "detail") history.back(); // popstate handler clears `detail`
     else detail = false;
   }
+  /** Close settings, then open something else. On a phone closing pops
+   *  settings' history entries asynchronously; that popstate used to land
+   *  after the new window registered its Back and closed it at once — "My
+   *  profile" just dropped back to the chat list. Open it once the pop is in. */
+  function closeThen(open: () => void) {
+    const depth = history.state?.aquaSettings === "detail" ? 2 : history.state?.aquaSettings === "list" ? 1 : 0;
+    closeAll();
+    if (!depth) { open(); return; }
+    let done = false;
+    const go = () => { if (done) return; done = true; window.removeEventListener("popstate", go); setTimeout(open, 0); };
+    window.addEventListener("popstate", go);
+    setTimeout(go, 450);
+  }
   function closeAll() {
     const depth = history.state?.aquaSettings === "detail" ? 2 : history.state?.aquaSettings === "list" ? 1 : 0;
     detail = false;
@@ -258,8 +269,8 @@
   });
 
   function openItem(it: Item) {
-    if (it.id === "profile") { closeAll(); openProfile(); return; }
-    if (it.id === "shortcuts") { closeAll(); shortcutsOpen.set(true); return; }
+    if (it.id === "profile") { closeThen(() => openProfile()); return; }
+    if (it.id === "shortcuts") { closeThen(() => shortcutsOpen.set(true)); return; }
     section = it.id;
     enterDetail();
   }
@@ -1070,13 +1081,11 @@
               <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
               <div class="nm-veil" onclick={() => (navMenu = false)}></div>
               <div class="nm" role="menu">
-                <button role="menuitem" onclick={() => { navMenu = false; closeAll(); openProfile(); }}>{$t("Edit profile")}</button>
-                <button role="menuitem" onclick={() => { navMenu = false; openItem(GROUPS.flat().find((x) => x.id === "account")!); }}>{$t("Account & server")}</button>
                 <button role="menuitem" class="danger" onclick={() => { navMenu = false; void logOut(); }}>{$t("Log out")}</button>
               </div>
             {/if}
           </div>
-          <button class="me-card" onclick={() => { closeAll(); openProfile(); }} title={$t("Edit profile")}>
+          <button class="me-card" onclick={() => closeThen(() => openProfile())} title={$t("Edit profile")}>
             {#if $profile.banner_url}<span class="me-banner" style:background-image={`url("${$profile.banner_url}")`} aria-hidden="true"></span>{/if}
             <span class="me-ava" style:background={`linear-gradient(135deg, ${$profile.banner_a}, ${$profile.banner_b})`}>
               {#if $profile.avatar_url}<img src={$profile.avatar_url} alt="" />{:else}{($profile.display_name !== "You" ? $profile.display_name : $info?.username ?? "?").charAt(0).toUpperCase()}{/if}
@@ -1115,16 +1124,16 @@
           <div class="nav-group">
             <button class="nav-item adv-toggle" onclick={() => settings.update((x) => ({ ...x, advancedSettings: !x.advancedSettings }))}>
               <span class="tile" style:background="#636366">{@html ic(`<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>`)}</span>
-              <span class="nav-lbl">{$t("Advanced settings")}<small class="adv-sub">{$t("Network, your own server, ghost mode, bots, experiments")}</small></span>
+              <span class="nav-lbl">{$t("Advanced settings")}<small class="adv-sub">{$t("Network, your own server, ghost mode, bots, plugins, experiments")}</small></span>
               <span class="adv-sw" class:on={$settings.advancedSettings}></span>
             </button>
           </div>
           {#if $settings.advancedSettings}
             <div class="nav-group">
               {#each ADVANCED_ITEMS.filter(shown) as it (it.id)}{@render navItem(it)}{/each}
+              {@render navItem(PLUGINS_ITEM)}
             </div>
           {/if}
-          <div class="nav-group">{@render navItem(PLUGINS_ITEM)}</div>
           {/if}
         </nav>
 

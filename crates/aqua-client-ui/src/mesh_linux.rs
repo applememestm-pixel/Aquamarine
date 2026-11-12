@@ -92,7 +92,7 @@ impl Profile {
 
     fn new_connection(&self, device: OwnedObjectPath, fd: zbus::zvariant::OwnedFd, _props: HashMap<String, OwnedValue>) -> zbus::fdo::Result<()> {
         let fd: OwnedFd = fd.into();
-        let waiter = dialling().lock().ok().and_then(|mut m| m.remove(device.as_str()));
+        let waiter = dialling().lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|mut m| m.remove(device.as_str()));
         let app = self.app.clone();
         let mac = mac_of(device.as_str());
         std::thread::spawn(move || {
@@ -198,7 +198,7 @@ pub async fn sync_round(app: &AppHandle, scan: bool) -> Result<(), String> {
         .min_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
     let Some((adapter, powered)) = adapter else { return Err("no Bluetooth adapter".into()) };
     if let Some(m) = objs.get(&adapter).and_then(|m| iface(m, "org.bluez.Adapter1")) {
-        if let Ok(mut g) = OWN.lock() { *g = Some(s(m.get("Address"))); }
+        if let Ok(mut g) = OWN.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { *g = Some(s(m.get("Address"))); }
     }
     if !powered {
         return Err("Bluetooth is off".into());
@@ -239,7 +239,7 @@ pub async fn sync_round(app: &AppHandle, scan: bool) -> Result<(), String> {
     let mut met = 0;
     for (_, path) in cands.into_iter().take(8) {
         let (tx, rx) = oneshot::channel();
-        if let Ok(mut m) = dialling().lock() {
+        if let Ok(mut m) = dialling().lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
             m.insert(path.clone(), tx);
         }
         let dev = match zbus::Proxy::new(&sys, "org.bluez", path.as_str(), "org.bluez.Device1").await {
@@ -256,7 +256,7 @@ pub async fn sync_round(app: &AppHandle, scan: bool) -> Result<(), String> {
                 }
             }
             _ => {
-                if let Ok(mut m) = dialling().lock() {
+                if let Ok(mut m) = dialling().lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
                     m.remove(&path);
                 }
             }
@@ -271,5 +271,5 @@ pub async fn sync_round(app: &AppHandle, scan: bool) -> Result<(), String> {
 /// The adapter's address, learned when listening (for my QR).
 static OWN: Mutex<Option<String>> = Mutex::new(None);
 pub fn own_address() -> Option<String> {
-    OWN.lock().ok().and_then(|g| g.clone())
+    OWN.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|g| g.clone())
 }

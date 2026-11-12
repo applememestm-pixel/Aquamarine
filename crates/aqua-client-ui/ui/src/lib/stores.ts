@@ -109,11 +109,56 @@ export const activeChat = derived([chats, activeId, contacts], ([$chats, $id, _$
 
 // ---------- Actions ----------
 
-export async function bootstrap() {
+/** The first read of the account and the chats. It used to be tried once:
+ *  if it failed (the backend still busy after the app came back from the
+ *  background, a failed command), the window stayed empty — no chats, no
+ *  connection badge — until the app was killed. Now it's retried, and again
+ *  whenever the app comes back to the front with nothing loaded. */
+async function loadBase(): Promise<boolean> {
   try {
     const [i, c] = await Promise.all([api.initApp(), api.listChats()]);
     info.set(i);
     chats.set(c);
+    return true;
+  } catch (e) {
+    console.error("loading the account failed", e);
+    return false;
+  }
+}
+let baseRetry: ReturnType<typeof setTimeout> | null = null;
+function retryBase(delay = 800) {
+  if (baseRetry) return;
+  baseRetry = setTimeout(async () => {
+    baseRetry = null;
+    if (await loadBase()) { await loadActiveMessages().catch(() => {}); return; }
+    retryBase(Math.min(delay * 2, 8000));
+  }, delay);
+}
+
+export async function bootstrap() {
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && (!get(info) || !get(chats).length)) retryBase(50);
+    });
+  }
+  // App passcode: while locked the backend answers every command with
+  // "locked", so the first load comes back empty — read everything again
+  // the moment the lock opens (it used to stay empty: no chats, no server).
+  void import("./lock").then(({ locked }) => {
+    let was = get(locked);
+    locked.subscribe((l) => {
+      if (was && !l) {
+        if (baseRetry) { clearTimeout(baseRetry); baseRetry = null; }
+        // Nothing loaded at all (groups, contacts… were refused too): start the page over.
+        if (!get(info)) { setTimeout(() => location.reload(), 60); was = l; return; }
+        void loadBase().then(async (ok) => { if (ok) await loadActiveMessages().catch(() => {}); else retryBase(); });
+      }
+      was = l;
+    });
+  });
+  try {
+    if (!(await loadBase())) { retryBase(); throw new Error("first load failed"); }
+    const c = get(chats);
     const currentId = get(activeId);
     if (!c.find((x) => x.id === currentId)) {
       activeId.set(c[0]?.id ?? "");

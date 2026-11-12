@@ -114,7 +114,7 @@ fn book(app: &AppHandle) -> std::sync::MutexGuard<'static, Book> {
     let m = BOOK.get_or_init(|| {
         let path = app
             .try_state::<std::sync::Mutex<AppState>>()
-            .and_then(|s| s.lock().ok().map(|s| s.data_dir.join("mesh.json")));
+            .and_then(|s| s.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().map(|s| s.data_dir.join("mesh.json")));
         let mut b: Book = path
             .as_ref()
             .and_then(|p| std::fs::read(p).ok())
@@ -222,7 +222,7 @@ static HELD: Mutex<Vec<(String, u64)>> = Mutex::new(Vec::new());
 
 pub fn issue_meet() -> String {
     let tok = hex::encode(rand::random::<[u8; 12]>());
-    if let Ok(mut v) = ISSUED.lock() {
+    if let Ok(mut v) = ISSUED.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
         v.retain(|(_, at)| now().saturating_sub(*at) < MEET_SECS);
         v.push((tok.clone(), now()));
     }
@@ -230,7 +230,7 @@ pub fn issue_meet() -> String {
 }
 
 pub fn hold_meet(tok: &str) {
-    if let Ok(mut v) = HELD.lock() {
+    if let Ok(mut v) = HELD.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
         v.retain(|(_, at)| now().saturating_sub(*at) < MEET_SECS);
         if !v.iter().any(|(t, _)| t == tok) {
             v.push((tok.to_string(), now()));
@@ -239,18 +239,18 @@ pub fn hold_meet(tok: &str) {
 }
 
 fn held_meets() -> Vec<String> {
-    HELD.lock().map(|v| v.iter().filter(|(_, at)| now().saturating_sub(*at) < MEET_SECS).map(|(t, _)| t.clone()).collect()).unwrap_or_default()
+    HELD.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).map(|v| v.iter().filter(|(_, at)| now().saturating_sub(*at) < MEET_SECS).map(|(t, _)| t.clone()).collect()).unwrap_or_default()
 }
 
 fn issued_ok(toks: &[String]) -> bool {
-    ISSUED.lock().map(|v| v.iter().any(|(t, at)| now().saturating_sub(*at) < MEET_SECS && toks.contains(t))).unwrap_or(false)
+    ISSUED.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).map(|v| v.iter().any(|(t, at)| now().saturating_sub(*at) < MEET_SECS && toks.contains(t))).unwrap_or(false)
 }
 
 /// Connected to a relay again: hand it everything still waiting.
 pub async fn flush_to_relay(app: &AppHandle) {
     let transport = {
         let st = app.state::<std::sync::Mutex<AppState>>();
-        let Ok(s) = st.lock() else { return };
+        let Ok(s) = st.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) else { return };
         s.transport.clone()
     };
     let Some(t) = transport else { return };
@@ -415,7 +415,7 @@ pub fn relay_back() {
 }
 fn relay_up(app: &AppHandle) -> bool {
     !RELAY_LOST.load(std::sync::atomic::Ordering::Relaxed)
-        && app.state::<std::sync::Mutex<AppState>>().lock().map(|s| s.transport.is_some()).unwrap_or(false)
+        && app.state::<std::sync::Mutex<AppState>>().lock().or_else(|e| Ok::<_, ()>(e.into_inner())).map(|s| s.transport.is_some()).unwrap_or(false)
 }
 
 /// A message was just queued: try known peers soon (debounced).
@@ -512,7 +512,7 @@ struct Me {
 
 fn me(app: &AppHandle) -> Result<Me, String> {
     let st = app.state::<std::sync::Mutex<AppState>>();
-    let s = st.lock().map_err(|e| e.to_string())?;
+    let s = st.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let user = s.username.clone().ok_or("not signed in")?;
     let dev = crate::multidev::device_id(s.identity.public().dh_pub.as_bytes());
     Ok(Me {

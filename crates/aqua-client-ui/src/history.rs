@@ -171,7 +171,7 @@ mod tests {
         ).unwrap();
         {
             let st = crate::state::AppState::boot(dir.path().to_path_buf()).unwrap();
-            let mut s = st.lock().unwrap();
+            let mut s = st.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             assert_eq!(s.chats[crate::state::SAVED_MESSAGES_ID].messages.len(), 1);
             let mut book = s.chats[crate::state::SAVED_MESSAGES_ID].summary.clone();
             book.id = "alice".into();
@@ -184,7 +184,7 @@ mod tests {
         }
         assert!(!dir.path().join(crate::state::SAVED_MESSAGES_FILE).exists(), "plain JSON should be gone");
         let st = crate::state::AppState::boot(dir.path().to_path_buf()).unwrap();
-        let s = st.lock().unwrap();
+        let s = st.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         assert_eq!(s.chats["alice"].messages.len(), 1);
         assert_eq!(s.chats["alice"].summary.name, "Alice");
         assert_eq!(s.chats[crate::state::SAVED_MESSAGES_ID].messages[0].id, "m-old");

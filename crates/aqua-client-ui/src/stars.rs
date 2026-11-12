@@ -56,7 +56,7 @@ pub async fn my_star(state: State<'_, StdMutex<AppState>>) -> Result<Option<Stat
         return Ok(None);
     }
     let (server, uid) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match &s.transport {
             Some(t) => (t.server_url().to_string(), t.uid().to_string()),
             None => return Ok(None),

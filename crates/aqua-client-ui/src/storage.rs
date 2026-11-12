@@ -96,7 +96,7 @@ pub struct StorageInfo {
 
 #[tauri::command]
 pub fn storage_get(state: State<'_, StdMutex<AppState>>) -> Result<StorageInfo, String> {
-    let d = state.lock().map_err(|e| e.to_string())?.data_dir.clone();
+    let d = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.clone();
     Ok(StorageInfo {
         conf: load(&d),
         downloads: downloads_dir(&d).display().to_string(),
@@ -107,7 +107,7 @@ pub fn storage_get(state: State<'_, StdMutex<AppState>>) -> Result<StorageInfo, 
 
 #[tauri::command]
 pub fn storage_set(app: AppHandle, state: State<'_, StdMutex<AppState>>, conf: StorageConf) -> Result<StorageInfo, String> {
-    let d = state.lock().map_err(|e| e.to_string())?.data_dir.clone();
+    let d = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.clone();
     let mut c = conf;
     if !matches!(c.mode.as_str(), "default" | "temp" | "custom") {
         c.mode = "default".into();
@@ -185,7 +185,7 @@ fn dir_size(p: &Path) -> u64 {
 #[tauri::command]
 pub fn storage_stats(state: State<'_, StdMutex<AppState>>) -> Result<StorageStats, String> {
     let (files, d) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         (saved_files(&s), s.data_dir.clone())
     };
     let mut st = StorageStats::default();
@@ -219,7 +219,7 @@ pub struct Traffic {
 #[tauri::command]
 pub fn storage_traffic(state: State<'_, StdMutex<AppState>>) -> Result<Traffic, String> {
     use std::collections::{BTreeMap, HashMap};
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut rx: HashMap<(String, String), (u64, u64)> = HashMap::new();
     let mut tx: HashMap<(String, String), (u64, u64)> = HashMap::new();
     let mut names: HashMap<String, String> = HashMap::new();
@@ -271,7 +271,7 @@ fn drop_files(s: &mut AppState, paths: &std::collections::HashSet<String>) -> u6
 pub fn storage_clear(app: AppHandle, state: State<'_, StdMutex<AppState>>, kinds: Vec<String>) -> Result<u64, String> {
     let mut freed = 0;
     {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let paths: std::collections::HashSet<String> = saved_files(&s).into_iter()
             .filter(|(_, k)| kinds.iter().any(|x| x == k)).map(|(p, _)| p).collect();
         freed += drop_files(&mut s, &paths);
@@ -333,7 +333,7 @@ pub fn trim(s: &mut AppState) -> u64 {
 
 #[tauri::command]
 pub fn storage_trim(app: AppHandle, state: State<'_, StdMutex<AppState>>) -> Result<u64, String> {
-    let freed = { let mut s = state.lock().map_err(|e| e.to_string())?; trim(&mut s) };
+    let freed = { let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner); trim(&mut s) };
     if freed > 0 { let _ = app.emit("aqua://chats_updated", ()); }
     Ok(freed)
 }
@@ -353,7 +353,7 @@ pub fn on_log_out(s: &mut AppState) {
 /// Aquamarine data". Written where the user chose in the save dialog.
 #[tauri::command]
 pub fn export_chats(state: State<'_, StdMutex<AppState>>, dest: String) -> Result<u64, String> {
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut chats = Vec::new();
     for id in &s.chat_order {
         let Some(b) = s.chats.get(id) else { continue };

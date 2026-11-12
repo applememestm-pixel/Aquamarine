@@ -103,7 +103,7 @@ pub fn url_for(path: &Path) -> Result<String, String> {
     }
     let st = state()?;
     let token = {
-        let mut by_path = st.by_path.lock().map_err(|e| e.to_string())?;
+        let mut by_path = st.by_path.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(t) = by_path.get(&path) {
             t.clone()
         } else {
@@ -111,7 +111,7 @@ pub fn url_for(path: &Path) -> Result<String, String> {
             rand::rngs::OsRng.fill_bytes(&mut b);
             let t = hex::encode(b);
             by_path.insert(path.clone(), t.clone());
-            st.by_token.lock().map_err(|e| e.to_string())?.insert(t.clone(), path.clone());
+            st.by_token.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(t.clone(), path.clone());
             t
         }
     };
@@ -123,7 +123,7 @@ pub fn url_for(path: &Path) -> Result<String, String> {
 /// the webview's cache and the player's position survive re-renders).
 pub fn remote_url(key: &str, ext: &str, f: RemoteFn) -> Result<String, String> {
     let st = state()?;
-    let mut keys = st.remote_keys.lock().map_err(|e| e.to_string())?;
+    let mut keys = st.remote_keys.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let token = match keys.get(key) {
         Some(t) => t.clone(),
         None => {
@@ -134,13 +134,13 @@ pub fn remote_url(key: &str, ext: &str, f: RemoteFn) -> Result<String, String> {
             t
         }
     };
-    st.remote.lock().map_err(|e| e.to_string())?.insert(token.clone(), f);
+    st.remote.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(token.clone(), f);
     let ext: String = ext.chars().filter(|c| c.is_ascii_alphanumeric()).take(5).collect();
     Ok(format!("http://127.0.0.1:{}/r/{token}.{}", st.port, if ext.is_empty() { "bin" } else { &ext }))
 }
 
 fn serve_remote(req: tiny_http::Request, token: &str) {
-    let f = STATE.get().and_then(|s| s.as_ref().ok()).and_then(|s| s.remote.lock().ok()?.get(token).cloned());
+    let f = STATE.get().and_then(|s| s.as_ref().ok()).and_then(|s| s.remote.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok()?.get(token).cloned());
     let Some(f) = f else {
         let _ = req.respond(Response::empty(StatusCode(404)));
         return;
@@ -195,7 +195,7 @@ fn serve(req: tiny_http::Request) {
     if token.len() != 32 || !token.chars().all(|c| c.is_ascii_hexdigit()) {
         return respond_err(req, 404);
     }
-    let path = match STATE.get().and_then(|s| s.as_ref().ok()).and_then(|s| s.by_token.lock().ok()?.get(&token).cloned()) {
+    let path = match STATE.get().and_then(|s| s.as_ref().ok()).and_then(|s| s.by_token.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok()?.get(&token).cloned()) {
         Some(p) => p,
         None => return respond_err(req, 404),
     };
@@ -300,7 +300,7 @@ pub async fn transcode_media(
         h.update(stamp.to_le_bytes());
         hex::encode(&h.finalize()[..12])
     };
-    let dir = { state.lock().map_err(|e| e.to_string())?.data_dir.join("transcoded") };
+    let dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.join("transcoded") };
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let out = dir.join(format!("{key}.{}", if video { "webm" } else { "ogg" }));
     if out.is_file() && std::fs::metadata(&out).map(|m| m.len() > 0).unwrap_or(false) {

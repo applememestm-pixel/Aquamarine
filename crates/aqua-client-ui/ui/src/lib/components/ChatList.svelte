@@ -393,8 +393,25 @@
   /** How far the list is being pulled down at its top (px, follows the finger). */
   let pull = $state(0);
   const ST_H = 96;
-  const stProgress = $derived(storiesOpen ? 1 : Math.min(1, pull / ST_H));
-  const showStories = $derived(storiesHere && (storiesOpen || pull > 0));
+  /** The strip's height when not following a finger: it goes 0 → full on
+   *  open and back on fold, so it grows instead of popping in whole. */
+  let animH = $state(0);
+  let stMounted = $state(false);
+  const stH = $derived(pulling ? pull : animH);
+  const stProgress = $derived(Math.min(1, stH / ST_H));
+  const showStories = $derived(storiesHere && (stMounted || pull > 0));
+  let foldT: ReturnType<typeof setTimeout> | null = null;
+  $effect(() => {
+    if (storiesOpen) {
+      if (foldT) { clearTimeout(foldT); foldT = null; }
+      stMounted = true;
+      requestAnimationFrame(() => requestAnimationFrame(() => { if (storiesOpen) animH = ST_H; }));
+    } else {
+      animH = 0;
+      if (foldT) clearTimeout(foldT);
+      foldT = setTimeout(() => { foldT = null; if (!storiesOpen) stMounted = false; }, 340);
+    }
+  });
   const showStack = $derived(storiesHere && stProgress < 0.98);
   $effect(() => { if (!storiesHere) { storiesOpen = false; pull = 0; } });
   let chatsEl = $state<HTMLDivElement | null>(null);
@@ -412,7 +429,7 @@
   // past half its height it opens on release, otherwise it slides back.
   let pullY: number | null = null;
   let pulling = $state(false);
-  function storiesTouchStart(e: TouchEvent) { pullY = storiesHere && chatsEl && chatsEl.scrollTop <= 0 ? e.touches[0].clientY : null; }
+  function storiesTouchStart(e: TouchEvent) { if (!storiesOpen) keepStack(); pullY = storiesHere && chatsEl && chatsEl.scrollTop <= 0 ? e.touches[0].clientY : null; }
   function storiesTouchMove(e: TouchEvent) {
     if (pullY == null) return;
     const dy = e.touches[0].clientY - pullY;
@@ -426,18 +443,57 @@
   function storiesTouchEnd() {
     pullY = null;
     if (!pulling) return;
+    // Carry on from where the finger left it, open or back.
+    animH = pull;
+    stMounted = true;
     pulling = false;
     if (pull > ST_H * 0.5) { storiesOpen = true; try { navigator.vibrate?.(8); } catch { /* none */ } }
+    else {
+      requestAnimationFrame(() => { if (!storiesOpen) animH = 0; });
+      if (foldT) clearTimeout(foldT);
+      foldT = setTimeout(() => { foldT = null; if (!storiesOpen) stMounted = false; }, 340);
+    }
     pull = 0;
   }
   function storiesScroll() {
-    // Scrolled down past the strip: it folds back into the header.
-    if (storiesOpen && chatsEl && storiesEl && chatsEl.scrollTop > storiesEl.offsetHeight + 24) {
-      const h = storiesEl.offsetHeight;
-      storiesOpen = false;
-      requestAnimationFrame(() => { if (chatsEl) chatsEl.scrollTop = Math.max(0, chatsEl.scrollTop - h); });
-    }
+    // The strip sits above the search now (Telegram), outside the list:
+    // scrolling the list down folds it back into the stack.
+    if (storiesOpen && chatsEl && chatsEl.scrollTop > 12) storiesOpen = false;
   }
+  let stackEl = $state<HTMLButtonElement | null>(null);
+  let wrapEl = $state<HTMLDivElement | null>(null);
+  /** A tap on the stack: back to the top of the list and the strip opens
+   *  (it used to open inside the list and scroll it by a couple of rows). */
+  /** The stack's place, taken before it folds away (it shrinks when open). */
+  let stackRect: DOMRect | null = null;
+  const keepStack = () => { const r = stackEl?.getBoundingClientRect(); if (r && r.width > 4) stackRect = r; };
+  function openStrip() {
+    keepStack();
+    if (chatsEl && chatsEl.scrollTop > 0) chatsEl.scrollTo({ top: 0 });
+    storiesOpen = true;
+  }
+  // Where each circle starts from: the stack in the header (Telegram — they
+  // fly out of it and grow, and fly back when it folds).
+  $effect(() => {
+    void stackOwners; void $storyOwners; void $hiddenOwners;
+    if (!showStories || !wrapEl || !storiesEl) return;
+    const wrap = wrapEl, strip = storiesEl;
+    requestAnimationFrame(() => {
+      if (!storiesOpen && pull === 0) keepStack();
+      const st = stackRect ?? stackEl?.getBoundingClientRect();
+      const w = wrap.getBoundingClientRect();
+      if (!st || !st.width) return;
+      const items = strip.querySelectorAll<HTMLElement>(".st-item");
+      items.forEach((it, i) => {
+        const ix = w.left + it.offsetLeft - strip.scrollLeft + it.offsetWidth / 2;
+        const iy = w.top + it.offsetTop + 31;
+        const tx = st.left + 13 + Math.min(i, 2) * 17;
+        const ty = st.top + st.height / 2;
+        it.style.setProperty("--dx", `${Math.round(tx - ix)}px`);
+        it.style.setProperty("--dy", `${Math.round(ty - iy)}px`);
+      });
+    });
+  });
   let storyMenu = $state<{ x: number; y: number; user?: string } | null>(null);
   /** Ghost mode on (any part of it): a ghost in the header says so. */
   const ghostOn = $derived($ghost.noReadReceipts || $ghost.noTyping || $myOnline === "invisible");
@@ -826,20 +882,23 @@
   }
 </script>
 
-{#snippet headExtras()}
-  {#if ghostOn}
-    <button class="ghost-on" onclick={() => openSettings("ghost")} title={$t("Ghost mode is on")} aria-label={$t("Ghost mode is on")}>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 10h.01"/><path d="M15 10h.01"/><path d="M12 2a8 8 0 0 0-8 8v12l3-3 2.5 2.5L12 19l2.5 2.5L17 19l3 3V10a8 8 0 0 0-8-8z"/></svg>
-    </button>
-  {/if}
-  {#if showStack}
-    <button class="st-stack" onclick={() => (storiesOpen = true)} title={$t("Stories")} aria-label={$t("Stories")}
+{#snippet stack()}
+  {#if storiesHere}
+    <button class="st-stack" bind:this={stackEl} class:gone={!showStack} style:opacity={1 - stProgress} onclick={openStrip} title={$t("Stories")} aria-label={$t("Stories")} tabindex={showStack ? 0 : -1}
       oncontextmenu={(e) => { e.preventDefault(); storyMenu = { x: e.clientX, y: e.clientY }; }}>
       {#each stackOwners as o (o.user)}
         {@const ch = o.user ? $chats.find((x) => x.id === o.user) : undefined}
         {@const pic = o.user ? $avatars[o.user] : $profile.avatar_url}
         <span class="ss" class:seen={!o.unseen && o.user !== ""} style:--gradient={ch?.gradient} style:background-image={pic ? `url("${pic}")` : undefined}>{pic ? "" : (o.user ? (ch?.letter ?? o.user.charAt(0).toUpperCase()) : meLetter)}</span>
       {/each}
+    </button>
+  {/if}
+{/snippet}
+
+{#snippet headExtras()}
+  {#if ghostOn}
+    <button class="ghost-on" onclick={() => openSettings("ghost")} title={$t("Ghost mode is on")} aria-label={$t("Ghost mode is on")}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 10h.01"/><path d="M15 10h.01"/><path d="M12 2a8 8 0 0 0-8 8v12l3-3 2.5 2.5L12 19l2.5 2.5L17 19l3 3V10a8 8 0 0 0-8-8z"/></svg>
     </button>
   {/if}
 {/snippet}
@@ -858,6 +917,7 @@
       onclick={meClick} oncontextmenu={(e) => e.preventDefault()} aria-label={$t("Profile")} title={$t("Tap — profile, hold — accounts")}>
       {#if $profile.avatar_url}<img src={$profile.avatar_url} alt="" draggable="false" />{:else}{meLetter}{/if}
     </button>
+    {#if IS_MOBILE}{@render stack()}{/if}
     <span class="m-name">Aquamarine</span>
     {#if IS_MOBILE}{@render headExtras()}{/if}
     <!-- The connection: ping when connected, "connecting" otherwise; tap —
@@ -897,8 +957,45 @@
       {/if}
     </div>
   {/if}
+  {#if showStories}
+    <!-- Stories (Telegram): above the search, unfolded from the header's
+         stack by pulling the list down (it follows the finger) or a tap on
+         the stack — the circles fly out of it; scroll down — back in. -->
+    <div class="stories-wrap" bind:this={wrapEl} class:anim={!pulling} class:flying={stProgress < 1} style:height="{stH}px" style:--p={stProgress}>
+    <div class="stories" role="list" aria-label={$t("Stories")} use:scrollX bind:this={storiesEl}
+      oncontextmenu={(e) => { e.preventDefault(); storyMenu = { x: e.clientX, y: e.clientY }; }}>
+      <div class="st-item" role="listitem">
+        <button class="st-ava" class:ring={$myLiveStories.length > 0} class:seen={$myLiveStories.length > 0} onclick={tapMine} aria-label={$t("My story")}>
+          <span class="st-pic" style:background-image={$profile.avatar_url ? `url("${$profile.avatar_url}")` : undefined}>{$profile.avatar_url ? "" : meLetter}</span>
+          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+          <span class="st-plus" role="button" tabindex="-1" title={$t("Add a story")} onclick={(e) => { e.stopPropagation(); storyAdd = !storyAdd; }}>+</span>
+        </button>
+        <span class="st-nm">{$t("My story")}</span>
+        {#if storyAdd}
+          <div class="st-menu" role="menu">
+            <button role="menuitem" onclick={() => { storyAdd = false; void addStory("camera"); }}>{$t("Camera")}</button>
+            <button role="menuitem" onclick={() => { storyAdd = false; void addStory("gallery"); }}>{$t("Photo or video")}</button>
+          </div>
+        {/if}
+      </div>
+      {#each [...$storyOwners, ...$hiddenOwners] as o (o.user)}
+        {@const ch = $chats.find((x) => x.id === o.user)}
+        <div class="st-item" class:hid={o.hidden} role="listitem">
+          <button class="st-ava ring" class:seen={!o.unseen} class:close={o.close && o.unseen}
+            onpointerdown={(e) => stDown(e, o.user)} onpointerup={stUp} onpointercancel={stUp} onpointerleave={stUp}
+            onclick={() => { if (stHeld) { stHeld = false; return; } openStories(o.hidden ? [o.user] : storyUsers(), o.user); }}
+            oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); if (!stHeld) storyMenu = { x: e.clientX, y: e.clientY, user: o.user }; }}
+            aria-label={ch?.name ?? o.user}>
+            <span class="st-pic" style:--gradient={ch?.gradient} style:background-image={$avatars[o.user] ? `url("${$avatars[o.user]}")` : undefined}>{$avatars[o.user] ? "" : (ch?.letter ?? o.user.charAt(0).toUpperCase())}</span>
+          </button>
+          <span class="st-nm">{(ch?.name ?? o.user).split(" ")[0]}</span>
+        </div>
+      {/each}
+    </div>
+    </div>
+  {/if}
   <div class="list-header">
-    {#if !IS_MOBILE}{@render headExtras()}{/if}
+    {#if !IS_MOBILE}{@render stack()}{@render headExtras()}{/if}
     {#if inServer && !compact}
       <button class="collapse-btn" onclick={() => (compactPinned = false)} title={$t("Collapse to avatars")} aria-label={$t("Collapse to avatars")}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
@@ -996,42 +1093,6 @@
 
   <div class="chats" class:home={searchHome} bind:this={chatsEl} onscroll={storiesScroll} onwheel={storiesWheel}
     ontouchstart={storiesTouchStart} ontouchmove={storiesTouchMove} ontouchend={storiesTouchEnd} ontouchcancel={storiesTouchEnd}>
-    {#if showStories}
-      <!-- Stories (Telegram): unfolded from the header's stack by pulling the
-           list down (it follows the finger); scroll down — they fold back. -->
-      <div class="stories-wrap" class:anim={!pulling} style:height="{storiesOpen ? ST_H : pull}px" style:--p={stProgress}>
-      <div class="stories" role="list" aria-label={$t("Stories")} use:scrollX bind:this={storiesEl}
-        oncontextmenu={(e) => { e.preventDefault(); storyMenu = { x: e.clientX, y: e.clientY }; }}>
-        <div class="st-item" role="listitem">
-          <button class="st-ava" class:ring={$myLiveStories.length > 0} class:seen={$myLiveStories.length > 0} onclick={tapMine} aria-label={$t("My story")}>
-            <span class="st-pic" style:background-image={$profile.avatar_url ? `url("${$profile.avatar_url}")` : undefined}>{$profile.avatar_url ? "" : meLetter}</span>
-            <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-            <span class="st-plus" role="button" tabindex="-1" title={$t("Add a story")} onclick={(e) => { e.stopPropagation(); storyAdd = !storyAdd; }}>+</span>
-          </button>
-          <span class="st-nm">{$t("My story")}</span>
-          {#if storyAdd}
-            <div class="st-menu" role="menu">
-              <button role="menuitem" onclick={() => { storyAdd = false; void addStory("camera"); }}>{$t("Camera")}</button>
-              <button role="menuitem" onclick={() => { storyAdd = false; void addStory("gallery"); }}>{$t("Photo or video")}</button>
-            </div>
-          {/if}
-        </div>
-        {#each [...$storyOwners, ...$hiddenOwners] as o (o.user)}
-          {@const ch = $chats.find((x) => x.id === o.user)}
-          <div class="st-item" class:hid={o.hidden} role="listitem">
-            <button class="st-ava ring" class:seen={!o.unseen} class:close={o.close && o.unseen}
-              onpointerdown={(e) => stDown(e, o.user)} onpointerup={stUp} onpointercancel={stUp} onpointerleave={stUp}
-              onclick={() => { if (stHeld) { stHeld = false; return; } openStories(o.hidden ? [o.user] : storyUsers(), o.user); }}
-              oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); if (!stHeld) storyMenu = { x: e.clientX, y: e.clientY, user: o.user }; }}
-              aria-label={ch?.name ?? o.user}>
-              <span class="st-pic" style:--gradient={ch?.gradient} style:background-image={$avatars[o.user] ? `url("${$avatars[o.user]}")` : undefined}>{$avatars[o.user] ? "" : (ch?.letter ?? o.user.charAt(0).toUpperCase())}</span>
-            </button>
-            <span class="st-nm">{(ch?.name ?? o.user).split(" ")[0]}</span>
-          </div>
-        {/each}
-      </div>
-      </div>
-    {/if}
     {#if storyMenu}
       {@const sm = storyMenu}
       {@const smUser = sm.user}
@@ -1286,6 +1347,14 @@
       <div class="fab-veil" onclick={() => (fabOpen = false)}></div>
     {/if}
     <div class="fab-wrap" class:open={fabOpen}>
+      {#if !$storiesOff}
+        <!-- Telegram: a small camera above the pencil — a new story; with the
+             menu open it rides up above it, still its own circle. -->
+        <button class="fab-cam" onclick={() => void addStory("camera")} aria-label={$t("Add a story")} title={$t("Add a story")}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-2.5h6L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.6"/></svg>
+        </button>
+      {/if}
+      <div class="fab-slot" class:open={fabOpen}><div class="fab-slot-in">
       {#if fabOpen}
         <div class="fab-panel">
           {#if fabSel != null}
@@ -1303,14 +1372,13 @@
           </div>
         </div>
       {/if}
-      {#if !fabOpen && !$storiesOff}
-        <!-- Telegram: a small camera above the pencil — a new story. -->
-        <button class="fab-cam" onclick={() => void addStory("camera")} aria-label={$t("Add a story")} title={$t("Add a story")}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-2.5h6L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.6"/></svg>
-        </button>
-      {/if}
+      </div></div>
       <button class="fab" onclick={() => (fabOpen = !fabOpen)} aria-label={$t("New chat, group or channel")} aria-expanded={fabOpen}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path class="fab-line" d="M12 20h9"/><path class="fab-pen" d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        {#if fabOpen}
+          <svg class="fab-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        {:else}
+          <svg class="fab-p" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path class="fab-line" d="M12 20h9"/><path class="fab-pen" d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        {/if}
       </button>
     </div>
   {/if}
@@ -1397,7 +1465,7 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div class="peek-veil" onclick={dismissPeek} oncontextmenu={(e) => e.preventDefault()}>
-      <div class="peek" class:grow={peekGrow} onclick={(e) => e.stopPropagation()}>
+      <div class="peek" class:grow={peekGrow} onclick={(e) => { e.stopPropagation(); /* empty room beside the menu is the veil too */ if (e.target === e.currentTarget) dismissPeek(); }}>
         <button class="peek-card" onclick={openFromPeek} title={$t("Open")}>
           <div class="peek-head">
             <div class="avatar sz-40" style="--gradient: {pc?.gradient ?? ''}">
@@ -1895,14 +1963,24 @@
   /* Stories strip. */
   .stories-wrap { overflow: hidden; flex-shrink: 0; }
   .stories-wrap.anim { transition: height .26s cubic-bezier(.2,.9,.25,1); }
-  .stories { display: flex; gap: 14px; padding: 6px 12px 10px; height: 96px; box-sizing: border-box; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--border);
-    opacity: var(--p, 1); transform: scale(calc(.55 + .45 * var(--p, 1))); transform-origin: 50% 0; }
-  .stories-wrap.anim .stories { transition: opacity .26s ease, transform .26s cubic-bezier(.2,.9,.25,1); }
+  .stories-wrap { position: relative; z-index: 3; will-change: height; }
+  /* While it opens or folds the circles travel to/from the header: nothing clips them. */
+  .stories-wrap.flying, .stories-wrap.flying .stories { overflow: visible; }
+  .stories-wrap.anim { transition: height .3s cubic-bezier(.2,.9,.25,1), --p .3s cubic-bezier(.2,.9,.25,1); }
+  .stories { display: flex; gap: 14px; padding: 6px 12px 10px; height: 96px; box-sizing: border-box; overflow-x: auto; scrollbar-width: none; overflow-y: visible; }
+  /* Each circle flies from the stack (--dx/--dy, set from the layout) and
+     grows as the strip opens; the names fade in last. */
+  .stories .st-item { transform: translate(calc(var(--dx, 0px) * (1 - var(--p, 1))), calc(var(--dy, 0px) * (1 - var(--p, 1)))) scale(calc(.45 + .55 * var(--p, 1)));
+    transform-origin: 50% 31px; will-change: transform; }
+  .stories .st-item:nth-child(n + 4) { opacity: var(--p, 1); }
+  .stories .st-nm { opacity: calc(var(--p, 1) * 2 - 1); }
+  .st-stack.gone { pointer-events: none; max-width: 0; padding: 0; margin: 0 -9px 0 0; }
   .stories::-webkit-scrollbar { display: none; }
   .st-item.hid { opacity: .45; }
   .st-ava.ring.close { background: conic-gradient(from 210deg, #34C759, #9BE15D, #34C759); }
   /* The folded strip: up to three small avatars, overlapping (Telegram). */
-  .st-stack { display: flex; align-items: center; flex-shrink: 0; border: none; background: transparent; padding: 0 2px; cursor: pointer; height: 32px; }
+  .st-stack { display: flex; align-items: center; flex-shrink: 0; border: none; background: transparent; padding: 0 4px; cursor: pointer; height: 34px; max-width: 90px; overflow: hidden;
+    transition: opacity .2s, max-width .3s cubic-bezier(.2,.9,.25,1), padding .3s, margin .3s; }
   .st-stack .ss { width: 26px; height: 26px; border-radius: var(--ava-r, 50%); display: grid; place-items: center; margin-left: -9px; box-sizing: border-box;
     background: var(--gradient, var(--bg-surface-2)) center / cover; color: rgba(6,7,12,.85); font: 800 11px var(--font-ui, inherit);
     box-shadow: 0 0 0 2px var(--bg-list), 0 0 0 3.5px var(--accent); }
@@ -1933,8 +2011,8 @@
   /* Phones: the pencil (Telegram) above the bottom bar; it unfolds upwards. */
   .fab-wrap { position: fixed; right: 16px; bottom: calc(92px + var(--sab, env(safe-area-inset-bottom, 0px))); z-index: 60; display: flex; flex-direction: column; align-items: flex-end; gap: 12px; }
   :global(body.chat-open) .fab-wrap, :global(body.chat-open) .fab-veil { display: none; }
-  .fab-cam { width: 44px; height: 44px; margin-right: 6px; border-radius: 50%; border: 1px solid var(--border-strong); display: grid; place-items: center; cursor: pointer;
-    background: var(--bg-surface); color: var(--fg); box-shadow: 0 8px 20px -10px rgba(0,0,0,.6); animation: fab-cam-in .22s cubic-bezier(.2,.9,.3,1.2); }
+  .fab-cam { position: relative; z-index: 1; width: 44px; height: 44px; margin-right: 6px; border-radius: 50%; border: 1px solid var(--border-strong); display: grid; place-items: center; cursor: pointer;
+    background: linear-gradient(var(--bg-surface), var(--bg-surface)), #0d0f16; color: var(--fg); box-shadow: 0 8px 20px -10px rgba(0,0,0,.6); animation: fab-cam-in .22s cubic-bezier(.2,.9,.3,1.2); }
   .fab-cam svg { width: 21px; height: 21px; }
   @keyframes fab-cam-in { from { transform: scale(.4) translateY(20px); opacity: 0; } }
   .fab { width: 56px; height: 56px; border-radius: calc(18px * var(--rk, 1)); border: none; display: grid; place-items: center; color: #06070c;
@@ -1944,13 +2022,24 @@
   .fab:active { transform: scale(.92); }
   /* Open: the pencil turns, the line it writes on stays put. */
   .fab .fab-pen { transform-box: fill-box; transform-origin: center; transition: transform .25s cubic-bezier(.3,1.3,.5,1); }
-  .fab-wrap.open .fab .fab-pen { transform: rotate(-45deg); }
+  /* Open: the pencil turns into × (a turned pencil read as an "L"). */
+  .fab .fab-x, .fab .fab-p { animation: fab-turn .22s cubic-bezier(.3,1.3,.5,1); }
+  @keyframes fab-turn { from { transform: rotate(-90deg) scale(.6); opacity: 0; } }
+  /* The tab bar slid away while scrolling: the buttons take its place. */
+  .fab-wrap { transition: transform .38s cubic-bezier(.22,1,.36,1); }
+  :global(html.dock-hidden) .fab-wrap:not(.open) { transform: translateY(64px); }
   .fab-veil { position: fixed; inset: 0; z-index: 59; background: rgba(0,0,0,.35); animation: fab-veil .2s ease; }
   @keyframes fab-veil { from { opacity: 0; } }
   /* One panel with a slider, like the tab bar's (see fabDown). */
+  /* The menu's room grows smoothly, so the camera above glides up instead of jumping. */
+  .fab-slot { display: grid; grid-template-rows: 0fr; margin-top: -12px; transition: grid-template-rows .28s cubic-bezier(.2,.9,.25,1), margin-top .28s cubic-bezier(.2,.9,.25,1); }
+  .fab-slot.open { grid-template-rows: 1fr; margin-top: 0; }
+  .fab-slot-in { min-height: 0; overflow: visible; display: flex; justify-content: flex-end; }
   .fab-panel { position: relative; margin-right: 4px; animation: fab-in .26s cubic-bezier(.22,1.2,.36,1) both; transform-origin: bottom center; }
   .fab-items { position: relative; display: flex; flex-direction: column; padding: 5px; border-radius: calc(26px * var(--rk, 1));
-    background: var(--bg-surface); border: 1px solid var(--border-strong); box-shadow: 0 14px 34px -14px rgba(0,0,0,.75); touch-action: none; user-select: none; -webkit-user-select: none; }
+    /* Solid, whatever the theme's transparency: the list must not show through. */
+    background: linear-gradient(var(--bg-surface), var(--bg-surface)), linear-gradient(var(--bg-shell), var(--bg-shell)), #0d0f16; -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+    border: 1px solid var(--border-strong); box-shadow: 0 14px 34px -14px rgba(0,0,0,.75); touch-action: none; user-select: none; -webkit-user-select: none; }
   .fab-thumb { position: absolute; left: 5px; top: 5px; width: 46px; height: 46px; border-radius: calc(21px * var(--rk, 1));
     background: color-mix(in srgb, var(--accent) 18%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
     opacity: 0; transition: transform .24s cubic-bezier(.3,1.3,.5,1), opacity .15s ease; pointer-events: none; }

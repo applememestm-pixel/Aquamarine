@@ -190,7 +190,7 @@ pub fn spawn(app: AppHandle) {
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_secs(10));
         let st = app.state::<StdMutex<AppState>>();
-        let changed = match st.lock() {
+        let changed = match st.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
             Ok(mut s) => sweep(&mut s),
             Err(_) => continue,
         };
@@ -205,7 +205,7 @@ pub fn spawn(app: AppHandle) {
 
 #[tauri::command]
 pub fn get_chat_ttl(state: State<'_, StdMutex<AppState>>, peer_id: String) -> Result<u64, String> {
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     Ok(ttl_of(&s, &peer_id))
 }
 
@@ -214,7 +214,7 @@ pub fn get_chat_ttl(state: State<'_, StdMutex<AppState>>, peer_id: String) -> Re
 #[tauri::command]
 pub async fn set_chat_ttl(app: AppHandle, state: State<'_, StdMutex<AppState>>, peer_id: String, secs: u64) -> Result<(), String> {
     let live = {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if s.groups.contains_key(&peer_id) {
             return Err("change a group's timer in its settings".into());
         }

@@ -1,3 +1,5 @@
+/* The stories strip's progress (ChatList): registered so it can animate. */
+@property --p { syntax: "<number>"; inherits: true; initial-value: 1; }
 /* Layout: three-column shell (rail | chat list | active chat); single column below 720px, toggled by body class */
 
 :root {

@@ -129,7 +129,7 @@ pub async fn listen(app: &AppHandle) -> Result<(), String> {
                         let _ = udp.send_to(format!("{MAGIC_A} {}", TCP_PORT.load(Ordering::Relaxed)).as_bytes(), from);
                     }
                     Some((true, tcp)) => {
-                        if let Ok(mut h) = heard().lock() {
+                        if let Ok(mut h) = heard().lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
                             h.insert(SocketAddr::new(from.ip(), tcp), Instant::now());
                         }
                     }
@@ -168,7 +168,7 @@ fn shout() {
     while Instant::now() < until {
         if let Ok((n, from)) = s.recv_from(&mut buf) {
             if let Some((true, tcp)) = parse_beacon(&buf[..n]) {
-                if let Ok(mut h) = heard().lock() {
+                if let Ok(mut h) = heard().lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
                     h.insert(SocketAddr::new(from.ip(), tcp), Instant::now());
                 }
             }
@@ -197,6 +197,7 @@ pub async fn sync_round(app: &AppHandle, scan: bool) -> Result<usize, String> {
     let me = local_ipv4().map(IpAddr::V4);
     let mut cands: Vec<SocketAddr> = heard()
         .lock()
+        .or_else(|e| Ok::<_, ()>(e.into_inner()))
         .map(|h| h.iter().filter(|(_, t)| t.elapsed() < Duration::from_secs(600)).map(|(a, _)| *a).collect())
         .unwrap_or_default();
     // Places contacts were met before.

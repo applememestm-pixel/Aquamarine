@@ -1155,6 +1155,8 @@
   .pf-media { min-height: 240px; max-height: 60vh; display: flex; flex-direction: column; border-radius: calc(14px * var(--rk, 1)); overflow: hidden;
     background: color-mix(in srgb, var(--bg-shell) 40%, transparent); border: 1px solid var(--border); }
   :global(html.phone) .pf-media { max-height: none; }
+  /* Phone, someone's profile: the media runs edge to edge like Telegram's. */
+  :global(html.phone) .sheet.tgp .pf-media { margin: 0 -22px; border: none; border-radius: 0; background: transparent; min-height: 50vh; }
   @media (max-width: 760px) { .pf-grid { grid-template-columns: 1fr; } }
   .pf-tabs { display: flex; gap: 18px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
   .pf-tabs button {
@@ -1286,6 +1288,9 @@
     .p-more { right: 10px; top: calc(10px + var(--sat, env(safe-area-inset-top, 0px))); }
     .p-more-menu { top: calc(54px + var(--sat, env(safe-area-inset-top, 0px))); }
     .sheet:not(.ed) .banner { height: 210px; }
+    /* Someone's profile (Telegram): a low strip, not a third of the screen
+       of empty colour above the avatar. */
+    .sheet.tgp .banner { height: calc(118px + var(--sat, env(safe-area-inset-top, 0px))); margin-top: calc(-1 * var(--sat, env(safe-area-inset-top, 0px))); }
   }
   @media (max-width: 760px) {
     .sheet.ed { height: auto; }

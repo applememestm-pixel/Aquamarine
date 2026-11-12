@@ -93,7 +93,7 @@ pub fn session_id(s: &AppState, addr: &str) -> Option<String> {
 /// every new one waits for approval (and the UI is told).
 pub async fn refresh(app: &AppHandle) {
     let state: State<'_, StdMutex<AppState>> = app.state();
-    let Some(t) = state.lock().ok().and_then(|s| s.transport.clone()) else { return };
+    let Some(t) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|s| s.transport.clone()) else { return };
     let devs = match t.my_devices().await {
         Ok(d) => d,
         Err(e) => {
@@ -102,7 +102,7 @@ pub async fn refresh(app: &AppHandle) {
         }
     };
     let fresh = {
-        let Ok(s) = state.lock() else { return };
+        let Ok(s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) else { return };
         let mine = my_id(&s);
         let mut tr = load(&s);
         let mut fresh = false;
@@ -156,7 +156,7 @@ pub async fn start(app: &AppHandle) {
 /// again (at most every 20 s), so the question shows up.
 pub fn untrusted_seen(app: &AppHandle) {
     static LAST: StdMutex<Option<std::time::Instant>> = StdMutex::new(None);
-    if let Ok(mut l) = LAST.lock() {
+    if let Ok(mut l) = LAST.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
         if l.is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(20)) {
             return;
         }
@@ -176,7 +176,7 @@ pub fn on_control(app: &AppHandle, text: &str) {
     let v: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
     let Some(id) = v["id"].as_str().filter(|i| i.len() == 12 && i.bytes().all(|b| b.is_ascii_hexdigit())) else { return };
     let state: State<'_, StdMutex<AppState>> = app.state();
-    if let Ok(s) = state.lock() {
+    if let Ok(s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
         let mut tr = load(&s);
         tr.pending.remove(id);
         if ok {
@@ -211,7 +211,7 @@ fn republish(app: &AppHandle) {
 
 #[tauri::command]
 pub fn device_trust(state: State<'_, StdMutex<AppState>>) -> Result<TrustView, String> {
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let t = load(&s);
     Ok(TrustView { pending: t.pending.values().cloned().collect(), trusted: t.ok.into_iter().collect(), this: my_id(&s) })
 }
@@ -221,7 +221,7 @@ pub fn device_trust(state: State<'_, StdMutex<AppState>>) -> Result<TrustView, S
 pub async fn device_approve(app: AppHandle, id: String) -> Result<(), String> {
     let addr = {
         let state: State<'_, StdMutex<AppState>> = app.state();
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut tr = load(&s);
         let addr = tr.pending.remove(&id).map(|p| p.addr);
         tr.ok.insert(id.clone());
@@ -244,14 +244,14 @@ pub async fn device_approve(app: AppHandle, id: String) -> Result<(), String> {
 pub async fn device_decline(app: AppHandle, id: String) -> Result<(), String> {
     let (t, me) = {
         let state: State<'_, StdMutex<AppState>> = app.state();
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         (s.transport.clone().ok_or("not connected")?, s.username.clone().unwrap_or_default())
     };
     t.remove_device(&id).await.map_err(|e| e.to_string())?;
     crate::multidev::invalidate(&me);
     {
         let state: State<'_, StdMutex<AppState>> = app.state();
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut tr = load(&s);
         tr.pending.remove(&id);
         tr.ok.remove(&id);

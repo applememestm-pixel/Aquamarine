@@ -90,20 +90,26 @@
   // ---- exteraGram: hide while scrolling down, show when scrolling up ----
   let hidden = $state(false);
   onMount(() => {
-    const last = new WeakMap<EventTarget, number>();
+    // Per element: where the current run of scrolling one way started.
+    // A finger scroll comes as many small steps (2–5 px a frame), so the
+    // distance is summed up — a "> 6 px per event" test never fired on a phone.
+    const last = new WeakMap<EventTarget, { y: number; anchor: number; dir: number }>();
     const onScroll = (e: Event) => {
       if (!mobile()) return;
       const el = e.target as HTMLElement;
       if (!el || !(el instanceof HTMLElement) || el.closest(".main-pane, .rail, [role=dialog]")) return;
       const y = el.scrollTop;
-      const prev = last.get(el) ?? y;
-      last.set(el, y);
+      const st = last.get(el) ?? { y, anchor: y, dir: 0 };
+      const dir = Math.sign(y - st.y);
+      if (dir && dir !== st.dir) { st.anchor = st.y; st.dir = dir; }
+      st.y = y;
+      last.set(el, st);
       // Only a list long enough to scroll back up may hide it — in a short
       // one the bar stayed away with no way to bring it back.
       if (el.scrollHeight - el.clientHeight < 200 || !el.isConnected) { hidden = false; return; }
       if (y < 40) hidden = false;
-      else if (y - prev > 6) hidden = true;
-      else if (prev - y > 6) hidden = false;
+      else if (y - st.anchor > 24) hidden = true;
+      else if (st.anchor - y > 24) hidden = false;
     };
     document.addEventListener("scroll", onScroll, { capture: true, passive: true });
     return () => document.removeEventListener("scroll", onScroll, { capture: true });

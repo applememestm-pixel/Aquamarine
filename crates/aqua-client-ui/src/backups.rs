@@ -103,7 +103,7 @@ fn status_of(s: &AppState) -> BackupStatus {
 
 #[tauri::command]
 pub fn backup_status(state: State<'_, StdMutex<AppState>>) -> Result<BackupStatus, String> {
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     Ok(status_of(&s))
 }
 
@@ -115,7 +115,7 @@ pub async fn backup_enable(state: State<'_, StdMutex<AppState>>, password: Strin
         return Err("password must be at least 8 characters".into());
     }
     // The account's recovery key, if this device already has one, stays.
-    let existing = { let s = state.lock().map_err(|e| e.to_string())?; phrase_of(&s) };
+    let existing = { let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner); phrase_of(&s) };
     // Argon2id with 64 MiB: off the async runtime.
     let (keys, phrase) = tokio::task::spawn_blocking(move || match existing {
         Some(p) => backup::new_keys_with_phrase(&password, &p).unwrap_or_else(|_| backup::new_keys(&password)),
@@ -125,7 +125,7 @@ pub async fn backup_enable(state: State<'_, StdMutex<AppState>>, password: Strin
     .map_err(|e| e.to_string())?;
     // The relay learns about the key only once the user has seen it
     // (`recovery_create`): a key nobody wrote down must not lock them out.
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     s.vault.put_record(KEYS, &serde_json::to_vec(&keys).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     s.vault.put_record(PHRASE, phrase.as_bytes()).map_err(|e| e.to_string())?;
     let _ = s.vault.delete_record(LAST);
@@ -143,7 +143,7 @@ pub struct RecoveryStatus {
 
 #[tauri::command]
 pub async fn recovery_status(state: State<'_, StdMutex<AppState>>) -> Result<RecoveryStatus, String> {
-    let (local, t) = { let s = state.lock().map_err(|e| e.to_string())?; (phrase_of(&s).is_some(), s.transport.clone()) };
+    let (local, t) = { let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner); (phrase_of(&s).is_some(), s.transport.clone()) };
     let server = match t { Some(t) => t.recovery_set().await.ok(), None => None };
     Ok(RecoveryStatus { local, server })
 }
@@ -155,7 +155,7 @@ pub async fn recovery_status(state: State<'_, StdMutex<AppState>>) -> Result<Rec
 #[tauri::command]
 pub async fn recovery_create(state: State<'_, StdMutex<AppState>>) -> Result<String, String> {
     let (phrase, t) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let phrase = match phrase_of(&s) {
             Some(p) => p,
             None => {
@@ -209,7 +209,7 @@ pub async fn recovery_check_of(phrase: Option<String>) -> Result<String, String>
 
 #[tauri::command]
 pub fn backup_phrase(state: State<'_, StdMutex<AppState>>) -> Result<Option<String>, String> {
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     Ok(s.vault.get_record(PHRASE).ok().flatten().map(|b| String::from_utf8_lossy(&b).to_string()))
 }
 
@@ -221,7 +221,7 @@ pub async fn backup_now(state: State<'_, StdMutex<AppState>>, ui: String, force:
     // compressing and sealing (the slow part) run on a worker thread so the
     // UI and message handling never wait for a backup.
     let (keys, payload, transport, prev) = {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(keys) = keys_of(&s) else { return Err("backups are off".into()) };
         if !force && last_of(&s).is_some_and(|l| now().saturating_sub(l.at) < AUTO_EVERY_SECS) {
             return Ok(status_of(&s));
@@ -256,14 +256,14 @@ pub async fn backup_now(state: State<'_, StdMutex<AppState>>, ui: String, force:
     .await
     .map_err(|e| e.to_string())??;
     let Some((blob, hash)) = sealed else {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let size = last_of(&s).map(|l| l.size).unwrap_or(0);
         let _ = s.vault.put_record(LAST, &serde_json::to_vec(&Last { at: now(), size }).unwrap_or_default());
         return Ok(status_of(&s));
     };
     let size = blob.len() as u64;
     transport.put_backup(blob).await.map_err(|e| e.to_string())?;
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let _ = s.vault.put_record(LAST, &serde_json::to_vec(&Last { at: now(), size }).unwrap_or_default());
     let _ = s.vault.put_record(HASH, &hash);
     Ok(status_of(&s))
@@ -272,11 +272,11 @@ pub async fn backup_now(state: State<'_, StdMutex<AppState>>, ui: String, force:
 /// Turn backups off and delete the copy on the server.
 #[tauri::command]
 pub async fn backup_disable(state: State<'_, StdMutex<AppState>>) -> Result<(), String> {
-    let t = { state.lock().map_err(|e| e.to_string())?.transport.clone() };
+    let t = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone() };
     if let Some(t) = t {
         t.delete_backup().await.map_err(|e| e.to_string())?;
     }
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     // The recovery key stays: it also resets the account's password.
     for k in [KEYS, LAST, HASH] {
         let _ = s.vault.delete_record(k);
@@ -315,7 +315,7 @@ pub async fn backup_restore(
     // Since 1.2.0-1: no e-mail ticket — this device has just signed in
     // (signin_plain) and fetches the backup as a device of the account.
     let blob = if ticket.trim().is_empty() {
-        let identity = state.lock().map_err(|e| e.to_string())?.identity.clone();
+        let identity = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).identity.clone();
         Transport::fetch_my_backup(&server_url, &identity).await.map_err(|e| e.to_string())?
     } else {
         let secret = backup::auth_secret(&password, &email);
@@ -353,7 +353,7 @@ pub async fn backup_restore(
     }
     let mut payload = decode_payload(&bytes)?;
     let phrase = phrase.or_else(|| payload.phrase.take());
-    let mut s = state.lock().map_err(|e| e.to_string())?;
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     // Keep this device's keys: identity, prekeys and per-device sessions.
     let own = s.vault.export_dump(&[]).map_err(|e| e.to_string())?;
     if own.identity.is_some() {

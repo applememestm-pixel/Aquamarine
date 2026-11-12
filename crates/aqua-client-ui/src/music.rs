@@ -41,13 +41,13 @@ pub struct Own {
 }
 
 fn own(state: &StdMutex<AppState>) -> Option<Own> {
-    let s = state.lock().ok()?;
+    let s = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok()?;
     let b = s.vault.get_record(VAULT_KEY).ok().flatten()?;
     serde_json::from_slice::<Own>(&b).ok().filter(|o| !o.url.is_empty())
 }
 
 fn transport(state: &StdMutex<AppState>) -> Result<Arc<aqua_client_core::transport::Transport>, String> {
-    state.lock().map_err(|e| e.to_string())?.transport.clone().ok_or_else(|| "not connected".to_string())
+    state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone().ok_or_else(|| "not connected".to_string())
 }
 
 /// Same tag as the relay's (aqua-server music.rs `tag_of`): which Navidrome a
@@ -143,7 +143,7 @@ pub async fn music_set_own(state: State<'_, StdMutex<AppState>>, url: String, us
     }
     let r = own_call(&o, "ping", &[]).await?;
     {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.vault.put_record(VAULT_KEY, &serde_json::to_vec(&o).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     }
     Ok(json!({ "ok": true, "server": r.get("type"), "version": r.get("serverVersion"), "tag": tag_of(&o.url) }))
@@ -151,7 +151,7 @@ pub async fn music_set_own(state: State<'_, StdMutex<AppState>>, url: String, us
 
 #[tauri::command]
 pub fn music_clear_own(state: State<'_, StdMutex<AppState>>) -> Result<(), String> {
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     s.vault.delete_record(VAULT_KEY).map_err(|e| e.to_string())
 }
 
@@ -304,7 +304,7 @@ fn kind_is_stream(h: &[(String, String)]) -> bool {
 #[tauri::command]
 pub async fn music_save(state: State<'_, StdMutex<AppState>>, src: String, id: String, name: String) -> Result<String, String> {
     let dir = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         crate::commands::downloads_dir(&s.data_dir)
     };
     let f = Fetch::new(&state, &src, "download", &id, None)?;

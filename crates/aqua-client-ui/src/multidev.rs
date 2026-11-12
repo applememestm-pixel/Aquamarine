@@ -50,7 +50,7 @@ pub fn device_id(dh: &[u8]) -> String {
 
 /// Forget the cached device list of `user` (a device was added / removed).
 pub fn invalidate(user: &str) {
-    if let Ok(mut c) = CACHE.lock() {
+    if let Ok(mut c) = CACHE.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
         if let Some(m) = c.as_mut() {
             m.remove(user);
         }
@@ -62,6 +62,7 @@ pub fn note_sender(addr: &str) {
     let user = base_user(addr);
     let known = CACHE
         .lock()
+        .or_else(|e| Ok::<_, ()>(e.into_inner()))
         .ok()
         .and_then(|c| c.as_ref().and_then(|m| m.get(user).map(|(_, l)| l.iter().any(|a| a == addr))))
         .unwrap_or(true);
@@ -72,7 +73,7 @@ pub fn note_sender(addr: &str) {
 
 /// Every address of `user` (cached for a little while).
 pub async fn addresses(transport: &Transport, user: &str) -> Vec<String> {
-    if let Ok(c) = CACHE.lock() {
+    if let Ok(c) = CACHE.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
         if let Some((at, list)) = c.as_ref().and_then(|m| m.get(user)) {
             if at.elapsed() < CACHE_TTL {
                 return list.clone();
@@ -84,7 +85,7 @@ pub async fn addresses(transport: &Transport, user: &str) -> Vec<String> {
         // Old relay, unknown user (bots), or a network hiccup: the username.
         _ => vec![user.to_string()],
     };
-    if let Ok(mut c) = CACHE.lock() {
+    if let Ok(mut c) = CACHE.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
         c.get_or_insert_with(HashMap::new).insert(user.to_string(), (Instant::now(), list.clone()));
     }
     list
@@ -134,8 +135,8 @@ async fn send_inner(app: &AppHandle, addr: &str, payload: &str, own: bool) -> Re
     let state: State<'_, StdMutex<AppState>> = app.state();
     // Someone else's device: only if their signed list has it (devlists.rs).
     if !own {
-        let key = state.lock().map_err(|e| e.to_string())?.sessions.get(addr).map(|x| x.peer.dh_pub.as_bytes().to_vec());
-        let transport = state.lock().map_err(|e| e.to_string())?.transport.clone();
+        let key = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).sessions.get(addr).map(|x| x.peer.dh_pub.as_bytes().to_vec());
+        let transport = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone();
         let ok = match (&key, &transport) {
             (Some(dh), Some(t)) => crate::devlists::allowed(app, base_user(addr), dh) || device_ok(app, t, base_user(addr), addr, dh).await,
             (Some(dh), None) => crate::devlists::allowed(app, base_user(addr), dh),
@@ -147,7 +148,7 @@ async fn send_inner(app: &AppHandle, addr: &str, payload: &str, own: bool) -> Re
                 // more (a new phone, the account registered again). It's of
                 // no use: forget it and start from the device's current keys
                 // below — those are checked against the list too.
-                let mut s = state.lock().map_err(|e| e.to_string())?;
+                let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 s.sessions.remove(addr);
                 let _ = s.vault.delete_session(addr);
                 s.prev_sessions.remove(addr);
@@ -157,7 +158,7 @@ async fn send_inner(app: &AppHandle, addr: &str, payload: &str, own: bool) -> Re
         }
     }
     let fast = {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if own {
             if let Some(id) = crate::devtrust::session_id(&s, addr) {
                 if !crate::devtrust::is_trusted(&s, &id) {
@@ -197,10 +198,10 @@ async fn send_inner(app: &AppHandle, addr: &str, payload: &str, own: bool) -> Re
         // use up its one-time prekeys every couple of seconds). `user~id`
         // names its key id; for `user` the last fetched key is remembered.
         let claimed = addr.split_once('~').map(|(_, id)| id.to_string()).or_else(|| {
-            KEY_OF.lock().ok().and_then(|m| m.as_ref().and_then(|m| m.get(addr)).filter(|(t, _)| t.elapsed() < KEY_OF_TTL).map(|(_, id)| id.clone()))
+            KEY_OF.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|m| m.as_ref().and_then(|m| m.get(addr)).filter(|(t, _)| t.elapsed() < KEY_OF_TTL).map(|(_, id)| id.clone()))
         });
         if let Some(id) = claimed {
-            if !state.lock().map(|s| crate::devtrust::is_trusted(&s, &id)).unwrap_or(false) {
+            if !state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).map(|s| crate::devtrust::is_trusted(&s, &id)).unwrap_or(false) {
                 return Err(NOT_APPROVED.into());
             }
         }
@@ -208,10 +209,10 @@ async fn send_inner(app: &AppHandle, addr: &str, payload: &str, own: bool) -> Re
     // Met by QR (meet.rs / mesh.rs): their keys came in the QR — start the
     // session from them, no relay needed. Without a relay the first message
     // waits for Bluetooth / the same Wi-Fi.
-    let met = MET.lock().ok().and_then(|m| m.as_ref().and_then(|m| m.get(addr).cloned()));
+    let met = MET.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|m| m.as_ref().and_then(|m| m.get(addr).cloned()));
     if let Some(bundle) = met {
         let (transport, identity) = {
-            let s = state.lock().map_err(|e| e.to_string())?;
+            let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             (s.transport.clone(), s.identity.clone())
         };
         let (session, initial) = Session::start_as_initiator(&identity, &bundle, payload.as_bytes())
@@ -219,10 +220,10 @@ async fn send_inner(app: &AppHandle, addr: &str, payload: &str, own: bool) -> Re
         if !transport.map(|t| t.send_initial(addr, &initial).is_ok()).unwrap_or(false) {
             crate::mesh::queue_initial(app, addr, &initial);
         }
-        let mut s = state.lock().map_err(|e| e.to_string())?;
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let _ = s.vault.save_session(addr, &session);
         s.sessions.insert(addr.to_string(), session);
-        if let Ok(mut g) = MET.lock() {
+        if let Ok(mut g) = MET.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
             if let Some(m) = g.as_mut() {
                 m.remove(addr);
             }
@@ -230,7 +231,7 @@ async fn send_inner(app: &AppHandle, addr: &str, payload: &str, own: bool) -> Re
         return Ok(());
     }
     let (transport, identity) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         (s.transport.clone().ok_or("not connected")?, s.identity.clone())
     };
     let bundle = transport.fetch_bundle(addr).await.map_err(|e| format!("fetch_bundle: {e}"))?;
@@ -240,10 +241,10 @@ async fn send_inner(app: &AppHandle, addr: &str, payload: &str, own: bool) -> Re
     }
     if own {
         let id = device_id(bundle.identity.dh_pub.as_bytes());
-        if let Ok(mut m) = KEY_OF.lock() {
+        if let Ok(mut m) = KEY_OF.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
             m.get_or_insert_with(HashMap::new).insert(addr.to_string(), (Instant::now(), id.clone()));
         }
-        let ok = state.lock().map(|s| crate::devtrust::is_trusted(&s, &id)).unwrap_or(false);
+        let ok = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).map(|s| crate::devtrust::is_trusted(&s, &id)).unwrap_or(false);
         if !ok {
             return Err(NOT_APPROVED.into());
         }
@@ -251,7 +252,7 @@ async fn send_inner(app: &AppHandle, addr: &str, payload: &str, own: bool) -> Re
     let (session, initial) = Session::start_as_initiator(&identity, &bundle, payload.as_bytes())
         .map_err(|e| format!("start_as_initiator: {e}"))?;
     transport.send_initial(addr, &initial).map_err(|e| format!("send_initial: {e}"))?;
-    let mut s = state.lock().map_err(|e| e.to_string())?;
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let _ = s.vault.save_session(addr, &session);
     s.sessions.insert(addr.to_string(), session);
     Ok(())
@@ -262,14 +263,14 @@ async fn send_inner(app: &AppHandle, addr: &str, payload: &str, own: bool) -> Re
 static MET: StdMutex<Option<HashMap<String, aqua_core::keys::PreKeyBundle>>> = StdMutex::new(None);
 
 pub fn remember_met(addr: &str, bundle: aqua_core::keys::PreKeyBundle) {
-    if let Ok(mut m) = MET.lock() {
+    if let Ok(mut m) = MET.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
         m.get_or_insert_with(HashMap::new).insert(addr.to_string(), bundle);
     }
 }
 
 /// For the nearby handshake: these count as contacts (mesh.rs::me).
 pub fn met_identities() -> Vec<(String, aqua_core::keys::IdentityPublic)> {
-    MET.lock().ok().and_then(|m| m.as_ref().map(|m| m.iter().map(|(a, b)| (a.clone(), b.identity)).collect())).unwrap_or_default()
+    MET.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|m| m.as_ref().map(|m| m.iter().map(|(a, b)| (a.clone(), b.identity)).collect())).unwrap_or_default()
 }
 
 fn opens_no_session(payload: &str) -> bool {
@@ -288,13 +289,13 @@ fn worth_keeping(payload: &str) -> bool {
 /// Device addresses of `user` we can reach without the relay: the last
 /// known device list, else every device we have a session with.
 fn offline_addresses(app: &AppHandle, user: &str) -> Vec<String> {
-    if let Ok(c) = CACHE.lock() {
+    if let Ok(c) = CACHE.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
         if let Some((_, list)) = c.as_ref().and_then(|m| m.get(user)) {
             return list.clone();
         }
     }
     let state: State<'_, StdMutex<AppState>> = app.state();
-    let Ok(s) = state.lock() else { return Vec::new() };
+    let Ok(s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) else { return Vec::new() };
     let mut v: Vec<String> = s.sessions.keys().filter(|a| base_user(a) == user).cloned().collect();
     // Met by QR: no session yet, but their keys are here.
     for (a, _) in met_identities() {
@@ -312,7 +313,7 @@ fn offline_addresses(app: &AppHandle, user: &str) -> Vec<String> {
 pub async fn fanout(app: &AppHandle, peer: &str, payload: &str, sync: bool) -> Result<(), String> {
     let state: State<'_, StdMutex<AppState>> = app.state();
     let (transport, me) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         (s.transport.clone(), s.username.clone().unwrap_or_default())
     };
     let peer = base_user(peer).to_string();
@@ -402,7 +403,7 @@ async fn fanout_offline(app: &AppHandle, peer: &str, me: &str, payload: &str, sy
         let mine = offline_addresses(app, me);
         let my_addr = {
             let state: State<'_, StdMutex<AppState>> = app.state();
-            let s = state.lock().map_err(|e| e.to_string())?;
+            let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             my_address(&s, &mine)
         };
         for addr in mine.into_iter().filter(|a| *a != my_addr) {
@@ -426,7 +427,7 @@ pub async fn to_my_devices(app: &AppHandle, transport: &Transport, me: &str, pay
     let mine = addresses(transport, me).await;
     let my_addr = {
         let state: State<'_, StdMutex<AppState>> = app.state();
-        let Ok(s) = state.lock() else { return };
+        let Ok(s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) else { return };
         my_address(&s, &mine)
     };
     for addr in mine.iter().filter(|a| **a != my_addr) {
@@ -440,7 +441,7 @@ pub async fn to_my_devices(app: &AppHandle, transport: &Transport, me: &str, pay
 pub async fn sync_raw(app: &AppHandle, payload: &str) {
     let state: State<'_, StdMutex<AppState>> = app.state();
     let (transport, me) = {
-        let Ok(s) = state.lock() else { return };
+        let Ok(s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) else { return };
         (s.transport.clone(), s.username.clone().unwrap_or_default())
     };
     if let Some(t) = transport {
@@ -492,7 +493,7 @@ pub async fn sync_own(app: AppHandle, body: String) -> Result<(), String> {
     }
     let me = {
         let state: State<'_, StdMutex<AppState>> = app.state();
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.username.clone().unwrap_or_default()
     };
     if me.is_empty() {
@@ -510,14 +511,14 @@ fn chrono_ms() -> u64 {
 
 #[tauri::command]
 pub async fn list_devices(state: State<'_, StdMutex<AppState>>) -> Result<Vec<DeviceInfo>, String> {
-    let t = { state.lock().map_err(|e| e.to_string())?.transport.clone() }.ok_or("not connected")?;
+    let t = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone() }.ok_or("not connected")?;
     t.my_devices().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn remove_device(state: State<'_, StdMutex<AppState>>, id: String) -> Result<(), String> {
     let (t, me) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         (s.transport.clone().ok_or("not connected")?, s.username.clone().unwrap_or_default())
     };
     t.remove_device(&id).await.map_err(|e| e.to_string())?;
@@ -527,7 +528,7 @@ pub async fn remove_device(state: State<'_, StdMutex<AppState>>, id: String) -> 
 
 #[tauri::command]
 pub async fn rename_device(state: State<'_, StdMutex<AppState>>, id: String, name: String) -> Result<(), String> {
-    let t = { state.lock().map_err(|e| e.to_string())?.transport.clone() }.ok_or("not connected")?;
+    let t = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone() }.ok_or("not connected")?;
     t.rename_device(&id, &name).await.map_err(|e| e.to_string())
 }
 
@@ -580,7 +581,7 @@ pub fn handle_own_device(app: &AppHandle, text: &str) {
         let state: State<'_, StdMutex<AppState>> = app.state();
         let v: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
         let (old, new) = (v["old"].as_str().unwrap_or(""), v["new"].as_str().unwrap_or(""));
-        if let Ok(mut s) = state.lock() {
+        if let Ok(mut s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
             if s.username.as_deref() == Some(old) && !new.is_empty() {
                 let email = s.email.clone();
                 s.mark_registered(new.to_string(), email);
@@ -594,7 +595,7 @@ pub fn handle_own_device(app: &AppHandle, text: &str) {
     // Group traffic of mine (snapshots, messages) arrives unwrapped.
     let me = {
         let state: State<'_, StdMutex<AppState>> = app.state();
-        state.lock().ok().and_then(|s| s.username.clone()).unwrap_or_default()
+        state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|s| s.username.clone()).unwrap_or_default()
     };
     route_group_payload_pub(app, &me, text);
 }
