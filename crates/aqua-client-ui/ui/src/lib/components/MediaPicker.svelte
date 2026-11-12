@@ -148,7 +148,6 @@
   /** What waits for the second tap ("Delete?"). */
   let armed = $state<string | null>(null);
   $effect(() => { void tab; manageOpen = false; armed = null; });
-  const managedPacks = $derived(tab === "emoji" ? emojiPacks.filter((x) => x.pack).map((x) => x.pack!) : tab === "stickers" ? stickerPacks : []);
   async function dropPack(p: StickerPack) {
     if (armed !== p.id) { armed = p.id; return; }
     armed = null;
@@ -334,6 +333,7 @@
     return ordered("emoji", out);
   });
   const stickerPacks = $derived(ordered("stickers", (catalogue?.packs ?? []).filter((p) => p.kind !== "emoji")));
+  const managedPacks = $derived(tab === "emoji" ? emojiPacks.filter((x) => x.pack).map((x) => x.pack!) : tab === "stickers" ? stickerPacks : []);
 
   // emoji char → search words, for matching custom emoji / stickers by meaning
   const wordsByEmoji = $derived.by(() => {

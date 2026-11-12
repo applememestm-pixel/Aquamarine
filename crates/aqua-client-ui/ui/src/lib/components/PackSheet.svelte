@@ -94,6 +94,9 @@
     }
   }
 
+  /** The relay can't reach Telegram (blocked in its network). */
+  const tgBlocked = (e: string) => /can't reach Telegram|Telegram is blocked/i.test(e);
+
   function close() { packSheet.set(null); }
 
   async function add() {
@@ -152,7 +155,7 @@
       </header>
 
       {#if error}
-        <div class="ps-note">{/can't reach Telegram|Telegram is blocked/i.test(error) ? $t("Your server can't reach Telegram, so the whole pack doesn't load. This sticker can still be saved. (Server admin: Aquamarine Server → Stickers → Telegram network → proxy.)") : error}</div>
+        <div class="ps-note">{tgBlocked(error) ? $t("Your server can't reach Telegram, so the whole pack doesn't load. This sticker can still be saved. (Server admin: Aquamarine Server → Stickers → Telegram network → proxy.)") : error}</div>
       {:else if !preview}
         <div class="ps-grid">
           {#each Array(12) as _, i (i)}<div class="ps-cell skel"></div>{/each}
