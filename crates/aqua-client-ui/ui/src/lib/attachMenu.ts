@@ -7,8 +7,9 @@ import { writable } from "svelte/store";
 
 export type AttachId = "camera" | "media" | "file" | "poll" | "event" | "sealed" | "article" | "document" | "board" | "checklist" | "bluetooth" | "music";
 
+/** No "Camera": on phones the sheet has a live camera tile, on computers
+ *  it's not what people attach (owner's call: the menu was too long). */
 export const ATTACH_ITEMS: { id: AttachId; label: string }[] = [
-  { id: "camera", label: "Camera" },
   { id: "media", label: "Photo or video" },
   { id: "file", label: "File" },
   { id: "poll", label: "Poll" },
@@ -23,7 +24,9 @@ export const ATTACH_ITEMS: { id: AttachId; label: string }[] = [
 ];
 
 /** Shown right away; the rest go under "More". */
-const DEFAULT: AttachId[] = ["media", "file", "poll", "event"];
+const DEFAULT: AttachId[] = ["media", "file", "poll"];
+/** Hidden unless turned on in Settings (rarely needed). */
+const HIDDEN: AttachId[] = ["bluetooth"];
 const KEY = "aqua.attachMenu.v1";
 const isId = (x: unknown): x is AttachId => ATTACH_ITEMS.some((i) => i.id === x);
 
@@ -38,7 +41,16 @@ function stored<T>(key: string, fallback: T, check: (v: unknown) => T | null) {
 /** Right away, in this order. */
 export const attachFront = stored<AttachId[]>(KEY, [...DEFAULT], (v) => (Array.isArray(v) ? v.filter(isId) : null));
 /** Not shown at all, not even under "More". */
-export const attachHidden = stored<AttachId[]>("aqua.attachHidden.v1", [], (v) => (Array.isArray(v) ? v.filter(isId) : null));
+export const attachHidden = stored<AttachId[]>("aqua.attachHidden.v1", [...HIDDEN], (v) => (Array.isArray(v) ? v.filter(isId) : null));
+// 1.20.1-4: the shorter menu for everyone who kept the old default.
+try {
+  if (localStorage.getItem("aqua.attachMenu.trim") !== "1") {
+    localStorage.setItem("aqua.attachMenu.trim", "1");
+    attachFront.update((l) => (l.join() === "media,file,poll,event" ? [...DEFAULT] : l.filter((x) => x !== "camera")));
+    attachHidden.update((l) => (l.length ? l : [...HIDDEN]));
+  }
+} catch { /* storage blocked */ }
+
 /** Phones: the actions as a floating bar under the gallery (off: inside the sheet). */
 export const attachDock = stored<boolean>("aqua.attachDock.v1", true, (v) => (typeof v === "boolean" ? v : null));
 
@@ -68,4 +80,4 @@ export function moveAttach(id: AttachId, dir: -1 | 1) {
 export function toggleAttachBot(b: AttachBot) {
   attachBots.update((l) => (l.some((x) => x.bot === b.bot) ? l.filter((x) => x.bot !== b.bot) : [...l, b]));
 }
-export function resetAttachMenu() { attachFront.set([...DEFAULT]); attachHidden.set([]); attachDock.set(true); }
+export function resetAttachMenu() { attachFront.set([...DEFAULT]); attachHidden.set([...HIDDEN]); attachDock.set(true); }
