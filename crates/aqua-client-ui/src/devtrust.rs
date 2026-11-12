@@ -113,7 +113,8 @@ pub async fn refresh(app: &AppHandle) {
             tracing::info!(devices = devs.len(), "device trust: the account's devices are trusted");
         } else {
             // A new device works right away; the question is only "was it you?".
-            for d in devs.iter().filter(|d| d.id != mine && !tr.ok.contains(&d.id) && !tr.no.contains(&d.id)) {
+            let new: Vec<_> = devs.iter().filter(|d| d.id != mine && !tr.ok.contains(&d.id) && !tr.no.contains(&d.id)).collect();
+            for d in new {
                 fresh = true;
                 tracing::warn!(id = %d.id, name = %d.name, "a new device signed in to my account");
                 tr.ok.insert(d.id.clone());
