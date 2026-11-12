@@ -83,3 +83,65 @@ export function themeStyle(t: ChatTheme | undefined): string {
 }
 
 export const chatThemeStyle = (id: string) => themeStyle(get(chatThemes)[id]);
+
+// ---- "For both of us": the theme goes to the other person too ----------
+// Travels as `[ctl:v1]{"t":"theme","th":…}` (like noShare.ts). What comes in
+// is taken only as plain colours and gradients — never url(...) or anything
+// else that could load a page or a picture from elsewhere.
+
+const SHARED_KEY = "aqua.chatThemeShared";
+function loadShared(): Set<string> {
+  try { return new Set(JSON.parse(localStorage.getItem(SHARED_KEY) ?? "[]")); } catch { return new Set(); }
+}
+/** 1:1 chats whose theme is kept the same on both sides. */
+export const sharedThemes = writable<Set<string>>(loadShared());
+sharedThemes.subscribe((v) => { try { localStorage.setItem(SHARED_KEY, JSON.stringify([...v])); } catch { /* ignore */ } });
+
+const HEX = /^#[0-9a-f]{6}$/i;
+/** A background made only of colours: #hex, gradients of them, angles, %. */
+const SAFE_WALL = /^(?:#[0-9a-f]{3,8}|(?:linear|radial)-gradient\((?:[\s,.%0-9a-z#-]|\((?:[\s,.%0-9a-z#-])*\))*\)(?:\s*,\s*(?:#[0-9a-f]{3,8}|(?:linear|radial)-gradient\((?:[\s,.%0-9a-z#-]|\((?:[\s,.%0-9a-z#-])*\))*\)))*)$/i;
+
+function clean(t: unknown): ChatTheme | null {
+  if (!t || typeof t !== "object") return null;
+  const x = t as Record<string, unknown>;
+  const out: ChatTheme = {};
+  if (typeof x.preset === "string" && PRESETS.some((p) => p.id === x.preset)) out.preset = x.preset;
+  for (const k of ["accent", "out", "in"] as const) if (typeof x[k] === "string" && HEX.test(x[k] as string)) out[k] = x[k] as string;
+  if (typeof x.wall === "string" && x.wall.length < 600 && !/url\s*\(|expression|image-set|var\(/i.test(x.wall) && SAFE_WALL.test(x.wall.trim())) out.wall = x.wall.trim();
+  return out.preset || out.accent || out.wall || out.out || out.in ? out : null;
+}
+
+let sendTimer: ReturnType<typeof setTimeout> | null = null;
+async function sendTheme(chat: string) {
+  const { sendChatControl } = await import("./tauri");
+  await sendChatControl(chat, "[ctl:v1]" + JSON.stringify({ t: "theme", th: get(chatThemes)[chat] ?? null, at: Date.now() })).catch(() => {});
+}
+/** Turn "for both of us" on / off for a 1:1 chat (on sends the theme now). */
+export function setThemeShared(chat: string, on: boolean) {
+  sharedThemes.update((s) => { const n = new Set(s); if (on) n.add(chat); else n.delete(chat); return n; });
+  if (on) void sendTheme(chat);
+}
+/** The theme of a shared chat changed here: tell the other side (a moment later — the colour pickers fire a lot). */
+export function themeChanged(chat: string) {
+  if (!get(sharedThemes).has(chat)) return;
+  if (sendTimer) clearTimeout(sendTimer);
+  sendTimer = setTimeout(() => void sendTheme(chat), 700);
+}
+
+let started = false;
+export function startChatThemes() {
+  if (started) return;
+  started = true;
+  void import("@tauri-apps/api/event").then(({ listen }) => listen<{ chat: string; body: Record<string, unknown>; own?: boolean }>("aqua://ctl", (e) => {
+    const b = e.payload.body;
+    const chat = e.payload.chat;
+    if (b?.t !== "theme" || !chat || chat.startsWith("grp_")) return;
+    chatThemes.update((all) => {
+      const next = { ...all };
+      const th = clean(b.th);
+      if (th) next[chat] = th; else delete next[chat];
+      return next;
+    });
+    sharedThemes.update((s) => new Set(s).add(chat));
+  })).catch(() => {});
+}

@@ -4,13 +4,16 @@
    * own — accent, background, my bubbles, their bubbles — each in a section
    * that folds open. Changes show at once (in the chat behind and the preview).
    */
-  import { PRESETS, chatThemes, setChatTheme, themeStyle, resolve, type ChatTheme } from "../chatTheme";
+  import { PRESETS, chatThemes, setChatTheme as setLocal, themeStyle, resolve, sharedThemes, setThemeShared, themeChanged, type ChatTheme } from "../chatTheme";
   import { PALETTES, WALLPAPERS } from "../theme";
   import ColorInput from "./ColorInput.svelte";
-  import { t } from "../i18n";
+  import { t, tr } from "../i18n";
 
   let { chat, name = "", onclose }: { chat: string; name?: string; onclose: () => void } = $props();
 
+  // Every change here also goes to the other person when "for both of us" is on.
+  const setChatTheme = (id: string, th: ChatTheme | null) => { setLocal(id, th); themeChanged(id); };
+  const oneToOne = $derived(!!chat && !chat.startsWith("grp_") && !chat.startsWith("__"));
   const cur = $derived<ChatTheme>($chatThemes[chat] ?? {});
   const look = $derived(resolve(cur));
   const set = (patch: Partial<ChatTheme>) => setChatTheme(chat, { ...cur, ...patch });
@@ -31,6 +34,13 @@
       <div class="b out" style:background={look?.out ?? "color-mix(in srgb, var(--accent) 22%, var(--bg-bubble-in))"} style:color={look?.out ? "var(--bubble-out-fg)" : "var(--fg)"}>{$t("Great — look at this theme 🎨")}</div>
     </div>
 
+    {#if oneToOne}
+      <!-- Telegram: a chat theme is for both people. -->
+      <label class="both">
+        <input type="checkbox" checked={$sharedThemes.has(chat)} onchange={(e) => setThemeShared(chat, (e.currentTarget as HTMLInputElement).checked)} />
+        <span><b>{$t("For both of us")}</b><small>{name ? tr("{name} sees the same theme in this chat", { name }) : $t("The other person sees the same theme in this chat")}</small></span>
+      </label>
+    {/if}
     <div class="presets">
       <button class="pr" class:on={!look} onclick={() => pick(null)}><span class="pr-sw none">✕</span><small>{$t("No theme")}</small></button>
       {#each PRESETS as p (p.id)}
@@ -74,6 +84,11 @@
 </div>
 
 <style>
+  .both { display: flex; align-items: flex-start; gap: 10px; margin: 2px 0 12px; padding: 10px 12px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-input); cursor: pointer; }
+  .both input { margin-top: 3px; accent-color: var(--accent); width: 18px; height: 18px; }
+  .both span { display: flex; flex-direction: column; gap: 2px; }
+  .both b { font-size: 14px; }
+  .both small { font-size: 12px; color: var(--fg-dim); }
   .ct-back { position: fixed; inset: 0; z-index: 10080; display: grid; place-items: center; background: rgba(0, 0, 0, .45); }
   :global(html.phone) .ct-back { place-items: end stretch; }
   .ct { width: min(460px, 94vw); max-height: 88vh; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 18px;

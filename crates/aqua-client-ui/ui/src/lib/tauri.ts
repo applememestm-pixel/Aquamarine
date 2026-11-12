@@ -1,6 +1,7 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { tr } from "./i18n";
+import { noteWrote } from "./wrote";
 
 /**
  * Turn a local file path into a URL the webview can load directly through
@@ -102,7 +103,10 @@ export const api = {
   listChats:          (): Promise<ChatSummary[]>                                   => invoke<ChatSummary[]>("list_chats").then((l) => l.map((c) => ({ ...c, time: shownTime(c.time), ...(c.id === "__replies__" ? { name: tr("Replies") } : {}), ...(c.id === "__saved__" ? { name: tr("Saved Messages"), preview: c.preview === "Note to self — only you see this" ? tr(c.preview) : c.preview } : {}) })).filter((c) => c.id !== "welcome")),
   getMessages:        (peer_id: string): Promise<ChatMessage[]>                    => invoke<ChatMessage[]>("get_messages", { peerId: peer_id }).then((l) => l.map((m) => ({ ...m, time: shownTime(m.time) }))),
   setTzOffset:        (minutes: number): Promise<void> => invoke("set_tz_offset", { minutes }),
-  sendMessage:        (peer_id: string, text: string): Promise<SendResult>        => invoke("send_message", { peerId: peer_id, text }),
+  /** Stars (src/stars.rs): someone's statement → its kind if real; my own from my relay. */
+  starVerify:         (uid: string, star: unknown): Promise<number | null>          => invoke("star_verify", { uid, star }),
+  myStar:             (): Promise<{ uid: string; kind: number; exp: number; sig: string } | null> => invoke("my_star"),
+  sendMessage:        (peer_id: string, text: string): Promise<SendResult>        => { noteWrote(peer_id); return invoke("send_message", { peerId: peer_id, text }); },
   verifyFingerprint:  (peer_id: string): Promise<FingerprintView>                  => invoke("verify_fingerprint", { peerId: peer_id }),
   sessionFingerprint: (): Promise<string>                                          => invoke("session_fingerprint"),
   connectToServer:    (server_url: string, username: string): Promise<InitInfo>    => invoke("connect_to_server", { serverUrl: server_url, username }),
@@ -204,6 +208,7 @@ export const api = {
   addMediaFiles:      (target: "gifs" | "stickers" | "emoji", pack: string | null, paths: string[]): Promise<number> => invoke("add_media_files", { target, pack, paths }),
   deleteMediaItem:    (path: string): Promise<void> => invoke("delete_media_item", { path }),
   deleteStickerPack:  (title: string): Promise<void> => invoke("delete_sticker_pack", { title }),
+  deleteGif:          (name: string): Promise<void> => invoke("delete_gif", { name }),
   createStickerPack:  (title: string, kind: "sticker" | "emoji"): Promise<string> => invoke("create_sticker_pack", { title, kind }),
   packAddFiles:       (title: string, paths: string[]): Promise<string[]> => invoke("pack_add_files", { title, paths }),
   packSetOrder:       (title: string, files: string[]): Promise<void> => invoke("pack_set_order", { title, files }),
@@ -256,7 +261,7 @@ export const api = {
   markChatRead:       (peerId: string): Promise<void> => invoke("mark_chat_read", { peerId }),
   attachFile:         (peer_id: string, file_path: string, caption?: string): Promise<AttachResult>  => invoke("attach_file", { peerId: peer_id, filePath: file_path, caption: caption || null }),
   /** Re-send a file with a "Forwarded from" header (JSON). */
-  forwardFile:        (peer_id: string, file_path: string, header: string): Promise<AttachResult> => invoke("forward_file", { peerId: peer_id, filePath: file_path, header }),
+  forwardFile:        (peer_id: string, file_path: string, header: string | null, category?: string | null): Promise<AttachResult> => invoke("forward_file", { peerId: peer_id, filePath: file_path, header, category: category ?? null }),
   attachFileAs:       (peerId: string, filePath: string, mode: "file" | "media" | "compressed" | "live" | "live-loop" | "live-bounce" | "once", caption?: string): Promise<AttachResult> => invoke("attach_file_as", { peerId, filePath, mode, caption: caption || null }),
   attachBytes:        (peerId: string, name: string, mime: string, bytes: number[], caption?: string): Promise<AttachResult> => invoke("attach_bytes", { peerId, name, mime, bytes, caption: caption || null }),
   downloadFile:       (peer_id: string, message_id: string): Promise<DownloadResult> => invoke("download_file", { peerId: peer_id, messageId: message_id }),

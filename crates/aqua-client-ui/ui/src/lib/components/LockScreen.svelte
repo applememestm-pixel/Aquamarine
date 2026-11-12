@@ -4,13 +4,11 @@
    * through (Telegram-style local passcode with auto-lock).
    */
   import { onMount, tick } from "svelte";
-  import { locked, passcodeSetupOpen, lockConf, setPasscode, unlock, lockNow, initLock, unlockBiometric, biometricAvailable } from "../lock";
+  import { locked, passcodeSetupOpen, lockConf, setPasscode, unlock, lockNow, initLock, unlockBiometric, biometricAvailable, forgotSend, forgotCheck, lockLoaded } from "../lock";
   import { wizardOpen } from "./RegistrationWizard.svelte";
   import { info } from "../stores";
-  import { api } from "../tauri";
   import { profile } from "../profile";
   import { t, tr } from "../i18n";
-  import { askConfirm } from "./Confirm.svelte";
   import { showToast } from "./Toast.svelte";
   import { IS_MOBILE } from "../platform";
 
@@ -70,7 +68,7 @@
 
   // Signed in but no passcode yet → ask for one (once the sign-in window closes).
   $effect(() => {
-    if ($info?.registered && !$wizardOpen && !$lockConf?.hash && !$lockConf?.skipped) passcodeSetupOpen.set(true);
+    if ($lockLoaded && $info?.registered && !$wizardOpen && !$lockConf?.hash && !$lockConf?.skipped) passcodeSetupOpen.set(true);
   });
   $effect(() => {
     if ($locked || $passcodeSetupOpen) { pass = ""; pass2 = ""; err = ""; forgotStep = 0; code = ""; pinStep = 1; pinFirst = ""; if (!$locked) usePassword = !IS_MOBILE; void tick().then(() => input?.focus()); }
@@ -86,7 +84,15 @@
   async function doUnlock() {
     if (!pass || busy) return;
     busy = true;
-    const ok = await unlock(pass);
+    let ok = false;
+    try { ok = await unlock(pass); }
+    catch (e) {
+      // Too many wrong tries: the vault makes the next one wait.
+      const ms = Number(/wait:(\d+)/.exec(String(e))?.[1] ?? 0);
+      busy = false; pass = "";
+      err = tr("Too many tries. Try again in {s} s.", { s: String(Math.ceil(ms / 1000)) });
+      return;
+    }
     busy = false;
     if (!ok) { err = $t($lockConf?.kind === "pin" ? "Wrong passcode" : "Wrong password"); pass = ""; shake = true; setTimeout(() => (shake = false), 450); }
   }
@@ -98,29 +104,14 @@
     busy = false;
     passcodeSetupOpen.set(false);
   }
-  /** Sign out of this account on this device (a fresh sign-in restores it from the backup). */
-  async function logOutProfile() {
-    if (!(await askConfirm({ title: tr("Log out of the profile?"), text: tr("You can sign back in with your e-mail and password — chats come back from your encrypted backup."), ok: tr("Log out"), danger: true }))) return;
-    try { info.set(await api.logOut()); } catch { /* ignore */ }
-    lockConf.set(null);
-    locked.set(false);
-    passcodeSetupOpen.set(false);
-    wizardOpen.set(true);
-  }
   /** Forgot the password: a code to the account e-mail removes it. */
+  /** Forgot the password: a code to the account e-mail removes it (checked
+   *  on the Rust side — applock.rs; the relay must really send e-mail). */
   async function forgot() {
     err = "";
-    const email = $info?.email ?? "";
-    const server = $info?.server_url ?? "";
-    if (!email || !server) {
-      err = tr("No e-mail is linked to this account here — log out and sign in again.");
-      return;
-    }
     busy = true;
     try {
-      const r = await api.requestEmailCode(server, email, "signin");
-      if (r.dev_code) code = r.dev_code;
-      sentTo = email.replace(/^(.).*?(@.*)$/, "$1•••$2");
+      sentTo = await forgotSend();
       forgotStep = 1;
       void tick().then(() => input?.focus());
     } catch (e) { err = tr("Could not send the code: {e}", { e: String(e) }); }
@@ -130,11 +121,10 @@
     if (code.trim().length < 4 || busy) return;
     busy = true;
     try {
-      await api.verifyEmailCode($info?.server_url ?? "", $info?.email ?? "", code.trim());
-      // Straight in; the old password is gone (a new one can be set in Settings → Privacy).
-      lockConf.set({ hash: "", salt: "", autoMin: 0, skipped: true });
-      locked.set(false);
-      showToast(tr("Signed in. The app password is removed — set a new one in Settings."));
+      if (await forgotCheck(code.trim())) {
+        // Straight in; the old password is gone (a new one can be set in Settings → Privacy).
+        showToast(tr("Signed in. The app password is removed — set a new one in Settings."));
+      } else { err = tr("Wrong or expired code"); code = ""; }
     } catch { err = tr("Wrong or expired code"); code = ""; }
     finally { busy = false; }
   }
@@ -185,7 +175,6 @@
         {#if $locked}
           <div class="pair">
             <button class="ghost" onclick={forgot} disabled={busy}>{$t("Forgot passcode")}</button>
-            <button class="ghost danger" onclick={logOutProfile}>{$t("Log out of the profile")}</button>
           </div>
         {:else}
           <div class="pair">
@@ -206,7 +195,6 @@
         </form>
         <div class="pair">
           <button class="ghost" onclick={forgot} disabled={busy}>{$t("Forgot password")}</button>
-          <button class="ghost danger" onclick={logOutProfile}>{$t("Log out of the profile")}</button>
         </div>
       {:else if $locked}
         <p>{tr("We sent a code to {e}. Enter it to sign in without the password.", { e: sentTo })}</p>
@@ -217,7 +205,6 @@
         </form>
         <div class="pair">
           <button class="ghost" onclick={() => { forgotStep = 0; err = ""; }}>{$t("Back")}</button>
-          <button class="ghost danger" onclick={logOutProfile}>{$t("Log out of the profile")}</button>
         </div>
       {:else}
         <h2>{$t("Set a passcode")}</h2>

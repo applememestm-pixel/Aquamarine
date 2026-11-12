@@ -24,6 +24,8 @@ export interface ChatMessage {
   id: string;
   from: string;
   time: string;
+  /** When it was sent (unix seconds); none on messages from before 1.20.1-3. */
+  at?: number | null;
   kind: MessageKind;
   /** Local history: deleted by the sender (kept), previous versions. */
   meta?: { deleted?: boolean; edits?: string[]; room?: string; fwd?: { from?: string; name: string; at?: string; chat?: string }; via?: "bt" | "lan" } | null;

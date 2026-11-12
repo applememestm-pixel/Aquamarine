@@ -38,6 +38,8 @@ export interface PeerCard {
   uid?: string;
   /** Check mark from the relay's @verify bot. */
   verified?: boolean;
+  /** A star the owner gave (0 official, 1–8 Boosty), checked against his key. */
+  star?: number | null;
 }
 
 const KEY = "aqua.peerCards.v1";
@@ -118,6 +120,10 @@ export function refreshPeer(username: string, force = false): Promise<void> {
         }
       }
       const av = card.avatar_ver ?? 0, bv = card.banner_ver ?? 0, mv = card.music_ver ?? 0;
+      // A star counts only if the owner's signature holds for this very ID (src/stars.rs).
+      const st = (card.extra as Record<string, unknown> | undefined)?.st;
+      const starUid = card.uid || cur?.uid || "";
+      const starKind = st && starUid ? await api.starVerify(starUid, st).catch(() => null) : null;
       let music = cur && cur.music_ver === mv ? (cur.music ?? "") : "";
       if (mv && !music) music = assetUrl(await api.profileMediaPath(username, "music", mv).catch(() => null));
       let avatar = cur && cur.avatar_ver === av ? cur.avatar : "";
@@ -139,6 +145,7 @@ export function refreshPeer(username: string, force = false): Promise<void> {
           pv: m[username]?.pv ?? 0,
           uid: card.uid || cur?.uid,
           verified: !!(card as { verified?: boolean }).verified,
+          star: starKind,
         },
       }));
     } catch { /* offline — keep the cached card */ }
@@ -263,7 +270,7 @@ export async function publishMyProfile(): Promise<void> {
     myPublicName(p),
     isPublic("bio") ? p.about : "",
     isPublic("phone") ? p.phone : "",
-    { ...myExtra(p), pt: p.edited ?? 0 },
+    { ...myExtra(p), pt: p.edited ?? 0, ...(p.star ? { st: p.star } : {}) },
   );
   updateProfile({ pv: Date.now() });
   broadcastPresence();
@@ -394,8 +401,15 @@ export async function syncMyProfileOnConnect(): Promise<void> {
     // A newer card on the server (set up on another device, or this one is
     // new): take it rather than publish this device's older one over it.
     const me = get(info)?.username;
+    // My star (if the owner gave me one) goes on my card.
+    let starChanged = false;
+    try {
+      const st = await api.myStar();
+      const cur = get(profile).star ?? null;
+      if ((st?.kind ?? -1) !== (cur?.kind ?? -1) || (st && cur && st.exp - cur.exp > 86_400)) { updateProfile({ star: st }, true); starChanged = true; }
+    } catch { /* offline */ }
     const adopted = me ? await adoptMyCard(me) : false;
-    if (!adopted) await publishMyProfile();
+    if (!adopted || starChanged) await publishMyProfile();
     else broadcastPresence();
     await syncPhotoPrivacy();
   } catch (e) {

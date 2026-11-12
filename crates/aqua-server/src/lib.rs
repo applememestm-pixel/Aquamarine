@@ -43,6 +43,7 @@ pub mod tglogin;
 pub mod report;
 pub mod music;
 pub mod verify;
+pub mod stars;
 pub mod fedtunnel;
 pub mod tgnet;
 // Re-export the wire types so tests + external callers keep working.
@@ -1073,6 +1074,57 @@ async fn email_verify(
     }
 }
 
+/// Accounts one address may make: `AQUA_SIGNUPS_PER_IP` (default 1;
+/// 0 — no limit). Joining with an account from another relay of the
+/// network isn't a new account and isn't counted.
+fn signups_per_ip() -> u32 {
+    std::env::var("AQUA_SIGNUPS_PER_IP").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(1)
+}
+
+/// The caller's address: the connection's, or — behind a proxy on this
+/// machine (nginx, Caddy) — the one it passes on.
+fn client_ip(conn: Option<&axum::extract::ConnectInfo<std::net::SocketAddr>>, headers: &axum::http::HeaderMap) -> Option<std::net::IpAddr> {
+    let peer = conn.map(|c| c.0.ip())?;
+    if peer.is_loopback() {
+        let fwd = headers.get("x-real-ip").and_then(|v| v.to_str().ok()).map(str::to_string)
+            .or_else(|| headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()).and_then(|v| v.split(',').next()).map(|v| v.trim().to_string()));
+        if let Some(ip) = fwd.and_then(|v| v.parse().ok()) {
+            return Some(ip);
+        }
+    }
+    Some(peer)
+}
+
+/// The address as the sign-up table keeps it: a hash, and a whole /64 for
+/// IPv6 (one home gets a whole block of them).
+fn ip_key(ip: std::net::IpAddr) -> String {
+    use sha2::{Digest, Sha256};
+    let text = match ip {
+        std::net::IpAddr::V4(v) => v.to_string(),
+        std::net::IpAddr::V6(v) => match v.to_ipv4_mapped() {
+            Some(v4) => v4.to_string(),
+            None => { let s = v.segments(); format!("{:x}:{:x}:{:x}:{:x}::/64", s[0], s[1], s[2], s[3]) }
+        },
+    };
+    hex::encode(&Sha256::digest(format!("aqua-signup-ip\0{text}").as_bytes())[..16])
+}
+
+/// Refuse a new account from an address that already made its share;
+/// Some(key) to note after the account is made. This machine itself
+/// (the server app on the same computer) isn't limited.
+fn signup_ip_check(state: &AppState, conn: Option<&axum::extract::ConnectInfo<std::net::SocketAddr>>, headers: &axum::http::HeaderMap) -> Result<Option<String>, (StatusCode, String)> {
+    let limit = signups_per_ip();
+    let Some(ip) = client_ip(conn, headers) else { return Ok(None) };
+    if limit == 0 || ip.is_loopback() {
+        return Ok(None);
+    }
+    let key = ip_key(ip);
+    if state.directory.signups_from(&key) >= limit {
+        return Err((StatusCode::TOO_MANY_REQUESTS, "an account was already registered from this network — sign in to it instead".into()));
+    }
+    Ok(Some(key))
+}
+
 #[derive(Deserialize)]
 struct RegisterBody {
     ticket: String,
@@ -1090,8 +1142,11 @@ struct RegisterBody {
 async fn register_user(
     State(state): State<AppState>,
     Caller(dh_pub): Caller,
+    conn: Option<axum::extract::ConnectInfo<std::net::SocketAddr>>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<RegisterBody>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    let ip = signup_ip_check(&state, conn.as_ref(), &headers)?;
     state
         .directory
         .register(&body.username, &dh_pub, &body.ticket, &body.display_name, &body.about, &body.phone)
@@ -1102,6 +1157,7 @@ async fn register_user(
             .set_password(&body.username, &dh_pub, &body.password)
             .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     }
+    if let Some(ip) = ip { state.directory.note_signup(&ip); }
     tracing::info!(user = %body.username, "registered via directory");
     journal::log(&body.username, "register", "");
     Ok(StatusCode::NO_CONTENT)
@@ -1128,6 +1184,8 @@ struct SignupBody {
 async fn signup_user(
     State(state): State<AppState>,
     Caller(dh_pub): Caller,
+    conn: Option<axum::extract::ConnectInfo<std::net::SocketAddr>>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<SignupBody>,
 ) -> Result<axum::response::Response, (StatusCode, String)> {
     use axum::response::IntoResponse;
@@ -1149,6 +1207,8 @@ async fn signup_user(
     {
         return Err((StatusCode::FORBIDDEN, "this relay is invite-only — ask the admin for an invitation".into()));
     }
+    // A new account (not one joining from another relay): one per address.
+    let ip = if joined.is_some() { None } else { signup_ip_check(&state, conn.as_ref(), &headers)? };
     let tg = if body.tg_ticket.trim().is_empty() {
         None
     } else {
@@ -1162,6 +1222,7 @@ async fn signup_user(
     if let Some((id, tg_name)) = tg {
         state.directory.tg_link(&name, &id, &tg_name).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
+    if let Some(ip) = ip { state.directory.note_signup(&ip); }
     journal::log(&name, if joined.is_some() { "join" } else { "register" }, "");
     state.fed_kick.notify_waiters();
     if joined.is_some() {
@@ -2678,11 +2739,33 @@ async fn admin_detail(
             let v = tokio::task::spawn_blocking(move || store.stats_by_kind()).await.unwrap_or_default();
             serde_json::json!(v.into_iter().map(|(kind, n, bytes)| serde_json::json!({ "kind": kind, "count": n, "bytes": bytes })).collect::<Vec<_>>())
         }
-        "bots" => serde_json::json!(state.directory.all_bots().into_iter().map(|(u, n)| serde_json::json!({ "username": u, "name": n })).collect::<Vec<_>>()),
+        "bots" => {
+            let sys = state.directory.system_bots(&music::relay_bot_owner());
+            serde_json::json!(state.directory.all_bots().into_iter().map(|(u, n)| serde_json::json!({ "username": u, "name": n, "system": sys.contains(&u) })).collect::<Vec<_>>())
+        }
         "visitors" => serde_json::json!(journal::visitors()),
         "journal" => serde_json::json!(journal::recent(500)),
         _ => return Err(StatusCode::NOT_FOUND),
     }))
+}
+
+/// `DELETE /v1/admin/bots/:name` — the admin deletes a bot (any owner's);
+/// the relay's own bots can't be.
+async fn admin_delete_bot(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Path(name): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    admin_authed(&state, &headers).map_err(|c| (c, String::new()))?;
+    match state.directory.admin_delete_bot(&name, &music::relay_bot_owner()) {
+        Ok(true) => {
+            state.bot_queues.remove(&name.trim().to_lowercase());
+            Ok(StatusCode::NO_CONTENT)
+        }
+        Ok(false) => Err((StatusCode::NOT_FOUND, "no such bot".into())),
+        Err(directory::DirError::NotOwner) => Err((StatusCode::FORBIDDEN, "the relay's own bot".into())),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
 }
 
 async fn admin_set_config(
@@ -2800,6 +2883,69 @@ async fn admin_test_smtp(
     }
 }
 
+/// `POST /v1/admin/wipe` — "Clear the server" (the panel, Settings): empties
+/// what's ticked; `confirm` must be "WIPE". Accounts ticked = everyone is
+/// logged out at once (their connections dropped) and has to sign up anew.
+/// The built-in bots come back right away.
+#[derive(serde::Deserialize)]
+struct WipeReq {
+    #[serde(flatten)]
+    what: directory::Wipe,
+    #[serde(default)]
+    confirm: String,
+}
+
+async fn admin_wipe(State(state): State<AppState>, headers: axum::http::HeaderMap, Json(b): Json<WipeReq>) -> Result<Json<serde_json::Value>, StatusCode> {
+    admin_authed(&state, &headers)?;
+    if b.confirm != "WIPE" {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let w = b.what;
+    let mut removed = {
+        let dir = state.directory.clone();
+        let w = w.clone();
+        tokio::task::spawn_blocking(move || dir.wipe(&w)).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    };
+    if w.files {
+        let blobs = state.blobs.clone();
+        removed.push(("files", tokio::task::spawn_blocking(move || blobs.clear_all()).await.unwrap_or(0)));
+    }
+    if w.packs {
+        removed.push(("sticker and emoji packs", tokio::task::spawn_blocking(packs::clear_all).await.unwrap_or(0)));
+    }
+    if w.logs {
+        journal::clear();
+        removed.push(("error reports", report::clear()));
+    }
+    if w.accounts {
+        // Drop every connection: their sockets end, and nobody is known any more.
+        removed.push(("connections", state.users.len()));
+        state.users.clear();
+        state.bindings.clear();
+        state.bot_queues.clear();
+    }
+    else if w.people {
+        // Everyone but the bots is gone: their connections too.
+        let dir = state.directory.clone();
+        let before = state.users.len();
+        state.users.retain(|name, _| dir.is_bot(name));
+        state.bindings.retain(|name, _| dir.is_bot(name));
+        removed.push(("connections", before.saturating_sub(state.users.len())));
+    }
+    if w.accounts || w.bots {
+        verify::ensure_bot(&state);
+        if stars::has_key() {
+            stars::ensure_bot(&state);
+        }
+        if music::enabled() {
+            music::ensure_bot(&state);
+        }
+    }
+    tracing::warn!(?removed, "the server was cleared from the admin panel");
+    let list: Vec<serde_json::Value> = removed.into_iter().map(|(what, n)| serde_json::json!({ "what": what, "n": n })).collect();
+    Ok(Json(serde_json::json!({ "removed": list })))
+}
+
 async fn admin_page(State(state): State<AppState>) -> impl IntoResponse {
     if std::env::var("AQUA_ADMIN_TOKEN").unwrap_or_default().is_empty() {
         let _ = state;
@@ -2895,6 +3041,9 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/admin/detail/:what", get(admin_detail))
         .route("/v1/admin/datadir", get(admin_get_datadir).post(admin_move_datadir))
         .route("/v1/admin/config", post(admin_set_config))
+        .route("/v1/admin/wipe", post(admin_wipe))
+        .route("/v1/admin/bots/:name", axum::routing::delete(admin_delete_bot))
+        .route("/v1/stars/:uid", get(stars::get_star))
         .route("/v1/admin/smtp", get(admin_get_smtp).post(admin_set_smtp))
         .route("/v1/admin/smtp/test", post(admin_test_smtp))
         .route("/v1/admin/telegram", get(packs::admin_get).post(packs::admin_set))
@@ -3031,8 +3180,9 @@ pub async fn serve_embedded(
     tgapi::resume_webhooks(state.clone());
     music::spawn_bot(state.clone());
     verify::spawn_bot(state.clone());
+    stars::spawn(state.clone());
     let blobs = state.blobs.clone();
-    let r = axum::serve(listener, app(state)).with_graceful_shutdown(shutdown).await;
+    let r = axum::serve(listener, app(state).into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(shutdown).await;
     // Stopped: the file cache goes, people's data stays (blobstore::clear_cache).
     let n = blobs.clear_cache();
     tracing::info!(removed = n, "server stopped: file cache cleared");

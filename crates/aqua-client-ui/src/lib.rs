@@ -5,6 +5,8 @@
 //! [`state::AppState`] in a `Mutex` for cross-command access.
 
 pub mod state;
+pub mod applock;
+pub mod stars;
 #[cfg(desktop)]
 pub mod single;
 pub mod commands;
@@ -118,6 +120,10 @@ pub fn run() -> Result<()> {
             let _ = app.asset_protocol_scope().allow_directory(shared.join("gifs"), true);
             let _ = app.asset_protocol_scope().allow_directory(crate::storage::downloads_dir(&data_dir), true);
             let state = state::AppState::boot(data_dir)?;
+            // A passcode in the vault: start locked (applock.rs).
+            if let Ok(s) = state.lock() {
+                applock::init(&s);
+            }
             app.manage(state);
             // Write changed chat history to the encrypted vault every few seconds.
             {
@@ -158,7 +164,21 @@ pub fn run() -> Result<()> {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler({
+            // While the app is locked (a passcode, applock.rs) its commands
+            // answer "locked": a webview without the lock screen gets nothing.
+            let inner: Box<dyn Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync> = Box::new(tauri::generate_handler![
+            applock::applock_state,
+            applock::applock_set,
+            applock::applock_options,
+            applock::applock_clear,
+            applock::applock_lock,
+            applock::applock_unlock,
+            applock::applock_unlock_bio,
+            applock::applock_forgot_send,
+            applock::applock_forgot_check,
+            stars::star_verify,
+            stars::my_star,
             crashreport::report_error,
             crashreport::report_config,
             bgnotify::notify_front,
@@ -329,6 +349,7 @@ pub fn run() -> Result<()> {
             commands::add_media_files,
             commands::delete_media_item,
             commands::delete_sticker_pack,
+            commands::delete_gif,
             commands::rename_sticker_pack,
             commands::set_activity_detection,
             commands::current_activity,
@@ -389,7 +410,15 @@ pub fn run() -> Result<()> {
             commands::read_user_image,
             commands::read_user_font,
             commands::copy_file_to,
-        ])
+        ]);
+            move |invoke| {
+                if applock::is_locked() && !applock::allowed(invoke.message.command()) {
+                    invoke.resolver.reject("locked");
+                    return true;
+                }
+                inner(invoke)
+            }
+        })
         .build(tauri::generate_context!())
         .map(|app| {
             app.run(|handle, ev| {

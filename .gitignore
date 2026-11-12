@@ -57,3 +57,7 @@ __pycache__/
 # Documents copied in by pages.yml
 site/docs/
 docker/bin/
+
+# The star signing key (aqua-server star-key) never goes into the repository.
+aqua-star.key
+aqua-stars.json

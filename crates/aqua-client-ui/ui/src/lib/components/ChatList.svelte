@@ -25,7 +25,9 @@
   import { avatars, peerCards, clans } from "../people";
   import ClanTag from "./ClanTag.svelte";
   import OfficialMark from "./OfficialMark.svelte";
+  import StarMark from "./StarMark.svelte";
   import { keepOnScreen, scrollX } from "../actions";
+  import { requestIds } from "../privacy";
   import { archived, mutedChats, setArchived, setMuted, pinnedChats, togglePin, movePin, MAX_PINS, markedUnread, setMarkedUnread } from "../chatPrefs";
   import { folders as allFolders, folderHas, updateFolder, folderTags, FOLDER_COLORS, type Folder, type ChatFacts } from "../folders";
   import { parseJoinLink } from "../groupRules";
@@ -112,7 +114,7 @@
   import { ping } from "../ping";
   import { meshStatus, offlineLink } from "../mesh";
   import ServerPicker from "./ServerPicker.svelte";
-  import { accounts, loadAccounts, switchAccount } from "../accounts";
+  import { accounts, loadAccounts, switchAccount, accountsFull, MAX_ACCOUNTS } from "../accounts";
 
   // ---- Phones: your avatar in the title row. Tap — your profile; hold —
   // the accounts on this device (switch, or add one more). ----
@@ -165,6 +167,12 @@
     if (err) srvErr = err; else serversOpen = false;
   }
   const hostOf = (u: string | null) => { try { return u ? new URL(u).host : ""; } catch { return u ?? ""; } };
+
+  // ---- Requests: 1:1 chats from people who may not write to me (privacy →
+  // "Who can write to me", the whitelist) — behind a row of their own. ----
+  let showRequests = $state(false);
+  let requestChats = $derived($visibleChats.filter((c) => $requestIds.has(c.id)));
+  $effect(() => { if (showRequests && requestChats.length === 0) showRequests = false; });
 
   // ---- Archive (Telegram): archived chats live behind one row ----
   let showArchive = $state(false);
@@ -241,7 +249,8 @@
   let shownChats = $derived.by(() => {
     const af = $activeFolder;
     let list = $visibleChats;
-    if (!$search.trim()) list = list.filter((c) => (showArchive ? $archived.has(c.id) : !$archived.has(c.id)));
+    if (!$search.trim() && showRequests) return list.filter((c) => $requestIds.has(c.id));
+    if (!$search.trim()) list = list.filter((c) => !$requestIds.has(c.id) && (showArchive ? $archived.has(c.id) : !$archived.has(c.id)));
     if (af !== "all" && !showArchive) {
       const f = $folders.find((x) => x.id === af);
       // A folder's rules see the archive too ("exclude archived" is a rule).
@@ -262,7 +271,7 @@
     return m;
   });
   let entries = $derived.by((): Entry[] => {
-    if ($search.trim() || showArchive) return shownChats.map((c) => ({ key: c.id, c }));
+    if ($search.trim() || showArchive || showRequests) return shownChats.map((c) => ({ key: c.id, c }));
     const out: Entry[] = [];
     const placed = new Set<string>();
     for (const c of shownChats) {
@@ -991,12 +1000,31 @@
         {/if}
       </div>
     {/if}
+    {#if !$search.trim() && showRequests}
+      <button class="arch-back" onclick={() => (showRequests = false)}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        {$t("Message requests")}
+      </button>
+    {:else if !$search.trim() && !showArchive && requestChats.length > 0 && $activeFolder === "all"}
+      <button class="chat-item arch-row" onclick={() => (showRequests = true)}>
+        <div class="arch-ic">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H8l-4 4z"/><path d="M12 8v3M12 13.5v.01"/></svg>
+        </div>
+        <div class="chat-body">
+          <div class="chat-row-1"><span class="chat-name">{$t("Message requests")}</span></div>
+          <div class="chat-row-2">
+            <span class="chat-preview">{requestChats.map((c) => c.name).slice(0, 4).join(", ")}</span>
+            <span class="chat-badge muted">{requestChats.length}</span>
+          </div>
+        </div>
+      </button>
+    {/if}
     {#if !$search.trim() && showArchive}
       <button class="arch-back" onclick={() => (showArchive = false)}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
         {$t("Archived chats")}
       </button>
-    {:else if !$search.trim() && archivedChats.length > 0 && $activeFolder === "all"}
+    {:else if !$search.trim() && !showRequests && archivedChats.length > 0 && $activeFolder === "all"}
       <button class="chat-item arch-row" onclick={() => (showArchive = true)} oncontextmenu={(e) => { e.preventDefault(); markAllRead(archivedChats.map((c) => c.id)); }}>
         <div class="arch-ic">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9"/><line x1="10" y1="13" x2="14" y2="13"/></svg>
@@ -1111,7 +1139,7 @@
               <span class="cn-text" class:lk-blur={lk}>{lk ? "•••••••" : c.name}</span>{#if !lk && !c.id.startsWith("grp_")}<EmojiStatus token={emojiStatusOf($peerCards, c.id)} size={16} />{/if}
               {#if inGroup}<!-- svelte-ignore a11y_no_static_element_interactions --><!-- svelte-ignore a11y_click_events_have_key_events --><span class="g-tag" onclick={(e) => { e.stopPropagation(); openGroupId.set(inGroup.id); }} title={$t("Chat group")}>{inGroup.emoji ?? "▣"} {inGroup.name}</span>{/if}
               {#if c.verified}<span class="verified-badge">{@html icons.verified}</span>{/if}
-              {#if !lk && $peerCards[c.id]?.verified}<OfficialMark size={15} />{/if}
+              {#if !lk && $peerCards[c.id]?.verified}<OfficialMark size={15} />{/if}{#if !lk && $peerCards[c.id]?.star != null}<StarMark kind={$peerCards[c.id]?.star ?? 0} size={15} />{/if}
               {#if $clans[c.id]}<ClanTag tag={$clans[c.id]} />{/if}
               {#if !lk && $peerPresence[c.id]?.activity?.[0]}
                 {@const a = $peerPresence[c.id].activity![0]}
@@ -1366,8 +1394,8 @@
           {/if}
         </div>
       {/each}
-      <button class="acc-add" disabled={switching} onclick={() => pickAccount("new")}>
-        <span class="acc-plus">+</span>{$t("Add account")}
+      <button class="acc-add" disabled={switching || $accountsFull} onclick={() => pickAccount("new")}>
+        <span class="acc-plus">+</span>{$accountsFull ? $t("{n} accounts at most", { n: MAX_ACCOUNTS }) : $t("Add account")}
       </button>
       {#if switching}<div class="acc-note">{$t("Opening the account…")}</div>
       {:else}<div class="acc-note">{$t("Each account keeps its own chats on this device. The app restarts to switch.")}</div>{/if}

@@ -65,6 +65,10 @@ pub struct ChatMessage {
     pub id: String,
     pub from: String,
     pub time: String,
+    /// When it was sent (unix seconds) — the day dividers in a chat go by
+    /// it. Messages from before 1.20.1-3 have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<i64>,
     pub kind: MessageKind,
     /// Local-only extras (kept-deleted flag, edit history).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1464,12 +1468,22 @@ pub fn hms_at(unix_secs: i64) -> String {
 /// hides them unless Settings → Chat settings → "Seconds" is on). It used
 /// to be UTC "HH:MM", hours off for everyone east or west of London.
 pub fn hhmm_now() -> String {
+    hms_at(msg_secs())
+}
+
+/// The unix time (seconds) behind `hhmm_now`: when it was sent, else now.
+pub fn msg_secs() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
-    let sent = SENT_AT.try_with(|t| *t).ok().flatten().map(|ms| ms / 1000)
+    SENT_AT.try_with(|t| *t).ok().flatten().map(|ms| ms / 1000)
         // A relay clock far ahead of ours: don't show the future.
-        .filter(|s| *s <= now + 120);
-    hms_at(sent.unwrap_or(now))
+        .filter(|s| *s <= now + 120)
+        .unwrap_or(now)
+}
+
+/// `at` of a message made now (or of the incoming one being handled).
+pub fn now_at() -> Option<i64> {
+    Some(msg_secs())
 }
 
 /// Times stored before the fix were UTC: shift every "HH:MM" by the local
@@ -1514,6 +1528,7 @@ pub fn text_msg_from_me(text: &str) -> ChatMessage {
         id: format!("m-{}", uuid_like()),
         from: "me".into(),
         time: hhmm_now(),
+        at: now_at(),
         kind,
     }
 }
@@ -1524,6 +1539,7 @@ pub fn text_msg_from_peer(peer_id: &str, text: &str) -> ChatMessage {
         id: format!("m-{}", uuid_like()),
         from: peer_id.into(),
         time: hhmm_now(),
+        at: now_at(),
         kind,
     }
 }
@@ -1703,19 +1719,19 @@ pub fn preview_for(kind: &MessageKind) -> String {
 
 fn text_from(id: &str, from: &str, time: &str, text: &str) -> ChatMessage {
     ChatMessage { meta: None,
-        id: id.into(), from: from.into(), time: time.into(),
+        id: id.into(), from: from.into(), time: time.into(), at: None,
         kind: MessageKind::Text { text: text.into() },
     }
 }
 fn date(id: &str, label: &str) -> ChatMessage {
     ChatMessage { meta: None,
-        id: id.into(), from: "system".into(), time: "".into(),
+        id: id.into(), from: "system".into(), time: "".into(), at: None,
         kind: MessageKind::DateSeparator { label: label.into() },
     }
 }
 fn system_msg(id: &str, text: &str) -> ChatMessage {
     ChatMessage { meta: None,
-        id: id.into(), from: "system".into(), time: "".into(),
+        id: id.into(), from: "system".into(), time: "".into(), at: None,
         kind: MessageKind::System { text: text.into() },
     }
 }

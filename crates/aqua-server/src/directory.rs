@@ -79,6 +79,42 @@ impl SmtpConfig {
     }
 }
 
+/// What "Clear the server" empties (see [`Directory::wipe`]).
+#[derive(Debug, Default, Clone, serde::Deserialize)]
+pub struct Wipe {
+    #[serde(default)]
+    pub accounts: bool,
+    /// Every person's account and everything of theirs, but the bots (and
+    /// the chats people had with them) stay.
+    #[serde(default)]
+    pub people: bool,
+    #[serde(default)]
+    pub messages: bool,
+    #[serde(default)]
+    pub history: bool,
+    #[serde(default)]
+    pub backups: bool,
+    #[serde(default)]
+    pub profiles: bool,
+    #[serde(default)]
+    pub capsules: bool,
+    #[serde(default)]
+    pub bots: bool,
+    #[serde(default)]
+    pub marks: bool,
+    #[serde(default)]
+    pub codes: bool,
+    /// Files (photos, videos, documents in chats): the blob store.
+    #[serde(default)]
+    pub files: bool,
+    /// Sticker and emoji packs (aqua-packs).
+    #[serde(default)]
+    pub packs: bool,
+    /// The server's journal and error reports.
+    #[serde(default)]
+    pub logs: bool,
+}
+
 pub struct Directory {
     db: Mutex<Connection>,
     /// AQUA_DEV_CODES: Some(true) forces dev mode even with SMTP, Some(false)
@@ -630,6 +666,13 @@ impl Directory {
             CREATE TABLE IF NOT EXISTS verified (
                 uid TEXT PRIMARY KEY,
                 at  INTEGER NOT NULL
+            );
+            -- Sign-ups per address (a hash of the IP, not the IP): one
+            -- account per address (lib.rs::signup_ip_check).
+            CREATE TABLE IF NOT EXISTS signup_ips (
+                ip TEXT PRIMARY KEY,
+                n  INTEGER NOT NULL,
+                at INTEGER NOT NULL
             );
             "#,
         )?;
@@ -2562,6 +2605,69 @@ impl Directory {
         r.is_ok()
     }
 
+    /// "Clear the server" (panel → Settings): empties what's ticked.
+    /// `accounts` is everything people left here — the accounts with their
+    /// keys, profiles, two-step codes, backups, synced history, waiting
+    /// messages, capsules, bots and check marks; the rest are pieces of it.
+    /// Server settings (aqua-admin.json, mail, Telegram, music, network) stay.
+    /// Returns (what, rows removed).
+    pub fn wipe(&self, w: &Wipe) -> Vec<(&'static str, usize)> {
+        let db = self.db.lock().unwrap();
+        let mut out = Vec::new();
+        let mut run = |what: &'static str, sql: &str| {
+            let n = db.execute(sql, []).unwrap_or(0);
+            out.push((what, n));
+        };
+        if w.accounts {
+            for (what, table) in [
+                ("accounts", "users"), ("keys", "prekeys"), ("profile pictures", "profile_media"), ("last seen", "last_seen"),
+                ("backups", "backups"), ("synced history", "hist_store"), ("waiting messages", "inbox"), ("capsules", "capsules"),
+                ("bot tokens", "bot_keys"), ("bot chats", "bot_peers"), ("renames", "renames"), ("check marks", "verified"),
+                ("e-mail codes", "email_codes"), ("network names", "fed_names"), ("sign-up addresses", "signup_ips"),
+            ] {
+                run(what, &format!("DELETE FROM {table}"));
+            }
+        } else if w.people {
+            // People go first; then whatever isn't a remaining (bot) account's.
+            const GONE: &str = "NOT IN (SELECT username FROM users)";
+            run("accounts", "DELETE FROM users WHERE is_bot=0");
+            for (what, sql) in [
+                ("keys", format!("DELETE FROM prekeys WHERE username {GONE}")),
+                ("profile pictures", format!("DELETE FROM profile_media WHERE username {GONE}")),
+                ("last seen", format!("DELETE FROM last_seen WHERE username {GONE}")),
+                ("backups", format!("DELETE FROM backups WHERE username {GONE}")),
+                ("synced history", format!("DELETE FROM hist_store WHERE username {GONE}")),
+                ("waiting messages", format!("DELETE FROM inbox WHERE user {GONE}")),
+                ("capsules", "DELETE FROM capsules".to_string()),
+                ("bot chats", format!("DELETE FROM bot_peers WHERE user {GONE}")),
+                ("renames", "DELETE FROM renames".to_string()),
+                ("check marks", "DELETE FROM verified WHERE uid NOT IN (SELECT uid FROM users)".to_string()),
+                ("e-mail codes", "DELETE FROM email_codes".to_string()),
+                ("network names", format!("DELETE FROM fed_names WHERE username {GONE}")),
+                ("sign-up addresses", "DELETE FROM signup_ips".to_string()),
+            ] {
+                run(what, &sql);
+            }
+        } else {
+            if w.messages { run("waiting messages", "DELETE FROM inbox"); }
+            if w.history { run("synced history", "DELETE FROM hist_store"); }
+            if w.backups { run("backups", "DELETE FROM backups"); }
+            if w.profiles { run("profile pictures", "DELETE FROM profile_media"); }
+            if w.capsules { run("capsules", "DELETE FROM capsules"); }
+            if w.bots {
+                run("bot chats", "DELETE FROM bot_peers");
+                run("bot tokens", "DELETE FROM bot_keys");
+                run("bots", "DELETE FROM users WHERE is_bot=1");
+            }
+            if w.marks { run("check marks", "DELETE FROM verified"); }
+            if w.codes { run("e-mail codes", "DELETE FROM email_codes"); }
+        }
+        drop(run);
+        // Give the space back to the disk.
+        let _ = db.execute_batch("VACUUM");
+        out
+    }
+
     /// Who has a check mark here (current @names).
     pub fn verified_names(&self) -> Vec<String> {
         let db = self.db.lock().unwrap();
@@ -2570,6 +2676,15 @@ impl Directory {
     }
 
     /// The account's e-mail (lower-case), if it signed up with one.
+    /// Accounts here with this e-mail (Boosty stars, stars.rs).
+    pub fn usernames_by_email(&self, email: &str) -> Vec<String> {
+        let db = self.db.lock().unwrap();
+        let Ok(mut q) = db.prepare("SELECT username FROM users WHERE lower(trim(email))=?1 AND is_bot=0") else { return Vec::new() };
+        q.query_map(rusqlite::params![email.trim().to_lowercase()], |r| r.get::<_, String>(0))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
     pub fn email_of(&self, username: &str) -> Option<String> {
         let db = self.db.lock().unwrap();
         db.query_row("SELECT email FROM users WHERE username=?1", rusqlite::params![username.trim().to_lowercase()], |r| r.get::<_, Option<String>>(0))
@@ -2716,6 +2831,48 @@ impl Directory {
         db.execute("DELETE FROM users WHERE username=?1 AND is_bot=1", rusqlite::params![username])?;
         tracing::info!(%username, "bot deleted");
         Ok(())
+    }
+
+    /// How many accounts were made from this address (`ip` is a hash).
+    pub fn signups_from(&self, ip: &str) -> u32 {
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT n FROM signup_ips WHERE ip=?1", rusqlite::params![ip], |r| r.get::<_, i64>(0)).map(|n| n as u32).unwrap_or(0)
+    }
+
+    /// An account was made from this address.
+    pub fn note_signup(&self, ip: &str) {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        let db = self.db.lock().unwrap();
+        let _ = db.execute(
+            "INSERT INTO signup_ips (ip, n, at) VALUES (?1, 1, ?2) ON CONFLICT(ip) DO UPDATE SET n = n + 1, at = ?2",
+            rusqlite::params![ip, now],
+        );
+    }
+
+    /// The server's admin deletes any bot (the panel → Bots). The relay's
+    /// own bots (`system`) are made again at start, so they stay.
+    pub fn admin_delete_bot(&self, username: &str, system: &[u8; 32]) -> Result<bool, DirError> {
+        let username = username.trim().to_lowercase();
+        let db = self.db.lock().unwrap();
+        let owner: Option<Vec<u8>> = db
+            .query_row("SELECT owner_dh FROM bot_keys WHERE username=?1", rusqlite::params![username], |r| r.get(0))
+            .ok();
+        if owner.as_deref() == Some(system.as_slice()) {
+            return Err(DirError::NotOwner);
+        }
+        db.execute("DELETE FROM bot_keys WHERE username=?1", rusqlite::params![username])?;
+        db.execute("DELETE FROM bot_peers WHERE bot=?1", rusqlite::params![username])?;
+        let n = db.execute("DELETE FROM users WHERE username=?1 AND is_bot=1", rusqlite::params![username])?;
+        tracing::info!(%username, "bot deleted by the admin");
+        Ok(n > 0)
+    }
+
+    /// The relay's own bots (verification, music, stars) — not deletable.
+    pub fn system_bots(&self, system: &[u8; 32]) -> Vec<String> {
+        let db = self.db.lock().unwrap();
+        let Ok(mut stmt) = db.prepare("SELECT username FROM bot_keys WHERE owner_dh=?1") else { return Vec::new() };
+        let rows = stmt.query_map(rusqlite::params![system.to_vec()], |r| r.get::<_, String>(0));
+        match rows { Ok(it) => it.filter_map(|r| r.ok()).collect(), Err(_) => Vec::new() }
     }
 
     /// `user` wrote to `bot`: from now on the bot may answer them.

@@ -78,6 +78,9 @@
   textarea { min-height: 96px; resize: vertical; font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
   label.f { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--dim); font-weight: 600; flex: 1; min-width: 140px; }
   label.chk { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--fg); cursor: pointer; }
+  .wipe { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; }
+  .wipe label.chk.big { font-weight: 600; align-items: flex-start; }
+  .wipe label.chk:not(.big) { padding-left: 4px; }
   label.chk input { width: 16px; height: 16px; accent-color: var(--accent); }
   code, .mono { font: 13px ui-monospace, SFMono-Regular, Consolas, monospace; }
 
@@ -232,6 +235,15 @@ document.addEventListener("DOMContentLoaded", () => armAll(document.body));
 // ======================================================================
 const RU = /^(ru|uk|be)/i.test(navigator.language || "");
 const RU_DICT = {
+  "Clear the server": "Очистить сервер", "Clear…": "Очистить…", "wipeNote": "Стирает выбранное прямо сейчас, без возврата. Сервер продолжает работать.",
+  "wipeKeeps": "Не трогается: настройки сервера, почта, Telegram, музыка, сеть серверов, адрес и порт. В сети серверов аккаунты могут вернуться с других серверов — очистите и их или выйдите из сети.",
+  "wpPeople": "Все люди — их аккаунты целиком, а боты и их чаты остаются", "wipeConfirmPeople": "Стереть всех людей? Все выйдут и должны будут зарегистрироваться заново. Боты остаются. Отменить нельзя.",
+  "wpAccounts": "Все аккаунты целиком — люди, их ключи, профили, двухэтапные коды, копии чатов, синхронизированная история, недоставленные сообщения, капсулы, боты и галочки",
+  "wpMessages": "Недоставленные сообщения", "wpHistory": "История, синхронизированная между устройствами", "wpBackups": "Копии чатов", "wpProfiles": "Аватарки и баннеры",
+  "wpCapsules": "Капсулы времени", "wpBots": "Боты (встроенные появятся снова)", "wpMarks": "Галочки", "wpCodes": "Коды из писем",
+  "wpFiles": "Файлы — фото, видео и документы из чатов", "wpPacks": "Наборы стикеров и эмодзи", "wpLogs": "Журнал и отчёты об ошибках",
+  "Nothing is ticked.": "Ничего не выбрано.", "wipeConfirm": "Стереть выбранное с сервера? Это не отменить.", "wipeConfirmAll": "Стереть ВСЕ аккаунты? Все выйдут, и всем придётся регистрироваться заново. Это не отменить.",
+  "Cleared: {list}": "Стёрто: {list}", "Start the server to clear it.": "Запустите сервер, чтобы очистить его.",
   "Home": "Главная", "People": "Люди", "Access": "Доступ", "Network": "Сеть", "Mail": "Почта", "Stickers": "Стикеры", "Settings": "Настройки",
   "Running": "Работает", "Stopped": "Остановлен", "Starting…": "Запускается…", "Error": "Ошибка",
   "Start": "Запустить", "Stop": "Остановить", "Start the server": "Запустить сервер",
@@ -252,7 +264,8 @@ const RU_DICT = {
   "In a network": "В сети", "netText": "Вместе с другими серверами: аккаунты и резервные копии общие, люди на связи, даже когда один сервер выключен.",
   "Choose later": "Решу потом",
   "Online": "В сети", "Journal": "Журнал", "From other servers": "С других серверов",
-  "filter by @name": "фильтр по @имени", "Nobody": "Никого", "No bots": "Ботов нет", "No events yet": "Событий пока нет", "No one yet": "Пока никого",
+  "filter by @name": "фильтр по @имени", "Nobody": "Никого", "No bots": "Ботов нет", "Delete bot": "Удалить бота", "server's own": "сервера",
+  "Delete the bot @{n}? Its account and token stop working.": "Удалить бота @{n}? Его аккаунт и токен перестанут работать.", "No events yet": "Событий пока нет", "No one yet": "Пока никого",
   "online": "в сети", "offline": "вышел", "login": "вход", "register": "регистрация", "user": "человек", "times": "раз", "was online": "был в сети",
   "journalHint": "Кто заходил и выходил, входил с нового устройства или регистрировался. Пишется и в aqua-journal.log в папке данных.",
   "Files by type": "Файлы по типам", "filesHint": "Файлы зашифрованы — сервер знает только тип, который сообщило приложение.", "No files": "Файлов нет",
@@ -344,6 +357,14 @@ const RU_DICT = {
 };
 const t = (k, vars) => { let s = (RU && RU_DICT[k]) || EN[k] || k; if (vars) for (const [a, b] of Object.entries(vars)) s = s.split("{" + a + "}").join(b); return s; };
 const EN = {
+  wipeNote: "Erases what's ticked right now, for good. The server keeps running.",
+  wipeKeeps: "Kept: the server's settings, mail, Telegram, music, the server network, address and port. In a server network, accounts may come back from the other servers — clear them too or leave the network.",
+  wpPeople: "Every person — their accounts, whole; the bots and their chats stay", wipeConfirmPeople: "Erase every person? Everyone is logged out and has to sign up again. The bots stay. This can't be undone.",
+  wpAccounts: "Every account, whole — people, their keys, profiles, two-step codes, chat backups, synced history, undelivered messages, capsules, bots and check marks",
+  wpMessages: "Undelivered messages", wpHistory: "History synced between devices", wpBackups: "Chat backups", wpProfiles: "Avatars and banners",
+  wpCapsules: "Time capsules", wpBots: "Bots (the built-in ones come back)", wpMarks: "Check marks", wpCodes: "E-mail codes",
+  wpFiles: "Files — photos, videos and documents from chats", wpPacks: "Sticker and emoji packs", wpLogs: "Journal and error reports",
+  wipeConfirm: "Erase what's ticked from the server? This can't be undone.", wipeConfirmAll: "Erase ALL accounts? Everyone is logged out and has to sign up again. This can't be undone.",
   connectHint: "In Aquamarine: sign-in window → Server → paste the address or scan the QR. Friends outside your Wi-Fi need the internet address.",
   notForwarded: "doesn't lead back here: a VPN is on, or the port isn't forwarded on the router",
   noPublic: "not yet — forward the port on the router, or use a VPS",
@@ -571,11 +592,18 @@ async function openDetail(what) {
 }
 function detailHtml(what, d) {
   if (what === "online") return d.map((u) => `<div class="li">${ava(u)}<span class="main">@${esc(u)}</span></div>`).join("") || `<div class="empty">${t("Nobody")}</div>`;
-  if (what === "bots") return d.map((b) => `<div class="li">${ava(b.username)}<span class="main">@${esc(b.username)}</span><span class="sub">${esc(b.name || "")}</span></div>`).join("") || `<div class="empty">${t("No bots")}</div>`;
+  if (what === "bots") return d.map((b) => `<div class="li">${ava(b.username)}<span class="main">@${esc(b.username)}</span><span class="sub">${esc(b.name || "")}${b.system ? " · " + t("server's own") : ""}</span>`
+    + (b.system ? "" : `<button class="mini danger" title="${t("Delete bot")}" onclick="delBot('${esc(b.username)}')">${IC.x}</button>`) + `</div>`).join("") || `<div class="empty">${t("No bots")}</div>`;
   if (what === "files") { const max = Math.max(1, ...d.map((f) => f.bytes));
     return d.map((f) => `<div class="li"><span class="main">${t(f.kind)}</span><span class="bar"><i style="width:${(f.bytes / max * 100).toFixed(1)}%"></i></span><span class="sub">${f.count} · ${human(f.bytes)}</span></div>`).join("") || `<div class="empty">${t("No files")}</div>`; }
   if (what === "visitors") return d.map((v) => `<div class="li">${ava(v.who)}<span class="main">${v.kind === "user" ? "@" : ""}${esc(v.who)}</span><span class="sub">${t(v.kind)} · ${v.count} ${t("times")} · ${ago(v.last)}</span></div>`).join("") || `<div class="empty">${t("No one yet")}</div>`;
   return "";
+}
+async function delBot(name) {
+  if (!confirm(t("Delete the bot @{n}? Its account and token stop working.").replace("{n}", name))) return;
+  try { await api(`/v1/admin/bots/${encodeURIComponent(name)}`, "DELETE"); } catch (e) { alert(errText(e)); }
+  if ($("detList")) { try { $("detList").innerHTML = detailHtml("bots", await api("/v1/admin/detail/bots")); } catch {} }
+  else loadPeople();
 }
 function modal(html) { $("modal").innerHTML = `<div class="modal" onclick="if(event.target===this)closeModal()"><div class="box">${html}</div></div>`; }
 function closeModal() { $("modal").innerHTML = ""; }
@@ -1025,10 +1053,43 @@ function pageSettings(el) {
     <div class="card"><h2>${t("Updates")}</h2>
       <div class="sw" onclick="setAutoUpd(!upd?.auto)"><div class="t"><b>${t("Update automatically")}</b><span>${t("autoUpdSub")}</span></div><span class="tog ${upd?.auto ? "on" : ""}" id="updTog"></span></div>
       <div id="updSet"></div></div>
+    <div class="card"><h2>${t("Clear the server")}</h2>
+      <div class="note">${t("wipeNote")}</div>
+      <div class="wipe">${WIPE.map(([k, l, on]) => `<label class="chk${k === "accounts" || k === "people" ? " big" : ""}"><input type="checkbox" id="wp_${k}" ${on ? "checked" : ""} onchange="wipeSync('${k}')"> <span>${t(l)}</span></label>`).join("")}</div>
+      <div class="note">${t("wipeKeeps")}</div>
+      <div class="row"><button class="danger" onclick="doWipe()">${t("Clear…")}</button></div>
+      <span class="msg" id="wipeMsg"></span></div>
     <div class="card"><h2>${t("About")}</h2><div class="note">Aquamarine Server · ${t("Version")} ${esc(version)}</div>
       <a onclick="invoke('open_guide')">${t("Step by step: router, public IP, what to do without one")} →</a></div>`;
   paintUpd();
+  wipeSync();
   if (s.running) api("/v1/admin/datadir").then((d) => { if ($("ddSize")) $("ddSize").textContent = human(d.bytes); }).catch(() => {});
+}
+// "Clear the server": what can be erased (aqua-server admin_wipe). Accounts
+// take every per-person piece with them, so those boxes follow it.
+const WIPE = [["accounts", "wpAccounts", true], ["people", "wpPeople", false], ["messages", "wpMessages", false], ["history", "wpHistory", false], ["backups", "wpBackups", false],
+  ["profiles", "wpProfiles", false], ["capsules", "wpCapsules", false], ["bots", "wpBots", false], ["marks", "wpMarks", false], ["codes", "wpCodes", false],
+  ["files", "wpFiles", true], ["packs", "wpPacks", false], ["logs", "wpLogs", true]];
+const PER_PERSON = ["messages", "history", "backups", "profiles", "capsules", "bots", "marks", "codes"];
+function wipeSync(changed) {
+  // "Every account" and "Every person" are one or the other.
+  if (changed === "accounts" && $("wp_accounts")?.checked && $("wp_people")) $("wp_people").checked = false;
+  if (changed === "people" && $("wp_people")?.checked && $("wp_accounts")) $("wp_accounts").checked = false;
+  const all = $("wp_accounts")?.checked, ppl = $("wp_people")?.checked;
+  for (const k of PER_PERSON) { const b = $("wp_" + k); if (!b) continue; const lock = all || ppl; b.disabled = !!lock; if (lock) b.checked = all || k !== "bots"; b.parentElement.style.opacity = lock ? ".55" : ""; }
+}
+async function doWipe() {
+  if (!st?.running) return setMsg("wipeMsg", t("Start the server to clear it."), "err");
+  const body = { confirm: "WIPE" }; let any = false;
+  for (const [k] of WIPE) { body[k] = !!$("wp_" + k)?.checked; any = any || body[k]; }
+  if (!any) return setMsg("wipeMsg", t("Nothing is ticked."), "err");
+  if (!confirm(t(body.accounts ? "wipeConfirmAll" : body.people ? "wipeConfirmPeople" : "wipeConfirm"))) return;
+  try {
+    const r = await api("/v1/admin/wipe", "POST", body);
+    const list = (r.removed || []).filter((x) => x.n > 0).map((x) => `${esc(x.what)}: ${x.n}`).join(", ") || "—";
+    setMsg("wipeMsg", t("Cleared: {list}", { list }), "ok");
+    poll(true);
+  } catch (e) { setMsg("wipeMsg", t("Failed: ") + esc(errText(e)), "err"); }
 }
 async function setPort() {
   try { st = await invoke("set_port", { port: Number($("port").value) }); setMsg("portMsg", t("Saved."), "ok"); paintAll(); }

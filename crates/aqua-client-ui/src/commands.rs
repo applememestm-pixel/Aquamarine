@@ -187,6 +187,9 @@ pub async fn send_message(
         push_own_message(&mut s, &peer_id, msg.clone(), &text);
         msg
     };
+    // Show it right away; the sending below can take a moment (a new device
+    // of theirs needs a session first).
+    let _ = app.emit("aqua://own_sent", serde_json::json!({ "peer_id": peer_id }));
     // Encrypted once per device of the peer, plus a copy for my other devices.
     crate::multidev::fanout(&app, &peer_id, &text, true).await?;
     Ok(SendResult { id: out_msg.id, time: out_msg.time })
@@ -1482,6 +1485,22 @@ pub fn delete_sticker_pack(state: State<'_, StdMutex<AppState>>, title: String) 
     std::fs::remove_dir_all(&dir).map_err(|e| format!("delete pack: {e}"))
 }
 
+/// Delete a saved GIF (a file in the device's `gifs/` folder, by name).
+#[tauri::command]
+pub fn delete_gif(state: State<'_, StdMutex<AppState>>, name: String) -> Result<(), String> {
+    let data_dir = state.lock().map_err(|e| e.to_string())?.data_dir.clone();
+    let root = crate::accounts::shared_root(&data_dir).join("gifs");
+    let n = name.trim();
+    if n.is_empty() || n.contains(['/', '\\']) || n.starts_with('.') {
+        return Err("bad name".into());
+    }
+    let path = root.join(n);
+    if !path.is_file() || !media::path_is_within(&root, &path) {
+        return Err("no such GIF".into());
+    }
+    std::fs::remove_file(&path).map_err(|e| format!("delete GIF: {e}"))
+}
+
 /// Rename a sticker pack (its folder).
 #[tauri::command]
 pub fn rename_sticker_pack(state: State<'_, StdMutex<AppState>>, title: String, new_title: String) -> Result<(), String> {
@@ -1803,9 +1822,13 @@ pub async fn forward_file(
     peer_id: String,
     file_path: String,
     header: Option<String>,
+    category: Option<String>,
 ) -> Result<AttachResult, String> {
     let header = header.filter(|h| crate::state::split_fwd(&format!("{}{h}\nx", crate::state::FWD_PREFIX)).0.is_some());
-    attach_file_fwd(state, app, peer_id, file_path, None, None, header, None).await
+    // A sticker / GIF / voice / round video stays one (it used to arrive as
+    // a plain video file); a view-once one isn't forwarded as such.
+    let category = category.filter(|c| matches!(c.as_str(), "sticker" | "gif" | "voice" | "circle" | "document"));
+    attach_file_fwd(state, app, peer_id, file_path, category, None, header, None).await
 }
 
 async fn attach_file_fwd(
@@ -1879,6 +1902,7 @@ async fn attach_file_fwd(
             id: format!("m-{}", crate::state::uuid_like()),
             from: "me".into(),
             time: hhmm_now(),
+            at: crate::state::now_at(),
             kind: MessageKind::File {
                 cid: fake_cid.clone(),
                 key_b64: String::new(),
@@ -3284,6 +3308,7 @@ pub async fn group_send(
             id: format!("m-{}", crate::state::uuid_like()),
             from: me.clone(),
             time: hhmm_now(),
+            at: crate::state::now_at(),
             kind,
         };
         let out = (msg.id.clone(), msg.time.clone());
@@ -3300,19 +3325,46 @@ pub async fn group_send(
         out
     };
 
-    // Fan out.
+    // The message shows in the chat now — not after it has gone to every
+    // member's every device one by one (seconds in a big group).
+    let _ = app.emit("aqua://own_sent", serde_json::json!({ "peer_id": gid }));
+
+    // Fan out in the background, to all members at once.
     let wire = format!(
         "{GRPMSG_PREFIX}{}",
         serde_json::json!({ "gid": gid, "author": me, "body": body, "room": room_id })
     );
-    for m in group.members.iter().filter(|m| m.username != me) {
-        if let Err(e) = deliver_to_member(&app, &m.username, &wire).await {
-            tracing::warn!(member = %m.username, %e, "group_send: delivery failed");
-        }
-    }
-    crate::multidev::sync_raw(&app, &wire).await;
+    let members: Vec<String> = group.members.iter().filter(|m| m.username != me).map(|m| m.username.clone()).collect();
+    group_outbox(&app).send((members, wire)).map_err(|_| "the sending queue stopped".to_string())?;
 
     Ok(SendResult { id: out.0, time: out.1 })
+}
+
+/// Group messages go out from one queue, in the order they were sent (two
+/// quick messages never arrive swapped): each to all members at once.
+type GroupJob = (Vec<String>, String);
+fn group_outbox(app: &AppHandle) -> tokio::sync::mpsc::UnboundedSender<GroupJob> {
+    static TX: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<GroupJob>> = std::sync::OnceLock::new();
+    TX.get_or_init(|| {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<GroupJob>();
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            while let Some((members, wire)) = rx.recv().await {
+                let sends = members.iter().map(|m| {
+                    let (app, wire) = (&app, &wire);
+                    async move {
+                        if let Err(e) = deliver_to_member(app, m, wire).await {
+                            tracing::warn!(member = %m, %e, "group_send: delivery failed");
+                        }
+                    }
+                });
+                futures_util::future::join_all(sends).await;
+                crate::multidev::sync_raw(&app, &wire).await;
+            }
+        });
+        tx
+    })
+    .clone()
 }
 
 /// The room the UI has open in a supergroup: group sends without an
@@ -3499,7 +3551,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                 let (kind, meta) = crate::state::classify_full(inner, None);
                 let len = s.chats.get(&chat).map(|b| b.messages.len()).unwrap_or(0);
                 if let Some(book) = s.chats.get_mut(&chat) {
-                    book.messages.push(ChatMessage { meta, id: format!("d-{time}-{len}"), from: from.to_string(), time: time.clone(), kind });
+                    book.messages.push(ChatMessage { meta, id: format!("d-{time}-{len}"), from: from.to_string(), time: time.clone(), at: crate::state::now_at(), kind });
                     book.summary.preview = preview_for(&book.messages.last().unwrap().kind);
                     book.summary.preview_by_me = false;
                     book.summary.time = time.clone();
@@ -3593,6 +3645,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                         id: format!("g-{time}-{len}"),
                         from: author.clone(),
                         time: time.clone(),
+                        at: crate::state::now_at(),
                         kind,
                     });
                     book.summary.preview = preview;
@@ -4349,6 +4402,7 @@ pub fn note_call(
         id: format!("call-{}", crate::state::uuid_like()),
         from: "system".into(),
         time: hhmm_now(),
+        at: crate::state::now_at(),
         kind: MessageKind::System { text: text.clone() },
     };
     {
@@ -4712,6 +4766,7 @@ fn push_peer_message(s: &mut AppState, peer_id: &str, text: String, time: &str) 
             id: format!("in-{time}-{msg_len}"),
             from: peer_id.to_string(),
             time: time.to_string(),
+            at: crate::state::now_at(),
             kind,
         });
         book.summary.preview = preview;
@@ -4868,7 +4923,7 @@ mod replies_tests {
         assert_eq!(super::parse_cdm_chat_id("dm~grp_x"), None);
         assert!(!super::is_control_text(r#"[reply:v1]{"q":"x","t":"y"}"#));
         let m = crate::state::ChatMessage {
-            id: "1".into(), from: "vpst".into(), time: "18:22".into(),
+            id: "1".into(), from: "vpst".into(), time: "18:22".into(), at: None,
             kind: crate::state::MessageKind::Text { text: "[status:v1]{}".into() }, meta: None,
         };
         assert!(crate::state::stray_control(&m));

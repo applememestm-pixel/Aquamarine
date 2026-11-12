@@ -85,7 +85,7 @@
   import { peerPresence, setPeerPresence, broadcastPresenceTo, activityVerb, chatOnline, peerStatus, presenceNow } from "../presence";
   import { notePeerProfileVersion, avatars, clans, peerCards, nameColorOf } from "../people";
   import { profile as myProfile } from "../profile";
-  import { isPublic } from "../privacy";
+  import { isPublic, requestIds, allowWriter } from "../privacy";
   import { fwdHeader, type ForwardAuthor } from "./ForwardPicker.svelte";
   import ClanTag from "./ClanTag.svelte";
   import { keepOnScreen } from "../actions";
@@ -95,6 +95,7 @@
   import { parseBotText, type BotKb, type KbButton } from "../botkb";
   import { openMiniApp } from "./MiniApp.svelte";
   import OfficialMark from "./OfficialMark.svelte";
+  import StarMark from "./StarMark.svelte";
   import { rememberBotMenu } from "../botMenus";
   import TrackCardView from "./TrackCard.svelte";
   import { musicOn, openMusic, parseTrack } from "../music";
@@ -122,7 +123,7 @@
   import { postBlock, tagOf, canSendKind, isAdmin, can, roomsOf, setOpenRoom } from "../groupRules";
   import { roleColor, hasPerm, rolesOn } from "../roles";
   import type { Room } from "../types";
-  import { t, tr, tn } from "../i18n";
+  import { t, tr, tn, lang } from "../i18n";
   import { mutedChats, setMuted } from "../chatPrefs";
   import { insertToComposer } from "../composerBus";
   import { startRecorder, AUDIO_TYPES, openMic } from "../recorder";
@@ -1975,8 +1976,11 @@
   /** A person you blocked: no composer, an "Unblock" bar instead (Telegram). */
   let peerBlocked = $derived(!!$activeChat && !activeGroup && !$activeChat.channel && $blocked.has($activeChat.id));
   let canPost = $derived(postBlocked === null && !peerBlocked && $activeChat?.id !== "__replies__");
+  /** A message request: someone not on my "who can write to me" list. */
+  let isRequest = $derived(!!$activeChat && !activeGroup && $requestIds.has($activeChat.id));
   /** Channel / group forbids forwarding, copying and saving. */
   startNoShare();
+  void import("../chatTheme").then((m) => m.startChatThemes());
   void import("../botHelpers").then((m) => m.startBotHelpers());
   // Someone's devices changed without their old devices signing it.
   onMount(() => {
@@ -2037,7 +2041,7 @@
   // Comments ([cmt:v1]) live in threads under their message, not in the flow.
   const isComment = (m: ChatMessage) => m.kind.type === "text" && m.kind.content.text.startsWith("[cmt:v1]");
   let flowMessages = $derived(roomMessages.some(isComment) ? roomMessages.filter((m) => !isComment(m)) : roomMessages);
-  let rows = $derived(computeRows(flowMessages, myUsername));
+  let rows = $derived(computeRows(flowMessages, myUsername, $lang));
 
   // ---- Windowed rendering: only the newest WINDOW_STEP rows are in the
   // DOM; scrolling near the top reveals the next page (scroll position
@@ -2101,8 +2105,58 @@
     return r;
   }
 
-  function computeRows(msgs: ChatMessage[], me: string): Row[] {
+  // ---- day dividers ("Today", "Yesterday", "12 November") ----
+  const dayKey = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  const secsOf = (time: string) => { const [h, m, s] = time.split(":").map(Number); return (h || 0) * 3600 + (m || 0) * 60 + (s || 0); };
+  /** The day of each message. Messages from before 1.20.1-3 carry only
+   *  "HH:MM:SS": their day is counted back from the next dated one — the
+   *  clock jumping back by more than an hour means midnight passed. */
+  function daysOf(msgs: ChatMessage[]): (Date | null)[] {
+    const out: (Date | null)[] = new Array(msgs.length).fill(null);
+    let anchor: Date | null = null;
+    let after: number | null = null;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m.at) {
+        anchor = new Date(m.at * 1000);
+        after = m.time ? secsOf(m.time) : null;
+      } else if (anchor && m.time && /^\d\d:\d\d/.test(m.time)) {
+        const cur = secsOf(m.time);
+        if (after !== null && cur > after + 3600) anchor = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() - 1);
+        after = cur;
+      } else if (!anchor || !m.time) {
+        continue;
+      }
+      out[i] = anchor;
+    }
+    // Not dated yet (just sent, still being saved): the day of the one before.
+    for (let i = 1; i < out.length; i++) if (!out[i] && out[i - 1] && msgs[i].kind.type !== "date_separator") out[i] = out[i - 1];
+    return out;
+  }
+  function dayLabel(d: Date, _l: string): string {
+    const now = new Date();
+    const yest = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+    if (dayKey(d) === dayKey(now)) return $t("Today");
+    if (dayKey(d) === dayKey(yest)) return $t("Yesterday");
+    const loc = $lang === "ru" ? "ru-RU" : "en-US";
+    return d.toLocaleDateString(loc, d.getFullYear() === now.getFullYear() ? { day: "numeric", month: "long" } : { day: "numeric", month: "long", year: "numeric" });
+  }
+  /** One object per divider, so the keyed list keeps its element. */
+  const daySeps = new Map<string, ChatMessage>();
+  function daySep(d: Date): ChatMessage {
+    const label = dayLabel(d, $lang);
+    const id = `day-${dayKey(d)}`;
+    const old = daySeps.get(id);
+    if (old && old.kind.type === "date_separator" && old.kind.content.label === label) return old;
+    const m = { id, from: "system", time: "", kind: { type: "date_separator", content: { label } } } as ChatMessage;
+    daySeps.set(id, m);
+    return m;
+  }
+
+  function computeRows(msgs: ChatMessage[], me: string, _lang: string): Row[] {
     const out: Row[] = [];
+    const days = daysOf(msgs);
+    let lastDay = "";
     let prevFrom: string | null = null;
     let prevTime: string | null = null;
     const mine = (from: string) => from === "me" || (me !== "" && from === me);
@@ -2117,6 +2171,17 @@
       // A repeated id would break the keyed list for the whole chat.
       if (ids.has(m.id)) continue;
       ids.add(m.id);
+      const day = days[i];
+      if (m.kind.type === "date_separator") lastDay = "";
+      else if (day && dayKey(day) !== lastDay) {
+        lastDay = dayKey(day);
+        if (!ids.has(`day-${lastDay}`)) {
+          ids.add(`day-${lastDay}`);
+          out.push(rowOf(daySep(day), false, false, false));
+          prevFrom = null;
+          prevTime = null;
+        }
+      }
       if (m.kind.type === "system" || m.kind.type === "date_separator") {
         out.push(rowOf(m, false, false, false));
         prevFrom = null;
@@ -2129,6 +2194,7 @@
         !next ||
         next.kind.type === "system" ||
         next.kind.type === "date_separator" ||
+        (!!days[i + 1] && !!day && dayKey(days[i + 1]!) !== dayKey(day)) ||
         next.from !== m.from ||
         next.time.slice(0, 5) !== m.time.slice(0, 5);
       out.push(rowOf(m, first, last, mine(m.from)));
@@ -2355,7 +2421,7 @@
     if (k.type === "article") return { kind: "text", text: [k.content.title, k.content.body].filter(Boolean).join("\n\n"), author };
     if (k.type === "reply") return { kind: "text", text: k.content.text, author };
     if (k.type === "file") {
-      if (k.content.saved_at) return { kind: "file", path: k.content.saved_at, name: k.content.name, author };
+      if (k.content.saved_at) return { kind: "file", path: k.content.saved_at, name: k.content.name, author, category: k.content.category };
       return null; // not downloaded → can't re-send
     }
     return null;
@@ -2997,7 +3063,7 @@
     const h = fwdHeader(it.author);
     try {
       if (it.kind === "text") await api.sendMessage("__saved__", h ? `[fwd:v1]${h}\n${it.text}` : it.text);
-      else if (h) await api.forwardFile("__saved__", it.path, h);
+      else if (h || it.category) await api.forwardFile("__saved__", it.path, h, it.category);
       else await api.attachFile("__saved__", it.path);
       chats.set(await api.listChats());
       showToast(tr("Saved to Saved Messages"));
@@ -3400,7 +3466,7 @@
             {/if}
             <span class="group-name-btn" class:dim={!!activeRoom}>{$activeChat.name}</span>
           {:else}
-            {$activeChat.name}{#if $peerCards[$activeChat.id]?.verified}<OfficialMark size={17} />{/if}<EmojiStatus token={emojiStatusOf($peerCards, $activeChat.id)} size={18} zoom />
+            {$activeChat.name}{#if $peerCards[$activeChat.id]?.verified}<OfficialMark size={17} />{/if}{#if $peerCards[$activeChat.id]?.star != null}<StarMark kind={$peerCards[$activeChat.id]?.star ?? 0} size={17} />{/if}<EmojiStatus token={emojiStatusOf($peerCards, $activeChat.id)} size={18} zoom />
             {#if $clans[$activeChat.id]}<span class="hdr-clan"><ClanTag tag={$clans[$activeChat.id]} /></span>{/if}
           {/if}
           {#if e2eePeer}
@@ -3737,7 +3803,7 @@
               {#if m.first && !m.outgoing && $activeChat}
                 {@const mt = isGroup ? tagOf(activeGroup, m.from) : null}
                 <div class="msg-header">
-                  <span class="msg-author" style:color={isGroup ? roleColor(activeGroup, m.from) || peerColor(m.from) : null}>{isGroup ? m.from : $activeChat.name.split(' ')[0]}</span>{#if $peerCards[m.from]?.verified}<OfficialMark size={13} />{/if}
+                  <span class="msg-author" style:color={isGroup ? roleColor(activeGroup, m.from) || peerColor(m.from) : null}>{isGroup ? m.from : $activeChat.name.split(' ')[0]}</span>{#if $peerCards[m.from]?.verified}<OfficialMark size={13} />{/if}{#if $peerCards[m.from]?.star != null}<StarMark kind={$peerCards[m.from]?.star ?? 0} size={13} />{/if}
                   {#if $clans[m.from]}<ClanTag tag={$clans[m.from]} />{/if}
                   {#if mt?.tag}<span class="member-tag" class:admin={mt.admin}>{mt.tag}</span>{/if}
                   {#if mt?.title}<span class="admin-title">{mt.title}</span>{/if}
@@ -4311,6 +4377,16 @@
       </div>
     {/if}
 
+    {#if isRequest && $activeChat && !peerBlocked}
+      {@const cid = $activeChat.id}
+      <div class="req-bar">
+        <span>{$t("Not on your list of who can write to you — no notifications from this chat.")}</span>
+        <div class="req-acts">
+          <button onclick={() => allowWriter(cid)}>{$t("Allow")}</button>
+          <button class="danger-txt" onclick={() => setBlocked(cid, true)}>{$t("Block")}</button>
+        </div>
+      </div>
+    {/if}
     {#if !canPost}
       {#if $activeChat?.id === "__replies__"}
         <div class="channel-locked">{$t("Answers to you, comments on your comments and @mentions from groups and channels.")}</div>
@@ -4888,6 +4964,11 @@
     color: var(--fg-muted); font-size: 13px;
   }
   .channel-locked :global(svg) { width: 14px; height: 14px; color: var(--fg-dim); }
+  .req-bar { margin: 8px 14px 0; padding: 10px 12px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-input); border: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; color: var(--fg-muted); }
+  .req-bar > span { flex: 1; min-width: 180px; }
+  .req-acts { display: flex; gap: 8px; }
+  .req-acts button { padding: 7px 14px; border-radius: calc(10px * var(--rk, 1)); border: 1px solid var(--border-strong); background: var(--bg-surface); color: var(--accent); font: inherit; font-weight: 700; cursor: pointer; }
   .channel-mute {
     margin: 10px 14px; padding: 13px; border-radius: calc(12px * var(--rk, 1)); cursor: pointer;
     background: var(--bg-input); border: 1px solid var(--border);
