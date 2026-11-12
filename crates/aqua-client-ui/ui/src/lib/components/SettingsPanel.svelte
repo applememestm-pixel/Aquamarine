@@ -2159,6 +2159,7 @@
             <div class="foot-note" style="margin:0 0 8px">{$t("No plugins yet.")}</div>
           {/each}
           <div class="pl-acts">
+            <button class="mini-btn" onclick={() => void api.openExternal("https://applememestm-pixel.github.io/Aquamarine/addons.html").catch((e) => showToast(String(e)))}>{$t("Add-on catalogue")}</button>
             <label class="mini-btn">{$t("Install from file…")}
               <input type="file" accept=".js,.mjs,.txt,text/javascript" hidden onchange={async (e) => {
                 const f = (e.currentTarget as HTMLInputElement).files?.[0];

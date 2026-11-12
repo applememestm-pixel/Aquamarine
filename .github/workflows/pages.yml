@@ -7,7 +7,7 @@ name: pages
 on:
   push:
     branches: [main]
-    paths: ["site/**", "docs/**", "README.md", ".github/workflows/pages.yml", "tools/updates_feed.py"]
+    paths: ["site/**", "docs/**", "addons/**", "README.md", ".github/workflows/pages.yml", "tools/updates_feed.py", "tools/addons_feed.py"]
   # updates.json (below) follows every release run — and once in a while, in
   # case a release was edited by hand.
   workflow_run:
@@ -46,6 +46,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 tools/updates_feed.py "$GITHUB_REPOSITORY" site/updates.json
+      # The add-on catalogue (addons.html): plugins from addons/ and from
+      # public repositories with the topic "aquamarine-plugin".
+      - name: Add the add-on catalogue
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 tools/addons_feed.py "$GITHUB_REPOSITORY" site/addons.json || echo '{"items":[]}' > site/addons.json
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site

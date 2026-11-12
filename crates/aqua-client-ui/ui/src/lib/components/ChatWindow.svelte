@@ -46,6 +46,7 @@
   import { openFileDialog } from "../dialog";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { icons } from "../icons";
+  import { fromEdge } from "../tabSwipe";
   import { activeChat, activeMessages, drafts, activeId, sendCurrent, loadActiveMessages, info, chats } from "../stores";
   import { meshStatus, meshSyncNow, nearbyVia } from "../mesh";
   import { noShare, setNoShare, startNoShare } from "../noShare";
@@ -2695,6 +2696,9 @@
     const start = (e: TouchEvent) => {
       if (e.touches.length !== 1 || selecting || !isPhone()) { g = null; return; }
       const t = e.touches[0];
+      // The screen's side edges belong to the system (Back gesture, Xiaomi's
+      // sidebar…): it takes the finger midway, and the chat stayed shifted.
+      if (fromEdge(t.clientX)) { g = null; return; }
       const target = e.target as HTMLElement;
       // Sliders, players, text fields and things that scroll sideways keep the finger.
       if (target.closest("input, textarea, [contenteditable], .ctl, .reactions-row, .carousel, pre, .hscroll")) { g = null; return; }
@@ -2724,6 +2728,14 @@
         root.style.transform = `translateX(${Math.max(0, dx)}px)`;
       }
     };
+    /** The system took the gesture (no touchend / touchcancel came): put things back. */
+    const drop = () => {
+      if (!g) return;
+      const { dir, rowEl } = g;
+      g = null;
+      if (dir === 1) reset(rowEl, "transform");
+      else if (dir === 2) reset(root, "transform");
+    };
     const end = () => {
       if (!g) return;
       const { dir, dx, rowEl, id, t0 } = g;
@@ -2743,12 +2755,18 @@
     el.addEventListener("touchstart", start, { passive: true });
     el.addEventListener("touchmove", move, { passive: false });
     el.addEventListener("touchend", end);
-    el.addEventListener("touchcancel", end);
+    el.addEventListener("touchcancel", drop);
+    window.addEventListener("blur", drop);
+    document.addEventListener("visibilitychange", drop);
+    window.addEventListener("resize", drop);
     return () => {
+      window.removeEventListener("blur", drop);
+      document.removeEventListener("visibilitychange", drop);
+      window.removeEventListener("resize", drop);
       el.removeEventListener("touchstart", start);
       el.removeEventListener("touchmove", move);
       el.removeEventListener("touchend", end);
-      el.removeEventListener("touchcancel", end);
+      el.removeEventListener("touchcancel", drop);
     };
   });
 
@@ -3524,6 +3542,13 @@
           </div>
         </button>
         <button class="pin-x" onclick={unpin} title={$t("Unpin")}>×</button>
+      </div>
+    {/if}
+
+    {#if dmNoShare || activeGroup?.settings.protected_content}
+      <!-- Like Telegram's pinned strip: thin, see-through, just a note. -->
+      <div class="noshare-bar" role="note">
+        {@html icons.lock}<span>{$t("Forwarding, copying and saving are off in this chat")}</span>
       </div>
     {/if}
 
@@ -4903,7 +4928,7 @@
     :global(html.glass) .active-chat > :global([data-gf]) { position: relative; z-index: 3; }
     :global(html.glass) .hm-drop {
       margin: 0 8px 6px; border: 1px solid color-mix(in srgb, var(--fg) 16%, transparent); border-radius: calc(18px * var(--rk, 1));
-      background: color-mix(in srgb, var(--bg-surface, #12151d) 92%, transparent); box-shadow: 0 10px 30px -16px rgba(0,0,0,.7);
+      background: var(--bg-surface, #12151d); box-shadow: 0 10px 30px -16px rgba(0,0,0,.7);
     }
     :global(html.glass) .chat-header, :global(html.glass) .composer {
       margin: 6px 8px; border: 1px solid color-mix(in srgb, var(--fg) 16%, transparent);
@@ -6003,6 +6028,18 @@
   .rules-bar p { margin: 6px 0 0; white-space: pre-wrap; line-height: 1.45; max-height: 30vh; overflow-y: auto; }
   .rb-ok { border: none; border-radius: calc(8px * var(--rk, 1)); padding: 6px 12px; background: var(--acc); color: #06070c; font-weight: 700; cursor: pointer; }
   @keyframes rb-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+  .noshare-bar {
+    display: flex; align-items: center; justify-content: center; gap: 6px; flex-shrink: 0;
+    padding: 4px 12px; font-size: 11.5px; line-height: 1.3; color: var(--fg-muted);
+    background: color-mix(in srgb, var(--bg-list) 60%, transparent); border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  }
+  .noshare-bar span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .noshare-bar :global(svg) { width: 12px; height: 12px; flex-shrink: 0; opacity: .8; }
+  @media (max-width: 720px) {
+    :global(html.glass) .noshare-bar { margin: -2px auto 4px; max-width: calc(100% - 32px); border: 1px solid color-mix(in srgb, var(--fg) 12%, transparent);
+      border-radius: calc(12px * var(--rk, 1)); background: color-mix(in srgb, var(--bg-surface, #12151d) 45%, transparent); }
+  }
   .pin-bar {
     display: flex; align-items: center; gap: 6px;
     padding: 8px 14px; border-bottom: 1px solid var(--border);

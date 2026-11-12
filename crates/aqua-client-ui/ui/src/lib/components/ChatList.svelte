@@ -830,9 +830,12 @@
       {#if plusMenuOpen}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div class="plus-pop" role="menu" tabindex="-1">
-          <button onclick={() => { plusMenuOpen = false; openNewChatDialog(); }}>{$t("New chat")}</button>
-          <button onclick={() => { plusMenuOpen = false; openNewGroup("group"); }}>{$t("New group")}</button>
-          <button onclick={() => { plusMenuOpen = false; openNewGroup("supergroup"); }}>{$t("New server")}</button>
+          <!-- Phone: chat, group, server and channel live on the pencil button — no doubles here. -->
+          {#if !IS_MOBILE}
+            <button onclick={() => { plusMenuOpen = false; openNewChatDialog(); }}>{$t("New chat")}</button>
+            <button onclick={() => { plusMenuOpen = false; openNewGroup("group"); }}>{$t("New group")}</button>
+            <button onclick={() => { plusMenuOpen = false; openNewGroup("supergroup"); }}>{$t("New server")}</button>
+          {/if}
           <button onclick={() => { plusMenuOpen = false; void addStory(IS_MOBILE ? "camera" : "gallery"); }}>{$t("Add a story")}</button>
           {#if IS_MOBILE}
             <!-- Telegram's ⋮: Saved Messages, day / night, the server. -->
@@ -840,7 +843,7 @@
             <button onclick={() => { plusMenuOpen = false; themeSettings.update((x) => ({ ...x, mode: x.mode === "light" ? "dark" : "light" })); }}>{$t($themeSettings.mode === "light" ? "Night mode" : "Day mode")}</button>
             <button onclick={() => { plusMenuOpen = false; openServers(); }}>{$t("Server")}</button>
           {/if}
-          <button onclick={() => { plusMenuOpen = false; openNewGroup("channel"); }}>{$t("New channel")}</button>
+          {#if !IS_MOBILE}<button onclick={() => { plusMenuOpen = false; openNewGroup("channel"); }}>{$t("New channel")}</button>{/if}
           {#if $chats.some((c) => c.unread > 0)}<button onclick={() => { plusMenuOpen = false; markAllRead(); }}>{$t("Mark all as read")}</button>{/if}
         </div>
         <!-- svelte-ignore a11y_no_static_element_interactions -->

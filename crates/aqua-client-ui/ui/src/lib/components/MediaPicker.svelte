@@ -952,7 +952,10 @@
     background: transparent; border: none; color: var(--fg); text-align: left;
     padding: 8px 10px; border-radius: calc(6px * var(--rk, 1)); font-size: 13px; cursor: pointer;
   }
-  .menu button span { color: var(--fg-dim); font-size: 11px; }
+  /* One line per item: "Add files…" wrapped to two lines beside its hint, out of line with the rest. */
+  .menu { width: max-content; max-width: calc(100vw - 24px); }
+  .menu button { white-space: nowrap; }
+  .menu button span { color: var(--fg-dim); font-size: 11px; flex-shrink: 0; }
   .menu button:hover { background: var(--accent-soft); color: var(--accent); }
 
   .search {
