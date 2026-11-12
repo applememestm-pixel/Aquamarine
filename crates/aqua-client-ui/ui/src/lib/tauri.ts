@@ -1,6 +1,7 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { tr } from "./i18n";
+import { noteWrote } from "./wrote";
 
 /**
  * Turn a local file path into a URL the webview can load directly through
@@ -102,7 +103,7 @@ export const api = {
   listChats:          (): Promise<ChatSummary[]>                                   => invoke<ChatSummary[]>("list_chats").then((l) => l.map((c) => ({ ...c, time: shownTime(c.time), ...(c.id === "__replies__" ? { name: tr("Replies") } : {}), ...(c.id === "__saved__" ? { name: tr("Saved Messages"), preview: c.preview === "Note to self — only you see this" ? tr(c.preview) : c.preview } : {}) })).filter((c) => c.id !== "welcome")),
   getMessages:        (peer_id: string): Promise<ChatMessage[]>                    => invoke<ChatMessage[]>("get_messages", { peerId: peer_id }).then((l) => l.map((m) => ({ ...m, time: shownTime(m.time) }))),
   setTzOffset:        (minutes: number): Promise<void> => invoke("set_tz_offset", { minutes }),
-  sendMessage:        (peer_id: string, text: string): Promise<SendResult>        => invoke("send_message", { peerId: peer_id, text }),
+  sendMessage:        (peer_id: string, text: string): Promise<SendResult>        => { noteWrote(peer_id); return invoke("send_message", { peerId: peer_id, text }); },
   verifyFingerprint:  (peer_id: string): Promise<FingerprintView>                  => invoke("verify_fingerprint", { peerId: peer_id }),
   sessionFingerprint: (): Promise<string>                                          => invoke("session_fingerprint"),
   connectToServer:    (server_url: string, username: string): Promise<InitInfo>    => invoke("connect_to_server", { serverUrl: server_url, username }),

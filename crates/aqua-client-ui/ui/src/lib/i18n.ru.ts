@@ -2795,4 +2795,8 @@ export const RU: Record<string, string> = {
   "Channel “{name}” created": "Канал «{name}» создан",
   "My QR code": "Мой QR-код",
   "Too many tries. Try again in {s} s.": "Слишком много попыток. Повторите через {s} с.",
+  "Messages": "Сообщения",
+  "Who can write to me?": "Кто может мне писать?",
+  "Message requests": "Запросы на переписку",
+  "Not on your list of who can write to you — no notifications from this chat.": "Этого человека нет в списке тех, кто может вам писать, — уведомлений из этого чата не будет.",
 };

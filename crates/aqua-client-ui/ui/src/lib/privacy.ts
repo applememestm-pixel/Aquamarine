@@ -15,19 +15,25 @@
  *  - voice messages: their client is told and won't record for us.
  *  - group invites: groups created by someone who may not add us are left
  *    as soon as they arrive.
+ *  - messages (the whitelist: "Always allow"): a 1:1 chat from someone who
+ *    may not write to us is a "request" — kept, but behind its own row in
+ *    the chat list, with no notification, until we allow them. Chats we
+ *    started ourselves never are (wrote.ts).
  */
 import { writable, get, derived } from "svelte/store";
 import { contacts } from "./contacts";
 import { chats } from "./stores";
 import { tr } from "./i18n";
 import { isBlocked } from "./ghost";
+import { wroteTo } from "./wrote";
 
 export type Audience = "everybody" | "contacts" | "nobody";
-export type PrivKey = "last_seen" | "photo" | "bio" | "phone" | "birthday" | "activity" | "calls" | "voice" | "invites" | "forwards";
+export type PrivKey = "messages" | "last_seen" | "photo" | "bio" | "phone" | "birthday" | "activity" | "calls" | "voice" | "invites" | "forwards";
 export interface Rule { who: Audience; allow: string[]; deny: string[] }
 export type Rules = Record<PrivKey, Rule>;
 
 export const PRIV_ITEMS: { key: PrivKey; label: string; q: string; noNobody?: boolean }[] = [
+  { key: "messages",  label: "Messages",           q: "Who can write to me?" },
   { key: "last_seen", label: "Last seen & online", q: "Who can see my last seen and online status?" },
   { key: "photo",     label: "Profile photos",     q: "Who can see my profile photo and banner?" },
   { key: "bio",       label: "Bio",                q: "Who can see my bio?" },
@@ -41,6 +47,7 @@ export const PRIV_ITEMS: { key: PrivKey; label: string; q: string; noNobody?: bo
 ];
 
 const DEFAULTS: Rules = {
+  messages:  { who: "everybody", allow: [], deny: [] },
   last_seen: { who: "everybody", allow: [], deny: [] },
   photo:     { who: "everybody", allow: [], deny: [] },
   bio:       { who: "everybody", allow: [], deny: [] },
@@ -142,4 +149,30 @@ export function photoAcl(rules: Rules = get(privacy)): { everybody: boolean; all
   const allow = new Set(r.allow);
   if (r.who === "contacts") for (const u of get(contactSet)) if (!r.deny.includes(u)) allow.add(u);
   return { everybody: false, allow: [...allow], deny: r.deny };
+}
+
+/** May `peer` write to me? "My contacts" here is the contact book only —
+ *  someone who just wrote has a chat but isn't a contact for this. */
+export function mayWriteMe(peer: string, rules: Rules = get(privacy)): boolean {
+  if (peer.startsWith("grp_") || peer.startsWith("__")) return true;
+  if (get(wroteTo).has(peer)) return true;
+  const r = rules.messages;
+  if (r.deny.includes(peer)) return false;
+  if (r.allow.includes(peer)) return true;
+  if (r.who === "everybody") return true;
+  if (r.who === "contacts") return peer in get(contacts);
+  return false;
+}
+
+/** 1:1 chats waiting as requests (see the note at the top). */
+export const requestIds = derived([privacy, chats, contacts, wroteTo], ([r, ch]) => {
+  const out = new Set<string>();
+  if (r.messages.who === "everybody" && r.messages.deny.length === 0) return out;
+  for (const c of ch) if (!c.channel && !mayWriteMe(c.id, r)) out.add(c.id);
+  return out;
+});
+
+/** Let `peer` write to me: on the whitelist ("Always allow"). */
+export function allowWriter(peer: string) {
+  privacy.update((r) => ({ ...r, messages: { ...r.messages, allow: [...new Set([...r.messages.allow, peer])], deny: r.messages.deny.filter((x) => x !== peer) } }));
 }

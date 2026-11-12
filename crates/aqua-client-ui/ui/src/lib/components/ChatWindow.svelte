@@ -85,7 +85,7 @@
   import { peerPresence, setPeerPresence, broadcastPresenceTo, activityVerb, chatOnline, peerStatus, presenceNow } from "../presence";
   import { notePeerProfileVersion, avatars, clans, peerCards, nameColorOf } from "../people";
   import { profile as myProfile } from "../profile";
-  import { isPublic } from "../privacy";
+  import { isPublic, requestIds, allowWriter } from "../privacy";
   import { fwdHeader, type ForwardAuthor } from "./ForwardPicker.svelte";
   import ClanTag from "./ClanTag.svelte";
   import { keepOnScreen } from "../actions";
@@ -1975,6 +1975,8 @@
   /** A person you blocked: no composer, an "Unblock" bar instead (Telegram). */
   let peerBlocked = $derived(!!$activeChat && !activeGroup && !$activeChat.channel && $blocked.has($activeChat.id));
   let canPost = $derived(postBlocked === null && !peerBlocked && $activeChat?.id !== "__replies__");
+  /** A message request: someone not on my "who can write to me" list. */
+  let isRequest = $derived(!!$activeChat && !activeGroup && $requestIds.has($activeChat.id));
   /** Channel / group forbids forwarding, copying and saving. */
   startNoShare();
   void import("../botHelpers").then((m) => m.startBotHelpers());
@@ -4311,6 +4313,16 @@
       </div>
     {/if}
 
+    {#if isRequest && $activeChat && !peerBlocked}
+      {@const cid = $activeChat.id}
+      <div class="req-bar">
+        <span>{$t("Not on your list of who can write to you — no notifications from this chat.")}</span>
+        <div class="req-acts">
+          <button onclick={() => allowWriter(cid)}>{$t("Allow")}</button>
+          <button class="danger-txt" onclick={() => setBlocked(cid, true)}>{$t("Block")}</button>
+        </div>
+      </div>
+    {/if}
     {#if !canPost}
       {#if $activeChat?.id === "__replies__"}
         <div class="channel-locked">{$t("Answers to you, comments on your comments and @mentions from groups and channels.")}</div>
@@ -4888,6 +4900,11 @@
     color: var(--fg-muted); font-size: 13px;
   }
   .channel-locked :global(svg) { width: 14px; height: 14px; color: var(--fg-dim); }
+  .req-bar { margin: 8px 14px 0; padding: 10px 12px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-input); border: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; color: var(--fg-muted); }
+  .req-bar > span { flex: 1; min-width: 180px; }
+  .req-acts { display: flex; gap: 8px; }
+  .req-acts button { padding: 7px 14px; border-radius: calc(10px * var(--rk, 1)); border: 1px solid var(--border-strong); background: var(--bg-surface); color: var(--accent); font: inherit; font-weight: 700; cursor: pointer; }
   .channel-mute {
     margin: 10px 14px; padding: 13px; border-radius: calc(12px * var(--rk, 1)); cursor: pointer;
     background: var(--bg-input); border: 1px solid var(--border);

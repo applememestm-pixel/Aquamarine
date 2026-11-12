@@ -141,7 +141,10 @@ export async function bootstrap() {
     // Archived + unmuted chats pop back out; muted chats stay silent.
     const prefs = await import("./chatPrefs");
     prefs.onIncomingForArchive(p.peer_id);
-    if (!isActive && !prefs.isMuted(p.peer_id)) notifyIncoming(p.peer_id, p.text);
+    // Someone who may not write to me (privacy → "Who can write to me"):
+    // the chat waits under "Message requests", without a notification.
+    const { mayWriteMe } = await import("./privacy");
+    if (!isActive && !prefs.isMuted(p.peer_id) && mayWriteMe(p.peer_id)) notifyIncoming(p.peer_id, p.text);
     // Refresh info (opk count, etc.)
     api.initApp().then((i) => info.set(i)).catch(() => {});
   });

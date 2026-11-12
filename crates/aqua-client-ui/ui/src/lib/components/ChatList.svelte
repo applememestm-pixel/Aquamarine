@@ -26,6 +26,7 @@
   import ClanTag from "./ClanTag.svelte";
   import OfficialMark from "./OfficialMark.svelte";
   import { keepOnScreen, scrollX } from "../actions";
+  import { requestIds } from "../privacy";
   import { archived, mutedChats, setArchived, setMuted, pinnedChats, togglePin, movePin, MAX_PINS, markedUnread, setMarkedUnread } from "../chatPrefs";
   import { folders as allFolders, folderHas, updateFolder, folderTags, FOLDER_COLORS, type Folder, type ChatFacts } from "../folders";
   import { parseJoinLink } from "../groupRules";
@@ -166,6 +167,12 @@
   }
   const hostOf = (u: string | null) => { try { return u ? new URL(u).host : ""; } catch { return u ?? ""; } };
 
+  // ---- Requests: 1:1 chats from people who may not write to me (privacy →
+  // "Who can write to me", the whitelist) — behind a row of their own. ----
+  let showRequests = $state(false);
+  let requestChats = $derived($visibleChats.filter((c) => $requestIds.has(c.id)));
+  $effect(() => { if (showRequests && requestChats.length === 0) showRequests = false; });
+
   // ---- Archive (Telegram): archived chats live behind one row ----
   let showArchive = $state(false);
   let archivedChats = $derived($visibleChats.filter((c) => $archived.has(c.id)));
@@ -241,7 +248,8 @@
   let shownChats = $derived.by(() => {
     const af = $activeFolder;
     let list = $visibleChats;
-    if (!$search.trim()) list = list.filter((c) => (showArchive ? $archived.has(c.id) : !$archived.has(c.id)));
+    if (!$search.trim() && showRequests) return list.filter((c) => $requestIds.has(c.id));
+    if (!$search.trim()) list = list.filter((c) => !$requestIds.has(c.id) && (showArchive ? $archived.has(c.id) : !$archived.has(c.id)));
     if (af !== "all" && !showArchive) {
       const f = $folders.find((x) => x.id === af);
       // A folder's rules see the archive too ("exclude archived" is a rule).
@@ -262,7 +270,7 @@
     return m;
   });
   let entries = $derived.by((): Entry[] => {
-    if ($search.trim() || showArchive) return shownChats.map((c) => ({ key: c.id, c }));
+    if ($search.trim() || showArchive || showRequests) return shownChats.map((c) => ({ key: c.id, c }));
     const out: Entry[] = [];
     const placed = new Set<string>();
     for (const c of shownChats) {
@@ -991,12 +999,31 @@
         {/if}
       </div>
     {/if}
+    {#if !$search.trim() && showRequests}
+      <button class="arch-back" onclick={() => (showRequests = false)}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        {$t("Message requests")}
+      </button>
+    {:else if !$search.trim() && !showArchive && requestChats.length > 0 && $activeFolder === "all"}
+      <button class="chat-item arch-row" onclick={() => (showRequests = true)}>
+        <div class="arch-ic">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H8l-4 4z"/><path d="M12 8v3M12 13.5v.01"/></svg>
+        </div>
+        <div class="chat-body">
+          <div class="chat-row-1"><span class="chat-name">{$t("Message requests")}</span></div>
+          <div class="chat-row-2">
+            <span class="chat-preview">{requestChats.map((c) => c.name).slice(0, 4).join(", ")}</span>
+            <span class="chat-badge muted">{requestChats.length}</span>
+          </div>
+        </div>
+      </button>
+    {/if}
     {#if !$search.trim() && showArchive}
       <button class="arch-back" onclick={() => (showArchive = false)}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
         {$t("Archived chats")}
       </button>
-    {:else if !$search.trim() && archivedChats.length > 0 && $activeFolder === "all"}
+    {:else if !$search.trim() && !showRequests && archivedChats.length > 0 && $activeFolder === "all"}
       <button class="chat-item arch-row" onclick={() => (showArchive = true)} oncontextmenu={(e) => { e.preventDefault(); markAllRead(archivedChats.map((c) => c.id)); }}>
         <div class="arch-ic">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9"/><line x1="10" y1="13" x2="14" y2="13"/></svg>
