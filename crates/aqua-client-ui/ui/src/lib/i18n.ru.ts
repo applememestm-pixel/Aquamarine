@@ -2801,4 +2801,7 @@ export const RU: Record<string, string> = {
   "Not on your list of who can write to you — no notifications from this chat.": "Этого человека нет в списке тех, кто может вам писать, — уведомлений из этого чата не будет.",
   "Official star from Aquamarine": "Официальная звезда Aquamarine",
   "Aquamarine supporter · level {n}": "Поддерживает Aquamarine · уровень {n}",
+  "For both of us": "Для нас обоих",
+  "{name} sees the same theme in this chat": "У {name} в этом чате будет такая же тема",
+  "The other person sees the same theme in this chat": "У собеседника в этом чате будет такая же тема",
 };

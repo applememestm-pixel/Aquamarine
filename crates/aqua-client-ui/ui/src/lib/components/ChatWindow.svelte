@@ -1980,6 +1980,7 @@
   let isRequest = $derived(!!$activeChat && !activeGroup && $requestIds.has($activeChat.id));
   /** Channel / group forbids forwarding, copying and saving. */
   startNoShare();
+  void import("../chatTheme").then((m) => m.startChatThemes());
   void import("../botHelpers").then((m) => m.startBotHelpers());
   // Someone's devices changed without their old devices signing it.
   onMount(() => {
