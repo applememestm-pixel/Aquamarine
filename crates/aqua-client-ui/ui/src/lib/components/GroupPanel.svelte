@@ -6,6 +6,7 @@
 </script>
 
 <script lang="ts">
+  import Select from "./Select.svelte";
   import ColorInput from "./ColorInput.svelte";
   import { t, tr, tn } from "../i18n";
   /**
@@ -772,6 +773,17 @@
           {/if}
           {#if !basic}{@render toggle("Approve new members", "Admins must approve anyone who joins by link or server tag", !!group.settings.join_requests, () => toggleSetting("join_requests", "approve new members"))}{/if}
           {@render toggle("Restrict saving content", "No forwarding, copying or saving media", !!group.settings.protected_content, () => toggleSetting("protected_content", "restrict saving content"))}
+          {#if can(group, me, "change_info")}
+            <!-- Telegram: Auto-delete messages (autodelete.rs reads settings.ttl). -->
+            <div class="ttl-row">
+              <span class="rl">{$t("Auto-delete messages")}<span class="rs">{$t("New messages disappear for everyone after this time")}</span></span>
+              <div class="seg">
+                {#each [[0, "Off"], [86400, "1 day"], [604800, "1 week"], [2592000, "1 month"]] as [v, l] (v)}
+                  <button class:active={(group.settings.ttl ?? 0) === v} onclick={() => commit((g) => { if (v) g.settings.ttl = Number(v); else delete g.settings.ttl; }, v ? `set auto-delete to ${l}` : "turned auto-delete off")}>{$t(String(l))}</button>
+                {/each}
+              </div>
+            </div>
+          {/if}
           {#if isChannel}
             {@render toggle("Sign messages", "Add the admin's name to posts", group.settings.sign_messages, () => toggleSetting("sign_messages", "sign messages"))}
             {@render toggle("Show authors' profiles", "Signatures link to the author", !!group.settings.show_authors, () => toggleSetting("show_authors", "show authors' profiles"))}
@@ -806,6 +818,24 @@
             {@render toggle(p.label, "", isOn(group, p.key), () => togglePerm(p.key, p.label), busy || !canPerms)}
           {/each}
         </div>
+        {#if !isChannel}
+          <!-- Telegram's "Exceptions": members held to fewer rights than the rest. -->
+          <div class="card">
+            <div class="ct">{$t("Exceptions")}</div>
+            {#each group.members.filter((m) => m.muted) as m (m.username)}
+              <div class="row"><span class="rl">@{m.username}<span class="rs">{$t("Can read, can't send")}</span></span>
+                {#if canPerms}<button class="btn ghost" onclick={() => setMemberField(m.username, { muted: false }, `unrestricted @${m.username}`)}>{$t("Remove")}</button>{/if}</div>
+            {/each}
+            {#if canPerms}
+              {@const can_add = group.members.filter((m) => !m.muted && m.role === "member" && m.username !== me)}
+              {#if can_add.length}
+                <Select class="sel" value="" options={[{ value: "", label: $t("Add exception…") }, ...can_add.map((m) => ({ value: m.username, label: "@" + m.username }))]}
+                  onchange={(v) => { if (v) void setMemberField(String(v), { muted: true }, `restricted @${v}`); }} />
+              {/if}
+            {/if}
+            {#if !group.members.some((m) => m.muted)}<div class="note">{$t("No exceptions. Restricted members can read but not write.")}</div>{/if}
+          </div>
+        {/if}
         <div class="card" class:hidden={basic}>
           <div class="ct">{$t("Slow mode")}</div>
           <div class="seg">
@@ -1312,6 +1342,8 @@
   .btn:disabled { opacity: 0.6; }
   .danger-btn { width: 100%; border: none; border-radius: calc(12px * var(--rk, 1)); padding: 12px; margin-top: 4px; cursor: pointer;
                 background: var(--bg-surface); color: #ff6b6b; font-weight: 700; font-size: 14px; }
+  .ttl-row { padding: 8px 0 2px; }
+  .ttl-row .rl { display: flex; flex-direction: column; }
   .seg { display: flex; gap: 4px; background: var(--bg-input); border-radius: calc(10px * var(--rk, 1)); padding: 3px; margin: 8px 0; flex-wrap: wrap; }
   .seg button { flex: 1; border: none; background: transparent; color: var(--fg-muted); font-weight: 600; font-size: 12.5px;
                 padding: 7px 8px; border-radius: calc(8px * var(--rk, 1)); cursor: pointer; white-space: nowrap; }

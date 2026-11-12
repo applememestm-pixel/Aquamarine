@@ -46,6 +46,7 @@ export function tr(s: string, vars?: Vars): string {
 /** Count words: `$tn(3, "member")` → "3 members" / "3 участника". */
 const PLURALS: Record<string, { en: [string, string]; ru: [string, string, string] }> = {
   member: { en: ["member", "members"], ru: ["участник", "участника", "участников"] },
+  "year old": { en: ["year old", "years old"], ru: ["год", "года", "лет"] },
   subscriber: { en: ["subscriber", "subscribers"], ru: ["подписчик", "подписчика", "подписчиков"] },
   vote: { en: ["vote", "votes"], ru: ["голос", "голоса", "голосов"] },
   rule: { en: ["rule", "rules"], ru: ["правило", "правила", "правил"] },
