@@ -2931,4 +2931,6 @@ export const RU: Record<string, string> = {
   "No exceptions. Restricted members can read but not write.": "Исключений нет. Ограниченные участники могут читать, но не писать.",
   "Pinch to change the size": "Сведите или разведите пальцы, чтобы изменить размер",
   "Share QR code": "Поделиться QR-кодом",
+  "Both cameras": "Обе камеры",
+  "This device can't use both cameras at once": "Это устройство не может снимать двумя камерами сразу",
 };

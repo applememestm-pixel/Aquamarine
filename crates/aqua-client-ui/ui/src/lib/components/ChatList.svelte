@@ -392,6 +392,7 @@
   let storiesOpen = $state(false);
   /** How far the list is being pulled down at its top (px, follows the finger). */
   let pull = $state(0);
+  let pulling = $state(false);
   const ST_H = 96;
   /** The strip's height when not following a finger: it goes 0 → full on
    *  open and back on fold, so it grows instead of popping in whole. */
@@ -428,7 +429,6 @@
   // Telegram's pull: at the list's top the strip comes out with the finger,
   // past half its height it opens on release, otherwise it slides back.
   let pullY: number | null = null;
-  let pulling = $state(false);
   function storiesTouchStart(e: TouchEvent) { if (!storiesOpen) keepStack(); pullY = storiesHere && chatsEl && chatsEl.scrollTop <= 0 ? e.touches[0].clientY : null; }
   function storiesTouchMove(e: TouchEvent) {
     if (pullY == null) return;
