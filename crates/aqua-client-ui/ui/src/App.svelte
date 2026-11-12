@@ -38,7 +38,6 @@
   import SendDialog from "./lib/components/SendDialog.svelte";
   import CameraCapture from "./lib/components/CameraCapture.svelte";
   import StoryViewer from "./lib/components/StoryViewer.svelte";
-  import MeCard from "./lib/components/MeCard.svelte";
   import { mediaSupport, installHint } from "./lib/media";
   import { tr } from "./lib/i18n";
   import CallModal from "./lib/components/CallModal.svelte";
@@ -413,7 +412,6 @@
 <SendDialog />
 <CameraCapture />
 <StoryViewer />
-<MeCard />
 
 <style>
   .gpu-ask { position: fixed; inset: 0; z-index: 100000; display: grid; place-items: center; background: rgba(4, 6, 12, 0.55); }

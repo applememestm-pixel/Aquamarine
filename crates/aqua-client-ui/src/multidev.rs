@@ -123,6 +123,8 @@ async fn send_inner(app: &AppHandle, addr: &str, payload: &str, own: bool) -> Re
                 let mut s = state.lock().map_err(|e| e.to_string())?;
                 s.sessions.remove(addr);
                 let _ = s.vault.delete_session(addr);
+                s.prev_sessions.remove(addr);
+                let _ = s.vault.delete_session(&format!("{addr}{}", crate::state::PREV_SESSION));
                 tracing::warn!(%addr, "session with a device that's off the signed list — dropped");
             }
         }

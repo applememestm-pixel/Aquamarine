@@ -93,7 +93,6 @@
   import { chatLines } from "../listLook";
   import { botMenus } from "../botMenus";
   import { settings as themeSettings } from "../theme";
-  import { meCardOpen } from "./MeCard.svelte";
   import { storyOwners, myLiveStories, storyRing, addStory } from "../storyFeed";
   import { openStories } from "../stories";
   import { openMiniApp } from "./MiniApp.svelte";
@@ -129,8 +128,7 @@
     meTimer = setTimeout(() => { meTimer = null; meHeld = true; openAccounts(); }, 420);
   }
   function meCancel() { if (meTimer) { clearTimeout(meTimer); meTimer = null; } }
-  // Phones: your card in the middle of the screen (status, profile, stories, settings).
-  function meClick() { meCancel(); if (meHeld) { meHeld = false; return; } if (IS_MOBILE) meCardOpen.set(true); else openProfile(); }
+  function meClick() { meCancel(); if (meHeld) { meHeld = false; return; } openProfile(); }
   function openAccounts() {
     try { navigator.vibrate?.(12); } catch { /* no vibration */ }
     accountsOpen = true;
@@ -357,7 +355,41 @@
   let lastFolder = $activeFolder;
   $effect(() => { const f = $activeFolder; if (f !== lastFolder) { lastFolder = f; if (inServer) compactPinned = true; } });
   $effect(() => { document.documentElement.classList.toggle("list-compact", compact); });
-  const showStories = $derived(!compact && !searchMode && !showArchive && ($storyOwners.length > 0 || $myLiveStories.length > 0));
+  // Phones always keep the strip ("My story" is the way to post one), tucked
+  // away above the list until it's pulled down (Telegram).
+  const showStories = $derived(!compact && !searchMode && !showArchive && (IS_MOBILE || $storyOwners.length > 0 || $myLiveStories.length > 0));
+  let chatsEl = $state<HTMLDivElement | null>(null);
+  let storiesEl = $state<HTMLDivElement | null>(null);
+  const tuckStories = $derived(IS_MOBILE && showStories);
+  // Hidden at start: the list opens scrolled just past the strip.
+  $effect(() => {
+    const el = chatsEl, st = storiesEl;
+    if (!tuckStories || !el || !st) return;
+    requestAnimationFrame(() => { if (el.scrollTop === 0) el.scrollTop = st.offsetHeight; });
+  });
+  // A short list gets room below the last chat, so the strip can still tuck away.
+  let tuckPad = $state(0);
+  $effect(() => {
+    void $visibleChats.length;
+    const el = chatsEl, st = storiesEl;
+    if (!tuckStories || !el || !st) { tuckPad = 0; return; }
+    const fit = () => { tuckPad = Math.max(0, el.clientHeight + st.offsetHeight - (el.scrollHeight - tuckPad)); };
+    requestAnimationFrame(fit);
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
+  // Let go half-way — it opens or closes the rest of the way.
+  let snapT: ReturnType<typeof setTimeout> | null = null;
+  function snapStories() {
+    if (!tuckStories || !chatsEl || !storiesEl) return;
+    if (snapT) clearTimeout(snapT);
+    snapT = setTimeout(() => {
+      const el = chatsEl, h = storiesEl?.offsetHeight ?? 0;
+      if (!el || !h || el.scrollTop <= 0 || el.scrollTop >= h) return;
+      el.scrollTo({ top: el.scrollTop < h / 2 ? 0 : h, behavior: "smooth" });
+    }, 140);
+  }
 
   // ---- Resizable list (drag the right edge) ----
   const LW_KEY = "aqua.listWidth";
@@ -887,10 +919,10 @@
     </div>
   {/if}
 
-  <div class="chats" class:home={searchHome}>
+  <div class="chats" class:home={searchHome} style:--tuck-pad="{tuckPad}px" bind:this={chatsEl} onscroll={snapStories}>
     {#if showStories}
       <!-- Stories (Telegram): scrolls away with the list; pull down to see it again. -->
-      <div class="stories" role="list" aria-label={$t("Stories")} use:scrollX>
+      <div class="stories" role="list" aria-label={$t("Stories")} use:scrollX bind:this={storiesEl}>
         <div class="st-item" role="listitem">
           <button class="st-ava" class:ring={$myLiveStories.length > 0} onclick={tapMine} aria-label={$t("My story")}>
             <span class="st-pic" style:background-image={$profile.avatar_url ? `url("${$profile.avatar_url}")` : undefined}>{$profile.avatar_url ? "" : meLetter}</span>
@@ -1308,7 +1340,7 @@
       <button class="srv-go" disabled={srvBusy || !srvUrl.trim()} onclick={reconnectTo}>
         {srvBusy ? $t("Connecting…") : $t("Connect to this server")}
       </button>
-      <div class="acc-note">{$t("Your account lives on the server it was created on; another server works only if they're in one federation.")}</div>
+      <div class="acc-note">{$t("Your account works on every server of the network; switching changes only the route.")}</div>
     </div>
   {/if}
   {#if accountsOpen}
@@ -1737,6 +1769,7 @@
   /* Stories strip. */
   .stories { display: flex; gap: 14px; padding: 6px 12px 10px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
   .stories::-webkit-scrollbar { display: none; }
+  .chats::after { content: ""; display: block; height: var(--tuck-pad, 0px); }
   .st-item { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; width: 62px; flex-shrink: 0; }
   .st-ava { position: relative; width: 58px; height: 58px; border-radius: var(--ava-r, 50%); border: none; padding: 3px; background: transparent; cursor: pointer; }
   .st-ava.ring { background: conic-gradient(from 210deg, var(--accent), var(--accent-2), var(--accent)); }

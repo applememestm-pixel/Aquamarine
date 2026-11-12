@@ -472,6 +472,7 @@
       showToast(tr("Admins don't allow media in this chat"));
       return;
     }
+    stopCamPeek();
     attachMenuOpen = false;
     const p = await openCamera();
     if (p) await sendFiles(chat.id, [p], "media");
@@ -698,6 +699,36 @@
     galCap = "";
     if (chat && pick.length) await sendFiles(chat.id, pick, "media", { caption: cap });
   }
+  // The camera tile shows the live camera, like Telegram: started with the
+  // sheet (if the camera is allowed), stopped as it closes.
+  let camPeek = $state<MediaStream | null>(null);
+  let camPeekGen = 0;
+  function stopCamPeek() {
+    camPeekGen++;
+    camPeek?.getTracks().forEach((t) => t.stop());
+    camPeek = null;
+  }
+  async function startCamPeek() {
+    const gen = ++camPeekGen;
+    try {
+      const st = await navigator.permissions?.query({ name: "camera" as PermissionName }).catch(() => null);
+      if (st?.state === "denied" || gen !== camPeekGen) return;
+      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 480 }, height: { ideal: 480 } }, audio: false });
+      if (gen !== camPeekGen) { s.getTracks().forEach((t) => t.stop()); return; }
+      camPeek = s;
+    } catch { /* no camera or not allowed: the tile stays an icon */ }
+  }
+  function camVideo(v: HTMLVideoElement, s: MediaStream) {
+    v.srcObject = s;
+    void v.play().catch(() => {});
+    return { update(n: MediaStream) { v.srcObject = n; } };
+  }
+  $effect(() => {
+    if (!(attachMenuOpen && phoneUI)) return;
+    // Give the sheet its slide-in first: the camera opening is heavy.
+    const t = setTimeout(() => void startCamPeek(), 180);
+    return () => { clearTimeout(t); stopCamPeek(); };
+  });
   function fmtDur(ms: number) { const s = Math.round(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
   $effect(() => {
     if (attachMenuOpen && phoneUI) {
@@ -4350,7 +4381,8 @@
               {/if}
               {#if !(IS_MOBILE && $attachDock)}<div class="ap-inline">{@render attachActions()}</div>{/if}
               <div class="ap-gallery">
-                <button class="ap-tile ap-pick ap-cam" onclick={() => void shoot()}>
+                <button class="ap-tile ap-pick ap-cam" class:live={!!camPeek} onclick={() => void shoot()}>
+                  {#if camPeek}<video class="ap-cam-live" muted playsinline use:camVideo={camPeek}></video>{/if}
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-3l-2-3H9L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><circle cx="12" cy="13" r="3.6"/></svg>
                   <span>{$t("Camera")}</span>
                 </button>
@@ -4936,7 +4968,7 @@
       box-shadow: 0 10px 30px -16px rgba(0,0,0,.7);
     }
     :global(html.glass) .chat-header { border-radius: calc(22px * var(--rk, 1)); z-index: 4; }
-    :global(html.glass) .composer { border-radius: calc(26px * var(--rk, 1)); margin-bottom: calc(6px + env(safe-area-inset-bottom, 0px)); padding: 6px 8px; }
+    :global(html.glass) .composer { border-radius: calc(26px * var(--rk, 1)); margin-bottom: 6px; padding: 6px 8px; }
     :global(html.glass) .chat-header::before, :global(html.glass) .composer::before {
       border-radius: inherit; backdrop-filter: blur(var(--glass-blur, 12px)) saturate(1.5); -webkit-backdrop-filter: blur(var(--glass-blur, 12px)) saturate(1.5);
     }
@@ -5590,6 +5622,10 @@
   .ap-tile.on img { transform: scale(.86); border-radius: calc(8px * var(--rk, 1)); }
   .ap-pick, .ap-allow { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; font-size: 13px; font-weight: 600; }
   .ap-pick :global(svg) { width: 34px; height: 34px; }
+  .ap-cam-live { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .ap-cam.live { justify-content: flex-start; align-items: flex-end; padding: 8px; color: #fff; }
+  .ap-cam.live :global(svg) { position: relative; width: 26px; height: 26px; filter: drop-shadow(0 1px 3px rgba(0,0,0,.6)); }
+  .ap-cam.live span { display: none; }
   .ap-allow { color: var(--accent); padding: 8px; text-align: center; }
   .ap-check { position: absolute; top: 7px; right: 7px; width: 24px; height: 24px; box-sizing: border-box; border-radius: 50%; border: 2px solid #fff; background: rgba(0,0,0,.25);
     display: grid; place-items: center; font-size: 12.5px; font-weight: 800; color: #06070c; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
