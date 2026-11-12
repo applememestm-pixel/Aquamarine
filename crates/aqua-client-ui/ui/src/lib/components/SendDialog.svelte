@@ -132,12 +132,17 @@
   function done(send: boolean, edit = false) {
     const a = $pending;
     if (!a) return;
-    pending.set(null);
-    if (!send || !paths.length) { a.resolve(null); return; }
-    try { localStorage.setItem(LAST, JSON.stringify({ mode, compressVideo })); } catch { /* ignore */ }
+    // `paths` (and what hangs on it) is derived from `$pending`: read it all
+    // before closing, or the list is already empty and the send turns into a
+    // silent cancel (the sheet closed, nothing went out).
+    const list = [...paths];
     const m: SendMode = mode === "file" ? "file" : hasVideos && compressVideo ? "compressed" : "media";
     const one = once && canOnce;
-    a.resolve({ mode: m, caption: caption.trim(), edit: edit && !one, paths: [...paths], live: !one && canLive && live && mode !== "file" ? live : undefined, once: one || undefined });
+    const lv = !one && canLive && live && mode !== "file" ? live : undefined;
+    pending.set(null);
+    if (!send || !list.length) { a.resolve(null); return; }
+    try { localStorage.setItem(LAST, JSON.stringify({ mode, compressVideo })); } catch { /* ignore */ }
+    a.resolve({ mode: m, caption: caption.trim(), edit: edit && !one, paths: list, live: lv, once: one || undefined });
   }
   function key(e: KeyboardEvent) {
     if (!$pending) return;

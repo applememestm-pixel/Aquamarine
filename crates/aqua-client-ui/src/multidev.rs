@@ -479,6 +479,29 @@ pub async fn handoff(app: AppHandle, chat: String, draft: String) -> Result<(), 
     Ok(())
 }
 
+/// Account-wide settings and "my card changed" notices for my other devices
+/// (`lib/ownSync.ts`): a `[ctl:v1]` body, end-to-end encrypted like the rest.
+#[tauri::command]
+pub async fn sync_own(app: AppHandle, body: String) -> Result<(), String> {
+    if body.len() > 256 * 1024 {
+        return Err("too big".into());
+    }
+    let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    if !v.get("t").and_then(|t| t.as_str()).is_some_and(|t| t.starts_with("prefs") || t == "card") {
+        return Err("bad body".into());
+    }
+    let me = {
+        let state: State<'_, StdMutex<AppState>> = app.state();
+        let s = state.lock().map_err(|e| e.to_string())?;
+        s.username.clone().unwrap_or_default()
+    };
+    if me.is_empty() {
+        return Err("not signed in".into());
+    }
+    sync_raw(&app, &wrap_sync(&me, &format!("{}{}", crate::commands::CTL_PREFIX, v))).await;
+    Ok(())
+}
+
 fn chrono_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }

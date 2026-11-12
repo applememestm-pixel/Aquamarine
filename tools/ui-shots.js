@@ -24,7 +24,14 @@ window.__TAURI_INTERNALS__ = {
   transformCallback: (cb) => { const id = ++n; window["_" + id] = cb; return id; },
   convertFileSrc: (p) => p,
   invoke: async (cmd, args) => {
+    (window.__cmds = window.__cmds || []).push(cmd);
+    // The send sheet (pasted picture): a temp file, its bytes, the send.
+    if (cmd === "save_temp_file") return "/tmp/pasted.png";
+    if (cmd === "read_user_image") return Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
+    if (/^attach_/.test(cmd)) return { cid: "x", size: 1 };
+    if (cmd === "capsules_mine") return [];
     // Navidrome add-on (lib/music.ts): a relay with music, a few albums.
+    if (cmd === "account_boot") return { slot: "a", store: null };
     if (cmd === "music_status") return { server: { enabled: true, tag: "t1", bot: "music" }, own: null };
     if (cmd === "music_url") return "";
     if (cmd === "music_api") {
@@ -102,6 +109,24 @@ window.__TAURI_INTERNALS__ = {
       console.log('shiftEnter', JSON.stringify(await box.evaluate((e) => ({ html: e.innerHTML, text: e.innerText, h: e.getBoundingClientRect().height }))));
       await p.keyboard.press('Control+A'); await p.keyboard.press('Delete');
     } catch (e) { errs.push('shiftEnter: ' + e.message.split('\n')[0]); }
+    // A pasted picture: the send sheet opens; Enter in its caption must send
+    // (it used to close the sheet and send nothing).
+    try {
+      const box = p.locator('.composer [contenteditable="true"]').first();
+      await box.click();
+      await box.evaluate(async (el) => {
+        const c = document.createElement('canvas'); c.width = 40; c.height = 30;
+        const bl = await new Promise((r) => c.toBlob(r, 'image/png'));
+        const dt = new DataTransfer(); dt.items.add(new File([bl], 'image.png', { type: 'image/png' }));
+        el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+      });
+      await p.waitForTimeout(800);
+      const open = await p.locator('.sd').count();
+      await p.keyboard.type('caption'); await p.keyboard.press('Enter'); await p.waitForTimeout(1200);
+      const cmds = await p.evaluate(() => window.__cmds.filter((c) => /^(attach_|read_user_image)/.test(c)));
+      console.log('sendSheet', JSON.stringify({ open, closed: !(await p.locator('.sd').count()), cmds }));
+      if (!cmds.some((c) => c.startsWith('attach_'))) errs.push('sendSheet: Enter sent nothing');
+    } catch (e) { errs.push('sendSheet: ' + e.message.split('\n')[0]); }
     await p.locator('.attach-btn').first().click(); await p.waitForTimeout(600);
     await p.getByText(/^(Музыка|Music)$/).first().click(); await p.waitForTimeout(1500);
     await shot('10-music');

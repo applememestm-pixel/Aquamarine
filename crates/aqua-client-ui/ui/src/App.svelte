@@ -55,6 +55,7 @@
   import { startWorkspace } from "./lib/workspace";
   import { startChannelStats } from "./lib/channelStats";
   import { startHandoff } from "./lib/handoff";
+  import { startOwnSync } from "./lib/ownSync";
   import HandoffBanner from "./lib/components/HandoffBanner.svelte";
   import DeviceApproval from "./lib/components/DeviceApproval.svelte";
   import TwoFactorGate from "./lib/components/TwoFactorGate.svelte";
@@ -163,6 +164,7 @@
     startMesh();
     startChannelStats();
     startHandoff();
+    startOwnSync();
     const stopIcon = startAppIcon();
     const stopUpdates = startUpdates();
     void migrateCustomWallpaper(api.saveWallpaper)
