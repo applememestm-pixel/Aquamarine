@@ -1435,11 +1435,11 @@
         </button>
         {#if $settings.glassMenus}
           <div class="row">
-            <span class="row-label">{$t("Opacity")}</span>
+            <span class="row-label">{$t("Transparency")}</span>
             <div class="range">
-              <input type="range" min="0.35" max="0.95" step="0.05" value={$settings.menuAlpha ?? MENU_ALPHA}
-                oninput={(e) => settings.update((x) => ({ ...x, menuAlpha: +(e.target as HTMLInputElement).value }))} />
-              <span class="range-val">{Math.round(($settings.menuAlpha ?? MENU_ALPHA) * 100)}%</span>
+              <input type="range" min="5" max="65" step="5" value={Math.round((1 - ($settings.menuAlpha ?? MENU_ALPHA)) * 100)}
+                oninput={(e) => settings.update((x) => ({ ...x, menuAlpha: 1 - +(e.target as HTMLInputElement).value / 100 }))} />
+              <span class="range-val">{Math.round((1 - ($settings.menuAlpha ?? MENU_ALPHA)) * 100)}%</span>
             </div>
           </div>
         {/if}
@@ -1636,8 +1636,9 @@
           <div class="row">
             <span class="row-label">{$t(lbl)}</span>
             <div class="range">
-              <input type="range" min="0.3" max="1" step="0.02" value={$settings.alphas?.[k] ?? 1} oninput={(e) => setAlpha(k, +(e.target as HTMLInputElement).value)} />
-              <span class="range-val">{Math.round(($settings.alphas?.[k] ?? 1) * 100)}%</span>
+              <!-- Shown as transparency (0 % = solid, 100 % = see-through); stored as opacity. -->
+              <input type="range" min="0" max="100" step="2" value={Math.round((1 - ($settings.alphas?.[k] ?? 1)) * 100)} oninput={(e) => setAlpha(k, 1 - +(e.target as HTMLInputElement).value / 100)} />
+              <span class="range-val">{Math.round((1 - ($settings.alphas?.[k] ?? 1)) * 100)}%</span>
             </div>
           </div>
         {/each}
@@ -1716,9 +1717,9 @@
           {@const ga = $settings.glassAlpha ?? 55}
           <div class="ava-row">
             <div class="ava-ctl">
-              <div class="ava-head"><b>{$t("Opacity")}</b><span class="pill-tag">{ga === 0 ? $t("Outline only") : `${ga}%`}</span></div>
-              <div class="range"><input type="range" min="0" max="100" step="5" value={ga}
-                oninput={(e) => settings.update((x) => ({ ...x, glassAlpha: parseInt((e.target as HTMLInputElement).value) }))} /></div>
+              <div class="ava-head"><b>{$t("Transparency")}</b><span class="pill-tag">{ga === 0 ? $t("Outline only") : `${100 - ga}%`}</span></div>
+              <div class="range"><input type="range" min="0" max="100" step="5" value={100 - ga}
+                oninput={(e) => settings.update((x) => ({ ...x, glassAlpha: 100 - parseInt((e.target as HTMLInputElement).value) }))} /></div>
             </div>
           </div>
         {/if}

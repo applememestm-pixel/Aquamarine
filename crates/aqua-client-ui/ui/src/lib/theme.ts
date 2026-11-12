@@ -468,7 +468,7 @@ function apply(s: Settings) {
   const fade = (key: string, alpha: number | undefined) => {
     if (alpha == null || alpha >= 0.999) return;
     const cur = root.style.getPropertyValue(key).trim();
-    if (/^#[0-9a-f]{6}$/i.test(cur)) root.style.setProperty(key, hexToRgba(cur, Math.max(0.15, alpha)));
+    if (/^#[0-9a-f]{6}$/i.test(cur)) root.style.setProperty(key, hexToRgba(cur, Math.max(0, alpha)));
   };
   fade("--bg-bubble-in", a.bubbles);
   fade("--bg-list", a.panels);
