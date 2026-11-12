@@ -411,6 +411,17 @@ impl Fed {
         tracing::debug!(ok, peers = self.cfg.peers.len(), "federation: poked peers");
     }
 
+    /// Tell every peer: something is queued here — pull it for whoever is
+    /// connected to you (only that, not a full sync).
+    pub async fn poke_inbox_all(&self) {
+        let body = serde_json::to_vec(&serde_json::json!({ "from": self.cfg.public_url, "inbox": true })).unwrap_or_default();
+        let tries = self.cfg.peers.iter().map(|p| {
+            let body = body.clone();
+            async move { self.post(p, "/v1/fed/poke", body).await.is_some() }
+        });
+        futures_util::future::join_all(tries).await;
+    }
+
     /// Envelopes that peers kept for `user` (they drop them once sent).
     pub async fn collect_inbox(&self, user: &str) -> Vec<RelayMessage> {
         let path = format!("/v1/fed/inbox/{user}");
@@ -423,6 +434,22 @@ impl Fed {
             }
         }
         out
+    }
+
+    /// Envelopes peers keep for any of `users` (connected here) — one call per
+    /// peer. A push (`forward`) that failed once no longer waits for the
+    /// recipient's next reconnect. Peers older than this ignore the call.
+    pub async fn collect_inboxes(&self, users: &[String]) -> Vec<RelayMessage> {
+        if users.is_empty() { return Vec::new(); }
+        let body = serde_json::to_vec(&serde_json::json!({ "users": users })).unwrap_or_default();
+        let tries = self.cfg.peers.iter().map(|p| {
+            let body = body.clone();
+            async move {
+                let r = self.post(p, "/v1/fed/inboxes", body).await?;
+                r.json::<Vec<RelayMessage>>().await.ok()
+            }
+        });
+        futures_util::future::join_all(tries).await.into_iter().flatten().flatten().collect()
     }
 
     pub async fn fetch_bytes(&self, path: &str) -> Option<(String, Vec<u8>)> {
@@ -579,7 +606,24 @@ pub async fn h_deliver(State(state): State<AppState>, headers: HeaderMap, body: 
 /// A peer changed something: pull from the peers now instead of in ≤ 30 s.
 pub async fn h_poke(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Result<StatusCode, StatusCode> {
     check(&state, &headers, "POST", "/v1/fed/poke", &body)?;
-    state.fed_kick.notify_one();
+    let inbox = serde_json::from_slice::<serde_json::Value>(&body).ok().is_some_and(|v| v["inbox"].as_bool() == Some(true));
+    if !inbox {
+        state.fed_kick.notify_one();
+        return Ok(StatusCode::NO_CONTENT);
+    }
+    // Only queued envelopes: pull them for the people connected here (one pull at a time).
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static PULLING: AtomicBool = AtomicBool::new(false);
+    if !PULLING.swap(true, Ordering::SeqCst) {
+        if let Some(fed) = current(&state) {
+            tokio::spawn(async move {
+                pull_for_connected(&state, &fed).await;
+                PULLING.store(false, Ordering::SeqCst);
+            });
+        } else {
+            PULLING.store(false, Ordering::SeqCst);
+        }
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -593,6 +637,54 @@ pub async fn h_inbox(State(state): State<AppState>, headers: HeaderMap, Path(use
         state.directory.inbox_ack(id);
     }
     Ok(Json(out))
+}
+
+/// Batch of `h_inbox`: what waits here for these users (connected to the caller).
+pub async fn h_inboxes(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Result<Json<Vec<RelayMessage>>, StatusCode> {
+    check(&state, &headers, "POST", "/v1/fed/inboxes", &body)?;
+    let v: serde_json::Value = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let users = v["users"].as_array().ok_or(StatusCode::BAD_REQUEST)?;
+    let mut out = Vec::new();
+    for u in users.iter().filter_map(|x| x.as_str()).take(5000) {
+        for (id, bytes) in state.directory.inbox_take(u) {
+            if let Ok(m) = serde_json::from_slice::<RelayMessage>(&bytes) {
+                out.push(m);
+            }
+            state.directory.inbox_ack(id);
+        }
+    }
+    Ok(Json(out))
+}
+
+/// Something was queued here for a user who isn't connected here: ask the
+/// peers to pull now (they take it for whoever is connected to them).
+/// Bursts collapse into one poke a second.
+pub fn queued_for_absent(state: &AppState) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static BUSY: AtomicBool = AtomicBool::new(false);
+    let Some(fed) = current(state) else { return };
+    if BUSY.swap(true, Ordering::SeqCst) { return; }
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        BUSY.store(false, Ordering::SeqCst);
+        fed.poke_inbox_all().await;
+    });
+}
+
+/// Pull what peers queued for the people connected here, and hand it over.
+async fn pull_for_connected(state: &AppState, fed: &Fed) {
+    let users: Vec<String> = state.users.iter()
+        .filter(|e| e.value().try_lock().map(|u| u.tx.iter().any(|t| !t.is_closed())).unwrap_or(true))
+        .map(|e| e.key().clone())
+        .collect();
+    let got = fed.collect_inboxes(&users).await;
+    if got.is_empty() { return; }
+    tracing::info!(n = got.len(), "federation: pulled queued envelopes for people connected here");
+    for m in got {
+        if crate::deliver_local(state, &m).await { continue; }
+        // Gone meanwhile: keep it here until they're back.
+        if let Ok(bytes) = serde_json::to_vec(&m) { let _ = state.directory.inbox_push(&m.to, &bytes); }
+    }
 }
 
 pub async fn h_bundle(State(state): State<AppState>, headers: HeaderMap, Path(user): Path<String>) -> Result<impl IntoResponse, StatusCode> {
@@ -789,6 +881,8 @@ pub struct Cursors {
 pub async fn sync_once(state: &AppState, cursors: &mut Cursors) {
     let Some(fed) = registry(state) else { return };
     if fed.cfg.active() {
+        // Messages first: they're what people wait for.
+        pull_for_connected(state, &fed).await;
         for peer in fed.cfg.peers.clone() {
             sync_peer(state, &fed, &peer, &mut cursors.users, &mut cursors.backups).await;
             sync_hist(state, &fed, &peer, &mut cursors.hist).await;
@@ -912,6 +1006,7 @@ pub fn routes() -> axum::Router<AppState> {
         .route("/v1/fed/deliver", post(h_deliver))
         .route("/v1/fed/poke", post(h_poke))
         .route("/v1/fed/inbox/:user", get(h_inbox))
+        .route("/v1/fed/inboxes", post(h_inboxes))
         .route("/v1/fed/bundle/:user", get(h_bundle))
         .route("/v1/fed/blob/:cid", get(h_blob))
         .route("/v1/fed/users", get(h_users))

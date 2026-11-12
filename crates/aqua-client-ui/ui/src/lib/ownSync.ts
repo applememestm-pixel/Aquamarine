@@ -28,6 +28,7 @@ import { chatThemes } from "./chatTheme";
 import { blocked, noReceiptChats, ghost } from "./ghost";
 import { profile } from "./profile";
 import { adoptMyCard } from "./people";
+import { seenStories } from "./stories";
 
 /** Fields of the settings that stay on this device. */
 const DEVICE_FIELDS: (keyof Settings)[] = [
@@ -84,6 +85,7 @@ function saveAt(v: number) { try { localStorage.setItem(AT_KEY, String(v)); } ca
 
 let at = 0;
 let applying = false;
+let seenApplying = false;
 let snap = "";
 let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -171,12 +173,28 @@ export function startOwnSync() {
     }
   });
 
+  // Stories I've watched: the ring turns grey on every device of mine.
+  let seenPrev = new Set(get(seenStories));
+  let seenOut: string[] = [];
+  let seenTimer: ReturnType<typeof setTimeout> | null = null;
+  seenStories.subscribe((l) => {
+    const fresh = l.filter((id) => !seenPrev.has(id));
+    seenPrev = new Set(l);
+    if (seenApplying || !fresh.length) return;
+    seenOut.push(...fresh);
+    if (seenTimer) clearTimeout(seenTimer);
+    seenTimer = setTimeout(() => { seenTimer = null; const ids = seenOut; seenOut = []; send({ t: "st_seen", ids }); }, 800);
+  });
+
   // Connected: a device that never got the account's settings asks for them.
   info.subscribe((i) => {
     const on = !!i?.connected;
     if (on && !wasOn) {
       setTimeout(async () => {
         if (!get(info)?.connected) return;
+        // What I watched while the others were away (a story lives a day).
+        const recent = get(seenStories).slice(-150);
+        if (recent.length) send({ t: "st_seen", ids: recent });
         if (at === 0 && !(await isMain())) send({ t: "prefs_req" });
         else if (at > 0) sendPrefs();
       }, 2500);
@@ -201,6 +219,15 @@ export function startOwnSync() {
       apply(data, stamp);
       // A new device: the profile card too.
       void adoptCard();
+      return;
+    }
+    if (b.t === "st_seen") {
+      const ids = (strArr(b.ids) ?? []).filter((id) => /^[a-z0-9-]{4,40}$/i.test(id)).slice(0, 200);
+      const have = new Set(get(seenStories));
+      const add = ids.filter((id) => !have.has(id));
+      if (!add.length) return;
+      seenApplying = true;
+      try { seenStories.update((l) => [...l, ...add].slice(-400)); } finally { seenApplying = false; }
       return;
     }
     if (b.t === "card") void adoptCard();

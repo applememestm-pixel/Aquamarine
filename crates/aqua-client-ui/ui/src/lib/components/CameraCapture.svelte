@@ -39,10 +39,18 @@
     stop();
     err = "";
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-        audio: true,
-      }).catch(() => navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing } }, audio: false }));
+      // Full HD asked as a minimum of 720 lines too: some Android WebViews
+      // otherwise hand out 176×144 / 320×240 (the "144p" story), and without
+      // the microphone the second try used to ask for no size at all.
+      const vid: MediaTrackConstraints = { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } };
+      stream = await navigator.mediaDevices.getUserMedia({ video: vid, audio: true })
+        .catch(() => navigator.mediaDevices.getUserMedia({ video: vid, audio: false }))
+        .catch(() => navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing } }, audio: false }));
+      const tr0 = stream.getVideoTracks()[0];
+      const st = tr0?.getSettings?.();
+      if (tr0 && st && Math.min(st.width ?? 0, st.height ?? 0) < 720) {
+        await tr0.applyConstraints({ width: { min: 1280, ideal: 1920 }, height: { min: 720, ideal: 1080 } }).catch(() => {});
+      }
       if (video) { video.srcObject = stream; video.muted = true; void video.play().catch(() => {}); }
     } catch (e) {
       const name = (e as DOMException)?.name;
@@ -97,7 +105,7 @@
     if (!stream) return;
     chunks = [];
     try {
-      const st = startRecorder(stream, VIDEO_TYPES, (b) => chunks.push(b), 1000);
+      const st = startRecorder(stream, VIDEO_TYPES, (b) => chunks.push(b), 1000, 5_000_000);
       recorder = st.recorder;
       const mime = st.mime;
       recorder.onstop = async () => {

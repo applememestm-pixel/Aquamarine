@@ -487,7 +487,7 @@ pub async fn sync_own(app: AppHandle, body: String) -> Result<(), String> {
         return Err("too big".into());
     }
     let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-    if !v.get("t").and_then(|t| t.as_str()).is_some_and(|t| t.starts_with("prefs") || t == "card") {
+    if !v.get("t").and_then(|t| t.as_str()).is_some_and(|t| t.starts_with("prefs") || t == "card" || t == "st_seen") {
         return Err("bad body".into());
     }
     let me = {

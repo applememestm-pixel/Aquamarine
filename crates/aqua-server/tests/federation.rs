@@ -131,6 +131,15 @@ async fn two_relays_act_as_one() {
     let mut wc = ws(&b, "carol", &tc).await;
     assert_eq!(recv(&mut wc).await.payload, b"while you were away");
 
+    // A push to B that didn't get through (a timeout, a hiccup): the
+    // envelope waits on A while bob is connected to B. A asks B to pull,
+    // and bob gets it now — not at his next reconnect.
+    let stuck = serde_json::to_vec(&RelayMessage { from: "alice".into(), to: "bob".into(), payload: b"pushed late".to_vec(), kind: PayloadKind::Envelope, ts: None, id: None }).unwrap();
+    sa.directory.inbox_push("bob", &stuck).unwrap();
+    fed::queued_for_absent(&sa);
+    assert_eq!(recv(&mut wb).await.payload, b"pushed late");
+    assert!(sa.directory.inbox_take("bob").is_empty(), "taken off A's queue");
+
     // Files: uploaded to A, downloaded from B.
     let blob = b"ciphertext bytes".to_vec();
     let cid = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&blob));

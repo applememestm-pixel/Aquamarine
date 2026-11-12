@@ -53,6 +53,14 @@
   /** "My story" tapped with none up: camera or gallery. */
   let storyAdd = $state(false);
   function storyUsers(): string[] { return [...($myLiveStories.length ? [""] : []), ...$storyOwners.map((o) => o.user)]; }
+  /** A tap on the story ring itself: it's a shadow outside the avatar, which
+   *  takes no taps, so the row gets them — the avatar's box plus the ring. */
+  function onRing(e: MouseEvent): boolean {
+    const a = (e.currentTarget as Element).querySelector(".avatar");
+    if (!a) return false;
+    const r = a.getBoundingClientRect(), pad = 10;
+    return e.clientX >= r.left - pad && e.clientX <= r.right + pad && e.clientY >= r.top - pad && e.clientY <= r.bottom + pad;
+  }
   function tapMine() { if ($myLiveStories.length) openStories(storyUsers(), ""); else storyAdd = !storyAdd; }
   $effect(() => { if (fabOpen) return onBack(() => (fabOpen = false)); });
   function fabPick(k: "chat" | "group" | "supergroup" | "channel") {
@@ -1138,7 +1146,7 @@
         onpointermove={(e) => { peekMove(e); selMove(e); pinMove(e); }}
         onpointerup={() => { peekCancel(); selCancel(); pinUp(); }}
         onpointercancel={() => { peekCancel(); selCancel(); dragPin = null; }}
-        onclick={(e) => { if (suppressClick) return; if (sel.length && !g) { toggleSel(c.id); return; } if (g) { openGroupId.set(g.id); return; } if (e.altKey && DESKTOP) { e.preventDefault(); peekStart = { x: e.clientX, y: e.clientY }; void openPeek(c.id); return; } if ((e.ctrlKey || e.metaKey) && DESKTOP) { popOut(c.id, c.name); return; } void selectChat(c.id); }}
+        onclick={(e) => { if (suppressClick) return; if (sel.length && !g) { toggleSel(c.id); return; } if (g) { openGroupId.set(g.id); return; } if (!lk && $storyRing[c.id] && onRing(e)) { openStories(storyUsers(), c.id); return; } if (e.altKey && DESKTOP) { e.preventDefault(); peekStart = { x: e.clientX, y: e.clientY }; void openPeek(c.id); return; } if ((e.ctrlKey || e.metaKey) && DESKTOP) { popOut(c.id, c.name); return; } void selectChat(c.id); }}
         oncontextmenu={(e) => { if (g) { e.preventDefault(); openGroupId.set(g.id); return; } if (peekFired || peek || selFired || sel.length) { e.preventDefault(); return; } if ((e.ctrlKey || e.metaKey) && DESKTOP) { e.preventDefault(); popOut(c.id, c.name); return; } openCtx(e, c.id); }}
       >
         {#if g}

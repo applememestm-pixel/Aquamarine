@@ -149,7 +149,9 @@
           ontimeupdate={(e) => { const el = e.currentTarget as HTMLVideoElement; if (el.duration) progress = el.currentTime / el.duration; }}
           onended={next}></video>
       {:else if url}
-        <img src={url} alt="" draggable="false" />
+        <!-- Whole picture, never cropped or stretched; its own blur fills the edges (Telegram). -->
+        <img class="bg" src={url} alt="" draggable="false" aria-hidden="true" />
+        <img class="fg" src={url} alt="" draggable="false" />
       {:else if err}
         <div class="msg">{$t("Could not load the story")}<small>{err}</small></div>
       {:else}
@@ -184,8 +186,8 @@
     transform: translateY(var(--dy)); opacity: calc(1 - var(--dy) / 600px); animation: sv-in .22s cubic-bezier(.2,.9,.25,1); }
   @keyframes sv-in { from { transform: scale(.94); opacity: 0; } }
   .stage { position: absolute; inset: 0; display: grid; place-items: center; touch-action: none; }
-  .stage img, .stage video { max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
-  :global(html.phone) .stage img, :global(html.phone) .stage video { object-fit: cover; }
+  .stage img, .stage video { grid-area: 1 / 1; max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+  .stage img.bg { object-fit: cover; filter: blur(28px) brightness(.55); transform: scale(1.15); }
   .msg { display: flex; flex-direction: column; gap: 6px; align-items: center; font-size: 15px; text-align: center; padding: 20px; }
   .msg small { font-size: 12px; opacity: .6; max-width: 80vw; overflow-wrap: anywhere; }
   .spin { width: 36px; height: 36px; border-radius: 50%; border: 3px solid rgba(255,255,255,.25); border-top-color: #fff; animation: spin .8s linear infinite; }
