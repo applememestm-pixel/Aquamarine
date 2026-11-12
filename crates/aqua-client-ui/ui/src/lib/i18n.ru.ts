@@ -2930,4 +2930,5 @@ export const RU: Record<string, string> = {
   "Add exception…": "Добавить исключение…",
   "No exceptions. Restricted members can read but not write.": "Исключений нет. Ограниченные участники могут читать, но не писать.",
   "Pinch to change the size": "Сведите или разведите пальцы, чтобы изменить размер",
+  "Share QR code": "Поделиться QR-кодом",
 };

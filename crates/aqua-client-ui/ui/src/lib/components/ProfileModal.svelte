@@ -43,10 +43,10 @@
   import { openRegistration, registrationDismissed } from "./RegistrationWizard.svelte";
   import { playedTop, played, gameGradient } from "../played";
   import GamePoster from "./GamePoster.svelte";
-  import QrCode from "./QrCode.svelte";
   import EmojiStatus from "./EmojiStatus.svelte";
   import { reactionPack, emojiPacks, loadEmojiPacks } from "../reactionPack";
   import SharedMedia from "./SharedMedia.svelte";
+  import QrSheet from "./QrSheet.svelte";
   import OfficialMark from "./OfficialMark.svelte";
   import StarMark from "./StarMark.svelte";
   import { NAME_COLORS, parseNameColor, nameColorBar } from "../people";
@@ -833,13 +833,8 @@
               onclick={() => { void navigator.clipboard?.writeText(uid); showToast(tr("ID copied")); }}>ID {uid}</button>
           {/if}
           {#if showQr}
-            <div class="qr-pop" role="presentation" onclick={() => (showQr = false)}>
-              <div class="qr-card" role="presentation" onclick={(e) => e.stopPropagation()}>
-                <QrCode text={userQr(view.username, isMe ? ($info?.server_url ?? "") : "")} color={cardColor} avatar={shownAvatar} letter={view.display_name.charAt(0).toUpperCase()} />
-                <b>@{view.username}</b>
-                <small>{$t("Scan it in Aquamarine: New message → Scan QR.")}</small>
-              </div>
-            </div>
+            <QrSheet text={userQr(view.username, isMe ? ($info?.server_url ?? "") : "")} username={view.username} avatar={shownAvatar} letter={view.display_name.charAt(0).toUpperCase()}
+              hint={$t("Scan it in Aquamarine: New message → Scan QR.")} onclose={() => (showQr = false)} />
           {/if}
           {#if view.status}
             <div class="status-line">{view.status}</div>
@@ -990,13 +985,8 @@
           <StoryTiles user={activeUsername} onopen={closeProfile} />
 
           {#if showQr}
-            <div class="qr-pop" role="presentation" onclick={() => (showQr = false)}>
-              <div class="qr-card" role="presentation" onclick={(e) => e.stopPropagation()}>
-                <QrCode text={userQr(view.username, "")} color={cardColor} avatar={shownAvatar} letter={view.display_name.charAt(0).toUpperCase()} />
-                <b>@{view.username}</b>
-                <small>{$t("Scan it in Aquamarine: New message → Scan QR.")}</small>
-              </div>
-            </div>
+            <QrSheet text={userQr(view.username, "")} username={view.username} avatar={shownAvatar} letter={view.display_name.charAt(0).toUpperCase()}
+              hint={$t("Scan it in Aquamarine: New message → Scan QR.")} onclose={() => (showQr = false)} />
           {/if}
           {/if}
         </div>
