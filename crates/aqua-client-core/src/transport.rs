@@ -413,6 +413,9 @@ impl Transport {
                             Ok(bytes) => {
                                 if let Err(e) = ws_write.send(Message::Binary(bytes.into())).await {
                                     tracing::warn!(?e, "ws write failed; giving up on this connection");
+                                    // Say so now: the reader may wait out the
+                                    // whole silence limit before noticing.
+                                    let _ = in_tx_w.send(Incoming::Closed);
                                     break;
                                 }
                             }
@@ -421,6 +424,7 @@ impl Transport {
                     }
                     _ = ping.tick() => {
                         if ws_write.send(Message::Ping(Vec::new().into())).await.is_err() {
+                            let _ = in_tx_w.send(Incoming::Closed);
                             break;
                         }
                     }
@@ -1468,9 +1472,17 @@ impl Transport {
                 q.pop_front();
             }
         }
-        self.ws_out
-            .send(msg)
-            .map_err(|_| TransportError::BadPayload("transport disconnected".into()))
+        if self.ws_out.send(msg).is_ok() {
+            return Ok(());
+        }
+        // This connection is gone and the next one isn't up yet (a VPN or a
+        // phone switching networks drops it often). A confirming relay gets
+        // it from the queue above as soon as the app reconnects
+        // ([`Self::take_unconfirmed`]) — not an error to show.
+        if self.acks.on() {
+            return Ok(());
+        }
+        Err(TransportError::BadPayload("transport disconnected".into()))
     }
 }
 

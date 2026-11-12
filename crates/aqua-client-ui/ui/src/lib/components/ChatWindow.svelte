@@ -1039,7 +1039,10 @@
     let unClose: (() => void) | null = null;
     events.onPollClose((p) => { if (p.close?.poll) closePoll(p.close.poll, p.from); })
       .then((u) => { unClose = u; });
-    events.onSeen((p) => { seenByPeer = { ...seenByPeer, [p.from]: true }; })
+    events.onSeen((p) => {
+      const last = $activeChat?.id === p.from ? lastMineId() : undefined;
+      setSeenMark(p.from, last ?? "*");
+    })
       .then((u) => { unSeen = u; });
     let unPres: (() => void) | null = null;
     events.onPresence((p) => { setPeerPresence(p.from, p.presence ?? {}); notePeerProfileVersion(p.from, p.presence?.pv); })
@@ -1246,8 +1249,6 @@
     // otherwise scrollHeight is still the tall value and the field stays
     // grown until the next reload.
     queueMicrotask(() => autoresize());
-    // A fresh outgoing message resets the peer's "seen" state for this chat.
-    if (chat) seenByPeer = { ...seenByPeer, [chat.id]: false };
     // Wrap as a quoted reply when replying.
     const payload = rt
       ? "[reply:v1]" + JSON.stringify({ quoted_author: rt.author, quoted_text: rt.text, text: t })
@@ -3129,8 +3130,39 @@
   }
 
   // ---- Read receipts (chat-level "seen") ----
-  let seenByPeer = $state<Record<string, boolean>>({});
-  let peerSeen = $derived(seenByPeer[$activeChat?.id ?? ""] ?? false);
+  // Which of my messages the peer has seen: the last one of mine that was
+  // there when their "seen" came (chat → message id; "*" = everything up to
+  // then, for a chat that wasn't open). Kept, so the double ticks don't go
+  // back to single after my next message or a restart.
+  const SEEN_MARK = "aqua.seenMark.v1";
+  let seenMark = $state<Record<string, string>>((() => { try { return JSON.parse(localStorage.getItem(SEEN_MARK) || "{}"); } catch { return {}; } })());
+  function setSeenMark(chat: string, id: string) {
+    seenMark = { ...seenMark, [chat]: id };
+    try { localStorage.setItem(SEEN_MARK, JSON.stringify(seenMark)); } catch { /* storage blocked */ }
+  }
+  function lastMineId(): string | undefined {
+    for (let i = rows.length - 1; i >= 0; i--) if (rows[i].outgoing && rows[i].id) return rows[i].id;
+    return undefined;
+  }
+  // A "seen" that came while the chat was closed: pin it to my last message now.
+  $effect(() => {
+    const id = $activeChat?.id;
+    if (!id || untrack(() => seenMark[id]) !== "*") return;
+    const last = lastMineId();
+    if (last) untrack(() => setSeenMark(id, last));
+  });
+  /** Position of the seen mark among the rows (-1: none / older than these). */
+  let seenIdx = $derived.by(() => {
+    const mark = seenMark[$activeChat?.id ?? ""];
+    if (!mark) return -1;
+    if (mark === "*") return rows.length;
+    return rows.findIndex((r) => r.id === mark);
+  });
+  let seenIds = $derived.by(() => {
+    const out = new Set<string>();
+    for (let i = 0; i <= Math.min(seenIdx, rows.length - 1); i++) if (rows[i].outgoing && rows[i].id) out.add(rows[i].id!);
+    return out;
+  });
   /** My messages followed by a message of theirs: they've seen those, even
    *  with read receipts off on their side (a reply means "read"). */
   let answeredIds = $derived.by(() => {
@@ -3184,7 +3216,7 @@
 
 {#snippet statusTick(outgoing: boolean, id?: string)}
   {#if outgoing}
-    {@const rd = peerSeen || (id !== undefined && answeredIds.has(id))}
+    {@const rd = id !== undefined && (seenIds.has(id) || answeredIds.has(id))}
     <span class="rr" class:read={rd}>{@html rd ? icons.checkDouble : icons.check}</span>
   {/if}
 {/snippet}

@@ -150,6 +150,27 @@ pub fn account_switch(app: AppHandle, slot: String, store: String) -> Result<Swi
     Ok(Switched { slot: target, store: back })
 }
 
+/// At start, before the UI reads its storage: the webview's localStorage
+/// says whose it is (`owner`, a slot). If that isn't the account the app
+/// started in — the page kept writing after a switch handed its copy over,
+/// or the phone's WebView never flushed the swap before the relaunch — this
+/// storage still is `owner`'s: it's saved as theirs (`store`), and the
+/// active account's copy comes back. Otherwise nothing changes.
+#[tauri::command]
+pub fn account_boot(app: AppHandle, owner: Option<String>, store: String) -> Result<Switched, String> {
+    let base = base_of(&app)?;
+    let cur = active(&base);
+    match owner {
+        Some(o) if o != cur && valid_slot(&o) && dir_of(&base, &o).is_dir() => {
+            if serde_json::from_str::<serde_json::Value>(&store).is_ok() {
+                let _ = std::fs::write(dir_of(&base, &o).join(STORE), store.as_bytes());
+            }
+            Ok(Switched { store: Some(std::fs::read_to_string(dir_of(&base, &cur).join(STORE)).unwrap_or_else(|_| "{}".into())), slot: cur })
+        }
+        _ => Ok(Switched { slot: cur, store: None }),
+    }
+}
+
 /// Drop an account slot that never finished signing in (an "Add account"
 /// that was abandoned). Signed-in accounts are removed by logging out first.
 #[tauri::command]

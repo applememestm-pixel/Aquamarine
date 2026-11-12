@@ -234,6 +234,7 @@ pub fn run() -> Result<()> {
             servers::public_servers,
             accounts::accounts_list,
             accounts::account_switch,
+            accounts::account_boot,
             accounts::account_forget,
             accounts::app_relaunch,
             updates::update_check,

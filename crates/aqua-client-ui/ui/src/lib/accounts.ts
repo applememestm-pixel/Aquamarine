@@ -11,7 +11,11 @@ import { api, type AccountSlot } from "./tauri";
 const DEVICE_KEYS = new Set([
   "aqua-settings", "aqua.lang", "aqua.keybindings.v1", "aqua.kbH", "aqua.listWidth",
   "aqua.hostRelay", "aqua.player.volume", "aqua.player.speed", "aqua.reader.scale", "aqua.servers.v1", "aqua.updates.v1",
+  "aqua.acct",
 ]);
+
+/** Whose the per-account part of localStorage is (an account slot). */
+const OWNER = "aqua.acct";
 
 export const accounts = writable<AccountSlot[]>([]);
 
@@ -47,9 +51,29 @@ function restore(store: string | null) {
 /** Open another account ("new" = sign in to / create one more). The app
  *  starts over in it. */
 export async function switchAccount(slot: string): Promise<void> {
-  const r = await api.accountSwitch(slot, snapshot());
-  restore(r.store);
+  // This page keeps running until the relaunch (and a phone's WebView may
+  // not write the storage out in time), so the other account's copy is put
+  // in at the next start, by `accountBoot` — not here, where whatever this
+  // page still saved landed on top of it (the name and photo of one account
+  // ended up on another).
+  try { if (!localStorage.getItem(OWNER)) localStorage.setItem(OWNER, (await api.accountsList()).find((a) => a.active)?.slot ?? ""); } catch { /* storage blocked */ }
+  await api.accountSwitch(slot, snapshot());
   // The app closes and opens again in that account (where a platform can't
   // reopen itself, the next start does).
   await api.appRelaunch();
+}
+
+/** At start, before the app reads anything: if localStorage still holds
+ *  another account's things, keep them as that account's, take this one's
+ *  and reload. True = reloading, don't start the app. */
+export async function accountBoot(): Promise<boolean> {
+  let owner: string | null = null;
+  try { owner = localStorage.getItem(OWNER); } catch { return false; }
+  let r: { slot: string; store: string | null };
+  try { r = await api.accountBoot(owner, snapshot()); } catch { return false; /* no accounts here (browser, older build) */ }
+  try { localStorage.setItem(OWNER, r.slot); } catch { /* storage blocked */ }
+  if (r.store === null) return false;
+  restore(r.store);
+  location.reload();
+  return true;
 }
