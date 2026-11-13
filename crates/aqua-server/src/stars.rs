@@ -23,7 +23,7 @@
 //! moved over on load (0 → 6, 7–8 → 5).
 //! A statement lasts 8 days and is signed afresh on every request while the
 //! star stands. Apps ask `GET /v1/stars/:uid` whenever they refresh a card
-//! (aqua-client-ui `stars::star_live`), so a removed star goes within minutes;
+//! (aqua-client-ui `stars::marks_live`, `/v1/marks`), so a removed star goes within minutes;
 //! the statement on the card counts only while the star relay can't be asked.
 //! `GET /v1/stars/:uid` — the statement, from the relay with the key, or from
 //! any other relay fetched there (`AQUA_STAR_HOME`).
@@ -262,6 +262,75 @@ pub async fn get_star(State(_state): State<AppState>, Path(uid): Path<String>) -
     st.map(Json).ok_or(StatusCode::NOT_FOUND)
 }
 
+// ---------- marks: the star and the check mark, for every server ----------
+
+/// What a check mark statement signs: "the account <uid> is verified until
+/// <exp>" — the same key as stars, another prefix, so neither passes for
+/// the other.
+pub fn check_bytes(uid: &str, exp: u64) -> Vec<u8> {
+    format!("aqua-check-v1|{uid}|{exp}").into_bytes()
+}
+
+fn sign_check(uid: &str) -> Option<Statement> {
+    let k = key()?;
+    let exp = now() + LIFE_SECS;
+    let sig = k.sign(&check_bytes(uid, exp));
+    Some(Statement { uid: uid.to_string(), kind: 0, exp, sig: hex::encode(sig) })
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct Marks {
+    #[serde(default)]
+    pub star: Option<Statement>,
+    #[serde(default)]
+    pub check: Option<Statement>,
+}
+
+static MARKS_CACHE: Mutex<Option<BTreeMap<String, (u64, Marks)>>> = Mutex::new(None);
+
+/// `GET /v1/marks/:uid` — the account's star and check mark, signed by the
+/// star relay (asked through any other relay), so both show on every
+/// server. The check mark there is the @verify list of the star relay.
+pub async fn get_marks(State(state): State<AppState>, Path(uid): Path<String>) -> Result<Json<Marks>, StatusCode> {
+    let uid = uid.trim().to_string();
+    if uid.is_empty() || uid.len() > 32 || !uid.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if has_key() {
+        let t = now();
+        let star = with_stars(|m| m.get(&uid).filter(|s| s.live(t)).map(|s| (s.kind, s.until)));
+        let star = star.and_then(|(k, until)| sign(&uid, k, until));
+        let check = if state.directory.is_verified_uid(&uid) { sign_check(&uid) } else { None };
+        return Ok(Json(Marks { star, check }));
+    }
+    if let Some((at, m)) = MARKS_CACHE.lock().ok().and_then(|g| g.as_ref().and_then(|m| m.get(&uid).cloned())) {
+        if now() < at + 300 {
+            return Ok(Json(m));
+        }
+    }
+    let home = std::env::var("AQUA_STAR_HOME").ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| DEFAULT_HOME.into());
+    let url = format!("{}/v1/marks/{uid}", home.trim_end_matches('/'));
+    let res: Result<Marks, ()> = async {
+        let c = reqwest::Client::builder().timeout(std::time::Duration::from_secs(8)).build().map_err(|_| ())?;
+        let r = c.get(&url).send().await.map_err(|_| ())?;
+        if !r.status().is_success() {
+            return Err(());
+        }
+        r.json::<Marks>().await.map_err(|_| ())
+    }
+    .await;
+    // Couldn't ask: not "no marks" (the app keeps what it has).
+    let Ok(m) = res else { return Err(StatusCode::BAD_GATEWAY) };
+    if let Ok(mut g) = MARKS_CACHE.lock() {
+        let c = g.get_or_insert_with(BTreeMap::new);
+        if c.len() > 5000 {
+            c.clear();
+        }
+        c.insert(uid, (now(), m.clone()));
+    }
+    Ok(Json(m))
+}
+
 // ---------- the @stars bot (only on the relay with the key) ----------------
 
 pub fn bot_name() -> String {
@@ -408,7 +477,7 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
             let lines: Vec<String> = list
                 .iter()
                 .map(|(uid, s)| {
-                    let n = state.directory.username_by_uid(uid).map(|n| format!("@{n}")).unwrap_or_else(|| format!("ID {uid}"));
+                    let n = label(state, uid);
                     let until = s.until.map(|u| format!(" · {} left", left(u, t))).unwrap_or_default();
                     format!("{n} — {}{}{until}", kind_name(s.kind), if s.source == "boosty" { " (Boosty)" } else { "" })
                 })
@@ -437,16 +506,17 @@ async fn set_level(state: &AppState, owner: &str, name: &str, lvl: Result<u8, &'
     if name.is_empty() {
         return say(state, owner, "Who? /<name> level <0-6>").await;
     }
-    let Some(uid) = state.directory.uid_of(name).filter(|x| !x.is_empty()) else {
-        return say(state, owner, &format!("There's no @{name} on this server.")).await;
+    let Some((uid, who)) = resolve(state, name) else {
+        return say(state, owner, &format!("I don't know @{name}: not on this server or in the name registry of the servers it knows. Its account ID works too: /<ID> level N.")).await;
     };
+    let name = who.as_str();
     if lvl == 0 {
         let had = with_stars(|m| {
             let had = m.remove(&uid).is_some();
             save(m);
             had
         });
-        return say(state, owner, &if had { format!("@{name} has no star now (other people stop seeing it within about 15 minutes).") } else { format!("@{name} had no star.") }).await;
+        return say(state, owner, &if had { format!("{name} has no star now (other people stop seeing it within about 15 minutes).") } else { format!("{name} had no star.") }).await;
     }
     let until = dur.map(|d| now() + d);
     with_stars(|m| {
@@ -454,7 +524,24 @@ async fn set_level(state: &AppState, owner: &str, name: &str, lvl: Result<u8, &'
         save(m);
     });
     let tail = until.map(|u| format!(" for {} (until {})", left(u, now()), fmt_date(u))).unwrap_or_default();
-    say(state, owner, &format!("@{name} now has the {} star{tail}.", kind_name(lvl))).await;
+    say(state, owner, &format!("{name} now has the {} star{tail}.", kind_name(lvl))).await;
+}
+
+/// An account by @name (this relay's, or any relay's from the name registry)
+/// or by its 10-digit ID: (ID, how to call it). Stars and check marks hold
+/// on every server, so they're given to anyone, not only accounts here.
+pub(crate) fn resolve(state: &AppState, w: &str) -> Option<(String, String)> {
+    let w = w.trim().trim_start_matches('@').to_lowercase();
+    if w.len() == 10 && w.bytes().all(|b| b.is_ascii_digit()) {
+        let label = state.directory.name_anywhere(&w).map(|n| format!("@{n} (ID {w})")).unwrap_or_else(|| format!("ID {w}"));
+        return Some((w, label));
+    }
+    let uid = state.directory.uid_anywhere(&w)?;
+    Some((uid, format!("@{w}")))
+}
+
+fn label(state: &AppState, uid: &str) -> String {
+    state.directory.name_anywhere(uid).map(|n| format!("@{n}")).unwrap_or_else(|| format!("ID {uid}"))
 }
 
 /// "2026-12-13" (UTC) for unix seconds.

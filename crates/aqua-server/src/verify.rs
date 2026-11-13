@@ -139,10 +139,23 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
         "/id" => say(state, &u.from, &id_text(state, &u.from)).await,
         "/verify" | "/unverify" => {
             let Some(name) = target(arg) else {
-                say(state, &u.from, &format!("Who? {cmd} @name")).await;
+                say(state, &u.from, &format!("Who? {cmd} @name (or the account ID)")).await;
                 return;
             };
             let on = cmd == "/verify";
+            // The star relay's list holds on every server (stars::get_marks):
+            // anyone, by @name from the name registry or by ID.
+            if crate::stars::has_key() {
+                let Some((uid, who)) = crate::stars::resolve(state, &name) else {
+                    say(state, &u.from, &format!("I don't know @{name}: not on this server or in the name registry of the servers it knows. The account ID works too: {cmd} 1234567890")).await;
+                    return;
+                };
+                state.directory.set_verified_uid(&uid, on);
+                let msg = if on { format!("✔️ {who} is verified on every server (others see it within about 15 minutes).") } else { format!("{who} no longer has the check mark (gone everywhere within about 15 minutes).") };
+                say(state, &u.from, &msg).await;
+                tracing::info!(%uid, on, "check mark changed (every server)");
+                return;
+            }
             if state.directory.set_verified(&name, on) {
                 let msg = if on { format!("✔️ @{name} is verified on this server.") } else { format!("@{name} no longer has the check mark.") };
                 say(state, &u.from, &msg).await;

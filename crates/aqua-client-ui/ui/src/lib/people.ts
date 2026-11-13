@@ -126,7 +126,11 @@ export function refreshPeer(username: string, force = false): Promise<void> {
       // The card's statement holds up to 8 days; the star relay knows now
       // (a star taken away goes within minutes). Can't ask it: the card.
       const cardKind = st && starUid ? await api.starVerify(starUid, st).catch(() => null) : null;
-      const starKind = starUid ? await api.starLive(starUid).catch(() => cardKind) : cardKind;
+      // The check mark too: the star relay's list holds on every server
+      // (signed like the star); this relay's own mark still counts.
+      const live = starUid ? await api.marksLive(starUid).catch(() => null) : null;
+      const starKind = live ? live.star : cardKind;
+      const verified = !!(card as { verified?: boolean }).verified || live?.check === true || (!live && !!cur?.verified);
       let music = cur && cur.music_ver === mv ? (cur.music ?? "") : "";
       if (mv && !music) music = assetUrl(await api.profileMediaPath(username, "music", mv).catch(() => null));
       let avatar = cur && cur.avatar_ver === av ? cur.avatar : "";
@@ -147,7 +151,7 @@ export function refreshPeer(username: string, force = false): Promise<void> {
           fetched: Date.now(),
           pv: m[username]?.pv ?? 0,
           uid: card.uid || cur?.uid,
-          verified: !!(card as { verified?: boolean }).verified,
+          verified,
           star: starKind,
         },
       }));

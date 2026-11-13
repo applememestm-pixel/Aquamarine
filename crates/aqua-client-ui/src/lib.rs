@@ -179,7 +179,7 @@ pub fn run() -> Result<()> {
             applock::applock_forgot_check,
             stars::star_verify,
             stars::my_star,
-            stars::star_live,
+            stars::marks_live,
             ice::relay_ice,
             crashreport::report_error,
             crashreport::report_config,

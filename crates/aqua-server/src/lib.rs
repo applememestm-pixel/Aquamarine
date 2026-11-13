@@ -3149,6 +3149,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/admin/power", post(admin_power))
         .route("/v1/admin/updates", get(admin_get_updates).post(admin_set_updates))
         .route("/v1/stars/:uid", get(stars::get_star))
+        .route("/v1/marks/:uid", get(stars::get_marks))
         .route("/v1/stars-app", get(stars::app::page))
         .route("/v1/stars-app/me", post(stars::app::me))
         .route("/v1/stars-app/link", post(stars::app::link))

@@ -2607,6 +2607,43 @@ impl Directory {
 
     // ---- check marks (verify.rs) ----
 
+    /// Has this account ID the check mark here?
+    pub fn is_verified_uid(&self, uid: &str) -> bool {
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT 1 FROM verified WHERE uid=?1", rusqlite::params![uid], |_| Ok(())).is_ok()
+    }
+
+    /// Give or take the check mark by account ID (any relay's account).
+    pub fn set_verified_uid(&self, uid: &str, on: bool) -> bool {
+        let db = self.db.lock().unwrap();
+        let r = if on {
+            db.execute("INSERT INTO verified (uid, at) VALUES (?1, ?2) ON CONFLICT(uid) DO NOTHING", rusqlite::params![uid, now_secs() as i64])
+        } else {
+            db.execute("DELETE FROM verified WHERE uid=?1", rusqlite::params![uid])
+        };
+        r.is_ok()
+    }
+
+    /// The ID of `name` here or on another relay this one knows the names
+    /// of (name registry).
+    pub fn uid_anywhere(&self, name: &str) -> Option<String> {
+        let name = name.trim().trim_start_matches('@').to_lowercase();
+        if let Some(u) = self.uid_of(&name).filter(|u| !u.is_empty()) {
+            return Some(u);
+        }
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT uid FROM fed_names WHERE username=?1", rusqlite::params![name], |r| r.get::<_, String>(0)).ok().filter(|u| !u.is_empty())
+    }
+
+    /// The @name of an ID here or in the name registry.
+    pub fn name_anywhere(&self, uid: &str) -> Option<String> {
+        if let Some(n) = self.username_by_uid(uid) {
+            return Some(n);
+        }
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT username FROM fed_names WHERE uid=?1", rusqlite::params![uid], |r| r.get::<_, String>(0)).ok()
+    }
+
     /// Give or take the check mark; false when there's no such account.
     pub fn set_verified(&self, username: &str, on: bool) -> bool {
         let Some(uid) = self.uid_of(username).filter(|u| !u.is_empty()) else { return false };
@@ -2685,7 +2722,11 @@ impl Directory {
     /// Who has a check mark here (current @names).
     pub fn verified_names(&self) -> Vec<String> {
         let db = self.db.lock().unwrap();
-        let Ok(mut st) = db.prepare("SELECT u.username FROM verified v JOIN users u ON u.uid = v.uid ORDER BY v.at") else { return Vec::new() };
+        // Accounts of other relays too (the star relay's marks hold everywhere).
+        let Ok(mut st) = db.prepare(
+            "SELECT COALESCE(u.username, f.username, 'ID ' || v.uid) FROM verified v
+             LEFT JOIN users u ON u.uid = v.uid AND u.is_bot = 0 LEFT JOIN fed_names f ON f.uid = v.uid ORDER BY v.at",
+        ) else { return Vec::new() };
         st.query_map([], |r| r.get::<_, String>(0)).map(|it| it.filter_map(|x| x.ok()).collect()).unwrap_or_default()
     }
 
