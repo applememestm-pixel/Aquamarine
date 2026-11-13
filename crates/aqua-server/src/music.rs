@@ -70,8 +70,32 @@ pub fn config() -> Config {
         c.password = env("AQUA_NAVIDROME_PASSWORD").unwrap_or_default();
         if let Some(b) = env("AQUA_MUSIC_BOT_ENABLED") { c.bot = b != "0" && b != "false"; }
     }
-    c.url = c.url.trim().trim_end_matches('/').to_string();
+    c.url = clean_url(&c.url);
     c
+}
+
+/// The address as typed, fixed up: "http://https://host" (a pasted address
+/// after a typed scheme) → "https://host", "host:4533" → "http://host:4533".
+pub fn clean_url(s: &str) -> String {
+    let mut u = s.trim().trim_end_matches('/');
+    loop {
+        let low = u.to_ascii_lowercase();
+        let rest = if low.starts_with("http://") { &u[7..] } else if low.starts_with("https://") { &u[8..] } else { break };
+        let rl = rest.to_ascii_lowercase();
+        if rl.starts_with("http://") || rl.starts_with("https://") || rl.starts_with("http//") || rl.starts_with("https//") {
+            u = rest;
+        } else {
+            break;
+        }
+    }
+    let low = u.to_ascii_lowercase();
+    if u.is_empty() || low.starts_with("http://") || low.starts_with("https://") {
+        return u.to_string();
+    }
+    // "https//host" (a lost colon) or a bare "host:port".
+    if let Some(r) = low.strip_prefix("https//") { return format!("https://{}", &u[u.len() - r.len()..]); }
+    if let Some(r) = low.strip_prefix("http//") { return format!("http://{}", &u[u.len() - r.len()..]); }
+    format!("http://{u}")
 }
 
 pub fn enabled() -> bool {
@@ -230,9 +254,9 @@ pub async fn admin_set(State(state): State<AppState>, headers: HeaderMap, Json(b
     if from_env() {
         return Err((StatusCode::CONFLICT, "Navidrome comes from AQUA_NAVIDROME_URL; change it there".into()));
     }
-    let url = b.url.trim().trim_end_matches('/').to_string();
-    if !url.is_empty() && !(url.starts_with("http://") || url.starts_with("https://")) {
-        return Err((StatusCode::BAD_REQUEST, "the address starts with http:// or https://".into()));
+    let url = clean_url(&b.url);
+    if url.contains(char::is_whitespace) {
+        return Err((StatusCode::BAD_REQUEST, "the address has spaces in it".into()));
     }
     let old = config();
     let c = Config {
@@ -550,6 +574,16 @@ pub fn md5(input: &[u8]) -> [u8; 16] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn addresses_are_fixed_up() {
+        assert_eq!(clean_url("http://https://1.2.3.4:4533/"), "https://1.2.3.4:4533");
+        assert_eq!(clean_url("https://http://nd.local"), "http://nd.local");
+        assert_eq!(clean_url("http://https//nd.local"), "https://nd.local");
+        assert_eq!(clean_url(" 127.0.0.1:4533 "), "http://127.0.0.1:4533");
+        assert_eq!(clean_url("HTTP://Host:4533"), "HTTP://Host:4533");
+        assert_eq!(clean_url(""), "");
+    }
 
     #[test]
     fn md5_vectors() {
