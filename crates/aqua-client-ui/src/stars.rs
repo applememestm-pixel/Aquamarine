@@ -13,11 +13,10 @@ use tauri::State;
 
 use crate::state::AppState;
 
-/// The owner's public star key (hex). Empty until the owner has made the
-/// key (the star relay's panel → Stars, or `aqua-server star-key`): then no
-/// star shows. It can also come at build time from the repository variable
-/// `AQUA_STAR_PUBLIC` (release.yml) — a public key, nothing secret.
-pub const STAR_PUBLIC_BUILTIN: &str = "";
+/// The owner's public star key (hex; made on the star relay's panel → Stars,
+/// 2026-11-13). Empty: no star shows. The repository variable
+/// `AQUA_STAR_PUBLIC` (release.yml) wins when set — a public key, nothing secret.
+pub const STAR_PUBLIC_BUILTIN: &str = "3abdfac4ef46672c05a21e9024073208655c0deae3f645441dc1776217a92431";
 
 fn star_public() -> &'static str {
     match option_env!("AQUA_STAR_PUBLIC") {
@@ -50,6 +49,18 @@ pub fn check(uid: &str, st: &Statement) -> Option<u8> {
     Some(st.kind)
 }
 
+/// A check mark statement (aqua-server `stars::check_bytes`): real, for
+/// this ID, not run out.
+pub fn check_mark(uid: &str, st: &Statement) -> bool {
+    let Some(pk) = hex::decode(star_public()).ok().and_then(|v| <[u8; 32]>::try_from(v).ok()) else { return false };
+    let Some(sig) = hex::decode(&st.sig).ok().and_then(|v| <[u8; 64]>::try_from(v).ok()) else { return false };
+    if st.uid != uid || uid.is_empty() || st.exp < now() {
+        return false;
+    }
+    let msg = format!("aqua-check-v1|{}|{}", st.uid, st.exp);
+    aqua_core::crypto::SignPublic::from_bytes(pk).verify(msg.as_bytes(), &sig).is_ok()
+}
+
 /// Someone's card carries a statement (`extra.st`): its kind if it holds.
 #[tauri::command]
 pub fn star_verify(uid: String, star: serde_json::Value) -> Option<u8> {
@@ -57,21 +68,22 @@ pub fn star_verify(uid: String, star: serde_json::Value) -> Option<u8> {
     check(&uid, &st)
 }
 
-/// My own star, from my relay (which asks the star relay): the statement
-/// to put on my card, or None.
-#[tauri::command]
-pub async fn my_star(state: State<'_, StdMutex<AppState>>) -> Result<Option<Statement>, String> {
+/// The statement for `uid`, asked of my relay (which asks the star relay).
+/// `Ok(None)`: the star relay says there's no star (404). `Err`: it couldn't
+/// be asked — "don't know", not "no star".
+async fn fetch(state: &State<'_, StdMutex<AppState>>, uid: Option<String>) -> Result<Option<Statement>, String> {
     if star_public().is_empty() {
         return Ok(None);
     }
-    let (server, uid) = {
+    let (server, me) = {
         let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match &s.transport {
             Some(t) => (t.server_url().to_string(), t.uid().to_string()),
-            None => return Ok(None),
+            None => return Err("offline".into()),
         }
     };
-    if uid.is_empty() {
+    let uid = uid.unwrap_or(me);
+    if uid.is_empty() || !uid.bytes().all(|b| b.is_ascii_alphanumeric()) {
         return Ok(None);
     }
     let http = aqua_client_core::transport::http_client().map_err(|e| e.to_string())?;
@@ -81,8 +93,6 @@ pub async fn my_star(state: State<'_, StdMutex<AppState>>) -> Result<Option<Stat
         .send()
         .await
         .map_err(|e| e.without_url().to_string())?;
-    // 404: no star. Anything else (the star relay unreachable, 502): don't
-    // know — an error, so the star already on my card stays.
     if r.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
@@ -91,4 +101,63 @@ pub async fn my_star(state: State<'_, StdMutex<AppState>>) -> Result<Option<Stat
     }
     let st: Statement = r.json().await.map_err(|e| e.without_url().to_string())?;
     Ok(check(&uid, &st).map(|_| st))
+}
+
+/// My own star: the statement to put on my card, or None.
+#[tauri::command]
+pub async fn my_star(state: State<'_, StdMutex<AppState>>) -> Result<Option<Statement>, String> {
+    fetch(&state, None).await
+}
+
+
+#[derive(Serialize)]
+pub struct LiveMarks {
+    /// The star's kind, or None.
+    pub star: Option<u8>,
+    /// The star relay's check mark; None: this relay can't tell (older).
+    pub check: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct MarksResp {
+    #[serde(default)]
+    star: Option<Statement>,
+    #[serde(default)]
+    check: Option<Statement>,
+}
+
+/// Someone's star and check mark as the star relay has them now — both
+/// signed by the owner's key, so they show whichever server they're on.
+/// `Err`: couldn't ask — the caller keeps what the card says.
+#[tauri::command]
+pub async fn marks_live(state: State<'_, StdMutex<AppState>>, uid: String) -> Result<LiveMarks, String> {
+    if star_public().is_empty() || uid.is_empty() || !uid.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Ok(LiveMarks { star: None, check: None });
+    }
+    let server = {
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        match &s.transport {
+            Some(t) => t.server_url().to_string(),
+            None => return Err("offline".into()),
+        }
+    };
+    let http = aqua_client_core::transport::http_client().map_err(|e| e.to_string())?;
+    let r = http
+        .get(format!("{}/v1/marks/{uid}", server.trim_end_matches('/')))
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| e.without_url().to_string())?;
+    // An older relay: only the star, the old way.
+    if r.status() == reqwest::StatusCode::NOT_FOUND || r.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED {
+        let star = fetch(&state, Some(uid)).await?.map(|st| st.kind);
+        return Ok(LiveMarks { star, check: None });
+    }
+    if !r.status().is_success() {
+        return Err(format!("marks: HTTP {}", r.status()));
+    }
+    let m: MarksResp = r.json().await.map_err(|e| e.without_url().to_string())?;
+    let star = m.star.as_ref().and_then(|st| check(&uid, st));
+    let check = m.check.as_ref().is_some_and(|st| check_mark(&uid, st));
+    Ok(LiveMarks { star, check: Some(check) })
 }

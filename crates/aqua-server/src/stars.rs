@@ -22,8 +22,9 @@
 //! Older builds had 0 ("official", now level 6) and 1–8: stored ones are
 //! moved over on load (0 → 6, 7–8 → 5).
 //! A statement lasts 8 days and is signed afresh on every request while the
-//! star stands, so a removed star fades from other people's screens within
-//! that time (from its owner's own app at once).
+//! star stands. Apps ask `GET /v1/stars/:uid` whenever they refresh a card
+//! (aqua-client-ui `stars::marks_live`, `/v1/marks`), so a removed star goes within minutes;
+//! the statement on the card counts only while the star relay can't be asked.
 //! `GET /v1/stars/:uid` — the statement, from the relay with the key, or from
 //! any other relay fetched there (`AQUA_STAR_HOME`).
 
@@ -228,9 +229,9 @@ pub async fn get_star(State(_state): State<AppState>, Path(uid): Path<String>) -
         let star = with_stars(|m| m.get(&uid).filter(|s| s.live(t)).map(|s| (s.kind, s.until)));
         return star.and_then(|(k, until)| sign(&uid, k, until)).map(Json).ok_or(StatusCode::NOT_FOUND);
     }
-    // Not the star relay: ask it (and remember the answer for 10 minutes).
+    // Not the star relay: ask it (and remember the answer for 5 minutes).
     if let Some((at, st)) = CACHE.lock().ok().and_then(|g| g.as_ref().and_then(|m| m.get(&uid).cloned())) {
-        if now() < at + 600 {
+        if now() < at + 300 {
             return st.map(Json).ok_or(StatusCode::NOT_FOUND);
         }
     }
@@ -261,6 +262,75 @@ pub async fn get_star(State(_state): State<AppState>, Path(uid): Path<String>) -
     st.map(Json).ok_or(StatusCode::NOT_FOUND)
 }
 
+// ---------- marks: the star and the check mark, for every server ----------
+
+/// What a check mark statement signs: "the account <uid> is verified until
+/// <exp>" — the same key as stars, another prefix, so neither passes for
+/// the other.
+pub fn check_bytes(uid: &str, exp: u64) -> Vec<u8> {
+    format!("aqua-check-v1|{uid}|{exp}").into_bytes()
+}
+
+fn sign_check(uid: &str) -> Option<Statement> {
+    let k = key()?;
+    let exp = now() + LIFE_SECS;
+    let sig = k.sign(&check_bytes(uid, exp));
+    Some(Statement { uid: uid.to_string(), kind: 0, exp, sig: hex::encode(sig) })
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct Marks {
+    #[serde(default)]
+    pub star: Option<Statement>,
+    #[serde(default)]
+    pub check: Option<Statement>,
+}
+
+static MARKS_CACHE: Mutex<Option<BTreeMap<String, (u64, Marks)>>> = Mutex::new(None);
+
+/// `GET /v1/marks/:uid` — the account's star and check mark, signed by the
+/// star relay (asked through any other relay), so both show on every
+/// server. The check mark there is the @verify list of the star relay.
+pub async fn get_marks(State(state): State<AppState>, Path(uid): Path<String>) -> Result<Json<Marks>, StatusCode> {
+    let uid = uid.trim().to_string();
+    if uid.is_empty() || uid.len() > 32 || !uid.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if has_key() {
+        let t = now();
+        let star = with_stars(|m| m.get(&uid).filter(|s| s.live(t)).map(|s| (s.kind, s.until)));
+        let star = star.and_then(|(k, until)| sign(&uid, k, until));
+        let check = if state.directory.is_verified_uid(&uid) { sign_check(&uid) } else { None };
+        return Ok(Json(Marks { star, check }));
+    }
+    if let Some((at, m)) = MARKS_CACHE.lock().ok().and_then(|g| g.as_ref().and_then(|m| m.get(&uid).cloned())) {
+        if now() < at + 300 {
+            return Ok(Json(m));
+        }
+    }
+    let home = std::env::var("AQUA_STAR_HOME").ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| DEFAULT_HOME.into());
+    let url = format!("{}/v1/marks/{uid}", home.trim_end_matches('/'));
+    let res: Result<Marks, ()> = async {
+        let c = reqwest::Client::builder().timeout(std::time::Duration::from_secs(8)).build().map_err(|_| ())?;
+        let r = c.get(&url).send().await.map_err(|_| ())?;
+        if !r.status().is_success() {
+            return Err(());
+        }
+        r.json::<Marks>().await.map_err(|_| ())
+    }
+    .await;
+    // Couldn't ask: not "no marks" (the app keeps what it has).
+    let Ok(m) = res else { return Err(StatusCode::BAD_GATEWAY) };
+    if let Ok(mut g) = MARKS_CACHE.lock() {
+        let c = g.get_or_insert_with(BTreeMap::new);
+        if c.len() > 5000 {
+            c.clear();
+        }
+        c.insert(uid, (now(), m.clone()));
+    }
+    Ok(Json(m))
+}
+
 // ---------- the @stars bot (only on the relay with the key) ----------------
 
 pub fn bot_name() -> String {
@@ -269,6 +339,7 @@ pub fn bot_name() -> String {
 
 pub(crate) fn ensure_bot(state: &AppState) {
     let name = bot_name();
+    crate::tgapi::set_builtin_app(state, &name, "Stars", APP_URL);
     if state.directory.is_bot(&name) {
         return;
     }
@@ -315,6 +386,17 @@ async fn say(state: &AppState, to: &str, text: &str) {
     crate::bot_deliver_text(state, &bot_name(), to, text).await;
 }
 
+/// A message with buttons (the app draws them from the `[kb:v1]` line).
+async fn say_kb(state: &AppState, to: &str, text: &str, row: serde_json::Value) {
+    let kb = serde_json::json!({ "kind": "inline", "m": 0, "rows": [row] });
+    say(state, to, &format!("{}{kb}\n{text}", crate::tgapi::KB_PREFIX)).await;
+}
+
+/// …with the button that opens the mini app.
+async fn say_app(state: &AppState, to: &str, text: &str) {
+    say_kb(state, to, text, serde_json::json!([{ "t": "✦ Open", "wa": APP_URL }])).await;
+}
+
 fn kind_name(k: u8) -> String {
     if k == OWNER_LEVEL { format!("CeZeOs level {k} (the owner's)") } else { format!("CeZeOs level {k}") }
 }
@@ -336,14 +418,26 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
         return;
     }
     if !crate::verify::is_owner(state, &u.from) {
-        say(state, &u.from, "✦ The CeZeOs star: levels 1–5 come with a Boosty subscription (on their own, by your e-mail here); level 6 only from the owner.").await;
+        say_app(state, &u.from, "✦ The CeZeOs star: levels 1–5 come with a Boosty subscription — on their own, by your e-mail here, or link your Boosty in the app below (no e-mail needed). Level 6 only from the owner.\nThe app also shows how many days are left until the next payment.").await;
+        return;
+    }
+    // The owner pressed "Link" / "Don't" under a request (app::request).
+    let cb = u.callback.clone().or_else(|| {
+        let v: serde_json::Value = serde_json::from_str(text.strip_prefix(crate::tgapi::CB_PREFIX)?).ok()?;
+        v.get("d")?.as_str().map(str::to_string)
+    });
+    if let Some(d) = cb {
+        if let Some(rest) = d.strip_prefix("bl:") {
+            let (verb, uid) = rest.split_once(':').unwrap_or((rest, ""));
+            return app::decide(state, &u.from, uid, verb == "ok").await;
+        }
         return;
     }
     let (cmd, arg) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
     let cmd = cmd.split('@').next().unwrap_or(cmd);
     // `/<name> level <n>` (the owner's way): the same as `/star @name n`.
     let lower = arg.trim().to_lowercase();
-    if !["/star", "/unstar", "/stars", "/start", "/help"].contains(&cmd) && cmd.len() > 1 && lower.starts_with("level") {
+    if !["/star", "/unstar", "/stars", "/start", "/help", "/id", "/links", "/unlink"].contains(&cmd) && cmd.len() > 1 && lower.starts_with("level") {
         let name = cmd[1..].trim_start_matches('@').to_lowercase();
         let mut rest = lower["level".len()..].split_whitespace();
         let lvl = rest.next().unwrap_or("x");
@@ -360,6 +454,19 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
             let lvl = if cmd == "/unstar" { Ok(0) } else { parse_level(words.next()) };
             set_level(state, &u.from, &name, lvl, words.next()).await;
         }
+        "/id" => say(state, &u.from, &crate::verify::id_text(state, &u.from)).await,
+        "/links" => {
+            let list = app::list_links(state);
+            say(state, &u.from, &if list.is_empty() { "Nobody linked a Boosty account yet.".to_string() } else { format!("Boosty links:\n{list}") }).await;
+        }
+        "/unlink" => {
+            let Some(name) = who else { return say(state, &u.from, "Who? /unlink @name").await };
+            let Some(uid) = state.directory.uid_of(&name).filter(|x| !x.is_empty()) else {
+                return say(state, &u.from, &format!("There's no @{name} on this server.")).await;
+            };
+            let had = app::unlink(&uid);
+            say(state, &u.from, &if had { format!("@{name}'s Boosty link is gone.") } else { format!("@{name} had no Boosty link.") }).await;
+        }
         "/stars" => {
             let t = now();
             let list = with_stars(|m| m.iter().filter(|(_, s)| s.live(t)).map(|(uid, s)| (uid.clone(), s.clone())).collect::<Vec<_>>());
@@ -370,7 +477,7 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
             let lines: Vec<String> = list
                 .iter()
                 .map(|(uid, s)| {
-                    let n = state.directory.username_by_uid(uid).map(|n| format!("@{n}")).unwrap_or_else(|| format!("ID {uid}"));
+                    let n = label(state, uid);
                     let until = s.until.map(|u| format!(" · {} left", left(u, t))).unwrap_or_default();
                     format!("{n} — {}{}{until}", kind_name(s.kind), if s.source == "boosty" { " (Boosty)" } else { "" })
                 })
@@ -378,7 +485,7 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
             say(state, &u.from, &format!("Stars ({}):\n{}", lines.len(), lines.join("\n"))).await;
         }
         _ => {
-            say(state, &u.from, "✦ The CeZeOs star:\n/<name> level 6 — yours, above the donation levels\n/<name> level 1-5 — a donation level by hand (Boosty gives them on its own)\n/<name> level 4 30d — for a while: h, d, w, m (30 days), y; it goes by itself\n/<name> level 0 — take it away\n(also /star @name [1-6] [30d], /unstar @name)\n/stars — who has one").await;
+            say(state, &u.from, "✦ The CeZeOs star:\n/<name> level 6 — yours, above the donation levels\n/<name> level 1-5 — a donation level by hand (Boosty gives them on its own)\n/<name> level 4 30d — for a while: h, d, w, m (30 days), y; it goes by itself\n/<name> level 0 — take it away\n(also /star @name [1-6] [30d], /unstar @name)\n/stars — who has one\n/links — Boosty accounts linked without an e-mail, /unlink @name\n/id — your account ID").await;
         }
     }
 }
@@ -399,16 +506,17 @@ async fn set_level(state: &AppState, owner: &str, name: &str, lvl: Result<u8, &'
     if name.is_empty() {
         return say(state, owner, "Who? /<name> level <0-6>").await;
     }
-    let Some(uid) = state.directory.uid_of(name).filter(|x| !x.is_empty()) else {
-        return say(state, owner, &format!("There's no @{name} on this server.")).await;
+    let Some((uid, who)) = resolve(state, name) else {
+        return say(state, owner, &format!("I don't know @{name}: not on this server or in the name registry of the servers it knows. Its account ID works too: /<ID> level N.")).await;
     };
+    let name = who.as_str();
     if lvl == 0 {
         let had = with_stars(|m| {
             let had = m.remove(&uid).is_some();
             save(m);
             had
         });
-        return say(state, owner, &if had { format!("@{name} has no star now (other people stop seeing it within 8 days).") } else { format!("@{name} had no star.") }).await;
+        return say(state, owner, &if had { format!("{name} has no star now (other people stop seeing it within about 15 minutes).") } else { format!("{name} had no star.") }).await;
     }
     let until = dur.map(|d| now() + d);
     with_stars(|m| {
@@ -416,7 +524,24 @@ async fn set_level(state: &AppState, owner: &str, name: &str, lvl: Result<u8, &'
         save(m);
     });
     let tail = until.map(|u| format!(" for {} (until {})", left(u, now()), fmt_date(u))).unwrap_or_default();
-    say(state, owner, &format!("@{name} now has the {} star{tail}.", kind_name(lvl))).await;
+    say(state, owner, &format!("{name} now has the {} star{tail}.", kind_name(lvl))).await;
+}
+
+/// An account by @name (this relay's, or any relay's from the name registry)
+/// or by its 10-digit ID: (ID, how to call it). Stars and check marks hold
+/// on every server, so they're given to anyone, not only accounts here.
+pub(crate) fn resolve(state: &AppState, w: &str) -> Option<(String, String)> {
+    let w = w.trim().trim_start_matches('@').to_lowercase();
+    if w.len() == 10 && w.bytes().all(|b| b.is_ascii_digit()) {
+        let label = state.directory.name_anywhere(&w).map(|n| format!("@{n} (ID {w})")).unwrap_or_else(|| format!("ID {w}"));
+        return Some((w, label));
+    }
+    let uid = state.directory.uid_anywhere(&w)?;
+    Some((uid, format!("@{w}")))
+}
+
+fn label(state: &AppState, uid: &str) -> String {
+    state.directory.name_anywhere(uid).map(|n| format!("@{n}")).unwrap_or_else(|| format!("ID {uid}"))
 }
 
 /// "2026-12-13" (UTC) for unix seconds.
@@ -474,8 +599,10 @@ mod boosty {
             .unwrap_or_default();
         lv.sort_by_key(|x| x.1);
         let tier_of = |id: i64| lv.iter().position(|x| x.0 == id).map(|i| (i as u8 + 1).min(DONATION_MAX));
-        // Every active subscriber: e-mail → level.
+        // Every active subscriber: e-mail → level; and all of them for the
+        // mini app and the links without an e-mail (app.rs-like part below).
         let mut subs: BTreeMap<String, u8> = BTreeMap::new();
+        let mut all: Vec<app::Sub> = Vec::new();
         let mut offset = 0;
         loop {
             let page = get(format!("https://api.boosty.to/v1/blog/{blog}/subscribers?limit=100&offset={offset}&sort_by=on_time&order=gt")).await?;
@@ -487,6 +614,9 @@ mod boosty {
                 let active = s["subscribed"].as_bool().unwrap_or(true);
                 let email = s["email"].as_str().unwrap_or("").trim().to_lowercase();
                 let tier = s["level"]["id"].as_i64().and_then(tier_of);
+                if let (true, Some(t), Some(id)) = (active, tier, s["id"].as_i64()) {
+                    all.push(app::Sub::from_boosty(s, id, t, email.clone()));
+                }
                 if active && !email.is_empty() {
                     if let Some(t) = tier {
                         let e = subs.entry(email).or_insert(t);
@@ -508,6 +638,14 @@ mod boosty {
                 }
             }
         }
+        // Linked by hand (no e-mail): the owner approved the Boosty account.
+        for (uid, id) in app::approved() {
+            if let Some(sub) = all.iter().find(|x| x.id == id) {
+                let e = want.entry(uid).or_insert(sub.tier);
+                *e = (*e).max(sub.tier);
+            }
+        }
+        app::set_subs(all);
         let n = subs.len();
         with_stars(|m| {
             // Boosty stars that no longer stand go; hand-set ones stay until
@@ -526,6 +664,296 @@ mod boosty {
             save(m);
         });
         Ok(n)
+    }
+}
+
+// ---------- the mini app: my star, my Boosty, days to the next payment ------
+
+/// Where the app opens it: the client puts its own relay in front.
+pub const APP_URL: &str = "aqua:relay/v1/stars-app";
+
+pub mod app {
+    use super::*;
+    use axum::response::{Html, IntoResponse};
+
+    const LINKS: &str = "aqua-boosty-links.json";
+    const PAGE: &str = include_str!("stars_app.html");
+
+    /// A Boosty account an account here says is theirs (no e-mail needed).
+    #[derive(Clone, Serialize, Deserialize)]
+    struct Link {
+        boosty_id: i64,
+        name: String,
+        at: u64,
+        /// The owner said yes; until then it gives nothing.
+        #[serde(default)]
+        ok: bool,
+    }
+
+    /// An active subscriber, as the last sync saw them.
+    #[derive(Clone)]
+    pub struct Sub {
+        pub id: i64,
+        pub tier: u8,
+        name: String,
+        email: String,
+        level: String,
+        price: u64,
+        on_time: u64,
+        next_pay: Option<u64>,
+    }
+
+    fn secs(v: &serde_json::Value) -> Option<u64> {
+        let n = v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))?;
+        // Some fields come in milliseconds.
+        Some(if n > 100_000_000_000 { n / 1000 } else { n })
+    }
+
+    impl Sub {
+        pub fn from_boosty(s: &serde_json::Value, id: i64, tier: u8, email: String) -> Sub {
+            let next = ["nextPayTime", "next_pay_time", "nextPayDate", "payTime"].iter().find_map(|k| secs(&s[*k]));
+            Sub {
+                id,
+                tier,
+                name: s["name"].as_str().unwrap_or("").trim().to_string(),
+                email,
+                level: s["level"]["name"].as_str().unwrap_or("").to_string(),
+                price: s["price"].as_u64().or_else(|| s["level"]["price"].as_u64()).unwrap_or(0),
+                on_time: secs(&s["onTime"]).unwrap_or(0),
+                next_pay: next,
+            }
+        }
+
+        #[cfg(test)]
+        pub fn next_for_test(&self, now: u64) -> Option<(u64, bool)> {
+            self.next(now)
+        }
+
+        /// The next payment: Boosty's own date, or a month after the last
+        /// one counted from the start (subscriptions renew monthly).
+        fn next(&self, now: u64) -> Option<(u64, bool)> {
+            if let Some(t) = self.next_pay.filter(|&t| t > now) {
+                return Some((t, true));
+            }
+            if self.on_time == 0 || self.on_time > now {
+                return None;
+            }
+            const MONTH: u64 = 30 * 86_400;
+            let k = (now - self.on_time) / MONTH + 1;
+            Some((self.on_time + k * MONTH, false))
+        }
+    }
+
+    static SUBS: Mutex<Option<Vec<Sub>>> = Mutex::new(None);
+    static LINKS_M: Mutex<Option<BTreeMap<String, Link>>> = Mutex::new(None);
+
+    pub fn set_subs(all: Vec<Sub>) {
+        *SUBS.lock().unwrap_or_else(|e| e.into_inner()) = Some(all);
+    }
+    fn subs() -> Option<Vec<Sub>> {
+        SUBS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn with_links<R>(f: impl FnOnce(&mut BTreeMap<String, Link>) -> R) -> R {
+        let mut g = LINKS_M.lock().unwrap_or_else(|e| e.into_inner());
+        let m = g.get_or_insert_with(|| std::fs::read(LINKS).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default());
+        f(m)
+    }
+    fn save_links(m: &BTreeMap<String, Link>) {
+        let tmp = format!("{LINKS}.tmp");
+        if std::fs::write(&tmp, serde_json::to_vec_pretty(m).unwrap_or_default()).is_ok() {
+            let _ = std::fs::rename(&tmp, LINKS);
+        }
+    }
+
+    /// uid → Boosty id, the approved links.
+    pub fn approved() -> Vec<(String, i64)> {
+        with_links(|m| m.iter().filter(|(_, l)| l.ok).map(|(u, l)| (u.clone(), l.boosty_id)).collect())
+    }
+
+    pub fn list_links(state: &AppState) -> String {
+        with_links(|m| {
+            m.iter()
+                .map(|(uid, l)| {
+                    let n = state.directory.username_by_uid(uid).map(|n| format!("@{n}")).unwrap_or_else(|| format!("ID {uid}"));
+                    format!("{n} — Boosty «{}» ({}){}", l.name, l.boosty_id, if l.ok { "" } else { " · waiting for you" })
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+    }
+
+    /// Take the link away (and the star it gave; an e-mail one comes back
+    /// with the next sync).
+    pub fn unlink(uid: &str) -> bool {
+        let had = with_links(|m| {
+            let had = m.remove(uid).is_some();
+            save_links(m);
+            had
+        });
+        if had {
+            with_stars(|m| {
+                if m.get(uid).is_some_and(|s| s.source == "boosty") {
+                    m.remove(uid);
+                    save(m);
+                }
+            });
+        }
+        had
+    }
+
+    fn boosty_on() -> bool {
+        ["AQUA_BOOSTY_TOKEN", "AQUA_BOOSTY_BLOG"].iter().all(|k| std::env::var(k).is_ok_and(|v| !v.trim().is_empty()))
+    }
+
+    /// The owner said yes or no to a link.
+    pub async fn decide(state: &AppState, owner: &str, uid: &str, yes: bool) {
+        let name = state.directory.username_by_uid(uid).unwrap_or_default();
+        let link = with_links(|m| {
+            let l = m.get(uid).cloned()?;
+            if yes {
+                m.insert(uid.to_string(), Link { ok: true, ..l.clone() });
+            } else {
+                m.remove(uid);
+            }
+            save_links(m);
+            Some(l)
+        });
+        let Some(link) = link else { return say(state, owner, "That request is gone already.").await };
+        if !yes {
+            say(state, owner, &format!("Not linked: @{name} and Boosty «{}».", link.name)).await;
+            if !name.is_empty() {
+                say_app(state, &name, &format!("✦ The owner didn't confirm Boosty «{}» as yours.", link.name)).await;
+            }
+            return;
+        }
+        // The star at once, from what the last sync saw.
+        let tier = subs().and_then(|s| s.iter().find(|x| x.id == link.boosty_id).map(|x| x.tier));
+        if let Some(t) = tier {
+            with_stars(|m| {
+                let keep = m.get(uid).is_some_and(|s| s.source == "manual" && s.live(now()));
+                let higher = m.get(uid).is_some_and(|s| s.source == "boosty" && s.kind >= t);
+                if !keep && !higher {
+                    m.insert(uid.to_string(), Star { kind: t, source: "boosty".into(), at: now(), until: None });
+                    save(m);
+                }
+            });
+        }
+        say(state, owner, &format!("Linked: @{name} ↔ Boosty «{}».", link.name)).await;
+        if !name.is_empty() {
+            let t = tier.map(|t| format!(" Your star: CeZeOs level {t}.")).unwrap_or_default();
+            say_app(state, &name, &format!("✦ Boosty «{}» is linked to you.{t}", link.name)).await;
+        }
+    }
+
+    #[derive(Deserialize)]
+    pub struct Body {
+        #[serde(default)]
+        init: String,
+        #[serde(default)]
+        q: String,
+    }
+
+    type Res = Result<Json<serde_json::Value>, (StatusCode, String)>;
+
+    fn who(state: &AppState, b: &Body) -> Result<(String, String), (StatusCode, String)> {
+        if !has_key() {
+            return Err((StatusCode::NOT_FOUND, "no stars here".into()));
+        }
+        let me = crate::tgapi::check_init(state, &bot_name(), &b.init).ok_or((StatusCode::UNAUTHORIZED, "reopen the app".into()))?;
+        let uid = state.directory.uid_of(&me).filter(|x| !x.is_empty()).ok_or((StatusCode::NOT_FOUND, "no such account".into()))?;
+        Ok((me, uid))
+    }
+
+    /// `GET /v1/stars-app` — the page.
+    pub async fn page() -> impl IntoResponse {
+        ([(axum::http::header::CACHE_CONTROL, "no-store")], Html(PAGE))
+    }
+
+    /// `POST /v1/stars-app/me` — my star, my subscription, my link.
+    pub async fn me(State(state): State<AppState>, Json(b): Json<Body>) -> Res {
+        let (me, uid) = who(&state, &b)?;
+        let t = now();
+        let star = with_stars(|m| m.get(&uid).filter(|s| s.live(t)).cloned());
+        let link = with_links(|m| m.get(&uid).cloned());
+        let email = state.directory.email_of(&me);
+        let all = subs();
+        let by_mail = all.as_ref().and_then(|a| email.as_ref().and_then(|e| a.iter().filter(|x| &x.email == e).max_by_key(|x| x.tier).cloned()));
+        let by_link = all.as_ref().and_then(|a| link.as_ref().filter(|l| l.ok).and_then(|l| a.iter().find(|x| x.id == l.boosty_id).cloned()));
+        let (sub, via) = match (by_link, by_mail) {
+            (Some(l), Some(m)) if m.tier > l.tier => (Some(m), "email"),
+            (Some(l), _) => (Some(l), "link"),
+            (None, Some(m)) => (Some(m), "email"),
+            (None, None) => (None, ""),
+        };
+        let sub = sub.map(|s| {
+            let next = s.next(t);
+            serde_json::json!({
+                "name": s.name, "level": s.level, "tier": s.tier, "price": s.price, "since": s.on_time,
+                "next": next.map(|n| n.0), "exact": next.is_some_and(|n| n.1), "via": via,
+            })
+        });
+        Ok(Json(serde_json::json!({
+            "me": me,
+            "owner": crate::verify::is_owner(&state, &me),
+            "star": star.map(|s| serde_json::json!({ "level": s.kind, "source": s.source, "until": s.until })),
+            "boosty": boosty_on(),
+            "synced": all.is_some(),
+            "blog": std::env::var("AQUA_BOOSTY_BLOG").ok().map(|b| format!("https://boosty.to/{}", b.trim())),
+            "sub": sub,
+            "link": link.map(|l| serde_json::json!({ "name": l.name, "id": l.boosty_id, "ok": l.ok })),
+            "now": t,
+        })))
+    }
+
+    /// `POST /v1/stars-app/link {q}` — "this Boosty account is mine": the
+    /// owner gets a request with two buttons.
+    pub async fn link(State(state): State<AppState>, Json(b): Json<Body>) -> Res {
+        let (me, uid) = who(&state, &b)?;
+        if !boosty_on() {
+            return Err((StatusCode::SERVICE_UNAVAILABLE, "boosty-off".into()));
+        }
+        let all = subs().ok_or((StatusCode::SERVICE_UNAVAILABLE, "not-synced".into()))?;
+        let q = b.q.trim().trim_start_matches('@').to_string();
+        if q.is_empty() || q.chars().count() > 80 {
+            return Err((StatusCode::BAD_REQUEST, "empty".into()));
+        }
+        let by_id: Vec<&Sub> = q.parse::<i64>().ok().map(|id| all.iter().filter(|x| x.id == id).collect()).unwrap_or_default();
+        let found: Vec<&Sub> = if by_id.is_empty() { all.iter().filter(|x| x.name.eq_ignore_ascii_case(&q) || x.name.to_lowercase() == q.to_lowercase()).collect() } else { by_id };
+        let sub = match found.as_slice() {
+            [] => return Err((StatusCode::NOT_FOUND, "not-found".into())),
+            [one] => (*one).clone(),
+            _ => return Err((StatusCode::CONFLICT, "many".into())),
+        };
+        // One Boosty account, one person here.
+        let taken = with_links(|m| m.iter().any(|(u, l)| u != &uid && l.ok && l.boosty_id == sub.id));
+        if taken {
+            return Err((StatusCode::CONFLICT, "taken".into()));
+        }
+        with_links(|m| {
+            m.insert(uid.clone(), Link { boosty_id: sub.id, name: sub.name.clone(), at: now(), ok: false });
+            save_links(m);
+        });
+        let text = format!(
+            "✦ @{me} says Boosty «{}» is theirs: level {} «{}», {} ₽, since {}. Link it?",
+            sub.name,
+            sub.tier,
+            sub.level,
+            sub.price,
+            if sub.on_time > 0 { fmt_date(sub.on_time) } else { "?".into() }
+        );
+        let row = serde_json::json!([{ "t": "✓ Link", "cb": format!("bl:ok:{uid}") }, { "t": "✕ Don't", "cb": format!("bl:no:{uid}") }]);
+        for owner in crate::verify::owner_names(&state) {
+            say_kb(&state, &owner, &text, row.clone()).await;
+        }
+        Ok(Json(serde_json::json!({ "ok": true, "name": sub.name })))
+    }
+
+    /// `POST /v1/stars-app/unlink`.
+    pub async fn unlink_me(State(state): State<AppState>, Json(b): Json<Body>) -> Res {
+        let (_, uid) = who(&state, &b)?;
+        unlink(&uid);
+        Ok(Json(serde_json::json!({ "ok": true })))
     }
 }
 
@@ -550,6 +978,12 @@ mod tests {
         assert_eq!(parse_for("5x"), None);
         assert_eq!(fmt_date(0), "1970-01-01");
         assert_eq!(fmt_date(1_794_528_000), "2026-11-13");
+        let b = serde_json::json!({ "name": "Ivan", "onTime": 1_000_000, "price": 300, "level": { "name": "Gold" } });
+        let sub = app::Sub::from_boosty(&b, 7, 3, String::new());
+        assert_eq!(sub.next_for_test(1_000_000 + 86_400), Some((1_000_000 + 30 * 86_400, false)));
+        assert_eq!(sub.next_for_test(1_000_000 + 31 * 86_400), Some((1_000_000 + 60 * 86_400, false)));
+        let b = serde_json::json!({ "onTime": 1_000_000, "nextPayTime": 5_000_000_000_000u64 });
+        assert_eq!(app::Sub::from_boosty(&b, 7, 3, String::new()).next_for_test(2_000_000), Some((5_000_000_000, true)));
         let s = Star { kind: 3, source: "manual".into(), at: 0, until: Some(100) };
         assert!(s.live(99) && !s.live(100));
     }

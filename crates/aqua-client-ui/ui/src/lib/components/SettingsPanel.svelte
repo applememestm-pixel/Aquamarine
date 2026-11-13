@@ -15,6 +15,7 @@
   import { LINKS } from "../links";
   import { NOTES, openWhatsNew } from "./WhatsNew.svelte";
   import { AUTODL_DEFAULT, POWER_DEFAULT, type DblTap } from "../theme";
+  import { SETTINGS_INDEX } from "../settingsIndex";
   import { powerActive, battery, powerMode } from "../power";
   import { autostartEnabled, setAutostart } from "../desktop";
   import { pickFolder } from "../dialog";
@@ -176,6 +177,38 @@
       return [it.label, tr(it.label), sub[0], tr(sub[0]), sub[1]].some((x) => x.toLowerCase().includes(q));
     });
   });
+  /** Settings inside sections (settingsIndex.ts): "Night mode", "Blur
+   *  explicit…" — the search used to find only section names. */
+  const deepHits = $derived.by(() => {
+    const q = navQuery.trim().toLowerCase();
+    if (q.length < 2) return [];
+    const items = new Map<string, Item>(GROUPS.flat().filter(shown).map((it) => [it.id as string, it]));
+    const out: { it: Item; text: string }[] = [];
+    for (const [sec, text] of SETTINGS_INDEX) {
+      const it = items.get(sec);
+      if (!it || out.length >= 30) continue;
+      if (text.toLowerCase().includes(q) || tr(text).toLowerCase().includes(q)) out.push({ it, text });
+    }
+    return out;
+  });
+  /** Open a setting found by the search: its section, scrolled to it, lit up. */
+  async function openSetting(it: Item, text: string) {
+    navQuery = "";
+    phoneSearch = false;
+    openItem(it);
+    const want = tr(text).trim();
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      const el = [...document.querySelectorAll<HTMLElement>(".sheet .label, .sheet .tr-title, .sheet .row-label")]
+        .find((e) => (e.textContent ?? "").trim().startsWith(want));
+      if (!el) continue;
+      const row = (el.closest(".toggle-row, .row, .group") as HTMLElement | null) ?? el;
+      row.scrollIntoView({ block: "center", behavior: "smooth" });
+      row.classList.add("set-flash");
+      setTimeout(() => row.classList.remove("set-flash"), 1800);
+      return;
+    }
+  }
   let navMenu = $state(false);
   /** Phones: the search field shows from the 🔍 in the top bar (Telegram). */
   let phoneSearch = $state(false);
@@ -881,7 +914,7 @@
 
   // ---- graphics mode (gpu.rs) ----
   let gpu = $state<GpuStatus | null>(null);
-  const isLinuxWk = typeof document !== "undefined" && document.documentElement.classList.contains("wk-lowfx");
+  const isLinuxWk = typeof document !== "undefined" && document.documentElement.classList.contains("wk-linux");
   async function toggleDmabuf() {
     if (!gpu) return;
     const on = !gpu.dmabuf;
@@ -1118,7 +1151,15 @@
           {/snippet}
           {#if navQuery.trim()}
             <div class="nav-group">
-              {#each navHits as it (it.id)}{@render navItem(it)}{:else}<div class="nav-none">{$t("Nothing found")}</div>{/each}
+              {#each navHits as it (it.id)}{@render navItem(it)}{/each}
+              {#each deepHits as h (h.it.id + h.text)}
+                <button class="nav-item" onclick={() => void openSetting(h.it, h.text)}>
+                  <span class="tile" style:background={h.it.color}>{@html h.it.icon}</span>
+                  <span class="nav-lbl">{$t(h.text)}<small class="nav-sub">{$t(h.it.label)}</small></span>
+                  <span class="chev">›</span>
+                </button>
+              {/each}
+              {#if !navHits.length && !deepHits.length}<div class="nav-none">{$t("Nothing found")}</div>{/if}
             </div>
           {:else}
           {#each BASIC_GROUPS as g, gi (gi)}
@@ -2393,6 +2434,15 @@
 
       {#if section === "power"}
       <section class="group">
+        <div class="label">{$t("Lightweight mode")}</div>
+        <div class="row">
+          <span class="row-label">{$t("Lighter effects")}</span>
+          <Select class="sel" value={$settings.liteFx ?? "auto"} options={[{ value: "auto", label: $t("Auto (weak devices)") }, { value: "on", label: $t("On") }, { value: "off", label: $t("Off") }]}
+            onchange={(v) => settings.update((x) => ({ ...x, liteFx: v as "auto" | "on" | "off" }))} />
+        </div>
+        <div class="foot-note">{$t("No glass blur, no moving glow, flat shadows, fewer looping animations — smoother on weaker phones and computers. Looks almost the same.")}</div>
+      </section>
+      <section class="group">
         <div class="label">{$t("Power saving mode")} <span class="pill-tag" class:on={$powerActive}>{$powerActive ? $t("ON") : $t("OFF")}</span></div>
         <div class="pw-scale"><span>{$t("Off")}</span><span class="mid">{pwMode > 0 && pwMode < 100 ? $t("When below {n}%", { n: pwMode }) : ""}</span><span>{$t("On")}</span></div>
         <div class="range"><input type="range" min="0" max="100" step="5" value={pwMode}
@@ -3601,4 +3651,6 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .field-col { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
   .field-col > span { font-size: 12px; font-weight: 600; color: var(--fg-muted); }
   .field-col .txt { width: 100%; box-sizing: border-box; }
+  :global(.set-flash) { animation: set-flash 1.8s ease-out; border-radius: calc(12px * var(--rk, 1)); }
+  @keyframes set-flash { 0%, 40% { background: color-mix(in srgb, var(--accent) 22%, transparent); box-shadow: 0 0 0 2px var(--accent); } 100% { background: transparent; box-shadow: 0 0 0 2px transparent; } }
 </style>

@@ -228,9 +228,14 @@ async fn ensure_key(app: &AppHandle, transport: &aqua_client_core::Transport, me
             return None;
         }
     }
-    // Another device has it: ask them (they answer within seconds if online).
-    // Once a minute, not every 10 s: a device of mine that's off found
-    // hundreds of these waiting for it, and worked through them all first.
+    ask_key(app, transport, me).await;
+    None
+}
+
+/// Ask my other devices for the account's history key (they answer within
+/// seconds if online). Once a minute, not every 10 s: a device of mine that's
+/// off found hundreds of these waiting for it, and worked through them all.
+async fn ask_key(app: &AppHandle, transport: &aqua_client_core::Transport, me: &str) {
     static ASKED: StdMutex<Option<std::time::Instant>> = StdMutex::new(None);
     let due = ASKED.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).map(|mut a| {
         let due = a.is_none_or(|t| t.elapsed() >= Duration::from_secs(60));
@@ -240,7 +245,50 @@ async fn ensure_key(app: &AppHandle, transport: &aqua_client_core::Transport, me
     if due {
         crate::multidev::to_my_devices(app, transport, me, HKEYREQ_PREFIX).await;
     }
-    None
+}
+
+/// Start over with this relay: forget what's been seen and stored there, so
+/// everything is fetched and uploaded again (under the current key).
+fn reset_sync(app: &AppHandle, server: &str) {
+    let state: State<'_, StdMutex<AppState>> = app.state();
+    if let Ok(s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
+        let mut st = load(&s);
+        st.cursor.remove(server);
+        st.uploaded.clear();
+        save(&s, &st);
+    }
+    if let Ok(mut p) = PUSHED.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { *p = None; }
+}
+
+/// Is the relay's history ours? The server was cleared, or another device of
+/// mine made a new key meanwhile — then this device used to go on writing
+/// what the others can't read and reading nothing of theirs (a new phone got
+/// stale chats; deletions on it never reached the computer, and back).
+/// Ok(true): go on; Ok(false): wait (asked my devices for the new key).
+async fn check_relay(app: &AppHandle, t: &aqua_client_core::Transport, me: &str, key: &[u8; 32]) -> Result<bool, String> {
+    let server = t.server_url().trim_end_matches('/').to_string();
+    let mine = kid_of(key);
+    match t.hist_get("kid").await.map_err(|e| e.to_string())? {
+        Some(kid) if kid == mine.as_bytes() => Ok(true),
+        None => {
+            // The relay forgot everything: our key goes back (first one wins),
+            // and all of this device's history goes up again.
+            if t.hist_put("kid", mine.into_bytes()).await.is_ok() {
+                tracing::info!("history: the relay was cleared — storing everything again");
+                reset_sync(app, &server);
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+        Some(_) => {
+            // Another device's key stands: take it from them (on_key), then
+            // everything here is stored again under it.
+            tracing::info!("history: the relay has another key of this account — asking my devices for it");
+            ask_key(app, t, me).await;
+            Ok(false)
+        }
+    }
 }
 
 /// `[hkeyreq:v1]` from my other device: give it the key.
@@ -269,8 +317,19 @@ pub fn on_key(app: &AppHandle, body: &str) {
         // Only the key whose id the relay has (the account's one).
         let ok = matches!(t.hist_get("kid").await, Ok(Some(kid)) if kid == kid_of(&key).as_bytes());
         if !ok { return; }
+        let mut replaced = false;
         if let Ok(s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
-            if history_key(&s).is_none() { let _ = s.vault.put_record(KEY_REC, &key); }
+            match history_key(&s) {
+                None => { let _ = s.vault.put_record(KEY_REC, &key); }
+                // Ours is stale (made before the relay was cleared, or by a
+                // device that lost the race): the relay's one wins.
+                Some(old) if old != key => { let _ = s.vault.put_record(KEY_REC, &key); replaced = true; }
+                Some(_) => {}
+            }
+        }
+        if replaced {
+            reset_sync(&app, t.server_url().trim_end_matches('/'));
+            tracing::info!("history key replaced by the account's current one — syncing everything again");
         }
         tracing::info!("history key received from my other device");
         PULL_NOW.notify_one();
@@ -390,6 +449,11 @@ pub fn start(app: &AppHandle) {
                 continue;
             };
             if poked || pull_due {
+                match check_relay(&app, &t, &me, &key).await {
+                    Ok(true) => {}
+                    Ok(false) => { last_pull = std::time::Instant::now(); tokio::time::sleep(Duration::from_secs(8)).await; continue; }
+                    Err(e) => tracing::warn!(%e, "history: relay check failed"),
+                }
                 if let Err(e) = pull(&app, &t, &key).await { tracing::warn!(%e, "history: fetch failed"); }
                 last_pull = std::time::Instant::now();
             }

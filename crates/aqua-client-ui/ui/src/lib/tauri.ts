@@ -106,6 +106,7 @@ export const api = {
   /** Stars (src/stars.rs): someone's statement → its kind if real; my own from my relay. */
   starVerify:         (uid: string, star: unknown): Promise<number | null>          => invoke("star_verify", { uid, star }),
   relayIce:           (): Promise<RTCIceServer | null> => invoke("relay_ice"),
+  marksLive:          (uid: string): Promise<{ star: number | null; check: boolean | null }> => invoke("marks_live", { uid }),
   myStar:             (): Promise<{ uid: string; kind: number; exp: number; sig: string } | null> => invoke("my_star"),
   sendMessage:        (peer_id: string, text: string): Promise<SendResult>        => { noteWrote(peer_id); return invoke("send_message", { peerId: peer_id, text }); },
   verifyFingerprint:  (peer_id: string): Promise<FingerprintView>                  => invoke("verify_fingerprint", { peerId: peer_id }),
