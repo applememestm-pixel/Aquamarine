@@ -818,21 +818,32 @@ async fn deliver(state: &AppState, msg: RelayMessage) {
     if deliver_local(state, &msg).await {
         return;
     }
-    // Federation: maybe they're connected to another relay.
-    if let Some(f) = fed::current(state) {
-        if f.forward(&msg).await {
-            return;
-        }
-    }
     // Kept on disk until the recipient connects (survives restarts; a peer
-    // relay collects it if they connect there — or right away, if they're
-    // connected there and the push above just didn't get through).
-    match serde_json::to_vec(&msg) {
-        Ok(bytes) if state.directory.inbox_push(&msg.to, &bytes).is_ok() => fed::queued_for_absent(state),
-        _ => {
-            let recipient = state.user(&msg.to);
-            recipient.lock().await.inbox.push_back(msg);
-        }
+    // relay collects it if they connect there).
+    let row = serde_json::to_vec(&msg).ok().and_then(|b| state.directory.inbox_push(&msg.to, &b).ok());
+    // Federation: maybe they're connected to another relay. Asked in the
+    // background: a slow or unreachable peer took up to ~40 s here, the
+    // sender's connection waited for it (no reads, no confirmation), its app
+    // gave up after 15 s, reconnected and sent everything again — every
+    // message to someone offline crawled. Delivered there: our copy goes
+    // (a copy that left here meanwhile is dropped by its id on the device).
+    if let Some(f) = fed::current(state) {
+        let state = state.clone();
+        tokio::spawn(async move {
+            if f.forward(&msg).await {
+                if let Some(r) = row { state.directory.inbox_ack(r); }
+                return;
+            }
+            match row {
+                Some(_) => fed::queued_for_absent(&state),
+                None => state.user(&msg.to).lock().await.inbox.push_back(msg),
+            }
+        });
+        return;
+    }
+    if row.is_none() {
+        let recipient = state.user(&msg.to);
+        recipient.lock().await.inbox.push_back(msg);
     }
 }
 
@@ -2773,6 +2784,8 @@ async fn admin_move_datadir(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     admin_authed(&state, &headers).map_err(|c| (c, "unauthorized".into()))?;
     let to = std::path::PathBuf::from(body.path.trim().trim_matches('"'));
+    // Everything into the main database file first (WAL, see Directory::open).
+    state.directory.checkpoint();
     let r = tokio::task::spawn_blocking(move || datadir::move_to(&to)).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     match r {
         Ok(n) => { journal::log("admin", "datadir", format!("copied {n} files")); Ok(Json(serde_json::json!({ "copied": n }))) }

@@ -117,6 +117,17 @@ pub fn http_client() -> Result<reqwest::Client, TransportError> {
         // A home relay's LAN address from outside the home network never
         // answers: give up soon so the next known address gets its turn.
         .connect_timeout(std::time::Duration::from_secs(8))
+        // No request ever had a time limit: a reply that stalled (a pooled
+        // connection the phone's network had silently dropped) hung for
+        // good — and with it the message being sent (device lists are looked
+        // up first) or the whole connect. A stall between two reads ends the
+        // request instead; big files still stream as long as bytes move.
+        .read_timeout(std::time::Duration::from_secs(25))
+        // Mobile networks and home routers forget idle connections within a
+        // minute; reusing one of those is what stalled. Keep them shorter
+        // and probe the ones in use.
+        .pool_idle_timeout(std::time::Duration::from_secs(20))
+        .tcp_keepalive(std::time::Duration::from_secs(15))
         .user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION")))
         // The relay serves only apps from 1.2.0 on (see aqua-server `MIN_VERSION`).
         .default_headers({
@@ -337,6 +348,18 @@ pub struct Transport {
     /// Kept alive so the WS read/write tasks stay running.
     _write_task: tokio::task::JoinHandle<()>,
     _read_task: tokio::task::JoinHandle<()>,
+}
+
+/// A replaced or abandoned connection stops at once. Its tasks used to run
+/// on: the old reader reported "closed" up to a minute later and the app
+/// dropped the new, working connection for it (and again, and again); a
+/// connection whose setup failed went on reading — confirming messages to
+/// the relay that nobody was there to take, so they were lost.
+impl Drop for Transport {
+    fn drop(&mut self) {
+        self._write_task.abort();
+        self._read_task.abort();
+    }
 }
 
 impl std::fmt::Debug for Transport {
@@ -1492,7 +1515,7 @@ impl Transport {
 /// older relay or an account it doesn't know.
 async fn whoami(http: &reqwest::Client, server_url: &str, token: &str) -> Option<(String, String, bool)> {
     let url = format!("{}/v1/me", server_url.trim_end_matches('/'));
-    let r = http.get(&url).bearer_auth(token).send().await.ok()?;
+    let r = http.get(&url).bearer_auth(token).timeout(AUTH_TIMEOUT).send().await.ok()?;
     if !r.status().is_success() {
         return None;
     }
@@ -1547,6 +1570,10 @@ async fn check_server(http: &reqwest::Client, server_url: &str) -> Result<(), Tr
     Ok(())
 }
 
+/// Signing in is a few small requests: a relay that takes longer than this
+/// for one is better tried again (the app reconnects) than waited for.
+const AUTH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 async fn sign_in(
     http: &reqwest::Client,
     server_url: &str,
@@ -1560,6 +1587,7 @@ async fn sign_in(
     // 1) Challenge.
     let chal: ChallengeResponse = http
         .post(format!("{base}/v1/auth/challenge"))
+        .timeout(AUTH_TIMEOUT)
         .json(&ChallengeRequest { identity_dh_pub: dh_pub_b64 })
         .send()
         .await?
@@ -1576,6 +1604,7 @@ async fn sign_in(
     // 3) Verify.
     let verify: VerifyResponse = http
         .post(format!("{base}/v1/auth/verify"))
+        .timeout(AUTH_TIMEOUT)
         .json(&VerifyRequest {
             identity: pub_id,
             nonce: chal.nonce,
@@ -1622,24 +1651,32 @@ fn ws_target(ws_url: &str) -> Result<(String, u16), TransportError> {
 /// TLS (for wss://) is applied by `client_async_tls` either way.
 async fn open_ws(ws_url: &str) -> Result<WsStream, TransportError> {
     let (host, port) = ws_target(ws_url)?;
+    // A network that's gone (Wi-Fi ↔ mobile data) used to hold the connect
+    // for the OS's TCP timeout — up to two minutes of "connecting".
+    let dial = std::time::Duration::from_secs(10);
+    let late = |what: &str| TransportError::BadPayload(format!("{what}: timed out"));
     let stream: Box<dyn Rw> = match proxy() {
         Some(p) => {
             let proxy_addr = p
                 .trim_start_matches("socks5h://")
                 .trim_start_matches("socks5://");
-            let s = tokio_socks::tcp::Socks5Stream::connect(proxy_addr, (host.as_str(), port))
+            let s = tokio::time::timeout(dial, tokio_socks::tcp::Socks5Stream::connect(proxy_addr, (host.as_str(), port)))
                 .await
+                .map_err(|_| late("proxy connect"))?
                 .map_err(|e| TransportError::BadPayload(format!("proxy connect: {e}")))?;
             Box::new(s)
         }
         None => {
-            let s = tokio::net::TcpStream::connect((host.as_str(), port))
+            let s = tokio::time::timeout(dial, tokio::net::TcpStream::connect((host.as_str(), port)))
                 .await
+                .map_err(|_| late("connect"))?
                 .map_err(|e| TransportError::BadPayload(format!("connect: {e}")))?;
             Box::new(s)
         }
     };
-    let (ws, _resp) = tokio_tungstenite::client_async_tls(ws_url, stream).await?;
+    let (ws, _resp) = tokio::time::timeout(std::time::Duration::from_secs(15), tokio_tungstenite::client_async_tls(ws_url, stream))
+        .await
+        .map_err(|_| late("websocket handshake"))??;
     Ok(ws)
 }
 
@@ -1687,28 +1724,48 @@ fn dispatch_frame(tx: &mpsc::UnboundedSender<Incoming>, acks: &Acks, out: &mpsc:
         }
         return;
     }
-    if let Some(id) = &msg.id {
-        if acks.on() {
-            let _ = out.send(RelayMessage::ack(Some(id.clone())));
-        }
-        // The relay sends again what we may not have got; once is enough.
+    let id = msg.id.clone();
+    // The relay sends again what we may not have got; once is enough.
+    if let Some(id) = &id {
         if !first_sighting(id) {
+            if acks.on() {
+                let _ = out.send(RelayMessage::ack(Some(id.clone())));
+            }
             return;
         }
     }
-    match msg.kind {
-        PayloadKind::Ack => {}
+    let handed = match msg.kind {
+        PayloadKind::Ack => true,
         PayloadKind::Initial => match bincode::deserialize::<InitialMessage>(&msg.payload) {
-            Ok(initial) => { let _ = tx.send(Incoming::Initial { from: msg.from, message: initial, ts: msg.ts }); }
-            Err(e) => tracing::warn!(from = %msg.from, "skipping an unreadable first message: {e}"),
+            Ok(initial) => tx.send(Incoming::Initial { from: msg.from, message: initial, ts: msg.ts }).is_ok(),
+            Err(e) => { tracing::warn!(from = %msg.from, "skipping an unreadable first message: {e}"); true }
         },
         PayloadKind::Envelope => match bincode::deserialize::<Envelope>(&msg.payload) {
-            Ok(envelope) => { let _ = tx.send(Incoming::Envelope { from: msg.from, envelope, ts: msg.ts }); }
-            Err(e) => tracing::warn!(from = %msg.from, "skipping an unreadable message: {e}"),
+            Ok(envelope) => tx.send(Incoming::Envelope { from: msg.from, envelope, ts: msg.ts }).is_ok(),
+            Err(e) => { tracing::warn!(from = %msg.from, "skipping an unreadable message: {e}"); true }
         },
         PayloadKind::Plaintext => {
             let text = String::from_utf8_lossy(&msg.payload).to_string();
-            let _ = tx.send(Incoming::Plaintext { from: msg.from, text, ts: msg.ts });
+            tx.send(Incoming::Plaintext { from: msg.from, text, ts: msg.ts }).is_ok()
+        }
+    };
+    // "Got it" only once the app has it: nobody listening (the app let go
+    // of this connection) — the relay keeps it for the next one.
+    if let (Some(id), true) = (id, acks.on()) {
+        if handed {
+            let _ = out.send(RelayMessage::ack(Some(id)));
+        } else {
+            forget_sighting(&id);
+        }
+    }
+}
+
+/// Undo [`first_sighting`]: this one wasn't taken after all.
+fn forget_sighting(id: &str) {
+    if let Ok(mut g) = SEEN.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
+        if let Some((set, order)) = g.as_mut() {
+            set.remove(id);
+            order.retain(|x| x != id);
         }
     }
 }

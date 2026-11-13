@@ -318,6 +318,7 @@ pub async fn connect_to_server(
     transport.upload_bundle(&bundle).await
         .map_err(|e| format!("upload_bundle: {e}"))?;
     let transport = Arc::new(transport);
+    let mine = Arc::downgrade(&transport);
 
     // Publish state and persist the hints so a later launch auto-reconnects.
     {
@@ -351,17 +352,29 @@ pub async fn connect_to_server(
         s.save_connection_hints();
     }
 
-    // Which of my devices get my chats (a new one waits for approval).
-    crate::devtrust::start(&app).await;
-
-    // Spawn incoming task.
+    // Spawn incoming task — first: what waited on the relay comes in now.
     let app_bg = app.clone();
     tokio::spawn(async move {
         while let Some(inc) = incoming.recv().await {
+            // "Closed" from a connection that was replaced already: the
+            // current one is fine — dropping it for this made the link flap.
+            if matches!(inc, aqua_client_core::Incoming::Closed | aqua_client_core::Incoming::Error(_))
+                && !transport_of(&app_bg).is_some_and(|t| std::ptr::eq(Arc::as_ptr(&t), mine.as_ptr()))
+            {
+                tracing::info!("an earlier connection closed — the current one stays");
+                continue;
+            }
             handle_incoming(&app_bg, inc).await;
         }
         tracing::info!("incoming stream ended");
     });
+    // Which of my devices get my chats — in the background. It used to be
+    // awaited right here, before the incoming task above: a slow device
+    // list held every waiting message (and "connecting…") until it came.
+    {
+        let app_dt = app.clone();
+        tokio::spawn(async move { crate::devtrust::start(&app_dt).await });
+    }
     // My other devices get what they lack of my chats, and I get theirs.
     crate::history_sync::start(&app);
     // Messages written while offline go out now (mesh.rs).
@@ -373,6 +386,12 @@ pub async fn connect_to_server(
 
     let info = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).init_info();
     Ok(info)
+}
+
+/// The live connection, if any.
+fn transport_of(app: &AppHandle) -> Option<Arc<Transport>> {
+    let state: State<'_, StdMutex<AppState>> = app.state();
+    state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|s| s.transport.clone())
 }
 
 // ---------- User directory: email registration + search --------------------
@@ -4077,6 +4096,11 @@ async fn on_incoming_initial(
     message: aqua_core::wire::InitialMessage,
 ) {
     let state: State<'_, StdMutex<AppState>> = app.state();
+    // A second copy of a first message (relay + Bluetooth / Wi-Fi): taken
+    // again it would replace the session with a fresh one — back to its start.
+    if crate::multidev::already_decrypted(&message.ciphertext) {
+        return;
+    }
 
     // Consume SPK + optional OPK from the vault under the lock.
     let (identity_clone, spk, opk) = {
@@ -4097,6 +4121,7 @@ async fn on_incoming_initial(
         Ok(x) => x,
         Err(e) => { tracing::warn!(?e, "accept_initial failed"); return }
     };
+    crate::multidev::note_decrypted(&message.ciphertext);
     let plain_text = String::from_utf8_lossy(&plain).to_string();
 
     // The session belongs to the sender's DEVICE; the chat to the account.
@@ -4133,7 +4158,10 @@ async fn on_incoming_envelope(
         let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let plain = {
             let Some(session) = s.sessions.get_mut(&addr) else {
-                tracing::warn!(peer = %addr, "envelope for unknown session");
+                drop(s);
+                if crate::multidev::already_decrypted(&envelope.ciphertext) { return; }
+                tracing::warn!(peer = %addr, "envelope for unknown session — starting a new one with the device");
+                crate::multidev::repair_session(app, &addr);
                 return;
             };
             match session.decrypt(&envelope) {
@@ -4153,10 +4181,18 @@ async fn on_incoming_envelope(
                         tracing::info!(peer = %addr, "message from the previous session — switched back to it");
                         p
                     }
-                    _ => { tracing::warn!(?e, "decrypt failed"); return }
+                    _ => {
+                        drop(s);
+                        // A second copy of what already came: nothing wrong.
+                        if crate::multidev::already_decrypted(&envelope.ciphertext) { return; }
+                        tracing::warn!(?e, peer = %addr, "decrypt failed — starting a new session with the device");
+                        crate::multidev::repair_session(app, &addr);
+                        return;
+                    }
                 },
             }
         };
+        crate::multidev::note_decrypted(&envelope.ciphertext);
         if let Some(session) = s.sessions.get(&addr) {
             if let Err(e) = s.vault.save_session(&addr, session) {
                 tracing::warn!(?e, "save_session after decrypt");
@@ -4230,12 +4266,16 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
     if let Some(dh) = peer_dh {
         if !crate::devlists::allowed(app, &from, &dh) {
             let t = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|s| s.transport.clone());
-            if let Some(t) = &t {
-                crate::devlists::refresh(app, t, &from, true).await;
-            }
             // Not on the list yet, but signed in to their account: a new
-            // phone of theirs (multidev::device_ok).
+            // phone of theirs (multidev::device_ok; its device list is
+            // cached). Asked first: the list used to be fetched afresh for
+            // every single message from such a device, one after another.
             let relay_has = match &t { Some(t) => crate::multidev::device_ok(app, t, &from, addr, &dh).await, None => false };
+            if !relay_has {
+                if let Some(t) = &t {
+                    crate::devlists::refresh(app, t, &from, false).await;
+                }
+            }
             if !relay_has && !crate::devlists::allowed(app, &from, &dh) {
                 tracing::warn!(%addr, "a message from a device that isn't on the sender's signed list — dropped");
                 let _ = app.emit("aqua://devlist_refused", serde_json::json!({ "user": from, "why": "unlisted device" }));
@@ -4301,6 +4341,10 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
 
     // UI controls (event RSVPs, task ticks…).
     if let Some(body) = text.strip_prefix(CTL_PREFIX) {
+        // Only opened a fresh session (multidev::repair_session).
+        if body == crate::multidev::RESET_BODY {
+            return;
+        }
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
             let _ = app.emit("aqua://ctl", serde_json::json!({ "from": from, "chat": from, "body": v }));
         }

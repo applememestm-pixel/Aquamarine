@@ -50,6 +50,16 @@ static BOOK: StdMutex<Option<(std::path::PathBuf, Book)>> = StdMutex::new(None);
 static CHECKED: StdMutex<Option<HashMap<String, Instant>>> = StdMutex::new(None);
 
 fn with_book<R>(app: &AppHandle, f: impl FnOnce(&mut Book) -> R) -> Option<R> {
+    book_op(app, true, f)
+}
+
+/// Read only: no write to disk. `allowed` runs for every message sent and
+/// received, and used to rewrite the whole file each time.
+fn read_book<R>(app: &AppHandle, f: impl FnOnce(&Book) -> R) -> Option<R> {
+    book_op(app, false, |b| f(b))
+}
+
+fn book_op<R>(app: &AppHandle, write: bool, f: impl FnOnce(&mut Book) -> R) -> Option<R> {
     let dir = {
         let state: State<'_, StdMutex<AppState>> = app.state();
         let s = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok()?;
@@ -62,8 +72,10 @@ fn with_book<R>(app: &AppHandle, f: impl FnOnce(&mut Book) -> R) -> Option<R> {
     }
     let (dir, book) = g.as_mut()?;
     let r = f(book);
-    if let Ok(b) = serde_json::to_vec(book) {
-        let _ = crate::fsx::write_atomic(&dir.join(FILE), &b);
+    if write {
+        if let Ok(b) = serde_json::to_vec(book) {
+            let _ = crate::fsx::write_atomic(&dir.join(FILE), &b);
+        }
     }
     Some(r)
 }
@@ -74,7 +86,7 @@ fn now() -> i64 {
 
 /// The accepted list of `user`, if any.
 pub fn accepted(app: &AppHandle, user: &str) -> Option<SignedDeviceList> {
-    with_book(app, |b| b.lists.get(user).cloned()).flatten()
+    read_book(app, |b| b.lists.get(user).cloned()).flatten()
 }
 
 /// May I encrypt to / take messages from this device key of `user`?
@@ -146,7 +158,7 @@ pub async fn refresh(app: &AppHandle, transport: &Transport, user: &str, force: 
 /// Users whose device list was reset and who weren't looked at yet.
 #[tauri::command]
 pub fn devlist_resets(app: AppHandle) -> Vec<String> {
-    with_book(&app, |b| b.resets.keys().cloned().collect()).unwrap_or_default()
+    read_book(&app, |b| b.resets.keys().cloned().collect()).unwrap_or_default()
 }
 
 /// The warning about `user` was seen.

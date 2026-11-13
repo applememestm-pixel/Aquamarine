@@ -49,7 +49,7 @@ static PULL_NOW: tokio::sync::Notify = tokio::sync::Notify::const_new();
 /// chat id → (version of what was last checked for upload); "\0groups" too.
 static PUSHED: StdMutex<Option<HashMap<String, u64>>> = StdMutex::new(None);
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct SyncState {
     /// server url → the last seq seen there.
     #[serde(default)]
@@ -83,13 +83,32 @@ enum Rec {
     Groups { groups: Vec<Group> },
 }
 
+/// The file, kept in memory: the sync loop looked at it every 2 s — read
+/// and parsed from disk (tombstones and all) while holding the app's lock,
+/// so sending and receiving waited for it.
+static CACHE: StdMutex<Option<(std::path::PathBuf, SyncState)>> = StdMutex::new(None);
+
 fn load(s: &AppState) -> SyncState {
-    std::fs::read(s.data_dir.join(FILE)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+    let path = s.data_dir.join(FILE);
+    if let Ok(g) = CACHE.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
+        if let Some((_, st)) = g.as_ref().filter(|(p, _)| *p == path) {
+            return st.clone();
+        }
+    }
+    let st: SyncState = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    if let Ok(mut g) = CACHE.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
+        *g = Some((path, st.clone()));
+    }
+    st
 }
 
 fn save(s: &AppState, st: &SyncState) {
+    let path = s.data_dir.join(FILE);
     if let Ok(b) = serde_json::to_vec(st) {
-        let _ = crate::fsx::write_atomic(&s.data_dir.join(FILE), &b);
+        let _ = crate::fsx::write_atomic(&path, &b);
+    }
+    if let Ok(mut g) = CACHE.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
+        *g = Some((path, st.clone()));
     }
 }
 
@@ -210,7 +229,17 @@ async fn ensure_key(app: &AppHandle, transport: &aqua_client_core::Transport, me
         }
     }
     // Another device has it: ask them (they answer within seconds if online).
-    crate::multidev::to_my_devices(app, transport, me, HKEYREQ_PREFIX).await;
+    // Once a minute, not every 10 s: a device of mine that's off found
+    // hundreds of these waiting for it, and worked through them all first.
+    static ASKED: StdMutex<Option<std::time::Instant>> = StdMutex::new(None);
+    let due = ASKED.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).map(|mut a| {
+        let due = a.is_none_or(|t| t.elapsed() >= Duration::from_secs(60));
+        if due { *a = Some(std::time::Instant::now()); }
+        due
+    }).unwrap_or(true);
+    if due {
+        crate::multidev::to_my_devices(app, transport, me, HKEYREQ_PREFIX).await;
+    }
     None
 }
 

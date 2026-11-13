@@ -30,6 +30,7 @@
 ## Ловушки
 - Новый формат сообщения → `compat.ts::KNOWN`. Служебная приставка → `commands.rs::is_control_text`.
 - Удаление сообщений → `history_sync::tombstone`. Отправка своим устройствам → `multidev::send_to_own`.
+- Нерасшифрованное сообщение не отбрасывать молча — `multidev::repair_session` (копии узнаёт `already_decrypted`). `Closed` старого `Transport` игнорируется (`connect_to_server`), `Drop` гасит его задачи — иначе связь «мигает».
 - Списки — только `Select.svelte`. Скругления — `calc(Npx * var(--rk, 1))`. Окна: крестик `data-x`, панель `data-back` (`lib/back.ts`).
 - «Сложная» настройка → `SettingsPanel.svelte::ADVANCED`. Платформа — `lib/platform.ts` (`IS_MOBILE`/`IS_DESKTOP`), не ширина окна.
 - Цвета — только через переменные темы (`theme.ts`), карточка профиля — `cardStyle.ts::cardLook` + класс `.light`.

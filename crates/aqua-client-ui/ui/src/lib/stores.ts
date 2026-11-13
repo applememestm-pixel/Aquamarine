@@ -184,13 +184,12 @@ export async function bootstrap() {
 
   // Wire live event listeners.
   events.onIncoming(async (p) => {
-    // Refresh chat list + messages for the affected peer.
-    const updated = await api.listChats();
-    chats.set(updated);
+    // Refresh chat list + messages for the affected peer — once for a burst
+    // (what waited on the relay arrives all at once after reconnecting; a
+    // full reload per message kept the app busy for seconds).
+    refreshChatsSoon();
     const isActive = get(activeId) === p.peer_id;
-    if (isActive) {
-      await loadActiveMessages();
-    }
+    if (isActive) refreshActiveSoon();
     // Notify (sound + desktop) for messages that aren't in the chat
     // you're actively looking at.
     // Archived + unmuted chats pop back out; muted chats stay silent.
@@ -201,12 +200,11 @@ export async function bootstrap() {
     const { mayWriteMe } = await import("./privacy");
     if (!isActive && !prefs.isMuted(p.peer_id) && mayWriteMe(p.peer_id)) notifyIncoming(p.peer_id, p.text);
     // Refresh info (opk count, etc.)
-    api.initApp().then((i) => info.set(i)).catch(() => {});
+    refreshInfoSoon();
   });
-  events.onChatsUpdated(async () => {
-    const updated = await api.listChats();
-    chats.set(updated);
-    api.initApp().then((i) => info.set(i)).catch(() => {});
+  events.onChatsUpdated(() => {
+    refreshChatsSoon();
+    refreshInfoSoon();
   });
   // Auto-delete timers removed messages.
   listen<{ peer_id: string }>("aqua://expired", async (e) => {
@@ -239,6 +237,27 @@ export async function bootstrap() {
     void reconnectLoop();
   });
 }
+
+/** Run `fn` once for a burst of calls: shortly after the first, and once
+ *  more if more came while it ran. */
+function coalesced(fn: () => Promise<unknown>, wait = 100): () => void {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let busy = false;
+  let again = false;
+  const run = async () => {
+    timer = null;
+    if (busy) { again = true; return; }
+    busy = true;
+    try { await fn(); } catch { /* the next event retries */ }
+    busy = false;
+    if (again) { again = false; schedule(); }
+  };
+  const schedule = () => { if (!timer) timer = setTimeout(run, wait); };
+  return schedule;
+}
+const refreshChatsSoon = coalesced(async () => chats.set(await api.listChats()));
+const refreshActiveSoon = coalesced(() => loadActiveMessages());
+const refreshInfoSoon = coalesced(async () => info.set(await api.initApp()), 400);
 
 let reconnecting = false;
 /** Set when the network came back: the loop skips its current pause. */
