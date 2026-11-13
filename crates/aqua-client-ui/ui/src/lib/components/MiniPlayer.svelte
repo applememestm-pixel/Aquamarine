@@ -31,17 +31,20 @@
 {/if}
 
 <style>
+  /* The menus' look (pop-ups, the account sheet): the shell colour as
+     solid as Settings → See-through menus says, frosted, a thin border. */
   .mp {
     position: relative; flex-shrink: 0;
     display: flex; align-items: center; gap: 4px;
-    height: 42px; margin: 6px 12px 2px; padding: 0 4px 0 8px;
-    border-radius: calc(21px * var(--rk, 1));
-    background: color-mix(in srgb, var(--bg-input) 88%, transparent);
-    backdrop-filter: blur(var(--glass-blur, 12px)); -webkit-backdrop-filter: blur(var(--glass-blur, 12px));
+    height: 44px; margin: 6px 10px 4px; padding: 0 4px 0 8px;
+    border-radius: calc(22px * var(--rk, 1));
+    background: color-mix(in srgb, var(--bg-shell) var(--menu-alpha, 82%), transparent);
+    backdrop-filter: blur(24px) saturate(1.5); -webkit-backdrop-filter: blur(24px) saturate(1.5);
+    border: 1px solid var(--border-strong);
+    box-shadow: 0 10px 30px -18px rgba(0, 0, 0, 0.8);
     overflow: hidden;
   }
-  /* In a chat: a full-width strip under the pinned message. */
-  .mp.in-chat { margin: 0; border-radius: 0; border-bottom: 1px solid var(--border); background: var(--bg-list); }
+  .mp.in-chat { margin: 6px 10px 2px; }
   .mp-play, .mp-x {
     width: 34px; height: 34px; flex-shrink: 0; padding: 0; border: none; background: none;
     display: grid; place-items: center; cursor: pointer;
@@ -61,5 +64,4 @@
     background: var(--accent); pointer-events: none;
     transition: width 0.25s linear;
   }
-  .mp:not(.in-chat) .mp-bar { display: none; }
 </style>

@@ -415,7 +415,7 @@ html.autoscrolling.as-down, html.autoscrolling.as-down * { cursor: url("data:ima
 /* Settings → Appearance → See-through menus: frosted glass for menus,
    pop-ups and dialogs. --menu-alpha is how solid they stay. */
 html.glass-menus :is(.ctx-menu, .chat-ctx, .room-menu, .attach-pop, .plus-pop, [role="menu"],
-  .cp-pop, .bd-pop, .panel, .pm, [role="dialog"][aria-modal="true"], .toast) {
+  .cp-pop, .bd-pop, .panel, .pm, [role="dialog"][aria-modal="true"], .toast, .mp) {
   background: color-mix(in srgb, var(--bg-shell) var(--menu-alpha, 70%), transparent) !important;
   backdrop-filter: blur(22px) saturate(1.5);
   -webkit-backdrop-filter: blur(22px) saturate(1.5);
@@ -427,7 +427,7 @@ html.glass-menus :is([role="dialog"][aria-modal="true"], .pm) :is(.card, .group,
 }
 /* WebKitGTK paints blur on the CPU: keep the see-through, skip the blur. */
 html.wk-lowfx.glass-menus :is(.ctx-menu, .chat-ctx, .room-menu, .attach-pop, .plus-pop, [role="menu"],
-  .cp-pop, .bd-pop, .panel, .pm, [role="dialog"][aria-modal="true"], .toast) {
+  .cp-pop, .bd-pop, .panel, .pm, [role="dialog"][aria-modal="true"], .toast, .mp) {
   backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
 }
 
