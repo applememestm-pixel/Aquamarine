@@ -133,10 +133,7 @@ pub fn run() -> Result<()> {
                 std::thread::spawn(move || loop {
                     std::thread::sleep(std::time::Duration::from_secs(3));
                     let st = handle.state::<std::sync::Mutex<state::AppState>>();
-                    let guard = st.lock().or_else(|e| Ok::<_, ()>(e.into_inner()));
-                    if let Ok(mut s) = guard {
-                        history::flush(&mut s);
-                    }
+                    history::flush_unlocked(&st);
                 });
             }
             commands::spawn_activity_watcher(app.handle().clone());

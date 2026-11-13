@@ -415,13 +415,13 @@
   .range { display: flex; align-items: center; gap: 10px; flex: 1; }
   .range input[type="range"] { flex: 1; accent-color: var(--accent); }
   .range-val { min-width: 48px; text-align: right; font-variant-numeric: tabular-nums; color: var(--fg-muted); font-size: 12px; }
-  .sel, .txt {
+  .txt {
     flex: 1; min-width: 0;
     background: var(--bg-input); color: var(--fg);
     border: 1px solid var(--border); border-radius: calc(8px * var(--rk, 1));
     padding: 7px 9px; font-size: 13px; font-family: inherit;
   }
-  .sel:focus, .txt:focus { outline: none; border-color: var(--accent); }
+  .txt:focus { outline: none; border-color: var(--accent); }
   .btn {
     background: var(--bg-input); color: var(--fg);
     border: 1px solid var(--border-strong); border-radius: calc(8px * var(--rk, 1));

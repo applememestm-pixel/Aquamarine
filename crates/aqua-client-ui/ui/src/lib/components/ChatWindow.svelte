@@ -36,7 +36,9 @@
   import { tick, onMount, untrack } from "svelte";
   import { chatThemes, themeStyle } from "../chatTheme";
   import ChatThemeSheet from "./ChatThemeSheet.svelte";
-  import { slide } from "svelte/transition";
+  import { slide, scale as scaleIn, fade } from "svelte/transition";
+  import { backOut } from "svelte/easing";
+  import { motionMs } from "../motion";
   import { SvelteSet } from "svelte/reactivity";
   import { askConfirm } from "./Confirm.svelte";
   import { askSend, VIDEO_RE, type SendMode } from "./SendDialog.svelte";
@@ -908,7 +910,9 @@
       }
     }
     // Nothing went out: keep the caption as a message rather than lose it.
-    if (cap && ok) await sendCurrent(cap);
+    // (`cap` is left only when no file took it — it said `&& ok`, which
+    // could never be true together with it, and the caption was lost.)
+    if (cap && !ok) await sendCurrent(cap);
     await loadActiveMessages();
     if (fail === 0) {
       showToast(ok === 1 ? tr("File sent") : `${ok} files sent`);
@@ -1217,9 +1221,10 @@
       queueMicrotask(() => autoresize());
       if (t === et.old) return; // no change
       try {
-        await api.editMessage(chat.id, et.old, t);
+        const at = await api.editMessage(chat.id, et.old, t, et.id);
         if (chat.id !== "__saved__") {
-          void sendChatControl(chat.id, "[edit:v1]" + JSON.stringify({ old: et.old, new: t })).catch(() => {});
+          // `at`: which of several same-text messages (older apps ignore it).
+          void sendChatControl(chat.id, "[edit:v1]" + JSON.stringify({ old: et.old, new: t, ...(at ? { at } : {}) })).catch(() => {});
         }
         await loadActiveMessages();
         chats.set(await api.listChats());
@@ -1274,10 +1279,17 @@
       : t;
     const err = await sendCurrent(payload);
     if (err) {
-      // Restore the message + reply target so nothing is lost.
-      text = original;
-      replyTarget = rt;
-      queueMicrotask(() => autoresize());
+      // Restore the message + reply target so nothing is lost — in front of
+      // whatever was typed while it was going out (that used to be wiped).
+      if (chat && $activeChat?.id !== chat.id) {
+        // Another chat is open by now: back into this one's draft, not into
+        // the field of the other.
+        drafts.update((d) => ({ ...d, [chat.id]: d[chat.id]?.trim() ? `${original}\n${d[chat.id]}` : original }));
+      } else {
+        text = text.trim() ? `${original}\n${text}` : original;
+        replyTarget = replyTarget ?? rt;
+        queueMicrotask(() => autoresize());
+      }
       showToast(tr(err), 6000);
     } else if (chat?.id.startsWith("grp_")) {
       armSlowMode(chat.id);
@@ -2633,11 +2645,11 @@
   function cancelReply() { replyTarget = null; }
 
   // ---- Edit / delete ----
-  let editTarget = $state<{ old: string } | null>(null);
+  let editTarget = $state<{ old: string; id?: string } | null>(null);
   function startEdit(row: Row) {
     const t = textOf(row);
     if (t == null) { closeMenu(); return; }
-    editTarget = { old: t };
+    editTarget = { old: t, id: row.id };
     replyTarget = null;
     text = t;
     closeMenu();
@@ -2665,12 +2677,17 @@
       const text = saved ? undefined : grp ? tr("It disappears for all members.") : tr("It disappears for {name} too.", { name: chat.name });
       if (!(await askConfirm({ title, text, ok: tr("Delete"), danger: true }))) return;
     }
+    // They fade out while the deletion goes out (the list then closes up).
+    const ids = list.map((r) => r.id);
+    const fadeUntil = Date.now() + motionMs(220);
+    vanishing = new Set([...vanishing, ...ids]);
     let failed = 0;
     if (!saved) {
-      let keys: { id: string; key: string; author: string; preview: string }[] = [];
+      let keys: { id: string; key: string; author: string; preview: string; at?: number | null }[] = [];
       try { keys = await api.messageKeys(chat.id, list.map((r) => r.id)); } catch { failed++; }
       for (const k of keys) {
-        try { await sendChatControl(chat.id, "[del:v1]" + JSON.stringify({ text: k.key, author: k.author })); } catch { failed++; }
+        // `at`: which of several same-text messages (older apps ignore it).
+        try { await sendChatControl(chat.id, "[del:v1]" + JSON.stringify({ text: k.key, author: k.author, ...(k.at ? { at: k.at } : {}) })); } catch { failed++; }
       }
       if (grp && g && keys.length && isAdmin(g, myUsername)) {
         const next = JSON.parse(JSON.stringify(g)) as typeof g;
@@ -2679,11 +2696,16 @@
         void api.updateGroup(next).then(() => refreshGroups()).catch(() => {});
       }
     }
-    try { await api.deleteMessagesLocal(chat.id, list.map((r) => r.id)); } catch { failed++; }
+    const wait = fadeUntil - Date.now();
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    try { await api.deleteMessagesLocal(chat.id, ids); } catch { failed++; }
     if (failed) showToast(tr("Some messages could not be deleted"));
     await loadActiveMessages();
+    const left = new Set(vanishing); for (const id of ids) left.delete(id); vanishing = left;
     chats.set(await api.listChats());
   }
+  /** Rows on their way out (deleteRows). */
+  let vanishing = $state<Set<string>>(new Set());
   async function deleteSelection() {
     const list = rows.filter((r) => selected.has(r.id));
     clearSelection();
@@ -3357,7 +3379,7 @@
 {#snippet statusTick(outgoing: boolean, id?: string)}
   {#if outgoing}
     {@const rd = id !== undefined && (seenIds.has(id) || answeredIds.has(id))}
-    <span class="rr" class:read={rd}>{@html rd ? icons.checkDouble : icons.check}</span>
+    {#key rd}<span class="rr" class:read={rd} in:scaleIn={{ start: 0.5, duration: motionMs(240), easing: backOut }}>{@html rd ? icons.checkDouble : icons.check}</span>{/key}
   {/if}
 {/snippet}
 
@@ -3569,7 +3591,7 @@
         <div class="peer-status">
           {#if isGroup && activeGroup}
             {#if typingPeers.has($activeChat.id) && typingWho[$activeChat.id]}
-              <span class="typing-ind">{typingWho[$activeChat.id]} {$t("typing…")}</span>
+              <span class="typing-ind" in:fade={{ duration: motionMs(160) }}>{typingWho[$activeChat.id]} {$t("typing")}<span class="tdots" aria-hidden="true"><i></i><i></i><i></i></span></span>
               <span class="sep">·</span>
             {/if}
             {#if activeRoom}<span class="grp-title-m">{$activeChat.name}</span>{/if}
@@ -3589,7 +3611,7 @@
             <span class="e2ee">{@html icons.lock} encrypted</span>
           {:else}
           {#if typingPeers.has($activeChat.id)}
-            <span class="typing-ind">{$t("typing…")}</span>
+            <span class="typing-ind" in:fade={{ duration: motionMs(160) }}>{$t("typing")}<span class="tdots" aria-hidden="true"><i></i><i></i><i></i></span></span>
             <span class="sep">·</span>
           {:else if $peerPresence[$activeChat.id]?.activity?.[0] && peerStatus($peerPresence[$activeChat.id], $presenceNow) !== "offline"}
             {@const a = $peerPresence[$activeChat.id].activity![0]}
@@ -3857,6 +3879,7 @@
             class:first={m.first}
             class:last={m.last}
             class:fresh={fresh.has(m.id)}
+            class:vanishing={vanishing.has(m.id)}
             class:selected={selected.has(m.id)}
             class:search-hit={searchOpen && searchHitSet.has(m.id)}
             class:search-current={searchOpen && m.id === currentHitId}
@@ -4303,8 +4326,8 @@
                     {#each chips as chip (chip.emoji)}
                       {@const ru = reactionUrl(chip.emoji, $reactionPack.items)}
                       {@const src = reactionSource(chip.emoji)}
-                      <button class="reaction-chip" class:mine={chip.mine} onclick={() => toggleChipReaction(m, chip.emoji)} oncontextmenu={(e) => reactionInfo(e, chip.emoji)} title={src ? tr("From “{title}” — right-click for the pack", { title: src.title }) : parseReaction(chip.emoji).emoji}>
-                        {#if ru}<span class="rc-media"><AnimatedMedia src={ru.url} mime={ru.mime} alt={parseReaction(chip.emoji).emoji} play="auto" /></span>{:else}{parseReaction(chip.emoji).emoji}{/if}{#if chip.count > 1}<span class="rc-count">{chip.count}</span>{/if}
+                      <button class="reaction-chip" class:mine={chip.mine} onclick={() => toggleChipReaction(m, chip.emoji)} oncontextmenu={(e) => reactionInfo(e, chip.emoji)} title={src ? tr("From “{title}” — right-click for the pack", { title: src.title }) : parseReaction(chip.emoji).emoji} in:scaleIn={{ start: 0.3, duration: motionMs(280), easing: backOut }}>
+                        {#if ru}<span class="rc-media"><AnimatedMedia src={ru.url} mime={ru.mime} alt={parseReaction(chip.emoji).emoji} play="auto" /></span>{:else}{parseReaction(chip.emoji).emoji}{/if}{#if chip.count > 1}{#key chip.count}<span class="rc-count" in:scaleIn={{ start: 0.5, duration: motionMs(220), easing: backOut }}>{chip.count}</span>{/key}{/if}
                       </button>
                     {/each}
                   </div>
@@ -5271,6 +5294,11 @@
   /* Sent: floats up out of the message field and settles — no overshoot,
      transform/opacity only (stays on the compositor, no layout jank). */
   .msg.out.fresh .bubble { animation: msg-send 0.42s cubic-bezier(.16, 1, .3, 1); }
+  /* Deleted: shrinks into itself and fades (transform/opacity only). */
+  .msg.vanishing { animation: msg-vanish .22s var(--ease-out) forwards; pointer-events: none; }
+  .msg.out.vanishing { transform-origin: right center; }
+  .msg.in.vanishing { transform-origin: left center; }
+  @keyframes msg-vanish { to { opacity: 0; transform: scale(.92); } }
   @keyframes msg-in {
     from { opacity: 0; transform: translateY(10px) scale(0.98); }
     to   { opacity: 1; transform: none; }
@@ -5360,7 +5388,6 @@
     color: var(--accent);
   }
   .file-icon :global(svg) { width: 20px; height: 20px; }
-  .msg.out .file-icon { background: rgba(255,255,255,0.08); color: var(--fg); }
   .file-meta { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .file-name {
     font-weight: 600;
@@ -5398,7 +5425,6 @@
     color: var(--fg-dim);
     font-style: italic;
   }
-  .msg.out .file-saved { color: rgba(255,255,255,0.55); }
 
   /* Drag-and-drop overlay. */
   .messages.drag-over {
@@ -6080,7 +6106,13 @@
   .ctx-item:hover { background: var(--accent-soft); color: var(--accent); }
   .ctx-item.danger { color: #ff8f8f; }
   .ctx-item.danger:hover { background: rgba(255,77,109,0.1); color: #ff6b6b; }
-  .typing-ind { color: var(--accent); font-weight: 600; }
+  .typing-ind { color: var(--accent); font-weight: 600; display: inline-flex; align-items: baseline; }
+  /* "typing" + three dots that rise in turn (Telegram). */
+  .tdots { display: inline-flex; gap: 2px; margin-left: 3px; }
+  .tdots i { width: 3.5px; height: 3.5px; border-radius: 50%; background: currentColor; animation: tdot 1.2s ease-in-out infinite; }
+  .tdots i:nth-child(2) { animation-delay: .15s; }
+  .tdots i:nth-child(3) { animation-delay: .3s; }
+  @keyframes tdot { 0%, 60%, 100% { opacity: .35; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
   .ctx-reactions {
     display: flex; gap: 2px; padding: 4px 4px 6px; margin-bottom: 4px;
     border-bottom: 1px solid var(--border); flex-wrap: wrap;
@@ -6236,7 +6268,6 @@
     /* "Group · 3 members" always fits: the group name gives way first. */
     .peer-status { min-width: 0; overflow: hidden; white-space: nowrap; }
     .peer-status .group-sub { flex-shrink: 0; white-space: nowrap; }
-    .active-chat.with-rooms .chat-actions .group-gear { display: none; }
   }
   @media (min-width: 761px) { .room-switch { pointer-events: none; } }
   @media (max-width: 760px) {
@@ -6368,10 +6399,6 @@
   .nlb-sub :global(b) { color: var(--fg); }
 
   /* Composer */
-  .composer.disabled .composer-input {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
   .composer {
     display: flex;
     align-items: flex-end;
@@ -6523,15 +6550,6 @@
     backdrop-filter: blur(12px);
   }
   .composer-note :global(svg) { width: 11px; height: 11px; color: var(--accent); }
-  .composer-note kbd {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    background: rgba(255,255,255,0.04);
-    padding: 1px 5px;
-    border-radius: 3px;
-    border: 1px solid var(--border);
-    color: var(--fg-muted);
-  }
   .kbds { margin-left: auto; }
   .channel-mute.danger-txt { color: var(--danger, #FF4D6D); }
   /* A channel post and its comment bar are one block, as wide as the wider of the two. */

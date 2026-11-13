@@ -112,11 +112,3 @@ export function updateProfile(patch: Partial<Profile>, adopt = false) {
   }
 }
 
-export function resetProfile() {
-  profile.set({ ...DEFAULTS });
-}
-
-/** Short helper to read without subscribing. */
-export function currentProfile(): Profile {
-  return get(profile);
-}

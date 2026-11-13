@@ -177,7 +177,6 @@ export async function unpinStory(id: string) {
   const { broadcastPresence } = await import("./presence");
   broadcastPresence();
 }
-export const isPinned = (id: string) => get(pinnedStories).some((p) => p.id === id || p.from === id);
 
 export interface PostOptions { caption?: string; aud?: StoryAudience; sel?: string[]; hours?: number }
 

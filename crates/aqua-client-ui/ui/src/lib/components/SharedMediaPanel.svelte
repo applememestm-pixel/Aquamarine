@@ -1,7 +1,6 @@
 <script module lang="ts">
   import { writable } from "svelte/store";
   export const sharedMediaOpen = writable(false);
-  export function openSharedMedia() { sharedMediaOpen.set(true); }
   export function closeSharedMedia() { sharedMediaOpen.set(false); }
   export function toggleSharedMedia() { sharedMediaOpen.update((v) => !v); }
 </script>

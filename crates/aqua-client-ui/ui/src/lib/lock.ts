@@ -88,12 +88,6 @@ export async function setPasscode(pass: string, autoMin = 5, kind: "pin" | "pass
   locked.set(false);
 }
 
-export async function removePasscode() {
-  try { await invoke("applock_clear"); } catch { /* locked: nothing */ }
-  lockConf.set(null);
-  locked.set(false);
-}
-
 export function setAutoLock(min: number) {
   const c = get(lockConf);
   if (!c) return;

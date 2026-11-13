@@ -425,15 +425,41 @@ impl Fed {
     /// Envelopes that peers kept for `user` (they drop them once sent).
     pub async fn collect_inbox(&self, user: &str) -> Vec<RelayMessage> {
         let path = format!("/v1/fed/inbox/{user}");
-        let mut out = Vec::new();
-        for p in &self.cfg.peers {
-            if let Some(r) = self.get(p, &path).await {
-                if let Ok(list) = r.json::<Vec<RelayMessage>>().await {
-                    out.extend(list);
-                }
+        // All peers at once (one by one, every slow one added its wait).
+        let users = [user.to_string()];
+        let tries = self.cfg.peers.iter().map(|p| {
+            let (path, users) = (path.clone(), &users);
+            async move {
+                if let Some(got) = self.take_kept(p, users).await { return Some(got); }
+                // A peer from before 1.20.1-8: it hands them over and forgets them.
+                self.get(p, &path).await?.json::<Vec<RelayMessage>>().await.ok()
             }
+        });
+        futures_util::future::join_all(tries).await.into_iter().flatten().flatten().collect()
+    }
+
+    /// What `peer` keeps for `users`, without it forgetting them before we
+    /// have them: it lists them (`/v1/fed/inboxes2`), we confirm what came
+    /// (`/v1/fed/inbox_ack`) and only then it deletes. The old endpoints
+    /// deleted while answering — a reply lost on the way (a timeout, a
+    /// tunnel that dropped) lost the messages with it. None: not supported
+    /// there (or not reachable).
+    async fn take_kept(&self, peer: &str, users: &[String]) -> Option<Vec<RelayMessage>> {
+        let body = serde_json::to_vec(&serde_json::json!({ "users": users })).ok()?;
+        let r = self.post(peer, "/v1/fed/inboxes2", body).await?;
+        let rows: Vec<serde_json::Value> = r.json().await.ok()?;
+        let mut ids = Vec::new();
+        let mut out = Vec::new();
+        for row in rows {
+            if let Some(id) = row["id"].as_i64() { ids.push(id); }
+            if let Ok(m) = serde_json::from_value::<RelayMessage>(row["m"].clone()) { out.push(m); }
         }
-        out
+        if !ids.is_empty() {
+            let body = serde_json::to_vec(&serde_json::json!({ "ids": ids })).unwrap_or_default();
+            // Not confirmed: they come again next time (the device drops copies by id).
+            let _ = self.post(peer, "/v1/fed/inbox_ack", body).await;
+        }
+        Some(out)
     }
 
     /// Envelopes peers keep for any of `users` (connected here) — one call per
@@ -445,6 +471,7 @@ impl Fed {
         let tries = self.cfg.peers.iter().map(|p| {
             let body = body.clone();
             async move {
+                if let Some(got) = self.take_kept(p, users).await { return Some(got); }
                 let r = self.post(p, "/v1/fed/inboxes", body).await?;
                 r.json::<Vec<RelayMessage>>().await.ok()
             }
@@ -654,6 +681,34 @@ pub async fn h_inboxes(State(state): State<AppState>, headers: HeaderMap, body: 
         }
     }
     Ok(Json(out))
+}
+
+/// `h_inboxes` that forgets nothing yet: `[{id, m}]`, deleted by `h_inbox_ack`
+/// once the caller has them (see `Fed::take_kept`).
+pub async fn h_inboxes2(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Result<Json<Vec<serde_json::Value>>, StatusCode> {
+    check(&state, &headers, "POST", "/v1/fed/inboxes2", &body)?;
+    let v: serde_json::Value = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let users = v["users"].as_array().ok_or(StatusCode::BAD_REQUEST)?;
+    let mut out = Vec::new();
+    for u in users.iter().filter_map(|x| x.as_str()).take(5000) {
+        for (id, bytes) in state.directory.inbox_take(u) {
+            match serde_json::from_slice::<serde_json::Value>(&bytes) {
+                Ok(m) => out.push(serde_json::json!({ "id": id, "m": m })),
+                Err(_) => state.directory.inbox_ack(id),
+            }
+        }
+    }
+    Ok(Json(out))
+}
+
+/// The caller has these (`h_inboxes2`): forget them.
+pub async fn h_inbox_ack(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Result<StatusCode, StatusCode> {
+    check(&state, &headers, "POST", "/v1/fed/inbox_ack", &body)?;
+    let v: serde_json::Value = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    for id in v["ids"].as_array().ok_or(StatusCode::BAD_REQUEST)?.iter().filter_map(|x| x.as_i64()).take(100_000) {
+        state.directory.inbox_ack(id);
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Something was queued here for a user who isn't connected here: ask the
@@ -1007,6 +1062,8 @@ pub fn routes() -> axum::Router<AppState> {
         .route("/v1/fed/poke", post(h_poke))
         .route("/v1/fed/inbox/:user", get(h_inbox))
         .route("/v1/fed/inboxes", post(h_inboxes))
+        .route("/v1/fed/inboxes2", post(h_inboxes2))
+        .route("/v1/fed/inbox_ack", post(h_inbox_ack))
         .route("/v1/fed/bundle/:user", get(h_bundle))
         .route("/v1/fed/blob/:cid", get(h_blob))
         .route("/v1/fed/users", get(h_users))

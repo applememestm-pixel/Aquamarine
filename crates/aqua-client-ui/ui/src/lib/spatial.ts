@@ -151,4 +151,3 @@ export function setRoomKind(r: RoomKind) {
   spatial.update((c) => ({ ...c, room: r }));
   setRoom(r);
 }
-export const currentRoom = () => room;

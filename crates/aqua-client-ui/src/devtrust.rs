@@ -30,7 +30,7 @@ pub const DEVOK_PREFIX: &str = "[devok:v1]";
 /// `[devno:v1]{"id"}` — my other device signed device `id` out.
 pub const DEVNO_PREFIX: &str = "[devno:v1]";
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct Trust {
     /// The devices that were there at the start are trusted.
     #[serde(default)]
@@ -57,13 +57,31 @@ pub struct Pending {
     pub added: i64,
 }
 
+/// What's in the file, kept in memory: `is_trusted` runs for every message
+/// to and from my devices and read the file from disk each time.
+static CACHE: StdMutex<Option<(std::path::PathBuf, Trust)>> = StdMutex::new(None);
+
 fn load(s: &AppState) -> Trust {
-    std::fs::read(s.data_dir.join(FILE)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+    let path = s.data_dir.join(FILE);
+    if let Ok(g) = CACHE.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
+        if let Some((_, t)) = g.as_ref().filter(|(p, _)| *p == path) {
+            return t.clone();
+        }
+    }
+    let t: Trust = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    if let Ok(mut g) = CACHE.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
+        *g = Some((path, t.clone()));
+    }
+    t
 }
 
 fn save(s: &AppState, t: &Trust) {
+    let path = s.data_dir.join(FILE);
     if let Ok(b) = serde_json::to_vec(t) {
-        let _ = crate::fsx::write_atomic(&s.data_dir.join(FILE), &b);
+        let _ = crate::fsx::write_atomic(&path, &b);
+    }
+    if let Ok(mut g) = CACHE.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
+        *g = Some((path, t.clone()));
     }
 }
 
@@ -80,6 +98,12 @@ pub fn my_id(s: &AppState) -> String {
 pub fn is_trusted(s: &AppState, id: &str) -> bool {
     if id == my_id(s) {
         return true;
+    }
+    let path = s.data_dir.join(FILE);
+    if let Ok(g) = CACHE.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
+        if let Some((_, t)) = g.as_ref().filter(|(p, _)| *p == path) {
+            return !t.no.contains(id);
+        }
     }
     !load(s).no.contains(id)
 }

@@ -114,6 +114,10 @@ impl Vault {
     pub fn open<P: AsRef<Path>>(path: P, master_key: MasterKey) -> Result<Self, VaultError> {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
+        // Every message sent or received saves its session here. In WAL,
+        // FULL synced the disk on each of those; NORMAL stays crash-safe
+        // (an app crash loses nothing; a power cut at most the last moment).
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         let vault = Self { conn, key: master_key };
         vault.migrate()?;

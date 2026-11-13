@@ -29,8 +29,6 @@ export async function setNoShare(chat: string, on: boolean) {
   await sendChatControl(chat, "[ctl:v1]" + JSON.stringify({ t: "noshare", on, at: Date.now() }));
 }
 
-export const isNoShare = (chat: string) => get(noShare).has(chat);
-
 let started = false;
 export function startNoShare() {
   if (started) return;

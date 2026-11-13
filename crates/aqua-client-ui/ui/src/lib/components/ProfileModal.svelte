@@ -1293,7 +1293,6 @@
   .played-bar { flex: 0 0 70px; height: 5px; border-radius: 3px; background: var(--bg-input); overflow: hidden; }
   .played-bar span { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
   img.played-cover { object-fit: cover; }
-  .game-chip img { width: 16px; height: 16px; border-radius: calc(4px * var(--rk, 1)); margin-right: 5px; vertical-align: -3px; }
   .game-search { position: relative; }
   .game-hits { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 20; background: var(--bg-shell); border: 1px solid var(--border-strong);
     border-radius: calc(12px * var(--rk, 1)); padding: 4px; box-shadow: 0 18px 40px -14px rgba(0,0,0,.7); max-height: 260px; overflow-y: auto; }
@@ -1315,7 +1314,6 @@
   .add-row { margin-top: 6px; align-self: flex-start; }
   .game-chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .game-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 4px 3px 10px; border-radius: 999px; color: #fff; font-size: 12px; font-weight: 600; }
-  .game-chip button { border: none; background: rgba(0, 0, 0, 0.25); color: #fff; width: 18px; height: 18px; border-radius: 50%; cursor: pointer; line-height: 1; }
 
   /* The whole card takes its colour (from the banner unless set by hand). */
   .sheet {
@@ -1414,8 +1412,6 @@
   .qr-pop { position: fixed; inset: 0; z-index: 140; display: grid; place-items: center; background: rgba(4, 6, 10, 0.6); backdrop-filter: blur(4px); }
   .qr-card { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 22px; border-radius: calc(22px * var(--rk, 1)); color: #fff;
     background: linear-gradient(160deg, var(--card), color-mix(in srgb, var(--card) 45%, #000)); box-shadow: 0 30px 70px -20px rgba(0,0,0,.7); }
-  .qr-card b { font-size: 17px; }
-  .qr-card small { opacity: .8; font-size: 12px; max-width: 220px; text-align: center; }
 
   .backdrop {
     position: fixed; inset: 0;
@@ -1676,7 +1672,6 @@
     resize: vertical;
   }
   .field input:focus, .field textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-  .field input[type="color"] { padding: 2px; height: 36px; cursor: pointer; }
   .row { display: flex; gap: 10px; }
   .field.half { flex: 1; }
 

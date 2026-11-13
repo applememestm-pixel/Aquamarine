@@ -643,7 +643,6 @@
   .srv[open] summary { margin-bottom: 6px; }
   .other-acc { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
   .reset-head { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
-  .reset-head b { font-size: 18px; }
   .link { align-self: flex-start; border: none; background: none; padding: 0; color: var(--accent); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
   .link:hover { text-decoration: underline; }
   .link.forgot { margin-top: 6px; font-weight: 500; }
@@ -651,8 +650,6 @@
   .note.dim { opacity: 0.75; font-size: 12.5px; }
   .rk-title { font-size: 18px; }
   .rk-words { list-style: none; margin: 4px 0 0; padding: 12px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px 10px; background: var(--bg-input); border-radius: calc(12px * var(--rk, 1)); border: 1px solid var(--border); font-family: var(--font-mono, ui-monospace, monospace); font-size: 13.5px; user-select: text; }
-  .rk-words li { display: flex; gap: 6px; align-items: baseline; }
-  .rk-words li span { color: var(--fg-dim); font-size: 11px; min-width: 16px; text-align: right; }
   .rk-ok { display: flex; align-items: center; gap: 8px; font-size: 13.5px; cursor: pointer; }
   .pw { position: relative; display: flex; }
   .field .pw input, .pw input { flex: 1; padding-right: 38px; }
@@ -780,7 +777,6 @@
     box-shadow: 0 0 24px -4px var(--accent-glow);
     flex-shrink: 0;
   }
-  .brand-row h2 { margin: 0; font-size: 18px; font-weight: 800; letter-spacing: -0.01em; }
   .sub { margin: 2px 0 0; font-size: 12.5px; color: var(--fg-muted); line-height: 1.4; }
 
   .steps { display: flex; align-items: center; justify-content: center; gap: 4px; margin-bottom: 18px; }
@@ -841,7 +837,6 @@
   }
   .resend:disabled { color: var(--fg-dim); cursor: not-allowed; }
   .note.dev { color: var(--accent); }
-  .note.dev b { font-family: var(--font-mono); }
 
   .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
   .ghost, .primary { padding: 9px 18px; border-radius: calc(10px * var(--rk, 1)); font-size: 13px; font-weight: 700; cursor: pointer; border: none; }

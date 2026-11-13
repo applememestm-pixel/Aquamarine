@@ -629,9 +629,16 @@ async fn ws_run(mut socket: WebSocket, state: AppState, me: UserId, acks: bool) 
         journal::online(&person, me.split_once('~').map(|(_, d)| d).unwrap_or(""));
     }
     {
-        let mut u = user_state.lock().await;
-        u.tx.push(tx);
-        while let Some(m) = u.inbox.pop_front() {
+        // Only registering takes the person's lock: the backlog below used
+        // to be sent with it held, and everybody writing to them meanwhile
+        // waited (their apps gave up on the relay after 15 s). What arrives
+        // now queues on `rx` and goes out after the backlog.
+        let waiting: Vec<RelayMessage> = {
+            let mut u = user_state.lock().await;
+            u.tx.push(tx);
+            u.inbox.drain(..).collect()
+        };
+        for m in waiting {
             if acks {
                 send_tracked(&mut socket, &state, &me, &mut pending, m, None).await;
             } else if let Ok(bytes) = serde_json::to_vec(&m) {
@@ -639,7 +646,8 @@ async fn ws_run(mut socket: WebSocket, state: AppState, me: UserId, acks: bool) 
             }
         }
         // Envelopes that waited on disk (also across server restarts).
-        for (id, bytes) in state.directory.inbox_take(&me) {
+        let disk = { let st = state.clone(); let me = me.clone(); tokio::task::spawn_blocking(move || st.directory.inbox_take(&me)).await.unwrap_or_default() };
+        for (id, bytes) in disk {
             if acks {
                 match serde_json::from_slice::<RelayMessage>(&bytes) {
                     Ok(m) => { send_tracked(&mut socket, &state, &me, &mut pending, m, Some(id)).await; }
@@ -650,15 +658,20 @@ async fn ws_run(mut socket: WebSocket, state: AppState, me: UserId, acks: bool) 
             }
         }
     }
-    // …and those that waited on other relays of the federation.
+    // …and those that waited on other relays of the federation — in the
+    // background. Asked here, before the loop below, a slow or unreachable
+    // peer held the new connection for up to a minute: nothing it sent was
+    // read or confirmed, its app gave up after 15 s and connected again —
+    // into the same wait, over and over. They come through `tx` like any
+    // live message (kept on disk if the device is gone by then).
     if let Some(f) = fed::current(&state) {
-        for m in f.collect_inbox(&me).await {
-            if acks {
-                send_tracked(&mut socket, &state, &me, &mut pending, m, None).await;
-            } else if let Ok(bytes) = serde_json::to_vec(&m) {
-                let _ = socket.send(Message::Binary(bytes.into())).await;
+        let (state, me) = (state.clone(), me.clone());
+        tokio::spawn(async move {
+            for m in f.collect_inbox(&me).await {
+                if deliver_local(&state, &m).await { continue; }
+                if let Ok(bytes) = serde_json::to_vec(&m) { let _ = state.directory.inbox_push(&m.to, &bytes); }
             }
-        }
+        });
     }
 
     // Phones vanish without closing the socket (Wi-Fi ↔ mobile data, a
@@ -818,21 +831,32 @@ async fn deliver(state: &AppState, msg: RelayMessage) {
     if deliver_local(state, &msg).await {
         return;
     }
-    // Federation: maybe they're connected to another relay.
-    if let Some(f) = fed::current(state) {
-        if f.forward(&msg).await {
-            return;
-        }
-    }
     // Kept on disk until the recipient connects (survives restarts; a peer
-    // relay collects it if they connect there — or right away, if they're
-    // connected there and the push above just didn't get through).
-    match serde_json::to_vec(&msg) {
-        Ok(bytes) if state.directory.inbox_push(&msg.to, &bytes).is_ok() => fed::queued_for_absent(state),
-        _ => {
-            let recipient = state.user(&msg.to);
-            recipient.lock().await.inbox.push_back(msg);
-        }
+    // relay collects it if they connect there).
+    let row = serde_json::to_vec(&msg).ok().and_then(|b| state.directory.inbox_push(&msg.to, &b).ok());
+    // Federation: maybe they're connected to another relay. Asked in the
+    // background: a slow or unreachable peer took up to ~40 s here, the
+    // sender's connection waited for it (no reads, no confirmation), its app
+    // gave up after 15 s, reconnected and sent everything again — every
+    // message to someone offline crawled. Delivered there: our copy goes
+    // (a copy that left here meanwhile is dropped by its id on the device).
+    if let Some(f) = fed::current(state) {
+        let state = state.clone();
+        tokio::spawn(async move {
+            if f.forward(&msg).await {
+                if let Some(r) = row { state.directory.inbox_ack(r); }
+                return;
+            }
+            match row {
+                Some(_) => fed::queued_for_absent(&state),
+                None => state.user(&msg.to).lock().await.inbox.push_back(msg),
+            }
+        });
+        return;
+    }
+    if row.is_none() {
+        let recipient = state.user(&msg.to);
+        recipient.lock().await.inbox.push_back(msg);
     }
 }
 
@@ -2773,6 +2797,8 @@ async fn admin_move_datadir(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     admin_authed(&state, &headers).map_err(|c| (c, "unauthorized".into()))?;
     let to = std::path::PathBuf::from(body.path.trim().trim_matches('"'));
+    // Everything into the main database file first (WAL, see Directory::open).
+    state.directory.checkpoint();
     let r = tokio::task::spawn_blocking(move || datadir::move_to(&to)).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     match r {
         Ok(n) => { journal::log("admin", "datadir", format!("copied {n} files")); Ok(Json(serde_json::json!({ "copied": n }))) }

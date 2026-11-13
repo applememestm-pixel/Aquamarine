@@ -22,6 +22,7 @@
   import { t, tr } from "../i18n";
   import { scale as scaleIn } from "svelte/transition";
   import { flip } from "svelte/animate";
+  import { calm, motionMs } from "../motion";
   import { cubicOut, backOut } from "svelte/easing";
   import { avatars, peerCards, clans } from "../people";
   import ClanTag from "./ClanTag.svelte";
@@ -569,8 +570,6 @@
   }
 
   // Lists move (a chat jumps to the top) and appear with a short glide.
-  const calm = typeof window !== "undefined" && (matchMedia("(prefers-reduced-motion: reduce)").matches || document.documentElement.classList.contains("soft-render") || document.documentElement.classList.contains("wk-lowfx"));
-  const motionMs = (ms: number) => (calm ? 0 : ms);
 
   // ---- Hold an avatar: peek into the chat without opening it (Telegram) ----
   let peek = $state<{ id: string; msgs: ChatMessage[] } | null>(null);
@@ -641,7 +640,7 @@
     if (!peekSettled()) return;
     const id = peek?.id;
     if (!id) return;
-    if (calm) { peek = null; void selectChat(id); return; }
+    if (calm()) { peek = null; void selectChat(id); return; }
     peekGrow = true;
     void selectChat(id);
     setTimeout(() => { peek = null; peekGrow = false; }, 240);
@@ -1310,7 +1309,7 @@
             <div class="chat-row-2">
               <span class="chat-preview"><span class="me-prefix">{memberLabel(g.name, c.name)}:</span> {previewText(c.preview)}</span>
               {#if n > 0}
-                {#key n}<span class="chat-badge" class:muted={groupMuted(en)} in:scaleIn={{ start: 0.4, duration: 260, easing: backOut }}>{n}</span>{/key}
+                {#key n}<span class="chat-badge" class:muted={groupMuted(en)} in:scaleIn={{ start: 0.4, duration: motionMs(260), easing: backOut }}>{n}</span>{/key}
               {/if}
             </div>
           </div>
@@ -1366,7 +1365,7 @@
                 onclick={(e) => { e.stopPropagation(); openMiniApp({ bot: c.id, url: $botMenus[c.id].url, from: "menu" }); }}>{$botMenus[c.id].text || $t("Open")}</span>
             {/if}
             {#if c.unread > 0 && c.id !== $activeId}
-              {#key c.unread}<span class="chat-badge" class:muted={c.channel || $mutedChats.has(c.id)} in:scaleIn={{ start: 0.4, duration: 260, easing: backOut }}>{c.unread}</span>{/key}
+              {#key c.unread}<span class="chat-badge" class:muted={c.channel || $mutedChats.has(c.id)} in:scaleIn={{ start: 0.4, duration: motionMs(260), easing: backOut }}>{c.unread}</span>{/key}
             {:else if $markedUnread.has(c.id) && c.id !== $activeId}
               <span class="chat-badge mark" title={$t("Marked as unread")}></span>
             {:else if $pinnedChats.includes(c.id)}
@@ -1803,7 +1802,6 @@
   .chat-ctx button.danger:hover, .peek-menu button.danger:hover { background: color-mix(in srgb, var(--danger, #FF4D6D) 14%, transparent); color: var(--danger, #FF4D6D); }
   .chat-preview.activity { color: var(--accent); }
   .act-tag { flex: 0 1 auto; min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 700; color: var(--accent); padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 14%, transparent); margin-left: 4px; }
-  .chat-preview.activity b { font-weight: 700; }
   /* Compact: avatars only (a server is open). */
   .list.compact .list-header, .list.compact .folder-strip, .list.compact .chat-body,
   .list.compact .resize-handle, .list.compact .join-card { display: none; }
@@ -2303,15 +2301,6 @@
   }
   .copy-fp:hover { color: var(--accent); background: var(--bg-hover); }
   .copy-fp :global(svg) { width: 12px; height: 12px; }
-  .data-dir .dir-path {
-    direction: rtl;
-    text-align: left;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 220px;
-    font-size: 10.5px;
-  }
   .accent-dot {
     width: 6px; height: 6px; border-radius: 50%;
     background: var(--accent);

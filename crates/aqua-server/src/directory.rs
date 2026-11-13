@@ -795,6 +795,14 @@ impl Directory {
     pub fn open() -> anyhow::Result<Self> {
         let path = std::env::var("AQUA_DIR_DB").unwrap_or_else(|_| "aqua-directory.sqlite".into());
         let db = Connection::open(&path)?;
+        // Every message passes through the inbox table (stored, then deleted
+        // on the device's "got it"), behind one lock shared by every request.
+        // The default rollback journal syncs the disk several times per
+        // write — on a home server's SD card or HDD that's tens of ms each,
+        // and everything else waited. WAL + NORMAL: one sync per checkpoint,
+        // still crash-safe (a power cut may lose only the last moments).
+        let _ = db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
+        let _ = db.busy_timeout(std::time::Duration::from_secs(5));
         Self::init_schema(&db)?;
         // SMTP: env vars win, else the admin panel's aqua-smtp.json.
         let (smtp, source) = match SmtpConfig::from_env() {
@@ -2443,6 +2451,12 @@ impl Directory {
         st.query_map(rusqlite::params![user], |r| Ok((r.get(0)?, r.get(1)?)))
             .map(|rows| rows.flatten().collect())
             .unwrap_or_default()
+    }
+
+    /// Write the WAL back into the database file (before copying it).
+    pub fn checkpoint(&self) {
+        let db = self.db.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _ = db.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
     }
 
     pub fn inbox_ack(&self, id: i64) {

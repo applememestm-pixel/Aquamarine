@@ -42,6 +42,3 @@ export function clearCallHistory() {
   callHistory.set([]);
 }
 
-export function recentCalls(): CallRecord[] {
-  return [...get(callHistory)].sort((a, b) => b.started_at - a.started_at);
-}

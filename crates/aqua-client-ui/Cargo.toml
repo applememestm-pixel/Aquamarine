@@ -1,6 +1,6 @@
 [package]
 name        = "aqua-client-ui"
-version     = "1.20.1-7"
+version     = "1.20.1-8"
 edition     = "2021"
 license     = "MIT OR Apache-2.0"
 description = "Aquamarine desktop shell — Tauri 2 + Svelte + TypeScript."

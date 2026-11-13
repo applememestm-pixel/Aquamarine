@@ -90,4 +90,3 @@ async function syncShortcuts(url: string) {
 export function setAppIcon(a: AppIconSetting) {
   settings.update((s) => ({ ...s, appIcon: a }));
 }
-export const appIconSetting = () => get(settings).appIcon ?? { mode: "default" as const };

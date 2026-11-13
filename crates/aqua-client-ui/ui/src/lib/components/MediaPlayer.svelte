@@ -220,7 +220,7 @@
    *  macOS); on Android the whole app becomes the floating window, with the
    *  video filling it (relay_host::pip_enter). */
   const ANDROID = typeof navigator !== "undefined" && /android/i.test(navigator.userAgent);
-  const canPip = kind === "video" && (ANDROID || (typeof document !== "undefined" && "pictureInPictureEnabled" in document && (document as any).pictureInPictureEnabled));
+  const canPip = $derived(kind === "video" && (ANDROID || (typeof document !== "undefined" && "pictureInPictureEnabled" in document && (document as any).pictureInPictureEnabled)));
   async function pip() {
     const v = media as HTMLVideoElement | null;
     if (!v) return;

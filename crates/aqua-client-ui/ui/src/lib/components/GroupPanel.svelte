@@ -1388,6 +1388,5 @@
   .colors { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding-bottom: 6px; }
   .ccell { width: 26px; height: 26px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; }
   .ccell.on { border-color: var(--fg); }
-  .colors input[type=color] { width: 30px; height: 30px; border: none; background: none; cursor: pointer; }
   .m-ava.img { background-size: cover; background-position: center; }
 </style>

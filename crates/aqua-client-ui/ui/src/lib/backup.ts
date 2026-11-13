@@ -111,9 +111,6 @@ async function upload(): Promise<void> {
   }
 }
 
-/** Ask for an upload soon (after the burst of changes settles). */
-export function backupSoon(): void { changedAt = changedAt || Date.now(); }
-
 export function startAutoBackup(): void {
   if (timer) return;
   watchStorage();

@@ -2801,12 +2801,10 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .ava-ctl { flex: 1; min-width: 0; } .ava-head { display: flex; align-items: center; gap: 6px; font-size: 13.5px; }
   .ava-demo.ava-g { background: linear-gradient(135deg, #ff7cac, #7b5cff); } .ava-demo.ava-c { background: linear-gradient(135deg, #ffb067, #ff5f6d); }
   .ava-prev { display: flex; align-items: center; gap: 12px; margin: 6px 0 10px; }
-  .ava-prev .tr-text { display: flex; flex-direction: column; } .ava-prev small { color: var(--fg-dim); }
   .ava-demo { width: 48px; height: 48px; flex-shrink: 0; display: grid; place-items: center; font-weight: 800; color: #fff; border-radius: var(--ava-r, 50%);
     background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
   .host-first { display: flex; flex-direction: column; gap: 6px; padding: 12px; margin: 6px 0 10px; border-radius: calc(12px * var(--rk, 1));
     background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); font-size: 13px; }
-  .host-first span { color: var(--fg-muted); }
   .host-first-btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
   .host-dir { font-size: 11.5px; color: var(--fg-dim); word-break: break-all; }
   .backdrop {
@@ -3015,7 +3013,6 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .back svg { width: 24px; height: 24px; }
   .back:hover { background: var(--bg-hover); }
   .list-head { align-items: center; justify-content: space-between; padding: 2px 4px 0; }
-  .list-head h2 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }
 
   /* ---- Phone: one screen at a time (list, or the open section) ---- */
   @media (max-width: 720px) {
@@ -3338,7 +3335,6 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
 
   .bots-note { font-size: 12px; color: var(--fg-dim); line-height: 1.5; margin-top: 6px; }
   .bots-note.err { color: #ff9fb0; }
-  .bots-note code { font-family: var(--font-mono); font-size: 11px; color: var(--accent); }
   .bot-create {
     display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px;
     align-items: end; margin-bottom: 10px;
@@ -3424,8 +3420,6 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     border: none; background: none; color: var(--fg); padding: 0;
     font-size: 12.5px; font-weight: 600; cursor: pointer;
   }
-  .bot-api-toggle .chev { transition: transform 0.15s; color: var(--fg-dim); }
-  .bot-api-toggle .chev.open { transform: rotate(90deg); }
   .bot-api {
     margin: 10px 0 0; padding: 10px; border-radius: calc(8px * var(--rk, 1)); overflow-x: auto;
     background: var(--bg-shell); border: 1px solid var(--border);
@@ -3494,9 +3488,6 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
 
   /* Live preview card */
   /* Hide the native colour input; the swatch is the visible control. */
-  .te-color input[type="color"] {
-    position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none;
-  }
   .te-swatch {
     width: 22px; height: 22px; border-radius: calc(6px * var(--rk, 1));
     border: 1px solid var(--border-strong); flex-shrink: 0;
@@ -3589,10 +3580,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     background: rgba(0,0,0,.6); color: #fff; cursor: pointer; opacity: 0; transition: opacity .15s; }
   .wall.own:hover .wall-del { opacity: 1; }
   .host-port { display: flex; align-items: center; gap: 10px; padding: 8px 14px 12px; font-size: 13.5px; color: var(--fg-dim); }
-  .host-port input { width: 110px; }
   .host-addr { display: flex; align-items: center; gap: 10px; padding: 8px 14px; }
-  .host-addr span { width: 84px; flex-shrink: 0; font-size: 13px; color: var(--fg-dim); }
-  .host-addr code { flex: 1; min-width: 0; font-family: var(--font-mono, monospace); font-size: 13px; overflow-wrap: anywhere; user-select: all; }
   /* Settings → Music: own Navidrome form. */
   .field-col { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
   .field-col > span { font-size: 12px; font-weight: 600; color: var(--fg-muted); }

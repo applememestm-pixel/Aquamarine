@@ -46,12 +46,6 @@ export function mixHex(a: string, b: string): string {
   return "#" + x.map((v, i) => Math.round((v + y[i]) / 2).toString(16).padStart(2, "0")).join("");
 }
 
-/** Light enough that dark text reads better on it. */
-export function isLight(hex: string): boolean {
-  const [r, g, b] = rgb(hex);
-  return 0.299 * r + 0.587 * g + 0.114 * b > 170;
-}
-
 export const PATTERN_EMOJI = ["⭐", "❤️", "🌸", "🐾", "🎮", "🎵", "🔥", "❄️", "🌙", "💎", "🍀", "👾", "🦋", "☕"];
 
 const patCache = new Map<string, string>();

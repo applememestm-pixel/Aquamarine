@@ -215,9 +215,6 @@
   .pc-seg { display: flex; flex-wrap: wrap; gap: 5px; }
   .pc-seg button { border: 1px solid var(--border); background: var(--bg-input); color: var(--fg-muted); border-radius: 100px; padding: 5px 10px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
   .pc-seg button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
-  .pc-check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
-  .pc-check input { accent-color: var(--accent); width: 16px; height: 16px; }
-  .pc-check span { font-size: 13px; color: var(--fg-muted); }
   .pc-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border); }
   .pc-ghost, .pc-create { padding: 8px 16px; border-radius: calc(9px * var(--rk, 1)); font-size: 13px; font-weight: 700; cursor: pointer; border: none; }
   .pc-ghost { background: transparent; border: 1px solid var(--border); color: var(--fg-muted); }

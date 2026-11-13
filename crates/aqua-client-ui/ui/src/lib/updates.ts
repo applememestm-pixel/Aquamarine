@@ -105,9 +105,6 @@ function autoInstall() {
   void installUpdate();
 }
 
-/** Kept for old callers: updates can't be put off any more. */
-export function skipUpdate() {}
-
 export async function installUpdate(): Promise<void> {
   const st = get(updateState);
   if (!("info" in st) || !st.info?.asset || !("id" in st) || !st.id) return;

@@ -184,13 +184,12 @@ export async function bootstrap() {
 
   // Wire live event listeners.
   events.onIncoming(async (p) => {
-    // Refresh chat list + messages for the affected peer.
-    const updated = await api.listChats();
-    chats.set(updated);
+    // Refresh chat list + messages for the affected peer — once for a burst
+    // (what waited on the relay arrives all at once after reconnecting; a
+    // full reload per message kept the app busy for seconds).
+    refreshChatsSoon();
     const isActive = get(activeId) === p.peer_id;
-    if (isActive) {
-      await loadActiveMessages();
-    }
+    if (isActive) refreshActiveSoon();
     // Notify (sound + desktop) for messages that aren't in the chat
     // you're actively looking at.
     // Archived + unmuted chats pop back out; muted chats stay silent.
@@ -201,12 +200,11 @@ export async function bootstrap() {
     const { mayWriteMe } = await import("./privacy");
     if (!isActive && !prefs.isMuted(p.peer_id) && mayWriteMe(p.peer_id)) notifyIncoming(p.peer_id, p.text);
     // Refresh info (opk count, etc.)
-    api.initApp().then((i) => info.set(i)).catch(() => {});
+    refreshInfoSoon();
   });
-  events.onChatsUpdated(async () => {
-    const updated = await api.listChats();
-    chats.set(updated);
-    api.initApp().then((i) => info.set(i)).catch(() => {});
+  events.onChatsUpdated(() => {
+    refreshChatsSoon();
+    refreshInfoSoon();
   });
   // Auto-delete timers removed messages.
   listen<{ peer_id: string }>("aqua://expired", async (e) => {
@@ -225,13 +223,19 @@ export async function bootstrap() {
   });
   // Network back / app back in front: don't wait for the next retry.
   const kick = () => { const i = get(info); if (i && !i.connected) { reconnectNow = true; void reconnectLoop(); } };
-  addEventListener("online", kick);
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") kick(); });
+  // Ask the backend, not the last thing it said: back from the background
+  // (the phone slept) the link is often dead while the app still showed
+  // "connected" — messages then waited up to a minute, or until a restart.
+  const recheck = () => { api.initApp().then((n) => { info.set(n); kick(); }).catch(() => kick()); };
+  addEventListener("online", recheck);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") recheck(); });
   // The dot under my name trusts the app's own state: if it says "not
   // connected" while the transport is actually up (missed event), it heals.
+  // Also while it says "connected": a link that died quietly shows up here
+  // (Transport::is_alive) instead of never.
   setInterval(() => {
     const i = get(info);
-    if (!i || i.connected || !i.username) return;
+    if (!i || !i.username || document.visibilityState === "hidden") return;
     api.initApp().then((n) => { info.set(n); if (!n.connected) kick(); }).catch(() => {});
   }, 20_000);
   events.onDisconnected(() => {
@@ -239,6 +243,27 @@ export async function bootstrap() {
     void reconnectLoop();
   });
 }
+
+/** Run `fn` once for a burst of calls: shortly after the first, and once
+ *  more if more came while it ran. */
+function coalesced(fn: () => Promise<unknown>, wait = 100): () => void {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let busy = false;
+  let again = false;
+  const run = async () => {
+    timer = null;
+    if (busy) { again = true; return; }
+    busy = true;
+    try { await fn(); } catch { /* the next event retries */ }
+    busy = false;
+    if (again) { again = false; schedule(); }
+  };
+  const schedule = () => { if (!timer) timer = setTimeout(run, wait); };
+  return schedule;
+}
+const refreshChatsSoon = coalesced(async () => chats.set(await api.listChats()));
+const refreshActiveSoon = coalesced(() => loadActiveMessages());
+const refreshInfoSoon = coalesced(async () => info.set(await api.initApp()), 400);
 
 let reconnecting = false;
 /** Set when the network came back: the loop skips its current pause. */

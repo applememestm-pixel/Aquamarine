@@ -97,11 +97,23 @@ pub fn get_messages(
 /// backup made on the PC, or a file deleted since — is fetched from the
 /// relay again instead of failing with "No such file or directory".
 fn forget_missing_files(msgs: &mut [ChatMessage]) {
+    // The chat is read again on every new message: a disk look-up for each
+    // of its files every time (thousands in a long chat, slow on a phone).
+    // What was there a moment ago still is.
+    static SEEN: StdMutex<Option<(std::time::Instant, std::collections::HashSet<String>)>> = StdMutex::new(None);
+    let mut seen = SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if seen.as_ref().is_none_or(|(at, _)| at.elapsed() > std::time::Duration::from_secs(30)) {
+        *seen = Some((std::time::Instant::now(), Default::default()));
+    }
+    let Some((_, there)) = seen.as_mut() else { return };
     for m in msgs {
         if let MessageKind::File { saved_at, .. } = &mut m.kind {
             let gone = saved_at.as_deref().is_some_and(|p| {
                 let fs_path = p.starts_with('/') || p.as_bytes().get(1) == Some(&b':');
-                fs_path && !std::path::Path::new(p).exists()
+                if !fs_path || there.contains(p) { return false; }
+                let ok = std::path::Path::new(p).exists();
+                if ok { there.insert(p.to_string()); }
+                !ok
             });
             if gone {
                 *saved_at = None;
@@ -130,10 +142,6 @@ pub async fn send_message(
             let msg = text_msg_from_me(&text);
             let out = (msg.id.clone(), msg.time.clone());
             push_own_message(&mut s, &peer_id, msg, &text);
-            let data_dir = s.data_dir.clone();
-            if let Some(book) = s.chats.get(&peer_id) {
-                crate::state::save_saved_messages(&data_dir, &book.messages);
-            }
             out
         };
         // The list shows the last message: tell it (it kept the old one).
@@ -318,6 +326,7 @@ pub async fn connect_to_server(
     transport.upload_bundle(&bundle).await
         .map_err(|e| format!("upload_bundle: {e}"))?;
     let transport = Arc::new(transport);
+    let mine = Arc::downgrade(&transport);
 
     // Publish state and persist the hints so a later launch auto-reconnects.
     {
@@ -351,17 +360,29 @@ pub async fn connect_to_server(
         s.save_connection_hints();
     }
 
-    // Which of my devices get my chats (a new one waits for approval).
-    crate::devtrust::start(&app).await;
-
-    // Spawn incoming task.
+    // Spawn incoming task — first: what waited on the relay comes in now.
     let app_bg = app.clone();
     tokio::spawn(async move {
         while let Some(inc) = incoming.recv().await {
+            // "Closed" from a connection that was replaced already: the
+            // current one is fine — dropping it for this made the link flap.
+            if matches!(inc, aqua_client_core::Incoming::Closed | aqua_client_core::Incoming::Error(_))
+                && !transport_of(&app_bg).is_some_and(|t| std::ptr::eq(Arc::as_ptr(&t), mine.as_ptr()))
+            {
+                tracing::info!("an earlier connection closed — the current one stays");
+                continue;
+            }
             handle_incoming(&app_bg, inc).await;
         }
         tracing::info!("incoming stream ended");
     });
+    // Which of my devices get my chats — in the background. It used to be
+    // awaited right here, before the incoming task above: a slow device
+    // list held every waiting message (and "connecting…") until it came.
+    {
+        let app_dt = app.clone();
+        tokio::spawn(async move { crate::devtrust::start(&app_dt).await });
+    }
     // My other devices get what they lack of my chats, and I get theirs.
     crate::history_sync::start(&app);
     // Messages written while offline go out now (mesh.rs).
@@ -373,6 +394,12 @@ pub async fn connect_to_server(
 
     let info = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).init_info();
     Ok(info)
+}
+
+/// The live connection, if any.
+fn transport_of(app: &AppHandle) -> Option<Arc<Transport>> {
+    let state: State<'_, StdMutex<AppState>> = app.state();
+    state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|s| s.transport.clone())
 }
 
 // ---------- User directory: email registration + search --------------------
@@ -1941,10 +1968,6 @@ async fn attach_file_fwd(
             let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let preview = crate::state::one_line_preview(&msg.kind);
             push_own_message(&mut s, &peer_id, msg, &preview);
-            let data_dir = s.data_dir.clone();
-            if let Some(book) = s.chats.get(&peer_id) {
-                crate::state::save_saved_messages(&data_dir, &book.messages);
-            }
         }
         let _ = app.emit("aqua://chats_updated", ());
         return Ok(AttachResult { message_id, cid: fake_cid, size });
@@ -2329,7 +2352,7 @@ struct WaitReader {
 
 impl std::io::Read for WaitReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        use std::io::{Read as _, Seek, SeekFrom};
+        use std::io::{Seek, SeekFrom};
         if self.pos > self.end || buf.is_empty() {
             return Ok(0);
         }
@@ -3541,7 +3564,7 @@ pub fn own_device_message(app: &AppHandle, to: &str, inner: &str) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
             let old = v.get("old").and_then(|x| x.as_str()).unwrap_or("");
             let new = v.get("new").and_then(|x| x.as_str()).unwrap_or("");
-            if !old.is_empty() { apply_edit(&mut s, to, &me, old, new); }
+            if !old.is_empty() { apply_edit_at(&mut s, to, &me, old, new, v.get("at").and_then(|x| x.as_i64()), None); }
         }
         drop(s);
         let _ = app.emit("aqua://chats_updated", ());
@@ -3552,7 +3575,7 @@ pub fn own_device_message(app: &AppHandle, to: &str, inner: &str) {
             let t = v.get("text").and_then(|x| x.as_str()).unwrap_or("");
             // The peer's message, deleted for both from my other device.
             let author = v.get("author").and_then(|x| x.as_str()).filter(|a| *a == to).unwrap_or(me.as_str()).to_string();
-            if !t.is_empty() { apply_delete(&mut s, to, &author, t); }
+            if !t.is_empty() { apply_delete_at(&mut s, to, &author, t, v.get("at").and_then(|x| x.as_i64())); }
         }
         drop(s);
         let _ = app.emit("aqua://chats_updated", ());
@@ -3839,7 +3862,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                 let old = v.get("old").and_then(|x| x.as_str()).unwrap_or("");
                 let new = v.get("new").and_then(|x| x.as_str()).unwrap_or("");
                 if !old.is_empty() {
-                    if let Ok(mut s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { apply_edit(&mut s, &gid, from, old, new); }
+                    if let Ok(mut s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { apply_edit_at(&mut s, &gid, from, old, new, v.get("at").and_then(|x| x.as_i64()), None); }
                     let _ = app.emit("aqua://chats_updated", ());
                     let _ = app.emit("aqua://incoming", IncomingEventPayload { peer_id: gid.clone(), text: String::new(), time: hhmm_now(), is_new_chat: false });
                 }
@@ -3854,10 +3877,9 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                         let ok = target == from || s.groups.get(&gid).map(|g| crate::state::can_delete_others(g, from)).unwrap_or(false);
                         // What it was, for the owner's "Recent actions".
                         let me = s.username.clone();
-                        let was = s.chats.get(&gid).and_then(|b| b.messages.iter().rev()
-                            .find(|m| author_is(&me, &m.from, &target) && del_key(&m.kind) == t)
-                            .map(|m| preview_for(&m.kind)));
-                        if ok && apply_delete(&mut s, &gid, &target, t) {
+                        let at = v.get("at").and_then(|x| x.as_i64());
+                        let was = s.chats.get(&gid).and_then(|b| del_target(b, &me, &target, t, at).map(|i| preview_for(&b.messages[i].kind)));
+                        if ok && apply_delete_at(&mut s, &gid, &target, t, at) {
                             let _ = app.emit("aqua://group_deleted", serde_json::json!({
                                 "gid": gid, "by": from, "author": target, "preview": was.unwrap_or_default(),
                             }));
@@ -4077,6 +4099,11 @@ async fn on_incoming_initial(
     message: aqua_core::wire::InitialMessage,
 ) {
     let state: State<'_, StdMutex<AppState>> = app.state();
+    // A second copy of a first message (relay + Bluetooth / Wi-Fi): taken
+    // again it would replace the session with a fresh one — back to its start.
+    if crate::multidev::already_decrypted(&message.ciphertext) {
+        return;
+    }
 
     // Consume SPK + optional OPK from the vault under the lock.
     let (identity_clone, spk, opk) = {
@@ -4097,6 +4124,7 @@ async fn on_incoming_initial(
         Ok(x) => x,
         Err(e) => { tracing::warn!(?e, "accept_initial failed"); return }
     };
+    crate::multidev::note_decrypted(&message.ciphertext);
     let plain_text = String::from_utf8_lossy(&plain).to_string();
 
     // The session belongs to the sender's DEVICE; the chat to the account.
@@ -4133,7 +4161,10 @@ async fn on_incoming_envelope(
         let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let plain = {
             let Some(session) = s.sessions.get_mut(&addr) else {
-                tracing::warn!(peer = %addr, "envelope for unknown session");
+                drop(s);
+                if crate::multidev::already_decrypted(&envelope.ciphertext) { return; }
+                tracing::warn!(peer = %addr, "envelope for unknown session — starting a new one with the device");
+                crate::multidev::repair_session(app, &addr);
                 return;
             };
             match session.decrypt(&envelope) {
@@ -4153,10 +4184,18 @@ async fn on_incoming_envelope(
                         tracing::info!(peer = %addr, "message from the previous session — switched back to it");
                         p
                     }
-                    _ => { tracing::warn!(?e, "decrypt failed"); return }
+                    _ => {
+                        drop(s);
+                        // A second copy of what already came: nothing wrong.
+                        if crate::multidev::already_decrypted(&envelope.ciphertext) { return; }
+                        tracing::warn!(?e, peer = %addr, "decrypt failed — starting a new session with the device");
+                        crate::multidev::repair_session(app, &addr);
+                        return;
+                    }
                 },
             }
         };
+        crate::multidev::note_decrypted(&envelope.ciphertext);
         if let Some(session) = s.sessions.get(&addr) {
             if let Err(e) = s.vault.save_session(&addr, session) {
                 tracing::warn!(?e, "save_session after decrypt");
@@ -4230,12 +4269,16 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
     if let Some(dh) = peer_dh {
         if !crate::devlists::allowed(app, &from, &dh) {
             let t = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|s| s.transport.clone());
-            if let Some(t) = &t {
-                crate::devlists::refresh(app, t, &from, true).await;
-            }
             // Not on the list yet, but signed in to their account: a new
-            // phone of theirs (multidev::device_ok).
+            // phone of theirs (multidev::device_ok; its device list is
+            // cached). Asked first: the list used to be fetched afresh for
+            // every single message from such a device, one after another.
             let relay_has = match &t { Some(t) => crate::multidev::device_ok(app, t, &from, addr, &dh).await, None => false };
+            if !relay_has {
+                if let Some(t) = &t {
+                    crate::devlists::refresh(app, t, &from, false).await;
+                }
+            }
             if !relay_has && !crate::devlists::allowed(app, &from, &dh) {
                 tracing::warn!(%addr, "a message from a device that isn't on the sender's signed list — dropped");
                 let _ = app.emit("aqua://devlist_refused", serde_json::json!({ "user": from, "why": "unlisted device" }));
@@ -4301,6 +4344,10 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
 
     // UI controls (event RSVPs, task ticks…).
     if let Some(body) = text.strip_prefix(CTL_PREFIX) {
+        // Only opened a fresh session (multidev::repair_session).
+        if body == crate::multidev::RESET_BODY {
+            return;
+        }
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
             let _ = app.emit("aqua://ctl", serde_json::json!({ "from": from, "chat": from, "body": v }));
         }
@@ -4350,7 +4397,7 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
             let new = v.get("new").and_then(|x| x.as_str()).unwrap_or("");
             if !old.is_empty() {
                 let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                apply_edit(&mut s, &from, &from, old, new);
+                apply_edit_at(&mut s, &from, &from, old, new, v.get("at").and_then(|x| x.as_i64()), None);
             }
             let _ = app.emit("aqua://chats_updated", ());
             let _ = app.emit("aqua://incoming", IncomingEventPayload {
@@ -4370,10 +4417,11 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
                 // as in Telegram: `author` names whose message it was.
                 let mine = v.get("author").and_then(|x| x.as_str())
                     .is_some_and(|a| s.username.as_deref() == Some(a));
+                let at = v.get("at").and_then(|x| x.as_i64());
                 if mine {
-                    apply_delete(&mut s, &from, "me", t);
+                    apply_delete_at(&mut s, &from, "me", t, at);
                 } else {
-                    apply_delete(&mut s, &from, &from, t);
+                    apply_delete_at(&mut s, &from, &from, t, at);
                 }
             }
             let _ = app.emit("aqua://chats_updated", ());
@@ -4506,35 +4554,43 @@ fn author_is(s_user: &Option<String>, from: &str, author: &str) -> bool {
     from == author || (author == "me" && s_user.as_deref() == Some(from)) || (from == "me" && s_user.as_deref() == Some(author))
 }
 
-fn apply_edit(s: &mut AppState, chat_id: &str, author: &str, old: &str, new: &str) -> bool {
-    let mut changed = false;
+/// Edit the message `old` names: this device's `id` when it's mine and
+/// known, else the one of that text closest to `at` (1.20.1-8), else the
+/// latest — which used to be the only rule: editing an older one of two
+/// same-text messages changed the newer one. Returns the edited one's time.
+fn apply_edit_at(s: &mut AppState, chat_id: &str, author: &str, old: &str, new: &str, at: Option<i64>, id: Option<&str>) -> Option<Option<i64>> {
+    let mut changed = None;
     let me = s.username.clone();
     let keep = s.prefs.keep_edits;
     if let Some(book) = s.chats.get_mut(chat_id) {
-        for m in book.messages.iter_mut().rev() {
-            if !author_is(&me, &m.from, author) { continue; }
-            let hit = matches!(&m.kind, MessageKind::Text { text } if text == old)
-                || matches!(&m.kind, MessageKind::Reply { text, .. } if text == old);
-            if hit {
-                if keep {
-                    m.meta.get_or_insert_with(Default::default).edits.push(old.to_string());
-                }
-                match &mut m.kind {
-                    MessageKind::Text { text } => *text = new.to_string(),
-                    MessageKind::Reply { text, .. } => *text = new.to_string(),
-                    _ => {}
-                }
-                changed = true;
-                break;
+        let hit = |m: &ChatMessage| author_is(&me, &m.from, author)
+            && (matches!(&m.kind, MessageKind::Text { text } if text == old) || matches!(&m.kind, MessageKind::Reply { text, .. } if text == old));
+        let by_id = id.and_then(|id| book.messages.iter().position(|m| m.id == id && hit(m)));
+        let pos = by_id.or_else(|| {
+            let hits = book.messages.iter().enumerate().filter(|(_, m)| hit(m));
+            match at {
+                Some(at) => hits.min_by_key(|(i, m)| (m.at.map(|t| (t - at).abs()).unwrap_or(i64::MAX), std::cmp::Reverse(*i))).map(|(i, _)| i),
+                None => hits.last().map(|(i, _)| i),
             }
+        });
+        if let Some(m) = pos.and_then(|p| book.messages.get_mut(p)) {
+            if keep {
+                m.meta.get_or_insert_with(Default::default).edits.push(old.to_string());
+            }
+            match &mut m.kind {
+                MessageKind::Text { text } => *text = new.to_string(),
+                MessageKind::Reply { text, .. } => *text = new.to_string(),
+                _ => {}
+            }
+            changed = Some(m.at);
         }
-        if changed {
+        if changed.is_some() {
             if let Some(last) = book.messages.last() {
                 book.summary.preview = preview_for(&last.kind);
             }
         }
     }
-    if changed {
+    if changed.is_some() {
         crate::history::mark_dirty(s, chat_id);
     }
     changed
@@ -4560,9 +4616,24 @@ pub fn del_key(kind: &MessageKind) -> String {
 /// `del_key` is `key`. Deleted means deleted, on every side (owner's rule):
 /// nothing stays behind marked "deleted".
 fn apply_delete(s: &mut AppState, chat_id: &str, author: &str, key: &str) -> bool {
+    apply_delete_at(s, chat_id, author, key, None)
+}
+
+/// The message a `[del:v1]` means. With its time (`at`, since 1.20.1-8) the
+/// closest one of those with the same text — before, always the latest: of
+/// two "ok"s, deleting the older took the newer one away on the other side.
+fn del_target(book: &crate::state::ChatBook, me: &Option<String>, author: &str, key: &str, at: Option<i64>) -> Option<usize> {
+    let hits = book.messages.iter().enumerate().filter(|(_, m)| author_is(me, &m.from, author) && del_key(&m.kind) == key);
+    match at {
+        Some(at) => hits.min_by_key(|(i, m)| (m.at.map(|t| (t - at).abs()).unwrap_or(i64::MAX), std::cmp::Reverse(*i))).map(|(i, _)| i),
+        None => hits.last().map(|(i, _)| i),
+    }
+}
+
+fn apply_delete_at(s: &mut AppState, chat_id: &str, author: &str, key: &str, at: Option<i64>) -> bool {
     let me = s.username.clone();
     if let Some(book) = s.chats.get_mut(chat_id) {
-        if let Some(pos) = book.messages.iter().rposition(|m| author_is(&me, &m.from, author) && del_key(&m.kind) == key) {
+        if let Some(pos) = del_target(book, &me, author, key, at) {
             let gone = book.messages.remove(pos);
             book.summary.preview = book
                 .messages
@@ -4589,7 +4660,7 @@ pub fn message_keys(state: State<'_, StdMutex<AppState>>, peer_id: String, ids: 
         .filter(|m| ids.contains(&m.id))
         .map(|m| {
             let author = if m.from == "me" { me.as_str() } else { m.from.as_str() };
-            serde_json::json!({ "id": m.id, "key": del_key(&m.kind), "author": author, "preview": preview_for(&m.kind) })
+            serde_json::json!({ "id": m.id, "key": del_key(&m.kind), "author": author, "preview": preview_for(&m.kind), "at": m.at })
         })
         .collect())
 }
@@ -4602,16 +4673,12 @@ pub fn edit_message(
     peer_id: String,
     old_text: String,
     new_text: String,
-) -> Result<(), String> {
+    id: Option<String>,
+) -> Result<Option<i64>, String> {
     let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    apply_edit(&mut s, &peer_id, "me", &old_text, &new_text);
-    if peer_id == crate::state::SAVED_MESSAGES_ID {
-        let data_dir = s.data_dir.clone();
-        if let Some(book) = s.chats.get(&peer_id) {
-            crate::state::save_saved_messages(&data_dir, &book.messages);
-        }
-    }
-    Ok(())
+    // The edited message's time goes with the `[edit:v1]`, so the other
+    // side changes that one too (see apply_edit_at).
+    Ok(apply_edit_at(&mut s, &peer_id, "me", &old_text, &new_text, None, id.as_deref()).flatten())
 }
 
 /// Delete one of my own messages locally. The frontend separately relays a
@@ -4624,12 +4691,6 @@ pub fn delete_message(
 ) -> Result<(), String> {
     let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     apply_delete(&mut s, &peer_id, "me", &text);
-    if peer_id == crate::state::SAVED_MESSAGES_ID {
-        let data_dir = s.data_dir.clone();
-        if let Some(book) = s.chats.get(&peer_id) {
-            crate::state::save_saved_messages(&data_dir, &book.messages);
-        }
-    }
     Ok(())
 }
 
@@ -4655,9 +4716,6 @@ pub fn once_burn(state: State<'_, StdMutex<AppState>>, peer_id: String, message_
         }
         *category = Some("once-seen".into());
     }
-    if peer_id == crate::state::SAVED_MESSAGES_ID {
-        crate::state::save_saved_messages(&data_dir, &book.messages);
-    }
     Ok(())
 }
 
@@ -4668,7 +4726,6 @@ pub fn delete_messages_local(
     ids: Vec<String>,
 ) -> Result<usize, String> {
     let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let data_dir = s.data_dir.clone();
     let Some(book) = s.chats.get_mut(&peer_id) else { return Ok(0) };
     let before = book.messages.len();
     let gone: Vec<ChatMessage> = book.messages.iter().filter(|m| ids.contains(&m.id)).cloned().collect();
@@ -4676,9 +4733,6 @@ pub fn delete_messages_local(
     let removed = before - book.messages.len();
     if removed > 0 {
         book.summary.preview = book.messages.last().map(|m| preview_for(&m.kind)).unwrap_or_default();
-        if peer_id == crate::state::SAVED_MESSAGES_ID {
-            crate::state::save_saved_messages(&data_dir, &book.messages);
-        }
         crate::history_sync::tombstone(&s, &peer_id, &gone);
     }
     Ok(removed)
@@ -4819,13 +4873,11 @@ pub fn delete_chat(state: State<'_, StdMutex<AppState>>, peer_id: String) -> Res
         return Err("leave the group instead".into());
     }
     if peer_id == crate::state::SAVED_MESSAGES_ID {
-        let data_dir = s.data_dir.clone();
         let gone = s.chats.get(&peer_id).map(|b| b.messages.clone()).unwrap_or_default();
         if let Some(book) = s.chats.get_mut(&peer_id) {
             book.messages.clear();
             book.summary.preview = String::new();
             book.summary.unread = 0;
-            crate::state::save_saved_messages(&data_dir, &book.messages);
         }
         crate::history_sync::tombstone(&s, &peer_id, &gone);
         return Ok(());
@@ -5075,5 +5127,26 @@ mod meet_code_tests {
         let back = super::meet_unpack(&super::base32_decode(&text).unwrap()).unwrap();
         assert_eq!((back.u.as_str(), back.k.as_str(), back.bt.as_str(), back.b.as_str()), ("vpst", c.k.as_str(), "AA:BB:CC:DD:EE:FF", c.b.as_str()));
         assert!(back.n.len() <= 24 && c.n.starts_with(&back.n));
+    }
+}
+
+#[cfg(test)]
+mod delete_target_tests {
+    use super::*;
+
+    fn msg(id: &str, text: &str, at: Option<i64>) -> ChatMessage {
+        ChatMessage { meta: None, id: id.into(), from: "me".into(), time: "10:00".into(), at, kind: MessageKind::Text { text: text.into() } }
+    }
+
+    #[test]
+    fn the_message_of_that_time_goes_not_the_latest_twin() {
+        let summary = crate::state::summary_for("ann", "", false, false);
+        let book = crate::state::ChatBook { summary, messages: vec![msg("a", "ok", Some(1000)), msg("b", "hi", Some(1500)), msg("c", "ok", Some(2000))] };
+        let me = Some("vlad".to_string());
+        let key = del_key(&book.messages[0].kind);
+        assert_eq!(del_target(&book, &me, "me", &key, Some(1003)), Some(0), "the older twin, by its time");
+        assert_eq!(del_target(&book, &me, "me", &key, Some(1998)), Some(2));
+        assert_eq!(del_target(&book, &me, "me", &key, None), Some(2), "an older app: the latest, as before");
+        assert_eq!(del_target(&book, &me, "me", "nope", Some(1000)), None);
     }
 }

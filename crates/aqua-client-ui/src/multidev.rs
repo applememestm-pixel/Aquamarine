@@ -37,6 +37,8 @@ static KEY_OF: StdMutex<Option<HashMap<String, (Instant, String)>>> = StdMutex::
 const KEY_OF_TTL: Duration = Duration::from_secs(300);
 
 static CACHE: StdMutex<Option<HashMap<String, (Instant, Vec<String>)>>> = StdMutex::new(None);
+/// Key id the relay lists for each device address (filled by [`addresses`]).
+static IDS: StdMutex<Option<HashMap<String, String>>> = StdMutex::new(None);
 
 /// `alice~a1b2c3` → `alice`.
 pub fn base_user(addr: &str) -> &str {
@@ -81,7 +83,13 @@ pub async fn addresses(transport: &Transport, user: &str) -> Vec<String> {
         }
     }
     let list: Vec<String> = match transport.devices(user).await {
-        Ok(Some(devs)) if !devs.is_empty() => devs.into_iter().map(|d: DeviceInfo| d.addr).collect(),
+        Ok(Some(devs)) if !devs.is_empty() => {
+            if let Ok(mut m) = IDS.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
+                let m = m.get_or_insert_with(HashMap::new);
+                for d in &devs { m.insert(d.addr.clone(), d.id.clone()); }
+            }
+            devs.into_iter().map(|d: DeviceInfo| d.addr).collect()
+        }
         // Old relay, unknown user (bots), or a network hiccup: the username.
         _ => vec![user.to_string()],
     };
@@ -100,16 +108,26 @@ pub async fn device_ok(app: &AppHandle, transport: &Transport, user: &str, addr:
         return true;
     }
     // `user~id`: the id must be this key's, and the relay must list it now.
+    // The plain `user` (their main device) names no id: the relay's list
+    // says which key it has. (It used to be refused outright: a main phone
+    // set up again, while their other device that would list it was off,
+    // got nothing from anyone and its messages were dropped.)
+    let want = device_id(dh);
     match addr.split_once('~') {
-        Some((_, id)) if id == device_id(dh) => {}
-        _ => return false,
+        Some((_, id)) if id == want => {}
+        Some(_) => return false,
+        None => {}
     }
-    if addresses(transport, user).await.iter().any(|a| a == addr) {
+    let listed = |list: &[String]| {
+        list.iter().any(|a| a == addr)
+            && (addr.contains('~') || IDS.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().is_some_and(|m| m.as_ref().and_then(|m| m.get(addr)).is_some_and(|id| *id == want)))
+    };
+    if listed(&addresses(transport, user).await) {
         return true;
     }
     // Maybe just signed in: ask the relay afresh once.
     invalidate(user);
-    addresses(transport, user).await.iter().any(|a| a == addr)
+    listed(&addresses(transport, user).await)
 }
 
 /// This device's own address.
@@ -261,6 +279,106 @@ async fn send_inner(app: &AppHandle, addr: &str, payload: &str, own: bool) -> Re
     let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let _ = s.vault.save_session(addr, &session);
     s.sessions.insert(addr.to_string(), session);
+    Ok(())
+}
+
+/// `[ctl:v1]{"t":"rst"}` — opens a fresh session, shows nothing (older apps
+/// pass it to the UI, which ignores a `t` it doesn't know).
+pub const RESET_BODY: &str = r#"{"t":"rst"}"#;
+
+/// Envelopes decrypted lately (hash of the ciphertext): a second copy of one
+/// (the relay and Bluetooth / the same Wi-Fi both deliver, a resend after a
+/// reconnect) fails to decrypt — that's no broken session.
+static DECRYPTED: StdMutex<Option<(std::collections::HashSet<[u8; 16]>, std::collections::VecDeque<[u8; 16]>)>> = StdMutex::new(None);
+
+fn envelope_hash(ciphertext: &[u8]) -> [u8; 16] {
+    use sha2::Digest;
+    let d = sha2::Sha256::digest(ciphertext);
+    let mut out = [0u8; 16];
+    out.copy_from_slice(&d[..16]);
+    out
+}
+
+/// A message with this ciphertext was decrypted: remember it (the last 4096).
+pub fn note_decrypted(ciphertext: &[u8]) {
+    let h = envelope_hash(ciphertext);
+    if let Ok(mut g) = DECRYPTED.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
+        let (set, order) = g.get_or_insert_with(Default::default);
+        if set.insert(h) {
+            order.push_back(h);
+            while order.len() > 4096 {
+                if let Some(o) = order.pop_front() { set.remove(&o); }
+            }
+        }
+    }
+}
+
+/// A copy of a message that already decrypted here?
+pub fn already_decrypted(ciphertext: &[u8]) -> bool {
+    let h = envelope_hash(ciphertext);
+    DECRYPTED.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().is_some_and(|g| g.as_ref().is_some_and(|(set, _)| set.contains(&h)))
+}
+
+/// A device's messages can't be read here: no session with it (lost with a
+/// reinstall, dropped, never arrived) or one that went out of step. Until
+/// now every one of its messages was dropped without a word, for good —
+/// the sender saw "sent", and nothing ever came. Start a new session with
+/// it: its app takes the new one, and what it sends next decrypts.
+/// At most once per device every 2 minutes.
+pub fn repair_session(app: &AppHandle, addr: &str) {
+    static LAST: StdMutex<Option<HashMap<String, Instant>>> = StdMutex::new(None);
+    if addr.is_empty() || addr.starts_with("__") || addr.starts_with("grp_") {
+        return;
+    }
+    if let Ok(mut g) = LAST.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
+        let m = g.get_or_insert_with(HashMap::new);
+        if m.get(addr).is_some_and(|t| t.elapsed() < Duration::from_secs(120)) {
+            return;
+        }
+        m.insert(addr.to_string(), Instant::now());
+    }
+    let (app, addr) = (app.clone(), addr.to_string());
+    tauri::async_runtime::spawn(async move {
+        match restart_session(&app, &addr).await {
+            Ok(()) => tracing::info!(%addr, "unreadable messages: a new session was started with the device"),
+            Err(e) => tracing::warn!(%addr, %e, "unreadable messages: no new session"),
+        }
+    });
+}
+
+async fn restart_session(app: &AppHandle, addr: &str) -> Result<(), String> {
+    let state: State<'_, StdMutex<AppState>> = app.state();
+    let (transport, identity, me) = {
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        (s.transport.clone().ok_or("not connected")?, s.identity.clone(), s.username.clone().unwrap_or_default())
+    };
+    let user = base_user(addr).to_string();
+    let own = !me.is_empty() && user == me;
+    let bundle = transport.fetch_bundle(addr).await.map_err(|e| format!("fetch_bundle: {e}"))?;
+    bundle.verify().map_err(|e| format!("bad bundle: {e}"))?;
+    let dh = bundle.identity.dh_pub.as_bytes().to_vec();
+    if own {
+        let id = device_id(&dh);
+        if !state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).map(|s| crate::devtrust::is_trusted(&s, &id)).unwrap_or(false) {
+            return Err(NOT_APPROVED.into());
+        }
+    } else if !device_ok(app, &transport, &user, addr, &dh).await {
+        return Err(NOT_LISTED.into());
+    }
+    // My own device pulls the shared history on it (harmless); anyone else
+    // gets the empty reset control.
+    let payload = if own { crate::history_sync::HPOKE_PREFIX.to_string() } else { format!("{}{RESET_BODY}", crate::commands::CTL_PREFIX) };
+    let (session, initial) = Session::start_as_initiator(&identity, &bundle, payload.as_bytes())
+        .map_err(|e| format!("start_as_initiator: {e}"))?;
+    transport.send_initial(addr, &initial).map_err(|e| format!("send_initial: {e}"))?;
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _ = s.vault.save_session(addr, &session);
+    // The old one stays as the previous session: anything still sent with
+    // it decrypts (and both ends settle on one, see on_incoming_envelope).
+    if let Some(old) = s.sessions.insert(addr.to_string(), session) {
+        let _ = s.vault.save_session(&format!("{addr}{}", crate::state::PREV_SESSION), &old);
+        s.prev_sessions.insert(addr.to_string(), old);
+    }
     Ok(())
 }
 

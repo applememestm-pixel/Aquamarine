@@ -95,7 +95,7 @@
    *       "hover" — first frame; plays while hovered (picker grids)
    *       "never" — first frame only
    */
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
 
   interface Props {
     src: string;
@@ -132,7 +132,7 @@
   /** Big grids: a player (Lottie canvas or video decoder) only for cells
    *  near the screen. Building hundreds at once took gigabytes of memory
    *  and froze the app when the sticker panel opened. */
-  let near = $state(!lazy);
+  let near = $state(untrack(() => !lazy));
   let visible = false;
   let hovering = false;
   let anim: { play(): void; pause(): void; goToAndStop(v: number, f?: boolean): void; destroy(): void } | null = null;

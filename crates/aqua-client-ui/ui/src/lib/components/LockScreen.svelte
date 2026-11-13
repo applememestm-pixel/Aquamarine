@@ -269,7 +269,6 @@
   .pair { width: 100%; display: flex; gap: 8px; margin-top: 4px; }
   .ghost { flex: 1; border: 1px solid var(--border); background: var(--bg-input); color: var(--fg-muted); border-radius: calc(10px * var(--rk, 1)); padding: 9px 8px; font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; transition: color .15s, border-color .15s; }
   .ghost:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
-  .ghost.danger:hover { color: #ff8f8f; border-color: color-mix(in srgb, #ff5c5c 45%, transparent); }
   .ghost:disabled { opacity: 0.6; }
   h2 { margin: 0; font-size: 18px; font-weight: 800; color: var(--fg); }
   p { margin: 0 0 6px; font-size: 12.5px; color: var(--fg-muted); text-align: center; line-height: 1.5; }

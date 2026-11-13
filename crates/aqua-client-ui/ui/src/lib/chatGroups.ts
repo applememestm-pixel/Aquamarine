@@ -33,10 +33,6 @@ chatGroups.subscribe((v) => { try { localStorage.setItem(KEY, JSON.stringify(v))
 /** The group that holds the chat (sheet that opens a group row). */
 export const openGroupId = writable<string | null>(null);
 
-export function groupOf(chatId: string): ChatGroup | undefined {
-  return get(chatGroups).find((g) => g.chatIds.includes(chatId));
-}
-
 /** New group with these chats (they leave any other group). */
 export function createGroup(name: string, chatIds: string[]): string {
   const id = "cg_" + Math.random().toString(36).slice(2, 10);

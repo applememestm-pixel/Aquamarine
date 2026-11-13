@@ -54,4 +54,3 @@ export function startBluetooth() {
 export function clearDone() {
   btTransfers.update((m) => Object.fromEntries(Object.entries(m).filter(([, t]) => !["complete", "error", "failed"].includes(t.status))));
 }
-export const anyActive = () => Object.values(get(btTransfers)).some((t) => !["complete", "error", "failed"].includes(t.status));
