@@ -431,10 +431,13 @@ export async function loadActiveMessages() {
   if (!id) { activeMessages.set([]); return; }
   try {
     const msgs = await api.getMessages(id);
-    activeMessages.set(reuseUnchanged(get(activeId) === id ? get(activeMessages) : [], msgs));
+    // Another chat was opened meanwhile: its own load fills the view (before,
+    // a slow answer for the old chat could land in the new one).
+    if (get(activeId) !== id) return;
+    activeMessages.set(reuseUnchanged(get(activeMessages), msgs));
   } catch (e) {
     console.error("get_messages failed", e);
-    activeMessages.set([]);
+    if (get(activeId) === id) activeMessages.set([]);
   }
 }
 
@@ -458,13 +461,17 @@ export async function sendCurrent(text: string): Promise<string | null> {
     void import("./botHelpers").then((m) => m.routeGuestMentions(id, text)).catch(() => {});
     // Refresh both messages and chat list (backend bumps chat to top).
     const [msgs, updated] = await Promise.all([api.getMessages(id), api.listChats()]);
-    activeMessages.set(reuseUnchanged(get(activeMessages), msgs));
+    // Switched chats while it was going out: don't show this chat's
+    // messages in the other one.
+    if (get(activeId) === id) activeMessages.set(reuseUnchanged(get(activeMessages), msgs));
     chats.set(updated);
     // Clear draft.
     drafts.update((d) => { const { [id]: _, ...rest } = d; return rest; });
     return null;
   } catch (e) {
     console.error("send_message failed", e);
+    // The backend took back its echo of the unsent message.
+    void loadActiveMessages();
     return String(e);
   }
 }

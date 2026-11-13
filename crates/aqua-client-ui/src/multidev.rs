@@ -327,6 +327,13 @@ pub async fn fanout(app: &AppHandle, peer: &str, payload: &str, sync: bool) -> R
                 ok += 1;
             }
         }
+        // My other devices get their copy as on the normal path (before,
+        // the first messages after a QR meeting never reached them).
+        if ok > 0 && sync {
+            if let Some(t) = &transport {
+                to_my_devices(app, t, &me, &wrap_sync(&peer, payload)).await;
+            }
+        }
         return if ok > 0 || opens_no_session(payload) { Ok(()) } else { Err("couldn't start the chat".into()) };
     }
     let Some(transport) = transport else {

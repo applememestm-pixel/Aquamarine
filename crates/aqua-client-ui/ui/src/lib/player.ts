@@ -94,3 +94,16 @@ export function stopTrack() {
   queueIndex.set(-1);
   nowPlaying.set(null);
 }
+
+/** The top player's element state, for the small strips (MiniPlayer):
+ *  paused or not, and how far into the track (0…1). */
+export const playerPaused = writable<boolean>(true);
+export const playerProgress = writable<number>(0);
+let playerEl: HTMLAudioElement | null = null;
+/** TopPlayer hands over its <audio> (the only one there is). */
+export function setPlayerElement(a: HTMLAudioElement | null) { playerEl = a; }
+export function togglePlayback() {
+  const a = playerEl;
+  if (!a) return;
+  if (a.paused) void a.play().catch(() => {}); else a.pause();
+}

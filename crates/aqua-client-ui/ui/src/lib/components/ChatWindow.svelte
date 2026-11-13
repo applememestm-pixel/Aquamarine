@@ -52,6 +52,7 @@
   import { noShare, setNoShare, startNoShare } from "../noShare";
   import { isLive, livePlay } from "../liveMotion";
   import { IS_DESKTOP, IS_MOBILE } from "../platform";
+  import MiniPlayer from "./MiniPlayer.svelte";
   import Welcome from "./Welcome.svelte";
   import { settings } from "../theme";
   import { api, assetUrl, sendChatControl } from "../tauri";
@@ -72,7 +73,7 @@
   import MediaPlayer from "./MediaPlayer.svelte";
   import { openGallery, type GalleryItem } from "./Lightbox.svelte";
   import { openArticleComposer } from "../panels/articleComposer";
-  import { openCircleRecorder, releaseCircleHold } from "./CircleRecorder.svelte";
+  import { openCircleRecorder, releaseCircleHold, cancelCircleHold, circleDrag, CANCEL_PX } from "./CircleRecorder.svelte";
   import { openPollComposer } from "./PollComposer.svelte";
   import { openForward, type ForwardItem } from "./ForwardPicker.svelte";
   import { playQueue, type Track } from "../player";
@@ -762,6 +763,8 @@
   let holdTimer: ReturnType<typeof setTimeout> | null = null;
   let holdFired = false;
   let holdStartY = 0;
+  let holdStartX = 0;
+  let holdCancelled = false;
   let recLocked = false;
 
   /** The peer's privacy (or the group's rules) forbid voice / video notes. */
@@ -781,8 +784,12 @@
     if (!$activeChat?.live) return;
     if (voiceBlocked($activeChat.id)) return;
     holdFired = false;
+    holdCancelled = false;
     recLocked = false;
     holdStartY = e.clientY;
+    holdStartX = e.clientX;
+    // The finger may leave the button (slide to cancel / up to lock).
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ignore */ }
     holdTimer = setTimeout(() => {
       holdFired = true;
       if (mediaMode === "voice") void startRecording();
@@ -790,13 +797,22 @@
     }, 250);
   }
   function mediaMove(e: PointerEvent) {
-    if (holdFired && !recLocked && holdStartY - e.clientY > 40) {
+    if (!holdFired || recLocked) return;
+    const dx = e.clientX - holdStartX, dy = e.clientY - holdStartY;
+    if (mediaMode === "circle") circleDrag.set({ x: dx, y: dy });
+    if (dx < -CANCEL_PX) {
+      // Slid left → thrown away (Telegram).
+      holdFired = false;
+      holdCancelled = true;
+      if (mediaMode === "circle") cancelCircleHold(); else cancelRecord();
+    } else if (-dy > 40) {
       recLocked = true; // slid up → hands-free
       if (mediaMode === "circle") releaseCircleHold(true);
     }
   }
   function mediaUp() {
     if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+    if (holdCancelled) { holdCancelled = false; return; }
     if (!holdFired) {
       // A tap: switch mode.
       mediaMode = mediaMode === "voice" ? "circle" : "voice";
@@ -806,6 +822,8 @@
     // recording keeps going (controlled by the rec-bar).
     if (mediaMode === "voice" && !recLocked && recording) stopRecording();
     if (mediaMode === "circle" && !recLocked) releaseCircleHold();
+    // Once: the window's pointerup comes here too.
+    holdFired = false;
   }
 
   async function sendVoiceBlob(blob: Blob) {
@@ -3693,6 +3711,8 @@
         <button class="pin-x" onclick={unpin} title={$t("Unpin")}>×</button>
       </div>
     {/if}
+
+    {#if IS_MOBILE}<MiniPlayer inChat />{/if}
 
     {#if dmNoShare || activeGroup?.settings.protected_content}
       <!-- Like Telegram's pinned strip: thin, see-through, just a note. -->

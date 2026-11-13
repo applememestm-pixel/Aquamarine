@@ -1,5 +1,6 @@
 <script lang="ts">
   import { emojiStatusOf } from "../people";
+  import MiniPlayer from "./MiniPlayer.svelte";
   import EmojiStatus from "./EmojiStatus.svelte";
   import { onBack } from "../back";
   import { untrack } from "svelte";
@@ -1089,6 +1090,7 @@
       <button class="folder-edit" onclick={openFolderManager} title={$t("Create folders")}>{$t("+ Folders")}</button>
     </div>
   {/if}
+  {#if IS_MOBILE && !searchMode}<MiniPlayer />{/if}
   {#if folderMenu}
     {@const fm = folderMenu}
     <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->

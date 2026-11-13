@@ -191,8 +191,27 @@ pub async fn send_message(
     // of theirs needs a session first).
     let _ = app.emit("aqua://own_sent", serde_json::json!({ "peer_id": peer_id }));
     // Encrypted once per device of the peer, plus a copy for my other devices.
-    crate::multidev::fanout(&app, &peer_id, &text, true).await?;
+    if let Err(e) = crate::multidev::fanout(&app, &peer_id, &text, true).await {
+        // Nothing went out: the UI puts the text back into the field, so the
+        // echo goes too — else a retry left two copies, and the one that
+        // never left looked sent.
+        drop_own_echo(&state, &peer_id, &out_msg.id);
+        let _ = app.emit("aqua://chats_updated", ());
+        return Err(e);
+    }
     Ok(SendResult { id: out_msg.id, time: out_msg.time })
+}
+
+/// Undo [`push_own_message`] for a message that couldn't be sent.
+fn drop_own_echo(state: &State<'_, StdMutex<AppState>>, peer_id: &str, id: &str) {
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(book) = s.chats.get_mut(peer_id) {
+        book.messages.retain(|m| m.id != id);
+        if let Some(last) = book.messages.last() {
+            book.summary.preview = preview_for(&last.kind);
+            book.summary.preview_by_me = last.from == "me";
+        }
+    }
 }
 
 // ---------- Verification --------------------------------------------------
@@ -3909,7 +3928,7 @@ async fn on_incoming_plaintext(app: &AppHandle, from: String, text: String) {
                 preview: text.clone(),
                 preview_is_typing: false, preview_by_me: false, has_lock: false,
                 time: time.clone(),
-                unread: 1, online: true, verified: false, channel: false, live: true,
+                unread: 0, online: true, verified: false, channel: false, live: true,
             };
             s.chats.insert(from.clone(), ChatBook { summary, messages: Vec::new() });
             s.chat_order.retain(|id| id != &from);
@@ -4034,7 +4053,6 @@ async fn on_incoming_initial(
         Err(e) => { tracing::warn!(?e, "accept_initial failed"); return }
     };
     let plain_text = String::from_utf8_lossy(&plain).to_string();
-    let time = hhmm_now();
 
     // The session belongs to the sender's DEVICE; the chat to the account.
     {
@@ -4053,44 +4071,9 @@ async fn on_incoming_initial(
     // Presence, typing, group traffic… may open a session too (a new device
     // of theirs): handle it like any other envelope, never as a bubble.
     // The same path covers my own devices and blocked people.
-    let from = crate::multidev::base_user(&addr).to_string();
-    let mine = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|s| s.username.clone()).as_deref() == Some(from.as_str());
-    let blocked = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).map(|s| s.prefs.blocked.contains(&from)).unwrap_or(false);
-    if mine || blocked || is_control_text(&plain_text) {
-        on_incoming_text(app, &addr, plain_text).await;
-        return;
-    }
-
-    // Store + emit.
-    let is_new_chat;
-    {
-        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        is_new_chat = !s.chats.contains_key(&from);
-        if is_new_chat {
-            let (letter, gradient) = gradient_for(&from);
-            let summary = ChatSummary { preview_from: None,
-                id: from.clone(),
-                name: from.clone(),
-                letter, gradient,
-                preview: plain_text.clone(),
-                preview_is_typing: false, preview_by_me: false, has_lock: true,
-                time: time.clone(),
-                unread: 1, online: true, verified: false, channel: false, live: true,
-            };
-            s.chats.insert(from.clone(), ChatBook { summary, messages: Vec::new() });
-            s.chat_order.retain(|id| id != &from);
-            s.chat_order.insert(0, from.clone());
-        }
-        push_peer_message(&mut s, &from, plain_text.clone(), &time);
-    }
-
-    crate::bgnotify::incoming(&app, &from);
-    let _ = app.emit("aqua://incoming", IncomingEventPayload {
-        peer_id: from.clone(),
-        text: plain_text,
-        time,
-        is_new_chat,
-    });
+    // Everything goes the one way (before, a first message skipped the
+    // signed-device-list check and the rest of on_incoming_text).
+    on_incoming_text(app, &addr, plain_text).await;
 }
 
 async fn on_incoming_envelope(
@@ -4376,15 +4359,40 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
 
     // Normal (text or file) message path.
     let time = hhmm_now();
+    let mut is_new_chat = false;
     {
         let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // No chat with them here (new, or deleted on this device): open
+        // one — before, only a session's first message did, and later ones
+        // into a deleted chat were lost without a trace.
+        if !s.chats.contains_key(&from) {
+            is_new_chat = true;
+            let (letter, gradient) = gradient_for(&from);
+            let summary = ChatSummary { preview_from: None,
+                id: from.clone(),
+                name: from.clone(),
+                letter, gradient,
+                preview: String::new(),
+                // push_peer_message counts it (it started at 1: a first
+                // message showed 2 unread).
+                preview_is_typing: false, preview_by_me: false, has_lock: true,
+                time: time.clone(),
+                unread: 0, online: true, verified: false, channel: false, live: true,
+            };
+            s.chats.insert(from.clone(), ChatBook { summary, messages: Vec::new() });
+            s.chat_order.retain(|id| id != &from);
+            s.chat_order.insert(0, from.clone());
+        }
         push_peer_message(&mut s, &from, text.clone(), &time);
     }
+    // Phones in the background: before, only a session's first message
+    // was announced (bgnotify.rs) — the ordinary ones stayed silent.
+    crate::bgnotify::incoming(app, &from);
     let _ = app.emit("aqua://incoming", IncomingEventPayload {
         peer_id: from,
         text,
         time,
-        is_new_chat: false,
+        is_new_chat,
     });
 }
 
@@ -4789,9 +4797,10 @@ fn push_peer_message(s: &mut AppState, peer_id: &str, text: String, time: &str) 
     let (kind, meta) = crate::state::classify_full(&text, None);
     let preview = preview_for(&kind);
     if let Some(book) = s.chats.get_mut(peer_id) {
-        let msg_len = book.messages.len();
         book.messages.push(ChatMessage { meta,
-            id: format!("in-{time}-{msg_len}"),
+            // Unique: "in-{time}-{len}" came back after a deletion (same
+            // minute, same length) and two messages shared one id.
+            id: format!("in-{}", crate::state::uuid_like()),
             from: peer_id.to_string(),
             time: time.to_string(),
             at: crate::state::now_at(),
