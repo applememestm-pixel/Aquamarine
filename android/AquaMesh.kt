@@ -23,6 +23,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.util.Base64
 import app.tauri.annotation.Command
@@ -70,6 +71,11 @@ class MeshDevicesArgs {
   var scanSecs: Int = 0
 }
 
+@InvokeArg
+class MeshLockArgs {
+  var on: Boolean = false
+}
+
 @TauriPlugin
 class AquaMeshPlugin(private val activity: Activity) : Plugin(activity) {
   private val pool = Executors.newCachedThreadPool()
@@ -77,6 +83,7 @@ class AquaMeshPlugin(private val activity: Activity) : Plugin(activity) {
   private val nextId = AtomicLong(1)
   private val accepted = LinkedBlockingQueue<Pair<Long, String>>()
   @Volatile private var server: BluetoothServerSocket? = null
+  private var multicast: WifiManager.MulticastLock? = null
 
   private fun adapter(): BluetoothAdapter? =
     (activity.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
@@ -134,15 +141,27 @@ class AquaMeshPlugin(private val activity: Activity) : Plugin(activity) {
         val s = a.listenUsingInsecureRfcommWithServiceRecord(args.name, UUID.fromString(args.uuid))
         server = s
         Thread {
-          while (server === s) {
+          var cur = s
+          while (server === cur) {
             try {
-              val sock = s.accept() ?: continue
+              val sock = cur.accept() ?: continue
               val id = nextId.getAndIncrement()
               conns[id] = sock
               accepted.put(Pair(id, sock.remoteDevice?.address ?: ""))
             } catch (e: IOException) {
-              if (server !== s) break
-              Thread.sleep(1000)
+              if (server !== cur) break
+              Thread.sleep(2000)
+              // Bluetooth was switched off and on: that socket is dead for
+              // good (it used to fail every second until the app restarted,
+              // and nobody nearby could reach us). Listen again once it's on.
+              val now = adapter()
+              if (now?.isEnabled == true) {
+                try {
+                  val fresh = now.listenUsingInsecureRfcommWithServiceRecord(args.name, UUID.fromString(args.uuid))
+                  try { cur.close() } catch (_: IOException) {}
+                  if (server === cur) { server = fresh; cur = fresh } else { fresh.close(); break }
+                } catch (_: Exception) {}
+              }
             }
           }
         }.apply { isDaemon = true; start() }
@@ -236,6 +255,42 @@ class AquaMeshPlugin(private val activity: Activity) : Plugin(activity) {
     }
   }
 
+  /** A search by hand: a phone isn't visible to others unless paired, so
+   *  the other side's search found nothing. Ask the system to make this one
+   *  visible for two minutes (its own prompt; needs "Nearby devices"). */
+  @SuppressLint("MissingPermission")
+  private fun askVisible() {
+    try {
+      val a = adapter() ?: return
+      if (a.scanMode == BluetoothAdapter.SCAN_MODE_CONNECTABLE_DISCOVERABLE) return
+      if (Build.VERSION.SDK_INT >= 31 && activity.checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) != PackageManager.PERMISSION_GRANTED) {
+        activity.runOnUiThread { activity.requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_ADVERTISE), 7732) }
+        return
+      }
+      val i = Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 120)
+      activity.runOnUiThread { try { activity.startActivity(i) } catch (_: Exception) {} }
+    } catch (_: Exception) {}
+  }
+
+  /** Same Wi-Fi (mesh_lan.rs): many phones drop broadcast packets unless an
+   *  app holds a multicast lock — the "who's here?" beacons never arrived. */
+  @Command
+  fun lanLock(invoke: Invoke) {
+    val args = invoke.parseArgs(MeshLockArgs::class.java)
+    try {
+      if (args.on) {
+        if (multicast == null) {
+          val wm = activity.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+          multicast = wm.createMulticastLock("aquamarine:nearby").apply { setReferenceCounted(false); acquire() }
+        }
+      } else {
+        multicast?.release()
+        multicast = null
+      }
+    } catch (_: Exception) {}
+    invoke.resolve(JSObject())
+  }
+
   /** Paired devices, plus whatever a short scan finds. */
   @SuppressLint("MissingPermission")
   @Command
@@ -246,6 +301,7 @@ class AquaMeshPlugin(private val activity: Activity) : Plugin(activity) {
       val found = LinkedHashMap<String, Boolean>()
       for (d in a.bondedDevices ?: emptySet()) found[d.address] = true
       if (args.scanSecs > 0) {
+        askVisible()
         val rx = object : BroadcastReceiver() {
           override fun onReceive(c: Context, i: Intent) {
             if (i.action == BluetoothDevice.ACTION_FOUND) {

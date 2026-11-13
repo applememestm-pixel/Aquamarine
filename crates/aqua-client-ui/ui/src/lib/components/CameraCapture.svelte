@@ -44,8 +44,14 @@
   let pipDrag: { id: number; dx: number; dy: number } | null = null;
   let mixer: { canvas: HTMLCanvasElement; raf: number } | null = null;
 
+  /** Bumped by every start / stop: a camera that finishes opening after the
+   *  window closed or the side was switched again is closed at once (it
+   *  stayed on, the light too, until the app was killed). */
+  let gen = 0;
+  const drop = (s: MediaStream) => s.getTracks().forEach((x) => x.stop());
   async function start() {
     stop();
+    const my = gen;
     err = "";
     try {
       // Full HD asked as a minimum of 720 lines too: some Android WebViews
@@ -55,6 +61,7 @@
       stream = await navigator.mediaDevices.getUserMedia({ video: vid, audio: true })
         .catch(() => navigator.mediaDevices.getUserMedia({ video: vid, audio: false }))
         .catch(() => navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing } }, audio: false }));
+      if (my !== gen) { drop(stream); return; }
       const tr0 = stream.getVideoTracks()[0];
       const st = tr0?.getSettings?.();
       if (tr0 && st && Math.min(st.width ?? 0, st.height ?? 0) < 720) {
@@ -65,11 +72,15 @@
       // after a moment — ask again with plain constraints.
       const mine = stream;
       setTimeout(async () => {
-        if (stream !== mine || !video || video.videoWidth) return;
+        if (stream !== mine || my !== gen || !video || video.videoWidth) return;
         try {
-          stop();
-          stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing }, audio: true })
+          // Only the main camera: the small second one keeps running.
+          mine.getTracks().forEach((x) => x.stop());
+          stream = null;
+          const again = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing }, audio: true })
             .catch(() => navigator.mediaDevices.getUserMedia({ video: true, audio: false }));
+          if (my !== gen) { drop(again); return; }
+          stream = again;
           if (video) { video.srcObject = stream; void video.play().catch(() => {}); }
         } catch { /* the error above stays */ }
       }, 1500);
@@ -82,6 +93,7 @@
     }
   }
   function stop() {
+    gen++;
     stream?.getTracks().forEach((x) => x.stop());
     stream = null;
     stopSecond();
@@ -92,8 +104,12 @@
   }
   async function startSecond() {
     stopSecond();
+    const my = gen;
     try {
-      stream2 = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: facing === "user" ? "environment" : "user" }, width: { ideal: 720 }, height: { ideal: 720 } }, audio: false });
+      const s2 = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: facing === "user" ? "environment" : "user" }, width: { ideal: 720 }, height: { ideal: 720 } }, audio: false });
+      if (my !== gen || !dual) { drop(s2); return; }
+      stream2?.getTracks().forEach((x) => x.stop());
+      stream2 = s2;
       if (video2) { video2.srcObject = stream2; video2.muted = true; void video2.play().catch(() => {}); }
     } catch {
       dual = false;

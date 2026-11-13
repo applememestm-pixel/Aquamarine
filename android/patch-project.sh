@@ -62,6 +62,18 @@ if ! grep -q AquaRelayService "$M"; then
     </application>' perl -0pi -e 's|</application>|$ENV{AQ_SVC}|' "$M"
   echo '[patch] foreground service for the server added'
 fi
+# 1c''. Screen sharing in calls (MainActivity.kt: AquaScreenService) and
+#       nearby delivery (Wi-Fi broadcasts, Bluetooth visibility).
+if ! grep -q AquaScreenService "$M"; then
+  AQ_SCR='<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    ' perl -0pi -e 's/<application/$ENV{AQ_SCR}<application/' "$M"
+  AQ_SCS='<service android:name=".AquaScreenService" android:exported="false" android:foregroundServiceType="mediaProjection" />
+    </application>' perl -0pi -e 's|</application>|$ENV{AQ_SCS}|' "$M"
+  echo '[patch] screen sharing service + nearby permissions added'
+fi
 # 1c'''. Home-screen widget (android/widget).
 if [ -n "$MA" ]; then
   cp -f "$HERE/widget/AquaWidget.kt" "$(dirname "$MA")/AquaWidget.kt"

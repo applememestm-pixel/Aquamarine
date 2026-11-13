@@ -167,6 +167,14 @@ impl FileEnvelope {
             .map_err(|_| FileError::BadLength)?;
         let nonce: [u8; AEAD_NONCE_LEN] = nonce_bytes.try_into()
             .map_err(|_| FileError::BadLength)?;
+        // The CID goes into URLs and local file names, the size into
+        // allocations: a sender can't make either one anything else.
+        if !valid_cid(&w.cid) {
+            return Err(FileError::BadJson("bad cid".into()));
+        }
+        if w.size > MAX_FILE_SIZE {
+            return Err(FileError::TooLarge);
+        }
         Ok(FileEnvelope {
             cid: w.cid,
             key,
@@ -335,7 +343,8 @@ pub fn decrypt_file(
     if let Some(chunk) = envelope.chunk {
         let piece = chunk as usize + CHUNK_TAG;
         let n = chunk_count(envelope.size, chunk);
-        let mut out = Vec::with_capacity(envelope.size as usize);
+        // Never more than the bytes that are really here (`size` is the sender's word).
+        let mut out = Vec::with_capacity((envelope.size.min(MAX_FILE_SIZE) as usize).min(ciphertext.len()));
         for i in 0..n {
             let a = i as usize * piece;
             if a > ciphertext.len() {
@@ -356,6 +365,11 @@ pub fn decrypt_file(
         ciphertext,
     )?;
     Ok(pt)
+}
+
+/// A blob CID: SHA-256 as 64 hex digits — nothing that could be a path.
+pub fn valid_cid(cid: &str) -> bool {
+    cid.len() == 64 && cid.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Public helper: compute the SHA-256 CID a ciphertext blob would have.
@@ -411,6 +425,18 @@ mod tests {
         // Same plaintext, but fresh key + nonce → different cid.
         assert_ne!(e1.cid, e2.cid);
         assert_ne!(e1.key, e2.key);
+    }
+
+    #[test]
+    fn offers_with_bad_cid_or_size_are_refused() {
+        let (env, _) = encrypt_file(b"x", "a.txt", None).unwrap();
+        let text = env.to_message_text();
+        assert!(FileEnvelope::from_message_text(&text).is_ok());
+        let bad = text.replace(&env.cid, "../../../../etc/passwd");
+        assert!(FileEnvelope::from_message_text(&bad).is_err());
+        let huge = text.replace("\"size\":1", "\"size\":18446744073709551615");
+        assert_ne!(huge, text);
+        assert!(matches!(FileEnvelope::from_message_text(&huge), Err(FileError::TooLarge)));
     }
 
     #[test]

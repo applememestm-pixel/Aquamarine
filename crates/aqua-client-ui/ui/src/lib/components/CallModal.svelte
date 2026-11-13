@@ -582,13 +582,23 @@
   // ---------------------------------------------------------------------------
   async function startMic() {
     const cs = get(callSettings);
+    const forPc = pc;
+    let got: MediaStream;
     try {
-      micRaw = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(cs), video: false });
+      got = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(cs), video: false });
     } catch (e) {
       showToast(`Microphone unavailable (${e}) — you can still listen`, 5000);
       micRaw = null;
       return;
     }
+    // The call ended (or another one began) while the permission prompt was
+    // up: this microphone would stay open with nothing to send it to.
+    if (pc !== forPc || !pc) { got.getTracks().forEach((t) => t.stop()); return; }
+    // A second start (accept tapped twice, mic switched): the first goes.
+    if (micRaw && micRaw !== got) micRaw.getTracks().forEach((t) => t.stop());
+    if (micTrack) { try { micTrack.stop(); } catch { /* ignore */ } }
+    if (inCtx) { void inCtx.close().catch(() => {}); inCtx = null; }
+    micRaw = got;
     const raw = micRaw.getAudioTracks()[0];
     try { raw.contentHint = "speech"; } catch { /* ignore */ }
     let out: MediaStreamTrack = raw;
@@ -696,22 +706,38 @@
     if (k === "ended" || k === "idle") takeCamOnConnect();
   });
 
+  /** A camera / screen is being opened (its prompt may be up): a second tap
+   *  waits instead of opening another one that's never closed. */
+  let camBusy = false;
+  let screenBusy = false;
+
   async function toggleCam() {
+    if (camBusy) return;
     if (camStream) return stopCam();
     if (!pc || !tx[T_CAM] || tx[T_CAM].receiver.track.kind !== "video") { showToast(tr("Your contact's app is too old for video — ask them to update")); return; }
     const cs = get(callSettings);
+    const forPc = pc;
+    let s: MediaStream | null = null;
+    camBusy = true;
     try {
-      const s = await navigator.mediaDevices.getUserMedia({ video: camVideo(cs.camId, cs.camRes), audio: false });
+      s = await navigator.mediaDevices.getUserMedia({ video: camVideo(cs.camId, cs.camRes), audio: false });
+      // Hung up while the camera was starting: don't leave it on.
+      if (pc !== forPc || !tx[T_CAM]) { s.getTracks().forEach((t) => t.stop()); return; }
       const v = s.getVideoTracks()[0];
       try { v.contentHint = "motion"; } catch { /* ignore */ }
       await tx[T_CAM].sender.replaceTrack(v);
       camStream = s;
+      s = null;
+      const cam = camStream;
       await tuneSender(tx[T_CAM].sender, { maxKbps: targetVideoKbps(cs.camRes, 30, cs.maxVideoKbps), maxFps: 30, hint: "camera" });
-      v.onended = () => void stopCam();
+      v.onended = () => { if (camStream === cam) void stopCam(); };
       expanded = true;
       sendMedia();
     } catch (e) {
+      s?.getTracks().forEach((t) => t.stop());
       showToast(`Could not start camera: ${e}`);
+    } finally {
+      camBusy = false;
     }
   }
 
@@ -724,24 +750,36 @@
 
   /** Front ↔ back camera, without dropping the video. */
   async function flipCam() {
-    if (!camStream || !tx[T_CAM]) return;
+    if (!camStream || !tx[T_CAM] || camBusy) return;
     const cs = get(callSettings);
     const next = facing === "user" ? "environment" : "user";
     const prev = facing;
-    facing = next;
-    try {
-      // Some phones can't open two cameras at once: let go of the old one first.
-      camStream.getVideoTracks().forEach((t) => { t.onended = null; t.stop(); });
+    const forPc = pc;
+    camBusy = true;
+    const open = async () => {
       const s = await navigator.mediaDevices.getUserMedia({ video: camVideo(cs.camId, cs.camRes), audio: false });
+      if (pc !== forPc || !tx[T_CAM]) { s.getTracks().forEach((t) => t.stop()); throw new Error("the call ended"); }
       const v = s.getVideoTracks()[0];
       try { v.contentHint = "motion"; } catch { /* ignore */ }
       await tx[T_CAM].sender.replaceTrack(v);
       camStream = s;
-      v.onended = () => void stopCam();
+      v.onended = () => { if (camStream === s) void stopCam(); };
+    };
+    try {
+      // Some phones can't open two cameras at once: let go of the old one first.
+      camStream.getVideoTracks().forEach((t) => { t.onended = null; t.stop(); });
+      facing = next;
+      await open();
     } catch (e) {
+      // That side didn't open (no back camera, busy): go back to the one
+      // that worked instead of dropping the video altogether.
       facing = prev;
+      let back = false;
+      if (pc === forPc && pc) { try { await open(); back = true; } catch { /* still nothing */ } }
       showToast(tr("Could not switch the camera: {e}", { e: String(e) }));
-      await stopCam();
+      if (!back) await stopCam();
+    } finally {
+      camBusy = false;
     }
   }
 
@@ -765,9 +803,14 @@
     const cfg = { ...gl };
     patchCallSettings({ screenRes: cfg.res, screenFps: cfg.fps, screenHint: cfg.hint, screenAudio: cfg.audio });
     if (screenStream) return changeStreamQuality(cfg);
+    if (screenBusy) return;
     if (!pc || !tx[T_SCR] || tx[T_SCR].receiver.track.kind !== "video") { showToast(tr("Your contact's app is too old for screen share — ask them to update")); return; }
+    const forPc = pc;
+    screenBusy = true;
     try {
       const { stream: s, camera } = await captureScreenOrCamera(displayMediaOptions(cfg.res, cfg.fps, cfg.audio), cfg.fps);
+      // The call ended while the system asked: stop capturing right away.
+      if (pc !== forPc || !tx[T_SCR]) { s.getTracks().forEach((t) => t.stop()); return; }
       if (camera) showToast(tr("Phones can't share the screen — streaming your camera instead"), 4000);
       const v = s.getVideoTracks()[0];
       try { v.contentHint = cfg.hint === "detail" && cfg.fps < 50 ? "detail" : "motion"; } catch { /* ignore */ }
@@ -788,6 +831,8 @@
       sendMedia();
     } catch (e) {
       if ((e as DOMException)?.name !== "NotAllowedError") showToast(`Could not start stream: ${e}`);
+    } finally {
+      screenBusy = false;
     }
   }
 
@@ -892,9 +937,11 @@
     void retuneAll();
   }
 
+  let accepting = false;
   async function accept() {
     const s = get(callState);
-    if (s.kind !== "incoming" || !pc) return;
+    if (s.kind !== "incoming" || !pc || accepting) return;
+    accepting = true;
     stopRinging();
     try {
       await startMic();
@@ -906,6 +953,8 @@
     } catch (e) {
       showToast(`Could not accept: ${e}`);
       await hangup("local-error");
+    } finally {
+      accepting = false;
     }
   }
 

@@ -185,6 +185,12 @@ async fn send_inner(app: &AppHandle, addr: &str, payload: &str, own: bool) -> Re
                 return Err("not connected".into());
             }
             crate::mesh::queue(app, addr, &env);
+        } else if crate::mesh::relay_down() && worth_keeping(payload) {
+            // The relay's connection is down: the transport "took" it only
+            // into its own resend queue (a confirming relay), and nearby
+            // delivery never saw it — same Wi-Fi / Bluetooth stayed silent.
+            // Both keep it now; a second copy fails to decrypt and is dropped.
+            crate::mesh::queue(app, addr, &env);
         }
         return Ok(());
     }

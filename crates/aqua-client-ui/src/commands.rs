@@ -1977,13 +1977,30 @@ async fn attach_file_fwd(
     let cid = envelope.cid.clone();
     let size = envelope.size;
 
-    // 3. Upload the ciphertext blob.
+    // 3. Upload the ciphertext blob. No relay right now: a file small
+    //    enough waits on this device instead — contacts on the same Wi-Fi
+    //    or over Bluetooth take it from here, the relay gets it once it's
+    //    back (mesh.rs). Before, a file couldn't be sent without a relay.
     let transport = {
         let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        s.transport.clone().ok_or("not connected")?
+        s.transport.clone()
     };
-    transport.upload_blob_kind(&cid, ciphertext, false, Some(blob_kind(envelope.category.as_deref(), envelope.mime.as_deref(), &envelope.filename))).await
-        .map_err(|e| format!("upload_blob: {e}"))?;
+    let nearby = ciphertext.len() <= crate::mesh::BLOB_MAX && crate::mesh::enabled(&app);
+    let spare = nearby.then(|| ciphertext.clone());
+    let up = match &transport {
+        Some(t) if !(nearby && crate::mesh::relay_down()) => t
+            .upload_blob_kind(&cid, ciphertext, false, Some(blob_kind(envelope.category.as_deref(), envelope.mime.as_deref(), &envelope.filename)))
+            .await
+            .map_err(|e| format!("upload_blob: {e}")),
+        Some(_) => Err("the relay is away".to_string()),
+        None => Err("not connected".to_string()),
+    };
+    if let Err(e) = up {
+        match spare {
+            Some(b) => crate::mesh::keep_blob(&app, &cid, &b)?,
+            None => return Err(e),
+        }
+    }
 
     // 4. Send the offer as a regular E2EE text message through the
     //    peer's session.
@@ -2223,23 +2240,32 @@ pub async fn download_file(
         return Ok(DownloadResult { saved_path: saved_str });
     }
 
-    // Download blob.
-    let transport = {
-        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        s.transport.clone().ok_or("not connected")?
+    // Download blob. (A CID that isn't a hash — an old message, a local
+    // "Saved Messages" one — never becomes a URL path.)
+    if !aqua_core::valid_cid(&envelope.cid) {
+        return Err("this file is not available".into());
+    }
+    // Came from a contact nearby (same Wi-Fi / Bluetooth, mesh.rs): no relay needed.
+    let data_dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.clone() };
+    let nearby = crate::mesh::local_blob(&data_dir, &envelope.cid);
+    let from_nearby = nearby.is_some();
+    let ciphertext = match nearby {
+        Some(b) => b,
+        None => {
+            let transport = {
+                let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                s.transport.clone().ok_or("not connected")?
+            };
+            transport.download_blob(&envelope.cid).await
+                .map_err(|e| format!("download_blob: {e}"))?
+        }
     };
-    let ciphertext = transport.download_blob(&envelope.cid).await
-        .map_err(|e| format!("download_blob: {e}"))?;
 
     // Decrypt.
     let plaintext = decrypt_file(&envelope, &ciphertext)
         .map_err(|e| format!("decrypt_file: {e}"))?;
 
     // Save to Downloads/Aquamarine.
-    let data_dir = {
-        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        s.data_dir.clone()
-    };
     // View once: inside the app's own data, never in Downloads (and wiped
     // once looked at, `once_burn`).
     let base = if envelope.category.as_deref() == Some("once") { data_dir.join("once") } else { downloads_dir(&data_dir) };
@@ -2255,6 +2281,9 @@ pub async fn download_file(
     };
     let saved_str = save_path.to_string_lossy().to_string();
     set_saved_at(&state, &peer_id, &message_id, &saved_str)?;
+    if from_nearby {
+        crate::mesh::blob_used(&app, &envelope.cid);
+    }
     // Keep within the limits (Settings → Data and storage).
     if let Ok(mut s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { crate::storage::trim(&mut s); }
     let _ = app.emit("aqua://chats_updated", ());
@@ -2362,6 +2391,16 @@ pub async fn stream_file(
         return crate::media_server::url_for(std::path::Path::new(&p));
     }
     let chunk = envelope.chunk.ok_or("this file isn't streamed")?;
+    // The CID names the part file below: only a real hash.
+    if !aqua_core::valid_cid(&envelope.cid) {
+        return Err("this file is not available".into());
+    }
+    // It came nearby (mesh.rs): open the local copy whole, no streaming.
+    let here = { let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner); crate::mesh::has_blob(&s.data_dir, &envelope.cid) };
+    if here {
+        let r = download_file(state, app, peer_id, message_id).await?;
+        return crate::media_server::url_for(std::path::Path::new(&r.saved_path));
+    }
     let ext: String = std::path::Path::new(&envelope.filename).extension().and_then(|e| e.to_str()).unwrap_or("mp4").chars().filter(|c| c.is_ascii_alphanumeric()).take(5).collect();
     let mime = envelope.mime.clone().unwrap_or_else(|| "video/mp4".into());
     if let Some((_, url)) = streams().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&envelope.cid) {
@@ -2407,9 +2446,15 @@ pub async fn stream_file(
         use sha2::Digest;
         use std::io::Write;
         let (lock, cv) = &*slot;
+        let cid = envelope.cid.clone();
+        let part_f = part.clone();
         let fail = |e: String| {
             if let Ok(mut g) = lock.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { g.err = Some(e); }
             cv.notify_all();
+            // A broken stream isn't handed out again (a retry used to get
+            // the same dead URL until the app restarted); its half file goes.
+            if let Ok(mut m) = streams().lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { m.remove(&cid); }
+            let _ = std::fs::remove_file(&part_f);
         };
         let mut out = match std::fs::OpenOptions::new().append(true).open(&part) {
             Ok(f) => f,

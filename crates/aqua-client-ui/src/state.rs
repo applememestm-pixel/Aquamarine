@@ -1295,24 +1295,43 @@ fn load_or_create_master_key(dir: &std::path::Path) -> Result<MasterKey> {
     let legacy_path = dir.join("master.key");
     let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).ok();
 
+    // The keyring answered "nothing here" (not an error, not a value): only
+    // then may this folder's key be written into it. The entry is shared by
+    // every account on the device — overwriting a value that merely failed
+    // to read would lock the other account out of its vault.
+    let mut keyring_empty = false;
     // 1. Prefer the keyring if it holds a usable value.
     if let Some(entry) = &entry {
         match entry.get_password() {
             Ok(hex_str) => match decode_key(&hex_str) {
                 Some(arr) => {
-                    // If a legacy file somehow still exists, clean it up
-                    // so there isn't a plaintext key on disk alongside
-                    // an authoritative keyring entry.
+                    // A file here too. The keyring entry is one for the
+                    // whole device, but every account (accounts.rs) has its
+                    // own folder: a file with ANOTHER key is this account's
+                    // own (made while the keyring was unavailable) — it was
+                    // deleted and the vault opened with the wrong key, so
+                    // that account was gone. Keep and use it.
                     if legacy_path.exists() {
-                        if let Err(e) = std::fs::remove_file(&legacy_path) {
-                            tracing::warn!(?e, "could not remove stale master.key file");
+                        let file: Option<[u8; MASTER_KEY_LEN]> = std::fs::read(&legacy_path).ok().and_then(|b| b.try_into().ok());
+                        match file {
+                            Some(f) if f != arr => {
+                                tracing::warn!("master.key differs from the keyring entry; using this folder's file");
+                                return Ok(MasterKey::from_bytes(f));
+                            }
+                            // The same key (a finished migration): no
+                            // plaintext copy next to the keyring entry.
+                            _ => {
+                                if let Err(e) = std::fs::remove_file(&legacy_path) {
+                                    tracing::warn!(?e, "could not remove stale master.key file");
+                                }
+                            }
                         }
                     }
                     return Ok(MasterKey::from_bytes(arr));
                 }
                 None => tracing::warn!("master key in keyring is malformed; ignoring"),
             },
-            Err(keyring::Error::NoEntry) => { /* fall through to migrate / generate */ }
+            Err(keyring::Error::NoEntry) => { keyring_empty = true; /* fall through to migrate / generate */ }
             Err(e) => tracing::warn!(?e, "keyring read failed; will try fallback paths"),
         }
     }
@@ -1324,7 +1343,7 @@ fn load_or_create_master_key(dir: &std::path::Path) -> Result<MasterKey> {
         let arr: [u8; MASTER_KEY_LEN] = bytes
             .try_into()
             .map_err(|_| anyhow!("master.key has unexpected length"))?;
-        if let Some(entry) = &entry {
+        if let Some(entry) = entry.as_ref().filter(|_| keyring_empty) {
             match entry.set_password(&hex::encode(arr)) {
                 Ok(()) => {
                     if let Err(e) = std::fs::remove_file(&legacy_path) {
@@ -1345,6 +1364,7 @@ fn load_or_create_master_key(dir: &std::path::Path) -> Result<MasterKey> {
     let key = MasterKey::generate();
     let stored_in_keyring = entry
         .as_ref()
+        .filter(|_| keyring_empty)
         .and_then(|e| e.set_password(&hex::encode(key.0)).ok())
         .is_some();
     if stored_in_keyring {

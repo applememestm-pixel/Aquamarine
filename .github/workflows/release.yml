@@ -451,7 +451,14 @@ jobs:
           sed -i "0,/<application/s##${fgs}#" "$m"
           svc='<service android:name=".AquaRelayService" android:exported="false" android:foregroundServiceType="specialUse"><property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Hosts the Aquamarine relay server for the user and their contacts" /></service>\n    </application>'
           sed -i "s#</application>#${svc}#" "$m"
-          grep -n 'AquaRelayService\|FOREGROUND' "$m"
+          # Screen sharing in calls (MainActivity.kt: AquaScreenService, MediaProjection);
+          # nearby delivery: Wi-Fi broadcasts get through (multicast lock), the phone
+          # can be made visible over Bluetooth for a search.
+          more='<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />\n    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />\n    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />\n    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />\n    <application'
+          sed -i "0,/<application/s##${more}#" "$m"
+          scr='<service android:name=".AquaScreenService" android:exported="false" android:foregroundServiceType="mediaProjection" />\n    </application>'
+          sed -i "s#</application>#${scr}#" "$m"
+          grep -n 'AquaRelayService\|AquaScreenService\|FOREGROUND\|MULTICAST' "$m""
           # Home-screen widget: unread chats (android/widget)
           cp ../../android/widget/AquaWidget.kt "$(dirname "$(find gen/android/app/src/main/java -name MainActivity.kt | head -1)")/AquaWidget.kt"
           cp -r ../../android/widget/res/* gen/android/app/src/main/res/

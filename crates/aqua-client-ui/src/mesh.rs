@@ -102,6 +102,10 @@ struct Book {
     /// no pairing in the system settings.
     #[serde(default)]
     direct: Vec<String>,
+    /// Sealed files sent while the relay was away (`mesh-blobs/<cid>`):
+    /// they go to the relay once it's back, and to contacts nearby before.
+    #[serde(default)]
+    uploads: Vec<String>,
     #[serde(skip)]
     seen: VecDeque<String>,
     #[serde(skip)]
@@ -158,6 +162,152 @@ impl Book {
 
 fn item_id(payload: &[u8]) -> String {
     hex::encode(&Sha256::digest(payload)[..16])
+}
+
+// ---------- files carried device to device ------------------------------------
+//
+// A file's sealed blob normally waits on the relay; with no relay it can't be
+// sent at all — a photo over the same Wi-Fi or Bluetooth never arrived. Now
+// a sent file (≤ BLOB_MAX) waits in `mesh-blobs/<cid>` when the relay can't
+// take it, and a nearby contact who got the offer asks for it by CID
+// (`Want` / `Blob` frames, only between versions that say "blob" in hello).
+
+/// Largest sealed file carried device to device (Bluetooth: ~100 KB/s).
+pub const BLOB_MAX: usize = 40 << 20;
+/// Bytes of a blob per frame (base64 keeps it well under MAX_FRAME).
+const BLOB_PIECE: usize = 512 * 1024;
+/// Blobs asked for in one meeting.
+const BLOB_WANTS: usize = 32;
+/// What this version can do beyond v1 (hello `caps`).
+const CAPS: &[&str] = &["blob"];
+
+fn data_dir_of(app: &AppHandle) -> Option<PathBuf> {
+    app.try_state::<std::sync::Mutex<AppState>>()
+        .and_then(|s| s.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().map(|s| s.data_dir.clone()))
+}
+
+/// Where the sealed file `cid` waits for nearby delivery (None: not a CID).
+pub fn blob_path(data_dir: &std::path::Path, cid: &str) -> Option<PathBuf> {
+    aqua_core::valid_cid(cid).then(|| data_dir.join("mesh-blobs").join(cid.to_ascii_lowercase()))
+}
+
+/// The sealed file `cid`, if it came here nearby (or I sent it offline).
+pub fn local_blob(data_dir: &std::path::Path, cid: &str) -> Option<Vec<u8>> {
+    let b = std::fs::read(blob_path(data_dir, cid)?).ok()?;
+    (aqua_core::hex_sha256(&b).eq_ignore_ascii_case(cid)).then_some(b)
+}
+
+pub fn has_blob(data_dir: &std::path::Path, cid: &str) -> bool {
+    blob_path(data_dir, cid).is_some_and(|p| p.is_file())
+}
+
+fn write_blob(data_dir: &std::path::Path, cid: &str, bytes: &[u8]) -> Result<(), String> {
+    let p = blob_path(data_dir, cid).ok_or("bad cid")?;
+    if let Some(d) = p.parent() {
+        std::fs::create_dir_all(d).map_err(|e| format!("mkdir: {e}"))?;
+    }
+    let tmp = p.with_extension("part");
+    std::fs::write(&tmp, bytes).map_err(|e| format!("write: {e}"))?;
+    std::fs::rename(&tmp, &p).map_err(|e| format!("rename: {e}"))
+}
+
+/// The relay couldn't take a file I'm sending: it waits here for contacts
+/// nearby and for the relay (`flush_to_relay`).
+pub fn keep_blob(app: &AppHandle, cid: &str, bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() > BLOB_MAX {
+        return Err("the file is too large to send without a server".into());
+    }
+    let dir = data_dir_of(app).ok_or("no data folder")?;
+    write_blob(&dir, cid, bytes)?;
+    let mut b = book(app);
+    if !b.uploads.iter().any(|c| c == cid) {
+        b.uploads.push(cid.to_string());
+    }
+    b.save();
+    Ok(())
+}
+
+/// A file that came nearby was opened and saved: its sealed copy can go
+/// (one of mine waits for the relay still).
+pub fn blob_used(app: &AppHandle, cid: &str) {
+    if book(app).uploads.iter().any(|c| c == cid) {
+        return;
+    }
+    if let Some(p) = data_dir_of(app).and_then(|d| blob_path(&d, cid)) {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+/// Old leftovers (never asked for, relay never back) go after KEEP_SECS.
+fn prune_blobs(app: &AppHandle) {
+    let Some(dir) = data_dir_of(app).map(|d| d.join("mesh-blobs")) else { return };
+    let Ok(rd) = std::fs::read_dir(&dir) else { return };
+    let cut = std::time::Duration::from_secs(KEEP_SECS);
+    let mut gone = Vec::new();
+    for e in rd.flatten() {
+        let old = e.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| t.elapsed().ok()).is_some_and(|a| a > cut);
+        if old && std::fs::remove_file(e.path()).is_ok() {
+            gone.push(e.file_name().to_string_lossy().to_string());
+        }
+    }
+    if !gone.is_empty() {
+        let mut b = book(app);
+        b.uploads.retain(|c| !gone.contains(c));
+        b.save();
+    }
+}
+
+/// Offers from `peer` (a device address) whose file isn't here: the chat
+/// with them, and their posts in groups. Newest first.
+fn wanted_from(app: &AppHandle, peer: &str) -> Vec<String> {
+    let st = app.state::<std::sync::Mutex<AppState>>();
+    let s = st.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let base = crate::multidev::base_user(peer);
+    let cut = now().saturating_sub(KEEP_SECS) as i64;
+    let mut out: Vec<String> = Vec::new();
+    for (chat, book) in s.chats.iter() {
+        let group = chat.starts_with("grp_");
+        if chat != base && !group {
+            continue;
+        }
+        for m in book.messages.iter().rev().take(400) {
+            if out.len() >= BLOB_WANTS {
+                break;
+            }
+            if m.from == "me" || (group && m.from != base) || m.at.is_some_and(|a| a < cut) {
+                continue;
+            }
+            if let crate::state::MessageKind::File { cid, saved_at, size, .. } = &m.kind {
+                let here = saved_at.as_deref().is_some_and(|p| std::path::Path::new(p).is_file());
+                if !here && aqua_core::valid_cid(cid) && (*size as usize) <= BLOB_MAX && !has_blob(&s.data_dir, cid) && !out.contains(cid) {
+                    out.push(cid.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A wanted file came nearby: open it for every message that offered it
+/// (the same as tapping "download", now from the local copy).
+fn open_arrived(app: &AppHandle, cid: &str) {
+    let targets: Vec<(String, String)> = {
+        let st = app.state::<std::sync::Mutex<AppState>>();
+        let s = st.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        s.chats.iter().flat_map(|(chat, b)| b.messages.iter().filter_map(move |m| match &m.kind {
+            crate::state::MessageKind::File { cid: c, saved_at: None, .. } if c.eq_ignore_ascii_case(cid) => Some((chat.clone(), m.id.clone())),
+            _ => None,
+        })).collect()
+    };
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        for (peer, id) in targets {
+            let st = app.state::<std::sync::Mutex<AppState>>();
+            if let Err(e) = crate::commands::download_file(st, app.clone(), peer, id).await {
+                tracing::info!(%e, "mesh: a file that came nearby didn't open");
+            }
+        }
+    });
 }
 
 /// Nearby delivery is on unless the user switched it off.
@@ -254,6 +404,29 @@ pub async fn flush_to_relay(app: &AppHandle) {
         s.transport.clone()
     };
     let Some(t) = transport else { return };
+    // Files sent while away first: the offers below point at them.
+    let ups: Vec<String> = book(app).uploads.clone();
+    if !ups.is_empty() {
+        let dir = data_dir_of(app);
+        for cid in ups {
+            let bytes = dir.as_deref().and_then(|d| local_blob(d, &cid));
+            let ok = match bytes {
+                Some(b) => t.upload_blob(&cid, b).await.is_ok(),
+                None => true, // gone (pruned / damaged): nothing to send
+            };
+            if !ok {
+                break;
+            }
+            {
+                let mut b = book(app);
+                b.uploads.retain(|c| *c != cid);
+                b.save();
+            }
+            if let Some(p) = dir.as_deref().and_then(|d| blob_path(d, &cid)) {
+                let _ = std::fs::remove_file(p);
+            }
+        }
+    }
     let items: Vec<Item> = book(app).items.clone();
     if items.is_empty() {
         return;
@@ -377,6 +550,7 @@ pub async fn start(app: AppHandle) {
     if !enabled(&app) || !platform::SUPPORTED {
         return;
     }
+    prune_blobs(&app);
     if let Err(e) = platform::listen(&app).await {
         tracing::info!(%e, "mesh: not listening");
         *NOTE.lock().unwrap_or_else(|e| e.into_inner()) = Some(e);
@@ -412,6 +586,10 @@ pub fn relay_lost() {
 }
 pub fn relay_back() {
     RELAY_LOST.store(false, std::sync::atomic::Ordering::Relaxed);
+}
+/// The relay connection is down right now (sends only reach its resend queue).
+pub fn relay_down() -> bool {
+    RELAY_LOST.load(std::sync::atomic::Ordering::Relaxed)
 }
 fn relay_up(app: &AppHandle) -> bool {
     !RELAY_LOST.load(std::sync::atomic::Ordering::Relaxed)
@@ -455,11 +633,19 @@ enum Frame {
         /// One-time passes from a QR (meet above).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         meet: Vec<String>,
+        /// What else this side speaks (CAPS); older versions send none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        caps: Vec<String>,
     },
     Auth { addr: String, sig: String },
     Batch { items: Vec<WireItem> },
     Ack { ids: Vec<String> },
     Bye { reason: String },
+    /// Sealed files (by CID) this side has offers for but not the file.
+    Want { cids: Vec<String> },
+    /// A piece of a sealed file; `end` on its last piece. An empty `cid`
+    /// ends the run.
+    Blob { cid: String, #[serde(default)] data: String, #[serde(default)] end: bool },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -628,6 +814,16 @@ trait Ctx {
     fn issued(&self, _toks: &[String]) -> bool {
         false
     }
+    /// Sealed files `peer` offered that aren't here.
+    fn wanted_blobs(&self, _peer: &str) -> Vec<String> {
+        Vec::new()
+    }
+    /// The sealed file `cid`, if it waits here for nearby delivery.
+    fn blob(&self, _cid: &str) -> Option<Vec<u8>> {
+        None
+    }
+    /// A wanted sealed file arrived (its hash is checked).
+    fn got_blob(&self, _cid: &str, _bytes: &[u8]) {}
 }
 
 struct AppCtx<'a>(&'a AppHandle, &'static str);
@@ -668,6 +864,19 @@ impl Ctx for AppCtx<'_> {
     fn issued(&self, toks: &[String]) -> bool {
         issued_ok(toks)
     }
+    fn wanted_blobs(&self, peer: &str) -> Vec<String> {
+        wanted_from(self.0, peer)
+    }
+    fn blob(&self, cid: &str) -> Option<Vec<u8>> {
+        data_dir_of(self.0).and_then(|d| local_blob(&d, cid))
+    }
+    fn got_blob(&self, cid: &str, bytes: &[u8]) {
+        let Some(dir) = data_dir_of(self.0) else { return };
+        match write_blob(&dir, cid, bytes) {
+            Ok(()) => open_arrived(self.0, cid),
+            Err(e) => tracing::warn!(%e, "mesh: couldn't keep a file that came nearby"),
+        }
+    }
 }
 
 fn exchange<S: Read + Write, C: Ctx>(ctx: &C, link: &mut S, dialled: bool, rep: &mut SyncReport) -> Result<(), String> {
@@ -681,6 +890,7 @@ fn exchange<S: Read + Write, C: Ctx>(ctx: &C, link: &mut S, dialled: bool, rep: 
         sign_pub: B64.encode(pubk.sign_pub.as_bytes()),
         dh_pub: B64.encode(pubk.dh_pub.as_bytes()),
         meet: ctx.held(),
+        caps: CAPS.iter().map(|c| c.to_string()).collect(),
     };
     // 1. Hello both ways. The dialled side checks the caller is a contact
     // before it says who it is, so a stranger learns nothing.
@@ -690,7 +900,7 @@ fn exchange<S: Read + Write, C: Ctx>(ctx: &C, link: &mut S, dialled: bool, rep: 
     } else {
         read_frame(link)?
     };
-    let Frame::Hello { v, addrs, nonce, sign_pub, dh_pub, meet } = theirs else { return Err("expected hello".into()) };
+    let Frame::Hello { v, addrs, nonce, sign_pub, dh_pub, meet, caps } = theirs else { return Err("expected hello".into()) };
     if v != 1 {
         return Err(format!("protocol v{v}"));
     }
@@ -802,6 +1012,70 @@ fn exchange<S: Read + Write, C: Ctx>(ctx: &C, link: &mut S, dialled: bool, rep: 
     } else {
         rep.received = take(link)?;
         rep.sent = give(link)?;
+    }
+
+    // 4. Files (both sides speak "blob"): what each asks for, then each
+    //    sends what it holds of that. Asked after the batches, so an offer
+    //    that came just now is asked for in this same meeting.
+    if caps.iter().any(|c| c == "blob") {
+        let mine = ctx.wanted_blobs(&peer_addr);
+        let ask = |link: &mut S| send_frame(link, &Frame::Want { cids: mine.clone() });
+        let asked = |link: &mut S| -> Result<Vec<String>, String> {
+            let Frame::Want { cids } = read_frame(link)? else { return Err("expected want".into()) };
+            Ok(cids.into_iter().filter(|c| aqua_core::valid_cid(c)).take(BLOB_WANTS).collect())
+        };
+        let send_blobs = |link: &mut S, cids: &[String]| -> Result<(), String> {
+            for cid in cids {
+                let Some(bytes) = ctx.blob(cid).filter(|b| b.len() <= BLOB_MAX) else { continue };
+                let n = bytes.len().div_ceil(BLOB_PIECE).max(1);
+                for i in 0..n {
+                    let piece = &bytes[(i * BLOB_PIECE).min(bytes.len())..((i + 1) * BLOB_PIECE).min(bytes.len())];
+                    send_frame(link, &Frame::Blob { cid: cid.clone(), data: B64.encode(piece), end: i + 1 == n })?;
+                }
+            }
+            send_frame(link, &Frame::Blob { cid: String::new(), data: String::new(), end: true })
+        };
+        let recv_blobs = |link: &mut S| -> Result<usize, String> {
+            let mut got = 0;
+            let mut cur: Option<(String, Vec<u8>)> = None;
+            loop {
+                let Frame::Blob { cid, data, end } = read_frame(link)? else { return Err("expected blob".into()) };
+                if cid.is_empty() {
+                    return Ok(got);
+                }
+                if !mine.contains(&cid) {
+                    return Err("a file nobody asked for".into());
+                }
+                let raw = B64.decode(data).map_err(|_| "bad blob")?;
+                if cur.as_ref().is_none_or(|(c, _)| *c != cid) {
+                    cur = Some((cid.clone(), Vec::new()));
+                }
+                let buf = &mut cur.as_mut().expect("current blob").1;
+                if buf.len() + raw.len() > BLOB_MAX {
+                    return Err("file too large".into());
+                }
+                buf.extend_from_slice(&raw);
+                if end {
+                    let (c, b) = cur.take().expect("current blob");
+                    // Only the bytes the offer named (the CID is their hash).
+                    if aqua_core::hex_sha256(&b).eq_ignore_ascii_case(&c) {
+                        ctx.got_blob(&c, &b);
+                        got += 1;
+                    }
+                }
+            }
+        };
+        if dialled {
+            ask(link)?;
+            let theirs = asked(link)?;
+            send_blobs(link, &theirs[..])?;
+            rep.received += recv_blobs(link)?;
+        } else {
+            let theirs = asked(link)?;
+            ask(link)?;
+            rep.received += recv_blobs(link)?;
+            send_blobs(link, &theirs[..])?;
+        }
     }
     let _ = send_frame(link, &Frame::Bye { reason: "done".into() });
     tracing::info!(peer = %rep.peer, sent = rep.sent, received = rep.received, "mesh: exchanged");
@@ -1106,6 +1380,49 @@ mod tests {
         });
         assert!(r1.is_err() && r2.is_err());
         assert_eq!(a.outbox.borrow().len(), 1);
+    }
+
+    #[test]
+    fn a_file_comes_along_when_asked_for() {
+        let (a, b) = pair();
+        let blob: Vec<u8> = (0..BLOB_PIECE * 2 + 5).map(|i| (i % 253) as u8).collect();
+        let cid = aqua_core::hex_sha256(&blob);
+        struct Has<'a>(&'a T, Vec<u8>);
+        unsafe impl Sync for Has<'_> {}
+        impl Ctx for Has<'_> {
+            fn me(&self) -> Result<Me, String> { self.0.me() }
+            fn outbox_for(&self, a: &str) -> Vec<WireItem> { self.0.outbox_for(a) }
+            fn acked(&self, ids: &[String]) { self.0.acked(ids) }
+            fn first_time(&self, id: &str) -> bool { self.0.first_time(id) }
+            fn deliver(&self, f: String, e: Envelope) { self.0.deliver(f, e) }
+            fn blob(&self, cid: &str) -> Option<Vec<u8>> { (aqua_core::hex_sha256(&self.1) == cid).then(|| self.1.clone()) }
+        }
+        struct Wants<'a>(&'a T, Vec<String>, RefCell<Vec<(String, Vec<u8>)>>);
+        unsafe impl Sync for Wants<'_> {}
+        impl Ctx for Wants<'_> {
+            fn me(&self) -> Result<Me, String> { self.0.me() }
+            fn outbox_for(&self, a: &str) -> Vec<WireItem> { self.0.outbox_for(a) }
+            fn acked(&self, ids: &[String]) { self.0.acked(ids) }
+            fn first_time(&self, id: &str) -> bool { self.0.first_time(id) }
+            fn deliver(&self, f: String, e: Envelope) { self.0.deliver(f, e) }
+            fn wanted_blobs(&self, _: &str) -> Vec<String> { self.1.clone() }
+            fn got_blob(&self, cid: &str, b: &[u8]) { self.2.borrow_mut().push((cid.to_string(), b.to_vec())) }
+        }
+        a.queue(&b.addr(), "photo offer");
+        let has = Has(&a, blob.clone());
+        // Bob wants this file and one nobody has.
+        let wants = Wants(&b, vec![cid.clone(), "0".repeat(64)], RefCell::new(Vec::new()));
+        let (mut la, mut lb) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (ra, rb) = std::thread::scope(|sc| {
+            let h = sc.spawn(|| { let mut r = SyncReport::default(); exchange(&wants, &mut lb, false, &mut r).map(|_| r) });
+            let mut r = SyncReport::default();
+            (exchange(&has, &mut la, true, &mut r).map(|_| r), h.join().unwrap())
+        });
+        ra.unwrap();
+        assert_eq!(rb.unwrap().received, 2, "the offer and its file");
+        let got = wants.2.into_inner();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0], (cid, blob));
     }
 
     #[test]
