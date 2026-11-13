@@ -3159,6 +3159,8 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/admin/packs/import", post(packs::admin_import))
         .route("/v1/admin/packs/upload", post(packs::admin_upload).layer(DefaultBodyLimit::max(packs::UPLOAD_LIMIT)))
         .route("/v1/admin/packs/:name", get(packs::admin_manifest).delete(packs::admin_delete))
+        .route("/v1/admin/packs/:name/rules", post(packs::admin_rules))
+        .route("/v1/admin/packs/:name/file/:file", axum::routing::delete(packs::admin_remove_file))
         .route("/v1/admin/music", get(music::admin_get).post(music::admin_set))
         .route("/v1/admin/music/test", post(music::admin_test))
         .route("/v1/music", get(music::info))

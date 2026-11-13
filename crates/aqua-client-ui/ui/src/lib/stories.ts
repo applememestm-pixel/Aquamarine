@@ -85,8 +85,29 @@ export const storyNav = persisted<"" | "cube" | "vertical">("aqua.storyNav.v1", 
 /** The audience and life last picked when posting (Telegram remembers it). */
 export const storyDefaults = persisted<{ aud: StoryAudience; sel: string[]; hours: number }>("aqua.storyDefaults.v1", { aud: "all", sel: [], hours: 24 });
 
-/** My stories that ran out (Telegram's archive), newest last. Only here. */
+/** My stories that ran out (Telegram's archive), newest last. Only here,
+ *  and never trimmed: a story leaves it only when I delete it. */
 export const storyArchive = persisted<Story[]>("aqua.storyArchive.v1", []);
+storyArchive.update((l) => (Array.isArray(l) ? l : []));
+
+/** Into the archive (once per id). */
+function toArchive(gone: Story[]) {
+  if (!gone.length) return;
+  storyArchive.update((a) => {
+    const have = new Set(a.map((s) => s.id));
+    return [...a, ...gone.filter((s) => !have.has(s.id))];
+  });
+}
+
+/** Every story of mine — live and archived — newest first: what the
+ *  archive grid shows and the viewer pages through. */
+export function allMyStories(live: Story[] = get(myStories), archived: Story[] = get(storyArchive)): Story[] {
+  const seen = new Set<string>();
+  return [...live, ...archived].filter((s) => !seen.has(s.id) && (seen.add(s.id), true)).sort((a, b) => b.at - a.at);
+}
+
+/** The archive grid is open (StoryArchive.svelte). */
+export const storyArchiveOpen = writable(false);
 /** Pinned to my profile: copies kept on the relay (`keep`), no expiry;
  *  shown in my profile to whoever may see them. */
 export const pinnedStories = persisted<Story[]>("aqua.pinnedStories.v1", []);
@@ -97,10 +118,7 @@ export function archiveExpired(now = Date.now()) {
   const gone = get(myStories).filter((s) => !isLive(s, now));
   if (!gone.length) return;
   myStories.update((l) => l.filter((s) => isLive(s, now)));
-  storyArchive.update((a) => {
-    const have = new Set(a.map((s) => s.id));
-    return [...a, ...gone.filter((s) => !have.has(s.id))].slice(-200);
-  });
+  toArchive(gone);
 }
 
 /** A story reference as it travels in presence — checked before use.
@@ -192,7 +210,11 @@ export async function postStory(path: string, opts: PostOptions = {}): Promise<v
     local: path,
   };
   archiveExpired();
-  myStories.update((l) => [...fresh(l), s].slice(-MAX_STORIES));
+  // More than MAX_STORIES live: the oldest leave early — for the archive,
+  // not for nowhere (they used to vanish).
+  const all = [...fresh(get(myStories)), s];
+  toArchive(all.slice(0, Math.max(0, all.length - MAX_STORIES)));
+  myStories.set(all.slice(-MAX_STORIES));
   const { broadcastPresence } = await import("./presence");
   broadcastPresence();
 }

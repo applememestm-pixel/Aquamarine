@@ -17,7 +17,7 @@
   import {
     storyViewer, myStories, saneStories, markSeen, deleteStory, isLive, sendStoryView, toggleLike, toggleHidden,
     likedStories, seenStories, storyViews, hiddenStories, closeFriends, storyNav, storyArchive, pinnedStories,
-    pinStory, unpinStory, storyFile, openStories, type Story,
+    pinStory, unpinStory, storyFile, openStories, allMyStories, storyArchiveOpen, type Story,
   } from "../stories";
   import { peerPresence } from "../presence";
   import { avatars, peerCards } from "../people";
@@ -34,7 +34,7 @@
   let v = $derived($storyViewer);
   /** Live stories, my archive (newest first), or the ones pinned to a profile. */
   const src = $derived(v?.src ?? "live");
-  const storiesOf = (u: string): Story[] => src === "archive" ? $storyArchive.slice().reverse()
+  const storiesOf = (u: string): Story[] => src === "archive" ? allMyStories($myStories, $storyArchive)
     : src === "pinned" ? (u === "" ? $pinnedStories.slice().reverse() : saneStories($peerPresence[u]?.sp, Date.now(), true).reverse())
     : u === "" ? $myStories.filter((s) => isLive(s)) : saneStories($peerPresence[u]?.st);
   let list = $derived<Story[]>(v ? storiesOf(v.user) : []);
@@ -491,7 +491,7 @@
                   <button onclick={pin}>{$t("Pin to profile")}</button>
                 {/if}
                 <button onclick={share}>{$t("Share")}</button>
-                {#if src === "live"}<button onclick={() => { menu = false; openStories([""], "", "archive"); }}>{$t("Story archive")}</button>{/if}
+                {#if src === "live"}<button onclick={() => { menu = false; close(); storyArchiveOpen.set(true); }}>{$t("Story archive")}</button>{/if}
                 {#if src !== "pinned"}<button class="danger" onclick={remove}>{$t("Delete story")}</button>{/if}
               {:else}
                 {@const u = v.user}

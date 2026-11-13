@@ -146,6 +146,7 @@
   import { openNewChatDialog } from "../newChat";
 
   import { contacts, getContact } from "../contacts";
+  import { stickerVerdict } from "../packRules";
   import type { ChatMessage, Group } from "../types";
 
   // Inline media now streams straight from disk via Tauri's asset
@@ -2294,6 +2295,8 @@
   const selected = new SvelteSet<string>();
   /** GIFs the user started while "Autoplay GIFs" is off. */
   const gifPlaying = new SvelteSet<string>();
+  /** 18+ stickers opened with a tap (packRules.ts — the filter is on). */
+  const adultShown = new SvelteSet<string>();
   // Custom (non-Chromium) context menu.
   let menu = $state<{ open: boolean; x: number; y: number; row: Row | null; touch?: boolean }>({ open: false, x: 0, y: 0, row: null });
 
@@ -3965,8 +3968,17 @@
                     <span class="once-meta">{m.time}{@render statusTick(m.outgoing, m.id)}</span>
                   </div>
                 {:else if rk === "sticker"}
+                  {@const verdict = $stickerVerdict(content.pack, content.name)}
                   <div class="sticker-wrap">
-                    {#if url}
+                    {#if verdict === "gone"}
+                      <!-- The relay's admin removed this sticker / banned its pack. -->
+                      <div class="sticker-gone">{$t("Sticker removed by the server")}</div>
+                    {:else if verdict === "adult" && !adultShown.has(m.id)}
+                      <button class="sticker-btn sticker-18" title={$t("18+ — tap to show")} onclick={() => adultShown.add(m.id)}>
+                        {#if url}<span class="sticker-img blur18"><AnimatedMedia src={url} mime={stickerMime(content)} alt="" play="never" /></span>{:else}<span class="sticker-placeholder"></span>{/if}
+                        <span class="b18">18+</span>
+                      </button>
+                    {:else if url}
                       <button class="sticker-btn" title={$t("Show the pack")}
                         onclick={() => { if (peekHeld) { peekHeld = false; return; } openPackSheet(content.pack ?? "own:-", m.outgoing ? undefined : m.from, content.saved_at); }}
                         onpointerdown={(e) => peekStart(e, url, stickerMime(content))} onpointerup={peekEnd} onpointerleave={peekEnd} onpointercancel={peekEnd}>
@@ -5528,6 +5540,11 @@
     pointer-events: none;
     filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.35));
   }
+  .sticker-18 { position: relative; }
+  .sticker-18 .blur18 { filter: blur(18px) saturate(.6); }
+  .sticker-18 .b18 { position: absolute; inset: 0; display: grid; place-items: center; font: 800 15px var(--font-ui, inherit); color: #fff; text-shadow: 0 1px 6px rgba(0,0,0,.7); }
+  .sticker-gone { width: var(--sticker-size, 128px); min-height: 48px; display: grid; place-items: center; text-align: center; padding: 8px;
+    border-radius: calc(14px * var(--rk, 1)); border: 1px dashed var(--border-strong); color: var(--fg-muted); font-size: 12.5px; }
   .sticker-placeholder {
     width: var(--sticker-size, 128px); height: var(--sticker-size, 128px);
     border-radius: calc(14px * var(--rk, 1));

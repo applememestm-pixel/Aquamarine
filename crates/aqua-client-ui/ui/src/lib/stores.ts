@@ -43,7 +43,11 @@ export const info = writable<InitInfo | null>(null);
   let was = false;
   info.subscribe((i) => {
     const now = !!i?.connected;
-    if (now && !was) setTimeout(() => { void import("./stories").then((m) => m.healMyStories()).catch(() => {}); }, 3000);
+    if (now && !was) setTimeout(() => {
+      void import("./stories").then((m) => m.healMyStories()).catch(() => {});
+      // The admin's bans / removed stickers / 18+ marks (packRules.ts).
+      void import("./packRules").then((m) => m.refreshPackRules(true)).catch(() => {});
+    }, 3000);
     was = now;
   });
 }

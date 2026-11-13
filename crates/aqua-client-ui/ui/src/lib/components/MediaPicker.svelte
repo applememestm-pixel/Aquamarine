@@ -58,6 +58,7 @@
   import { insertEmoji } from "../composerBus";
   import { loadActiveMessages } from "../stores";
   import AnimatedMedia from "./AnimatedMedia.svelte";
+  import { stickerVerdict, refreshPackRules, showAdult } from "../packRules";
   import { reactionPack, emojiFromFile, REACTION_PACK, loadReactionPack, loadEmojiPacks } from "../reactionPack";
 
   /** Telegram's paper plane, for packs that came from there. */
@@ -69,6 +70,12 @@
 
   let query = $state("");
   let catalogue = $state<LocalMediaList | null>(null);
+  /** My library as the relay's admin and the 18+ filter allow (packRules.ts):
+   *  banned / 18+ packs out, removed stickers out. */
+  const libPacks = $derived((catalogue?.packs ?? [])
+    .filter((p) => !p.source || $stickerVerdict(p.source) === "ok")
+    .map((p) => (p.source ? { ...p, items: p.items.filter((it) => $stickerVerdict(p.source, it.path.split(/[\\/]/).pop()) === "ok") } : p)));
+  $effect(() => { if ($pickerState.open) void refreshPackRules(); });
   let emojiCats = $state<EmojiCat[] | null>(null);
   let loading = $state(false);
   let panel: HTMLDivElement | undefined = $state();
@@ -321,7 +328,7 @@
   }
 
   const emojiPacks = $derived.by(() => {
-    const packs = (catalogue?.packs ?? []).filter((p) => p.kind === "emoji");
+    const packs = libPacks.filter((p) => p.kind === "emoji");
     const out: { id: string; title: string; items: CItem[]; pack?: StickerPack }[] = packs.map((p) => ({ id: p.id, title: p.title, items: customFromPack(p), pack: p }));
     // App-bundled reaction pack, when it isn't also imported.
     if ($reactionPack.source === "bundled" && !packs.some((p) => p.source === REACTION_PACK)) {
@@ -332,7 +339,7 @@
     }
     return ordered("emoji", out);
   });
-  const stickerPacks = $derived(ordered("stickers", (catalogue?.packs ?? []).filter((p) => p.kind !== "emoji")));
+  const stickerPacks = $derived(ordered("stickers", libPacks.filter((p) => p.kind !== "emoji")));
   const managedPacks = $derived(tab === "emoji" ? emojiPacks.filter((x) => x.pack).map((x) => x.pack!) : tab === "stickers" ? stickerPacks : []);
 
   // emoji char → search words, for matching custom emoji / stickers by meaning
@@ -638,7 +645,7 @@
   let tgPack = $state("");
   try { tgToken = localStorage.getItem(TG_TOKEN_KEY) ?? ""; } catch { /* ignore */ }
   /** The relay can import packs itself (its admin set a bot token). */
-  let srv = $state<{ telegram: boolean; packs: { name: string; title: string; type: string; count: number }[] } | null>(null);
+  let srv = $state<{ telegram: boolean; packs: { name: string; title: string; type: string; count: number; adult?: boolean }[] } | null>(null);
   /** "loading" until the relay answers, "old" if it has no packs API. */
   let srvState = $state<"loading" | "ok" | "old" | "offline">("loading");
   /** Users never need a token — unless they opt into their own (the relay
@@ -657,7 +664,7 @@
       .catch((e) => { srv = null; srvState = /404|not found/i.test(String(e)) ? "old" : "offline"; });
   }
   let serverOnly = $derived(
-    uniq(srv?.packs ?? [], (p) => p.name).filter((p) => !(catalogue?.packs ?? []).some((c) => c.source === p.name || c.title === p.title)),
+    uniq(srv?.packs ?? [], (p) => p.name).filter((p) => (!p.adult || $showAdult) && !(catalogue?.packs ?? []).some((c) => c.source === p.name || c.title === p.title)),
   );
   async function doImport(link?: string) {
     const token = tgToken.trim(), pack = (link ?? tgPack).trim();
