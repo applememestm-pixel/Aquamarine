@@ -464,7 +464,7 @@ jobs:
           sed -i "0,/<application/s##${more}#" "$m"
           scr='<service android:name=".AquaScreenService" android:exported="false" android:foregroundServiceType="mediaProjection" />\n    </application>'
           sed -i "s#</application>#${scr}#" "$m"
-          grep -n 'AquaRelayService\|AquaScreenService\|FOREGROUND\|MULTICAST' "$m""
+          grep -n 'AquaRelayService\|AquaScreenService\|FOREGROUND\|MULTICAST' "$m"
           # Home-screen widget: unread chats (android/widget)
           cp ../../android/widget/AquaWidget.kt "$(dirname "$(find gen/android/app/src/main/java -name MainActivity.kt | head -1)")/AquaWidget.kt"
           cp -r ../../android/widget/res/* gen/android/app/src/main/res/
