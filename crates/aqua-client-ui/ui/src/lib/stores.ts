@@ -223,13 +223,19 @@ export async function bootstrap() {
   });
   // Network back / app back in front: don't wait for the next retry.
   const kick = () => { const i = get(info); if (i && !i.connected) { reconnectNow = true; void reconnectLoop(); } };
-  addEventListener("online", kick);
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") kick(); });
+  // Ask the backend, not the last thing it said: back from the background
+  // (the phone slept) the link is often dead while the app still showed
+  // "connected" — messages then waited up to a minute, or until a restart.
+  const recheck = () => { api.initApp().then((n) => { info.set(n); kick(); }).catch(() => kick()); };
+  addEventListener("online", recheck);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") recheck(); });
   // The dot under my name trusts the app's own state: if it says "not
   // connected" while the transport is actually up (missed event), it heals.
+  // Also while it says "connected": a link that died quietly shows up here
+  // (Transport::is_alive) instead of never.
   setInterval(() => {
     const i = get(info);
-    if (!i || i.connected || !i.username) return;
+    if (!i || !i.username || document.visibilityState === "hidden") return;
     api.initApp().then((n) => { info.set(n); if (!n.connected) kick(); }).catch(() => {});
   }, 20_000);
   events.onDisconnected(() => {

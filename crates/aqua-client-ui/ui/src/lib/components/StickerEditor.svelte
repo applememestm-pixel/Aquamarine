@@ -714,7 +714,6 @@
   .cc { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--border-strong); cursor: pointer; padding: 0; transition: transform .15s; }
   .cc.sm { width: 18px; height: 18px; }
   .cc.on { border-color: var(--accent); transform: scale(1.15); }
-  .colors input[type=color] { width: 26px; height: 26px; border: none; background: none; padding: 0; }
   .inp { background: var(--bg-input); border: 1px solid var(--border); border-radius: calc(9px * var(--rk, 1)); color: var(--fg); font: inherit; font-size: 13px; padding: 7px 10px; outline: none; width: 100%; box-sizing: border-box; }
   .inp:focus { border-color: var(--accent); }
   .inp.sm { padding: 5px 9px; font-size: 12px; }

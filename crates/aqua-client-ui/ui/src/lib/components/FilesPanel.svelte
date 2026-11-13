@@ -364,12 +364,6 @@
   }
   .goto:last-child { margin-right: 8px; }
   .goto:hover { color: var(--accent); border-color: var(--accent-soft); background: var(--accent-soft); }
-  .chev {
-    display: inline-block;
-    transition: transform 0.15s ease;
-    color: var(--fg-dim);
-  }
-  .chev.open { transform: rotate(90deg); color: var(--accent); }
   .preview {
     padding: 6px 12px 12px 56px;
     display: flex; flex-direction: column; gap: 6px;

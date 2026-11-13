@@ -255,10 +255,11 @@ export const api = {
   setGroupRoom:       (gid: string, room: string): Promise<void>                      => invoke("set_group_room", { gid, room }),
 
   // Edit / delete (local store mutation; relay the control separately)
-  editMessage:        (peer_id: string, old_text: string, new_text: string): Promise<void> => invoke("edit_message", { peerId: peer_id, oldText: old_text, newText: new_text }),
+  /** Resolves to the edited message's time (it goes along with `[edit:v1]`). */
+  editMessage:        (peer_id: string, old_text: string, new_text: string, id?: string): Promise<number | null> => invoke("edit_message", { peerId: peer_id, oldText: old_text, newText: new_text, id: id ?? null }),
   deleteMessage:      (peer_id: string, text: string): Promise<void>                    => invoke("delete_message", { peerId: peer_id, text }),
   deleteMessagesLocal: (peerId: string, ids: string[]): Promise<number> => invoke("delete_messages_local", { peerId, ids }),
-  messageKeys: (peerId: string, ids: string[]): Promise<{ id: string; key: string; author: string; preview: string }[]> => invoke("message_keys", { peerId, ids }),
+  messageKeys: (peerId: string, ids: string[]): Promise<{ id: string; key: string; author: string; preview: string; at?: number | null }[]> => invoke("message_keys", { peerId, ids }),
   deleteChat:         (peerId: string): Promise<void> => invoke("delete_chat", { peerId }),
   markChatRead:       (peerId: string): Promise<void> => invoke("mark_chat_read", { peerId }),
   attachFile:         (peer_id: string, file_path: string, caption?: string): Promise<AttachResult>  => invoke("attach_file", { peerId: peer_id, filePath: file_path, caption: caption || null }),

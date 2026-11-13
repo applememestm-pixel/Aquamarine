@@ -92,10 +92,6 @@ export function groupById(id: string): Group | undefined {
   return get(groups).find((g) => g.id === id);
 }
 
-export function isGroupId(id: string): boolean {
-  return id.startsWith("grp_");
-}
-
 /**
  * Someone asked to join a group we run. Public groups without "approve new
  * members" let them straight in (Telegram behaviour); otherwise the request

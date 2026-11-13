@@ -119,32 +119,84 @@ pub fn flush_app(app: &tauri::AppHandle) {
     }
 }
 
-pub fn flush(s: &mut AppState) {
-    let mut written = 0usize;
+/// A changed chat, ready to be compressed and written.
+struct Job {
+    id: String,
+    fp: u64,
+    h: u64,
+    /// What the vault held for it when the job was made.
+    before: Option<u64>,
+    json: Vec<u8>,
+}
+
+/// The chats that changed since the last write (serialised; cheap when none did).
+fn jobs(s: &mut AppState) -> Vec<Job> {
+    let mut out = Vec::new();
     let ids: Vec<String> = s.chats.keys().cloned().collect();
-    for id in &ids {
+    for id in ids {
         if EPHEMERAL.contains(&id.as_str()) {
             continue;
         }
-        let Some(book) = s.chats.get(id) else { continue };
+        let Some(book) = s.chats.get(&id) else { continue };
         let fp = fingerprint(book);
-        if s.hist_fp.get(id) == Some(&fp) {
+        if s.hist_fp.get(&id) == Some(&fp) {
             continue;
         }
         let Ok(json) = serde_json::to_vec(&StoredRef { summary: &book.summary, messages: &book.messages }) else { continue };
         let h = hash_of(&json);
-        s.hist_fp.insert(id.clone(), fp);
-        if s.hist_hashes.get(id) == Some(&h) {
+        if s.hist_hashes.get(&id) == Some(&h) {
+            s.hist_fp.insert(id, fp);
             continue;
         }
-        match s.vault.put_record(&format!("{PREFIX}{id}"), &compress(&json)) {
+        let before = s.hist_hashes.get(&id).copied();
+        out.push(Job { id, fp, h, before, json });
+    }
+    out
+}
+
+/// Write compressed jobs. One that another flush overtook meanwhile (it
+/// wrote something newer) is skipped — the next round looks again.
+fn store(s: &mut AppState, done: Vec<(Job, Vec<u8>)>) -> usize {
+    let mut written = 0;
+    for (job, packed) in done {
+        if s.hist_hashes.get(&job.id).copied() != job.before || !s.chats.contains_key(&job.id) {
+            continue;
+        }
+        match s.vault.put_record(&format!("{PREFIX}{}", job.id), &packed) {
             Ok(()) => {
-                s.hist_hashes.insert(id.clone(), h);
+                s.hist_hashes.insert(job.id.clone(), job.h);
+                s.hist_fp.insert(job.id, job.fp);
                 written += 1;
             }
-            Err(e) => tracing::warn!(chat = %id, error = %e, "saving chat history failed"),
+            Err(e) => tracing::warn!(chat = %job.id, error = %e, "saving chat history failed"),
         }
     }
+    written
+}
+
+/// The background flush: compression (the slow part for a long chat) runs
+/// without the app's lock. `flush` did it all under the lock every 3 s, and
+/// sending, receiving and the UI stood still meanwhile.
+pub fn flush_unlocked(st: &std::sync::Mutex<AppState>) {
+    let todo = {
+        let mut s = st.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        jobs(&mut s)
+    };
+    let done: Vec<(Job, Vec<u8>)> = todo.into_iter().map(|j| { let c = compress(&j.json); (j, c) }).collect();
+    let mut s = st.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let written = store(&mut s, done);
+    finish(&mut s, written);
+}
+
+pub fn flush(s: &mut AppState) {
+    let done: Vec<(Job, Vec<u8>)> = jobs(s).into_iter().map(|j| { let c = compress(&j.json); (j, c) }).collect();
+    let written = store(s, done);
+    finish(s, written);
+}
+
+/// Deleted chats, the groups, the old plain files.
+fn finish(s: &mut AppState, written: usize) {
+    let mut written = written;
     // Chats that were deleted.
     let gone: Vec<String> = s.hist_hashes.keys().filter(|k| !k.starts_with('\u{0}') && !s.chats.contains_key(*k)).cloned().collect();
     for id in gone {

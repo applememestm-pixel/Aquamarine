@@ -100,6 +100,10 @@ impl Acks {
     }
 }
 
+fn unix_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
 fn new_delivery_id() -> String {
     let mut b = [0u8; 16];
     rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut b);
@@ -345,6 +349,9 @@ pub struct Transport {
     http: reqwest::Client,
     ws_out: mpsc::UnboundedSender<RelayMessage>,
     acks: std::sync::Arc<Acks>,
+    /// When the relay last sent anything (wall clock, unix ms — a phone's
+    /// monotonic clock stands still in deep sleep).
+    heard: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Kept alive so the WS read/write tasks stay running.
     _write_task: tokio::task::JoinHandle<()>,
     _read_task: tokio::task::JoinHandle<()>,
@@ -407,6 +414,8 @@ impl Transport {
         let (out_tx, mut out_rx) = mpsc::unbounded_channel::<RelayMessage>();
         let (in_tx, in_rx) = mpsc::unbounded_channel::<Incoming>();
         let acks = std::sync::Arc::new(Acks::default());
+        let heard = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(unix_ms()));
+        let heard_r = heard.clone();
         let (acks_w, acks_r, in_tx_w, out_tx_r) = (acks.clone(), acks.clone(), in_tx.clone(), out_tx.clone());
 
         // Writer task: forwards outgoing RelayMessages onto the socket
@@ -475,6 +484,7 @@ impl Transport {
                         break;
                     }
                 };
+                heard_r.store(unix_ms(), std::sync::atomic::Ordering::Relaxed);
                 match frame {
                     Ok(Message::Binary(bytes)) => {
                         dispatch_frame(&in_tx_r, &acks_r, &out_tx_r, &bytes);
@@ -507,11 +517,22 @@ impl Transport {
                 http,
                 ws_out: out_tx,
                 acks,
+                heard,
                 _write_task: write_task,
                 _read_task: read_task,
             },
             in_rx,
         ))
+    }
+
+    /// Is this connection still working? Its tasks end when it closes, and a
+    /// relay that said nothing for longer than its pings allow is gone too
+    /// (the phone slept; the socket hasn't noticed yet). The app used to go
+    /// by "there is a transport": a dead one stayed "connected", the
+    /// reconnect loop stopped, and what was sent piled up unsent.
+    pub fn is_alive(&self) -> bool {
+        let quiet = unix_ms().saturating_sub(self.heard.load(std::sync::atomic::Ordering::Relaxed));
+        !self._write_task.is_finished() && !self._read_task.is_finished() && quiet < SILENCE_LIMIT.as_millis() as u64
     }
 
     /// Messages a confirming relay never confirmed (the connection died

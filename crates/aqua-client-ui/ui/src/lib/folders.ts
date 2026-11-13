@@ -109,38 +109,8 @@ export function createFolder(name: string, patch: Partial<Folder> = {}): string 
   return id;
 }
 
-export function renameFolder(id: string, name: string) {
-  folders.update((list) => list.map((f) => (f.id === id ? { ...f, name: name.trim() || f.name } : f)));
-}
-
 export function deleteFolder(id: string) {
   folders.update((list) => list.filter((f) => f.id !== id));
   if (get(activeFolder) === id) activeFolder.set("all");
 }
 
-export function isInFolder(id: string, chatId: string): boolean {
-  const f = get(folders).find((x) => x.id === id);
-  return !!f && f.chatIds.includes(chatId);
-}
-
-export function toggleChatInFolder(id: string, chatId: string) {
-  folders.update((list) =>
-    list.map((f) => {
-      if (f.id !== id) return f;
-      const has = f.chatIds.includes(chatId);
-      return {
-        ...f,
-        chatIds: has ? f.chatIds.filter((c) => c !== chatId) : [...f.chatIds, chatId],
-        // Added by hand: no longer left out.
-        excludeIds: has ? f.excludeIds : (f.excludeIds ?? []).filter((c) => c !== chatId),
-      };
-    }),
-  );
-}
-
-/** Add a chat to a folder (no-op if already there). */
-export function addChatToFolder(id: string, chatId: string) {
-  folders.update((list) =>
-    list.map((f) => (f.id === id && !f.chatIds.includes(chatId) ? { ...f, chatIds: [...f.chatIds, chatId] } : f)),
-  );
-}

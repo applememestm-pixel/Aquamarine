@@ -51,17 +51,6 @@ export function playedTop(n = 12, m = get(played)): Played[] {
   return Object.values(m).sort((a, b) => b.secs - a.secs || b.last - a.last).slice(0, n);
 }
 
-export function forgetPlayed(name: string): void {
-  played.update((m) => { const { [name]: _, ...rest } = m; return rest; });
-}
-
-export function fmtPlaytime(secs: number): string {
-  const h = Math.floor(secs / 3600);
-  if (h >= 1) return `${h} h`;
-  const m = Math.max(1, Math.round(secs / 60));
-  return `${m} min`;
-}
-
 /** A stable two-colour gradient per game name (no cover art yet). */
 export function gameGradient(name: string): string {
   let h = 2166136261;

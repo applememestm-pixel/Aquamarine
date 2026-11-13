@@ -456,7 +456,6 @@ function onPrivacyChanged() {
 privacy.subscribe(onPrivacyChanged);
 contactSet.subscribe(onPrivacyChanged);
 
-
 /** Someone's emoji status from their public card ("" when none). */
 /** Name and quote colours people can pick (Telegram's profile colours):
  *  one colour, or two / three for a striped quote bar. A value is
@@ -483,10 +482,6 @@ export function nameColorsOf(cards: Record<string, { extra?: Record<string, unkn
   const ex = cards[user]?.extra;
   const multi = parseNameColor(ex?.ncs);
   return multi.length ? multi : parseNameColor(ex?.nc).slice(0, 1);
-}
-/** Someone's chosen name colour (the first one), or "". */
-export function nameColorOf(cards: Record<string, { extra?: Record<string, unknown> } | undefined>, user: string): string {
-  return nameColorsOf(cards, user)[0] ?? "";
 }
 
 export function emojiStatusOf(cards: Record<string, { extra?: Record<string, unknown> } | undefined>, user: string): string {

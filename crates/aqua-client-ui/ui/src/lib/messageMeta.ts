@@ -15,8 +15,6 @@ import { writable, get } from "svelte/store";
 // so the same logical message maps to the same key on both sides even
 // though its local message id differs. `mine` is what this device added;
 // `peer` counts what the other side added (over the [react:v1] channel).
-export const REACTION_SET = ["👍", "❤️", "🔥", "😂", "😮", "😢", "🙏", "🎉"];
-
 export interface Reaction {
   mine: string[];
   peer: Record<string, number>;

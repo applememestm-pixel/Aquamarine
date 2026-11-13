@@ -96,7 +96,7 @@
   .cc-x { width: 30px; height: 30px; border-radius: 50%; border: none; background: var(--bg-hover); color: var(--fg-muted); cursor: pointer; }
   .cc-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
   .cc-note { margin: 0; font-size: 12.5px; color: var(--fg-dim); line-height: 1.5; }
-  .cc-body textarea, .cc-body input, .cc-body select { padding: 9px 11px; border-radius: calc(10px * var(--rk, 1)); border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 14px; outline: none; resize: vertical; }
+  .cc-body textarea, .cc-body input { padding: 9px 11px; border-radius: calc(10px * var(--rk, 1)); border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 14px; outline: none; resize: vertical; }
   .cc-body textarea:focus, .cc-body input:focus { border-color: var(--accent); }
   .cc-seg { display: flex; gap: 4px; padding: 3px; border-radius: calc(10px * var(--rk, 1)); background: var(--bg-input); flex-wrap: wrap; }
   .cc-seg button { flex: 1; border: none; background: none; color: var(--fg-muted); font: inherit; font-size: 12.5px; font-weight: 600; padding: 7px 6px; border-radius: calc(8px * var(--rk, 1)); cursor: pointer; white-space: nowrap; }

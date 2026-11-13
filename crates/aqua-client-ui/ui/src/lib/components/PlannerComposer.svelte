@@ -156,7 +156,7 @@
   .pc-head b { flex: 1; font-size: 15.5px; }
   .pc-x { width: 30px; height: 30px; border-radius: 50%; border: none; background: var(--bg-hover); color: var(--fg-muted); cursor: pointer; }
   .pc-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
-  .pc-body input:not([type=range]), .pc-body textarea, .pc-body select { padding: 9px 11px; border-radius: calc(10px * var(--rk, 1)); border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 14px; outline: none; resize: vertical; }
+  .pc-body input:not([type=range]), .pc-body textarea { padding: 9px 11px; border-radius: calc(10px * var(--rk, 1)); border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 14px; outline: none; resize: vertical; }
   .pc-body input:focus, .pc-body textarea:focus { border-color: var(--accent); }
   .pc-title { font-size: 16px !important; font-weight: 700; }
   .pc-cols { display: grid; grid-template-columns: 1fr 190px; gap: 14px; }

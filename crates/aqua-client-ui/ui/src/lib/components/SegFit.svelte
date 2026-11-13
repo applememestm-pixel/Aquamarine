@@ -77,11 +77,6 @@
     color: var(--accent);
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
   }
-  .seg-select {
-    max-width: 100%; min-width: 0;
-    background-color: var(--bg-input); color: var(--accent); border: 1px solid var(--border);
-    border-radius: calc(10px * var(--rk, 1)); padding: 8px 12px; font: inherit; font-size: 14px; font-weight: 600;
-  }
   @media (max-width: 720px) {
     .seg-opt { padding: 8px 12px; font-size: 13.5px; }
   }

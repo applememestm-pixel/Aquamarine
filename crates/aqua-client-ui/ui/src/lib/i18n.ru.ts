@@ -962,6 +962,7 @@ export const RU: Record<string, string> = {
   "Docs": "Документы",
   "to send ·": "— отправить ·",
   "typing…": "печатает…",
+  "typing": "печатает",
   "voice": "голос",
   "you:": "вы:",
   "{n} of {total}": "{n} из {total}",

@@ -1057,7 +1057,7 @@ impl AppState {
             session_fingerprint: short_fingerprint(&self.identity),
             opk_available: opk,
             spk_rotates_in_days: 7,
-            connected: self.transport.is_some(),
+            connected: self.transport.as_ref().is_some_and(|t| t.is_alive()),
             server_url: self.server_url.clone(),
             proxy: aqua_client_core::transport::proxy(),
             data_dir: self.data_dir.display().to_string(),
@@ -1074,12 +1074,6 @@ pub fn load_saved_messages(data_dir: &std::path::Path) -> Vec<ChatMessage> {
     let path = data_dir.join(SAVED_MESSAGES_FILE);
     let Ok(bytes) = std::fs::read(&path) else { return Vec::new(); };
     serde_json::from_slice(&bytes).unwrap_or_default()
-}
-
-/// Persist the Saved Messages chat log to disk. Errors are logged.
-pub fn save_saved_messages(_data_dir: &std::path::Path, _msgs: &[ChatMessage]) {
-    // Saved Messages now live in the encrypted vault with the rest of the
-    // history (history.rs flushes them); nothing is written in the clear.
 }
 
 /// Short one-line preview for a message kind, used in chat-list cards.
@@ -1764,25 +1758,6 @@ pub fn preview_for(kind: &MessageKind) -> String {
         MessageKind::Reply { text, .. } => text.clone(),
         MessageKind::System { .. } => one_line_preview(kind),
         MessageKind::DateSeparator { label } => label.clone(),
-    }
-}
-
-fn text_from(id: &str, from: &str, time: &str, text: &str) -> ChatMessage {
-    ChatMessage { meta: None,
-        id: id.into(), from: from.into(), time: time.into(), at: None,
-        kind: MessageKind::Text { text: text.into() },
-    }
-}
-fn date(id: &str, label: &str) -> ChatMessage {
-    ChatMessage { meta: None,
-        id: id.into(), from: "system".into(), time: "".into(), at: None,
-        kind: MessageKind::DateSeparator { label: label.into() },
-    }
-}
-fn system_msg(id: &str, text: &str) -> ChatMessage {
-    ChatMessage { meta: None,
-        id: id.into(), from: "system".into(), time: "".into(), at: None,
-        kind: MessageKind::System { text: text.into() },
     }
 }
 

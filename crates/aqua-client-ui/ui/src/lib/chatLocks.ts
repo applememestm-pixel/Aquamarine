@@ -31,10 +31,6 @@ async function derive(pass: string, saltHex: string): Promise<string> {
   return hex(bits);
 }
 
-export function isLocked(chat: string): boolean {
-  return !!get(chatLocks)[chat] && !get(unlocked)[chat];
-}
-
 export async function setChatLock(chat: string, pass: string, hint?: string) {
   const salt = hex(crypto.getRandomValues(new Uint8Array(16)).buffer);
   const hash = await derive(pass, salt);

@@ -118,7 +118,8 @@ html.wk-lowfx .np-note,
 html.wk-lowfx .accent-dot,
 html.wk-lowfx .plus-btn.nudge,
 html.wk-lowfx .pill-dot,
-html.wk-lowfx .live-dot {
+html.wk-lowfx .live-dot,
+html.wk-lowfx .tdots i {
   animation: none !important;
 }
 html.wk-lowfx .eq i:nth-child(1) { transform: scaleY(0.55); }

@@ -13,7 +13,6 @@
     try { seen = localStorage.getItem(SEEN) ?? ""; localStorage.setItem(SEEN, NOTES.version); } catch { return; }
     if (seen && seen !== NOTES.version && enabled && NOTES.md) setTimeout(() => open.set(true), 1200);
   }
-  export function whatsNewOpen() { return get(open); }
 </script>
 
 <script lang="ts">
