@@ -13,7 +13,7 @@ use crate::state::AppState;
 /// over HTTP to `server_url`.
 async fn call(state: &State<'_, StdMutex<AppState>>, server_url: Option<String>, method: &str, path: &str, body: Option<serde_json::Value>) -> Result<serde_json::Value, String> {
     let (t, identity, known) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         (s.transport.clone(), s.identity.clone(), s.server_url.clone())
     };
     match (t, server_url.filter(|u| !u.is_empty()).or(known)) {

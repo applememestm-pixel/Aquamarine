@@ -14,7 +14,7 @@
   import Donut from "./Donut.svelte";
   import { LINKS } from "../links";
   import { NOTES, openWhatsNew } from "./WhatsNew.svelte";
-  import { AUTODL_DEFAULT, POWER_DEFAULT } from "../theme";
+  import { AUTODL_DEFAULT, POWER_DEFAULT, type DblTap } from "../theme";
   import { powerActive, battery, powerMode } from "../power";
   import { autostartEnabled, setAutostart } from "../desktop";
   import { pickFolder } from "../dialog";
@@ -88,6 +88,8 @@
   // Telegram-mobile style: coloured icon tiles in grouped lists.
   interface Item { id: Sec | "profile" | "shortcuts"; label: string; color: string; icon: string; hint?: string }
   const ic = (p: string) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
+  // Telegram: three groups — me; how the app works; account & the rest.
+  // (Phones showed seven groups of one or two rows — jumpy, not easier.)
   const GROUPS: Item[][] = [
     [
       { id: "profile", label: "Edit profile", color: "#007AFF", icon: ic(`<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>`) },
@@ -99,42 +101,38 @@
       { id: "notifications", label: "Notifications", color: "#FF3B30", icon: ic(`<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>`) },
       { id: "behaviour", label: "Chat settings", color: "#007AFF", icon: ic(`<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>`) },
       { id: "storage", label: "Data and storage", color: "#30D158", icon: ic(`<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>`) },
-      { id: "power", label: "Power saving", color: "#FFCC00", icon: ic(`<rect x="2" y="7" width="17" height="10" rx="2"/><line x1="22" y1="11" x2="22" y2="13"/><path d="M10 9l-2 3h3l-2 3"/>`) },
-      { id: "music", label: "Music", color: "#FF2D55", icon: ic(`<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>`) },
       { id: "stickers", label: "Stickers & Emoji", color: "#FF9500", icon: ic(`<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>`) },
       { id: "voice", label: "Voice & Video", color: "#34C759", icon: ic(`<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/>`) },
-      { id: "language", label: "Language", color: "#AF52DE", icon: ic(`<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>`) },
-    ],
-    [
       { id: "appearance", label: "Appearance", color: "#32ADE6", icon: ic(`<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>`) },
+      { id: "language", label: "Language", color: "#AF52DE", icon: ic(`<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>`) },
+      { id: "power", label: "Power saving", color: "#FFCC00", icon: ic(`<rect x="2" y="7" width="17" height="10" rx="2"/><line x1="22" y1="11" x2="22" y2="13"/><path d="M10 9l-2 3h3l-2 3"/>`) },
       { id: "window", label: "Window & system", color: "#64D2FF", icon: ic(`<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><circle cx="6.5" cy="6.5" r=".5"/>`) },
     ],
     [
       { id: "account", label: "Account & server", color: "#007AFF", icon: ic(`<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>`) },
+      { id: "backups", label: "Backups", color: "#30B0C7", icon: ic(`<path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/><path d="M22 2v6h-6"/>`) },
+      { id: "updates", label: "Updates", color: "#34C759", icon: ic(`<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>`) },
+      { id: "about", label: "About Aquamarine", color: "#8E8E93", icon: ic(`<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>`) },
       { id: "network", label: "Network & proxy", color: "#5856D6", icon: ic(`<circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20"/><path d="M12 2a15 15 0 0 0 0 20"/>`) },
       { id: "host", label: "Your own server", color: "#00C7BE", icon: ic(`<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><line x1="7" y1="6.5" x2="7.01" y2="6.5"/><line x1="7" y1="17.5" x2="7.01" y2="17.5"/><path d="M14 6.5h3M14 17.5h3"/>`) },
       { id: "nearby", label: "Without internet", color: "#0A84FF", icon: ic(`<path d="M7 7l10 10-5 5V2l5 5L7 17"/>`) },
-      { id: "backups", label: "Backups", color: "#30B0C7", icon: ic(`<path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/><path d="M22 2v6h-6"/>`) },
       { id: "bots", label: "Bots", color: "#00C7BE", icon: ic(`<rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4"/><circle cx="12" cy="3" r="1"/><line x1="9" y1="13" x2="9.01" y2="13"/><line x1="15" y1="13" x2="15.01" y2="13"/>`) },
-    ],
-    [
       { id: "shortcuts", label: "Keyboard shortcuts", color: "#5AC8FA", icon: ic(`<rect x="2" y="6" width="20" height="12" rx="2"/><line x1="6" y1="10" x2="6.01" y2="10"/><line x1="10" y1="10" x2="10.01" y2="10"/><line x1="14" y1="10" x2="14.01" y2="10"/><line x1="18" y1="10" x2="18.01" y2="10"/><line x1="7" y1="14" x2="17" y2="14"/>`), hint: "Ctrl+/" },
-      { id: "updates", label: "Updates", color: "#34C759", icon: ic(`<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>`) },
       { id: "advanced", label: "Experimental", color: "#636366", icon: ic(`<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>`) },
-      { id: "about", label: "About Aquamarine", color: "#8E8E93", icon: ic(`<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>`) },
-    ],
-    [
       { id: "plugins", label: "Plugins", color: "#BF5AF2", icon: ic(`<path d="M10 3h4v3a2 2 0 1 0 4 0V3h3v7h-3a2 2 0 1 0 0 4h3v7h-7v-3a2 2 0 1 0-4 0v3H3v-7h3a2 2 0 1 0 0-4H3V3h7z"/>`) },
+      { id: "music", label: "Music", color: "#FF2D55", icon: ic(`<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>`) },
     ],
   ];
   /** Sections for experienced users: shown under "Advanced settings". */
-  const ADVANCED = new Set<string>(["ghost", "power", "window", "network", "host", "bots", "shortcuts", "advanced"]);
+  const ADVANCED = new Set<string>(["ghost", "power", "window", "network", "host", "bots", "shortcuts", "advanced", "plugins"]);
+  /** Reached from another section only: Music (Navidrome) lives under Plugins. */
+  const HIDDEN = new Set<string>(["music"]);
   // Computer-only sections never show on a phone (and nothing phone-only on a PC).
   const shown = (x: Item) => !((x.id === "shortcuts" || x.id === "window") && IS_MOBILE);
   // Plugins: their own panel at the very bottom, under everything else.
-  const BASIC_GROUPS = GROUPS.map((g) => g.filter((x) => !ADVANCED.has(x.id) && x.id !== "plugins")).filter((g) => g.length);
+  const BASIC_GROUPS = GROUPS.map((g) => g.filter((x) => !ADVANCED.has(x.id) && !HIDDEN.has(x.id))).filter((g) => g.length);
   const PLUGINS_ITEM = GROUPS.flat().find((x) => x.id === "plugins")!;
-  const ADVANCED_ITEMS = GROUPS.flat().filter((x) => ADVANCED.has(x.id));
+  const ADVANCED_ITEMS = GROUPS.flat().filter((x) => ADVANCED.has(x.id) && x.id !== "plugins");
   const SECTIONS = GROUPS.flat().filter((x) => x.id !== "profile" && x.id !== "shortcuts") as (Item & { id: Sec })[];
   const sectionItem = $derived(GROUPS.flat().find((x) => x.id === section));
   const sectionTitle = $derived(sectionItem?.label ?? "Settings");
@@ -227,6 +225,19 @@
     if (history.state?.aquaSettings === "detail") history.back(); // popstate handler clears `detail`
     else detail = false;
   }
+  /** Close settings, then open something else. On a phone closing pops
+   *  settings' history entries asynchronously; that popstate used to land
+   *  after the new window registered its Back and closed it at once — "My
+   *  profile" just dropped back to the chat list. Open it once the pop is in. */
+  function closeThen(open: () => void) {
+    const depth = history.state?.aquaSettings === "detail" ? 2 : history.state?.aquaSettings === "list" ? 1 : 0;
+    closeAll();
+    if (!depth) { open(); return; }
+    let done = false;
+    const go = () => { if (done) return; done = true; window.removeEventListener("popstate", go); setTimeout(open, 0); };
+    window.addEventListener("popstate", go);
+    setTimeout(go, 450);
+  }
   function closeAll() {
     const depth = history.state?.aquaSettings === "detail" ? 2 : history.state?.aquaSettings === "list" ? 1 : 0;
     detail = false;
@@ -258,8 +269,8 @@
   });
 
   function openItem(it: Item) {
-    if (it.id === "profile") { closeAll(); openProfile(); return; }
-    if (it.id === "shortcuts") { closeAll(); shortcutsOpen.set(true); return; }
+    if (it.id === "profile") { closeThen(() => openProfile()); return; }
+    if (it.id === "shortcuts") { closeThen(() => shortcutsOpen.set(true)); return; }
     section = it.id;
     enterDetail();
   }
@@ -680,6 +691,9 @@
   /** Appearance: each block opens by its title, the others fold away —
    *  the page was one very long scroll. */
   function accordion(node: HTMLElement) {
+    // Phone (Telegram): one plain page, every block open — folding blocks
+    // that jump open and shut was the "jerky" part.
+    if (IS_MOBILE) return;
     const setup = () => {
       const secs = [...node.querySelectorAll<HTMLElement>(":scope > section.group")];
       secs.forEach((sec, i) => {
@@ -1070,13 +1084,11 @@
               <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
               <div class="nm-veil" onclick={() => (navMenu = false)}></div>
               <div class="nm" role="menu">
-                <button role="menuitem" onclick={() => { navMenu = false; closeAll(); openProfile(); }}>{$t("Edit profile")}</button>
-                <button role="menuitem" onclick={() => { navMenu = false; openItem(GROUPS.flat().find((x) => x.id === "account")!); }}>{$t("Account & server")}</button>
                 <button role="menuitem" class="danger" onclick={() => { navMenu = false; void logOut(); }}>{$t("Log out")}</button>
               </div>
             {/if}
           </div>
-          <button class="me-card" onclick={() => { closeAll(); openProfile(); }} title={$t("Edit profile")}>
+          <button class="me-card" onclick={() => closeThen(() => openProfile())} title={$t("Edit profile")}>
             {#if $profile.banner_url}<span class="me-banner" style:background-image={`url("${$profile.banner_url}")`} aria-hidden="true"></span>{/if}
             <span class="me-ava" style:background={`linear-gradient(135deg, ${$profile.banner_a}, ${$profile.banner_b})`}>
               {#if $profile.avatar_url}<img src={$profile.avatar_url} alt="" />{:else}{($profile.display_name !== "You" ? $profile.display_name : $info?.username ?? "?").charAt(0).toUpperCase()}{/if}
@@ -1085,7 +1097,7 @@
             <span class="me-cam phone-only" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></span>
             <span class="me-text">
               <span class="me-name">{$profile.display_name !== "You" ? $profile.display_name : ($info?.username ?? "")}</span>
-              <span class="me-sub">{$profile.phone ? `${$profile.phone} • ` : ""}@{$info?.username ?? "—"}</span>
+              <span class="me-sub">{$profile.phone && !$settings.hidePhone ? `${$profile.phone} • ` : ""}@{$info?.username ?? "—"}</span>
               <span class="me-online" class:off={!$info?.connected}>{$info?.connected ? ($myOnline === "invisible" ? "invisible" : $myOnline === "dnd" ? "do not disturb" : $myOnline) : "offline"}</span>
             </span>
           </button>
@@ -1115,16 +1127,16 @@
           <div class="nav-group">
             <button class="nav-item adv-toggle" onclick={() => settings.update((x) => ({ ...x, advancedSettings: !x.advancedSettings }))}>
               <span class="tile" style:background="#636366">{@html ic(`<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>`)}</span>
-              <span class="nav-lbl">{$t("Advanced settings")}<small class="adv-sub">{$t("Network, your own server, ghost mode, bots, experiments")}</small></span>
+              <span class="nav-lbl">{$t("Advanced settings")}<small class="adv-sub">{$t("Network, your own server, ghost mode, bots, plugins, experiments")}</small></span>
               <span class="adv-sw" class:on={$settings.advancedSettings}></span>
             </button>
           </div>
           {#if $settings.advancedSettings}
             <div class="nav-group">
               {#each ADVANCED_ITEMS.filter(shown) as it (it.id)}{@render navItem(it)}{/each}
+              {@render navItem(PLUGINS_ITEM)}
             </div>
           {/if}
-          <div class="nav-group">{@render navItem(PLUGINS_ITEM)}</div>
           {/if}
         </nav>
 
@@ -1416,6 +1428,18 @@
             </button>
           {/each}
         </div>
+        <div class="row">
+          <span class="row-label">{$t("Mode")}</span>
+          <SegFit label={$t("Mode")} value={$settings.mode} onpick={(m) => setMode(m)}
+            options={(["dark", "light", "auto"] as const).map((m) => ({ id: m, label: $t(m === "dark" ? "Dark" : m === "light" ? "Light" : "Auto") }))} />
+        </div>
+        <!-- Telegram: the accent right under the themes, as a row of circles. -->
+        <div class="acc-row" role="radiogroup" aria-label={$t("Accent colour")}>
+          {#each PALETTES as p (p.id)}
+            <button class="acc-dot" class:on={$settings.palette === p.id} role="radio" aria-checked={$settings.palette === p.id} title={p.name} aria-label={p.name}
+              style={`--pa:${p.accent}; --pb:${p.accent2};`} onclick={() => setPalette(p.id)}></button>
+          {/each}
+        </div>
         <div class="foot-note">{$t("A theme sets every colour; the accent, theme editor and transparency still work on top. Share the whole look in Theme editor → Share.")}</div>
       </section>
       <section class="group">
@@ -1443,11 +1467,6 @@
             </div>
           </div>
         {/if}
-        <div class="row">
-          <span class="row-label">{$t("Mode")}</span>
-          <SegFit label={$t("Mode")} value={$settings.mode} onpick={(m) => setMode(m)}
-            options={(["dark", "light", "auto"] as const).map((m) => ({ id: m, label: $t(m === "dark" ? "Dark" : m === "light" ? "Light" : "Auto") }))} />
-        </div>
 
         <div class="row">
           <span class="row-label">{$t("Density")}</span>
@@ -1486,6 +1505,46 @@
             <span class="range-val">{Math.round((uiScalePreview ?? $settings.uiScale ?? 1) * 100)}%</span>
           </div>
         </div>
+      </section>
+      <section class="group">
+        <div class="label">{$t("Chat list")}</div>
+        <div class="row">
+          <span class="row-label">{$t("Title")}</span>
+          <Select class="sel" value={$settings.listTitle ?? "app"} options={[{ value: "app", label: "Aquamarine" }, { value: "name", label: $t("My name") }, { value: "username", label: $t("My @username") }]}
+            onchange={(v) => settings.update((x) => ({ ...x, listTitle: v as "app" | "name" | "username" }))} />
+        </div>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, centerTitle: !x.centerTitle }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Title in the middle")}</div></div>
+          <span class="switch" class:on={!!$settings.centerTitle}></span>
+        </button>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, hideNetBadge: !x.hideNetBadge }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Hide the connection status")}</div>
+            <div class="tr-sub">{$t("No ping next to the title; “Connecting…” still shows when there's no connection.")}</div></div>
+          <span class="switch" class:on={!!$settings.hideNetBadge}></span>
+        </button>
+        <div class="row">
+          <span class="row-label">{$t("Folder tabs")}</span>
+          <Select class="sel" value={$settings.folderTabStyle ?? "chips"} options={[{ value: "chips", label: $t("Chips") }, { value: "pills", label: $t("Pills") }, { value: "text", label: $t("Text only") }]}
+            onchange={(v) => settings.update((x) => ({ ...x, folderTabStyle: v as "chips" | "pills" | "text" }))} />
+        </div>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, folderCounters: x.folderCounters === false }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Unread counters on folders")}</div></div>
+          <span class="switch" class:on={$settings.folderCounters !== false}></span>
+        </button>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, hideAllTab: !x.hideAllTab }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Hide “All chats”")}</div>
+            <div class="tr-sub">{$t("When you have folders, the list opens on the first one.")}</div></div>
+          <span class="switch" class:on={!!$settings.hideAllTab}></span>
+        </button>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, hidePhone: !x.hidePhone }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Hide my phone number")}</div>
+            <div class="tr-sub">{$t("In Settings, for screenshots. Who sees it is set in Privacy.")}</div></div>
+          <span class="switch" class:on={!!$settings.hidePhone}></span>
+        </button>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, snow: !x.snow }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Snow")} ❄</div></div>
+          <span class="switch" class:on={!!$settings.snow}></span>
+        </button>
       </section>
       <section class="group">
         <div class="label">{$t("Bubbles & media size")}</div>
@@ -1745,6 +1804,26 @@
             <div class="tr-text"><div class="tr-title">{$t("Story archive")}{#if $storyArchive.length} · {$storyArchive.length}{/if}</div>
               <div class="tr-sub">{$t("Your stories after they run out — only you see them. Pinned to profile: {n}.", { n: $pinnedStories.length })}</div></div>
             <span class="chev">›</span>
+          </button>
+        {/if}
+      </section>
+      <section class="group">
+        <div class="label">{$t("Messages")}</div>
+        <div class="row">
+          <span class="row-label">{$t("Double tap — incoming")}</span>
+          <Select class="sel" value={$settings.dblTapIn ?? "auto"} options={[{ value: "auto", label: $t("Default") }, { value: "react", label: $t("Reaction") }, { value: "reply", label: $t("Reply") }, { value: "copy", label: $t("Copy") }, { value: "forward", label: $t("Forward") }, { value: "save", label: $t("Save to Saved Messages") }, { value: "edit", label: $t("Edit") }, { value: "delete", label: $t("Delete") }, { value: "none", label: $t("Nothing") }]}
+            onchange={(v) => settings.update((x) => ({ ...x, dblTapIn: v as DblTap }))} />
+        </div>
+        <div class="row">
+          <span class="row-label">{$t("Double tap — mine")}</span>
+          <Select class="sel" value={$settings.dblTapOut ?? "auto"} options={[{ value: "auto", label: $t("Default") }, { value: "react", label: $t("Reaction") }, { value: "reply", label: $t("Reply") }, { value: "copy", label: $t("Copy") }, { value: "forward", label: $t("Forward") }, { value: "save", label: $t("Save to Saved Messages") }, { value: "edit", label: $t("Edit") }, { value: "delete", label: $t("Delete") }, { value: "none", label: $t("Nothing") }]}
+            onchange={(v) => settings.update((x) => ({ ...x, dblTapOut: v as DblTap }))} />
+        </div>
+        <div class="foot-note" style="margin:0 0 8px">{$t("“Default”: with a mouse — reply, with a finger — ❤.")}</div>
+        {#if IS_MOBILE}
+          <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, hideKbOnScroll: !x.hideKbOnScroll }))}>
+            <div class="tr-text"><div class="tr-title">{$t("Hide the keyboard when scrolling")}</div></div>
+            <span class="switch" class:on={!!$settings.hideKbOnScroll}></span>
           </button>
         {/if}
       </section>
@@ -2619,20 +2698,15 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
       <section class="group">
         <div class="label">{$t("Updates")}</div>
         <div class="info-row"><span class="k">{$t("This build")}</span><span class="v mono">{BUILD.version || "—"}{BUILD_SHORT ? ` · ${BUILD_SHORT}` : ""} · {BUILD.channel}</span></div>
-        <div class="row">
-          <span class="row-label">{$t("Channel")}</span>
-          <SegFit label={$t("Channel")} value={$updatePrefs.channel} onpick={(c) => { updatePrefs.update((p) => ({ ...p, channel: c, skip: undefined })); void checkUpdates(true); }}
-            options={[{ id: "nightly" as const, label: $t("Every build") }, { id: "stable" as const, label: $t("Releases only") }]} />
-        </div>
-        <button class="toggle-row" onclick={() => updatePrefs.update((p) => ({ ...p, auto: !p.auto }))}>
-          <div class="tr-text"><div class="tr-title">{$t("Check for updates")}</div><div class="tr-sub">{$t("On start and every 6 hours; a card offers the new build")}</div></div>
-          <span class="switch" class:on={$updatePrefs.auto}></span>
+        <button class="toggle-row" onclick={() => updatePrefs.update((p) => ({ ...p, tester: !p.tester }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Tester")}</div><div class="tr-sub">{$t("Every new build installs by itself, pre-releases too. Off: releases only — they always install by themselves.")}</div></div>
+          <span class="switch" class:on={$updatePrefs.tester}></span>
         </button>
         <div class="info-row">
           <span class="v">
             {#if $updateState.s === "checking"}{$t("Checking…")}
             {:else if $updateState.s === "none"}{$t("You have the newest build")}
-            {:else if $updateState.s === "available" || $updateState.s === "downloading" || $updateState.s === "installing" || $updateState.s === "permission"}{$t("A new build is available — see the card at the top")}
+            {:else if $updateState.s === "available" || $updateState.s === "downloading" || $updateState.s === "installing" || $updateState.s === "permission"}{$t("A new build is installing — see the card at the top")}
             {:else if $updateState.s === "error"}<span class="upd-err">{$updateState.error}</span>
             {/if}
           </span>
@@ -3119,6 +3193,14 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   }
 
   .themes { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; }
+  /* Phone (Telegram): themes in one swipeable row of small cards. */
+  :global(html.phone) .themes { display: flex; overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity; margin: 0 -4px; padding: 2px 4px 4px; }
+  :global(html.phone) .theme-card { flex: 0 0 92px; scroll-snap-align: start; }
+  :global(html.phone) .tc-prev { height: 70px; }
+  .acc-row { display: flex; flex-wrap: wrap; gap: 10px; padding: 12px 2px 4px; }
+  .acc-dot { width: 32px; height: 32px; border-radius: 50%; border: none; padding: 0; cursor: pointer; background: linear-gradient(135deg, var(--pa), var(--pb));
+    box-shadow: 0 0 0 2px var(--bg-shell), 0 0 0 2px transparent; transition: box-shadow .15s, transform .15s; }
+  .acc-dot.on { box-shadow: 0 0 0 3px var(--bg-shell), 0 0 0 5px var(--pa); transform: scale(.9); }
   .theme-card {
     display: flex; flex-direction: column; gap: 6px; padding: 6px;
     border: 1.5px solid var(--border); border-radius: calc(12px * var(--rk, 1)); background: transparent;

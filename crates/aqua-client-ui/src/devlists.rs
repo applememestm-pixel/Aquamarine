@@ -52,10 +52,10 @@ static CHECKED: StdMutex<Option<HashMap<String, Instant>>> = StdMutex::new(None)
 fn with_book<R>(app: &AppHandle, f: impl FnOnce(&mut Book) -> R) -> Option<R> {
     let dir = {
         let state: State<'_, StdMutex<AppState>> = app.state();
-        let s = state.lock().ok()?;
+        let s = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok()?;
         s.data_dir.clone()
     };
-    let mut g = BOOK.lock().ok()?;
+    let mut g = BOOK.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok()?;
     if g.as_ref().is_none_or(|(d, _)| *d != dir) {
         let b: Book = std::fs::read(dir.join(FILE)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
         *g = Some((dir, b));
@@ -63,7 +63,7 @@ fn with_book<R>(app: &AppHandle, f: impl FnOnce(&mut Book) -> R) -> Option<R> {
     let (dir, book) = g.as_mut()?;
     let r = f(book);
     if let Ok(b) = serde_json::to_vec(book) {
-        let _ = std::fs::write(dir.join(FILE), b);
+        let _ = crate::fsx::write_atomic(&dir.join(FILE), &b);
     }
     Some(r)
 }
@@ -90,7 +90,7 @@ pub async fn refresh(app: &AppHandle, transport: &Transport, user: &str, force: 
         return;
     }
     if !force {
-        if let Ok(mut c) = CHECKED.lock() {
+        if let Ok(mut c) = CHECKED.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
             let m = c.get_or_insert_with(HashMap::new);
             if m.get(user).is_some_and(|t| t.elapsed() < FRESH) {
                 return;
@@ -180,7 +180,7 @@ fn known_keys(s: &AppState, me: &str, cur: Option<&SignedDeviceList>) -> HashMap
 pub async fn publish(app: &AppHandle, reset: bool) -> Result<bool, String> {
     let state: State<'_, StdMutex<AppState>> = app.state();
     let (t, me, identity) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         (s.transport.clone().ok_or("not connected")?, s.username.clone().unwrap_or_default(), s.identity.clone())
     };
     if me.is_empty() {
@@ -213,7 +213,7 @@ pub async fn publish(app: &AppHandle, reset: bool) -> Result<bool, String> {
     // a list still on the old count is signed again once.
     let legacy = cur.as_ref().is_some_and(|c| c.ver < TIME_VER);
     let (known, wanted_ids) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let known = known_keys(&s, &me, cur.as_ref());
         let mut ids: Vec<String> = devs.iter().map(|d| d.id.clone()).filter(|id| crate::devtrust::is_trusted(&s, id)).collect();
         if !reset {
@@ -273,7 +273,7 @@ pub async fn devlist_reset(app: AppHandle) -> Result<(), String> {
 pub async fn devlist_status(app: AppHandle) -> Result<serde_json::Value, String> {
     let state: State<'_, StdMutex<AppState>> = app.state();
     let (t, me, mine) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         (s.transport.clone().ok_or("not connected")?, s.username.clone().unwrap_or_default(), DeviceKey::of(&s.identity.public()))
     };
     let cur = t.get_devlist(&me).await.map_err(|e| e.to_string())?

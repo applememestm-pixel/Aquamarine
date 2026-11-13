@@ -60,7 +60,7 @@ static SEEN: std::sync::Mutex<Option<(std::collections::HashSet<String>, std::co
 
 /// First time we see `id`? Remembers the last 4096.
 fn first_sighting(id: &str) -> bool {
-    let Ok(mut g) = SEEN.lock() else { return true };
+    let Ok(mut g) = SEEN.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) else { return true };
     let (set, order) = g.get_or_insert_with(Default::default);
     if !set.insert(id.to_string()) {
         return false;
@@ -91,12 +91,12 @@ impl Acks {
         self.on.load(std::sync::atomic::Ordering::Relaxed)
     }
     fn confirmed(&self, id: &str) {
-        if let Ok(mut q) = self.unconfirmed.lock() {
+        if let Ok(mut q) = self.unconfirmed.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
             q.retain(|(m, _)| m.id.as_deref() != Some(id));
         }
     }
     fn overdue(&self) -> bool {
-        self.on() && self.unconfirmed.lock().ok().and_then(|q| q.front().map(|(_, at)| at.elapsed() > ACK_DEADLINE)).unwrap_or(false)
+        self.on() && self.unconfirmed.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|q| q.front().map(|(_, at)| at.elapsed() > ACK_DEADLINE)).unwrap_or(false)
     }
 }
 
@@ -497,7 +497,7 @@ impl Transport {
         if !self.acks.on() {
             return Vec::new();
         }
-        self.acks.unconfirmed.lock().map(|mut q| q.drain(..).map(|(m, _)| m).collect()).unwrap_or_default()
+        self.acks.unconfirmed.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).map(|mut q| q.drain(..).map(|(m, _)| m).collect()).unwrap_or_default()
     }
 
     /// Send again what an earlier connection lost; same ids, so the
@@ -531,7 +531,7 @@ impl Transport {
         Ok(v["username"].as_str().map(str::to_string))
     }
     /// The current bearer token (may be close to expiry — prefer [`Self::bearer`]).
-    pub fn token(&self) -> String { self.token.lock().map(|t| t.0.clone()).unwrap_or_default() }
+    pub fn token(&self) -> String { self.token.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).map(|t| t.0.clone()).unwrap_or_default() }
 
     /// A bearer token that is valid for a while yet: tokens older than
     /// 45 minutes (they expire after 60) are renewed by signing a fresh
@@ -545,7 +545,7 @@ impl Transport {
     /// the token "old" too — one extra sign-in, nothing worse).
     pub async fn bearer(&self) -> Result<String, TransportError> {
         const RENEW_AFTER: std::time::Duration = std::time::Duration::from_secs(45 * 60);
-        if let Ok(t) = self.token.lock() {
+        if let Ok(t) = self.token.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
             let wall = std::time::SystemTime::now().duration_since(t.2).unwrap_or(RENEW_AFTER);
             if t.1.elapsed() < RENEW_AFTER && wall < RENEW_AFTER {
                 return Ok(t.0.clone());
@@ -557,7 +557,7 @@ impl Transport {
     /// Sign a fresh challenge now (also after a "token has expired" answer).
     pub async fn renew_token(&self) -> Result<String, TransportError> {
         let fresh = sign_in(&self.http, &self.server_url, &self.identity).await?;
-        if let Ok(mut t) = self.token.lock() {
+        if let Ok(mut t) = self.token.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
             *t = (fresh.clone(), std::time::Instant::now(), std::time::SystemTime::now());
         }
         Ok(fresh)
@@ -1466,7 +1466,7 @@ impl Transport {
     /// relay never does: then only the last 500 are kept, and never resent
     /// by the deadline — see [`Acks::overdue`]).
     fn push(&self, msg: RelayMessage) -> Result<(), TransportError> {
-        if let Ok(mut q) = self.acks.unconfirmed.lock() {
+        if let Ok(mut q) = self.acks.unconfirmed.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
             q.push_back((msg.clone(), std::time::Instant::now()));
             while q.len() > 500 {
                 q.pop_front();
@@ -1528,7 +1528,7 @@ pub fn server_version_ok(v: &str) -> bool {
 async fn check_server(http: &reqwest::Client, server_url: &str) -> Result<(), TransportError> {
     static OK: std::sync::Mutex<Option<std::collections::HashMap<String, std::time::Instant>>> = std::sync::Mutex::new(None);
     let base = server_url.trim_end_matches('/').to_string();
-    if OK.lock().ok().and_then(|m| m.as_ref().and_then(|m| m.get(&base).copied())).is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(600)) {
+    if OK.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|m| m.as_ref().and_then(|m| m.get(&base).copied())).is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(600)) {
         return Ok(());
     }
     let r = http.get(format!("{base}/v1/stats")).timeout(std::time::Duration::from_secs(8)).send().await?;
@@ -1541,7 +1541,7 @@ async fn check_server(http: &reqwest::Client, server_url: &str) -> Result<(), Tr
             body: format!("the server is too old ({was}) — it needs to be updated to Aquamarine {MIN_SERVER} or newer"),
         });
     }
-    if let Ok(mut m) = OK.lock() {
+    if let Ok(mut m) = OK.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
         m.get_or_insert_with(std::collections::HashMap::new).insert(base, std::time::Instant::now());
     }
     Ok(())

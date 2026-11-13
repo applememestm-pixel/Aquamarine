@@ -53,7 +53,7 @@ static GATE: Mutex<Option<Gate>> = Mutex::new(None);
 
 /// Same failure once per 10 minutes, at most 40 an hour.
 fn admit(key: &str) -> bool {
-    let Ok(mut g) = GATE.lock() else { return false };
+    let Ok(mut g) = GATE.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) else { return false };
     let g = g.get_or_insert_with(|| Gate { seen: HashMap::new(), sent: VecDeque::new() });
     let t = Instant::now();
     if g.seen.get(key).is_some_and(|p| t.duration_since(*p) < Duration::from_secs(600)) {
@@ -97,8 +97,8 @@ pub fn send(mut r: Report) {
     r.app = "aquamarine".into();
     r.ver = env!("CARGO_PKG_VERSION").into();
     r.os = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
-    r.server = SERVER.lock().map(|g| g.clone()).unwrap_or_default();
-    r.id = ID.lock().map(|g| g.clone()).unwrap_or_default();
+    r.server = SERVER.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).map(|g| g.clone()).unwrap_or_default();
+    r.id = ID.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).map(|g| g.clone()).unwrap_or_default();
     r.msg = clip(&scrub(&r.msg), 1000);
     r.detail = clip(&scrub(&r.detail), 6000);
     r.code = clip(&r.code, 40);
@@ -148,7 +148,7 @@ pub fn install(app: &AppHandle) {
             })
         })
         .unwrap_or_default();
-    if let Ok(mut g) = ID.lock() {
+    if let Ok(mut g) = ID.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
         *g = id;
     }
     let prev = std::panic::take_hook();
@@ -173,7 +173,7 @@ pub fn report_error(report: Report) {
 #[tauri::command]
 pub fn report_config(enabled: bool, server: Option<String>) {
     ON.store(enabled, Ordering::Relaxed);
-    if let (Some(s), Ok(mut g)) = (server, SERVER.lock()) {
+    if let (Some(s), Ok(mut g)) = (server, SERVER.lock().or_else(|e| Ok::<_, ()>(e.into_inner()))) {
         *g = s;
     }
 }

@@ -254,6 +254,12 @@ export function toggleGroupMute() {
 }
 export function toggleGroupDeafen() { patch((n) => { n.deafened = !n.deafened; spatialDeafen(n.deafened); }); }
 
+/** Still in the call `s` was taken from (a prompt can take long). */
+function stillIn(s: { gid: string; started: number }): boolean {
+  const n = get(groupCall);
+  return !!n?.joined && !!n.local && n.gid === s.gid && n.started === s.started;
+}
+
 async function replaceVideo(track: MediaStreamTrack | null) {
   const s = get(groupCall);
   if (!s?.local) return;
@@ -268,6 +274,8 @@ export async function toggleGroupCamera() {
   if (s.camera || s.screen) { await replaceVideo(null); patch((n) => { n.camera = false; n.screen = false; }); return; }
   try {
     const v = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } } });
+    // Left the call (or it moved on) while the camera opened: close it.
+    if (!stillIn(s)) { v.getTracks().forEach((t) => t.stop()); return; }
     await replaceVideo(v.getVideoTracks()[0]);
     patch((n) => { n.camera = true; });
   } catch (e) { showToast(tr("Camera unavailable: {e}", { e: String(e) })); }
@@ -280,6 +288,7 @@ export async function toggleGroupScreen() {
   try {
     const { stream: d, camera } = await captureScreenOrCamera({ video: { frameRate: { ideal: 30 }, width: { ideal: 1920 } }, audio: false });
     if (camera) showToast(tr("Phones can't share the screen — streaming your camera instead"), 4000);
+    if (!stillIn(s)) { d.getTracks().forEach((t) => t.stop()); return; }
     const tr0 = d.getVideoTracks()[0];
     tr0.onended = () => { if (get(groupCall)?.screen) void toggleGroupScreen(); };
     await replaceVideo(tr0);

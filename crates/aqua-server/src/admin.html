@@ -111,7 +111,12 @@
     padding:20px 22px;margin-bottom:18px}
   .card h2{font-size:16px;font-weight:700;display:flex;align-items:center;gap:10px;margin-bottom:14px}
   .card h2 .hint{margin-left:auto;font-family:var(--body);font-size:12.5px;font-weight:500;color:var(--fg-dim);letter-spacing:0}
-  .two{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:stretch}
+  .two>.card{margin:0;display:flex;flex-direction:column;min-width:0}
+  .two>.card>.row:last-child{margin-top:auto;padding-top:14px}
+  details.danger-zone>summary{cursor:pointer;font-weight:700;font-size:16px;color:#ff6b6b;list-style:none}
+  details.danger-zone>summary::-webkit-details-marker{display:none}
+  details.danger-zone>summary::after{content:" ▾";color:var(--fg-dim)}
   @media (max-width:1000px){.two{grid-template-columns:1fr}}
 
   .addr{display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:12px;background:var(--void);border:1px solid var(--line);margin-bottom:8px}
@@ -415,11 +420,13 @@
           <div class="note" id="ddMsg"></div>
         </div>
         <div class="card rv">
-          <h2 data-t="Clear the server">Clear the server</h2>
-          <div class="note" data-t="wipeNote">Erases what's ticked right now, for good. The server keeps running. Kept: settings, mail, Telegram, music, the server network.</div>
-          <div class="wipe" id="wipeBox"></div>
-          <div class="row mt"><button class="btn ghost" style="color:#ff6b6b" onclick="doWipe()" data-t="Clear…">Clear…</button></div>
-          <div class="note" id="wipeMsg"></div>
+          <h2><span data-t="Updates">Updates</span> <span class="hint" id="updVer"></span></h2>
+          <div class="toggle" onclick="setTester()">
+            <div><div class="t" data-t="Tester">Tester</div>
+              <div class="s" data-t="testerSub">Install every new build, pre-releases too. Releases always install by themselves; the server is off only for the seconds of the restart.</div></div>
+            <div id="testerSw" class="sw"></div>
+          </div>
+          <div class="row mt"><button class="btn ghost" id="updCheck" onclick="checkUpd()" data-t="Check now">Check now</button><span class="note" id="updMsg" style="margin:0"></span></div>
         </div>
         <div class="card rv">
           <h2><span data-t="Latest codes">Latest codes</span> <span class="hint"><a href="#codes" data-t="all →">all →</a></span></h2>
@@ -474,6 +481,19 @@
         </div>
         <span id="invMsg" class="note" style="margin:0"></span>
       </div>
+      <div class="card rv">
+        <h2><span data-t="Stars">Stars</span> <span class="hint" id="starHint"></span></h2>
+        <div class="note" data-t="starsNote">Stars are marks only the project owner hands out (the official one and the Boosty levels). Only the owner's server has the key. Make it once there: the public key goes into the apps (repository variable AQUA_STAR_PUBLIC); stars are given by the @stars bot.</div>
+        <div class="addr mt" id="starKeyRow" hidden><code id="starKey" style="word-break:break-all"></code><button class="copy" onclick="copy($('starKey').textContent)" data-t="Copy">Copy</button></div>
+        <div class="row mt"><button class="btn ghost" id="starMake" onclick="makeStarKey()" data-t="Make the star key">Make the star key</button><span class="note" id="starMsg" style="margin:0"></span></div>
+      </div>
+      <details class="card rv danger-zone">
+        <summary data-t="Clear the server">Clear the server</summary>
+        <div class="note mt" data-t="wipeNote">Erases what's ticked right now, for good. The server keeps running. Kept: settings, mail, Telegram, music, the server network.</div>
+        <div class="wipe" id="wipeBox"></div>
+        <div class="row mt"><button class="btn ghost" style="color:#ff6b6b" onclick="doWipe()" data-t="Clear…">Clear…</button></div>
+        <div class="note" id="wipeMsg"></div>
+      </details>
     </section>
     <div id="qrPop" class="qr-pop hide" onclick="if(event.target===this)this.classList.add('hide')">
       <div class="qr-card"><b id="qrTitle"></b><div id="qrBox"></div><code id="qrText"></code><div class="note" id="qrNote"></div>
@@ -671,6 +691,15 @@
     "Stopped. Start it again on the machine.":"Выключен. Запустите его снова на машине.",
     "Stop and restart are in the server app here (Start / Stop).":"Здесь включение и выключение — в приложении сервера (Запустить / Остановить).",
     "Clear the server":"Очистить сервер","Clear…":"Очистить…",
+    "Stars":"Звёзды","starsNote":"Звёзды — отметки, которые даёт только владелец проекта (официальная и уровни Boosty). Ключ есть только на сервере владельца. Создайте его там один раз: открытый ключ встраивается в приложения (переменная репозитория AQUA_STAR_PUBLIC), звёзды выдаёт бот @stars.",
+    "Make the star key":"Создать ключ звёзд","this server hands them out":"этот сервер их выдаёт",
+    "Make the star key on this server? Only the project owner's server should have it.":"Создать ключ звёзд на этом сервере? Он должен быть только на сервере владельца проекта.",
+    "Done — copy the public key into the repository variable AQUA_STAR_PUBLIC.":"Готово — скопируйте открытый ключ в переменную репозитория AQUA_STAR_PUBLIC.",
+    "Updates":"Обновления","Tester":"Тестер","testerSub":"Ставить каждую новую сборку, и пре-выпуски тоже. Выпуски ставятся всегда, сами; сервер выключается только на секунды перезапуска.",
+    "Check now":"Проверить","version":"версия","Checking…":"Проверка…","This is the latest version.":"Это последняя версия.",
+    "This server updates together with the Aquamarine Server app.":"Этот сервер обновляется вместе с приложением Aquamarine Server.",
+    "Version {v} is out, its file for this machine is still being built.":"Вышла версия {v}, файл для этой машины ещё собирается.",
+    "Downloading {v}…":"Скачивается {v}…","Installing {v} — the server restarts in a few seconds…":"Ставится {v} — сервер перезапустится через несколько секунд…","Couldn't check: ":"Не удалось проверить: ",
     "wipeNote":"Стирает выбранное прямо сейчас, без возврата. Сервер продолжает работать. Не трогается: настройки, почта, Telegram, музыка, сеть серверов.",
     "wpPeople":"Все люди — их аккаунты целиком, а боты и их чаты остаются","wipeConfirmPeople":"Стереть всех людей? Все выйдут и должны будут зарегистрироваться заново. Боты остаются. Отменить нельзя.",
     "wpAccounts":"Все аккаунты целиком — люди, ключи, профили, двухэтапные коды, копии чатов, история, недоставленные сообщения, капсулы, боты и галочки",
@@ -1337,9 +1366,54 @@
     } catch (e) { msg("powerMsg", String(e.message || e), "bad"); }
   }
 
+  // ---- stars (GET/POST /v1/admin/stars) ----
+  let starsAt = 0;
+  async function loadStars(force){
+    if (!force && Date.now() - starsAt < 30000) return; starsAt = Date.now();
+    let s; try { s = await api("/v1/admin/stars"); } catch { return; }
+    $("starKeyRow").hidden = !s.public; $("starKey").textContent = s.public || "";
+    $("starMake").hidden = !!s.has_key;
+    $("starHint").textContent = s.has_key ? T("this server hands them out") + " · @" + s.bot + " · " + s.stars : "";
+  }
+  async function makeStarKey(){
+    if (!confirm(T("Make the star key on this server? Only the project owner's server should have it."))) return;
+    try { await api("/v1/admin/stars", { method: "POST", body: "{}" }); $("starMsg").textContent = T("Done — copy the public key into the repository variable AQUA_STAR_PUBLIC."); }
+    catch (e) { $("starMsg").textContent = String(e.message || e); }
+    loadStars(true);
+  }
+
+  // ---- this server's updates (GET/POST /v1/admin/updates) ----
+  let upd = null, updAt = 0;
+  function paintUpd(){
+    if (!upd || !$("testerSw")) return;
+    $("testerSw").className = "sw" + (upd.tester ? " on" : "");
+    $("updVer").textContent = T("version") + " " + (upd.current || "");
+    const v = esc(upd.version || "");
+    const line = !upd.managed ? T("This server updates together with the Aquamarine Server app.")
+      : ({ checking: T("Checking…"), latest: T("This is the latest version."), waiting: T("Version {v} is out, its file for this machine is still being built.").replace("{v}", v),
+           downloading: T("Downloading {v}…").replace("{v}", v) + (upd.total ? " " + Math.floor(upd.done * 100 / upd.total) + "%" : ""),
+           installing: T("Installing {v} — the server restarts in a few seconds…").replace("{v}", v), error: T("Couldn't check: ") + esc(upd.error || "") }[upd.state] || "");
+    $("updMsg").innerHTML = line;
+    $("updCheck").disabled = !upd.managed || ["checking", "downloading", "installing"].includes(upd.state);
+  }
+  async function loadUpd(force){
+    if (!force && Date.now() - updAt < 15000) return;
+    updAt = Date.now();
+    try { upd = await api("/v1/admin/updates"); } catch { return; }
+    paintUpd();
+  }
+  async function setTester(){
+    try { upd = await api("/v1/admin/updates", { method: "POST", body: JSON.stringify({ tester: !(upd && upd.tester) }) }); } catch (e) { $("updMsg").textContent = String(e.message || e); return; }
+    paintUpd(); setTimeout(() => loadUpd(true), 1500);
+  }
+  async function checkUpd(){
+    try { upd = await api("/v1/admin/updates", { method: "POST", body: JSON.stringify({ check: true }) }); } catch (e) { $("updMsg").textContent = String(e.message || e); return; }
+    paintUpd(); setTimeout(() => loadUpd(true), 1500);
+  }
+
   async function tick(){
     if (!TOKEN) { $("gate").classList.remove("hide"); pill("", T("locked")); bootDone(); return; }
-    try { await refresh(); paintWipe(); void loadHost(); if (!mailLoaded) loadMail(); if (!tgLoaded) loadTg(); if (!fedLoaded) loadFed(); }
+    try { await refresh(); paintWipe(); void loadHost(); void loadUpd(); void loadStars(); if (!mailLoaded) loadMail(); if (!tgLoaded) loadTg(); if (!fedLoaded) loadFed(); }
     catch(e){
       if (e.message === "bad token") { signOut(); }
       else { pill("down", T("server not reachable")); bootDone(); }

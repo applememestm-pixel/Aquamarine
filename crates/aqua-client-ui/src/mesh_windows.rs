@@ -181,11 +181,11 @@ pub async fn stop(_app: &AppHandle) {
 /// when listening starts — never on the UI thread.
 static OWN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 pub fn own_address() -> Option<String> {
-    OWN.lock().ok().and_then(|g| g.clone())
+    OWN.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|g| g.clone())
 }
 fn read_own_address() {
     let a = windows::Devices::Bluetooth::BluetoothAdapter::GetDefaultAsync().and_then(|op| op.join()).and_then(|ad| ad.BluetoothAddress());
-    if let (Ok(a), Ok(mut g)) = (a, OWN.lock()) {
+    if let (Ok(a), Ok(mut g)) = (a, OWN.lock().or_else(|e| Ok::<_, ()>(e.into_inner()))) {
         *g = Some(mac(a));
     }
 }

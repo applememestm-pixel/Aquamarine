@@ -1,7 +1,8 @@
 <script lang="ts">
-  /** "A new build is out" — a card at the top: update now or later. */
+  /** "A new build is out" — a card at the top. Updates are mandatory
+   *  (updates.ts installs by itself): no "Later", only "Update" / "Try again". */
   import { t } from "../i18n";
-  import { updateState, installUpdate, skipUpdate, BUILD_SHORT, BUILD } from "../updates";
+  import { updateState, installUpdate, BUILD_SHORT, BUILD } from "../updates";
 
   const st = $derived($updateState);
   const shown = $derived(st.s === "available" || st.s === "downloading" || st.s === "installing" || st.s === "permission" || st.s === "signature" || (st.s === "error" && !!st.id));
@@ -17,7 +18,7 @@
     <div class="upd-body">
       {#if st.s === "available"}
         <b>{$t("Update available")}</b>
-        <span>{[label, BUILD_SHORT || BUILD.version ? $t("you have {v}", { v: BUILD.channel === "stable" ? "v" + BUILD.version : BUILD_SHORT || BUILD.version }) : "", st.info.asset ? `${mb(st.info.asset.size)} ${$t("MB")}` : ""].filter(Boolean).join(" · ")}</span>
+        <span>{[label, BUILD_SHORT || BUILD.version ? $t("you have {v}", { v: BUILD.version ? "v" + BUILD.version : BUILD_SHORT }) : "", st.info.asset ? `${mb(st.info.asset.size)} ${$t("MB")}` : ""].filter(Boolean).join(" · ")}</span>
       {:else if st.s === "downloading"}
         <b>{$t("Downloading the update…")}</b>
         <span class="bar"><i style:width="{st.total ? Math.min(100, (st.done / st.total) * 100) : 0}%"></i></span>
@@ -39,14 +40,13 @@
     <div class="upd-act">
       {#if st.s === "available" || st.s === "error"}
         <button class="go" onclick={installUpdate}>{$t(st.s === "error" ? "Try again" : "Update")}</button>
-        <button class="later" onclick={skipUpdate}>{$t("Later")}</button>
       {:else if st.s === "permission"}
         <button class="go" onclick={installUpdate}>{$t("Continue")}</button>
       {:else if st.s === "signature" && st.info.html_url}
         <a class="go" href={st.info.html_url} target="_blank" rel="noopener">{$t("Download")}</a>
       {/if}
-      {#if st.s !== "available" && st.s !== "error" && st.s !== "downloading"}
-        <button class="later x" onclick={skipUpdate} aria-label={$t("Close")} title={$t("Close")}>✕</button>
+      {#if st.s === "signature"}
+        <button class="later x" onclick={() => updateState.set({ s: "idle" })} aria-label={$t("Close")} title={$t("Close")}>✕</button>
       {/if}
     </div>
   </div>

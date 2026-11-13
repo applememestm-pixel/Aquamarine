@@ -232,14 +232,16 @@
   .key.bio svg { width: 30px; height: 30px; color: var(--accent); }
   .lock {
     position: fixed; inset: var(--tb-h, 0px) 0 0 0; z-index: 390; display: grid; place-items: center;
-    background:
-      radial-gradient(900px 500px at 20% 0%, var(--accent-glow), transparent 60%),
-      radial-gradient(800px 500px at 90% 100%, color-mix(in srgb, var(--accent-2) 25%, transparent), transparent 60%),
-      var(--bg-void, #06070c);
+    /* Telegram: the chosen chat wallpaper (pattern, gradient, picture with
+       its dimming), a little darker — never the app showing through. */
+    background: #06070c;
+    isolation: isolate;
   }
+  .lock::before { content: ""; position: absolute; inset: 0; z-index: -2; background: var(--chat-wallpaper, transparent), var(--bg-void, #06070c); background-color: #06070c; }
+  .lock::after { content: ""; position: absolute; inset: 0; z-index: -1; background: linear-gradient(rgba(0,0,0,.22), rgba(0,0,0,.42)); }
   .card {
     position: relative; width: min(380px, 92vw); display: flex; flex-direction: column; align-items: center; gap: 10px;
-    padding: 0 24px 22px; border-radius: calc(22px * var(--rk, 1)); background: var(--bg-shell); border: 1px solid var(--border-strong); overflow: hidden;
+    padding: 0 24px 22px; border-radius: calc(22px * var(--rk, 1)); background: linear-gradient(var(--bg-shell), var(--bg-shell)), #10131b; border: 1px solid var(--border-strong); overflow: hidden;
     box-shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.7), 0 0 40px -18px var(--accent-glow);
     animation: card-in 0.35s cubic-bezier(.2,.9,.3,1.1);
   }
@@ -303,6 +305,17 @@
   .key.del { font-size: 22px; color: var(--fg-muted); }
   @media (max-width: 720px) {
     .lock { place-items: stretch; }
+    /* Phone: no card — the wallpaper itself, white text, round glass keys (Telegram). */
+    .card { background: transparent; color: #fff; animation: none; }
+    .card :global(h2), .who b { color: #fff; text-shadow: 0 1px 6px rgba(0,0,0,.45); }
+    .who span, .card :global(p), .hint { color: rgba(255,255,255,.78); }
+    .key { width: 78px; height: 78px; justify-self: center; border-radius: 50%; flex-direction: column; gap: 0; color: #fff;
+      background: rgba(255,255,255,.14); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
+    .key small { min-width: 0; text-align: center; color: rgba(255,255,255,.7); font-size: 10px; }
+    .key:active { background: rgba(255,255,255,.32); }
+    .key.del, .key.bio { background: transparent; color: #fff; backdrop-filter: none; -webkit-backdrop-filter: none; }
+    .keypad { gap: 14px 0; }
+    .pin-box { border-color: rgba(255,255,255,.55); }
     .card { box-sizing: border-box; width: 100%; height: 100%; overflow-y: auto; border-radius: 0; border: none; box-shadow: none; gap: 8px;
       padding: calc(28px + var(--sat, env(safe-area-inset-top, 0px))) 18px calc(18px + var(--sab, env(safe-area-inset-bottom, 0px))); }
     .banner { display: none; }

@@ -86,9 +86,9 @@ fn hex_ok(s: &str, len: usize) -> bool {
 
 #[tauri::command]
 pub fn applock_state(state: State<'_, StdMutex<AppState>>) -> Result<LockState, String> {
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let c = conf_of(&s);
-    let wait_ms = FAILS.lock().map(|f| f.1.saturating_sub(now_ms())).unwrap_or(0);
+    let wait_ms = FAILS.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).map(|f| f.1.saturating_sub(now_ms())).unwrap_or(0);
     Ok(match c {
         Some(c) => LockState { has: true, locked: is_locked(), salt: c.salt, kind: c.kind, auto_min: c.auto_min, bio: c.bio, wait_ms },
         None => LockState { has: false, locked: false, salt: String::new(), kind: String::new(), auto_min: 0, bio: false, wait_ms: 0 },
@@ -104,7 +104,7 @@ pub fn applock_set(state: State<'_, StdMutex<AppState>>, hash: String, salt: Str
     if !hex_ok(&hash, 64) || !hex_ok(&salt, 32) {
         return Err("bad passcode hash".into());
     }
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let bio = conf_of(&s).map(|c| c.bio).unwrap_or(false);
     let c = Conf { hash: hash.to_lowercase(), salt: salt.to_lowercase(), kind, auto_min, bio };
     s.vault.put_record(KEY, &serde_json::to_vec(&c).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
@@ -116,7 +116,7 @@ pub fn applock_options(state: State<'_, StdMutex<AppState>>, auto_min: Option<u3
     if is_locked() {
         return Err("locked".into());
     }
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(mut c) = conf_of(&s) else { return Ok(()) };
     if let Some(m) = auto_min {
         c.auto_min = m;
@@ -133,13 +133,13 @@ pub fn applock_clear(state: State<'_, StdMutex<AppState>>) -> Result<(), String>
     if is_locked() {
         return Err("locked".into());
     }
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     s.vault.delete_record(KEY).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn applock_lock(state: State<'_, StdMutex<AppState>>) -> Result<(), String> {
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if conf_of(&s).is_some() {
         LOCKED.store(true, Ordering::SeqCst);
     }
@@ -150,12 +150,12 @@ pub fn applock_lock(state: State<'_, StdMutex<AppState>>) -> Result<(), String> 
 /// in a row make the next one wait: 5 free, then 30 s, doubling.
 #[tauri::command]
 pub fn applock_unlock(state: State<'_, StdMutex<AppState>>, hash: String) -> Result<bool, String> {
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(c) = conf_of(&s) else {
         LOCKED.store(false, Ordering::SeqCst);
         return Ok(true);
     };
-    let mut f = FAILS.lock().map_err(|e| e.to_string())?;
+    let mut f = FAILS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if now_ms() < f.1 {
         return Err(format!("wait:{}", f.1 - now_ms()));
     }
@@ -179,7 +179,7 @@ pub fn applock_unlock(state: State<'_, StdMutex<AppState>>, hash: String) -> Res
 pub fn applock_unlock_bio(state: State<'_, StdMutex<AppState>>) -> Result<bool, String> {
     #[cfg(mobile)]
     {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if conf_of(&s).is_some_and(|c| c.bio) {
             LOCKED.store(false, Ordering::SeqCst);
             return Ok(true);
@@ -197,7 +197,7 @@ pub struct ForgotSent {
 }
 
 fn account_of(state: &State<'_, StdMutex<AppState>>) -> Result<(String, String), String> {
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     match (s.server_url.clone(), s.email.clone()) {
         (Some(u), Some(e)) if !u.is_empty() && !e.is_empty() => Ok((u, e)),
         _ => Err("no e-mail is linked to this account here".into()),
@@ -229,9 +229,9 @@ pub async fn applock_forgot_check(state: State<'_, StdMutex<AppState>>, code: St
     if aqua_client_core::verify_email_code(&server, &email, code.trim()).await.is_err() {
         return Ok(false);
     }
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     s.vault.delete_record(KEY).map_err(|e| e.to_string())?;
-    if let Ok(mut f) = FAILS.lock() {
+    if let Ok(mut f) = FAILS.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
         *f = (0, 0);
     }
     LOCKED.store(false, Ordering::SeqCst);

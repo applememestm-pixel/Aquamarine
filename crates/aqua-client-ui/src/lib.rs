@@ -32,6 +32,8 @@ pub mod devlists;
 pub mod relay_host;
 pub mod gallery;
 pub mod accounts;
+pub mod fsx;
+pub mod ice;
 pub mod updates;
 pub mod storage;
 pub mod tray;
@@ -121,7 +123,7 @@ pub fn run() -> Result<()> {
             let _ = app.asset_protocol_scope().allow_directory(crate::storage::downloads_dir(&data_dir), true);
             let state = state::AppState::boot(data_dir)?;
             // A passcode in the vault: start locked (applock.rs).
-            if let Ok(s) = state.lock() {
+            if let Ok(s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
                 applock::init(&s);
             }
             app.manage(state);
@@ -131,7 +133,7 @@ pub fn run() -> Result<()> {
                 std::thread::spawn(move || loop {
                     std::thread::sleep(std::time::Duration::from_secs(3));
                     let st = handle.state::<std::sync::Mutex<state::AppState>>();
-                    let guard = st.lock();
+                    let guard = st.lock().or_else(|e| Ok::<_, ()>(e.into_inner()));
                     if let Ok(mut s) = guard {
                         history::flush(&mut s);
                     }
@@ -179,6 +181,7 @@ pub fn run() -> Result<()> {
             applock::applock_forgot_check,
             stars::star_verify,
             stars::my_star,
+            ice::relay_ice,
             crashreport::report_error,
             crashreport::report_config,
             bgnotify::notify_front,
@@ -257,6 +260,7 @@ pub fn run() -> Result<()> {
             accounts::account_boot,
             accounts::account_forget,
             accounts::app_relaunch,
+            history::history_flush,
             updates::update_check,
             updates::update_download,
             updates::update_install,
@@ -426,7 +430,7 @@ pub fn run() -> Result<()> {
             app.run(|handle, ev| {
                 if let tauri::RunEvent::Exit = ev {
                     let st = handle.state::<std::sync::Mutex<state::AppState>>();
-                    let guard = st.lock();
+                    let guard = st.lock().or_else(|e| Ok::<_, ()>(e.into_inner()));
                     if let Ok(mut s) = guard {
                         history::flush(&mut s);
                     }

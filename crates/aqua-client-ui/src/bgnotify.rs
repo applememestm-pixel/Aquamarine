@@ -48,7 +48,7 @@ pub fn notify_front(front: bool) {
 
 #[tauri::command]
 pub fn notify_prefs(prefs: Prefs) {
-    if let Ok(mut g) = PREFS.lock() {
+    if let Ok(mut g) = PREFS.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
         *g = Some(prefs);
     }
 }
@@ -58,14 +58,14 @@ pub fn incoming(app: &AppHandle, chat: &str) {
     if !cfg!(mobile) || in_front() || chat.starts_with("__") {
         return;
     }
-    let Some(p) = PREFS.lock().ok().and_then(|g| g.clone()) else { return };
+    let Some(p) = PREFS.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|g| g.clone()) else { return };
     widget(app, &p);
     if !p.enabled || p.muted.iter().any(|m| m == chat) {
         return;
     }
     let (title, body) = {
         let Some(st) = app.try_state::<std::sync::Mutex<crate::state::AppState>>() else { return };
-        let Ok(s) = st.lock() else { return };
+        let Ok(s) = st.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) else { return };
         let Some(book) = s.chats.get(chat) else { return };
         let body = match &book.summary.preview_from {
             // A group: who wrote.
@@ -83,7 +83,7 @@ pub fn incoming(app: &AppHandle, chat: &str) {
 fn widget(app: &AppHandle, p: &Prefs) {
     let Some(st) = app.try_state::<std::sync::Mutex<crate::state::AppState>>() else { return };
     let rows: Vec<(String, String, u32)> = {
-        let Ok(s) = st.lock() else { return };
+        let Ok(s) = st.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) else { return };
         s.chat_order.iter()
             .filter(|id| !id.starts_with("__") && !p.muted.contains(id) && !p.archived.contains(id))
             .filter_map(|id| s.chats.get(id).map(|b| (id, b)))

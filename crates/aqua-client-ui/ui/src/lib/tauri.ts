@@ -105,6 +105,7 @@ export const api = {
   setTzOffset:        (minutes: number): Promise<void> => invoke("set_tz_offset", { minutes }),
   /** Stars (src/stars.rs): someone's statement → its kind if real; my own from my relay. */
   starVerify:         (uid: string, star: unknown): Promise<number | null>          => invoke("star_verify", { uid, star }),
+  relayIce:           (): Promise<RTCIceServer | null> => invoke("relay_ice"),
   myStar:             (): Promise<{ uid: string; kind: number; exp: number; sig: string } | null> => invoke("my_star"),
   sendMessage:        (peer_id: string, text: string): Promise<SendResult>        => { noteWrote(peer_id); return invoke("send_message", { peerId: peer_id, text }); },
   verifyFingerprint:  (peer_id: string): Promise<FingerprintView>                  => invoke("verify_fingerprint", { peerId: peer_id }),
@@ -310,6 +311,7 @@ export const api = {
   accountBoot:        (owner: string | null, store: string): Promise<{ slot: string; store: string | null }> => invoke("account_boot", { owner, store }),
   accountForget:      (slot: string): Promise<void> => invoke("account_forget", { slot }),
   appRelaunch:        (): Promise<void> => invoke("app_relaunch"),
+  historyFlush:       (): Promise<void> => invoke("history_flush"),
   setGpuMode:         (mode: "auto" | "on" | "off"): Promise<void>                     => invoke("set_gpu_mode", { mode }),
   fetchAttachment:    (media: ArticleMedia): Promise<string>                         => invoke("fetch_attachment", { media }),
   allowMediaPreview:  (path: string): Promise<void>                                  => invoke("allow_media_preview", { path }),

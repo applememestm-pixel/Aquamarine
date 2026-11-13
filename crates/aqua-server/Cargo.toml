@@ -44,6 +44,9 @@ rusqlite    = { version = "0.32", features = ["bundled"] }
 lettre      = { version = "0.11", default-features = false, features = ["smtp-transport", "builder", "tokio1-rustls-tls", "tokio1"] }
 # Downloads sticker / emoji packs from the Telegram Bot API (see packs.rs).
 reqwest     = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# The TURN relay for calls (turnsrv.rs).
+turn        = "0.17"
+util        = { package = "webrtc-util", version = "0.17", default-features = false, features = ["vnet"] }
 
 [lib]
 path = "src/lib.rs"

@@ -80,6 +80,35 @@ async fn get_json(http: &reqwest::Client, url: &str) -> Result<serde_json::Value
     serde_json::from_slice(&body).map_err(|e| e.to_string())
 }
 
+/// "v1.20.1-6" → "1.20.1-6"; None for tags without a number ("nightly").
+fn tag_version(tag: &str) -> Option<&str> {
+    tag.strip_prefix('v').filter(|v| v.chars().next().is_some_and(|c| c.is_ascii_digit()))
+}
+
+/// The project's numbering (= ui/src/lib/updates.ts::newer and
+/// aqua-server-app/src/updates.rs::newer): 1.0.10 > 1.0.9, 1.0.7 > 1.0.62 >
+/// 1.0.61 > 1.0.6, and 1.2.0-8 > 1.2.0-7 > 1.2.0.
+pub fn newer(a: &str, b: &str) -> bool {
+    let sa: Vec<&str> = a.split(['.', '-']).collect();
+    let sb: Vec<&str> = b.split(['.', '-']).collect();
+    let num = |s: &str| s.parse::<u64>().unwrap_or(0);
+    for i in 0..sa.len().max(sb.len()) {
+        let (x, y) = (sa.get(i).copied().unwrap_or("0"), sb.get(i).copied().unwrap_or("0"));
+        if i == 2 && x.len() != y.len() {
+            let short = x.len().min(y.len());
+            let (hx, hy) = (num(&x[..short]), num(&y[..short]));
+            if hx != hy {
+                return hx > hy;
+            }
+            return x.len() > y.len();
+        }
+        if num(x) != num(y) {
+            return num(x) > num(y);
+        }
+    }
+    false
+}
+
 fn short_commit(name: &str) -> Option<String> {
     let open = name.rfind('(')?;
     let inner = name[open + 1..].trim_end().strip_suffix(')')?;
@@ -185,13 +214,20 @@ async fn web_check(http: &reqwest::Client, channel: &str) -> Result<UpdateInfo, 
         let tag = r.url().path().rsplit_once("/tag/").map(|(_, t)| t.to_string()).ok_or("no releases yet")?;
         (tag.clone(), tag, String::new())
     } else {
-        // The feed lists every release, pre-releases too, newest first.
+        // The feed lists every release, pre-releases too: the highest number.
         let feed = get(format!("{base}/releases.atom")).await?.text().await.map_err(|e| e.to_string())?;
-        let entry = xml_tag(&feed, "entry").ok_or("no releases yet")?;
-        let link = entry.split("href=\"").nth(1).and_then(|r| r.split('"').next()).unwrap_or_default();
-        let tag = link.rsplit_once("/tag/").map(|(_, t)| t.to_string()).ok_or("no releases yet")?;
+        let mut best: Option<(String, &str)> = None;
+        for entry in feed.split("<entry").skip(1) {
+            let link = entry.split("href=\"").nth(1).and_then(|r| r.split('"').next()).unwrap_or_default();
+            let Some(tag) = link.rsplit_once("/tag/").map(|(_, t)| t.to_string()) else { continue };
+            let Some(v) = tag_version(&tag) else { continue };
+            if best.as_ref().map_or(true, |(b, _)| newer(v, tag_version(b).unwrap_or("0"))) {
+                best = Some((tag.clone(), entry));
+            }
+        }
+        let (tag, entry) = best.ok_or("no releases yet")?;
         let name = xml_unescape(xml_tag(entry, "title").unwrap_or(&tag));
-        (tag, name, xml_tag(entry, "updated").unwrap_or_default().to_string())
+        (tag.clone(), name, xml_tag(entry, "updated").unwrap_or_default().to_string())
     };
     let dl = |f: &str| format!("{base}/releases/download/{tag}/{f}");
     let sums = match get(dl("SHA256SUMS.txt")).await {
@@ -236,15 +272,17 @@ async fn api_check(http: &reqwest::Client, channel: &str) -> Result<UpdateInfo, 
     let rel = if channel == "stable" {
         get_json(&http, &format!("https://api.github.com/repos/{REPO}/releases/latest")).await?
     } else {
-        // Every build: the most recently published release — a numbered
-        // pre-release (v1.0.61…), a stable one, or the old moving "nightly".
-        let list = get_json(&http, &format!("https://api.github.com/repos/{REPO}/releases?per_page=15")).await?;
+        // Testers: the highest numbered release, pre-releases included. The
+        // old moving "nightly" (no number) is never picked: there are no
+        // nightly builds any more, and its stale files would go over newer ones.
+        let list = get_json(&http, &format!("https://api.github.com/repos/{REPO}/releases?per_page=20")).await?;
         list.as_array()
             .into_iter()
             .flatten()
             .filter(|r| !r["draft"].as_bool().unwrap_or(false))
-            .max_by(|a, b| a["published_at"].as_str().unwrap_or_default().cmp(b["published_at"].as_str().unwrap_or_default()))
-            .cloned()
+            .filter_map(|r| Some((tag_version(r["tag_name"].as_str()?)?.to_string(), r)))
+            .reduce(|a, b| if newer(&b.0, &a.0) { b } else { a })
+            .map(|(_, r)| r.clone())
             .ok_or("no releases yet")?
     };
     release_info(&http, &rel, channel).await
@@ -425,6 +463,8 @@ impl std::io::Write for HashWriter<'_> {
 /// Install a file `update_download` fetched.
 #[tauri::command]
 pub async fn update_install(app: AppHandle, path: String) -> Result<String, String> {
+    // The installer ends this process: the last messages go to disk first.
+    crate::history::flush_app(&app);
     let p = PathBuf::from(&path);
     let dir = updates_dir(&app)?;
     if p.parent() != Some(dir.as_path()) || !p.is_file() {

@@ -14,6 +14,8 @@
   import { untrack, tick, onMount } from "svelte";
   import { prevTrack } from "../player";
   import { bindAudio } from "../music";
+  import { setPlayerElement, playerPaused, playerProgress } from "../player";
+  import { IS_MOBILE } from "../platform";
 
   const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
   const VOL_KEY = "aqua.player.volume";
@@ -181,10 +183,14 @@
     return `${m}:${String(sec).padStart(2, "0")}`;
   }
   let pct = $derived(duration > 0 ? (current / duration) * 100 : 0);
+  // The small strips (MiniPlayer) — on phones they take this bar's place.
+  $effect(() => { setPlayerElement(audio); return () => setPlayerElement(null); });
+  $effect(() => { playerPaused.set(!playing); });
+  $effect(() => { playerProgress.set(pct / 100); });
 </script>
 
 {#if $nowPlaying}
-  <div class="top-player">
+  <div class="top-player" class:phone={IS_MOBILE}>
     <audio
       bind:this={audio}
       src={playSrc || undefined}
@@ -356,6 +362,9 @@
   .tp-icon svg { width: 14px; height: 14px; }
   .tp-icon:hover { color: var(--fg); background: var(--bg-hover); border-color: var(--border-strong); }
 
+  /* Phones: Telegram's strip (MiniPlayer) in the list and the chat instead;
+     the bar only keeps the <audio>. */
+  .top-player.phone { display: none; }
   @media (max-width: 720px) {
     .tp-info { display: none; }
     .tp-vol-slider { display: none; }

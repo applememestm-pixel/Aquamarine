@@ -76,7 +76,11 @@ fn with_stars<R>(f: impl FnOnce(&mut BTreeMap<String, Star>) -> R) -> R {
 }
 
 fn save(map: &BTreeMap<String, Star>) {
-    let _ = std::fs::write(STORE, serde_json::to_vec_pretty(map).unwrap_or_default());
+    // Whole or not at all: a cut file read back as "nobody has a star".
+    let tmp = format!("{STORE}.tmp");
+    if std::fs::write(&tmp, serde_json::to_vec_pretty(map).unwrap_or_default()).is_ok() {
+        let _ = std::fs::rename(&tmp, STORE);
+    }
 }
 
 /// The signing key, if this is the relay that hands stars out.
@@ -91,21 +95,49 @@ pub fn has_key() -> bool {
     key().is_some()
 }
 
+/// Make the key once (never over an existing one); its public half.
+pub fn make_key() -> Result<String, String> {
+    if let Some(k) = key() {
+        return Ok(hex::encode(k.public().as_bytes()));
+    }
+    let k = aqua_core::crypto::SignSecret::generate();
+    std::fs::write(KEY_FILE, hex::encode(k.to_bytes())).map_err(|e| format!("Couldn't write {KEY_FILE}: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(KEY_FILE, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(hex::encode(k.public().as_bytes()))
+}
+
+/// `GET /v1/admin/stars` — is this the star relay, its public key, how many
+/// stars; `POST` makes the key (once) and starts the @stars bot.
+pub async fn admin_get(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Result<Json<serde_json::Value>, StatusCode> {
+    crate::admin_authed(&state, &headers)?;
+    let n = with_stars(|m| m.len());
+    Ok(Json(serde_json::json!({ "has_key": has_key(), "public": key().map(|k| hex::encode(k.public().as_bytes())), "stars": n, "bot": bot_name() })))
+}
+
+pub async fn admin_make(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    crate::admin_authed(&state, &headers).map_err(|c| (c, String::new()))?;
+    let had = has_key();
+    let public = make_key().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    if !had {
+        spawn(state.clone());
+    }
+    Ok(Json(serde_json::json!({ "has_key": true, "public": public, "stars": with_stars(|m| m.len()), "bot": bot_name() })))
+}
+
 /// `aqua-server star-key`: make the key once (never over an existing one)
 /// and print the public half.
 pub fn keygen_cli() -> String {
     if let Some(k) = key() {
         return format!("The star key exists already ({KEY_FILE}). Public key:\n{}", hex::encode(k.public().as_bytes()));
     }
-    let k = aqua_core::crypto::SignSecret::generate();
-    if let Err(e) = std::fs::write(KEY_FILE, hex::encode(k.to_bytes())) {
-        return format!("Couldn't write {KEY_FILE}: {e}");
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(KEY_FILE, std::fs::Permissions::from_mode(0o600));
-    }
+    let k = match make_key().ok().and_then(|_| key()) {
+        Some(k) => k,
+        None => return format!("Couldn't write {KEY_FILE}"),
+    };
     format!(
         "Star key made: {KEY_FILE} (keep it secret, back it up; never share it).\nPublic key — send this one to be built into the apps:\n{}",
         hex::encode(k.public().as_bytes())
@@ -140,15 +172,21 @@ pub async fn get_star(State(_state): State<AppState>, Path(uid): Path<String>) -
     }
     let home = std::env::var("AQUA_STAR_HOME").ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| DEFAULT_HOME.into());
     let url = format!("{}/v1/stars/{uid}", home.trim_end_matches('/'));
-    let st = async {
-        let c = reqwest::Client::builder().timeout(std::time::Duration::from_secs(8)).build().ok()?;
-        let r = c.get(&url).send().await.ok()?;
-        if !r.status().is_success() {
-            return None;
+    // Ok(None): the star relay says "no star". Err: it couldn't be asked —
+    // that's not "no star" (the app would take the star off the card).
+    let res: Result<Option<Statement>, ()> = async {
+        let c = reqwest::Client::builder().timeout(std::time::Duration::from_secs(8)).build().map_err(|_| ())?;
+        let r = c.get(&url).send().await.map_err(|_| ())?;
+        if r.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
         }
-        r.json::<Statement>().await.ok()
+        if !r.status().is_success() {
+            return Err(());
+        }
+        r.json::<Statement>().await.map(Some).map_err(|_| ())
     }
     .await;
+    let Ok(st) = res else { return Err(StatusCode::BAD_GATEWAY) };
     if let Ok(mut g) = CACHE.lock() {
         let m = g.get_or_insert_with(BTreeMap::new);
         if m.len() > 5000 {

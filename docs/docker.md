@@ -68,7 +68,7 @@ Linux и macOS:
 
 ```bash
 docker run -d --name aquamarine-server --restart unless-stopped \
-  -p 7777:7777 -v aquamarine-data:/data \
+  -p 7777:7777 -p 3478:3478/udp -v aquamarine-data:/data \
   -e AQUA_ADMIN_TOKEN=ВАШ-ПАРОЛЬ-ДЛЯ-ПАНЕЛИ \
   ghcr.io/applememestm-pixel/aquamarine-server:latest
 ```
@@ -76,7 +76,7 @@ docker run -d --name aquamarine-server --restart unless-stopped \
 Windows (PowerShell), то же одной строкой:
 
 ```powershell
-docker run -d --name aquamarine-server --restart unless-stopped -p 7777:7777 -v aquamarine-data:/data -e AQUA_ADMIN_TOKEN=ВАШ-ПАРОЛЬ-ДЛЯ-ПАНЕЛИ ghcr.io/applememestm-pixel/aquamarine-server:latest
+docker run -d --name aquamarine-server --restart unless-stopped -p 7777:7777 -p 3478:3478/udp -v aquamarine-data:/data -e AQUA_ADMIN_TOKEN=ВАШ-ПАРОЛЬ-ДЛЯ-ПАНЕЛИ ghcr.io/applememestm-pixel/aquamarine-server:latest
 ```
 
 Что здесь что:
@@ -86,6 +86,7 @@ docker run -d --name aquamarine-server --restart unless-stopped -p 7777:7777 -v 
 | `-d` | работает в фоне |
 | `--restart unless-stopped` | сам поднимается после перезагрузки, пока вы его не остановили |
 | `-p 7777:7777` | порт для приложений. Занят — пишите `-p 7778:7777` и подключайтесь к 7778 |
+| `-p 3478:3478/udp` | ретранслятор звонков (TURN): без него звонки между мобильным интернетом и домашними роутерами часто не соединяются. Откройте этот UDP-порт и в файрволе / на роутере |
 | `-v aquamarine-data:/data` | учётные записи, файлы и настройки живут в томе `aquamarine-data` и переживают обновления |
 | `AQUA_ADMIN_TOKEN` | пароль панели. Без него при каждом запуске появляется новый — его видно в `docker logs aquamarine-server` |
 
@@ -175,3 +176,7 @@ docker build -t aquamarine-server -f docker/relay.Dockerfile https://github.com/
 | Приложение не видит сервер с телефона | Проверьте, что телефон в той же сети, адрес — IP компьютера, а не 127.0.0.1. Файрвол Windows при первом запуске спросит разрешение — разрешите для частных сетей |
 
 Сайт проекта с документацией тоже есть в Docker — отдельный маленький образ `aquamarine-site`, см. [deployment.md, раздел 2](deployment.md#2-сайт-проекта-termux-docker).
+
+## Обновления
+
+Сервер обновляется сам (выпуски — обязательно; пре-выпуски — с «Тестером» в панели или `AQUA_UPDATES=tester`): новая версия скачивается в том `/data` (`aqua-update/`) и запускается оттуда, в том числе после перезапуска контейнера. `docker compose pull` тоже работает — образ новее скачанного, и скачанный тогда удаляется.

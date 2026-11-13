@@ -2,27 +2,31 @@ import { writable, get } from "svelte/store";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { tr } from "./i18n";
+import { groupCall } from "./groupCall";
 
 /**
  * In-app updates (Rust: updates.rs). Every v* tag is a release — stable,
- * or a numbered pre-release (1.0.61…) — and "every build" takes the newest
- * published one (the old moving "nightly" included); the app
- * compares itself with the newest one of its channel and, on a "yes",
- * downloads the file for this platform, checks its SHA-256 and installs it.
+ * or a numbered pre-release (1.20.1-6…). Releases are mandatory (the owner's
+ * rule, 1.20.1-6): the app looks on start and every 3 hours, and a newer
+ * release downloads, is checked against its SHA-256 and installs by itself —
+ * there's no "Later". Testers (Settings → Updates → Tester) get every
+ * numbered build the same way, pre-releases included. Nightly builds are gone.
  */
 declare const __AQ_BUILD__: { commit: string; channel: "nightly" | "stable" | "dev"; version: string };
 export const BUILD = typeof __AQ_BUILD__ !== "undefined" ? __AQ_BUILD__ : { commit: "", channel: "dev" as const, version: "" };
 export const BUILD_SHORT = BUILD.commit.slice(0, 7);
 
 export type Channel = "nightly" | "stable";
-interface Prefs { channel: Channel; auto: boolean; skip?: string }
-const KEY = "aqua.updates.v1";
+interface Prefs { tester: boolean }
+const KEY = "aqua.updates.v2";
 function loadPrefs(): Prefs {
-  const def: Prefs = { channel: BUILD.channel === "stable" ? "stable" : "nightly", auto: true };
+  const def: Prefs = { tester: false };
   try { return { ...def, ...JSON.parse(localStorage.getItem(KEY) || "{}") }; } catch { return def; }
 }
 export const updatePrefs = writable<Prefs>(loadPrefs());
 updatePrefs.subscribe((p) => { try { localStorage.setItem(KEY, JSON.stringify(p)); } catch { /* storage blocked */ } });
+/** "nightly" is the Rust side's name for "every numbered build". */
+const channelOf = (p: Prefs): Channel => (p.tester ? "nightly" : "stable");
 
 export interface UpdateAsset { name: string; url: string; size: number; sha256: string | null }
 export interface UpdateInfo {
@@ -62,42 +66,47 @@ export function newer(a: string, b: string): boolean {
   }
   return false;
 }
-/** The id of the release if it's not the build we are, else null. */
-function updateId(info: UpdateInfo, channel: Channel): string | null {
-  if (channel === "stable") return info.version && (!BUILD.version || newer(info.version, BUILD.version)) ? "v" + info.version : null;
-  // A numbered release (v1.2.0-5): its number decides. The commit list
-  // (BUILDS.json) is only uploaded at the very end of a release run, and
-  // without it the newest pre-release looked like "you have the newest build".
-  if (info.version && BUILD.version && info.version !== BUILD.version) return newer(info.version, BUILD.version) ? "v" + info.version : null;
-  if (!info.commit) return null;
-  return BUILD.commit.startsWith(info.commit) ? null : info.commit;
+/** The id of the release if it's newer than the build we are, else null. */
+function updateId(info: UpdateInfo): string | null {
+  if (!info.version) return null;
+  return !BUILD.version || newer(info.version, BUILD.version) ? "v" + info.version : null;
 }
 
 export async function checkUpdates(manual = false): Promise<void> {
   const cur = get(updateState).s;
   if (cur === "checking" || cur === "downloading" || cur === "installing") return;
-  const { channel, skip } = get(updatePrefs);
+  const channel = channelOf(get(updatePrefs));
   updateState.set({ s: "checking" });
   try {
     const info = await invoke<UpdateInfo>("update_check", { channel });
-    const id = updateId(info, channel);
+    const id = updateId(info);
     // A build still uploading (no file or no checksum yet) waits for the next look.
     const ready = !!info.asset?.sha256;
     if (!id) updateState.set({ s: "none", info });
     else if (!ready) updateState.set(manual ? { s: "error", error: tr("The new build for this device isn't ready yet — try again in a few minutes."), info } : { s: "idle" });
-    // A version the user put off stays quiet until they look themselves.
-    else if (!manual && skip === id) updateState.set({ s: "idle" });
-    else updateState.set({ s: "available", info, id });
+    else { updateState.set({ s: "available", info, id }); autoInstall(); }
   } catch (e) {
     updateState.set(manual ? { s: "error", error: String(e) } : { s: "idle" });
   }
 }
 
-export function skipUpdate() {
+/** Updates are mandatory: an available one starts by itself — not in the
+ *  middle of a call (it waits for the call to end), and on Android the system
+ *  installer is asked again at most every 30 minutes if it was turned down. */
+let lastAuto = 0;
+const busyWithCall = () => !!get(groupCall) || [...document.querySelectorAll<HTMLMediaElement>("[data-call-media]")].some((m) => !!m.srcObject);
+function autoInstall() {
   const st = get(updateState);
-  if ("id" in st && st.id) updatePrefs.update((p) => ({ ...p, skip: st.id }));
-  updateState.set({ s: "idle" });
+  if (st.s !== "available" && st.s !== "error") return;
+  if (!("id" in st) || !st.id) return;
+  if (busyWithCall()) { setTimeout(autoInstall, 60000); return; }
+  if (Date.now() - lastAuto < 30 * 60000) return;
+  lastAuto = Date.now();
+  void installUpdate();
 }
+
+/** Kept for old callers: updates can't be put off any more. */
+export function skipUpdate() {}
 
 export async function installUpdate(): Promise<void> {
   const st = get(updateState);
@@ -124,11 +133,15 @@ export async function installUpdate(): Promise<void> {
   }
 }
 
-/** Look on start and every 6 hours (GitHub allows 60 unauthenticated calls an hour). */
+/** Look on start and every 3 hours (GitHub allows 60 unauthenticated calls
+ *  an hour; the site's updates.json takes over after that). */
 export function startUpdates(): () => void {
-  const tick = () => { if (get(updatePrefs).auto && BUILD.channel !== "dev") void checkUpdates(); };
+  const tick = () => { if (BUILD.channel !== "dev") void checkUpdates(); };
   const first = setTimeout(tick, 15000);
-  const every = setInterval(tick, 6 * 3600 * 1000);
+  const every = setInterval(tick, 3 * 3600 * 1000);
+  // Turning "Tester" on looks right away.
+  let prevTester = get(updatePrefs).tester;
+  const unPrefs = updatePrefs.subscribe((p) => { if (p.tester !== prevTester) { prevTester = p.tester; lastAuto = 0; void checkUpdates(true); } });
   // Back from "allow installs" in system settings: carry on.
   // Back from the system installer and still here: it didn't go through —
   // don't keep saying "Installing…" forever.
@@ -141,10 +154,10 @@ export function startUpdates(): () => void {
       hiddenWhileInstalling = false;
       setTimeout(() => {
         const n = get(updateState);
-        if (n.s === "installing") updateState.set({ s: "available", info: n.info, id: n.id });
+        if (n.s === "installing") { updateState.set({ s: "available", info: n.info, id: n.id }); autoInstall(); }
       }, 1500);
-    }
+    } else if (s.s === "available") autoInstall();
   };
   document.addEventListener("visibilitychange", onVis);
-  return () => { clearTimeout(first); clearInterval(every); document.removeEventListener("visibilitychange", onVis); };
+  return () => { clearTimeout(first); clearInterval(every); unPrefs(); document.removeEventListener("visibilitychange", onVis); };
 }

@@ -52,6 +52,7 @@
   import { noShare, setNoShare, startNoShare } from "../noShare";
   import { isLive, livePlay } from "../liveMotion";
   import { IS_DESKTOP, IS_MOBILE } from "../platform";
+  import MiniPlayer from "./MiniPlayer.svelte";
   import Welcome from "./Welcome.svelte";
   import { settings } from "../theme";
   import { api, assetUrl, sendChatControl } from "../tauri";
@@ -60,7 +61,7 @@
   import { pluginCommands, pluginsOnSend, runPluginCommand, pluginButtons, pressPluginButton } from "../plugins";
   import { ATTACH_ITEMS, attachFront, attachHidden, attachDock, attachBots, toggleAttachBot, type AttachId } from "../attachMenu";
   import { openRoomRequest } from "../roomNav";
-  import { AUTODL_DEFAULT } from "../theme";
+  import { AUTODL_DEFAULT, type DblTap } from "../theme";
   import { openPopout } from "../popouts";
   import { startOutgoingCall, callState } from "./CallModal.svelte";
   import { openMediaPicker, closeMediaPicker, pickerState, pickerTab, panelClaimsDrop } from "./MediaPicker.svelte";
@@ -72,7 +73,7 @@
   import MediaPlayer from "./MediaPlayer.svelte";
   import { openGallery, type GalleryItem } from "./Lightbox.svelte";
   import { openArticleComposer } from "../panels/articleComposer";
-  import { openCircleRecorder, releaseCircleHold } from "./CircleRecorder.svelte";
+  import { openCircleRecorder, releaseCircleHold, cancelCircleHold, circleDrag, CANCEL_PX } from "./CircleRecorder.svelte";
   import { openPollComposer } from "./PollComposer.svelte";
   import { openForward, type ForwardItem } from "./ForwardPicker.svelte";
   import { playQueue, type Track } from "../player";
@@ -762,6 +763,8 @@
   let holdTimer: ReturnType<typeof setTimeout> | null = null;
   let holdFired = false;
   let holdStartY = 0;
+  let holdStartX = 0;
+  let holdCancelled = false;
   let recLocked = false;
 
   /** The peer's privacy (or the group's rules) forbid voice / video notes. */
@@ -781,8 +784,12 @@
     if (!$activeChat?.live) return;
     if (voiceBlocked($activeChat.id)) return;
     holdFired = false;
+    holdCancelled = false;
     recLocked = false;
     holdStartY = e.clientY;
+    holdStartX = e.clientX;
+    // The finger may leave the button (slide to cancel / up to lock).
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ignore */ }
     holdTimer = setTimeout(() => {
       holdFired = true;
       if (mediaMode === "voice") void startRecording();
@@ -790,13 +797,22 @@
     }, 250);
   }
   function mediaMove(e: PointerEvent) {
-    if (holdFired && !recLocked && holdStartY - e.clientY > 40) {
+    if (!holdFired || recLocked) return;
+    const dx = e.clientX - holdStartX, dy = e.clientY - holdStartY;
+    if (mediaMode === "circle") circleDrag.set({ x: dx, y: dy });
+    if (dx < -CANCEL_PX) {
+      // Slid left → thrown away (Telegram).
+      holdFired = false;
+      holdCancelled = true;
+      if (mediaMode === "circle") cancelCircleHold(); else cancelRecord();
+    } else if (-dy > 40) {
       recLocked = true; // slid up → hands-free
       if (mediaMode === "circle") releaseCircleHold(true);
     }
   }
   function mediaUp() {
     if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+    if (holdCancelled) { holdCancelled = false; return; }
     if (!holdFired) {
       // A tap: switch mode.
       mediaMode = mediaMode === "voice" ? "circle" : "voice";
@@ -806,6 +822,8 @@
     // recording keeps going (controlled by the rec-bar).
     if (mediaMode === "voice" && !recLocked && recording) stopRecording();
     if (mediaMode === "circle" && !recLocked) releaseCircleHold();
+    // Once: the window's pointerup comes here too.
+    holdFired = false;
   }
 
   async function sendVoiceBlob(blob: Blob) {
@@ -2299,6 +2317,42 @@
   function openTouchMenu(row: Row, x: number, y: number) {
     menu = { open: true, x, y, row, touch: true };
   }
+  /** The menu must not lie over the message it's for (Telegram): once it's
+   *  drawn and its size is known, it goes under the bubble, or above it when
+   *  there's no room below. Only a bubble taller than the screen keeps it at
+   *  the finger. */
+  let menuEl = $state<HTMLDivElement | null>(null);
+  $effect(() => {
+    const el = menuEl, row = menu.row;
+    if (!menu.open || !el || !row) return;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (!menu.open || menu.row !== row || !el.isConnected) return;
+      const b = document.querySelector(`[data-msg-id="${CSS.escape(row.id)}"] .bubble`) ?? document.querySelector(`[data-msg-id="${CSS.escape(row.id)}"]`);
+      if (!b) return;
+      const r = b.getBoundingClientRect();
+      const h = el.offsetHeight, w = el.offsetWidth;
+      const vv = window.visualViewport;
+      const vh = Math.min(window.innerHeight, vv ? vv.height + vv.offsetTop : Infinity) - 16;
+      const m = el.getBoundingClientRect();
+      if (m.top >= r.bottom - 1 || m.bottom <= r.top + 1) return;   // already clear of it
+      let top: number;
+      if (r.bottom + 6 + h <= vh) top = r.bottom + 6;
+      else if (r.top - 6 - h >= 8) top = r.top - 6 - h;
+      else {
+        // No room for all of it on either side: the bigger side, scrolling
+        // inside — still not over the message (unless it fills the screen).
+        const below = vh - (r.bottom + 6), above = r.top - 6 - 8;
+        const room = Math.max(below, above);
+        if (room < 160) return;
+        el.style.maxHeight = `${room}px`; el.style.overflowY = "auto";
+        top = below >= above ? r.bottom + 6 : 8;
+      }
+      el.style.top = `${top}px`;
+      // Next to the bubble's side, inside the window.
+      const left = Math.min(Math.max(8, menu.touch ? r.left : m.left), window.innerWidth - 8 - w);
+      el.style.left = `${left}px`;
+    }));
+  });
 
   function onMsgClick(row: Row, e?: MouseEvent) {
     // Swallow the click that trails a real drag-select so it doesn't
@@ -2317,14 +2371,45 @@
     if ((e.target as HTMLElement).closest(TAP_OWN)) return;
     const sel = getSelection();
     if (sel && !sel.isCollapsed && sel.toString().trim()) return;   // tapping off a text selection
-    openTouchMenu(row, e.clientX, e.clientY);
+    // A second tap on the same message soon after: the double-tap action
+    // (exteraGram). With one set, the menu waits a moment for that tap.
+    if (dblPending && dblPending.id === row.id && performance.now() - dblPending.t < 320) {
+      clearTimeout(dblPending.timer); dblPending = null;
+      runDbl(row, "touch");
+      return;
+    }
+    if (dblPending) { clearTimeout(dblPending.timer); dblPending = null; }
+    if (dblOf(row, "touch") === "none") { openTouchMenu(row, e.clientX, e.clientY); return; }
+    const x = e.clientX, y = e.clientY;
+    dblPending = { id: row.id, t: performance.now(), timer: setTimeout(() => { dblPending = null; openTouchMenu(row, x, y); }, 260) };
+  }
+  let dblPending: { id: string; t: number; timer: ReturnType<typeof setTimeout> } | null = null;
+  /** What a double tap on this message does (Settings → Chat settings). */
+  function dblOf(row: Row, by: "mouse" | "touch"): DblTap {
+    const v = (row.outgoing ? $settings.dblTapOut : $settings.dblTapIn) ?? "auto";
+    if (v === "auto") return by === "mouse" ? "reply" : "react";
+    if (v === "edit" && !row.outgoing) return "none";
+    return v;
+  }
+  function runDbl(row: Row, by: "mouse" | "touch") {
+    const a = dblOf(row, by);
+    if (a !== "none") { try { navigator.vibrate?.(8); } catch { /* none */ } }
+    switch (a) {
+      case "react": reactTo(row, "❤️"); break;
+      case "reply": replyRow(row); break;
+      case "copy": void copyRow(row); break;
+      case "forward": forwardRow(row); break;
+      case "save": void saveToFavorites(row, true); break;
+      case "edit": startEdit(row); break;
+      case "delete": void deleteRow(row); break;
+    }
   }
   /** Telegram Desktop: double-click a message to reply to it. */
   function onMsgDblClick(row: Row, e: MouseEvent) {
     if (lastPointerType !== "mouse" || selecting || e.shiftKey || e.ctrlKey || e.metaKey) return;
     if ((e.target as HTMLElement).closest(TAP_OWN)) return;
     getSelection()?.removeAllRanges();             // the word the double-click picked
-    replyRow(row);
+    runDbl(row, "mouse");
   }
   function onMsgContext(e: MouseEvent, row: Row) {
     if (lastPointerType === "touch") {
@@ -3663,6 +3748,8 @@
       </div>
     {/if}
 
+    {#if IS_MOBILE}<MiniPlayer inChat />{/if}
+
     {#if dmNoShare || activeGroup?.settings.protected_content}
       <!-- Like Telegram's pinned strip: thin, see-through, just a note. -->
       <div class="noshare-bar" role="note">
@@ -3735,6 +3822,7 @@
       bind:this={messagesEl}
       onscroll={onMessagesScroll}
       onpointermove={onMessagesPointerMove}
+      ontouchmove={() => { if ($settings.hideKbOnScroll) { const el = document.activeElement as HTMLElement | null; if (el && el.closest(".composer")) el.blur(); } }}
     >
       {#if draggingOver}
         <div class="drop-hint">
@@ -4245,7 +4333,7 @@
         <div class="ctx-veil" onclick={closeMenu}></div>
       {/if}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="ctx-menu" class:touch={menu.touch} use:keepOnScreen style={`left:${menu.x}px; top:${menu.y}px`} role="menu" tabindex="-1" onmousedown={(e) => e.stopPropagation()}>
+      <div class="ctx-menu" bind:this={menuEl} class:touch={menu.touch} use:keepOnScreen style={`left:${menu.x}px; top:${menu.y}px`} role="menu" tabindex="-1" onmousedown={(e) => e.stopPropagation()}>
         <div class="ctx-reactions" class:expanded={reactAll}>
           {#if reactAll && $emojiPacks.length}
             <div class="react-tabs">

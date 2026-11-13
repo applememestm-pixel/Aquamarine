@@ -83,6 +83,18 @@ if ($x -notmatch 'AquaRelayService') {
   [IO.File]::WriteAllText($m, $x)
   Write-Host '[patch] foreground service for the server added'
 }
+# Screen sharing in calls (MainActivity.kt: AquaScreenService) and nearby
+# delivery (Wi-Fi broadcasts, Bluetooth visibility).
+if ($x -notmatch 'AquaScreenService') {
+  $scr = '<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />' + "`n    " +
+         '<uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />' + "`n    " +
+         '<uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />' + "`n    " +
+         '<uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />' + "`n    <application"
+  $x = ([regex]'<application').Replace($x, $scr, 1)
+  $x = $x.Replace('</application>', '<service android:name=".AquaScreenService" android:exported="false" android:foregroundServiceType="mediaProjection" />' + "`n    </application>")
+  [IO.File]::WriteAllText($m, $x)
+  Write-Host '[patch] screen sharing service + nearby permissions added'
+}
 # In-app updates (crates/aqua-client-ui/src/updates.rs): installing the
 # downloaded APK needs this permission.
 if ($x -notmatch 'REQUEST_INSTALL_PACKAGES') {

@@ -21,6 +21,11 @@ use std::path::{Path, PathBuf};
 /// Files that mean "a server already lives here".
 const MARKERS: &[&str] = &["aqua-directory.sqlite", "aqua-blobs", "aqua-admin.json", "aqua-federation.json"];
 
+/// `aquamarine/` in the user's config folder (`server-data.txt`, `panel.json`).
+pub fn config_dir() -> Option<PathBuf> {
+    config_file().and_then(|f| f.parent().map(Path::to_path_buf))
+}
+
 fn config_file() -> Option<PathBuf> {
     let base = if cfg!(windows) {
         std::env::var_os("APPDATA").map(PathBuf::from)

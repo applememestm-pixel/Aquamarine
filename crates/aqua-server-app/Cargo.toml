@@ -1,6 +1,6 @@
 [package]
 name        = "aqua-server-app"
-version     = "1.20.1-5"
+version     = "1.20.1-6"
 edition     = "2021"
 license     = "MIT OR Apache-2.0"
 description = "Aquamarine Server — the relay as its own app (Windows, macOS, Linux, Android)."
@@ -31,6 +31,9 @@ sha2        = "0.10"
 rand        = "0.8"
 dirs        = "5"
 reqwest     = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# "Remote server": the panel of a server on another machine over SSH (remote.rs).
+# ring, not the default aws-lc-rs: no C toolchain trouble on Android.
+russh       = { version = "0.65", default-features = false, features = ["ring", "rsa", "flate2"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"   # "Start with the system"

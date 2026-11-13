@@ -1,3 +1,5 @@
+import { androidScreen, canShareAndroidScreen } from "./androidScreen";
+
 /**
  * Call-quality engine: everything that decides HOW good a call looks and
  * sounds, kept as pure functions so it can be unit-tested outside WebRTC.
@@ -314,9 +316,10 @@ export function qualityLabel(res: ResPreset, fps: number): string {
   return res === "source" ? `Source ${fps}fps` : `${res}p${fps}`;
 }
 
-/** Phones' webviews have no screen capture (getDisplayMedia). */
+/** Phones' webviews have no getDisplayMedia; the Android app captures the
+ *  screen itself (androidScreen.ts). */
 export function canCaptureScreen(): boolean {
-  return typeof navigator !== "undefined" && typeof navigator.mediaDevices?.getDisplayMedia === "function";
+  return (typeof navigator !== "undefined" && typeof navigator.mediaDevices?.getDisplayMedia === "function") || canShareAndroidScreen();
 }
 
 /** Screen share where possible; on phones stream the (rear) camera instead.
@@ -325,8 +328,15 @@ export async function captureScreenOrCamera(
   screen: DisplayMediaStreamOptions,
   fps = 30,
 ): Promise<{ stream: MediaStream; camera: boolean }> {
-  if (canCaptureScreen()) {
+  if (typeof navigator !== "undefined" && typeof navigator.mediaDevices?.getDisplayMedia === "function") {
     return { stream: await navigator.mediaDevices.getDisplayMedia(screen), camera: false };
+  }
+  if (canShareAndroidScreen()) {
+    // The system's own screen-capture prompt; "no" is the answer, not a
+    // reason to send the camera instead.
+    const w = (screen.video && typeof screen.video === "object" ? (screen.video as MediaTrackConstraints).width : undefined) as ConstrainULongRange | number | undefined;
+    const side = typeof w === "number" ? w : w?.ideal ?? w?.max ?? 1280;
+    return { stream: await androidScreen(fps, Math.max(640, Math.min(1920, Number(side) || 1280))), camera: false };
   }
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: fps } },

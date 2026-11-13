@@ -89,7 +89,7 @@ fn load(s: &AppState) -> SyncState {
 
 fn save(s: &AppState, st: &SyncState) {
     if let Ok(b) = serde_json::to_vec(st) {
-        let _ = std::fs::write(s.data_dir.join(FILE), b);
+        let _ = crate::fsx::write_atomic(&s.data_dir.join(FILE), &b);
     }
 }
 
@@ -186,7 +186,7 @@ fn open(key: &[u8; 32], k: &str, blob: &[u8]) -> Option<Vec<u8>> {
 /// made now (first device), or my other devices are asked for it.
 async fn ensure_key(app: &AppHandle, transport: &aqua_client_core::Transport, me: &str) -> Option<[u8; 32]> {
     let state: State<'_, StdMutex<AppState>> = app.state();
-    if let Some(k) = state.lock().ok().and_then(|s| history_key(&s)) {
+    if let Some(k) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|s| history_key(&s)) {
         return Some(k);
     }
     match transport.hist_get("kid").await {
@@ -195,7 +195,7 @@ async fn ensure_key(app: &AppHandle, transport: &aqua_client_core::Transport, me
             rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut key);
             match transport.hist_put("kid", kid_of(&key).into_bytes()).await {
                 Ok(_) => {
-                    let s = state.lock().ok()?;
+                    let s = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok()?;
                     s.vault.put_record(KEY_REC, &key).ok()?;
                     tracing::info!("history key made (first device of the account)");
                     return Some(key);
@@ -217,7 +217,7 @@ async fn ensure_key(app: &AppHandle, transport: &aqua_client_core::Transport, me
 /// `[hkeyreq:v1]` from my other device: give it the key.
 pub fn on_key_request(app: &AppHandle, from_addr: &str) {
     let state: State<'_, StdMutex<AppState>> = app.state();
-    let Some(key) = state.lock().ok().and_then(|s| history_key(&s)) else { return };
+    let Some(key) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|s| history_key(&s)) else { return };
     let payload = format!("{HKEY_PREFIX}{}", serde_json::json!({ "k": base64::engine::general_purpose::STANDARD.encode(key) }));
     let (app, addr) = (app.clone(), from_addr.to_string());
     tauri::async_runtime::spawn(async move {
@@ -236,11 +236,11 @@ pub fn on_key(app: &AppHandle, body: &str) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let state: State<'_, StdMutex<AppState>> = app.state();
-        let Some(t) = state.lock().ok().and_then(|s| s.transport.clone()) else { return };
+        let Some(t) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|s| s.transport.clone()) else { return };
         // Only the key whose id the relay has (the account's one).
         let ok = matches!(t.hist_get("kid").await, Ok(Some(kid)) if kid == kid_of(&key).as_bytes());
         if !ok { return; }
-        if let Ok(s) = state.lock() {
+        if let Ok(s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
             if history_key(&s).is_none() { let _ = s.vault.put_record(KEY_REC, &key); }
         }
         tracing::info!("history key received from my other device");
@@ -266,7 +266,7 @@ pub fn tombstone(s: &AppState, chat: &str, msgs: &[ChatMessage]) {
     }
     if t.len() > TOMB_MAX { let cut = t.len() - TOMB_MAX; t.drain(..cut); }
     save(s, &st);
-    if let Ok(mut p) = PUSHED.lock() { p.get_or_insert_with(HashMap::new).remove(chat); }
+    if let Ok(mut p) = PUSHED.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { p.get_or_insert_with(HashMap::new).remove(chat); }
 }
 
 /// Merge `theirs` into `ours`, keeping our order and putting each message we
@@ -354,7 +354,7 @@ pub fn start(app: &AppHandle) {
             let pull_due = last_pull.elapsed() >= Duration::from_secs(60);
             let poked = tokio::time::timeout(Duration::from_secs(2), PULL_NOW.notified()).await.is_ok();
             let state: State<'_, StdMutex<AppState>> = app.state();
-            let Some((t, me)) = state.lock().ok().and_then(|s| Some((s.transport.clone()?, s.username.clone()?))) else { continue };
+            let Some((t, me)) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|s| Some((s.transport.clone()?, s.username.clone()?))) else { continue };
             let Some(key) = ensure_key(&app, &t, &me).await else {
                 // Waiting for the key from my other device.
                 tokio::time::sleep(Duration::from_secs(8)).await;
@@ -383,10 +383,10 @@ type Out = (String, Vec<u8>, u64);
 async fn push(app: &AppHandle, t: &aqua_client_core::Transport, key: &[u8; 32]) -> Result<usize, String> {
     let state: State<'_, StdMutex<AppState>> = app.state();
     let (outs, versions) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let me = s.username.clone().unwrap_or_default();
         let st = load(&s);
-        let pushed = PUSHED.lock().map_err(|e| e.to_string())?.clone().unwrap_or_default();
+        let pushed = PUSHED.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone().unwrap_or_default();
         let mut outs: Vec<Out> = Vec::new();
         let mut versions = HashMap::new();
         let add = |label: String, rec: &Rec, outs: &mut Vec<Out>| {
@@ -435,14 +435,14 @@ async fn push(app: &AppHandle, t: &aqua_client_core::Transport, key: &[u8; 32]) 
         }
     }
     save_uploaded(app, &done);
-    if let Ok(mut p) = PUSHED.lock() { p.get_or_insert_with(HashMap::new).extend(versions); }
+    if let Ok(mut p) = PUSHED.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { p.get_or_insert_with(HashMap::new).extend(versions); }
     Ok(sent)
 }
 
 fn save_uploaded(app: &AppHandle, done: &[(String, u64)]) {
     if done.is_empty() { return; }
     let state: State<'_, StdMutex<AppState>> = app.state();
-    if let Ok(s) = state.lock() {
+    if let Ok(s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
         let mut st = load(&s);
         for (k, h) in done { st.uploaded.insert(k.clone(), *h); }
         save(&s, &st);
@@ -453,7 +453,7 @@ fn save_uploaded(app: &AppHandle, done: &[(String, u64)]) {
 async fn pull(app: &AppHandle, t: &aqua_client_core::Transport, key: &[u8; 32]) -> Result<(), String> {
     let state: State<'_, StdMutex<AppState>> = app.state();
     let server = t.server_url().trim_end_matches('/').to_string();
-    let mut st = state.lock().map(|s| load(&s)).map_err(|e| e.to_string())?;
+    let mut st = load(&state.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
     let mut since = st.cursor.get(&server).copied().unwrap_or(0);
     let mut changed = false;
     loop {
@@ -466,7 +466,7 @@ async fn pull(app: &AppHandle, t: &aqua_client_core::Transport, key: &[u8; 32]) 
             let Ok(Some(blob)) = t.hist_get(&k).await else { continue };
             let Some(plain) = open(key, &k, &blob) else { continue };
             let Ok(rec) = serde_json::from_slice::<Rec>(&plain) else { continue };
-            let mut s = state.lock().map_err(|e| e.to_string())?;
+            let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let local = apply(&mut s, &mut st, rec, key);
             // What's on the relay is what we have now (or we upload the
             // merge next round — once, then it settles).
@@ -474,7 +474,7 @@ async fn pull(app: &AppHandle, t: &aqua_client_core::Transport, key: &[u8; 32]) 
             changed = true;
         }
         st.cursor.insert(server.clone(), since);
-        if let Ok(s) = state.lock() {
+        if let Ok(s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
             // Tombstones made meanwhile on this device stay.
             let disk = load(&s);
             for (chat, t) in disk.tomb {

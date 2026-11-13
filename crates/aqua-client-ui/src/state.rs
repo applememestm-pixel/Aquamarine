@@ -1175,7 +1175,7 @@ pub fn load_proxy(dir: &std::path::Path) -> Option<String> {
 pub fn save_proxy(dir: &std::path::Path, url: Option<&str>) {
     let path = dir.join(PROXY_FILE);
     match url.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(u) => { let _ = std::fs::write(&path, u); }
+        Some(u) => { let _ = crate::fsx::write_atomic(&path, u.as_bytes()); }
         None => { let _ = std::fs::remove_file(&path); }
     }
 }
@@ -1208,7 +1208,7 @@ fn save_connection_hints(dir: &std::path::Path, server_url: &str, username: &str
     };
     match serde_json::to_vec_pretty(&hints) {
         Ok(bytes) => {
-            if let Err(e) = std::fs::write(&path, bytes) {
+            if let Err(e) = crate::fsx::write_atomic(&path, &bytes) {
                 tracing::warn!(?e, path = %path.display(), "connection.json write failed");
             }
         }
@@ -1246,7 +1246,7 @@ fn save_account(dir: &std::path::Path, acct: &Account) {
     let path = dir.join(ACCOUNT_FILE);
     match serde_json::to_vec_pretty(acct) {
         Ok(bytes) => {
-            if let Err(e) = std::fs::write(&path, bytes) {
+            if let Err(e) = crate::fsx::write_atomic(&path, &bytes) {
                 tracing::warn!(?e, path = %path.display(), "account.json write failed");
             }
         }
@@ -1295,24 +1295,52 @@ fn load_or_create_master_key(dir: &std::path::Path) -> Result<MasterKey> {
     let legacy_path = dir.join("master.key");
     let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).ok();
 
+    // The keyring answered "nothing here" (not an error, not a value): only
+    // then may this folder's key be written into it. The entry is shared by
+    // every account on the device — overwriting a value that merely failed
+    // to read would lock the other account out of its vault.
+    let mut keyring_empty = false;
     // 1. Prefer the keyring if it holds a usable value.
     if let Some(entry) = &entry {
         match entry.get_password() {
             Ok(hex_str) => match decode_key(&hex_str) {
                 Some(arr) => {
-                    // If a legacy file somehow still exists, clean it up
-                    // so there isn't a plaintext key on disk alongside
-                    // an authoritative keyring entry.
+                    // A file here too. The keyring entry is one for the
+                    // whole device, but every account (accounts.rs) has its
+                    // own folder: a file with ANOTHER key is this account's
+                    // own (made while the keyring was unavailable) — it was
+                    // deleted and the vault opened with the wrong key, so
+                    // that account was gone. Keep and use it.
                     if legacy_path.exists() {
-                        if let Err(e) = std::fs::remove_file(&legacy_path) {
-                            tracing::warn!(?e, "could not remove stale master.key file");
+                        let file: Option<[u8; MASTER_KEY_LEN]> = std::fs::read(&legacy_path).ok().and_then(|b| b.try_into().ok());
+                        match file {
+                            // Which of the two opens this folder's vault:
+                            // a file written while the keyring didn't answer
+                            // (older versions made a NEW key then) must not
+                            // win over the key the vault really has.
+                            Some(f) if f != arr => {
+                                if key_opens(dir, &arr) && !key_opens(dir, &f) {
+                                    tracing::warn!("master.key doesn't open this vault, the keyring's key does; setting the file aside");
+                                    let _ = std::fs::rename(&legacy_path, dir.join("master.key.unused"));
+                                    return Ok(MasterKey::from_bytes(arr));
+                                }
+                                tracing::warn!("master.key differs from the keyring entry; using this folder's file");
+                                return Ok(MasterKey::from_bytes(f));
+                            }
+                            // The same key (a finished migration): no
+                            // plaintext copy next to the keyring entry.
+                            _ => {
+                                if let Err(e) = std::fs::remove_file(&legacy_path) {
+                                    tracing::warn!(?e, "could not remove stale master.key file");
+                                }
+                            }
                         }
                     }
                     return Ok(MasterKey::from_bytes(arr));
                 }
                 None => tracing::warn!("master key in keyring is malformed; ignoring"),
             },
-            Err(keyring::Error::NoEntry) => { /* fall through to migrate / generate */ }
+            Err(keyring::Error::NoEntry) => { keyring_empty = true; /* fall through to migrate / generate */ }
             Err(e) => tracing::warn!(?e, "keyring read failed; will try fallback paths"),
         }
     }
@@ -1324,7 +1352,7 @@ fn load_or_create_master_key(dir: &std::path::Path) -> Result<MasterKey> {
         let arr: [u8; MASTER_KEY_LEN] = bytes
             .try_into()
             .map_err(|_| anyhow!("master.key has unexpected length"))?;
-        if let Some(entry) = &entry {
+        if let Some(entry) = entry.as_ref().filter(|_| keyring_empty) {
             match entry.set_password(&hex::encode(arr)) {
                 Ok(()) => {
                     if let Err(e) = std::fs::remove_file(&legacy_path) {
@@ -1340,11 +1368,20 @@ fn load_or_create_master_key(dir: &std::path::Path) -> Result<MasterKey> {
     }
 
     // 3. Fresh install: generate a key and store it in the keyring if
-    //    possible; otherwise write it to disk.
+    //    possible; otherwise write it to disk. NOT when this folder already
+    //    has a vault and the keyring only failed to answer (Secret Service
+    //    still locked at login, D-Bus not up yet): a new key can't open it,
+    //    and the file written here used to win over the real key on every
+    //    later start — the account was gone for good.
+    let vault_file = dir.join("vault.sqlite");
+    if !keyring_empty && entry.is_some() && vault_file.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+        return Err(anyhow!("the system keyring didn't answer, and this account's vault key is kept there — restart the app (or unlock the keyring) to open it"));
+    }
     std::fs::create_dir_all(dir)?;
     let key = MasterKey::generate();
     let stored_in_keyring = entry
         .as_ref()
+        .filter(|_| keyring_empty)
         .and_then(|e| e.set_password(&hex::encode(key.0)).ok())
         .is_some();
     if stored_in_keyring {
@@ -1357,6 +1394,19 @@ fn load_or_create_master_key(dir: &std::path::Path) -> Result<MasterKey> {
         );
     }
     Ok(key)
+}
+
+/// Does `key` open the vault in `dir` (its identity decrypts)? A vault with
+/// no identity yet opens with any key.
+fn key_opens(dir: &std::path::Path, key: &[u8; aqua_client_core::MASTER_KEY_LEN]) -> bool {
+    let p = dir.join("vault.sqlite");
+    if !p.exists() {
+        return true;
+    }
+    match Vault::open(&p, MasterKey::from_bytes(*key)) {
+        Ok(v) => v.load_identity().is_ok(),
+        Err(_) => false,
+    }
 }
 
 fn decode_key(hex_str: &str) -> Option<[u8; aqua_client_core::MASTER_KEY_LEN]> {

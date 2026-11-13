@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
-use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -26,6 +26,9 @@ const MAGIC_A: &str = "AQMESH1 A";
 
 static READY: AtomicBool = AtomicBool::new(false);
 static STOP: AtomicBool = AtomicBool::new(false);
+/// Bumped by every listen: threads of an earlier one (stopped, then started
+/// again before they noticed) end instead of running twice.
+static GEN: AtomicU64 = AtomicU64::new(0);
 static TCP_PORT: AtomicU16 = AtomicU16::new(0);
 /// Who answered a beacon lately: address → when.
 static HEARD: OnceLock<Mutex<HashMap<SocketAddr, Instant>>> = OnceLock::new();
@@ -85,8 +88,22 @@ pub async fn listen(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
     STOP.store(false, Ordering::Relaxed);
-    let listener = (PORT..PORT + 5)
-        .find_map(|p| TcpListener::bind(("0.0.0.0", p)).ok())
+    let epoch = GEN.fetch_add(1, Ordering::Relaxed) + 1;
+    #[cfg(target_os = "android")]
+    super::bt::lan_lock(true);
+    // Switched off and on again: the last listener lets go of 7790 within
+    // a moment — wait for it rather than move to 7791, where contacts that
+    // knock on 7790 never look.
+    let mut first = None;
+    for _ in 0..5 {
+        if let Ok(l) = TcpListener::bind(("0.0.0.0", PORT)) {
+            first = Some(l);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let listener = first
+        .or_else(|| (PORT + 1..PORT + 5).find_map(|p| TcpListener::bind(("0.0.0.0", p)).ok()))
         .ok_or("local network: ports 7790–7794 are taken")?;
     let port = listener.local_addr().map(|a| a.port()).unwrap_or(PORT);
     TCP_PORT.store(port, Ordering::Relaxed);
@@ -95,7 +112,7 @@ pub async fn listen(app: &AppHandle) -> Result<(), String> {
     // Incoming sessions.
     let app2 = app.clone();
     std::thread::spawn(move || {
-        while !STOP.load(Ordering::Relaxed) {
+        while !STOP.load(Ordering::Relaxed) && GEN.load(Ordering::Relaxed) == epoch {
             match listener.accept() {
                 Ok((s, peer)) => {
                     let _ = s.set_nonblocking(false);
@@ -113,13 +130,24 @@ pub async fn listen(app: &AppHandle) -> Result<(), String> {
     });
 
     // Beacons: answer "who's here?" and remember who answers ours.
-    if let Ok(udp) = UdpSocket::bind(("0.0.0.0", PORT)) {
-        let _ = udp.set_broadcast(true);
-        let _ = udp.set_read_timeout(Some(Duration::from_secs(1)));
+    {
         std::thread::spawn(move || {
+            // The previous beacon thread (if any) frees the port within its
+            // 1 s read timeout.
+            let mut udp = None;
+            for _ in 0..12 {
+                if let Ok(u) = UdpSocket::bind(("0.0.0.0", PORT)) {
+                    udp = Some(u);
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            let Some(udp) = udp else { return };
+            let _ = udp.set_broadcast(true);
+            let _ = udp.set_read_timeout(Some(Duration::from_secs(1)));
             let mut buf = [0u8; 64];
             let me = local_ipv4();
-            while !STOP.load(Ordering::Relaxed) {
+            while !STOP.load(Ordering::Relaxed) && GEN.load(Ordering::Relaxed) == epoch {
                 let Ok((n, from)) = udp.recv_from(&mut buf) else { continue };
                 if Some(from.ip()) == me.map(IpAddr::V4) {
                     continue;
@@ -129,7 +157,7 @@ pub async fn listen(app: &AppHandle) -> Result<(), String> {
                         let _ = udp.send_to(format!("{MAGIC_A} {}", TCP_PORT.load(Ordering::Relaxed)).as_bytes(), from);
                     }
                     Some((true, tcp)) => {
-                        if let Ok(mut h) = heard().lock() {
+                        if let Ok(mut h) = heard().lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
                             h.insert(SocketAddr::new(from.ip(), tcp), Instant::now());
                         }
                     }
@@ -146,6 +174,8 @@ pub async fn listen(app: &AppHandle) -> Result<(), String> {
 pub fn stop() {
     STOP.store(true, Ordering::Relaxed);
     READY.store(false, Ordering::Relaxed);
+    #[cfg(target_os = "android")]
+    super::bt::lan_lock(false);
 }
 
 /// Ask the network who runs Aquamarine; answers land in `heard()`.
@@ -168,7 +198,7 @@ fn shout() {
     while Instant::now() < until {
         if let Ok((n, from)) = s.recv_from(&mut buf) {
             if let Some((true, tcp)) = parse_beacon(&buf[..n]) {
-                if let Ok(mut h) = heard().lock() {
+                if let Ok(mut h) = heard().lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
                     h.insert(SocketAddr::new(from.ip(), tcp), Instant::now());
                 }
             }
@@ -197,6 +227,7 @@ pub async fn sync_round(app: &AppHandle, scan: bool) -> Result<usize, String> {
     let me = local_ipv4().map(IpAddr::V4);
     let mut cands: Vec<SocketAddr> = heard()
         .lock()
+        .or_else(|e| Ok::<_, ()>(e.into_inner()))
         .map(|h| h.iter().filter(|(_, t)| t.elapsed() < Duration::from_secs(600)).map(|(a, _)| *a).collect())
         .unwrap_or_default();
     // Places contacts were met before.

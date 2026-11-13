@@ -143,6 +143,9 @@ export const EDITABLE_COLORS: EditableColor[] = [
   { key: "--fg-dim",       label: "Dim text",         group: "Text",     dark: "#5E6675", light: "#8A91A0", desc: "Faint text: timestamps, hints, section captions." },
 ];
 
+/** What a double tap on a message does (exteraGram). "auto": reply with a
+ *  mouse, ❤ with a finger. */
+export type DblTap = "auto" | "react" | "reply" | "copy" | "forward" | "edit" | "save" | "delete" | "none";
 export interface Settings {
   mode: Mode;
   palette: string;   // palette id
@@ -250,6 +253,24 @@ export interface Settings {
   power?: { stickers: boolean; emoji: boolean; chat: boolean; calls: boolean; ui: boolean; particles?: boolean };
   /** Power saving mode: 0 off, 100 always, else "when the battery is below N%". */
   powerMode?: number;
+  // ---- From exteraGram ----
+  dblTapIn?: DblTap;
+  dblTapOut?: DblTap;
+  /** The chat list's title: the app's name, my name or my @username. */
+  listTitle?: "app" | "name" | "username";
+  centerTitle?: boolean;
+  /** No ping / "connecting" badge next to the title. */
+  hideNetBadge?: boolean;
+  /** My phone number not shown in Settings and my profile header. */
+  hidePhone?: boolean;
+  folderTabStyle?: "chips" | "pills" | "text";
+  /** Unread counters on folder tabs (default on). */
+  folderCounters?: boolean;
+  hideAllTab?: boolean;
+  /** Scrolling the messages hides the phone keyboard. */
+  hideKbOnScroll?: boolean;
+  /** Snow over the app (winter mood). */
+  snow?: boolean;
 }
 
 export const POWER_DEFAULT = { stickers: true, emoji: true, chat: true, calls: true, ui: true, particles: true };

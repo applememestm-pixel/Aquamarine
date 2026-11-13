@@ -23,7 +23,7 @@ pub struct SoundFile {
 }
 
 fn sounds_dir(state: &State<'_, StdMutex<AppState>>) -> Result<PathBuf, String> {
-    let dir = state.lock().map_err(|e| e.to_string())?.data_dir.join("sounds");
+    let dir = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.join("sounds");
     std::fs::create_dir_all(&dir).map_err(|e| format!("sounds folder: {e}"))?;
     Ok(dir)
 }
@@ -139,7 +139,7 @@ pub fn save_temp_file(state: State<'_, StdMutex<AppState>>, name: String, bytes:
     if bytes.len() > 40 * 1024 * 1024 {
         return Err("file too large".into());
     }
-    let dir = { state.lock().map_err(|e| e.to_string())?.data_dir.join("tmp") };
+    let dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.join("tmp") };
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let p = dir.join(format!("{stamp:x}-{}", safe_name(&name)));
@@ -154,7 +154,7 @@ pub struct GameHit { pub id: String, pub name: String, pub has_icon: bool }
 
 #[tauri::command]
 pub async fn games_search(state: State<'_, StdMutex<AppState>>, q: String) -> Result<Vec<GameHit>, String> {
-    let t = { state.lock().map_err(|e| e.to_string())?.transport.clone().ok_or("not connected")? };
+    let t = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone().ok_or("not connected")? };
     let v = t.games_search(q.trim()).await.map_err(|e| e.to_string())?;
     Ok(v.into_iter().map(|(id, name, has_icon)| GameHit { id, name, has_icon }).collect())
 }
@@ -166,7 +166,7 @@ pub async fn game_icon(state: State<'_, StdMutex<AppState>>, id: String) -> Resu
         return Ok(None);
     }
     let (dir, t) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         (s.data_dir.join("game-icons"), s.transport.clone())
     };
     let file = dir.join(format!("{id}.png"));
@@ -192,7 +192,7 @@ pub async fn game_cover(state: State<'_, StdMutex<AppState>>, id: String) -> Res
         return Ok(None);
     }
     let (dir, t) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         (s.data_dir.join("game-covers"), s.transport.clone())
     };
     let file = dir.join(format!("{id}.jpg"));
@@ -223,7 +223,7 @@ pub async fn game_cover(state: State<'_, StdMutex<AppState>>, id: String) -> Res
 // ---- wallpapers -------------------------------------------------------------
 
 fn wallpapers_dir(state: &State<'_, StdMutex<AppState>>) -> Result<std::path::PathBuf, String> {
-    let dir = state.lock().map_err(|e| e.to_string())?.data_dir.join("wallpapers");
+    let dir = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.join("wallpapers");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
 }

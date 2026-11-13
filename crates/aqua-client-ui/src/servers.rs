@@ -81,7 +81,7 @@ fn geo_cache() -> &'static Mutex<HashMap<IpAddr, Geo>> {
 
 /// Rough location of a public IP (country / city) from ipwho.is; cached.
 async fn geo(http: &reqwest::Client, ip: IpAddr) -> Geo {
-    if let Some(g) = geo_cache().lock().ok().and_then(|c| c.get(&ip).cloned()) {
+    if let Some(g) = geo_cache().lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|c| c.get(&ip).cloned()) {
         return g;
     }
     let url = format!("https://ipwho.is/{ip}?fields=success,country,country_code,city");
@@ -96,7 +96,7 @@ async fn geo(http: &reqwest::Client, ip: IpAddr) -> Geo {
         },
         Err(_) => return Geo::default(), // offline: don't cache, try again next time
     };
-    if let Ok(mut c) = geo_cache().lock() {
+    if let Ok(mut c) = geo_cache().lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
         c.insert(ip, g.clone());
     }
     g
@@ -265,7 +265,7 @@ pub async fn server_ping(url: String, via: Option<String>) -> Result<u64, String
         Some(v) => v.trim().to_string(),
         None => aqua_client_core::transport::proxy().unwrap_or_default(),
     };
-    let cached = HTTP.get_or_init(|| Mutex::new(HashMap::new())).lock().ok().and_then(|m| m.get(&proxy).cloned());
+    let cached = HTTP.get_or_init(|| Mutex::new(HashMap::new())).lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|m| m.get(&proxy).cloned());
     let http = match cached {
         Some(c) => c,
         None => {
@@ -275,7 +275,7 @@ pub async fn server_ping(url: String, via: Option<String>) -> Result<u64, String
                 .pool_idle_timeout(Duration::from_secs(90));
             b = if proxy.is_empty() { b.no_proxy() } else { b.proxy(reqwest::Proxy::all(&proxy).map_err(|e| format!("proxy: {e}"))?) };
             let c = b.build().map_err(|e| e.to_string())?;
-            if let Ok(mut m) = HTTP.get_or_init(|| Mutex::new(HashMap::new())).lock() {
+            if let Ok(mut m) = HTTP.get_or_init(|| Mutex::new(HashMap::new())).lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
                 if m.len() > 16 { m.clear(); }
                 m.insert(proxy.clone(), c.clone());
             }

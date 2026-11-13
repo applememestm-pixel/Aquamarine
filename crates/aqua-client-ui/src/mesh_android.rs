@@ -176,6 +176,13 @@ pub async fn listen(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Hold (or let go of) Android's Wi-Fi multicast lock while listening on
+/// the local network (AquaMesh.kt `lanLock`): without it broadcasts are
+/// dropped on many phones.
+pub fn lan_lock(on: bool) {
+    let _ = call::<Empty>("lanLock", serde_json::json!({ "on": on }));
+}
+
 pub async fn stop(_app: &AppHandle) {
     READY.store(false, Ordering::Relaxed);
     let _ = call_async::<Empty>("stop", serde_json::json!({})).await;

@@ -47,6 +47,8 @@ pub mod stars;
 pub mod fedtunnel;
 pub mod tgnet;
 pub mod host;
+pub mod selfupdate;
+pub mod turnsrv;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
 pub use auth::{AuthState, Caller};
@@ -2719,6 +2721,36 @@ async fn admin_power(State(state): State<AppState>, headers: axum::http::HeaderM
     Ok(Json(serde_json::json!({ "ok": true, "systemd": host::systemd_unit() })))
 }
 
+/// `GET /v1/admin/updates` — this server's own updates (selfupdate.rs):
+/// state, version, tester. Inside Aquamarine Server `managed` is false (the
+/// app updates itself and shows its own).
+async fn admin_get_updates(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Result<Json<selfupdate::UpdState>, StatusCode> {
+    admin_authed(&state, &headers)?;
+    Ok(Json(selfupdate::snapshot()))
+}
+
+#[derive(Deserialize)]
+struct UpdReq {
+    #[serde(default)]
+    tester: Option<bool>,
+    /// Check now (and restart into a new version).
+    #[serde(default)]
+    check: bool,
+}
+
+/// `POST /v1/admin/updates` `{tester?, check?}`.
+async fn admin_set_updates(State(state): State<AppState>, headers: axum::http::HeaderMap, Json(b): Json<UpdReq>) -> Result<Json<selfupdate::UpdState>, (StatusCode, String)> {
+    admin_authed(&state, &headers).map_err(|c| (c, String::new()))?;
+    if let Some(on) = b.tester {
+        selfupdate::set_tester(on).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    if (b.check || b.tester == Some(true)) && selfupdate::snapshot().managed {
+        let blobs = state.blobs.clone();
+        tokio::spawn(selfupdate::run_once(move || { let n = blobs.clear_cache(); tracing::info!(removed = n, "file cache cleared"); }));
+    }
+    Ok(Json(selfupdate::snapshot()))
+}
+
 async fn admin_get_datadir(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -3070,7 +3102,10 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/admin/bots/:name", axum::routing::delete(admin_delete_bot))
         .route("/v1/admin/host", get(admin_host))
         .route("/v1/admin/power", post(admin_power))
+        .route("/v1/admin/updates", get(admin_get_updates).post(admin_set_updates))
         .route("/v1/stars/:uid", get(stars::get_star))
+        .route("/v1/ice", get(turnsrv::ice))
+        .route("/v1/admin/stars", get(stars::admin_get).post(stars::admin_make))
         .route("/v1/admin/smtp", get(admin_get_smtp).post(admin_set_smtp))
         .route("/v1/admin/smtp/test", post(admin_test_smtp))
         .route("/v1/admin/telegram", get(packs::admin_get).post(packs::admin_set))
@@ -3200,6 +3235,7 @@ pub async fn serve_embedded(
     ONCE.call_once(|| {
         packs::spawn_default_imports();
         public::spawn(port, everywhere, false);
+        turnsrv::spawn();
     });
     let state = AppState::new();
     state.blobs.spawn_sweeper();

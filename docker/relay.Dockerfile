@@ -26,7 +26,7 @@ USER aqua
 WORKDIR /data
 VOLUME /data
 ENV AQUA_DATA=/data AQUA_LISTEN=0.0.0.0:7777 AQUA_DATA_PROMPT=0 AQUA_TG_PROMPT=0
-EXPOSE 7777
+EXPOSE 7777 3478/udp
 HEALTHCHECK --interval=60s --timeout=5s CMD ["wget", "-q", "-O", "/dev/null", "http://127.0.0.1:7777/v1/stats"]
 CMD ["aqua-server"]
 LABEL org.opencontainers.image.title="Aquamarine relay" \

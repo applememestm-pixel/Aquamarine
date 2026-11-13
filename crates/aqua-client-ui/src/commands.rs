@@ -27,7 +27,7 @@ use crate::media;
 
 #[tauri::command]
 pub fn init_app(state: State<'_, StdMutex<AppState>>) -> Result<InitInfo, String> {
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     Ok(s.init_info())
 }
 
@@ -39,7 +39,7 @@ pub fn complete_registration(
     username: String,
     email: Option<String>,
 ) -> Result<InitInfo, String> {
-    let mut s = state.lock().map_err(|e| e.to_string())?;
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     s.mark_registered(username.trim().to_lowercase(), email);
     Ok(s.init_info())
 }
@@ -49,7 +49,7 @@ pub fn complete_registration(
 /// (registered=false) so the UI reopens the login window.
 #[tauri::command]
 pub fn log_out(state: State<'_, StdMutex<AppState>>) -> Result<InitInfo, String> {
-    let mut s = state.lock().map_err(|e| e.to_string())?;
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     crate::storage::on_log_out(&mut s);
     s.log_out();
     Ok(s.init_info())
@@ -59,7 +59,7 @@ pub fn log_out(state: State<'_, StdMutex<AppState>>) -> Result<InitInfo, String>
 
 #[tauri::command]
 pub fn list_chats(state: State<'_, StdMutex<AppState>>) -> Result<Vec<ChatSummary>, String> {
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let me = s.username.clone().unwrap_or_default();
     Ok(s.chat_order
         .iter()
@@ -86,7 +86,7 @@ pub fn get_messages(
     state: State<'_, StdMutex<AppState>>,
     peer_id: String,
 ) -> Result<Vec<ChatMessage>, String> {
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut msgs = s.chats.get(&peer_id).map(|c| c.messages.clone()).unwrap_or_default();
     drop(s);
     forget_missing_files(&mut msgs);
@@ -126,7 +126,7 @@ pub async fn send_message(
     // Saved Messages — local-only self-chat, no server round-trip.
     if peer_id == crate::state::SAVED_MESSAGES_ID {
         let (msg_id, msg_time) = {
-            let mut s = state.lock().map_err(|e| e.to_string())?;
+            let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let msg = text_msg_from_me(&text);
             let out = (msg.id.clone(), msg.time.clone());
             push_own_message(&mut s, &peer_id, msg, &text);
@@ -150,12 +150,12 @@ pub async fn send_message(
     // un-encrypted through the relay; no session / ratchet.
     {
         let is_bot_chat = {
-            let s = state.lock().map_err(|e| e.to_string())?;
+            let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             s.chats.get(&peer_id).map(|c| c.summary.live && !c.summary.has_lock).unwrap_or(false)
         };
         if is_bot_chat {
             let (transport, out_msg) = {
-                let mut s = state.lock().map_err(|e| e.to_string())?;
+                let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 let msg = text_msg_from_me(&text);
                 push_own_message(&mut s, &peer_id, msg.clone(), &text);
                 (s.transport.clone(), msg)
@@ -170,7 +170,7 @@ pub async fn send_message(
     // encrypt, persist state. Take transport handle out to send outside
     // the lock.
     let out_msg = {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let is_live = s.chats.get(&peer_id).map(|c| c.summary.live).unwrap_or(false);
         if !is_live {
             // Welcome / stub chats aren't attached to any real peer.
@@ -191,8 +191,27 @@ pub async fn send_message(
     // of theirs needs a session first).
     let _ = app.emit("aqua://own_sent", serde_json::json!({ "peer_id": peer_id }));
     // Encrypted once per device of the peer, plus a copy for my other devices.
-    crate::multidev::fanout(&app, &peer_id, &text, true).await?;
+    if let Err(e) = crate::multidev::fanout(&app, &peer_id, &text, true).await {
+        // Nothing went out: the UI puts the text back into the field, so the
+        // echo goes too — else a retry left two copies, and the one that
+        // never left looked sent.
+        drop_own_echo(&state, &peer_id, &out_msg.id);
+        let _ = app.emit("aqua://chats_updated", ());
+        return Err(e);
+    }
     Ok(SendResult { id: out_msg.id, time: out_msg.time })
+}
+
+/// Undo [`push_own_message`] for a message that couldn't be sent.
+fn drop_own_echo(state: &State<'_, StdMutex<AppState>>, peer_id: &str, id: &str) {
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(book) = s.chats.get_mut(peer_id) {
+        book.messages.retain(|m| m.id != id);
+        if let Some(last) = book.messages.last() {
+            book.summary.preview = preview_for(&last.kind);
+            book.summary.preview_by_me = last.from == "me";
+        }
+    }
 }
 
 // ---------- Verification --------------------------------------------------
@@ -226,7 +245,7 @@ pub fn verify_fingerprint(
     state: State<'_, StdMutex<AppState>>,
     peer_id: String,
 ) -> Result<FingerprintView, String> {
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let sess = s.sessions.get(&peer_id).ok_or("no encrypted session with this chat yet — send a message first")?;
     let theirs = *sess.peer.dh_pub.as_bytes();
     let mine = *s.identity.public().dh_pub.as_bytes();
@@ -242,7 +261,7 @@ pub fn verify_fingerprint(
 
 #[tauri::command]
 pub fn session_fingerprint(state: State<'_, StdMutex<AppState>>) -> Result<String, String> {
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     Ok(s.init_info().session_fingerprint)
 }
 
@@ -256,7 +275,7 @@ pub fn set_network_proxy(
     state: State<'_, StdMutex<AppState>>,
     url: String,
 ) -> Result<InitInfo, String> {
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let trimmed = url.trim();
     let val = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
     aqua_client_core::transport::set_proxy(val.clone());
@@ -273,7 +292,7 @@ pub async fn connect_to_server(
 ) -> Result<InitInfo, String> {
     // Build the bundle to upload + clone the identity out of the state.
     let (identity_clone, bundle) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let pm = PrekeyManager::new(&s.vault, &s.identity);
         pm.check_and_refresh(SystemTime::now())
             .map_err(|e| format!("prekeys: {e}"))?;
@@ -302,7 +321,7 @@ pub async fn connect_to_server(
 
     // Publish state and persist the hints so a later launch auto-reconnects.
     {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         // What the old connection sent but the relay never confirmed goes
         // out again (the recipient drops copies by id).
         // The relay knows this account under another @name now: an older
@@ -352,7 +371,7 @@ pub async fn connect_to_server(
         tokio::spawn(async move { crate::mesh::flush_to_relay(&app_fl).await });
     }
 
-    let info = state.lock().map_err(|e| e.to_string())?.init_info();
+    let info = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).init_info();
     Ok(info)
 }
 
@@ -395,7 +414,7 @@ pub async fn register_account(
     email: Option<String>,
 ) -> Result<(), String> {
     let identity = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.identity.clone()
     };
     // The relay never sees the password itself, only an Argon2id hash of it
@@ -444,7 +463,7 @@ pub async fn signup_plain(
     // password may be left empty (the server keeps none then).
     let joining = invite.as_deref().is_some_and(|i| i.trim().starts_with("aqpass:"));
     if !(joining && password.is_empty()) && password.chars().count() < 8 { return Err("password must be at least 8 characters".into()); }
-    let identity = state.lock().map_err(|e| e.to_string())?.identity.clone();
+    let identity = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).identity.clone();
     let name = username.trim().trim_start_matches('@').to_lowercase();
     let secret = if password.is_empty() { String::new() } else { secret_for(&password, &name).await? };
     Transport::signup_account_tg(&server_url, &identity, &name, &secret, display_name.as_deref().unwrap_or(""), invite.as_deref().unwrap_or(""), tg_ticket.as_deref().unwrap_or(""))
@@ -464,7 +483,7 @@ pub async fn signin_plain(
     recovery: Option<String>,
     tg_ticket: Option<String>,
 ) -> Result<String, String> {
-    let identity = state.lock().map_err(|e| e.to_string())?.identity.clone();
+    let identity = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).identity.clone();
     let check = crate::backups::recovery_check_of(recovery).await?;
     let secret = secret_for(&password, &login).await?;
     let name = crate::multidev::this_device_name();
@@ -511,7 +530,7 @@ pub async fn login_account(
     recovery: Option<String>,
 ) -> Result<String, String> {
     let identity = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.identity.clone()
     };
     let totp = totp.unwrap_or_default();
@@ -552,7 +571,7 @@ pub async fn register_username(
     phone: String,
 ) -> Result<(), String> {
     let transport = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.transport.clone().ok_or("not connected — connect first")?
     };
     transport.register_user(&ticket, &username, &display_name, &about, &phone)
@@ -602,10 +621,10 @@ impl From<aqua_client_core::ProfileCard> for DirProfile {
 /// away): the chat follows the ID. Returns the name it has now.
 #[tauri::command]
 pub async fn follow_peer_by_uid(app: AppHandle, state: State<'_, StdMutex<AppState>>, old: String, uid: String) -> Result<Option<String>, String> {
-    let transport = state.lock().map_err(|e| e.to_string())?.transport.clone().ok_or("not connected")?;
+    let transport = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone().ok_or("not connected")?;
     let Some(new) = transport.username_by_uid(&uid).await.map_err(|e| e.to_string())? else { return Ok(None) };
     if new != old {
-        if let Ok(mut s) = state.lock() { apply_peer_rename(&mut s, &old, &new); }
+        if let Ok(mut s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { apply_peer_rename(&mut s, &old, &new); }
         crate::multidev::invalidate(&old);
         let _ = app.emit("aqua://renamed", serde_json::json!({ "old": old, "new": new }));
         let _ = app.emit("aqua://chats_updated", ());
@@ -619,7 +638,7 @@ pub async fn search_directory(
     query: String,
 ) -> Result<Vec<DirProfile>, String> {
     let transport = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.transport.clone()
     };
     let Some(transport) = transport else { return Ok(Vec::new()); };
@@ -633,7 +652,7 @@ pub async fn fetch_directory_profile(
     username: String,
 ) -> Result<Option<DirProfile>, String> {
     let transport = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.transport.clone()
     };
     let Some(transport) = transport else { return Ok(None); };
@@ -649,7 +668,7 @@ pub async fn publish_profile(
     phone: String,
 ) -> Result<(), String> {
     let transport = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.transport.clone().ok_or("not connected")?
     };
     transport.update_profile(&display_name, &about, &phone)
@@ -668,7 +687,7 @@ pub async fn publish_profile_full(
     extra: serde_json::Value,
 ) -> Result<(), String> {
     let transport = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.transport.clone().ok_or("not connected")?
     };
     transport.update_profile_full(&display_name, &about, &phone, &extra)
@@ -753,7 +772,7 @@ async fn upload_profile_image(
         return Err(format!("file is empty or larger than {limit} MB"));
     }
     let (transport, data_dir) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         (s.transport.clone().ok_or("not connected — connect to a server to publish your profile")?, s.data_dir.clone())
     };
     let ver = transport.upload_profile_media(&kind, &mime, bytes.clone()).await.map_err(|e| e.to_string())?;
@@ -812,7 +831,7 @@ pub async fn set_profile_media_file(
         // HE-AAC…) or a big FLAC/WAV often doesn't play for others
         // (WebKitGTK "FormatError") or is over the 10 MB limit.
         if !matches!(ext.as_str(), "mp3" | "ogg" | "oga" | "opus") {
-            let out_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.join("outbox") };
+            let out_dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.join("outbox") };
             std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
             let out = out_dir.join("profile-track.ogg");
             let mut cmd = tokio::process::Command::new("ffmpeg");
@@ -845,7 +864,7 @@ pub async fn set_profile_media_file(
             return Err("videos can only be a banner".into());
         }
         // Silent, ≤ 8 s, 480 px wide, small: a banner must stay light.
-        let out_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.join("outbox") };
+        let out_dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.join("outbox") };
         std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
         let out = out_dir.join("banner.webm");
         let mut cmd = tokio::process::Command::new("ffmpeg");
@@ -881,7 +900,7 @@ pub async fn prepare_banner_video(
     app: AppHandle,
     path: String,
 ) -> Result<String, String> {
-    let data_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.clone() };
+    let data_dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.clone() };
     let path = if is_uri_pick(&path) { materialize_picked(&app, &data_dir, &path)? } else { path };
     let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
     if !matches!(ext.as_str(), "gif" | "mp4" | "webm" | "mov" | "mkv" | "m4v") {
@@ -944,7 +963,7 @@ pub async fn clear_profile_image(
 ) -> Result<(), String> {
     check_media_kind(&kind)?;
     let transport = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.transport.clone().ok_or("not connected")?
     };
     transport.clear_profile_media(&kind).await.map_err(|e| e.to_string())
@@ -958,7 +977,7 @@ pub fn set_local_prefs(
     keep_edits: bool,
     blocked: Vec<String>,
 ) -> Result<(), String> {
-    let mut s = state.lock().map_err(|e| e.to_string())?;
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     s.prefs.keep_deleted = keep_deleted;
     s.prefs.keep_edits = keep_edits;
     s.prefs.blocked = blocked.into_iter().collect();
@@ -973,7 +992,7 @@ pub fn delete_group_message_of(
     author: String,
     text: String,
 ) -> Result<(), String> {
-    let mut s = state.lock().map_err(|e| e.to_string())?;
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     apply_delete(&mut s, &gid, &author, &text);
     Ok(())
 }
@@ -987,7 +1006,7 @@ pub async fn set_photo_privacy(
     deny: Vec<String>,
 ) -> Result<(), String> {
     let transport = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.transport.clone().ok_or("not connected")?
     };
     transport.set_media_acl(everybody, &allow, &deny).await.map_err(|e| e.to_string())
@@ -1008,7 +1027,7 @@ pub async fn profile_media_path(
         return Ok(None);
     }
     let (transport, data_dir) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         (s.transport.clone(), s.data_dir.clone())
     };
     let dir = profile_cache_dir(&data_dir);
@@ -1044,7 +1063,7 @@ pub fn add_media_files(
     paths: Vec<String>,
 ) -> Result<usize, String> {
     let data_dir = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.data_dir.clone()
     };
     media::add_files(&data_dir, &target, pack.as_deref(), &paths)
@@ -1057,7 +1076,7 @@ pub fn delete_media_item(
     path: String,
 ) -> Result<(), String> {
     let data_dir = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.data_dir.clone()
     };
     let p = PathBuf::from(&path);
@@ -1118,11 +1137,11 @@ pub async fn start_bot_chat(
 ) -> Result<ChatSummary, String> {
     let bot = bot_username.trim().to_lowercase();
     let transport = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.transport.clone().ok_or("not connected")?
     };
     let summary = {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let (letter, gradient) = gradient_for(&bot);
         let mut summary = summary_for(&bot, &first_message, true, false);
         summary.letter = letter;
@@ -1165,14 +1184,14 @@ pub async fn create_bot(
     display_name: String,
 ) -> Result<BotInfo, String> {
     let transport = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.transport.clone().ok_or("not connected")?
     };
     let display_name = display_name.trim().to_string();
     let (username, token) = transport.register_bot(&username, &display_name)
         .await.map_err(|e| e.to_string())?;
     {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let _ = s.vault.put_record(&bot_token_key(&username), token.as_bytes());
     }
     let hint = token.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
@@ -1183,11 +1202,11 @@ pub async fn create_bot(
 #[tauri::command]
 pub async fn list_bots(state: State<'_, StdMutex<AppState>>) -> Result<Vec<BotInfo>, String> {
     let transport = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.transport.clone().ok_or("not connected")?
     };
     let rows = transport.list_bots().await.map_err(|e| e.to_string())?;
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     Ok(rows
         .into_iter()
         .map(|(username, token, display_name, hint)| {
@@ -1208,11 +1227,11 @@ pub async fn list_bots(state: State<'_, StdMutex<AppState>>) -> Result<Vec<BotIn
 #[tauri::command]
 pub async fn delete_bot(state: State<'_, StdMutex<AppState>>, username: String) -> Result<(), String> {
     let transport = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.transport.clone().ok_or("not connected")?
     };
     transport.delete_bot(&username).await.map_err(|e| e.to_string())?;
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let _ = s.vault.delete_record(&bot_token_key(&username.trim().to_lowercase()));
     Ok(())
 }
@@ -1257,7 +1276,7 @@ pub async fn attach_file_as(
         // then gone from the device (`once_burn`).
         "once" => attach_file_fwd(state, app, peer_id, file_path, Some("once".into()), None, None, caption).await,
         "compressed" => {
-            let out_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.join("outbox") };
+            let out_dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.join("outbox") };
             std::fs::create_dir_all(&out_dir).map_err(|e| format!("mkdir outbox: {e}"))?;
             let stem = PathBuf::from(&file_path).file_stem().and_then(|s| s.to_str()).unwrap_or("video").to_string();
             let out = out_dir.join(format!("{}.mp4", stem.replace(['/', '\\', ':'], "_")));
@@ -1286,7 +1305,7 @@ pub async fn attach_file_as(
         // (a JPEG with the clip inside) sends its clip.
         "live" | "live-loop" | "live-bounce" => {
             let path = if is_motion_photo_path(&file_path) {
-                let out_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.join("outbox") };
+                let out_dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.join("outbox") };
                 std::fs::create_dir_all(&out_dir).map_err(|e| format!("mkdir outbox: {e}"))?;
                 let bytes = read_picked_bytes(&app, &file_path)?;
                 let clip = motion_photo_clip(&bytes).ok_or("this photo has no motion clip inside")?;
@@ -1350,7 +1369,7 @@ pub async fn attach_bytes(
     bytes: Vec<u8>,
     caption: Option<String>,
 ) -> Result<AttachResult, String> {
-    let out_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.join("outbox") };
+    let out_dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.join("outbox") };
     std::fs::create_dir_all(&out_dir).map_err(|e| format!("mkdir outbox: {e}"))?;
     let out = out_dir.join(name.replace(['/', '\\', ':'], "_"));
     tokio::fs::write(&out, &bytes).await.map_err(|e| format!("write: {e}"))?;
@@ -1366,7 +1385,7 @@ pub async fn send_sticker(
 ) -> Result<AttachResult, String> {
     // Only allow sources from inside the local stickers dir.
     {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let allowed = crate::accounts::shared_root(&s.data_dir).join("stickers");
         if !media::path_is_within(&allowed, &PathBuf::from(&file_path)) {
             return Err(format!(
@@ -1392,7 +1411,7 @@ pub async fn send_voice_message(
     bytes: Vec<u8>,
 ) -> Result<AttachResult, String> {
     let voice_dir = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.data_dir.join("voice")
     };
     std::fs::create_dir_all(&voice_dir).map_err(|e| format!("mkdir voice: {e}"))?;
@@ -1435,7 +1454,7 @@ pub fn save_sticker(
     if pack_safe.is_empty() { return Err("pack name required".into()); }
     if name_safe.is_empty() { return Err("sticker name required".into()); }
     let data_dir = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.data_dir.clone()
     };
     let pack_dir = crate::accounts::shared_root(&data_dir).join("stickers").join(&pack_safe);
@@ -1465,7 +1484,7 @@ pub fn save_sticker(
 }
 
 fn own_pack_dir(state: &State<'_, StdMutex<AppState>>, title: &str) -> Result<PathBuf, String> {
-    let data_dir = state.lock().map_err(|e| e.to_string())?.data_dir.clone();
+    let data_dir = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.clone();
     let root = crate::accounts::shared_root(&data_dir).join("stickers");
     let t = title.trim();
     if t.is_empty() || t.contains(['/', '\\']) || t.starts_with('.') {
@@ -1488,7 +1507,7 @@ pub fn delete_sticker_pack(state: State<'_, StdMutex<AppState>>, title: String) 
 /// Delete a saved GIF (a file in the device's `gifs/` folder, by name).
 #[tauri::command]
 pub fn delete_gif(state: State<'_, StdMutex<AppState>>, name: String) -> Result<(), String> {
-    let data_dir = state.lock().map_err(|e| e.to_string())?.data_dir.clone();
+    let data_dir = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.clone();
     let root = crate::accounts::shared_root(&data_dir).join("gifs");
     let n = name.trim();
     if n.is_empty() || n.contains(['/', '\\']) || n.starts_with('.') {
@@ -1534,7 +1553,7 @@ pub async fn import_telegram_stickers(
     pack_ref: String,
 ) -> Result<aqua_client_core::ImportReport, String> {
     let stickers_root = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         crate::accounts::shared_root(&s.data_dir).join("stickers")
     };
     std::fs::create_dir_all(&stickers_root).map_err(|e| format!("mkdir stickers: {e}"))?;
@@ -1544,7 +1563,7 @@ pub async fn import_telegram_stickers(
 /// What the relay offers for sticker packs: `{ telegram, packs: [...] }`.
 #[tauri::command]
 pub async fn server_packs(state: State<'_, StdMutex<AppState>>) -> Result<serde_json::Value, String> {
-    let t = { state.lock().map_err(|e| e.to_string())?.transport.clone().ok_or("not connected")? };
+    let t = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone().ok_or("not connected")? };
     t.packs_index().await.map_err(|e| e.to_string())
 }
 
@@ -1556,7 +1575,7 @@ pub async fn import_pack_via_server(
     link: String,
 ) -> Result<aqua_client_core::ImportReport, String> {
     let (t, root) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         (s.transport.clone().ok_or("not connected")?, crate::accounts::shared_root(&s.data_dir).join("stickers"))
     };
     let m = t.import_pack(&link).await.map_err(|e| match e {
@@ -1610,7 +1629,7 @@ pub async fn pack_file_path(
         return Err("bad pack file".into());
     }
     let (t, dir) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         (s.transport.clone(), s.data_dir.join("packcache").join(&name))
     };
     let path = dir.join(&file);
@@ -1638,7 +1657,7 @@ pub async fn send_circle_video(
     bytes: Vec<u8>,
 ) -> Result<AttachResult, String> {
     let dir = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.data_dir.join("circles")
     };
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir circles: {e}"))?;
@@ -1668,7 +1687,7 @@ pub async fn send_edited_image(
     bytes: Vec<u8>,
 ) -> Result<AttachResult, String> {
     let img_dir = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.data_dir.join("images")
     };
     std::fs::create_dir_all(&img_dir).map_err(|e| format!("mkdir images: {e}"))?;
@@ -1694,7 +1713,7 @@ pub async fn send_gif(
     caption: Option<String>,
 ) -> Result<AttachResult, String> {
     {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let allowed = crate::accounts::shared_root(&s.data_dir).join("gifs");
         if !media::path_is_within(&allowed, &PathBuf::from(&file_path)) {
             return Err(format!("gif path must be under {}", allowed.display()));
@@ -1844,7 +1863,7 @@ async fn attach_file_fwd(
     let caption = caption.map(|c| c.trim().chars().take(4096).collect::<String>()).filter(|c| !c.is_empty());
     // 1. Read the file from disk (phone picks arrive as content:// URIs).
     let file_path = if is_uri_pick(&file_path) {
-        let data_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.clone() };
+        let data_dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.clone() };
         materialize_picked(&app, &data_dir, &file_path)?
     } else {
         file_path
@@ -1882,7 +1901,7 @@ async fn attach_file_fwd(
         // from an arbitrary folder (e.g. Music) would otherwise be
         // outside scope.
         let saved_path = {
-            let data_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.clone() };
+            let data_dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.clone() };
             let media_dir = data_dir.join("saved-media");
             std::fs::create_dir_all(&media_dir).ok();
             if crate::media::path_is_within(&media_dir, &path) {
@@ -1919,7 +1938,7 @@ async fn attach_file_fwd(
         };
         let message_id = msg.id.clone();
         {
-            let mut s = state.lock().map_err(|e| e.to_string())?;
+            let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let preview = crate::state::one_line_preview(&msg.kind);
             push_own_message(&mut s, &peer_id, msg, &preview);
             let data_dir = s.data_dir.clone();
@@ -1958,13 +1977,30 @@ async fn attach_file_fwd(
     let cid = envelope.cid.clone();
     let size = envelope.size;
 
-    // 3. Upload the ciphertext blob.
+    // 3. Upload the ciphertext blob. No relay right now: a file small
+    //    enough waits on this device instead — contacts on the same Wi-Fi
+    //    or over Bluetooth take it from here, the relay gets it once it's
+    //    back (mesh.rs). Before, a file couldn't be sent without a relay.
     let transport = {
-        let s = state.lock().map_err(|e| e.to_string())?;
-        s.transport.clone().ok_or("not connected")?
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        s.transport.clone()
     };
-    transport.upload_blob_kind(&cid, ciphertext, false, Some(blob_kind(envelope.category.as_deref(), envelope.mime.as_deref(), &envelope.filename))).await
-        .map_err(|e| format!("upload_blob: {e}"))?;
+    let nearby = ciphertext.len() <= crate::mesh::BLOB_MAX && crate::mesh::enabled(&app);
+    let spare = nearby.then(|| ciphertext.clone());
+    let up = match &transport {
+        Some(t) if !(nearby && crate::mesh::relay_down()) => t
+            .upload_blob_kind(&cid, ciphertext, false, Some(blob_kind(envelope.category.as_deref(), envelope.mime.as_deref(), &envelope.filename)))
+            .await
+            .map_err(|e| format!("upload_blob: {e}")),
+        Some(_) => Err("the relay is away".to_string()),
+        None => Err("not connected".to_string()),
+    };
+    if let Err(e) = up {
+        match spare {
+            Some(b) => crate::mesh::keep_blob(&app, &cid, &b)?,
+            None => return Err(e),
+        }
+    }
 
     // 4. Send the offer as a regular E2EE text message through the
     //    peer's session.
@@ -1979,7 +2015,7 @@ async fn attach_file_fwd(
     if peer_id.starts_with("grp_") {
         let r = group_send(app.clone(), state.clone(), peer_id.clone(), offer_text.clone()).await?;
         {
-            let mut s = state.lock().map_err(|e| e.to_string())?;
+            let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(book) = s.chats.get_mut(&peer_id) {
                 if let Some(m) = book.messages.iter_mut().find(|m| m.id == r.id) {
                     if let MessageKind::File { saved_at, .. } = &mut m.kind {
@@ -1992,7 +2028,7 @@ async fn attach_file_fwd(
         return Ok(AttachResult { message_id: r.id, cid, size });
     }
 
-    let is_live = state.lock().map_err(|e| e.to_string())?
+    let is_live = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
         .chats.get(&peer_id).map(|c| c.summary.live).unwrap_or(false);
     if !is_live {
         return Err("no live session with peer".into());
@@ -2009,7 +2045,7 @@ async fn attach_file_fwd(
     }
     let message_id = msg.id.clone();
     {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         push_own_message(&mut s, &peer_id, msg, &offer_text);
     }
     let _ = app.emit("aqua://chats_updated", ());
@@ -2023,7 +2059,7 @@ pub fn list_local_media(
     state: State<'_, StdMutex<AppState>>,
 ) -> Result<media::LocalMediaList, String> {
     let dir = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.data_dir.clone()
     };
     Ok(media::scan(&dir))
@@ -2100,7 +2136,7 @@ pub fn read_media_bytes(
     path: String,
 ) -> Result<Vec<u8>, String> {
     let data_dir = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.data_dir.clone()
     };
     let downloads = downloads_dir(&data_dir);
@@ -2159,7 +2195,7 @@ pub async fn download_file(
 ) -> Result<DownloadResult, String> {
     // Extract envelope from the stored message.
     let envelope = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let book = s.chats.get(&peer_id).ok_or("unknown peer")?;
         let msg = book.messages.iter().find(|m| m.id == message_id)
             .ok_or("unknown message id")?;
@@ -2192,7 +2228,7 @@ pub async fn download_file(
     // sticker sent twice, a forwarded photo: point at that copy instead of
     // downloading it again as "name (1).jpg".
     let have = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.chats.values().flat_map(|b| b.messages.iter()).find_map(|m| match &m.kind {
             MessageKind::File { cid, saved_at: Some(p), .. } if *cid == envelope.cid && std::path::Path::new(p).is_file() => Some(p.clone()),
             _ => None,
@@ -2204,23 +2240,32 @@ pub async fn download_file(
         return Ok(DownloadResult { saved_path: saved_str });
     }
 
-    // Download blob.
-    let transport = {
-        let s = state.lock().map_err(|e| e.to_string())?;
-        s.transport.clone().ok_or("not connected")?
+    // Download blob. (A CID that isn't a hash — an old message, a local
+    // "Saved Messages" one — never becomes a URL path.)
+    if !aqua_core::valid_cid(&envelope.cid) {
+        return Err("this file is not available".into());
+    }
+    // Came from a contact nearby (same Wi-Fi / Bluetooth, mesh.rs): no relay needed.
+    let data_dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.clone() };
+    let nearby = crate::mesh::local_blob(&data_dir, &envelope.cid);
+    let from_nearby = nearby.is_some();
+    let ciphertext = match nearby {
+        Some(b) => b,
+        None => {
+            let transport = {
+                let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                s.transport.clone().ok_or("not connected")?
+            };
+            transport.download_blob(&envelope.cid).await
+                .map_err(|e| format!("download_blob: {e}"))?
+        }
     };
-    let ciphertext = transport.download_blob(&envelope.cid).await
-        .map_err(|e| format!("download_blob: {e}"))?;
 
     // Decrypt.
     let plaintext = decrypt_file(&envelope, &ciphertext)
         .map_err(|e| format!("decrypt_file: {e}"))?;
 
     // Save to Downloads/Aquamarine.
-    let data_dir = {
-        let s = state.lock().map_err(|e| e.to_string())?;
-        s.data_dir.clone()
-    };
     // View once: inside the app's own data, never in Downloads (and wiped
     // once looked at, `once_burn`).
     let base = if envelope.category.as_deref() == Some("once") { data_dir.join("once") } else { downloads_dir(&data_dir) };
@@ -2236,14 +2281,17 @@ pub async fn download_file(
     };
     let saved_str = save_path.to_string_lossy().to_string();
     set_saved_at(&state, &peer_id, &message_id, &saved_str)?;
+    if from_nearby {
+        crate::mesh::blob_used(&app, &envelope.cid);
+    }
     // Keep within the limits (Settings → Data and storage).
-    if let Ok(mut s) = state.lock() { crate::storage::trim(&mut s); }
+    if let Ok(mut s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { crate::storage::trim(&mut s); }
     let _ = app.emit("aqua://chats_updated", ());
     Ok(DownloadResult { saved_path: saved_str })
 }
 
 fn set_saved_at(state: &State<'_, StdMutex<AppState>>, peer_id: &str, message_id: &str, path: &str) -> Result<(), String> {
-    let mut s = state.lock().map_err(|e| e.to_string())?;
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(book) = s.chats.get_mut(peer_id) {
         if let Some(msg) = book.messages.iter_mut().find(|m| m.id == message_id) {
             if let MessageKind::File { saved_at, .. } = &mut msg.kind {
@@ -2324,7 +2372,7 @@ pub async fn stream_file(
     message_id: String,
 ) -> Result<String, String> {
     let (envelope, saved) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let book = s.chats.get(&peer_id).ok_or("unknown peer")?;
         let msg = book.messages.iter().find(|m| m.id == message_id).ok_or("unknown message id")?;
         match &msg.kind {
@@ -2343,13 +2391,23 @@ pub async fn stream_file(
         return crate::media_server::url_for(std::path::Path::new(&p));
     }
     let chunk = envelope.chunk.ok_or("this file isn't streamed")?;
+    // The CID names the part file below: only a real hash.
+    if !aqua_core::valid_cid(&envelope.cid) {
+        return Err("this file is not available".into());
+    }
+    // It came nearby (mesh.rs): open the local copy whole, no streaming.
+    let here = { let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner); crate::mesh::has_blob(&s.data_dir, &envelope.cid) };
+    if here {
+        let r = download_file(state, app, peer_id, message_id).await?;
+        return crate::media_server::url_for(std::path::Path::new(&r.saved_path));
+    }
     let ext: String = std::path::Path::new(&envelope.filename).extension().and_then(|e| e.to_str()).unwrap_or("mp4").chars().filter(|c| c.is_ascii_alphanumeric()).take(5).collect();
     let mime = envelope.mime.clone().unwrap_or_else(|| "video/mp4".into());
-    if let Some((_, url)) = streams().lock().map_err(|e| e.to_string())?.get(&envelope.cid) {
+    if let Some((_, url)) = streams().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&envelope.cid) {
         return Ok(url.clone());
     }
 
-    let data_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.clone() };
+    let data_dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.clone() };
     let base = downloads_dir(&data_dir);
     std::fs::create_dir_all(&base).map_err(|e| format!("mkdir: {e}"))?;
     let part = base.join(format!(".{}.aqpart", &envelope.cid[..16.min(envelope.cid.len())]));
@@ -2380,17 +2438,23 @@ pub async fn stream_file(
         })
     });
     let url = crate::media_server::remote_url(&format!("stream:{}", envelope.cid), &ext, f)?;
-    streams().lock().map_err(|e| e.to_string())?.insert(envelope.cid.clone(), (slot.clone(), url.clone()));
+    streams().lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(envelope.cid.clone(), (slot.clone(), url.clone()));
 
-    let transport = { state.lock().map_err(|e| e.to_string())?.transport.clone().ok_or("not connected")? };
+    let transport = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone().ok_or("not connected")? };
     let app2 = app.clone();
     tauri::async_runtime::spawn(async move {
         use sha2::Digest;
         use std::io::Write;
         let (lock, cv) = &*slot;
+        let cid = envelope.cid.clone();
+        let part_f = part.clone();
         let fail = |e: String| {
-            if let Ok(mut g) = lock.lock() { g.err = Some(e); }
+            if let Ok(mut g) = lock.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { g.err = Some(e); }
             cv.notify_all();
+            // A broken stream isn't handed out again (a retry used to get
+            // the same dead URL until the app restarted); its half file goes.
+            if let Ok(mut m) = streams().lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { m.remove(&cid); }
+            let _ = std::fs::remove_file(&part_f);
         };
         let mut out = match std::fs::OpenOptions::new().append(true).open(&part) {
             Ok(f) => f,
@@ -2411,7 +2475,7 @@ pub async fn stream_file(
                 out.write_all(&plain).map_err(|e| format!("write: {e}"))?;
                 *written += plain.len() as u64;
                 *i += 1;
-                if let Ok(mut g) = lock.lock() { g.avail = *written; }
+                if let Ok(mut g) = lock.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { g.avail = *written; }
                 cv.notify_all();
             }
             Ok(())
@@ -2433,12 +2497,12 @@ pub async fn stream_file(
         // Done: give it its real name, like a normal download.
         let dest = pick_unique_path(&base, &envelope.filename);
         let final_path = if std::fs::rename(&part, &dest).is_ok() { dest } else { part.clone() };
-        if let Ok(mut g) = lock.lock() { g.path = final_path.clone(); g.done = true; }
+        if let Ok(mut g) = lock.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { g.path = final_path.clone(); g.done = true; }
         cv.notify_all();
         let st = app2.state::<StdMutex<AppState>>();
         let _ = set_saved_at(&st, &peer_id, &message_id, &final_path.to_string_lossy());
         let _ = app2.emit("aqua://chats_updated", ());
-        if let Ok(mut m) = streams().lock() { m.remove(&envelope.cid); }
+        if let Ok(mut m) = streams().lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { m.remove(&envelope.cid); }
     });
     Ok(url)
 }
@@ -2448,7 +2512,7 @@ pub async fn stream_file(
 #[tauri::command]
 pub fn open_saved_file(state: State<'_, StdMutex<AppState>>, path: String) -> Result<(), String> {
     let (data_dir, known) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let known = s.chats.values().flat_map(|b| b.messages.iter()).any(|m| matches!(&m.kind, MessageKind::File { saved_at: Some(p), .. } if *p == path));
         (s.data_dir.clone(), known)
     };
@@ -2512,7 +2576,7 @@ pub async fn upload_attachment(
     file_path: String,
     keep: Option<bool>,
 ) -> Result<crate::state::ArticleMedia, String> {
-    let data_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.clone() };
+    let data_dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.clone() };
     let file_path = if is_uri_pick(&file_path) { materialize_picked(&app, &data_dir, &file_path)? } else { file_path };
     let path = PathBuf::from(&file_path);
     let size = std::fs::metadata(&path).map(|m| m.len()).map_err(|e| format!("{file_path}: {e}"))?;
@@ -2546,7 +2610,7 @@ pub async fn upload_attachment(
     let (envelope, ciphertext) = encrypt_file_with_category(&bytes, &name, mime.clone(), Some(kind.into()))
         .map_err(|e| format!("encrypt_file: {e}"))?;
     let transport = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.transport.clone().ok_or("not connected")?
     };
     // Images are group photos / banners: kept by the relay for months.
@@ -2588,7 +2652,7 @@ pub async fn fetch_attachment(
     media: crate::state::ArticleMedia,
 ) -> Result<String, String> {
     let media = media.sane().ok_or("bad media reference")?;
-    let data_dir = { state.lock().map_err(|e| e.to_string())?.data_dir.clone() };
+    let data_dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.clone() };
     let cache = media_cache_dir(&data_dir);
     std::fs::create_dir_all(&cache).map_err(|e| format!("mkdir: {e}"))?;
     if let Some(p) = cached_media(&cache, &media.cid) {
@@ -2607,7 +2671,7 @@ pub async fn fetch_attachment(
         mime: media.mime.clone(), category: Some(media.kind.clone()), pack: None, caption: None, chunk: None,
     };
     let transport = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.transport.clone().ok_or("not connected")?
     };
     let ciphertext = transport.download_blob(&media.cid).await.map_err(|e| format!("download_blob: {e}"))?;
@@ -2694,7 +2758,7 @@ pub async fn start_chat_with(
     first_message: String,
 ) -> Result<ChatSummary, String> {
     let transport = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.transport.clone().ok_or("not connected")?
     };
     // Only people who exist: a registered @name (profile card) or at least
@@ -2722,7 +2786,7 @@ pub async fn start_chat_with(
 
     // Update the chat store.
     let summary = {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let mut summary = summary_for(&peer_username, &first_message, true, false);
         summary.online = true;
@@ -2771,7 +2835,7 @@ struct MeetCard {
 #[tauri::command]
 pub fn meet_qr(state: State<'_, StdMutex<AppState>>, name: Option<String>) -> Result<String, String> {
     use base64::Engine;
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let user = s.username.clone().ok_or("sign in first")?;
     let (spk, _) = s.vault.latest_signed_prekey().map_err(|e| e.to_string())?.ok_or("no keys yet — connect to a server once")?;
     let bundle = aqua_core::keys::PreKeyBundle { identity: s.identity.public(), signed_prekey: spk.public(), one_time_prekey: None };
@@ -2891,7 +2955,7 @@ pub async fn meet_accept(app: AppHandle, state: State<'_, StdMutex<AppState>>, c
     if card.a != format!("{}~{dev}", card.u) || card.u.is_empty() {
         return Err("the keys in this code don't check out".into());
     }
-    if state.lock().map_err(|e| e.to_string())?.username.as_deref() == Some(card.u.as_str()) {
+    if state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).username.as_deref() == Some(card.u.as_str()) {
         return Err("that's your own code".into());
     }
     crate::multidev::remember_met(&card.a, bundle);
@@ -2900,10 +2964,10 @@ pub async fn meet_accept(app: AppHandle, state: State<'_, StdMutex<AppState>>, c
         crate::mesh::add_direct(&app, &card.bt);
     }
     let hello = "👋";
-    let had = state.lock().map_err(|e| e.to_string())?.chats.contains_key(&card.u);
+    let had = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).chats.contains_key(&card.u);
     crate::multidev::fanout(&app, &card.u, hello, true).await?;
     {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if !had {
             let mut summary = summary_for(&card.u, hello, true, false);
             if !card.n.trim().is_empty() {
@@ -3014,7 +3078,7 @@ fn ensure_cdm_book(s: &mut AppState, g: &Group, user: &str) -> String {
 /// subscriber's thread with `user`.
 #[tauri::command]
 pub fn channel_dm_open(state: State<'_, StdMutex<AppState>>, gid: String, user: Option<String>) -> Result<String, String> {
-    let mut s = state.lock().map_err(|e| e.to_string())?;
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let me = s.username.clone().ok_or("not registered")?;
     let g = s.groups.get(&gid).cloned().ok_or("unknown channel")?;
     if !direct_on(&g) { return Err("This channel doesn't take direct messages.".into()); }
@@ -3029,7 +3093,7 @@ async fn channel_dm_send(app: &AppHandle, chat_id: &str, text: &str) -> Result<S
     let (gid, user) = parse_cdm_chat_id(chat_id).ok_or("bad chat")?;
     let state: State<'_, StdMutex<AppState>> = app.state();
     let (me, g, out) = {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let me = s.username.clone().ok_or("not registered")?;
         let g = s.groups.get(&gid).cloned().ok_or("unknown channel")?;
         if !direct_on(&g) { return Err("This channel doesn't take direct messages.".into()); }
@@ -3063,7 +3127,7 @@ pub async fn send_control(
     payload: String,
 ) -> Result<(), String> {
     {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if s.chats.get(&peer_id).map(|c| !c.summary.live).unwrap_or(true) {
             return Ok(()); // nothing to do without a live session
         }
@@ -3086,7 +3150,7 @@ async fn deliver_to_member(app: &AppHandle, member: &str, payload: &str) -> Resu
 
 #[tauri::command]
 pub fn list_groups(state: State<'_, StdMutex<AppState>>) -> Result<Vec<Group>, String> {
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     Ok(s.groups.values().cloned().collect())
 }
 
@@ -3102,7 +3166,7 @@ pub async fn create_group(
     members: Vec<String>,
 ) -> Result<Group, String> {
     let me = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.username.clone().ok_or("not registered")?
     };
     let id = format!("grp_{}", crate::state::uuid_like());
@@ -3132,7 +3196,7 @@ pub async fn create_group(
 
     // Persist + surface as a chat locally.
     {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.groups.insert(id.clone(), group.clone());
         save_groups(&s.data_dir, &s.groups);
         if !s.chats.contains_key(&id) {
@@ -3167,7 +3231,7 @@ pub async fn update_group(
     group: Group,
 ) -> Result<Group, String> {
     let (me, mut next) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         (s.username.clone().ok_or("not registered")?, group)
     };
     next.version += 1;
@@ -3175,7 +3239,7 @@ pub async fn update_group(
     // Recipients = union of old + new members (so removed members are told).
     let mut recipients: Vec<String> = next.members.iter().map(|m| m.username.clone()).collect();
     {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(old) = s.groups.get(&next.id) {
             for m in &old.members {
                 if !recipients.contains(&m.username) { recipients.push(m.username.clone()); }
@@ -3212,7 +3276,7 @@ pub async fn leave_group(
     gid: String,
 ) -> Result<(), String> {
     let (me, others) = {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let me = s.username.clone().unwrap_or_default();
         let others: Vec<String> = s.groups.get(&gid)
             .map(|g| g.members.iter().map(|m| m.username.clone()).filter(|u| u != &me).collect())
@@ -3243,7 +3307,7 @@ pub async fn group_set_my_tag(
 ) -> Result<(), String> {
     let tag: String = tag.trim().chars().take(24).collect();
     let (me, recipients) = {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let me = s.username.clone().ok_or("not registered")?;
         let g = s.groups.get_mut(&gid).ok_or("unknown group")?;
         if g.perm("edit_own_tags") == "admins" && !g.is_admin(&me) {
@@ -3287,7 +3351,7 @@ pub async fn group_send(
     body: String,
 ) -> Result<SendResult, String> {
     let (me, group, room) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let g = s.groups.get(&gid).cloned().ok_or("unknown group")?;
         let room = crate::state::resolve_room(&g, s.active_rooms.get(&gid).map(String::as_str));
         (s.username.clone().ok_or("not registered")?, g, room)
@@ -3301,7 +3365,7 @@ pub async fn group_send(
 
     // Local echo.
     let out = {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let (kind, meta) = crate::state::classify_full(&body, room_id.clone());
         let msg = ChatMessage {
             meta,
@@ -3371,7 +3435,7 @@ fn group_outbox(app: &AppHandle) -> tokio::sync::mpsc::UnboundedSender<GroupJob>
 /// explicit room (text, files, stickers, polls) go there.
 #[tauri::command]
 pub fn set_group_room(state: State<'_, StdMutex<AppState>>, gid: String, room: String) -> Result<(), String> {
-    let mut s = state.lock().map_err(|e| e.to_string())?;
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if room.is_empty() { s.active_rooms.remove(&gid); } else { s.active_rooms.insert(gid, room); }
     Ok(())
 }
@@ -3389,7 +3453,7 @@ pub async fn group_control_admins(
         return Err("unsupported group control".into());
     }
     let (me, group) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let g = s.groups.get(&gid).cloned().ok_or("unknown group")?;
         (s.username.clone().ok_or("not registered")?, g)
     };
@@ -3421,7 +3485,7 @@ pub async fn group_control(
         return Err("unsupported group control".into());
     }
     let (me, group) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let g = s.groups.get(&gid).cloned().ok_or("unknown group")?;
         (s.username.clone().ok_or("not registered")?, g)
     };
@@ -3451,7 +3515,7 @@ pub async fn group_control_to(
         return Err("unsupported group control".into());
     }
     let ok = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let me = s.username.clone().unwrap_or_default();
         s.groups.get(&gid).map(|g| g.is_member(&me) && g.is_member(&to)).unwrap_or(false)
     };
@@ -3471,7 +3535,7 @@ pub fn route_group_payload_pub(app: &AppHandle, from: &str, text: &str) -> bool 
 /// A message (or an edit / deletion) I sent to `to` from another device.
 pub fn own_device_message(app: &AppHandle, to: &str, inner: &str) {
     let state: State<'_, StdMutex<AppState>> = app.state();
-    let Ok(mut s) = state.lock() else { return };
+    let Ok(mut s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) else { return };
     let me = s.username.clone().unwrap_or_default();
     if let Some(body) = inner.strip_prefix(EDIT_PREFIX) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
@@ -3535,7 +3599,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
         let (gid, user, inner) = (v["gid"].as_str().unwrap_or(""), v["user"].as_str().unwrap_or(""), v["body"].as_str().unwrap_or(""));
         if gid.is_empty() || user.is_empty() || inner.is_empty() || inner.len() > 16 * 1024 { return true; }
         let (chat, time) = {
-            let mut s = match state.lock() { Ok(s) => s, Err(_) => return true };
+            let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let me = s.username.clone().unwrap_or_default();
             let Some(g) = s.groups.get(gid).cloned() else { return true };
             // The subscriber themselves or an admin wrote it; it's for me
@@ -3563,7 +3627,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
             }
             (chat, time)
         };
-        if from != state.lock().ok().and_then(|s| s.username.clone()).unwrap_or_default() {
+        if from != state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|s| s.username.clone()).unwrap_or_default() {
             let _ = app.emit("aqua://incoming", IncomingEventPayload { peer_id: chat, text: inner.to_string(), time, is_new_chat: false });
         }
         let _ = app.emit("aqua://chats_updated", ());
@@ -3572,7 +3636,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
     if let Some(body) = text.strip_prefix(GRPINFO_PREFIX) {
         let state: State<'_, StdMutex<AppState>> = app.state();
         if let Ok(g) = serde_json::from_str::<Group>(body) {
-            let mut s = match state.lock() { Ok(s) => s, Err(_) => return true };
+            let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             // Only the group's admins may change it, never backwards in time.
             let accept = crate::state::accept_group_snapshot(s.groups.get(&g.id), &g, from);
             if !accept {
@@ -3624,7 +3688,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
             if gid.is_empty() { return true; }
             let time = hhmm_now();
             {
-                let mut s = match state.lock() { Ok(s) => s, Err(_) => return true };
+                let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 // Only accept messages for groups we know about, from members
                 // who are allowed to post this (in this room).
                 let room = match s.groups.get(&gid) {
@@ -3687,7 +3751,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
             let gid = v.get("gid").and_then(|x| x.as_str()).unwrap_or("");
             let tag: String = v.get("tag").and_then(|x| x.as_str()).unwrap_or("").chars().take(24).collect();
-            let mut s = match state.lock() { Ok(s) => s, Err(_) => return true };
+            let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let mut changed = false;
             if let Some(g) = s.groups.get_mut(gid) {
                 let allowed = g.perm("edit_own_tags") != "admins" || g.is_admin(from);
@@ -3712,7 +3776,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
             let gid = v.get("gid").and_then(|x| x.as_str()).unwrap_or("").to_string();
             let note: String = v.get("note").and_then(|x| x.as_str()).unwrap_or("").chars().take(200).collect();
-            let mut s = match state.lock() { Ok(s) => s, Err(_) => return true };
+            let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let me = s.username.clone().unwrap_or_default();
             let mut changed = false;
             if let Some(g) = s.groups.get_mut(&gid) {
@@ -3742,7 +3806,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
         let gid = v.get("gid").and_then(|x| x.as_str()).unwrap_or("").to_string();
         let inner = v.get("body").and_then(|x| x.as_str()).unwrap_or("");
         let ok = {
-            let s = match state.lock() { Ok(s) => s, Err(_) => return true };
+            let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             s.groups.get(&gid).map(|g| g.is_member(from) && !g.is_banned(from)).unwrap_or(false)
         };
         if !ok {
@@ -3775,7 +3839,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                 let old = v.get("old").and_then(|x| x.as_str()).unwrap_or("");
                 let new = v.get("new").and_then(|x| x.as_str()).unwrap_or("");
                 if !old.is_empty() {
-                    if let Ok(mut s) = state.lock() { apply_edit(&mut s, &gid, from, old, new); }
+                    if let Ok(mut s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { apply_edit(&mut s, &gid, from, old, new); }
                     let _ = app.emit("aqua://chats_updated", ());
                     let _ = app.emit("aqua://incoming", IncomingEventPayload { peer_id: gid.clone(), text: String::new(), time: hhmm_now(), is_new_chat: false });
                 }
@@ -3786,7 +3850,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                 // Admins with the right may delete other people's messages.
                 let target = v.get("author").and_then(|x| x.as_str()).unwrap_or(from).to_string();
                 if !t.is_empty() {
-                    if let Ok(mut s) = state.lock() {
+                    if let Ok(mut s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
                         let ok = target == from || s.groups.get(&gid).map(|g| crate::state::can_delete_others(g, from)).unwrap_or(false);
                         // What it was, for the owner's "Recent actions".
                         let me = s.username.clone();
@@ -3811,7 +3875,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
         let state: State<'_, StdMutex<AppState>> = app.state();
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
             let gid = v.get("gid").and_then(|x| x.as_str()).unwrap_or("");
-            let mut s = match state.lock() { Ok(s) => s, Err(_) => return true };
+            let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let mut changed = false;
             if let Some(g) = s.groups.get_mut(gid) {
                 if g.owner != from {
@@ -3840,7 +3904,7 @@ pub async fn send_call_signal(
     signal_json: String,
 ) -> Result<(), String> {
     {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if s.chats.get(&peer_id).map(|c| !c.summary.live).unwrap_or(true) {
             return Err("no live session with peer".into());
         }
@@ -3891,14 +3955,14 @@ async fn on_incoming_plaintext(app: &AppHandle, from: String, text: String) {
     // Chats are per account: "vpst~fbab0a51…" is a device of @vpst. My own
     // devices never get a chat of their own.
     let from = crate::multidev::base_user(&from).to_string();
-    if state.lock().ok().and_then(|s| s.username.clone()).as_deref() == Some(from.as_str()) {
+    if state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|s| s.username.clone()).as_deref() == Some(from.as_str()) {
         // My devices always encrypt: an unencrypted one "from me" is forged.
         tracing::warn!("an unencrypted message from my own account — dropped");
         return;
     }
     let is_new_chat;
     {
-        let mut s = match state.lock() { Ok(s) => s, Err(_) => return };
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         is_new_chat = !s.chats.contains_key(&from);
         if is_new_chat {
             let (letter, gradient) = gradient_for(&from);
@@ -3909,7 +3973,7 @@ async fn on_incoming_plaintext(app: &AppHandle, from: String, text: String) {
                 preview: text.clone(),
                 preview_is_typing: false, preview_by_me: false, has_lock: false,
                 time: time.clone(),
-                unread: 1, online: true, verified: false, channel: false, live: true,
+                unread: 0, online: true, verified: false, channel: false, live: true,
             };
             s.chats.insert(from.clone(), ChatBook { summary, messages: Vec::new() });
             s.chat_order.retain(|id| id != &from);
@@ -3932,19 +3996,19 @@ async fn on_incoming_plaintext(app: &AppHandle, from: String, text: String) {
 /// Sealed message: store its key with the condition on my relay.
 #[tauri::command]
 pub async fn capsule_create(state: State<'_, StdMutex<AppState>>, body: serde_json::Value) -> Result<(), String> {
-    let t = { state.lock().map_err(|e| e.to_string())?.transport.clone().ok_or("not connected to a server")? };
+    let t = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone().ok_or("not connected to a server")? };
     t.capsule_put(&body).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn capsules_mine(state: State<'_, StdMutex<AppState>>) -> Result<serde_json::Value, String> {
-    let t = { state.lock().map_err(|e| e.to_string())?.transport.clone().ok_or("not connected to a server")? };
+    let t = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone().ok_or("not connected to a server")? };
     t.capsules_mine().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn capsule_stop(state: State<'_, StdMutex<AppState>>, id: String, forever: bool) -> Result<(), String> {
-    let t = { state.lock().map_err(|e| e.to_string())?.transport.clone().ok_or("not connected to a server")? };
+    let t = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone().ok_or("not connected to a server")? };
     t.capsule_stop(&id, forever).await.map_err(|e| e.to_string())
 }
 
@@ -3954,7 +4018,7 @@ pub async fn capsule_open(state: State<'_, StdMutex<AppState>>, server_url: Stri
     if !(server_url.starts_with("http://") || server_url.starts_with("https://")) || server_url.len() > 200 {
         return Err("bad relay address".into());
     }
-    let identity = { state.lock().map_err(|e| e.to_string())?.identity.clone() };
+    let identity = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).identity.clone() };
     Transport::capsule_open_at(&server_url, &identity, &id).await.map_err(|e| e.to_string())
 }
 
@@ -3966,7 +4030,7 @@ pub async fn bot_send_raw(state: State<'_, StdMutex<AppState>>, peer_id: String,
         return Err("only button presses and mini app data go this way".into());
     }
     let transport = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let bot_chat = s.chats.get(&peer_id).map(|c| c.summary.live && !c.summary.has_lock).unwrap_or(false);
         if !bot_chat { return Err("not a bot chat".into()); }
         s.transport.clone().ok_or("not connected to a server")?
@@ -3980,7 +4044,7 @@ pub async fn bot_send_raw(state: State<'_, StdMutex<AppState>>, peer_id: String,
 #[tauri::command]
 pub async fn bot_hand_over(state: State<'_, StdMutex<AppState>>, bot: String, text: String) -> Result<(), String> {
     let bot = bot.trim().trim_start_matches('@').to_lowercase();
-    let transport = { state.lock().map_err(|e| e.to_string())?.transport.clone().ok_or("not connected to a server")? };
+    let transport = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone().ok_or("not connected to a server")? };
     let card = transport.get_profile(&bot).await.map_err(|e| e.to_string())?;
     if !card.is_some_and(|c| c.is_bot) {
         return Err(format!("@{bot} isn't a bot"));
@@ -3995,7 +4059,7 @@ pub struct WebAppInit { pub init_data: String, pub signed: bool }
 /// initData for a bot's mini app, signed by the relay with the bot token.
 #[tauri::command]
 pub async fn webapp_init(state: State<'_, StdMutex<AppState>>, bot: String, start_param: Option<String>) -> Result<WebAppInit, String> {
-    let t = { state.lock().map_err(|e| e.to_string())?.transport.clone().ok_or("not connected to a server")? };
+    let t = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone().ok_or("not connected to a server")? };
     let (init_data, signed) = t.webapp_init(&bot, start_param.as_deref().unwrap_or("")).await.map_err(|e| e.to_string())?;
     Ok(WebAppInit { init_data, signed })
 }
@@ -4003,7 +4067,7 @@ pub async fn webapp_init(state: State<'_, StdMutex<AppState>>, bot: String, star
 /// The bot's menu button (mini app) — `{"type":"default"}` when it has none.
 #[tauri::command]
 pub async fn webapp_menu(state: State<'_, StdMutex<AppState>>, bot: String) -> Result<serde_json::Value, String> {
-    let t = { state.lock().map_err(|e| e.to_string())?.transport.clone().ok_or("not connected to a server")? };
+    let t = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone().ok_or("not connected to a server")? };
     t.webapp_menu(&bot).await.map_err(|e| e.to_string())
 }
 
@@ -4016,7 +4080,7 @@ async fn on_incoming_initial(
 
     // Consume SPK + optional OPK from the vault under the lock.
     let (identity_clone, spk, opk) = {
-        let s = match state.lock() { Ok(s) => s, Err(_) => return };
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let identity = s.identity.clone();
         let spk = match s.vault.latest_signed_prekey() {
             Ok(Some((spk, _))) => spk,
@@ -4034,11 +4098,10 @@ async fn on_incoming_initial(
         Err(e) => { tracing::warn!(?e, "accept_initial failed"); return }
     };
     let plain_text = String::from_utf8_lossy(&plain).to_string();
-    let time = hhmm_now();
 
     // The session belongs to the sender's DEVICE; the chat to the account.
     {
-        let mut s = match state.lock() { Ok(s) => s, Err(_) => return };
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Err(e) = s.vault.save_session(&addr, &session) {
             tracing::warn!(?e, "save_session on accept");
         }
@@ -4053,44 +4116,9 @@ async fn on_incoming_initial(
     // Presence, typing, group traffic… may open a session too (a new device
     // of theirs): handle it like any other envelope, never as a bubble.
     // The same path covers my own devices and blocked people.
-    let from = crate::multidev::base_user(&addr).to_string();
-    let mine = state.lock().ok().and_then(|s| s.username.clone()).as_deref() == Some(from.as_str());
-    let blocked = state.lock().map(|s| s.prefs.blocked.contains(&from)).unwrap_or(false);
-    if mine || blocked || is_control_text(&plain_text) {
-        on_incoming_text(app, &addr, plain_text).await;
-        return;
-    }
-
-    // Store + emit.
-    let is_new_chat;
-    {
-        let mut s = match state.lock() { Ok(s) => s, Err(_) => return };
-        is_new_chat = !s.chats.contains_key(&from);
-        if is_new_chat {
-            let (letter, gradient) = gradient_for(&from);
-            let summary = ChatSummary { preview_from: None,
-                id: from.clone(),
-                name: from.clone(),
-                letter, gradient,
-                preview: plain_text.clone(),
-                preview_is_typing: false, preview_by_me: false, has_lock: true,
-                time: time.clone(),
-                unread: 1, online: true, verified: false, channel: false, live: true,
-            };
-            s.chats.insert(from.clone(), ChatBook { summary, messages: Vec::new() });
-            s.chat_order.retain(|id| id != &from);
-            s.chat_order.insert(0, from.clone());
-        }
-        push_peer_message(&mut s, &from, plain_text.clone(), &time);
-    }
-
-    crate::bgnotify::incoming(&app, &from);
-    let _ = app.emit("aqua://incoming", IncomingEventPayload {
-        peer_id: from.clone(),
-        text: plain_text,
-        time,
-        is_new_chat,
-    });
+    // Everything goes the one way (before, a first message skipped the
+    // signed-device-list check and the rest of on_incoming_text).
+    on_incoming_text(app, &addr, plain_text).await;
 }
 
 async fn on_incoming_envelope(
@@ -4102,7 +4130,7 @@ async fn on_incoming_envelope(
     // Decrypt and persist state. Keep this scope narrow so we don't
     // hold the state lock across the subsequent emit.
     let text = {
-        let mut s = match state.lock() { Ok(s) => s, Err(_) => return };
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let plain = {
             let Some(session) = s.sessions.get_mut(&addr) else {
                 tracing::warn!(peer = %addr, "envelope for unknown session");
@@ -4159,10 +4187,10 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
     let state: State<'_, StdMutex<AppState>> = app.state();
     let from = crate::multidev::base_user(addr).to_string();
     // Sent by another device of mine.
-    if state.lock().ok().and_then(|s| s.username.clone()).as_deref() == Some(from.as_str()) {
+    if state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|s| s.username.clone()).as_deref() == Some(from.as_str()) {
         // Only from my devices that are approved (devtrust.rs): a device the
         // relay or a password thief added gets nothing and says nothing.
-        let trusted = state.lock().ok().map(|s| match crate::devtrust::session_id(&s, addr) {
+        let trusted = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().map(|s| match crate::devtrust::session_id(&s, addr) {
             Some(id) => crate::devtrust::is_trusted(&s, &id),
             None => false,
         }).unwrap_or(false);
@@ -4198,10 +4226,10 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
     // A device of theirs that their own devices never signed onto their list
     // (devlists.rs): the relay could have added it. Look once more — the
     // list may just be new — then drop the message.
-    let peer_dh = state.lock().ok().and_then(|s| s.sessions.get(addr).map(|x| x.peer.dh_pub.as_bytes().to_vec()));
+    let peer_dh = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|s| s.sessions.get(addr).map(|x| x.peer.dh_pub.as_bytes().to_vec()));
     if let Some(dh) = peer_dh {
         if !crate::devlists::allowed(app, &from, &dh) {
-            let t = state.lock().ok().and_then(|s| s.transport.clone());
+            let t = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|s| s.transport.clone());
             if let Some(t) = &t {
                 crate::devlists::refresh(app, t, &from, true).await;
             }
@@ -4218,7 +4246,7 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
 
     // Blocked people: everything is dropped except group traffic (their
     // messages in shared groups stay visible, like Telegram).
-    let blocked = state.lock().map(|s| s.prefs.blocked.contains(&from)).unwrap_or(false);
+    let blocked = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).map(|s| s.prefs.blocked.contains(&from)).unwrap_or(false);
     if blocked && !(text.starts_with(GRPMSG_PREFIX) || text.starts_with(GRPINFO_PREFIX) || text.starts_with(GRPCTL_PREFIX)
         || text.starts_with(GRPLEAVE_PREFIX) || text.starts_with(GRPSELF_PREFIX)) {
         return;
@@ -4232,7 +4260,7 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
             let valid = new.len() >= 3 && new.len() <= 32 && new.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '.');
             // Only for themselves: the notice comes from the old name.
             if old == from && valid {
-                if let Ok(mut s) = state.lock() { apply_peer_rename(&mut s, &old, &new); }
+                if let Ok(mut s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { apply_peer_rename(&mut s, &old, &new); }
                 crate::multidev::invalidate(&old);
                 let _ = app.emit("aqua://renamed", serde_json::json!({ "old": old, "new": new }));
                 let _ = app.emit("aqua://chats_updated", ());
@@ -4321,7 +4349,7 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
             let old = v.get("old").and_then(|x| x.as_str()).unwrap_or("");
             let new = v.get("new").and_then(|x| x.as_str()).unwrap_or("");
             if !old.is_empty() {
-                let mut s = match state.lock() { Ok(s) => s, Err(_) => return };
+                let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 apply_edit(&mut s, &from, &from, old, new);
             }
             let _ = app.emit("aqua://chats_updated", ());
@@ -4337,7 +4365,7 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
             let t = v.get("text").and_then(|x| x.as_str()).unwrap_or("");
             if !t.is_empty() {
-                let mut s = match state.lock() { Ok(s) => s, Err(_) => return };
+                let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 // In a 1:1 chat either side may delete any message for both,
                 // as in Telegram: `author` names whose message it was.
                 let mine = v.get("author").and_then(|x| x.as_str())
@@ -4359,7 +4387,7 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
     // Auto-delete timer of this chat, set by the peer.
     if let Some(body) = text.strip_prefix(crate::autodelete::TTL_PREFIX) {
         {
-            let mut s = match state.lock() { Ok(s) => s, Err(_) => return };
+            let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             crate::autodelete::handle_control(&mut s, &from, body, &from);
         }
         let _ = app.emit("aqua://chats_updated", ());
@@ -4376,15 +4404,40 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
 
     // Normal (text or file) message path.
     let time = hhmm_now();
+    let mut is_new_chat = false;
     {
-        let mut s = match state.lock() { Ok(s) => s, Err(_) => return };
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // No chat with them here (new, or deleted on this device): open
+        // one — before, only a session's first message did, and later ones
+        // into a deleted chat were lost without a trace.
+        if !s.chats.contains_key(&from) {
+            is_new_chat = true;
+            let (letter, gradient) = gradient_for(&from);
+            let summary = ChatSummary { preview_from: None,
+                id: from.clone(),
+                name: from.clone(),
+                letter, gradient,
+                preview: String::new(),
+                // push_peer_message counts it (it started at 1: a first
+                // message showed 2 unread).
+                preview_is_typing: false, preview_by_me: false, has_lock: true,
+                time: time.clone(),
+                unread: 0, online: true, verified: false, channel: false, live: true,
+            };
+            s.chats.insert(from.clone(), ChatBook { summary, messages: Vec::new() });
+            s.chat_order.retain(|id| id != &from);
+            s.chat_order.insert(0, from.clone());
+        }
         push_peer_message(&mut s, &from, text.clone(), &time);
     }
+    // Phones in the background: before, only a session's first message
+    // was announced (bgnotify.rs) — the ordinary ones stayed silent.
+    crate::bgnotify::incoming(app, &from);
     let _ = app.emit("aqua://incoming", IncomingEventPayload {
         peer_id: from,
         text,
         time,
-        is_new_chat: false,
+        is_new_chat,
     });
 }
 
@@ -4415,7 +4468,7 @@ pub fn note_call(
         kind: MessageKind::System { text: text.clone() },
     };
     {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if !s.chats.contains_key(&peer_id) { return Ok(()); }
         push_own_message(&mut s, &peer_id, msg, &text);
         if let Some(b) = s.chats.get_mut(&peer_id) {
@@ -4527,7 +4580,7 @@ fn apply_delete(s: &mut AppState, chat_id: &str, author: &str, key: &str) -> boo
 /// (the group's "Recent actions" keeps the preview).
 #[tauri::command]
 pub fn message_keys(state: State<'_, StdMutex<AppState>>, peer_id: String, ids: Vec<String>) -> Result<Vec<serde_json::Value>, String> {
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let me = s.username.clone().unwrap_or_default();
     let Some(book) = s.chats.get(&peer_id) else { return Ok(vec![]) };
     Ok(book
@@ -4550,7 +4603,7 @@ pub fn edit_message(
     old_text: String,
     new_text: String,
 ) -> Result<(), String> {
-    let mut s = state.lock().map_err(|e| e.to_string())?;
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     apply_edit(&mut s, &peer_id, "me", &old_text, &new_text);
     if peer_id == crate::state::SAVED_MESSAGES_ID {
         let data_dir = s.data_dir.clone();
@@ -4569,7 +4622,7 @@ pub fn delete_message(
     peer_id: String,
     text: String,
 ) -> Result<(), String> {
-    let mut s = state.lock().map_err(|e| e.to_string())?;
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     apply_delete(&mut s, &peer_id, "me", &text);
     if peer_id == crate::state::SAVED_MESSAGES_ID {
         let data_dir = s.data_dir.clone();
@@ -4588,7 +4641,7 @@ pub fn delete_message(
 /// copy is theirs (it was their file), only the message is marked.
 #[tauri::command]
 pub fn once_burn(state: State<'_, StdMutex<AppState>>, peer_id: String, message_id: String) -> Result<(), String> {
-    let mut s = state.lock().map_err(|e| e.to_string())?;
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let data_dir = s.data_dir.clone();
     let Some(book) = s.chats.get_mut(&peer_id) else { return Ok(()) };
     let Some(m) = book.messages.iter_mut().find(|m| m.id == message_id) else { return Ok(()) };
@@ -4614,7 +4667,7 @@ pub fn delete_messages_local(
     peer_id: String,
     ids: Vec<String>,
 ) -> Result<usize, String> {
-    let mut s = state.lock().map_err(|e| e.to_string())?;
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let data_dir = s.data_dir.clone();
     let Some(book) = s.chats.get_mut(&peer_id) else { return Ok(0) };
     let before = book.messages.len();
@@ -4638,7 +4691,7 @@ pub fn delete_messages_local(
 pub fn set_tz_offset(app: AppHandle, state: State<'_, StdMutex<AppState>>, minutes: i32) -> Result<(), String> {
     crate::state::set_tz_offset(minutes);
     let n = {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         crate::state::localize_old_times(&mut s)
     };
     if n > 0 {
@@ -4652,7 +4705,7 @@ pub fn set_tz_offset(app: AppHandle, state: State<'_, StdMutex<AppState>>, minut
 /// the open chat back as "unread".
 #[tauri::command]
 pub fn mark_chat_read(state: State<'_, StdMutex<AppState>>, peer_id: String) -> Result<(), String> {
-    let mut s = state.lock().map_err(|e| e.to_string())?;
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(book) = s.chats.get_mut(&peer_id) {
         book.summary.unread = 0;
     }
@@ -4667,7 +4720,7 @@ pub fn mark_chat_read(state: State<'_, StdMutex<AppState>>, peer_id: String) -> 
 pub async fn change_username(app: AppHandle, state: State<'_, StdMutex<AppState>>, username: String) -> Result<String, String> {
     let wanted = username.trim().trim_start_matches('@').to_lowercase();
     let (transport, old, peers) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let t = s.transport.clone().ok_or("not connected")?;
         let me = s.username.clone().ok_or("not registered")?;
         let mut peers: Vec<String> = s.sessions.keys().map(|k| crate::multidev::base_user(k).to_string()).filter(|p| p != &me).collect();
@@ -4688,7 +4741,7 @@ pub async fn change_username(app: AppHandle, state: State<'_, StdMutex<AppState>
         }
     }
     {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let email = s.email.clone();
         s.mark_registered(new.clone(), email);
         s.save_connection_hints();
@@ -4761,7 +4814,7 @@ pub fn apply_peer_rename(s: &mut AppState, old: &str, new: &str) {
 /// chat again. Saved Messages are only emptied. Groups are left, not deleted.
 #[tauri::command]
 pub fn delete_chat(state: State<'_, StdMutex<AppState>>, peer_id: String) -> Result<(), String> {
-    let mut s = state.lock().map_err(|e| e.to_string())?;
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if peer_id.starts_with("grp_") {
         return Err("leave the group instead".into());
     }
@@ -4789,9 +4842,10 @@ fn push_peer_message(s: &mut AppState, peer_id: &str, text: String, time: &str) 
     let (kind, meta) = crate::state::classify_full(&text, None);
     let preview = preview_for(&kind);
     if let Some(book) = s.chats.get_mut(peer_id) {
-        let msg_len = book.messages.len();
         book.messages.push(ChatMessage { meta,
-            id: format!("in-{time}-{msg_len}"),
+            // Unique: "in-{time}-{len}" came back after a deletion (same
+            // minute, same length) and two messages shared one id.
+            id: format!("in-{}", crate::state::uuid_like()),
             from: peer_id.to_string(),
             time: time.to_string(),
             at: crate::state::now_at(),
@@ -4817,7 +4871,7 @@ fn push_peer_message(s: &mut AppState, peer_id: &str, text: String, time: &str) 
 /// The MP4 / MOV with its index moved to the front (`-c copy -movflags
 /// +faststart`); None when ffmpeg isn't there or fails.
 async fn faststart(state: &State<'_, StdMutex<AppState>>, path: &std::path::Path) -> Option<Vec<u8>> {
-    let out_dir = { state.lock().ok()?.data_dir.join("outbox") };
+    let out_dir = { state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok()?.data_dir.join("outbox") };
     std::fs::create_dir_all(&out_dir).ok()?;
     let out = out_dir.join(format!("fs-{}.mp4", crate::state::uuid_like()));
     let mut cmd = tokio::process::Command::new("ffmpeg");

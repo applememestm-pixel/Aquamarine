@@ -8,7 +8,8 @@ hours, and github.com's own pages (the releases feed) do the same. GitHub
 Pages sits behind a CDN with no such limit, so this file carries the same
 answer:
 
-  latest   — the most recently published release (the "every build" channel),
+  latest   — the highest numbered release, pre-releases included (testers;
+             the old moving "nightly" is left out — no more nightly builds),
   stable   — the latest stable release (what /releases/latest gives),
   releases — the last 20 releases (the server app picks the highest version).
 
@@ -82,8 +83,34 @@ def trim(rel, body=True):
     return out
 
 
-releases = [r for r in api("releases?per_page=20") if not r.get("draft")]
-latest = max(releases, key=lambda r: r.get("published_at") or "", default=None)
+def newer(a, b):
+    """The apps' numbering (ui/src/lib/updates.ts::newer)."""
+    import re
+    sa, sb = re.split(r"[.-]", a), re.split(r"[.-]", b)
+    num = lambda s: int(s) if s.isdigit() else 0
+    for i in range(max(len(sa), len(sb))):
+        x = sa[i] if i < len(sa) else "0"
+        y = sb[i] if i < len(sb) else "0"
+        if i == 2 and len(x) != len(y):
+            short = min(len(x), len(y))
+            if num(x[:short]) != num(y[:short]):
+                return num(x[:short]) > num(y[:short])
+            return len(x) > len(y)
+        if num(x) != num(y):
+            return num(x) > num(y)
+    return False
+
+
+def version(r):
+    t = r.get("tag_name") or ""
+    return t[1:] if t.startswith("v") and t[1:2].isdigit() else None
+
+
+releases = [r for r in api("releases?per_page=20") if not r.get("draft") and version(r)]
+latest = None
+for r in releases:
+    if latest is None or newer(version(r), version(latest)):
+        latest = r
 try:
     stable = api("releases/latest")
 except Exception:

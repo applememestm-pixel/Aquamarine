@@ -20,7 +20,7 @@ use crate::media::{self, is_telegram_pack, read_pack_json, write_pack_json};
 use crate::state::AppState;
 
 fn root(state: &State<'_, StdMutex<AppState>>) -> Result<PathBuf, String> {
-    Ok(crate::accounts::shared_root(&state.lock().map_err(|e| e.to_string())?.data_dir).join("stickers"))
+    Ok(crate::accounts::shared_root(&state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir).join("stickers"))
 }
 
 fn bad_title(t: &str) -> bool {
@@ -263,7 +263,7 @@ pub async fn apply_manifest(t: &aqua_client_core::Transport, dir: &Path, m: &ser
 }
 
 fn transport_and_root(state: &State<'_, StdMutex<AppState>>) -> Result<(std::sync::Arc<aqua_client_core::Transport>, PathBuf), String> {
-    let s = state.lock().map_err(|e| e.to_string())?;
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     Ok((s.transport.clone().ok_or("not connected")?, crate::accounts::shared_root(&s.data_dir).join("stickers")))
 }
 
@@ -339,7 +339,7 @@ pub struct PackPreview {
 #[tauri::command]
 pub async fn pack_preview(state: State<'_, StdMutex<AppState>>, pack_ref: String) -> Result<PackPreview, String> {
     let (data_dir, transport) = {
-        let s = state.lock().map_err(|e| e.to_string())?;
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         (s.data_dir.clone(), s.transport.clone())
     };
     let (kind_ref, name) = pack_ref.split_once(':').ok_or("bad pack reference")?;

@@ -13,7 +13,18 @@
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-tap-highlight-color: transparent; }
-  body { display: grid; grid-template-columns: 220px 1fr; overflow: hidden; }
+  body { display: grid; grid-template-columns: 220px 1fr; grid-template-rows: 1fr auto; overflow: hidden; }
+  body > nav { grid-row: 1 / 3; grid-column: 1; }
+  body > main { grid-row: 1; grid-column: 2; }
+  /* ---- servers: "This device" and remote ones (SSH), switched at the bottom ---- */
+  #srvbar { grid-row: 2; grid-column: 2; display: flex; gap: 6px; padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--side); overflow-x: auto; scrollbar-width: none; }
+  #srvbar::-webkit-scrollbar { display: none; }
+  .srv { display: inline-flex; align-items: center; gap: 8px; flex: none; max-width: 220px; padding: 7px 12px; border-radius: 11px; border: 1px solid var(--line); background: #0F141E; color: var(--dim); font-weight: 600; font-size: 13px; }
+  .srv span.n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .srv.on { color: var(--fg); border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: linear-gradient(90deg, rgba(46,230,197,.14), rgba(46,230,197,.03)); }
+  .srv.add { border-style: dashed; }
+  .srv .dot { width: 8px; height: 8px; }
+  .srv .dot.wait { background: var(--warn); }
   [hidden] { display: none !important; }
   svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
 
@@ -36,6 +47,8 @@
   /* ---- pages ---- */
   main { min-height: 0; overflow-y: auto; padding: calc(22px + env(safe-area-inset-top)) 28px 40px; }
   .page { max-width: 880px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; animation: in .22s ease; }
+  /* Empty slots of the home page (update card, first-start question) take no gap. */
+  .page > div:empty { display: none; }
   @keyframes in { from { opacity: 0; transform: translateY(6px); } }
   h1 { margin: 0 0 4px; font-size: 22px; font-weight: 800; letter-spacing: -.01em; }
   .lead { color: var(--dim); margin: -2px 0 6px; max-width: 640px; }
@@ -189,8 +202,11 @@
 
   /* ---- phones and narrow windows: tabs at the bottom ---- */
   @media (max-width: 760px) {
-    body { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
-    nav { grid-row: 2; flex-direction: row; border-right: 0; border-top: 1px solid var(--line); padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); overflow-x: auto; gap: 0; }
+    body { grid-template-columns: 1fr; grid-template-rows: 1fr auto auto; }
+    body > main { grid-row: 1; grid-column: 1; }
+    #srvbar { grid-row: 2; grid-column: 1; padding-bottom: 8px; }
+    body > nav { grid-row: 3; grid-column: 1; }
+    nav { grid-row: 3; flex-direction: row; border-right: 0; border-top: 1px solid var(--line); padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); overflow-x: auto; gap: 0; }
     .brand, .nav-foot { display: none; }
     .nav-btn { flex-direction: column; gap: 3px; font-size: 10px; padding: 6px 2px; min-width: 0; flex: 1 1 0; text-align: center; justify-content: center; }
     .nav-btn.on { background: none; color: var(--accent); }
@@ -212,6 +228,7 @@
   <div class="brand"><div class="logo">A</div><div><b>Aquamarine</b><small>Server</small></div></div>
 </nav>
 <main id="main"></main>
+<div id="srvbar"></div>
 <div id="modal"></div>
 <div id="toast"></div>
 <script src="qrcode.js"></script>
@@ -243,6 +260,64 @@ document.addEventListener("DOMContentLoaded", () => armAll(document.body));
 // ======================================================================
 const RU = /^(ru|uk|be)/i.test(navigator.language || "");
 const RU_DICT = {
+  "Stars": "Звёзды", "starsNote": "Звёзды — отметки, которые даёт только владелец проекта (официальная и уровни Boosty). Ключ есть только на сервере владельца. Создайте его там один раз: открытый ключ встраивается в приложения (переменная репозитория AQUA_STAR_PUBLIC), звёзды выдаёт бот @stars.",
+  "Make the star key": "Создать ключ звёзд", "this server hands them out": "этот сервер их выдаёт",
+  "Make the star key on this server? Only the project owner's server should have it.": "Создать ключ звёзд на этом сервере? Он должен быть только на сервере владельца проекта.",
+  "Done — copy the public key into the repository variable AQUA_STAR_PUBLIC.": "Готово — скопируйте открытый ключ в переменную репозитория AQUA_STAR_PUBLIC.",
+  "Connecting…": "Подключаюсь…",
+  "Not connected": "Не подключён",
+  "Over SSH: {h}": "По SSH: {h}",
+  "Disconnect": "Отключиться",
+  "Connect": "Подключиться",
+  "Connected": "Подключён",
+  "By the machine's address": "По адресу машины",
+  "Its local network": "Её локальная сеть",
+  "Add a server": "Добавить сервер",
+  "Connect to {n}": "Подключение к {n}",
+  "Server {n}": "Сервер {n}",
+  "Name (optional)": "Название (необязательно)",
+  "My VPS": "Мой VPS",
+  "Address (IP or name)": "Адрес (IP или имя)",
+  "SSH port": "Порт SSH",
+  "Private key": "Закрытый ключ",
+  "unchanged": "без изменений",
+  "Private key (OpenSSH)": "Закрытый ключ (OpenSSH)",
+  "From a file…": "Из файла…",
+  "Key passphrase (if any)": "Пароль ключа (если есть)",
+  "Remember on this device": "Запомнить на этом устройстве",
+  "If the panel isn't found by itself": "Если панель не находится сама",
+  "Server port": "Порт сервера",
+  "auto": "сам",
+  "Admin token": "Токен панели",
+  "Find the token by itself again": "Снова находить токен самому",
+  "Save and connect": "Сохранить и подключиться",
+  "Remove": "Убрать",
+  "That's not a key file.": "Это не файл ключа.",
+  "Paste the private key.": "Вставьте закрытый ключ.",
+  "Enter the password.": "Введите пароль.",
+  "Remove this server from the list? Nothing changes on the server itself.": "Убрать сервер из списка? На самом сервере ничего не изменится.",
+  "Aquamarine Server": "Aquamarine Server",
+  "Run a server on this device": "Запустить сервер на этом устройстве",
+  "My server over SSH": "Мой сервер по SSH",
+  "It updates together with the Aquamarine Server app there.": "Он обновляется вместе с приложением Aquamarine Server там.",
+  "Connection": "Подключение",
+  "Change": "Изменить",
+  "Host key": "Ключ машины",
+  "The password / key is kept on this device.": "Пароль / ключ хранится на этом устройстве.",
+  "The password / key is kept only until the app quits.": "Пароль / ключ хранится только до закрытия приложения.",
+  "Restart the server": "Перезапустить сервер",
+  "Stop the server": "Остановить сервер",
+  "Restarting…": "Перезапускаю…",
+  "Stopped.": "Остановлен.",
+  "Restart the server? Everyone reconnects in a few seconds.": "Перезапустить сервер? Все переподключатся через несколько секунд.",
+  "Stop the server? Nobody can connect until it is started again on the machine.": "Остановить сервер? Никто не подключится, пока его снова не запустят на машине.",
+  "remoteIntro": "Сервер Aquamarine на другой машине (VPS, домашний ПК): приложение заходит туда по SSH и открывает его панель здесь. Наружу панель не открывается — всё идёт внутри SSH.",
+  "remoteManual": "Порт и токен панели приложение читает само из panel.json на той машине (его пишет запущенный сервер). В Docker файл внутри контейнера — тогда укажите порт и AQUA_ADMIN_TOKEN контейнера.",
+  "chooseLead": "Как будете работать?",
+  "chooseLocal": "Этот компьютер или телефон сам станет сервером: аккаунты и файлы хранятся здесь.",
+  "chooseRemote": "Сервер уже работает на другой машине (VPS, домашний ПК) — управлять им отсюда через SSH. Здесь сервер не запускается.",
+  "remoteLocalOnly": "Сервер слушает только 127.0.0.1 на своей машине — снаружи к нему не подключиться (AQUA_LISTEN=0.0.0.0:7777).",
+
   "Machine": "Машина", "server": "сервер", "PC": "компьютер", "phone": "телефон", "System": "Система", "Processor": "Процессор", "Memory": "Память",
   "Disk": "Диск", "Network": "Сеть", "Machine is up": "Машина работает", "This server": "Этот сервер", "Load": "Нагрузка", "cores": "ядер", "of": "из", "free": "свободно",
   "Clear the server": "Очистить сервер", "Clear…": "Очистить…", "wipeNote": "Стирает выбранное прямо сейчас, без возврата. Сервер продолжает работать.",
@@ -331,8 +406,8 @@ const RU_DICT = {
   "Server": "Сервер", "Apply": "Применить", "portNote": "Порт меняется сразу — сервер перезапустится.",
   "Data folder": "Папка данных", "dataNote": "Аккаунты, зашифрованные файлы и настройки сервера. Консольный сервер использует ту же папку — аккаунты сохраняются.",
   "Use another folder…": "Другая папка…", "Move the data to…": "Перенести данные в…", "Stop the server first": "Сначала остановите сервер",
-  "Updates": "Обновления", "Update automatically": "Обновляться автоматически",
-  "autoUpdSub": "Новые версии скачиваются и ставятся сами; сервер выключается только на несколько секунд перезапуска.",
+  "Updates": "Обновления", "Tester": "Тестер",
+  "testerSub": "Ставить каждую новую сборку, и пре-выпуски тоже. Выпуски ставятся всегда, сами: сервер выключается только на несколько секунд перезапуска.",
   "Checking for updates…": "Проверяю обновления…", "This is the latest version.": "Это последняя версия.",
   "Version {v} is out, its file for this device is still being built.": "Вышла версия {v}, файл для этого устройства ещё собирается.",
   "Downloading {v}…": "Скачиваю {v}…", "Version {v} is downloaded.": "Версия {v} скачана.", "Version {v} is ready to install.": "Версию {v} можно установить.",
@@ -367,6 +442,14 @@ const RU_DICT = {
 };
 const t = (k, vars) => { let s = (RU && RU_DICT[k]) || EN[k] || k; if (vars) for (const [a, b] of Object.entries(vars)) s = s.split("{" + a + "}").join(b); return s; };
 const EN = {
+  starsNote: "Stars are marks only the project owner hands out (the official one and the Boosty levels). Only the owner's server has the key. Make it once there: the public key goes into the apps (repository variable AQUA_STAR_PUBLIC); stars are given by the @stars bot.",
+  remoteIntro: "An Aquamarine server on another machine (a VPS, a home PC): the app signs in there over SSH and opens its panel here. The panel is never opened to the internet — everything goes inside SSH.",
+  remoteManual: "The app reads the panel's port and token by itself from panel.json on that machine (the running server writes it). In Docker the file is inside the container — then enter the container's port and AQUA_ADMIN_TOKEN.",
+  chooseLead: "How will you use it?",
+  chooseLocal: "This computer or phone becomes the server: accounts and files are kept here.",
+  chooseRemote: "The server already runs on another machine (a VPS, a home PC) — manage it from here over SSH. No server starts here.",
+  remoteLocalOnly: "The server listens on 127.0.0.1 of its machine only — nobody can connect from outside (AQUA_LISTEN=0.0.0.0:7777).",
+
   wipeNote: "Erases what's ticked right now, for good. The server keeps running.",
   wipeKeeps: "Kept: the server's settings, mail, Telegram, music, the server network, address and port. In a server network, accounts may come back from the other servers — clear them too or leave the network.",
   wpPeople: "Every person — their accounts, whole; the bots and their chats stay", wipeConfirmPeople: "Erase every person? Everyone is logged out and has to sign up again. The bots stay. This can't be undone.",
@@ -421,7 +504,7 @@ const EN = {
   uploadNote: "PNG or WebP with transparency, GIF, Telegram animations (.tgs) and video stickers (.webm) — up to 2 MB each, up to 200 in a pack.",
   packsNote: "Click a pack to open all of it.",
   errorsSub: "Failures of the apps of people on this server, and of the server itself. No message text here — only the error, version and device.",
-  autoUpdSub: "New versions download and install by themselves; the server is off only for the few seconds of the restart.",
+  testerSub: "Install every new build, pre-releases too. Releases always install by themselves: the server is off only for the few seconds of the restart.",
 };
 document.documentElement.lang = RU ? "ru" : "en";
 
@@ -430,7 +513,10 @@ document.documentElement.lang = RU ? "ru" : "en";
 // ======================================================================
 const $ = (id) => document.getElementById(id);
 const invoke = (c, a) => window.__TAURI__.core.invoke(c, a);
-const api = (path, method = "GET", body) => invoke("admin", { method, path, body: body ?? null });
+// The server the panel shows: "" = this device, else a remote one (remote.rs).
+let target = "";
+try { target = localStorage.getItem("aqs.target") || ""; } catch {}
+const api = (path, method = "GET", body) => invoke("admin", { method, path, body: body ?? null, target: target || null });
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const human = (n) => n < 1024 ? n + (RU ? " Б" : " B") : n < 1048576 ? (n / 1024).toFixed(1) + (RU ? " КБ" : " KB") : n < 1073741824 ? (n / 1048576).toFixed(1) + (RU ? " МБ" : " MB") : (n / 1073741824).toFixed(2) + (RU ? " ГБ" : " GB");
 function dur(s) { const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
@@ -475,12 +561,18 @@ const IC = {
   user: I('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'),
   globe: I('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>'),
   refresh: I('<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>'),
+  device: I('<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>'),
+  server: I('<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>'),
+  plus: I('<path d="M12 5v14M5 12h14"/>'),
+  edit: I('<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>'),
 };
 
 // ======================================================================
 // State
 // ======================================================================
-let st = null;          // status from the app (running, port, addresses, folder…)
+let st = null;          // the shown server: this device's status, or a remote one (remoteSt)
+let local = null;       // this device's status from the app
+let remotes = [];       // remote_list (remote.rs)
 let stats = null;       // /v1/admin/stats while running
 let fed = null;         // /v1/admin/federation
 let page = "home";
@@ -514,11 +606,15 @@ function go(id) {
 // Rendering: each page is a function that fills <main>
 // ======================================================================
 function render() {
+  paintBar();
+  if (!target && local && !local.chosen && !local.running) { $("main").innerHTML = `<div class="page" id="pg"></div>`; pageChoose($("pg")); return; }
   const fn = { home: pageHome, people: pagePeople, access: pageAccess, network: pageNetwork, mail: pageMail, stickers: pageStickers, music: pageMusic, errors: pageErrors, settings: pageSettings }[page];
   $("main").innerHTML = `<div class="page" id="pg"></div>`;
   fn($("pg"));
 }
-const offBox = () => `<div class="card off-box">${IC.power}<b style="color:var(--fg)">${t("serverOff")}</b><span>${t("serverOffSub")}</span><button class="primary" onclick="toggleServer()">${t("Start the server")}</button></div>`;
+const offBox = () => st?.remote
+  ? `<div class="card off-box">${IC.server}<b style="color:var(--fg)">${esc(st.name)}</b><span>${esc(st.error || t("Not connected"))}</span><button class="primary" onclick="toggleServer()">${t("Connect")}</button></div>`
+  : `<div class="card off-box">${IC.power}<b style="color:var(--fg)">${t("serverOff")}</b><span>${t("serverOffSub")}</span><button class="primary" onclick="toggleServer()">${t("Start the server")}</button></div>`;
 const needRunning = (el, title, lead) => { el.innerHTML = `<div><h1>${t(title)}</h1>${lead ? `<p class="lead">${lead}</p>` : ""}</div>` + offBox(); };
 
 // ---------------------------------------------------------------- Home
@@ -567,10 +663,15 @@ function paintHome() {
   if (page !== "home" || !$("hBtn") || !st) return;
   const on = st.running;
   $("hPulse").className = "pulse" + (on ? " on" : st.error ? " err" : "");
+  if (st.remote) {
+    $("hState").textContent = st.rstate === "connecting" || busy ? t("Connecting…") : on ? st.name : st.error ? t("Not connected") : st.name;
+    $("hSub").textContent = on ? [st.user + "@" + st.host, stats ? t("for {t}", { t: dur(stats.uptime_secs) }) : "", (RU ? "порт " : "port ") + st.port, st.version ? "v" + st.version : ""].filter(Boolean).join(" · ") : t("Over SSH: {h}", { h: st.user + "@" + st.host });
+  } else {
   $("hState").textContent = busy ? t("Starting…") : on ? t("Running") : st.error ? t("Error") : t("Stopped");
   $("hSub").textContent = on ? (stats ? t("for {t}", { t: dur(stats.uptime_secs) }) + " · " + (RU ? "порт " : "port ") + st.port : (RU ? "порт " : "port ") + st.port) : t("The server is off — nobody can connect.");
+  }
   $("hBtn").className = on ? "danger" : "primary";
-  $("hBtn").innerHTML = IC.power + (on ? t("Stop") : t("Start"));
+  $("hBtn").innerHTML = st.remote ? (on ? IC.x + t("Disconnect") : IC.server + t("Connect")) : IC.power + (on ? t("Stop") : t("Start"));
   $("hBtn").disabled = busy;
   $("hErr").hidden = !st.error; $("hErr").textContent = st.error || "";
   // Stat tiles
@@ -586,14 +687,20 @@ function paintHome() {
   const rows = [];
   const row = (k, url, off) => `<div class="addr ${off ? "off" : ""}"><span class="k">${t(k)}</span><code>${esc(off ? t(url) : url)}</code>${off ? "" :
     `<button class="mini" onclick="copy('${esc(url)}')">${IC.copy}</button><button class="mini" onclick="showQr('${esc(url)}')">${IC.qr}</button>`}</div>`;
-  if (on) {
+  if (on && st.remote) {
+    if (stats?.public_url) rows.push(row("Internet", stats.public_url));
+    else if (stats?.public_unverified) rows.push(`<div class="addr off"><span class="k">${t("Internet")}</span><code>${esc(stats.public_unverified)} — ${t("notForwarded")}</code></div>`);
+    if (/^0\.0\.0\.0:|^\[::\]:/.test(stats?.listen || "")) rows.push(row("By the machine's address", `http://${st.host}:${st.port}`));
+    if (stats?.lan_ip) rows.push(row("Its local network", `http://${stats.lan_ip}:${st.port}`));
+    if (!rows.length) rows.push(`<div class="note">${t("remoteLocalOnly")}</div>`);
+  } else if (on) {
     rows.push(st.lan_url ? row("Same Wi-Fi", st.lan_url) : row("Same Wi-Fi", "no address in the local network", true));
     if (st.public_url) rows.push(row("Internet", st.public_url));
     else if (stats?.public_unverified) rows.push(`<div class="addr off"><span class="k">${t("Internet")}</span><code>${esc(stats.public_unverified)} — ${t("notForwarded")}</code></div>`);
     else rows.push(row("Internet", "noPublic", true));
     rows.push(row("This device", st.local_url));
     if (!st.mobile) rows.push(row("Android emulator", `http://10.0.2.2:${st.port}`));
-  } else rows.push(`<div class="note">${t("The server is off — nobody can connect.")}</div>`);
+  } else rows.push(`<div class="note">${t(st.remote ? "Not connected" : "The server is off — nobody can connect.")}</div>`);
   const html = rows.join("");
   if ($("addrs").dataset.h !== html) { $("addrs").dataset.h = html; $("addrs").innerHTML = html; }
   // First start: solo or network?
@@ -605,10 +712,12 @@ function paintHome() {
       <div><button class="ghost mini" onclick="sessionStorage.setItem('aqs.modeLater','1'); paintHome()">${t("Choose later")}</button></div></div>` : "";
   if ($("modeAsk").dataset.h !== askHtml) { $("modeAsk").dataset.h = askHtml; $("modeAsk").innerHTML = askHtml; }
   paintUpd();
+  if (st.remote && $("hErr")) { $("hErr").hidden = !st.error || on; $("hErr").textContent = st.error || ""; }
 }
 
 async function toggleServer() {
   if (busy || !st) return;
+  if (st.remote) return connectRemote(!st.running);
   busy = true; paintAll();
   try { st = await invoke(st.running ? "stop" : "start", {}); if (!st.running) { stats = null; fed = null; } }
   catch (e) { st = await invoke("status"); st.error = st.error || errText(e); }
@@ -702,8 +811,24 @@ function pageAccess(el) {
         <label class="f">${t("For whom (optional)")}<input type="text" id="invNote"></label>
         <button class="primary" onclick="newInvite()">${t("Create")}</button></div>
       <span class="msg" id="invMsg"></span>
-      <div class="list" id="invList"><div class="empty">…</div></div></div>`;
-  loadInvites();
+      <div class="list" id="invList"><div class="empty">…</div></div></div>
+    <div class="card"><h2><span class="grow">${t("Stars")}</span><span class="note" id="starHint" style="font-weight:400"></span></h2><div class="note">${t("starsNote")}</div>
+      <div class="addr" id="starKeyRow" hidden><code id="starKey"></code><button class="mini" onclick="copy($('starKey').textContent)">${IC.copy}</button></div>
+      <div class="row"><button class="mini" id="starMake" onclick="makeStarKey()">${t("Make the star key")}</button><span class="msg" id="starMsg"></span></div></div>`;
+  loadInvites(); loadStars();
+}
+async function loadStars() {
+  let s; try { s = await api("/v1/admin/stars"); } catch { return; }
+  if (!$("starKey")) return;
+  $("starKeyRow").hidden = !s.public; $("starKey").textContent = s.public || "";
+  $("starMake").hidden = !!s.has_key;
+  $("starHint").textContent = s.has_key ? `${t("this server hands them out")} · @${s.bot} · ${s.stars}` : "";
+}
+async function makeStarKey() {
+  if (!confirm(t("Make the star key on this server? Only the project owner's server should have it."))) return;
+  try { await api("/v1/admin/stars", "POST", {}); setMsg("starMsg", t("Done — copy the public key into the repository variable AQUA_STAR_PUBLIC."), "ok"); }
+  catch (e) { setMsg("starMsg", esc(errText(e)), "err"); }
+  loadStars();
 }
 async function saveAccess() {
   const allow = ($("allow")?.value || "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
@@ -1072,6 +1197,7 @@ async function delPack(name) {
 
 // ---------------------------------------------------------------- Settings
 function pageSettings(el) {
+  if (st?.remote) return pageRemoteSettings(el);
   const s = st || {};
   el.innerHTML = `<div><h1>${t("Settings")}</h1></div>
     <div class="card"><h2>${t("Server")}</h2>
@@ -1087,7 +1213,7 @@ function pageSettings(el) {
       <div class="sw" onclick="setSys('set_autostart', !st.autostart)"><div class="t"><b>${t("Start with the system")}</b><span>${t("autoSub")}</span></div><span class="tog ${s.autostart ? "on" : ""}"></span></div>
       <div class="sw" onclick="setSys('set_tray', !st.tray)"><div class="t"><b>${t("Keep running when the window is closed")}</b><span>${t("traySub")}</span></div><span class="tog ${s.tray ? "on" : ""}"></span></div></div>`}
     <div class="card"><h2>${t("Updates")}</h2>
-      <div class="sw" onclick="setAutoUpd(!upd?.auto)"><div class="t"><b>${t("Update automatically")}</b><span>${t("autoUpdSub")}</span></div><span class="tog ${upd?.auto ? "on" : ""}" id="updTog"></span></div>
+      <div class="sw" onclick="setTester(!upd?.tester)"><div class="t"><b>${t("Tester")}</b><span>${t("testerSub")}</span></div><span class="tog ${upd?.tester ? "on" : ""}" id="updTog"></span></div>
       <div id="updSet"></div></div>
     <div class="card"><h2>${t("Clear the server")}</h2>
       <div class="note">${t("wipeNote")}</div>
@@ -1165,7 +1291,13 @@ function paintUpd() {
   const set = $("updSet");
   if (set) { const h = `<div class="note">${t("Version")} ${esc(upd?.current || version)} · ${updLine()}</div><div class="row">${updButtons()}${upd?.notes_url && upd?.version ? `<a onclick="invoke('open_notes').catch(()=>{})">${t("What's new")} →</a>` : ""}</div>`;
     if (set.dataset.h !== h) { set.dataset.h = h; set.innerHTML = h; } }
-  if ($("updTog")) $("updTog").className = "tog" + (upd?.auto ? " on" : "");
+  if ($("updTog")) $("updTog").className = "tog" + (upd?.tester ? " on" : "");
+  // Updates are mandatory: where the app can't put the file in place itself
+  // (Android, macOS, .deb) the installer opens by itself, once per version.
+  if (upd?.state === "ready" && upd.version && !upd.can_self_install) {
+    let asked = ""; try { asked = localStorage.getItem("aqs.updAsked") || ""; } catch {}
+    if (asked !== upd.version) { try { localStorage.setItem("aqs.updAsked", upd.version); } catch {} void updNow(true); }
+  }
   const box = $("updBox");
   if (box) {
     const show = upd && upd.version && ["waiting", "downloading", "ready", "installing"].includes(upd.state) && !(upd.state === "waiting");
@@ -1173,7 +1305,7 @@ function paintUpd() {
     if (box.dataset.h !== h) { box.dataset.h = h; box.innerHTML = h; }
   }
 }
-async function setAutoUpd(on) { try { upd = await invoke("set_auto_update", { on }); } catch (e) { toast(errText(e)); } paintUpd(); }
+async function setTester(on) { try { upd = await invoke("set_tester", { on }); } catch (e) { toast(errText(e)); } paintUpd(); }
 async function updNow(install) {
   if (install) { upd = { ...upd, state: "installing" }; paintUpd(); }
   else { upd = { ...upd, state: "checking" }; paintUpd(); }
@@ -1182,16 +1314,174 @@ async function updNow(install) {
 }
 
 // ======================================================================
+// Servers: this device and remote ones over SSH (remote.rs)
+// ======================================================================
+function remoteSt(r) {
+  if (!r) return local;
+  return { remote: true, id: r.id, name: r.name, host: r.host, user: r.user, running: r.state === "connected", rstate: r.state,
+    port: r.port || r.server_port || 7777, local_url: r.local_url, lan_url: null, public_url: null, dir: "", error: r.error,
+    mobile: local?.mobile, version: r.version, r };
+}
+function paintBar() {
+  const bar = $("srvbar"); if (!bar) return;
+  const dot = (cls) => `<span class="dot ${cls}"></span>`;
+  const chip = (id, icon, name, cls) => `<button class="srv${(target || "") === id ? " on" : ""}" onclick="setTarget('${esc(id)}')" title="${esc(name)}">${icon}<span class="n">${esc(name)}</span>${dot(cls)}</button>`;
+  const h = chip("", IC.device, t("This device"), local?.running ? "on" : local?.error ? "err" : "")
+    + remotes.map((r) => chip(r.id, IC.server, r.name, r.state === "connected" ? "on" : r.state === "connecting" ? "wait" : r.state === "error" ? "err" : "")).join("")
+    + `<button class="srv add" onclick="openRemote('')">${IC.plus}<span class="n">${t("Add a server")}</span></button>`;
+  if (bar.dataset.h !== h) { bar.dataset.h = h; bar.innerHTML = h; }
+}
+async function setTarget(id, quiet) {
+  if ((target || "") === id && !quiet) { if (id) { const r = remotes.find((x) => x.id === id); if (r && r.state !== "connected") connectRemote(true); } return; }
+  target = id; try { localStorage.setItem("aqs.target", id); } catch {}
+  stats = null; fed = null; hostAt = 0; rupd = null; wasRunning = null;
+  if (quiet) return;
+  st = id ? remoteSt(remotes.find((r) => r.id === id)) : local;
+  render();
+  if (id) { const r = remotes.find((x) => x.id === id); if (r && r.state !== "connected") await connectRemote(true); }
+  await poll(true); render();
+}
+async function connectRemote(on) {
+  const r = remotes.find((x) => x.id === target); if (!r) return;
+  if (!on) { remotes = await invoke("remote_disconnect", { id: r.id }).catch(() => remotes); await poll(true); render(); return; }
+  if (!r.has_secret) return openRemote(r.id, true);
+  busy = true; r.state = "connecting"; st = remoteSt(r); paintAll(); paintBar();
+  try { await invoke("remote_connect", { id: r.id }); } catch (e) { toast(errText(e)); }
+  busy = false;
+  await poll(true); render();
+}
+// Add / change a remote server. `ask`: only the password is missing.
+function openRemote(id, ask) {
+  const r = remotes.find((x) => x.id === id) || { id: "", name: "", host: "", ssh_port: 22, user: "root", auth: "password", server_port: 0, remembered: false, has_token: false };
+  const key = r.auth === "key";
+  modal(`<h3><span>${t(id ? (ask ? "Connect to {n}" : "Server {n}") : "Add a server", { n: esc(r.name) })}</span><button class="ghost mini" onclick="closeModal()">${IC.x}</button></h3>
+    ${id ? "" : `<div class="note">${t("remoteIntro")}</div>`}
+    <div ${ask ? "hidden" : ""} style="display:flex;flex-direction:column;gap:10px">
+      <label class="f">${t("Name (optional)")}<input type="text" id="rName" value="${esc(r.name && id ? r.name : "")}" placeholder="${t("My VPS")}"></label>
+      <div class="row"><label class="f" style="flex:3">${t("Address (IP or name)")}<input type="text" id="rHost" value="${esc(r.host)}" placeholder="203.0.113.5" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
+        <label class="f" style="max-width:100px">${t("SSH port")}<input type="number" id="rPort" value="${r.ssh_port || 22}" min="1" max="65535"></label></div>
+      <label class="f">${t("Login")}<input type="text" id="rUser" value="${esc(r.user)}" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
+      <div class="seg" id="rAuth"><button data-a="password" class="${key ? "" : "on"}" onclick="pickAuth('password')">${t("Password")}</button><button data-a="key" class="${key ? "on" : ""}" onclick="pickAuth('key')">${t("Private key")}</button></div>
+    </div>
+    <label class="f" id="rPassL" ${key ? "hidden" : ""}>${t("Password")}<input type="password" id="rPass" autocomplete="new-password" placeholder="${r.has_secret && !ask ? t("unchanged") : ""}"></label>
+    <div id="rKeyL" ${key ? "" : "hidden"} style="display:flex;flex-direction:column;gap:8px">
+      <label class="f">${t("Private key (OpenSSH)")}<textarea id="rKey" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" spellcheck="false">${""}</textarea></label>
+      <div class="row"><button class="mini" onclick="$('rKeyFile').click()">${t("From a file…")}</button><input type="file" id="rKeyFile" hidden onchange="readKey(this.files)">
+        <label class="f" style="flex:1">${t("Key passphrase (if any)")}<input type="password" id="rPhrase" autocomplete="new-password"></label></div>
+    </div>
+    <label class="chk"><input type="checkbox" id="rRemember" ${r.remembered || !id ? "checked" : ""}> <span>${t("Remember on this device")}</span></label>
+    <details ${ask ? "hidden" : ""} ${r.server_port || r.has_token ? "open" : ""}><summary>${t("If the panel isn't found by itself")}</summary>
+      <div class="note">${t("remoteManual")}</div>
+      <div class="row"><label class="f" style="max-width:130px">${t("Server port")}<input type="number" id="rSPort" value="${r.server_port || ""}" placeholder="${t("auto")}"></label>
+        <label class="f">${t("Admin token")}<input type="password" id="rTok" placeholder="${r.has_token ? t("unchanged") : t("auto")}" autocomplete="off"></label></div>
+      ${r.has_token ? `<label class="chk"><input type="checkbox" id="rTokClear"> <span>${t("Find the token by itself again")}</span></label>` : ""}
+    </details>
+    <div class="row"><button class="primary" onclick="saveRemote('${esc(r.id)}')">${IC.server}${t(ask ? "Connect" : "Save and connect")}</button>
+      ${id && !ask ? `<button class="danger" onclick="delRemote('${esc(r.id)}')">${t("Remove")}</button>` : ""}<span class="msg" id="rMsg"></span></div>`);
+  setTimeout(() => { const f = ask ? (key ? $("rKey") : $("rPass")) : $("rHost"); f?.focus(); }, 30);
+}
+function pickAuth(a) {
+  for (const b of $("rAuth").children) b.classList.toggle("on", b.dataset.a === a);
+  $("rPassL").hidden = a !== "password"; $("rKeyL").hidden = a !== "key";
+}
+async function readKey(files) { const f = files?.[0]; if (!f) return; if (f.size > 64 * 1024) return setMsg("rMsg", t("That's not a key file."), "err"); $("rKey").value = await f.text(); }
+async function saveRemote(id) {
+  const auth = [...$("rAuth").children].find((b) => b.classList.contains("on"))?.dataset.a || "password";
+  const secret = auth === "key" ? $("rKey").value.trim() : $("rPass").value;
+  const r = { id, name: $("rName").value, host: $("rHost").value.trim(), ssh_port: Number($("rPort").value) || 22, user: $("rUser").value.trim(), auth,
+    secret, passphrase: auth === "key" ? $("rPhrase").value : "", remember: $("rRemember").checked,
+    server_port: Number($("rSPort").value) || 0, token: $("rTok").value.trim(), clear_token: !!$("rTokClear")?.checked };
+  const known = remotes.find((x) => x.id === id);
+  if (!secret && !(known?.has_secret && known.auth === auth)) return setMsg("rMsg", t(auth === "key" ? "Paste the private key." : "Enter the password."), "err");
+  setMsg("rMsg", t("Connecting…"));
+  let nid;
+  try { nid = await invoke("remote_save", { r }); } catch (e) { return setMsg("rMsg", esc(errText(e)), "err"); }
+  remotes = await invoke("remote_list").catch(() => remotes);
+  target = nid; try { localStorage.setItem("aqs.target", nid); } catch {}
+  stats = null; fed = null; hostAt = 0; rupd = null;
+  try { await invoke("remote_connect", { id: nid }); } catch (e) { await poll(true); render(); return setMsg("rMsg", esc(errText(e)), "err"); }
+  closeModal(); await poll(true); render();
+}
+async function delRemote(id) {
+  if (!confirm(t("Remove this server from the list? Nothing changes on the server itself."))) return;
+  try { await invoke("remote_delete", { id }); } catch (e) { return setMsg("rMsg", esc(errText(e)), "err"); }
+  closeModal(); setTarget("", true); await poll(true); render();
+}
+// First start: a server here, or my server somewhere else?
+function pageChoose(el) {
+  el.innerHTML = `<div><h1>${t("Aquamarine Server")}</h1><p class="lead">${t("chooseLead")}</p></div>
+    <div class="card"><button class="choice" onclick="chooseLocal()">${IC.device}<div><b>${t("Run a server on this device")}</b><span>${t("chooseLocal")}</span></div></button>
+      <button class="choice" onclick="openRemote('')">${IC.server}<div><b>${t("My server over SSH")}</b><span>${t("chooseRemote")}</span></div></button></div>`;
+}
+async function chooseLocal() {
+  busy = true; render();
+  try { local = await invoke("choose_mode", { local: true }); } catch (e) { toast(errText(e)); local = await invoke("status").catch(() => local); local.chosen = true; }
+  busy = false; await poll(true); render();
+}
+// Settings of a remote server: the connection, its updates, power, data, clearing.
+let rupd = null;
+async function loadRupd() {
+  try { rupd = await api("/v1/admin/updates"); } catch { rupd = null; }
+  paintRupd();
+}
+function paintRupd() {
+  const box = $("rUpd"); if (!box) return;
+  const u = rupd;
+  const v = esc(u?.version || "");
+  const line = !u ? "…" : !u.managed ? t("It updates together with the Aquamarine Server app there.")
+    : ({ checking: t("Checking for updates…"), latest: t("This is the latest version."), waiting: t("Version {v} is out, its file for this device is still being built.", { v }),
+         downloading: t("Downloading {v}…", { v }) + (u.total ? ` ${Math.floor(u.done * 100 / u.total)}%` : ""), installing: t("Installing — the server will be back in a few seconds…"),
+         error: t("Couldn't check for updates: ") + esc(u.error || "") }[u.state] || "");
+  const h = `<div class="sw" onclick="setRTester()"><div class="t"><b>${t("Tester")}</b><span>${t("testerSub")}</span></div><span class="tog ${u?.tester ? "on" : ""}"></span></div>
+    <div class="note">${t("Version")} ${esc(u?.current || st?.version || "—")} · ${line}</div>
+    <div class="row"><button class="mini" onclick="rCheck()" ${!u?.managed || ["checking", "downloading", "installing"].includes(u?.state) ? "disabled" : ""}>${IC.refresh}${t("Check now")}</button></div>`;
+  if (box.dataset.h !== h) { box.dataset.h = h; box.innerHTML = h; }
+}
+async function setRTester() { try { rupd = await api("/v1/admin/updates", "POST", { tester: !rupd?.tester }); } catch (e) { toast(errText(e)); } paintRupd(); }
+async function rCheck() { try { rupd = await api("/v1/admin/updates", "POST", { check: true }); } catch (e) { toast(errText(e)); } paintRupd(); }
+async function rPower(action) {
+  if (!confirm(t(action === "restart" ? "Restart the server? Everyone reconnects in a few seconds." : "Stop the server? Nobody can connect until it is started again on the machine."))) return;
+  try { await api("/v1/admin/power", "POST", { action }); toast(t(action === "restart" ? "Restarting…" : "Stopped.")); } catch (e) { toast(errText(e)); }
+}
+function pageRemoteSettings(el) {
+  const r = st.r || {};
+  el.innerHTML = `<div><h1>${t("Settings")}</h1><p class="lead">${esc(st.name)}</p></div>
+    <div class="card"><h2><span class="grow">${t("Connection")}</span><button class="mini" onclick="openRemote('${esc(st.id)}')">${IC.edit}${t("Change")}</button></h2>
+      <div class="addr"><span class="k">SSH</span><code>${esc(r.user + "@" + r.host + (r.ssh_port && r.ssh_port !== 22 ? ":" + r.ssh_port : ""))}</code></div>
+      <div class="addr"><span class="k">${t("Host key")}</span><code>${esc(r.fingerprint || "—")}</code></div>
+      <div class="note">${t(r.remembered ? "The password / key is kept on this device." : "The password / key is kept only until the app quits.")}</div>
+      <div class="row">${st.running ? `<button class="mini" onclick="connectRemote(false)">${IC.x}${t("Disconnect")}</button>` : `<button class="mini primary" onclick="connectRemote(true)">${IC.server}${t("Connect")}</button>`}
+        <button class="mini danger" onclick="delRemote('${esc(st.id)}')">${t("Remove")}</button></div></div>
+    ${st.running ? `
+    <div class="card"><h2>${t("Updates")}</h2><div id="rUpd"><div class="note">…</div></div></div>
+    <div class="card"><h2>${t("Server")}</h2><div class="note" id="rDir">…</div>
+      <div class="row"><button class="mini" onclick="rPower('restart')">${IC.refresh}${t("Restart the server")}</button><button class="mini danger" onclick="rPower('stop')">${IC.power}${t("Stop the server")}</button></div></div>
+    <div class="card"><h2>${t("Clear the server")}</h2>
+      <div class="note">${t("wipeNote")}</div>
+      <div class="wipe">${WIPE.map(([k, l, on]) => `<label class="chk${k === "accounts" || k === "people" ? " big" : ""}"><input type="checkbox" id="wp_${k}" ${on ? "checked" : ""} onchange="wipeSync('${k}')"> <span>${t(l)}</span></label>`).join("")}</div>
+      <div class="note">${t("wipeKeeps")}</div>
+      <div class="row"><button class="danger" onclick="doWipe()">${t("Clear…")}</button></div>
+      <span class="msg" id="wipeMsg"></span></div>` : offBox()}`;
+  if (st.running) {
+    wipeSync(); paintRupd(); void loadRupd();
+    api("/v1/admin/datadir").then((d) => { if ($("rDir")) $("rDir").innerHTML = `${t("Data folder")}: <b>${esc(d.path)}</b> · ${human(d.bytes)}`; }).catch(() => {});
+  }
+}
+
+// ======================================================================
 // Polling
 // ======================================================================
 function paintAll() {
   const on = st?.running;
-  if ($("navDot")) { $("navDot").className = "dot" + (on ? " on" : st?.error ? " err" : ""); $("navText").textContent = busy ? t("Starting…") : on ? t("Running") + (stats ? " · " + (stats.online) + " " + t("online") : "") : t("Stopped"); }
+  if ($("navDot")) { $("navDot").className = "dot" + (on ? " on" : st?.error ? " err" : ""); $("navText").textContent = (st?.remote ? st.name + " · " : "") + (busy ? t(st?.remote ? "Connecting…" : "Starting…") : on ? t(st?.remote ? "Connected" : "Running") + (stats ? " · " + (stats.online) + " " + t("online") : "") : t(st?.remote ? "Not connected" : "Stopped")); }
   paintHome(); paintCodes(); paintUpd();
 }
 let wasRunning = null;
 async function poll(force) {
-  try { st = await invoke("status"); } catch (e) { console.warn(e); return; }
+  try { local = await invoke("status"); } catch (e) { console.warn(e); return; }
+  try { remotes = await invoke("remote_list"); } catch { remotes = []; }
+  if (target && !remotes.some((r) => r.id === target)) setTarget("", true);
+  st = target ? remoteSt(remotes.find((r) => r.id === target)) : local;
   try { upd = await invoke("update_status"); } catch {}
   if (st.running) {
     try { stats = await api("/v1/admin/stats"); } catch { stats = null; }
@@ -1200,7 +1490,8 @@ async function poll(force) {
   // The server came up or went down: pages that need it redraw.
   if (wasRunning !== null && wasRunning !== st.running && page !== "home" && page !== "settings") render();
   wasRunning = st.running;
-  paintAll();
+  paintAll(); paintBar();
+  if (st.remote && st.running && page === "settings") void loadRupd();
   if (page === "people") loadPeople();
   if (page === "home") void loadHost();
 }

@@ -102,6 +102,23 @@ pub fn mark_dirty(s: &mut AppState, chat: &str) {
 
 /// Write whatever changed. Cheap when nothing did (a fingerprint per chat,
 /// no serialisation); called every few seconds and on exit.
+/// Write the history now (the app goes to the background — Android may end
+/// it there without a word — or relaunches / updates): the 3-second loop
+/// in lib.rs could lose the last messages.
+#[tauri::command]
+pub fn history_flush(state: tauri::State<'_, std::sync::Mutex<AppState>>) {
+    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    flush(&mut s);
+}
+
+pub fn flush_app(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(st) = app.try_state::<std::sync::Mutex<AppState>>() {
+        let mut s = st.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        flush(&mut s);
+    }
+}
+
 pub fn flush(s: &mut AppState) {
     let mut written = 0usize;
     let ids: Vec<String> = s.chats.keys().cloned().collect();
@@ -171,7 +188,7 @@ mod tests {
         ).unwrap();
         {
             let st = crate::state::AppState::boot(dir.path().to_path_buf()).unwrap();
-            let mut s = st.lock().unwrap();
+            let mut s = st.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             assert_eq!(s.chats[crate::state::SAVED_MESSAGES_ID].messages.len(), 1);
             let mut book = s.chats[crate::state::SAVED_MESSAGES_ID].summary.clone();
             book.id = "alice".into();
@@ -184,7 +201,7 @@ mod tests {
         }
         assert!(!dir.path().join(crate::state::SAVED_MESSAGES_FILE).exists(), "plain JSON should be gone");
         let st = crate::state::AppState::boot(dir.path().to_path_buf()).unwrap();
-        let s = st.lock().unwrap();
+        let s = st.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         assert_eq!(s.chats["alice"].messages.len(), 1);
         assert_eq!(s.chats["alice"].summary.name, "Alice");
         assert_eq!(s.chats[crate::state::SAVED_MESSAGES_ID].messages[0].id, "m-old");
