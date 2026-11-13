@@ -2699,6 +2699,15 @@ impl Directory {
             .unwrap_or_default()
     }
 
+    /// Every person's (name, e-mail) — to find the owner (verify.rs).
+    pub fn accounts_with_email(&self) -> Vec<(String, String)> {
+        let db = self.db.lock().unwrap();
+        let Ok(mut q) = db.prepare("SELECT username, email FROM users WHERE email IS NOT NULL AND email<>'' AND is_bot=0") else { return Vec::new() };
+        q.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map(|rows| rows.flatten().map(|(n, e)| (n, e.trim().to_lowercase())).collect())
+            .unwrap_or_default()
+    }
+
     pub fn email_of(&self, username: &str) -> Option<String> {
         let db = self.db.lock().unwrap();
         db.query_row("SELECT email FROM users WHERE username=?1", rusqlite::params![username.trim().to_lowercase()], |r| r.get::<_, Option<String>>(0))

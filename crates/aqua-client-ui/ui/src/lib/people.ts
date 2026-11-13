@@ -123,7 +123,10 @@ export function refreshPeer(username: string, force = false): Promise<void> {
       // A star counts only if the owner's signature holds for this very ID (src/stars.rs).
       const st = (card.extra as Record<string, unknown> | undefined)?.st;
       const starUid = card.uid || cur?.uid || "";
-      const starKind = st && starUid ? await api.starVerify(starUid, st).catch(() => null) : null;
+      // The card's statement holds up to 8 days; the star relay knows now
+      // (a star taken away goes within minutes). Can't ask it: the card.
+      const cardKind = st && starUid ? await api.starVerify(starUid, st).catch(() => null) : null;
+      const starKind = starUid ? await api.starLive(starUid).catch(() => cardKind) : cardKind;
       let music = cur && cur.music_ver === mv ? (cur.music ?? "") : "";
       if (mv && !music) music = assetUrl(await api.profileMediaPath(username, "music", mv).catch(() => null));
       let avatar = cur && cur.avatar_ver === av ? cur.avatar : "";

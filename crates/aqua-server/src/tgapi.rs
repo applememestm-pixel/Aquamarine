@@ -699,6 +699,40 @@ pub fn init_data(state: &AppState, bot: &str, user: &str, start_param: Option<&s
     (enc, signed)
 }
 
+/// A relay's own bot with a mini app of the relay's own (stars.rs): a key to
+/// sign its initData (made here, never leaves the process — open apps just
+/// reopen after a restart) and its menu button.
+pub(crate) fn set_builtin_app(state: &AppState, bot: &str, text: &str, url: &str) {
+    if !state.tg.webapp_keys.contains_key(bot) {
+        let mut k = [0u8; 32];
+        rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut k);
+        state.tg.webapp_keys.insert(bot.to_string(), webapp_key(&hex::encode(k)));
+    }
+    state.tg.menus.insert(bot.to_string(), json!({ "type": "web_app", "text": text, "web_app": { "url": url } }));
+}
+
+/// The @name of whoever opened `bot`'s mini app, if `init` is the initData
+/// this relay signed for it (and isn't older than a day).
+pub(crate) fn check_init(state: &AppState, bot: &str, init: &str) -> Option<String> {
+    let key = state.tg.webapp_keys.get(bot).map(|k| k.clone())?;
+    let mut fields: Vec<(String, String)> = form_urlencoded::parse(init.as_bytes()).into_owned().collect();
+    let pos = fields.iter().position(|(k, _)| k == "hash")?;
+    let hash = fields.remove(pos).1;
+    fields.sort();
+    let check: String = fields.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("\n");
+    let want = hex::encode(hmac(&key, check.as_bytes()));
+    if want.len() != hash.len() || want.bytes().zip(hash.bytes()).fold(0u8, |a, (x, y)| a | (x ^ y)) != 0 {
+        return None;
+    }
+    let get = |k: &str| fields.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+    let at: i64 = get("auth_date")?.parse().ok()?;
+    if (now() - at).abs() > 86_400 {
+        return None;
+    }
+    let user: Value = serde_json::from_str(&get("user")?).ok()?;
+    user.get("username")?.as_str().map(|u| u.to_lowercase()).filter(|u| !u.is_empty())
+}
+
 /// The bot's menu button, if it set a mini app one.
 pub fn menu_button(state: &AppState, bot: &str) -> Value {
     state.tg.menus.get(bot).map(|m| m.clone()).unwrap_or(json!({ "type": "default" }))

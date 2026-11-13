@@ -1793,7 +1793,7 @@
     botMenu = null;
     if (!id || !isBotChat) return;
     api.webappMenu(id).then((m) => {
-      const menu = m?.type === "web_app" && m.web_app?.url && /^https:\/\//.test(m.web_app.url) ? { text: m.text || tr("Open"), url: m.web_app.url } : null;
+      const menu = m?.type === "web_app" && m.web_app?.url && /^(https:\/\/|aqua:relay\/)/.test(m.web_app.url) ? { text: m.text || tr("Open"), url: m.web_app.url } : null;
       rememberBotMenu(id, menu);
       if ($activeChat?.id === id && menu) botMenu = menu;
     }).catch(() => {});

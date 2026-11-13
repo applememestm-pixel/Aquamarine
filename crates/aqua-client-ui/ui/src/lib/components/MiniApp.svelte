@@ -1,5 +1,6 @@
 <script module lang="ts">
-  import { writable } from "svelte/store";
+  import { writable, get } from "svelte/store";
+  import { info } from "../stores";
   /**
    * Telegram mini apps (bot web apps), the way Telegram Web runs them: the
    * page goes in an iframe with the launch parameters in its #hash, and the
@@ -16,9 +17,16 @@
     startParam?: string;
   }
   export const miniApp = writable<MiniAppOpen | null>(null);
+  /** A relay's own bot (@stars): "aqua:relay/<path>" is a page of my relay. */
+  export const RELAY_APP = "aqua:relay/";
   export function openMiniApp(o: MiniAppOpen) {
     // The relay's @music bot: its "mini app" is the app's own player (lib/music.ts).
     if (o.url.startsWith("aqua:music")) { void import("../music").then((m) => m.openMusic()); return; }
+    if (o.url.startsWith(RELAY_APP)) {
+      const base = get(info)?.server_url?.replace(/\/+$/, "");
+      if (!base) return;
+      o = { ...o, url: `${base}/${o.url.slice(RELAY_APP.length)}` };
+    }
     miniApp.set(o);
   }
 </script>
@@ -28,7 +36,6 @@
   import { api } from "../tauri";
   import { showToast } from "./Toast.svelte";
   import { askConfirm } from "./Confirm.svelte";
-  import { get } from "svelte/store";
 
   interface MainBtn { visible: boolean; active: boolean; text: string; color?: string; textColor?: string; progress: boolean }
   const NO_BTN: MainBtn = { visible: false, active: true, text: "", progress: false };

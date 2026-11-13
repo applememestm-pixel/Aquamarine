@@ -56,21 +56,22 @@ pub fn star_verify(uid: String, star: serde_json::Value) -> Option<u8> {
     check(&uid, &st)
 }
 
-/// My own star, from my relay (which asks the star relay): the statement
-/// to put on my card, or None.
-#[tauri::command]
-pub async fn my_star(state: State<'_, StdMutex<AppState>>) -> Result<Option<Statement>, String> {
+/// The statement for `uid`, asked of my relay (which asks the star relay).
+/// `Ok(None)`: the star relay says there's no star (404). `Err`: it couldn't
+/// be asked — "don't know", not "no star".
+async fn fetch(state: &State<'_, StdMutex<AppState>>, uid: Option<String>) -> Result<Option<Statement>, String> {
     if star_public().is_empty() {
         return Ok(None);
     }
-    let (server, uid) = {
+    let (server, me) = {
         let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match &s.transport {
             Some(t) => (t.server_url().to_string(), t.uid().to_string()),
-            None => return Ok(None),
+            None => return Err("offline".into()),
         }
     };
-    if uid.is_empty() {
+    let uid = uid.unwrap_or(me);
+    if uid.is_empty() || !uid.bytes().all(|b| b.is_ascii_alphanumeric()) {
         return Ok(None);
     }
     let http = aqua_client_core::transport::http_client().map_err(|e| e.to_string())?;
@@ -80,8 +81,6 @@ pub async fn my_star(state: State<'_, StdMutex<AppState>>) -> Result<Option<Stat
         .send()
         .await
         .map_err(|e| e.without_url().to_string())?;
-    // 404: no star. Anything else (the star relay unreachable, 502): don't
-    // know — an error, so the star already on my card stays.
     if r.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
@@ -90,4 +89,18 @@ pub async fn my_star(state: State<'_, StdMutex<AppState>>) -> Result<Option<Stat
     }
     let st: Statement = r.json().await.map_err(|e| e.without_url().to_string())?;
     Ok(check(&uid, &st).map(|_| st))
+}
+
+/// My own star: the statement to put on my card, or None.
+#[tauri::command]
+pub async fn my_star(state: State<'_, StdMutex<AppState>>) -> Result<Option<Statement>, String> {
+    fetch(&state, None).await
+}
+
+/// Someone's star as the star relay has it now (not the statement on their
+/// card, which holds up to 8 days): a star taken away goes at once.
+/// `Err`: couldn't ask — the caller falls back to the card's statement.
+#[tauri::command]
+pub async fn star_live(state: State<'_, StdMutex<AppState>>, uid: String) -> Result<Option<u8>, String> {
+    Ok(fetch(&state, Some(uid)).await?.map(|st| st.kind))
 }

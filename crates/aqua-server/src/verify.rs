@@ -30,6 +30,18 @@ pub fn is_owner(state: &AppState, username: &str) -> bool {
         .is_some_and(|e| hex::encode(Sha256::digest(e.as_bytes())) == OWNER_EMAIL_SHA256)
 }
 
+/// The owner's accounts on this relay (for the bots that ask them things).
+pub fn owner_names(state: &AppState) -> Vec<String> {
+    use sha2::{Digest, Sha256};
+    state
+        .directory
+        .accounts_with_email()
+        .into_iter()
+        .filter(|(_, e)| hex::encode(Sha256::digest(e.as_bytes())) == OWNER_EMAIL_SHA256)
+        .map(|(n, _)| n)
+        .collect()
+}
+
 pub(crate) fn ensure_bot(state: &AppState) {
     let name = bot_name();
     if state.directory.is_bot(&name) {
