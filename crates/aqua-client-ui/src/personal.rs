@@ -140,11 +140,18 @@ pub fn save_temp_file(state: State<'_, StdMutex<AppState>>, name: String, bytes:
         return Err("file too large".into());
     }
     let dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.join("tmp") };
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-    let p = dir.join(format!("{stamp:x}-{}", safe_name(&name)));
+    let p = fresh_tmp(&dir, &name)?;
     std::fs::write(&p, bytes).map_err(|e| e.to_string())?;
     Ok(p.display().to_string())
+}
+
+/// `tmp/<stamp>/<name>`: a folder per file keeps the name itself clean —
+/// it's what the other side sees under a video ("18e7ab…-video-….mp4" before).
+fn fresh_tmp(dir: &std::path::Path, name: &str) -> Result<std::path::PathBuf, String> {
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let d = dir.join(format!("{stamp:x}"));
+    std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+    Ok(d.join(safe_name(name)))
 }
 
 /// A recording written to disk while it's being made (camera video): each
@@ -157,20 +164,16 @@ pub fn temp_append(state: State<'_, StdMutex<AppState>>, request: tauri::ipc::Re
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err("expected raw bytes".into()) };
     let header = |k: &str| request.headers().get(k).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
     let dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.join("tmp") };
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = match header("x-path") {
         p if !p.is_empty() => {
-            // Only a file this made, in tmp/.
+            // Only a file this made: tmp/<stamp>/<name>.
             let p = std::path::PathBuf::from(p);
-            if p.parent() != Some(dir.as_path()) || !p.is_file() {
+            if p.parent().and_then(|d| d.parent()) != Some(dir.as_path()) || !p.is_file() {
                 return Err("not a recording".into());
             }
             p
         }
-        _ => {
-            let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-            dir.join(format!("{stamp:x}-{}", safe_name(&header("x-name"))))
-        }
+        _ => fresh_tmp(&dir, &header("x-name"))?,
     };
     let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path).map_err(|e| e.to_string())?;
     f.write_all(bytes).map_err(|e| e.to_string())?;
