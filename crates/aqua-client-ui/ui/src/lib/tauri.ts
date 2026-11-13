@@ -310,6 +310,7 @@ export const api = {
   accountBoot:        (owner: string | null, store: string): Promise<{ slot: string; store: string | null }> => invoke("account_boot", { owner, store }),
   accountForget:      (slot: string): Promise<void> => invoke("account_forget", { slot }),
   appRelaunch:        (): Promise<void> => invoke("app_relaunch"),
+  historyFlush:       (): Promise<void> => invoke("history_flush"),
   setGpuMode:         (mode: "auto" | "on" | "off"): Promise<void>                     => invoke("set_gpu_mode", { mode }),
   fetchAttachment:    (media: ArticleMedia): Promise<string>                         => invoke("fetch_attachment", { media }),
   allowMediaPreview:  (path: string): Promise<void>                                  => invoke("allow_media_preview", { path }),

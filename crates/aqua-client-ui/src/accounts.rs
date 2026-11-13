@@ -48,7 +48,7 @@ fn active(base: &Path) -> String {
 
 fn set_active(base: &Path, slot: &str) -> Result<(), String> {
     let bytes = serde_json::to_vec(&Pointer { active: slot.to_string() }).map_err(|e| e.to_string())?;
-    std::fs::write(base.join(POINTER), bytes).map_err(|e| e.to_string())
+    crate::fsx::write_atomic(&base.join(POINTER), &bytes).map_err(|e| e.to_string())
 }
 
 /// The data directory of the account the app starts with.
@@ -155,7 +155,7 @@ pub fn account_switch(app: AppHandle, slot: String, store: String) -> Result<Swi
     let dir = dir_of(&base, &target);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     if serde_json::from_str::<serde_json::Value>(&store).is_ok() {
-        let _ = std::fs::write(dir_of(&base, &cur).join(STORE), store.as_bytes());
+        let _ = crate::fsx::write_atomic(&dir_of(&base, &cur).join(STORE), store.as_bytes());
     }
     let back = std::fs::read_to_string(dir.join(STORE)).ok();
     set_active(&base, &target)?;
@@ -175,7 +175,7 @@ pub fn account_boot(app: AppHandle, owner: Option<String>, store: String) -> Res
     match owner {
         Some(o) if o != cur && valid_slot(&o) && dir_of(&base, &o).is_dir() => {
             if serde_json::from_str::<serde_json::Value>(&store).is_ok() {
-                let _ = std::fs::write(dir_of(&base, &o).join(STORE), store.as_bytes());
+                let _ = crate::fsx::write_atomic(&dir_of(&base, &o).join(STORE), store.as_bytes());
             }
             Ok(Switched { store: Some(std::fs::read_to_string(dir_of(&base, &cur).join(STORE)).unwrap_or_else(|_| "{}".into())), slot: cur })
         }
@@ -201,6 +201,9 @@ pub fn account_forget(app: AppHandle, slot: String) -> Result<(), String> {
 /// Start the app over (the account switch takes effect).
 #[tauri::command]
 pub fn app_relaunch(app: AppHandle) {
+    // Nothing of this account may be lost on the way (history is written
+    // every 3 s otherwise).
+    crate::history::flush_app(&app);
     #[cfg(target_os = "android")]
     {
         let _ = app;

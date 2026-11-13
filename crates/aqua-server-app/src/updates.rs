@@ -1,14 +1,14 @@
 //! Updates of the server app itself (1.2.0-8), from GitHub Releases.
 //!
 //! A loop checks 20 s after start and then every 3 hours for the newest
-//! numbered release (`v…`, pre-releases included — the project ships every
-//! PR as one). Its file for this platform is downloaded and checked against
-//! SHA256SUMS.txt; then, with "Update automatically" on (the default):
+//! numbered release (`v…`). Releases are mandatory (1.20.1-6): they always
+//! install. Pre-releases only with "Tester" on. Its file for this platform is
+//! downloaded and checked against SHA256SUMS.txt; then:
 //!   * Windows — the NSIS installer runs silently and starts the new app
 //!     (hidden again if it was in the tray);
 //!   * Linux AppImage — the file is swapped and the new one started;
-//!   * macOS, .deb, Android — can't replace themselves: the window shows
-//!     "Update" and that opens the file / the download.
+//!   * macOS, .deb, Android — can't replace themselves: the window opens
+//!     the file / the download by itself once (and shows "Update").
 //! The server is down only for the seconds the restart takes.
 
 use std::path::PathBuf;
@@ -41,6 +41,11 @@ pub struct UpdState {
 }
 
 static STATE: Mutex<Option<UpdState>> = Mutex::new(None);
+/// Pre-releases too (Settings → Updates → Tester).
+pub static TESTER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+fn tester() -> bool {
+    TESTER.load(std::sync::atomic::Ordering::Relaxed)
+}
 static BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// What `install` will open / run.
 static FILE: Mutex<Option<(PathBuf, String)>> = Mutex::new(None);
@@ -166,6 +171,8 @@ async fn find_web(c: &reqwest::Client) -> Result<Option<Found>, String> {
         .filter_map(|r| r.split('"').next())
         .filter_map(|l| l.rsplit_once("/releases/tag/v").map(|(_, v)| v.to_string()))
         .filter(|v| v.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        // The page doesn't say which are pre-releases: those are "X.Y.Z-N".
+        .filter(|v| tester() || !v.contains('-'))
         .reduce(|a, b| if newer(&b, &a) { b } else { a });
     let Some(version) = best else { return Ok(None) };
     if !newer(&version, cur) {
@@ -219,6 +226,7 @@ async fn pick(c: &reqwest::Client, list: &serde_json::Value) -> Result<Option<Fo
         .into_iter()
         .flatten()
         .filter(|r| !r["draft"].as_bool().unwrap_or(false))
+        .filter(|r| tester() || !r["prerelease"].as_bool().unwrap_or(false))
         .filter_map(|r| Some((r["tag_name"].as_str()?.strip_prefix('v')?.to_string(), r)))
         .filter(|(v, _)| v.chars().next().is_some_and(|c| c.is_ascii_digit()))
         .reduce(|a, b| if newer(&b.0, &a.0) { b } else { a });
@@ -478,12 +486,13 @@ pub fn install_now(app: &AppHandle) -> Result<(), String> {
     }
 }
 
-/// The background loop (started in `setup`).
-pub fn spawn(app: AppHandle, auto: impl Fn(&AppHandle) -> bool + Send + 'static) {
+/// The background loop (started in `setup`). Always installs: updates are
+/// mandatory.
+pub fn spawn(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(20)).await;
         loop {
-            let wait = run_once(&app, auto(&app)).await;
+            let wait = run_once(&app, true).await;
             tokio::time::sleep(wait).await;
         }
     });

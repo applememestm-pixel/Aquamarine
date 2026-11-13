@@ -12,6 +12,7 @@
 //!   switching to the app keeps every account. On a first start it also
 //!   takes over the folder of the old in-app server of the messenger.
 
+mod remote;
 mod updates;
 
 use std::path::{Path, PathBuf};
@@ -37,9 +38,18 @@ struct Conf {
     /// Computers: closing the window keeps the server in the tray.
     #[serde(default = "yes")]
     tray: bool,
-    /// Install new versions of this app by itself (updates.rs).
-    #[serde(default = "yes")]
+    /// Old "Update automatically" switch: read and ignored — updates are
+    /// mandatory since 1.20.1-6.
+    #[serde(default = "yes", skip_serializing)]
+    #[allow(dead_code)]
     auto_update: bool,
+    /// Tester: pre-releases too (updates.rs).
+    #[serde(default)]
+    tester: bool,
+    /// The first start asked "a server on this device, or my server over
+    /// SSH?" (older configs: already answered — they run a server here).
+    #[serde(default = "yes")]
+    chosen: bool,
 }
 
 fn yes() -> bool {
@@ -48,7 +58,7 @@ fn yes() -> bool {
 
 impl Default for Conf {
     fn default() -> Self {
-        Self { port: DEFAULT_PORT, dir: String::new(), run: true, tray: true, auto_update: true }
+        Self { port: DEFAULT_PORT, dir: String::new(), run: true, tray: true, auto_update: true, tester: false, chosen: false }
     }
 }
 
@@ -126,6 +136,8 @@ pub struct Status {
     mobile: bool,
     tray: bool,
     autostart: Option<bool>,
+    /// The first-start question is answered.
+    chosen: bool,
 }
 
 fn status_of(app: &AppHandle) -> Status {
@@ -156,6 +168,7 @@ fn status_of(app: &AppHandle) -> Status {
         mobile: cfg!(mobile),
         tray: c.tray,
         autostart,
+        chosen: c.chosen,
     }
 }
 
@@ -221,7 +234,12 @@ async fn start_inner(app: &AppHandle, port: Option<u16>) -> Result<Status, Strin
     android::keep_alive(true, port);
     c.port = port;
     c.run = true;
+    c.chosen = true;
     save(app, &c);
+    // So this panel can be opened from another device over SSH (remote.rs there).
+    if let Some(t) = RUNNING.lock().ok().and_then(|g| g.as_ref().map(|r| r.token.clone())) {
+        aqua_server::host::write_panel_file(port, &t, &dir);
+    }
     tracing::info!(port, dir = %dir.display(), "Aquamarine Server is running");
     Ok(status_of(app))
 }
@@ -355,6 +373,20 @@ fn set_autostart(app: AppHandle, on: bool) -> Result<Status, String> {
     Ok(status_of(&app))
 }
 
+/// The first-start question: `local` runs a server here; otherwise the
+/// window goes on to "Add a server" (SSH) and nothing starts here.
+#[tauri::command]
+async fn choose_mode(app: AppHandle, local: bool) -> Result<Status, String> {
+    let mut c = load(&app);
+    c.chosen = true;
+    c.run = local;
+    save(&app, &c);
+    if local {
+        return start_inner(&app, None).await;
+    }
+    Ok(status_of(&app))
+}
+
 #[tauri::command]
 fn set_tray(app: AppHandle, on: bool) -> Status {
     let mut c = load(&app);
@@ -366,16 +398,20 @@ fn set_tray(app: AppHandle, on: bool) -> Status {
 
 /// The window's own panel talks to the running relay through this: one call
 /// to `/v1/admin/…` with this run's token. No browser, no web page inside.
+/// `target`: a remote server's id (remote.rs) — through its SSH tunnel.
 #[tauri::command]
-async fn admin(method: String, path: String, body: Option<serde_json::Value>) -> Result<serde_json::Value, String> {
+async fn admin(app: AppHandle, method: String, path: String, body: Option<serde_json::Value>, target: Option<String>) -> Result<serde_json::Value, String> {
     if !path.starts_with("/v1/admin/") || path.contains("..") {
         return Err("not an admin path".into());
     }
-    let (port, token) = RUNNING
-        .lock()
-        .ok()
-        .and_then(|g| g.as_ref().map(|r| (r.port, r.token.clone())))
-        .ok_or("the server isn't running")?;
+    let (port, token) = match target.filter(|t| !t.is_empty()) {
+        Some(id) => remote::admin_target(&app, &id).await?,
+        None => RUNNING
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|r| (r.port, r.token.clone())))
+            .ok_or("the server isn't running")?,
+    };
     let url = format!("http://127.0.0.1:{port}{path}");
     let c = reqwest::Client::builder()
         .no_proxy()
@@ -401,19 +437,25 @@ async fn admin(method: String, path: String, body: Option<serde_json::Value>) ->
 struct UpdateView {
     #[serde(flatten)]
     st: updates::UpdState,
-    auto: bool,
+    tester: bool,
 }
 
 #[tauri::command]
 fn update_status(app: AppHandle) -> UpdateView {
-    UpdateView { st: updates::snapshot(), auto: load(&app).auto_update }
+    UpdateView { st: updates::snapshot(), tester: load(&app).tester }
 }
 
+/// Tester on/off; on → looks for a pre-release right away.
 #[tauri::command]
-fn set_auto_update(app: AppHandle, on: bool) -> UpdateView {
+async fn set_tester(app: AppHandle, on: bool) -> UpdateView {
     let mut c = load(&app);
-    c.auto_update = on;
+    c.tester = on;
     save(&app, &c);
+    updates::TESTER.store(on, std::sync::atomic::Ordering::Relaxed);
+    let a = app.clone();
+    tauri::async_runtime::spawn(async move {
+        updates::run_once(&a, true).await;
+    });
     update_status(app)
 }
 
@@ -560,8 +602,10 @@ pub fn run() {
                     }
                 }
             }
-            updates::spawn(handle.clone(), |a| load(a).auto_update);
-            if c.run {
+            updates::TESTER.store(c.tester, std::sync::atomic::Ordering::Relaxed);
+            updates::spawn(handle.clone());
+            // First start: the window asks first (choose_mode).
+            if c.run && c.chosen {
                 tauri::async_runtime::spawn(async move {
                     if let Err(e) = start_inner(&handle, None).await {
                         tracing::warn!(%e, "the server didn't start");
@@ -578,7 +622,7 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![status, start, stop, set_port, set_dir, pick_dir, set_autostart, set_tray, open_guide, admin, update_status, set_auto_update, update_now, open_notes])
+        .invoke_handler(tauri::generate_handler![status, start, stop, set_port, set_dir, pick_dir, set_autostart, set_tray, open_guide, admin, update_status, set_tester, update_now, open_notes, choose_mode, remote::remote_list, remote::remote_save, remote::remote_delete, remote::remote_connect, remote::remote_disconnect])
         .build(tauri::generate_context!());
     match res {
         Ok(app) => app.run(|_, ev| {

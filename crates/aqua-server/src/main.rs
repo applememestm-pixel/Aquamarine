@@ -33,6 +33,9 @@ async fn main() -> anyhow::Result<()> {
     // Everything the server keeps lives in one folder: find it (or ask on
     // the first start) and work from there.
     let data = aqua_server::datadir::choose_and_enter();
+    // A newer version waiting in the data folder (selfupdate.rs: the binary
+    // itself couldn't be replaced — Docker, root-owned installs): run it.
+    aqua_server::selfupdate::run_newest();
 
     // `aqua-server star-key`: make this relay the one that hands out stars
     // (stars.rs) — once; prints the public key to build into the apps.
@@ -84,6 +87,11 @@ async fn main() -> anyhow::Result<()> {
     let local = format!("http://127.0.0.1:{host_port}");
     let panel = token.as_ref().map(|t| format!("{local}/admin#token={t}"));
     banner(ansi, &addr, host_port, &local, panel.as_deref(), &data);
+    // Where Aquamarine Server finds this panel over SSH (its "Remote server"):
+    // the port and this run's token, readable only by this user.
+    if let Some(t) = token.as_ref() {
+        aqua_server::host::write_panel_file(host_port, t, &data);
+    }
 
     if let (Some(url), true) = (panel.as_ref(), std::env::var("AQUA_OPEN_PANEL").map(|v| v == "1").unwrap_or(false)) {
         open_in_browser(url);
@@ -101,6 +109,14 @@ async fn main() -> anyhow::Result<()> {
     aqua_server::music::spawn_bot(state.clone());
     aqua_server::verify::spawn_bot(state.clone());
     aqua_server::stars::spawn(state.clone());
+    // New releases install by themselves (pre-releases for testers).
+    {
+        let blobs = state.blobs.clone();
+        aqua_server::selfupdate::spawn(move || {
+            let n = blobs.clear_cache();
+            tracing::info!(removed = n, "update: file cache cleared");
+        });
+    }
     // Ctrl+C / closing the console: stop cleanly, then drop the file cache
     // (people's data stays — blobstore::clear_cache).
     let blobs = state.blobs.clone();

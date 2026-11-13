@@ -11,15 +11,13 @@ name: release
 #     (autotag.yml creates the tag when Cargo.toml gets a new version
 #     and starts this workflow on it)
 #                           ("Latest"; the site's download buttons use it);
-#   * a push to main      → the "nightly" pre-release, rebuilt for every
-#     (or a manual run)     platform from the newest commit, so Windows /
-#                           macOS / Android never lag behind Linux.
-# A newer push cancels a nightly build still in progress.
+# No more "nightly" builds from main (1.20.1-6, the owner's call): only
+# numbered releases and pre-releases are built. A manual run has to be
+# started on a v* tag.
 
 on:
   push:
     tags: ["v*"]
-    branches: [main]
   workflow_dispatch:
     inputs:
       prerelease:
@@ -53,6 +51,11 @@ jobs:
     name: release notes
     runs-on: ubuntu-latest
     steps:
+      - name: Only on a v* tag
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          echo "::error::Releases are built from v* tags only (no nightly builds any more)."
+          exit 1
       - uses: actions/checkout@v4
       # Nightly: move the "nightly" tag to this commit and (re)title the
       # pre-release; the build jobs then replace its files.

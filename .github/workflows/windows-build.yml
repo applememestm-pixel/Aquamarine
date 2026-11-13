@@ -1,7 +1,7 @@
 name: windows-build
 
-# Manual only: release.yml now builds Windows (and every other platform) on
-# each push to main and publishes it as the "nightly" pre-release.
+# Manual only: release.yml builds Windows (and every other platform) for
+# every v* tag.
 on:
   workflow_dispatch:
 

@@ -241,3 +241,24 @@ pub fn power(restart: bool, before_exit: impl FnOnce() + Send + 'static) {
         std::process::exit(if restart { 75 } else { 0 });
     });
 }
+
+/// `panel.json` next to `server-data.txt` (`~/.config/aquamarine/` on Linux):
+/// `{port, token, data}` of the running console server, mode 600. Aquamarine
+/// Server's "Remote server" reads it over SSH to open this panel.
+pub fn write_panel_file(port: u16, token: &str, data: &Path) {
+    let Some(dir) = crate::datadir::config_dir() else { return };
+    let _ = std::fs::create_dir_all(&dir);
+    let f = dir.join("panel.json");
+    let body = serde_json::to_vec_pretty(&serde_json::json!({ "port": port, "token": token, "data": data.display().to_string(), "version": env!("CARGO_PKG_VERSION") })).unwrap_or_default();
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let _ = std::fs::remove_file(&f);
+        if let Ok(mut h) = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&f) {
+            let _ = h.write_all(&body);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = std::fs::write(&f, body);
+}

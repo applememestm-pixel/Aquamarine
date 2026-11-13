@@ -63,7 +63,7 @@ fn with_book<R>(app: &AppHandle, f: impl FnOnce(&mut Book) -> R) -> Option<R> {
     let (dir, book) = g.as_mut()?;
     let r = f(book);
     if let Ok(b) = serde_json::to_vec(book) {
-        let _ = std::fs::write(dir.join(FILE), b);
+        let _ = crate::fsx::write_atomic(&dir.join(FILE), &b);
     }
     Some(r)
 }

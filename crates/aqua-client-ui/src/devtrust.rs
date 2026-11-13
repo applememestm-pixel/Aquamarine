@@ -63,7 +63,7 @@ fn load(s: &AppState) -> Trust {
 
 fn save(s: &AppState, t: &Trust) {
     if let Ok(b) = serde_json::to_vec(t) {
-        let _ = std::fs::write(s.data_dir.join(FILE), b);
+        let _ = crate::fsx::write_atomic(&s.data_dir.join(FILE), &b);
     }
 }
 

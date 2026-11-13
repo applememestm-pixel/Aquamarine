@@ -32,6 +32,7 @@ pub mod devlists;
 pub mod relay_host;
 pub mod gallery;
 pub mod accounts;
+pub mod fsx;
 pub mod updates;
 pub mod storage;
 pub mod tray;
@@ -257,6 +258,7 @@ pub fn run() -> Result<()> {
             accounts::account_boot,
             accounts::account_forget,
             accounts::app_relaunch,
+            history::history_flush,
             updates::update_check,
             updates::update_download,
             updates::update_install,

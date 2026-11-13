@@ -152,6 +152,11 @@
 
   onMount(() => {
     initDesktop();
+    // Going to the background: write the history right away — Android may
+    // end the app there, and the 3-second save would lose the last messages.
+    const flushHidden = () => { if (document.visibilityState === "hidden") void api.historyFlush().catch(() => {}); };
+    document.addEventListener("visibilitychange", flushHidden);
+    window.addEventListener("pagehide", flushHidden);
     // Notifications are on by default: ask the system once, on first start.
     try {
       if (!localStorage.getItem("aqua.notifyAsked")) {
@@ -295,6 +300,8 @@
     window.addEventListener("drop", onDrop);
     window.addEventListener("dragover", onDragOver);
     return () => {
+      document.removeEventListener("visibilitychange", flushHidden);
+      window.removeEventListener("pagehide", flushHidden);
       stopIcon();
       stopUpdates();
       stopShortcuts();

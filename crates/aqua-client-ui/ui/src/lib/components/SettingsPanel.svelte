@@ -2698,20 +2698,15 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
       <section class="group">
         <div class="label">{$t("Updates")}</div>
         <div class="info-row"><span class="k">{$t("This build")}</span><span class="v mono">{BUILD.version || "—"}{BUILD_SHORT ? ` · ${BUILD_SHORT}` : ""} · {BUILD.channel}</span></div>
-        <div class="row">
-          <span class="row-label">{$t("Channel")}</span>
-          <SegFit label={$t("Channel")} value={$updatePrefs.channel} onpick={(c) => { updatePrefs.update((p) => ({ ...p, channel: c, skip: undefined })); void checkUpdates(true); }}
-            options={[{ id: "nightly" as const, label: $t("Every build") }, { id: "stable" as const, label: $t("Releases only") }]} />
-        </div>
-        <button class="toggle-row" onclick={() => updatePrefs.update((p) => ({ ...p, auto: !p.auto }))}>
-          <div class="tr-text"><div class="tr-title">{$t("Check for updates")}</div><div class="tr-sub">{$t("On start and every 6 hours; a card offers the new build")}</div></div>
-          <span class="switch" class:on={$updatePrefs.auto}></span>
+        <button class="toggle-row" onclick={() => updatePrefs.update((p) => ({ ...p, tester: !p.tester }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Tester")}</div><div class="tr-sub">{$t("Every new build installs by itself, pre-releases too. Off: releases only — they always install by themselves.")}</div></div>
+          <span class="switch" class:on={$updatePrefs.tester}></span>
         </button>
         <div class="info-row">
           <span class="v">
             {#if $updateState.s === "checking"}{$t("Checking…")}
             {:else if $updateState.s === "none"}{$t("You have the newest build")}
-            {:else if $updateState.s === "available" || $updateState.s === "downloading" || $updateState.s === "installing" || $updateState.s === "permission"}{$t("A new build is available — see the card at the top")}
+            {:else if $updateState.s === "available" || $updateState.s === "downloading" || $updateState.s === "installing" || $updateState.s === "permission"}{$t("A new build is installing — see the card at the top")}
             {:else if $updateState.s === "error"}<span class="upd-err">{$updateState.error}</span>
             {/if}
           </span>

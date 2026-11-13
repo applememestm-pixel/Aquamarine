@@ -89,7 +89,7 @@ fn load(s: &AppState) -> SyncState {
 
 fn save(s: &AppState, st: &SyncState) {
     if let Ok(b) = serde_json::to_vec(st) {
-        let _ = std::fs::write(s.data_dir.join(FILE), b);
+        let _ = crate::fsx::write_atomic(&s.data_dir.join(FILE), &b);
     }
 }
 
