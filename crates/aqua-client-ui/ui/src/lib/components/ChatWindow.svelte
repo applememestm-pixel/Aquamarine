@@ -2317,6 +2317,42 @@
   function openTouchMenu(row: Row, x: number, y: number) {
     menu = { open: true, x, y, row, touch: true };
   }
+  /** The menu must not lie over the message it's for (Telegram): once it's
+   *  drawn and its size is known, it goes under the bubble, or above it when
+   *  there's no room below. Only a bubble taller than the screen keeps it at
+   *  the finger. */
+  let menuEl = $state<HTMLDivElement | null>(null);
+  $effect(() => {
+    const el = menuEl, row = menu.row;
+    if (!menu.open || !el || !row) return;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (!menu.open || menu.row !== row || !el.isConnected) return;
+      const b = document.querySelector(`[data-msg-id="${CSS.escape(row.id)}"] .bubble`) ?? document.querySelector(`[data-msg-id="${CSS.escape(row.id)}"]`);
+      if (!b) return;
+      const r = b.getBoundingClientRect();
+      const h = el.offsetHeight, w = el.offsetWidth;
+      const vv = window.visualViewport;
+      const vh = Math.min(window.innerHeight, vv ? vv.height + vv.offsetTop : Infinity) - 16;
+      const m = el.getBoundingClientRect();
+      if (m.top >= r.bottom - 1 || m.bottom <= r.top + 1) return;   // already clear of it
+      let top: number;
+      if (r.bottom + 6 + h <= vh) top = r.bottom + 6;
+      else if (r.top - 6 - h >= 8) top = r.top - 6 - h;
+      else {
+        // No room for all of it on either side: the bigger side, scrolling
+        // inside — still not over the message (unless it fills the screen).
+        const below = vh - (r.bottom + 6), above = r.top - 6 - 8;
+        const room = Math.max(below, above);
+        if (room < 160) return;
+        el.style.maxHeight = `${room}px`; el.style.overflowY = "auto";
+        top = below >= above ? r.bottom + 6 : 8;
+      }
+      el.style.top = `${top}px`;
+      // Next to the bubble's side, inside the window.
+      const left = Math.min(Math.max(8, menu.touch ? r.left : m.left), window.innerWidth - 8 - w);
+      el.style.left = `${left}px`;
+    }));
+  });
 
   function onMsgClick(row: Row, e?: MouseEvent) {
     // Swallow the click that trails a real drag-select so it doesn't
@@ -4297,7 +4333,7 @@
         <div class="ctx-veil" onclick={closeMenu}></div>
       {/if}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="ctx-menu" class:touch={menu.touch} use:keepOnScreen style={`left:${menu.x}px; top:${menu.y}px`} role="menu" tabindex="-1" onmousedown={(e) => e.stopPropagation()}>
+      <div class="ctx-menu" bind:this={menuEl} class:touch={menu.touch} use:keepOnScreen style={`left:${menu.x}px; top:${menu.y}px`} role="menu" tabindex="-1" onmousedown={(e) => e.stopPropagation()}>
         <div class="ctx-reactions" class:expanded={reactAll}>
           {#if reactAll && $emojiPacks.length}
             <div class="react-tabs">

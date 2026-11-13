@@ -33,6 +33,7 @@ pub mod relay_host;
 pub mod gallery;
 pub mod accounts;
 pub mod fsx;
+pub mod ice;
 pub mod updates;
 pub mod storage;
 pub mod tray;
@@ -180,6 +181,7 @@ pub fn run() -> Result<()> {
             applock::applock_forgot_check,
             stars::star_verify,
             stars::my_star,
+            ice::relay_ice,
             crashreport::report_error,
             crashreport::report_config,
             bgnotify::notify_front,

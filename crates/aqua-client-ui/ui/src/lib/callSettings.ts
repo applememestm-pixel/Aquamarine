@@ -100,6 +100,20 @@ export function patchCallSettings(p: Partial<CallSettings>) {
 
 /** ICE servers: two public STUNs plus the user's TURN relay if configured.
  *  TURN is what makes calls work between two strict NATs (mobile, CGNAT). */
+/** My server's TURN relay (aqua-server turnsrv.rs): without one, calls
+ *  between a phone on mobile data and most home routers never connected. */
+let relayTurn: RTCIceServer | null = null;
+let relayAt = 0;
+export async function refreshRelayIce(force = false): Promise<void> {
+  // Credentials live 12 h: fetched again after 6.
+  if (!force && relayTurn && Date.now() - relayAt < 6 * 3600_000) return;
+  try {
+    const { api } = await import("./tauri");
+    const r = await api.relayIce();
+    if (r) { relayTurn = r; relayAt = Date.now(); }
+  } catch { /* offline: keep the old one */ }
+}
+
 export function iceServersFor(s: CallSettings): RTCIceServer[] {
   const list: RTCIceServer[] = [
     { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
@@ -107,6 +121,9 @@ export function iceServersFor(s: CallSettings): RTCIceServer[] {
   ];
   const urls = s.turnUrl.split(/[\s,]+/).map((u) => u.trim()).filter(Boolean);
   if (urls.length) list.push({ urls, username: s.turnUser || undefined, credential: s.turnPass || undefined });
+  if (relayTurn) list.push(relayTurn);
+  // Look again in the background (the next call gets fresh credentials).
+  void refreshRelayIce();
   return list;
 }
 

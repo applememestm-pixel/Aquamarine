@@ -29,7 +29,7 @@
   import StarMark from "./StarMark.svelte";
   import { keepOnScreen, scrollX } from "../actions";
   import { requestIds } from "../privacy";
-  import { archived, mutedChats, setArchived, setMuted, pinnedChats, togglePin, movePin, MAX_PINS, markedUnread, setMarkedUnread } from "../chatPrefs";
+  import { archived, archiveHidden, mutedChats, setArchived, setMuted, pinnedChats, togglePin, movePin, MAX_PINS, markedUnread, setMarkedUnread } from "../chatPrefs";
   import { folders as allFolders, folderHas, updateFolder, folderTags, FOLDER_COLORS, type Folder, type ChatFacts } from "../folders";
   import { parseJoinLink } from "../groupRules";
   import { groupMap, requestJoinGroup } from "../groups";
@@ -199,6 +199,16 @@
   let archivedChats = $derived($visibleChats.filter((c) => $archived.has(c.id)));
   let archivedUnread = $derived(archivedChats.filter((c) => c.unread > 0 && !$mutedChats.has(c.id)).length);
   $effect(() => { if (showArchive && archivedChats.length === 0) showArchive = false; });
+  /** The archive row can be here at all (not searching, not inside it, "All"). */
+  let archCan = $derived(!$search.trim() && !showRequests && !showArchive && archivedChats.length > 0 && $activeFolder === "all");
+  /** Hidden archive (Telegram): pulled out by dragging the list down at its
+   *  top — `archPull` follows the finger, `archPeek` keeps it out until the
+   *  list is scrolled past it. */
+  let archPeek = $state(false);
+  let archPull = $state(0);
+  const ARCH_H = 72;
+  let archRowH = $derived(!archCan ? 0 : !$archiveHidden || archPeek ? ARCH_H : Math.min(ARCH_H, archPull));
+  let archMenu = $state<{ x: number; y: number } | null>(null);
 
   // ---- Search, like Telegram: tabs, frequent contacts, recent ----
   type SearchTab = "all" | "people" | "groups" | "channels";
@@ -423,29 +433,44 @@
   let storiesEl = $state<HTMLDivElement | null>(null);
   let wheelAcc = 0, wheelT: ReturnType<typeof setTimeout> | null = null;
   function storiesWheel(e: WheelEvent) {
-    if (!storiesHere || !chatsEl || chatsEl.scrollTop > 0) { wheelAcc = 0; return; }
+    const archHid = archCan && $archiveHidden && !archPeek;
+    if ((!storiesHere && !archHid) || !chatsEl || chatsEl.scrollTop > 0) { wheelAcc = 0; return; }
     wheelAcc += e.deltaY;
     if (wheelT) clearTimeout(wheelT);
     wheelT = setTimeout(() => (wheelAcc = 0), 250);
-    if (!storiesOpen && wheelAcc < -60) { storiesOpen = true; wheelAcc = 0; }
+    // Up at the top: the stories first, then the hidden archive.
+    if (storiesHere && !storiesOpen && wheelAcc < -60) { storiesOpen = true; wheelAcc = 0; }
+    else if ((storiesOpen || !storiesHere) && archHid && wheelAcc < -60) { archPeek = true; wheelAcc = 0; }
     else if (storiesOpen && wheelAcc > 40) { storiesOpen = false; wheelAcc = 0; }
   }
   // Telegram's pull: at the list's top the strip comes out with the finger,
   // past half its height it opens on release, otherwise it slides back.
   let pullY: number | null = null;
-  function storiesTouchStart(e: TouchEvent) { if (!storiesOpen) keepStack(); pullY = storiesHere && chatsEl && chatsEl.scrollTop <= 0 ? e.touches[0].clientY : null; }
+  const archHidden = () => archCan && $archiveHidden && !archPeek;
+  function storiesTouchStart(e: TouchEvent) {
+    if (!storiesOpen) keepStack();
+    pullY = (storiesHere || archHidden()) && chatsEl && chatsEl.scrollTop <= 0 ? e.touches[0].clientY : null;
+  }
   function storiesTouchMove(e: TouchEvent) {
     if (pullY == null) return;
     const dy = e.touches[0].clientY - pullY;
-    if (!storiesOpen) {
-      if (dy <= 0) { if (pulling) pull = 0; return; }
+    if (storiesHere && !storiesOpen) {
+      if (dy <= 0) { if (pulling) pull = 0; archPull = 0; return; }
       pulling = true;
       // A little resistance past the full height.
       pull = dy <= ST_H ? dy : ST_H + (dy - ST_H) * 0.25;
-    } else if (dy < -36) { storiesOpen = false; pullY = null; }
+      // Further down: the hidden archive comes out under the stories.
+      if (archHidden()) archPull = Math.max(0, (dy - ST_H - 30) * 0.6);
+    } else if (archHidden() && dy > 0) {
+      archPull = Math.min(ARCH_H + 12, dy * 0.6);
+    } else if (storiesOpen && dy < -36) { storiesOpen = false; pullY = null; archPull = 0; }
   }
   function storiesTouchEnd() {
     pullY = null;
+    if (archPull > 0) {
+      if (archPull > ARCH_H * 0.6) { archPeek = true; try { navigator.vibrate?.(8); } catch { /* none */ } }
+      archPull = 0;
+    }
     if (!pulling) return;
     // Carry on from where the finger left it, open or back.
     animH = pull;
@@ -463,6 +488,12 @@
     // The strip sits above the search now (Telegram), outside the list:
     // scrolling the list down folds it back into the stack.
     if (storiesOpen && chatsEl && chatsEl.scrollTop > 12) storiesOpen = false;
+    // A pulled-out hidden archive goes back once it's scrolled out of sight
+    // (the list keeps its place: the row's height comes off the scroll).
+    if (archPeek && $archiveHidden && chatsEl && chatsEl.scrollTop > ARCH_H + 8) {
+      archPeek = false;
+      chatsEl.scrollTop -= ARCH_H;
+    }
   }
   let stackEl = $state<HTMLButtonElement | null>(null);
   let wrapEl = $state<HTMLDivElement | null>(null);
@@ -1189,8 +1220,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
         {$t("Archived chats")}
       </button>
-    {:else if !$search.trim() && !showRequests && archivedChats.length > 0 && $activeFolder === "all"}
-      <button class="chat-item arch-row" onclick={() => (showArchive = true)} oncontextmenu={(e) => { e.preventDefault(); markAllRead(archivedChats.map((c) => c.id)); }}>
+    {:else if archCan && archRowH > 0}
+      <div class="arch-slot" class:anim={archPull === 0} style:max-height="{archRowH >= ARCH_H ? 120 : archRowH}px">
+      <button class="chat-item arch-row" class:peek={$archiveHidden} onclick={() => { archPeek = false; showArchive = true; }}
+        oncontextmenu={(e) => { e.preventDefault(); archMenu = { x: e.clientX, y: e.clientY }; }}>
         <div class="arch-ic">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9"/><line x1="10" y1="13" x2="14" y2="13"/></svg>
         </div>
@@ -1202,6 +1235,7 @@
           </div>
         </div>
       </button>
+      </div>
     {/if}
     {#if dirResults.length > 0}
       <div class="dir-head">{$t("Found on the server")}</div>
@@ -1368,9 +1402,11 @@
       <div class="fab-slot" class:open={fabOpen}><div class="fab-slot-in">
       {#if fabOpen}
         <div class="fab-panel">
-          {#if fabSel != null}
-            {#key fabSel}<span class="fab-label" style:top="{5 + fabSel * FAB_CELL + FAB_CELL / 2}px">{$t(FAB_ITEMS[fabSel][1])}</span>{/key}
-          {/if}
+          <!-- Every item says what it is (icons alone were guesswork); the one
+               under the finger is lit. -->
+          {#each FAB_ITEMS as [k, label], i (k)}
+            <span class="fab-label" class:sel={fabSel === i} style:top="{5 + i * FAB_CELL + FAB_CELL / 2}px" style:--i={FAB_ITEMS.length - 1 - i}>{$t(label)}</span>
+          {/each}
           <div class="fab-items" role="menu" tabindex="-1" onpointerdown={fabDown} onpointermove={fabMove} onpointerup={fabUp} onpointercancel={() => (fabDrag = null)}>
             <span class="fab-thumb" class:on={fabSel != null} style:transform="translateY({(fabSel ?? 0) * FAB_CELL}px)"></span>
             {#each FAB_ITEMS as [k, label], i (k)}
@@ -1391,6 +1427,20 @@
           <svg class="fab-p" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path class="fab-line" d="M12 20h9"/><path class="fab-pen" d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
         {/if}
       </button>
+    </div>
+  {/if}
+
+  {#if archMenu}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div class="ctx-scrim" onclick={() => (archMenu = null)} oncontextmenu={(e) => { e.preventDefault(); archMenu = null; }}></div>
+    <div class="chat-ctx" use:keepOnScreen style:left="{archMenu.x}px" style:top="{archMenu.y}px" role="menu">
+      {#if archivedUnread > 0}<button onclick={() => { markAllRead(archivedChats.map((c) => c.id)); archMenu = null; }}>{$t("Mark all as read")}</button>{/if}
+      {#if $archiveHidden}
+        <button onclick={() => { archiveHidden.set(false); archPeek = false; archMenu = null; }}>{$t("Pin in the chat list")}</button>
+      {:else}
+        <button onclick={() => { archiveHidden.set(true); archPeek = false; archMenu = null; showToast(tr("The archive is hidden — pull the list down to see it")); }}>{$t("Hide above the list")}</button>
+      {/if}
     </div>
   {/if}
 
@@ -1631,6 +1681,8 @@
   .cn-text { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .muted-ic { display: inline-grid; color: var(--fg-dim); flex-shrink: 0; }
   .muted-ic svg { width: 13px; height: 13px; }
+  .arch-slot { overflow: hidden; flex-shrink: 0; }
+  .arch-slot.anim { transition: max-height .26s cubic-bezier(.22,1,.36,1); }
   .arch-ic {
     width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center;
     background: var(--bg-input); color: var(--fg-muted); border: 1px solid var(--border);
@@ -2048,7 +2100,9 @@
   /* The tab bar slid away while scrolling: the buttons take its place. */
   .fab-wrap { transition: transform .38s cubic-bezier(.22,1,.36,1); }
   :global(html.dock-hidden) .fab-wrap:not(.open) { transform: translateY(64px); }
-  .fab-veil { position: fixed; inset: 0; z-index: 59; background: rgba(0,0,0,.35); animation: fab-veil .2s ease; }
+  /* Dark and blurred enough that the list under the open menu (and the
+     camera circle riding over it) doesn't read as overlapping text. */
+  .fab-veil { position: fixed; inset: 0; z-index: 59; background: rgba(0,0,0,.55); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); animation: fab-veil .2s ease; }
   @keyframes fab-veil { from { opacity: 0; } }
   /* One panel with a slider, like the tab bar's (see fabDown). */
   /* The menu's room grows smoothly, so the camera above glides up instead of jumping. */
@@ -2070,7 +2124,9 @@
   .fab-item.sel { color: var(--accent); transform: scale(1.08); }
   .fab-label { position: absolute; right: calc(100% + 10px); transform: translateY(-50%); white-space: nowrap; padding: 7px 12px;
     border-radius: calc(12px * var(--rk, 1)); background: var(--bg-surface); border: 1px solid var(--border-strong); box-shadow: 0 8px 20px -10px rgba(0,0,0,.7);
-    color: var(--fg); font: 600 14.5px var(--font-ui, inherit); pointer-events: none; animation: fab-label .18s ease both; }
+    color: var(--fg-muted); font: 600 14.5px var(--font-ui, inherit); pointer-events: none; animation: fab-label .22s ease both; animation-delay: calc(var(--i, 0) * 30ms);
+    transition: color .15s ease, border-color .15s ease; }
+  .fab-label.sel { color: var(--fg); border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong)); }
   @keyframes fab-label { from { opacity: 0; transform: translate(8px, -50%); } }
   @keyframes fab-in { from { opacity: 0; transform: translateY(14px) scale(.85); } }
   .bot-open { flex-shrink: 0; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 3px 11px; border-radius: calc(12px * var(--rk, 1));

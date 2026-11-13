@@ -14,8 +14,17 @@ use tauri::State;
 use crate::state::AppState;
 
 /// The owner's public star key (hex). Empty until the owner has made the
-/// key (`aqua-server star-key` on the star relay): then no star shows.
-pub const STAR_PUBLIC: &str = "";
+/// key (the star relay's panel → Stars, or `aqua-server star-key`): then no
+/// star shows. It can also come at build time from the repository variable
+/// `AQUA_STAR_PUBLIC` (release.yml) — a public key, nothing secret.
+pub const STAR_PUBLIC_BUILTIN: &str = "";
+
+fn star_public() -> &'static str {
+    match option_env!("AQUA_STAR_PUBLIC") {
+        Some(k) if k.trim().len() == 64 => k.trim(),
+        _ => STAR_PUBLIC_BUILTIN,
+    }
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Statement {
@@ -31,7 +40,7 @@ fn now() -> u64 {
 
 /// The star kind, if the statement is real, for this ID, and still holds.
 pub fn check(uid: &str, st: &Statement) -> Option<u8> {
-    let pk: [u8; 32] = hex::decode(STAR_PUBLIC).ok()?.try_into().ok()?;
+    let pk: [u8; 32] = hex::decode(star_public()).ok()?.try_into().ok()?;
     let sig: [u8; 64] = hex::decode(&st.sig).ok()?.try_into().ok()?;
     if st.uid != uid || uid.is_empty() || st.exp < now() || st.kind > 8 {
         return None;
@@ -52,7 +61,7 @@ pub fn star_verify(uid: String, star: serde_json::Value) -> Option<u8> {
 /// to put on my card, or None.
 #[tauri::command]
 pub async fn my_star(state: State<'_, StdMutex<AppState>>) -> Result<Option<Statement>, String> {
-    if STAR_PUBLIC.is_empty() {
+    if star_public().is_empty() {
         return Ok(None);
     }
     let (server, uid) = {
@@ -72,8 +81,13 @@ pub async fn my_star(state: State<'_, StdMutex<AppState>>) -> Result<Option<Stat
         .send()
         .await
         .map_err(|e| e.without_url().to_string())?;
-    if !r.status().is_success() {
+    // 404: no star. Anything else (the star relay unreachable, 502): don't
+    // know — an error, so the star already on my card stays.
+    if r.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
+    }
+    if !r.status().is_success() {
+        return Err(format!("stars: HTTP {}", r.status()));
     }
     let st: Statement = r.json().await.map_err(|e| e.without_url().to_string())?;
     Ok(check(&uid, &st).map(|_| st))

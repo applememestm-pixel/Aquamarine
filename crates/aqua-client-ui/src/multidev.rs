@@ -362,18 +362,19 @@ pub async fn fanout(app: &AppHandle, peer: &str, payload: &str, sync: bool) -> R
             }
         }
     }
-    if sync || peer == me {
-        let copy = if peer == me { payload.to_string() } else { wrap_sync(&peer, payload) };
-        to_my_devices(app, &transport, &me, &copy).await;
-        if peer == me {
-            return Ok(());
-        }
+    if peer == me {
+        to_my_devices(app, &transport, &me, payload).await;
+        return Ok(());
     }
     // Presence, typing and read marks never open a session (send_inner):
     // with none yet, nothing goes out and that's as meant — not an error for
     // the UI (it ended up in crash reports as "no session yet" by the
     // hundred), and no reason to fetch their device list again.
     if ok == 0 && opens_no_session(payload) {
+        // Read marks and the like still matter to my other devices.
+        if sync {
+            to_my_devices(app, &transport, &me, &wrap_sync(&peer, payload)).await;
+        }
         return Ok(());
     }
     if ok == 0 && peer != me {
@@ -393,6 +394,12 @@ pub async fn fanout(app: &AppHandle, peer: &str, payload: &str, sync: bool) -> R
         // A device that disappeared: refresh the list next time.
         invalidate(&peer);
         return Err(first_err.unwrap_or_else(|| "no device to send to".into()));
+    }
+    // My other devices get their copy only once it really went out: before,
+    // a send that failed (the UI puts the text back) still showed up there
+    // as sent, and the retry made a second copy.
+    if sync {
+        to_my_devices(app, &transport, &me, &wrap_sync(&peer, payload)).await;
     }
     Ok(())
 }

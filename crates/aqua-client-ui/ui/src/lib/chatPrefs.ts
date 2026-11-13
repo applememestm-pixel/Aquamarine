@@ -25,6 +25,11 @@ function toggleIn(store: typeof archived, id: string, on?: boolean) {
   });
 }
 export const setArchived = (id: string, on?: boolean) => toggleIn(archived, id, on);
+/** Telegram's "Hide above the list": the archive row isn't shown until the
+ *  list is pulled down at its top (the wheel up on a computer). Off: it sits
+ *  pinned above the chats. */
+export const archiveHidden = writable<boolean>((() => { try { return localStorage.getItem("aqua.archiveHidden") === "1"; } catch { return false; } })());
+archiveHidden.subscribe((v) => { try { localStorage.setItem("aqua.archiveHidden", v ? "1" : "0"); } catch { /* ignore */ } });
 export const setMuted = (id: string, on?: boolean) => toggleIn(mutedChats, id, on);
 /** "Mark as unread" (Telegram): a dot on the chat until it's opened again. */
 export const markedUnread = persistedSet("aqua.markedUnread");

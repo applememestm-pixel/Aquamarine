@@ -260,6 +260,10 @@ document.addEventListener("DOMContentLoaded", () => armAll(document.body));
 // ======================================================================
 const RU = /^(ru|uk|be)/i.test(navigator.language || "");
 const RU_DICT = {
+  "Stars": "Звёзды", "starsNote": "Звёзды — отметки, которые даёт только владелец проекта (официальная и уровни Boosty). Ключ есть только на сервере владельца. Создайте его там один раз: открытый ключ встраивается в приложения (переменная репозитория AQUA_STAR_PUBLIC), звёзды выдаёт бот @stars.",
+  "Make the star key": "Создать ключ звёзд", "this server hands them out": "этот сервер их выдаёт",
+  "Make the star key on this server? Only the project owner's server should have it.": "Создать ключ звёзд на этом сервере? Он должен быть только на сервере владельца проекта.",
+  "Done — copy the public key into the repository variable AQUA_STAR_PUBLIC.": "Готово — скопируйте открытый ключ в переменную репозитория AQUA_STAR_PUBLIC.",
   "Connecting…": "Подключаюсь…",
   "Not connected": "Не подключён",
   "Over SSH: {h}": "По SSH: {h}",
@@ -438,6 +442,7 @@ const RU_DICT = {
 };
 const t = (k, vars) => { let s = (RU && RU_DICT[k]) || EN[k] || k; if (vars) for (const [a, b] of Object.entries(vars)) s = s.split("{" + a + "}").join(b); return s; };
 const EN = {
+  starsNote: "Stars are marks only the project owner hands out (the official one and the Boosty levels). Only the owner's server has the key. Make it once there: the public key goes into the apps (repository variable AQUA_STAR_PUBLIC); stars are given by the @stars bot.",
   remoteIntro: "An Aquamarine server on another machine (a VPS, a home PC): the app signs in there over SSH and opens its panel here. The panel is never opened to the internet — everything goes inside SSH.",
   remoteManual: "The app reads the panel's port and token by itself from panel.json on that machine (the running server writes it). In Docker the file is inside the container — then enter the container's port and AQUA_ADMIN_TOKEN.",
   chooseLead: "How will you use it?",
@@ -806,8 +811,24 @@ function pageAccess(el) {
         <label class="f">${t("For whom (optional)")}<input type="text" id="invNote"></label>
         <button class="primary" onclick="newInvite()">${t("Create")}</button></div>
       <span class="msg" id="invMsg"></span>
-      <div class="list" id="invList"><div class="empty">…</div></div></div>`;
-  loadInvites();
+      <div class="list" id="invList"><div class="empty">…</div></div></div>
+    <div class="card"><h2><span class="grow">${t("Stars")}</span><span class="note" id="starHint" style="font-weight:400"></span></h2><div class="note">${t("starsNote")}</div>
+      <div class="addr" id="starKeyRow" hidden><code id="starKey"></code><button class="mini" onclick="copy($('starKey').textContent)">${IC.copy}</button></div>
+      <div class="row"><button class="mini" id="starMake" onclick="makeStarKey()">${t("Make the star key")}</button><span class="msg" id="starMsg"></span></div></div>`;
+  loadInvites(); loadStars();
+}
+async function loadStars() {
+  let s; try { s = await api("/v1/admin/stars"); } catch { return; }
+  if (!$("starKey")) return;
+  $("starKeyRow").hidden = !s.public; $("starKey").textContent = s.public || "";
+  $("starMake").hidden = !!s.has_key;
+  $("starHint").textContent = s.has_key ? `${t("this server hands them out")} · @${s.bot} · ${s.stars}` : "";
+}
+async function makeStarKey() {
+  if (!confirm(t("Make the star key on this server? Only the project owner's server should have it."))) return;
+  try { await api("/v1/admin/stars", "POST", {}); setMsg("starMsg", t("Done — copy the public key into the repository variable AQUA_STAR_PUBLIC."), "ok"); }
+  catch (e) { setMsg("starMsg", esc(errText(e)), "err"); }
+  loadStars();
 }
 async function saveAccess() {
   const allow = ($("allow")?.value || "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean);

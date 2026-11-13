@@ -9,6 +9,7 @@
   import { startNetwork } from "./lib/network";
   import { migrateCustomWallpaper, fitCurrentWallpaper, followWallpaper } from "./lib/theme";
   import { api } from "./lib/tauri";
+  import { refreshRelayIce } from "./lib/callSettings";
   import { bootstrap, activeTab, info, activeId, backToList, connect, quickConnect } from "./lib/stores";
   import { openRegistration, closeRegistration, registrationDismissed, wizardHold } from "./lib/components/RegistrationWizard.svelte";
   import { initTheme, settings } from "./lib/theme";
@@ -155,6 +156,9 @@
     // Going to the background: write the history right away — Android may
     // end the app there, and the 3-second save would lose the last messages.
     const flushHidden = () => { if (document.visibilityState === "hidden") void api.historyFlush().catch(() => {}); };
+    // My server's TURN relay for calls: ready before the first call comes.
+    const iceT = setTimeout(() => void refreshRelayIce(true), 5000);
+    const iceI = setInterval(() => void refreshRelayIce(), 3600_000);
     document.addEventListener("visibilitychange", flushHidden);
     window.addEventListener("pagehide", flushHidden);
     // Notifications are on by default: ask the system once, on first start.
@@ -301,6 +305,7 @@
     window.addEventListener("dragover", onDragOver);
     return () => {
       document.removeEventListener("visibilitychange", flushHidden);
+      clearTimeout(iceT); clearInterval(iceI);
       window.removeEventListener("pagehide", flushHidden);
       stopIcon();
       stopUpdates();

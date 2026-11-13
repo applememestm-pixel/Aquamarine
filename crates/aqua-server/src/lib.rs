@@ -48,6 +48,7 @@ pub mod fedtunnel;
 pub mod tgnet;
 pub mod host;
 pub mod selfupdate;
+pub mod turnsrv;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
 pub use auth::{AuthState, Caller};
@@ -3103,6 +3104,8 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/admin/power", post(admin_power))
         .route("/v1/admin/updates", get(admin_get_updates).post(admin_set_updates))
         .route("/v1/stars/:uid", get(stars::get_star))
+        .route("/v1/ice", get(turnsrv::ice))
+        .route("/v1/admin/stars", get(stars::admin_get).post(stars::admin_make))
         .route("/v1/admin/smtp", get(admin_get_smtp).post(admin_set_smtp))
         .route("/v1/admin/smtp/test", post(admin_test_smtp))
         .route("/v1/admin/telegram", get(packs::admin_get).post(packs::admin_set))
@@ -3232,6 +3235,7 @@ pub async fn serve_embedded(
     ONCE.call_once(|| {
         packs::spawn_default_imports();
         public::spawn(port, everywhere, false);
+        turnsrv::spawn();
     });
     let state = AppState::new();
     state.blobs.spawn_sweeper();
