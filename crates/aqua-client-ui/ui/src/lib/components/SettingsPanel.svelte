@@ -22,6 +22,7 @@
   import { hasWidget } from "../widget";
   import { storiesOff, storyNav, storyArchive, pinnedStories, storyArchiveOpen, myStories } from "../stories";
   import { showAdult } from "../packRules";
+  import { sensitiveBlur, type BlurMode } from "../nsfw";
   import { setStoriesOff } from "../storyFeed";
   import { plugins, pluginsOn, installPlugin, removePlugin, togglePlugin, EXAMPLE_PLUGIN, PLUGIN_CATS, pluginCategory, type PluginCat } from "../plugins";
   import { musicStatus, refreshMusic, openMusic } from "../music";
@@ -1809,7 +1810,13 @@
         {/if}
       </section>
       <section class="group">
-        <div class="label">{$t("Stickers")}</div>
+        <div class="label">{$t("Sensitive content")}</div>
+        <div class="row">
+          <span class="row-label">{$t("Blur explicit photos and stickers")}</span>
+          <Select class="sel" value={$sensitiveBlur} options={[{ value: "strangers", label: $t("From people not in my contacts") }, { value: "all", label: $t("From everyone") }, { value: "off", label: $t("Don't blur") }]}
+            onchange={(v) => sensitiveBlur.set(v as BlurMode)} />
+        </div>
+        <div class="foot-note">{$t("Pictures are checked on this device — nothing is sent anywhere. A blurred one opens with a tap.")}</div>
         <button class="toggle-row" onclick={() => showAdult.update((v) => !v)}>
           <div class="tr-text"><div class="tr-title">{$t("Show 18+ content")}</div>
             <div class="tr-sub">{$t("Off: 18+ sticker packs (marked by your server) are hidden, and their stickers in chats are blurred until tapped.")}</div></div>

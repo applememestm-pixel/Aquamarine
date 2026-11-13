@@ -147,6 +147,7 @@
 
   import { contacts, getContact } from "../contacts";
   import { stickerVerdict } from "../packRules";
+  import { sensitiveBlur, nsfwOf } from "../nsfw";
   import type { ChatMessage, Group } from "../types";
 
   // Inline media now streams straight from disk via Tauri's asset
@@ -2295,8 +2296,17 @@
   const selected = new SvelteSet<string>();
   /** GIFs the user started while "Autoplay GIFs" is off. */
   const gifPlaying = new SvelteSet<string>();
-  /** 18+ stickers opened with a tap (packRules.ts — the filter is on). */
+  /** 18+ stickers / explicit pictures opened with a tap (packRules.ts, nsfw.ts). */
   const adultShown = new SvelteSet<string>();
+  /** Cover this incoming picture? The detector's verdict (nsfw.ts), for
+   *  everyone or only people not in my contacts, as set; while it's still
+   *  looking (a fraction of a second, once per file) it stays covered. */
+  function coverMedia(m: Row, path: string | null | undefined): boolean {
+    if (!path || m.outgoing || adultShown.has(m.id) || $sensitiveBlur === "off") return false;
+    if ($activeChat?.id === "__saved__") return false;
+    if ($sensitiveBlur === "strangers" && $contacts[whoOf(m)]) return false;
+    return $nsfwOf(path) !== "clean";
+  }
   // Custom (non-Chromium) context menu.
   let menu = $state<{ open: boolean; x: number; y: number; row: Row | null; touch?: boolean }>({ open: false, x: 0, y: 0, row: null });
 
@@ -3973,7 +3983,7 @@
                     {#if verdict === "gone"}
                       <!-- The relay's admin removed this sticker / banned its pack. -->
                       <div class="sticker-gone">{$t("Sticker removed by the server")}</div>
-                    {:else if verdict === "adult" && !adultShown.has(m.id)}
+                    {:else if (verdict === "adult" && !adultShown.has(m.id)) || (verdict === "ok" && url && coverMedia(m, content.saved_at))}
                       <button class="sticker-btn sticker-18" title={$t("18+ — tap to show")} onclick={() => adultShown.add(m.id)}>
                         {#if url}<span class="sticker-img blur18"><AnimatedMedia src={url} mime={stickerMime(content)} alt="" play="never" /></span>{:else}<span class="sticker-placeholder"></span>{/if}
                         <span class="b18">18+</span>
@@ -3995,7 +4005,14 @@
                   </div>
                 {:else if rk === "gif" || rk === "image"}
                   <div class="bubble media-bubble">
-                    {#if url}
+                    {#if url && coverMedia(m, content.saved_at)}
+                      <!-- Explicit (or still being looked at): blurred until tapped. -->
+                      <button class="media-img-btn media-18" onclick={() => { if ($nsfwOf(content.saved_at) !== "pending") adultShown.add(m.id); }}
+                        title={$t("Sensitive content — tap to show")}>
+                        <img class="media-img" src={url} alt="" />
+                        {#if $nsfwOf(content.saved_at) === "explicit"}<span class="m18"><b>18+</b><small>{$t("Sensitive content — tap to show")}</small></span>{/if}
+                      </button>
+                    {:else if url}
                       {#if rk === "gif" && !$power.gifs && !gifPlaying.has(m.id)}
                         <!-- Autoplay off: a still frame until clicked. -->
                         <button class="media-img-btn gif-still" onclick={() => gifPlaying.add(m.id)} title={$t("Play GIF")}>
@@ -5540,6 +5557,12 @@
     pointer-events: none;
     filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.35));
   }
+  .media-18 { position: relative; overflow: hidden; min-width: 200px; min-height: 150px; background: var(--bg-input); }
+  .media-18 .media-img { filter: blur(32px) saturate(.7); transform: scale(1.1); }
+  .media-18 .m18 { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+    color: #fff; text-shadow: 0 1px 6px rgba(0,0,0,.75); text-align: center; padding: 8px; }
+  .media-18 .m18 b { font: 800 18px var(--font-ui, inherit); }
+  .media-18 .m18 small { font-size: 12px; opacity: .9; }
   .sticker-18 { position: relative; }
   .sticker-18 .blur18 { filter: blur(18px) saturate(.6); }
   .sticker-18 .b18 { position: absolute; inset: 0; display: grid; place-items: center; font: 800 15px var(--font-ui, inherit); color: #fff; text-shadow: 0 1px 6px rgba(0,0,0,.7); }

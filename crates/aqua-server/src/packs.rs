@@ -62,6 +62,88 @@ pub struct Manifest {
     /// the 18+ filter on hide the pack and blur its stickers in chats.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub adult: bool,
+    /// What the image detector found in it (`scan`), for revision `rev`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan: Option<Scan>,
+}
+
+/// The detector's look at a pack (aqua-nsfw): how many stickers it could
+/// read (static ones — .tgs / .webm are skipped) and how many are explicit.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Scan {
+    pub rev: u64,
+    pub checked: u32,
+    pub explicit: u32,
+}
+
+impl Scan {
+    /// 18+ by the pictures: two explicit stickers, or one in a pack this small.
+    pub fn adult(&self) -> bool {
+        self.explicit >= 2 || (self.explicit >= 1 && self.checked <= 4)
+    }
+}
+
+/// At most this many stickers of a pack are looked at (evenly spread):
+/// enough to tell, and a 120-sticker pack costs ~2 s of one core, not 8.
+const SCAN_SAMPLE: usize = 32;
+
+/// One scan at a time on the whole relay (it's one core's work): imports
+/// and the start-up pass queue up instead of loading a small home server.
+fn scan_gate() -> &'static tokio::sync::Semaphore {
+    static G: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    G.get_or_init(|| tokio::sync::Semaphore::new(1))
+}
+
+/// Look at a pack's stickers with the detector, unless this revision was
+/// already looked at. Stores the result in its manifest.
+pub async fn scan(name: &str) {
+    let Some(m) = load_manifest(name) else { return };
+    if m.scan.is_some_and(|s| s.rev == m.rev) {
+        return;
+    }
+    let Ok(_permit) = scan_gate().acquire().await else { return };
+    let dir = pack_dir(&m.name);
+    let files: Vec<String> = m.files.iter().filter(|f| f.mime.starts_with("image/")).map(|f| f.file.clone()).collect();
+    let step = files.len().div_ceil(SCAN_SAMPLE).max(1);
+    let pick: Vec<std::path::PathBuf> = files.iter().step_by(step).map(|f| dir.join(f)).collect();
+    let started = std::time::Instant::now();
+    let (checked, explicit) = tokio::task::spawn_blocking(move || {
+        let (mut c, mut e) = (0u32, 0u32);
+        for p in pick {
+            if let Some(s) = aqua_nsfw::classify_file(&p) {
+                c += 1;
+                e += u32::from(s.explicit());
+            }
+        }
+        (c, e)
+    }).await.unwrap_or((0, 0));
+    let lock = pack_lock(&m.name.to_ascii_lowercase());
+    let _g = lock.lock().await;
+    // Changed while we looked: the next pass looks again.
+    let Some(mut now) = load_manifest(&m.name).filter(|x| x.rev == m.rev) else { return };
+    now.scan = Some(Scan { rev: m.rev, checked, explicit });
+    let _ = std::fs::write(dir.join("manifest.json"), serde_json::to_vec(&now).unwrap_or_default());
+    tracing::info!(pack = %m.name, checked, explicit, ms = started.elapsed().as_millis() as u64, "sticker pack scanned");
+}
+
+/// In the background: [`scan`] for one pack.
+pub fn spawn_scan(name: &str) {
+    let name = name.to_string();
+    tokio::spawn(async move { scan(&name).await });
+}
+
+/// At start: every stored pack not looked at yet (or changed since), one
+/// after another.
+pub fn spawn_scan_all() {
+    tokio::spawn(async {
+        // Let the relay come up first.
+        tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+        for m in list_manifests() {
+            if !m.scan.is_some_and(|s| s.rev == m.rev) {
+                scan(&m.name).await;
+            }
+        }
+    });
 }
 
 // ---------- What the admin decided about packs (aqua-pack-rules.json) -------
@@ -103,8 +185,11 @@ impl Rules {
     fn removed_of(&self, name: &str) -> &[String] {
         self.removed.get(&name.to_ascii_lowercase()).map(Vec::as_slice).unwrap_or(&[])
     }
-    pub fn adult_of(&self, name: &str, title: &str) -> bool {
-        self.adult.get(&name.to_ascii_lowercase()).copied().unwrap_or_else(|| looks_adult(name, title))
+    /// The admin's word; else the detector's (for this revision) or the title.
+    pub fn adult_of(&self, m: &Manifest) -> bool {
+        self.adult.get(&m.name.to_ascii_lowercase()).copied().unwrap_or_else(|| {
+            m.scan.is_some_and(|s| s.rev == m.rev && s.adult()) || looks_adult(&m.name, &m.title)
+        })
     }
 }
 
@@ -122,7 +207,7 @@ fn served(mut m: Manifest, r: &Rules) -> Manifest {
     if !gone.is_empty() {
         m.files.retain(|f| !gone.contains(&f.file) && (f.id.is_empty() || !gone.contains(&f.id)));
     }
-    m.adult = r.adult_of(&m.name, &m.title);
+    m.adult = r.adult_of(&m);
     m
 }
 
@@ -376,11 +461,16 @@ pub async fn sync(name: &str, refresh: bool) -> Result<Manifest, String> {
         o.title == title && o.files.len() == files.len() && o.files.iter().zip(&files).all(|(a, b)| a.file == b.file && a.emoji == b.emoji)
     });
     let rev = old.as_ref().map(|o| o.rev + u64::from(!same)).unwrap_or(1);
-    let m = Manifest { name: real.clone(), title, kind, files, updated: now_secs(), rev, local: false, adult: false };
+    // Same stickers: the detector's last look still holds.
+    let scan = old.as_ref().and_then(|o| o.scan).filter(|s| s.rev == rev);
+    let m = Manifest { name: real.clone(), title, kind, files, updated: now_secs(), rev, local: false, adult: false, scan };
     std::fs::write(tmp.join("manifest.json"), serde_json::to_vec(&m).unwrap_or_default()).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::rename(&tmp, &dir).map_err(|e| e.to_string())?;
     tracing::info!(pack = %m.name, files = m.files.len(), downloaded = fresh, rev = m.rev, ms = started.elapsed().as_millis() as u64, "sticker pack synced");
+    if m.scan.is_none() {
+        spawn_scan(&m.name);
+    }
     Ok(m)
 }
 
@@ -504,6 +594,8 @@ pub struct PackBrief {
     /// 18+ (set or guessed), and whether the admin set it.
     pub adult: bool,
     pub adult_set: Option<bool>,
+    /// The detector's look: (checked, explicit), if it has looked.
+    pub scan: Option<(u32, u32)>,
 }
 
 fn briefs() -> Vec<PackBrief> {
@@ -513,6 +605,7 @@ fn briefs() -> Vec<PackBrief> {
         .map(|m| served(m, &r))
         .map(|m| PackBrief {
             adult_set: r.adult.get(&m.name.to_ascii_lowercase()).copied(),
+            scan: m.scan.filter(|s| s.rev == m.rev).map(|s| (s.checked, s.explicit)),
             adult: m.adult,
             count: m.files.len(),
             preview: m.files.iter().take(4).map(|f| (f.file.clone(), f.mime.clone())).collect(),
@@ -620,11 +713,19 @@ mod tests {
         assert!(looks_adult("MLP", "MLP HENTAI 🦄"));
         assert!(!looks_adult("eltaller47", "eltaller47"));
         let mut r = Rules::default();
-        assert!(r.adult_of("p", "nsfw pack"));
+        let mut pm = Manifest { name: "P".into(), title: "nsfw pack".into(), kind: "regular".into(), updated: 0, rev: 3, local: false, adult: false, scan: None, files: vec![] };
+        assert!(r.adult_of(&pm));
+        pm.title = "cats".into();
+        assert!(!r.adult_of(&pm));
+        pm.scan = Some(Scan { rev: 3, checked: 30, explicit: 4 });
+        assert!(r.adult_of(&pm));
+        pm.scan = Some(Scan { rev: 2, checked: 30, explicit: 4 }); // stale
+        assert!(!r.adult_of(&pm));
+        pm.scan = Some(Scan { rev: 3, checked: 30, explicit: 4 });
         r.adult.insert("p".into(), false);
-        assert!(!r.adult_of("P", "nsfw pack"));
+        assert!(!r.adult_of(&pm));
         r.removed.insert("p".into(), vec!["2.webp".into(), "uid9".into()]);
-        let m = Manifest { name: "P".into(), title: "t".into(), kind: "regular".into(), updated: 0, rev: 1, local: false, adult: false,
+        let m = Manifest { name: "P".into(), title: "t".into(), kind: "regular".into(), updated: 0, rev: 1, local: false, adult: false, scan: None,
             files: ["1.webp", "2.webp", "3.webp"].iter().enumerate().map(|(i, f)| PackFile { file: f.to_string(), emoji: String::new(), mime: String::new(), id: if i == 2 { "uid9".into() } else { String::new() } }).collect() };
         assert_eq!(served(m, &r).files.len(), 1);
     }
@@ -695,6 +796,7 @@ pub async fn admin_upload(State(state): State<AppState>, headers: axum::http::He
                 rev: 0,
                 local: true,
                 adult: false,
+                scan: None,
             }
         }
     };
@@ -723,6 +825,7 @@ pub async fn admin_upload(State(state): State<AppState>, headers: axum::http::He
     m.updated = now_secs();
     let json = serde_json::to_vec_pretty(&m).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     std::fs::write(dir.join("manifest.json"), json).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    spawn_scan(&m.name);
     Ok(Json(m))
 }
 
@@ -801,6 +904,7 @@ pub async fn admin_remove_file(
     m.rev += 1;
     std::fs::write(dir.join("manifest.json"), serde_json::to_vec(&m).unwrap_or_default())
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    spawn_scan(&m.name);
     Ok(Json(served(m, &r)))
 }
 

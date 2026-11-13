@@ -102,6 +102,7 @@ async fn main() -> anyhow::Result<()> {
     aqua_server::public::spawn(host_port, addr.ip().is_unspecified(), ansi);
     // Sticker / emoji packs: fetch the default ones in the background.
     aqua_server::packs::spawn_default_imports();
+    aqua_server::packs::spawn_scan_all();
     // The TURN relay for calls (UDP 3478): calls connect through any NAT.
     aqua_server::turnsrv::spawn();
     let state = AppState::new();

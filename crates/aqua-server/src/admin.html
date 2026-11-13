@@ -577,7 +577,7 @@
         <h2><span data-t="Packs on this server">Packs on this server</span> <span class="hint" id="packsCount"></span></h2>
         <div class="packs" id="packs"></div>
         <div class="note" data-t="packsNote">Apps download a pack once and keep its files on the device; this list is what the server keeps for everyone.</div>
-        <div class="note" data-t="adultNote">Click a pack to remove stickers from it, mark it 18+ or ban it. 18+ packs are hidden for people with the 18+ filter on (on by default), their stickers blurred in chats; «Auto» — by the title.</div>
+        <div class="note" data-t="adultNote">Click a pack to remove stickers from it, mark it 18+ or ban it. 18+ packs are hidden for people with the 18+ filter on (on by default), their stickers blurred in chats; «Auto» — the server looks at the stickers themselves (and the title).</div>
       </div>
       <div class="card rv">
         <h2 data-t="Banned packs">Banned packs</h2>
@@ -793,10 +793,11 @@
     "Banned packs":"Заблокированные наборы","Ban":"Заблокировать","Unban":"Разблокировать","No banned packs.":"Заблокированных наборов нет.",
     "Remove sticker":"Убрать стикер","Remove from server":"Удалить с сервера","Empty":"Пусто","18+: auto":"18+: авто","18+: yes":"18+: да","18+: no":"18+: нет",
     "Remove this pack from the server? People who already have it keep their copy.":"Удалить набор с сервера? У тех, кто уже скачал его, он останется (заблокированный — пропадёт у всех).",
-    "adultNote":"Нажмите на набор, чтобы убрать из него стикеры, отметить 18+ или заблокировать. Наборы 18+ скрыты у тех, у кого включён фильтр 18+ (по умолчанию включён), их стикеры в чатах размыты; «Авто» — по названию.",
+    "adultNote":"Нажмите на набор, чтобы убрать из него стикеры, отметить 18+ или заблокировать. Наборы 18+ скрыты у тех, у кого включён фильтр 18+ (по умолчанию включён), их стикеры в чатах размыты; «Авто» — сервер сам смотрит на стикеры (и на название).",
     "banNote":"Заблокированный набор удаляется с сервера, его нельзя добавить снова, а у всех на этом сервере он пропадает из библиотек и чатов.",
     "banAsk":"Заблокировать набор? Он пропадёт с сервера и у всех людей на нём, добавить его снова будет нельзя.",
     "rmAsk":"Убрать этот стикер у всех? Обновление набора из Telegram его не вернёт.",
+    "scanRes":"Проверка: откровенных {e} из {n}","scanWait":"Проверка картинок — в очереди…",
     "packsNote":"Приложение скачивает набор один раз и хранит его файлы на устройстве; здесь — то, что сервер хранит для всех.",
     "Alone":"Один","In a network":"В сети","Invitation into this network":"Приглашение в эту сеть",
     "Join a network by an invitation":"Вступить в сеть по приглашению","Join":"Вступить","Servers":"Серверы","Search again":"Искать снова",
@@ -812,7 +813,8 @@
     "accounts":"аккаунтов","online":"в сети",
   };
   const T = (s) => (RU && DICT[s]) || ({banAsk:"Ban this pack? It disappears from the server and for everyone on it, and can't be added again.",
-    rmAsk:"Remove this sticker for everyone? A refresh from Telegram won't bring it back.",invQrNote:"Scan it in Aquamarine: sign-in → “Scan QR”, or Settings → Network & proxy → “Scan QR”.",
+    rmAsk:"Remove this sticker for everyone? A refresh from Telegram won't bring it back.",
+    scanRes:"Checked: {e} explicit of {n}", scanWait:"Picture check — queued…",invQrNote:"Scan it in Aquamarine: sign-in → “Scan QR”, or Settings → Network & proxy → “Scan QR”.",
     regOn:"Names are reserved in the network, servers: ",
     qrSecret:"This QR holds the network's secret — show it only to the admin of another relay.", lanOn:"Phones must be on the same Wi-Fi. If they can't connect, allow <b>aqua-server</b> in the firewall.",
     lanOff:"The relay only accepts connections from this PC.", codesMailed:"Codes are e-mailed to users, so they don't show up here. If an e-mail can't be sent, its code appears here.",
@@ -1256,6 +1258,7 @@
     const brief = (lastTg?.list || []).find((p) => p.name === m.name);
     const cur = brief?.adult_set == null ? "auto" : brief.adult_set ? "on" : "off";
     $("pkAct").innerHTML = `<select id="pkAdult">${[["auto", "18+: auto"], ["on", "18+: yes"], ["off", "18+: no"]].map(([k, l]) => `<option value="${k}"${k === cur ? " selected" : ""}>${T(l)}${k === "auto" && m.adult ? " (18+)" : ""}</option>`).join("")}</select>
+      <span class="hint">${m.scan && m.scan.rev === m.rev ? T("scanRes").replace("{e}", m.scan.explicit).replace("{n}", m.scan.checked) : T("scanWait")}</span>
       <span style="flex:1"></span><button class="btn ghost" id="pkDel">${T("Remove from server")}</button><button class="btn danger" id="pkBan">${T("Ban")}</button>`;
     $("pkAdult").addEventListener("change", async (e) => { await packRules(m.name, { adult: e.target.value }); openPack(m.name); });
     $("pkDel").addEventListener("click", async () => {

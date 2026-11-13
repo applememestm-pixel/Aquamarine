@@ -463,7 +463,7 @@
 | `POST /v1/packs/import` | сеанс | `{"link": "https://t.me/addstickers/…"}` → манифест набора. `502` — Telegram недоступен или токен не задан; `403` — набор заблокирован на сервере |
 | `POST /v1/admin/packs/:name/rules` | админ | `{"adult": "on"\|"off"\|"auto", "ban": true\|false}` — отметка 18+ и блокировка (заблокированный набор удаляется и не импортируется снова; `:name` — и набор, которого на сервере нет). Ответ — как `GET /v1/admin/telegram` (с `banned`) |
 | `DELETE /v1/admin/packs/:name/file/:file` | админ | Убрать стикер из набора у всех; обновление из Telegram его не вернёт (`aqua-pack-rules.json`) |
-| `GET /v1/packs/:name` | открытый | Манифест: `{"name", "title", "type", "files": [...], "updated"}`; `type` — `regular`, `custom_emoji` или `mask` |
+| `GET /v1/packs/:name` | открытый | Манифест: `{"name", "title", "type", "files": [...], "updated"}`; `type` — `regular`, `custom_emoji` или `mask`. С 1.20.1-9: `adult` (18+) и `scan` — `{"rev", "checked", "explicit"}`, что нашёл детектор `aqua-nsfw` в стикерах этой ревизии |
 | `POST /v1/packs/:name/refresh` | сеанс | Сверить набор с Telegram и докачать новое |
 | `GET /v1/packs/:name/:file` | открытый | Файл стикера (WebP, WebM или TGS) |
 

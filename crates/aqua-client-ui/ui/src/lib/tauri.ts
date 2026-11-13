@@ -302,6 +302,8 @@ export const api = {
   openSavedFile:      (path: string): Promise<void>                                 => invoke("open_saved_file", { path }),
   uploadAttachment:   (peer_id: string, file_path: string, keep?: boolean, story?: boolean): Promise<ArticleMedia> => invoke("upload_attachment", { peerId: peer_id, filePath: file_path, keep: keep ?? null, story: story ?? null }),
   /** A live story of mine whose file the relay lost: put it back (true = it was gone). */
+  /** The on-device detector's look at a local picture (src/nsfw.rs); null: not a picture it reads. */
+  nsfwCheck:          (path: string): Promise<{ explicit: boolean; level: number } | null> => invoke("nsfw_check", { path }),
   restoreStoryFile:   (media: ArticleMedia, local?: string): Promise<boolean>      => invoke("restore_story_file", { media, local: local ?? null }),
   prepareBannerVideo: (path: string): Promise<string>                                  => invoke("prepare_banner_video", { path }),
   gpuStatus:          (): Promise<GpuStatus> => invoke("gpu_status"),

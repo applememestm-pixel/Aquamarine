@@ -3281,6 +3281,7 @@ pub async fn serve_embedded(
     let everywhere = listener.local_addr().map(|a| a.ip().is_unspecified()).unwrap_or(false);
     ONCE.call_once(|| {
         packs::spawn_default_imports();
+        packs::spawn_scan_all();
         public::spawn(port, everywhere, false);
         turnsrv::spawn();
     });

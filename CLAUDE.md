@@ -26,6 +26,7 @@
 - `crates/aqua-core` — протокол; `crates/aqua-client-core` — транспорт/хранилище.
 - `crates/aqua-client-ui` — мессенджер (отдельный workspace): Rust `src/`, Svelte `ui/src/lib`.
 - `crates/aqua-server` — ретранслятор; `crates/aqua-server-app` — его приложение (отдельный workspace).
+- `crates/aqua-nsfw` — детектор 18+ (сервер и клиент). `model/aqnsfw.bin` — только из `tools/nsfw_convert.py` (тест сверяет с эталоном; после пересборки обновить `REFERENCE` через `--pattern`).
 
 ## Ловушки
 - Новый формат сообщения → `compat.ts::KNOWN`. Служебная приставка → `commands.rs::is_control_text`.

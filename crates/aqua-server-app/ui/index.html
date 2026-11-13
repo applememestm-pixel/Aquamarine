@@ -443,8 +443,9 @@ const RU_DICT = {
   "banNote": "Заблокированный набор удаляется с сервера, его нельзя добавить снова, а у всех на этом сервере он пропадает из библиотек и чатов.",
   "banAsk": "Заблокировать набор? Он пропадёт с сервера и у всех людей на нём, добавить его снова будет нельзя.",
   "rmAsk": "Убрать этот стикер у всех? Обновление набора из Telegram его не вернёт.",
+  "scanRes": "Проверка: откровенных {e} из {n}", "scanWait": "Проверка картинок — в очереди…",
   "18+: auto": "18+: авто", "18+: yes": "18+: да", "18+: no": "18+: нет",
-  "adultNote": "18+ — набор скрыт у тех, у кого включён фильтр 18+ (по умолчанию включён), а его стикеры в чатах размыты. «Авто» — по названию.",
+  "adultNote": "18+ — набор скрыт у тех, у кого включён фильтр 18+ (по умолчанию включён), а его стикеры в чатах размыты. «Авто» — сервер сам смотрит на стикеры (и на название).",
   "Pack link or name": "Ссылка или имя набора", "No banned packs.": "Заблокированных наборов нет.",
   "This computer": "Этот компьютер", "Start with the system": "Запускать вместе с системой", "autoSub": "Сервер работает с момента входа в систему, окно не открывается.",
   "Keep running when the window is closed": "Работать в фоне при закрытом окне", "traySub": "Значок в трее: оттуда окно открывается снова.",
@@ -519,7 +520,8 @@ const EN = {
   banNote: "A banned pack is removed from the server, can't be added again, and disappears from the libraries and chats of everyone on this server.",
   banAsk: "Ban this pack? It disappears from the server and for everyone on it, and can't be added again.",
   rmAsk: "Remove this sticker for everyone? A refresh from Telegram won't bring it back.",
-  adultNote: "18+ — hidden for people with the 18+ filter on (it's on by default), its stickers blurred in chats. «Auto» — by the title.",
+  scanRes: "Checked: {e} explicit of {n}", scanWait: "Picture check — queued…",
+  adultNote: "18+ — hidden for people with the 18+ filter on (it's on by default), its stickers blurred in chats. «Auto» — the server looks at the stickers themselves (and the title).",
   errorsSub: "Failures of the apps of people on this server, and of the server itself. No message text here — only the error, version and device.",
   testerSub: "Install every new build, pre-releases too. Releases always install by themselves: the server is off only for the few seconds of the restart.",
 };
@@ -1213,6 +1215,7 @@ async function openPack(name) {
     $("opAct").innerHTML = (m.local ? `<button onclick="$('opFiles').click()">${t("Add files…")}</button><input type="file" id="opFiles" multiple accept=".png,.webp,.gif,.tgs,.webm" hidden onchange="uploadPack(this.files,'${esc(m.name)}')">` : "")
       + `<select onchange="setRules('${esc(m.name)}',{adult:this.value}).then(()=>openPack('${esc(m.name)}'))">`
       + [["auto", "18+: auto"], ["on", "18+: yes"], ["off", "18+: no"]].map(([k, l]) => `<option value="${k}"${(a === null ? "auto" : a ? "on" : "off") === k ? " selected" : ""}>${t(l)}${k === "auto" ? (m.adult ? " (18+)" : "") : ""}</option>`).join("") + `</select>`
+      + (m.scan && m.scan.rev === m.rev ? `<span class="note">${t("scanRes", { e: m.scan.explicit, n: m.scan.checked })}</span>` : `<span class="note">${t("scanWait")}</span>`)
       + `<span class="grow"></span><button class="danger" onclick="delPack('${esc(m.name)}')">${t("Remove from server")}</button><button class="danger" onclick="banPack('${esc(m.name)}')">${t("Ban")}</button>`;
   } catch (e) { $("opGrid").innerHTML = `<div class="empty">${esc(errText(e))}</div>`; }
 }

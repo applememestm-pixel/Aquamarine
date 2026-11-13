@@ -7,6 +7,7 @@ description = "Aquamarine signaling / relay server (WebSocket, HTTP prekey direc
 
 [dependencies]
 aqua-core = { path = "../aqua-core" }
+aqua-nsfw = { path = "../aqua-nsfw" }
 
 tokio               = { workspace = true }
 axum                = { workspace = true, features = ["multipart"] }

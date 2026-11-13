@@ -1,0 +1,11 @@
+[package]
+name        = "aqua-nsfw"
+version     = { workspace = true }
+edition     = { workspace = true }
+license     = { workspace = true }
+rust-version = { workspace = true }
+description = "Explicit-image detector (NSFWJS MobileNetV2, MIT) on a tiny pure-Rust engine: the relay marks 18+ sticker packs, the app blurs explicit photos on the device."
+
+[dependencies]
+# Decoding only; no resize / encode (the engine resizes itself).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }

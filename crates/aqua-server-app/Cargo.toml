@@ -42,6 +42,10 @@ tauri-plugin-single-instance = "2"   # a second launch shows the running window 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
 
+# The image detector is arithmetic: unoptimised it takes seconds per picture.
+[profile.dev.package.aqua-nsfw]
+opt-level = 3
+
 [profile.release]
 lto = "thin"
 codegen-units = 4
