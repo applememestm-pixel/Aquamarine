@@ -1175,22 +1175,45 @@
       selected.clear();
       text = $drafts[c.id] ?? "";
       prevId = c.id;
+      scrolledUp = false;
       queueMicrotask(() => autoresize());
       queueScrollBottom();
     }
   });
 
-  // Scroll to bottom on new messages.
+  // New messages: follow them while reading at the bottom (not when the
+  // person has scrolled up to read older ones — the ↓ button is there).
   $effect(() => {
     void $activeMessages.length;
-    queueScrollBottom();
+    if (!untrack(() => scrolledUp)) queueScrollBottom();
   });
 
-  function queueScrollBottom() {
-    tick().then(() => {
-      if (messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight;
-    });
+  /** Stay pinned to the bottom for a moment: pictures, videos, link previews
+   *  and stickers take their height after the first paint, and the chat used
+   *  to open in the middle (or near the top). Any scrolling by the person
+   *  lets go at once. */
+  let stickUntil = 0;
+  function pinBottom() {
+    if (messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight;
   }
+  function queueScrollBottom() {
+    stickUntil = performance.now() + 3000;
+    tick().then(pinBottom);
+  }
+  const letGo = () => { stickUntil = 0; };
+  $effect(() => {
+    const el = messagesEl;
+    if (!el) return;
+    const ro = new ResizeObserver(() => { if (performance.now() < stickUntil) pinBottom(); });
+    const watch = () => { for (const c of el.children) ro.observe(c); };
+    watch();
+    const mo = new MutationObserver(() => { watch(); if (performance.now() < stickUntil) pinBottom(); });
+    mo.observe(el, { childList: true });
+    el.addEventListener("wheel", letGo, { passive: true });
+    el.addEventListener("touchstart", letGo, { passive: true });
+    el.addEventListener("keydown", letGo);
+    return () => { ro.disconnect(); mo.disconnect(); el.removeEventListener("wheel", letGo); el.removeEventListener("touchstart", letGo); el.removeEventListener("keydown", letGo); };
+  });
 
   /** Scroll a long way up → show a floating "jump to bottom" button.
    *  Threshold is "more than one viewport away from the bottom". */
@@ -1199,7 +1222,9 @@
     if (!messagesEl) return;
     const dist = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
     scrolledUp = dist > messagesEl.clientHeight * 0.9;
-    if (messagesEl.scrollTop < 600) void showOlder();
+    // Not while it's still settling at the bottom: the first paint starts at
+    // the top, and loading older messages there pulled the chat up.
+    if (performance.now() >= stickUntil && messagesEl.scrollTop < 600) void showOlder();
   }
   function jumpToBottom() {
     if (!messagesEl) return;

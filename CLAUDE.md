@@ -33,7 +33,7 @@
 - Удаление сообщений → `history_sync::tombstone`. Отправка своим устройствам → `multidev::send_to_own`.
 - Нерасшифрованное сообщение не отбрасывать молча — `multidev::repair_session` (копии узнаёт `already_decrypted`). `Closed` старого `Transport` игнорируется (`connect_to_server`), `Drop` гасит его задачи — иначе связь «мигает».
 - Списки — только `Select.svelte`. Скругления — `calc(Npx * var(--rk, 1))`. Окна: крестик `data-x`, панель `data-back` (`lib/back.ts`).
-- «Сложная» настройка → `SettingsPanel.svelte::ADVANCED`. Платформа — `lib/platform.ts` (`IS_MOBILE`/`IS_DESKTOP`), не ширина окна.
+- «Сложная» настройка → `SettingsPanel.svelte::ADVANCED`. Новая/переименованная настройка → `python3 tools/settings_index.py` (поиск по настройкам; CI проверяет). Платформа — `lib/platform.ts` (`IS_MOBILE`/`IS_DESKTOP`), не ширина окна.
 - Цвета — только через переменные темы (`theme.ts`), карточка профиля — `cardStyle.ts::cardLook` + класс `.light`.
 - Сервер: `fed::current()` — полная сеть, `fed::registry()` — любая; соло отдаёт только имена. Метка mesh `VIA` живёт в своей задаче — не `spawn`.
 - Панель сервера: `onclick="…"` работают только через `armAll`; блоки из `poll` перерисовывать только при изменении (`dataset.h`); новая настройка в `aqua-server/src/admin.html` → и сюда.

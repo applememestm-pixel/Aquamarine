@@ -187,6 +187,9 @@ export interface Settings {
   appIcon?: { mode: "default" | "custom" | "theme" | "preset"; preset?: string; custom?: string };
   /** Complete theme (THEMES id); empty = the built-in look. */
   themePreset?: string;
+  /** Telegram's day / night themes: what "Night mode" / "Day mode" switches
+   *  to — the theme last used in that mode (preset, palette, own colours). */
+  dayNight?: Partial<Record<"light" | "dark", { mode: Mode; palette: string; themePreset?: string; customColors?: Record<string, string>; bubbleOut?: string; bubbleIn?: string }>>;
   /** Opacity of block backgrounds, 0.3–1 (wallpaper shows through). */
   alphas?: { bubbles?: number; panels?: number; inputs?: number };
   // --- Chat look & media ---
@@ -667,4 +670,26 @@ export async function migrateCustomWallpaper(save: (name: string, bytes: number[
   } catch (e) {
     console.warn("wallpaper migration", e);
   }
+}
+
+/** The mode the interface shows now (a theme preset decides it when on). */
+export function shownMode(s: Settings): "light" | "dark" {
+  const presetMode = s.themePreset ? THEMES.find((x) => x.id === s.themePreset)?.mode : undefined;
+  return presetMode ?? (s.mode === "auto" ? (window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark") : s.mode);
+}
+
+/** "Night mode" / "Day mode" (Telegram): keep the current look as this
+ *  mode's theme and put on the other mode's — the one last used there, or
+ *  the built-in look in that mode. Before, it only changed `mode`, which a
+ *  chosen theme or own colours override — nothing happened with them. */
+export function toggleDayNight() {
+  settings.update((s) => {
+    const from = shownMode(s), to = from === "light" ? "dark" : "light";
+    const keep = { mode: s.mode, palette: s.palette, themePreset: s.themePreset, customColors: s.customColors, bubbleOut: s.bubbleOut, bubbleIn: s.bubbleIn };
+    const saved = s.dayNight?.[to];
+    // A saved look that isn't of that mode any more (its preset changed) isn't used.
+    const usable = saved && shownMode({ ...s, ...saved }) === to ? saved : null;
+    const next = usable ?? { mode: to, palette: s.palette, themePreset: undefined, customColors: undefined, bubbleOut: undefined, bubbleIn: undefined };
+    return { ...s, ...next, dayNight: { ...s.dayNight, [from]: keep } };
+  });
 }
