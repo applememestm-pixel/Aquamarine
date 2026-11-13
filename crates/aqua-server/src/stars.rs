@@ -62,7 +62,7 @@ struct Star {
 
 impl Star {
     fn live(&self, now: u64) -> bool {
-        self.until.is_none_or(|u| now < u)
+        self.until.map_or(true, |u| now < u)
     }
 }
 
