@@ -155,7 +155,7 @@ class AquaMeshPlugin(private val activity: Activity) : Plugin(activity) {
               // good (it used to fail every second until the app restarted,
               // and nobody nearby could reach us). Listen again once it's on.
               val now = adapter()
-              if (now?.isEnabled == true) {
+              if (now != null && now.isEnabled) {
                 try {
                   val fresh = now.listenUsingInsecureRfcommWithServiceRecord(args.name, UUID.fromString(args.uuid))
                   try { cur.close() } catch (_: IOException) {}
