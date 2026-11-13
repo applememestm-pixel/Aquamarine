@@ -235,6 +235,9 @@ export const api = {
   listWallpapers:     (): Promise<string[]>                                            => invoke("list_wallpapers"),
   deleteWallpaper:    (path: string): Promise<void>                                    => invoke("delete_wallpaper", { path }),
   saveTempFile:       (name: string, bytes: number[]): Promise<string>                  => invoke("save_temp_file", { name, bytes }),
+  /** Raw bytes onto a file in tmp/ (a recording, piece by piece): `name` starts one, `path` appends. */
+  tempAppend:         (bytes: Uint8Array, at: { name?: string; path?: string }): Promise<string> =>
+    invoke("temp_append", bytes, { headers: { "x-name": at.name ?? "", "x-path": at.path ?? "" } }),
   saveConsoleBot:     (path: string): Promise<void>                                    => invoke("save_console_bot", { path }),
   deleteBot:          (username: string): Promise<void>                                => invoke("delete_bot", { username }),
   startChatWith:      (peer_username: string, first_message: string): Promise<ChatSummary> => invoke("start_chat_with", { peerUsername: peer_username, firstMessage: first_message }),
