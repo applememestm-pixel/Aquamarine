@@ -2081,9 +2081,11 @@
   .avatar.story-ring.story-seen { box-shadow: 0 0 0 2px var(--bg-list), 0 0 0 4px var(--border-strong); }
   .avatar.story-ring.story-close { box-shadow: 0 0 0 2px var(--bg-list), 0 0 0 4px #34C759; }
   /* Phones: the pencil (Telegram) above the bottom bar; it unfolds upwards. */
-  .fab-wrap { position: fixed; right: 16px; bottom: calc(92px + var(--sab, env(safe-area-inset-bottom, 0px))); z-index: 60; display: flex; flex-direction: column; align-items: flex-end; gap: 12px; }
+  .fab-wrap { position: fixed; right: 16px; bottom: calc(92px + var(--sab, env(safe-area-inset-bottom, 0px))); z-index: 60; display: flex; flex-direction: column; align-items: center; gap: 12px; }
   :global(body.chat-open) .fab-wrap, :global(body.chat-open) .fab-veil { display: none; }
-  .fab-cam { position: relative; z-index: 1; width: 44px; height: 44px; margin-right: 6px; border-radius: 50%; border: 1px solid var(--border-strong); display: grid; place-items: center; cursor: pointer;
+  /* Camera, menu and pencil share one vertical axis (their centres line up,
+     open or closed — the camera used to sit 5 px off the open menu). */
+  .fab-cam { position: relative; z-index: 1; width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--border-strong); display: grid; place-items: center; cursor: pointer;
     background: linear-gradient(var(--bg-surface), var(--bg-surface)), #0d0f16; color: var(--fg); box-shadow: 0 8px 20px -10px rgba(0,0,0,.6); animation: fab-cam-in .22s cubic-bezier(.2,.9,.3,1.2); }
   .fab-cam svg { width: 21px; height: 21px; }
   @keyframes fab-cam-in { from { transform: scale(.4) translateY(20px); opacity: 0; } }
@@ -2108,8 +2110,8 @@
   /* The menu's room grows smoothly, so the camera above glides up instead of jumping. */
   .fab-slot { display: grid; grid-template-rows: 0fr; margin-top: -12px; transition: grid-template-rows .28s cubic-bezier(.2,.9,.25,1), margin-top .28s cubic-bezier(.2,.9,.25,1); }
   .fab-slot.open { grid-template-rows: 1fr; margin-top: 0; }
-  .fab-slot-in { min-height: 0; overflow: visible; display: flex; justify-content: flex-end; }
-  .fab-panel { position: relative; margin-right: 4px; animation: fab-in .26s cubic-bezier(.22,1.2,.36,1) both; transform-origin: bottom center; }
+  .fab-slot-in { min-height: 0; overflow: visible; display: flex; justify-content: center; }
+  .fab-panel { position: relative; animation: fab-in .26s cubic-bezier(.22,1.2,.36,1) both; transform-origin: bottom center; }
   .fab-items { position: relative; display: flex; flex-direction: column; padding: 5px; border-radius: calc(26px * var(--rk, 1));
     /* Solid, whatever the theme's transparency: the list must not show through. */
     background: linear-gradient(var(--bg-surface), var(--bg-surface)), linear-gradient(var(--bg-shell), var(--bg-shell)), #0d0f16; -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
