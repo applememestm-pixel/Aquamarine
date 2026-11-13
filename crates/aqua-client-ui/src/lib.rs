@@ -224,6 +224,7 @@ pub fn run() -> Result<()> {
             gpu::confirm_dmabuf,
             gpu::restart_app,
             commands::fetch_attachment,
+            commands::restore_story_file,
             commands::allow_media_preview,
             media_server::media_stream_url,
             media_server::probe_media,

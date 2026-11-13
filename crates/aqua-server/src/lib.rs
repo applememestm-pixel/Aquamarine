@@ -886,6 +886,10 @@ struct BlobQuery {
     /// 1 = long-lived (group photo / banner), see `blobstore::KEEP_TTL`.
     #[serde(default)]
     keep: u8,
+    /// 1 = a story's file: kept across restarts for its life (48 h at
+    /// most), see `blobstore::STORY_TTL`. Older relays ignore it.
+    #[serde(default)]
+    story: u8,
     /// A coarse label for the admin panel (see `blobstore::KINDS`).
     #[serde(default)]
     kind: Option<String>,
@@ -910,20 +914,35 @@ async fn upload_blob(
     }
     // Content-addressed: a duplicate just refreshes the file's age.
     let store = state.blobs.clone();
-    let keep = q.keep == 1;
-    if keep && body.len() > blobstore::KEEP_LIMIT {
+    // A story wins over `keep` (apps ask for both so older relays still
+    // keep a small story photo).
+    let shelf = if q.story == 1 { blobstore::Shelf::Story } else if q.keep == 1 { blobstore::Shelf::Keep } else { blobstore::Shelf::Cache };
+    if shelf == blobstore::Shelf::Keep && body.len() > blobstore::KEEP_LIMIT {
         return Err((StatusCode::PAYLOAD_TOO_LARGE, "only files up to 4 MiB can be kept".into()));
     }
     let kind = q.kind.clone();
     tokio::task::spawn_blocking(move || {
-        let r = if keep { store.put_keep(&cid, &body) } else { store.put(&cid, &body) };
-        if let (Ok(()), Some(k)) = (&r, kind) { store.set_kind(&cid, keep, &k); }
+        let r = match shelf {
+            blobstore::Shelf::Story => store.put_story(&cid, &body),
+            blobstore::Shelf::Keep => store.put_keep(&cid, &body),
+            blobstore::Shelf::Cache => store.put(&cid, &body),
+        };
+        if let (Ok(()), Some(k)) = (&r, kind) { store.set_kind(&cid, shelf, &k); }
         r
     })
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `HEAD /v1/blob/:cid`: is it on this relay? Without reading it or asking
+/// the federation — the author's app checks its live stories this way and
+/// uploads the ones a cleared cache took away.
+async fn has_blob(State(state): State<AppState>, Path(cid): Path<String>) -> StatusCode {
+    let store = state.blobs.clone();
+    let here = tokio::task::spawn_blocking(move || store.has(&cid)).await.unwrap_or(false);
+    if here { StatusCode::OK } else { StatusCode::NOT_FOUND }
 }
 
 async fn fetch_blob(
@@ -3232,7 +3251,7 @@ pub fn app(state: AppState) -> Router {
             .layer(DefaultBodyLimit::max(20 * 1024 * 1024)))
         .route(
             "/v1/blob/:cid",
-            post(upload_blob).get(fetch_blob)
+            post(upload_blob).get(fetch_blob).head(has_blob)
                 .layer(DefaultBodyLimit::max(BLOB_LIMIT)),
         )
         // Everything else: the optional website (AQUA_SITE_DIR, see site.rs).

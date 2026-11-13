@@ -2598,6 +2598,7 @@ pub async fn upload_attachment(
     peer_id: String,
     file_path: String,
     keep: Option<bool>,
+    story: Option<bool>,
 ) -> Result<crate::state::ArticleMedia, String> {
     let data_dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.clone() };
     let file_path = if is_uri_pick(&file_path) { materialize_picked(&app, &data_dir, &file_path)? } else { file_path };
@@ -2639,7 +2640,9 @@ pub async fn upload_attachment(
     // Images are group photos / banners: kept by the relay for months.
     // `keep` asks the same for an animated (video) banner.
     let keep = (kind == "image" || keep == Some(true)) && ciphertext.len() <= 4 * 1024 * 1024;
-    transport.upload_blob_kind(&envelope.cid, ciphertext, keep, Some(blob_kind(envelope.category.as_deref(), envelope.mime.as_deref(), &envelope.filename))).await.map_err(|e| format!("upload_blob: {e}"))?;
+    // A story: the relay keeps it across its restarts for the story's life.
+    let story = story == Some(true);
+    transport.upload_blob_full(&envelope.cid, ciphertext, keep, story, Some(blob_kind(envelope.category.as_deref(), envelope.mime.as_deref(), &envelope.filename))).await.map_err(|e| format!("upload_blob: {e}"))?;
     let _ = tokio::fs::write(cache.join(format!("{}.{ext}", envelope.cid)), &bytes).await;
     Ok(crate::state::ArticleMedia {
         kind: kind.into(),
@@ -2652,6 +2655,53 @@ pub async fn upload_attachment(
         poster: None,
         duration: None,
     })
+}
+
+/// One of my live stories: if the relay no longer has its file (its cache
+/// was cleared by a restart or an update, or it's a new relay), encrypt the
+/// file on this device again with the story's own key and nonce — the same
+/// ciphertext, the same CID — and put it back, so the reference everyone
+/// already holds works again. `Ok(true)` = it was missing and is back.
+#[tauri::command]
+pub async fn restore_story_file(
+    state: State<'_, StdMutex<AppState>>,
+    app: AppHandle,
+    media: crate::state::ArticleMedia,
+    local: Option<String>,
+) -> Result<bool, String> {
+    let media = media.sane().ok_or("bad media reference")?;
+    if media.cid.starts_with("local-") { return Ok(false); }
+    let (data_dir, transport) = {
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        (s.data_dir.clone(), s.transport.clone().ok_or("not connected")?)
+    };
+    if transport.has_blob(&media.cid).await.map_err(|e| format!("has_blob: {e}"))? {
+        return Ok(false);
+    }
+    // The plaintext: the copy the upload left in the media cache, or the
+    // file the story was made from.
+    let cache = media_cache_dir(&data_dir);
+    let path = match cached_media(&cache, &media.cid) {
+        Some(p) => p,
+        None => {
+            let l = local.filter(|l| !l.is_empty()).ok_or("the story's file isn't on this device")?;
+            PathBuf::from(if is_uri_pick(&l) { materialize_picked(&app, &data_dir, &l)? } else { l })
+        }
+    };
+    let key: [u8; 32] = URL_SAFE_NO_PAD.decode(&media.key_b64).map_err(|e| format!("bad key: {e}"))?
+        .try_into().map_err(|_| "bad key length".to_string())?;
+    let nonce: [u8; 12] = URL_SAFE_NO_PAD.decode(&media.nonce_b64).map_err(|e| format!("bad nonce: {e}"))?
+        .try_into().map_err(|_| "bad nonce length".to_string())?;
+    let plain = tokio::fs::read(&path).await.map_err(|e| format!("read: {e}"))?;
+    let ciphertext = aqua_core::crypto::aead_encrypt(&key, &nonce, media.name.as_bytes(), &plain)
+        .map_err(|e| format!("encrypt: {e}"))?;
+    if aqua_core::hex_sha256(&ciphertext) != media.cid.to_ascii_lowercase() {
+        return Err("the file on this device has changed".into());
+    }
+    let keep = media.kind == "image" && ciphertext.len() <= 4 * 1024 * 1024;
+    let kind = if media.kind == "video" { "video" } else { "photo" };
+    transport.upload_blob_full(&media.cid, ciphertext, keep, true, Some(kind)).await.map_err(|e| format!("upload_blob: {e}"))?;
+    Ok(true)
 }
 
 /// Let the webview preview a media file the user just picked (for posters

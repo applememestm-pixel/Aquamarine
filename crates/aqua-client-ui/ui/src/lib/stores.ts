@@ -37,6 +37,16 @@ function notifyIncoming(peerId: string, text: string) {
 
 /** Startup info from the backend. */
 export const info = writable<InitInfo | null>(null);
+// Each time the link comes up: my live stories' files back on the relay if
+// a restart / update of it cleared them (stories.ts::healMyStories).
+{
+  let was = false;
+  info.subscribe((i) => {
+    const now = !!i?.connected;
+    if (now && !was) setTimeout(() => { void import("./stories").then((m) => m.healMyStories()).catch(() => {}); }, 3000);
+    was = now;
+  });
+}
 
 /** All chats, in server order. */
 export const chats = writable<ChatSummary[]>([]);

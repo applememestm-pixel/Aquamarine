@@ -27,6 +27,8 @@ on:
 
 permissions:
   contents: write
+  # tools/release_sums_add.sh starts pages.yml (updates.json for the apps).
+  actions: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -215,6 +217,13 @@ jobs:
           overwrite_files: true
           files: dist/*
 
+      # The update can go out now, without waiting for the slowest runner.
+      - name: Checksums of these files
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash tools/release_sums_add.sh "$REL_TAG" dist/*
+
   # ---------------------------------------------------------------- server app
   # Aquamarine Server: the relay as an app of its own (crates/aqua-server-app).
   # A plain HTML page, no npm build.
@@ -296,6 +305,13 @@ jobs:
           make_latest: ${{ (env.NIGHTLY == 'true' || env.PRE == 'true') && 'false' || 'true' }}
           overwrite_files: true
           files: dist/*
+
+      # The update can go out now, without waiting for the slowest runner.
+      - name: Checksums of these files
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash tools/release_sums_add.sh "$REL_TAG" dist/*
 
   server-app-android:
     name: server app (android)
@@ -395,6 +411,13 @@ jobs:
           make_latest: ${{ (env.NIGHTLY == 'true' || env.PRE == 'true') && 'false' || 'true' }}
           overwrite_files: true
           files: dist/*
+
+      # The update can go out now, without waiting for the slowest runner.
+      - name: Checksums of these files
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash tools/release_sums_add.sh "$REL_TAG" dist/*
 
   # ---------------------------------------------------------------- android
   android:
@@ -549,6 +572,13 @@ jobs:
           make_latest: ${{ (env.NIGHTLY == 'true' || env.PRE == 'true') && 'false' || 'true' }}
           overwrite_files: true
           files: dist/*
+
+      # The update can go out now, without waiting for the slowest runner.
+      - name: Checksums of these files
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash tools/release_sums_add.sh "$REL_TAG" dist/*
 
   # ---------------------------------------------------------------- ios
   # Unsigned .ipa for sideloading (AltStore / SideStore / Sideloadly re-sign it
@@ -740,6 +770,13 @@ jobs:
           make_latest: ${{ (env.NIGHTLY == 'true' || env.PRE == 'true') && 'false' || 'true' }}
           overwrite_files: true
           files: dist/*
+
+      # The update can go out now, without waiting for the slowest runner.
+      - name: Checksums of these files
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash tools/release_sums_add.sh "$REL_TAG" dist/*
 
   # ---------------------------------------------------------------- relay image
   # The relay as a container, from the Linux binaries above (no compiling

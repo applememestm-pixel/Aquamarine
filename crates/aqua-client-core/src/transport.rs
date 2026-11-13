@@ -653,8 +653,15 @@ impl Transport {
     /// "sticker", "gif", "emoji", "voice", "audio", "file") — the content
     /// itself stays encrypted. Older relays ignore it.
     pub async fn upload_blob_kind(&self, cid: &str, bytes: Vec<u8>, keep: bool, kind: Option<&str>) -> Result<(), TransportError> {
+        self.upload_blob_full(cid, bytes, keep, false, kind).await
+    }
+
+    /// `story`: a story's file — the relay keeps it across restarts for
+    /// the story's life (older relays ignore it; `keep` still applies there).
+    pub async fn upload_blob_full(&self, cid: &str, bytes: Vec<u8>, keep: bool, story: bool, kind: Option<&str>) -> Result<(), TransportError> {
         let mut q = Vec::new();
         if keep { q.push("keep=1".to_string()); }
+        if story { q.push("story=1".to_string()); }
         if let Some(k) = kind.filter(|k| k.bytes().all(|b| b.is_ascii_lowercase())) { q.push(format!("kind={k}")); }
         let url = format!("{}/v1/blob/{}{}{}", self.server_url.trim_end_matches('/'), cid, if q.is_empty() { "" } else { "?" }, q.join("&"));
         let r = self.http.post(&url).bearer_auth(self.bearer().await?).body(bytes).send().await?;
@@ -712,6 +719,16 @@ impl Transport {
 
     /// Download an encrypted blob by CID. The caller is expected to
     /// re-verify the SHA-256 before trusting the bytes.
+    /// Is the blob on this relay (`HEAD`)? Relays before 1.20.1-9 answer it
+    /// with their GET handler minus the body (the federation asked too).
+    pub async fn has_blob(&self, cid: &str) -> Result<bool, TransportError> {
+        let url = format!("{}/v1/blob/{}", self.server_url.trim_end_matches('/'), cid);
+        let st = self.http.head(&url).send().await?.status();
+        if st.is_success() { Ok(true) }
+        else if st.as_u16() == 404 { Ok(false) }
+        else { Err(TransportError::Server { status: st.as_u16(), body: String::new() }) }
+    }
+
     pub async fn download_blob(&self, cid: &str) -> Result<Vec<u8>, TransportError> {
         let url = format!("{}/v1/blob/{}", self.server_url.trim_end_matches('/'), cid);
         let r = self.http.get(&url).send().await?;

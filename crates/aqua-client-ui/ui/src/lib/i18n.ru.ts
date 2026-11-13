@@ -2730,6 +2730,7 @@ export const RU: Record<string, string> = {
   "Story posted — it's visible for 24 hours": "История опубликована — её видно 24 часа",
   "Could not post the story": "Не удалось опубликовать историю",
   "Could not load the story": "Не удалось загрузить историю",
+  "The file isn't on the server right now — it comes back when the author is online.": "Файла сейчас нет на сервере — он вернётся, когда автор будет в сети.",
   "Delete this story?": "Удалить эту историю?",
   "just now": "только что",
   "{n} min ago": "{n} мин назад",

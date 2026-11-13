@@ -182,7 +182,7 @@ export interface PostOptions { caption?: string; aud?: StoryAudience; sel?: stri
 
 /** Post a photo / video as a story; resolves when it's up. */
 export async function postStory(path: string, opts: PostOptions = {}): Promise<void> {
-  const media = await api.uploadAttachment("__story__", path, false);
+  const media = await api.uploadAttachment("__story__", path, false, true);
   if (media.kind !== "image" && media.kind !== "video") throw new Error("a story is a photo or a video");
   const at = Date.now();
   const hours = [6, 12, 24, 48].includes(Number(opts.hours)) ? Number(opts.hours) : 24;
@@ -195,6 +195,23 @@ export async function postStory(path: string, opts: PostOptions = {}): Promise<v
   myStories.update((l) => [...fresh(l), s].slice(-MAX_STORIES));
   const { broadcastPresence } = await import("./presence");
   broadcastPresence();
+}
+
+/** Connected: my live stories' files back on the relay if it lost them
+ *  (its file cache goes when it restarts or updates itself; relays from
+ *  1.20.1-9 keep story files, older ones don't). Same key, same CID — the
+ *  references people already have work again. */
+let healing = false;
+export async function healMyStories(): Promise<void> {
+  if (healing) return;
+  healing = true;
+  try {
+    for (const s of fresh(get(myStories))) {
+      try {
+        if (await api.restoreStoryFile(s.media, s.local)) console.info(`[aqua] story ${s.id}: file put back on the relay`);
+      } catch (e) { console.warn(`[aqua] story ${s.id}: ${e}`); }
+    }
+  } finally { healing = false; }
 }
 
 export async function deleteStory(id: string) {

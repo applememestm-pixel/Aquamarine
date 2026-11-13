@@ -106,7 +106,14 @@
         if (first) sendStoryView(owner, s.id);
       }
       prefetch();
-    }).catch((e) => { if (cur?.id === s.id) { err = String(e); loading = false; } });
+    }).catch((e) => {
+      if (cur?.id !== s.id) return;
+      // The relay lost the file (its cache is cleared on restart): the
+      // author's app puts it back once it's online (stories.ts::healMyStories).
+      err = /responded 404/.test(String(e)) ? tr("The file isn't on the server right now — it comes back when the author is online.") : String(e);
+      loading = false;
+      if (owner === "" && src === "live") void import("../stories").then((m) => m.healMyStories());
+    });
   });
   function prefetch() {
     if (!v) return;
