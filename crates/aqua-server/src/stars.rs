@@ -368,7 +368,7 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
     let cmd = cmd.split('@').next().unwrap_or(cmd);
     // `/<name> level <n>` (the owner's way): the same as `/star @name n`.
     let lower = arg.trim().to_lowercase();
-    if !["/star", "/unstar", "/stars", "/start", "/help"].contains(&cmd) && cmd.len() > 1 && lower.starts_with("level") {
+    if !["/star", "/unstar", "/stars", "/start", "/help", "/id", "/links", "/unlink"].contains(&cmd) && cmd.len() > 1 && lower.starts_with("level") {
         let name = cmd[1..].trim_start_matches('@').to_lowercase();
         let mut rest = lower["level".len()..].split_whitespace();
         let lvl = rest.next().unwrap_or("x");
@@ -385,6 +385,7 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
             let lvl = if cmd == "/unstar" { Ok(0) } else { parse_level(words.next()) };
             set_level(state, &u.from, &name, lvl, words.next()).await;
         }
+        "/id" => say(state, &u.from, &crate::verify::id_text(state, &u.from)).await,
         "/links" => {
             let list = app::list_links(state);
             say(state, &u.from, &if list.is_empty() { "Nobody linked a Boosty account yet.".to_string() } else { format!("Boosty links:\n{list}") }).await;
@@ -415,7 +416,7 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
             say(state, &u.from, &format!("Stars ({}):\n{}", lines.len(), lines.join("\n"))).await;
         }
         _ => {
-            say(state, &u.from, "✦ The CeZeOs star:\n/<name> level 6 — yours, above the donation levels\n/<name> level 1-5 — a donation level by hand (Boosty gives them on its own)\n/<name> level 4 30d — for a while: h, d, w, m (30 days), y; it goes by itself\n/<name> level 0 — take it away\n(also /star @name [1-6] [30d], /unstar @name)\n/stars — who has one\n/links — Boosty accounts linked without an e-mail, /unlink @name").await;
+            say(state, &u.from, "✦ The CeZeOs star:\n/<name> level 6 — yours, above the donation levels\n/<name> level 1-5 — a donation level by hand (Boosty gives them on its own)\n/<name> level 4 30d — for a while: h, d, w, m (30 days), y; it goes by itself\n/<name> level 0 — take it away\n(also /star @name [1-6] [30d], /unstar @name)\n/stars — who has one\n/links — Boosty accounts linked without an e-mail, /unlink @name\n/id — your account ID").await;
         }
     }
 }
