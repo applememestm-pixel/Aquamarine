@@ -2,6 +2,11 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/); версии — [семантические](https://semver.org/lang/ru/). Подробные описания выпусков — в [docs/releases](docs/releases/).
 
+## [1.20.1-7] — 2026-11-13 (пре-выпуск)
+
+### Исправлено
+- **В выпуске 1.20.1-6 не было `Aquamarine.apk`**: в `release.yml` (шаг «Generate Android project» задачи `mobile (android)`) лишняя кавычка в `grep … "$m""` — bash падал с `syntax error`, APK мессенджера не собирался (серверный `AquamarineServer.apk` собирался отдельно). Кавычка убрана.
+
 ## [1.20.1-6] — 2026-11-13 (пре-выпуск)
 
 ### Исправлено
