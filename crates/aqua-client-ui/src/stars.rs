@@ -13,11 +13,10 @@ use tauri::State;
 
 use crate::state::AppState;
 
-/// The owner's public star key (hex). Empty until the owner has made the
-/// key (the star relay's panel → Stars, or `aqua-server star-key`): then no
-/// star shows. It can also come at build time from the repository variable
-/// `AQUA_STAR_PUBLIC` (release.yml) — a public key, nothing secret.
-pub const STAR_PUBLIC_BUILTIN: &str = "";
+/// The owner's public star key (hex; made on the star relay's panel → Stars,
+/// 2026-11-13). Empty: no star shows. The repository variable
+/// `AQUA_STAR_PUBLIC` (release.yml) wins when set — a public key, nothing secret.
+pub const STAR_PUBLIC_BUILTIN: &str = "3abdfac4ef46672c05a21e9024073208655c0deae3f645441dc1776217a92431";
 
 fn star_public() -> &'static str {
     match option_env!("AQUA_STAR_PUBLIC") {
