@@ -914,7 +914,7 @@
 
   // ---- graphics mode (gpu.rs) ----
   let gpu = $state<GpuStatus | null>(null);
-  const isLinuxWk = typeof document !== "undefined" && document.documentElement.classList.contains("wk-lowfx");
+  const isLinuxWk = typeof document !== "undefined" && document.documentElement.classList.contains("wk-linux");
   async function toggleDmabuf() {
     if (!gpu) return;
     const on = !gpu.dmabuf;
@@ -2433,6 +2433,15 @@
       {/if}
 
       {#if section === "power"}
+      <section class="group">
+        <div class="label">{$t("Lightweight mode")}</div>
+        <div class="row">
+          <span class="row-label">{$t("Lighter effects")}</span>
+          <Select class="sel" value={$settings.liteFx ?? "auto"} options={[{ value: "auto", label: $t("Auto (weak devices)") }, { value: "on", label: $t("On") }, { value: "off", label: $t("Off") }]}
+            onchange={(v) => settings.update((x) => ({ ...x, liteFx: v as "auto" | "on" | "off" }))} />
+        </div>
+        <div class="foot-note">{$t("No glass blur, no moving glow, flat shadows, fewer looping animations — smoother on weaker phones and computers. Looks almost the same.")}</div>
+      </section>
       <section class="group">
         <div class="label">{$t("Power saving mode")} <span class="pill-tag" class:on={$powerActive}>{$powerActive ? $t("ON") : $t("OFF")}</span></div>
         <div class="pw-scale"><span>{$t("Off")}</span><span class="mid">{pwMode > 0 && pwMode < 100 ? $t("When below {n}%", { n: pwMode }) : ""}</span><span>{$t("On")}</span></div>

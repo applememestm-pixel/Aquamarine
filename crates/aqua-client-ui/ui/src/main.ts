@@ -67,7 +67,7 @@ startInsets();
 {
   const ua = navigator.userAgent;
   if (/Linux/.test(ua) && !/Android|Chrome/.test(ua)) {
-    document.documentElement.classList.add("wk-lowfx");
+    document.documentElement.classList.add("wk-lowfx", "wk-linux");
     // Diagnostics for the launcher log: report main-thread stalls together
     // with what was clicked last ("[aqua-stall] 2300 ms after click …").
     let last = performance.now();
@@ -181,3 +181,17 @@ if (IS_DESKTOP) {
     } catch { /* not in the app */ }
   });
 }
+
+// Lightweight mode (Settings → Power saving): the same light effects as on
+// Linux (class "wk-lowfx", see app.css) — automatically on weak devices
+// (≤ 4 cores or ≤ 4 GB of memory, or software rendering), or by hand.
+void import("./lib/theme").then(({ settings }) => {
+  const root = document.documentElement;
+  const nav = navigator as Navigator & { deviceMemory?: number };
+  const weak = (nav.hardwareConcurrency ?? 8) <= 4 || (nav.deviceMemory ?? 8) <= 4 || root.classList.contains("soft-render");
+  settings.subscribe((s) => {
+    const m = s.liteFx ?? "auto";
+    const on = m === "on" || (m === "auto" && (weak || root.classList.contains("wk-linux")));
+    root.classList.toggle("wk-lowfx", on);
+  });
+});

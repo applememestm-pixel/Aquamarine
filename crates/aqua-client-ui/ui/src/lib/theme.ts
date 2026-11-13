@@ -187,6 +187,9 @@ export interface Settings {
   appIcon?: { mode: "default" | "custom" | "theme" | "preset"; preset?: string; custom?: string };
   /** Complete theme (THEMES id); empty = the built-in look. */
   themePreset?: string;
+  /** Lightweight mode: no glass blur, no drifting glow, flat shadows, fewer
+   *  looping animations ("auto": on for weak devices and Linux). */
+  liteFx?: "auto" | "on" | "off";
   /** Telegram's day / night themes: what "Night mode" / "Day mode" switches
    *  to — the theme last used in that mode (preset, palette, own colours). */
   dayNight?: Partial<Record<"light" | "dark", { mode: Mode; palette: string; themePreset?: string; customColors?: Record<string, string>; bubbleOut?: string; bubbleIn?: string }>>;
