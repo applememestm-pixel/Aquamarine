@@ -115,7 +115,7 @@
   import { botMenus } from "../botMenus";
   import { settings as themeSettings } from "../theme";
   import { storyOwners, hiddenOwners, myLiveStories, storyRing, addStory, setStoriesOff, storyUsers } from "../storyFeed";
-  import { openStories, storiesOff, toggleHidden, hiddenStories, storyArchive } from "../stories";
+  import { openStories, storiesOff, toggleHidden, hiddenStories, storyArchiveOpen } from "../stories";
   import { myOnline } from "../presence";
   import { openSettings } from "../panels/settings";
   import { openMiniApp } from "./MiniApp.svelte";
@@ -1146,7 +1146,7 @@
           <button onclick={() => { storyMenu = null; const was = $hiddenStories.includes(smUser); toggleHidden(smUser); showToast(tr(was ? "Stories are shown again" : "Stories hidden — they're now at the end of the strip")); }}>{$t($hiddenStories.includes(smUser) ? "Show stories" : "Hide stories")}</button>
         {:else}
           <button onclick={() => { storyMenu = null; void addStory(IS_MOBILE ? "camera" : "gallery"); }}>{$t("Add a story")}</button>
-          <button onclick={() => { storyMenu = null; if ($storyArchive.length) openStories([""], "", "archive"); else showToast(tr("The archive is empty — stories land here when they run out")); }}>{$t("Story archive")}</button>
+          <button onclick={() => { storyMenu = null; storyArchiveOpen.set(true); }}>{$t("Story archive")}</button>
           {#if storiesOpen}<button onclick={() => { storyMenu = null; storiesOpen = false; }}>{$t("Hide stories")}</button>{/if}
           <button class="danger" onclick={() => { storyMenu = null; void setStoriesOff(true); showToast(tr("Stories are off. Turn them back on in Settings → Chat settings.")); }}>{$t("Turn off stories")}</button>
         {/if}

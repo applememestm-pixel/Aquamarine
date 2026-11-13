@@ -146,6 +146,8 @@
   import { openNewChatDialog } from "../newChat";
 
   import { contacts, getContact } from "../contacts";
+  import { stickerVerdict } from "../packRules";
+  import { sensitiveBlur, nsfwOf } from "../nsfw";
   import type { ChatMessage, Group } from "../types";
 
   // Inline media now streams straight from disk via Tauri's asset
@@ -1541,9 +1543,33 @@
     }
     return c;
   });
+  /** The message a reply quotes: the nearest one above with that text — its
+   *  author's when the name maps back. By the text alone every sticker
+   *  ("Sticker") or every "ок" counted the reply as its own. */
+  function quotedIndex(at: number, text: string, author: string): number {
+    const who = quoteUser(author);
+    let loose = -1;
+    for (let i = at - 1; i >= 0; i--) {
+      if (quoteOf(rows[i]) !== text) continue;
+      if (whoOf(rows[i]) === who) return i;
+      if (loose < 0) loose = i;
+    }
+    return loose;
+  }
+  /** Reply id → the id of the message it answers. */
+  let replyTargets = $derived.by(() => {
+    const m = new Map<string, string>();
+    rows.forEach((r, i) => {
+      if (r.kind.type !== "reply") return;
+      const j = quotedIndex(i, r.kind.content.quoted_text, r.kind.content.quoted_author);
+      if (j >= 0) m.set(r.id, rows[j].id);
+    });
+    return m;
+  });
+  /** Message id → how many replies it has. */
   let replyCount = $derived.by(() => {
     const c = new Map<string, number>();
-    for (const r of rows) if (r.kind.type === "reply") c.set(r.kind.content.quoted_text, (c.get(r.kind.content.quoted_text) ?? 0) + 1);
+    for (const to of replyTargets.values()) c.set(to, (c.get(to) ?? 0) + 1);
     return c;
   });
   const quoteOf = (m: ChatMessage) => snippetOf(m).slice(0, 180);
@@ -1567,6 +1593,8 @@
   }
   /** Tap on a quote: to the message it quotes (the nearest one above). */
   function jumpToQuoted(fromId: string, quoted: string) {
+    const to = replyTargets.get(fromId);
+    if (to) { window.dispatchEvent(new CustomEvent("aqua:jump", { detail: to })); return; }
     const at = rows.findIndex((r) => r.id === fromId);
     for (let i = (at < 0 ? rows.length : at) - 1; i >= 0; i--) {
       // A quote of part of a message (Telegram's "Quote") is inside it.
@@ -1586,15 +1614,15 @@
     }
     // Replies, and replies to those (Telegram's "replies" view).
     const out: ThreadItem[] = [];
-    let level = [quoteOf(th.root)];
+    let level = [th.root.id];
     const seen = new Set<string>();
     for (let depth = 0; depth < 4 && level.length; depth++) {
       const next: string[] = [];
       for (const r of rows) {
-        if (r.kind.type !== "reply" || seen.has(r.id) || !level.includes(r.kind.content.quoted_text)) continue;
+        if (r.kind.type !== "reply" || seen.has(r.id) || !level.includes(replyTargets.get(r.id) ?? "")) continue;
         seen.add(r.id);
         out.push({ id: r.id, author: r.outgoing ? myUsername : (isGroup ? r.from : ($activeChat?.name ?? r.from)), time: r.time, text: r.kind.content.text, outgoing: r.outgoing, re: depth ? { a: r.kind.content.quoted_author, t: r.kind.content.quoted_text } : null, depth });
-        next.push(quoteOf(r));
+        next.push(r.id);
       }
       level = next;
     }
@@ -2268,6 +2296,17 @@
   const selected = new SvelteSet<string>();
   /** GIFs the user started while "Autoplay GIFs" is off. */
   const gifPlaying = new SvelteSet<string>();
+  /** 18+ stickers / explicit pictures opened with a tap (packRules.ts, nsfw.ts). */
+  const adultShown = new SvelteSet<string>();
+  /** Cover this incoming picture? The detector's verdict (nsfw.ts), for
+   *  everyone or only people not in my contacts, as set; while it's still
+   *  looking (a fraction of a second, once per file) it stays covered. */
+  function coverMedia(m: Row, path: string | null | undefined): boolean {
+    if (!path || m.outgoing || adultShown.has(m.id) || $sensitiveBlur === "off") return false;
+    if ($activeChat?.id === "__saved__") return false;
+    if ($sensitiveBlur === "strangers" && $contacts[whoOf(m)]) return false;
+    return $nsfwOf(path) !== "clean";
+  }
   // Custom (non-Chromium) context menu.
   let menu = $state<{ open: boolean; x: number; y: number; row: Row | null; touch?: boolean }>({ open: false, x: 0, y: 0, row: null });
 
@@ -3939,8 +3978,17 @@
                     <span class="once-meta">{m.time}{@render statusTick(m.outgoing, m.id)}</span>
                   </div>
                 {:else if rk === "sticker"}
+                  {@const verdict = $stickerVerdict(content.pack, content.name)}
                   <div class="sticker-wrap">
-                    {#if url}
+                    {#if verdict === "gone"}
+                      <!-- The relay's admin removed this sticker / banned its pack. -->
+                      <div class="sticker-gone">{$t("Sticker removed by the server")}</div>
+                    {:else if (verdict === "adult" && !adultShown.has(m.id)) || (verdict === "ok" && url && coverMedia(m, content.saved_at))}
+                      <button class="sticker-btn sticker-18" title={$t("18+ — tap to show")} onclick={() => adultShown.add(m.id)}>
+                        {#if url}<span class="sticker-img blur18"><AnimatedMedia src={url} mime={stickerMime(content)} alt="" play="never" /></span>{:else}<span class="sticker-placeholder"></span>{/if}
+                        <span class="b18">18+</span>
+                      </button>
+                    {:else if url}
                       <button class="sticker-btn" title={$t("Show the pack")}
                         onclick={() => { if (peekHeld) { peekHeld = false; return; } openPackSheet(content.pack ?? "own:-", m.outgoing ? undefined : m.from, content.saved_at); }}
                         onpointerdown={(e) => peekStart(e, url, stickerMime(content))} onpointerup={peekEnd} onpointerleave={peekEnd} onpointercancel={peekEnd}>
@@ -3957,7 +4005,14 @@
                   </div>
                 {:else if rk === "gif" || rk === "image"}
                   <div class="bubble media-bubble">
-                    {#if url}
+                    {#if url && coverMedia(m, content.saved_at)}
+                      <!-- Explicit (or still being looked at): blurred until tapped. -->
+                      <button class="media-img-btn media-18" onclick={() => { if ($nsfwOf(content.saved_at) !== "pending") adultShown.add(m.id); }}
+                        title={$t("Sensitive content — tap to show")}>
+                        <img class="media-img" src={url} alt="" />
+                        {#if $nsfwOf(content.saved_at) === "explicit"}<span class="m18"><b>18+</b><small>{$t("Sensitive content — tap to show")}</small></span>{/if}
+                      </button>
+                    {:else if url}
                       {#if rk === "gif" && !$power.gifs && !gifPlaying.has(m.id)}
                         <!-- Autoplay off: a still frame until clicked. -->
                         <button class="media-img-btn gif-still" onclick={() => gifPlaying.add(m.id)} title={$t("Play GIF")}>
@@ -4283,9 +4338,9 @@
                 </div>
               {/if}
 
-              {#if (isGroup && commentsAllowed && (activeGroup?.kind === "channel" || commentCount.get(reactionKey(m)))) || replyCount.get(quoteOf(m)) || isChannel}
+              {#if (isGroup && commentsAllowed && (activeGroup?.kind === "channel" || commentCount.get(reactionKey(m)))) || replyCount.get(m.id) || isChannel}
                 {@const nc = isGroup ? (commentCount.get(reactionKey(m)) ?? 0) : 0}
-                {@const nr = replyCount.get(quoteOf(m)) ?? 0}
+                {@const nr = replyCount.get(m.id) ?? 0}
                 {@const vk = reactionKey(m)}
                 {#if isGroup && commentsAllowed && activeGroup?.kind === "channel"}
                   <!-- Telegram: a bar under every post — who commented, how many, "Leave a comment". -->
@@ -5502,6 +5557,17 @@
     pointer-events: none;
     filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.35));
   }
+  .media-18 { position: relative; overflow: hidden; min-width: 200px; min-height: 150px; background: var(--bg-input); }
+  .media-18 .media-img { filter: blur(32px) saturate(.7); transform: scale(1.1); }
+  .media-18 .m18 { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+    color: #fff; text-shadow: 0 1px 6px rgba(0,0,0,.75); text-align: center; padding: 8px; }
+  .media-18 .m18 b { font: 800 18px var(--font-ui, inherit); }
+  .media-18 .m18 small { font-size: 12px; opacity: .9; }
+  .sticker-18 { position: relative; }
+  .sticker-18 .blur18 { filter: blur(18px) saturate(.6); }
+  .sticker-18 .b18 { position: absolute; inset: 0; display: grid; place-items: center; font: 800 15px var(--font-ui, inherit); color: #fff; text-shadow: 0 1px 6px rgba(0,0,0,.7); }
+  .sticker-gone { width: var(--sticker-size, 128px); min-height: 48px; display: grid; place-items: center; text-align: center; padding: 8px;
+    border-radius: calc(14px * var(--rk, 1)); border: 1px dashed var(--border-strong); color: var(--fg-muted); font-size: 12.5px; }
   .sticker-placeholder {
     width: var(--sticker-size, 128px); height: var(--sticker-size, 128px);
     border-radius: calc(14px * var(--rk, 1));

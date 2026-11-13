@@ -149,6 +149,7 @@
     background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#04060b;box-shadow:0 12px 28px -12px var(--accent-glow)}
   .btn:hover{transform:translateY(-1px)}
   .btn:disabled{opacity:.5;cursor:default;transform:none}
+  .btn.danger{background:#d9485f;border-color:#d9485f;color:#fff;box-shadow:none}
   .btn.ghost{background:transparent;color:var(--fg);border-color:var(--line-str);box-shadow:none}
   .btn.ghost:hover{border-color:var(--accent);color:var(--accent)}
   .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
@@ -305,6 +306,15 @@
   .pack .pv .ph{width:44px;height:44px;border-radius:8px;background:var(--ink-2);display:grid;place-items:center;color:var(--fg-dim);font-size:11px}
   .pack b{display:block;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .pack span{font-size:12px;color:var(--fg-dim)}
+  .pack.click{cursor:pointer;transition:border-color .15s}.pack.click:hover{border-color:var(--accent)}
+  .a18{font-style:normal;display:inline-block;font-size:10px;font-weight:800;color:#fff;background:#d9485f;border-radius:5px;padding:1px 4px;vertical-align:1px}
+  .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px;max-height:56vh;overflow-y:auto;margin-top:8px}
+  .pgrid .pc{position:relative;display:flex;flex-direction:column;align-items:center;gap:2px;background:var(--void);border:1px solid var(--line);border-radius:10px;padding:6px}
+  .pgrid img,.pgrid video,.pgrid .ph{width:100%;aspect-ratio:1;object-fit:contain;display:grid;place-items:center;font-size:11px;color:var(--fg-dim)}
+  .pgrid small{font-size:14px}
+  .pgrid .rm{position:absolute;top:3px;right:3px;width:24px;height:24px;border-radius:7px;border:none;background:rgba(0,0,0,.6);color:#fff;cursor:pointer;opacity:0}
+  .pgrid .pc:hover .rm,.pgrid .rm:focus{opacity:1}
+  @media (hover:none){.pgrid .rm{opacity:.85}}
   /* The website's cursor: a small teal dot, a thin comet tail (the button in
      the top bar turns the tail off; the dot stays). Fields and selected text
      get the normal cursor back. */
@@ -483,7 +493,7 @@
       </div>
       <div class="card rv">
         <h2><span data-t="Stars">Stars</span> <span class="hint" id="starHint"></span></h2>
-        <div class="note" data-t="starsNote">Stars are marks only the project owner hands out (the official one and the Boosty levels). Only the owner's server has the key. Make it once there: the public key goes into the apps (repository variable AQUA_STAR_PUBLIC); stars are given by the @stars bot.</div>
+        <div class="note" data-t="starsNote">The CeZeOs star is a mark only the project owner hands out: levels 1–5 for donations (Boosty, given on their own), level 6 above them by hand («/name level 6» to the bot). Only the owner's server has the key. Make it once there: the public key goes into the apps (repository variable AQUA_STAR_PUBLIC); stars are given by the @stars bot.</div>
         <div class="addr mt" id="starKeyRow" hidden><code id="starKey" style="word-break:break-all"></code><button class="copy" onclick="copy($('starKey').textContent)" data-t="Copy">Copy</button></div>
         <div class="row mt"><button class="btn ghost" id="starMake" onclick="makeStarKey()" data-t="Make the star key">Make the star key</button><span class="note" id="starMsg" style="margin:0"></span></div>
       </div>
@@ -567,6 +577,14 @@
         <h2><span data-t="Packs on this server">Packs on this server</span> <span class="hint" id="packsCount"></span></h2>
         <div class="packs" id="packs"></div>
         <div class="note" data-t="packsNote">Apps download a pack once and keep its files on the device; this list is what the server keeps for everyone.</div>
+        <div class="note" data-t="adultNote">Click a pack to remove stickers from it, mark it 18+ or ban it. 18+ packs are hidden for people with the 18+ filter on (on by default), their stickers blurred in chats; «Auto» — the server looks at the stickers themselves (and the title).</div>
+      </div>
+      <div class="card rv">
+        <h2 data-t="Banned packs">Banned packs</h2>
+        <div class="note" data-t="banNote">A banned pack is removed from the server, can't be added again, and disappears from the libraries and chats of everyone on this server.</div>
+        <div class="row mt"><input id="bLink" placeholder="t.me/addstickers/…" style="flex:1" />
+          <button class="btn danger" onclick="banByLink()" data-t="Ban">Ban</button></div>
+        <div class="dl" id="bannedList"></div>
       </div>
     </section>
 
@@ -645,6 +663,11 @@
   <div class="card"><h2 id="detTitle"></h2><div id="detHint" class="hint"></div><div class="dl" id="detList"></div>
     <div style="margin-top:12px;text-align:right"><button class="btn ghost" onclick="closeDetail()" data-t="Close">Close</button></div></div>
 </div>
+<div class="modal hide" id="packModal" onclick="if(event.target===this)closePack()">
+  <div class="card"><h2 id="pkTitle"></h2><div class="pgrid" id="pkGrid"></div>
+    <div class="row mt" id="pkAct"></div><div class="note" id="pkMsg"></div>
+    <div style="margin-top:12px;text-align:right"><button class="btn ghost" onclick="closePack()" data-t="Close">Close</button></div></div>
+</div>
 <div class="modal hide" id="modeModal">
   <div class="card">
     <div class="eyebrow" data-t="First start">First start</div>
@@ -691,7 +714,7 @@
     "Stopped. Start it again on the machine.":"Выключен. Запустите его снова на машине.",
     "Stop and restart are in the server app here (Start / Stop).":"Здесь включение и выключение — в приложении сервера (Запустить / Остановить).",
     "Clear the server":"Очистить сервер","Clear…":"Очистить…",
-    "Stars":"Звёзды","starsNote":"Звёзды — отметки, которые даёт только владелец проекта (официальная и уровни Boosty). Ключ есть только на сервере владельца. Создайте его там один раз: открытый ключ встраивается в приложения (переменная репозитория AQUA_STAR_PUBLIC), звёзды выдаёт бот @stars.",
+    "Stars":"Звёзды","starsNote":"Звезда CeZeOs — отметка, которую даёт только владелец проекта: уровни 1–5 — за донаты (Boosty, выдаются сами), уровень 6 — выше них, только вручную («/ник level 6» боту). Ключ есть только на сервере владельца. Создайте его там один раз: открытый ключ встраивается в приложения (переменная репозитория AQUA_STAR_PUBLIC), звёзды выдаёт бот @stars.",
     "Make the star key":"Создать ключ звёзд","this server hands them out":"этот сервер их выдаёт",
     "Make the star key on this server? Only the project owner's server should have it.":"Создать ключ звёзд на этом сервере? Он должен быть только на сервере владельца проекта.",
     "Done — copy the public key into the repository variable AQUA_STAR_PUBLIC.":"Готово — скопируйте открытый ключ в переменную репозитория AQUA_STAR_PUBLIC.",
@@ -767,6 +790,14 @@
     "copySecret":"Скопируйте этот секрет в панели других серверов и нажмите «Сохранить».",
     "s ago":" с назад","m ago":" мин назад","h ago":" ч назад",
     "Packs on this server":"Наборы на этом сервере",
+    "Banned packs":"Заблокированные наборы","Ban":"Заблокировать","Unban":"Разблокировать","No banned packs.":"Заблокированных наборов нет.",
+    "Remove sticker":"Убрать стикер","Remove from server":"Удалить с сервера","Empty":"Пусто","18+: auto":"18+: авто","18+: yes":"18+: да","18+: no":"18+: нет",
+    "Remove this pack from the server? People who already have it keep their copy.":"Удалить набор с сервера? У тех, кто уже скачал его, он останется (заблокированный — пропадёт у всех).",
+    "adultNote":"Нажмите на набор, чтобы убрать из него стикеры, отметить 18+ или заблокировать. Наборы 18+ скрыты у тех, у кого включён фильтр 18+ (по умолчанию включён), их стикеры в чатах размыты; «Авто» — сервер сам смотрит на стикеры (и на название).",
+    "banNote":"Заблокированный набор удаляется с сервера, его нельзя добавить снова, а у всех на этом сервере он пропадает из библиотек и чатов.",
+    "banAsk":"Заблокировать набор? Он пропадёт с сервера и у всех людей на нём, добавить его снова будет нельзя.",
+    "rmAsk":"Убрать этот стикер у всех? Обновление набора из Telegram его не вернёт.",
+    "scanRes":"Проверка: откровенных {e} из {n}","scanWait":"Проверка картинок — в очереди…",
     "packsNote":"Приложение скачивает набор один раз и хранит его файлы на устройстве; здесь — то, что сервер хранит для всех.",
     "Alone":"Один","In a network":"В сети","Invitation into this network":"Приглашение в эту сеть",
     "Join a network by an invitation":"Вступить в сеть по приглашению","Join":"Вступить","Servers":"Серверы","Search again":"Искать снова",
@@ -781,7 +812,9 @@
     "mailHere":"Почта настроена здесь — этот сервер отправляет коды и за серверы сети без почты (пароль остаётся тут).",
     "accounts":"аккаунтов","online":"в сети",
   };
-  const T = (s) => (RU && DICT[s]) || ({invQrNote:"Scan it in Aquamarine: sign-in → “Scan QR”, or Settings → Network & proxy → “Scan QR”.",
+  const T = (s) => (RU && DICT[s]) || ({banAsk:"Ban this pack? It disappears from the server and for everyone on it, and can't be added again.",
+    rmAsk:"Remove this sticker for everyone? A refresh from Telegram won't bring it back.",
+    scanRes:"Checked: {e} explicit of {n}", scanWait:"Picture check — queued…",invQrNote:"Scan it in Aquamarine: sign-in → “Scan QR”, or Settings → Network & proxy → “Scan QR”.",
     regOn:"Names are reserved in the network, servers: ",
     qrSecret:"This QR holds the network's secret — show it only to the admin of another relay.", lanOn:"Phones must be on the same Wi-Fi. If they can't connect, allow <b>aqua-server</b> in the firewall.",
     lanOff:"The relay only accepts connections from this PC.", codesMailed:"Codes are e-mailed to users, so they don't show up here. If an e-mail can't be sent, its code appears here.",
@@ -1188,7 +1221,9 @@
 
   // ---- Telegram packs ----
   let tgLoaded = false;
+  let lastTg = null;
   function showTg(v){
+    lastTg = v;
     $("tState").className = "mstate" + (v.has_token ? " on" : "");
     $("tgSt").className = "st" + (v.has_token ? " on" : "");
     $("tStateText").innerHTML = v.has_token
@@ -1198,14 +1233,60 @@
     $("tTok").disabled = v.source === "env";
     const packs = v.list || [];
     $("packsCount").textContent = packs.length ? String(packs.length) : "";
-    setHtml("packs", packs.length ? packs.map((p) => `<div class="pack"><div class="pv">${(p.preview || []).map(([f, mime]) =>
+    setHtml("packs", packs.length ? packs.map((p) => `<div class="pack click" data-pack="${esc(p.name)}" role="button" tabindex="0"><div class="pv">${(p.preview || []).map(([f, mime]) =>
         mime.startsWith("video/") ? `<video src="/v1/packs/${encodeURIComponent(p.name)}/${encodeURIComponent(f)}" muted loop autoplay playsinline></video>`
         : mime.startsWith("image/") ? `<img src="/v1/packs/${encodeURIComponent(p.name)}/${encodeURIComponent(f)}" alt="" loading="lazy" />`
-        : `<span class="ph">TGS</span>`).join("")}</div><b>${esc(p.title || p.name)}</b><span>${p.count} · ${esc(p.kind === "custom_emoji" ? (RU ? "эмодзи" : "emoji") : (RU ? "стикеры" : "stickers"))}</span></div>`).join("")
+        : `<span class="ph">TGS</span>`).join("")}</div><b>${p.adult ? '<i class="a18">18+</i> ' : ""}${esc(p.title || p.name)}</b><span>${p.count} · ${esc(p.kind === "custom_emoji" ? (RU ? "эмодзи" : "emoji") : (RU ? "стикеры" : "stickers"))}</span></div>`).join("")
       : `<div class="empty">${RU ? "Наборов пока нет — вставьте ссылку t.me/addstickers/… в приложении." : "No packs yet — paste a t.me/addstickers/… link in the app."}</div>`);
+    const banned = v.banned || [];
+    setHtml("bannedList", banned.length ? banned.map((n) => `<div class="dl-row"><span class="main">${esc(n)}</span><button class="btn ghost" data-unban="${esc(n)}">${T("Unban")}</button></div>`).join("")
+      : `<div class="empty">${T("No banned packs.")}</div>`);
     $("tTok").placeholder = v.has_token ? (RU ? "•••••••• сохранён — вставьте новый, чтобы заменить" : "•••••••• saved — paste a new one to replace") : "123456789:AA…";
     tgLoaded = true;
   }
+  // A pack: its stickers (✕ removes one for everyone), 18+, remove, ban (packs.rs admin_*).
+  const packSrc = (n, f) => `/v1/packs/${encodeURIComponent(n)}/${encodeURIComponent(f)}`;
+  function closePack(){ $("packModal").classList.add("hide"); }
+  async function openPack(name){
+    $("pkTitle").textContent = "…"; $("pkGrid").innerHTML = ""; $("pkAct").innerHTML = ""; $("pkMsg").textContent = "";
+    $("packModal").classList.remove("hide");
+    let m; try { m = await api("/v1/admin/packs/" + encodeURIComponent(name)); } catch (e) { $("pkMsg").textContent = e.message; return; }
+    $("pkTitle").textContent = `${m.title || m.name} · ${m.files.length}`;
+    $("pkGrid").innerHTML = m.files.map((f) => `<div class="pc">${f.mime.startsWith("video/") ? `<video src="${packSrc(m.name, f.file)}" muted loop autoplay playsinline></video>`
+      : f.mime.startsWith("image/") ? `<img src="${packSrc(m.name, f.file)}" alt="" loading="lazy" />` : `<span class="ph">TGS</span>`}<small>${esc(f.emoji)}</small>
+      <button class="ghost rm" data-rmfile="${esc(f.file)}" data-of="${esc(m.name)}" title="${T("Remove sticker")}">✕</button></div>`).join("") || `<div class="empty">${T("Empty")}</div>`;
+    const brief = (lastTg?.list || []).find((p) => p.name === m.name);
+    const cur = brief?.adult_set == null ? "auto" : brief.adult_set ? "on" : "off";
+    $("pkAct").innerHTML = `<select id="pkAdult">${[["auto", "18+: auto"], ["on", "18+: yes"], ["off", "18+: no"]].map(([k, l]) => `<option value="${k}"${k === cur ? " selected" : ""}>${T(l)}${k === "auto" && m.adult ? " (18+)" : ""}</option>`).join("")}</select>
+      <span class="hint">${m.scan && m.scan.rev === m.rev ? T("scanRes").replace("{e}", m.scan.explicit).replace("{n}", m.scan.checked) : T("scanWait")}</span>
+      <span style="flex:1"></span><button class="btn ghost" id="pkDel">${T("Remove from server")}</button><button class="btn danger" id="pkBan">${T("Ban")}</button>`;
+    $("pkAdult").addEventListener("change", async (e) => { await packRules(m.name, { adult: e.target.value }); openPack(m.name); });
+    $("pkDel").addEventListener("click", async () => {
+      if (!confirm(T("Remove this pack from the server? People who already have it keep their copy."))) return;
+      try { await fetch("/v1/admin/packs/" + encodeURIComponent(m.name), { method: "DELETE", headers: { "Authorization": "Bearer " + TOKEN } }); } catch {}
+      closePack(); loadTg();
+    });
+    $("pkBan").addEventListener("click", async () => { if (!confirm(T("banAsk"))) return; await packRules(m.name, { ban: true }); closePack(); });
+  }
+  async function packRules(name, body){
+    try { showTg(await api(`/v1/admin/packs/${encodeURIComponent(name)}/rules`, { method: "POST", body: JSON.stringify(body) })); }
+    catch (e) { toast(T("Failed: ") + e.message); }
+  }
+  async function banByLink(){
+    const link = $("bLink").value.trim().replace(/\/+$/, "");
+    if (!link || !confirm(T("banAsk"))) return;
+    await packRules(link.split("/").pop(), { ban: true }); $("bLink").value = "";
+  }
+  document.addEventListener("click", async (e) => {
+    const pk = e.target.closest("[data-pack]"); if (pk) { openPack(pk.dataset.pack); return; }
+    const ub = e.target.closest("[data-unban]"); if (ub) { packRules(ub.dataset.unban, { ban: false }); return; }
+    const rm = e.target.closest("[data-rmfile]");
+    if (rm) {
+      if (!confirm(T("rmAsk"))) return;
+      try { await api(`/v1/admin/packs/${encodeURIComponent(rm.dataset.of)}/file/${encodeURIComponent(rm.dataset.rmfile)}`, { method: "DELETE" }); } catch (err) { toast(T("Failed: ") + err.message); }
+      openPack(rm.dataset.of); loadTg();
+    }
+  });
   async function loadTg(){ try { showTg(await api("/v1/admin/telegram")); } catch {} try { showNet((await api("/v1/admin/telegram/net")).net); } catch {} }
   // How the server reaches Telegram (tgnet.rs).
   function showNet(n){ if (!n) return; $("nProxy").value = $("nProxy").defaultValue = n.proxy || ""; $("nApi").value = n.api || ""; $("nProxy").disabled = $("nApi").disabled = !!n.from_env; }

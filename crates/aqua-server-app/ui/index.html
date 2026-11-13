@@ -177,6 +177,12 @@
   .pgrid .pc { display: flex; flex-direction: column; align-items: center; gap: 2px; background: var(--card2); border-radius: 10px; padding: 6px; }
   .pgrid img, .pgrid video, .pgrid span { width: 100%; aspect-ratio: 1; object-fit: contain; display: grid; place-items: center; font-size: 11px; color: var(--dim); }
   .pgrid small { font-size: 14px; }
+  .pgrid .pc { position: relative; }
+  .pgrid .pc .rm { position: absolute; top: 2px; right: 2px; width: 22px; height: 22px; padding: 0; opacity: 0; }
+  .pgrid .pc:hover .rm, .pgrid .pc .rm:focus { opacity: 1; }
+  @media (hover: none) { .pgrid .pc .rm { opacity: .8; } }
+  .pgrid .pc .rm svg { width: 14px; height: 14px; }
+  .a18 { display: inline-block; font-size: 10px; font-weight: 800; color: #fff; background: #d9485f; border-radius: 5px; padding: 1px 4px; vertical-align: 1px; }
   .pack .pv { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
   .pack .pv img, .pack .pv video, .pack .pv span { width: 100%; aspect-ratio: 1; object-fit: contain; border-radius: 6px; background: #121826; display: grid; place-items: center; font-size: 10px; color: var(--dim); }
   .pack b { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -260,7 +266,7 @@ document.addEventListener("DOMContentLoaded", () => armAll(document.body));
 // ======================================================================
 const RU = /^(ru|uk|be)/i.test(navigator.language || "");
 const RU_DICT = {
-  "Stars": "Звёзды", "starsNote": "Звёзды — отметки, которые даёт только владелец проекта (официальная и уровни Boosty). Ключ есть только на сервере владельца. Создайте его там один раз: открытый ключ встраивается в приложения (переменная репозитория AQUA_STAR_PUBLIC), звёзды выдаёт бот @stars.",
+  "Stars": "Звёзды", "starsNote": "Звезда CeZeOs — отметка, которую даёт только владелец проекта: уровни 1–5 — за донаты (Boosty, выдаются сами), уровень 6 — выше них, только вручную («/ник level 6» боту). Ключ есть только на сервере владельца. Создайте его там один раз: открытый ключ встраивается в приложения (переменная репозитория AQUA_STAR_PUBLIC), звёзды выдаёт бот @stars.",
   "Make the star key": "Создать ключ звёзд", "this server hands them out": "этот сервер их выдаёт",
   "Make the star key on this server? Only the project owner's server should have it.": "Создать ключ звёзд на этом сервере? Он должен быть только на сервере владельца проекта.",
   "Done — copy the public key into the repository variable AQUA_STAR_PUBLIC.": "Готово — скопируйте открытый ключ в переменную репозитория AQUA_STAR_PUBLIC.",
@@ -433,6 +439,14 @@ const RU_DICT = {
   "Give the pack a name first.": "Сначала назовите набор.", "Uploading {a} of {b}…": "Загружаю {a} из {b}…", "Done — apps on this server see it now.": "Готово — приложения на этом сервере уже видят его.",
   "Add files…": "Добавить файлы…", "Remove from server": "Удалить с сервера", "Empty": "Пусто",
   "Remove this pack from the server? People who already have it keep their copy.": "Удалить набор с сервера? У тех, кто уже скачал его, он останется.",
+  "Ban": "Заблокировать", "Unban": "Разблокировать", "Banned packs": "Заблокированные наборы", "Remove sticker": "Убрать стикер",
+  "banNote": "Заблокированный набор удаляется с сервера, его нельзя добавить снова, а у всех на этом сервере он пропадает из библиотек и чатов.",
+  "banAsk": "Заблокировать набор? Он пропадёт с сервера и у всех людей на нём, добавить его снова будет нельзя.",
+  "rmAsk": "Убрать этот стикер у всех? Обновление набора из Telegram его не вернёт.",
+  "scanRes": "Проверка: откровенных {e} из {n}", "scanWait": "Проверка картинок — в очереди…",
+  "18+: auto": "18+: авто", "18+: yes": "18+: да", "18+: no": "18+: нет",
+  "adultNote": "18+ — набор скрыт у тех, у кого включён фильтр 18+ (по умолчанию включён), а его стикеры в чатах размыты. «Авто» — сервер сам смотрит на стикеры (и на название).",
+  "Pack link or name": "Ссылка или имя набора", "No banned packs.": "Заблокированных наборов нет.",
   "This computer": "Этот компьютер", "Start with the system": "Запускать вместе с системой", "autoSub": "Сервер работает с момента входа в систему, окно не открывается.",
   "Keep running when the window is closed": "Работать в фоне при закрытом окне", "traySub": "Значок в трее: оттуда окно открывается снова.",
   "mobNote": "Сервер работает и с выключенным экраном — Android показывает уведомление. Если телефон всё равно его закрывает: Настройки → Приложения → Aquamarine Server → Батарея → Без ограничений.",
@@ -442,7 +456,7 @@ const RU_DICT = {
 };
 const t = (k, vars) => { let s = (RU && RU_DICT[k]) || EN[k] || k; if (vars) for (const [a, b] of Object.entries(vars)) s = s.split("{" + a + "}").join(b); return s; };
 const EN = {
-  starsNote: "Stars are marks only the project owner hands out (the official one and the Boosty levels). Only the owner's server has the key. Make it once there: the public key goes into the apps (repository variable AQUA_STAR_PUBLIC); stars are given by the @stars bot.",
+  starsNote: "The CeZeOs star is a mark only the project owner hands out: levels 1–5 for donations (Boosty, given on their own), level 6 above them by hand («/name level 6» to the bot). Only the owner's server has the key. Make it once there: the public key goes into the apps (repository variable AQUA_STAR_PUBLIC); stars are given by the @stars bot.",
   remoteIntro: "An Aquamarine server on another machine (a VPS, a home PC): the app signs in there over SSH and opens its panel here. The panel is never opened to the internet — everything goes inside SSH.",
   remoteManual: "The app reads the panel's port and token by itself from panel.json on that machine (the running server writes it). In Docker the file is inside the container — then enter the container's port and AQUA_ADMIN_TOKEN.",
   chooseLead: "How will you use it?",
@@ -503,6 +517,11 @@ const EN = {
   addTgNote: "A link to a sticker or emoji pack (t.me/addstickers/… or t.me/addemoji/…). The server downloads it once — every app on this server sees it. Needs the bot token above.",
   uploadNote: "PNG or WebP with transparency, GIF, Telegram animations (.tgs) and video stickers (.webm) — up to 2 MB each, up to 200 in a pack.",
   packsNote: "Click a pack to open all of it.",
+  banNote: "A banned pack is removed from the server, can't be added again, and disappears from the libraries and chats of everyone on this server.",
+  banAsk: "Ban this pack? It disappears from the server and for everyone on it, and can't be added again.",
+  rmAsk: "Remove this sticker for everyone? A refresh from Telegram won't bring it back.",
+  scanRes: "Checked: {e} explicit of {n}", scanWait: "Picture check — queued…",
+  adultNote: "18+ — hidden for people with the 18+ filter on (it's on by default), its stickers blurred in chats. «Auto» — the server looks at the stickers themselves (and the title).",
   errorsSub: "Failures of the apps of people on this server, and of the server itself. No message text here — only the error, version and device.",
   testerSub: "Install every new build, pre-releases too. Releases always install by themselves: the server is off only for the few seconds of the restart.",
 };
@@ -1051,7 +1070,10 @@ function pageStickers(el) {
         <div class="seg" id="uKind"><button class="on" data-k="regular" onclick="pickKind(this)">${t("Stickers")}</button><button data-k="custom_emoji" onclick="pickKind(this)">${t("Emoji")}</button></div></div>
       <div class="row"><button class="primary" onclick="$('uFiles').click()">${t("Choose files…")}</button><span class="msg" id="uMsg"></span></div>
       <input type="file" id="uFiles" multiple accept=".png,.webp,.gif,.tgs,.webm" hidden onchange="uploadPack(this.files)"></div>
-    <div class="card"><h2>${t("Packs on this server")} <span id="packsN"></span></h2><div class="note">${t("packsNote")}</div><div class="packs" id="packs"></div></div>`;
+    <div class="card"><h2>${t("Packs on this server")} <span id="packsN"></span></h2><div class="note">${t("packsNote")} ${t("adultNote")}</div><div class="packs" id="packs"></div></div>
+    <div class="card"><h2>${t("Banned packs")}</h2><div class="note">${t("banNote")}</div>
+      <div class="row"><input id="bLink" placeholder="${t("Pack link or name")}" style="flex:1"><button class="danger" onclick="banByLink()">${t("Ban")}</button><span class="msg" id="bMsg"></span></div>
+      <div id="banned"></div></div>`;
   api("/v1/admin/telegram").then(showTg).catch((e) => setMsg("tMsg", esc(errText(e)), "err"));
   api("/v1/admin/telegram/net").then((r) => showNet(r.net)).catch(() => {});
 }
@@ -1087,8 +1109,12 @@ function showTg(v) {
   $("packs").innerHTML = packs.length ? packs.map((p) => `<div class="pack" role="button" tabindex="0" onclick="openPack('${esc(p.name)}')"><div class="pv">${(p.preview || []).map(([f, mime]) => {
       const src = `${base}/v1/packs/${encodeURIComponent(p.name)}/${encodeURIComponent(f)}`;
       return mime.startsWith("video/") ? `<video src="${src}" muted loop autoplay playsinline></video>` : mime.startsWith("image/") ? `<img src="${src}" alt="" loading="lazy">` : `<span>TGS</span>`; }).join("")}</div>
-      <b>${esc(p.title || p.name)}</b><small>${p.count} · ${t(p.kind === "custom_emoji" ? "emoji " : "stickers ")}${p.local ? " · " + t("uploaded") : ""}</small></div>`).join("")
+      <b>${p.adult ? '<span class="a18">18+</span> ' : ""}${esc(p.title || p.name)}</b><small>${p.count} · ${t(p.kind === "custom_emoji" ? "emoji " : "stickers ")}${p.local ? " · " + t("uploaded") : ""}</small></div>`).join("")
     : `<div class="empty" style="grid-column:1/-1">${t("noPacks")}</div>`;
+  const banned = v.banned || [];
+  if ($("banned")) $("banned").innerHTML = banned.length
+    ? banned.map((n) => `<div class="row"><b style="flex:1">${esc(n)}</b><button onclick="setRules('${esc(n)}',{ban:false})">${t("Unban")}</button></div>`).join("")
+    : `<div class="empty">${t("No banned packs.")}</div>`;
 }
 async function saveTg(remove) {
   const token = remove ? "" : $("tTok").value.trim();
@@ -1184,10 +1210,33 @@ async function openPack(name) {
   try {
     const m = await api(`/v1/admin/packs/${encodeURIComponent(name)}`);
     $("opTitle").textContent = `${m.title || m.name} · ${m.files.length}`;
-    $("opGrid").innerHTML = m.files.map((f) => `<div class="pc">${packCell(m.name, f)}<small>${esc(f.emoji)}</small></div>`).join("") || `<div class="empty">${t("Empty")}</div>`;
+    $("opGrid").innerHTML = m.files.map((f) => `<div class="pc">${packCell(m.name, f)}<small>${esc(f.emoji)}</small><button class="ghost mini rm" title="${t("Remove sticker")}" onclick="rmSticker('${esc(m.name)}','${esc(f.file)}')">${IC.x}</button></div>`).join("") || `<div class="empty">${t("Empty")}</div>`;
+    const a = m.adult_set ?? null;
     $("opAct").innerHTML = (m.local ? `<button onclick="$('opFiles').click()">${t("Add files…")}</button><input type="file" id="opFiles" multiple accept=".png,.webp,.gif,.tgs,.webm" hidden onchange="uploadPack(this.files,'${esc(m.name)}')">` : "")
-      + `<span class="grow"></span><button class="danger" onclick="delPack('${esc(m.name)}')">${t("Remove from server")}</button>`;
+      + `<select onchange="setRules('${esc(m.name)}',{adult:this.value}).then(()=>openPack('${esc(m.name)}'))">`
+      + [["auto", "18+: auto"], ["on", "18+: yes"], ["off", "18+: no"]].map(([k, l]) => `<option value="${k}"${(a === null ? "auto" : a ? "on" : "off") === k ? " selected" : ""}>${t(l)}${k === "auto" ? (m.adult ? " (18+)" : "") : ""}</option>`).join("") + `</select>`
+      + (m.scan && m.scan.rev === m.rev ? `<span class="note">${t("scanRes", { e: m.scan.explicit, n: m.scan.checked })}</span>` : `<span class="note">${t("scanWait")}</span>`)
+      + `<span class="grow"></span><button class="danger" onclick="delPack('${esc(m.name)}')">${t("Remove from server")}</button><button class="danger" onclick="banPack('${esc(m.name)}')">${t("Ban")}</button>`;
   } catch (e) { $("opGrid").innerHTML = `<div class="empty">${esc(errText(e))}</div>`; }
+}
+async function setRules(name, body) {
+  try { showTg(await api(`/v1/admin/packs/${encodeURIComponent(name)}/rules`, "POST", body)); }
+  catch (e) { setMsg($("opMsg") ? "opMsg" : "bMsg", t("Failed: ") + esc(errText(e)), "err"); }
+}
+async function banPack(name) {
+  if (!confirm(t("banAsk"))) return;
+  await setRules(name, { ban: true }); closeModal();
+}
+async function banByLink() {
+  const link = $("bLink").value.trim();
+  if (!link) return setMsg("bMsg", t("Paste a link first."), "err");
+  if (!confirm(t("banAsk"))) return;
+  await setRules(link.replace(/\/+$/, "").split("/").pop(), { ban: true }); $("bLink").value = "";
+}
+async function rmSticker(name, file) {
+  if (!confirm(t("rmAsk"))) return;
+  try { await api(`/v1/admin/packs/${encodeURIComponent(name)}/file/${encodeURIComponent(file)}`, "DELETE"); openPack(name); reloadPacks(); }
+  catch (e) { setMsg("opMsg", t("Failed: ") + esc(errText(e)), "err"); }
 }
 async function delPack(name) {
   if (!confirm(t("Remove this pack from the server? People who already have it keep their copy."))) return;

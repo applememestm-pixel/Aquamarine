@@ -57,6 +57,158 @@ pub struct Manifest {
     /// Telegram: never checked against Telegram.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub local: bool,
+    /// 18+ (Telegram's "sensitive content"): set when served, from the
+    /// admin's choice or a guess by the title (`Rules::adult_of`). Apps with
+    /// the 18+ filter on hide the pack and blur its stickers in chats.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub adult: bool,
+    /// What the image detector found in it (`scan`), for revision `rev`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan: Option<Scan>,
+}
+
+/// The detector's look at a pack (aqua-nsfw): how many stickers it could
+/// read (static ones — .tgs / .webm are skipped) and how many are explicit.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Scan {
+    pub rev: u64,
+    pub checked: u32,
+    pub explicit: u32,
+}
+
+impl Scan {
+    /// 18+ by the pictures: two explicit stickers, or one in a pack this small.
+    pub fn adult(&self) -> bool {
+        self.explicit >= 2 || (self.explicit >= 1 && self.checked <= 4)
+    }
+}
+
+/// At most this many stickers of a pack are looked at (evenly spread):
+/// enough to tell, and a 120-sticker pack costs ~2 s of one core, not 8.
+const SCAN_SAMPLE: usize = 32;
+
+/// One scan at a time on the whole relay (it's one core's work): imports
+/// and the start-up pass queue up instead of loading a small home server.
+fn scan_gate() -> &'static tokio::sync::Semaphore {
+    static G: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    G.get_or_init(|| tokio::sync::Semaphore::new(1))
+}
+
+/// Look at a pack's stickers with the detector, unless this revision was
+/// already looked at. Stores the result in its manifest.
+pub async fn scan(name: &str) {
+    let Some(m) = load_manifest(name) else { return };
+    if m.scan.is_some_and(|s| s.rev == m.rev) {
+        return;
+    }
+    let Ok(_permit) = scan_gate().acquire().await else { return };
+    let dir = pack_dir(&m.name);
+    let files: Vec<String> = m.files.iter().filter(|f| f.mime.starts_with("image/")).map(|f| f.file.clone()).collect();
+    let step = files.len().div_ceil(SCAN_SAMPLE).max(1);
+    let pick: Vec<std::path::PathBuf> = files.iter().step_by(step).map(|f| dir.join(f)).collect();
+    let started = std::time::Instant::now();
+    let (checked, explicit) = tokio::task::spawn_blocking(move || {
+        let (mut c, mut e) = (0u32, 0u32);
+        for p in pick {
+            if let Some(s) = aqua_nsfw::classify_file(&p) {
+                c += 1;
+                e += u32::from(s.explicit());
+            }
+        }
+        (c, e)
+    }).await.unwrap_or((0, 0));
+    let lock = pack_lock(&m.name.to_ascii_lowercase());
+    let _g = lock.lock().await;
+    // Changed while we looked: the next pass looks again.
+    let Some(mut now) = load_manifest(&m.name).filter(|x| x.rev == m.rev) else { return };
+    now.scan = Some(Scan { rev: m.rev, checked, explicit });
+    let _ = std::fs::write(dir.join("manifest.json"), serde_json::to_vec(&now).unwrap_or_default());
+    tracing::info!(pack = %m.name, checked, explicit, ms = started.elapsed().as_millis() as u64, "sticker pack scanned");
+}
+
+/// In the background: [`scan`] for one pack.
+pub fn spawn_scan(name: &str) {
+    let name = name.to_string();
+    tokio::spawn(async move { scan(&name).await });
+}
+
+/// At start: every stored pack not looked at yet (or changed since), one
+/// after another.
+pub fn spawn_scan_all() {
+    tokio::spawn(async {
+        // Let the relay come up first.
+        tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+        for m in list_manifests() {
+            if !m.scan.is_some_and(|s| s.rev == m.rev) {
+                scan(&m.name).await;
+            }
+        }
+    });
+}
+
+// ---------- What the admin decided about packs (aqua-pack-rules.json) -------
+//
+// Kept apart from `aqua-packs/` (which "Clear the server" empties): a pack
+// banned here can't be imported again by anyone; stickers removed from a
+// pack don't come back with Telegram's next refresh; 18+ marks. Apps get
+// the bans and marks with `/v1/packs` and apply them to stickers already
+// in chats and libraries — what the admin removes is gone for everyone.
+
+const RULES_FILE: &str = "aqua-pack-rules.json";
+
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct Rules {
+    /// Banned packs (short names, lowercase).
+    #[serde(default)]
+    pub banned: Vec<String>,
+    /// Pack (lowercase) → removed stickers: file names and Telegram
+    /// `file_unique_id`s.
+    #[serde(default)]
+    pub removed: std::collections::BTreeMap<String, Vec<String>>,
+    /// Pack (lowercase) → 18+ as the admin set it (absent = guessed).
+    #[serde(default)]
+    pub adult: std::collections::BTreeMap<String, bool>,
+}
+
+impl Rules {
+    pub fn load() -> Self {
+        std::fs::read(RULES_FILE).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+    }
+    fn save(&self) -> std::io::Result<()> {
+        let tmp = format!("{RULES_FILE}.part");
+        std::fs::write(&tmp, serde_json::to_vec_pretty(self).unwrap_or_default())?;
+        std::fs::rename(tmp, RULES_FILE)
+    }
+    pub fn is_banned(&self, name: &str) -> bool {
+        self.banned.iter().any(|b| b.eq_ignore_ascii_case(name))
+    }
+    fn removed_of(&self, name: &str) -> &[String] {
+        self.removed.get(&name.to_ascii_lowercase()).map(Vec::as_slice).unwrap_or(&[])
+    }
+    /// The admin's word; else the detector's (for this revision) or the title.
+    pub fn adult_of(&self, m: &Manifest) -> bool {
+        self.adult.get(&m.name.to_ascii_lowercase()).copied().unwrap_or_else(|| {
+            m.scan.is_some_and(|s| s.rev == m.rev && s.adult()) || looks_adult(&m.name, &m.title)
+        })
+    }
+}
+
+/// A guess by the name and title (Telegram's Bot API has no 18+ flag);
+/// the admin overrides it either way.
+pub fn looks_adult(name: &str, title: &str) -> bool {
+    let t = format!("{name} {title}").to_lowercase();
+    ["18+", "r18", "r-18", "nsfw", "hentai", "yiff", "porn", "xxx", "lewd", "nude", "ecchi", "секс", "порн", "хентай", "эротик"]
+        .iter().any(|k| t.contains(k))
+}
+
+/// A manifest as people get it: removed stickers out, the 18+ mark on.
+fn served(mut m: Manifest, r: &Rules) -> Manifest {
+    let gone = r.removed_of(&m.name);
+    if !gone.is_empty() {
+        m.files.retain(|f| !gone.contains(&f.file) && (f.id.is_empty() || !gone.contains(&f.id)));
+    }
+    m.adult = r.adult_of(&m);
+    m
 }
 
 /// A stored pack older than this is checked against Telegram again.
@@ -186,12 +338,17 @@ async fn fetch_sticker(
     Some(PackFile { mime: mime_of(&file).into(), file, emoji, id: uid })
 }
 
+const BANNED: &str = "this pack is blocked on this server";
+
 /// Import a pack (or return the stored one; a stale one is re-checked in
 /// the background).
 pub async fn import(pack_ref: &str) -> Result<Manifest, String> {
     let name = short_name(pack_ref);
     if name.is_empty() {
         return Err("empty pack link".into());
+    }
+    if Rules::load().is_banned(&name) {
+        return Err(BANNED.into());
     }
     if let Some(m) = load_manifest(&name) {
         refresh_if_stale(&m);
@@ -246,13 +403,21 @@ pub async fn sync(name: &str, refresh: bool) -> Result<Manifest, String> {
     }
     let r = &set["result"];
     let real = r["name"].as_str().map(short_name).unwrap_or_else(|| name.to_string());
+    let rules = Rules::load();
+    if rules.is_banned(&real) {
+        return Err(BANNED.into());
+    }
+    let gone = rules.removed_of(&real).to_vec();
     let title = r["title"].as_str().unwrap_or(&real).to_string();
     let kind = r["sticker_type"].as_str().unwrap_or("regular").to_string();
     let dir = pack_dir(&real);
     let tmp = Path::new(PACKS_DIR).join(format!(".{real}.part"));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-    let stickers: Vec<serde_json::Value> = r["stickers"].as_array().cloned().unwrap_or_default().into_iter().take(MAX_STICKERS).collect();
+    // Stickers the admin removed stay out.
+    let stickers: Vec<serde_json::Value> = r["stickers"].as_array().cloned().unwrap_or_default().into_iter()
+        .filter(|st| !st["file_unique_id"].as_str().is_some_and(|u| gone.iter().any(|g| g == u)))
+        .take(MAX_STICKERS).collect();
     let started = std::time::Instant::now();
     // Keep what we have: link (or copy) the old file into the new folder.
     let have: std::collections::HashMap<String, PackFile> = old.as_ref()
@@ -296,11 +461,16 @@ pub async fn sync(name: &str, refresh: bool) -> Result<Manifest, String> {
         o.title == title && o.files.len() == files.len() && o.files.iter().zip(&files).all(|(a, b)| a.file == b.file && a.emoji == b.emoji)
     });
     let rev = old.as_ref().map(|o| o.rev + u64::from(!same)).unwrap_or(1);
-    let m = Manifest { name: real.clone(), title, kind, files, updated: now_secs(), rev, local: false };
+    // Same stickers: the detector's last look still holds.
+    let scan = old.as_ref().and_then(|o| o.scan).filter(|s| s.rev == rev);
+    let m = Manifest { name: real.clone(), title, kind, files, updated: now_secs(), rev, local: false, adult: false, scan };
     std::fs::write(tmp.join("manifest.json"), serde_json::to_vec(&m).unwrap_or_default()).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::rename(&tmp, &dir).map_err(|e| e.to_string())?;
     tracing::info!(pack = %m.name, files = m.files.len(), downloaded = fresh, rev = m.rev, ms = started.elapsed().as_millis() as u64, "sticker pack synced");
+    if m.scan.is_none() {
+        spawn_scan(&m.name);
+    }
     Ok(m)
 }
 
@@ -326,6 +496,11 @@ pub struct PacksIndex {
     /// Users can import by link (the server has a bot token).
     pub telegram: bool,
     pub packs: Vec<PackSummary>,
+    /// Banned here (lowercase): apps drop them from libraries and hide
+    /// their stickers in chats (with 1.20.1-9).
+    pub banned: Vec<String>,
+    /// Pack (lowercase) → stickers removed from it (file names / ids).
+    pub removed: std::collections::BTreeMap<String, Vec<String>>,
 }
 #[derive(Serialize)]
 pub struct PackSummary {
@@ -334,22 +509,30 @@ pub struct PackSummary {
     #[serde(rename = "type")]
     pub kind: String,
     pub count: usize,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub adult: bool,
 }
 
 pub async fn list(State(_): State<AppState>) -> Json<PacksIndex> {
+    let r = Rules::load();
     Json(PacksIndex {
         telegram: bot_token().is_some(),
         packs: list_manifests()
             .into_iter()
-            .map(|m| PackSummary { count: m.files.len(), name: m.name, title: m.title, kind: m.kind })
+            .filter(|m| !r.is_banned(&m.name))
+            .map(|m| served(m, &r))
+            .map(|m| PackSummary { count: m.files.len(), adult: m.adult, name: m.name, title: m.title, kind: m.kind })
             .collect(),
+        banned: r.banned.clone(),
+        removed: r.removed.clone(),
     })
 }
 
 pub async fn manifest(UrlPath(name): UrlPath<String>) -> Result<Json<Manifest>, StatusCode> {
-    let m = load_manifest(&short_name(&name)).ok_or(StatusCode::NOT_FOUND)?;
+    let r = Rules::load();
+    let m = load_manifest(&short_name(&name)).filter(|m| !r.is_banned(&m.name)).ok_or(StatusCode::NOT_FOUND)?;
     refresh_if_stale(&m);
-    Ok(Json(m))
+    Ok(Json(served(m, &r)))
 }
 
 /// Check a pack against Telegram now (at most once a minute per pack).
@@ -358,13 +541,14 @@ pub async fn refresh_http(_caller: Caller, UrlPath(name): UrlPath<String>) -> Re
     if load_manifest(&name).is_none() {
         return Err((StatusCode::NOT_FOUND, "no such pack".into()));
     }
-    sync(&name, true).await.map(Json).map_err(|e| (StatusCode::BAD_GATEWAY, e))
+    let m = sync(&name, true).await.map_err(|e| (StatusCode::BAD_GATEWAY, e))?;
+    Ok(Json(served(m, &Rules::load())))
 }
 
 pub async fn file(UrlPath((name, file)): UrlPath<(String, String)>) -> impl IntoResponse {
     let name = short_name(&name);
-    let Some(m) = load_manifest(&name) else { return Err(StatusCode::NOT_FOUND) };
-    // Only files listed in the manifest — no path tricks.
+    let Some(m) = load_manifest(&name).map(|m| served(m, &Rules::load())) else { return Err(StatusCode::NOT_FOUND) };
+    // Only files listed in the manifest — no path tricks (nor removed ones).
     let Some(f) = m.files.iter().find(|f| f.file == file) else { return Err(StatusCode::NOT_FOUND) };
     let bytes = std::fs::read(pack_dir(&name).join(&f.file)).map_err(|_| StatusCode::NOT_FOUND)?;
     Ok((
@@ -380,7 +564,8 @@ pub struct ImportBody {
 
 /// Any signed-in user may import (the token never leaves the server).
 pub async fn import_http(_caller: Caller, Json(b): Json<ImportBody>) -> Result<Json<Manifest>, (StatusCode, String)> {
-    import(&b.link).await.map(Json).map_err(|e| (StatusCode::BAD_GATEWAY, e))
+    let m = import(&b.link).await.map_err(|e| (if e == BANNED { StatusCode::FORBIDDEN } else { StatusCode::BAD_GATEWAY }, e))?;
+    Ok(Json(served(m, &Rules::load())))
 }
 
 #[derive(Serialize)]
@@ -390,6 +575,8 @@ pub struct TokenView {
     pub packs: usize,
     /// The packs stored here, for the panel's list.
     pub list: Vec<PackBrief>,
+    /// Banned packs (they can't be imported again).
+    pub banned: Vec<String>,
 }
 
 /// One stored pack in the admin panel: name, title, kind, how many files,
@@ -404,12 +591,22 @@ pub struct PackBrief {
     pub updated: u64,
     /// Uploaded here, not from Telegram.
     pub local: bool,
+    /// 18+ (set or guessed), and whether the admin set it.
+    pub adult: bool,
+    pub adult_set: Option<bool>,
+    /// The detector's look: (checked, explicit), if it has looked.
+    pub scan: Option<(u32, u32)>,
 }
 
 fn briefs() -> Vec<PackBrief> {
+    let r = Rules::load();
     list_manifests()
         .into_iter()
+        .map(|m| served(m, &r))
         .map(|m| PackBrief {
+            adult_set: r.adult.get(&m.name.to_ascii_lowercase()).copied(),
+            scan: m.scan.filter(|s| s.rev == m.rev).map(|s| (s.checked, s.explicit)),
+            adult: m.adult,
             count: m.files.len(),
             preview: m.files.iter().take(4).map(|f| (f.file.clone(), f.mime.clone())).collect(),
             name: m.name,
@@ -428,8 +625,12 @@ pub struct TokenUpdate {
 
 pub async fn admin_get(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Result<Json<TokenView>, StatusCode> {
     admin_authed(&state, &headers)?;
+    Ok(Json(token_view()))
+}
+
+fn token_view() -> TokenView {
     let list = briefs();
-    Ok(Json(TokenView { source: token_source(), has_token: bot_token().is_some(), packs: list.len(), list }))
+    TokenView { source: token_source(), has_token: bot_token().is_some(), packs: list.len(), list, banned: Rules::load().banned }
 }
 
 pub async fn admin_set(
@@ -448,8 +649,7 @@ pub async fn admin_set(
     std::fs::write(TOKEN_FILE, serde_json::to_vec_pretty(&TokenFile { token: t }).unwrap_or_default())
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     spawn_default_imports();
-    let list = briefs();
-    Ok(Json(TokenView { source: token_source(), has_token: bot_token().is_some(), packs: list.len(), list }))
+    Ok(Json(token_view()))
 }
 
 /// First start without a Telegram token: ask for one in the terminal, so
@@ -506,6 +706,28 @@ mod tests {
         assert_eq!(short_name("@Pack?x=1"), "Pack");
         assert_eq!(short_name("../../etc"), "etc");
         assert_eq!(short_name("a b"), "ab");
+    }
+    #[test]
+    fn adult_guess_and_override() {
+        assert!(looks_adult("x", "Random Stickers R18 @sharky_png"));
+        assert!(looks_adult("MLP", "MLP HENTAI 🦄"));
+        assert!(!looks_adult("eltaller47", "eltaller47"));
+        let mut r = Rules::default();
+        let mut pm = Manifest { name: "P".into(), title: "nsfw pack".into(), kind: "regular".into(), updated: 0, rev: 3, local: false, adult: false, scan: None, files: vec![] };
+        assert!(r.adult_of(&pm));
+        pm.title = "cats".into();
+        assert!(!r.adult_of(&pm));
+        pm.scan = Some(Scan { rev: 3, checked: 30, explicit: 4 });
+        assert!(r.adult_of(&pm));
+        pm.scan = Some(Scan { rev: 2, checked: 30, explicit: 4 }); // stale
+        assert!(!r.adult_of(&pm));
+        pm.scan = Some(Scan { rev: 3, checked: 30, explicit: 4 });
+        r.adult.insert("p".into(), false);
+        assert!(!r.adult_of(&pm));
+        r.removed.insert("p".into(), vec!["2.webp".into(), "uid9".into()]);
+        let m = Manifest { name: "P".into(), title: "t".into(), kind: "regular".into(), updated: 0, rev: 1, local: false, adult: false, scan: None,
+            files: ["1.webp", "2.webp", "3.webp"].iter().enumerate().map(|(i, f)| PackFile { file: f.to_string(), emoji: String::new(), mime: String::new(), id: if i == 2 { "uid9".into() } else { String::new() } }).collect() };
+        assert_eq!(served(m, &r).files.len(), 1);
     }
 }
 
@@ -573,6 +795,8 @@ pub async fn admin_upload(State(state): State<AppState>, headers: axum::http::He
                 updated: now_secs(),
                 rev: 0,
                 local: true,
+                adult: false,
+                scan: None,
             }
         }
     };
@@ -601,13 +825,87 @@ pub async fn admin_upload(State(state): State<AppState>, headers: axum::http::He
     m.updated = now_secs();
     let json = serde_json::to_vec_pretty(&m).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     std::fs::write(dir.join("manifest.json"), json).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    spawn_scan(&m.name);
     Ok(Json(m))
 }
 
 /// One pack, whole, for the panel.
 pub async fn admin_manifest(State(state): State<AppState>, headers: axum::http::HeaderMap, UrlPath(name): UrlPath<String>) -> Result<Json<Manifest>, StatusCode> {
     admin_authed(&state, &headers)?;
-    load_manifest(&short_name(&name)).map(Json).ok_or(StatusCode::NOT_FOUND)
+    load_manifest(&short_name(&name)).map(|m| Json(served(m, &Rules::load()))).ok_or(StatusCode::NOT_FOUND)
+}
+
+#[derive(Deserialize)]
+pub struct RulesUpdate {
+    /// "on" | "off" | "auto" (the guess by the title).
+    #[serde(default)]
+    pub adult: Option<String>,
+    /// true: remove the pack and refuse it from now on; false: allow it again.
+    #[serde(default)]
+    pub ban: Option<bool>,
+}
+
+/// 18+ mark and ban of a pack (also of one not on this server: by name / link).
+pub async fn admin_rules(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    UrlPath(name): UrlPath<String>,
+    Json(u): Json<RulesUpdate>,
+) -> Result<Json<TokenView>, (StatusCode, String)> {
+    admin_authed(&state, &headers).map_err(|c| (c, "admin only".into()))?;
+    let name = short_name(&name);
+    if name.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "no pack name".into()));
+    }
+    let lc = name.to_ascii_lowercase();
+    let _guard = pack_lock(&lc);
+    let _guard = _guard.lock().await;
+    let mut r = Rules::load();
+    match u.adult.as_deref() {
+        Some("on") => { r.adult.insert(lc.clone(), true); }
+        Some("off") => { r.adult.insert(lc.clone(), false); }
+        Some("auto") => { r.adult.remove(&lc); }
+        _ => {}
+    }
+    match u.ban {
+        Some(true) => {
+            if !r.is_banned(&lc) { r.banned.push(lc.clone()); }
+            if load_manifest(&name).is_some() { let _ = std::fs::remove_dir_all(pack_dir(&name)); }
+        }
+        Some(false) => r.banned.retain(|b| !b.eq_ignore_ascii_case(&lc)),
+        None => {}
+    }
+    r.save().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(token_view()))
+}
+
+/// Take one sticker out of a pack for everyone (a Telegram refresh won't
+/// bring it back; apps drop it from libraries and hide it in chats).
+pub async fn admin_remove_file(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    UrlPath((name, file)): UrlPath<(String, String)>,
+) -> Result<Json<Manifest>, (StatusCode, String)> {
+    admin_authed(&state, &headers).map_err(|c| (c, "admin only".into()))?;
+    let name = short_name(&name);
+    let lock = pack_lock(&name.to_ascii_lowercase());
+    let _guard = lock.lock().await;
+    let mut m = load_manifest(&name).ok_or((StatusCode::NOT_FOUND, "no such pack".into()))?;
+    let i = m.files.iter().position(|f| f.file == file).ok_or((StatusCode::NOT_FOUND, "no such sticker".into()))?;
+    let f = m.files.remove(i);
+    let mut r = Rules::load();
+    let gone = r.removed.entry(name.to_ascii_lowercase()).or_default();
+    for k in [f.file.clone(), f.id.clone()] {
+        if !k.is_empty() && !gone.contains(&k) { gone.push(k); }
+    }
+    r.save().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let dir = pack_dir(&m.name);
+    let _ = std::fs::remove_file(dir.join(&f.file));
+    m.rev += 1;
+    std::fs::write(dir.join("manifest.json"), serde_json::to_vec(&m).unwrap_or_default())
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    spawn_scan(&m.name);
+    Ok(Json(served(m, &r)))
 }
 
 /// Remove a pack from this server (apps that already have it keep their copy).

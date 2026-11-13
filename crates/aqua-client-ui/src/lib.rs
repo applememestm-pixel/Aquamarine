@@ -40,6 +40,7 @@ pub mod tray;
 pub mod bgnotify;
 pub mod crashreport;
 pub mod music;
+pub mod nsfw;
 
 use anyhow::Result;
 use tauri::Manager;
@@ -224,6 +225,8 @@ pub fn run() -> Result<()> {
             gpu::confirm_dmabuf,
             gpu::restart_app,
             commands::fetch_attachment,
+            commands::restore_story_file,
+            nsfw::nsfw_check,
             commands::allow_media_preview,
             media_server::media_stream_url,
             media_server::probe_media,
@@ -235,6 +238,7 @@ pub fn run() -> Result<()> {
             personal::read_theme_file,
             personal::save_console_bot,
             personal::save_temp_file,
+            personal::temp_append,
             personal::set_window_icon,
             personal::set_shortcut_icon,
             personal::save_wallpaper,

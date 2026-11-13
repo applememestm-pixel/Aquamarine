@@ -1,6 +1,6 @@
 [package]
 name        = "aqua-server-app"
-version     = "1.20.1-8"
+version     = "1.20.1-9"
 edition     = "2021"
 license     = "MIT OR Apache-2.0"
 description = "Aquamarine Server — the relay as its own app (Windows, macOS, Linux, Android)."
@@ -41,6 +41,10 @@ tauri-plugin-single-instance = "2"   # a second launch shows the running window 
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+
+# The image detector is arithmetic: unoptimised it takes seconds per picture.
+[profile.dev.package.aqua-nsfw]
+opt-level = 3
 
 [profile.release]
 lto = "thin"

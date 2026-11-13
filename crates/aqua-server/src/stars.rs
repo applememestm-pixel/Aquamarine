@@ -11,13 +11,16 @@
 //! `aqua-star.key` in its data folder, made once with `aqua-server star-key`
 //! (which prints the public key to build into the apps). That relay runs the
 //! @stars bot, for the owner only (the e-mail check of verify.rs):
-//!   /star @name [official|1-8]   /unstar @name   /stars
+//!   /<name> level <0-6>   /star @name [1-6]   /unstar @name   /stars
 //! and, with `AQUA_BOOSTY_TOKEN` + `AQUA_BOOSTY_BLOG`, follows the Boosty
 //! subscribers: an account whose e-mail here is a subscriber's gets the star
-//! of that subscription level (levels by price: the cheapest is 1). Stars set
-//! by hand are never touched by that.
+//! of that subscription level (levels by price: the cheapest is 1, at most
+//! 5). Stars set by hand are never touched by that.
 //!
-//! Kinds: 0 — the official star; 1–8 — the Boosty levels.
+//! The CeZeOs star (the owner's mark, a sun in its level's colour): levels
+//! 1–5 — donations (Boosty); 6 — above them, only the owner gives it by hand.
+//! Older builds had 0 ("official", now level 6) and 1–8: stored ones are
+//! moved over on load (0 → 6, 7–8 → 5).
 //! A statement lasts 8 days and is signed afresh on every request while the
 //! star stands, so a removed star fades from other people's screens within
 //! that time (from its owner's own app at once).
@@ -38,6 +41,11 @@ const KEY_FILE: &str = "aqua-star.key";
 const STORE: &str = "aqua-stars.json";
 /// How long a signed statement holds.
 const LIFE_SECS: u64 = 8 * 24 * 3600;
+/// The donation levels (Boosty) end here…
+pub const DONATION_MAX: u8 = 5;
+/// …and this one stands above them: only the owner gives it.
+pub const OWNER_LEVEL: u8 = 6;
+
 /// The relay with the key, for relays without it (the owner's).
 const DEFAULT_HOME: &str = "http://193.233.245.196:7777";
 
@@ -47,6 +55,37 @@ struct Star {
     /// "manual" (the owner's command) or "boosty".
     source: String,
     at: u64,
+    /// Given for a while (`/<name> level 3 30d`): gone after this (unix s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    until: Option<u64>,
+}
+
+impl Star {
+    fn live(&self, now: u64) -> bool {
+        self.until.map_or(true, |u| now < u)
+    }
+}
+
+/// "30d", "12h", "2w", "3m" (months of 30 days), also д/ч/н/м → seconds.
+fn parse_for(w: &str) -> Option<u64> {
+    let w = w.trim().to_lowercase();
+    let split = w.find(|c: char| !c.is_ascii_digit())?;
+    let (n, unit) = w.split_at(split);
+    let n: u64 = n.parse().ok().filter(|&n| n > 0 && n <= 10_000)?;
+    let secs = match unit.trim() {
+        "h" | "ч" | "час" | "часа" | "часов" => 3600,
+        "d" | "д" | "день" | "дня" | "дней" => 86_400,
+        "w" | "н" | "нед" => 7 * 86_400,
+        "m" | "м" | "мес" | "month" | "months" => 30 * 86_400,
+        "y" | "г" | "год" | "года" | "лет" => 365 * 86_400,
+        _ => return None,
+    };
+    Some(n * secs)
+}
+
+fn left(until: u64, now: u64) -> String {
+    let s = until.saturating_sub(now);
+    if s >= 2 * 86_400 { format!("{} d", s / 86_400) } else { format!("{} h", (s / 3600).max(1)) }
 }
 
 /// What every app checks (see the module note).
@@ -71,8 +110,31 @@ static STARS: Mutex<Option<BTreeMap<String, Star>>> = Mutex::new(None);
 
 fn with_stars<R>(f: impl FnOnce(&mut BTreeMap<String, Star>) -> R) -> R {
     let mut g = STARS.lock().unwrap_or_else(|e| e.into_inner());
-    let map = g.get_or_insert_with(|| std::fs::read(STORE).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default());
+    let map = g.get_or_insert_with(|| {
+        let mut m: BTreeMap<String, Star> = std::fs::read(STORE).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        // The old kinds: "official" (0) is level 6 now, 7–8 are 5.
+        let mut moved = false;
+        for st in m.values_mut() {
+            let k = migrate(st.kind);
+            if k != st.kind {
+                st.kind = k;
+                moved = true;
+            }
+        }
+        if moved {
+            save(&m);
+        }
+        m
+    });
     f(map)
+}
+
+pub fn migrate(kind: u8) -> u8 {
+    match kind {
+        0 => OWNER_LEVEL,
+        k if k > OWNER_LEVEL => DONATION_MAX,
+        k => k,
+    }
 }
 
 fn save(map: &BTreeMap<String, Star>) {
@@ -144,9 +206,10 @@ pub fn keygen_cli() -> String {
     )
 }
 
-fn sign(uid: &str, kind: u8) -> Option<Statement> {
+fn sign(uid: &str, kind: u8, until: Option<u64>) -> Option<Statement> {
     let k = key()?;
-    let exp = now() + LIFE_SECS;
+    // A star given for a while ends there for everyone, not 8 days later.
+    let exp = (now() + LIFE_SECS).min(until.unwrap_or(u64::MAX));
     let sig = k.sign(&signed_bytes(uid, kind, exp));
     Some(Statement { uid: uid.to_string(), kind, exp, sig: hex::encode(sig) })
 }
@@ -161,8 +224,9 @@ pub async fn get_star(State(_state): State<AppState>, Path(uid): Path<String>) -
         return Err(StatusCode::BAD_REQUEST);
     }
     if has_key() {
-        let kind = with_stars(|m| m.get(&uid).map(|s| s.kind));
-        return kind.and_then(|k| sign(&uid, k)).map(Json).ok_or(StatusCode::NOT_FOUND);
+        let t = now();
+        let star = with_stars(|m| m.get(&uid).filter(|s| s.live(t)).map(|s| (s.kind, s.until)));
+        return star.and_then(|(k, until)| sign(&uid, k, until)).map(Json).ok_or(StatusCode::NOT_FOUND);
     }
     // Not the star relay: ask it (and remember the answer for 10 minutes).
     if let Some((at, st)) = CACHE.lock().ok().and_then(|g| g.as_ref().and_then(|m| m.get(&uid).cloned())) {
@@ -252,7 +316,18 @@ async fn say(state: &AppState, to: &str, text: &str) {
 }
 
 fn kind_name(k: u8) -> String {
-    if k == 0 { "official ⭐".into() } else { format!("level {k} ★") }
+    if k == OWNER_LEVEL { format!("CeZeOs level {k} (the owner's)") } else { format!("CeZeOs level {k}") }
+}
+
+/// The level word of a command: 1–6 (0 — take the star away).
+fn parse_level(w: Option<&str>) -> Result<u8, &'static str> {
+    match w.map(str::trim) {
+        None | Some("") => Ok(OWNER_LEVEL),
+        Some(w) => match w.parse::<u8>() {
+            Ok(n) if n <= OWNER_LEVEL => Ok(n),
+            _ => Err("The level: 1–5 (donations) or 6 (yours); 0 takes the star away."),
+        },
+    }
 }
 
 async fn answer(state: &AppState, u: &crate::BotUpdate) {
@@ -261,51 +336,33 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
         return;
     }
     if !crate::verify::is_owner(state, &u.from) {
-        say(state, &u.from, "⭐ Stars are given by the Aquamarine team. Boosty supporters get theirs on their own.").await;
+        say(state, &u.from, "✦ The CeZeOs star: levels 1–5 come with a Boosty subscription (on their own, by your e-mail here); level 6 only from the owner.").await;
         return;
     }
     let (cmd, arg) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
     let cmd = cmd.split('@').next().unwrap_or(cmd);
+    // `/<name> level <n>` (the owner's way): the same as `/star @name n`.
+    let lower = arg.trim().to_lowercase();
+    if !["/star", "/unstar", "/stars", "/start", "/help"].contains(&cmd) && cmd.len() > 1 && lower.starts_with("level") {
+        let name = cmd[1..].trim_start_matches('@').to_lowercase();
+        let mut rest = lower["level".len()..].split_whitespace();
+        let lvl = rest.next().unwrap_or("x");
+        return set_level(state, &u.from, &name, parse_level(Some(lvl)), rest.next()).await;
+    }
     let mut words = arg.split_whitespace();
     let who = words.next().map(|w| w.trim_start_matches('@').to_lowercase()).filter(|w| !w.is_empty());
     match cmd {
         "/star" | "/unstar" => {
             let Some(name) = who else {
-                say(state, &u.from, &format!("Who? {cmd} @name{}", if cmd == "/star" { " [official|1-8]" } else { "" })).await;
+                say(state, &u.from, &format!("Who? {cmd} @name{}", if cmd == "/star" { " [1-6]" } else { "" })).await;
                 return;
             };
-            let Some(uid) = state.directory.uid_of(&name).filter(|x| !x.is_empty()) else {
-                say(state, &u.from, &format!("There's no @{name} on this server.")).await;
-                return;
-            };
-            if cmd == "/unstar" {
-                let had = with_stars(|m| {
-                    let had = m.remove(&uid).is_some();
-                    save(m);
-                    had
-                });
-                say(state, &u.from, &if had { format!("@{name} has no star now (other people stop seeing it within 8 days).") } else { format!("@{name} had no star.") }).await;
-                return;
-            }
-            let kind = match words.next().map(|w| w.to_lowercase()) {
-                None => 0,
-                Some(w) if w == "official" || w == "0" => 0,
-                Some(w) => match w.parse::<u8>() {
-                    Ok(n) if (1..=8).contains(&n) => n,
-                    _ => {
-                        say(state, &u.from, "The kind: official, or 1–8 (the Boosty levels).").await;
-                        return;
-                    }
-                },
-            };
-            with_stars(|m| {
-                m.insert(uid, Star { kind, source: "manual".into(), at: now() });
-                save(m);
-            });
-            say(state, &u.from, &format!("@{name} now has the {} star.", kind_name(kind))).await;
+            let lvl = if cmd == "/unstar" { Ok(0) } else { parse_level(words.next()) };
+            set_level(state, &u.from, &name, lvl, words.next()).await;
         }
         "/stars" => {
-            let list = with_stars(|m| m.iter().map(|(uid, s)| (uid.clone(), s.clone())).collect::<Vec<_>>());
+            let t = now();
+            let list = with_stars(|m| m.iter().filter(|(_, s)| s.live(t)).map(|(uid, s)| (uid.clone(), s.clone())).collect::<Vec<_>>());
             if list.is_empty() {
                 say(state, &u.from, "Nobody has a star yet.").await;
                 return;
@@ -314,15 +371,67 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
                 .iter()
                 .map(|(uid, s)| {
                     let n = state.directory.username_by_uid(uid).map(|n| format!("@{n}")).unwrap_or_else(|| format!("ID {uid}"));
-                    format!("{n} — {}{}", kind_name(s.kind), if s.source == "boosty" { " (Boosty)" } else { "" })
+                    let until = s.until.map(|u| format!(" · {} left", left(u, t))).unwrap_or_default();
+                    format!("{n} — {}{}{until}", kind_name(s.kind), if s.source == "boosty" { " (Boosty)" } else { "" })
                 })
                 .collect();
             say(state, &u.from, &format!("Stars ({}):\n{}", lines.len(), lines.join("\n"))).await;
         }
         _ => {
-            say(state, &u.from, "⭐ Stars:\n/star @name — the official star\n/star @name 1-8 — a Boosty level\n/unstar @name — take it away\n/stars — who has one").await;
+            say(state, &u.from, "✦ The CeZeOs star:\n/<name> level 6 — yours, above the donation levels\n/<name> level 1-5 — a donation level by hand (Boosty gives them on its own)\n/<name> level 4 30d — for a while: h, d, w, m (30 days), y; it goes by itself\n/<name> level 0 — take it away\n(also /star @name [1-6] [30d], /unstar @name)\n/stars — who has one").await;
         }
     }
+}
+
+/// Give `name` the star of level `lvl` (0: take it away), by hand.
+async fn set_level(state: &AppState, owner: &str, name: &str, lvl: Result<u8, &'static str>, time: Option<&str>) {
+    let lvl = match lvl {
+        Ok(l) => l,
+        Err(e) => return say(state, owner, e).await,
+    };
+    let dur = match time {
+        None => None,
+        Some(w) => match parse_for(w) {
+            Some(d) => Some(d),
+            None => return say(state, owner, "For how long: 12h, 30d, 2w, 3m (months), 1y.").await,
+        },
+    };
+    if name.is_empty() {
+        return say(state, owner, "Who? /<name> level <0-6>").await;
+    }
+    let Some(uid) = state.directory.uid_of(name).filter(|x| !x.is_empty()) else {
+        return say(state, owner, &format!("There's no @{name} on this server.")).await;
+    };
+    if lvl == 0 {
+        let had = with_stars(|m| {
+            let had = m.remove(&uid).is_some();
+            save(m);
+            had
+        });
+        return say(state, owner, &if had { format!("@{name} has no star now (other people stop seeing it within 8 days).") } else { format!("@{name} had no star.") }).await;
+    }
+    let until = dur.map(|d| now() + d);
+    with_stars(|m| {
+        m.insert(uid, Star { kind: lvl, source: "manual".into(), at: now(), until });
+        save(m);
+    });
+    let tail = until.map(|u| format!(" for {} (until {})", left(u, now()), fmt_date(u))).unwrap_or_default();
+    say(state, owner, &format!("@{name} now has the {} star{tail}.", kind_name(lvl))).await;
+}
+
+/// "2026-12-13" (UTC) for unix seconds.
+fn fmt_date(t: u64) -> String {
+    // Civil date from days (Howard Hinnant's algorithm).
+    let z = (t / 86_400) as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
 }
 
 /// Boosty subscribers → stars (by the account's e-mail on this relay).
@@ -357,14 +466,14 @@ mod boosty {
                 r.json::<serde_json::Value>().await.map_err(|e| e.without_url().to_string())
             }
         };
-        // The blog's levels, cheapest first → 1..8.
+        // The blog's levels, cheapest first → 1..5 (more expensive ones: 5).
         let levels = get(format!("https://api.boosty.to/v1/blog/{blog}/subscription_level/?show_free_level=false")).await?;
         let mut lv: Vec<(i64, u64)> = levels["data"]
             .as_array()
             .map(|a| a.iter().filter_map(|l| Some((l["id"].as_i64()?, l["price"].as_u64().unwrap_or(0)))).collect())
             .unwrap_or_default();
         lv.sort_by_key(|x| x.1);
-        let tier_of = |id: i64| lv.iter().position(|x| x.0 == id).map(|i| (i as u8 + 1).min(8));
+        let tier_of = |id: i64| lv.iter().position(|x| x.0 == id).map(|i| (i as u8 + 1).min(DONATION_MAX));
         // Every active subscriber: e-mail → level.
         let mut subs: BTreeMap<String, u8> = BTreeMap::new();
         let mut offset = 0;
@@ -401,18 +510,47 @@ mod boosty {
         }
         let n = subs.len();
         with_stars(|m| {
-            // Boosty stars that no longer stand go; hand-set ones stay.
-            m.retain(|uid, s| s.source != "boosty" || want.contains_key(uid));
+            // Boosty stars that no longer stand go; hand-set ones stay until
+            // their time is up.
+            let t = now();
+            m.retain(|uid, s| if s.source == "boosty" { want.contains_key(uid) } else { s.live(t) });
             for (uid, tier) in want {
                 match m.get(&uid) {
-                    Some(s) if s.source == "manual" => {}
+                    // Set by hand (level 6 among them): Boosty never lowers it.
+                    Some(s) if s.source == "manual" && s.live(now()) => {}
                     _ => {
-                        m.insert(uid, Star { kind: tier, source: "boosty".into(), at: now() });
+                        m.insert(uid, Star { kind: tier, source: "boosty".into(), at: now(), until: None });
                     }
                 }
             }
             save(m);
         });
         Ok(n)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn levels() {
+        assert_eq!(migrate(0), 6);
+        assert_eq!(migrate(3), 3);
+        assert_eq!(migrate(8), 5);
+        assert_eq!(parse_level(None), Ok(6));
+        assert_eq!(parse_level(Some("2")), Ok(2));
+        assert_eq!(parse_level(Some("0")), Ok(0));
+        assert!(parse_level(Some("7")).is_err());
+        assert!(parse_level(Some("x")).is_err());
+        assert_eq!(parse_for("30d"), Some(30 * 86_400));
+        assert_eq!(parse_for("12ч"), Some(12 * 3600));
+        assert_eq!(parse_for("2w"), Some(14 * 86_400));
+        assert_eq!(parse_for("3m"), Some(90 * 86_400));
+        assert_eq!(parse_for("0d"), None);
+        assert_eq!(parse_for("5x"), None);
+        assert_eq!(fmt_date(0), "1970-01-01");
+        assert_eq!(fmt_date(1_794_528_000), "2026-11-13");
+        let s = Star { kind: 3, source: "manual".into(), at: 0, until: Some(100) };
+        assert!(s.live(99) && !s.live(100));
     }
 }

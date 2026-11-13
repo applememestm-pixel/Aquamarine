@@ -147,6 +147,36 @@ pub fn save_temp_file(state: State<'_, StdMutex<AppState>>, name: String, bytes:
     Ok(p.display().to_string())
 }
 
+/// A recording written to disk while it's being made (camera video): each
+/// piece comes as the raw request body — no JSON array of numbers, no copy
+/// of the whole clip in memory, no size cap. Header `x-name` starts a new
+/// file in `tmp/`, `x-path` appends to one it returned. Returns the path.
+#[tauri::command]
+pub fn temp_append(state: State<'_, StdMutex<AppState>>, request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    use std::io::Write;
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err("expected raw bytes".into()) };
+    let header = |k: &str| request.headers().get(k).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+    let dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.join("tmp") };
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = match header("x-path") {
+        p if !p.is_empty() => {
+            // Only a file this made, in tmp/.
+            let p = std::path::PathBuf::from(p);
+            if p.parent() != Some(dir.as_path()) || !p.is_file() {
+                return Err("not a recording".into());
+            }
+            p
+        }
+        _ => {
+            let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+            dir.join(format!("{stamp:x}-{}", safe_name(&header("x-name"))))
+        }
+    };
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path).map_err(|e| e.to_string())?;
+    f.write_all(bytes).map_err(|e| e.to_string())?;
+    Ok(path.display().to_string())
+}
+
 // ---- game catalogue (via the relay) --------------------------------------------
 
 #[derive(serde::Serialize)]

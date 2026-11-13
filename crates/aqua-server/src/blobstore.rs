@@ -4,7 +4,8 @@
 //! under `aqua-blobs/` (`AQUA_BLOB_DIR`). They are a delivery cache, not an
 //! archive: anything older than `AQUA_BLOB_TTL_HOURS` (72 by default) is
 //! swept hourly, and the whole cache is cleared when the server stops
-//! (`clear_cache`); kept blobs (`keep/`) and people's data stay.
+//! (`clear_cache`); kept blobs (`keep/`), live stories (`stories/`) and
+//! people's data stay.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -16,12 +17,30 @@ pub struct BlobStore {
     /// Long-lived blobs (group photos and banners): `<dir>/keep`, expiring
     /// only after `KEEP_TTL` without a single download.
     keep: PathBuf,
+    /// Story files: `<dir>/stories`. A story lives up to 48 h, and a
+    /// restart (or a self-update) of the relay must not take it away
+    /// while it's still up — so they're not part of the delivery cache.
+    stories: PathBuf,
+}
+
+/// Where a blob goes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Shelf {
+    /// The delivery cache (`AQUA_BLOB_TTL_HOURS`, cleared on stop).
+    Cache,
+    /// Long-lived, ≤ `KEEP_LIMIT` (`KEEP_TTL` past the last download).
+    Keep,
+    /// A story's file (`STORY_TTL`, kept across restarts).
+    Story,
 }
 
 /// Kept blobs live this long past their last download.
 pub const KEEP_TTL: Duration = Duration::from_secs(90 * 24 * 3600);
 /// Only small files may be kept.
 pub const KEEP_LIMIT: usize = 4 * 1024 * 1024;
+/// Story files live this long since the last upload (the longest story is
+/// 48 h; the author's app uploads it again when it finds it gone).
+pub const STORY_TTL: Duration = Duration::from_secs(50 * 3600);
 /// File kinds the admin panel tells apart.
 pub const KINDS: [&str; 8] = ["photo", "video", "sticker", "gif", "emoji", "voice", "audio", "file"];
 
@@ -39,7 +58,17 @@ impl BlobStore {
     pub fn new(dir: PathBuf, ttl: Duration) -> Self {
         let keep = dir.join("keep");
         let _ = std::fs::create_dir_all(&keep);
-        Self { dir, ttl, keep }
+        let stories = dir.join("stories");
+        let _ = std::fs::create_dir_all(&stories);
+        Self { dir, ttl, keep, stories }
+    }
+
+    fn shelf_dir(&self, shelf: Shelf) -> &Path {
+        match shelf {
+            Shelf::Cache => &self.dir,
+            Shelf::Keep => &self.keep,
+            Shelf::Story => &self.stories,
+        }
     }
 
     fn path(&self, cid: &str) -> Option<PathBuf> {
@@ -52,9 +81,9 @@ impl BlobStore {
 
     /// Remember what kind of file a blob is (for the admin panel): a
     /// `.k.<cid>` file next to it, swept together with it.
-    pub fn set_kind(&self, cid: &str, keep: bool, kind: &str) {
+    pub fn set_kind(&self, cid: &str, shelf: Shelf, kind: &str) {
         if !valid_cid(cid) || !KINDS.contains(&kind) { return; }
-        let dir = if keep { &self.keep } else { &self.dir };
+        let dir = self.shelf_dir(shelf);
         let _ = std::fs::write(dir.join(format!(".k.{}", cid.to_ascii_lowercase())), kind);
     }
 
@@ -62,7 +91,7 @@ impl BlobStore {
     /// older apps) count as "unknown".
     pub fn stats_by_kind(&self) -> Vec<(String, usize, u64)> {
         let mut m: std::collections::BTreeMap<String, (usize, u64)> = Default::default();
-        for dir in [&self.dir, &self.keep] {
+        for dir in [&self.dir, &self.keep, &self.stories] {
             let Ok(rd) = std::fs::read_dir(dir) else { continue };
             for e in rd.flatten() {
                 let name = e.file_name().to_string_lossy().to_string();
@@ -86,6 +115,16 @@ impl BlobStore {
             return Err(std::io::Error::other("too large to keep"));
         }
         self.put_in(&self.keep, cid, data)
+    }
+
+    /// Store a story's file (see `stories`).
+    pub fn put_story(&self, cid: &str, data: &[u8]) -> std::io::Result<()> {
+        self.put_in(&self.stories, cid, data)
+    }
+
+    /// Is it here (any shelf)? Without reading it.
+    pub fn has(&self, cid: &str) -> bool {
+        valid_cid(cid) && [&self.dir, &self.keep, &self.stories].iter().any(|d| d.join(cid.to_ascii_lowercase()).is_file())
     }
 
     fn put_in(&self, dir: &Path, cid: &str, data: &[u8]) -> std::io::Result<()> {
@@ -112,10 +151,12 @@ impl BlobStore {
             return None;
         }
         let p = self.keep.join(cid.to_ascii_lowercase());
-        let b = std::fs::read(&p).ok()?;
-        // Sliding expiry: every download keeps it alive.
-        touch(&p);
-        Some(b)
+        if let Ok(b) = std::fs::read(&p) {
+            // Sliding expiry: every download keeps it alive.
+            touch(&p);
+            return Some(b);
+        }
+        std::fs::read(self.stories.join(cid.to_ascii_lowercase())).ok()
     }
 
     /// (count, total bytes)
@@ -138,7 +179,7 @@ impl BlobStore {
 
     /// Remove blobs older than the TTL (and stale partial uploads).
     pub fn sweep(&self) -> usize {
-        sweep_dir(&self.dir, self.ttl) + sweep_dir(&self.keep, KEEP_TTL)
+        sweep_dir(&self.dir, self.ttl) + sweep_dir(&self.keep, KEEP_TTL) + sweep_dir(&self.stories, STORY_TTL)
     }
 
     /// The server is shutting down: the delivery cache goes (photos, videos,
@@ -161,10 +202,12 @@ impl BlobStore {
     /// "Clear the server": every file, the long-lived ones too.
     pub fn clear_all(&self) -> usize {
         let mut removed = self.clear_cache();
-        if let Ok(rd) = std::fs::read_dir(&self.keep) {
-            for e in rd.flatten() {
-                if e.metadata().is_ok_and(|m| m.is_file()) && std::fs::remove_file(e.path()).is_ok() {
-                    removed += 1;
+        for dir in [&self.keep, &self.stories] {
+            if let Ok(rd) = std::fs::read_dir(dir) {
+                for e in rd.flatten() {
+                    if e.metadata().is_ok_and(|m| m.is_file()) && std::fs::remove_file(e.path()).is_ok() {
+                        removed += 1;
+                    }
                 }
             }
         }
@@ -216,8 +259,13 @@ mod tests {
         let s = BlobStore::new(dir.path().to_path_buf(), Duration::from_secs(3600));
         std::fs::write(dir.path().join("a".repeat(64)), b"x").unwrap();
         std::fs::write(dir.path().join("keep").join("b".repeat(64)), b"y").unwrap();
+        s.put_story(&"c".repeat(64), b"z").unwrap();
         assert_eq!(s.clear_cache(), 1);
         assert!(dir.path().join("keep").join("b".repeat(64)).exists());
+        // A live story survives a restart, and is still served.
+        assert_eq!(s.get(&"c".repeat(64)).unwrap(), b"z");
+        assert!(s.has(&"c".repeat(64)) && !s.has(&"a".repeat(64)));
+        assert_eq!(s.clear_all(), 2);
     }
     #[test]
     fn put_get_sweep() {
@@ -228,8 +276,8 @@ mod tests {
         assert_eq!(s.get(&cid).unwrap(), b"cipher");
         assert!(s.get("../etc/passwd").is_none());
         assert_eq!(s.stats(), (1, 6));
-        s.set_kind(&cid, false, "video");
-        s.set_kind(&cid, false, "../x");
+        s.set_kind(&cid, Shelf::Cache, "video");
+        s.set_kind(&cid, Shelf::Cache, "../x");
         assert_eq!(s.stats(), (1, 6));
         assert_eq!(s.stats_by_kind(), vec![("video".to_string(), 1, 6)]);
         // Age it past the TTL.

@@ -39,6 +39,7 @@
   import SendDialog from "./lib/components/SendDialog.svelte";
   import CameraCapture from "./lib/components/CameraCapture.svelte";
   import StoryViewer from "./lib/components/StoryViewer.svelte";
+  import StoryArchive from "./lib/components/StoryArchive.svelte";
   import StoryComposer from "./lib/components/StoryComposer.svelte";
   import { startStoryViews } from "./lib/stories";
   import { mediaSupport, installHint } from "./lib/media";
@@ -429,6 +430,7 @@
 <SendDialog />
 <CameraCapture />
 <StoryViewer />
+<StoryArchive />
 <StoryComposer />
 
 <style>

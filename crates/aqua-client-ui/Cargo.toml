@@ -1,6 +1,6 @@
 [package]
 name        = "aqua-client-ui"
-version     = "1.20.1-8"
+version     = "1.20.1-9"
 edition     = "2021"
 license     = "MIT OR Apache-2.0"
 description = "Aquamarine desktop shell — Tauri 2 + Svelte + TypeScript."
@@ -20,6 +20,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 aqua-core        = { path = "../aqua-core" }
 aqua-client-core = { path = "../aqua-client-core" }
+aqua-nsfw        = { path = "../aqua-nsfw" }
 
 tauri               = { version = "2", features = ["protocol-asset", "tray-icon", "image-png"] }
 tauri-plugin-log    = { version = "2" }
@@ -94,6 +95,10 @@ custom-protocol = ["tauri/custom-protocol"]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(aqua_wincheck)', 'cfg(aqua_mobilecheck)'] }
 
 # Smaller, faster release binary (cross-crate inlining).
+# The image detector is arithmetic: unoptimised it takes seconds per picture.
+[profile.dev.package.aqua-nsfw]
+opt-level = 3
+
 [profile.release]
 lto = "thin"
 codegen-units = 4

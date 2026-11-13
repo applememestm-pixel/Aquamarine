@@ -1159,6 +1159,26 @@
     return { update: (s) => set(s ?? null) };
   };
 
+  /** A letterboxed video ("contain"): where the picture really is inside
+   *  its box — the LIVE / name / size tags sit on the picture's corners
+   *  (they hung in the black bars before). Sets --px / --py on the tile. */
+  const picRect: Action<HTMLVideoElement> = (node) => {
+    const tile = node.parentElement;
+    const fit = () => {
+      if (!tile) return;
+      const vw = node.videoWidth, vh = node.videoHeight, bw = node.clientWidth, bh = node.clientHeight;
+      if (!vw || !vh || !bw || !bh || getComputedStyle(node).objectFit !== "contain") { tile.style.removeProperty("--px"); tile.style.removeProperty("--py"); return; }
+      const k = Math.min(bw / vw, bh / vh);
+      tile.style.setProperty("--px", `${Math.max(0, (bw - vw * k) / 2)}px`);
+      tile.style.setProperty("--py", `${Math.max(0, (bh - vh * k) / 2)}px`);
+    };
+    const ro = new ResizeObserver(fit);
+    ro.observe(node);
+    node.addEventListener("loadedmetadata", fit);
+    node.addEventListener("resize", fit);
+    return { destroy: () => { ro.disconnect(); node.removeEventListener("loadedmetadata", fit); node.removeEventListener("resize", fit); } };
+  };
+
   const tiles = $derived.by(() => {
     const t: TileId[] = [];
     if (remote.screen && rScreen) t.push("r-screen");
@@ -1182,7 +1202,9 @@
 
   function tileTitle(id: TileId): string {
     switch (id) {
-      case "r-screen": return `${peerName} — stream${remote.label ? ` · ${remote.label}` : ""}`;
+      // The real size / fps show in the corner once known; the preset the
+      // sender picked ("1080p60") only until then — they often differ.
+      case "r-screen": return `${peerName} — stream${remote.label && !stats?.downScreen?.w ? ` · ${remote.label}` : ""}`;
       case "r-cam": return peerName;
       case "l-screen": return `You — stream${liveCfg ? ` · ${qualityLabel(liveCfg.res, liveCfg.fps)}` : ""}`;
       case "l-cam": return "You";
@@ -1262,6 +1284,7 @@
       <!-- svelte-ignore a11y_media_has_caption -->
       <video
         use:srcObject={id === "r-screen" ? rScreen : id === "r-cam" ? rCam : id === "l-screen" ? screenStream : camStream}
+        use:picRect
         class:mirror={id === "l-cam" && facing === "user"}
         class:contain={id === "r-screen" || id === "l-screen" || (big && id === "r-cam")}
         style:transform={id === "r-screen" && big && zoom.s > 1 ? `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.s})` : undefined}
@@ -1680,7 +1703,8 @@
 
   /* ---------- stage ---------- */
   .stage {
-    position: fixed; inset: 14px; z-index: 250;
+    /* Below the window's own title bar (it covered the call's top row). */
+    position: fixed; inset: calc(var(--tb-h, 0px) + 10px) 14px 14px; z-index: 250;
     background: #0B0C10;
     border: 1px solid var(--border-strong);
     border-radius: calc(16px * var(--rk, 1));
@@ -1690,7 +1714,8 @@
     overflow: hidden;
     animation: slide-in 0.18s ease-out;
   }
-  .stage.fs { inset: 0; border-radius: 0; border: none; }
+  /* Fullscreen: over everything, the title bar too (z-index 400). */
+  .stage.fs { inset: 0; border-radius: 0; border: none; z-index: 410; }
   .watch { position: fixed; inset: 0; z-index: 2000; background: #000; overflow: hidden; touch-action: none; }
   .watch-in { position: absolute; inset: 0; display: grid; place-items: center; overflow: hidden; }
   .watch-in.sideways { inset: auto; top: 50%; left: 50%; width: 100vh; height: 100vw; transform: translate(-50%, -50%) rotate(90deg); }
@@ -1745,9 +1770,9 @@
   .tile video.mirror { transform: scaleX(-1); }
   .tile-ava { width: 100%; height: 100%; display: grid; place-items: center; }
   .tile-tag {
-    position: absolute; left: 8px; bottom: 8px;
+    position: absolute; left: calc(var(--px, 0px) + 8px); bottom: calc(var(--py, 0px) + 8px);
     display: flex; align-items: center; gap: 6px;
-    max-width: calc(100% - 16px);
+    max-width: calc(100% - 16px - 2 * var(--px, 0px));
     background: rgba(0, 0, 0, 0.6); color: #fff;
     padding: 3px 8px; border-radius: calc(6px * var(--rk, 1));
     font-size: 12px; font-weight: 600;
@@ -1756,7 +1781,7 @@
   .tag-ico { width: 14px; height: 14px; color: #ff6b6e; display: grid; place-items: center; }
   .tag-ico :global(svg) { width: 14px; height: 14px; }
   .tile-res {
-    position: absolute; right: 8px; top: 8px;
+    position: absolute; right: calc(var(--px, 0px) + 8px); top: calc(var(--py, 0px) + 8px);
     background: rgba(0, 0, 0, 0.6); color: rgba(255, 255, 255, 0.85);
     padding: 2px 7px; border-radius: calc(6px * var(--rk, 1)); font-size: 11px; font-variant-numeric: tabular-nums;
   }

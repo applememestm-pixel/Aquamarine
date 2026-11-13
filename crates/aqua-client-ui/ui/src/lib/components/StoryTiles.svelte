@@ -3,11 +3,10 @@
    * Stories pinned to a profile (Telegram's "Posts" row): small 9:16 tiles,
    * a tap opens them in the story viewer. Mine also lead to the archive.
    */
-  import { t, tr } from "../i18n";
+  import { t } from "../i18n";
   import { api, assetUrl } from "../tauri";
   import { peerPresence } from "../presence";
-  import { pinnedStories, saneStories, storyArchive, openStories, storyFile, storiesOff, type Story } from "../stories";
-  import { showToast } from "./Toast.svelte";
+  import { pinnedStories, saneStories, storyArchive, myStories, storyArchiveOpen, openStories, storyFile, storiesOff, type Story } from "../stories";
 
   let { user, onopen }: { user: string; onopen?: () => void } = $props();
   const me = $derived(user === "");
@@ -22,9 +21,8 @@
   });
   function open(i: number) { onopen?.(); openStories([user], user, "pinned", i); }
   function archive() {
-    if (!$storyArchive.length) { showToast(tr("The archive is empty — stories land here when they run out")); return; }
     onopen?.();
-    openStories([""], "", "archive");
+    storyArchiveOpen.set(true);
   }
 </script>
 
@@ -32,7 +30,7 @@
   <section class="st-tiles">
     <div class="head">
       <span>{$t("Stories")}</span>
-      {#if me}<button class="arch" onclick={archive}>{$t("Story archive")}{#if $storyArchive.length} · {$storyArchive.length}{/if}</button>{/if}
+      {#if me}<button class="arch" onclick={archive}>{$t("Story archive")}{#if $storyArchive.length + $myStories.length} · {$storyArchive.length + $myStories.length}{/if}</button>{/if}
     </div>
     {#if list.length}
       <div class="row">

@@ -85,8 +85,29 @@ export const storyNav = persisted<"" | "cube" | "vertical">("aqua.storyNav.v1", 
 /** The audience and life last picked when posting (Telegram remembers it). */
 export const storyDefaults = persisted<{ aud: StoryAudience; sel: string[]; hours: number }>("aqua.storyDefaults.v1", { aud: "all", sel: [], hours: 24 });
 
-/** My stories that ran out (Telegram's archive), newest last. Only here. */
+/** My stories that ran out (Telegram's archive), newest last. Only here,
+ *  and never trimmed: a story leaves it only when I delete it. */
 export const storyArchive = persisted<Story[]>("aqua.storyArchive.v1", []);
+storyArchive.update((l) => (Array.isArray(l) ? l : []));
+
+/** Into the archive (once per id). */
+function toArchive(gone: Story[]) {
+  if (!gone.length) return;
+  storyArchive.update((a) => {
+    const have = new Set(a.map((s) => s.id));
+    return [...a, ...gone.filter((s) => !have.has(s.id))];
+  });
+}
+
+/** Every story of mine — live and archived — newest first: what the
+ *  archive grid shows and the viewer pages through. */
+export function allMyStories(live: Story[] = get(myStories), archived: Story[] = get(storyArchive)): Story[] {
+  const seen = new Set<string>();
+  return [...live, ...archived].filter((s) => !seen.has(s.id) && (seen.add(s.id), true)).sort((a, b) => b.at - a.at);
+}
+
+/** The archive grid is open (StoryArchive.svelte). */
+export const storyArchiveOpen = writable(false);
 /** Pinned to my profile: copies kept on the relay (`keep`), no expiry;
  *  shown in my profile to whoever may see them. */
 export const pinnedStories = persisted<Story[]>("aqua.pinnedStories.v1", []);
@@ -97,10 +118,7 @@ export function archiveExpired(now = Date.now()) {
   const gone = get(myStories).filter((s) => !isLive(s, now));
   if (!gone.length) return;
   myStories.update((l) => l.filter((s) => isLive(s, now)));
-  storyArchive.update((a) => {
-    const have = new Set(a.map((s) => s.id));
-    return [...a, ...gone.filter((s) => !have.has(s.id))].slice(-200);
-  });
+  toArchive(gone);
 }
 
 /** A story reference as it travels in presence — checked before use.
@@ -182,7 +200,7 @@ export interface PostOptions { caption?: string; aud?: StoryAudience; sel?: stri
 
 /** Post a photo / video as a story; resolves when it's up. */
 export async function postStory(path: string, opts: PostOptions = {}): Promise<void> {
-  const media = await api.uploadAttachment("__story__", path, false);
+  const media = await api.uploadAttachment("__story__", path, false, true);
   if (media.kind !== "image" && media.kind !== "video") throw new Error("a story is a photo or a video");
   const at = Date.now();
   const hours = [6, 12, 24, 48].includes(Number(opts.hours)) ? Number(opts.hours) : 24;
@@ -192,9 +210,30 @@ export async function postStory(path: string, opts: PostOptions = {}): Promise<v
     local: path,
   };
   archiveExpired();
-  myStories.update((l) => [...fresh(l), s].slice(-MAX_STORIES));
+  // More than MAX_STORIES live: the oldest leave early — for the archive,
+  // not for nowhere (they used to vanish).
+  const all = [...fresh(get(myStories)), s];
+  toArchive(all.slice(0, Math.max(0, all.length - MAX_STORIES)));
+  myStories.set(all.slice(-MAX_STORIES));
   const { broadcastPresence } = await import("./presence");
   broadcastPresence();
+}
+
+/** Connected: my live stories' files back on the relay if it lost them
+ *  (its file cache goes when it restarts or updates itself; relays from
+ *  1.20.1-9 keep story files, older ones don't). Same key, same CID — the
+ *  references people already have work again. */
+let healing = false;
+export async function healMyStories(): Promise<void> {
+  if (healing) return;
+  healing = true;
+  try {
+    for (const s of fresh(get(myStories))) {
+      try {
+        if (await api.restoreStoryFile(s.media, s.local)) console.info(`[aqua] story ${s.id}: file put back on the relay`);
+      } catch (e) { console.warn(`[aqua] story ${s.id}: ${e}`); }
+    }
+  } finally { healing = false; }
 }
 
 export async function deleteStory(id: string) {

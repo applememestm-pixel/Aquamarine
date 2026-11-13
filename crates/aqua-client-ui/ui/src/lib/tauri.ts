@@ -235,6 +235,9 @@ export const api = {
   listWallpapers:     (): Promise<string[]>                                            => invoke("list_wallpapers"),
   deleteWallpaper:    (path: string): Promise<void>                                    => invoke("delete_wallpaper", { path }),
   saveTempFile:       (name: string, bytes: number[]): Promise<string>                  => invoke("save_temp_file", { name, bytes }),
+  /** Raw bytes onto a file in tmp/ (a recording, piece by piece): `name` starts one, `path` appends. */
+  tempAppend:         (bytes: Uint8Array, at: { name?: string; path?: string }): Promise<string> =>
+    invoke("temp_append", bytes, { headers: { "x-name": at.name ?? "", "x-path": at.path ?? "" } }),
   saveConsoleBot:     (path: string): Promise<void>                                    => invoke("save_console_bot", { path }),
   deleteBot:          (username: string): Promise<void>                                => invoke("delete_bot", { username }),
   startChatWith:      (peer_username: string, first_message: string): Promise<ChatSummary> => invoke("start_chat_with", { peerUsername: peer_username, firstMessage: first_message }),
@@ -300,7 +303,11 @@ export const api = {
   openExternal:       (url: string): Promise<void>                                  => invoke("open_external", { url }),
   noteCall:           (peerId: string, direction: "in" | "out", status: string, duration: number, video: boolean): Promise<void> => invoke("note_call", { peerId, direction, status, duration, video }),
   openSavedFile:      (path: string): Promise<void>                                 => invoke("open_saved_file", { path }),
-  uploadAttachment:   (peer_id: string, file_path: string, keep?: boolean): Promise<ArticleMedia> => invoke("upload_attachment", { peerId: peer_id, filePath: file_path, keep: keep ?? null }),
+  uploadAttachment:   (peer_id: string, file_path: string, keep?: boolean, story?: boolean): Promise<ArticleMedia> => invoke("upload_attachment", { peerId: peer_id, filePath: file_path, keep: keep ?? null, story: story ?? null }),
+  /** A live story of mine whose file the relay lost: put it back (true = it was gone). */
+  /** The on-device detector's look at a local picture (src/nsfw.rs); null: not a picture it reads. */
+  nsfwCheck:          (path: string): Promise<{ explicit: boolean; level: number } | null> => invoke("nsfw_check", { path }),
+  restoreStoryFile:   (media: ArticleMedia, local?: string): Promise<boolean>      => invoke("restore_story_file", { media, local: local ?? null }),
   prepareBannerVideo: (path: string): Promise<string>                                  => invoke("prepare_banner_video", { path }),
   gpuStatus:          (): Promise<GpuStatus> => invoke("gpu_status"),
   setDmabuf:          (on: boolean): Promise<void> => invoke("set_dmabuf", { on }),
@@ -342,7 +349,7 @@ export const api = {
   // Telegram bot token. Downloads straight from the Telegram Bot API into
   // the local stickers library; never touches our own relay.
   packPreview:        (pack_ref: string): Promise<{ ref: string; title: string; kind: string; installed: boolean; local: StickerPack | null; server: Record<string, unknown> | null }> => invoke("pack_preview", { packRef: pack_ref }),
-  serverPacks:        (): Promise<{ telegram: boolean; packs: { name: string; title: string; type: string; count: number }[] }> => invoke("server_packs"),
+  serverPacks:        (): Promise<{ telegram: boolean; packs: { name: string; title: string; type: string; count: number; adult?: boolean }[]; banned?: string[]; removed?: Record<string, string[]> }> => invoke("server_packs"),
   importPackViaServer: (link: string): Promise<StickerImportReport>                  => invoke("import_pack_via_server", { link }),
   packFilePath:       (name: string, file: string): Promise<string>                  => invoke("pack_file_path", { name, file }),
   importTelegramStickers: (bot_token: string, pack_ref: string): Promise<StickerImportReport> =>

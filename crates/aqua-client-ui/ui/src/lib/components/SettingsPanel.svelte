@@ -20,7 +20,9 @@
   import { pickFolder } from "../dialog";
   const PHONE_UI = /android|iphone|ipad/i.test(navigator.userAgent);
   import { hasWidget } from "../widget";
-  import { storiesOff, storyNav, storyArchive, pinnedStories, openStories } from "../stories";
+  import { storiesOff, storyNav, storyArchive, pinnedStories, storyArchiveOpen, myStories } from "../stories";
+  import { showAdult } from "../packRules";
+  import { sensitiveBlur, type BlurMode } from "../nsfw";
   import { setStoriesOff } from "../storyFeed";
   import { plugins, pluginsOn, installPlugin, removePlugin, togglePlugin, EXAMPLE_PLUGIN, PLUGIN_CATS, pluginCategory, type PluginCat } from "../plugins";
   import { musicStatus, refreshMusic, openMusic } from "../music";
@@ -1800,12 +1802,26 @@
             <Select class="sel" value={$storyNav || "cube"} options={[{ value: "cube", label: $t("Sideways (cube)") }, { value: "vertical", label: $t("Down (feed)") }]}
               onchange={(v) => storyNav.set(v === "vertical" ? "vertical" : "cube")} />
           </div>
-          <button class="toggle-row" onclick={() => { if ($storyArchive.length) openStories([""], "", "archive"); else showToast(tr("The archive is empty — stories land here when they run out")); }}>
-            <div class="tr-text"><div class="tr-title">{$t("Story archive")}{#if $storyArchive.length} · {$storyArchive.length}{/if}</div>
-              <div class="tr-sub">{$t("Your stories after they run out — only you see them. Pinned to profile: {n}.", { n: $pinnedStories.length })}</div></div>
+          <button class="toggle-row" onclick={() => storyArchiveOpen.set(true)}>
+            <div class="tr-text"><div class="tr-title">{$t("Story archive")}{#if $storyArchive.length + $myStories.length} · {$storyArchive.length + $myStories.length}{/if}</div>
+              <div class="tr-sub">{$t("All your stories, the live ones too — only you see them. Pinned to profile: {n}.", { n: $pinnedStories.length })}</div></div>
             <span class="chev">›</span>
           </button>
         {/if}
+      </section>
+      <section class="group">
+        <div class="label">{$t("Sensitive content")}</div>
+        <div class="row">
+          <span class="row-label">{$t("Blur explicit photos and stickers")}</span>
+          <Select class="sel" value={$sensitiveBlur} options={[{ value: "strangers", label: $t("From people not in my contacts") }, { value: "all", label: $t("From everyone") }, { value: "off", label: $t("Don't blur") }]}
+            onchange={(v) => sensitiveBlur.set(v as BlurMode)} />
+        </div>
+        <div class="foot-note">{$t("Pictures are checked on this device — nothing is sent anywhere. A blurred one opens with a tap.")}</div>
+        <button class="toggle-row" onclick={() => showAdult.update((v) => !v)}>
+          <div class="tr-text"><div class="tr-title">{$t("Show 18+ content")}</div>
+            <div class="tr-sub">{$t("Off: 18+ sticker packs (marked by your server) are hidden, and their stickers in chats are blurred until tapped.")}</div></div>
+          <span class="switch" class:on={$showAdult}></span>
+        </button>
       </section>
       <section class="group">
         <div class="label">{$t("Messages")}</div>

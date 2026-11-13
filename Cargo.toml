@@ -4,6 +4,7 @@ members = [
     "crates/aqua-core",
     "crates/aqua-server",
     "crates/aqua-client-core",
+    "crates/aqua-nsfw",
 ]
 # aqua-client-ui is a Tauri 2 project. Its build.rs invokes tauri-build
 # which needs a bundled frontend to exist at compile time. Rather than
@@ -17,7 +18,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "1.20.1-8"
+version = "1.20.1-9"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 rust-version = "1.75"
@@ -67,6 +68,10 @@ dashmap             = "6"
 rusqlite            = { version = "0.32", features = ["bundled"] }
 
 # Smaller, faster release binaries (cross-crate inlining).
+# The image detector is arithmetic: unoptimised it takes seconds per picture.
+[profile.dev.package.aqua-nsfw]
+opt-level = 3
+
 [profile.release]
 lto = "thin"
 codegen-units = 4

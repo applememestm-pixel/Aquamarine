@@ -57,7 +57,8 @@
       // Full HD asked as a minimum of 720 lines too: some Android WebViews
       // otherwise hand out 176×144 / 320×240 (the "144p" story), and without
       // the microphone the second try used to ask for no size at all.
-      const vid: MediaTrackConstraints = { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } };
+      // 30 fps at most: a 60 fps camera doubled the encoder's work for nothing.
+      const vid: MediaTrackConstraints = { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30, max: 30 } };
       stream = await navigator.mediaDevices.getUserMedia({ video: vid, audio: true })
         .catch(() => navigator.mediaDevices.getUserMedia({ video: vid, audio: false }))
         .catch(() => navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing } }, audio: false }));
@@ -206,6 +207,25 @@
   function record() {
     if (!stream) return;
     chunks = [];
+    // Pieces go to disk as they come (tempAppend, raw bytes): no 40 MB cap,
+    // no whole clip turned into a JSON array at the end (that froze the app).
+    let file: string | null = null;
+    let failed = false;
+    let mime = "";
+    let chain: Promise<void> = Promise.resolve();
+    const onData = (b: Blob) => {
+      chain = chain.then(async () => {
+        if (failed) { chunks.push(b); return; }
+        try {
+          const bytes = new Uint8Array(await b.arrayBuffer());
+          file = await api.tempAppend(bytes, file ? { path: file } : { name: `video-${stamp()}.${extFor(mime || b.type, "webm")}` });
+        } catch {
+          // This WebView can't send raw bytes: keep them, save at the end.
+          failed = true;
+          chunks.push(b);
+        }
+      });
+    };
     try {
       let src = stream;
       if (dual) {
@@ -220,15 +240,17 @@
         stream.getAudioTracks().forEach((t0) => cs.addTrack(t0));
         src = cs;
       }
-      const st = startRecorder(src, VIDEO_TYPES, (b) => chunks.push(b), 1000, 5_000_000);
+      const st = startRecorder(src, VIDEO_TYPES, onData, 1000, 5_000_000);
       recorder = st.recorder;
-      const mime = st.mime;
+      mime = st.mime;
       recorder.onstop = async () => {
         if (mixer) { cancelAnimationFrame(mixer.raf); mixer = null; }
-        const blob = new Blob(chunks, { type: mime || "video/webm" });
-        if (!blob.size) { recording = false; return; }
         busy = true;
+        await chain;
         try {
+          if (!failed && file) { finish(file); return; }
+          const blob = new Blob(chunks, { type: mime || "video/webm" });
+          if (!blob.size && !file) { recording = false; busy = false; return; }
           finish(await api.saveTempFile(`video-${stamp()}.${extFor(blob.type, "webm")}`, Array.from(new Uint8Array(await blob.arrayBuffer()))));
         } catch (e) { err = String(e); busy = false; }
       };
