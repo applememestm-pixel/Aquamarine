@@ -27,9 +27,16 @@
   import { askConfirm } from "./Confirm.svelte";
   import { showToast } from "./Toast.svelte";
   import { IS_MOBILE } from "../platform";
+  import { reactionPack, quickReactions, reactionUrl, parseReaction, REACTION_PACK, DEFAULT_REACTIONS } from "../reactionPack";
 
   const PHOTO_MS = 6000;
-  const QUICK = ["❤️", "🔥", "😂", "😮", "😢", "👍"];
+  /** The quick reactions — our own pixel emoji (the reaction pack), as in
+   *  the chat's reaction bar; plain emoji only while the pack isn't there. */
+  const QUICK_BASE = ["❤️", "🔥", "😂", "😮", "😢", "👍"];
+  const QUICK = $derived.by(() => {
+    const all = quickReactions($reactionPack.items); // in DEFAULT_REACTIONS order
+    return QUICK_BASE.map((e) => all[DEFAULT_REACTIONS.indexOf(e)] ?? e);
+  });
 
   let v = $derived($storyViewer);
   /** Live stories, my archive (newest first), or the ones pinned to a profile. */
@@ -331,12 +338,15 @@
     replyEl?.blur();
     void sendReply(text);
   }
-  function quick(emo: string) {
+  function quick(r: string) {
     const s = cur, owner = v?.user;
     if (!s || !owner) return;
     if (!$likedStories.includes(s.id)) toggleLike(owner, s.id);
     replyEl?.blur();
-    void sendReply(emo);
+    // A pack emoji goes into the reply as the chat's custom-emoji token, so
+    // it shows as the same picture there.
+    const { file, pack, emoji } = parseReaction(r);
+    void sendReply(file ? `[ce:${pack ?? REACTION_PACK}/${file}]` : emoji || r);
   }
   const pinnedNow = $derived(!!cur && $pinnedStories.some((p) => p.id === cur!.id || p.from === cur!.id));
   async function pin() {
@@ -522,7 +532,10 @@
             {#if replyFocus && !reply}
               <div class="quick">
                 {#each QUICK as q (q)}
-                  <button onpointerdown={(e) => e.preventDefault()} onclick={() => quick(q)}>{q}</button>
+                  {@const ru = reactionUrl(q, $reactionPack.items)}
+                  <button onpointerdown={(e) => e.preventDefault()} onclick={() => quick(q)} aria-label={parseReaction(q).emoji || q}>
+                    {#if ru}<img class="qe" src={ru.url} alt={parseReaction(q).emoji} draggable="false" />{:else}{parseReaction(q).emoji || q}{/if}
+                  </button>
                 {/each}
               </div>
             {/if}
@@ -591,7 +604,7 @@
             <button class="vrow" onclick={() => { viewersOpen = false; close(); void selectChat(w.u); }}>
               <span class="ava" class:cf={$closeFriends.includes(w.u)} style:background-image={avaOf(w.u) ? `url("${avaOf(w.u)}")` : undefined}>{avaOf(w.u) ? "" : letterOf(w.u)}</span>
               <span class="nm"><b>{nameOf(w.u)}</b><small>{ago(w.at)}</small></span>
-              {#if w.r}<span class="vr-emo">{w.r}</span>{/if}
+              {#if w.r}{@const ru = reactionUrl(w.r, $reactionPack.items)}<span class="vr-emo">{#if ru}<img class="qe sm" src={ru.url} alt={w.r} />{:else}{w.r}{/if}</span>{/if}
             </button>
           {/each}
         </div>
@@ -684,6 +697,8 @@
   @keyframes q-in { from { transform: translateY(8px); opacity: 0; } }
   .quick button { border: none; background: transparent; font-size: 28px; cursor: pointer; transition: transform .15s; }
   .quick button:hover { transform: scale(1.2); }
+  .qe { width: 34px; height: 34px; object-fit: contain; display: block; pointer-events: none; }
+  .qe.sm { width: 22px; height: 22px; }
   .views { display: flex; align-items: center; gap: 8px; border: none; background: transparent; color: #fff; font: 600 14px var(--font-ui, inherit); cursor: pointer; padding: 8px 6px; }
   .views svg { width: 20px; height: 20px; }
   .vr { opacity: .8; font-weight: 500; }
