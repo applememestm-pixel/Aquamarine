@@ -55,6 +55,37 @@ struct Star {
     /// "manual" (the owner's command) or "boosty".
     source: String,
     at: u64,
+    /// Given for a while (`/<name> level 3 30d`): gone after this (unix s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    until: Option<u64>,
+}
+
+impl Star {
+    fn live(&self, now: u64) -> bool {
+        self.until.is_none_or(|u| now < u)
+    }
+}
+
+/// "30d", "12h", "2w", "3m" (months of 30 days), also д/ч/н/м → seconds.
+fn parse_for(w: &str) -> Option<u64> {
+    let w = w.trim().to_lowercase();
+    let split = w.find(|c: char| !c.is_ascii_digit())?;
+    let (n, unit) = w.split_at(split);
+    let n: u64 = n.parse().ok().filter(|&n| n > 0 && n <= 10_000)?;
+    let secs = match unit.trim() {
+        "h" | "ч" | "час" | "часа" | "часов" => 3600,
+        "d" | "д" | "день" | "дня" | "дней" => 86_400,
+        "w" | "н" | "нед" => 7 * 86_400,
+        "m" | "м" | "мес" | "month" | "months" => 30 * 86_400,
+        "y" | "г" | "год" | "года" | "лет" => 365 * 86_400,
+        _ => return None,
+    };
+    Some(n * secs)
+}
+
+fn left(until: u64, now: u64) -> String {
+    let s = until.saturating_sub(now);
+    if s >= 2 * 86_400 { format!("{} d", s / 86_400) } else { format!("{} h", (s / 3600).max(1)) }
 }
 
 /// What every app checks (see the module note).
@@ -175,9 +206,10 @@ pub fn keygen_cli() -> String {
     )
 }
 
-fn sign(uid: &str, kind: u8) -> Option<Statement> {
+fn sign(uid: &str, kind: u8, until: Option<u64>) -> Option<Statement> {
     let k = key()?;
-    let exp = now() + LIFE_SECS;
+    // A star given for a while ends there for everyone, not 8 days later.
+    let exp = (now() + LIFE_SECS).min(until.unwrap_or(u64::MAX));
     let sig = k.sign(&signed_bytes(uid, kind, exp));
     Some(Statement { uid: uid.to_string(), kind, exp, sig: hex::encode(sig) })
 }
@@ -192,8 +224,9 @@ pub async fn get_star(State(_state): State<AppState>, Path(uid): Path<String>) -
         return Err(StatusCode::BAD_REQUEST);
     }
     if has_key() {
-        let kind = with_stars(|m| m.get(&uid).map(|s| s.kind));
-        return kind.and_then(|k| sign(&uid, k)).map(Json).ok_or(StatusCode::NOT_FOUND);
+        let t = now();
+        let star = with_stars(|m| m.get(&uid).filter(|s| s.live(t)).map(|s| (s.kind, s.until)));
+        return star.and_then(|(k, until)| sign(&uid, k, until)).map(Json).ok_or(StatusCode::NOT_FOUND);
     }
     // Not the star relay: ask it (and remember the answer for 10 minutes).
     if let Some((at, st)) = CACHE.lock().ok().and_then(|g| g.as_ref().and_then(|m| m.get(&uid).cloned())) {
@@ -312,8 +345,9 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
     let lower = arg.trim().to_lowercase();
     if !["/star", "/unstar", "/stars", "/start", "/help"].contains(&cmd) && cmd.len() > 1 && lower.starts_with("level") {
         let name = cmd[1..].trim_start_matches('@').to_lowercase();
-        let lvl = lower["level".len()..].trim();
-        return set_level(state, &u.from, &name, parse_level(Some(lvl).filter(|x| !x.is_empty()).or(Some("x")))).await;
+        let mut rest = lower["level".len()..].split_whitespace();
+        let lvl = rest.next().unwrap_or("x");
+        return set_level(state, &u.from, &name, parse_level(Some(lvl)), rest.next()).await;
     }
     let mut words = arg.split_whitespace();
     let who = words.next().map(|w| w.trim_start_matches('@').to_lowercase()).filter(|w| !w.is_empty());
@@ -324,10 +358,11 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
                 return;
             };
             let lvl = if cmd == "/unstar" { Ok(0) } else { parse_level(words.next()) };
-            set_level(state, &u.from, &name, lvl).await;
+            set_level(state, &u.from, &name, lvl, words.next()).await;
         }
         "/stars" => {
-            let list = with_stars(|m| m.iter().map(|(uid, s)| (uid.clone(), s.clone())).collect::<Vec<_>>());
+            let t = now();
+            let list = with_stars(|m| m.iter().filter(|(_, s)| s.live(t)).map(|(uid, s)| (uid.clone(), s.clone())).collect::<Vec<_>>());
             if list.is_empty() {
                 say(state, &u.from, "Nobody has a star yet.").await;
                 return;
@@ -336,22 +371,30 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
                 .iter()
                 .map(|(uid, s)| {
                     let n = state.directory.username_by_uid(uid).map(|n| format!("@{n}")).unwrap_or_else(|| format!("ID {uid}"));
-                    format!("{n} — {}{}", kind_name(s.kind), if s.source == "boosty" { " (Boosty)" } else { "" })
+                    let until = s.until.map(|u| format!(" · {} left", left(u, t))).unwrap_or_default();
+                    format!("{n} — {}{}{until}", kind_name(s.kind), if s.source == "boosty" { " (Boosty)" } else { "" })
                 })
                 .collect();
             say(state, &u.from, &format!("Stars ({}):\n{}", lines.len(), lines.join("\n"))).await;
         }
         _ => {
-            say(state, &u.from, "✦ The CeZeOs star:\n/<name> level 6 — yours, above the donation levels\n/<name> level 1-5 — a donation level by hand (Boosty gives them on its own)\n/<name> level 0 — take it away\n(also /star @name [1-6], /unstar @name)\n/stars — who has one").await;
+            say(state, &u.from, "✦ The CeZeOs star:\n/<name> level 6 — yours, above the donation levels\n/<name> level 1-5 — a donation level by hand (Boosty gives them on its own)\n/<name> level 4 30d — for a while: h, d, w, m (30 days), y; it goes by itself\n/<name> level 0 — take it away\n(also /star @name [1-6] [30d], /unstar @name)\n/stars — who has one").await;
         }
     }
 }
 
 /// Give `name` the star of level `lvl` (0: take it away), by hand.
-async fn set_level(state: &AppState, owner: &str, name: &str, lvl: Result<u8, &'static str>) {
+async fn set_level(state: &AppState, owner: &str, name: &str, lvl: Result<u8, &'static str>, time: Option<&str>) {
     let lvl = match lvl {
         Ok(l) => l,
         Err(e) => return say(state, owner, e).await,
+    };
+    let dur = match time {
+        None => None,
+        Some(w) => match parse_for(w) {
+            Some(d) => Some(d),
+            None => return say(state, owner, "For how long: 12h, 30d, 2w, 3m (months), 1y.").await,
+        },
     };
     if name.is_empty() {
         return say(state, owner, "Who? /<name> level <0-6>").await;
@@ -367,11 +410,28 @@ async fn set_level(state: &AppState, owner: &str, name: &str, lvl: Result<u8, &'
         });
         return say(state, owner, &if had { format!("@{name} has no star now (other people stop seeing it within 8 days).") } else { format!("@{name} had no star.") }).await;
     }
+    let until = dur.map(|d| now() + d);
     with_stars(|m| {
-        m.insert(uid, Star { kind: lvl, source: "manual".into(), at: now() });
+        m.insert(uid, Star { kind: lvl, source: "manual".into(), at: now(), until });
         save(m);
     });
-    say(state, owner, &format!("@{name} now has the {} star.", kind_name(lvl))).await;
+    let tail = until.map(|u| format!(" for {} (until {})", left(u, now()), fmt_date(u))).unwrap_or_default();
+    say(state, owner, &format!("@{name} now has the {} star{tail}.", kind_name(lvl))).await;
+}
+
+/// "2026-12-13" (UTC) for unix seconds.
+fn fmt_date(t: u64) -> String {
+    // Civil date from days (Howard Hinnant's algorithm).
+    let z = (t / 86_400) as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
 }
 
 /// Boosty subscribers → stars (by the account's e-mail on this relay).
@@ -450,14 +510,16 @@ mod boosty {
         }
         let n = subs.len();
         with_stars(|m| {
-            // Boosty stars that no longer stand go; hand-set ones stay.
-            m.retain(|uid, s| s.source != "boosty" || want.contains_key(uid));
+            // Boosty stars that no longer stand go; hand-set ones stay until
+            // their time is up.
+            let t = now();
+            m.retain(|uid, s| if s.source == "boosty" { want.contains_key(uid) } else { s.live(t) });
             for (uid, tier) in want {
                 match m.get(&uid) {
                     // Set by hand (level 6 among them): Boosty never lowers it.
-                    Some(s) if s.source == "manual" => {}
+                    Some(s) if s.source == "manual" && s.live(now()) => {}
                     _ => {
-                        m.insert(uid, Star { kind: tier, source: "boosty".into(), at: now() });
+                        m.insert(uid, Star { kind: tier, source: "boosty".into(), at: now(), until: None });
                     }
                 }
             }
@@ -480,5 +542,15 @@ mod tests {
         assert_eq!(parse_level(Some("0")), Ok(0));
         assert!(parse_level(Some("7")).is_err());
         assert!(parse_level(Some("x")).is_err());
+        assert_eq!(parse_for("30d"), Some(30 * 86_400));
+        assert_eq!(parse_for("12ч"), Some(12 * 3600));
+        assert_eq!(parse_for("2w"), Some(14 * 86_400));
+        assert_eq!(parse_for("3m"), Some(90 * 86_400));
+        assert_eq!(parse_for("0d"), None);
+        assert_eq!(parse_for("5x"), None);
+        assert_eq!(fmt_date(0), "1970-01-01");
+        assert_eq!(fmt_date(1_794_528_000), "2026-11-13");
+        let s = Star { kind: 3, source: "manual".into(), at: 0, until: Some(100) };
+        assert!(s.live(99) && !s.live(100));
     }
 }
