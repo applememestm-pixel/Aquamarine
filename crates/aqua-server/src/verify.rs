@@ -24,7 +24,7 @@ pub fn bot_name() -> String {
 /// relay without mail (codes shown on screen) or a federated peer can put on
 /// any account. `AQUA_OWNER_UID` (comma-separated) overrides. While neither
 /// is set, the e-mail decides (and `/id` to this bot shows the ID to build in).
-const OWNER_UIDS: &[&str] = &[];
+const OWNER_UIDS: &[&str] = &["9346183112"];
 
 fn pinned() -> Vec<String> {
     match std::env::var("AQUA_OWNER_UID") {
