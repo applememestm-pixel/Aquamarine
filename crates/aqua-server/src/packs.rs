@@ -197,7 +197,12 @@ impl Rules {
 /// the admin overrides it either way.
 pub fn looks_adult(name: &str, title: &str) -> bool {
     let t = format!("{name} {title}").to_lowercase();
-    ["18+", "r18", "r-18", "nsfw", "hentai", "yiff", "porn", "xxx", "lewd", "nude", "ecchi", "секс", "порн", "хентай", "эротик"]
+    // Word stems, not whole words: "пошлят" (not "пошл" — that's "пошли",
+    // let's go), "сиськ", "голые"…
+    [
+        "18+", "r18", "r-18", "r34", "rule34", "nsfw", "hentai", "yiff", "porn", "xxx", "lewd", "nude", "ecchi", "ahegao", "futa",
+        "секс", "порн", "хентай", "эрот", "пошлят", "пошлост", "пошляк", "похаб", "голые", "голая", "сиськ", "нюдс", "футанар", "ахегао", "18 +",
+    ]
         .iter().any(|k| t.contains(k))
 }
 
@@ -712,6 +717,8 @@ mod tests {
         assert!(looks_adult("x", "Random Stickers R18 @sharky_png"));
         assert!(looks_adult("MLP", "MLP HENTAI 🦄"));
         assert!(!looks_adult("eltaller47", "eltaller47"));
+        assert!(looks_adult("hari_pack", "Пошлятина от Хари"));
+        assert!(!looks_adult("go", "Пошли гулять"));
         let mut r = Rules::default();
         let mut pm = Manifest { name: "P".into(), title: "nsfw pack".into(), kind: "regular".into(), updated: 0, rev: 3, local: false, adult: false, scan: None, files: vec![] };
         assert!(r.adult_of(&pm));
