@@ -495,12 +495,14 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
         }
         return;
     }
-    let (cmd, arg) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
-    let cmd = cmd.split('@').next().unwrap_or(cmd);
+    let (word, arg) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
+    let cmd = word.split('@').next().unwrap_or(word);
     // `/<name> level <n>` (the owner's way): the same as `/star @name n`.
+    // The name from the whole word: `/@vpst` cut at '@' was just "/".
     let lower = arg.trim().to_lowercase();
-    if !["/star", "/unstar", "/stars", "/start", "/help", "/id", "/links", "/unlink"].contains(&cmd) && cmd.len() > 1 && lower.starts_with("level") {
-        let name = cmd[1..].trim_start_matches('@').to_lowercase();
+    let named = word.strip_prefix('/').unwrap_or("").trim_start_matches('@').to_lowercase();
+    if !["/star", "/unstar", "/stars", "/start", "/help", "/id", "/links", "/unlink"].contains(&cmd) && !named.is_empty() && lower.starts_with("level") {
+        let name = named;
         let mut rest = lower["level".len()..].split_whitespace();
         let lvl = rest.next().unwrap_or("x");
         return set_level(state, &u.from, &name, parse_level(Some(lvl)), rest.next()).await;

@@ -1183,7 +1183,8 @@ async function saveNd(off) {
 }
 async function testNd() {
   setMsg("ndMsg", t("Checking…"), "");
-  try { const r = await api("/v1/admin/music/test", "POST", {}); setMsg("ndMsg", ndTest(r), r.ok ? "ok" : "err"); }
+  const body = { url: $("ndUrl").value.trim(), user: $("ndUser").value.trim(), password: $("ndPass").value, bot: $("ndBot").checked };
+  try { const r = await api("/v1/admin/music/test", "POST", body); setMsg("ndMsg", ndTest(r), r.ok ? "ok" : "err"); }
   catch (e) { setMsg("ndMsg", t("Failed: ") + esc(errText(e)), "err"); }
 }
 

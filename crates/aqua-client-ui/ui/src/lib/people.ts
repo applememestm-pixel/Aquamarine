@@ -399,6 +399,25 @@ function dataUrlToBytes(url: string): { mime: string; bytes: number[] } | null {
   return { mime: m[1], bytes };
 }
 
+/** My star as the star relay has it now onto my profile; true if it changed. */
+async function takeMyStar(): Promise<boolean> {
+  try {
+    const st = await api.myStar();
+    const cur = get(profile).star ?? null;
+    if ((st?.kind ?? -1) !== (cur?.kind ?? -1) || (st && cur && st.exp - cur.exp > 86_400)) { updateProfile({ star: st }, true); return true; }
+  } catch { /* offline */ }
+  return false;
+}
+
+/** Ask again (my profile opened): a star given or taken away shows without
+ *  reconnecting — before, only connecting asked. */
+let starAsked = 0;
+export async function refreshMyStar(): Promise<void> {
+  if (Date.now() - starAsked < 20_000) return;
+  starAsked = Date.now();
+  if (await takeMyStar()) await publishMyProfile();
+}
+
 /** On connect: publish our card, and migrate an old local-only avatar
  *  (a data: URL from before avatars lived on the server) up to it. */
 export async function syncMyProfileOnConnect(): Promise<void> {
@@ -412,12 +431,7 @@ export async function syncMyProfileOnConnect(): Promise<void> {
     // new): take it rather than publish this device's older one over it.
     const me = get(info)?.username;
     // My star (if the owner gave me one) goes on my card.
-    let starChanged = false;
-    try {
-      const st = await api.myStar();
-      const cur = get(profile).star ?? null;
-      if ((st?.kind ?? -1) !== (cur?.kind ?? -1) || (st && cur && st.exp - cur.exp > 86_400)) { updateProfile({ star: st }, true); starChanged = true; }
-    } catch { /* offline */ }
+    const starChanged = await takeMyStar();
     const adopted = me ? await adoptMyCard(me) : false;
     if (!adopted || starChanged) await publishMyProfile();
     else broadcastPresence();
