@@ -31,7 +31,7 @@
   import { openFileDialog } from "../dialog";
   import { showToast } from "./Toast.svelte";
   import { broadcastPresence, peerPresence, myActivity, shareActivity, myOnline, activityVerb, activityLine, peerStatus, presenceNow } from "../presence";
-  import { peerCards, refreshPeer, publishMyProfile, setMyImage, setMyImageBytes, clearMyImage, setMyMediaFile, clearMyMusic, str, clans } from "../people";
+  import { peerCards, refreshPeer, publishMyProfile, setMyImage, setMyImageBytes, clearMyImage, setMyMediaFile, clearMyMusic, str, clans, refreshMyStar } from "../people";
   import MediaPlayer from "./MediaPlayer.svelte";
   import { streamSrc } from "../media";
   import ClanTag from "./ClanTag.svelte";
@@ -232,6 +232,8 @@
   let editing = $state(false);
   let activeUsername = $derived($profileState ?? "");
   let isMe = $derived(activeUsername === "__me__");
+  // My star: given or taken while I'm connected — show it now.
+  $effect(() => { if (isMe) void refreshMyStar(); });
   /** The account's ID (never changes, unlike the @name). */
   let uid = $derived(isMe ? ($info?.uid ?? "") : ($peerCards[activeUsername]?.uid ?? ""));
 
