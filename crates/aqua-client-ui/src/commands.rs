@@ -4032,6 +4032,29 @@ async fn on_incoming_plaintext(app: &AppHandle, from: String, text: String) {
         tracing::warn!("an unencrypted message from my own account — dropped");
         return;
     }
+    // The chat was made as an encrypted one (opened from search, or my
+    // other device wrote first) but this is a bot: make it a bot chat, so
+    // its buttons and mini app work. Only when the directory says it's a bot —
+    // a relay can't turn a person's chat into an unencrypted one this way.
+    let locked = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).chats.get(&from).is_some_and(|c| c.summary.has_lock);
+    if locked {
+        let t = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone();
+        // Can't ask (offline): shown as before, the chat stays as it is.
+        let bot = match t {
+            Some(t) => t.get_profile(&from).await.ok().map(|p| p.is_some_and(|p| p.is_bot)),
+            None => None,
+        };
+        if bot == Some(false) {
+            tracing::warn!(peer = %from, "an unencrypted message in an encrypted chat with a person — dropped");
+            return;
+        }
+        if bot == Some(true) {
+            let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(c) = s.chats.get_mut(&from) {
+                c.summary.has_lock = false;
+            }
+        }
+    }
     let is_new_chat;
     {
         let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);

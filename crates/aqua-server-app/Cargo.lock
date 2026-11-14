@@ -108,7 +108,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "aqua-core"
-version = "1.21.0-1"
+version = "1.21.0-2"
 dependencies = [
  "base64 0.22.1",
  "bincode",
@@ -130,14 +130,14 @@ dependencies = [
 
 [[package]]
 name = "aqua-nsfw"
-version = "1.21.0-1"
+version = "1.21.0-2"
 dependencies = [
  "image",
 ]
 
 [[package]]
 name = "aqua-server"
-version = "1.21.0-1"
+version = "1.21.0-2"
 dependencies = [
  "anyhow",
  "aqua-core",
@@ -173,7 +173,7 @@ dependencies = [
 
 [[package]]
 name = "aqua-server-app"
-version = "1.21.0-1"
+version = "1.21.0-2"
 dependencies = [
  "aqua-server",
  "dirs 5.0.1",

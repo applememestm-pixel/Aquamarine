@@ -3156,6 +3156,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/stars-app/unlink", post(stars::app::unlink_me))
         .route("/v1/ice", get(turnsrv::ice))
         .route("/v1/admin/stars", get(stars::admin_get).post(stars::admin_make))
+        .route("/v1/admin/stars/boosty", get(stars::admin_boosty_get).post(stars::admin_boosty_set))
         .route("/v1/admin/smtp", get(admin_get_smtp).post(admin_set_smtp))
         .route("/v1/admin/smtp/test", post(admin_test_smtp))
         .route("/v1/admin/telegram", get(packs::admin_get).post(packs::admin_set))

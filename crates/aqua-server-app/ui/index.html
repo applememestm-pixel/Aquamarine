@@ -270,6 +270,7 @@ const RU_DICT = {
   "Make the star key": "Создать ключ звёзд", "this server hands them out": "этот сервер их выдаёт",
   "Make the star key on this server? Only the project owner's server should have it.": "Создать ключ звёзд на этом сервере? Он должен быть только на сервере владельца проекта.",
   "Done — copy the public key into the repository variable AQUA_STAR_PUBLIC.": "Готово — скопируйте открытый ключ в переменную репозитория AQUA_STAR_PUBLIC.",
+  "boostyNote": "Вставьте один раз и забудьте: на boosty.to нажмите F12 → «Хранилище» (Application) → Cookies → boosty.to, скопируйте значение «auth» и вставьте сюда вместе с именем блога. Дальше сервер сам продлевает вход; если Boosty его всё же завершит — @stars вам напишет.","The “auth” cookie of boosty.to": "Cookie «auth» с boosty.to","Blog (boosty.to/…)": "Блог (boosty.to/…)","Connected: {b} · subscribers: {n} · renews by itself": "Подключено: {b} · подписчиков: {n} · продлевается само","Connected: {b} · subscribers: {n} · doesn't renew — paste the whole auth cookie": "Подключено: {b} · подписчиков: {n} · само не продлится — вставьте cookie auth целиком","Disconnect Boosty": "Отключить Boosty", "This key isn't the one the apps trust — it's ignored; stars come from the star server.": "Этот ключ не тот, которому верят приложения, — он не используется; звёзды берутся с сервера звёзд.","Checking with Boosty…": "Проверяю в Boosty…",
   "Connecting…": "Подключаюсь…",
   "Not connected": "Не подключён",
   "Over SSH: {h}": "По SSH: {h}",
@@ -456,6 +457,7 @@ const RU_DICT = {
 };
 const t = (k, vars) => { let s = (RU && RU_DICT[k]) || EN[k] || k; if (vars) for (const [a, b] of Object.entries(vars)) s = s.split("{" + a + "}").join(b); return s; };
 const EN = {
+  boostyNote: "Paste once and forget: on boosty.to press F12 → Storage (Application) → Cookies → boosty.to, copy the value of “auth” and put it here with your blog. The server renews the session by itself; if Boosty ever ends it, @stars writes to you.",
   starsNote: "The CeZeOs star is a mark only the project owner hands out: levels 1–5 for donations (Boosty, given on their own), level 6 above them by hand («/name level 6» to the bot). Only the owner's server has the key. Make it once there: the public key goes into the apps (repository variable AQUA_STAR_PUBLIC); stars are given by the @stars bot.",
   remoteIntro: "An Aquamarine server on another machine (a VPS, a home PC): the app signs in there over SSH and opens its panel here. The panel is never opened to the internet — everything goes inside SSH.",
   remoteManual: "The app reads the panel's port and token by itself from panel.json on that machine (the running server writes it). In Docker the file is inside the container — then enter the container's port and AQUA_ADMIN_TOKEN.",
@@ -833,7 +835,11 @@ function pageAccess(el) {
       <div class="list" id="invList"><div class="empty">…</div></div></div>
     <div class="card"><h2><span class="grow">${t("Stars")}</span><span class="note" id="starHint" style="font-weight:400"></span></h2><div class="note">${t("starsNote")}</div>
       <div class="addr" id="starKeyRow" hidden><code id="starKey"></code><button class="mini" onclick="copy($('starKey').textContent)">${IC.copy}</button></div>
-      <div class="row"><button class="mini" id="starMake" onclick="makeStarKey()">${t("Make the star key")}</button><span class="msg" id="starMsg"></span></div></div>`;
+      <div class="row"><button class="mini" id="starMake" onclick="makeStarKey()">${t("Make the star key")}</button><span class="msg" id="starMsg"></span></div>
+      <div id="boostyBox" hidden><h2><span class="grow">Boosty</span><span class="note" id="boostyState" style="font-weight:400"></span></h2><div class="note">${t("boostyNote")}</div>
+        <label class="f">${t("The “auth” cookie of boosty.to")}<input type="password" id="boostyCookie" autocomplete="off" placeholder="{%22accessToken%22:…"></label>
+        <label class="f">${t("Blog (boosty.to/…)")}<input type="text" id="boostyBlog" autocomplete="off" placeholder="VladST"></label>
+        <div class="row"><button class="primary" onclick="saveBoosty()">${t("Save")}</button><button class="mini" id="boostyOff" onclick="saveBoosty(true)">${t("Disconnect Boosty")}</button><span class="msg" id="boostyMsg"></span></div></div></div>`;
   loadInvites(); loadStars();
 }
 async function loadStars() {
@@ -841,7 +847,24 @@ async function loadStars() {
   if (!$("starKey")) return;
   $("starKeyRow").hidden = !s.public; $("starKey").textContent = s.public || "";
   $("starMake").hidden = !!s.has_key;
-  $("starHint").textContent = s.has_key ? `${t("this server hands them out")} · @${s.bot} · ${s.stars}` : "";
+  $("starHint").textContent = s.has_key ? `${t("this server hands them out")} · @${s.bot} · ${s.stars}` : s.foreign ? t("This key isn't the one the apps trust — it's ignored; stars come from the star server.") : "";
+  $("boostyBox").hidden = !s.has_key;
+  if (s.has_key) { try { paintBoosty(await api("/v1/admin/stars/boosty")); } catch { /* older server */ } }
+}
+function paintBoosty(b) {
+  if (!$("boostyState")) return;
+  $("boostyState").textContent = !b.set ? t("Not connected")
+    : t(b.renews ? "Connected: {b} · subscribers: {n} · renews by itself" : "Connected: {b} · subscribers: {n} · doesn't renew — paste the whole auth cookie").replace("{b}", b.blog || "?").replace("{n}", String(b.subscribers ?? "…"));
+  $("boostyOff").hidden = !b.set;
+  if (b.blog && !$("boostyBlog").value) $("boostyBlog").value = b.blog;
+  if (b.error) setMsg("boostyMsg", esc(b.error), "err"); else setMsg("boostyMsg", "", "ok");
+}
+async function saveBoosty(clear) {
+  if (!clear) setMsg("boostyMsg", t("Checking with Boosty…"), "ok");
+  try {
+    const b = await api("/v1/admin/stars/boosty", "POST", clear ? { clear: true } : { cookie: $("boostyCookie").value, blog: $("boostyBlog").value });
+    $("boostyCookie").value = ""; paintBoosty(b);
+  } catch (e) { setMsg("boostyMsg", esc(errText(e)), "err"); }
 }
 async function makeStarKey() {
   if (!confirm(t("Make the star key on this server? Only the project owner's server should have it."))) return;
