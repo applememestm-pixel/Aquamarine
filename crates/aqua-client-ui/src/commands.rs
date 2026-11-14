@@ -4567,6 +4567,8 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
             s.chat_order.insert(0, from.clone());
         }
         push_peer_message(&mut s, &from, text.clone(), &time);
+        // An encrypted message: the chat is an encrypted one.
+        if let Some(b) = s.chats.get_mut(&from) { b.summary.has_lock = true; }
     }
     // Phones in the background: before, only a session's first message
     // was announced (bgnotify.rs) — the ordinary ones stayed silent.
@@ -4997,7 +4999,8 @@ fn push_peer_message(s: &mut AppState, peer_id: &str, text: String, time: &str) 
         book.summary.preview = preview;
         book.summary.preview_by_me = false;
         book.summary.preview_is_typing = false;
-        book.summary.has_lock = true;
+        // The lock is the caller's: a bot's message (unencrypted) put it back
+        // and the bot's buttons flashed and turned into raw `[kb:v1]`.
         book.summary.time = time.to_string();
         book.summary.unread = book.summary.unread.saturating_add(1);
     }
