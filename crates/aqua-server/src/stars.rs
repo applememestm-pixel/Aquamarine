@@ -902,7 +902,10 @@ mod boosty {
             }
         };
         // The blog's levels, cheapest first → 1..5 (more expensive ones: 5).
-        let levels = get(format!("https://api.boosty.to/v1/blog/{blog}/subscription_level/?show_free_level=false")).await?;
+        // Which request failed goes into the error (the panel shows it).
+        let levels = get(format!("https://api.boosty.to/v1/blog/{blog}/subscription_level/?show_free_level=false"))
+            .await
+            .map_err(|e| format!("levels (/v1/blog/{blog}/subscription_level/): {e}"))?;
         let mut lv: Vec<(i64, u64)> = levels["data"]
             .as_array()
             .map(|a| a.iter().filter_map(|l| Some((l["id"].as_i64()?, l["price"].as_u64().unwrap_or(0)))).collect())
@@ -915,7 +918,9 @@ mod boosty {
         let mut all: Vec<app::Sub> = Vec::new();
         let mut offset = 0;
         loop {
-            let page = get(format!("https://api.boosty.to/v1/blog/{blog}/subscribers?limit=100&offset={offset}&sort_by=on_time&order=gt")).await?;
+            let page = get(format!("https://api.boosty.to/v1/blog/{blog}/subscribers?limit=100&offset={offset}&sort_by=on_time&order=gt"))
+                .await
+                .map_err(|e| format!("subscribers (/v1/blog/{blog}/subscribers): {e}"))?;
             let data = page["data"].as_array().cloned().unwrap_or_default();
             if data.is_empty() {
                 break;
