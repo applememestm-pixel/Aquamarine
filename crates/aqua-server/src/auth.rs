@@ -274,6 +274,11 @@ pub async fn verify(
         return Err((e.status(), e.to_string()));
     }
 
+    // Banned on this server (panel -> People -> Accounts): no token.
+    if state.directory.is_banned_dh(&dh_pub) {
+        tracing::warn!(identity = %fp, "auth/verify REJECT: banned here");
+        return Err((StatusCode::FORBIDDEN, BANNED.into()));
+    }
     let (token, expires_at) = state.auth.mint_token(dh_pub);
     tracing::info!(identity = %fp, "auth/verify OK: token minted");
     Ok(Json(VerifyResponse { token, expires_at }))
@@ -284,6 +289,9 @@ pub async fn verify(
 /// Extractor that validates the Bearer token and returns the caller's
 /// identity DH public.
 pub struct Caller(pub [u8; X25519_LEN]);
+
+/// What a banned account hears (the app shows it as it is).
+pub const BANNED: &str = "you are banned on this server";
 
 #[async_trait]
 impl FromRequestParts<AppState> for Caller {
@@ -312,6 +320,10 @@ impl FromRequestParts<AppState> for Caller {
             .auth
             .verify_token(token)
             .map_err(|e| (e.status(), e.to_string()))?;
+        // A token from before the ban stops working too.
+        if state.directory.is_banned_dh(&dh_pub) {
+            return Err((StatusCode::FORBIDDEN, BANNED.into()));
+        }
         Ok(Caller(dh_pub))
     }
 }
