@@ -250,9 +250,26 @@ pub async fn admin_set(State(state): State<AppState>, headers: HeaderMap, Json(b
     Ok(Json(json!({ "view": view(), "test": test })))
 }
 
-pub async fn admin_test(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<Value>, StatusCode> {
+/// `POST /v1/admin/music/test` — what's typed in the form (not saved yet),
+/// or the saved settings when the form is empty. Before, only the saved ones:
+/// "Check" before "Save" said "Navidrome isn't set up on this server".
+pub async fn admin_test(State(state): State<AppState>, headers: HeaderMap, body: Option<Json<AdminSet>>) -> Result<Json<Value>, StatusCode> {
     admin_authed(&state, &headers)?;
-    Ok(Json(test_json(&config()).await))
+    let old = config();
+    let c = match body.map(|Json(b)| b).filter(|b| !b.url.trim().is_empty() && !from_env()) {
+        Some(b) => {
+            let url = b.url.trim().trim_end_matches('/').to_string();
+            if !(url.starts_with("http://") || url.starts_with("https://")) {
+                return Ok(Json(json!({ "ok": false, "error": "the address starts with http:// or https://" })));
+            }
+            let user = b.user.trim().to_string();
+            // An empty password: the saved one, for the same address and login.
+            let password = if b.password.is_empty() && url == old.url && user == old.user { old.password.clone() } else { b.password };
+            Config { url, user, password, bot: b.bot }
+        }
+        None => old,
+    };
+    Ok(Json(test_json(&c).await))
 }
 
 async fn test_json(c: &Config) -> Value {
@@ -261,6 +278,11 @@ async fn test_json(c: &Config) -> Value {
             let songs = call(c, "getAlbumList2", &[("type".into(), "newest".into()), ("size".into(), "1".into())]).await.is_ok();
             json!({ "ok": true, "server": r.get("type").and_then(|t| t.as_str()).unwrap_or("subsonic"),
                     "version": r.get("serverVersion").and_then(|t| t.as_str()).unwrap_or(""), "albums": songs })
+        }
+        // Navidrome itself serves plain http (port 4533); https by an IP
+        // address has no certificate to match — it looks unreachable.
+        Err(e) if e.starts_with("can't reach") && c.url.starts_with("https://") => {
+            json!({ "ok": false, "error": format!("{e} — Navidrome itself serves http://, not https:// (unless it's behind a proxy with a certificate)") })
         }
         Err(e) => json!({ "ok": false, "error": e }),
     }

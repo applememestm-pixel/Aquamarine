@@ -1333,7 +1333,8 @@
       msg("ndMsg", off ? (RU ? "Отключено." : "Turned off.") : ndRes(r.test), off || r.test?.ok ? "ok" : "err"); }
     catch(e){ msg("ndMsg", T("Not saved: ") + e.message, "err"); }
   }
-  async function testNd(){ try { const r = await api("/v1/admin/music/test", { method: "POST", body: "{}" }); msg("ndMsg", ndRes(r), r.ok ? "ok" : "err"); } catch(e){ msg("ndMsg", e.message, "err"); } }
+  async function testNd(){ try { const body = { url: $("ndUrl").value.trim(), user: $("ndUser").value.trim(), password: $("ndPass").value, bot: $("ndBot").checked };
+    const r = await api("/v1/admin/music/test", { method: "POST", body: JSON.stringify(body) }); msg("ndMsg", ndRes(r), r.ok ? "ok" : "err"); } catch(e){ msg("ndMsg", e.message, "err"); } }
 
   // ---- Federation ----
   let fedLoaded = false, fedMode = "", fedSmtp = false;
