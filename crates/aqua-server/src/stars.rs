@@ -192,6 +192,43 @@ pub async fn admin_make(State(state): State<AppState>, headers: axum::http::Head
     Ok(Json(serde_json::json!({ "has_key": true, "public": public, "stars": with_stars(|m| m.len()), "bot": bot_name() })))
 }
 
+#[derive(Deserialize)]
+pub struct BoostyBody {
+    #[serde(default)]
+    cookie: String,
+    #[serde(default)]
+    blog: String,
+    #[serde(default)]
+    clear: bool,
+}
+
+/// `GET /v1/admin/stars/boosty` — is Boosty set up, the blog, the last sync
+/// (never the token).
+pub async fn admin_boosty_get(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Result<Json<serde_json::Value>, StatusCode> {
+    crate::admin_authed(&state, &headers)?;
+    Ok(Json(boosty::status()))
+}
+
+/// `POST /v1/admin/stars/boosty {cookie, blog}` — paste once; checked at once.
+pub async fn admin_boosty_set(State(state): State<AppState>, headers: axum::http::HeaderMap, Json(b): Json<BoostyBody>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    crate::admin_authed(&state, &headers).map_err(|c| (c, String::new()))?;
+    if b.clear {
+        boosty::clear();
+        return Ok(Json(boosty::status()));
+    }
+    if !has_key() {
+        return Err((StatusCode::CONFLICT, "Boosty works on the server with the star key".into()));
+    }
+    boosty::spawn(state.clone());
+    let r = boosty::set(&state, &b.cookie, &b.blog).await;
+    let mut st = boosty::status();
+    st["ok"] = serde_json::json!(r.is_ok());
+    if let Err(e) = r {
+        st["error"] = serde_json::json!(e);
+    }
+    Ok(Json(st))
+}
+
 /// `aqua-server star-key`: make the key once (never over an existing one)
 /// and print the public half.
 pub fn keygen_cli() -> String {
@@ -569,10 +606,11 @@ fn fmt_date(t: u64) -> String {
 mod boosty {
     use super::*;
 
-    /// The Boosty session the server works with: pasted once (the `auth`
-    /// cookie of boosty.to), then renewed here on its own — Boosty's
-    /// refresh token gives a new access token (and a new refresh token)
-    /// before the old one runs out. Kept in the data folder.
+    /// The Boosty session the server works with: pasted once — in the panel
+    /// (Access → Stars → Boosty) or as `AQUA_BOOSTY_AUTH` — the `auth` cookie
+    /// of boosty.to, then renewed here on its own: Boosty's refresh token
+    /// gives a new access token (and a new refresh token) before the old
+    /// one runs out. Kept in the data folder, never shown back.
     const AUTH_FILE: &str = "aqua-boosty-auth.json";
 
     #[derive(Clone, Default, Serialize, Deserialize)]
@@ -583,26 +621,37 @@ mod boosty {
         /// Unix seconds; 0 — unknown.
         #[serde(default)]
         expires: u64,
-        /// SHA-256 of the pasted value this came from: a new paste wins.
+        /// The blog (boosty.to/<blog>); "" — `AQUA_BOOSTY_BLOG`.
         #[serde(default)]
-        seed: String,
+        blog: String,
+        /// SHA-256 of the environment value last taken: a new one there
+        /// wins over what's kept, the same one doesn't (the panel's does).
+        #[serde(default)]
+        env_seed: String,
     }
 
-    /// What the owner pasted: the whole `auth` cookie (url-encoded or not)
-    /// or, as before, just an access token.
-    fn pasted() -> Option<String> {
+    /// The environment's paste: the whole `auth` cookie or a bare token
+    /// (`AQUA_BOOSTY_TOKEN`, as before).
+    fn env_paste() -> Option<String> {
         ["AQUA_BOOSTY_AUTH", "AQUA_BOOSTY_TOKEN"].iter().find_map(|k| std::env::var(k).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty()))
     }
 
-    pub(crate) fn configured() -> bool {
-        pasted().is_some() && std::env::var("AQUA_BOOSTY_BLOG").is_ok_and(|b| !b.trim().is_empty())
+    fn seed(raw: &str) -> String {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(raw.as_bytes()))
+    }
+
+    /// "VladST", "boosty.to/VladST", "https://boosty.to/VladST/…" → "VladST".
+    fn blog_name(w: &str) -> String {
+        let w = w.trim().trim_end_matches('/');
+        let w = w.rsplit_once("boosty.to/").map(|(_, r)| r).unwrap_or(w);
+        w.split(['/', '?', '#']).next().unwrap_or("").trim().to_string()
     }
 
     fn parse(raw: &str) -> Auth {
-        use sha2::{Digest, Sha256};
-        let seed = hex::encode(Sha256::digest(raw.as_bytes()));
-        let text = if raw.starts_with('%') || raw.contains("%22") {
-            form_urlencoded::parse(format!("v={raw}").as_bytes()).find(|(k, _)| k == "v").map(|(_, v)| v.into_owned()).unwrap_or_default()
+        let raw = raw.trim();
+        let text = if raw.contains('%') {
+            form_urlencoded::parse(format!("v={}", raw.replace('+', "%2B")).as_bytes()).find(|(k, _)| k == "v").map(|(_, v)| v.into_owned()).unwrap_or_default()
         } else {
             raw.to_string()
         };
@@ -611,23 +660,39 @@ mod boosty {
                 access: v["accessToken"].as_str().unwrap_or("").to_string(),
                 refresh: v["refreshToken"].as_str().unwrap_or("").to_string(),
                 expires: app::secs_pub(&v["expiresAt"]).unwrap_or(0),
-                seed,
+                ..Auth::default()
             },
-            _ => Auth { access: raw.to_string(), seed, ..Auth::default() },
+            _ => Auth { access: raw.to_string(), ..Auth::default() },
         }
     }
 
     fn load() -> Option<Auth> {
-        let raw = pasted()?;
-        let fresh = parse(&raw);
         let kept: Option<Auth> = std::fs::read(AUTH_FILE).ok().and_then(|b| serde_json::from_slice(&b).ok());
-        Some(match kept {
-            Some(k) if k.seed == fresh.seed && !k.access.is_empty() => k,
-            _ => {
-                store(&fresh);
-                fresh
+        let env = env_paste();
+        let a = match (kept, env) {
+            // A new value in the environment: take it.
+            (k, Some(raw)) if k.as_ref().map_or(true, |k| k.env_seed != seed(&raw)) => {
+                let mut a = parse(&raw);
+                a.env_seed = seed(&raw);
+                a.blog = k.map(|k| k.blog).unwrap_or_default();
+                store(&a);
+                a
             }
-        })
+            (Some(k), _) => k,
+            (None, _) => return None,
+        };
+        (!a.access.is_empty()).then_some(a)
+    }
+
+    fn blog_of(a: &Auth) -> String {
+        if !a.blog.is_empty() {
+            return a.blog.clone();
+        }
+        blog_name(&std::env::var("AQUA_BOOSTY_BLOG").unwrap_or_default())
+    }
+
+    pub(crate) fn configured() -> bool {
+        load().is_some_and(|a| !blog_of(&a).is_empty())
     }
 
     fn store(a: &Auth) {
@@ -640,6 +705,66 @@ mod boosty {
             }
             let _ = std::fs::rename(&tmp, AUTH_FILE);
         }
+    }
+
+    /// Wakes the sync loop (a new paste in the panel).
+    static WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+    /// The last sync: (unix s, "ok N" or the error).
+    static LAST: Mutex<Option<(u64, Result<usize, String>)>> = Mutex::new(None);
+
+    /// The panel: what's set (never the token itself) and how the last sync went.
+    pub(crate) fn status() -> serde_json::Value {
+        let a = load();
+        let last = LAST.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        serde_json::json!({
+            "set": a.is_some(),
+            "blog": a.as_ref().map(blog_of).unwrap_or_default(),
+            "renews": a.as_ref().is_some_and(|a| !a.refresh.is_empty()),
+            "expires": a.as_ref().map(|a| a.expires).unwrap_or(0),
+            "last_at": last.as_ref().map(|l| l.0),
+            "subscribers": last.as_ref().and_then(|l| l.1.as_ref().ok().copied()),
+            "error": last.as_ref().and_then(|l| l.1.as_ref().err().cloned()),
+        })
+    }
+
+    /// The panel's paste: the `auth` cookie (empty — keep the one there) and
+    /// the blog. Checked right away: the answer is the first sync's.
+    pub(crate) async fn set(state: &AppState, cookie: &str, blog: &str) -> Result<usize, String> {
+        let blog = blog_name(blog);
+        let mut a = match load() {
+            Some(k) if cookie.trim().is_empty() => k,
+            k => {
+                if cookie.trim().is_empty() {
+                    return Err("paste the auth cookie".into());
+                }
+                let mut a = parse(cookie);
+                if a.access.is_empty() {
+                    return Err("that isn't the auth cookie".into());
+                }
+                // Keep the environment's seed, so it doesn't win back over this.
+                a.env_seed = k.map(|k| k.env_seed).or_else(|| env_paste().map(|r| seed(&r))).unwrap_or_default();
+                a
+            }
+        };
+        if !blog.is_empty() {
+            a.blog = blog;
+        }
+        if blog_of(&a).is_empty() {
+            return Err("the blog: boosty.to/<name>".into());
+        }
+        store(&a);
+        let r = run_once(state, &mut a).await;
+        WAKE.notify_one();
+        r
+    }
+
+    /// Forget the Boosty session (panel).
+    pub(crate) fn clear() {
+        let env_seed = load().map(|a| a.env_seed).unwrap_or_default();
+        // An empty one with the environment's seed: the environment's paste
+        // doesn't come back by itself either.
+        store(&Auth { env_seed, ..Auth::default() });
+        *LAST.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     /// A new access token from the refresh token (Boosty's web client does
@@ -689,49 +814,58 @@ mod boosty {
         let a = parse(raw);
         (a.access, a.refresh, a.expires)
     }
+    #[cfg(test)]
+    pub(crate) fn blog_for_test(w: &str) -> String {
+        blog_name(w)
+    }
+
+    /// One sync: renew the session first if it runs out within a day, and
+    /// once more if Boosty refuses it.
+    async fn run_once(state: &AppState, a: &mut Auth) -> Result<usize, String> {
+        if a.expires > 0 && a.expires < now() + 86_400 {
+            if let Err(e) = renew(a).await {
+                tracing::warn!("{e}");
+            }
+        }
+        let blog = blog_of(a);
+        let mut res = sync(state, &a.access, &blog).await;
+        if res.as_ref().is_err_and(|e| e.contains("401") || e.contains("403")) {
+            res = match renew(a).await {
+                Ok(()) => sync(state, &a.access, &blog).await,
+                Err(e) => Err(e),
+            };
+        }
+        *LAST.lock().unwrap_or_else(|e| e.into_inner()) = Some((now(), res.clone()));
+        res
+    }
 
     pub fn spawn(state: AppState) {
-        if !configured() {
+        static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
             return;
         }
-        let blog = std::env::var("AQUA_BOOSTY_BLOG").unwrap_or_default().trim().to_string();
         tokio::spawn(async move {
             // Told the owner the session is gone (once until it works again).
             let mut told = false;
             loop {
-                let mut res = Err("no Boosty session".to_string());
-                if let Some(mut a) = load() {
-                    // Renew a day before it runs out.
-                    if a.expires > 0 && a.expires < now() + 86_400 {
-                        if let Err(e) = renew(&mut a).await {
-                            tracing::warn!("{e}");
+                if let Some(mut a) = load().filter(|a| !blog_of(a).is_empty()) {
+                    match run_once(&state, &mut a).await {
+                        Ok(n) => {
+                            tracing::info!(subscribers = n, "Boosty stars synced");
+                            told = false;
                         }
-                    }
-                    res = sync(&state, &a.access, &blog).await;
-                    // Refused: renew and try once more.
-                    if res.as_ref().is_err_and(|e| e.contains("401") || e.contains("403")) {
-                        res = match renew(&mut a).await {
-                            Ok(()) => sync(&state, &a.access, &blog).await,
-                            Err(e) => Err(e),
-                        };
-                    }
-                }
-                match &res {
-                    Ok(n) => {
-                        tracing::info!(subscribers = n, "Boosty stars synced");
-                        told = false;
-                    }
-                    Err(e) => {
-                        tracing::warn!("Boosty sync: {e}");
-                        if !told && (e.contains("401") || e.contains("403") || e.contains("refresh") || e.contains("session")) {
-                            told = true;
-                            for owner in crate::verify::owner_names(&state) {
-                                say(&state, &owner, &format!("⚠️ Boosty: the server's session stopped working ({e}). Paste the auth cookie of boosty.to into AQUA_BOOSTY_AUTH again and restart the server — after that it renews itself.")).await;
+                        Err(e) => {
+                            tracing::warn!("Boosty sync: {e}");
+                            if !told && (e.contains("401") || e.contains("403") || e.contains("renewing")) {
+                                told = true;
+                                for owner in crate::verify::owner_names(&state) {
+                                    say(&state, &owner, &format!("⚠️ Boosty: the server's session stopped working ({e}). Paste the auth cookie of boosty.to again: server panel → Access → Stars → Boosty. After that it renews itself.")).await;
+                                }
                             }
                         }
                     }
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(30 * 60)).await;
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(30 * 60), WAKE.notified()).await;
             }
         });
     }
@@ -1150,6 +1284,10 @@ mod tests {
         assert_eq!(boosty::parse_for_test(c), ("aaa".into(), "rrr".into(), 1_800_000_000));
         assert_eq!(boosty::parse_for_test(r#"{"accessToken":"aaa","refreshToken":"rrr","expiresAt":1800000000}"#), ("aaa".into(), "rrr".into(), 1_800_000_000));
         assert_eq!(boosty::parse_for_test("tok123"), ("tok123".into(), String::new(), 0));
+        // As pasted from the screen: braces and colons as they are, quotes encoded.
+        assert_eq!(boosty::parse_for_test("{%22accessToken%22:%22aaa%22%2C%22refreshToken%22:%22rrr%22%2C%22expiresAt%22:1797226884024}"), ("aaa".into(), "rrr".into(), 1_797_226_884));
+        assert_eq!(boosty::blog_for_test("https://boosty.to/VladST/"), "VladST");
+        assert_eq!(boosty::blog_for_test("VladST"), "VladST");
         let s = Star { kind: 3, source: "manual".into(), at: 0, until: Some(100) };
         assert!(s.live(99) && !s.live(100));
     }
