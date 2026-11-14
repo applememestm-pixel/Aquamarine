@@ -12,7 +12,8 @@
 //! (which prints the public key to build into the apps). That relay runs the
 //! @stars bot, for the owner only (the e-mail check of verify.rs):
 //!   /<name> level <0-6>   /star @name [1-6]   /unstar @name   /stars
-//! and, with `AQUA_BOOSTY_TOKEN` + `AQUA_BOOSTY_BLOG`, follows the Boosty
+//! and, with `AQUA_BOOSTY_AUTH` (the boosty.to `auth` cookie, renewed here
+//! on its own) + `AQUA_BOOSTY_BLOG`, follows the Boosty
 //! subscribers: an account whose e-mail here is a subscriber's gets the star
 //! of that subscription level (levels by price: the cheapest is 1, at most
 //! 5). Stars set by hand are never touched by that.
@@ -568,16 +569,167 @@ fn fmt_date(t: u64) -> String {
 mod boosty {
     use super::*;
 
+    /// The Boosty session the server works with: pasted once (the `auth`
+    /// cookie of boosty.to), then renewed here on its own — Boosty's
+    /// refresh token gives a new access token (and a new refresh token)
+    /// before the old one runs out. Kept in the data folder.
+    const AUTH_FILE: &str = "aqua-boosty-auth.json";
+
+    #[derive(Clone, Default, Serialize, Deserialize)]
+    struct Auth {
+        access: String,
+        #[serde(default)]
+        refresh: String,
+        /// Unix seconds; 0 — unknown.
+        #[serde(default)]
+        expires: u64,
+        /// SHA-256 of the pasted value this came from: a new paste wins.
+        #[serde(default)]
+        seed: String,
+    }
+
+    /// What the owner pasted: the whole `auth` cookie (url-encoded or not)
+    /// or, as before, just an access token.
+    fn pasted() -> Option<String> {
+        ["AQUA_BOOSTY_AUTH", "AQUA_BOOSTY_TOKEN"].iter().find_map(|k| std::env::var(k).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty()))
+    }
+
+    pub(crate) fn configured() -> bool {
+        pasted().is_some() && std::env::var("AQUA_BOOSTY_BLOG").is_ok_and(|b| !b.trim().is_empty())
+    }
+
+    fn parse(raw: &str) -> Auth {
+        use sha2::{Digest, Sha256};
+        let seed = hex::encode(Sha256::digest(raw.as_bytes()));
+        let text = if raw.starts_with('%') || raw.contains("%22") {
+            form_urlencoded::parse(format!("v={raw}").as_bytes()).find(|(k, _)| k == "v").map(|(_, v)| v.into_owned()).unwrap_or_default()
+        } else {
+            raw.to_string()
+        };
+        match serde_json::from_str::<serde_json::Value>(&text) {
+            Ok(v) if v.is_object() => Auth {
+                access: v["accessToken"].as_str().unwrap_or("").to_string(),
+                refresh: v["refreshToken"].as_str().unwrap_or("").to_string(),
+                expires: app::secs_pub(&v["expiresAt"]).unwrap_or(0),
+                seed,
+            },
+            _ => Auth { access: raw.to_string(), seed, ..Auth::default() },
+        }
+    }
+
+    fn load() -> Option<Auth> {
+        let raw = pasted()?;
+        let fresh = parse(&raw);
+        let kept: Option<Auth> = std::fs::read(AUTH_FILE).ok().and_then(|b| serde_json::from_slice(&b).ok());
+        Some(match kept {
+            Some(k) if k.seed == fresh.seed && !k.access.is_empty() => k,
+            _ => {
+                store(&fresh);
+                fresh
+            }
+        })
+    }
+
+    fn store(a: &Auth) {
+        let tmp = format!("{AUTH_FILE}.tmp");
+        if std::fs::write(&tmp, serde_json::to_vec_pretty(a).unwrap_or_default()).is_ok() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+            }
+            let _ = std::fs::rename(&tmp, AUTH_FILE);
+        }
+    }
+
+    /// A new access token from the refresh token (Boosty's web client does
+    /// the same: `POST /oauth/token/`, grant_type=refresh_token).
+    async fn renew(a: &mut Auth) -> Result<(), String> {
+        if a.refresh.is_empty() {
+            return Err("no refresh token: paste the whole auth cookie into AQUA_BOOSTY_AUTH".into());
+        }
+        let device = std::env::var("AQUA_BOOSTY_CLIENT_ID").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let body = {
+            let mut f = form_urlencoded::Serializer::new(String::new());
+            f.append_pair("grant_type", "refresh_token").append_pair("refresh_token", &a.refresh).append_pair("device_os", "web");
+            if let Some(d) = &device {
+                f.append_pair("device_id", d);
+            }
+            f.finish()
+        };
+        let c = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)).build().map_err(|e| e.to_string())?;
+        let r = c
+            .post("https://api.boosty.to/oauth/token/")
+            .bearer_auth(&a.access)
+            .header(reqwest::header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| e.without_url().to_string())?;
+        if !r.status().is_success() {
+            return Err(format!("renewing the Boosty session: HTTP {}", r.status()));
+        }
+        let v: serde_json::Value = r.json().await.map_err(|e| e.without_url().to_string())?;
+        let access = v["access_token"].as_str().or_else(|| v["accessToken"].as_str()).unwrap_or("");
+        if access.is_empty() {
+            return Err("renewing the Boosty session: no token in the answer".into());
+        }
+        a.access = access.to_string();
+        if let Some(r) = v["refresh_token"].as_str().or_else(|| v["refreshToken"].as_str()).filter(|r| !r.is_empty()) {
+            a.refresh = r.to_string();
+        }
+        a.expires = v["expires_in"].as_u64().map(|s| now() + s).or_else(|| app::secs_pub(&v["expiresAt"])).unwrap_or(0);
+        store(a);
+        tracing::info!("Boosty session renewed");
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn parse_for_test(raw: &str) -> (String, String, u64) {
+        let a = parse(raw);
+        (a.access, a.refresh, a.expires)
+    }
+
     pub fn spawn(state: AppState) {
-        let (Ok(token), Ok(blog)) = (std::env::var("AQUA_BOOSTY_TOKEN"), std::env::var("AQUA_BOOSTY_BLOG")) else { return };
-        if token.trim().is_empty() || blog.trim().is_empty() {
+        if !configured() {
             return;
         }
+        let blog = std::env::var("AQUA_BOOSTY_BLOG").unwrap_or_default().trim().to_string();
         tokio::spawn(async move {
+            // Told the owner the session is gone (once until it works again).
+            let mut told = false;
             loop {
-                match sync(&state, token.trim(), blog.trim()).await {
-                    Ok(n) => tracing::info!(subscribers = n, "Boosty stars synced"),
-                    Err(e) => tracing::warn!("Boosty sync: {e}"),
+                let mut res = Err("no Boosty session".to_string());
+                if let Some(mut a) = load() {
+                    // Renew a day before it runs out.
+                    if a.expires > 0 && a.expires < now() + 86_400 {
+                        if let Err(e) = renew(&mut a).await {
+                            tracing::warn!("{e}");
+                        }
+                    }
+                    res = sync(&state, &a.access, &blog).await;
+                    // Refused: renew and try once more.
+                    if res.as_ref().is_err_and(|e| e.contains("401") || e.contains("403")) {
+                        res = match renew(&mut a).await {
+                            Ok(()) => sync(&state, &a.access, &blog).await,
+                            Err(e) => Err(e),
+                        };
+                    }
+                }
+                match &res {
+                    Ok(n) => {
+                        tracing::info!(subscribers = n, "Boosty stars synced");
+                        told = false;
+                    }
+                    Err(e) => {
+                        tracing::warn!("Boosty sync: {e}");
+                        if !told && (e.contains("401") || e.contains("403") || e.contains("refresh") || e.contains("session")) {
+                            told = true;
+                            for owner in crate::verify::owner_names(&state) {
+                                say(&state, &owner, &format!("⚠️ Boosty: the server's session stopped working ({e}). Paste the auth cookie of boosty.to into AQUA_BOOSTY_AUTH again and restart the server — after that it renews itself.")).await;
+                            }
+                        }
+                    }
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(30 * 60)).await;
             }
@@ -708,6 +860,10 @@ pub mod app {
         next_pay: Option<u64>,
     }
 
+    pub(crate) fn secs_pub(v: &serde_json::Value) -> Option<u64> {
+        secs(v)
+    }
+
     fn secs(v: &serde_json::Value) -> Option<u64> {
         let n = v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))?;
         // Some fields come in milliseconds.
@@ -808,7 +964,7 @@ pub mod app {
     }
 
     fn boosty_on() -> bool {
-        ["AQUA_BOOSTY_TOKEN", "AQUA_BOOSTY_BLOG"].iter().all(|k| std::env::var(k).is_ok_and(|v| !v.trim().is_empty()))
+        super::boosty::configured()
     }
 
     /// The owner said yes or no to a link.
@@ -989,6 +1145,11 @@ mod tests {
         assert_eq!(sub.next_for_test(1_000_000 + 31 * 86_400), Some((1_000_000 + 60 * 86_400, false)));
         let b = serde_json::json!({ "onTime": 1_000_000, "nextPayTime": 5_000_000_000_000u64 });
         assert_eq!(app::Sub::from_boosty(&b, 7, 3, String::new()).next_for_test(2_000_000), Some((5_000_000_000, true)));
+        // The auth cookie as the browser keeps it (url-encoded JSON), or decoded, or a bare token.
+        let c = "%7B%22accessToken%22%3A%22aaa%22%2C%22refreshToken%22%3A%22rrr%22%2C%22expiresAt%22%3A1800000000000%7D";
+        assert_eq!(boosty::parse_for_test(c), ("aaa".into(), "rrr".into(), 1_800_000_000));
+        assert_eq!(boosty::parse_for_test(r#"{"accessToken":"aaa","refreshToken":"rrr","expiresAt":1800000000}"#), ("aaa".into(), "rrr".into(), 1_800_000_000));
+        assert_eq!(boosty::parse_for_test("tok123"), ("tok123".into(), String::new(), 0));
         let s = Star { kind: 3, source: "manual".into(), at: 0, until: Some(100) };
         assert!(s.live(99) && !s.live(100));
     }
