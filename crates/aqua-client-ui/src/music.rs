@@ -141,7 +141,19 @@ pub async fn music_set_own(state: State<'_, StdMutex<AppState>>, url: String, us
             o.password = old.password;
         }
     }
-    let r = own_call(&o, "ping", &[]).await?;
+    // Navidrome itself serves plain http (port 4533): https:// to it (or an
+    // address typed without one, made https above) can't connect — try
+    // http:// to the same address before giving up.
+    let r = match own_call(&o, "ping", &[]).await {
+        Err(e) if e.starts_with("can't reach") && o.url.starts_with("https://") => {
+            let plain = Own { url: format!("http://{}", &o.url["https://".len()..]), ..o.clone() };
+            match own_call(&plain, "ping", &[]).await {
+                Ok(r) => { o = plain; r }
+                Err(_) => return Err(format!("{e} — Navidrome itself serves http://, not https:// (unless it's behind a proxy with a certificate)")),
+            }
+        }
+        r => r?,
+    };
     {
         let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.vault.put_record(VAULT_KEY, &serde_json::to_vec(&o).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
