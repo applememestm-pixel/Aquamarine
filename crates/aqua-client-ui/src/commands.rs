@@ -200,6 +200,23 @@ pub async fn send_message(
     let _ = app.emit("aqua://own_sent", serde_json::json!({ "peer_id": peer_id }));
     // Encrypted once per device of the peer, plus a copy for my other devices.
     if let Err(e) = crate::multidev::fanout(&app, &peer_id, &text, true).await {
+        // No keys at all (404): a bot whose chat was made as an encrypted
+        // one (opened from search, or my other device wrote first). The
+        // directory says so → it's a bot chat from now on, and this goes as
+        // a bot message (a person's chat never turns unencrypted this way).
+        if e.contains("404") {
+            let t = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone();
+            if let Some(t) = t {
+                if t.get_profile(&peer_id).await.ok().flatten().is_some_and(|p| p.is_bot) {
+                    if let Some(c) = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).chats.get_mut(&peer_id) {
+                        c.summary.has_lock = false;
+                    }
+                    t.send_plaintext(&peer_id, &text).map_err(|e| format!("send: {e}"))?;
+                    let _ = app.emit("aqua://chats_updated", ());
+                    return Ok(SendResult { id: out_msg.id, time: out_msg.time });
+                }
+            }
+        }
         // Nothing went out: the UI puts the text back into the field, so the
         // echo goes too — else a retry left two copies, and the one that
         // never left looked sent.

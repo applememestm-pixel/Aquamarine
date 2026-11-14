@@ -1132,7 +1132,7 @@ function showTg(v) {
   $("packs").innerHTML = packs.length ? packs.map((p) => `<div class="pack" role="button" tabindex="0" onclick="openPack('${esc(p.name)}')"><div class="pv">${(p.preview || []).map(([f, mime]) => {
       const src = `${base}/v1/packs/${encodeURIComponent(p.name)}/${encodeURIComponent(f)}`;
       return mime.startsWith("video/") ? `<video src="${src}" muted loop autoplay playsinline></video>` : mime.startsWith("image/") ? `<img src="${src}" alt="" loading="lazy">` : `<span>TGS</span>`; }).join("")}</div>
-      <b>${p.adult ? '<span class="a18">18+</span> ' : ""}${esc(p.title || p.name)}</b><small>${p.count} · ${t(p.kind === "custom_emoji" ? "emoji " : "stickers ")}${p.local ? " · " + t("uploaded") : ""}</small></div>`).join("")
+      <b>${p.adult ? '<span class="a18">18+</span> ' : p.teen ? '<span class="a18" style="opacity:.75">16+</span> ' : ""}${esc(p.title || p.name)}</b><small>${p.count} · ${t(p.kind === "custom_emoji" ? "emoji " : "stickers ")}${p.local ? " · " + t("uploaded") : ""}</small></div>`).join("")
     : `<div class="empty" style="grid-column:1/-1">${t("noPacks")}</div>`;
   const banned = v.banned || [];
   if ($("banned")) $("banned").innerHTML = banned.length
