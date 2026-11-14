@@ -22,7 +22,7 @@
   const PHONE_UI = /android|iphone|ipad/i.test(navigator.userAgent);
   import { hasWidget } from "../widget";
   import { storiesOff, storyNav, storyArchive, pinnedStories, storyArchiveOpen, myStories } from "../stories";
-  import { showAdult } from "../packRules";
+  import { showAdult, showTeen } from "../packRules";
   import { sensitiveBlur, type BlurMode } from "../nsfw";
   import { setStoriesOff } from "../storyFeed";
   import { plugins, pluginsOn, installPlugin, removePlugin, togglePlugin, EXAMPLE_PLUGIN, PLUGIN_CATS, pluginCategory, type PluginCat } from "../plugins";
@@ -1862,6 +1862,11 @@
           <div class="tr-text"><div class="tr-title">{$t("Show 18+ content")}</div>
             <div class="tr-sub">{$t("Off: 18+ sticker packs (marked by your server) are hidden, and their stickers in chats are blurred until tapped.")}</div></div>
           <span class="switch" class:on={$showAdult}></span>
+        </button>
+        <button class="toggle-row" onclick={() => showTeen.update((v) => !v)}>
+          <div class="tr-text"><div class="tr-title">{$t("Show 16+ content")}</div>
+            <div class="tr-sub">{$t("Off: 16+ sticker packs (half-naked: underwear, swimsuits) are hidden, and their stickers in chats are blurred until tapped.")}</div></div>
+          <span class="switch" class:on={$showTeen}></span>
         </button>
       </section>
       <section class="group">

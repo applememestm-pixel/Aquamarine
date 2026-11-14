@@ -85,6 +85,7 @@
   import { clipboardFiles } from "../pasteFiles";
   import { events } from "../tauri";
   import { pollStates, castVote, retractVote, applyRemoteVote, closePoll, viewPoll, ME as POLL_ME, type PollView } from "../polls";
+  import { openStories, saneStories, allMyStories, myStories, storyArchive } from "../stories";
   import { peerPresence, setPeerPresence, broadcastPresenceTo, activityVerb, chatOnline, peerStatus, presenceNow } from "../presence";
   import { notePeerProfileVersion, avatars, clans, peerCards, nameColorsOf, parseNameColor, nameColorBar } from "../people";
   import { profile as myProfile } from "../profile";
@@ -1616,8 +1617,26 @@
     if (!isGroup && $activeChat && (qa === $activeChat.name || qa === $activeChat.id)) return $activeChat.id;
     return qa;
   }
+  /** A reply to a story ("🎬 Story: caption" — StoryViewer.sendReply):
+   *  open that story (its owner's, or mine from the archive). The reply
+   *  carries no id, so it's found by its caption, else the newest. */
+  function openQuotedStory(qa: string, quoted: string): boolean {
+    const m = quoted.match(/^(🎬|📷) ([^:]+)(?:: ([\s\S]*))?$/);
+    if (!m || ![tr("Story"), "Story", "История"].includes(m[2].trim())) return false;
+    const cap = (m[3] ?? "").trim();
+    const owner = quoteUser(qa);
+    const mine = owner === myUsername;
+    const list = mine ? allMyStories($myStories, $storyArchive) : saneStories($peerPresence[owner]?.st);
+    if (!list.length) { showToast(tr("That story is gone — stories last a day")); return true; }
+    let i = cap ? list.findIndex((s) => (s.caption ?? "").slice(0, 120).trim() === cap) : -1;
+    if (i < 0 && cap) { showToast(tr("That story is gone — stories last a day")); return true; }
+    if (i < 0) i = mine ? 0 : list.length - 1;
+    openStories([mine ? "" : owner], mine ? "" : owner, mine ? "archive" : "live", i);
+    return true;
+  }
   /** Tap on a quote: to the message it quotes (the nearest one above). */
-  function jumpToQuoted(fromId: string, quoted: string) {
+  function jumpToQuoted(fromId: string, quoted: string, qa = "") {
+    if (openQuotedStory(qa, quoted)) return;
     const to = replyTargets.get(fromId);
     if (to) { window.dispatchEvent(new CustomEvent("aqua:jump", { detail: to })); return; }
     const at = rows.findIndex((r) => r.id === fromId);
@@ -4008,10 +4027,10 @@
                     {#if verdict === "gone"}
                       <!-- The relay's admin removed this sticker / banned its pack. -->
                       <div class="sticker-gone">{$t("Sticker removed by the server")}</div>
-                    {:else if (verdict === "adult" && !adultShown.has(m.id)) || (verdict === "ok" && url && coverMedia(m, content.saved_at))}
-                      <button class="sticker-btn sticker-18" title={$t("18+ — tap to show")} onclick={() => adultShown.add(m.id)}>
+                    {:else if ((verdict === "adult" || verdict === "teen") && !adultShown.has(m.id)) || (verdict === "ok" && url && coverMedia(m, content.saved_at))}
+                      <button class="sticker-btn sticker-18" title={$t(verdict === "teen" ? "16+ — tap to show" : "18+ — tap to show")} onclick={() => adultShown.add(m.id)}>
                         {#if url}<span class="sticker-img blur18"><AnimatedMedia src={url} mime={stickerMime(content)} alt="" play="never" /></span>{:else}<span class="sticker-placeholder"></span>{/if}
-                        <span class="b18">18+</span>
+                        <span class="b18">{verdict === "teen" ? "16+" : "18+"}</span>
                       </button>
                     {:else if url}
                       <button class="sticker-btn" title={$t("Show the pack")}
@@ -4289,7 +4308,7 @@
                 {@const qt = m.kind.content.quoted_text}
                 <div class="bubble">
                   <!-- Telegram's quote: the author's colour, a bar, tap → to the original. -->
-                  <button class="reply-quote" style:--rq={peerColor(quoteUser(qa))} style:--rq-bar={nameColorBar(peerColors(quoteUser(qa)))} onclick={(e) => { e.stopPropagation(); jumpToQuoted(m.id, qt); }}>
+                  <button class="reply-quote" style:--rq={peerColor(quoteUser(qa))} style:--rq-bar={nameColorBar(peerColors(quoteUser(qa)))} onclick={(e) => { e.stopPropagation(); jumpToQuoted(m.id, qt, qa); }}>
                     <span class="rq-author">{qa === myUsername ? $t("You") : !isGroup && qa === $activeChat?.id ? $activeChat.name : qa}</span>
                     <span class="rq-text">{@render richText(qt)}</span>
                   </button>

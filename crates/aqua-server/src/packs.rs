@@ -65,15 +65,25 @@ pub struct Manifest {
     /// What the image detector found in it (`scan`), for revision `rev`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scan: Option<Scan>,
+    /// 16+ (half-naked, not 18+): set when served (`Rules::teen_of`). Apps
+    /// with the 16+ filter on hide the pack and blur its stickers.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub teen: bool,
 }
 
 /// The detector's look at a pack (aqua-nsfw): how many stickers it could
 /// read (static ones — .tgs / .webm are skipped) and how many are explicit.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct Scan {
     pub rev: u64,
     pub checked: u32,
     pub explicit: u32,
+    /// Half-naked (underwear, swimwear — the detector's "sexy"), not explicit.
+    #[serde(default)]
+    pub suggestive: u32,
+    /// What the scan counted: 2 — with `suggestive` (older scans are redone).
+    #[serde(default)]
+    pub v: u8,
 }
 
 impl Scan {
@@ -81,11 +91,17 @@ impl Scan {
     pub fn adult(&self) -> bool {
         self.explicit >= 2 || (self.explicit >= 1 && self.checked <= 4)
     }
+    /// 16+: half-naked pictures (two, or one in a pack this small), not 18+.
+    pub fn teen(&self) -> bool {
+        !self.adult() && (self.suggestive >= 2 || (self.suggestive >= 1 && self.checked <= 4))
+    }
 }
 
 /// At most this many stickers of a pack are looked at (evenly spread):
 /// enough to tell, and a 120-sticker pack costs ~2 s of one core, not 8.
 const SCAN_SAMPLE: usize = 32;
+/// [`Scan::v`] of today's scans.
+const SCAN_V: u8 = 2;
 
 /// One scan at a time on the whole relay (it's one core's work): imports
 /// and the start-up pass queue up instead of loading a small home server.
@@ -98,7 +114,7 @@ fn scan_gate() -> &'static tokio::sync::Semaphore {
 /// already looked at. Stores the result in its manifest.
 pub async fn scan(name: &str) {
     let Some(m) = load_manifest(name) else { return };
-    if m.scan.is_some_and(|s| s.rev == m.rev) {
+    if m.scan.is_some_and(|s| s.rev == m.rev && s.v >= SCAN_V) {
         return;
     }
     let Ok(_permit) = scan_gate().acquire().await else { return };
@@ -107,23 +123,24 @@ pub async fn scan(name: &str) {
     let step = files.len().div_ceil(SCAN_SAMPLE).max(1);
     let pick: Vec<std::path::PathBuf> = files.iter().step_by(step).map(|f| dir.join(f)).collect();
     let started = std::time::Instant::now();
-    let (checked, explicit) = tokio::task::spawn_blocking(move || {
-        let (mut c, mut e) = (0u32, 0u32);
+    let (checked, explicit, suggestive) = tokio::task::spawn_blocking(move || {
+        let (mut c, mut e, mut h) = (0u32, 0u32, 0u32);
         for p in pick {
             if let Some(s) = aqua_nsfw::classify_file(&p) {
                 c += 1;
                 e += u32::from(s.explicit());
+                h += u32::from(s.suggestive());
             }
         }
-        (c, e)
-    }).await.unwrap_or((0, 0));
+        (c, e, h)
+    }).await.unwrap_or((0, 0, 0));
     let lock = pack_lock(&m.name.to_ascii_lowercase());
     let _g = lock.lock().await;
     // Changed while we looked: the next pass looks again.
     let Some(mut now) = load_manifest(&m.name).filter(|x| x.rev == m.rev) else { return };
-    now.scan = Some(Scan { rev: m.rev, checked, explicit });
+    now.scan = Some(Scan { rev: m.rev, checked, explicit, suggestive, v: SCAN_V });
     let _ = std::fs::write(dir.join("manifest.json"), serde_json::to_vec(&now).unwrap_or_default());
-    tracing::info!(pack = %m.name, checked, explicit, ms = started.elapsed().as_millis() as u64, "sticker pack scanned");
+    tracing::info!(pack = %m.name, checked, explicit, suggestive, ms = started.elapsed().as_millis() as u64, "sticker pack scanned");
 }
 
 /// In the background: [`scan`] for one pack.
@@ -139,7 +156,7 @@ pub fn spawn_scan_all() {
         // Let the relay come up first.
         tokio::time::sleep(std::time::Duration::from_secs(20)).await;
         for m in list_manifests() {
-            if !m.scan.is_some_and(|s| s.rev == m.rev) {
+            if !m.scan.is_some_and(|s| s.rev == m.rev && s.v >= SCAN_V) {
                 scan(&m.name).await;
             }
         }
@@ -186,11 +203,23 @@ impl Rules {
         self.removed.get(&name.to_ascii_lowercase()).map(Vec::as_slice).unwrap_or(&[])
     }
     /// The admin's word; else the detector's (for this revision) or the title.
+    /// 16+ (half-naked): only when it isn't 18+; by the pictures or a
+    /// "16+" in the title. The admin's "18+: no" leaves it to this.
+    pub fn teen_of(&self, m: &Manifest) -> bool {
+        !self.adult_of(m) && (m.scan.is_some_and(|s| s.rev == m.rev && s.teen()) || looks_teen(&m.name, &m.title))
+    }
+
     pub fn adult_of(&self, m: &Manifest) -> bool {
         self.adult.get(&m.name.to_ascii_lowercase()).copied().unwrap_or_else(|| {
             m.scan.is_some_and(|s| s.rev == m.rev && s.adult()) || looks_adult(&m.name, &m.title)
         })
     }
+}
+
+/// 16+ by the title.
+pub fn looks_teen(name: &str, title: &str) -> bool {
+    let t = format!("{name} {title}").to_lowercase();
+    ["16+", "16 +", "r16", "r-16", "suggestive", "bikini", "бикини", "купальник", "полуголы", "полуобнаж"].iter().any(|k| t.contains(k))
 }
 
 /// A guess by the name and title (Telegram's Bot API has no 18+ flag);
@@ -213,6 +242,7 @@ fn served(mut m: Manifest, r: &Rules) -> Manifest {
         m.files.retain(|f| !gone.contains(&f.file) && (f.id.is_empty() || !gone.contains(&f.id)));
     }
     m.adult = r.adult_of(&m);
+    m.teen = r.teen_of(&m);
     m
 }
 
@@ -468,7 +498,7 @@ pub async fn sync(name: &str, refresh: bool) -> Result<Manifest, String> {
     let rev = old.as_ref().map(|o| o.rev + u64::from(!same)).unwrap_or(1);
     // Same stickers: the detector's last look still holds.
     let scan = old.as_ref().and_then(|o| o.scan).filter(|s| s.rev == rev);
-    let m = Manifest { name: real.clone(), title, kind, files, updated: now_secs(), rev, local: false, adult: false, scan };
+    let m = Manifest { name: real.clone(), title, kind, files, updated: now_secs(), rev, local: false, adult: false, teen: false, scan };
     std::fs::write(tmp.join("manifest.json"), serde_json::to_vec(&m).unwrap_or_default()).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::rename(&tmp, &dir).map_err(|e| e.to_string())?;
@@ -516,6 +546,8 @@ pub struct PackSummary {
     pub count: usize,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub adult: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub teen: bool,
 }
 
 pub async fn list(State(_): State<AppState>) -> Json<PacksIndex> {
@@ -526,7 +558,7 @@ pub async fn list(State(_): State<AppState>) -> Json<PacksIndex> {
             .into_iter()
             .filter(|m| !r.is_banned(&m.name))
             .map(|m| served(m, &r))
-            .map(|m| PackSummary { count: m.files.len(), adult: m.adult, name: m.name, title: m.title, kind: m.kind })
+            .map(|m| PackSummary { count: m.files.len(), adult: m.adult, teen: m.teen, name: m.name, title: m.title, kind: m.kind })
             .collect(),
         banned: r.banned.clone(),
         removed: r.removed.clone(),
@@ -599,6 +631,8 @@ pub struct PackBrief {
     /// 18+ (set or guessed), and whether the admin set it.
     pub adult: bool,
     pub adult_set: Option<bool>,
+    /// 16+ (half-naked, not 18+).
+    pub teen: bool,
     /// The detector's look: (checked, explicit), if it has looked.
     pub scan: Option<(u32, u32)>,
 }
@@ -612,6 +646,7 @@ fn briefs() -> Vec<PackBrief> {
             adult_set: r.adult.get(&m.name.to_ascii_lowercase()).copied(),
             scan: m.scan.filter(|s| s.rev == m.rev).map(|s| (s.checked, s.explicit)),
             adult: m.adult,
+            teen: m.teen,
             count: m.files.len(),
             preview: m.files.iter().take(4).map(|f| (f.file.clone(), f.mime.clone())).collect(),
             name: m.name,
@@ -720,19 +755,19 @@ mod tests {
         assert!(looks_adult("hari_pack", "Пошлятина от Хари"));
         assert!(!looks_adult("go", "Пошли гулять"));
         let mut r = Rules::default();
-        let mut pm = Manifest { name: "P".into(), title: "nsfw pack".into(), kind: "regular".into(), updated: 0, rev: 3, local: false, adult: false, scan: None, files: vec![] };
+        let mut pm = Manifest { name: "P".into(), title: "nsfw pack".into(), kind: "regular".into(), updated: 0, rev: 3, local: false, adult: false, teen: false, scan: None, files: vec![] };
         assert!(r.adult_of(&pm));
         pm.title = "cats".into();
         assert!(!r.adult_of(&pm));
-        pm.scan = Some(Scan { rev: 3, checked: 30, explicit: 4 });
+        pm.scan = Some(Scan { rev: 3, checked: 30, explicit: 4, ..Default::default() });
         assert!(r.adult_of(&pm));
-        pm.scan = Some(Scan { rev: 2, checked: 30, explicit: 4 }); // stale
+        pm.scan = Some(Scan { rev: 2, checked: 30, explicit: 4, ..Default::default() }); // stale
         assert!(!r.adult_of(&pm));
-        pm.scan = Some(Scan { rev: 3, checked: 30, explicit: 4 });
+        pm.scan = Some(Scan { rev: 3, checked: 30, explicit: 4, ..Default::default() });
         r.adult.insert("p".into(), false);
         assert!(!r.adult_of(&pm));
         r.removed.insert("p".into(), vec!["2.webp".into(), "uid9".into()]);
-        let m = Manifest { name: "P".into(), title: "t".into(), kind: "regular".into(), updated: 0, rev: 1, local: false, adult: false, scan: None,
+        let m = Manifest { name: "P".into(), title: "t".into(), kind: "regular".into(), updated: 0, rev: 1, local: false, adult: false, teen: false, scan: None,
             files: ["1.webp", "2.webp", "3.webp"].iter().enumerate().map(|(i, f)| PackFile { file: f.to_string(), emoji: String::new(), mime: String::new(), id: if i == 2 { "uid9".into() } else { String::new() } }).collect() };
         assert_eq!(served(m, &r).files.len(), 1);
     }
@@ -803,6 +838,7 @@ pub async fn admin_upload(State(state): State<AppState>, headers: axum::http::He
                 rev: 0,
                 local: true,
                 adult: false,
+                teen: false,
                 scan: None,
             }
         }

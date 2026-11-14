@@ -6,13 +6,14 @@
  * from a pack, and 18+ packs. Here they apply to everything on this device:
  * a banned pack and a removed sticker disappear from the picker and show as
  * "removed" in chats; an 18+ pack is hidden and its stickers blurred (tap to
- * see) while the filter is on — it is on until the person turns it off.
+ * see) while the filter is on — it is on until the person turns it off. A
+ * 16+ pack (half-naked) works the same with its own switch.
  * Kept between runs, so it holds while the relay is out of reach.
  */
 import { writable, derived } from "svelte/store";
 import { api } from "./tauri";
 
-interface Raw { adult: string[]; banned: string[]; removed: Record<string, string[]> }
+interface Raw { adult: string[]; teen?: string[]; banned: string[]; removed: Record<string, string[]> }
 const KEY = "aqua.packRules.v1";
 
 function persisted<T>(key: string, init: T) {
@@ -26,10 +27,13 @@ function persisted<T>(key: string, init: T) {
 const raw = persisted<Raw>(KEY, { adult: [], banned: [], removed: {} });
 /** Show 18+ stickers and packs (off = the filter is on). */
 export const showAdult = persisted<boolean>("aqua.showAdult.v1", false);
+/** Show 16+ (half-naked) stickers and packs — the same filter, a step lower. */
+export const showTeen = persisted<boolean>("aqua.showTeen.v1", false);
 
-export interface Rules { adult: Set<string>; banned: Set<string>; removed: Map<string, Set<string>> }
+export interface Rules { adult: Set<string>; teen: Set<string>; banned: Set<string>; removed: Map<string, Set<string>> }
 export const packRules = derived<typeof raw, Rules>(raw, (r) => ({
   adult: new Set((r.adult ?? []).map((x) => x.toLowerCase())),
+  teen: new Set((r.teen ?? []).map((x) => x.toLowerCase())),
   banned: new Set((r.banned ?? []).map((x) => x.toLowerCase())),
   removed: new Map(Object.entries(r.removed ?? {}).map(([k, v]) => [k.toLowerCase(), new Set(v)])),
 }));
@@ -39,7 +43,7 @@ export function packKey(pack: string | null | undefined): string {
   return pack?.startsWith("tg:") ? pack.slice(3).toLowerCase() : "";
 }
 
-export type Verdict = "ok" | "adult" | "gone";
+export type Verdict = "ok" | "adult" | "teen" | "gone";
 /** A sticker from `pack` (a "tg:…" reference or a short name), file `file`. */
 export function verdictOf(rules: Rules, show: boolean, pack: string | null | undefined, file?: string | null): Verdict {
   const k = pack?.startsWith("tg:") ? packKey(pack) : (pack ?? "").toLowerCase();
@@ -47,9 +51,12 @@ export function verdictOf(rules: Rules, show: boolean, pack: string | null | und
   if (rules.banned.has(k)) return "gone";
   if (file && rules.removed.get(k)?.has(file)) return "gone";
   if (!show && rules.adult.has(k)) return "adult";
+  if (!showTeenNow && rules.teen.has(k)) return "teen";
   return "ok";
 }
-export const stickerVerdict = derived([packRules, showAdult], ([r, s]) => (pack: string | null | undefined, file?: string | null) => verdictOf(r, s, pack, file));
+let showTeenNow = false;
+showTeen.subscribe((v) => { showTeenNow = v; });
+export const stickerVerdict = derived([packRules, showAdult, showTeen], ([r, s]) => (pack: string | null | undefined, file?: string | null) => verdictOf(r, s, pack, file));
 
 let last = 0;
 /** Ask the relay again (at most every 2 minutes unless `force`). */
@@ -57,10 +64,10 @@ export async function refreshPackRules(force = false): Promise<void> {
   if (!force && Date.now() - last < 120_000) return;
   last = Date.now();
   try {
-    const r = await api.serverPacks() as { packs?: { name: string; adult?: boolean }[]; banned?: string[]; removed?: Record<string, string[]> } | null;
+    const r = await api.serverPacks() as { packs?: { name: string; adult?: boolean; teen?: boolean }[]; banned?: string[]; removed?: Record<string, string[]> } | null;
     if (!r) return;
     // A relay before 1.20.1-9 sends no rules: keep what we knew.
     if (!Array.isArray(r.banned) && !r.packs?.some((p) => "adult" in p)) return;
-    raw.set({ adult: (r.packs ?? []).filter((p) => p.adult).map((p) => p.name), banned: r.banned ?? [], removed: r.removed ?? {} });
+    raw.set({ adult: (r.packs ?? []).filter((p) => p.adult).map((p) => p.name), teen: (r.packs ?? []).filter((p) => p.teen).map((p) => p.name), banned: r.banned ?? [], removed: r.removed ?? {} });
   } catch { last = 0; }
 }

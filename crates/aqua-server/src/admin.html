@@ -1246,7 +1246,7 @@
     setHtml("packs", packs.length ? packs.map((p) => `<div class="pack click" data-pack="${esc(p.name)}" role="button" tabindex="0"><div class="pv">${(p.preview || []).map(([f, mime]) =>
         mime.startsWith("video/") ? `<video src="/v1/packs/${encodeURIComponent(p.name)}/${encodeURIComponent(f)}" muted loop autoplay playsinline></video>`
         : mime.startsWith("image/") ? `<img src="/v1/packs/${encodeURIComponent(p.name)}/${encodeURIComponent(f)}" alt="" loading="lazy" />`
-        : `<span class="ph">TGS</span>`).join("")}</div><b>${p.adult ? '<i class="a18">18+</i> ' : ""}${esc(p.title || p.name)}</b><span>${p.count} · ${esc(p.kind === "custom_emoji" ? (RU ? "эмодзи" : "emoji") : (RU ? "стикеры" : "stickers"))}</span></div>`).join("")
+        : `<span class="ph">TGS</span>`).join("")}</div><b>${p.adult ? '<i class="a18">18+</i> ' : p.teen ? '<i class="a18" style="opacity:.75">16+</i> ' : ""}${esc(p.title || p.name)}</b><span>${p.count} · ${esc(p.kind === "custom_emoji" ? (RU ? "эмодзи" : "emoji") : (RU ? "стикеры" : "stickers"))}</span></div>`).join("")
       : `<div class="empty">${RU ? "Наборов пока нет — вставьте ссылку t.me/addstickers/… в приложении." : "No packs yet — paste a t.me/addstickers/… link in the app."}</div>`);
     const banned = v.banned || [];
     setHtml("bannedList", banned.length ? banned.map((n) => `<div class="dl-row"><span class="main">${esc(n)}</span><button class="btn ghost" data-unban="${esc(n)}">${T("Unban")}</button></div>`).join("")
