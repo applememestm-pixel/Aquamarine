@@ -69,7 +69,15 @@ pub fn owner_names(state: &AppState) -> Vec<String> {
 pub fn id_text(state: &AppState, username: &str) -> String {
     let id = state.directory.uid_of(username).unwrap_or_default();
     if !is_owner(state, username) {
-        return format!("Your account ID: {id}");
+        // Why not the owner — said only to the account itself.
+        let why = if owner_pinned() {
+            "Not the owner's ID."
+        } else if state.directory.email_of(username).is_some() {
+            "Not the owner: this account's e-mail here isn't the owner's."
+        } else {
+            "Not the owner: this account has no e-mail here."
+        };
+        return format!("Your account ID: {id}\n{why} The owner is recognised by the built-in ID (verify.rs OWNER_UIDS, AQUA_OWNER_UID on the server) or, while none is set, by the owner's e-mail.");
     }
     if owner_pinned() {
         format!("Your account ID: {id}\nThe owner is recognised by this ID.")

@@ -4622,7 +4622,8 @@ fn push_own_message(s: &mut AppState, peer_id: &str, msg: ChatMessage, _text: &s
         book.summary.preview = preview_for(&msg.kind);
         book.summary.preview_by_me = true;
         book.summary.preview_is_typing = false;
-        book.summary.has_lock = book.summary.live;
+        // The chat stays what it is: a bot chat (no lock) must not turn into
+        // an encrypted one by my own message — its buttons showed as raw `[kb:v1]`.
         book.summary.time = hhmm_now();
         book.messages.push(msg);
     }
