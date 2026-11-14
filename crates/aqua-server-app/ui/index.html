@@ -157,6 +157,7 @@
   .ev { font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: 7px; background: #1C2433; color: var(--dim); flex: none; }
   .ev.online, .ev.login { color: var(--accent); background: rgba(46,230,197,.1); }
   .ev.register { color: var(--accent2); background: rgba(108,140,255,.12); }
+  .ev.banned, .ev.deleted { color: var(--bad); background: rgba(255,107,129,.12); }
   .bar { width: 120px; height: 6px; border-radius: 3px; background: #1C2433; overflow: hidden; flex: none; }
   .bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); }
   .empty { color: var(--dim); text-align: center; padding: 22px 8px; font-size: 13px; grid-column: 1 / -1; }
@@ -358,6 +359,12 @@ const RU_DICT = {
   "Online": "В сети", "Journal": "Журнал", "From other servers": "С других серверов",
   "filter by @name": "фильтр по @имени", "Nobody": "Никого", "No bots": "Ботов нет", "Delete bot": "Удалить бота", "server's own": "сервера",
   "Delete the bot @{n}? Its account and token stop working.": "Удалить бота @{n}? Его аккаунт и токен перестанут работать.", "No events yet": "Событий пока нет", "No one yet": "Пока никого",
+  "All accounts": "Все аккаунты", "accHint": "Все, кто зарегистрирован на этом сервере (в сети серверов — во всей сети). Бан: не войдёт и не подключится, другой сервер сети его не вернёт. Удаление стирает аккаунт и всё, что он оставил здесь.",
+  "filter by @name, name, ID or e-mail": "фильтр по @имени, имени, ID или e-mail", "banned": "забанен", "deleted": "удалён",
+  "registered": "регистрация", "seen": "был", "devices": "устр.", "Banned (account deleted)": "Забанены (аккаунт удалён)",
+  "Ban @{n}? They can't sign in or connect here until you lift it.": "Забанить @{n}? Не сможет войти и подключиться, пока не разбаните.",
+  "Delete @{n} and everything they left here (profile, keys, backups, history, waiting messages)? This can't be undone.": "Удалить @{n} и всё, что он оставил здесь (профиль, ключи, резервные копии, историю, ждущие сообщения)? Отменить нельзя.",
+  "Ban them too, so they can't come back?": "Заодно забанить, чтобы не вернулся? (Без бана приложение может зарегистрироваться заново, а в сети серверов аккаунт вернётся с другого сервера.)",
   "online": "в сети", "offline": "вышел", "login": "вход", "register": "регистрация", "user": "человек", "times": "раз", "was online": "был в сети",
   "journalHint": "Кто заходил и выходил, входил с нового устройства или регистрировался. Пишется и в aqua-journal.log в папке данных.",
   "Files by type": "Файлы по типам", "filesHint": "Файлы зашифрованы — сервер знает только тип, который сообщило приложение.", "No files": "Файлов нет",
@@ -679,7 +686,7 @@ async function loadHost() {
   if ($("hostGrid").dataset.h !== html) { $("hostGrid").dataset.h = html; $("hostGrid").innerHTML = html; }
   $("hostCard").hidden = false;
 }
-const STAT_TILES = [["online", "Online now", "online"], ["users", "Accounts", "journal"], ["bots", "Bots", "bots"], ["files", "Files", "files"], ["disk", "Storage", "files"], ["time", "Uptime", "visitors"]];
+const STAT_TILES = [["online", "Online now", "online"], ["users", "Accounts", "accounts"], ["bots", "Bots", "bots"], ["files", "Files", "files"], ["disk", "Storage", "files"], ["time", "Uptime", "visitors"]];
 function paintHome() {
   if (page !== "home" || !$("hBtn") || !st) return;
   const on = st.running;
@@ -749,7 +756,7 @@ async function toggleServer() {
 
 // ---------------------------------------------------------------- details modal
 async function openDetail(what) {
-  if (what === "journal") { peopleTab = "journal"; go("people"); return; }
+  if (what === "journal" || what === "accounts") { peopleTab = what; go("people"); return; }
   const titles = { online: "Online now", files: "Files by type", bots: "Bots", visitors: "From other servers" };
   modal(`<h3><span>${t(titles[what])}</span><button class="ghost mini" onclick="closeModal()">${IC.x}</button></h3>
     ${what === "files" ? `<div class="note">${t("filesHint")}</div>` : ""}<div class="list" id="detList"><div class="empty">…</div></div>`);
@@ -786,13 +793,14 @@ function showQr(text, title, note) {
 }
 
 // ---------------------------------------------------------------- People
-let peopleTab = "online", journal = [], jq = "";
+let peopleTab = "online", journal = [], jq = "", accounts = [], bans = [], aq = "";
 function pagePeople(el) {
   if (!st?.running) return needRunning(el, "People");
   el.innerHTML = `<div><h1>${t("People")}</h1></div>
-    <div class="seg" id="pSeg">${[["online", "Online"], ["journal", "Journal"], ["bots", "Bots"], ["visitors", "From other servers"]].map(([k, l]) =>
+    <div class="seg" id="pSeg">${[["online", "Online"], ["accounts", "All accounts"], ["journal", "Journal"], ["bots", "Bots"], ["visitors", "From other servers"]].map(([k, l]) =>
       `<button data-k="${k}" class="${k === peopleTab ? "on" : ""}" onclick="peopleTab='${k}'; render()">${t(l)}</button>`).join("")}</div>
     <div class="card">${peopleTab === "journal" ? `<input type="text" id="jq" placeholder="${t("filter by @name")}" value="${esc(jq)}" oninput="jq=this.value; paintJournal()"><div class="note">${t("journalHint")}</div>` : ""}
+      ${peopleTab === "accounts" ? `<input type="text" id="aq" placeholder="${t("filter by @name, name, ID or e-mail")}" value="${esc(aq)}" oninput="aq=this.value; paintAccounts()"><div class="note">${t("accHint")}</div>` : ""}
       <div class="list" id="pList"><div class="empty">…</div></div></div>`;
   loadPeople();
 }
@@ -800,8 +808,36 @@ async function loadPeople() {
   if (page !== "people" || !st?.running) return;
   try {
     if (peopleTab === "journal") { journal = await api("/v1/admin/detail/journal"); paintJournal(); }
+    else if (peopleTab === "accounts") { const [a, b] = await Promise.all([api("/v1/admin/detail/accounts"), api("/v1/admin/detail/bans")]); accounts = a; bans = b; paintAccounts(); }
     else { const d = await api("/v1/admin/detail/" + peopleTab); const h = detailHtml(peopleTab, d); if ($("pList") && $("pList").dataset.h !== h) { $("pList").dataset.h = h; $("pList").innerHTML = h; } }
   } catch (e) { if ($("pList")) $("pList").innerHTML = `<div class="empty">${esc(errText(e))}</div>`; }
+}
+function paintAccounts() {
+  if (!$("pList")) return;
+  const q = aq.trim().replace(/^@/, "").toLowerCase();
+  const hit = (a) => !q || [a.username, a.name, a.uid, a.email].some((x) => (x || "").toLowerCase().includes(q));
+  const day = (at) => at ? new Date(at * 1000).toLocaleDateString([], { day: "2-digit", month: "2-digit", year: "numeric" }) : "—";
+  const rows = accounts.filter(hit).map((a) => `<div class="li">${ava(a.username)}<span class="main">@${esc(a.username)}${a.name ? ` <span class="sub">${esc(a.name)}</span>` : ""}${a.banned ? ` <span class="ev banned">${t("banned")}</span>` : ""}
+      <span class="sub" style="display:block">ID ${esc(a.uid)} · ${t("registered")} ${day(a.created_at)} · ${t("seen")} ${a.seen ? ago(a.seen) : "—"} · ${a.devices} ${t("devices")}${a.email ? " · " + esc(a.email) : ""}</span></span>
+      <button class="mini" data-user="${esc(a.username)}" data-on="${a.banned ? 0 : 1}" onclick="banUser(this.dataset.user, this.dataset.on === '1')">${t(a.banned ? "Unban" : "Ban")}</button>
+      <button class="mini danger" data-user="${esc(a.username)}" onclick="delUser(this.dataset.user)">${t("Delete")}</button></div>`);
+  const known = new Set(accounts.map((a) => a.uid));
+  const gone = bans.filter((b) => !known.has(b.uid) && hit({ username: b.username, uid: b.uid }));
+  const h = (rows.join("") || `<div class="empty">${t("Nobody")}</div>`)
+    + (gone.length ? `<h2 style="margin-top:14px">${t("Banned (account deleted)")}</h2>` + gone.map((b) => `<div class="li">${ava(b.username || "?")}<span class="main">@${esc(b.username)} <span class="sub">ID ${esc(b.uid)} · ${ago(b.at)}</span></span>
+      <button class="mini" data-user="${esc(b.uid)}" onclick="banUser(this.dataset.user, false)">${t("Unban")}</button></div>`).join("") : "");
+  if ($("pList").dataset.h !== h) { $("pList").dataset.h = h; $("pList").innerHTML = h; armAll($("pList")); }
+}
+async function banUser(name, on) {
+  if (on && !confirm(t("Ban @{n}? They can't sign in or connect here until you lift it.").replace("{n}", name))) return;
+  try { await api(`/v1/admin/users/${encodeURIComponent(name)}/ban`, "POST", { on }); } catch (e) { alert(errText(e)); }
+  loadPeople();
+}
+async function delUser(name) {
+  if (!confirm(t("Delete @{n} and everything they left here (profile, keys, backups, history, waiting messages)? This can't be undone.").replace("{n}", name))) return;
+  const ban = confirm(t("Ban them too, so they can't come back?"));
+  try { await api(`/v1/admin/users/${encodeURIComponent(name)}${ban ? "?ban=1" : ""}`, "DELETE"); } catch (e) { alert(errText(e)); }
+  loadPeople();
 }
 function paintJournal() {
   if (!$("pList")) return;

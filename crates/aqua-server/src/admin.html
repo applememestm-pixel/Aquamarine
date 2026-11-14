@@ -274,6 +274,7 @@
   .dl-row .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),#7ff3e3)}
   .ev{font-size:11px;font-weight:700;padding:2px 8px;border-radius:8px;background:var(--line);text-transform:uppercase;letter-spacing:.04em}
   .ev.online,.ev.login,.ev.register{background:rgba(0,229,199,.16);color:var(--accent)}
+  .ev.banned,.ev.deleted{background:rgba(255,92,92,.14);color:#ff7b7b}
   .jf{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px}
   .jf input{flex:1;min-width:160px}
   .modal{position:fixed;inset:0;z-index:60;display:grid;place-items:center;padding:20px;background:rgba(3,4,8,.72);backdrop-filter:blur(8px)}
@@ -459,6 +460,10 @@
         <p data-t="journalHint">Who came online and went offline, signed in on a new device or registered. Also written to aqua-journal.log next to the server.</p></div>
       <div class="card rv"><div class="jf"><input id="jq" data-tp="filter by @name" placeholder="filter by @name" oninput="renderJournal()" /></div>
         <div id="jsum" class="hint"></div><div class="dl" id="jlist"></div></div>
+      <div class="card rv" id="accCard"><h2 data-t="All accounts">All accounts</h2>
+        <p class="hint" data-t="accHint">Everyone registered on this server (in a server network, the whole network). Ban: can't sign in or connect, another server of the network won't bring them back. Delete erases the account and everything it left here.</p>
+        <div class="jf"><input id="aq" data-tp="filter by @name, name, ID or e-mail" placeholder="filter by @name, name, ID or e-mail" oninput="renderAccounts()" /></div>
+        <div class="dl" id="alist"></div></div>
     </section>
 
     <!-- Access -->
@@ -783,6 +788,12 @@
     "Delete the bot @{n}? Its account and token stop working.":"Удалить бота @{n}? Его аккаунт и токен перестанут работать.","No one yet":"Пока никого","No events yet":"Событий пока нет",
     "photo":"Фото","video":"Видео","sticker":"Стикеры","gif":"GIF","emoji":"Эмодзи","voice":"Голосовые","audio":"Музыка","file":"Другие файлы","unknown":"Без метки (старые версии)",
     "user":"человек","offline":"вышел","login":"вход","register":"регистрация",
+    "All accounts":"Все аккаунты","accHint":"Все, кто зарегистрирован на этом сервере (в сети серверов — во всей сети). Бан: не войдёт и не подключится, другой сервер сети его не вернёт. Удаление стирает аккаунт и всё, что он оставил здесь.",
+    "filter by @name, name, ID or e-mail":"фильтр по @имени, имени, ID или e-mail","banned":"забанен","deleted":"удалён","Ban user":"Забанить","Unban user":"Разбанить","Delete user":"Удалить",
+    "registered":"регистрация","seen":"был","devices":"устр.","Banned (account deleted)":"Забанены (аккаунт удалён)",
+    "Ban @{n}? They can't sign in or connect here until you lift it.":"Забанить @{n}? Не сможет войти и подключиться, пока не разбаните.",
+    "Delete @{n} and everything they left here (profile, keys, backups, history, waiting messages)? This can't be undone.":"Удалить @{n} и всё, что он оставил здесь (профиль, ключи, резервные копии, историю, ждущие сообщения)? Отменить нельзя.",
+    "Ban them too, so they can't come back?":"Заодно забанить, чтобы не вернулся? (Без бана приложение может зарегистрироваться заново, а в сети серверов аккаунт вернётся с другого сервера.)",
     "filesHint":"Файлы зашифрованы — сервер знает только тип, который сообщило приложение.","times":"раз","was online":"был в сети",
     "Online now":"Сейчас в сети","Accounts":"Аккаунтов","Bots":"Ботов","Files":"Файлов","Storage":"Хранилище","Uptime":"Работает",
     "This PC":"Этот компьютер","Phones · Wi-Fi":"Телефоны · Wi-Fi","Internet":"Интернет (белый IP)","doesn't lead back here: VPN on, or the port isn't forwarded":"не ведёт сюда: включён VPN или не проброшен порт","Android emulator":"Эмулятор Android","Copy":"Копировать","Copied":"Скопировано",
@@ -876,7 +887,7 @@
     if (location.hash.slice(1) !== id && !/token=/.test(location.hash)) history.replaceState(null, "", "#" + id);
     store.set("aqua.admin.tab", id);
     // Opened: the servers around / the packs on the server (after the script has run).
-    setTimeout(() => { if (id === "fed") loadServers(); if (id === "telegram") loadTg(); if (id === "music") loadNd(); if (id === "journal") loadJournal(); if (id === "codes") markCodesSeen(); }, 0);
+    setTimeout(() => { if (id === "fed") loadServers(); if (id === "telegram") loadTg(); if (id === "music") loadNd(); if (id === "journal") { loadJournal(); loadAccounts(); } if (id === "codes") markCodesSeen(); }, 0);
     document.querySelector(`.tab[data-tab="${id}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
   document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => { showTab(b.dataset.tab); window.scrollTo({ top: 0 }); }));
@@ -1005,9 +1016,9 @@
   const STATS = [["online","Online now",true],["users","Accounts"],["bots","Bots"],["files","Files"],["disk","Storage"],["time","Uptime"]];
   const shown = {};
   // What each tile opens.
-  const DET = { online: "online", users: "journal", bots: "bots", files: "files", disk: "files", time: "visitors" };
+  const DET = { online: "online", users: "accounts", bots: "bots", files: "files", disk: "files", time: "visitors" };
   async function openDetail(what){
-    if (what === "journal") { showTab("journal"); return; }
+    if (what === "journal" || what === "accounts") { showTab("journal"); if (what === "accounts") setTimeout(() => $("accCard").scrollIntoView({ behavior: "smooth" }), 50); return; }
     const titles = { online: "Online now — who", files: "Files by type", bots: "Bots on this server", visitors: "From other servers since the start" };
     $("detTitle").textContent = T(titles[what]); $("detHint").textContent = what === "files" ? T("filesHint") : "";
     $("detList").innerHTML = `<div class="empty">…</div>`; $("detModal").classList.remove("hide");
@@ -1035,6 +1046,36 @@
   // ---- journal ----
   let journal = [];
   async function loadJournal(){ try { journal = await api("/v1/admin/detail/journal"); renderJournal(); } catch {} }
+  // ---- all accounts: ban / delete (lib.rs admin_ban_user, admin_delete_user) ----
+  let accounts = [], bans = [];
+  async function loadAccounts(){ try { [accounts, bans] = await Promise.all([api("/v1/admin/detail/accounts"), api("/v1/admin/detail/bans")]); renderAccounts(); } catch (e) { $("alist").innerHTML = `<div class="empty">${esc(e.message)}</div>`; } }
+  function renderAccounts(){
+    const q = ($("aq").value || "").trim().replace(/^@/, "").toLowerCase();
+    const hit = (a) => !q || [a.username, a.name, a.uid, a.email].some((x) => (x || "").toLowerCase().includes(q));
+    const day = (at) => at ? new Date(at * 1000).toLocaleDateString([], { day: "2-digit", month: "2-digit", year: "numeric" }) : "—";
+    const rows = accounts.filter(hit).map((a) => `<div class="dl-row"><span class="main">@${esc(a.username)}${a.name ? ` <span class="sub">${esc(a.name)}</span>` : ""}${a.banned ? ` <span class="ev deleted">${T("banned")}</span>` : ""}
+        <span class="sub" style="display:block">ID ${esc(a.uid)} · ${T("registered")} ${day(a.created_at)} · ${T("seen")} ${a.seen ? ago(a.seen) : "—"} · ${a.devices} ${T("devices")}${a.email ? " · " + esc(a.email) : ""}</span></span>
+        <button class="ghost" data-ban="${esc(a.username)}" data-on="${a.banned ? 0 : 1}">${T(a.banned ? "Unban user" : "Ban user")}</button>
+        <button class="ghost" data-del="${esc(a.username)}">${T("Delete user")}</button></div>`);
+    const known = new Set(accounts.map((a) => a.uid));
+    const gone = bans.filter((b) => !known.has(b.uid) && hit({ username: b.username, uid: b.uid }));
+    $("alist").innerHTML = (rows.join("") || `<div class="empty">${T("Nobody")}</div>`)
+      + (gone.length ? `<h2 style="margin-top:14px">${T("Banned (account deleted)")}</h2>` + gone.map((b) => `<div class="dl-row"><span class="main">@${esc(b.username)} <span class="sub">ID ${esc(b.uid)} · ${ago(b.at)}</span></span>
+        <button class="ghost" data-ban="${esc(b.uid)}" data-on="0">${T("Unban user")}</button></div>`).join("") : "");
+    $("alist").querySelectorAll("[data-ban]").forEach((el) => el.addEventListener("click", async () => {
+      const name = el.dataset.ban, on = el.dataset.on === "1";
+      if (on && !confirm(T("Ban @{n}? They can't sign in or connect here until you lift it.").replace("{n}", name))) return;
+      try { await api(`/v1/admin/users/${encodeURIComponent(name)}/ban`, { method: "POST", body: JSON.stringify({ on }) }); } catch (e) { alert(e.message); }
+      loadAccounts();
+    }));
+    $("alist").querySelectorAll("[data-del]").forEach((el) => el.addEventListener("click", async () => {
+      const name = el.dataset.del;
+      if (!confirm(T("Delete @{n} and everything they left here (profile, keys, backups, history, waiting messages)? This can't be undone.").replace("{n}", name))) return;
+      const ban = confirm(T("Ban them too, so they can't come back?"));
+      try { await api(`/v1/admin/users/${encodeURIComponent(name)}${ban ? "?ban=1" : ""}`, { method: "DELETE" }); } catch (e) { alert(e.message); }
+      loadAccounts();
+    }));
+  }
   function renderJournal(){
     const q = ($("jq").value || "").trim().replace(/^@/, "").toLowerCase();
     const list = q ? journal.filter((e) => e.user.toLowerCase().includes(q)) : journal;

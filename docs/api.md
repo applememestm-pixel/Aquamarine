@@ -1,6 +1,6 @@
 # HTTP API ретранслятора
 
-> Часть [технической документации](README.md). Описание соответствует `aqua-server` 1.21.0-5 и версии протокола `v1`.
+> Часть [технической документации](README.md). Описание соответствует `aqua-server` 1.21.0-6 и версии протокола `v1`.
 
 Ретранслятор (`aqua-server`) предоставляет HTTP API и канал WebSocket. Клиент Aquamarine работает только через них, поэтому API позволяет написать совместимый клиент, бота или инструмент администрирования.
 
@@ -508,7 +508,9 @@
 |---|---|
 | `GET /admin` | Веб-панель |
 | `GET /v1/admin/stats` | Адрес, IP в локальной сети, счётчики, объём вложений, время работы, последние коды подтверждения (в режиме разработки; просроченные — старше 10 минут — не показываются), режим приглашений |
-| `GET /v1/admin/detail/:what` | Что открывает плитка панели: `online` — @имена в сети; `files` — `[{kind, count, bytes}]` по типам (без метки — `unknown`); `bots` — `[{username, name}]`; `visitors` — серверы и люди федерации, обращавшиеся к узлу с момента запуска; `journal` — последние 500 событий `{at, user, ev, note}` (`online`, `offline`, `login`, `register`). Журнал дописывается и в файл `AQUA_JOURNAL` (по умолчанию `aqua-journal.log`, `off` — не писать) |
+| `GET /v1/admin/detail/:what` | Что открывает плитка панели: `online` — @имена в сети; `files` — `[{kind, count, bytes}]` по типам (без метки — `unknown`); `bots` — `[{username, name}]`; `visitors` — серверы и люди федерации, обращавшиеся к узлу с момента запуска; `journal` — последние 500 событий `{at, user, ev, note}` (`online`, `offline`, `login`, `register`, `banned`, `deleted`); `accounts` — все люди `[{username, name, uid, created_at, email, seen, devices, banned}]`; `bans` — баны `[{uid, username, at}]`. Журнал дописывается и в файл `AQUA_JOURNAL` (по умолчанию `aqua-journal.log`, `off` — не писать) |
+| `POST /v1/admin/users/:name/ban` | `{"on": true}` — бан: токен не выдаётся и не действует, соединения рвутся, сервер сети не вернёт аккаунт; `false` — снять (`:name` может быть ID удалённого) |
+| `DELETE /v1/admin/users/:name` | Удалить человека и всё, что он оставил на сервере; `?ban=1` — сначала забанить |
 | `GET` / `POST /v1/admin/datadir` | Папка данных: `{path, bytes, suggest}`. `POST {"path": "…"}` копирует данные в другую папку и запоминает её — она используется со следующего запуска; старая остаётся |
 | `POST /v1/admin/config` | `{"invite_only", "allow": [адреса]}` — режим «только по приглашению» |
 | `GET /v1/admin/invites` | Коды приглашений: `[{"code", "uses", "expires", "note"}]` |
@@ -625,6 +627,8 @@ x-aqua-fed: <unix_ms>.<hex HMAC-SHA256(secret, METHOD "\n" PATH "\n" unix_ms "\n
 | GET | `/admin` | админ | 15 |
 | GET | `/v1/admin/stats` | админ | 15 |
 | GET | `/v1/admin/detail/:what` | админ | 15 |
+| POST | `/v1/admin/users/:name/ban` | админ | 15 |
+| DELETE | `/v1/admin/users/:name` | админ | 15 |
 | GET, POST | `/v1/admin/datadir` | админ | 15 |
 | POST | `/v1/admin/config` | админ | 15 |
 | GET, POST | `/v1/admin/invites` | админ | 15 |
