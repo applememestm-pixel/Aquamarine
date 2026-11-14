@@ -417,6 +417,11 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
     if text.is_empty() {
         return;
     }
+    // The ID isn't a secret (it's on every profile card): anyone may ask,
+    // so the owner can find theirs before the server knows them.
+    if text.split_whitespace().next() == Some("/id") {
+        return say(state, &u.from, &crate::verify::id_text(state, &u.from)).await;
+    }
     if !crate::verify::is_owner(state, &u.from) {
         say_app(state, &u.from, "✦ The CeZeOs star: levels 1–5 come with a Boosty subscription — on their own, by your e-mail here, or link your Boosty in the app below (no e-mail needed). Level 6 only from the owner.\nThe app also shows how many days are left until the next payment.").await;
         return;

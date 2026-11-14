@@ -68,6 +68,9 @@ pub fn owner_names(state: &AppState) -> Vec<String> {
 /// `OWNER_UIDS`.
 pub fn id_text(state: &AppState, username: &str) -> String {
     let id = state.directory.uid_of(username).unwrap_or_default();
+    if !is_owner(state, username) {
+        return format!("Your account ID: {id}");
+    }
     if owner_pinned() {
         format!("Your account ID: {id}\nThe owner is recognised by this ID.")
     } else {
@@ -128,6 +131,9 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
     let text = u.text.trim();
     if text.is_empty() {
         return;
+    }
+    if text.split_whitespace().next() == Some("/id") {
+        return say(state, &u.from, &id_text(state, &u.from)).await;
     }
     if !is_owner(state, &u.from) {
         say(state, &u.from, "✔️ This bot gives the check mark on this server. Only the Aquamarine team can use it.").await;
