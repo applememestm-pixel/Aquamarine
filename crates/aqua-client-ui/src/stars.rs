@@ -159,5 +159,10 @@ pub async fn marks_live(state: State<'_, StdMutex<AppState>>, uid: String) -> Re
     let m: MarksResp = r.json().await.map_err(|e| e.without_url().to_string())?;
     let star = m.star.as_ref().and_then(|st| check(&uid, st));
     let check = m.check.as_ref().is_some_and(|st| check_mark(&uid, st));
+    // A statement that doesn't check out (a relay with a key of its own):
+    // that's not "no star" — the caller keeps the card's (signed by the owner).
+    if (m.star.is_some() && star.is_none()) || (m.check.is_some() && !check) {
+        return Err("marks: a signature that isn't the owner's".into());
+    }
     Ok(LiveMarks { star, check: Some(check) })
 }

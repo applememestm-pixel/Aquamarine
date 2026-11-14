@@ -155,8 +155,24 @@ fn key() -> Option<aqua_core::crypto::SignSecret> {
     Some(aqua_core::crypto::SignSecret::from_bytes(raw))
 }
 
+/// The public key the apps check stars against (aqua-client-ui
+/// `stars::STAR_PUBLIC_BUILTIN`; `AQUA_STAR_PUBLIC` for a build with another).
+const OFFICIAL_PUBLIC: &str = "3abdfac4ef46672c05a21e9024073208655c0deae3f645441dc1776217a92431";
+
+fn official_public() -> String {
+    std::env::var("AQUA_STAR_PUBLIC").ok().map(|k| k.trim().to_lowercase()).filter(|k| k.len() == 64).unwrap_or_else(|| OFFICIAL_PUBLIC.into())
+}
+
+/// A star key here that the apps don't trust: someone made their own. It
+/// signs nothing — this relay asks the star relay like any other, so its
+/// people still see the real stars.
+pub fn foreign_key() -> bool {
+    key().is_some_and(|k| hex::encode(k.public().as_bytes()) != official_public())
+}
+
+/// This is the star relay: it has the key the apps trust.
 pub fn has_key() -> bool {
-    key().is_some()
+    key().is_some_and(|k| hex::encode(k.public().as_bytes()) == official_public())
 }
 
 /// Make the key once (never over an existing one); its public half.
@@ -179,17 +195,17 @@ pub fn make_key() -> Result<String, String> {
 pub async fn admin_get(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Result<Json<serde_json::Value>, StatusCode> {
     crate::admin_authed(&state, &headers)?;
     let n = with_stars(|m| m.len());
-    Ok(Json(serde_json::json!({ "has_key": has_key(), "public": key().map(|k| hex::encode(k.public().as_bytes())), "stars": n, "bot": bot_name() })))
+    Ok(Json(serde_json::json!({ "has_key": has_key(), "foreign": foreign_key(), "public": key().map(|k| hex::encode(k.public().as_bytes())), "stars": n, "bot": bot_name() })))
 }
 
 pub async fn admin_make(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     crate::admin_authed(&state, &headers).map_err(|c| (c, String::new()))?;
     let had = has_key();
     let public = make_key().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    if !had {
+    if !had && has_key() {
         spawn(state.clone());
     }
-    Ok(Json(serde_json::json!({ "has_key": true, "public": public, "stars": with_stars(|m| m.len()), "bot": bot_name() })))
+    Ok(Json(serde_json::json!({ "has_key": has_key(), "foreign": foreign_key(), "public": public, "stars": with_stars(|m| m.len()), "bot": bot_name() })))
 }
 
 #[derive(Deserialize)]
@@ -389,6 +405,9 @@ pub(crate) fn ensure_bot(state: &AppState) {
 
 /// Started with the relay: does anything only where the key is.
 pub fn spawn(state: AppState) {
+    if foreign_key() {
+        tracing::warn!("{KEY_FILE} isn't the key the apps trust: ignored — stars come from the star relay");
+    }
     if !has_key() {
         return;
     }

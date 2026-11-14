@@ -270,7 +270,7 @@ const RU_DICT = {
   "Make the star key": "Создать ключ звёзд", "this server hands them out": "этот сервер их выдаёт",
   "Make the star key on this server? Only the project owner's server should have it.": "Создать ключ звёзд на этом сервере? Он должен быть только на сервере владельца проекта.",
   "Done — copy the public key into the repository variable AQUA_STAR_PUBLIC.": "Готово — скопируйте открытый ключ в переменную репозитория AQUA_STAR_PUBLIC.",
-  "boostyNote": "Вставьте один раз и забудьте: на boosty.to нажмите F12 → «Хранилище» (Application) → Cookies → boosty.to, скопируйте значение «auth» и вставьте сюда вместе с именем блога. Дальше сервер сам продлевает вход; если Boosty его всё же завершит — @stars вам напишет.","The “auth” cookie of boosty.to": "Cookie «auth» с boosty.to","Blog (boosty.to/…)": "Блог (boosty.to/…)","Connected: {b} · subscribers: {n} · renews by itself": "Подключено: {b} · подписчиков: {n} · продлевается само","Connected: {b} · subscribers: {n} · doesn't renew — paste the whole auth cookie": "Подключено: {b} · подписчиков: {n} · само не продлится — вставьте cookie auth целиком","Disconnect Boosty": "Отключить Boosty","Checking with Boosty…": "Проверяю в Boosty…",
+  "boostyNote": "Вставьте один раз и забудьте: на boosty.to нажмите F12 → «Хранилище» (Application) → Cookies → boosty.to, скопируйте значение «auth» и вставьте сюда вместе с именем блога. Дальше сервер сам продлевает вход; если Boosty его всё же завершит — @stars вам напишет.","The “auth” cookie of boosty.to": "Cookie «auth» с boosty.to","Blog (boosty.to/…)": "Блог (boosty.to/…)","Connected: {b} · subscribers: {n} · renews by itself": "Подключено: {b} · подписчиков: {n} · продлевается само","Connected: {b} · subscribers: {n} · doesn't renew — paste the whole auth cookie": "Подключено: {b} · подписчиков: {n} · само не продлится — вставьте cookie auth целиком","Disconnect Boosty": "Отключить Boosty", "This key isn't the one the apps trust — it's ignored; stars come from the star server.": "Этот ключ не тот, которому верят приложения, — он не используется; звёзды берутся с сервера звёзд.","Checking with Boosty…": "Проверяю в Boosty…",
   "Connecting…": "Подключаюсь…",
   "Not connected": "Не подключён",
   "Over SSH: {h}": "По SSH: {h}",
@@ -847,7 +847,7 @@ async function loadStars() {
   if (!$("starKey")) return;
   $("starKeyRow").hidden = !s.public; $("starKey").textContent = s.public || "";
   $("starMake").hidden = !!s.has_key;
-  $("starHint").textContent = s.has_key ? `${t("this server hands them out")} · @${s.bot} · ${s.stars}` : "";
+  $("starHint").textContent = s.has_key ? `${t("this server hands them out")} · @${s.bot} · ${s.stars}` : s.foreign ? t("This key isn't the one the apps trust — it's ignored; stars come from the star server.") : "";
   $("boostyBox").hidden = !s.has_key;
   if (s.has_key) { try { paintBoosty(await api("/v1/admin/stars/boosty")); } catch { /* older server */ } }
 }
