@@ -1442,6 +1442,39 @@
     return slashCmds.filter((c) => c.cmd.startsWith(q));
   });
   $effect(() => { void slashMatches.length; slashIdx = 0; });
+
+  // "@" suggestions (Telegram): the group's members, else people from the
+  // chat list; picking one finishes the @name.
+  let atIdx = $state(0);
+  let atHidden = $state("");
+  let atMatches = $derived.by((): { user: string; name: string }[] => {
+    const m = /(?:^|\s)@([A-Za-z0-9_.]{0,32})$/.exec(text);
+    if (!m || atHidden === text || $activeChat?.live !== true) return [];
+    const q = m[1].toLowerCase();
+    const pool: { user: string; name: string }[] = activeGroup
+      ? activeGroup.members.map((x) => ({ user: x.username, name: $chats.find((c) => c.id === x.username)?.name ?? x.username }))
+      : $chats.filter((c) => !c.id.startsWith("grp_") && !c.id.startsWith("__")).map((c) => ({ user: c.id, name: c.name }));
+    const me = myUsername;
+    return pool.filter((p) => p.user !== me && (p.user.toLowerCase().startsWith(q) || p.name.toLowerCase().includes(q))).slice(0, 8);
+  });
+  $effect(() => { void atMatches.length; atIdx = 0; });
+  function pickAt(u: string) {
+    text = text.replace(/@([A-Za-z0-9_.]{0,32})$/, `@${u} `);
+    atHidden = "";
+    queueMicrotask(() => composerEl?.focus());
+  }
+  function atKey(e: KeyboardEvent): boolean {
+    if (!atMatches.length) return false;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const n = atMatches.length;
+      atIdx = (atIdx + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+      return true;
+    }
+    if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickAt(atMatches[Math.min(atIdx, atMatches.length - 1)].user); return true; }
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); atHidden = text; return true; }
+    return false;
+  }
   function runSlash(c: SlashCmd) { slashHidden = ""; c.run(); }
   /** Returns true when the key was used by the command popup. */
   function slashKey(e: KeyboardEvent): boolean {
@@ -1462,6 +1495,7 @@
   }
 
   function onKey(e: KeyboardEvent) {
+    if (atKey(e)) return;
     if (slashKey(e)) return;
     const ctrl = e.ctrlKey || e.metaKey;
     if (e.key === "ArrowUp" && !ctrl && !e.shiftKey && !e.altKey && text.length === 0 && !editTarget) {
@@ -4846,6 +4880,17 @@
         >{@html icons.attach}</button>
       </div>
       <div class="input-wrap">
+        {#if atMatches.length}
+          <div class="slash-pop" role="listbox" aria-label={$t("Mention")}>
+            {#each atMatches as p, i (p.user)}
+              <button class="slash-item" class:on={i === atIdx} role="option" aria-selected={i === atIdx}
+                onmousedown={(e) => e.preventDefault()} onmouseenter={() => (atIdx = i)} onclick={() => pickAt(p.user)}>
+                <span class="slash-cmd">{p.name}</span>
+                <span class="slash-desc">@{p.user}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
         {#if slashMatches.length}
           <div class="slash-pop" role="listbox" aria-label={$t("Commands")}>
             {#each slashMatches as c, i (c.cmd)}

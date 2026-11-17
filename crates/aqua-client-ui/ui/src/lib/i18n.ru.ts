@@ -812,6 +812,7 @@ export const RU: Record<string, string> = {
   "Search in this chat…": "Поиск в этом чате…",
   "Search members": "Поиск участников",
   "Seek": "Перемотка",
+  "Mention": "Упоминание",
   "Select": "Выбрать",
   "Send": "Отправить",
   "Sending…": "Отправка…",
