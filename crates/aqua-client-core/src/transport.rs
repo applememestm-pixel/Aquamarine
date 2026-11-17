@@ -1346,6 +1346,16 @@ impl Transport {
         Ok(r.json().await?)
     }
 
+    /// A bot's commands for the "/" hints (public on the relay).
+    pub async fn bot_commands(&self, bot: &str) -> Result<serde_json::Value, TransportError> {
+        let url = format!("{}/v1/webapp/commands/{}", self.server_url.trim_end_matches('/'), bot);
+        let r = self.http.get(&url).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(r.json().await?)
+    }
+
     /// Sealed messages: store the key with its condition on my relay.
     pub async fn capsule_put(&self, body: &serde_json::Value) -> Result<(), TransportError> {
         let url = format!("{}/v1/capsules", self.server_url.trim_end_matches('/'));

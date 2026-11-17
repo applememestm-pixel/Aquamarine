@@ -21,6 +21,8 @@ export type Inline =
   | { t: "link"; href: string; c: Inline[] }
   | { t: "mention"; v: string }
   | { t: "hashtag"; v: string }
+  /** `/command` — tapped, sends it (Telegram's bot commands). */
+  | { t: "botcmd"; v: string }
   /** `<t:UNIX>` — a moment in time, shown in the reader's own time zone
    *  (Telegram's "Date" formatting, 1.2.0-4). */
   | { t: "date"; at: number };
@@ -138,6 +140,11 @@ export function parseInline(s: string, mode: Mode = "message"): Inline[] {
           i += url.length; continue;
         }
       }
+    }
+    // /commands (Telegram: a bot's commands are links that send themselves)
+    if (ch === "/" && (prev === undefined || isSpace(prev))) {
+      const m = /^\/([a-z][a-z0-9_]{0,31})(?![\w/.])/i.exec(s.slice(i));
+      if (m) { flush(); out.push({ t: "botcmd", v: m[1] }); i += m[0].length; continue; }
     }
     // @mentions and #hashtags
     if ((ch === "@" || ch === "#") && (prev === undefined || !WORD_BEFORE.test(prev))) {
@@ -277,6 +284,7 @@ function inlineText(c: Inline[]): string {
       case "code": return x.v;
       case "mention": return "@" + x.v;
       case "hashtag": return "#" + x.v;
+      case "botcmd": return "/" + x.v;
       case "date": return fmtDate(x.at);
       case "spoiler": return "▒▒▒";
       default: return inlineText(x.c);
@@ -300,7 +308,7 @@ export function plainText(src: string, mode: Mode = "message"): string {
 
 /** True when the text uses any formatting marker (cheap pre-check). */
 export function hasMarkup(s: string): boolean {
-  return /\*\*|__|\+\+|~~|\|\||`|^>|\[[^\]]+\]\(|https?:\/\/|www\.|aqua:\/\/join\/|@\w{3}|#\p{L}/mu.test(s);
+  return /\*\*|__|\+\+|~~|\|\||`|^>|\[[^\]]+\]\(|https?:\/\/|www\.|aqua:\/\/join\/|@\w{3}|#\p{L}|(?:^|\s)\/[a-z]/mu.test(s);
 }
 
 /** All links in a text, in order (for link previews). */

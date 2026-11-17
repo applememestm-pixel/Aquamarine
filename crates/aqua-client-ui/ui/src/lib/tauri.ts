@@ -170,6 +170,8 @@ export const api = {
   /** Signed initData for a bot's mini app. */
   webappInit:         (bot: string, start_param?: string): Promise<{ init_data: string; signed: boolean }> => invoke("webapp_init", { bot, startParam: start_param ?? null }),
   /** The bot's menu button. */
+  /** The bot's commands (setMyCommands) for the "/" hints. */
+  botCommands:        (bot: string): Promise<{ command: string; description: string }[]> => invoke("bot_commands", { bot }),
   webappMenu:         (bot: string): Promise<{ type: string; text?: string; web_app?: { url: string } }> => invoke("webapp_menu", { bot }),
   /** Save a text export (.ics/.md/.txt/.html/.csv) to a path the user picked. */
   writeTextFile:      (path: string, text: string): Promise<void> => invoke("write_text_file", { path, text }),

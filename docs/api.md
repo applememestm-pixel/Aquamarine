@@ -413,6 +413,7 @@
 |---|---|---|
 | `POST /v1/webapp/init` | сеанс | `{"bot", "start_param"}` → `{"init_data": "<строка запуска>", "signed": true}` |
 | `GET /v1/webapp/menu/:bot` | открытый | Кнопка меню бота: `{"type": "web_app", "text", "web_app": {"url"}}` или `{"type": "default"}` |
+| `GET /v1/webapp/commands/:bot` | открытый | Команды бота (setMyCommands) для подсказок «/»: `[{"command", "description"}]` |
 
 `init_data` подписывается по алгоритму Telegram ключом `HMAC-SHA256("WebAppData", токен бота)`. `signed: false` означает, что ретранслятор ещё не знает ключ бота (бот не обращался к API после запуска ретранслятора). Подробнее — [bots.md](bots.md#9-совместимость-с-telegram-bot-api).
 
@@ -599,6 +600,7 @@ x-aqua-fed: <unix_ms>.<hex HMAC-SHA256(secret, METHOD "\n" PATH "\n" unix_ms "\n
 | POST | `/v1/capsules/:id/stop` | сеанс | 10 |
 | POST | `/v1/webapp/init` | сеанс | 11 |
 | GET | `/v1/webapp/menu/:bot` | открытый | 11 |
+| GET | `/v1/webapp/commands/:bot` | открытый | 11 |
 | POST | `/v1/bot/register` | сеанс | 12 |
 | GET | `/v1/bot/list` | сеанс | 12 |
 | DELETE | `/v1/bot/:name` | сеанс | 12 |

@@ -1475,6 +1475,13 @@ async fn webapp_menu(State(state): State<AppState>, Path(bot): Path<String>) -> 
     Json(tgapi::menu_button(&state, &bot.trim().trim_start_matches('@').to_lowercase()))
 }
 
+/// A bot's commands (setMyCommands) for the "/" hints in the app — public,
+/// as in Telegram: `[{command, description}]`.
+async fn webapp_commands(State(state): State<AppState>, Path(bot): Path<String>) -> Json<serde_json::Value> {
+    let bot = bot.trim().trim_start_matches('@').to_lowercase();
+    Json(state.tg.commands.get(&bot).map(|c| c.clone()).unwrap_or(serde_json::json!([])))
+}
+
 // ---------- Sealed messages ------------------------------------------------------
 
 #[derive(Deserialize)]
@@ -3293,6 +3300,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/capsules/:id/open",  post(capsule_open))
         .route("/v1/capsules/:id/stop",  post(capsule_stop))
         .route("/v1/webapp/menu/:bot",   get(webapp_menu))
+        .route("/v1/webapp/commands/:bot", get(webapp_commands))
         .route("/v1/me/recovery",        get(recovery_get).put(recovery_put))
         .route("/v1/me/security",        get(security_get).put(security_put))
         .route("/v1/me/2fa/setup",       post(totp_setup))

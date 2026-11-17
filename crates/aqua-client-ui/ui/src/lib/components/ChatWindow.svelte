@@ -1435,11 +1435,28 @@
     .filter((c, i, all) => all.findIndex((x) => x.cmd === c.cmd) === i));
   let slashIdx = $state(0);
   let slashHidden = $state("");
+  // A bot's own commands (setMyCommands), like Telegram: listed first, a
+  // tap sends the command straight away.
+  let botCmds = $state<{ command: string; description: string }[]>([]);
+  $effect(() => {
+    const id = $activeChat?.id;
+    botCmds = [];
+    if (!id || id.startsWith("grp_") || !$peerCards[id]?.is_bot) return;
+    void api.botCommands(id).then((l) => { if ($activeChat?.id === id && Array.isArray(l)) botCmds = l; }).catch(() => {});
+  });
+  // A /command tapped in a message (Markup.svelte) is sent to this chat.
+  $effect(() => {
+    const h = (e: Event) => { const v = (e as CustomEvent<string>).detail; if (v && $activeChat?.live) sendNow("/" + v); };
+    window.addEventListener("aqua:botcmd", h);
+    return () => window.removeEventListener("aqua:botcmd", h);
+  });
   let slashMatches = $derived.by(() => {
     const m = /^\/([\p{L}\w]*)$/u.exec(text);
     if (!m || $activeChat?.live !== true || slashHidden === text) return [];
     const q = m[1].toLowerCase();
-    return slashCmds.filter((c) => c.cmd.startsWith(q));
+    const fromBot: SlashCmd[] = botCmds.map((c) => ({ cmd: c.command, desc: c.description, run: () => sendNow("/" + c.command) }));
+    const all = [...fromBot, ...slashCmds.filter((c) => !fromBot.some((b) => b.cmd === c.cmd))];
+    return all.filter((c) => c.cmd.startsWith(q));
   });
   $effect(() => { void slashMatches.length; slashIdx = 0; });
 

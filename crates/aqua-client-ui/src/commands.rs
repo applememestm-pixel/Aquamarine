@@ -4188,6 +4188,12 @@ pub async fn webapp_menu(state: State<'_, StdMutex<AppState>>, bot: String) -> R
     t.webapp_menu(&bot).await.map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn bot_commands(state: State<'_, StdMutex<AppState>>, bot: String) -> Result<serde_json::Value, String> {
+    let t = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone().ok_or("not connected to a server")? };
+    t.bot_commands(&bot).await.map_err(|e| e.to_string())
+}
+
 async fn on_incoming_initial(
     app: &AppHandle,
     addr: String,

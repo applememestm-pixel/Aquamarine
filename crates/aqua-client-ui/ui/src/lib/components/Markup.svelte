@@ -85,7 +85,7 @@
     {#if n.t === "text"}{n.v}{:else if n.t === "br"}<br />{:else if n.t === "emoji"}
       {@const m = resolveEmoji?.(n.key)}
       {#if m}<span class="mk-emoji" title={emojiFallback(n.key)}><AnimatedMedia src={m.url} mime={m.mime} alt={emojiFallback(n.key)} play="auto" /></span>{:else}{emojiFallback(n.key)}{/if}
-    {:else if n.t === "code"}<code class="mk-code">{n.v}</code>{:else if n.t === "b"}<strong>{@render inl(n.c)}</strong>{:else if n.t === "i"}<em>{@render inl(n.c)}</em>{:else if n.t === "u"}<u>{@render inl(n.c)}</u>{:else if n.t === "s"}<s>{@render inl(n.c)}</s>{:else if n.t === "spoiler"}<!-- svelte-ignore a11y_click_events_have_key_events --><span class="mk-spoiler" role="button" tabindex="0" title={tr("Spoiler — click to show")} onclick={reveal}>{@render inl(n.c)}</span>{:else if n.t === "link"}<a class="mk-link" href={n.href} title={n.href} onclick={(e) => click(e, n.href)}>{@render inl(n.c)}</a>{:else if n.t === "mention"}<button class="mk-mention" onclick={(e) => { e.stopPropagation(); openProfile(n.v); }}>@{n.v}</button>{:else if n.t === "hashtag"}<span class="mk-tag">#{n.v}</span>{:else if n.t === "date"}<span class="mk-date" title={new Date(n.at * 1000).toString()}>📅 {fmtDate(n.at)}</span>{/if}
+    {:else if n.t === "code"}<code class="mk-code">{n.v}</code>{:else if n.t === "b"}<strong>{@render inl(n.c)}</strong>{:else if n.t === "i"}<em>{@render inl(n.c)}</em>{:else if n.t === "u"}<u>{@render inl(n.c)}</u>{:else if n.t === "s"}<s>{@render inl(n.c)}</s>{:else if n.t === "spoiler"}<!-- svelte-ignore a11y_click_events_have_key_events --><span class="mk-spoiler" role="button" tabindex="0" title={tr("Spoiler — click to show")} onclick={reveal}>{@render inl(n.c)}</span>{:else if n.t === "link"}<a class="mk-link" href={n.href} title={n.href} onclick={(e) => click(e, n.href)}>{@render inl(n.c)}</a>{:else if n.t === "mention"}<button class="mk-mention" onclick={(e) => { e.stopPropagation(); openProfile(n.v); }}>@{n.v}</button>{:else if n.t === "hashtag"}<span class="mk-tag">#{n.v}</span>{:else if n.t === "botcmd"}<button class="mk-cmd" onclick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent("aqua:botcmd", { detail: n.v })); }}>/{n.v}</button>{:else if n.t === "date"}<span class="mk-date" title={new Date(n.at * 1000).toString()}>📅 {fmtDate(n.at)}</span>{/if}
   {/each}
 {/snippet}
 
@@ -202,4 +202,6 @@
   .mk-emoji { display: inline-block; width: 1.35em; height: 1.35em; vertical-align: -0.3em; margin: 0 1px; }
   .mk-emoji :global(img), .mk-emoji :global(video) { width: 100%; height: 100%; object-fit: contain; }
   strong { font-weight: 700; }
+  .mk-cmd { background: none; border: none; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
+  .mk-cmd:hover { text-decoration: underline; }
 </style>
