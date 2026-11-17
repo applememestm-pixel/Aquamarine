@@ -701,6 +701,22 @@
     e.preventDefault();
     folderMenu = { x: Math.min(e.clientX, window.innerWidth - 220), y: e.clientY + 8, id };
   }
+  /** Phones: holding a folder tab opens its menu ("Mark all as read", …) —
+   *  the right-click menu had no way to open by touch. */
+  let tabHold: ReturnType<typeof setTimeout> | null = null;
+  let tabHeld = false;
+  function tabDown(e: PointerEvent, id: string) {
+    tabHeld = false;
+    if (e.pointerType !== "touch") return;
+    const { clientX, clientY } = e;
+    tabHold = setTimeout(() => {
+      tabHold = null; tabHeld = true;
+      try { navigator.vibrate?.(12); } catch { /* no vibration */ }
+      folderMenu = { x: Math.min(clientX, window.innerWidth - 220), y: clientY + 8, id };
+    }, 450);
+  }
+  function tabUp() { if (tabHold) { clearTimeout(tabHold); tabHold = null; } }
+  function tabClick(id: string) { if (tabHeld) { tabHeld = false; return; } activeFolder.set(id); }
 
   // ---- Right-click a chat: archive / mute ----
   let ctx = $state<{ x: number; y: number; id: string } | null>(null);
@@ -1109,10 +1125,10 @@
     </div>
   {:else if $folders.length > 0}
     <div class="folder-strip" class:fs-pills={$themeSettings.folderTabStyle === "pills"} class:fs-text={$themeSettings.folderTabStyle === "text"} use:scrollX>
-      {#if !$themeSettings.hideAllTab}<button class="folder-tab" class:active={$activeFolder === "all"} onclick={() => activeFolder.set("all")} oncontextmenu={(e) => openFolderMenu(e, "all")}>{$t("All")}</button>{/if}
+      {#if !$themeSettings.hideAllTab}<button class="folder-tab" class:active={$activeFolder === "all"} onclick={() => tabClick("all")} onpointerdown={(e) => tabDown(e, "all")} onpointerup={tabUp} onpointercancel={tabUp} onpointerleave={tabUp} oncontextmenu={(e) => openFolderMenu(e, "all")}>{$t("All")}</button>{/if}
       {#each $folders as f (f.id)}
         {@const unread = $visibleChats.filter((c) => (c.unread > 0) && !$mutedChats.has(c.id) && folderHas(f, factsOf(c))).length}
-        <button class="folder-tab" class:active={$activeFolder === f.id} onclick={() => activeFolder.set(f.id)} oncontextmenu={(e) => openFolderMenu(e, f.id)}>
+        <button class="folder-tab" class:active={$activeFolder === f.id} onclick={() => tabClick(f.id)} onpointerdown={(e) => tabDown(e, f.id)} onpointerup={tabUp} onpointercancel={tabUp} onpointerleave={tabUp} oncontextmenu={(e) => openFolderMenu(e, f.id)}>
           {#if f.emoji}<span class="ft-emoji">{f.emoji}</span>{/if}{f.name}{#if unread > 0 && $themeSettings.folderCounters !== false}<span class="ft-count">{unread}</span>{/if}
         </button>
       {/each}
