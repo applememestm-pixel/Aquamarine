@@ -5380,6 +5380,15 @@
     }
     :global(html.glass) .chat-header { border-radius: calc(22px * var(--rk, 1)); z-index: 4; }
     :global(html.glass) .composer { border-radius: calc(26px * var(--rk, 1)); margin-bottom: 6px; padding: 6px 8px; }
+    /* Telegram's field: one pill — attach, text, emoji and camera sit inside
+       it without boxes of their own; the send / mic button is a round accent
+       button at the end. */
+    :global(html.glass) .composer .input-wrap,
+    :global(html.glass) .composer .input-wrap:focus-within { background: transparent; border-color: transparent; box-shadow: none; padding-left: 4px; }
+    :global(html.glass) .composer .attach-btn { background: transparent; border-color: transparent; border-radius: 50%; }
+    :global(html.glass) .composer .send-btn { width: 40px; height: 40px; border-radius: 50%; border: none;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2, var(--accent))); color: #fff; }
+    :global(html.glass) .composer .send-btn.media-btn.recording { background: #ff4d6d; }
     :global(html.glass) .chat-header::before, :global(html.glass) .composer::before {
       border-radius: inherit; backdrop-filter: blur(var(--glass-blur, 12px)) saturate(1.5); -webkit-backdrop-filter: blur(var(--glass-blur, 12px)) saturate(1.5);
     }
