@@ -61,6 +61,13 @@
   const index = $derived($gallery?.index ?? 0);
   const total = $derived(items.length);
   const cur = $derived<GalleryItem | null>($gallery ? items[index] ?? null : null);
+  // Phones: the bottom tab bar stayed above the viewer and took taps
+  // through it. While the viewer is open it's hidden (app.css, html.lb-open).
+  $effect(() => {
+    const open = !!$gallery;
+    document.documentElement.classList.toggle("lb-open", open);
+    return () => document.documentElement.classList.remove("lb-open");
+  });
   const isImage = $derived(cur?.kind === "image");
 
   // ── Per-item view state ─────────────────────────────────────

@@ -487,3 +487,6 @@ html.aq-autoscroll, html.aq-autoscroll * { cursor: all-scroll !important; user-s
 @media (pointer: fine) {
   button:not(:disabled):not(.no-press):active { filter: brightness(1.12); }
 }
+
+/* The photo viewer is open (Lightbox.svelte): nothing of the tab bar over it. */
+html.lb-open aside.rail { visibility: hidden; pointer-events: none; }

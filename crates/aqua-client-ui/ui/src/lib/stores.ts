@@ -212,7 +212,9 @@ export async function bootstrap() {
     // Someone who may not write to me (privacy → "Who can write to me"):
     // the chat waits under "Message requests", without a notification.
     const { mayWriteMe } = await import("./privacy");
-    if (!isActive && !prefs.isMuted(p.peer_id) && mayWriteMe(p.peer_id)) notifyIncoming(p.peer_id, p.text);
+    // An edit, a deletion or a timer change comes with no text: it isn't a
+    // new message and made a sound (and a banner) of its own.
+    if (p.text && !isActive && !prefs.isMuted(p.peer_id) && mayWriteMe(p.peer_id)) notifyIncoming(p.peer_id, p.text);
     // Refresh info (opk count, etc.)
     refreshInfoSoon();
   });

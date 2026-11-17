@@ -109,6 +109,8 @@ export const RU: Record<string, string> = {
   "Chat settings": "Настройки чатов",
   "Chat wallpaper": "Обои чата",
   "Clear": "Очистить",
+  "Reset theme to defaults": "Сбросить тему к заводской",
+  "Theme reset to defaults": "Тема сброшена к заводской",
   "Clear custom colours": "Сбросить свои цвета",
   "Clear history": "Очистить историю",
   "Click on the photo to add text": "Нажмите на фото, чтобы добавить текст",
