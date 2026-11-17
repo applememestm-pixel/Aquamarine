@@ -16,7 +16,7 @@
 
 <script lang="ts">
   import StoryTiles from "./StoryTiles.svelte";
-  import { openLightbox } from "./Lightbox.svelte";
+  import { openLightbox, openGallery } from "./Lightbox.svelte";
   import UsernameEdit from "./UsernameEdit.svelte";
   import BirthdayInput from "./BirthdayInput.svelte";
   import ColorInput from "./ColorInput.svelte";
@@ -26,7 +26,7 @@
   import { info, chats, selectChat } from "../stores";
   import { mutedChats, setMuted } from "../chatPrefs";
   import { startOutgoingCall } from "./CallModal.svelte";
-  import { api, bytesToDataUrl } from "../tauri";
+  import { api, bytesToDataUrl, assetUrl } from "../tauri";
   import { icons } from "../icons";
   import { openFileDialog } from "../dialog";
   import { showToast } from "./Toast.svelte";
@@ -216,6 +216,53 @@
       uploading = "";
     }
   }
+  /** One more avatar (up to 5 in all) or banner (up to 3): the next free
+   *  server slot; cropped and squeezed like the main one. */
+  async function addMore(type: "avatar" | "banner") {
+    const used = new Set(($profile.more ?? []).map((m) => m.k));
+    const slots = type === "avatar" ? ["avatar2", "avatar3", "avatar4", "avatar5"] : ["banner2", "banner3"];
+    const slot = slots.find((k) => !used.has(k));
+    if (!slot) { showToast(tr(type === "avatar" ? "Up to 5 photos" : "Up to 3 banners")); return; }
+    try {
+      const result = await openFileDialog({ multiple: false, directory: false, title: type === "avatar" ? "Pick a photo" : "Pick a banner",
+        filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }] });
+      const path = Array.isArray(result) ? (result[0] ?? null) : result;
+      if (!path) return;
+      uploading = type;
+      let r: { ver: number; path: string };
+      if (path.toLowerCase().endsWith(".gif")) {
+        const raw = await api.readUserImage(path);
+        r = await api.setProfileImageBytes(slot as "avatar2", "image/gif", Array.from(new Uint8Array(raw)));
+      } else {
+        const raw = await api.readUserImage(path);
+        const src = URL.createObjectURL(new Blob([new Uint8Array(raw)]));
+        const blob = await cropImage(src, type === "avatar"
+          ? { aspect: 1, round: true, outWidth: 512, title: "Position your avatar" }
+          : { aspect: 3, outWidth: 1500, title: "Position your banner" });
+        URL.revokeObjectURL(src);
+        if (!blob) return;
+        r = await api.setProfileImageBytes(slot as "avatar2", "image/webp", Array.from(new Uint8Array(await blob.arrayBuffer())));
+      }
+      const more = [...($profile.more ?? []).filter((m) => m.k !== slot), { k: slot, v: r.ver, url: assetUrl(r.path) + `?v=${r.ver}` }];
+      updateProfile({ more });
+      await publishMyProfile();
+    } catch (e) {
+      showToast(String(e), 6000);
+    } finally {
+      uploading = "";
+    }
+  }
+  async function removeMore(k: string) {
+    try {
+      await api.clearProfileMedia(k as "avatar2");
+    } catch { /* gone already */ }
+    updateProfile({ more: ($profile.more ?? []).filter((m) => m.k !== k) });
+    void publishMyProfile();
+  }
+  function toggleLink() {
+    updateProfile({ link_banner: !$profile.link_banner });
+    void publishMyProfile();
+  }
   async function removeImage(kind: "avatar" | "banner") {
     try {
       uploading = kind;
@@ -271,6 +318,10 @@
     card_g: number;
     pattern: string;
     estatus: string;
+    /** More avatars / banners (server slot + version) and whether paging
+     *  the banner pages the avatar too. */
+    more: { k: string; v: number; url?: string }[];
+    link: boolean;
   }
   let view = $derived<View | null>((void $played, buildView(activeUsername, $profile, $contacts, $info, $peerCards, $peerPresence, $myActivity)));
   // Links to a known service show as connections, the rest as links.
@@ -278,12 +329,42 @@
   const plainLinks = $derived((view?.links ?? []).filter((l) => !serviceOf(l.url)));
   // Which avatar image to show: the live draft when editing myself, else
   // the stored/served one.
-  let shownAvatar = $derived(
+  let baseAvatar = $derived(
     (editing && isMe && draft) ? (draft.avatar_url ?? "") : (view?.avatar_url ?? ""),
   );
-  let shownBanner = $derived(
+  let baseBanner = $derived(
     (editing && isMe && draft) ? (draft.banner_url ?? "") : (view?.banner_url ?? ""),
   );
+  // ---- More avatars and banners (exteraGram): paged on the banner ----
+  let moreUrls = $state<Record<string, string>>({});
+  $effect(() => {
+    const v = view;
+    if (!v) return;
+    for (const m of v.more) {
+      const key = `${v.username}:${m.k}:${m.v}`;
+      if (moreUrls[key]) continue;
+      if (m.url) { moreUrls = { ...moreUrls, [key]: m.url }; continue; }
+      const who = isMe ? ($info?.username ?? "") : v.username;
+      if (!who) continue;
+      void api.profileMediaPath(who, m.k, m.v).then((p) => { if (p) moreUrls = { ...moreUrls, [key]: assetUrl(p) + `?v=${m.v}` }; }).catch(() => {});
+    }
+  });
+  const moreOf = (prefix: string) => (view?.more ?? []).filter((m) => m.k.startsWith(prefix)).sort((a, b) => a.k.localeCompare(b.k))
+    .map((m) => moreUrls[`${view?.username}:${m.k}:${m.v}`]).filter(Boolean) as string[];
+  let avatarPages = $derived([baseAvatar, ...moreOf("avatar")].filter(Boolean));
+  let bannerPages = $derived([baseBanner, ...moreOf("banner")].filter(Boolean));
+  let pageCount = $derived(editing ? 1 : view?.link ? Math.max(bannerPages.length, avatarPages.length) : bannerPages.length);
+  let page = $state(0);
+  $effect(() => { void activeUsername; page = 0; });
+  function turnPage(d: number) { if (pageCount > 1) page = (page + d + pageCount) % pageCount; }
+  let shownBanner = $derived(!editing && bannerPages.length > 1 ? bannerPages[page % bannerPages.length] : baseBanner);
+  let shownAvatar = $derived(!editing && view?.link && avatarPages.length > 1 ? avatarPages[page % avatarPages.length] : baseAvatar);
+  /** Tapped the avatar: every photo of the profile, full screen. */
+  function openAvatars() {
+    if (!avatarPages.length) return;
+    const at = Math.max(0, avatarPages.indexOf(shownAvatar));
+    openGallery(avatarPages.map((u) => ({ url: u, kind: isVideoUrl(u) ? "video" as const : "image" as const, name: view?.display_name, from: view?.display_name })), at);
+  }
   let bannerA = $derived((editing && isMe && draft) ? draft.banner_a : (view?.banner_a ?? "#4F7AFE"));
   let bannerB = $derived((editing && isMe && draft) ? draft.banner_b : (view?.banner_b ?? "#9B6CFF"));
   // Card colour: set by hand, else the banner picture's average colour,
@@ -405,6 +486,8 @@
         card_g: me.card_g ?? CARD_LENGTH,
         pattern: me.pattern ?? "",
         estatus: me.estatus ?? "",
+        more: me.more ?? [],
+        link: !!me.link_banner,
       };
     }
     const c = getContact(uname);
@@ -444,6 +527,8 @@
       card_g: typeof x.cg === "number" ? x.cg : CARD_LENGTH,
       pattern: str(x.pattern).slice(0, 16),
       estatus: str(x.es),
+      more: Array.isArray(x.more) ? (x.more as { k: string; v: number }[]).filter((m) => m && /^(avatar[2-5]|banner[23])$/.test(String(m.k)) && typeof m.v === "number") : [],
+      link: x.lb === true,
     };
   }
 
@@ -550,6 +635,12 @@
           <video class="banner-vid" use:streamSrc={shownBanner} muted loop autoplay playsinline></video>
         {/if}
         {#if patternBg}<div class="pattern" style:background-image={`url("${patternBg}")`}></div>{/if}
+        {#if pageCount > 1}
+          <!-- Paging banners (and avatars, if linked): arrows and dots. -->
+          <button class="pg-arrow l" onclick={() => turnPage(-1)} aria-label={$t("Previous")}>‹</button>
+          <button class="pg-arrow r" onclick={() => turnPage(1)} aria-label={$t("Next")}>›</button>
+          <div class="pg-dots">{#each Array(pageCount) as _, i (i)}<i class:on={i === page}></i>{/each}</div>
+        {/if}
         {#if isMe}
           <!-- My own profile: the small buttons right away, not only in "Edit". -->
           <div class="banner-tools">
@@ -568,7 +659,7 @@
             {#if shownAvatar}
               <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
               <img src={shownAvatar} alt={view.display_name} class:zoomable={!editing}
-                onclick={() => { if (!editing && shownAvatar) openLightbox({ url: shownAvatar, kind: /\.(mp4|webm)(\?|$)/i.test(shownAvatar) ? "video" : "image", name: view?.display_name, from: view?.display_name }); }} />
+                onclick={() => { if (!editing && shownAvatar) openAvatars(); }} />
             {:else}
               {view.display_name.charAt(0).toUpperCase()}
             {/if}
@@ -585,6 +676,24 @@
 
         {#if editing && isMe && draft}
           <div class="ed-left">
+          <!-- More photos and banners: paged on the profile (exteraGram). -->
+          <div class="more-media">
+            <div class="mm-row">
+              <span class="mm-lbl">{$t("Photos")}</span>
+              {#each ($profile.more ?? []).filter((m) => m.k.startsWith("avatar")) as m (m.k)}
+                <span class="mm-th round" style:background-image={m.url ? `url("${m.url}")` : undefined}><button onclick={() => removeMore(m.k)} aria-label={$t("Remove")}>×</button></span>
+              {/each}
+              {#if ($profile.more ?? []).filter((m) => m.k.startsWith("avatar")).length < 4}<button class="mm-add round" onclick={() => addMore("avatar")} disabled={!!uploading} aria-label={$t("Add a photo")}>+</button>{/if}
+            </div>
+            <div class="mm-row">
+              <span class="mm-lbl">{$t("Banners")}</span>
+              {#each ($profile.more ?? []).filter((m) => m.k.startsWith("banner")) as m (m.k)}
+                <span class="mm-th wide" style:background-image={m.url ? `url("${m.url}")` : undefined}><button onclick={() => removeMore(m.k)} aria-label={$t("Remove")}>×</button></span>
+              {/each}
+              {#if ($profile.more ?? []).filter((m) => m.k.startsWith("banner")).length < 2}<button class="mm-add wide" onclick={() => addMore("banner")} disabled={!!uploading} aria-label={$t("Add a banner")}>+</button>{/if}
+            </div>
+            <label class="mm-link"><input type="checkbox" checked={!!$profile.link_banner} onchange={toggleLink} /> {$t("Paging the banner changes the photo too")}</label>
+          </div>
           <input
             class="edit-name"
             bind:value={draft.display_name}
@@ -1708,4 +1817,20 @@
     box-shadow: 0 6px 16px -4px var(--accent-glow);
   }
   .btn-primary:hover { transform: translateY(-1px); }
+  /* Banner paging (more banners / linked photos). */
+  .pg-arrow { position: absolute; top: 50%; transform: translateY(-50%); z-index: 3; width: 30px; height: 30px; border-radius: 50%; border: none;
+    background: rgba(0,0,0,.35); color: #fff; font-size: 20px; line-height: 1; cursor: pointer; display: grid; place-items: center; }
+  .pg-arrow.l { left: 8px; } .pg-arrow.r { right: 8px; }
+  .pg-dots { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 3; display: flex; gap: 4px; }
+  .pg-dots i { width: 18px; height: 3px; border-radius: 2px; background: rgba(255,255,255,.4); }
+  .pg-dots i.on { background: #fff; }
+  .more-media { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+  .mm-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .mm-lbl { font-size: 12px; color: var(--fg-muted); min-width: 64px; }
+  .mm-th, .mm-add { position: relative; height: 44px; background: var(--bg-input) center / cover no-repeat; border: 1px solid var(--border); }
+  .mm-th.round, .mm-add.round { width: 44px; border-radius: 50%; }
+  .mm-th.wide, .mm-add.wide { width: 96px; border-radius: calc(8px * var(--rk, 1)); }
+  .mm-th button { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; border-radius: 50%; border: none; background: var(--bg-shell); color: var(--fg); font-size: 12px; line-height: 1; cursor: pointer; }
+  .mm-add { color: var(--fg-muted); font-size: 20px; cursor: pointer; }
+  .mm-link { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--fg-muted); }
 </style>

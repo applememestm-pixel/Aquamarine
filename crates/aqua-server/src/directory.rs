@@ -513,9 +513,12 @@ pub const IMAGE_MEDIA_LIMIT: usize = 8 * 1024 * 1024;
 /// Largest `extra` JSON blob accepted.
 pub const PROFILE_EXTRA_LIMIT: usize = 8 * 1024;
 
-/// Which profile image.
+/// Which profile image. Besides the main avatar and banner a profile keeps
+/// up to 4 more avatars (`avatar2`…`avatar5`) and 2 more banners
+/// (`banner2`, `banner3`) that the profile pages through; their versions
+/// live in the profile's `extra` (the app writes them), not in columns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MediaKind { Avatar, Banner, Music }
+pub enum MediaKind { Avatar, Banner, Music, Avatar2, Avatar3, Avatar4, Avatar5, Banner2, Banner3 }
 
 impl MediaKind {
     pub fn parse(s: &str) -> Option<Self> {
@@ -523,15 +526,30 @@ impl MediaKind {
             "avatar" => Some(Self::Avatar),
             "banner" => Some(Self::Banner),
             "music" => Some(Self::Music),
+            "avatar2" => Some(Self::Avatar2),
+            "avatar3" => Some(Self::Avatar3),
+            "avatar4" => Some(Self::Avatar4),
+            "avatar5" => Some(Self::Avatar5),
+            "banner2" => Some(Self::Banner2),
+            "banner3" => Some(Self::Banner3),
             _ => None,
         }
     }
     pub fn as_str(self) -> &'static str {
-        match self { Self::Avatar => "avatar", Self::Banner => "banner", Self::Music => "music" }
+        match self {
+            Self::Avatar => "avatar", Self::Banner => "banner", Self::Music => "music",
+            Self::Avatar2 => "avatar2", Self::Avatar3 => "avatar3", Self::Avatar4 => "avatar4", Self::Avatar5 => "avatar5",
+            Self::Banner2 => "banner2", Self::Banner3 => "banner3",
+        }
     }
-    fn ver_col(self) -> &'static str {
-        match self { Self::Avatar => "avatar_ver", Self::Banner => "banner_ver", Self::Music => "music_ver" }
+    fn ver_col(self) -> Option<&'static str> {
+        match self {
+            Self::Avatar => Some("avatar_ver"), Self::Banner => Some("banner_ver"), Self::Music => Some("music_ver"),
+            _ => None,
+        }
     }
+    fn is_avatar(self) -> bool { matches!(self, Self::Avatar | Self::Avatar2 | Self::Avatar3 | Self::Avatar4 | Self::Avatar5) }
+    fn is_banner(self) -> bool { matches!(self, Self::Banner | Self::Banner2 | Self::Banner3) }
 }
 
 pub(crate) fn now_secs() -> u64 {
@@ -1265,11 +1283,12 @@ impl Directory {
         let username = username.trim().to_lowercase();
         let mime = mime.trim().to_ascii_lowercase();
         let mb = |n: usize| n / 1024 / 1024;
+        let pic = kind.is_avatar() || kind.is_banner();
         let limit = match (kind, mime.as_str()) {
-            (MediaKind::Avatar | MediaKind::Banner, "image/png" | "image/jpeg" | "image/webp") => IMAGE_MEDIA_LIMIT,
+            (_, "image/png" | "image/jpeg" | "image/webp") if pic => IMAGE_MEDIA_LIMIT,
             // Animated: GIF anywhere, short silent video for banners — light only.
-            (MediaKind::Avatar | MediaKind::Banner, "image/gif") => ANIMATED_MEDIA_LIMIT,
-            (MediaKind::Banner, "video/webm" | "video/mp4") => ANIMATED_MEDIA_LIMIT,
+            (_, "image/gif") if pic => ANIMATED_MEDIA_LIMIT,
+            (_, "video/webm" | "video/mp4") if kind.is_banner() => ANIMATED_MEDIA_LIMIT,
             (MediaKind::Music, "audio/mpeg" | "audio/ogg" | "audio/opus" | "audio/mp4" | "audio/aac" | "audio/flac" | "audio/wav" | "audio/webm") => PROFILE_MEDIA_LIMIT,
             _ => return Err(DirError::BadProfile(format!("unsupported type {mime:?} for {}", kind.as_str()))),
         };
@@ -1283,11 +1302,12 @@ impl Directory {
              ON CONFLICT(username, kind) DO UPDATE SET mime=?3, data=?4",
             rusqlite::params![username, kind.as_str(), mime, data],
         )?;
+        let Some(col) = kind.ver_col() else { return Ok(now_secs() as i64) };
         let old: i64 = db
-            .query_row(&format!("SELECT {} FROM users WHERE username=?1", kind.ver_col()), rusqlite::params![username], |r| r.get(0))
+            .query_row(&format!("SELECT {col} FROM users WHERE username=?1"), rusqlite::params![username], |r| r.get(0))
             .unwrap_or(0);
         let ver = (now_secs() as i64).max(old + 1);
-        db.execute(&format!("UPDATE users SET {}=?2 WHERE username=?1", kind.ver_col()), rusqlite::params![username, ver])?;
+        db.execute(&format!("UPDATE users SET {col}=?2 WHERE username=?1"), rusqlite::params![username, ver])?;
         Ok(ver)
     }
 
@@ -1297,7 +1317,9 @@ impl Directory {
         let db = self.db.lock().unwrap();
         Self::check_owner(&db, &username, identity_dh)?;
         db.execute("DELETE FROM profile_media WHERE username=?1 AND kind=?2", rusqlite::params![username, kind.as_str()])?;
-        db.execute(&format!("UPDATE users SET {}=0 WHERE username=?1", kind.ver_col()), rusqlite::params![username])?;
+        if let Some(col) = kind.ver_col() {
+            db.execute(&format!("UPDATE users SET {col}=0 WHERE username=?1"), rusqlite::params![username])?;
+        }
         Ok(())
     }
 
@@ -3670,6 +3692,12 @@ mod tests {
         assert!(d.set_media("media", &[9u8; 32], MediaKind::Banner, "image/png", b"x").is_err());
         assert!(d.set_media("media", &id, MediaKind::Banner, "text/html", b"x").is_err());
         d.set_media("media", &id, MediaKind::Banner, "image/jpeg", b"jpg").unwrap();
+        // More avatars and banners: stored and served like the main ones.
+        d.set_media("media", &id, MediaKind::Avatar3, "image/webp", b"a3").unwrap();
+        assert_eq!(d.get_media("media", MediaKind::Avatar3).unwrap().1, b"a3".to_vec());
+        assert!(d.set_media("media", &id, MediaKind::Avatar2, "video/mp4", b"v").is_err());
+        assert!(d.set_media("media", &id, MediaKind::Banner2, "video/mp4", b"v").is_ok());
+        assert_eq!(MediaKind::parse("banner4"), None);
         d.clear_media("media", &id, MediaKind::Avatar).unwrap();
         let p = d.get_profile("media").unwrap();
         assert_eq!(p.avatar_ver, 0);

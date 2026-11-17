@@ -742,7 +742,8 @@ pub async fn publish_profile_full(
 // ---------- Profile images (public avatar / banner) -----------------------
 
 fn check_media_kind(kind: &str) -> Result<(), String> {
-    if matches!(kind, "avatar" | "banner" | "music") { Ok(()) } else { Err(format!("unknown profile media kind {kind:?}")) }
+    // avatar2…avatar5, banner2, banner3: the profile's extra photos and banners.
+    if matches!(kind, "avatar" | "banner" | "music" | "avatar2" | "avatar3" | "avatar4" | "avatar5" | "banner2" | "banner3") { Ok(()) } else { Err(format!("unknown profile media kind {kind:?}")) }
 }
 
 fn image_mime_for(path: &str) -> Option<&'static str> {
@@ -901,10 +902,10 @@ pub async fn set_profile_media_file(
     }
     // A big GIF banner is turned into a light WebM loop (the relay keeps
     // animated banners ≤ 3 MB); small GIFs go up as they are.
-    let big_gif = ext == "gif" && kind == "banner"
+    let big_gif = ext == "gif" && kind.starts_with("banner")
         && std::fs::metadata(&path).map(|m| m.len() > 2_900_000).unwrap_or(false);
     if big_gif || matches!(ext.as_str(), "mp4" | "webm" | "mov" | "mkv" | "m4v") {
-        if kind != "banner" {
+        if !kind.starts_with("banner") {
             return Err("videos can only be a banner".into());
         }
         // Silent, ≤ 8 s, 480 px wide, small: a banner must stay light.
