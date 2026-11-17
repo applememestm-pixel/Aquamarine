@@ -144,7 +144,9 @@ window.__TAURI_INTERNALS__ = {
     await ph.addInitScript(mock(card));
     await ph.goto('http://127.0.0.1:5199/'); await ph.waitForTimeout(2500);
     for (let i = 0; i < 3; i++) { const l = ph.getByText(/^(Не сейчас|Not now)$/).first(); if (!(await l.count())) break; await l.click().catch(() => {}); await ph.waitForTimeout(500); }
+    await ph.screenshot({ path: path.join(out, '12a-phone-list.jpg'), type: 'jpeg', quality: 72 });
     await ph.getByText(/^(Saved Messages|Избранное)$/).first().click(); await ph.waitForTimeout(1000);
+    await ph.screenshot({ path: path.join(out, '12b-phone-chat.jpg'), type: 'jpeg', quality: 72 });
     await ph.locator('[data-emoji-anchor]').first().click(); await ph.waitForTimeout(1200);
     console.log('dock', JSON.stringify(await ph.evaluate(() => {
       const c = document.querySelector('.main-pane .composer')?.getBoundingClientRect();
