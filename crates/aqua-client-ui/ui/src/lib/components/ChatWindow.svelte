@@ -265,7 +265,8 @@
   }
 
   let attachMore = $state(false);
-  $effect(() => { if (!attachMenuOpen) attachMore = false; });
+  // Telegram: the sheet opens with every action, no "More" step.
+  $effect(() => { attachMore = attachMenuOpen; });
   function attachAvailable(id: AttachId): boolean {
     if (id === "bluetooth") return DESKTOP_APP;
     if (id === "music") return $musicOn;
@@ -691,6 +692,13 @@
     // The system dialog answers asynchronously: look again a few times.
     for (const ms of [800, 1800, 3500]) { await new Promise((r) => setTimeout(r, ms)); await galleryLoad(); if (gallery.state === "ok") break; }
   }
+  /** A gallery tile tapped: look at it full screen (the circle selects). */
+  function galleryPeek(i: number) {
+    const shots = gallery.items.filter((g) => g.thumb && !g.video);
+    const at = shots.indexOf(gallery.items[i]);
+    if (at < 0) { galleryToggle(gallery.items[i].uri); return; }
+    openGallery(shots.map((g) => ({ url: g.thumb!, kind: "image" as const })), at);
+  }
   function galleryToggle(uri: string) {
     gallerySel = gallerySel.includes(uri) ? gallerySel.filter((u) => u !== uri) : [...gallerySel, uri];
   }
@@ -739,7 +747,8 @@
   function fmtDur(ms: number) { const s = Math.round(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
   $effect(() => {
     if (attachMenuOpen && phoneUI) {
-      gallerySel = []; galCap = ""; sheetFull = false; sheetDy = 0; albumMenu = false; album = "";
+      // Opens straight to the full gallery (Telegram), not a half sheet.
+      gallerySel = []; galCap = ""; sheetFull = true; sheetDy = 0; albumMenu = false; album = "";
       void galleryLoad(); void albumsLoad();
     }
   });
@@ -4751,13 +4760,15 @@
                 {#if gallery.state === "denied"}
                   <button class="ap-tile ap-allow" onclick={galleryAsk}><span>{$t("Allow access to photos")}</span></button>
                 {/if}
-                {#each gallery.items as g (g.uri)}
+                {#each gallery.items as g, gi (g.uri)}
                   {@const n = gallerySel.indexOf(g.uri)}
-                  <button class="ap-tile" class:on={n >= 0} onclick={() => galleryToggle(g.uri)}>
+                  <!-- Telegram: the photo opens big, the circle selects it. -->
+                  <div class="ap-tile" class:on={n >= 0} role="button" tabindex="0"
+                    onclick={() => galleryPeek(gi)} onkeydown={(e) => { if (e.key === "Enter") galleryPeek(gi); }}>
                     {#if g.thumb}<img src={g.thumb} alt="" loading="lazy" decoding="async" />{/if}
                     {#if g.video}<span class="ap-dur">{fmtDur(g.duration)}</span>{/if}
-                    <span class="ap-check">{n >= 0 ? n + 1 : ""}</span>
-                  </button>
+                    <button class="ap-check" aria-label={$t("Select")} onclick={(e) => { e.stopPropagation(); galleryToggle(g.uri); }}>{n >= 0 ? n + 1 : ""}</button>
+                  </div>
                 {/each}
               </div>
             {:else}
@@ -5996,6 +6007,7 @@
   .ap-cam.live :global(svg) { position: relative; width: 26px; height: 26px; filter: drop-shadow(0 1px 3px rgba(0,0,0,.6)); }
   .ap-cam.live span { display: none; }
   .ap-allow { color: var(--accent); padding: 8px; text-align: center; }
+  .ap-check { padding: 0; cursor: pointer; color: #fff; font: 700 12px var(--font-ui, inherit); }
   .ap-check { position: absolute; top: 7px; right: 7px; width: 24px; height: 24px; box-sizing: border-box; border-radius: 50%; border: 2px solid #fff; background: rgba(0,0,0,.25);
     display: grid; place-items: center; font-size: 12.5px; font-weight: 800; color: #06070c; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
   .ap-tile.on .ap-check { background: var(--accent); border-color: var(--accent); }
