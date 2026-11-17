@@ -4316,7 +4316,7 @@ pub(crate) fn is_control_text(text: &str) -> bool {
             EDIT_PREFIX, DEL_PREFIX, REN_PREFIX, CTL_PREFIX, GCALL_PREFIX, GRPINFO_PREFIX, GRPSELF_PREFIX,
             GRPJOIN_PREFIX, GRPLEAVE_PREFIX, GRPCTL_PREFIX, GRPMSG_PREFIX, CDM_PREFIX, crate::autodelete::TTL_PREFIX,
             crate::history_sync::HPOKE_PREFIX, crate::history_sync::HKEYREQ_PREFIX, crate::history_sync::HKEY_PREFIX,
-            crate::devtrust::DEVOK_PREFIX, crate::devtrust::DEVNO_PREFIX,
+            crate::devtrust::DEVOK_PREFIX, crate::devtrust::DEVNO_PREFIX, READ_PREFIX,
             "[hist:v1]", "[histack:v1]"]
             .iter().any(|p| text.starts_with(p))
 }
@@ -4358,6 +4358,10 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
         }
         if let Some(body) = text.strip_prefix(crate::history_sync::HKEY_PREFIX) {
             crate::history_sync::on_key(app, body);
+            return;
+        }
+        if let Some(body) = text.strip_prefix(READ_PREFIX) {
+            on_read_elsewhere(app, body);
             return;
         }
         crate::multidev::handle_own_device(app, &text);
@@ -4863,12 +4867,41 @@ pub fn set_tz_offset(app: AppHandle, state: State<'_, StdMutex<AppState>>, minut
 /// zeroed it, and the next chat-list refresh brought every message read in
 /// the open chat back as "unread".
 #[tauri::command]
-pub fn mark_chat_read(state: State<'_, StdMutex<AppState>>, peer_id: String) -> Result<(), String> {
-    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(book) = s.chats.get_mut(&peer_id) {
-        book.summary.unread = 0;
+pub fn mark_chat_read(app: AppHandle, state: State<'_, StdMutex<AppState>>, peer_id: String) -> Result<(), String> {
+    let (was_unread, t, me) = {
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let was = s.chats.get(&peer_id).map(|b| b.summary.unread > 0).unwrap_or(false);
+        if let Some(book) = s.chats.get_mut(&peer_id) {
+            book.summary.unread = 0;
+        }
+        (was, s.transport.clone(), s.username.clone().unwrap_or_default())
+    };
+    // Read here — read on my other devices too: they kept the counter and
+    // rang for messages already read (READ_PREFIX, handled below).
+    if was_unread {
+        if let Some(t) = t {
+            let payload = format!("{READ_PREFIX}{}", serde_json::json!({ "peer": peer_id }));
+            tauri::async_runtime::spawn(async move { crate::multidev::to_my_devices(&app, &t, &me, &payload).await; });
+        }
     }
     Ok(())
+}
+
+/// "I read this chat" between devices of one account.
+pub const READ_PREFIX: &str = "[read:v1]";
+
+/// Another device of mine read a chat: no unread counter here either, and
+/// the UI drops its notifications for it.
+pub(crate) fn on_read_elsewhere(app: &AppHandle, body: &str) {
+    let Some(peer) = serde_json::from_str::<serde_json::Value>(body).ok()
+        .and_then(|v| v.get("peer").and_then(|x| x.as_str()).map(str::to_string)) else { return };
+    let state: State<'_, StdMutex<AppState>> = app.state();
+    {
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(book) = s.chats.get_mut(&peer) { book.summary.unread = 0; }
+    }
+    let _ = app.emit("aqua://read_elsewhere", serde_json::json!({ "peer_id": peer }));
+    let _ = app.emit("aqua://chats_updated", ());
 }
 
 /// Change my @username. The relay renames the account (the old name forwards
