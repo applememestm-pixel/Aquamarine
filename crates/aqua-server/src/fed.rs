@@ -778,6 +778,35 @@ pub async fn h_media(State(state): State<AppState>, headers: HeaderMap, Path((us
     Ok(([(axum::http::header::CONTENT_TYPE, mime)], data))
 }
 
+/// Navidrome of this relay for a relay of the network that has none: what
+/// works on one server works on all (the owner). Read-only methods only.
+pub async fn h_music_rest(State(state): State<AppState>, headers: HeaderMap, Path(method): Path<String>,
+    axum::extract::RawQuery(q): axum::extract::RawQuery) -> Result<impl IntoResponse, StatusCode> {
+    let path = match &q { Some(q) => format!("/v1/fed/music/rest/{method}?{q}"), None => format!("/v1/fed/music/rest/{method}") };
+    check(&state, &headers, "GET", &path, b"")?;
+    let v = crate::music::local_rest(&method, q.as_deref()).await.map_err(|_| StatusCode::NOT_FOUND)?;
+    Ok(Json(v))
+}
+
+/// A cover / track of this relay's Navidrome for another relay (whole file).
+pub async fn h_music_file(State(state): State<AppState>, headers: HeaderMap, Path((what, id)): Path<(String, String)>) -> Result<impl IntoResponse, StatusCode> {
+    check(&state, &headers, "GET", &format!("/v1/fed/music/file/{what}/{id}"), b"")?;
+    let (mime, data) = crate::music::local_file(&what, &id).await.ok_or(StatusCode::NOT_FOUND)?;
+    Ok(([(axum::http::header::CONTENT_TYPE, mime)], data))
+}
+
+impl Fed {
+    /// The first relay of the network that answers this music path.
+    pub async fn music_json(&self, path: &str) -> Option<serde_json::Value> {
+        for p in &self.cfg.peers {
+            if let Some(r) = self.get(p, path).await {
+                if let Ok(v) = r.json::<serde_json::Value>().await { return Some(v); }
+            }
+        }
+        None
+    }
+}
+
 #[derive(Deserialize)]
 pub struct Hello { url: String, #[serde(default)] peers: Vec<String> }
 
@@ -1070,6 +1099,8 @@ pub fn routes() -> axum::Router<AppState> {
         .route("/v1/fed/backups", get(h_backups))
         .route("/v1/fed/backup/:user", get(h_backup))
         .route("/v1/fed/media/:user/:kind", get(h_media))
+        .route("/v1/fed/music/rest/:method", get(h_music_rest))
+        .route("/v1/fed/music/file/:what/:id", get(h_music_file))
         .route("/v1/fed/tunnel", post(crate::fedtunnel::h_poll))
         .route("/v1/fed/tunnel/reply", post(crate::fedtunnel::h_reply)
             .layer(axum::extract::DefaultBodyLimit::max(96 * 1024 * 1024)))

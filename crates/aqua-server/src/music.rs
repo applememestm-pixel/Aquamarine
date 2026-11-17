@@ -348,9 +348,17 @@ async fn test_json(c: &Config) -> Value {
 // ---------------------------------------------------------------------- users
 
 /// What the app needs to know: is there music here, and which Navidrome.
-pub async fn info(_caller: Caller) -> Json<Value> {
+pub async fn info(State(state): State<AppState>, _caller: Caller) -> Json<Value> {
     let c = config();
     let on = !c.url.is_empty() && !c.user.is_empty();
+    // No Navidrome here: one on another relay of the network serves it.
+    if !on {
+        if let Some(f) = crate::fed::current(&state) {
+            if f.music_json("/v1/fed/music/rest/ping").await.is_some() {
+                return Json(json!({ "enabled": true, "tag": "", "bot": null, "via": "network" }));
+            }
+        }
+    }
     Json(json!({
         "enabled": on,
         "tag": if on { tag_of(&c.url) } else { String::new() },
@@ -358,15 +366,57 @@ pub async fn info(_caller: Caller) -> Json<Value> {
     }))
 }
 
-pub async fn rest(_caller: Caller, UrlPath(method): UrlPath<String>, RawQuery(q): RawQuery) -> Result<Json<Value>, (StatusCode, String)> {
+pub async fn rest(State(state): State<AppState>, _caller: Caller, UrlPath(method): UrlPath<String>, RawQuery(q): RawQuery) -> Result<Json<Value>, (StatusCode, String)> {
     let method = method.trim_end_matches(".view");
     if !READ_METHODS.contains(&method) {
         return Err((StatusCode::FORBIDDEN, format!("{method}: not available through the server")));
     }
     if !enabled() {
+        // Another relay of the network with Navidrome answers instead.
+        if let Some(f) = crate::fed::current(&state) {
+            let qs = clean_query(q.as_deref()).into_iter().map(|(k, v)| format!("{}={}", urlenc(&k), urlenc(&v))).collect::<Vec<_>>().join("&");
+            let path = if qs.is_empty() { format!("/v1/fed/music/rest/{method}") } else { format!("/v1/fed/music/rest/{method}?{qs}") };
+            if let Some(v) = f.music_json(&path).await { return Ok(Json(v)); }
+        }
         return Err((StatusCode::NOT_FOUND, "Navidrome isn't set up on this server".into()));
     }
     call(&config(), method, &clean_query(q.as_deref())).await.map(Json).map_err(|e| (StatusCode::BAD_GATEWAY, e))
+}
+
+fn urlenc(s: &str) -> String {
+    s.bytes().map(|b| match b {
+        b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+        _ => format!("%{b:02X}"),
+    }).collect()
+}
+
+/// This relay's Navidrome for a relay of the network (`fed.rs`): read-only.
+pub async fn local_rest(method: &str, q: Option<&str>) -> Result<Value, String> {
+    let method = method.trim_end_matches(".view");
+    if !READ_METHODS.contains(&method) || !enabled() { return Err("no".into()); }
+    call(&config(), method, &clean_query(q)).await
+}
+
+/// A cover or a track of this relay's Navidrome, whole, for another relay.
+pub async fn local_file(what: &str, id: &str) -> Option<(String, Vec<u8>)> {
+    if !enabled() || id.is_empty() || id.len() > 128 { return None; }
+    let method = match what { "cover" => "getCoverArt", "stream" => "stream", "download" => "download", _ => return None };
+    let c = config();
+    let mut q = auth_params(&c);
+    q.push(("id".into(), id.to_string()));
+    let r = client().get(format!("{}/rest/{method}", c.url)).query(&q).timeout(std::time::Duration::from_secs(60)).send().await.ok()?;
+    let ct = r.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("application/octet-stream").to_string();
+    if ct.contains("json") || ct.contains("xml") { return None; }
+    let b = r.bytes().await.ok()?;
+    if b.len() > 60 * 1024 * 1024 { return None; }
+    Some((ct, b.to_vec()))
+}
+
+/// No Navidrome here: the file from the relay of the network that has it.
+async fn via_network(state: &AppState, what: &str, id: &str) -> Option<Response> {
+    let f = crate::fed::current(state)?;
+    let (mime, data) = f.fetch_bytes(&format!("/v1/fed/music/file/{what}/{}", urlenc(id))).await?;
+    Some(([(header::CONTENT_TYPE, mime)], data).into_response())
 }
 
 #[derive(Deserialize)]
@@ -375,7 +425,8 @@ pub struct CoverQ {
     pub size: Option<u32>,
 }
 
-pub async fn stream(_caller: Caller, UrlPath(id): UrlPath<String>, RawQuery(q): RawQuery, headers: HeaderMap) -> Response {
+pub async fn stream(State(state): State<AppState>, _caller: Caller, UrlPath(id): UrlPath<String>, RawQuery(q): RawQuery, headers: HeaderMap) -> Response {
+    if !enabled() { if let Some(r) = via_network(&state, "stream", &id).await { return r; } }
     let mut p: Vec<(String, String)> = clean_query(q.as_deref())
         .into_iter()
         .filter(|(k, _)| matches!(k.as_str(), "maxBitRate" | "format" | "timeOffset" | "estimateContentLength"))
@@ -384,11 +435,13 @@ pub async fn stream(_caller: Caller, UrlPath(id): UrlPath<String>, RawQuery(q): 
     pass(&headers, "stream", p, None).await
 }
 
-pub async fn download(_caller: Caller, UrlPath(id): UrlPath<String>, headers: HeaderMap) -> Response {
+pub async fn download(State(state): State<AppState>, _caller: Caller, UrlPath(id): UrlPath<String>, headers: HeaderMap) -> Response {
+    if !enabled() { if let Some(r) = via_network(&state, "download", &id).await { return r; } }
     pass(&headers, "download", vec![("id".into(), id)], None).await
 }
 
-pub async fn cover(_caller: Caller, UrlPath(id): UrlPath<String>, Query(q): Query<CoverQ>, headers: HeaderMap) -> Response {
+pub async fn cover(State(state): State<AppState>, _caller: Caller, UrlPath(id): UrlPath<String>, Query(q): Query<CoverQ>, headers: HeaderMap) -> Response {
+    if !enabled() { if let Some(r) = via_network(&state, "cover", &id).await { return r; } }
     let mut p = vec![("id".into(), id)];
     if let Some(s) = q.size {
         p.push(("size".into(), s.clamp(32, 1200).to_string()));
