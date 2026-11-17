@@ -31,9 +31,10 @@
     mq?.addEventListener("change", on);
     return () => mq?.removeEventListener("change", on);
   });
-  // The Navidrome add-on (lib/music.ts) adds Music, on phones, only while it's on.
-  const music: Item = { id: "music", label: "Music", svg: icons.music, tab: "music", mobileOnly: true };
-  const items = $derived((phone && $musicOn ? [...all.slice(0, -1), music, all[all.length - 1]] : all).filter((i) => (phone ? !i.desktopOnly : !i.mobileOnly)));
+  // The Navidrome add-on (lib/music.ts) adds Music while it's on — on
+  // phones and in the computer's side bar (it was phones only).
+  const music: Item = { id: "music", label: "Music", svg: icons.music, tab: "music" };
+  const items = $derived(($musicOn ? [...all.slice(0, -1), music, all[all.length - 1]] : all).filter((i) => (phone ? !i.desktopOnly : !i.mobileOnly)));
 
   function activate(it: Item) {
     if (it.tab) activeTab.set(it.tab);
