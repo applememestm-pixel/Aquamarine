@@ -1648,7 +1648,10 @@
     showToast(tr("The original message isn't here any more"));
   }
   let thread = $state<{ kind: "comments" | "replies"; root: Row } | null>(null);
-  $effect(() => { void $activeChat?.id; thread = null; });
+  // Only a different chat closes the thread: $activeChat is a new object on
+  // every chat-list refresh (each sent comment), and the panel shut itself.
+  const threadChatId = $derived($activeChat?.id);
+  $effect(() => { void threadChatId; thread = null; });
   let threadItems = $derived.by<ThreadItem[]>(() => {
     const th = thread;
     if (!th) return [];

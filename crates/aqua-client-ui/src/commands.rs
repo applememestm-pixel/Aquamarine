@@ -3789,6 +3789,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                     }
                     None => return true,
                 };
+                let is_comment = inner.starts_with(crate::state::COMMENT_PREFIX);
                 let (kind, meta) = crate::state::classify_full(&inner, room.map(|r| r.id));
                 let preview = preview_for(&kind);
                 let len = s.chats.get(&gid).map(|b| b.messages.len()).unwrap_or(0);
@@ -3802,16 +3803,20 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                         at: crate::state::now_at(),
                         kind,
                     });
-                    book.summary.preview = preview;
-                    // Posted from another device of mine: it's my message.
-                    let mine = s_me.as_deref() == Some(author.as_str());
-                    book.summary.preview_by_me = mine;
-                    book.summary.preview_from = if mine { None } else { Some(author.clone()) };
-                    book.summary.time = time.clone();
-                    let is_active = false; // UI decides unread via its own active id
-                    if !is_active && !mine { book.summary.unread += 1; }
+                    // A comment under a channel post lives in its thread: it
+                    // isn't the channel's last message, nor its unread.
+                    if !is_comment {
+                        book.summary.preview = preview;
+                        // Posted from another device of mine: it's my message.
+                        let mine = s_me.as_deref() == Some(author.as_str());
+                        book.summary.preview_by_me = mine;
+                        book.summary.preview_from = if mine { None } else { Some(author.clone()) };
+                        book.summary.time = time.clone();
+                        let is_active = false; // UI decides unread via its own active id
+                        if !is_active && !mine { book.summary.unread += 1; }
+                    }
                 }
-                if let Some(pos) = s.chat_order.iter().position(|id| id == &gid) {
+                if let Some(pos) = s.chat_order.iter().position(|id| id == &gid).filter(|_| !is_comment) {
                     if pos > 0 { s.chat_order.remove(pos); s.chat_order.insert(0, gid.clone()); }
                 }
                 if let Some(me) = s_me.as_deref().filter(|me| *me != author.as_str()) {
