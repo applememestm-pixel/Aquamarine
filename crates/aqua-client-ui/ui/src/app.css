@@ -185,14 +185,19 @@ html.wk-lowfx .eq i:nth-child(3) { transform: scaleY(0.75); }
   body:not(.chat-open) .list { animation: aq-slide-back .26s var(--ease-out); }
 }
 
-/* Scrollbars — thin, themed, rounded, hover-reveal. */
-*::-webkit-scrollbar { width: 10px; height: 10px; }
+/* Scrollbars — thin, themed, rounded, and invisible until the pointer is
+   over the area they scroll (they used to be always on, a grey stripe). */
+*::-webkit-scrollbar { width: 8px; height: 8px; }
 *::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--fg-dim) 55%, transparent);
+  background: transparent;
   border-radius: calc(8px * var(--rk, 1));
-  border: 3px solid transparent;
+  border: 2px solid transparent;
   background-clip: padding-box;
   transition: background 0.15s ease;
+}
+*:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--fg-dim) 40%, transparent);
+  background-clip: padding-box;
 }
 *::-webkit-scrollbar-thumb:hover {
   background: color-mix(in srgb, var(--accent) 70%, transparent);
@@ -201,7 +206,8 @@ html.wk-lowfx .eq i:nth-child(3) { transform: scaleY(0.75); }
 *::-webkit-scrollbar-track { background: transparent; }
 *::-webkit-scrollbar-corner { background: transparent; }
 /* Firefox */
-* { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--fg-dim) 55%, transparent) transparent; }
+* { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+*:hover { scrollbar-color: color-mix(in srgb, var(--fg-dim) 40%, transparent) transparent; }
 
 /* ---- Suppress Chromium/webview chrome ----
    No text caret/selection on UI chrome, no native image drag ghost,
