@@ -4496,6 +4496,11 @@
                       <svg class="cmt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1.1-4.6A8 8 0 1 1 21 12z"/></svg>
                     {/if}
                     <span class="cmt-label">{nc ? $tn(nc, "comment") : $t("Leave a comment")}</span>
+                    {#if isChannel}
+                      <!-- Telegram: the views are part of the post, not a stray line under it. -->
+                      {@const nv = Math.max($viewCounts[$activeChat?.id ?? ""]?.[vk] ?? 0, $channelStats[$activeChat?.id ?? ""]?.[vk]?.n ?? 0)}
+                      <span class="views-chip in-bar" title={$t("Views")}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>{nv}</span>
+                    {/if}
                     <span class="tc-arrow">›</span>
                   </button>
                 {/if}
@@ -4506,7 +4511,7 @@
                       <span class="tc-arrow">›</span>
                     </button>
                   {/if}
-                  {#if isChannel}
+                  {#if isChannel && !(isGroup && commentsAllowed && activeGroup?.kind === "channel")}
                     {@const n = Math.max($viewCounts[$activeChat?.id ?? ""]?.[vk] ?? 0, $channelStats[$activeChat?.id ?? ""]?.[vk]?.n ?? 0)}
                     <span class="views-chip" title={$t("Views")}>👁 {n}</span>
                   {/if}
@@ -5023,6 +5028,8 @@
   .post-foot.out { align-self: flex-end; }
   .post-foot .thread-chip { margin-top: 0; }
   .views-chip { font-size: 11.5px; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
+  .views-chip.in-bar { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; font-weight: 500; }
+  .views-chip.in-bar svg { width: 14px; height: 14px; }
   .event-room { color: var(--accent); font-weight: 600; }
   .event-room.ended { color: var(--fg-dim); }
   .thread-chip { display: inline-flex; align-items: center; gap: 6px; margin-top: 3px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-bubble-in); color: var(--accent); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; transition: border-color 0.12s, background 0.12s; }
