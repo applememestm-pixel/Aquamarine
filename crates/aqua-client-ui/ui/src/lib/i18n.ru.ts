@@ -820,6 +820,7 @@ export const RU: Record<string, string> = {
   "Chat view": "Вид чата",
   "Posts as wide cards, like a news feed": "Посты широкими карточками, как лента новостей",
   "Posts as messages": "Посты как сообщения",
+  "Up to {n} reactions on one message": "Не больше {n} реакций на одно сообщение",
   "Mention": "Упоминание",
   "Select": "Выбрать",
   "Send": "Отправить",

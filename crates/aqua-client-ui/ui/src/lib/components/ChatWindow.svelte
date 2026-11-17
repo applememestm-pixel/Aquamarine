@@ -3359,6 +3359,7 @@
     }
     if (allowedReactions && !allowedReactions.includes(emoji)) { closeMenu(); return; }
     const key = reactionKey(row);
+    if (reactionLimitHit(key, emoji)) { closeMenu(); return; }
     const added = toggleMyReaction(key, emoji);
     const peer = $activeChat?.id;
     if (peer && $activeChat?.live) {
@@ -3366,8 +3367,17 @@
     }
     closeMenu();
   }
+  /** At most 5 different reactions from me on one message. */
+  const MAX_MY_REACTIONS = 5;
+  function reactionLimitHit(key: string, emoji: string): boolean {
+    const mine = $reactions[key]?.mine ?? [];
+    if (mine.includes(emoji) || mine.length < MAX_MY_REACTIONS) return false;
+    showToast(tr("Up to {n} reactions on one message", { n: MAX_MY_REACTIONS }));
+    return true;
+  }
   function toggleChipReaction(row: Row, emoji: string) {
     const key = reactionKey(row);
+    if (reactionLimitHit(key, emoji)) return;
     const added = toggleMyReaction(key, emoji);
     if (favEmoji && emoji === favEmoji) { void saveToFavorites(row, added); return; }
     const peer = $activeChat?.id;
