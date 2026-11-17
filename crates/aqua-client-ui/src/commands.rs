@@ -904,6 +904,39 @@ pub async fn set_profile_media_file(
     // animated banners ≤ 3 MB); small GIFs go up as they are.
     let big_gif = ext == "gif" && kind.starts_with("banner")
         && std::fs::metadata(&path).map(|m| m.len() > 2_900_000).unwrap_or(false);
+    // Animated avatar from a video (or a big GIF): a square, silent,
+    // looping animated WebP — an image, so every <img> that shows avatars
+    // plays it (chat list, messages, profile). ≤ 6 s, 360 px, ≤ 3 MB.
+    let vid = matches!(ext.as_str(), "mp4" | "webm" | "mov" | "mkv" | "m4v");
+    let big_ava_gif = ext == "gif" && kind.starts_with("avatar")
+        && std::fs::metadata(&path).map(|m| m.len() > 2_900_000).unwrap_or(false);
+    if kind.starts_with("avatar") && (vid || big_ava_gif) {
+        let out_dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.join("outbox") };
+        std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+        let out = out_dir.join("avatar.webp");
+        for (fps, side, q) in [(20, 360, 60), (15, 300, 45), (12, 240, 35)] {
+            let mut cmd = tokio::process::Command::new("ffmpeg");
+            cmd.args(["-v", "error", "-nostdin", "-y", "-t", "6", "-i"]).arg(&path)
+                .args(["-an", "-vf", &format!("crop='min(iw,ih)':'min(iw,ih)',scale={side}:{side},fps={fps}"),
+                    "-c:v", "libwebp", "-loop", "0", "-q:v", &q.to_string(), "-compression_level", "4"])
+                .arg(&out)
+                .stdin(std::process::Stdio::null())
+                .kill_on_drop(true);
+            #[cfg(windows)]
+            {
+                cmd.creation_flags(0x0800_0000);
+            }
+            match cmd.output().await {
+                Ok(o) if o.status.success() => {
+                    let bytes = tokio::fs::read(&out).await.map_err(|e| e.to_string())?;
+                    if bytes.len() <= 2_900_000 { return upload_profile_image(state, kind, "image/webp".into(), bytes).await; }
+                }
+                Ok(_) => return Err("this video couldn't be turned into an avatar".into()),
+                Err(_) => return Err("install ffmpeg so a video can become an animated avatar (or pick a GIF under 3 MB)".into()),
+            }
+        }
+        return Err("this video is too long or too busy for an avatar — pick a shorter one".into());
+    }
     if big_gif || matches!(ext.as_str(), "mp4" | "webm" | "mov" | "mkv" | "m4v") {
         if !kind.starts_with("banner") {
             return Err("videos can only be a banner".into());

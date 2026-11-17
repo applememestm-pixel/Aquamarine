@@ -183,11 +183,16 @@
     try {
       const result = await openFileDialog({
         multiple: false, directory: false, title: kind === "avatar" ? "Pick an avatar" : "Pick a banner",
-        filters: [{ name: kind === "banner" ? "Images, GIFs, short videos" : "Images", extensions: kind === "banner" ? ["png", "jpg", "jpeg", "webp", "gif", "mp4", "webm", "mov"] : ["png", "jpg", "jpeg", "webp", "gif"] }],
+        // Avatars can be animated too: a GIF, or a short video turned into a
+        // looping square picture.
+        filters: [{ name: "Images, GIFs, short videos", extensions: ["png", "jpg", "jpeg", "webp", "gif", "mp4", "webm", "mov"] }],
       });
       const path = Array.isArray(result) ? (result[0] ?? null) : result;
       if (!path) return;
-      if (kind === "banner" && /\.(mp4|webm|mov|gif)$/i.test(path)) {
+      if (kind === "avatar" && /\.(mp4|webm|mov)$/i.test(path)) {
+        uploading = kind;
+        await setMyMediaFile("avatar", path);
+      } else if (kind === "banner" && /\.(mp4|webm|mov|gif)$/i.test(path)) {
         // Animated banner: re-encoded silent and light (≤ 3 MB).
         uploading = kind;
         await setMyMediaFile("banner", path);

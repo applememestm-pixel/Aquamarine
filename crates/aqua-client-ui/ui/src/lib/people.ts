@@ -370,14 +370,14 @@ function applyMyImage(kind: "avatar" | "banner", r: { ver: number; path: string 
 }
 
 /** Animated banner (GIF / short video, made silent + light) or favourite track. */
-export async function setMyMediaFile(kind: "banner" | "music", path: string): Promise<void> {
+export async function setMyMediaFile(kind: "avatar" | "banner" | "music", path: string): Promise<void> {
   const r = await api.setProfileMediaFile(kind, path);
   if (kind === "music") {
     const title = (path.split(/[\\/]/).pop() ?? "").replace(/\.[^.]+$/, "").replace(/_/g, " ");
     updateProfile({ music_ver: r.ver, music_url: assetUrl(r.path), music_title: title });
     await publishMyProfile();
   } else {
-    applyMyImage("banner", r);
+    applyMyImage(kind, r);
   }
 }
 
