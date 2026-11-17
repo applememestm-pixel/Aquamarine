@@ -490,3 +490,7 @@ html.aq-autoscroll, html.aq-autoscroll * { cursor: all-scroll !important; user-s
 
 /* The photo viewer is open (Lightbox.svelte): nothing of the tab bar over it. */
 html.lb-open aside.rail { visibility: hidden; pointer-events: none; }
+
+/* Calmer look (Telegram): no neon glow around buttons, rings and text —
+   it made half the interface look over-decorated. Colours stay. */
+:root { --accent-glow: transparent !important; }
