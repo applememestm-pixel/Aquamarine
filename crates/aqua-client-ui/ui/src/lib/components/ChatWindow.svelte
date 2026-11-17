@@ -1512,6 +1512,9 @@
     first: boolean;
     last: boolean;
     outgoing: boolean;
+    /** Photos sent together (same sender, same minute, no captions): shown
+     *  as one album grid; the row itself is the last of them. */
+    album?: Row[];
   }
   let myUsername = $derived($info?.username ?? "");
   let isGroup = $derived($activeChat?.id?.startsWith("grp_") ?? false);
@@ -2313,6 +2316,30 @@
       out.push(rowOf(m, first, last, mine(m.from)));
       prevFrom = m.from;
       prevTime = m.time;
+    }
+    return albums(out);
+  }
+
+  /** A run of plain photos from one sender in one minute → one album row
+   *  (Telegram's look). Each photo is still its own message underneath. */
+  function albumable(r: Row): boolean {
+    if (r.kind.type !== "file") return false;
+    const c = r.kind.content;
+    return !c.caption && renderKind(c) === "image" && !!c.saved_at;
+  }
+  function albums(rows: Row[]): Row[] {
+    const out: Row[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (!albumable(r)) { out.push(r); continue; }
+      let j = i;
+      while (j + 1 < rows.length && albumable(rows[j + 1]) && rows[j + 1].from === r.from
+        && rows[j + 1].time.slice(0, 5) === r.time.slice(0, 5) && j + 1 - i < 10) j++;
+      if (j === i) { out.push(r); continue; }
+      const run = rows.slice(i, j + 1);
+      const lastRow = run[run.length - 1];
+      out.push({ ...lastRow, first: r.first, album: run });
+      i = j;
     }
     return out;
   }
@@ -4050,6 +4077,26 @@
                       {m.time}
                       {@render statusTick(m.outgoing, m.id)}
                     </span>
+                  </div>
+                {:else if m.album}
+                  <div class="bubble media-bubble album" class:a2={m.album.length === 2} class:a3={m.album.length >= 3}>
+                    {#each m.album as a (a.id)}
+                      {#if a.kind.type === "file"}
+                        {@const ac = a.kind.content}
+                        {@const au = inlineUrl(ac.saved_at, ac.mime)}
+                        {#if au && coverMedia(a, ac.saved_at)}
+                          <button class="media-img-btn media-18 alb-cell" onclick={() => { if ($nsfwOf(ac.saved_at) !== "pending") adultShown.add(a.id); }} title={$t("Sensitive content — tap to show")}>
+                            <img class="media-img" src={au} alt="" />
+                            {#if $nsfwOf(ac.saved_at) === "explicit"}<span class="m18"><b>18+</b></span>{/if}
+                          </button>
+                        {:else if au}
+                          <button class="media-img-btn alb-cell" onclick={() => openInGallery(ac.saved_at)} title={$t("Open")}><img class="media-img" src={au} alt={ac.name} /></button>
+                        {:else}
+                          <div class="media-placeholder alb-cell"></div>
+                        {/if}
+                      {/if}
+                    {/each}
+                    <span class="photo-meta">{m.time}{@render statusTick(m.outgoing, m.id)}</span>
                   </div>
                 {:else if rk === "gif" || rk === "image"}
                   <div class="bubble media-bubble">
@@ -6272,6 +6319,11 @@
   /* Reply composer bar */
   /* Same width as the composer below and its input's surface: it was a
      darker, narrower block that looked foreign. */
+  /* Album: photos sent together, in a grid like Telegram's. */
+  .media-bubble.album { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; width: min(var(--media-max, 360px), 100%); }
+  .media-bubble.album.a3 { grid-template-columns: 1fr 1fr 1fr; }
+  .media-bubble.album .alb-cell { aspect-ratio: 1; overflow: hidden; padding: 0; border: none; background: var(--bg-input); }
+  .media-bubble.album .alb-cell .media-img { width: 100%; height: 100%; object-fit: cover; max-width: none; max-height: none; border-radius: 0; }
   .reply-bar {
     display: flex; align-items: center; gap: 10px;
     padding: 8px 12px; margin: 0 16px 8px;
