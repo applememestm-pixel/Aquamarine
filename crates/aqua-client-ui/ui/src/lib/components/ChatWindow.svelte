@@ -4618,7 +4618,8 @@
         <button class="ctx-item" role="menuitem" onclick={() => replyRow(row)}>{$t("Reply")}</button>
         {#if menuQuote}<button class="ctx-item" role="menuitem" onclick={() => quoteRow(row, menuQuote)}>{$t("Quote")}</button>{/if}
         <button class="ctx-item" role="menuitem" onclick={() => openThread(row)}>{$t(isGroup && commentsAllowed ? "Comments & thread" : "Thread")}</button>
-        {#if row.kind.type === "file" && row.kind.content.saved_at && !row.outgoing && !protectedChat}
+        <!-- My own GIFs and pictures too (it was others' only). -->
+        {#if row.kind.type === "file" && row.kind.content.saved_at && !protectedChat}
           {@const rk = renderKind(row.kind.content)}
           {#if rk === "sticker"}
             <button class="ctx-item" role="menuitem" onclick={() => saveToCollection(row, "stickers")}>{$t("Add to my stickers")}</button>
