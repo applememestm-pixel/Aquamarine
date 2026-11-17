@@ -1082,6 +1082,7 @@
             <button onclick={() => { plusMenuOpen = false; openNewGroup("supergroup"); }}>{$t("New server")}</button>
           {/if}
           {#if !$storiesOff}<button onclick={() => { plusMenuOpen = false; void addStory(IS_MOBILE ? "camera" : "gallery"); }}>{$t("Add a story")}</button>{/if}
+          {#if !$storiesOff && IS_MOBILE}<button onclick={() => { plusMenuOpen = false; void addStory("gallery"); }}>{$t("Story from the gallery")}</button>{/if}
           {#if IS_MOBILE}
             <!-- Telegram's ⋮: Saved Messages, day / night, the server. -->
             {#if storiesHere}<button onclick={() => { plusMenuOpen = false; openStrip(); }}>{$t("Stories")}</button>{/if}

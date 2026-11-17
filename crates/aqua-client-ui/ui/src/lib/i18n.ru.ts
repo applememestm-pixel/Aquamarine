@@ -821,6 +821,7 @@ export const RU: Record<string, string> = {
   "Posts as wide cards, like a news feed": "Посты широкими карточками, как лента новостей",
   "Posts as messages": "Посты как сообщения",
   "Up to {n} reactions on one message": "Не больше {n} реакций на одно сообщение",
+  "Story from the gallery": "История из галереи",
   "Mention": "Упоминание",
   "Select": "Выбрать",
   "Send": "Отправить",
