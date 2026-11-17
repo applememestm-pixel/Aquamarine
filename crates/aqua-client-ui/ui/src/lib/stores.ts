@@ -30,6 +30,9 @@ function notifyIncoming(peerId: string, text: string) {
   // shows ("📎 report.pdf", not the raw file record); in a group — who wrote.
   const c = get(chats).find((x) => x.id === peerId);
   const title = displayName(peerId, c?.name || peerId);
+  // Settings → Notifications → "Notification shows".
+  if (s.notifyPreview === "none") { void osNotify("Aquamarine", tr("New message")); return; }
+  if (s.notifyPreview === "sender") { void osNotify(title, tr("New message")); return; }
   let body = (c?.preview || "").trim() || (text.startsWith("[") ? "" : text);
   if (c?.preview_from && !c.preview_by_me) body = `${displayName(c.preview_from, c.preview_from)}: ${body}`;
   void osNotify(title, body.slice(0, 120) || tr("New message"));

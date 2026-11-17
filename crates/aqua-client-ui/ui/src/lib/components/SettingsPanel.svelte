@@ -2029,6 +2029,11 @@
           <span class="switch" class:on={$settings.notifyDesktop}></span>
         </button>
         {#if $settings.notifyDesktop}
+          <div class="row">
+            <span class="row-label">{$t("Notification shows")}</span>
+            <Select class="sel" value={$settings.notifyPreview ?? "full"} options={[{ value: "full", label: $t("Sender and text") }, { value: "sender", label: $t("Only the sender") }, { value: "none", label: $t("Only \"New message\"") }]}
+              onchange={(v) => settings.update((s) => ({ ...s, notifyPreview: v as "full" | "sender" | "none" }))} />
+          </div>
           <button class="mini-btn" onclick={testNotification}>{$t("Send a test notification")}</button>
           <div class="foot-note">{$t("Notifications come for chats you aren't looking at. If the test doesn't show up, notifications for Aquamarine are off in the system (on Linux — in your shell's notification settings).")}</div>
         {/if}
