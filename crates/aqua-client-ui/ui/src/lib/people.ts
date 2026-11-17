@@ -203,6 +203,9 @@ function myExtra(p: Profile): Record<string, unknown> {
     games: (p.games ?? []).slice(0, 12),
     game_ids: Object.fromEntries(Object.entries(p.game_ids ?? {}).filter(([n]) => (p.games ?? []).includes(n)).slice(0, 12)),
     game_note: (p.game_note ?? "").slice(0, 140),
+    // More photos / banners (their versions; the files are profile media).
+    more: (p.more ?? []).filter((m) => /^(avatar[2-5]|banner[23])$/.test(m.k) && m.v > 0).map(({ k, v }) => ({ k, v })),
+    lb: !!p.link_banner,
     // Auto "game collection": top games by play time, only while sharing activity.
     played: get(shareActivity) ? playedTop(8).map((g) => ({ n: g.name, h: Math.round(g.secs / 360) / 10 })) : [],
   };
@@ -268,6 +271,8 @@ export async function adoptMyCard(username: string): Promise<boolean> {
     if (Array.isArray(x.links)) patch.links = x.links as Profile["links"];
     if (Array.isArray(x.games)) patch.games = x.games as string[];
     if (str("game_note") !== undefined) patch.game_note = str("game_note");
+    if (Array.isArray(x.more)) patch.more = (x.more as { k: string; v: number }[]).filter((m) => m && typeof m.k === "string" && typeof m.v === "number");
+    if (typeof x.lb === "boolean") patch.link_banner = x.lb;
     updateProfile(patch, true);
     return true;
   } catch { return false; /* offline: keep what we have */ }
@@ -365,14 +370,14 @@ function applyMyImage(kind: "avatar" | "banner", r: { ver: number; path: string 
 }
 
 /** Animated banner (GIF / short video, made silent + light) or favourite track. */
-export async function setMyMediaFile(kind: "banner" | "music", path: string): Promise<void> {
+export async function setMyMediaFile(kind: "avatar" | "banner" | "music", path: string): Promise<void> {
   const r = await api.setProfileMediaFile(kind, path);
   if (kind === "music") {
     const title = (path.split(/[\\/]/).pop() ?? "").replace(/\.[^.]+$/, "").replace(/_/g, " ");
     updateProfile({ music_ver: r.ver, music_url: assetUrl(r.path), music_title: title });
     await publishMyProfile();
   } else {
-    applyMyImage("banner", r);
+    applyMyImage(kind, r);
   }
 }
 

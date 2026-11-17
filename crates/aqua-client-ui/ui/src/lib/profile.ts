@@ -21,6 +21,11 @@ export interface Profile {
   pronouns?: string;      // e.g. "she/her", "он/его"
   /** Manually-set "now playing" shown to peers (no OAuth; you set it). */
   listening?: { title: string; artist: string; url?: string };
+  /** More avatars (avatar2…avatar5) and banners (banner2, banner3): server
+   *  slot, version, local URL. The profile pages through them. */
+  more?: { k: string; v: number; url?: string }[];
+  /** Paging the banner pages the avatar along (exteraGram). */
+  link_banner?: boolean;
   /** Server version + local cached copy of our public avatar / banner. */
   avatar_ver?: number;
   banner_ver?: number;

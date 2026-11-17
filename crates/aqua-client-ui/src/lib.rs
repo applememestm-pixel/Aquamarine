@@ -288,6 +288,7 @@ pub fn run() -> Result<()> {
             commands::note_call,
             commands::webapp_init,
             commands::webapp_menu,
+            commands::bot_commands,
             autodelete::set_chat_ttl,
             backups::recovery_create,
             backups::password_reset,

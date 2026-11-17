@@ -1124,11 +1124,13 @@ async fn email_verify(
     }
 }
 
-/// Accounts one address may make: `AQUA_SIGNUPS_PER_IP` (default 1;
-/// 0 — no limit). Joining with an account from another relay of the
-/// network isn't a new account and isn't counted.
+/// Accounts one address may make a day: `AQUA_SIGNUPS_PER_IP` (default 3;
+/// 0 — no limit). It was 1 for good: a family on one home Wi-Fi, or
+/// everyone behind a mobile operator's shared address, got only one
+/// account. Joining with an account from another relay of the network
+/// isn't a new account and isn't counted.
 fn signups_per_ip() -> u32 {
-    std::env::var("AQUA_SIGNUPS_PER_IP").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(1)
+    std::env::var("AQUA_SIGNUPS_PER_IP").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(3)
 }
 
 /// The caller's address: the connection's, or — behind a proxy on this
@@ -1170,7 +1172,7 @@ fn signup_ip_check(state: &AppState, conn: Option<&axum::extract::ConnectInfo<st
     }
     let key = ip_key(ip);
     if state.directory.signups_from(&key) >= limit {
-        return Err((StatusCode::TOO_MANY_REQUESTS, "an account was already registered from this network — sign in to it instead".into()));
+        return Err((StatusCode::TOO_MANY_REQUESTS, "too many accounts were registered from this network today — sign in to one of them, or try tomorrow".into()));
     }
     Ok(Some(key))
 }
@@ -1471,6 +1473,13 @@ async fn webapp_init(
 /// `GET /v1/webapp/menu/:bot` — the bot's menu button (`{"type":"web_app",…}` or default).
 async fn webapp_menu(State(state): State<AppState>, Path(bot): Path<String>) -> Json<serde_json::Value> {
     Json(tgapi::menu_button(&state, &bot.trim().trim_start_matches('@').to_lowercase()))
+}
+
+/// A bot's commands (setMyCommands) for the "/" hints in the app — public,
+/// as in Telegram: `[{command, description}]`.
+async fn webapp_commands(State(state): State<AppState>, Path(bot): Path<String>) -> Json<serde_json::Value> {
+    let bot = bot.trim().trim_start_matches('@').to_lowercase();
+    Json(state.tg.commands.get(&bot).map(|c| c.clone()).unwrap_or(serde_json::json!([])))
 }
 
 // ---------- Sealed messages ------------------------------------------------------
@@ -3291,6 +3300,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/capsules/:id/open",  post(capsule_open))
         .route("/v1/capsules/:id/stop",  post(capsule_stop))
         .route("/v1/webapp/menu/:bot",   get(webapp_menu))
+        .route("/v1/webapp/commands/:bot", get(webapp_commands))
         .route("/v1/me/recovery",        get(recovery_get).put(recovery_put))
         .route("/v1/me/security",        get(security_get).put(security_put))
         .route("/v1/me/2fa/setup",       post(totp_setup))

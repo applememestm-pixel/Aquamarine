@@ -56,6 +56,9 @@
   import { openPackManager } from "./PackManager.svelte";
   import { askInput } from "./InputPrompt.svelte";
   import { insertEmoji } from "../composerBus";
+  import { openPackSheet } from "./PackSheet.svelte";
+  import { updateProfile } from "../profile";
+  import { publishMyProfile } from "../people";
   import { loadActiveMessages } from "../stores";
   import AnimatedMedia from "./AnimatedMedia.svelte";
   import { stickerVerdict, refreshPackRules, showAdult, showTeen } from "../packRules";
@@ -438,10 +441,39 @@
   function holdEnd() {
     if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
     if (preview) {
+      // Telegram: let go — the sticker stays big with its menu.
+      held = preview as CItem | SItem;
       preview = null;
       // Released over another sticker: no click comes to clear this.
       setTimeout(() => (suppressClick = false), 350);
     }
+  }
+  /** A held sticker / emoji: its menu (Send, Set as status, Copy, View pack, Remove from recent). */
+  let held = $state<CItem | SItem | null>(null);
+  const packOfSticker = (path: string) => stickerPacks.find((p) => p.items.some((i) => i.path === path));
+  function heldSend() { const h = held; held = null; if (h) pick(h); }
+  function heldStatus() {
+    const h = held; held = null;
+    if (h?.kind !== "custom") return;
+    updateProfile({ estatus: h.token, edited: Date.now() });
+    void publishMyProfile().then(() => showToast(tr("Emoji status set"))).catch((e) => showToast(String(e)));
+  }
+  async function heldCopy() {
+    const h = held; held = null;
+    if (!h) return;
+    try { await navigator.clipboard.writeText(h.kind === "custom" ? h.token : h.emoji); showToast(tr("Copied")); } catch { /* no clipboard */ }
+  }
+  function heldPack() {
+    const h = held; held = null;
+    if (h?.kind !== "sticker") return;
+    const p = packOfSticker(h.path);
+    openPackSheet(p ? p.id : "own:-", undefined, h.path);
+  }
+  function heldUnrecent() {
+    const h = held; held = null;
+    if (h?.kind !== "sticker") return;
+    recentStickers = recentStickers.filter((x) => x !== h.path);
+    try { localStorage.setItem("aqua.recent.stickers", JSON.stringify(recentStickers)); } catch { /* ignore */ }
   }
   function pickGuarded(it: EItem | SItem) {
     if (suppressClick) { suppressClick = false; return; }
@@ -957,6 +989,26 @@
       </div>
     {/if}
 
+    {#if held}
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+      <div class="held" onclick={() => (held = null)}>
+        <div class="pv-media" class:emo={held.kind === "custom"}><AnimatedMedia src={held.url} mime={held.mime} alt={held.emoji} play="auto" /></div>
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+        <div class="held-menu" role="menu" tabindex="-1" onclick={(e) => e.stopPropagation()}>
+          {#if held.kind === "sticker"}
+            <button role="menuitem" onclick={heldSend}>{$t("Send sticker")}</button>
+            <button role="menuitem" onclick={heldPack}>{$t("View sticker set")}</button>
+            {#if recentStickers.includes(held.path)}<button role="menuitem" onclick={heldUnrecent}>{$t("Remove from recent")}</button>{/if}
+            <button role="menuitem" onclick={heldCopy}>{$t("Copy emoji")}</button>
+          {:else}
+            <button role="menuitem" onclick={heldSend}>{$t("Send emoji")}</button>
+            <button role="menuitem" onclick={heldStatus}>{$t("Set as status")}</button>
+            <button role="menuitem" onclick={heldCopy}>{$t("Copy emoji")}</button>
+          {/if}
+        </div>
+      </div>
+    {/if}
+
     {#if dropHover}
       <div class="drop-veil">Drop to add to {tab === "gifs" ? "GIFs" : tab === "emoji" ? "My emoji" : "My stickers"}</div>
     {/if}
@@ -975,6 +1027,13 @@
   .pv-media { width: 220px; height: 220px; }
   .pv.emoji .pv-media { width: 128px; height: 128px; }
   .pv-emoji { font-size: 28px; line-height: 1; font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; }
+  .held { position: absolute; inset: 0; z-index: 6; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+    background: color-mix(in srgb, var(--bg-surface) 80%, transparent); backdrop-filter: blur(6px); border-radius: inherit; animation: pv-in 0.14s ease-out; }
+  .held .pv-media.emo { width: 128px; height: 128px; }
+  .held-menu { min-width: 200px; display: flex; flex-direction: column; padding: 6px; border-radius: calc(12px * var(--rk, 1));
+    background: var(--bg-surface); border: 1px solid var(--border); box-shadow: 0 14px 34px -16px rgba(0,0,0,.7); }
+  .held-menu button { padding: 10px 12px; border: none; background: none; color: var(--fg); font: inherit; font-size: 14px; text-align: left; border-radius: calc(8px * var(--rk, 1)); cursor: pointer; }
+  .held-menu button:hover { background: var(--bg-hover); }
   @keyframes pv-in { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: none; } }
 
   .panel {

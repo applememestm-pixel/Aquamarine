@@ -1,12 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Aquamarine: the app streams its own audio / video to the WebView from a
-     loopback HTTP server (127.0.0.1, random port, random per-file tokens).
-     Android blocks plain HTTP in release builds, which made every local
-     track and video fail with "format not supported". Allow it for the
-     loopback address only. -->
+<!-- Aquamarine: plain HTTP is allowed.
+     - The app streams its own audio / video to the WebView from a loopback
+       HTTP server (127.0.0.1, random port, random per-file tokens).
+     - Mini-apps of bots open from the relay itself, and home relays are
+       mostly http://<IP>:7777 — the WebView refused them with
+       ERR_CLEARTEXT_NOT_PERMITTED. A relay's address can be any IP, so it
+       can't be listed here. Messages are end-to-end encrypted anyway; the
+       app's own page is still guarded by its CSP. -->
 <network-security-config>
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">127.0.0.1</domain>
-        <domain includeSubdomains="false">localhost</domain>
-    </domain-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
 </network-security-config>

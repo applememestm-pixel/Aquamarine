@@ -176,6 +176,9 @@ export interface Settings {
   // Notifications
   notifySound: boolean;       // play a chime on incoming message
   notifyDesktop: boolean;     // OS desktop notification on incoming
+  /** What a notification shows: the text, only who wrote, or only that
+   *  there's a new message (Telegram's "Message preview"). */
+  notifyPreview?: "full" | "sender" | "none";
   notifyOnV2?: boolean;       // the one-time "on by default" migration ran
   // --- Full customisation (the theme editor) ---
   /** Per-var colour overrides (CSS var → hex). Wins over palette/mode. */

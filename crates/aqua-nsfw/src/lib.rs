@@ -43,10 +43,12 @@ impl Scores {
     pub fn level(&self) -> f32 {
         (self.porn + self.hentai + 0.5 * self.sexy).min(1.0)
     }
-    /// Blur it? Tuned against false alarms (beach photos, anime art):
-    /// clearly porn / hentai, or overwhelmingly porn + hentai + sexy.
+    /// Blur it? Tuned against false alarms (beach photos, anime art, a
+    /// girl kissing her dog): clearly porn / hentai. "sexy" alone no longer
+    /// tips a picture over — porn + hentai + sexy ≥ 0.85 blurred close-ups
+    /// of faces and skin.
     pub fn explicit(&self) -> bool {
-        self.porn + self.hentai >= 0.6 || self.porn + self.hentai + self.sexy >= 0.85
+        self.porn + self.hentai >= 0.7 || (self.porn + self.hentai >= 0.45 && self.porn + self.hentai + self.sexy >= 0.92)
     }
     /// 16+: half-naked (underwear, swimwear, revealing art) but not
     /// explicit — the "sexy" class leads, or it's close to explicit.

@@ -70,8 +70,32 @@ pub fn config() -> Config {
         c.password = env("AQUA_NAVIDROME_PASSWORD").unwrap_or_default();
         if let Some(b) = env("AQUA_MUSIC_BOT_ENABLED") { c.bot = b != "0" && b != "false"; }
     }
-    c.url = c.url.trim().trim_end_matches('/').to_string();
+    c.url = clean_url(&c.url);
     c
+}
+
+/// The address as typed, fixed up: "http://https://host" (a pasted address
+/// after a typed scheme) → "https://host", "host:4533" → "http://host:4533".
+pub fn clean_url(s: &str) -> String {
+    let mut u = s.trim().trim_end_matches('/');
+    loop {
+        let low = u.to_ascii_lowercase();
+        let rest = if low.starts_with("http://") { &u[7..] } else if low.starts_with("https://") { &u[8..] } else { break };
+        let rl = rest.to_ascii_lowercase();
+        if rl.starts_with("http://") || rl.starts_with("https://") || rl.starts_with("http//") || rl.starts_with("https//") {
+            u = rest;
+        } else {
+            break;
+        }
+    }
+    let low = u.to_ascii_lowercase();
+    if u.is_empty() || low.starts_with("http://") || low.starts_with("https://") {
+        return u.to_string();
+    }
+    // "https//host" (a lost colon) or a bare "host:port".
+    if let Some(r) = low.strip_prefix("https//") { return format!("https://{}", &u[u.len() - r.len()..]); }
+    if let Some(r) = low.strip_prefix("http//") { return format!("http://{}", &u[u.len() - r.len()..]); }
+    format!("http://{u}")
 }
 
 pub fn enabled() -> bool {
@@ -173,12 +197,45 @@ pub async fn call(c: &Config, method: &str, params: &[(String, String)]) -> Resu
         .map_err(net_err)?;
     let status = r.status();
     let v: Value = r.json().await.map_err(|e| format!("Navidrome answered {status}: {}", e.without_url()))?;
-    let resp = v.get("subsonic-response").cloned().unwrap_or(Value::Null);
+    let mut resp = v.get("subsonic-response").cloned().unwrap_or(Value::Null);
+    fix_mojibake(&mut resp);
     if resp.get("status").and_then(|s| s.as_str()) != Some("ok") {
         let msg = resp.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("unexpected answer");
         return Err(format!("Navidrome: {msg}"));
     }
     Ok(resp)
+}
+
+/// Old Russian MP3s carry Windows-1251 tags that Navidrome reads as Latin-1:
+/// «Сектор Газа» comes as «ÑÅÊÒÎÐ ÃÀÇÀ». Every string of the answer that
+/// looks like that is read back as 1251.
+pub fn fix_mojibake(v: &mut Value) {
+    match v {
+        Value::String(s) => if let Some(f) = from_1251(s) { *s = f },
+        Value::Array(a) => a.iter_mut().for_each(fix_mojibake),
+        Value::Object(o) => o.values_mut().for_each(fix_mojibake),
+        _ => {}
+    }
+}
+
+fn from_1251(s: &str) -> Option<String> {
+    let mut high = 0;
+    let mut letters = 0;
+    for ch in s.chars() {
+        let c = ch as u32;
+        if c > 0xFF { return None; }
+        if c >= 0x80 && !(c == 0xA8 || c == 0xB8 || c >= 0xC0) { return None; }
+        if c >= 0xC0 || c == 0xA8 || c == 0xB8 { high += 1; }
+        if ch.is_alphabetic() { letters += 1; }
+    }
+    // «Motörhead», «Beyoncé»: a letter or two — real Latin-1, left alone.
+    if high < 3 || high * 2 < letters { return None; }
+    Some(s.chars().map(|ch| match ch as u32 {
+        0xA8 => 'Ё',
+        0xB8 => 'ё',
+        c @ 0xC0..=0xFF => char::from_u32(0x410 + c - 0xC0).unwrap_or(ch),
+        _ => ch,
+    }).collect())
 }
 
 /// Never the URL: it carries the credentials.
@@ -230,9 +287,9 @@ pub async fn admin_set(State(state): State<AppState>, headers: HeaderMap, Json(b
     if from_env() {
         return Err((StatusCode::CONFLICT, "Navidrome comes from AQUA_NAVIDROME_URL; change it there".into()));
     }
-    let url = b.url.trim().trim_end_matches('/').to_string();
-    if !url.is_empty() && !(url.starts_with("http://") || url.starts_with("https://")) {
-        return Err((StatusCode::BAD_REQUEST, "the address starts with http:// or https://".into()));
+    let url = clean_url(&b.url);
+    if url.contains(char::is_whitespace) {
+        return Err((StatusCode::BAD_REQUEST, "the address has spaces in it".into()));
     }
     let old = config();
     let c = Config {
@@ -291,9 +348,17 @@ async fn test_json(c: &Config) -> Value {
 // ---------------------------------------------------------------------- users
 
 /// What the app needs to know: is there music here, and which Navidrome.
-pub async fn info(_caller: Caller) -> Json<Value> {
+pub async fn info(State(state): State<AppState>, _caller: Caller) -> Json<Value> {
     let c = config();
     let on = !c.url.is_empty() && !c.user.is_empty();
+    // No Navidrome here: one on another relay of the network serves it.
+    if !on {
+        if let Some(f) = crate::fed::current(&state) {
+            if f.music_json("/v1/fed/music/rest/ping").await.is_some() {
+                return Json(json!({ "enabled": true, "tag": "", "bot": null, "via": "network" }));
+            }
+        }
+    }
     Json(json!({
         "enabled": on,
         "tag": if on { tag_of(&c.url) } else { String::new() },
@@ -301,15 +366,57 @@ pub async fn info(_caller: Caller) -> Json<Value> {
     }))
 }
 
-pub async fn rest(_caller: Caller, UrlPath(method): UrlPath<String>, RawQuery(q): RawQuery) -> Result<Json<Value>, (StatusCode, String)> {
+pub async fn rest(State(state): State<AppState>, _caller: Caller, UrlPath(method): UrlPath<String>, RawQuery(q): RawQuery) -> Result<Json<Value>, (StatusCode, String)> {
     let method = method.trim_end_matches(".view");
     if !READ_METHODS.contains(&method) {
         return Err((StatusCode::FORBIDDEN, format!("{method}: not available through the server")));
     }
     if !enabled() {
+        // Another relay of the network with Navidrome answers instead.
+        if let Some(f) = crate::fed::current(&state) {
+            let qs = clean_query(q.as_deref()).into_iter().map(|(k, v)| format!("{}={}", urlenc(&k), urlenc(&v))).collect::<Vec<_>>().join("&");
+            let path = if qs.is_empty() { format!("/v1/fed/music/rest/{method}") } else { format!("/v1/fed/music/rest/{method}?{qs}") };
+            if let Some(v) = f.music_json(&path).await { return Ok(Json(v)); }
+        }
         return Err((StatusCode::NOT_FOUND, "Navidrome isn't set up on this server".into()));
     }
     call(&config(), method, &clean_query(q.as_deref())).await.map(Json).map_err(|e| (StatusCode::BAD_GATEWAY, e))
+}
+
+fn urlenc(s: &str) -> String {
+    s.bytes().map(|b| match b {
+        b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+        _ => format!("%{b:02X}"),
+    }).collect()
+}
+
+/// This relay's Navidrome for a relay of the network (`fed.rs`): read-only.
+pub async fn local_rest(method: &str, q: Option<&str>) -> Result<Value, String> {
+    let method = method.trim_end_matches(".view");
+    if !READ_METHODS.contains(&method) || !enabled() { return Err("no".into()); }
+    call(&config(), method, &clean_query(q)).await
+}
+
+/// A cover or a track of this relay's Navidrome, whole, for another relay.
+pub async fn local_file(what: &str, id: &str) -> Option<(String, Vec<u8>)> {
+    if !enabled() || id.is_empty() || id.len() > 128 { return None; }
+    let method = match what { "cover" => "getCoverArt", "stream" => "stream", "download" => "download", _ => return None };
+    let c = config();
+    let mut q = auth_params(&c);
+    q.push(("id".into(), id.to_string()));
+    let r = client().get(format!("{}/rest/{method}", c.url)).query(&q).timeout(std::time::Duration::from_secs(60)).send().await.ok()?;
+    let ct = r.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("application/octet-stream").to_string();
+    if ct.contains("json") || ct.contains("xml") { return None; }
+    let b = r.bytes().await.ok()?;
+    if b.len() > 60 * 1024 * 1024 { return None; }
+    Some((ct, b.to_vec()))
+}
+
+/// No Navidrome here: the file from the relay of the network that has it.
+async fn via_network(state: &AppState, what: &str, id: &str) -> Option<Response> {
+    let f = crate::fed::current(state)?;
+    let (mime, data) = f.fetch_bytes(&format!("/v1/fed/music/file/{what}/{}", urlenc(id))).await?;
+    Some(([(header::CONTENT_TYPE, mime)], data).into_response())
 }
 
 #[derive(Deserialize)]
@@ -318,7 +425,8 @@ pub struct CoverQ {
     pub size: Option<u32>,
 }
 
-pub async fn stream(_caller: Caller, UrlPath(id): UrlPath<String>, RawQuery(q): RawQuery, headers: HeaderMap) -> Response {
+pub async fn stream(State(state): State<AppState>, _caller: Caller, UrlPath(id): UrlPath<String>, RawQuery(q): RawQuery, headers: HeaderMap) -> Response {
+    if !enabled() { if let Some(r) = via_network(&state, "stream", &id).await { return r; } }
     let mut p: Vec<(String, String)> = clean_query(q.as_deref())
         .into_iter()
         .filter(|(k, _)| matches!(k.as_str(), "maxBitRate" | "format" | "timeOffset" | "estimateContentLength"))
@@ -327,11 +435,13 @@ pub async fn stream(_caller: Caller, UrlPath(id): UrlPath<String>, RawQuery(q): 
     pass(&headers, "stream", p, None).await
 }
 
-pub async fn download(_caller: Caller, UrlPath(id): UrlPath<String>, headers: HeaderMap) -> Response {
+pub async fn download(State(state): State<AppState>, _caller: Caller, UrlPath(id): UrlPath<String>, headers: HeaderMap) -> Response {
+    if !enabled() { if let Some(r) = via_network(&state, "download", &id).await { return r; } }
     pass(&headers, "download", vec![("id".into(), id)], None).await
 }
 
-pub async fn cover(_caller: Caller, UrlPath(id): UrlPath<String>, Query(q): Query<CoverQ>, headers: HeaderMap) -> Response {
+pub async fn cover(State(state): State<AppState>, _caller: Caller, UrlPath(id): UrlPath<String>, Query(q): Query<CoverQ>, headers: HeaderMap) -> Response {
+    if !enabled() { if let Some(r) = via_network(&state, "cover", &id).await { return r; } }
     let mut p = vec![("id".into(), id)];
     if let Some(s) = q.size {
         p.push(("size".into(), s.clamp(32, 1200).to_string()));
@@ -572,6 +682,26 @@ pub fn md5(input: &[u8]) -> [u8; 16] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cp1251_tags_are_read_back() {
+        assert_eq!(from_1251("ÑÅÊÒÎÐ ÃÀÇÀ").as_deref(), Some("СЕКТОР ГАЗА"));
+        assert_eq!(from_1251("Ñåêòîð Ãàçà - Ëèðèê").as_deref(), Some("Сектор Газа - Лирик"));
+        assert_eq!(from_1251("Motörhead"), None);
+        assert_eq!(from_1251("Beyoncé"), None);
+        assert_eq!(from_1251("Rob Zombie"), None);
+        assert_eq!(from_1251("Кино"), None);
+    }
+
+    #[test]
+    fn addresses_are_fixed_up() {
+        assert_eq!(clean_url("http://https://1.2.3.4:4533/"), "https://1.2.3.4:4533");
+        assert_eq!(clean_url("https://http://nd.local"), "http://nd.local");
+        assert_eq!(clean_url("http://https//nd.local"), "https://nd.local");
+        assert_eq!(clean_url(" 127.0.0.1:4533 "), "http://127.0.0.1:4533");
+        assert_eq!(clean_url("HTTP://Host:4533"), "HTTP://Host:4533");
+        assert_eq!(clean_url(""), "");
+    }
 
     #[test]
     fn md5_vectors() {

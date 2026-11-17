@@ -391,6 +391,17 @@
   function setColor(key: string, value: string) {
     settings.update((s) => ({ ...s, customColors: { ...(s.customColors ?? {}), [key]: value } }));
   }
+  /** Back to the stock look: theme, palette, wallpaper, colours, bubbles —
+   *  the rest of the settings stay. */
+  function resetTheme() {
+    settings.update((s) => ({
+      ...s,
+      mode: DEFAULTS.mode, palette: DEFAULTS.palette, wallpaper: DEFAULTS.wallpaper,
+      bubbleRadius: DEFAULTS.bubbleRadius, fontScale: DEFAULTS.fontScale, density: DEFAULTS.density,
+      themePreset: undefined, customColors: {}, bubbleOut: undefined, bubbleIn: undefined,
+    }));
+    showToast(tr("Theme reset to defaults"));
+  }
   function clearColors() {
     settings.update((s) => ({ ...s, customColors: {} }));
     showToast(tr("Custom colours cleared"));
@@ -1746,6 +1757,7 @@
         {/each}
 
         <button class="reset" style="margin-top:16px" onclick={clearColors}>{$t("Clear custom colours")}</button>
+        <button class="reset" style="margin-top:8px" onclick={resetTheme}>{$t("Reset theme to defaults")}</button>
       </section>
       <section class="group">
         <div class="label">{$t("Share")}</div>
@@ -2017,6 +2029,11 @@
           <span class="switch" class:on={$settings.notifyDesktop}></span>
         </button>
         {#if $settings.notifyDesktop}
+          <div class="row">
+            <span class="row-label">{$t("Notification shows")}</span>
+            <Select class="sel" value={$settings.notifyPreview ?? "full"} options={[{ value: "full", label: $t("Sender and text") }, { value: "sender", label: $t("Only the sender") }, { value: "none", label: $t("Only \"New message\"") }]}
+              onchange={(v) => settings.update((s) => ({ ...s, notifyPreview: v as "full" | "sender" | "none" }))} />
+          </div>
           <button class="mini-btn" onclick={testNotification}>{$t("Send a test notification")}</button>
           <div class="foot-note">{$t("Notifications come for chats you aren't looking at. If the test doesn't show up, notifications for Aquamarine are off in the system (on Linux — in your shell's notification settings).")}</div>
         {/if}

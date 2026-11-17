@@ -170,6 +170,8 @@ export const api = {
   /** Signed initData for a bot's mini app. */
   webappInit:         (bot: string, start_param?: string): Promise<{ init_data: string; signed: boolean }> => invoke("webapp_init", { bot, startParam: start_param ?? null }),
   /** The bot's menu button. */
+  /** The bot's commands (setMyCommands) for the "/" hints. */
+  botCommands:        (bot: string): Promise<{ command: string; description: string }[]> => invoke("bot_commands", { bot }),
   webappMenu:         (bot: string): Promise<{ type: string; text?: string; web_app?: { url: string } }> => invoke("webapp_menu", { bot }),
   /** Save a text export (.ics/.md/.txt/.html/.csv) to a path the user picked. */
   writeTextFile:      (path: string, text: string): Promise<void> => invoke("write_text_file", { path, text }),
@@ -200,11 +202,11 @@ export const api = {
     invoke("publish_profile_full", { displayName: display_name, about, phone, extra }),
   // Public avatar / banner (stored on the server, visible to everyone).
   setProfileImage:      (kind: "avatar" | "banner", path: string): Promise<{ ver: number; path: string }> => invoke("set_profile_image", { kind, path }),
-  setProfileImageBytes: (kind: "avatar" | "banner", mime: string, bytes: number[]): Promise<{ ver: number; path: string }> => invoke("set_profile_image_bytes", { kind, mime, bytes }),
+  setProfileImageBytes: (kind: "avatar" | "banner" | `avatar${2 | 3 | 4 | 5}` | `banner${2 | 3}`, mime: string, bytes: number[]): Promise<{ ver: number; path: string }> => invoke("set_profile_image_bytes", { kind, mime, bytes }),
   clearProfileImage:    (kind: "avatar" | "banner"): Promise<void> => invoke("clear_profile_image", { kind }),
-  clearProfileMedia:    (kind: "avatar" | "banner" | "music"): Promise<void> => invoke("clear_profile_image", { kind }),
-  setProfileMediaFile:  (kind: "banner" | "music", path: string): Promise<{ ver: number; path: string }> => invoke("set_profile_media_file", { kind, path }),
-  profileMediaPath:     (username: string, kind: "avatar" | "banner" | "music", ver: number): Promise<string | null> => invoke("profile_media_path", { username, kind, ver }),
+  clearProfileMedia:    (kind: "avatar" | "banner" | "music" | `avatar${2 | 3 | 4 | 5}` | `banner${2 | 3}`): Promise<void> => invoke("clear_profile_image", { kind }),
+  setProfileMediaFile:  (kind: "avatar" | "banner" | "music" | `banner${2 | 3}`, path: string): Promise<{ ver: number; path: string }> => invoke("set_profile_media_file", { kind, path }),
+  profileMediaPath:     (username: string, kind: string, ver: number): Promise<string | null> => invoke("profile_media_path", { username, kind, ver }),
 
   // Media library management
   addMediaFiles:      (target: "gifs" | "stickers" | "emoji", pack: string | null, paths: string[]): Promise<number> => invoke("add_media_files", { target, pack, paths }),

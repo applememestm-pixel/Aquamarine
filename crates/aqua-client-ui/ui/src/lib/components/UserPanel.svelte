@@ -249,6 +249,9 @@
     border: 1px solid var(--border);
     border-radius: calc(12px * var(--rk, 1));
     z-index: 30;
+    /* Exactly 54px: with the 8px margin its top meets the composer's top
+       line (min-height 62px) — it was content-tall and missed it. */
+    box-sizing: border-box; height: 54px;
   }
   .who {
     flex: 1; min-width: 0;

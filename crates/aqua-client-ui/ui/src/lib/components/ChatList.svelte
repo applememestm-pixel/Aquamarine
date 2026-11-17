@@ -701,6 +701,22 @@
     e.preventDefault();
     folderMenu = { x: Math.min(e.clientX, window.innerWidth - 220), y: e.clientY + 8, id };
   }
+  /** Phones: holding a folder tab opens its menu ("Mark all as read", …) —
+   *  the right-click menu had no way to open by touch. */
+  let tabHold: ReturnType<typeof setTimeout> | null = null;
+  let tabHeld = false;
+  function tabDown(e: PointerEvent, id: string) {
+    tabHeld = false;
+    if (e.pointerType !== "touch") return;
+    const { clientX, clientY } = e;
+    tabHold = setTimeout(() => {
+      tabHold = null; tabHeld = true;
+      try { navigator.vibrate?.(12); } catch { /* no vibration */ }
+      folderMenu = { x: Math.min(clientX, window.innerWidth - 220), y: clientY + 8, id };
+    }, 450);
+  }
+  function tabUp() { if (tabHold) { clearTimeout(tabHold); tabHold = null; } }
+  function tabClick(id: string) { if (tabHeld) { tabHeld = false; return; } activeFolder.set(id); }
 
   // ---- Right-click a chat: archive / mute ----
   let ctx = $state<{ x: number; y: number; id: string } | null>(null);
@@ -957,7 +973,8 @@
       onclick={meClick} oncontextmenu={(e) => e.preventDefault()} aria-label={$t("Profile")} title={$t("Tap — profile, hold — accounts")}>
       {#if $profile.avatar_url}<img src={$profile.avatar_url} alt="" draggable="false" />{:else}{meLetter}{/if}
     </button>
-    {#if IS_MOBILE}{@render stack()}{/if}
+    <!-- Phones: one avatar only (Telegram) — stories open by pulling the
+         list down or from ⋮, accounts from ⋮ (or holding the avatar). -->
     <span class="m-name" class:center={$themeSettings.centerTitle}>{$themeSettings.listTitle === "name" ? ($profile.display_name && $profile.display_name !== "You" ? $profile.display_name : "Aquamarine") : $themeSettings.listTitle === "username" && $info?.username ? "@" + $info.username : "Aquamarine"}</span>
     {#if IS_MOBILE}{@render headExtras()}{/if}
     <!-- The connection: ping when connected, "connecting" otherwise; tap —
@@ -1081,8 +1098,11 @@
             <button onclick={() => { plusMenuOpen = false; openNewGroup("supergroup"); }}>{$t("New server")}</button>
           {/if}
           {#if !$storiesOff}<button onclick={() => { plusMenuOpen = false; void addStory(IS_MOBILE ? "camera" : "gallery"); }}>{$t("Add a story")}</button>{/if}
+          {#if !$storiesOff && IS_MOBILE}<button onclick={() => { plusMenuOpen = false; void addStory("gallery"); }}>{$t("Story from the gallery")}</button>{/if}
           {#if IS_MOBILE}
             <!-- Telegram's ⋮: Saved Messages, day / night, the server. -->
+            {#if storiesHere}<button onclick={() => { plusMenuOpen = false; openStrip(); }}>{$t("Stories")}</button>{/if}
+            <button onclick={() => { plusMenuOpen = false; openAccounts(); }}>{$t("Accounts")}</button>
             <button onclick={() => { plusMenuOpen = false; void selectChat("__saved__"); }}>{$t("Saved Messages")}</button>
             <button onclick={() => { plusMenuOpen = false; toggleDayNight(); }}>{$t(shownMode($themeSettings) === "light" ? "Night mode" : "Day mode")}</button>
             <button onclick={() => { plusMenuOpen = false; openServers(); }}>{$t("Server")}</button>
@@ -1105,10 +1125,10 @@
     </div>
   {:else if $folders.length > 0}
     <div class="folder-strip" class:fs-pills={$themeSettings.folderTabStyle === "pills"} class:fs-text={$themeSettings.folderTabStyle === "text"} use:scrollX>
-      {#if !$themeSettings.hideAllTab}<button class="folder-tab" class:active={$activeFolder === "all"} onclick={() => activeFolder.set("all")} oncontextmenu={(e) => openFolderMenu(e, "all")}>{$t("All")}</button>{/if}
+      {#if !$themeSettings.hideAllTab}<button class="folder-tab" class:active={$activeFolder === "all"} onclick={() => tabClick("all")} onpointerdown={(e) => tabDown(e, "all")} onpointerup={tabUp} onpointercancel={tabUp} onpointerleave={tabUp} oncontextmenu={(e) => openFolderMenu(e, "all")}>{$t("All")}</button>{/if}
       {#each $folders as f (f.id)}
         {@const unread = $visibleChats.filter((c) => (c.unread > 0) && !$mutedChats.has(c.id) && folderHas(f, factsOf(c))).length}
-        <button class="folder-tab" class:active={$activeFolder === f.id} onclick={() => activeFolder.set(f.id)} oncontextmenu={(e) => openFolderMenu(e, f.id)}>
+        <button class="folder-tab" class:active={$activeFolder === f.id} onclick={() => tabClick(f.id)} onpointerdown={(e) => tabDown(e, f.id)} onpointerup={tabUp} onpointercancel={tabUp} onpointerleave={tabUp} oncontextmenu={(e) => openFolderMenu(e, f.id)}>
           {#if f.emoji}<span class="ft-emoji">{f.emoji}</span>{/if}{f.name}{#if unread > 0 && $themeSettings.folderCounters !== false}<span class="ft-count">{unread}</span>{/if}
         </button>
       {/each}

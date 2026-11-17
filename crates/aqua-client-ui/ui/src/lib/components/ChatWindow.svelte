@@ -87,6 +87,7 @@
   import { pollStates, castVote, retractVote, applyRemoteVote, closePoll, viewPoll, ME as POLL_ME, type PollView } from "../polls";
   import { openStories, saneStories, allMyStories, myStories, storyArchive } from "../stories";
   import { peerPresence, setPeerPresence, broadcastPresenceTo, activityVerb, chatOnline, peerStatus, presenceNow } from "../presence";
+  import { showAdult, showTeen } from "../packRules";
   import { notePeerProfileVersion, avatars, clans, peerCards, nameColorsOf, parseNameColor, nameColorBar } from "../people";
   import { profile as myProfile } from "../profile";
   import { isPublic, requestIds, allowWriter } from "../privacy";
@@ -265,7 +266,8 @@
   }
 
   let attachMore = $state(false);
-  $effect(() => { if (!attachMenuOpen) attachMore = false; });
+  // Telegram: the sheet opens with every action, no "More" step.
+  $effect(() => { attachMore = attachMenuOpen; });
   function attachAvailable(id: AttachId): boolean {
     if (id === "bluetooth") return DESKTOP_APP;
     if (id === "music") return $musicOn;
@@ -691,6 +693,13 @@
     // The system dialog answers asynchronously: look again a few times.
     for (const ms of [800, 1800, 3500]) { await new Promise((r) => setTimeout(r, ms)); await galleryLoad(); if (gallery.state === "ok") break; }
   }
+  /** A gallery tile tapped: look at it full screen (the circle selects). */
+  function galleryPeek(i: number) {
+    const shots = gallery.items.filter((g) => g.thumb && !g.video);
+    const at = shots.indexOf(gallery.items[i]);
+    if (at < 0) { galleryToggle(gallery.items[i].uri); return; }
+    openGallery(shots.map((g) => ({ url: g.thumb!, kind: "image" as const })), at);
+  }
   function galleryToggle(uri: string) {
     gallerySel = gallerySel.includes(uri) ? gallerySel.filter((u) => u !== uri) : [...gallerySel, uri];
   }
@@ -739,7 +748,8 @@
   function fmtDur(ms: number) { const s = Math.round(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
   $effect(() => {
     if (attachMenuOpen && phoneUI) {
-      gallerySel = []; galCap = ""; sheetFull = false; sheetDy = 0; albumMenu = false; album = "";
+      // Opens straight to the full gallery (Telegram), not a half sheet.
+      gallerySel = []; galCap = ""; sheetFull = true; sheetDy = 0; albumMenu = false; album = "";
       void galleryLoad(); void albumsLoad();
     }
   });
@@ -1426,13 +1436,63 @@
     .filter((c, i, all) => all.findIndex((x) => x.cmd === c.cmd) === i));
   let slashIdx = $state(0);
   let slashHidden = $state("");
+  // A bot's own commands (setMyCommands), like Telegram: listed first, a
+  // tap sends the command straight away.
+  let botCmds = $state<{ command: string; description: string }[]>([]);
+  $effect(() => {
+    const id = $activeChat?.id;
+    botCmds = [];
+    if (!id || id.startsWith("grp_") || !$peerCards[id]?.is_bot) return;
+    void api.botCommands(id).then((l) => { if ($activeChat?.id === id && Array.isArray(l)) botCmds = l; }).catch(() => {});
+  });
+  // A /command tapped in a message (Markup.svelte) is sent to this chat.
+  $effect(() => {
+    const h = (e: Event) => { const v = (e as CustomEvent<string>).detail; if (v && $activeChat?.live) sendNow("/" + v); };
+    window.addEventListener("aqua:botcmd", h);
+    return () => window.removeEventListener("aqua:botcmd", h);
+  });
   let slashMatches = $derived.by(() => {
     const m = /^\/([\p{L}\w]*)$/u.exec(text);
     if (!m || $activeChat?.live !== true || slashHidden === text) return [];
     const q = m[1].toLowerCase();
-    return slashCmds.filter((c) => c.cmd.startsWith(q));
+    const fromBot: SlashCmd[] = botCmds.map((c) => ({ cmd: c.command, desc: c.description, run: () => sendNow("/" + c.command) }));
+    const all = [...fromBot, ...slashCmds.filter((c) => !fromBot.some((b) => b.cmd === c.cmd))];
+    return all.filter((c) => c.cmd.startsWith(q));
   });
   $effect(() => { void slashMatches.length; slashIdx = 0; });
+
+  // "@" suggestions (Telegram): the group's members, else people from the
+  // chat list; picking one finishes the @name.
+  let atIdx = $state(0);
+  let atHidden = $state("");
+  let atMatches = $derived.by((): { user: string; name: string }[] => {
+    const m = /(?:^|\s)@([A-Za-z0-9_.]{0,32})$/.exec(text);
+    if (!m || atHidden === text || $activeChat?.live !== true) return [];
+    const q = m[1].toLowerCase();
+    const pool: { user: string; name: string }[] = activeGroup
+      ? activeGroup.members.map((x) => ({ user: x.username, name: $chats.find((c) => c.id === x.username)?.name ?? x.username }))
+      : $chats.filter((c) => !c.id.startsWith("grp_") && !c.id.startsWith("__")).map((c) => ({ user: c.id, name: c.name }));
+    const me = myUsername;
+    return pool.filter((p) => p.user !== me && (p.user.toLowerCase().startsWith(q) || p.name.toLowerCase().includes(q))).slice(0, 8);
+  });
+  $effect(() => { void atMatches.length; atIdx = 0; });
+  function pickAt(u: string) {
+    text = text.replace(/@([A-Za-z0-9_.]{0,32})$/, `@${u} `);
+    atHidden = "";
+    queueMicrotask(() => composerEl?.focus());
+  }
+  function atKey(e: KeyboardEvent): boolean {
+    if (!atMatches.length) return false;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const n = atMatches.length;
+      atIdx = (atIdx + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+      return true;
+    }
+    if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickAt(atMatches[Math.min(atIdx, atMatches.length - 1)].user); return true; }
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); atHidden = text; return true; }
+    return false;
+  }
   function runSlash(c: SlashCmd) { slashHidden = ""; c.run(); }
   /** Returns true when the key was used by the command popup. */
   function slashKey(e: KeyboardEvent): boolean {
@@ -1453,6 +1513,7 @@
   }
 
   function onKey(e: KeyboardEvent) {
+    if (atKey(e)) return;
     if (slashKey(e)) return;
     const ctrl = e.ctrlKey || e.metaKey;
     if (e.key === "ArrowUp" && !ctrl && !e.shiftKey && !e.altKey && text.length === 0 && !editTarget) {
@@ -1512,6 +1573,9 @@
     first: boolean;
     last: boolean;
     outgoing: boolean;
+    /** Photos sent together (same sender, same minute, no captions): shown
+     *  as one album grid; the row itself is the last of them. */
+    album?: Row[];
   }
   let myUsername = $derived($info?.username ?? "");
   let isGroup = $derived($activeChat?.id?.startsWith("grp_") ?? false);
@@ -1648,7 +1712,10 @@
     showToast(tr("The original message isn't here any more"));
   }
   let thread = $state<{ kind: "comments" | "replies"; root: Row } | null>(null);
-  $effect(() => { void $activeChat?.id; thread = null; });
+  // Only a different chat closes the thread: $activeChat is a new object on
+  // every chat-list refresh (each sent comment), and the panel shut itself.
+  const threadChatId = $derived($activeChat?.id);
+  $effect(() => { void threadChatId; thread = null; });
   let threadItems = $derived.by<ThreadItem[]>(() => {
     const th = thread;
     if (!th) return [];
@@ -1876,6 +1943,14 @@
       { id: "video", label: tr("Video call"), icon: IC.video, run: () => startVoiceCall(true) },
     ];
   });
+  // Channels: "feed" view (exteraGram's feed) — wide cards in one column,
+  // no avatars; per channel, remembered on this device.
+  let feedChans = $state<Record<string, boolean>>((() => { try { return JSON.parse(localStorage.getItem("aqua.feedView") ?? "{}"); } catch { return {}; } })());
+  let feedView = $derived(isChannel && !!feedChans[$activeChat?.id ?? ""]);
+  function setFeedView(id: string, on: boolean) {
+    feedChans = { ...feedChans, [id]: on };
+    try { localStorage.setItem("aqua.feedView", JSON.stringify(feedChans)); } catch { /* private mode */ }
+  }
   let toolItems = $derived.by((): HdrItem[] => {
     const c = $activeChat;
     if (!c) return [];
@@ -1888,6 +1963,7 @@
       out.push({ id: "noshare", label: tr(on ? "Allow sharing" : "Disable sharing"), sub: tr(on ? "Forwarding, copying and saving are off for both of you" : "No forwarding, copying or saving — for both of you"), icon: icons.lock, on,
         run: () => void setNoShare(c.id, !on).then(() => showToast(tr(on ? "Sharing is allowed again" : "Sharing is off in this chat — for both of you. A modified app or a camera can still copy."), 5000)) });
     }
+    if (isChannel) out.push({ id: "feed", label: tr(feedView ? "Chat view" : "Feed view"), sub: tr(feedView ? "Posts as messages" : "Posts as wide cards, like a news feed"), icon: IC.tools, on: feedView, run: () => setFeedView(c.id, !feedView) });
     if (amChanAdmin) out.push({ id: "stats", label: tr("Channel statistics"), sub: tr("Views, reactions, comments"), icon: IC.stats, on: $statsFor === c.id, run: () => statsFor.set($statsFor === c.id ? null : c.id) });
     if (isBotChat && botMenu) {
       const bm = botMenu, added = $attachBots.some((b) => b.bot === c.id);
@@ -2311,6 +2387,30 @@
       prevFrom = m.from;
       prevTime = m.time;
     }
+    return photoAlbums(out);
+  }
+
+  /** A run of plain photos from one sender in one minute → one album row
+   *  (Telegram's look). Each photo is still its own message underneath. */
+  function albumable(r: Row): boolean {
+    if (r.kind.type !== "file") return false;
+    const c = r.kind.content;
+    return !c.caption && renderKind(c) === "image" && !!c.saved_at;
+  }
+  function photoAlbums(rows: Row[]): Row[] {
+    const out: Row[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (!albumable(r)) { out.push(r); continue; }
+      let j = i;
+      while (j + 1 < rows.length && albumable(rows[j + 1]) && rows[j + 1].from === r.from
+        && rows[j + 1].time.slice(0, 5) === r.time.slice(0, 5) && j + 1 - i < 10) j++;
+      if (j === i) { out.push(r); continue; }
+      const run = rows.slice(i, j + 1);
+      const lastRow = run[run.length - 1];
+      out.push({ ...lastRow, first: r.first, album: run });
+      i = j;
+    }
     return out;
   }
 
@@ -2345,6 +2445,15 @@
   /** Cover this incoming picture? The detector's verdict (nsfw.ts), for
    *  everyone or only people not in my contacts, as set; while it's still
    *  looking (a fraction of a second, once per file) it stays covered. */
+  /** Tap on a blurred 18+ / 16+ picture: shown only when that age is turned
+   *  on in Settings → Chat settings; otherwise the blur stays (the owner). */
+  function revealAdult(id: string, teen: boolean) {
+    if (!(teen ? $showTeen : $showAdult)) {
+      showToast(tr(teen ? "Turn on 16+ content in Settings → Chat settings to see it" : "Turn on 18+ content in Settings → Chat settings to see it"), 4500);
+      return;
+    }
+    adultShown.add(id);
+  }
   function coverMedia(m: Row, path: string | null | undefined): boolean {
     if (!path || m.outgoing || adultShown.has(m.id) || $sensitiveBlur === "off") return false;
     if ($activeChat?.id === "__saved__") return false;
@@ -3260,6 +3369,7 @@
     }
     if (allowedReactions && !allowedReactions.includes(emoji)) { closeMenu(); return; }
     const key = reactionKey(row);
+    if (reactionLimitHit(key, emoji)) { closeMenu(); return; }
     const added = toggleMyReaction(key, emoji);
     const peer = $activeChat?.id;
     if (peer && $activeChat?.live) {
@@ -3267,8 +3377,17 @@
     }
     closeMenu();
   }
+  /** At most 5 different reactions from me on one message. */
+  const MAX_MY_REACTIONS = 5;
+  function reactionLimitHit(key: string, emoji: string): boolean {
+    const mine = $reactions[key]?.mine ?? [];
+    if (mine.includes(emoji) || mine.length < MAX_MY_REACTIONS) return false;
+    showToast(tr("Up to {n} reactions on one message", { n: MAX_MY_REACTIONS }));
+    return true;
+  }
   function toggleChipReaction(row: Row, emoji: string) {
     const key = reactionKey(row);
+    if (reactionLimitHit(key, emoji)) return;
     const added = toggleMyReaction(key, emoji);
     if (favEmoji && emoji === favEmoji) { void saveToFavorites(row, added); return; }
     const peer = $activeChat?.id;
@@ -3459,7 +3578,15 @@
   {#if m.meta?.edits?.length}<span class="mflag pen" role="img" aria-label={$t("edited")} title={$t("Earlier versions:") + "\n" + m.meta.edits.join("\n— ")}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>{/if}
 {/snippet}
 
-{#snippet statusTick(outgoing: boolean, id?: string)}
+{#snippet statusTick(outgoing: boolean, id?: string, m?: Row)}
+  {#if isChannel && m}
+    <!-- Telegram's channel post: "👁 14  author, 22:29" in one line, inside
+         the post. The time comes first in the markup, so these go before it. -->
+    {@const vk = reactionKey(m)}
+    {@const nv = Math.max($viewCounts[$activeChat?.id ?? ""]?.[vk] ?? 0, $channelStats[$activeChat?.id ?? ""]?.[vk]?.n ?? 0)}
+    <span class="pm-views"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>{nv}</span>
+    {#if activeGroup?.settings?.sign_messages && m.from}<span class="pm-sign">{$peerCards[m.from]?.display_name || m.from},</span>{/if}
+  {/if}
   {#if outgoing}
     {@const rd = id !== undefined && (seenIds.has(id) || answeredIds.has(id))}
     {#key rd}<span class="rr" class:read={rd} in:scaleIn={{ start: 0.5, duration: motionMs(240), easing: backOut }}>{@html rd ? icons.checkDouble : icons.check}</span>{/key}
@@ -3702,7 +3829,8 @@
             <span class="sep">·</span>
           {:else if chatOnline($activeChat, $peerPresence, $presenceNow)}
             {@const st = peerStatus($peerPresence[$activeChat.id], $presenceNow)}
-            <span><span class="dot {st}"></span>{$t(st === "idle" ? "away" : st === "dnd" ? "do not disturb" : "online")}</span>
+            <!-- The avatar already has the status dot: words only here. -->
+            <span>{$t(st === "idle" ? "away" : st === "dnd" ? "do not disturb" : "online")}</span>
             <span class="sep">·</span>
           {/if}
           {#if nearbyVia($meshStatus, $activeChat.id)}
@@ -3920,6 +4048,7 @@
     <div class="chat-wall" aria-hidden="true"></div>
     <div
       class="messages"
+      class:feed={feedView}
       class:protected={protectedChat}
       class:drag-over={draggingOver}
       class:selecting
@@ -3983,7 +4112,7 @@
               {#if $avatars[avatarKey(m.from)]}<img class="ava-img" src={$avatars[avatarKey(m.from)]} alt="" loading="lazy" />{/if}
             </div>
             <div class="msg-col" class:post={isGroup && commentsAllowed && activeGroup?.kind === "channel"}>
-              {#if m.first && !m.outgoing && $activeChat}
+              {#if m.first && !m.outgoing && $activeChat && !isChannel}
                 {@const mt = isGroup ? tagOf(activeGroup, m.from) : null}
                 <div class="msg-header">
                   <span class="msg-author" style:color={isGroup ? roleColor(activeGroup, m.from) || peerColor(m.from) : null}>{isGroup ? m.from : $activeChat.name.split(' ')[0]}</span>{#if $peerCards[m.from]?.verified}<OfficialMark size={13} />{/if}{#if $peerCards[m.from]?.star != null}<StarMark kind={$peerCards[m.from]?.star ?? 0} size={13} />{/if}
@@ -4019,7 +4148,7 @@
                       </span>
                     </button>
                     {#if content.caption}<div class="once-cap">{content.caption}</div>{/if}
-                    <span class="once-meta">{m.time}{@render statusTick(m.outgoing, m.id)}</span>
+                    <span class="once-meta">{m.time}{@render statusTick(m.outgoing, m.id, m)}</span>
                   </div>
                 {:else if rk === "sticker"}
                   {@const verdict = $stickerVerdict(content.pack, content.name)}
@@ -4028,7 +4157,7 @@
                       <!-- The relay's admin removed this sticker / banned its pack. -->
                       <div class="sticker-gone">{$t("Sticker removed by the server")}</div>
                     {:else if ((verdict === "adult" || verdict === "teen") && !adultShown.has(m.id)) || (verdict === "ok" && url && coverMedia(m, content.saved_at))}
-                      <button class="sticker-btn sticker-18" title={$t(verdict === "teen" ? "16+ — tap to show" : "18+ — tap to show")} onclick={() => adultShown.add(m.id)}>
+                      <button class="sticker-btn sticker-18" title={$t(verdict === "teen" ? "16+ — tap to show" : "18+ — tap to show")} onclick={() => revealAdult(m.id, verdict === "teen")}>
                         {#if url}<span class="sticker-img blur18"><AnimatedMedia src={url} mime={stickerMime(content)} alt="" play="never" /></span>{:else}<span class="sticker-placeholder"></span>{/if}
                         <span class="b18">{verdict === "teen" ? "16+" : "18+"}</span>
                       </button>
@@ -4044,14 +4173,34 @@
                     {/if}
                     <span class="sticker-meta">
                       {m.time}
-                      {@render statusTick(m.outgoing, m.id)}
+                      {@render statusTick(m.outgoing, m.id, m)}
                     </span>
+                  </div>
+                {:else if m.album}
+                  <div class="bubble media-bubble album" class:a2={m.album.length === 2} class:a3={m.album.length >= 3}>
+                    {#each m.album as a (a.id)}
+                      {#if a.kind.type === "file"}
+                        {@const ac = a.kind.content}
+                        {@const au = inlineUrl(ac.saved_at, ac.mime)}
+                        {#if au && coverMedia(a, ac.saved_at)}
+                          <button class="media-img-btn media-18 alb-cell" onclick={() => { if ($nsfwOf(ac.saved_at) !== "pending") revealAdult(a.id, false); }} title={$t("Sensitive content — tap to show")}>
+                            <img class="media-img" src={au} alt="" />
+                            {#if $nsfwOf(ac.saved_at) === "explicit"}<span class="m18"><b>18+</b></span>{/if}
+                          </button>
+                        {:else if au}
+                          <button class="media-img-btn alb-cell" onclick={() => openInGallery(ac.saved_at)} title={$t("Open")}><img class="media-img" src={au} alt={ac.name} /></button>
+                        {:else}
+                          <div class="media-placeholder alb-cell"></div>
+                        {/if}
+                      {/if}
+                    {/each}
+                    <span class="photo-meta">{m.time}{@render statusTick(m.outgoing, m.id, m)}</span>
                   </div>
                 {:else if rk === "gif" || rk === "image"}
                   <div class="bubble media-bubble">
                     {#if url && coverMedia(m, content.saved_at)}
                       <!-- Explicit (or still being looked at): blurred until tapped. -->
-                      <button class="media-img-btn media-18" onclick={() => { if ($nsfwOf(content.saved_at) !== "pending") adultShown.add(m.id); }}
+                      <button class="media-img-btn media-18" onclick={() => { if ($nsfwOf(content.saved_at) !== "pending") revealAdult(m.id, false); }}
                         title={$t("Sensitive content — tap to show")}>
                         <img class="media-img" src={url} alt="" />
                         {#if $nsfwOf(content.saved_at) === "explicit"}<span class="m18"><b>18+</b><small>{$t("Sensitive content — tap to show")}</small></span>{/if}
@@ -4075,9 +4224,9 @@
                          the picture, or after the caption when there is one. -->
                     {#if content.caption}
                       <div class="media-caption"><Markup src={content.caption} resolveEmoji={(k) => emojiMap[k]} compact />
-                        <span class="bubble-meta inline-meta">{m.time}{@render statusTick(m.outgoing, m.id)}</span></div>
+                        <span class="bubble-meta inline-meta">{m.time}{@render statusTick(m.outgoing, m.id, m)}</span></div>
                     {:else}
-                      <span class="photo-meta">{m.time}{@render statusTick(m.outgoing, m.id)}</span>
+                      <span class="photo-meta">{m.time}{@render statusTick(m.outgoing, m.id, m)}</span>
                     {/if}
                   </div>
                 {:else if rk === "live"}
@@ -4092,9 +4241,9 @@
                     {/if}
                     {#if content.caption}
                       <div class="media-caption"><Markup src={content.caption} resolveEmoji={(k) => emojiMap[k]} compact />
-                        <span class="bubble-meta inline-meta">{m.time}{@render statusTick(m.outgoing, m.id)}</span></div>
+                        <span class="bubble-meta inline-meta">{m.time}{@render statusTick(m.outgoing, m.id, m)}</span></div>
                     {:else}
-                      <span class="photo-meta">{m.time}{@render statusTick(m.outgoing, m.id)}</span>
+                      <span class="photo-meta">{m.time}{@render statusTick(m.outgoing, m.id, m)}</span>
                     {/if}
                   </div>
                 {:else if rk === "circle"}
@@ -4110,7 +4259,7 @@
                     {/if}
                     <span class="sticker-meta">
                       {m.time}
-                      {@render statusTick(m.outgoing, m.id)}
+                      {@render statusTick(m.outgoing, m.id, m)}
                     </span>
                   </div>
                 {:else if rk === "voice" || rk === "audio"}
@@ -4136,7 +4285,7 @@
                         <span class="media-sub">{fmtSize(content.size)}</span>
                         <span class="bubble-meta inline-meta">
                           {m.time}
-                          {@render statusTick(m.outgoing, m.id)}
+                          {@render statusTick(m.outgoing, m.id, m)}
                         </span>
                       </div>
                     </div>
@@ -4170,7 +4319,7 @@
                       <span class="media-sub">{fmtSize(content.size)}</span>
                       <span class="bubble-meta inline-meta">
                         {m.time}
-                        {@render statusTick(m.outgoing, m.id)}
+                        {@render statusTick(m.outgoing, m.id, m)}
                       </span>
                     </div>
                   </div>
@@ -4211,7 +4360,7 @@
                     </div>
                     <span class="bubble-meta">
                       {m.time}
-                      {@render statusTick(m.outgoing, m.id)}
+                      {@render statusTick(m.outgoing, m.id, m)}
                     </span>
                   </div>
                 {/if}
@@ -4240,7 +4389,7 @@
                     <button class="art-read" onclick={openIt}>⚡ {$t("Read article")}</button>
                     <span class="bubble-meta inline-meta">
                       {m.time}
-                      {@render statusTick(m.outgoing, m.id)}
+                      {@render statusTick(m.outgoing, m.id, m)}
                     </span>
                   </div>
                 </div>
@@ -4300,7 +4449,7 @@
                       {#if voted && !pv.closed && !poll.quiz}<button onclick={() => retractPoll(poll)}>{$t("Retract vote")}</button>{/if}
                       {#if m.outgoing && !pv.closed}<button onclick={() => stopPoll(poll)}>{$t("Stop poll")}</button>{/if}
                     </span>
-                    <span class="bubble-meta inline-meta">{m.time} {@render statusTick(m.outgoing, m.id)}</span>
+                    <span class="bubble-meta inline-meta">{m.time} {@render statusTick(m.outgoing, m.id, m)}</span>
                   </div>
                 </div>
               {:else if m.kind.type === "reply"}
@@ -4316,7 +4465,7 @@
                   <span class="bubble-meta">
                     {@render msgFlags(m)}
                     {m.time}
-                    {@render statusTick(m.outgoing, m.id)}
+                    {@render statusTick(m.outgoing, m.id, m)}
                   </span>
                 </div>
               {:else if m.kind.type === "text" && m.kind.content.text.startsWith("[track:v1]") && parseTrack(m.kind.content.text)}
@@ -4377,7 +4526,7 @@
                   <span class="bubble-meta">
                     {@render msgFlags(m)}
                     {m.time}
-                    {@render statusTick(m.outgoing, m.id)}
+                    {@render statusTick(m.outgoing, m.id, m)}
                   </span>
                 </div>
               {/if}
@@ -4412,7 +4561,7 @@
                       <span class="tc-arrow">›</span>
                     </button>
                   {/if}
-                  {#if isChannel}
+                  {#if false}
                     {@const n = Math.max($viewCounts[$activeChat?.id ?? ""]?.[vk] ?? 0, $channelStats[$activeChat?.id ?? ""]?.[vk]?.n ?? 0)}
                     <span class="views-chip" title={$t("Views")}>👁 {n}</span>
                   {/if}
@@ -4479,7 +4628,8 @@
         <button class="ctx-item" role="menuitem" onclick={() => replyRow(row)}>{$t("Reply")}</button>
         {#if menuQuote}<button class="ctx-item" role="menuitem" onclick={() => quoteRow(row, menuQuote)}>{$t("Quote")}</button>{/if}
         <button class="ctx-item" role="menuitem" onclick={() => openThread(row)}>{$t(isGroup && commentsAllowed ? "Comments & thread" : "Thread")}</button>
-        {#if row.kind.type === "file" && row.kind.content.saved_at && !row.outgoing && !protectedChat}
+        <!-- My own GIFs and pictures too (it was others' only). -->
+        {#if row.kind.type === "file" && row.kind.content.saved_at && !protectedChat}
           {@const rk = renderKind(row.kind.content)}
           {#if rk === "sticker"}
             <button class="ctx-item" role="menuitem" onclick={() => saveToCollection(row, "stickers")}>{$t("Add to my stickers")}</button>
@@ -4700,13 +4850,15 @@
                 {#if gallery.state === "denied"}
                   <button class="ap-tile ap-allow" onclick={galleryAsk}><span>{$t("Allow access to photos")}</span></button>
                 {/if}
-                {#each gallery.items as g (g.uri)}
+                {#each gallery.items as g, gi (g.uri)}
                   {@const n = gallerySel.indexOf(g.uri)}
-                  <button class="ap-tile" class:on={n >= 0} onclick={() => galleryToggle(g.uri)}>
+                  <!-- Telegram: the photo opens big, the circle selects it. -->
+                  <div class="ap-tile" class:on={n >= 0} role="button" tabindex="0"
+                    onclick={() => galleryPeek(gi)} onkeydown={(e) => { if (e.key === "Enter") galleryPeek(gi); }}>
                     {#if g.thumb}<img src={g.thumb} alt="" loading="lazy" decoding="async" />{/if}
                     {#if g.video}<span class="ap-dur">{fmtDur(g.duration)}</span>{/if}
-                    <span class="ap-check">{n >= 0 ? n + 1 : ""}</span>
-                  </button>
+                    <button class="ap-check" aria-label={$t("Select")} onclick={(e) => { e.stopPropagation(); galleryToggle(g.uri); }}>{n >= 0 ? n + 1 : ""}</button>
+                  </div>
                 {/each}
               </div>
             {:else}
@@ -4784,6 +4936,17 @@
         >{@html icons.attach}</button>
       </div>
       <div class="input-wrap">
+        {#if atMatches.length}
+          <div class="slash-pop" role="listbox" aria-label={$t("Mention")}>
+            {#each atMatches as p, i (p.user)}
+              <button class="slash-item" class:on={i === atIdx} role="option" aria-selected={i === atIdx}
+                onmousedown={(e) => e.preventDefault()} onmouseenter={() => (atIdx = i)} onclick={() => pickAt(p.user)}>
+                <span class="slash-cmd">{p.name}</span>
+                <span class="slash-desc">@{p.user}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
         {#if slashMatches.length}
           <div class="slash-pop" role="listbox" aria-label={$t("Commands")}>
             {#each slashMatches as c, i (c.cmd)}
@@ -4916,6 +5079,9 @@
   .post-foot.out { align-self: flex-end; }
   .post-foot .thread-chip { margin-top: 0; }
   .views-chip { font-size: 11.5px; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
+  .pm-views, .pm-sign { order: -1; display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+  .pm-views { margin-right: 4px; }
+  .pm-views svg { width: 13px; height: 13px; }
   .event-room { color: var(--accent); font-weight: 600; }
   .event-room.ended { color: var(--fg-dim); }
   .thread-chip { display: inline-flex; align-items: center; gap: 6px; margin-top: 3px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-bubble-in); color: var(--accent); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; transition: border-color 0.12s, background 0.12s; }
@@ -5133,14 +5299,6 @@
     align-items: center;
     gap: 6px;
   }
-  .peer-status .dot {
-    width: 6px; height: 6px; border-radius: 50%; margin-right: 5px; vertical-align: 1px;
-    background: var(--online);
-    box-shadow: 0 0 6px var(--online);
-    display: inline-block;
-  }
-  .peer-status .dot.idle { background: #FAA61A; box-shadow: 0 0 6px #FAA61A; }
-  .peer-status .dot.dnd { background: #ED4245; box-shadow: 0 0 6px #ED4245; }
   .peer-status .sep { color: var(--fg-dim); }
   .peer-status .e2ee {
     display: inline-flex;
@@ -5281,6 +5439,15 @@
     }
     :global(html.glass) .chat-header { border-radius: calc(22px * var(--rk, 1)); z-index: 4; }
     :global(html.glass) .composer { border-radius: calc(26px * var(--rk, 1)); margin-bottom: 6px; padding: 6px 8px; }
+    /* Telegram's field: one pill — attach, text, emoji and camera sit inside
+       it without boxes of their own; the send / mic button is a round accent
+       button at the end. */
+    :global(html.glass) .composer .input-wrap,
+    :global(html.glass) .composer .input-wrap:focus-within { background: transparent; border-color: transparent; box-shadow: none; padding-left: 4px; }
+    :global(html.glass) .composer .attach-btn { background: transparent; border-color: transparent; border-radius: 50%; }
+    :global(html.glass) .composer .send-btn { width: 40px; height: 40px; border-radius: 50%; border: none;
+      background: var(--accent); color: #fff; }
+    :global(html.glass) .composer .send-btn.media-btn.recording { background: #ff4d6d; }
     :global(html.glass) .chat-header::before, :global(html.glass) .composer::before {
       border-radius: inherit; backdrop-filter: blur(var(--glass-blur, 12px)) saturate(1.5); -webkit-backdrop-filter: blur(var(--glass-blur, 12px)) saturate(1.5);
     }
@@ -5953,6 +6120,7 @@
   .ap-cam.live :global(svg) { position: relative; width: 26px; height: 26px; filter: drop-shadow(0 1px 3px rgba(0,0,0,.6)); }
   .ap-cam.live span { display: none; }
   .ap-allow { color: var(--accent); padding: 8px; text-align: center; }
+  .ap-check { padding: 0; cursor: pointer; color: #fff; font: 700 12px var(--font-ui, inherit); }
   .ap-check { position: absolute; top: 7px; right: 7px; width: 24px; height: 24px; box-sizing: border-box; border-radius: 50%; border: 2px solid #fff; background: rgba(0,0,0,.25);
     display: grid; place-items: center; font-size: 12.5px; font-weight: 800; color: #06070c; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
   .ap-tile.on .ap-check { background: var(--accent); border-color: var(--accent); }
@@ -6274,16 +6442,28 @@
   }
 
   /* Reply composer bar */
+  /* Same width as the composer below and its input's surface: it was a
+     darker, narrower block that looked foreign. */
+  /* Album: photos sent together, in a grid like Telegram's. */
+  .media-bubble.album { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; width: min(var(--media-max, 360px), 100%); }
+  .media-bubble.album.a3 { grid-template-columns: 1fr 1fr 1fr; }
+  .media-bubble.album .alb-cell { aspect-ratio: 1; overflow: hidden; padding: 0; border: none; background: var(--bg-input); }
+  .media-bubble.album .alb-cell .media-img { width: 100%; height: 100%; object-fit: cover; max-width: none; max-height: none; border-radius: 0; }
+  /* Feed view of a channel: one centred column of full-width posts. */
+  .messages.feed .msg-avatar { display: none; }
+  .messages.feed .msg { display: flex; justify-content: center; }
+  .messages.feed .msg-col { width: min(640px, 100%); max-width: none; margin: 0 auto; align-items: stretch; }
+  .messages.feed .msg-col > .bubble, .messages.feed .msg-col > .media-bubble { max-width: none; width: 100%; box-sizing: border-box; }
   .reply-bar {
     display: flex; align-items: center; gap: 10px;
-    padding: 8px 16px; margin: 0 20px 8px;
-    background: var(--bg-list); border: 1px solid var(--border);
-    border-radius: calc(10px * var(--rk, 1));
+    padding: 8px 12px; margin: 0 16px 8px;
+    background: var(--bg-input); border: 1px solid var(--border);
+    border-radius: calc(12px * var(--rk, 1));
   }
   .rb-line { width: 3px; align-self: stretch; background: var(--accent); border-radius: 3px; flex-shrink: 0; }
   .rb-body { flex: 1; min-width: 0; }
-  .rb-author { font-size: 11.5px; font-weight: 700; color: var(--rq, var(--accent)); }
-  .rb-text { font-size: 12.5px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rb-author { font-size: 12.5px; font-weight: 700; color: var(--rq, var(--accent)); }
+  .rb-text { font-size: 13.5px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rb-x { width: 28px; height: 28px; background: transparent; border: 1px solid var(--border); border-radius: calc(8px * var(--rk, 1)); color: var(--fg-dim); font-size: 16px; cursor: pointer; flex-shrink: 0; }
   .rb-x:hover { color: var(--fg); background: var(--bg-hover); }
 

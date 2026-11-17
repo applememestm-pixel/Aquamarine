@@ -1,6 +1,6 @@
 # HTTP API ретранслятора
 
-> Часть [технической документации](README.md). Описание соответствует `aqua-server` 1.21.0-6 и версии протокола `v1`.
+> Часть [технической документации](README.md). Описание соответствует `aqua-server` 1.21.0-7 и версии протокола `v1`.
 
 Ретранслятор (`aqua-server`) предоставляет HTTP API и канал WebSocket. Клиент Aquamarine работает только через них, поэтому API позволяет написать совместимый клиент, бота или инструмент администрирования.
 
@@ -341,7 +341,7 @@
 
 ### 8.2. Медиа
 
-`:kind` — `avatar`, `banner` или `music`.
+`:kind` — `avatar`, `banner` или `music`; ещё фото профиля — `avatar2`…`avatar5`, ещё баннеры — `banner2`, `banner3` (те же форматы и лимиты; их версии приложение кладёт в `extra.more` = `[{"k", "v"}]`, `extra.lb` — листать фото вместе с баннером).
 
 | Метод и путь | Доступ | Назначение |
 |---|---|---|
@@ -413,6 +413,7 @@
 |---|---|---|
 | `POST /v1/webapp/init` | сеанс | `{"bot", "start_param"}` → `{"init_data": "<строка запуска>", "signed": true}` |
 | `GET /v1/webapp/menu/:bot` | открытый | Кнопка меню бота: `{"type": "web_app", "text", "web_app": {"url"}}` или `{"type": "default"}` |
+| `GET /v1/webapp/commands/:bot` | открытый | Команды бота (setMyCommands) для подсказок «/»: `[{"command", "description"}]` |
 
 `init_data` подписывается по алгоритму Telegram ключом `HMAC-SHA256("WebAppData", токен бота)`. `signed: false` означает, что ретранслятор ещё не знает ключ бота (бот не обращался к API после запуска ретранслятора). Подробнее — [bots.md](bots.md#9-совместимость-с-telegram-bot-api).
 
@@ -546,6 +547,8 @@ x-aqua-fed: <unix_ms>.<hex HMAC-SHA256(secret, METHOD "\n" PATH "\n" unix_ms "\n
 | `GET /v1/fed/backups?since=` | Метаданные резервных копий |
 | `GET /v1/fed/backup/:user` | Резервная копия |
 | `GET /v1/fed/media/:user/:kind` | Медиа профиля |
+| `GET /v1/fed/music/rest/:method` | Navidrome этого сервера для сервера сети без своего (только чтение) |
+| `GET /v1/fed/music/file/:what/:id` | Обложка (`cover`) или трек (`stream`, `download`) целиком |
 | `POST /v1/fed/deliver` | Доставить конверт получателю, подключённому к этому узлу |
 | `GET /v1/fed/inbox/:user` | Забрать конверты, ждущие получателя на этом узле |
 | `POST /v1/fed/inboxes2` | `{"users": [...]}` → `[{"id", "m"}]` — конверты, ждущие этих получателей; узел их **не удаляет** до `inbox_ack` (1.21.0; старые `inbox`/`inboxes` удаляли сразу при ответе) |
@@ -599,6 +602,7 @@ x-aqua-fed: <unix_ms>.<hex HMAC-SHA256(secret, METHOD "\n" PATH "\n" unix_ms "\n
 | POST | `/v1/capsules/:id/stop` | сеанс | 10 |
 | POST | `/v1/webapp/init` | сеанс | 11 |
 | GET | `/v1/webapp/menu/:bot` | открытый | 11 |
+| GET | `/v1/webapp/commands/:bot` | открытый | 11 |
 | POST | `/v1/bot/register` | сеанс | 12 |
 | GET | `/v1/bot/list` | сеанс | 12 |
 | DELETE | `/v1/bot/:name` | сеанс | 12 |

@@ -25,7 +25,9 @@ pub struct Verdict {
     pub level: f32,
 }
 
-const CACHE_FILE: &str = "nsfw-cache.json";
+/// v2: the thresholds changed — old verdicts (false alarms among them)
+/// aren't reused.
+const CACHE_FILE: &str = "nsfw-cache-v2.json";
 const CACHE_MAX: usize = 20_000;
 
 struct Cache {

@@ -61,6 +61,13 @@
   const index = $derived($gallery?.index ?? 0);
   const total = $derived(items.length);
   const cur = $derived<GalleryItem | null>($gallery ? items[index] ?? null : null);
+  // Phones: the bottom tab bar stayed above the viewer and took taps
+  // through it. While the viewer is open it's hidden (app.css, html.lb-open).
+  $effect(() => {
+    const open = !!$gallery;
+    document.documentElement.classList.toggle("lb-open", open);
+    return () => document.documentElement.classList.remove("lb-open");
+  });
   const isImage = $derived(cur?.kind === "image");
 
   // ── Per-item view state ─────────────────────────────────────
@@ -223,16 +230,21 @@
   let drag: { id: number; x: number; y: number; tx: number; ty: number; moved: boolean } | null = null;
   let suppressClick = false;
 
-  // Two fingers: pinch to zoom around the point between them.
+  // Two fingers: pinch to zoom, following the fingers 1:1 — the point that
+  // was between them stays under them, and moving both pans. It used to go
+  // through the same animated step as the mouse wheel (0.18 s transition on
+  // every move), and lagged far behind the fingers.
   const touches = new Map<number, { x: number; y: number }>();
-  let pinch: { d: number; z: number } | null = null;
+  let pinch: { d: number; z: number; m: { x: number; y: number }; px: number; py: number } | null = null;
   const pdist = () => { const [a, b] = [...touches.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
+  const pmid = () => { const [a, b] = [...touches.values()]; return stagePoint({ clientX: (a.x + b.x) / 2, clientY: (a.y + b.y) / 2 }); };
   function pinchDown(e: PointerEvent): boolean {
     if (e.pointerType !== "touch" || !isImage || loading || failed) return false;
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (touches.size === 2) {
-      drag = null; dragging = false;
-      pinch = { d: pdist(), z: zoom };
+      drag = null;
+      dragging = true; // no transition while the fingers drive it
+      pinch = { d: pdist(), z: zoom, m: pmid(), px: panX, py: panY };
       return true;
     }
     return false;
@@ -240,16 +252,22 @@
   function pinchMove(e: PointerEvent): boolean {
     if (!touches.has(e.pointerId)) return false;
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (!pinch || touches.size < 2) return false;
-    const [a, b] = [...touches.values()];
-    const p = stagePoint({ clientX: (a.x + b.x) / 2, clientY: (a.y + b.y) / 2 });
-    zoomTo(pinch.z * (pdist() / Math.max(1, pinch.d)), p.x, p.y);
+    if (!pinch || touches.size < 2 || !natW) return false;
+    const nz = clamp(pinch.z * (pdist() / Math.max(1, pinch.d)), minZoom, MAX_ZOOM);
+    const k = nz / pinch.z;
+    const m = pmid();
+    const mx = Math.max(0, (rotW * nz - stageW) / 2);
+    const my = Math.max(0, (rotH * nz - stageH) / 2);
+    zoomState = nz;
+    fitMode = false;
+    tx = clamp(m.x - (pinch.m.x - pinch.px) * k, -mx, mx);
+    ty = clamp(m.y - (pinch.m.y - pinch.py) * k, -my, my);
     suppressClick = true;
     return true;
   }
   function pinchUp(e: PointerEvent) {
     touches.delete(e.pointerId);
-    if (touches.size < 2) pinch = null;
+    if (touches.size < 2 && pinch) { pinch = null; dragging = false; }
   }
 
   // Not zoomed in: a sideways swipe goes to the next / previous photo.

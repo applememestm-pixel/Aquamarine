@@ -742,7 +742,8 @@ pub async fn publish_profile_full(
 // ---------- Profile images (public avatar / banner) -----------------------
 
 fn check_media_kind(kind: &str) -> Result<(), String> {
-    if matches!(kind, "avatar" | "banner" | "music") { Ok(()) } else { Err(format!("unknown profile media kind {kind:?}")) }
+    // avatar2…avatar5, banner2, banner3: the profile's extra photos and banners.
+    if matches!(kind, "avatar" | "banner" | "music" | "avatar2" | "avatar3" | "avatar4" | "avatar5" | "banner2" | "banner3") { Ok(()) } else { Err(format!("unknown profile media kind {kind:?}")) }
 }
 
 fn image_mime_for(path: &str) -> Option<&'static str> {
@@ -901,10 +902,43 @@ pub async fn set_profile_media_file(
     }
     // A big GIF banner is turned into a light WebM loop (the relay keeps
     // animated banners ≤ 3 MB); small GIFs go up as they are.
-    let big_gif = ext == "gif" && kind == "banner"
+    let big_gif = ext == "gif" && kind.starts_with("banner")
         && std::fs::metadata(&path).map(|m| m.len() > 2_900_000).unwrap_or(false);
+    // Animated avatar from a video (or a big GIF): a square, silent,
+    // looping animated WebP — an image, so every <img> that shows avatars
+    // plays it (chat list, messages, profile). ≤ 6 s, 360 px, ≤ 3 MB.
+    let vid = matches!(ext.as_str(), "mp4" | "webm" | "mov" | "mkv" | "m4v");
+    let big_ava_gif = ext == "gif" && kind.starts_with("avatar")
+        && std::fs::metadata(&path).map(|m| m.len() > 2_900_000).unwrap_or(false);
+    if kind.starts_with("avatar") && (vid || big_ava_gif) {
+        let out_dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.join("outbox") };
+        std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+        let out = out_dir.join("avatar.webp");
+        for (fps, side, q) in [(20, 360, 60), (15, 300, 45), (12, 240, 35)] {
+            let mut cmd = tokio::process::Command::new("ffmpeg");
+            cmd.args(["-v", "error", "-nostdin", "-y", "-t", "6", "-i"]).arg(&path)
+                .args(["-an", "-vf", &format!("crop='min(iw,ih)':'min(iw,ih)',scale={side}:{side},fps={fps}"),
+                    "-c:v", "libwebp", "-loop", "0", "-q:v", &q.to_string(), "-compression_level", "4"])
+                .arg(&out)
+                .stdin(std::process::Stdio::null())
+                .kill_on_drop(true);
+            #[cfg(windows)]
+            {
+                cmd.creation_flags(0x0800_0000);
+            }
+            match cmd.output().await {
+                Ok(o) if o.status.success() => {
+                    let bytes = tokio::fs::read(&out).await.map_err(|e| e.to_string())?;
+                    if bytes.len() <= 2_900_000 { return upload_profile_image(state, kind, "image/webp".into(), bytes).await; }
+                }
+                Ok(_) => return Err("this video couldn't be turned into an avatar".into()),
+                Err(_) => return Err("install ffmpeg so a video can become an animated avatar (or pick a GIF under 3 MB)".into()),
+            }
+        }
+        return Err("this video is too long or too busy for an avatar — pick a shorter one".into());
+    }
     if big_gif || matches!(ext.as_str(), "mp4" | "webm" | "mov" | "mkv" | "m4v") {
-        if kind != "banner" {
+        if !kind.starts_with("banner") {
             return Err("videos can only be a banner".into());
         }
         // Silent, ≤ 8 s, 480 px wide, small: a banner must stay light.
@@ -3789,6 +3823,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                     }
                     None => return true,
                 };
+                let is_comment = inner.starts_with(crate::state::COMMENT_PREFIX);
                 let (kind, meta) = crate::state::classify_full(&inner, room.map(|r| r.id));
                 let preview = preview_for(&kind);
                 let len = s.chats.get(&gid).map(|b| b.messages.len()).unwrap_or(0);
@@ -3802,16 +3837,20 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                         at: crate::state::now_at(),
                         kind,
                     });
-                    book.summary.preview = preview;
-                    // Posted from another device of mine: it's my message.
-                    let mine = s_me.as_deref() == Some(author.as_str());
-                    book.summary.preview_by_me = mine;
-                    book.summary.preview_from = if mine { None } else { Some(author.clone()) };
-                    book.summary.time = time.clone();
-                    let is_active = false; // UI decides unread via its own active id
-                    if !is_active && !mine { book.summary.unread += 1; }
+                    // A comment under a channel post lives in its thread: it
+                    // isn't the channel's last message, nor its unread.
+                    if !is_comment {
+                        book.summary.preview = preview;
+                        // Posted from another device of mine: it's my message.
+                        let mine = s_me.as_deref() == Some(author.as_str());
+                        book.summary.preview_by_me = mine;
+                        book.summary.preview_from = if mine { None } else { Some(author.clone()) };
+                        book.summary.time = time.clone();
+                        let is_active = false; // UI decides unread via its own active id
+                        if !is_active && !mine { book.summary.unread += 1; }
+                    }
                 }
-                if let Some(pos) = s.chat_order.iter().position(|id| id == &gid) {
+                if let Some(pos) = s.chat_order.iter().position(|id| id == &gid).filter(|_| !is_comment) {
                     if pos > 0 { s.chat_order.remove(pos); s.chat_order.insert(0, gid.clone()); }
                 }
                 if let Some(me) = s_me.as_deref().filter(|me| *me != author.as_str()) {
@@ -4183,6 +4222,12 @@ pub async fn webapp_menu(state: State<'_, StdMutex<AppState>>, bot: String) -> R
     t.webapp_menu(&bot).await.map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn bot_commands(state: State<'_, StdMutex<AppState>>, bot: String) -> Result<serde_json::Value, String> {
+    let t = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone().ok_or("not connected to a server")? };
+    t.bot_commands(&bot).await.map_err(|e| e.to_string())
+}
+
 async fn on_incoming_initial(
     app: &AppHandle,
     addr: String,
@@ -4305,7 +4350,7 @@ pub(crate) fn is_control_text(text: &str) -> bool {
             EDIT_PREFIX, DEL_PREFIX, REN_PREFIX, CTL_PREFIX, GCALL_PREFIX, GRPINFO_PREFIX, GRPSELF_PREFIX,
             GRPJOIN_PREFIX, GRPLEAVE_PREFIX, GRPCTL_PREFIX, GRPMSG_PREFIX, CDM_PREFIX, crate::autodelete::TTL_PREFIX,
             crate::history_sync::HPOKE_PREFIX, crate::history_sync::HKEYREQ_PREFIX, crate::history_sync::HKEY_PREFIX,
-            crate::devtrust::DEVOK_PREFIX, crate::devtrust::DEVNO_PREFIX,
+            crate::devtrust::DEVOK_PREFIX, crate::devtrust::DEVNO_PREFIX, READ_PREFIX,
             "[hist:v1]", "[histack:v1]"]
             .iter().any(|p| text.starts_with(p))
 }
@@ -4347,6 +4392,10 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
         }
         if let Some(body) = text.strip_prefix(crate::history_sync::HKEY_PREFIX) {
             crate::history_sync::on_key(app, body);
+            return;
+        }
+        if let Some(body) = text.strip_prefix(READ_PREFIX) {
+            on_read_elsewhere(app, body);
             return;
         }
         crate::multidev::handle_own_device(app, &text);
@@ -4839,6 +4888,7 @@ pub fn set_tz_offset(app: AppHandle, state: State<'_, StdMutex<AppState>>, minut
     crate::state::set_tz_offset(minutes);
     let n = {
         let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _ = std::fs::write(s.data_dir.join(crate::state::TZ_FILE), crate::state::tz_offset().to_string());
         crate::state::localize_old_times(&mut s)
     };
     if n > 0 {
@@ -4851,12 +4901,41 @@ pub fn set_tz_offset(app: AppHandle, state: State<'_, StdMutex<AppState>>, minut
 /// zeroed it, and the next chat-list refresh brought every message read in
 /// the open chat back as "unread".
 #[tauri::command]
-pub fn mark_chat_read(state: State<'_, StdMutex<AppState>>, peer_id: String) -> Result<(), String> {
-    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(book) = s.chats.get_mut(&peer_id) {
-        book.summary.unread = 0;
+pub fn mark_chat_read(app: AppHandle, state: State<'_, StdMutex<AppState>>, peer_id: String) -> Result<(), String> {
+    let (was_unread, t, me) = {
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let was = s.chats.get(&peer_id).map(|b| b.summary.unread > 0).unwrap_or(false);
+        if let Some(book) = s.chats.get_mut(&peer_id) {
+            book.summary.unread = 0;
+        }
+        (was, s.transport.clone(), s.username.clone().unwrap_or_default())
+    };
+    // Read here — read on my other devices too: they kept the counter and
+    // rang for messages already read (READ_PREFIX, handled below).
+    if was_unread {
+        if let Some(t) = t {
+            let payload = format!("{READ_PREFIX}{}", serde_json::json!({ "peer": peer_id }));
+            tauri::async_runtime::spawn(async move { crate::multidev::to_my_devices(&app, &t, &me, &payload).await; });
+        }
     }
     Ok(())
+}
+
+/// "I read this chat" between devices of one account.
+pub const READ_PREFIX: &str = "[read:v1]";
+
+/// Another device of mine read a chat: no unread counter here either, and
+/// the UI drops its notifications for it.
+pub(crate) fn on_read_elsewhere(app: &AppHandle, body: &str) {
+    let Some(peer) = serde_json::from_str::<serde_json::Value>(body).ok()
+        .and_then(|v| v.get("peer").and_then(|x| x.as_str()).map(str::to_string)) else { return };
+    let state: State<'_, StdMutex<AppState>> = app.state();
+    {
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(book) = s.chats.get_mut(&peer) { book.summary.unread = 0; }
+    }
+    let _ = app.emit("aqua://read_elsewhere", serde_json::json!({ "peer_id": peer }));
+    let _ = app.emit("aqua://chats_updated", ());
 }
 
 /// Change my @username. The relay renames the account (the old name forwards

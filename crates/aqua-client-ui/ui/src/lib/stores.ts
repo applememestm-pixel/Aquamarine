@@ -30,6 +30,9 @@ function notifyIncoming(peerId: string, text: string) {
   // shows ("📎 report.pdf", not the raw file record); in a group — who wrote.
   const c = get(chats).find((x) => x.id === peerId);
   const title = displayName(peerId, c?.name || peerId);
+  // Settings → Notifications → "Notification shows".
+  if (s.notifyPreview === "none") { void osNotify("Aquamarine", tr("New message")); return; }
+  if (s.notifyPreview === "sender") { void osNotify(title, tr("New message")); return; }
   let body = (c?.preview || "").trim() || (text.startsWith("[") ? "" : text);
   if (c?.preview_from && !c.preview_by_me) body = `${displayName(c.preview_from, c.preview_from)}: ${body}`;
   void osNotify(title, body.slice(0, 120) || tr("New message"));
@@ -212,13 +215,22 @@ export async function bootstrap() {
     // Someone who may not write to me (privacy → "Who can write to me"):
     // the chat waits under "Message requests", without a notification.
     const { mayWriteMe } = await import("./privacy");
-    if (!isActive && !prefs.isMuted(p.peer_id) && mayWriteMe(p.peer_id)) notifyIncoming(p.peer_id, p.text);
+    // An edit, a deletion or a timer change comes with no text: it isn't a
+    // new message and made a sound (and a banner) of its own.
+    // "@me" in a muted chat still pings (Telegram's mentions).
+    const me = get(info)?.username;
+    const mentioned = !!me && new RegExp(`(^|[^\\w@])@${me.replace(/[.]/g, "\\.")}(?![\\w.])`, "i").test(p.text);
+    if (p.text && !isActive && (mentioned || !prefs.isMuted(p.peer_id)) && mayWriteMe(p.peer_id)) notifyIncoming(p.peer_id, p.text);
     // Refresh info (opk count, etc.)
     refreshInfoSoon();
   });
   events.onChatsUpdated(() => {
     refreshChatsSoon();
     refreshInfoSoon();
+    // The open chat too: a call's line (note_call), a channel post or
+    // anything else written without "incoming" showed only after leaving
+    // the chat and opening it again.
+    if (get(activeId)) refreshActiveSoon();
   });
   // Auto-delete timers removed messages.
   listen<{ peer_id: string }>("aqua://expired", async (e) => {
