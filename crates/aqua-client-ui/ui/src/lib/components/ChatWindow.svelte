@@ -2377,7 +2377,7 @@
       prevFrom = m.from;
       prevTime = m.time;
     }
-    return albums(out);
+    return photoAlbums(out);
   }
 
   /** A run of plain photos from one sender in one minute → one album row
@@ -2387,7 +2387,7 @@
     const c = r.kind.content;
     return !c.caption && renderKind(c) === "image" && !!c.saved_at;
   }
-  function albums(rows: Row[]): Row[] {
+  function photoAlbums(rows: Row[]): Row[] {
     const out: Row[] = [];
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
