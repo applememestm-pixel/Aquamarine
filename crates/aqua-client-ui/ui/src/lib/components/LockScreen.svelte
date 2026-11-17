@@ -308,12 +308,14 @@
     .card { background: transparent; color: #fff; animation: none; }
     .card :global(h2), .who b { color: #fff; text-shadow: 0 1px 6px rgba(0,0,0,.45); }
     .who span, .card :global(p), .hint { color: rgba(255,255,255,.78); }
-    .key { width: 78px; height: 78px; justify-self: center; border-radius: 50%; flex-direction: column; gap: 0; color: #fff;
+    /* Blocks, as before 1.20 (the owner: round "drops" read worse): full-width
+       rounded rectangles in the grid, digits and letters in one line. */
+    .key { width: auto; height: 62px; justify-self: stretch; border-radius: calc(14px * var(--rk, 1)); flex-direction: row; gap: 10px; color: #fff;
       background: rgba(255,255,255,.14); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
-    .key small { min-width: 0; text-align: center; color: rgba(255,255,255,.7); font-size: 10px; }
+    .key small { min-width: 30px; text-align: left; color: rgba(255,255,255,.7); font-size: 11px; }
     .key:active { background: rgba(255,255,255,.32); }
     .key.del, .key.bio { background: transparent; color: #fff; backdrop-filter: none; -webkit-backdrop-filter: none; }
-    .keypad { gap: 14px 0; }
+    .keypad { gap: 8px; }
     .pin-box { border-color: rgba(255,255,255,.55); }
     .card { box-sizing: border-box; width: 100%; height: 100%; overflow-y: auto; border-radius: 0; border: none; box-shadow: none; gap: 8px;
       padding: calc(28px + var(--sat, env(safe-area-inset-top, 0px))) 18px calc(18px + var(--sab, env(safe-area-inset-bottom, 0px))); }
