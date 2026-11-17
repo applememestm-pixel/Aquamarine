@@ -63,6 +63,9 @@
     border: 1px solid var(--border-strong); box-shadow: 0 18px 44px -18px rgba(0,0,0,.85);
     animation: upd-in .4s cubic-bezier(.22,1,.36,1);
   }
+  /* Phones: at the bottom, above the tab bar — at the top it covered the
+     list's title row. */
+  :global(html.phone) .upd { top: auto; bottom: calc(var(--sab, env(safe-area-inset-bottom, 0px)) + 92px); }
   @keyframes upd-in { from { opacity: 0; transform: translateX(-50%) translateY(-14px); } }
   .upd-ic { width: 38px; height: 38px; flex-shrink: 0; border-radius: calc(12px * var(--rk, 1)); display: grid; place-items: center; color: #06070c;
     background: linear-gradient(135deg, var(--accent), var(--accent-2)); }

@@ -957,7 +957,8 @@
       onclick={meClick} oncontextmenu={(e) => e.preventDefault()} aria-label={$t("Profile")} title={$t("Tap — profile, hold — accounts")}>
       {#if $profile.avatar_url}<img src={$profile.avatar_url} alt="" draggable="false" />{:else}{meLetter}{/if}
     </button>
-    {#if IS_MOBILE}{@render stack()}{/if}
+    <!-- Phones: one avatar only (Telegram) — stories open by pulling the
+         list down or from ⋮, accounts from ⋮ (or holding the avatar). -->
     <span class="m-name" class:center={$themeSettings.centerTitle}>{$themeSettings.listTitle === "name" ? ($profile.display_name && $profile.display_name !== "You" ? $profile.display_name : "Aquamarine") : $themeSettings.listTitle === "username" && $info?.username ? "@" + $info.username : "Aquamarine"}</span>
     {#if IS_MOBILE}{@render headExtras()}{/if}
     <!-- The connection: ping when connected, "connecting" otherwise; tap —
@@ -1083,6 +1084,8 @@
           {#if !$storiesOff}<button onclick={() => { plusMenuOpen = false; void addStory(IS_MOBILE ? "camera" : "gallery"); }}>{$t("Add a story")}</button>{/if}
           {#if IS_MOBILE}
             <!-- Telegram's ⋮: Saved Messages, day / night, the server. -->
+            {#if storiesHere}<button onclick={() => { plusMenuOpen = false; openStrip(); }}>{$t("Stories")}</button>{/if}
+            <button onclick={() => { plusMenuOpen = false; openAccounts(); }}>{$t("Accounts")}</button>
             <button onclick={() => { plusMenuOpen = false; void selectChat("__saved__"); }}>{$t("Saved Messages")}</button>
             <button onclick={() => { plusMenuOpen = false; toggleDayNight(); }}>{$t(shownMode($themeSettings) === "light" ? "Night mode" : "Day mode")}</button>
             <button onclick={() => { plusMenuOpen = false; openServers(); }}>{$t("Server")}</button>
