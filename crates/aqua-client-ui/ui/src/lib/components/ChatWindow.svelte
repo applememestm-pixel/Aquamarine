@@ -1942,6 +1942,14 @@
       { id: "video", label: tr("Video call"), icon: IC.video, run: () => startVoiceCall(true) },
     ];
   });
+  // Channels: "feed" view (exteraGram's feed) — wide cards in one column,
+  // no avatars; per channel, remembered on this device.
+  let feedChans = $state<Record<string, boolean>>((() => { try { return JSON.parse(localStorage.getItem("aqua.feedView") ?? "{}"); } catch { return {}; } })());
+  let feedView = $derived(isChannel && !!feedChans[$activeChat?.id ?? ""]);
+  function setFeedView(id: string, on: boolean) {
+    feedChans = { ...feedChans, [id]: on };
+    try { localStorage.setItem("aqua.feedView", JSON.stringify(feedChans)); } catch { /* private mode */ }
+  }
   let toolItems = $derived.by((): HdrItem[] => {
     const c = $activeChat;
     if (!c) return [];
@@ -1954,6 +1962,7 @@
       out.push({ id: "noshare", label: tr(on ? "Allow sharing" : "Disable sharing"), sub: tr(on ? "Forwarding, copying and saving are off for both of you" : "No forwarding, copying or saving — for both of you"), icon: icons.lock, on,
         run: () => void setNoShare(c.id, !on).then(() => showToast(tr(on ? "Sharing is allowed again" : "Sharing is off in this chat — for both of you. A modified app or a camera can still copy."), 5000)) });
     }
+    if (isChannel) out.push({ id: "feed", label: tr(feedView ? "Chat view" : "Feed view"), sub: tr(feedView ? "Posts as messages" : "Posts as wide cards, like a news feed"), icon: IC.tools, on: feedView, run: () => setFeedView(c.id, !feedView) });
     if (amChanAdmin) out.push({ id: "stats", label: tr("Channel statistics"), sub: tr("Views, reactions, comments"), icon: IC.stats, on: $statsFor === c.id, run: () => statsFor.set($statsFor === c.id ? null : c.id) });
     if (isBotChat && botMenu) {
       const bm = botMenu, added = $attachBots.some((b) => b.bot === c.id);
@@ -4019,6 +4028,7 @@
     <div class="chat-wall" aria-hidden="true"></div>
     <div
       class="messages"
+      class:feed={feedView}
       class:protected={protectedChat}
       class:drag-over={draggingOver}
       class:selecting
@@ -6418,6 +6428,11 @@
   .media-bubble.album.a3 { grid-template-columns: 1fr 1fr 1fr; }
   .media-bubble.album .alb-cell { aspect-ratio: 1; overflow: hidden; padding: 0; border: none; background: var(--bg-input); }
   .media-bubble.album .alb-cell .media-img { width: 100%; height: 100%; object-fit: cover; max-width: none; max-height: none; border-radius: 0; }
+  /* Feed view of a channel: one centred column of full-width posts. */
+  .messages.feed .msg-avatar { display: none; }
+  .messages.feed .msg { display: flex; justify-content: center; }
+  .messages.feed .msg-col { width: min(640px, 100%); max-width: none; margin: 0 auto; align-items: stretch; }
+  .messages.feed .msg-col > .bubble, .messages.feed .msg-col > .media-bubble { max-width: none; width: 100%; box-sizing: border-box; }
   .reply-bar {
     display: flex; align-items: center; gap: 10px;
     padding: 8px 12px; margin: 0 16px 8px;
