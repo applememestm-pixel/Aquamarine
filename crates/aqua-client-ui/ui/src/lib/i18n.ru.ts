@@ -835,6 +835,8 @@ export const RU: Record<string, string> = {
   "Send emoji": "Отправить эмодзи",
   "Set as status": "Сделать статусом",
   "Emoji status set": "Эмодзи-статус установлен",
+  "Turn on 16+ content in Settings → Chat settings to see it": "Чтобы увидеть, включите 16+ в Настройки → Настройки чатов",
+  "Turn on 18+ content in Settings → Chat settings to see it": "Чтобы увидеть, включите 18+ в Настройки → Настройки чатов",
   "Mention": "Упоминание",
   "Select": "Выбрать",
   "Send": "Отправить",

@@ -87,6 +87,7 @@
   import { pollStates, castVote, retractVote, applyRemoteVote, closePoll, viewPoll, ME as POLL_ME, type PollView } from "../polls";
   import { openStories, saneStories, allMyStories, myStories, storyArchive } from "../stories";
   import { peerPresence, setPeerPresence, broadcastPresenceTo, activityVerb, chatOnline, peerStatus, presenceNow } from "../presence";
+  import { showAdult, showTeen } from "../packRules";
   import { notePeerProfileVersion, avatars, clans, peerCards, nameColorsOf, parseNameColor, nameColorBar } from "../people";
   import { profile as myProfile } from "../profile";
   import { isPublic, requestIds, allowWriter } from "../privacy";
@@ -2444,6 +2445,15 @@
   /** Cover this incoming picture? The detector's verdict (nsfw.ts), for
    *  everyone or only people not in my contacts, as set; while it's still
    *  looking (a fraction of a second, once per file) it stays covered. */
+  /** Tap on a blurred 18+ / 16+ picture: shown only when that age is turned
+   *  on in Settings → Chat settings; otherwise the blur stays (the owner). */
+  function revealAdult(id: string, teen: boolean) {
+    if (!(teen ? $showTeen : $showAdult)) {
+      showToast(tr(teen ? "Turn on 16+ content in Settings → Chat settings to see it" : "Turn on 18+ content in Settings → Chat settings to see it"), 4500);
+      return;
+    }
+    adultShown.add(id);
+  }
   function coverMedia(m: Row, path: string | null | undefined): boolean {
     if (!path || m.outgoing || adultShown.has(m.id) || $sensitiveBlur === "off") return false;
     if ($activeChat?.id === "__saved__") return false;
@@ -4147,7 +4157,7 @@
                       <!-- The relay's admin removed this sticker / banned its pack. -->
                       <div class="sticker-gone">{$t("Sticker removed by the server")}</div>
                     {:else if ((verdict === "adult" || verdict === "teen") && !adultShown.has(m.id)) || (verdict === "ok" && url && coverMedia(m, content.saved_at))}
-                      <button class="sticker-btn sticker-18" title={$t(verdict === "teen" ? "16+ — tap to show" : "18+ — tap to show")} onclick={() => adultShown.add(m.id)}>
+                      <button class="sticker-btn sticker-18" title={$t(verdict === "teen" ? "16+ — tap to show" : "18+ — tap to show")} onclick={() => revealAdult(m.id, verdict === "teen")}>
                         {#if url}<span class="sticker-img blur18"><AnimatedMedia src={url} mime={stickerMime(content)} alt="" play="never" /></span>{:else}<span class="sticker-placeholder"></span>{/if}
                         <span class="b18">{verdict === "teen" ? "16+" : "18+"}</span>
                       </button>
@@ -4173,7 +4183,7 @@
                         {@const ac = a.kind.content}
                         {@const au = inlineUrl(ac.saved_at, ac.mime)}
                         {#if au && coverMedia(a, ac.saved_at)}
-                          <button class="media-img-btn media-18 alb-cell" onclick={() => { if ($nsfwOf(ac.saved_at) !== "pending") adultShown.add(a.id); }} title={$t("Sensitive content — tap to show")}>
+                          <button class="media-img-btn media-18 alb-cell" onclick={() => { if ($nsfwOf(ac.saved_at) !== "pending") revealAdult(a.id, false); }} title={$t("Sensitive content — tap to show")}>
                             <img class="media-img" src={au} alt="" />
                             {#if $nsfwOf(ac.saved_at) === "explicit"}<span class="m18"><b>18+</b></span>{/if}
                           </button>
@@ -4190,7 +4200,7 @@
                   <div class="bubble media-bubble">
                     {#if url && coverMedia(m, content.saved_at)}
                       <!-- Explicit (or still being looked at): blurred until tapped. -->
-                      <button class="media-img-btn media-18" onclick={() => { if ($nsfwOf(content.saved_at) !== "pending") adultShown.add(m.id); }}
+                      <button class="media-img-btn media-18" onclick={() => { if ($nsfwOf(content.saved_at) !== "pending") revealAdult(m.id, false); }}
                         title={$t("Sensitive content — tap to show")}>
                         <img class="media-img" src={url} alt="" />
                         {#if $nsfwOf(content.saved_at) === "explicit"}<span class="m18"><b>18+</b><small>{$t("Sensitive content — tap to show")}</small></span>{/if}
