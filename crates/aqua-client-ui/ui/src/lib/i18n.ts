@@ -54,6 +54,7 @@ const PLURALS: Record<string, { en: [string, string]; ru: [string, string, strin
   comment: { en: ["comment", "comments"], ru: ["комментарий", "комментария", "комментариев"] },
   reply: { en: ["reply", "replies"], ru: ["ответ", "ответа", "ответов"] },
   view: { en: ["view", "views"], ru: ["просмотр", "просмотра", "просмотров"] },
+  reaction: { en: ["reaction", "reactions"], ru: ["реакция", "реакции", "реакций"] },
 };
 function ruForm(n: number): 0 | 1 | 2 {
   const a = Math.abs(n) % 100, b = a % 10;

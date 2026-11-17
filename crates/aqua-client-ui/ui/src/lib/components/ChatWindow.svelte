@@ -3549,7 +3549,15 @@
   {#if m.meta?.edits?.length}<span class="mflag pen" role="img" aria-label={$t("edited")} title={$t("Earlier versions:") + "\n" + m.meta.edits.join("\n— ")}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>{/if}
 {/snippet}
 
-{#snippet statusTick(outgoing: boolean, id?: string)}
+{#snippet statusTick(outgoing: boolean, id?: string, m?: Row)}
+  {#if isChannel && m}
+    <!-- Telegram's channel post: "👁 14  author, 22:29" in one line, inside
+         the post. The time comes first in the markup, so these go before it. -->
+    {@const vk = reactionKey(m)}
+    {@const nv = Math.max($viewCounts[$activeChat?.id ?? ""]?.[vk] ?? 0, $channelStats[$activeChat?.id ?? ""]?.[vk]?.n ?? 0)}
+    <span class="pm-views"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>{nv}</span>
+    {#if activeGroup?.settings?.sign_messages && m.from}<span class="pm-sign">{$peerCards[m.from]?.display_name || m.from},</span>{/if}
+  {/if}
   {#if outgoing}
     {@const rd = id !== undefined && (seenIds.has(id) || answeredIds.has(id))}
     {#key rd}<span class="rr" class:read={rd} in:scaleIn={{ start: 0.5, duration: motionMs(240), easing: backOut }}>{@html rd ? icons.checkDouble : icons.check}</span>{/key}
@@ -4074,7 +4082,7 @@
               {#if $avatars[avatarKey(m.from)]}<img class="ava-img" src={$avatars[avatarKey(m.from)]} alt="" loading="lazy" />{/if}
             </div>
             <div class="msg-col" class:post={isGroup && commentsAllowed && activeGroup?.kind === "channel"}>
-              {#if m.first && !m.outgoing && $activeChat}
+              {#if m.first && !m.outgoing && $activeChat && !isChannel}
                 {@const mt = isGroup ? tagOf(activeGroup, m.from) : null}
                 <div class="msg-header">
                   <span class="msg-author" style:color={isGroup ? roleColor(activeGroup, m.from) || peerColor(m.from) : null}>{isGroup ? m.from : $activeChat.name.split(' ')[0]}</span>{#if $peerCards[m.from]?.verified}<OfficialMark size={13} />{/if}{#if $peerCards[m.from]?.star != null}<StarMark kind={$peerCards[m.from]?.star ?? 0} size={13} />{/if}
@@ -4110,7 +4118,7 @@
                       </span>
                     </button>
                     {#if content.caption}<div class="once-cap">{content.caption}</div>{/if}
-                    <span class="once-meta">{m.time}{@render statusTick(m.outgoing, m.id)}</span>
+                    <span class="once-meta">{m.time}{@render statusTick(m.outgoing, m.id, m)}</span>
                   </div>
                 {:else if rk === "sticker"}
                   {@const verdict = $stickerVerdict(content.pack, content.name)}
@@ -4135,7 +4143,7 @@
                     {/if}
                     <span class="sticker-meta">
                       {m.time}
-                      {@render statusTick(m.outgoing, m.id)}
+                      {@render statusTick(m.outgoing, m.id, m)}
                     </span>
                   </div>
                 {:else if m.album}
@@ -4156,7 +4164,7 @@
                         {/if}
                       {/if}
                     {/each}
-                    <span class="photo-meta">{m.time}{@render statusTick(m.outgoing, m.id)}</span>
+                    <span class="photo-meta">{m.time}{@render statusTick(m.outgoing, m.id, m)}</span>
                   </div>
                 {:else if rk === "gif" || rk === "image"}
                   <div class="bubble media-bubble">
@@ -4186,9 +4194,9 @@
                          the picture, or after the caption when there is one. -->
                     {#if content.caption}
                       <div class="media-caption"><Markup src={content.caption} resolveEmoji={(k) => emojiMap[k]} compact />
-                        <span class="bubble-meta inline-meta">{m.time}{@render statusTick(m.outgoing, m.id)}</span></div>
+                        <span class="bubble-meta inline-meta">{m.time}{@render statusTick(m.outgoing, m.id, m)}</span></div>
                     {:else}
-                      <span class="photo-meta">{m.time}{@render statusTick(m.outgoing, m.id)}</span>
+                      <span class="photo-meta">{m.time}{@render statusTick(m.outgoing, m.id, m)}</span>
                     {/if}
                   </div>
                 {:else if rk === "live"}
@@ -4203,9 +4211,9 @@
                     {/if}
                     {#if content.caption}
                       <div class="media-caption"><Markup src={content.caption} resolveEmoji={(k) => emojiMap[k]} compact />
-                        <span class="bubble-meta inline-meta">{m.time}{@render statusTick(m.outgoing, m.id)}</span></div>
+                        <span class="bubble-meta inline-meta">{m.time}{@render statusTick(m.outgoing, m.id, m)}</span></div>
                     {:else}
-                      <span class="photo-meta">{m.time}{@render statusTick(m.outgoing, m.id)}</span>
+                      <span class="photo-meta">{m.time}{@render statusTick(m.outgoing, m.id, m)}</span>
                     {/if}
                   </div>
                 {:else if rk === "circle"}
@@ -4221,7 +4229,7 @@
                     {/if}
                     <span class="sticker-meta">
                       {m.time}
-                      {@render statusTick(m.outgoing, m.id)}
+                      {@render statusTick(m.outgoing, m.id, m)}
                     </span>
                   </div>
                 {:else if rk === "voice" || rk === "audio"}
@@ -4247,7 +4255,7 @@
                         <span class="media-sub">{fmtSize(content.size)}</span>
                         <span class="bubble-meta inline-meta">
                           {m.time}
-                          {@render statusTick(m.outgoing, m.id)}
+                          {@render statusTick(m.outgoing, m.id, m)}
                         </span>
                       </div>
                     </div>
@@ -4281,7 +4289,7 @@
                       <span class="media-sub">{fmtSize(content.size)}</span>
                       <span class="bubble-meta inline-meta">
                         {m.time}
-                        {@render statusTick(m.outgoing, m.id)}
+                        {@render statusTick(m.outgoing, m.id, m)}
                       </span>
                     </div>
                   </div>
@@ -4322,7 +4330,7 @@
                     </div>
                     <span class="bubble-meta">
                       {m.time}
-                      {@render statusTick(m.outgoing, m.id)}
+                      {@render statusTick(m.outgoing, m.id, m)}
                     </span>
                   </div>
                 {/if}
@@ -4351,7 +4359,7 @@
                     <button class="art-read" onclick={openIt}>⚡ {$t("Read article")}</button>
                     <span class="bubble-meta inline-meta">
                       {m.time}
-                      {@render statusTick(m.outgoing, m.id)}
+                      {@render statusTick(m.outgoing, m.id, m)}
                     </span>
                   </div>
                 </div>
@@ -4411,7 +4419,7 @@
                       {#if voted && !pv.closed && !poll.quiz}<button onclick={() => retractPoll(poll)}>{$t("Retract vote")}</button>{/if}
                       {#if m.outgoing && !pv.closed}<button onclick={() => stopPoll(poll)}>{$t("Stop poll")}</button>{/if}
                     </span>
-                    <span class="bubble-meta inline-meta">{m.time} {@render statusTick(m.outgoing, m.id)}</span>
+                    <span class="bubble-meta inline-meta">{m.time} {@render statusTick(m.outgoing, m.id, m)}</span>
                   </div>
                 </div>
               {:else if m.kind.type === "reply"}
@@ -4427,7 +4435,7 @@
                   <span class="bubble-meta">
                     {@render msgFlags(m)}
                     {m.time}
-                    {@render statusTick(m.outgoing, m.id)}
+                    {@render statusTick(m.outgoing, m.id, m)}
                   </span>
                 </div>
               {:else if m.kind.type === "text" && m.kind.content.text.startsWith("[track:v1]") && parseTrack(m.kind.content.text)}
@@ -4488,7 +4496,7 @@
                   <span class="bubble-meta">
                     {@render msgFlags(m)}
                     {m.time}
-                    {@render statusTick(m.outgoing, m.id)}
+                    {@render statusTick(m.outgoing, m.id, m)}
                   </span>
                 </div>
               {/if}
@@ -4513,11 +4521,6 @@
                       <svg class="cmt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1.1-4.6A8 8 0 1 1 21 12z"/></svg>
                     {/if}
                     <span class="cmt-label">{nc ? $tn(nc, "comment") : $t("Leave a comment")}</span>
-                    {#if isChannel}
-                      <!-- Telegram: the views are part of the post, not a stray line under it. -->
-                      {@const nv = Math.max($viewCounts[$activeChat?.id ?? ""]?.[vk] ?? 0, $channelStats[$activeChat?.id ?? ""]?.[vk]?.n ?? 0)}
-                      <span class="views-chip in-bar" title={$t("Views")}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>{nv}</span>
-                    {/if}
                     <span class="tc-arrow">›</span>
                   </button>
                 {/if}
@@ -4528,7 +4531,7 @@
                       <span class="tc-arrow">›</span>
                     </button>
                   {/if}
-                  {#if isChannel && !(isGroup && commentsAllowed && activeGroup?.kind === "channel")}
+                  {#if false}
                     {@const n = Math.max($viewCounts[$activeChat?.id ?? ""]?.[vk] ?? 0, $channelStats[$activeChat?.id ?? ""]?.[vk]?.n ?? 0)}
                     <span class="views-chip" title={$t("Views")}>👁 {n}</span>
                   {/if}
@@ -5045,8 +5048,9 @@
   .post-foot.out { align-self: flex-end; }
   .post-foot .thread-chip { margin-top: 0; }
   .views-chip { font-size: 11.5px; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
-  .views-chip.in-bar { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; font-weight: 500; }
-  .views-chip.in-bar svg { width: 14px; height: 14px; }
+  .pm-views, .pm-sign { order: -1; display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+  .pm-views { margin-right: 4px; }
+  .pm-views svg { width: 13px; height: 13px; }
   .event-room { color: var(--accent); font-weight: 600; }
   .event-room.ended { color: var(--fg-dim); }
   .thread-chip { display: inline-flex; align-items: center; gap: 6px; margin-top: 3px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-bubble-in); color: var(--accent); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; transition: border-color 0.12s, background 0.12s; }

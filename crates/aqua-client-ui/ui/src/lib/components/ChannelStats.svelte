@@ -26,13 +26,27 @@
   let cur = $derived(rows.find((r) => r.key === sel) ?? null);
   let peak = $derived(cur?.st ? Math.max(1, ...cur.st.h) : 1);
   const loc = () => ($lang === "ru" ? "ru-RU" : undefined);
+  /** A plain line chart (Telegram's statistics): grid, axis numbers, a line
+   *  with a light area under it — no gradients, no glow. */
+  const W = 320, H = 130, PL = 30, PB = 18, PT = 8, PR = 8;
+  function chart(vals: number[]) {
+    const max = Math.max(1, ...vals);
+    const n = Math.max(1, vals.length - 1);
+    const x = (i: number) => PL + (i / n) * (W - PL - PR);
+    const y = (v: number) => PT + (1 - v / max) * (H - PT - PB);
+    const pts = vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`);
+    const line = pts.length > 1 ? "M" + pts.join("L") : `M${PL},${y(vals[0] ?? 0)}L${W - PR},${y(vals[0] ?? 0)}`;
+    const area = `${line}L${x(vals.length - 1)},${H - PB}L${PL},${H - PB}Z`;
+    const ticks = [0, Math.round(max / 2), max].map((v) => ({ v, y: y(v) }));
+    return { line, area, ticks, x, y, max };
+  }
   const when = (ms: number) => new Date(ms).toLocaleString(loc(), { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 </script>
 
 <aside class="cs" use:sideResize={"channelstats"} data-back aria-label={$t("Channel statistics")}>
   <header class="cs-head">
     {#if cur}<button class="cs-back" onclick={() => (sel = null)} aria-label={$t("Back")}>‹</button>{/if}
-    <b>📊 {cur ? $t("Post") : $t("Statistics")}</b>
+    <b>{cur ? $t("Post") : $t("Statistics")}</b>
     <button data-x class="cs-x" onclick={() => statsFor.set(null)} aria-label={$t("Close")}>✕</button>
   </header>
   <div class="cs-body">
@@ -45,12 +59,23 @@
         <div class="cs-tile"><b>{comms}</b><span>{$t("Comments")}</span></div>
         <div class="cs-tile"><b>{total}</b><span>{$t("Views in total")}</span></div>
       </div>
+      {#if rows.length > 1}
+        {@const vals = [...rows].reverse().map((r) => r.views)}
+        {@const c = chart(vals)}
+        <div class="cs-lbl">{$t("Views per post")}</div>
+        <svg class="cs-svg" viewBox="0 0 {W} {H}" role="img" aria-label={$t("Views per post")}>
+          {#each c.ticks as tk (tk.v)}<line class="g" x1={PL} x2={W - PR} y1={tk.y} y2={tk.y} /><text class="ax" x={PL - 5} y={tk.y + 3} text-anchor="end">{tk.v}</text>{/each}
+          <path class="ar" d={c.area} /><path class="ln" d={c.line} />
+          <text class="ax" x={PL} y={H - 4}>{[...rows].reverse()[0]?.time ?? ""}</text>
+          <text class="ax" x={W - PR} y={H - 4} text-anchor="end">{rows[0]?.time ?? ""}</text>
+        </svg>
+      {/if}
       <div class="cs-lbl">{$t("Posts")}</div>
       {#if !rows.length}<div class="cs-empty">{$t("No posts yet.")}</div>{/if}
       {#each rows as r (r.key)}
         <button class="cs-post" onclick={() => (sel = r.key)}>
           <span class="cs-pt">{r.text || "…"}</span>
-          <span class="cs-pm">👁 {r.views} · ❤ {r.reactions} · 💬 {r.comments} · {r.time}</span>
+          <span class="cs-pm">{$tn(r.views, "view")} · {$tn(r.reactions, "reaction")} · {$tn(r.comments, "comment")} · {r.time}</span>
           <span class="cs-bar"><i style:width="{subscribers > 1 ? Math.min(100, (r.views / (subscribers - 1)) * 100) : 0}%"></i></span>
         </button>
       {/each}
@@ -64,9 +89,15 @@
       </div>
       {#if cur.st?.h?.length}
         <div class="cs-lbl">{$t("Views in the first 48 hours")}</div>
-        <div class="cs-chart" role="img" aria-label={$t("Views per hour")}>
-          {#each cur.st.h as n, i (i)}<i style:height="{(n / peak) * 100}%" title={tr("Hour {h}: {n}", { h: i + 1, n })}></i>{/each}
-        </div>
+        {@const cum = cur.st.h.reduce((a: number[], n: number) => (a.push((a[a.length - 1] ?? 0) + n), a), [])}
+        {@const c = chart(cum)}
+        <svg class="cs-svg" viewBox="0 0 {W} {H}" role="img" aria-label={$t("Views per hour")}>
+          {#each c.ticks as tk (tk.v)}<line class="g" x1={PL} x2={W - PR} y1={tk.y} y2={tk.y} /><text class="ax" x={PL - 5} y={tk.y + 3} text-anchor="end">{tk.v}</text>{/each}
+          {#each cur.st.h as n, i (i)}<rect class="br" x={c.x(i) - 1.5} width="3" y={H - PB - (n / peak) * (H - PT - PB) * 0.35} height={(n / peak) * (H - PT - PB) * 0.35}><title>{tr("Hour {h}: {n}", { h: i + 1, n })}</title></rect>{/each}
+          <path class="ar" d={c.area} /><path class="ln" d={c.line} />
+          <text class="ax" x={PL} y={H - 4}>1 {$t("h")}</text>
+          <text class="ax" x={W - PR} y={H - 4} text-anchor="end">{cur.st.h.length} {$t("h")}</text>
+        </svg>
       {/if}
       <div class="cs-lbl">{$t("Who viewed")}</div>
       {#if cur.st?.v}
@@ -95,7 +126,7 @@
   .cs-tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
   .cs-tiles.three { grid-template-columns: repeat(3, 1fr); }
   .cs-tile { padding: 10px 12px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-input); display: flex; flex-direction: column; gap: 2px; }
-  .cs-tile b { font-size: 20px; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .cs-tile b { font-size: 20px; color: var(--fg); font-variant-numeric: tabular-nums; }
   .cs-tile span { font-size: 11.5px; color: var(--fg-muted); }
   .cs-lbl { margin-top: 6px; font-size: 11.5px; font-weight: 800; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.04em; }
   .cs-empty { font-size: 12.5px; color: var(--fg-dim); }
@@ -104,11 +135,15 @@
   .cs-pt { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cs-pm { font-size: 11.5px; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
   .cs-bar { height: 3px; border-radius: 2px; background: var(--bg-hover); overflow: hidden; }
-  .cs-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+  .cs-bar i { display: block; height: 100%; background: var(--accent); }
   .cs-note { margin-top: 8px; font-size: 11.5px; color: var(--fg-dim); line-height: 1.5; }
   .cs-root { padding: 10px 12px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-input); border-left: 3px solid var(--accent); font-size: 13.5px; line-height: 1.45; max-height: 120px; overflow: hidden; }
-  .cs-chart { height: 90px; display: flex; align-items: flex-end; gap: 2px; padding: 6px; border-radius: calc(10px * var(--rk, 1)); background: var(--bg-input); }
-  .cs-chart i { flex: 1; min-height: 2px; border-radius: 2px 2px 0 0; background: linear-gradient(180deg, var(--accent), var(--accent-2)); }
+  .cs-svg { width: 100%; height: auto; display: block; padding: 6px 0; border-radius: calc(10px * var(--rk, 1)); background: var(--bg-input); }
+  .cs-svg .g { stroke: var(--border); stroke-width: 1; }
+  .cs-svg .ax { fill: var(--fg-dim); font-size: 9px; font-variant-numeric: tabular-nums; }
+  .cs-svg .ln { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .cs-svg .ar { fill: var(--accent); opacity: 0.12; stroke: none; }
+  .cs-svg .br { fill: var(--accent); opacity: 0.35; }
   .cs-viewer { display: flex; align-items: center; gap: 9px; padding: 4px 2px; }
   .cs-av { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 800; color: #06070C; background: linear-gradient(135deg, var(--accent), var(--accent-2)); background-size: cover; background-position: center; }
   .cs-vn { flex: 1; font-size: 13px; }
