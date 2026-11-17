@@ -67,3 +67,33 @@ export function movePin(id: string, to: number) {
 export function onIncomingForArchive(id: string) {
   if (get(archived).has(id) && !get(mutedChats).has(id)) setArchived(id, false);
 }
+
+/** A new chat follows the others of its kind (the owner's "template"): when
+ *  every other channel (or group) is archived, a new one goes to the archive
+ *  too; when every other is muted, it comes muted. Chats seen once are
+ *  remembered, so this happens only on arrival. */
+const SEEN_KEY = "aqua.seenChats.v1";
+let seenChats: Set<string> | null = null;
+export function applyNewChatTemplate(chats: { id: string }[], kindOf: (id: string) => string | null) {
+  if (!seenChats) {
+    try { seenChats = new Set(JSON.parse(localStorage.getItem(SEEN_KEY) ?? "null") ?? []); } catch { seenChats = new Set(); }
+    // First run: everything already here counts as seen.
+    if (!seenChats.size) { for (const c of chats) seenChats.add(c.id); save(); return; }
+  }
+  const fresh = chats.filter((c) => !seenChats!.has(c.id));
+  if (!fresh.length) return;
+  const arch = get(archived), muted = get(mutedChats);
+  for (const c of fresh) {
+    const kind = kindOf(c.id);
+    // A group whose card hasn't come yet: decided when it has.
+    if (c.id.startsWith("grp_") && !kind) continue;
+    seenChats.add(c.id);
+    if (kind !== "channel" && kind !== "group" && kind !== "supergroup") continue;
+    const same = chats.filter((x) => x.id !== c.id && seenChats!.has(x.id) && kindOf(x.id) === kind);
+    if (same.length < 2) continue;
+    if (same.every((x) => arch.has(x.id))) setArchived(c.id, true);
+    if (same.every((x) => muted.has(x.id))) setMuted(c.id, true);
+  }
+  save();
+  function save() { try { localStorage.setItem(SEEN_KEY, JSON.stringify([...seenChats!])); } catch { /* ignore */ } }
+}

@@ -199,6 +199,12 @@ export async function bootstrap() {
   // Load groups/channels and keep them live.
   import("./groups").then((m) => m.initGroups());
 
+  // New channels / groups follow the others of their kind (archive, mute).
+  void Promise.all([import("./chatPrefs"), import("./groups")]).then(([cp, gr]) => {
+    const kindOf = (id: string) => get(gr.groupMap)[id]?.kind ?? null;
+    chats.subscribe((l) => cp.applyNewChatTemplate(l, kindOf));
+    gr.groupMap.subscribe(() => cp.applyNewChatTemplate(get(chats), kindOf));
+  });
   // Wire live event listeners.
   events.onIncoming(async (p) => {
     // Refresh chat list + messages for the affected peer — once for a burst
