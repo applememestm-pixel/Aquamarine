@@ -4839,6 +4839,7 @@ pub fn set_tz_offset(app: AppHandle, state: State<'_, StdMutex<AppState>>, minut
     crate::state::set_tz_offset(minutes);
     let n = {
         let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _ = std::fs::write(s.data_dir.join(crate::state::TZ_FILE), crate::state::tz_offset().to_string());
         crate::state::localize_old_times(&mut s)
     };
     if n > 0 {

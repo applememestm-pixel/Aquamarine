@@ -1124,11 +1124,13 @@ async fn email_verify(
     }
 }
 
-/// Accounts one address may make: `AQUA_SIGNUPS_PER_IP` (default 1;
-/// 0 — no limit). Joining with an account from another relay of the
-/// network isn't a new account and isn't counted.
+/// Accounts one address may make a day: `AQUA_SIGNUPS_PER_IP` (default 3;
+/// 0 — no limit). It was 1 for good: a family on one home Wi-Fi, or
+/// everyone behind a mobile operator's shared address, got only one
+/// account. Joining with an account from another relay of the network
+/// isn't a new account and isn't counted.
 fn signups_per_ip() -> u32 {
-    std::env::var("AQUA_SIGNUPS_PER_IP").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(1)
+    std::env::var("AQUA_SIGNUPS_PER_IP").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(3)
 }
 
 /// The caller's address: the connection's, or — behind a proxy on this
@@ -1170,7 +1172,7 @@ fn signup_ip_check(state: &AppState, conn: Option<&axum::extract::ConnectInfo<st
     }
     let key = ip_key(ip);
     if state.directory.signups_from(&key) >= limit {
-        return Err((StatusCode::TOO_MANY_REQUESTS, "an account was already registered from this network — sign in to it instead".into()));
+        return Err((StatusCode::TOO_MANY_REQUESTS, "too many accounts were registered from this network today — sign in to one of them, or try tomorrow".into()));
     }
     Ok(Some(key))
 }

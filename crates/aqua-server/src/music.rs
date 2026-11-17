@@ -197,12 +197,45 @@ pub async fn call(c: &Config, method: &str, params: &[(String, String)]) -> Resu
         .map_err(net_err)?;
     let status = r.status();
     let v: Value = r.json().await.map_err(|e| format!("Navidrome answered {status}: {}", e.without_url()))?;
-    let resp = v.get("subsonic-response").cloned().unwrap_or(Value::Null);
+    let mut resp = v.get("subsonic-response").cloned().unwrap_or(Value::Null);
+    fix_mojibake(&mut resp);
     if resp.get("status").and_then(|s| s.as_str()) != Some("ok") {
         let msg = resp.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("unexpected answer");
         return Err(format!("Navidrome: {msg}"));
     }
     Ok(resp)
+}
+
+/// Old Russian MP3s carry Windows-1251 tags that Navidrome reads as Latin-1:
+/// «Сектор Газа» comes as «ÑÅÊÒÎÐ ÃÀÇÀ». Every string of the answer that
+/// looks like that is read back as 1251.
+pub fn fix_mojibake(v: &mut Value) {
+    match v {
+        Value::String(s) => if let Some(f) = from_1251(s) { *s = f },
+        Value::Array(a) => a.iter_mut().for_each(fix_mojibake),
+        Value::Object(o) => o.values_mut().for_each(fix_mojibake),
+        _ => {}
+    }
+}
+
+fn from_1251(s: &str) -> Option<String> {
+    let mut high = 0;
+    let mut letters = 0;
+    for ch in s.chars() {
+        let c = ch as u32;
+        if c > 0xFF { return None; }
+        if c >= 0x80 && !(c == 0xA8 || c == 0xB8 || c >= 0xC0) { return None; }
+        if c >= 0xC0 || c == 0xA8 || c == 0xB8 { high += 1; }
+        if ch.is_alphabetic() { letters += 1; }
+    }
+    // «Motörhead», «Beyoncé»: a letter or two — real Latin-1, left alone.
+    if high < 3 || high * 2 < letters { return None; }
+    Some(s.chars().map(|ch| match ch as u32 {
+        0xA8 => 'Ё',
+        0xB8 => 'ё',
+        c @ 0xC0..=0xFF => char::from_u32(0x410 + c - 0xC0).unwrap_or(ch),
+        _ => ch,
+    }).collect())
 }
 
 /// Never the URL: it carries the credentials.
@@ -596,6 +629,16 @@ pub fn md5(input: &[u8]) -> [u8; 16] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cp1251_tags_are_read_back() {
+        assert_eq!(from_1251("ÑÅÊÒÎÐ ÃÀÇÀ").as_deref(), Some("СЕКТОР ГАЗА"));
+        assert_eq!(from_1251("Ñåêòîð Ãàçà - Ëèðèê").as_deref(), Some("Сектор Газа - Лирик"));
+        assert_eq!(from_1251("Motörhead"), None);
+        assert_eq!(from_1251("Beyoncé"), None);
+        assert_eq!(from_1251("Rob Zombie"), None);
+        assert_eq!(from_1251("Кино"), None);
+    }
 
     #[test]
     fn addresses_are_fixed_up() {

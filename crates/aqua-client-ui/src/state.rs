@@ -862,6 +862,12 @@ impl AppState {
         crate::media::ensure_dirs(&data_dir);
         // Apply the saved outbound proxy (if any) before any network use.
         aqua_client_core::transport::set_proxy(load_proxy(&data_dir));
+        // The last known time zone, before any message arrives: the UI sets
+        // it a moment after start, and a bot's instant reply (or the queue
+        // that came in while offline) got UTC times in between.
+        if let Some(m) = std::fs::read_to_string(data_dir.join(TZ_FILE)).ok().and_then(|t| t.trim().parse().ok()) {
+            set_tz_offset(m);
+        }
         let vault_path = data_dir.join("vault.sqlite");
         let master_key = load_or_create_master_key(&data_dir)
             .context("loading master key")?;
@@ -1491,6 +1497,9 @@ tokio::task_local! {
 /// This device's offset from UTC in minutes (the UI tells it at start:
 /// Rust on Android has no time-zone database to ask).
 static TZ_MIN: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+/// The UI's time zone, remembered for the next start (`AppState::boot`).
+pub const TZ_FILE: &str = "tz-offset.txt";
 
 pub fn set_tz_offset(minutes: i32) {
     TZ_MIN.store(minutes.clamp(-14 * 60, 14 * 60), std::sync::atomic::Ordering::Relaxed);
