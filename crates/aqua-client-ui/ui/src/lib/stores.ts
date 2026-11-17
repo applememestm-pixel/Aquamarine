@@ -219,6 +219,10 @@ export async function bootstrap() {
   events.onChatsUpdated(() => {
     refreshChatsSoon();
     refreshInfoSoon();
+    // The open chat too: a call's line (note_call), a channel post or
+    // anything else written without "incoming" showed only after leaving
+    // the chat and opening it again.
+    if (get(activeId)) refreshActiveSoon();
   });
   // Auto-delete timers removed messages.
   listen<{ peer_id: string }>("aqua://expired", async (e) => {

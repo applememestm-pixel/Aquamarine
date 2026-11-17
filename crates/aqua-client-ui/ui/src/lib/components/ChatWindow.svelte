@@ -6270,16 +6270,18 @@
   }
 
   /* Reply composer bar */
+  /* Same width as the composer below and its input's surface: it was a
+     darker, narrower block that looked foreign. */
   .reply-bar {
     display: flex; align-items: center; gap: 10px;
-    padding: 8px 16px; margin: 0 20px 8px;
-    background: var(--bg-list); border: 1px solid var(--border);
-    border-radius: calc(10px * var(--rk, 1));
+    padding: 8px 12px; margin: 0 16px 8px;
+    background: var(--bg-input); border: 1px solid var(--border);
+    border-radius: calc(12px * var(--rk, 1));
   }
   .rb-line { width: 3px; align-self: stretch; background: var(--accent); border-radius: 3px; flex-shrink: 0; }
   .rb-body { flex: 1; min-width: 0; }
-  .rb-author { font-size: 11.5px; font-weight: 700; color: var(--rq, var(--accent)); }
-  .rb-text { font-size: 12.5px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rb-author { font-size: 12.5px; font-weight: 700; color: var(--rq, var(--accent)); }
+  .rb-text { font-size: 13.5px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rb-x { width: 28px; height: 28px; background: transparent; border: 1px solid var(--border); border-radius: calc(8px * var(--rk, 1)); color: var(--fg-dim); font-size: 16px; cursor: pointer; flex-shrink: 0; }
   .rb-x:hover { color: var(--fg); background: var(--bg-hover); }
 
