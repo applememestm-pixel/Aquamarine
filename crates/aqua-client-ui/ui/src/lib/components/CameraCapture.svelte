@@ -317,6 +317,11 @@
 
 <style>
   .cam { position: fixed; inset: 0; z-index: 10095; background: #000; color: #fff; display: flex; flex-direction: column; justify-content: space-between; touch-action: none; user-select: none; }
+  /* Telegram: the camera slides up smoothly from the sheet instead of
+     popping in black while the sensor starts. */
+  .cam { animation: cam-in .34s cubic-bezier(.22,1,.36,1); }
+  @keyframes cam-in { from { transform: translateY(40%) scale(.96); opacity: 0; border-radius: calc(24px * var(--rk, 1)); } }
+  @media (prefers-reduced-motion: reduce) { .cam { animation: none; } }
   video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
   :global(html:not(.phone)) video { object-fit: contain; }
   video.mirror { transform: scaleX(-1); }
