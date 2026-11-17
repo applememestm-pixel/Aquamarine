@@ -37,6 +37,14 @@ export function closeReader() {
 /** Telegraph links open in the reader; web links in the built-in browser
  *  (computers, when on), everything else in the system browser. */
 export async function openLink(href: string): Promise<void> {
+  // A group invitation: the chat list's search shows the join card for it.
+  if (/^aqua:\/\/join\//i.test(href)) {
+    const { search, backToList, activeTab } = await import("./stores");
+    backToList();
+    activeTab.set("chats");
+    search.set(href);
+    return;
+  }
   const tp = telegraphPathOf(href);
   if (tp) { openTelegraph(tp, href); return; }
   if (IS_DESKTOP && get(inAppBrowser) && /^https?:\/\//i.test(href)) {

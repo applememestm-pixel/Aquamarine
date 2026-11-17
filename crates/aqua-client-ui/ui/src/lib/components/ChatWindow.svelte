@@ -3702,7 +3702,8 @@
             <span class="sep">·</span>
           {:else if chatOnline($activeChat, $peerPresence, $presenceNow)}
             {@const st = peerStatus($peerPresence[$activeChat.id], $presenceNow)}
-            <span><span class="dot {st}"></span>{$t(st === "idle" ? "away" : st === "dnd" ? "do not disturb" : "online")}</span>
+            <!-- The avatar already has the status dot: words only here. -->
+            <span>{$t(st === "idle" ? "away" : st === "dnd" ? "do not disturb" : "online")}</span>
             <span class="sep">·</span>
           {/if}
           {#if nearbyVia($meshStatus, $activeChat.id)}
@@ -5133,14 +5134,6 @@
     align-items: center;
     gap: 6px;
   }
-  .peer-status .dot {
-    width: 6px; height: 6px; border-radius: 50%; margin-right: 5px; vertical-align: 1px;
-    background: var(--online);
-    box-shadow: 0 0 6px var(--online);
-    display: inline-block;
-  }
-  .peer-status .dot.idle { background: #FAA61A; box-shadow: 0 0 6px #FAA61A; }
-  .peer-status .dot.dnd { background: #ED4245; box-shadow: 0 0 6px #ED4245; }
   .peer-status .sep { color: var(--fg-dim); }
   .peer-status .e2ee {
     display: inline-flex;

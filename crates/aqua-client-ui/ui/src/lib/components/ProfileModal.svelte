@@ -1331,6 +1331,9 @@
     color: var(--fg);
   }
   .sheet.light :global(input), .sheet.light :global(textarea) { color: var(--fg); }
+  /* A light card makes the text dark — the "⋮" menu's own surface stayed
+     the theme's dark one, and its items were dark on dark. */
+  .sheet.light .p-more-menu { background: var(--bg-shell); }
   .sheet.light :global(input::placeholder), .sheet.light :global(textarea::placeholder) { color: var(--fg-dim); }
   .sheet :global(.section), .sheet .card, .sheet .act-card {
     background: color-mix(in srgb, var(--card) 22%, rgba(0, 0, 0, 0.30)) !important;
