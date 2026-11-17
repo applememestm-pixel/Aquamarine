@@ -547,6 +547,8 @@ x-aqua-fed: <unix_ms>.<hex HMAC-SHA256(secret, METHOD "\n" PATH "\n" unix_ms "\n
 | `GET /v1/fed/backups?since=` | Метаданные резервных копий |
 | `GET /v1/fed/backup/:user` | Резервная копия |
 | `GET /v1/fed/media/:user/:kind` | Медиа профиля |
+| `GET /v1/fed/music/rest/:method` | Navidrome этого сервера для сервера сети без своего (только чтение) |
+| `GET /v1/fed/music/file/:what/:id` | Обложка (`cover`) или трек (`stream`, `download`) целиком |
 | `POST /v1/fed/deliver` | Доставить конверт получателю, подключённому к этому узлу |
 | `GET /v1/fed/inbox/:user` | Забрать конверты, ждущие получателя на этом узле |
 | `POST /v1/fed/inboxes2` | `{"users": [...]}` → `[{"id", "m"}]` — конверты, ждущие этих получателей; узел их **не удаляет** до `inbox_ack` (1.21.0; старые `inbox`/`inboxes` удаляли сразу при ответе) |
