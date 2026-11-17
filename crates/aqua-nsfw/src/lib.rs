@@ -48,6 +48,11 @@ impl Scores {
     pub fn explicit(&self) -> bool {
         self.porn + self.hentai >= 0.6 || self.porn + self.hentai + self.sexy >= 0.85
     }
+    /// 16+: half-naked (underwear, swimwear, revealing art) but not
+    /// explicit — the "sexy" class leads, or it's close to explicit.
+    pub fn suggestive(&self) -> bool {
+        !self.explicit() && (self.sexy >= 0.5 || self.porn + self.hentai + self.sexy >= 0.6)
+    }
 }
 
 // ---------------------------------------------------------------- model

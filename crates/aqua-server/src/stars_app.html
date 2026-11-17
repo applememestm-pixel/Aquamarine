@@ -1,0 +1,214 @@
+<!doctype html>
+<!-- The @stars bot's mini app (stars.rs `app`): my CeZeOs star, my Boosty
+     subscription with the days left to the next payment, and linking a
+     Boosty account without an e-mail. Opened by the app in its mini-app
+     frame; who I am comes from the initData this relay signed. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Stars</title>
+<style>
+  :root { --bg: #0b0e15; --card: #141a26; --fg: #e8ecf4; --dim: #8b95a8; --acc: #6aa6ff; --btn-fg: #06070c; --bad: #ff5c5c; --line: rgba(127,127,127,.18); }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 460px; margin: 0 auto; padding: 18px 16px 28px; display: flex; flex-direction: column; gap: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 16px; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--acc); margin: 0 0 10px; font-weight: 600; }
+  .dim { color: var(--dim); font-size: 13px; }
+  .hero { display: flex; align-items: center; gap: 14px; }
+  .hero svg { width: 64px; height: 64px; flex-shrink: 0; filter: drop-shadow(0 0 8px var(--g, transparent)); }
+  .ring { display: flex; align-items: center; gap: 18px; }
+  .ring svg { width: 116px; height: 116px; flex-shrink: 0; }
+  .ring .n { font-size: 30px; font-weight: 700; }
+  .rows { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 14px; }
+  .rows b { font-weight: 500; text-align: right; }
+  input { width: 100%; padding: 11px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); font: inherit; }
+  button { width: 100%; margin-top: 10px; padding: 12px; border: 0; border-radius: 12px; background: var(--acc); color: var(--btn-fg); font: inherit; font-weight: 600; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--acc); border: 1px solid var(--line); }
+  button:disabled { opacity: .55; cursor: default; }
+  .msg { margin-top: 8px; font-size: 13px; }
+  .msg.bad { color: var(--bad); }
+  a { color: var(--acc); }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <div class="card hero" id="hero">
+    <svg viewBox="0 0 1024 1024" id="sun" aria-hidden="true"></svg>
+    <div><h1 id="title">…</h1><div class="dim" id="sub"></div></div>
+  </div>
+
+  <div class="card hidden" id="pay">
+    <h2 id="payH"></h2>
+    <div class="ring">
+      <svg viewBox="0 0 120 120" aria-hidden="true">
+        <circle cx="60" cy="60" r="50" fill="none" stroke="var(--line)" stroke-width="10"/>
+        <circle id="arc" cx="60" cy="60" r="50" fill="none" stroke="var(--acc)" stroke-width="10" stroke-linecap="round"
+          transform="rotate(-90 60 60)" stroke-dasharray="314.16" stroke-dashoffset="0"/>
+        <text x="60" y="58" text-anchor="middle" fill="var(--fg)" font-size="30" font-weight="700" id="days">–</text>
+        <text x="60" y="80" text-anchor="middle" fill="var(--dim)" font-size="12" id="daysW"></text>
+      </svg>
+      <div><div class="dim" id="nextL"></div><div style="font-size:18px;font-weight:600" id="nextD">–</div></div>
+    </div>
+    <div class="rows" id="rows" style="margin-top:12px"></div>
+    <div class="dim" id="payNote" style="margin-top:10px"></div>
+  </div>
+
+  <div class="card hidden" id="linkC">
+    <h2 id="linkH"></h2>
+    <div id="linkState" class="dim"></div>
+    <div id="linkForm">
+      <div class="dim" id="linkHint" style="margin:6px 0 10px"></div>
+      <input id="q" autocomplete="off" spellcheck="false">
+      <button id="go"></button>
+    </div>
+    <button class="ghost hidden" id="un"></button>
+    <div class="msg" id="msg"></div>
+  </div>
+
+  <div class="dim" id="foot" style="text-align:center"></div>
+</main>
+<script>
+(() => {
+  const ru = /^ru/i.test(navigator.language || "ru");
+  const L = ru ? {
+    title: "Звезда CeZeOs", none: "Звезды пока нет", lvl: n => `Уровень ${n}`, own: "Уровень 6 — от владельца",
+    byBoosty: "за подписку Boosty", byHand: "выдана вручную", until: d => `до ${d}`,
+    payH: "Подписка Boosty", left: n => plural(n, "день", "дня", "дней"), next: "Следующая оплата", level: "Уровень", price: "Цена", since: "С", via: "Как узнали",
+    viaEmail: "по e-mail", viaLink: "по привязке", approx: "Дата примерная: Boosty не сообщил её, считаем месяц от начала подписки.", today: "сегодня",
+    linkH: "Привязать Boosty без e-mail", hint: "Напишите своё имя на Boosty (как в подписке) или ID. Владелец подтвердит — и звезда придёт сама.",
+    ph: "Имя или ID на Boosty", go: "Привязать", un: "Отвязать", waiting: n => `Ждёт подтверждения владельца: «${n}».`, linked: n => `Привязан Boosty «${n}».`,
+    sent: "Запрос отправлен владельцу.", e: { "not-found": "Среди подписчиков такого нет. Проверьте имя или впишите ID.", many: "Таких имён несколько — впишите ID.", taken: "Этот Boosty уже привязан к другому аккаунту.", "boosty-off": "Boosty на сервере не подключён.", "not-synced": "Сервер ещё не получил список подписчиков — попробуйте через пару минут.", empty: "Впишите имя или ID.", any: "Не получилось. Закройте и откройте снова." },
+    off: "Boosty на этом сервере не подключён: уровни 1–5 пока выдаёт только владелец.", noSub: "Активной подписки не нашли.", blog: "Поддержать на Boosty",
+  } : {
+    title: "CeZeOs star", none: "No star yet", lvl: n => `Level ${n}`, own: "Level 6 — from the owner",
+    byBoosty: "for a Boosty subscription", byHand: "given by hand", until: d => `until ${d}`,
+    payH: "Boosty subscription", left: n => (n === 1 ? "day" : "days"), next: "Next payment", level: "Level", price: "Price", since: "Since", via: "Found",
+    viaEmail: "by e-mail", viaLink: "by link", approx: "Approximate: Boosty didn't say, so it's a month from the start of the subscription.", today: "today",
+    linkH: "Link Boosty without an e-mail", hint: "Type your Boosty name (as in the subscription) or ID. The owner confirms it, and the star comes on its own.",
+    ph: "Boosty name or ID", go: "Link", un: "Unlink", waiting: n => `Waiting for the owner: “${n}”.`, linked: n => `Boosty “${n}” is linked.`,
+    sent: "Sent to the owner.", e: { "not-found": "No such subscriber. Check the name or type the ID.", many: "Several have that name — type the ID.", taken: "That Boosty account is linked to someone else.", "boosty-off": "Boosty isn't connected on this server.", "not-synced": "The server hasn't got the subscriber list yet — try in a couple of minutes.", empty: "Type a name or ID.", any: "That didn't work. Close and open it again." },
+    off: "Boosty isn't connected on this server: levels 1–5 come from the owner for now.", noSub: "No active subscription found.", blog: "Support on Boosty",
+  };
+  function plural(n, one, few, many) { const a = n % 10, b = n % 100; return a === 1 && b !== 11 ? one : a >= 2 && a <= 4 && (b < 12 || b > 14) ? few : many; }
+  const COLORS = ["#C77B3A", "#B4C0CC", "#F5B417", "#2F86FF", "#A24DFF", "#189820"];
+  const $ = id => document.getElementById(id);
+  const hash = new URLSearchParams(location.hash.slice(1));
+  const init = hash.get("tgWebAppData") || "";
+  const post = (eventType, eventData = {}) => { try { parent.postMessage(JSON.stringify({ eventType, eventData }), "*"); } catch {} };
+
+  // The app's theme.
+  try {
+    const th = JSON.parse(hash.get("tgWebAppThemeParams") || "{}");
+    const r = document.documentElement.style;
+    if (th.bg_color) r.setProperty("--bg", th.bg_color);
+    if (th.section_bg_color || th.secondary_bg_color) r.setProperty("--card", th.section_bg_color || th.secondary_bg_color);
+    if (th.text_color) r.setProperty("--fg", th.text_color);
+    if (th.hint_color) r.setProperty("--dim", th.hint_color);
+    if (th.button_color) r.setProperty("--acc", th.button_color);
+    if (th.button_text_color) r.setProperty("--btn-fg", th.button_text_color);
+  } catch {}
+
+  const date = s => new Date(s * 1000).toLocaleDateString(ru ? "ru-RU" : undefined, { day: "numeric", month: "long", year: "numeric" });
+  async function call(path, body = {}) {
+    const r = await fetch(`/v1/stars-app${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ init, ...body }) });
+    const t = await r.text();
+    if (!r.ok) throw new Error(t || "any");
+    return JSON.parse(t);
+  }
+
+  function sun(color) {
+    $("sun").innerHTML = color
+      ? `<circle cx="512" cy="512" r="310" fill="${color}"/><g stroke="${color}" stroke-width="56" stroke-linecap="round">${[0,45,90,135,180,225,270,315].map(a => `<line x1="512" y1="120" x2="512" y2="40" transform="rotate(${a} 512 512)"/>`).join("")}</g>`
+      : `<circle cx="512" cy="512" r="300" fill="none" stroke="var(--dim)" stroke-width="40" stroke-dasharray="60 50"/>`;
+    $("hero").style.setProperty("--g", color ? color + "88" : "transparent");
+  }
+
+  function render(d) {
+    $("title").textContent = L.title;
+    if (d.star) {
+      const lv = Math.max(1, Math.min(d.star.level, 6));
+      sun(COLORS[lv - 1]);
+      $("title").textContent = lv === 6 ? L.own : `${L.title} · ${L.lvl(lv)}`;
+      $("sub").textContent = [d.star.source === "boosty" ? L.byBoosty : L.byHand, d.star.until ? L.until(date(d.star.until)) : ""].filter(Boolean).join(" · ");
+    } else {
+      sun(null);
+      $("sub").textContent = L.none;
+    }
+
+    $("pay").classList.toggle("hidden", !d.boosty);
+    if (d.boosty) {
+      $("payH").textContent = L.payH;
+      const s = d.sub;
+      if (s && s.next) {
+        const left = Math.max(0, Math.ceil((s.next - d.now) / 86400));
+        $("days").textContent = String(left);
+        $("daysW").textContent = left === 0 ? L.today : L.left(left);
+        const frac = Math.max(0, Math.min(1, (s.next - d.now) / (30 * 86400)));
+        $("arc").setAttribute("stroke-dashoffset", String(314.16 * (1 - frac)));
+        $("arc").setAttribute("stroke", COLORS[Math.max(1, Math.min(s.tier, 5)) - 1]);
+      } else {
+        $("days").textContent = "–"; $("daysW").textContent = "";
+        $("arc").setAttribute("stroke-dashoffset", "314.16");
+      }
+      $("nextL").textContent = L.next;
+      $("nextD").textContent = s && s.next ? date(s.next) : "–";
+      $("rows").innerHTML = "";
+      const row = (k, v) => { const a = document.createElement("span"); a.className = "dim"; a.textContent = k; const b = document.createElement("b"); b.textContent = v; $("rows").append(a, b); };
+      if (s) {
+        row(L.level, `${s.tier}${s.level ? " · " + s.level : ""}`);
+        if (s.price) row(L.price, `${s.price} ₽`);
+        if (s.since) row(L.since, date(s.since));
+        row(L.via, s.via === "link" ? L.viaLink : L.viaEmail);
+        $("payNote").textContent = s.next && !s.exact ? L.approx : "";
+      } else {
+        $("payNote").textContent = L.noSub;
+      }
+      if (d.blog) {
+        const a = document.createElement("a"); a.href = d.blog; a.textContent = L.blog;
+        a.onclick = e => { e.preventDefault(); post("web_app_open_link", { url: d.blog }); };
+        $("payNote").append(document.createElement("br"), a);
+      }
+    } else {
+      $("foot").textContent = L.off;
+    }
+
+    // Linking: only when Boosty is on and the e-mail didn't find it already.
+    const showLink = d.boosty && !(d.sub && d.sub.via === "email");
+    $("linkC").classList.toggle("hidden", !showLink);
+    $("linkH").textContent = L.linkH;
+    $("linkHint").textContent = L.hint;
+    $("q").placeholder = L.ph;
+    $("go").textContent = L.go;
+    $("un").textContent = L.un;
+    const l = d.link;
+    $("linkState").textContent = l ? (l.ok ? L.linked(l.name) : L.waiting(l.name)) : "";
+    $("linkForm").classList.toggle("hidden", !!(l && l.ok));
+    $("un").classList.toggle("hidden", !l);
+  }
+
+  async function load() {
+    try { render(await call("/me")); } catch (e) { $("title").textContent = L.title; $("sub").textContent = L.e.any; sun(null); }
+    post("web_app_ready");
+  }
+
+  $("go").onclick = async () => {
+    const q = $("q").value.trim();
+    $("msg").className = "msg";
+    if (!q) { $("msg").textContent = L.e.empty; $("msg").className = "msg bad"; return; }
+    $("go").disabled = true;
+    try { await call("/link", { q }); $("msg").textContent = L.sent; $("q").value = ""; await load(); }
+    catch (e) { $("msg").textContent = L.e[e.message] || L.e.any; $("msg").className = "msg bad"; }
+    finally { $("go").disabled = false; }
+  };
+  $("q").addEventListener("keydown", e => { if (e.key === "Enter") $("go").click(); });
+  $("un").onclick = async () => { $("un").disabled = true; try { await call("/unlink"); $("msg").textContent = ""; await load(); } finally { $("un").disabled = false; } };
+
+  load();
+})();
+</script>
+</body>
+</html>

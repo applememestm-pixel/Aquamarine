@@ -113,7 +113,7 @@
   import { contacts, saveContact, displayName } from "../contacts";
   import { chatLines } from "../listLook";
   import { botMenus } from "../botMenus";
-  import { settings as themeSettings } from "../theme";
+  import { settings as themeSettings, toggleDayNight, shownMode } from "../theme";
   import { storyOwners, hiddenOwners, myLiveStories, storyRing, addStory, setStoriesOff, storyUsers } from "../storyFeed";
   import { openStories, storiesOff, toggleHidden, hiddenStories, storyArchiveOpen } from "../stories";
   import { myOnline } from "../presence";
@@ -1084,7 +1084,7 @@
           {#if IS_MOBILE}
             <!-- Telegram's ⋮: Saved Messages, day / night, the server. -->
             <button onclick={() => { plusMenuOpen = false; void selectChat("__saved__"); }}>{$t("Saved Messages")}</button>
-            <button onclick={() => { plusMenuOpen = false; themeSettings.update((x) => ({ ...x, mode: x.mode === "light" ? "dark" : "light" })); }}>{$t($themeSettings.mode === "light" ? "Night mode" : "Day mode")}</button>
+            <button onclick={() => { plusMenuOpen = false; toggleDayNight(); }}>{$t(shownMode($themeSettings) === "light" ? "Night mode" : "Day mode")}</button>
             <button onclick={() => { plusMenuOpen = false; openServers(); }}>{$t("Server")}</button>
           {/if}
           {#if !IS_MOBILE}<button onclick={() => { plusMenuOpen = false; openNewGroup("channel"); }}>{$t("New channel")}</button>{/if}

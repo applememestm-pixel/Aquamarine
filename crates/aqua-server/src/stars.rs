@@ -12,7 +12,8 @@
 //! (which prints the public key to build into the apps). That relay runs the
 //! @stars bot, for the owner only (the e-mail check of verify.rs):
 //!   /<name> level <0-6>   /star @name [1-6]   /unstar @name   /stars
-//! and, with `AQUA_BOOSTY_TOKEN` + `AQUA_BOOSTY_BLOG`, follows the Boosty
+//! and, with `AQUA_BOOSTY_AUTH` (the boosty.to `auth` cookie, renewed here
+//! on its own) + `AQUA_BOOSTY_BLOG`, follows the Boosty
 //! subscribers: an account whose e-mail here is a subscriber's gets the star
 //! of that subscription level (levels by price: the cheapest is 1, at most
 //! 5). Stars set by hand are never touched by that.
@@ -22,8 +23,9 @@
 //! Older builds had 0 ("official", now level 6) and 1–8: stored ones are
 //! moved over on load (0 → 6, 7–8 → 5).
 //! A statement lasts 8 days and is signed afresh on every request while the
-//! star stands, so a removed star fades from other people's screens within
-//! that time (from its owner's own app at once).
+//! star stands. Apps ask `GET /v1/stars/:uid` whenever they refresh a card
+//! (aqua-client-ui `stars::marks_live`, `/v1/marks`), so a removed star goes within minutes;
+//! the statement on the card counts only while the star relay can't be asked.
 //! `GET /v1/stars/:uid` — the statement, from the relay with the key, or from
 //! any other relay fetched there (`AQUA_STAR_HOME`).
 
@@ -153,8 +155,24 @@ fn key() -> Option<aqua_core::crypto::SignSecret> {
     Some(aqua_core::crypto::SignSecret::from_bytes(raw))
 }
 
+/// The public key the apps check stars against (aqua-client-ui
+/// `stars::STAR_PUBLIC_BUILTIN`; `AQUA_STAR_PUBLIC` for a build with another).
+const OFFICIAL_PUBLIC: &str = "3abdfac4ef46672c05a21e9024073208655c0deae3f645441dc1776217a92431";
+
+fn official_public() -> String {
+    std::env::var("AQUA_STAR_PUBLIC").ok().map(|k| k.trim().to_lowercase()).filter(|k| k.len() == 64).unwrap_or_else(|| OFFICIAL_PUBLIC.into())
+}
+
+/// A star key here that the apps don't trust: someone made their own. It
+/// signs nothing — this relay asks the star relay like any other, so its
+/// people still see the real stars.
+pub fn foreign_key() -> bool {
+    key().is_some_and(|k| hex::encode(k.public().as_bytes()) != official_public())
+}
+
+/// This is the star relay: it has the key the apps trust.
 pub fn has_key() -> bool {
-    key().is_some()
+    key().is_some_and(|k| hex::encode(k.public().as_bytes()) == official_public())
 }
 
 /// Make the key once (never over an existing one); its public half.
@@ -177,17 +195,54 @@ pub fn make_key() -> Result<String, String> {
 pub async fn admin_get(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Result<Json<serde_json::Value>, StatusCode> {
     crate::admin_authed(&state, &headers)?;
     let n = with_stars(|m| m.len());
-    Ok(Json(serde_json::json!({ "has_key": has_key(), "public": key().map(|k| hex::encode(k.public().as_bytes())), "stars": n, "bot": bot_name() })))
+    Ok(Json(serde_json::json!({ "has_key": has_key(), "foreign": foreign_key(), "public": key().map(|k| hex::encode(k.public().as_bytes())), "stars": n, "bot": bot_name() })))
 }
 
 pub async fn admin_make(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     crate::admin_authed(&state, &headers).map_err(|c| (c, String::new()))?;
     let had = has_key();
     let public = make_key().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    if !had {
+    if !had && has_key() {
         spawn(state.clone());
     }
-    Ok(Json(serde_json::json!({ "has_key": true, "public": public, "stars": with_stars(|m| m.len()), "bot": bot_name() })))
+    Ok(Json(serde_json::json!({ "has_key": has_key(), "foreign": foreign_key(), "public": public, "stars": with_stars(|m| m.len()), "bot": bot_name() })))
+}
+
+#[derive(Deserialize)]
+pub struct BoostyBody {
+    #[serde(default)]
+    cookie: String,
+    #[serde(default)]
+    blog: String,
+    #[serde(default)]
+    clear: bool,
+}
+
+/// `GET /v1/admin/stars/boosty` — is Boosty set up, the blog, the last sync
+/// (never the token).
+pub async fn admin_boosty_get(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Result<Json<serde_json::Value>, StatusCode> {
+    crate::admin_authed(&state, &headers)?;
+    Ok(Json(boosty::status()))
+}
+
+/// `POST /v1/admin/stars/boosty {cookie, blog}` — paste once; checked at once.
+pub async fn admin_boosty_set(State(state): State<AppState>, headers: axum::http::HeaderMap, Json(b): Json<BoostyBody>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    crate::admin_authed(&state, &headers).map_err(|c| (c, String::new()))?;
+    if b.clear {
+        boosty::clear();
+        return Ok(Json(boosty::status()));
+    }
+    if !has_key() {
+        return Err((StatusCode::CONFLICT, "Boosty works on the server with the star key".into()));
+    }
+    boosty::spawn(state.clone());
+    let r = boosty::set(&state, &b.cookie, &b.blog).await;
+    let mut st = boosty::status();
+    st["ok"] = serde_json::json!(r.is_ok());
+    if let Err(e) = r {
+        st["error"] = serde_json::json!(e);
+    }
+    Ok(Json(st))
 }
 
 /// `aqua-server star-key`: make the key once (never over an existing one)
@@ -228,9 +283,9 @@ pub async fn get_star(State(_state): State<AppState>, Path(uid): Path<String>) -
         let star = with_stars(|m| m.get(&uid).filter(|s| s.live(t)).map(|s| (s.kind, s.until)));
         return star.and_then(|(k, until)| sign(&uid, k, until)).map(Json).ok_or(StatusCode::NOT_FOUND);
     }
-    // Not the star relay: ask it (and remember the answer for 10 minutes).
+    // Not the star relay: ask it (and remember the answer for 5 minutes).
     if let Some((at, st)) = CACHE.lock().ok().and_then(|g| g.as_ref().and_then(|m| m.get(&uid).cloned())) {
-        if now() < at + 600 {
+        if now() < at + 300 {
             return st.map(Json).ok_or(StatusCode::NOT_FOUND);
         }
     }
@@ -261,6 +316,75 @@ pub async fn get_star(State(_state): State<AppState>, Path(uid): Path<String>) -
     st.map(Json).ok_or(StatusCode::NOT_FOUND)
 }
 
+// ---------- marks: the star and the check mark, for every server ----------
+
+/// What a check mark statement signs: "the account <uid> is verified until
+/// <exp>" — the same key as stars, another prefix, so neither passes for
+/// the other.
+pub fn check_bytes(uid: &str, exp: u64) -> Vec<u8> {
+    format!("aqua-check-v1|{uid}|{exp}").into_bytes()
+}
+
+fn sign_check(uid: &str) -> Option<Statement> {
+    let k = key()?;
+    let exp = now() + LIFE_SECS;
+    let sig = k.sign(&check_bytes(uid, exp));
+    Some(Statement { uid: uid.to_string(), kind: 0, exp, sig: hex::encode(sig) })
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct Marks {
+    #[serde(default)]
+    pub star: Option<Statement>,
+    #[serde(default)]
+    pub check: Option<Statement>,
+}
+
+static MARKS_CACHE: Mutex<Option<BTreeMap<String, (u64, Marks)>>> = Mutex::new(None);
+
+/// `GET /v1/marks/:uid` — the account's star and check mark, signed by the
+/// star relay (asked through any other relay), so both show on every
+/// server. The check mark there is the @verify list of the star relay.
+pub async fn get_marks(State(state): State<AppState>, Path(uid): Path<String>) -> Result<Json<Marks>, StatusCode> {
+    let uid = uid.trim().to_string();
+    if uid.is_empty() || uid.len() > 32 || !uid.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if has_key() {
+        let t = now();
+        let star = with_stars(|m| m.get(&uid).filter(|s| s.live(t)).map(|s| (s.kind, s.until)));
+        let star = star.and_then(|(k, until)| sign(&uid, k, until));
+        let check = if state.directory.is_verified_uid(&uid) { sign_check(&uid) } else { None };
+        return Ok(Json(Marks { star, check }));
+    }
+    if let Some((at, m)) = MARKS_CACHE.lock().ok().and_then(|g| g.as_ref().and_then(|m| m.get(&uid).cloned())) {
+        if now() < at + 300 {
+            return Ok(Json(m));
+        }
+    }
+    let home = std::env::var("AQUA_STAR_HOME").ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| DEFAULT_HOME.into());
+    let url = format!("{}/v1/marks/{uid}", home.trim_end_matches('/'));
+    let res: Result<Marks, ()> = async {
+        let c = reqwest::Client::builder().timeout(std::time::Duration::from_secs(8)).build().map_err(|_| ())?;
+        let r = c.get(&url).send().await.map_err(|_| ())?;
+        if !r.status().is_success() {
+            return Err(());
+        }
+        r.json::<Marks>().await.map_err(|_| ())
+    }
+    .await;
+    // Couldn't ask: not "no marks" (the app keeps what it has).
+    let Ok(m) = res else { return Err(StatusCode::BAD_GATEWAY) };
+    if let Ok(mut g) = MARKS_CACHE.lock() {
+        let c = g.get_or_insert_with(BTreeMap::new);
+        if c.len() > 5000 {
+            c.clear();
+        }
+        c.insert(uid, (now(), m.clone()));
+    }
+    Ok(Json(m))
+}
+
 // ---------- the @stars bot (only on the relay with the key) ----------------
 
 pub fn bot_name() -> String {
@@ -269,6 +393,7 @@ pub fn bot_name() -> String {
 
 pub(crate) fn ensure_bot(state: &AppState) {
     let name = bot_name();
+    crate::tgapi::set_builtin_app(state, &name, "Stars", APP_URL);
     if state.directory.is_bot(&name) {
         return;
     }
@@ -280,6 +405,9 @@ pub(crate) fn ensure_bot(state: &AppState) {
 
 /// Started with the relay: does anything only where the key is.
 pub fn spawn(state: AppState) {
+    if foreign_key() {
+        tracing::warn!("{KEY_FILE} isn't the key the apps trust: ignored — stars come from the star relay");
+    }
     if !has_key() {
         return;
     }
@@ -315,6 +443,17 @@ async fn say(state: &AppState, to: &str, text: &str) {
     crate::bot_deliver_text(state, &bot_name(), to, text).await;
 }
 
+/// A message with buttons (the app draws them from the `[kb:v1]` line).
+async fn say_kb(state: &AppState, to: &str, text: &str, row: serde_json::Value) {
+    let kb = serde_json::json!({ "kind": "inline", "m": 0, "rows": [row] });
+    say(state, to, &format!("{}{kb}\n{text}", crate::tgapi::KB_PREFIX)).await;
+}
+
+/// …with the button that opens the mini app.
+async fn say_app(state: &AppState, to: &str, text: &str) {
+    say_kb(state, to, text, serde_json::json!([{ "t": "✦ Open", "wa": APP_URL }])).await;
+}
+
 fn kind_name(k: u8) -> String {
     if k == OWNER_LEVEL { format!("CeZeOs level {k} (the owner's)") } else { format!("CeZeOs level {k}") }
 }
@@ -335,16 +474,35 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
     if text.is_empty() {
         return;
     }
+    // The ID isn't a secret (it's on every profile card): anyone may ask,
+    // so the owner can find theirs before the server knows them.
+    if text.split_whitespace().next() == Some("/id") {
+        return say(state, &u.from, &crate::verify::id_text(state, &u.from)).await;
+    }
     if !crate::verify::is_owner(state, &u.from) {
-        say(state, &u.from, "✦ The CeZeOs star: levels 1–5 come with a Boosty subscription (on their own, by your e-mail here); level 6 only from the owner.").await;
+        say_app(state, &u.from, "✦ The CeZeOs star: levels 1–5 come with a Boosty subscription — on their own, by your e-mail here, or link your Boosty in the app below (no e-mail needed). Level 6 only from the owner.\nThe app also shows how many days are left until the next payment.").await;
         return;
     }
-    let (cmd, arg) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
-    let cmd = cmd.split('@').next().unwrap_or(cmd);
+    // The owner pressed "Link" / "Don't" under a request (app::request).
+    let cb = u.callback.clone().or_else(|| {
+        let v: serde_json::Value = serde_json::from_str(text.strip_prefix(crate::tgapi::CB_PREFIX)?).ok()?;
+        v.get("d")?.as_str().map(str::to_string)
+    });
+    if let Some(d) = cb {
+        if let Some(rest) = d.strip_prefix("bl:") {
+            let (verb, uid) = rest.split_once(':').unwrap_or((rest, ""));
+            return app::decide(state, &u.from, uid, verb == "ok").await;
+        }
+        return;
+    }
+    let (word, arg) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
+    let cmd = word.split('@').next().unwrap_or(word);
     // `/<name> level <n>` (the owner's way): the same as `/star @name n`.
+    // The name from the whole word: `/@vpst` cut at '@' was just "/".
     let lower = arg.trim().to_lowercase();
-    if !["/star", "/unstar", "/stars", "/start", "/help"].contains(&cmd) && cmd.len() > 1 && lower.starts_with("level") {
-        let name = cmd[1..].trim_start_matches('@').to_lowercase();
+    let named = word.strip_prefix('/').unwrap_or("").trim_start_matches('@').to_lowercase();
+    if !["/star", "/unstar", "/stars", "/start", "/help", "/id", "/links", "/unlink"].contains(&cmd) && !named.is_empty() && lower.starts_with("level") {
+        let name = named;
         let mut rest = lower["level".len()..].split_whitespace();
         let lvl = rest.next().unwrap_or("x");
         return set_level(state, &u.from, &name, parse_level(Some(lvl)), rest.next()).await;
@@ -360,6 +518,19 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
             let lvl = if cmd == "/unstar" { Ok(0) } else { parse_level(words.next()) };
             set_level(state, &u.from, &name, lvl, words.next()).await;
         }
+        "/id" => say(state, &u.from, &crate::verify::id_text(state, &u.from)).await,
+        "/links" => {
+            let list = app::list_links(state);
+            say(state, &u.from, &if list.is_empty() { "Nobody linked a Boosty account yet.".to_string() } else { format!("Boosty links:\n{list}") }).await;
+        }
+        "/unlink" => {
+            let Some(name) = who else { return say(state, &u.from, "Who? /unlink @name").await };
+            let Some(uid) = state.directory.uid_of(&name).filter(|x| !x.is_empty()) else {
+                return say(state, &u.from, &format!("There's no @{name} on this server.")).await;
+            };
+            let had = app::unlink(&uid);
+            say(state, &u.from, &if had { format!("@{name}'s Boosty link is gone.") } else { format!("@{name} had no Boosty link.") }).await;
+        }
         "/stars" => {
             let t = now();
             let list = with_stars(|m| m.iter().filter(|(_, s)| s.live(t)).map(|(uid, s)| (uid.clone(), s.clone())).collect::<Vec<_>>());
@@ -370,7 +541,7 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
             let lines: Vec<String> = list
                 .iter()
                 .map(|(uid, s)| {
-                    let n = state.directory.username_by_uid(uid).map(|n| format!("@{n}")).unwrap_or_else(|| format!("ID {uid}"));
+                    let n = label(state, uid);
                     let until = s.until.map(|u| format!(" · {} left", left(u, t))).unwrap_or_default();
                     format!("{n} — {}{}{until}", kind_name(s.kind), if s.source == "boosty" { " (Boosty)" } else { "" })
                 })
@@ -378,7 +549,7 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
             say(state, &u.from, &format!("Stars ({}):\n{}", lines.len(), lines.join("\n"))).await;
         }
         _ => {
-            say(state, &u.from, "✦ The CeZeOs star:\n/<name> level 6 — yours, above the donation levels\n/<name> level 1-5 — a donation level by hand (Boosty gives them on its own)\n/<name> level 4 30d — for a while: h, d, w, m (30 days), y; it goes by itself\n/<name> level 0 — take it away\n(also /star @name [1-6] [30d], /unstar @name)\n/stars — who has one").await;
+            say(state, &u.from, "✦ The CeZeOs star:\n/<name> level 6 — yours, above the donation levels\n/<name> level 1-5 — a donation level by hand (Boosty gives them on its own)\n/<name> level 4 30d — for a while: h, d, w, m (30 days), y; it goes by itself\n/<name> level 0 — take it away\n(also /star @name [1-6] [30d], /unstar @name)\n/stars — who has one\n/links — Boosty accounts linked without an e-mail, /unlink @name\n/id — your account ID").await;
         }
     }
 }
@@ -399,16 +570,17 @@ async fn set_level(state: &AppState, owner: &str, name: &str, lvl: Result<u8, &'
     if name.is_empty() {
         return say(state, owner, "Who? /<name> level <0-6>").await;
     }
-    let Some(uid) = state.directory.uid_of(name).filter(|x| !x.is_empty()) else {
-        return say(state, owner, &format!("There's no @{name} on this server.")).await;
+    let Some((uid, who)) = resolve(state, name) else {
+        return say(state, owner, &format!("I don't know @{name}: not on this server or in the name registry of the servers it knows. Its account ID works too: /<ID> level N.")).await;
     };
+    let name = who.as_str();
     if lvl == 0 {
         let had = with_stars(|m| {
             let had = m.remove(&uid).is_some();
             save(m);
             had
         });
-        return say(state, owner, &if had { format!("@{name} has no star now (other people stop seeing it within 8 days).") } else { format!("@{name} had no star.") }).await;
+        return say(state, owner, &if had { format!("{name} has no star now (other people stop seeing it within about 15 minutes).") } else { format!("{name} had no star.") }).await;
     }
     let until = dur.map(|d| now() + d);
     with_stars(|m| {
@@ -416,7 +588,24 @@ async fn set_level(state: &AppState, owner: &str, name: &str, lvl: Result<u8, &'
         save(m);
     });
     let tail = until.map(|u| format!(" for {} (until {})", left(u, now()), fmt_date(u))).unwrap_or_default();
-    say(state, owner, &format!("@{name} now has the {} star{tail}.", kind_name(lvl))).await;
+    say(state, owner, &format!("{name} now has the {} star{tail}.", kind_name(lvl))).await;
+}
+
+/// An account by @name (this relay's, or any relay's from the name registry)
+/// or by its 10-digit ID: (ID, how to call it). Stars and check marks hold
+/// on every server, so they're given to anyone, not only accounts here.
+pub(crate) fn resolve(state: &AppState, w: &str) -> Option<(String, String)> {
+    let w = w.trim().trim_start_matches('@').to_lowercase();
+    if w.len() == 10 && w.bytes().all(|b| b.is_ascii_digit()) {
+        let label = state.directory.name_anywhere(&w).map(|n| format!("@{n} (ID {w})")).unwrap_or_else(|| format!("ID {w}"));
+        return Some((w, label));
+    }
+    let uid = state.directory.uid_anywhere(&w)?;
+    Some((uid, format!("@{w}")))
+}
+
+fn label(state: &AppState, uid: &str) -> String {
+    state.directory.name_anywhere(uid).map(|n| format!("@{n}")).unwrap_or_else(|| format!("ID {uid}"))
 }
 
 /// "2026-12-13" (UTC) for unix seconds.
@@ -438,18 +627,266 @@ fn fmt_date(t: u64) -> String {
 mod boosty {
     use super::*;
 
+    /// The Boosty session the server works with: pasted once — in the panel
+    /// (Access → Stars → Boosty) or as `AQUA_BOOSTY_AUTH` — the `auth` cookie
+    /// of boosty.to, then renewed here on its own: Boosty's refresh token
+    /// gives a new access token (and a new refresh token) before the old
+    /// one runs out. Kept in the data folder, never shown back.
+    const AUTH_FILE: &str = "aqua-boosty-auth.json";
+
+    #[derive(Clone, Default, Serialize, Deserialize)]
+    struct Auth {
+        access: String,
+        #[serde(default)]
+        refresh: String,
+        /// Unix seconds; 0 — unknown.
+        #[serde(default)]
+        expires: u64,
+        /// The blog (boosty.to/<blog>); "" — `AQUA_BOOSTY_BLOG`.
+        #[serde(default)]
+        blog: String,
+        /// SHA-256 of the environment value last taken: a new one there
+        /// wins over what's kept, the same one doesn't (the panel's does).
+        #[serde(default)]
+        env_seed: String,
+    }
+
+    /// The environment's paste: the whole `auth` cookie or a bare token
+    /// (`AQUA_BOOSTY_TOKEN`, as before).
+    fn env_paste() -> Option<String> {
+        ["AQUA_BOOSTY_AUTH", "AQUA_BOOSTY_TOKEN"].iter().find_map(|k| std::env::var(k).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty()))
+    }
+
+    fn seed(raw: &str) -> String {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(raw.as_bytes()))
+    }
+
+    /// "VladST", "boosty.to/VladST", "https://boosty.to/VladST/…" → "VladST".
+    fn blog_name(w: &str) -> String {
+        let w = w.trim().trim_end_matches('/');
+        let w = w.rsplit_once("boosty.to/").map(|(_, r)| r).unwrap_or(w);
+        w.split(['/', '?', '#']).next().unwrap_or("").trim().to_string()
+    }
+
+    fn parse(raw: &str) -> Auth {
+        let raw = raw.trim();
+        let text = if raw.contains('%') {
+            form_urlencoded::parse(format!("v={}", raw.replace('+', "%2B")).as_bytes()).find(|(k, _)| k == "v").map(|(_, v)| v.into_owned()).unwrap_or_default()
+        } else {
+            raw.to_string()
+        };
+        match serde_json::from_str::<serde_json::Value>(&text) {
+            Ok(v) if v.is_object() => Auth {
+                access: v["accessToken"].as_str().unwrap_or("").to_string(),
+                refresh: v["refreshToken"].as_str().unwrap_or("").to_string(),
+                expires: app::secs_pub(&v["expiresAt"]).unwrap_or(0),
+                ..Auth::default()
+            },
+            _ => Auth { access: raw.to_string(), ..Auth::default() },
+        }
+    }
+
+    fn load() -> Option<Auth> {
+        let kept: Option<Auth> = std::fs::read(AUTH_FILE).ok().and_then(|b| serde_json::from_slice(&b).ok());
+        let env = env_paste();
+        let a = match (kept, env) {
+            // A new value in the environment: take it.
+            (k, Some(raw)) if k.as_ref().map_or(true, |k| k.env_seed != seed(&raw)) => {
+                let mut a = parse(&raw);
+                a.env_seed = seed(&raw);
+                a.blog = k.map(|k| k.blog).unwrap_or_default();
+                store(&a);
+                a
+            }
+            (Some(k), _) => k,
+            (None, _) => return None,
+        };
+        (!a.access.is_empty()).then_some(a)
+    }
+
+    fn blog_of(a: &Auth) -> String {
+        if !a.blog.is_empty() {
+            return a.blog.clone();
+        }
+        blog_name(&std::env::var("AQUA_BOOSTY_BLOG").unwrap_or_default())
+    }
+
+    pub(crate) fn configured() -> bool {
+        load().is_some_and(|a| !blog_of(&a).is_empty())
+    }
+
+    fn store(a: &Auth) {
+        let tmp = format!("{AUTH_FILE}.tmp");
+        if std::fs::write(&tmp, serde_json::to_vec_pretty(a).unwrap_or_default()).is_ok() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+            }
+            let _ = std::fs::rename(&tmp, AUTH_FILE);
+        }
+    }
+
+    /// Wakes the sync loop (a new paste in the panel).
+    static WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+    /// The last sync: (unix s, "ok N" or the error).
+    static LAST: Mutex<Option<(u64, Result<usize, String>)>> = Mutex::new(None);
+
+    /// The panel: what's set (never the token itself) and how the last sync went.
+    pub(crate) fn status() -> serde_json::Value {
+        let a = load();
+        let last = LAST.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        serde_json::json!({
+            "set": a.is_some(),
+            "blog": a.as_ref().map(blog_of).unwrap_or_default(),
+            "renews": a.as_ref().is_some_and(|a| !a.refresh.is_empty()),
+            "expires": a.as_ref().map(|a| a.expires).unwrap_or(0),
+            "last_at": last.as_ref().map(|l| l.0),
+            "subscribers": last.as_ref().and_then(|l| l.1.as_ref().ok().copied()),
+            "error": last.as_ref().and_then(|l| l.1.as_ref().err().cloned()),
+        })
+    }
+
+    /// The panel's paste: the `auth` cookie (empty — keep the one there) and
+    /// the blog. Checked right away: the answer is the first sync's.
+    pub(crate) async fn set(state: &AppState, cookie: &str, blog: &str) -> Result<usize, String> {
+        let blog = blog_name(blog);
+        let mut a = match load() {
+            Some(k) if cookie.trim().is_empty() => k,
+            k => {
+                if cookie.trim().is_empty() {
+                    return Err("paste the auth cookie".into());
+                }
+                let mut a = parse(cookie);
+                if a.access.is_empty() {
+                    return Err("that isn't the auth cookie".into());
+                }
+                // Keep the environment's seed, so it doesn't win back over this.
+                a.env_seed = k.map(|k| k.env_seed).or_else(|| env_paste().map(|r| seed(&r))).unwrap_or_default();
+                a
+            }
+        };
+        if !blog.is_empty() {
+            a.blog = blog;
+        }
+        if blog_of(&a).is_empty() {
+            return Err("the blog: boosty.to/<name>".into());
+        }
+        store(&a);
+        let r = run_once(state, &mut a).await;
+        WAKE.notify_one();
+        r
+    }
+
+    /// Forget the Boosty session (panel).
+    pub(crate) fn clear() {
+        let env_seed = load().map(|a| a.env_seed).unwrap_or_default();
+        // An empty one with the environment's seed: the environment's paste
+        // doesn't come back by itself either.
+        store(&Auth { env_seed, ..Auth::default() });
+        *LAST.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    /// A new access token from the refresh token (Boosty's web client does
+    /// the same: `POST /oauth/token/`, grant_type=refresh_token).
+    async fn renew(a: &mut Auth) -> Result<(), String> {
+        if a.refresh.is_empty() {
+            return Err("no refresh token: paste the whole auth cookie into AQUA_BOOSTY_AUTH".into());
+        }
+        let device = std::env::var("AQUA_BOOSTY_CLIENT_ID").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let body = {
+            let mut f = form_urlencoded::Serializer::new(String::new());
+            f.append_pair("grant_type", "refresh_token").append_pair("refresh_token", &a.refresh).append_pair("device_os", "web");
+            if let Some(d) = &device {
+                f.append_pair("device_id", d);
+            }
+            f.finish()
+        };
+        let c = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)).build().map_err(|e| e.to_string())?;
+        let r = c
+            .post("https://api.boosty.to/oauth/token/")
+            .bearer_auth(&a.access)
+            .header(reqwest::header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| e.without_url().to_string())?;
+        if !r.status().is_success() {
+            return Err(format!("renewing the Boosty session: HTTP {}", r.status()));
+        }
+        let v: serde_json::Value = r.json().await.map_err(|e| e.without_url().to_string())?;
+        let access = v["access_token"].as_str().or_else(|| v["accessToken"].as_str()).unwrap_or("");
+        if access.is_empty() {
+            return Err("renewing the Boosty session: no token in the answer".into());
+        }
+        a.access = access.to_string();
+        if let Some(r) = v["refresh_token"].as_str().or_else(|| v["refreshToken"].as_str()).filter(|r| !r.is_empty()) {
+            a.refresh = r.to_string();
+        }
+        a.expires = v["expires_in"].as_u64().map(|s| now() + s).or_else(|| app::secs_pub(&v["expiresAt"])).unwrap_or(0);
+        store(a);
+        tracing::info!("Boosty session renewed");
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn parse_for_test(raw: &str) -> (String, String, u64) {
+        let a = parse(raw);
+        (a.access, a.refresh, a.expires)
+    }
+    #[cfg(test)]
+    pub(crate) fn blog_for_test(w: &str) -> String {
+        blog_name(w)
+    }
+
+    /// One sync: renew the session first if it runs out within a day, and
+    /// once more if Boosty refuses it.
+    async fn run_once(state: &AppState, a: &mut Auth) -> Result<usize, String> {
+        if a.expires > 0 && a.expires < now() + 86_400 {
+            if let Err(e) = renew(a).await {
+                tracing::warn!("{e}");
+            }
+        }
+        let blog = blog_of(a);
+        let mut res = sync(state, &a.access, &blog).await;
+        if res.as_ref().is_err_and(|e| e.contains("401") || e.contains("403")) {
+            res = match renew(a).await {
+                Ok(()) => sync(state, &a.access, &blog).await,
+                Err(e) => Err(e),
+            };
+        }
+        *LAST.lock().unwrap_or_else(|e| e.into_inner()) = Some((now(), res.clone()));
+        res
+    }
+
     pub fn spawn(state: AppState) {
-        let (Ok(token), Ok(blog)) = (std::env::var("AQUA_BOOSTY_TOKEN"), std::env::var("AQUA_BOOSTY_BLOG")) else { return };
-        if token.trim().is_empty() || blog.trim().is_empty() {
+        static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
             return;
         }
         tokio::spawn(async move {
+            // Told the owner the session is gone (once until it works again).
+            let mut told = false;
             loop {
-                match sync(&state, token.trim(), blog.trim()).await {
-                    Ok(n) => tracing::info!(subscribers = n, "Boosty stars synced"),
-                    Err(e) => tracing::warn!("Boosty sync: {e}"),
+                if let Some(mut a) = load().filter(|a| !blog_of(a).is_empty()) {
+                    match run_once(&state, &mut a).await {
+                        Ok(n) => {
+                            tracing::info!(subscribers = n, "Boosty stars synced");
+                            told = false;
+                        }
+                        Err(e) => {
+                            tracing::warn!("Boosty sync: {e}");
+                            if !told && (e.contains("401") || e.contains("403") || e.contains("renewing")) {
+                                told = true;
+                                for owner in crate::verify::owner_names(&state) {
+                                    say(&state, &owner, &format!("⚠️ Boosty: the server's session stopped working ({e}). Paste the auth cookie of boosty.to again: server panel → Access → Stars → Boosty. After that it renews itself.")).await;
+                                }
+                            }
+                        }
+                    }
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(30 * 60)).await;
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(30 * 60), WAKE.notified()).await;
             }
         });
     }
@@ -467,18 +904,25 @@ mod boosty {
             }
         };
         // The blog's levels, cheapest first → 1..5 (more expensive ones: 5).
-        let levels = get(format!("https://api.boosty.to/v1/blog/{blog}/subscription_level/?show_free_level=false")).await?;
+        // Which request failed goes into the error (the panel shows it).
+        let levels = get(format!("https://api.boosty.to/v1/blog/{blog}/subscription_level/?show_free_level=false"))
+            .await
+            .map_err(|e| format!("levels (/v1/blog/{blog}/subscription_level/): {e}"))?;
         let mut lv: Vec<(i64, u64)> = levels["data"]
             .as_array()
             .map(|a| a.iter().filter_map(|l| Some((l["id"].as_i64()?, l["price"].as_u64().unwrap_or(0)))).collect())
             .unwrap_or_default();
         lv.sort_by_key(|x| x.1);
         let tier_of = |id: i64| lv.iter().position(|x| x.0 == id).map(|i| (i as u8 + 1).min(DONATION_MAX));
-        // Every active subscriber: e-mail → level.
+        // Every active subscriber: e-mail → level; and all of them for the
+        // mini app and the links without an e-mail (app.rs-like part below).
         let mut subs: BTreeMap<String, u8> = BTreeMap::new();
+        let mut all: Vec<app::Sub> = Vec::new();
         let mut offset = 0;
         loop {
-            let page = get(format!("https://api.boosty.to/v1/blog/{blog}/subscribers?limit=100&offset={offset}&sort_by=on_time&order=gt")).await?;
+            let page = get(format!("https://api.boosty.to/v1/blog/{blog}/subscribers?limit=100&offset={offset}&sort_by=on_time&order=gt"))
+                .await
+                .map_err(|e| format!("subscribers (/v1/blog/{blog}/subscribers): {e}"))?;
             let data = page["data"].as_array().cloned().unwrap_or_default();
             if data.is_empty() {
                 break;
@@ -487,6 +931,9 @@ mod boosty {
                 let active = s["subscribed"].as_bool().unwrap_or(true);
                 let email = s["email"].as_str().unwrap_or("").trim().to_lowercase();
                 let tier = s["level"]["id"].as_i64().and_then(tier_of);
+                if let (true, Some(t), Some(id)) = (active, tier, s["id"].as_i64()) {
+                    all.push(app::Sub::from_boosty(s, id, t, email.clone()));
+                }
                 if active && !email.is_empty() {
                     if let Some(t) = tier {
                         let e = subs.entry(email).or_insert(t);
@@ -508,6 +955,14 @@ mod boosty {
                 }
             }
         }
+        // Linked by hand (no e-mail): the owner approved the Boosty account.
+        for (uid, id) in app::approved() {
+            if let Some(sub) = all.iter().find(|x| x.id == id) {
+                let e = want.entry(uid).or_insert(sub.tier);
+                *e = (*e).max(sub.tier);
+            }
+        }
+        app::set_subs(all);
         let n = subs.len();
         with_stars(|m| {
             // Boosty stars that no longer stand go; hand-set ones stay until
@@ -526,6 +981,300 @@ mod boosty {
             save(m);
         });
         Ok(n)
+    }
+}
+
+// ---------- the mini app: my star, my Boosty, days to the next payment ------
+
+/// Where the app opens it: the client puts its own relay in front.
+pub const APP_URL: &str = "aqua:relay/v1/stars-app";
+
+pub mod app {
+    use super::*;
+    use axum::response::{Html, IntoResponse};
+
+    const LINKS: &str = "aqua-boosty-links.json";
+    const PAGE: &str = include_str!("stars_app.html");
+
+    /// A Boosty account an account here says is theirs (no e-mail needed).
+    #[derive(Clone, Serialize, Deserialize)]
+    struct Link {
+        boosty_id: i64,
+        name: String,
+        at: u64,
+        /// The owner said yes; until then it gives nothing.
+        #[serde(default)]
+        ok: bool,
+    }
+
+    /// An active subscriber, as the last sync saw them.
+    #[derive(Clone)]
+    pub struct Sub {
+        pub id: i64,
+        pub tier: u8,
+        name: String,
+        email: String,
+        level: String,
+        price: u64,
+        on_time: u64,
+        next_pay: Option<u64>,
+    }
+
+    pub(crate) fn secs_pub(v: &serde_json::Value) -> Option<u64> {
+        secs(v)
+    }
+
+    fn secs(v: &serde_json::Value) -> Option<u64> {
+        let n = v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))?;
+        // Some fields come in milliseconds.
+        Some(if n > 100_000_000_000 { n / 1000 } else { n })
+    }
+
+    impl Sub {
+        pub fn from_boosty(s: &serde_json::Value, id: i64, tier: u8, email: String) -> Sub {
+            let next = ["nextPayTime", "next_pay_time", "nextPayDate", "payTime"].iter().find_map(|k| secs(&s[*k]));
+            Sub {
+                id,
+                tier,
+                name: s["name"].as_str().unwrap_or("").trim().to_string(),
+                email,
+                level: s["level"]["name"].as_str().unwrap_or("").to_string(),
+                price: s["price"].as_u64().or_else(|| s["level"]["price"].as_u64()).unwrap_or(0),
+                on_time: secs(&s["onTime"]).unwrap_or(0),
+                next_pay: next,
+            }
+        }
+
+        #[cfg(test)]
+        pub fn next_for_test(&self, now: u64) -> Option<(u64, bool)> {
+            self.next(now)
+        }
+
+        /// The next payment: Boosty's own date, or a month after the last
+        /// one counted from the start (subscriptions renew monthly).
+        fn next(&self, now: u64) -> Option<(u64, bool)> {
+            if let Some(t) = self.next_pay.filter(|&t| t > now) {
+                return Some((t, true));
+            }
+            if self.on_time == 0 || self.on_time > now {
+                return None;
+            }
+            const MONTH: u64 = 30 * 86_400;
+            let k = (now - self.on_time) / MONTH + 1;
+            Some((self.on_time + k * MONTH, false))
+        }
+    }
+
+    static SUBS: Mutex<Option<Vec<Sub>>> = Mutex::new(None);
+    static LINKS_M: Mutex<Option<BTreeMap<String, Link>>> = Mutex::new(None);
+
+    pub fn set_subs(all: Vec<Sub>) {
+        *SUBS.lock().unwrap_or_else(|e| e.into_inner()) = Some(all);
+    }
+    fn subs() -> Option<Vec<Sub>> {
+        SUBS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn with_links<R>(f: impl FnOnce(&mut BTreeMap<String, Link>) -> R) -> R {
+        let mut g = LINKS_M.lock().unwrap_or_else(|e| e.into_inner());
+        let m = g.get_or_insert_with(|| std::fs::read(LINKS).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default());
+        f(m)
+    }
+    fn save_links(m: &BTreeMap<String, Link>) {
+        let tmp = format!("{LINKS}.tmp");
+        if std::fs::write(&tmp, serde_json::to_vec_pretty(m).unwrap_or_default()).is_ok() {
+            let _ = std::fs::rename(&tmp, LINKS);
+        }
+    }
+
+    /// uid → Boosty id, the approved links.
+    pub fn approved() -> Vec<(String, i64)> {
+        with_links(|m| m.iter().filter(|(_, l)| l.ok).map(|(u, l)| (u.clone(), l.boosty_id)).collect())
+    }
+
+    pub fn list_links(state: &AppState) -> String {
+        with_links(|m| {
+            m.iter()
+                .map(|(uid, l)| {
+                    let n = state.directory.username_by_uid(uid).map(|n| format!("@{n}")).unwrap_or_else(|| format!("ID {uid}"));
+                    format!("{n} — Boosty «{}» ({}){}", l.name, l.boosty_id, if l.ok { "" } else { " · waiting for you" })
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+    }
+
+    /// Take the link away (and the star it gave; an e-mail one comes back
+    /// with the next sync).
+    pub fn unlink(uid: &str) -> bool {
+        let had = with_links(|m| {
+            let had = m.remove(uid).is_some();
+            save_links(m);
+            had
+        });
+        if had {
+            with_stars(|m| {
+                if m.get(uid).is_some_and(|s| s.source == "boosty") {
+                    m.remove(uid);
+                    save(m);
+                }
+            });
+        }
+        had
+    }
+
+    fn boosty_on() -> bool {
+        super::boosty::configured()
+    }
+
+    /// The owner said yes or no to a link.
+    pub async fn decide(state: &AppState, owner: &str, uid: &str, yes: bool) {
+        let name = state.directory.username_by_uid(uid).unwrap_or_default();
+        let link = with_links(|m| {
+            let l = m.get(uid).cloned()?;
+            if yes {
+                m.insert(uid.to_string(), Link { ok: true, ..l.clone() });
+            } else {
+                m.remove(uid);
+            }
+            save_links(m);
+            Some(l)
+        });
+        let Some(link) = link else { return say(state, owner, "That request is gone already.").await };
+        if !yes {
+            say(state, owner, &format!("Not linked: @{name} and Boosty «{}».", link.name)).await;
+            if !name.is_empty() {
+                say_app(state, &name, &format!("✦ The owner didn't confirm Boosty «{}» as yours.", link.name)).await;
+            }
+            return;
+        }
+        // The star at once, from what the last sync saw.
+        let tier = subs().and_then(|s| s.iter().find(|x| x.id == link.boosty_id).map(|x| x.tier));
+        if let Some(t) = tier {
+            with_stars(|m| {
+                let keep = m.get(uid).is_some_and(|s| s.source == "manual" && s.live(now()));
+                let higher = m.get(uid).is_some_and(|s| s.source == "boosty" && s.kind >= t);
+                if !keep && !higher {
+                    m.insert(uid.to_string(), Star { kind: t, source: "boosty".into(), at: now(), until: None });
+                    save(m);
+                }
+            });
+        }
+        say(state, owner, &format!("Linked: @{name} ↔ Boosty «{}».", link.name)).await;
+        if !name.is_empty() {
+            let t = tier.map(|t| format!(" Your star: CeZeOs level {t}.")).unwrap_or_default();
+            say_app(state, &name, &format!("✦ Boosty «{}» is linked to you.{t}", link.name)).await;
+        }
+    }
+
+    #[derive(Deserialize)]
+    pub struct Body {
+        #[serde(default)]
+        init: String,
+        #[serde(default)]
+        q: String,
+    }
+
+    type Res = Result<Json<serde_json::Value>, (StatusCode, String)>;
+
+    fn who(state: &AppState, b: &Body) -> Result<(String, String), (StatusCode, String)> {
+        if !has_key() {
+            return Err((StatusCode::NOT_FOUND, "no stars here".into()));
+        }
+        let me = crate::tgapi::check_init(state, &bot_name(), &b.init).ok_or((StatusCode::UNAUTHORIZED, "reopen the app".into()))?;
+        let uid = state.directory.uid_of(&me).filter(|x| !x.is_empty()).ok_or((StatusCode::NOT_FOUND, "no such account".into()))?;
+        Ok((me, uid))
+    }
+
+    /// `GET /v1/stars-app` — the page.
+    pub async fn page() -> impl IntoResponse {
+        ([(axum::http::header::CACHE_CONTROL, "no-store")], Html(PAGE))
+    }
+
+    /// `POST /v1/stars-app/me` — my star, my subscription, my link.
+    pub async fn me(State(state): State<AppState>, Json(b): Json<Body>) -> Res {
+        let (me, uid) = who(&state, &b)?;
+        let t = now();
+        let star = with_stars(|m| m.get(&uid).filter(|s| s.live(t)).cloned());
+        let link = with_links(|m| m.get(&uid).cloned());
+        let email = state.directory.email_of(&me);
+        let all = subs();
+        let by_mail = all.as_ref().and_then(|a| email.as_ref().and_then(|e| a.iter().filter(|x| &x.email == e).max_by_key(|x| x.tier).cloned()));
+        let by_link = all.as_ref().and_then(|a| link.as_ref().filter(|l| l.ok).and_then(|l| a.iter().find(|x| x.id == l.boosty_id).cloned()));
+        let (sub, via) = match (by_link, by_mail) {
+            (Some(l), Some(m)) if m.tier > l.tier => (Some(m), "email"),
+            (Some(l), _) => (Some(l), "link"),
+            (None, Some(m)) => (Some(m), "email"),
+            (None, None) => (None, ""),
+        };
+        let sub = sub.map(|s| {
+            let next = s.next(t);
+            serde_json::json!({
+                "name": s.name, "level": s.level, "tier": s.tier, "price": s.price, "since": s.on_time,
+                "next": next.map(|n| n.0), "exact": next.is_some_and(|n| n.1), "via": via,
+            })
+        });
+        Ok(Json(serde_json::json!({
+            "me": me,
+            "owner": crate::verify::is_owner(&state, &me),
+            "star": star.map(|s| serde_json::json!({ "level": s.kind, "source": s.source, "until": s.until })),
+            "boosty": boosty_on(),
+            "synced": all.is_some(),
+            "blog": std::env::var("AQUA_BOOSTY_BLOG").ok().map(|b| format!("https://boosty.to/{}", b.trim())),
+            "sub": sub,
+            "link": link.map(|l| serde_json::json!({ "name": l.name, "id": l.boosty_id, "ok": l.ok })),
+            "now": t,
+        })))
+    }
+
+    /// `POST /v1/stars-app/link {q}` — "this Boosty account is mine": the
+    /// owner gets a request with two buttons.
+    pub async fn link(State(state): State<AppState>, Json(b): Json<Body>) -> Res {
+        let (me, uid) = who(&state, &b)?;
+        if !boosty_on() {
+            return Err((StatusCode::SERVICE_UNAVAILABLE, "boosty-off".into()));
+        }
+        let all = subs().ok_or((StatusCode::SERVICE_UNAVAILABLE, "not-synced".into()))?;
+        let q = b.q.trim().trim_start_matches('@').to_string();
+        if q.is_empty() || q.chars().count() > 80 {
+            return Err((StatusCode::BAD_REQUEST, "empty".into()));
+        }
+        let by_id: Vec<&Sub> = q.parse::<i64>().ok().map(|id| all.iter().filter(|x| x.id == id).collect()).unwrap_or_default();
+        let found: Vec<&Sub> = if by_id.is_empty() { all.iter().filter(|x| x.name.eq_ignore_ascii_case(&q) || x.name.to_lowercase() == q.to_lowercase()).collect() } else { by_id };
+        let sub = match found.as_slice() {
+            [] => return Err((StatusCode::NOT_FOUND, "not-found".into())),
+            [one] => (*one).clone(),
+            _ => return Err((StatusCode::CONFLICT, "many".into())),
+        };
+        // One Boosty account, one person here.
+        let taken = with_links(|m| m.iter().any(|(u, l)| u != &uid && l.ok && l.boosty_id == sub.id));
+        if taken {
+            return Err((StatusCode::CONFLICT, "taken".into()));
+        }
+        with_links(|m| {
+            m.insert(uid.clone(), Link { boosty_id: sub.id, name: sub.name.clone(), at: now(), ok: false });
+            save_links(m);
+        });
+        let text = format!(
+            "✦ @{me} says Boosty «{}» is theirs: level {} «{}», {} ₽, since {}. Link it?",
+            sub.name,
+            sub.tier,
+            sub.level,
+            sub.price,
+            if sub.on_time > 0 { fmt_date(sub.on_time) } else { "?".into() }
+        );
+        let row = serde_json::json!([{ "t": "✓ Link", "cb": format!("bl:ok:{uid}") }, { "t": "✕ Don't", "cb": format!("bl:no:{uid}") }]);
+        for owner in crate::verify::owner_names(&state) {
+            say_kb(&state, &owner, &text, row.clone()).await;
+        }
+        Ok(Json(serde_json::json!({ "ok": true, "name": sub.name })))
+    }
+
+    /// `POST /v1/stars-app/unlink`.
+    pub async fn unlink_me(State(state): State<AppState>, Json(b): Json<Body>) -> Res {
+        let (_, uid) = who(&state, &b)?;
+        unlink(&uid);
+        Ok(Json(serde_json::json!({ "ok": true })))
     }
 }
 
@@ -550,6 +1299,21 @@ mod tests {
         assert_eq!(parse_for("5x"), None);
         assert_eq!(fmt_date(0), "1970-01-01");
         assert_eq!(fmt_date(1_794_528_000), "2026-11-13");
+        let b = serde_json::json!({ "name": "Ivan", "onTime": 1_000_000, "price": 300, "level": { "name": "Gold" } });
+        let sub = app::Sub::from_boosty(&b, 7, 3, String::new());
+        assert_eq!(sub.next_for_test(1_000_000 + 86_400), Some((1_000_000 + 30 * 86_400, false)));
+        assert_eq!(sub.next_for_test(1_000_000 + 31 * 86_400), Some((1_000_000 + 60 * 86_400, false)));
+        let b = serde_json::json!({ "onTime": 1_000_000, "nextPayTime": 5_000_000_000_000u64 });
+        assert_eq!(app::Sub::from_boosty(&b, 7, 3, String::new()).next_for_test(2_000_000), Some((5_000_000_000, true)));
+        // The auth cookie as the browser keeps it (url-encoded JSON), or decoded, or a bare token.
+        let c = "%7B%22accessToken%22%3A%22aaa%22%2C%22refreshToken%22%3A%22rrr%22%2C%22expiresAt%22%3A1800000000000%7D";
+        assert_eq!(boosty::parse_for_test(c), ("aaa".into(), "rrr".into(), 1_800_000_000));
+        assert_eq!(boosty::parse_for_test(r#"{"accessToken":"aaa","refreshToken":"rrr","expiresAt":1800000000}"#), ("aaa".into(), "rrr".into(), 1_800_000_000));
+        assert_eq!(boosty::parse_for_test("tok123"), ("tok123".into(), String::new(), 0));
+        // As pasted from the screen: braces and colons as they are, quotes encoded.
+        assert_eq!(boosty::parse_for_test("{%22accessToken%22:%22aaa%22%2C%22refreshToken%22:%22rrr%22%2C%22expiresAt%22:1797226884024}"), ("aaa".into(), "rrr".into(), 1_797_226_884));
+        assert_eq!(boosty::blog_for_test("https://boosty.to/VladST/"), "VladST");
+        assert_eq!(boosty::blog_for_test("VladST"), "VladST");
         let s = Star { kind: 3, source: "manual".into(), at: 0, until: Some(100) };
         assert!(s.live(99) && !s.live(100));
     }

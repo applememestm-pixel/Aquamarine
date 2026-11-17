@@ -166,7 +166,7 @@ export function streamSrc(node: HTMLMediaElement, url: string) {
 /** Human text for a failed <audio>/<video>, with the Linux codec hint. */
 export function mediaErrorText(el: HTMLMediaElement): string {
   const code = el.error?.code;
-  const linux = document.documentElement.classList.contains("wk-lowfx");
+  const linux = document.documentElement.classList.contains("wk-linux");
   if (code === 4 || code === 3) {
     return linux
       ? "No decoder for this format — install GStreamer codecs: sudo pacman -S --needed gst-libav gst-plugins-good"

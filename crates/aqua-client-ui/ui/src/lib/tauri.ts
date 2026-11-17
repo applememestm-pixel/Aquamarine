@@ -106,6 +106,7 @@ export const api = {
   /** Stars (src/stars.rs): someone's statement → its kind if real; my own from my relay. */
   starVerify:         (uid: string, star: unknown): Promise<number | null>          => invoke("star_verify", { uid, star }),
   relayIce:           (): Promise<RTCIceServer | null> => invoke("relay_ice"),
+  marksLive:          (uid: string): Promise<{ star: number | null; check: boolean | null }> => invoke("marks_live", { uid }),
   myStar:             (): Promise<{ uid: string; kind: number; exp: number; sig: string } | null> => invoke("my_star"),
   sendMessage:        (peer_id: string, text: string): Promise<SendResult>        => { noteWrote(peer_id); return invoke("send_message", { peerId: peer_id, text }); },
   verifyFingerprint:  (peer_id: string): Promise<FingerprintView>                  => invoke("verify_fingerprint", { peerId: peer_id }),
@@ -349,7 +350,7 @@ export const api = {
   // Telegram bot token. Downloads straight from the Telegram Bot API into
   // the local stickers library; never touches our own relay.
   packPreview:        (pack_ref: string): Promise<{ ref: string; title: string; kind: string; installed: boolean; local: StickerPack | null; server: Record<string, unknown> | null }> => invoke("pack_preview", { packRef: pack_ref }),
-  serverPacks:        (): Promise<{ telegram: boolean; packs: { name: string; title: string; type: string; count: number; adult?: boolean }[]; banned?: string[]; removed?: Record<string, string[]> }> => invoke("server_packs"),
+  serverPacks:        (): Promise<{ telegram: boolean; packs: { name: string; title: string; type: string; count: number; adult?: boolean; teen?: boolean }[]; banned?: string[]; removed?: Record<string, string[]> }> => invoke("server_packs"),
   importPackViaServer: (link: string): Promise<StickerImportReport>                  => invoke("import_pack_via_server", { link }),
   packFilePath:       (name: string, file: string): Promise<string>                  => invoke("pack_file_path", { name, file }),
   importTelegramStickers: (bot_token: string, pack_ref: string): Promise<StickerImportReport> =>

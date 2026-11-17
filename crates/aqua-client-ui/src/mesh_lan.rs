@@ -95,7 +95,8 @@ pub async fn listen(app: &AppHandle) -> Result<(), String> {
     // a moment — wait for it rather than move to 7791, where contacts that
     // knock on 7790 never look.
     let mut first = None;
-    for _ in 0..5 {
+    // (The previous listener frees it within its 1 s poll.)
+    for _ in 0..15 {
         if let Ok(l) = TcpListener::bind(("0.0.0.0", PORT)) {
             first = Some(l);
             break;
@@ -123,7 +124,9 @@ pub async fn listen(app: &AppHandle) -> Result<(), String> {
                         run_session(&app3, &mut link, false, &format!("lan:{}", peer.ip()));
                     });
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(200)),
+                // Once a second, not five times: a phone kept waking up for
+                // this all day (a connection waits ≤ 1 s, nobody notices).
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_secs(1)),
                 Err(_) => std::thread::sleep(Duration::from_secs(1)),
             }
         }

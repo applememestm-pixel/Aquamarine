@@ -243,6 +243,9 @@ pub struct SecurityState {
 /// two different people with the same @name both keep their accounts.
 /// Derived from the identity key the account was created with, so every
 /// relay computes the same ID for rows from before IDs existed.
+/// Any bans at all (so most servers skip the lookup on every request).
+static ANY_BANS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub fn uid_for(identity_dh: &[u8]) -> String {
     use sha2::Digest;
     let h = sha2::Sha256::new().chain_update(b"aqua-uid\0").chain_update(identity_dh).finalize();
@@ -674,8 +677,20 @@ impl Directory {
                 n  INTEGER NOT NULL,
                 at INTEGER NOT NULL
             );
+            -- People the admin banned here (panel -> People -> Accounts): by
+            -- account ID, with every identity key the account had then
+            -- (devices too), so none of them gets a token here again.
+            CREATE TABLE IF NOT EXISTS bans (
+                uid  TEXT PRIMARY KEY,
+                dhs  TEXT NOT NULL DEFAULT '',
+                name TEXT NOT NULL DEFAULT '',
+                at   INTEGER NOT NULL
+            );
             "#,
         )?;
+        if db.query_row("SELECT 1 FROM bans LIMIT 1", [], |_| Ok(())).is_ok() {
+            ANY_BANS.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         // Columns added after the first release. SQLite has no
         // "ADD COLUMN IF NOT EXISTS", so ignore the duplicate-column error
         // on databases that already have them.
@@ -2159,6 +2174,10 @@ impl Directory {
             return out;
         }
         let uid = if u.uid.len() == 10 && u.uid.bytes().all(|b| b.is_ascii_digit()) { u.uid.clone() } else { uid_for(&dh) };
+        // Banned here: a peer doesn't bring them back.
+        if self.is_banned_uid(&uid) || self.is_banned_dh(&dh) {
+            return out;
+        }
         let mut db = self.db.lock().unwrap();
         // This account here, under whatever name.
         let mine: Option<(String, i64)> = db
@@ -2607,6 +2626,43 @@ impl Directory {
 
     // ---- check marks (verify.rs) ----
 
+    /// Has this account ID the check mark here?
+    pub fn is_verified_uid(&self, uid: &str) -> bool {
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT 1 FROM verified WHERE uid=?1", rusqlite::params![uid], |_| Ok(())).is_ok()
+    }
+
+    /// Give or take the check mark by account ID (any relay's account).
+    pub fn set_verified_uid(&self, uid: &str, on: bool) -> bool {
+        let db = self.db.lock().unwrap();
+        let r = if on {
+            db.execute("INSERT INTO verified (uid, at) VALUES (?1, ?2) ON CONFLICT(uid) DO NOTHING", rusqlite::params![uid, now_secs() as i64])
+        } else {
+            db.execute("DELETE FROM verified WHERE uid=?1", rusqlite::params![uid])
+        };
+        r.is_ok()
+    }
+
+    /// The ID of `name` here or on another relay this one knows the names
+    /// of (name registry).
+    pub fn uid_anywhere(&self, name: &str) -> Option<String> {
+        let name = name.trim().trim_start_matches('@').to_lowercase();
+        if let Some(u) = self.uid_of(&name).filter(|u| !u.is_empty()) {
+            return Some(u);
+        }
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT uid FROM fed_names WHERE username=?1", rusqlite::params![name], |r| r.get::<_, String>(0)).ok().filter(|u| !u.is_empty())
+    }
+
+    /// The @name of an ID here or in the name registry.
+    pub fn name_anywhere(&self, uid: &str) -> Option<String> {
+        if let Some(n) = self.username_by_uid(uid) {
+            return Some(n);
+        }
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT username FROM fed_names WHERE uid=?1", rusqlite::params![uid], |r| r.get::<_, String>(0)).ok()
+    }
+
     /// Give or take the check mark; false when there's no such account.
     pub fn set_verified(&self, username: &str, on: bool) -> bool {
         let Some(uid) = self.uid_of(username).filter(|u| !u.is_empty()) else { return false };
@@ -2682,10 +2738,135 @@ impl Directory {
         out
     }
 
+    /// Every person registered here (not bots), newest first — the panel's
+    /// "Accounts" list. In a full server network that's the network's.
+    pub fn accounts_list(&self) -> Vec<serde_json::Value> {
+        let db = self.db.lock().unwrap();
+        let Ok(mut st) = db.prepare(
+            "SELECT u.username, u.display_name, u.uid, u.created_at, COALESCE(u.email, ''), COALESCE(l.at, 0), u.devices,
+                    (SELECT 1 FROM bans b WHERE b.uid = u.uid)
+             FROM users u LEFT JOIN last_seen l ON l.username = u.username WHERE u.is_bot = 0 ORDER BY u.created_at DESC",
+        ) else { return Vec::new() };
+        st.query_map([], |r| {
+            let devices: String = r.get(6)?;
+            let n = serde_json::from_str::<Vec<serde_json::Value>>(&devices).map(|v| v.len()).unwrap_or(0);
+            Ok(serde_json::json!({
+                "username": r.get::<_, String>(0)?, "name": r.get::<_, String>(1)?, "uid": r.get::<_, String>(2)?,
+                "created_at": r.get::<_, i64>(3)?, "email": r.get::<_, String>(4)?, "seen": r.get::<_, i64>(5)?,
+                "devices": n + 1, "banned": r.get::<_, Option<i64>>(7)?.is_some(),
+            }))
+        })
+        .map(|it| it.filter_map(|x| x.ok()).collect())
+        .unwrap_or_default()
+    }
+
+    /// Banned here, including accounts already deleted (they'd come back).
+    pub fn bans_list(&self) -> Vec<serde_json::Value> {
+        let db = self.db.lock().unwrap();
+        let Ok(mut st) = db.prepare("SELECT uid, name, at FROM bans ORDER BY at DESC") else { return Vec::new() };
+        st.query_map([], |r| Ok(serde_json::json!({ "uid": r.get::<_, String>(0)?, "username": r.get::<_, String>(1)?, "at": r.get::<_, i64>(2)? })))
+            .map(|it| it.filter_map(|x| x.ok()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Ban `username` (a person, not a bot): its ID and every identity key it
+    /// has now. Returns the ID, or None when there's no such person.
+    pub fn ban(&self, username: &str) -> Option<String> {
+        let name = username.trim().trim_start_matches('@').to_lowercase();
+        let row: Option<(String, Vec<u8>, String)> = {
+            let db = self.db.lock().unwrap();
+            db.query_row("SELECT uid, identity_dh, devices FROM users WHERE username=?1 AND is_bot=0", rusqlite::params![name], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .ok()
+        };
+        let (uid, dh, devices) = row?;
+        let uid = if uid.is_empty() { uid_for(&dh) } else { uid };
+        let mut dhs = vec![hex::encode(&dh)];
+        if let Ok(list) = serde_json::from_str::<Vec<Device>>(&devices) {
+            dhs.extend(list.into_iter().map(|d| d.dh));
+        }
+        let db = self.db.lock().unwrap();
+        db.execute(
+            "INSERT INTO bans (uid, dhs, name, at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(uid) DO UPDATE SET dhs=?2, name=?3",
+            rusqlite::params![uid, dhs.join(","), name, now_secs() as i64],
+        )
+        .ok()?;
+        ANY_BANS.store(true, std::sync::atomic::Ordering::Relaxed);
+        Some(uid)
+    }
+
+    /// Lift a ban (by account ID or @name); false when there was none.
+    pub fn unban(&self, who: &str) -> bool {
+        let w = who.trim().trim_start_matches('@').to_lowercase();
+        let db = self.db.lock().unwrap();
+        let n = db.execute("DELETE FROM bans WHERE uid=?1 OR name=?1", rusqlite::params![w]).unwrap_or(0);
+        let left: i64 = db.query_row("SELECT COUNT(*) FROM bans", [], |r| r.get(0)).unwrap_or(0);
+        ANY_BANS.store(left > 0, std::sync::atomic::Ordering::Relaxed);
+        n > 0
+    }
+
+    /// Is this identity key (an account's or one of its devices') banned here?
+    pub fn is_banned_dh(&self, dh: &[u8]) -> bool {
+        if !ANY_BANS.load(std::sync::atomic::Ordering::Relaxed) {
+            return false;
+        }
+        let db = self.db.lock().unwrap();
+        db.query_row(
+            "SELECT 1 FROM bans WHERE uid=?1 OR instr(dhs, ?2) > 0",
+            rusqlite::params![uid_for(dh), hex::encode(dh)],
+            |_| Ok(()),
+        )
+        .is_ok()
+    }
+
+    pub fn is_banned_uid(&self, uid: &str) -> bool {
+        if !ANY_BANS.load(std::sync::atomic::Ordering::Relaxed) {
+            return false;
+        }
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT 1 FROM bans WHERE uid=?1", rusqlite::params![uid], |_| Ok(())).is_ok()
+    }
+
+    /// The admin deletes one person and everything they left here: the
+    /// account, keys, profile pictures, backups, synced history, waiting
+    /// messages (also to their devices), capsules, bot chats, check mark,
+    /// network name. Their bots stay. Returns false when there's no such person.
+    pub fn delete_person(&self, username: &str) -> bool {
+        let name = username.trim().trim_start_matches('@').to_lowercase();
+        let db = self.db.lock().unwrap();
+        let Ok(uid) = db.query_row("SELECT uid FROM users WHERE username=?1 AND is_bot=0", rusqlite::params![name], |r| r.get::<_, String>(0)) else {
+            return false;
+        };
+        let dev = format!("{name}~%");
+        for sql in [
+            "DELETE FROM users WHERE username=?1",
+            "DELETE FROM prekeys WHERE username=?1",
+            "DELETE FROM profile_media WHERE username=?1",
+            "DELETE FROM last_seen WHERE username=?1",
+            "DELETE FROM backups WHERE username=?1",
+            "DELETE FROM hist_store WHERE username=?1",
+            "DELETE FROM inbox WHERE user=?1",
+            "DELETE FROM capsules WHERE owner=?1 OR recipient=?1",
+            "DELETE FROM bot_peers WHERE user=?1",
+            "DELETE FROM fed_names WHERE username=?1",
+            "DELETE FROM renames WHERE new_name=?1",
+        ] {
+            let _ = db.execute(sql, rusqlite::params![name]);
+        }
+        let _ = db.execute("DELETE FROM inbox WHERE user LIKE ?1", rusqlite::params![dev]);
+        if !uid.is_empty() {
+            let _ = db.execute("DELETE FROM verified WHERE uid=?1", rusqlite::params![uid]);
+        }
+        true
+    }
+
     /// Who has a check mark here (current @names).
     pub fn verified_names(&self) -> Vec<String> {
         let db = self.db.lock().unwrap();
-        let Ok(mut st) = db.prepare("SELECT u.username FROM verified v JOIN users u ON u.uid = v.uid ORDER BY v.at") else { return Vec::new() };
+        // Accounts of other relays too (the star relay's marks hold everywhere).
+        let Ok(mut st) = db.prepare(
+            "SELECT COALESCE(u.username, f.username, 'ID ' || v.uid) FROM verified v
+             LEFT JOIN users u ON u.uid = v.uid AND u.is_bot = 0 LEFT JOIN fed_names f ON f.uid = v.uid ORDER BY v.at",
+        ) else { return Vec::new() };
         st.query_map([], |r| r.get::<_, String>(0)).map(|it| it.filter_map(|x| x.ok()).collect()).unwrap_or_default()
     }
 
@@ -2696,6 +2877,15 @@ impl Directory {
         let Ok(mut q) = db.prepare("SELECT username FROM users WHERE lower(trim(email))=?1 AND is_bot=0") else { return Vec::new() };
         q.query_map(rusqlite::params![email.trim().to_lowercase()], |r| r.get::<_, String>(0))
             .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
+    /// Every person's (name, e-mail) — to find the owner (verify.rs).
+    pub fn accounts_with_email(&self) -> Vec<(String, String)> {
+        let db = self.db.lock().unwrap();
+        let Ok(mut q) = db.prepare("SELECT username, email FROM users WHERE email IS NOT NULL AND email<>'' AND is_bot=0") else { return Vec::new() };
+        q.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map(|rows| rows.flatten().map(|(n, e)| (n, e.trim().to_lowercase())).collect())
             .unwrap_or_default()
     }
 

@@ -58,7 +58,7 @@
   import { insertEmoji } from "../composerBus";
   import { loadActiveMessages } from "../stores";
   import AnimatedMedia from "./AnimatedMedia.svelte";
-  import { stickerVerdict, refreshPackRules, showAdult } from "../packRules";
+  import { stickerVerdict, refreshPackRules, showAdult, showTeen } from "../packRules";
   import { reactionPack, emojiFromFile, REACTION_PACK, loadReactionPack, loadEmojiPacks } from "../reactionPack";
 
   /** Telegram's paper plane, for packs that came from there. */
@@ -645,7 +645,7 @@
   let tgPack = $state("");
   try { tgToken = localStorage.getItem(TG_TOKEN_KEY) ?? ""; } catch { /* ignore */ }
   /** The relay can import packs itself (its admin set a bot token). */
-  let srv = $state<{ telegram: boolean; packs: { name: string; title: string; type: string; count: number; adult?: boolean }[] } | null>(null);
+  let srv = $state<{ telegram: boolean; packs: { name: string; title: string; type: string; count: number; adult?: boolean; teen?: boolean }[] } | null>(null);
   /** "loading" until the relay answers, "old" if it has no packs API. */
   let srvState = $state<"loading" | "ok" | "old" | "offline">("loading");
   /** Users never need a token — unless they opt into their own (the relay
@@ -664,7 +664,7 @@
       .catch((e) => { srv = null; srvState = /404|not found/i.test(String(e)) ? "old" : "offline"; });
   }
   let serverOnly = $derived(
-    uniq(srv?.packs ?? [], (p) => p.name).filter((p) => (!p.adult || $showAdult) && !(catalogue?.packs ?? []).some((c) => c.source === p.name || c.title === p.title)),
+    uniq(srv?.packs ?? [], (p) => p.name).filter((p) => (!p.adult || $showAdult) && (!p.teen || $showTeen) && !(catalogue?.packs ?? []).some((c) => c.source === p.name || c.title === p.title)),
   );
   async function doImport(link?: string) {
     const token = tgToken.trim(), pack = (link ?? tgPack).trim();

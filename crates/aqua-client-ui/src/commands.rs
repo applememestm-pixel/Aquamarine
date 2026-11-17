@@ -200,6 +200,23 @@ pub async fn send_message(
     let _ = app.emit("aqua://own_sent", serde_json::json!({ "peer_id": peer_id }));
     // Encrypted once per device of the peer, plus a copy for my other devices.
     if let Err(e) = crate::multidev::fanout(&app, &peer_id, &text, true).await {
+        // No keys at all (404): a bot whose chat was made as an encrypted
+        // one (opened from search, or my other device wrote first). The
+        // directory says so → it's a bot chat from now on, and this goes as
+        // a bot message (a person's chat never turns unencrypted this way).
+        if e.contains("404") {
+            let t = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone();
+            if let Some(t) = t {
+                if t.get_profile(&peer_id).await.ok().flatten().is_some_and(|p| p.is_bot) {
+                    if let Some(c) = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).chats.get_mut(&peer_id) {
+                        c.summary.has_lock = false;
+                    }
+                    t.send_plaintext(&peer_id, &text).map_err(|e| format!("send: {e}"))?;
+                    let _ = app.emit("aqua://chats_updated", ());
+                    return Ok(SendResult { id: out_msg.id, time: out_msg.time });
+                }
+            }
+        }
         // Nothing went out: the UI puts the text back into the field, so the
         // echo goes too — else a retry left two copies, and the one that
         // never left looked sent.
@@ -4032,6 +4049,29 @@ async fn on_incoming_plaintext(app: &AppHandle, from: String, text: String) {
         tracing::warn!("an unencrypted message from my own account — dropped");
         return;
     }
+    // The chat was made as an encrypted one (opened from search, or my
+    // other device wrote first) but this is a bot: make it a bot chat, so
+    // its buttons and mini app work. Only when the directory says it's a bot —
+    // a relay can't turn a person's chat into an unencrypted one this way.
+    let locked = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).chats.get(&from).is_some_and(|c| c.summary.has_lock);
+    if locked {
+        let t = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone();
+        // Can't ask (offline): shown as before, the chat stays as it is.
+        let bot = match t {
+            Some(t) => t.get_profile(&from).await.ok().map(|p| p.is_some_and(|p| p.is_bot)),
+            None => None,
+        };
+        if bot == Some(false) {
+            tracing::warn!(peer = %from, "an unencrypted message in an encrypted chat with a person — dropped");
+            return;
+        }
+        if bot == Some(true) {
+            let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(c) = s.chats.get_mut(&from) {
+                c.summary.has_lock = false;
+            }
+        }
+    }
     let is_new_chat;
     {
         let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -4527,6 +4567,8 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
             s.chat_order.insert(0, from.clone());
         }
         push_peer_message(&mut s, &from, text.clone(), &time);
+        // An encrypted message: the chat is an encrypted one.
+        if let Some(b) = s.chats.get_mut(&from) { b.summary.has_lock = true; }
     }
     // Phones in the background: before, only a session's first message
     // was announced (bgnotify.rs) — the ordinary ones stayed silent.
@@ -4582,7 +4624,8 @@ fn push_own_message(s: &mut AppState, peer_id: &str, msg: ChatMessage, _text: &s
         book.summary.preview = preview_for(&msg.kind);
         book.summary.preview_by_me = true;
         book.summary.preview_is_typing = false;
-        book.summary.has_lock = book.summary.live;
+        // The chat stays what it is: a bot chat (no lock) must not turn into
+        // an encrypted one by my own message — its buttons showed as raw `[kb:v1]`.
         book.summary.time = hhmm_now();
         book.messages.push(msg);
     }
@@ -4956,7 +4999,8 @@ fn push_peer_message(s: &mut AppState, peer_id: &str, text: String, time: &str) 
         book.summary.preview = preview;
         book.summary.preview_by_me = false;
         book.summary.preview_is_typing = false;
-        book.summary.has_lock = true;
+        // The lock is the caller's: a bot's message (unencrypted) put it back
+        // and the bot's buttons flashed and turned into raw `[kb:v1]`.
         book.summary.time = time.to_string();
         book.summary.unread = book.summary.unread.saturating_add(1);
     }

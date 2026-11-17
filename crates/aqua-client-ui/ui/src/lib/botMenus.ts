@@ -12,7 +12,7 @@ try {
   const raw = JSON.parse(localStorage.getItem(KEY) ?? "{}");
   if (raw && typeof raw === "object") for (const [k, v] of Object.entries(raw)) {
     const m = v as BotMenu;
-    if (typeof m?.url === "string" && /^https:\/\//.test(m.url)) first[k] = { text: String(m.text ?? "").slice(0, 32), url: m.url };
+    if (typeof m?.url === "string" && /^(https:\/\/|aqua:relay\/)/.test(m.url)) first[k] = { text: String(m.text ?? "").slice(0, 32), url: m.url };
   }
 } catch { first = {}; }
 export const botMenus = writable<Record<string, BotMenu>>(first);

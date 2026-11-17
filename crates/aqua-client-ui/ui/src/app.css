@@ -86,6 +86,10 @@ body::after {
 /* WebKitGTK (Linux): a 100px blur over a 60vmax layer, animated forever, is
    repainted on the CPU every frame and makes the whole UI lag. The gradient
    alone is already soft; drop the blur, the drift and backdrop blurs there. */
+/* Phones: the glow stays, it just doesn't drift — a screen-sized blurred
+   layer moving all day cost battery for a barely visible effect. */
+html.phone body::before,
+html.phone body::after,
 html.wk-lowfx body::before,
 html.wk-lowfx body::after {
   filter: none;

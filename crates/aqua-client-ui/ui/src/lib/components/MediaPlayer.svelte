@@ -105,10 +105,27 @@
     if (!media) return;
     if (media.paused) play(); else media.pause();
   }
+  /** Recorded in a browser (camera, stories, circles): WebM / MP4 written by
+   *  MediaRecorder carry no length — "0:10 / 0:00" and no seeking. Jump far
+   *  past the end once: the browser then knows the real length; back to 0. */
+  let probing = false;
+  function probeLength() {
+    if (!media || duration || probing || isFinite(media.duration)) return;
+    probing = true;
+    try { media.currentTime = 1e101; } catch { probing = false; }
+  }
+  function probed() {
+    if (!probing || !media || !isFinite(media.duration) || media.duration <= 0) return;
+    probing = false;
+    duration = media.duration;
+    try { media.currentTime = 0; } catch { /* ignore */ }
+    current = 0;
+  }
   function onMeta() {
     if (!media) return;
     readDuration();
     const h = handoff.get(src);
+    if (!h) probeLength();
     if (h) {
       handoff.delete(src);
       try { media.currentTime = h.t; } catch { /* ignore */ }
@@ -122,12 +139,14 @@
   }
   function readDuration() {
     if (!media) return;
+    if (probing) { probed(); return; }
     const d = media.duration;
     if (isFinite(d) && d > 0) duration = d;
     else if (media.seekable.length) duration = media.seekable.end(media.seekable.length - 1);
   }
   function onTime() {
     if (!media) return;
+    if (probing) { probed(); return; }
     if (!seeking) current = media.currentTime;
     if (!duration) readDuration();
     const b = media.buffered;

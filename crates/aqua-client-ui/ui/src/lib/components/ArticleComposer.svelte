@@ -264,7 +264,7 @@
   async function probeLocal(path: string, kind: "video" | "audio"): Promise<{ poster?: string; duration?: number }> {
     const native = await api.probeMediaFile(path, kind).catch(() => null);
     if (native && (native.poster || kind === "audio") && native.duration) return { poster: native.poster ?? undefined, duration: native.duration };
-    if (document.documentElement.classList.contains("wk-lowfx")) {
+    if (document.documentElement.classList.contains("wk-linux")) {
       return { poster: native?.poster ?? undefined, duration: native?.duration ?? undefined };
     }
     return probeMedia(await localUrl(path), kind);

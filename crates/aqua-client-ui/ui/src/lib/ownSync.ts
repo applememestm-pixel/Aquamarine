@@ -34,7 +34,7 @@ import { seenStories } from "./stories";
 const DEVICE_FIELDS: (keyof Settings)[] = [
   "uiScale", "fontScale", "enterToSend", "wallpaperPath", "wallpaperCustom", "customFontName", "customFontData", "appIcon",
   "tray", "trayMono", "restoreWindows", "askDownloadPath", "power", "powerMode", "widgetText", "notifyDesktop",
-  "titleChatName", "titleAccount", "titleUnread",
+  "titleChatName", "titleAccount", "titleUnread", "liteFx",
 ];
 
 interface Entry {

@@ -564,6 +564,9 @@ async fn ws_upgrade(
             return Err((e.status(), e.to_string()));
         }
     };
+    if state.directory.is_banned_dh(&dh_pub) {
+        return Err((StatusCode::FORBIDDEN, auth::BANNED.into()));
+    }
     let token_fp = short_hex(&dh_pub);
     tracing::info!(user = %q.user, token = %token_fp, "WS: token verified");
 
@@ -2845,10 +2848,93 @@ async fn admin_detail(
             let sys = state.directory.system_bots(&music::relay_bot_owner());
             serde_json::json!(state.directory.all_bots().into_iter().map(|(u, n)| serde_json::json!({ "username": u, "name": n, "system": sys.contains(&u) })).collect::<Vec<_>>())
         }
+        "accounts" => {
+            let dir = state.directory.clone();
+            serde_json::json!(tokio::task::spawn_blocking(move || dir.accounts_list()).await.unwrap_or_default())
+        }
+        "bans" => serde_json::json!(state.directory.bans_list()),
         "visitors" => serde_json::json!(journal::visitors()),
         "journal" => serde_json::json!(journal::recent(500)),
         _ => return Err(StatusCode::NOT_FOUND),
     }))
+}
+
+/// Drop `name`'s connections (the account and its devices, `name~dev`):
+/// their senders go, so each socket's loop ends (`rx` closes).
+async fn drop_connections(state: &AppState, name: &str) {
+    let dev = format!("{name}~");
+    let mine = |k: &str| k == name || k.starts_with(&dev);
+    let live: Vec<Arc<Mutex<UserState>>> = state.users.iter().filter(|e| mine(e.key())).map(|e| e.value().clone()).collect();
+    for u in live {
+        u.lock().await.tx.clear();
+    }
+    state.users.retain(|k, _| !mine(k));
+    state.bindings.retain(|k, _| !mine(k));
+}
+
+#[derive(serde::Deserialize)]
+struct BanReq {
+    on: bool,
+}
+
+/// `POST /v1/admin/users/:name/ban {on}` — ban a person here (no sign-in,
+/// no connection, a peer can't bring them back) or lift it. `:name` may be
+/// an account ID when lifting the ban of a deleted account.
+async fn admin_ban_user(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Path(name): Path<String>,
+    Json(b): Json<BanReq>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    admin_authed(&state, &headers).map_err(|c| (c, String::new()))?;
+    let name = name.trim().trim_start_matches('@').to_lowercase();
+    if !b.on {
+        return Ok(Json(serde_json::json!({ "ok": state.directory.unban(&name) })));
+    }
+    if state.directory.is_bot(&name) {
+        return Err((StatusCode::BAD_REQUEST, "a bot — delete it instead".into()));
+    }
+    let uid = state.directory.ban(&name).ok_or((StatusCode::NOT_FOUND, "no such account".into()))?;
+    drop_connections(&state, &name).await;
+    tracing::warn!(user = %name, %uid, "admin: banned");
+    journal::log(&name, "banned", "");
+    Ok(Json(serde_json::json!({ "ok": true, "uid": uid })))
+}
+
+#[derive(serde::Deserialize)]
+struct DeleteUserQ {
+    #[serde(default)]
+    ban: bool,
+}
+
+/// `DELETE /v1/admin/users/:name?ban=1` — delete a person and their data here
+/// (and ban them first with `ban`, so they can't come back). Without a ban
+/// the app can sign up again, and in a server network a peer brings the
+/// account back.
+async fn admin_delete_user(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Path(name): Path<String>,
+    Query(q): Query<DeleteUserQ>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    admin_authed(&state, &headers).map_err(|c| (c, String::new()))?;
+    let name = name.trim().trim_start_matches('@').to_lowercase();
+    if state.directory.is_bot(&name) {
+        return Err((StatusCode::BAD_REQUEST, "a bot — delete it in Bots".into()));
+    }
+    if q.ban && state.directory.ban(&name).is_none() {
+        return Err((StatusCode::NOT_FOUND, "no such account".into()));
+    }
+    let dir = state.directory.clone();
+    let n = name.clone();
+    let ok = tokio::task::spawn_blocking(move || dir.delete_person(&n)).await.unwrap_or(false);
+    if !ok {
+        return Err((StatusCode::NOT_FOUND, "no such account".into()));
+    }
+    drop_connections(&state, &name).await;
+    tracing::warn!(user = %name, ban = q.ban, "admin: account deleted");
+    journal::log(&name, "deleted", if q.ban { "banned" } else { "" });
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 /// `DELETE /v1/admin/bots/:name` — the admin deletes a bot (any owner's);
@@ -3145,12 +3231,20 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/admin/config", post(admin_set_config))
         .route("/v1/admin/wipe", post(admin_wipe))
         .route("/v1/admin/bots/:name", axum::routing::delete(admin_delete_bot))
+        .route("/v1/admin/users/:name", axum::routing::delete(admin_delete_user))
+        .route("/v1/admin/users/:name/ban", post(admin_ban_user))
         .route("/v1/admin/host", get(admin_host))
         .route("/v1/admin/power", post(admin_power))
         .route("/v1/admin/updates", get(admin_get_updates).post(admin_set_updates))
         .route("/v1/stars/:uid", get(stars::get_star))
+        .route("/v1/marks/:uid", get(stars::get_marks))
+        .route("/v1/stars-app", get(stars::app::page))
+        .route("/v1/stars-app/me", post(stars::app::me))
+        .route("/v1/stars-app/link", post(stars::app::link))
+        .route("/v1/stars-app/unlink", post(stars::app::unlink_me))
         .route("/v1/ice", get(turnsrv::ice))
         .route("/v1/admin/stars", get(stars::admin_get).post(stars::admin_make))
+        .route("/v1/admin/stars/boosty", get(stars::admin_boosty_get).post(stars::admin_boosty_set))
         .route("/v1/admin/smtp", get(admin_get_smtp).post(admin_set_smtp))
         .route("/v1/admin/smtp/test", post(admin_test_smtp))
         .route("/v1/admin/telegram", get(packs::admin_get).post(packs::admin_set))
