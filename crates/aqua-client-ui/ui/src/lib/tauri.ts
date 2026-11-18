@@ -18,6 +18,9 @@ export interface ServerProbe {
 }
 
 /** One account on this device (accounts.rs); slot "" is the first one. */
+/** A public group / channel's @name on the server (aqua-server group_names). */
+export interface PublicGroup { username: string; gid: string; title: string; kind: "group" | "channel"; admin: string }
+
 export interface AccountSlot {
   slot: string; registered: boolean; username: string | null; server_url: string | null; active: boolean;
   /** Logged out there: whose keys it still holds (if known); has_keys — it has a vault. */
@@ -197,6 +200,9 @@ export const api = {
     invoke("backup_restore", { serverUrl: server_url, ticket, password, email, phrase: phrase || null, totp: totp || null, recovery: recovery || null }),
   registerUsername:   (ticket: string, username: string, display_name: string, about: string, phone: string): Promise<void> => invoke("register_username", { ticket, username, displayName: display_name, about, phone }),
   searchDirectory:    (query: string): Promise<DirProfile[]>                        => invoke("search_directory", { query }),
+  groupSearch:        (query: string): Promise<PublicGroup[]>                       => invoke("group_search", { query }),
+  groupLookup:        (name: string): Promise<PublicGroup | null>                   => invoke("group_lookup", { name }),
+  groupNameSet:       (gid: string, name: string, title: string, kind: string): Promise<string> => invoke("group_name_set", { gid, name, title, kind }),
   fetchDirectoryProfile: (username: string): Promise<DirProfile | null>            => invoke("fetch_directory_profile", { username }),
   followPeerByUid: (old: string, uid: string): Promise<string | null>                => invoke("follow_peer_by_uid", { old, uid }),
   publishProfile:     (display_name: string, about: string, phone: string): Promise<void> => invoke("publish_profile", { displayName: display_name, about, phone }),

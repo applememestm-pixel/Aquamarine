@@ -105,8 +105,16 @@ export function tagOf(g: Group | undefined, u: string): { tag: string; admin: bo
 }
 
 export function shareLink(g: Group): string {
+  // A public group / channel with an @name: the short link (the server says the rest).
+  if (g.settings.is_public && g.settings.public_link) return `aqua://join/@${g.settings.public_link}`;
   const q = new URLSearchParams({ admin: g.owner, title: g.title });
   return `aqua://join/${g.id}?${q.toString()}`;
+}
+
+/** `aqua://join/@name` (a public group / channel's @name) → the name. */
+export function parseNameLink(s: string): string | null {
+  const m = /^aqua:\/\/join\/@([a-z0-9_.]{3,32})$/i.exec(s.trim());
+  return m ? m[1].toLowerCase() : null;
 }
 
 export function parseJoinLink(s: string): { gid: string; admin: string; title: string } | null {

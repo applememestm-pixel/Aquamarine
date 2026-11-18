@@ -4088,6 +4088,7 @@
       class="messages"
       class:feed={feedView}
       class:dm={!isGroup}
+      class:chan={isChannel}
       class:protected={protectedChat}
       class:drag-over={draggingOver}
       class:selecting
@@ -4124,7 +4125,7 @@
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <div
-            class="msg {m.outgoing ? 'out' : 'in'}"
+            class="msg {m.outgoing && !isChannel ? 'out' : 'in'}"
             data-msg-id={m.id}
             data-vkey={isChannel ? reactionKey(m) : undefined}
             class:first={m.first}
@@ -4164,7 +4165,7 @@
               {/if}
               {#if m.meta?.fwd?.name}
                 {@const fw = m.meta.fwd}
-                <button class="fwd-tag" class:out={m.outgoing} disabled={!fw.from} onclick={() => fw.from && openProfile(fw.from)}
+                <button class="fwd-tag" class:out={m.outgoing && !isChannel} disabled={!fw.from} onclick={() => fw.from && openProfile(fw.from)}
                   title={fw.from ? `@${fw.from}${fw.at ? " · " + fw.at : ""}` : $t("The author doesn't allow linking to their account")}>
                   <span class="fwd-av" style:background-image={fw.from && $avatars[fw.from] ? `url("${$avatars[fw.from]}")` : undefined}>{fw.from && $avatars[fw.from] ? "" : fw.name.slice(0, 1).toUpperCase()}</span>
                   <span class="fwd-txt"><i>{$t("Forwarded from")}</i> <b>{fw.name}</b>{#if fw.chat}<span class="fwd-chat"> · {fw.chat}</span>{/if}</span>
@@ -4577,7 +4578,7 @@
                 {@const vk = reactionKey(m)}
                 {#if isGroup && commentsAllowed && activeGroup?.kind === "channel"}
                   <!-- Telegram: a bar under every post — who commented, how many, "Leave a comment". -->
-                  <button class="cmt-bar" class:out={m.outgoing}
+                  <button class="cmt-bar" class:out={m.outgoing && !isChannel}
                     onclick={() => { if (cmtHeld) { cmtHeld = false; return; } openThread(m, "comments"); }}
                     onpointerdown={(e) => cmtDown(e, m)} onpointerup={cmtUp} onpointerleave={cmtUp} onpointercancel={cmtUp}
                     oncontextmenu={(e) => { if (cmtPeek) e.preventDefault(); }}>
@@ -4594,7 +4595,7 @@
                     <span class="tc-arrow">›</span>
                   </button>
                 {/if}
-                <div class="post-foot" class:out={m.outgoing}>
+                <div class="post-foot" class:out={m.outgoing && !isChannel}>
                   {#if (isGroup && commentsAllowed && activeGroup?.kind !== "channel" && nc) || (nr && activeGroup?.kind !== "channel")}
                     <button class="thread-chip" onclick={() => openThread(m, nc ? "comments" : "replies")}>
                       {#if nc}💬 {$tn(nc, "comment")}{:else}↩ {$tn(nr, "reply")}{/if}
@@ -6496,6 +6497,11 @@
   .media-bubble.album.a3 { grid-template-columns: 1fr 1fr 1fr; }
   .media-bubble.album .alb-cell { aspect-ratio: 1; overflow: hidden; padding: 0; border: none; background: var(--bg-input); }
   .media-bubble.album .alb-cell .media-img { width: 100%; height: 100%; object-fit: cover; max-width: none; max-height: none; border-radius: 0; }
+  /* A channel (Telegram): every post on one side, in one colour — mine too
+     (the row is "in" for them); no avatars, the posts take the width. */
+  .messages.chan .msg { grid-template-columns: 1fr; }
+  .messages.chan .msg-avatar { display: none; }
+  .messages.chan .msg-col { grid-column: 1; }
   /* A chat of two: no avatar column — the bubbles take the room. */
   .messages.dm .msg { grid-template-columns: 1fr; }
   .messages.dm .msg-avatar { display: none; }

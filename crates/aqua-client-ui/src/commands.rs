@@ -690,6 +690,52 @@ pub async fn search_directory(
     Ok(cards.into_iter().map(DirProfile::from).collect())
 }
 
+// ---------- @names of public groups and channels (aqua-server group_names) ----
+
+fn live_transport(state: &State<'_, StdMutex<AppState>>) -> Result<std::sync::Arc<aqua_client_core::transport::Transport>, String> {
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    s.transport.clone().ok_or_else(|| "not connected to a server".to_string())
+}
+
+async fn group_get(state: &State<'_, StdMutex<AppState>>, path: &str, query: &[(&str, &str)]) -> Result<Option<serde_json::Value>, String> {
+    let t = live_transport(state)?;
+    let url = format!("{}{path}", t.server_url().trim_end_matches('/'));
+    let r = t.http().get(&url).query(query).timeout(std::time::Duration::from_secs(15)).send().await.map_err(|e| e.without_url().to_string())?;
+    if r.status().as_u16() == 404 { return Ok(None); }
+    if !r.status().is_success() { return Err(format!("HTTP {}", r.status().as_u16())); }
+    r.json().await.map(Some).map_err(|e| e.without_url().to_string())
+}
+
+/// Public groups / channels whose @name or title has `query`.
+#[tauri::command]
+pub async fn group_search(state: State<'_, StdMutex<AppState>>, query: String) -> Result<serde_json::Value, String> {
+    Ok(group_get(&state, "/v1/groups/search", &[("q", query.as_str())]).await.unwrap_or(None).unwrap_or_else(|| serde_json::json!([])))
+}
+
+/// A public group / channel by its @name: `{username, gid, title, kind, admin}` or null.
+#[tauri::command]
+pub async fn group_lookup(state: State<'_, StdMutex<AppState>>, name: String) -> Result<Option<serde_json::Value>, String> {
+    let n: String = name.trim().trim_start_matches('@').chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '.').collect();
+    if n.is_empty() { return Ok(None); }
+    group_get(&state, &format!("/v1/groups/by-name/{n}"), &[]).await
+}
+
+/// The owner sets (or, with an empty name, gives up) the group's @name.
+#[tauri::command]
+pub async fn group_name_set(state: State<'_, StdMutex<AppState>>, gid: String, name: String, title: String, kind: String) -> Result<String, String> {
+    let t = live_transport(&state)?;
+    let url = format!("{}/v1/groups/name", t.server_url().trim_end_matches('/'));
+    let r = t.http().post(&url).bearer_auth(t.bearer().await.map_err(|e| e.to_string())?)
+        .json(&serde_json::json!({ "name": name, "gid": gid, "title": title, "kind": kind }))
+        .timeout(std::time::Duration::from_secs(15)).send().await.map_err(|e| e.without_url().to_string())?;
+    if !r.status().is_success() {
+        let body = r.text().await.unwrap_or_default();
+        return Err(if body.is_empty() { "the server refused".into() } else { body });
+    }
+    let v: serde_json::Value = r.json().await.unwrap_or_default();
+    Ok(v["name"].as_str().unwrap_or("").to_string())
+}
+
 #[tauri::command]
 pub async fn fetch_directory_profile(
     state: State<'_, StdMutex<AppState>>,

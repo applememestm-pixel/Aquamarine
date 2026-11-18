@@ -121,6 +121,26 @@
     showToast(tr("Saved"));
   }
 
+  // ---- the public @name (the server keeps it unique) -------------------
+  let nameBusy = $state(false);
+  let nameErr = $state("");
+  async function saveName() {
+    const n = dLink.trim().replace(/^@+/, "").toLowerCase();
+    nameErr = "";
+    if (n && !/^[a-z0-9_.]{3,32}$/.test(n)) { nameErr = tr("@name: 3–32 characters, a-z 0-9 _ . only"); return; }
+    if (n && !group.settings.is_public) { nameErr = tr("Make it public first — only public groups and channels get an @name."); return; }
+    nameBusy = true;
+    try {
+      const got = await api.groupNameSet(group.id, n, group.title, group.kind === "channel" ? "channel" : "group");
+      await commit((g) => { g.settings.public_link = n ? got || n : ""; }, n ? "changed the public name" : "removed the public name");
+      dLink = n ? got || n : "";
+    } catch (e) {
+      const m = String(e);
+      nameErr = /taken/i.test(m) ? tr("@{u} is already taken.", { u: n }) : /not the owner/i.test(m) ? tr("Only the owner can change the @name.") : m;
+    }
+    nameBusy = false;
+  }
+
   // ---- photo & banner --------------------------------------------------
   let uploading = $state<"" | "photo" | "banner">("");
   const isVid = (u: string) => /\.(webm|mp4|mov|mkv|m4v)(\?|$)/i.test(u);
@@ -801,7 +821,7 @@
       {:else if page === "type"}
         <div class="card">
           <div class="seg">
-            <button class:active={!group.settings.is_public} onclick={() => !group.settings.is_public || commit((g) => { g.settings.is_public = false; }, `made the ${noun} private`)}>{$t("Private")}</button>
+            <button class:active={!group.settings.is_public} onclick={() => !group.settings.is_public || commit((g) => { g.settings.is_public = false; g.settings.public_link = ""; }, `made the ${noun} private`).then(() => api.groupNameSet(group.id, "", "", "").catch(() => {}))}>{$t("Private")}</button>
             <button class:active={group.settings.is_public} onclick={() => group.settings.is_public || commit((g) => { g.settings.is_public = true; }, `made the ${noun} public`)}>{$t("Public")}</button>
           </div>
           <div class="note">{group.settings.is_public
@@ -809,8 +829,12 @@
             : `People can only join if an admin adds them or approves their request.`}</div>
         </div>
         <div class="card">
-          <label class="fld"><span>{$t("Public name")}</span><input class="inp" bind:value={dLink} maxlength="32" placeholder={$t("mygroup")} /></label>
-          <button class="btn wide" onclick={() => commit((g) => { g.settings.public_link = dLink.trim().toLowerCase(); }, "changed the public name")}>{$t("Save")}</button>
+          <!-- The @name: unique on the server among people, bots and other groups;
+               found in search, `aqua://join/@name` (aqua-server group_names). -->
+          <label class="fld"><span>{$t("Public @name")}</span><input class="inp" bind:value={dLink} maxlength="33" placeholder="@{$t("mygroup")}" /></label>
+          {#if nameErr}<div class="note bad">{nameErr}</div>{/if}
+          <button class="btn wide" disabled={nameBusy} onclick={saveName}>{$t("Save")}</button>
+          <div class="note">{$t("People find it by this @name in search and join with the link aqua://join/@name. 3–32 characters: a-z, 0-9, _ and dot.")}</div>
         </div>
         <div class="card">
           <button class="row" onclick={copyLink}><span class="rl">{$t("Invite link")}<span class="rs mono">{shareLink(group)}</span></span><span class="rv">{$t("Copy")}</span></button>
@@ -1317,6 +1341,7 @@
   .card { background: var(--bg-surface); border-radius: calc(14px * var(--rk, 1)); padding: 6px 12px; margin-bottom: 10px; }
   .ct { font-size: 12px; font-weight: 700; color: var(--accent); padding: 8px 0 6px; }
   .note { font-size: 11.5px; color: var(--fg-dim); padding: 6px 0 8px; line-height: 1.45; }
+  .note.bad { color: var(--danger, #ff6b6b); }
   .note.pad { padding: 0 6px; }
   .row { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 0; background: transparent; border: none;
          color: var(--fg); text-align: left; cursor: pointer; font-size: 14px; border-bottom: 1px solid var(--border); }
@@ -1363,7 +1388,7 @@
   /* Rows reach the card's edges a little, rounded, so the "contrast rows"
      stripe (app.css, made for the chat list's background) is a soft band
      inside the card instead of a black slab with hard ends. */
-  .mrow { width: calc(100% + 12px); margin: 0 -6px; padding: 8px 6px; border-radius: calc(10px * var(--rk, 1)); }
+  .mrow { width: calc(100% + 12px); box-sizing: border-box; margin: 0 -6px; padding: 8px 6px; border-radius: calc(10px * var(--rk, 1)); }
   :global(html.contrast-rows) .mrow.alt:not(:hover) { background: color-mix(in srgb, var(--fg) 5%, transparent) !important; }
   .mrow.click:hover .m-name { color: var(--accent); }
   .m-ava { border-radius: var(--ava-r, 50%); background: linear-gradient(135deg, var(--accent), var(--accent-2)); display: grid; place-items: center;

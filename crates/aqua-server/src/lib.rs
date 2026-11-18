@@ -2185,6 +2185,43 @@ async fn search_users(
     Json(state.directory.search(&q.q, 20))
 }
 
+/// `GET /v1/groups/search?q=` — public groups and channels by @name or title.
+async fn search_groups(State(state): State<AppState>, Query(q): Query<SearchQuery>) -> Json<Vec<serde_json::Value>> {
+    Json(state.directory.search_groups(&q.q, 20))
+}
+
+/// `GET /v1/groups/by-name/:name` — a public group / channel by its @name:
+/// its id, title, kind and whom to ask to join.
+async fn group_by_name(State(state): State<AppState>, Path(name): Path<String>) -> Result<Json<serde_json::Value>, StatusCode> {
+    state.directory.group_by_name(&name).map(Json).ok_or(StatusCode::NOT_FOUND)
+}
+
+#[derive(Deserialize)]
+struct GroupNameBody {
+    #[serde(default)]
+    name: String,
+    gid: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    kind: String,
+}
+
+/// `POST /v1/groups/name {name, gid, title, kind}` — the owner gives their
+/// public group / channel an @name (the same namespace as people and bots);
+/// an empty name gives it up.
+async fn set_group_name(State(state): State<AppState>, Caller(dh): Caller, Json(b): Json<GroupNameBody>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let owner = state.directory.username_for_identity(&dh).ok_or((StatusCode::FORBIDDEN, "no account".into()))?;
+    if b.name.trim().is_empty() {
+        return Ok(Json(serde_json::json!({ "ok": state.directory.release_group_name(b.gid.trim(), &owner) })));
+    }
+    let name = state.directory.claim_group_name(&b.name, b.gid.trim(), &b.title, &b.kind, &owner).map_err(|e| {
+        let code = match e { directory::DirError::UsernameTaken => StatusCode::CONFLICT, directory::DirError::NotOwner => StatusCode::FORBIDDEN, _ => StatusCode::BAD_REQUEST };
+        (code, e.to_string())
+    })?;
+    Ok(Json(serde_json::json!({ "ok": true, "name": name })))
+}
+
 async fn get_profile(
     State(state): State<AppState>,
     Path(user): Path<UserId>,
@@ -3296,6 +3333,9 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/auth/tg/start",      post(tglogin::start))
         .route("/v1/auth/tg/poll",       post(tglogin::poll))
         .route("/v1/users/search",       get(search_users))
+        .route("/v1/groups/search", get(search_groups))
+        .route("/v1/groups/by-name/:name", get(group_by_name))
+        .route("/v1/groups/name", post(set_group_name))
         .route("/v1/users/login",        post(login_user))
         .route("/v1/users/reset",        post(reset_password))
         .route("/v1/webapp/init",        post(webapp_init))
