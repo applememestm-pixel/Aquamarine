@@ -103,6 +103,12 @@ pub struct MsgMeta {
     /// Came without the relay: "bt" (Bluetooth) or "lan" (same Wi-Fi).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub via: Option<String>,
+    /// Sent "as" a group / channel (Telegram's "Send message as…"):
+    /// `{gid, title, kind, name?, ok}`. `ok`: checked on arrival (the sender
+    /// is an admin of this very group); otherwise the UI checks a public
+    /// channel's @name owner before it shows the channel, never the claim alone.
+    #[serde(default, rename = "as", skip_serializing_if = "Option::is_none")]
+    pub as_: Option<serde_json::Value>,
 }
 
 pub const FWD_PREFIX: &str = "[fwd:v1]";

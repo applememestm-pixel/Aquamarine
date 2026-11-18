@@ -135,6 +135,7 @@
   import { get } from "svelte/store";
   import { callSettings } from "../callSettings";
   import { groupMap, refreshGroups } from "../groups";
+  import { sendAsPick, setSendAs, sendAsFor, shownAs, asVerified, type AsClaim } from "../sendAs";
   import Markup from "./Markup.svelte";
   import LinkPreview from "./LinkPreview.svelte";
   import Carousel, { type CarouselItem } from "./Carousel.svelte";
@@ -1616,6 +1617,15 @@
     return () => ro.disconnect();
   });
   let activeGroup = $derived($activeChat ? $groupMap[$activeChat.id] : undefined);
+  // ---- "Send message as…" (Telegram): myself, this group, a channel I run ----
+  /** Whom I can write as here: groups / channels / servers I'm an admin of. */
+  const asChoices = $derived(activeGroup ? Object.values($groupMap).filter((g) => isAdmin(g, myUsername)).sort((a, b) => (a.id === activeGroup?.id ? -1 : b.id === activeGroup?.id ? 1 : 0)) : []);
+  const asPicked = $derived($activeChat ? $groupMap[$sendAsPick[$activeChat.id] ?? ""] : undefined);
+  let asOpen = $state(false);
+  /** Seen by everyone here, or checkable: this group itself, a group they
+   *  share with me, or a public channel (its @name's owner). */
+  const asNote = (g: { id: string; settings: { public_link?: string } }) =>
+    g.id === activeGroup?.id || g.settings.public_link ? "" : tr("only its members see it as this");
 
   // ---- Channel views (subscribers report to admins; see channelStats.ts) ----
   let isChannel = $derived(activeGroup?.kind === "channel");
@@ -1644,7 +1654,7 @@
   });
 
   // ---- Threads: comments under posts, replies gathered under a message ----
-  interface Cmt { id: string; from: string; time: string; to: string; t: string; re: { a: string; t: string } | null; outgoing: boolean }
+  interface Cmt { id: string; from: string; time: string; to: string; t: string; re: { a: string; t: string } | null; outgoing: boolean; as: AsClaim | null }
   let comments = $derived.by<Cmt[]>(() => {
     const out: Cmt[] = [];
     for (const m of roomMessages) {
@@ -1654,7 +1664,7 @@
         if (typeof v?.to !== "string" || typeof v?.t !== "string") continue;
         const re = v.re && typeof v.re.a === "string" && typeof v.re.t === "string" ? { a: v.re.a.slice(0, 60), t: v.re.t.slice(0, 160) } : null;
         const mine = m.from === "me" || m.from === myUsername;
-        out.push({ id: m.id, from: mine ? myUsername : m.from, time: m.time, to: v.to, t: v.t.slice(0, 4000), re, outgoing: mine });
+        out.push({ id: m.id, from: mine ? myUsername : m.from, time: m.time, to: v.to, t: v.t.slice(0, 4000), re, outgoing: mine, as: shownAs(m.meta, m.from, $asVerified) });
       } catch { /* not a comment */ }
     }
     return out;
@@ -1757,7 +1767,7 @@
     if (!th) return [];
     if (th.kind === "comments") {
       const key = reactionKey(th.root);
-      return comments.filter((c) => c.to === key).map((c) => ({ id: c.id, author: c.from, time: c.time, text: c.t, outgoing: c.outgoing, re: c.re, depth: c.re ? 1 : 0 }));
+      return comments.filter((c) => c.to === key).map((c) => ({ id: c.id, author: c.from, time: c.time, text: c.t, outgoing: c.outgoing, re: c.re, depth: c.re ? 1 : 0, as: c.as ? { gid: c.as.gid, title: c.as.title } : null }));
     }
     // Replies, and replies to those (Telegram's "replies" view).
     const out: ThreadItem[] = [];
@@ -1840,7 +1850,7 @@
       ? "[cmt:v1]" + JSON.stringify({ to: reactionKey(th.root), t: text, ...(re ? { re } : {}) })
       : "[reply:v1]" + JSON.stringify({ quoted_author: re?.a ?? authorOf(th.root), quoted_text: re ? re.t.slice(0, 180) : quoteOf(th.root), text });
     try {
-      if (chat.id.startsWith("grp_")) await api.groupSend(chat.id, body);
+      if (chat.id.startsWith("grp_")) await api.groupSend(chat.id, body, false, sendAsFor(chat.id));
       else await api.sendMessage(chat.id, body);
       await loadActiveMessages();
     } catch (e) { showToast(String(e)); }
@@ -3672,6 +3682,9 @@
         onSend={sendThread}
         onClose={() => (thread = null)}
         onJump={th.kind === "replies" ? (id) => window.dispatchEvent(new CustomEvent("aqua:jump", { detail: id })) : undefined}
+        asChoices={asChoices.map((g) => ({ id: g.id, title: g.title, gradient: g.gradient }))}
+        asPick={$sendAsPick[$activeChat.id] ?? ""}
+        onAs={(gid) => { if ($activeChat) setSendAs($activeChat.id, gid); }}
       />
     {/if}
     {#if lockedNow}
@@ -4129,6 +4142,7 @@
           {@const tn2 = ttlNote(m.kind.content.text)}
           <div class="sys" class:ttl={!!tn2}>{@html icons.lock}<span>{@html tn2 ?? m.kind.content.text}</span></div>
         {:else}
+          {@const sa = isGroup && !m.outgoing ? shownAs(m.meta, m.from, $asVerified) : null}
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <div
@@ -4154,13 +4168,26 @@
                 {#if selected.has(m.id)}{@html icons.check}{/if}
               </span>
             {/if}
+            {#if sa}
+              <!-- Sent as a group / channel (checked, sendAs.ts): its face, not the person's. -->
+              <div class="avatar sz-34 msg-avatar" style="--gradient: {$groupMap[sa.gid]?.gradient ?? chatGradient(sa.gid)}">
+                {(sa.title || "?").charAt(0).toUpperCase()}
+                {#if $avatars[sa.gid]}<img class="ava-img" src={$avatars[sa.gid]} alt="" loading="lazy" />{/if}
+              </div>
+            {:else}
             <div class="avatar sz-34 msg-avatar" style="--gradient: {chatGradient(m.from)}">
               {firstLetter(m.from)}
               {#if $avatars[avatarKey(m.from)]}<img class="ava-img" src={$avatars[avatarKey(m.from)]} alt="" loading="lazy" />{/if}
             </div>
+            {/if}
             <div class="msg-col" class:post={isGroup && commentsAllowed && activeGroup?.kind === "channel"}>
               <!-- A chat of two: whose message it is goes without saying (Telegram) — no name, no avatar. -->
-              {#if m.first && !m.outgoing && $activeChat && !isChannel && isGroup}
+              {#if m.first && !m.outgoing && $activeChat && !isChannel && isGroup && sa}
+                <div class="msg-header">
+                  <span class="msg-author as-author">{sa.title}</span>
+                  <span class="msg-time">{m.time}</span>
+                </div>
+              {:else if m.first && !m.outgoing && $activeChat && !isChannel && isGroup}
                 {@const mt = isGroup ? tagOf(activeGroup, m.from) : null}
                 <div class="msg-header">
                   <span class="msg-author" style:color={isGroup ? roleColor(activeGroup, m.from) || peerColor(m.from) : null}>{isGroup ? m.from : $activeChat.name.split(' ')[0]}</span>{#if $peerCards[m.from]?.verified}<OfficialMark size={13} />{/if}{#if $peerCards[m.from]?.star != null}<StarMark kind={$peerCards[m.from]?.star ?? 0} size={13} />{/if}
@@ -4847,6 +4874,33 @@
           onclick={() => { const id = $activeChat?.id; if (!id) return; const off = !$silentChans[id]; silentChans.update((m) => ({ ...m, [id]: off })); showToast(tr(off ? "Posts go out silent" : "Posts notify subscribers")); }}>
           {#if $silentChans[$activeChat?.id ?? ""]}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13.7 21a2 2 0 0 1-3.4 0"/><path d="M18.6 13A17.9 17.9 0 0 1 18 8"/><path d="M6.3 6.3A5.9 5.9 0 0 0 6 8c0 7-3 9-3 9h14"/><path d="M18 8a6 6 0 0 0-9.3-5"/><path d="M2 2l20 20"/></svg>{:else}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>{/if}
         </button>
+      {/if}
+      {#if !isChannel && isGroup && liveChat && asChoices.length}
+        <!-- "Send message as…": tap the face to write as a group / channel you run. -->
+        <div class="as-wrap">
+          <button class="as-btn" onclick={() => (asOpen = !asOpen)} title={$t("Send message as…")} aria-label={$t("Send message as…")} aria-expanded={asOpen}
+            style:background-image={asPicked ? ($avatars[asPicked.id] ? `url("${$avatars[asPicked.id]}")` : undefined) : ($myProfile.avatar_url ? `url("${$myProfile.avatar_url}")` : undefined)}
+            style:--gradient={asPicked?.gradient}>
+            {#if asPicked}{$avatars[asPicked.id] ? "" : asPicked.title.charAt(0).toUpperCase()}{:else}{$myProfile.avatar_url ? "" : (myUsername || "?").charAt(0).toUpperCase()}{/if}
+          </button>
+          {#if asOpen}
+            <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+            <div class="as-veil" onclick={() => (asOpen = false)}></div>
+            <div class="as-menu" role="menu">
+              <div class="as-title">{$t("Send message as…")}</div>
+              <button role="menuitem" class:on={!asPicked} onclick={() => { if ($activeChat) setSendAs($activeChat.id, ""); asOpen = false; }}>
+                <span class="as-av" style:background-image={$myProfile.avatar_url ? `url("${$myProfile.avatar_url}")` : undefined}>{$myProfile.avatar_url ? "" : (myUsername || "?").charAt(0).toUpperCase()}</span>
+                <span class="as-tx"><b>{$myProfile.display_name || myUsername}</b><small>{$t("personal account")}</small></span>
+              </button>
+              {#each asChoices as g (g.id)}
+                <button role="menuitem" class:on={asPicked?.id === g.id} onclick={() => { if ($activeChat) setSendAs($activeChat.id, g.id); asOpen = false; }}>
+                  <span class="as-av" style:--gradient={g.gradient} style:background-image={$avatars[g.id] ? `url("${$avatars[g.id]}")` : undefined}>{$avatars[g.id] ? "" : g.title.charAt(0).toUpperCase()}</span>
+                  <span class="as-tx"><b>{g.title}</b><small>{$tn(g.members.length, g.kind === "channel" ? "subscriber" : "member")}{#if asNote(g)} · {asNote(g)}{/if}</small></span>
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
       {/if}
       {#if botMenu}
         <button class="bot-menu-btn" onclick={() => { if ($activeChat && botMenu) openMiniApp({ bot: $activeChat.id, url: botMenu.url, from: "menu" }); }} title={botMenu.url}>
@@ -6809,6 +6863,24 @@
   .composer.chan-bar { align-items: center; gap: 2px; margin: 6px 10px 8px; padding: 4px; border: 1px solid var(--border);
     border-radius: 999px; background: var(--bg-input); }
   .composer.chan-bar::before { border-radius: 999px; }
+  /* "Send message as…": a face at the start of the field, a card of choices above it. */
+  .as-wrap { position: relative; flex-shrink: 0; align-self: center; }
+  .as-btn { width: 36px; height: 36px; border-radius: var(--ava-r, 50%); border: 2px solid var(--accent); cursor: pointer; display: grid; place-items: center;
+    font-weight: 800; color: var(--bg-shell); background: var(--gradient, var(--accent-soft)) center / cover no-repeat; }
+  .as-veil { position: fixed; inset: 0; z-index: 60; }
+  .as-menu { position: absolute; left: 0; bottom: calc(100% + 10px); z-index: 61; width: min(320px, calc(100vw - 24px)); padding: 6px 0; display: flex; flex-direction: column;
+    background: color-mix(in srgb, var(--bg-surface-2) 94%, transparent); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+    border: 1px solid var(--border); border-radius: calc(18px * var(--rk, 1)); box-shadow: 0 14px 36px -12px rgba(0,0,0,.55); animation: ctx-pop .2s cubic-bezier(.2,.9,.25,1.12); transform-origin: bottom left; }
+  .as-title { padding: 8px 18px 6px; font-size: 15px; font-weight: 600; color: var(--accent); }
+  .as-menu button { display: flex; align-items: center; gap: 14px; min-height: 58px; padding: 6px 16px; border: none; background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+  .as-menu button:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
+  .as-menu button.on .as-av { box-shadow: 0 0 0 2px var(--bg-surface-2), 0 0 0 4px var(--accent); }
+  .as-av { width: 44px; height: 44px; border-radius: var(--ava-r, 50%); flex-shrink: 0; display: grid; place-items: center; font-weight: 700; font-size: 17px;
+    color: var(--bg-shell); background: var(--gradient, var(--accent-soft)) center / cover no-repeat; }
+  .as-tx { min-width: 0; display: flex; flex-direction: column; }
+  .as-tx b { font-size: 16px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .as-tx small { font-size: 13.5px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .as-author { color: var(--accent); }
   .chan-bar .cb-ava { order: 0; width: 38px; height: 38px; border-radius: var(--ava-r, 50%); flex-shrink: 0; background: var(--accent-soft) center / cover no-repeat;
     display: grid; place-items: center; font-weight: 800; color: var(--accent); }
   .chan-bar .input-wrap { order: 1; background: transparent; border: none; box-shadow: none !important; padding-left: 4px; align-items: center; }

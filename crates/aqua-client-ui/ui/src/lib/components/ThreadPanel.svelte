@@ -8,6 +8,8 @@
     /** Answer to another comment in the thread. */
     re?: { a: string; t: string } | null;
     depth: number;
+    /** Sent as a group / channel (checked, sendAs.ts). */
+    as?: { gid: string; title: string } | null;
   }
 </script>
 
@@ -20,9 +22,11 @@
   import Markup from "./Markup.svelte";
   import { icons } from "../icons";
   import { IS_MOBILE } from "../platform";
+  import { info } from "../stores";
+  const me = $derived($info?.username ?? "?");
   const CLOSE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>`;
 
-  let { title, rootAuthor, rootText, rootTime, items, canWrite = true, onSend, onClose, onJump }: {
+  let { title, rootAuthor, rootText, rootTime, items, canWrite = true, onSend, onClose, onJump, asChoices = [], asPick = "", onAs }: {
     title: string;
     rootAuthor: string;
     rootText: string;
@@ -32,7 +36,13 @@
     onSend: (text: string, re: { a: string; t: string } | null) => Promise<void>;
     onClose: () => void;
     onJump?: (id: string) => void;
+    /** "Send message as…": groups / channels I run, the current pick ("" = me). */
+    asChoices?: { id: string; title: string; gradient: string }[];
+    asPick?: string;
+    onAs?: (gid: string) => void;
   } = $props();
+  let asOpen = $state(false);
+  const picked = $derived(asChoices.find((c) => c.id === asPick));
 
   let text = $state("");
   let re = $state<{ a: string; t: string } | null>(null);
@@ -67,10 +77,11 @@
     </div>
     <div class="th-sep"><span>{$t(items.length ? "Discussion started" : "No replies yet — start the discussion")}</span></div>
     {#each items as it (it.id)}
+      {@const face = it.as ? it.as.gid : it.author}
       <div class="th-item" class:out={it.outgoing} style:padding-left="{Math.min(it.depth, 3) * 12}px">
-        {#if !it.outgoing}<span class="th-av" style:background-image={$avatars[it.author] ? `url("${$avatars[it.author]}")` : undefined}>{$avatars[it.author] ? "" : it.author.slice(0, 1).toUpperCase()}</span>{/if}
+        {#if !it.outgoing}<span class="th-av" style:background-image={$avatars[face] ? `url("${$avatars[face]}")` : undefined}>{$avatars[face] ? "" : (it.as?.title ?? it.author).slice(0, 1).toUpperCase()}</span>{/if}
         <div class="th-bubble">
-          {#if !it.outgoing}<div class="th-name">{it.author}</div>{/if}
+          {#if !it.outgoing}<div class="th-name">{it.as?.title ?? it.author}</div>{/if}
           {#if it.re}<div class="th-re"><b>{it.re.a}</b><span>{it.re.t}</span></div>{/if}
           <div class="th-text"><Markup src={it.text} compact /></div>
           <div class="th-time">{it.time}</div>
@@ -88,6 +99,26 @@
         <div class="th-reply"><span class="th-rbar"></span><span class="th-rtx"><b>{re.a}</b>{re.t}</span><button onclick={() => (re = null)} aria-label={$t("Cancel")}>{@html CLOSE}</button></div>
       {/if}
       <div class="th-row">
+        {#if asChoices.length && onAs}
+          <div class="th-as">
+            <button class="th-asb" onclick={() => (asOpen = !asOpen)} title={$t("Send message as…")} aria-label={$t("Send message as…")}
+              style:background={picked ? ($avatars[picked.id] ? undefined : picked.gradient) : undefined}
+              style:background-image={picked ? ($avatars[picked.id] ? `url("${$avatars[picked.id]}")` : undefined) : ($avatars[me] ? `url("${$avatars[me]}")` : undefined)}>
+              {picked ? ($avatars[picked.id] ? "" : picked.title.charAt(0).toUpperCase()) : ($avatars[me] ? "" : me.charAt(0).toUpperCase())}
+            </button>
+            {#if asOpen}
+              <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+              <div class="th-asveil" onclick={() => (asOpen = false)}></div>
+              <div class="th-asmenu" role="menu">
+                <div class="th-astitle">{$t("Send message as…")}</div>
+                <button role="menuitem" class:on={!picked} onclick={() => { onAs(""); asOpen = false; }}><span class="th-asav" style:background-image={$avatars[me] ? `url("${$avatars[me]}")` : undefined}>{$avatars[me] ? "" : me.charAt(0).toUpperCase()}</span><b>{me}</b></button>
+                {#each asChoices as c (c.id)}
+                  <button role="menuitem" class:on={picked?.id === c.id} onclick={() => { onAs(c.id); asOpen = false; }}><span class="th-asav" style:background={$avatars[c.id] ? undefined : c.gradient} style:background-image={$avatars[c.id] ? `url("${$avatars[c.id]}")` : undefined}>{$avatars[c.id] ? "" : c.title.charAt(0).toUpperCase()}</span><b>{c.title}</b></button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/if}
         <textarea rows="1" placeholder={$t("Write a comment…")} bind:value={text}
           onkeydown={(e) => { if (e.key === "Enter" && !e.shiftKey && !IS_MOBILE) { e.preventDefault(); void send(); } }}></textarea>
         <button class="th-send" onclick={send} disabled={busy || !text.trim()} aria-label={$t("Send")}>{@html icons.send}</button>
@@ -136,6 +167,16 @@
   .th-rtx b { color: var(--accent); }
   .th-reply button { width: 30px; height: 30px; display: grid; place-items: center; border: none; background: none; color: var(--fg-muted); cursor: pointer; }
   .th-reply button :global(svg) { width: 16px; height: 16px; }
+  .th-as { position: relative; flex-shrink: 0; }
+  .th-asb { width: 44px; height: 44px; border-radius: 50%; border: 2px solid var(--accent); display: grid; place-items: center; font-weight: 800; color: var(--bg-shell); background: var(--accent-soft) center / cover no-repeat; cursor: pointer; }
+  .th-asveil { position: fixed; inset: 0; z-index: 30; }
+  .th-asmenu { position: absolute; left: 0; bottom: calc(100% + 10px); z-index: 31; width: min(300px, calc(100vw - 24px)); padding: 6px 0; display: flex; flex-direction: column;
+    background: var(--bg-surface-2); border: 1px solid var(--border); border-radius: calc(18px * var(--rk, 1)); box-shadow: 0 14px 36px -12px rgba(0,0,0,.55); }
+  .th-astitle { padding: 8px 18px 6px; font-size: 15px; font-weight: 600; color: var(--accent); }
+  .th-asmenu button { display: flex; align-items: center; gap: 14px; min-height: 54px; padding: 6px 16px; border: none; background: transparent; color: var(--fg); font: inherit; font-size: 15.5px; text-align: left; cursor: pointer; }
+  .th-asmenu button b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .th-asmenu button.on .th-asav { box-shadow: 0 0 0 2px var(--bg-surface-2), 0 0 0 4px var(--accent); }
+  .th-asav { width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0; display: grid; place-items: center; font-weight: 700; color: var(--bg-shell); background: var(--accent-soft) center / cover no-repeat; }
   .th-row { display: flex; gap: 8px; align-items: flex-end; }
   .th-row textarea { flex: 1; min-width: 0; resize: none; max-height: 140px; min-height: 44px; box-sizing: border-box; padding: 11px 16px; border-radius: calc(22px * var(--rk, 1)); border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; font-size: 15px; outline: none; }
   .th-row textarea:focus { border-color: var(--accent); }
