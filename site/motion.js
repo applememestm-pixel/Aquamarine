@@ -1,6 +1,6 @@
-/* Aquamarine site motion: a living background (grid, drifting glows, a
-   constellation of particles), sections that rise in as they scroll into
-   view, a chat mock that types, cards that light up under the cursor.
+/* Aquamarine site motion: a quiet background (a few slow points, faintly
+   linked, in the theme's accent), sections that rise in as they scroll into
+   view, a chat mock that types.
    Everything stops for prefers-reduced-motion and when the tab is hidden. */
 (() => {
   const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -11,13 +11,17 @@
   const bg = document.createElement("div");
   bg.className = "fx-bg";
   bg.setAttribute("aria-hidden", "true");
-  bg.innerHTML = '<div class="fx-grid"></div><div class="fx-glow g1"></div><div class="fx-glow g2"></div><div class="fx-glow g3"></div><canvas class="fx-particles"></canvas>';
+  bg.innerHTML = '<canvas class="fx-particles"></canvas>';
   document.body.prepend(bg);
 
   // ---- particles: points drifting, linked when close ----
   const canvas = bg.querySelector("canvas");
   const ctx = canvas.getContext("2d");
   let W = 0, H = 0, dpr = 1, pts = [], raf = 0, mouse = { x: -1e4, y: -1e4 };
+  // The accent as "r,g,b" (style.css --fx-rgb); follows the light/dark switch.
+  const fxRgb = () => getComputedStyle(root).getPropertyValue("--fx-rgb").trim() || "245,180,23";
+  let rgb = fxRgb();
+  matchMedia("(prefers-color-scheme: light)").addEventListener?.("change", () => { rgb = fxRgb(); });
   function resize() {
     // Phones fire resize while scrolling (the address bar): keep the dots.
     if (pts.length && innerWidth === W && Math.abs(innerHeight - H) < 160) return;
@@ -26,12 +30,12 @@
     canvas.width = W * dpr; canvas.height = H * dpr;
     canvas.style.width = W + "px"; canvas.style.height = H + "px";
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const n = Math.round(Math.min(110, (W * H) / 14000));
+    const n = Math.round(Math.min(56, (W * H) / 28000));
     pts = Array.from({ length: n }, () => ({
       x: Math.random() * W, y: Math.random() * H,
-      vx: (Math.random() - 0.5) * 0.6, vy: (Math.random() - 0.5) * 0.6,
-      r: Math.random() * 1.8 + 0.8, a: Math.random() * 0.45 + 0.45,
-      tw: Math.random() * Math.PI * 2, ts: 0.03 + Math.random() * 0.05, // twinkle phase and speed
+      vx: (Math.random() - 0.5) * 0.22, vy: (Math.random() - 0.5) * 0.22,
+      r: Math.random() * 1.2 + 0.7, a: Math.random() * 0.25 + 0.2,
+      tw: Math.random() * Math.PI * 2, ts: 0.01 + Math.random() * 0.02, // twinkle phase and speed
     }));
   }
   let last = 0;
@@ -40,27 +44,24 @@
     if (t - last < 33) return; // ~30 fps is plenty for drifting dots
     last = t;
     ctx.clearRect(0, 0, W, H);
-    const link = 130;
+    const link = 120;
     for (const p of pts) {
       p.x += p.vx; p.y += p.vy;
       if (p.x < 0 || p.x > W) p.vx *= -1;
       if (p.y < 0 || p.y > H) p.vy *= -1;
       // gently pushed away from the cursor
       const dx = p.x - mouse.x, dy = p.y - mouse.y, d2 = dx * dx + dy * dy;
-      if (d2 < 14000) { const k = 0.6 / Math.sqrt(d2 + 1); p.x += dx * k; p.y += dy * k; }
+      if (d2 < 10000) { const k = 0.25 / Math.sqrt(d2 + 1); p.x += dx * k; p.y += dy * k; }
       p.tw += p.ts;
       const a = p.a * (0.6 + 0.4 * Math.sin(p.tw));
-      // a soft halo, then the star (cheaper than shadowBlur on phones)
-      ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 3, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(0,229,199,${a * 0.12})`; ctx.fill();
       ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(0,229,199,${a})`; ctx.fill();
+      ctx.fillStyle = `rgba(${rgb},${a})`; ctx.fill();
     }
     for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) {
       const a = pts[i], b = pts[j], d = Math.hypot(a.x - b.x, a.y - b.y);
       if (d < link) {
         ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
-        ctx.strokeStyle = `rgba(0,229,199,${0.16 * (1 - d / link)})`; ctx.lineWidth = 1; ctx.stroke();
+        ctx.strokeStyle = `rgba(${rgb},${0.07 * (1 - d / link)})`; ctx.lineWidth = 1; ctx.stroke();
       }
     }
   }
@@ -228,7 +229,7 @@
     go(0);
   }
 
-  // ---- the cursor: a small teal dot instead of the arrow, a thin comet
+  // ---- the cursor: a small dot in the accent instead of the arrow, a thin
   // tail behind it (the colour of the site's text selection). Selecting
   // text or typing brings the normal cursor back. A button in the nav turns
   // both off (remembered): the normal cursor, no tail. ----
@@ -254,7 +255,7 @@
     fit(); addEventListener("resize", fit);
     // The last positions of the pointer; each lives TAIL ms. The head chases
     // the pointer a little (smoothing), so the tail curves instead of zigzagging.
-    const TAIL = 480, WIDTH = 2.6;
+    const TAIL = 360, WIDTH = 2;
     let pts = [], head = null, target = null, still = 0;
     const wipe = () => { pts = []; head = null; tx.clearRect(0, 0, tw, th); };
     const tick = (now) => {
@@ -272,18 +273,13 @@
       tx.clearRect(0, 0, tw, th);
       if (pts.length > 1) {
         tx.lineCap = "round"; tx.lineJoin = "round";
-        tx.globalCompositeOperation = "lighter";
         for (let i = 1; i < pts.length; i++) {
           const a = pts[i - 1], b = pts[i];
           const k = 1 - (now - b.t) / TAIL;          // 1 at the head, 0 at the end
-          tx.strokeStyle = `rgba(0,229,199,${0.5 * k})`;
-          tx.shadowColor = `rgba(0,229,199,${0.35 * k})`;
-          tx.shadowBlur = 6 * k;
+          tx.strokeStyle = `rgba(${rgb},${0.35 * k})`;
           tx.lineWidth = Math.max(0.4, WIDTH * k);
           tx.beginPath(); tx.moveTo(a.x, a.y); tx.lineTo(b.x, b.y); tx.stroke();
         }
-        tx.shadowBlur = 0;
-        tx.globalCompositeOperation = "source-over";
       }
       // Keep going while the tail is still fading or the head catches up.
       if (pts.length || (head && target && Math.hypot(target.x - head.x, target.y - head.y) > 0.5)) tRaf = requestAnimationFrame(tick);

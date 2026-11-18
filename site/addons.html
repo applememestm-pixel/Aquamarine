@@ -3,11 +3,13 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Дополнения — Aquamarine</title>
+<meta name="theme-color" content="#f3f4f6" media="(prefers-color-scheme: light)" />
+<meta name="theme-color" content="#121314" media="(prefers-color-scheme: dark)" />
 <link rel="icon" href="favicon.png" type="image/png">
 <meta name="description" content="Каталог дополнений (плагинов) Aquamarine от авторов: команды, кнопки, обработка сообщений." />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" />
 <link rel="stylesheet" href="style.css" />
 <script src="motion.js" defer></script>
 <style>
@@ -26,7 +28,7 @@
   .ad .by { font-size: 13px; color: var(--fg-dim); overflow-wrap: anywhere; }
   .ad .by a { color: var(--fg-muted); }
   .ad p { margin: 0; color: var(--fg-muted); font-size: 14.5px; overflow-wrap: anywhere; }
-  .ad .net { font-size: 12.5px; color: #F5B85A; overflow-wrap: anywhere; }
+  .ad .net { font-size: 12.5px; color: var(--warn); overflow-wrap: anywhere; }
   .ad .acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto; padding-top: 8px; }
   .ad .acts a { font-size: 13.5px; padding: 8px 14px; }
   .ad-empty { color: var(--fg-muted); padding: 30px 0; }
@@ -37,7 +39,7 @@
 
 <nav>
   <div class="wrap nav-in" style="width:min(1360px,100%)">
-    <a class="brand" href="index.html"><img class="logo" src="logo.png" alt="" width="28" height="28"> Aquamarine</a>
+    <a class="brand" href="index.html"><span class="logo" aria-hidden="true"></span> Aquamarine</a>
     <div class="nav-links">
       <a href="index.html#features">Возможности</a>
       <a href="index.html#download">Скачать</a>
