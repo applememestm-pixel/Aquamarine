@@ -58,7 +58,7 @@
   import Welcome from "./Welcome.svelte";
   import { settings } from "../theme";
   import { api, assetUrl, sendChatControl } from "../tauri";
-  import { openFingerprint, verifiedKeys, keyState, verifiedBy, noteKeyOk, sendKeyOk, sunState } from "./FingerprintModal.svelte";
+  import { openFingerprint, verifiedKeys, keyState, verifiedBy, sendKeyOk, sunState, listenKeyOk } from "./FingerprintModal.svelte";
   import { showToast } from "./Toast.svelte";
   import { pluginCommands, pluginsOnSend, runPluginCommand, pluginButtons, pressPluginButton } from "../plugins";
   import { ATTACH_ITEMS, attachFront, attachHidden, attachDock, attachBots, toggleAttachBot, type AttachId } from "../attachMenu";
@@ -1136,8 +1136,7 @@
     let unPres: (() => void) | null = null;
     events.onPresence((p) => { setPeerPresence(p.from, p.presence ?? {}); notePeerProfileVersion(p.from, p.presence?.pv); })
       .then((u) => { unPres = u; });
-    let unKeyOk: (() => void) | null = null;
-    events.onKeyOk((p) => noteKeyOk(p.from, p.code, p.on)).then((u) => { unKeyOk = u; });
+    listenKeyOk(); // app-wide, once (FingerprintModal)
     let unReact: (() => void) | null = null;
     events.onReaction((p) => { if (p.react?.key && p.react?.emoji) applyPeerReaction(p.react.key, p.react.emoji, !!p.react.add); })
       .then((u) => { unReact = u; });
@@ -1164,7 +1163,6 @@
       if (unClose) unClose();
       if (unSeen) unSeen();
       if (unPres) unPres();
-      if (unKeyOk) unKeyOk();
       if (unReact) unReact();
     };
   });
