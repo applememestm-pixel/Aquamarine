@@ -211,6 +211,8 @@
   let existsHint = $state(false);
   /** The account lives on another device (no two-step verification). */
   let boundHint = $state(false);
+  /** The account this device's keys already have on the server (from the error). */
+  let keyAccount = $state("");
   let password = $state("");
   let password2 = $state("");
   let showPw = $state(false);
@@ -248,6 +250,8 @@
   }
 
   function plainError(m: string): string {
+    const own = /already has an account here: @([a-z0-9_.]+)/i.exec(m);
+    if (own) { keyAccount = own[1].toLowerCase(); return tr("This device already has an account on this server: @{u}. One account per device — sign in to it.", { u: keyAccount }); }
     if (/already taken/i.test(m)) { existsHint = true; return tr("@{u} is already taken.", { u: login }); }
     if (/lives on one device/i.test(m)) { boundHint = true; return tr("@{u} lives on another device: it has no two-step verification, so it can't be moved. Turn it on there (Settings → Privacy & Security), then sign in here.", { u: login }); }
     if (/wrong @username or password/i.test(m)) return tr("Wrong @username or password");
@@ -261,7 +265,7 @@
   }
 
   async function submit() {
-    error = null; existsHint = false; boundHint = false;
+    error = null; existsHint = false; boundHint = false; keyAccount = "";
     if (mode === "signup" && !/^[a-z0-9_.]{3,32}$/.test(login)) { error = tr("@username: 3–32 characters, a-z 0-9 _ . only"); return; }
     if (mode === "signin" && !login) { error = tr("Enter your @username"); return; }
     if (!(passUser && !password) && password.length < 8) { error = tr("Password must be at least 8 characters"); return; }
@@ -416,6 +420,9 @@
           {error}
           {#if existsHint}
             <button class="err-act" onclick={() => { mode = "signin"; error = null; existsHint = false; password2 = ""; }}>{$t("Sign in to it")}</button>
+          {/if}
+          {#if keyAccount}
+            <button class="err-act" onclick={() => { mode = "signin"; username = keyAccount; error = null; keyAccount = ""; password2 = ""; }}>{$t("Sign in to @{u}", { u: keyAccount })}</button>
           {/if}
           {#if boundHint && homeSlot}
             <button class="err-act" disabled={leaving} onclick={() => homeSlot && backTo(homeSlot.slot)}>{$t("Its keys are on this phone — open it")}</button>

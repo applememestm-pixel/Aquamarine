@@ -349,6 +349,10 @@ pub enum DirError {
     BadNameLogin,
     #[error("this account lives on one device — turn on two-step verification there to sign in on another one")]
     DeviceBound,
+    /// This device's key already has an account here (one per key): said
+    /// to the key's holder only (the request is signed with it).
+    #[error("this device already has an account here: @{0} — sign in to it")]
+    KeyHasAccount(String),
     #[error("too many wrong attempts — try again in 15 minutes")]
     TooManyTries,
     #[error("confirm the sign-in in Telegram")]
@@ -1405,10 +1409,11 @@ impl Directory {
                 return Err(DirError::UsernameTaken);
             }
         }
-        // One account per identity key.
+        // One account per identity key — and which one, so the app can say
+        // so (it said "@new is taken", which looked like a broken sign-up).
         if let Ok(other) = db.query_row("SELECT username FROM users WHERE identity_dh=?1", rusqlite::params![identity_dh.as_slice()], |r| r.get::<_, String>(0)) {
             if other != username {
-                return Err(DirError::UsernameTaken);
+                return Err(DirError::KeyHasAccount(other));
             }
         }
         if Self::reserved_elsewhere(&db, &username, &uid_for(identity_dh)) {
@@ -1517,6 +1522,12 @@ impl Directory {
         let db = self.db.lock().unwrap();
         let mut sec: Security = serde_json::from_str(&json).unwrap_or_default();
         if !sec.portable() {
+            // These keys are another account's here (renamed in the network,
+            // another name than remembered): say whose, not "another device".
+            drop(db);
+            if let Some(other) = self.username_for_identity(identity_dh).filter(|o| *o != username) {
+                return Err(DirError::KeyHasAccount(other));
+            }
             return Err(DirError::DeviceBound);
         }
         let by_recovery = !recovery.trim().is_empty();
@@ -3741,7 +3752,20 @@ mod tests {
     }
 
     #[test]
-    fn username_taken_by_other_identity() {
+    fn one_account_per_key_names_it() {
+        let d = dir();
+        d.register_plain("papa", &[9u8; 32], "pass-word-1", "").unwrap();
+        // Another name with the same key: which account the key has.
+        assert!(matches!(d.register_plain("papa2", &[9u8; 32], "pass-word-1", ""), Err(DirError::KeyHasAccount(n)) if n == "papa"));
+        // Signing in to another account with these keys: whose they are.
+        d.register_plain("mama", &[8u8; 32], "pass-word-2", "").unwrap();
+        assert!(matches!(d.sign_in_plain("mama", "pass-word-2", &[9u8; 32], "", "", ""), Err(DirError::KeyHasAccount(n)) if n == "papa"));
+        // A fresh key: the account lives on another device.
+        assert!(matches!(d.sign_in_plain("mama", "pass-word-2", &[7u8; 32], "", "", ""), Err(DirError::DeviceBound)));
+    }
+
+    #[test]
+        fn username_taken_by_other_identity() {
         let d = dir();
         let code = d.request_code("a@x.com").unwrap().unwrap();
         let t1 = d.verify_code("a@x.com", &code).unwrap();

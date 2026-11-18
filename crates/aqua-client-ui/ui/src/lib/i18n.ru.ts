@@ -57,6 +57,8 @@ export const RU: Record<string, string> = {
   "Already in a call": "Уже идёт звонок",
   "Already registered on this device": "Уже зарегистрирован на этом устройстве",
   "Its keys are on this phone — open it": "Его ключи на этом телефоне — открыть",
+  "This device already has an account on this server: @{u}. One account per device — sign in to it.": "У этого устройства уже есть аккаунт на этом сервере: @{u}. Один аккаунт на устройство — войдите в него.",
+  "Sign in to @{u}": "Войти в @{u}",
   "Back to the account that was here before": "Вернуться к аккаунту, который был здесь раньше",
   "Also visible as SHA-256 fingerprint:": "Также виден как отпечаток SHA-256:",
   "Always allow": "Всегда разрешать",
