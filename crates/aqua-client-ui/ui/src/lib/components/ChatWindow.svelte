@@ -2044,7 +2044,10 @@
   // Channels: "feed" view (exteraGram's feed) — wide cards in one column,
   // no avatars; per channel, remembered on this device.
   let feedChans = $state<Record<string, boolean>>((() => { try { return JSON.parse(localStorage.getItem("aqua.feedView") ?? "{}"); } catch { return {}; } })());
-  let feedView = $derived(isChannel && !!feedChans[$activeChat?.id ?? ""]);
+  // The feed (wide cards) is a reader's view on a phone (owner): not on a PC,
+  // not for the channel's admins.
+  let feedAllowed = $derived(isChannel && IS_MOBILE && !amChanAdmin);
+  let feedView = $derived(feedAllowed && !!feedChans[$activeChat?.id ?? ""]);
   function setFeedView(id: string, on: boolean) {
     feedChans = { ...feedChans, [id]: on };
     try { localStorage.setItem("aqua.feedView", JSON.stringify(feedChans)); } catch { /* private mode */ }
@@ -2061,7 +2064,7 @@
       out.push({ id: "noshare", label: tr(on ? "Allow sharing" : "Disable sharing"), sub: tr(on ? "Forwarding, copying and saving are off for both of you" : "No forwarding, copying or saving — for both of you"), icon: icons.lock, on,
         run: () => void setNoShare(c.id, !on).then(() => showToast(tr(on ? "Sharing is allowed again" : "Sharing is off in this chat — for both of you. A modified app or a camera can still copy."), 5000)) });
     }
-    if (isChannel) out.push({ id: "feed", label: tr(feedView ? "Chat view" : "Feed view"), sub: tr(feedView ? "Posts as messages" : "Posts as wide cards, like a news feed"), icon: IC.tools, on: feedView, run: () => setFeedView(c.id, !feedView) });
+    if (feedAllowed) out.push({ id: "feed", label: tr(feedView ? "Chat view" : "Feed view"), sub: tr(feedView ? "Posts as messages" : "Posts as wide cards, like a news feed"), icon: IC.tools, on: feedView, run: () => setFeedView(c.id, !feedView) });
     if (amChanAdmin) out.push({ id: "stats", label: tr("Channel statistics"), sub: tr("Views, reactions, comments"), icon: IC.stats, on: $statsFor === c.id, run: () => statsFor.set($statsFor === c.id ? null : c.id) });
     if (isBotChat && botMenu) {
       const bm = botMenu, added = $attachBots.some((b) => b.bot === c.id);
@@ -3958,8 +3961,8 @@
         </div>
       </div>
       <div class="chat-actions">
-        {#if isChannel && $activeChat}
-          <!-- Feed / chat view of a channel in one tap (exteraGram's "Feed"). -->
+        {#if feedAllowed && $activeChat}
+          <!-- Feed / chat view of a channel in one tap (exteraGram's "Feed"); phones, subscribers only. -->
           <button class="icon-btn" class:active={feedView} title={$t(feedView ? "Chat view" : "Feed view")} aria-pressed={feedView}
             onclick={() => $activeChat && setFeedView($activeChat.id, !feedView)}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{#if feedView}<path d="M4 6h10M4 12h16M4 18h12"/>{:else}<rect x="3" y="3" width="18" height="8" rx="2"/><rect x="3" y="13" width="18" height="8" rx="2"/>{/if}</svg>
