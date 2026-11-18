@@ -82,3 +82,21 @@ export function scrollX(node: HTMLElement) {
     },
   };
 }
+
+/** While `on`, the node lives at the end of <body>: a full-screen layer
+ *  inside a sticky / animated parent was trapped in that parent's stacking
+ *  context and slid under the rest of the page. A marker keeps its place. */
+export function portal(node: HTMLElement, on: boolean) {
+  const mark = document.createComment("portal");
+  node.before(mark);
+  let moved = false;
+  const set = (v: boolean) => {
+    if (v && !moved) { document.body.appendChild(node); moved = true; }
+    else if (!v && moved) { mark.after(node); moved = false; }
+  };
+  set(on);
+  return {
+    update: set,
+    destroy() { if (moved) node.remove(); mark.remove(); },
+  };
+}

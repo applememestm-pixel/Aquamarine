@@ -6,6 +6,7 @@
 <script lang="ts">
   import Select from "./Select.svelte";
   import { onBack } from "../back";
+  import { portal } from "../actions";
   import { chatLines } from "../listLook";
   import { inAppBrowser } from "../browser";
   import { IS_MOBILE, IS_DESKTOP } from "../platform";
@@ -1775,9 +1776,9 @@
       </section>
       </div>
       <aside class="ap-preview" aria-label={$t("Preview")}>
-        <div class="pv-card" class:full={pvFull} role={pvFull ? "dialog" : undefined} aria-label={pvFull ? $t("Preview") : undefined}>
+        <div class="pv-card" class:full={pvFull} use:portal={pvFull} role={pvFull ? "dialog" : undefined} aria-modal={pvFull ? "true" : undefined} aria-label={pvFull ? $t("Preview") : undefined}>
           <div class="pv-head">
-            {#if pvFull}<button class="pv-x" data-x onclick={() => (pvFull = false)} aria-label={$t("Close")}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>{/if}
+            {#if pvFull}<button class="pv-x" data-x data-keep-x onclick={() => (pvFull = false)} aria-label={$t("Close")}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>{/if}
             <span class="pv-ava">A</span>
             <div class="pv-meta"><b>{$t("Alice")}</b><span>{$t("online")}</span></div>
             {#if !pvFull}
