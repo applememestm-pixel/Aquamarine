@@ -2113,6 +2113,7 @@ export const RU: Record<string, string> = {
   "No replies yet — start the discussion": "Ответов пока нет — начните обсуждение",
   "Show in chat": "Показать в чате",
   "Discussion started": "Начало обсуждения",
+  "Open a chat to send the edited picture to": "Откройте чат, куда отправить изменённое фото",
   "Send message as…": "Отправлять от имени…",
   "personal account": "личный аккаунт",
   "only its members see it as this": "от его имени увидят только его участники",
