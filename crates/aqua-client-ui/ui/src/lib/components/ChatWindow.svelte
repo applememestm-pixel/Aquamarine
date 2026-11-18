@@ -4154,6 +4154,16 @@
       </div>
     {/if}
 
+{#snippet chipRow(m: any, chips: ReturnType<typeof reactionChips>)}
+  {#each chips as chip (chip.emoji)}
+                      {@const ru = reactionUrl(chip.emoji, $reactionPack.items)}
+                      {@const src = reactionSource(chip.emoji)}
+                      <button class="reaction-chip" class:mine={chip.mine} onclick={() => toggleChipReaction(m, chip.emoji)} oncontextmenu={(e) => reactionInfo(e, chip.emoji)} title={src ? tr("From “{title}” — right-click for the pack", { title: src.title }) : parseReaction(chip.emoji).emoji} in:scaleIn={{ start: 0.3, duration: motionMs(280), easing: backOut }}>
+                        {#if ru}<span class="rc-media"><AnimatedMedia src={ru.url} mime={ru.mime} alt={parseReaction(chip.emoji).emoji} play="auto" /></span>{:else}{parseReaction(chip.emoji).emoji}{/if}{#if chip.count > 1}{#key chip.count}<span class="rc-count" in:scaleIn={{ start: 0.5, duration: motionMs(220), easing: backOut }}>{chip.count}</span>{/key}{/if}
+                      </button>
+                    {/each}
+{/snippet}
+
     <div class="msg-stage">
     <div class="chat-wall" aria-hidden="true"></div>
     <div
@@ -4669,7 +4679,10 @@
                 {@const nr = replyCount.get(m.id) ?? 0}
                 {@const vk = reactionKey(m)}
                 {#if isGroup && commentsAllowed && activeGroup?.kind === "channel"}
-                  <!-- Telegram: a bar under every post — who commented, how many, "Leave a comment". -->
+                  <!-- Telegram X: reactions inside the post card, under its content… -->
+                  {@const pchips = $activeChat ? reactionChips($reactions[vk]) : []}
+                  {#if pchips.length > 0}<div class="reaction-row post-reacts">{@render chipRow(m, pchips)}</div>{/if}
+                  <!-- …then the comments line closing the card: who commented, how many, "Leave a comment". -->
                   <button class="cmt-bar" class:out={m.outgoing && !isChannel}
                     onclick={() => { if (cmtHeld) { cmtHeld = false; return; } openThread(m, "comments"); }}
                     onpointerdown={(e) => cmtDown(e, m)} onpointerup={cmtUp} onpointerleave={cmtUp} onpointercancel={cmtUp}
@@ -4700,18 +4713,10 @@
                   {/if}
                 </div>
               {/if}
-              {#if $activeChat}
+              {#if $activeChat && !(isGroup && commentsAllowed && activeGroup?.kind === "channel")}
                 {@const chips = reactionChips($reactions[reactionKey(m)])}
                 {#if chips.length > 0}
-                  <div class="reaction-row">
-                    {#each chips as chip (chip.emoji)}
-                      {@const ru = reactionUrl(chip.emoji, $reactionPack.items)}
-                      {@const src = reactionSource(chip.emoji)}
-                      <button class="reaction-chip" class:mine={chip.mine} onclick={() => toggleChipReaction(m, chip.emoji)} oncontextmenu={(e) => reactionInfo(e, chip.emoji)} title={src ? tr("From “{title}” — right-click for the pack", { title: src.title }) : parseReaction(chip.emoji).emoji} in:scaleIn={{ start: 0.3, duration: motionMs(280), easing: backOut }}>
-                        {#if ru}<span class="rc-media"><AnimatedMedia src={ru.url} mime={ru.mime} alt={parseReaction(chip.emoji).emoji} play="auto" /></span>{:else}{parseReaction(chip.emoji).emoji}{/if}{#if chip.count > 1}{#key chip.count}<span class="rc-count" in:scaleIn={{ start: 0.5, duration: motionMs(220), easing: backOut }}>{chip.count}</span>{/key}{/if}
-                      </button>
-                    {/each}
-                  </div>
+                  <div class="reaction-row">{@render chipRow(m, chips)}</div>
                 {/if}
               {/if}
             </div>
@@ -6713,7 +6718,7 @@
   /* Feed view of a channel: one centred column of full-width posts. */
   .messages.feed .msg-avatar { display: none; }
   .messages.feed .msg { display: flex; justify-content: center; }
-  .messages.feed .msg-col { width: min(640px, 100%); max-width: none; margin: 0 auto; align-items: stretch; }
+  .messages.feed .msg-col { width: min(860px, 100%); max-width: none; margin: 0 auto; align-items: stretch; }
   .messages.feed .msg-col > .bubble, .messages.feed .msg-col > .media-bubble { max-width: none; width: 100%; box-sizing: border-box; }
   .reply-bar {
     display: flex; align-items: center; gap: 10px;
@@ -7142,17 +7147,22 @@
   .kbds { margin-left: auto; }
   .channel-mute.danger-txt { color: var(--danger, #FF4D6D); }
   /* A channel post and its comment bar are one block, as wide as the wider of the two. */
-  .msg-col.post { display: grid; justify-items: stretch; width: fit-content; max-width: 100%; }
+  /* Telegram X: one card — the content, its reactions, a hairline, the
+     comments line. Nothing between them, one background, one border. */
+  .msg-col.post { display: grid; justify-items: stretch; width: fit-content; max-width: 100%; gap: 0; }
   .msg.out .msg-col.post { justify-self: end; }
-  .msg-col.post > .bubble { border-bottom-left-radius: 6px; border-bottom-right-radius: 6px; }
+  .msg-col.post > :is(.bubble, .media-bubble) { border-bottom-left-radius: 0; border-bottom-right-radius: 0; border-bottom-width: 0; box-shadow: none; }
+  .post-reacts { width: 0; min-width: 100%; box-sizing: border-box; margin: 0; padding: 2px 10px 8px;
+    background: var(--bubble-in, var(--bg-bubble-in)); border: 1px solid var(--border); border-top: none; border-bottom: none; }
+  .msg-col.post > .media-bubble + .post-reacts { padding-top: 8px; }
   .msg-col.post > .post-foot.out { justify-self: end; }
   /* Never wider than the post above it (text, photo, video, circle…): it
      adds nothing to the column's width (width 0) and stretches to it. */
-  .cmt-bar { display: flex; align-items: center; gap: 8px; width: 0; min-width: 100%; box-sizing: border-box; margin-top: -1px; padding: 8px 12px; overflow: hidden;
-    border: 1px solid var(--border); border-top-color: color-mix(in srgb, var(--border) 60%, transparent); border-radius: 0 0 16px 16px;
-    background: var(--bg-bubble-in); color: var(--accent); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; text-align: left; transition: background-color .12s; }
+  .cmt-bar { display: flex; align-items: center; gap: 8px; width: 0; min-width: 100%; box-sizing: border-box; margin-top: 0; padding: 9px 12px; overflow: hidden;
+    border: 1px solid var(--border); border-top-color: color-mix(in srgb, var(--fg) 9%, transparent); border-radius: 0 0 var(--bubble-r, 14px) var(--bubble-r, 14px);
+    background: var(--bubble-in, var(--bg-bubble-in)); box-shadow: var(--shadow-lift); color: var(--accent); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; text-align: left; transition: background-color .12s; }
   .cmt-bar.out { align-self: flex-end; background: var(--bg-bubble-out, var(--bg-bubble-in)); }
-  .cmt-bar:hover { background: color-mix(in srgb, var(--accent) 10%, var(--bg-bubble-in)); }
+  .cmt-bar:hover { background: color-mix(in srgb, var(--accent) 8%, var(--bubble-in, var(--bg-bubble-in))); }
   .cmt-bar .cmt-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
   .cmt-ic { width: 20px; height: 20px; flex-shrink: 0; }
   .cmt-avas { display: flex; flex-shrink: 0; }
