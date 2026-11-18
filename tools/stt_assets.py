@@ -18,7 +18,6 @@ from pathlib import Path
 ORT = "1.22.0"
 MODEL = "gigaam-v3-e2e-ctc"
 HF_REPO = "istupakov/gigaam-v3-onnx"
-EXAMPLES = "https://cdn.chatwm.opensmodel.sberdevices.ru/GigaAM/"  # GigaAM's own test recordings
 
 out = Path("out"); out.mkdir(exist_ok=True)
 work = Path("work"); work.mkdir(exist_ok=True)
@@ -62,17 +61,33 @@ print("vocab:", len(vocab), "head:", vocab[:5], "tail:", vocab[-5:])
 # ---------------------------------------------------------------- golden
 asr = onnx_asr.load_model(MODEL, quantization="int8" if "int8" in model_file else None)
 import numpy as np  # noqa: E402
-for ex in ("example", "long_example"):
-    (work / f"{ex}.src").write_bytes(get(EXAMPLES + ex + ".wav"))
-    # 16 kHz mono s16 — what the app hands the recognizer after decoding.
-    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(work / f"{ex}.src"),
-                    "-ac", "1", "-ar", "16000", "-f", "s16le", str(out / f"stt-{ex}.pcm")], check=True)
-    pcm = np.frombuffer((out / f"stt-{ex}.pcm").read_bytes(), dtype="<i2").astype(np.float32) / 32768
-    print(ex, "seconds:", len(pcm) / 16000)
-    if len(pcm) <= 25 * 16000:
-        text = asr.recognize(pcm, sample_rate=16000)
-        print("golden", ex, ":", text)
-        put(f"stt-{ex}.txt", text.encode("utf-8"))
+# Test speech, synthesized here (espeak-ng) so nothing is fetched: the Rust
+# tests check they get the same text as onnx-asr — the pipeline, not the
+# voice. The long one (> 20 s) goes through the chunking.
+SAY = {
+    "example": "Привет! Это проверка распознавания голосовых сообщений в Аквамарине.",
+    "long_example": " ".join([
+        "Сегодня мы проверяем, как приложение превращает длинное голосовое сообщение в текст.",
+        "Запись длиннее двадцати секунд режется на части в паузах между словами.",
+        "Каждая часть распознаётся отдельно, а потом текст склеивается обратно.",
+        "Если всё работает правильно, здесь не будет ни обрывков, ни повторов.",
+    ]),
+}
+for ex, text_in in SAY.items():
+    try:
+        src = work / f"{ex}.wav"
+        subprocess.run(["espeak-ng", "-v", "ru", "-s", "140", "-w", str(src), text_in], check=True)
+        # 16 kHz mono s16 — what the app hands the recognizer after decoding.
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(src),
+                        "-ac", "1", "-ar", "16000", "-f", "s16le", str(out / f"stt-{ex}.pcm")], check=True)
+        pcm = np.frombuffer((out / f"stt-{ex}.pcm").read_bytes(), dtype="<i2").astype(np.float32) / 32768
+        print(ex, "seconds:", len(pcm) / 16000)
+        if len(pcm) <= 20 * 16000:
+            text = asr.recognize(pcm, sample_rate=16000)
+            print("golden", ex, ":", text)
+            put(f"stt-{ex}.txt", text.encode("utf-8"))
+    except Exception as e:  # noqa: BLE001
+        print("::warning::fixture", ex, "skipped:", e)
 
 # ---------------------------------------------------------------- runtime
 base = f"https://github.com/microsoft/onnxruntime/releases/download/v{ORT}"

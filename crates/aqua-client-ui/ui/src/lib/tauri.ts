@@ -15,6 +15,8 @@ export interface ServerProbe {
   scope: "loopback" | "lan" | "emulator" | "public" | null;
   ok: boolean; ms: number | null; users: number | null; online: number | null;
   country: string | null; country_code: string | null; city: string | null;
+  /** Why it didn't answer (servers.rs why_failed). */
+  why?: "refused" | "timeout" | "dns" | "proxy" | "http" | "other" | null;
 }
 
 /** One account on this device (accounts.rs); slot "" is the first one. */
