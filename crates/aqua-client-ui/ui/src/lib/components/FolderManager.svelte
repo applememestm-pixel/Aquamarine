@@ -21,6 +21,7 @@
   import { folders, createFolder, deleteFolder, updateFolder, moveFolder, folderHas, folderTags, FOLDER_COLORS,
     type Folder, type FolderKind, type FolderSkip, type ChatFacts } from "../folders";
   import { askConfirm } from "./Confirm.svelte";
+  import { settings } from "../theme";
   import type { ChatSummary } from "../types";
 
   const KINDS: { id: FolderKind; label: string; ic: string }[] = [
@@ -54,6 +55,9 @@
   const countOf = (f: Folder) => realChats.filter((c) => folderHas(f, facts(c))).length;
 
   function add() {
+    // "Hide All chats" does nothing without folders, so it was likely
+    // switched on unseen — the first folder made "All" vanish.
+    if (!$folders.length && $settings.hideAllTab) settings.update((x) => ({ ...x, hideAllTab: false }));
     const id = createFolder(tr("New folder"));
     folderManagerOpen.set(id);
   }
@@ -129,6 +133,10 @@
             {/each}
             <button class="fm-row fm-add" onclick={add}><span class="fm-fic">＋</span><b>{$t("Create a folder")}</b></button>
           </div>
+          <label class="fm-row fm-switch">
+            <span class="fm-txt"><b>{$t("“All chats” tab")}</b><small>{$t("Off: the list opens on the first folder")}</small></span>
+            <input type="checkbox" checked={!$settings.hideAllTab} onchange={(e) => { const on = e.currentTarget.checked; settings.update((x) => ({ ...x, hideAllTab: !on })); }} /><span class="knob"></span>
+          </label>
           <label class="fm-row fm-switch">
             <span class="fm-txt"><b>{$t("Folder tags")}</b><small>{$t("Under each chat in “All”: which folders it's in")}</small></span>
             <input type="checkbox" bind:checked={$folderTags} /><span class="knob"></span>

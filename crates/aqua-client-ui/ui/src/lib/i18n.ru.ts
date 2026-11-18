@@ -2761,6 +2761,8 @@ export const RU: Record<string, string> = {
   "Folders sort chats into tabs above the list. A folder can take in whole kinds of chats — say, all groups — and leave out muted or read ones.": "Папки раскладывают чаты по вкладкам над списком. Папка может брать целые типы чатов — например, все группы — и не показывать чаты без звука или прочитанные.",
   "{n} chats": "Чатов: {n}",
   "Create a folder": "Создать папку",
+  "“All chats” tab": "Вкладка «Все чаты»",
+  "Off: the list opens on the first folder": "Если выключить, список открывается на первой папке",
   "Folder tags": "Метки папок",
   "Under each chat in “All”: which folders it's in": "Под каждым чатом во «Всех» — в каких он папках",
   "Folder name": "Название папки",
