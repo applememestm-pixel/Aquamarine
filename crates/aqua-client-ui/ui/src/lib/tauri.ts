@@ -249,6 +249,13 @@ export const api = {
   deleteWallpaper:    (path: string): Promise<void>                                    => invoke("delete_wallpaper", { path }),
   saveTempFile:       (name: string, bytes: number[]): Promise<string>                  => invoke("save_temp_file", { name, bytes }),
   /** Raw bytes onto a file in tmp/ (a recording, piece by piece): `name` starts one, `path` appends. */
+  /** Voice-to-text (stt.rs): the model is downloaded once, then works offline. */
+  sttStatus:          (): Promise<{ supported: boolean; ready: boolean; size: number; downloading: boolean }> => invoke("stt_status"),
+  sttDownload:        (): Promise<void>                                 => invoke("stt_download"),
+  sttDelete:          (): Promise<void>                                 => invoke("stt_delete"),
+  /** 16 kHz mono s16le samples as the raw body. */
+  sttTranscribe:      (pcm: Uint8Array): Promise<string>                => invoke("stt_transcribe", pcm),
+  onSttProgress:      (fn: (p: { done: number; total: number }) => void) => listen<{ done: number; total: number }>("aqua://stt-progress", (e) => fn(e.payload)),
   tempAppend:         (bytes: Uint8Array, at: { name?: string; path?: string }): Promise<string> =>
     invoke("temp_append", bytes, { headers: { "x-name": at.name ?? "", "x-path": at.path ?? "" } }),
   saveConsoleBot:     (path: string): Promise<void>                                    => invoke("save_console_bot", { path }),

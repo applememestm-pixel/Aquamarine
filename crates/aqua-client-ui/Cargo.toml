@@ -21,6 +21,8 @@ tauri-build = { version = "2", features = [] }
 aqua-core        = { path = "../aqua-core" }
 aqua-client-core = { path = "../aqua-client-core" }
 aqua-nsfw        = { path = "../aqua-nsfw" }
+# Voice-to-text: GigaAM + ONNX Runtime, both downloaded on demand (adds no weight).
+aqua-stt         = { path = "../aqua-stt" }
 
 tauri               = { version = "2", features = ["protocol-asset", "tray-icon", "image-png"] }
 tauri-plugin-log    = { version = "2" }
