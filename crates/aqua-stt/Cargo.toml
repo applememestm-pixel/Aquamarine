@@ -11,3 +11,6 @@ description = "Voice-to-text on the device: GigaAM v3 (Sber, MIT) on ONNX Runtim
 # nothing is linked or downloaded at build time and the app does not grow.
 [target.'cfg(not(target_os = "ios"))'.dependencies]
 ort = { version = "=2.0.0-rc.15", default-features = false, features = ["load-dynamic"] }
+
+[dev-dependencies]
+sha2 = "0.10"

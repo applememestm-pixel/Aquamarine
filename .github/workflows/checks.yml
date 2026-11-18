@@ -34,6 +34,36 @@ jobs:
           cargo check -p aqua-stt --target aarch64-linux-android
           cargo check -p aqua-stt --target armv7-linux-androideabi
 
+  # Voice-to-text end to end: the files from the stt release (cached), then
+  # the Rust pipeline must give onnx-asr's text (crates/aqua-stt/tests/e2e.rs).
+  stt:
+    name: stt e2e
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          shared-key: checks
+      - uses: actions/cache@v4
+        with:
+          path: stt-files
+          key: stt-${{ hashFiles('crates/aqua-stt/src/files.rs') }}
+      - name: Files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(grep -oP 'RELEASE_TAG: &str = "\K[^"]+' crates/aqua-stt/src/files.rs)
+          mkdir -p stt-files
+          for f in stt-model.onnx stt-pre.onnx stt-vocab.txt ort-linux-x64.so stt-example.pcm stt-example.txt stt-long_example.pcm; do
+            [ -f "stt-files/$f" ] || gh release download "$tag" -R "$GITHUB_REPOSITORY" -p "$f" -D stt-files
+          done
+          touch stt-files/verified
+      - run: cargo test -p aqua-stt --test e2e -- --nocapture
+        env:
+          AQUA_STT_DIR: ${{ github.workspace }}/stt-files
+
   app:
     name: app (cargo check + svelte-check)
     runs-on: ubuntu-22.04
