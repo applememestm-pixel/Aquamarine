@@ -6537,6 +6537,10 @@
      (the row is "in" for them); no avatars, the posts take the width. */
   .messages.chan .msg { grid-template-columns: 1fr; }
   .messages.chan .msg-avatar { display: none; }
+  /* A channel has no avatar gutter for the selection circle: the posts step
+     aside (Telegram), or the circle sat on top of them. */
+  .messages.chan .msg { transition: padding-left .18s ease, background-color .14s ease; }
+  .messages.chan.selecting .msg { padding-left: 34px; }
   .messages.chan .msg-col { grid-column: 1; }
   /* A chat of two: no avatar column — the bubbles take the room. */
   .messages.dm .msg { grid-template-columns: 1fr; }

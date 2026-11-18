@@ -32,6 +32,10 @@
   import { openFileDialog } from "../dialog";
   import { showToast } from "./Toast.svelte";
   import { broadcastPresence, peerPresence, myActivity, shareActivity, myOnline, activityVerb, activityLine, peerStatus, presenceNow } from "../presence";
+  import Select from "./Select.svelte";
+  import { groupMap, requestJoinGroup } from "../groups";
+  import { isAdmin } from "../groupRules";
+  import { asChannel, avatars } from "../people";
   import { peerCards, refreshPeer, publishMyProfile, setMyImage, setMyImageBytes, clearMyImage, setMyMediaFile, clearMyMusic, str, clans, refreshMyStar } from "../people";
   import MediaPlayer from "./MediaPlayer.svelte";
   import { streamSrc } from "../media";
@@ -376,6 +380,8 @@
      *  the banner pages the avatar too. */
     more: { k: string; v: number; url?: string }[];
     link: boolean;
+    /** Their channel on the profile (Telegram's personal channel). */
+    channel: { gid: string; title: string; owner: string } | null;
   }
   let view = $derived<View | null>((void $played, buildView(activeUsername, $profile, $contacts, $info, $peerCards, $peerPresence, $myActivity)));
   // Links to a known service show as connections, the rest as links.
@@ -547,6 +553,7 @@
         estatus: me.estatus ?? "",
         more: me.more ?? [],
         link: !!me.link_banner,
+        channel: asChannel(me.channel),
       };
     }
     const c = getContact(uname);
@@ -588,6 +595,7 @@
       estatus: str(x.es),
       more: Array.isArray(x.more) ? (x.more as { k: string; v: number }[]).filter((m) => m && /^(avatar[2-5]|banner[23])$/.test(String(m.k)) && typeof m.v === "number") : [],
       link: x.lb === true,
+      channel: asChannel(x.ch),
     };
   }
 
@@ -615,6 +623,17 @@
     editing = true;
   }
   function cancelEdit() { editing = false; draft = null; }
+  /** Channels I can put on my profile: any I'm an admin of — private or public. */
+  const myChannels = $derived(Object.values($groupMap).filter((g) => g.kind === "channel" && isAdmin(g, $info?.username ?? "")));
+  function setChannel(gid: string) {
+    if (!draft) return;
+    const g = $groupMap[gid];
+    draft = { ...draft, channel: g ? { gid: g.id, title: g.title, owner: $info?.username ?? g.owner } : null };
+  }
+  async function joinChannel(ch: { gid: string; title: string; owner: string }) {
+    try { await requestJoinGroup(ch.gid, ch.owner, ch.title, ""); showToast(tr("Request sent")); }
+    catch (e) { showToast(String(e)); }
+  }
   async function saveEdit() {
     if (!draft) return;
     updateProfile(draft);
@@ -773,6 +792,15 @@
             <span>{$t("About")}</span>
             <textarea bind:value={draft.about} rows="4" placeholder={$t("Tell people a little about yourself...")}></textarea>
           </label>
+          <div class="field">
+            <span>{$t("Channel")}</span>
+            {#if myChannels.length}
+              <Select value={draft.channel?.gid ?? ""} onchange={(v) => setChannel(v)}
+                options={[{ value: "", label: $t("None") }, ...myChannels.map((g) => ({ value: g.id, label: g.title }))]} />
+            {:else}
+              <small class="ch-none">{$t("Channels you run (owner or admin) can be shown on your profile.")}</small>
+            {/if}
+          </div>
           <div class="field">
             <span>{$t("Emoji next to your name")}</span>
             <div class="es-row">
@@ -1023,6 +1051,20 @@
               <p class="section-body">{view.about}</p>
             </section>
           {/if}
+          {#if view.channel && !editing}
+            {@const ch = view.channel}
+            {@const g = $groupMap[ch.gid]}
+            {@const member = !!g?.members.some((m) => m.username === $info?.username)}
+            <section class="section">
+              <div class="section-label">{$t("Channel")}</div>
+              <div class="pch">
+                <span class="pch-av" style:background-image={$avatars[ch.gid] ? `url("${$avatars[ch.gid]}")` : undefined} style:background={$avatars[ch.gid] ? undefined : g?.gradient}>{$avatars[ch.gid] ? "" : (g?.title ?? ch.title).charAt(0).toUpperCase()}</span>
+                <span class="pch-t"><b>{g?.title ?? ch.title}</b>{#if g}<small>{$tn(g.members.length, "subscriber")}</small>{/if}</span>
+                {#if member}<button class="pch-go" onclick={() => { closeProfile(); void selectChat(ch.gid); }}>{$t("Open")}</button>
+                {:else if !isMe}<button class="pch-go" onclick={() => joinChannel(ch)}>{$t("Request to join")}</button>{/if}
+              </div>
+            </section>
+          {/if}
 
           {#if conns.length}
             <section class="section">
@@ -1134,6 +1176,14 @@
             </div>
             {#if view.about}
               <div class="tg-row"><span class="tg-v pre">{view.about}</span><span class="tg-l">{$t("Bio")}</span></div>
+            {/if}
+            {#if view.channel}
+              {@const ch = view.channel}
+              {@const g = $groupMap[ch.gid]}
+              {@const member = !!g?.members.some((m) => m.username === $info?.username)}
+              <button class="tg-row" onclick={() => { if (member) { closeProfile(); void selectChat(ch.gid); } else if (!isMe) void joinChannel(ch); }}>
+                <span class="tg-v">{g?.title ?? ch.title}{#if g} · {$tn(g.members.length, "subscriber")}{/if}</span>
+                <span class="tg-l">{$t(member || isMe ? "Channel" : "Channel · tap to ask to join")}</span></button>
             {/if}
             {#if view.birthday}
               <div class="tg-row"><span class="tg-v">{view.birthday}{#if ageOf(view.birthday) != null} ({$tn(ageOf(view.birthday) ?? 0, "year old")}){/if}</span><span class="tg-l">{$t("Birthday")}</span></div>
@@ -1799,6 +1849,13 @@
     padding: 10px 14px;
     margin-bottom: 8px;
   }
+  .pch { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border-radius: calc(14px * var(--rk, 1)); background: color-mix(in srgb, var(--fg) 5%, transparent); }
+  .pch-av { width: 44px; height: 44px; border-radius: 50%; flex-shrink: 0; display: grid; place-items: center; font-weight: 700; font-size: 18px; color: var(--bg-shell); background-size: cover; background-position: center; }
+  .pch-t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .pch-t b { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pch-t small { font-size: 12.5px; color: var(--fg-muted); }
+  .pch-go { flex-shrink: 0; border: none; border-radius: 999px; padding: 8px 14px; font: inherit; font-size: 13px; font-weight: 700; background: var(--accent); color: var(--bg-shell); cursor: pointer; }
+  .ch-none { font-size: 12.5px; color: var(--fg-dim); }
   .section-label {
     font-size: 11px;
     font-weight: 700;
