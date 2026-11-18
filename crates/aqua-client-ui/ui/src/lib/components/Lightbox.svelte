@@ -347,7 +347,7 @@
       }
     } catch (err) {
       console.error("lightbox save failed", err);
-      showToast(tr("Could not save file"));
+      showToast(`${tr("Could not save file")}: ${err}`, 6000);
     } finally {
       busy = false;
     }

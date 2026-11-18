@@ -2190,7 +2190,27 @@ pub fn list_local_media(
 /// restrict the destination since the user picked it via the native
 /// save dialog.
 #[tauri::command]
-pub fn copy_file_to(source: String, dest: String) -> Result<(), String> {
+pub fn copy_file_to(app: AppHandle, source: String, dest: String) -> Result<(), String> {
+    // Android's "Save as" hands back a content:// URI, not a path: std::fs
+    // can't write there ("Could not save file" in the viewer). The system
+    // opens it for us, through the fs plugin, as it does for picked files.
+    if is_uri_pick(&dest) {
+        use tauri_plugin_fs::FsExt;
+        let url = tauri::Url::parse(&dest).map_err(|e| format!("bad file URI: {e}"))?;
+        if url.scheme() == "file" {
+            if let Ok(p) = url.to_file_path() {
+                std::fs::copy(&source, &p).map_err(|e| format!("copy: {e}"))?;
+                return Ok(());
+            }
+        }
+        let mut opts = tauri_plugin_fs::OpenOptions::new();
+        opts.read(false).write(true).truncate(true).create(true);
+        let mut out = app.fs().open(tauri_plugin_fs::FilePath::Url(url), opts).map_err(|e| format!("open {dest}: {e}"))?;
+        let mut src = std::fs::File::open(&source).map_err(|e| format!("read {source}: {e}"))?;
+        std::io::copy(&mut src, &mut out).map_err(|e| format!("copy: {e}"))?;
+        out.sync_all().ok();
+        return Ok(());
+    }
     std::fs::copy(&source, &dest).map_err(|e| format!("copy: {e}"))?;
     Ok(())
 }
