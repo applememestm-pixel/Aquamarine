@@ -96,6 +96,10 @@ const T = (id: string, name: string, mode: "dark" | "light", shell: string, rail
   },
 });
 export const THEMES: ThemePreset[] = [
+  // CeZeOs — the project's own look (the website and both server panels):
+  // near-black / cream, dark green, flat; the default since 1.21.0-14.
+  T("cezeos", "CeZeOs", "dark", "#0c0f0d", "#090b0a", "#0f1310", "#151a16", "#1a1f1b", "#ece8dd", "#aaa89f", "#6e6d67", "#3fa866", "#1b6b3e"),
+  T("cezeos-light", "CeZeOs Light", "light", "#f2efe6", "#ebe7dc", "#f6f3eb", "#ffffff", "#ffffff", "#121512", "#535a54", "#868b84", "#2f9356", "#1b6b3e"),
   T("github-dark", "GitHub Dark", "dark", "#0d1117", "#010409", "#0d1117", "#161b22", "#161b22", "#e6edf3", "#9198a1", "#6e7681", "#2f81f7", "#a371f7"),
   T("github-light", "GitHub Light", "light", "#ffffff", "#f6f8fa", "#f6f8fa", "#ffffff", "#f6f8fa", "#1f2328", "#59636e", "#8c959f", "#0969da", "#8250df"),
   T("vscode-dark", "VS Code Dark+", "dark", "#1e1e1e", "#181818", "#252526", "#2d2d2d", "#2d2d30", "#d4d4d4", "#a0a0a0", "#6a6a6a", "#007acc", "#c586c0"),
@@ -190,6 +194,9 @@ export interface Settings {
   appIcon?: { mode: "default" | "custom" | "theme" | "preset"; preset?: string; custom?: string };
   /** Complete theme (THEMES id); empty = the built-in look. */
   themePreset?: string;
+  /** 1.21.0-14: the CeZeOs theme became the default; set once the old
+   *  default (Aquamarine palette, no preset) has been moved to it. */
+  cezeosV1?: boolean;
   /** Lightweight mode: no glass blur, no drifting glow, flat shadows, fewer
    *  looping animations ("auto": on for weak devices and Linux). */
   liteFx?: "auto" | "on" | "off";
@@ -295,9 +302,11 @@ export const MENU_ALPHA = 0.55;
 export const DEFAULTS: Settings = {
   mode: "dark",
   palette: "aqua",
+  themePreset: "cezeos",
+  cezeosV1: true,
   density: "comfortable",
   fontScale: 1,
-  wallpaper: "aurora",
+  wallpaper: "none",
   enterToSend: true,
   autoDownloadMedia: true,
   linkPreviews: true,
@@ -358,6 +367,16 @@ function load(): Settings {
     // 1.0.61: notifications are on by default (they used to start off, so
     // nobody saw them). Once; switching them off afterwards sticks.
     if (!parsed.notifyOnV2) { s.notifyDesktop = true; s.notifyOnV2 = true; }
+    // 1.21.0-14: whoever still has the old default look (the Aquamarine
+    // palette, no complete theme, no own colours) moves to CeZeOs, the
+    // default now. Once; picking another theme afterwards sticks.
+    if (!parsed.cezeosV1) {
+      if (!parsed.themePreset && !parsed.customColors && (!parsed.palette || parsed.palette === "aqua")) {
+        s.themePreset = "cezeos";
+        if (!parsed.wallpaper || parsed.wallpaper === "aurora") s.wallpaper = "none";
+      }
+      s.cezeosV1 = true;
+    }
     return s;
   } catch {
     return { ...DEFAULTS };
@@ -480,6 +499,12 @@ function apply(s: Settings) {
     root.style.setProperty("--border-strong", light ? "rgba(0,0,0,0.17)" : "rgba(255,255,255,0.14)");
     root.style.setProperty("--bg-hover", light ? "rgba(0,0,0,0.045)" : "rgba(255,255,255,0.045)");
     root.style.setProperty("--bg-active", hexToRgba(preset.colors["--accent"], 0.1));
+    // CeZeOs is flat: no halos, no drifting glow behind the app.
+    if (preset.id.startsWith("cezeos")) {
+      root.style.setProperty("--accent-glow", hexToRgba(preset.colors["--accent"], 0.1));
+      root.style.setProperty("--accent-2-glow", hexToRgba(preset.colors["--accent-2"], 0.08));
+      root.style.setProperty("--accent-strong", light ? "#256f43" : "#56bd7c");
+    }
   }
 
   // --- Custom colour overrides (theme editor) win over everything. ---
@@ -698,7 +723,9 @@ export function toggleDayNight() {
     const saved = s.dayNight?.[to];
     // A saved look that isn't of that mode any more (its preset changed) isn't used.
     const usable = saved && shownMode({ ...s, ...saved }) === to ? saved : null;
-    const next = usable ?? { mode: to, palette: s.palette, themePreset: undefined, customColors: undefined, bubbleOut: undefined, bubbleIn: undefined };
+    // CeZeOs has a day and a night look of its own.
+    const cz = !s.customColors?.["--accent"] && (!s.themePreset || s.themePreset.startsWith("cezeos")) ? (to === "light" ? "cezeos-light" : "cezeos") : undefined;
+    const next = usable ?? { mode: to, palette: s.palette, themePreset: cz, customColors: undefined, bubbleOut: undefined, bubbleIn: undefined };
     return { ...s, ...next, dayNight: { ...s.dayNight, [from]: keep } };
   });
 }
