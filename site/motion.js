@@ -1,6 +1,6 @@
-/* Aquamarine site motion: a living background (grid, drifting glows, a
-   constellation of particles), sections that rise in as they scroll into
-   view, a chat mock that types, cards that light up under the cursor.
+/* Aquamarine site motion: a quiet background (a few slow points, faintly
+   linked, in the theme's accent), sections that rise in as they scroll into
+   view, a chat mock that types.
    Everything stops for prefers-reduced-motion and when the tab is hidden. */
 (() => {
   const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -11,13 +11,16 @@
   const bg = document.createElement("div");
   bg.className = "fx-bg";
   bg.setAttribute("aria-hidden", "true");
-  bg.innerHTML = '<div class="fx-grid"></div><div class="fx-glow g1"></div><div class="fx-glow g2"></div><div class="fx-glow g3"></div><canvas class="fx-particles"></canvas>';
+  bg.innerHTML = '<canvas class="fx-particles"></canvas>';
   document.body.prepend(bg);
 
   // ---- particles: points drifting, linked when close ----
   const canvas = bg.querySelector("canvas");
   const ctx = canvas.getContext("2d");
   let W = 0, H = 0, dpr = 1, pts = [], raf = 0, mouse = { x: -1e4, y: -1e4 };
+  // The accent as "r,g,b" (style.css --fx-rgb); follows the theme.
+  const fxRgb = () => getComputedStyle(root).getPropertyValue("--fx-rgb").trim() || "90,190,120";
+  let rgb = fxRgb();
   function resize() {
     // Phones fire resize while scrolling (the address bar): keep the dots.
     if (pts.length && innerWidth === W && Math.abs(innerHeight - H) < 160) return;
@@ -26,12 +29,12 @@
     canvas.width = W * dpr; canvas.height = H * dpr;
     canvas.style.width = W + "px"; canvas.style.height = H + "px";
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const n = Math.round(Math.min(110, (W * H) / 14000));
+    const n = Math.round(Math.min(56, (W * H) / 28000));
     pts = Array.from({ length: n }, () => ({
       x: Math.random() * W, y: Math.random() * H,
-      vx: (Math.random() - 0.5) * 0.6, vy: (Math.random() - 0.5) * 0.6,
-      r: Math.random() * 1.8 + 0.8, a: Math.random() * 0.45 + 0.45,
-      tw: Math.random() * Math.PI * 2, ts: 0.03 + Math.random() * 0.05, // twinkle phase and speed
+      vx: (Math.random() - 0.5) * 0.22, vy: (Math.random() - 0.5) * 0.22,
+      r: Math.random() * 1.3 + 0.9, a: Math.random() * 0.3 + 0.35,
+      tw: Math.random() * Math.PI * 2, ts: 0.01 + Math.random() * 0.02, // twinkle phase and speed
     }));
   }
   let last = 0;
@@ -40,27 +43,24 @@
     if (t - last < 33) return; // ~30 fps is plenty for drifting dots
     last = t;
     ctx.clearRect(0, 0, W, H);
-    const link = 130;
+    const link = 120;
     for (const p of pts) {
       p.x += p.vx; p.y += p.vy;
       if (p.x < 0 || p.x > W) p.vx *= -1;
       if (p.y < 0 || p.y > H) p.vy *= -1;
       // gently pushed away from the cursor
       const dx = p.x - mouse.x, dy = p.y - mouse.y, d2 = dx * dx + dy * dy;
-      if (d2 < 14000) { const k = 0.6 / Math.sqrt(d2 + 1); p.x += dx * k; p.y += dy * k; }
+      if (d2 < 10000) { const k = 0.25 / Math.sqrt(d2 + 1); p.x += dx * k; p.y += dy * k; }
       p.tw += p.ts;
       const a = p.a * (0.6 + 0.4 * Math.sin(p.tw));
-      // a soft halo, then the star (cheaper than shadowBlur on phones)
-      ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 3, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(0,229,199,${a * 0.12})`; ctx.fill();
       ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(0,229,199,${a})`; ctx.fill();
+      ctx.fillStyle = `rgba(${rgb},${a})`; ctx.fill();
     }
     for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) {
       const a = pts[i], b = pts[j], d = Math.hypot(a.x - b.x, a.y - b.y);
       if (d < link) {
         ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
-        ctx.strokeStyle = `rgba(0,229,199,${0.16 * (1 - d / link)})`; ctx.lineWidth = 1; ctx.stroke();
+        ctx.strokeStyle = `rgba(${rgb},${0.13 * (1 - d / link)})`; ctx.lineWidth = 1; ctx.stroke();
       }
     }
   }
@@ -74,6 +74,53 @@
     });
     raf = requestAnimationFrame(frame);
   }
+
+  // ---- theme: dark by default, light by the system; the switch in the nav
+  // remembers a choice (html[data-theme], set early by each page's head) ----
+  const THEME_KEY = "aqua.site.theme";
+  const sysLight = matchMedia("(prefers-color-scheme: light)");
+  const isLight = () => root.dataset.theme ? root.dataset.theme === "light" : sysLight.matches;
+  const navIn = document.querySelector(".nav-in");
+  if (navIn) {
+    const tb = document.createElement("button");
+    tb.type = "button"; tb.className = "theme-btn";
+    const SUN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
+    const MOON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5Z"/></svg>';
+    const paintBtn = () => {
+      const ru = (document.documentElement.lang || "ru").startsWith("ru");
+      tb.innerHTML = isLight() ? MOON : SUN;
+      tb.title = isLight() ? (ru ? "Тёмная тема" : "Dark theme") : (ru ? "Светлая тема" : "Light theme");
+      tb.setAttribute("aria-label", tb.title);
+      rgb = fxRgb();
+    };
+    tb.addEventListener("click", () => {
+      const next = isLight() ? "dark" : "light";
+      root.dataset.theme = next;
+      try { localStorage.setItem(THEME_KEY, next); } catch { /* private mode */ }
+      paintBtn();
+    });
+    sysLight.addEventListener?.("change", paintBtn);
+    navIn.insertBefore(tb, navIn.querySelector(".lang-btn, .nav-cta"));
+    paintBtn();
+  }
+
+  // ---- the CeZeOs sun in the corner: turns a little each time the reader
+  // moves to another section (or heading, on the docs) ----
+  const sun = document.createElement("span");
+  sun.className = "sun corner-sun"; sun.setAttribute("aria-hidden", "true");
+  document.body.prepend(sun);
+  let turn = 0, current = null;
+  const SUN_SEL = ".hero, section.band, .api-hero, .ad-hero, .md h1, .md h2";
+  const sunSpy = "IntersectionObserver" in window ? new IntersectionObserver((es) => {
+    for (const e of es) if (e.isIntersecting && e.target !== current) {
+      if (current) { turn += 45; root.style.setProperty("--sun-turn", turn + "deg"); }
+      current = e.target;
+    }
+  }, { rootMargin: "-40% 0px -55% 0px" }) : null;
+  const watchSun = (scope) => { if (sunSpy) scope.querySelectorAll(SUN_SEL).forEach((el) => sunSpy.observe(el)); };
+  watchSun(document);
+  if (sunSpy) new MutationObserver((ms) => { for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1) { if (n.matches?.(SUN_SEL)) sunSpy.observe(n); watchSun(n); } })
+    .observe(document.body, { childList: true, subtree: true });
 
   // ---- nav gets a backdrop once the page scrolls ----
   const nav = document.querySelector("nav");
@@ -228,136 +275,23 @@
     go(0);
   }
 
-  // ---- the cursor: a small teal dot instead of the arrow, a thin comet
-  // tail behind it (the colour of the site's text selection). Selecting
-  // text or typing brings the normal cursor back. A button in the nav turns
-  // both off (remembered): the normal cursor, no tail. ----
-  if (!reduce && matchMedia("(pointer: fine)").matches) {
-    const FX_KEY = "aqua.site.fx";
-    let fxOn = (() => { try { return localStorage.getItem(FX_KEY) !== "off"; } catch { return true; } })();
-
-    const tc = document.createElement("canvas");
-    tc.className = "fx-trail";
-    tc.setAttribute("aria-hidden", "true");
-    document.body.appendChild(tc);
-    const dot = document.createElement("div");
-    dot.className = "fx-dot";
-    dot.setAttribute("aria-hidden", "true");
-    document.body.appendChild(dot);
-    const tx = tc.getContext("2d");
-    let tw = 0, th = 0, tdpr = 1, tRaf = 0;
-    const fit = () => {
-      tdpr = Math.min(2, devicePixelRatio || 1); tw = innerWidth; th = innerHeight;
-      tc.width = tw * tdpr; tc.height = th * tdpr; tc.style.width = tw + "px"; tc.style.height = th + "px";
-      tx.setTransform(tdpr, 0, 0, tdpr, 0, 0);
+  // ---- the storage donut: point at a part (or its legend line) to see it ----
+  document.querySelectorAll(".donut").forEach((d) => {
+    const store = d.closest(".tp-store");
+    const segs = [...d.querySelectorAll(".seg")];
+    const legs = store ? [...store.querySelectorAll(".legend [data-seg]")] : [];
+    const b = d.querySelector(".hole b"), sm = d.querySelector(".hole small");
+    const total = b.textContent, totalSub = sm.textContent;
+    const show = (i) => {
+      d.classList.toggle("hover", i != null);
+      segs.forEach((s, j) => s.classList.toggle("on", j === i));
+      legs.forEach((l, j) => l.classList.toggle("on", j === i));
+      if (i == null) { b.textContent = total; sm.textContent = totalSub; return; }
+      b.textContent = legs[i]?.dataset.gb || ""; sm.textContent = legs[i]?.textContent.trim() || "";
     };
-    fit(); addEventListener("resize", fit);
-    // The last positions of the pointer; each lives TAIL ms. The head chases
-    // the pointer a little (smoothing), so the tail curves instead of zigzagging.
-    const TAIL = 480, WIDTH = 2.6;
-    let pts = [], head = null, target = null, still = 0;
-    const wipe = () => { pts = []; head = null; tx.clearRect(0, 0, tw, th); };
-    const tick = (now) => {
-      tRaf = 0;
-      // Turned off (or the pointer left): nothing more is drawn, and the
-      // loop doesn't keep itself alive by chasing the pointer.
-      if (!fxOn || !target) { wipe(); return; }
-      if (target) {
-        if (!head) head = { ...target };
-        head.x += (target.x - head.x) * 0.32; head.y += (target.y - head.y) * 0.32;
-        const lastPt = pts[pts.length - 1];
-        if (!lastPt || Math.hypot(head.x - lastPt.x, head.y - lastPt.y) > 1.5) pts.push({ x: head.x, y: head.y, t: now });
-      }
-      pts = pts.filter((p) => now - p.t < TAIL);
-      tx.clearRect(0, 0, tw, th);
-      if (pts.length > 1) {
-        tx.lineCap = "round"; tx.lineJoin = "round";
-        tx.globalCompositeOperation = "lighter";
-        for (let i = 1; i < pts.length; i++) {
-          const a = pts[i - 1], b = pts[i];
-          const k = 1 - (now - b.t) / TAIL;          // 1 at the head, 0 at the end
-          tx.strokeStyle = `rgba(0,229,199,${0.5 * k})`;
-          tx.shadowColor = `rgba(0,229,199,${0.35 * k})`;
-          tx.shadowBlur = 6 * k;
-          tx.lineWidth = Math.max(0.4, WIDTH * k);
-          tx.beginPath(); tx.moveTo(a.x, a.y); tx.lineTo(b.x, b.y); tx.stroke();
-        }
-        tx.shadowBlur = 0;
-        tx.globalCompositeOperation = "source-over";
-      }
-      // Keep going while the tail is still fading or the head catches up.
-      if (pts.length || (head && target && Math.hypot(target.x - head.x, target.y - head.y) > 0.5)) tRaf = requestAnimationFrame(tick);
-      else if (now - still > 100) head = null;
-    };
-
-    // Where the dot gives way to the normal cursor: text being selected,
-    // fields to type in.
-    const TYPING = "input, textarea, select, [contenteditable=''], [contenteditable='true']";
-    let selecting = false, overField = false;
-    const native = () => !fxOn || selecting || overField;
-    const paint = () => {
-      const show = !native() && !!target;
-      root.classList.toggle("fx-cursor", !native());
-      dot.classList.toggle("on", show);
-    };
-    document.addEventListener("selectionchange", () => {
-      const s = getSelection();
-      selecting = !!s && !s.isCollapsed && String(s).trim() !== "";
-      paint();
-    });
-    addEventListener("pointermove", (e) => {
-      target = { x: e.clientX, y: e.clientY };
-      overField = !!(e.target.closest && e.target.closest(TYPING));
-      dot.style.transform = `translate(${e.clientX}px, ${e.clientY}px)`;
-      const link = e.target.closest && e.target.closest("a, button, summary, label, [role=button]");
-      dot.classList.toggle("big", !!link);
-      paint();
-      if (!fxOn || native()) return;
-      still = performance.now();
-      if (!tRaf) tRaf = requestAnimationFrame(tick);
-    }, { passive: true });
-    addEventListener("pointerdown", () => dot.classList.add("press"), { passive: true });
-    addEventListener("pointerup", () => dot.classList.remove("press"), { passive: true });
-    const away = () => { target = null; wipe(); paint(); };
-    document.addEventListener("pointerleave", away);
-    document.documentElement.addEventListener("mouseleave", away);
-    addEventListener("blur", away);
-    document.addEventListener("visibilitychange", () => { if (document.hidden) away(); });
-
-    // The switch in the nav.
-    const btn = document.createElement("button");
-    btn.type = "button"; btn.className = "fx-toggle";
-    const label = () => {
-      // The same language the page picks (index.html, docs.js).
-      let ru = true;
-      try { ru = (localStorage.getItem("aqua.site.lang") || (navigator.language.toLowerCase().startsWith("ru") ? "ru" : "en")) === "ru"; } catch { /* storage blocked */ }
-      btn.title = fxOn ? (ru ? "Выключить эффекты курсора (след и точку)" : "Turn the cursor effects off (trail and dot)") : (ru ? "Включить эффекты курсора" : "Turn the cursor effects on");
-      btn.setAttribute("aria-label", btn.title);
-      btn.setAttribute("aria-pressed", String(fxOn));
-    };
-    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="16" cy="8" r="3"/><path d="M13.5 10.5 4 20M11 9 6 14M15 13l-5 5"/></svg>';
-    btn.addEventListener("click", () => {
-      fxOn = !fxOn;
-      try { localStorage.setItem(FX_KEY, fxOn ? "on" : "off"); } catch { /* private mode */ }
-      if (!fxOn) wipe();
-      btn.classList.toggle("off", !fxOn);
-      label(); paint();
-    });
-    btn.classList.toggle("off", !fxOn);
-    label();
-    const navIn = document.querySelector(".nav-in");
-    if (navIn) navIn.insertBefore(btn, navIn.querySelector(".lang-btn, .nav-cta"));
-    paint();
-  }
-
-  // ---- cards light up where the cursor is ----
-  document.addEventListener("pointermove", (e) => {
-    const c = e.target.closest && e.target.closest(".card, .dl, .code, .note");
-    if (!c) return;
-    const r = c.getBoundingClientRect();
-    c.style.setProperty("--mx", e.clientX - r.left + "px");
-    c.style.setProperty("--my", e.clientY - r.top + "px");
-  }, { passive: true });
+    segs.forEach((s, i) => { s.addEventListener("pointerenter", () => show(i)); s.addEventListener("pointerleave", () => show(null)); s.addEventListener("click", () => show(i)); });
+    legs.forEach((l, i) => { l.addEventListener("pointerenter", () => show(i)); l.addEventListener("pointerleave", () => show(null)); l.addEventListener("click", () => show(i)); });
+  });
 
   // ---- the chat mock types its last message, again and again ----
   const body = document.querySelector(".mock-body");
