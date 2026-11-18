@@ -356,6 +356,17 @@ if (typeof window !== "undefined" && PHONE_UA) {
   window.addEventListener("orientationchange", () => setTimeout(() => applyUiScale(uiScaleNow, true), 250));
 }
 
+/** The complete theme in effect. CeZeOs follows the light/dark/auto mode
+ *  (its two looks are one theme); other presets have a fixed mode. */
+function presetOf(s: Settings): ThemePreset | undefined {
+  if (!s.themePreset) return undefined;
+  if (s.themePreset.startsWith("cezeos")) {
+    const light = s.mode === "auto" ? !!window.matchMedia?.("(prefers-color-scheme: light)").matches : s.mode === "light";
+    return THEMES.find((x) => x.id === (light ? "cezeos-light" : "cezeos"));
+  }
+  return THEMES.find((x) => x.id === s.themePreset);
+}
+
 const KEY = "aqua-settings";
 
 function load(): Settings {
@@ -396,7 +407,7 @@ function apply(s: Settings) {
   const root = document.documentElement;
 
   // Resolve mode (auto → prefers-color-scheme)
-  const presetMode = s.themePreset ? THEMES.find((x) => x.id === s.themePreset)?.mode : undefined;
+  const presetMode = presetOf(s)?.mode;
   const effectiveMode: Exclude<Mode, "auto"> = presetMode ??
     (s.mode === "auto"
       ? (window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark")
@@ -487,7 +498,7 @@ function apply(s: Settings) {
   root.style.setProperty("--chat-wallpaper", wallCss || "transparent");
 
   // --- Complete theme preset (GitHub, VS Code, Dracula, …) ---
-  const preset = s.themePreset ? THEMES.find((x) => x.id === s.themePreset) : undefined;
+  const preset = presetOf(s);
   if (preset) {
     for (const [k, v] of Object.entries(preset.colors)) root.style.setProperty(k, v);
     root.style.setProperty("--accent-soft", hexToRgba(preset.colors["--accent"], 0.14));
@@ -708,7 +719,7 @@ export async function migrateCustomWallpaper(save: (name: string, bytes: number[
 
 /** The mode the interface shows now (a theme preset decides it when on). */
 export function shownMode(s: Settings): "light" | "dark" {
-  const presetMode = s.themePreset ? THEMES.find((x) => x.id === s.themePreset)?.mode : undefined;
+  const presetMode = presetOf(s)?.mode;
   return presetMode ?? (s.mode === "auto" ? (window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark") : s.mode);
 }
 
@@ -723,9 +734,9 @@ export function toggleDayNight() {
     const saved = s.dayNight?.[to];
     // A saved look that isn't of that mode any more (its preset changed) isn't used.
     const usable = saved && shownMode({ ...s, ...saved }) === to ? saved : null;
-    // CeZeOs has a day and a night look of its own.
-    const cz = !s.customColors?.["--accent"] && (!s.themePreset || s.themePreset.startsWith("cezeos")) ? (to === "light" ? "cezeos-light" : "cezeos") : undefined;
-    const next = usable ?? { mode: to, palette: s.palette, themePreset: cz, customColors: undefined, bubbleOut: undefined, bubbleIn: undefined };
+    // CeZeOs has a day and a night look of its own: it follows the mode.
+    if (s.themePreset?.startsWith("cezeos") && !usable) return { ...s, mode: to, themePreset: "cezeos", dayNight: { ...s.dayNight, [from]: keep } };
+    const next = usable ?? { mode: to, palette: s.palette, themePreset: undefined, customColors: undefined, bubbleOut: undefined, bubbleIn: undefined };
     return { ...s, ...next, dayNight: { ...s.dayNight, [from]: keep } };
   });
 }
