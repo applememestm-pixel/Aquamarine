@@ -1,6 +1,6 @@
 <script module lang="ts">
   import { writable } from "svelte/store";
-  interface Ask { resolve: (path: string | null) => void }
+  interface Ask { resolve: (path: string | null) => void; gallery: boolean }
   const pending = writable<Ask | null>(null);
   /**
    * The camera in the app (Telegram / AyuGram): tap the shutter for a
@@ -8,8 +8,8 @@
    * then goes through the usual send sheet: caption, compress, edit), or
    * null when closed.
    */
-  export function openCamera(): Promise<string | null> {
-    return new Promise((resolve) => pending.set({ resolve }));
+  export function openCamera(opts: { gallery?: boolean } = {}): Promise<string | null> {
+    return new Promise((resolve) => pending.set({ resolve, gallery: !!opts.gallery }));
   }
 </script>
 
@@ -276,6 +276,61 @@
     if (!recording) void photo();
   }
   const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+
+  // ---- The gallery (stories): bottom-left of the camera, like a phone's
+  // camera app; a tap opens the grid with albums, like the chat's sheet ----
+  type GalItem = { uri: string; mime: string; video: boolean; duration: number; thumb: string };
+  type GalAlbum = { id: string; name: string; count: number; cover: string };
+  let galOpen = $state(false);
+  let galState = $state<"idle" | "ok" | "denied" | "none">("idle");
+  let galItems = $state<GalItem[]>([]);
+  let galAlbums = $state<GalAlbum[]>([]);
+  let galAlbum = $state("");
+  let galMenu = $state(false);
+  /** The newest photo, on the gallery button. */
+  let galThumb = $state("");
+  const galName = (id: string) => (id === "" ? tr("All media") : id === "*video" ? tr("All videos") : galAlbums.find((a) => a.id === id)?.name || tr("Album"));
+  async function galLoad(limit = 120) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const r = await invoke<{ granted: boolean; items: GalItem[] }>("gallery_recent", { limit, bucket: galAlbum });
+      galState = r.granted ? "ok" : "denied";
+      galItems = r.items ?? [];
+      if (!galAlbum && galItems[0]?.thumb) galThumb = galItems[0].thumb;
+    } catch { galState = "none"; galItems = []; }
+  }
+  $effect(() => { if ($pending?.gallery) { galThumb = ""; galAlbum = ""; void galLoad(1); } });
+  async function galShow() {
+    if (recording || busy) return;
+    // No phone gallery here (desktop): the system picker.
+    if (galState === "none") return void galSystem();
+    galOpen = true;
+    galMenu = false;
+    void galLoad();
+    try { const { invoke } = await import("@tauri-apps/api/core"); galAlbums = (await invoke<{ albums: GalAlbum[] }>("gallery_albums")).albums ?? []; } catch { galAlbums = []; }
+  }
+  async function galAsk() {
+    try { const { invoke } = await import("@tauri-apps/api/core"); await invoke("gallery_ask"); } catch { /* not here */ }
+    for (const ms of [800, 1800, 3500]) { await new Promise((r) => setTimeout(r, ms)); await galLoad(); if (galState === "ok") break; }
+  }
+  function galPickAlbum(id: string) {
+    galMenu = false;
+    if (id === galAlbum) return;
+    galAlbum = id;
+    galItems = [];
+    void galLoad();
+  }
+  async function galSystem() {
+    try {
+      const { openFileDialog } = await import("../dialog");
+      const r = await openFileDialog({ multiple: false, directory: false, title: tr("Add a story"),
+        filters: [{ name: tr("Photo or video"), extensions: ["jpg", "jpeg", "png", "webp", "gif", "mp4", "webm", "mov", "m4v"] }] });
+      const path = Array.isArray(r) ? (r[0] ?? null) : (r as string | null);
+      if (path) { galOpen = false; finish(String(path)); }
+    } catch { /* closed */ }
+  }
+  $effect(() => { if (galOpen) return onBack(() => { if (galMenu) galMenu = false; else galOpen = false; }); });
+  $effect(() => { if (!$pending) galOpen = false; });
 </script>
 
 {#if $pending}
@@ -301,17 +356,72 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="5" width="13" height="14" rx="2.5"/><rect x="12" y="9" width="9.5" height="10" rx="2.2" fill="currentColor" fill-opacity=".25"/><circle cx="9" cy="10.5" r="2.2"/></svg>
         </button>
       {/if}
-      <button class="ic" disabled={recording} onclick={() => (facing = facing === "user" ? "environment" : "user")} aria-label={$t("Switch camera")} title={$t("Switch camera")}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-3l-2-3H9L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M9 13.5a3 3 0 0 1 5.2-2"/><path d="M15 12.5a3 3 0 0 1-5.2 2"/><path d="M14.5 9.5v2h-2M9.5 16.5v-2h2"/></svg>
-      </button>
       </span>
     </div>
     {#if err}<div class="err">{err}</div>{/if}
     <div class="bottom">
       <span class="hint">{$t(recording ? "Release or tap to stop" : "Tap for a photo, hold for a video")}</span>
-      <button class="shutter" class:recording disabled={!!err || busy} aria-label={$t("Take a photo")}
-        onpointerdown={down} onpointerup={up} onpointercancel={up} oncontextmenu={(e) => e.preventDefault()}><i></i></button>
+      <!-- As in a phone's camera: the gallery on one side, the shutter, switching cameras on the other. -->
+      <div class="row">
+        <span class="side">
+          {#if $pending.gallery}
+            <button class="gal-btn" disabled={recording} onclick={galShow} aria-label={$t("Gallery")} title={$t("Gallery")}>
+              {#if galThumb}<img src={galThumb} alt="" />{:else}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>{/if}
+            </button>
+          {/if}
+        </span>
+        <button class="shutter" class:recording disabled={!!err || busy} aria-label={$t("Take a photo")}
+          onpointerdown={down} onpointerup={up} onpointercancel={up} oncontextmenu={(e) => e.preventDefault()}><i></i></button>
+        <span class="side">
+          <button class="ic flip" disabled={recording} onclick={() => (facing = facing === "user" ? "environment" : "user")} aria-label={$t("Switch camera")} title={$t("Switch camera")}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/></svg>
+          </button>
+        </span>
+      </div>
     </div>
+    {#if galOpen}
+      <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+      <div class="g-scrim" onclick={() => (galOpen = false)}></div>
+      <div class="g-sheet" role="dialog" aria-label={$t("Gallery")}>
+        <div class="g-bar">
+          <button class="g-close" onclick={() => (galOpen = false)} aria-label={$t("Close")}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+          </button>
+          <button class="g-album" class:open={galMenu} disabled={galAlbums.length < 2} onclick={() => (galMenu = !galMenu)}>
+            <span>{galName(galAlbum)}</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+        </div>
+        {#if galMenu}
+          <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+          <div class="g-veil" onclick={() => (galMenu = false)}></div>
+          <div class="g-albums" role="listbox" aria-label={$t("Albums")}>
+            {#each galAlbums as a (a.id)}
+              <button class="g-alb" class:on={a.id === galAlbum} role="option" aria-selected={a.id === galAlbum} onclick={() => galPickAlbum(a.id)}>
+                <span class="g-alb-cover">{#if a.cover}<img src={a.cover} alt="" />{/if}</span>
+                <span class="g-alb-name">{galName(a.id)}</span>
+                <span class="g-alb-n">{a.count}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+        <div class="g-grid">
+          <button class="g-tile g-pick" onclick={galSystem}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+            <span>{$t("Files")}</span>
+          </button>
+          {#if galState === "denied"}
+            <button class="g-tile g-pick g-allow" onclick={galAsk}><span>{$t("Allow access to photos")}</span></button>
+          {/if}
+          {#each galItems as g (g.uri)}
+            <button class="g-tile" onclick={() => { galOpen = false; finish(g.uri); }}>
+              {#if g.thumb}<img src={g.thumb} alt="" loading="lazy" decoding="async" />{/if}
+              {#if g.video}<span class="g-dur">{fmt(Math.round((g.duration || 0) / 1000))}</span>{/if}
+            </button>
+          {/each}
+        </div>
+      </div>
+    {/if}
   </div>
 {/if}
 
@@ -351,4 +461,46 @@
   .shutter.recording { transform: scale(1.12); border-color: rgba(255,255,255,.7); }
   .shutter.recording i { width: 30px; height: 30px; border-radius: calc(8px * var(--rk, 1)); background: #ff3b30; }
   .shutter:disabled { opacity: .45; }
+  .row { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 0 34px; box-sizing: border-box; }
+  .side { width: 52px; height: 52px; display: grid; place-items: center; }
+  .ic.flip { width: 48px; height: 48px; }
+  .ic.flip svg { width: 24px; height: 24px; }
+  .gal-btn { width: 50px; height: 50px; padding: 0; border: 2px solid rgba(255,255,255,.9); border-radius: calc(12px * var(--rk, 1)); overflow: hidden; background: rgba(0,0,0,.35); color: #fff; display: grid; place-items: center; cursor: pointer; }
+  .gal-btn img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .gal-btn svg { width: 24px; height: 24px; }
+  .gal-btn:disabled { opacity: .35; }
+  /* The gallery: the chat's attach sheet (ChatWindow .ap-*), in the theme's colours. */
+  .g-scrim { position: absolute; inset: 0; z-index: 5; background: rgba(0,0,0,.35); animation: g-fade .25s ease; }
+  @keyframes g-fade { from { opacity: 0; } }
+  .g-sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 6; height: calc(100dvh - 28px - var(--sat, env(safe-area-inset-top, 0px)));
+    display: flex; flex-direction: column; background: var(--bg-surface); color: var(--fg); border-radius: calc(26px * var(--rk, 1)) calc(26px * var(--rk, 1)) 0 0;
+    border-top: 1px solid var(--border); animation: g-up .32s cubic-bezier(.22,1,.36,1); touch-action: pan-y; }
+  @keyframes g-up { from { transform: translateY(100%); } }
+  .g-bar { display: flex; align-items: center; gap: 6px; padding: 10px 12px 8px 8px; min-height: 44px; flex-shrink: 0; }
+  .g-close { width: 40px; height: 40px; border-radius: 50%; border: none; background: transparent; color: var(--fg-muted); display: grid; place-items: center; }
+  .g-close svg { width: 20px; height: 20px; }
+  .g-album { display: inline-flex; align-items: center; gap: 6px; border: none; background: transparent; color: var(--fg); font: 700 18px var(--font-ui, inherit); padding: 6px 10px; border-radius: calc(14px * var(--rk, 1)); min-width: 0; }
+  .g-album span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .g-album svg { width: 18px; height: 18px; color: var(--fg-muted); transition: transform .25s cubic-bezier(.22,1,.36,1); }
+  .g-album.open svg { transform: rotate(180deg); }
+  .g-album:disabled { opacity: 1; }
+  .g-album:disabled svg { display: none; }
+  .g-veil { position: absolute; inset: 0; z-index: 3; }
+  .g-albums { position: absolute; z-index: 4; top: 60px; left: 10px; width: min(330px, calc(100% - 20px)); max-height: min(60dvh, 480px); overflow-y: auto; padding: 6px;
+    border-radius: calc(20px * var(--rk, 1)); border: 1px solid var(--border-strong); background: color-mix(in srgb, var(--bg-surface) 82%, transparent);
+    backdrop-filter: blur(22px) saturate(1.5); -webkit-backdrop-filter: blur(22px) saturate(1.5); }
+  .g-alb { display: flex; align-items: center; gap: 14px; width: 100%; padding: 7px 10px 7px 7px; border: none; border-radius: calc(14px * var(--rk, 1)); background: transparent; color: var(--fg); text-align: left; font: 500 16px var(--font-ui, inherit); }
+  .g-alb.on, .g-alb:active { background: var(--accent-soft); }
+  .g-alb-cover { width: 46px; height: 46px; border-radius: calc(10px * var(--rk, 1)); overflow: hidden; flex-shrink: 0; background: var(--bg-surface-2); }
+  .g-alb-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .g-alb-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .g-alb-n { color: var(--fg-dim); font-size: 14px; font-variant-numeric: tabular-nums; }
+  .g-grid { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: max-content;
+    gap: 3px; padding: 0 3px calc(12px + var(--sab, env(safe-area-inset-bottom, 0px))); align-content: start; }
+  .g-tile { position: relative; aspect-ratio: 1 / 1; width: 100%; border: none; padding: 0; overflow: hidden; background: var(--bg-surface-2); color: var(--fg-muted); border-radius: calc(4px * var(--rk, 1)); cursor: pointer; }
+  .g-tile img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+  .g-pick { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; font-size: 13px; font-weight: 600; }
+  .g-pick svg { width: 34px; height: 34px; }
+  .g-allow { color: var(--accent); padding: 8px; text-align: center; }
+  .g-dur { position: absolute; left: 6px; bottom: 6px; font-size: 11px; font-weight: 700; color: #fff; background: rgba(0,0,0,.5); padding: 1px 6px; border-radius: calc(8px * var(--rk, 1)); }
 </style>

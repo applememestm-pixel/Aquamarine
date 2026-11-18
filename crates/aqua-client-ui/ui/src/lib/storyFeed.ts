@@ -50,7 +50,8 @@ export async function addStory(from: "camera" | "gallery") {
   let path: string | null = null;
   if (from === "camera") {
     const { openCamera } = await import("./components/CameraCapture.svelte");
-    path = await openCamera();
+    // The gallery is in the camera (bottom left), like a phone's camera app.
+    path = await openCamera({ gallery: true });
   } else {
     try {
       const { tr } = await import("./i18n");
