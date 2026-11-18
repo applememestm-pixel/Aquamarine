@@ -81,7 +81,7 @@
       <div class="th-item" class:out={it.outgoing} style:padding-left="{Math.min(it.depth, 3) * 12}px">
         {#if !it.outgoing}<span class="th-av" style:background-image={$avatars[face] ? `url("${$avatars[face]}")` : undefined}>{$avatars[face] ? "" : (it.as?.title ?? it.author).slice(0, 1).toUpperCase()}</span>{/if}
         <div class="th-bubble">
-          {#if !it.outgoing}<div class="th-name">{it.as?.title ?? it.author}</div>{/if}
+          {#if !it.outgoing || it.as}<div class="th-name">{it.as?.title ?? it.author}</div>{/if}
           {#if it.re}<div class="th-re"><b>{it.re.a}</b><span>{it.re.t}</span></div>{/if}
           <div class="th-text"><Markup src={it.text} compact /></div>
           <div class="th-time">{it.time}</div>

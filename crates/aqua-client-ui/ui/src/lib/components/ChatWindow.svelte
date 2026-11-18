@@ -4197,6 +4197,10 @@
                   <span class="msg-time">{m.time}</span>
                 </div>
               {/if}
+              {#if m.outgoing && m.meta?.as?.title && isGroup && !isChannel}
+                <!-- Mine, sent as a group / channel: say so on my side too. -->
+                <div class="as-own">{m.meta.as.title}</div>
+              {/if}
               {#if m.meta?.fwd?.name}
                 {@const fw = m.meta.fwd}
                 <button class="fwd-tag" class:out={m.outgoing && !isChannel} disabled={!fw.from} onclick={() => fw.from && openProfile(fw.from)}
@@ -6881,6 +6885,7 @@
   .as-tx b { font-size: 16px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .as-tx small { font-size: 13.5px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .as-author { color: var(--accent); }
+  .as-own { align-self: flex-end; font-size: 12.5px; font-weight: 600; color: var(--accent); margin: 0 4px 2px; }
   .chan-bar .cb-ava { order: 0; width: 38px; height: 38px; border-radius: var(--ava-r, 50%); flex-shrink: 0; background: var(--accent-soft) center / cover no-repeat;
     display: grid; place-items: center; font-weight: 800; color: var(--accent); }
   .chan-bar .input-wrap { order: 1; background: transparent; border: none; box-shadow: none !important; padding-left: 4px; align-items: center; }

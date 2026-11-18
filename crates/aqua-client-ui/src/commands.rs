@@ -3924,13 +3924,14 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                 // by the UI against its public @name's owner.
                 if let Some(a) = v.get("as").filter(|a| a.get("gid").and_then(|x| x.as_str()).is_some_and(|x| x.starts_with("grp_"))) {
                     let agid = a["gid"].as_str().unwrap_or("");
-                    let ok = match s.groups.get(agid) {
-                        Some(og) => og.is_admin(&author),
-                        None => false,
+                    // Checked: the title is the one I know, not the claimed one.
+                    let (ok, known) = match s.groups.get(agid) {
+                        Some(og) => (og.is_admin(&author), Some(og.title.clone())),
+                        None => (false, None),
                     };
                     let mut a = serde_json::json!({
                         "gid": agid,
-                        "title": a.get("title").and_then(|x| x.as_str()).unwrap_or("").chars().take(64).collect::<String>(),
+                        "title": known.unwrap_or_else(|| a.get("title").and_then(|x| x.as_str()).unwrap_or("").chars().take(64).collect::<String>()),
                         "kind": a.get("kind").and_then(|x| x.as_str()).unwrap_or("channel"),
                         "name": a.get("name").and_then(|x| x.as_str()).unwrap_or(""),
                     });

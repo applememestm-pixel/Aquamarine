@@ -28,8 +28,10 @@ export function sendAsFor(chat: string): string | undefined {
   return get(sendAsPick)[chat] || undefined;
 }
 
-/** `name|sender` → checked against the public @name's owner. */
-export const asVerified = writable<Record<string, boolean>>({});
+/** `gid|name|sender` → the public @name's own record when its owner is the
+ *  sender and it is that gid; false otherwise. The title shown is the
+ *  registry's, never the claimed one. */
+export const asVerified = writable<Record<string, { title: string } | false>>({});
 const asking = new Set<string>();
 
 function claimOf(meta: unknown): AsClaim | null {
@@ -41,18 +43,19 @@ function claimOf(meta: unknown): AsClaim | null {
 
 /** Who a message is shown as — the group / channel, once checked; else null
  *  (show the real sender). Pass `$asVerified` so the caller re-renders. */
-export function shownAs(meta: unknown, from: string, verified: Record<string, boolean>): AsClaim | null {
+export function shownAs(meta: unknown, from: string, verified: Record<string, { title: string } | false>): AsClaim | null {
   const a = claimOf(meta);
   if (!a) return null;
+  // `ok` was worked out on arrival (commands.rs), with the title I know.
   if (a.ok) return a;
   if (!a.name) return null;
-  const k = `${a.name}|${from}`;
-  if (k in verified) return verified[k] ? a : null;
+  const k = `${a.gid}|${a.name}|${from}`;
+  if (k in verified) { const v = verified[k]; return v ? { ...a, title: v.title } : null; }
   if (!asking.has(k)) {
     asking.add(k);
     void api.groupLookup(a.name).then((g) => {
       const ok = !!g && g.gid === a.gid && g.admin === from;
-      asVerified.update((v) => ({ ...v, [k]: ok }));
+      asVerified.update((v) => ({ ...v, [k]: ok && g ? { title: g.title } : false }));
     }).catch(() => { asking.delete(k); });
   }
   return null;
