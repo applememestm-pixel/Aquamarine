@@ -1598,6 +1598,21 @@
   }
   let myUsername = $derived($info?.username ?? "");
   let isGroup = $derived($activeChat?.id?.startsWith("grp_") ?? false);
+  // "Jump to latest" right above the message field (wherever it floats),
+  // not a fixed 160 px up the chat.
+  let composerBox = $state<HTMLElement | null>(null);
+  let jumpBottom = $state(84);
+  $effect(() => {
+    if (!scrolledUp || !composerBox) return;
+    const el = composerBox;
+    const host = el.closest(".active-chat") as HTMLElement | null;
+    const upd = () => { if (host) jumpBottom = Math.max(12, Math.round(host.getBoundingClientRect().bottom - el.getBoundingClientRect().top + 10)); };
+    upd();
+    const ro = new ResizeObserver(upd);
+    ro.observe(el);
+    if (host) ro.observe(host);
+    return () => ro.disconnect();
+  });
   let activeGroup = $derived($activeChat ? $groupMap[$activeChat.id] : undefined);
 
   // ---- Channel views (subscribers report to admins; see channelStats.ts) ----
@@ -4612,7 +4627,7 @@
     </div>
 
     {#if scrolledUp}
-      <button class="jump-btn" onclick={jumpToBottom} title={$t("Jump to latest")} aria-label={$t("Scroll to bottom")}>
+      <button class="jump-btn" style:bottom="{jumpBottom}px" onclick={jumpToBottom} title={$t("Jump to latest")} aria-label={$t("Scroll to bottom")}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="6 9 12 15 18 9"/>
         </svg>
@@ -4807,7 +4822,7 @@
         {/if}
       </div>
     {/if}
-    <div class="composer" class:disabled={!liveChat}>
+    <div class="composer" class:disabled={!liveChat} bind:this={composerBox}>
       {#if botMenu}
         <button class="bot-menu-btn" onclick={() => { if ($activeChat && botMenu) openMiniApp({ bot: $activeChat.id, url: botMenu.url, from: "menu" }); }} title={botMenu.url}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="14" y2="17"/></svg>

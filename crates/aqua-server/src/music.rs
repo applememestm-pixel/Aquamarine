@@ -296,6 +296,113 @@ pub async fn call_all(state: &AppState, method: &str, params: Vec<(String, Strin
     ask(first, params).await
 }
 
+// ------------------------------------------------------------ smart search
+//
+// Navidrome's search3 finds the words as typed. People type a band in the
+// wrong keyboard layout ("ytdhs"), in translit ("nervy"), with extra words
+// ("нервы песня про"), or a word of a title that sits in a file name
+// ("01. Нервы - Критика"). So: several spellings at once, then the songs
+// ranked by how much of the query they hold (artist and title first).
+
+const EN: &str = "qwertyuiop[]asdfghjkl;'zxcvbnm,.`";
+const RU: &str = "йцукенгшщзхъфывапролджэячсмитьбюё";
+
+/// The same keys in the other layout (ghbdtn ↔ привет).
+fn swap_layout(q: &str) -> String {
+    let en: Vec<char> = EN.chars().collect();
+    let ru: Vec<char> = RU.chars().collect();
+    q.chars().map(|c| {
+        let l = c.to_lowercase().next().unwrap_or(c);
+        if let Some(i) = en.iter().position(|&x| x == l) { ru[i] } else if let Some(i) = ru.iter().position(|&x| x == l) { en[i] } else { c }
+    }).collect()
+}
+
+const TR: &[(&str, &str)] = &[("щ", "shch"), ("ё", "yo"), ("ж", "zh"), ("ц", "ts"), ("ч", "ch"), ("ш", "sh"), ("ю", "yu"), ("я", "ya"), ("х", "kh"),
+    ("а", "a"), ("б", "b"), ("в", "v"), ("г", "g"), ("д", "d"), ("е", "e"), ("з", "z"), ("и", "i"), ("й", "y"), ("к", "k"), ("л", "l"), ("м", "m"),
+    ("н", "n"), ("о", "o"), ("п", "p"), ("р", "r"), ("с", "s"), ("т", "t"), ("у", "u"), ("ф", "f"), ("ъ", ""), ("ы", "y"), ("ь", ""), ("э", "e")];
+
+/// Cyrillic → Latin (нервы → nervy).
+fn to_latin(q: &str) -> String {
+    let mut out = String::new();
+    for c in q.to_lowercase().chars() {
+        let cs = c.to_string();
+        match TR.iter().find(|(r, _)| *r == cs) { Some((_, l)) => out.push_str(l), None => out.push(c) }
+    }
+    out
+}
+
+/// Latin → Cyrillic, longest letters first (shch, zh, ya…).
+fn to_cyrillic(q: &str) -> String {
+    // "y" reads as ы, "e" as е (not й / э): the usual way back.
+    let mut pairs: Vec<(&str, &str)> = TR.iter().filter(|(r, l)| !l.is_empty() && *r != "й" && *r != "э").map(|(r, l)| (*l, *r)).collect();
+    pairs.sort_by_key(|(l, _)| std::cmp::Reverse(l.len()));
+    let q = q.to_lowercase();
+    let mut out = String::new();
+    let mut i = 0;
+    'outer: while i < q.len() {
+        for (l, r) in &pairs {
+            if q[i..].starts_with(l) { out.push_str(r); i += l.len(); continue 'outer; }
+        }
+        let c = q[i..].chars().next().unwrap_or(' ');
+        out.push(c);
+        i += c.len_utf8();
+    }
+    out
+}
+
+fn words(s: &str) -> Vec<String> {
+    s.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| w.chars().count() >= 2).map(str::to_string).collect()
+}
+
+/// How well a song answers the query (higher is better; 0 — not at all).
+fn score(song: &Value, q: &str) -> u32 {
+    let ql = q.trim().to_lowercase();
+    let (title, artist, album) = (s(song, "title").to_lowercase(), s(song, "artist").to_lowercase(), s(song, "album").to_lowercase());
+    let hay = format!("{title} {artist} {album}");
+    let mut sc = 0;
+    if artist == ql || title == ql { sc += 100; }
+    if title.starts_with(&ql) || artist.starts_with(&ql) { sc += 40; }
+    if hay.contains(&ql) { sc += 30; }
+    let qw = words(&ql);
+    let hw = words(&hay);
+    let hits = qw.iter().filter(|w| hw.iter().any(|h| h.starts_with(w.as_str()))).count() as u32;
+    sc += hits * 20;
+    if !qw.is_empty() && hits as usize == qw.len() { sc += 25; }
+    sc
+}
+
+/// Songs for what a person typed: every spelling of it on every Navidrome,
+/// ranked, the same song once.
+pub async fn smart_songs(state: &AppState, q: &str, limit: usize) -> Result<Vec<Value>, String> {
+    let q = q.trim();
+    let mut tries: Vec<String> = vec![q.to_string()];
+    let mut add = |v: String| { let v = v.trim().to_string(); if v.chars().count() >= 2 && !tries.contains(&v) { tries.push(v); } };
+    add(swap_layout(q));
+    if q.chars().any(|c| ('а'..='я').contains(&c.to_lowercase().next().unwrap_or(c)) || c == 'ё') { add(to_latin(q)); } else { add(to_cyrillic(q)); }
+    let ws = words(q);
+    if ws.len() > 1 { for w in ws.iter().filter(|w| w.chars().count() >= 3).take(4) { add(w.clone()); } }
+    tries.truncate(7);
+    let asks = tries.iter().map(|t| call_all(state, "search3", vec![("query".into(), t.clone()), ("songCount".into(), "30".into()), ("albumCount".into(), "0".into()), ("artistCount".into(), "0".into())]));
+    let mut seen = std::collections::HashSet::new();
+    let mut songs: Vec<(u32, Value)> = Vec::new();
+    let mut err = None;
+    for (i, r) in futures_util::future::join_all(asks).await.into_iter().enumerate() {
+        match r {
+            Ok(v) => for song in v.pointer("/searchResult3/song").and_then(|x| x.as_array()).cloned().unwrap_or_default() {
+                let key = format!("{}|{}|{}", s(&song, "title").to_lowercase(), s(&song, "artist").to_lowercase(), song.get("duration").and_then(|d| d.as_u64()).unwrap_or(0));
+                if !seen.insert(key) { continue; }
+                // Scored against the spelling that found it; the typed one first.
+                let sc = score(&song, &tries[i]).max(score(&song, q)) + if i == 0 { 5 } else { 0 };
+                songs.push((sc, song));
+            },
+            Err(e) => err = Some(e),
+        }
+    }
+    if songs.is_empty() { if let Some(e) = err { if !e.contains("isn't set up") { return Err(e); } } }
+    songs.sort_by(|a, b| b.0.cmp(&a.0));
+    Ok(songs.into_iter().take(limit).map(|(_, v)| v).collect())
+}
+
 // ------------------------------------------------------------------ Subsonic
 
 /// `u`, `t`, `s`, `v`, `c` for one request (token auth: md5(password + salt)).
@@ -800,8 +907,8 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
         }
     } else {
         let q: String = text.chars().take(100).collect();
-        match call_all(state, "search3", vec![("query".into(), q), ("songCount".into(), "8".into()), ("albumCount".into(), "0".into()), ("artistCount".into(), "0".into())]).await {
-            Ok(r) => r.pointer("/searchResult3/song").and_then(|s| s.as_array()).cloned().unwrap_or_default(),
+        match smart_songs(state, &q, 10).await {
+            Ok(v) => v,
             Err(e) => { say(state, &u.from, &format!("⚠️ {e}")).await; return; }
         }
     };
@@ -885,6 +992,18 @@ pub fn md5(input: &[u8]) -> [u8; 16] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn smart_search_spellings() {
+        assert_eq!(swap_layout("ytdhs"), "нервы");
+        assert_eq!(swap_layout("нервы"), "ytdhs");
+        assert_eq!(to_latin("Нервы"), "nervy");
+        assert_eq!(to_cyrillic("nervy"), "нервы");
+        assert_eq!(to_cyrillic("shchuka"), "щука");
+        let song = json!({ "title": "01. Нервы - Критика", "artist": "[Unknown Artist]", "album": "" });
+        assert!(score(&song, "нервы критика") > score(&song, "кино"));
+        assert_eq!(score(&song, "кино"), 0);
+    }
 
     #[test]
     fn cp1251_tags_are_read_back() {

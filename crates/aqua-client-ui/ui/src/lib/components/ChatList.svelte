@@ -2102,7 +2102,7 @@
   .avatar.story-ring.story-seen { box-shadow: 0 0 0 2px var(--bg-list), 0 0 0 4px var(--border-strong); }
   .avatar.story-ring.story-close { box-shadow: 0 0 0 2px var(--bg-list), 0 0 0 4px #34C759; }
   /* Phones: the pencil (Telegram) above the bottom bar; it unfolds upwards. */
-  .fab-wrap { position: fixed; right: 16px; bottom: calc(92px + var(--sab, env(safe-area-inset-bottom, 0px))); z-index: 60; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .fab-wrap { position: fixed; right: 16px; bottom: calc(80px + var(--sab, env(safe-area-inset-bottom, 0px))); z-index: 60; display: flex; flex-direction: column; align-items: center; gap: 12px; }
   :global(body.chat-open) .fab-wrap, :global(body.chat-open) .fab-veil { display: none; }
   /* Camera, menu and pencil share one vertical axis (their centres line up,
      open or closed — the camera used to sit 5 px off the open menu). */
