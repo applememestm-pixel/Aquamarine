@@ -183,7 +183,7 @@
   let liveCfg = $state<{ res: ResPreset; fps: FpsPreset; hint: ContentHint; audio: boolean } | null>(null);
   let gl = $state({ res: "1080" as ResPreset, fps: 60 as FpsPreset, hint: "motion" as ContentHint, audio: true });
 
-  interface VStat { w: number; h: number; fps: number; kbps: number; codec: string; impl: string; limit: string; loss: number }
+  interface VStat { w: number; h: number; fps: number; kbps: number; codec: string; impl: string; limit: string; loss: number; cap?: number; target?: number }
   interface StatsView {
     upScreen?: VStat; upCam?: VStat; downScreen?: VStat; downCam?: VStat;
     rttMs?: number; bweKbps?: number; route?: string; voiceLoss?: number; jitterMs?: number;
@@ -202,6 +202,9 @@
   let meHoldUntil = 0;
   let peerHoldUntil = 0;
   const prevBytes = new Map<string, { b: number; t: number }>();
+  /** Frame counters over the last ~2 s (fpsOf): steadier than the browser's
+   *  one-second framesPerSecond, which jumped 0 → 13 → 15. */
+  const frameHist = new Map<string, { f: number; t: number }[]>();
 
   // ---------------------------------------------------------------------------
   // Lifecycle
@@ -1002,6 +1005,7 @@
     tx = [];
     pendingIce = [];
     prevBytes.clear();
+    frameHist.clear();
     remote = { ...NO_REMOTE };
     speakingMe = false; speakingPeer = false; reconnecting = false; pttHeld = false;
     goLiveOpen = false; volOpen = false; devOpen = false; focus = null; stats = null; expanded = true;
@@ -1019,6 +1023,25 @@
     prevBytes.set(id, { b: bytes, t: ts });
     if (!p || ts <= p.t) return 0;
     return Math.round(((bytes - p.b) * 8) / (ts - p.t)); // bytes/ms → kbps
+  }
+
+  function fpsOf(key: string, frames: number | undefined, ts: number, fallback?: number): number {
+    if (frames == null) return Math.round(fallback ?? 0);
+    const h = frameHist.get(key) ?? [];
+    h.push({ f: frames, t: ts });
+    while (h.length > 2 && ts - h[0].t > 2200) h.shift();
+    frameHist.set(key, h);
+    const a = h[0], b = h[h.length - 1];
+    if (b.t - a.t < 400) return Math.round(fallback ?? 0);
+    return Math.max(0, Math.round(((b.f - a.f) * 1000) / (b.t - a.t)));
+  }
+  /** Why the stream sends fewer frames than asked, in words. */
+  function fpsReason(s: VStat): string {
+    if (!s.target || s.fps >= s.target * 0.85) return "";
+    if (s.limit === "cpu") return tr("the processor can't keep up — try a lower resolution or 30 fps");
+    if (s.limit === "bandwidth") return tr("the connection is the limit");
+    if (s.cap != null && s.cap < s.target * 0.85) return tr("the screen barely changes — a frame goes only when something on it moves");
+    return "";
   }
 
   async function pollStats() {
@@ -1041,9 +1064,14 @@
       if (s.type === "outbound-rtp") {
         const kbps = rate(s.id, s.bytesSent ?? 0, s.timestamp);
         if (s.kind === "video" && (slot === T_SCR || slot === T_CAM)) {
+          // Captured (media-source) vs encoded frames: tells "the screen
+          // doesn't change" from "the encoder can't keep up".
+          const src = s.mediaSourceId ? (report.get(s.mediaSourceId) as any) : null;
           const vs: VStat = {
-            w: s.frameWidth ?? 0, h: s.frameHeight ?? 0, fps: Math.round(s.framesPerSecond ?? 0), kbps,
+            w: s.frameWidth ?? 0, h: s.frameHeight ?? 0, fps: fpsOf(s.id + ":enc", s.framesEncoded, s.timestamp, s.framesPerSecond), kbps,
             codec: codecName(s.codecId), impl: s.encoderImplementation ?? "", limit: s.qualityLimitationReason ?? "", loss: 0,
+            cap: src ? fpsOf(s.id + ":cap", src.frames, s.timestamp, src.framesPerSecond) : undefined,
+            target: slot === T_SCR ? liveCfg?.fps : undefined,
           };
           if (slot === T_SCR) v.upScreen = vs; else v.upCam = vs;
         } else if (s.kind === "audio" && slot === T_MIC) {
@@ -1055,7 +1083,7 @@
         const loss = got + lost > 0 ? (100 * lost) / (got + lost) : 0;
         if (s.kind === "video" && (slot === T_SCR || slot === T_CAM)) {
           const vs: VStat = {
-            w: s.frameWidth ?? 0, h: s.frameHeight ?? 0, fps: Math.round(s.framesPerSecond ?? 0), kbps,
+            w: s.frameWidth ?? 0, h: s.frameHeight ?? 0, fps: fpsOf(s.id + ":dec", s.framesDecoded, s.timestamp, s.framesPerSecond), kbps,
             codec: codecName(s.codecId), impl: s.decoderImplementation ?? "", limit: "", loss,
           };
           if (slot === T_SCR) v.downScreen = vs; else v.downCam = vs;
@@ -1428,7 +1456,8 @@
     {#if stats}
       {#if stats.downScreen?.w}<div><b>{$t("↓ stream")}</b> {fmtStat(stats.downScreen)} <em>{implLabel(stats.downScreen.impl)}</em>{stats.downScreen.loss > 0.05 ? ` · loss ${stats.downScreen.loss.toFixed(1)}%` : ""}</div>{/if}
       {#if stats.downCam?.w}<div><b>{$t("↓ camera")}</b> {fmtStat(stats.downCam)}</div>{/if}
-      {#if stats.upScreen?.w}<div><b>{$t("↑ stream")}</b> {fmtStat(stats.upScreen)} <em>{implLabel(stats.upScreen.impl)}</em>{stats.upScreen.limit && stats.upScreen.limit !== "none" ? ` · limited by ${stats.upScreen.limit}` : ""}</div>{/if}
+      {#if stats.upScreen?.w}<div><b>{$t("↑ stream")}</b> {fmtStat(stats.upScreen)} <em>{implLabel(stats.upScreen.impl)}</em>{stats.upScreen.limit && stats.upScreen.limit !== "none" ? ` · limited by ${stats.upScreen.limit}` : ""}</div>
+        <div class="fps-line">{$t("fps: captured {c} · sent {e} of {t}", { c: stats.upScreen.cap ?? "—", e: stats.upScreen.fps, t: stats.upScreen.target ?? "—" })}{#if fpsReason(stats.upScreen)} — {fpsReason(stats.upScreen)}{/if}</div>{/if}
       {#if stats.upCam?.w}<div><b>{$t("↑ camera")}</b> {fmtStat(stats.upCam)}</div>{/if}
       <div><b>{$t("voice")}</b> ↑{stats.voiceOutKbps ?? 0} ↓{stats.voiceInKbps ?? 0} kbps · loss {(stats.voiceLoss ?? 0).toFixed(1)}% · jitter {stats.jitterMs ?? 0} ms</div>
       <div><b>{$t("net")}</b> ping {stats.rttMs ?? "—"} ms{stats.bweKbps ? ` · uplink ≈ ${(stats.bweKbps / 1000).toFixed(1)} Mbps` : ""}{stats.route ? ` · ${stats.route}` : ""}</div>

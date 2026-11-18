@@ -410,6 +410,7 @@ pub fn run() -> Result<()> {
             storage::storage_traffic,
             storage::export_chats,
             tray::tray_set,
+            tray::badge_set,
             commands::send_call_signal,
             commands::send_control,
             commands::send_sticker,

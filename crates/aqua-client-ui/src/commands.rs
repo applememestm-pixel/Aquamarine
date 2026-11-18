@@ -5187,6 +5187,11 @@ pub fn delete_chat(state: State<'_, StdMutex<AppState>>, peer_id: String) -> Res
 }
 
 fn push_peer_message(s: &mut AppState, peer_id: &str, text: String, time: &str) {
+    // A service payload ("[keyok:v1]{…}", "[status:v1]…") is never a bubble,
+    // whatever path it came by (repair, mesh, history from another device).
+    if is_control_text(text.trim_start()) {
+        return;
+    }
     let (kind, meta) = crate::state::classify_full(&text, None);
     let preview = preview_for(&kind);
     if let Some(book) = s.chats.get_mut(peer_id) {
@@ -5346,6 +5351,7 @@ mod replies_tests {
     fn control_payloads_never_become_bubbles() {
         assert!(super::is_control_text(r#"[status:v1]{"online":"offline","pp":{"birthday":"27 февраля"}}"#));
         assert!(super::is_control_text("[typing:v1]"));
+        assert!(super::is_control_text(r#"[keyok:v1]{"c":"39fe","on":true}"#));
         assert!(super::is_control_text("AQUA-CALL:v1:{}"));
         assert!(super::is_control_text(r#"[grpmsg:v1]{"gid":"g"}"#));
         assert!(!super::is_control_text("привет"));

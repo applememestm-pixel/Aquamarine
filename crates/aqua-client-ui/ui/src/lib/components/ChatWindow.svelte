@@ -5480,10 +5480,12 @@
   .key-shield { width: 15px; height: 15px; color: var(--fg-dim); opacity: .8; }
   /* The CeZeOs sun: the theme's accent; dim until the code is compared. */
   .key-sun svg { width: 17px; height: 17px; display: block; }
-  .sun-none svg { color: var(--fg-dim); opacity: .85; }
-  .verified-btn.sun-none:hover svg { color: var(--accent); opacity: 1; }
-  .sun-mine svg, .sun-both svg { color: var(--accent); }
-  .sun-both svg { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 60%, transparent)); }
+  /* The CeZeOs sun is always its own dark green, whatever the theme (owner). */
+  .key-sun { --sun: var(--cezeos-green); }
+  .sun-none svg { color: var(--sun); opacity: .7; }
+  .verified-btn.sun-none:hover svg { opacity: 1; }
+  .sun-mine svg, .sun-both svg { color: var(--sun); }
+  .sun-both svg { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--sun) 55%, transparent)); }
   .sun-changed svg { color: var(--warn, #F0B232); }
   .verified-btn:hover .key-shield { color: var(--accent); opacity: 1; }
   .key-changed .key-shield { color: #F0B232; opacity: 1; }

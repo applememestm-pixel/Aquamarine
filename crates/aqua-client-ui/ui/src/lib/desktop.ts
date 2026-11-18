@@ -28,9 +28,12 @@ export function initDesktop() {
   void invoke("storage_trim").catch(() => {});
   if (!DESKTOP) return;
   let last = "";
+  let lastBadge = -1;
   const sync = () => {
     const s = get(settings);
     const unread = get(chats).reduce((n, c) => n + (c.channel || get(mutedChats).has(c.id) ? 0 : c.unread), 0);
+    // The count on the taskbar / dock icon (tray.rs badge_set), tray or not.
+    if (unread !== lastBadge) { lastBadge = unread; void invoke("badge_set", { unread }).catch(() => {}); }
     const key = `${!!s.tray}|${!!s.trayMono}|${s.tray ? unread : 0}`;
     if (key === last) return;
     last = key;

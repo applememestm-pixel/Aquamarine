@@ -3,6 +3,8 @@
 /* Layout: three-column shell (rail | chat list | active chat); single column below 720px, toggled by body class */
 
 :root {
+  /* CeZeOs dark green — the same in every theme (the key sun). */
+  --cezeos-green: #157A24;
   /* Height of our custom title bar (0 on narrow / mobile layouts). */
   --tb-h: 32px;
   --bg-void:        #06070C;
