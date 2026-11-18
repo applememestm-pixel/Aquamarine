@@ -40,6 +40,10 @@ pub async fn open_chat_window(app: AppHandle, peer_id: String, title: String) ->
             .shadow(true)
             .theme(Some(tauri::Theme::Dark))
             .background_color(tauri::window::Color(6, 7, 12, 255))
+            // The chat id, sure to arrive: the `#popout=` in the address can
+            // be lost on the way (Windows), and the window then came up as a
+            // whole second copy of the app instead of the one chat.
+            .initialization_script(&format!("window.__AQUA_POPOUT__ = {};", serde_json::to_string(&peer_id).unwrap_or_else(|_| "\"\"".into())))
             .build()
             .map_err(|e| format!("window: {e}"))?;
         #[cfg(target_os = "linux")]
