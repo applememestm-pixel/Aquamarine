@@ -12,13 +12,13 @@ Python implementation the Rust code mirrors (crates/aqua-stt tests compare).
   vocab    CTC vocabulary
   ort-*    ONNX Runtime (Microsoft, MIT) shared library per platform
 """
-import hashlib, io, json, os, shutil, subprocess, sys, tarfile, urllib.request, zipfile
+import hashlib, io, json, shutil, subprocess, tarfile, urllib.request, zipfile
 from pathlib import Path
 
 ORT = "1.22.0"
 MODEL = "gigaam-v3-e2e-ctc"
 HF_REPO = "istupakov/gigaam-v3-onnx"
-EXAMPLE = "https://github.com/salute-developers/GigaAM/raw/main/example.wav"
+EXAMPLES = "https://cdn.chatwm.opensmodel.sberdevices.ru/GigaAM/"  # GigaAM's own test recordings
 
 out = Path("out"); out.mkdir(exist_ok=True)
 work = Path("work"); work.mkdir(exist_ok=True)
@@ -60,17 +60,19 @@ vocab = (out / "stt-vocab.txt").read_text(encoding="utf-8").splitlines()
 print("vocab:", len(vocab), "head:", vocab[:5], "tail:", vocab[-5:])
 
 # ---------------------------------------------------------------- golden
-wav = get(EXAMPLE)
-(work / "example.wav").write_bytes(wav)
 asr = onnx_asr.load_model(MODEL, quantization="int8" if "int8" in model_file else None)
-text = asr.recognize(str(work / "example.wav"))
-print("golden:", text)
-import numpy as np, wave  # noqa: E402
-with wave.open(str(work / "example.wav")) as w:
-    assert w.getframerate() == 16000 and w.getnchannels() == 1 and w.getsampwidth() == 2, w.getparams()
-    pcm = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2")
-put("stt-example.pcm", pcm.astype("<i2").tobytes())
-put("stt-example.txt", text.encode("utf-8"))
+import numpy as np  # noqa: E402
+for ex in ("example", "long_example"):
+    (work / f"{ex}.src").write_bytes(get(EXAMPLES + ex + ".wav"))
+    # 16 kHz mono s16 — what the app hands the recognizer after decoding.
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(work / f"{ex}.src"),
+                    "-ac", "1", "-ar", "16000", "-f", "s16le", str(out / f"stt-{ex}.pcm")], check=True)
+    pcm = np.frombuffer((out / f"stt-{ex}.pcm").read_bytes(), dtype="<i2").astype(np.float32) / 32768
+    print(ex, "seconds:", len(pcm) / 16000)
+    if len(pcm) <= 25 * 16000:
+        text = asr.recognize(pcm, sample_rate=16000)
+        print("golden", ex, ":", text)
+        put(f"stt-{ex}.txt", text.encode("utf-8"))
 
 # ---------------------------------------------------------------- runtime
 base = f"https://github.com/microsoft/onnxruntime/releases/download/v{ORT}"
