@@ -286,7 +286,8 @@
     let list = $visibleChats;
     if (!$search.trim() && showRequests) return list.filter((c) => $requestIds.has(c.id));
     if (!$search.trim()) list = list.filter((c) => !$requestIds.has(c.id) && (showArchive ? $archived.has(c.id) : !$archived.has(c.id)));
-    if (af !== "all" && !showArchive) {
+    // A search looks through every chat, not only the open folder's.
+    if (af !== "all" && !showArchive && !$search.trim()) {
       const f = $folders.find((x) => x.id === af);
       // A folder's rules see the archive too ("exclude archived" is a rule).
       if (f) list = $visibleChats.filter((c) => folderHas(f, factsOf(c)));
@@ -919,8 +920,9 @@
       dirSearching = true;
       try {
         const [r, gs] = await Promise.all([api.searchDirectory(q), api.groupSearch(q).catch(() => [] as PublicGroup[])]);
-        // Hide people we already have a chat with (shown above).
-        const existing = new Set($visibleChats.map((c) => c.id));
+        // Hide people whose chat is shown above — only the rows really
+        // there: a chat hidden by a filter left the person nowhere.
+        const existing = new Set(shownChats.map((c) => c.id));
         dirResults = r.filter((p) => !existing.has(p.username));
         // Public groups / channels by @name: the ones I'm in are already above.
         groupResults = gs.filter((g) => !existing.has(g.gid));
