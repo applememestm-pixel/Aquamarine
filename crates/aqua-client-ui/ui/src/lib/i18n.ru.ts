@@ -1260,6 +1260,8 @@ export const RU: Record<string, string> = {
   "Flip a coin": "Подбросить монетку",
   "Formatting": "Форматирование",
   "Full screen": "На весь экран",
+  "Look what I found 📸": "Смотри, что нашла 📸",
+  "Haha, send it to the group": "Ахаха, скинь в группу",
   "Heading": "Заголовок",
   "Heads": "Орёл",
   "Hidden text: ||like this||": "Скрытый текст: ||вот так||",

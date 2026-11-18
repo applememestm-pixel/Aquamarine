@@ -977,8 +977,7 @@
         <div class="pf-left">
           {#if isMe}
           <h2 class="name">
-            {view.display_name}{#if !isMe && $peerCards[activeUsername]?.verified}<OfficialMark size={22} />{/if}{#if isMe ? $profile.star : $peerCards[activeUsername]?.star != null}<StarMark kind={(isMe ? $profile.star?.kind : $peerCards[activeUsername]?.star) ?? 0} size={22} />{/if}<EmojiStatus token={view.estatus} size={24} zoom />
-            {#if view.verified}<span class="badge" title={$t("Verified identity")}>{@html icons.verified}</span>{/if}
+            {view.display_name}{#if $peerCards[isMe ? ($info?.username ?? "") : activeUsername]?.verified}<OfficialMark size={22} />{/if}{#if isMe ? $profile.star : $peerCards[activeUsername]?.star != null}<StarMark kind={(isMe ? $profile.star?.kind : $peerCards[activeUsername]?.star) ?? 0} size={22} />{/if}<EmojiStatus token={view.estatus} size={24} zoom />
             {#if view.is_bot}<span class="bot-tag">BOT</span>{/if}
 
             {#if $clans[isMe ? ($info?.username ?? "") : activeUsername]}<ClanTag tag={$clans[isMe ? ($info?.username ?? "") : activeUsername]} size="md" />{/if}
@@ -1079,7 +1078,6 @@
                top of it: banner, badges, server tag, stories, the board. -->
           <h2 class="name tg-name">
             {view.display_name}{#if $peerCards[activeUsername]?.verified}<OfficialMark size={22} />{/if}{#if $peerCards[activeUsername]?.star != null}<StarMark kind={$peerCards[activeUsername]?.star ?? 0} size={22} />{/if}<EmojiStatus token={view.estatus} size={24} zoom />
-            {#if view.verified}<span class="badge" title={$t("Verified identity")}>{@html icons.verified}</span>{/if}
             {#if view.is_bot}<span class="bot-tag">BOT</span>{/if}
             {#if $clans[activeUsername]}<ClanTag tag={$clans[activeUsername]} size="md" />{/if}
           </h2>
@@ -1772,7 +1770,6 @@
   }
   /* The emoji sits right after the name (its own 4px margin + the gap was a hole). */
   .name :global(.es) { margin-left: -2px; }
-  .badge :global(svg) { width: 16px; height: 16px; color: var(--accent); filter: drop-shadow(0 0 4px var(--accent-glow)); }
   .username {
     font-family: var(--font-mono);
     font-size: 12.5px;
