@@ -12,10 +12,10 @@ Python implementation the Rust code mirrors (crates/aqua-stt tests compare).
   vocab    CTC vocabulary
   ort-*    ONNX Runtime (Microsoft, MIT) shared library per platform
 """
-import hashlib, io, json, shutil, subprocess, tarfile, urllib.request, zipfile
+import hashlib, io, json, shutil, subprocess, urllib.request, zipfile
 from pathlib import Path
 
-ORT = "1.22.0"
+ORT = "1.23.2"  # NuGet Microsoft.ML.OnnxRuntime (the last with macOS Intel) + Maven AAR
 MODEL = "gigaam-v3-e2e-ctc"
 HF_REPO = "istupakov/gigaam-v3-onnx"
 
@@ -90,30 +90,20 @@ for ex, text_in in SAY.items():
         print("::warning::fixture", ex, "skipped:", e)
 
 # ---------------------------------------------------------------- runtime
-base = f"https://github.com/microsoft/onnxruntime/releases/download/v{ORT}"
-
-
-def from_tgz(name: str, member_suffix: str) -> bytes:
-    with tarfile.open(fileobj=io.BytesIO(get(f"{base}/{name}"))) as t:
-        for m in t.getmembers():
-            if m.isfile() and m.name.endswith(member_suffix):
-                return t.extractfile(m).read()
-    raise SystemExit(f"{member_suffix} not in {name}")
-
-
-def from_zip(data: bytes, member_suffix: str) -> bytes:
+def from_zip(data: bytes, member: str) -> bytes:
     with zipfile.ZipFile(io.BytesIO(data)) as z:
-        for n in z.namelist():
-            if n.endswith(member_suffix):
-                return z.read(n)
-    raise SystemExit(f"{member_suffix} not in zip")
+        return z.read(member)
 
 
-put("ort-linux-x64.so", from_tgz(f"onnxruntime-linux-x64-{ORT}.tgz", f"lib/libonnxruntime.so.{ORT}"))
-put("ort-linux-arm64.so", from_tgz(f"onnxruntime-linux-aarch64-{ORT}.tgz", f"lib/libonnxruntime.so.{ORT}"))
-mac = from_tgz(f"onnxruntime-osx-universal2-{ORT}.tgz", f"lib/libonnxruntime.{ORT}.dylib")
-put("ort-macos.dylib", mac)
-put("ort-windows-x64.dll", from_zip(get(f"{base}/onnxruntime-win-x64-{ORT}.zip"), "lib/onnxruntime.dll"))
+nupkg = get(f"https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/{ORT}/microsoft.ml.onnxruntime.{ORT}.nupkg")
+for out_name, member in [
+    ("ort-linux-x64.so", "runtimes/linux-x64/native/libonnxruntime.so"),
+    ("ort-linux-arm64.so", "runtimes/linux-arm64/native/libonnxruntime.so"),
+    ("ort-macos-arm64.dylib", "runtimes/osx-arm64/native/libonnxruntime.dylib"),
+    ("ort-macos-x64.dylib", "runtimes/osx-x64/native/libonnxruntime.dylib"),
+    ("ort-windows-x64.dll", "runtimes/win-x64/native/onnxruntime.dll"),
+]:
+    put(out_name, from_zip(nupkg, member))
 aar = get(f"https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime-android/{ORT}/onnxruntime-android-{ORT}.aar")
 put("ort-android-arm64.so", from_zip(aar, "jni/arm64-v8a/libonnxruntime.so"))
 put("ort-android-armv7.so", from_zip(aar, "jni/armeabi-v7a/libonnxruntime.so"))

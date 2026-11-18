@@ -24,8 +24,10 @@ pub const FILES: &[FileSpec] = &[
 /// This platform's ONNX Runtime library among [`FILES`].
 pub(crate) const RUNTIME: Option<&str> = if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
     Some("ort-windows-x64.dll")
-} else if cfg!(target_os = "macos") {
-    Some("ort-macos.dylib")
+} else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+    Some("ort-macos-arm64.dylib")
+} else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+    Some("ort-macos-x64.dylib")
 } else if cfg!(all(target_os = "android", target_arch = "aarch64")) {
     Some("ort-android-arm64.so")
 } else if cfg!(all(target_os = "android", target_arch = "arm")) {
