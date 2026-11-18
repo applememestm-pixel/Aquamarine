@@ -299,7 +299,7 @@ pub async fn call_all(state: &AppState, method: &str, params: Vec<(String, Strin
 // ------------------------------------------------------------ smart search
 //
 // Navidrome's search3 finds the words as typed. People type a band in the
-// wrong keyboard layout ("ytdhs"), in translit ("nervy"), with extra words
+// wrong keyboard layout ("ythds"), in translit ("nervy"), with extra words
 // ("нервы песня про"), or a word of a title that sits in a file name
 // ("01. Нервы - Критика"). So: several spellings at once, then the songs
 // ranked by how much of the query they hold (artist and title first).
@@ -998,8 +998,8 @@ mod tests {
 
     #[test]
     fn smart_search_spellings() {
-        assert_eq!(swap_layout("ytdhs"), "нервы");
-        assert_eq!(swap_layout("нервы"), "ytdhs");
+        assert_eq!(swap_layout("ythds"), "нервы");
+        assert_eq!(swap_layout("нервы"), "ythds");
         assert_eq!(to_latin("Нервы"), "nervy");
         assert_eq!(to_cyrillic("nervy"), "нервы");
         assert_eq!(to_cyrillic("shchuka"), "щука");

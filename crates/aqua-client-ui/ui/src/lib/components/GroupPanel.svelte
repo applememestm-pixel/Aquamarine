@@ -125,6 +125,7 @@
   let nameBusy = $state(false);
   let nameErr = $state("");
   async function saveName() {
+    if (!group) return;
     const n = dLink.trim().replace(/^@+/, "").toLowerCase();
     nameErr = "";
     if (n && !/^[a-z0-9_.]{3,32}$/.test(n)) { nameErr = tr("@name: 3–32 characters, a-z 0-9 _ . only"); return; }
