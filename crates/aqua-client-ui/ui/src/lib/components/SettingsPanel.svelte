@@ -5,6 +5,7 @@
 
 <script lang="ts">
   import Select from "./Select.svelte";
+  import { onBack } from "../back";
   import { chatLines } from "../listLook";
   import { inAppBrowser } from "../browser";
   import { IS_MOBILE, IS_DESKTOP } from "../platform";
@@ -32,6 +33,7 @@
   import { askSetLock, askRemoveLock, askChangeLock } from "../chatLockUi";
   /** The appearance preview opened full screen (every kind of message). */
   let pvFull = $state(false);
+  $effect(() => { if (pvFull) return onBack(() => (pvFull = false)); });
   let blockPick = $state("");
   async function testNotification() {
     const { ensureNotifyPermission, osNotify } = await import("../notify");
