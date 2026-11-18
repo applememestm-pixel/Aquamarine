@@ -1195,10 +1195,12 @@
                 <div class="section-label">{$t("All games")} · {all.length}</div>
                 {#each all as g (g)}
                   {@const pl = view.played.find((x) => x.n === g)}
+                  {@const cv = coverFor(g, $gameIds, $gameCovers, view.game_ids)}
                   {@const ic = iconFor(g, $gameIds, $gameIcons, view.game_ids)}
                   {@const max = Math.max(1, ...view.played.map((x) => x.h))}
                   <div class="played-row">
-                    {#if ic}<img class="played-cover" src={ic} alt="" />{:else}<span class="played-cover" style:background={gameGradient(g)}>{g.charAt(0).toUpperCase()}</span>{/if}
+                    <!-- The game's poster, as in "My favourite games" (a letter only when there's none). -->
+                    {#if cv || ic}<img class="played-cover poster" src={cv || ic} alt="" />{:else}<span class="played-cover poster" style:background={gameGradient(g)}>{g.charAt(0).toUpperCase()}</span>{/if}
                     <span class="played-name">{g}{#if view.games.includes(g)} <span class="game-star">★</span>{/if}</span>
                     {#if pl}<span class="played-bar"><span style:width="{Math.max(4, (pl.h / max) * 100)}%"></span></span>{/if}
                     <span class="played-h">{pl ? (pl.h > 0 ? `${pl.h} ${$t("h")}` : $t("< 1 h")) : ""}</span>
@@ -1421,6 +1423,7 @@
   .game-fav { position: absolute; top: 6px; right: 7px; font-size: 12px; color: #FFD45C; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5); }
   .played-row { display: flex; align-items: center; gap: 10px; padding: 6px 2px; font-size: 13px; }
   .played-cover { width: 34px; height: 34px; border-radius: calc(8px * var(--rk, 1)); display: grid; place-items: center; color: #fff; font-weight: 800; flex-shrink: 0; }
+  .played-cover.poster { width: 42px; height: 56px; border-radius: calc(7px * var(--rk, 1)); }
   .played-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .played-h { color: var(--fg-dim); font-size: 12px; }
   .link-edit { display: flex; gap: 6px; margin-top: 6px; }
