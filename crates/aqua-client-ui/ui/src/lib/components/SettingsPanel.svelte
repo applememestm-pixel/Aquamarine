@@ -403,7 +403,7 @@
       ...s,
       mode: DEFAULTS.mode, palette: DEFAULTS.palette, wallpaper: DEFAULTS.wallpaper,
       bubbleRadius: DEFAULTS.bubbleRadius, fontScale: DEFAULTS.fontScale, density: DEFAULTS.density,
-      themePreset: undefined, customColors: {}, bubbleOut: undefined, bubbleIn: undefined,
+      themePreset: DEFAULTS.themePreset, customColors: {}, bubbleOut: undefined, bubbleIn: undefined,
     }));
     showToast(tr("Theme reset to defaults"));
   }
