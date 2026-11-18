@@ -87,11 +87,13 @@ export const clans = derived([peerCards, profile, info], ([cards, me, i]) => {
 });
 
 /** A profile's channel (`extra.ch`), checked. */
-export function asChannel(v: unknown): { gid: string; title: string; owner: string } | null {
+export function asChannel(v: unknown): { gid: string; title: string; owner: string; kind: "group" | "supergroup" | "channel" } | null {
   if (!v || typeof v !== "object") return null;
   const o = v as Record<string, unknown>;
   if (typeof o.gid !== "string" || !o.gid.startsWith("grp_") || typeof o.owner !== "string") return null;
-  return { gid: o.gid, title: typeof o.title === "string" ? o.title.slice(0, 64) : "", owner: o.owner };
+  // No kind: from before groups and servers could go there — a channel.
+  const kind = o.kind === "group" || o.kind === "supergroup" ? o.kind : "channel";
+  return { gid: o.gid, title: typeof o.title === "string" ? o.title.slice(0, 64) : "", owner: o.owner, kind };
 }
 
 export function str(v: unknown): string { return typeof v === "string" ? v : ""; }

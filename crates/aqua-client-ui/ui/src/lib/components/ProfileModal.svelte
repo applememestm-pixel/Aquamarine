@@ -381,7 +381,7 @@
     more: { k: string; v: number; url?: string }[];
     link: boolean;
     /** Their channel on the profile (Telegram's personal channel). */
-    channel: { gid: string; title: string; owner: string } | null;
+    channel: { gid: string; title: string; owner: string; kind: "group" | "supergroup" | "channel" } | null;
   }
   let view = $derived<View | null>((void $played, buildView(activeUsername, $profile, $contacts, $info, $peerCards, $peerPresence, $myActivity)));
   // Links to a known service show as connections, the rest as links.
@@ -623,12 +623,14 @@
     editing = true;
   }
   function cancelEdit() { editing = false; draft = null; }
-  /** Channels I can put on my profile: any I'm an admin of — private or public. */
-  const myChannels = $derived(Object.values($groupMap).filter((g) => g.kind === "channel" && isAdmin(g, $info?.username ?? "")));
+  /** What I can put on my profile: any channel, group or server I'm an admin
+   *  of — private or public. */
+  const myChannels = $derived(Object.values($groupMap).filter((g) => isAdmin(g, $info?.username ?? "")));
+  const KIND_LABEL = { channel: "Channel", group: "Group", supergroup: "Server" } as const;
   function setChannel(gid: string) {
     if (!draft) return;
     const g = $groupMap[gid];
-    draft = { ...draft, channel: g ? { gid: g.id, title: g.title, owner: $info?.username ?? g.owner } : null };
+    draft = { ...draft, channel: g ? { gid: g.id, title: g.title, owner: $info?.username ?? g.owner, kind: g.kind } : null };
   }
   async function joinChannel(ch: { gid: string; title: string; owner: string }) {
     try { await requestJoinGroup(ch.gid, ch.owner, ch.title, ""); showToast(tr("Request sent")); }
@@ -793,12 +795,12 @@
             <textarea bind:value={draft.about} rows="4" placeholder={$t("Tell people a little about yourself...")}></textarea>
           </label>
           <div class="field">
-            <span>{$t("Channel")}</span>
+            <span>{$t("Channel, group or server")}</span>
             {#if myChannels.length}
               <Select value={draft.channel?.gid ?? ""} onchange={(v) => setChannel(v)}
-                options={[{ value: "", label: $t("None") }, ...myChannels.map((g) => ({ value: g.id, label: g.title }))]} />
+                options={[{ value: "", label: $t("None") }, ...myChannels.map((g) => ({ value: g.id, label: `${g.title} · ${$t(KIND_LABEL[g.kind])}` }))]} />
             {:else}
-              <small class="ch-none">{$t("Channels you run (owner or admin) can be shown on your profile.")}</small>
+              <small class="ch-none">{$t("A channel, group or server you run (owner or admin) can be shown on your profile.")}</small>
             {/if}
           </div>
           <div class="field">
@@ -1056,10 +1058,10 @@
             {@const g = $groupMap[ch.gid]}
             {@const member = !!g?.members.some((m) => m.username === $info?.username)}
             <section class="section">
-              <div class="section-label">{$t("Channel")}</div>
+              <div class="section-label">{$t(KIND_LABEL[ch.kind])}</div>
               <div class="pch">
                 <span class="pch-av" style:background-image={$avatars[ch.gid] ? `url("${$avatars[ch.gid]}")` : undefined} style:background={$avatars[ch.gid] ? undefined : g?.gradient}>{$avatars[ch.gid] ? "" : (g?.title ?? ch.title).charAt(0).toUpperCase()}</span>
-                <span class="pch-t"><b>{g?.title ?? ch.title}</b>{#if g}<small>{$tn(g.members.length, "subscriber")}</small>{/if}</span>
+                <span class="pch-t"><b>{g?.title ?? ch.title}</b>{#if g}<small>{$tn(g.members.length, ch.kind === "channel" ? "subscriber" : "member")}</small>{/if}</span>
                 {#if member}<button class="pch-go" onclick={() => { closeProfile(); void selectChat(ch.gid); }}>{$t("Open")}</button>
                 {:else if !isMe}<button class="pch-go" onclick={() => joinChannel(ch)}>{$t("Request to join")}</button>{/if}
               </div>
@@ -1182,8 +1184,8 @@
               {@const g = $groupMap[ch.gid]}
               {@const member = !!g?.members.some((m) => m.username === $info?.username)}
               <button class="tg-row" onclick={() => { if (member) { closeProfile(); void selectChat(ch.gid); } else if (!isMe) void joinChannel(ch); }}>
-                <span class="tg-v">{g?.title ?? ch.title}{#if g} · {$tn(g.members.length, "subscriber")}{/if}</span>
-                <span class="tg-l">{$t(member || isMe ? "Channel" : "Channel · tap to ask to join")}</span></button>
+                <span class="tg-v">{g?.title ?? ch.title}{#if g} · {$tn(g.members.length, ch.kind === "channel" ? "subscriber" : "member")}{/if}</span>
+                <span class="tg-l">{$t(KIND_LABEL[ch.kind])}{#if !member && !isMe} · {$t("tap to ask to join")}{/if}</span></button>
             {/if}
             {#if view.birthday}
               <div class="tg-row"><span class="tg-v">{view.birthday}{#if ageOf(view.birthday) != null} ({$tn(ageOf(view.birthday) ?? 0, "year old")}){/if}</span><span class="tg-l">{$t("Birthday")}</span></div>
