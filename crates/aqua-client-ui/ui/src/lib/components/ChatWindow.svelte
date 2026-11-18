@@ -6858,9 +6858,10 @@
     flex-shrink: 0;
   }
   /* Computers: the account card (UserPanel, 54px + 8px margin) sits to the
-     left of this bar — same top line, same bottom edge. */
+     left of this bar — the field on the card's middle line (it sat 7px
+     lower, bottoms matched instead). */
   @media (min-width: 721px) {
-    :global(html:not(.glass)) .composer { box-sizing: border-box; min-height: 62px; padding: 13px 16px 8px; }
+    :global(html:not(.glass)) .composer { box-sizing: border-box; min-height: 62px; padding: 7px 16px 16px; }
   }
   /* The blur lives on a pseudo-layer: a backdrop-filter on the bar itself would make it a
      "backdrop root", and popups inside it (attach menu, room list) couldn't blur the chat. */
