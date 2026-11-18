@@ -26,6 +26,7 @@
     --sun-c:       #189820;               /* the CeZeOs sun (the owner's green) */
     --fx-rgb:      90,190,120;            /* motion.js: background points */
     --sun: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1024 1024'> <defs><mask id='c'><rect width='1024' height='1024' fill='%23fff'/><path stroke='%23000' stroke-width='46' d='M512 190V834M190 512H834M284 284L740 740M740 284L284 740'/></mask></defs> <circle cx='512' cy='512' r='330' mask='url(%23c)'/> <path d='M552 212L512 12L472 212ZM752 328L866 158L696 272ZM812 552L1012 512L812 472ZM696 752L866 866L752 696ZM472 812L512 1012L552 812ZM272 696L158 866L328 752ZM212 472L12 512L212 552ZM328 272L158 158L272 328Z'/> </svg>");  /* sun.svg inline: mask-image from a file needs CORS (file://, some CDNs) */
+    --sun-big: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1024 1024'><defs><mask id='c'><rect width='1024' height='1024' fill='%23fff'/><path stroke='%23000' stroke-width='18' d='M512 190V834M190 512H834M284 284L740 740M740 284L284 740'/></mask></defs><circle cx='512' cy='512' r='310' mask='url(%23c)'/><path d='M521 190L512 60L503 190ZM654 190L683 100L639 184ZM746 296L843 181L728 278ZM840 385L924 341L834 370ZM834 521L964 512L834 503ZM834 654L924 683L840 639ZM728 746L843 843L746 728ZM639 840L683 924L654 834ZM503 834L512 964L521 834ZM370 834L341 924L385 840ZM278 728L181 843L296 746ZM184 639L100 683L190 654ZM190 503L60 512L190 521ZM190 370L100 341L184 385ZM296 278L181 181L278 296ZM385 184L341 100L370 190Z'/></svg>");  /* the big turning sun in the corner: the first, 16-ray drawing */
 
     /* small accents in the mockups — the CeZeOs star levels */
     --bronze:   #C77B3A;
@@ -158,7 +159,8 @@
   .aura { display: none; }
   /* the CeZeOs sun in the top right corner; it turns when the section
      changes (motion.js sets --sun-turn) */
-  .corner-sun { position: fixed; z-index: -1; pointer-events: none; width: 520px; height: 520px; right: -170px; top: -170px; opacity: .08;
+  .corner-sun { -webkit-mask-image: var(--sun-big); mask-image: var(--sun-big);
+    position: fixed; z-index: -1; pointer-events: none; width: 520px; height: 520px; right: -170px; top: -170px; opacity: .08;
     transform: rotate(var(--sun-turn, 0deg)); transition: transform 1.2s cubic-bezier(.22,1,.36,1); }
   @media (max-width: 900px) { .corner-sun { width: 340px; height: 340px; right: -120px; top: -110px; } }
   :root[data-theme="light"] .corner-sun { opacity: .16; }
