@@ -121,7 +121,7 @@
     if (gameTimer) clearTimeout(gameTimer);
     if (q.length < 2) { gameHits = []; return; }
     gameTimer = setTimeout(() => {
-      void api.gamesSearch(q).then((h) => { if (gameInput.trim() === q) { gameHits = h.slice(0, 8); h.slice(0, 8).forEach((x) => x.has_icon && resolveGame(x.name, x.id)); } }).catch(() => (gameHits = []));
+      void api.gamesSearch(q).then((h) => { if (gameInput.trim() === q) { gameHits = h.slice(0, 8); h.slice(0, 8).forEach((x) => resolveGame(x.name, x.id)); } }).catch(() => (gameHits = []));
     }, 250);
   });
   function addGame(hit?: { id: string; name: string }) {
@@ -951,9 +951,10 @@
               {#if gameHits.length}
                 <div class="game-hits">
                   {#each gameHits as h (h.id)}
-                    {@const ic = $gameIcons[h.id]}
+                    <!-- The game's poster right in the list (owner), the icon only when there's no cover. -->
+                    {@const ic = $gameCovers[h.id] || $gameIcons[h.id]}
                     <button class="game-hit" onclick={() => addGame(h)}>
-                      {#if ic}<img src={ic} alt="" />{:else}<span class="gh-ph" style:background={gameGradient(h.name)}>{h.name.charAt(0)}</span>{/if}
+                      {#if ic}<img class="gh-poster" src={ic} alt="" />{:else}<span class="gh-ph gh-poster" style:background={gameGradient(h.name)}>{h.name.charAt(0)}</span>{/if}
                       <span>{h.name}</span>
                     </button>
                   {/each}
@@ -1511,6 +1512,8 @@
     border-radius: calc(12px * var(--rk, 1)); padding: 4px; box-shadow: 0 18px 40px -14px rgba(0,0,0,.7); max-height: 260px; overflow-y: auto; }
   .game-hit { width: 100%; display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: none; border-radius: calc(8px * var(--rk, 1)); background: none; color: var(--fg); font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
   .game-hit:hover { background: var(--accent-soft); }
+  /* A small portrait poster (3:4), like the cards on the profile. */
+  .game-hit .gh-poster { width: 36px !important; height: 48px !important; border-radius: calc(6px * var(--rk, 1)) !important; }
   .game-hit img, .gh-ph { width: 28px; height: 28px; border-radius: calc(7px * var(--rk, 1)); object-fit: cover; flex-shrink: 0; display: grid; place-items: center; color: #fff; font-weight: 800; }
   .game:hover { transform: translateY(-2px); }
   .game-name { font-size: 12px; font-weight: 700; line-height: 1.2; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6); }
