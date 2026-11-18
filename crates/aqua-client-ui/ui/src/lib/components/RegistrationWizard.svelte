@@ -67,7 +67,9 @@
   // Other slots on this phone with keys but logged out: an account without
   // two-step verification can only be signed into with ITS keys — after
   // "Log out" + "Add account" it was unreachable ("lives on another device").
-  const keptAccounts = $derived($accounts.filter((a) => !a.active && !a.registered && a.has_keys));
+  // Every slot has a vault (made at start) — an abandoned "Add account" one
+  // (a1, a2…) too; a nameless one counts only as the first account's slot.
+  const keptAccounts = $derived($accounts.filter((a) => !a.active && !a.registered && a.has_keys && (!!a.last || a.slot === "")));
   let leaving = $state(false);
   async function backTo(slot: string) {
     leaving = true;

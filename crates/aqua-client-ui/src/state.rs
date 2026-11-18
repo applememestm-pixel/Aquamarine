@@ -1034,6 +1034,7 @@ impl AppState {
         self.registered = true;
         self.username = Some(username.clone());
         self.email = email.clone();
+        save_last_account(&self.data_dir, &username);
         save_account(&self.data_dir, &Account {
             registered: true,
             username: Some(username),
@@ -1050,7 +1051,7 @@ impl AppState {
         // account without two-step verification can't be signed into with
         // other keys — "Add account" after a logout left it unreachable.
         if let Some(u) = self.username.clone() {
-            let _ = crate::fsx::write_atomic(&self.data_dir.join(LAST_ACCOUNT_FILE), &serde_json::to_vec(&serde_json::json!({ "username": u })).unwrap_or_default());
+            save_last_account(&self.data_dir, &u);
         }
         self.registered = false;
         self.username = None;
@@ -1261,6 +1262,11 @@ fn save_account(dir: &std::path::Path, acct: &Account) {
         }
         Err(e) => tracing::warn!(?e, "account.json serialize failed"),
     }
+}
+
+/// Whose keys this data directory holds (kept after a logout, accounts.rs).
+fn save_last_account(dir: &std::path::Path, username: &str) {
+    let _ = crate::fsx::write_atomic(&dir.join(LAST_ACCOUNT_FILE), &serde_json::to_vec(&serde_json::json!({ "username": username })).unwrap_or_default());
 }
 
 fn clear_account_file(dir: &std::path::Path) {
