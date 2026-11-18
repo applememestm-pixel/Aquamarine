@@ -273,6 +273,9 @@ export interface Settings {
   /** My phone number not shown in Settings and my profile header. */
   hidePhone?: boolean;
   folderTabStyle?: "chips" | "pills" | "text";
+  /** Message menu: "cards" — reactions / actions / icon row as three cards (Telegram);
+   *  "compact" — one small plate, text only; "auto" — cards on a phone, compact on a PC. */
+  msgMenu?: "auto" | "cards" | "compact";
   /** Unread counters on folder tabs (default on). */
   folderCounters?: boolean;
   hideAllTab?: boolean;

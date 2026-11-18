@@ -1915,6 +1915,11 @@
       <section class="group">
         <div class="label">{$t("Messages")}</div>
         <div class="row">
+          <span class="row-label">{$t("Message menu")}</span>
+          <Select class="sel" value={$settings.msgMenu ?? "auto"} options={[{ value: "auto", label: $t("Auto (cards on a phone, compact on a PC)") }, { value: "cards", label: $t("Cards") }, { value: "compact", label: $t("Compact") }]}
+            onchange={(v) => settings.update((x) => ({ ...x, msgMenu: v as "auto" | "cards" | "compact" }))} />
+        </div>
+        <div class="row">
           <span class="row-label">{$t("Double tap — incoming")}</span>
           <Select class="sel" value={$settings.dblTapIn ?? "auto"} options={[{ value: "auto", label: $t("Default") }, { value: "react", label: $t("Reaction") }, { value: "reply", label: $t("Reply") }, { value: "copy", label: $t("Copy") }, { value: "forward", label: $t("Forward") }, { value: "save", label: $t("Save to Saved Messages") }, { value: "edit", label: $t("Edit") }, { value: "delete", label: $t("Delete") }, { value: "none", label: $t("Nothing") }]}
             onchange={(v) => settings.update((x) => ({ ...x, dblTapIn: v as DblTap }))} />

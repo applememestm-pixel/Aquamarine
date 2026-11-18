@@ -28,7 +28,7 @@ export async function ensureModel(): Promise<boolean> {
   if (st.downloading || get(sttProgress) != null) return waitDownload();
   asking ??= askConfirm({
     title: tr("Download the speech recognition model?"),
-    text: tr("To turn voice into text, Aquamarine needs a recognition model on this device ({size}, once). It runs right here: transcripts then work without the internet — over Bluetooth and Wi-Fi too — and no server, ours included, ever hears your voice messages. You can delete it in Settings → Storage.", { size: mb(st.size) }),
+    text: tr("To turn voice into text, Aquamarine needs a recognition model on this device ({size}, once). It runs right here: transcripts then work without the internet — over Bluetooth and Wi-Fi too — and no server, ours included, ever hears your voice messages. You can delete it in Settings → Data and storage.", { size: mb(st.size) }),
     ok: tr("Download"),
   }).finally(() => { asking = null; });
   if (!(await asking)) return false;
