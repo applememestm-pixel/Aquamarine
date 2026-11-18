@@ -1033,9 +1033,9 @@
       <button class="sel-btn" onclick={() => (selMore = !selMore)} aria-label={$t("More")}><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></svg></button>
       {#if selMore}
         <div class="sel-more" role="menu">
-          <button onclick={selPin}>{$t(selAllPinned ? "Unpin" : "Pin to top")}</button>
-          <button onclick={selRead}>{$t("Mark as read")}</button>
-          <button onclick={() => { const ids = $visibleChats.map((c) => c.id).filter((id) => !id.startsWith("grp_") || !$groupMap[id]); sel = [...new Set([...sel, ...ids])]; selMore = false; }}>{$t("Select all")}</button>
+          <button onclick={selPin}><span class="sm-ic">{@html icons.pin}</span>{$t(selAllPinned ? "Unpin" : "Pin to top")}</button>
+          <button onclick={selRead}><span class="sm-ic">{@html icons.checkDouble}</span>{$t("Mark as read")}</button>
+          <button onclick={() => { const ids = $visibleChats.map((c) => c.id).filter((id) => !id.startsWith("grp_") || !$groupMap[id]); sel = [...new Set([...sel, ...ids])]; selMore = false; }}><span class="sm-ic">{@html icons.select}</span>{$t("Select all")}</button>
         </div>
       {/if}
     </div>
@@ -1715,9 +1715,14 @@
     border-radius: calc(12px * var(--rk, 1)); cursor: pointer; }
   .sel-btn:active { background: color-mix(in srgb, var(--fg) 10%, transparent); }
   .sel-btn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-  .sel-more { position: absolute; top: 54px; right: 8px; min-width: 190px; display: flex; flex-direction: column; padding: 6px;
-    background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: calc(14px * var(--rk, 1)); box-shadow: 0 12px 32px rgba(0,0,0,.35); }
-  .sel-more button { text-align: left; padding: 11px 12px; border: none; background: transparent; color: var(--fg); font-size: 15px; border-radius: calc(9px * var(--rk, 1)); }
+  /* Telegram's ⋮ menu: a blurred card, icon + label rows. */
+  .sel-more { position: absolute; top: 54px; right: 8px; min-width: 220px; display: flex; flex-direction: column; padding: 4px 0;
+    background: color-mix(in srgb, var(--bg-surface-2) 94%, transparent); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+    border: 1px solid var(--border); border-radius: calc(16px * var(--rk, 1)); box-shadow: 0 14px 36px -12px rgba(0,0,0,.55); }
+  .sel-more button { display: flex; align-items: center; gap: 18px; min-height: 48px; padding: 0 20px 0 18px; text-align: left; border: none; background: transparent; color: var(--fg); font: inherit; font-size: 16px; font-weight: 500; }
+  .sel-more button:active { background: color-mix(in srgb, var(--fg) 10%, transparent); }
+  .sm-ic { width: 22px; height: 22px; flex-shrink: 0; color: var(--fg-muted); display: grid; place-items: center; }
+  .sm-ic :global(svg) { width: 22px; height: 22px; }
   .sel-more button:active { background: color-mix(in srgb, var(--fg) 10%, transparent); }
   .chat-item.selected { background: color-mix(in srgb, var(--accent) 16%, transparent); }
   .chat-item.selected .avatar::after { content: "✓"; position: absolute; right: -2px; bottom: -2px; width: 20px; height: 20px; border-radius: 50%;

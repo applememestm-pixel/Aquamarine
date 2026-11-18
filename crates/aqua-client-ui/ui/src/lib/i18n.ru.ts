@@ -197,6 +197,7 @@ export const RU: Record<string, string> = {
   "The internet address works once the router forwards TCP port {p} to this device (and the provider gives you a white IP). On a phone, mobile networks almost never allow it — use Wi-Fi.": "Адрес в интернете заработает, когда роутер пробросит TCP-порт {p} на это устройство (и провайдер даёт белый IP). Мобильные сети на телефоне такого почти никогда не позволяют — используйте Wi-Fi.",
   "Open the admin panel": "Открыть панель сервера",
   "Connecting…": "Соединение…",
+  "Calling…": "Вызов…",
   "Profile": "Профиль",
   "Gallery": "Галерея",
   "Allow access to photos": "Разрешить доступ к фото",

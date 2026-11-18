@@ -3625,7 +3625,7 @@
   {/if}
   {#if outgoing}
     {@const rd = id !== undefined && (seenIds.has(id) || answeredIds.has(id))}
-    {#key rd}<span class="rr" class:read={rd} in:scaleIn={{ start: 0.5, duration: motionMs(240), easing: backOut }}>{@html rd ? icons.checkDouble : icons.check}</span>{/key}
+    {#key rd}<span class="rr" class:read={rd} in:scaleIn={{ start: 0.5, duration: motionMs(240), easing: backOut }}>{@html rd ? icons.checkDouble : icons.tick}</span>{/key}
   {/if}
 {/snippet}
 
@@ -4078,9 +4078,9 @@
                 <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
                 <div class="sel-more-veil" onclick={() => (selMore = false)}></div>
                 <div class="sel-more" role="menu">
-                  <button role="menuitem" onclick={() => { selMore = false; void selectionTo("tasks"); }}>☑️ {$t("Tasks")}</button>
-                  <button role="menuitem" onclick={() => { selMore = false; void selectionTo("doc"); }}>📄 {$t("Doc")}</button>
-                  <button role="menuitem" onclick={() => { selMore = false; void selectionTo("board"); }}>🗂 {$t("Board")}</button>
+                  <button role="menuitem" onclick={() => { selMore = false; void selectionTo("tasks"); }}><span class="ci-ic">{@html icons.tasks}</span>{$t("Tasks")}</button>
+                  <button role="menuitem" onclick={() => { selMore = false; void selectionTo("doc"); }}><span class="ci-ic">{@html icons.doc}</span>{$t("Doc")}</button>
+                  <button role="menuitem" onclick={() => { selMore = false; void selectionTo("board"); }}><span class="ci-ic">{@html icons.board}</span>{$t("Board")}</button>
                 </div>
               {/if}
             </div>
@@ -4646,6 +4646,9 @@
 
     {#if menu.open && menu.row}
       {@const row = menu.row}
+      {@const canFwd = !protectedChat && !(row.kind.type === "file" && renderKind(row.kind.content) === "once")}
+      {@const canCopy = textOf(row) != null && !protectedChat}
+      {@const canDel = row.outgoing || !isGroup || can(activeGroup, myUsername, "delete_messages")}
       {#if menu.touch}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -4673,50 +4676,52 @@
             <button class="ctx-emoji more" onclick={() => (reactAll = !reactAll)} title={$t(reactAll ? "Fewer" : "All reactions")}>{$t(reactAll ? "−" : "+")}</button>
           {/if}
         </div>
-        <button class="ctx-item" role="menuitem" onclick={() => replyRow(row)}>{$t("Reply")}</button>
-        {#if menuQuote}<button class="ctx-item" role="menuitem" onclick={() => quoteRow(row, menuQuote)}>{$t("Quote")}</button>{/if}
-        <button class="ctx-item" role="menuitem" onclick={() => openThread(row)}>{$t(isGroup && commentsAllowed ? "Comments & thread" : "Thread")}</button>
+        {#snippet item(ic: string, label: string, fn: () => void, danger = false)}
+          <button class={["ctx-item", danger && "danger"]} role="menuitem" onclick={fn}><span class="ci-ic">{@html ic}</span><span class="ci-tx">{label}</span></button>
+        {/snippet}
+        <div class="ctx-card">
+        {#if menuQuote}{@render item(icons.quote, $t("Quote"), () => quoteRow(row, menuQuote))}{/if}
+        {@render item(icons.thread, $t(isGroup && commentsAllowed ? "Comments & thread" : "Thread"), () => openThread(row))}
         <!-- My own GIFs and pictures too (it was others' only). -->
         {#if row.kind.type === "file" && row.kind.content.saved_at && !protectedChat}
           {@const rk = renderKind(row.kind.content)}
           {#if rk === "sticker"}
-            <button class="ctx-item" role="menuitem" onclick={() => saveToCollection(row, "stickers")}>{$t("Add to my stickers")}</button>
+            {@render item(icons.sticker, $t("Add to my stickers"), () => saveToCollection(row, "stickers"))}
           {:else if rk === "gif" || (rk === "video" && (row.kind.content.size ?? 0) < 25 * 1024 * 1024)}
-            <button class="ctx-item" role="menuitem" onclick={() => saveToCollection(row, "gifs")}>{$t("Save GIF")}</button>
+            {@render item(icons.download, $t("Save GIF"), () => saveToCollection(row, "gifs"))}
           {:else if rk === "image"}
-            <button class="ctx-item" role="menuitem" onclick={() => saveToCollection(row, "stickers")}>{$t("Add as sticker")}</button>
+            {@render item(icons.sticker, $t("Add as sticker"), () => saveToCollection(row, "stickers"))}
           {/if}
         {/if}
         {#if textOf(row) != null && /\[ce:[^\]]+\]/.test(textOf(row) ?? "")}
-          <button class="ctx-item" role="menuitem" onclick={() => saveEmojiFromRow(row)}>{$t("Add these emoji to my collection")}</button>
-        {/if}
-        {#if !protectedChat && !(row.kind.type === "file" && renderKind(row.kind.content) === "once")}
-        <button class="ctx-item" role="menuitem" onclick={() => forwardRow(row)}>{$t("Forward")}</button>
+          {@render item(icons.smile, $t("Add these emoji to my collection"), () => saveEmojiFromRow(row))}
         {/if}
         {#if !protectedChat && row.kind.type === "file" && row.kind.content.saved_at && renderKind(row.kind.content) !== "once"}
           {@const fc = row.kind.content}
-          <button class="ctx-item" role="menuitem" onclick={() => { closeMenu(); void saveFileAs(fc.saved_at, fc.name); }}>{$t("Save as…")}</button>
+          {@render item(icons.download, $t("Save as…"), () => { closeMenu(); void saveFileAs(fc.saved_at, fc.name); })}
         {/if}
         {#if DESKTOP_APP && !protectedChat && row.kind.type === "file" && row.kind.content.saved_at && renderKind(row.kind.content) !== "once"}
-          {@const p = row.kind.content.saved_at}
-          <button class="ctx-item" role="menuitem" onclick={() => { closeMenu(); btSheet.set([p]); }}>{$t("Send via Bluetooth")}</button>
+          {@const bp = row.kind.content.saved_at}
+          {@render item(icons.bluetooth, $t("Send via Bluetooth"), () => { closeMenu(); btSheet.set([bp]); })}
         {/if}
-        {#if textOf(row) != null && !protectedChat}
-          <button class="ctx-item" role="menuitem" onclick={() => copyRow(row)}>{$t("Copy text")}</button>
-          <button class="ctx-item" role="menuitem" onclick={() => selectRowText(row)}>{$t("Select text")}</button>
-        {/if}
+        {#if canCopy}{@render item(icons.textSel, $t("Select text"), () => selectRowText(row))}{/if}
         {#if row.outgoing && (row.kind.type === "text" || row.kind.type === "reply")}
-          <button class="ctx-item" role="menuitem" onclick={() => startEdit(row)}>{$t("Edit")}</button>
-        {/if}
-        {#if row.outgoing || !isGroup || can(activeGroup, myUsername, "delete_messages")}
-          <button class="ctx-item danger" role="menuitem" onclick={() => deleteRow(row)}>{$t("Delete")}</button>
+          {@render item(icons.edit, $t("Edit"), () => startEdit(row))}
         {/if}
         {#if pinnedId($activeChat?.id ?? "") === row.id}
-          <button class="ctx-item" role="menuitem" onclick={() => { unpin(); closeMenu(); }}>{$t("Unpin")}</button>
+          {@render item(icons.pin, $t("Unpin"), () => { unpin(); closeMenu(); })}
         {:else}
-          <button class="ctx-item" role="menuitem" onclick={() => pinRow(row)}>{$t("Pin")}</button>
+          {@render item(icons.pin, $t("Pin"), () => pinRow(row))}
         {/if}
-        <button class="ctx-item" role="menuitem" onclick={() => { startSelection(row); closeMenu(); }}>{$t("Select")}</button>
+        {@render item(icons.select, $t("Select"), () => { startSelection(row); closeMenu(); })}
+        </div>
+        <!-- The everyday four as one row of icons (Telegram / AyuGram). -->
+        <div class="ctx-card ctx-quick">
+          <button role="menuitem" onclick={() => replyRow(row)} title={$t("Reply")} aria-label={$t("Reply")}>{@html icons.reply}</button>
+          {#if canCopy}<button role="menuitem" onclick={() => copyRow(row)} title={$t("Copy text")} aria-label={$t("Copy text")}>{@html icons.copy}</button>{/if}
+          {#if canFwd}<button role="menuitem" onclick={() => forwardRow(row)} title={$t("Forward")} aria-label={$t("Forward")}>{@html icons.forward}</button>{/if}
+          {#if canDel}<button class="danger" role="menuitem" onclick={() => deleteRow(row)} title={$t("Delete")} aria-label={$t("Delete")}>{@html icons.trash}</button>{/if}
+        </div>
       </div>
     {/if}
 
@@ -6336,14 +6341,17 @@
   }
   .sel-act svg { width: 19px; height: 19px; }
   .sel-act:hover { color: var(--fg); background: var(--bg-hover); }
-  .sel-act.danger { color: #ff6b6b; }
-  .sel-act.danger:hover { background: color-mix(in srgb, #ff6b6b 14%, transparent); color: #ff8787; }
+  .sel-act.danger { color: var(--danger); }
+  .sel-act.danger:hover { background: color-mix(in srgb, var(--danger) 14%, transparent); }
   .sel-more-wrap { position: relative; }
   .sel-more-veil { position: fixed; inset: 0; z-index: 30; }
-  .sel-more { position: absolute; right: 0; top: calc(100% + 6px); z-index: 31; min-width: 170px; padding: 5px; display: flex; flex-direction: column;
-    background: var(--bg-surface-2); border: 1px solid var(--border-strong); border-radius: calc(12px * var(--rk, 1)); box-shadow: 0 16px 40px -10px rgba(0,0,0,.6); }
-  .sel-more button { text-align: left; padding: 10px 12px; border: none; border-radius: calc(8px * var(--rk, 1)); background: transparent; color: var(--fg); font: inherit; font-size: 14px; cursor: pointer; }
-  .sel-more button:hover { background: var(--accent-soft); color: var(--accent); }
+  /* Telegram's ⋮ menu: a blurred card, icon + label rows. */
+  .sel-more { position: absolute; right: 0; top: calc(100% + 6px); z-index: 31; min-width: 220px; padding: 4px 0; display: flex; flex-direction: column;
+    background: color-mix(in srgb, var(--bg-surface-2) 94%, transparent); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+    border: 1px solid var(--border); border-radius: calc(16px * var(--rk, 1)); box-shadow: 0 14px 36px -12px rgba(0,0,0,.55);
+    transform-origin: top right; animation: ctx-pop 0.2s cubic-bezier(0.2, 0.9, 0.25, 1.12); }
+  .sel-more button { display: flex; align-items: center; gap: 18px; min-height: 48px; padding: 0 20px 0 18px; text-align: left; border: none; background: transparent; color: var(--fg); font: inherit; font-size: 16px; font-weight: 500; cursor: pointer; }
+  .sel-more button:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
   /* Phones: the bar replaces the chat header; icons only, big targets. */
   @media (max-width: 720px) {
     .chat-header.under-sel { display: none; }
@@ -6351,7 +6359,7 @@
     .sel-act span { display: none; }
     .sel-act { width: 44px; height: 44px; padding: 0; justify-content: center; border-radius: 50%; color: var(--fg); }
     .sel-act svg { width: 22px; height: 22px; }
-    .sel-act.danger { color: #ff6b6b; }
+    .sel-act.danger { color: var(--danger); }
   }
 
   /* Swipe to reply: an arrow fades in at the right edge as the message slides. */
@@ -6390,25 +6398,39 @@
   .sel-check :global(svg) { width: 12px; height: 12px; color: #06070C; }
 
   /* --- Custom (non-Chromium) context menu --- */
+  /* Telegram / AyuGram: three separate cards of one width — the reaction
+     strip, the actions, then reply/copy/forward/delete as icons. */
   .ctx-menu {
     position: fixed;
     z-index: 120;
-    min-width: 170px;
-    background: var(--bg-surface-2);
-    border: 1px solid var(--border-strong);
-    border-radius: calc(10px * var(--rk, 1));
-    padding: 5px;
-    box-shadow: 0 16px 40px -10px rgba(0,0,0,0.6);
+    width: 236px;
+    display: flex; flex-direction: column; gap: 8px;
     animation: ctx-in 0.1s ease-out;
   }
+  .ctx-menu.touch { width: 262px; }
+  .ctx-card, .ctx-reactions {
+    background: color-mix(in srgb, var(--bg-surface-2) 94%, transparent);
+    backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+    border: 1px solid var(--border);
+    border-radius: calc(16px * var(--rk, 1));
+    box-shadow: 0 14px 36px -12px rgba(0,0,0,0.55);
+  }
+  .ctx-card { padding: 4px 0; display: flex; flex-direction: column; }
+  .ctx-quick { flex-direction: row; justify-content: space-around; padding: 4px; }
+  .ctx-quick button {
+    flex: 1; height: 46px; display: grid; place-items: center; border: none; background: transparent;
+    color: var(--fg); border-radius: calc(12px * var(--rk, 1)); cursor: pointer;
+  }
+  .ctx-quick button :global(svg) { width: 23px; height: 23px; }
+  .ctx-quick button:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
+  .ctx-quick button.danger { color: var(--danger); }
   @keyframes ctx-in { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: scale(1); } }
   /* Touch: Telegram-style pop with a soft spring, over a dimmed chat. */
   .ctx-menu.touch {
     transform-origin: top left;
     animation: ctx-pop 0.22s cubic-bezier(0.2, 0.9, 0.25, 1.12);
-    border-radius: calc(14px * var(--rk, 1));
   }
-  .ctx-menu.touch :global(.ctx-item) { padding-top: 11px; padding-bottom: 11px; }
+  .ctx-menu.touch :global(.ctx-item) { min-height: 50px; font-size: 16px; }
   @keyframes ctx-pop {
     from { opacity: 0; transform: scale(0.82) translateY(-6px); }
     60% { opacity: 1; }
@@ -6435,14 +6457,15 @@
   .msg.menu-target :global(.bubble) { animation: bubble-lift 0.22s cubic-bezier(0.2, 0.9, 0.25, 1.12) both; }
   @keyframes bubble-lift { from { transform: scale(1); } 50% { transform: scale(0.97); } to { transform: scale(1); } }
   .ctx-item {
-    display: block; width: 100%; text-align: left;
-    padding: 8px 12px; border: none; background: transparent;
-    color: var(--fg); font-size: 13px; font-weight: 500;
-    border-radius: calc(7px * var(--rk, 1)); cursor: pointer;
+    display: flex; align-items: center; gap: 18px; width: 100%; text-align: left;
+    min-height: 42px; padding: 0 16px 0 18px; border: none; background: transparent;
+    color: var(--fg); font: inherit; font-size: 14.5px; font-weight: 500; cursor: pointer;
   }
-  .ctx-item:hover { background: var(--accent-soft); color: var(--accent); }
-  .ctx-item.danger { color: #ff8f8f; }
-  .ctx-item.danger:hover { background: rgba(255,77,109,0.1); color: #ff6b6b; }
+  .ci-ic { width: 22px; height: 22px; flex-shrink: 0; color: var(--fg-muted); display: grid; place-items: center; }
+  .ci-ic :global(svg) { width: 22px; height: 22px; }
+  .ci-tx { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ctx-item:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
+  .ctx-item.danger, .ctx-item.danger .ci-ic { color: var(--danger); }
   .typing-ind { color: var(--accent); font-weight: 600; display: inline-flex; align-items: baseline; }
   /* "typing" + three dots that rise in turn (Telegram). */
   .tdots { display: inline-flex; gap: 2px; margin-left: 3px; }
@@ -6450,18 +6473,20 @@
   .tdots i:nth-child(2) { animation-delay: .15s; }
   .tdots i:nth-child(3) { animation-delay: .3s; }
   @keyframes tdot { 0%, 60%, 100% { opacity: .35; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
+  /* One line as wide as the menu; the rest scrolls sideways. */
   .ctx-reactions {
-    display: flex; gap: 2px; padding: 4px 4px 6px; margin-bottom: 4px;
-    border-bottom: 1px solid var(--border); flex-wrap: wrap;
+    display: flex; gap: 2px; padding: 6px 8px; align-items: center;
+    overflow-x: auto; scrollbar-width: none; border-radius: calc(26px * var(--rk, 1));
   }
+  .ctx-reactions::-webkit-scrollbar { display: none; }
   .ctx-emoji {
-    width: 30px; height: 30px; border: none; background: transparent;
-    border-radius: calc(8px * var(--rk, 1)); font-size: 17px; cursor: pointer; line-height: 1;
+    flex-shrink: 0; width: 34px; height: 34px; border: none; background: transparent;
+    border-radius: 50%; font-size: 24px; cursor: pointer; line-height: 1;
   }
   .ctx-emoji:hover { background: var(--bg-hover); transform: scale(1.15); }
   .ctx-emoji.pack { padding: 2px; }
   .ctx-emoji.more { font-size: 18px; color: var(--fg-muted); font-weight: 700; }
-  .ctx-reactions.expanded { max-height: 220px; overflow-y: auto; width: 272px; }
+  .ctx-reactions.expanded { max-height: 220px; overflow-y: auto; overflow-x: hidden; flex-wrap: wrap; border-radius: calc(16px * var(--rk, 1)); }
   .rc-media { width: 18px; height: 18px; display: inline-block; vertical-align: middle; }
 
   /* Reaction chips under a bubble */
@@ -6550,10 +6575,11 @@
 
   /* Read-receipt tick */
   .rr { display: inline-flex; align-items: center; }
-  /* Delivered: plain light ticks; read: accent double ticks, a bit bigger
-     so the difference is seen at a glance. */
-  .rr :global(svg) { width: 15px; height: 15px; color: color-mix(in srgb, var(--fg) 85%, transparent); }
-  .rr.read :global(svg) { width: 18px; height: 18px; color: var(--accent); }
+  /* Delivered: one tick; read: two ticks in the accent colour — one size,
+     like Telegram. */
+  /* Wins over ".bubble-meta svg" (12px), which squeezed the pair into one. */
+  .rr.rr :global(svg) { width: 21px; height: 15px; color: color-mix(in srgb, var(--fg) 85%, transparent); }
+  .rr.rr.read :global(svg) { color: var(--accent); }
 
   /* Pinned-message bar */
   .plain-note { color: #f5b14c; }
