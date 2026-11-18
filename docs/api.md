@@ -547,6 +547,7 @@ x-aqua-fed: <unix_ms>.<hex HMAC-SHA256(secret, METHOD "\n" PATH "\n" unix_ms "\n
 | `GET /v1/fed/backups?since=` | Метаданные резервных копий |
 | `GET /v1/fed/backup/:user` | Резервная копия |
 | `GET /v1/fed/media/:user/:kind` | Медиа профиля |
+| `GET /v1/fed/music/info` | Тег и имя Navidrome этого сервера: сервер сети сливает все Navidrome сети в одну музыку (поиск — у всех сразу, id чужих — `<тег>~<id>`) |
 | `GET /v1/fed/music/rest/:method` | Navidrome этого сервера для сервера сети без своего (только чтение) |
 | `GET /v1/fed/music/file/:what/:id` | Обложка (`cover`) или трек (`stream`, `download`) целиком |
 | `POST /v1/fed/deliver` | Доставить конверт получателю, подключённому к этому узлу |
