@@ -452,6 +452,9 @@ fn url_pairs(raw: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Percent-decoding for the network's query strings (fed.rs).
+pub fn pct(s: &str) -> String { pct_decode(s) }
+
 fn pct_decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());

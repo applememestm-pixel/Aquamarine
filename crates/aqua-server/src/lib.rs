@@ -2187,13 +2187,33 @@ async fn search_users(
 
 /// `GET /v1/groups/search?q=` — public groups and channels by @name or title.
 async fn search_groups(State(state): State<AppState>, Query(q): Query<SearchQuery>) -> Json<Vec<serde_json::Value>> {
-    Json(state.directory.search_groups(&q.q, 20))
+    let mut out = state.directory.search_groups(&q.q, 20);
+    // The network's too: @names are one namespace across it.
+    if let Some(f) = fed::registry(&state) {
+        let path = format!("/v1/fed/groups/search?q={}", q.q.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect::<String>());
+        for v in f.ask_all(&path).await {
+            for g in v.as_array().cloned().unwrap_or_default() {
+                if !out.iter().any(|o| o["username"] == g["username"]) { out.push(g); }
+            }
+        }
+    }
+    out.truncate(30);
+    Json(out)
+}
+
+/// A public group / channel by @name: this relay's, else one of the network's.
+async fn find_group_name(state: &AppState, name: &str) -> Option<serde_json::Value> {
+    if let Some(g) = state.directory.group_by_name(name) { return Some(g); }
+    let n: String = name.trim().trim_start_matches('@').to_lowercase().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '.').collect();
+    if n.is_empty() { return None; }
+    let f = fed::registry(state)?;
+    f.ask_all(&format!("/v1/fed/groups/by-name/{n}")).await.into_iter().next()
 }
 
 /// `GET /v1/groups/by-name/:name` — a public group / channel by its @name:
 /// its id, title, kind and whom to ask to join.
 async fn group_by_name(State(state): State<AppState>, Path(name): Path<String>) -> Result<Json<serde_json::Value>, StatusCode> {
-    state.directory.group_by_name(&name).map(Json).ok_or(StatusCode::NOT_FOUND)
+    find_group_name(&state, &name).await.map(Json).ok_or(StatusCode::NOT_FOUND)
 }
 
 #[derive(Deserialize)]
@@ -2214,6 +2234,12 @@ async fn set_group_name(State(state): State<AppState>, Caller(dh): Caller, Json(
     let owner = state.directory.username_for_identity(&dh).ok_or((StatusCode::FORBIDDEN, "no account".into()))?;
     if b.name.trim().is_empty() {
         return Ok(Json(serde_json::json!({ "ok": state.directory.release_group_name(b.gid.trim(), &owner) })));
+    }
+    // Taken by another group somewhere in the network: not here either.
+    if let Some(other) = find_group_name(&state, &b.name).await {
+        if other["gid"].as_str() != Some(b.gid.trim()) {
+            return Err((StatusCode::CONFLICT, directory::DirError::UsernameTaken.to_string()));
+        }
     }
     let name = state.directory.claim_group_name(&b.name, b.gid.trim(), &b.title, &b.kind, &owner).map_err(|e| {
         let code = match e { directory::DirError::UsernameTaken => StatusCode::CONFLICT, directory::DirError::NotOwner => StatusCode::FORBIDDEN, _ => StatusCode::BAD_REQUEST };

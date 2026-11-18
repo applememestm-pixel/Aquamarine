@@ -2133,7 +2133,7 @@ async fn attach_file_fwd(
     // Groups / channels: the blob is uploaded once; the offer (with the
     // file key) fans out to every member over their own E2EE sessions.
     if peer_id.starts_with("grp_") {
-        let r = group_send(app.clone(), state.clone(), peer_id.clone(), offer_text.clone()).await?;
+        let r = group_send(app.clone(), state.clone(), peer_id.clone(), offer_text.clone(), None).await?;
         {
             let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(book) = s.chats.get_mut(&peer_id) {
@@ -3523,7 +3523,9 @@ pub async fn group_send(
     state: State<'_, StdMutex<AppState>>,
     gid: String,
     body: String,
+    silent: Option<bool>,
 ) -> Result<SendResult, String> {
+    let silent = silent.unwrap_or(false);
     let (me, group, room) = {
         let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let g = s.groups.get(&gid).cloned().ok_or("unknown group")?;
@@ -3570,7 +3572,9 @@ pub async fn group_send(
     // Fan out in the background, to all members at once.
     let wire = format!(
         "{GRPMSG_PREFIX}{}",
-        serde_json::json!({ "gid": gid, "author": me, "body": body, "room": room_id })
+        // `sil`: a silent post (the channel's 🔔 off) — no sound, no notification.
+        if silent { serde_json::json!({ "gid": gid, "author": me, "body": body, "room": room_id, "sil": true }) }
+        else { serde_json::json!({ "gid": gid, "author": me, "body": body, "room": room_id }) }
     );
     let members: Vec<String> = group.members.iter().filter(|m| m.username != me).map(|m| m.username.clone()).collect();
     group_outbox(&app).send((members, wire)).map_err(|_| "the sending queue stopped".to_string())?;
@@ -3859,6 +3863,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
             // "author" field can't impersonate someone else.
             let author = from.to_string();
             let inner = v.get("body").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let silent = v.get("sil").and_then(|x| x.as_bool()) == Some(true);
             if gid.is_empty() { return true; }
             let time = hhmm_now();
             {
@@ -3914,10 +3919,12 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                     }
                 }
             }
-            crate::bgnotify::incoming(&app, &gid);
+            // A silent post: in the chat and the list, but no sound / notification
+            // (an incoming without text doesn't ring — stores.ts).
+            if !silent { crate::bgnotify::incoming(&app, &gid); }
             let _ = app.emit("aqua://incoming", IncomingEventPayload {
                 peer_id: gid,
-                text: inner,
+                text: if silent { String::new() } else { inner },
                 time,
                 is_new_chat: false,
             });

@@ -49,7 +49,7 @@
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { icons } from "../icons";
   import { fromEdge } from "../tabSwipe";
-  import { activeChat, activeMessages, drafts, activeId, sendCurrent, loadActiveMessages, info, chats } from "../stores";
+  import { activeChat, activeMessages, drafts, activeId, sendCurrent, loadActiveMessages, info, chats, silentChans } from "../stores";
   import { meshStatus, meshSyncNow, nearbyVia } from "../mesh";
   import { noShare, setNoShare, startNoShare } from "../noShare";
   import { isLive, livePlay } from "../liveMotion";
@@ -4836,6 +4836,12 @@
       {#if isChannel && liveChat}
         <!-- A channel (Telegram): one bar — who posts, stickers, the text, 📎, the round button. -->
         <span class="cb-ava" style:background-image={$myProfile.avatar_url ? `url("${$myProfile.avatar_url}")` : undefined}>{$myProfile.avatar_url ? "" : (myUsername || "?").charAt(0).toUpperCase()}</span>
+        <!-- 🔔: subscribers get a sound / a notification; off — a silent post. -->
+        <button class="cb-bell" class:off={!!$silentChans[$activeChat?.id ?? ""]} aria-pressed={!!$silentChans[$activeChat?.id ?? ""]}
+          title={$t($silentChans[$activeChat?.id ?? ""] ? "Silent: subscribers get no sound" : "Subscribers get a notification")}
+          onclick={() => { const id = $activeChat?.id; if (!id) return; const off = !$silentChans[id]; silentChans.update((m) => ({ ...m, [id]: off })); showToast(tr(off ? "Posts go out silent" : "Posts notify subscribers")); }}>
+          {#if $silentChans[$activeChat?.id ?? ""]}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13.7 21a2 2 0 0 1-3.4 0"/><path d="M18.6 13A17.9 17.9 0 0 1 18 8"/><path d="M6.3 6.3A5.9 5.9 0 0 0 6 8c0 7-3 9-3 9h14"/><path d="M18 8a6 6 0 0 0-9.3-5"/><path d="M2 2l20 20"/></svg>{:else}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>{/if}
+        </button>
       {/if}
       {#if botMenu}
         <button class="bot-menu-btn" onclick={() => { if ($activeChat && botMenu) openMiniApp({ bot: $activeChat.id, url: botMenu.url, from: "menu" }); }} title={botMenu.url}>
@@ -6778,6 +6784,9 @@
   .chan-bar .input-wrap { order: 1; background: transparent; border: none; box-shadow: none !important; padding-left: 4px; align-items: center; }
   .chan-bar .input-wrap > .emoji-in { order: -1; }
   .chan-bar .attach-wrap { order: 2; }
+  .chan-bar .cb-bell { order: 1; width: 38px; height: 38px; border: none; background: transparent; color: var(--fg-muted); border-radius: 50%; display: grid; place-items: center; cursor: pointer; flex-shrink: 0; }
+  .chan-bar .cb-bell.off { color: var(--fg-dim); }
+  .chan-bar .cb-bell :global(svg) { width: 21px; height: 21px; }
   .chan-bar .attach-btn { background: transparent; border: none; border-radius: 50%; }
   .chan-bar .send-btn { order: 3; border-radius: 50%; }
   .composer::before, .chat-header::before {

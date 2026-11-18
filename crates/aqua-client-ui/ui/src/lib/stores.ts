@@ -497,6 +497,11 @@ export async function loadActiveMessages() {
  * Returns `null` on success, or a human-readable error string on failure
  * (the caller is expected to show it as a toast and restore the input).
  */
+/** Channels whose posts go out silent (the 🔔 in the channel's bar is off):
+ *  no sound and no notification for the subscribers. Per channel, this device. */
+export const silentChans = writable<Record<string, boolean>>((() => { try { return JSON.parse(localStorage.getItem("aqua.silentChans") ?? "{}"); } catch { return {}; } })());
+silentChans.subscribe((v) => { try { localStorage.setItem("aqua.silentChans", JSON.stringify(v)); } catch { /* private mode */ } });
+
 export async function sendCurrent(text: string): Promise<string | null> {
   const id = get(activeId);
   if (!id) return "No chat selected";
@@ -504,7 +509,7 @@ export async function sendCurrent(text: string): Promise<string | null> {
   try {
     // Groups fan the message out to every member; 1:1 uses the direct path.
     if (id.startsWith("grp_")) {
-      await api.groupSend(id, text);
+      await api.groupSend(id, text, !!get(silentChans)[id]);
     } else {
       await api.sendMessage(id, text);
     }
