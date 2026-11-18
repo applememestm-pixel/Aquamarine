@@ -58,7 +58,7 @@
   import Welcome from "./Welcome.svelte";
   import { settings } from "../theme";
   import { api, assetUrl, sendChatControl } from "../tauri";
-  import { openFingerprint, verifiedKeys, keyState } from "./FingerprintModal.svelte";
+  import { openFingerprint, verifiedKeys, keyState, verifiedBy, noteKeyOk, sendKeyOk, sunState } from "./FingerprintModal.svelte";
   import { showToast } from "./Toast.svelte";
   import { pluginCommands, pluginsOnSend, runPluginCommand, pluginButtons, pressPluginButton } from "../plugins";
   import { ATTACH_ITEMS, attachFront, attachHidden, attachDock, attachBots, toggleAttachBot, type AttachId } from "../attachMenu";
@@ -1083,6 +1083,8 @@
     let unPres: (() => void) | null = null;
     events.onPresence((p) => { setPeerPresence(p.from, p.presence ?? {}); notePeerProfileVersion(p.from, p.presence?.pv); })
       .then((u) => { unPres = u; });
+    let unKeyOk: (() => void) | null = null;
+    events.onKeyOk((p) => noteKeyOk(p.from, p.code, p.on)).then((u) => { unKeyOk = u; });
     let unReact: (() => void) | null = null;
     events.onReaction((p) => { if (p.react?.key && p.react?.emoji) applyPeerReaction(p.react.key, p.react.emoji, !!p.react.add); })
       .then((u) => { unReact = u; });
@@ -1109,6 +1111,7 @@
       if (unClose) unClose();
       if (unSeen) unSeen();
       if (unPres) unPres();
+      if (unKeyOk) unKeyOk();
       if (unReact) unReact();
     };
   });
@@ -1553,7 +1556,7 @@
     if (!c) return;
     try {
       const view = await api.verifyFingerprint(c.id);
-      peerKey = { id: c.id, key: view.peer_key };
+      peerKey = { id: c.id, key: view.peer_key, hex: view.hex };
       openFingerprint(view, c.id);
     } catch (e) {
       showToast(tr(String(e)));
@@ -1562,15 +1565,26 @@
 
   // Key check: every encrypted one-to-one chat gets the shield; it fills in
   // once the words were compared, and turns amber if the key changed since.
-  let peerKey = $state<{ id: string; key: string | null } | null>(null);
+  let peerKey = $state<{ id: string; key: string | null; hex?: string } | null>(null);
   const e2eePeer = $derived(!!$activeChat && $activeChat.live && $activeChat.has_lock && !$activeChat.id.startsWith("grp_") && $activeChat.id !== "__saved__");
   $effect(() => {
     const id = e2eePeer ? $activeChat?.id : null;
     if (!id) { peerKey = null; return; }
-    api.verifyFingerprint(id).then((v) => { if ($activeChat?.id === id) peerKey = { id, key: v.peer_key }; })
+    api.verifyFingerprint(id).then((v) => { if ($activeChat?.id === id) peerKey = { id, key: v.peer_key, hex: v.hex }; })
       .catch(() => { if ($activeChat?.id === id) peerKey = { id, key: null }; });
   });
   const keyCheck = $derived(peerKey && peerKey.id === $activeChat?.id ? keyState(peerKey.id, peerKey.key, $verifiedKeys) : "unverified");
+  // The CeZeOs sun in the header (instead of the shield): half until the code
+  // is compared, whole once BOTH marked it (each side tells the other, [keyok:v1]).
+  const sun = $derived(peerKey && peerKey.id === $activeChat?.id ? sunState(peerKey.id, peerKey.key, peerKey.hex, $verifiedKeys, $verifiedBy) : "none");
+  // Marked before the other side could hear it (older builds): tell them once a run.
+  const toldKeyOk = new Set<string>();
+  $effect(() => {
+    const pk = peerKey;
+    if (!pk?.hex || keyCheck !== "verified" || toldKeyOk.has(pk.id + pk.hex)) return;
+    toldKeyOk.add(pk.id + pk.hex);
+    sendKeyOk(pk.id, pk.hex, true);
+  });
 
   // ---- Message grouping ----
 
@@ -3781,13 +3795,15 @@
             {#if $clans[$activeChat.id]}<span class="hdr-clan"><ClanTag tag={$clans[$activeChat.id]} /></span>{/if}
           {/if}
           {#if e2eePeer}
-            <button class="verified-btn key-{keyCheck}" onclick={openPeerFingerprint}
-              title={$t(keyCheck === "verified" ? "Key verified" : keyCheck === "changed" ? "Key changed — check again" : "Verify key")}
+            <button class="verified-btn key-sun sun-{sun}" onclick={openPeerFingerprint}
+              title={$t(sun === "both" ? "Key verified by both of you" : sun === "mine" ? "You verified the key — waiting for {name}" : sun === "changed" ? "Key changed — check again" : "Verify key", { name: $activeChat.name })}
               aria-label={$t("Verify key")}>
-              {#if keyCheck === "verified"}
-                <span class="verified-badge">{@html icons.verified}</span>
+              {#if sun === "both"}
+                <!-- Whole sun: both compared the code. -->
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="4.6" fill="currentColor"/><path d="M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M5.3 5.3l1.7 1.7M17 17l1.7 1.7M5.3 18.7 7 17M17 7l1.7-1.7"/></svg>
               {:else}
-                <svg class="key-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>{#if keyCheck === "changed"}<path d="M12 8v4"/><path d="M12 16h.01"/>{/if}</svg>
+                <!-- Half a sun rising: compare the code (filled once I did). -->
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M7 17a5 5 0 0 1 10 0z" fill={sun === "mine" ? "currentColor" : "none"}/><path d="M3 20h18M12 6.5v2.4M4.6 10.6l1.7 1.7M19.4 10.6l-1.7 1.7M2.5 17h1.8M19.7 17h1.8"/>{#if sun === "changed"}<path d="M12 12.6v1.6"/>{/if}</svg>
               {/if}
             </button>
           {:else if $activeChat.verified}
@@ -5275,6 +5291,13 @@
   .e2ee-btn { background: none; border: none; padding: 0; font: inherit; color: inherit; cursor: pointer; }
   .e2ee-btn:hover { text-decoration: underline; }
   .key-shield { width: 15px; height: 15px; color: var(--fg-dim); opacity: .8; }
+  /* The CeZeOs sun: the theme's accent; dim until the code is compared. */
+  .key-sun svg { width: 17px; height: 17px; display: block; }
+  .sun-none svg { color: var(--fg-dim); opacity: .85; }
+  .verified-btn.sun-none:hover svg { color: var(--accent); opacity: 1; }
+  .sun-mine svg, .sun-both svg { color: var(--accent); }
+  .sun-both svg { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 60%, transparent)); }
+  .sun-changed svg { color: var(--warn, #F0B232); }
   .verified-btn:hover .key-shield { color: var(--accent); opacity: 1; }
   .key-changed .key-shield { color: #F0B232; opacity: 1; }
   .verified-btn {

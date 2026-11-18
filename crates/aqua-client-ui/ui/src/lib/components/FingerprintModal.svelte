@@ -21,6 +21,27 @@
     return k === key ? "verified" : "changed";
   }
 
+  /** peer id → the safety code (hex) THEY compared and marked ([keyok:v1]).
+   *  Both marked, same code as now = a whole sun in the chat header. */
+  const BY_KEY = "aqua.verifiedBy.v1";
+  export const verifiedBy = writable<Record<string, string>>((() => { try { return JSON.parse(localStorage.getItem(BY_KEY) || "{}"); } catch { return {}; } })());
+  verifiedBy.subscribe((v) => { try { localStorage.setItem(BY_KEY, JSON.stringify(v)); } catch { /* storage blocked */ } });
+  export function noteKeyOk(from: string, code: string, on: boolean) {
+    verifiedBy.update((m) => { const n = { ...m }; if (on && code) n[from] = code.replace(/\s+/g, "").toLowerCase(); else delete n[from]; return n; });
+  }
+  /** Tell the peer I marked (or unmarked) our code — their sun follows. */
+  export function sendKeyOk(peerId: string, hex: string, on: boolean) {
+    const body = JSON.stringify({ c: hex.replace(/\s+/g, "").toLowerCase(), on });
+    void import("../tauri").then(({ api }) => api.sendControl(peerId, "[keyok:v1]" + body)).catch(() => {});
+  }
+  /** Sun: "none" not compared, "mine" I compared, "both" both did (same code), "changed" the key changed. */
+  export function sunState(peerId: string, key: string | null | undefined, hex: string | null | undefined, known: Record<string, string>, by: Record<string, string>): "none" | "mine" | "both" | "changed" {
+    const k = keyState(peerId, key, known);
+    if (k === "changed") return "changed";
+    if (k !== "verified") return "none";
+    return hex && by[peerId] === hex.replace(/\s+/g, "").toLowerCase() ? "both" : "mine";
+  }
+
   export function openFingerprint(v: FingerprintView, peerId = "") {
     view.set(v);
     peer.set(peerId);
@@ -61,13 +82,14 @@
 
   function markVerified() {
     const v = get(view), id = get(peer);
-    if (v && id) verifiedKeys.update((m) => ({ ...m, [id]: v.peer_key }));
+    if (v && id) { verifiedKeys.update((m) => ({ ...m, [id]: v.peer_key })); sendKeyOk(id, v.hex, true); }
     closeFingerprint();
     showToast(tr("{name}'s key marked verified", { name: v?.peer_name ?? "" }));
   }
   function unverify() {
-    const id = get(peer);
+    const id = get(peer), v = get(view);
     verifiedKeys.update((m) => { const n = { ...m }; delete n[id]; return n; });
+    if (id && v) sendKeyOk(id, v.hex, false);
     closeFingerprint();
   }
 </script>
@@ -87,6 +109,11 @@
         <p class="fp-warn">{$t("{name}'s key has changed since you verified it. That happens after reinstalling the app or signing in anew — or when someone is trying to read the chat. Compare the words again.", { name: $view.peer_name })}</p>
       {:else if kstate === "verified"}
         <p class="fp-ok">{$t("Verified: these words matched on both phones.")}</p>
+        {#if $peer && $verifiedBy[$peer] === $view.hex.replace(/\s+/g, "").toLowerCase()}
+          <p class="fp-ok">☀ {$t("{name} verified your key too — the sun is whole.", { name: $view.peer_name })}</p>
+        {:else}
+          <p>{$t("When {name} marks it on their side too, the sun becomes whole for both of you.", { name: $view.peer_name })}</p>
+        {/if}
       {/if}
       <p>{$t("Open this window in the same chat on {name}'s device — in person, or over a call where you know the voice. If the words are the same on both screens, nobody stands between you.", { name: $view.peer_name })}</p>
       <div class="fp-grid">

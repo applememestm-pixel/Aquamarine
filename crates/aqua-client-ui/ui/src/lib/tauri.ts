@@ -400,6 +400,8 @@ export const events = {
   onPollClose:       (fn: (p: { from: string; close: { poll: string }; gid?: string }) => void) =>
     listen<{ from: string; close: { poll: string }; gid?: string }>("aqua://poll_close", (e) => fn(e.payload)),
   onSeen:            (fn: (p: { from: string }) => void)   => listen<{ from: string }>("aqua://seen", (e) => fn(e.payload)),
+  onKeyOk:           (fn: (p: { from: string; code: string; on: boolean }) => void) =>
+    listen<{ from: string; code: string; on: boolean }>("aqua://keyok", (e) => fn(e.payload)),
   onPresence:        (fn: (p: { from: string; presence: import("./presence").Presence }) => void) =>
     listen<{ from: string; presence: import("./presence").Presence }>("aqua://presence", (e) => fn(e.payload)),
   onActivity:        (fn: (a: Activity[]) => void) => listen<Activity[]>("aqua://activity", (e) => fn(e.payload)),

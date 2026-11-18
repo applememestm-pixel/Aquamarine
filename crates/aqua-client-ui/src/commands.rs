@@ -3125,6 +3125,10 @@ pub const CALL_PREFIX: &str = "AQUA-CALL:v1:";
 pub const POLLVOTE_PREFIX: &str = "[pollvote:v1]";
 pub const POLLCLOSE_PREFIX: &str = "[pollclose:v1]";
 pub const SEEN_PREFIX: &str = "[seen:v1]";
+/// "I compared our safety code and marked your key verified" (or took it
+/// back): `{"c": <the code's hex>, "on": bool}`. Both sides marked = a
+/// whole sun in the chat header (FingerprintModal.svelte).
+pub const KEYOK_PREFIX: &str = "[keyok:v1]";
 pub const STATUS_PREFIX: &str = "[status:v1]";
 /// "Listen together" (ui/src/lib/music.ts): the host's player state —
 /// track, position, play/pause — for the peers following along.
@@ -3699,7 +3703,7 @@ pub fn own_device_message(app: &AppHandle, to: &str, inner: &str) {
     // Something "to me" from my own other device isn't a chat with myself.
     if to == me || to.is_empty() { return; }
     // Per-device state (typing, read marks, presence…) isn't mirrored.
-    for p in [CALL_PREFIX, POLLVOTE_PREFIX, POLLCLOSE_PREFIX, SEEN_PREFIX, STATUS_PREFIX, REACT_PREFIX, TYPING_PREFIX, LISTEN_PREFIX] {
+    for p in [CALL_PREFIX, POLLVOTE_PREFIX, POLLCLOSE_PREFIX, SEEN_PREFIX, STATUS_PREFIX, REACT_PREFIX, TYPING_PREFIX, LISTEN_PREFIX, KEYOK_PREFIX] {
         if inner.starts_with(p) { return; }
     }
     if !s.chats.contains_key(to) {
@@ -4350,7 +4354,7 @@ pub(crate) fn is_control_text(text: &str) -> bool {
             EDIT_PREFIX, DEL_PREFIX, REN_PREFIX, CTL_PREFIX, GCALL_PREFIX, GRPINFO_PREFIX, GRPSELF_PREFIX,
             GRPJOIN_PREFIX, GRPLEAVE_PREFIX, GRPCTL_PREFIX, GRPMSG_PREFIX, CDM_PREFIX, crate::autodelete::TTL_PREFIX,
             crate::history_sync::HPOKE_PREFIX, crate::history_sync::HKEYREQ_PREFIX, crate::history_sync::HKEY_PREFIX,
-            crate::devtrust::DEVOK_PREFIX, crate::devtrust::DEVNO_PREFIX, READ_PREFIX,
+            crate::devtrust::DEVOK_PREFIX, crate::devtrust::DEVNO_PREFIX, READ_PREFIX, KEYOK_PREFIX,
             "[hist:v1]", "[histack:v1]"]
             .iter().any(|p| text.starts_with(p))
 }
@@ -4489,6 +4493,14 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
         }
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
             let _ = app.emit("aqua://ctl", serde_json::json!({ "from": from, "chat": from, "body": v }));
+        }
+        return;
+    }
+
+    // The peer compared our safety code (or took the mark back).
+    if let Some(body) = text.strip_prefix(KEYOK_PREFIX) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
+            let _ = app.emit("aqua://keyok", serde_json::json!({ "from": from, "code": v["c"].as_str().unwrap_or(""), "on": v["on"].as_bool().unwrap_or(false) }));
         }
         return;
     }
