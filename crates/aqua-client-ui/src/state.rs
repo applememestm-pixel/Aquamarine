@@ -918,7 +918,13 @@ impl AppState {
         for (id, summary, mut messages) in crate::history::load_all(&vault) {
             // Older versions could store a presence or typing signal that
             // opened a session as a bubble ("[status:v1]{…}"). Drop those.
+            let before = messages.len();
             messages.retain(|m| !stray_control(m));
+            // The chat list showed it too: the preview follows the last real message.
+            let mut summary = summary;
+            if messages.len() != before && crate::commands::is_control_text(summary.preview.trim_start()) {
+                summary.preview = messages.last().map(|m| preview_for(&m.kind)).unwrap_or_default();
+            }
             // Not "written" yet as far as the flush knows: 0 never matches.
             hist_hashes.insert(id.clone(), 0);
             match chats.get_mut(&id) {
