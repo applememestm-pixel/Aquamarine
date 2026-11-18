@@ -2107,6 +2107,26 @@
   }
   .folder-tab:hover { color: var(--fg); background: var(--bg-hover); }
   .folder-tab.active { color: var(--accent); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 25%, transparent); }
+  /* Chips: the open folder is a notebook tab like the open chat — it runs down
+     into the strip's bottom line, which takes the accent (drawn as a background:
+     the strip scrolls, and a border would sit outside the tab's reach). */
+  .folder-strip:not(.fs-pills):not(.fs-text) {
+    --tab: color-mix(in srgb, var(--accent) 15%, var(--bg-list));
+    border-bottom: none;
+    background: linear-gradient(color-mix(in srgb, var(--accent) 42%, var(--border)), color-mix(in srgb, var(--accent) 42%, var(--border))) bottom / 100% 1px no-repeat;
+  }
+  .folder-strip:not(.fs-pills):not(.fs-text) .folder-tab.active {
+    position: relative;
+    background: var(--tab); border-color: transparent;
+    padding-bottom: 13px; margin-bottom: -8px;
+    border-radius: calc(12px * var(--rk, 1)) calc(12px * var(--rk, 1)) 0 0;
+  }
+  .folder-strip:not(.fs-pills):not(.fs-text) .folder-tab.active::before,
+  .folder-strip:not(.fs-pills):not(.fs-text) .folder-tab.active::after {
+    content: ""; position: absolute; bottom: 0; width: 10px; height: 10px; pointer-events: none;
+  }
+  .folder-strip:not(.fs-pills):not(.fs-text) .folder-tab.active::before { left: -10px; background: radial-gradient(circle at 0 0, transparent 9.5px, var(--tab) 10px); }
+  .folder-strip:not(.fs-pills):not(.fs-text) .folder-tab.active::after { right: -10px; background: radial-gradient(circle at 100% 0, transparent 9.5px, var(--tab) 10px); }
   .ft-emoji { margin-right: 4px; }
   .snow { position: absolute; inset: 0; z-index: 4; pointer-events: none; overflow: hidden; }
   .snow i { position: absolute; top: -10px; width: var(--s); height: var(--s); border-radius: 50%; background: #fff; opacity: .75; filter: blur(.4px);
