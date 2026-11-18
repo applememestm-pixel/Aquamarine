@@ -81,6 +81,11 @@ fn slots(base: &Path) -> Vec<String> {
     out
 }
 
+/// The @username whose keys a logged-out slot still holds (`last-account.json`).
+fn kept_name(dir: &Path) -> Option<String> {
+    read_json(dir.join(crate::state::LAST_ACCOUNT_FILE))["username"].as_str().map(str::to_string)
+}
+
 fn read_json(path: PathBuf) -> serde_json::Value {
     std::fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
 }
@@ -115,7 +120,7 @@ pub fn accounts_list(app: AppHandle) -> Result<Vec<AccountSlot>, String> {
             let conn = read_json(dir.join("connection.json"));
             let registered = acct["registered"].as_bool().unwrap_or(false);
             let username = acct["username"].as_str().or_else(|| conn["username"].as_str()).map(str::to_string);
-            let last = read_json(dir.join(crate::state::LAST_ACCOUNT_FILE))["username"].as_str().map(str::to_string);
+            let last = kept_name(&dir);
             AccountSlot {
                 last,
                 has_keys: dir.join("vault.sqlite").is_file(),
@@ -146,8 +151,10 @@ pub fn account_switch(app: AppHandle, slot: String, store: String) -> Result<Swi
     let target = if slot == "new" {
         let all = slots(&base);
         let registered = |s: &str| read_json(dir_of(&base, s).join("account.json"))["registered"].as_bool().unwrap_or(false);
-        // An "Add account" left unfinished: back to it, not one more.
-        if let Some(s) = all.iter().find(|s| **s != cur && !registered(s)) {
+        // An "Add account" left unfinished: back to it, not one more. Not a
+        // slot that was logged out of: its keys are that account's (one
+        // account per key — a new one couldn't sign up there).
+        if let Some(s) = all.iter().find(|s| **s != cur && !registered(s) && kept_name(&dir_of(&base, s)).is_none()) {
             s.clone()
         } else if all.len() >= MAX_ACCOUNTS {
             return Err(format!("max-accounts:{MAX_ACCOUNTS}"));
@@ -202,6 +209,11 @@ pub fn account_forget(app: AppHandle, slot: String) -> Result<(), String> {
     let dir = dir_of(&base, &slot);
     if read_json(dir.join("account.json"))["registered"].as_bool().unwrap_or(false) {
         return Err("log out of this account first".into());
+    }
+    // Logged out, but the keys are still that account's: removing them is
+    // losing it (without two-step verification nothing else signs in).
+    if let Some(u) = kept_name(&dir) {
+        return Err(format!("kept-keys:{u}"));
     }
     std::fs::remove_dir_all(dir).map_err(|e| e.to_string())
 }

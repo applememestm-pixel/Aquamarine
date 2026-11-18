@@ -163,7 +163,11 @@
     try { await switchAccount(slot); } catch (e) { switching = false; showToast(String(e)); }
   }
   async function forgetAccount(slot: string) {
-    try { await api.accountForget(slot); await loadAccounts(); } catch (e) { showToast(String(e)); }
+    // An older logged-out slot doesn't say whose keys it holds: removing it
+    // removes them — say so before.
+    if (!confirm(tr("Remove this account slot from the phone? If an account was signed in here, its keys go too, and an account without two-step verification can't be signed into again."))) return;
+    try { await api.accountForget(slot); await loadAccounts(); }
+    catch (e) { const m = /kept-keys:(\S+)/.exec(String(e)); showToast(m ? tr("@{u}'s keys are in this slot — sign in to it instead of removing it.", { u: m[1] }) : String(e)); }
   }
   // Back closes the sheets and the preview (lib/back.ts).
   $effect(() => { if (accountsOpen) return onBack(() => (accountsOpen = false)); });
@@ -1630,12 +1634,12 @@
               {#if a.active && $profile.avatar_url}<img src={$profile.avatar_url} alt="" />{:else}{(a.username || "?").charAt(0).toUpperCase()}{/if}
             </span>
             <span class="acc-who">
-              <span class="acc-name">{a.username ? "@" + a.username : $t("Not signed in")}</span>
-              <span class="acc-sub">{hostOf(a.server_url) || $t("Sign-in not finished")}</span>
+              <span class="acc-name">{a.username ? "@" + a.username : a.last ? "@" + a.last : $t("Not signed in")}</span>
+              <span class="acc-sub">{a.last && !a.registered ? $t("Logged out — its keys are here, tap to sign in") : hostOf(a.server_url) || $t("Sign-in not finished")}</span>
             </span>
             {#if a.active}<span class="acc-tick">{@html icons.check}</span>{/if}
           </button>
-          {#if !a.active && !a.registered && a.slot}
+          {#if !a.active && !a.registered && !a.last && a.slot}
             <button class="acc-x" onclick={() => forgetAccount(a.slot)} aria-label={$t("Remove")} title={$t("Remove")}>×</button>
           {/if}
         </div>
