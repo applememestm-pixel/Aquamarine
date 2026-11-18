@@ -3893,6 +3893,13 @@
         </div>
       </div>
       <div class="chat-actions">
+        {#if isChannel && $activeChat}
+          <!-- Feed / chat view of a channel in one tap (exteraGram's "Feed"). -->
+          <button class="icon-btn" class:active={feedView} title={$t(feedView ? "Chat view" : "Feed view")} aria-pressed={feedView}
+            onclick={() => $activeChat && setFeedView($activeChat.id, !feedView)}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{#if feedView}<path d="M4 6h10M4 12h16M4 18h12"/>{:else}<rect x="3" y="3" width="18" height="8" rx="2"/><rect x="3" y="13" width="18" height="8" rx="2"/>{/if}</svg>
+          </button>
+        {/if}
         <button class="icon-btn" class:active={searchOpen} title={$t("Search in chat")} onclick={() => (searchOpen ? closeSearch() : openSearch())}>{@html icons.search}</button>
         {#if callChoices.length}
           <div class="ttl-wrap hdr-menu">

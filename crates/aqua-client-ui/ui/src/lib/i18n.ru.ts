@@ -1261,6 +1261,7 @@ export const RU: Record<string, string> = {
   "Formatting": "Форматирование",
   "Full screen": "На весь экран",
   "Broadcast": "Публикация",
+  "Ask to join {t} (@{n})?": "Попроситься в {t} (@{n})?",
   "Public @name": "Публичный @ник",
   "People find it by this @name in search and join with the link aqua://join/@name. 3–32 characters: a-z, 0-9, _ and dot.": "По этому @нику канал находят в поиске и вступают по ссылке aqua://join/@ник. 3–32 символа: a-z, 0-9, _ и точка.",
   "@name: 3–32 characters, a-z 0-9 _ . only": "@ник: 3–32 символа, только a-z 0-9 _ .",
