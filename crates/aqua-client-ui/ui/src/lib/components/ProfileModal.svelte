@@ -419,6 +419,11 @@
     const at = Math.max(0, avatarPages.indexOf(shownAvatar));
     openGallery(avatarPages.map((u) => ({ url: u, kind: isVideoUrl(u) ? "video" as const : "image" as const, name: view?.display_name, from: view?.display_name })), at);
   }
+  function openBanners() {
+    const list = bannerPages.length ? bannerPages : shownBanner ? [shownBanner] : [];
+    if (!list.length) return;
+    openGallery(list.map((u) => ({ url: u, kind: isVideoUrl(u) ? "video" as const : "image" as const, name: view?.display_name, from: view?.display_name })), Math.max(0, list.indexOf(shownBanner)));
+  }
   let bannerA = $derived((editing && isMe && draft) ? draft.banner_a : (view?.banner_a ?? "#4F7AFE"));
   let bannerB = $derived((editing && isMe && draft) ? draft.banner_b : (view?.banner_b ?? "#9B6CFF"));
   // Card colour: set by hand, else the banner picture's average colour,
@@ -683,7 +688,10 @@
         {/if}
       {/if}
       <div class="scroll">
-      <div class="banner" style:background={bannerBg}>
+      <!-- Tap the banner (not its buttons): every banner full screen. -->
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+      <div class="banner" class:zoom={!editing && !!shownBanner} style:background={bannerBg}
+        onclick={(e) => { if (!editing && shownBanner && !(e.target as HTMLElement).closest("button")) openBanners(); }}>
         {#if shownBanner && isVideoUrl(shownBanner)}
           <!-- Animated banner: silent short loop. -->
           <video class="banner-vid" use:streamSrc={shownBanner} muted loop autoplay playsinline></video>
@@ -1615,6 +1623,7 @@
   }
 
   /* A bigger banner (was 120 px). */
+  .banner.zoom { cursor: zoom-in; }
   .banner {
     height: 180px;
     position: relative;

@@ -28,6 +28,7 @@
   import { showToast } from "./Toast.svelte";
   import { profile, updateProfile } from "../profile";
   import { publishMyProfile, avatars } from "../people";
+  import { openLightbox } from "./Lightbox.svelte";
   import { mutedChats, setMuted } from "../chatPrefs";
   import { reactionPack, quickReactions, reactionUrl, parseReaction } from "../reactionPack";
   import { CLAN_BADGES, CLAN_COLORS, badgeSvg } from "../clanBadges";
@@ -608,13 +609,18 @@
       <div class="body">
       {#if page === "info"}
         {#if media.banner || group.accent}
-          <div class="gbanner" style:background={media.banner && !isVid(media.banner) ? `center / cover no-repeat url("${media.banner}")` : `linear-gradient(135deg, ${group.accent ?? "#223"}, color-mix(in srgb, ${group.accent ?? "#223"} 40%, #000))`}>
+          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+          <div class="gbanner" class:zoom={!!media.banner} onclick={() => { if (media.banner) openLightbox({ url: media.banner, kind: isVid(media.banner) ? "video" : "image", name: group.title }); }}
+            style:background={media.banner && !isVid(media.banner) ? `center / cover no-repeat url("${media.banner}")` : `linear-gradient(135deg, ${group.accent ?? "#223"}, color-mix(in srgb, ${group.accent ?? "#223"} 40%, #000))`}>
             {#if media.banner && isVid(media.banner)}<video class="gb-vid" use:streamSrc={media.banner} muted loop autoplay playsinline></video>{/if}
           </div>
         {/if}
         <div class="hero" class:over={!!(media.banner || group.accent)}>
           {#if media.photo}
-            <img class="ava img" src={media.photo} alt="" style:--ring={group.accent ?? "transparent"} />
+            <!-- Tap: the photo full screen (as in a person's profile). -->
+            <button class="ava-btn" onclick={() => { if (media.photo) openLightbox({ url: media.photo, kind: isVid(media.photo) ? "video" : "image", name: group.title }); }} aria-label={$t("Open")}>
+              <img class="ava img" src={media.photo} alt="" style:--ring={group.accent ?? "transparent"} />
+            </button>
           {:else}
             <span class="ava" style:background={group.gradient} style:--ring={group.accent ?? "transparent"}>{group.title.charAt(0).toUpperCase()}</span>
           {/if}
@@ -1214,6 +1220,8 @@
   .gb-vid { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; z-index: 0; }
   .me-banner { position: relative; overflow: hidden; }
   .me-banner > :global(button) { position: relative; z-index: 1; }
+  .gbanner.zoom { cursor: zoom-in; }
+  .ava-btn { padding: 0; border: none; background: none; cursor: zoom-in; border-radius: var(--ava-r, 50%); flex-shrink: 0; display: block; }
   .gbanner { position: relative; overflow: hidden; height: 120px; margin: -12px -14px 0; animation: gb-in .45s cubic-bezier(.2,.8,.2,1); }
   .hero.over { margin-top: -34px; position: relative; }
   .hero.over .ava { width: 76px; height: 76px; box-shadow: 0 0 0 4px var(--bg-shell), 0 0 0 6px var(--ring, transparent); }
