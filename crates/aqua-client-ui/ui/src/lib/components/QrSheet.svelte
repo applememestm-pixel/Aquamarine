@@ -67,7 +67,8 @@
 </div>
 
 <style>
-  .qs { position: fixed; inset: 0; z-index: 160; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+  /* Below the PC's own title bar (--tb-h; 0 on phones): the × sat under it. */
+  .qs { position: fixed; inset: var(--tb-h, 0px) 0 0 0; z-index: 160; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
     background: radial-gradient(120% 80% at 20% 0%, var(--a), transparent 70%), radial-gradient(120% 90% at 100% 100%, var(--b), transparent 70%), var(--c);
     animation: qs-in .28s cubic-bezier(.2,.9,.25,1); padding: calc(64px + var(--sat, 0px)) 16px calc(16px + var(--sab, 0px)); box-sizing: border-box; transition: background .4s; }
   @keyframes qs-in { from { opacity: 0; } }
@@ -89,8 +90,9 @@
   .qs-hint { position: relative; max-width: 300px; text-align: center; color: rgba(255,255,255,.85); font-size: 13px; }
   .qs-bottom { position: relative; width: min(420px, 100%); margin-top: auto; padding: 14px; border-radius: calc(22px * var(--rk, 1)); display: flex; flex-direction: column; gap: 12px;
     background: rgba(10, 12, 18, .55); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
-  .qs-themes { display: flex; gap: 10px; overflow-x: auto; scrollbar-width: none; padding: 3px; }
-  .qs-th { flex: 0 0 auto; width: 52px; height: 64px; border-radius: calc(14px * var(--rk, 1)); border: 2px solid transparent; cursor: pointer; display: grid; place-items: center; padding: 0; transition: transform .15s; }
+  /* All the themes fit the card's width (the last one was cut off). */
+  .qs-themes { display: flex; justify-content: center; gap: 8px; padding: 3px; }
+  .qs-th { flex: 1 1 0; min-width: 0; max-width: 56px; height: 64px; border-radius: calc(14px * var(--rk, 1)); border: 2px solid transparent; cursor: pointer; display: grid; place-items: center; padding: 0; transition: transform .15s; }
   .qs-th span { font-size: 22px; }
   .qs-th.on { border-color: #fff; transform: scale(1.04); }
   .qs-share { height: 48px; border: none; border-radius: calc(14px * var(--rk, 1)); background: linear-gradient(135deg, var(--a), var(--b)); color: #fff; font: 700 15.5px var(--font-ui, inherit); cursor: pointer; }
