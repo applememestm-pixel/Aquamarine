@@ -4868,10 +4868,12 @@
         {/if}
       </div>
     {/if}
-    <div class="composer" class:disabled={!liveChat} class:chan-bar={isChannel && liveChat} bind:this={composerBox}>
+    <div class="composer" class:disabled={!liveChat} class:chan-bar={isChannel && liveChat && IS_MOBILE} bind:this={composerBox}>
       {#if isChannel && liveChat}
-        <!-- A channel (Telegram): one bar — who posts, stickers, the text, 📎, the round button. -->
-        <span class="cb-ava" style:background-image={$myProfile.avatar_url ? `url("${$myProfile.avatar_url}")` : undefined}>{$myProfile.avatar_url ? "" : (myUsername || "?").charAt(0).toUpperCase()}</span>
+        <!-- A channel on a phone (Telegram): one bar — who posts, stickers, the
+             text, 📎, the round button. The PC keeps its usual field (the
+             owner's call), with only the 🔔 added. -->
+        {#if IS_MOBILE}<span class="cb-ava" style:background-image={$myProfile.avatar_url ? `url("${$myProfile.avatar_url}")` : undefined}>{$myProfile.avatar_url ? "" : (myUsername || "?").charAt(0).toUpperCase()}</span>{/if}
         <!-- 🔔: subscribers get a sound / a notification; off — a silent post. -->
         <button class="cb-bell" class:off={!!$silentChans[$activeChat?.id ?? ""]} aria-pressed={!!$silentChans[$activeChat?.id ?? ""]}
           title={$t($silentChans[$activeChat?.id ?? ""] ? "Silent: subscribers get no sound" : "Subscribers get a notification")}
@@ -5082,7 +5084,7 @@
         <RichComposer
           bind:this={composerEl}
           bind:value={text}
-          placeholder={liveChat ? (isChannel ? $t("Broadcast") : activeRoom ? $t("Message #{room}…", { room: activeRoom.name }) : $t("Message {name}…", { name: $activeChat.name.split(" ")[0] })) : $t("Start a real chat first — see the banner above")}
+          placeholder={liveChat ? (isChannel && IS_MOBILE ? $t("Broadcast") : activeRoom ? $t("Message #{room}…", { room: activeRoom.name }) : $t("Message {name}…", { name: $activeChat.name.split(" ")[0] })) : $t("Start a real chat first — see the banner above")}
           resolve={(k) => emojiMap[k]}
           oninput={onComposerInput}
           onkeydown={onKey}
@@ -6891,6 +6893,9 @@
   .chan-bar .input-wrap { order: 1; background: transparent; border: none; box-shadow: none !important; padding-left: 4px; align-items: center; }
   .chan-bar .input-wrap > .emoji-in { order: -1; }
   .chan-bar .attach-wrap { order: 2; }
+  .cb-bell { width: 38px; height: 38px; flex-shrink: 0; align-self: center; border: none; background: transparent; color: var(--fg-muted); border-radius: 50%; display: grid; place-items: center; cursor: pointer; }
+  .cb-bell.off { color: var(--fg-dim); }
+  .cb-bell :global(svg) { width: 21px; height: 21px; }
   .chan-bar .cb-bell { order: 1; width: 38px; height: 38px; border: none; background: transparent; color: var(--fg-muted); border-radius: 50%; display: grid; place-items: center; cursor: pointer; flex-shrink: 0; }
   .chan-bar .cb-bell.off { color: var(--fg-dim); }
   .chan-bar .cb-bell :global(svg) { width: 21px; height: 21px; }
