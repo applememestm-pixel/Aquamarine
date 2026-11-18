@@ -53,7 +53,7 @@
   import { fitWallpaper, followWallpaper } from "../theme";
   import SegFit from "./SegFit.svelte";
   import { BUILD, BUILD_SHORT, updatePrefs, updateState, checkUpdates } from "../updates";
-  import { settings, PALETTES, WALLPAPERS, EDITABLE_COLORS, THEMES, DEFAULTS, MENU_ALPHA, type Mode, type Density } from "../theme";
+  import { settings, PALETTES, WALLPAPERS, EDITABLE_COLORS, THEMES, DEFAULTS, MENU_ALPHA, shownMode, type Mode, type Density } from "../theme";
   import { info } from "../stores";
   import { icons } from "../icons";
   import { openFileDialog } from "../dialog";
@@ -1019,7 +1019,17 @@
 
   // ---- Themes / customisation / sounds ----
   function pickTheme(id: string) {
+    // CeZeOs's day and night looks are one theme that follows the mode.
+    if (id.startsWith("cezeos")) {
+      settings.update((s) => ({ ...s, themePreset: "cezeos", mode: id === "cezeos-light" ? "light" : "dark", customColors: {} }));
+      return;
+    }
     settings.update((s) => ({ ...s, themePreset: id || undefined, ...(id ? { customColors: {} } : {}) }));
+  }
+  /** Which card is lit: CeZeOs by the mode in effect. */
+  function themeOn(id: string, s: typeof $settings): boolean {
+    if (id.startsWith("cezeos") && s.themePreset?.startsWith("cezeos")) return (id === "cezeos-light") === (shownMode(s) === "light");
+    return s.themePreset === id;
   }
   function setNum(key: "stickerSize" | "mediaMaxWidth" | "bubbleRadius" | "soundVolume", v: number) {
     settings.update((s) => ({ ...s, [key]: v }));
@@ -1498,7 +1508,7 @@
             <span class="tc-name">Aquamarine</span>
           </button>
           {#each THEMES as th (th.id)}
-            <button class="theme-card" class:active={$settings.themePreset === th.id} onclick={() => pickTheme(th.id)} title={th.name}>
+            <button class="theme-card" class:active={themeOn(th.id, $settings)} onclick={() => pickTheme(th.id)} title={th.name}>
               <span class="tc-prev" style={`--s:${th.colors["--bg-shell"]};--l:${th.colors["--bg-list"]};--b:${th.colors["--bg-bubble-in"]};--a:${th.colors["--accent"]};--f:${th.colors["--fg"]}`}>
                 <i class="tc-l"></i><i class="tc-in"></i><i class="tc-out"></i>
               </span>
