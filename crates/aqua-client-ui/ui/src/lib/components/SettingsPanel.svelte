@@ -3035,9 +3035,6 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     font-size: 14px; font-weight: 500; text-align: left;
     position: relative;
   }
-  .nav-item + .nav-item::before {
-    content: ""; position: absolute; top: 0; left: 52px; right: 0; height: 1px; background: var(--border);
-  }
   .nav-item:hover { background: var(--bg-hover); }
   .nav-item.active { background: var(--accent-soft); }
   .nav-item.active .nav-lbl { color: var(--accent); font-weight: 700; }
@@ -3114,7 +3111,6 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     .layout { grid-template-columns: 1fr; }
     .nav { border-right: none; padding: 12px 12px 20px; }
     .nav-item { padding: 9px 12px; font-size: 14.5px; }
-    .nav-item + .nav-item::before { left: 52px; }
     .nav-item.active { background: transparent; }
     .nav-item.active .nav-lbl { color: var(--fg); font-weight: 500; }
     .tile { width: 28px; height: 28px; }

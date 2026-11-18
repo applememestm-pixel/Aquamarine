@@ -218,13 +218,23 @@ pub fn fix_mojibake(v: &mut Value) {
     }
 }
 
+/// Windows-1251 punctuation read as Latin-1: «», dashes, quotes, №, …
+/// (they used to make the whole tag "not cp1251").
+fn cp1251_punct(c: u32) -> Option<char> {
+    Some(match c {
+        0x85 => '…', 0x91 => '‘', 0x92 => '’', 0x93 => '“', 0x94 => '”', 0x96 => '–', 0x97 => '—',
+        0xA0 => '\u{a0}', 0xAB => '«', 0xBB => '»', 0xB9 => '№', 0xB0 => '°',
+        _ => return None,
+    })
+}
+
 fn from_1251(s: &str) -> Option<String> {
     let mut high = 0;
     let mut letters = 0;
     for ch in s.chars() {
         let c = ch as u32;
         if c > 0xFF { return None; }
-        if c >= 0x80 && !(c == 0xA8 || c == 0xB8 || c >= 0xC0) { return None; }
+        if c >= 0x80 && !(c == 0xA8 || c == 0xB8 || c >= 0xC0 || cp1251_punct(c).is_some()) { return None; }
         if c >= 0xC0 || c == 0xA8 || c == 0xB8 { high += 1; }
         if ch.is_alphabetic() { letters += 1; }
     }
@@ -233,6 +243,7 @@ fn from_1251(s: &str) -> Option<String> {
     Some(s.chars().map(|ch| match ch as u32 {
         0xA8 => 'Ё',
         0xB8 => 'ё',
+        c if cp1251_punct(c).is_some() => cp1251_punct(c).unwrap_or(ch),
         c @ 0xC0..=0xFF => char::from_u32(0x410 + c - 0xC0).unwrap_or(ch),
         _ => ch,
     }).collect())
@@ -687,6 +698,9 @@ mod tests {
     fn cp1251_tags_are_read_back() {
         assert_eq!(from_1251("ÑÅÊÒÎÐ ÃÀÇÀ").as_deref(), Some("СЕКТОР ГАЗА"));
         assert_eq!(from_1251("Ñåêòîð Ãàçà - Ëèðèê").as_deref(), Some("Сектор Газа - Лирик"));
+        // cp1251 «», dashes and № read as Latin-1 come back too.
+        assert_eq!(from_1251("\u{ab}Ñåêòîð Ãàçà\u{bb} \u{96} Ëèðèê \u{b9}1").as_deref(), Some("«Сектор Газа» – Лирик №1"));
+        assert_eq!(from_1251("\u{ab}Le Café\u{bb}"), None);
         assert_eq!(from_1251("Motörhead"), None);
         assert_eq!(from_1251("Beyoncé"), None);
         assert_eq!(from_1251("Rob Zombie"), None);

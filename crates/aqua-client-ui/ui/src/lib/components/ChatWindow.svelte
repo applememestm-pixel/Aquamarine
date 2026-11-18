@@ -1439,15 +1439,20 @@
   // A bot's own commands (setMyCommands), like Telegram: listed first, a
   // tap sends the command straight away.
   let botCmds = $state<{ command: string; description: string }[]>([]);
+  // Keyed by the chat and "is a bot" only: any chat-list or card refresh
+  // re-ran it — the list emptied and was asked again on every message.
+  const cmdBot = $derived.by(() => { const id = $activeChat?.id; return id && !id.startsWith("grp_") && $peerCards[id]?.is_bot ? id : ""; });
   $effect(() => {
-    const id = $activeChat?.id;
+    const id = cmdBot;
     botCmds = [];
-    if (!id || id.startsWith("grp_") || !$peerCards[id]?.is_bot) return;
-    void api.botCommands(id).then((l) => { if ($activeChat?.id === id && Array.isArray(l)) botCmds = l; }).catch(() => {});
+    if (!id) return;
+    void api.botCommands(id).then((l) => { if (cmdBot === id && Array.isArray(l)) botCmds = l; }).catch(() => {});
   });
   // A /command tapped in a message (Markup.svelte) is sent to this chat.
   $effect(() => {
-    const h = (e: Event) => { const v = (e as CustomEvent<string>).detail; if (v && $activeChat?.live) sendNow("/" + v); };
+    // Only to a bot: in a chat with a person or a group, a tap on "/start"
+    // in their message sent it from me.
+    const h = (e: Event) => { const v = (e as CustomEvent<string>).detail; if (v && isBotChat) sendNow("/" + v); };
     window.addEventListener("aqua:botcmd", h);
     return () => window.removeEventListener("aqua:botcmd", h);
   });
