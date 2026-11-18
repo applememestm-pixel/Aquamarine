@@ -56,6 +56,8 @@ export const RU: Record<string, string> = {
   "Already here": "Уже в чате",
   "Already in a call": "Уже идёт звонок",
   "Already registered on this device": "Уже зарегистрирован на этом устройстве",
+  "Its keys are on this phone — open it": "Его ключи на этом телефоне — открыть",
+  "Back to the account that was here before": "Вернуться к аккаунту, который был здесь раньше",
   "Also visible as SHA-256 fingerprint:": "Также виден как отпечаток SHA-256:",
   "Always allow": "Всегда разрешать",
   "An open, end-to-end encrypted messenger. Your keys never leave this device.": "Открытый мессенджер со сквозным шифрованием. Ваши ключи никогда не покидают это устройство.",

@@ -92,6 +92,11 @@ pub struct AccountSlot {
     pub username: Option<String>,
     pub server_url: Option<String>,
     pub active: bool,
+    /// Logged out (or never finished): the @username whose keys it still
+    /// holds, if known (`last-account.json`).
+    pub last: Option<String>,
+    /// It has keys (a vault): an account there can be signed into again.
+    pub has_keys: bool,
 }
 
 fn base_of(app: &AppHandle) -> Result<PathBuf, String> {
@@ -110,7 +115,10 @@ pub fn accounts_list(app: AppHandle) -> Result<Vec<AccountSlot>, String> {
             let conn = read_json(dir.join("connection.json"));
             let registered = acct["registered"].as_bool().unwrap_or(false);
             let username = acct["username"].as_str().or_else(|| conn["username"].as_str()).map(str::to_string);
+            let last = read_json(dir.join(crate::state::LAST_ACCOUNT_FILE))["username"].as_str().map(str::to_string);
             AccountSlot {
+                last,
+                has_keys: dir.join("vault.sqlite").is_file(),
                 active: slot == cur,
                 registered,
                 username: if registered { username } else { None },

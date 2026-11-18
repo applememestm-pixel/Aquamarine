@@ -20,6 +20,8 @@ export interface ServerProbe {
 /** One account on this device (accounts.rs); slot "" is the first one. */
 export interface AccountSlot {
   slot: string; registered: boolean; username: string | null; server_url: string | null; active: boolean;
+  /** Logged out there: whose keys it still holds (if known); has_keys — it has a vault. */
+  last?: string | null; has_keys?: boolean;
 }
 
 export function assetUrl(path: string | null | undefined): string {

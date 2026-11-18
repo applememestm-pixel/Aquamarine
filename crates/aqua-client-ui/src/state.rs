@@ -1045,6 +1045,13 @@ impl AppState {
     /// transport so the entry gate reopens. The identity/vault is kept, so
     /// logging back in with the same handle reuses the same keys.
     pub fn log_out(&mut self) {
+        // Whose keys these are, after the logout too: the sign-in screen of
+        // another account slot offers to come back here (accounts.rs). An
+        // account without two-step verification can't be signed into with
+        // other keys — "Add account" after a logout left it unreachable.
+        if let Some(u) = self.username.clone() {
+            let _ = crate::fsx::write_atomic(&self.data_dir.join(LAST_ACCOUNT_FILE), &serde_json::to_vec(&serde_json::json!({ "username": u })).unwrap_or_default());
+        }
         self.registered = false;
         self.username = None;
         self.email = None;
@@ -1225,6 +1232,8 @@ fn save_connection_hints(dir: &std::path::Path, server_url: &str, username: &str
 // storage — the auth material is still the vault-held identity key.
 
 const ACCOUNT_FILE: &str = "account.json";
+/// The @username whose keys this data directory holds, kept after a logout.
+pub const LAST_ACCOUNT_FILE: &str = "last-account.json";
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct Account {
