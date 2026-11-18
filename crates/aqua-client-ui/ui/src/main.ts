@@ -146,7 +146,10 @@ const target = document.getElementById("app");
 if (!target) throw new Error("#app root not found");
 
 // A chat opened in its own window (Ctrl+click in the list): `#popout=<id>`.
-const pop = /^#popout=(.+)$/.exec(location.hash);
+// The window also gets the id from an init script (windows.rs): the hash
+// alone could be lost, and then a whole second app came up.
+const popId = (window as unknown as { __AQUA_POPOUT__?: string }).__AQUA_POPOUT__;
+const pop = popId ? [location.hash, encodeURIComponent(popId)] : /^#popout=(.+)$/.exec(location.hash);
 if (pop) document.documentElement.classList.add("popout");
 // Another account's storage left over from a switch: sorted out first.
 const reloading = !pop && await accountBoot();

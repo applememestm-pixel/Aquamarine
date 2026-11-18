@@ -25,7 +25,13 @@ import { contacts } from "./contacts";
 import { chats } from "./stores";
 import { tr } from "./i18n";
 import { isBlocked } from "./ghost";
-import { wroteTo } from "./wrote";
+import { wroteTo, noteWrote } from "./wrote";
+
+// My message in a chat (sent from my other device, too: that one's list of
+// who I wrote to is its own) means I'm in this conversation — never a request.
+chats.subscribe((list) => {
+  for (const c of list) if (c.preview_by_me && !c.channel) noteWrote(c.id);
+});
 
 export type Audience = "everybody" | "contacts" | "nobody";
 export type PrivKey = "messages" | "last_seen" | "photo" | "bio" | "phone" | "birthday" | "activity" | "calls" | "voice" | "invites" | "forwards";

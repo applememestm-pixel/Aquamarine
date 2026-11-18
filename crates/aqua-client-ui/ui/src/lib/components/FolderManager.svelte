@@ -21,6 +21,7 @@
   import { folders, createFolder, deleteFolder, updateFolder, moveFolder, folderHas, folderTags, FOLDER_COLORS,
     type Folder, type FolderKind, type FolderSkip, type ChatFacts } from "../folders";
   import { askConfirm } from "./Confirm.svelte";
+  import { settings } from "../theme";
   import type { ChatSummary } from "../types";
 
   const KINDS: { id: FolderKind; label: string; ic: string }[] = [
@@ -54,6 +55,9 @@
   const countOf = (f: Folder) => realChats.filter((c) => folderHas(f, facts(c))).length;
 
   function add() {
+    // "Hide All chats" does nothing without folders, so it was likely
+    // switched on unseen — the first folder made "All" vanish.
+    if (!$folders.length && $settings.hideAllTab) settings.update((x) => ({ ...x, hideAllTab: false }));
     const id = createFolder(tr("New folder"));
     folderManagerOpen.set(id);
   }
@@ -129,6 +133,10 @@
             {/each}
             <button class="fm-row fm-add" onclick={add}><span class="fm-fic">＋</span><b>{$t("Create a folder")}</b></button>
           </div>
+          <label class="fm-row fm-switch">
+            <span class="fm-txt"><b>{$t("“All chats” tab")}</b><small>{$t("Off: the list opens on the first folder")}</small></span>
+            <input type="checkbox" checked={!$settings.hideAllTab} onchange={(e) => { const on = e.currentTarget.checked; settings.update((x) => ({ ...x, hideAllTab: !on })); }} /><span class="knob"></span>
+          </label>
           <label class="fm-row fm-switch">
             <span class="fm-txt"><b>{$t("Folder tags")}</b><small>{$t("Under each chat in “All”: which folders it's in")}</small></span>
             <input type="checkbox" bind:checked={$folderTags} /><span class="knob"></span>
@@ -224,7 +232,10 @@
   .fm-sheet { width: min(440px, 94vw); max-height: 86vh; display: flex; flex-direction: column; background: var(--bg-shell); border: 1px solid var(--border-strong);
     border-radius: calc(16px * var(--rk, 1)); overflow: hidden; box-shadow: 0 32px 80px -16px rgba(0,0,0,0.6); }
   :global(html.phone) .fm-backdrop { padding: 0; place-items: end stretch; }
-  :global(html.phone) .fm-sheet { width: 100%; max-height: 92dvh; border-radius: calc(18px * var(--rk, 1)) calc(18px * var(--rk, 1)) 0 0; padding-bottom: var(--sab, env(safe-area-inset-bottom, 0px)); }
+  /* Phones: a screen of its own (Telegram's folder editor), clear of the
+     status bar — the header sat under the clock. */
+  :global(html.phone) .fm-sheet { width: 100%; height: 100dvh; max-height: none; border: none; border-radius: 0; box-sizing: border-box;
+    padding: var(--sat, env(safe-area-inset-top, 0px)) 0 var(--sab, env(safe-area-inset-bottom, 0px)); }
   .fm-head { display: flex; align-items: center; gap: 6px; padding: 10px 10px 10px 16px; border-bottom: 1px solid var(--border); }
   .fm-head:has(.fm-ic:first-child) { padding-left: 8px; }
   .fm-head h3 { margin: 0; flex: 1; font-size: 15.5px; font-weight: 700; }
@@ -234,7 +245,10 @@
   .fm-ic svg { width: 18px; height: 18px; }
   .fm-ic.sm { width: 30px; height: 30px; }
   .fm-ic.sm svg { width: 16px; height: 16px; }
-  .fm-body { overflow-y: auto; padding: 12px 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+  .fm-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+  /* A column that scrolls: its cards must not shrink (they did, and were
+     cut off and ran into each other). */
+  .fm-body > :global(*) { flex-shrink: 0; }
   .fm-note { margin: 0 6px; font-size: 12px; line-height: 1.45; color: var(--fg-dim); }
   .fm-label { margin: 8px 6px 0; font-size: 12.5px; font-weight: 700; color: var(--accent); }
   .fm-card { display: flex; flex-direction: column; background: var(--bg-surface); border: 1px solid var(--border); border-radius: calc(14px * var(--rk, 1)); overflow: hidden; }

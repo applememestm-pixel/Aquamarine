@@ -49,6 +49,10 @@
   import { showToast } from "./Toast.svelte";
   import { api } from "../tauri";
   import { t, tr } from "../i18n";
+  import { IS_MOBILE } from "../platform";
+  import { activeId } from "../stores";
+  import { editAndSend } from "../panels/photoEditor";
+  import { get as getStore } from "svelte/store";
 
   const ZOOM_STEP = 1.15;
   const BTN_STEP = 1.25;
@@ -315,6 +319,24 @@
   }
 
   // ── Actions ─────────────────────────────────────────────────
+  /** Phones (Telegram): "Edit" — crop, draw, text, colours — and send the
+   *  result to the open chat. Pinch zooms, so no zoom buttons there. */
+  async function editCur() {
+    const it = cur;
+    const peer = getStore(activeId);
+    if (!it || !peer) { showToast(tr("Open a chat to send the edited picture to")); return; }
+    try {
+      const bytes = it.path ? await api.readUserImage(it.path) : Array.from(new Uint8Array(await (await fetch(it.url)).arrayBuffer()));
+      const name = fileName(it);
+      const lower = name.toLowerCase();
+      const mime = lower.endsWith(".png") ? "image/png" : lower.endsWith(".webp") ? "image/webp" : "image/jpeg";
+      closeLightbox();
+      await editAndSend({ path: it.path ?? "", bytes, mime, name, peerId: peer });
+    } catch (e) {
+      showToast(`${tr("Could not open the editor")}: ${e}`);
+    }
+  }
+
   function fileName(it: GalleryItem): string {
     if (it.name) return it.name;
     if (it.path) return it.path.split(/[\\/]/).pop() || "file";
@@ -347,7 +369,7 @@
       }
     } catch (err) {
       console.error("lightbox save failed", err);
-      showToast(tr("Could not save file"));
+      showToast(`${tr("Could not save file")}: ${err}`, 6000);
     } finally {
       busy = false;
     }
@@ -597,7 +619,16 @@
           {@render ico("M15 5l-7 7 7 7")}
         </button>
       {/if}
-      {#if isImage}
+      {#if isImage && IS_MOBILE}
+        <div class="phbar">
+          <button class="phb" onclick={() => void editCur()} disabled={loading || failed}>
+            {@render ico("M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z")}<span>{$t("Edit")}</span>
+          </button>
+          <button class="phb" onclick={() => void saveAs()} disabled={loading || failed}>
+            {@render ico("M12 3v12M7 10l5 5 5-5M5 21h14")}<span>{$t("Save")}</span>
+          </button>
+        </div>
+      {:else if isImage}
         <div class="zoombox">
           <button class="gbtn" onclick={() => zoomBy(1 / BTN_STEP)} disabled={loading || failed || zoom <= minZoom + 1e-6} title={$t("Zoom out (−)")} aria-label={$t("Zoom out")}>
             {@render ico("M5 12h14")}
@@ -673,6 +704,11 @@
     position: relative; z-index: 3;
   }
   .zoombox { display: flex; align-items: center; gap: 6px; }
+  .phbar { display: flex; gap: 10px; }
+  .phb { display: inline-flex; align-items: center; gap: 8px; height: 46px; padding: 0 20px; border: none; border-radius: 999px; cursor: pointer;
+    background: rgba(255,255,255,.14); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); color: #fff; font: inherit; font-size: 15px; font-weight: 600; }
+  .phb:disabled { opacity: .45; }
+  .phb :global(svg) { width: 20px; height: 20px; }
   .pill {
     min-width: 58px;
     padding: 6px 10px;

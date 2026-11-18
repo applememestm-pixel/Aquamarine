@@ -85,6 +85,8 @@
   import Select from "./Select.svelte";
   import { t, tr } from "../i18n";
   import { avatars } from "../people";
+  import { IS_MOBILE } from "../platform";
+  import { displayName } from "../contacts";
   import { onMount } from "svelte";
   import { get } from "svelte/store";
   import type { Action } from "svelte/action";
@@ -898,6 +900,8 @@
   }
   function closeWatch() { watch = false; zoom = { s: 1, x: 0, y: 0 }; }
   $effect(() => { if (watch) return onBack(closeWatch); });
+  // Phones: "back" folds the full-screen call into the strip (Telegram).
+  $effect(() => { if (IS_MOBILE && expanded && !showStage && ($callState.kind === "outgoing" || $callState.kind === "incoming" || $callState.kind === "connected")) return onBack(() => { expanded = false; }); });
   $effect(() => { if (watch && !rScreen) closeWatch(); });
   function zoomEnd(e: TouchEvent) {
     if (e.touches.length) { zoomStart(e); return; }
@@ -1482,6 +1486,36 @@
     {/if}
     <div class="st-controls">{@render controls()}</div>
   </div>
+{:else if IS_MOBILE && expanded && ($callState.kind === "outgoing" || $callState.kind === "incoming" || $callState.kind === "connected")}
+  <!-- Phones: the whole screen, like Telegram — the theme's gradient, the
+       face in the middle, round buttons with captions at the bottom. -->
+  {@const img = $avatars[peerId] ?? ""}
+  <div class="tgc" role="dialog" aria-label={$t("Call")}>
+    <button class="tgc-min" onclick={() => (expanded = false)} title={$t("Minimize")} aria-label={$t("Minimize")}>{@html I.shrink}</button>
+    <div class="tgc-mid">
+      <div class="tgc-ava" class:speaking={speakingPeer} style:background-image={img ? `url("${img}")` : undefined}>{#if !img}{peerLetter}{/if}</div>
+      <div class="tgc-name">{displayName(peerName, peerName)}</div>
+      <div class="tgc-status">
+        {#if $callState.kind === "outgoing"}{$t("Calling…")}
+        {:else if $callState.kind === "incoming"}{$t("Incoming call")}
+        {:else if reconnecting}{$t("Reconnecting…")}
+        {:else}{fmt(elapsedSeconds)}{/if}
+      </div>
+    </div>
+    <div class="tgc-btns">
+      {#if $callState.kind === "incoming"}
+        <button class="tgc-b" onclick={reject}><i class="red">{@html I.hang}</i><span>{$t("Decline")}</span></button>
+        <button class="tgc-b" onclick={accept}><i class="green">{@html I.phone}</i><span>{$t("Accept")}</span></button>
+      {:else}
+        {#if $callState.kind === "connected"}
+          <button class="tgc-b" onclick={toggleDeafen}><i class:lit={deafened}>{@html deafened ? I.headOff : I.vol}</i><span>{$t("Sound")}</span></button>
+          <button class="tgc-b" onclick={toggleCam}><i class:lit={!!camStream}>{@html camStream ? I.cam : I.camOff}</i><span>{$t("Video")}</span></button>
+        {/if}
+        <button class="tgc-b" onclick={toggleMute}><i class:lit={$callMuted}>{@html $callMuted ? I.micOff : I.mic}</i><span>{$t("Microphone")}</span></button>
+        <button class="tgc-b" onclick={() => hangup($callState.kind === "outgoing" ? "local-cancel" : "local-hangup")}><i class="red">{@html I.hang}</i><span>{$t("Hang up")}</span></button>
+      {/if}
+    </div>
+  </div>
 {:else if $callState.kind !== "idle"}
   <div class="mini" class:ended={$callState.kind === "ended"}>
     {#if $callState.kind === "connected" && hasVideo && focused}
@@ -1491,7 +1525,7 @@
       </div>
     {/if}
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-    <div class="mini-top" onclick={() => { if ($callState.kind === "connected" && matchMedia("(max-width: 720px)").matches) expanded = true; }}>
+    <div class="mini-top" onclick={() => { if ($callState.kind !== "ended" && (IS_MOBILE || ($callState.kind === "connected" && matchMedia("(max-width: 720px)").matches))) expanded = true; }}>
       {@render avatar(peerLetter, speakingPeer, "md", remote.muted, remote.deaf, $avatars[peerId] ?? "")}
       <div class="mini-text">
         <div class="mini-name">{$callState.kind === "ended" ? "Call ended" : peerName}</div>
@@ -1648,19 +1682,32 @@
   .pop-range input { flex: 1; accent-color: var(--accent); }
   .pop-range span { min-width: 38px; text-align: right; font-size: 12px; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
 
-  /* ---------- mini card ---------- */
-  /* Phones: a slim strip under the chat's header (Telegram's "return to
-     call" bar) — the card sat on top of the message field. Tap → full. */
-  @media (max-width: 720px) {
-    .mini { top: calc(var(--sat, env(safe-area-inset-top, 0px)) + 64px); bottom: auto; left: 8px; right: 8px; width: auto;
-      flex-direction: row; align-items: center; gap: 8px; padding: 6px 8px 6px 10px; border-radius: calc(14px * var(--rk, 1)); }
-    .mini-top { flex: 1; min-width: 0; gap: 8px; cursor: pointer; }
-    .mini-video, .mini-me, .mini-statsbtn, .mini .bars, .mini .stats { display: none !important; }
-    .mini .ava { transform: scale(.8); }
-    .mini .controls { gap: 6px; margin: 0; flex-wrap: nowrap; }
-    .mini .controls .cb { width: 36px; height: 36px; }
-    .mini .controls .cb:not(.hang):not(.accept):not(:first-child) { display: none; }
+  /* ---------- phone: full-screen call (Telegram) ---------- */
+  .tgc {
+    position: fixed; inset: 0; z-index: 400; display: flex; flex-direction: column; color: #fff;
+    padding: calc(var(--sat, env(safe-area-inset-top, 0px)) + 10px) 16px calc(var(--sab, env(safe-area-inset-bottom, 0px)) + 28px);
+    background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 80%, #000) 0%, color-mix(in srgb, var(--accent-2) 70%, #000) 100%);
+    animation: tgc-in .22s ease-out;
   }
+  @keyframes tgc-in { from { opacity: 0; transform: scale(1.03); } }
+  .tgc-min { align-self: flex-start; width: 44px; height: 44px; display: grid; place-items: center; border: none; background: transparent; color: #fff; border-radius: 50%; }
+  .tgc-min :global(svg) { width: 24px; height: 24px; }
+  .tgc-mid { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding-bottom: 12vh; text-align: center; }
+  .tgc-ava { width: 136px; height: 136px; border-radius: 50%; display: grid; place-items: center; font-size: 54px; font-weight: 700; color: #fff;
+    background: rgba(255,255,255,.18) center / cover no-repeat; margin-bottom: 14px; transition: box-shadow .15s; }
+  .tgc-ava.speaking { box-shadow: 0 0 0 6px rgba(255,255,255,.22), 0 0 0 14px rgba(255,255,255,.1); }
+  .tgc-name { font-size: 28px; font-weight: 500; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tgc-status { font-size: 16px; opacity: .85; font-variant-numeric: tabular-nums; }
+  .tgc-btns { display: flex; justify-content: space-around; align-items: flex-start; }
+  .tgc-b { display: flex; flex-direction: column; align-items: center; gap: 10px; border: none; background: transparent; color: #fff; font: inherit; font-size: 13px; width: 25%; }
+  .tgc-b i { width: 60px; height: 60px; border-radius: 50%; display: grid; place-items: center; background: rgba(255,255,255,.2); transition: background .15s, color .15s; }
+  .tgc-b i :global(svg) { width: 27px; height: 27px; }
+  .tgc-b i.lit { background: #fff; color: color-mix(in srgb, var(--accent) 80%, #000); }
+  .tgc-b i.red { background: var(--danger); }
+  .tgc-b i.green { background: var(--online); }
+  .tgc-b:active i { filter: brightness(.9); }
+
+  /* ---------- mini card ---------- */
   .mini {
     position: fixed; right: 20px; bottom: 20px; z-index: 250;
     width: 340px;
@@ -1674,6 +1721,19 @@
   }
   .mini.ended { opacity: 0.85; }
   @keyframes slide-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+  /* Phones: a slim strip under the chat's header (Telegram's "return to
+     call" bar); tap → full screen. It must come after the card's own rules:
+     before them those won, and the strip came out as a tall crooked card. */
+  @media (max-width: 720px) {
+    .mini { top: calc(var(--sat, env(safe-area-inset-top, 0px)) + 64px); bottom: auto; left: 8px; right: 8px; width: auto;
+      flex-direction: row; align-items: center; gap: 8px; padding: 6px 8px 6px 10px; border-radius: calc(14px * var(--rk, 1)); }
+    .mini-top { flex: 1; min-width: 0; gap: 8px; cursor: pointer; }
+    .mini-video, .mini-me, .mini-statsbtn, .mini .bars, .mini .stats { display: none !important; }
+    .mini .ava { transform: scale(.8); }
+    .mini .controls { gap: 6px; margin: 0; flex-wrap: nowrap; }
+    .mini .controls .cb { width: 36px; height: 36px; }
+    .mini .controls .cb:not(.hang):not(.accept):not(:first-child) { display: none; }
+  }
   .mini-top { display: flex; align-items: center; gap: 12px; }
   .mini-text { flex: 1; min-width: 0; }
   .mini-name { font-weight: 700; font-size: 15px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

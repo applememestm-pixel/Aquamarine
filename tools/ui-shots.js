@@ -44,6 +44,13 @@ window.__TAURI_INTERNALS__ = {
       if (m === "search3") return { searchResult3: { song: [0, 1, 2, 3].map(so), album: [al(1)], artist: [{ id: "r1", name: "Kino" }] } };
       return {};
     }
+    // A chat with a few messages (menus, ticks, the call screen).
+    if (cmd === "get_messages" && window.__shotChat && args && args.peerId === "bocchi") {
+      const tx = (id, from, text, time) => ({ id, from, time, meta: null, kind: { type: "text", content: { text } } });
+      return [tx("b1", "bocchi", "Привет! Как дела?", "21:40"), tx("b2", "apple", "Норм, смотри что сделал", "21:41"),
+        tx("b3", "bocchi", "Круто выглядит", "21:42"), tx("b4", "apple", "Галочки теперь читаемые", "21:43")];
+    }
+    if (cmd === "list_chats" && window.__shotChat) return [{ id: "bocchi", name: "Bocchi", letter: "B", gradient: "linear-gradient(135deg,#FF6FA8,#7B5CFF)", preview: "Галочки теперь читаемые", preview_is_typing: false, preview_by_me: true, has_lock: true, time: "21:43", unread: 0, online: true, verified: false, channel: false, live: true }];
     if (cmd === "get_messages" && window.__shotTrack) return [{ id: "m1", from: "apple", time: "12:00", meta: null,
       kind: { type: "text", content: { text: '[track:v1]{"id":"s0","title":"The Whole Blue World","artist":"Ave Mujica","album":"Blue World","dur":260,"src":"server","nd":"t1"}' } } }];
     if (cmd === "init_app") return { has_identity: true, registered: true, username: "apple", session_fingerprint: "ab12 cd34", opk_available: 10, spk_rotates_in_days: 5, connected: true, server_url: "http://127.0.0.1:7777", uid: "A1B2C3D4" };
@@ -164,6 +171,46 @@ window.__TAURI_INTERNALS__ = {
     console.log('phoneFull', JSON.stringify(fit));
     if (fit.some((x) => !x.ok)) errs.push('phone: a full-screen window does not fill the screen ' + JSON.stringify(fit));
   } catch (e) { errs.push('phone: ' + e.message.split('\n')[0]); }
+  // Phone, a chat: the long-press menu (Telegram's three cards), the
+  // selection ⋮ menu, the ticks, and the full-screen call.
+  try {
+    const ph = await b.newPage({ viewport: { width: 412, height: 915 }, locale: 'ru-RU', hasTouch: true, isMobile: true, deviceScaleFactor: 1,
+      userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36' });
+    ph.on('pageerror', (e) => errs.push('phone2: ' + e.message));
+    await ph.addInitScript(() => { window.__shotChat = true; });
+    await ph.addInitScript(mock(card));
+    await ph.goto('http://127.0.0.1:5199/'); await ph.waitForTimeout(2500);
+    for (let i = 0; i < 3; i++) { const l = ph.getByText(/^(Не сейчас|Not now)$/).first(); if (!(await l.count())) break; await l.click({ force: true, timeout: 5000 }).catch(() => {}); await ph.waitForTimeout(500); }
+    await ph.locator('text=Bocchi >> visible=true').first().tap({ force: true }); await ph.waitForTimeout(1200);
+    await ph.screenshot({ path: path.join(out, '13a-phone-ticks.jpg'), type: 'jpeg', quality: 80 });
+    await ph.locator('text=Круто выглядит >> visible=true').first().tap({ force: true }); await ph.waitForTimeout(900);
+    await ph.screenshot({ path: path.join(out, '13b-phone-msg-menu.jpg'), type: 'jpeg', quality: 80 });
+    const sel = ph.locator('.ctx-item').filter({ hasText: /Выбрать|Select/ }).last();
+    if (await sel.count()) { await sel.click({ force: true }); await ph.waitForTimeout(500); }
+    await ph.locator('.sel-more-wrap .sel-act').first().click({ force: true, timeout: 5000 }).catch(() => {}); await ph.waitForTimeout(600);
+    await ph.screenshot({ path: path.join(out, '13c-phone-select-more.jpg'), type: 'jpeg', quality: 80 });
+    await ph.evaluate(() => window.__aquaBack && window.__aquaBack()); await ph.waitForTimeout(300);
+    await ph.keyboard.press('Escape'); await ph.waitForTimeout(400);
+    await ph.locator('.call-btn').first().click({ force: true, timeout: 5000 }).catch(() => {}); await ph.waitForTimeout(500);
+    const voice = ph.locator('[role=menuitem]').filter({ hasText: /Голос|Voice|Аудио|Audio|Позвонить|Call/ }).first();
+    if (await voice.count()) await voice.click({ force: true, timeout: 5000 }).catch(() => {});
+    await ph.waitForTimeout(1200);
+    await ph.screenshot({ path: path.join(out, '13d-phone-call.jpg'), type: 'jpeg', quality: 80 });
+    // Folded: a slim strip under the header, then hang up.
+    await ph.evaluate(() => window.__aquaBack && window.__aquaBack()); await ph.waitForTimeout(600);
+    await ph.screenshot({ path: path.join(out, '13d2-phone-call-strip.jpg'), type: 'jpeg', quality: 80 });
+    await ph.locator('.mini .cb.hang').first().click({ force: true, timeout: 5000 }).catch(() => {}); await ph.waitForTimeout(1500);
+    // Comments / thread: a screen of its own on a phone.
+    await ph.locator('text=Круто выглядит >> visible=true').first().tap({ force: true }); await ph.waitForTimeout(900);
+    await ph.locator('.ctx-item').filter({ hasText: /Ветка|Thread|Комментарии/ }).first().click({ force: true, timeout: 5000 }).catch(() => {});
+    await ph.waitForTimeout(700);
+    await ph.screenshot({ path: path.join(out, '13e-phone-thread.jpg'), type: 'jpeg', quality: 80 });
+    // The folder editor: a screen of its own, cards not squeezed.
+    for (let i = 0; i < 3; i++) { await ph.evaluate(() => window.__aquaBack && window.__aquaBack()); await ph.waitForTimeout(400); }
+    await ph.locator('.folder-edit >> visible=true').first().tap({ force: true }); await ph.waitForTimeout(700);
+    await ph.locator('.fm-add >> visible=true').first().tap({ force: true }); await ph.waitForTimeout(800);
+    await ph.screenshot({ path: path.join(out, '13f-phone-folder.jpg'), type: 'jpeg', quality: 80 });
+  } catch (e) { errs.push('phone2: ' + e.message.split('\n')[0]); }
   console.log(errs.join('\n') || 'no errors');
   for (const f of fs.readdirSync(out).filter((f) => f.endsWith('.jpg')).sort()) {
     console.log('=====SHOT ' + f);

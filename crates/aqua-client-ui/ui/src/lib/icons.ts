@@ -17,10 +17,26 @@ export const icons = {
   attach:  `<svg ${base}><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>`,
   send:    `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3.3 20.6c-.6.3-1.2-.3-1-.9l2.4-6.9 8.6-.8-8.6-.8L2.3 4.3c-.2-.6.4-1.2 1-.9l18 8c.6.3.6 1.1 0 1.4l-18 7.8Z"/></svg>`,
   lock:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`,
+  // Telegram's ticks: one size for "sent" and "read", the second tick set
+  // well apart and its short arm clipped, so the pair never reads as one.
   check:   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`,
-  // Two separate ticks, like Telegram's: the old pair overlapped in thick
-  // strokes and read as one.
-  checkDouble: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1.5 12.5 6 17 15.5 6.5"/><polyline points="11 16 12 17 22.5 6.5"/></svg>`,
+  tick:    `<svg viewBox="0 0 26 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="5.5 9.5 9.5 13.5 18 4.5"/></svg>`,
+  checkDouble: `<svg viewBox="0 0 26 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1.5 9.5 5.5 13.5 14 4.5"/><polyline points="11.2 12.5 12.2 13.5 20.7 4.5"/></svg>`,
+  // Menus (message long-press, selection, Telegram-style rows).
+  reply:   `<svg ${base}><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 6 6v5"/></svg>`,
+  forward: `<svg ${base}><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0-6 6v5"/></svg>`,
+  trash:   `<svg ${base}><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/><path d="M10 11v5M14 11v5"/></svg>`,
+  pin:     `<svg ${base}><path d="M12 17v5"/><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"/></svg>`,
+  quote:   `<svg ${base}><path d="M4 7h6v6H6l-2 4V7zM14 7h6v6h-4l-2 4V7z"/></svg>`,
+  thread:  `<svg ${base}><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M8.5 10.5h7M8.5 13.5h4.5"/></svg>`,
+  select:  `<svg ${base}><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>`,
+  textSel: `<svg ${base}><path d="M5 6h14M5 12h9M5 18h11"/><path d="M19 15v6"/></svg>`,
+  download:`<svg ${base}><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>`,
+  smile:   `<svg ${base}><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><path d="M9 9.5h.01M15 9.5h.01"/></svg>`,
+  bluetooth:`<svg ${base}><path d="m7 7 10 10-5 4V3l5 4L7 17"/></svg>`,
+  tasks:   `<svg ${base}><rect x="3" y="3" width="18" height="18" rx="4"/><path d="m8 12 3 3 5-6"/></svg>`,
+  doc:     `<svg ${base}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>`,
+  board:   `<svg ${base}><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16M15 4v16"/></svg>`,
   copy:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`,
   verified:`<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 15l-4-4 1.41-1.41L10 13.17l6.59-6.59L18 8l-8 8z"/></svg>`,
   globe:   `<svg ${base}><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`,

@@ -251,6 +251,9 @@
   const recentChats = $derived(recentSearch.map((id) => $visibleChats.find((c) => c.id === id)).filter(Boolean) as ChatSummary[]);
   /** People you write to most lately (the list is newest first). */
   const frequent = $derived($visibleChats.filter((c) => kindOfChat(c) === "people" && !c.id.startsWith("__")).slice(0, 12));
+  /** A tab picked with nothing typed: every chat of that kind (Telegram) —
+   *  the tabs changed nothing here, recent and frequent stayed mixed. */
+  const tabChats = $derived(searchTab === "all" ? [] : $visibleChats.filter((c) => kindOfChat(c) === searchTab && !c.id.startsWith("__")));
   function openFromSearch(id: string) {
     rememberSearch(id);
     void selectChat(id);
@@ -286,7 +289,8 @@
     let list = $visibleChats;
     if (!$search.trim() && showRequests) return list.filter((c) => $requestIds.has(c.id));
     if (!$search.trim()) list = list.filter((c) => !$requestIds.has(c.id) && (showArchive ? $archived.has(c.id) : !$archived.has(c.id)));
-    if (af !== "all" && !showArchive) {
+    // A search looks through every chat, not only the open folder's.
+    if (af !== "all" && !showArchive && !$search.trim()) {
       const f = $folders.find((x) => x.id === af);
       // A folder's rules see the archive too ("exclude archived" is a rule).
       if (f) list = $visibleChats.filter((c) => folderHas(f, factsOf(c)));
@@ -635,8 +639,8 @@
   // and must not close the peek they opened.
   let peekAt = 0;
   const peekSettled = () => Date.now() - peekAt > 650;
-  function closePeek() { peek = null; }
-  function dismissPeek() { if (peekSettled()) peek = null; }
+  function closePeek() { peek = null; peekGroups = false; }
+  function dismissPeek() { if (peekSettled()) { peek = null; peekGroups = false; } }
   // Opening from the peek: the card grows to the whole window first
   // (Telegram), then the chat is there.
   let peekGrow = $state(false);
@@ -650,6 +654,8 @@
     setTimeout(() => { peek = null; peekGrow = false; }, 240);
   }
   let peekFolders = $state(false);
+  /** The peek menu's "Add to a group…" list (phones have no right-click menu). */
+  let peekGroups = $state(false);
   // Opening a chat takes its "unread" mark off.
   $effect(() => { const id = $activeId; if (id && $markedUnread.has(id)) setMarkedUnread(id, false); });
   let peekScroll = $state<HTMLElement | null>(null);
@@ -919,8 +925,9 @@
       dirSearching = true;
       try {
         const [r, gs] = await Promise.all([api.searchDirectory(q), api.groupSearch(q).catch(() => [] as PublicGroup[])]);
-        // Hide people we already have a chat with (shown above).
-        const existing = new Set($visibleChats.map((c) => c.id));
+        // Hide people whose chat is shown above — only the rows really
+        // there: a chat hidden by a filter left the person nowhere.
+        const existing = new Set(shownChats.map((c) => c.id));
         dirResults = r.filter((p) => !existing.has(p.username));
         // Public groups / channels by @name: the ones I'm in are already above.
         groupResults = gs.filter((g) => !existing.has(g.gid));
@@ -1031,9 +1038,9 @@
       <button class="sel-btn" onclick={() => (selMore = !selMore)} aria-label={$t("More")}><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></svg></button>
       {#if selMore}
         <div class="sel-more" role="menu">
-          <button onclick={selPin}>{$t(selAllPinned ? "Unpin" : "Pin to top")}</button>
-          <button onclick={selRead}>{$t("Mark as read")}</button>
-          <button onclick={() => { const ids = $visibleChats.map((c) => c.id).filter((id) => !id.startsWith("grp_") || !$groupMap[id]); sel = [...new Set([...sel, ...ids])]; selMore = false; }}>{$t("Select all")}</button>
+          <button onclick={selPin}><span class="sm-ic">{@html icons.pin}</span>{$t(selAllPinned ? "Unpin" : "Pin to top")}</button>
+          <button onclick={selRead}><span class="sm-ic">{@html icons.checkDouble}</span>{$t("Mark as read")}</button>
+          <button onclick={() => { const ids = $visibleChats.map((c) => c.id).filter((id) => !id.startsWith("grp_") || !$groupMap[id]); sel = [...new Set([...sel, ...ids])]; selMore = false; }}><span class="sm-ic">{@html icons.select}</span>{$t("Select all")}</button>
         </div>
       {/if}
     </div>
@@ -1197,6 +1204,16 @@
     {/if}
     {#if searchHome}
       <div class="search-home" role="presentation" onpointerdown={(e) => e.preventDefault()}>
+        {#if searchTab !== "all"}
+          {#each tabChats as c (c.id)}
+            <button class="sh-recent" onclick={() => openFromSearch(c.id)}>
+              <span class="avatar sz-40" class:ava-grp={c.id.startsWith("grp_") && !c.channel} class:ava-chan={c.channel} style="--gradient: {c.gradient}">{c.letter}{#if $avatars[c.id]}<img class="ava-img" src={$avatars[c.id]} alt="" loading="lazy" />{/if}</span>
+              <span class="sh-txt"><b>{c.name}</b><span>{peekStatus(c.id) || (c.id.startsWith("grp_") ? "" : "@" + c.id)}</span></span>
+            </button>
+          {:else}
+            <div class="sh-title">{$t("Nothing here yet.")}</div>
+          {/each}
+        {:else}
         {#if frequent.length}
           <div class="sh-title">{$t("Frequent contacts")}</div>
           <div class="sh-freq" use:scrollX>
@@ -1219,6 +1236,7 @@
         {/if}
         {#if !frequent.length && !recentChats.length}
           <div class="sh-title">{$t("Type a name, @username or paste an invite link")}</div>
+        {/if}
         {/if}
       </div>
     {/if}
@@ -1620,9 +1638,17 @@
             {/each}
             <button onclick={() => { peekFolders = false; closePeek(); openFolderManager(); }}>{$t("New folder…")}</button>
             <button onclick={() => (peekFolders = false)}>‹ {$t("Back")}</button>
+          {:else if peekGroups}
+            {#each $chatGroups as cg (cg.id)}
+              <button onclick={() => { if (groupByChat.get(pid)?.id === cg.id) removeFromGroup(pid); else { addToGroup(cg.id, pid); showToast(tr("Added to “{name}”", { name: cg.name })); } peekGroups = false; closePeek(); }}>{groupByChat.get(pid)?.id === cg.id ? "✓ " : ""}{cg.emoji ?? "▣"} {cg.name}</button>
+            {/each}
+            <button onclick={() => { const id = pid; peekGroups = false; closePeek(); newGroupFor(id); }}>＋ {$t("New group…")}</button>
+            <button onclick={() => (peekGroups = false)}>‹ {$t("Back")}</button>
           {:else}
           <button onclick={openFromPeek}>{$t("Open")}</button>
           <button onclick={() => { if ($allFolders.length) peekFolders = true; else { closePeek(); openFolderManager(); } }}>{$t("Add to folder")}</button>
+          {#if groupByChat.get(pid)}<button onclick={() => { removeFromGroup(pid); closePeek(); }}>{$t("Remove from the group")}</button>
+          {:else}<button onclick={() => { if ($chatGroups.length) peekGroups = true; else { const id = pid; closePeek(); newGroupFor(id); } }}>{$t("Add to a group…")}</button>{/if}
           {#if (pc?.unread ?? 0) > 0 || $markedUnread.has(pid)}<button onclick={() => { markRead(pid); setMarkedUnread(pid, false); closePeek(); }}>{$t("Mark as read")}</button>
           {:else}<button onclick={() => { setMarkedUnread(pid, true); closePeek(); }}>{$t("Mark as unread")}</button>{/if}
           <button onclick={() => { pinChat(pid); closePeek(); }}>{$t($pinnedChats.includes(pid) ? "Unpin" : "Pin to top")}</button>
@@ -1713,9 +1739,14 @@
     border-radius: calc(12px * var(--rk, 1)); cursor: pointer; }
   .sel-btn:active { background: color-mix(in srgb, var(--fg) 10%, transparent); }
   .sel-btn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-  .sel-more { position: absolute; top: 54px; right: 8px; min-width: 190px; display: flex; flex-direction: column; padding: 6px;
-    background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: calc(14px * var(--rk, 1)); box-shadow: 0 12px 32px rgba(0,0,0,.35); }
-  .sel-more button { text-align: left; padding: 11px 12px; border: none; background: transparent; color: var(--fg); font-size: 15px; border-radius: calc(9px * var(--rk, 1)); }
+  /* Telegram's ⋮ menu: a blurred card, icon + label rows. */
+  .sel-more { position: absolute; top: 54px; right: 8px; min-width: 220px; display: flex; flex-direction: column; padding: 4px 0;
+    background: color-mix(in srgb, var(--bg-surface-2) 94%, transparent); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+    border: 1px solid var(--border); border-radius: calc(16px * var(--rk, 1)); box-shadow: 0 14px 36px -12px rgba(0,0,0,.55); }
+  .sel-more button { display: flex; align-items: center; gap: 18px; min-height: 48px; padding: 0 20px 0 18px; text-align: left; border: none; background: transparent; color: var(--fg); font: inherit; font-size: 16px; font-weight: 500; }
+  .sel-more button:active { background: color-mix(in srgb, var(--fg) 10%, transparent); }
+  .sm-ic { width: 22px; height: 22px; flex-shrink: 0; color: var(--fg-muted); display: grid; place-items: center; }
+  .sm-ic :global(svg) { width: 22px; height: 22px; }
   .sel-more button:active { background: color-mix(in srgb, var(--fg) 10%, transparent); }
   .chat-item.selected { background: color-mix(in srgb, var(--accent) 16%, transparent); }
   .chat-item.selected .avatar::after { content: "✓"; position: absolute; right: -2px; bottom: -2px; width: 20px; height: 20px; border-radius: 50%;
@@ -2076,6 +2107,26 @@
   }
   .folder-tab:hover { color: var(--fg); background: var(--bg-hover); }
   .folder-tab.active { color: var(--accent); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 25%, transparent); }
+  /* Chips: the open folder is a notebook tab like the open chat — it runs down
+     into the strip's bottom line, which takes the accent (drawn as a background:
+     the strip scrolls, and a border would sit outside the tab's reach). */
+  .folder-strip:not(.fs-pills):not(.fs-text) {
+    --tab: color-mix(in srgb, var(--accent) 15%, var(--bg-list));
+    border-bottom: none;
+    background: linear-gradient(color-mix(in srgb, var(--accent) 42%, var(--border)), color-mix(in srgb, var(--accent) 42%, var(--border))) bottom / 100% 1px no-repeat;
+  }
+  .folder-strip:not(.fs-pills):not(.fs-text) .folder-tab.active {
+    position: relative;
+    background: var(--tab); border-color: transparent;
+    padding-bottom: 13px; margin-bottom: -8px;
+    border-radius: calc(12px * var(--rk, 1)) calc(12px * var(--rk, 1)) 0 0;
+  }
+  .folder-strip:not(.fs-pills):not(.fs-text) .folder-tab.active::before,
+  .folder-strip:not(.fs-pills):not(.fs-text) .folder-tab.active::after {
+    content: ""; position: absolute; bottom: 0; width: 10px; height: 10px; pointer-events: none;
+  }
+  .folder-strip:not(.fs-pills):not(.fs-text) .folder-tab.active::before { left: -10px; background: radial-gradient(circle at 0 0, transparent 9.5px, var(--tab) 10px); }
+  .folder-strip:not(.fs-pills):not(.fs-text) .folder-tab.active::after { right: -10px; background: radial-gradient(circle at 100% 0, transparent 9.5px, var(--tab) 10px); }
   .ft-emoji { margin-right: 4px; }
   .snow { position: absolute; inset: 0; z-index: 4; pointer-events: none; overflow: hidden; }
   .snow i { position: absolute; top: -10px; width: var(--s); height: var(--s); border-radius: 50%; background: #fff; opacity: .75; filter: blur(.4px);

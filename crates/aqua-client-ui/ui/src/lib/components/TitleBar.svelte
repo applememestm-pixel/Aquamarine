@@ -66,7 +66,7 @@
         <svg viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" rx="1.2" /></svg>
       {/if}
     </button>
-    <button class="wb close" onclick={() => { const pop = /^#popout=(.+)$/.exec(location.hash); if (pop) forgetPopout(decodeURIComponent(pop[1])); act((w) => w.close())(); }} title={$t("Close")} aria-label={$t("Close")}>
+    <button class="wb close" onclick={() => { const id = (window as unknown as { __AQUA_POPOUT__?: string }).__AQUA_POPOUT__ ?? (/^#popout=(.+)$/.exec(location.hash)?.[1] ? decodeURIComponent(/^#popout=(.+)$/.exec(location.hash)![1]) : ""); if (id) forgetPopout(id); act((w) => w.close())(); }} title={$t("Close")} aria-label={$t("Close")}>
       <svg viewBox="0 0 12 12"><line x1="2.5" y1="2.5" x2="9.5" y2="9.5" /><line x1="9.5" y1="2.5" x2="2.5" y2="9.5" /></svg>
     </button>
   </div>

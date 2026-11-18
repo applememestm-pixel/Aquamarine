@@ -32,6 +32,10 @@
   import { openFileDialog } from "../dialog";
   import { showToast } from "./Toast.svelte";
   import { broadcastPresence, peerPresence, myActivity, shareActivity, myOnline, activityVerb, activityLine, peerStatus, presenceNow } from "../presence";
+  import Select from "./Select.svelte";
+  import { groupMap, requestJoinGroup } from "../groups";
+  import { isAdmin } from "../groupRules";
+  import { asChannel, avatars } from "../people";
   import { peerCards, refreshPeer, publishMyProfile, setMyImage, setMyImageBytes, clearMyImage, setMyMediaFile, clearMyMusic, str, clans, refreshMyStar } from "../people";
   import MediaPlayer from "./MediaPlayer.svelte";
   import { streamSrc } from "../media";
@@ -117,7 +121,7 @@
     if (gameTimer) clearTimeout(gameTimer);
     if (q.length < 2) { gameHits = []; return; }
     gameTimer = setTimeout(() => {
-      void api.gamesSearch(q).then((h) => { if (gameInput.trim() === q) { gameHits = h.slice(0, 8); h.slice(0, 8).forEach((x) => x.has_icon && resolveGame(x.name, x.id)); } }).catch(() => (gameHits = []));
+      void api.gamesSearch(q).then((h) => { if (gameInput.trim() === q) { gameHits = h.slice(0, 8); h.slice(0, 8).forEach((x) => resolveGame(x.name, x.id)); } }).catch(() => (gameHits = []));
     }, 250);
   });
   function addGame(hit?: { id: string; name: string }) {
@@ -131,6 +135,8 @@
   }
   function makeFavourite(g: string) { if (draft) draft = { ...draft, games: [g, ...(draft.games ?? []).filter((x) => x !== g)] }; }
   let showAllGames = $state(false);
+  // Each opening starts with the top 8 again (owner).
+  $effect(() => { void activeUsername; void $profileState; showAllGames = false; });
   // ---- Favourite games: hold a poster and drag it to change the order (the
   // first one is the favourite). Mouse: drag at once; touch: hold first, so
   // scrolling the editor still works. ----
@@ -376,6 +382,8 @@
      *  the banner pages the avatar too. */
     more: { k: string; v: number; url?: string }[];
     link: boolean;
+    /** Their channel on the profile (Telegram's personal channel). */
+    channel: { gid: string; title: string; owner: string; kind: "group" | "supergroup" | "channel" } | null;
   }
   let view = $derived<View | null>((void $played, buildView(activeUsername, $profile, $contacts, $info, $peerCards, $peerPresence, $myActivity)));
   // Links to a known service show as connections, the rest as links.
@@ -547,6 +555,7 @@
         estatus: me.estatus ?? "",
         more: me.more ?? [],
         link: !!me.link_banner,
+        channel: asChannel(me.channel),
       };
     }
     const c = getContact(uname);
@@ -588,6 +597,7 @@
       estatus: str(x.es),
       more: Array.isArray(x.more) ? (x.more as { k: string; v: number }[]).filter((m) => m && /^(avatar[2-5]|banner[23])$/.test(String(m.k)) && typeof m.v === "number") : [],
       link: x.lb === true,
+      channel: asChannel(x.ch),
     };
   }
 
@@ -615,6 +625,19 @@
     editing = true;
   }
   function cancelEdit() { editing = false; draft = null; }
+  /** What I can put on my profile: any channel, group or server I'm an admin
+   *  of — private or public. */
+  const myChannels = $derived(Object.values($groupMap).filter((g) => isAdmin(g, $info?.username ?? "")));
+  const KIND_LABEL = { channel: "Channel", group: "Group", supergroup: "Server" } as const;
+  function setChannel(gid: string) {
+    if (!draft) return;
+    const g = $groupMap[gid];
+    draft = { ...draft, channel: g ? { gid: g.id, title: g.title, owner: $info?.username ?? g.owner, kind: g.kind } : null };
+  }
+  async function joinChannel(ch: { gid: string; title: string; owner: string }) {
+    try { await requestJoinGroup(ch.gid, ch.owner, ch.title, ""); showToast(tr("Request sent")); }
+    catch (e) { showToast(String(e)); }
+  }
   async function saveEdit() {
     if (!draft) return;
     updateProfile(draft);
@@ -774,6 +797,15 @@
             <textarea bind:value={draft.about} rows="4" placeholder={$t("Tell people a little about yourself...")}></textarea>
           </label>
           <div class="field">
+            <span>{$t("Channel, group or server")}</span>
+            {#if myChannels.length}
+              <Select value={draft.channel?.gid ?? ""} onchange={(v) => setChannel(v)}
+                options={[{ value: "", label: $t("None") }, ...myChannels.map((g) => ({ value: g.id, label: `${g.title} · ${$t(KIND_LABEL[g.kind])}` }))]} />
+            {:else}
+              <small class="ch-none">{$t("A channel, group or server you run (owner or admin) can be shown on your profile.")}</small>
+            {/if}
+          </div>
+          <div class="field">
             <span>{$t("Emoji next to your name")}</span>
             <div class="es-row">
               <button class="es-cur" onclick={() => (esOpen = !esOpen)} title={$t("Choose an emoji")} aria-expanded={esOpen}>
@@ -919,9 +951,10 @@
               {#if gameHits.length}
                 <div class="game-hits">
                   {#each gameHits as h (h.id)}
-                    {@const ic = $gameIcons[h.id]}
+                    <!-- The game's poster right in the list (owner), the icon only when there's no cover. -->
+                    {@const ic = $gameCovers[h.id] || $gameIcons[h.id]}
                     <button class="game-hit" onclick={() => addGame(h)}>
-                      {#if ic}<img src={ic} alt="" />{:else}<span class="gh-ph" style:background={gameGradient(h.name)}>{h.name.charAt(0)}</span>{/if}
+                      {#if ic}<img class="gh-poster" src={ic} alt="" />{:else}<span class="gh-ph gh-poster" style:background={gameGradient(h.name)}>{h.name.charAt(0)}</span>{/if}
                       <span>{h.name}</span>
                     </button>
                   {/each}
@@ -1021,6 +1054,20 @@
             <section class="section">
               <div class="section-label">{$t("About me")}</div>
               <p class="section-body">{view.about}</p>
+            </section>
+          {/if}
+          {#if view.channel && !editing}
+            {@const ch = view.channel}
+            {@const g = $groupMap[ch.gid]}
+            {@const member = !!g?.members.some((m) => m.username === $info?.username)}
+            <section class="section">
+              <div class="section-label">{$t(KIND_LABEL[ch.kind])}</div>
+              <div class="pch">
+                <span class="pch-av" style:background-image={$avatars[ch.gid] ? `url("${$avatars[ch.gid]}")` : undefined} style:background={$avatars[ch.gid] ? undefined : g?.gradient}>{$avatars[ch.gid] ? "" : (g?.title ?? ch.title).charAt(0).toUpperCase()}</span>
+                <span class="pch-t"><b>{g?.title ?? ch.title}</b>{#if g}<small>{$tn(g.members.length, ch.kind === "channel" ? "subscriber" : "member")}</small>{/if}</span>
+                {#if member}<button class="pch-go" onclick={() => { closeProfile(); void selectChat(ch.gid); }}>{$t("Open")}</button>
+                {:else if !isMe}<button class="pch-go" onclick={() => joinChannel(ch)}>{$t("Request to join")}</button>{/if}
+              </div>
             </section>
           {/if}
 
@@ -1135,6 +1182,14 @@
             {#if view.about}
               <div class="tg-row"><span class="tg-v pre">{view.about}</span><span class="tg-l">{$t("Bio")}</span></div>
             {/if}
+            {#if view.channel}
+              {@const ch = view.channel}
+              {@const g = $groupMap[ch.gid]}
+              {@const member = !!g?.members.some((m) => m.username === $info?.username)}
+              <button class="tg-row" onclick={() => { if (member) { closeProfile(); void selectChat(ch.gid); } else if (!isMe) void joinChannel(ch); }}>
+                <span class="tg-v">{g?.title ?? ch.title}{#if g} · {$tn(g.members.length, ch.kind === "channel" ? "subscriber" : "member")}{/if}</span>
+                <span class="tg-l">{$t(KIND_LABEL[ch.kind])}{#if !member && !isMe} · {$t("tap to ask to join")}{/if}</span></button>
+            {/if}
             {#if view.birthday}
               <div class="tg-row"><span class="tg-v">{view.birthday}{#if ageOf(view.birthday) != null} ({$tn(ageOf(view.birthday) ?? 0, "year old")}){/if}</span><span class="tg-l">{$t("Birthday")}</span></div>
             {/if}
@@ -1228,42 +1283,27 @@
                   </div>
                 </div>
               </section>
-              {#if view.games.length > 1}
+            {/if}
+            {#if view.played.length || view.games.length}
+              <!-- Games as posters (owner): the favourites first, then the rest
+                   played; 8 at first, "Show all" opens every one in the same
+                   cards — back to 8 next time the profile opens. -->
+              {@const all = [...new Set([...view.games, ...view.played.map((g) => g.n)])]}
+              {#if all.length > 1}
                 <section class="card">
-                  <div class="section-label">{$t("My favourite games")}</div>
+                  <div class="section-label">{$t("Games")} · {all.length}</div>
                   <div class="games">
-                    <!-- Every starred game, the main one too; the name under the poster
-                         (on the poster it was cut off by the card's edge). -->
-                    {#each view.games.slice(0, showAllGames ? 16 : 8) as g (g)}
+                    {#each all.slice(0, showAllGames ? all.length : 8) as g (g)}
                       {@const pl = view.played.find((x) => x.n === g)}
                       <div class="g-item" title={g}>
                         <GamePoster name={g} bare cover={coverFor(g, $gameIds, $gameCovers, view.game_ids)} icon={iconFor(g, $gameIds, $gameIcons, view.game_ids)} hours={pl?.h ?? 0} />
-                        <span class="g-name">{g}</span>
+                        <span class="g-name">{g}{#if view.games.includes(g)} <span class="game-star">★</span>{/if}</span>
                       </div>
                     {/each}
                   </div>
-                  {#if view.games.length > 8}<button class="more-games" onclick={() => (showAllGames = !showAllGames)}>{showAllGames ? $t("Show less") : $t("Show more")}</button>{/if}
+                  {#if all.length > 8}<button class="more-games" onclick={() => (showAllGames = !showAllGames)}>{showAllGames ? $t("Show less") : tr("Show all {n}", { n: all.length })}</button>{/if}
                 </section>
               {/if}
-            {/if}
-            {#if view.played.length || view.games.length}
-              {@const all = [...new Set([...view.played.map((g) => g.n), ...view.games])]}
-              <section class="card">
-                <div class="section-label">{$t("All games")} · {all.length}</div>
-                {#each all as g (g)}
-                  {@const pl = view.played.find((x) => x.n === g)}
-                  {@const cv = coverFor(g, $gameIds, $gameCovers, view.game_ids)}
-                  {@const ic = iconFor(g, $gameIds, $gameIcons, view.game_ids)}
-                  {@const max = Math.max(1, ...view.played.map((x) => x.h))}
-                  <div class="played-row">
-                    <!-- The game's poster, as in "My favourite games" (a letter only when there's none). -->
-                    {#if cv || ic}<img class="played-cover poster" src={cv || ic} alt="" />{:else}<span class="played-cover poster" style:background={gameGradient(g)}>{g.charAt(0).toUpperCase()}</span>{/if}
-                    <span class="played-name">{g}{#if view.games.includes(g)} <span class="game-star">★</span>{/if}</span>
-                    {#if pl}<span class="played-bar"><span style:width="{Math.max(4, (pl.h / max) * 100)}%"></span></span>{/if}
-                    <span class="played-h">{pl ? (pl.h > 0 ? `${pl.h} ${$t("h")}` : $t("< 1 h")) : ""}</span>
-                  </div>
-                {/each}
-              </section>
             {/if}
 
             {#if view.favourite_music}
@@ -1466,14 +1506,14 @@
     .sheet.ed .avatar-wrap { margin: 0 0 14px; }
     .ed-left, .ed-right { padding: 0; border: none; overflow: visible; }
   }
-  .played-bar { flex: 0 0 70px; height: 5px; border-radius: 3px; background: var(--bg-input); overflow: hidden; }
-  .played-bar span { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
   img.played-cover { object-fit: cover; }
   .game-search { position: relative; }
   .game-hits { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 20; background: var(--bg-shell); border: 1px solid var(--border-strong);
     border-radius: calc(12px * var(--rk, 1)); padding: 4px; box-shadow: 0 18px 40px -14px rgba(0,0,0,.7); max-height: 260px; overflow-y: auto; }
   .game-hit { width: 100%; display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: none; border-radius: calc(8px * var(--rk, 1)); background: none; color: var(--fg); font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
   .game-hit:hover { background: var(--accent-soft); }
+  /* A small portrait poster (3:4), like the cards on the profile. */
+  .game-hit .gh-poster { width: 36px !important; height: 48px !important; border-radius: calc(6px * var(--rk, 1)) !important; }
   .game-hit img, .gh-ph { width: 28px; height: 28px; border-radius: calc(7px * var(--rk, 1)); object-fit: cover; flex-shrink: 0; display: grid; place-items: center; color: #fff; font-weight: 800; }
   .game:hover { transform: translateY(-2px); }
   .game-name { font-size: 12px; font-weight: 700; line-height: 1.2; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6); }
@@ -1481,7 +1521,6 @@
   .game-fav { position: absolute; top: 6px; right: 7px; font-size: 12px; color: #FFD45C; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5); }
   .played-row { display: flex; align-items: center; gap: 10px; padding: 6px 2px; font-size: 13px; }
   .played-cover { width: 34px; height: 34px; border-radius: calc(8px * var(--rk, 1)); display: grid; place-items: center; color: #fff; font-weight: 800; flex-shrink: 0; }
-  .played-cover.poster { width: 42px; height: 56px; border-radius: calc(7px * var(--rk, 1)); }
   .played-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .played-h { color: var(--fg-dim); font-size: 12px; }
   .link-edit { display: flex; gap: 6px; margin-top: 6px; }
@@ -1799,6 +1838,13 @@
     padding: 10px 14px;
     margin-bottom: 8px;
   }
+  .pch { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border-radius: calc(14px * var(--rk, 1)); background: color-mix(in srgb, var(--fg) 5%, transparent); }
+  .pch-av { width: 44px; height: 44px; border-radius: 50%; flex-shrink: 0; display: grid; place-items: center; font-weight: 700; font-size: 18px; color: var(--bg-shell); background-size: cover; background-position: center; }
+  .pch-t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .pch-t b { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pch-t small { font-size: 12.5px; color: var(--fg-muted); }
+  .pch-go { flex-shrink: 0; border: none; border-radius: 999px; padding: 8px 14px; font: inherit; font-size: 13px; font-weight: 700; background: var(--accent); color: var(--bg-shell); cursor: pointer; }
+  .ch-none { font-size: 12.5px; color: var(--fg-dim); }
   .section-label {
     font-size: 11px;
     font-weight: 700;

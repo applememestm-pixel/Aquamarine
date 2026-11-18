@@ -265,7 +265,7 @@ export const api = {
   groupControl:       (gid: string, body: string): Promise<void>                       => invoke("group_control", { gid, body }),
   groupSetMyTag:      (gid: string, tag: string): Promise<void>                        => invoke("group_set_my_tag", { gid, tag }),
   groupRequestJoin:   (gid: string, admin: string, title: string, note: string): Promise<void> => invoke("group_request_join", { gid, admin, title, note }),
-  groupSend:          (gid: string, body: string, silent = false): Promise<SendResult> => invoke("group_send", { gid, body, silent }),
+  groupSend:          (gid: string, body: string, silent = false, asGid?: string): Promise<SendResult> => invoke("group_send", { gid, body, silent, asGid: asGid ?? null }),
   setGroupRoom:       (gid: string, room: string): Promise<void>                      => invoke("set_group_room", { gid, room }),
 
   // Edit / delete (local store mutation; relay the control separately)

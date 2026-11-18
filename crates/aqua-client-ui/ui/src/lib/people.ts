@@ -86,6 +86,16 @@ export const clans = derived([peerCards, profile, info], ([cards, me, i]) => {
   return out;
 });
 
+/** A profile's channel (`extra.ch`), checked. */
+export function asChannel(v: unknown): { gid: string; title: string; owner: string; kind: "group" | "supergroup" | "channel" } | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  if (typeof o.gid !== "string" || !o.gid.startsWith("grp_") || typeof o.owner !== "string") return null;
+  // No kind: from before groups and servers could go there — a channel.
+  const kind = o.kind === "group" || o.kind === "supergroup" ? o.kind : "channel";
+  return { gid: o.gid, title: typeof o.title === "string" ? o.title.slice(0, 64) : "", owner: o.owner, kind };
+}
+
 export function str(v: unknown): string { return typeof v === "string" ? v : ""; }
 
 const inflight = new Map<string, Promise<void>>();
@@ -191,6 +201,7 @@ function myExtra(p: Profile): Record<string, unknown> {
     fwd_link: isPublic("forwards"),
     music_title: p.music_ver ? (p.music_title ?? "") : "",
     clan: p.clan ?? null,
+    ch: p.channel ?? null,
     card: /^#[0-9a-f]{6}$/i.test(p.card ?? "") ? p.card : "",
     ci: Number.isFinite(p.card_i) ? Math.round(p.card_i as number) : null,
     cg: Number.isFinite(p.card_g) ? Math.round(p.card_g as number) : null,

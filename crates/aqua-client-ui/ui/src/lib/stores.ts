@@ -509,7 +509,9 @@ export async function sendCurrent(text: string): Promise<string | null> {
   try {
     // Groups fan the message out to every member; 1:1 uses the direct path.
     if (id.startsWith("grp_")) {
-      await api.groupSend(id, text, !!get(silentChans)[id]);
+      // "Send as" (sendAs.ts): who I write as in this group, if not myself.
+      const { sendAsFor } = await import("./sendAs");
+      await api.groupSend(id, text, !!get(silentChans)[id], sendAsFor(id));
     } else {
       await api.sendMessage(id, text);
     }

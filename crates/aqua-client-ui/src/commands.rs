@@ -2133,7 +2133,7 @@ async fn attach_file_fwd(
     // Groups / channels: the blob is uploaded once; the offer (with the
     // file key) fans out to every member over their own E2EE sessions.
     if peer_id.starts_with("grp_") {
-        let r = group_send(app.clone(), state.clone(), peer_id.clone(), offer_text.clone(), None).await?;
+        let r = group_send(app.clone(), state.clone(), peer_id.clone(), offer_text.clone(), None, None).await?;
         {
             let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(book) = s.chats.get_mut(&peer_id) {
@@ -2190,7 +2190,27 @@ pub fn list_local_media(
 /// restrict the destination since the user picked it via the native
 /// save dialog.
 #[tauri::command]
-pub fn copy_file_to(source: String, dest: String) -> Result<(), String> {
+pub fn copy_file_to(app: AppHandle, source: String, dest: String) -> Result<(), String> {
+    // Android's "Save as" hands back a content:// URI, not a path: std::fs
+    // can't write there ("Could not save file" in the viewer). The system
+    // opens it for us, through the fs plugin, as it does for picked files.
+    if is_uri_pick(&dest) {
+        use tauri_plugin_fs::FsExt;
+        let url = tauri::Url::parse(&dest).map_err(|e| format!("bad file URI: {e}"))?;
+        if url.scheme() == "file" {
+            if let Ok(p) = url.to_file_path() {
+                std::fs::copy(&source, &p).map_err(|e| format!("copy: {e}"))?;
+                return Ok(());
+            }
+        }
+        let mut opts = tauri_plugin_fs::OpenOptions::new();
+        opts.read(false).write(true).truncate(true).create(true);
+        let mut out = app.fs().open(tauri_plugin_fs::FilePath::Url(url), opts).map_err(|e| format!("open {dest}: {e}"))?;
+        let mut src = std::fs::File::open(&source).map_err(|e| format!("read {source}: {e}"))?;
+        std::io::copy(&mut src, &mut out).map_err(|e| format!("copy: {e}"))?;
+        out.sync_all().ok();
+        return Ok(());
+    }
     std::fs::copy(&source, &dest).map_err(|e| format!("copy: {e}"))?;
     Ok(())
 }
@@ -3524,13 +3544,26 @@ pub async fn group_send(
     gid: String,
     body: String,
     silent: Option<bool>,
+    as_gid: Option<String>,
 ) -> Result<SendResult, String> {
     let silent = silent.unwrap_or(false);
-    let (me, group, room) = {
+    let (me, group, room, as_of) = {
         let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let g = s.groups.get(&gid).cloned().ok_or("unknown group")?;
         let room = crate::state::resolve_room(&g, s.active_rooms.get(&gid).map(String::as_str));
-        (s.username.clone().ok_or("not registered")?, g, room)
+        let me = s.username.clone().ok_or("not registered")?;
+        // "Send as": this group itself, or another group / channel I run.
+        let as_of = match as_gid.as_deref().filter(|x| !x.is_empty()) {
+            Some(a) => {
+                let og = s.groups.get(a).ok_or("unknown group to send as")?;
+                if !og.is_admin(&me) { return Err("Only its admins can write as it.".into()); }
+                let name = og.settings.public_link.trim().trim_start_matches('@').to_string();
+                let kind = match og.kind.as_str() { "channel" => "channel", "supergroup" => "supergroup", _ => "group" };
+                Some(serde_json::json!({ "gid": og.id, "title": og.title, "kind": kind, "name": name }))
+            }
+            None => None,
+        };
+        (me, g, room, as_of)
     };
 
     // Permission: the same rule every receiver applies (state.rs may_post).
@@ -3542,7 +3575,12 @@ pub async fn group_send(
     // Local echo.
     let out = {
         let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (kind, meta) = crate::state::classify_full(&body, room_id.clone());
+        let (kind, mut meta) = crate::state::classify_full(&body, room_id.clone());
+        if let Some(a) = &as_of {
+            let mut a = a.clone();
+            a["ok"] = serde_json::Value::Bool(true);
+            meta.get_or_insert_with(Default::default).as_ = Some(a);
+        }
         let msg = ChatMessage {
             meta,
             id: format!("m-{}", crate::state::uuid_like()),
@@ -3570,12 +3608,13 @@ pub async fn group_send(
     let _ = app.emit("aqua://own_sent", serde_json::json!({ "peer_id": gid }));
 
     // Fan out in the background, to all members at once.
-    let wire = format!(
-        "{GRPMSG_PREFIX}{}",
-        // `sil`: a silent post (the channel's 🔔 off) — no sound, no notification.
-        if silent { serde_json::json!({ "gid": gid, "author": me, "body": body, "room": room_id, "sil": true }) }
-        else { serde_json::json!({ "gid": gid, "author": me, "body": body, "room": room_id }) }
-    );
+    // `sil`: a silent post (the channel's 🔔 off) — no sound, no notification.
+    // `as`: sent as a group / channel; older apps don't know the field and
+    // show the real sender, which is safe.
+    let mut env = serde_json::json!({ "gid": gid, "author": me, "body": body, "room": room_id });
+    if silent { env["sil"] = serde_json::Value::Bool(true); }
+    if let Some(a) = as_of { env["as"] = a; }
+    let wire = format!("{GRPMSG_PREFIX}{env}");
     let members: Vec<String> = group.members.iter().filter(|m| m.username != me).map(|m| m.username.clone()).collect();
     group_outbox(&app).send((members, wire)).map_err(|_| "the sending queue stopped".to_string())?;
 
@@ -3879,7 +3918,26 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                     None => return true,
                 };
                 let is_comment = inner.starts_with(crate::state::COMMENT_PREFIX);
-                let (kind, meta) = crate::state::classify_full(&inner, room.map(|r| r.id));
+                let (kind, mut meta) = crate::state::classify_full(&inner, room.map(|r| r.id));
+                // "Sent as": this group itself only from one of its admins
+                // (checked here, `ok`); another group / channel is checked
+                // by the UI against its public @name's owner.
+                if let Some(a) = v.get("as").filter(|a| a.get("gid").and_then(|x| x.as_str()).is_some_and(|x| x.starts_with("grp_"))) {
+                    let agid = a["gid"].as_str().unwrap_or("");
+                    // Checked: the title is the one I know, not the claimed one.
+                    let (ok, known) = match s.groups.get(agid) {
+                        Some(og) => (og.is_admin(&author), Some(og.title.clone())),
+                        None => (false, None),
+                    };
+                    let mut a = serde_json::json!({
+                        "gid": agid,
+                        "title": known.unwrap_or_else(|| a.get("title").and_then(|x| x.as_str()).unwrap_or("").chars().take(64).collect::<String>()),
+                        "kind": a.get("kind").and_then(|x| x.as_str()).unwrap_or("channel"),
+                        "name": a.get("name").and_then(|x| x.as_str()).unwrap_or(""),
+                    });
+                    a["ok"] = serde_json::Value::Bool(ok);
+                    meta.get_or_insert_with(Default::default).as_ = Some(a);
+                }
                 let preview = preview_for(&kind);
                 let len = s.chats.get(&gid).map(|b| b.messages.len()).unwrap_or(0);
                 let s_me = s.username.clone();

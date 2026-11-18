@@ -66,6 +66,9 @@ export interface Profile {
   name_color?: string;
   /** Discord-style server tag I'm wearing (from a group I'm in). */
   clan?: { text: string; badge: string; color: string; gid?: string; title?: string; owner?: string };
+  /** My channel / group / server on the profile (Telegram's personal
+   *  channel): any I run, private or public; `owner` takes join requests. */
+  channel?: { gid: string; title: string; owner: string; kind?: "group" | "supergroup" | "channel" } | null;
 }
 
 const KEY = "aqua-profile";
