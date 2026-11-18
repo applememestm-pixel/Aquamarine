@@ -3765,7 +3765,7 @@ mod tests {
     }
 
     #[test]
-        fn username_taken_by_other_identity() {
+    fn username_taken_by_other_identity() {
         let d = dir();
         let code = d.request_code("a@x.com").unwrap().unwrap();
         let t1 = d.verify_code("a@x.com", &code).unwrap();
