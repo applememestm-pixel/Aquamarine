@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Speech-to-text files for the "stt-N" release (CI only: .github/workflows/stt-assets.yml).
+
+The app does not ship the recognizer: the first time someone taps "to text",
+it downloads these files once (crates/aqua-stt). This script gathers them in
+`out/`, prints each file's SHA-256 (they go into crates/aqua-stt/src/files.rs)
+and a reference transcript of a fixed Russian recording made by onnx-asr, the
+Python implementation the Rust code mirrors (crates/aqua-stt tests compare).
+
+  model    GigaAM v3 e2e CTC (Sber, MIT; punctuation + normalization), int8
+  pre      log-mel preprocessor for GigaAM v3, from onnx-asr (MIT)
+  vocab    CTC vocabulary
+  ort-*    ONNX Runtime (Microsoft, MIT) shared library per platform
+"""
+import hashlib, io, json, os, shutil, subprocess, sys, tarfile, urllib.request, zipfile
+from pathlib import Path
+
+ORT = "1.22.0"
+MODEL = "gigaam-v3-e2e-ctc"
+HF_REPO = "istupakov/gigaam-v3-onnx"
+EXAMPLE = "https://github.com/salute-developers/GigaAM/raw/main/example.wav"
+
+out = Path("out"); out.mkdir(exist_ok=True)
+work = Path("work"); work.mkdir(exist_ok=True)
+
+
+def get(url: str) -> bytes:
+    print("GET", url, flush=True)
+    with urllib.request.urlopen(url, timeout=300) as r:
+        return r.read()
+
+
+def put(name: str, data: bytes):
+    (out / name).write_bytes(data)
+
+
+# ---------------------------------------------------------------- model
+from huggingface_hub import list_repo_files, hf_hub_download  # noqa: E402
+
+files = list_repo_files(HF_REPO)
+print("HF files:", files)
+cands = [f for f in files if f.startswith("v3_e2e_ctc") and f.endswith(".onnx")]
+model_file = next((f for f in cands if "int8" in f), None) or cands[0]
+vocab_file = "v3_e2e_ctc_vocab.txt"
+put("stt-model.onnx", Path(hf_hub_download(HF_REPO, model_file)).read_bytes())
+put("stt-vocab.txt", Path(hf_hub_download(HF_REPO, vocab_file)).read_bytes())
+if "config.json" in files:
+    print("config.json:", Path(hf_hub_download(HF_REPO, "config.json")).read_text())
+
+import onnx_asr  # noqa: E402
+pre_dir = Path(onnx_asr.__file__).parent / "preprocessors" / "data"
+shutil.copy(pre_dir / "gigaam_v3.onnx", out / "stt-pre.onnx")
+
+import onnxruntime as rt  # noqa: E402
+for f in ("stt-pre.onnx", "stt-model.onnx"):
+    s = rt.InferenceSession(str(out / f))
+    print(f, "inputs:", [(i.name, i.type, i.shape) for i in s.get_inputs()],
+          "outputs:", [(o.name, o.type, o.shape) for o in s.get_outputs()])
+vocab = (out / "stt-vocab.txt").read_text(encoding="utf-8").splitlines()
+print("vocab:", len(vocab), "head:", vocab[:5], "tail:", vocab[-5:])
+
+# ---------------------------------------------------------------- golden
+wav = get(EXAMPLE)
+(work / "example.wav").write_bytes(wav)
+asr = onnx_asr.load_model(MODEL, quantization="int8" if "int8" in model_file else None)
+text = asr.recognize(str(work / "example.wav"))
+print("golden:", text)
+import numpy as np, wave  # noqa: E402
+with wave.open(str(work / "example.wav")) as w:
+    assert w.getframerate() == 16000 and w.getnchannels() == 1 and w.getsampwidth() == 2, w.getparams()
+    pcm = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2")
+put("stt-example.pcm", pcm.astype("<i2").tobytes())
+put("stt-example.txt", text.encode("utf-8"))
+
+# ---------------------------------------------------------------- runtime
+base = f"https://github.com/microsoft/onnxruntime/releases/download/v{ORT}"
+
+
+def from_tgz(name: str, member_suffix: str) -> bytes:
+    with tarfile.open(fileobj=io.BytesIO(get(f"{base}/{name}"))) as t:
+        for m in t.getmembers():
+            if m.isfile() and m.name.endswith(member_suffix):
+                return t.extractfile(m).read()
+    raise SystemExit(f"{member_suffix} not in {name}")
+
+
+def from_zip(data: bytes, member_suffix: str) -> bytes:
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        for n in z.namelist():
+            if n.endswith(member_suffix):
+                return z.read(n)
+    raise SystemExit(f"{member_suffix} not in zip")
+
+
+put("ort-linux-x64.so", from_tgz(f"onnxruntime-linux-x64-{ORT}.tgz", f"lib/libonnxruntime.so.{ORT}"))
+put("ort-linux-arm64.so", from_tgz(f"onnxruntime-linux-aarch64-{ORT}.tgz", f"lib/libonnxruntime.so.{ORT}"))
+mac = from_tgz(f"onnxruntime-osx-universal2-{ORT}.tgz", f"lib/libonnxruntime.{ORT}.dylib")
+put("ort-macos.dylib", mac)
+put("ort-windows-x64.dll", from_zip(get(f"{base}/onnxruntime-win-x64-{ORT}.zip"), "lib/onnxruntime.dll"))
+aar = get(f"https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime-android/{ORT}/onnxruntime-android-{ORT}.aar")
+put("ort-android-arm64.so", from_zip(aar, "jni/arm64-v8a/libonnxruntime.so"))
+put("ort-android-armv7.so", from_zip(aar, "jni/armeabi-v7a/libonnxruntime.so"))
+
+# ---------------------------------------------------------------- hashes
+sums = {}
+for p in sorted(out.iterdir()):
+    sums[p.name] = (hashlib.sha256(p.read_bytes()).hexdigest(), p.stat().st_size)
+    print(f"{p.name:24} {p.stat().st_size:>11} {sums[p.name][0]}")
+(work / "sums.json").write_text(json.dumps(sums, indent=1))
+print("=====RUST")
+for n, (h, s) in sums.items():
+    print(f'    ("{n}", "{h}", {s}),')
+print("=====END")

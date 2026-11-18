@@ -1,0 +1,37 @@
+name: stt assets
+
+# Speech-to-text files (model, preprocessor, vocabulary, ONNX Runtime per
+# platform) for the app to download on demand — see tools/stt_assets.py.
+# They live in their own pre-release "stt-N": the tag has no "v", so neither
+# the updaters (tag_version) nor updates_feed.py ever take it for a version,
+# and it is never "Latest". Runs when this file or the script changes.
+on:
+  push:
+    paths: [.github/workflows/stt-assets.yml, tools/stt_assets.py]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  TAG: stt-1
+
+jobs:
+  assets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "onnx-asr[cpu,hub]==0.12.0" numpy
+      - run: python tools/stt_assets.py
+      - name: Publish to the stt release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --latest=false \
+              --title "Speech-to-text files ($TAG)" \
+              --notes "Files the app downloads on demand for voice-to-text (GigaAM v3 by Sber, MIT; ONNX Runtime by Microsoft, MIT). Not an app release."
+          gh release upload "$TAG" out/* -R "$GITHUB_REPOSITORY" --clobber
