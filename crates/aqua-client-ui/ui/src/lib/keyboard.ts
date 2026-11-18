@@ -33,6 +33,16 @@ export function startKeyboardInset(): () => void {
     root.classList.toggle("kb-open", open);
     // Undo the browser's own "scroll the caret into view": the room is ours now.
     if (overlay && (window.scrollY || document.scrollingElement?.scrollTop)) window.scrollTo(0, 0);
+    // It also scrolls the field's NON-scrolling ancestors (the chat, the
+    // pane — overflow hidden): the header went off the top and the field
+    // stayed half under the keyboard. Those are put back.
+    if (open) {
+      for (let el = (document.activeElement as HTMLElement | null)?.parentElement ?? null; el; el = el.parentElement) {
+        if (el.scrollTop === 0) continue;
+        const oy = getComputedStyle(el).overflowY;
+        if (oy !== "auto" && oy !== "scroll") el.scrollTop = 0;
+      }
+    }
     // A list that was at the bottom stays at the bottom.
     for (const el of document.querySelectorAll<HTMLElement>(".messages")) {
       if (el.dataset.atEnd === "1") el.scrollTop = el.scrollHeight;
@@ -50,6 +60,10 @@ export function startKeyboardInset(): () => void {
   window.addEventListener("resize", schedule);
   // A field gained / lost focus: the keyboard check above depends on it.
   document.addEventListener("focusin", schedule);
+  // The browser scrolls the field into view a moment after focusing it (and
+  // again once the keyboard is up): look again then.
+  const late = () => { setTimeout(schedule, 150); setTimeout(schedule, 450); };
+  document.addEventListener("focusin", late);
   document.addEventListener("focusout", schedule);
   apply();
   return () => {
@@ -57,6 +71,7 @@ export function startKeyboardInset(): () => void {
     vv?.removeEventListener("scroll", schedule);
     window.removeEventListener("resize", schedule);
     document.removeEventListener("focusin", schedule);
+    document.removeEventListener("focusin", late);
     document.removeEventListener("focusout", schedule);
     cancelAnimationFrame(raf);
   };
