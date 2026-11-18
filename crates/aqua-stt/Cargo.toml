@@ -1,0 +1,13 @@
+[package]
+name        = "aqua-stt"
+version     = { workspace = true }
+edition     = { workspace = true }
+license     = { workspace = true }
+description = "Voice-to-text on the device: GigaAM v3 (Sber, MIT) on ONNX Runtime (Microsoft, MIT), both downloaded on demand — nothing is bundled into the app."
+
+[dependencies]
+# load-dynamic: ONNX Runtime is the shared library the app downloads with the
+# model (stt release), loaded by path at run time — no default features, so
+# nothing is linked or downloaded at build time and the app does not grow.
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["load-dynamic"] }
