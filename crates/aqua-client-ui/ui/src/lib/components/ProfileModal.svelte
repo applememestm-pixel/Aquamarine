@@ -21,6 +21,7 @@
   import BirthdayInput from "./BirthdayInput.svelte";
   import ColorInput from "./ColorInput.svelte";
   import { onMount } from "svelte";
+  import { flip } from "svelte/animate";
   import { profile, updateProfile, type Profile } from "../profile";
   import { contacts, saveContact, getContact } from "../contacts";
   import { info, chats, selectChat } from "../stores";
@@ -130,6 +131,47 @@
   }
   function makeFavourite(g: string) { if (draft) draft = { ...draft, games: [g, ...(draft.games ?? []).filter((x) => x !== g)] }; }
   let showAllGames = $state(false);
+  // ---- Favourite games: hold a poster and drag it to change the order (the
+  // first one is the favourite). Mouse: drag at once; touch: hold first, so
+  // scrolling the editor still works. ----
+  let gDrag = $state<{ g: string; id: number } | null>(null);
+  let gHold: ReturnType<typeof setTimeout> | null = null;
+  let gStart: { x: number; y: number; id: number; g: string } | null = null;
+  function gameDown(e: PointerEvent, g: string) {
+    if (e.button !== 0 || (e.target as HTMLElement).closest("button")) return;
+    gStart = { x: e.clientX, y: e.clientY, id: e.pointerId, g };
+    const begin = () => {
+      gHold = null;
+      gDrag = { g, id: e.pointerId };
+      try { (e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId); } catch { /* gone */ }
+      try { navigator.vibrate?.(10); } catch { /* none */ }
+    };
+    if (e.pointerType === "mouse") begin();
+    else gHold = setTimeout(begin, 260);
+  }
+  function gameMove(e: PointerEvent) {
+    if (gHold && gStart && Math.hypot(e.clientX - gStart.x, e.clientY - gStart.y) > 8) { clearTimeout(gHold); gHold = null; gStart = null; }
+    if (!gDrag || e.pointerId !== gDrag.id || !draft) return;
+    const over = (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)?.closest<HTMLElement>("[data-game]")?.dataset.game;
+    const list = draft.games ?? [];
+    if (!over || over === gDrag.g) return;
+    const from = list.indexOf(gDrag.g), to = list.indexOf(over);
+    if (from < 0 || to < 0) return;
+    const next = list.filter((x) => x !== gDrag!.g);
+    next.splice(to, 0, gDrag.g);
+    draft = { ...draft, games: next };
+  }
+  function gameUp() {
+    if (gHold) { clearTimeout(gHold); gHold = null; }
+    gStart = null;
+    gDrag = null;
+  }
+  /** While a poster is dragged on a phone the page mustn't scroll. */
+  function noScrollWhileDragging(node: HTMLElement) {
+    const h = (e: TouchEvent) => { if (gDrag) e.preventDefault(); };
+    node.addEventListener("touchmove", h, { passive: false });
+    return { destroy: () => node.removeEventListener("touchmove", h) };
+  }
   function removeGame(g: string) { if (draft) { const ids = { ...(draft.game_ids ?? {}) }; delete ids[g]; draft = { ...draft, games: (draft.games ?? []).filter((x) => x !== g), game_ids: ids }; } }
   // Look up icons for whatever is on screen.
   $effect(() => {
@@ -839,11 +881,13 @@
           <div class="field">
             <span>{$t("Favourite games")}</span>
             {#if (draft.games ?? []).length}
-              <div class="ed-games">
+              <div class="ed-games" use:noScrollWhileDragging>
                 {#each draft.games ?? [] as g (g)}
                   {@const cv = coverFor(g, $gameIds, $gameCovers, draft.game_ids)}
                   {@const ic = iconFor(g, $gameIds, $gameIcons, draft.game_ids)}
-                  <div class="ed-game" class:first={g === draft.games?.[0]}>
+                  <!-- svelte-ignore a11y_no_static_element_interactions -->
+                  <div class="ed-game" class:first={g === draft.games?.[0]} class:dragging={gDrag?.g === g} data-game={g} animate:flip={{ duration: 180 }}
+                    onpointerdown={(e) => gameDown(e, g)} onpointermove={gameMove} onpointerup={gameUp} onpointercancel={gameUp} oncontextmenu={(e) => e.preventDefault()}>
                     <GamePoster name={g} cover={cv} icon={ic} />
                     {#if g !== draft.games?.[0]}<button class="eg-star" onclick={() => makeFavourite(g)} title={$t("Make it my favourite game")} aria-label={$t("Make it my favourite game")}>★</button>{:else}<span class="eg-first">★ {$t("Favourite")}</span>{/if}
                     <button class="eg-x" onclick={() => removeGame(g)} title={$t("Remove")} aria-label={$t("Remove")}>×</button>
@@ -1375,7 +1419,8 @@
     display: flex; flex-direction: column; scrollbar-width: thin; }
   .ed-right .buttons { margin-top: auto; padding-top: 16px; }
   .ed-games { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 8px; margin: 2px 0 8px; }
-  .ed-game { position: relative; animation: fade-in .2s ease-out; }
+  .ed-game { position: relative; animation: fade-in .2s ease-out; cursor: grab; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+  .ed-game.dragging { cursor: grabbing; transform: scale(1.06); opacity: .85; z-index: 2; }
   .ed-game.first :global(.gp) { box-shadow: 0 0 0 2px #FFD45C; }
   .eg-star { position: absolute; top: 4px; left: 4px; width: 20px; height: 20px; border-radius: 50%; border: none; cursor: pointer;
     background: rgba(0,0,0,.6); color: #FFD45C; font-size: 12px; line-height: 1; opacity: 0; transition: opacity .15s; }
