@@ -64,6 +64,12 @@
   // Opened by "Add account": the other accounts on this device stay one tap away.
   $effect(() => { if ($wizardOpen) void loadAccounts(); });
   const otherAccounts = $derived($accounts.filter((a) => !a.active && a.registered && a.username));
+  // Other slots on this phone with keys but logged out: an account without
+  // two-step verification can only be signed into with ITS keys — after
+  // "Log out" + "Add account" it was unreachable ("lives on another device").
+  // Every slot has a vault (made at start) — an abandoned "Add account" one
+  // (a1, a2…) too; a nameless one counts only as the first account's slot.
+  const keptAccounts = $derived($accounts.filter((a) => !a.active && !a.registered && a.has_keys && (!!a.last || a.slot === "")));
   let leaving = $state(false);
   async function backTo(slot: string) {
     leaving = true;
@@ -207,6 +213,8 @@
   let existsHint = $state(false);
   /** The account lives on another device (no two-step verification). */
   let boundHint = $state(false);
+  /** The account this device's keys already have on the server (from the error). */
+  let keyAccount = $state("");
   let password = $state("");
   let password2 = $state("");
   let showPw = $state(false);
@@ -215,6 +223,10 @@
     (/[A-ZА-Я]/.test(password) && /[a-zа-я]/.test(password) ? 1 : 0) + (/\d/.test(password) ? 1 : 0) + (/[^\w\s]/.test(password) ? 1 : 0),
   );
   const login = $derived(username.trim().replace(/^@/, "").toLowerCase());
+  /** The slot to go back to for @login, when this one says it lives elsewhere. */
+  const homeSlot = $derived(
+    $accounts.find((a) => !a.active && (a.registered || a.has_keys) && (a.username ?? a.last ?? "").toLowerCase() === login)
+    ?? (keptAccounts.length === 1 && !keptAccounts[0].last ? keptAccounts[0] : null));
   /** A pass from my server (Settings → Account & server): I join this
    *  private server with my account there — same @name, nothing to choose. */
   function passUserOf(text: string): string | null {
@@ -240,6 +252,8 @@
   }
 
   function plainError(m: string): string {
+    const own = /already has an account here: @([a-z0-9_.]+)/i.exec(m);
+    if (own) { keyAccount = own[1].toLowerCase(); return tr("This device already has an account on this server: @{u}. One account per device — sign in to it.", { u: keyAccount }); }
     if (/already taken/i.test(m)) { existsHint = true; return tr("@{u} is already taken.", { u: login }); }
     if (/lives on one device/i.test(m)) { boundHint = true; return tr("@{u} lives on another device: it has no two-step verification, so it can't be moved. Turn it on there (Settings → Privacy & Security), then sign in here.", { u: login }); }
     if (/wrong @username or password/i.test(m)) return tr("Wrong @username or password");
@@ -253,7 +267,7 @@
   }
 
   async function submit() {
-    error = null; existsHint = false; boundHint = false;
+    error = null; existsHint = false; boundHint = false; keyAccount = "";
     if (mode === "signup" && !/^[a-z0-9_.]{3,32}$/.test(login)) { error = tr("@username: 3–32 characters, a-z 0-9 _ . only"); return; }
     if (mode === "signin" && !login) { error = tr("Enter your @username"); return; }
     if (!(passUser && !password) && password.length < 8) { error = tr("Password must be at least 8 characters"); return; }
@@ -409,6 +423,12 @@
           {#if existsHint}
             <button class="err-act" onclick={() => { mode = "signin"; error = null; existsHint = false; password2 = ""; }}>{$t("Sign in to it")}</button>
           {/if}
+          {#if keyAccount}
+            <button class="err-act" onclick={() => { mode = "signin"; username = keyAccount; error = null; keyAccount = ""; password2 = ""; }}>{$t("Sign in to @{u}", { u: keyAccount })}</button>
+          {/if}
+          {#if boundHint && homeSlot}
+            <button class="err-act" disabled={leaving} onclick={() => homeSlot && backTo(homeSlot.slot)}>{$t("Its keys are on this phone — open it")}</button>
+          {/if}
         </div>
       {/if}
 
@@ -423,10 +443,13 @@
               {busy ? $t("Signing in…") : $t("Continue as @{name}", { name: $info.username ?? "" })}
             </button>
           {/if}
-          {#if otherAccounts.length && !$info?.registered}
+          {#if (otherAccounts.length || keptAccounts.length) && !$info?.registered}
             <div class="other-acc">
               {#each otherAccounts as a (a.slot)}
                 <button class="link" disabled={leaving} onclick={() => backTo(a.slot)}>← {$t("Back to @{name}", { name: a.username ?? "" })}</button>
+              {/each}
+              {#each keptAccounts as a (a.slot)}
+                <button class="link" disabled={leaving} onclick={() => backTo(a.slot)}>← {a.last ? $t("Back to @{name}", { name: a.last }) : $t("Back to the account that was here before")}</button>
               {/each}
             </div>
           {/if}

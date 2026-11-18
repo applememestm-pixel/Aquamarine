@@ -1034,6 +1034,7 @@ impl AppState {
         self.registered = true;
         self.username = Some(username.clone());
         self.email = email.clone();
+        save_last_account(&self.data_dir, &username);
         save_account(&self.data_dir, &Account {
             registered: true,
             username: Some(username),
@@ -1045,6 +1046,13 @@ impl AppState {
     /// transport so the entry gate reopens. The identity/vault is kept, so
     /// logging back in with the same handle reuses the same keys.
     pub fn log_out(&mut self) {
+        // Whose keys these are, after the logout too: the sign-in screen of
+        // another account slot offers to come back here (accounts.rs). An
+        // account without two-step verification can't be signed into with
+        // other keys — "Add account" after a logout left it unreachable.
+        if let Some(u) = self.username.clone() {
+            save_last_account(&self.data_dir, &u);
+        }
         self.registered = false;
         self.username = None;
         self.email = None;
@@ -1225,6 +1233,8 @@ fn save_connection_hints(dir: &std::path::Path, server_url: &str, username: &str
 // storage — the auth material is still the vault-held identity key.
 
 const ACCOUNT_FILE: &str = "account.json";
+/// The @username whose keys this data directory holds, kept after a logout.
+pub const LAST_ACCOUNT_FILE: &str = "last-account.json";
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct Account {
@@ -1252,6 +1262,11 @@ fn save_account(dir: &std::path::Path, acct: &Account) {
         }
         Err(e) => tracing::warn!(?e, "account.json serialize failed"),
     }
+}
+
+/// Whose keys this data directory holds (kept after a logout, accounts.rs).
+fn save_last_account(dir: &std::path::Path, username: &str) {
+    let _ = crate::fsx::write_atomic(&dir.join(LAST_ACCOUNT_FILE), &serde_json::to_vec(&serde_json::json!({ "username": username })).unwrap_or_default());
 }
 
 fn clear_account_file(dir: &std::path::Path) {

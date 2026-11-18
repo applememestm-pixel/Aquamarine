@@ -1603,7 +1603,15 @@ async fn check_server(http: &reqwest::Client, server_url: &str) -> Result<(), Tr
         return Ok(());
     }
     let r = http.get(format!("{base}/v1/stats")).timeout(std::time::Duration::from_secs(8)).send().await?;
+    let ok = r.status().is_success();
     let v: serde_json::Value = r.json().await.unwrap_or_default();
+    // Only an Aquamarine relay's own answer can say it's old (theirs has
+    // `ok`/`users`, no `version`). An error page, a 5xx / 429, a VPN or Wi-Fi
+    // login page used to read as "older than 1.2.0" for a new server: then
+    // we can't tell — let the connection itself say what's wrong.
+    if !ok || !(v.get("ok").is_some() || v.get("users").is_some() || v.get("version").is_some()) {
+        return Ok(());
+    }
     let ver = v["version"].as_str().unwrap_or("").to_string();
     if !server_version_ok(&ver) {
         let was = if ver.is_empty() { "older than 1.2.0".to_string() } else { ver };
