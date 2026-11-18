@@ -10,6 +10,8 @@
  * system does shrink the page instead, only `kb-open` is set (the bottom
  * safe-area padding then isn't needed above the keyboard).
  */
+import { nativeKeyboard } from "./insets";
+
 export function startKeyboardInset(): () => void {
   const vv = window.visualViewport;
   const root = document.documentElement;
@@ -26,10 +28,13 @@ export function startKeyboardInset(): () => void {
     // system (Xiaomi's sidebar / floating window, split screen) isn't one —
     // it lifted the composer and the page drifted.
     const typing = !!document.activeElement?.closest("input, textarea, [contenteditable=true], [contenteditable='']");
-    const overlay = typing && kb > 120;
-    const open = overlay || (typing && shrunk > 120);
+    // Android says it itself (any keyboard app): trust that over the guess.
+    const nk = nativeKeyboard();
+    const overlay = nk ? nk.shown && nk.css > 40 : typing && kb > 120;
+    const open = nk ? nk.shown : overlay || (typing && shrunk > 120);
+    const cover = nk ? nk.css : kb;
     if (!typing && shrunk > 120 && kb <= 120) tall = window.innerHeight;
-    root.style.setProperty("--kb", overlay ? `${kb}px` : "0px");
+    root.style.setProperty("--kb", overlay ? `${cover}px` : "0px");
     root.classList.toggle("kb-open", open);
     // Undo the browser's own "scroll the caret into view": the room is ours now.
     if (overlay && (window.scrollY || document.scrollingElement?.scrollTop)) window.scrollTo(0, 0);
@@ -60,6 +65,7 @@ export function startKeyboardInset(): () => void {
   window.addEventListener("resize", schedule);
   // A field gained / lost focus: the keyboard check above depends on it.
   document.addEventListener("focusin", schedule);
+  window.addEventListener("aqua-ime", schedule);
   // The browser scrolls the field into view a moment after focusing it (and
   // again once the keyboard is up): look again then.
   const late = () => { setTimeout(schedule, 150); setTimeout(schedule, 450); };
@@ -71,6 +77,7 @@ export function startKeyboardInset(): () => void {
     vv?.removeEventListener("scroll", schedule);
     window.removeEventListener("resize", schedule);
     document.removeEventListener("focusin", schedule);
+    window.removeEventListener("aqua-ime", schedule);
     document.removeEventListener("focusin", late);
     document.removeEventListener("focusout", schedule);
     cancelAnimationFrame(raf);
