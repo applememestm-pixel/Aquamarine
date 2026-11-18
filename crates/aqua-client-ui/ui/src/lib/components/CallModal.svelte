@@ -1708,18 +1708,6 @@
   .tgc-b:active i { filter: brightness(.9); }
 
   /* ---------- mini card ---------- */
-  /* Phones: a slim strip under the chat's header (Telegram's "return to
-     call" bar) — the card sat on top of the message field. Tap → full. */
-  @media (max-width: 720px) {
-    .mini { top: calc(var(--sat, env(safe-area-inset-top, 0px)) + 64px); bottom: auto; left: 8px; right: 8px; width: auto;
-      flex-direction: row; align-items: center; gap: 8px; padding: 6px 8px 6px 10px; border-radius: calc(14px * var(--rk, 1)); }
-    .mini-top { flex: 1; min-width: 0; gap: 8px; cursor: pointer; }
-    .mini-video, .mini-me, .mini-statsbtn, .mini .bars, .mini .stats { display: none !important; }
-    .mini .ava { transform: scale(.8); }
-    .mini .controls { gap: 6px; margin: 0; flex-wrap: nowrap; }
-    .mini .controls .cb { width: 36px; height: 36px; }
-    .mini .controls .cb:not(.hang):not(.accept):not(:first-child) { display: none; }
-  }
   .mini {
     position: fixed; right: 20px; bottom: 20px; z-index: 250;
     width: 340px;
@@ -1733,6 +1721,19 @@
   }
   .mini.ended { opacity: 0.85; }
   @keyframes slide-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+  /* Phones: a slim strip under the chat's header (Telegram's "return to
+     call" bar); tap → full screen. It must come after the card's own rules:
+     before them those won, and the strip came out as a tall crooked card. */
+  @media (max-width: 720px) {
+    .mini { top: calc(var(--sat, env(safe-area-inset-top, 0px)) + 64px); bottom: auto; left: 8px; right: 8px; width: auto;
+      flex-direction: row; align-items: center; gap: 8px; padding: 6px 8px 6px 10px; border-radius: calc(14px * var(--rk, 1)); }
+    .mini-top { flex: 1; min-width: 0; gap: 8px; cursor: pointer; }
+    .mini-video, .mini-me, .mini-statsbtn, .mini .bars, .mini .stats { display: none !important; }
+    .mini .ava { transform: scale(.8); }
+    .mini .controls { gap: 6px; margin: 0; flex-wrap: nowrap; }
+    .mini .controls .cb { width: 36px; height: 36px; }
+    .mini .controls .cb:not(.hang):not(.accept):not(:first-child) { display: none; }
+  }
   .mini-top { display: flex; align-items: center; gap: 12px; }
   .mini-text { flex: 1; min-width: 0; }
   .mini-name { font-weight: 700; font-size: 15px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

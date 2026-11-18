@@ -2112,6 +2112,7 @@ export const RU: Record<string, string> = {
   "{n} in the thread": "В ветке: {n}",
   "No replies yet — start the discussion": "Ответов пока нет — начните обсуждение",
   "Show in chat": "Показать в чате",
+  "Discussion started": "Начало обсуждения",
   "Write a comment…": "Написать комментарий…",
   "Comment": "Комментировать",
   "Comments & thread": "Комментарии и ветка",

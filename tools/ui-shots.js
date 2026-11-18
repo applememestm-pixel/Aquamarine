@@ -196,6 +196,15 @@ window.__TAURI_INTERNALS__ = {
     if (await voice.count()) await voice.click({ force: true, timeout: 5000 }).catch(() => {});
     await ph.waitForTimeout(1200);
     await ph.screenshot({ path: path.join(out, '13d-phone-call.jpg'), type: 'jpeg', quality: 80 });
+    // Folded: a slim strip under the header, then hang up.
+    await ph.evaluate(() => window.__aquaBack && window.__aquaBack()); await ph.waitForTimeout(600);
+    await ph.screenshot({ path: path.join(out, '13d2-phone-call-strip.jpg'), type: 'jpeg', quality: 80 });
+    await ph.locator('.mini .cb.hang').first().click({ force: true, timeout: 5000 }).catch(() => {}); await ph.waitForTimeout(1500);
+    // Comments / thread: a screen of its own on a phone.
+    await ph.locator('text=Круто выглядит >> visible=true').first().tap({ force: true }); await ph.waitForTimeout(900);
+    await ph.locator('.ctx-item').filter({ hasText: /Ветка|Thread|Комментарии/ }).first().click({ force: true, timeout: 5000 }).catch(() => {});
+    await ph.waitForTimeout(700);
+    await ph.screenshot({ path: path.join(out, '13e-phone-thread.jpg'), type: 'jpeg', quality: 80 });
   } catch (e) { errs.push('phone2: ' + e.message.split('\n')[0]); }
   console.log(errs.join('\n') || 'no errors');
   for (const f of fs.readdirSync(out).filter((f) => f.endsWith('.jpg')).sort()) {

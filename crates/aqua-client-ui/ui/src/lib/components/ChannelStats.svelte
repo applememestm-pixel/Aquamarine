@@ -12,6 +12,9 @@
   import { t, tr, tn, lang } from "../i18n";
   import { channelStats, viewCounts, DETAIL_DAYS } from "../channelStats";
   import { avatars } from "../people";
+  import { icons } from "../icons";
+  import { IS_MOBILE } from "../platform";
+  const CLOSE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>`;
 
   let { gid, posts, subscribers }: { gid: string; posts: StatPost[]; subscribers: number } = $props();
 
@@ -43,11 +46,12 @@
   const when = (ms: number) => new Date(ms).toLocaleString(loc(), { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 </script>
 
-<aside class="cs" use:sideResize={"channelstats"} data-back aria-label={$t("Channel statistics")}>
+<aside class="cs" class:phone={IS_MOBILE} use:sideResize={"channelstats"} data-back aria-label={$t("Channel statistics")}>
   <header class="cs-head">
-    {#if cur}<button class="cs-back" onclick={() => (sel = null)} aria-label={$t("Back")}>‹</button>{/if}
+    {#if cur}<button data-x data-keep-x class="cs-x" onclick={() => (sel = null)} aria-label={$t("Back")}>{@html icons.back}</button>
+    {:else if IS_MOBILE}<button data-x data-keep-x class="cs-x" onclick={() => statsFor.set(null)} aria-label={$t("Back")}>{@html icons.back}</button>{/if}
     <b>{cur ? $t("Post") : $t("Statistics")}</b>
-    <button data-x class="cs-x" onclick={() => statsFor.set(null)} aria-label={$t("Close")}>✕</button>
+    {#if !IS_MOBILE}<button data-x data-keep-x class="cs-x" onclick={() => statsFor.set(null)} aria-label={$t("Close")}>{@html CLOSE}</button>{/if}
   </header>
   <div class="cs-body">
     {#if !cur}
@@ -118,34 +122,41 @@
 
 <style>
   .cs { position: absolute; top: 0; right: 0; bottom: 0; width: min(380px, 100%); z-index: 26; display: flex; flex-direction: column; background: var(--bg-shell); border-left: 1px solid var(--border-strong); box-shadow: -16px 0 40px -22px rgba(0,0,0,0.6); animation: cs-in 0.2s cubic-bezier(.2,.9,.3,1); }
+  /* Phones: a screen of its own (Telegram's statistics), not a strip. */
+  .cs.phone { position: fixed; inset: 0; width: auto; z-index: 300; border: none; box-shadow: none;
+    padding: var(--sat, env(safe-area-inset-top, 0px)) 0 var(--sab, env(safe-area-inset-bottom, 0px)); animation: cs-in-ph 0.22s cubic-bezier(.2,.9,.3,1); }
   @keyframes cs-in { from { transform: translateX(24px); opacity: 0; } }
-  .cs-head { display: flex; align-items: center; gap: 8px; padding: 14px 12px 12px 16px; border-bottom: 1px solid var(--border); }
-  .cs-head b { flex: 1; font-size: 15px; }
-  .cs-back, .cs-x { width: 28px; height: 28px; border-radius: 50%; border: none; background: var(--bg-hover); color: var(--fg-muted); cursor: pointer; font-size: 15px; }
-  .cs-body { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
-  .cs-tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  @keyframes cs-in-ph { from { transform: translateX(40%); opacity: 0; } }
+  .cs-head { display: flex; align-items: center; gap: 6px; min-height: 56px; padding: 0 8px 0 6px; border-bottom: 1px solid var(--border); background: var(--bg-list); }
+  .cs-head b { flex: 1; font-size: 17px; font-weight: 600; padding-left: 8px; }
+  .cs-x { width: 44px; height: 44px; flex-shrink: 0; display: grid; place-items: center; border-radius: 50%; border: none; background: transparent; color: var(--fg); cursor: pointer; }
+  .cs-x :global(svg) { width: 22px; height: 22px; }
+  .cs-x:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
+  .cs-body { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  /* Telegram's overview: one card, numbers in two columns. */
+  .cs-tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px 12px; padding: 14px 16px; border-radius: calc(16px * var(--rk, 1)); background: var(--bg-surface); border: 1px solid var(--border); }
   .cs-tiles.three { grid-template-columns: repeat(3, 1fr); }
-  .cs-tile { padding: 10px 12px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-input); display: flex; flex-direction: column; gap: 2px; }
-  .cs-tile b { font-size: 20px; color: var(--fg); font-variant-numeric: tabular-nums; }
-  .cs-tile span { font-size: 11.5px; color: var(--fg-muted); }
-  .cs-lbl { margin-top: 6px; font-size: 11.5px; font-weight: 800; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.04em; }
-  .cs-empty { font-size: 12.5px; color: var(--fg-dim); }
-  .cs-post { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: calc(11px * var(--rk, 1)); border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
-  .cs-post:hover { border-color: var(--accent); }
-  .cs-pt { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .cs-pm { font-size: 11.5px; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
-  .cs-bar { height: 3px; border-radius: 2px; background: var(--bg-hover); overflow: hidden; }
-  .cs-bar i { display: block; height: 100%; background: var(--accent); }
-  .cs-note { margin-top: 8px; font-size: 11.5px; color: var(--fg-dim); line-height: 1.5; }
-  .cs-root { padding: 10px 12px; border-radius: calc(12px * var(--rk, 1)); background: var(--bg-input); border-left: 3px solid var(--accent); font-size: 13.5px; line-height: 1.45; max-height: 120px; overflow: hidden; }
-  .cs-svg { width: 100%; height: auto; display: block; padding: 6px 0; border-radius: calc(10px * var(--rk, 1)); background: var(--bg-input); }
+  .cs-tile { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .cs-tile b { font-size: 21px; font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
+  .cs-tile span { font-size: 13px; color: var(--fg-muted); }
+  .cs-lbl { margin: 10px 4px 0; font-size: 14px; font-weight: 600; color: var(--accent); }
+  .cs-empty { font-size: 14px; color: var(--fg-dim); padding: 0 4px; }
+  .cs-post { display: flex; flex-direction: column; gap: 5px; padding: 12px 14px; border-radius: calc(14px * var(--rk, 1)); border: 1px solid var(--border); background: var(--bg-surface); color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+  .cs-post:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+  .cs-pt { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cs-pm { font-size: 12.5px; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
+  .cs-bar { height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--fg) 8%, transparent); overflow: hidden; }
+  .cs-bar i { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
+  .cs-note { margin: 8px 4px; font-size: 12.5px; color: var(--fg-dim); line-height: 1.5; }
+  .cs-root { padding: 12px 14px; border-radius: calc(14px * var(--rk, 1)); background: var(--bg-surface); border: 1px solid var(--border); border-left: 3px solid var(--accent); font-size: 15px; line-height: 1.45; max-height: 140px; overflow: hidden; }
+  .cs-svg { width: 100%; height: auto; display: block; padding: 8px 0; border-radius: calc(16px * var(--rk, 1)); background: var(--bg-surface); border: 1px solid var(--border); box-sizing: border-box; }
   .cs-svg .g { stroke: var(--border); stroke-width: 1; }
   .cs-svg .ax { fill: var(--fg-dim); font-size: 9px; font-variant-numeric: tabular-nums; }
   .cs-svg .ln { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
   .cs-svg .ar { fill: var(--accent); opacity: 0.12; stroke: none; }
   .cs-svg .br { fill: var(--accent); opacity: 0.35; }
-  .cs-viewer { display: flex; align-items: center; gap: 9px; padding: 4px 2px; }
-  .cs-av { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 800; color: #06070C; background: linear-gradient(135deg, var(--accent), var(--accent-2)); background-size: cover; background-position: center; }
-  .cs-vn { flex: 1; font-size: 13px; }
-  .cs-vt { font-size: 11.5px; color: var(--fg-dim); }
+  .cs-viewer { display: flex; align-items: center; gap: 12px; padding: 8px 4px; border-bottom: 1px solid var(--border); }
+  .cs-av { width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0; display: grid; place-items: center; font-size: 16px; font-weight: 700; color: var(--bg-shell); background: linear-gradient(135deg, var(--accent), var(--accent-2)); background-size: cover; background-position: center; }
+  .cs-vn { flex: 1; font-size: 15px; }
+  .cs-vt { font-size: 13px; color: var(--fg-dim); }
 </style>
