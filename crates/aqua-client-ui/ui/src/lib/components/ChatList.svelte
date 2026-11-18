@@ -251,6 +251,9 @@
   const recentChats = $derived(recentSearch.map((id) => $visibleChats.find((c) => c.id === id)).filter(Boolean) as ChatSummary[]);
   /** People you write to most lately (the list is newest first). */
   const frequent = $derived($visibleChats.filter((c) => kindOfChat(c) === "people" && !c.id.startsWith("__")).slice(0, 12));
+  /** A tab picked with nothing typed: every chat of that kind (Telegram) —
+   *  the tabs changed nothing here, recent and frequent stayed mixed. */
+  const tabChats = $derived(searchTab === "all" ? [] : $visibleChats.filter((c) => kindOfChat(c) === searchTab && !c.id.startsWith("__")));
   function openFromSearch(id: string) {
     rememberSearch(id);
     void selectChat(id);
@@ -1201,6 +1204,16 @@
     {/if}
     {#if searchHome}
       <div class="search-home" role="presentation" onpointerdown={(e) => e.preventDefault()}>
+        {#if searchTab !== "all"}
+          {#each tabChats as c (c.id)}
+            <button class="sh-recent" onclick={() => openFromSearch(c.id)}>
+              <span class="avatar sz-40" class:ava-grp={c.id.startsWith("grp_") && !c.channel} class:ava-chan={c.channel} style="--gradient: {c.gradient}">{c.letter}{#if $avatars[c.id]}<img class="ava-img" src={$avatars[c.id]} alt="" loading="lazy" />{/if}</span>
+              <span class="sh-txt"><b>{c.name}</b><span>{peekStatus(c.id) || (c.id.startsWith("grp_") ? "" : "@" + c.id)}</span></span>
+            </button>
+          {:else}
+            <div class="sh-title">{$t("Nothing here yet.")}</div>
+          {/each}
+        {:else}
         {#if frequent.length}
           <div class="sh-title">{$t("Frequent contacts")}</div>
           <div class="sh-freq" use:scrollX>
@@ -1223,6 +1236,7 @@
         {/if}
         {#if !frequent.length && !recentChats.length}
           <div class="sh-title">{$t("Type a name, @username or paste an invite link")}</div>
+        {/if}
         {/if}
       </div>
     {/if}
