@@ -168,6 +168,19 @@
           onblur={saveStatus}
         />
         <div class="sep"></div>
+        <!-- Accounts first, like Telegram's side menu: the switch is the first thing here. -->
+        <div class="mi-head">{$t("Accounts")}</div>
+        {#each $accounts as a (a.slot)}
+          <button class="menu-item acc" class:active={a.active} disabled={switching || a.active} onclick={() => pickAccount(a.slot)}>
+            <span class="acc-ava">{(a.username || "?").charAt(0).toUpperCase()}</span>
+            <span class="mi-text"><span class="mi-label">{a.username ? "@" + a.username : $t("Not signed in")}</span><span class="mi-hint">{hostOf(a.server_url ?? "") || $t("Sign-in not finished")}</span></span>
+            {#if a.active}<span class="acc-tick">✓</span>{/if}
+          </button>
+        {/each}
+        <button class="menu-item" disabled={switching || $accountsFull} title={$accountsFull ? $t("At most {n} accounts in one app. Log out of one to add another.", { n: MAX_ACCOUNTS }) : undefined} onclick={() => pickAccount("new")}>
+          <span class="acc-ava plus">+</span><span class="mi-label">{switching ? $t("Opening the account…") : $accountsFull ? $t("{n} accounts at most", { n: MAX_ACCOUNTS }) : $t("Add account")}</span>
+        </button>
+        <div class="sep"></div>
         {#each STATUSES as st}
           <button class="menu-item" class:active={$myOnline === st.id} onclick={() => setOnline(st.id)}>
             <span class="dot {st.id}"></span>
@@ -189,17 +202,6 @@
           <span class="acc-ava plus">⇄</span><span class="mi-label">{$t("Another server…")}</span>
         </button>
         <div class="sep"></div>
-        <div class="mi-head">{$t("Accounts")}</div>
-        {#each $accounts as a (a.slot)}
-          <button class="menu-item acc" class:active={a.active} disabled={switching || a.active} onclick={() => pickAccount(a.slot)}>
-            <span class="acc-ava">{(a.username || "?").charAt(0).toUpperCase()}</span>
-            <span class="mi-text"><span class="mi-label">{a.username ? "@" + a.username : $t("Not signed in")}</span><span class="mi-hint">{hostOf(a.server_url ?? "") || $t("Sign-in not finished")}</span></span>
-            {#if a.active}<span class="acc-tick">✓</span>{/if}
-          </button>
-        {/each}
-        <button class="menu-item" disabled={switching || $accountsFull} title={$accountsFull ? $t("At most {n} accounts in one app. Log out of one to add another.", { n: MAX_ACCOUNTS }) : undefined} onclick={() => pickAccount("new")}>
-          <span class="acc-ava plus">+</span><span class="mi-label">{switching ? $t("Opening the account…") : $accountsFull ? $t("{n} accounts at most", { n: MAX_ACCOUNTS }) : $t("Add account")}</span>
-        </button>
         <button class="menu-item" onclick={() => { shareActivity.update((v) => !v); }}>
           <span class="mi-text"><span class="mi-label">{$t($shareActivity ? "Hide my activity" : "Share my activity")}</span><span class="mi-hint">{$t("Games, music and videos you have open")}</span></span>
         </button>
@@ -207,7 +209,7 @@
     </div>
   {/if}
 
-  <button class="who" onclick={toggleMenu} title={$t("Set status")}>
+  <button class="who" onclick={toggleMenu} title={$t("Status, accounts and server")}>
     <div class="ava" style:background={`linear-gradient(135deg, ${$profile.banner_a}, ${$profile.banner_b})`}>
       {#if $profile.avatar_url}<img src={$profile.avatar_url} alt="" />{:else}{letter}{/if}
       <span class="dot {$info?.connected ? $myOnline : 'offline'}"></span>
@@ -301,7 +303,8 @@
     border: 1px solid var(--border-strong);
     border-radius: calc(14px * var(--rk, 1));
     box-shadow: 0 18px 48px -12px rgba(0, 0, 0, 0.7);
-    overflow: hidden;
+    overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
+    max-height: calc(100vh - var(--tb-h, 0px) - 110px);
     animation: pop 0.14s ease-out;
   }
   @keyframes pop { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }

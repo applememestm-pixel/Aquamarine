@@ -28,7 +28,9 @@
   import FilesPanel from "./lib/components/FilesPanel.svelte";
   import MusicPanel from "./lib/components/MusicPanel.svelte";
   import ContactsPanel from "./lib/components/ContactsPanel.svelte";
-  import FingerprintModal from "./lib/components/FingerprintModal.svelte";
+  import FingerprintModal, { listenKeyOk } from "./lib/components/FingerprintModal.svelte";
+  // Key-check marks from peers are heard from the start, whatever screen is open.
+  listenKeyOk();
   import InputPrompt from "./lib/components/InputPrompt.svelte";
   import NewChatSheet from "./lib/components/NewChatSheet.svelte";
   import MeetSheet from "./lib/components/MeetSheet.svelte";

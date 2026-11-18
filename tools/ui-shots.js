@@ -211,6 +211,49 @@ window.__TAURI_INTERNALS__ = {
     await ph.locator('.fm-add >> visible=true').first().tap({ force: true }); await ph.waitForTimeout(800);
     await ph.screenshot({ path: path.join(out, '13f-phone-folder.jpg'), type: 'jpeg', quality: 80 });
   } catch (e) { errs.push('phone2: ' + e.message.split('\n')[0]); }
+  // Settings, every section top to bottom (desktop, then phone): "s-<n>-<id>-<part>".
+  // Only with SHOTS_SETTINGS=1 (the log gets big).
+  if (process.env.SHOTS_SETTINGS) {
+    const tourOf = async (pg, tag) => {
+      const sh = (n) => pg.screenshot({ path: path.join(out, n + '.jpg'), type: 'jpeg', quality: 62 });
+      await pg.evaluate(() => { const s = JSON.parse(localStorage.getItem('aqua-settings') || '{}'); s.advancedSettings = true; s.mode = 'dark'; localStorage.setItem('aqua-settings', JSON.stringify(s)); });
+      await pg.reload(); await pg.waitForTimeout(2500);
+      for (let i = 0; i < 3; i++) { const l = pg.getByText(/^(Не сейчас|Not now)$/).first(); if (!(await l.count())) break; await l.click().catch(() => {}); await pg.waitForTimeout(400); }
+      const openSettings = async () => {
+        const btn = pg.locator('.user-panel button[aria-label="Настройки"], .user-panel button[aria-label="Settings"], button[aria-label="Настройки"] >> visible=true').first();
+        await btn.click({ force: true, timeout: 5000 }); await pg.waitForTimeout(900);
+      };
+      await openSettings();
+      const n = await pg.locator('.nav .nav-item:not(.adv-toggle)').count();
+      for (let i = 0; i < n; i++) {
+        try {
+          let item = pg.locator('.nav .nav-item:not(.adv-toggle)').nth(i);
+          if (!(await item.isVisible().catch(() => false))) { await pg.evaluate(() => window.__aquaBack && window.__aquaBack()); await pg.waitForTimeout(500); item = pg.locator('.nav .nav-item:not(.adv-toggle)').nth(i); }
+          const label = ((await item.innerText()).split('\n')[0] || 'x').trim().replace(/[^\p{L}\p{N}]+/gu, '_').slice(0, 24);
+          await item.click({ force: true, timeout: 5000 }); await pg.waitForTimeout(800);
+          const c = pg.locator('.content >> visible=true').first();
+          const total = await c.evaluate((e) => e.scrollHeight).catch(() => 0);
+          const view = await c.evaluate((e) => e.clientHeight).catch(() => 1);
+          for (let part = 0, y = 0; part < 5; part++, y += view - 40) {
+            await c.evaluate((e, y) => e.scrollTo(0, y), y).catch(() => {});
+            await pg.waitForTimeout(250);
+            await sh(`s-${tag}-${String(i).padStart(2, '0')}-${label}-${part}`);
+            if (y + view >= total) break;
+          }
+          if (tag === 'phone') { await pg.evaluate(() => window.__aquaBack && window.__aquaBack()); await pg.waitForTimeout(500); }
+        } catch (e) { errs.push(`settings ${tag} ${i}: ` + e.message.split('\n')[0]); }
+      }
+    };
+    try { await p.setViewportSize({ width: 1366, height: 820 }); await tourOf(p, 'pc'); } catch (e) { errs.push('settings pc: ' + e.message.split('\n')[0]); }
+    try {
+      const ph = await b.newPage({ viewport: { width: 412, height: 915 }, locale: 'ru-RU', hasTouch: true, isMobile: true, deviceScaleFactor: 1,
+        userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36' });
+      ph.on('pageerror', (e) => errs.push('phone: ' + e.message));
+      await ph.addInitScript(mock(card));
+      await ph.goto('http://127.0.0.1:5199/'); await ph.waitForTimeout(2500);
+      await tourOf(ph, 'phone');
+    } catch (e) { errs.push('settings phone: ' + e.message.split('\n')[0]); }
+  }
   console.log(errs.join('\n') || 'no errors');
   for (const f of fs.readdirSync(out).filter((f) => f.endsWith('.jpg')).sort()) {
     console.log('=====SHOT ' + f);

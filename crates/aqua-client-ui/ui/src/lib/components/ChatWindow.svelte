@@ -58,7 +58,7 @@
   import Welcome from "./Welcome.svelte";
   import { settings } from "../theme";
   import { api, assetUrl, sendChatControl } from "../tauri";
-  import { openFingerprint, verifiedKeys, keyState, verifiedBy, noteKeyOk, sendKeyOk, sunState } from "./FingerprintModal.svelte";
+  import { openFingerprint, verifiedKeys, keyState, verifiedBy, sendKeyOk, sunState, listenKeyOk } from "./FingerprintModal.svelte";
   import { showToast } from "./Toast.svelte";
   import { pluginCommands, pluginsOnSend, runPluginCommand, pluginButtons, pressPluginButton } from "../plugins";
   import { ATTACH_ITEMS, attachFront, attachHidden, attachDock, attachBots, toggleAttachBot, type AttachId } from "../attachMenu";
@@ -1136,8 +1136,7 @@
     let unPres: (() => void) | null = null;
     events.onPresence((p) => { setPeerPresence(p.from, p.presence ?? {}); notePeerProfileVersion(p.from, p.presence?.pv); })
       .then((u) => { unPres = u; });
-    let unKeyOk: (() => void) | null = null;
-    events.onKeyOk((p) => noteKeyOk(p.from, p.code, p.on)).then((u) => { unKeyOk = u; });
+    listenKeyOk(); // app-wide, once (FingerprintModal)
     let unReact: (() => void) | null = null;
     events.onReaction((p) => { if (p.react?.key && p.react?.emoji) applyPeerReaction(p.react.key, p.react.emoji, !!p.react.add); })
       .then((u) => { unReact = u; });
@@ -1164,7 +1163,6 @@
       if (unClose) unClose();
       if (unSeen) unSeen();
       if (unPres) unPres();
-      if (unKeyOk) unKeyOk();
       if (unReact) unReact();
     };
   });
@@ -2044,7 +2042,10 @@
   // Channels: "feed" view (exteraGram's feed) — wide cards in one column,
   // no avatars; per channel, remembered on this device.
   let feedChans = $state<Record<string, boolean>>((() => { try { return JSON.parse(localStorage.getItem("aqua.feedView") ?? "{}"); } catch { return {}; } })());
-  let feedView = $derived(isChannel && !!feedChans[$activeChat?.id ?? ""]);
+  // The feed (wide cards) is a reader's view on a phone (owner): not on a PC,
+  // not for the channel's admins.
+  let feedAllowed = $derived(isChannel && IS_MOBILE && !amChanAdmin);
+  let feedView = $derived(feedAllowed && !!feedChans[$activeChat?.id ?? ""]);
   function setFeedView(id: string, on: boolean) {
     feedChans = { ...feedChans, [id]: on };
     try { localStorage.setItem("aqua.feedView", JSON.stringify(feedChans)); } catch { /* private mode */ }
@@ -2061,7 +2062,7 @@
       out.push({ id: "noshare", label: tr(on ? "Allow sharing" : "Disable sharing"), sub: tr(on ? "Forwarding, copying and saving are off for both of you" : "No forwarding, copying or saving — for both of you"), icon: icons.lock, on,
         run: () => void setNoShare(c.id, !on).then(() => showToast(tr(on ? "Sharing is allowed again" : "Sharing is off in this chat — for both of you. A modified app or a camera can still copy."), 5000)) });
     }
-    if (isChannel) out.push({ id: "feed", label: tr(feedView ? "Chat view" : "Feed view"), sub: tr(feedView ? "Posts as messages" : "Posts as wide cards, like a news feed"), icon: IC.tools, on: feedView, run: () => setFeedView(c.id, !feedView) });
+    if (feedAllowed) out.push({ id: "feed", label: tr(feedView ? "Chat view" : "Feed view"), sub: tr(feedView ? "Posts as messages" : "Posts as wide cards, like a news feed"), icon: IC.tools, on: feedView, run: () => setFeedView(c.id, !feedView) });
     if (amChanAdmin) out.push({ id: "stats", label: tr("Channel statistics"), sub: tr("Views, reactions, comments"), icon: IC.stats, on: $statsFor === c.id, run: () => statsFor.set($statsFor === c.id ? null : c.id) });
     if (isBotChat && botMenu) {
       const bm = botMenu, added = $attachBots.some((b) => b.bot === c.id);
@@ -3958,8 +3959,8 @@
         </div>
       </div>
       <div class="chat-actions">
-        {#if isChannel && $activeChat}
-          <!-- Feed / chat view of a channel in one tap (exteraGram's "Feed"). -->
+        {#if feedAllowed && $activeChat}
+          <!-- Feed / chat view of a channel in one tap (exteraGram's "Feed"); phones, subscribers only. -->
           <button class="icon-btn" class:active={feedView} title={$t(feedView ? "Chat view" : "Feed view")} aria-pressed={feedView}
             onclick={() => $activeChat && setFeedView($activeChat.id, !feedView)}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{#if feedView}<path d="M4 6h10M4 12h16M4 18h12"/>{:else}<rect x="3" y="3" width="18" height="8" rx="2"/><rect x="3" y="13" width="18" height="8" rx="2"/>{/if}</svg>
@@ -4153,6 +4154,16 @@
         </div>
       </div>
     {/if}
+
+{#snippet chipRow(m: any, chips: ReturnType<typeof reactionChips>)}
+  {#each chips as chip (chip.emoji)}
+                      {@const ru = reactionUrl(chip.emoji, $reactionPack.items)}
+                      {@const src = reactionSource(chip.emoji)}
+                      <button class="reaction-chip" class:mine={chip.mine} onclick={() => toggleChipReaction(m, chip.emoji)} oncontextmenu={(e) => reactionInfo(e, chip.emoji)} title={src ? tr("From “{title}” — right-click for the pack", { title: src.title }) : parseReaction(chip.emoji).emoji} in:scaleIn={{ start: 0.3, duration: motionMs(280), easing: backOut }}>
+                        {#if ru}<span class="rc-media"><AnimatedMedia src={ru.url} mime={ru.mime} alt={parseReaction(chip.emoji).emoji} play="auto" /></span>{:else}{parseReaction(chip.emoji).emoji}{/if}{#if chip.count > 1}{#key chip.count}<span class="rc-count" in:scaleIn={{ start: 0.5, duration: motionMs(220), easing: backOut }}>{chip.count}</span>{/key}{/if}
+                      </button>
+                    {/each}
+{/snippet}
 
     <div class="msg-stage">
     <div class="chat-wall" aria-hidden="true"></div>
@@ -4669,7 +4680,10 @@
                 {@const nr = replyCount.get(m.id) ?? 0}
                 {@const vk = reactionKey(m)}
                 {#if isGroup && commentsAllowed && activeGroup?.kind === "channel"}
-                  <!-- Telegram: a bar under every post — who commented, how many, "Leave a comment". -->
+                  <!-- Telegram X: reactions inside the post card, under its content… -->
+                  {@const pchips = $activeChat ? reactionChips($reactions[vk]) : []}
+                  {#if pchips.length > 0}<div class="reaction-row post-reacts">{@render chipRow(m, pchips)}</div>{/if}
+                  <!-- …then the comments line closing the card: who commented, how many, "Leave a comment". -->
                   <button class="cmt-bar" class:out={m.outgoing && !isChannel}
                     onclick={() => { if (cmtHeld) { cmtHeld = false; return; } openThread(m, "comments"); }}
                     onpointerdown={(e) => cmtDown(e, m)} onpointerup={cmtUp} onpointerleave={cmtUp} onpointercancel={cmtUp}
@@ -4700,18 +4714,10 @@
                   {/if}
                 </div>
               {/if}
-              {#if $activeChat}
+              {#if $activeChat && !(isGroup && commentsAllowed && activeGroup?.kind === "channel")}
                 {@const chips = reactionChips($reactions[reactionKey(m)])}
                 {#if chips.length > 0}
-                  <div class="reaction-row">
-                    {#each chips as chip (chip.emoji)}
-                      {@const ru = reactionUrl(chip.emoji, $reactionPack.items)}
-                      {@const src = reactionSource(chip.emoji)}
-                      <button class="reaction-chip" class:mine={chip.mine} onclick={() => toggleChipReaction(m, chip.emoji)} oncontextmenu={(e) => reactionInfo(e, chip.emoji)} title={src ? tr("From “{title}” — right-click for the pack", { title: src.title }) : parseReaction(chip.emoji).emoji} in:scaleIn={{ start: 0.3, duration: motionMs(280), easing: backOut }}>
-                        {#if ru}<span class="rc-media"><AnimatedMedia src={ru.url} mime={ru.mime} alt={parseReaction(chip.emoji).emoji} play="auto" /></span>{:else}{parseReaction(chip.emoji).emoji}{/if}{#if chip.count > 1}{#key chip.count}<span class="rc-count" in:scaleIn={{ start: 0.5, duration: motionMs(220), easing: backOut }}>{chip.count}</span>{/key}{/if}
-                      </button>
-                    {/each}
-                  </div>
+                  <div class="reaction-row">{@render chipRow(m, chips)}</div>
                 {/if}
               {/if}
             </div>
@@ -4821,12 +4827,13 @@
 
     {@const liveChat = $activeChat?.live === true}
 
-    {#if !liveChat}
+    <!-- Replies has its own note in the composer (only a feed of answers to you). -->
+    {#if !liveChat && $activeChat?.id !== "__replies__"}
       <div class="not-live-banner">
         <div class="nlb-title">{$t("You can't send messages here")}</div>
         <div class="nlb-sub">
-          “{$activeChat.name}” isn't a real conversation — it's just the welcome placeholder.
-          Click <b>{$t("+ Start new chat")}</b> {$t("at the top of the sidebar (or type a username in the search bar) to open a real E2EE chat with another user on the server.")}
+          {$t("“{name}” isn't a real conversation — it's just the welcome placeholder.", { name: $activeChat.name })}
+          {$t("Click")} <b>{$t("+ Start new chat")}</b> {$t("at the top of the sidebar (or type a username in the search bar) to open a real E2EE chat with another user on the server.")}
         </div>
       </div>
     {/if}
@@ -6713,7 +6720,7 @@
   /* Feed view of a channel: one centred column of full-width posts. */
   .messages.feed .msg-avatar { display: none; }
   .messages.feed .msg { display: flex; justify-content: center; }
-  .messages.feed .msg-col { width: min(640px, 100%); max-width: none; margin: 0 auto; align-items: stretch; }
+  .messages.feed .msg-col { width: min(860px, 100%); max-width: none; margin: 0 auto; align-items: stretch; }
   .messages.feed .msg-col > .bubble, .messages.feed .msg-col > .media-bubble { max-width: none; width: 100%; box-sizing: border-box; }
   .reply-bar {
     display: flex; align-items: center; gap: 10px;
@@ -7142,17 +7149,22 @@
   .kbds { margin-left: auto; }
   .channel-mute.danger-txt { color: var(--danger, #FF4D6D); }
   /* A channel post and its comment bar are one block, as wide as the wider of the two. */
-  .msg-col.post { display: grid; justify-items: stretch; width: fit-content; max-width: 100%; }
+  /* Telegram X: one card — the content, its reactions, a hairline, the
+     comments line. Nothing between them, one background, one border. */
+  .msg-col.post { display: grid; justify-items: stretch; width: fit-content; max-width: 100%; gap: 0; }
   .msg.out .msg-col.post { justify-self: end; }
-  .msg-col.post > .bubble { border-bottom-left-radius: 6px; border-bottom-right-radius: 6px; }
+  .msg-col.post > :is(.bubble, .media-bubble) { border-bottom-left-radius: 0; border-bottom-right-radius: 0; border-bottom-width: 0; box-shadow: none; }
+  .post-reacts { width: 0; min-width: 100%; box-sizing: border-box; margin: 0; padding: 2px 10px 8px;
+    background: var(--bubble-in, var(--bg-bubble-in)); border: 1px solid var(--border); border-top: none; border-bottom: none; }
+  .msg-col.post > .media-bubble + .post-reacts { padding-top: 8px; }
   .msg-col.post > .post-foot.out { justify-self: end; }
   /* Never wider than the post above it (text, photo, video, circle…): it
      adds nothing to the column's width (width 0) and stretches to it. */
-  .cmt-bar { display: flex; align-items: center; gap: 8px; width: 0; min-width: 100%; box-sizing: border-box; margin-top: -1px; padding: 8px 12px; overflow: hidden;
-    border: 1px solid var(--border); border-top-color: color-mix(in srgb, var(--border) 60%, transparent); border-radius: 0 0 16px 16px;
-    background: var(--bg-bubble-in); color: var(--accent); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; text-align: left; transition: background-color .12s; }
+  .cmt-bar { display: flex; align-items: center; gap: 8px; width: 0; min-width: 100%; box-sizing: border-box; margin-top: 0; padding: 9px 12px; overflow: hidden;
+    border: 1px solid var(--border); border-top-color: color-mix(in srgb, var(--fg) 9%, transparent); border-radius: 0 0 var(--bubble-r, 14px) var(--bubble-r, 14px);
+    background: var(--bubble-in, var(--bg-bubble-in)); box-shadow: var(--shadow-lift); color: var(--accent); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; text-align: left; transition: background-color .12s; }
   .cmt-bar.out { align-self: flex-end; background: var(--bg-bubble-out, var(--bg-bubble-in)); }
-  .cmt-bar:hover { background: color-mix(in srgb, var(--accent) 10%, var(--bg-bubble-in)); }
+  .cmt-bar:hover { background: color-mix(in srgb, var(--accent) 8%, var(--bubble-in, var(--bg-bubble-in))); }
   .cmt-bar .cmt-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
   .cmt-ic { width: 20px; height: 20px; flex-shrink: 0; }
   .cmt-avas { display: flex; flex-shrink: 0; }

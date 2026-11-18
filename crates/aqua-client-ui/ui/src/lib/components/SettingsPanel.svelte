@@ -65,6 +65,7 @@
   import AnimatedMedia from "./AnimatedMedia.svelte";
   import type { StickerPack } from "../types";
   import { ensureNotifyPermission } from "../notify";
+  import { accounts, loadAccounts, switchAccount, accountsFull } from "../accounts";
   import { api, bytesToDataUrl, assetUrl, type DeviceInfo, type GpuStatus } from "../tauri";
   import { showToast } from "./Toast.svelte";
   import type { BotInfo } from "../types";
@@ -505,6 +506,14 @@
     try { st = await invoke<StInfo>("storage_set", { conf: { ...st.conf, ...patch } }); await invoke("storage_trim"); stStats = await invoke<StStats>("storage_stats"); }
     catch (e) { showToast(String(e)); }
   }
+  let accSwitching = $state(false);
+  async function accPick(slot: string) {
+    if (accSwitching) return;
+    accSwitching = true;
+    try { await switchAccount(slot); } catch (e) { accSwitching = false; showToast(String(e)); }
+  }
+  const hostOf = (u: string) => u.replace(/^[a-z]+:\/\//i, "").replace(/\/+$/, "");
+  $effect(() => { if (section === "account") void loadAccounts(); });
   let stt = $state<{ supported: boolean; ready: boolean; size: number } | null>(null);
   async function sttLoad() { try { stt = await api.sttStatus(); } catch { stt = null; } }
   async function sttRemove() {
@@ -2144,6 +2153,21 @@
 
       {#if section === "account"}
       <section class="group">
+        <div class="label">{$t("Accounts")}</div>
+        {#each $accounts as a (a.slot)}
+          <button class="row acc-row" disabled={accSwitching || a.active} onclick={() => void accPick(a.slot)}>
+            <span class="acc-ava">{(a.username || "?").charAt(0).toUpperCase()}</span>
+            <span class="row-label">{a.username ? "@" + a.username : $t("Not signed in")}<small class="st-sub">{hostOf(a.server_url ?? "") || $t("Sign-in not finished")}</small></span>
+            {#if a.active}<span class="acc-cur">{$t("current")}</span>{:else}<span class="acc-go">{$t("Switch")}</span>{/if}
+          </button>
+        {/each}
+        <button class="row acc-row" disabled={accSwitching || $accountsFull} onclick={() => void accPick("new")}>
+          <span class="acc-ava plus">+</span>
+          <span class="row-label">{$t(accSwitching ? "Opening the account…" : "Add account")}</span>
+        </button>
+        <div class="foot-note">{$t("Also from the menu of your card at the bottom left (your avatar and name).")}</div>
+      </section>
+      <section class="group">
         <div class="label">{$t("Session")}</div>
         <div class="info-row ue">
           <span class="k">{$t("Username")}</span>
@@ -3765,4 +3789,14 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   :global(.set-flash) { animation: set-flash 1.8s ease-out; border-radius: calc(12px * var(--rk, 1)); }
   @keyframes set-flash { 0%, 40% { background: color-mix(in srgb, var(--accent) 22%, transparent); box-shadow: 0 0 0 2px var(--accent); } 100% { background: transparent; box-shadow: 0 0 0 2px transparent; } }
   .st-sub { margin-left: 8px; color: var(--fg-muted); font-size: 12px; }
+  .acc-row { width: 100%; border: none; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; gap: 12px; }
+  .acc-row:disabled { cursor: default; }
+  .acc-row:not(:disabled):hover { background: var(--bg-hover); }
+  .acc-ava { width: 30px; height: 30px; flex-shrink: 0; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 13px; color: var(--bg-void); background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+  .acc-ava.plus { background: var(--accent-soft); color: var(--accent); font-size: 18px; }
+  .acc-row .row-label { flex: 1; min-width: 0; display: flex; flex-direction: column; color: var(--fg); font-size: 14px; }
+  .acc-row { padding: 6px 4px; margin-bottom: 2px; border-radius: calc(10px * var(--rk, 1)); }
+  .acc-row .st-sub { margin-left: 0; }
+  .acc-cur { font-size: 12px; color: var(--fg-muted); }
+  .acc-go { font-size: 13px; font-weight: 600; color: var(--accent); }
 </style>

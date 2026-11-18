@@ -2,6 +2,15 @@
   import { writable, get } from "svelte/store";
   import type { FingerprintView } from "../types";
 
+  // The peer's marks are heard app-wide (on a phone the chat screen exists
+  // only while a chat is open — a mark sent meanwhile was lost: half a sun forever).
+  let listening = false;
+  export function listenKeyOk() {
+    if (listening) return;
+    listening = true;
+    void import("../tauri").then(({ events }) => events.onKeyOk((p) => noteKeyOk(p.from, p.code, p.on))).catch(() => { listening = false; });
+  }
+
   const open = writable<boolean>(false);
   const view = writable<FingerprintView | null>(null);
   const peer = writable<string>("");
@@ -27,7 +36,19 @@
   export const verifiedBy = writable<Record<string, string>>((() => { try { return JSON.parse(localStorage.getItem(BY_KEY) || "{}"); } catch { return {}; } })());
   verifiedBy.subscribe((v) => { try { localStorage.setItem(BY_KEY, JSON.stringify(v)); } catch { /* storage blocked */ } });
   export function noteKeyOk(from: string, code: string, on: boolean) {
-    verifiedBy.update((m) => { const n = { ...m }; if (on && code) n[from] = code.replace(/\s+/g, "").toLowerCase(); else delete n[from]; return n; });
+    const c = (code || "").replace(/\s+/g, "").toLowerCase();
+    const isNew = on && !!c && get(verifiedBy)[from] !== c;
+    verifiedBy.update((m) => { const n = { ...m }; if (on && c) n[from] = c; else delete n[from]; return n; });
+    // They just marked our code: if I marked it too, tell them now — so the
+    // sun turns whole on both sides at once, not only after I happen to open
+    // the chat. Only on news (no ping-pong: their echo is no longer new).
+    if (isNew) {
+      void import("../tauri").then(async ({ api }) => {
+        const v = await api.verifyFingerprint(from);
+        const mine = v.hex.replace(/\s+/g, "").toLowerCase();
+        if (mine === c && keyState(from, v.peer_key, get(verifiedKeys)) === "verified") sendKeyOk(from, v.hex, true);
+      }).catch(() => {});
+    }
   }
   /** Tell the peer I marked (or unmarked) our code — their sun follows. */
   export function sendKeyOk(peerId: string, hex: string, on: boolean) {
