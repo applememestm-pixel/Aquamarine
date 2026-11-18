@@ -715,17 +715,58 @@
    *  the right-click menu had no way to open by touch. */
   let tabHold: ReturnType<typeof setTimeout> | null = null;
   let tabHeld = false;
+  // Hold a folder tab, then drag it along the strip: the order changes as it
+  // goes (folders.ts). Held still on a phone: its menu, as before.
+  let dragFid = $state<string | null>(null);
+  let dragMoved = false;
+  let holdAt = { x: 0, y: 0, touch: false };
   function tabDown(e: PointerEvent, id: string) {
     tabHeld = false;
-    if (e.pointerType !== "touch") return;
-    const { clientX, clientY } = e;
+    if (e.button !== 0) return;
+    const touch = e.pointerType === "touch";
+    if (!touch && id === "all") return;
+    const { clientX, clientY, pointerId } = e;
+    const el = e.currentTarget as HTMLElement;
+    holdAt = { x: clientX, y: clientY, touch };
     tabHold = setTimeout(() => {
       tabHold = null; tabHeld = true;
       try { navigator.vibrate?.(12); } catch { /* no vibration */ }
-      folderMenu = { x: Math.min(clientX, window.innerWidth - 220), y: clientY + 8, id };
-    }, 450);
+      if (id === "all") { folderMenu = { x: Math.min(clientX, window.innerWidth - 220), y: clientY + 8, id }; return; }
+      dragFid = id; dragMoved = false;
+      try { el.setPointerCapture(pointerId); } catch { /* gone */ }
+    }, touch ? 450 : 350);
   }
-  function tabUp() { if (tabHold) { clearTimeout(tabHold); tabHold = null; } }
+  function tabMove(e: PointerEvent) {
+    // Moved before the hold fired: it's a scroll / a click, not a drag.
+    if (tabHold && Math.hypot(e.clientX - holdAt.x, e.clientY - holdAt.y) > 8) { clearTimeout(tabHold); tabHold = null; return; }
+    if (!dragFid) return;
+    e.preventDefault();
+    const over = (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)?.closest<HTMLElement>("[data-fid]")?.dataset.fid;
+    if (!over || over === dragFid) return;
+    const id = dragFid;
+    folders.update((list) => {
+      const from = list.findIndex((f) => f.id === id), to = list.findIndex((f) => f.id === over);
+      if (from < 0 || to < 0) return list;
+      const n = [...list];
+      const [it] = n.splice(from, 1);
+      n.splice(to, 0, it);
+      return n;
+    });
+    dragMoved = true;
+  }
+  function tabUp() {
+    if (tabHold) { clearTimeout(tabHold); tabHold = null; }
+    if (!dragFid) return;
+    const id = dragFid;
+    dragFid = null;
+    if (!dragMoved && holdAt.touch) folderMenu = { x: Math.min(holdAt.x, window.innerWidth - 220), y: holdAt.y + 8, id };
+  }
+  /** While a tab is dragged a finger mustn't scroll the strip. */
+  function noScrollWhileDragging(node: HTMLElement) {
+    const stop = (e: TouchEvent) => { if (dragFid) e.preventDefault(); };
+    node.addEventListener("touchmove", stop, { passive: false });
+    return { destroy: () => node.removeEventListener("touchmove", stop) };
+  }
   function tabClick(id: string) { if (tabHeld) { tabHeld = false; return; } activeFolder.set(id); }
 
   // ---- Right-click a chat: archive / mute ----
@@ -1154,11 +1195,11 @@
       {/each}
     </div>
   {:else if $folders.length > 0}
-    <div class="folder-strip" class:fs-pills={$themeSettings.folderTabStyle === "pills"} class:fs-text={$themeSettings.folderTabStyle === "text"} use:scrollX>
+    <div class="folder-strip" class:fs-pills={$themeSettings.folderTabStyle === "pills"} class:fs-text={$themeSettings.folderTabStyle === "text"} class:fs-dragging={!!dragFid} use:scrollX use:noScrollWhileDragging onpointermove={tabMove}>
       {#if !$themeSettings.hideAllTab}<button class="folder-tab" class:active={$activeFolder === "all"} onclick={() => tabClick("all")} onpointerdown={(e) => tabDown(e, "all")} onpointerup={tabUp} onpointercancel={tabUp} onpointerleave={tabUp} oncontextmenu={(e) => openFolderMenu(e, "all")}>{$t("All")}</button>{/if}
       {#each $folders as f (f.id)}
         {@const unread = $visibleChats.filter((c) => (c.unread > 0) && !$mutedChats.has(c.id) && folderHas(f, factsOf(c))).length}
-        <button class="folder-tab" class:active={$activeFolder === f.id} onclick={() => tabClick(f.id)} onpointerdown={(e) => tabDown(e, f.id)} onpointerup={tabUp} onpointercancel={tabUp} onpointerleave={tabUp} oncontextmenu={(e) => openFolderMenu(e, f.id)}>
+        <button class="folder-tab" data-fid={f.id} class:lifted={dragFid === f.id} class:active={$activeFolder === f.id} onclick={() => tabClick(f.id)} onpointerdown={(e) => tabDown(e, f.id)} onpointerup={tabUp} onpointercancel={tabUp} onpointerleave={tabUp} oncontextmenu={(e) => openFolderMenu(e, f.id)}>
           {#if f.emoji}<span class="ft-emoji">{f.emoji}</span>{/if}{f.name}{#if unread > 0 && $themeSettings.folderCounters !== false}<span class="ft-count">{unread}</span>{/if}
         </button>
       {/each}
@@ -2515,4 +2556,6 @@
     .chat-row-1 { margin-bottom: 2px; }
 
   }
+  .folder-tab.lifted { transform: scale(1.06); box-shadow: 0 6px 18px -6px rgba(0,0,0,.55); z-index: 2; position: relative; cursor: grabbing; transition: transform .12s ease; }
+  .folder-strip.fs-dragging { cursor: grabbing; user-select: none; -webkit-user-select: none; }
 </style>

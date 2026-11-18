@@ -4829,12 +4829,13 @@
 
     {@const liveChat = $activeChat?.live === true}
 
-    {#if !liveChat}
+    <!-- Replies has its own note in the composer (only a feed of answers to you). -->
+    {#if !liveChat && $activeChat?.id !== "__replies__"}
       <div class="not-live-banner">
         <div class="nlb-title">{$t("You can't send messages here")}</div>
         <div class="nlb-sub">
-          “{$activeChat.name}” isn't a real conversation — it's just the welcome placeholder.
-          Click <b>{$t("+ Start new chat")}</b> {$t("at the top of the sidebar (or type a username in the search bar) to open a real E2EE chat with another user on the server.")}
+          {$t("“{name}” isn't a real conversation — it's just the welcome placeholder.", { name: $activeChat.name })}
+          {$t("Click")} <b>{$t("+ Start new chat")}</b> {$t("at the top of the sidebar (or type a username in the search bar) to open a real E2EE chat with another user on the server.")}
         </div>
       </div>
     {/if}

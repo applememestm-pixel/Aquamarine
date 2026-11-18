@@ -2310,6 +2310,7 @@ export const RU: Record<string, string> = {
   "local network": "локальная сеть",
   "address not found": "адрес не найден",
   "no answer": "не отвечает",
+  "“{name}” isn't a real conversation — it's just the welcome placeholder.": "«{name}» — не настоящий разговор, а только заставка.",
   "Status, accounts and server": "Статус, аккаунты и сервер",
   "current": "текущий",
   "Switch": "Переключиться",

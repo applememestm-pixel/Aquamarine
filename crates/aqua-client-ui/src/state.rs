@@ -925,6 +925,11 @@ impl AppState {
             if messages.len() != before && crate::commands::is_control_text(summary.preview.trim_start()) {
                 summary.preview = messages.last().map(|m| preview_for(&m.kind)).unwrap_or_default();
             }
+            // A chat that only ever held service payloads (someone's presence
+            // or key check opened it): nobody wrote there — it goes.
+            if before > 0 && messages.is_empty() && !id.starts_with("grp_") && !id.starts_with("__") {
+                continue;
+            }
             // Not "written" yet as far as the flush knows: 0 never matches.
             hist_hashes.insert(id.clone(), 0);
             match chats.get_mut(&id) {

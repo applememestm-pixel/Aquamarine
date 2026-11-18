@@ -3905,6 +3905,10 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
             let inner = v.get("body").and_then(|x| x.as_str()).unwrap_or("").to_string();
             let silent = v.get("sil").and_then(|x| x.as_bool()) == Some(true);
             if gid.is_empty() { return true; }
+            // The same post / comment can reach this device twice (the relay
+            // and a copy synced from my other device, a resend after a
+            // reconnect): it showed twice in the chat, the thread and Replies.
+            if group_repeat(&gid, &author, &inner) { return true; }
             let time = hhmm_now();
             {
                 let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -4227,6 +4231,7 @@ async fn on_incoming_plaintext(app: &AppHandle, from: String, text: String) {
             }
         }
     }
+    if is_control_text(text.trim_start()) { return; }
     let is_new_chat;
     {
         let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -4713,7 +4718,10 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
         return;
     }
 
-    // Normal (text or file) message path.
+    // Normal (text or file) message path. A service payload that got this
+    // far isn't a message: no bubble — and no empty chat with its sender
+    // (a "contact" nobody wrote to appeared that way).
+    if is_control_text(text.trim_start()) { return; }
     let time = hhmm_now();
     let mut is_new_chat = false;
     {
@@ -5308,6 +5316,27 @@ fn reply_note(me: &str, author: &str, group: &str, inner: &str) -> Option<String
     } else {
         format!("[reply:v1]{}", serde_json::json!({ "quoted_author": me, "quoted_text": quoted, "text": body }))
     })
+}
+
+/// True when this (group, author, text) already arrived within the last
+/// minute — a second delivery of the same message, not a new one.
+fn group_repeat(gid: &str, author: &str, inner: &str) -> bool {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::time::{Duration, Instant};
+    static SEEN: StdMutex<Option<std::collections::HashMap<u64, Instant>>> = StdMutex::new(None);
+    let mut h = DefaultHasher::new();
+    (gid, author, inner).hash(&mut h);
+    let key = h.finish();
+    let now = Instant::now();
+    let mut g = SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let m = g.get_or_insert_with(std::collections::HashMap::new);
+    m.retain(|_, t| now.duration_since(*t) < Duration::from_secs(60));
+    if m.contains_key(&key) {
+        return true;
+    }
+    m.insert(key, now);
+    false
 }
 
 fn push_replies(s: &mut AppState, text: String, time: &str) {
