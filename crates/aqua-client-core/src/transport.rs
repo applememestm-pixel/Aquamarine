@@ -139,14 +139,20 @@ pub fn http_client() -> Result<reqwest::Client, TransportError> {
             h.insert("x-aqua-version", reqwest::header::HeaderValue::from_static(env!("CARGO_PKG_VERSION")));
             h
         });
-    if let Some(p) = proxy() {
-        b = b.proxy(reqwest::Proxy::all(&p).map_err(TransportError::Http)?);
-    } else {
-        // Direct unless the user set a proxy in Settings: never pick one up
-        // from the environment (VPN clients like to set HTTP(S)_PROXY).
-        b = b.no_proxy();
-    }
-    Ok(b.build()?)
+    Ok(app_proxy(b)?.build()?)
+}
+
+/// The app's one rule for reaching relays, for every client that talks to
+/// one (sign-in server list, LAN scan, federation): the proxy from Settings,
+/// else direct. Never the system's or the environment's proxy — a VPN app in
+/// "system proxy" mode (v2rayN, Happ, Hiddify…) would otherwise carry the
+/// server list's checks into a VPN that may not reach the relay, while the
+/// chat itself goes direct: the list said "no answer" for a working server.
+pub fn app_proxy(b: reqwest::ClientBuilder) -> Result<reqwest::ClientBuilder, TransportError> {
+    Ok(match proxy() {
+        Some(p) => b.proxy(reqwest::Proxy::all(&p).map_err(TransportError::Http)?),
+        None => b.no_proxy(),
+    })
 }
 
 /// "error sending request" alone says nothing; append the causes

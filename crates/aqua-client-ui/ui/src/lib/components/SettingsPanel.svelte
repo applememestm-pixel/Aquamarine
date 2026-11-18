@@ -497,12 +497,22 @@
   const sumOf = (rows: TRow[] | undefined) => (rows ?? []).reduce((n, r) => n + r.bytes, 0);
   const stTxTotal = $derived(stTx ? Object.values(stTx.sent).reduce((n, rows) => n + sumOf(rows), 0) : 0);
   async function stLoad() {
+    void sttLoad();
     try { st = await invoke<StInfo>("storage_get"); stStats = await invoke<StStats>("storage_stats"); stTx = await invoke<Traffic>("storage_traffic"); } catch (e) { console.warn(e); }
   }
   async function stSave(patch: Partial<StConf>) {
     if (!st) return;
     try { st = await invoke<StInfo>("storage_set", { conf: { ...st.conf, ...patch } }); await invoke("storage_trim"); stStats = await invoke<StStats>("storage_stats"); }
     catch (e) { showToast(String(e)); }
+  }
+  let stt = $state<{ supported: boolean; ready: boolean; size: number } | null>(null);
+  async function sttLoad() { try { stt = await api.sttStatus(); } catch { stt = null; } }
+  async function sttRemove() {
+    if (!stt) return;
+    const ok = await askConfirm({ title: tr("Delete the speech recognition model?"), text: tr("It frees {size}. Texts already made stay; for new ones it's downloaded again.", { size: fmtBytes(stt.size) }), ok: tr("Delete"), danger: true });
+    if (!ok) return;
+    try { await api.sttDelete(); } catch (e) { showToast(String(e)); }
+    await sttLoad();
   }
   async function stPickFolder() {
     const p = await pickFolder(tr("Folder for downloaded files"));
@@ -1905,6 +1915,11 @@
       <section class="group">
         <div class="label">{$t("Messages")}</div>
         <div class="row">
+          <span class="row-label">{$t("Message menu")}</span>
+          <Select class="sel" value={$settings.msgMenu ?? "auto"} options={[{ value: "auto", label: $t("Auto (cards on a phone, compact on a PC)") }, { value: "cards", label: $t("Cards") }, { value: "compact", label: $t("Compact") }]}
+            onchange={(v) => settings.update((x) => ({ ...x, msgMenu: v as "auto" | "cards" | "compact" }))} />
+        </div>
+        <div class="row">
           <span class="row-label">{$t("Double tap — incoming")}</span>
           <Select class="sel" value={$settings.dblTapIn ?? "auto"} options={[{ value: "auto", label: $t("Default") }, { value: "react", label: $t("Reaction") }, { value: "reply", label: $t("Reply") }, { value: "copy", label: $t("Copy") }, { value: "forward", label: $t("Forward") }, { value: "save", label: $t("Save to Saved Messages") }, { value: "edit", label: $t("Edit") }, { value: "delete", label: $t("Delete") }, { value: "none", label: $t("Nothing") }]}
             onchange={(v) => settings.update((x) => ({ ...x, dblTapIn: v as DblTap }))} />
@@ -2328,6 +2343,16 @@
             options={[[7, "1 week"], [30, "1 month"], [90, "3 months"], [365, "1 year"], [0, "Never"]].map(([id, l]) => ({ id: id as number, label: $t(String(l)) }))} />
         </div>
         <div class="foot-note">{$t("When files take more, the ones unused the longest go first.")}</div>
+      </section>
+      {/if}
+      {#if stt?.supported}
+      <section class="group">
+        <div class="label">{$t("Speech recognition")}</div>
+        <div class="row">
+          <span class="row-label">{$t(stt.ready ? "Model on this device" : "Model not downloaded")}<small class="st-sub">{fmtBytes(stt.size)}</small></span>
+          {#if stt.ready}<button class="mini-btn danger" onclick={sttRemove}>{$t("Delete")}</button>{/if}
+        </div>
+        <div class="foot-note">{$t("Voice messages and circles turn into text right on this device — it's downloaded the first time you tap “to text”.")}</div>
       </section>
       {/if}
       <section class="group">
@@ -3729,4 +3754,5 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .field-col .txt { width: 100%; box-sizing: border-box; }
   :global(.set-flash) { animation: set-flash 1.8s ease-out; border-radius: calc(12px * var(--rk, 1)); }
   @keyframes set-flash { 0%, 40% { background: color-mix(in srgb, var(--accent) 22%, transparent); box-shadow: 0 0 0 2px var(--accent); } 100% { background: transparent; box-shadow: 0 0 0 2px transparent; } }
+  .st-sub { margin-left: 8px; color: var(--fg-muted); font-size: 12px; }
 </style>

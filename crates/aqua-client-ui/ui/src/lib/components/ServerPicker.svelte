@@ -31,6 +31,14 @@
   const pubOf = (url: string) => pub.find((x) => norm(x.url) === norm(url));
 
   const norm = (u: string) => u.trim().replace(/\/+$/, "");
+  /** Why a server didn't answer (servers.rs why_failed): short label, hint. */
+  const WHY: Record<string, [string, string]> = {
+    refused: ["refused", "The connection was refused: the server is off or its port is closed."],
+    timeout: ["timeout", "No reply in time: the network or a VPN may be blocking this address. Try with the VPN off or with this app excluded from it."],
+    dns: ["address not found", "This name doesn't resolve: check the address."],
+    proxy: ["proxy", "The proxy set in Settings → Network didn't connect."],
+    http: ["not a relay", "Something answers there, but it isn't an Aquamarine server."],
+  };
 
   function candidates(extra: string[] = []): string[] {
     const list = [value, ...pub.map((x) => x.url), ...defaults, ...knownServers(), ...extra].map(norm).filter(Boolean);
@@ -178,7 +186,7 @@
               <span class="ms" class:slow={(p.ms ?? 0) > 400}>{p.ms} {$t("ms")}</span>
               {#if p.online != null}<span class="on">{p.online} {$t("online")}</span>{/if}
             {:else}
-              <span class="off">{$t(probing ? "…" : "no answer")}</span>
+              <span class="off" title={p.why && WHY[p.why] ? $t(WHY[p.why][1]) : undefined}>{$t(probing ? "…" : "no answer")}{#if !probing && p.why && WHY[p.why]} · {$t(WHY[p.why][0])}{/if}</span>
             {/if}
           </span>
         </button>

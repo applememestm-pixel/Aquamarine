@@ -72,6 +72,8 @@
   import { openProfile } from "./ProfileModal.svelte";
   import { reactionPack, quickReactions, parseReaction, reactionUrl, loadReactionPack, REACTION_PACK, emojiPacks, reactionSource, loadEmojiPacks } from "../reactionPack";
   import { editAndSend } from "../panels/photoEditor";
+  import { transcribe, sttProgress } from "../stt";
+  import Transcript from "./Transcript.svelte";
   import MediaPlayer from "./MediaPlayer.svelte";
   import { openGallery, type GalleryItem } from "./Lightbox.svelte";
   import { openArticleComposer } from "../panels/articleComposer";
@@ -582,9 +584,13 @@
         recording = false;
         recordPaused = false;
         if (recordTimer) { clearInterval(recordTimer); recordTimer = null; }
-        if (recordedChunks.length === 0) return;
-        await sendVoiceBlob(new Blob(recordedChunks, { type: mimeType || "audio/webm" }));
+        if (recordedChunks.length === 0) { reviewOnStop = false; return; }
+        const blob = new Blob(recordedChunks, { type: mimeType || "audio/webm" });
         recordedChunks = [];
+        // "Stop to listen": the recording waits in a bar (play / to text /
+        // send) instead of going at once.
+        if (reviewOnStop) { reviewOnStop = false; openVoiceDraft(blob, recordElapsed); return; }
+        await sendVoiceBlob(blob);
       };
       recordStartMs = Date.now();
       recordElapsed = 0;
@@ -599,6 +605,52 @@
         : e instanceof Error ? e.message : String(e);
       showToast(`${tr("Voice recording failed")}: ${why}`, 8000);
     }
+  }
+
+  /** Stop the recording and keep it to listen to / turn into text first. */
+  let reviewOnStop = false;
+  let voiceDraft = $state<{ blob: Blob; url: string; secs: number } | null>(null);
+  /** Its transcript, being edited (null: the voice bar shows). */
+  let draftText = $state<string | null>(null);
+  let draftBusy = $state(false);
+  function stopToReview() { reviewOnStop = true; stopRecording(); }
+  // A draft belongs to the chat it was recorded in: another chat drops it.
+  let draftChat: string | null = null;
+  $effect(() => {
+    const id = $activeChat?.id ?? null;
+    if (voiceDraft && draftChat !== id) closeVoiceDraft();
+    if (!voiceDraft) draftChat = id;
+  });
+  function openVoiceDraft(blob: Blob, secs: number) {
+    closeVoiceDraft();
+    voiceDraft = { blob, url: URL.createObjectURL(blob), secs };
+  }
+  function closeVoiceDraft() {
+    if (voiceDraft) URL.revokeObjectURL(voiceDraft.url);
+    voiceDraft = null; draftText = null; draftBusy = false;
+  }
+  async function draftToText() {
+    if (!voiceDraft || draftBusy) return;
+    draftBusy = true;
+    try {
+      const r = await transcribe(voiceDraft.blob, null);
+      if (r != null) draftText = r;
+    } catch (e) {
+      showToast(tr("Couldn't turn it into text: {e}", { e: String((e as Error)?.message ?? e) }), 4000);
+    } finally { draftBusy = false; }
+  }
+  async function sendDraftVoice() {
+    const d = voiceDraft;
+    if (!d) return;
+    voiceDraft = null; draftText = null;
+    await sendVoiceBlob(d.blob);
+    URL.revokeObjectURL(d.url);
+  }
+  function sendDraftText() {
+    const v = (draftText ?? "").trim();
+    if (!v) return;
+    closeVoiceDraft();
+    sendNow(v);
   }
 
   function cancelRecord() {
@@ -4340,6 +4392,7 @@
                       {m.time}
                       {@render statusTick(m.outgoing, m.id, m)}
                     </span>
+                    {#if url}<div class="circle-tr"><Transcript src={url} id={m.id} compact /></div>{/if}
                   </div>
                 {:else if rk === "voice" || rk === "audio"}
                   <div class="bubble audio-bubble">
@@ -4367,6 +4420,7 @@
                           {@render statusTick(m.outgoing, m.id, m)}
                         </span>
                       </div>
+                      {#if url}<Transcript src={url} id={m.id} />{/if}
                     </div>
                   </div>
                 {:else if rk === "video"}
@@ -4680,13 +4734,15 @@
       {@const canFwd = !protectedChat && !(row.kind.type === "file" && renderKind(row.kind.content) === "once")}
       {@const canCopy = textOf(row) != null && !protectedChat}
       {@const canDel = row.outgoing || !isGroup || can(activeGroup, myUsername, "delete_messages")}
+      {@const mstyle = $settings.msgMenu ?? "auto"}
+      {@const compact = mstyle === "compact" || (mstyle === "auto" && !IS_MOBILE)}
       {#if menu.touch}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <div class="ctx-veil" onclick={closeMenu}></div>
       {/if}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="ctx-menu" bind:this={menuEl} class:touch={menu.touch} use:keepOnScreen style={`left:${menu.x}px; top:${menu.y}px`} role="menu" tabindex="-1" onmousedown={(e) => e.stopPropagation()}>
+      <div class="ctx-menu" bind:this={menuEl} class:touch={menu.touch} class:compact use:keepOnScreen style={`left:${menu.x}px; top:${menu.y}px`} role="menu" tabindex="-1" onmousedown={(e) => e.stopPropagation()}>
         <div class="ctx-reactions" class:expanded={reactAll}>
           {#if reactAll && $emojiPacks.length}
             <div class="react-tabs">
@@ -4711,8 +4767,12 @@
           <button class={["ctx-item", danger && "danger"]} role="menuitem" onclick={fn}><span class="ci-ic">{@html ic}</span><span class="ci-tx">{label}</span></button>
         {/snippet}
         <div class="ctx-card">
+        <!-- Compact: one plate, the everyday four as lines (no icon row). -->
+        {#if compact}{@render item(icons.reply, $t("Reply"), () => replyRow(row))}{/if}
         {#if menuQuote}{@render item(icons.quote, $t("Quote"), () => quoteRow(row, menuQuote))}{/if}
         {@render item(icons.thread, $t(isGroup && commentsAllowed ? "Comments & thread" : "Thread"), () => openThread(row))}
+        {#if compact && canFwd}{@render item(icons.forward, $t("Forward"), () => forwardRow(row))}{/if}
+        {#if compact && canCopy}{@render item(icons.copy, $t("Copy text"), () => copyRow(row))}{/if}
         <!-- My own GIFs and pictures too (it was others' only). -->
         {#if row.kind.type === "file" && row.kind.content.saved_at && !protectedChat}
           {@const rk = renderKind(row.kind.content)}
@@ -4736,6 +4796,7 @@
           {@render item(icons.bluetooth, $t("Send via Bluetooth"), () => { closeMenu(); btSheet.set([bp]); })}
         {/if}
         {#if canCopy}{@render item(icons.textSel, $t("Select text"), () => selectRowText(row))}{/if}
+        {#if compact && canDel}{@render item(icons.trash, $t("Delete"), () => deleteRow(row), true)}{/if}
         {#if row.outgoing && (row.kind.type === "text" || row.kind.type === "reply")}
           {@render item(icons.edit, $t("Edit"), () => startEdit(row))}
         {/if}
@@ -4747,12 +4808,14 @@
         {@render item(icons.select, $t("Select"), () => { startSelection(row); closeMenu(); })}
         </div>
         <!-- The everyday four as one row of icons (Telegram / AyuGram). -->
+        {#if !compact}
         <div class="ctx-card ctx-quick">
           <button role="menuitem" onclick={() => replyRow(row)} title={$t("Reply")} aria-label={$t("Reply")}>{@html icons.reply}</button>
           {#if canCopy}<button role="menuitem" onclick={() => copyRow(row)} title={$t("Copy text")} aria-label={$t("Copy text")}>{@html icons.copy}</button>{/if}
           {#if canFwd}<button role="menuitem" onclick={() => forwardRow(row)} title={$t("Forward")} aria-label={$t("Forward")}>{@html icons.forward}</button>{/if}
           {#if canDel}<button class="danger" role="menuitem" onclick={() => deleteRow(row)} title={$t("Delete")} aria-label={$t("Delete")}>{@html icons.trash}</button>{/if}
         </div>
+        {/if}
       </div>
     {/if}
 
@@ -4804,9 +4867,37 @@
             <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
           {/if}
         </button>
+        <button class="rec-review" onclick={stopToReview} title={$t("Stop to listen or turn into text")} aria-label={$t("Stop to listen or turn into text")}>
+          <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+        </button>
         <button class="rec-send" onclick={toggleRecord} title="Stop &amp; send">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
         </button>
+      </div>
+    {/if}
+
+    {#if voiceDraft && !recording}
+      <div class="rec-bar voice-draft" class:has-text={draftText != null}>
+        <button class="rec-trash" onclick={closeVoiceDraft} title={$t("Delete recording")}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+        </button>
+        {#if draftText == null}
+          <div class="vd-player"><MediaPlayer src={voiceDraft.url} kind="voice" /></div>
+          <button class="vd-tt" onclick={draftToText} disabled={draftBusy} title={$t("Turn into text")}>
+            {#if draftBusy}<span class="vd-spin"></span>{#if $sttProgress != null}<span class="vd-pct">{Math.round($sttProgress * 100)}%</span>{/if}{:else}{$t("To text")}{/if}
+          </button>
+          <button class="rec-send" onclick={sendDraftVoice} title={$t("Send voice message")}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
+        {:else}
+          <textarea class="vd-text" bind:value={draftText} rows="3" placeholder={$t("No speech recognized.")}></textarea>
+          <div class="vd-acts">
+            <button class="vd-back" onclick={() => (draftText = null)} title={$t("Back to the voice message")}>{$t("Voice")}</button>
+            <button class="rec-send" onclick={sendDraftText} disabled={!draftText.trim()} title={$t("Send as text")}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            </button>
+          </div>
+        {/if}
       </div>
     {/if}
 
@@ -6491,6 +6582,17 @@
     animation: ctx-pop 0.22s cubic-bezier(0.2, 0.9, 0.25, 1.12);
   }
   .ctx-menu.touch :global(.ctx-item) { min-height: 50px; font-size: 16px; }
+  /* Compact: one small plate — the reaction strip on top as wide as it, a
+     hairline, then short text lines (no icons). */
+  .ctx-menu.compact { width: 212px; gap: 0; }
+  .ctx-menu.compact.touch { width: 236px; }
+  .ctx-menu.compact .ctx-reactions { border-radius: calc(12px * var(--rk, 1)) calc(12px * var(--rk, 1)) 0 0; border-bottom: none; box-shadow: none; padding: 4px 6px; }
+  .ctx-menu.compact .ctx-reactions.expanded { border-radius: calc(12px * var(--rk, 1)) calc(12px * var(--rk, 1)) 0 0; }
+  .ctx-menu.compact .ctx-card { border-radius: 0 0 calc(12px * var(--rk, 1)) calc(12px * var(--rk, 1)); padding: 3px 0 5px; }
+  .ctx-menu.compact .ctx-emoji { width: 28px; height: 28px; font-size: 19px; }
+  .ctx-menu.compact :global(.ci-ic) { display: none; }
+  .ctx-menu.compact :global(.ctx-item) { min-height: 31px; padding: 0 14px; gap: 0; font-size: 13.5px; font-weight: 600; }
+  .ctx-menu.compact.touch :global(.ctx-item) { min-height: 40px; font-size: 15px; }
   @keyframes ctx-pop {
     from { opacity: 0; transform: scale(0.82) translateY(-6px); }
     60% { opacity: 1; }
@@ -7062,4 +7164,18 @@
   .uns-up { border: none; padding: 0; background: none; color: var(--accent); font: inherit; font-size: 13.5px; font-weight: 700; cursor: pointer; }
   .uns-up:hover { text-decoration: underline; }
   .ap-emoji { font-size: 20px; line-height: 1; width: 22px; text-align: center; }
+  .circle-tr { margin-top: 6px; max-width: 260px; }
+  .rec-review { display: grid; place-items: center; width: 34px; height: 34px; border: none; border-radius: 50%; background: var(--bg-hover); color: var(--fg); cursor: pointer; }
+  .rec-review svg { width: 14px; height: 14px; }
+  .voice-draft { gap: 8px; }
+  .voice-draft.has-text { align-items: flex-end; }
+  .vd-player { flex: 1; min-width: 0; }
+  .vd-tt { height: 32px; padding: 0 12px; border: none; border-radius: calc(16px * var(--rk, 1)); background: var(--accent-soft); color: var(--accent); font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .vd-tt:disabled { cursor: progress; }
+  .vd-pct { font-size: 12px; font-variant-numeric: tabular-nums; }
+  .vd-spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: vd-sp 0.8s linear infinite; }
+  @keyframes vd-sp { to { transform: rotate(1turn); } }
+  .vd-text { flex: 1; min-width: 0; resize: vertical; max-height: 40vh; padding: 8px 10px; border: 1px solid var(--border); border-radius: calc(12px * var(--rk, 1)); background: var(--bg-input); color: var(--fg); font: inherit; }
+  .vd-acts { display: flex; flex-direction: column; gap: 6px; align-items: center; }
+  .vd-back { height: 28px; padding: 0 10px; border: none; border-radius: calc(14px * var(--rk, 1)); background: var(--bg-hover); color: var(--fg); cursor: pointer; font-size: 12px; }
 </style>

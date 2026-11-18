@@ -552,7 +552,8 @@ pub async fn tg_login_poll(server_url: String, code: String) -> Result<serde_jso
 #[tauri::command]
 pub async fn fed_peers(server_url: String) -> Result<serde_json::Value, String> {
     let url = format!("{}/v1/fed/peers", server_url.trim_end_matches('/'));
-    let http = reqwest::Client::builder().timeout(std::time::Duration::from_secs(6)).build().map_err(|e| e.to_string())?;
+    let b = reqwest::Client::builder().timeout(std::time::Duration::from_secs(6));
+    let http = aqua_client_core::transport::app_proxy(b).map_err(|e| e.to_string())?.build().map_err(|e| e.to_string())?;
     let r = http.get(url).send().await.map_err(|e| e.to_string())?;
     if !r.status().is_success() {
         return Ok(serde_json::json!({ "federated": false, "servers": [] }));

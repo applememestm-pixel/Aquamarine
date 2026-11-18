@@ -29,6 +29,32 @@ pub struct ServerProbe {
     pub country: Option<String>,
     pub country_code: Option<String>,
     pub city: Option<String>,
+    /// Why it didn't answer: "refused" | "timeout" | "dns" | "proxy" |
+    /// "http" (an error page) | "other" — shown under "no answer".
+    pub why: Option<String>,
+}
+
+/// The short reason a probe failed, for the hint under "no answer".
+fn why_failed(e: &reqwest::Error) -> &'static str {
+    let mut chain = e.to_string();
+    let mut src = std::error::Error::source(e);
+    while let Some(s) = src {
+        chain.push(' ');
+        chain.push_str(&s.to_string());
+        src = s.source();
+    }
+    let c = chain.to_ascii_lowercase();
+    if c.contains("proxy") || c.contains("socks") {
+        "proxy"
+    } else if e.is_timeout() || c.contains("timed out") {
+        "timeout"
+    } else if c.contains("dns") || c.contains("resolve") || c.contains("lookup") || c.contains("no such host") {
+        "dns"
+    } else if c.contains("refused") || c.contains("reset") || c.contains("unreachable") {
+        "refused"
+    } else {
+        "other"
+    }
 }
 
 fn split_url(url: &str) -> Option<(String, String, u16)> {
@@ -116,11 +142,13 @@ async fn probe_one(http: reqwest::Client, raw: String) -> Option<ServerProbe> {
     let t0 = Instant::now();
     let stats = http.get(format!("{url}/v1/stats")).timeout(Duration::from_secs(3)).send().await;
     let ms = t0.elapsed().as_millis() as u64;
-    let body = match stats {
-        Ok(r) if r.status().is_success() => r.json::<serde_json::Value>().await.ok(),
-        _ => None,
+    let (body, why) = match stats {
+        Ok(r) if r.status().is_success() => (r.json::<serde_json::Value>().await.ok(), None),
+        Ok(_) => (None, Some("http")),
+        Err(e) => (None, Some(why_failed(&e))),
     };
     let ok = body.as_ref().and_then(|v| v["ok"].as_bool()).unwrap_or(false);
+    let why = if ok { None } else { Some(why.unwrap_or("http").to_string()) };
     let scope = ip.as_ref().map(scope_of);
     let g = match ip {
         Some(ip) if scope == Some("public") => geo(&http, ip).await,
@@ -139,16 +167,15 @@ async fn probe_one(http: reqwest::Client, raw: String) -> Option<ServerProbe> {
         country: g.country,
         country_code: g.country_code,
         city: g.city,
+        why,
     })
 }
 
 /// Probes every address at once (each gives up after a few seconds).
 #[tauri::command]
 pub async fn probe_servers(urls: Vec<String>) -> Result<Vec<ServerProbe>, String> {
-    let http = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(2))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let b = reqwest::Client::builder().connect_timeout(Duration::from_secs(2));
+    let http = aqua_client_core::transport::app_proxy(b).map_err(|e| e.to_string())?.build().map_err(|e| e.to_string())?;
     let mut seen = std::collections::HashSet::new();
     let jobs = urls
         .into_iter()
@@ -184,7 +211,8 @@ pub async fn scan_lan_relays(port: Option<u16>) -> Result<Vec<String>, String> {
         }
     });
     let open: Vec<SocketAddr> = join_all(knocks).await.into_iter().flatten().collect();
-    let http = reqwest::Client::builder().timeout(Duration::from_secs(2)).build().map_err(|e| e.to_string())?;
+    // Always direct: neither a proxy nor a VPN can see this network.
+    let http = reqwest::Client::builder().timeout(Duration::from_secs(2)).no_proxy().build().map_err(|e| e.to_string())?;
     let checks = open.into_iter().map(|addr| {
         let http = http.clone();
         async move {
