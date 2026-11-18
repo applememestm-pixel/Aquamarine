@@ -1260,6 +1260,7 @@ export const RU: Record<string, string> = {
   "Flip a coin": "Подбросить монетку",
   "Formatting": "Форматирование",
   "Full screen": "На весь экран",
+  "From the server {s}": "С сервера {s}",
   "Look what I found 📸": "Смотри, что нашла 📸",
   "Haha, send it to the group": "Ахаха, скинь в группу",
   "Heading": "Заголовок",

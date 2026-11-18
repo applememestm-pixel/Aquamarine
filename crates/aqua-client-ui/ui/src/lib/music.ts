@@ -23,7 +23,8 @@ import { tr } from "./i18n";
 export type Src = "server" | "own";
 
 export interface MusicStatus {
-  server: { enabled: boolean; tag: string; bot?: string | null } | null;
+  /** `sources`: every Navidrome of the server's network (aqua-server music.rs). */
+  server: { enabled: boolean; tag: string; bot?: string | null; sources?: { tag: string; name: string }[] } | null;
   own: { url: string; user: string; tag: string } | null;
 }
 
@@ -40,6 +41,9 @@ export interface Song {
   year?: number;
   starred?: boolean;
   src: Src;
+  /** Which Navidrome of the network it's on (its tag) and that server's name. */
+  nd?: string;
+  srv?: string;
 }
 
 export interface Album { id: string; name: string; artist: string; artistId?: string; coverArt?: string; year?: number; songCount?: number; src: Src }
@@ -59,6 +63,8 @@ export interface TrackCard {
   nd: string;
   /** "Listen together" invite: the host's @name. */
   lt?: string;
+  /** The server the track is on (several Navidromes in the network). */
+  srv?: string;
 }
 
 export const TRACK_PREFIX = "[track:v1]";
@@ -123,7 +129,7 @@ musicOn.subscribe((on) => {
 /** Does this card play here, and from which source? */
 export function cardSource(c: { src?: Src; nd?: string }, st = get(musicStatus)): Src | null {
   if (!c.nd) return null;
-  if (st.server?.enabled && st.server.tag === c.nd) return "server";
+  if (st.server?.enabled && (st.server.tag === c.nd || st.server.sources?.some((x) => x.tag === c.nd))) return "server";
   if (st.own && st.own.tag === c.nd) return "own";
   return null;
 }
@@ -156,6 +162,7 @@ export function toSong(x: any, src: Src): Song {
     id: String(x.id), title: x.title ?? "", artist: x.artist ?? x.displayArtist ?? "", album: x.album ?? "",
     albumId: x.albumId, artistId: x.artistId, duration: Number(x.duration ?? 0), coverArt: x.coverArt,
     track: x.track, year: x.year, starred: !!x.starred, src,
+    ...(typeof x.nd === "string" ? { nd: x.nd } : {}), ...(typeof x.srv === "string" && x.srv ? { srv: x.srv } : {}),
   };
 }
 export const toAlbum = (x: any, src: Src): Album => ({ id: String(x.id), name: x.name ?? x.title ?? "", artist: x.artist ?? "", artistId: x.artistId, coverArt: x.coverArt, year: x.year, songCount: x.songCount, src });
@@ -247,8 +254,9 @@ export function openMusic(sendTo: string | null = null) {
 
 export function cardOf(s: Song, lt?: string): TrackCard {
   const st = get(musicStatus);
-  const tag = s.src === "server" ? st.server?.tag ?? "" : st.own?.tag ?? "";
+  const tag = s.src === "server" ? s.nd || st.server?.tag || "" : st.own?.tag ?? "";
   const c: TrackCard = { id: s.id, title: s.title, artist: s.artist, album: s.album, dur: s.duration, cover: s.coverArt, src: s.src, nd: tag };
+  if (s.srv) c.srv = s.srv;
   if (lt) c.lt = lt;
   return c;
 }
@@ -263,7 +271,8 @@ export function parseTrack(text: string): TrackCard | null {
 }
 
 export function cardSong(c: TrackCard, src: Src): Song {
-  return { id: c.id, title: c.title, artist: c.artist ?? "", album: c.album ?? "", duration: c.dur ?? 0, coverArt: c.cover, src };
+  return { id: c.id, title: c.title, artist: c.artist ?? "", album: c.album ?? "", duration: c.dur ?? 0, coverArt: c.cover, src,
+    ...(c.nd ? { nd: c.nd } : {}), ...(c.srv ? { srv: c.srv } : {}) };
 }
 
 export async function sendCard(chat: string, s: Song, lt?: string) {

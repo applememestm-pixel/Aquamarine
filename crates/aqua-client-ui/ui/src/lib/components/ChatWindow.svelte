@@ -4070,6 +4070,7 @@
     <div
       class="messages"
       class:feed={feedView}
+      class:dm={!isGroup}
       class:protected={protectedChat}
       class:drag-over={draggingOver}
       class:selecting
@@ -4133,7 +4134,8 @@
               {#if $avatars[avatarKey(m.from)]}<img class="ava-img" src={$avatars[avatarKey(m.from)]} alt="" loading="lazy" />{/if}
             </div>
             <div class="msg-col" class:post={isGroup && commentsAllowed && activeGroup?.kind === "channel"}>
-              {#if m.first && !m.outgoing && $activeChat && !isChannel}
+              <!-- A chat of two: whose message it is goes without saying (Telegram) — no name, no avatar. -->
+              {#if m.first && !m.outgoing && $activeChat && !isChannel && isGroup}
                 {@const mt = isGroup ? tagOf(activeGroup, m.from) : null}
                 <div class="msg-header">
                   <span class="msg-author" style:color={isGroup ? roleColor(activeGroup, m.from) || peerColor(m.from) : null}>{isGroup ? m.from : $activeChat.name.split(' ')[0]}</span>{#if $peerCards[m.from]?.verified}<OfficialMark size={13} />{/if}{#if $peerCards[m.from]?.star != null}<StarMark kind={$peerCards[m.from]?.star ?? 0} size={13} />{/if}
@@ -6477,6 +6479,10 @@
   .media-bubble.album.a3 { grid-template-columns: 1fr 1fr 1fr; }
   .media-bubble.album .alb-cell { aspect-ratio: 1; overflow: hidden; padding: 0; border: none; background: var(--bg-input); }
   .media-bubble.album .alb-cell .media-img { width: 100%; height: 100%; object-fit: cover; max-width: none; max-height: none; border-radius: 0; }
+  /* A chat of two: no avatar column — the bubbles take the room. */
+  .messages.dm .msg { grid-template-columns: 1fr; }
+  .messages.dm .msg-avatar { display: none; }
+  .messages.dm .msg-col { grid-column: 1; }
   /* Feed view of a channel: one centred column of full-width posts. */
   .messages.feed .msg-avatar { display: none; }
   .messages.feed .msg { display: flex; justify-content: center; }
