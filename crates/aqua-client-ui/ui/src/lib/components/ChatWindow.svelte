@@ -4825,7 +4825,11 @@
         {/if}
       </div>
     {/if}
-    <div class="composer" class:disabled={!liveChat} bind:this={composerBox}>
+    <div class="composer" class:disabled={!liveChat} class:chan-bar={isChannel && liveChat} bind:this={composerBox}>
+      {#if isChannel && liveChat}
+        <!-- A channel (Telegram): one bar — who posts, stickers, the text, 📎, the round button. -->
+        <span class="cb-ava" style:background-image={$myProfile.avatar_url ? `url("${$myProfile.avatar_url}")` : undefined}>{$myProfile.avatar_url ? "" : (myUsername || "?").charAt(0).toUpperCase()}</span>
+      {/if}
       {#if botMenu}
         <button class="bot-menu-btn" onclick={() => { if ($activeChat && botMenu) openMiniApp({ bot: $activeChat.id, url: botMenu.url, from: "menu" }); }} title={botMenu.url}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="14" y2="17"/></svg>
@@ -5002,7 +5006,7 @@
         <RichComposer
           bind:this={composerEl}
           bind:value={text}
-          placeholder={liveChat ? (activeRoom ? $t("Message #{room}…", { room: activeRoom.name }) : $t("Message {name}…", { name: $activeChat.name.split(" ")[0] })) : $t("Start a real chat first — see the banner above")}
+          placeholder={liveChat ? (isChannel ? $t("Broadcast") : activeRoom ? $t("Message #{room}…", { room: activeRoom.name }) : $t("Message {name}…", { name: $activeChat.name.split(" ")[0] })) : $t("Start a real chat first — see the banner above")}
           resolve={(k) => emojiMap[k]}
           oninput={onComposerInput}
           onkeydown={onKey}
@@ -5024,12 +5028,6 @@
             } else if (liveChat && $activeChat) openMediaPicker($activeChat.id);
           }}
         >{#if $pickerState.open}<span class="kb-ico">{@html KEYBOARD_ICON}</span>{:else}{@html $pickerTab === "stickers" ? STICKER_ICON : $pickerTab === "gifs" ? GIF_ICON : SMILE_ICON}{/if}</button>
-        {#if IS_MOBILE && liveChat && text.trim().length === 0}
-          <!-- The camera right in the message field (AyuGram): photo or video in one tap. -->
-          <button class="emoji-in cam-in" title={$t("Camera")} aria-label={$t("Camera")} onclick={() => void shoot()}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-3l-2-3H9L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><circle cx="12" cy="13" r="3.6"/></svg>
-          </button>
-        {/if}
       </div>
       {#if text.trim().length === 0 && liveChat}
         <!-- One button: tap switches mic↔camera, hold to record -->
@@ -6763,6 +6761,18 @@
   }
   /* The blur lives on a pseudo-layer: a backdrop-filter on the bar itself would make it a
      "backdrop root", and popups inside it (attach menu, room list) couldn't blur the chat. */
+  /* A channel's bar (Telegram): one pill — my avatar, stickers, the text, 📎,
+     the round mic / send button; no separate boxes. */
+  .composer.chan-bar { align-items: center; gap: 2px; margin: 6px 10px 8px; padding: 4px; border: 1px solid var(--border);
+    border-radius: 999px; background: var(--bg-input); }
+  .composer.chan-bar::before { border-radius: 999px; }
+  .chan-bar .cb-ava { order: 0; width: 38px; height: 38px; border-radius: var(--ava-r, 50%); flex-shrink: 0; background: var(--accent-soft) center / cover no-repeat;
+    display: grid; place-items: center; font-weight: 800; color: var(--accent); }
+  .chan-bar .input-wrap { order: 1; background: transparent; border: none; box-shadow: none !important; padding-left: 4px; align-items: center; }
+  .chan-bar .input-wrap > .emoji-in { order: -1; }
+  .chan-bar .attach-wrap { order: 2; }
+  .chan-bar .attach-btn { background: transparent; border: none; border-radius: 50%; }
+  .chan-bar .send-btn { order: 3; border-radius: 50%; }
   .composer::before, .chat-header::before {
     content: "";
     position: absolute;
@@ -6862,7 +6872,6 @@
   .emoji-in:hover { color: var(--accent); background: var(--accent-soft); }
   .emoji-in.disabled { opacity: .4; cursor: help; }
   .emoji-in :global(svg) { width: 21px; height: 21px; }
-  .cam-in { margin-left: 0; }
   .stream-play { display: grid; place-items: center; width: 100%; border: none; cursor: pointer; }
   .sp-ic { width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; color: #fff; background: rgba(0,0,0,.5); }
   .sp-ic svg { width: 26px; height: 26px; margin-left: 3px; }
