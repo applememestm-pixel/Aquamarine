@@ -112,6 +112,297 @@ pub fn tag_of(url: &str) -> String {
     hex::encode(&Sha256::digest(u.as_bytes())[..6])
 }
 
+// ------------------------------------------------------- several Navidromes
+//
+// Every Navidrome of the network is one library here: search, albums, the
+// @music bot ask all of them at once (in parallel) and merge the answers.
+// What came from another relay carries its tag in its ids (`<tag>~<id>`),
+// so a track, a cover or an album opened later goes to that relay; every
+// song also says where it's from (`nd`, `srv` — shown on its card).
+
+/// One Navidrome of the network: this relay's (`peer: None`) or a peer's.
+#[derive(Clone, Debug)]
+pub struct Source {
+    pub tag: String,
+    pub name: String,
+    pub peer: Option<String>,
+}
+
+/// An address without its scheme: how a relay is named next to a track.
+fn host_of(url: &str) -> String {
+    let u = url.trim().trim_end_matches('/');
+    u.strip_prefix("https://").or_else(|| u.strip_prefix("http://")).unwrap_or(u).to_string()
+}
+
+/// This relay's Navidrome as the network sees it (`/v1/fed/music/info`).
+pub fn local_info() -> Option<Value> {
+    if !enabled() { return None; }
+    let me = crate::public::url();
+    Some(json!({ "tag": tag_of(&config().url), "name": if me.is_empty() { "this server".to_string() } else { host_of(&me) } }))
+}
+
+static SOURCES: std::sync::Mutex<Option<(std::time::Instant, Vec<Source>)>> = std::sync::Mutex::new(None);
+
+/// Every Navidrome reachable from here, this relay's first; asked of the
+/// peers in parallel and remembered for a minute.
+pub async fn sources(state: &AppState) -> Vec<Source> {
+    if let Some((at, v)) = SOURCES.lock().ok().and_then(|g| g.clone()) {
+        if at.elapsed() < std::time::Duration::from_secs(60) { return v; }
+    }
+    let mut out = Vec::new();
+    if let Some(i) = local_info() {
+        out.push(Source { tag: i["tag"].as_str().unwrap_or("").to_string(), name: i["name"].as_str().unwrap_or("").to_string(), peer: None });
+    }
+    if let Some(f) = crate::fed::current(state) {
+        let asks = f.peer_list().into_iter().map(|p| {
+            let f = f.clone();
+            async move {
+                let t = std::time::Duration::from_secs(6);
+                if let Ok(Some(v)) = tokio::time::timeout(t, f.music_json_at(&p, "/v1/fed/music/info")).await {
+                    let tag = v["tag"].as_str().unwrap_or("").to_string();
+                    if !tag.is_empty() {
+                        let name = v["name"].as_str().filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| host_of(&p));
+                        return Some(Source { tag, name, peer: Some(p) });
+                    }
+                }
+                // An older relay: no info, but its Navidrome answers.
+                match tokio::time::timeout(t, f.music_json_at(&p, "/v1/fed/music/rest/ping")).await {
+                    Ok(Some(_)) => Some(Source { tag: format!("p{}", &tag_of(&p)[..8]), name: host_of(&p), peer: Some(p) }),
+                    _ => None,
+                }
+            }
+        });
+        for s in futures_util::future::join_all(asks).await.into_iter().flatten() {
+            // The same Navidrome behind two relays: once.
+            if !out.iter().any(|o: &Source| o.tag == s.tag) { out.push(s); }
+        }
+    }
+    if let Ok(mut g) = SOURCES.lock() { *g = Some((std::time::Instant::now(), out.clone())); }
+    out
+}
+
+/// `<tag>~<id>` of a peer's source → (that source, the id there).
+fn routed<'a>(srcs: &'a [Source], id: &'a str) -> Option<(&'a Source, &'a str)> {
+    let (tag, rest) = id.split_once('~')?;
+    srcs.iter().find(|s| s.peer.is_some() && s.tag == tag).map(|s| (s, rest))
+}
+
+/// A card made on another relay can carry THIS relay's tag (`<mine>~<id>`):
+/// the id as this Navidrome knows it.
+fn unlocal(id: &str) -> String {
+    if enabled() {
+        let mine = tag_of(&config().url);
+        if let Some(rest) = id.strip_prefix(&format!("{mine}~")) { return rest.to_string(); }
+    }
+    id.to_string()
+}
+
+const ID_KEYS: &[&str] = &["id", "albumId", "artistId", "coverArt", "parent"];
+
+/// Mark an answer as `src`'s: a peer's ids get its tag, every song / album /
+/// artist says where it's from (`nd`, and `srv` when there are several).
+fn stamp(v: &mut Value, src: &Source, label: bool) {
+    match v {
+        Value::Object(o) => {
+            if src.peer.is_some() {
+                for k in ID_KEYS {
+                    if let Some(Value::String(x)) = o.get_mut(*k) {
+                        if !x.is_empty() { *x = format!("{}~{x}", src.tag); }
+                    }
+                }
+            }
+            if o.contains_key("id") && (o.contains_key("title") || o.contains_key("name")) {
+                o.insert("nd".into(), json!(src.tag));
+                if label { o.insert("srv".into(), json!(src.name)); }
+            }
+            for x in o.values_mut() { stamp(x, src, label); }
+        }
+        Value::Array(a) => a.iter_mut().for_each(|x| stamp(x, src, label)),
+        _ => {}
+    }
+}
+
+/// Lists that are the same kind of thing on every Navidrome: asked of all.
+const MERGED: &[&str] = &["search3", "search2", "getAlbumList2", "getAlbumList", "getRandomSongs", "getStarred2", "getStarred", "getPlaylists", "getArtists", "getIndexes", "getGenres"];
+
+/// Put the lists of `more` after those of `base` (`{"searchResult3": {"song": [...]}}`);
+/// the same song (title, artist, length) twice — once.
+fn merge_into(base: &mut Value, more: Value) {
+    let Value::Object(more) = more else { return };
+    for (k, v) in more {
+        let Value::Object(inner) = v else { continue };
+        let slot = base.as_object_mut().map(|b| b.entry(k).or_insert_with(|| json!({})));
+        let Some(Value::Object(slot)) = slot else { continue };
+        for (k2, arr) in inner {
+            let Value::Array(items) = arr else { continue };
+            let e = slot.entry(k2.clone()).or_insert_with(|| json!([]));
+            let Value::Array(have) = e else { continue };
+            for it in items {
+                let key = |x: &Value| (s(x, "title").to_lowercase(), s(x, "artist").to_lowercase(), x.get("duration").and_then(|d| d.as_u64()).unwrap_or(0));
+                if k2 == "song" && !s(&it, "title").is_empty() && have.iter().any(|h| key(h) == key(&it)) { continue; }
+                have.push(it);
+            }
+        }
+    }
+}
+
+/// One Subsonic call across the network's Navidromes: routed by a tagged
+/// id, merged for the lists, else this relay's (or the first peer's).
+pub async fn call_all(state: &AppState, method: &str, params: Vec<(String, String)>) -> Result<Value, String> {
+    let params: Vec<(String, String)> = params.into_iter().map(|(k, v)| if matches!(k.as_str(), "id" | "albumId" | "artistId") { let v = unlocal(&v); (k, v) } else { (k, v) }).collect();
+    let srcs = sources(state).await;
+    if srcs.is_empty() { return Err("Navidrome isn't set up on this server".into()); }
+    let label = srcs.len() > 1;
+    let ask = |src: Source, params: Vec<(String, String)>| {
+        let state = state.clone();
+        let method = method.to_string();
+        async move {
+            let mut v = match &src.peer {
+                None => call(&config(), &method, &params).await?,
+                Some(p) => {
+                    let f = crate::fed::current(&state).ok_or("no network")?;
+                    let qs = params.iter().map(|(k, v)| format!("{}={}", urlenc(k), urlenc(v))).collect::<Vec<_>>().join("&");
+                    let path = if qs.is_empty() { format!("/v1/fed/music/rest/{method}") } else { format!("/v1/fed/music/rest/{method}?{qs}") };
+                    tokio::time::timeout(std::time::Duration::from_secs(20), f.music_json_at(p, &path)).await.ok().flatten().ok_or_else(|| format!("{} doesn't answer", src.name))?
+                }
+            };
+            fix_mojibake(&mut v);
+            stamp(&mut v, &src, label);
+            Ok::<Value, String>(v)
+        }
+    };
+    // An id of another relay's: that relay alone, the id as it knows it.
+    if let Some((src, _)) = params.iter().filter(|(k, _)| matches!(k.as_str(), "id" | "albumId" | "artistId")).find_map(|(_, v)| routed(&srcs, v)) {
+        let src = src.clone();
+        let local: Vec<(String, String)> = params.iter().map(|(k, v)| {
+            let v = if matches!(k.as_str(), "id" | "albumId" | "artistId") { routed(&srcs, v).filter(|(s2, _)| s2.tag == src.tag).map(|(_, r)| r.to_string()).unwrap_or_else(|| v.clone()) } else { v.clone() };
+            (k.clone(), v)
+        }).collect();
+        return ask(src, local).await;
+    }
+    if MERGED.contains(&method) && srcs.len() > 1 {
+        let all = futures_util::future::join_all(srcs.iter().cloned().map(|src| ask(src, params.clone()))).await;
+        let mut base: Option<Value> = None;
+        let mut err = None;
+        for r in all {
+            match r {
+                Ok(v) => match base.as_mut() { None => base = Some(v), Some(b) => merge_into(b, v) },
+                Err(e) => err = Some(e),
+            }
+        }
+        return base.ok_or_else(|| err.unwrap_or_default());
+    }
+    let first = srcs[0].clone();
+    ask(first, params).await
+}
+
+// ------------------------------------------------------------ smart search
+//
+// Navidrome's search3 finds the words as typed. People type a band in the
+// wrong keyboard layout ("ythds"), in translit ("nervy"), with extra words
+// ("нервы песня про"), or a word of a title that sits in a file name
+// ("01. Нервы - Критика"). So: several spellings at once, then the songs
+// ranked by how much of the query they hold (artist and title first).
+
+const EN: &str = "qwertyuiop[]asdfghjkl;'zxcvbnm,.`";
+const RU: &str = "йцукенгшщзхъфывапролджэячсмитьбюё";
+
+/// The same keys in the other layout (ghbdtn ↔ привет).
+fn swap_layout(q: &str) -> String {
+    let en: Vec<char> = EN.chars().collect();
+    let ru: Vec<char> = RU.chars().collect();
+    q.chars().map(|c| {
+        let l = c.to_lowercase().next().unwrap_or(c);
+        if let Some(i) = en.iter().position(|&x| x == l) { ru[i] } else if let Some(i) = ru.iter().position(|&x| x == l) { en[i] } else { c }
+    }).collect()
+}
+
+const TR: &[(&str, &str)] = &[("щ", "shch"), ("ё", "yo"), ("ж", "zh"), ("ц", "ts"), ("ч", "ch"), ("ш", "sh"), ("ю", "yu"), ("я", "ya"), ("х", "kh"),
+    ("а", "a"), ("б", "b"), ("в", "v"), ("г", "g"), ("д", "d"), ("е", "e"), ("з", "z"), ("и", "i"), ("й", "y"), ("к", "k"), ("л", "l"), ("м", "m"),
+    ("н", "n"), ("о", "o"), ("п", "p"), ("р", "r"), ("с", "s"), ("т", "t"), ("у", "u"), ("ф", "f"), ("ъ", ""), ("ы", "y"), ("ь", ""), ("э", "e")];
+
+/// Cyrillic → Latin (нервы → nervy).
+fn to_latin(q: &str) -> String {
+    let mut out = String::new();
+    for c in q.to_lowercase().chars() {
+        let cs = c.to_string();
+        match TR.iter().find(|(r, _)| *r == cs) { Some((_, l)) => out.push_str(l), None => out.push(c) }
+    }
+    out
+}
+
+/// Latin → Cyrillic, longest letters first (shch, zh, ya…).
+fn to_cyrillic(q: &str) -> String {
+    // "y" reads as ы, "e" as е (not й / э): the usual way back.
+    let mut pairs: Vec<(&str, &str)> = TR.iter().filter(|(r, l)| !l.is_empty() && *r != "й" && *r != "э").map(|(r, l)| (*l, *r)).collect();
+    pairs.sort_by_key(|(l, _)| std::cmp::Reverse(l.len()));
+    let q = q.to_lowercase();
+    let mut out = String::new();
+    let mut i = 0;
+    'outer: while i < q.len() {
+        for (l, r) in &pairs {
+            if q[i..].starts_with(l) { out.push_str(r); i += l.len(); continue 'outer; }
+        }
+        let c = q[i..].chars().next().unwrap_or(' ');
+        out.push(c);
+        i += c.len_utf8();
+    }
+    out
+}
+
+fn words(s: &str) -> Vec<String> {
+    s.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| w.chars().count() >= 2).map(str::to_string).collect()
+}
+
+/// How well a song answers the query (higher is better; 0 — not at all).
+fn score(song: &Value, q: &str) -> u32 {
+    let ql = q.trim().to_lowercase();
+    let (title, artist, album) = (s(song, "title").to_lowercase(), s(song, "artist").to_lowercase(), s(song, "album").to_lowercase());
+    let hay = format!("{title} {artist} {album}");
+    let mut sc = 0;
+    if artist == ql || title == ql { sc += 100; }
+    if title.starts_with(&ql) || artist.starts_with(&ql) { sc += 40; }
+    if hay.contains(&ql) { sc += 30; }
+    let qw = words(&ql);
+    let hw = words(&hay);
+    let hits = qw.iter().filter(|w| hw.iter().any(|h| h.starts_with(w.as_str()))).count() as u32;
+    sc += hits * 20;
+    if !qw.is_empty() && hits as usize == qw.len() { sc += 25; }
+    sc
+}
+
+/// Songs for what a person typed: every spelling of it on every Navidrome,
+/// ranked, the same song once.
+pub async fn smart_songs(state: &AppState, q: &str, limit: usize) -> Result<Vec<Value>, String> {
+    let q = q.trim();
+    let mut tries: Vec<String> = vec![q.to_string()];
+    let mut add = |v: String| { let v = v.trim().to_string(); if v.chars().count() >= 2 && !tries.contains(&v) { tries.push(v); } };
+    add(swap_layout(q));
+    if q.chars().any(|c| ('а'..='я').contains(&c.to_lowercase().next().unwrap_or(c)) || c == 'ё') { add(to_latin(q)); } else { add(to_cyrillic(q)); }
+    let ws = words(q);
+    if ws.len() > 1 { for w in ws.iter().filter(|w| w.chars().count() >= 3).take(4) { add(w.clone()); } }
+    tries.truncate(7);
+    let asks = tries.iter().map(|t| call_all(state, "search3", vec![("query".into(), t.clone()), ("songCount".into(), "30".into()), ("albumCount".into(), "0".into()), ("artistCount".into(), "0".into())]));
+    let mut seen = std::collections::HashSet::new();
+    let mut songs: Vec<(u32, Value)> = Vec::new();
+    let mut err = None;
+    for (i, r) in futures_util::future::join_all(asks).await.into_iter().enumerate() {
+        match r {
+            Ok(v) => for song in v.pointer("/searchResult3/song").and_then(|x| x.as_array()).cloned().unwrap_or_default() {
+                let key = format!("{}|{}|{}", s(&song, "title").to_lowercase(), s(&song, "artist").to_lowercase(), song.get("duration").and_then(|d| d.as_u64()).unwrap_or(0));
+                if !seen.insert(key) { continue; }
+                // Scored against the spelling that found it; the typed one first.
+                let sc = score(&song, &tries[i]).max(score(&song, q)) + if i == 0 { 5 } else { 0 };
+                songs.push((sc, song));
+            },
+            Err(e) => err = Some(e),
+        }
+    }
+    if songs.is_empty() { if let Some(e) = err { if !e.contains("isn't set up") { return Err(e); } } }
+    songs.sort_by(|a, b| b.0.cmp(&a.0));
+    Ok(songs.into_iter().take(limit).map(|(_, v)| v).collect())
+}
+
 // ------------------------------------------------------------------ Subsonic
 
 /// `u`, `t`, `s`, `v`, `c` for one request (token auth: md5(password + salt)).
@@ -160,6 +451,9 @@ fn url_pairs(raw: &str) -> Vec<(String, String)> {
         })
         .collect()
 }
+
+/// Percent-decoding for the network's query strings (fed.rs).
+pub fn pct(s: &str) -> String { pct_decode(s) }
 
 fn pct_decode(s: &str) -> String {
     let b = s.as_bytes();
@@ -218,13 +512,23 @@ pub fn fix_mojibake(v: &mut Value) {
     }
 }
 
+/// Windows-1251 punctuation read as Latin-1: «», dashes, quotes, №, …
+/// (they used to make the whole tag "not cp1251").
+fn cp1251_punct(c: u32) -> Option<char> {
+    Some(match c {
+        0x85 => '…', 0x91 => '‘', 0x92 => '’', 0x93 => '“', 0x94 => '”', 0x96 => '–', 0x97 => '—',
+        0xA0 => '\u{a0}', 0xAB => '«', 0xBB => '»', 0xB9 => '№', 0xB0 => '°',
+        _ => return None,
+    })
+}
+
 fn from_1251(s: &str) -> Option<String> {
     let mut high = 0;
     let mut letters = 0;
     for ch in s.chars() {
         let c = ch as u32;
         if c > 0xFF { return None; }
-        if c >= 0x80 && !(c == 0xA8 || c == 0xB8 || c >= 0xC0) { return None; }
+        if c >= 0x80 && !(c == 0xA8 || c == 0xB8 || c >= 0xC0 || cp1251_punct(c).is_some()) { return None; }
         if c >= 0xC0 || c == 0xA8 || c == 0xB8 { high += 1; }
         if ch.is_alphabetic() { letters += 1; }
     }
@@ -233,6 +537,7 @@ fn from_1251(s: &str) -> Option<String> {
     Some(s.chars().map(|ch| match ch as u32 {
         0xA8 => 'Ё',
         0xB8 => 'ё',
+        c if cp1251_punct(c).is_some() => cp1251_punct(c).unwrap_or(ch),
         c @ 0xC0..=0xFF => char::from_u32(0x410 + c - 0xC0).unwrap_or(ch),
         _ => ch,
     }).collect())
@@ -350,18 +655,14 @@ async fn test_json(c: &Config) -> Value {
 /// What the app needs to know: is there music here, and which Navidrome.
 pub async fn info(State(state): State<AppState>, _caller: Caller) -> Json<Value> {
     let c = config();
-    let on = !c.url.is_empty() && !c.user.is_empty();
-    // No Navidrome here: one on another relay of the network serves it.
-    if !on {
-        if let Some(f) = crate::fed::current(&state) {
-            if f.music_json("/v1/fed/music/rest/ping").await.is_some() {
-                return Json(json!({ "enabled": true, "tag": "", "bot": null, "via": "network" }));
-            }
-        }
-    }
+    // Every Navidrome of the network (this relay's first): their cards play here.
+    let srcs = sources(&state).await;
+    let on = !srcs.is_empty();
     Json(json!({
         "enabled": on,
-        "tag": if on { tag_of(&c.url) } else { String::new() },
+        // Older apps know one tag: this relay's, else the first peer's.
+        "tag": srcs.first().map(|s| s.tag.clone()).unwrap_or_default(),
+        "sources": srcs.iter().map(|s| json!({ "tag": s.tag, "name": s.name })).collect::<Vec<_>>(),
         "bot": if on && c.bot { Some(bot_name()) } else { None },
     }))
 }
@@ -371,16 +672,11 @@ pub async fn rest(State(state): State<AppState>, _caller: Caller, UrlPath(method
     if !READ_METHODS.contains(&method) {
         return Err((StatusCode::FORBIDDEN, format!("{method}: not available through the server")));
     }
-    if !enabled() {
-        // Another relay of the network with Navidrome answers instead.
-        if let Some(f) = crate::fed::current(&state) {
-            let qs = clean_query(q.as_deref()).into_iter().map(|(k, v)| format!("{}={}", urlenc(&k), urlenc(&v))).collect::<Vec<_>>().join("&");
-            let path = if qs.is_empty() { format!("/v1/fed/music/rest/{method}") } else { format!("/v1/fed/music/rest/{method}?{qs}") };
-            if let Some(v) = f.music_json(&path).await { return Ok(Json(v)); }
-        }
-        return Err((StatusCode::NOT_FOUND, "Navidrome isn't set up on this server".into()));
-    }
-    call(&config(), method, &clean_query(q.as_deref())).await.map(Json).map_err(|e| (StatusCode::BAD_GATEWAY, e))
+    // This relay's Navidrome and the network's, as one.
+    call_all(&state, method, clean_query(q.as_deref())).await.map(Json).map_err(|e| {
+        let code = if e.contains("isn't set up") { StatusCode::NOT_FOUND } else { StatusCode::BAD_GATEWAY };
+        (code, e)
+    })
 }
 
 fn urlenc(s: &str) -> String {
@@ -412,9 +708,17 @@ pub async fn local_file(what: &str, id: &str) -> Option<(String, Vec<u8>)> {
     Some((ct, b.to_vec()))
 }
 
-/// No Navidrome here: the file from the relay of the network that has it.
+/// A file of another relay's Navidrome (`<tag>~<id>`), or — no Navidrome
+/// here — of the relay of the network that has one.
 async fn via_network(state: &AppState, what: &str, id: &str) -> Option<Response> {
     let f = crate::fed::current(state)?;
+    let srcs = sources(state).await;
+    if let Some((src, rest)) = routed(&srcs, id) {
+        let (mime, data) = f.fetch_bytes_at(src.peer.as_deref()?, &format!("/v1/fed/music/file/{what}/{}", urlenc(rest))).await?;
+        return Some(([(header::CONTENT_TYPE, mime)], data).into_response());
+    }
+    // A local id that just has a "~" in it: this Navidrome's.
+    if enabled() { return None; }
     let (mime, data) = f.fetch_bytes(&format!("/v1/fed/music/file/{what}/{}", urlenc(id))).await?;
     Some(([(header::CONTENT_TYPE, mime)], data).into_response())
 }
@@ -426,7 +730,8 @@ pub struct CoverQ {
 }
 
 pub async fn stream(State(state): State<AppState>, _caller: Caller, UrlPath(id): UrlPath<String>, RawQuery(q): RawQuery, headers: HeaderMap) -> Response {
-    if !enabled() { if let Some(r) = via_network(&state, "stream", &id).await { return r; } }
+    let id = unlocal(&id);
+    if !enabled() || id.contains('~') { if let Some(r) = via_network(&state, "stream", &id).await { return r; } }
     let mut p: Vec<(String, String)> = clean_query(q.as_deref())
         .into_iter()
         .filter(|(k, _)| matches!(k.as_str(), "maxBitRate" | "format" | "timeOffset" | "estimateContentLength"))
@@ -436,12 +741,14 @@ pub async fn stream(State(state): State<AppState>, _caller: Caller, UrlPath(id):
 }
 
 pub async fn download(State(state): State<AppState>, _caller: Caller, UrlPath(id): UrlPath<String>, headers: HeaderMap) -> Response {
-    if !enabled() { if let Some(r) = via_network(&state, "download", &id).await { return r; } }
+    let id = unlocal(&id);
+    if !enabled() || id.contains('~') { if let Some(r) = via_network(&state, "download", &id).await { return r; } }
     pass(&headers, "download", vec![("id".into(), id)], None).await
 }
 
 pub async fn cover(State(state): State<AppState>, _caller: Caller, UrlPath(id): UrlPath<String>, Query(q): Query<CoverQ>, headers: HeaderMap) -> Response {
-    if !enabled() { if let Some(r) = via_network(&state, "cover", &id).await { return r; } }
+    let id = unlocal(&id);
+    if !enabled() || id.contains('~') { if let Some(r) = via_network(&state, "cover", &id).await { return r; } }
     let mut p = vec![("id".into(), id)];
     if let Some(s) = q.size {
         p.push(("size".into(), s.clamp(32, 1200).to_string()));
@@ -533,7 +840,8 @@ pub fn spawn_bot(state: AppState) {
         let mut made = false;
         loop {
             let c = config();
-            if c.url.is_empty() || !c.bot {
+            // On while this relay — or another of the network — has music.
+            if !c.bot || sources(&state).await.is_empty() {
                 tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                 continue;
             }
@@ -571,28 +879,30 @@ async fn say(state: &AppState, to: &str, text: &str) {
 
 async fn answer(state: &AppState, u: &crate::BotUpdate) {
     let text = u.text.trim();
-    let c = config();
     if text.is_empty() {
         return;
     }
     if text.starts_with("/start") || text.starts_with("/help") {
-        say(state, &u.from, "🎵 Write a song, an artist or an album — I'll find it on this server's Navidrome.\n\n/new — new albums\n/random — something random\n\nTap ▶ on a card to listen, ⬇ to download. The «Player» button opens the music player.").await;
+        say(state, &u.from, "🎵 Write a song, an artist or an album — I'll find it on every Navidrome of this server's network.\n\n/new — new albums\n/random — something random\n\nTap ▶ on a card to listen, ⬇ to download. The «Player» button opens the music player.").await;
         return;
     }
     let songs: Vec<Value> = if text.starts_with("/random") {
-        match call(&c, "getRandomSongs", &[("size".into(), "6".into())]).await {
+        match call_all(state, "getRandomSongs", vec![("size".into(), "6".into())]).await {
             Ok(r) => r.pointer("/randomSongs/song").and_then(|s| s.as_array()).cloned().unwrap_or_default(),
             Err(e) => { say(state, &u.from, &format!("⚠️ {e}")).await; return; }
         }
     } else if text.starts_with("/new") {
-        match call(&c, "getAlbumList2", &[("type".into(), "newest".into()), ("size".into(), "6".into())]).await {
+        match call_all(state, "getAlbumList2", vec![("type".into(), "newest".into()), ("size".into(), "6".into())]).await {
             Ok(r) => {
                 let albums = r.pointer("/albumList2/album").and_then(|s| s.as_array()).cloned().unwrap_or_default();
                 if albums.is_empty() {
                     say(state, &u.from, "No albums yet.").await;
                     return;
                 }
-                let lines: Vec<String> = albums.iter().map(|a| format!("💿 {} — {}", s(a, "name"), s(a, "artist"))).collect();
+                let lines: Vec<String> = albums.iter().map(|a| {
+                    let from = s(a, "srv");
+                    format!("💿 {} — {}{}", s(a, "name"), s(a, "artist"), if from.is_empty() { String::new() } else { format!(" · {from}") })
+                }).collect();
                 say(state, &u.from, &format!("{}\n\nWrite an album's name to get its songs.", lines.join("\n"))).await;
                 return;
             }
@@ -600,8 +910,8 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
         }
     } else {
         let q: String = text.chars().take(100).collect();
-        match call(&c, "search3", &[("query".into(), q), ("songCount".into(), "8".into()), ("albumCount".into(), "0".into()), ("artistCount".into(), "0".into())]).await {
-            Ok(r) => r.pointer("/searchResult3/song").and_then(|s| s.as_array()).cloned().unwrap_or_default(),
+        match smart_songs(state, &q, 10).await {
+            Ok(v) => v,
             Err(e) => { say(state, &u.from, &format!("⚠️ {e}")).await; return; }
         }
     };
@@ -609,8 +919,10 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
         say(state, &u.from, "Nothing found 🤷").await;
         return;
     }
-    let tag = tag_of(&c.url);
-    for song in songs.iter().take(8) {
+    // Each card says which Navidrome it plays from (`nd`) and, with several, whose (`srv`).
+    let local = if enabled() { tag_of(&config().url) } else { String::new() };
+    for song in songs.iter().take(10) {
+        let tag = song.get("nd").and_then(|t| t.as_str()).map(str::to_string).unwrap_or_else(|| local.clone());
         say(state, &u.from, &format!("[track:v1]{}", card(song, &tag))).await;
     }
 }
@@ -630,6 +942,7 @@ pub fn card(song: &Value, tag: &str) -> Value {
         "cover": s(song, "coverArt"),
         "src": "server",
         "nd": tag,
+        "srv": s(song, "srv"),
     })
 }
 
@@ -684,9 +997,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn smart_search_spellings() {
+        assert_eq!(swap_layout("ythds"), "нервы");
+        assert_eq!(swap_layout("нервы"), "ythds");
+        assert_eq!(to_latin("Нервы"), "nervy");
+        assert_eq!(to_cyrillic("nervy"), "нервы");
+        assert_eq!(to_cyrillic("shchuka"), "щука");
+        let song = json!({ "title": "01. Нервы - Критика", "artist": "[Unknown Artist]", "album": "" });
+        assert!(score(&song, "нервы критика") > score(&song, "кино"));
+        assert_eq!(score(&song, "кино"), 0);
+    }
+
+    #[test]
     fn cp1251_tags_are_read_back() {
         assert_eq!(from_1251("ÑÅÊÒÎÐ ÃÀÇÀ").as_deref(), Some("СЕКТОР ГАЗА"));
         assert_eq!(from_1251("Ñåêòîð Ãàçà - Ëèðèê").as_deref(), Some("Сектор Газа - Лирик"));
+        // cp1251 «», dashes and № read as Latin-1 come back too.
+        assert_eq!(from_1251("\u{ab}Ñåêòîð Ãàçà\u{bb} \u{96} Ëèðèê \u{b9}1").as_deref(), Some("«Сектор Газа» – Лирик №1"));
+        assert_eq!(from_1251("\u{ab}Le Café\u{bb}"), None);
         assert_eq!(from_1251("Motörhead"), None);
         assert_eq!(from_1251("Beyoncé"), None);
         assert_eq!(from_1251("Rob Zombie"), None);

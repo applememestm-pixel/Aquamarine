@@ -63,6 +63,7 @@
   <div class="meta">
     <b title={card.title}>{card.title}</b>
     <small>{[card.artist, card.album].filter(Boolean).join(" — ")}</small>
+    {#if card.srv}<small class="srv" title={$t("From the server {s}", { s: card.srv })}>🖧 {card.srv}</small>{/if}
     <span class="foot">
       {#if card.dur}<span class="dur">{fmtDuration(card.dur)}</span>{/if}
       {#if src}
@@ -88,6 +89,7 @@
 <style>
   .track { display: flex; gap: 10px; align-items: center; padding: 8px; width: min(320px, 76vw); box-sizing: border-box;
     background: var(--bubble-in, var(--bg-elev)); border: 1px solid var(--border); border-radius: calc(16px * var(--rk, 1)); color: var(--fg); }
+  .srv { color: var(--fg-dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .track.out { background: var(--bubble-out, var(--accent-soft)); }
   .art { position: relative; width: 64px; height: 64px; flex: none; border-radius: calc(11px * var(--rk, 1)); background-size: cover; background-position: center;
     background-color: color-mix(in srgb, var(--accent) 30%, transparent); display: grid; place-items: center; overflow: hidden; }

@@ -18,6 +18,26 @@
 
   const isMember = $derived(!!tag?.gid && !!$groupMap[tag.gid]?.members.some((m) => m.username === $info?.username));
 
+  /** Where the card goes: under the tag, kept on the screen (it lives in
+   *  <body> — inside a chat row or a header it was cut off by their edges). */
+  let at = $state({ x: 0, y: 0 });
+  function toggle(e: Event) {
+    e.stopPropagation();
+    e.preventDefault();
+    if (!open && root) {
+      const r = root.getBoundingClientRect();
+      const w = 260, h = 170;
+      at = { x: Math.max(8, Math.min(r.left, innerWidth - w - 8)), y: r.bottom + 6 + h > innerHeight ? Math.max(8, r.top - 6 - h) : r.bottom + 6 };
+    }
+    open = !open;
+  }
+  /** Mount the node on <body>. */
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return { destroy: () => node.remove() };
+  }
+  let card: HTMLDivElement | undefined = $state();
+
   async function requestJoin() {
     if (!tag?.gid || !tag.owner) return;
     try {
@@ -28,22 +48,28 @@
   }
 </script>
 
-<svelte:window onmousedown={(e) => { if (open && root && !root.contains(e.target as Node)) open = false; }} />
+<svelte:window onpointerdown={(e) => { if (open && root && !root.contains(e.target as Node) && !card?.contains(e.target as Node)) open = false; }} onscroll={() => (open = false)} />
 
 {#if tag && tag.text}
   <span class="wrap" bind:this={root}>
-    <button
+    <!-- Not a <button>: it often sits inside one (a chat row), and a button in
+         a button swallowed the tap. -->
+    <span
       class="clan {size}"
+      role="button"
+      tabindex="0"
       style:--c={tag.color || "var(--accent)"}
       title={tag.title ? `${tag.title} — server tag` : "Server tag"}
-      onclick={(e) => { e.stopPropagation(); open = !open; }}
+      onclick={toggle}
+      onpointerdown={(e) => e.stopPropagation()}
+      onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") toggle(e); }}
     >
       <span class="ic">{@html badgeSvg(tag.badge)}</span>{tag.text}
-    </button>
+    </span>
     {#if open}
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="pop" onclick={(e) => e.stopPropagation()}>
+      <div class="pop" use:portal bind:this={card} style:left="{at.x}px" style:top="{at.y}px" onclick={(e) => e.stopPropagation()} onpointerdown={(e) => e.stopPropagation()}>
         <div class="pop-head" style:--c={tag.color || "var(--accent)"}>
           <span class="big">{@html badgeSvg(tag.badge)}</span>
           <div>
@@ -81,11 +107,12 @@
   .clan.md .ic :global(svg) { width: 14px; height: 14px; }
   .clan:hover { background: color-mix(in srgb, var(--c) 26%, transparent); }
   .pop {
-    position: absolute; left: 0; top: calc(100% + 6px); z-index: 60; width: 240px;
+    position: fixed; z-index: 10080; width: 260px; box-sizing: border-box;
     background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: calc(12px * var(--rk, 1));
     box-shadow: 0 16px 40px -10px rgba(0, 0, 0, 0.7); padding: 12px; text-align: left;
     font-weight: 500; letter-spacing: normal;
   }
+  .pop { --c: var(--accent); }
   .pop-head { display: flex; gap: 10px; align-items: center; }
   .big {
     width: 40px; height: 40px; border-radius: calc(12px * var(--rk, 1)); display: grid; place-items: center; flex-shrink: 0;

@@ -18,6 +18,9 @@ export interface ServerProbe {
 }
 
 /** One account on this device (accounts.rs); slot "" is the first one. */
+/** A public group / channel's @name on the server (aqua-server group_names). */
+export interface PublicGroup { username: string; gid: string; title: string; kind: "group" | "channel"; admin: string }
+
 export interface AccountSlot {
   slot: string; registered: boolean; username: string | null; server_url: string | null; active: boolean;
   /** Logged out there: whose keys it still holds (if known); has_keys — it has a vault. */
@@ -197,6 +200,9 @@ export const api = {
     invoke("backup_restore", { serverUrl: server_url, ticket, password, email, phrase: phrase || null, totp: totp || null, recovery: recovery || null }),
   registerUsername:   (ticket: string, username: string, display_name: string, about: string, phone: string): Promise<void> => invoke("register_username", { ticket, username, displayName: display_name, about, phone }),
   searchDirectory:    (query: string): Promise<DirProfile[]>                        => invoke("search_directory", { query }),
+  groupSearch:        (query: string): Promise<PublicGroup[]>                       => invoke("group_search", { query }),
+  groupLookup:        (name: string): Promise<PublicGroup | null>                   => invoke("group_lookup", { name }),
+  groupNameSet:       (gid: string, name: string, title: string, kind: string): Promise<string> => invoke("group_name_set", { gid, name, title, kind }),
   fetchDirectoryProfile: (username: string): Promise<DirProfile | null>            => invoke("fetch_directory_profile", { username }),
   followPeerByUid: (old: string, uid: string): Promise<string | null>                => invoke("follow_peer_by_uid", { old, uid }),
   publishProfile:     (display_name: string, about: string, phone: string): Promise<void> => invoke("publish_profile", { displayName: display_name, about, phone }),
@@ -259,7 +265,7 @@ export const api = {
   groupControl:       (gid: string, body: string): Promise<void>                       => invoke("group_control", { gid, body }),
   groupSetMyTag:      (gid: string, tag: string): Promise<void>                        => invoke("group_set_my_tag", { gid, tag }),
   groupRequestJoin:   (gid: string, admin: string, title: string, note: string): Promise<void> => invoke("group_request_join", { gid, admin, title, note }),
-  groupSend:          (gid: string, body: string): Promise<SendResult>                 => invoke("group_send", { gid, body }),
+  groupSend:          (gid: string, body: string, silent = false): Promise<SendResult> => invoke("group_send", { gid, body, silent }),
   setGroupRoom:       (gid: string, room: string): Promise<void>                      => invoke("set_group_room", { gid, room }),
 
   // Edit / delete (local store mutation; relay the control separately)
@@ -400,6 +406,8 @@ export const events = {
   onPollClose:       (fn: (p: { from: string; close: { poll: string }; gid?: string }) => void) =>
     listen<{ from: string; close: { poll: string }; gid?: string }>("aqua://poll_close", (e) => fn(e.payload)),
   onSeen:            (fn: (p: { from: string }) => void)   => listen<{ from: string }>("aqua://seen", (e) => fn(e.payload)),
+  onKeyOk:           (fn: (p: { from: string; code: string; on: boolean }) => void) =>
+    listen<{ from: string; code: string; on: boolean }>("aqua://keyok", (e) => fn(e.payload)),
   onPresence:        (fn: (p: { from: string; presence: import("./presence").Presence }) => void) =>
     listen<{ from: string; presence: import("./presence").Presence }>("aqua://presence", (e) => fn(e.payload)),
   onActivity:        (fn: (a: Activity[]) => void) => listen<Activity[]>("aqua://activity", (e) => fn(e.payload)),

@@ -11,7 +11,13 @@
  * / `--sar` (CSS uses `var(--sab, env(safe-area-inset-bottom))`). A bar the
  * WebView already keeps the page out of counts as 0 — no double padding.
  */
-interface Raw { l: number; t: number; r: number; b: number; w: number; h: number }
+interface Raw { l: number; t: number; r: number; b: number; w: number; h: number; kv?: boolean; k?: number }
+
+/** The keyboard as Android itself reports it (any keyboard app): shown, and
+ *  how many CSS px of the page it covers. null — not told (older build,
+ *  desktop): keyboard.ts guesses from the viewport then. */
+let nativeKb: { shown: boolean; css: number } | null = null;
+export function nativeKeyboard() { return nativeKb; }
 
 declare global {
   interface Window { __aquaInsets?: (o: Raw) => void; AquaInsets?: { insets(): string } }
@@ -36,6 +42,11 @@ export function startInsets() {
     root.style.setProperty("--sab", px((bottomEdge - (n.h - n.b)) / k));
     root.style.setProperty("--sal", px(n.l / k));
     root.style.setProperty("--sar", px(n.r / k));
+    if (typeof n.kv === "boolean") {
+      const was = nativeKb;
+      nativeKb = { shown: n.kv, css: Math.max(0, Math.round((n.k ?? 0) / k)) };
+      if (!was || was.shown !== nativeKb.shown || was.css !== nativeKb.css) window.dispatchEvent(new Event("aqua-ime"));
+    }
   };
   window.__aquaInsets = (o) => { last = o; apply(); };
   window.addEventListener("resize", apply);

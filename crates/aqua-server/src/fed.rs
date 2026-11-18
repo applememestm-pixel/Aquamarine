@@ -795,16 +795,56 @@ pub async fn h_music_file(State(state): State<AppState>, headers: HeaderMap, Pat
     Ok(([(axum::http::header::CONTENT_TYPE, mime)], data))
 }
 
+/// A public group / channel @name of this relay, for another relay of the
+/// network (names are one namespace across it; lib.rs group_by_name).
+pub async fn h_group_by_name(State(state): State<AppState>, headers: HeaderMap, Path(name): Path<String>) -> Result<impl IntoResponse, StatusCode> {
+    check(&state, &headers, "GET", &format!("/v1/fed/groups/by-name/{name}"), b"")?;
+    state.directory.group_by_name(&name).map(Json).ok_or(StatusCode::NOT_FOUND)
+}
+
+/// This relay's public groups / channels matching `q`, for the network's search.
+pub async fn h_group_search(State(state): State<AppState>, headers: HeaderMap, axum::extract::RawQuery(q): axum::extract::RawQuery) -> Result<impl IntoResponse, StatusCode> {
+    let path = match &q { Some(q) => format!("/v1/fed/groups/search?{q}"), None => "/v1/fed/groups/search".to_string() };
+    check(&state, &headers, "GET", &path, b"")?;
+    let query = q.as_deref().unwrap_or("").split('&').find_map(|kv| kv.strip_prefix("q=")).map(crate::music::pct).unwrap_or_default();
+    Ok(Json(state.directory.search_groups(&query, 20)))
+}
+
+/// Ask every relay of the network (in parallel, a few seconds each) a JSON path.
 impl Fed {
-    /// The first relay of the network that answers this music path.
-    pub async fn music_json(&self, path: &str) -> Option<serde_json::Value> {
-        for p in &self.cfg.peers {
-            if let Some(r) = self.get(p, path).await {
-                if let Ok(v) = r.json::<serde_json::Value>().await { return Some(v); }
-            }
-        }
-        None
+    pub async fn ask_all(&self, path: &str) -> Vec<serde_json::Value> {
+        let asks = self.cfg.peers.iter().map(|p| async move {
+            tokio::time::timeout(Duration::from_secs(5), self.music_json_at(p, path)).await.ok().flatten()
+        });
+        futures_util::future::join_all(asks).await.into_iter().flatten().collect()
     }
+}
+
+/// What this relay's Navidrome is called in the network (music.rs merges
+/// every relay's into one): its tag and a name to show next to a track.
+pub async fn h_music_info(State(state): State<AppState>, headers: HeaderMap) -> Result<impl IntoResponse, StatusCode> {
+    check(&state, &headers, "GET", "/v1/fed/music/info", b"")?;
+    crate::music::local_info().map(Json).ok_or(StatusCode::NOT_FOUND)
+}
+
+impl Fed {
+    /// The relays of the network (their addresses), to ask each of them.
+    pub fn peer_list(&self) -> Vec<String> {
+        self.cfg.peers.clone()
+    }
+
+    /// One relay's answer to a music path.
+    pub async fn music_json_at(&self, peer: &str, path: &str) -> Option<serde_json::Value> {
+        self.get(peer, path).await?.json::<serde_json::Value>().await.ok()
+    }
+
+    /// A file from one relay (its Navidrome's track or cover).
+    pub async fn fetch_bytes_at(&self, peer: &str, path: &str) -> Option<(String, Vec<u8>)> {
+        let r = self.get(peer, path).await?;
+        let mime = r.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("application/octet-stream").to_string();
+        Some((mime, r.bytes().await.ok()?.to_vec()))
+    }
+
 }
 
 #[derive(Deserialize)]
@@ -1099,6 +1139,9 @@ pub fn routes() -> axum::Router<AppState> {
         .route("/v1/fed/backups", get(h_backups))
         .route("/v1/fed/backup/:user", get(h_backup))
         .route("/v1/fed/media/:user/:kind", get(h_media))
+        .route("/v1/fed/music/info", get(h_music_info))
+        .route("/v1/fed/groups/by-name/:name", get(h_group_by_name))
+        .route("/v1/fed/groups/search", get(h_group_search))
         .route("/v1/fed/music/rest/:method", get(h_music_rest))
         .route("/v1/fed/music/file/:what/:id", get(h_music_file))
         .route("/v1/fed/tunnel", post(crate::fedtunnel::h_poll))

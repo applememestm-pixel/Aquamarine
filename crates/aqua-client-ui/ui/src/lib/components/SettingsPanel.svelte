@@ -5,6 +5,7 @@
 
 <script lang="ts">
   import Select from "./Select.svelte";
+  import { onBack } from "../back";
   import { chatLines } from "../listLook";
   import { inAppBrowser } from "../browser";
   import { IS_MOBILE, IS_DESKTOP } from "../platform";
@@ -30,6 +31,9 @@
   import { ATTACH_ITEMS, attachFront, attachHidden, attachDock, attachBots, toggleAttachFront, toggleAttachHidden, moveAttach, toggleAttachBot, resetAttachMenu } from "../attachMenu";
   import { chatLocks } from "../chatLocks";
   import { askSetLock, askRemoveLock, askChangeLock } from "../chatLockUi";
+  /** The appearance preview opened full screen (every kind of message). */
+  let pvFull = $state(false);
+  $effect(() => { if (pvFull) return onBack(() => (pvFull = false)); });
   let blockPick = $state("");
   async function testNotification() {
     const { ensureNotifyPermission, osNotify } = await import("../notify");
@@ -1771,14 +1775,30 @@
       </section>
       </div>
       <aside class="ap-preview" aria-label={$t("Preview")}>
-        <div class="pv-card">
+        <div class="pv-card" class:full={pvFull} role={pvFull ? "dialog" : undefined} aria-label={pvFull ? $t("Preview") : undefined}>
           <div class="pv-head">
+            {#if pvFull}<button class="pv-x" data-x onclick={() => (pvFull = false)} aria-label={$t("Close")}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>{/if}
             <span class="pv-ava">A</span>
             <div class="pv-meta"><b>{$t("Alice")}</b><span>{$t("online")}</span></div>
+            {#if !pvFull}
+              <button class="pv-full" onclick={() => (pvFull = true)} aria-label={$t("Full screen")} title={$t("Full screen")}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+              </button>
+            {/if}
           </div>
           <div class="pv-stage">
             <div class="pv-wall"></div>
             <div class="pv-msgs">
+              <!-- Everything a chat can hold (seen whole in full screen; the small card shows the end). -->
+              <span class="pv-date">{$t("Yesterday")}</span>
+              <div class="pv-media in"><div class="pv-photo"></div><span class="pv-t pv-on">21:03</span></div>
+              <div class="pv-b in">{$t("Look what I found 📸")}<span class="pv-t">21:03</span></div>
+              <div class="pv-media out"><div class="pv-photo pv-video"><span class="pv-play"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span><span class="pv-dur">0:42</span></div><span class="pv-t pv-on">21:05 ✓✓</span></div>
+              <div class="pv-media in"><div class="pv-photo pv-gif"><span class="pv-dur">GIF</span></div></div>
+              <div class="pv-emoji">😂🔥</div>
+              <div class="pv-b out pv-voice"><span class="pv-vplay"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span><span class="pv-wave">{#each [4,8,12,7,14,10,5,11,15,9,6,12,8,4,10,13,7,5] as h, i (i)}<i style:height="{h}px"></i>{/each}</span><span class="pv-t">0:12 · 21:06 ✓✓</span></div>
+              <div class="pv-b in">{$t("Haha, send it to the group")}<span class="pv-t">21:07</span><span class="pv-reacts"><span class="pv-react">❤️ 2</span><span class="pv-react mine">👍 1</span></span></div>
+              <div class="pv-b out pv-file"><span class="pv-fic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg></span><span class="pv-fn"><b>trip-plan.pdf</b><small>1.2 MB</small></span><span class="pv-t">21:08 ✓✓</span></div>
               <span class="pv-date">{$t("Today")}</span>
               <div class="pv-b in first">{$t("Hi! How does the new theme look?")}<span class="pv-t">12:40</span></div>
               <div class="pv-b in">{$t("The wallpaper shows through here 🌊")}<span class="pv-t">12:40</span></div>
@@ -3035,9 +3055,6 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     font-size: 14px; font-weight: 500; text-align: left;
     position: relative;
   }
-  .nav-item + .nav-item::before {
-    content: ""; position: absolute; top: 0; left: 52px; right: 0; height: 1px; background: var(--border);
-  }
   .nav-item:hover { background: var(--bg-hover); }
   .nav-item.active { background: var(--accent-soft); }
   .nav-item.active .nav-lbl { color: var(--accent); font-weight: 700; }
@@ -3114,7 +3131,6 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     .layout { grid-template-columns: 1fr; }
     .nav { border-right: none; padding: 12px 12px 20px; }
     .nav-item { padding: 9px 12px; font-size: 14.5px; }
-    .nav-item + .nav-item::before { left: 52px; }
     .nav-item.active { background: transparent; }
     .nav-item.active .nav-lbl { color: var(--fg); font-weight: 500; }
     .tile { width: 28px; height: 28px; }
@@ -3159,6 +3175,43 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .ap-div { display: flex; align-items: center; gap: 12px; margin: 26px 16px 4px; scroll-margin-top: 64px; }
   .ap-div::before, .ap-div::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, transparent, var(--border-strong), transparent); }
   .ap-div span { font-size: 11px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-muted); }
+  .pv-card.full { position: fixed; inset: 0; z-index: 10090; height: auto; border: none; border-radius: 0;
+    padding-top: var(--sat, env(safe-area-inset-top, 0px)); padding-bottom: var(--sab, env(safe-area-inset-bottom, 0px)); animation: pv-in .25s cubic-bezier(.22,1,.36,1); }
+  @keyframes pv-in { from { opacity: 0; transform: scale(.97); } }
+  .pv-card.full .pv-msgs { overflow-y: auto; justify-content: flex-start; padding-bottom: 16px; }
+  .pv-card.full .pv-msgs > :first-child { margin-top: auto; }
+  .pv-full, .pv-x { margin-left: auto; width: 34px; height: 34px; border: none; border-radius: 50%; background: transparent; color: var(--fg-muted); display: grid; place-items: center; cursor: pointer; flex-shrink: 0; }
+  .pv-x { margin-left: 0; }
+  .pv-full:hover, .pv-x:hover { background: var(--bg-hover); color: var(--fg); }
+  .pv-full svg, .pv-x svg { width: 18px; height: 18px; }
+  .pv-media { position: relative; max-width: 62%; border-radius: var(--bubble-r, 14px); overflow: hidden; border: 1px solid var(--border); flex-shrink: 0; }
+  .pv-media.in { align-self: flex-start; }
+  .pv-media.out { align-self: flex-end; }
+  .pv-photo { width: 190px; max-width: 100%; aspect-ratio: 4 / 3; position: relative;
+    background: radial-gradient(circle at 70% 30%, color-mix(in srgb, var(--accent-2) 70%, transparent), transparent 55%), linear-gradient(160deg, var(--accent), color-mix(in srgb, var(--accent) 30%, var(--bg-shell))); }
+  .pv-video { aspect-ratio: 16 / 10; background: linear-gradient(200deg, color-mix(in srgb, var(--accent-2) 60%, var(--bg-shell)), var(--bg-shell)); }
+  .pv-gif { width: 150px; aspect-ratio: 1 / 1; background: conic-gradient(from 0deg, var(--accent), var(--accent-2), var(--accent)); animation: pv-spin 6s linear infinite; }
+  @keyframes pv-spin { to { filter: hue-rotate(360deg); } }
+  .pv-play { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; color: var(--fg); background: color-mix(in srgb, var(--bg-shell) 60%, transparent); }
+  .pv-play svg { width: 20px; height: 20px; margin-left: 2px; }
+  .pv-dur { position: absolute; left: 6px; top: 6px; font-size: 10px; font-weight: 700; color: var(--fg); background: color-mix(in srgb, var(--bg-shell) 60%, transparent); padding: 1px 6px; border-radius: calc(8px * var(--rk, 1)); }
+  .pv-t.pv-on { position: absolute; right: 6px; bottom: 6px; float: none; margin: 0; color: var(--fg); background: color-mix(in srgb, var(--bg-shell) 55%, transparent); padding: 1px 6px; border-radius: calc(8px * var(--rk, 1)); }
+  .pv-emoji { align-self: flex-start; font-size: 34px; line-height: 1.1; }
+  .pv-voice { display: flex; align-items: center; gap: 8px; }
+  .pv-vplay { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; color: var(--bg-shell); background: var(--accent); flex-shrink: 0; }
+  .pv-vplay svg { width: 14px; height: 14px; margin-left: 2px; }
+  .pv-wave { display: flex; align-items: center; gap: 2px; height: 18px; }
+  .pv-wave i { width: 2.5px; border-radius: 2px; background: var(--accent); opacity: .8; }
+  .pv-voice .pv-t { float: none; margin: 0 0 0 4px; white-space: nowrap; }
+  .pv-reacts { display: flex; gap: 4px; clear: both; padding-top: 4px; }
+  .pv-react { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--bg-hover); color: var(--fg); }
+  .pv-react.mine { background: var(--accent-soft); color: var(--accent); }
+  .pv-file { display: flex; align-items: center; gap: 9px; }
+  .pv-fic { width: 32px; height: 32px; border-radius: calc(8px * var(--rk, 1)); display: grid; place-items: center; color: var(--accent); background: var(--accent-soft); flex-shrink: 0; }
+  .pv-fic svg { width: 17px; height: 17px; }
+  .pv-fn { display: flex; flex-direction: column; min-width: 0; }
+  .pv-fn small { color: var(--fg-dim); font-size: 0.85em; }
+  .pv-file .pv-t { float: none; margin: 0 0 0 6px; align-self: flex-end; }
   .pv-card { border: 1px solid var(--border-strong); border-radius: calc(16px * var(--rk, 1)); overflow: hidden; background: var(--bg-shell); display: flex; flex-direction: column; height: min(560px, calc(93vh - 140px)); }
   .pv-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--bg-list); border-bottom: 1px solid var(--border); }
   .pv-ava { width: 32px; height: 32px; border-radius: var(--ava-r, 50%); display: grid; place-items: center; font-weight: 800; font-size: 14px; color: #06070C; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
@@ -3189,7 +3242,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   @media (max-width: 1080px) {
     .ap-split { grid-template-columns: 1fr; padding-right: 0; }
     .ap-preview { order: -1; top: 56px; z-index: 1; margin: 10px 16px 0; padding-bottom: 6px; background: var(--bg-shell); }
-    .pv-card { height: 250px; }
+    .pv-card { height: min(380px, 52dvh); }
     .pv-note { display: none; }
   }
   /* Sections slide in when you switch (transform/opacity only: cheap). */

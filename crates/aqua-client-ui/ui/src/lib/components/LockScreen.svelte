@@ -30,7 +30,8 @@
 
   // ---- Telegram's passcode: 4 digits in boxes, a keypad below ----
   const PIN_LEN = 4;
-  const KEYS: [string, string][] = [["1", ""], ["2", "ABC"], ["3", "DEF"], ["4", "GHI"], ["5", "JKL"], ["6", "MNO"], ["7", "PQRS"], ["8", "TUV"], ["9", "WXYZ"]];
+  // Just digits: the passcode is numbers, the phone-dialer letters only confused.
+  const KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
   // Setup: phones get Telegram's 4 digits with a keypad; a PC keeps the
   // ordinary password field (a keypad to click with the mouse was clumsy).
   let usePassword = $state(!IS_MOBILE);
@@ -163,13 +164,13 @@
         {#if err}<div class="err">{err}</div>{/if}
         {#if !IS_MOBILE}<div class="hint">{$t("Type the digits on the keyboard")}</div>{/if}
         <div class="keypad" class:hidden={!IS_MOBILE}>
-          {#each KEYS as [d, l] (d)}<button class="key" onclick={() => pinKey(d)} disabled={busy}><b>{d}</b><small>{l}</small></button>{/each}
+          {#each KEYS as d (d)}<button class="key" onclick={() => pinKey(d)} disabled={busy}><b>{d}</b></button>{/each}
           {#if $locked && bioOk}
             <button class="key bio" onclick={tryBio} aria-label={$t("Fingerprint")} title={$t("Fingerprint")}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 11v3a8 8 0 0 1-1.5 4.7M8.5 7.7A5 5 0 0 1 17 11v1.5M7 11a5 5 0 0 1 .3-1.7M14.6 20.4A12 12 0 0 0 16 15M4 15.5A12 12 0 0 0 5 11a7 7 0 0 1 12.2-4.7M20 13a19 19 0 0 1-.7 4.5M9.7 21a12 12 0 0 1 .3-1.5"/></svg>
             </button>
           {:else}<span></span>{/if}
-          <button class="key" onclick={() => pinKey("0")} disabled={busy}><b>0</b><small>+</small></button>
+          <button class="key" onclick={() => pinKey("0")} disabled={busy}><b>0</b></button>
           <button class="key del" onclick={() => pinKey("del")} aria-label={$t("Delete")}>⌫</button>
         </div>
         {#if $locked}
@@ -299,7 +300,6 @@
   .key { height: 58px; border: none; border-radius: calc(16px * var(--rk, 1)); background: var(--bg-input); color: var(--fg); cursor: pointer;
     display: flex; align-items: center; justify-content: center; gap: 10px; font: inherit; transition: background-color .12s; }
   .key b { font-size: 24px; font-weight: 600; }
-  .key small { font-size: 11px; font-weight: 600; color: var(--fg-dim); letter-spacing: .06em; min-width: 30px; text-align: left; }
   .key:active { background: var(--accent-soft); }
   .key.del { font-size: 22px; color: var(--fg-muted); }
   @media (max-width: 720px) {
@@ -312,7 +312,6 @@
        rounded rectangles in the grid, digits and letters in one line. */
     .key { width: auto; height: 62px; justify-self: stretch; border-radius: calc(14px * var(--rk, 1)); flex-direction: row; gap: 10px; color: #fff;
       background: rgba(255,255,255,.14); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
-    .key small { min-width: 30px; text-align: left; color: rgba(255,255,255,.7); font-size: 11px; }
     .key:active { background: rgba(255,255,255,.32); }
     .key.del, .key.bio { background: transparent; color: #fff; backdrop-filter: none; -webkit-backdrop-filter: none; }
     .keypad { gap: 8px; }

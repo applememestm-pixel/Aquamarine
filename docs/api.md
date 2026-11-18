@@ -1,6 +1,6 @@
 # HTTP API ретранслятора
 
-> Часть [технической документации](README.md). Описание соответствует `aqua-server` 1.21.0-8 и версии протокола `v1`.
+> Часть [технической документации](README.md). Описание соответствует `aqua-server` 1.21.0-9 и версии протокола `v1`.
 
 Ретранслятор (`aqua-server`) предоставляет HTTP API и канал WebSocket. Клиент Aquamarine работает только через них, поэтому API позволяет написать совместимый клиент, бота или инструмент администрирования.
 
@@ -547,6 +547,9 @@ x-aqua-fed: <unix_ms>.<hex HMAC-SHA256(secret, METHOD "\n" PATH "\n" unix_ms "\n
 | `GET /v1/fed/backups?since=` | Метаданные резервных копий |
 | `GET /v1/fed/backup/:user` | Резервная копия |
 | `GET /v1/fed/media/:user/:kind` | Медиа профиля |
+| `POST /v1/stars-app/admin` · `/set {q, level, time}` · `/decide {uid, yes}` | Панель владельца в мини-приложении @stars (только владельцу): кто носит звезду и запросы Boosty, выдать/снять звезду, ответить на запрос |
+| `GET /v1/groups/search?q=` · `GET /v1/groups/by-name/:name` · `POST /v1/groups/name {name, gid, title, kind}` | @ники публичных групп и каналов: поиск, по нику (`{username, gid, title, kind, admin}`), задать/снять (владелец; общее пространство с людьми и ботами) |
+| `GET /v1/fed/music/info` | Тег и имя Navidrome этого сервера: сервер сети сливает все Navidrome сети в одну музыку (поиск — у всех сразу, id чужих — `<тег>~<id>`) |
 | `GET /v1/fed/music/rest/:method` | Navidrome этого сервера для сервера сети без своего (только чтение) |
 | `GET /v1/fed/music/file/:what/:id` | Обложка (`cover`) или трек (`stream`, `download`) целиком |
 | `POST /v1/fed/deliver` | Доставить конверт получателю, подключённому к этому узлу |

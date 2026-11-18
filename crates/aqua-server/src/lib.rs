@@ -2185,6 +2185,69 @@ async fn search_users(
     Json(state.directory.search(&q.q, 20))
 }
 
+/// `GET /v1/groups/search?q=` — public groups and channels by @name or title.
+async fn search_groups(State(state): State<AppState>, Query(q): Query<SearchQuery>) -> Json<Vec<serde_json::Value>> {
+    let mut out = state.directory.search_groups(&q.q, 20);
+    // The network's too: @names are one namespace across it.
+    if let Some(f) = fed::registry(&state) {
+        let path = format!("/v1/fed/groups/search?q={}", q.q.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect::<String>());
+        for v in f.ask_all(&path).await {
+            for g in v.as_array().cloned().unwrap_or_default() {
+                if !out.iter().any(|o| o["username"] == g["username"]) { out.push(g); }
+            }
+        }
+    }
+    out.truncate(30);
+    Json(out)
+}
+
+/// A public group / channel by @name: this relay's, else one of the network's.
+async fn find_group_name(state: &AppState, name: &str) -> Option<serde_json::Value> {
+    if let Some(g) = state.directory.group_by_name(name) { return Some(g); }
+    let n: String = name.trim().trim_start_matches('@').to_lowercase().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '.').collect();
+    if n.is_empty() { return None; }
+    let f = fed::registry(state)?;
+    f.ask_all(&format!("/v1/fed/groups/by-name/{n}")).await.into_iter().next()
+}
+
+/// `GET /v1/groups/by-name/:name` — a public group / channel by its @name:
+/// its id, title, kind and whom to ask to join.
+async fn group_by_name(State(state): State<AppState>, Path(name): Path<String>) -> Result<Json<serde_json::Value>, StatusCode> {
+    find_group_name(&state, &name).await.map(Json).ok_or(StatusCode::NOT_FOUND)
+}
+
+#[derive(Deserialize)]
+struct GroupNameBody {
+    #[serde(default)]
+    name: String,
+    gid: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    kind: String,
+}
+
+/// `POST /v1/groups/name {name, gid, title, kind}` — the owner gives their
+/// public group / channel an @name (the same namespace as people and bots);
+/// an empty name gives it up.
+async fn set_group_name(State(state): State<AppState>, Caller(dh): Caller, Json(b): Json<GroupNameBody>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let owner = state.directory.username_for_identity(&dh).ok_or((StatusCode::FORBIDDEN, "no account".into()))?;
+    if b.name.trim().is_empty() {
+        return Ok(Json(serde_json::json!({ "ok": state.directory.release_group_name(b.gid.trim(), &owner) })));
+    }
+    // Taken by another group somewhere in the network: not here either.
+    if let Some(other) = find_group_name(&state, &b.name).await {
+        if other["gid"].as_str() != Some(b.gid.trim()) {
+            return Err((StatusCode::CONFLICT, directory::DirError::UsernameTaken.to_string()));
+        }
+    }
+    let name = state.directory.claim_group_name(&b.name, b.gid.trim(), &b.title, &b.kind, &owner).map_err(|e| {
+        let code = match e { directory::DirError::UsernameTaken => StatusCode::CONFLICT, directory::DirError::NotOwner => StatusCode::FORBIDDEN, _ => StatusCode::BAD_REQUEST };
+        (code, e.to_string())
+    })?;
+    Ok(Json(serde_json::json!({ "ok": true, "name": name })))
+}
+
 async fn get_profile(
     State(state): State<AppState>,
     Path(user): Path<UserId>,
@@ -3251,6 +3314,9 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/stars-app/me", post(stars::app::me))
         .route("/v1/stars-app/link", post(stars::app::link))
         .route("/v1/stars-app/unlink", post(stars::app::unlink_me))
+        .route("/v1/stars-app/admin", post(stars::app::admin))
+        .route("/v1/stars-app/set", post(stars::app::set))
+        .route("/v1/stars-app/decide", post(stars::app::decide_app))
         .route("/v1/ice", get(turnsrv::ice))
         .route("/v1/admin/stars", get(stars::admin_get).post(stars::admin_make))
         .route("/v1/admin/stars/boosty", get(stars::admin_boosty_get).post(stars::admin_boosty_set))
@@ -3293,6 +3359,9 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/auth/tg/start",      post(tglogin::start))
         .route("/v1/auth/tg/poll",       post(tglogin::poll))
         .route("/v1/users/search",       get(search_users))
+        .route("/v1/groups/search", get(search_groups))
+        .route("/v1/groups/by-name/:name", get(group_by_name))
+        .route("/v1/groups/name", post(set_group_name))
         .route("/v1/users/login",        post(login_user))
         .route("/v1/users/reset",        post(reset_password))
         .route("/v1/webapp/init",        post(webapp_init))

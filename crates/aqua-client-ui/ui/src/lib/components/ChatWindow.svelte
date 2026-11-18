@@ -49,7 +49,7 @@
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { icons } from "../icons";
   import { fromEdge } from "../tabSwipe";
-  import { activeChat, activeMessages, drafts, activeId, sendCurrent, loadActiveMessages, info, chats } from "../stores";
+  import { activeChat, activeMessages, drafts, activeId, sendCurrent, loadActiveMessages, info, chats, silentChans } from "../stores";
   import { meshStatus, meshSyncNow, nearbyVia } from "../mesh";
   import { noShare, setNoShare, startNoShare } from "../noShare";
   import { isLive, livePlay } from "../liveMotion";
@@ -58,7 +58,7 @@
   import Welcome from "./Welcome.svelte";
   import { settings } from "../theme";
   import { api, assetUrl, sendChatControl } from "../tauri";
-  import { openFingerprint, verifiedKeys, keyState } from "./FingerprintModal.svelte";
+  import { openFingerprint, verifiedKeys, keyState, verifiedBy, noteKeyOk, sendKeyOk, sunState } from "./FingerprintModal.svelte";
   import { showToast } from "./Toast.svelte";
   import { pluginCommands, pluginsOnSend, runPluginCommand, pluginButtons, pressPluginButton } from "../plugins";
   import { ATTACH_ITEMS, attachFront, attachHidden, attachDock, attachBots, toggleAttachBot, type AttachId } from "../attachMenu";
@@ -1083,6 +1083,8 @@
     let unPres: (() => void) | null = null;
     events.onPresence((p) => { setPeerPresence(p.from, p.presence ?? {}); notePeerProfileVersion(p.from, p.presence?.pv); })
       .then((u) => { unPres = u; });
+    let unKeyOk: (() => void) | null = null;
+    events.onKeyOk((p) => noteKeyOk(p.from, p.code, p.on)).then((u) => { unKeyOk = u; });
     let unReact: (() => void) | null = null;
     events.onReaction((p) => { if (p.react?.key && p.react?.emoji) applyPeerReaction(p.react.key, p.react.emoji, !!p.react.add); })
       .then((u) => { unReact = u; });
@@ -1109,6 +1111,7 @@
       if (unClose) unClose();
       if (unSeen) unSeen();
       if (unPres) unPres();
+      if (unKeyOk) unKeyOk();
       if (unReact) unReact();
     };
   });
@@ -1439,15 +1442,20 @@
   // A bot's own commands (setMyCommands), like Telegram: listed first, a
   // tap sends the command straight away.
   let botCmds = $state<{ command: string; description: string }[]>([]);
+  // Keyed by the chat and "is a bot" only: any chat-list or card refresh
+  // re-ran it — the list emptied and was asked again on every message.
+  const cmdBot = $derived.by(() => { const id = $activeChat?.id; return id && !id.startsWith("grp_") && $peerCards[id]?.is_bot ? id : ""; });
   $effect(() => {
-    const id = $activeChat?.id;
+    const id = cmdBot;
     botCmds = [];
-    if (!id || id.startsWith("grp_") || !$peerCards[id]?.is_bot) return;
-    void api.botCommands(id).then((l) => { if ($activeChat?.id === id && Array.isArray(l)) botCmds = l; }).catch(() => {});
+    if (!id) return;
+    void api.botCommands(id).then((l) => { if (cmdBot === id && Array.isArray(l)) botCmds = l; }).catch(() => {});
   });
   // A /command tapped in a message (Markup.svelte) is sent to this chat.
   $effect(() => {
-    const h = (e: Event) => { const v = (e as CustomEvent<string>).detail; if (v && $activeChat?.live) sendNow("/" + v); };
+    // Only to a bot: in a chat with a person or a group, a tap on "/start"
+    // in their message sent it from me.
+    const h = (e: Event) => { const v = (e as CustomEvent<string>).detail; if (v && isBotChat) sendNow("/" + v); };
     window.addEventListener("aqua:botcmd", h);
     return () => window.removeEventListener("aqua:botcmd", h);
   });
@@ -1548,7 +1556,7 @@
     if (!c) return;
     try {
       const view = await api.verifyFingerprint(c.id);
-      peerKey = { id: c.id, key: view.peer_key };
+      peerKey = { id: c.id, key: view.peer_key, hex: view.hex };
       openFingerprint(view, c.id);
     } catch (e) {
       showToast(tr(String(e)));
@@ -1557,15 +1565,28 @@
 
   // Key check: every encrypted one-to-one chat gets the shield; it fills in
   // once the words were compared, and turns amber if the key changed since.
-  let peerKey = $state<{ id: string; key: string | null } | null>(null);
+  let peerKey = $state<{ id: string; key: string | null; hex?: string } | null>(null);
   const e2eePeer = $derived(!!$activeChat && $activeChat.live && $activeChat.has_lock && !$activeChat.id.startsWith("grp_") && $activeChat.id !== "__saved__");
   $effect(() => {
     const id = e2eePeer ? $activeChat?.id : null;
     if (!id) { peerKey = null; return; }
-    api.verifyFingerprint(id).then((v) => { if ($activeChat?.id === id) peerKey = { id, key: v.peer_key }; })
+    api.verifyFingerprint(id).then((v) => { if ($activeChat?.id === id) peerKey = { id, key: v.peer_key, hex: v.hex }; })
       .catch(() => { if ($activeChat?.id === id) peerKey = { id, key: null }; });
   });
   const keyCheck = $derived(peerKey && peerKey.id === $activeChat?.id ? keyState(peerKey.id, peerKey.key, $verifiedKeys) : "unverified");
+  // The CeZeOs sun in the header (instead of the shield): half until the code
+  // is compared, whole once BOTH marked it (each side tells the other, [keyok:v1]).
+  const sun = $derived(peerKey && peerKey.id === $activeChat?.id ? sunState(peerKey.id, peerKey.key, peerKey.hex, $verifiedKeys, $verifiedBy) : "none");
+  // Marked before the other side could hear it (older builds): tell them once a run.
+  const toldKeyOk = new Set<string>();
+  $effect(() => {
+    const pk = peerKey;
+    // Once a run per opened chat: whether they got our mark we can't tell
+    // (our sun being whole only says we got theirs).
+    if (!pk?.hex || keyCheck !== "verified" || toldKeyOk.has(pk.id + pk.hex)) return;
+    toldKeyOk.add(pk.id + pk.hex);
+    sendKeyOk(pk.id, pk.hex, true);
+  });
 
   // ---- Message grouping ----
 
@@ -1579,6 +1600,21 @@
   }
   let myUsername = $derived($info?.username ?? "");
   let isGroup = $derived($activeChat?.id?.startsWith("grp_") ?? false);
+  // "Jump to latest" right above the message field (wherever it floats),
+  // not a fixed 160 px up the chat.
+  let composerBox = $state<HTMLElement | null>(null);
+  let jumpBottom = $state(84);
+  $effect(() => {
+    if (!scrolledUp || !composerBox) return;
+    const el = composerBox;
+    const host = el.closest(".active-chat") as HTMLElement | null;
+    const upd = () => { if (host) jumpBottom = Math.max(12, Math.round(host.getBoundingClientRect().bottom - el.getBoundingClientRect().top + 10)); };
+    upd();
+    const ro = new ResizeObserver(upd);
+    ro.observe(el);
+    if (host) ro.observe(host);
+    return () => ro.disconnect();
+  });
   let activeGroup = $derived($activeChat ? $groupMap[$activeChat.id] : undefined);
 
   // ---- Channel views (subscribers report to admins; see channelStats.ts) ----
@@ -3776,13 +3812,15 @@
             {#if $clans[$activeChat.id]}<span class="hdr-clan"><ClanTag tag={$clans[$activeChat.id]} /></span>{/if}
           {/if}
           {#if e2eePeer}
-            <button class="verified-btn key-{keyCheck}" onclick={openPeerFingerprint}
-              title={$t(keyCheck === "verified" ? "Key verified" : keyCheck === "changed" ? "Key changed — check again" : "Verify key")}
+            <button class="verified-btn key-sun sun-{sun}" onclick={openPeerFingerprint}
+              title={$t(sun === "both" ? "Key verified by both of you" : sun === "mine" ? "You verified the key — waiting for {name}" : sun === "changed" ? "Key changed — check again" : "Verify key", { name: $activeChat.name })}
               aria-label={$t("Verify key")}>
-              {#if keyCheck === "verified"}
-                <span class="verified-badge">{@html icons.verified}</span>
+              {#if sun === "both"}
+                <!-- Whole sun: both compared the code. -->
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="4.6" fill="currentColor"/><path d="M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M5.3 5.3l1.7 1.7M17 17l1.7 1.7M5.3 18.7 7 17M17 7l1.7-1.7"/></svg>
               {:else}
-                <svg class="key-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>{#if keyCheck === "changed"}<path d="M12 8v4"/><path d="M12 16h.01"/>{/if}</svg>
+                <!-- Half a sun rising: compare the code (filled once I did). -->
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M7 17a5 5 0 0 1 10 0z" fill={sun === "mine" ? "currentColor" : "none"}/><path d="M3 20h18M12 6.5v2.4M4.6 10.6l1.7 1.7M19.4 10.6l-1.7 1.7M2.5 17h1.8M19.7 17h1.8"/>{#if sun === "changed"}<path d="M12 12.6v1.6"/>{/if}</svg>
               {/if}
             </button>
           {:else if $activeChat.verified}
@@ -3855,6 +3893,13 @@
         </div>
       </div>
       <div class="chat-actions">
+        {#if isChannel && $activeChat}
+          <!-- Feed / chat view of a channel in one tap (exteraGram's "Feed"). -->
+          <button class="icon-btn" class:active={feedView} title={$t(feedView ? "Chat view" : "Feed view")} aria-pressed={feedView}
+            onclick={() => $activeChat && setFeedView($activeChat.id, !feedView)}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{#if feedView}<path d="M4 6h10M4 12h16M4 18h12"/>{:else}<rect x="3" y="3" width="18" height="8" rx="2"/><rect x="3" y="13" width="18" height="8" rx="2"/>{/if}</svg>
+          </button>
+        {/if}
         <button class="icon-btn" class:active={searchOpen} title={$t("Search in chat")} onclick={() => (searchOpen ? closeSearch() : openSearch())}>{@html icons.search}</button>
         {#if callChoices.length}
           <div class="ttl-wrap hdr-menu">
@@ -4049,6 +4094,8 @@
     <div
       class="messages"
       class:feed={feedView}
+      class:dm={!isGroup}
+      class:chan={isChannel}
       class:protected={protectedChat}
       class:drag-over={draggingOver}
       class:selecting
@@ -4085,7 +4132,7 @@
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <div
-            class="msg {m.outgoing ? 'out' : 'in'}"
+            class="msg {m.outgoing && !isChannel ? 'out' : 'in'}"
             data-msg-id={m.id}
             data-vkey={isChannel ? reactionKey(m) : undefined}
             class:first={m.first}
@@ -4112,7 +4159,8 @@
               {#if $avatars[avatarKey(m.from)]}<img class="ava-img" src={$avatars[avatarKey(m.from)]} alt="" loading="lazy" />{/if}
             </div>
             <div class="msg-col" class:post={isGroup && commentsAllowed && activeGroup?.kind === "channel"}>
-              {#if m.first && !m.outgoing && $activeChat && !isChannel}
+              <!-- A chat of two: whose message it is goes without saying (Telegram) — no name, no avatar. -->
+              {#if m.first && !m.outgoing && $activeChat && !isChannel && isGroup}
                 {@const mt = isGroup ? tagOf(activeGroup, m.from) : null}
                 <div class="msg-header">
                   <span class="msg-author" style:color={isGroup ? roleColor(activeGroup, m.from) || peerColor(m.from) : null}>{isGroup ? m.from : $activeChat.name.split(' ')[0]}</span>{#if $peerCards[m.from]?.verified}<OfficialMark size={13} />{/if}{#if $peerCards[m.from]?.star != null}<StarMark kind={$peerCards[m.from]?.star ?? 0} size={13} />{/if}
@@ -4124,7 +4172,7 @@
               {/if}
               {#if m.meta?.fwd?.name}
                 {@const fw = m.meta.fwd}
-                <button class="fwd-tag" class:out={m.outgoing} disabled={!fw.from} onclick={() => fw.from && openProfile(fw.from)}
+                <button class="fwd-tag" class:out={m.outgoing && !isChannel} disabled={!fw.from} onclick={() => fw.from && openProfile(fw.from)}
                   title={fw.from ? `@${fw.from}${fw.at ? " · " + fw.at : ""}` : $t("The author doesn't allow linking to their account")}>
                   <span class="fwd-av" style:background-image={fw.from && $avatars[fw.from] ? `url("${$avatars[fw.from]}")` : undefined}>{fw.from && $avatars[fw.from] ? "" : fw.name.slice(0, 1).toUpperCase()}</span>
                   <span class="fwd-txt"><i>{$t("Forwarded from")}</i> <b>{fw.name}</b>{#if fw.chat}<span class="fwd-chat"> · {fw.chat}</span>{/if}</span>
@@ -4537,7 +4585,7 @@
                 {@const vk = reactionKey(m)}
                 {#if isGroup && commentsAllowed && activeGroup?.kind === "channel"}
                   <!-- Telegram: a bar under every post — who commented, how many, "Leave a comment". -->
-                  <button class="cmt-bar" class:out={m.outgoing}
+                  <button class="cmt-bar" class:out={m.outgoing && !isChannel}
                     onclick={() => { if (cmtHeld) { cmtHeld = false; return; } openThread(m, "comments"); }}
                     onpointerdown={(e) => cmtDown(e, m)} onpointerup={cmtUp} onpointerleave={cmtUp} onpointercancel={cmtUp}
                     oncontextmenu={(e) => { if (cmtPeek) e.preventDefault(); }}>
@@ -4554,7 +4602,7 @@
                     <span class="tc-arrow">›</span>
                   </button>
                 {/if}
-                <div class="post-foot" class:out={m.outgoing}>
+                <div class="post-foot" class:out={m.outgoing && !isChannel}>
                   {#if (isGroup && commentsAllowed && activeGroup?.kind !== "channel" && nc) || (nr && activeGroup?.kind !== "channel")}
                     <button class="thread-chip" onclick={() => openThread(m, nc ? "comments" : "replies")}>
                       {#if nc}💬 {$tn(nc, "comment")}{:else}↩ {$tn(nr, "reply")}{/if}
@@ -4589,7 +4637,7 @@
     </div>
 
     {#if scrolledUp}
-      <button class="jump-btn" onclick={jumpToBottom} title={$t("Jump to latest")} aria-label={$t("Scroll to bottom")}>
+      <button class="jump-btn" style:bottom="{jumpBottom}px" onclick={jumpToBottom} title={$t("Jump to latest")} aria-label={$t("Scroll to bottom")}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="6 9 12 15 18 9"/>
         </svg>
@@ -4784,7 +4832,17 @@
         {/if}
       </div>
     {/if}
-    <div class="composer" class:disabled={!liveChat}>
+    <div class="composer" class:disabled={!liveChat} class:chan-bar={isChannel && liveChat} bind:this={composerBox}>
+      {#if isChannel && liveChat}
+        <!-- A channel (Telegram): one bar — who posts, stickers, the text, 📎, the round button. -->
+        <span class="cb-ava" style:background-image={$myProfile.avatar_url ? `url("${$myProfile.avatar_url}")` : undefined}>{$myProfile.avatar_url ? "" : (myUsername || "?").charAt(0).toUpperCase()}</span>
+        <!-- 🔔: subscribers get a sound / a notification; off — a silent post. -->
+        <button class="cb-bell" class:off={!!$silentChans[$activeChat?.id ?? ""]} aria-pressed={!!$silentChans[$activeChat?.id ?? ""]}
+          title={$t($silentChans[$activeChat?.id ?? ""] ? "Silent: subscribers get no sound" : "Subscribers get a notification")}
+          onclick={() => { const id = $activeChat?.id; if (!id) return; const off = !$silentChans[id]; silentChans.update((m) => ({ ...m, [id]: off })); showToast(tr(off ? "Posts go out silent" : "Posts notify subscribers")); }}>
+          {#if $silentChans[$activeChat?.id ?? ""]}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13.7 21a2 2 0 0 1-3.4 0"/><path d="M18.6 13A17.9 17.9 0 0 1 18 8"/><path d="M6.3 6.3A5.9 5.9 0 0 0 6 8c0 7-3 9-3 9h14"/><path d="M18 8a6 6 0 0 0-9.3-5"/><path d="M2 2l20 20"/></svg>{:else}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>{/if}
+        </button>
+      {/if}
       {#if botMenu}
         <button class="bot-menu-btn" onclick={() => { if ($activeChat && botMenu) openMiniApp({ bot: $activeChat.id, url: botMenu.url, from: "menu" }); }} title={botMenu.url}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="14" y2="17"/></svg>
@@ -4961,7 +5019,7 @@
         <RichComposer
           bind:this={composerEl}
           bind:value={text}
-          placeholder={liveChat ? (activeRoom ? $t("Message #{room}…", { room: activeRoom.name }) : $t("Message {name}…", { name: $activeChat.name.split(" ")[0] })) : $t("Start a real chat first — see the banner above")}
+          placeholder={liveChat ? (isChannel ? $t("Broadcast") : activeRoom ? $t("Message #{room}…", { room: activeRoom.name }) : $t("Message {name}…", { name: $activeChat.name.split(" ")[0] })) : $t("Start a real chat first — see the banner above")}
           resolve={(k) => emojiMap[k]}
           oninput={onComposerInput}
           onkeydown={onKey}
@@ -4983,12 +5041,6 @@
             } else if (liveChat && $activeChat) openMediaPicker($activeChat.id);
           }}
         >{#if $pickerState.open}<span class="kb-ico">{@html KEYBOARD_ICON}</span>{:else}{@html $pickerTab === "stickers" ? STICKER_ICON : $pickerTab === "gifs" ? GIF_ICON : SMILE_ICON}{/if}</button>
-        {#if IS_MOBILE && liveChat && text.trim().length === 0}
-          <!-- The camera right in the message field (AyuGram): photo or video in one tap. -->
-          <button class="emoji-in cam-in" title={$t("Camera")} aria-label={$t("Camera")} onclick={() => void shoot()}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-3l-2-3H9L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><circle cx="12" cy="13" r="3.6"/></svg>
-          </button>
-        {/if}
       </div>
       {#if text.trim().length === 0 && liveChat}
         <!-- One button: tap switches mic↔camera, hold to record -->
@@ -5270,6 +5322,13 @@
   .e2ee-btn { background: none; border: none; padding: 0; font: inherit; color: inherit; cursor: pointer; }
   .e2ee-btn:hover { text-decoration: underline; }
   .key-shield { width: 15px; height: 15px; color: var(--fg-dim); opacity: .8; }
+  /* The CeZeOs sun: the theme's accent; dim until the code is compared. */
+  .key-sun svg { width: 17px; height: 17px; display: block; }
+  .sun-none svg { color: var(--fg-dim); opacity: .85; }
+  .verified-btn.sun-none:hover svg { color: var(--accent); opacity: 1; }
+  .sun-mine svg, .sun-both svg { color: var(--accent); }
+  .sun-both svg { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 60%, transparent)); }
+  .sun-changed svg { color: var(--warn, #F0B232); }
   .verified-btn:hover .key-shield { color: var(--accent); opacity: 1; }
   .key-changed .key-shield { color: #F0B232; opacity: 1; }
   .verified-btn {
@@ -6449,6 +6508,15 @@
   .media-bubble.album.a3 { grid-template-columns: 1fr 1fr 1fr; }
   .media-bubble.album .alb-cell { aspect-ratio: 1; overflow: hidden; padding: 0; border: none; background: var(--bg-input); }
   .media-bubble.album .alb-cell .media-img { width: 100%; height: 100%; object-fit: cover; max-width: none; max-height: none; border-radius: 0; }
+  /* A channel (Telegram): every post on one side, in one colour — mine too
+     (the row is "in" for them); no avatars, the posts take the width. */
+  .messages.chan .msg { grid-template-columns: 1fr; }
+  .messages.chan .msg-avatar { display: none; }
+  .messages.chan .msg-col { grid-column: 1; }
+  /* A chat of two: no avatar column — the bubbles take the room. */
+  .messages.dm .msg { grid-template-columns: 1fr; }
+  .messages.dm .msg-avatar { display: none; }
+  .messages.dm .msg-col { grid-column: 1; }
   /* Feed view of a channel: one centred column of full-width posts. */
   .messages.feed .msg-avatar { display: none; }
   .messages.feed .msg { display: flex; justify-content: center; }
@@ -6706,6 +6774,21 @@
   }
   /* The blur lives on a pseudo-layer: a backdrop-filter on the bar itself would make it a
      "backdrop root", and popups inside it (attach menu, room list) couldn't blur the chat. */
+  /* A channel's bar (Telegram): one pill — my avatar, stickers, the text, 📎,
+     the round mic / send button; no separate boxes. */
+  .composer.chan-bar { align-items: center; gap: 2px; margin: 6px 10px 8px; padding: 4px; border: 1px solid var(--border);
+    border-radius: 999px; background: var(--bg-input); }
+  .composer.chan-bar::before { border-radius: 999px; }
+  .chan-bar .cb-ava { order: 0; width: 38px; height: 38px; border-radius: var(--ava-r, 50%); flex-shrink: 0; background: var(--accent-soft) center / cover no-repeat;
+    display: grid; place-items: center; font-weight: 800; color: var(--accent); }
+  .chan-bar .input-wrap { order: 1; background: transparent; border: none; box-shadow: none !important; padding-left: 4px; align-items: center; }
+  .chan-bar .input-wrap > .emoji-in { order: -1; }
+  .chan-bar .attach-wrap { order: 2; }
+  .chan-bar .cb-bell { order: 1; width: 38px; height: 38px; border: none; background: transparent; color: var(--fg-muted); border-radius: 50%; display: grid; place-items: center; cursor: pointer; flex-shrink: 0; }
+  .chan-bar .cb-bell.off { color: var(--fg-dim); }
+  .chan-bar .cb-bell :global(svg) { width: 21px; height: 21px; }
+  .chan-bar .attach-btn { background: transparent; border: none; border-radius: 50%; }
+  .chan-bar .send-btn { order: 3; border-radius: 50%; }
   .composer::before, .chat-header::before {
     content: "";
     position: absolute;
@@ -6805,7 +6888,6 @@
   .emoji-in:hover { color: var(--accent); background: var(--accent-soft); }
   .emoji-in.disabled { opacity: .4; cursor: help; }
   .emoji-in :global(svg) { width: 21px; height: 21px; }
-  .cam-in { margin-left: 0; }
   .stream-play { display: grid; place-items: center; width: 100%; border: none; cursor: pointer; }
   .sp-ic { width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; color: #fff; background: rgba(0,0,0,.5); }
   .sp-ic svg { width: 26px; height: 26px; margin-left: 3px; }

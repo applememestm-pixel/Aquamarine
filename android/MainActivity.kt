@@ -43,6 +43,12 @@ class MainActivity : TauriActivity() {
   // (the bottom bar and the composer rode high with a gap under them).
   @Volatile private var insetsJson = ""
   private var bars = intArrayOf(0, 0, 0, 0)
+  // The on-screen keyboard as the SYSTEM reports it (WindowInsets IME), the
+  // same for Gboard, Yandex, SwiftKey…: visible, and how much of the WebView
+  // it covers (device px). The page used to guess it from the viewport size,
+  // which some keyboards / WebViews don't change.
+  private var imeShown = false
+  private var imeOver = 0
 
   inner class InsetsBridge {
     @JavascriptInterface fun insets(): String = insetsJson
@@ -86,7 +92,7 @@ class MainActivity : TauriActivity() {
   }
 
   private fun pushInsets(v: WebView) {
-    val json = "{\"l\":${bars[0]},\"t\":${bars[1]},\"r\":${bars[2]},\"b\":${bars[3]},\"w\":${v.width},\"h\":${v.height}}"
+    val json = "{\"l\":${bars[0]},\"t\":${bars[1]},\"r\":${bars[2]},\"b\":${bars[3]},\"w\":${v.width},\"h\":${v.height},\"kv\":$imeShown,\"k\":$imeOver}"
     if (json == insetsJson) return
     insetsJson = json
     v.post { v.evaluateJavascript("window.__aquaInsets&&window.__aquaInsets($json)", null) }
@@ -140,6 +146,14 @@ class MainActivity : TauriActivity() {
     ViewCompat.setOnApplyWindowInsetsListener(webView) { v, insets ->
       val b = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
       bars = intArrayOf(b.left, b.top, b.right, b.bottom)
+      // The keyboard: its height from the window's bottom, minus what lies
+      // below the WebView anyway (where the system already resized it).
+      imeShown = insets.isVisible(WindowInsetsCompat.Type.ime())
+      val ime = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+      val loc = IntArray(2)
+      v.getLocationInWindow(loc)
+      val below = v.rootView.height - (loc[1] + v.height)
+      imeOver = if (imeShown) maxOf(0, ime - maxOf(0, below)) else 0
       pushInsets(v as WebView)
       // The WebView still gets them too (its own safe-area handling).
       ViewCompat.onApplyWindowInsets(v, insets)

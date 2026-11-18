@@ -710,6 +710,18 @@ impl Directory {
             -- People the admin banned here (panel -> People -> Accounts): by
             -- account ID, with every identity key the account had then
             -- (devices too), so none of them gets a token here again.
+            -- @names of public groups and channels: the same namespace as
+            -- people and bots. The group itself lives on its members' devices
+            -- only; this says which group (id), what it's called and whom to
+            -- ask to join (its owner).
+            CREATE TABLE IF NOT EXISTS group_names (
+                username TEXT PRIMARY KEY,
+                gid      TEXT NOT NULL UNIQUE,
+                title    TEXT NOT NULL DEFAULT '',
+                kind     TEXT NOT NULL DEFAULT 'group',
+                owner    TEXT NOT NULL,
+                at       INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS bans (
                 uid  TEXT PRIMARY KEY,
                 dhs  TEXT NOT NULL DEFAULT '',
@@ -1569,6 +1581,66 @@ impl Directory {
     fn reserved_elsewhere(db: &Connection, name: &str, my_uid: &str) -> bool {
         db.query_row("SELECT uid FROM fed_names WHERE username=?1", rusqlite::params![name], |r| r.get::<_, String>(0))
             .is_ok_and(|uid| uid != my_uid)
+            || db.query_row("SELECT 1 FROM group_names WHERE username=?1", rusqlite::params![name], |_| Ok(())).is_ok()
+    }
+
+    /// A public group / channel takes `name` (its owner, from their account):
+    /// free in the whole namespace (people, bots, the network's names, other
+    /// groups), or already this group's. Its other name, if any, goes.
+    pub fn claim_group_name(&self, name: &str, gid: &str, title: &str, kind: &str, owner: &str) -> Result<String, DirError> {
+        let name = name.trim().trim_start_matches('@').to_lowercase();
+        if !Self::valid_username(&name) || !gid.starts_with("grp_") || gid.len() > 64 {
+            return Err(DirError::BadUsername);
+        }
+        let db = self.db.lock().unwrap();
+        let person = db.query_row("SELECT 1 FROM users WHERE username=?1", rusqlite::params![name], |_| Ok(())).is_ok()
+            || db.query_row("SELECT 1 FROM fed_names WHERE username=?1", rusqlite::params![name], |_| Ok(())).is_ok()
+            || db.query_row("SELECT 1 FROM renames WHERE old_name=?1 AND at > ?2", rusqlite::params![name, now_secs() as i64 - RENAME_KEEP_SECS as i64], |_| Ok(())).is_ok();
+        let holder: Option<(String, String)> = db.query_row("SELECT gid, owner FROM group_names WHERE username=?1", rusqlite::params![name], |r| Ok((r.get(0)?, r.get(1)?))).ok();
+        if person || holder.as_ref().is_some_and(|(g, _)| g != gid) {
+            return Err(DirError::UsernameTaken);
+        }
+        // This group's name is its owner's to change.
+        if let Ok(o) = db.query_row("SELECT owner FROM group_names WHERE gid=?1", rusqlite::params![gid], |r| r.get::<_, String>(0)) {
+            if o != owner { return Err(DirError::NotOwner); }
+        }
+        db.execute("DELETE FROM group_names WHERE gid=?1", rusqlite::params![gid])?;
+        let kind = if kind == "channel" { "channel" } else { "group" };
+        let title: String = title.trim().chars().take(128).collect();
+        db.execute("INSERT INTO group_names (username, gid, title, kind, owner, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![name, gid, title, kind, owner, now_secs() as i64])?;
+        Ok(name)
+    }
+
+    /// The group's owner gives its @name up (made private, or cleared).
+    pub fn release_group_name(&self, gid: &str, owner: &str) -> bool {
+        let db = self.db.lock().unwrap();
+        db.execute("DELETE FROM group_names WHERE gid=?1 AND owner=?2", rusqlite::params![gid, owner]).unwrap_or(0) > 0
+    }
+
+    fn group_row(r: &rusqlite::Row) -> rusqlite::Result<serde_json::Value> {
+        Ok(serde_json::json!({ "username": r.get::<_, String>(0)?, "gid": r.get::<_, String>(1)?, "title": r.get::<_, String>(2)?,
+            "kind": r.get::<_, String>(3)?, "admin": r.get::<_, String>(4)? }))
+    }
+
+    /// A public group / channel by its @name.
+    pub fn group_by_name(&self, name: &str) -> Option<serde_json::Value> {
+        let name = name.trim().trim_start_matches('@').to_lowercase();
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT username, gid, title, kind, owner FROM group_names WHERE username=?1", rusqlite::params![name], Self::group_row).ok()
+    }
+
+    /// Public groups and channels whose @name or title has `q`.
+    pub fn search_groups(&self, q: &str, limit: usize) -> Vec<serde_json::Value> {
+        let q = q.trim().trim_start_matches('@').to_lowercase();
+        if q.is_empty() { return Vec::new(); }
+        let like = format!("%{}%", q.replace('%', "").replace('_', "\\_"));
+        let db = self.db.lock().unwrap();
+        let Ok(mut st) = db.prepare(
+            "SELECT username, gid, title, kind, owner FROM group_names WHERE username LIKE ?1 ESCAPE '\\' OR lower(title) LIKE ?1 ESCAPE '\\'
+             ORDER BY (username = ?2) DESC, length(username) LIMIT ?3",
+        ) else { return Vec::new() };
+        st.query_map(rusqlite::params![like, q, limit as i64], Self::group_row).map(|it| it.filter_map(|x| x.ok()).collect()).unwrap_or_default()
     }
 
     /// The name registry as this relay knows it, changed after `since`:
@@ -3020,6 +3092,10 @@ impl Directory {
         }
         let display_name: String = display_name.trim().chars().take(64).collect();
         let db = self.db.lock().unwrap();
+        // A public group's / channel's @name.
+        if db.query_row("SELECT 1 FROM group_names WHERE username=?1", rusqlite::params![username], |_| Ok(())).is_ok() {
+            return Err(DirError::UsernameTaken);
+        }
         // If the username exists and isn't a bot owned by us, refuse.
         let mut existing = false;
         if let Ok((owner, is_bot)) = db.query_row(
@@ -3749,6 +3825,25 @@ mod tests {
         assert!(!d.may_see_media("media", Some("ex")));
         d.set_media_acl("media", &id, &MediaAcl { everybody: true, ..Default::default() }).unwrap();
         assert!(d.may_see_media("media", None));
+    }
+
+    #[test]
+    fn group_names_share_the_namespace() {
+        let d = dir();
+        d.register_plain("papa", &[9u8; 32], "pass-word-1", "").unwrap();
+        // A person's name can't be a channel's, and back.
+        assert!(matches!(d.claim_group_name("papa", "grp_1", "Papa", "channel", "papa"), Err(DirError::UsernameTaken)));
+        assert_eq!(d.claim_group_name("@CeZeOs", "grp_1", "CeZeOs", "channel", "papa").unwrap(), "cezeos");
+        assert!(matches!(d.register_plain("cezeos", &[8u8; 32], "pass-word-2", ""), Err(DirError::UsernameTaken)));
+        // Another group can't take it; its owner renames it, the old name goes.
+        assert!(matches!(d.claim_group_name("cezeos", "grp_2", "X", "group", "mama"), Err(DirError::UsernameTaken)));
+        assert!(matches!(d.claim_group_name("other", "grp_1", "CeZeOs", "channel", "mama"), Err(DirError::NotOwner)));
+        d.claim_group_name("cezeos_ch", "grp_1", "CeZeOs", "channel", "papa").unwrap();
+        assert!(d.group_by_name("cezeos").is_none());
+        assert_eq!(d.group_by_name("@CEZEOS_CH").unwrap()["gid"], "grp_1");
+        assert_eq!(d.search_groups("cez", 5).len(), 1);
+        assert!(d.release_group_name("grp_1", "papa"));
+        assert!(d.group_by_name("cezeos_ch").is_none());
     }
 
     #[test]

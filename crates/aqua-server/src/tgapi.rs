@@ -879,7 +879,23 @@ pub(crate) async fn dispatch(state: &AppState, bot: &str, method: &str, p: Map<S
                 Some(v) => v.clone(),
                 None => json!([]),
             };
-            state.tg.commands.insert(bot.clone(), cmds);
+            // As Telegram: up to 100 commands, each {command, description}
+            // as short strings — everyone who opens the bot's chat gets them.
+            let clean: Vec<Value> = cmds
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|c| {
+                            let cmd = c.get("command")?.as_str()?.trim().trim_start_matches('/').to_lowercase();
+                            let desc = c.get("description").and_then(|d| d.as_str()).unwrap_or("").trim();
+                            (!cmd.is_empty() && cmd.len() <= 32 && cmd.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_'))
+                                .then(|| json!({ "command": cmd, "description": desc.chars().take(256).collect::<String>() }))
+                        })
+                        .take(100)
+                        .collect()
+                })
+                .unwrap_or_default();
+            state.tg.commands.insert(bot.clone(), Value::Array(clean));
             ok(json!(true))
         }
         "getmycommands" => ok(state.tg.commands.get(&bot).map(|c| c.clone()).unwrap_or(json!([]))),

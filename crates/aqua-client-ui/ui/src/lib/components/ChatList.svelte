@@ -32,7 +32,7 @@
   import { requestIds } from "../privacy";
   import { archived, archiveHidden, mutedChats, setArchived, setMuted, pinnedChats, togglePin, movePin, MAX_PINS, markedUnread, setMarkedUnread } from "../chatPrefs";
   import { folders as allFolders, folderHas, updateFolder, folderTags, FOLDER_COLORS, type Folder, type ChatFacts } from "../folders";
-  import { parseJoinLink } from "../groupRules";
+  import { parseJoinLink, parseNameLink } from "../groupRules";
   import { groupMap, requestJoinGroup } from "../groups";
   import { roomsOf } from "../groupRules";
   import { rolesOn, hasPerm } from "../roles";
@@ -119,7 +119,7 @@
   import { myOnline } from "../presence";
   import { openSettings } from "../panels/settings";
   import { openMiniApp } from "./MiniApp.svelte";
-  import { api } from "../tauri";
+  import { api, type PublicGroup } from "../tauri";
   import { blocked, setBlocked, ghost } from "../ghost";
   import { chatLocks, unlocked, lockNowChat } from "../chatLocks";
   import { askSetLock, askRemoveLock } from "../chatLockUi";
@@ -819,10 +819,19 @@
     const known = $groupMap[j.gid]?.title || $chats.find((c) => c.id === j.gid)?.name;
     return known ? { ...j, title: known } : j;
   });
-  let joinIsMember = $derived(!!joinLink && !!$groupMap[joinLink.gid]?.members.some((m) => m.username === $info?.username));
+  // `aqua://join/@name`: the server says which group it is and whom to ask.
+  let nameJoin = $state<{ gid: string; admin: string; title: string } | null>(null);
+  $effect(() => {
+    const n = parseNameLink($search ?? "");
+    nameJoin = null;
+    if (!n || !$info?.connected) return;
+    void api.groupLookup(n).then((g) => { if (g && parseNameLink($search ?? "") === n) nameJoin = { gid: g.gid, admin: g.admin, title: g.title }; }).catch(() => {});
+  });
+  let joinLinkAny = $derived(joinLink ?? (nameJoin ? { ...nameJoin, title: $groupMap[nameJoin.gid]?.title || nameJoin.title } : null));
+  let joinIsMember = $derived(!!joinLinkAny && !!$groupMap[joinLinkAny.gid]?.members.some((m) => m.username === $info?.username));
   let joinSent = $state("");
   async function requestJoin() {
-    const j = joinLink;
+    const j = joinLinkAny;
     if (!j) return;
     try {
       await requestJoinGroup(j.gid, j.admin, j.title, "");
@@ -891,19 +900,30 @@
   // with, by username OR display name.
   let dirResults = $state<DirProfile[]>([]);
   let dirSearching = $state(false);
+  let groupResults = $state<PublicGroup[]>([]);
+  let groupAsked = $state("");
+  async function joinPublic(g: PublicGroup) {
+    try {
+      await requestJoinGroup(g.gid, g.admin, g.title, "");
+      groupAsked = g.gid;
+      showToast(tr("Request sent to @{a}", { a: g.admin }));
+    } catch (e) { showToast(String(e)); }
+  }
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   $effect(() => {
     const q = $search.trim().replace(/^@+/, "");
     if (debounceTimer) clearTimeout(debounceTimer);
-    if (q.length < 2 || !$info?.connected) { dirResults = []; return; }
+    if (q.length < 2 || !$info?.connected) { dirResults = []; groupResults = []; return; }
     debounceTimer = setTimeout(async () => {
       dirSearching = true;
       try {
-        const r = await api.searchDirectory(q);
+        const [r, gs] = await Promise.all([api.searchDirectory(q), api.groupSearch(q).catch(() => [] as PublicGroup[])]);
         // Hide people we already have a chat with (shown above).
         const existing = new Set($visibleChats.map((c) => c.id));
         dirResults = r.filter((p) => !existing.has(p.username));
+        // Public groups / channels by @name: the ones I'm in are already above.
+        groupResults = gs.filter((g) => !existing.has(g.gid));
       } catch {
         dirResults = [];
       } finally {
@@ -1102,7 +1122,6 @@
             <button onclick={() => { plusMenuOpen = false; openNewGroup("supergroup"); }}>{$t("New server")}</button>
           {/if}
           {#if !$storiesOff}<button onclick={() => { plusMenuOpen = false; void addStory(IS_MOBILE ? "camera" : "gallery"); }}>{$t("Add a story")}</button>{/if}
-          {#if !$storiesOff && IS_MOBILE}<button onclick={() => { plusMenuOpen = false; void addStory("gallery"); }}>{$t("Story from the gallery")}</button>{/if}
           {#if IS_MOBILE}
             <!-- Telegram's ⋮: Saved Messages, day / night, the server. -->
             {#if storiesHere}<button onclick={() => { plusMenuOpen = false; openStrip(); }}>{$t("Stories")}</button>{/if}
@@ -1203,16 +1222,16 @@
         {/if}
       </div>
     {/if}
-    {#if joinLink}
+    {#if joinLinkAny}
       <div class="join-card">
-        <div class="jc-ava">{joinLink.title.charAt(0).toUpperCase()}</div>
+        <div class="jc-ava">{joinLinkAny.title.charAt(0).toUpperCase()}</div>
         <div class="jc-body">
-          <div class="jc-title">{joinLink.title}</div>
-          <div class="jc-sub">{$t("Invite link · admin @{admin}", { admin: joinLink.admin })}</div>
+          <div class="jc-title">{joinLinkAny.title}</div>
+          <div class="jc-sub">{$t("Invite link · admin @{admin}", { admin: joinLinkAny.admin })}</div>
         </div>
         {#if joinIsMember}
-          <button class="jc-btn" onclick={() => { const id = joinLink!.gid; search.set(""); void selectChat(id); }}>{$t("Open")}</button>
-        {:else if joinSent === joinLink.gid}
+          <button class="jc-btn" onclick={() => { const id = joinLinkAny!.gid; search.set(""); void selectChat(id); }}>{$t("Open")}</button>
+        {:else if joinSent === joinLinkAny.gid}
           <span class="jc-done">{$t("Requested")}</span>
         {:else}
           <button class="jc-btn" onclick={requestJoin}>{$t("Request to join")}</button>
@@ -1259,6 +1278,19 @@
         </div>
       </button>
       </div>
+    {/if}
+    {#if groupResults.length > 0}
+      <div class="dir-head">{$t("Public groups and channels")}</div>
+      {#each groupResults as g (g.gid)}
+        <button class="dir-row" onclick={() => joinPublic(g)} disabled={groupAsked === g.gid} title={$t("Ask to join")}>
+          <div class="dir-avatar">{(g.title || g.username).charAt(0).toUpperCase()}</div>
+          <div class="dir-body">
+            <div class="dir-name">{g.title || g.username} <span class="bot-tag">{$t(g.kind === "channel" ? "CHANNEL" : "GROUP")}</span></div>
+            <div class="dir-sub">@{g.username}</div>
+          </div>
+          <span class="dir-go">{groupAsked === g.gid ? "✓" : "+"}</span>
+        </button>
+      {/each}
     {/if}
     {#if dirResults.length > 0}
       <div class="dir-head">{$t("Found on the server")}</div>
@@ -2103,7 +2135,7 @@
   .avatar.story-ring.story-seen { box-shadow: 0 0 0 2px var(--bg-list), 0 0 0 4px var(--border-strong); }
   .avatar.story-ring.story-close { box-shadow: 0 0 0 2px var(--bg-list), 0 0 0 4px #34C759; }
   /* Phones: the pencil (Telegram) above the bottom bar; it unfolds upwards. */
-  .fab-wrap { position: fixed; right: 16px; bottom: calc(92px + var(--sab, env(safe-area-inset-bottom, 0px))); z-index: 60; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .fab-wrap { position: fixed; right: 16px; bottom: calc(80px + var(--sab, env(safe-area-inset-bottom, 0px))); z-index: 60; display: flex; flex-direction: column; align-items: center; gap: 12px; }
   :global(body.chat-open) .fab-wrap, :global(body.chat-open) .fab-veil { display: none; }
   /* Camera, menu and pencil share one vertical axis (their centres line up,
      open or closed — the camera used to sit 5 px off the open menu). */

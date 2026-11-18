@@ -690,6 +690,52 @@ pub async fn search_directory(
     Ok(cards.into_iter().map(DirProfile::from).collect())
 }
 
+// ---------- @names of public groups and channels (aqua-server group_names) ----
+
+fn live_transport(state: &State<'_, StdMutex<AppState>>) -> Result<std::sync::Arc<aqua_client_core::transport::Transport>, String> {
+    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    s.transport.clone().ok_or_else(|| "not connected to a server".to_string())
+}
+
+async fn group_get(state: &State<'_, StdMutex<AppState>>, path: &str, query: &[(&str, &str)]) -> Result<Option<serde_json::Value>, String> {
+    let t = live_transport(state)?;
+    let url = format!("{}{path}", t.server_url().trim_end_matches('/'));
+    let r = t.http().get(&url).query(query).timeout(std::time::Duration::from_secs(15)).send().await.map_err(|e| e.without_url().to_string())?;
+    if r.status().as_u16() == 404 { return Ok(None); }
+    if !r.status().is_success() { return Err(format!("HTTP {}", r.status().as_u16())); }
+    r.json().await.map(Some).map_err(|e| e.without_url().to_string())
+}
+
+/// Public groups / channels whose @name or title has `query`.
+#[tauri::command]
+pub async fn group_search(state: State<'_, StdMutex<AppState>>, query: String) -> Result<serde_json::Value, String> {
+    Ok(group_get(&state, "/v1/groups/search", &[("q", query.as_str())]).await.unwrap_or(None).unwrap_or_else(|| serde_json::json!([])))
+}
+
+/// A public group / channel by its @name: `{username, gid, title, kind, admin}` or null.
+#[tauri::command]
+pub async fn group_lookup(state: State<'_, StdMutex<AppState>>, name: String) -> Result<Option<serde_json::Value>, String> {
+    let n: String = name.trim().trim_start_matches('@').chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '.').collect();
+    if n.is_empty() { return Ok(None); }
+    group_get(&state, &format!("/v1/groups/by-name/{n}"), &[]).await
+}
+
+/// The owner sets (or, with an empty name, gives up) the group's @name.
+#[tauri::command]
+pub async fn group_name_set(state: State<'_, StdMutex<AppState>>, gid: String, name: String, title: String, kind: String) -> Result<String, String> {
+    let t = live_transport(&state)?;
+    let url = format!("{}/v1/groups/name", t.server_url().trim_end_matches('/'));
+    let r = t.http().post(&url).bearer_auth(t.bearer().await.map_err(|e| e.to_string())?)
+        .json(&serde_json::json!({ "name": name, "gid": gid, "title": title, "kind": kind }))
+        .timeout(std::time::Duration::from_secs(15)).send().await.map_err(|e| e.without_url().to_string())?;
+    if !r.status().is_success() {
+        let body = r.text().await.unwrap_or_default();
+        return Err(if body.is_empty() { "the server refused".into() } else { body });
+    }
+    let v: serde_json::Value = r.json().await.unwrap_or_default();
+    Ok(v["name"].as_str().unwrap_or("").to_string())
+}
+
 #[tauri::command]
 pub async fn fetch_directory_profile(
     state: State<'_, StdMutex<AppState>>,
@@ -2087,7 +2133,7 @@ async fn attach_file_fwd(
     // Groups / channels: the blob is uploaded once; the offer (with the
     // file key) fans out to every member over their own E2EE sessions.
     if peer_id.starts_with("grp_") {
-        let r = group_send(app.clone(), state.clone(), peer_id.clone(), offer_text.clone()).await?;
+        let r = group_send(app.clone(), state.clone(), peer_id.clone(), offer_text.clone(), None).await?;
         {
             let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(book) = s.chats.get_mut(&peer_id) {
@@ -3125,6 +3171,10 @@ pub const CALL_PREFIX: &str = "AQUA-CALL:v1:";
 pub const POLLVOTE_PREFIX: &str = "[pollvote:v1]";
 pub const POLLCLOSE_PREFIX: &str = "[pollclose:v1]";
 pub const SEEN_PREFIX: &str = "[seen:v1]";
+/// "I compared our safety code and marked your key verified" (or took it
+/// back): `{"c": <the code's hex>, "on": bool}`. Both sides marked = a
+/// whole sun in the chat header (FingerprintModal.svelte).
+pub const KEYOK_PREFIX: &str = "[keyok:v1]";
 pub const STATUS_PREFIX: &str = "[status:v1]";
 /// "Listen together" (ui/src/lib/music.ts): the host's player state —
 /// track, position, play/pause — for the peers following along.
@@ -3473,7 +3523,9 @@ pub async fn group_send(
     state: State<'_, StdMutex<AppState>>,
     gid: String,
     body: String,
+    silent: Option<bool>,
 ) -> Result<SendResult, String> {
+    let silent = silent.unwrap_or(false);
     let (me, group, room) = {
         let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let g = s.groups.get(&gid).cloned().ok_or("unknown group")?;
@@ -3520,7 +3572,9 @@ pub async fn group_send(
     // Fan out in the background, to all members at once.
     let wire = format!(
         "{GRPMSG_PREFIX}{}",
-        serde_json::json!({ "gid": gid, "author": me, "body": body, "room": room_id })
+        // `sil`: a silent post (the channel's 🔔 off) — no sound, no notification.
+        if silent { serde_json::json!({ "gid": gid, "author": me, "body": body, "room": room_id, "sil": true }) }
+        else { serde_json::json!({ "gid": gid, "author": me, "body": body, "room": room_id }) }
     );
     let members: Vec<String> = group.members.iter().filter(|m| m.username != me).map(|m| m.username.clone()).collect();
     group_outbox(&app).send((members, wire)).map_err(|_| "the sending queue stopped".to_string())?;
@@ -3699,7 +3753,7 @@ pub fn own_device_message(app: &AppHandle, to: &str, inner: &str) {
     // Something "to me" from my own other device isn't a chat with myself.
     if to == me || to.is_empty() { return; }
     // Per-device state (typing, read marks, presence…) isn't mirrored.
-    for p in [CALL_PREFIX, POLLVOTE_PREFIX, POLLCLOSE_PREFIX, SEEN_PREFIX, STATUS_PREFIX, REACT_PREFIX, TYPING_PREFIX, LISTEN_PREFIX] {
+    for p in [CALL_PREFIX, POLLVOTE_PREFIX, POLLCLOSE_PREFIX, SEEN_PREFIX, STATUS_PREFIX, REACT_PREFIX, TYPING_PREFIX, LISTEN_PREFIX, KEYOK_PREFIX] {
         if inner.starts_with(p) { return; }
     }
     if !s.chats.contains_key(to) {
@@ -3809,6 +3863,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
             // "author" field can't impersonate someone else.
             let author = from.to_string();
             let inner = v.get("body").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let silent = v.get("sil").and_then(|x| x.as_bool()) == Some(true);
             if gid.is_empty() { return true; }
             let time = hhmm_now();
             {
@@ -3864,10 +3919,12 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                     }
                 }
             }
-            crate::bgnotify::incoming(&app, &gid);
+            // A silent post: in the chat and the list, but no sound / notification
+            // (an incoming without text doesn't ring — stores.ts).
+            if !silent { crate::bgnotify::incoming(&app, &gid); }
             let _ = app.emit("aqua://incoming", IncomingEventPayload {
                 peer_id: gid,
-                text: inner,
+                text: if silent { String::new() } else { inner },
                 time,
                 is_new_chat: false,
             });
@@ -4350,7 +4407,7 @@ pub(crate) fn is_control_text(text: &str) -> bool {
             EDIT_PREFIX, DEL_PREFIX, REN_PREFIX, CTL_PREFIX, GCALL_PREFIX, GRPINFO_PREFIX, GRPSELF_PREFIX,
             GRPJOIN_PREFIX, GRPLEAVE_PREFIX, GRPCTL_PREFIX, GRPMSG_PREFIX, CDM_PREFIX, crate::autodelete::TTL_PREFIX,
             crate::history_sync::HPOKE_PREFIX, crate::history_sync::HKEYREQ_PREFIX, crate::history_sync::HKEY_PREFIX,
-            crate::devtrust::DEVOK_PREFIX, crate::devtrust::DEVNO_PREFIX, READ_PREFIX,
+            crate::devtrust::DEVOK_PREFIX, crate::devtrust::DEVNO_PREFIX, READ_PREFIX, KEYOK_PREFIX,
             "[hist:v1]", "[histack:v1]"]
             .iter().any(|p| text.starts_with(p))
 }
@@ -4489,6 +4546,14 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
         }
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
             let _ = app.emit("aqua://ctl", serde_json::json!({ "from": from, "chat": from, "body": v }));
+        }
+        return;
+    }
+
+    // The peer compared our safety code (or took the mark back).
+    if let Some(body) = text.strip_prefix(KEYOK_PREFIX) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
+            let _ = app.emit("aqua://keyok", serde_json::json!({ "from": from, "code": v["c"].as_str().unwrap_or(""), "on": v["on"].as_bool().unwrap_or(false) }));
         }
         return;
     }

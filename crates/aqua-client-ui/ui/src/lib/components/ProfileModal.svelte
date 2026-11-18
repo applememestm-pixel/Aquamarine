@@ -21,6 +21,7 @@
   import BirthdayInput from "./BirthdayInput.svelte";
   import ColorInput from "./ColorInput.svelte";
   import { onMount } from "svelte";
+  import { flip } from "svelte/animate";
   import { profile, updateProfile, type Profile } from "../profile";
   import { contacts, saveContact, getContact } from "../contacts";
   import { info, chats, selectChat } from "../stores";
@@ -130,6 +131,54 @@
   }
   function makeFavourite(g: string) { if (draft) draft = { ...draft, games: [g, ...(draft.games ?? []).filter((x) => x !== g)] }; }
   let showAllGames = $state(false);
+  // ---- Favourite games: hold a poster and drag it to change the order (the
+  // first one is the favourite). Mouse: drag at once; touch: hold first, so
+  // scrolling the editor still works. ----
+  let gDrag = $state<{ g: string; id: number } | null>(null);
+  let gHold: ReturnType<typeof setTimeout> | null = null;
+  let gStart: { x: number; y: number; id: number; g: string } | null = null;
+  function gameDown(e: PointerEvent, g: string) {
+    if (e.button !== 0 || (e.target as HTMLElement).closest("button")) return;
+    gStart = { x: e.clientX, y: e.clientY, id: e.pointerId, g };
+    // Kept now: after the hold's timeout `currentTarget` is null, the capture
+    // wasn't set, and a finger released elsewhere left the drag stuck.
+    const el = e.currentTarget as HTMLElement | null;
+    const begin = () => {
+      gHold = null;
+      gDrag = { g, id: e.pointerId };
+      try { el?.setPointerCapture?.(e.pointerId); } catch { /* gone */ }
+      try { navigator.vibrate?.(10); } catch { /* none */ }
+    };
+    if (e.pointerType === "mouse") begin();
+    else gHold = setTimeout(begin, 260);
+  }
+  function gameMove(e: PointerEvent) {
+    if (gHold && gStart && Math.hypot(e.clientX - gStart.x, e.clientY - gStart.y) > 8) { clearTimeout(gHold); gHold = null; gStart = null; }
+    if (!gDrag || e.pointerId !== gDrag.id || !draft) return;
+    const over = (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)?.closest<HTMLElement>("[data-game]")?.dataset.game;
+    const list = draft.games ?? [];
+    if (!over || over === gDrag.g) return;
+    const from = list.indexOf(gDrag.g), to = list.indexOf(over);
+    if (from < 0 || to < 0) return;
+    const next = list.filter((x) => x !== gDrag!.g);
+    next.splice(to, 0, gDrag.g);
+    draft = { ...draft, games: next };
+  }
+  function gameUp() {
+    if (gHold) { clearTimeout(gHold); gHold = null; }
+    gStart = null;
+    gDrag = null;
+  }
+  /** While a poster is dragged on a phone the page mustn't scroll; a release
+   *  anywhere ends the drag. */
+  function noScrollWhileDragging(node: HTMLElement) {
+    const h = (e: TouchEvent) => { if (gDrag) e.preventDefault(); };
+    const end = () => { if (gDrag || gHold) gameUp(); };
+    node.addEventListener("touchmove", h, { passive: false });
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+    return { destroy: () => { node.removeEventListener("touchmove", h); window.removeEventListener("pointerup", end); window.removeEventListener("pointercancel", end); } };
+  }
   function removeGame(g: string) { if (draft) { const ids = { ...(draft.game_ids ?? {}) }; delete ids[g]; draft = { ...draft, games: (draft.games ?? []).filter((x) => x !== g), game_ids: ids }; } }
   // Look up icons for whatever is on screen.
   $effect(() => {
@@ -369,6 +418,11 @@
     if (!avatarPages.length) return;
     const at = Math.max(0, avatarPages.indexOf(shownAvatar));
     openGallery(avatarPages.map((u) => ({ url: u, kind: isVideoUrl(u) ? "video" as const : "image" as const, name: view?.display_name, from: view?.display_name })), at);
+  }
+  function openBanners() {
+    const list = bannerPages.length ? bannerPages : shownBanner ? [shownBanner] : [];
+    if (!list.length) return;
+    openGallery(list.map((u) => ({ url: u, kind: isVideoUrl(u) ? "video" as const : "image" as const, name: view?.display_name, from: view?.display_name })), Math.max(0, list.indexOf(shownBanner)));
   }
   let bannerA = $derived((editing && isMe && draft) ? draft.banner_a : (view?.banner_a ?? "#4F7AFE"));
   let bannerB = $derived((editing && isMe && draft) ? draft.banner_b : (view?.banner_b ?? "#9B6CFF"));
@@ -634,7 +688,10 @@
         {/if}
       {/if}
       <div class="scroll">
-      <div class="banner" style:background={bannerBg}>
+      <!-- Tap the banner (not its buttons): every banner full screen. -->
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+      <div class="banner" class:zoom={!editing && !!shownBanner} style:background={bannerBg}
+        onclick={(e) => { if (!editing && shownBanner && !(e.target as HTMLElement).closest("button")) openBanners(); }}>
         {#if shownBanner && isVideoUrl(shownBanner)}
           <!-- Animated banner: silent short loop. -->
           <video class="banner-vid" use:streamSrc={shownBanner} muted loop autoplay playsinline></video>
@@ -839,11 +896,13 @@
           <div class="field">
             <span>{$t("Favourite games")}</span>
             {#if (draft.games ?? []).length}
-              <div class="ed-games">
+              <div class="ed-games" use:noScrollWhileDragging>
                 {#each draft.games ?? [] as g (g)}
                   {@const cv = coverFor(g, $gameIds, $gameCovers, draft.game_ids)}
                   {@const ic = iconFor(g, $gameIds, $gameIcons, draft.game_ids)}
-                  <div class="ed-game" class:first={g === draft.games?.[0]}>
+                  <!-- svelte-ignore a11y_no_static_element_interactions -->
+                  <div class="ed-game" class:first={g === draft.games?.[0]} class:dragging={gDrag?.g === g} data-game={g} animate:flip={{ duration: 180 }}
+                    onpointerdown={(e) => gameDown(e, g)} onpointermove={gameMove} onpointerup={gameUp} onpointercancel={gameUp} oncontextmenu={(e) => e.preventDefault()}>
                     <GamePoster name={g} cover={cv} icon={ic} />
                     {#if g !== draft.games?.[0]}<button class="eg-star" onclick={() => makeFavourite(g)} title={$t("Make it my favourite game")} aria-label={$t("Make it my favourite game")}>★</button>{:else}<span class="eg-first">★ {$t("Favourite")}</span>{/if}
                     <button class="eg-x" onclick={() => removeGame(g)} title={$t("Remove")} aria-label={$t("Remove")}>×</button>
@@ -933,8 +992,7 @@
         <div class="pf-left">
           {#if isMe}
           <h2 class="name">
-            {view.display_name}{#if !isMe && $peerCards[activeUsername]?.verified}<OfficialMark size={22} />{/if}{#if isMe ? $profile.star : $peerCards[activeUsername]?.star != null}<StarMark kind={(isMe ? $profile.star?.kind : $peerCards[activeUsername]?.star) ?? 0} size={22} />{/if}<EmojiStatus token={view.estatus} size={24} zoom />
-            {#if view.verified}<span class="badge" title={$t("Verified identity")}>{@html icons.verified}</span>{/if}
+            {view.display_name}{#if $peerCards[isMe ? ($info?.username ?? "") : activeUsername]?.verified}<OfficialMark size={22} />{/if}{#if isMe ? $profile.star : $peerCards[activeUsername]?.star != null}<StarMark kind={(isMe ? $profile.star?.kind : $peerCards[activeUsername]?.star) ?? 0} size={22} />{/if}<EmojiStatus token={view.estatus} size={24} zoom />
             {#if view.is_bot}<span class="bot-tag">BOT</span>{/if}
 
             {#if $clans[isMe ? ($info?.username ?? "") : activeUsername]}<ClanTag tag={$clans[isMe ? ($info?.username ?? "") : activeUsername]} size="md" />{/if}
@@ -1035,7 +1093,6 @@
                top of it: banner, badges, server tag, stories, the board. -->
           <h2 class="name tg-name">
             {view.display_name}{#if $peerCards[activeUsername]?.verified}<OfficialMark size={22} />{/if}{#if $peerCards[activeUsername]?.star != null}<StarMark kind={$peerCards[activeUsername]?.star ?? 0} size={22} />{/if}<EmojiStatus token={view.estatus} size={24} zoom />
-            {#if view.verified}<span class="badge" title={$t("Verified identity")}>{@html icons.verified}</span>{/if}
             {#if view.is_bot}<span class="bot-tag">BOT</span>{/if}
             {#if $clans[activeUsername]}<ClanTag tag={$clans[activeUsername]} size="md" />{/if}
           </h2>
@@ -1375,7 +1432,8 @@
     display: flex; flex-direction: column; scrollbar-width: thin; }
   .ed-right .buttons { margin-top: auto; padding-top: 16px; }
   .ed-games { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 8px; margin: 2px 0 8px; }
-  .ed-game { position: relative; animation: fade-in .2s ease-out; }
+  .ed-game { position: relative; animation: fade-in .2s ease-out; cursor: grab; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+  .ed-game.dragging { cursor: grabbing; transform: scale(1.06); opacity: .85; z-index: 2; }
   .ed-game.first :global(.gp) { box-shadow: 0 0 0 2px #FFD45C; }
   .eg-star { position: absolute; top: 4px; left: 4px; width: 20px; height: 20px; border-radius: 50%; border: none; cursor: pointer;
     background: rgba(0,0,0,.6); color: #FFD45C; font-size: 12px; line-height: 1; opacity: 0; transition: opacity .15s; }
@@ -1565,6 +1623,7 @@
   }
 
   /* A bigger banner (was 120 px). */
+  .banner.zoom { cursor: zoom-in; }
   .banner {
     height: 180px;
     position: relative;
@@ -1727,7 +1786,6 @@
   }
   /* The emoji sits right after the name (its own 4px margin + the gap was a hole). */
   .name :global(.es) { margin-left: -2px; }
-  .badge :global(svg) { width: 16px; height: 16px; color: var(--accent); filter: drop-shadow(0 0 4px var(--accent-glow)); }
   .username {
     font-family: var(--font-mono);
     font-size: 12.5px;
