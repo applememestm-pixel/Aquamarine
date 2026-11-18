@@ -1581,6 +1581,8 @@
   const toldKeyOk = new Set<string>();
   $effect(() => {
     const pk = peerKey;
+    // Once a run per opened chat: whether they got our mark we can't tell
+    // (our sun being whole only says we got theirs).
     if (!pk?.hex || keyCheck !== "verified" || toldKeyOk.has(pk.id + pk.hex)) return;
     toldKeyOk.add(pk.id + pk.hex);
     sendKeyOk(pk.id, pk.hex, true);

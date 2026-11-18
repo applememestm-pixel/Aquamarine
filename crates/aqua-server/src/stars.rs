@@ -556,22 +556,23 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
 
 /// Give `name` the star of level `lvl` (0: take it away), by hand.
 async fn set_level(state: &AppState, owner: &str, name: &str, lvl: Result<u8, &'static str>, time: Option<&str>) {
-    let lvl = match lvl {
-        Ok(l) => l,
-        Err(e) => return say(state, owner, e).await,
-    };
-    let dur = match time {
+    let msg = match apply_level(state, name, lvl, time) { Ok(m) | Err(m) => m };
+    say(state, owner, &msg).await;
+}
+
+/// Give `name` the star of level `lvl` (0: take it away), by hand: what
+/// happened, in words (the bot's command and the mini app's owner panel).
+pub(crate) fn apply_level(state: &AppState, name: &str, lvl: Result<u8, &'static str>, time: Option<&str>) -> Result<String, String> {
+    let lvl = lvl.map_err(str::to_string)?;
+    let dur = match time.map(str::trim).filter(|w| !w.is_empty()) {
         None => None,
-        Some(w) => match parse_for(w) {
-            Some(d) => Some(d),
-            None => return say(state, owner, "For how long: 12h, 30d, 2w, 3m (months), 1y.").await,
-        },
+        Some(w) => Some(parse_for(w).ok_or("For how long: 12h, 30d, 2w, 3m (months), 1y.")?),
     };
-    if name.is_empty() {
-        return say(state, owner, "Who? /<name> level <0-6>").await;
+    if name.trim().is_empty() {
+        return Err("Who? /<name> level <0-6>".into());
     }
     let Some((uid, who)) = resolve(state, name) else {
-        return say(state, owner, &format!("I don't know @{name}: not on this server or in the name registry of the servers it knows. Its account ID works too: /<ID> level N.")).await;
+        return Err(format!("I don't know @{}: not on this server or in the name registry of the servers it knows. Its account ID works too: /<ID> level N.", name.trim().trim_start_matches('@')));
     };
     let name = who.as_str();
     if lvl == 0 {
@@ -580,7 +581,7 @@ async fn set_level(state: &AppState, owner: &str, name: &str, lvl: Result<u8, &'
             save(m);
             had
         });
-        return say(state, owner, &if had { format!("{name} has no star now (other people stop seeing it within about 15 minutes).") } else { format!("{name} had no star.") }).await;
+        return Ok(if had { format!("{name} has no star now (other people stop seeing it within about 15 minutes).") } else { format!("{name} had no star.") });
     }
     let until = dur.map(|d| now() + d);
     with_stars(|m| {
@@ -588,7 +589,7 @@ async fn set_level(state: &AppState, owner: &str, name: &str, lvl: Result<u8, &'
         save(m);
     });
     let tail = until.map(|u| format!(" for {} (until {})", left(u, now()), fmt_date(u))).unwrap_or_default();
-    say(state, owner, &format!("{name} now has the {} star{tail}.", kind_name(lvl))).await;
+    Ok(format!("{name} now has the {} star{tail}.", kind_name(lvl)))
 }
 
 /// An account by @name (this relay's, or any relay's from the name registry)
@@ -1173,6 +1174,16 @@ pub mod app {
         init: String,
         #[serde(default)]
         q: String,
+        /// The owner panel: a level to give (0 — take away), for how long
+        /// ("30d"; empty — for good), a link request's account and the answer.
+        #[serde(default)]
+        level: Option<u8>,
+        #[serde(default)]
+        time: String,
+        #[serde(default)]
+        uid: String,
+        #[serde(default)]
+        yes: bool,
     }
 
     type Res = Result<Json<serde_json::Value>, (StatusCode, String)>;
@@ -1268,6 +1279,49 @@ pub mod app {
             say_kb(&state, &owner, &text, row.clone()).await;
         }
         Ok(Json(serde_json::json!({ "ok": true, "name": sub.name })))
+    }
+
+    /// The owner only (the e-mail / ID check of verify.rs).
+    fn owner(state: &AppState, b: &Body) -> Result<String, (StatusCode, String)> {
+        let (me, _) = who(state, b)?;
+        if !crate::verify::is_owner(state, &me) {
+            return Err((StatusCode::FORBIDDEN, "owner-only".into()));
+        }
+        Ok(me)
+    }
+
+    /// `POST /v1/stars-app/admin` — the owner's panel: who has a star, the
+    /// Boosty link requests, how Boosty is doing.
+    pub async fn admin(State(state): State<AppState>, Json(b): Json<Body>) -> Res {
+        owner(&state, &b)?;
+        let t = now();
+        let stars: Vec<serde_json::Value> = with_stars(|m| m.iter().filter(|(_, s)| s.live(t)).map(|(uid, s)| (uid.clone(), s.clone())).collect::<Vec<_>>())
+            .into_iter()
+            .map(|(uid, s)| serde_json::json!({
+                "uid": uid, "name": state.directory.name_anywhere(&uid), "level": s.kind, "source": s.source, "until": s.until, "at": s.at,
+            }))
+            .collect();
+        let links: Vec<serde_json::Value> = with_links(|m| m.iter().map(|(uid, l)| serde_json::json!({
+            "uid": uid, "name": state.directory.username_by_uid(uid), "boosty": l.name, "id": l.boosty_id, "ok": l.ok, "at": l.at,
+        })).collect());
+        Ok(Json(serde_json::json!({ "stars": stars, "links": links, "boosty": super::boosty::status(), "now": t })))
+    }
+
+    /// `POST /v1/stars-app/set {q, level, time}` — give / take a star.
+    pub async fn set(State(state): State<AppState>, Json(b): Json<Body>) -> Res {
+        owner(&state, &b)?;
+        let lvl = match b.level { Some(l) if l <= OWNER_LEVEL => Ok(l), _ => Err("The level: 1–5 (donations) or 6 (yours); 0 takes the star away.") };
+        match apply_level(&state, &b.q, lvl, Some(b.time.as_str())) {
+            Ok(m) => Ok(Json(serde_json::json!({ "ok": true, "msg": m }))),
+            Err(m) => Err((StatusCode::BAD_REQUEST, m)),
+        }
+    }
+
+    /// `POST /v1/stars-app/decide {uid, yes}` — answer a Boosty link request.
+    pub async fn decide_app(State(state): State<AppState>, Json(b): Json<Body>) -> Res {
+        let me = owner(&state, &b)?;
+        decide(&state, &me, b.uid.trim(), b.yes).await;
+        Ok(Json(serde_json::json!({ "ok": true })))
     }
 
     /// `POST /v1/stars-app/unlink`.

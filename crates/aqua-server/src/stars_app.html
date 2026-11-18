@@ -32,6 +32,20 @@
   .msg.bad { color: var(--bad); }
   a { color: var(--acc); }
   .hidden { display: none !important; }
+  h3.sub { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 16px 0 8px; font-weight: 600; }
+  .lv { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-top: 10px; }
+  .lv button, .durs button { margin: 0; padding: 8px 0; background: var(--bg); color: var(--fg); border: 1px solid var(--line); font-weight: 600; display: grid; place-items: center; }
+  .lv button svg { width: 22px; height: 22px; }
+  .lv button.on, .durs button.on { border-color: var(--acc); box-shadow: 0 0 0 1px var(--acc) inset; }
+  .durs { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-top: 8px; }
+  .durs button { font-size: 13px; }
+  .row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
+  .row:first-child { border-top: none; }
+  .row svg { width: 22px; height: 22px; flex-shrink: 0; }
+  .row .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .nm small { display: block; color: var(--dim); font-size: 12px; }
+  .row button { width: auto; margin: 0; padding: 7px 10px; font-size: 13px; }
+  .row button.ghost { color: var(--fg); }
 </style>
 </head>
 <body>
@@ -69,6 +83,24 @@
     <div class="msg" id="msg"></div>
   </div>
 
+  <!-- The owner only (stars.rs app::admin / set / decide). -->
+  <div class="card hidden" id="own">
+    <h2 id="ownH"></h2>
+    <div class="give">
+      <input id="gName" autocomplete="off" spellcheck="false">
+      <div class="lv" id="gLv"></div>
+      <div class="durs" id="gDur"></div>
+      <button id="gGo"></button>
+      <div class="msg" id="gMsg"></div>
+    </div>
+    <h3 id="reqH" class="sub hidden"></h3>
+    <div id="reqs"></div>
+    <h3 id="whoH" class="sub"></h3>
+    <input id="whoQ" autocomplete="off" spellcheck="false">
+    <div id="who"></div>
+    <div class="dim" id="bst" style="margin-top:10px"></div>
+  </div>
+
   <div class="dim" id="foot" style="text-align:center"></div>
 </main>
 <script>
@@ -83,6 +115,9 @@
     ph: "Имя или ID на Boosty", go: "Привязать", un: "Отвязать", waiting: n => `Ждёт подтверждения владельца: «${n}».`, linked: n => `Привязан Boosty «${n}».`,
     sent: "Запрос отправлен владельцу.", e: { "not-found": "Среди подписчиков такого нет. Проверьте имя или впишите ID.", many: "Таких имён несколько — впишите ID.", taken: "Этот Boosty уже привязан к другому аккаунту.", "boosty-off": "Boosty на сервере не подключён.", "not-synced": "Сервер ещё не получил список подписчиков — попробуйте через пару минут.", empty: "Впишите имя или ID.", any: "Не получилось. Закройте и откройте снова." },
     off: "Boosty на этом сервере не подключён: уровни 1–5 пока выдаёт только владелец.", noSub: "Активной подписки не нашли.", blog: "Поддержать на Boosty",
+    ownH: "Владелец", gName: "@ник или ID", give: "Выдать", take: "Снять звезду", forever: "навсегда", reqH: "Запросы привязки Boosty", whoH: "У кого звезда", find: "Поиск",
+    yes: "Привязать", no: "Отклонить", nobody: "Пока ни у кого нет звезды.", boostyOn: n => `Boosty: подключён, подписчиков ${n}.`, boostyErr: e => `Boosty: ошибка — ${e}`, boostyNo: "Boosty не подключён (Aquamarine Server → Доступ → Звёзды).",
+    lvlShort: n => n === 6 ? "6 · владелец" : `ур. ${n}`, src: s => (s === "boosty" ? "Boosty" : "вручную"), pick: "Выберите уровень.",
   } : {
     title: "CeZeOs star", none: "No star yet", lvl: n => `Level ${n}`, own: "Level 6 — from the owner",
     byBoosty: "for a Boosty subscription", byHand: "given by hand", until: d => `until ${d}`,
@@ -92,6 +127,9 @@
     ph: "Boosty name or ID", go: "Link", un: "Unlink", waiting: n => `Waiting for the owner: “${n}”.`, linked: n => `Boosty “${n}” is linked.`,
     sent: "Sent to the owner.", e: { "not-found": "No such subscriber. Check the name or type the ID.", many: "Several have that name — type the ID.", taken: "That Boosty account is linked to someone else.", "boosty-off": "Boosty isn't connected on this server.", "not-synced": "The server hasn't got the subscriber list yet — try in a couple of minutes.", empty: "Type a name or ID.", any: "That didn't work. Close and open it again." },
     off: "Boosty isn't connected on this server: levels 1–5 come from the owner for now.", noSub: "No active subscription found.", blog: "Support on Boosty",
+    ownH: "Owner", gName: "@name or ID", give: "Give", take: "Take the star away", forever: "for good", reqH: "Boosty link requests", whoH: "Who has a star", find: "Search",
+    yes: "Link", no: "Decline", nobody: "Nobody has a star yet.", boostyOn: n => `Boosty: connected, ${n} subscribers.`, boostyErr: e => `Boosty: error — ${e}`, boostyNo: "Boosty isn't connected (Aquamarine Server → Access → Stars).",
+    lvlShort: n => n === 6 ? "6 · owner" : `lvl ${n}`, src: s => (s === "boosty" ? "Boosty" : "by hand"), pick: "Pick a level.",
   };
   function plural(n, one, few, many) { const a = n % 10, b = n % 100; return a === 1 && b !== 11 ? one : a >= 2 && a <= 4 && (b < 12 || b > 14) ? few : many; }
   const COLORS = ["#C77B3A", "#B4C0CC", "#F5B417", "#2F86FF", "#A24DFF", "#189820"];
@@ -120,10 +158,18 @@
     return JSON.parse(t);
   }
 
+  // The CeZeOs sun as the app draws it (aqua-client-ui StarMark.svelte):
+  // a disc cut in eight, sixteen sharp rays of two lengths.
+  const RAYS = "M521 190L512 60L503 190ZM654 190L683 100L639 184ZM746 296L843 181L728 278ZM840 385L924 341L834 370ZM834 521L964 512L834 503ZM834 654L924 683L840 639ZM728 746L843 843L746 728ZM639 840L683 924L654 834ZM503 834L512 964L521 834ZM370 834L341 924L385 840ZM278 728L181 843L296 746ZM184 639L100 683L190 654ZM190 503L60 512L190 521ZM190 370L100 341L184 385ZM296 278L181 181L278 296ZM385 184L341 100L370 190Z";
+  const CUTS = "M512 190V834M190 512H834M284 284L740 740M740 284L284 740";
+  function sunSvg(color) {
+    return `<defs><mask id="czm"><rect width="1024" height="1024" fill="#fff"/><path stroke="#000" stroke-width="18" d="${CUTS}"/></mask></defs>`
+      + `<g fill="${color}"><circle cx="512" cy="512" r="310" mask="url(#czm)"/><path d="${RAYS}"/></g>`;
+  }
   function sun(color) {
     $("sun").innerHTML = color
-      ? `<circle cx="512" cy="512" r="310" fill="${color}"/><g stroke="${color}" stroke-width="56" stroke-linecap="round">${[0,45,90,135,180,225,270,315].map(a => `<line x1="512" y1="120" x2="512" y2="40" transform="rotate(${a} 512 512)"/>`).join("")}</g>`
-      : `<circle cx="512" cy="512" r="300" fill="none" stroke="var(--dim)" stroke-width="40" stroke-dasharray="60 50"/>`;
+      ? sunSvg(color)
+      : `<g fill="none" stroke="var(--dim)" stroke-width="22" opacity=".7"><circle cx="512" cy="512" r="300" stroke-dasharray="50 40"/><path d="${RAYS}"/></g>`;
     $("hero").style.setProperty("--g", color ? color + "88" : "transparent");
   }
 
@@ -191,9 +237,60 @@
   }
 
   async function load() {
-    try { render(await call("/me")); } catch (e) { $("title").textContent = L.title; $("sub").textContent = L.e.any; sun(null); }
+    let d = null;
+    try { d = await call("/me"); render(d); } catch (e) { $("title").textContent = L.title; $("sub").textContent = L.e.any; sun(null); }
+    $("own").classList.toggle("hidden", !(d && d.owner));
+    if (d && d.owner) void loadOwner();
     post("web_app_ready");
   }
+
+  // ---- The owner's panel: give / take stars, Boosty link requests ----
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const mini = (lv) => `<svg viewBox="0 0 1024 1024">${sunSvg(COLORS[Math.max(1, Math.min(lv, 6)) - 1])}</svg>`.replaceAll('id="czm"', `id="czm${lv}"`).replaceAll("url(#czm)", `url(#czm${lv})`);
+  let gLevel = 0, gTime = "", adminData = null;
+  const DURS = [["", () => L.forever], ["7d", () => "7d"], ["30d", () => "30d"], ["3m", () => "3m"], ["1y", () => "1y"]];
+  function paintGive() {
+    $("gLv").innerHTML = [1, 2, 3, 4, 5, 6].map(n => `<button data-lv="${n}" class="${gLevel === n ? "on" : ""}" title="${n}">${mini(n)}</button>`).join("")
+      + `<button data-lv="0" class="${gLevel === 0 ? "on" : ""}" title="${esc(L.take)}">✕</button>`;
+    $("gDur").innerHTML = DURS.map(([v, l]) => `<button data-d="${v}" class="${gTime === v ? "on" : ""}">${esc(l())}</button>`).join("");
+    $("gGo").textContent = gLevel === 0 ? L.take : L.give;
+    $("gLv").querySelectorAll("[data-lv]").forEach(b => b.onclick = () => { gLevel = +b.dataset.lv; paintGive(); });
+    $("gDur").querySelectorAll("[data-d]").forEach(b => b.onclick = () => { gTime = b.dataset.d; paintGive(); });
+  }
+  function paintOwner() {
+    const d = adminData; if (!d) return;
+    const q = ($("whoQ").value || "").trim().replace(/^@/, "").toLowerCase();
+    const list = d.stars.filter(s => !q || (s.name || "").toLowerCase().includes(q) || s.uid.includes(q)).sort((a, b) => b.level - a.level);
+    $("who").innerHTML = list.map(s => `<div class="row">${mini(s.level)}<span class="nm">${s.name ? "@" + esc(s.name) : "ID " + esc(s.uid)}<small>${esc(L.lvlShort(s.level))} · ${esc(L.src(s.source))}${s.until ? " · " + esc(L.until(date(s.until))) : ""}</small></span>
+      <button class="ghost" data-take="${esc(s.uid)}">✕</button></div>`).join("") || `<div class="dim">${esc(L.nobody)}</div>`;
+    $("who").querySelectorAll("[data-take]").forEach(b => b.onclick = async () => { b.disabled = true; try { await call("/set", { q: b.dataset.take, level: 0 }); } catch {} await loadOwner(); });
+    const waiting = d.links.filter(l => !l.ok);
+    $("reqH").classList.toggle("hidden", !waiting.length);
+    $("reqs").innerHTML = waiting.map(l => `<div class="row"><span class="nm">${l.name ? "@" + esc(l.name) : "ID " + esc(l.uid)}<small>Boosty «${esc(l.boosty)}» (${esc(l.id)})</small></span>
+      <button data-yes="${esc(l.uid)}">${esc(L.yes)}</button><button class="ghost" data-no="${esc(l.uid)}">${esc(L.no)}</button></div>`).join("");
+    $("reqs").querySelectorAll("[data-yes],[data-no]").forEach(b => b.onclick = async () => {
+      b.disabled = true;
+      try { await call("/decide", { uid: b.dataset.yes || b.dataset.no, yes: !!b.dataset.yes }); } catch {}
+      await loadOwner();
+    });
+    const bs = d.boosty || {};
+    $("bst").textContent = !bs.set ? L.boostyNo : bs.error ? L.boostyErr(bs.error) : L.boostyOn(bs.subscribers ?? "?");
+  }
+  async function loadOwner() {
+    try { adminData = await call("/admin"); paintOwner(); } catch (e) { $("bst").textContent = e.message === "owner-only" ? "" : L.e.any; }
+  }
+  $("ownH").textContent = L.ownH; $("gName").placeholder = L.gName; $("reqH").textContent = L.reqH; $("whoH").textContent = L.whoH; $("whoQ").placeholder = L.find;
+  $("whoQ").addEventListener("input", paintOwner);
+  paintGive();
+  $("gGo").onclick = async () => {
+    const q = $("gName").value.trim();
+    $("gMsg").className = "msg";
+    if (!q) { $("gMsg").textContent = L.e.empty; $("gMsg").className = "msg bad"; return; }
+    $("gGo").disabled = true;
+    try { const r = await call("/set", { q, level: gLevel, time: gLevel ? gTime : "" }); $("gMsg").textContent = r.msg; $("gName").value = ""; await loadOwner(); }
+    catch (e) { $("gMsg").textContent = e.message; $("gMsg").className = "msg bad"; }
+    finally { $("gGo").disabled = false; }
+  };
 
   $("go").onclick = async () => {
     const q = $("q").value.trim();

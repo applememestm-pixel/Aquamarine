@@ -290,16 +290,20 @@
   /** The newest photo, on the gallery button. */
   let galThumb = $state("");
   const galName = (id: string) => (id === "" ? tr("All media") : id === "*video" ? tr("All videos") : galAlbums.find((a) => a.id === id)?.name || tr("Album"));
+  let galAsked = 0;
   async function galLoad(limit = 120) {
+    const mine = ++galAsked;
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       const r = await invoke<{ granted: boolean; items: GalItem[] }>("gallery_recent", { limit, bucket: galAlbum });
+      // An older album's answer arriving late doesn't overwrite the new one.
+      if (mine !== galAsked) return;
       galState = r.granted ? "ok" : "denied";
       galItems = r.items ?? [];
       if (!galAlbum && galItems[0]?.thumb) galThumb = galItems[0].thumb;
     } catch { galState = "none"; galItems = []; }
   }
-  $effect(() => { if ($pending?.gallery) { galThumb = ""; galAlbum = ""; void galLoad(1); } });
+  $effect(() => { if ($pending?.gallery) { galThumb = ""; galAlbum = ""; galItems = []; void galLoad(1); } });
   async function galShow() {
     if (recording || busy) return;
     // No phone gallery here (desktop): the system picker.

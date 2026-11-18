@@ -140,10 +140,13 @@
   function gameDown(e: PointerEvent, g: string) {
     if (e.button !== 0 || (e.target as HTMLElement).closest("button")) return;
     gStart = { x: e.clientX, y: e.clientY, id: e.pointerId, g };
+    // Kept now: after the hold's timeout `currentTarget` is null, the capture
+    // wasn't set, and a finger released elsewhere left the drag stuck.
+    const el = e.currentTarget as HTMLElement | null;
     const begin = () => {
       gHold = null;
       gDrag = { g, id: e.pointerId };
-      try { (e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId); } catch { /* gone */ }
+      try { el?.setPointerCapture?.(e.pointerId); } catch { /* gone */ }
       try { navigator.vibrate?.(10); } catch { /* none */ }
     };
     if (e.pointerType === "mouse") begin();
@@ -166,11 +169,15 @@
     gStart = null;
     gDrag = null;
   }
-  /** While a poster is dragged on a phone the page mustn't scroll. */
+  /** While a poster is dragged on a phone the page mustn't scroll; a release
+   *  anywhere ends the drag. */
   function noScrollWhileDragging(node: HTMLElement) {
     const h = (e: TouchEvent) => { if (gDrag) e.preventDefault(); };
+    const end = () => { if (gDrag || gHold) gameUp(); };
     node.addEventListener("touchmove", h, { passive: false });
-    return { destroy: () => node.removeEventListener("touchmove", h) };
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+    return { destroy: () => { node.removeEventListener("touchmove", h); window.removeEventListener("pointerup", end); window.removeEventListener("pointercancel", end); } };
   }
   function removeGame(g: string) { if (draft) { const ids = { ...(draft.game_ids ?? {}) }; delete ids[g]; draft = { ...draft, games: (draft.games ?? []).filter((x) => x !== g), game_ids: ids }; } }
   // Look up icons for whatever is on screen.
