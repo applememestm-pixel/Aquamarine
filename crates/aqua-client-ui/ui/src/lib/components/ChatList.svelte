@@ -636,8 +636,8 @@
   // and must not close the peek they opened.
   let peekAt = 0;
   const peekSettled = () => Date.now() - peekAt > 650;
-  function closePeek() { peek = null; }
-  function dismissPeek() { if (peekSettled()) peek = null; }
+  function closePeek() { peek = null; peekGroups = false; }
+  function dismissPeek() { if (peekSettled()) { peek = null; peekGroups = false; } }
   // Opening from the peek: the card grows to the whole window first
   // (Telegram), then the chat is there.
   let peekGrow = $state(false);
@@ -651,6 +651,8 @@
     setTimeout(() => { peek = null; peekGrow = false; }, 240);
   }
   let peekFolders = $state(false);
+  /** The peek menu's "Add to a group…" list (phones have no right-click menu). */
+  let peekGroups = $state(false);
   // Opening a chat takes its "unread" mark off.
   $effect(() => { const id = $activeId; if (id && $markedUnread.has(id)) setMarkedUnread(id, false); });
   let peekScroll = $state<HTMLElement | null>(null);
@@ -1622,9 +1624,17 @@
             {/each}
             <button onclick={() => { peekFolders = false; closePeek(); openFolderManager(); }}>{$t("New folder…")}</button>
             <button onclick={() => (peekFolders = false)}>‹ {$t("Back")}</button>
+          {:else if peekGroups}
+            {#each $chatGroups as cg (cg.id)}
+              <button onclick={() => { if (groupByChat.get(pid)?.id === cg.id) removeFromGroup(pid); else { addToGroup(cg.id, pid); showToast(tr("Added to “{name}”", { name: cg.name })); } peekGroups = false; closePeek(); }}>{groupByChat.get(pid)?.id === cg.id ? "✓ " : ""}{cg.emoji ?? "▣"} {cg.name}</button>
+            {/each}
+            <button onclick={() => { const id = pid; peekGroups = false; closePeek(); newGroupFor(id); }}>＋ {$t("New group…")}</button>
+            <button onclick={() => (peekGroups = false)}>‹ {$t("Back")}</button>
           {:else}
           <button onclick={openFromPeek}>{$t("Open")}</button>
           <button onclick={() => { if ($allFolders.length) peekFolders = true; else { closePeek(); openFolderManager(); } }}>{$t("Add to folder")}</button>
+          {#if groupByChat.get(pid)}<button onclick={() => { removeFromGroup(pid); closePeek(); }}>{$t("Remove from the group")}</button>
+          {:else}<button onclick={() => { if ($chatGroups.length) peekGroups = true; else { const id = pid; closePeek(); newGroupFor(id); } }}>{$t("Add to a group…")}</button>{/if}
           {#if (pc?.unread ?? 0) > 0 || $markedUnread.has(pid)}<button onclick={() => { markRead(pid); setMarkedUnread(pid, false); closePeek(); }}>{$t("Mark as read")}</button>
           {:else}<button onclick={() => { setMarkedUnread(pid, true); closePeek(); }}>{$t("Mark as unread")}</button>{/if}
           <button onclick={() => { pinChat(pid); closePeek(); }}>{$t($pinnedChats.includes(pid) ? "Unpin" : "Pin to top")}</button>

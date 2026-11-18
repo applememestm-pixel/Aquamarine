@@ -205,6 +205,11 @@ window.__TAURI_INTERNALS__ = {
     await ph.locator('.ctx-item').filter({ hasText: /Ветка|Thread|Комментарии/ }).first().click({ force: true, timeout: 5000 }).catch(() => {});
     await ph.waitForTimeout(700);
     await ph.screenshot({ path: path.join(out, '13e-phone-thread.jpg'), type: 'jpeg', quality: 80 });
+    // The folder editor: a screen of its own, cards not squeezed.
+    for (let i = 0; i < 3; i++) { await ph.evaluate(() => window.__aquaBack && window.__aquaBack()); await ph.waitForTimeout(400); }
+    await ph.locator('.folder-edit >> visible=true').first().tap({ force: true }); await ph.waitForTimeout(700);
+    await ph.locator('.fm-add >> visible=true').first().tap({ force: true }); await ph.waitForTimeout(800);
+    await ph.screenshot({ path: path.join(out, '13f-phone-folder.jpg'), type: 'jpeg', quality: 80 });
   } catch (e) { errs.push('phone2: ' + e.message.split('\n')[0]); }
   console.log(errs.join('\n') || 'no errors');
   for (const f of fs.readdirSync(out).filter((f) => f.endsWith('.jpg')).sort()) {
