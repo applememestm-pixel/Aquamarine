@@ -1,0 +1,35 @@
+{
+ "sticker": [
+  "assets/packs/ThatsLife7/0.webp",
+  "assets/packs/ThatsLife7/1.webp",
+  "assets/packs/ThatsLife7/2.webp",
+  "assets/packs/ThatsLife7/3.webp",
+  "assets/packs/ThatsLife7/4.webp",
+  "assets/packs/ThatsLife7/5.webp",
+  "assets/packs/ThatsLife7/6.webp",
+  "assets/packs/ThatsLife7/7.webp"
+ ],
+ "emoji": [
+  "assets/packs/eltaller47/0.webp",
+  "assets/packs/eltaller47/1.webp",
+  "assets/packs/eltaller47/2.webp",
+  "assets/packs/eltaller47/3.webp",
+  "assets/packs/eltaller47/4.webp",
+  "assets/packs/eltaller47/5.webp",
+  "assets/packs/eltaller47/6.webp"
+ ],
+ "packs": [
+  {
+   "name": "ThatsLife7",
+   "title": "That's life // @VPST2k25",
+   "kind": "sticker",
+   "count": 8
+  },
+  {
+   "name": "eltaller47",
+   "title": "eltaller47",
+   "kind": "emoji",
+   "count": 7
+  }
+ ]
+}
