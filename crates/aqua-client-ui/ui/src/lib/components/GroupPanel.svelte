@@ -610,13 +610,13 @@
 }} />
 
 {#if $groupPanelId && group}
-  <div class="backdrop" role="button" tabindex="-1"
+  <div class="backdrop" class:phone-manage={IS_MOBILE && page === "manage"} role="button" tabindex="-1"
        onclick={(e) => { if ((e.target as HTMLElement).classList.contains('backdrop')) closeGroupPanel(); }}
        onkeydown={() => {}}>
-    <div class="sheet" class:phone-manage={IS_MOBILE && page === "manage"} role="dialog" aria-modal="true" aria-label="{noun} info">
+    <div class="sheet" role="dialog" aria-modal="true" aria-label="{noun} info">
       <div class="bar">
         {#if page !== "info"}
-          <button class="ib" onclick={back} aria-label={$t("Back")}>{@html I.back}</button>
+          <button data-back class="ib" onclick={back} aria-label={$t("Back")}>{@html I.back}</button>
           <span class="bar-t">{$t(PAGE_TITLE[page])}</span>
         {:else}
           <span class="bar-t">{$t(isChannel ? "Channel info" : "Group info")}</span>
@@ -1241,7 +1241,12 @@
   .ib:hover { background: var(--bg-hover); color: var(--fg); }
   .body { flex: 1; overflow-y: auto; padding: 12px 14px 18px; }
 
-  .phone-manage { width: 100%; height: 100%; border: 0; border-radius: 0; }
+  .backdrop.phone-manage { padding: 0; }
+  .phone-manage .sheet {
+    width: 100%; height: 100%; min-height: 0; box-sizing: border-box; border: 0; border-radius: 0;
+    padding: var(--sat, env(safe-area-inset-top, 0px)) var(--sar, env(safe-area-inset-right, 0px))
+      var(--sab, env(safe-area-inset-bottom, 0px)) var(--sal, env(safe-area-inset-left, 0px));
+  }
   .phone-manage .bar { padding: 8px 12px; }
   .phone-manage .ib { width: 42px; height: 42px; }
   .phone-manage .card { margin-bottom: 14px; border-radius: calc(18px * var(--rk, 1)); }

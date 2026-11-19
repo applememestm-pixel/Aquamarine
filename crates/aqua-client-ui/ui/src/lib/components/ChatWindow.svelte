@@ -446,10 +446,21 @@
   let streamTapped = $state<string[]>([]);
   $effect(() => { const id = $activeChat?.id ?? ""; if (id !== streamChat) { streamChat = id; streamUrls = {}; streamTapped = []; } });
 
-  async function autoDownload(peerId: string, messageId: string) {
+  const loadingInlineMedia = new SvelteSet<string>();
+  async function loadInlineMedia(peerId: string, messageId: string) {
+    if (untrack(() => loadingInlineMedia.has(messageId))) return;
+    loadingInlineMedia.add(messageId);
     try {
       await api.downloadFile(peerId, messageId);
-      await loadActiveMessages();
+      if ($activeChat?.id === peerId) await loadActiveMessages();
+    } finally {
+      loadingInlineMedia.delete(messageId);
+    }
+  }
+
+  async function autoDownload(peerId: string, messageId: string) {
+    try {
+      await loadInlineMedia(peerId, messageId);
     } catch (e) {
       // Non-fatal — user can still click "Download & decrypt".
       console.warn("auto-download failed", messageId, e);
@@ -457,20 +468,15 @@
   }
 
   const failedPhotos = new SvelteSet<string>();
-  const loadingPhotos = new SvelteSet<string>();
   function photoKey(id: string, url: string | null) { return `${id}:${url ?? ""}`; }
   async function retryPhoto(id: string, url: string | null) {
     const chat = $activeChat;
-    if (!chat || loadingPhotos.has(id)) return;
-    loadingPhotos.add(id);
+    if (!chat || loadingInlineMedia.has(id)) return;
     try {
-      await api.downloadFile(chat.id, id);
-      if ($activeChat?.id === chat.id) await loadActiveMessages();
+      await loadInlineMedia(chat.id, id);
       failedPhotos.delete(photoKey(id, url));
     } catch {
       showToast(tr("Photo unavailable"));
-    } finally {
-      loadingPhotos.delete(id);
     }
   }
 
@@ -4140,9 +4146,9 @@
       {#if cid.startsWith("local-")}
         <div class="missing-photo" class:alb-cell={albumCell}>{$t("Photo unavailable")}</div>
       {:else}
-        <button class="missing-photo" class:alb-cell={albumCell} disabled={loadingPhotos.has(id)} onclick={() => retryPhoto(id, url)}>
+        <button class="missing-photo" class:alb-cell={albumCell} disabled={loadingInlineMedia.has(id)} onclick={() => retryPhoto(id, url)}>
           {@html icons.download}
-          <span>{$t(loadingPhotos.has(id) ? "Downloading…" : "Download photo")}</span>
+          <span>{$t(loadingInlineMedia.has(id) ? "Downloading…" : "Download photo")}</span>
         </button>
       {/if}
     {/snippet}
