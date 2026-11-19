@@ -2018,7 +2018,7 @@ async fn attach_file_fwd(
     // Saved Messages — local-only. Build a File message DIRECTLY (not
     // by round-tripping through the file-offer text format, which needs
     // a real key/nonce and would otherwise fall through to a raw text
-    // bubble). `saved_at` points at the source file so the UI renders
+    // bubble). `saved_at` points at the stored copy so the UI renders
     // the image/audio/video inline immediately. No encryption, no
     // server round-trip.
     if peer_id == crate::state::SAVED_MESSAGES_ID {
@@ -2034,16 +2034,18 @@ async fn attach_file_fwd(
         let saved_path = {
             let data_dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.clone() };
             let media_dir = data_dir.join("saved-media");
-            std::fs::create_dir_all(&media_dir).ok();
             if crate::media::path_is_within(&media_dir, &path) {
-                // Already in our media dir (voice/circle/edited) — reuse.
                 file_path.clone()
             } else {
-                let dest = pick_unique_path(&media_dir, &filename);
-                match std::fs::copy(&path, &dest) {
-                    Ok(_) => dest.display().to_string(),
-                    Err(_) => file_path.clone(), // fall back to original path
+                let dir = media_dir.join(&fake_cid);
+                std::fs::create_dir_all(&dir).map_err(|e| format!("create saved media directory: {e}"))?;
+                let dest = dir.join(sanitize_name(&filename));
+                if let Err(e) = std::fs::write(&dest, &bytes) {
+                    let _ = std::fs::remove_file(&dest);
+                    let _ = std::fs::remove_dir(&dir);
+                    return Err(format!("store saved media: {e}"));
                 }
+                dest.display().to_string()
             }
         };
         let msg = ChatMessage {

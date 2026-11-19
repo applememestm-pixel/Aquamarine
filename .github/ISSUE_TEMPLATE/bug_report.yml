@@ -26,7 +26,7 @@ body:
     id: version
     attributes:
       label: Версия клиента и ретранслятора
-      placeholder: "клиент 1.21.0-17, ретранслятор 1.21.0-17"
+      placeholder: "клиент 1.21.0-19, ретранслятор 1.21.0-19"
     validations:
       required: true
   - type: dropdown

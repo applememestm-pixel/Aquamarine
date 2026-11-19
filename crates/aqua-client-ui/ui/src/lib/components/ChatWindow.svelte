@@ -456,6 +456,24 @@
     }
   }
 
+  const failedPhotos = new SvelteSet<string>();
+  const loadingPhotos = new SvelteSet<string>();
+  function photoKey(id: string, url: string | null) { return `${id}:${url ?? ""}`; }
+  async function retryPhoto(id: string, url: string | null) {
+    const chat = $activeChat;
+    if (!chat || loadingPhotos.has(id)) return;
+    loadingPhotos.add(id);
+    try {
+      await api.downloadFile(chat.id, id);
+      if ($activeChat?.id === chat.id) await loadActiveMessages();
+      failedPhotos.delete(photoKey(id, url));
+    } catch {
+      showToast(tr("Photo unavailable"));
+    } finally {
+      loadingPhotos.delete(id);
+    }
+  }
+
   /** Open the info / settings sheet for whatever chat is open. */
   function openChatInfo() {
     const c = $activeChat;
@@ -772,7 +790,13 @@
   let checkDown: { x: number; y: number; uri: string } | null = null;
   let checkFired = false;
   function galleryToggle(uri: string) {
-    gallerySel = gallerySel.includes(uri) ? gallerySel.filter((u) => u !== uri) : [...gallerySel, uri];
+    if (gallerySel.includes(uri)) {
+      gallerySel = gallerySel.filter((u) => u !== uri);
+    } else if (gallerySel.length < 10) {
+      gallerySel = [...gallerySel, uri];
+    } else {
+      showToast(tr("Select up to 10 items at a time"));
+    }
   }
   /** Caption typed under the picked photos (Telegram: right in the sheet). */
   let galCap = $state("");
@@ -3748,7 +3772,7 @@
   {:else}<span class="room-ic">{r.kind === "voice" ? "🔊" : "#"}</span>{/if}
 {/snippet}
 
-<main class="active-chat" bind:this={chatRoot} class:themed={!!chatLook} style={chatLook} class:with-rooms={rooms.length > 0} class:voice-on={fullVoice} class:voice-chat={fullVoice && voiceChat}>
+<main class="active-chat" bind:this={chatRoot} class:phone={IS_MOBILE} class:themed={!!chatLook} style={chatLook} class:with-rooms={rooms.length > 0} class:voice-on={fullVoice} class:voice-chat={fullVoice && voiceChat}>
   {#if !$activeChat}
     <Welcome />
   {:else}
@@ -3887,6 +3911,7 @@
       <button class="back-btn" onclick={() => backToList()} title={$t("Back")} aria-label={$t("Back to chats")}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
       </button>
+      <div class="chat-identity">
       {#if isGroup && activeGroup}
         <button class="avatar sz-40 avatar-btn" class:ava-grp={!$activeChat.channel} class:ava-chan={$activeChat.channel} style="--gradient: {$activeChat.gradient}" title="Group info & settings">
           {$activeChat.letter}
@@ -3989,6 +4014,7 @@
           {/if}
           {/if}
         </div>
+      </div>
       </div>
       <div class="chat-actions">
         {#if feedAllowed && $activeChat}
@@ -4110,11 +4136,29 @@
       {/if}
     {/if}
 
+    {#snippet missingPhoto(id: string, cid: string, url: string | null, albumCell: boolean)}
+      {#if cid.startsWith("local-")}
+        <div class="missing-photo" class:alb-cell={albumCell}>{$t("Photo unavailable")}</div>
+      {:else}
+        <button class="missing-photo" class:alb-cell={albumCell} disabled={loadingPhotos.has(id)} onclick={() => retryPhoto(id, url)}>
+          {@html icons.download}
+          <span>{$t(loadingPhotos.has(id) ? "Downloading…" : "Download photo")}</span>
+        </button>
+      {/if}
+    {/snippet}
+
     {#if pinned}
       {@const pv = previewLine(pinned)}
+      {@const photo = pinned.kind.type === "file" && renderKind(pinned.kind.content) === "image" ? pinned.kind.content : null}
+      {@const thumb = photo && !coverMedia(pinned, photo.saved_at) ? inlineUrl(photo.saved_at, photo.mime) : null}
       <div class="pin-bar">
         <button class="pin-main" onclick={scrollToPinned} title={$t("Go to pinned message")}>
+          {#if thumb && !failedPhotos.has(photoKey(pinned.id, thumb))}
+            {@const key = photoKey(pinned.id, thumb)}
+            <img class="pin-thumb" src={thumb} alt="" onerror={() => failedPhotos.add(key)} />
+          {:else}
           <svg class="pin-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14l-1.5-5V5a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7z"/></svg>
+          {/if}
           <div class="pin-text">
             <div class="pin-title">{$t("Pinned message")}</div>
             <div class="pin-preview">{pv}</div>
@@ -4357,43 +4401,45 @@
                       {#if a.kind.type === "file"}
                         {@const ac = a.kind.content}
                         {@const au = inlineUrl(ac.saved_at, ac.mime)}
-                        {#if au && coverMedia(a, ac.saved_at)}
+                        {@const key = photoKey(a.id, au)}
+                        {#if failedPhotos.has(key) || !au}
+                          {@render missingPhoto(a.id, ac.cid, au, true)}
+                        {:else if coverMedia(a, ac.saved_at)}
                           <button class="media-img-btn media-18 alb-cell" onclick={() => { if ($nsfwOf(ac.saved_at) !== "pending") revealAdult(a.id, false); }} title={$t("Sensitive content — tap to show")}>
-                            <img class="media-img" src={au} alt="" />
+                            <img class="media-img" src={au} alt="" onerror={() => failedPhotos.add(key)} />
                             {#if $nsfwOf(ac.saved_at) === "explicit"}<span class="m18"><b>18+</b></span>{/if}
                           </button>
-                        {:else if au}
-                          <button class="media-img-btn alb-cell" onclick={() => openInGallery(ac.saved_at)} title={$t("Open")}><img class="media-img" src={au} alt={ac.name} /></button>
                         {:else}
-                          <div class="media-placeholder alb-cell"></div>
+                          <button class="media-img-btn alb-cell" onclick={() => openInGallery(ac.saved_at)} title={$t("Open")}><img class="media-img" src={au} alt={ac.name} onerror={() => failedPhotos.add(key)} /></button>
                         {/if}
                       {/if}
                     {/each}
                     <span class="photo-meta">{m.time}{@render statusTick(m.outgoing, m.id, m)}</span>
                   </div>
                 {:else if rk === "gif" || rk === "image"}
+                  {@const key = photoKey(m.id, url)}
                   <div class="bubble media-bubble">
-                    {#if url && coverMedia(m, content.saved_at)}
+                    {#if !url || failedPhotos.has(key)}
+                      {@render missingPhoto(m.id, content.cid, url, false)}
+                    {:else if coverMedia(m, content.saved_at)}
                       <!-- Explicit (or still being looked at): blurred until tapped. -->
                       <button class="media-img-btn media-18" onclick={() => { if ($nsfwOf(content.saved_at) !== "pending") revealAdult(m.id, false); }}
                         title={$t("Sensitive content — tap to show")}>
-                        <img class="media-img" src={url} alt="" />
+                        <img class="media-img" src={url} alt="" onerror={() => failedPhotos.add(key)} />
                         {#if $nsfwOf(content.saved_at) === "explicit"}<span class="m18"><b>18+</b><small>{$t("Sensitive content — tap to show")}</small></span>{/if}
                       </button>
-                    {:else if url}
+                    {:else}
                       {#if rk === "gif" && !$power.gifs && !gifPlaying.has(m.id)}
                         <!-- Autoplay off: a still frame until clicked. -->
                         <button class="media-img-btn gif-still" onclick={() => gifPlaying.add(m.id)} title={$t("Play GIF")}>
-                          {#await gifStill(url) then still}<img class="media-img" src={still} alt={content.name} />{/await}
+                          {#await gifStill(url) then still}<img class="media-img" src={still} alt={content.name} onerror={() => failedPhotos.add(key)} />{/await}
                           <span class="gif-badge">GIF ▶</span>
                         </button>
                       {:else}
                         <button class="media-img-btn" onclick={() => openInGallery(content.saved_at)} title={$t("Open")}>
-                          <img class="media-img" src={url} alt={content.name} />
+                          <img class="media-img" src={url} alt={content.name} onerror={() => failedPhotos.add(key)} />
                         </button>
                       {/if}
-                    {:else}
-                      <div class="media-placeholder" style="aspect-ratio: 4/3;"></div>
                     {/if}
                     <!-- Like Telegram: no file name under a photo; the time sits on
                          the picture, or after the caption when there is one. -->
@@ -5493,6 +5539,7 @@
     position: relative;
     flex-shrink: 0;
   }
+  .chat-identity { display: contents; }
   /* Mobile-only back button (returns to the chat list). */
   .back-btn {
     display: none;
@@ -6176,6 +6223,15 @@
     animation: shimmer 1.4s linear infinite;
     display: grid; place-items: center;
   }
+  .missing-photo {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 6px; width: 100%; aspect-ratio: 4/3; padding: 8px; box-sizing: border-box;
+    border: 0; border-radius: calc(10px * var(--rk, 1)); background: var(--bg-input);
+    color: var(--fg-muted); font: inherit; font-size: 12px; text-align: center;
+  }
+  button.missing-photo:not(:disabled) { cursor: pointer; color: var(--accent); }
+  button.missing-photo:disabled { opacity: .7; }
+  .missing-photo :global(svg) { width: 18px; height: 18px; }
   .media-footer {
     display: flex;
     align-items: center;
@@ -6927,11 +6983,40 @@
     border-left: 2px solid var(--accent); padding: 2px 0 2px 10px;
   }
   .pin-ic { width: 16px; height: 16px; color: var(--accent); flex-shrink: 0; }
+  .pin-thumb { width: 32px; height: 32px; object-fit: cover; flex-shrink: 0; border-radius: calc(6px * var(--rk, 1)); }
   .pin-text { min-width: 0; }
   .pin-title { font-size: 11px; font-weight: 700; color: var(--accent); }
   .pin-preview { font-size: 12.5px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pin-x { width: 28px; height: 28px; background: transparent; border: 1px solid var(--border); border-radius: calc(8px * var(--rk, 1)); color: var(--fg-dim); font-size: 16px; cursor: pointer; flex-shrink: 0; }
   .pin-x:hover { color: var(--fg); background: var(--bg-hover); }
+
+  .phone .chat-header { gap: 6px; padding: 6px 8px; }
+  .phone .back-btn { display: inline-flex; }
+  .phone .chat-identity { display: flex; flex: 1; min-width: 0; align-items: center; gap: 8px; }
+  .phone .chat-actions { gap: 0; flex-shrink: 0; }
+  .phone .chat-actions .icon-btn { width: 34px; height: 42px; }
+  :global(html.glass) .phone .chat-header {
+    background: transparent; padding: 0; border: 0; box-shadow: none;
+  }
+  :global(html.glass) .phone .chat-header::before { content: none; }
+  :global(html.glass) .phone .back-btn,
+  :global(html.glass) .phone .chat-identity,
+  :global(html.glass) .phone .chat-actions,
+  :global(html.glass) .phone .pin-bar {
+    border: 1px solid var(--border);
+    background: color-mix(in srgb, var(--bg-surface) 84%, transparent);
+    border-radius: calc(14px * var(--rk, 1));
+  }
+  :global(html.glass) .phone .back-btn { width: 42px; height: 48px; }
+  :global(html.glass) .phone .chat-identity { padding: 3px 6px; min-height: 48px; box-sizing: border-box; }
+  :global(html.glass) .phone .chat-actions { padding: 2px; }
+  :global(html.glass) .phone .pin-bar { margin: 0 8px 6px; padding: 5px 8px; }
+  :global(html.glass.panels-square) .phone :is(.back-btn, .chat-identity, .chat-actions, .pin-bar) {
+    border-radius: calc(8px * var(--rk, 1));
+  }
+  .phone .composer:not(.chan-bar) .input-wrap > .emoji-in { order: -1; }
+  .phone .composer:not(.chan-bar) > .attach-wrap { order: 1; }
+  .phone .composer:not(.chan-bar) > .send-btn { order: 2; }
 
   /* Poll bubble */
   .bubble.poll-bubble { display: flex; flex-direction: column; gap: 4px; min-width: 240px; max-width: 360px; }
