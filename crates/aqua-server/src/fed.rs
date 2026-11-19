@@ -1225,7 +1225,7 @@ async fn find_bot(state: &AppState, name: &str) -> Option<(String, serde_json::V
         let path = path.clone();
         async move {
             let v = tokio::time::timeout(Duration::from_secs(6), f.music_json_at(&p, &path)).await.ok().flatten()?;
-            v.get("profile").filter(|x| x.is_object()).map(|_| (p, v))
+            v.get("profile").is_some_and(|x| x.is_object()).then_some((p, v))
         }
     });
     let hit = futures_util::future::join_all(asks).await.into_iter().flatten().next();
