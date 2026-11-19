@@ -104,6 +104,8 @@ for d in APPS:
 fit(app, 256).save(ROOT / "crates/aqua-client-ui/ui/public/logo.webp", quality=92)
 fit(app, 256).save(ROOT / "site/logo.png")
 fit(app, 64).save(ROOT / "site/favicon.png")
+# The site's header / footer mark: the orbit alone, on transparent.
+fit(logo, 128).save(ROOT / "site/logo-mark.png")
 # The relay's admin page (lib.rs: __LOGO__).
 import base64, io
 buf = io.BytesIO()
