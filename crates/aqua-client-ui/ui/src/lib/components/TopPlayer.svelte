@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { get } from "svelte/store";
   import { streamable, mediaErrorText } from "../media";
   import { showToast } from "./Toast.svelte";
   import { tr } from "../i18n";
@@ -7,7 +8,7 @@
   // The expanded MusicPlayer sheet is driven by this SAME element (passed
   // as a prop) — there is never a second <audio>.
   import {
-    nowPlaying, stopTrack, nextTrack, playerExpanded, expandPlayer,
+    nowPlaying, stopTrack, nextTrack, playerExpanded, expandPlayer, repeatOne,
   } from "../player";
   import { t } from "../i18n";
   import MusicPlayer from "./MusicPlayer.svelte";
@@ -134,6 +135,8 @@
   function onTime() { if (audio && !seeking) current = audio.currentTime; }
   function onMeta() { if (audio) duration = isFinite(audio.duration) ? audio.duration : 0; }
   function onEnded() {
+    // Repeat the track: from the start again.
+    if (get(repeatOne) && audio) { audio.currentTime = 0; void audio.play().catch(() => {}); return; }
     // Queue: roll into the next track; otherwise rest at the start.
     if (nextTrack()) return;
     playing = false;

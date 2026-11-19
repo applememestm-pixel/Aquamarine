@@ -1647,14 +1647,13 @@ async fn sign_in(
     let dh_pub_b64 = URL_SAFE_NO_PAD.encode(pub_id.dh_pub.as_bytes());
 
     // 1) Challenge.
-    let chal: ChallengeResponse = http
+    let chal: ChallengeResponse = json_of(http
         .post(format!("{base}/v1/auth/challenge"))
         .timeout(AUTH_TIMEOUT)
         .json(&ChallengeRequest { identity_dh_pub: dh_pub_b64 })
         .send()
         .await?
-        .error_for_status()?
-        .json()
+        .error_for_status()?)
         .await?;
 
     // 2) Sign the nonce bytes with the identity's Ed25519 key.
@@ -1664,7 +1663,7 @@ async fn sign_in(
     let sig = identity.sign.sign(&nonce_bytes);
 
     // 3) Verify.
-    let verify: VerifyResponse = http
+    let verify: VerifyResponse = json_of(http
         .post(format!("{base}/v1/auth/verify"))
         .timeout(AUTH_TIMEOUT)
         .json(&VerifyRequest {
@@ -1674,10 +1673,21 @@ async fn sign_in(
         })
         .send()
         .await?
-        .error_for_status()?
-        .json()
+        .error_for_status()?)
         .await?;
     Ok(verify.token)
+}
+
+/// A relay's JSON answer — or, when something else answered in its place
+/// (a provider's block page, mobile-internet whitelists, a VPN, a Wi-Fi login
+/// page: all "200 OK" with HTML), a message that says so instead of
+/// "error decoding response body: expected value at line 1 column 1".
+async fn json_of<T: serde::de::DeserializeOwned>(r: reqwest::Response) -> Result<T, TransportError> {
+    let text = r.text().await?;
+    serde_json::from_str(&text).map_err(|_| TransportError::Server {
+        status: 502,
+        body: "the answer didn't come from an Aquamarine server: something on the way (the provider, mobile-internet limits, a VPN or a Wi-Fi login page) answers instead of it. Try another network (Wi-Fi ↔ mobile), turn the VPN off or on, or use the server's https:// address".into(),
+    })
 }
 
 /// Any byte stream we can run a WebSocket over (a plain TCP socket, or a

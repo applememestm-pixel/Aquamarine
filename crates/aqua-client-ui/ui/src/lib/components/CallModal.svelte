@@ -1515,11 +1515,13 @@
     {/if}
     <div class="st-controls">{@render controls()}</div>
   </div>
-{:else if IS_MOBILE && expanded && ($callState.kind === "outgoing" || $callState.kind === "incoming" || $callState.kind === "connected")}
-  <!-- Phones: the whole screen, like Telegram — the theme's gradient, the
-       face in the middle, round buttons with captions at the bottom. -->
+{:else if expanded && ($callState.kind === "outgoing" || $callState.kind === "incoming" || $callState.kind === "connected")}
+  <!-- A call of two, like Telegram (owner): phones — the whole screen; PC — a
+       window in the middle. The theme's gradient, the face in the middle,
+       round buttons with captions at the bottom. Group calls stay Discord-like. -->
   {@const img = $avatars[peerId] ?? ""}
-  <div class="tgc" role="dialog" aria-label={$t("Call")}>
+  <div class="tgc" class:desk={!IS_MOBILE} role="dialog" aria-label={$t("Call")}>
+    <div class="tgc-stars" aria-hidden="true"></div>
     <button class="tgc-min" onclick={() => (expanded = false)} title={$t("Minimize")} aria-label={$t("Minimize")}>{@html I.shrink}</button>
     <div class="tgc-mid">
       <div class="tgc-ava" class:speaking={speakingPeer} style:background-image={img ? `url("${img}")` : undefined}>{#if !img}{peerLetter}{/if}</div>
@@ -1537,8 +1539,13 @@
         <button class="tgc-b" onclick={accept}><i class="green">{@html I.phone}</i><span>{$t("Accept")}</span></button>
       {:else}
         {#if $callState.kind === "connected"}
-          <button class="tgc-b" onclick={toggleDeafen}><i class:lit={deafened}>{@html deafened ? I.headOff : I.vol}</i><span>{$t("Sound")}</span></button>
-          <button class="tgc-b" onclick={toggleCam}><i class:lit={!!camStream}>{@html camStream ? I.cam : I.camOff}</i><span>{$t("Video")}</span></button>
+          {#if IS_MOBILE}
+            <button class="tgc-b" onclick={toggleDeafen}><i class:lit={deafened}>{@html deafened ? I.headOff : I.vol}</i><span>{$t("Sound")}</span></button>
+          {:else}
+            <!-- Telegram Desktop: Screencast · Start Video · End Call · Mute. -->
+            <button class="tgc-b" onclick={() => void (screenStream ? stopScreen() : goLive())}><i class:lit={!!screenStream}>{@html I.screen}</i><span>{$t(screenStream ? "Stop sharing" : "Screencast")}</span></button>
+          {/if}
+          <button class="tgc-b" onclick={toggleCam}><i class:lit={!!camStream}>{@html camStream ? I.cam : I.camOff}</i><span>{$t(IS_MOBILE ? "Video" : camStream ? "Stop Video" : "Start Video")}</span></button>
         {/if}
         <button class="tgc-b" onclick={toggleMute}><i class:lit={$callMuted}>{@html $callMuted ? I.micOff : I.mic}</i><span>{$t("Microphone")}</span></button>
         <button class="tgc-b" onclick={() => hangup($callState.kind === "outgoing" ? "local-cancel" : "local-hangup")}><i class="red">{@html I.hang}</i><span>{$t("Hang up")}</span></button>
@@ -1719,6 +1726,29 @@
     animation: tgc-in .22s ease-out;
   }
   @keyframes tgc-in { from { opacity: 0; transform: scale(1.03); } }
+  /* PC: Telegram Desktop's call window — a card in the middle, not the whole screen. */
+  .tgc.desk {
+    inset: auto; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: min(720px, calc(100vw - 48px)); height: min(540px, calc(100vh - 80px));
+    padding: 12px 24px 22px; border-radius: calc(14px * var(--rk, 1));
+    box-shadow: 0 30px 80px -20px rgba(0, 0, 0, .75); overflow: hidden;
+    animation: tgc-desk-in .2s ease-out;
+  }
+  @keyframes tgc-desk-in { from { opacity: 0; transform: translate(-50%, -48%) scale(.98); } }
+  .tgc.desk .tgc-mid { padding-bottom: 0; }
+  .tgc.desk .tgc-ava { width: 160px; height: 160px; }
+  .tgc.desk .tgc-name { font-size: 22px; font-weight: 600; }
+  .tgc.desk .tgc-status { font-size: 14px; }
+  .tgc.desk .tgc-btns { justify-content: center; gap: 14px; }
+  .tgc.desk .tgc-b { width: 74px; font-size: 12px; gap: 8px; }
+  .tgc.desk .tgc-b i { width: 46px; height: 46px; }
+  .tgc.desk .tgc-b i :global(svg) { width: 21px; height: 21px; }
+  .tgc.desk .tgc-b:hover i:not(.red):not(.green):not(.lit) { background: rgba(255,255,255,.3); }
+  .tgc.desk .tgc-min { position: absolute; top: 8px; right: 10px; width: 34px; height: 34px; z-index: 1; }
+  /* A faint ring of stars around the face (Telegram's call background). */
+  .tgc-stars { position: absolute; inset: 0; pointer-events: none; opacity: .5;
+    background: radial-gradient(circle at 50% 42%, transparent 0 22%, rgba(255,255,255,.07) 22.5% 23%, transparent 23.5% 31%, rgba(255,255,255,.05) 31.5% 32%, transparent 32.5%); }
+  .tgc > :not(.tgc-stars) { position: relative; }
   .tgc-min { align-self: flex-start; width: 44px; height: 44px; display: grid; place-items: center; border: none; background: transparent; color: #fff; border-radius: 50%; }
   .tgc-min :global(svg) { width: 24px; height: 24px; }
   .tgc-mid { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding-bottom: 12vh; text-align: center; }

@@ -349,17 +349,17 @@
   >
     <div class="mp-cover" class:playing>
       <div class="mp-glow" aria-hidden="true"></div>
-      {#if showCover}
-        <img src={track.cover} alt="" draggable="false" onerror={() => (coverFailedFor = track.cover ?? null)} />
-      {:else}
-        <div class="mp-tile" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M9 18V5l12-2v13"/>
-            <circle cx="6" cy="18" r="3" fill="currentColor"/>
-            <circle cx="18" cy="16" r="3" fill="currentColor"/>
-          </svg>
+      <!-- A vinyl record: the cover is its label, it turns while playing. -->
+      <div class="vinyl" aria-hidden="true">
+        <div class="vinyl-label">
+          {#if showCover}
+            <img src={track.cover} alt="" draggable="false" onerror={() => (coverFailedFor = track.cover ?? null)} />
+          {:else}
+            <div class="vinyl-blank"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3" fill="currentColor"/><circle cx="18" cy="16" r="3" fill="currentColor"/></svg></div>
+          {/if}
         </div>
-      {/if}
+      </div>
+      <div class="vinyl-sheen" aria-hidden="true"></div>
     </div>
 
     <div class="mp-meta">
@@ -788,4 +788,24 @@
     .mp-glow { animation: none; }
     .mp-wave .bar { transition: none; }
   }
+  /* The vinyl: grooves around, the cover as the label, a spindle hole;
+     it spins while playing and stops where it is on pause. */
+  .vinyl {
+    position: relative; width: 100%; height: 100%; border-radius: 50%;
+    background:
+      radial-gradient(circle, transparent 0 31%, color-mix(in srgb, var(--bg-void) 92%, var(--fg)) 31.5% 33%, transparent 33.5%),
+      repeating-radial-gradient(circle, color-mix(in srgb, var(--bg-void) 88%, var(--fg)) 0 1.2px, var(--bg-void) 1.2px 3px);
+    box-shadow: 0 18px 40px -16px rgba(0, 0, 0, 0.85), inset 0 0 0 2px color-mix(in srgb, var(--bg-void) 70%, var(--fg));
+    animation: mp-spin 4.5s linear infinite; animation-play-state: paused;
+  }
+  .mp-cover.playing .vinyl { animation-play-state: running; }
+  .vinyl-label { position: absolute; inset: 22%; border-radius: 50%; overflow: hidden; box-shadow: 0 0 0 3px color-mix(in srgb, var(--bg-void) 80%, var(--fg)); }
+  .mp-cover .vinyl-label img { width: 100%; height: 100%; object-fit: cover; border: none; border-radius: 0; display: block; }
+  .vinyl-blank { width: 100%; height: 100%; display: grid; place-items: center; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: var(--bg-void); }
+  .vinyl-blank svg { width: 42%; height: 42%; }
+  .vinyl::after { content: ""; position: absolute; left: 50%; top: 50%; width: 4.5%; height: 4.5%; transform: translate(-50%, -50%); border-radius: 50%; background: var(--bg-surface); box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.6); }
+  /* Light on the disc stays still while it turns. */
+  .vinyl-sheen { position: absolute; inset: 0; border-radius: 50%; pointer-events: none;
+    background: conic-gradient(from 30deg, transparent 0 8%, color-mix(in srgb, var(--fg) 10%, transparent) 12%, transparent 18% 55%, color-mix(in srgb, var(--fg) 7%, transparent) 61%, transparent 67%); }
+  @media (prefers-reduced-motion: reduce) { .vinyl { animation: none; } }
 </style>

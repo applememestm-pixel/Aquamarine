@@ -15,6 +15,7 @@
 </script>
 
 <script lang="ts">
+  import { gallery } from "./Lightbox.svelte";
   import StoryTiles from "./StoryTiles.svelte";
   import { openLightbox, openGallery } from "./Lightbox.svelte";
   import UsernameEdit from "./UsernameEdit.svelte";
@@ -673,7 +674,16 @@
   }
 
   onMount(() => {
-    const h = (e: KeyboardEvent) => { if (e.key === "Escape") closeProfile(); };
+    // Esc / Back closing a photo opened from here (Lightbox) is that photo's,
+    // not the profile's: it closed both and dropped you into the chat.
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || getStore(gallery)) return;
+      // Sent to another dialog (the photo viewer, a menu): not ours. Lightbox
+      // closes itself first, so the target says it, not the store.
+      const tgt = e.target as HTMLElement | null;
+      if (tgt && tgt !== document.body && tgt.closest?.('[role="dialog"]') && !tgt.closest(".sheet")) return;
+      closeProfile();
+    };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   });

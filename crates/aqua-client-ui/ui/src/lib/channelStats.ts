@@ -50,10 +50,14 @@ const pending = new Map<string, Set<string>>();
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** A post of channel `gid` was on screen. */
-export function noteView(gid: string, key: string) {
+export function noteView(gid: string, key: string, admin = false) {
   const id = `${gid}|${key}`;
   if (reported.has(id)) return;
   reported.add(id);
+  // An admin reads posts too (owner: they count): kept here at once — the
+  // report below goes only to the other admins.
+  const me = get(info)?.username;
+  if (admin && me) record(gid, me, [key]);
   if (!pending.has(gid)) pending.set(gid, new Set());
   pending.get(gid)!.add(key);
   if (!flushTimer) flushTimer = setTimeout(flush, 4000);

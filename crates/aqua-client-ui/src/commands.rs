@@ -146,6 +146,12 @@ pub async fn send_message(
         };
         // The list shows the last message: tell it (it kept the old one).
         let _ = app.emit("aqua://chats_updated", ());
+        // My other devices get it now (a note from the phone was on the PC
+        // only after the history sync, a minute or two later — or not at all).
+        let (a, t) = (app.clone(), text.clone());
+        tauri::async_runtime::spawn(async move {
+            crate::multidev::sync_raw(&a, &crate::multidev::wrap_sync(crate::state::SAVED_MESSAGES_ID, &t)).await;
+        });
         return Ok(SendResult { id: msg_id, time: msg_time });
     }
 
@@ -3846,7 +3852,8 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
             (chat, time)
         };
         if from != state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|s| s.username.clone()).unwrap_or_default() {
-            let _ = app.emit("aqua://incoming", IncomingEventPayload { peer_id: chat, text: inner.to_string(), time, is_new_chat: false });
+            crate::bgnotify::incoming(app, &chat);
+                let _ = app.emit("aqua://incoming", IncomingEventPayload { peer_id: chat, text: inner.to_string(), time, is_new_chat: false });
         }
         let _ = app.emit("aqua://chats_updated", ());
         return true;

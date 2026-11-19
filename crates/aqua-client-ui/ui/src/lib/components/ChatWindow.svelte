@@ -73,6 +73,7 @@
   import { reactionPack, quickReactions, parseReaction, reactionUrl, loadReactionPack, REACTION_PACK, emojiPacks, reactionSource, loadEmojiPacks } from "../reactionPack";
   import { editAndSend } from "../panels/photoEditor";
   import { transcribe, sttProgress } from "../stt";
+  import Snow, { lastOpened, markOpened, pileFor } from "./Snow.svelte";
   import Transcript from "./Transcript.svelte";
   import MediaPlayer from "./MediaPlayer.svelte";
   import { openGallery, type GalleryItem } from "./Lightbox.svelte";
@@ -615,6 +616,21 @@
   let draftBusy = $state(false);
   function stopToReview() { reviewOnStop = true; stopRecording(); }
   // A draft belongs to the chat it was recorded in: another chat drops it.
+  // Snow piles up in a chat while you're away from it (PC only): its height
+  // from the time since you last had it open (Snow.svelte).
+  let snowPile = $state(0);
+  let snowChat: string | null = null;
+  $effect(() => {
+    const id = $activeChat?.id ?? null;
+    if (id === snowChat) return;
+    if (snowChat) markOpened(snowChat);
+    snowChat = id;
+    snowPile = 0;
+    if (!id) return;
+    const at = lastOpened(id);
+    if (IS_DESKTOP && at) snowPile = pileFor(Date.now() - at);
+    markOpened(id);
+  });
   let draftChat: string | null = null;
   $effect(() => {
     const id = $activeChat?.id ?? null;
@@ -753,6 +769,8 @@
     if (at < 0) { galleryToggle(gallery.items[i].uri); return; }
     openGallery(shots.map((g) => ({ url: g.thumb!, kind: "image" as const })), at);
   }
+  let checkDown: { x: number; y: number; uri: string } | null = null;
+  let checkFired = false;
   function galleryToggle(uri: string) {
     gallerySel = gallerySel.includes(uri) ? gallerySel.filter((u) => u !== uri) : [...gallerySel, uri];
   }
@@ -1520,8 +1538,9 @@
   });
   $effect(() => { void slashMatches.length; slashIdx = 0; });
 
-  // "@" suggestions (Telegram): the group's members, else people from the
-  // chat list; picking one finishes the @name.
+  // "@" suggestions (Telegram): the group's members; in a chat of two only
+  // the other person (owner: not everyone you know — they aren't in this chat);
+  // picking one finishes the @name.
   let atIdx = $state(0);
   let atHidden = $state("");
   let atMatches = $derived.by((): { user: string; name: string }[] => {
@@ -1530,7 +1549,7 @@
     const q = m[1].toLowerCase();
     const pool: { user: string; name: string }[] = activeGroup
       ? activeGroup.members.map((x) => ({ user: x.username, name: $chats.find((c) => c.id === x.username)?.name ?? x.username }))
-      : $chats.filter((c) => !c.id.startsWith("grp_") && !c.id.startsWith("__")).map((c) => ({ user: c.id, name: c.name }));
+      : $activeChat && !$activeChat.id.startsWith("__") ? [{ user: $activeChat.id, name: $activeChat.name }] : [];
     const me = myUsername;
     return pool.filter((p) => p.user !== me && (p.user.toLowerCase().startsWith(q) || p.name.toLowerCase().includes(q))).slice(0, 8);
   });
@@ -1683,11 +1702,12 @@
   $effect(() => {
     const el = messagesEl, gid = $activeChat?.id;
     void shownRows.length;
-    if (!el || !gid || !isChannel || amChanAdmin || lockedNow) return;
+    if (!el || !gid || !isChannel || lockedNow) return;
+    const asAdmin = amChanAdmin;
     const io = new IntersectionObserver((entries) => {
       for (const e of entries) {
         const k = (e.target as HTMLElement).dataset.vkey;
-        if (e.isIntersecting && k) { noteView(gid, k); io.unobserve(e.target); }
+        if (e.isIntersecting && k) { noteView(gid, k, asAdmin); io.unobserve(e.target); }
       }
     }, { root: el, threshold: 0.6 });
     void tick().then(() => el.querySelectorAll("[data-vkey]").forEach((n) => io.observe(n)));
@@ -3028,22 +3048,34 @@
     if (text.trim().length > 0) maybeSendTyping();
   }
 
+  /** A row as the messages under it: an album row is all its photos. */
+  function membersOf(row: Row): Row[] {
+    return (row as Row & { album?: Row[] }).album ?? [row];
+  }
+
   function forwardRow(row: Row) {
-    const it = forwardItemOf(row);
+    const items = membersOf(row).map(forwardItemOf).filter((x): x is ForwardItem => !!x);
     closeMenu();
-    if (!it) { showToast(tr("This message can't be forwarded (not downloaded)")); return; }
-    openForward([it]);
+    if (!items.length) { showToast(tr("This message can't be forwarded (not downloaded)")); return; }
+    openForward(items);
   }
 
   function forwardSelection() {
     const items: ForwardItem[] = [];
     let skipped = 0;
+    // Selected rows as shown (an album is one row, the id of its last photo):
+    // every photo of it goes, not only that one.
+    const albums = new Map(photoAlbums(rows).filter((r) => (r as Row & { album?: Row[] }).album).map((r) => [r.id, (r as Row & { album?: Row[] }).album!]));
     for (const r of rows) {
-      if (selected.has(r.id)) {
-        const it = forwardItemOf(r);
+      if (!selected.has(r.id)) continue;
+      for (const m of albums.get(r.id) ?? [r]) {
+        const it = forwardItemOf(m);
         if (it) items.push(it); else skipped++;
       }
     }
+    // An album's photos were listed with the album, not again on their own.
+    const pathOf = (x: ForwardItem) => (x.kind === "file" ? (x as { path?: string }).path ?? "" : "");
+    for (let i = items.length - 1; i > 0; i--) { const p = pathOf(items[i]); if (p && items.findIndex((x) => pathOf(x) === p) < i) items.splice(i, 1); }
     if (items.length === 0) { showToast(tr("Nothing forwardable selected")); return; }
     openForward(items);
     if (skipped) showToast(`${skipped} item(s) can't be forwarded`);
@@ -4167,6 +4199,7 @@
 
     <div class="msg-stage">
     <div class="chat-wall" aria-hidden="true"></div>
+    {#if $settings.snow}<Snow count={12} pile={snowPile} />{/if}
     <div
       class="messages"
       class:feed={feedView}
@@ -5019,7 +5052,9 @@
       {/if}
       <!-- Attach popup (Media / Article / Poll) -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="attach-wrap" onmousedown={(e) => e.stopPropagation()}>
+      <!-- Phone, text typed: the clip floats over the send button (Telegram) —
+           under the thumb, and the field takes its place. -->
+      <div class="attach-wrap" class:float={IS_MOBILE && liveChat && text.trim().length > 0} onmousedown={(e) => e.stopPropagation()}>
         {#if attachMenuOpen}
           {#if phoneUI}
             <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
@@ -5078,7 +5113,14 @@
                     onclick={() => galleryPeek(gi)} onkeydown={(e) => { if (e.key === "Enter") galleryPeek(gi); }}>
                     {#if g.thumb}<img src={g.thumb} alt="" loading="lazy" decoding="async" />{/if}
                     {#if g.video}<span class="ap-dur">{fmtDur(g.duration)}</span>{/if}
-                    <button class="ap-check" aria-label={$t("Select")} onclick={(e) => { e.stopPropagation(); galleryToggle(g.uri); }}>{n >= 0 ? n + 1 : ""}</button>
+                    <!-- A finger-sized zone around the circle; the tap counts on release unless
+                         the finger really scrolled (a slight move made Android drop the click). -->
+                    <button class="ap-check-hit" aria-label={$t("Select")}
+                      onpointerdown={(e) => { e.stopPropagation(); checkDown = { x: e.clientX, y: e.clientY, uri: g.uri }; }}
+                      onpointerup={(e) => { e.stopPropagation(); if (checkDown?.uri === g.uri && Math.hypot(e.clientX - checkDown.x, e.clientY - checkDown.y) < 14) { checkFired = true; galleryToggle(g.uri); } checkDown = null; }}
+                      onclick={(e) => { e.stopPropagation(); if (checkFired) { checkFired = false; return; } galleryToggle(g.uri); }}>
+                      <span class="ap-check">{n >= 0 ? n + 1 : ""}</span>
+                    </button>
                   </div>
                 {/each}
               </div>
@@ -5230,7 +5272,9 @@
           {/if}
         </button>
       {:else}
-        <button class="send-btn" class:ready={text.trim().length > 0 && slowLeft <= 0} onclick={submit} title={slowLeft > 0 ? `Slow mode: ${slowLeft}s` : "Send"}>
+        <!-- pointerdown doesn't take the focus: the field keeps it, the phone's
+             keyboard stays open after sending (it closed after every message). -->
+        <button class="send-btn" class:ready={text.trim().length > 0 && slowLeft <= 0} onpointerdown={(e) => e.preventDefault()} onclick={submit} title={slowLeft > 0 ? `Slow mode: ${slowLeft}s` : "Send"}>
           {#if slowLeft > 0}<span class="slow-left">{slowLeft}</span>{:else}{@html icons.send}{/if}
         </button>
       {/if}
@@ -6264,6 +6308,10 @@
 
   /* Attach popup (Media / Article / Poll) */
   .attach-wrap { position: relative; display: flex; }
+  .attach-wrap.float { position: absolute; right: 16px; bottom: calc(100% + 8px); z-index: 6; animation: att-float .16s ease-out; }
+  .attach-wrap.float .attach-btn { width: 44px; height: 44px; border-radius: 50%; background: var(--bg-surface-2, var(--bg-input)); box-shadow: 0 6px 18px -6px rgba(0,0,0,.55); }
+  .attach-wrap.float .attach-pop { left: auto; right: 0; }
+  @keyframes att-float { from { opacity: 0; transform: translateY(8px) scale(.9); } }
   .attach-btn.open { color: var(--accent); background: var(--accent-soft); }
   .attach-pop {
     position: absolute; bottom: calc(100% + 8px); left: 0;
@@ -6344,7 +6392,8 @@
   .ap-cam.live :global(svg) { position: relative; width: 26px; height: 26px; filter: drop-shadow(0 1px 3px rgba(0,0,0,.6)); }
   .ap-cam.live span { display: none; }
   .ap-allow { color: var(--accent); padding: 8px; text-align: center; }
-  .ap-check { padding: 0; cursor: pointer; color: #fff; font: 700 12px var(--font-ui, inherit); }
+  .ap-check-hit { position: absolute; top: 0; right: 0; width: 48px; height: 48px; padding: 0; border: none; background: none; cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+  .ap-check { pointer-events: none; padding: 0; color: #fff; font: 700 12px var(--font-ui, inherit); }
   .ap-check { position: absolute; top: 7px; right: 7px; width: 24px; height: 24px; box-sizing: border-box; border-radius: 50%; border: 2px solid #fff; background: rgba(0,0,0,.25);
     display: grid; place-items: center; font-size: 12.5px; font-weight: 800; color: #06070c; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
   .ap-tile.on .ap-check { background: var(--accent); border-color: var(--accent); }
@@ -6506,11 +6555,19 @@
   .sel-more-wrap { position: relative; }
   .sel-more-veil { position: fixed; inset: 0; z-index: 30; }
   /* Telegram's ⋮ menu: a blurred card, icon + label rows. */
-  .sel-more { position: absolute; right: 0; top: calc(100% + 6px); z-index: 31; min-width: 220px; padding: 4px 0; display: flex; flex-direction: column;
+  /* PC: a compact menu like the others (it was phone-sized there too); phones below. */
+  .sel-more { position: absolute; right: 0; top: calc(100% + 6px); z-index: 31; min-width: 168px; padding: 4px 0; display: flex; flex-direction: column;
     background: color-mix(in srgb, var(--bg-surface-2) 94%, transparent); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
     border: 1px solid var(--border); border-radius: calc(16px * var(--rk, 1)); box-shadow: 0 14px 36px -12px rgba(0,0,0,.55);
     transform-origin: top right; animation: ctx-pop 0.2s cubic-bezier(0.2, 0.9, 0.25, 1.12); }
-  .sel-more button { display: flex; align-items: center; gap: 18px; min-height: 48px; padding: 0 20px 0 18px; text-align: left; border: none; background: transparent; color: var(--fg); font: inherit; font-size: 16px; font-weight: 500; cursor: pointer; }
+  .sel-more { border-radius: calc(12px * var(--rk, 1)); }
+  .sel-more button { display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 0 14px 0 12px; text-align: left; border: none; background: transparent; color: var(--fg); font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+  .sel-more :global(.ci-ic), .sel-more :global(.ci-ic svg) { width: 16px; height: 16px; }
+  @media (max-width: 720px) {
+    .sel-more { min-width: 220px; border-radius: calc(16px * var(--rk, 1)); }
+    .sel-more button { gap: 18px; min-height: 48px; padding: 0 20px 0 18px; font-size: 16px; font-weight: 500; }
+    .sel-more :global(.ci-ic), .sel-more :global(.ci-ic svg) { width: 22px; height: 22px; }
+  }
   .sel-more button:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
   /* Phones: the bar replaces the chat header; icons only, big targets. */
   @media (max-width: 720px) {

@@ -411,6 +411,8 @@ pub fn run() -> Result<()> {
             storage::export_chats,
             tray::tray_set,
             tray::badge_set,
+            relay_host::bg_sync_set,
+            relay_host::battery_exempt,
             commands::send_call_signal,
             commands::send_control,
             commands::send_sticker,

@@ -487,7 +487,13 @@ jobs:
           sed -i "0,/<application/s##${more}#" "$m"
           scr='<service android:name=".AquaScreenService" android:exported="false" android:foregroundServiceType="mediaProjection" />\n    </application>'
           sed -i "s#</application>#${scr}#" "$m"
-          grep -n 'AquaRelayService\|AquaScreenService\|FOREGROUND\|MULTICAST' "$m"
+          # Messages in the background (AquaRelay.kt: AquaSyncService) — a quiet
+          # foreground service keeps the connection; battery optimisation can be lifted.
+          sync='<uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />\n    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />\n    <application'
+          sed -i "0,/<application/s##${sync}#" "$m"
+          ssvc='<service android:name=".AquaSyncService" android:exported="false" android:foregroundServiceType="remoteMessaging" />\n    </application>'
+          sed -i "s#</application>#${ssvc}#" "$m"
+          grep -n 'AquaRelayService\|AquaScreenService\\|AquaSyncService\|FOREGROUND\|MULTICAST' "$m"
           # Home-screen widget: unread chats (android/widget)
           cp ../../android/widget/AquaWidget.kt "$(dirname "$(find gen/android/app/src/main/java -name MainActivity.kt | head -1)")/AquaWidget.kt"
           cp -r ../../android/widget/res/* gen/android/app/src/main/res/

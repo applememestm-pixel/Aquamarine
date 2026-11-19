@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Music</title>
+<!-- @music's search: every Navidrome of the network, Spotify, YouTube (music_ext.rs).
+     Who I am comes from the initData this relay signed. -->
+<style>
+  :root { --bg: #000; --card: #161616; --fg: #f2f2f2; --dim: #9a9a9a; --acc: #2ea6ff; --btn-fg: #fff; --line: rgba(255,255,255,.08); }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { padding: 12px 14px 28px; max-width: 760px; margin: 0 auto; }
+  .bar { display: flex; align-items: center; gap: 8px; background: var(--card); border-radius: 999px; padding: 6px 8px 6px 12px; }
+  .bar input { flex: 1; min-width: 0; background: none; border: none; outline: none; color: var(--fg); font: inherit; font-size: 16px; padding: 6px 0; }
+  .bar button { width: 30px; height: 30px; border: none; border-radius: 50%; background: rgba(255,255,255,.12); color: var(--fg); cursor: pointer; font-size: 14px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
+  .chip { border: 1px solid var(--line); background: transparent; color: var(--fg); padding: 7px 14px; border-radius: 999px; font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+  .chip.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  h2 { display: flex; align-items: baseline; justify-content: space-between; font-size: 20px; margin: 20px 0 8px; }
+  h2 button { border: none; background: none; color: var(--dim); font: inherit; font-size: 14px; cursor: pointer; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 7px 0; cursor: pointer; }
+  .art { width: 50px; height: 50px; flex-shrink: 0; border-radius: 8px; background: var(--card) center / cover no-repeat; display: grid; place-items: center; color: var(--dim); font-size: 20px; }
+  .txt { flex: 1; min-width: 0; }
+  .t { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .s { color: var(--dim); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .src { display: inline-block; width: 12px; height: 12px; border-radius: 50%; vertical-align: -1px; margin-right: 5px; }
+  .src.nd { background: var(--acc); } .src.spotify { background: #1ed760; } .src.youtube { background: #ff2a2a; }
+  .act { width: 38px; height: 38px; flex-shrink: 0; border: none; background: none; color: var(--fg); font-size: 18px; cursor: pointer; border-radius: 50%; }
+  .act:hover { background: rgba(255,255,255,.08); }
+  .tiles { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 6px; scrollbar-width: none; }
+  .tile { width: 148px; flex-shrink: 0; cursor: pointer; }
+  .tile .art { width: 148px; height: 148px; border-radius: 12px; font-size: 34px; }
+  .tile.round .art { border-radius: 50%; }
+  .tile .t { margin-top: 6px; font-size: 14px; }
+  .empty, .note { color: var(--dim); text-align: center; padding: 30px 10px; }
+  .foot { color: var(--dim); text-align: center; font-size: 12.5px; margin-top: 26px; }
+  .toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); background: rgba(30,30,30,.95); color: #fff; padding: 9px 16px; border-radius: 12px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast.on { opacity: 1; }
+  .yt { position: fixed; inset: 0; background: rgba(0,0,0,.85); display: none; align-items: center; justify-content: center; padding: 14px; z-index: 5; }
+  .yt.on { display: flex; }
+  .yt iframe { width: min(100%, 720px); aspect-ratio: 16 / 9; border: 0; border-radius: 12px; }
+  .yt button { position: absolute; top: 12px; right: 12px; width: 38px; height: 38px; border-radius: 50%; border: none; background: rgba(255,255,255,.15); color: #fff; font-size: 18px; cursor: pointer; }
+</style>
+</head>
+<body>
+<main>
+  <form class="bar" id="f"><input id="q" type="search" autocomplete="off" enterkeyhint="search"><button type="button" id="clr" aria-label="×">✕</button></form>
+  <div class="chips" id="chips"></div>
+  <div id="out"></div>
+  <div class="foot">@music</div>
+</main>
+<div class="yt" id="yt"><button id="ytx" aria-label="×">✕</button><iframe id="ytf" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe></div>
+<div class="toast" id="toast"></div>
+<script>
+(() => {
+  const ru = /^ru/i.test(navigator.language || "ru");
+  const L = ru
+    ? { ph: "Песня, исполнитель, альбом", all: "Все", songs: "Песни", albums: "Альбомы", artists: "Исполнители", videos: "Видео", nd: "Navidrome", more: "Все ›", none: "Ничего не нашлось", start: "Найдите песню, исполнителя или альбом — на всех Navidrome сети, в Spotify и YouTube.", sent: "Отправлено в чат — нажмите ▶ на карточке", err: "Не получилось. Закройте и откройте снова.", off: s => `${s} не подключён на сервере` }
+    : { ph: "Song, artist, album", all: "All", songs: "Songs", albums: "Albums", artists: "Artists", videos: "Videos", nd: "Navidrome", more: "All ›", none: "Nothing found", start: "Find a song, an artist or an album — on every Navidrome of the network, Spotify and YouTube.", sent: "Sent to the chat — tap ▶ on the card", err: "That didn't work. Close and open it again.", off: s => `${s} isn't connected on this server` };
+  const $ = id => document.getElementById(id);
+  const hash = new URLSearchParams(location.hash.slice(1));
+  const init = hash.get("tgWebAppData") || "";
+  const post = (eventType, eventData = {}) => { try { parent.postMessage(JSON.stringify({ eventType, eventData }), "*"); } catch {} };
+  try {
+    const th = JSON.parse(hash.get("tgWebAppThemeParams") || "{}");
+    const r = document.documentElement.style;
+    if (th.bg_color) r.setProperty("--bg", th.bg_color);
+    if (th.secondary_bg_color || th.section_bg_color) r.setProperty("--card", th.section_bg_color || th.secondary_bg_color);
+    if (th.text_color) r.setProperty("--fg", th.text_color);
+    if (th.hint_color) r.setProperty("--dim", th.hint_color);
+    if (th.button_color) r.setProperty("--acc", th.button_color);
+  } catch {}
+  post("web_app_ready"); post("web_app_expand");
+
+  const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const mmss = d => d > 0 ? `${Math.floor(d / 60)}:${String(d % 60).padStart(2, "0")}` : "";
+  const views = n => !n ? "" : n >= 1e6 ? (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M" : n >= 1e3 ? Math.round(n / 1e3) + "K" : String(n);
+  const toast = t => { const el = $("toast"); el.textContent = t; el.classList.add("on"); clearTimeout(toast.h); toast.h = setTimeout(() => el.classList.remove("on"), 2600); };
+  async function call(path, body) {
+    const r = await fetch(`/v1/music-app${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ init, ...body }) });
+    const t = await r.text();
+    if (!r.ok) throw new Error(t || "any");
+    return JSON.parse(t);
+  }
+
+  let res = null, tab = "all";
+  const TABS = () => [["all", L.all], ["songs", L.songs], ["albums", L.albums], ["artists", L.artists], ["videos", L.videos], ["nd", L.nd], ["spotify", "Spotify"], ["youtube", "YouTube Music"]]
+    .filter(([k]) => !res || !res.sources || k === "all" || !["nd", "spotify", "youtube"].includes(k) || res.sources[k]);
+  function chips() {
+    $("chips").innerHTML = TABS().map(([k, n]) => `<button class="chip${k === tab ? " on" : ""}" data-tab="${k}">${esc(n)}</button>`).join("");
+    $("chips").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { tab = b.dataset.tab; render(); });
+  }
+  const bySrc = (list) => ["nd", "spotify", "youtube"].includes(tab) ? list.filter(x => x.src === tab) : list;
+
+  function songRow(x, i, key) {
+    const sub = [x.artist, x.views ? "▸ " + views(x.views) : "", mmss(x.dur)].filter(Boolean).join(" · ");
+    return `<div class="row" data-k="${key}" data-i="${i}">
+      <div class="art" style="${x.cover ? `background-image:url('${esc(x.cover)}')` : ""}">${x.cover ? "" : "♪"}</div>
+      <div class="txt"><div class="t">${esc(x.title)}</div><div class="s"><span class="src ${x.src}"></span>${esc(sub)}</div></div>
+      ${x.src === "nd" ? `<button class="act" data-send="${key}:${i}" aria-label="⬇">⬇</button>` : ""}
+      <button class="act" data-open="${key}:${i}" aria-label="⋯">⋯</button>
+    </div>`;
+  }
+  function tiles(list, key, round) {
+    return `<div class="tiles">${list.map((x, i) => `<div class="tile${round ? " round" : ""}" data-k="${key}" data-i="${i}"><div class="art" style="${x.cover ? `background-image:url('${esc(x.cover)}')` : ""}">${x.cover ? "" : round ? "👤" : "💿"}</div><div class="t">${esc(x.title)}</div><div class="s"><span class="src ${x.src}"></span>${esc(x.artist || x.year || "")}</div></div>`).join("")}</div>`;
+  }
+  let view = {};
+  function render() {
+    chips();
+    if (!res) { $("out").innerHTML = `<div class="note">${esc(L.start)}</div>`; return; }
+    view = { songs: bySrc(res.songs || []), videos: bySrc(res.videos || []), albums: bySrc(res.albums || []), artists: bySrc(res.artists || []) };
+    const parts = [];
+    const head = (k, n, more) => `<h2>${esc(n)}${more ? `<button data-tab-go="${k}">${esc(L.more)}</button>` : ""}</h2>`;
+    const all = tab === "all" || ["nd", "spotify", "youtube"].includes(tab);
+    if ((all || tab === "songs") && view.songs.length) parts.push(head("songs", L.songs, all && view.songs.length > 5) + (all ? view.songs.slice(0, 5) : view.songs).map((x, i) => songRow(x, i, "songs")).join(""));
+    if ((all || tab === "videos") && view.videos.length) parts.push(head("videos", L.videos, all && view.videos.length > 4) + (all ? view.videos.slice(0, 4) : view.videos).map((x, i) => songRow(x, i, "videos")).join(""));
+    if ((all || tab === "albums") && view.albums.length) parts.push(head("albums", L.albums) + tiles(view.albums, "albums"));
+    if ((all || tab === "artists") && view.artists.length) parts.push(head("artists", L.artists) + tiles(view.artists, "artists", true));
+    $("out").innerHTML = parts.join("") || `<div class="empty">${esc(L.none)}</div>`;
+    $("out").querySelectorAll("[data-tab-go]").forEach(b => b.onclick = e => { e.stopPropagation(); tab = b.dataset.tabGo; render(); });
+    $("out").querySelectorAll("[data-send]").forEach(b => b.onclick = e => { e.stopPropagation(); const [k, i] = b.dataset.send.split(":"); send(view[k][+i]); });
+    $("out").querySelectorAll("[data-open]").forEach(b => b.onclick = e => { e.stopPropagation(); const [k, i] = b.dataset.open.split(":"); open(view[k][+i], true); });
+    $("out").querySelectorAll("[data-k]").forEach(el => el.onclick = () => open(view[el.dataset.k][+el.dataset.i], false));
+  }
+  async function send(x) {
+    try { await call("/send", { item: x }); toast(L.sent); } catch { toast(L.err); }
+  }
+  function open(x, menu) {
+    if (!x) return;
+    if (x.src === "youtube" && !menu) { $("ytf").src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(x.id)}?autoplay=1`; $("yt").classList.add("on"); return; }
+    if (x.src === "nd") { if (x.kind === "song") send(x); else { $("q").value = x.title; go(); } return; }
+    if (x.url) post("web_app_open_link", { url: x.url });
+  }
+  $("ytx").onclick = () => { $("yt").classList.remove("on"); $("ytf").src = "about:blank"; };
+
+  let seq = 0;
+  async function go() {
+    const q = $("q").value.trim();
+    if (!q) { res = null; render(); return; }
+    const my = ++seq;
+    $("out").innerHTML = `<div class="note">…</div>`;
+    try { const r = await call("/search", { q }); if (my === seq) { res = r; render(); } }
+    catch { if (my === seq) $("out").innerHTML = `<div class="empty">${esc(L.err)}</div>`; }
+  }
+  $("q").placeholder = L.ph;
+  $("f").onsubmit = e => { e.preventDefault(); $("q").blur(); go(); };
+  $("clr").onclick = () => { $("q").value = ""; res = null; render(); $("q").focus(); };
+  const q0 = new URLSearchParams(location.search).get("q");
+  if (q0) { $("q").value = q0; go(); } else render();
+})();
+</script>
+</body>
+</html>

@@ -95,6 +95,47 @@ class AquaRelayPlugin(private val activity: Activity) : Plugin(activity) {
     invoke.resolve(JSObject().put("ok", true))
   }
 
+  /** The messenger stays connected in the background (AquaSyncService):
+   *  without it Android froze the app and messages came only when opened. */
+  @Command
+  fun syncStart(invoke: Invoke) {
+    if (Build.VERSION.SDK_INT >= 33 &&
+      activity.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+      activity.requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 7791)
+    }
+    val i = Intent(activity, AquaSyncService::class.java)
+    try {
+      if (Build.VERSION.SDK_INT >= 26) activity.startForegroundService(i) else activity.startService(i)
+      invoke.resolve(JSObject().put("ok", true))
+    } catch (e: Exception) {
+      invoke.reject(e.message ?: "can't start")
+    }
+  }
+
+  @Command
+  fun syncStop(invoke: Invoke) {
+    activity.stopService(Intent(activity, AquaSyncService::class.java))
+    invoke.resolve(JSObject().put("ok", true))
+  }
+
+  /** Battery optimisation off for the app (the system's own dialog): a
+   *  phone in Doze otherwise cuts the connection anyway. */
+  @Command
+  fun askBattery(invoke: Invoke) {
+    val pm = activity.getSystemService(Context.POWER_SERVICE) as PowerManager
+    if (Build.VERSION.SDK_INT >= 23 && !pm.isIgnoringBatteryOptimizations(activity.packageName)) {
+      try {
+        @Suppress("BatteryLife")
+        val i = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+          .setData(android.net.Uri.parse("package:" + activity.packageName))
+        activity.startActivity(i)
+      } catch (_: Exception) { }
+      invoke.resolve(JSObject().put("ok", false))
+    } else {
+      invoke.resolve(JSObject().put("ok", true))
+    }
+  }
+
   /** Picture-in-picture: the app shrinks into a floating window while a
    *  video plays (the page made the video fill the window first). */
   @Command
@@ -210,6 +251,44 @@ class AquaRelayService : Service() {
   }
 }
 
+
+/** The messenger's own foreground service: a quiet persistent notification
+ *  that keeps the process (and its connection to the relay) alive while the
+ *  app is in the background, so new messages are received and announced. */
+class AquaSyncService : Service() {
+  override fun onBind(intent: Intent?): IBinder? = null
+
+  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    if (Build.VERSION.SDK_INT >= 26) {
+      val ch = NotificationChannel("sync", "Connection", NotificationManager.IMPORTANCE_MIN)
+      ch.setShowBadge(false)
+      nm.createNotificationChannel(ch)
+    }
+    val open = PendingIntent.getActivity(
+      this, 1, packageManager.getLaunchIntentForPackage(packageName),
+      PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
+    val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, "sync") else Notification.Builder(this)
+    val n = b.setContentTitle("Aquamarine")
+      .setContentText("Connected — new messages arrive in the background")
+      .setSmallIcon(applicationInfo.icon)
+      .setOngoing(true)
+      .setContentIntent(open)
+      .build()
+    try {
+      if (Build.VERSION.SDK_INT >= 34) {
+        startForeground(7791, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)
+      } else {
+        startForeground(7791, n)
+      }
+    } catch (_: Exception) {
+      stopSelf()
+      return START_NOT_STICKY
+    }
+    return START_STICKY
+  }
+}
 
 @InvokeArg
 class GalleryArgs {

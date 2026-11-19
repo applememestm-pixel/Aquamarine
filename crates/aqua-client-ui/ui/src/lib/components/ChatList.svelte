@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { aliasesOf } from "../servers";
+  import Snow from "./Snow.svelte";
   import { emojiStatusOf } from "../people";
   import MiniPlayer from "./MiniPlayer.svelte";
   import EmojiStatus from "./EmojiStatus.svelte";
@@ -187,9 +189,20 @@
     const user = $info?.username;
     if (!user || !srvUrl.trim()) return;
     srvBusy = true; srvErr = null;
-    const err = await connect(srvUrl.trim(), user);
+    let err = await connect(srvUrl.trim(), user);
+    // That address doesn't lead there from here (the home relay's white IP
+    // from inside the home Wi-Fi: "No route to host"): the same relay's
+    // other address before giving up.
+    if (err) {
+      for (const alt of aliasesOf(srvUrl.trim())) {
+        if (!(await connect(alt, user))) { err = null; srvUrl = alt; break; }
+      }
+    }
     srvBusy = false;
-    if (err) srvErr = err; else serversOpen = false;
+    if (err) srvErr = /No route to host|os error 113|Network is unreachable|os error 101/i.test(err)
+      ? tr("This phone can't reach {u} from the network it's on now. On the server's own Wi-Fi use its home address; or switch Wi-Fi ↔ mobile data.", { u: hostOf(srvUrl.trim()) })
+      : err;
+    else serversOpen = false;
   }
   const hostOf = (u: string | null) => { try { return u ? new URL(u).host : ""; } catch { return u ?? ""; } };
 
@@ -397,7 +410,6 @@
   });
   const compact = $derived(inServer && !compactPinned && !phone);
   $effect(() => { if (!inServer) compactPinned = false; });
-  const SNOW = Array.from({ length: 34 }, () => ({ x: Math.random() * 100, d: 7 + Math.random() * 9, dl: -Math.random() * 16, s: 2 + Math.random() * 4, dx: (Math.random() - 0.5) * 80 }));
   // exteraGram "Hide All chats": with folders, open on the first one.
   $effect(() => { if ($themeSettings.hideAllTab && $folders.length && $activeFolder === "all") activeFolder.set($folders[0].id); });
   // Opening the archive or switching folders means browsing the list:
@@ -1027,10 +1039,8 @@
 
 <aside class="list" class:resizing class:compact class:lines3={$chatLines === 3} class:has-active={!!$activeId}>
   {#if $themeSettings.snow}
-    <!-- exteraGram's snow: a few flakes drifting over the list. -->
-    <div class="snow" aria-hidden="true">
-      {#each SNOW as f, i (i)}<i style:left="{f.x}%" style:--d="{f.d}s" style:--dl="{f.dl}s" style:--s="{f.s}px" style:--dx="{f.dx}px"></i>{/each}
-    </div>
+    <!-- exteraGram's snow: a few flakes drifting over the list (sparser now). -->
+    <Snow count={18} />
   {/if}
   {#if compact}
     <button class="compact-expand" onclick={() => (compactPinned = true)} title={$t("Show the chat list")} aria-label={$t("Show the chat list")}>
@@ -2169,11 +2179,6 @@
   .folder-strip:not(.fs-pills):not(.fs-text) .folder-tab.active::before { left: -10px; background: radial-gradient(circle at 0 0, transparent 9.5px, var(--tab) 10px); }
   .folder-strip:not(.fs-pills):not(.fs-text) .folder-tab.active::after { right: -10px; background: radial-gradient(circle at 100% 0, transparent 9.5px, var(--tab) 10px); }
   .ft-emoji { margin-right: 4px; }
-  .snow { position: absolute; inset: 0; z-index: 4; pointer-events: none; overflow: hidden; }
-  .snow i { position: absolute; top: -10px; width: var(--s); height: var(--s); border-radius: 50%; background: #fff; opacity: .75; filter: blur(.4px);
-    animation: snow var(--d) linear var(--dl) infinite; }
-  @keyframes snow { to { transform: translate(var(--dx), calc(100vh + 20px)); } }
-  :global(html.reduce-motion) .snow { display: none; }
   /* exteraGram's tab styles: round pills, or just words with an underline. */
   .folder-strip.fs-pills .folder-tab { border-radius: 999px; }
   .folder-strip.fs-text .folder-tab { background: transparent; border-color: transparent; border-radius: 0; padding-left: 6px; padding-right: 6px; box-shadow: inset 0 -2px 0 transparent; }

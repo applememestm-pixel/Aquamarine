@@ -2067,6 +2067,17 @@
         </button>
       </section>
       {/if}
+      {#if IS_MOBILE}
+      <section class="group">
+        <div class="label">{$t("In the background")}</div>
+        <button class="toggle-row" onclick={() => settings.update((x) => ({ ...x, bgConnection: x.bgConnection === false }))}>
+          <div class="tr-text"><div class="tr-title">{$t("Stay connected")}</div><div class="tr-sub">{$t("New messages and their notifications arrive while the app is closed. Android shows a quiet notification “Connected” for it.")}</div></div>
+          <span class="switch" class:on={$settings.bgConnection !== false}></span>
+        </button>
+        <button class="mini-btn" onclick={() => void invoke<boolean>("battery_exempt").then((ok) => { if (ok) showToast(tr("Battery optimisation is already off for Aquamarine")); }).catch((e) => showToast(String(e)))}>{$t("Don't let the battery saver stop it")}</button>
+        <div class="foot-note">{$t("Some phones (Xiaomi, Huawei, Samsung…) still close apps in the background: allow Aquamarine to run in the background / autostart in the phone's battery settings.")}</div>
+      </section>
+      {/if}
       <section class="group">
         <div class="label">{$t("Notifications")}</div>
         <button class="toggle-row" onclick={() => toggle("notifySound")}>

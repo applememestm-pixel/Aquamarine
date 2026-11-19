@@ -388,7 +388,7 @@ impl From<rusqlite::Error> for DirError {
 }
 
 /// A public profile card, as returned by the lookup + search endpoints.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Profile {
     pub username: String,
     pub display_name: String,
