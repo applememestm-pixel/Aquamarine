@@ -1,6 +1,6 @@
 /**
- * The app's logo — the shield with the "A" chat bubble (public/logo.webp,
- * the same picture as the installed icons). Settings → Appearance can swap
+ * The app's logo — the green orbit with a star (public/logo.webp, the same
+ * picture as the installed icons; tools/brand_icons.py makes them all). Settings → Appearance can swap
  * it for the user's own square picture. The result feeds the title bar, the
  * nav rail, the favicon and the window / taskbar icon (X11, Windows, macOS;
  * Wayland reads .desktop).
