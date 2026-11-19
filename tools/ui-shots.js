@@ -55,6 +55,10 @@ window.__TAURI_INTERNALS__ = {
       kind: { type: "text", content: { text: '[track:v1]{"id":"s0","title":"The Whole Blue World","artist":"Ave Mujica","album":"Blue World","dur":260,"src":"server","nd":"t1"}' } } }];
     if (cmd === "init_app") return { has_identity: true, registered: true, username: "apple", session_fingerprint: "ab12 cd34", opk_available: 10, spk_rotates_in_days: 5, connected: true, server_url: "http://127.0.0.1:7777", uid: "A1B2C3D4" };
     if (cmd === "list_chats") return [{ id: "__saved__", name: "Saved Messages", letter: "☁", gradient: "linear-gradient(135deg,#7B5CFF,#00E5C7)", preview: "Note to self — only you see this", preview_is_typing: false, preview_by_me: true, has_lock: true, time: "", unread: 0, online: true, verified: true, channel: false, live: true }];
+    // A bot of mine with a constructor spec (BotMaker.svelte).
+    if (cmd === "list_bots") return [{ username: "shopbot", token: "aqbot_0000", display_name: "Shop", hint: "0000" }];
+    if (cmd === "bot_spec") return { about: "Цены и запись", start: { text: "Привет! Я бот магазина.", buttons: [[{ text: "Цены", goto: "prices" }], [{ text: "Сайт", url: "https://example.com" }]] },
+      commands: [{ command: "prices", description: "Цены", reply: { text: "Стрижка — 1000 ₽" } }], keywords: [{ words: "цена, стоимость", reply: { text: "Смотрите /prices" } }], fallback: { text: "Не понял — нажмите /start" } };
     if (cmd === "list_local_media") return { packs: [], gifs: [], stickers_dir: "", gifs_dir: "" };
     if (cmd.startsWith("plugin:event|listen")) return ++n;
     if (/^(get_messages|list_)/.test(cmd)) return [];
@@ -211,6 +215,51 @@ window.__TAURI_INTERNALS__ = {
     await ph.locator('.fm-add >> visible=true').first().tap({ force: true }); await ph.waitForTimeout(800);
     await ph.screenshot({ path: path.join(out, '13f-phone-folder.jpg'), type: 'jpeg', quality: 80 });
   } catch (e) { errs.push('phone2: ' + e.message.split('\n')[0]); }
+  // Phone: the attach sheet opens low with the actions on top (Telegram);
+  // a long text gets the "expand into an article" button.
+  try {
+    const ph = await b.newPage({ viewport: { width: 412, height: 915 }, locale: 'ru-RU', hasTouch: true, isMobile: true, deviceScaleFactor: 1,
+      userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36' });
+    ph.on('pageerror', (e) => errs.push('phone3: ' + e.message));
+    await ph.addInitScript(() => { window.__shotChat = true; });
+    await ph.addInitScript(mock(card));
+    await ph.goto('http://127.0.0.1:5199/'); await ph.waitForTimeout(2500);
+    for (let i = 0; i < 3; i++) { const l = ph.getByText(/^(Не сейчас|Not now)$/).first(); if (!(await l.count())) break; await l.click({ force: true, timeout: 5000 }).catch(() => {}); await ph.waitForTimeout(500); }
+    await ph.locator('text=Bocchi >> visible=true').first().tap({ force: true }); await ph.waitForTimeout(1200);
+    await ph.locator('.attach-btn >> visible=true').first().click({ force: true, timeout: 5000 }); await ph.waitForTimeout(1200);
+    console.log('attachSheet', JSON.stringify(await ph.evaluate(() => {
+      const r = document.querySelector('.attach-pop.sheet')?.getBoundingClientRect();
+      const d = document.querySelector('.ap-dock')?.getBoundingClientRect();
+      return { sheet: r && [r.left, r.top, r.right, r.bottom], dock: d && [d.left, d.top, d.right, d.bottom], w: innerWidth };
+    })));
+    await ph.screenshot({ path: path.join(out, '14a-phone-attach-low.jpg'), type: 'jpeg', quality: 80 });
+    await ph.evaluate(() => window.__aquaBack && window.__aquaBack()); await ph.waitForTimeout(700);
+    const box = ph.locator('.composer [contenteditable] >> visible=true').first();
+    await box.click({ force: true }).catch(() => {});
+    await ph.keyboard.type('Первая строка'); await ph.keyboard.press('Shift+Enter'); await ph.keyboard.type('вторая'); await ph.keyboard.press('Shift+Enter'); await ph.keyboard.type('и третья');
+    await ph.waitForTimeout(500);
+    await ph.screenshot({ path: path.join(out, '14b-phone-expand.jpg'), type: 'jpeg', quality: 80 });
+    // …and now the sheet with text typed: it used to shrink to a strip on the right.
+    await ph.locator('.attach-btn >> visible=true').first().click({ force: true, timeout: 5000 }).catch(() => {}); await ph.waitForTimeout(1200);
+    const wide = await ph.evaluate(() => { const r = document.querySelector('.attach-pop.sheet')?.getBoundingClientRect(); return r ? Math.round(r.width) : 0; });
+    console.log('attachSheetWithText', wide);
+    if (wide && wide < 400) errs.push('phone3: the attach sheet is ' + wide + 'px wide with text typed');
+    await ph.screenshot({ path: path.join(out, '14c-phone-attach-text.jpg'), type: 'jpeg', quality: 80 });
+  } catch (e) { errs.push('phone3: ' + e.message.split('\n')[0]); }
+  // The bot constructor (desktop): Settings → Bots → the bot → Open the constructor.
+  try {
+    const pg = await b.newPage({ viewport: { width: 1300, height: 880 }, locale: 'ru-RU' });
+    pg.on('pageerror', (e) => errs.push('botmaker: ' + e.message));
+    await pg.addInitScript(mock(card));
+    await pg.addInitScript(() => { const s = JSON.parse(localStorage.getItem('aqua-settings') || '{}'); s.advancedSettings = true; localStorage.setItem('aqua-settings', JSON.stringify(s)); });
+    await pg.goto('http://127.0.0.1:5199/'); await pg.waitForTimeout(2500);
+    for (let i = 0; i < 3; i++) { const l = pg.getByText(/^(Не сейчас|Not now)$/).first(); if (!(await l.count())) break; await l.click().catch(() => {}); await pg.waitForTimeout(500); }
+    await pg.locator('.rail button').last().click().catch(() => {}); await pg.waitForTimeout(900);
+    await pg.locator('.nav .nav-item').filter({ hasText: /^\s*(Боты|Bots)\s*$/ }).first().click({ timeout: 5000 }); await pg.waitForTimeout(900);
+    await pg.locator('.bot-row').first().click({ timeout: 5000 }); await pg.waitForTimeout(600);
+    await pg.getByText(/^(Открыть конструктор|Open the constructor)$/).first().click({ timeout: 5000 }); await pg.waitForTimeout(1200);
+    await pg.screenshot({ path: path.join(out, '15-botmaker.jpg'), type: 'jpeg', quality: 76 });
+  } catch (e) { errs.push('botmaker: ' + e.message.split('\n')[0]); }
   // Settings, every section top to bottom (desktop, then phone): "s-<n>-<id>-<part>".
   // Only with SHOTS_SETTINGS=1 (the log gets big).
   if (process.env.SHOTS_SETTINGS) {

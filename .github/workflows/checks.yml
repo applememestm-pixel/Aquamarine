@@ -107,6 +107,37 @@ jobs:
           cargo check
           cargo test --lib
 
+  # The app's Rust for Android (mesh_android.rs, NDK calls): built only in
+  # release.yml before — a mistake there showed up at release time. Advisory
+  # (continue-on-error) until it has a run of green behind it.
+  app-android:
+    name: app (android cargo check, advisory)
+    runs-on: ubuntu-22.04
+    needs: app
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ui-dist
+          path: crates/aqua-client-ui/ui/dist
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/aqua-client-ui -> target
+          shared-key: checks-app-android
+      - name: cargo check --target aarch64-linux-android
+        working-directory: crates/aqua-client-ui
+        run: |
+          bin="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC_aarch64_linux_android="$bin/aarch64-linux-android24-clang"
+          export CXX_aarch64_linux_android="$bin/aarch64-linux-android24-clang++"
+          export AR_aarch64_linux_android="$bin/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CC_aarch64_linux_android"
+          cargo check --lib --target aarch64-linux-android
+
   ui-shots:
     name: ui screenshots (log)
     needs: app

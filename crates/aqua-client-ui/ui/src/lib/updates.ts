@@ -84,7 +84,7 @@ export async function checkUpdates(manual = false): Promise<void> {
     const ready = !!info.asset?.sha256;
     if (!id) updateState.set({ s: "none", info });
     else if (!ready) updateState.set(manual ? { s: "error", error: tr("The new build for this device isn't ready yet — try again in a few minutes."), info } : { s: "idle" });
-    else { updateState.set({ s: "available", info, id }); autoInstall(); }
+    else { updateState.set({ s: "available", info, id }); autoInstall(manual); }
   } catch (e) {
     updateState.set(manual ? { s: "error", error: String(e) } : { s: "idle" });
   }
@@ -95,12 +95,13 @@ export async function checkUpdates(manual = false): Promise<void> {
  *  installer is asked again at most every 30 minutes if it was turned down. */
 let lastAuto = 0;
 const busyWithCall = () => !!get(groupCall) || [...document.querySelectorAll<HTMLMediaElement>("[data-call-media]")].some((m) => !!m.srcObject);
-function autoInstall() {
+function autoInstall(manual = false) {
   const st = get(updateState);
   if (st.s !== "available" && st.s !== "error") return;
   if (!("id" in st) || !st.id) return;
   if (busyWithCall()) { setTimeout(autoInstall, 60000); return; }
-  if (Date.now() - lastAuto < 30 * 60000) return;
+  // Asked for by a tap ("Update the app"): now, not "at most every 30 minutes".
+  if (!manual && Date.now() - lastAuto < 30 * 60000) return;
   lastAuto = Date.now();
   void installUpdate();
 }

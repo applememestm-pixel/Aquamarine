@@ -361,18 +361,18 @@ pub fn set_shortcut_icon(app: tauri::AppHandle, png: Option<Vec<u8>>) -> Result<
     }
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
         use tauri::Manager;
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        // A new name each time: Explorer caches icons by path. Back to the
+        // app's icon: none left (refresh_shortcuts_after_update looks for one).
+        for old in std::fs::read_dir(&dir).map(|r| r.flatten().collect::<Vec<_>>()).unwrap_or_default() {
+            let n = old.file_name().to_string_lossy().to_string();
+            if n.starts_with("shortcut-icon-") && n.ends_with(".ico") { let _ = std::fs::remove_file(old.path()); }
+        }
         let loc = match png {
             Some(p) => {
-                let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
                 std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-                // A new name each time: Explorer caches icons by path.
-                for old in std::fs::read_dir(&dir).map(|r| r.flatten().collect::<Vec<_>>()).unwrap_or_default() {
-                    let n = old.file_name().to_string_lossy().to_string();
-                    if n.starts_with("shortcut-icon-") && n.ends_with(".ico") { let _ = std::fs::remove_file(old.path()); }
-                }
                 let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
                 let ico = dir.join(format!("shortcut-icon-{stamp}.ico"));
                 std::fs::write(&ico, png_to_ico(&p)).map_err(|e| e.to_string())?;
@@ -380,24 +380,7 @@ pub fn set_shortcut_icon(app: tauri::AppHandle, png: Option<Vec<u8>>) -> Result<
             }
             None => format!("{},0", exe.display()),
         };
-        let q = |s: &str| s.replace('\'', "''");
-        let script = format!(
-            "$exe='{exe}';$loc='{loc}';$sh=New-Object -ComObject WScript.Shell;\
-             foreach($k in 'Desktop','CommonDesktopDirectory','Programs','CommonPrograms','StartMenu'){{$d=[Environment]::GetFolderPath($k);if(-not $d){{continue}};\
-             Get-ChildItem -LiteralPath $d -Filter *.lnk -Recurse -ErrorAction SilentlyContinue|ForEach-Object{{try{{$l=$sh.CreateShortcut($_.FullName);\
-             if($l.TargetPath -ieq $exe){{$l.IconLocation=$loc;$l.Save()}}}}catch{{}}}}}};\
-             $tb=Join-Path $env:APPDATA 'Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar';\
-             if(Test-Path $tb){{Get-ChildItem -LiteralPath $tb -Filter *.lnk|ForEach-Object{{try{{$l=$sh.CreateShortcut($_.FullName);if($l.TargetPath -ieq $exe){{$l.IconLocation=$loc;$l.Save()}}}}catch{{}}}}}};\
-             try{{ie4uinit.exe -show}}catch{{}}",
-            exe = q(&exe.display().to_string()),
-            loc = q(&loc),
-        );
-        std::thread::spawn(move || {
-            let _ = std::process::Command::new("powershell")
-                .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &script])
-                .creation_flags(0x0800_0000)
-                .status();
-        });
+        relink_shortcuts(&exe.display().to_string(), &loc);
         Ok(())
     }
     #[cfg(not(windows))]
@@ -405,6 +388,58 @@ pub fn set_shortcut_icon(app: tauri::AppHandle, png: Option<Vec<u8>>) -> Result<
         let _ = (app, png);
         Ok(())
     }
+}
+
+/// Points every desktop / Start-menu / pinned-taskbar shortcut of `exe` at
+/// `loc` and has the shell drop its icon cache (in the background).
+#[cfg(windows)]
+fn relink_shortcuts(exe: &str, loc: &str) {
+    use std::os::windows::process::CommandExt;
+    let q = |s: &str| s.replace('\'', "''");
+    let script = format!(
+        "$exe='{exe}';$loc='{loc}';$sh=New-Object -ComObject WScript.Shell;\
+         foreach($k in 'Desktop','CommonDesktopDirectory','Programs','CommonPrograms','StartMenu'){{$d=[Environment]::GetFolderPath($k);if(-not $d){{continue}};\
+         Get-ChildItem -LiteralPath $d -Filter *.lnk -Recurse -ErrorAction SilentlyContinue|ForEach-Object{{try{{$l=$sh.CreateShortcut($_.FullName);\
+         if($l.TargetPath -ieq $exe){{$l.IconLocation=$loc;$l.Save()}}}}catch{{}}}}}};\
+         $tb=Join-Path $env:APPDATA 'Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar';\
+         if(Test-Path $tb){{Get-ChildItem -LiteralPath $tb -Filter *.lnk|ForEach-Object{{try{{$l=$sh.CreateShortcut($_.FullName);if($l.TargetPath -ieq $exe){{$l.IconLocation=$loc;$l.Save()}}}}catch{{}}}}}};\
+         try{{ie4uinit.exe -show}}catch{{}}",
+        exe = q(exe),
+        loc = q(loc),
+    );
+    std::thread::spawn(move || {
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &script])
+            .creation_flags(0x0800_0000)
+            .status();
+    });
+}
+
+/// Windows keeps a pinned / desktop shortcut's icon cached by the exe's path,
+/// and an update keeps the path: after the new logo the taskbar still showed
+/// the old one. Once per new version the shortcuts are re-pointed at the exe
+/// and the icon cache dropped — unless the user's own logo is on them.
+pub fn refresh_shortcuts_after_update(app: &tauri::AppHandle) {
+    #[cfg(windows)]
+    {
+        use tauri::Manager;
+        let Ok(dir) = app.path().app_data_dir() else { return };
+        let mark = dir.join("shortcut-icon.version");
+        let ver = env!("CARGO_PKG_VERSION");
+        if std::fs::read_to_string(&mark).map(|v| v.trim() == ver).unwrap_or(false) { return; }
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(&mark, ver);
+        let custom = std::fs::read_dir(&dir).map(|r| r.flatten().any(|e| {
+            let n = e.file_name().to_string_lossy().to_string();
+            n.starts_with("shortcut-icon-") && n.ends_with(".ico")
+        })).unwrap_or(false);
+        if custom { return; }
+        let Ok(exe) = std::env::current_exe() else { return };
+        let exe = exe.display().to_string();
+        relink_shortcuts(&exe, &format!("{exe},0"));
+    }
+    #[cfg(not(windows))]
+    let _ = app;
 }
 
 /// One PNG wrapped as an .ico (Vista+ reads PNG entries); 256 px → size byte 0.

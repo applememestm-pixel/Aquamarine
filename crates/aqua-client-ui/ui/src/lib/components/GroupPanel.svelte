@@ -17,7 +17,7 @@
    *   removed users, join requests, server tag (Discord), recent actions.
    * Toggles apply immediately (like Telegram); text fields have a Save.
    */
-  import { groupMap, groupMedia, refreshGroups } from "../groups";
+  import { groupMap, groupMedia, refreshGroups, requestJoinGroup } from "../groups";
   import { openFileDialog } from "../dialog";
   import { cropImage } from "./ImageCropper.svelte";
   import { streamSrc } from "../media";
@@ -38,9 +38,9 @@
   import { rolesOn, rolesOf, memberRoles, memberRoleIds, roleColor, hasPerm, canManageRole, outranks, rank, everyoneRole, PERM_GROUPS, ROLE_COLORS, ROOM_PERMS, type Role, type PermKey } from "../roles";
   import AnimatedMedia from "./AnimatedMedia.svelte";
   import ClanTag from "./ClanTag.svelte";
-  import type { AdminRights, Group, GroupMember, Perm } from "../types";
+  import type { AdminRights, Group, GroupMember, Perm, LinkedChat } from "../types";
 
-  type Page = "room-edit" | "roles" | "role-edit" | "room-perms" | "rooms" | "info" | "manage" | "type" | "perms" | "reactions" | "admins" | "admin-edit" | "members" | "banned" | "requests" | "clan" | "log";
+  type Page = "room-edit" | "roles" | "role-edit" | "room-perms" | "rooms" | "info" | "manage" | "type" | "perms" | "reactions" | "admins" | "admin-edit" | "members" | "banned" | "requests" | "clan" | "log" | "chats-add" | "suggested";
   let page = $state<Page>("info");
   let stack: Page[] = [];
   let editUser = $state("");
@@ -53,7 +53,8 @@
   /** Basic groups: private, ≤ 200 members, no server tag / slow mode / log. */
   let basic = $derived(group?.kind === "group");
   let media = $derived(group ? $groupMedia[group.id] ?? {} : {});
-  let noun = $derived(isChannel ? "channel" : "group");
+  let isCommunity = $derived(group?.kind === "community");
+  let noun = $derived(isChannel ? "channel" : isCommunity ? "community" : "group");
   let busy = $state(false);
 
   // Text drafts on the manage page.
@@ -105,6 +106,39 @@
     }
   }
   const S = (g: Group) => g.settings as unknown as Record<string, unknown>;
+
+  // ---- community: its chats (Telegram) ---------------------------------
+  /** "all": members add their chats right away; "admins": they suggest, admins approve. */
+  let addChats = $derived(group ? (((group.settings as unknown as Record<string, unknown>).add_chats as string) === "all" ? "all" : "admins") : "admins");
+  let linkedIds = $derived(new Set([...(group?.linked ?? []), ...(group?.suggested ?? [])].map((c) => c.id)));
+  /** My groups and channels I run that aren't in it yet (only their admin may bring them in). */
+  // A plain member brings in only chats they own (each receiver checks the owner is the sender).
+  let addable = $derived(group ? Object.values($groupMap).filter((g) => g.id !== group!.id && g.kind !== "community" && !linkedIds.has(g.id) && (admin ? isAdmin(g, me) : g.owner === me)) : []);
+  function linkOf(g: Group): LinkedChat { return { id: g.id, title: g.title.slice(0, 64), kind: g.kind, owner: g.owner, by: me }; }
+  async function addChat(g: Group) {
+    const e = linkOf(g);
+    if (admin) await commit((n) => { n.linked = [...(n.linked ?? []), e]; }, `Added chat ${g.title}`);
+    // A member's change carries nothing else (no log line): admins' copies accept only that.
+    else if (addChats === "all") await commit((n) => { n.linked = [...(n.linked ?? []), e]; });
+    else { await commit((n) => { n.suggested = [...(n.suggested ?? []), e]; }); showToast(tr("Suggested — the admins will look at it")); }
+    back();
+  }
+  async function unlinkChat(c: LinkedChat) {
+    if (!(await askConfirm({ title: tr("Remove “{name}” from the community?", { name: c.title }), text: tr("The chat itself stays."), ok: tr("Remove"), danger: true }))) return;
+    await commit((n) => { n.linked = (n.linked ?? []).filter((x) => x.id !== c.id); }, `Removed chat ${c.title}`);
+  }
+  async function decideSuggested(c: LinkedChat, ok: boolean) {
+    await commit((n) => {
+      n.suggested = (n.suggested ?? []).filter((x) => x.id !== c.id);
+      if (ok) n.linked = [...(n.linked ?? []), c];
+    }, ok ? `Added chat ${c.title}` : undefined);
+  }
+  async function openLinked(c: LinkedChat) {
+    if ($groupMap[c.id]) { closeGroupPanel(); await selectChat(c.id); return; }
+    try { await requestJoinGroup(c.id, c.owner, c.title, ""); showToast(tr("Request sent to the admins of “{name}”", { name: c.title })); }
+    catch (e) { showToast(String(e)); }
+  }
+  const setAddChats = (v: "all" | "admins") => commit((n) => { S(n).add_chats = v; }, v === "all" ? "Members can add chats" : "Only admins add chats");
 
   async function saveInfo() {
     const t = dTitle.trim();
@@ -574,6 +608,7 @@
     admins: "Administrators", "admin-edit": "Admin rights", members: "Members", banned: "Removed users",
     requests: "Join requests", clan: "Server tag", log: "Recent actions", rooms: "Rooms", "room-edit": "Room settings",
     roles: "Roles", "role-edit": "Edit role", "room-perms": "Room permissions",
+    "chats-add": "Add chat to community", suggested: "Suggested chats",
   };
   const I = {
     pencil: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>`,
@@ -619,7 +654,7 @@
           <button data-back class="ib" onclick={back} aria-label={$t("Back")}>{@html I.back}</button>
           <span class="bar-t">{$t(PAGE_TITLE[page])}</span>
         {:else}
-          <span class="bar-t">{$t(isChannel ? "Channel info" : "Group info")}</span>
+          <span class="bar-t">{$t(isChannel ? "Channel info" : isCommunity ? "Community" : "Group info")}</span>
         {/if}
         <span class="sp"></span>
         {#if page === "info" && admin}
@@ -648,12 +683,55 @@
           {/if}
           <div class="hero-t">
             <h2>{group.title} {#if group.clan}<ClanTag tag={{ ...group.clan, gid: group.id, title: group.title, owner: group.owner }} size="md" />{/if}</h2>
-            <div class="sub">{#if !isChannel}<span class="kind">{$t(basic ? "Group" : "Server")}</span> · {/if}{$tn(group.members.length, isChannel ? "subscriber" : "member")}{$t(group.settings.is_public ? " · public" : " · private")}{group.settings.protected_content ? $t(" · protected") : ""}</div>
+            <div class="sub">{#if !isChannel}<span class="kind">{$t(basic ? "Group" : isCommunity ? "Community" : "Server")}</span> · {/if}{$tn(group.members.length, isChannel ? "subscriber" : "member")}{$t(group.settings.is_public ? " · public" : " · private")}{group.settings.protected_content ? $t(" · protected") : ""}</div>
           </div>
         </div>
         {#if group.description}<p class="desc">{group.description}</p>{/if}
         {#if admin && group.requests?.length}
           <div class="card">{@render row("Join requests", `${group.requests.length}`, () => go("requests"), "#FF2D55")}</div>
+        {/if}
+
+        {#if isCommunity}
+          <!-- Telegram's community: its chats; open one, or ask to join it. -->
+          <div class="card">
+            <div class="ct">{$t("Chats in the community")}</div>
+            {#each group.linked ?? [] as c, ci (c.id)}
+              {@const lg = $groupMap[c.id]}
+              <div class="mrow click lrow" class:alt={ci % 2 === 1}>
+                <button class="lopen" onclick={() => void openLinked(c)}>
+                  <span class="m-ava" style:background-image={$groupMedia[c.id]?.photo ? `url("${$groupMedia[c.id]?.photo}")` : undefined} class:img={!!$groupMedia[c.id]?.photo}>{$groupMedia[c.id]?.photo ? "" : c.title.charAt(0).toUpperCase()}</span>
+                  <span class="m-name">{c.title}<span class="rs">{lg ? $tn(lg.members.length, lg.kind === "channel" ? "subscriber" : "member") : $t(c.kind === "channel" ? "Channel · ask to join" : "Group · ask to join")}</span></span>
+                </button>
+                {#if admin}<button class="lrm" onclick={() => void unlinkChat(c)} aria-label={$t("Remove from the community")} title={$t("Remove from the community")}>×</button>{/if}
+              </div>
+            {:else}
+              <div class="note">{$t("No chats yet.")}</div>
+            {/each}
+            {#if admin || memberOf(group, me)}
+              <button class="row add-row" onclick={() => go("chats-add")}><span class="rl">＋ {$t("Add chat to community")}</span></button>
+            {/if}
+          </div>
+          {#if admin && group.suggested?.length}
+            <div class="card">{@render row("Suggested chats", `${group.suggested.length}`, () => go("suggested"), "#FF9500")}</div>
+          {/if}
+          {#if admin}
+            <div class="card">
+              <div class="ct">{$t("Who can add chats")}</div>
+              <button class="row" onclick={() => { if (addChats !== "all") void setAddChats("all"); }}>
+                <span class="radio" class:on={addChats === "all"}></span>
+                <span class="rl">{$t("All members")}<span class="rs">{$t("Members add their groups and channels to the community.")}</span></span>
+              </button>
+              <button class="row" onclick={() => { if (addChats !== "admins") void setAddChats("admins"); }}>
+                <span class="radio" class:on={addChats === "admins"}></span>
+                <span class="rl">{$t("Only admins")}<span class="rs">{$t("Chats suggested by members need an admin's approval.")}</span></span>
+              </button>
+            </div>
+            <div class="card">
+              {@render row("Administrators", `${group.members.filter((m) => m.role !== "member").length}`, () => go("admins"))}
+              {@render row("Join requests", `${group.requests?.length ?? 0}`, () => go("requests"))}
+              {@render row("Removed users", `${group.banned?.length ?? 0}`, () => go("banned"))}
+            </div>
+          {/if}
         {/if}
 
         {#if group.rules}
@@ -741,6 +819,32 @@
 
         <button class="danger-btn" onclick={leave} disabled={busy}>{owner ? `Delete and leave ${noun}` : `Leave ${noun}`}</button>
 
+      {:else if page === "chats-add"}
+        <div class="card">
+          <div class="note">{$t(admin ? "Your groups and channels where you're an admin." : addChats === "all" ? "Your groups and channels where you're an admin — they join the community right away." : "Your groups and channels where you're an admin — the community's admins will look at them.")}</div>
+          {#each addable as g (g.id)}
+            <button class="mrow click" onclick={() => void addChat(g)} disabled={busy}>
+              <span class="m-ava" style:background={g.gradient}>{g.title.charAt(0).toUpperCase()}</span>
+              <span class="m-name">{g.title}<span class="rs">{$tn(g.members.length, g.kind === "channel" ? "subscriber" : "member")}</span></span>
+              <span class="chev">＋</span>
+            </button>
+          {:else}
+            <div class="note">{$t("No groups or channels of yours to add.")}</div>
+          {/each}
+        </div>
+      {:else if page === "suggested"}
+        <div class="card">
+          {#each group.suggested ?? [] as c (c.id)}
+            <div class="mrow">
+              <span class="m-ava">{c.title.charAt(0).toUpperCase()}</span>
+              <span class="m-name">{c.title}<span class="rs">{c.by ? `@${c.by}` : ""}</span></span>
+              <button class="btn" onclick={() => void decideSuggested(c, true)} disabled={busy}>{$t("Add")}</button>
+              <button class="btn ghost" onclick={() => void decideSuggested(c, false)} disabled={busy}>{$t("Decline")}</button>
+            </div>
+          {:else}
+            <div class="note">{$t("Nothing to review.")}</div>
+          {/each}
+        </div>
       {:else if page === "manage"}
         {#if can(group, me, "change_info")}
           <div class="card media-edit">
@@ -1389,6 +1493,14 @@
   .btn.ghost { background: var(--bg-input); color: var(--fg); }
   .btn.danger { background: rgba(255, 77, 109, 0.16); color: #ff6b6b; }
   .btn:disabled { opacity: 0.6; }
+  .lrow { display: flex; align-items: center; }
+  .lopen { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; border: none; background: transparent; color: inherit; padding: 0; cursor: pointer; text-align: left; font: inherit; }
+  .lopen .m-name, .mrow .m-name { display: flex; flex-direction: column; min-width: 0; }
+  .lrm { border: none; background: transparent; color: var(--fg-dim); font-size: 20px; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; }
+  .lrm:hover { color: var(--danger); background: var(--bg-hover); }
+  .add-row .rl { color: var(--accent); font-weight: 600; }
+  .radio { width: 20px; height: 20px; flex-shrink: 0; border-radius: 50%; border: 2px solid var(--fg-dim); box-sizing: border-box; margin-right: 12px; }
+  .radio.on { border-color: var(--accent); box-shadow: inset 0 0 0 4px var(--bg-surface), inset 0 0 0 10px var(--accent); }
   .danger-btn { width: 100%; border: none; border-radius: calc(12px * var(--rk, 1)); padding: 12px; margin-top: 4px; cursor: pointer;
                 background: var(--bg-surface); color: #ff6b6b; font-weight: 700; font-size: 14px; }
   .ttl-row { padding: 8px 0 2px; }

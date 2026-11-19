@@ -76,7 +76,7 @@
   }
   function stUp() { if (stHold) { clearTimeout(stHold); stHold = null; } }
   $effect(() => { if (fabOpen) return onBack(() => (fabOpen = false)); });
-  function fabPick(k: "chat" | "group" | "supergroup" | "channel") {
+  function fabPick(k: "chat" | "group" | "supergroup" | "channel" | "community") {
     fabOpen = false;
     if (k === "chat") openNewChatDialog(); else openNewGroup(k);
   }
@@ -84,7 +84,7 @@
    *  bar's. Touch an icon — the slider goes there and its name shows beside
    *  it; touch it again to make one. Or slide the finger along the panel and
    *  let go on the one you want. */
-  const FAB_ITEMS = [["channel", "New channel"], ["supergroup", "New server"], ["group", "New group"], ["chat", "New chat"]] as const;
+  const FAB_ITEMS = [["community", "New community"], ["channel", "New channel"], ["supergroup", "New server"], ["group", "New group"], ["chat", "New chat"]] as const;
   const FAB_CELL = 46;
   let fabSel = $state<number | null>(null);
   let fabDrag: { id: number; y0: number; moved: boolean; before: number | null } | null = null;
@@ -1186,7 +1186,8 @@
             <button onclick={() => { plusMenuOpen = false; toggleDayNight(); }}>{$t(shownMode($themeSettings) === "light" ? "Night mode" : "Day mode")}</button>
             <button onclick={() => { plusMenuOpen = false; openServers(); }}>{$t("Server")}</button>
           {/if}
-          {#if !IS_MOBILE}<button onclick={() => { plusMenuOpen = false; openNewGroup("channel"); }}>{$t("New channel")}</button>{/if}
+          {#if !IS_MOBILE}<button onclick={() => { plusMenuOpen = false; openNewGroup("channel"); }}>{$t("New channel")}</button>
+            <button onclick={() => { plusMenuOpen = false; openNewGroup("community"); }}>{$t("New community")}</button>{/if}
           {#if $chats.some((c) => c.unread > 0)}<button onclick={() => { plusMenuOpen = false; markAllRead(); }}>{$t("Mark all as read")}</button>{/if}
         </div>
         <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -1416,7 +1417,8 @@
         {#if g}
           {@const n = groupUnread(en)}
           <div class="gstack">
-            {#if g.emoji}<span class="gemo">{g.emoji}</span>
+            {#if g.photo}<img class="gemo gphoto" src={g.photo} alt="" />
+            {:else if g.emoji}<span class="gemo">{g.emoji}</span>
             {:else}
               {#each (en.members ?? []).slice(0, 3) as m, k (m.id)}
                 <span class="avatar gmini" style="--gradient: {m.gradient}; --k: {k}">{m.letter}{#if $avatars[m.id]}<img class="ava-img" src={$avatars[m.id]} alt="" loading="lazy" />{/if}</span>
@@ -1535,7 +1537,7 @@
               <!-- Touch is handled by the panel; a click with detail 0 is the keyboard. -->
               <button class="fab-item" class:sel={fabSel === i} role="menuitem" aria-label={$t(label)} style:--i={FAB_ITEMS.length - 1 - i}
                 onclick={(e) => { if (e.detail === 0) fabPick(k); }}>
-                {#if k === "chat"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>{:else if k === "group"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 19c.6-3.2 3-5 6-5s5.4 1.8 6 5"/><path d="M16 5.2a3 3 0 0 1 0 5.6M18 14.2c1.6.6 2.7 2.2 3 4.8"/></svg>{:else if k === "supergroup"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M8 9h8M8 13h5M3 8h0"/></svg>{:else}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v4a1 1 0 0 0 1 1h3l6 4V5L7 9H4a1 1 0 0 0-1 1z"/><path d="M17 8.5a5 5 0 0 1 0 7"/></svg>{/if}
+                {#if k === "chat"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>{:else if k === "group"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 19c.6-3.2 3-5 6-5s5.4 1.8 6 5"/><path d="M16 5.2a3 3 0 0 1 0 5.6M18 14.2c1.6.6 2.7 2.2 3 4.8"/></svg>{:else if k === "supergroup"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M8 9h8M8 13h5M3 8h0"/></svg>{:else if k === "community"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="3"/><circle cx="5" cy="17" r="2.5"/><circle cx="19" cy="17" r="2.5"/><path d="M10 9.5 6.5 15M14 9.5l3.5 5.5M7.5 17h9"/></svg>{:else}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v4a1 1 0 0 0 1 1h3l6 4V5L7 9H4a1 1 0 0 0-1 1z"/><path d="M17 8.5a5 5 0 0 1 0 7"/></svg>{/if}
               </button>
             {/each}
           </div>
@@ -1849,6 +1851,7 @@
   .gstack { position: relative; width: 44px; height: 44px; flex-shrink: 0; }
   .gmini { position: absolute; width: 28px; height: 28px; font-size: 11px; border: 2px solid var(--bg-list);
     left: calc(var(--k) * 8px); top: calc(var(--k) * 8px); z-index: calc(3 - var(--k)); }
+  .gphoto { object-fit: cover; display: block; }
   .gemo { display: grid; place-items: center; width: 44px; height: 44px; border-radius: calc(14px * var(--rk, 1)); background: var(--bg-input); font-size: 22px; }
   .g-count { flex-shrink: 0; min-width: 18px; padding: 0 6px; height: 17px; border-radius: calc(9px * var(--rk, 1)); font-size: 10.5px; font-weight: 800; line-height: 17px; text-align: center;
     color: var(--fg-muted); background: var(--bg-input); border: 1px solid var(--border); }

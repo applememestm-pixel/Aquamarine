@@ -63,7 +63,7 @@
   <div class="meta">
     <b title={card.title}>{card.title}</b>
     <small>{[card.artist, card.album].filter(Boolean).join(" — ")}</small>
-    {#if card.srv}<small class="srv" title={$t("From the server {s}", { s: card.srv })}>🖧 {card.srv}</small>{/if}
+    {#if card.srv}<small class="srv" title={$t("From the server {s}", { s: card.srv })}><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>{card.srv}</small>{/if}
     <span class="foot">
       {#if card.dur}<span class="dur">{fmtDuration(card.dur)}</span>{/if}
       {#if src}
@@ -89,7 +89,9 @@
 <style>
   .track { display: flex; gap: 10px; align-items: center; padding: 8px; width: min(320px, 76vw); box-sizing: border-box;
     background: var(--bubble-in, var(--bg-elev)); border: 1px solid var(--border); border-radius: calc(16px * var(--rk, 1)); color: var(--fg); }
+  /* An SVG, not the 🖧 emoji: Android has no glyph for it (an empty box). */
   .srv { color: var(--fg-dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .srv svg { width: 11px; height: 11px; margin-right: 4px; vertical-align: -1px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
   .track.out { background: var(--bubble-out, var(--accent-soft)); }
   .art { position: relative; width: 64px; height: 64px; flex: none; border-radius: calc(11px * var(--rk, 1)); background-size: cover; background-position: center;
     background-color: color-mix(in srgb, var(--accent) 30%, transparent); display: grid; place-items: center; overflow: hidden; }
@@ -98,7 +100,8 @@
   .play:hover { background: rgba(0, 0, 0, .42); }
   .play svg { width: 26px; height: 26px; fill: currentColor; }
   .eq { display: flex; gap: 3px; align-items: flex-end; height: 18px; }
-  .eq i { width: 4px; background: #fff; border-radius: 2px; animation: eq 0.9s ease-in-out infinite; }
+  /* A height of their own: with animations off the bars were 0 px — the playing card showed nothing. */
+  .eq i { width: 4px; height: 12px; background: #fff; border-radius: 2px; animation: eq 0.9s ease-in-out infinite; }
   .eq i:nth-child(2) { animation-delay: .2s; } .eq i:nth-child(3) { animation-delay: .4s; }
   @keyframes eq { 0%, 100% { height: 5px; } 50% { height: 18px; } }
   .meta { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }

@@ -61,6 +61,7 @@
   // ---------------------------------------------------------------- drafts
   const draftKey = (peer: string) => `aqua.articleDraft.${peer}`;
   let prevPeer = "";
+  let lastBodyState: unknown = null;
   $effect(() => {
     const s = $articleState;
     if (s && s.peerId !== prevPeer) {
@@ -76,6 +77,14 @@
           for (const m of media) if (m.path) void localUrl(m.path).catch(() => {});
         }
       } catch { /* no draft */ }
+      // From the message field's "expand": its text goes on after the draft's.
+      lastBodyState = s;
+      if (s.body) body = body.trim() ? `${body.trimEnd()}\n\n${s.body}` : s.body;
+      void tick().then(() => ta?.focus());
+    } else if (s?.body && s !== lastBodyState) {
+      // "Expand" while the editor is already open for this chat: the text goes on at the end.
+      lastBodyState = s;
+      body = body.trim() ? `${body.trimEnd()}\n\n${s.body}` : s.body;
       void tick().then(() => ta?.focus());
     } else if (!s) {
       prevPeer = "";

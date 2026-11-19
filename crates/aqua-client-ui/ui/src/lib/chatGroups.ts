@@ -11,6 +11,8 @@ export interface ChatGroup {
   name: string;
   /** Emoji shown instead of the stacked avatars (optional). */
   emoji?: string;
+  /** Its own photo (Telegram's "Change Community Photo"): a small JPEG data URL. */
+  photo?: string;
   chatIds: string[];
   /** Show as one row in the chat list. */
   collapsed: boolean;
@@ -61,6 +63,10 @@ export function removeFromGroup(chatId: string) {
 
 export function renameGroup(gid: string, name: string, emoji?: string) {
   chatGroups.update((gs) => gs.map((g) => (g.id === gid ? { ...g, name: name.trim().slice(0, 64) || g.name, emoji: emoji?.trim() || undefined } : g)));
+}
+
+export function setGroupPhoto(gid: string, photo: string | undefined) {
+  chatGroups.update((gs) => gs.map((g) => (g.id === gid ? { ...g, photo } : g)));
 }
 
 export function setCollapsed(gid: string, on: boolean) {

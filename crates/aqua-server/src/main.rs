@@ -112,6 +112,7 @@ async fn main() -> anyhow::Result<()> {
     aqua_server::music::spawn_bot(state.clone());
     aqua_server::verify::spawn_bot(state.clone());
     aqua_server::stars::spawn(state.clone());
+    aqua_server::botmaker::spawn(state.clone());
     // New releases install by themselves (pre-releases for testers).
     {
         let blobs = state.blobs.clone();

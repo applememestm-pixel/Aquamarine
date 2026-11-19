@@ -210,11 +210,11 @@
     color: var(--accent);
     font-weight: 500;
     padding: 4px 10px;
-    background: color-mix(in srgb, var(--accent) 6%, transparent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
     border-radius: calc(6px * var(--rk, 1));
     text-align: center;
   }
-  .word:nth-child(even) { color: var(--accent-2); background: color-mix(in srgb, var(--accent-2) 6%, transparent); }
+  /* Both columns alike: --accent-2 is dark in some themes and the right column was hard to read. */
   .fp-instruction {
     font-size: 12.5px;
     color: var(--fg-muted);

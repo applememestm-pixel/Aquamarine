@@ -161,7 +161,9 @@ pub async fn sources(state: &AppState) -> Vec<Source> {
                 if let Ok(Some(v)) = tokio::time::timeout(t, f.music_json_at(&p, "/v1/fed/music/info")).await {
                     let tag = v["tag"].as_str().unwrap_or("").to_string();
                     if !tag.is_empty() {
-                        let name = v["name"].as_str().filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| host_of(&p));
+                        // A relay without a public address calls itself "this server":
+                        // here that's someone else — named by its address.
+                        let name = v["name"].as_str().filter(|n| !n.is_empty() && *n != "this server").map(str::to_string).unwrap_or_else(|| host_of(&p));
                         return Some(Source { tag, name, peer: Some(p) });
                     }
                 }
@@ -253,6 +255,9 @@ pub async fn call_all(state: &AppState, method: &str, params: Vec<(String, Strin
     let srcs = sources(state).await;
     if srcs.is_empty() { return Err("Navidrome isn't set up on this server".into()); }
     let label = srcs.len() > 1;
+    // Merged lists don't wait long for a peer: one that's down held every
+    // /random and search for 20 s (and then said "… doesn't answer").
+    let wait = std::time::Duration::from_secs(if MERGED.contains(&method) && srcs.len() > 1 { 8 } else { 20 });
     let ask = |src: Source, params: Vec<(String, String)>| {
         let state = state.clone();
         let method = method.to_string();
@@ -263,7 +268,7 @@ pub async fn call_all(state: &AppState, method: &str, params: Vec<(String, Strin
                     let f = crate::fed::current(&state).ok_or("no network")?;
                     let qs = params.iter().map(|(k, v)| format!("{}={}", urlenc(k), urlenc(v))).collect::<Vec<_>>().join("&");
                     let path = if qs.is_empty() { format!("/v1/fed/music/rest/{method}") } else { format!("/v1/fed/music/rest/{method}?{qs}") };
-                    tokio::time::timeout(std::time::Duration::from_secs(20), f.music_json_at(p, &path)).await.ok().flatten().ok_or_else(|| format!("{} doesn't answer", src.name))?
+                    tokio::time::timeout(wait, f.music_json_at(p, &path)).await.ok().flatten().ok_or_else(|| format!("{} doesn't answer", src.name))?
                 }
             };
             fix_mojibake(&mut v);
@@ -284,12 +289,16 @@ pub async fn call_all(state: &AppState, method: &str, params: Vec<(String, Strin
         let all = futures_util::future::join_all(srcs.iter().cloned().map(|src| ask(src, params.clone()))).await;
         let mut base: Option<Value> = None;
         let mut err = None;
-        for r in all {
+        let mut down = false;
+        for (r, src) in all.into_iter().zip(srcs.iter()) {
             match r {
                 Ok(v) => match base.as_mut() { None => base = Some(v), Some(b) => merge_into(b, v) },
-                Err(e) => err = Some(e),
+                Err(e) => { down |= src.peer.is_some(); err = Some(e) }
             }
         }
+        // A peer stopped answering: the list of Navidromes is asked afresh
+        // next time rather than kept for a minute with the dead one in it.
+        if down { if let Ok(mut g) = SOURCES.lock() { *g = None; } }
         return base.ok_or_else(|| err.unwrap_or_default());
     }
     let first = srcs[0].clone();

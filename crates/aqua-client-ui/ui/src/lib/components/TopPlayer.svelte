@@ -67,6 +67,25 @@
   // When the track changes, load + autoplay. Identity (not src) is compared
   // so re-playing the same file / a duplicate queue entry restarts it.
   let playSrc = $state("");
+  /** A broken stream said "this format can't be played" too (the player
+   *  only sees bad bytes): ask the stream itself and say what really failed. */
+  async function playError(el: HTMLAudioElement) {
+    const src = playSrc;
+    if (!src) return;
+    let why = tr(mediaErrorText(el));
+    if (el.error?.code === 4 || el.error?.code === 3) {
+      try {
+        const r = await fetch(src, { headers: { Range: "bytes=0-1" } });
+        if (!r.ok) {
+          // No addresses in the toast: an error text could carry a Navidrome link with its login.
+          const raw = (await r.text().catch(() => "")).trim();
+          const body = /https?:\/\/|[?&](u|t|s|p)=/i.test(raw) ? "" : raw.slice(0, 160);
+          why = tr("Couldn't get the track: {e}", { e: body || `HTTP ${r.status}` });
+        }
+      } catch (err) { why = tr("Couldn't get the track: {e}", { e: String(err) }); }
+    }
+    if (src === playSrc) showToast(why, 9000);
+  }
   let lastTrack: object | null = null;
   let lastSrc = "";
   $effect(() => {
@@ -197,7 +216,7 @@
     <audio
       bind:this={audio}
       src={playSrc || undefined}
-      onerror={(e) => { if (playSrc) showToast(tr(mediaErrorText(e.currentTarget as HTMLAudioElement)), 9000); }}
+      onerror={(e) => void playError(e.currentTarget as HTMLAudioElement)}
       preload="metadata"
       ontimeupdate={onTime}
       onloadedmetadata={onMeta}
