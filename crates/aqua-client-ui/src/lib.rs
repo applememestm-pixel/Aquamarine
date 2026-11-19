@@ -109,6 +109,8 @@ pub fn run() -> Result<()> {
             if !single::claim(app.handle(), &base_dir) {
                 std::process::exit(0);
             }
+            // Windows: after an update the taskbar kept the old logo (icon cache).
+            personal::refresh_shortcuts_after_update(app.handle());
             // Several accounts on this device: each has its own directory
             // (accounts.rs); the first one is the base directory itself.
             let data_dir = accounts::resolve(&base_dir);
