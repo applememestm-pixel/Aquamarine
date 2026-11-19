@@ -183,6 +183,9 @@
   .bm-at { color: var(--fg-dim); font-weight: 500; }
   .bm-close { width: 32px; height: 32px; border: none; border-radius: 50%; background: transparent; color: var(--fg-muted); font-size: 22px; cursor: pointer; }
   .bm-body { overflow-y: auto; padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 8px; }
+  /* The scrolling column mustn't squeeze its fields (the textareas were one line high). */
+  .bm-body > * { flex-shrink: 0; }
+  .bm-text { min-height: 44px; }
   .bm-note { font-size: 13px; color: var(--fg-muted); padding: 12px 16px 0; }
   .bm-body .bm-note { padding: 0; }
   .bm-on { color: var(--accent); }
