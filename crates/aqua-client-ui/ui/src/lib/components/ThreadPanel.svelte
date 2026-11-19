@@ -33,7 +33,7 @@
     rootTime: string;
     items: ThreadItem[];
     canWrite?: boolean;
-    onSend: (text: string, re: { a: string; t: string } | null) => Promise<void>;
+    onSend: (text: string, re: { a: string; t: string } | null) => Promise<boolean>;
     onClose: () => void;
     onJump?: (id: string) => void;
     /** "Send message as…": groups / channels I run, the current pick ("" = me). */
@@ -48,6 +48,7 @@
   let re = $state<{ a: string; t: string } | null>(null);
   let busy = $state(false);
   let listEl = $state<HTMLDivElement | null>(null);
+  let input = $state<HTMLTextAreaElement | null>(null);
 
   $effect(() => {
     void items.length;
@@ -55,10 +56,15 @@
   });
 
   async function send() {
-    const v = text.trim();
-    if (!v || busy) return;
+    const draft = text, reply = re;
+    if (!draft.trim() || busy) return;
     busy = true;
-    try { await onSend(v, re); text = ""; re = null; }
+    try {
+      if (await onSend(draft.trim(), reply)) {
+        if (text === draft) text = "";
+        if (re === reply) re = null;
+      }
+    }
     finally { busy = false; }
   }
 </script>
@@ -66,16 +72,20 @@
 <aside class="th" class:phone={IS_MOBILE} use:sideResize={"threadpanel"} data-back aria-label={title}>
   <header class="th-head">
     <button data-x data-keep-x class="th-x" onclick={onClose} aria-label={$t(IS_MOBILE ? "Back" : "Close")}>{@html IS_MOBILE ? icons.back : CLOSE}</button>
-    <div class="th-title"><b>{title}</b>{#if items.length}<span>{tr("{n} in the thread", { n: items.length })}</span>{/if}</div>
+    <div class="th-title">
+      <b>{title}{#if IS_MOBILE && items.length}<small>{items.length}</small>{/if}</b>
+      {#if IS_MOBILE}<span>{rootAuthor} · {rootText}</span>
+      {:else if items.length}<span>{tr("{n} in the thread", { n: items.length })}</span>{/if}
+    </div>
   </header>
   <div class="th-list" bind:this={listEl}>
     <!-- The post itself on top, like Telegram's comments. -->
-    <div class="th-root">
+    {#if !IS_MOBILE}<div class="th-root">
       <div class="th-name">{rootAuthor}</div>
       <div class="th-text"><Markup src={rootText.slice(0, 2000)} compact /></div>
       <div class="th-time">{rootTime}</div>
-    </div>
-    <div class="th-sep"><span>{$t(items.length ? "Discussion started" : "No replies yet — start the discussion")}</span></div>
+    </div>{/if}
+    {#if !IS_MOBILE || !items.length}<div class="th-sep"><span>{$t(items.length ? "Discussion started" : "No replies yet — start the discussion")}</span></div>{/if}
     {#each items as it (it.id)}
       {@const face = it.as ? it.as.gid : it.author}
       <div class="th-item" class:out={it.outgoing} style:padding-left="{Math.min(it.depth, 3) * 12}px">
@@ -87,7 +97,7 @@
           <div class="th-time">{it.time}</div>
         </div>
         <div class="th-acts">
-          {#if canWrite}<button onclick={() => (re = { a: it.author, t: it.text.slice(0, 120) })} title={$t("Reply")} aria-label={$t("Reply")}>{@html icons.reply}</button>{/if}
+          {#if canWrite}<button onclick={() => { re = { a: it.as?.title ?? it.author, t: it.text.slice(0, 120) }; input?.focus(); }} title={$t("Reply")} aria-label={$t("Reply")}>{@html icons.reply}</button>{/if}
           {#if onJump}<button onclick={() => onJump?.(it.id)} title={$t("Show in chat")} aria-label={$t("Show in chat")}>{@html icons.forward}</button>{/if}
         </div>
       </div>
@@ -119,7 +129,7 @@
             {/if}
           </div>
         {/if}
-        <textarea rows="1" placeholder={$t("Write a comment…")} bind:value={text}
+        <textarea rows="1" placeholder={$t("Write a comment…")} bind:this={input} bind:value={text}
           onkeydown={(e) => { if (e.key === "Enter" && !e.shiftKey && !IS_MOBILE) { e.preventDefault(); void send(); } }}></textarea>
         <button class="th-send" onclick={send} disabled={busy || !text.trim()} aria-label={$t("Send")}>{@html icons.send}</button>
       </div>
@@ -129,11 +139,14 @@
 
 <style>
   .th { position: absolute; top: 0; right: 0; bottom: 0; width: min(380px, 100%); z-index: 25; display: flex; flex-direction: column; background: var(--bg-shell); border-left: 1px solid var(--border-strong); box-shadow: -16px 0 40px -22px rgba(0,0,0,0.6); animation: th-in 0.2s cubic-bezier(.2,.9,.3,1); }
-  /* Phones: a screen of its own over everything (Telegram), not a strip. */
-  .th.phone { position: fixed; inset: 0; width: auto; z-index: 300; border: none; box-shadow: none;
-    padding: var(--sat, env(safe-area-inset-top, 0px)) 0 var(--sab, env(safe-area-inset-bottom, 0px)); animation: th-in-ph 0.22s cubic-bezier(.2,.9,.3,1); }
+  .th.phone {
+    position: relative; inset: auto; width: auto !important; max-height: max(120px, min(35dvh, 256px));
+    flex: 0 0 auto; margin: 4px 8px; border: 1px solid var(--border);
+    border-radius: calc(14px * var(--rk, 1)); box-shadow: var(--shadow-lift); animation: th-in-ph .18s ease-out;
+  }
   @keyframes th-in { from { transform: translateX(24px); opacity: 0; } }
-  @keyframes th-in-ph { from { transform: translateX(40%); opacity: 0; } }
+  @keyframes th-in-ph { from { transform: translateY(-5px); opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .th, .th.phone { animation: none; } }
   .th-head { display: flex; align-items: center; gap: 6px; min-height: 56px; padding: 0 12px 0 6px; border-bottom: 1px solid var(--border); background: var(--bg-list); }
   .th-x { width: 44px; height: 44px; flex-shrink: 0; display: grid; place-items: center; border-radius: 50%; border: none; background: transparent; color: var(--fg); cursor: pointer; }
   .th-x :global(svg) { width: 22px; height: 22px; }
@@ -141,7 +154,15 @@
   .th-title { flex: 1; min-width: 0; display: flex; flex-direction: column; }
   .th-title b { font-size: 17px; font-weight: 600; }
   .th-title span { font-size: 13px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .th-title small { margin-inline-start: 8px; font-size: 11px; color: var(--accent); }
+  .phone .th-head { min-height: 44px; flex-shrink: 0; border-radius: calc(14px * var(--rk, 1)) calc(14px * var(--rk, 1)) 0 0; }
+  .phone .th-title b { font-size: 14px; }
+  .phone .th-title span { font-size: 12px; }
   .th-list { flex: 1; overflow-y: auto; padding: 12px 10px; display: flex; flex-direction: column; gap: 6px; }
+  .phone .th-list { min-height: 0; padding: 5px 8px; overscroll-behavior: contain; }
+  .phone .th-list > * { flex-shrink: 0; }
+  .phone .th-foot { flex-shrink: 0; padding: 4px 8px; border-radius: 0 0 calc(14px * var(--rk, 1)) calc(14px * var(--rk, 1)); }
+  .phone .th-asmenu { top: calc(100% + 4px); bottom: auto; max-height: 42dvh; overflow-y: auto; }
   .th-root { align-self: stretch; padding: 10px 12px 6px; border-radius: calc(16px * var(--rk, 1)); background: var(--bg-bubble-in); border: 1px solid var(--border); }
   .th-name { font-size: 13.5px; font-weight: 600; color: var(--accent); margin-bottom: 2px; }
   .th-text { font-size: 15px; line-height: 1.4; color: var(--fg); word-wrap: break-word; }

@@ -81,18 +81,31 @@ pub struct Spec {
 fn specs() -> &'static RwLock<HashMap<String, Spec>> {
     static S: std::sync::OnceLock<RwLock<HashMap<String, Spec>>> = std::sync::OnceLock::new();
     S.get_or_init(|| {
-        let map = std::fs::read(FILE).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        let map = match std::fs::read(FILE) {
+            Err(_) => HashMap::new(),
+            Ok(b) => serde_json::from_slice(&b).unwrap_or_else(|e| {
+                // A broken file isn't overwritten by the next save: it's kept aside.
+                let aside = format!("{FILE}.broken-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0));
+                let _ = std::fs::rename(FILE, &aside);
+                tracing::warn!(%e, file = %aside, "bot constructor: the specs file is broken; kept aside, starting empty");
+                HashMap::new()
+            }),
+        };
         RwLock::new(map)
     })
 }
 
+/// One save at a time (they share the .tmp file); a failure is logged.
 fn save() {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let map = specs().read().unwrap_or_else(|e| e.into_inner()).clone();
-    if let Ok(b) = serde_json::to_vec_pretty(&map) {
+    let res = serde_json::to_vec_pretty(&map).map_err(|e| e.to_string()).and_then(|b| {
         let tmp = format!("{FILE}.tmp");
-        if std::fs::write(&tmp, b).is_ok() {
-            let _ = std::fs::rename(&tmp, FILE);
-        }
+        std::fs::write(&tmp, b).and_then(|_| std::fs::rename(&tmp, FILE)).map_err(|e| e.to_string())
+    });
+    if let Err(e) = res {
+        tracing::warn!(%e, "bot constructor: can't save the specs");
     }
 }
 
@@ -195,10 +208,12 @@ pub fn pick<'a>(s: &'a Spec, bot: &str, u: &BotUpdate) -> Option<&'a Reply> {
         let word = word.split_once('@').filter(|(_, at)| at.eq_ignore_ascii_case(bot)).map(|(w, _)| w).unwrap_or(word);
         return by_name(&word.to_lowercase()).or(s.fallback.as_ref());
     }
-    let low = t.to_lowercase();
+    // Whole words: "hi" answers "hi there", not "this".
+    let norm = |x: &str| format!(" {} ", x.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" "));
+    let low = norm(t);
     s.keywords
         .iter()
-        .find(|k| k.words.split(',').map(|w| w.trim().to_lowercase()).any(|w| !w.is_empty() && low.contains(&w)))
+        .find(|k| k.words.split(',').map(norm).any(|w| !w.trim().is_empty() && low.contains(&w)))
         .map(|k| &k.reply)
         .or(s.fallback.as_ref())
 }
@@ -242,7 +257,13 @@ fn run(state: AppState, bot: String) {
     if !running().insert(bot.clone()) {
         return;
     }
+    /// Off the list however the loop ends (a panic included), so it can start again.
+    struct Done(String);
+    impl Drop for Done {
+        fn drop(&mut self) { running().remove(&self.0); }
+    }
     tokio::spawn(async move {
+        let _done = Done(bot.clone());
         loop {
             let Some(spec) = spec_of(&bot) else { break };
             if !state.directory.is_bot(&bot) {
@@ -271,7 +292,6 @@ fn run(state: AppState, bot: String) {
                 }
             }
         }
-        running().remove(&bot);
     });
 }
 
@@ -347,7 +367,8 @@ mod tests {
         assert_eq!(pick(&s, "shop", &upd("/start", None)).unwrap().text, "Hi");
         assert_eq!(pick(&s, "shop", &upd("/prices@shop", None)).unwrap().text, "100");
         assert_eq!(pick(&s, "shop", &upd("x", Some("go:prices"))).unwrap().text, "100");
-        assert_eq!(pick(&s, "shop", &upd("Ну ПРИВЕТ", None)).unwrap().text, "Hey");
+        assert_eq!(pick(&s, "shop", &upd("Ну ПРИВЕТ!", None)).unwrap().text, "Hey");
+        assert_eq!(pick(&s, "shop", &upd("shellohello", None)).unwrap().text, "?", "whole words only");
         assert_eq!(pick(&s, "shop", &upd("what", None)).unwrap().text, "?");
         assert_eq!(pick(&s, "shop", &upd("/nope", None)).unwrap().text, "?");
         assert!(pick(&s, "shop", &upd("x", Some("go:nope"))).is_none());

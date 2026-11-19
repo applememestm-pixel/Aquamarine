@@ -9,6 +9,7 @@
   import Select from "./Select.svelte";
   import ColorInput from "./ColorInput.svelte";
   import { t, tr, tn } from "../i18n";
+  import { IS_MOBILE } from "../platform";
   /**
    * Telegram-grade group / channel info and management:
    *   info → (admins) manage → type & link, permissions, reactions,
@@ -644,13 +645,13 @@
 }} />
 
 {#if $groupPanelId && group}
-  <div class="backdrop" role="button" tabindex="-1"
+  <div class="backdrop" class:phone-manage={IS_MOBILE && page === "manage"} role="button" tabindex="-1"
        onclick={(e) => { if ((e.target as HTMLElement).classList.contains('backdrop')) closeGroupPanel(); }}
        onkeydown={() => {}}>
     <div class="sheet" role="dialog" aria-modal="true" aria-label="{noun} info">
       <div class="bar">
         {#if page !== "info"}
-          <button class="ib" onclick={back} aria-label={$t("Back")}>{@html I.back}</button>
+          <button data-back class="ib" onclick={back} aria-label={$t("Back")}>{@html I.back}</button>
           <span class="bar-t">{$t(PAGE_TITLE[page])}</span>
         {:else}
           <span class="bar-t">{$t(isChannel ? "Channel info" : isCommunity ? "Community" : "Group info")}</span>
@@ -885,6 +886,8 @@
           {#if !basic}{@render row(isChannel ? "Channel type" : "Group type", group.settings.is_public ? "Public" : "Private", () => go("type"), "#007AFF")}{/if}
           {#if !isChannel}{@render row("Permissions", `${PERM_ROWS.filter((p) => isOn(group, p.key)).length}/${PERM_ROWS.length}`, () => go("perms"), "#34C759")}{/if}
           {@render row("Reactions", group.settings.reactions === "none" ? "Off" : group.settings.reactions === "some" ? `${group.settings.allowed_reactions?.length ?? 0}` : "All", () => go("reactions"), "#FF9500")}
+        </div>
+        <div class="card">
           {@render row("Administrators", `${admins.length}`, () => go("admins"), "#5856D6")}
           {@render row(isChannel ? "Subscribers" : "Members", `${group.members.length}`, () => go("members"), "#32ADE6")}
           {#if !basic || group.requests?.length}{@render row("Join requests", `${group.requests?.length ?? 0}`, () => go("requests"), "#FF2D55")}{/if}
@@ -1341,6 +1344,18 @@
   .ib :global(svg) { width: 17px; height: 17px; }
   .ib:hover { background: var(--bg-hover); color: var(--fg); }
   .body { flex: 1; overflow-y: auto; padding: 12px 14px 18px; }
+
+  .backdrop.phone-manage { padding: 0; }
+  .phone-manage .sheet {
+    width: 100%; height: 100%; min-height: 0; box-sizing: border-box; border: 0; border-radius: 0;
+    padding: var(--sat, env(safe-area-inset-top, 0px)) var(--sar, env(safe-area-inset-right, 0px))
+      var(--sab, env(safe-area-inset-bottom, 0px)) var(--sal, env(safe-area-inset-left, 0px));
+  }
+  .phone-manage .bar { padding: 8px 12px; }
+  .phone-manage .ib { width: 42px; height: 42px; }
+  .phone-manage .card { margin-bottom: 14px; border-radius: calc(18px * var(--rk, 1)); }
+  .phone-manage .row { min-height: 48px; }
+  .phone-manage .rv, .phone-manage .fld > span { color: var(--accent); }
 
   .hero { display: flex; gap: 14px; align-items: center; padding: 6px 4px 10px; }
   .ava { width: 64px; height: 64px; border-radius: var(--ava-r, 50%); display: grid; place-items: center; flex-shrink: 0;

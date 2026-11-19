@@ -14,6 +14,8 @@
   import { openSettings, settingsOpen } from "../panels/settings";
   import { musicOn } from "../music";
 
+  let { settingsActions }: { settingsActions?: { go: (tab: NavTab) => void; home: () => void } } = $props();
+
   type Item = { id: string; label: string; svg: string; tab?: NavTab; mobileOnly?: boolean; desktopOnly?: boolean };
   // Phones get four: Chats, Files, Contacts (with recent calls inside, like
   // Telegram) and Settings; your profile is the avatar on the main page.
@@ -37,12 +39,17 @@
   const items = $derived(($musicOn ? [...all.slice(0, -1), music, all[all.length - 1]] : all).filter((i) => (phone ? !i.desktopOnly : !i.mobileOnly)));
 
   function activate(it: Item) {
+    if (settingsActions) {
+      if (it.tab) settingsActions.go(it.tab);
+      else settingsActions.home();
+      return;
+    }
     if (it.tab) activeTab.set(it.tab);
     else if (it.id === "settings") openSettings();
   }
   // On phones the calls list lives under Contacts.
   const shownTab = $derived(phone && $activeTab === "calls" ? "contacts" : $activeTab);
-  const activeIndex = $derived(Math.max(0, items.findIndex((i) => i.tab === shownTab)));
+  const activeIndex = $derived(Math.max(0, items.findIndex((i) => settingsActions ? i.id === "settings" : i.tab === shownTab)));
 
   // ---- press and hold: drag the highlight, drop it on a section ----
   let bar: HTMLElement | undefined = $state();
@@ -91,6 +98,7 @@
   // ---- exteraGram: hide while scrolling down, show when scrolling up ----
   let hidden = $state(false);
   onMount(() => {
+    if (settingsActions) return;
     // Per element: where the current run of scrolling one way started.
     // A finger scroll comes as many small steps (2–5 px a frame), so the
     // distance is summed up — a "> 6 px per event" test never fired on a phone.
@@ -117,11 +125,12 @@
   });
   // A new section starts with the bar in view.
   $effect(() => { void $activeTab; void $activeId; void $settingsOpen; hidden = false; });
-  $effect(() => { document.documentElement.classList.toggle("dock-hidden", hidden); });
+  $effect(() => { if (!settingsActions) document.documentElement.classList.toggle("dock-hidden", hidden); });
 </script>
 
 <aside
   class="rail"
+  class:settings-rail={!!settingsActions}
   class:hidden
   class:dragging={dragX != null}
   bind:this={bar}
@@ -140,7 +149,7 @@
     <button
       class="nav-btn"
       class:mobile-only={item.mobileOnly}
-      class:active={item.tab ? shownTab === item.tab : false}
+      class:active={settingsActions ? item.id === "settings" : shownTab === item.tab}
       class:hover={dragX != null && lastIdx === i}
       data-label={$t(item.label)}
       onclick={(e) => { if (swallowClick) { e.preventDefault(); return; } activate(item); }}
@@ -222,6 +231,7 @@
   .nav-lbl { display: none; }
 
   /* ---- Phones: a floating tab bar, like the new Telegram ---- */
+  .rail.settings-rail { display: none; }
   @media (max-width: 720px) {
     .rail {
       flex-direction: row;
@@ -246,6 +256,7 @@
       transition: transform .38s cubic-bezier(.22,1,.36,1), opacity .3s ease;
     }
     .rail.hidden:not(.dragging) { transform: translateX(-50%) translateY(calc(100% + 24px)); opacity: 0; pointer-events: none; }
+    .rail.settings-rail { display: flex; position: absolute; }
     .brand, .rail-divider, .rail-spacer { display: none; }
     .nav-btn.mobile-only { display: flex; margin-top: 0; }
     /* Every button the same size: the whole slot is the hitbox. */

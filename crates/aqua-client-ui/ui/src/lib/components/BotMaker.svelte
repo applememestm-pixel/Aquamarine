@@ -30,12 +30,14 @@
   let loading = $state(false);
   let saving = $state(false);
   let on = $state(false);
+  /** The saved spec didn't load: saving now would replace it with this draft. */
+  let loadFailed = $state(false);
 
   $effect(() => {
     const bot = $botMakerFor;
     if (!bot) return;
     loading = true;
-    on = false;
+    on = false; loadFailed = false;
     spec = { about: "", start: empty(tr("Hi! I'm a bot.")), commands: [], keywords: [] };
     hasFallback = false; fallback = empty();
     api.botSpec(bot, "get").then((v) => {
@@ -45,7 +47,7 @@
       spec = { about: s.about ?? "", start: fix(s.start), commands: (s.commands ?? []).map((c) => ({ command: c.command, description: c.description ?? "", reply: fix(c.reply) })), keywords: (s.keywords ?? []).map((k) => ({ words: k.words, reply: fix(k.reply) })) };
       hasFallback = !!s.fallback; fallback = fix(s.fallback);
       on = true;
-    }).catch((e) => showToast(String(e), 6000)).finally(() => { loading = false; });
+    }).catch((e) => { loadFailed = true; showToast(String(e), 6000); }).finally(() => { loading = false; });
   });
   $effect(() => { if ($botMakerFor) return onBack(() => botMakerFor.set(null)); });
 
@@ -56,6 +58,15 @@
     { value: "@url", label: tr("A link…") },
   ]);
 
+  /** Renaming a command takes its buttons along (they pointed at the old name). */
+  function renameCmd(c: Cmd, next: string) {
+    const norm = (x: string) => x.trim().replace(/^\//, "").toLowerCase();
+    const was = norm(c.command), now = norm(next);
+    c.command = next;
+    if (!was || was === now) return;
+    const all = [spec.start, ...spec.commands.map((x) => x.reply), ...spec.keywords.map((k) => k.reply), ...(hasFallback ? [fallback] : [])];
+    for (const r of all) for (const row of r.buttons) for (const b of row) if (b.goto === was) b.goto = now;
+  }
   function addButton(r: Reply) { if (r.buttons.length < 8) r.buttons.push([{ text: "", goto: "start", url: "" }]); }
   function setTarget(b: Btn, v: string) { if (v === "@url") { b.goto = ""; b.url = b.url || "https://"; } else { b.goto = v; b.url = ""; } }
 
@@ -70,7 +81,7 @@
 
   async function save() {
     const bot = $botMakerFor;
-    if (!bot) return;
+    if (!bot || loadFailed) return;
     saving = true;
     try {
       await api.botSpec(bot, "put", payload());
@@ -114,6 +125,7 @@
         <div class="bm-note">{$t("Loading…")}</div>
       {:else}
       <div class="bm-body">
+        {#if loadFailed}<div class="bm-warn">{$t("Couldn't load what the bot answers now — saving is off so it isn't replaced. Close and open the constructor again.")}</div>{/if}
         <div class="bm-note">{$t("A bot without code: write what it answers, the server does the rest. Buttons lead to another answer or open a link.")}{#if on} <b class="bm-on">{$t("On")}</b>{/if}</div>
 
         <div class="bm-sec">{$t("About the bot")}</div>
@@ -127,7 +139,7 @@
           <div class="bm-card">
             <div class="bm-row">
               <span class="bm-slash">/</span>
-              <input class="bm-in cmd" maxlength="32" placeholder="prices" bind:value={c.command} />
+              <input class="bm-in cmd" maxlength="32" placeholder="prices" value={c.command} oninput={(e) => renameCmd(c, (e.currentTarget as HTMLInputElement).value)} />
               <input class="bm-in" maxlength="256" placeholder={$t("Description in the / menu")} bind:value={c.description} />
               <button class="bm-x" onclick={() => spec.commands.splice(ci, 1)} aria-label={$t("Remove")}>×</button>
             </div>
@@ -155,7 +167,7 @@
       <div class="bm-foot">
         {#if on}<button class="bm-off" onclick={turnOff}>{$t("Turn off")}</button>{/if}
         <span class="bm-sp"></span>
-        <button class="bm-save" onclick={save} disabled={saving}>{$t(saving ? "Saving…" : "Save")}</button>
+        <button class="bm-save" onclick={save} disabled={saving || loadFailed}>{$t(saving ? "Saving…" : "Save")}</button>
       </div>
       {/if}
     </div>
@@ -174,6 +186,7 @@
   .bm-note { font-size: 13px; color: var(--fg-muted); padding: 12px 16px 0; }
   .bm-body .bm-note { padding: 0; }
   .bm-on { color: var(--accent); }
+  .bm-warn { font-size: 13px; color: var(--danger); padding: 8px 10px; border-radius: calc(10px * var(--rk, 1)); background: color-mix(in srgb, var(--danger) 12%, transparent); }
   .bm-sec { margin-top: 10px; font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--fg-dim); }
   .bm-text, .bm-in { width: 100%; box-sizing: border-box; border: 1px solid var(--border); background: var(--bg-input); color: var(--fg); border-radius: calc(10px * var(--rk, 1));
     padding: 8px 10px; font: 14px var(--font-ui, inherit); resize: vertical; min-width: 0; }

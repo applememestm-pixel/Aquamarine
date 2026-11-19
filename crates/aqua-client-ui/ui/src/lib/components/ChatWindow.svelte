@@ -446,13 +446,37 @@
   let streamTapped = $state<string[]>([]);
   $effect(() => { const id = $activeChat?.id ?? ""; if (id !== streamChat) { streamChat = id; streamUrls = {}; streamTapped = []; } });
 
-  async function autoDownload(peerId: string, messageId: string) {
+  const loadingInlineMedia = new SvelteSet<string>();
+  async function loadInlineMedia(peerId: string, messageId: string) {
+    if (untrack(() => loadingInlineMedia.has(messageId))) return;
+    loadingInlineMedia.add(messageId);
     try {
       await api.downloadFile(peerId, messageId);
-      await loadActiveMessages();
+      if ($activeChat?.id === peerId) await loadActiveMessages();
+    } finally {
+      loadingInlineMedia.delete(messageId);
+    }
+  }
+
+  async function autoDownload(peerId: string, messageId: string) {
+    try {
+      await loadInlineMedia(peerId, messageId);
     } catch (e) {
       // Non-fatal — user can still click "Download & decrypt".
       console.warn("auto-download failed", messageId, e);
+    }
+  }
+
+  const failedPhotos = new SvelteSet<string>();
+  function photoKey(id: string, url: string | null) { return `${id}:${url ?? ""}`; }
+  async function retryPhoto(id: string, url: string | null) {
+    const chat = $activeChat;
+    if (!chat || loadingInlineMedia.has(id)) return;
+    try {
+      await loadInlineMedia(chat.id, id);
+      failedPhotos.delete(photoKey(id, url));
+    } catch {
+      showToast(tr("Photo unavailable"));
     }
   }
 
@@ -763,16 +787,39 @@
     for (const ms of [800, 1800, 3500]) { await new Promise((r) => setTimeout(r, ms)); await galleryLoad(); if (gallery.state === "ok") break; }
   }
   /** A gallery tile tapped: look at it full screen (the circle selects). */
-  function galleryPeek(i: number) {
-    const shots = gallery.items.filter((g) => g.thumb && !g.video);
-    const at = shots.indexOf(gallery.items[i]);
-    if (at < 0) { galleryToggle(gallery.items[i].uri); return; }
-    openGallery(shots.map((g) => ({ url: g.thumb!, kind: "image" as const })), at);
+  let pickedPreview = $state<{ uri: string; url: string; loading: boolean } | null>(null);
+  function closePickedPreview() {
+    if (pickedPreview?.url.startsWith("blob:")) URL.revokeObjectURL(pickedPreview.url);
+    pickedPreview = null;
   }
+  async function galleryPeek(i: number) {
+    const item = gallery.items[i];
+    if (!item) return;
+    if (item.video) { galleryToggle(item.uri); return; }
+    closePickedPreview();
+    pickedPreview = { uri: item.uri, url: item.thumb ?? "", loading: true };
+    try {
+      const bytes = await api.readUserImage(item.uri);
+      if (pickedPreview?.uri !== item.uri) return;
+      const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: item.mime || "image/jpeg" }));
+      pickedPreview = { uri: item.uri, url, loading: false };
+    } catch (e) {
+      if (pickedPreview?.uri === item.uri) pickedPreview = { ...pickedPreview, loading: false };
+      showToast(String(e));
+    }
+  }
+  $effect(() => { if (pickedPreview) return onBack(closePickedPreview); });
+  $effect(() => { if (!attachMenuOpen) closePickedPreview(); });
   let checkDown: { x: number; y: number; uri: string } | null = null;
   let checkFired = false;
   function galleryToggle(uri: string) {
-    gallerySel = gallerySel.includes(uri) ? gallerySel.filter((u) => u !== uri) : [...gallerySel, uri];
+    if (gallerySel.includes(uri)) {
+      gallerySel = gallerySel.filter((u) => u !== uri);
+    } else if (gallerySel.length < 10) {
+      gallerySel = [...gallerySel, uri];
+    } else {
+      showToast(tr("Select up to 10 items at a time"));
+    }
   }
   /** Caption typed under the picked photos (Telegram: right in the sheet). */
   let galCap = $state("");
@@ -1916,15 +1963,16 @@
   }
   async function sendThread(text: string, re: { a: string; t: string } | null) {
     const th = thread, chat = $activeChat;
-    if (!th || !chat) return;
+    if (!th || !chat) return false;
     const body = th.kind === "comments"
       ? "[cmt:v1]" + JSON.stringify({ to: reactionKey(th.root), t: text, ...(re ? { re } : {}) })
       : "[reply:v1]" + JSON.stringify({ quoted_author: re?.a ?? authorOf(th.root), quoted_text: re ? re.t.slice(0, 180) : quoteOf(th.root), text });
     try {
       if (chat.id.startsWith("grp_")) await api.groupSend(chat.id, body, false, sendAsFor(chat.id));
       else await api.sendMessage(chat.id, body);
-      await loadActiveMessages();
-    } catch (e) { showToast(String(e)); }
+      if ($activeChat?.id === chat.id) await loadActiveMessages();
+      return true;
+    } catch (e) { showToast(String(e)); return false; }
   }
 
   // ---- Chat password (only for me) ----
@@ -3771,29 +3819,12 @@
   {:else}<span class="room-ic">{r.kind === "voice" ? "🔊" : "#"}</span>{/if}
 {/snippet}
 
-<main class="active-chat" bind:this={chatRoot} class:themed={!!chatLook} style={chatLook} class:with-rooms={rooms.length > 0} class:voice-on={fullVoice} class:voice-chat={fullVoice && voiceChat}>
+<main class="active-chat" bind:this={chatRoot} class:phone={IS_MOBILE} class:themed={!!chatLook} style={chatLook} class:with-rooms={rooms.length > 0} class:voice-on={fullVoice} class:voice-chat={fullVoice && voiceChat}>
   {#if !$activeChat}
     <Welcome />
   {:else}
     {#if $statsFor === $activeChat.id && amChanAdmin && activeGroup}
       <ChannelStats gid={$activeChat.id} subscribers={activeGroup.members.length} posts={statPosts} />
-    {/if}
-    {#if thread && !lockedNow}
-      {@const th = thread}
-      <ThreadPanel
-        title={th.kind === "comments" ? $t("Comments") : $t("Thread")}
-        rootAuthor={th.root.outgoing ? $t("You") : (isGroup ? th.root.from : $activeChat.name)}
-        rootText={snippetOf(th.root)}
-        rootTime={th.root.time}
-        items={threadItems}
-        canWrite={$activeChat.live && (th.kind === "replies" ? canPost : commentsAllowed)}
-        onSend={sendThread}
-        onClose={() => (thread = null)}
-        onJump={th.kind === "replies" ? (id) => window.dispatchEvent(new CustomEvent("aqua:jump", { detail: id })) : undefined}
-        asChoices={asChoices.map((g) => ({ id: g.id, title: g.title, gradient: g.gradient }))}
-        asPick={$sendAsPick[$activeChat.id] ?? ""}
-        onAs={(gid) => { if ($activeChat) setSendAs($activeChat.id, gid); }}
-      />
     {/if}
     {#if lockedNow}
       <div class="lock-gate">
@@ -3910,6 +3941,7 @@
       <button class="back-btn" onclick={() => backToList()} title={$t("Back")} aria-label={$t("Back to chats")}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
       </button>
+      <div class="chat-identity">
       {#if isGroup && activeGroup}
         <button class="avatar sz-40 avatar-btn" class:ava-grp={!$activeChat.channel} class:ava-chan={$activeChat.channel} style="--gradient: {$activeChat.gradient}" title="Group info & settings">
           {$activeChat.letter}
@@ -4013,6 +4045,7 @@
           {/if}
         </div>
       </div>
+      </div>
       <div class="chat-actions">
         {#if feedAllowed && $activeChat}
           <!-- Feed / chat view of a channel in one tap (exteraGram's "Feed"); phones, subscribers only. -->
@@ -4063,6 +4096,25 @@
         {/if}
       </div>
     </header>
+    {#if thread && !lockedNow}
+      {@const th = thread}
+      {#key th.root.id}
+      <ThreadPanel
+        title={th.kind === "comments" ? $t("Comments") : $t("Thread")}
+        rootAuthor={th.root.outgoing ? $t("You") : (isGroup ? th.root.from : $activeChat.name)}
+        rootText={snippetOf(th.root)}
+        rootTime={th.root.time}
+        items={threadItems}
+        canWrite={$activeChat.live && (th.kind === "replies" ? canPost : commentsAllowed)}
+        onSend={sendThread}
+        onClose={() => (thread = null)}
+        onJump={th.kind === "replies" ? (id) => window.dispatchEvent(new CustomEvent("aqua:jump", { detail: id })) : undefined}
+        asChoices={asChoices.map((g) => ({ id: g.id, title: g.title, gradient: g.gradient }))}
+        asPick={$sendAsPick[$activeChat.id] ?? ""}
+        onAs={(gid) => { if ($activeChat) setSendAs($activeChat.id, gid); }}
+      />
+      {/key}
+    {/if}
     {#if phoneUI && (callMenu || toolsMenu || ttlMenu)}
       <!-- Phones: the header menus open under the header and push the room
            tabs and the pinned message down (like the search bar), instead of
@@ -4133,11 +4185,29 @@
       {/if}
     {/if}
 
+    {#snippet missingPhoto(id: string, cid: string, url: string | null, albumCell: boolean)}
+      {#if cid.startsWith("local-")}
+        <div class="missing-photo" class:alb-cell={albumCell}>{$t("Photo unavailable")}</div>
+      {:else}
+        <button class="missing-photo" class:alb-cell={albumCell} disabled={loadingInlineMedia.has(id)} onclick={() => retryPhoto(id, url)}>
+          {@html icons.download}
+          <span>{$t(loadingInlineMedia.has(id) ? "Downloading…" : "Download photo")}</span>
+        </button>
+      {/if}
+    {/snippet}
+
     {#if pinned}
       {@const pv = previewLine(pinned)}
+      {@const photo = pinned.kind.type === "file" && renderKind(pinned.kind.content) === "image" ? pinned.kind.content : null}
+      {@const thumb = photo && !coverMedia(pinned, photo.saved_at) ? inlineUrl(photo.saved_at, photo.mime) : null}
       <div class="pin-bar">
         <button class="pin-main" onclick={scrollToPinned} title={$t("Go to pinned message")}>
+          {#if thumb && !failedPhotos.has(photoKey(pinned.id, thumb))}
+            {@const key = photoKey(pinned.id, thumb)}
+            <img class="pin-thumb" src={thumb} alt="" onerror={() => failedPhotos.add(key)} />
+          {:else}
           <svg class="pin-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14l-1.5-5V5a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7z"/></svg>
+          {/if}
           <div class="pin-text">
             <div class="pin-title">{$t("Pinned message")}</div>
             <div class="pin-preview">{pv}</div>
@@ -4380,43 +4450,45 @@
                       {#if a.kind.type === "file"}
                         {@const ac = a.kind.content}
                         {@const au = inlineUrl(ac.saved_at, ac.mime)}
-                        {#if au && coverMedia(a, ac.saved_at)}
+                        {@const key = photoKey(a.id, au)}
+                        {#if failedPhotos.has(key) || !au}
+                          {@render missingPhoto(a.id, ac.cid, au, true)}
+                        {:else if coverMedia(a, ac.saved_at)}
                           <button class="media-img-btn media-18 alb-cell" onclick={() => { if ($nsfwOf(ac.saved_at) !== "pending") revealAdult(a.id, false); }} title={$t("Sensitive content — tap to show")}>
-                            <img class="media-img" src={au} alt="" />
+                            <img class="media-img" src={au} alt="" onerror={() => failedPhotos.add(key)} />
                             {#if $nsfwOf(ac.saved_at) === "explicit"}<span class="m18"><b>18+</b></span>{/if}
                           </button>
-                        {:else if au}
-                          <button class="media-img-btn alb-cell" onclick={() => openInGallery(ac.saved_at)} title={$t("Open")}><img class="media-img" src={au} alt={ac.name} /></button>
                         {:else}
-                          <div class="media-placeholder alb-cell"></div>
+                          <button class="media-img-btn alb-cell" onclick={() => openInGallery(ac.saved_at)} title={$t("Open")}><img class="media-img" src={au} alt={ac.name} onerror={() => failedPhotos.add(key)} /></button>
                         {/if}
                       {/if}
                     {/each}
                     <span class="photo-meta">{m.time}{@render statusTick(m.outgoing, m.id, m)}</span>
                   </div>
                 {:else if rk === "gif" || rk === "image"}
+                  {@const key = photoKey(m.id, url)}
                   <div class="bubble media-bubble">
-                    {#if url && coverMedia(m, content.saved_at)}
+                    {#if !url || failedPhotos.has(key)}
+                      {@render missingPhoto(m.id, content.cid, url, false)}
+                    {:else if coverMedia(m, content.saved_at)}
                       <!-- Explicit (or still being looked at): blurred until tapped. -->
                       <button class="media-img-btn media-18" onclick={() => { if ($nsfwOf(content.saved_at) !== "pending") revealAdult(m.id, false); }}
                         title={$t("Sensitive content — tap to show")}>
-                        <img class="media-img" src={url} alt="" />
+                        <img class="media-img" src={url} alt="" onerror={() => failedPhotos.add(key)} />
                         {#if $nsfwOf(content.saved_at) === "explicit"}<span class="m18"><b>18+</b><small>{$t("Sensitive content — tap to show")}</small></span>{/if}
                       </button>
-                    {:else if url}
+                    {:else}
                       {#if rk === "gif" && !$power.gifs && !gifPlaying.has(m.id)}
                         <!-- Autoplay off: a still frame until clicked. -->
                         <button class="media-img-btn gif-still" onclick={() => gifPlaying.add(m.id)} title={$t("Play GIF")}>
-                          {#await gifStill(url) then still}<img class="media-img" src={still} alt={content.name} />{/await}
+                          {#await gifStill(url) then still}<img class="media-img" src={still} alt={content.name} onerror={() => failedPhotos.add(key)} />{/await}
                           <span class="gif-badge">GIF ▶</span>
                         </button>
                       {:else}
                         <button class="media-img-btn" onclick={() => openInGallery(content.saved_at)} title={$t("Open")}>
-                          <img class="media-img" src={url} alt={content.name} />
+                          <img class="media-img" src={url} alt={content.name} onerror={() => failedPhotos.add(key)} />
                         </button>
                       {/if}
-                    {:else}
-                      <div class="media-placeholder" style="aspect-ratio: 4/3;"></div>
                     {/if}
                     <!-- Like Telegram: no file name under a photo; the time sits on
                          the picture, or after the caption when there is one. -->
@@ -5314,6 +5386,15 @@
     </div>
     {/if}
   {/if}
+  {#if pickedPreview}
+    {@const preview = pickedPreview}
+    <div class="picked-preview" role="dialog" aria-modal="true" aria-label={$t("Photo")}>
+      <header><button data-x onclick={closePickedPreview} aria-label={$t("Back")}>←</button>
+        <button onclick={() => galleryToggle(preview.uri)} aria-pressed={gallerySel.includes(preview.uri)}>{$t(gallerySel.includes(preview.uri) ? "Selected" : "Select")}</button></header>
+      <img src={preview.url} alt="" />
+      {#if preview.loading}<span role="status">{$t("Loading…")}</span>{/if}
+    </div>
+  {/if}
   {#if cmtPeek}
     {@const root = cmtPeek}
     <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
@@ -5526,6 +5607,7 @@
     position: relative;
     flex-shrink: 0;
   }
+  .chat-identity { display: contents; }
   /* Mobile-only back button (returns to the chat list). */
   .back-btn {
     display: none;
@@ -5927,7 +6009,7 @@
   /* File bubble */
   .bubble.file-bubble {
     display: grid;
-    grid-template-columns: 40px 1fr;
+    grid-template-columns: auto minmax(0, 1fr);
     gap: 12px;
     align-items: center;
     min-width: 240px;
@@ -6209,6 +6291,19 @@
     animation: shimmer 1.4s linear infinite;
     display: grid; place-items: center;
   }
+  .picked-preview { position: fixed; inset: 0; z-index: 280; display: flex; flex-direction: column; align-items: center; background: var(--bg-shell); padding: var(--sat, 0px) 0 var(--sab, 0px); }
+  .picked-preview header { align-self: stretch; display: flex; justify-content: space-between; padding: 8px; }
+  .picked-preview button { min-height: 44px; padding: 8px 16px; border: 0; border-radius: calc(12px * var(--rk, 1)); color: var(--accent); background: var(--bg-input); font: inherit; }
+  .picked-preview img { width: 100%; flex: 1; min-height: 0; object-fit: contain; }
+  .missing-photo {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 6px; width: 100%; aspect-ratio: 4/3; padding: 8px; box-sizing: border-box;
+    border: 0; border-radius: calc(10px * var(--rk, 1)); background: var(--bg-input);
+    color: var(--fg-muted); font: inherit; font-size: 12px; text-align: center;
+  }
+  button.missing-photo:not(:disabled) { cursor: pointer; color: var(--accent); }
+  button.missing-photo:disabled { opacity: .7; }
+  .missing-photo :global(svg) { width: 18px; height: 18px; }
   .media-footer {
     display: flex;
     align-items: center;
@@ -6974,11 +7069,40 @@
     border-left: 2px solid var(--accent); padding: 2px 0 2px 10px;
   }
   .pin-ic { width: 16px; height: 16px; color: var(--accent); flex-shrink: 0; }
+  .pin-thumb { width: 32px; height: 32px; object-fit: cover; flex-shrink: 0; border-radius: calc(6px * var(--rk, 1)); }
   .pin-text { min-width: 0; }
   .pin-title { font-size: 11px; font-weight: 700; color: var(--accent); }
   .pin-preview { font-size: 12.5px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pin-x { width: 28px; height: 28px; background: transparent; border: 1px solid var(--border); border-radius: calc(8px * var(--rk, 1)); color: var(--fg-dim); font-size: 16px; cursor: pointer; flex-shrink: 0; }
   .pin-x:hover { color: var(--fg); background: var(--bg-hover); }
+
+  .phone .chat-header { gap: 6px; padding: 6px 8px; }
+  .phone .back-btn { display: inline-flex; }
+  .phone .chat-identity { display: flex; flex: 1; min-width: 0; align-items: center; gap: 8px; }
+  .phone .chat-actions { gap: 0; flex-shrink: 0; }
+  .phone .chat-actions .icon-btn { width: 34px; height: 42px; }
+  :global(html.glass) .phone .chat-header {
+    background: transparent; padding: 0; border: 0; box-shadow: none;
+  }
+  :global(html.glass) .phone .chat-header::before { content: none; }
+  :global(html.glass) .phone .back-btn,
+  :global(html.glass) .phone .chat-identity,
+  :global(html.glass) .phone .chat-actions,
+  :global(html.glass) .phone .pin-bar {
+    border: 1px solid var(--border);
+    background: color-mix(in srgb, var(--bg-surface) 84%, transparent);
+    border-radius: calc(14px * var(--rk, 1));
+  }
+  :global(html.glass) .phone .back-btn { width: 42px; height: 48px; }
+  :global(html.glass) .phone .chat-identity { padding: 3px 6px; min-height: 48px; box-sizing: border-box; }
+  :global(html.glass) .phone .chat-actions { padding: 2px; }
+  :global(html.glass) .phone .pin-bar { margin: 0 8px 6px; padding: 5px 8px; }
+  :global(html.glass.panels-square) .phone :is(.back-btn, .chat-identity, .chat-actions, .pin-bar) {
+    border-radius: calc(8px * var(--rk, 1));
+  }
+  .phone .composer:not(.chan-bar) .input-wrap > .emoji-in { order: -1; }
+  .phone .composer:not(.chan-bar) > .attach-wrap { order: 1; }
+  .phone .composer:not(.chan-bar) > .send-btn { order: 2; }
 
   /* Poll bubble */
   .bubble.poll-bubble { display: flex; flex-direction: column; gap: 4px; min-width: 240px; max-width: 360px; }

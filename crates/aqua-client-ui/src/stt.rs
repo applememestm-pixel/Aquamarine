@@ -179,11 +179,13 @@ pub fn stt_delete(state: State<'_, StdMutex<AppState>>) -> Result<(), String> {
 #[cfg(not(target_os = "ios"))]
 static RECOGNIZER: StdMutex<Option<aqua_stt::Recognizer>> = StdMutex::new(None);
 
-/// Text of a recording: the body is 16 kHz mono s16le samples.
+/// Text of a recording: 16 kHz mono s16le samples.
 #[tauri::command]
-pub async fn stt_transcribe(state: State<'_, StdMutex<AppState>>, request: tauri::ipc::Request<'_>) -> Result<String, String> {
-    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err("expected raw bytes".into()) };
-    let pcm: Vec<f32> = bytes.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0).collect();
+pub async fn stt_transcribe(state: State<'_, StdMutex<AppState>>, pcm: Vec<u8>) -> Result<String, String> {
+    if pcm.len() % 2 != 0 {
+        return Err("invalid recording length".into());
+    }
+    let pcm: Vec<f32> = pcm.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0).collect();
     let dir = files_dir(&stt_root(&state));
     if !ready(&dir) {
         return Err("not downloaded".into());
