@@ -616,7 +616,7 @@
     opacity: 0.35;
     transition: height 0.45s cubic-bezier(.2, .8, .2, 1), background-color 0.15s, opacity 0.15s;
   }
-  .mp-wave:not(.ready) .bar { opacity: 0.18; }
+  .mp-wave:not(.ready) .bar { opacity: 0.3; }
   .mp-wave .bar.played {
     background: var(--accent);
     opacity: 1;
@@ -637,7 +637,7 @@
     position: absolute; left: 0; right: 0; top: 50%;
     height: 4px; margin-top: -2px;
     border-radius: 2px;
-    background: var(--border-strong);
+    background: color-mix(in srgb, var(--fg) 22%, transparent);
     overflow: hidden;
   }
   .mp-seek .fill {
@@ -733,8 +733,15 @@
     background: linear-gradient(to right, var(--accent) 0%, var(--accent) var(--p, 0%), var(--border-strong) var(--p, 0%), var(--border-strong) 100%);
     cursor: pointer;
   }
+  /* The track drawn explicitly: Android's WebView left only the thumb visible. */
+  .mp-vol::-webkit-slider-runnable-track {
+    height: 4px; border-radius: 2px;
+    background: linear-gradient(to right, var(--accent) 0%, var(--accent) var(--p, 0%), color-mix(in srgb, var(--fg) 28%, transparent) var(--p, 0%), color-mix(in srgb, var(--fg) 28%, transparent) 100%);
+  }
+  .mp-vol::-moz-range-track { height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--fg) 28%, transparent); }
+  .mp-vol::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--accent); }
   .mp-vol::-webkit-slider-thumb {
-    -webkit-appearance: none;
+    -webkit-appearance: none; margin-top: -4px;
     width: 12px; height: 12px; border-radius: 50%;
     background: var(--fg);
     box-shadow: 0 0 6px var(--accent-glow);
@@ -783,6 +790,7 @@
     .mp-sheet { padding: 20px 16px 16px; gap: 14px; }
     .mp-controls { gap: 10px; }
     .mp-volpct { display: none; }
+    .mp-vol { flex: 1; width: auto; }
   }
   @media (prefers-reduced-motion: reduce) {
     .mp-glow { animation: none; }

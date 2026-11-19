@@ -576,6 +576,7 @@ export const RU: Record<string, string> = {
   "Exit fullscreen": "Выйти из полноэкранного режима",
   "Exit fullscreen (F11)": "Выйти из полноэкранного режима (F11)",
   "Expand": "Развернуть",
+  "Expand into an article": "Развернуть в статью",
   "Explanation (optional)": "Пояснение (необязательно)",
   "Failed to send edited image: {error}": "Не удалось отправить изображение: {error}",
   "Favourite music": "Любимая музыка",
@@ -1228,6 +1229,7 @@ export const RU: Record<string, string> = {
   "away": "отошёл",
   "do not disturb": "не беспокоить",
   "Send failed": "Не отправилось",
+  "Bots take only text — files can't be sent to a bot": "Боты принимают только текст — файл боту не отправить",
   "File sent": "Файл отправлен",
   "Phones can't share the screen — streaming your camera instead": "На телефоне нельзя показать экран — транслируется камера",
   // Session 43: articles v2, formatting, commands, link previews

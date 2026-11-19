@@ -1991,6 +1991,16 @@ async fn attach_file_fwd(
     fwd: Option<String>,
     caption: Option<String>,
 ) -> Result<AttachResult, String> {
+    // A bot's chat is unencrypted text only: a file goes end-to-end
+    // encrypted, and a bot has no keys — it failed with "fetch_bundle: 404".
+    {
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let bot = !peer_id.starts_with("grp_") && !peer_id.starts_with("dm~") && !peer_id.starts_with("__")
+            && s.chats.get(&peer_id).is_some_and(|c| c.summary.live && !c.summary.has_lock);
+        if bot {
+            return Err("Bots take only text — files can't be sent to a bot".into());
+        }
+    }
     let caption = caption.map(|c| c.trim().chars().take(4096).collect::<String>()).filter(|c| !c.is_empty());
     // 1. Read the file from disk (phone picks arrive as content:// URIs).
     let file_path = if is_uri_pick(&file_path) {

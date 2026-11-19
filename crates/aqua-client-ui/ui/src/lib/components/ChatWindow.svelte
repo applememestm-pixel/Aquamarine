@@ -819,8 +819,9 @@
   function fmtDur(ms: number) { const s = Math.round(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
   $effect(() => {
     if (attachMenuOpen && phoneUI) {
-      // Opens straight to the full gallery (Telegram), not a half sheet.
-      gallerySel = []; galCap = ""; sheetFull = true; sheetDy = 0; albumMenu = false; album = "";
+      // Opens low — 2–3 rows of photos over the chat, the actions floating on
+      // top (Telegram); pulled up or scrolled, it fills the screen.
+      gallerySel = []; galCap = ""; sheetFull = false; sheetDy = 0; albumMenu = false; album = "";
       void galleryLoad(); void albumsLoad();
     }
   });
@@ -1001,7 +1002,7 @@
     if (fail === 0) {
       showToast(ok === 1 ? tr("File sent") : `${ok} files sent`);
     } else if (ok === 0) {
-      showToast(`${tr("Send failed")}: ${lastErr}`, 6000);
+      showToast(`${tr("Send failed")}: ${tr(lastErr.replace(/^Error:\s*/, ""))}`, 6000);
     } else {
       showToast(`${ok} sent · ${fail} failed — ${lastErr}`, 6000);
     }
@@ -5117,7 +5118,7 @@
                 </div>
               {/if}
               {#if !(IS_MOBILE && $attachDock)}<div class="ap-inline">{@render attachActions()}</div>{/if}
-              <div class="ap-gallery">
+              <div class="ap-gallery" onscroll={(e) => { if (!sheetFull && !sheetDrag && (e.currentTarget as HTMLElement).scrollTop > 24) sheetFull = true; }}>
                 <button class="ap-tile ap-pick ap-cam" class:live={!!camPeek} onclick={() => void shoot()}>
                   {#if camPeek}<video class="ap-cam-live" muted playsinline use:camVideo={camPeek}></video>{/if}
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-3l-2-3H9L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><circle cx="12" cy="13" r="3.6"/></svg>
@@ -5154,7 +5155,7 @@
           </div>
           {#if phoneUI && IS_MOBILE && $attachDock}
             <!-- Phones: the actions as a floating tab bar, the send button above it. -->
-            <div class="ap-dock" class:closing={sheetClosing}>{@render attachActions()}</div>
+            <div class="ap-dock" class:closing={sheetClosing} class:low={!sheetFull} class:dragging={!!sheetDrag} style:--dy={`${sheetDy}px`}>{@render attachActions()}</div>
           {/if}
           {#if phoneUI && gallerySel.length}{@render galBar()}{/if}
         {/if}
@@ -5254,6 +5255,14 @@
           onkeydown={onKey}
           onpastefiles={(f, p) => void pasteFiles(f, p)}
         />
+        {#if liveChat && $activeChat && !isChannel && (text.split("\n").length >= 3 || text.length > 160)}
+          <!-- Telegram: a long text opens in the full editor (an article). -->
+          <button class="compose-expand" title={$t("Expand into an article")} aria-label={$t("Expand into an article")}
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => { if (!$activeChat) return; const body = text; text = ""; openArticleComposer($activeChat.id, body); }}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7"/></svg>
+          </button>
+        {/if}
         <button
           class="emoji-in"
           class:disabled={!liveChat}
@@ -6221,6 +6230,10 @@
 
   /* "/" command popup */
   .input-wrap { position: relative; }
+  .compose-expand { position: absolute; top: 4px; right: 4px; z-index: 2; width: 28px; height: 28px; padding: 0; border: none; border-radius: 50%;
+    display: grid; place-items: center; background: transparent; color: var(--fg-muted); cursor: pointer; }
+  .compose-expand:hover, .compose-expand:active { color: var(--accent); background: var(--accent-soft); }
+  .compose-expand svg { width: 16px; height: 16px; }
   .slash-pop {
     position: absolute; left: -6px; right: -6px; bottom: calc(100% + 10px); z-index: 30;
     max-height: 300px; overflow-y: auto;
@@ -6334,7 +6347,8 @@
   .attach-wrap { position: relative; display: flex; }
   .attach-wrap.float { position: absolute; right: 16px; bottom: calc(100% + 8px); z-index: 6; animation: att-float .16s ease-out; }
   .attach-wrap.float .attach-btn { width: 44px; height: 44px; border-radius: 50%; background: var(--bg-surface-2, var(--bg-input)); box-shadow: 0 6px 18px -6px rgba(0,0,0,.55); }
-  .attach-wrap.float .attach-pop { left: auto; right: 0; }
+  /* Not the phone sheet: with "left: auto" it shrank to a strip on the right. */
+  .attach-wrap.float .attach-pop:not(.sheet) { left: auto; right: 0; }
   @keyframes att-float { from { opacity: 0; transform: translateY(8px) scale(.9); } }
   .attach-btn.open { color: var(--accent); background: var(--accent-soft); }
   .attach-pop {
@@ -6356,7 +6370,8 @@
      opening, dragging and closing never re-lay out the grid. */
   .attach-pop.sheet {
     --h-full: calc(100dvh - 28px - var(--sat, env(safe-area-inset-top, 0px)));
-    --h-half: min(64dvh, 620px);
+    /* Low: the grab bar and title + about 2.5 rows of photos. */
+    --h-half: min(calc(64px + (100vw - 12px) / 3 * 2.5), 60dvh);
     --rest: calc(var(--h-full) - var(--h-half));
     position: fixed; left: 0; right: 0; bottom: 0; top: auto; z-index: 71;
     height: var(--h-full); min-width: 0; padding: 0;
@@ -6405,6 +6420,7 @@
      rows a too-short container squeezed them into overlapping strips. */
   .ap-gallery { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); justify-items: stretch;
     grid-auto-rows: max-content; gap: 3px; padding: 0 3px calc(92px + var(--sab, env(safe-area-inset-bottom, 0px)) + var(--rest)); align-content: start; }
+  .ap-dock.low ~ .ap-capbar, .attach-pop.sheet:not(.full) ~ .ap-capbar.docked { bottom: calc(10px + var(--sab, env(safe-area-inset-bottom, 0px))); }
   .attach-pop.sheet.full .ap-gallery { padding-bottom: calc(92px + var(--sab, env(safe-area-inset-bottom, 0px))); }
   .ap-tile { position: relative; aspect-ratio: 1 / 1; width: 100%; height: auto; min-height: 0; min-width: 0; box-sizing: border-box; display: block; border: none; padding: 0; overflow: hidden; background: var(--bg-surface-2); color: var(--fg-muted); border-radius: calc(4px * var(--rk, 1)); }
   .ap-tile img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .22s cubic-bezier(.22,1,.36,1), border-radius .22s ease; }
@@ -6447,7 +6463,12 @@
     display: grid; place-items: center; font-weight: 800; font-size: 13px; }
   .ap-dock { position: fixed; left: 12px; right: 12px; bottom: calc(12px + var(--sab, env(safe-area-inset-bottom, 0px))); z-index: 72;
     animation: ap-dock-in .42s cubic-bezier(.22,1,.36,1); transition: transform .26s cubic-bezier(.4,0,1,1), opacity .26s ease; }
+  /* Sheet low: the actions float right on top of it (Telegram); full: at the bottom. */
+  .ap-dock { --h-half: min(calc(64px + (100vw - 12px) / 3 * 2.5), 60dvh); transition: bottom .42s cubic-bezier(.22,1,.36,1), transform .26s cubic-bezier(.4,0,1,1), opacity .26s ease; }
+  .ap-dock.low { bottom: calc(var(--h-half) + 8px); transform: translateY(max(0px, var(--dy, 0px))); }
+  .ap-dock.low.dragging { transition: none; }
   .ap-dock.closing { transform: translateY(140%); opacity: 0; }
+  .ap-dock.low.closing { transform: translateY(calc(var(--h-half) + 140%)); }
   @keyframes ap-dock-in { from { transform: translateY(140%); } }
   .ap-dock .ap-items {
     display: flex; gap: 0; overflow-x: auto; scrollbar-width: none; padding: 5px; border-radius: calc(26px * var(--rk, 1));

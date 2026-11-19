@@ -76,6 +76,8 @@
           for (const m of media) if (m.path) void localUrl(m.path).catch(() => {});
         }
       } catch { /* no draft */ }
+      // From the message field's "expand": its text goes on after the draft's.
+      if (s.body) body = body.trim() ? `${body.trimEnd()}\n\n${s.body}` : s.body;
       void tick().then(() => ta?.focus());
     } else if (!s) {
       prevPeer = "";
