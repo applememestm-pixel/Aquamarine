@@ -642,12 +642,12 @@
   function cancelEdit() { editing = false; draft = null; }
   /** What I can put on my profile: any channel, group or server I'm an admin
    *  of — private or public. */
-  const myChannels = $derived(Object.values($groupMap).filter((g) => isAdmin(g, $info?.username ?? "")));
-  const KIND_LABEL = { channel: "Channel", group: "Group", supergroup: "Server" } as const;
+  const myChannels = $derived(Object.values($groupMap).filter((g) => g.kind !== "community" && isAdmin(g, $info?.username ?? "")));
+  const KIND_LABEL = { channel: "Channel", group: "Group", supergroup: "Server", community: "Community" } as const;
   function setChannel(gid: string) {
     if (!draft) return;
     const g = $groupMap[gid];
-    draft = { ...draft, channel: g ? { gid: g.id, title: g.title, owner: $info?.username ?? g.owner, kind: g.kind } : null };
+    draft = { ...draft, channel: g ? { gid: g.id, title: g.title, owner: $info?.username ?? g.owner, kind: g.kind === "community" ? "group" : g.kind } : null };
   }
   async function joinChannel(ch: { gid: string; title: string; owner: string }) {
     try { await requestJoinGroup(ch.gid, ch.owner, ch.title, ""); showToast(tr("Request sent")); }

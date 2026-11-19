@@ -492,7 +492,14 @@ fn only_adds_chat(cur: &Group, next: &Group, from: &str) -> bool {
     let e = &after[before.len()];
     let id = e.get("id").and_then(|v| v.as_str()).unwrap_or("");
     let known = ["linked", "suggested"].iter().any(|k| list(cur, k).iter().any(|x| x.get("id").and_then(|v| v.as_str()) == Some(id)));
-    if !id.starts_with("grp_") || id == cur.id || known || e.get("by").and_then(|v| v.as_str()) != Some(from) {
+    let field = |k: &str| e.get(k).and_then(|v| v.as_str()).unwrap_or("");
+    // Only a chat of their own (join requests go to its owner — a forged one
+    // would send people's requests elsewhere), named sanely, of a real kind.
+    if !id.starts_with("grp_") || id == cur.id || known || field("by") != from || field("owner") != from
+        || field("title").trim().is_empty() || field("title").chars().count() > 64
+        || !matches!(field("kind"), "group" | "supergroup" | "channel")
+        || e.as_object().is_none_or(|o| o.keys().any(|k| !matches!(k.as_str(), "id" | "title" | "kind" | "owner" | "by")))
+    {
         return false;
     }
     let mut trimmed = next.clone();
@@ -2001,6 +2008,11 @@ mod group_rule_tests {
         forged.version = 6;
         forged.extra.insert("suggested".into(), serde_json::json!([chat("adm")]));
         assert!(!accept_group_snapshot(Some(&cur), &forged, "bob"));
+        // Someone else as the chat's owner (their join requests would go astray): no.
+        let mut not_his = cur.clone();
+        not_his.version = 6;
+        not_his.extra.insert("suggested".into(), serde_json::json!([{"id": "grp_9", "title": "X", "kind": "group", "owner": "adm", "by": "bob"}]));
+        assert!(!accept_group_snapshot(Some(&cur), &not_his, "bob"));
         let mut more = sug.clone();
         more.title = "mine now".into();
         assert!(!accept_group_snapshot(Some(&cur), &more, "bob"));

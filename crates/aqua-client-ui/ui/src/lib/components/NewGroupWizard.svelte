@@ -76,7 +76,7 @@
         next.settings.send_messages = "admins";
         (next.settings as unknown as Record<string, unknown>).add_chats = "admins";
         next.linked = [];
-        try { g = await api.updateGroup(next); } catch { /* set later in its settings */ }
+        try { g = await api.updateGroup(next); } catch (e) { showToast(tr("Couldn't save: {e}", { e: String(e) }), 5000); }
       } else if (kind === "supergroup") {
         // A server: starts with Discord-style rooms.
         const next = JSON.parse(JSON.stringify(g)) as typeof g;

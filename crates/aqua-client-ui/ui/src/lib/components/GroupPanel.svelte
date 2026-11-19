@@ -111,8 +111,9 @@
   let addChats = $derived(group ? (((group.settings as unknown as Record<string, unknown>).add_chats as string) === "all" ? "all" : "admins") : "admins");
   let linkedIds = $derived(new Set([...(group?.linked ?? []), ...(group?.suggested ?? [])].map((c) => c.id)));
   /** My groups and channels I run that aren't in it yet (only their admin may bring them in). */
-  let addable = $derived(group ? Object.values($groupMap).filter((g) => g.id !== group!.id && g.kind !== "community" && !linkedIds.has(g.id) && isAdmin(g, me)) : []);
-  function linkOf(g: Group): LinkedChat { return { id: g.id, title: g.title, kind: g.kind, owner: g.owner, by: me }; }
+  // A plain member brings in only chats they own (each receiver checks the owner is the sender).
+  let addable = $derived(group ? Object.values($groupMap).filter((g) => g.id !== group!.id && g.kind !== "community" && !linkedIds.has(g.id) && (admin ? isAdmin(g, me) : g.owner === me)) : []);
+  function linkOf(g: Group): LinkedChat { return { id: g.id, title: g.title.slice(0, 64), kind: g.kind, owner: g.owner, by: me }; }
   async function addChat(g: Group) {
     const e = linkOf(g);
     if (admin) await commit((n) => { n.linked = [...(n.linked ?? []), e]; }, `Added chat ${g.title}`);

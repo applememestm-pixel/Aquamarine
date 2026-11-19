@@ -3154,4 +3154,5 @@ export const RU: Record<string, string> = {
   "Your groups and channels where you're an admin — the community's admins will look at them.": "Ваши группы и каналы, где вы админ, — админы сообщества их посмотрят.",
   "No groups or channels of yours to add.": "Нет ваших групп или каналов, которые можно добавить.",
   "Nothing to review.": "Нечего рассматривать.",
+  "Couldn't save: {e}": "Не удалось сохранить: {e}",
 };
