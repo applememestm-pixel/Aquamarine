@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { aliasesOf } from "../servers";
   import Snow from "./Snow.svelte";
   import { emojiStatusOf } from "../people";
   import MiniPlayer from "./MiniPlayer.svelte";
@@ -188,9 +189,20 @@
     const user = $info?.username;
     if (!user || !srvUrl.trim()) return;
     srvBusy = true; srvErr = null;
-    const err = await connect(srvUrl.trim(), user);
+    let err = await connect(srvUrl.trim(), user);
+    // That address doesn't lead there from here (the home relay's white IP
+    // from inside the home Wi-Fi: "No route to host"): the same relay's
+    // other address before giving up.
+    if (err) {
+      for (const alt of aliasesOf(srvUrl.trim())) {
+        if (!(await connect(alt, user))) { err = null; srvUrl = alt; break; }
+      }
+    }
     srvBusy = false;
-    if (err) srvErr = err; else serversOpen = false;
+    if (err) srvErr = /No route to host|os error 113|Network is unreachable|os error 101/i.test(err)
+      ? tr("This phone can't reach {u} from the network it's on now. On the server's own Wi-Fi use its home address; or switch Wi-Fi ↔ mobile data.", { u: hostOf(srvUrl.trim()) })
+      : err;
+    else serversOpen = false;
   }
   const hostOf = (u: string | null) => { try { return u ? new URL(u).host : ""; } catch { return u ?? ""; } };
 

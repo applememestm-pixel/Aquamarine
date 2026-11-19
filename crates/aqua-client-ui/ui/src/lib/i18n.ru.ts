@@ -2310,6 +2310,7 @@ export const RU: Record<string, string> = {
   "local network": "локальная сеть",
   "address not found": "адрес не найден",
   "no answer": "не отвечает",
+  "This phone can't reach {u} from the network it's on now. On the server's own Wi-Fi use its home address; or switch Wi-Fi ↔ mobile data.": "Из этой сети телефон не достаёт до {u}. В домашнем Wi-Fi сервера укажите его домашний адрес или переключитесь Wi-Fi ↔ мобильный интернет.",
   "Screencast": "Показ экрана",
   "Stop sharing": "Остановить показ",
   "Start Video": "Включить видео",
