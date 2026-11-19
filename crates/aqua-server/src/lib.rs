@@ -3317,6 +3317,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/stars-app/admin", post(stars::app::admin))
         .route("/v1/stars-app/set", post(stars::app::set))
         .route("/v1/stars-app/decide", post(stars::app::decide_app))
+        .route("/v1/fed/stars-app/:op", post(stars::app::fed))
         .route("/v1/ice", get(turnsrv::ice))
         .route("/v1/admin/stars", get(stars::admin_get).post(stars::admin_make))
         .route("/v1/admin/stars/boosty", get(stars::admin_boosty_get).post(stars::admin_boosty_set))

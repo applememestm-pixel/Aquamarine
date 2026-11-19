@@ -241,7 +241,9 @@
     try { d = await call("/me"); render(d); } catch (e) {
       $("title").textContent = L.title;
       // Say why: this relay hands out no stars, or the app opened unsigned.
-      const why = { "no stars here": ru ? "Этот сервер звёзды не выдаёт — их выдаёт главный сервер сети. Переключите сервер в меню своей карточки (слева внизу) и откройте @stars там." : "This server hands out no stars — the network's main server does. Switch the server in your card's menu (bottom left) and open @stars there.",
+      const why = { "no stars here": ru ? "Этот сервер не в сети с сервером звёзд, поэтому звёзды здесь не выдаются." : "This server isn't in one network with the star server, so no stars here.",
+        "star relay unreachable": ru ? "Сервер звёзд сейчас не отвечает. Попробуйте чуть позже." : "The star server doesn't answer right now. Try a bit later.",
+        "not of this network": ru ? "Этот сервер не в сети с сервером звёзд, поэтому звёзды здесь не выдаются." : "This server isn't in one network with the star server, so no stars here.",
         "reopen the app": ru ? "Сервер не подписал вход в приложение. Закройте и откройте снова; если повторится — обновите Aquamarine." : "The server didn't sign the app's sign-in. Close and open it again; if it repeats, update Aquamarine." };
       $("sub").textContent = why[e.message] || L.e.any; sun(null);
     }

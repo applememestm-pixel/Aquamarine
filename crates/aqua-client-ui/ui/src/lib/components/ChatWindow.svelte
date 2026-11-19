@@ -5019,7 +5019,9 @@
       {/if}
       <!-- Attach popup (Media / Article / Poll) -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="attach-wrap" onmousedown={(e) => e.stopPropagation()}>
+      <!-- Phone, text typed: the clip floats over the send button (Telegram) —
+           under the thumb, and the field takes its place. -->
+      <div class="attach-wrap" class:float={IS_MOBILE && liveChat && text.trim().length > 0} onmousedown={(e) => e.stopPropagation()}>
         {#if attachMenuOpen}
           {#if phoneUI}
             <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
@@ -6264,6 +6266,10 @@
 
   /* Attach popup (Media / Article / Poll) */
   .attach-wrap { position: relative; display: flex; }
+  .attach-wrap.float { position: absolute; right: 16px; bottom: calc(100% + 8px); z-index: 6; animation: att-float .16s ease-out; }
+  .attach-wrap.float .attach-btn { width: 44px; height: 44px; border-radius: 50%; background: var(--bg-surface-2, var(--bg-input)); box-shadow: 0 6px 18px -6px rgba(0,0,0,.55); }
+  .attach-wrap.float .attach-pop { left: auto; right: 0; }
+  @keyframes att-float { from { opacity: 0; transform: translateY(8px) scale(.9); } }
   .attach-btn.open { color: var(--accent); background: var(--accent-soft); }
   .attach-pop {
     position: absolute; bottom: calc(100% + 8px); left: 0;

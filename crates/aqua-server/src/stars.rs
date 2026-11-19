@@ -409,6 +409,11 @@ pub fn spawn(state: AppState) {
         tracing::warn!("{KEY_FILE} isn't the key the apps trust: ignored — stars come from the star relay");
     }
     if !has_key() {
+        // The @stars app still opens here (its actions go to the star relay):
+        // this relay signs its sign-in and shows its menu button.
+        if state.directory.is_bot(&bot_name()) {
+            crate::tgapi::set_builtin_app(&state, &bot_name(), "Stars", APP_URL);
+        }
         return;
     }
     tracing::info!("star key found: this relay hands out stars");
@@ -1172,6 +1177,11 @@ pub mod app {
     pub struct Body {
         #[serde(default)]
         init: String,
+        /// Who, when another relay of the network asked for them (its own
+        /// initData checked there, the request signed for the network):
+        /// set only by `fed` below, never read from a request body.
+        #[serde(skip)]
+        as_user: Option<String>,
         #[serde(default)]
         q: String,
         /// The owner panel: a level to give (0 — take away), for how long
@@ -1192,9 +1202,58 @@ pub mod app {
         if !has_key() {
             return Err((StatusCode::NOT_FOUND, "no stars here".into()));
         }
-        let me = crate::tgapi::check_init(state, &bot_name(), &b.init).ok_or((StatusCode::UNAUTHORIZED, "reopen the app".into()))?;
+        let me = match &b.as_user {
+            Some(u) => u.clone(),
+            None => crate::tgapi::check_init(state, &bot_name(), &b.init).ok_or((StatusCode::UNAUTHORIZED, "reopen the app".into()))?,
+        };
         let uid = state.directory.uid_of(&me).filter(|x| !x.is_empty()).ok_or((StatusCode::NOT_FOUND, "no such account".into()))?;
         Ok((me, uid))
+    }
+
+    /// Not the star relay: the bot works here all the same (owner: every bot
+    /// works on every server of the network). The app's sign-in is checked
+    /// here, the action is done by the star relay — asked for this account
+    /// over the network's signed channel.
+    async fn forward(state: &AppState, op: &str, b: &Body) -> Res {
+        let me = crate::tgapi::check_init(state, &bot_name(), &b.init).ok_or((StatusCode::UNAUTHORIZED, "reopen the app".into()))?;
+        let f = crate::fed::current(state).ok_or((StatusCode::NOT_FOUND, "no stars here".into()))?;
+        let home = std::env::var("AQUA_STAR_HOME").ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| DEFAULT_HOME.into());
+        let body = serde_json::json!({ "user": me, "q": b.q, "level": b.level, "time": b.time, "uid": b.uid, "yes": b.yes });
+        let path = format!("/v1/fed/stars-app/{op}");
+        let (st, text) = f.post_answer(home.trim_end_matches('/'), &path, body.to_string().into_bytes()).await
+            .ok_or((StatusCode::BAD_GATEWAY, "star relay unreachable".into()))?;
+        if (200..300).contains(&st) {
+            serde_json::from_str(&text).map(Json).map_err(|_| (StatusCode::BAD_GATEWAY, "star relay unreachable".into()))
+        } else {
+            Err((StatusCode::from_u16(st).unwrap_or(StatusCode::BAD_GATEWAY), text))
+        }
+    }
+
+    /// `POST /v1/fed/stars-app/:op` — another relay of the network, for one of
+    /// its people (`user`): the same actions as the app's own.
+    pub async fn fed(State(state): State<AppState>, headers: axum::http::HeaderMap, Path(op): Path<String>, body: axum::body::Bytes) -> Res {
+        let f = crate::fed::current(&state).ok_or((StatusCode::NOT_FOUND, "no network".into()))?;
+        if !f.verify(&headers, "POST", &format!("/v1/fed/stars-app/{op}"), &body) {
+            return Err((StatusCode::UNAUTHORIZED, "not of this network".into()));
+        }
+        if !has_key() {
+            return Err((StatusCode::NOT_FOUND, "no stars here".into()));
+        }
+        let v: serde_json::Value = serde_json::from_slice(&body).map_err(|_| (StatusCode::BAD_REQUEST, "bad request".into()))?;
+        let user = v["user"].as_str().map(|u| u.trim().to_lowercase()).filter(|u| !u.is_empty()).ok_or((StatusCode::BAD_REQUEST, "bad request".into()))?;
+        let mut b: Body = serde_json::from_value(v).map_err(|_| (StatusCode::BAD_REQUEST, "bad request".into()))?;
+        b.init = String::new();
+        b.as_user = Some(user);
+        let st = State(state);
+        match op.as_str() {
+            "me" => me(st, Json(b)).await,
+            "link" => link(st, Json(b)).await,
+            "admin" => admin(st, Json(b)).await,
+            "set" => set(st, Json(b)).await,
+            "decide" => decide_app(st, Json(b)).await,
+            "unlink" => unlink_me(st, Json(b)).await,
+            _ => Err((StatusCode::NOT_FOUND, "no such action".into())),
+        }
     }
 
     /// `GET /v1/stars-app` — the page.
@@ -1204,6 +1263,7 @@ pub mod app {
 
     /// `POST /v1/stars-app/me` — my star, my subscription, my link.
     pub async fn me(State(state): State<AppState>, Json(b): Json<Body>) -> Res {
+        if !has_key() { return forward(&state, "me", &b).await; }
         let (me, uid) = who(&state, &b)?;
         let t = now();
         let star = with_stars(|m| m.get(&uid).filter(|s| s.live(t)).cloned());
@@ -1241,6 +1301,7 @@ pub mod app {
     /// `POST /v1/stars-app/link {q}` — "this Boosty account is mine": the
     /// owner gets a request with two buttons.
     pub async fn link(State(state): State<AppState>, Json(b): Json<Body>) -> Res {
+        if !has_key() { return forward(&state, "link", &b).await; }
         let (me, uid) = who(&state, &b)?;
         if !boosty_on() {
             return Err((StatusCode::SERVICE_UNAVAILABLE, "boosty-off".into()));
@@ -1293,6 +1354,7 @@ pub mod app {
     /// `POST /v1/stars-app/admin` — the owner's panel: who has a star, the
     /// Boosty link requests, how Boosty is doing.
     pub async fn admin(State(state): State<AppState>, Json(b): Json<Body>) -> Res {
+        if !has_key() { return forward(&state, "admin", &b).await; }
         owner(&state, &b)?;
         let t = now();
         let stars: Vec<serde_json::Value> = with_stars(|m| m.iter().filter(|(_, s)| s.live(t)).map(|(uid, s)| (uid.clone(), s.clone())).collect::<Vec<_>>())
@@ -1309,6 +1371,7 @@ pub mod app {
 
     /// `POST /v1/stars-app/set {q, level, time}` — give / take a star.
     pub async fn set(State(state): State<AppState>, Json(b): Json<Body>) -> Res {
+        if !has_key() { return forward(&state, "set", &b).await; }
         owner(&state, &b)?;
         let lvl = match b.level { Some(l) if l <= OWNER_LEVEL => Ok(l), _ => Err("The level: 1–5 (donations) or 6 (yours); 0 takes the star away.") };
         match apply_level(&state, &b.q, lvl, Some(b.time.as_str())) {
@@ -1319,6 +1382,7 @@ pub mod app {
 
     /// `POST /v1/stars-app/decide {uid, yes}` — answer a Boosty link request.
     pub async fn decide_app(State(state): State<AppState>, Json(b): Json<Body>) -> Res {
+        if !has_key() { return forward(&state, "decide", &b).await; }
         let me = owner(&state, &b)?;
         decide(&state, &me, b.uid.trim(), b.yes).await;
         Ok(Json(serde_json::json!({ "ok": true })))
@@ -1326,6 +1390,7 @@ pub mod app {
 
     /// `POST /v1/stars-app/unlink`.
     pub async fn unlink_me(State(state): State<AppState>, Json(b): Json<Body>) -> Res {
+        if !has_key() { return forward(&state, "unlink", &b).await; }
         let (_, uid) = who(&state, &b)?;
         unlink(&uid);
         Ok(Json(serde_json::json!({ "ok": true })))

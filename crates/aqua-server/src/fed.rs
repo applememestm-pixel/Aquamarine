@@ -329,6 +329,24 @@ impl Fed {
         }
     }
 
+    /// A signed POST to one peer with its answer as is — status and text,
+    /// errors included (stars.rs passes the star relay's own message on).
+    pub async fn post_answer(&self, peer: &str, path: &str, body: Vec<u8>) -> Option<(u16, String)> {
+        let sent = self.http.post(format!("{peer}{path}"))
+            .header("x-aqua-fed", self.header("POST", path, &body))
+            .header("content-type", "application/json")
+            .timeout(Duration::from_secs(10))
+            .body(body.clone()).send().await;
+        match sent {
+            Ok(r) => { let st = r.status().as_u16(); Some((st, r.text().await.unwrap_or_default())) }
+            Err(_) => {
+                let r = self.tunnel_fallback(peer, "POST", path, &body).await?;
+                let st = r.status().as_u16();
+                Some((st, r.text().await.unwrap_or_default()))
+            }
+        }
+    }
+
     /// The direct way failed: the reverse link, if the peer keeps one.
     async fn tunnel_fallback(&self, peer: &str, method: &str, path: &str, body: &[u8]) -> Option<reqwest::Response> {
         if !crate::fedtunnel::active(peer) {
