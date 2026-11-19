@@ -849,6 +849,7 @@ export const RU: Record<string, string> = {
   "Turn on 18+ content in Settings → Chat settings to see it": "Чтобы увидеть, включите 18+ в Настройки → Настройки чатов",
   "Mention": "Упоминание",
   "Select": "Выбрать",
+  "Selected": "Выбрано",
   "Send": "Отправить",
   "Sending…": "Отправка…",
   "Server": "Сервер",

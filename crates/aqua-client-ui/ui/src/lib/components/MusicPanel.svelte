@@ -1,3 +1,17 @@
+<script module lang="ts">
+  type HomeAlbums = { newest?: import("../music").Album[]; frequent?: import("../music").Album[] };
+  const homeAlbums = new Map<string, HomeAlbums>();
+
+  function rememberAlbums(key: string, value: HomeAlbums) {
+    homeAlbums.delete(key);
+    homeAlbums.set(key, value);
+    if (homeAlbums.size > 4) {
+      const oldest = homeAlbums.keys().next().value;
+      if (oldest !== undefined) homeAlbums.delete(oldest);
+    }
+  }
+</script>
+
 <script lang="ts">
   /**
    * Music (the Navidrome add-on, lib/music.ts): the phone tab / the desktop
@@ -7,7 +21,7 @@
    */
   import { t, tr } from "../i18n";
   import { showToast } from "./Toast.svelte";
-  import { activeTab, chats, selectChat, activeId } from "../stores";
+  import { activeTab, chats, selectChat, activeId, info } from "../stores";
   import { openSettings } from "../panels/settings";
   import { nowPlaying, repeatAll, expandPlayer } from "../player";
   import { fmtDuration } from "../media";
@@ -33,6 +47,7 @@
   const view = $derived(stack[stack.length - 1]);
   let q = $state("");
   let busy = $state(false);
+  let checkingSources = $state(true);
   let err = $state("");
 
   // What the current view shows.
@@ -46,23 +61,36 @@
 
   const src = $derived<Src>($musicSources.includes($musicSource) ? $musicSource : ($musicSources[0] ?? "server"));
   const ready = $derived($musicSources.length > 0);
+  const homeKey = $derived(JSON.stringify([$info?.server_url, $info?.username, src,
+    src === "own" ? [$musicStatus.own?.tag, $musicStatus.own?.user] : $musicStatus.server?.tag]));
 
   function push(v: View) { stack = [...stack, v]; }
   function back() { if (stack.length > 1) stack = stack.slice(0, -1); }
 
   let seq = 0;
-  async function load(v: View, s: Src) {
+  async function load(v: View, s: Src, key: string) {
     const my = ++seq;
     busy = true; err = "";
-    songs = []; albums = []; artists = []; lists = []; fav = []; frequent = [];
+    let saved: HomeAlbums = (v.kind === "home" ? homeAlbums.get(key) : undefined) ?? {};
+    songs = []; albums = saved.newest ?? []; artists = []; lists = []; fav = []; frequent = saved.frequent ?? [];
     try {
       if (v.kind === "home") {
-        const [n, f, p, st] = await Promise.all([
-          albumList(s, "newest", 18), albumList(s, "frequent", 12).catch(() => []),
-          playlists(s).catch(() => []), starred(s).catch(() => []),
+        await Promise.all([
+          albumList(s, "newest", 18).then((items) => {
+            if (my !== seq) return;
+            albums = items;
+            saved = { ...saved, newest: items };
+            rememberAlbums(key, saved);
+          }).catch((e) => { if (my === seq && !saved.newest?.length) err = String(e); }),
+          albumList(s, "frequent", 12).then((items) => {
+            if (my !== seq) return;
+            frequent = items;
+            saved = { ...saved, frequent: items };
+            rememberAlbums(key, saved);
+          }).catch(() => {}),
+          playlists(s).then((items) => { if (my === seq) lists = items; }).catch(() => {}),
+          starred(s).then((items) => { if (my === seq) fav = items.slice(0, 8); }).catch(() => {}),
         ]);
-        if (my !== seq) return;
-        albums = n; frequent = f; lists = p; fav = st.slice(0, 8);
       } else if (v.kind === "search") {
         const r = await search(s, v.q);
         if (my !== seq) return;
@@ -94,8 +122,18 @@
       if (my === seq) busy = false;
     }
   }
-  $effect(() => { if (ready && $musicOn) void load(view, src); });
-  $effect(() => { if ($musicOn) void refreshMusic(); });
+  $effect(() => {
+    if (!ready || !$musicOn) return;
+    void load(view, src, homeKey);
+    return () => { seq++; };
+  });
+  $effect(() => {
+    if (!$musicOn) return;
+    let current = true;
+    checkingSources = true;
+    void refreshMusic().finally(() => { if (current) checkingSources = false; });
+    return () => { current = false; };
+  });
 
   let qTimer: ReturnType<typeof setTimeout> | null = null;
   function onQuery() {
@@ -146,6 +184,14 @@
   const np = $derived($nowPlaying?.nd ? $nowPlaying : null);
 </script>
 
+{#snippet albumLoading()}
+  <div class="grid album-loading" role="status" aria-label={$t("Loading…")}>
+    {#each [0, 1, 2, 3] as tile (tile)}
+      <div class="album-placeholder" aria-hidden="true"><span></span><i></i><i></i></div>
+    {/each}
+  </div>
+{/snippet}
+
 <aside class="panel music">
   <div class="head">
     {#if stack.length > 1}
@@ -177,6 +223,8 @@
       <p>{$t("Music from Navidrome: listen, download, send tracks to chats and listen together.")}</p>
       <button class="primary" onclick={() => settings.update((s) => ({ ...s, navidrome: true }))}>{$t("Turn on")}</button>
     </div>
+  {:else if !ready && checkingSources}
+    {@render albumLoading()}
   {:else if !ready}
     <div class="empty">
       <div class="big">🎵</div>
@@ -223,10 +271,14 @@
         </div>
       {/if}
 
-      {#if busy}<div class="loading"><span class="spin"></span></div>{/if}
+      {#if busy && view.kind === "home" && !albums.length && !frequent.length}
+        {@render albumLoading()}
+      {:else if busy && view.kind !== "home"}
+        <div class="loading" role="status" aria-label={$t("Loading…")}><span class="spin"></span></div>
+      {/if}
       {#if err}<div class="err">{err}</div>{/if}
 
-      {#if view.kind === "home" && !busy}
+      {#if view.kind === "home"}
         <div class="quick">
           <button onclick={async () => { try { await shuffleSongs(await randomSongs(src, 60)); } catch (e) { showToast(String(e)); } }}>⤮ {$t("Random")}</button>
           <button onclick={() => push({ kind: "starred" })}>★ {$t("Favourites")}</button>
@@ -367,6 +419,14 @@
   .chip:hover { border-color: var(--accent); color: var(--accent); }
 
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 10px; padding: 0 4px; }
+  .album-loading { padding: 14px 8px; }
+  .album-placeholder { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  .album-placeholder > * { background: var(--bg-hover); border-radius: calc(8px * var(--rk, 1)); animation: album-pulse 1s ease-in-out alternate infinite; }
+  .album-placeholder span { width: 100%; aspect-ratio: 1; }
+  .album-placeholder i { width: 78%; height: 10px; }
+  .album-placeholder i:last-child { width: 50%; }
+  @keyframes album-pulse { from { opacity: .45; } to { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .album-placeholder > * { animation: none; } }
   .tile { display: flex; flex-direction: column; gap: 3px; border: none; background: transparent; color: var(--fg); text-align: left; padding: 4px; cursor: pointer;
     border-radius: calc(12px * var(--rk, 1)); min-width: 0; }
   .tile:hover { background: var(--bg-hover); }

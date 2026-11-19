@@ -273,7 +273,9 @@ class AquaSyncService : Service() {
     val n = b.setContentTitle("Aquamarine")
       .setContentText("Connected — new messages arrive in the background")
       .setSmallIcon(applicationInfo.icon)
-      .setOngoing(true)
+      .setOngoing(false)
+      .setGroup("aquamarine.connection")
+      .setOnlyAlertOnce(true)
       .setContentIntent(open)
       .build()
     try {

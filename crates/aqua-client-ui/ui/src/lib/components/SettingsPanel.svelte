@@ -5,6 +5,8 @@
 
 <script lang="ts">
   import Select from "./Select.svelte";
+  import NavRail from "./NavRail.svelte";
+  import { activeTab, backToList as closeChat } from "../stores";
   import { onBack } from "../back";
   import { portal } from "../actions";
   import { chatLines } from "../listLook";
@@ -2941,6 +2943,9 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
       <div class="foot">
         <button class="done" onclick={closeAll}>{$t("Done")}</button>
       </div>
+      {#if IS_MOBILE}
+        <NavRail settingsActions={{ go: (tab) => closeThen(() => { closeChat(); activeTab.set(tab); }), home: backToList }} />
+      {/if}
     </div>
   </div>
 {/if}
@@ -3212,7 +3217,8 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
     .head { padding: 10px 12px; gap: 6px; }
     .head h2 { font-size: 17px; }
     .head .close { display: none; }
-    .content { padding-bottom: 24px; }
+    .content { padding-bottom: 76px; }
+    .nav { padding-bottom: 76px; }
   }
   .close {
     width: 30px; height: 30px;

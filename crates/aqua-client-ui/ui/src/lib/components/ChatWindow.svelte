@@ -787,12 +787,29 @@
     for (const ms of [800, 1800, 3500]) { await new Promise((r) => setTimeout(r, ms)); await galleryLoad(); if (gallery.state === "ok") break; }
   }
   /** A gallery tile tapped: look at it full screen (the circle selects). */
-  function galleryPeek(i: number) {
-    const shots = gallery.items.filter((g) => g.thumb && !g.video);
-    const at = shots.indexOf(gallery.items[i]);
-    if (at < 0) { galleryToggle(gallery.items[i].uri); return; }
-    openGallery(shots.map((g) => ({ url: g.thumb!, kind: "image" as const })), at);
+  let pickedPreview = $state<{ uri: string; url: string; loading: boolean } | null>(null);
+  function closePickedPreview() {
+    if (pickedPreview?.url.startsWith("blob:")) URL.revokeObjectURL(pickedPreview.url);
+    pickedPreview = null;
   }
+  async function galleryPeek(i: number) {
+    const item = gallery.items[i];
+    if (!item) return;
+    if (item.video) { galleryToggle(item.uri); return; }
+    closePickedPreview();
+    pickedPreview = { uri: item.uri, url: item.thumb ?? "", loading: true };
+    try {
+      const bytes = await api.readUserImage(item.uri);
+      if (pickedPreview?.uri !== item.uri) return;
+      const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: item.mime || "image/jpeg" }));
+      pickedPreview = { uri: item.uri, url, loading: false };
+    } catch (e) {
+      if (pickedPreview?.uri === item.uri) pickedPreview = { ...pickedPreview, loading: false };
+      showToast(String(e));
+    }
+  }
+  $effect(() => { if (pickedPreview) return onBack(closePickedPreview); });
+  $effect(() => { if (!attachMenuOpen) closePickedPreview(); });
   let checkDown: { x: number; y: number; uri: string } | null = null;
   let checkFired = false;
   function galleryToggle(uri: string) {
@@ -1945,15 +1962,16 @@
   }
   async function sendThread(text: string, re: { a: string; t: string } | null) {
     const th = thread, chat = $activeChat;
-    if (!th || !chat) return;
+    if (!th || !chat) return false;
     const body = th.kind === "comments"
       ? "[cmt:v1]" + JSON.stringify({ to: reactionKey(th.root), t: text, ...(re ? { re } : {}) })
       : "[reply:v1]" + JSON.stringify({ quoted_author: re?.a ?? authorOf(th.root), quoted_text: re ? re.t.slice(0, 180) : quoteOf(th.root), text });
     try {
       if (chat.id.startsWith("grp_")) await api.groupSend(chat.id, body, false, sendAsFor(chat.id));
       else await api.sendMessage(chat.id, body);
-      await loadActiveMessages();
-    } catch (e) { showToast(String(e)); }
+      if ($activeChat?.id === chat.id) await loadActiveMessages();
+      return true;
+    } catch (e) { showToast(String(e)); return false; }
   }
 
   // ---- Chat password (only for me) ----
@@ -3785,23 +3803,6 @@
     {#if $statsFor === $activeChat.id && amChanAdmin && activeGroup}
       <ChannelStats gid={$activeChat.id} subscribers={activeGroup.members.length} posts={statPosts} />
     {/if}
-    {#if thread && !lockedNow}
-      {@const th = thread}
-      <ThreadPanel
-        title={th.kind === "comments" ? $t("Comments") : $t("Thread")}
-        rootAuthor={th.root.outgoing ? $t("You") : (isGroup ? th.root.from : $activeChat.name)}
-        rootText={snippetOf(th.root)}
-        rootTime={th.root.time}
-        items={threadItems}
-        canWrite={$activeChat.live && (th.kind === "replies" ? canPost : commentsAllowed)}
-        onSend={sendThread}
-        onClose={() => (thread = null)}
-        onJump={th.kind === "replies" ? (id) => window.dispatchEvent(new CustomEvent("aqua:jump", { detail: id })) : undefined}
-        asChoices={asChoices.map((g) => ({ id: g.id, title: g.title, gradient: g.gradient }))}
-        asPick={$sendAsPick[$activeChat.id] ?? ""}
-        onAs={(gid) => { if ($activeChat) setSendAs($activeChat.id, gid); }}
-      />
-    {/if}
     {#if lockedNow}
       <div class="lock-gate">
         <div class="lg-card">
@@ -4072,6 +4073,25 @@
         {/if}
       </div>
     </header>
+    {#if thread && !lockedNow}
+      {@const th = thread}
+      {#key th.root.id}
+      <ThreadPanel
+        title={th.kind === "comments" ? $t("Comments") : $t("Thread")}
+        rootAuthor={th.root.outgoing ? $t("You") : (isGroup ? th.root.from : $activeChat.name)}
+        rootText={snippetOf(th.root)}
+        rootTime={th.root.time}
+        items={threadItems}
+        canWrite={$activeChat.live && (th.kind === "replies" ? canPost : commentsAllowed)}
+        onSend={sendThread}
+        onClose={() => (thread = null)}
+        onJump={th.kind === "replies" ? (id) => window.dispatchEvent(new CustomEvent("aqua:jump", { detail: id })) : undefined}
+        asChoices={asChoices.map((g) => ({ id: g.id, title: g.title, gradient: g.gradient }))}
+        asPick={$sendAsPick[$activeChat.id] ?? ""}
+        onAs={(gid) => { if ($activeChat) setSendAs($activeChat.id, gid); }}
+      />
+      {/key}
+    {/if}
     {#if phoneUI && (callMenu || toolsMenu || ttlMenu)}
       <!-- Phones: the header menus open under the header and push the room
            tabs and the pinned message down (like the search bar), instead of
@@ -5333,6 +5353,15 @@
     </div>
     {/if}
   {/if}
+  {#if pickedPreview}
+    {@const preview = pickedPreview}
+    <div class="picked-preview" role="dialog" aria-modal="true" aria-label={$t("Photo")}>
+      <header><button data-x onclick={closePickedPreview} aria-label={$t("Back")}>←</button>
+        <button onclick={() => galleryToggle(preview.uri)} aria-pressed={gallerySel.includes(preview.uri)}>{$t(gallerySel.includes(preview.uri) ? "Selected" : "Select")}</button></header>
+      <img src={preview.url} alt="" />
+      {#if preview.loading}<span role="status">{$t("Loading…")}</span>{/if}
+    </div>
+  {/if}
   {#if cmtPeek}
     {@const root = cmtPeek}
     <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
@@ -5947,7 +5976,7 @@
   /* File bubble */
   .bubble.file-bubble {
     display: grid;
-    grid-template-columns: 40px 1fr;
+    grid-template-columns: auto minmax(0, 1fr);
     gap: 12px;
     align-items: center;
     min-width: 240px;
@@ -6229,6 +6258,10 @@
     animation: shimmer 1.4s linear infinite;
     display: grid; place-items: center;
   }
+  .picked-preview { position: fixed; inset: 0; z-index: 280; display: flex; flex-direction: column; align-items: center; background: var(--bg-shell); padding: var(--sat, 0px) 0 var(--sab, 0px); }
+  .picked-preview header { align-self: stretch; display: flex; justify-content: space-between; padding: 8px; }
+  .picked-preview button { min-height: 44px; padding: 8px 16px; border: 0; border-radius: calc(12px * var(--rk, 1)); color: var(--accent); background: var(--bg-input); font: inherit; }
+  .picked-preview img { width: 100%; flex: 1; min-height: 0; object-fit: contain; }
   .missing-photo {
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 6px; width: 100%; aspect-ratio: 4/3; padding: 8px; box-sizing: border-box;
