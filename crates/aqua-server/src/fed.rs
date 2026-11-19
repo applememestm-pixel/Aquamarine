@@ -644,7 +644,8 @@ pub async fn h_deliver(State(state): State<AppState>, headers: HeaderMap, body: 
     check(&state, &headers, "POST", "/v1/fed/deliver", &body)?;
     let msg: RelayMessage = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
     crate::journal::visitor(crate::base_user(&msg.from), "user");
-    let delivered = crate::deliver_local(&state, &msg).await;
+    // A bot of this relay: its queue (a user of another relay wrote to it).
+    let delivered = crate::deliver_to_bot(&state, &msg).await || crate::deliver_local(&state, &msg).await;
     Ok(Json(serde_json::json!({ "delivered": delivered })))
 }
 
@@ -1165,4 +1166,90 @@ pub fn routes() -> axum::Router<AppState> {
         .route("/v1/fed/tunnel", post(crate::fedtunnel::h_poll))
         .route("/v1/fed/tunnel/reply", post(crate::fedtunnel::h_reply)
             .layer(axum::extract::DefaultBodyLimit::max(96 * 1024 * 1024)))
+}
+
+// ---------- bots of other relays (owner: every bot works on every server) ----
+
+/// `GET /v1/fed/bot/:name` — a bot of this relay, for the network: its
+/// profile, "/" commands and menu button. 404 if it isn't one here.
+pub async fn h_bot(State(state): State<AppState>, headers: HeaderMap, Path(name): Path<String>) -> Result<Json<serde_json::Value>, StatusCode> {
+    let name = name.trim().trim_start_matches('@').to_lowercase();
+    check(&state, &headers, "GET", &format!("/v1/fed/bot/{name}"), b"")?;
+    if !state.directory.is_bot(&name) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let profile = state.directory.get_profile(&name).ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(serde_json::json!({
+        "profile": profile,
+        "commands": state.tg.commands.get(&name).map(|c| c.clone()).unwrap_or(serde_json::json!([])),
+        "menu": crate::tgapi::menu_button(&state, &name),
+    })))
+}
+
+/// `POST /v1/fed/webapp/init {bot, user, start_param}` — initData for one of
+/// this relay's bots, for a user of another relay of the network (that relay
+/// checked who they are; the request is signed for the network).
+pub async fn h_webapp_init(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Result<Json<serde_json::Value>, StatusCode> {
+    check(&state, &headers, "POST", "/v1/fed/webapp/init", &body)?;
+    let v: serde_json::Value = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let bot = v["bot"].as_str().unwrap_or("").trim().trim_start_matches('@').to_lowercase();
+    let user = v["user"].as_str().unwrap_or("").trim().to_lowercase();
+    if bot.is_empty() || user.is_empty() || !state.directory.is_bot(&bot) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let sp = v["start_param"].as_str().unwrap_or("");
+    let (init_data, signed) = crate::tgapi::init_data(&state, &bot, &user, Some(sp));
+    Ok(Json(serde_json::json!({ "init_data": init_data, "signed": signed })))
+}
+
+type BotCache = std::collections::HashMap<String, (std::time::Instant, Option<(String, serde_json::Value)>)>;
+static BOTS: std::sync::Mutex<Option<BotCache>> = std::sync::Mutex::new(None);
+
+/// A bot that runs on another relay of the network: (that relay, its info).
+/// Asked of every peer at once; remembered 5 minutes (a miss — 1 minute).
+async fn find_bot(state: &AppState, name: &str) -> Option<(String, serde_json::Value)> {
+    let name = name.trim().trim_start_matches('@').to_lowercase();
+    if name.is_empty() || name.len() > 64 || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+        return None;
+    }
+    if let Some((at, hit)) = BOTS.lock().ok().and_then(|g| g.as_ref().and_then(|m| m.get(&name).cloned())) {
+        let ttl = if hit.is_some() { 300 } else { 60 };
+        if at.elapsed() < Duration::from_secs(ttl) {
+            return hit;
+        }
+    }
+    let f = current(state)?;
+    let path = format!("/v1/fed/bot/{name}");
+    let asks = f.peer_list().into_iter().map(|p| {
+        let f = f.clone();
+        let path = path.clone();
+        async move {
+            let v = tokio::time::timeout(Duration::from_secs(6), f.music_json_at(&p, &path)).await.ok().flatten()?;
+            v.get("profile").filter(|x| x.is_object()).map(|_| (p, v))
+        }
+    });
+    let hit = futures_util::future::join_all(asks).await.into_iter().flatten().next();
+    if let Ok(mut g) = BOTS.lock() {
+        let m = g.get_or_insert_with(std::collections::HashMap::new);
+        if m.len() > 2000 { m.clear(); }
+        m.insert(name, (std::time::Instant::now(), hit.clone()));
+    }
+    hit
+}
+
+/// The info of a bot of another relay (`{profile, commands, menu}`).
+pub async fn remote_bot(state: &AppState, name: &str) -> Option<serde_json::Value> {
+    find_bot(state, name).await.map(|(_, v)| v)
+}
+
+/// initData for a bot of another relay, signed there, for `user` of this one.
+pub async fn remote_webapp_init(state: &AppState, bot: &str, user: &str, start_param: &str) -> Option<serde_json::Value> {
+    let (peer, _) = find_bot(state, bot).await?;
+    let f = current(state)?;
+    let body = serde_json::json!({ "bot": bot, "user": user, "start_param": start_param }).to_string().into_bytes();
+    let (st, text) = f.post_answer(&peer, "/v1/fed/webapp/init", body).await?;
+    if !(200..300).contains(&st) {
+        return None;
+    }
+    serde_json::from_str(&text).ok()
 }

@@ -792,42 +792,8 @@ async fn deliver(state: &AppState, msg: RelayMessage) {
             msg.to = format!("{new}{}", &msg.to[base.len()..]);
         }
     }
-    // If the recipient is a registered bot, queue the (plaintext) text
-    // into its bot queue instead of the normal user inbox — bots pull
-    // via GET /v1/bot/updates, they don't hold a WebSocket.
-    if msg.kind == PayloadKind::Plaintext && state.directory.is_bot(&msg.to) {
-        // Bots talk to accounts, not devices.
-        let mut msg = msg;
-        msg.from = base_user(&msg.from).to_string();
-        let text: String = String::from_utf8_lossy(&msg.payload).chars().take(BOT_TEXT_LIMIT).collect();
-        // Writing to a bot lets it answer; /stop takes that back.
-        if text.trim() == "/stop" {
-            state.directory.bot_peer_remove(&msg.to, &msg.from);
-        } else {
-            state.directory.bot_peer_add(&msg.to, &msg.from);
-        }
-        // A Telegram-style bot's open inline keyboard: "2" / "Yes" picks a button.
-        let callback = tgapi::classify(state, &msg.to, &msg.from, &text);
-        let q = state.bot_queue(&msg.to);
-        let mut q = q.lock().await;
-        let id = q.next_id;
-        q.next_id += 1;
-        let from_bot = state.directory.is_bot(&msg.from);
-        q.updates.push_back(BotUpdate {
-            id,
-            from_bot,
-            from: msg.from.clone(),
-            callback: callback.as_ref().map(|c| c.0.clone()),
-            callback_msg: callback.map(|c| c.1),
-            text,
-            ts: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-        });
-        // Cap the queue so an idle bot doesn't grow unbounded.
-        while q.updates.len() > 1000 { q.updates.pop_front(); }
-        q.notify.notify_waiters();
+    // A bot here: into its queue (bots pull GET /v1/bot/updates, no WebSocket).
+    if deliver_to_bot(state, &msg).await {
         return;
     }
 
@@ -861,6 +827,48 @@ async fn deliver(state: &AppState, msg: RelayMessage) {
         let recipient = state.user(&msg.to);
         recipient.lock().await.inbox.push_back(msg);
     }
+}
+
+/// The recipient is a bot of THIS relay: queue the (plaintext) text into its
+/// bot queue — from a user here or, through the network (fed `deliver`), from
+/// a user of another relay (owner: every bot works on every server).
+pub(crate) async fn deliver_to_bot(state: &AppState, msg: &RelayMessage) -> bool {
+    if msg.kind != PayloadKind::Plaintext || !state.directory.is_bot(&msg.to) {
+        return false;
+    }
+    let mut msg = msg.clone();
+    // Bots talk to accounts, not devices.
+    msg.from = base_user(&msg.from).to_string();
+    let text: String = String::from_utf8_lossy(&msg.payload).chars().take(BOT_TEXT_LIMIT).collect();
+    // Writing to a bot lets it answer; /stop takes that back.
+    if text.trim() == "/stop" {
+        state.directory.bot_peer_remove(&msg.to, &msg.from);
+    } else {
+        state.directory.bot_peer_add(&msg.to, &msg.from);
+    }
+    // A Telegram-style bot's open inline keyboard: "2" / "Yes" picks a button.
+    let callback = tgapi::classify(state, &msg.to, &msg.from, &text);
+    let q = state.bot_queue(&msg.to);
+    let mut q = q.lock().await;
+    let id = q.next_id;
+    q.next_id += 1;
+    let from_bot = state.directory.is_bot(&msg.from);
+    q.updates.push_back(BotUpdate {
+        id,
+        from_bot,
+        from: msg.from.clone(),
+        callback: callback.as_ref().map(|c| c.0.clone()),
+        callback_msg: callback.map(|c| c.1),
+        text,
+        ts: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    });
+    // Cap the queue so an idle bot doesn't grow unbounded.
+    while q.updates.len() > 1000 { q.updates.pop_front(); }
+    q.notify.notify_waiters();
+    true
 }
 
 /// Hand an envelope to the recipient's live connections on THIS relay.
@@ -1464,7 +1472,10 @@ async fn webapp_init(
     let me = caller_username(&state, &dh)?;
     let bot = body.bot.trim().trim_start_matches('@').to_lowercase();
     if !state.directory.is_bot(&bot) {
-        return Err((StatusCode::NOT_FOUND, "not a bot".into()));
+        // A bot of another relay of the network: that relay signs (its key,
+        // its query ids for answerWebAppQuery) — for me, vouched by the network.
+        return fed::remote_webapp_init(&state, &bot, &me, &body.start_param).await
+            .map(Json).ok_or((StatusCode::NOT_FOUND, "not a bot".into()));
     }
     let (init_data, signed) = tgapi::init_data(&state, &bot, &me, Some(body.start_param.as_str()));
     Ok(Json(serde_json::json!({ "init_data": init_data, "signed": signed })))
@@ -1472,13 +1483,20 @@ async fn webapp_init(
 
 /// `GET /v1/webapp/menu/:bot` — the bot's menu button (`{"type":"web_app",…}` or default).
 async fn webapp_menu(State(state): State<AppState>, Path(bot): Path<String>) -> Json<serde_json::Value> {
-    Json(tgapi::menu_button(&state, &bot.trim().trim_start_matches('@').to_lowercase()))
+    let bot = bot.trim().trim_start_matches('@').to_lowercase();
+    if !state.directory.is_bot(&bot) {
+        if let Some(v) = fed::remote_bot(&state, &bot).await { return Json(v["menu"].clone()); }
+    }
+    Json(tgapi::menu_button(&state, &bot))
 }
 
 /// A bot's commands (setMyCommands) for the "/" hints in the app — public,
 /// as in Telegram: `[{command, description}]`.
 async fn webapp_commands(State(state): State<AppState>, Path(bot): Path<String>) -> Json<serde_json::Value> {
     let bot = bot.trim().trim_start_matches('@').to_lowercase();
+    if !state.directory.is_bot(&bot) {
+        if let Some(v) = fed::remote_bot(&state, &bot).await { return Json(v["commands"].clone()); }
+    }
     Json(state.tg.commands.get(&bot).map(|c| c.clone()).unwrap_or(serde_json::json!([])))
 }
 
@@ -2252,7 +2270,13 @@ async fn get_profile(
     State(state): State<AppState>,
     Path(user): Path<UserId>,
 ) -> Result<Json<directory::Profile>, StatusCode> {
-    state.directory.get_profile(&user).map(Json).ok_or(StatusCode::NOT_FOUND)
+    if let Some(p) = state.directory.get_profile(&user) {
+        return Ok(Json(p));
+    }
+    // Not here: a bot of another relay of the network (people are synced,
+    // bots stay where they run) — the app then talks to it as a bot.
+    let v = fed::remote_bot(&state, user.as_str()).await.ok_or(StatusCode::NOT_FOUND)?;
+    serde_json::from_value(v["profile"].clone()).map(Json).map_err(|_| StatusCode::NOT_FOUND)
 }
 
 #[derive(Deserialize)]
@@ -3318,6 +3342,8 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/stars-app/set", post(stars::app::set))
         .route("/v1/stars-app/decide", post(stars::app::decide_app))
         .route("/v1/fed/stars-app/:op", post(stars::app::fed))
+        .route("/v1/fed/bot/:name", get(fed::h_bot))
+        .route("/v1/fed/webapp/init", post(fed::h_webapp_init))
         .route("/v1/ice", get(turnsrv::ice))
         .route("/v1/admin/stars", get(stars::admin_get).post(stars::admin_make))
         .route("/v1/admin/stars/boosty", get(stars::admin_boosty_get).post(stars::admin_boosty_set))
