@@ -73,6 +73,7 @@
   import { reactionPack, quickReactions, parseReaction, reactionUrl, loadReactionPack, REACTION_PACK, emojiPacks, reactionSource, loadEmojiPacks } from "../reactionPack";
   import { editAndSend } from "../panels/photoEditor";
   import { transcribe, sttProgress } from "../stt";
+  import Snow, { lastOpened, markOpened, pileFor } from "./Snow.svelte";
   import Transcript from "./Transcript.svelte";
   import MediaPlayer from "./MediaPlayer.svelte";
   import { openGallery, type GalleryItem } from "./Lightbox.svelte";
@@ -615,6 +616,21 @@
   let draftBusy = $state(false);
   function stopToReview() { reviewOnStop = true; stopRecording(); }
   // A draft belongs to the chat it was recorded in: another chat drops it.
+  // Snow piles up in a chat while you're away from it (PC only): its height
+  // from the time since you last had it open (Snow.svelte).
+  let snowPile = $state(0);
+  let snowChat: string | null = null;
+  $effect(() => {
+    const id = $activeChat?.id ?? null;
+    if (id === snowChat) return;
+    if (snowChat) markOpened(snowChat);
+    snowChat = id;
+    snowPile = 0;
+    if (!id) return;
+    const at = lastOpened(id);
+    if (IS_DESKTOP && at) snowPile = pileFor(Date.now() - at);
+    markOpened(id);
+  });
   let draftChat: string | null = null;
   $effect(() => {
     const id = $activeChat?.id ?? null;
@@ -753,6 +769,8 @@
     if (at < 0) { galleryToggle(gallery.items[i].uri); return; }
     openGallery(shots.map((g) => ({ url: g.thumb!, kind: "image" as const })), at);
   }
+  let checkDown: { x: number; y: number; uri: string } | null = null;
+  let checkFired = false;
   function galleryToggle(uri: string) {
     gallerySel = gallerySel.includes(uri) ? gallerySel.filter((u) => u !== uri) : [...gallerySel, uri];
   }
@@ -4168,6 +4186,7 @@
 
     <div class="msg-stage">
     <div class="chat-wall" aria-hidden="true"></div>
+    {#if $settings.snow}<Snow count={12} pile={snowPile} />{/if}
     <div
       class="messages"
       class:feed={feedView}
@@ -5081,7 +5100,14 @@
                     onclick={() => galleryPeek(gi)} onkeydown={(e) => { if (e.key === "Enter") galleryPeek(gi); }}>
                     {#if g.thumb}<img src={g.thumb} alt="" loading="lazy" decoding="async" />{/if}
                     {#if g.video}<span class="ap-dur">{fmtDur(g.duration)}</span>{/if}
-                    <button class="ap-check" aria-label={$t("Select")} onclick={(e) => { e.stopPropagation(); galleryToggle(g.uri); }}>{n >= 0 ? n + 1 : ""}</button>
+                    <!-- A finger-sized zone around the circle; the tap counts on release unless
+                         the finger really scrolled (a slight move made Android drop the click). -->
+                    <button class="ap-check-hit" aria-label={$t("Select")}
+                      onpointerdown={(e) => { e.stopPropagation(); checkDown = { x: e.clientX, y: e.clientY, uri: g.uri }; }}
+                      onpointerup={(e) => { e.stopPropagation(); if (checkDown?.uri === g.uri && Math.hypot(e.clientX - checkDown.x, e.clientY - checkDown.y) < 14) { checkFired = true; galleryToggle(g.uri); } checkDown = null; }}
+                      onclick={(e) => { e.stopPropagation(); if (checkFired) { checkFired = false; return; } galleryToggle(g.uri); }}>
+                      <span class="ap-check">{n >= 0 ? n + 1 : ""}</span>
+                    </button>
                   </div>
                 {/each}
               </div>
@@ -6353,7 +6379,8 @@
   .ap-cam.live :global(svg) { position: relative; width: 26px; height: 26px; filter: drop-shadow(0 1px 3px rgba(0,0,0,.6)); }
   .ap-cam.live span { display: none; }
   .ap-allow { color: var(--accent); padding: 8px; text-align: center; }
-  .ap-check { padding: 0; cursor: pointer; color: #fff; font: 700 12px var(--font-ui, inherit); }
+  .ap-check-hit { position: absolute; top: 0; right: 0; width: 48px; height: 48px; padding: 0; border: none; background: none; cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+  .ap-check { pointer-events: none; padding: 0; color: #fff; font: 700 12px var(--font-ui, inherit); }
   .ap-check { position: absolute; top: 7px; right: 7px; width: 24px; height: 24px; box-sizing: border-box; border-radius: 50%; border: 2px solid #fff; background: rgba(0,0,0,.25);
     display: grid; place-items: center; font-size: 12.5px; font-weight: 800; color: #06070c; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
   .ap-tile.on .ap-check { background: var(--accent); border-color: var(--accent); }
