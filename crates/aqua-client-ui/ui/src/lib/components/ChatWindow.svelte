@@ -119,7 +119,7 @@
   import { biometricAvailable, confirmBiometric } from "../lock";
   import ThreadPanel, { type ThreadItem } from "./ThreadPanel.svelte";
   import { unsupportedKind } from "../compat";
-  import { checkUpdates } from "../updates";
+  import { checkUpdates, updateState } from "../updates";
   import { noteView, viewCounts, channelStats } from "../channelStats";
   import ChannelStats, { statsFor, type StatPost } from "./ChannelStats.svelte";
   import EventCard from "./EventCard.svelte";
@@ -3060,6 +3060,17 @@
     return { destroy: () => el.removeEventListener("wheel", h) };
   }
 
+  /** "Update the app" under a message this version can't show: say what
+   *  happened — it did nothing visible before. */
+  async function updateFromBubble() {
+    showToast(tr("Checking for updates…"));
+    await checkUpdates(true);
+    const st = get(updateState);
+    if (st.s === "none") showToast(tr("This is the newest release. The message came from a test version — to get those, turn on “Tester” in Settings → Updates."), 7000);
+    else if (st.s === "error") showToast(String(("error" in st && st.error) || tr("Couldn't check for updates")), 6000);
+    else if (st.s === "available" || st.s === "downloading") showToast(tr("Downloading the update…"));
+  }
+
   function membersOf(row: Row): Row[] {
     return (row as Row & { album?: Row[] }).album ?? [row];
   }
@@ -4705,7 +4716,7 @@
                 <div class="bubble unsupported">
                   <span class="uns-ic">⬆</span>
                   <span class="uns-body"><b>{$t("This message isn't supported by your version of Aquamarine")}</b>
-                    <button class="uns-up" onclick={() => void checkUpdates(true)}>{$t("Update the app")}</button></span>
+                    <button class="uns-up" onclick={() => void updateFromBubble()}>{$t("Update the app")}</button></span>
                   <span class="bubble-meta">{m.time}</span>
                 </div>
               {:else if m.kind.type === "text"}
