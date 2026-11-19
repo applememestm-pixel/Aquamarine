@@ -3074,7 +3074,8 @@
       }
     }
     // An album's photos were listed with the album, not again on their own.
-    for (let i = items.length - 1; i > 0; i--) if (items[i].kind === "file" && items.findIndex((x) => x.kind === "file" && x.path === items[i].path) < i) items.splice(i, 1);
+    const pathOf = (x: ForwardItem) => (x.kind === "file" ? (x as { path?: string }).path ?? "" : "");
+    for (let i = items.length - 1; i > 0; i--) { const p = pathOf(items[i]); if (p && items.findIndex((x) => pathOf(x) === p) < i) items.splice(i, 1); }
     if (items.length === 0) { showToast(tr("Nothing forwardable selected")); return; }
     openForward(items);
     if (skipped) showToast(`${skipped} item(s) can't be forwarded`);
