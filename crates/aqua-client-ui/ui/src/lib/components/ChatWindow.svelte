@@ -1538,8 +1538,9 @@
   });
   $effect(() => { void slashMatches.length; slashIdx = 0; });
 
-  // "@" suggestions (Telegram): the group's members, else people from the
-  // chat list; picking one finishes the @name.
+  // "@" suggestions (Telegram): the group's members; in a chat of two only
+  // the other person (owner: not everyone you know — they aren't in this chat);
+  // picking one finishes the @name.
   let atIdx = $state(0);
   let atHidden = $state("");
   let atMatches = $derived.by((): { user: string; name: string }[] => {
@@ -1548,7 +1549,7 @@
     const q = m[1].toLowerCase();
     const pool: { user: string; name: string }[] = activeGroup
       ? activeGroup.members.map((x) => ({ user: x.username, name: $chats.find((c) => c.id === x.username)?.name ?? x.username }))
-      : $chats.filter((c) => !c.id.startsWith("grp_") && !c.id.startsWith("__")).map((c) => ({ user: c.id, name: c.name }));
+      : $activeChat && !$activeChat.id.startsWith("__") ? [{ user: $activeChat.id, name: $activeChat.name }] : [];
     const me = myUsername;
     return pool.filter((p) => p.user !== me && (p.user.toLowerCase().startsWith(q) || p.name.toLowerCase().includes(q))).slice(0, 8);
   });
