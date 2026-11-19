@@ -23,6 +23,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.util.Base64
@@ -289,6 +291,27 @@ class AquaMeshPlugin(private val activity: Activity) : Plugin(activity) {
       }
     } catch (_: Exception) {}
     invoke.resolve(JSObject())
+  }
+
+  /** The Wi-Fi network's handle (0: none), for `android_setsocknetwork` in
+   *  mesh_lan.rs. Wi-Fi without internet isn't the default network — mobile
+   *  data is — and sockets of the local network went there: neighbours on
+   *  the same Wi-Fi were never found. Only those sockets are put on Wi-Fi;
+   *  the relay keeps the default network. */
+  @Command
+  fun wifiHandle(invoke: Invoke) {
+    var handle = 0L
+    try {
+      val cm = activity.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+      @Suppress("DEPRECATION")
+      for (n in cm.allNetworks) {
+        val caps = cm.getNetworkCapabilities(n) ?: continue
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) { handle = n.networkHandle; break }
+      }
+    } catch (_: Exception) {}
+    val o = JSObject()
+    o.put("handle", handle)
+    invoke.resolve(o)
   }
 
   /** Paired devices, plus whatever a short scan finds. */

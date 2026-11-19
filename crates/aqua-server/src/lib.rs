@@ -50,6 +50,7 @@ pub mod tgnet;
 pub mod host;
 pub mod selfupdate;
 pub mod turnsrv;
+pub mod botmaker;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
 pub use auth::{AuthState, Caller};
@@ -2575,6 +2576,7 @@ async fn bot_delete(
 ) -> Result<StatusCode, (StatusCode, String)> {
     state.directory.delete_bot(&name, &dh_pub).map_err(|e| (dir_err_status(&e), e.to_string()))?;
     state.bot_queues.remove(&name.trim().to_lowercase());
+    botmaker::forget(&name.trim().to_lowercase());
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -3045,6 +3047,7 @@ async fn admin_delete_bot(
     match state.directory.admin_delete_bot(&name, &music::relay_bot_owner()) {
         Ok(true) => {
             state.bot_queues.remove(&name.trim().to_lowercase());
+            botmaker::forget(&name.trim().to_lowercase());
             Ok(StatusCode::NO_CONTENT)
         }
         Ok(false) => Err((StatusCode::NOT_FOUND, "no such bot".into())),
@@ -3439,6 +3442,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/bot/profile",        get(botx::profile_get).post(botx::profile_set))
         .route("/v1/bot/stats",          get(botx::stats))
         .route("/v1/bot/:name",          axum::routing::delete(bot_delete))
+        .route("/v1/botmaker/spec",      get(botmaker::spec_get).put(botmaker::spec_put).delete(botmaker::spec_delete))
         .route("/v1/backup", axum::routing::put(backup_put).get(backup_meta).delete(backup_delete)
             .layer(DefaultBodyLimit::max(BACKUP_LIMIT + 1024)))
         .route("/v1/backup/fetch", post(backup_fetch))
@@ -3496,6 +3500,7 @@ pub async fn serve_embedded(
     music::spawn_bot(state.clone());
     verify::spawn_bot(state.clone());
     stars::spawn(state.clone());
+    botmaker::spawn(state.clone());
     let blobs = state.blobs.clone();
     let r = axum::serve(listener, app(state).into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(shutdown).await;
     // Stopped: the file cache goes, people's data stays (blobstore::clear_cache).

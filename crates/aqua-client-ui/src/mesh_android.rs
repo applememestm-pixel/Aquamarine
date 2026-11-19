@@ -181,6 +181,35 @@ pub async fn listen(app: &AppHandle) -> Result<(), String> {
 /// dropped on many phones.
 pub fn lan_lock(on: bool) {
     let _ = call::<Empty>("lanLock", serde_json::json!({ "on": on }));
+    if on { refresh_wifi(); }
+}
+
+/// The Wi-Fi network (AquaMesh.kt `wifiHandle`), 0 when there's none.
+static WIFI: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Ask Android which network is Wi-Fi (it changes when Wi-Fi does).
+pub fn refresh_wifi() {
+    #[derive(Deserialize)]
+    struct Handle { handle: u64 }
+    let h = call::<Handle>("wifiHandle", serde_json::json!({})).map(|h| h.handle).unwrap_or(0);
+    WIFI.store(h, Ordering::Relaxed);
+}
+
+#[link(name = "android")]
+extern "C" {
+    /// NDK (API 23): this socket's traffic goes over `network`.
+    fn android_setsocknetwork(network: u64, fd: std::os::raw::c_int) -> std::os::raw::c_int;
+}
+
+/// A socket of the local network goes over Wi-Fi even when the default
+/// network is mobile data (Wi-Fi without internet): before, broadcasts and
+/// connections to neighbours left through mobile data and found nobody.
+pub fn on_wifi(fd: std::os::raw::c_int) {
+    let h = WIFI.load(Ordering::Relaxed);
+    if h != 0 {
+        // SAFETY: plain NDK call on a socket we own; a failure leaves it as it was.
+        unsafe { android_setsocknetwork(h, fd); }
+    }
 }
 
 pub async fn stop(_app: &AppHandle) {

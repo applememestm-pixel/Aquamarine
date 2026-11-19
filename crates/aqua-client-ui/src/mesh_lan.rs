@@ -41,9 +41,28 @@ pub fn ready() -> bool {
     READY.load(Ordering::Relaxed)
 }
 
+/// Android: put a socket of the local network on Wi-Fi (mesh_android.rs
+/// `on_wifi`) — elsewhere the system already routes the LAN there.
+#[cfg(target_os = "android")]
+fn on_wifi<S: std::os::fd::AsRawFd>(s: &S) {
+    super::bt::on_wifi(s.as_raw_fd());
+}
+#[cfg(not(target_os = "android"))]
+fn on_wifi<S>(_s: &S) {}
+
+/// A TCP connection to a neighbour, over Wi-Fi on Android.
+async fn dial(addr: SocketAddr) -> std::io::Result<tokio::net::TcpStream> {
+    let s = tokio::net::TcpSocket::new_v4()?;
+    on_wifi(&s);
+    s.connect(addr).await
+}
+
 /// This device's IPv4 address on the local network (no packet is sent).
 fn local_ipv4() -> Option<Ipv4Addr> {
     let s = UdpSocket::bind("0.0.0.0:0").ok()?;
+    // Android with mobile data as the default network: else this was the
+    // mobile address, and the /24 swept was the operator's.
+    on_wifi(&s);
     // Any routable address works; nothing is sent. A hotspot without
     // internet still has a default route through the phone.
     s.connect("10.255.255.255:9").or_else(|_| s.connect("1.1.1.1:80")).ok()?;
@@ -140,6 +159,7 @@ pub async fn listen(app: &AppHandle) -> Result<(), String> {
             let mut udp = None;
             for _ in 0..12 {
                 if let Ok(u) = UdpSocket::bind(("0.0.0.0", PORT)) {
+                    on_wifi(&u);
                     udp = Some(u);
                     break;
                 }
@@ -184,6 +204,7 @@ pub fn stop() {
 /// Ask the network who runs Aquamarine; answers land in `heard()`.
 fn shout() {
     let Ok(s) = UdpSocket::bind("0.0.0.0:0") else { return };
+    on_wifi(&s);
     let _ = s.set_broadcast(true);
     let _ = s.set_read_timeout(Some(Duration::from_millis(300)));
     let msg = format!("{MAGIC_Q} {}", TCP_PORT.load(Ordering::Relaxed).max(PORT));
@@ -215,7 +236,7 @@ async fn sweep() -> Vec<SocketAddr> {
     let [a, b, c, d0] = me.octets();
     let knocks = (1u8..=254).filter(|d| *d != d0).map(|d| async move {
         let addr = SocketAddr::from((Ipv4Addr::new(a, b, c, d), PORT));
-        match tokio::time::timeout(Duration::from_millis(600), tokio::net::TcpStream::connect(addr)).await {
+        match tokio::time::timeout(Duration::from_millis(600), dial(addr)).await {
             Ok(Ok(_)) => Some(addr),
             _ => None,
         }
@@ -226,6 +247,9 @@ async fn sweep() -> Vec<SocketAddr> {
 /// One round over the local network; returns how many contacts answered.
 pub async fn sync_round(app: &AppHandle, scan: bool) -> Result<usize, String> {
     listen(app).await?;
+    // Wi-Fi may have changed since the last round (another network, or none).
+    #[cfg(target_os = "android")]
+    let _ = tauri::async_runtime::spawn_blocking(super::bt::refresh_wifi).await;
     tauri::async_runtime::spawn_blocking(shout).await.map_err(|e| e.to_string())?;
     let me = local_ipv4().map(IpAddr::V4);
     let mut cands: Vec<SocketAddr> = heard()
@@ -247,7 +271,7 @@ pub async fn sync_round(app: &AppHandle, scan: bool) -> Result<usize, String> {
     cands.retain(|a| Some(a.ip()) != me && !a.ip().is_loopback());
     let mut met = 0;
     for addr in cands.into_iter().take(24) {
-        let Ok(Ok(s)) = tokio::time::timeout(Duration::from_secs(3), tokio::net::TcpStream::connect(addr)).await else { continue };
+        let Ok(Ok(s)) = tokio::time::timeout(Duration::from_secs(3), dial(addr)).await else { continue };
         let Ok(s) = s.into_std() else { continue };
         let _ = s.set_nonblocking(false);
         tune(&s);

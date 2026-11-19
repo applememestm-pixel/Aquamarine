@@ -69,7 +69,15 @@
     busy = true;
     try {
       let g = await api.createGroup(kind, t, description.trim(), members);
-      if (kind === "supergroup") {
+      if (kind === "community") {
+        // A community (Telegram): admins post announcements, chats are added
+        // by admins (members suggest, admins approve).
+        const next = JSON.parse(JSON.stringify(g)) as typeof g;
+        next.settings.send_messages = "admins";
+        (next.settings as unknown as Record<string, unknown>).add_chats = "admins";
+        next.linked = [];
+        try { g = await api.updateGroup(next); } catch (e) { showToast(tr("Couldn't save: {e}", { e: String(e) }), 5000); }
+      } else if (kind === "supergroup") {
         // A server: starts with Discord-style rooms.
         const next = JSON.parse(JSON.stringify(g)) as typeof g;
         next.settings.rooms_enabled = true;
@@ -79,7 +87,7 @@
       await refreshGroups();
       closeNewGroup();
       await selectChat(g.id);
-      showToast(tr(kind === "channel" ? "Channel “{name}” created" : kind === "supergroup" ? "Server “{name}” created" : "Group “{name}” created", { name: t }));
+      showToast(tr(kind === "community" ? "Community “{name}” created" : kind === "channel" ? "Channel “{name}” created" : kind === "supergroup" ? "Server “{name}” created" : "Group “{name}” created", { name: t }));
     } catch (e) {
       showToast(tr("Could not create: {e}", { e: String(e) }), 5000);
     } finally {
@@ -97,21 +105,23 @@
            what it is, and its own button — no switch between them here. -->
       <div class="head">
         <span class="k-ic {kind}">
-          {#if kind === "channel"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v4a1 1 0 0 0 1 1h3l6 4V5L7 9H4a1 1 0 0 0-1 1z"/><path d="M17 8.5a5 5 0 0 1 0 7"/></svg>
+          {#if kind === "community"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="3"/><circle cx="5" cy="17" r="2.5"/><circle cx="19" cy="17" r="2.5"/><path d="M10 9.5 6.5 15M14 9.5l3.5 5.5M7.5 17h9"/></svg>
+          {:else if kind === "channel"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v4a1 1 0 0 0 1 1h3l6 4V5L7 9H4a1 1 0 0 0-1 1z"/><path d="M17 8.5a5 5 0 0 1 0 7"/></svg>
           {:else if kind === "supergroup"}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M8 9h8M8 13h5"/></svg>
           {:else}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 19c.6-3.2 3-5 6-5s5.4 1.8 6 5"/><path d="M16 5.2a3 3 0 0 1 0 5.6M18 14.2c1.6.6 2.7 2.2 3 4.8"/></svg>{/if}
         </span>
-        <h2>{$t(kind === "channel" ? "New channel" : kind === "supergroup" ? "New server" : "New group")}</h2>
+        <h2>{$t(kind === "community" ? "New community" : kind === "channel" ? "New channel" : kind === "supergroup" ? "New server" : "New group")}</h2>
         <button data-x class="x" onclick={closeNewGroup} aria-label={$t("Close")}>×</button>
       </div>
       <p class="hint">
-        {$t(kind === "channel" ? "Broadcast to subscribers — only admins post. Everyone else reads."
+        {$t(kind === "community" ? "A community: your groups and channels in one place, with announcements from admins. Members see every chat of it and can ask to join."
+          : kind === "channel" ? "Broadcast to subscribers — only admins post. Everyone else reads."
           : kind === "supergroup" ? "A server: rooms like Discord channels (#general, announcements, voice), public link, server tag and full admin tools."
           : "A private group chat. Everyone can post by default.")}
       </p>
 
       <label class="field"><span>{$t("Name")}</span>
-        <input bind:value={title} placeholder={$t(kind === "channel" ? "My Channel" : kind === "supergroup" ? "My server" : "My Group")} maxlength="64" />
+        <input bind:value={title} placeholder={$t(kind === "community" ? "My community" : kind === "channel" ? "My Channel" : kind === "supergroup" ? "My server" : "My Group")} maxlength="64" />
       </label>
       <label class="field"><span>{$t("Description")}</span>
         <textarea bind:value={description} rows="2" placeholder={$t("What's this about? (optional)")}></textarea>
@@ -138,7 +148,7 @@
       <div class="actions">
         <button class="ghost" onclick={closeNewGroup}>{$t("Cancel")}</button>
         <button class="primary" onclick={create} disabled={busy}>
-          {$t(busy ? "Creating…" : kind === "channel" ? "Create channel" : kind === "supergroup" ? "Create server" : "Create group")}
+          {$t(busy ? "Creating…" : kind === "community" ? "Create community" : kind === "channel" ? "Create channel" : kind === "supergroup" ? "Create server" : "Create group")}
         </button>
       </div>
     </div>

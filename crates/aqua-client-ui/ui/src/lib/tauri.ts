@@ -260,6 +260,8 @@ export const api = {
     invoke("temp_append", bytes, { headers: { "x-name": at.name ?? "", "x-path": at.path ?? "" } }),
   saveConsoleBot:     (path: string): Promise<void>                                    => invoke("save_console_bot", { path }),
   deleteBot:          (username: string): Promise<void>                                => invoke("delete_bot", { username }),
+  /** Bot constructor: the bot's spec on the relay (botmaker.rs). */
+  botSpec:            (username: string, op: "get" | "put" | "delete", spec?: unknown): Promise<unknown> => invoke("bot_spec", { username, op, spec: spec ?? null }),
   startChatWith:      (peer_username: string, first_message: string): Promise<ChatSummary> => invoke("start_chat_with", { peerUsername: peer_username, firstMessage: first_message }),
 
   // Groups / supergroups / channels

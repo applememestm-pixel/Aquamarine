@@ -531,6 +531,43 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Windows keeps a pinned / desktop shortcut's icon cached by the exe's path,
+/// and an update keeps the path: after the new logo the taskbar still showed
+/// the old one. Once per new version the shortcuts are re-pointed at the exe
+/// and the shell's icon cache dropped (as in the messenger's personal.rs).
+fn refresh_shortcuts_after_update(app: &AppHandle) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let Ok(dir) = app.path().app_data_dir() else { return };
+        let mark = dir.join("shortcut-icon.version");
+        let ver = env!("CARGO_PKG_VERSION");
+        if std::fs::read_to_string(&mark).map(|v| v.trim() == ver).unwrap_or(false) { return; }
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(&mark, ver);
+        let Ok(exe) = std::env::current_exe() else { return };
+        let q = |s: &str| s.replace('\'', "''");
+        let exe = q(&exe.display().to_string());
+        let script = format!(
+            "$exe='{exe}';$loc='{exe},0';$sh=New-Object -ComObject WScript.Shell;\
+             foreach($k in 'Desktop','CommonDesktopDirectory','Programs','CommonPrograms','StartMenu'){{$d=[Environment]::GetFolderPath($k);if(-not $d){{continue}};\
+             Get-ChildItem -LiteralPath $d -Filter *.lnk -Recurse -ErrorAction SilentlyContinue|ForEach-Object{{try{{$l=$sh.CreateShortcut($_.FullName);\
+             if($l.TargetPath -ieq $exe){{$l.IconLocation=$loc;$l.Save()}}}}catch{{}}}}}};\
+             $tb=Join-Path $env:APPDATA 'Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar';\
+             if(Test-Path $tb){{Get-ChildItem -LiteralPath $tb -Filter *.lnk|ForEach-Object{{try{{$l=$sh.CreateShortcut($_.FullName);if($l.TargetPath -ieq $exe){{$l.IconLocation=$loc;$l.Save()}}}}catch{{}}}}}};\
+             try{{ie4uinit.exe -show}}catch{{}}"
+        );
+        std::thread::spawn(move || {
+            let _ = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &script])
+                .creation_flags(0x0800_0000)
+                .status();
+        });
+    }
+    #[cfg(not(windows))]
+    let _ = app;
+}
+
 #[cfg(target_os = "android")]
 mod android {
     //! The foreground service lives in Kotlin (android/AquaServer.kt).
@@ -602,6 +639,8 @@ pub fn run() {
                     }
                 }
             }
+            // Windows: after an update the taskbar kept the old logo (icon cache).
+            refresh_shortcuts_after_update(&handle);
             updates::TESTER.store(c.tester, std::sync::atomic::Ordering::Relaxed);
             updates::spawn(handle.clone());
             // First start: the window asks first (choose_mode).

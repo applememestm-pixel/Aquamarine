@@ -224,7 +224,10 @@ export interface BotInfo {
 
 // ---- Groups / supergroups / channels ----
 
-export type GroupKind = "group" | "supergroup" | "channel";
+export type GroupKind = "group" | "supergroup" | "channel" | "community";
+/** A chat of a community (Telegram): saved with its name and owner, since a
+ *  member who isn't in it has no copy of it to look them up in. */
+export interface LinkedChat { id: string; title: string; kind: string; owner: string; by?: string }
 export type Perm = "all" | "admins";
 export type GroupRole = "owner" | "admin" | "member";
 
@@ -335,6 +338,9 @@ export interface Group {
   version: number;
   banned?: string[];
   requests?: JoinRequest[];
+  /** Community: its chats, and those members suggested (admins approve). */
+  linked?: LinkedChat[];
+  suggested?: LinkedChat[];
   log?: GroupLogEntry[];
   clan?: ClanTag | null;
   rooms?: Room[];

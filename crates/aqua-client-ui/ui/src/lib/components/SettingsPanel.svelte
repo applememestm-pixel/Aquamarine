@@ -90,6 +90,7 @@
   import { handoffOn } from "../handoff";
   import { save as saveDialog } from "@tauri-apps/plugin-dialog";
   import { meshStatus, meshSyncNow, meshSetEnabled, refreshMesh } from "../mesh";
+  import { botMakerFor } from "./BotMaker.svelte";
 
   // ---- Section navigation ----
   type Sec = "network" | "nearby" | "host" | "ghost" | "language" | "appearance" | "theme" | "behaviour" | "notifications" | "voice" | "wallpaper" | "accent" | "bots" | "account" | "updates" | "about" | "privacy" | "stickers" | "backups" | "devices" | "storage" | "advanced" | "power" | "window" | "music" | "plugins";
@@ -2831,6 +2832,11 @@
         </div>
         {#if !sel.token}<div class="bots-note">{$t("The server keeps only a fingerprint of the token, and this device doesn't have it. Reset the token to get a new one.")}</div>{/if}
         <div class="bot-actions"><button class="bot-link" onclick={() => resetBotToken(sel)}>{$t("Reset token")}</button></div>
+      </section>
+      <section class="group">
+        <div class="label">{$t("Bot constructor")}</div>
+        <div class="bots-note">{$t("No code: write its greeting, commands, answers to words and buttons — this server answers for the bot.")}</div>
+        <div class="bot-actions"><button class="bot-btn primary" onclick={() => botMakerFor.set(sel.username)}>{$t("Open the constructor")}</button></div>
       </section>
       <section class="group">
         <div class="label">{$t("Run it")}</div>

@@ -4,7 +4,8 @@
    * chat", rename, add / remove chats, ungroup. Opens from the group's row
    * in the chat list or its tag next to a chat's name.
    */
-  import { chatGroups, openGroupId, setCollapsed, renameGroup, removeFromGroup, addToGroup, deleteGroup } from "../chatGroups";
+  import { chatGroups, openGroupId, setCollapsed, renameGroup, removeFromGroup, addToGroup, deleteGroup, setGroupPhoto } from "../chatGroups";
+  import { groupMap } from "../groups";
   import { chats, selectChat } from "../stores";
   import { avatars } from "../people";
   import { mutedChats } from "../chatPrefs";
@@ -39,6 +40,28 @@
       },
     });
   }
+  /** Under a chat, like Telegram's community list: "6 members" / "16 subscribers". */
+  function sizeOf(id: string): string {
+    const g = $groupMap[id];
+    if (!g) return "";
+    return g.kind === "channel" ? $tn(g.members.length, "subscriber") : $tn(g.members.length, "member");
+  }
+  let photoIn: HTMLInputElement | undefined = $state();
+  /** A square crop, 256 px JPEG: kept with the group on this device. */
+  async function pickPhoto(e: Event) {
+    const f = (e.currentTarget as HTMLInputElement).files?.[0];
+    (e.currentTarget as HTMLInputElement).value = "";
+    if (!f || !group) return;
+    const gid = group.id;
+    try {
+      const bmp = await createImageBitmap(f);
+      const side = Math.min(bmp.width, bmp.height);
+      const c = document.createElement("canvas");
+      c.width = c.height = 256;
+      c.getContext("2d")!.drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, 256, 256);
+      setGroupPhoto(gid, c.toDataURL("image/jpeg", 0.85));
+    } catch { /* not a picture */ }
+  }
   function onKey(e: KeyboardEvent) { if (e.key === "Escape" && $openGroupId) { e.stopPropagation(); close(); } }
 </script>
 
@@ -52,7 +75,9 @@
       <button data-x class="x" onclick={close} aria-label={$t("Close")}>✕</button>
       <div class="head">
         <div class="stack big">
-          {#if group.emoji}
+          {#if group.photo}
+            <img class="photo" src={group.photo} alt="" />
+          {:else if group.emoji}
             <span class="emo">{group.emoji}</span>
           {:else}
             {#each members.slice(0, 3) as m, i (m.id)}
@@ -62,6 +87,13 @@
         </div>
         <button class="name" onclick={rename} title={$t("Rename")}>{group.name} <span class="pen">✎</span></button>
         <div class="count">{$tn(members.length, "chat")}</div>
+        <input type="file" accept="image/*" hidden bind:this={photoIn} onchange={pickPhoto} />
+        <div class="photo-acts">
+          <button class="photo-btn" onclick={() => photoIn?.click()}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+            {$t(group.photo ? "Change photo" : "Set a photo")}</button>
+          {#if group.photo}<button class="photo-btn" onclick={() => setGroupPhoto(group!.id, undefined)}>{$t("Remove photo")}</button>{/if}
+        </div>
       </div>
 
       <div class="tools">
@@ -93,7 +125,7 @@
           {#each others as c (c.id)}
             <button class="row" onclick={() => addToGroup(group!.id, c.id)}>
               <span class="avatar sz-40" style="--gradient: {c.gradient}">{c.letter}{#if $avatars[c.id]}<img class="ava-img" src={$avatars[c.id]} alt="" />{/if}</span>
-              <span class="body"><span class="r1"><b>{c.name}</b></span><span class="r2">{preview(c.preview)}</span></span>
+              <span class="body"><span class="r1"><b>{c.name}</b></span><span class="r2">{sizeOf(c.id) || preview(c.preview)}</span></span>
               <span class="plus">＋</span>
             </button>
           {:else}
@@ -105,7 +137,7 @@
               <button class="open" onclick={() => open(c.id)}>
                 <span class="avatar sz-40" style="--gradient: {c.gradient}">{c.letter}{#if $avatars[c.id]}<img class="ava-img" src={$avatars[c.id]} alt="" />{/if}</span>
                 <span class="body">
-                  <span class="r1"><b>{c.name}</b><span class="time">{c.time}</span></span>
+                  <span class="r1"><b>{c.name}</b>{#if sizeOf(c.id)}<span class="size">{sizeOf(c.id)}</span>{/if}<span class="time">{c.time}</span></span>
                   <span class="r2"><span class="pv">{#if c.preview_by_me}{$t("you:")} {/if}{preview(c.preview)}</span>
                     {#if c.unread > 0}<span class="badge" class:muted={$mutedChats.has(c.id)}>{c.unread}</span>{/if}</span>
                 </span>
@@ -139,6 +171,12 @@
   .stack .mini { position: absolute; width: 60%; height: 60%; font-size: 12px; border: 2px solid var(--bg-shell);
     left: calc(var(--k) * 20%); top: calc(var(--k) * 20%); z-index: calc(3 - var(--k)); }
   .stack.big .mini { font-size: 18px; border-width: 3px; }
+  .photo { display: block; width: 100%; height: 100%; border-radius: calc(22px * var(--rk, 1)); object-fit: cover; }
+  .photo-acts { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 8px; }
+  .photo-btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border: none; border-radius: calc(12px * var(--rk, 1));
+    background: var(--accent-soft); color: var(--accent); font: 600 13px var(--font-ui, inherit); cursor: pointer; }
+  .photo-btn svg { width: 16px; height: 16px; }
+  .size { font-size: 12px; color: var(--fg-dim); font-weight: 400; margin-left: 6px; white-space: nowrap; }
   .emo { display: grid; place-items: center; width: 100%; height: 100%; border-radius: 50%; background: var(--bg-input); font-size: 40px; }
   .name { border: none; background: none; color: var(--fg); font: inherit; font-size: 18px; font-weight: 800; cursor: pointer; }
   .pen { font-size: 13px; color: var(--fg-dim); }
