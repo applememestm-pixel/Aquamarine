@@ -1004,7 +1004,7 @@
     } else if (ok === 0) {
       showToast(`${tr("Send failed")}: ${tr(lastErr.replace(/^Error:\s*/, ""))}`, 6000);
     } else {
-      showToast(`${ok} sent · ${fail} failed — ${lastErr}`, 6000);
+      showToast(`${ok} sent · ${fail} failed — ${tr(lastErr.replace(/^Error:\s*/, ""))}`, 6000);
     }
   }
 

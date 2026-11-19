@@ -734,7 +734,7 @@
           </div>
         {/if}
       {/if}
-      <div class="scroll" onscroll={heroScroll} ontouchstart={heroDown} ontouchmove={heroMove} ontouchend={() => (pullY = null)}>
+      <div class="scroll" onscroll={heroScroll} ontouchstart={heroDown} ontouchmove={heroMove} ontouchend={() => (pullY = null)} ontouchcancel={() => (pullY = null)}>
       {#if hero && shownAvatar}
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
         <div class="hero" onclick={openAvatars}>
@@ -1465,16 +1465,16 @@
   .sheet.tgp .banner { height: 150px; }
   /* The avatar opened out (Telegram): the photo is the header, name and
      "last seen" on it; the banner, circle and centred name step aside. */
-  .hero { position: relative; width: 100%; aspect-ratio: 1 / 1; max-height: 70dvh; overflow: hidden; cursor: zoom-in; animation: hero-in .32s cubic-bezier(.22,1,.36,1); transform-origin: 50% 30%; }
+  .hero { position: relative; width: 100%; height: min(100vw, 70dvh); overflow: hidden; cursor: zoom-in; animation: hero-in .32s cubic-bezier(.22,1,.36,1); transform-origin: 50% 30%; }
   .hero img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
   .hero::after { content: ""; position: absolute; inset: auto 0 0 0; height: 45%; background: linear-gradient(to top, rgba(0,0,0,.72), transparent); pointer-events: none; }
   .hero-txt { position: absolute; z-index: 1; left: 18px; right: 18px; bottom: 16px; display: flex; flex-direction: column; gap: 3px; color: #fff; text-shadow: 0 1px 6px rgba(0,0,0,.5); }
   .hero-txt b { font-size: 26px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .hero-txt span { font-size: 15px; opacity: .85; }
-  .hero-txt span.on { color: #7CF0B0; opacity: 1; }
+  .hero-txt span.on { color: var(--accent); opacity: 1; }
   @keyframes hero-in { from { transform: scale(.35); border-radius: 50%; opacity: .4; } }
   .sheet.hero-on .banner, .sheet.hero-on .avatar-wrap, .sheet.hero-on .tg-name, .sheet.hero-on .tg-seen { display: none; }
-  .sheet.hero-on .body { margin-top: 0; padding-top: 16px; }
+  .sheet.tgp.hero-on .body { margin-top: 0; padding-top: 16px; }
   .sheet.tgp .body { margin-top: -62px; }
   .sheet.tgp .avatar-wrap { margin: 0 auto 10px; }
   .sheet.tgp .pf-grid { grid-template-columns: minmax(0, 1fr); gap: 14px; }
