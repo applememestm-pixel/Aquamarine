@@ -6555,11 +6555,19 @@
   .sel-more-wrap { position: relative; }
   .sel-more-veil { position: fixed; inset: 0; z-index: 30; }
   /* Telegram's ⋮ menu: a blurred card, icon + label rows. */
-  .sel-more { position: absolute; right: 0; top: calc(100% + 6px); z-index: 31; min-width: 220px; padding: 4px 0; display: flex; flex-direction: column;
+  /* PC: a compact menu like the others (it was phone-sized there too); phones below. */
+  .sel-more { position: absolute; right: 0; top: calc(100% + 6px); z-index: 31; min-width: 168px; padding: 4px 0; display: flex; flex-direction: column;
     background: color-mix(in srgb, var(--bg-surface-2) 94%, transparent); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
     border: 1px solid var(--border); border-radius: calc(16px * var(--rk, 1)); box-shadow: 0 14px 36px -12px rgba(0,0,0,.55);
     transform-origin: top right; animation: ctx-pop 0.2s cubic-bezier(0.2, 0.9, 0.25, 1.12); }
-  .sel-more button { display: flex; align-items: center; gap: 18px; min-height: 48px; padding: 0 20px 0 18px; text-align: left; border: none; background: transparent; color: var(--fg); font: inherit; font-size: 16px; font-weight: 500; cursor: pointer; }
+  .sel-more { border-radius: calc(12px * var(--rk, 1)); }
+  .sel-more button { display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 0 14px 0 12px; text-align: left; border: none; background: transparent; color: var(--fg); font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+  .sel-more :global(.ci-ic), .sel-more :global(.ci-ic svg) { width: 16px; height: 16px; }
+  @media (max-width: 720px) {
+    .sel-more { min-width: 220px; border-radius: calc(16px * var(--rk, 1)); }
+    .sel-more button { gap: 18px; min-height: 48px; padding: 0 20px 0 18px; font-size: 16px; font-weight: 500; }
+    .sel-more :global(.ci-ic), .sel-more :global(.ci-ic svg) { width: 22px; height: 22px; }
+  }
   .sel-more button:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
   /* Phones: the bar replaces the chat header; icons only, big targets. */
   @media (max-width: 720px) {
