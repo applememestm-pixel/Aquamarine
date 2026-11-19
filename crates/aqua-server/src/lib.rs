@@ -42,6 +42,7 @@ pub mod totp;
 pub mod tglogin;
 pub mod report;
 pub mod music;
+pub mod music_ext;
 pub mod verify;
 pub mod stars;
 pub mod fedtunnel;
@@ -3343,6 +3344,9 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/stars-app/decide", post(stars::app::decide_app))
         .route("/v1/fed/stars-app/:op", post(stars::app::fed))
         .route("/v1/fed/bot/:name", get(fed::h_bot))
+        .route("/v1/music-app", get(music::app::page))
+        .route("/v1/music-app/search", post(music::app::search))
+        .route("/v1/music-app/send", post(music::app::send))
         .route("/v1/fed/webapp/init", post(fed::h_webapp_init))
         .route("/v1/ice", get(turnsrv::ice))
         .route("/v1/admin/stars", get(stars::admin_get).post(stars::admin_make))

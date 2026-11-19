@@ -58,3 +58,18 @@ Aquamarine умеет играть музыку из [Navidrome](https://www.nav
 ## Для плагинов
 
 Плагины могут добавить свою кнопку в меню 📎, искать и играть музыку и (с разрешения) ходить в сеть — см. [plugins.md](plugins.md).
+
+## Spotify и YouTube в @music
+
+Бот @music и его поиск (мини-приложение `aqua:relay/v1/music-app`, кнопка «🔎 All results» под списком) ищут сразу на всех Navidrome сети, в Spotify и в YouTube. Spotify и YouTube подключаются официальными API — только поиск, обложки и ссылки: Spotify открывается в его приложении, YouTube играет во встроенном плеере. Скачиваются только файлы с Navidrome.
+
+Ключи — переменные окружения сервера (например, `sudo systemctl edit <служба>` → `[Service]` → `Environment=…`):
+
+| Переменная | Откуда |
+|---|---|
+| `AQUA_SPOTIFY_ID`, `AQUA_SPOTIFY_SECRET` | developer.spotify.com → Dashboard → Create app → Client ID / Client secret |
+| `AQUA_YOUTUBE_KEY` | console.cloud.google.com → APIs & Services → включить «YouTube Data API v3» → Credentials → API key |
+
+Без ключа источник просто не спрашивается. Бот работает, если в сети есть Navidrome или подключён хотя бы один из этих источников.
+
+В чате бот отвечает списком из 10 результатов (💿 Navidrome, 🟢 Spotify, 🔴 YouTube) с кнопками `1…10`, ««» / «»», «💿 Albums» и «🔎 All results». Песня с Navidrome приходит карточкой с ▶, остальное — ссылкой.

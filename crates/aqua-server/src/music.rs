@@ -826,6 +826,8 @@ pub(crate) fn ensure_bot(state: &AppState) {
         }
         tracing::info!(bot = %name, "music bot created");
     }
+    // The search mini app signs in here (its menu button stays "Player").
+    crate::tgapi::set_builtin_app(state, &name, "Player", APP_URL);
     let st = state.clone();
     tokio::spawn(async move {
         let mut p = serde_json::Map::new();
@@ -841,7 +843,7 @@ pub fn spawn_bot(state: AppState) {
         loop {
             let c = config();
             // On while this relay — or another of the network — has music.
-            if !c.bot || sources(&state).await.is_empty() {
+            if !c.bot || (sources(&state).await.is_empty() && !crate::music_ext::spotify_on() && !crate::music_ext::youtube_on()) {
                 tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                 continue;
             }
@@ -879,6 +881,10 @@ async fn say(state: &AppState, to: &str, text: &str) {
 
 async fn answer(state: &AppState, u: &crate::BotUpdate) {
     let text = u.text.trim();
+    if let Some(cb) = u.callback.as_deref() {
+        on_button(state, &u.from, cb).await;
+        return;
+    }
     if text.is_empty() {
         return;
     }
@@ -909,11 +915,21 @@ async fn answer(state: &AppState, u: &crate::BotUpdate) {
             Err(e) => { say(state, &u.from, &format!("⚠️ {e}")).await; return; }
         }
     } else {
+        // A button of a results list, or a new search (list + buttons).
         let q: String = text.chars().take(100).collect();
-        match smart_songs(state, &q, 10).await {
-            Ok(v) => v,
-            Err(e) => { say(state, &u.from, &format!("⚠️ {e}")).await; return; }
+        if let Some(cb) = u.callback.as_deref() {
+            on_button(state, &u.from, cb).await;
+            return;
         }
+        let res = search_all(state, &q, 30).await;
+        let items = list_items(&res);
+        if items.is_empty() {
+            say(state, &u.from, "Nothing found 🤷").await;
+            return;
+        }
+        remember(&u.from, &q, items.clone(), res);
+        send_page(state, &u.from, 0).await;
+        return;
     };
     if songs.is_empty() {
         say(state, &u.from, "Nothing found 🤷").await;
@@ -944,6 +960,197 @@ pub fn card(song: &Value, tag: &str) -> Value {
         "nd": tag,
         "srv": s(song, "srv"),
     })
+}
+
+// ------------------------------------------------- search: every source at once
+
+/// The search mini app (`aqua:relay/v1/music-app`).
+pub const APP_URL: &str = "aqua:relay/v1/music-app";
+const APP_PAGE: &str = include_str!("music_app.html");
+const PAGE_SIZE: usize = 10;
+
+/// Every source at once: `{songs, albums, artists, videos}`; songs are the
+/// network's Navidromes first (full files), then Spotify; videos — YouTube.
+pub async fn search_all(state: &AppState, q: &str, limit: usize) -> Value {
+    let q = q.trim();
+    let nd_songs = async {
+        smart_songs(state, q, limit).await.unwrap_or_default().into_iter().map(|song| {
+            let local = if enabled() { tag_of(&config().url) } else { String::new() };
+            let tag = song.get("nd").and_then(|t| t.as_str()).map(str::to_string).unwrap_or(local);
+            json!({
+                "src": "nd", "kind": "song", "id": s(&song, "id"), "title": s(&song, "title"), "artist": s(&song, "artist"),
+                "album": s(&song, "album"), "dur": song.get("duration").and_then(|d| d.as_u64()).unwrap_or(0),
+                "srv": s(&song, "srv"), "card": card(&song, &tag),
+            })
+        }).collect::<Vec<Value>>()
+    };
+    let nd_more = async {
+        call_all(state, "search3", vec![("query".into(), q.to_string()), ("songCount".into(), "0".into()), ("albumCount".into(), "12".into()), ("artistCount".into(), "8".into())]).await.unwrap_or_default()
+    };
+    let (songs, more, sp, yt) = tokio::join!(nd_songs, nd_more, crate::music_ext::spotify(q, 12), crate::music_ext::youtube(q, 12));
+    let nd_albums: Vec<Value> = more.pointer("/searchResult3/album").and_then(|x| x.as_array()).into_iter().flatten().map(|a| json!({
+        "src": "nd", "kind": "album", "id": s(a, "id"), "title": s(a, "name"), "artist": s(a, "artist"), "year": a.get("year").and_then(|y| y.as_u64()).map(|y| y.to_string()).unwrap_or_default(), "srv": s(a, "srv"),
+    })).collect();
+    let nd_artists: Vec<Value> = more.pointer("/searchResult3/artist").and_then(|x| x.as_array()).into_iter().flatten().map(|a| json!({
+        "src": "nd", "kind": "artist", "id": s(a, "id"), "title": s(a, "name"), "srv": s(a, "srv"),
+    })).collect();
+    let cat = |a: Vec<Value>, b: &Value| -> Vec<Value> { let mut v = a; v.extend(b.as_array().cloned().unwrap_or_default()); v };
+    json!({
+        "songs": cat(songs, &sp["songs"]),
+        "albums": cat(nd_albums, &sp["albums"]),
+        "artists": cat(nd_artists, &sp["artists"]),
+        "videos": yt["videos"].clone(),
+        "sources": { "nd": !sources(state).await.is_empty(), "spotify": crate::music_ext::spotify_on(), "youtube": crate::music_ext::youtube_on() },
+    })
+}
+
+/// The list the chat shows: songs, then videos.
+fn list_items(res: &Value) -> Vec<Value> {
+    let mut v = res["songs"].as_array().cloned().unwrap_or_default();
+    v.extend(res["videos"].as_array().cloned().unwrap_or_default());
+    v
+}
+
+struct Last { q: String, items: Vec<Value>, res: Value, at: std::time::Instant }
+static LAST: std::sync::Mutex<Option<std::collections::HashMap<String, Last>>> = std::sync::Mutex::new(None);
+
+fn remember(user: &str, q: &str, items: Vec<Value>, res: Value) {
+    if let Ok(mut g) = LAST.lock() {
+        let m = g.get_or_insert_with(std::collections::HashMap::new);
+        m.retain(|_, l| l.at.elapsed() < std::time::Duration::from_secs(3600));
+        m.insert(user.to_string(), Last { q: q.to_string(), items, res, at: std::time::Instant::now() });
+    }
+}
+
+fn last_of(user: &str) -> Option<(String, Vec<Value>, Value)> {
+    LAST.lock().ok()?.as_ref()?.get(user).map(|l| (l.q.clone(), l.items.clone(), l.res.clone()))
+}
+
+fn src_mark(src: &str) -> &'static str {
+    match src { "spotify" => "🟢", "youtube" => "🔴", _ => "💿" }
+}
+
+fn mmss(secs: u64) -> String { format!("{}:{:02}", secs / 60, secs % 60) }
+
+fn pct_enc(v: &str) -> String {
+    v.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
+/// "🎧 query (1–10 of 45)" + a numbered list, buttons 1…10, », albums, the search app.
+async fn send_page(state: &AppState, to: &str, page: usize) {
+    let Some((q, items, res)) = last_of(to) else { return };
+    let from = page * PAGE_SIZE;
+    if from >= items.len() { return; }
+    let to_i = (from + PAGE_SIZE).min(items.len());
+    let mut text = format!("🎧 {q} ({}–{} / {})\n", from + 1, to_i, items.len());
+    for (k, it) in items[from..to_i].iter().enumerate() {
+        let dur = it["dur"].as_u64().filter(|d| *d > 0).map(|d| format!(" · {}", mmss(d))).unwrap_or_default();
+        text.push_str(&format!("\n{}. {} {} – {}{dur}", from + k + 1, src_mark(it["src"].as_str().unwrap_or("")), it["title"].as_str().unwrap_or(""), it["artist"].as_str().unwrap_or("")));
+    }
+    let nums: Vec<Value> = (from..to_i).map(|i| json!({ "t": (i + 1).to_string(), "cb": format!("p:{i}") })).collect();
+    let mut rows: Vec<Value> = nums.chunks(5).map(|c| Value::Array(c.to_vec())).collect();
+    let mut nav = Vec::new();
+    if page > 0 { nav.push(json!({ "t": "«", "cb": format!("n:{}", page - 1) })); }
+    if to_i < items.len() { nav.push(json!({ "t": "»", "cb": format!("n:{}", page + 1) })); }
+    if !nav.is_empty() { rows.push(Value::Array(nav)); }
+    if res["albums"].as_array().is_some_and(|a| !a.is_empty()) { rows.push(json!([{ "t": "💿 Albums", "cb": "al" }])); }
+    rows.push(json!([{ "t": "🔎 All results", "wa": format!("{APP_URL}?q={}", pct_enc(&q)) }]));
+    let kb = json!({ "kind": "inline", "m": 0, "rows": rows });
+    say(state, to, &format!("{}{kb}\n{text}", crate::tgapi::KB_PREFIX)).await;
+}
+
+/// One item into the chat: a Navidrome song as a playable card, others as a link.
+async fn send_item(state: &AppState, to: &str, it: &Value) {
+    if it["src"] == "nd" && it["card"].is_object() {
+        say(state, to, &format!("[track:v1]{}", it["card"])).await;
+        return;
+    }
+    let mark = src_mark(it["src"].as_str().unwrap_or(""));
+    let url = it["url"].as_str().unwrap_or("");
+    say(state, to, &format!("{mark} {} — {}\n{url}", it["title"].as_str().unwrap_or(""), it["artist"].as_str().unwrap_or(""))).await;
+}
+
+async fn on_button(state: &AppState, from: &str, cb: &str) {
+    let Some((_, items, res)) = last_of(from) else {
+        say(state, from, "That list is old — write the search again.").await;
+        return;
+    };
+    if let Some(i) = cb.strip_prefix("p:").and_then(|x| x.parse::<usize>().ok()) {
+        if let Some(it) = items.get(i) { send_item(state, from, it).await; }
+    } else if let Some(p) = cb.strip_prefix("n:").and_then(|x| x.parse::<usize>().ok()) {
+        send_page(state, from, p).await;
+    } else if cb == "al" {
+        let albums = res["albums"].as_array().cloned().unwrap_or_default();
+        let mut text = String::from("💿 Albums\n");
+        let mut btns = Vec::new();
+        for (i, a) in albums.iter().take(10).enumerate() {
+            text.push_str(&format!("\n{}. {} {} – {}", i + 1, src_mark(a["src"].as_str().unwrap_or("")), a["title"].as_str().unwrap_or(""), a["artist"].as_str().unwrap_or("")));
+            btns.push(json!({ "t": (i + 1).to_string(), "cb": format!("a:{i}") }));
+        }
+        let rows: Vec<Value> = btns.chunks(5).map(|c| Value::Array(c.to_vec())).collect();
+        let kb = json!({ "kind": "inline", "m": 0, "rows": rows });
+        say(state, from, &format!("{}{kb}\n{text}", crate::tgapi::KB_PREFIX)).await;
+    } else if let Some(i) = cb.strip_prefix("a:").and_then(|x| x.parse::<usize>().ok()) {
+        let Some(a) = res["albums"].as_array().and_then(|x| x.get(i)).cloned() else { return };
+        if a["src"] == "nd" {
+            // The album's songs as a new list.
+            let r = call_all(state, "getAlbum", vec![("id".into(), a["id"].as_str().unwrap_or("").to_string())]).await.unwrap_or_default();
+            let local = if enabled() { tag_of(&config().url) } else { String::new() };
+            let songs: Vec<Value> = r.pointer("/album/song").and_then(|x| x.as_array()).into_iter().flatten().map(|song| {
+                let tag = song.get("nd").and_then(|t| t.as_str()).map(str::to_string).unwrap_or_else(|| local.clone());
+                json!({ "src": "nd", "kind": "song", "title": s(song, "title"), "artist": s(song, "artist"), "dur": song.get("duration").and_then(|d| d.as_u64()).unwrap_or(0), "card": card(song, &tag) })
+            }).collect();
+            if songs.is_empty() { say(state, from, "Nothing in it 🤷").await; return; }
+            remember(from, a["title"].as_str().unwrap_or(""), songs, json!({}));
+            send_page(state, from, 0).await;
+        } else {
+            send_item(state, from, &a).await;
+        }
+    }
+}
+
+pub mod app {
+    //! The search mini app: what `search_all` finds, with filters; a song goes
+    //! into the chat as a card (Navidrome) or a link (Spotify / YouTube).
+    use super::*;
+    use axum::response::{Html, IntoResponse};
+
+    #[derive(Deserialize)]
+    pub struct Body {
+        #[serde(default)]
+        init: String,
+        #[serde(default)]
+        q: String,
+        #[serde(default)]
+        item: Value,
+    }
+
+    fn who(state: &AppState, init: &str) -> Result<String, (StatusCode, String)> {
+        crate::tgapi::check_init(state, &bot_name(), init).ok_or((StatusCode::UNAUTHORIZED, "reopen the app".into()))
+    }
+
+    pub async fn page() -> impl IntoResponse {
+        ([(axum::http::header::CACHE_CONTROL, "no-store")], Html(APP_PAGE))
+    }
+
+    /// `POST /v1/music-app/search {init, q}`.
+    pub async fn search(State(state): State<AppState>, Json(b): Json<Body>) -> Result<Json<Value>, (StatusCode, String)> {
+        who(&state, &b.init)?;
+        let q: String = b.q.trim().chars().take(100).collect();
+        if q.is_empty() { return Ok(Json(json!({ "songs": [], "albums": [], "artists": [], "videos": [] }))); }
+        Ok(Json(search_all(&state, &q, 30).await))
+    }
+
+    /// `POST /v1/music-app/send {init, item}` — into the chat with @music.
+    pub async fn send(State(state): State<AppState>, Json(b): Json<Body>) -> Result<Json<Value>, (StatusCode, String)> {
+        let me = who(&state, &b.init)?;
+        if !b.item.is_object() { return Err((StatusCode::BAD_REQUEST, "nothing to send".into())); }
+        // Only what search_all makes: a card is re-checked to be a card.
+        let mut it = b.item.clone();
+        if it["src"] == "nd" && !it["card"].get("id").is_some_and(|x| x.is_string()) { it["card"] = Value::Null; }
+        send_item(&state, &me, &it).await;
+        Ok(Json(json!({ "ok": true })))
+    }
 }
 
 // ----------------------------------------------------------------------- md5
