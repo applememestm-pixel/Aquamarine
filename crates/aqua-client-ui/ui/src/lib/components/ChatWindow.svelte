@@ -1683,11 +1683,12 @@
   $effect(() => {
     const el = messagesEl, gid = $activeChat?.id;
     void shownRows.length;
-    if (!el || !gid || !isChannel || amChanAdmin || lockedNow) return;
+    if (!el || !gid || !isChannel || lockedNow) return;
+    const asAdmin = amChanAdmin;
     const io = new IntersectionObserver((entries) => {
       for (const e of entries) {
         const k = (e.target as HTMLElement).dataset.vkey;
-        if (e.isIntersecting && k) { noteView(gid, k); io.unobserve(e.target); }
+        if (e.isIntersecting && k) { noteView(gid, k, asAdmin); io.unobserve(e.target); }
       }
     }, { root: el, threshold: 0.6 });
     void tick().then(() => el.querySelectorAll("[data-vkey]").forEach((n) => io.observe(n)));
@@ -5232,7 +5233,9 @@
           {/if}
         </button>
       {:else}
-        <button class="send-btn" class:ready={text.trim().length > 0 && slowLeft <= 0} onclick={submit} title={slowLeft > 0 ? `Slow mode: ${slowLeft}s` : "Send"}>
+        <!-- pointerdown doesn't take the focus: the field keeps it, the phone's
+             keyboard stays open after sending (it closed after every message). -->
+        <button class="send-btn" class:ready={text.trim().length > 0 && slowLeft <= 0} onpointerdown={(e) => e.preventDefault()} onclick={submit} title={slowLeft > 0 ? `Slow mode: ${slowLeft}s` : "Send"}>
           {#if slowLeft > 0}<span class="slow-left">{slowLeft}</span>{:else}{@html icons.send}{/if}
         </button>
       {/if}

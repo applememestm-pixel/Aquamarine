@@ -24,7 +24,7 @@
   let reacts = $derived(rows.reduce((a, r) => a + r.reactions, 0));
   let comms = $derived(rows.reduce((a, r) => a + r.comments, 0));
   let avg = $derived(rows.length ? Math.round(total / rows.length) : 0);
-  let reach = $derived(subscribers > 1 ? Math.round((avg / (subscribers - 1)) * 100) : 0);
+  let reach = $derived(subscribers > 0 ? Math.min(100, Math.round((avg / subscribers) * 100)) : 0);
   let sel = $state<string | null>(null);
   let cur = $derived(rows.find((r) => r.key === sel) ?? null);
   let peak = $derived(cur?.st ? Math.max(1, ...cur.st.h) : 1);
@@ -80,7 +80,7 @@
         <button class="cs-post" onclick={() => (sel = r.key)}>
           <span class="cs-pt">{r.text || "…"}</span>
           <span class="cs-pm">{$tn(r.views, "view")} · {$tn(r.reactions, "reaction")} · {$tn(r.comments, "comment")} · {r.time}</span>
-          <span class="cs-bar"><i style:width="{subscribers > 1 ? Math.min(100, (r.views / (subscribers - 1)) * 100) : 0}%"></i></span>
+          <span class="cs-bar"><i style:width="{subscribers > 0 ? Math.min(100, (r.views / subscribers) * 100) : 0}%"></i></span>
         </button>
       {/each}
       <div class="cs-note">{tr("Who read a post and when is kept for {d} days after it was first read, then only the counters stay. It's all counted on the admins' devices — servers never learn who read what.", { d: DETAIL_DAYS })}</div>
