@@ -16,9 +16,11 @@
 
 <script lang="ts">
   import { icons } from "../icons";
+  import { IS_MOBILE } from "../platform";
 </script>
 
-<div class="toast" class:show={$toastVisible}>
+<!-- Phones: at the top — at the bottom it covered the player's and the field's buttons. -->
+<div class="toast" class:show={$toastVisible} class:top={IS_MOBILE}>
   {@html icons.check}
   <span>{$toastText}</span>
 </div>
@@ -44,5 +46,9 @@
     pointer-events: none;
   }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.top { bottom: auto; top: calc(10px + var(--sat, env(safe-area-inset-top, 0px))); transform: translateX(-50%) translateY(-60px); max-width: calc(100vw - 32px); box-sizing: border-box; }
+  .toast.top.show { transform: translateX(-50%) translateY(0); }
+  .toast.top { bottom: auto; top: calc(10px + var(--sat, env(safe-area-inset-top, 0px))); transform: translateX(-50%) translateY(-60px); max-width: calc(100vw - 32px); box-sizing: border-box; }
+  .toast.top.show { transform: translateX(-50%) translateY(0); }
   .toast :global(svg) { width: 14px; height: 14px; color: var(--accent); }
 </style>

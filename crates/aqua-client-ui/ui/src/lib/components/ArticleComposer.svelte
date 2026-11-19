@@ -85,6 +85,7 @@
       // "Expand" while the editor is already open for this chat: the text goes on at the end.
       lastBodyState = s;
       body = body.trim() ? `${body.trimEnd()}\n\n${s.body}` : s.body;
+      void tick().then(() => ta?.focus());
     } else if (!s) {
       prevPeer = "";
     }

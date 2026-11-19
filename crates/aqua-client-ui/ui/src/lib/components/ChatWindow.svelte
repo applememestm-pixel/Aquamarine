@@ -6234,6 +6234,8 @@
     display: grid; place-items: center; background: transparent; color: var(--fg-muted); cursor: pointer; }
   .compose-expand:hover, .compose-expand:active { color: var(--accent); background: var(--accent-soft); }
   .compose-expand svg { width: 16px; height: 16px; }
+  /* The text keeps clear of the expand button in the corner. */
+  .input-wrap:has(> .compose-expand) :global(.rich) { padding-right: 30px; }
   .slash-pop {
     position: absolute; left: -6px; right: -6px; bottom: calc(100% + 10px); z-index: 30;
     max-height: 300px; overflow-y: auto;

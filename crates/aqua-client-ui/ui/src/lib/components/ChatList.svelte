@@ -1418,7 +1418,8 @@
         {#if g}
           {@const n = groupUnread(en)}
           <div class="gstack">
-            {#if g.emoji}<span class="gemo">{g.emoji}</span>
+            {#if g.photo}<img class="gemo gphoto" src={g.photo} alt="" />
+            {:else if g.emoji}<span class="gemo">{g.emoji}</span>
             {:else}
               {#each (en.members ?? []).slice(0, 3) as m, k (m.id)}
                 <span class="avatar gmini" style="--gradient: {m.gradient}; --k: {k}">{m.letter}{#if $avatars[m.id]}<img class="ava-img" src={$avatars[m.id]} alt="" loading="lazy" />{/if}</span>
@@ -1851,6 +1852,7 @@
   .gstack { position: relative; width: 44px; height: 44px; flex-shrink: 0; }
   .gmini { position: absolute; width: 28px; height: 28px; font-size: 11px; border: 2px solid var(--bg-list);
     left: calc(var(--k) * 8px); top: calc(var(--k) * 8px); z-index: calc(3 - var(--k)); }
+  .gphoto { object-fit: cover; display: block; }
   .gemo { display: grid; place-items: center; width: 44px; height: 44px; border-radius: calc(14px * var(--rk, 1)); background: var(--bg-input); font-size: 22px; }
   .g-count { flex-shrink: 0; min-width: 18px; padding: 0 6px; height: 17px; border-radius: calc(9px * var(--rk, 1)); font-size: 10.5px; font-weight: 800; line-height: 17px; text-align: center;
     color: var(--fg-muted); background: var(--bg-input); border: 1px solid var(--border); }
