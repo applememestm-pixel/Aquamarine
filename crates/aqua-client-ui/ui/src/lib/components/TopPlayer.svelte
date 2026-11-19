@@ -77,7 +77,9 @@
       try {
         const r = await fetch(src, { headers: { Range: "bytes=0-1" } });
         if (!r.ok) {
-          const body = (await r.text().catch(() => "")).trim().slice(0, 160);
+          // No addresses in the toast: an error text could carry a Navidrome link with its login.
+          const raw = (await r.text().catch(() => "")).trim();
+          const body = /https?:\/\/|[?&](u|t|s|p)=/i.test(raw) ? "" : raw.slice(0, 160);
           why = tr("Couldn't get the track: {e}", { e: body || `HTTP ${r.status}` });
         }
       } catch (err) { why = tr("Couldn't get the track: {e}", { e: String(err) }); }

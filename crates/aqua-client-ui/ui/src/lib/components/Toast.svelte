@@ -48,7 +48,5 @@
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   .toast.top { bottom: auto; top: calc(10px + var(--sat, env(safe-area-inset-top, 0px))); transform: translateX(-50%) translateY(-60px); max-width: calc(100vw - 32px); box-sizing: border-box; }
   .toast.top.show { transform: translateX(-50%) translateY(0); }
-  .toast.top { bottom: auto; top: calc(10px + var(--sat, env(safe-area-inset-top, 0px))); transform: translateX(-50%) translateY(-60px); max-width: calc(100vw - 32px); box-sizing: border-box; }
-  .toast.top.show { transform: translateX(-50%) translateY(0); }
   .toast :global(svg) { width: 14px; height: 14px; color: var(--accent); }
 </style>

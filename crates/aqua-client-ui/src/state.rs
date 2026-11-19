@@ -459,6 +459,11 @@ pub fn accept_group_snapshot(cur: Option<&Group>, next: &Group, from: &str) -> b
                 if roles_on(cur) && role_change_ok(cur, next, from) {
                     return true;
                 }
+                // A community member may bring in a chat of theirs: straight into
+                // `linked` when "all members" add chats, else into `suggested`.
+                if cur.kind == "community" && cur.is_member(from) && only_adds_chat(cur, next, from) {
+                    return true;
+                }
                 // A plain member may only *add* members, when the group allows it.
                 return cur.settings.add_members == "all" && cur.is_member(from) && only_adds_members(cur, next);
             }
@@ -472,6 +477,28 @@ pub fn accept_group_snapshot(cur: Option<&Group>, next: &Group, from: &str) -> b
             true
         }
     }
+}
+
+/// `next` == `cur` plus one chat (`{id, title, kind, owner, by: from}`)
+/// appended to `linked` (the community lets members add) or `suggested`
+/// (only admins add) — and a bumped version; nothing else changed.
+fn only_adds_chat(cur: &Group, next: &Group, from: &str) -> bool {
+    let key = if cur.perm("add_chats") == "all" && cur.settings.extra.contains_key("add_chats") { "linked" } else { "suggested" };
+    let list = |g: &Group, k: &str| g.extra.get(k).and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let (before, after) = (list(cur, key), list(next, key));
+    if after.len() != before.len() + 1 || after[..before.len()] != before[..] {
+        return false;
+    }
+    let e = &after[before.len()];
+    let id = e.get("id").and_then(|v| v.as_str()).unwrap_or("");
+    let known = ["linked", "suggested"].iter().any(|k| list(cur, k).iter().any(|x| x.get("id").and_then(|v| v.as_str()) == Some(id)));
+    if !id.starts_with("grp_") || id == cur.id || known || e.get("by").and_then(|v| v.as_str()) != Some(from) {
+        return false;
+    }
+    let mut trimmed = next.clone();
+    if before.is_empty() && !cur.extra.contains_key(key) { trimmed.extra.remove(key); } else { trimmed.extra.insert(key.into(), serde_json::Value::Array(before)); }
+    trimmed.version = cur.version;
+    serde_json::to_value(&trimmed).ok() == serde_json::to_value(cur).ok()
 }
 
 /// `next` == `cur` plus some new plain members (and a bumped version).
@@ -1950,6 +1977,54 @@ mod group_rule_tests {
         // A new group must come from one of its own admins.
         assert!(accept_group_snapshot(None, &cur, "own"));
         assert!(!accept_group_snapshot(None, &cur, "bob"));
+    }
+
+    #[test]
+    fn community_members_add_or_suggest_one_chat() {
+        let mut cur = group();
+        cur.kind = "community".into();
+        cur.settings.extra.insert("add_chats".into(), serde_json::json!("admins"));
+        cur.extra.insert("linked".into(), serde_json::json!([]));
+        let chat = |by: &str| serde_json::json!({"id": "grp_9", "title": "X", "kind": "group", "owner": by, "by": by});
+        // Only admins add: a member's chat goes to `suggested`, never straight in.
+        let mut sug = cur.clone();
+        sug.version = 6;
+        sug.extra.insert("suggested".into(), serde_json::json!([chat("bob")]));
+        assert!(accept_group_snapshot(Some(&cur), &sug, "bob"));
+        let mut direct = cur.clone();
+        direct.version = 6;
+        direct.extra.insert("linked".into(), serde_json::json!([chat("bob")]));
+        assert!(!accept_group_snapshot(Some(&cur), &direct, "bob"), "only admins link when add_chats = admins");
+        // Not in the community, someone else's name on it, or anything else changed: no.
+        assert!(!accept_group_snapshot(Some(&cur), &sug, "stranger"));
+        let mut forged = cur.clone();
+        forged.version = 6;
+        forged.extra.insert("suggested".into(), serde_json::json!([chat("adm")]));
+        assert!(!accept_group_snapshot(Some(&cur), &forged, "bob"));
+        let mut more = sug.clone();
+        more.title = "mine now".into();
+        assert!(!accept_group_snapshot(Some(&cur), &more, "bob"));
+        // "All members": straight into `linked`, one at a time, only appended.
+        let mut open = cur.clone();
+        open.settings.extra.insert("add_chats".into(), serde_json::json!("all"));
+        let mut add = open.clone();
+        add.version = 6;
+        add.extra.insert("linked".into(), serde_json::json!([chat("bob")]));
+        assert!(accept_group_snapshot(Some(&open), &add, "bob"));
+        let mut two = add.clone();
+        two.extra.insert("linked".into(), serde_json::json!([chat("bob"), {"id": "grp_8", "title": "Y", "kind": "group", "owner": "bob", "by": "bob"}]));
+        assert!(!accept_group_snapshot(Some(&open), &two, "bob"));
+        let mut removed = add.clone();
+        removed.version = 7;
+        removed.extra.insert("linked".into(), serde_json::json!([]));
+        assert!(!accept_group_snapshot(Some(&add), &removed, "bob"), "members can't take chats out");
+        // An ordinary group: no such thing.
+        let mut plain = group();
+        plain.settings.extra.insert("add_chats".into(), serde_json::json!("all"));
+        let mut padd = plain.clone();
+        padd.version = 6;
+        padd.extra.insert("linked".into(), serde_json::json!([chat("bob")]));
+        assert!(!accept_group_snapshot(Some(&plain), &padd, "bob"));
     }
 
     #[test]
