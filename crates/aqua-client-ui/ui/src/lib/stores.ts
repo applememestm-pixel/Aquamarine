@@ -222,7 +222,12 @@ export async function bootstrap() {
     const mentioned = !!me && new RegExp(`(^|[^\\w@])@${me.replace(/[.]/g, "\\.")}(?![\\w.])`, "i").test(p.text);
     // The open chat in a hidden / minimised window is not being read: it
     // notifies too (notifyIncoming skips only the chat in front of you).
-    if (p.text && (!isActive || !appInFront()) && (mentioned || !prefs.isMuted(p.peer_id)) && mayWriteMe(p.peer_id)) notifyIncoming(p.peer_id, p.text);
+    // My own message coming back (synced from my phone after switching to the
+    // PC, a redelivery): the chat's last message is mine with this very text —
+    // no notification about what I wrote myself.
+    const c = get(chats).find((x) => x.id === p.peer_id);
+    const echo = !!c && c.preview_by_me && c.preview.trim() === p.text.trim();
+    if (p.text && !echo && (!isActive || !appInFront()) && (mentioned || !prefs.isMuted(p.peer_id)) && mayWriteMe(p.peer_id)) notifyIncoming(p.peer_id, p.text);
     // Refresh info (opk count, etc.)
     refreshInfoSoon();
   });
