@@ -110,6 +110,8 @@
       return local
         ? tr("Nothing answers at {u}: that's this computer, and no Aquamarine server runs on it. Pick a server from the list or type the address your friend gave you.", { u: url })
         : tr("The server at {u} doesn't answer: it's off, the port is closed, or the address is wrong.", { u: url });
+    if (/didn't come from an Aquamarine server|error decoding response body/i.test(m))
+      return tr("Something on the way answered instead of the server at {u} — the provider, mobile-internet limits, a VPN or a Wi-Fi login page. Try another network (Wi-Fi ↔ mobile data), switch the VPN off or on, or use the server's https:// address.", { u: url });
     if (/InvalidContentType|wrong version number|tls|ssl|certificate/i.test(m))
       return tr("{u} doesn't speak HTTPS. Try the address with http:// instead.", { u: url });
     if (/timed out|timeout/i.test(m)) return tr("The server at {u} takes too long to answer — check the address and your connection.", { u: url });

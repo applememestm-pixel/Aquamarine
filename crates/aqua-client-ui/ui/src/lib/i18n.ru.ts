@@ -2310,6 +2310,7 @@ export const RU: Record<string, string> = {
   "local network": "локальная сеть",
   "address not found": "адрес не найден",
   "no answer": "не отвечает",
+  "Something on the way answered instead of the server at {u} — the provider, mobile-internet limits, a VPN or a Wi-Fi login page. Try another network (Wi-Fi ↔ mobile data), switch the VPN off or on, or use the server's https:// address.": "Вместо сервера {u} ответил кто-то по дороге — провайдер, ограничения мобильного интернета, VPN или страница входа в Wi-Fi. Попробуйте другую сеть (Wi-Fi ↔ мобильный интернет), выключите или включите VPN, или укажите адрес сервера с https://.",
   "“{name}” isn't a real conversation — it's just the welcome placeholder.": "«{name}» — не настоящий разговор, а только заставка.",
   "Status, accounts and server": "Статус, аккаунты и сервер",
   "current": "текущий",
