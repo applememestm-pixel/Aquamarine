@@ -254,8 +254,9 @@ window.__TAURI_INTERNALS__ = {
     await pg.addInitScript(() => { const s = JSON.parse(localStorage.getItem('aqua-settings') || '{}'); s.advancedSettings = true; localStorage.setItem('aqua-settings', JSON.stringify(s)); });
     await pg.goto('http://127.0.0.1:5199/'); await pg.waitForTimeout(2500);
     for (let i = 0; i < 3; i++) { const l = pg.getByText(/^(Не сейчас|Not now)$/).first(); if (!(await l.count())) break; await l.click().catch(() => {}); await pg.waitForTimeout(500); }
-    await pg.locator('.rail button').last().click().catch(() => {}); await pg.waitForTimeout(900);
-    await pg.locator('.nav .nav-item').filter({ hasText: /^\s*(Боты|Bots)\s*$/ }).first().click({ timeout: 5000 }); await pg.waitForTimeout(900);
+    // Desktop: Settings is the gear of the user panel (the rail's last button is Contacts).
+    await pg.locator('.user-panel button[aria-label="Настройки"], .user-panel button[aria-label="Settings"], button[aria-label="Настройки"] >> visible=true').first().click({ force: true, timeout: 5000 }); await pg.waitForTimeout(900);
+    await pg.locator('.nav .nav-item').filter({ hasText: /(Боты|Bots)/ }).first().click({ force: true, timeout: 5000 }); await pg.waitForTimeout(900);
     await pg.locator('.bot-row').first().click({ timeout: 5000 }); await pg.waitForTimeout(600);
     await pg.getByText(/^(Открыть конструктор|Open the constructor)$/).first().click({ timeout: 5000 }); await pg.waitForTimeout(1200);
     await pg.screenshot({ path: path.join(out, '15-botmaker.jpg'), type: 'jpeg', quality: 76 });

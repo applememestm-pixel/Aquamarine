@@ -3181,4 +3181,5 @@ export const RU: Record<string, string> = {
   "What the bot says first": "Что бот скажет первым",
   "Words, comma-separated: price, cost": "Слова через запятую: цена, стоимость",
   "greeting": "приветствие",
+  "Couldn't load what the bot answers now — saving is off so it isn't replaced. Close and open the constructor again.": "Не удалось загрузить, что бот отвечает сейчас, — сохранение выключено, чтобы не затереть. Закройте и откройте конструктор снова.",
 };
