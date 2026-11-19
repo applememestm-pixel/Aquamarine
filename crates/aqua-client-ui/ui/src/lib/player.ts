@@ -56,6 +56,36 @@ export function playQueue(tracks: Track[], index = 0) {
 
 /** Start the queue over after its last track. */
 export const repeatAll = writable<boolean>(false);
+/** Play the current track again and again. */
+export const repeatOne = writable<boolean>(false);
+
+/** Shuffle the queue; the playing track stays and goes first. */
+export function shuffleQueue() {
+  const q = get(queue), i = get(queueIndex);
+  if (q.length < 2) return;
+  const cur = i >= 0 ? q[i] : null;
+  const rest = q.filter((_, k) => k !== i);
+  for (let k = rest.length - 1; k > 0; k--) { const j = Math.floor(Math.random() * (k + 1)); [rest[k], rest[j]] = [rest[j], rest[k]]; }
+  const out = cur ? [cur, ...rest] : rest;
+  queue.set(out);
+  queueIndex.set(cur ? 0 : -1);
+}
+
+/** The queue backwards; the playing track keeps playing. */
+export function reverseQueue() {
+  const q = get(queue), i = get(queueIndex);
+  if (q.length < 2) return;
+  queue.set([...q].reverse());
+  if (i >= 0) queueIndex.set(q.length - 1 - i);
+}
+
+/** Jump to a track of the queue. */
+export function playAt(i: number) {
+  const q = get(queue);
+  if (i < 0 || i >= q.length) return;
+  queueIndex.set(i);
+  nowPlaying.set(q[i]);
+}
 
 /** Advance to the next queued track. Returns false at the end of the queue. */
 export function nextTrack(): boolean {

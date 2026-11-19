@@ -4,6 +4,10 @@
   // pinned message in a chat; the <audio> stays in TopPlayer.
   import { t } from "../i18n";
   import { nowPlaying, playerPaused, playerProgress, togglePlayback, expandPlayer, stopTrack } from "../player";
+  import QueueSheet from "./QueueSheet.svelte";
+  import { IS_MOBILE } from "../platform";
+  // Phone: the strip opens the queue sheet (Telegram); ↗ there — the full player.
+  let sheet = $state(false);
 
   let { inChat = false }: { inChat?: boolean } = $props();
 
@@ -20,7 +24,7 @@
         <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4.5" width="4.2" height="15" rx="1"/><rect x="13.8" y="4.5" width="4.2" height="15" rx="1"/></svg>
       {/if}
     </button>
-    <button class="mp-info" onclick={expandPlayer} title={$t("Open player")}>
+    <button class="mp-info" onclick={() => (IS_MOBILE ? (sheet = true) : expandPlayer())} title={$t("Open player")}>
       {#if artist}<b>{artist}</b><span class="mp-dash">&nbsp;-&nbsp;</span>{/if}<span class="mp-title">{title}</span>
     </button>
     <button class="mp-x" onclick={stopTrack} aria-label={$t("Stop")} title={$t("Stop")}>
@@ -28,6 +32,7 @@
     </button>
     <span class="mp-bar" style:width={`${$playerProgress * 100}%`}></span>
   </div>
+  {#if sheet}<QueueSheet onclose={() => (sheet = false)} />{/if}
 {/if}
 
 <style>
