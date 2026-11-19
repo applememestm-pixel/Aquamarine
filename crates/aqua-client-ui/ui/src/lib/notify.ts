@@ -67,6 +67,16 @@ export function startBgNotify(): () => void {
   if (!PHONE || !inTauri()) return () => {};
   const send = (cmd: string, args: Record<string, unknown>) =>
     void import("@tauri-apps/api/core").then((c) => c.invoke(cmd, args)).catch(() => {});
+  // Stay connected in the background (Android froze the app: no messages,
+  // no notifications until it was opened). Off in Settings → Notifications.
+  let bgOn: boolean | null = null;
+  const unBg = settings.subscribe((st) => {
+    const on = st.bgConnection !== false;
+    if (on === bgOn) return;
+    bgOn = on;
+    send("bg_sync_set", { on });
+  });
+  void unBg;
   const vis = () => {
     const front = document.visibilityState === "visible";
     if (front) backAt = performance.now();

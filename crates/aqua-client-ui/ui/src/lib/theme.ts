@@ -179,6 +179,8 @@ export interface Settings {
   showSeconds?: boolean;
   // Notifications
   notifySound: boolean;       // play a chime on incoming message
+  /** Android: stay connected in the background (a quiet persistent notification). Default on. */
+  bgConnection?: boolean;
   notifyDesktop: boolean;     // OS desktop notification on incoming
   /** What a notification shows: the text, only who wrote, or only that
    *  there's a new message (Telegram's "Message preview"). */

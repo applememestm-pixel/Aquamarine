@@ -3846,7 +3846,8 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
             (chat, time)
         };
         if from != state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|s| s.username.clone()).unwrap_or_default() {
-            let _ = app.emit("aqua://incoming", IncomingEventPayload { peer_id: chat, text: inner.to_string(), time, is_new_chat: false });
+            crate::bgnotify::incoming(app, &chat);
+                let _ = app.emit("aqua://incoming", IncomingEventPayload { peer_id: chat, text: inner.to_string(), time, is_new_chat: false });
         }
         let _ = app.emit("aqua://chats_updated", ());
         return true;

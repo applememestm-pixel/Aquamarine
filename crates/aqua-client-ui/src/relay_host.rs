@@ -34,6 +34,22 @@ pub mod android {
         }
     }
 
+    /// The messenger's background connection (AquaSyncService) on / off.
+    pub fn background_sync(on: bool) -> Result<(), String> {
+        let h = HANDLE.get().ok_or("background connection is not available")?;
+        h.run_mobile_plugin::<serde_json::Value>(if on { "syncStart" } else { "syncStop" }, serde_json::json!({}))
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    /// The system's "don't optimise battery for this app" dialog; true if already off.
+    pub fn ask_battery() -> Result<bool, String> {
+        let h = HANDLE.get().ok_or("not available")?;
+        h.run_mobile_plugin::<serde_json::Value>("askBattery", serde_json::json!({}))
+            .map(|v| v["ok"].as_bool().unwrap_or(false))
+            .map_err(|e| e.to_string())
+    }
+
     /// A link in the browser or mail app (AquaRelay.kt → openUrl).
     pub fn open_url(url: &str) -> Result<(), String> {
         let h = HANDLE.get().ok_or("opening links is not available")?;
@@ -128,4 +144,22 @@ pub fn widget_update(data: String) -> Result<(), String> {
         let _ = data;
         Ok(())
     }
+}
+
+/// Stay connected in the background (Android: a quiet foreground service).
+#[tauri::command]
+pub fn bg_sync_set(on: bool) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    { android::background_sync(on) }
+    #[cfg(not(target_os = "android"))]
+    { let _ = on; Ok(()) }
+}
+
+/// Android: ask to take the app off battery optimisation. True if it already is.
+#[tauri::command]
+pub fn battery_exempt() -> Result<bool, String> {
+    #[cfg(target_os = "android")]
+    { android::ask_battery() }
+    #[cfg(not(target_os = "android"))]
+    { Ok(true) }
 }
