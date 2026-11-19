@@ -3048,22 +3048,33 @@
     if (text.trim().length > 0) maybeSendTyping();
   }
 
+  /** A row as the messages under it: an album row is all its photos. */
+  function membersOf(row: Row): Row[] {
+    return (row as Row & { album?: Row[] }).album ?? [row];
+  }
+
   function forwardRow(row: Row) {
-    const it = forwardItemOf(row);
+    const items = membersOf(row).map(forwardItemOf).filter((x): x is ForwardItem => !!x);
     closeMenu();
-    if (!it) { showToast(tr("This message can't be forwarded (not downloaded)")); return; }
-    openForward([it]);
+    if (!items.length) { showToast(tr("This message can't be forwarded (not downloaded)")); return; }
+    openForward(items);
   }
 
   function forwardSelection() {
     const items: ForwardItem[] = [];
     let skipped = 0;
+    // Selected rows as shown (an album is one row, the id of its last photo):
+    // every photo of it goes, not only that one.
+    const albums = new Map(photoAlbums(rows).filter((r) => (r as Row & { album?: Row[] }).album).map((r) => [r.id, (r as Row & { album?: Row[] }).album!]));
     for (const r of rows) {
-      if (selected.has(r.id)) {
-        const it = forwardItemOf(r);
+      if (!selected.has(r.id)) continue;
+      for (const m of albums.get(r.id) ?? [r]) {
+        const it = forwardItemOf(m);
         if (it) items.push(it); else skipped++;
       }
     }
+    // An album's photos were listed with the album, not again on their own.
+    for (let i = items.length - 1; i > 0; i--) if (items[i].kind === "file" && items.findIndex((x) => x.kind === "file" && x.path === items[i].path) < i) items.splice(i, 1);
     if (items.length === 0) { showToast(tr("Nothing forwardable selected")); return; }
     openForward(items);
     if (skipped) showToast(`${skipped} item(s) can't be forwarded`);

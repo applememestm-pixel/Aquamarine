@@ -146,6 +146,12 @@ pub async fn send_message(
         };
         // The list shows the last message: tell it (it kept the old one).
         let _ = app.emit("aqua://chats_updated", ());
+        // My other devices get it now (a note from the phone was on the PC
+        // only after the history sync, a minute or two later — or not at all).
+        let (a, t) = (app.clone(), text.clone());
+        tauri::async_runtime::spawn(async move {
+            crate::multidev::sync_raw(&a, &crate::multidev::wrap_sync(crate::state::SAVED_MESSAGES_ID, &t)).await;
+        });
         return Ok(SendResult { id: msg_id, time: msg_time });
     }
 
