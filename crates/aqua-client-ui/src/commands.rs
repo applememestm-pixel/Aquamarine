@@ -1367,6 +1367,44 @@ pub async fn delete_bot(state: State<'_, StdMutex<AppState>>, username: String) 
     Ok(())
 }
 
+/// Bot constructor (aqua-server botmaker.rs): read, save or drop the spec
+/// of one of my bots — what the relay answers for it, no code. Signed with
+/// the bot's own token (from the vault). `op`: "get" | "put" | "delete".
+#[tauri::command]
+pub async fn bot_spec(
+    state: State<'_, StdMutex<AppState>>,
+    username: String,
+    op: String,
+    spec: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let username = username.trim().to_lowercase();
+    let (transport, token) = {
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let token = s.vault.get_record(&bot_token_key(&username)).ok().flatten()
+            .map(|b| String::from_utf8_lossy(&b).to_string())
+            .ok_or("this bot's token isn't on this device — reset it in the bot's settings")?;
+        (s.transport.clone().ok_or("not connected")?, token)
+    };
+    let url = format!("{}/v1/botmaker/spec", transport.server_url().trim_end_matches('/'));
+    let auth = format!("Bot {token}");
+    let req = match op.as_str() {
+        "get" => transport.http().get(&url),
+        "put" => transport.http().put(&url).json(&spec.ok_or("no spec")?),
+        "delete" => transport.http().delete(&url),
+        _ => return Err("bad op".into()),
+    };
+    let r = req.header("Authorization", auth).send().await.map_err(|e| e.to_string())?;
+    let status = r.status();
+    let body = r.text().await.unwrap_or_default();
+    if status.as_u16() == 404 {
+        return Err("this server doesn't have the bot constructor yet — it needs an update".into());
+    }
+    if !status.is_success() {
+        return Err(if body.trim().is_empty() { format!("HTTP {status}") } else { body });
+    }
+    Ok(serde_json::from_str(&body).unwrap_or(serde_json::Value::Null))
+}
+
 // ---------- File transfer -------------------------------------------------
 
 #[derive(Debug, serde::Serialize)]

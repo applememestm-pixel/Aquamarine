@@ -89,6 +89,7 @@
   import SharedMediaPanel from "./lib/components/SharedMediaPanel.svelte";
   import PollComposer from "./lib/components/PollComposer.svelte";
   import NewGroupWizard from "./lib/components/NewGroupWizard.svelte";
+  import BotMaker from "./lib/components/BotMaker.svelte";
   import { groupPanelId } from "./lib/panels/groupPanel";
   import UserPanel from "./lib/components/UserPanel.svelte";
   import TitleBar from "./lib/components/TitleBar.svelte";
@@ -398,6 +399,7 @@
 <FolderManager />
 <PollComposer />
 <NewGroupWizard />
+<BotMaker />
 <Lazy when={!!$groupPanelId} load={() => import("./lib/components/GroupPanel.svelte")} />
 <ShortcutsHelp />
 <ImageCropper />

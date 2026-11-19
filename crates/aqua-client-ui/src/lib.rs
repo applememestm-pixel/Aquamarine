@@ -376,6 +376,7 @@ pub fn run() -> Result<()> {
             commands::create_bot,
             commands::list_bots,
             commands::delete_bot,
+            commands::bot_spec,
             commands::start_chat_with,
             commands::list_groups,
             commands::create_group,
