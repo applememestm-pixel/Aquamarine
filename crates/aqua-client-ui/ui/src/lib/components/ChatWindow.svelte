@@ -3049,6 +3049,17 @@
   }
 
   /** A row as the messages under it: an album row is all its photos. */
+  /** The wheel scrolls a one-line strip sideways (non-passive: it must stop the page). */
+  function wheelSideways(el: HTMLElement) {
+    const h = (e: WheelEvent) => {
+      if (el.classList.contains("expanded") || el.scrollWidth <= el.clientWidth) return;
+      e.preventDefault();
+      el.scrollLeft += Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+    };
+    el.addEventListener("wheel", h, { passive: false });
+    return { destroy: () => el.removeEventListener("wheel", h) };
+  }
+
   function membersOf(row: Row): Row[] {
     return (row as Row & { album?: Row[] }).album ?? [row];
   }
@@ -4782,7 +4793,9 @@
       {/if}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="ctx-menu" bind:this={menuEl} class:touch={menu.touch} class:compact use:keepOnScreen style={`left:${menu.x}px; top:${menu.y}px`} role="menu" tabindex="-1" onmousedown={(e) => e.stopPropagation()}>
-        <div class="ctx-reactions" class:expanded={reactAll}>
+        <!-- The mouse wheel scrolls the reaction strip sideways (PC had no way to). -->
+        <div class="ctx-reactions" class:expanded={reactAll}
+          use:wheelSideways>
           {#if reactAll && $emojiPacks.length}
             <div class="react-tabs">
               <button class:on={!reactTab} onclick={() => (reactTab = "")}>El Taller</button>
