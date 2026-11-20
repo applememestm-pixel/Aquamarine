@@ -247,6 +247,8 @@ export async function bootstrap() {
   });
   // Sent from another device of this account: show it in the open chat.
   listen<{ peer_id: string }>("aqua://own_sent", async (e) => {
+    // Sent from my other device (Saved Messages included): its file comes down here.
+    void import("./autoFetch").then((m) => m.autoFetchSoon(e.payload.peer_id));
     chats.set(await api.listChats());
     if (get(activeId) === e.payload.peer_id) await loadActiveMessages();
   });

@@ -2063,12 +2063,11 @@ async fn attach_file_fwd(
         .to_string();
     let mime = mime_override.or_else(|| mime_from_extension(&path));
 
-    // Saved Messages — local-only. Build a File message DIRECTLY (not
-    // by round-tripping through the file-offer text format, which needs
-    // a real key/nonce and would otherwise fall through to a raw text
-    // bubble). `saved_at` points at the stored copy so the UI renders
-    // the image/audio/video inline immediately. No encryption, no
-    // server round-trip.
+    // Saved Messages: a copy stays on this device (`saved-media/`), and the
+    // file also goes to the relay, encrypted, so my other devices get it —
+    // before, it stayed here only and the phone showed an empty frame
+    // forever. With no relay it stays local-only, as it was.
+    let mut saved_local: Option<(String, String)> = None;
     if peer_id == crate::state::SAVED_MESSAGES_ID {
         let fake_cid = format!("local-{}", crate::state::uuid_like());
         let size = bytes.len() as u64;
@@ -2096,8 +2095,17 @@ async fn attach_file_fwd(
                 dest.display().to_string()
             }
         };
+        saved_local = Some((saved_path, fake_cid));
+    }
+    // Local-only Saved message (no relay to put the file on). Its own copies
+    // of what's moved further down (mime, caption…).
+    let lo = (
+        fwd.clone(), filename.clone(), mime.clone(), category.clone(), caption.clone(),
+        if category.as_deref() == Some("sticker") { sticker_pack_ref(&path) } else { None },
+    );
+    let save_local_only = |saved_path: String, fake_cid: String, size: u64| -> Result<AttachResult, String> {
         let msg = ChatMessage {
-            meta: fwd.as_deref().and_then(|h| crate::state::split_fwd(&format!("{}{h}\nx", crate::state::FWD_PREFIX)).0)
+            meta: lo.0.as_deref().and_then(|h| crate::state::split_fwd(&format!("{}{h}\nx", crate::state::FWD_PREFIX)).0)
                 .map(|f| crate::state::MsgMeta { fwd: Some(f), ..Default::default() }),
             id: format!("m-{}", crate::state::uuid_like()),
             from: "me".into(),
@@ -2107,13 +2115,13 @@ async fn attach_file_fwd(
                 cid: fake_cid.clone(),
                 key_b64: String::new(),
                 nonce_b64: String::new(),
-                name: filename.clone(),
+                name: lo.1.clone(),
                 size,
-                mime: mime.clone(),
-                category: category.clone(),
-                pack: if category.as_deref() == Some("sticker") { sticker_pack_ref(&path) } else { None },
+                mime: lo.2.clone(),
+                category: lo.3.clone(),
+                pack: lo.5.clone(),
                 saved_at: Some(saved_path),
-                caption: caption.clone(),
+                caption: lo.4.clone(),
                 chunk: None,
             },
         };
@@ -2124,7 +2132,12 @@ async fn attach_file_fwd(
             push_own_message(&mut s, &peer_id, msg, &preview);
         }
         let _ = app.emit("aqua://chats_updated", ());
-        return Ok(AttachResult { message_id, cid: fake_cid, size });
+        Ok(AttachResult { message_id, cid: fake_cid, size })
+    };
+    if let Some((p, c)) = &saved_local {
+        if state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.is_none() {
+            return save_local_only(p.clone(), c.clone(), bytes.len() as u64);
+        }
     }
 
     // 2. Encrypt + get CID + envelope. Videos are sealed in pieces so they
@@ -2173,6 +2186,10 @@ async fn attach_file_fwd(
         None => Err("not connected".to_string()),
     };
     if let Err(e) = up {
+        // Saved Messages without the relay: kept here only, as before.
+        if let Some((p, c)) = saved_local.take() {
+            return save_local_only(p, c, size);
+        }
         match spare {
             Some(b) => crate::mesh::keep_blob(&app, &cid, &b)?,
             None => return Err(e),
@@ -2186,6 +2203,26 @@ async fn attach_file_fwd(
         Some(h) => format!("{}{h}\n{offer_text}", crate::state::FWD_PREFIX),
         None => offer_text,
     };
+
+    // Saved Messages: shown here from the local copy; my other devices get
+    // the offer (with the key) and fetch the file from the relay.
+    if let Some((saved_path, _)) = saved_local {
+        let mut msg = text_msg_from_me(&offer_text);
+        if let MessageKind::File { saved_at, .. } = &mut msg.kind {
+            *saved_at = Some(saved_path);
+        }
+        let message_id = msg.id.clone();
+        {
+            let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            push_own_message(&mut s, &peer_id, msg, &offer_text);
+        }
+        let _ = app.emit("aqua://chats_updated", ());
+        let (a, t) = (app.clone(), offer_text.clone());
+        tauri::async_runtime::spawn(async move {
+            crate::multidev::sync_raw(&a, &crate::multidev::wrap_sync(crate::state::SAVED_MESSAGES_ID, &t)).await;
+        });
+        return Ok(AttachResult { message_id, cid, size });
+    }
 
     // Groups / channels: the blob is uploaded once; the offer (with the
     // file key) fans out to every member over their own E2EE sessions.

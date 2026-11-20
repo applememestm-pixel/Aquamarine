@@ -62,7 +62,8 @@ async function fetchChat(chatId: string) {
 
 /** A message came to `chatId`: fetch its new media shortly (once per burst). */
 export function autoFetchSoon(chatId: string) {
-  if (!chatId || chatId.startsWith("__")) return;
+  // Saved Messages too: a file saved on my other device comes down here.
+  if (!chatId || (chatId.startsWith("__") && chatId !== "__saved__")) return;
   // The open chat does it itself (ChatWindow), with streaming for big videos.
   if (get(activeId) === chatId) return;
   const t = timers.get(chatId);
