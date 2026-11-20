@@ -2531,9 +2531,12 @@ async fn bot_register(
 ) -> Result<Json<BotRegisterResp>, (StatusCode, String)> {
     let username = body.username.trim().to_lowercase();
     // Bots by level (quota.rs); the ones already there stay.
+    let q = quota::quotas(&state);
     let max = match state.directory.username_for_identity(&dh_pub) {
-        Some(u) => quota::quotas(&state).of(quota::tier_of_user(&state, &u).await).bots,
-        None => 0,
+        Some(u) => q.of(quota::tier_of_user(&state, &u).await).bots,
+        // An open relay (no sign-up at all): everyone is like an account here.
+        None if !state.require_registration => q.account.bots,
+        None => q.guest.bots,
     };
     if state.directory.list_bots_for_owner(&dh_pub).len() as u32 >= max {
         return Err((StatusCode::FORBIDDEN, format!("quota: bots {max}")));
