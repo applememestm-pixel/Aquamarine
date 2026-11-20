@@ -3187,7 +3187,6 @@ export const RU: Record<string, string> = {
   "History for your devices is full ({limit}): new messages stay on this device only.": "Место для истории на ваших устройствах закончилось ({limit}): новые сообщения останутся только на этом устройстве.",
   "The backup is bigger than your level allows ({limit}).": "Копия больше, чем позволяет ваш уровень ({limit}).",
   "Your level allows {n} bots.": "Ваш уровень позволяет {n} ботов.",
-  "Bots need an account on this server.": "Для ботов нужен аккаунт на этом сервере.",
   "On the server": "На сервере",
   "Guest": "Гость",
   "Account with two-step verification": "Аккаунт с двухэтапной проверкой",
@@ -3200,4 +3199,5 @@ export const RU: Record<string, string> = {
   "One file up to {size}.": "Один файл — до {size}.",
   "Without an account the space is shared by all guests of this server.": "Без аккаунта место общее для всех гостей этого сервера.",
   "Your files take more than your level allows: the oldest go from the server on {date} (they stay on the devices that downloaded them).": "Ваши файлы занимают больше, чем позволяет уровень: самые старые уйдут с сервера {date} (на устройствах, которые их скачали, они останутся).",
+  "Your level on this server doesn't include bots.": "Ваш уровень на этом сервере не включает ботов.",
 };

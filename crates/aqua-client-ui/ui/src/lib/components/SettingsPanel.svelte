@@ -3857,7 +3857,7 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .q-bots { padding: 8px 0; }
   .q-num { color: var(--fg-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .q-num.over, .q-warn { color: var(--danger); }
-  .q-bar { height: 6px; border-radius: 3px; background: color-mix(in srgb, var(--fg) 12%, transparent); overflow: hidden; }
-  .q-bar span { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
+  .q-bar { height: 6px; border-radius: calc(3px * var(--rk, 1)); background: color-mix(in srgb, var(--fg) 12%, transparent); overflow: hidden; }
+  .q-bar span { display: block; height: 100%; border-radius: calc(3px * var(--rk, 1)); background: var(--accent); }
   .q-bar span.over { background: var(--danger); }
 </style>

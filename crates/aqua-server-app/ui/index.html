@@ -923,15 +923,18 @@ async function loadQuotas() {
   if (!$("quotaBox")) return;
   const num = (v, k) => +(v / k).toFixed(k > 1 ? 2 : 0);
   $("quotaBox").innerHTML = `<table class="qt"><tr><th></th>${Q_COLS.map((c) => `<th>${esc(t(c[1]))}</th>`).join("")}</tr>`
-    + Q_TIERS.map(([id, name]) => `<tr><td>${esc(t(name))}</td>${Q_COLS.map(([c, , k]) => `<td><input type="number" min="0" step="any" data-q="${id}.${c}" value="${num(quotas[id][c], k)}"></td>`).join("")}</tr>`).join("")
-    + `<tr><td>${esc(t("All guests together"))}</td><td><input type="number" min="0" step="any" data-q="guest_pool" value="${num(quotas.guest_pool, 1073741824)}"></td></tr></table>`;
+    + Q_TIERS.map(([id, name]) => `<tr><td>${esc(t(name))}</td>${Q_COLS.map(([c, , k]) => `<td><input type="number" min="0" step="any" data-q="${id}.${c}" value="${num(quotas[id][c], k)}" data-orig="${num(quotas[id][c], k)}"></td>`).join("")}</tr>`).join("")
+    + `<tr><td>${esc(t("All guests together"))}</td><td><input type="number" min="0" step="any" data-q="guest_pool" value="${num(quotas.guest_pool, 1073741824)}" data-orig="${num(quotas.guest_pool, 1073741824)}"></td></tr></table>`;
 }
 async function saveQuotas() {
   if (!quotas) return;
   const q = JSON.parse(JSON.stringify(quotas));
   document.querySelectorAll("[data-q]").forEach((el) => {
     const [tier, c] = el.dataset.q.split(".");
-    const v = Math.max(0, parseFloat(el.value) || 0);
+    // Only what was changed (a rounded figure written back would shift the
+    // limit; an empty field would make it 0 and the files would go).
+    if (el.value.trim() === "" || el.value === el.dataset.orig || !(parseFloat(el.value) >= 0)) return;
+    const v = parseFloat(el.value);
     if (!c) { q.guest_pool = Math.round(v * 1073741824); return; }
     q[tier][c] = Math.round(v * Q_COLS.find((x) => x[0] === c)[2]);
   });

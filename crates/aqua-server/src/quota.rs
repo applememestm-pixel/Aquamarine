@@ -183,23 +183,40 @@ pub async fn tier_of_user(state: &AppState, username: &str) -> Tier {
     let star = match state.directory.uid_of(username) {
         Some(uid) => match crate::stars::star_of(&uid).await {
             Ok(st) => st.filter(|s| s.exp > (crate::now_ms() / 1000) as u64).map(|s| s.kind),
-            // Couldn't ask: keep what was known, else no star.
+            // Couldn't ask: keep what was known (for another round, so every
+            // upload doesn't wait for the star relay again), else no star for a minute.
             Err(()) => match cached {
-                Some((_, t)) => return t,
-                None => None,
+                Some((_, t)) => {
+                    remember(username, t, Instant::now());
+                    return t;
+                }
+                None => {
+                    let t = tier_from(true, two_step, None);
+                    remember(username, t, Instant::now().checked_sub(TIER_TTL - Duration::from_secs(60)).unwrap_or_else(Instant::now));
+                    return t;
+                }
             },
         },
         None => None,
     };
     let t = tier_from(true, two_step, star);
+    remember(username, t, Instant::now());
+    t
+}
+
+fn remember(username: &str, t: Tier, at: Instant) {
     if let Ok(mut g) = TIERS.lock() {
         let m = g.get_or_insert_with(HashMap::new);
         if m.len() > 20_000 {
             m.clear();
         }
-        m.insert(username.to_string(), (Instant::now(), t));
+        m.insert(username.to_string(), (at, t));
     }
-    t
+}
+
+/// Files went by another way (disk short, an age limit, "clear"): count again on next use.
+pub fn invalidate() {
+    *USAGE.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 /// The caller: (quota key, level). Guests share `GUESTS`.
@@ -258,12 +275,10 @@ pub async fn reconcile(state: &AppState) -> usize {
     let old = over_marks();
     let mut marks = HashMap::new();
     let mut removed = 0;
-    let mut usage = HashMap::new();
     for (owner, mut list) in by_owner {
         let tier = if owner == GUESTS { Tier::Guest } else { tier_of_user(state, &owner).await };
         let limit = files_limit(&q, &owner, tier);
         let total: u64 = list.iter().map(|f| f.1).sum();
-        let mut left = total;
         match verdict(total, limit, old.get(&owner).copied(), now) {
             Verdict::Fine => {}
             Verdict::Grace { since } => {
@@ -277,16 +292,15 @@ pub async fn reconcile(state: &AppState) -> usize {
                     }
                     if state.blobs.remove_cached(cid) {
                         need = need.saturating_sub(*len);
-                        left = left.saturating_sub(*len);
                         removed += 1;
                     }
                 }
                 tracing::info!(owner = %owner, removed, "over the limit past the grace: the oldest files went");
             }
         }
-        usage.insert(owner, left);
     }
-    *USAGE.lock().unwrap_or_else(|e| e.into_inner()) = Some(usage);
+    // Counted afresh on next use (uploads during this pass aren't lost).
+    invalidate();
     if marks != old {
         if let Ok(b) = serde_json::to_vec_pretty(&marks) {
             let _ = std::fs::write(OVER_FILE, b);

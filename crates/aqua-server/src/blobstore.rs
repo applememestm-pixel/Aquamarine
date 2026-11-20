@@ -196,6 +196,11 @@ impl BlobStore {
         self.put_in(&self.stories, cid, data)
     }
 
+    /// In the delivery cache (not keep / stories)?
+    pub fn has_cached(&self, cid: &str) -> bool {
+        valid_cid(cid) && self.dir.join(cid.to_ascii_lowercase()).is_file()
+    }
+
     /// Is it here (any shelf)? Without reading it.
     pub fn has(&self, cid: &str) -> bool {
         valid_cid(cid) && [&self.dir, &self.keep, &self.stories].iter().any(|d| d.join(cid.to_ascii_lowercase()).is_file())
@@ -263,6 +268,9 @@ impl BlobStore {
             Some(ttl) => sweep_dir(&self.dir, ttl),
             None => sweep_parts(&self.dir),
         };
+        if cache > 0 {
+            crate::quota::invalidate();
+        }
         cache + sweep_dir(&self.keep, KEEP_TTL) + sweep_dir(&self.stories, STORY_TTL) + self.fit(0)
     }
 
@@ -296,7 +304,7 @@ impl BlobStore {
         // Files nobody's quota holds (uploaded by older apps / before quotas)
         // go first, then the least recently used.
         let owned = |p: &PathBuf| p.file_name().is_some_and(|n| self.dir.join(format!(".o.{}", n.to_string_lossy())).is_file());
-        files.sort_by_key(|f| (owned(&f.0), f.2));
+        files.sort_by_cached_key(|f| (owned(&f.0), f.2));
         let mut removed = 0;
         for (p, len, _) in files {
             if !short(total, freed) {
@@ -312,6 +320,9 @@ impl BlobStore {
                 removed += 1;
             }
         }
+        if removed > 0 {
+            crate::quota::invalidate();
+        }
         removed
     }
 
@@ -319,6 +330,7 @@ impl BlobStore {
     /// server"). A stop, a restart or an update no longer does it (owner,
     /// 20.11: photos must not go "unavailable" after a restart).
     pub fn clear_cache(&self) -> usize {
+        crate::quota::invalidate();
         let mut removed = 0;
         if let Ok(rd) = std::fs::read_dir(&self.dir) {
             for e in rd.flatten() {

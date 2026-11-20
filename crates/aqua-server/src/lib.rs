@@ -947,7 +947,7 @@ async fn upload_blob(
     }
     // Chat files count against the share (a file already here costs nothing).
     let len = body.len() as u64;
-    if shelf == blobstore::Shelf::Cache && !store.has(&cid) {
+    if shelf == blobstore::Shelf::Cache && !store.has_cached(&cid) {
         let (used, limit) = (quota::used(&state, &owner), quota::files_limit(&limits, &owner, tier));
         if used + len > limit {
             return Err((StatusCode::INSUFFICIENT_STORAGE, format!("quota: files {used} {limit}")));
@@ -2064,10 +2064,7 @@ async fn backup_put(
     if body.len() > BACKUP_LIMIT {
         return Err((StatusCode::PAYLOAD_TOO_LARGE, "backup is too large".into()));
     }
-    let lim = quota::quotas(&state).of(quota::tier_of_user(&state, &user).await);
-    if body.len() as u64 > lim.backup && lim.backup > 0 {
-        return Err((StatusCode::INSUFFICIENT_STORAGE, format!("quota: backup {}", lim.backup)));
-    }
+
     if !body.starts_with(b"AQBK1") {
         return Err((StatusCode::BAD_REQUEST, "not an encrypted backup".into()));
     }
@@ -2075,6 +2072,11 @@ async fn backup_put(
     // recovered, so a copy on the relay would be of no use to anyone.
     if !state.directory.has_2fa(&user) {
         return Err((StatusCode::FORBIDDEN, "turn on two-step verification to keep a copy on the server".into()));
+    }
+    // The level's share (quota.rs); 0 — no copy on this server at this level.
+    let lim = quota::quotas(&state).of(quota::tier_of_user(&state, &user).await);
+    if body.len() as u64 > lim.backup {
+        return Err((StatusCode::INSUFFICIENT_STORAGE, format!("quota: backup {}", lim.backup)));
     }
     state.directory.put_backup(&user, &body).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let (size, at) = state.directory.backup_meta(&user).unwrap_or((0, 0));
@@ -3614,7 +3616,7 @@ mod invite_tests {
 
     #[test]
     fn an_invitation_lets_its_number_of_people_in() {
-        let mut c = AdminConfig { invite_only: true, allow: vec![], optional_2fa: false, invites: vec![Invite { code: "abc123def456".into(), uses: 1, expires: 0, note: String::new() }] };
+        let mut c = AdminConfig { invite_only: true, allow: vec![], optional_2fa: false, quotas: None, invites: vec![Invite { code: "abc123def456".into(), uses: 1, expires: 0, note: String::new() }] };
         assert!(!c.permits("a@x.com"));
         assert!(!c.redeem("wrong", "a@x.com"));
         assert!(c.redeem("abc123def456", "A@x.com"));

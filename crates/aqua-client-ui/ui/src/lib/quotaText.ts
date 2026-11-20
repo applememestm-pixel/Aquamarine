@@ -20,7 +20,7 @@ export function quotaText(text: string): string | null {
     case "file_max": return tr("The file is too big for your level: up to {size}.", { size: size(nums[0]) });
     case "hist": return tr("History for your devices is full ({limit}): new messages stay on this device only.", { limit: size(nums[0]) });
     case "backup": return tr("The backup is bigger than your level allows ({limit}).", { limit: size(nums[0]) });
-    case "bots": return nums[0] ? tr("Your level allows {n} bots.", { n: nums[0] }) : tr("Bots need an account on this server.");
+    case "bots": return nums[0] ? tr("Your level allows {n} bots.", { n: nums[0] }) : tr("Your level on this server doesn't include bots.");
   }
   return null;
 }
