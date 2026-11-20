@@ -248,6 +248,10 @@
     .hero button { width: 100%; justify-content: center; }
     .bar { width: 70px; }
   }
+.qt { border-collapse: collapse; width: 100%; font-size: 13px; }
+.qt th { text-align: left; font-weight: 600; opacity: .7; padding: 4px 6px; white-space: nowrap; }
+.qt td { padding: 3px 6px; white-space: nowrap; }
+.qt input { width: 80px; }
 </style>
 </head>
 <body>
@@ -288,6 +292,10 @@ document.addEventListener("DOMContentLoaded", () => armAll(document.body));
 // ======================================================================
 const RU = /^(ru|uk|be)/i.test(navigator.language || "");
 const RU_DICT = {
+  "Limits by level": "Лимиты по уровням", "Save limits": "Сохранить лимиты", "Guest": "Гость", "Account": "Аккаунт", "Account + 2FA": "Аккаунт + 2FA", "Star 1–2": "Звезда 1–2", "Star 3–5": "Звезда 3–5", "Star 6": "Звезда 6",
+  "Files, GB": "Файлы, ГБ", "One file, MB": "Один файл, МБ", "History, GB": "История, ГБ", "Backup, MB": "Копия, МБ", "Bots": "Боты", "All guests together": "Все гости вместе",
+  "Saved — everyone is checked against the new limits now.": "Сохранено — все сразу сверяются с новыми лимитами.",
+  "quotaNote": "Доля сервера у каждого аккаунта. Файлы сверх уменьшенного лимита остаются 7 дней, потом уходят самые старые; история, копия и боты не удаляются никогда — только не принимаются новые. Гости делят одну общую долю. Один файл пока не больше 210 МБ.",
   "Stars": "Звёзды", "starsNote": "Звезда CeZeOs — отметка, которую даёт только владелец проекта: уровни 1–5 — за донаты (Boosty, выдаются сами), уровень 6 — выше них, только вручную («/ник level 6» боту). Ключ есть только на сервере владельца. Создайте его там один раз: открытый ключ встраивается в приложения (переменная репозитория AQUA_STAR_PUBLIC), звёзды выдаёт бот @stars.",
   "Make the star key": "Создать ключ звёзд", "this server hands them out": "этот сервер их выдаёт",
   "Make the star key on this server? Only the project owner's server should have it.": "Создать ключ звёзд на этом сервере? Он должен быть только на сервере владельца проекта.",
@@ -485,6 +493,7 @@ const RU_DICT = {
 };
 const t = (k, vars) => { let s = (RU && RU_DICT[k]) || EN[k] || k; if (vars) for (const [a, b] of Object.entries(vars)) s = s.split("{" + a + "}").join(b); return s; };
 const EN = {
+  quotaNote: "Each account's share of this server. Files over a lowered limit stay 7 days, then the oldest go; history, backup and bots are never deleted — only new ones are refused. Guests share one pool. One file is at most 210 MB for now.",
   boostyNote: "Paste once and forget: on boosty.to press F12 → Storage (Application) → Cookies → boosty.to, copy the value of “auth” and put it here with your blog. The server renews the session by itself; if Boosty ever ends it, @stars writes to you.",
   starsNote: "The CeZeOs star is a mark only the project owner hands out: levels 1–5 for donations (Boosty, given on their own), level 6 above them by hand («/name level 6» to the bot). Only the owner's server has the key. Make it once there: the public key goes into the apps (repository variable AQUA_STAR_PUBLIC); stars are given by the @stars bot.",
   remoteIntro: "An Aquamarine server on another machine (a VPS, a home PC): the app signs in there over SSH and opens its panel here. The panel is never opened to the internet — everything goes inside SSH.",
@@ -893,6 +902,9 @@ function pageAccess(el) {
         <button class="primary" onclick="newInvite()">${t("Create")}</button></div>
       <span class="msg" id="invMsg"></span>
       <div class="list" id="invList"><div class="empty">…</div></div></div>
+    <div class="card"><h2>${t("Limits by level")}</h2><div class="note">${t("quotaNote")}</div>
+      <div id="quotaBox" style="overflow-x:auto"></div>
+      <div class="row"><button class="primary" onclick="saveQuotas()">${t("Save limits")}</button><span class="msg" id="quotaMsg"></span></div></div>
     <div class="card"><h2><span class="grow">${t("Stars")}</span><span class="note" id="starHint" style="font-weight:400"></span></h2><div class="note">${t("starsNote")}</div>
       <div class="addr" id="starKeyRow" hidden><code id="starKey"></code><button class="mini" onclick="copy($('starKey').textContent)">${IC.copy}</button></div>
       <div class="row"><button class="mini" id="starMake" onclick="makeStarKey()">${t("Make the star key")}</button><span class="msg" id="starMsg"></span></div>
@@ -900,7 +912,31 @@ function pageAccess(el) {
         <label class="f">${t("The “auth” cookie of boosty.to")}<input type="password" id="boostyCookie" autocomplete="off" placeholder="{%22accessToken%22:…"></label>
         <label class="f">${t("Blog (boosty.to/…)")}<input type="text" id="boostyBlog" autocomplete="off" placeholder="VladST"></label>
         <div class="row"><button class="primary" onclick="saveBoosty()">${t("Save")}</button><button class="mini" id="boostyOff" onclick="saveBoosty(true)">${t("Disconnect Boosty")}</button><span class="msg" id="boostyMsg"></span></div></div></div>`;
-  loadInvites(); loadStars();
+  loadInvites(); loadStars(); loadQuotas();
+}
+// Limits by level (aqua-server quota.rs), as in admin.html.
+const Q_TIERS = [["guest", "Guest"], ["account", "Account"], ["secure", "Account + 2FA"], ["star12", "Star 1–2"], ["star35", "Star 3–5"], ["star6", "Star 6"]];
+const Q_COLS = [["files", "Files, GB", 1073741824], ["file_max", "One file, MB", 1048576], ["hist", "History, GB", 1073741824], ["backup", "Backup, MB", 1048576], ["bots", "Bots", 1]];
+let quotas = null;
+async function loadQuotas() {
+  try { quotas = await api("/v1/admin/quotas"); } catch { return; }
+  if (!$("quotaBox")) return;
+  const num = (v, k) => +(v / k).toFixed(k > 1 ? 2 : 0);
+  $("quotaBox").innerHTML = `<table class="qt"><tr><th></th>${Q_COLS.map((c) => `<th>${esc(t(c[1]))}</th>`).join("")}</tr>`
+    + Q_TIERS.map(([id, name]) => `<tr><td>${esc(t(name))}</td>${Q_COLS.map(([c, , k]) => `<td><input type="number" min="0" step="any" data-q="${id}.${c}" value="${num(quotas[id][c], k)}"></td>`).join("")}</tr>`).join("")
+    + `<tr><td>${esc(t("All guests together"))}</td><td><input type="number" min="0" step="any" data-q="guest_pool" value="${num(quotas.guest_pool, 1073741824)}"></td></tr></table>`;
+}
+async function saveQuotas() {
+  if (!quotas) return;
+  const q = JSON.parse(JSON.stringify(quotas));
+  document.querySelectorAll("[data-q]").forEach((el) => {
+    const [tier, c] = el.dataset.q.split(".");
+    const v = Math.max(0, parseFloat(el.value) || 0);
+    if (!c) { q.guest_pool = Math.round(v * 1073741824); return; }
+    q[tier][c] = Math.round(v * Q_COLS.find((x) => x[0] === c)[2]);
+  });
+  try { quotas = await api("/v1/admin/quotas", "POST", q); await loadQuotas(); setMsg("quotaMsg", t("Saved — everyone is checked against the new limits now."), "ok"); }
+  catch (e) { setMsg("quotaMsg", t("Failed: ") + esc(errText(e)), "err"); }
 }
 async function loadStars() {
   let s; try { s = await api("/v1/admin/stars"); } catch { return; }
