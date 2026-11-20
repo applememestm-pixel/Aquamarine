@@ -6901,8 +6901,10 @@
   /* Album: photos sent together, in a grid like Telegram's. */
   .media-bubble.album { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; width: min(var(--media-max, 360px), 100%); }
   .media-bubble.album.a3 { grid-template-columns: 1fr 1fr 1fr; }
-  .media-bubble.album .alb-cell { aspect-ratio: 1; overflow: hidden; padding: 0; border: none; background: var(--bg-input); }
-  .media-bubble.album .alb-cell .media-img { width: 100%; height: 100%; object-fit: cover; max-width: none; max-height: none; border-radius: 0; }
+  .media-bubble.album .alb-cell { position: relative; aspect-ratio: 1; overflow: hidden; padding: 0; border: none; background: var(--bg-input); }
+  /* Pinned to the whole cell: "height: 100%" against an aspect-ratio box
+     resolved to the picture's own height in WebKit, and it came out squashed. */
+  .media-bubble.album .alb-cell .media-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; max-width: none; max-height: none; border-radius: 0; }
   /* A channel (Telegram): every post on one side, in one colour — mine too
      (the row is "in" for them); no avatars, the posts take the width. */
   .messages.chan .msg { grid-template-columns: 1fr; }

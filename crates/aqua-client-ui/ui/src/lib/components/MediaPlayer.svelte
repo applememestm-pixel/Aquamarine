@@ -851,6 +851,13 @@
     .vp .big { width: 58px; height: 58px; }
     .vp .big :global(svg) { width: 24px; height: 24px; }
   }
+  /* A narrow bubble (a phone-sized video in a chat): play, time, open, full
+     screen — the volume and speed went past the right edge. */
+  @container (max-width: 320px) {
+    .vp .vol, .vp .spd { display: none; }
+    .vp .time { font-size: 11px; white-space: nowrap; }
+    .vp .row { overflow: hidden; }
+  }
 
   /* ---------------------------------------------------------------- audio */
   .ap {
