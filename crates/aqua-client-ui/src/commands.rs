@@ -2676,12 +2676,28 @@ pub async fn stream_file(
     }
     let ext: String = std::path::Path::new(&envelope.filename).extension().and_then(|e| e.to_str()).unwrap_or("mp4").chars().filter(|c| c.is_ascii_alphanumeric()).take(5).collect();
     let mime = envelope.mime.clone().unwrap_or_else(|| "video/mp4".into());
-    if let Some((_, url)) = streams().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&envelope.cid) {
-        return Ok(url.clone());
+    // Already streaming: the same URL — unless that download failed (then
+    // it goes, and a new one starts below).
+    {
+        let mut m = streams().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((slot, url)) = m.get(&envelope.cid) {
+            let dead = slot.0.lock().map(|g| g.err.is_some()).unwrap_or(true);
+            if !dead {
+                return Ok(url.clone());
+            }
+            m.remove(&envelope.cid);
+        }
     }
+    // No relay: say so now, before a URL with nothing behind it is handed
+    // out (that was a player stuck at 0:00 forever, opened before connecting).
+    let transport = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone().ok_or("not connected")? };
 
-    let data_dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.clone() };
-    let base = downloads_dir(&data_dir);
+    let (data_dir, chat_name) = {
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        (s.data_dir.clone(), s.chats.get(&peer_id).map(|b| b.summary.name.clone()).unwrap_or_default())
+    };
+    // The chat's own folder, like download_file.
+    let base = downloads_dir(&data_dir).join(chat_folder(&chat_name, &peer_id));
     std::fs::create_dir_all(&base).map_err(|e| format!("mkdir: {e}"))?;
     let part = base.join(format!(".{}.aqpart", &envelope.cid[..16.min(envelope.cid.len())]));
     std::fs::write(&part, b"").map_err(|e| format!("write: {e}"))?;
@@ -2692,6 +2708,10 @@ pub async fn stream_file(
     let sl = slot.clone();
     let mime2 = mime.clone();
     let f: crate::media_server::RemoteFn = Arc::new(move |range: Option<String>| {
+        // The download failed: an error (502), not a body that never comes.
+        if let Some(e) = sl.0.lock().ok().and_then(|g| g.err.clone()) {
+            return Err(e);
+        }
         let (start, end, partial) = match range.as_deref().and_then(|r| crate::media_server::parse_range(r, total)) {
             Some((a, b)) => (a, b, true),
             None => (0, total.saturating_sub(1), false),
@@ -2713,8 +2733,8 @@ pub async fn stream_file(
     let url = crate::media_server::remote_url(&format!("stream:{}", envelope.cid), &ext, f)?;
     streams().lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(envelope.cid.clone(), (slot.clone(), url.clone()));
 
-    let transport = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone().ok_or("not connected")? };
     let app2 = app.clone();
+    let (fail_peer, fail_msg) = (peer_id.clone(), message_id.clone());
     tauri::async_runtime::spawn(async move {
         use sha2::Digest;
         use std::io::Write;
@@ -2722,12 +2742,17 @@ pub async fn stream_file(
         let cid = envelope.cid.clone();
         let part_f = part.clone();
         let fail = |e: String| {
-            if let Ok(mut g) = lock.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { g.err = Some(e); }
+            if let Ok(mut g) = lock.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { g.err = Some(e.clone()); }
             cv.notify_all();
             // A broken stream isn't handed out again (a retry used to get
             // the same dead URL until the app restarted); its half file goes.
             if let Ok(mut m) = streams().lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { m.remove(&cid); }
             let _ = std::fs::remove_file(&part_f);
+            // Its URL answers 404 now, and the chat hears it (it then fetches the
+            // file whole, or shows the error with "Retry").
+            crate::media_server::unregister_remote(&format!("stream:{cid}"));
+            tracing::warn!(%cid, error = %e, "stream failed");
+            let _ = app2.emit("aqua://stream_failed", serde_json::json!({ "peer_id": fail_peer, "message_id": fail_msg }));
         };
         let mut out = match std::fs::OpenOptions::new().append(true).open(&part) {
             Ok(f) => f,

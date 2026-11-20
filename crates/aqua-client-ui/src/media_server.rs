@@ -139,6 +139,15 @@ pub fn remote_url(key: &str, ext: &str, f: RemoteFn) -> Result<String, String> {
     Ok(format!("http://127.0.0.1:{}/r/{token}.{}", st.port, if ext.is_empty() { "bin" } else { &ext }))
 }
 
+/// The stream under `key` is gone (it failed): its URL answers 404 from now on.
+pub fn unregister_remote(key: &str) {
+    let Some(st) = STATE.get().and_then(|s| s.as_ref().ok()) else { return };
+    let token = st.remote_keys.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(key);
+    if let Some(t) = token {
+        st.remote.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&t);
+    }
+}
+
 fn serve_remote(req: tiny_http::Request, token: &str) {
     let f = STATE.get().and_then(|s| s.as_ref().ok()).and_then(|s| s.remote.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok()?.get(token).cloned());
     let Some(f) = f else {
@@ -186,7 +195,11 @@ fn serve(req: tiny_http::Request) {
     if let Some(r) = req.url().strip_prefix("/r/") {
         let token = r.split('.').next().unwrap_or("").to_string();
         if token.len() == 32 && token.chars().all(|c| c.is_ascii_hexdigit()) {
-            return serve_remote(req, &token);
+            // Its own thread: a stream waiting for bytes from the relay held one
+            // of the four workers, and with a few videos in a chat every other
+            // request queued unanswered (a player stuck at 0:00, no error).
+            let _ = std::thread::Builder::new().name("aqua-media-r".into()).spawn(move || serve_remote(req, &token));
+            return;
         }
         return respond_err(req, 404);
     }

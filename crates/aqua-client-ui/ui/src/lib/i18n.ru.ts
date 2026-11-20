@@ -3202,4 +3202,7 @@ export const RU: Record<string, string> = {
   "Your level on this server doesn't include bots.": "Ваш уровень на этом сервере не включает ботов.",
   "People join it by themselves — with its link or from the chats in it.": "Люди приходят сами — по ссылке или из его чатов.",
   "Open the comments full screen": "Открыть комментарии на весь экран",
+  "Retry": "Повторить",
+  "The video didn't load": "Видео не загрузилось",
+  "Couldn't load the video: {e}": "Не удалось загрузить видео: {e}",
 };

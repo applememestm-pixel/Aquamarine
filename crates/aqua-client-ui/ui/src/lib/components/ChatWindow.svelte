@@ -439,9 +439,29 @@
       if ($activeChat?.id === peerId) streamUrls = { ...streamUrls, [messageId]: u };
     } catch (e) {
       console.warn("stream failed", e);
-      await autoDownload(peerId, messageId);
+      // No stream (no relay right now…): the whole file, and say it if that fails too.
+      await streamFallback(peerId, messageId);
     }
   }
+  /** The stream didn't work (failed, or stalled): drop it and fetch the file
+   *  whole — what's saved then plays as a normal file. An error is said. */
+  async function streamFallback(peerId: string, messageId: string) {
+    if (streamUrls[messageId]) { const n = { ...streamUrls }; delete n[messageId]; streamUrls = n; }
+    try {
+      await loadInlineMedia(peerId, messageId);
+    } catch (e) {
+      showToast(tr("Couldn't load the video: {e}", { e: String(e) }), 6000);
+    }
+  }
+  // The relay side of a stream failed (stream_file's fail()): to the whole file.
+  $effect(() => {
+    let off: (() => void) | undefined;
+    let gone = false;
+    void import("@tauri-apps/api/event").then(({ listen }) => listen<{ peer_id: string; message_id: string }>("aqua://stream_failed", (e) => {
+      if ($activeChat?.id === e.payload.peer_id && streamUrls[e.payload.message_id]) void streamFallback(e.payload.peer_id, e.payload.message_id);
+    })).then((u) => { if (gone) u(); else off = u; }).catch(() => {});
+    return () => { gone = true; off?.(); };
+  });
   let streamChat = "";
   let streamTapped = $state<string[]>([]);
   $effect(() => { const id = $activeChat?.id ?? ""; if (id !== streamChat) { streamChat = id; streamUrls = {}; streamTapped = []; } });
@@ -4601,7 +4621,8 @@
                   <div class="bubble media-bubble">
                     {#if streamUrls[m.id]}
                       <!-- Plays while it downloads; kept until the chat changes so the position isn't lost. -->
-                      <MediaPlayer src={streamUrls[m.id]} kind="video" name={content.name} size={content.size} autoplay={streamTapped.includes(m.id)} onExpand={() => content.saved_at && openInGallery(content.saved_at)} />
+                      <MediaPlayer src={streamUrls[m.id]} kind="video" name={content.name} size={content.size} autoplay={streamTapped.includes(m.id)} onExpand={() => content.saved_at && openInGallery(content.saved_at)}
+                        onRetry={() => { if ($activeChat) void streamFallback($activeChat.id, m.id); }} />
                     {:else if url}
                       <MediaPlayer src={url} kind="video" name={content.name} size={content.size} onExpand={() => openInGallery(content.saved_at)} />
                     {:else if content.chunk && !m.outgoing && $activeChat}
