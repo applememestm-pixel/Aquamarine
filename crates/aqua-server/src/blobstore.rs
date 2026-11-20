@@ -1,11 +1,13 @@
 //! Encrypted file bodies (blobs) on disk.
 //!
 //! Content-addressed by the SHA-256 of the ciphertext, one file per blob
-//! under `aqua-blobs/` (`AQUA_BLOB_DIR`). They are a delivery cache, not an
-//! archive: anything older than `AQUA_BLOB_TTL_HOURS` (72 by default) is
-//! swept hourly, and the whole cache is cleared when the server stops
-//! (`clear_cache`); kept blobs (`keep/`), live stories (`stories/`) and
-//! people's data stay.
+//! under `aqua-blobs/` (`AQUA_BLOB_DIR`). Files stay — across stops,
+//! restarts and updates (owner, 20.11: photos went "unavailable" after a
+//! restart) — and go only when there's no room: the least recently used
+//! first, when the disk has less than `AQUA_BLOB_MIN_FREE_GB` free (2 by
+//! default) or the files take more than `AQUA_BLOB_MAX_GB` (no cap by
+//! default). `AQUA_BLOB_TTL_HOURS` brings back an age limit if set.
+//! Kept blobs (`keep/`), live stories (`stories/`) and people's data stay.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -13,7 +15,12 @@ use std::time::{Duration, SystemTime};
 #[derive(Clone)]
 pub struct BlobStore {
     dir: PathBuf,
-    ttl: Duration,
+    /// Age limit of the delivery cache: none unless `AQUA_BLOB_TTL_HOURS`.
+    ttl: Option<Duration>,
+    /// Size cap of the delivery cache (`AQUA_BLOB_MAX_GB`).
+    max_bytes: Option<u64>,
+    /// Keep at least this much of the disk free (`AQUA_BLOB_MIN_FREE_GB`).
+    min_free: u64,
     /// Long-lived blobs (group photos and banners): `<dir>/keep`, expiring
     /// only after `KEEP_TTL` without a single download.
     keep: PathBuf,
@@ -26,7 +33,7 @@ pub struct BlobStore {
 /// Where a blob goes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Shelf {
-    /// The delivery cache (`AQUA_BLOB_TTL_HOURS`, cleared on stop).
+    /// The delivery cache (kept until the disk runs short).
     Cache,
     /// Long-lived, ≤ `KEEP_LIMIT` (`KEEP_TTL` past the last download).
     Keep,
@@ -51,16 +58,27 @@ fn valid_cid(cid: &str) -> bool {
 impl BlobStore {
     pub fn from_env() -> Self {
         let dir = std::env::var("AQUA_BLOB_DIR").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("aqua-blobs"));
-        let hours = std::env::var("AQUA_BLOB_TTL_HOURS").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(72);
-        Self::new(dir, Duration::from_secs(hours.max(1) * 3600))
+        let num = |k: &str| std::env::var(k).ok().and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| *v >= 0.0);
+        let mut s = Self::new_unlimited(dir);
+        s.ttl = num("AQUA_BLOB_TTL_HOURS").filter(|h| *h > 0.0).map(|h| Duration::from_secs((h * 3600.0) as u64));
+        s.max_bytes = num("AQUA_BLOB_MAX_GB").filter(|g| *g > 0.0).map(|g| (g * GB as f64) as u64);
+        s.min_free = num("AQUA_BLOB_MIN_FREE_GB").map(|g| (g * GB as f64) as u64).unwrap_or(2 * GB);
+        s
     }
 
+    /// With an age limit on the delivery cache (tests).
     pub fn new(dir: PathBuf, ttl: Duration) -> Self {
+        let mut s = Self::new_unlimited(dir);
+        s.ttl = Some(ttl);
+        s
+    }
+
+    fn new_unlimited(dir: PathBuf) -> Self {
         let keep = dir.join("keep");
         let _ = std::fs::create_dir_all(&keep);
         let stories = dir.join("stories");
         let _ = std::fs::create_dir_all(&stories);
-        Self { dir, ttl, keep, stories }
+        Self { dir, ttl: None, max_bytes: None, min_free: 0, keep, stories }
     }
 
     fn shelf_dir(&self, shelf: Shelf) -> &Path {
@@ -76,6 +94,15 @@ impl BlobStore {
     }
 
     pub fn put(&self, cid: &str, data: &[u8]) -> std::io::Result<()> {
+        // Short of room: make some first (checked at most once a minute).
+        static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        if now.saturating_sub(LAST.swap(now, std::sync::atomic::Ordering::Relaxed)) >= 60 {
+            let n = self.fit(data.len() as u64);
+            if n > 0 {
+                tracing::info!(removed = n, "low on room: the oldest files went");
+            }
+        }
         self.put_in(&self.dir, cid, data)
     }
 
@@ -144,8 +171,12 @@ impl BlobStore {
     }
 
     pub fn get(&self, cid: &str) -> Option<Vec<u8>> {
-        if let Some(b) = self.path(cid).and_then(|p| std::fs::read(p).ok()) {
-            return Some(b);
+        if let Some(p) = self.path(cid) {
+            if let Ok(b) = std::fs::read(&p) {
+                // Last used: when room runs short, what nobody fetches lately goes first.
+                touch(&p);
+                return Some(b);
+            }
         }
         if !valid_cid(cid) {
             return None;
@@ -177,16 +208,64 @@ impl BlobStore {
         (n, bytes)
     }
 
-    /// Remove blobs older than the TTL (and stale partial uploads).
+    /// Remove what has run its time: the cache only with an age limit set,
+    /// stale partial uploads always; then make room if the disk is short.
     pub fn sweep(&self) -> usize {
-        sweep_dir(&self.dir, self.ttl) + sweep_dir(&self.keep, KEEP_TTL) + sweep_dir(&self.stories, STORY_TTL)
+        let cache = match self.ttl {
+            Some(ttl) => sweep_dir(&self.dir, ttl),
+            None => sweep_parts(&self.dir),
+        };
+        cache + sweep_dir(&self.keep, KEEP_TTL) + sweep_dir(&self.stories, STORY_TTL) + self.fit(0)
     }
 
-    /// The server is shutting down: the delivery cache goes (photos, videos,
-    /// files waiting to be fetched), so a stopped server keeps nothing but
-    /// what matters — accounts, history, settings, and the kept group
-    /// photos/banners (`keep/`). Owner's choice (06.11): "при выключении кэш
-    /// очищается, данные пользователей хранятся".
+    /// Room for `incoming` more bytes: the least recently used files of the
+    /// delivery cache go until it's under `AQUA_BLOB_MAX_GB` and the disk has
+    /// `AQUA_BLOB_MIN_FREE_GB` free. Nothing goes while there's room.
+    pub fn fit(&self, incoming: u64) -> usize {
+        let free = if self.min_free > 0 { crate::host::disk_free(&self.dir) } else { None };
+        self.fit_with(incoming, free)
+    }
+
+    fn fit_with(&self, incoming: u64, free: Option<u64>) -> usize {
+        let Ok(rd) = std::fs::read_dir(&self.dir) else { return 0 };
+        let mut files: Vec<(PathBuf, u64, SystemTime)> = rd
+            .flatten()
+            .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+            .filter_map(|e| {
+                let m = e.metadata().ok().filter(|m| m.is_file())?;
+                Some((e.path(), m.len(), m.modified().unwrap_or(SystemTime::UNIX_EPOCH)))
+            })
+            .collect();
+        let mut total: u64 = files.iter().map(|f| f.1).sum::<u64>() + incoming;
+        let mut freed = 0u64;
+        let short = |total: u64, freed: u64| {
+            self.max_bytes.is_some_and(|m| total > m)
+                || free.is_some_and(|f| (f + freed).saturating_sub(incoming) < self.min_free)
+        };
+        if !short(total, freed) {
+            return 0;
+        }
+        files.sort_by_key(|f| f.2);
+        let mut removed = 0;
+        for (p, len, _) in files {
+            if !short(total, freed) {
+                break;
+            }
+            if std::fs::remove_file(&p).is_ok() {
+                if let Some(name) = p.file_name() {
+                    let _ = std::fs::remove_file(self.dir.join(format!(".k.{}", name.to_string_lossy())));
+                }
+                total = total.saturating_sub(len);
+                freed += len;
+                removed += 1;
+            }
+        }
+        removed
+    }
+
+    /// Every file of the delivery cache — only when asked ("Clear the
+    /// server"). A stop, a restart or an update no longer does it (owner,
+    /// 20.11: photos must not go "unavailable" after a restart).
     pub fn clear_cache(&self) -> usize {
         let mut removed = 0;
         if let Ok(rd) = std::fs::read_dir(&self.dir) {
@@ -233,6 +312,27 @@ fn touch(p: &Path) {
     let _ = std::fs::File::options().write(true).open(p).and_then(|f| f.set_modified(SystemTime::now()));
 }
 
+const GB: u64 = 1024 * 1024 * 1024;
+
+/// Partial uploads left by a broken connection (a day old).
+fn sweep_parts(dir: &Path) -> usize {
+    let now = SystemTime::now();
+    let mut removed = 0;
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if !(name.starts_with('.') && name.ends_with(".part")) {
+                continue;
+            }
+            let old = e.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| now.duration_since(t).ok()).is_some_and(|a| a > Duration::from_secs(86_400));
+            if old && std::fs::remove_file(e.path()).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
+
 fn sweep_dir(dir: &Path, ttl: Duration) -> usize {
     let now = SystemTime::now();
     let mut removed = 0;
@@ -267,6 +367,36 @@ mod tests {
         assert!(s.has(&"c".repeat(64)) && !s.has(&"a".repeat(64)));
         assert_eq!(s.clear_all(), 2);
     }
+    #[test]
+    fn files_stay_until_room_runs_short() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = BlobStore::new_unlimited(dir.path().to_path_buf());
+        let (a, b, c) = ("a".repeat(64), "b".repeat(64), "c".repeat(64));
+        for (cid, age) in [(&a, 300), (&b, 200), (&c, 100)] {
+            s.put_in(&s.dir.clone(), cid, &[0u8; 100]).unwrap();
+            let f = std::fs::File::options().write(true).open(dir.path().join(cid)).unwrap();
+            f.set_modified(SystemTime::now() - Duration::from_secs(age * 3600)).unwrap();
+        }
+        // No age limit: a year-old file isn't swept.
+        assert_eq!(s.sweep(), 0);
+        // Plenty of room: nothing goes.
+        assert_eq!(s.fit_with(0, Some(10 * GB)), 0);
+        // A cap of 250 bytes: the oldest (a) goes, then the next — and only as many as needed.
+        s.max_bytes = Some(250);
+        assert_eq!(s.fit_with(0, None), 1);
+        assert!(!s.has(&a) && s.has(&b) && s.has(&c));
+        // A fetch makes a file "used": the other one goes first next time.
+        s.get(&b).unwrap();
+        s.max_bytes = Some(150);
+        assert_eq!(s.fit_with(0, None), 1);
+        assert!(s.has(&b) && !s.has(&c));
+        // Disk short: below the free-space floor, files go until it's back.
+        s.max_bytes = None;
+        s.min_free = 1000;
+        assert_eq!(s.fit_with(0, Some(950)), 1);
+        assert!(!s.has(&b));
+    }
+
     #[test]
     fn put_get_sweep() {
         let dir = tempfile::tempdir().unwrap();

@@ -2465,7 +2465,17 @@ pub async fn download_file(
     // Save to Downloads/Aquamarine.
     // View once: inside the app's own data, never in Downloads (and wiped
     // once looked at, `once_burn`).
-    let base = if envelope.category.as_deref() == Some("once") { data_dir.join("once") } else { downloads_dir(&data_dir) };
+    // Everything else: a folder per chat (Downloads/Aquamarine/<chat name>/),
+    // like Telegram — files of a chat stay together and easy to find.
+    let base = if envelope.category.as_deref() == Some("once") {
+        data_dir.join("once")
+    } else {
+        let name = {
+            let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            s.chats.get(&peer_id).map(|b| b.summary.name.clone()).unwrap_or_default()
+        };
+        downloads_dir(&data_dir).join(chat_folder(&name, &peer_id))
+    };
     std::fs::create_dir_all(&base).map_err(|e| format!("mkdir: {e}"))?;
     // A file of that name with exactly these bytes is already there: reuse it.
     let same = base.join(sanitize_name(&envelope.filename));
@@ -2485,6 +2495,15 @@ pub async fn download_file(
     if let Ok(mut s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { crate::storage::trim(&mut s); }
     let _ = app.emit("aqua://chats_updated", ());
     Ok(DownloadResult { saved_path: saved_str })
+}
+
+/// A chat's folder name: its name as shown, safe for every file system
+/// (no separators, no dots at the ends — Windows), else its id.
+fn chat_folder(name: &str, id: &str) -> String {
+    let n = name.trim();
+    let n = if n.is_empty() { id } else { n };
+    let clean: String = sanitize_name(&n.replace(['/', '\\'], "_")).chars().take(64).collect();
+    clean.trim().trim_end_matches('.').to_string()
 }
 
 fn set_saved_at(state: &State<'_, StdMutex<AppState>>, peer_id: &str, message_id: &str, path: &str) -> Result<(), String> {

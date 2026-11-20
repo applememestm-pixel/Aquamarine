@@ -59,6 +59,18 @@ fn disk(dir: &Path) -> Option<(u64, u64, u64)> {
     (f.len() == 3).then(|| (f[0] * 1024, f[1] * 1024, f[2] * 1024))
 }
 
+/// Free bytes on the disk holding `dir` (blobstore.rs: room for files).
+pub fn disk_free(dir: &Path) -> Option<u64> {
+    #[cfg(target_os = "windows")]
+    {
+        windows_extra(dir).and_then(|w| w["dfree"].as_u64())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        disk(dir).map(|d| d.2)
+    }
+}
+
 /// Bytes received / sent by all network cards but the loopback.
 fn net() -> Option<(u64, u64)> {
     let dev = read("/proc/net/dev")?;

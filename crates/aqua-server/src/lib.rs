@@ -2861,8 +2861,8 @@ async fn admin_power(State(state): State<AppState>, headers: axum::http::HeaderM
         return Err((StatusCode::CONFLICT, "this server runs inside Aquamarine Server — use its Start / Stop".into()));
     }
     let restart = match b.action.as_str() { "restart" => true, "stop" => false, _ => return Err((StatusCode::BAD_REQUEST, "action: stop | restart".into())) };
-    let blobs = state.blobs.clone();
-    host::power(restart, move || { let n = blobs.clear_cache(); tracing::info!(removed = n, "file cache cleared"); });
+    // Files stay across a restart (blobstore.rs: they go only when room runs short).
+    host::power(restart, || {});
     Ok(Json(serde_json::json!({ "ok": true, "systemd": host::systemd_unit() })))
 }
 
@@ -2890,8 +2890,7 @@ async fn admin_set_updates(State(state): State<AppState>, headers: axum::http::H
         selfupdate::set_tester(on).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
     if (b.check || b.tester == Some(true)) && selfupdate::snapshot().managed {
-        let blobs = state.blobs.clone();
-        tokio::spawn(selfupdate::run_once(move || { let n = blobs.clear_cache(); tracing::info!(removed = n, "file cache cleared"); }));
+        tokio::spawn(selfupdate::run_once(|| {}));
     }
     Ok(Json(selfupdate::snapshot()))
 }
@@ -3501,12 +3500,8 @@ pub async fn serve_embedded(
     verify::spawn_bot(state.clone());
     stars::spawn(state.clone());
     botmaker::spawn(state.clone());
-    let blobs = state.blobs.clone();
-    let r = axum::serve(listener, app(state).into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(shutdown).await;
-    // Stopped: the file cache goes, people's data stays (blobstore::clear_cache).
-    let n = blobs.clear_cache();
-    tracing::info!(removed = n, "server stopped: file cache cleared");
-    r
+    // Stopped: the files stay (blobstore.rs).
+    axum::serve(listener, app(state).into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(shutdown).await
 }
 
 #[cfg(test)]

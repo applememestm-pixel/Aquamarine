@@ -207,6 +207,8 @@ export async function bootstrap() {
     refreshChatsSoon();
     const isActive = get(activeId) === p.peer_id;
     if (isActive) refreshActiveSoon();
+    // Its photos, voice and videos come down now, open or not (autoFetch.ts).
+    void import("./autoFetch").then((m) => m.autoFetchSoon(p.peer_id));
     // Notify (sound + desktop) for messages that aren't in the chat
     // you're actively looking at.
     // Archived + unmuted chats pop back out; muted chats stay silent.
