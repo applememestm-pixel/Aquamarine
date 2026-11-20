@@ -163,9 +163,10 @@
   function onPlay() { playing = true; started = true; failed = ""; poke(); }
 
   // A stream from the relay (loopback /r/) that never answers: no error event
-  // comes, the player sat at 0:00 with a spinner forever. 25 s without metadata,
-  // or waiting while playing without a frame — it's a failure, with "Retry".
-  const STALL_MS = 25_000;
+  // comes, the player sat at 0:00 with a spinner forever. A full minute with
+  // not a single byte (every piece that arrives — `progress` — restarts the
+  // count, so a slow but live connection isn't cut off) — it's a failure, with "Retry".
+  const STALL_MS = 60_000;
   let lastProgress = 0;
   let metaSeen = false;
   const stamp = () => { lastProgress = Date.now(); };
