@@ -166,51 +166,52 @@ pub fn quotas(state: &AppState) -> Quotas {
     state.admin.read().ok().and_then(|c| c.quotas.clone()).unwrap_or_default()
 }
 
-/// Levels known lately: username → (when, level).
-static TIERS: Mutex<Option<HashMap<String, (Instant, Tier)>>> = Mutex::new(None);
-const TIER_TTL: Duration = Duration::from_secs(600);
+/// Stars known lately: username → (when, CeZeOs level). Only the star is
+/// remembered — two-step verification is looked up each time (cheap), so
+/// turning it on counts at once.
+static STARS_SEEN: Mutex<Option<HashMap<String, (Instant, Option<u8>)>>> = Mutex::new(None);
+const STAR_TTL: Duration = Duration::from_secs(600);
 
-/// The account's level (cached 10 minutes; a star relay that can't be
-/// asked leaves the last known level).
+/// The account's level. The star comes from the star relay (remembered 10
+/// minutes); while it can't be asked, the last known star stands.
 pub async fn tier_of_user(state: &AppState, username: &str) -> Tier {
-    let cached = TIERS.lock().ok().and_then(|g| g.as_ref().and_then(|m| m.get(username).copied()));
-    if let Some((at, t)) = cached {
-        if at.elapsed() < TIER_TTL {
-            return t;
-        }
-    }
     let two_step = state.directory.has_2fa(username);
-    let star = match state.directory.uid_of(username) {
-        Some(uid) => match crate::stars::star_of(&uid).await {
-            Ok(st) => st.filter(|s| s.exp > (crate::now_ms() / 1000) as u64).map(|s| s.kind),
-            // Couldn't ask: keep what was known (for another round, so every
-            // upload doesn't wait for the star relay again), else no star for a minute.
-            Err(()) => match cached {
-                Some((_, t)) => {
-                    remember(username, t, Instant::now());
-                    return t;
-                }
-                None => {
-                    let t = tier_from(true, two_step, None);
-                    remember(username, t, Instant::now().checked_sub(TIER_TTL - Duration::from_secs(60)).unwrap_or_else(Instant::now));
-                    return t;
-                }
-            },
-        },
-        None => None,
-    };
-    let t = tier_from(true, two_step, star);
-    remember(username, t, Instant::now());
-    t
+    let star = star_level(state, username).await;
+    tier_from(true, two_step, star)
 }
 
-fn remember(username: &str, t: Tier, at: Instant) {
-    if let Ok(mut g) = TIERS.lock() {
+async fn star_level(state: &AppState, username: &str) -> Option<u8> {
+    let cached = STARS_SEEN.lock().ok().and_then(|g| g.as_ref().and_then(|m| m.get(username).copied()));
+    if let Some((at, s)) = cached {
+        if at.elapsed() < STAR_TTL {
+            return s;
+        }
+    }
+    let uid = state.directory.uid_of(username)?;
+    match crate::stars::star_of(&uid).await {
+        Ok(st) => {
+            let s = st.filter(|s| s.exp > (crate::now_ms() / 1000) as u64).map(|s| s.kind);
+            remember(username, s, Instant::now());
+            s
+        }
+        // Couldn't ask: keep what was known (for another round, so every
+        // upload doesn't wait for the star relay again), else none for a minute.
+        Err(()) => {
+            let s = cached.and_then(|c| c.1);
+            let at = if cached.is_some() { Instant::now() } else { Instant::now().checked_sub(STAR_TTL - Duration::from_secs(60)).unwrap_or_else(Instant::now) };
+            remember(username, s, at);
+            s
+        }
+    }
+}
+
+fn remember(username: &str, s: Option<u8>, at: Instant) {
+    if let Ok(mut g) = STARS_SEEN.lock() {
         let m = g.get_or_insert_with(HashMap::new);
         if m.len() > 20_000 {
             m.clear();
         }
-        m.insert(username.to_string(), (at, t));
+        m.insert(username.to_string(), (at, s));
     }
 }
 
@@ -321,7 +322,7 @@ pub fn spawn(state: AppState) {
 
 /// A level changed for someone right now (a star given or taken): look again.
 pub fn forget_tier(username: &str) {
-    if let Ok(mut g) = TIERS.lock() {
+    if let Ok(mut g) = STARS_SEEN.lock() {
         if let Some(m) = g.as_mut() {
             m.remove(username);
         }
