@@ -21,7 +21,7 @@
   }
   import { chatStatus, presenceNow } from "../presence";
   import { unsupportedKind } from "../compat";
-  import { t, tr } from "../i18n";
+  import { t, tr, lang } from "../i18n";
   import { scale as scaleIn } from "svelte/transition";
   import { flip } from "svelte/animate";
   import { calm, motionMs } from "../motion";
@@ -1014,6 +1014,19 @@
     openNewChat(p);
     search.set("");
   }
+  /** Telegram: today — the time; this week — the weekday; older — the date
+   *  (the year too if it isn't this one). */
+  function listTime(c: { time: string; last_at?: number | null }): string {
+    if (!c.last_at) return c.time;
+    const d = new Date(c.last_at * 1000), now = new Date();
+    const loc = $lang === "ru" ? "ru-RU" : "en-GB";
+    const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const days = Math.round((day(now) - day(d)) / 86_400_000);
+    if (days <= 0) return c.time || d.toLocaleTimeString(loc, { hour: "2-digit", minute: "2-digit" });
+    if (days < 7) return d.toLocaleDateString(loc, { weekday: "short" });
+    if (d.getFullYear() === now.getFullYear()) return d.toLocaleDateString(loc, { day: "numeric", month: "short" });
+    return d.toLocaleDateString(loc, { day: "2-digit", month: "2-digit", year: "numeric" });
+  }
 </script>
 
 {#snippet stack()}
@@ -1429,7 +1442,7 @@
           <div class="chat-body">
             <div class="chat-row-1">
               <span class="chat-name"><span class="cn-text">{g.name}</span><span class="g-count">{(en.members ?? []).length}</span></span>
-              <span class="chat-time">{c.time}</span>
+              <span class="chat-time">{listTime(c)}</span>
             </div>
             <div class="chat-row-2">
               <span class="chat-preview"><span class="me-prefix">{memberLabel(g.name, c.name)}:</span> {previewText(c.preview)}</span>
@@ -1470,7 +1483,7 @@
               {/if}
               {#if $mutedChats.has(c.id)}<span class="muted-ic" title={$t("Muted")}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg></span>{/if}
             </span>
-            <span class="chat-time">{c.time}</span>
+            <span class="chat-time">{listTime(c)}</span>
           </div>
           <div class="chat-row-2">
             {#if lk}
@@ -1519,9 +1532,12 @@
       {#if !$storiesOff}
         <!-- Telegram: a small camera above the pencil — a new story; with the
              menu open it rides up above it, still its own circle. -->
-        <button class="fab-cam" onclick={() => void addStory("camera")} aria-label={$t("Add a story")} title={$t("Add a story")}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-2.5h6L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.6"/></svg>
-        </button>
+        <div class="fab-cam-wrap">
+          {#if fabOpen}<button class="fab-label cam-label" onclick={() => { fabOpen = false; void addStory("camera"); }}>{$t("New story")}</button>{/if}
+          <button class="fab-cam" onclick={() => { fabOpen = false; void addStory("camera"); }} aria-label={$t("Add a story")} title={$t("Add a story")}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-2.5h6L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.6"/></svg>
+          </button>
+        </div>
       {/if}
       <div class="fab-slot" class:open={fabOpen}><div class="fab-slot-in">
       {#if fabOpen}
@@ -1529,7 +1545,8 @@
           <!-- Every item says what it is (icons alone were guesswork); the one
                under the finger is lit. -->
           {#each FAB_ITEMS as [k, label], i (k)}
-            <span class="fab-label" class:sel={fabSel === i} style:top="{5 + i * FAB_CELL + FAB_CELL / 2}px" style:--i={FAB_ITEMS.length - 1 - i}>{$t(label)}</span>
+            <!-- The name is a button too (a thumb lands on the words as often as on the icon). -->
+            <button class="fab-label" class:sel={fabSel === i} style:top="{5 + i * FAB_CELL + FAB_CELL / 2}px" style:--i={FAB_ITEMS.length - 1 - i} onclick={() => fabPick(k)}>{$t(label)}</button>
           {/each}
           <div class="fab-items" role="menu" tabindex="-1" onpointerdown={fabDown} onpointermove={fabMove} onpointerup={fabUp} onpointercancel={() => (fabDrag = null)}>
             <span class="fab-thumb" class:on={fabSel != null} style:transform="translateY({(fabSel ?? 0) * FAB_CELL}px)"></span>
@@ -2278,8 +2295,11 @@
   .fab-item.sel { color: var(--accent); transform: scale(1.08); }
   .fab-label { position: absolute; right: calc(100% + 10px); transform: translateY(-50%); white-space: nowrap; padding: 7px 12px;
     border-radius: calc(12px * var(--rk, 1)); background: var(--bg-surface); border: 1px solid var(--border-strong); box-shadow: 0 8px 20px -10px rgba(0,0,0,.7);
-    color: var(--fg-muted); font: 600 14.5px var(--font-ui, inherit); pointer-events: none; animation: fab-label .22s ease both; animation-delay: calc(var(--i, 0) * 30ms);
+    color: var(--fg-muted); font: 600 14.5px var(--font-ui, inherit); cursor: pointer; animation: fab-label .22s ease both; animation-delay: calc(var(--i, 0) * 30ms);
     transition: color .15s ease, border-color .15s ease; }
+  .fab-label:active { color: var(--fg); border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong)); }
+  .fab-cam-wrap { position: relative; }
+  .fab-label.cam-label { top: 50%; }
   .fab-label.sel { color: var(--fg); border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong)); }
   @keyframes fab-label { from { opacity: 0; transform: translate(8px, -50%); } }
   @keyframes fab-in { from { opacity: 0; transform: translateY(14px) scale(.85); } }

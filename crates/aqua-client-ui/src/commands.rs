@@ -58,10 +58,13 @@ pub fn log_out(state: State<'_, StdMutex<AppState>>) -> Result<InitInfo, String>
 // ---------- Chats & messages ----------------------------------------------
 
 #[tauri::command]
-pub fn list_chats(state: State<'_, StdMutex<AppState>>) -> Result<Vec<ChatSummary>, String> {
+pub fn list_chats(state: State<'_, StdMutex<AppState>>) -> Result<Vec<serde_json::Value>, String> {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let me = s.username.clone().unwrap_or_default();
-    Ok(s.chat_order
+    // Each chat with `last_at` (unix seconds of its last message): the list
+    // shows a weekday / date for older chats and goes newest first by it —
+    // the order kept by hand (`chat_order`) slipped, and only a time was shown.
+    let mut out: Vec<(Option<i64>, serde_json::Value)> = s.chat_order
         .iter()
         // "user~device" rows came from an older build: a device isn't a chat.
         // (A channel's direct messages, "dm~…", are.)
@@ -76,9 +79,15 @@ pub fn list_chats(state: State<'_, StdMutex<AppState>>) -> Result<Vec<ChatSummar
             if id.starts_with("grp_") && !sum.preview_by_me && !sum.preview_is_typing {
                 sum.preview_from = c.messages.last().map(|m| m.from.clone()).filter(|f| !f.is_empty() && f != "system" && *f != me);
             }
-            sum
+            let last_at = c.messages.iter().rev().find_map(|m| m.at);
+            let mut v = serde_json::to_value(&sum).unwrap_or_default();
+            if let Some(o) = v.as_object_mut() { o.insert("last_at".into(), serde_json::json!(last_at)); }
+            (last_at, v)
         }))
-        .collect())
+        .collect();
+    // Stable: equal times keep their old order; a chat with no message yet (just made) goes on top.
+    out.sort_by_key(|(at, _)| std::cmp::Reverse(at.unwrap_or(i64::MAX)));
+    Ok(out.into_iter().map(|(_, v)| v).collect())
 }
 
 #[tauri::command]

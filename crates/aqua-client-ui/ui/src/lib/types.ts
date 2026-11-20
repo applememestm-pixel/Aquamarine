@@ -1,6 +1,8 @@
 /** Mirrors `ChatSummary` in the Rust backend. */
 export interface ChatSummary {
   id: string;
+  /** Unix seconds of the last message (list_chats); null — none yet. */
+  last_at?: number | null;
   name: string;
   letter: string;
   gradient: string;

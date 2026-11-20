@@ -748,6 +748,9 @@
   // ---- The sheet follows the finger: pull up to fill the screen, down to
   // close. Only transforms move (no relayout), so it stays smooth. ----
   let sheetFull = $state(false);
+  /** Opened with text typed: low, above the message field (its height: `cmpH`). */
+  let sheetAbove = $state(false);
+  let cmpH = $state(0);
   let sheetDy = $state(0);
   let sheetClosing = $state(false);
   let sheetDrag: { y0: number; t0: number } | null = $state(null);
@@ -866,9 +869,14 @@
   function fmtDur(ms: number) { const s = Math.round(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
   $effect(() => {
     if (attachMenuOpen && phoneUI) {
-      // Opens low — 2–3 rows of photos over the chat, the actions floating on
-      // top (Telegram); pulled up or scrolled, it fills the screen.
-      gallerySel = []; galCap = ""; sheetFull = false; sheetDy = 0; albumMenu = false; album = "";
+      // Owner (20.11): as it was — the whole screen, the actions at the
+      // bottom. Only with text typed it opens low, above the field (which
+      // stays in view, like the comments panel), the actions floating on
+      // top; pulled up or scrolled it fills the screen.
+      const typed = untrack(() => text.trim().length > 0);
+      sheetAbove = typed;
+      cmpH = typed ? Math.round(document.querySelector(".main-pane .composer")?.getBoundingClientRect().height ?? 0) : 0;
+      gallerySel = []; galCap = ""; sheetFull = !typed; sheetDy = 0; albumMenu = false; album = "";
       void galleryLoad(); void albumsLoad();
     }
   });
@@ -2641,6 +2649,8 @@
   $effect(() => { if (toolsMenu || callMenu || ttlMenu) return onBack(() => { toolsMenu = false; callMenu = false; ttlMenu = false; }); });
 
   function selectedCount() { return selected.size; }
+  /** The one selected message, when it's exactly one. */
+  let selOne = $derived(selected.size === 1 ? rows.find((x) => selected.has(x.id)) ?? null : null);
   let selMore = $state(false);
   $effect(() => { if (!selecting) selMore = false; });
 
@@ -2999,8 +3009,11 @@
 
   function replyRow(row: Row) {
     replyTarget = { author: authorOf(row), text: snippetOf(row).slice(0, 180), who: whoOf(row) };
+    // Right in the tap (a phone shows the keyboard only for a focus made
+    // inside the user's gesture), and again once the menu is gone.
+    composerEl?.focus(true);
     closeMenu();
-    queueMicrotask(() => composerEl?.focus());
+    setTimeout(() => composerEl?.focus(), 60);
   }
   function cancelReply() { replyTarget = null; }
 
@@ -3067,7 +3080,11 @@
   /** Rows on their way out (deleteRows). */
   let vanishing = $state<Set<string>>(new Set());
   async function deleteSelection() {
-    const list = rows.filter((r) => selected.has(r.id));
+    // An album is all its photos (it went one photo at a time).
+    const albums = new Map(photoAlbums(rows).filter((r) => (r as Row & { album?: Row[] }).album).map((r) => [r.id, (r as Row & { album?: Row[] }).album!]));
+    const list = rows.filter((r) => selected.has(r.id)).flatMap((r) => albums.get(r.id) ?? membersOf(r));
+    const seen = new Set<string>();
+    for (let i = list.length - 1; i >= 0; i--) { if (seen.has(list[i].id)) list.splice(i, 1); else seen.add(list[i].id); }
     clearSelection();
     await deleteRows(list);
   }
@@ -3075,7 +3092,7 @@
   /** One message: asks first, with "also delete for …" ticked (Telegram). */
   async function deleteRow(row: Row) {
     closeMenu();
-    await deleteRows([row]);
+    await deleteRows(membersOf(row));
   }
 
   // ---- Typing indicator ----
@@ -4242,10 +4259,16 @@
         <button class="sel-x" onclick={clearSelection} title={$t("Cancel (Esc)")} aria-label={$t("Cancel")}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
         </button>
-        <span class="sel-count">{selectedCount()}</span>
+        <span class="sel-count"><b>{selectedCount()}</b><span class="sel-word">{$t("Selected")}</span></span>
         <div class="sel-actions">
+          {#if selOne && selOne.outgoing && textOf(selOne) != null && $activeChat?.live}
+            <!-- One message of mine: edit (Telegram's pencil). -->
+            <button class="sel-act" onclick={() => { const r = selOne; clearSelection(); if (r) startEdit(r); }} title={$t("Edit")} aria-label={$t("Edit")}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z"/></svg><span>{$t("Edit")}</span>
+            </button>
+          {/if}
           {#if selectedCount() === 1 && $activeChat?.live}
-            <button class="sel-act" onclick={() => { const r = rows.find((x) => selected.has(x.id)); clearSelection(); if (r) replyRow(r); }} title={$t("Reply")} aria-label={$t("Reply")}>
+            <button class="sel-act sel-top-reply" onclick={() => { const r = rows.find((x) => selected.has(x.id)); clearSelection(); if (r) replyRow(r); }} title={$t("Reply")} aria-label={$t("Reply")}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 6 6v5"/></svg><span>{$t("Reply")}</span>
             </button>
           {/if}
@@ -4253,7 +4276,7 @@
             <button class="sel-act" onclick={copySelection} title={$t("Copy")} aria-label={$t("Copy")}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg><span>{$t("Copy")}</span>
             </button>
-            <button class="sel-act" onclick={forwardSelection} title={$t("Forward")} aria-label={$t("Forward")}>
+            <button class="sel-act sel-top-fwd" onclick={forwardSelection} title={$t("Forward")} aria-label={$t("Forward")}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0-6 6v5"/></svg><span>{$t("Forward")}</span>
             </button>
           {/if}
@@ -4277,6 +4300,18 @@
             </div>
           {/if}
         </div>
+      </div>
+      <!-- Phones: Reply and Forward as two big buttons at the bottom, over
+           the message field (Telegram); the top keeps edit / copy / delete. -->
+      <div class="sel-bottom">
+        {#if selectedCount() === 1 && $activeChat?.live}
+          <button class="sel-big" onclick={() => { const r = rows.find((x) => selected.has(x.id)); clearSelection(); if (r) replyRow(r); }}>{$t("Reply")}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 6 6v5"/></svg></button>
+        {/if}
+        {#if !protectedChat}
+          <button class="sel-big" onclick={forwardSelection}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0-6 6v5"/></svg>{$t("Forward")}</button>
+        {/if}
       </div>
     {/if}
 
@@ -5155,11 +5190,11 @@
         {#if attachMenuOpen}
           {#if phoneUI}
             <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
-            <div class="ap-scrim" class:closing={sheetClosing} onclick={closeSheet}></div>
+            <div class="ap-scrim" class:closing={sheetClosing} class:above={sheetAbove && !sheetFull} style:--cmp-h="{cmpH}px" onclick={closeSheet}></div>
           {/if}
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-          <div class="attach-pop" class:sheet={phoneUI} class:full={sheetFull} class:dragging={!!sheetDrag} class:closing={sheetClosing}
-            style:--dy={phoneUI ? `${sheetDy}px` : undefined}
+          <div class="attach-pop" class:sheet={phoneUI} class:full={sheetFull} class:above={sheetAbove && !sheetFull} class:dragging={!!sheetDrag} class:closing={sheetClosing}
+            style:--dy={phoneUI ? `${sheetDy}px` : undefined} style:--cmp-h="{cmpH}px"
             role="menu" tabindex="-1" onmousedown={(e) => e.stopPropagation()}>
             {#if phoneUI}
               <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -5227,7 +5262,7 @@
           </div>
           {#if phoneUI && IS_MOBILE && $attachDock}
             <!-- Phones: the actions as a floating tab bar, the send button above it. -->
-            <div class="ap-dock" class:closing={sheetClosing} class:low={!sheetFull} class:dragging={!!sheetDrag} style:--dy={`${sheetDy}px`}>{@render attachActions()}</div>
+            <div class="ap-dock" class:closing={sheetClosing} class:low={sheetAbove && !sheetFull} class:dragging={!!sheetDrag} style:--dy={`${sheetDy}px`} style:--cmp-h="{cmpH}px">{@render attachActions()}</div>
           {/if}
           {#if phoneUI && gallerySel.length}{@render galBar()}{/if}
         {/if}
@@ -6462,6 +6497,12 @@
   /* ---- Phones: a bottom sheet — gallery on top, the actions as a tab bar ---- */
   .ap-scrim { position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,.3); animation: ap-fade .25s ease; transition: opacity .26s ease; }
   .ap-scrim.closing { opacity: 0; }
+  /* Text typed: the field under the sheet stays usable. */
+  .ap-scrim.above { bottom: var(--cmp-h, 0px); }
+  /* Low above the field: its own height (not the full sheet pushed down —
+     that would lie behind the field). */
+  .attach-pop.sheet.above { bottom: var(--cmp-h, 0px); height: var(--h-half); transform: translateY(var(--dy, 0px)); }
+  .attach-pop.sheet.above .ap-gallery { padding-bottom: 8px; }
   @keyframes ap-fade { from { opacity: 0; } }
   /* The sheet is always full height; the half-open state is a transform, so
      opening, dragging and closing never re-lay out the grid. */
@@ -6517,7 +6558,7 @@
      rows a too-short container squeezed them into overlapping strips. */
   .ap-gallery { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); justify-items: stretch;
     grid-auto-rows: max-content; gap: 3px; padding: 0 3px calc(92px + var(--sab, env(safe-area-inset-bottom, 0px)) + var(--rest)); align-content: start; }
-  .ap-dock.low ~ .ap-capbar, .attach-pop.sheet:not(.full) ~ .ap-capbar.docked { bottom: calc(10px + var(--sab, env(safe-area-inset-bottom, 0px))); }
+  .ap-dock.low ~ .ap-capbar { bottom: calc(10px + var(--sab, env(safe-area-inset-bottom, 0px))); }
   .attach-pop.sheet.full .ap-gallery { padding-bottom: calc(92px + var(--sab, env(safe-area-inset-bottom, 0px))); }
   .ap-tile { position: relative; aspect-ratio: 1 / 1; width: 100%; height: auto; min-height: 0; min-width: 0; box-sizing: border-box; display: block; border: none; padding: 0; overflow: hidden; background: var(--bg-surface-2); color: var(--fg-muted); border-radius: calc(4px * var(--rk, 1)); }
   .ap-tile img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .22s cubic-bezier(.22,1,.36,1), border-radius .22s ease; }
@@ -6562,7 +6603,7 @@
     animation: ap-dock-in .42s cubic-bezier(.22,1,.36,1); transition: transform .26s cubic-bezier(.4,0,1,1), opacity .26s ease; }
   /* Sheet low: the actions float right on top of it (Telegram); full: at the bottom. */
   .ap-dock { --h-half: min(calc(64px + (100vw - 12px) / 3 * 2.5), 60dvh); transition: bottom .42s cubic-bezier(.22,1,.36,1), transform .26s cubic-bezier(.4,0,1,1), opacity .26s ease; }
-  .ap-dock.low { bottom: calc(var(--h-half) + 8px); transform: translateY(max(0px, var(--dy, 0px))); }
+  .ap-dock.low { bottom: calc(var(--cmp-h, 0px) + var(--h-half) + 8px); transform: translateY(max(0px, var(--dy, 0px))); }
   .ap-dock.low.dragging { transition: none; }
   .ap-dock.closing { transform: translateY(140%); opacity: 0; }
   .ap-dock.low.closing { transform: translateY(calc(var(--h-half) + 140%)); }
@@ -6719,7 +6760,28 @@
     .sel-act { width: 44px; height: 44px; padding: 0; justify-content: center; border-radius: 50%; color: var(--fg); }
     .sel-act svg { width: 22px; height: 22px; }
     .sel-act.danger { color: var(--danger); }
+    /* Telegram: floating pills — ×, "N Selected", the actions — over the chat. */
+    .sel-bar { background: transparent; border-bottom: none; padding: 6px 8px; }
+    .sel-x, .sel-count, .sel-actions {
+      background: color-mix(in srgb, var(--bg-surface-2) 82%, transparent); backdrop-filter: blur(18px) saturate(1.4); -webkit-backdrop-filter: blur(18px) saturate(1.4);
+      border: 1px solid var(--border); box-shadow: 0 10px 26px -14px rgba(0,0,0,.7);
+    }
+    .sel-x { width: 48px; height: 48px; color: var(--fg); }
+    .sel-x svg { width: 22px; height: 22px; }
+    .sel-count { display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 18px; border-radius: calc(24px * var(--rk, 1)); font-size: 18px; min-width: 0; }
+    .sel-word { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sel-actions { height: 48px; padding: 0 4px; border-radius: calc(24px * var(--rk, 1)); gap: 0; }
+    .sel-top-reply, .sel-top-fwd { display: none; }
+    .sel-bottom { position: fixed; left: 10px; right: 10px; bottom: calc(10px + var(--sab, env(safe-area-inset-bottom, 0px))); z-index: 40; display: flex; gap: 10px; animation: sel-up .2s ease-out; }
+    .sel-big { flex: 1; height: 54px; display: flex; align-items: center; justify-content: center; gap: 10px; border-radius: calc(27px * var(--rk, 1)); border: 1px solid var(--border);
+      background: color-mix(in srgb, var(--bg-surface-2) 82%, transparent); backdrop-filter: blur(18px) saturate(1.4); -webkit-backdrop-filter: blur(18px) saturate(1.4);
+      color: var(--fg); font: 600 17px var(--font-ui, inherit); cursor: pointer; box-shadow: 0 10px 26px -14px rgba(0,0,0,.7); }
+    .sel-big svg { width: 22px; height: 22px; }
+    .sel-big:active { background: var(--accent-soft); color: var(--accent); }
   }
+  /* Desktop: no bottom buttons (the bar has them). */
+  @media (min-width: 721px) { .sel-bottom { display: none; } .sel-word { display: none; } }
+  @keyframes sel-up { from { opacity: 0; transform: translateY(14px); } }
 
   /* Swipe to reply: an arrow fades in at the right edge as the message slides. */
   .msg:global(.swiping) { position: relative; }
