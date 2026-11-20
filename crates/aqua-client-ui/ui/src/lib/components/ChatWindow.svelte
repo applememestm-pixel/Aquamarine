@@ -440,17 +440,19 @@
     } catch (e) {
       console.warn("stream failed", e);
       // No stream (no relay right now…): the whole file, and say it if that fails too.
-      await streamFallback(peerId, messageId);
+      await streamFallback(peerId, messageId, !streamTapped.includes(messageId));
     }
   }
   /** The stream didn't work (failed, or stalled): drop it and fetch the file
    *  whole — what's saved then plays as a normal file. An error is said. */
-  async function streamFallback(peerId: string, messageId: string) {
+  async function streamFallback(peerId: string, messageId: string, quiet = false) {
     if (streamUrls[messageId]) { const n = { ...streamUrls }; delete n[messageId]; streamUrls = n; }
     try {
       await loadInlineMedia(peerId, messageId);
     } catch (e) {
-      showToast(tr("Couldn't load the video: {e}", { e: String(e) }), 6000);
+      // Started by itself (auto-download): no toast; the bubble keeps its play button.
+      if (!quiet) showToast(tr("Couldn't load the video: {e}", { e: String(e) }), 6000);
+      else console.warn("stream fallback", e);
     }
   }
   // The relay side of a stream failed (stream_file's fail()): to the whole file.

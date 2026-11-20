@@ -2742,15 +2742,15 @@ pub async fn stream_file(
         let cid = envelope.cid.clone();
         let part_f = part.clone();
         let fail = |e: String| {
+            // First off the list and off the loopback server (its URL answers
+            // 404 now), then marked failed: a retry that sees the mark starts a
+            // fresh stream that this one can no longer tear down. Its half file goes.
+            if let Ok(mut m) = streams().lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { m.remove(&cid); }
+            crate::media_server::unregister_remote(&format!("stream:{cid}"));
+            let _ = std::fs::remove_file(&part_f);
             if let Ok(mut g) = lock.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { g.err = Some(e.clone()); }
             cv.notify_all();
-            // A broken stream isn't handed out again (a retry used to get
-            // the same dead URL until the app restarted); its half file goes.
-            if let Ok(mut m) = streams().lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { m.remove(&cid); }
-            let _ = std::fs::remove_file(&part_f);
-            // Its URL answers 404 now, and the chat hears it (it then fetches the
-            // file whole, or shows the error with "Retry").
-            crate::media_server::unregister_remote(&format!("stream:{cid}"));
+            // The chat hears it (it then fetches the file whole, or shows the error with "Retry").
             tracing::warn!(%cid, error = %e, "stream failed");
             let _ = app2.emit("aqua://stream_failed", serde_json::json!({ "peer_id": fail_peer, "message_id": fail_msg }));
         };

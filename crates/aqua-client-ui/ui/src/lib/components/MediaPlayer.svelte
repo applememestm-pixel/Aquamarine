@@ -559,7 +559,7 @@
     {#if converting}
       <div class="center err">{$t("Converting to a playable format…")}</div>
     {:else if failed}
-      <div class="center err">{failed}<button class="retry" onclick={(e) => { e.stopPropagation(); retry(); }}>{$t("Retry")}</button></div>
+      <div class="center err">{failed}{#if onRetry || /\/r\//.test(playSrc)}<button class="retry" onclick={(e) => { e.stopPropagation(); retry(); }}>{$t("Retry")}</button>{/if}</div>
     {:else if waiting && playing}
       <div class="center"><span class="spin"></span></div>
     {:else if !playing}

@@ -198,7 +198,17 @@ fn serve(req: tiny_http::Request) {
             // Its own thread: a stream waiting for bytes from the relay held one
             // of the four workers, and with a few videos in a chat every other
             // request queued unanswered (a player stuck at 0:00, no error).
-            let _ = std::thread::Builder::new().name("aqua-media-r".into()).spawn(move || serve_remote(req, &token));
+            // At most 32 at once (seeks while it downloads each wait for their bytes).
+            static OPEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            if OPEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 32 {
+                OPEN.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                return respond_err(req, 503);
+            }
+            let spawned = std::thread::Builder::new().name("aqua-media-r".into()).spawn(move || {
+                serve_remote(req, &token);
+                OPEN.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            });
+            if spawned.is_err() { OPEN.fetch_sub(1, std::sync::atomic::Ordering::SeqCst); }
             return;
         }
         return respond_err(req, 404);
