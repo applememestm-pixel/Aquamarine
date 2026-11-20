@@ -46,6 +46,8 @@
   import { onMount, tick } from "svelte";
   import { save } from "@tauri-apps/plugin-dialog";
   import MediaPlayer from "./MediaPlayer.svelte";
+  import { probeMedia } from "../imageTools";
+  import { streamable } from "../media";
   import { showToast } from "./Toast.svelte";
   import { api } from "../tauri";
   import { t, tr } from "../i18n";
@@ -91,6 +93,16 @@
 
   let stageEl = $state<HTMLDivElement | null>(null);
   let stripEl = $state<HTMLDivElement | null>(null);
+  // Video thumbnails of the strip: a frame of each (was a bare ▶ square).
+  let posters = $state<Record<string, string>>({});
+  const probing = new Set<string>();
+  $effect(() => {
+    for (const it of items) {
+      if (it.kind !== "video" || posters[it.url] || probing.has(it.url)) continue;
+      probing.add(it.url);
+      void streamable(it.url).then((u) => probeMedia(u, "video", 6000)).then((r) => { if (r.poster) posters = { ...posters, [it.url]: r.poster }; }).catch(() => {});
+    }
+  });
   let stageW = $state(0);
   let stageH = $state(0);
 
@@ -602,7 +614,7 @@
             {#if it.kind === "image"}
               <img src={it.url} alt="" loading="lazy" draggable="false" />
             {:else}
-              <span class="vthumb">
+              <span class="vthumb" style:background-image={posters[it.url] ? `url("${posters[it.url]}")` : undefined}>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
               </span>
             {/if}
@@ -853,7 +865,7 @@
   }
   .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .vthumb {
-    width: 100%; height: 100%;
+    width: 100%; height: 100%; background-size: cover; background-position: center;
     display: grid; place-items: center;
     color: rgba(255, 255, 255, 0.8);
     background: linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));

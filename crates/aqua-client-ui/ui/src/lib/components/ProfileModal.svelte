@@ -1225,7 +1225,7 @@
                 <span class="tg-l">{$t(KIND_LABEL[ch.kind])}{#if !member && !isMe} · {$t("tap to ask to join")}{/if}</span></button>
             {/if}
             {#if view.birthday}
-              <div class="tg-row"><span class="tg-v">{view.birthday}{#if ageOf(view.birthday) != null} ({$tn(ageOf(view.birthday) ?? 0, "year old")}){/if}</span><span class="tg-l">{$t("Birthday")}</span></div>
+              <div class="tg-row"><span class="tg-v">{view.birthday}{#if ageOf(view.birthday) != null}{" "}({$tn(ageOf(view.birthday) ?? 0, "year old")}){/if}</span><span class="tg-l">{$t("Birthday")}</span></div>
             {/if}
             {#each conns as c, i (i)}
               <button class="tg-row" onclick={() => api.openExternal(c.url).catch(() => {})} title={c.url}>

@@ -1,10 +1,14 @@
 <script module lang="ts">
   import { writable } from "svelte/store";
+  import { quotaText } from "../quotaText";
   const toastText = writable<string>("");
   const toastVisible = writable<boolean>(false);
   let hideTimer: ReturnType<typeof setTimeout> | null = null;
 
   export function showToast(text: string, ms = 2400) {
+    // "Over your share of the server": in people's words (quotaText.ts).
+    const q = quotaText(text);
+    if (q) { text = q; ms = Math.max(ms, 6000); }
     toastText.set(text);
     toastVisible.set(true);
     if (hideTimer) clearTimeout(hideTimer);

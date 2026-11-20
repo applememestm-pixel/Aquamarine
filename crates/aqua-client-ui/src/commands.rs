@@ -58,10 +58,13 @@ pub fn log_out(state: State<'_, StdMutex<AppState>>) -> Result<InitInfo, String>
 // ---------- Chats & messages ----------------------------------------------
 
 #[tauri::command]
-pub fn list_chats(state: State<'_, StdMutex<AppState>>) -> Result<Vec<ChatSummary>, String> {
+pub fn list_chats(state: State<'_, StdMutex<AppState>>) -> Result<Vec<serde_json::Value>, String> {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let me = s.username.clone().unwrap_or_default();
-    Ok(s.chat_order
+    // Each chat with `last_at` (unix seconds of its last message): the list
+    // shows a weekday / date for older chats and goes newest first by it —
+    // the order kept by hand (`chat_order`) slipped, and only a time was shown.
+    let mut out: Vec<(Option<i64>, serde_json::Value)> = s.chat_order
         .iter()
         // "user~device" rows came from an older build: a device isn't a chat.
         // (A channel's direct messages, "dm~…", are.)
@@ -76,9 +79,15 @@ pub fn list_chats(state: State<'_, StdMutex<AppState>>) -> Result<Vec<ChatSummar
             if id.starts_with("grp_") && !sum.preview_by_me && !sum.preview_is_typing {
                 sum.preview_from = c.messages.last().map(|m| m.from.clone()).filter(|f| !f.is_empty() && f != "system" && *f != me);
             }
-            sum
+            let last_at = c.messages.iter().rev().find_map(|m| m.at);
+            let mut v = serde_json::to_value(&sum).unwrap_or_default();
+            if let Some(o) = v.as_object_mut() { o.insert("last_at".into(), serde_json::json!(last_at)); }
+            (last_at, v)
         }))
-        .collect())
+        .collect();
+    // Stable: equal times keep their old order; a chat with no message yet (just made) goes on top.
+    out.sort_by_key(|(at, _)| std::cmp::Reverse(at.unwrap_or(i64::MAX)));
+    Ok(out.into_iter().map(|(_, v)| v).collect())
 }
 
 #[tauri::command]
@@ -1367,6 +1376,17 @@ pub async fn delete_bot(state: State<'_, StdMutex<AppState>>, username: String) 
     Ok(())
 }
 
+/// My share of the relay (aqua-server quota.rs): level, limits, use.
+/// `null` from a relay without quotas.
+#[tauri::command]
+pub async fn server_quota(state: State<'_, StdMutex<AppState>>) -> Result<serde_json::Value, String> {
+    let transport = {
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        s.transport.clone().ok_or("not connected")?
+    };
+    Ok(transport.me_quota().await.map_err(|e| e.to_string())?.unwrap_or(serde_json::Value::Null))
+}
+
 /// Bot constructor (aqua-server botmaker.rs): read, save or drop the spec
 /// of one of my bots — what the relay answers for it, no code. Signed with
 /// the bot's own token (from the vault). `op`: "get" | "put" | "delete".
@@ -2063,12 +2083,11 @@ async fn attach_file_fwd(
         .to_string();
     let mime = mime_override.or_else(|| mime_from_extension(&path));
 
-    // Saved Messages — local-only. Build a File message DIRECTLY (not
-    // by round-tripping through the file-offer text format, which needs
-    // a real key/nonce and would otherwise fall through to a raw text
-    // bubble). `saved_at` points at the stored copy so the UI renders
-    // the image/audio/video inline immediately. No encryption, no
-    // server round-trip.
+    // Saved Messages: a copy stays on this device (`saved-media/`), and the
+    // file also goes to the relay, encrypted, so my other devices get it —
+    // before, it stayed here only and the phone showed an empty frame
+    // forever. With no relay it stays local-only, as it was.
+    let mut saved_local: Option<(String, String)> = None;
     if peer_id == crate::state::SAVED_MESSAGES_ID {
         let fake_cid = format!("local-{}", crate::state::uuid_like());
         let size = bytes.len() as u64;
@@ -2096,8 +2115,17 @@ async fn attach_file_fwd(
                 dest.display().to_string()
             }
         };
+        saved_local = Some((saved_path, fake_cid));
+    }
+    // Local-only Saved message (no relay to put the file on). Its own copies
+    // of what's moved further down (mime, caption…).
+    let lo = (
+        fwd.clone(), filename.clone(), mime.clone(), category.clone(), caption.clone(),
+        if category.as_deref() == Some("sticker") { sticker_pack_ref(&path) } else { None },
+    );
+    let save_local_only = |saved_path: String, fake_cid: String, size: u64| -> Result<AttachResult, String> {
         let msg = ChatMessage {
-            meta: fwd.as_deref().and_then(|h| crate::state::split_fwd(&format!("{}{h}\nx", crate::state::FWD_PREFIX)).0)
+            meta: lo.0.as_deref().and_then(|h| crate::state::split_fwd(&format!("{}{h}\nx", crate::state::FWD_PREFIX)).0)
                 .map(|f| crate::state::MsgMeta { fwd: Some(f), ..Default::default() }),
             id: format!("m-{}", crate::state::uuid_like()),
             from: "me".into(),
@@ -2107,13 +2135,13 @@ async fn attach_file_fwd(
                 cid: fake_cid.clone(),
                 key_b64: String::new(),
                 nonce_b64: String::new(),
-                name: filename.clone(),
+                name: lo.1.clone(),
                 size,
-                mime: mime.clone(),
-                category: category.clone(),
-                pack: if category.as_deref() == Some("sticker") { sticker_pack_ref(&path) } else { None },
+                mime: lo.2.clone(),
+                category: lo.3.clone(),
+                pack: lo.5.clone(),
                 saved_at: Some(saved_path),
-                caption: caption.clone(),
+                caption: lo.4.clone(),
                 chunk: None,
             },
         };
@@ -2124,7 +2152,12 @@ async fn attach_file_fwd(
             push_own_message(&mut s, &peer_id, msg, &preview);
         }
         let _ = app.emit("aqua://chats_updated", ());
-        return Ok(AttachResult { message_id, cid: fake_cid, size });
+        Ok(AttachResult { message_id, cid: fake_cid, size })
+    };
+    if let Some((p, c)) = &saved_local {
+        if state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.is_none() {
+            return save_local_only(p.clone(), c.clone(), bytes.len() as u64);
+        }
     }
 
     // 2. Encrypt + get CID + envelope. Videos are sealed in pieces so they
@@ -2173,6 +2206,10 @@ async fn attach_file_fwd(
         None => Err("not connected".to_string()),
     };
     if let Err(e) = up {
+        // Saved Messages without the relay: kept here only, as before.
+        if let Some((p, c)) = saved_local.take() {
+            return save_local_only(p, c, size);
+        }
         match spare {
             Some(b) => crate::mesh::keep_blob(&app, &cid, &b)?,
             None => return Err(e),
@@ -2186,6 +2223,26 @@ async fn attach_file_fwd(
         Some(h) => format!("{}{h}\n{offer_text}", crate::state::FWD_PREFIX),
         None => offer_text,
     };
+
+    // Saved Messages: shown here from the local copy; my other devices get
+    // the offer (with the key) and fetch the file from the relay.
+    if let Some((saved_path, _)) = saved_local {
+        let mut msg = text_msg_from_me(&offer_text);
+        if let MessageKind::File { saved_at, .. } = &mut msg.kind {
+            *saved_at = Some(saved_path);
+        }
+        let message_id = msg.id.clone();
+        {
+            let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            push_own_message(&mut s, &peer_id, msg, &offer_text);
+        }
+        let _ = app.emit("aqua://chats_updated", ());
+        let (a, t) = (app.clone(), offer_text.clone());
+        tauri::async_runtime::spawn(async move {
+            crate::multidev::sync_raw(&a, &crate::multidev::wrap_sync(crate::state::SAVED_MESSAGES_ID, &t)).await;
+        });
+        return Ok(AttachResult { message_id, cid, size });
+    }
 
     // Groups / channels: the blob is uploaded once; the offer (with the
     // file key) fans out to every member over their own E2EE sessions.
@@ -2465,7 +2522,17 @@ pub async fn download_file(
     // Save to Downloads/Aquamarine.
     // View once: inside the app's own data, never in Downloads (and wiped
     // once looked at, `once_burn`).
-    let base = if envelope.category.as_deref() == Some("once") { data_dir.join("once") } else { downloads_dir(&data_dir) };
+    // Everything else: a folder per chat (Downloads/Aquamarine/<chat name>/),
+    // like Telegram — files of a chat stay together and easy to find.
+    let base = if envelope.category.as_deref() == Some("once") {
+        data_dir.join("once")
+    } else {
+        let name = {
+            let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            s.chats.get(&peer_id).map(|b| b.summary.name.clone()).unwrap_or_default()
+        };
+        downloads_dir(&data_dir).join(chat_folder(&name, &peer_id))
+    };
     std::fs::create_dir_all(&base).map_err(|e| format!("mkdir: {e}"))?;
     // A file of that name with exactly these bytes is already there: reuse it.
     let same = base.join(sanitize_name(&envelope.filename));
@@ -2485,6 +2552,15 @@ pub async fn download_file(
     if let Ok(mut s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { crate::storage::trim(&mut s); }
     let _ = app.emit("aqua://chats_updated", ());
     Ok(DownloadResult { saved_path: saved_str })
+}
+
+/// A chat's folder name: its name as shown, safe for every file system
+/// (no separators, no dots at the ends — Windows), else its id.
+fn chat_folder(name: &str, id: &str) -> String {
+    let n = name.trim();
+    let n = if n.is_empty() { id } else { n };
+    let clean: String = sanitize_name(&n.replace(['/', '\\'], "_")).chars().take(64).collect();
+    clean.trim().trim_end_matches('.').to_string()
 }
 
 fn set_saved_at(state: &State<'_, StdMutex<AppState>>, peer_id: &str, message_id: &str, path: &str) -> Result<(), String> {
@@ -2600,12 +2676,28 @@ pub async fn stream_file(
     }
     let ext: String = std::path::Path::new(&envelope.filename).extension().and_then(|e| e.to_str()).unwrap_or("mp4").chars().filter(|c| c.is_ascii_alphanumeric()).take(5).collect();
     let mime = envelope.mime.clone().unwrap_or_else(|| "video/mp4".into());
-    if let Some((_, url)) = streams().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&envelope.cid) {
-        return Ok(url.clone());
+    // Already streaming: the same URL — unless that download failed (then
+    // it goes, and a new one starts below).
+    {
+        let mut m = streams().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((slot, url)) = m.get(&envelope.cid) {
+            let dead = slot.0.lock().map(|g| g.err.is_some()).unwrap_or(true);
+            if !dead {
+                return Ok(url.clone());
+            }
+            m.remove(&envelope.cid);
+        }
     }
+    // No relay: say so now, before a URL with nothing behind it is handed
+    // out (that was a player stuck at 0:00 forever, opened before connecting).
+    let transport = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone().ok_or("not connected")? };
 
-    let data_dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.clone() };
-    let base = downloads_dir(&data_dir);
+    let (data_dir, chat_name) = {
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        (s.data_dir.clone(), s.chats.get(&peer_id).map(|b| b.summary.name.clone()).unwrap_or_default())
+    };
+    // The chat's own folder, like download_file.
+    let base = downloads_dir(&data_dir).join(chat_folder(&chat_name, &peer_id));
     std::fs::create_dir_all(&base).map_err(|e| format!("mkdir: {e}"))?;
     let part = base.join(format!(".{}.aqpart", &envelope.cid[..16.min(envelope.cid.len())]));
     std::fs::write(&part, b"").map_err(|e| format!("write: {e}"))?;
@@ -2616,6 +2708,10 @@ pub async fn stream_file(
     let sl = slot.clone();
     let mime2 = mime.clone();
     let f: crate::media_server::RemoteFn = Arc::new(move |range: Option<String>| {
+        // The download failed: an error (502), not a body that never comes.
+        if let Some(e) = sl.0.lock().ok().and_then(|g| g.err.clone()) {
+            return Err(e);
+        }
         let (start, end, partial) = match range.as_deref().and_then(|r| crate::media_server::parse_range(r, total)) {
             Some((a, b)) => (a, b, true),
             None => (0, total.saturating_sub(1), false),
@@ -2637,8 +2733,8 @@ pub async fn stream_file(
     let url = crate::media_server::remote_url(&format!("stream:{}", envelope.cid), &ext, f)?;
     streams().lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(envelope.cid.clone(), (slot.clone(), url.clone()));
 
-    let transport = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).transport.clone().ok_or("not connected")? };
     let app2 = app.clone();
+    let (fail_peer, fail_msg) = (peer_id.clone(), message_id.clone());
     tauri::async_runtime::spawn(async move {
         use sha2::Digest;
         use std::io::Write;
@@ -2646,12 +2742,17 @@ pub async fn stream_file(
         let cid = envelope.cid.clone();
         let part_f = part.clone();
         let fail = |e: String| {
-            if let Ok(mut g) = lock.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { g.err = Some(e); }
-            cv.notify_all();
-            // A broken stream isn't handed out again (a retry used to get
-            // the same dead URL until the app restarted); its half file goes.
+            // First off the list and off the loopback server (its URL answers
+            // 404 now), then marked failed: a retry that sees the mark starts a
+            // fresh stream that this one can no longer tear down. Its half file goes.
             if let Ok(mut m) = streams().lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { m.remove(&cid); }
+            crate::media_server::unregister_remote(&format!("stream:{cid}"));
             let _ = std::fs::remove_file(&part_f);
+            if let Ok(mut g) = lock.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { g.err = Some(e.clone()); }
+            cv.notify_all();
+            // The chat hears it (it then fetches the file whole, or shows the error with "Retry").
+            tracing::warn!(%cid, error = %e, "stream failed");
+            let _ = app2.emit("aqua://stream_failed", serde_json::json!({ "peer_id": fail_peer, "message_id": fail_msg }));
         };
         let mut out = match std::fs::OpenOptions::new().append(true).open(&part) {
             Ok(f) => f,

@@ -17,7 +17,9 @@
 <script lang="ts">
   import { t, tr } from "../i18n";
   import { chats, selectChat } from "../stores";
-  import { refreshGroups } from "../groups";
+  import { refreshGroups, groupMap } from "../groups";
+  import { isAdmin } from "../groupRules";
+  import { info } from "../stores";
   import { DEFAULT_ROOMS } from "../groupRules";
   import { api } from "../tauri";
   import { showToast } from "./Toast.svelte";
@@ -52,6 +54,11 @@
     ),
   );
 
+  // A community gathers chats, not people: my groups, channels and servers
+  // (only their admin may bring them in — GroupPanel's rule).
+  let myChats = $derived(Object.values($groupMap).filter((g) => g.kind !== "community" && isAdmin(g, $info?.username ?? "")));
+  const chatKind = (k: string) => (k === "channel" ? "Channel" : k === "supergroup" ? "Server" : "Group");
+
   function toggle(id: string) {
     const next = new Set(picked);
     if (next.has(id)) next.delete(id); else next.add(id);
@@ -61,8 +68,9 @@
   async function create() {
     const t = title.trim();
     if (!t) { showToast(tr("Give it a name first.")); return; }
-    const members = [...picked];
-    for (const u of manual.split(/[,\s]+/)) {
+    // A community starts with just me; its chats are what was picked.
+    const members = kind === "community" ? [] : [...picked];
+    for (const u of kind === "community" ? [] : manual.split(/[,\s]+/)) {
       const v = u.trim().toLowerCase();
       if (v && !members.includes(v)) members.push(v);
     }
@@ -75,7 +83,8 @@
         const next = JSON.parse(JSON.stringify(g)) as typeof g;
         next.settings.send_messages = "admins";
         (next.settings as unknown as Record<string, unknown>).add_chats = "admins";
-        next.linked = [];
+        const me = $info?.username ?? "";
+        next.linked = myChats.filter((c) => picked.has(c.id)).map((c) => ({ id: c.id, title: c.title.slice(0, 64), kind: c.kind, owner: c.owner, by: me }));
         try { g = await api.updateGroup(next); } catch (e) { showToast(tr("Couldn't save: {e}", { e: String(e) }), 5000); }
       } else if (kind === "supergroup") {
         // A server: starts with Discord-style rooms.
@@ -127,6 +136,25 @@
         <textarea bind:value={description} rows="2" placeholder={$t("What's this about? (optional)")}></textarea>
       </label>
 
+      {#if kind === "community"}
+      <div class="field">
+        <span>{$t("Chats in the community")}</span>
+        {#if myChats.length === 0}
+          <div class="empty">{$t("No groups or channels of yours to add.")}</div>
+        {:else}
+          <div class="members">
+            {#each myChats as c (c.id)}
+              <button class="member" class:on={picked.has(c.id)} onclick={() => toggle(c.id)}>
+                <span class="m-ava" style="background: {c.gradient}">{c.title.charAt(0).toUpperCase()}</span>
+                <span class="m-name">{c.title} <small class="m-kind">{$t(chatKind(c.kind))}</small></span>
+                <span class="m-check">{picked.has(c.id) ? "✓" : ""}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+        <div class="empty">{$t("People join it by themselves — with its link or from the chats in it.")}</div>
+      </div>
+      {:else}
       <div class="field">
         <span>{$t(kind === "channel" ? "Subscribers" : "Members")}</span>
         {#if candidates.length === 0}
@@ -144,6 +172,7 @@
         {/if}
         <input class="manual" bind:value={manual} placeholder={$t("Add by username: ivan, maria …")} />
       </div>
+      {/if}
 
       <div class="actions">
         <button class="ghost" onclick={closeNewGroup}>{$t("Cancel")}</button>
@@ -197,4 +226,5 @@
   .ghost { background: transparent; border: 1px solid var(--border); color: var(--fg-muted); }
   .primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06070C; }
   .primary:disabled { opacity: 0.5; cursor: default; }
+  .m-kind { color: var(--fg-dim); font-size: 12px; font-weight: 500; margin-left: 4px; }
 </style>

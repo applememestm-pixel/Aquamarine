@@ -113,24 +113,15 @@ async fn main() -> anyhow::Result<()> {
     aqua_server::verify::spawn_bot(state.clone());
     aqua_server::stars::spawn(state.clone());
     aqua_server::botmaker::spawn(state.clone());
+    aqua_server::quota::spawn(state.clone());
     // New releases install by themselves (pre-releases for testers).
-    {
-        let blobs = state.blobs.clone();
-        aqua_server::selfupdate::spawn(move || {
-            let n = blobs.clear_cache();
-            tracing::info!(removed = n, "update: file cache cleared");
-        });
-    }
-    // Ctrl+C / closing the console: stop cleanly, then drop the file cache
-    // (people's data stays — blobstore::clear_cache).
-    let blobs = state.blobs.clone();
+    aqua_server::selfupdate::spawn(|| {});
+    // Ctrl+C / closing the console: stop cleanly. The files stay (blobstore.rs).
     axum::serve(listener, app(state).into_make_service_with_connect_info::<std::net::SocketAddr>())
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })
         .await?;
-    let n = blobs.clear_cache();
-    tracing::info!(removed = n, "server stopped: file cache cleared");
     Ok(())
 }
 

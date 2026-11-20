@@ -11,7 +11,7 @@
   import { mediaKind, tgsSnapshot } from "./AnimatedMedia.svelte";
   import { askInput } from "./InputPrompt.svelte";
   import { tr } from "../i18n";
-  import { kbd } from "../platform";
+  import { kbd, IS_MOBILE } from "../platform";
   import { fmtDate, dateToken } from "../markup";
 
   interface Props {
@@ -180,9 +180,14 @@
     if (el && sel && sel.rangeCount && el.contains(sel.anchorNode)) savedRange = sel.getRangeAt(0).cloneRange();
   }
 
-  export function focus() {
+  /** `reopen`: even if it has the focus — on a phone the keyboard may have
+   *  been put away (back) while the field kept it; focusing again brings it up. */
+  export function focus(reopen = false) {
     if (!el) return;
-    if (document.activeElement === el) return;
+    if (document.activeElement === el) {
+      if (!reopen) return;
+      el.blur();
+    }
     // Focusing a contenteditable puts the caret at the start; put it back
     // where the user left it (or at the end).
     const keep = savedRange;
@@ -404,6 +409,33 @@
     getSelection()?.getRangeAt(0).deleteContents();
     sync();
   }
+  // ---- the loupe (phones) ------------------------------------------
+  const LENS_ZOOM = 1.5, LENS_W = 140, LENS_H = 46;
+  let touching = false;
+  let lens = $state<{ x: number; y: number; ox: number; oy: number; w: number; html: string } | null>(null);
+  $effect(() => {
+    if (!IS_MOBILE) return;
+    const onSel = () => {
+      if (!touching || !el) { lens = null; return; }
+      const sel = getSelection();
+      if (!sel || !sel.rangeCount || !el.contains(sel.focusNode)) { lens = null; return; }
+      // The point being moved: the focus end of the selection.
+      const r = document.createRange();
+      try { r.setStart(sel.focusNode!, sel.focusOffset); r.collapse(true); } catch { return; }
+      let rect = r.getBoundingClientRect();
+      if (!rect.height) { const rs = r.getClientRects(); if (rs.length) rect = rs[0]; else rect = (sel.focusNode as Element).parentElement?.getBoundingClientRect?.() ?? rect; }
+      const box = el.getBoundingClientRect();
+      const cx = rect.left, cy = rect.top + rect.height / 2;
+      const x = Math.min(window.innerWidth - LENS_W - 8, Math.max(8, cx - LENS_W / 2));
+      const y = Math.max(8, rect.top - LENS_H - 28);
+      // The copy of the field, scaled, so the point lands in the lens' middle.
+      const ox = LENS_W / 2 - (cx - box.left) * LENS_ZOOM;
+      const oy = LENS_H / 2 - (cy - box.top + el.scrollTop) * LENS_ZOOM;
+      lens = { x, y, ox, oy, w: box.width, html: el.innerHTML };
+    };
+    document.addEventListener("selectionchange", onSel);
+    return () => document.removeEventListener("selectionchange", onSel);
+  });
 </script>
 
 <input class="rc-date-in" type="datetime-local" bind:this={dateIn} onchange={dateChosen} tabindex="-1" aria-hidden="true" />
@@ -447,7 +479,17 @@
   oncopy={onCopy}
   oncut={onCut}
   ondrop={(e) => e.preventDefault()}
+  ontouchstart={() => { touching = true; }}
+  ontouchend={() => { touching = false; lens = null; }}
+  ontouchcancel={() => { touching = false; lens = null; }}
 ></div>
+{#if lens}
+  <!-- Phones: a loupe over the finger while the caret / selection is moved (Telegram). -->
+  <div class="rc-lens" style:left="{lens.x}px" style:top="{lens.y}px" aria-hidden="true">
+    <div class="rich rc-lens-in {klass}" style:width="{lens.w}px" style:transform="translate({lens.ox}px, {lens.oy}px) scale({LENS_ZOOM})">{@html lens.html}</div>
+    <span class="rc-lens-caret"></span>
+  </div>
+{/if}
 
 <style>
   .rich {
@@ -505,4 +547,9 @@
   .fsep { width: 1px; height: 18px; background: var(--border-strong); margin: 0 2px; }
   :global(.rc-date) { color: var(--accent); font-weight: 600; white-space: nowrap; }
   .rc-date-in { position: fixed; left: -9999px; top: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+  .rc-lens { position: fixed; z-index: 400; width: 140px; height: 46px; overflow: hidden; pointer-events: none;
+    border-radius: calc(23px * var(--rk, 1)); background: var(--bg-surface); border: 1px solid var(--border-strong);
+    box-shadow: 0 10px 26px -10px rgba(0,0,0,.7); }
+  .rich.rc-lens-in { position: absolute; left: 0; top: 0; transform-origin: 0 0; max-height: none; overflow: visible; flex: none; white-space: pre-wrap; word-break: break-word; color: var(--fg); pointer-events: none; }
+  .rc-lens-caret { position: absolute; left: 50%; top: 9px; bottom: 9px; width: 2px; margin-left: -1px; background: var(--accent); border-radius: 1px; }
 </style>

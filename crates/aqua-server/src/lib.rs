@@ -51,6 +51,7 @@ pub mod host;
 pub mod selfupdate;
 pub mod turnsrv;
 pub mod botmaker;
+pub mod quota;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
 pub use auth::{AuthState, Caller};
@@ -183,6 +184,9 @@ pub struct AdminConfig {
     /// the field is only kept so old `aqua-admin.json` files still load.
     #[serde(default, skip_serializing)]
     pub optional_2fa: bool,
+    /// Each level's share of this server (quota.rs); none: the defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quotas: Option<quota::Quotas>,
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -910,13 +914,21 @@ struct BlobQuery {
 
 async fn upload_blob(
     State(state): State<AppState>,
-    Caller(_dh_pub): Caller,
+    Caller(dh_pub): Caller,
     Path(cid): Path<String>,
     Query(q): Query<BlobQuery>,
     body: Bytes,
 ) -> Result<StatusCode, (StatusCode, String)> {
     if body.len() > BLOB_LIMIT {
         return Err((StatusCode::PAYLOAD_TOO_LARGE, "blob too large".into()));
+    }
+    // This account's share (quota.rs). Messages start with "quota:" — the
+    // app shows them in its own words.
+    let (owner, tier) = quota::caller(&state, &dh_pub).await;
+    let limits = quota::quotas(&state);
+    let lim = limits.of(tier);
+    if body.len() as u64 > lim.file_max {
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, format!("quota: file_max {}", lim.file_max)));
     }
     let actual_cid = hex_sha256(&body);
     if actual_cid != cid {
@@ -933,19 +945,31 @@ async fn upload_blob(
     if shelf == blobstore::Shelf::Keep && body.len() > blobstore::KEEP_LIMIT {
         return Err((StatusCode::PAYLOAD_TOO_LARGE, "only files up to 4 MiB can be kept".into()));
     }
+    // Chat files count against the share (a file already here costs nothing).
+    let len = body.len() as u64;
+    if shelf == blobstore::Shelf::Cache && !store.has_cached(&cid) {
+        let (used, limit) = (quota::used(&state, &owner), quota::files_limit(&limits, &owner, tier));
+        if used + len > limit {
+            return Err((StatusCode::INSUFFICIENT_STORAGE, format!("quota: files {used} {limit}")));
+        }
+    }
     let kind = q.kind.clone();
-    tokio::task::spawn_blocking(move || {
+    let who = owner.clone();
+    let charged = tokio::task::spawn_blocking(move || {
         let r = match shelf {
-            blobstore::Shelf::Story => store.put_story(&cid, &body),
-            blobstore::Shelf::Keep => store.put_keep(&cid, &body),
-            blobstore::Shelf::Cache => store.put(&cid, &body),
+            blobstore::Shelf::Story => store.put_story(&cid, &body).map(|_| false),
+            blobstore::Shelf::Keep => store.put_keep(&cid, &body).map(|_| false),
+            blobstore::Shelf::Cache => store.put_owned(&cid, &body, &who),
         };
-        if let (Ok(()), Some(k)) = (&r, kind) { store.set_kind(&cid, shelf, &k); }
+        if let (Ok(_), Some(k)) = (&r, kind) { store.set_kind(&cid, shelf, &k); }
         r
     })
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if charged {
+        quota::add(&owner, len);
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -2040,6 +2064,7 @@ async fn backup_put(
     if body.len() > BACKUP_LIMIT {
         return Err((StatusCode::PAYLOAD_TOO_LARGE, "backup is too large".into()));
     }
+
     if !body.starts_with(b"AQBK1") {
         return Err((StatusCode::BAD_REQUEST, "not an encrypted backup".into()));
     }
@@ -2047,6 +2072,11 @@ async fn backup_put(
     // recovered, so a copy on the relay would be of no use to anyone.
     if !state.directory.has_2fa(&user) {
         return Err((StatusCode::FORBIDDEN, "turn on two-step verification to keep a copy on the server".into()));
+    }
+    // The level's share (quota.rs); 0 — no copy on this server at this level.
+    let lim = quota::quotas(&state).of(quota::tier_of_user(&state, &user).await);
+    if body.len() as u64 > lim.backup {
+        return Err((StatusCode::INSUFFICIENT_STORAGE, format!("quota: backup {}", lim.backup)));
     }
     state.directory.put_backup(&user, &body).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let (size, at) = state.directory.backup_meta(&user).unwrap_or((0, 0));
@@ -2069,6 +2099,48 @@ fn hist_key_ok(k: &str) -> bool {
 #[derive(Deserialize)]
 struct HistSince { #[serde(default)] since: i64 }
 
+/// `GET /v1/me/quota` — this account's level, its limits and what it uses.
+async fn me_quota(State(state): State<AppState>, Caller(dh): Caller) -> Json<serde_json::Value> {
+    let (key, tier) = quota::caller(&state, &dh).await;
+    let q = quota::quotas(&state);
+    let lim = q.of(tier);
+    let guest = key == quota::GUESTS;
+    let over = quota::over_since(&key);
+    Json(serde_json::json!({
+        "tier": tier,
+        "limits": lim,
+        "files_limit": quota::files_limit(&q, &key, tier),
+        "shared": guest,
+        "used": {
+            "files": quota::used(&state, &key),
+            "hist": if guest { 0 } else { state.directory.hist_total(&key) },
+            "backup": if guest { 0 } else { state.directory.backup_meta(&key).map(|b| b.0).unwrap_or(0) },
+            "bots": state.directory.list_bots_for_owner(&dh).len(),
+        },
+        "over_since": over,
+        "free_at": over.map(|s| s + quota::GRACE),
+    }))
+}
+
+/// `GET /v1/admin/quotas` — the limits in force (defaults if never set).
+async fn admin_get_quotas(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Result<Json<quota::Quotas>, StatusCode> {
+    admin_authed(&state, &headers)?;
+    Ok(Json(quota::quotas(&state)))
+}
+
+/// `POST /v1/admin/quotas` — new limits; everyone is checked against them at once.
+async fn admin_set_quotas(State(state): State<AppState>, headers: axum::http::HeaderMap, Json(q): Json<quota::Quotas>) -> Result<Json<quota::Quotas>, StatusCode> {
+    admin_authed(&state, &headers)?;
+    let q = q.clean();
+    if let Ok(mut c) = state.admin.write() {
+        c.quotas = Some(q.clone());
+        c.save();
+    }
+    let st = state.clone();
+    tokio::spawn(async move { quota::reconcile(&st).await; });
+    Ok(Json(q))
+}
+
 /// `GET /v1/me/hist?since=N` — `[{"k", "seq", "size"}]`, oldest first, ≤ 2000.
 async fn hist_list(State(state): State<AppState>, Caller(dh): Caller, Query(q): Query<HistSince>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let user = caller_username(&state, &dh)?;
@@ -2089,9 +2161,10 @@ async fn hist_put(State(state): State<AppState>, Caller(dh): Caller, Path(k): Pa
     let user = caller_username(&state, &dh)?;
     if !hist_key_ok(&k) { return Err((StatusCode::BAD_REQUEST, "bad key".into())); }
     if body.is_empty() || body.len() > HIST_RECORD_LIMIT { return Err((StatusCode::PAYLOAD_TOO_LARGE, "record too large".into())); }
-    let seq = state.directory.hist_put(&user, &k, &body, k == "kid").map_err(|e| match e {
+    let limit = quota::quotas(&state).of(quota::tier_of_user(&state, &user).await).hist;
+    let seq = state.directory.hist_put(&user, &k, &body, k == "kid", limit as i64).map_err(|e| match e {
         directory::DirError::Conflict => (StatusCode::CONFLICT, e.to_string()),
-        directory::DirError::TooLarge => (StatusCode::INSUFFICIENT_STORAGE, e.to_string()),
+        directory::DirError::TooLarge => (StatusCode::INSUFFICIENT_STORAGE, format!("quota: hist {limit}")),
         _ => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     })?;
     state.fed_kick.notify_waiters();
@@ -2457,6 +2530,17 @@ async fn bot_register(
     Json(body): Json<BotRegisterBody>,
 ) -> Result<Json<BotRegisterResp>, (StatusCode, String)> {
     let username = body.username.trim().to_lowercase();
+    // Bots by level (quota.rs); the ones already there stay.
+    let q = quota::quotas(&state);
+    let max = match state.directory.username_for_identity(&dh_pub) {
+        Some(u) => q.of(quota::tier_of_user(&state, &u).await).bots,
+        // An open relay (no sign-up at all): everyone is like an account here.
+        None if !state.require_registration => q.account.bots,
+        None => q.guest.bots,
+    };
+    if state.directory.list_bots_for_owner(&dh_pub).len() as u32 >= max {
+        return Err((StatusCode::FORBIDDEN, format!("quota: bots {max}")));
+    }
     let token = state
         .directory
         .register_bot(&username, &dh_pub, &body.display_name)
@@ -2861,8 +2945,8 @@ async fn admin_power(State(state): State<AppState>, headers: axum::http::HeaderM
         return Err((StatusCode::CONFLICT, "this server runs inside Aquamarine Server — use its Start / Stop".into()));
     }
     let restart = match b.action.as_str() { "restart" => true, "stop" => false, _ => return Err((StatusCode::BAD_REQUEST, "action: stop | restart".into())) };
-    let blobs = state.blobs.clone();
-    host::power(restart, move || { let n = blobs.clear_cache(); tracing::info!(removed = n, "file cache cleared"); });
+    // Files stay across a restart (blobstore.rs: they go only when room runs short).
+    host::power(restart, || {});
     Ok(Json(serde_json::json!({ "ok": true, "systemd": host::systemd_unit() })))
 }
 
@@ -2890,8 +2974,7 @@ async fn admin_set_updates(State(state): State<AppState>, headers: axum::http::H
         selfupdate::set_tester(on).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
     if (b.check || b.tester == Some(true)) && selfupdate::snapshot().managed {
-        let blobs = state.blobs.clone();
-        tokio::spawn(selfupdate::run_once(move || { let n = blobs.clear_cache(); tracing::info!(removed = n, "file cache cleared"); }));
+        tokio::spawn(selfupdate::run_once(|| {}));
     }
     Ok(Json(selfupdate::snapshot()))
 }
@@ -3062,9 +3145,11 @@ async fn admin_set_config(
     Json(body): Json<AdminConfig>,
 ) -> Result<Json<AdminConfig>, StatusCode> {
     admin_authed(&state, &headers)?;
-    let invites = state.admin.read().map(|c| c.invites.clone()).unwrap_or_default();
+    let (invites, quotas) = state.admin.read().map(|c| (c.invites.clone(), c.quotas.clone())).unwrap_or_default();
     let clean = AdminConfig {
         invites,
+        // Set by its own page (`/v1/admin/quotas`); the access form doesn't send it.
+        quotas,
         optional_2fa: false,
         invite_only: body.invite_only,
         allow: body
@@ -3329,6 +3414,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/admin/detail/:what", get(admin_detail))
         .route("/v1/admin/datadir", get(admin_get_datadir).post(admin_move_datadir))
         .route("/v1/admin/config", post(admin_set_config))
+        .route("/v1/admin/quotas", get(admin_get_quotas).post(admin_set_quotas))
         .route("/v1/admin/wipe", post(admin_wipe))
         .route("/v1/admin/bots/:name", axum::routing::delete(admin_delete_bot))
         .route("/v1/admin/users/:name", axum::routing::delete(admin_delete_user))
@@ -3447,6 +3533,7 @@ pub fn app(state: AppState) -> Router {
             .layer(DefaultBodyLimit::max(BACKUP_LIMIT + 1024)))
         .route("/v1/backup/fetch", post(backup_fetch))
         .route("/v1/me/hist",            get(hist_list))
+        .route("/v1/me/quota",           get(me_quota))
         .route("/v1/me/hist/:k",         get(hist_get).put(hist_put).layer(DefaultBodyLimit::max(HIST_RECORD_LIMIT + 1024)))
         .route("/v1/admin/fed/invite", get(admin_fed_invite))
         .route("/v1/admin/invites",    get(admin_invites).post(admin_invite_new))
@@ -3501,12 +3588,9 @@ pub async fn serve_embedded(
     verify::spawn_bot(state.clone());
     stars::spawn(state.clone());
     botmaker::spawn(state.clone());
-    let blobs = state.blobs.clone();
-    let r = axum::serve(listener, app(state).into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(shutdown).await;
-    // Stopped: the file cache goes, people's data stays (blobstore::clear_cache).
-    let n = blobs.clear_cache();
-    tracing::info!(removed = n, "server stopped: file cache cleared");
-    r
+    quota::spawn(state.clone());
+    // Stopped: the files stay (blobstore.rs).
+    axum::serve(listener, app(state).into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(shutdown).await
 }
 
 #[cfg(test)]
@@ -3535,7 +3619,7 @@ mod invite_tests {
 
     #[test]
     fn an_invitation_lets_its_number_of_people_in() {
-        let mut c = AdminConfig { invite_only: true, allow: vec![], optional_2fa: false, invites: vec![Invite { code: "abc123def456".into(), uses: 1, expires: 0, note: String::new() }] };
+        let mut c = AdminConfig { invite_only: true, allow: vec![], optional_2fa: false, quotas: None, invites: vec![Invite { code: "abc123def456".into(), uses: 1, expires: 0, note: String::new() }] };
         assert!(!c.permits("a@x.com"));
         assert!(!c.redeem("wrong", "a@x.com"));
         assert!(c.redeem("abc123def456", "A@x.com"));

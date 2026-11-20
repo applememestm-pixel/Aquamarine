@@ -207,6 +207,8 @@ export async function bootstrap() {
     refreshChatsSoon();
     const isActive = get(activeId) === p.peer_id;
     if (isActive) refreshActiveSoon();
+    // Its photos, voice and videos come down now, open or not (autoFetch.ts).
+    void import("./autoFetch").then((m) => m.autoFetchSoon(p.peer_id));
     // Notify (sound + desktop) for messages that aren't in the chat
     // you're actively looking at.
     // Archived + unmuted chats pop back out; muted chats stay silent.
@@ -245,6 +247,8 @@ export async function bootstrap() {
   });
   // Sent from another device of this account: show it in the open chat.
   listen<{ peer_id: string }>("aqua://own_sent", async (e) => {
+    // Sent from my other device (Saved Messages included): its file comes down here.
+    void import("./autoFetch").then((m) => m.autoFetchSoon(e.payload.peer_id));
     chats.set(await api.listChats());
     if (get(activeId) === e.payload.peer_id) await loadActiveMessages();
   });

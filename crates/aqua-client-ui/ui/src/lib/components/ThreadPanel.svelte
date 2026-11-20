@@ -67,20 +67,30 @@
     }
     finally { busy = false; }
   }
+  /** Phones: the comments as a chat of their own (the whole screen). */
+  let full = $state(false);
 </script>
 
-<aside class="th" class:phone={IS_MOBILE} use:sideResize={"threadpanel"} data-back aria-label={title}>
+<!-- Phones: a small panel under the chat's header; "expand" (or a tap on the
+     title) opens it as a chat of its own, the whole screen, the post on top. -->
+<aside class="th" class:phone={IS_MOBILE} class:full use:sideResize={"threadpanel"} data-back aria-label={title}>
   <header class="th-head">
-    <button data-x data-keep-x class="th-x" onclick={onClose} aria-label={$t(IS_MOBILE ? "Back" : "Close")}>{@html IS_MOBILE ? icons.back : CLOSE}</button>
-    <div class="th-title">
+    <button data-x data-keep-x class="th-x" onclick={() => { if (full) full = false; else onClose(); }} aria-label={$t(IS_MOBILE ? "Back" : "Close")}>{@html IS_MOBILE ? icons.back : CLOSE}</button>
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div class="th-title" onclick={() => { if (IS_MOBILE) full = true; }}>
       <b>{title}{#if IS_MOBILE && items.length}<small>{items.length}</small>{/if}</b>
       {#if IS_MOBILE}<span>{rootAuthor} · {rootText}</span>
       {:else if items.length}<span>{tr("{n} in the thread", { n: items.length })}</span>{/if}
     </div>
+    {#if IS_MOBILE && !full}
+      <button class="th-x th-full" onclick={() => (full = true)} aria-label={$t("Open the comments full screen")} title={$t("Open the comments full screen")}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7"/></svg>
+      </button>
+    {/if}
   </header>
   <div class="th-list" bind:this={listEl}>
     <!-- The post itself on top, like Telegram's comments. -->
-    {#if !IS_MOBILE}<div class="th-root">
+    {#if !IS_MOBILE || full}<div class="th-root">
       <div class="th-name">{rootAuthor}</div>
       <div class="th-text"><Markup src={rootText.slice(0, 2000)} compact /></div>
       <div class="th-time">{rootTime}</div>
@@ -144,6 +154,12 @@
     flex: 0 0 auto; margin: 4px 8px; border: 1px solid var(--border);
     border-radius: calc(14px * var(--rk, 1)); box-shadow: var(--shadow-lift); animation: th-in-ph .18s ease-out;
   }
+  /* A chat of its own: the whole screen. */
+  .th.phone.full { position: fixed; inset: 0; z-index: 90; max-height: none; margin: 0; border: none; border-radius: 0; box-shadow: none;
+    padding-top: var(--sat, env(safe-area-inset-top, 0px)); padding-bottom: var(--sab, env(safe-area-inset-bottom, 0px)); animation: th-in .2s cubic-bezier(.2,.9,.3,1); }
+  .th.phone.full .th-head, .th.phone.full .th-foot { border-radius: 0; }
+  .th.phone.full .th-list { flex: 1; }
+  .th-full :global(svg), .th-full svg { width: 18px; height: 18px; }
   @keyframes th-in { from { transform: translateX(24px); opacity: 0; } }
   @keyframes th-in-ph { from { transform: translateY(-5px); opacity: 0; } }
   @media (prefers-reduced-motion: reduce) { .th, .th.phone { animation: none; } }

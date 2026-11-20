@@ -50,8 +50,11 @@
     fill?: boolean;
     /** The big viewer's player (hands its place back to the small one on close). */
     viewer?: boolean;
+    /** It didn't load (an error, or a stream that stalled): the owner tries
+     *  again its own way (ChatWindow: the whole file instead of the stream). */
+    onRetry?: () => void;
   }
-  let { src, kind = "audio", onExpand, poster, name, size, autoplay = false, fill = false, viewer = false }: Props = $props();
+  let { src, kind = "audio", onExpand, poster, name, size, autoplay = false, fill = false, viewer = false, onRetry }: Props = $props();
 
   // Local files stream over loopback HTTP (see lib/media.ts::streamUrl).
   let playSrc = $state("");
@@ -122,6 +125,8 @@
     current = 0;
   }
   function onMeta() {
+    metaSeen = true;
+    stamp();
     if (!media) return;
     readDuration();
     const h = handoff.get(src);
@@ -145,6 +150,7 @@
     else if (media.seekable.length) duration = media.seekable.end(media.seekable.length - 1);
   }
   function onTime() {
+    stamp();
     if (!media) return;
     if (probing) { probed(); return; }
     if (!seeking) current = media.currentTime;
@@ -155,6 +161,33 @@
     }
   }
   function onPlay() { playing = true; started = true; failed = ""; poke(); }
+
+  // A stream from the relay (loopback /r/) that never answers: no error event
+  // comes, the player sat at 0:00 with a spinner forever. A full minute with
+  // not a single byte (every piece that arrives — `progress` — restarts the
+  // count, so a slow but live connection isn't cut off) — it's a failure, with "Retry".
+  const STALL_MS = 60_000;
+  let lastProgress = 0;
+  let metaSeen = false;
+  const stamp = () => { lastProgress = Date.now(); };
+  $effect(() => {
+    const u = playSrc;
+    metaSeen = false;
+    stamp();
+    if (!u || !/^http:\/\/127\.0\.0\.1:\d+\/r\//.test(u)) return;
+    const t = setInterval(() => {
+      if (failed || converting) return;
+      const stuck = Date.now() - lastProgress > STALL_MS;
+      if (stuck && (!metaSeen || (waiting && playing))) failed = tr("The video didn't load");
+    }, 5000);
+    return () => clearInterval(t);
+  });
+  function retry() {
+    failed = "";
+    stamp();
+    if (onRetry) { onRetry(); return; }
+    try { media?.load(); } catch { /* ignore */ }
+  }
   function onPause() { playing = false; showControls = true; }
   function onEnded() { playing = false; showControls = true; }
   function onError() {
@@ -527,7 +560,7 @@
     {#if converting}
       <div class="center err">{$t("Converting to a playable format…")}</div>
     {:else if failed}
-      <div class="center err">{failed}</div>
+      <div class="center err">{failed}{#if onRetry || /\/r\//.test(playSrc)}<button class="retry" onclick={(e) => { e.stopPropagation(); retry(); }}>{$t("Retry")}</button>{/if}</div>
     {:else if waiting && playing}
       <div class="center"><span class="spin"></span></div>
     {:else if !playing}
@@ -851,6 +884,13 @@
     .vp .big { width: 58px; height: 58px; }
     .vp .big :global(svg) { width: 24px; height: 24px; }
   }
+  /* A narrow bubble (a phone-sized video in a chat): play, time, open, full
+     screen — the volume and speed went past the right edge. */
+  @container (max-width: 320px) {
+    .vp .vol, .vp .spd { display: none; }
+    .vp .time { font-size: 11px; white-space: nowrap; }
+    .vp .row { overflow: hidden; }
+  }
 
   /* ---------------------------------------------------------------- audio */
   .ap {
@@ -883,4 +923,6 @@
   .wave { display: flex; align-items: center; gap: 2px; height: 26px; cursor: pointer; }
   .wb { flex: 1; min-height: 3px; border-radius: 2px; background: var(--border-strong); }
   .wb.played { background: var(--accent); }
+  .retry { display: block; margin: 10px auto 0; padding: 7px 16px; border: none; border-radius: calc(16px * var(--rk, 1)); cursor: pointer;
+    background: var(--accent); color: var(--bg-shell); font: 600 13px var(--font-ui, inherit); pointer-events: auto; }
 </style>

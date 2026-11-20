@@ -326,6 +326,10 @@
   .pgrid .rm{position:absolute;top:3px;right:3px;width:24px;height:24px;border-radius:7px;border:none;background:rgba(0,0,0,.6);color:#fff;cursor:pointer;opacity:0}
   .pgrid .pc:hover .rm,.pgrid .rm:focus{opacity:1}
   @media (hover:none){.pgrid .rm{opacity:.85}}
+  .qt { border-collapse: collapse; width: 100%; font-size: 13px; }
+  .qt th { text-align: left; font-weight: 600; opacity: .7; padding: 4px 6px; white-space: nowrap; }
+  .qt td { padding: 3px 6px; white-space: nowrap; }
+  .qt input { width: 80px; }
 </style>
 </head>
 <body>
@@ -488,6 +492,12 @@
           <button class="btn" onclick="newInvite()" data-t="New invitation">New invitation</button>
         </div>
         <span id="invMsg" class="note" style="margin:0"></span>
+      </div>
+      <div class="card rv">
+        <h2><span data-t="Limits by level">Limits by level</span></h2>
+        <div class="note" data-th="quotaNote">Each account's share of this server. Files over a lowered limit stay 7 days, then the oldest go; history, backup and bots are never deleted — only new ones are refused. Guests share one pool. One file is at most 210 MB for now.</div>
+        <div id="quotaBox" class="mt" style="overflow-x:auto"></div>
+        <div class="row mt"><button class="btn" onclick="saveQuotas()" data-t="Save limits">Save limits</button><span id="quotaMsg" class="note" style="margin:0"></span></div>
       </div>
       <div class="card rv">
         <h2><span data-t="Stars">Stars</span> <span class="hint" id="starHint"></span></h2>
@@ -712,6 +722,9 @@
   // ---- language: Russian when the browser is Russian ----
   const RU = /^ru\b/i.test(navigator.language || "");
   const DICT = {
+    "Limits by level":"Лимиты по уровням","Save limits":"Сохранить лимиты","Guest":"Гость","Account":"Аккаунт","Account + 2FA":"Аккаунт + 2FA","Star 1–2":"Звезда 1–2","Star 3–5":"Звезда 3–5","Star 6":"Звезда 6",
+    "Files, GB":"Файлы, ГБ","One file, MB":"Один файл, МБ","History, GB":"История, ГБ","Backup, MB":"Копия, МБ","Bots":"Боты","All guests together":"Все гости вместе",
+    "Saved — everyone is checked against the new limits now.":"Сохранено — все сразу сверяются с новыми лимитами.",
     "Machine":"Машина","Restart the server":"Перезапустить сервер","Stop the server":"Выключить сервер",
     "server":"сервер","PC":"компьютер","phone":"телефон","System":"Система","Processor":"Процессор","Memory":"Память","Disk":"Диск","Network":"Сеть",
     "Machine is up":"Машина работает","This server":"Этот сервер","Load":"Нагрузка","cores":"ядер","free":"свободно","of":"из","received":"принято","sent":"отправлено",
@@ -852,6 +865,7 @@
     document.querySelectorAll("[data-t]").forEach((el) => { const k = el.getAttribute("data-t"); if (DICT[k]) el.innerHTML = DICT[k]; });
     document.querySelectorAll("[data-tp]").forEach((el) => { const k = el.getAttribute("data-tp"); if (DICT[k]) el.placeholder = DICT[k]; });
     const notes = {
+      quotaNote: "Доля сервера у каждого аккаунта. Файлы сверх уменьшенного лимита остаются 7 дней, потом уходят самые старые; история, копия и боты не удаляются никогда — только не принимаются новые. Гости делят одну общую долю. Один файл пока не больше 210 МБ.",
       gmailNote: "Gmail: включите двухэтапную проверку и создайте <b>пароль приложения</b> на <a href=\"https://myaccount.google.com/apppasswords\" target=\"_blank\" rel=\"noopener\">myaccount.google.com/apppasswords</a> — вставьте его выше (не обычный пароль). Настройки хранятся в <b>aqua-smtp.json</b> рядом с сервером.",
       inviteNote: "Передайте его админу другого ретранслятора: он вставит его ниже в своей панели, и серверы добавят друг друга — а дальше сами найдут все остальные серверы сети. В приглашении секрет сети: пересылайте его лично.",
       serversNote: "Серверы вашей сети, серверы в этой локальной сети и из публичного списка. <b>В сети</b> — знает секрет этого сервера; остальные — отдельные серверы (чтобы они вступили, передайте им приглашение).",
@@ -1173,7 +1187,7 @@
     if (store.get("aqua.admin.tab") === "journal" && !document.hidden) loadJournal();
 
     if (s.public_url) window.__pub = s.public_url;
-    if (!window.__invLoaded) { window.__invLoaded = true; loadInvites(); }
+    if (!window.__invLoaded) { window.__invLoaded = true; loadInvites(); loadQuotas(); }
     inviteOnly = s.invite_only;
     $("sw").className = "sw" + (inviteOnly?" on":"");
     $("accessSt").className = "st" + (inviteOnly?" on":"");
@@ -1211,6 +1225,34 @@
     } catch(e){ msg("invMsg", T("Failed: ") + e.message, "err"); }
   }
   async function delInvite(code){ try { await fetch("/v1/admin/invites/" + code, { method: "DELETE", headers: { "Authorization": "Bearer " + TOKEN } }); loadInvites(); } catch {} }
+
+  // ---- limits by level (aqua-server quota.rs) ----
+  const Q_TIERS = [["guest","Guest"],["account","Account"],["secure","Account + 2FA"],["star12","Star 1–2"],["star35","Star 3–5"],["star6","Star 6"]];
+  const Q_COLS = [["files","Files, GB",1073741824],["file_max","One file, MB",1048576],["hist","History, GB",1073741824],["backup","Backup, MB",1048576],["bots","Bots",1]];
+  let quotas = null;
+  async function loadQuotas(){
+    try { quotas = await api("/v1/admin/quotas"); } catch { return; }
+    const num = (v, k) => +(v / k).toFixed(k > 1 ? 2 : 0);
+    $("quotaBox").innerHTML = `<table class="qt"><tr><th></th>${Q_COLS.map(c => `<th>${esc(T(c[1]))}</th>`).join("")}</tr>`
+      + Q_TIERS.map(([id, name]) => `<tr><td>${esc(T(name))}</td>${Q_COLS.map(([c,, k]) => `<td><input type="number" min="0" step="any" data-q="${id}.${c}" value="${num(quotas[id][c], k)}" data-orig="${num(quotas[id][c], k)}"></td>`).join("")}</tr>`).join("")
+      + `<tr><td>${esc(T("All guests together"))}</td><td><input type="number" min="0" step="any" data-q="guest_pool" value="${num(quotas.guest_pool, 1073741824)}" data-orig="${num(quotas.guest_pool, 1073741824)}"></td></tr></table>`;
+  }
+  async function saveQuotas(){
+    if (!quotas) return;
+    const q = JSON.parse(JSON.stringify(quotas));
+    document.querySelectorAll("[data-q]").forEach((el) => {
+      const [t, c] = el.dataset.q.split(".");
+      // Only what was changed (a rounded figure written back would shift the
+      // limit; an empty field would make it 0 and the files would go).
+      if (el.value.trim() === "" || el.value === el.dataset.orig || !(parseFloat(el.value) >= 0)) return;
+      const v = parseFloat(el.value);
+      if (!c) { q.guest_pool = Math.round(v * 1073741824); return; }
+      const k = Q_COLS.find((x) => x[0] === c)[2];
+      q[t][c] = Math.round(v * k);
+    });
+    try { quotas = await api("/v1/admin/quotas", { method: "POST", body: JSON.stringify(q) }); await loadQuotas(); msg("quotaMsg", T("Saved — everyone is checked against the new limits now."), "ok"); }
+    catch(e){ msg("quotaMsg", T("Failed: ") + e.message, "err"); }
+  }
 
   async function saveCfg(){
     const allow = $("allow").value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
