@@ -278,22 +278,31 @@ pub async fn get_star(State(_state): State<AppState>, Path(uid): Path<String>) -
     if uid.is_empty() || uid.len() > 32 || !uid.bytes().all(|b| b.is_ascii_alphanumeric()) {
         return Err(StatusCode::BAD_REQUEST);
     }
+    match star_of(&uid).await {
+        Ok(Some(st)) => Ok(Json(st)),
+        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Err(()) => Err(StatusCode::BAD_GATEWAY),
+    }
+}
+
+/// The account's star statement: signed here (the star relay), else asked
+/// of it and remembered for 5 minutes. `Ok(None)` — no star; `Err` — the
+/// star relay couldn't be asked (that's not "no star"). Also quota.rs.
+pub async fn star_of(uid: &str) -> Result<Option<Statement>, ()> {
+    let uid = uid.to_string();
     if has_key() {
         let t = now();
         let star = with_stars(|m| m.get(&uid).filter(|s| s.live(t)).map(|s| (s.kind, s.until)));
-        return star.and_then(|(k, until)| sign(&uid, k, until)).map(Json).ok_or(StatusCode::NOT_FOUND);
+        return Ok(star.and_then(|(k, until)| sign(&uid, k, until)));
     }
-    // Not the star relay: ask it (and remember the answer for 5 minutes).
     if let Some((at, st)) = CACHE.lock().ok().and_then(|g| g.as_ref().and_then(|m| m.get(&uid).cloned())) {
         if now() < at + 300 {
-            return st.map(Json).ok_or(StatusCode::NOT_FOUND);
+            return Ok(st);
         }
     }
     let home = std::env::var("AQUA_STAR_HOME").ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| DEFAULT_HOME.into());
     let url = format!("{}/v1/stars/{uid}", home.trim_end_matches('/'));
-    // Ok(None): the star relay says "no star". Err: it couldn't be asked —
-    // that's not "no star" (the app would take the star off the card).
-    let res: Result<Option<Statement>, ()> = async {
+    let st: Option<Statement> = async {
         let c = reqwest::Client::builder().timeout(std::time::Duration::from_secs(8)).build().map_err(|_| ())?;
         let r = c.get(&url).send().await.map_err(|_| ())?;
         if r.status() == StatusCode::NOT_FOUND {
@@ -304,8 +313,7 @@ pub async fn get_star(State(_state): State<AppState>, Path(uid): Path<String>) -
         }
         r.json::<Statement>().await.map(Some).map_err(|_| ())
     }
-    .await;
-    let Ok(st) = res else { return Err(StatusCode::BAD_GATEWAY) };
+    .await?;
     if let Ok(mut g) = CACHE.lock() {
         let m = g.get_or_insert_with(BTreeMap::new);
         if m.len() > 5000 {
@@ -313,7 +321,7 @@ pub async fn get_star(State(_state): State<AppState>, Path(uid): Path<String>) -
         }
         m.insert(uid, (now(), st.clone()));
     }
-    st.map(Json).ok_or(StatusCode::NOT_FOUND)
+    Ok(st)
 }
 
 // ---------- marks: the star and the check mark, for every server ----------

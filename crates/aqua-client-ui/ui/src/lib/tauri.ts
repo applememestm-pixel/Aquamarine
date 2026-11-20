@@ -64,6 +64,18 @@ export interface LinkPreview {
   youtube_id: string | null;
   telegraph_path: string | null;
 }
+/** `GET /v1/me/quota` (aqua-server quota.rs). Sizes in bytes. */
+export interface ServerQuota {
+  tier: "guest" | "account" | "secure" | "star12" | "star35" | "star6";
+  limits: { files: number; file_max: number; hist: number; backup: number; bots: number };
+  files_limit: number;
+  /** A guest: the files limit is shared by all guests of the server. */
+  shared: boolean;
+  used: { files: number; hist: number; backup: number; bots: number };
+  /** Over the files limit since (s); files over it go at `free_at`. */
+  over_since: number | null;
+  free_at: number | null;
+}
 export interface CachedMedia { path: string; mime: string; size: number }
 export interface TelegraphPage {
   path: string;
@@ -260,6 +272,8 @@ export const api = {
     invoke("temp_append", bytes, { headers: { "x-name": at.name ?? "", "x-path": at.path ?? "" } }),
   saveConsoleBot:     (path: string): Promise<void>                                    => invoke("save_console_bot", { path }),
   deleteBot:          (username: string): Promise<void>                                => invoke("delete_bot", { username }),
+  /** My share of the relay (quota.rs): level, limits, use; null — no quotas there. */
+  serverQuota:        (): Promise<ServerQuota | null>                     => invoke("server_quota"),
   /** Bot constructor: the bot's spec on the relay (botmaker.rs). */
   botSpec:            (username: string, op: "get" | "put" | "delete", spec?: unknown): Promise<unknown> => invoke("bot_spec", { username, op, spec: spec ?? null }),
   startChatWith:      (peer_username: string, first_message: string): Promise<ChatSummary> => invoke("start_chat_with", { peerUsername: peer_username, firstMessage: first_message }),

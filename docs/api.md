@@ -648,3 +648,9 @@ x-aqua-fed: <unix_ms>.<hex HMAC-SHA256(secret, METHOD "\n" PATH "\n" unix_ms "\n
 | POST | `/v1/admin/fed/join` | админ | 15 |
 | GET | `/v1/admin/servers` | админ | 15 |
 | * | `/v1/fed/*` | федерация | 16 |
+
+## Доли сервера (квоты)
+
+`GET /v1/me/quota` — мой уровень (`guest`, `account`, `secure`, `star12`, `star35`, `star6`), лимиты (`files`, `file_max`, `hist`, `backup`, `bots`, байты), `files_limit` (у гостей — общая доля), занятое (`used`), `over_since` и `free_at` (с какого момента файлы сверх лимита и когда самые старые уйдут). Сверх доли сервер отвечает текстом `quota: files <занято> <лимит>`, `quota: file_max <байт>`, `quota: hist <байт>`, `quota: backup <байт>`, `quota: bots <n>` (507, 413 или 403).
+
+`GET` / `POST /v1/admin/quotas` (админ) — лимиты всех уровней; после сохранения все сразу сверяются с новыми.

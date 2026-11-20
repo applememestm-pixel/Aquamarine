@@ -93,6 +93,7 @@
   import { save as saveDialog } from "@tauri-apps/plugin-dialog";
   import { meshStatus, meshSyncNow, meshSetEnabled, refreshMesh } from "../mesh";
   import { botMakerFor } from "./BotMaker.svelte";
+  import type { ServerQuota } from "../tauri";
 
   // ---- Section navigation ----
   type Sec = "network" | "nearby" | "host" | "ghost" | "language" | "appearance" | "theme" | "behaviour" | "notifications" | "voice" | "wallpaper" | "accent" | "bots" | "account" | "updates" | "about" | "privacy" | "stickers" | "backups" | "devices" | "storage" | "advanced" | "power" | "window" | "music" | "plugins";
@@ -562,7 +563,15 @@
     if (n < 1073741824) return `${(n / 1048576).toFixed(1)} MB`;
     return `${(n / 1073741824).toFixed(2)} GB`;
   }
-  $effect(() => { if ($settingsOpen && section === "storage") void stLoad(); });
+  $effect(() => { if ($settingsOpen && section === "storage") { void stLoad(); void quotaLoad(); } });
+  // My share of the server (aqua-server quota.rs): by level, per "folder".
+  let quota = $state<ServerQuota | null>(null);
+  async function quotaLoad() { try { quota = await api.serverQuota(); } catch { quota = null; } }
+  const TIER_NAME: Record<ServerQuota["tier"], string> = {
+    guest: "Guest", account: "Account", secure: "Account with two-step verification",
+    star12: "CeZeOs star 1–2", star35: "CeZeOs star 3–5", star6: "CeZeOs star 6",
+  };
+  const pct = (used: number, limit: number) => (limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0);
   async function exportChats() {
     try {
       const { save } = await import("@tauri-apps/plugin-dialog");
@@ -2288,6 +2297,27 @@
       {/if}
 
       {#if section === "storage"}
+      {#if quota}
+        <section class="group">
+          <div class="label">{$t("On the server")} · {$t(TIER_NAME[quota.tier])}</div>
+          {#each [
+            { name: "Files of chats", used: quota.used.files, limit: quota.files_limit },
+            { name: "History for your devices", used: quota.used.hist, limit: quota.limits.hist },
+            { name: "Backup", used: quota.used.backup, limit: quota.limits.backup },
+          ].filter((r) => r.limit > 0) as r (r.name)}
+            <div class="q-row">
+              <div class="q-head"><span>{$t(r.name)}</span><span class="q-num" class:over={r.used > r.limit}>{fmtBytes(r.used)} / {fmtBytes(r.limit)}</span></div>
+              <div class="q-bar"><span style:width="{pct(r.used, r.limit)}%" class:over={r.used > r.limit}></span></div>
+            </div>
+          {/each}
+          <div class="q-head q-bots"><span>{$t("Bots")}</span><span class="q-num">{quota.used.bots} / {quota.limits.bots}</span></div>
+          <div class="foot-note">
+            {$t("One file up to {size}.", { size: fmtBytes(quota.limits.file_max) })}
+            {#if quota.shared} {$t("Without an account the space is shared by all guests of this server.")}{/if}
+            {#if quota.free_at} <b class="q-warn">{$t("Your files take more than your level allows: the oldest go from the server on {date} (they stay on the devices that downloaded them).", { date: new Date(quota.free_at * 1000).toLocaleDateString() })}</b>{/if}
+          </div>
+        </section>
+      {/if}
       <section class="group">
         <div class="label">{$t("Download path")}</div>
         {#if st}
@@ -3822,4 +3852,12 @@ POST /v1/bot/send   {"{"} "to": "alice", "text": "hi" {"}"}
   .acc-row .st-sub { margin-left: 0; }
   .acc-cur { font-size: 12px; color: var(--fg-muted); }
   .acc-go { font-size: 13px; font-weight: 600; color: var(--accent); }
+  .q-row { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; }
+  .q-head { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; }
+  .q-bots { padding: 8px 0; }
+  .q-num { color: var(--fg-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .q-num.over, .q-warn { color: var(--danger); }
+  .q-bar { height: 6px; border-radius: 3px; background: color-mix(in srgb, var(--fg) 12%, transparent); overflow: hidden; }
+  .q-bar span { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
+  .q-bar span.over { background: var(--danger); }
 </style>

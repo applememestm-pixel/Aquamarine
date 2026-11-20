@@ -1159,6 +1159,20 @@ impl Transport {
         Ok((resp.username, resp.token))
     }
 
+    /// `GET /v1/me/quota` — my level on this relay, its limits and what I use
+    /// (raw JSON; `Ok(None)` from a relay that has no quotas yet).
+    pub async fn me_quota(&self) -> Result<Option<serde_json::Value>, TransportError> {
+        let url = format!("{}/v1/me/quota", self.server_url.trim_end_matches('/'));
+        let r = self.http.get(&url).bearer_auth(self.bearer().await?).send().await?;
+        if r.status().as_u16() == 404 {
+            return Ok(None);
+        }
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        Ok(Some(r.json().await?))
+    }
+
     // ---- Sticker / emoji packs hosted by the relay ----
 
     /// `GET /v1/packs` — `{ telegram: bool, packs: [...] }` (raw JSON).

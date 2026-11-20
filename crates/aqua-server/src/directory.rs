@@ -2410,7 +2410,14 @@ impl Directory {
 
     /// Store one record. `only_new`: refuse to replace a different value
     /// (the key id, `kid`: the first device's key wins). Returns the seq.
-    pub fn hist_put(&self, username: &str, k: &str, data: &[u8], only_new: bool) -> Result<i64, DirError> {
+    /// Bytes of history stored for the account (quota.rs).
+    pub fn hist_total(&self, username: &str) -> i64 {
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT COALESCE(SUM(length(data)), 0) FROM hist_store WHERE username=?1", rusqlite::params![username], |r| r.get(0)).unwrap_or(0)
+    }
+
+    /// `limit`: the account's history share (quota.rs, by level).
+    pub fn hist_put(&self, username: &str, k: &str, data: &[u8], only_new: bool, limit: i64) -> Result<i64, DirError> {
         let db = self.db.lock().unwrap();
         if only_new {
             let cur: Option<Vec<u8>> = db
@@ -2427,8 +2434,8 @@ impl Directory {
         let total: i64 = db
             .query_row("SELECT COALESCE(SUM(length(data)), 0) FROM hist_store WHERE username=?1 AND k<>?2", rusqlite::params![username, k], |r| r.get(0))
             .unwrap_or(0);
-        let limit = if Self::security_of(&db, username).map(|s| s.portable()).unwrap_or(false) { HIST_LIMIT } else { HIST_LIMIT_PLAIN };
-        if total + data.len() as i64 > limit {
+        // The account's own key never counts (a full share must not lock it out).
+        if k != "kid" && total + data.len() as i64 > limit {
             return Err(DirError::TooLarge);
         }
         let seq: i64 = db
@@ -3619,12 +3626,12 @@ mod tests {
     #[test]
     fn history_records_are_listed_by_seq_and_the_key_id_is_written_once() {
         let d = dir();
-        assert_eq!(d.hist_put("vlad", "kid", b"K1", true).unwrap(), 1);
-        assert!(matches!(d.hist_put("vlad", "kid", b"K2", true), Err(DirError::Conflict)));
-        assert_eq!(d.hist_put("vlad", "kid", b"K1", true).unwrap(), 1, "the same value is fine");
-        assert_eq!(d.hist_put("vlad", "a1", b"page", false).unwrap(), 2);
-        assert_eq!(d.hist_put("vlad", "b2", b"meta", false).unwrap(), 3);
-        assert_eq!(d.hist_put("vlad", "a1", b"page v2", false).unwrap(), 4);
+        assert_eq!(d.hist_put("vlad", "kid", b"K1", true, HIST_LIMIT).unwrap(), 1);
+        assert!(matches!(d.hist_put("vlad", "kid", b"K2", true, HIST_LIMIT), Err(DirError::Conflict)));
+        assert_eq!(d.hist_put("vlad", "kid", b"K1", true, HIST_LIMIT).unwrap(), 1, "the same value is fine");
+        assert_eq!(d.hist_put("vlad", "a1", b"page", false, HIST_LIMIT).unwrap(), 2);
+        assert_eq!(d.hist_put("vlad", "b2", b"meta", false, HIST_LIMIT).unwrap(), 3);
+        assert_eq!(d.hist_put("vlad", "a1", b"page v2", false, HIST_LIMIT).unwrap(), 4);
         let all: Vec<String> = d.hist_list("vlad", 0, 100).into_iter().map(|r| r.0).collect();
         assert_eq!(all, ["kid", "b2", "a1"]);
         assert_eq!(d.hist_list("vlad", 3, 100).len(), 1);

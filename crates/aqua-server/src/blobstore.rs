@@ -106,6 +106,53 @@ impl BlobStore {
         self.put_in(&self.dir, cid, data)
     }
 
+    /// A blob of the delivery cache stored for `owner` (quota.rs): `.o.<cid>`
+    /// is written only when the blob is new — whoever uploads the same file
+    /// later isn't charged for it. Returns whether it was new.
+    pub fn put_owned(&self, cid: &str, data: &[u8], owner: &str) -> std::io::Result<bool> {
+        let new = !self.dir.join(cid.to_ascii_lowercase()).is_file();
+        self.put(cid, data)?;
+        if new {
+            let _ = std::fs::write(self.dir.join(format!(".o.{}", cid.to_ascii_lowercase())), owner);
+        }
+        Ok(new)
+    }
+
+    /// Bytes of the delivery cache per owner (blobs with no `.o.` aren't counted).
+    pub fn usage_by_owner(&self) -> std::collections::HashMap<String, u64> {
+        let mut m = std::collections::HashMap::new();
+        for (owner, _, len, _) in self.owned_files() {
+            *m.entry(owner).or_insert(0) += len;
+        }
+        m
+    }
+
+    /// (owner, cid, bytes, last used) of every owned blob in the delivery cache.
+    pub fn owned_files(&self) -> Vec<(String, String, u64, SystemTime)> {
+        let Ok(rd) = std::fs::read_dir(&self.dir) else { return Vec::new() };
+        rd.flatten()
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                let cid = name.strip_prefix(".o.")?.to_string();
+                let owner = std::fs::read_to_string(e.path()).ok()?.trim().to_string();
+                let m = std::fs::metadata(self.dir.join(&cid)).ok().filter(|m| m.is_file())?;
+                Some((owner, cid, m.len(), m.modified().unwrap_or(SystemTime::UNIX_EPOCH)))
+            })
+            .collect()
+    }
+
+    /// One blob of the delivery cache, with its labels.
+    pub fn remove_cached(&self, cid: &str) -> bool {
+        if !valid_cid(cid) {
+            return false;
+        }
+        let c = cid.to_ascii_lowercase();
+        let ok = std::fs::remove_file(self.dir.join(&c)).is_ok();
+        let _ = std::fs::remove_file(self.dir.join(format!(".k.{c}")));
+        let _ = std::fs::remove_file(self.dir.join(format!(".o.{c}")));
+        ok
+    }
+
     /// Remember what kind of file a blob is (for the admin panel): a
     /// `.k.<cid>` file next to it, swept together with it.
     pub fn set_kind(&self, cid: &str, shelf: Shelf, kind: &str) {
@@ -163,6 +210,7 @@ impl BlobStore {
             // Same content; just refresh its age.
             touch(&p);
             touch(&dir.join(format!(".k.{}", cid.to_ascii_lowercase())));
+            touch(&dir.join(format!(".o.{}", cid.to_ascii_lowercase())));
             return Ok(());
         }
         let tmp = dir.join(format!(".{cid}.part"));
@@ -245,7 +293,10 @@ impl BlobStore {
         if !short(total, freed) {
             return 0;
         }
-        files.sort_by_key(|f| f.2);
+        // Files nobody's quota holds (uploaded by older apps / before quotas)
+        // go first, then the least recently used.
+        let owned = |p: &PathBuf| p.file_name().is_some_and(|n| self.dir.join(format!(".o.{}", n.to_string_lossy())).is_file());
+        files.sort_by_key(|f| (owned(&f.0), f.2));
         let mut removed = 0;
         for (p, len, _) in files {
             if !short(total, freed) {
@@ -254,6 +305,7 @@ impl BlobStore {
             if std::fs::remove_file(&p).is_ok() {
                 if let Some(name) = p.file_name() {
                     let _ = std::fs::remove_file(self.dir.join(format!(".k.{}", name.to_string_lossy())));
+                    let _ = std::fs::remove_file(self.dir.join(format!(".o.{}", name.to_string_lossy())));
                 }
                 total = total.saturating_sub(len);
                 freed += len;
@@ -395,6 +447,26 @@ mod tests {
         s.min_free = 1000;
         assert_eq!(s.fit_with(0, Some(950)), 1);
         assert!(!s.has(&b));
+    }
+
+    #[test]
+    fn owners_are_charged_once_and_unowned_go_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = BlobStore::new_unlimited(dir.path().to_path_buf());
+        let (a, b) = ("a".repeat(64), "b".repeat(64));
+        assert!(s.put_owned(&a, &[0u8; 100], "vlad").unwrap());
+        assert!(!s.put_owned(&a, &[0u8; 100], "gleb").unwrap(), "the same file again isn't charged");
+        s.put(&b, &[0u8; 100]).unwrap(); // an older app: no owner
+        assert_eq!(s.usage_by_owner().get("vlad"), Some(&100));
+        assert_eq!(s.usage_by_owner().get("gleb"), None);
+        // Short of room: the unowned one goes first even though it's newer.
+        let f = std::fs::File::options().write(true).open(dir.path().join(&a)).unwrap();
+        f.set_modified(SystemTime::now() - Duration::from_secs(3600)).unwrap();
+        s.max_bytes = Some(150);
+        assert_eq!(s.fit_with(0, None), 1);
+        assert!(s.has(&a) && !s.has(&b));
+        assert!(s.remove_cached(&a));
+        assert!(s.usage_by_owner().is_empty());
     }
 
     #[test]

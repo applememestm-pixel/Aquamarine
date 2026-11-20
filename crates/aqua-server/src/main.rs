@@ -113,6 +113,7 @@ async fn main() -> anyhow::Result<()> {
     aqua_server::verify::spawn_bot(state.clone());
     aqua_server::stars::spawn(state.clone());
     aqua_server::botmaker::spawn(state.clone());
+    aqua_server::quota::spawn(state.clone());
     // New releases install by themselves (pre-releases for testers).
     aqua_server::selfupdate::spawn(|| {});
     // Ctrl+C / closing the console: stop cleanly. The files stay (blobstore.rs).

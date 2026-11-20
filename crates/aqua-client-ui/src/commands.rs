@@ -1367,6 +1367,17 @@ pub async fn delete_bot(state: State<'_, StdMutex<AppState>>, username: String) 
     Ok(())
 }
 
+/// My share of the relay (aqua-server quota.rs): level, limits, use.
+/// `null` from a relay without quotas.
+#[tauri::command]
+pub async fn server_quota(state: State<'_, StdMutex<AppState>>) -> Result<serde_json::Value, String> {
+    let transport = {
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        s.transport.clone().ok_or("not connected")?
+    };
+    Ok(transport.me_quota().await.map_err(|e| e.to_string())?.unwrap_or(serde_json::Value::Null))
+}
+
 /// Bot constructor (aqua-server botmaker.rs): read, save or drop the spec
 /// of one of my bots — what the relay answers for it, no code. Signed with
 /// the bot's own token (from the vault). `op`: "get" | "put" | "delete".
