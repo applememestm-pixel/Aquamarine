@@ -2161,20 +2161,41 @@ async fn attach_file_fwd(
     let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
     let filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("attachment").to_owned();
     let mime = mime_override.or_else(|| mime_from_extension(&path));
-    if size > aqua_core::MAX_FILE_SIZE {
+    // A multi-part upload can resume at the relay. Keep the existing path
+    // for attachments that can still go directly to a nearby device.
+    let nearby_enabled = crate::mesh::enabled(&app);
+    let resumable_threshold = if nearby_enabled {
+        crate::mesh::BLOB_MAX as u64
+    } else {
+        aqua_core::file_transfer::UPLOAD_PART_SIZE as u64
+    };
+    let mut resumable = None;
+    if size > resumable_threshold {
         let (transport, data_dir) = {
             let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            (s.transport.clone().ok_or("Connect to a relay to upload a large file")?, s.data_dir.clone())
+            (s.transport.clone(), s.data_dir.clone())
         };
-        let quota = transport.me_quota().await.map_err(|e| e.to_string())?.unwrap_or_default();
-        let advertised = quota["limits"]["file_max"].as_u64().unwrap_or(aqua_core::MAX_FILE_SIZE);
-        let protocol_max = if quota["resumable_uploads"].as_bool() == Some(true) {
-            aqua_core::file_transfer::MAX_RESUMABLE_FILE_SIZE
-        } else {
-            aqua_core::MAX_FILE_SIZE
-        };
-        let limit = advertised.min(protocol_max);
-        if size > limit { return Err(format!("quota: file_max {limit}")); }
+        if let Some(transport) = transport {
+            let quota = match transport.me_quota().await {
+                Ok(quota) => quota.unwrap_or_default(),
+                Err(_) if size <= aqua_core::MAX_FILE_SIZE => serde_json::Value::Null,
+                Err(error) => return Err(error.to_string()),
+            };
+            let supported = quota["resumable_uploads"].as_bool() == Some(true)
+                && (category.as_deref() != Some("once") || size > aqua_core::MAX_FILE_SIZE);
+            let protocol_max = if supported {
+                aqua_core::file_transfer::MAX_RESUMABLE_FILE_SIZE
+            } else {
+                aqua_core::MAX_FILE_SIZE
+            };
+            let limit = quota["limits"]["file_max"].as_u64().unwrap_or(protocol_max).min(protocol_max);
+            if size > limit { return Err(format!("quota: file_max {limit}")); }
+            if supported { resumable = Some((transport, data_dir)); }
+        } else if size > aqua_core::MAX_FILE_SIZE {
+            return Err("Connect to a relay to upload a large file".into());
+        }
+    }
+    if let Some((transport, data_dir)) = resumable {
         let _upload = crate::large_files::UPLOAD.lock().await;
         let pending = crate::large_files::prepare(&app, path.clone(), filename, mime, category).await?;
         let mut envelope = pending.envelope.clone();
@@ -2307,7 +2328,7 @@ async fn attach_file_fwd(
         let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.transport.clone()
     };
-    let nearby = ciphertext.len() <= crate::mesh::BLOB_MAX && crate::mesh::enabled(&app);
+    let nearby = ciphertext.len() <= crate::mesh::BLOB_MAX && nearby_enabled;
     let spare = nearby.then(|| ciphertext.clone());
     let up = match &transport {
         Some(t) if !(nearby && crate::mesh::relay_down()) => t
