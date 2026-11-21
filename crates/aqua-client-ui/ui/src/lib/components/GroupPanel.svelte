@@ -55,6 +55,46 @@
   let media = $derived(group ? $groupMedia[group.id] ?? {} : {});
   let isCommunity = $derived(group?.kind === "community");
   let noun = $derived(isChannel ? "channel" : isCommunity ? "community" : "group");
+  let discussionPick = $state("");
+  $effect(() => { discussionPick = group?.settings.discussion_group ?? ""; });
+  const discussions = $derived(Object.values($groupMap).filter(g => g.owner === me
+    && (g.kind === "group" || g.kind === "supergroup")
+    && (!g.settings.discussion_channel || g.settings.discussion_channel === group?.id)));
+  async function changeDiscussion(create = false) {
+    const channel = group;
+    if (!channel || busy) return;
+    busy = true;
+    try {
+      const id = create ? (await api.createGroup("group", tr("{name} discussion", { name: channel.title }), "", [])).id : discussionPick;
+      await api.linkDiscussion(channel.id, id || null);
+      await refreshGroups();
+    } catch (e) { showToast(String(e)); }
+    finally { busy = false; }
+  }
+  let successor = $state("");
+  let transferBusy = $state(false);
+  let activeOffer = $derived(group?.ownership_offer && group.ownership_offer.expires * 1000 > Date.now() ? group.ownership_offer : undefined);
+  $effect(() => { void $groupPanelId; successor = ""; });
+  async function offerOwnership() {
+    if (!group || !successor || transferBusy || !(await askConfirm({
+      title: $t("Offer community ownership?"),
+      text: tr("Ownership changes only after @{name} accepts.", { name: successor }),
+      ok: $t("Send offer"),
+    }))) return;
+    transferBusy = true;
+    try { await api.communityOffer(group.id, successor); }
+    catch (error) { showToast(String(error)); }
+    finally { transferBusy = false; }
+  }
+  async function acceptOwnership() {
+    if (!group || transferBusy || !(await askConfirm({
+      title: $t("Accept community ownership?"), text: $t("You will become the owner when the transfer is confirmed."), ok: $t("Accept"),
+    }))) return;
+    transferBusy = true;
+    try { await api.communityAccept(group.id); showToast($t("Acceptance sent")); }
+    catch (error) { showToast(String(error)); }
+    finally { transferBusy = false; }
+  }
   let busy = $state(false);
 
   // Text drafts on the manage page.
@@ -734,6 +774,26 @@
           {/if}
         {/if}
 
+        {#if isCommunity && (owner || activeOffer?.to === me)}
+          <div class="card transfer">
+            <div class="ct">{$t("Community ownership")}</div>
+            {#if activeOffer}
+              <p>{tr("Ownership offered to @{name}", { name: activeOffer.to })}</p>
+            {/if}
+            {#if activeOffer?.to === me}
+              <button class="row" disabled={transferBusy} onclick={acceptOwnership}>{$t("Accept ownership")}</button>
+            {:else if owner}
+              <select aria-label={$t("New owner")} bind:value={successor}>
+                <option value="">{$t("Choose a member")}</option>
+                {#each group.members.filter(m => m.username !== me && !group?.banned?.includes(m.username)) as member (member.username)}
+                  <option value={member.username}>@{member.username}</option>
+                {/each}
+              </select>
+              <button class="row" disabled={!successor || transferBusy} onclick={offerOwnership}>{$t("Send offer")}</button>
+            {/if}
+          </div>
+        {/if}
+
         {#if group.rules}
           <details class="card rules" style:--acc={group.accent ?? "var(--accent)"}>
             <summary class="ct">{$t("Rules")}</summary>
@@ -919,6 +979,22 @@
             </div>
           {/if}
           {#if isChannel}
+            {#if owner}
+              <div class="row transfer">
+                <label>
+                  {$t("Linked discussion group")}
+                  <select bind:value={discussionPick}>
+                    <option value="">{$t("No linked group")}</option>
+                    {#each discussions as discussion (discussion.id)}
+                      <option value={discussion.id}>{discussion.title}</option>
+                    {/each}
+                  </select>
+                </label>
+                <button disabled={busy || discussionPick === (group.settings.discussion_group ?? "")} onclick={() => changeDiscussion()}>{$t("Save")}</button>
+                <button disabled={busy} onclick={() => changeDiscussion(true)}>{$t("Create discussion group")}</button>
+              </div>
+            {/if}
+            {@render toggle("Authors edit only their own posts", "Applies to everyone, even when posting as the same channel.", group.settings.own_post_edits !== false, () => commit((g) => { g.settings.own_post_edits = g.settings.own_post_edits === false; }), !owner)}
             {@render toggle("Sign messages", "Add the admin's name to posts", group.settings.sign_messages, () => toggleSetting("sign_messages", "sign messages"))}
             {@render toggle("Show authors' profiles", "Signatures link to the author", !!group.settings.show_authors, () => toggleSetting("show_authors", "show authors' profiles"))}
           {:else if !basic}
@@ -1330,6 +1406,9 @@
 {/if}
 
 <style>
+  .transfer select { margin: 0 12px 8px; width: calc(100% - 24px); font: inherit; color: var(--fg); background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; padding: 7px; }
+  .transfer p { margin: 0 12px 8px; color: var(--fg-muted); }
+
   .sub-ct { margin-top: 10px; }
   .backdrop { position: fixed; inset: 0; background: rgba(6,7,12,0.6); backdrop-filter: blur(4px);
               display: grid; place-items: center; z-index: 130; padding: 20px; }

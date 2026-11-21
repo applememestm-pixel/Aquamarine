@@ -17,6 +17,7 @@ pub mod media_server;
 pub mod personal;
 pub mod history;
 pub mod history_sync;
+mod large_files;
 pub mod devtrust;
 pub mod security;
 pub mod backups;
@@ -244,6 +245,7 @@ pub fn run() -> Result<()> {
             stt::stt_download,
             stt::stt_delete,
             stt::stt_transcribe,
+            stt::server_processing,
             commands::allow_media_preview,
             media_server::media_stream_url,
             media_server::probe_media,
@@ -391,16 +393,21 @@ pub fn run() -> Result<()> {
             commands::list_groups,
             commands::create_group,
             commands::update_group,
+            commands::community_offer,
+            commands::community_accept,
+            commands::link_discussion,
             commands::leave_group,
             commands::group_set_my_tag,
             commands::group_request_join,
             commands::group_send,
             commands::set_group_room,
             commands::edit_message,
+            commands::edit_channel_post,
             commands::delete_message,
             commands::delete_messages_local,
             commands::delete_chat,
             commands::mark_chat_read,
+            commands::mark_thread_mentions,
             commands::set_tz_offset,
             commands::change_username,
             commands::follow_peer_by_uid,

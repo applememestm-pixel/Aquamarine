@@ -286,7 +286,7 @@ pub async fn get_star(State(_state): State<AppState>, Path(uid): Path<String>) -
 }
 
 /// The account's star statement: signed here (the star relay), else asked
-/// of it and remembered for 5 minutes. `Ok(None)` — no star; `Err` — the
+/// of it and cached briefly. `Ok(None)` — no star; `Err` — the
 /// star relay couldn't be asked (that's not "no star"). Also quota.rs.
 pub async fn star_of(uid: &str) -> Result<Option<Statement>, ()> {
     let uid = uid.to_string();
@@ -295,25 +295,31 @@ pub async fn star_of(uid: &str) -> Result<Option<Statement>, ()> {
         let star = with_stars(|m| m.get(&uid).filter(|s| s.live(t)).map(|s| (s.kind, s.until)));
         return Ok(star.and_then(|(k, until)| sign(&uid, k, until)));
     }
-    if let Some((at, st)) = CACHE.lock().ok().and_then(|g| g.as_ref().and_then(|m| m.get(&uid).cloned())) {
-        if now() < at + 300 {
-            return Ok(st);
+    let cached = CACHE.lock().ok().and_then(|g| g.as_ref().and_then(|m| m.get(&uid).cloned()));
+    if let Some((at, statement)) = &cached {
+        if now() < at + 30 && statement.as_ref().is_none_or(|st| st.exp > now()) {
+            return Ok(statement.clone());
         }
     }
     let home = std::env::var("AQUA_STAR_HOME").ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| DEFAULT_HOME.into());
     let url = format!("{}/v1/stars/{uid}", home.trim_end_matches('/'));
-    let st: Option<Statement> = async {
+    let reply = async {
         let c = reqwest::Client::builder().timeout(std::time::Duration::from_secs(8)).build().map_err(|_| ())?;
         let r = c.get(&url).send().await.map_err(|_| ())?;
-        if r.status() == StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
-        if !r.status().is_success() {
-            return Err(());
-        }
-        r.json::<Statement>().await.map(Some).map_err(|_| ())
-    }
-    .await?;
+        if r.status() == StatusCode::NOT_FOUND { return Ok(None); }
+        if !r.status().is_success() { return Err(()); }
+        let st: Statement = r.json().await.map_err(|_| ())?;
+        if st.uid != uid || st.exp <= now() || !(1..=6).contains(&st.kind) { return Err(()); }
+        let pk: [u8; 32] = hex::decode(official_public()).map_err(|_| ())?.try_into().map_err(|_| ())?;
+        let sig: [u8; 64] = hex::decode(&st.sig).map_err(|_| ())?.try_into().map_err(|_| ())?;
+        aqua_core::crypto::SignPublic::from_bytes(pk).verify(&signed_bytes(&uid, st.kind, st.exp), &sig).map_err(|_| ())?;
+        Ok(Some(st))
+    }.await;
+    let st = match reply {
+        Ok(value) => value,
+        Err(()) => return cached.and_then(|(_, st)| st)
+            .filter(|st| st.exp > now()).map(|st| Some(st)).ok_or(()),
+    };
     if let Ok(mut g) = CACHE.lock() {
         let m = g.get_or_insert_with(BTreeMap::new);
         if m.len() > 5000 {
