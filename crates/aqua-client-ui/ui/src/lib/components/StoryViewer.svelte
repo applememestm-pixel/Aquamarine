@@ -48,6 +48,7 @@
     : u === "" ? $myStories.filter((s) => isLive(s)) : saneStories($peerPresence[u]?.st);
   let list = $derived<Story[]>(v ? storiesOf(v.user) : []);
   let cur = $derived(v ? list[v.index] ?? null : null);
+  const currentId = $derived(cur?.id);
   let url = $state("");
   let photoReady = $state(false);
   let err = $state("");
@@ -109,9 +110,10 @@
   // Load the current story's file, and the next ones ahead.
   let retry = $state(0);
   $effect(() => {
-    const s = cur;
-    if (!s) return;
+    const id = currentId;
     void retry;
+    const s = untrack(() => cur);
+    if (!id || !s) return;
     let active = true;
     const owner = untrack(() => v?.user ?? "");
     err = ""; progress = 0; photoReady = false;
@@ -430,7 +432,7 @@
         ontimeupdate={(e) => { const el = e.currentTarget as HTMLVideoElement; if (el.duration) progress = el.currentTime / el.duration; }}
         onended={next}></video>
     {:else if (live ? url : cached(s)) && s?.media.kind !== "video"}
-      {#key live ? url : cached(s)}
+      {#key (s?.id ?? "") + ":" + (live ? url : cached(s))}
         <img class="fg" src={live ? url : cached(s)} alt="" draggable="false" decoding="async"
           onload={() => { if (live) photoReady = true; }}
           onerror={() => {
