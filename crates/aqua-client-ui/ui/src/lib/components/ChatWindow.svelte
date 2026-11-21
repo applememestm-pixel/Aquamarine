@@ -5780,10 +5780,10 @@
 {#if (audit && audit.edit_audit?.length && isAdmin(activeGroup, myUsername)) || translation !== null}
   <div class="audit-shade">
     <button class="audit-dismiss" aria-label={$t("Close")} tabindex="-1" onclick={() => { audit = null; translation = null; }}></button>
-    <section class="audit-card" role="dialog" aria-modal="true" aria-label={$t(translation !== null ? "Translation" : "Edit details")} tabindex="-1" use:focusAuditDialog
+    <div class="audit-card" role="dialog" aria-modal="true" aria-label={$t(translation !== null ? "Translation" : "Edit details")} tabindex="-1" use:focusAuditDialog
       onkeydown={e => {
         if (e.key === "Escape") { e.stopPropagation(); audit = null; translation = null; }
-        if (e.key === "Tab") { e.preventDefault(); e.currentTarget.querySelector("header button")?.focus(); }
+        if (e.key === "Tab") { e.preventDefault(); e.currentTarget.querySelector<HTMLButtonElement>("header button")?.focus(); }
       }}>
       <header><strong>{$t(translation !== null ? "Translation" : "Edit details")}</strong><button aria-label={$t("Close")} onclick={() => { audit = null; translation = null; }}>×</button></header>
       {#if translation !== null}
@@ -5793,7 +5793,7 @@
         <div class="audit-entry"><span>@{edit.editor} · {auditDate(edit.at)}</span><p>{edit.previous}</p></div>
       {/each}
       {/if}
-    </section>
+    </div>
   </div>
 {/if}
 
