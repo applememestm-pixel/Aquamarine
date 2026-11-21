@@ -82,7 +82,7 @@
   import SignInProtection from "./SignInProtection.svelte";
   import { deviceTrust } from "./DeviceApproval.svelte";
   import { ghost, blocked, setBlocked } from "../ghost";
-  import { lockConf, setAutoLock, lockNow, passcodeSetupOpen, biometricAvailable, setBiometric } from "../lock";
+  import { lockConf, setAutoLock, lockNow, removePasscode, passcodeSetupOpen, biometricAvailable, setBiometric } from "../lock";
   import { t, lang, LANGS, tr } from "../i18n";
   import { chats, activeId, loadActiveMessages } from "../stores";
   import { BUILTIN_SOUNDS, customSounds, refreshSounds, playSound, soundLabel, addSoundBytes } from "../sounds";
@@ -901,6 +901,23 @@
     const result = await openFileDialog({ multiple: true, directory: false, title, filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }] });
     return Array.isArray(result) ? result : result ? [result] : [];
   }
+  function turnOffPasscode() {
+    const pin = $lockConf?.kind === "pin";
+    askInput({
+      title: tr("Turn off passcode lock"),
+      fields: [{ label: tr(pin ? "Passcode" : "Password"), secret: true }],
+      submitLabel: tr("Turn off"),
+      onSubmit: async ([pass]) => {
+        try {
+          return await removePasscode(pass) ? null : tr(pin ? "Wrong passcode" : "Wrong password");
+        } catch (e) {
+          const wait = /wait:(\d+)/.exec(String(e));
+          if (wait) return tr("Too many tries. Try again in {s} s.", { s: Math.ceil(Number(wait[1]) / 1000) });
+          return tr("Could not turn off passcode lock");
+        }
+      },
+    });
+  }
   function newPackFlow() {
     askInput({
       title: tr("New sticker pack"),
@@ -1314,7 +1331,8 @@
           {/if}
           <div class="info-row">{#if IS_DESKTOP}<span class="v">{$t("Ctrl+L locks the app any time.")}</span>{/if}
             <button class="mini-btn" onclick={() => { closeSettings(); lockNow(); }}>{$t("Lock now")}</button>
-            <button class="mini-btn" onclick={() => { lockConf.set(null); passcodeSetupOpen.set(true); }}>{$t("Change")}</button>
+            <button class="mini-btn" onclick={() => passcodeSetupOpen.set(true)}>{$t("Change")}</button>
+            <button class="mini-btn" onclick={turnOffPasscode}>{$t("Turn off passcode lock")}</button>
           </div>
         {:else}
           <button class="mini-btn" onclick={() => passcodeSetupOpen.set(true)}>{$t("Set a passcode")}</button>
@@ -1914,7 +1932,7 @@
         {#if !$storiesOff}
           <div class="row">
             <span class="row-label">{$t("Next person")}</span>
-            <Select class="sel" value={$storyNav || "cube"} options={[{ value: "cube", label: $t("Sideways (cube)") }, { value: "vertical", label: $t("Down (feed)") }]}
+            <Select class="sel" value={$storyNav || "cube"} options={[{ value: "cube", label: $t("Sideways") }, { value: "vertical", label: $t("Down (feed)") }]}
               onchange={(v) => storyNav.set(v === "vertical" ? "vertical" : "cube")} />
           </div>
           <button class="toggle-row" onclick={() => storyArchiveOpen.set(true)}>
@@ -2736,7 +2754,7 @@
       {/if}
       <section class="group">
         <div class="label">{$t("How to start")}</div>
-        <div class="bots-note">{$t("1. Connect by QR code: one of you shows the code, the other scans it — that exchanges the keys and the Bluetooth address, like Briar; or chat once through a server. 2. Keep Bluetooth on (the device from the QR is dialled directly, no pairing) or be on the same Wi-Fi. 3. Messages are swapped automatically every couple of minutes while the server is away, or right now with “Find contacts nearby”.")}</div>
+        <div class="bots-note">{$t("For a new contact, open Meet nearby. On Android, the phone showing the code should prepare Bluetooth before the other phone scans. For an existing contact, use Find contacts nearby while the other phone is listening. You can also use the same Wi-Fi network.")}</div>
       </section>
       {/if}
 

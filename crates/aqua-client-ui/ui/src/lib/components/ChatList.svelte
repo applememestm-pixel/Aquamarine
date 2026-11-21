@@ -52,6 +52,7 @@
   import { openNewGroup } from "./NewGroupWizard.svelte";
 
   let plusMenuOpen = $state(false);
+  $effect(() => { if (plusMenuOpen) return onBack(() => (plusMenuOpen = false)); });
   /** Phones: the pencil at the bottom (Telegram) unfolds into what to make. */
   let fabOpen = $state(false);
   /** "My story" tapped with none up: camera or gallery. */
@@ -1050,7 +1051,7 @@
   {/if}
 {/snippet}
 
-<aside class="list" class:resizing class:compact class:lines3={$chatLines === 3} class:has-active={!!$activeId}>
+<aside class="list" class:resizing class:compact class:lines3={$chatLines === 3} class:has-active={!!$activeId} class:desktop-list={!IS_MOBILE}>
   {#if $themeSettings.snow}
     <!-- exteraGram's snow: a few flakes drifting over the list (sparser now). -->
     <Snow count={18} />
@@ -1068,10 +1069,9 @@
       onclick={meClick} oncontextmenu={(e) => e.preventDefault()} aria-label={$t("Profile")} title={$t("Tap — profile, hold — accounts")}>
       {#if $profile.avatar_url}<img src={$profile.avatar_url} alt="" draggable="false" />{:else}{meLetter}{/if}
     </button>
-    <!-- Phones: one avatar only (Telegram) — stories open by pulling the
-         list down or from ⋮, accounts from ⋮ (or holding the avatar). -->
+
     <span class="m-name" class:center={$themeSettings.centerTitle}>{$themeSettings.listTitle === "name" ? ($profile.display_name && $profile.display_name !== "You" ? $profile.display_name : "Aquamarine") : $themeSettings.listTitle === "username" && $info?.username ? "@" + $info.username : "Aquamarine"}</span>
-    {#if IS_MOBILE}{@render headExtras()}{/if}
+    {#if IS_MOBILE}{@render stack()}{@render headExtras()}{/if}
     <!-- The connection: ping when connected, "connecting" otherwise; tap —
          the servers sheet (switch server, see which ones answer). -->
     {#if $info && !($themeSettings.hideNetBadge && $info.connected)}
@@ -1085,8 +1085,8 @@
         {:else}<span class="m-dot"></span>{$t("online")}{/if}
       </button>
     {/if}
-    <button class="m-menu" onclick={() => (plusMenuOpen = !plusMenuOpen)} aria-label={$t("New")}>
-      <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
+    <button class="m-menu" onclick={() => (plusMenuOpen = !plusMenuOpen)} aria-label={$t("Menu")} aria-expanded={plusMenuOpen}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
     </button>
   </div>
   {#if sel.length}
@@ -1171,42 +1171,6 @@
         </button>
       {/if}
     </label>
-    <div class="plus-wrap">
-      <button
-        class="plus-btn"
-        class:nudge={$visibleChats.every((c) => !c.live)}
-        onclick={() => (plusMenuOpen = !plusMenuOpen)}
-        title={$t("New chat, group or channel")}
-        aria-label={$t("New")}
-      >
-        <svg class="plus-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-      </button>
-      {#if plusMenuOpen}
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="plus-pop" role="menu" tabindex="-1">
-          <!-- Phone: chat, group, server and channel live on the pencil button — no doubles here. -->
-          {#if !IS_MOBILE}
-            <button onclick={() => { plusMenuOpen = false; openNewChatDialog(); }}>{$t("New chat")}</button>
-            <button onclick={() => { plusMenuOpen = false; openNewGroup("group"); }}>{$t("New group")}</button>
-            <button onclick={() => { plusMenuOpen = false; openNewGroup("supergroup"); }}>{$t("New server")}</button>
-          {/if}
-          {#if !$storiesOff}<button onclick={() => { plusMenuOpen = false; void addStory(IS_MOBILE ? "camera" : "gallery"); }}>{$t("Add a story")}</button>{/if}
-          {#if IS_MOBILE}
-            <!-- Telegram's ⋮: Saved Messages, day / night, the server. -->
-            {#if storiesHere}<button onclick={() => { plusMenuOpen = false; openStrip(); }}>{$t("Stories")}</button>{/if}
-            <button onclick={() => { plusMenuOpen = false; openAccounts(); }}>{$t("Accounts")}</button>
-            <button onclick={() => { plusMenuOpen = false; void selectChat("__saved__"); }}>{$t("Saved Messages")}</button>
-            <button onclick={() => { plusMenuOpen = false; toggleDayNight(); }}>{$t(shownMode($themeSettings) === "light" ? "Night mode" : "Day mode")}</button>
-            <button onclick={() => { plusMenuOpen = false; openServers(); }}>{$t("Server")}</button>
-          {/if}
-          {#if !IS_MOBILE}<button onclick={() => { plusMenuOpen = false; openNewGroup("channel"); }}>{$t("New channel")}</button>
-            <button onclick={() => { plusMenuOpen = false; openNewGroup("community"); }}>{$t("New community")}</button>{/if}
-          {#if $chats.some((c) => c.unread > 0)}<button onclick={() => { plusMenuOpen = false; markAllRead(); }}>{$t("Mark all as read")}</button>{/if}
-        </div>
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="plus-scrim" onclick={() => (plusMenuOpen = false)}></div>
-      {/if}
-    </div>
   </div>
 
   {#if searchMode}
@@ -1523,6 +1487,54 @@
     {/each}
   </div>
 
+    <div class="plus-wrap" class:desktop-compose={!IS_MOBILE}>
+      <button
+        class="plus-btn"
+        class:nudge={$visibleChats.every((c) => !c.live)}
+        onclick={() => (plusMenuOpen = !plusMenuOpen)}
+        title={$t("New chat, group or channel")}
+        aria-label={$t("New")}
+      >
+        <svg class="plus-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+      </button>
+      {#if plusMenuOpen}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="plus-pop" class:drawer={IS_MOBILE} role="menu" tabindex="-1">
+          {#if IS_MOBILE}
+            <div class="drawer-head">
+              <button data-x onclick={() => (plusMenuOpen = false)} aria-label={$t("Close")}>×</button>
+              <button class="drawer-profile" onclick={() => { plusMenuOpen = false; openAccounts(); }}>
+                <span>{$profile.display_name || $info?.username || "Aquamarine"}</span>
+                <small>@{$info?.username ?? ""}</small>
+              </button>
+            </div>
+            <button onclick={() => { plusMenuOpen = false; openNewChatDialog(); }}>{$t("New chat")}</button>
+            <button onclick={() => { plusMenuOpen = false; openNewGroup("group"); }}>{$t("New group")}</button>
+            <button onclick={() => { plusMenuOpen = false; openNewGroup("channel"); }}>{$t("New channel")}</button>
+          {/if}
+          {#if !IS_MOBILE}
+            <button onclick={() => { plusMenuOpen = false; openNewChatDialog(); }}>{$t("New chat")}</button>
+            <button onclick={() => { plusMenuOpen = false; openNewGroup("group"); }}>{$t("New group")}</button>
+            <button onclick={() => { plusMenuOpen = false; openNewGroup("supergroup"); }}>{$t("New server")}</button>
+          {/if}
+          {#if !$storiesOff}<button onclick={() => { plusMenuOpen = false; void addStory(IS_MOBILE ? "camera" : "gallery"); }}>{$t("Add a story")}</button>{/if}
+          {#if IS_MOBILE}
+            <!-- Telegram's ⋮: Saved Messages, day / night, the server. -->
+            {#if storiesHere}<button onclick={() => { plusMenuOpen = false; openStrip(); }}>{$t("Stories")}</button>{/if}
+            <button onclick={() => { plusMenuOpen = false; openAccounts(); }}>{$t("Accounts")}</button>
+            <button onclick={() => { plusMenuOpen = false; void selectChat("__saved__"); }}>{$t("Saved Messages")}</button>
+            <button onclick={() => { plusMenuOpen = false; toggleDayNight(); }}>{$t(shownMode($themeSettings) === "light" ? "Night mode" : "Day mode")}</button>
+            <button onclick={() => { plusMenuOpen = false; openServers(); }}>{$t("Server")}</button>
+          {/if}
+          {#if !IS_MOBILE}
+            <button onclick={() => { plusMenuOpen = false; openNewGroup("channel"); }}>{$t("New channel")}</button>
+            <button onclick={() => { plusMenuOpen = false; openNewGroup("community"); }}>{$t("New community")}</button>
+          {/if}
+          {#if $chats.some((c) => c.unread > 0)}<button onclick={() => { plusMenuOpen = false; markAllRead(); }}>{$t("Mark all as read")}</button>{/if}
+        </div>
+        <button class="plus-scrim" aria-label={$t("Close")} onclick={() => (plusMenuOpen = false)}></button>
+      {/if}
+    </div>
   {#if IS_MOBILE && !searchMode && !sel.length}
     {#if fabOpen}
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
@@ -2046,6 +2058,13 @@
      the user has no real chats yet so it reads as the primary
      action, otherwise it sits quietly. */
   .plus-wrap { position: relative; flex-shrink: 0; }
+  .plus-wrap.desktop-compose { position: absolute; bottom: 18px; right: 18px; z-index: 35; }
+  .desktop-list:not(.compact) .chats { padding-bottom: 68px; }
+  .list.compact .desktop-compose { right: 8px; bottom: 10px; }
+  .list.compact .desktop-compose .plus-btn { width: 36px; height: 36px; }
+  .list.compact .desktop-compose .plus-pop { left: 0; right: auto; }
+  .desktop-compose .plus-btn { width: 48px; height: 48px; border-radius: calc(16px * var(--rk, 1)); }
+  .desktop-compose .plus-pop { top: auto; bottom: calc(100% + 8px); }
   .plus-pop {
     position: absolute; top: 42px; right: 0; z-index: 40;
     background: var(--bg-shell); border: 1px solid var(--border-strong);
@@ -2058,7 +2077,19 @@
     background: transparent; color: var(--fg); font: inherit; font-size: 13.5px; font-weight: 500; cursor: pointer;
   }
   .plus-pop button:hover { background: var(--accent-soft); color: var(--accent); }
-  .plus-scrim { position: fixed; inset: 0; z-index: 30; }
+  .plus-scrim { position: fixed; inset: 0; z-index: 30; border: 0; background: transparent; cursor: default; }
+  .drawer + .plus-scrim { background: #0006; }
+  .plus-pop.drawer { position: fixed; inset: 0 auto 0 0; z-index: 200; width: min(310px, 86vw); min-width: 0; box-sizing: border-box; overflow-y: auto;
+    padding: calc(8px + var(--sat, env(safe-area-inset-top, 0px))) 10px calc(12px + var(--sab, env(safe-area-inset-bottom, 0px)));
+    border-radius: 0 calc(18px * var(--rk, 1)) calc(18px * var(--rk, 1)) 0; animation: drawer-in .18s ease-out; }
+  .plus-pop.drawer > button { min-height: 44px; }
+  .drawer-head { display: flex; flex-direction: column; align-items: stretch; padding-bottom: 12px; border-bottom: 1px solid var(--border); margin-bottom: 8px; }
+  .drawer-head > button:first-child { align-self: flex-end; font-size: 22px; }
+  .drawer-head .drawer-profile { display: flex; flex-direction: column; gap: 4px; font-size: 18px; font-weight: 700; }
+  .drawer-profile small { color: var(--fg-muted); font-size: 13px; font-weight: 400; }
+  .drawer + .plus-scrim { z-index: 199; background: color-mix(in srgb, var(--bg-shell) 55%, transparent); }
+  @keyframes drawer-in { from { transform: translateX(-100%); } }
+  @media (prefers-reduced-motion: reduce) { .plus-pop.drawer { animation: none; } }
   .plus-btn {
     width: 34px; height: 34px;
     display: grid; place-items: center;
@@ -2216,6 +2247,7 @@
   .stories .st-item:nth-child(n + 4) { opacity: var(--p, 1); }
   .stories .st-nm { opacity: calc(var(--p, 1) * 2 - 1); }
   .st-stack.gone { pointer-events: none; max-width: 0; padding: 0; margin: 0 -9px 0 0; }
+  .m-title .st-stack:not(.gone) { max-width: 62px; }
   .stories::-webkit-scrollbar { display: none; }
   .st-item.hid { opacity: .45; }
   .st-ava.ring.close { background: conic-gradient(from 210deg, #34C759, #9BE15D, #34C759); }

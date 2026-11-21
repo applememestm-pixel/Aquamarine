@@ -3,6 +3,12 @@
 const base = `viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"`;
 
 export const icons = {
+  play: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5a1 1 0 0 1 1.5-.9l10 6.5a1 1 0 0 1 0 1.8l-10 6.5a1 1 0 0 1-1.5-.9z"/></svg>`,
+  pause: `<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1.2"/><rect x="14" y="5" width="4" height="14" rx="1.2"/></svg>`,
+  shuffle: `<svg ${base}><path d="M3 6h3c3 0 4 3 6 6s3 6 6 6h3M3 18h3c1.6 0 2.7-.9 3.7-2.3M14.3 8.3C15.3 6.9 16.4 6 18 6h3m-3-3 3 3-3 3m0 6 3 3-3 3"/></svg>`,
+  star: `<svg ${base}><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2-5.5-2.9-5.5 2.9 1-6.2L3 9.6l6.2-.9z"/></svg>`,
+  close: `<svg ${base}><path d="m6 6 12 12M18 6 6 18"/></svg>`,
+
   music:   `<svg ${base}><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`,
   chats:   `<svg ${base}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`,
   phone:   `<svg ${base}><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.86 19.86 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.86 19.86 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.37 1.9.72 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.35 1.85.59 2.81.72A2 2 0 0 1 22 16.92z"/></svg>`,

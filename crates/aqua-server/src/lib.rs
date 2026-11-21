@@ -945,31 +945,29 @@ async fn upload_blob(
     if shelf == blobstore::Shelf::Keep && body.len() > blobstore::KEEP_LIMIT {
         return Err((StatusCode::PAYLOAD_TOO_LARGE, "only files up to 4 MiB can be kept".into()));
     }
-    // Chat files count against the share (a file already here costs nothing).
     let len = body.len() as u64;
-    if shelf == blobstore::Shelf::Cache && !store.has_cached(&cid) {
-        let (used, limit) = (quota::used(&state, &owner), quota::files_limit(&limits, &owner, tier));
-        if used + len > limit {
-            return Err((StatusCode::INSUFFICIENT_STORAGE, format!("quota: files {used} {limit}")));
+    let limit = quota::files_limit(&limits, &owner, tier);
+    tokio::task::spawn_blocking(move || {
+        let io_error = |error: std::io::Error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+        match shelf {
+            blobstore::Shelf::Story => store.put_story(&cid, &body).map_err(io_error)?,
+            blobstore::Shelf::Keep => store.put_keep(&cid, &body).map_err(io_error)?,
+            blobstore::Shelf::Cache => {
+                // Keep admission and the committed charge together, including when
+                // the HTTP client disconnects while the disk write is running.
+                let _upload = quota::lock_upload(&owner);
+                let (used, generation) = quota::usage_snapshot(&state, &owner);
+                if len > limit.saturating_sub(used) && !store.has_cached(&cid) {
+                    return Err((StatusCode::INSUFFICIENT_STORAGE, format!("quota: files {used} {limit}")));
+                }
+                if store.put_owned(&cid, &body, &owner).map_err(io_error)? {
+                    quota::add(&owner, len, generation);
+                }
+            }
         }
-    }
-    let kind = q.kind.clone();
-    let who = owner.clone();
-    let charged = tokio::task::spawn_blocking(move || {
-        let r = match shelf {
-            blobstore::Shelf::Story => store.put_story(&cid, &body).map(|_| false),
-            blobstore::Shelf::Keep => store.put_keep(&cid, &body).map(|_| false),
-            blobstore::Shelf::Cache => store.put_owned(&cid, &body, &who),
-        };
-        if let (Ok(_), Some(k)) = (&r, kind) { store.set_kind(&cid, shelf, &k); }
-        r
-    })
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    if charged {
-        quota::add(&owner, len);
-    }
+        if let Some(kind) = q.kind.as_deref() { store.set_kind(&cid, shelf, kind); }
+        Ok(())
+    }).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -2538,13 +2536,13 @@ async fn bot_register(
         None if !state.require_registration => q.account.bots,
         None => q.guest.bots,
     };
-    if state.directory.list_bots_for_owner(&dh_pub).len() as u32 >= max {
-        return Err((StatusCode::FORBIDDEN, format!("quota: bots {max}")));
-    }
     let token = state
         .directory
-        .register_bot(&username, &dh_pub, &body.display_name)
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+        .register_bot_with_limit(&username, &dh_pub, &body.display_name, i64::from(max))
+        .map_err(|error| match error {
+            directory::DirError::TooManyBots => (StatusCode::FORBIDDEN, format!("quota: bots {max}")),
+            other => (StatusCode::BAD_REQUEST, other.to_string()),
+        })?;
     let telegram_token = tgapi::telegram_token(&username, &token);
     Ok(Json(BotRegisterResp { ok: true, username, token, telegram_token }))
 }

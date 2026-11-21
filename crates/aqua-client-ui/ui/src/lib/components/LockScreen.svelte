@@ -130,7 +130,7 @@
     finally { busy = false; }
   }
   function skipSetup() {
-    lockConf.set({ hash: "", salt: "", autoMin: 0, skipped: true });
+    if (!$lockConf?.hash) lockConf.set({ hash: "", salt: "", autoMin: 0, skipped: true });
     passcodeSetupOpen.set(false);
   }
 
@@ -180,7 +180,7 @@
         {:else}
           <div class="pair">
             <button class="ghost" onclick={() => { usePassword = true; pass = ""; err = ""; }}>{$t("Use a password instead")}</button>
-            <button class="ghost" onclick={skipSetup}>{$t("Not now")}</button>
+            <button class="ghost" onclick={skipSetup}>{$t($lockConf?.hash ? "Cancel" : "Not now")}</button>
           </div>
         {/if}
       {:else if $locked && forgotStep === 0}
@@ -222,7 +222,7 @@
           {#if err}<div class="err">{err}</div>{/if}
           <button class="primary" onclick={doSetup} disabled={busy}>{$t("Save passcode")}</button>
         </div>
-        <div class="pair"><button class="ghost" onclick={() => { usePassword = false; pass = ""; pass2 = ""; err = ""; }}>{$t("Use 4 digits instead")}</button><button class="ghost" onclick={skipSetup}>{$t("Not now")}</button></div>
+        <div class="pair"><button class="ghost" onclick={() => { usePassword = false; pass = ""; pass2 = ""; err = ""; }}>{$t("Use 4 digits instead")}</button><button class="ghost" onclick={skipSetup}>{$t($lockConf?.hash ? "Cancel" : "Not now")}</button></div>
         <div class="hint">{$t("Ctrl+L locks the app any time.")}</div>
       {/if}
     </div>

@@ -39,6 +39,7 @@
   import { openPackManager } from "./PackManager.svelte";
   import { openSettings } from "../panels/settings";
   import AnimatedMedia from "./AnimatedMedia.svelte";
+  import { notePack, noteSticker } from "../stickerSync";
 
   interface Item { key: string; src: Promise<string> | string; mime: string; emoji: string; path?: string }
   type Preview = Awaited<ReturnType<typeof api.packPreview>>;
@@ -104,6 +105,7 @@
     busy = true;
     try {
       const r = await api.importPackViaServer(preview.server.name as string);
+      notePack(preview.server.name as string);
       stickerLibraryTick.update((n) => n + 1);
       showToast(tr("Pack “{t}” added: {n} stickers", { t: r.pack_title || preview.title, n: r.imported || items.length }));
       await load(preview.ref);
@@ -117,6 +119,7 @@
     if (!peer) return;
     try {
       await api.sendSticker(peer, it.path);
+      if (preview?.local) noteSticker(preview.local, it.path);
       await loadActiveMessages();
       close();
     } catch (e) { showToast(String(e)); }

@@ -23,6 +23,7 @@
   import { openStickerQueue, openStickerEditor, stickerLibraryTick } from "../panels/stickerEditor";
   import AnimatedMedia from "./AnimatedMedia.svelte";
   import { emojiFromFile } from "../reactionPack";
+  import { notePack } from "../stickerSync";
 
   const QUICK = ["😀", "😂", "🥰", "😍", "😎", "🤔", "😭", "😡", "👍", "👎", "👏", "🙏", "❤️", "🔥", "✨", "🎉", "💀", "🤡", "😴", "🤯", "🥺", "😱", "🤝", "👋"];
   const LIMIT = { sticker: 120, emoji: 200 };
@@ -166,7 +167,7 @@
   async function delPack() {
     if (!pack) return;
     if (!(await askConfirm({ title: tr("Delete pack?"), text: tr("“{pack}” and all its stickers are removed from this device.", { pack: pack.title }), ok: tr("Delete"), danger: true }))) return;
-    try { await api.deleteStickerPack(pack.title); closePackManager(); changed(); } catch (e) { showToast(String(e)); }
+    try { await api.deleteStickerPack(pack.title); if (pack.source) notePack(pack.source, true); closePackManager(); changed(); } catch (e) { showToast(String(e)); }
   }
 
   function onKey(e: KeyboardEvent) {

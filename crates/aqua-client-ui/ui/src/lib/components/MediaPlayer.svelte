@@ -113,7 +113,7 @@
    *  past the end once: the browser then knows the real length; back to 0. */
   let probing = false;
   function probeLength() {
-    if (!media || duration || probing || isFinite(media.duration)) return;
+    if (!media || duration || probing || (isFinite(media.duration) && media.duration > 0)) return;
     probing = true;
     try { media.currentTime = 1e101; } catch { probing = false; }
   }

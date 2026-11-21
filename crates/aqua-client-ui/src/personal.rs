@@ -98,11 +98,22 @@ fn theme_path_ok(path: &str) -> Result<PathBuf, String> {
 
 /// Save a theme config the user exported (path from a save dialog).
 #[tauri::command]
-pub fn write_theme_file(path: String, text: String) -> Result<(), String> {
-    let p = theme_path_ok(&path)?;
+pub fn write_theme_file(app: tauri::AppHandle, path: String, text: String) -> Result<(), String> {
     if text.len() as u64 > MAX_THEME {
         return Err("theme too large".into());
     }
+    if path.starts_with("content://") {
+        use std::io::Write;
+        use tauri_plugin_fs::FsExt;
+        let url = tauri::Url::parse(&path).map_err(|e| format!("bad file URI: {e}"))?;
+        let mut options = tauri_plugin_fs::OpenOptions::new();
+        options.read(false).write(true).truncate(true).create(true);
+        let mut file = app.fs().open(tauri_plugin_fs::FilePath::Url(url), options).map_err(|e| format!("open theme: {e}"))?;
+        file.write_all(text.as_bytes()).map_err(|e| format!("write theme: {e}"))?;
+        file.sync_all().map_err(|e| format!("save theme: {e}"))?;
+        return Ok(());
+    }
+    let p = theme_path_ok(&path)?;
     std::fs::write(p, text).map_err(|e| format!("write: {e}"))
 }
 
@@ -123,7 +134,12 @@ pub fn write_text_file(path: String, text: String) -> Result<(), String> {
 
 /// Read a theme config (picked by the user, or received in a chat).
 #[tauri::command]
-pub fn read_theme_file(path: String) -> Result<String, String> {
+pub fn read_theme_file(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    if path.starts_with("content://") || path.starts_with("file://") {
+        let bytes = crate::commands::read_picked_bytes(&app, &path)?;
+        if bytes.len() as u64 > MAX_THEME { return Err("theme too large".into()); }
+        return String::from_utf8(bytes).map_err(|e| format!("read theme: {e}"));
+    }
     let p = theme_path_ok(&path)?;
     let len = std::fs::metadata(&p).map_err(|e| e.to_string())?.len();
     if len > MAX_THEME {

@@ -60,6 +60,7 @@
   import { updateProfile } from "../profile";
   import { publishMyProfile } from "../people";
   import { loadActiveMessages } from "../stores";
+  import { stickerState, stickerKey, noteSticker, clearRecentStickers, notePack } from "../stickerSync";
   import AnimatedMedia from "./AnimatedMedia.svelte";
   import { stickerVerdict, refreshPackRules, showAdult, showTeen } from "../packRules";
   import { reactionPack, emojiFromFile, REACTION_PACK, loadReactionPack, loadEmojiPacks } from "../reactionPack";
@@ -163,6 +164,7 @@
     armed = null;
     try {
       await api.deleteStickerPack(p.title);
+      if (p.source) notePack(p.source, true);
       showToast(tr("Deleted “{pack}”", { pack: p.title }));
       await refreshCatalogue();
       stickerLibraryTick.update((x) => x + 1);
@@ -177,7 +179,7 @@
 
   function clearRecent() {
     const kind = tab === "emoji" ? "emoji" : "stickers";
-    if (kind === "emoji") recentEmoji = []; else recentStickers = [];
+    if (kind === "emoji") recentEmoji = []; else { recentStickers = []; clearRecentStickers(); }
     try { localStorage.removeItem(`aqua.recent.${kind}`); } catch { /* private mode */ }
   }
 
@@ -200,7 +202,20 @@
   $effect(() => { const n = $stickerLibraryTick; if (n !== seenTick) { seenTick = n; untrack(() => void refreshCatalogue()); } });
   async function refreshCatalogue() {
     loading = true;
-    try { catalogue = await api.listLocalMedia(); }
+    try {
+      catalogue = await api.listLocalMedia();
+      const packs = catalogue.packs;
+      stickerState.update((state) => {
+        const recent = { ...state.recent };
+        for (let i = recentStickers.length - 1; i >= 0; i--) {
+          const path = recentStickers[i];
+          const pack = packs.find((p) => p.items.some((item) => item.path === path));
+          const key = pack && stickerKey(pack, path);
+          if (key && !recent[key]) recent[key] = { at: recentStickers.length - i, removed: false };
+        }
+        return { ...state, recent };
+      });
+    }
     catch (e) { showToast(`Media library: ${e}`); }
     finally { loading = false; }
   }
@@ -388,8 +403,20 @@
     const all = new Map<string, SItem>();
     const toS = (it: StickerItem): SItem => ({ kind: "sticker", key: it.path, path: it.path, url: assetUrl(it.path), mime: it.mime, emoji: it.emoji ?? emojiFromFile(fileOf(it.path)) });
     for (const p of stickerPacks) for (const it of p.items) all.set(it.path, toS(it));
-    if (!terms.length && recentStickers.length) {
-      const items = recentStickers.map((p) => all.get(p)).filter(Boolean) as SItem[];
+    if (!terms.length) {
+      const portable = new Map<string, SItem>();
+      for (const p of stickerPacks) for (const it of p.items) {
+        const key = stickerKey(p, it.path);
+        if (key) portable.set(key, toS(it));
+      }
+      const synced = Object.entries($stickerState.recent)
+        .filter(([, use]) => !use.removed && use.at > $stickerState.cleared)
+        .sort((a, b) => b[1].at - a[1].at || a[0].localeCompare(b[0]))
+        .map(([key]) => portable.get(key)).filter(Boolean) as SItem[];
+      const syncedPaths = new Set(synced.map((it) => it.path));
+      const local = recentStickers.map((p) => all.get(p)).filter((it) => it && !syncedPaths.has(it.path)
+        && !stickerPacks.some((p) => p.source && p.items.some((s) => s.path === it.path))) as SItem[];
+      const items = [...synced, ...local].slice(0, 20);
       if (items.length) secs.push({ id: "recent", title: "Recently used", icon: { emoji: "🕓" }, items });
     }
     for (const p of stickerPacks) {
@@ -472,6 +499,8 @@
   function heldUnrecent() {
     const h = held; held = null;
     if (h?.kind !== "sticker") return;
+    const pack = packOfSticker(h.path);
+    if (pack) noteSticker(pack, h.path, true);
     recentStickers = recentStickers.filter((x) => x !== h.path);
     try { localStorage.setItem("aqua.recent.stickers", JSON.stringify(recentStickers)); } catch { /* ignore */ }
   }
@@ -491,6 +520,8 @@
     if (!s.peer) return;
     try {
       await api.sendSticker(s.peer, it.path);
+      const pack = packOfSticker(it.path);
+      if (pack) noteSticker(pack, it.path);
       pushRecent("stickers", it.path);
       await loadActiveMessages();
       // The panel stays open, as in Telegram: send several in a row.
@@ -712,6 +743,7 @@
       if (/eltaller47/i.test(pack)) await loadReactionPack();
       void loadEmojiPacks();
       const p = catalogue?.packs.find((x) => x.title === r.pack_title);
+      if (p?.source) notePack(p.source);
       tab = p?.kind === "emoji" ? "emoji" : "stickers";
       showImport = false; tgPack = "";
       showToast(`Imported “${r.pack_title}” — ${r.imported} item${r.imported === 1 ? "" : "s"}`);

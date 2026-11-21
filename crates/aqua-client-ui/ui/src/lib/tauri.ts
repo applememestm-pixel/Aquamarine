@@ -90,6 +90,7 @@ export interface TelegraphPage {
 }
 
 export interface IncomingPayload {
+  preview?: string;
   peer_id: string;
   text: string;
   time: string;
@@ -367,11 +368,14 @@ export const api = {
   deleteSound:        (id: string): Promise<void>                                  => invoke("delete_sound", { id }),
   writeThemeFile:     (path: string, text: string): Promise<void>                   => invoke("write_theme_file", { path, text }),
   readThemeFile:      (path: string): Promise<string>                               => invoke("read_theme_file", { path }),
+  prepareBluetooth: (): Promise<void> => invoke("mesh_prepare_bluetooth"),
   meetQr:             (name?: string): Promise<string> => invoke("meet_qr", { name: name ?? null }),
   meetAccept:         (code: string): Promise<string> => invoke("meet_accept", { code }),
   pickedPreview:      (path: string): Promise<{ kind: "image" | "video" | "audio" | "file"; url: string | null }> => invoke("picked_preview", { path }),
   probeMediaFile:     (path: string, kind: "video" | "audio" | "size"): Promise<{ poster?: string | null; duration?: number | null; size: number; too_big: boolean }> => invoke("probe_media", { path, kind }),
   copyFileTo:         (source: string, dest: string): Promise<void>                => invoke("copy_file_to", { source, dest }),
+  exportDownload:     (peerId: string, messageId: string): Promise<boolean>             => invoke("export_download", { peerId, messageId }),
+  pickedMediaPath:    (path: string): Promise<string>                             => invoke("picked_media_path", { path }),
 
   // Voice & video messages (recorded in-browser → bytes sent to Rust → encrypted via attach pipeline)
   sendVoiceMessage:   (peer_id: string, name: string, mime: string, bytes: number[]): Promise<AttachResult> => invoke("send_voice_message", { peerId: peer_id, name, mime, bytes }),

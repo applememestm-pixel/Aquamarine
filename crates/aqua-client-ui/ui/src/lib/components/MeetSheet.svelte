@@ -25,6 +25,7 @@
    */
   import { onBack } from "../back";
   import { t } from "../i18n";
+  import { IS_ANDROID } from "../platform";
   import { profile } from "../profile";
   import QrCode from "./QrCode.svelte";
   import { scanQr } from "./QrScanner.svelte";
@@ -32,6 +33,25 @@
   let code = $state("");
   let err = $state("");
   let busy = $state(false);
+  let preparingBluetooth = $state(false);
+  let bluetoothReady = $state(false);
+  let visibilityTimer: ReturnType<typeof setTimeout> | undefined;
+
+  async function prepareBluetooth() {
+    preparingBluetooth = true;
+    err = "";
+    try {
+      await api.prepareBluetooth();
+      if (!$meetOpen) return;
+      bluetoothReady = true;
+      clearTimeout(visibilityTimer);
+      visibilityTimer = setTimeout(() => { bluetoothReady = false; }, 110_000);
+    } catch (error) {
+      if ($meetOpen) err = tr(String(error));
+    } finally {
+      preparingBluetooth = false;
+    }
+  }
 
   $effect(() => {
     if (!$meetOpen) return;
@@ -40,7 +60,7 @@
     // A new pass every 14 minutes while it's open (each lives 15).
     const id = setInterval(() => void api.meetQr($profile?.display_name ?? "").then((c) => (code = c)).catch(() => {}), 14 * 60_000);
     const release = onBack(() => meetOpen.set(false));
-    return () => { clearInterval(id); release(); };
+    return () => { clearInterval(id); clearTimeout(visibilityTimer); bluetoothReady = false; release(); };
   });
 
   async function scan() {
@@ -57,7 +77,12 @@
   <div class="mt-back" onclick={(e) => { if (e.target === e.currentTarget) meetOpen.set(false); }}>
     <div class="mt" role="dialog" aria-modal="true" aria-label={$t("Meet nearby")} tabindex="-1">
       <header><h3>{$t("Meet nearby")}</h3><button data-x class="x" onclick={() => meetOpen.set(false)} aria-label={$t("Close")}>×</button></header>
-      <p class="note">{$t("No internet and no pairing needed, like Briar. One of you shows the code, the other scans it: the code carries the keys and the Bluetooth address, so the devices connect directly over Bluetooth or the same Wi-Fi. Encrypted end to end, like any chat.")}</p>
+      <p class="note">{$t("One person shows the code, the other scans it. Use the same Wi-Fi network, or prepare Bluetooth on the phone showing the code before the other phone scans.")}</p>
+      {#if IS_ANDROID}
+        <button class="btn" onclick={prepareBluetooth} disabled={preparingBluetooth || bluetoothReady}>
+          {$t(preparingBluetooth ? "Preparing Bluetooth…" : bluetoothReady ? "Bluetooth is ready for the other phone" : "Prepare Bluetooth")}
+        </button>
+      {/if}
       <div class="qr">
         {#if code}<QrCode text={code} size={260} plain />{:else if !err}<div class="ph">…</div>{/if}
       </div>
