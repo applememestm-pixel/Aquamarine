@@ -37,7 +37,7 @@ export async function osNotify(title: string, body: string): Promise<void> {
   try {
     if (inTauri()) {
       const n = await import("@tauri-apps/plugin-notification");
-      n.sendNotification({ title, body });
+      n.sendNotification({ title, body, autoCancel: true, ...(/android/i.test(navigator.userAgent) ? { icon: "ic_stat_aquamarine" } : {}) });
     } else {
       new Notification(title, { body });
     }

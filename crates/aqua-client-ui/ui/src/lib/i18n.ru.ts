@@ -2125,6 +2125,8 @@ export const RU: Record<string, string> = {
   "Games": "Игры",
   "Show all {n}": "Показать все ({n})",
   "Open a chat to send the edited picture to": "Откройте чат, куда отправить изменённое фото",
+  "Choose the name shown on your messages in this chat.": "Выбери, от чьего имени будут видны сообщения в этом чате.",
+  "React with {emoji}": "Поставить реакцию {emoji}",
   "Send message as…": "Отправлять от имени…",
   "personal account": "личный аккаунт",
   "only its members see it as this": "от его имени увидят только его участники",

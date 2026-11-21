@@ -372,6 +372,8 @@ export const api = {
   pickedPreview:      (path: string): Promise<{ kind: "image" | "video" | "audio" | "file"; url: string | null }> => invoke("picked_preview", { path }),
   probeMediaFile:     (path: string, kind: "video" | "audio" | "size"): Promise<{ poster?: string | null; duration?: number | null; size: number; too_big: boolean }> => invoke("probe_media", { path, kind }),
   copyFileTo:         (source: string, dest: string): Promise<void>                => invoke("copy_file_to", { source, dest }),
+  exportDownload:     (peerId: string, messageId: string): Promise<boolean>             => invoke("export_download", { peerId, messageId }),
+  pickedMediaPath:    (path: string): Promise<string>                             => invoke("picked_media_path", { path }),
 
   // Voice & video messages (recorded in-browser → bytes sent to Rust → encrypted via attach pipeline)
   sendVoiceMessage:   (peer_id: string, name: string, mime: string, bytes: number[]): Promise<AttachResult> => invoke("send_voice_message", { peerId: peer_id, name, mime, bytes }),

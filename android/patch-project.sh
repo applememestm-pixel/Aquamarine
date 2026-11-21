@@ -47,6 +47,8 @@ fi
 # 1c''. Server on this device (crates/aqua-client-ui/src/relay_host.rs).
 if [ -n "$MA" ]; then
   cp -f "$HERE/AquaRelay.kt" "$(dirname "$MA")/AquaRelay.kt"
+  mkdir -p "$APP/src/main/res/drawable"
+  cp -f "$HERE/res/drawable/ic_stat_aquamarine.xml" "$APP/src/main/res/drawable/ic_stat_aquamarine.xml"
   echo '[patch] AquaRelay.kt (server on this device)'
 fi
 if ! grep -q AquaRelayService "$M"; then

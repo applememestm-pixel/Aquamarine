@@ -37,6 +37,9 @@ import androidx.core.content.FileProvider
 import java.io.File
 import android.graphics.Bitmap
 import android.provider.MediaStore
+import android.provider.OpenableColumns
+import android.content.ContentValues
+import android.webkit.MimeTypeMap
 import android.util.Base64
 import android.util.Size
 import app.tauri.plugin.JSArray
@@ -221,7 +224,7 @@ class AquaRelayService : Service() {
     val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, "relay") else Notification.Builder(this)
     val n = b.setContentTitle("Aquamarine server is running")
       .setContentText("Port $port · friends connect to this phone's address")
-      .setSmallIcon(applicationInfo.icon)
+      .setSmallIcon(R.drawable.ic_stat_aquamarine)
       .setOngoing(true)
       .setContentIntent(open)
       .build()
@@ -272,7 +275,7 @@ class AquaSyncService : Service() {
     val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, "sync") else Notification.Builder(this)
     val n = b.setContentTitle("Aquamarine")
       .setContentText("Connected — new messages arrive in the background")
-      .setSmallIcon(applicationInfo.icon)
+      .setSmallIcon(R.drawable.ic_stat_aquamarine)
       .setOngoing(false)
       .setGroup("aquamarine.connection")
       .setOnlyAlertOnce(true)
@@ -299,11 +302,68 @@ class GalleryArgs {
   var bucket: String = ""
 }
 
+@InvokeArg
+class GalleryFileArgs {
+  var uri: String = ""
+  var source: String = ""
+  var name: String = ""
+}
+
 private class GalleryAlbum(val id: String, val name: String, var count: Int, val coverId: Long, val coverVideo: Boolean)
 
 @TauriPlugin
 class AquaGalleryPlugin(private val activity: Activity) : Plugin(activity) {
   private val pool = Executors.newSingleThreadExecutor()
+
+  @Command
+  fun fileInfo(invoke: Invoke) {
+    val args = invoke.parseArgs(GalleryFileArgs::class.java)
+    val uri = Uri.parse(args.uri)
+    if (uri.scheme != "content") { invoke.reject("Expected a content URI"); return }
+    try {
+      var name = ""
+      activity.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+        if (cursor.moveToFirst()) name = cursor.getString(0) ?: ""
+      }
+      invoke.resolve(JSObject().put("name", name))
+    } catch (e: Exception) { invoke.reject(e.message ?: "Could not read file information") }
+  }
+
+  @Command
+  fun saveDownload(invoke: Invoke) {
+    val args = invoke.parseArgs(GalleryFileArgs::class.java)
+    if (Build.VERSION.SDK_INT < 29) {
+      invoke.resolve(JSObject().put("saved", false))
+      return
+    }
+    pool.execute {
+      var uri: Uri? = null
+      try {
+        val source = File(args.source).canonicalFile
+        val own = activity.filesDir.parentFile!!.canonicalFile
+        if (!source.path.startsWith(own.path + File.separator) || !source.isFile) throw IllegalArgumentException("Invalid download source")
+        val name = File(args.name).name.ifBlank { source.name }
+        val resolver = activity.contentResolver
+        val values = ContentValues().apply {
+          put(MediaStore.Downloads.DISPLAY_NAME, name)
+          put(MediaStore.Downloads.MIME_TYPE, MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase()) ?: "application/octet-stream")
+          put(MediaStore.Downloads.RELATIVE_PATH, "Download/Aquamarine")
+          put(MediaStore.Downloads.IS_PENDING, 1)
+        }
+        val target = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: throw IllegalStateException("Could not create download")
+        uri = target
+        resolver.openOutputStream(target, "w")?.use { output -> source.inputStream().use { it.copyTo(output) } }
+          ?: throw IllegalStateException("Could not open download")
+        if (resolver.update(target, ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }, null, null) == 0) {
+          throw IllegalStateException("Could not publish download")
+        }
+        invoke.resolve(JSObject().put("saved", true))
+      } catch (e: Exception) {
+        uri?.let { runCatching { activity.contentResolver.delete(it, null, null) } }
+        invoke.reject(e.message ?: "Could not save download")
+      }
+    }
+  }
 
   private fun needed(): Array<String> =
     if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)

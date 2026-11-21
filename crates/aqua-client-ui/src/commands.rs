@@ -58,13 +58,10 @@ pub fn log_out(state: State<'_, StdMutex<AppState>>) -> Result<InitInfo, String>
 // ---------- Chats & messages ----------------------------------------------
 
 #[tauri::command]
-pub fn list_chats(state: State<'_, StdMutex<AppState>>) -> Result<Vec<serde_json::Value>, String> {
+pub fn list_chats(state: State<'_, StdMutex<AppState>>) -> Result<Vec<ChatSummary>, String> {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let me = s.username.clone().unwrap_or_default();
-    // Each chat with `last_at` (unix seconds of its last message): the list
-    // shows a weekday / date for older chats and goes newest first by it —
-    // the order kept by hand (`chat_order`) slipped, and only a time was shown.
-    let mut out: Vec<(Option<i64>, serde_json::Value)> = s.chat_order
+    let mut summaries: Vec<ChatSummary> = s.chat_order
         .iter()
         // "user~device" rows came from an older build: a device isn't a chat.
         // (A channel's direct messages, "dm~…", are.)
@@ -74,20 +71,20 @@ pub fn list_chats(state: State<'_, StdMutex<AppState>>) -> Result<Vec<serde_json
         .filter(|id| me.is_empty() || **id != me)
         .filter_map(|id| s.chats.get(id).map(|c| {
             let mut sum = c.summary.clone();
-            // Groups: who wrote the last message, from the history itself
-            // (deletes / timers recompute the preview without it).
+            let last = c.messages.iter()
+                .filter(|m| !crate::state::stray_control(m) && !m.meta.as_ref().is_some_and(|meta| meta.deleted))
+                .max_by_key(|m| m.at);
+            sum.last_at = last.and_then(|m| m.at);
             if id.starts_with("grp_") && !sum.preview_by_me && !sum.preview_is_typing {
-                sum.preview_from = c.messages.last().map(|m| m.from.clone()).filter(|f| !f.is_empty() && f != "system" && *f != me);
+                sum.preview_from = last.map(|m| m.from.clone())
+                    .filter(|from| !from.is_empty() && from != "system" && *from != me);
             }
-            let last_at = c.messages.iter().rev().find_map(|m| m.at);
-            let mut v = serde_json::to_value(&sum).unwrap_or_default();
-            if let Some(o) = v.as_object_mut() { o.insert("last_at".into(), serde_json::json!(last_at)); }
-            (last_at, v)
+            sum
         }))
         .collect();
-    // Stable: equal times keep their old order; a chat with no message yet (just made) goes on top.
-    out.sort_by_key(|(at, _)| std::cmp::Reverse(at.unwrap_or(i64::MAX)));
-    Ok(out.into_iter().map(|(_, v)| v).collect())
+    // Keep the existing order for equal times and new chats at the top.
+    summaries.sort_by_key(|c| std::cmp::Reverse(c.last_at.unwrap_or(i64::MAX)));
+    Ok(summaries)
 }
 
 #[tauri::command]
@@ -1196,8 +1193,9 @@ pub async fn profile_media_path(
 /// picker, "Add to my GIFs" on a received message, …). Returns how many
 /// files were added.
 #[tauri::command]
-pub fn add_media_files(
+pub async fn add_media_files(
     state: State<'_, StdMutex<AppState>>,
+    app: AppHandle,
     target: String,
     pack: Option<String>,
     paths: Vec<String>,
@@ -1206,7 +1204,10 @@ pub fn add_media_files(
         let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.data_dir.clone()
     };
-    media::add_files(&data_dir, &target, pack.as_deref(), &paths)
+    tauri::async_runtime::spawn_blocking(move || {
+        let paths = paths.iter().map(|p| materialize_picked(&app, &data_dir, p)).collect::<Result<Vec<_>, _>>()?;
+        media::add_files(&data_dir, &target, pack.as_deref(), &paths)
+    }).await.map_err(|e| e.to_string())?
 }
 
 /// Delete one item from the library (only inside the stickers / gifs dirs).
@@ -1976,8 +1977,20 @@ fn materialize_picked(app: &AppHandle, data_dir: &std::path::Path, path: &str) -
     if !is_uri_pick(path) {
         return Ok(path.to_string());
     }
-    let bytes = read_picked_bytes(app, path)?;
-    let kind = infer::get(&bytes);
+    use std::io::{Read, Write};
+    use tauri_plugin_fs::FsExt;
+    let uri = tauri::Url::parse(path).map_err(|e| format!("bad file URI: {e}"))?;
+    let mut source = if let Ok(local) = uri.to_file_path() {
+        std::fs::File::open(local).map_err(|e| format!("open picked file: {e}"))?
+    } else {
+        let mut options = tauri_plugin_fs::OpenOptions::new();
+        options.read(true);
+        app.fs().open(tauri_plugin_fs::FilePath::Url(uri), options)
+            .map_err(|e| format!("open picked file: {e}"))?
+    };
+    let mut header = Vec::new();
+    (&mut source).take(8192).read_to_end(&mut header).map_err(|e| format!("read picked file: {e}"))?;
+    let kind = infer::get(&header);
     let ext = kind.map(|k| k.extension()).unwrap_or("bin");
     let stem = match kind.map(|k| k.matcher_type()) {
         Some(infer::MatcherType::Video) => "video",
@@ -1991,9 +2004,50 @@ fn materialize_picked(app: &AppHandle, data_dir: &std::path::Path, path: &str) -
         .unwrap_or(0);
     let dir = data_dir.join("picked");
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
-    let dest = pick_unique_path(&dir, &format!("{stem}-{secs}.{ext}"));
-    std::fs::write(&dest, &bytes).map_err(|e| format!("write: {e}"))?;
+    let name = format!("{stem}-{secs}.{ext}");
+    #[cfg(target_os = "android")]
+    let name = if path.starts_with("content://") {
+        crate::gallery::android::call("fileInfo", serde_json::json!({ "uri": path })).ok()
+            .and_then(|info| info["name"].as_str().filter(|n| !n.trim().is_empty()).map(sanitize_name))
+            .map(|mut filename| {
+                if ext != "bin" && std::path::Path::new(&filename).extension().is_none() {
+                    filename.push('.');
+                    filename.push_str(ext);
+                }
+                filename
+            })
+            .unwrap_or(name)
+    } else { name };
+    let mut retries = 0;
+    let (dest, mut file) = loop {
+        let dest = pick_unique_path(&dir, &name);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&dest) {
+            Ok(file) => break (dest, file),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && retries < 3 => retries += 1,
+            Err(e) => return Err(format!("open picked copy: {e}")),
+        }
+    };
+    if let Err(e) = file.write_all(&header).and_then(|()| std::io::copy(&mut source, &mut file)) {
+        drop(file);
+        let _ = std::fs::remove_file(&dest);
+        return Err(format!("write picked copy: {e}"));
+    }
     Ok(dest.display().to_string())
+}
+
+/// A local image/video path for previewing a file chosen in the phone gallery.
+#[tauri::command]
+pub async fn picked_media_path(state: State<'_, StdMutex<AppState>>, app: AppHandle, path: String) -> Result<String, String> {
+    let data_dir = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let local = materialize_picked(&app, &data_dir, &path)?;
+        let mime = mime_from_extension(std::path::Path::new(&local)).unwrap_or_default();
+        if !mime.starts_with("image/") && !mime.starts_with("video/") {
+            return Err("not an image or video file".into());
+        }
+        if !std::path::Path::new(&local).is_file() { return Err("file unavailable".into()); }
+        Ok(local)
+    }).await.map_err(|e| e.to_string())?
 }
 
 
@@ -2327,6 +2381,47 @@ pub fn copy_file_to(app: AppHandle, source: String, dest: String) -> Result<(), 
     }
     std::fs::copy(&source, &dest).map_err(|e| format!("copy: {e}"))?;
     Ok(())
+}
+
+/// Publish an explicitly saved attachment in Android's public Downloads.
+/// Automatic media downloads keep using the private application cache.
+#[tauri::command]
+pub async fn export_download(
+    state: State<'_, StdMutex<AppState>>,
+    peer_id: String,
+    message_id: String,
+) -> Result<bool, String> {
+    #[cfg(target_os = "android")]
+    {
+        let (data_dir, path) = {
+            let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let message = s.chats.get(&peer_id)
+                .and_then(|book| book.messages.iter().find(|message| message.id == message_id))
+                .ok_or("unknown message")?;
+            let MessageKind::File { saved_at: Some(path), category, .. } = &message.kind else {
+                return Err("the attachment has not been downloaded".into());
+            };
+            if category.as_deref() == Some("once") {
+                return Err("a view-once attachment cannot be exported".into());
+            }
+            (s.data_dir.clone(), path.clone())
+        };
+        let candidate = std::path::Path::new(&path);
+        if !media::path_is_within(&data_dir, candidate) {
+            // The user can export attachments from a custom directory through the picker.
+            return Ok(false);
+        }
+        let name = candidate.file_name().and_then(|n| n.to_str()).unwrap_or("attachment").to_string();
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            crate::gallery::android::call("saveDownload", serde_json::json!({ "source": path, "name": name }))
+        }).await.map_err(|e| e.to_string())??;
+        Ok(result["saved"].as_bool().unwrap_or_default())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (state, peer_id, message_id);
+        Ok(false)
+    }
 }
 
 /// Read an image/video file the user picked from anywhere on their
@@ -4396,7 +4491,7 @@ async fn on_incoming_plaintext(app: &AppHandle, from: String, text: String) {
         is_new_chat = !s.chats.contains_key(&from);
         if is_new_chat {
             let (letter, gradient) = gradient_for(&from);
-            let summary = ChatSummary { preview_from: None,
+            let summary = ChatSummary { preview_from: None, last_at: None,
                 id: from.clone(),
                 name: from.clone(),
                 letter, gradient,
@@ -4890,7 +4985,7 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
         if !s.chats.contains_key(&from) {
             is_new_chat = true;
             let (letter, gradient) = gradient_for(&from);
-            let summary = ChatSummary { preview_from: None,
+            let summary = ChatSummary { preview_from: None, last_at: None,
                 id: from.clone(),
                 name: from.clone(),
                 letter, gradient,
@@ -5500,7 +5595,7 @@ fn group_repeat(gid: &str, author: &str, inner: &str) -> bool {
 fn push_replies(s: &mut AppState, text: String, time: &str) {
     use crate::state::REPLIES_ID;
     if !s.chats.contains_key(REPLIES_ID) {
-        let summary = ChatSummary { preview_from: None,
+        let summary = ChatSummary { preview_from: None, last_at: None,
             id: REPLIES_ID.into(),
             name: "Replies".into(),
             letter: "↩".into(),

@@ -434,6 +434,8 @@ pub fn run() -> Result<()> {
             commands::read_user_image,
             commands::read_user_font,
             commands::copy_file_to,
+            commands::export_download,
+            commands::picked_media_path,
         ]);
             move |invoke| {
                 if applock::is_locked() && !applock::allowed(invoke.message.command()) {

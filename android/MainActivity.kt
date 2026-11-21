@@ -205,7 +205,7 @@ class AquaScreenService : Service() {
     val note: Notification = if (Build.VERSION.SDK_INT >= 26) {
       nm.createNotificationChannel(NotificationChannel("aqua_screen", "Screen sharing", NotificationManager.IMPORTANCE_LOW))
       Notification.Builder(this, "aqua_screen")
-        .setSmallIcon(applicationInfo.icon)
+        .setSmallIcon(R.drawable.ic_stat_aquamarine)
         .setContentTitle("Aquamarine")
         .setContentText("Your screen is shared in a call")
         .setOngoing(true)
@@ -213,7 +213,7 @@ class AquaScreenService : Service() {
     } else {
       @Suppress("DEPRECATION")
       Notification.Builder(this)
-        .setSmallIcon(applicationInfo.icon)
+        .setSmallIcon(R.drawable.ic_stat_aquamarine)
         .setContentTitle("Aquamarine")
         .setContentText("Your screen is shared in a call")
         .setOngoing(true)

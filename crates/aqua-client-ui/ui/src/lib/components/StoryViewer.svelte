@@ -4,20 +4,22 @@
    *
    * Phone: full screen; tap right / left — next / previous, hold — pause
    * (the bars and buttons step aside), swipe sideways — the next person
-   * comes in on a turning cube, swipe down — close, swipe up — reply (or,
+   * slides into view, swipe down — close, swipe up — reply (or,
    * on my own story, who watched it). A reply field, ❤ and the menu sit
    * under the picture.
    * Computer: the story in the middle at 9:16, the people before / after it
    * at the sides (click to jump), arrows and the keyboard (← → Space Esc).
    * Files are fetched and decrypted on first view, the next ones ahead.
    */
+  import { untrack } from "svelte";
+  import { motionMs } from "../motion";
   import { t, tr } from "../i18n";
   import { api, assetUrl } from "../tauri";
   import { onBack } from "../back";
   import {
     storyViewer, myStories, saneStories, markSeen, deleteStory, isLive, sendStoryView, toggleLike, toggleHidden,
     likedStories, seenStories, storyViews, hiddenStories, closeFriends, storyNav, storyArchive, pinnedStories,
-    pinStory, unpinStory, storyFile, openStories, allMyStories, storyArchiveOpen, type Story,
+    pinStory, unpinStory, storyFile, allMyStories, storyArchiveOpen, type Story,
   } from "../stories";
   import { peerPresence } from "../presence";
   import { avatars, peerCards } from "../people";
@@ -47,7 +49,7 @@
   let list = $derived<Story[]>(v ? storiesOf(v.user) : []);
   let cur = $derived(v ? list[v.index] ?? null : null);
   let url = $state("");
-  let loading = $state(false);
+  let photoReady = $state(false);
   let err = $state("");
   let progress = $state(0);
   let held = $state(false);
@@ -59,24 +61,37 @@
   let menu = $state(false);
   let viewersOpen = $state(false);
   let hidden = $state(typeof document !== "undefined" && document.visibilityState === "hidden");
-  /** People one after another downwards (a feed) instead of the cube. */
+  /** People one after another downwards (a feed) instead of sliding sideways. */
   const vert = $derived($storyNav === "vertical");
-  /** First time: ask which way to move between people. */
-  const choosing = $derived(!!v && $storyNav === "");
-  const paused = $derived(held || replyFocus || menu || viewersOpen || hidden || choosing);
+  const paused = $derived(held || replyFocus || menu || viewersOpen || hidden);
 
   /** Decrypted files, by story id (shared with the side previews). */
   const cache = new Map<string, string>();
+  const pending = new Map<string, Promise<string>>();
   let cacheTick = $state(0);
-  async function load(s: Story): Promise<string> {
+  function load(s: Story): Promise<string> {
     const hit = cache.get(s.id);
-    if (hit) return hit;
-    // Mine (archive / pinned): the file on this device when the relay's copy is gone.
-    const own = $myStories.some((x) => x.id === s.id) || $storyArchive.some((x) => x.id === s.id) || $pinnedStories.some((x) => x.id === s.id);
-    const u = assetUrl(own ? await storyFile(s) : await api.fetchAttachment(s.media));
-    cache.set(s.id, u);
-    cacheTick++;
-    return u;
+    if (hit) {
+      cache.delete(s.id);
+      cache.set(s.id, hit);
+      return Promise.resolve(hit);
+    }
+    const existing = pending.get(s.id);
+    if (existing) return existing;
+
+    const own = untrack(() => [$myStories, $storyArchive, $pinnedStories].some((stories) => stories.some((item) => item.id === s.id)));
+    const request = (own ? storyFile(s) : api.fetchAttachment(s.media)).then((path) => {
+      const url = assetUrl(path);
+      cache.set(s.id, url);
+      if (cache.size > 12) {
+        const oldest = cache.keys().next().value;
+        if (oldest !== undefined) cache.delete(oldest);
+      }
+      cacheTick++;
+      return url;
+    }).finally(() => pending.delete(s.id));
+    pending.set(s.id, request);
+    return request;
   }
   const cached = (s: Story | undefined) => { void cacheTick; return s ? cache.get(s.id) ?? "" : ""; };
 
@@ -92,21 +107,19 @@
   });
 
   // Load the current story's file, and the next ones ahead.
-  let loadedFor = "";
+  let retry = $state(0);
   $effect(() => {
     const s = cur;
     if (!s) return;
-    if (loadedFor === s.id) return;
-    loadedFor = s.id;
-    const owner = v?.user ?? "";
-    err = ""; progress = 0;
+    void retry;
+    let active = true;
+    const owner = untrack(() => v?.user ?? "");
+    err = ""; progress = 0; photoReady = false;
     const hit = cache.get(s.id);
     url = hit ?? "";
-    loading = !hit;
     void load(s).then((u) => {
-      if (cur?.id !== s.id) return;
+      if (!active || cur?.id !== s.id) return;
       url = u;
-      loading = false;
       if (owner && src === "live") {
         const first = !$seenStories.includes(s.id);
         markSeen(s.id);
@@ -114,35 +127,31 @@
       }
       prefetch();
     }).catch((e) => {
-      if (cur?.id !== s.id) return;
+      if (!active || cur?.id !== s.id) return;
       // The relay lost the file (its cache is cleared on restart): the
       // author's app puts it back once it's online (stories.ts::healMyStories).
       err = /responded 404/.test(String(e)) ? tr("The file isn't on the server right now — it comes back when the author is online.") : String(e);
-      loading = false;
       if (owner === "" && src === "live") void import("../stories").then((m) => m.healMyStories());
     });
+    return () => { active = false; };
   });
   function prefetch() {
     if (!v) return;
-    const nextHere = list[v.index + 1];
-    if (nextHere) void load(nextHere).catch(() => {});
-    for (const u of [neighbour(1), neighbour(-1)]) {
-      if (u == null) continue;
-      const first = storiesOf(u)[startIndex(u)];
-      if (first) void load(first).catch(() => {});
-    }
+    const u = neighbour(1);
+    const nextStory = list[v.index + 1] ?? (u == null ? undefined : storiesOf(u)[startIndex(u)]);
+    if (nextStory) void load(nextStory).catch(() => {});
   }
   // No story left (expired / deleted): next person or close.
   $effect(() => { if (v && !cur) { if (list.length && v.index >= list.length) nextUser(); else if (!list.length) nextUser(); } });
-  $effect(() => { if (!v) { viewersOpen = false; menu = false; reply = ""; replyFocus = false; held = false; } });
+  $effect(() => { if (!v) { cancelGesture(); viewersOpen = false; menu = false; reply = ""; replyFocus = false; held = false; } });
 
   // Photo timer (videos follow their own time).
   $effect(() => {
-    if (!cur || !url || loading || cur.media.kind === "video") return;
+    if (!cur || !photoReady || cur.media.kind === "video") return;
     let last = performance.now();
     let raf = 0;
     const step = (now: number) => {
-      if (!paused && !turning) progress = Math.min(1, progress + (now - last) / PHOTO_MS);
+      if (!paused && !turning && !dragging) progress = Math.min(1, progress + (now - last) / PHOTO_MS);
       last = now;
       if (progress >= 1) { next(); return; }
       raf = requestAnimationFrame(step);
@@ -150,7 +159,7 @@
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
   });
-  $effect(() => { const el = videoEl; if (!el) return; if (paused || turning) el.pause(); else void el.play().catch(() => {}); });
+  $effect(() => { const el = videoEl; if (!el) return; if (paused || turning || dragging) el.pause(); else void el.play().catch(() => {}); });
 
   /** Where to start in someone's stories: the first one not yet seen. */
   function startIndex(u: string): number {
@@ -165,7 +174,10 @@
     const u = v.users[i + dir];
     return u === undefined ? null : u;
   }
-  function close() { storyViewer.set(null); loadedFor = ""; }
+  function close() {
+    cancelGesture();
+    storyViewer.set(null);
+  }
   function goUser(u: string) {
     if (!v) return;
     storyViewer.set({ ...v, user: u, index: startIndex(u) });
@@ -181,120 +193,134 @@
     goUser(u);
   }
   function next() {
-    if (!v) return;
+    if (!v || turning) return;
     if (v.index + 1 < list.length) storyViewer.set({ ...v, index: v.index + 1 });
     else if (neighbour(1) != null) advance(1);
     else close();
   }
   function prev() {
-    if (!v) return;
+    if (!v || turning) return;
     if (v.index > 0) storyViewer.set({ ...v, index: v.index - 1 });
     else prevUser();
   }
 
-  // ---- Gestures: tap / hold / swipe sideways (cube) / down / up ----
-  let down: { x: number; y: number; t: number; w: number } | null = null;
+  let down: { x: number; y: number; at: number; width: number; id: number } | null = null;
   let axis: "" | "x" | "y" = "";
-  let holdT: ReturnType<typeof setTimeout> | null = null;
+  let holdTimer: ReturnType<typeof setTimeout> | undefined;
+  let motionTimer: ReturnType<typeof setTimeout> | undefined;
   let dy = $state(0);
-  let angle = $state(0);
+  let offset = $state(0);
+  let previewDir = $state<1 | -1 | 0>(0);
   let turning = $state(false);
-  let cubeW = $state(400);
-  let cubeH = $state(700);
-  /** Feed mode: how far the page is dragged up (−) / down (+), px. */
-  let offY = $state(0);
-  function pdown(e: PointerEvent) {
-    if ((e.target as HTMLElement).closest("button, input, .no-tap")) return;
-    if (turning) return;
-    const w = (e.currentTarget as HTMLElement).clientWidth;
-    down = { x: e.clientX, y: e.clientY, t: performance.now(), w };
-    cubeW = w;
-    cubeH = (e.currentTarget as HTMLElement).clientHeight;
-    axis = "";
-    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
-    holdT = setTimeout(() => (held = true), 220);
-  }
-  function pmove(e: PointerEvent) {
-    if (!down) return;
-    const dx = e.clientX - down.x, ddy = e.clientY - down.y;
-    if (!axis && Math.hypot(dx, ddy) > 10) {
-      axis = Math.abs(dx) > Math.abs(ddy) ? "x" : "y";
-      if (holdT) { clearTimeout(holdT); holdT = null; }
-    }
-    if (axis === "x") {
-      if (vert) return;
-      // Nobody that way: a little give, no more.
-      const has = neighbour(dx < 0 ? 1 : -1) != null;
-      angle = Math.max(-90, Math.min(90, (-dx / down.w) * 90 * (has ? 1 : 0.15)));
-    } else if (axis === "y") {
-      // Feed: up — the next person, down — the previous one; down on the
-      // first person still closes, as in the cube mode.
-      if (vert && (ddy < 0 || neighbour(-1) != null)) { dy = 0; offY = ddy < 0 && neighbour(1) == null ? ddy * 0.15 : ddy; }
-      else { offY = 0; dy = ddy; }
-    }
-  }
-  function pup(e: PointerEvent) {
-    if (holdT) { clearTimeout(holdT); holdT = null; }
-    const d = down;
+  let dragging = $state(false);
+  let cubeEl = $state<HTMLDivElement | null>(null);
+
+  function resetPointer() {
+    clearTimeout(holdTimer);
     down = null;
-    const wasHeld = held;
     held = false;
-    if (!d) return;
-    const fast = performance.now() - d.t < 260;
-    if (vert && axis === "y" && offY !== 0) {
-      const dir = offY < 0 ? 1 : -1;
-      if ((Math.abs(offY) > cubeH * 0.18 || (fast && Math.abs(offY) > 40)) && neighbour(dir) != null) slide(dir);
-      else settleY();
-      return;
+    dragging = false;
+  }
+
+  function cancelGesture() {
+    resetPointer();
+    clearTimeout(motionTimer);
+    turning = false;
+    offset = 0;
+    previewDir = 0;
+    dy = 0;
+  }
+
+  function pdown(e: PointerEvent) {
+    if (!e.isPrimary || e.button !== 0 || turning || menu || viewersOpen || (e.target as Element).closest("button, input, .no-tap")) return;
+    const stage = e.currentTarget as HTMLElement;
+    down = { x: e.clientX, y: e.clientY, at: performance.now(), width: stage.clientWidth, id: e.pointerId };
+    dragging = true;
+    axis = "";
+    stage.setPointerCapture(e.pointerId);
+    holdTimer = setTimeout(() => { held = true; }, 220);
+  }
+
+  function pmove(e: PointerEvent) {
+    if (!down || e.pointerId !== down.id) return;
+    const dx = e.clientX - down.x;
+    const delta = e.clientY - down.y;
+    if (!axis && Math.hypot(dx, delta) > 10) {
+      axis = Math.abs(dx) > Math.abs(delta) ? "x" : "y";
+      clearTimeout(holdTimer);
+      held = false;
     }
-    if (axis === "x") {
-      if (vert) return;
-      const dir = angle > 0 ? 1 : -1;
-      if ((Math.abs(angle) > 22 || (fast && Math.abs(angle) > 8)) && neighbour(dir) != null) turn(dir);
-      else settle();
+    if (axis === "x" && !vert) {
+      offset = neighbour(dx < 0 ? 1 : -1) == null ? dx * 0.18 : dx;
+    } else if (axis === "y") {
+      if (vert && (delta < 0 || neighbour(-1) != null)) {
+        offset = neighbour(delta < 0 ? 1 : -1) == null ? delta * 0.18 : delta;
+      } else {
+        offset = 0;
+        dy = Math.max(0, delta);
+      }
+    }
+    if (offset) { dy = 0; previewDir = offset < 0 ? 1 : -1; }
+  }
+
+  function pup(e: PointerEvent) {
+    const gesture = down;
+    if (!gesture || e.pointerId !== gesture.id) return;
+    const wasHeld = held;
+    resetPointer();
+    const fast = performance.now() - gesture.at < 260;
+    if (offset) {
+      const dir = offset < 0 ? 1 : -1;
+      const extent = vert ? cubeEl?.clientHeight ?? 0 : gesture.width;
+      if ((Math.abs(offset) > extent * 0.22 || (fast && Math.abs(offset) > 40)) && neighbour(dir) != null) advance(dir);
+      else animate(0);
       return;
     }
     if (axis === "y") {
-      const yy = dy;
-      dy = 0;
-      if (yy > 110 || (fast && yy > 50)) { close(); return; }
-      if (yy < -70) { if (v?.user === "") viewersOpen = true; else replyEl?.focus(); }
+      const delta = e.clientY - gesture.y;
+      if (dy > 110 || (fast && dy > 50)) { close(); return; }
+      if (dy) animate(0);
+      if (delta < -70 && !vert) {
+        if (v?.user === "") viewersOpen = true;
+        else replyEl?.focus();
+      }
       return;
     }
-    if (wasHeld && performance.now() - d.t > 220) return;
+    if (axis || wasHeld) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    if (e.clientX - rect.left < d.w * 0.3) prev(); else next();
+    if (e.clientX - rect.left < gesture.width * 0.3) prev(); else next();
   }
-  /** Finish the cube turn to the next / previous person. */
-  function turn(dir: 1 | -1) {
-    turning = true;
-    angle = dir * 90;
-    setTimeout(() => {
-      const u = neighbour(dir);
-      if (u != null) goUser(u);
+
+  function pcancel(e: PointerEvent) {
+    if (down?.id !== e.pointerId) return;
+    resetPointer();
+    if (offset || dy) animate(0);
+  }
+
+  function animate(target: number, user?: string) {
+    const duration = motionMs(230);
+    const finish = () => {
+      if (user !== undefined) goUser(user);
       turning = false;
-      angle = 0;
-    }, 300);
-  }
-  function settle() { turning = true; angle = 0; setTimeout(() => (turning = false), 300); }
-  /** Feed mode: the page slides away and the next / previous one takes its place. */
-  function slide(dir: 1 | -1) {
+      offset = 0;
+      previewDir = 0;
+      dy = 0;
+    };
+    if (!duration) { finish(); return; }
     turning = true;
-    offY = -dir * cubeH;
-    setTimeout(() => {
-      const u = neighbour(dir);
-      if (u != null) goUser(u);
-      turning = false;
-      offY = 0;
-    }, 300);
+    if (target) previewDir = target < 0 ? 1 : -1;
+    offset = target;
+    dy = 0;
+    motionTimer = setTimeout(finish, duration);
   }
-  function settleY() { turning = true; offY = 0; setTimeout(() => (turning = false), 300); }
-  /** To the next / previous person the chosen way (cube or feed). */
+
   function advance(dir: 1 | -1) {
     if (turning) return;
-    cubeW = cubeEl?.clientWidth ?? cubeW;
-    cubeH = cubeEl?.clientHeight ?? cubeH;
-    if (vert) slide(dir); else turn(dir);
+    const user = neighbour(dir);
+    if (user == null) return;
+    const extent = vert ? cubeEl?.clientHeight : cubeEl?.clientWidth;
+    if (!extent) { goUser(user); return; }
+    animate(-dir * extent, user);
   }
   /** Arrows / keys between people. */
   function stepUser(dir: 1 | -1) {
@@ -305,16 +331,14 @@
   // Computer, feed mode: the wheel goes from person to person.
   let wheelAcc = 0, wheelAt = 0;
   function wheel(e: WheelEvent) {
-    if (!vert || choosing || viewersOpen || (e.target as Element).closest?.(".sheet")) return;
+    if (!vert || viewersOpen || (e.target as Element).closest?.(".sheet")) return;
     const now = performance.now();
     if (now - wheelAt < 450) return;
     wheelAcc += e.deltaY;
     if (Math.abs(wheelAcc) > 60) { const d = wheelAcc > 0 ? 1 : -1; wheelAcc = 0; wheelAt = now; stepUser(d); }
   }
-  let cubeEl = $state<HTMLDivElement | null>(null);
-
   function key(e: KeyboardEvent) {
-    if (!v || replyFocus || choosing) return;
+    if (!v || replyFocus || menu || viewersOpen || e.defaultPrevented || (e.target instanceof Element && e.target.closest("button, input"))) return;
     if (e.key === "ArrowRight") { e.preventDefault(); if (e.shiftKey) stepUser(1); else next(); }
     else if (e.key === "ArrowLeft") { e.preventDefault(); if (e.shiftKey) stepUser(-1); else prev(); }
     else if (e.key === "ArrowDown") { e.preventDefault(); stepUser(1); }
@@ -392,8 +416,7 @@
   const views = $derived(cur && v?.user === "" ? ($storyViews[cur.id] ?? []).slice().reverse() : []);
   const sideL = $derived(v ? neighbour(-1) : null);
   const sideR = $derived(v ? neighbour(1) : null);
-  /** The face turning in on the cube (its first story, if loaded). */
-  const turnTo = $derived(vert ? (offY < 0 ? sideR : offY > 0 ? sideL : null) : angle > 0 ? sideR : angle < 0 ? sideL : null);
+  const turnTo = $derived(previewDir === 1 ? sideR : previewDir === -1 ? sideL : null);
   const turnStory = $derived(turnTo != null ? storiesOf(turnTo)[startIndex(turnTo)] : undefined);
 </script>
 
@@ -407,11 +430,18 @@
         ontimeupdate={(e) => { const el = e.currentTarget as HTMLVideoElement; if (el.duration) progress = el.currentTime / el.duration; }}
         onended={next}></video>
     {:else if (live ? url : cached(s)) && s?.media.kind !== "video"}
-      <!-- Whole picture, never cropped or stretched; its own blur fills the edges (Telegram). -->
-      <img class="bg" src={live ? url : cached(s)} alt="" draggable="false" aria-hidden="true" />
-      <img class="fg" src={live ? url : cached(s)} alt="" draggable="false" />
+      {#key live ? url : cached(s)}
+        <img class="fg" src={live ? url : cached(s)} alt="" draggable="false" decoding="async"
+          onload={() => { if (live) photoReady = true; }}
+          onerror={() => {
+            if (!live || !s) return;
+            cache.delete(s.id);
+            url = "";
+            err = tr("Could not load the story");
+          }} />
+      {/key}
     {:else if live && err}
-      <div class="msg">{$t("Could not load the story")}<small>{err}</small></div>
+      <div class="msg">{$t("Could not load the story")}<small>{err}</small><button class="pin-btn" onclick={() => retry++}>{$t("Retry")}</button></div>
     {:else if live}
       <div class="spin"></div>
     {:else}
@@ -422,7 +452,7 @@
   <div class="top" class:gone={live && held}>
     <div class="bars">
       {#each live ? list : storiesOf(u) as st, i (st.id)}
-        <span class="bar"><i style:width="{live && v ? (i < v.index ? 100 : i === v.index ? progress * 100 : 0) : 0}%"></i></span>
+        <span class="bar"><i style:transform="scaleX({live && v ? (i < v.index ? 1 : i === v.index ? progress : 0) : 0})"></i></span>
       {/each}
     </div>
     <div class="who">
@@ -452,10 +482,8 @@
 
 {#if v && cur}
   <div class="sv" class:desk={!IS_MOBILE} data-own-back data-phone-full role="dialog" aria-modal="true" aria-label={$t("Stories")}
-    style:--dy="{Math.max(0, dy)}px" style:--up="{Math.min(0, dy)}px" onwheel={wheel}>
+    style:--dy="{dy}px" style:--dismiss-opacity={Math.max(0.42, 1 - dy / 550)} class:anim={turning} onwheel={wheel}>
     {#if !IS_MOBILE}
-      <!-- The story's own blur behind everything (Telegram Desktop). -->
-      {#if url && cur.media.kind !== "video"}<img class="sv-blur" src={url} alt="" aria-hidden="true" />{/if}
       <button class="ic close-x" data-x data-keep-x onclick={close} aria-label={$t("Close")}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
       </button>
@@ -478,13 +506,13 @@
       {/if}
 
       <div class="col">
-        <div class="cube-wrap" class:vert bind:this={cubeEl}>
+        <div class="cube-wrap" bind:this={cubeEl}>
           <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div class="cube" class:anim={turning} class:vert style:--w="{cubeW}px" style:--a="{angle}deg" style:--oy="{offY}px"
-            onpointerdown={pdown} onpointermove={pmove} onpointerup={pup} onpointercancel={pup} oncontextmenu={(e) => e.preventDefault()}>
+          <div class="cube" class:vert style:--offset="{offset}px"
+            onpointerdown={pdown} onpointermove={pmove} onpointerup={pup} onpointercancel={pcancel} onlostpointercapture={pcancel} oncontextmenu={(e) => e.preventDefault()}>
             <div class="face front">{@render face(v.user, cur, true)}</div>
             {#if turnTo != null}
-              <div class="face" class:right={!vert && angle > 0} class:left={!vert && angle < 0} class:below={vert && offY < 0} class:above={vert && offY > 0}>{@render face(turnTo, turnStory, false)}</div>
+              <div class="face preview" inert class:right={!vert && previewDir === 1} class:left={!vert && previewDir === -1} class:below={vert && previewDir === 1} class:above={vert && previewDir === -1}>{@render face(turnTo, turnStory, false)}</div>
             {/if}
           </div>
           {#if menu}
@@ -571,27 +599,6 @@
       {/if}
     </div>
 
-    {#if choosing}
-      <!-- First stories ever: which way to the next person? (Settings →
-           Chat settings → Stories changes it later.) -->
-      <div class="choose" role="dialog" aria-label={$t("How to flip through stories?")}>
-        <b class="ch-title">{$t("How to flip through stories?")}</b>
-        <div class="ch-opts">
-          <button class="ch-opt" onclick={() => storyNav.set("cube")}>
-            <span class="ch-pic cube-pic"><i></i><i></i></span>
-            <b>{$t("Sideways")}</b>
-            <small>{$t("Swipe left — the next person comes in on a turning cube, like in Telegram")}</small>
-          </button>
-          <button class="ch-opt" onclick={() => storyNav.set("vertical")}>
-            <span class="ch-pic feed-pic"><i></i><i></i></span>
-            <b>{$t("Downwards")}</b>
-            <small>{$t("Swipe up — the next person comes up from below, like a feed")}</small>
-          </button>
-        </div>
-        <small class="ch-note">{$t("You can change it in Settings → Chat settings.")}</small>
-      </div>
-    {/if}
-
     {#if viewersOpen}
       <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
       <div class="sheet-scrim" onclick={() => (viewersOpen = false)}></div>
@@ -616,52 +623,26 @@
 <style>
   .sv { position: fixed; inset: 0; z-index: 10094; background: #000; color: #fff; user-select: none; -webkit-user-select: none; overflow: hidden;
     display: flex; flex-direction: column; padding: var(--sat, env(safe-area-inset-top, 0px)) 0 var(--sab, env(safe-area-inset-bottom, 0px)); box-sizing: border-box;
-    animation: sv-in .24s cubic-bezier(.2,.9,.25,1); }
-  @keyframes sv-in { from { transform: scale(.9); opacity: 0; } }
+    animation: sv-in .16s ease-out; }
+  @keyframes sv-in { from { opacity: 0; } }
   .stage-row { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center;
-    transform: translateY(var(--dy)) scale(calc(1 - var(--dy) / 1600px)); opacity: calc(1 - var(--dy) / 700px); }
+    transform: translateY(var(--dy)); opacity: var(--dismiss-opacity); }
   .col { position: relative; flex: 1; height: 100%; min-width: 0; display: flex; flex-direction: column; }
-  .cube-wrap { position: relative; flex: 1; min-height: 0; perspective: 1400px; }
-  .cube { position: absolute; inset: 0; transform-style: preserve-3d; touch-action: none;
-    transform: translateZ(calc(var(--w) / -2)) rotateY(calc(var(--a) * -1)) translateZ(calc(var(--w) / 2)); }
-  .cube.anim { transition: transform .3s cubic-bezier(.3,.7,.3,1); }
-  .face { position: absolute; inset: 0; backface-visibility: hidden; overflow: hidden; background: #000; border-radius: calc(12px * var(--rk, 1)); }
-  .face.right { transform: translateZ(calc(var(--w) / -2)) rotateY(90deg) translateZ(calc(var(--w) / 2)); }
-  .face.left { transform: translateZ(calc(var(--w) / -2)) rotateY(-90deg) translateZ(calc(var(--w) / 2)); }
-  /* Feed mode: people one under another. */
-  .cube-wrap.vert { overflow: hidden; perspective: none; }
-  .cube.vert { transform: translateY(var(--oy)); transform-style: flat; }
+  .cube-wrap { position: relative; flex: 1; min-height: 0; overflow: hidden; border-radius: calc(14px * var(--rk, 1)); background: #111216; }
+  .cube { position: absolute; inset: 0; touch-action: none; transform: translateX(var(--offset)); }
+  .cube.vert { transform: translateY(var(--offset)); }
+  .sv.anim .cube, .sv.anim .stage-row { transition: transform 230ms cubic-bezier(.2,.72,.25,1), opacity 230ms ease-out; }
+  .face { position: absolute; inset: 0; overflow: hidden; background: #111216; }
+  .face.right { transform: translateX(100%); }
+  .face.left { transform: translateX(-100%); }
   .face.below { transform: translateY(100%); }
   .face.above { transform: translateY(-100%); }
-  .choose { position: absolute; inset: 0; z-index: 12; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; padding: 24px;
-    background: rgba(0,0,0,.72); backdrop-filter: blur(6px); text-align: center; animation: q-in .2s ease-out; }
-  .ch-title { font-size: 20px; }
-  .ch-opts { display: flex; gap: 12px; width: min(460px, 100%); }
-  .ch-opt { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 16px 12px; border-radius: calc(16px * var(--rk, 1));
-    border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.06); color: #fff; cursor: pointer; font: inherit; }
-  .ch-opt:hover { background: rgba(255,255,255,.12); border-color: var(--accent); }
-  .ch-opt b { font-size: 16px; }
-  .ch-opt small { font-size: 12.5px; opacity: .75; line-height: 1.35; }
-  .ch-note { font-size: 12.5px; opacity: .6; }
-  .ch-pic { position: relative; width: 64px; height: 96px; overflow: hidden; border-radius: 10px; background: rgba(255,255,255,.08); }
-  .ch-pic i { position: absolute; inset: 6px; border-radius: 6px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
-  .ch-pic i + i { background: linear-gradient(135deg, #ff7a59, #e0457b); }
-  .cube-pic i { animation: cube-a 2.4s infinite cubic-bezier(.4,0,.2,1); transform-origin: 0 50%; }
-  .cube-pic i + i { animation-name: cube-b; transform-origin: 100% 50%; }
-  @keyframes cube-a { 0%, 35% { transform: none; } 55%, 100% { transform: translateX(-100%) scaleX(.2); } }
-  @keyframes cube-b { 0%, 35% { transform: translateX(100%) scaleX(.2); } 55%, 100% { transform: none; } }
-  .feed-pic i { animation: feed-a 2.4s infinite cubic-bezier(.4,0,.2,1); }
-  .feed-pic i + i { animation-name: feed-b; }
-  @keyframes feed-a { 0%, 35% { transform: none; } 55%, 100% { transform: translateY(-110%); } }
-  @keyframes feed-b { 0%, 35% { transform: translateY(110%); } 55%, 100% { transform: none; } }
-  .face:not(.front) .media::after { content: ""; position: absolute; inset: 0; background: rgba(0,0,0,.25); }
+  .preview { pointer-events: none; }
   .media { position: absolute; inset: 0; display: grid; place-items: center; }
   .media img, .media video { grid-area: 1 / 1; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
-  .media img.bg { object-fit: cover; filter: blur(28px) brightness(.55); transform: scale(1.15); }
-  /* Above its own blur (a transformed layer paints over plain ones). */
   .media img.fg, .media video { position: relative; z-index: 1; }
   .cap { z-index: 2; }
-  .ph { position: absolute; inset: 0; background: #111 center / cover; filter: blur(30px) brightness(.5); transform: scale(1.2); }
+  .ph { position: absolute; inset: 0; background: #111 center / cover; opacity: .35; }
   .msg { display: flex; flex-direction: column; gap: 6px; align-items: center; font-size: 15px; text-align: center; padding: 20px; }
   .msg small { font-size: 12px; opacity: .6; max-width: 80vw; overflow-wrap: anywhere; }
   .spin { width: 36px; height: 36px; border-radius: 50%; border: 3px solid rgba(255,255,255,.25); border-top-color: #fff; animation: spin .8s linear infinite; }
@@ -672,7 +653,7 @@
   .top.gone, .bottom.gone { opacity: 0; pointer-events: none; }
   .bars { display: flex; gap: 3px; }
   .bar { flex: 1; height: 2.5px; border-radius: 2px; background: rgba(255,255,255,.35); overflow: hidden; }
-  .bar i { display: block; height: 100%; background: #fff; }
+  .bar i { display: block; height: 100%; background: #fff; transform-origin: left; }
   .who { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
   .whob { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; border: none; background: transparent; color: inherit; padding: 0; text-align: left; cursor: pointer; }
   .ava { width: 36px; height: 36px; border-radius: var(--ava-r, 50%); background: rgba(255,255,255,.2) center / cover; display: grid; place-items: center; font-weight: 800; flex-shrink: 0; color: #fff; }
@@ -731,10 +712,10 @@
   /* Computer (Telegram Desktop): the story in the middle at 9:16, the
      people before / after it at the sides, the blur of it behind. */
   .sv.desk { background: rgba(8,8,10,.94); padding: 0; }
-  .sv-blur { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: blur(60px) brightness(.35); transform: scale(1.2); pointer-events: none; }
   .close-x { position: absolute; top: 14px; right: 14px; z-index: 6; background: rgba(255,255,255,.08); }
   .desk .stage-row { gap: 12px; padding: 20px 0; }
-  .desk .col { flex: 0 0 auto; height: min(100%, 900px); aspect-ratio: 9 / 17.2; }
+  .desk .col { flex: 0 1 auto; height: min(100%, 900px); aspect-ratio: 9 / 17.2; max-width: calc(100% - 120px); }
+  @media (prefers-reduced-motion: reduce) { .sv { animation: none; } }
   .desk .bottom { padding: 10px 0 0; }
   .desk .menu-scrim { position: fixed; }
   .side { flex: 1; height: 100%; display: flex; align-items: center; min-width: 0; }

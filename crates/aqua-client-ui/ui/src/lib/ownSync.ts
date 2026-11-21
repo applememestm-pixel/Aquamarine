@@ -29,6 +29,8 @@ import { blocked, noReceiptChats, ghost } from "./ghost";
 import { profile } from "./profile";
 import { adoptMyCard } from "./people";
 import { seenStories } from "./stories";
+import { stickerState, mergeStickerState, restoreStickerPacks } from "./stickerSync";
+import { stickerLibraryTick } from "./panels/stickerEditor";
 
 /** Fields of the settings that stay on this device. */
 const DEVICE_FIELDS: (keyof Settings)[] = [
@@ -50,6 +52,7 @@ const plainObj = (v: unknown) => (v && typeof v === "object" && !Array.isArray(v
 const strArr = (v: unknown) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") : undefined);
 
 const ENTRIES: Entry[] = [
+  { key: "stickers", store: stickerState, out: (v) => v, take: (v, cur) => mergeStickerState(v, cur) },
   {
     key: "settings", store: settings,
     out: (s: Settings) => {
@@ -158,6 +161,7 @@ export function startOwnSync() {
   at = loadAt();
   snap = JSON.stringify(collect());
   for (const e of ENTRIES) e.store.subscribe(() => changed());
+  stickerLibraryTick.subscribe(() => { if (get(info)?.connected) void restoreStickerPacks().catch(() => {}); });
 
   // My card: an edit made here, once published (`pv` moves after every
   // successful publish) → my other devices fetch it.
@@ -192,6 +196,7 @@ export function startOwnSync() {
     if (on && !wasOn) {
       setTimeout(async () => {
         if (!get(info)?.connected) return;
+        void restoreStickerPacks().catch(() => {});
         // What I watched while the others were away (a story lives a day).
         const recent = get(seenStories).slice(-150);
         if (recent.length) send({ t: "st_seen", ids: recent });
@@ -215,8 +220,21 @@ export function startOwnSync() {
     if (b.t === "prefs") {
       const stamp = Number(b.at) || 0;
       const data = plainObj(b.data) as Record<string, unknown> | undefined;
-      if (!data || stamp <= at) return;
+      if (!data) return;
+      // Sticker operations merge individually even when another device has
+      // already sent newer preferences in an unrelated section.
+      if (stamp <= at) {
+        if (data.stickers) {
+          applying = true;
+          try { stickerState.update((s) => mergeStickerState(data.stickers, s)); }
+          finally { applying = false; }
+          snap = JSON.stringify(collect());
+          void restoreStickerPacks().catch(() => {});
+        }
+        return;
+      }
       apply(data, stamp);
+      void restoreStickerPacks().catch(() => {});
       // A new device: the profile card too.
       void adoptCard();
       return;

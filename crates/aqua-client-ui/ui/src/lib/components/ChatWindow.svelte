@@ -53,7 +53,7 @@
   import { meshStatus, meshSyncNow, nearbyVia } from "../mesh";
   import { noShare, setNoShare, startNoShare } from "../noShare";
   import { isLive, livePlay } from "../liveMotion";
-  import { IS_DESKTOP, IS_MOBILE } from "../platform";
+  import { IS_ANDROID, IS_DESKTOP, IS_MOBILE } from "../platform";
   import MiniPlayer from "./MiniPlayer.svelte";
   import Welcome from "./Welcome.svelte";
   import { settings } from "../theme";
@@ -812,29 +812,44 @@
     for (const ms of [800, 1800, 3500]) { await new Promise((r) => setTimeout(r, ms)); await galleryLoad(); if (gallery.state === "ok") break; }
   }
   /** A gallery tile tapped: look at it full screen (the circle selects). */
-  let pickedPreview = $state<{ uri: string; url: string; loading: boolean } | null>(null);
+  let pickedPreview = $state<{ uri: string; video: boolean; thumb: string; url: string; loading: boolean } | null>(null);
+  let previewRequest = 0;
+  const galleryCopies = new Map<string, Promise<string>>();
+
   function closePickedPreview() {
-    if (pickedPreview?.url.startsWith("blob:")) URL.revokeObjectURL(pickedPreview.url);
+    previewRequest++;
     pickedPreview = null;
   }
+
   async function galleryPeek(i: number) {
     const item = gallery.items[i];
     if (!item) return;
-    if (item.video) { galleryToggle(item.uri); return; }
-    closePickedPreview();
-    pickedPreview = { uri: item.uri, url: item.thumb ?? "", loading: true };
+    const requestId = ++previewRequest;
+    pickedPreview = { uri: item.uri, video: item.video, thumb: item.thumb, url: "", loading: true };
+    let copy = galleryCopies.get(item.uri);
+    if (!copy) {
+      copy = api.pickedMediaPath(item.uri);
+      galleryCopies.set(item.uri, copy);
+    }
     try {
-      const bytes = await api.readUserImage(item.uri);
-      if (pickedPreview?.uri !== item.uri) return;
-      const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: item.mime || "image/jpeg" }));
-      pickedPreview = { uri: item.uri, url, loading: false };
+      const path = await copy;
+      if (requestId !== previewRequest || !pickedPreview) return;
+      pickedPreview = { ...pickedPreview, url: assetUrl(path), loading: false };
     } catch (e) {
-      if (pickedPreview?.uri === item.uri) pickedPreview = { ...pickedPreview, loading: false };
+      if (galleryCopies.get(item.uri) === copy) galleryCopies.delete(item.uri);
+      if (requestId !== previewRequest || !pickedPreview) return;
+      pickedPreview = { ...pickedPreview, loading: false };
       showToast(String(e));
     }
   }
+
   $effect(() => { if (pickedPreview) return onBack(closePickedPreview); });
-  $effect(() => { if (!attachMenuOpen) closePickedPreview(); });
+  $effect(() => {
+    if (!attachMenuOpen) {
+      closePickedPreview();
+      galleryCopies.clear();
+    }
+  });
   let checkDown: { x: number; y: number; uri: string } | null = null;
   let checkFired = false;
   function galleryToggle(uri: string) {
@@ -850,13 +865,13 @@
   let galCap = $state("");
   async function gallerySend() {
     const chat = $activeChat;
-    const pick = gallerySel;
+    const pick = gallerySel.map((uri) => galleryCopies.get(uri)?.catch(() => uri) ?? uri);
     const cap = galCap.trim() || text.trim();
     if (!galCap.trim() && text.trim()) text = "";
     attachMenuOpen = false;
     gallerySel = [];
     galCap = "";
-    if (chat && pick.length) await sendFiles(chat.id, pick, "media", { caption: cap });
+    if (chat && pick.length) await sendFiles(chat.id, await Promise.all(pick), "media", { caption: cap });
   }
   // The camera tile shows the live camera, like Telegram: started with the
   // sheet (if the camera is allowed), stopped as it closes.
@@ -1285,6 +1300,13 @@
       await loadActiveMessages();
       // "Ask where to save each file": the save dialog right after.
       if ($settings.askDownloadPath) { await saveFileAs(res.saved_path, res.saved_path.split(/[\\/]/).pop() ?? "file"); return; }
+      if (IS_ANDROID) {
+        const name = res.saved_path.split(/[\\/]/).pop() ?? "file";
+        const exported = await api.exportDownload(chat.id, messageId);
+        if (!exported) { await saveFileAs(res.saved_path, name); return; }
+        showToast(tr("Saved to {path}", { path: "Download/Aquamarine/" + name }));
+        return;
+      }
       showToast(tr("Saved to {path}", { path: res.saved_path }));
     } catch (e) {
       showToast(`Download failed: ${e}`);
@@ -1767,8 +1789,30 @@
   // ---- "Send message as…" (Telegram): myself, this group, a channel I run ----
   /** Whom I can write as here: groups / channels / servers I'm an admin of. */
   const asChoices = $derived(activeGroup ? Object.values($groupMap).filter((g) => isAdmin(g, myUsername)).sort((a, b) => (a.id === activeGroup?.id ? -1 : b.id === activeGroup?.id ? 1 : 0)) : []);
-  const asPicked = $derived($activeChat ? $groupMap[$sendAsPick[$activeChat.id] ?? ""] : undefined);
-  let asOpen = $state(false);
+  const asPicked = $derived(asChoices.find((group) => group.id === $sendAsPick[$activeChat?.id ?? ""]));
+  let asDialog = $state<HTMLDialogElement>();
+  let identityOpen = $state(false);
+  let asChat = $state("");
+  let asDraft = $state("");
+  function openIdentity(chat: string) {
+    if (!asDialog || asDialog.open) return;
+    asChat = chat;
+    asDraft = asPicked?.id ?? "";
+    asDialog.showModal();
+    identityOpen = true;
+  }
+  function confirmIdentity() {
+    if ($activeChat?.id === asChat && (!asDraft || asChoices.some((choice) => choice.id === asDraft))) {
+      setSendAs(asChat, asDraft);
+    }
+    asDialog?.close();
+  }
+  $effect(() => {
+    if ($activeChat?.id !== asChat) asDialog?.close();
+  });
+  $effect(() => {
+    if (identityOpen) return onBack(() => asDialog?.close());
+  });
   /** Seen by everyone here, or checkable: this group itself, a group they
    *  share with me, or a public channel (its @name's owner). */
   const asNote = (g: { id: string; settings: { public_link?: string } }) =>
@@ -3551,6 +3595,49 @@
     const author = m.outgoing ? ($info?.username ?? "me") : (isGroup ? m.from : ($activeChat?.id ?? "peer"));
     return `${author}:${hashContent(reactionContent(m))}`;
   }
+  let quickTarget = $state<{ row: Row; left: number; top: number; below: boolean } | null>(null);
+  let quickExpanded = $state(false);
+  let quickHideTimer: ReturnType<typeof setTimeout> | undefined;
+  const nearReactions = $derived(filterReactions(quickReactions($reactionPack.items)).filter((emoji) => emoji !== favEmoji).slice(0, 5));
+
+  function clearQuick() {
+    clearTimeout(quickHideTimer);
+    quickTarget = null;
+    quickExpanded = false;
+  }
+
+  function hideQuick() {
+    clearTimeout(quickHideTimer);
+    quickHideTimer = setTimeout(clearQuick, 160);
+  }
+
+  function hoverMessage(e: PointerEvent) {
+    if (e.pointerType !== "mouse" || IS_MOBILE || e.buttons || selecting || menu.open || !nearReactions.length) return;
+    const target = e.target as Element;
+    const bubble = target.closest<HTMLElement>(".bubble, .circle-wrap, .sticker-wrap");
+    const id = bubble?.closest<HTMLElement>("[data-msg-id]")?.dataset.msgId;
+    if (!bubble || !id || !messagesEl || !messagesEl.contains(bubble)) {
+      if (quickTarget) hideQuick();
+      return;
+    }
+    clearTimeout(quickHideTimer);
+    if (quickTarget?.row.id === id) return;
+    const row = shownRows.find((message) => message.id === id);
+    if (!row || row.kind.type === "system" || row.kind.type === "date_separator") { clearQuick(); return; }
+
+    const rect = bubble.getBoundingClientRect();
+    const room = messagesEl.getBoundingClientRect();
+    const left = rect.right + 3 + 34 <= room.right - 4 ? rect.right + 3 : rect.left - 37;
+    const top = Math.max(room.top + 3, Math.min(rect.bottom - 29, room.bottom - 34));
+    quickExpanded = false;
+    quickTarget = { row, left: Math.max(room.left + 4, left), top, below: top - room.top < 142 };
+  }
+  $effect(() => {
+    void $activeChat?.id;
+    if (selecting || menu.open || !nearReactions.length) clearQuick();
+    return clearQuick;
+  });
+
   /** Context menu: show the whole reaction pack instead of the quick 8. */
   let reactAll = $state(false);
   /** Which pack the full reaction picker shows ("" = El Taller). */
@@ -4352,6 +4439,8 @@
     {#if $settings.snow}<Snow count={12} pile={snowPile} />{/if}
     <div
       class="messages"
+      role="region"
+      aria-label={$t("Messages")}
       class:feed={feedView}
       class:dm={!isGroup}
       class:chan={isChannel}
@@ -4360,7 +4449,9 @@
       class:selecting
       class:dragging
       bind:this={messagesEl}
-      onscroll={onMessagesScroll}
+      onscroll={() => { onMessagesScroll(); if (quickTarget) clearQuick(); }}
+      onpointerover={hoverMessage}
+      onpointerleave={hideQuick}
       onpointermove={onMessagesPointerMove}
       ontouchmove={() => { if ($settings.hideKbOnScroll) { const el = document.activeElement as HTMLElement | null; if (el && el.closest(".composer")) el.blur(); } }}
     >
@@ -4851,7 +4942,7 @@
                   <span class="bubble-meta">{m.time}</span>
                 </div>
               {:else if m.kind.type === "text"}
-                <div class="bubble">
+                <div class="bubble text-bubble">
                   {@render msgBody(m.kind.content.text)}
                   <span class="bubble-meta">
                     {@render msgFlags(m)}
@@ -4912,6 +5003,36 @@
       {/each}
     </div>
     </div>
+
+    {#if quickTarget && !menu.open && nearReactions[0]}
+      {@const target = quickTarget}
+      {@const first = nearReactions[0]}
+      {@const firstMedia = first ? reactionUrl(first, $reactionPack.items) : null}
+      <div class="quick-react" role="group" aria-label={$t("Reactions")} class:below={target.below}
+        style:left="{target.left}px" style:top="{target.top}px"
+        onpointerenter={() => clearTimeout(quickHideTimer)} onpointerleave={hideQuick}
+        onfocusin={() => clearTimeout(quickHideTimer)} onfocusout={(event) => {
+          if (!(event.currentTarget as HTMLElement).contains(event.relatedTarget as Node | null)) hideQuick();
+        }}>
+        <button class="quick-react-trigger" aria-label={$t("React with {emoji}", { emoji: parseReaction(first).emoji })}
+          onclick={() => { reactTo(target.row, first); clearQuick(); }} onpointerenter={() => (quickExpanded = true)}
+          onfocus={() => (quickExpanded = true)}>
+          {#if firstMedia}<AnimatedMedia src={firstMedia.url} mime={firstMedia.mime} alt="" play="never" />{:else}{first}{/if}
+        </button>
+        {#if quickExpanded && nearReactions.length > 1}
+          <div class="quick-react-panel">
+            {#each nearReactions.slice(1) as reaction (reaction)}
+              {@const art = reactionUrl(reaction, $reactionPack.items)}
+              {@const emoji = parseReaction(reaction).emoji}
+              <button aria-label={$t("React with {emoji}", { emoji })} title={emoji}
+                onclick={() => { reactTo(target.row, reaction); clearQuick(); }}>
+                {#if art}<AnimatedMedia src={art.url} mime={art.mime} alt="" play="hover" />{:else}{emoji}{/if}
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/if}
 
     {#if scrolledUp}
       <button class="jump-btn" style:bottom="{jumpBottom}px" onclick={jumpToBottom} title={$t("Jump to latest")} aria-label={$t("Scroll to bottom")}>
@@ -5159,7 +5280,6 @@
         <!-- A channel on a phone (Telegram): one bar — who posts, stickers, the
              text, 📎, the round button. The PC keeps its usual field (the
              owner's call), with only the 🔔 added. -->
-        {#if IS_MOBILE}<span class="cb-ava" style:background-image={$myProfile.avatar_url ? `url("${$myProfile.avatar_url}")` : undefined}>{$myProfile.avatar_url ? "" : (myUsername || "?").charAt(0).toUpperCase()}</span>{/if}
         <!-- 🔔: subscribers get a sound / a notification; off — a silent post. -->
         <button class="cb-bell" class:off={!!$silentChans[$activeChat?.id ?? ""]} aria-pressed={!!$silentChans[$activeChat?.id ?? ""]}
           title={$t($silentChans[$activeChat?.id ?? ""] ? "Silent: subscribers get no sound" : "Subscribers get a notification")}
@@ -5167,32 +5287,13 @@
           {#if $silentChans[$activeChat?.id ?? ""]}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13.7 21a2 2 0 0 1-3.4 0"/><path d="M18.6 13A17.9 17.9 0 0 1 18 8"/><path d="M6.3 6.3A5.9 5.9 0 0 0 6 8c0 7-3 9-3 9h14"/><path d="M18 8a6 6 0 0 0-9.3-5"/><path d="M2 2l20 20"/></svg>{:else}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>{/if}
         </button>
       {/if}
-      {#if !isChannel && isGroup && liveChat && asChoices.length}
-        <!-- "Send message as…": tap the face to write as a group / channel you run. -->
-        <div class="as-wrap">
-          <button class="as-btn" onclick={() => (asOpen = !asOpen)} title={$t("Send message as…")} aria-label={$t("Send message as…")} aria-expanded={asOpen}
-            style:background-image={asPicked ? ($avatars[asPicked.id] ? `url("${$avatars[asPicked.id]}")` : undefined) : ($myProfile.avatar_url ? `url("${$myProfile.avatar_url}")` : undefined)}
-            style:--gradient={asPicked?.gradient}>
-            {#if asPicked}{$avatars[asPicked.id] ? "" : asPicked.title.charAt(0).toUpperCase()}{:else}{$myProfile.avatar_url ? "" : (myUsername || "?").charAt(0).toUpperCase()}{/if}
-          </button>
-          {#if asOpen}
-            <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
-            <div class="as-veil" onclick={() => (asOpen = false)}></div>
-            <div class="as-menu" role="menu">
-              <div class="as-title">{$t("Send message as…")}</div>
-              <button role="menuitem" class:on={!asPicked} onclick={() => { if ($activeChat) setSendAs($activeChat.id, ""); asOpen = false; }}>
-                <span class="as-av" style:background-image={$myProfile.avatar_url ? `url("${$myProfile.avatar_url}")` : undefined}>{$myProfile.avatar_url ? "" : (myUsername || "?").charAt(0).toUpperCase()}</span>
-                <span class="as-tx"><b>{$myProfile.display_name || myUsername}</b><small>{$t("personal account")}</small></span>
-              </button>
-              {#each asChoices as g (g.id)}
-                <button role="menuitem" class:on={asPicked?.id === g.id} onclick={() => { if ($activeChat) setSendAs($activeChat.id, g.id); asOpen = false; }}>
-                  <span class="as-av" style:--gradient={g.gradient} style:background-image={$avatars[g.id] ? `url("${$avatars[g.id]}")` : undefined}>{$avatars[g.id] ? "" : g.title.charAt(0).toUpperCase()}</span>
-                  <span class="as-tx"><b>{g.title}</b><small>{$tn(g.members.length, g.kind === "channel" ? "subscriber" : "member")}{#if asNote(g)} · {asNote(g)}{/if}</small></span>
-                </button>
-              {/each}
-            </div>
-          {/if}
-        </div>
+      {#if isGroup && liveChat && asChoices.length && $activeChat}
+        {@const photo = asPicked ? $avatars[asPicked.id] : $myProfile.avatar_url}
+        {@const initial = (asPicked?.title || $myProfile.display_name || myUsername || "?").charAt(0).toUpperCase()}
+        <button class="as-btn" onclick={() => openIdentity($activeChat!.id)} title={$t("Send message as…")}
+          aria-label={$t("Send message as…")} aria-haspopup="dialog" style:--gradient={asPicked?.gradient}>
+          {#if photo}<img src={photo} alt="" />{:else}{initial}{/if}
+        </button>
       {/if}
       {#if botMenu}
         <button class="bot-menu-btn" onclick={() => { if ($activeChat && botMenu) openMiniApp({ bot: $activeChat.id, url: botMenu.url, from: "menu" }); }} title={botMenu.url}>
@@ -5446,10 +5547,15 @@
   {/if}
   {#if pickedPreview}
     {@const preview = pickedPreview}
-    <div class="picked-preview" role="dialog" aria-modal="true" aria-label={$t("Photo")}>
+    <div class="picked-preview" role="dialog" aria-modal="true" aria-label={$t(preview.video ? "Video" : "Photo")} tabindex="-1">
       <header><button data-x onclick={closePickedPreview} aria-label={$t("Back")}>←</button>
         <button onclick={() => galleryToggle(preview.uri)} aria-pressed={gallerySel.includes(preview.uri)}>{$t(gallerySel.includes(preview.uri) ? "Selected" : "Select")}</button></header>
-      <img src={preview.url} alt="" />
+      {#if preview.video && preview.url}
+        <!-- svelte-ignore a11y_media_has_caption -->
+        <video use:streamSrc={preview.url} controls playsinline poster={preview.thumb || undefined}></video>
+      {:else if preview.url || preview.thumb}
+        <img src={preview.url || preview.thumb} alt="" />
+      {/if}
       {#if preview.loading}<span role="status">{$t("Loading…")}</span>{/if}
     </div>
   {/if}
@@ -5504,6 +5610,37 @@
 </main>
 
 <svelte:window onmousedown={(e) => { if ((ttlMenu || callMenu || toolsMenu) && !(e.target as HTMLElement).closest?.(".ttl-wrap")) { ttlMenu = false; callMenu = false; toolsMenu = false; } }} />
+
+<dialog class="as-dialog" bind:this={asDialog} onclose={() => (identityOpen = false)} aria-labelledby="send-as-title">
+  <form class="as-form" onsubmit={(e) => { e.preventDefault(); confirmIdentity(); }}>
+    <header>
+      <h2 id="send-as-title">{$t("Send message as…")}</h2>
+      <p>{$t("Choose the name shown on your messages in this chat.")}</p>
+    </header>
+    <div class="as-options">
+      <label class="as-option">
+        <span class="as-av" aria-hidden="true">
+          {#if $myProfile.avatar_url}<img src={$myProfile.avatar_url} alt="" />{:else}{($myProfile.display_name || myUsername || "?").charAt(0).toUpperCase()}{/if}
+        </span>
+        <span class="as-tx"><b>{$myProfile.display_name || myUsername}</b><small>{$t("personal account")}</small></span>
+        <input type="radio" name="identity" value="" bind:group={asDraft} />
+      </label>
+      {#each asChoices as group (group.id)}
+        <label class="as-option">
+          <span class="as-av" aria-hidden="true" style:--gradient={group.gradient}>
+            {#if $avatars[group.id]}<img src={$avatars[group.id]} alt="" />{:else}{group.title.charAt(0).toUpperCase()}{/if}
+          </span>
+          <span class="as-tx"><b>{group.title}</b><small>{$tn(group.members.length, group.kind === "channel" ? "subscriber" : "member")}{#if asNote(group)} · {asNote(group)}{/if}</small></span>
+          <input type="radio" name="identity" value={group.id} bind:group={asDraft} />
+        </label>
+      {/each}
+    </div>
+    <footer>
+      <button type="button" data-x onclick={() => asDialog?.close()}>{$t("Cancel")}</button>
+      <button type="submit">{$t("Done")}</button>
+    </footer>
+  </form>
+</dialog>
 
 <style>
   .post-foot { display: flex; align-items: center; gap: 8px; margin-top: 3px; }
@@ -6034,6 +6171,14 @@
   .msg:not(.out) .bubble { color: var(--bubble-in-fg, var(--fg)); }
   .msg.out:not(.first) .bubble { border-top-right-radius: var(--bubble-r, 14px); }
 
+  .messages:not(.chan) .msg .text-bubble {
+    border-radius: var(--bubble-r, 14px);
+  }
+  .messages:not(.chan) .msg.in:not(.first) .text-bubble { border-start-start-radius: calc(6px * var(--rk, 1)); }
+  .messages:not(.chan) .msg.out:not(.first) .text-bubble { border-start-end-radius: calc(6px * var(--rk, 1)); }
+  .messages:not(.chan) .msg.in .text-bubble { border-end-start-radius: calc(6px * var(--rk, 1)); }
+  .messages:not(.chan) .msg.out .text-bubble { border-end-end-radius: calc(6px * var(--rk, 1)); }
+
   .bubble-meta {
     display: inline-flex;
     align-items: center;
@@ -6352,7 +6497,7 @@
   .picked-preview { position: fixed; inset: 0; z-index: 280; display: flex; flex-direction: column; align-items: center; background: var(--bg-shell); padding: var(--sat, 0px) 0 var(--sab, 0px); }
   .picked-preview header { align-self: stretch; display: flex; justify-content: space-between; padding: 8px; }
   .picked-preview button { min-height: 44px; padding: 8px 16px; border: 0; border-radius: calc(12px * var(--rk, 1)); color: var(--accent); background: var(--bg-input); font: inherit; }
-  .picked-preview img { width: 100%; flex: 1; min-height: 0; object-fit: contain; }
+  .picked-preview img, .picked-preview video { width: 100%; flex: 1; min-height: 0; object-fit: contain; }
   .missing-photo {
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 6px; width: 100%; aspect-ratio: 4/3; padding: 8px; box-sizing: border-box;
@@ -6852,6 +6997,17 @@
     animation: ctx-in 0.1s ease-out;
   }
   .ctx-menu.touch { width: 262px; }
+  .quick-react { position: fixed; z-index: 25; width: 34px; height: 34px; }
+  .quick-react button { display: grid; place-items: center; width: 30px; height: 30px; padding: 5px; border: 0; background: transparent; color: var(--fg); border-radius: 50%; cursor: pointer; font-size: 16px; }
+  .quick-react button:hover, .quick-react button:focus-visible { background: var(--bg-hover); }
+  .quick-react .quick-react-trigger { width: 34px; height: 34px; padding: 7px; background: var(--bg-surface-2); border: 1px solid var(--border-strong); box-shadow: 0 3px 9px #0003; }
+  .quick-react-panel {
+    display: grid; gap: 1px; position: absolute; bottom: calc(100% - 3px); left: 0; padding: 5px 2px;
+    background: var(--bg-surface-2); border: 1px solid var(--border-strong); border-radius: 999px;
+    box-shadow: 0 4px 14px #0004;
+  }
+  .quick-react.below .quick-react-panel { bottom: auto; top: calc(100% - 3px); }
+  .quick-react :global(.am) { width: 100%; height: 100%; }
   .ctx-card, .ctx-reactions {
     background: color-mix(in srgb, var(--bg-surface-2) 94%, transparent);
     backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
@@ -7296,27 +7452,46 @@
   .composer.chan-bar { align-items: center; gap: 2px; margin: 6px 10px 8px; padding: 4px; border: 1px solid var(--border);
     border-radius: 999px; background: var(--bg-input); }
   .composer.chan-bar::before { border-radius: 999px; }
-  /* "Send message as…": a face at the start of the field, a card of choices above it. */
-  .as-wrap { position: relative; flex-shrink: 0; align-self: center; }
-  .as-btn { width: 36px; height: 36px; border-radius: var(--ava-r, 50%); border: 2px solid var(--accent); cursor: pointer; display: grid; place-items: center;
-    font-weight: 800; color: var(--bg-shell); background: var(--gradient, var(--accent-soft)) center / cover no-repeat; }
-  .as-veil { position: fixed; inset: 0; z-index: 60; }
-  .as-menu { position: absolute; left: 0; bottom: calc(100% + 10px); z-index: 61; width: min(320px, calc(100vw - 24px)); padding: 6px 0; display: flex; flex-direction: column;
-    background: color-mix(in srgb, var(--bg-surface-2) 94%, transparent); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
-    border: 1px solid var(--border); border-radius: calc(18px * var(--rk, 1)); box-shadow: 0 14px 36px -12px rgba(0,0,0,.55); animation: ctx-pop .2s cubic-bezier(.2,.9,.25,1.12); transform-origin: bottom left; }
-  .as-title { padding: 8px 18px 6px; font-size: 15px; font-weight: 600; color: var(--accent); }
-  .as-menu button { display: flex; align-items: center; gap: 14px; min-height: 58px; padding: 6px 16px; border: none; background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
-  .as-menu button:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
-  .as-menu button.on .as-av { box-shadow: 0 0 0 2px var(--bg-surface-2), 0 0 0 4px var(--accent); }
-  .as-av { width: 44px; height: 44px; border-radius: var(--ava-r, 50%); flex-shrink: 0; display: grid; place-items: center; font-weight: 700; font-size: 17px;
-    color: var(--bg-shell); background: var(--gradient, var(--accent-soft)) center / cover no-repeat; }
-  .as-tx { min-width: 0; display: flex; flex-direction: column; }
-  .as-tx b { font-size: 16px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .as-tx small { font-size: 13.5px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .as-btn, .as-av {
+    border-radius: var(--ava-r, 50%); flex-shrink: 0; display: grid; place-items: center; overflow: hidden;
+    font-weight: 700; color: var(--fg); background: var(--gradient, var(--accent-soft));
+  }
+  .as-btn { align-self: center; width: 34px; height: 34px; padding: 0; border: 1px solid var(--border-strong); cursor: pointer; }
+  .chan-bar .as-btn { order: 0; margin-inline: 2px; }
+  .as-btn img, .as-av img { width: 100%; height: 100%; object-fit: cover; }
+  .as-dialog {
+    width: min(360px, calc(100% - 32px)); max-height: min(520px, calc(100dvh - 32px));
+    box-sizing: border-box; padding: 0; border: 1px solid var(--border-strong);
+    border-radius: calc(18px * var(--rk, 1)); background: var(--bg-surface-2); color: var(--fg);
+    box-shadow: 0 16px 42px #0005;
+  }
+  .as-dialog[open] { animation: identity-in .16s ease-out; }
+  .as-dialog::backdrop { background: #0008; }
+  @keyframes identity-in { from { opacity: 0; transform: translateY(6px); } }
+  .as-form { display: flex; flex-direction: column; max-height: inherit; }
+  .as-form header { padding: 18px 18px 10px; }
+  .as-form h2 { margin: 0 0 6px; font-size: 17px; }
+  .as-form p { margin: 0; color: var(--fg-muted); font-size: 13px; line-height: 1.4; }
+  .as-options { min-height: 0; padding: 3px 8px; overflow-y: auto; overscroll-behavior: contain; }
+  .as-option {
+    display: flex; align-items: center; gap: 11px; min-height: 57px; padding: 6px 10px;
+    box-sizing: border-box; border-radius: calc(10px * var(--rk, 1)); cursor: pointer;
+  }
+  .as-option:hover { background: var(--bg-hover); }
+  .as-option:has(input:checked) { background: var(--accent-soft); }
+  .as-option:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .as-av { height: 38px; width: 38px; }
+  .as-option input { margin-inline-start: auto; flex: 0 0 auto; accent-color: var(--accent); }
+  .as-tx { min-width: 0; flex: 1; display: grid; gap: 2px; }
+  .as-tx b, .as-tx small { overflow: hidden; text-overflow: ellipsis; }
+  .as-tx b { font-size: 14px; white-space: nowrap; }
+  .as-tx small { font-size: 12px; color: var(--fg-muted); }
+  .as-form footer { display: flex; justify-content: flex-end; gap: 8px; padding: 10px; border-top: 1px solid var(--border); }
+  .as-form footer button { min-height: 36px; padding: 0 14px; border: 0; border-radius: 999px; background: transparent; color: var(--fg); font: inherit; cursor: pointer; }
+  .as-form footer button[type="submit"] { background: var(--accent-soft); color: var(--accent); font-weight: 650; }
+  @media (prefers-reduced-motion: reduce) { .as-dialog[open] { animation: none; } }
   .as-author { color: var(--accent); }
   .as-own { align-self: flex-end; font-size: 12.5px; font-weight: 600; color: var(--accent); margin: 0 4px 2px; }
-  .chan-bar .cb-ava { order: 0; width: 38px; height: 38px; border-radius: var(--ava-r, 50%); flex-shrink: 0; background: var(--accent-soft) center / cover no-repeat;
-    display: grid; place-items: center; font-weight: 800; color: var(--accent); }
   .chan-bar .input-wrap { order: 1; background: transparent; border: none; box-shadow: none !important; padding-left: 4px; align-items: center; }
   .chan-bar .input-wrap > .emoji-in { order: -1; }
   .chan-bar .attach-wrap { order: 2; }

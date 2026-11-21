@@ -1914,7 +1914,7 @@
         {#if !$storiesOff}
           <div class="row">
             <span class="row-label">{$t("Next person")}</span>
-            <Select class="sel" value={$storyNav || "cube"} options={[{ value: "cube", label: $t("Sideways (cube)") }, { value: "vertical", label: $t("Down (feed)") }]}
+            <Select class="sel" value={$storyNav || "cube"} options={[{ value: "cube", label: $t("Sideways") }, { value: "vertical", label: $t("Down (feed)") }]}
               onchange={(v) => storyNav.set(v === "vertical" ? "vertical" : "cube")} />
           </div>
           <button class="toggle-row" onclick={() => storyArchiveOpen.set(true)}>

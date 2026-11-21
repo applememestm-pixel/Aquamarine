@@ -24,7 +24,7 @@
 </script>
 
 <!-- Phones: at the top — at the bottom it covered the player's and the field's buttons. -->
-<div class="toast" class:show={$toastVisible} class:top={IS_MOBILE}>
+<div class="toast" class:show={$toastVisible} class:top={IS_MOBILE} role="status" aria-live="polite">
   {@html icons.check}
   <span>{$toastText}</span>
 </div>
@@ -41,13 +41,16 @@
     border-radius: calc(10px * var(--rk, 1));
     font-size: 13px;
     opacity: 0;
-    transition: all 0.25s ease;
+    transition: opacity 0.2s ease, transform 0.2s ease;
     box-shadow: var(--shadow-accent);
     z-index: 300;
     display: flex;
     align-items: center;
     gap: 8px;
     pointer-events: none;
+    max-width: min(440px, calc(100vw - 32px));
+    box-sizing: border-box;
+    overflow-wrap: anywhere;
   }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   .toast.top { bottom: auto; top: calc(10px + var(--sat, env(safe-area-inset-top, 0px))); transform: translateX(-50%) translateY(-60px); max-width: calc(100vw - 32px); box-sizing: border-box; }

@@ -56,6 +56,9 @@ if ($ma) {
   Write-Host '[patch] AquaMesh.kt (Bluetooth nearby delivery)'
   # Server on this device (crates\aqua-client-ui\src\relay_host.rs).
   Copy-Item (Join-Path $PSScriptRoot 'AquaRelay.kt') (Join-Path $ma.DirectoryName 'AquaRelay.kt') -Force
+  $drawable = Join-Path $app 'src\main\res\drawable'
+  New-Item -ItemType Directory -Force -Path $drawable | Out-Null
+  Copy-Item (Join-Path $PSScriptRoot 'res\drawable\ic_stat_aquamarine.xml') $drawable -Force
   Write-Host '[patch] AquaRelay.kt (server on this device)'
   # Home-screen widget (android\widget).
   Copy-Item (Join-Path $PSScriptRoot 'widget\AquaWidget.kt') (Join-Path $ma.DirectoryName 'AquaWidget.kt') -Force

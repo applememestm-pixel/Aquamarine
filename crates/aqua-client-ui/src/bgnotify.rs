@@ -67,6 +67,9 @@ pub fn incoming(app: &AppHandle, chat: &str) {
         let Some(st) = app.try_state::<std::sync::Mutex<crate::state::AppState>>() else { return };
         let Ok(s) = st.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) else { return };
         let Some(book) = s.chats.get(chat) else { return };
+        if book.summary.preview_by_me || book.messages.last().is_some_and(|m| m.from == "me" || s.username.as_deref() == Some(m.from.as_str())) {
+            return;
+        }
         let body = match &book.summary.preview_from {
             // A group: who wrote.
             Some(who) if !book.summary.preview_by_me && !who.is_empty() => format!("{who}: {}", book.summary.preview),
@@ -76,7 +79,10 @@ pub fn incoming(app: &AppHandle, chat: &str) {
     };
     let (title, body) = if p.locked.iter().any(|m| m == chat) { ("Aquamarine".to_string(), p.locked_text) } else { (title, body) };
     use tauri_plugin_notification::NotificationExt;
-    let _ = app.notification().builder().title(title).body(body.chars().take(160).collect::<String>()).show();
+    let note = app.notification().builder().title(title).body(body.chars().take(160).collect::<String>()).auto_cancel();
+    #[cfg(target_os = "android")]
+    let note = note.icon("ic_stat_aquamarine");
+    let _ = note.show();
 }
 
 /// The widget the page would draw (ui/src/lib/widget.ts), from Rust.
