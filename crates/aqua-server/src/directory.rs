@@ -3124,7 +3124,9 @@ impl Directory {
         }
         let display_name: String = display_name.trim().chars().take(64).collect();
         let mut connection = self.db.lock().unwrap();
-        let db = connection.transaction()?;
+        // Reserve the writer before reading the name and quota. This lets
+        // SQLite wait for a concurrent writer instead of failing on upgrade.
+        let db = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         // A public group's / channel's @name.
         if db.query_row("SELECT 1 FROM group_names WHERE username=?1", rusqlite::params![username], |_| Ok(())).is_ok() {
             return Err(DirError::UsernameTaken);

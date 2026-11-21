@@ -763,9 +763,13 @@ async fn telegram_bot_api_compat() {
     let http = test_http();
     let mut owner = Client::new("tgowner");
     owner.login(&http, &base).await;
-    let reg: serde_json::Value = http.post(format!("{base}/v1/bot/register")).bearer_auth(&owner.token)
+    let response = http.post(format!("{base}/v1/bot/register")).bearer_auth(&owner.token)
         .json(&serde_json::json!({ "username": "tgcompat_bot", "display_name": "Compat" }))
-        .send().await.unwrap().json().await.unwrap();
+        .send().await.unwrap();
+    let status = response.status();
+    let body = response.text().await.unwrap();
+    assert!(status.is_success(), "bot registration returned {status}: {body}");
+    let reg: serde_json::Value = serde_json::from_str(&body).unwrap();
     // The Telegram-shaped token ("<digits>:<secret>") works, like a real one.
     let tg_token = reg["telegram_token"].as_str().unwrap().to_string();
     let (digits, _) = tg_token.split_once(':').unwrap();
@@ -895,9 +899,13 @@ async fn native_bot_api_extras() {
     let http = test_http();
     let mut owner = Client::new("xowner");
     owner.login(&http, &base).await;
-    let reg: serde_json::Value = http.post(format!("{base}/v1/bot/register")).bearer_auth(&owner.token)
+    let response = http.post(format!("{base}/v1/bot/register")).bearer_auth(&owner.token)
         .json(&serde_json::json!({ "username": "extras_bot", "display_name": "Extras" }))
-        .send().await.unwrap().json().await.unwrap();
+        .send().await.unwrap();
+    let status = response.status();
+    let body = response.text().await.unwrap();
+    assert!(status.is_success(), "bot registration returned {status}: {body}");
+    let reg: serde_json::Value = serde_json::from_str(&body).unwrap();
     let tok = reg["token"].as_str().unwrap().to_string();
     let auth = format!("Bot {tok}");
     let get = |path: &str| http.get(format!("{base}{path}")).header("Authorization", &auth);

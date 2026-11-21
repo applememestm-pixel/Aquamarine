@@ -3182,6 +3182,17 @@
   }
 
   let audit = $state<ChatMessage["meta"] | null>(null);
+  function focusAuditDialog(node: HTMLElement) {
+    const trigger = document.activeElement;
+    node.focus();
+    return {
+      destroy() {
+        if (trigger instanceof HTMLElement && trigger.isConnected && node.contains(document.activeElement)) {
+          trigger.focus();
+        }
+      },
+    };
+  }
   $effect(() => { void $activeId; audit = null; });
   const auditDate = (at: number) => new Intl.DateTimeFormat($lang, {
     dateStyle: "medium", timeStyle: "short",
@@ -5768,9 +5779,12 @@
 
 {#if (audit && audit.edit_audit?.length && isAdmin(activeGroup, myUsername)) || translation !== null}
   <div class="audit-shade">
-    <button class="audit-dismiss" aria-label={$t("Close")} onclick={() => { audit = null; translation = null; }}></button>
-    <section class="audit-card" role="dialog" aria-modal="true" aria-label={$t(translation !== null ? "Translation" : "Edit details")} tabindex="-1"
-      onkeydown={e => { if (e.key === "Escape") { audit = null; translation = null; } }}>
+    <button class="audit-dismiss" aria-label={$t("Close")} tabindex="-1" onclick={() => { audit = null; translation = null; }}></button>
+    <section class="audit-card" role="dialog" aria-modal="true" aria-label={$t(translation !== null ? "Translation" : "Edit details")} tabindex="-1" use:focusAuditDialog
+      onkeydown={e => {
+        if (e.key === "Escape") { e.stopPropagation(); audit = null; translation = null; }
+        if (e.key === "Tab") { e.preventDefault(); e.currentTarget.querySelector("header button")?.focus(); }
+      }}>
       <header><strong>{$t(translation !== null ? "Translation" : "Edit details")}</strong><button aria-label={$t("Close")} onclick={() => { audit = null; translation = null; }}>×</button></header>
       {#if translation !== null}
         <div class="audit-entry"><p>{translation}</p></div>
