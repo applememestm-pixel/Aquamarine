@@ -61,6 +61,43 @@ class MainActivity : TauriActivity() {
   // canvas whose captureStream() goes out as the call's screen track.
   private var screenAsk: ActivityResultLauncher<Intent>? = null
 
+  private var meshPermissionReply: ((Boolean) -> Unit)? = null
+  private var meshVisibleReply: ((Boolean) -> Unit)? = null
+
+  private val meshPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+    val reply = meshPermissionReply
+    meshPermissionReply = null
+    reply?.invoke(grants.isNotEmpty() && grants.values.all { it })
+  }
+
+  private val meshVisibility = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+    val reply = meshVisibleReply
+    meshVisibleReply = null
+    reply?.invoke(result.resultCode > 0)
+  }
+
+  fun requestMeshPermissions(permissions: Array<String>, reply: (Boolean) -> Unit) {
+    runOnUiThread {
+      if (meshPermissionReply != null) { reply(false); return@runOnUiThread }
+      meshPermissionReply = reply
+      try { meshPermissions.launch(permissions) } catch (_: Exception) {
+        meshPermissionReply = null
+        reply(false)
+      }
+    }
+  }
+
+  fun requestMeshVisibility(intent: Intent, reply: (Boolean) -> Unit) {
+    runOnUiThread {
+      if (meshVisibleReply != null) { reply(false); return@runOnUiThread }
+      meshVisibleReply = reply
+      try { meshVisibility.launch(intent) } catch (_: Exception) {
+        meshVisibleReply = null
+        reply(false)
+      }
+    }
+  }
+
   inner class ScreenBridge {
     @JavascriptInterface fun start(fps: Int, maxSide: Int): Boolean {
       val ask = screenAsk ?: return false

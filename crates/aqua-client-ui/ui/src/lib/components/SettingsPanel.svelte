@@ -2736,7 +2736,7 @@
       {/if}
       <section class="group">
         <div class="label">{$t("How to start")}</div>
-        <div class="bots-note">{$t("1. Connect by QR code: one of you shows the code, the other scans it — that exchanges the keys and the Bluetooth address, like Briar; or chat once through a server. 2. Keep Bluetooth on (the device from the QR is dialled directly, no pairing) or be on the same Wi-Fi. 3. Messages are swapped automatically every couple of minutes while the server is away, or right now with “Find contacts nearby”.")}</div>
+        <div class="bots-note">{$t("For a new contact, open Meet nearby. On Android, the phone showing the code should prepare Bluetooth before the other phone scans. For an existing contact, use Find contacts nearby while the other phone is listening. You can also use the same Wi-Fi network.")}</div>
       </section>
       {/if}
 

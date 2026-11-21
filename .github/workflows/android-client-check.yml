@@ -1,0 +1,62 @@
+name: Android client APK check
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "android/**"
+      - ".github/workflows/android-client-check.yml"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: android-client-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/aqua-client-ui -> target
+          shared-key: android-client-check
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crates/aqua-client-ui/ui/package-lock.json
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-tauri
+          key: tauri-cli-${{ runner.os }}-2
+      - name: Install Tauri CLI
+        run: command -v cargo-tauri || cargo install tauri-cli --version '^2' --locked
+      - name: Frontend dependencies
+        run: npm ci --no-audit --no-fund
+        working-directory: crates/aqua-client-ui/ui
+      - name: Generate and patch Android project
+        working-directory: crates/aqua-client-ui
+        run: |
+          export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          echo "NDK_HOME=$NDK_HOME" >> "$GITHUB_ENV"
+          cargo tauri android init --ci
+          bash ../../android/patch-project.sh
+      - name: Build debug APK
+        working-directory: crates/aqua-client-ui
+        run: cargo tauri android build --apk --debug --target aarch64 --ci
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aquamarine-android-debug
+          path: crates/aqua-client-ui/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+          retention-days: 7

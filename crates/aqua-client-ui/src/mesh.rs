@@ -524,6 +524,12 @@ pub async fn mesh_set_enabled(app: AppHandle, on: bool) -> Result<MeshStatus, St
     Ok(status_of(&app))
 }
 
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn mesh_prepare_bluetooth(app: AppHandle) -> Result<(), String> {
+    bt::prepare(&app).await
+}
+
 /// Look for contacts nearby right now and swap messages with them.
 #[tauri::command]
 pub async fn mesh_sync_now(app: AppHandle) -> Result<MeshStatus, String> {
@@ -1142,13 +1148,14 @@ mod platform {
     }
 
     pub async fn sync_round(app: &AppHandle, scan: bool) -> Result<(), String> {
-        let l = lan::sync_round(app, scan).await;
-        let b = if bt::SUPPORTED { bt::sync_round(app, scan).await } else { Err(String::new()) };
-        match (l, b) {
-            (Ok(n), Err(e)) if n > 0 && scan && !e.is_empty() => Err(format!("Bluetooth: {e}")),
-            (Ok(n), _) if n > 0 => Ok(()),
-            (_, Ok(())) => Ok(()),
-            (_, Err(e)) if scan && !e.is_empty() => Err(e),
+        let lan = lan::sync_round(app, scan).await;
+        if matches!(lan, Ok(n) if n > 0) {
+            return Ok(());
+        }
+        let bluetooth = if bt::SUPPORTED { bt::sync_round(app, scan).await } else { Err(String::new()) };
+        match bluetooth {
+            Ok(()) => Ok(()),
+            Err(error) if scan && !error.is_empty() => Err(error),
             _ if !scan => Ok(()),
             _ => Err("no contacts with Aquamarine nearby — same Wi-Fi, or Bluetooth on".into()),
         }

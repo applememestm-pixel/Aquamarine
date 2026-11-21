@@ -36,8 +36,10 @@ import app.tauri.plugin.JSArray
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 import java.io.IOException
+import java.net.Inet4Address
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -81,6 +83,7 @@ class MeshLockArgs {
 @TauriPlugin
 class AquaMeshPlugin(private val activity: Activity) : Plugin(activity) {
   private val pool = Executors.newCachedThreadPool()
+  private val discoveryLock = Any()
   private val conns = ConcurrentHashMap<Long, BluetoothSocket>()
   private val nextId = AtomicLong(1)
   private val accepted = LinkedBlockingQueue<Pair<Long, String>>()
@@ -101,7 +104,7 @@ class AquaMeshPlugin(private val activity: Activity) : Plugin(activity) {
     val a = adapter()
     val o = JSObject()
     o.put("supported", a != null)
-    o.put("enabled", a?.isEnabled == true)
+    o.put("enabled", runCatching { a?.isEnabled == true }.getOrDefault(false))
     o.put("permitted", permitted())
     return o
   }
@@ -124,13 +127,11 @@ class AquaMeshPlugin(private val activity: Activity) : Plugin(activity) {
   /** Asks for "Nearby devices" (Android 12+) or location (older), then reports. */
   @Command
   fun ask(invoke: Invoke) {
-    if (permitted()) { invoke.resolve(snapshot()); return }
-    activity.runOnUiThread { activity.requestPermissions(needed(), 7731) }
-    later(invoke) {
-      var waited = 0
-      while (!permitted() && waited < 60000) { Thread.sleep(400); waited += 400 }
-      snapshot()
-    }
+    val missing = needed().filter { activity.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+    if (missing.isEmpty()) { invoke.resolve(snapshot()); return }
+    val host = activity as? MainActivity
+    if (host == null) { invoke.reject("Bluetooth permission prompt unavailable"); return }
+    host.requestMeshPermissions(missing.toTypedArray()) { invoke.resolve(snapshot()) }
   }
 
   @SuppressLint("MissingPermission")
@@ -202,7 +203,12 @@ class AquaMeshPlugin(private val activity: Activity) : Plugin(activity) {
       try { a.cancelDiscovery() } catch (_: Exception) {}
       val dev = a.getRemoteDevice(args.address)
       val sock = dev.createInsecureRfcommSocketToServiceRecord(UUID.fromString(args.uuid))
-      sock.connect()
+      try {
+        sock.connect()
+      } catch (e: Exception) {
+        try { sock.close() } catch (_: IOException) {}
+        throw e
+      }
       val id = nextId.getAndIncrement()
       conns[id] = sock
       val o = JSObject()
@@ -257,21 +263,32 @@ class AquaMeshPlugin(private val activity: Activity) : Plugin(activity) {
     }
   }
 
-  /** A search by hand: a phone isn't visible to others unless paired, so
-   *  the other side's search found nothing. Ask the system to make this one
-   *  visible for two minutes (its own prompt; needs "Nearby devices"). */
+  /** Make the phone showing the QR discoverable before the other phone scans. */
   @SuppressLint("MissingPermission")
-  private fun askVisible() {
-    try {
-      val a = adapter() ?: return
-      if (a.scanMode == BluetoothAdapter.SCAN_MODE_CONNECTABLE_DISCOVERABLE) return
-      if (Build.VERSION.SDK_INT >= 31 && activity.checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) != PackageManager.PERMISSION_GRANTED) {
-        activity.runOnUiThread { activity.requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_ADVERTISE), 7732) }
-        return
+  @Command
+  fun visible(invoke: Invoke) {
+    val a = adapter()
+    val host = activity as? MainActivity
+    if (a == null || host == null) { invoke.reject("Bluetooth is unavailable"); return }
+    if (a.scanMode == BluetoothAdapter.SCAN_MODE_CONNECTABLE_DISCOVERABLE) {
+      invoke.resolve(JSObject())
+      return
+    }
+    val intent = Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE)
+      .putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 120)
+    val showPrompt = {
+      host.requestMeshVisibility(intent) { allowed ->
+        if (allowed) invoke.resolve(JSObject()) else invoke.reject("Bluetooth visibility was not enabled")
       }
-      val i = Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 120)
-      activity.runOnUiThread { try { activity.startActivity(i) } catch (_: Exception) {} }
-    } catch (_: Exception) {}
+    }
+    if (Build.VERSION.SDK_INT >= 31 &&
+        activity.checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) != PackageManager.PERMISSION_GRANTED) {
+      host.requestMeshPermissions(arrayOf(Manifest.permission.BLUETOOTH_ADVERTISE)) { allowed ->
+        if (allowed) showPrompt() else invoke.reject("Bluetooth visibility requires the Nearby devices permission")
+      }
+    } else {
+      showPrompt()
+    }
   }
 
   /** Same Wi-Fi (mesh_lan.rs): many phones drop broadcast packets unless an
@@ -301,16 +318,26 @@ class AquaMeshPlugin(private val activity: Activity) : Plugin(activity) {
   @Command
   fun wifiHandle(invoke: Invoke) {
     var handle = 0L
+    var ipv4: String? = null
     try {
       val cm = activity.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
       @Suppress("DEPRECATION")
       for (n in cm.allNetworks) {
         val caps = cm.getNetworkCapabilities(n) ?: continue
-        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) { handle = n.networkHandle; break }
+        if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) continue
+        if (handle == 0L) handle = n.networkHandle
+        val address = cm.getLinkProperties(n)?.linkAddresses?.map { it.address }
+          ?.firstOrNull { it is Inet4Address && !it.isLoopbackAddress }?.hostAddress
+        if (address != null) {
+          handle = n.networkHandle
+          ipv4 = address
+          break
+        }
       }
     } catch (_: Exception) {}
     val o = JSObject()
     o.put("handle", handle)
+    if (ipv4 != null) o.put("ipv4", ipv4)
     invoke.resolve(o)
   }
 
@@ -321,34 +348,45 @@ class AquaMeshPlugin(private val activity: Activity) : Plugin(activity) {
     val args = invoke.parseArgs(MeshDevicesArgs::class.java)
     later(invoke) {
       val a = adapter() ?: throw IOException("no Bluetooth")
-      val found = LinkedHashMap<String, Boolean>()
-      for (d in a.bondedDevices ?: emptySet()) found[d.address] = true
-      if (args.scanSecs > 0) {
-        askVisible()
+      val bonded = (a.bondedDevices ?: emptySet()).map { it.address }.toSet()
+      val found = ConcurrentHashMap.newKeySet<String>()
+      if (args.scanSecs > 0) synchronized(discoveryLock) {
+        val finished = CountDownLatch(1)
         val rx = object : BroadcastReceiver() {
           override fun onReceive(c: Context, i: Intent) {
-            if (i.action == BluetoothDevice.ACTION_FOUND) {
-              val d: BluetoothDevice? = if (Build.VERSION.SDK_INT >= 33)
-                i.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
-              else @Suppress("DEPRECATION") i.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
-              if (d != null && !found.containsKey(d.address)) found[d.address] = false
+            when (i.action) {
+              BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> finished.countDown()
+              BluetoothDevice.ACTION_FOUND -> {
+                val device: BluetoothDevice? = if (Build.VERSION.SDK_INT >= 33)
+                  i.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                else @Suppress("DEPRECATION") i.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                device?.let { found.add(it.address) }
+              }
             }
           }
         }
-        activity.registerReceiver(rx, IntentFilter(BluetoothDevice.ACTION_FOUND))
+        val filter = IntentFilter(BluetoothDevice.ACTION_FOUND).apply {
+          addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
+        }
+        if (Build.VERSION.SDK_INT >= 33) activity.registerReceiver(rx, filter, Context.RECEIVER_EXPORTED)
+        else @Suppress("DEPRECATION") activity.registerReceiver(rx, filter)
         try {
-          a.startDiscovery()
-          Thread.sleep(args.scanSecs * 1000L)
+          if (a.isDiscovering || a.startDiscovery()) {
+            finished.await(args.scanSecs.coerceIn(15, 25).toLong(), TimeUnit.SECONDS)
+          } else if (bonded.isEmpty()) {
+            throw IOException("Android could not start Bluetooth discovery")
+          }
         } finally {
           try { a.cancelDiscovery() } catch (_: Exception) {}
-          try { activity.unregisterReceiver(rx) } catch (_: Exception) {}
+          activity.unregisterReceiver(rx)
         }
       }
       val list = JSArray()
-      for ((addr, bonded) in found) {
+      for (addr in bonded + found) {
         val d = JSObject()
         d.put("address", addr)
-        d.put("bonded", bonded)
+        d.put("bonded", addr in bonded)
+        d.put("discovered", addr in found)
         list.put(d)
       }
       val o = JSObject()

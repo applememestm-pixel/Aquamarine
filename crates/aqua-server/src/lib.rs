@@ -2538,13 +2538,13 @@ async fn bot_register(
         None if !state.require_registration => q.account.bots,
         None => q.guest.bots,
     };
-    if state.directory.list_bots_for_owner(&dh_pub).len() as u32 >= max {
-        return Err((StatusCode::FORBIDDEN, format!("quota: bots {max}")));
-    }
     let token = state
         .directory
-        .register_bot(&username, &dh_pub, &body.display_name)
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+        .register_bot_with_limit(&username, &dh_pub, &body.display_name, i64::from(max))
+        .map_err(|error| match error {
+            directory::DirError::TooManyBots => (StatusCode::FORBIDDEN, format!("quota: bots {max}")),
+            other => (StatusCode::BAD_REQUEST, other.to_string()),
+        })?;
     let telegram_token = tgapi::telegram_token(&username, &token);
     Ok(Json(BotRegisterResp { ok: true, username, token, telegram_token }))
 }

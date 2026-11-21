@@ -45,6 +45,15 @@ if ($mt -notmatch 'networkSecurityConfig') {
 }
 
 # 1c. MainActivity that asks for local-network access on Android 17+.
+$x = [IO.File]::ReadAllText($m)
+foreach ($permission in @('ACCESS_NETWORK_STATE', 'BLUETOOTH_ADVERTISE')) {
+  $name = "android.permission.$permission"
+  if (-not $x.Contains($name)) {
+    $line = '<uses-permission android:name="{0}" />' -f $name
+    $x = ([regex]'<application').Replace($x, "$line`n    <application", 1)
+  }
+}
+[IO.File]::WriteAllText($m, $x)
 $ma = Get-ChildItem -Path (Join-Path $app 'src\main\java') -Recurse -Filter MainActivity.kt | Select-Object -First 1
 if ($ma) {
   Copy-Item (Join-Path $PSScriptRoot 'MainActivity.kt') $ma.FullName -Force
@@ -91,8 +100,7 @@ if ($x -notmatch 'AquaRelayService') {
 if ($x -notmatch 'AquaScreenService') {
   $scr = '<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />' + "`n    " +
          '<uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />' + "`n    " +
-         '<uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />' + "`n    " +
-         '<uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />' + "`n    <application"
+         '<uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />' + "`n    "
   $x = ([regex]'<application').Replace($x, $scr, 1)
   $x = $x.Replace('</application>', '<service android:name=".AquaScreenService" android:exported="false" android:foregroundServiceType="mediaProjection" />' + "`n    </application>")
   [IO.File]::WriteAllText($m, $x)

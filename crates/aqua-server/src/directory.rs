@@ -3093,12 +3093,23 @@ impl Directory {
         owner_dh: &[u8; 32],
         display_name: &str,
     ) -> Result<String, DirError> {
+        self.register_bot_with_limit(username, owner_dh, display_name, MAX_BOTS_PER_OWNER)
+    }
+
+    pub(crate) fn register_bot_with_limit(
+        &self,
+        username: &str,
+        owner_dh: &[u8; 32],
+        display_name: &str,
+        max: i64,
+    ) -> Result<String, DirError> {
         let username = username.trim().to_lowercase();
         if !Self::valid_username(&username) {
             return Err(DirError::BadUsername);
         }
         let display_name: String = display_name.trim().chars().take(64).collect();
-        let db = self.db.lock().unwrap();
+        let mut connection = self.db.lock().unwrap();
+        let db = connection.transaction()?;
         // A public group's / channel's @name.
         if db.query_row("SELECT 1 FROM group_names WHERE username=?1", rusqlite::params![username], |_| Ok(())).is_ok() {
             return Err(DirError::UsernameTaken);
@@ -3117,9 +3128,8 @@ impl Directory {
         }
         if !existing {
             let n: i64 = db
-                .query_row("SELECT COUNT(*) FROM bot_keys WHERE owner_dh=?1", rusqlite::params![owner_dh.as_slice()], |r| r.get(0))
-                .unwrap_or(0);
-            if n >= MAX_BOTS_PER_OWNER {
+                .query_row("SELECT COUNT(*) FROM bot_keys WHERE owner_dh=?1", rusqlite::params![owner_dh.as_slice()], |r| r.get(0))?;
+            if n >= max {
                 return Err(DirError::TooManyBots);
             }
         }
@@ -3140,6 +3150,7 @@ impl Directory {
             "INSERT INTO bot_keys (token_hash, username, owner_dh, created_at, hint) VALUES (?1, ?2, ?3, ?4, ?5)",
             rusqlite::params![bot_token_hash(&token), username, owner_dh.as_slice(), now_secs() as i64, token_hint(&token)],
         )?;
+        db.commit()?;
         tracing::info!(%username, "bot registered");
         Ok(token)
     }
@@ -3929,6 +3940,26 @@ mod tests {
             d.register_bot("echobot", &[6u8; 32], "x"),
             Err(DirError::UsernameTaken)
         ));
+    }
+
+    #[test]
+    fn bot_at_quota_can_rotate_its_token() {
+        let d = dir();
+        let owner = [5u8; 32];
+        let original = d.register_bot_with_limit("echobot", &owner, "Echo", 1).unwrap();
+        assert!(matches!(
+            d.register_bot_with_limit("secondbot", &owner, "Second", 1),
+            Err(DirError::TooManyBots)
+        ));
+        assert!(matches!(
+            d.register_bot_with_limit("echobot", &[6u8; 32], "Other", 1),
+            Err(DirError::UsernameTaken)
+        ));
+        let replacement = d.register_bot_with_limit("echobot", &owner, "Echo", 0).unwrap();
+        assert_ne!(original, replacement);
+        assert!(d.bot_by_token(&original).is_none());
+        assert_eq!(d.bot_by_token(&replacement).as_deref(), Some("echobot"));
+        assert_eq!(d.list_bots_for_owner(&owner).len(), 1);
     }
 
     #[test]

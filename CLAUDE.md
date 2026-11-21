@@ -50,5 +50,5 @@
 - Панель Aquamarine Server ходит в сервер только через `admin(…, target)`; удалённый — SSH-туннель (`remote.rs`, порт/токен из `panel.json`, `host::write_panel_file`).
 
 ## Открыто
-- Не проверено на устройствах: биометрия, сканер QR, список устройств, автообновление, Navidrome (живого сервера в CI нет), показ экрана с Android (MediaProjection), файлы по Wi-Fi/Bluetooth. Kotlin (`android/*.kt`) в CI на PR не собирается — только в `release.yml`.
+- Не проверено на устройствах: биометрия, сканер QR, список устройств, автообновление, Navidrome (живого сервера в CI нет), показ экрана с Android (MediaProjection), файлы по Wi-Fi/Bluetooth. При правках Android CI собирает проверочный APK с Kotlin (`android-client-check.yml`).
 - Конструктор ботов (`aqua-server/src/botmaker.rs`, `BotMaker.svelte`): схемы в `aqua-bot-specs.json`, бот со схемой забирает свою очередь — его программа (getUpdates) тогда ничего не получит. Android с Wi-Fi без интернета: сокеты LAN привязываются к Wi-Fi (`mesh_lan.rs::on_wifi` → `android_setsocknetwork`, сеть из `AquaMesh.kt::wifiHandle`), не весь процесс — на устройстве не проверено. FLAG_SECURE (`screen_secure`) не проверен на устройстве.

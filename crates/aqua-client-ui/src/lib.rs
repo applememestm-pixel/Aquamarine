@@ -202,6 +202,8 @@ pub fn run() -> Result<()> {
             mesh::mesh_status,
             mesh::mesh_set_enabled,
             mesh::mesh_sync_now,
+            #[cfg(target_os = "android")]
+            mesh::mesh_prepare_bluetooth,
             bluetooth::bt_status,
             bluetooth::bt_devices,
             bluetooth::bt_power,
