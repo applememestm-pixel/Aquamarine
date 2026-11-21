@@ -82,7 +82,7 @@
   import SignInProtection from "./SignInProtection.svelte";
   import { deviceTrust } from "./DeviceApproval.svelte";
   import { ghost, blocked, setBlocked } from "../ghost";
-  import { lockConf, setAutoLock, lockNow, passcodeSetupOpen, biometricAvailable, setBiometric } from "../lock";
+  import { lockConf, setAutoLock, lockNow, removePasscode, passcodeSetupOpen, biometricAvailable, setBiometric } from "../lock";
   import { t, lang, LANGS, tr } from "../i18n";
   import { chats, activeId, loadActiveMessages } from "../stores";
   import { BUILTIN_SOUNDS, customSounds, refreshSounds, playSound, soundLabel, addSoundBytes } from "../sounds";
@@ -901,6 +901,23 @@
     const result = await openFileDialog({ multiple: true, directory: false, title, filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }] });
     return Array.isArray(result) ? result : result ? [result] : [];
   }
+  function turnOffPasscode() {
+    const pin = $lockConf?.kind === "pin";
+    askInput({
+      title: tr("Turn off passcode lock"),
+      fields: [{ label: tr(pin ? "Passcode" : "Password"), secret: true }],
+      submitLabel: tr("Turn off"),
+      onSubmit: async ([pass]) => {
+        try {
+          return await removePasscode(pass) ? null : tr(pin ? "Wrong passcode" : "Wrong password");
+        } catch (e) {
+          const wait = /wait:(\d+)/.exec(String(e));
+          if (wait) return tr("Too many tries. Try again in {s} s.", { s: Math.ceil(Number(wait[1]) / 1000) });
+          return tr("Could not turn off passcode lock");
+        }
+      },
+    });
+  }
   function newPackFlow() {
     askInput({
       title: tr("New sticker pack"),
@@ -1314,7 +1331,8 @@
           {/if}
           <div class="info-row">{#if IS_DESKTOP}<span class="v">{$t("Ctrl+L locks the app any time.")}</span>{/if}
             <button class="mini-btn" onclick={() => { closeSettings(); lockNow(); }}>{$t("Lock now")}</button>
-            <button class="mini-btn" onclick={() => { lockConf.set(null); passcodeSetupOpen.set(true); }}>{$t("Change")}</button>
+            <button class="mini-btn" onclick={() => passcodeSetupOpen.set(true)}>{$t("Change")}</button>
+            <button class="mini-btn" onclick={turnOffPasscode}>{$t("Turn off passcode lock")}</button>
           </div>
         {:else}
           <button class="mini-btn" onclick={() => passcodeSetupOpen.set(true)}>{$t("Set a passcode")}</button>

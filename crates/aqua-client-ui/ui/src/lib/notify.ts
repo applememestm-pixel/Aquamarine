@@ -14,9 +14,8 @@ export async function ensureNotifyPermission(ask = true): Promise<boolean> {
   if (granted) return true;
   try {
     if (inTauri()) {
-      const n = await import("@tauri-apps/plugin-notification");
-      granted = await n.isPermissionGranted();
-      if (!granted && ask) granted = (await n.requestPermission()) === "granted";
+      const { invoke } = await import("@tauri-apps/api/core");
+      granted = await invoke<boolean>("notify_permission", { ask });
       return !!granted;
     }
     if ("Notification" in window) {
@@ -31,11 +30,16 @@ export async function ensureNotifyPermission(ask = true): Promise<boolean> {
 }
 
 /** Show a notification if the user wants them and the OS allows. */
-export async function osNotify(title: string, body: string): Promise<void> {
+export async function osNotify(title: string, body: string, peer?: string): Promise<void> {
   if (!get(settings).notifyDesktop) return;
   if (!(await ensureNotifyPermission(false))) return;
   try {
     if (inTauri()) {
+      if (peer) {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("notify_message", { peer, title, preview: body });
+        return;
+      }
       const n = await import("@tauri-apps/plugin-notification");
       n.sendNotification({ title, body, autoCancel: true, ...(/android/i.test(navigator.userAgent) ? { icon: "ic_stat_aquamarine" } : {}) });
     } else {
@@ -57,56 +61,87 @@ export function appInFront(): boolean {
  * screen and what the user wants notified.
  */
 const PHONE = typeof navigator !== "undefined" && /android|iphone|ipad/i.test(navigator.userAgent);
-let backAt = 0;
+let backAt = -Infinity;
 /** Right after coming back, the paused events arrive at once — Rust has
  *  already shown those, so the page doesn't repeat them. */
 export function justResumed(): boolean {
   return PHONE && performance.now() - backAt < 3000;
 }
 export function startBgNotify(): () => void {
-  if (!PHONE || !inTauri()) return () => {};
+  if (!inTauri()) return () => {};
   const send = (cmd: string, args: Record<string, unknown>) =>
     void import("@tauri-apps/api/core").then((c) => c.invoke(cmd, args)).catch(() => {});
-  // Stay connected in the background (Android froze the app: no messages,
-  // no notifications until it was opened). Off in Settings → Notifications.
   let bgOn: boolean | null = null;
-  const unBg = settings.subscribe((st) => {
+  const unBg = PHONE ? settings.subscribe((st) => {
     const on = st.bgConnection !== false;
     if (on === bgOn) return;
     bgOn = on;
     send("bg_sync_set", { on });
-  });
-  void unBg;
+  }) : () => {};
+  const reportsFront = PHONE && !/android/i.test(navigator.userAgent);
   const vis = () => {
     const front = document.visibilityState === "visible";
     if (front) backAt = performance.now();
-    send("notify_front", { front });
+    if (reportsFront) send("notify_front", { front });
   };
-  document.addEventListener("visibilitychange", vis);
-  vis();
-  // Heartbeat: a paused page goes quiet and Rust takes over (bgnotify.rs).
-  const beat = setInterval(() => { if (document.visibilityState === "visible") send("notify_front", { front: true }); }, 1500);
-  // Asked once at first start; a dismissed Android 13 prompt left them off
-  // for good. Ask again on start while notifications are on in settings.
-  if (get(settings).notifyDesktop) void ensureNotifyPermission(true);
-  let un = () => {};
-  void Promise.all([import("./chatPrefs"), import("./i18n")]).then(([cp, i18n]) => {
+  let beat: ReturnType<typeof setInterval> | undefined;
+  if (PHONE) {
+    document.addEventListener("visibilitychange", vis);
+    if (reportsFront) {
+      send("notify_front", { front: document.visibilityState === "visible" });
+      beat = setInterval(() => {
+        if (document.visibilityState === "visible") send("notify_front", { front: true });
+      }, 1500);
+    }
+    if (get(settings).notifyDesktop) void ensureNotifyPermission(true);
+  }
+  let stopped = false;
+  let unsubscribe: Array<() => void> = [];
+  void Promise.all([
+    import("./chatPrefs"), import("./i18n"), import("./chatLocks"), import("./lock"),
+    import("./privacy"), import("./contacts"), import("./wrote"),
+  ]).then(([cp, i18n, cl, lock, privacy, contacts, wrote]) => {
+    if (stopped) return;
+    let queued = false;
     const push = () => {
-      let locked: string[] = [];
-      try { locked = Object.keys(JSON.parse(localStorage.getItem("aqua.chatLocks.v1") ?? "{}")); } catch { /* ignore */ }
-      send("notify_prefs", { prefs: {
-        enabled: !!get(settings).notifyDesktop,
-        muted: [...get(cp.mutedChats)],
-        locked,
-        locked_text: i18n.tr("New message in a locked chat"),
-        archived: [...get(cp.archived)],
-        widget_text: get(settings).widgetText !== false,
-        widget_empty: i18n.tr("No new messages"),
-      } });
+      if (queued) return;
+      queued = true;
+      queueMicrotask(() => {
+        queued = false;
+        if (stopped || !get(lock.lockLoaded) || get(lock.locked)) return;
+        const s = get(settings);
+        const rules = get(privacy.privacy).messages;
+        const allowed = new Set(get(wrote.wroteTo));
+        for (const peer of rules.allow) if (!rules.deny.includes(peer)) allowed.add(peer);
+        if (rules.who === "contacts") {
+          for (const peer of Object.keys(get(contacts.contacts))) if (!rules.deny.includes(peer)) allowed.add(peer);
+        }
+        send("notify_prefs", { prefs: {
+          enabled: !!s.notifyDesktop,
+          muted: [...get(cp.mutedChats)],
+          locked: Object.keys(get(cl.chatLocks)),
+          locked_text: i18n.tr("New message in a locked chat"),
+          new_text: i18n.tr("New message"),
+          read_text: i18n.tr("Mark as read"),
+          reply_text: i18n.tr("Reply"),
+          preview: s.notifyPreview ?? "full",
+          restricted: rules.who !== "everybody",
+          denied: rules.deny,
+          allowed: [...allowed],
+          archived: [...get(cp.archived)],
+          widget_text: s.widgetText !== false,
+          widget_empty: i18n.tr("No new messages"),
+        } });
+      });
     };
-    const a = settings.subscribe(push), b = cp.mutedChats.subscribe(push), c = cp.archived.subscribe(push);
-    window.addEventListener("storage", push);
-    un = () => { a(); b(); c(); window.removeEventListener("storage", push); };
+    unsubscribe = [settings, cp.mutedChats, cp.archived, cl.chatLocks, lock.locked, lock.lockLoaded,
+      privacy.privacy, contacts.contacts, wrote.wroteTo, i18n.lang].map((store) => store.subscribe(push));
   });
-  return () => { clearInterval(beat); document.removeEventListener("visibilitychange", vis); un(); };
+  return () => {
+    stopped = true;
+    unBg();
+    clearInterval(beat);
+    document.removeEventListener("visibilitychange", vis);
+    unsubscribe.forEach((un) => un());
+  };
 }

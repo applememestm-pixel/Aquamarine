@@ -319,6 +319,8 @@ pub struct InitInfo {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct IncomingEventPayload {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
     pub peer_id: String,
     pub text: String,
     pub time: String,

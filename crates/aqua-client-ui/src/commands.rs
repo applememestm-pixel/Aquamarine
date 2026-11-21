@@ -71,13 +71,20 @@ pub fn list_chats(state: State<'_, StdMutex<AppState>>) -> Result<Vec<ChatSummar
         .filter(|id| me.is_empty() || **id != me)
         .filter_map(|id| s.chats.get(id).map(|c| {
             let mut sum = c.summary.clone();
-            let last = c.messages.iter()
-                .filter(|m| !crate::state::stray_control(m) && !m.meta.as_ref().is_some_and(|meta| meta.deleted))
-                .max_by_key(|m| m.at);
+            let last = c.messages.iter().rev()
+                .filter(|m| !crate::state::stray_control(m)
+                    && !m.meta.as_ref().is_some_and(|meta| meta.deleted)
+                    && !matches!(&m.kind, MessageKind::Text { text } if id.starts_with("grp_") && text.starts_with(crate::state::COMMENT_PREFIX)))
+                .reduce(|newer, candidate| if candidate.at > newer.at { candidate } else { newer });
             sum.last_at = last.and_then(|m| m.at);
-            if id.starts_with("grp_") && !sum.preview_by_me && !sum.preview_is_typing {
-                sum.preview_from = last.map(|m| m.from.clone())
-                    .filter(|from| !from.is_empty() && from != "system" && *from != me);
+            if !sum.preview_is_typing {
+                if let Some(last) = last {
+                    sum.preview = preview_for(&last.kind);
+                    sum.preview_by_me = last.from == "me" || last.from == me;
+                    sum.time.clone_from(&last.time);
+                    sum.preview_from = (id.starts_with("grp_") && !sum.preview_by_me
+                        && !last.from.is_empty() && last.from != "system").then(|| last.from.clone());
+                }
             }
             sum
         }))
@@ -4068,7 +4075,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
         let v: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
         let (gid, user, inner) = (v["gid"].as_str().unwrap_or(""), v["user"].as_str().unwrap_or(""), v["body"].as_str().unwrap_or(""));
         if gid.is_empty() || user.is_empty() || inner.is_empty() || inner.len() > 16 * 1024 { return true; }
-        let (chat, time) = {
+        let (chat, time, preview) = {
             let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let me = s.username.clone().unwrap_or_default();
             let Some(g) = s.groups.get(gid).cloned() else { return true };
@@ -4079,14 +4086,16 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
             if !direct_on(&g) || !sender_ok || !mine_to_see { return true; }
             let chat = ensure_cdm_book(&mut s, &g, user);
             let time = hhmm_now();
-            if from == me {
+            let preview = if from == me {
                 push_own_message(&mut s, &chat, text_msg_from_me(inner), inner);
+                None
             } else {
                 let (kind, meta) = crate::state::classify_full(inner, None);
+                let preview = preview_for(&kind);
                 let len = s.chats.get(&chat).map(|b| b.messages.len()).unwrap_or(0);
                 if let Some(book) = s.chats.get_mut(&chat) {
                     book.messages.push(ChatMessage { meta, id: format!("d-{time}-{len}"), from: from.to_string(), time: time.clone(), at: crate::state::now_at(), kind });
-                    book.summary.preview = preview_for(&book.messages.last().unwrap().kind);
+                    book.summary.preview = preview.clone();
                     book.summary.preview_by_me = false;
                     book.summary.time = time.clone();
                     book.summary.unread += 1;
@@ -4094,12 +4103,15 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                 if let Some(pos) = s.chat_order.iter().position(|id| *id == chat) {
                     if pos > 0 { s.chat_order.remove(pos); s.chat_order.insert(0, chat.clone()); }
                 }
-            }
-            (chat, time)
+                Some(preview)
+            };
+            (chat, time, preview)
         };
-        if from != state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|s| s.username.clone()).unwrap_or_default() {
-            crate::bgnotify::incoming(app, &chat);
-                let _ = app.emit("aqua://incoming", IncomingEventPayload { peer_id: chat, text: inner.to_string(), time, is_new_chat: false });
+        if let Some(preview) = preview {
+            crate::bgnotify::incoming(app, &chat, &preview);
+            let _ = app.emit("aqua://incoming", IncomingEventPayload { preview: Some(preview), peer_id: chat, text: inner.to_string(), time, is_new_chat: false });
+        } else {
+            let _ = app.emit("aqua://own_sent", serde_json::json!({ "peer_id": chat }));
         }
         let _ = app.emit("aqua://chats_updated", ());
         return true;
@@ -4163,7 +4175,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
             // reconnect): it showed twice in the chat, the thread and Replies.
             if group_repeat(&gid, &author, &inner) { return true; }
             let time = hhmm_now();
-            {
+            let (mine, preview) = {
                 let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 // Only accept messages for groups we know about, from members
                 // who are allowed to post this (in this room).
@@ -4199,6 +4211,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                 let preview = preview_for(&kind);
                 let len = s.chats.get(&gid).map(|b| b.messages.len()).unwrap_or(0);
                 let s_me = s.username.clone();
+                let mine = s_me.as_deref() == Some(author.as_str());
                 if let Some(book) = s.chats.get_mut(&gid) {
                     book.messages.push(ChatMessage {
                         meta,
@@ -4211,14 +4224,12 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                     // A comment under a channel post lives in its thread: it
                     // isn't the channel's last message, nor its unread.
                     if !is_comment {
-                        book.summary.preview = preview;
+                        book.summary.preview = preview.clone();
                         // Posted from another device of mine: it's my message.
-                        let mine = s_me.as_deref() == Some(author.as_str());
                         book.summary.preview_by_me = mine;
                         book.summary.preview_from = if mine { None } else { Some(author.clone()) };
                         book.summary.time = time.clone();
-                        let is_active = false; // UI decides unread via its own active id
-                        if !is_active && !mine { book.summary.unread += 1; }
+                        if !mine { book.summary.unread += 1; }
                     }
                 }
                 if let Some(pos) = s.chat_order.iter().position(|id| id == &gid).filter(|_| !is_comment) {
@@ -4229,16 +4240,21 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                     let gname = s.groups.get(&gid).map(|g| g.title.clone()).unwrap_or_default();
                     if let Some(note) = reply_note(&me, &author, &gname, &inner) {
                         push_replies(&mut s, note, &time);
-                        let _ = app.emit("aqua://incoming", IncomingEventPayload {
+                        let _ = app.emit("aqua://incoming", IncomingEventPayload { preview: None,
                             peer_id: crate::state::REPLIES_ID.into(), text: format!("@{author}: {}", reply_text(&inner)), time: time.clone(), is_new_chat: false,
                         });
                     }
                 }
+                (mine, (!silent).then(|| format!("@{author}: {preview}")))
+            };
+            if mine {
+                let _ = app.emit("aqua://chats_updated", ());
+                let _ = app.emit("aqua://own_sent", serde_json::json!({ "peer_id": gid }));
+                return true;
             }
-            // A silent post: in the chat and the list, but no sound / notification
-            // (an incoming without text doesn't ring — stores.ts).
-            if !silent { crate::bgnotify::incoming(&app, &gid); }
+            if let Some(preview) = &preview { crate::bgnotify::incoming(app, &gid, preview); }
             let _ = app.emit("aqua://incoming", IncomingEventPayload {
+                preview,
                 peer_id: gid,
                 text: if silent { String::new() } else { inner },
                 time,
@@ -4343,7 +4359,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                 if !old.is_empty() {
                     if let Ok(mut s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { apply_edit_at(&mut s, &gid, from, old, new, v.get("at").and_then(|x| x.as_i64()), None); }
                     let _ = app.emit("aqua://chats_updated", ());
-                    let _ = app.emit("aqua://incoming", IncomingEventPayload { peer_id: gid.clone(), text: String::new(), time: hhmm_now(), is_new_chat: false });
+                    let _ = app.emit("aqua://incoming", IncomingEventPayload { preview: None, peer_id: gid.clone(), text: String::new(), time: hhmm_now(), is_new_chat: false });
                 }
             }
         } else if let Some(b) = inner.strip_prefix(DEL_PREFIX) {
@@ -4365,7 +4381,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                         }
                     }
                     let _ = app.emit("aqua://chats_updated", ());
-                    let _ = app.emit("aqua://incoming", IncomingEventPayload { peer_id: gid.clone(), text: String::new(), time: hhmm_now(), is_new_chat: false });
+                    let _ = app.emit("aqua://incoming", IncomingEventPayload { preview: None, peer_id: gid.clone(), text: String::new(), time: hhmm_now(), is_new_chat: false });
                 }
             }
         }
@@ -4486,7 +4502,7 @@ async fn on_incoming_plaintext(app: &AppHandle, from: String, text: String) {
     }
     if is_control_text(text.trim_start()) { return; }
     let is_new_chat;
-    {
+    let preview = {
         let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         is_new_chat = !s.chats.contains_key(&from);
         if is_new_chat {
@@ -4504,13 +4520,14 @@ async fn on_incoming_plaintext(app: &AppHandle, from: String, text: String) {
             s.chat_order.retain(|id| id != &from);
             s.chat_order.insert(0, from.clone());
         }
-        push_peer_message(&mut s, &from, text.clone(), &time);
+        let preview = push_peer_message(&mut s, &from, text.clone(), &time);
         if is_new_chat {
             if let Some(b) = s.chats.get_mut(&from) { b.summary.preview = crate::state::strip_bot_keyboard(&text); }
         }
-    }
-    crate::bgnotify::incoming(&app, &from);
-    let _ = app.emit("aqua://incoming", IncomingEventPayload {
+        preview
+    };
+    crate::bgnotify::incoming(&app, &from, &preview);
+    let _ = app.emit("aqua://incoming", IncomingEventPayload { preview: Some(preview),
         peer_id: from,
         text: crate::state::strip_bot_keyboard(&text),
         time,
@@ -4921,7 +4938,7 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
                 apply_edit_at(&mut s, &from, &from, old, new, v.get("at").and_then(|x| x.as_i64()), None);
             }
             let _ = app.emit("aqua://chats_updated", ());
-            let _ = app.emit("aqua://incoming", IncomingEventPayload {
+            let _ = app.emit("aqua://incoming", IncomingEventPayload { preview: None,
                 peer_id: from, text: String::new(), time: hhmm_now(), is_new_chat: false,
             });
         }
@@ -4946,7 +4963,7 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
                 }
             }
             let _ = app.emit("aqua://chats_updated", ());
-            let _ = app.emit("aqua://incoming", IncomingEventPayload {
+            let _ = app.emit("aqua://incoming", IncomingEventPayload { preview: None,
                 peer_id: from, text: String::new(), time: hhmm_now(), is_new_chat: false,
             });
         }
@@ -4960,7 +4977,7 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
             crate::autodelete::handle_control(&mut s, &from, body, &from);
         }
         let _ = app.emit("aqua://chats_updated", ());
-        let _ = app.emit("aqua://incoming", IncomingEventPayload {
+        let _ = app.emit("aqua://incoming", IncomingEventPayload { preview: None,
             peer_id: from, text: String::new(), time: hhmm_now(), is_new_chat: false,
         });
         return;
@@ -4977,7 +4994,7 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
     if is_control_text(text.trim_start()) { return; }
     let time = hhmm_now();
     let mut is_new_chat = false;
-    {
+    let preview = {
         let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         // No chat with them here (new, or deleted on this device): open
         // one — before, only a session's first message did, and later ones
@@ -5000,14 +5017,15 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
             s.chat_order.retain(|id| id != &from);
             s.chat_order.insert(0, from.clone());
         }
-        push_peer_message(&mut s, &from, text.clone(), &time);
+        let preview = push_peer_message(&mut s, &from, text.clone(), &time);
         // An encrypted message: the chat is an encrypted one.
         if let Some(b) = s.chats.get_mut(&from) { b.summary.has_lock = true; }
-    }
+        preview
+    };
     // Phones in the background: before, only a session's first message
     // was announced (bgnotify.rs) — the ordinary ones stayed silent.
-    crate::bgnotify::incoming(app, &from);
-    let _ = app.emit("aqua://incoming", IncomingEventPayload {
+    crate::bgnotify::incoming(app, &from, &preview);
+    let _ = app.emit("aqua://incoming", IncomingEventPayload { preview: Some(preview),
         peer_id: from,
         text,
         time,
@@ -5298,6 +5316,10 @@ pub fn mark_chat_read(app: AppHandle, state: State<'_, StdMutex<AppState>>, peer
     // Read here — read on my other devices too: they kept the counter and
     // rang for messages already read (READ_PREFIX, handled below).
     if was_unread {
+        let handle = app.clone();
+        let peer = peer_id.clone();
+        tauri::async_runtime::spawn_blocking(move || crate::bgnotify::clear_chat(&handle, &peer));
+        let _ = app.emit("aqua://chats_updated", ());
         if let Some(t) = t {
             let payload = format!("{READ_PREFIX}{}", serde_json::json!({ "peer": peer_id }));
             tauri::async_runtime::spawn(async move { crate::multidev::to_my_devices(&app, &t, &me, &payload).await; });
@@ -5319,6 +5341,7 @@ pub(crate) fn on_read_elsewhere(app: &AppHandle, body: &str) {
         let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(book) = s.chats.get_mut(&peer) { book.summary.unread = 0; }
     }
+    crate::bgnotify::clear_chat(app, &peer);
     let _ = app.emit("aqua://read_elsewhere", serde_json::json!({ "peer_id": peer }));
     let _ = app.emit("aqua://chats_updated", ());
 }
@@ -5447,11 +5470,11 @@ pub fn delete_chat(state: State<'_, StdMutex<AppState>>, peer_id: String) -> Res
     Ok(())
 }
 
-fn push_peer_message(s: &mut AppState, peer_id: &str, text: String, time: &str) {
+fn push_peer_message(s: &mut AppState, peer_id: &str, text: String, time: &str) -> String {
     // A service payload ("[keyok:v1]{…}", "[status:v1]…") is never a bubble,
     // whatever path it came by (repair, mesh, history from another device).
     if is_control_text(text.trim_start()) {
-        return;
+        return String::new();
     }
     let (kind, meta) = crate::state::classify_full(&text, None);
     let preview = preview_for(&kind);
@@ -5465,7 +5488,8 @@ fn push_peer_message(s: &mut AppState, peer_id: &str, text: String, time: &str) 
             at: crate::state::now_at(),
             kind,
         });
-        book.summary.preview = preview;
+        book.summary.preview = preview.clone();
+        book.summary.preview_from = None;
         book.summary.preview_by_me = false;
         book.summary.preview_is_typing = false;
         // The lock is the caller's: a bot's message (unencrypted) put it back
@@ -5479,6 +5503,7 @@ fn push_peer_message(s: &mut AppState, peer_id: &str, text: String, time: &str) 
             s.chat_order.insert(0, peer_id.to_string());
         }
     }
+    preview
 }
 
 /// What the relay's admin panel counts a file as (only this label leaves

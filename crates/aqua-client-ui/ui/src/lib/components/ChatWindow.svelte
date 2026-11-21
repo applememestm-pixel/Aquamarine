@@ -1220,8 +1220,13 @@
     window.addEventListener("pointerup", onUp);
 
     // Keyboard-control requests from lib/shortcuts.ts.
-    const kb: [string, () => void][] = [
-      ["aqua:focus-composer", () => { if ($activeChat) composerEl?.focus(); }],
+    const kb: [string, (event: Event) => void][] = [
+      ["aqua:focus-composer", (event) => {
+        if (!$activeChat) return;
+        const draft = (event as CustomEvent<string | undefined>).detail;
+        if (draft) text = text.trim() ? text + "\n" + draft : draft;
+        composerEl?.focus();
+      }],
       ["aqua:chat-search", () => { if ($activeChat) openSearch(); }],
       ["aqua:jump-bottom", () => jumpToBottom()],
       ["aqua:call", () => startVoiceCall()],

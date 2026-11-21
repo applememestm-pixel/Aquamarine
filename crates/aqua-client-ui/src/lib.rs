@@ -131,6 +131,11 @@ pub fn run() -> Result<()> {
                 applock::init(&s);
             }
             app.manage(state);
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                if applock::is_locked() { bgnotify::hide_on_lock(&handle); }
+                bgnotify::listen(handle);
+            });
             // Write changed chat history to the encrypted vault every few seconds.
             {
                 let handle = app.handle().clone();
@@ -199,6 +204,8 @@ pub fn run() -> Result<()> {
             commands::meet_qr,
             commands::meet_accept,
             bgnotify::notify_prefs,
+            bgnotify::notify_message,
+            bgnotify::notify_permission,
             mesh::mesh_status,
             mesh::mesh_set_enabled,
             mesh::mesh_sync_now,

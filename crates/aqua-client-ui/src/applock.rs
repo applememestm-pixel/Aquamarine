@@ -129,20 +129,24 @@ pub fn applock_options(state: State<'_, StdMutex<AppState>>, auto_min: Option<u3
 
 /// Remove the passcode — only while unlocked.
 #[tauri::command]
-pub fn applock_clear(state: State<'_, StdMutex<AppState>>) -> Result<(), String> {
-    if is_locked() {
-        return Err("locked".into());
-    }
+pub fn applock_clear(state: State<'_, StdMutex<AppState>>, hash: String) -> Result<bool, String> {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    s.vault.delete_record(KEY).map_err(|e| e.to_string())
+    if is_locked() { return Err("locked".into()); }
+    if let Some(c) = conf_of(&s) {
+        if !verify(&c, &hash)? { return Ok(false); }
+        s.vault.delete_record(KEY).map_err(|e| e.to_string())?;
+    }
+    Ok(true)
 }
 
 #[tauri::command]
-pub fn applock_lock(state: State<'_, StdMutex<AppState>>) -> Result<(), String> {
-    let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if conf_of(&s).is_some() {
+pub async fn applock_lock(app: tauri::AppHandle, state: State<'_, StdMutex<AppState>>) -> Result<(), String> {
+    {
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if conf_of(&s).is_none() { return Ok(()); }
         LOCKED.store(true, Ordering::SeqCst);
     }
+    crate::bgnotify::hide_on_lock(&app);
     Ok(())
 }
 
@@ -151,18 +155,22 @@ pub fn applock_lock(state: State<'_, StdMutex<AppState>>) -> Result<(), String> 
 #[tauri::command]
 pub fn applock_unlock(state: State<'_, StdMutex<AppState>>, hash: String) -> Result<bool, String> {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let Some(c) = conf_of(&s) else {
-        LOCKED.store(false, Ordering::SeqCst);
-        return Ok(true);
-    };
+    if let Some(c) = conf_of(&s) {
+        if !verify(&c, &hash)? { return Ok(false); }
+    }
+    LOCKED.store(false, Ordering::SeqCst);
+    Ok(true)
+}
+
+fn verify(c: &Conf, hash: &str) -> Result<bool, String> {
     let mut f = FAILS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if now_ms() < f.1 {
-        return Err(format!("wait:{}", f.1 - now_ms()));
+    let now = now_ms();
+    if now < f.1 {
+        return Err(format!("wait:{}", f.1 - now));
     }
     let ok = ct_eq(hash.to_lowercase().as_bytes(), c.hash.as_bytes());
     if ok {
         *f = (0, 0);
-        LOCKED.store(false, Ordering::SeqCst);
     } else {
         f.0 += 1;
         if f.0 >= 5 {

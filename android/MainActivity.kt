@@ -135,6 +135,18 @@ class MainActivity : TauriActivity() {
     v.post { v.evaluateJavascript("window.__aquaInsets&&window.__aquaInsets($json)", null) }
   }
 
+  private external fun nativeSetNotificationForeground(front: Boolean)
+
+  override fun onResume() {
+    super.onResume()
+    nativeSetNotificationForeground(true)
+  }
+
+  override fun onPause() {
+    nativeSetNotificationForeground(false)
+    super.onPause()
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)

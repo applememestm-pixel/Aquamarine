@@ -1209,6 +1209,8 @@ export const RU: Record<string, string> = {
   "Voice chat": "Голосовой чат",
   "Waiting for the host…": "Ждём ведущего…",
   "Wrong email or password": "Неверная почта или пароль",
+  "Turn off passcode lock": "Отключить пароль приложения",
+  "Could not turn off passcode lock": "Не удалось отключить пароль приложения",
   "Wrong passcode": "Неверный код",
   "You look offline but can keep chatting": "Вы выглядите не в сети, но можете переписываться",
   "connecting…": "подключение…",

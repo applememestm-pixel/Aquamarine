@@ -90,6 +90,7 @@ export interface TelegraphPage {
 }
 
 export interface IncomingPayload {
+  preview?: string;
   peer_id: string;
   text: string;
   time: string;
