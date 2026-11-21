@@ -49,13 +49,14 @@ async function waitDownload(): Promise<boolean> {
 }
 
 /** 16 kHz mono s16le of any recording the WebView can decode. */
-export async function decode16k(data: ArrayBuffer): Promise<Uint8Array> {
+export async function decode16k(data: ArrayBuffer, maxSeconds = Infinity): Promise<Uint8Array> {
   const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
   const ctx = new Ctx();
   let buf: AudioBuffer;
   try { buf = await ctx.decodeAudioData(data); }
   catch { throw new Error(tr("This recording's sound can't be read here.")); }
   finally { void ctx.close(); }
+  if (buf.duration > maxSeconds) throw new Error(tr("Server transcription supports recordings up to ten minutes."));
   const len = Math.max(1, Math.ceil(buf.duration * 16000));
   const off = new OfflineAudioContext(1, len, 16000);
   const src = off.createBufferSource();

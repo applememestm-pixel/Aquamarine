@@ -76,6 +76,9 @@ pub fn list_chats(state: State<'_, StdMutex<AppState>>) -> Result<Vec<ChatSummar
                     && !m.meta.as_ref().is_some_and(|meta| meta.deleted)
                     && !matches!(&m.kind, MessageKind::Text { text } if id.starts_with("grp_") && text.starts_with(crate::state::COMMENT_PREFIX)))
                 .reduce(|newer, candidate| if candidate.at > newer.at { candidate } else { newer });
+            sum.unread_mentions = c.messages.iter().filter(|m| {
+                m.meta.as_ref().is_some_and(|meta| !meta.deleted && meta.unread_ping.is_some())
+            }).count().min(u32::MAX as usize) as u32;
             sum.last_at = last.and_then(|m| m.at);
             if !sum.preview_is_typing {
                 if let Some(last) = last {
@@ -101,6 +104,20 @@ pub fn get_messages(
 ) -> Result<Vec<ChatMessage>, String> {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut msgs = s.chats.get(&peer_id).map(|c| c.messages.clone()).unwrap_or_default();
+    if let Some(group) = s.groups.get(&peer_id).filter(|g| g.kind == "channel") {
+        let privileged = s.username.as_deref().is_some_and(|u| group.is_admin(u));
+        let now = crate::state::msg_secs();
+        for msg in &mut msgs {
+            if let Some(meta) = &mut msg.meta {
+                meta.edits.clear();
+                meta.edit_audit.retain(|e| privileged && now.saturating_sub(e.at) < 86_400);
+                if !privileged && !group.settings.sign_messages {
+                    meta.edited_at = None;
+                    meta.editor_signatures.clear();
+                }
+            }
+        }
+    }
     drop(s);
     forget_missing_files(&mut msgs);
     Ok(msgs)
@@ -1406,22 +1423,34 @@ pub async fn bot_spec(
     spec: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
     let username = username.trim().to_lowercase();
+    if username.is_empty() || !username.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+        return Err("invalid bot name".into());
+    }
     let (transport, token) = {
         let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let token = s.vault.get_record(&bot_token_key(&username)).ok().flatten()
-            .map(|b| String::from_utf8_lossy(&b).to_string())
-            .ok_or("this bot's token isn't on this device — reset it in the bot's settings")?;
+            .and_then(|b| String::from_utf8(b).ok());
         (s.transport.clone().ok_or("not connected")?, token)
     };
-    let url = format!("{}/v1/botmaker/spec", transport.server_url().trim_end_matches('/'));
-    let auth = format!("Bot {token}");
-    let req = match op.as_str() {
-        "get" => transport.http().get(&url),
-        "put" => transport.http().put(&url).json(&spec.ok_or("no spec")?),
-        "delete" => transport.http().delete(&url),
-        _ => return Err("bad op".into()),
+    let base = transport.server_url().trim_end_matches('/');
+    let request = |url: String| -> Result<reqwest::RequestBuilder, String> {
+        match op.as_str() {
+            "get" => Ok(transport.http().get(url)),
+            "put" => Ok(transport.http().put(url).json(spec.as_ref().ok_or("no spec")?)),
+            "delete" => Ok(transport.http().delete(url)),
+            _ => Err("bad op".into()),
+        }
     };
-    let r = req.header("Authorization", auth).send().await.map_err(|e| e.to_string())?;
+    let mut r = request(format!("{base}/v1/botmaker/owned/{username}"))?
+        .bearer_auth(transport.bearer().await.map_err(|e| e.to_string())?)
+        .send().await.map_err(|e| e.to_string())?;
+    if r.status().as_u16() == 404 {
+        if let Some(token) = token {
+            r = request(format!("{base}/v1/botmaker/spec"))?
+                .header("Authorization", format!("Bot {token}"))
+                .send().await.map_err(|e| e.to_string())?;
+        }
+    }
     let status = r.status();
     let body = r.text().await.unwrap_or_default();
     if status.as_u16() == 404 {
@@ -2130,19 +2159,42 @@ async fn attach_file_fwd(
     };
     let path = PathBuf::from(&file_path);
     let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    let filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("attachment").to_owned();
+    let mime = mime_override.or_else(|| mime_from_extension(&path));
     if size > aqua_core::MAX_FILE_SIZE {
-        return Err(format!(
-            "file is too large: {} MB (limit {} MB)",
-            size / (1024 * 1024),
-            aqua_core::MAX_FILE_SIZE / (1024 * 1024)
-        ));
+        let (transport, data_dir) = {
+            let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            (s.transport.clone().ok_or("Connect to a relay to upload a large file")?, s.data_dir.clone())
+        };
+        let quota = transport.me_quota().await.map_err(|e| e.to_string())?.unwrap_or_default();
+        let advertised = quota["limits"]["file_max"].as_u64().unwrap_or(aqua_core::MAX_FILE_SIZE);
+        let protocol_max = if quota["resumable_uploads"].as_bool() == Some(true) {
+            aqua_core::file_transfer::MAX_RESUMABLE_FILE_SIZE
+        } else {
+            aqua_core::MAX_FILE_SIZE
+        };
+        let limit = advertised.min(protocol_max);
+        if size > limit { return Err(format!("quota: file_max {limit}")); }
+        let _upload = crate::large_files::UPLOAD.lock().await;
+        let pending = crate::large_files::prepare(&app, path.clone(), filename, mime, category).await?;
+        let mut envelope = pending.envelope.clone();
+        if envelope.category.as_deref() == Some("sticker") { envelope.pack = sticker_pack_ref(&path); }
+        envelope.caption = caption;
+        pending.upload(&transport, blob_kind(envelope.category.as_deref(), envelope.mime.as_deref(), &envelope.filename)).await?;
+        let saved_path = if peer_id == crate::state::SAVED_MESSAGES_ID {
+            let dir = data_dir.join("saved-media").join(&envelope.cid);
+            let dest = dir.join(sanitize_name(&envelope.filename));
+            if !crate::media::path_is_within(&data_dir.join("saved-media"), &path) {
+                tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
+                tokio::fs::copy(&path, &dest).await.map_err(|e| e.to_string())?;
+                Some(dest.to_string_lossy().into_owned())
+            } else { Some(file_path.clone()) }
+        } else { None };
+        let result = publish_file_offer(&state, &app, peer_id, file_path, envelope, fwd, saved_path).await;
+        if result.is_ok() { pending.finish(&state); }
+        return result;
     }
     let bytes = std::fs::read(&path).map_err(|e| format!("read {file_path}: {e}"))?;
-    let filename = path.file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("attachment")
-        .to_string();
-    let mime = mime_override.or_else(|| mime_from_extension(&path));
 
     // Saved Messages: a copy stays on this device (`saved-media/`), and the
     // file also goes to the relay, encrypted, so my other devices get it —
@@ -2259,7 +2311,7 @@ async fn attach_file_fwd(
     let spare = nearby.then(|| ciphertext.clone());
     let up = match &transport {
         Some(t) if !(nearby && crate::mesh::relay_down()) => t
-            .upload_blob_kind(&cid, ciphertext, false, Some(blob_kind(envelope.category.as_deref(), envelope.mime.as_deref(), &envelope.filename)))
+            .upload_attachment(&envelope, ciphertext, blob_kind(envelope.category.as_deref(), envelope.mime.as_deref(), &envelope.filename))
             .await
             .map_err(|e| format!("upload_blob: {e}")),
         Some(_) => Err("the relay is away".to_string()),
@@ -2276,8 +2328,20 @@ async fn attach_file_fwd(
         }
     }
 
-    // 4. Send the offer as a regular E2EE text message through the
-    //    peer's session.
+    publish_file_offer(&state, &app, peer_id, file_path, envelope, fwd, saved_local.map(|(path, _)| path)).await
+}
+
+async fn publish_file_offer(
+    state: &State<'_, StdMutex<AppState>>,
+    app: &AppHandle,
+    peer_id: String,
+    file_path: String,
+    envelope: FileEnvelope,
+    fwd: Option<String>,
+    saved_path: Option<String>,
+) -> Result<AttachResult, String> {
+    let cid = envelope.cid.clone();
+    let size = envelope.size;
     let offer_text = envelope.to_message_text();
     let offer_text = match &fwd {
         Some(h) => format!("{}{h}\n{offer_text}", crate::state::FWD_PREFIX),
@@ -2286,7 +2350,7 @@ async fn attach_file_fwd(
 
     // Saved Messages: shown here from the local copy; my other devices get
     // the offer (with the key) and fetch the file from the relay.
-    if let Some((saved_path, _)) = saved_local {
+    if let Some(saved_path) = saved_path {
         let mut msg = text_msg_from_me(&offer_text);
         if let MessageKind::File { saved_at, .. } = &mut msg.kind {
             *saved_at = Some(saved_path);
@@ -2327,8 +2391,7 @@ async fn attach_file_fwd(
     if !is_live {
         return Err("no live session with peer".into());
     }
-    let _ = &transport;
-    crate::multidev::fanout(&app, &peer_id, &offer_text, true).await?;
+    crate::multidev::fanout(app, &peer_id, &offer_text, true).await?;
 
     // 5. Reflect it locally as a File message with saved_at pointing
     //    at the sender's source file (so the UI can render inline
@@ -2600,8 +2663,34 @@ pub async fn download_file(
     if !aqua_core::valid_cid(&envelope.cid) {
         return Err("this file is not available".into());
     }
-    // Came from a contact nearby (same Wi-Fi / Bluetooth, mesh.rs): no relay needed.
     let data_dir = { state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.clone() };
+    // Save to Downloads/Aquamarine.
+    // View once: inside the app's own data, never in Downloads (and wiped
+    // once looked at, `once_burn`).
+    // Everything else: a folder per chat (Downloads/Aquamarine/<chat name>/),
+    // like Telegram — files of a chat stay together and easy to find.
+    let base = if envelope.category.as_deref() == Some("once") {
+        data_dir.join("once")
+    } else {
+        let name = {
+            let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            s.chats.get(&peer_id).map(|b| b.summary.name.clone()).unwrap_or_default()
+        };
+        downloads_dir(&data_dir).join(chat_folder(&name, &peer_id))
+    };
+    std::fs::create_dir_all(&base).map_err(|e| format!("mkdir: {e}"))?;
+    if envelope.size > aqua_core::MAX_FILE_SIZE {
+        let transport = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+            .transport.clone().ok_or("not connected")?;
+        let path = pick_unique_path(&base, &envelope.filename);
+        crate::large_files::download(&transport, envelope, path.clone()).await?;
+        let saved_path = path.to_string_lossy().into_owned();
+        set_saved_at(&state, &peer_id, &message_id, &saved_path)?;
+        let _ = app.emit("aqua://chats_updated", ());
+        return Ok(DownloadResult { saved_path });
+    }
+
+    // Came from a contact nearby (same Wi-Fi / Bluetooth, mesh.rs): no relay needed.
     let nearby = crate::mesh::local_blob(&data_dir, &envelope.cid);
     let from_nearby = nearby.is_some();
     let ciphertext = match nearby {
@@ -2620,21 +2709,6 @@ pub async fn download_file(
     let plaintext = decrypt_file(&envelope, &ciphertext)
         .map_err(|e| format!("decrypt_file: {e}"))?;
 
-    // Save to Downloads/Aquamarine.
-    // View once: inside the app's own data, never in Downloads (and wiped
-    // once looked at, `once_burn`).
-    // Everything else: a folder per chat (Downloads/Aquamarine/<chat name>/),
-    // like Telegram — files of a chat stay together and easy to find.
-    let base = if envelope.category.as_deref() == Some("once") {
-        data_dir.join("once")
-    } else {
-        let name = {
-            let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            s.chats.get(&peer_id).map(|b| b.summary.name.clone()).unwrap_or_default()
-        };
-        downloads_dir(&data_dir).join(chat_folder(&name, &peer_id))
-    };
-    std::fs::create_dir_all(&base).map_err(|e| format!("mkdir: {e}"))?;
     // A file of that name with exactly these bytes is already there: reuse it.
     let same = base.join(sanitize_name(&envelope.filename));
     let save_path = if std::fs::read(&same).map(|b| b == plaintext).unwrap_or(false) {
@@ -2733,6 +2807,23 @@ impl std::io::Read for WaitReader {
         self.pos += n as u64;
         Ok(n)
     }
+}
+
+fn mp4_needs_full_file(mut data: &[u8]) -> bool {
+    while data.len() >= 8 {
+        let size = u32::from_be_bytes(data[..4].try_into().unwrap()) as u64;
+        match &data[4..8] {
+            b"moov" | b"moof" => return false,
+            b"mdat" => return true,
+            _ => {}
+        }
+        let (size, header) = if size == 1 && data.len() >= 16 {
+            (u64::from_be_bytes(data[8..16].try_into().unwrap()), 16)
+        } else { (size, 8) };
+        if size < header || size > data.len() as u64 { break; }
+        data = &data[size as usize..];
+    }
+    false
 }
 
 /// A video sealed in pieces (FileEnvelope.chunk): a loopback URL that plays
@@ -2871,6 +2962,9 @@ pub async fn stream_file(
                 let take = buf.len().min(piece);
                 let sealed: Vec<u8> = buf.drain(..take).collect();
                 let plain = aqua_core::decrypt_chunk(&envelope, *i, &sealed).map_err(|e| format!("decrypt: {e}"))?;
+                if *i == 0 && matches!(mime.as_str(), "video/mp4" | "video/quicktime") && mp4_needs_full_file(&plain) {
+                    return Err("MP4 index follows media data".into());
+                }
                 out.write_all(&plain).map_err(|e| format!("write: {e}"))?;
                 *written += plain.len() as u64;
                 *i += 1;
@@ -3683,6 +3777,17 @@ pub async fn update_group(
     state: State<'_, StdMutex<AppState>>,
     group: Group,
 ) -> Result<Group, String> {
+    save_group_update(app, state, group, None).await
+}
+
+const TRANSFER_PREFIX: &str = "[ownership-accept:v1]";
+
+async fn save_group_update(
+    app: AppHandle,
+    state: State<'_, StdMutex<AppState>>,
+    group: Group,
+    transfer: Option<(&str, &str)>,
+) -> Result<Group, String> {
     let (me, mut next) = {
         let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         (s.username.clone().ok_or("not registered")?, group)
@@ -3694,6 +3799,31 @@ pub async fn update_group(
     {
         let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(old) = s.groups.get(&next.id) {
+            for key in ["discussion_group", "discussion_channel", "discussion_history"] {
+                if old.settings.extra.get(key) != next.settings.extra.get(key) { return Err("use discussion settings to change the link".into()); }
+            }
+            if old.kind == "channel" && me != old.owner
+                && old.settings.extra.get("own_post_edits") != next.settings.extra.get("own_post_edits") {
+                return Err("only the channel owner can set the edit policy".into());
+            }
+            let old_offer = old.extra.get("ownership_offer");
+            let new_offer = next.extra.get("ownership_offer");
+            if old.kind == "community" {
+                if old_offer != new_offer && me != old.owner { return Err("only the owner can offer ownership".into()); }
+                if old.owner != next.owner {
+                    let (actor, offer) = transfer.ok_or("ownership transfer requires acceptance")?;
+                    let value = old_offer.ok_or("ownership offer expired")?;
+                    if me != old.owner || actor != next.owner || !old.is_member(actor) || old.is_banned(actor)
+                        || value["id"].as_str() != Some(offer) || value["to"].as_str() != Some(actor)
+                        || value["expires"].as_i64().unwrap_or(0) <= crate::state::now_at().unwrap_or(i64::MAX)
+                        || next.version != old.version + 1 {
+                        return Err("ownership offer expired".into());
+                    }
+                }
+            }
+            if !crate::state::accept_group_snapshot(Some(old), &next, &me) {
+                return Err("group update is not allowed".into());
+            }
             for m in &old.members {
                 if !recipients.contains(&m.username) { recipients.push(m.username.clone()); }
             }
@@ -3718,6 +3848,115 @@ pub async fn update_group(
     let _ = app.emit("aqua://chats_updated", ());
     let _ = app.emit("aqua://groups_updated", ());
     Ok(next)
+}
+
+#[tauri::command]
+pub async fn community_offer(
+    app: AppHandle, state: State<'_, StdMutex<AppState>>, gid: String, to: String,
+) -> Result<Group, String> {
+    let mut group = {
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let group = s.groups.get(&gid).ok_or("unknown community")?;
+        if group.kind != "community" || s.username.as_deref() != Some(group.owner.as_str())
+            || group.owner == to || !group.is_member(&to) || group.is_banned(&to) {
+            return Err("ownership can only be offered to an active member".into());
+        }
+        group.clone()
+    };
+    group.extra.insert("ownership_offer".into(), serde_json::json!({
+        "id": crate::state::uuid_like(), "to": to,
+        "expires": crate::state::now_at().ok_or("clock unavailable")? + 86_400_i64
+    }));
+    save_group_update(app, state, group, None).await
+}
+
+#[tauri::command]
+pub async fn community_accept(
+    app: AppHandle, state: State<'_, StdMutex<AppState>>, gid: String,
+) -> Result<(), String> {
+    let (owner, id) = {
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let group = s.groups.get(&gid).ok_or("unknown community")?;
+        let me = s.username.as_deref().ok_or("not registered")?;
+        let offer = group.extra.get("ownership_offer").ok_or("no ownership offer")?;
+        if group.kind != "community" || offer["to"].as_str() != Some(me) || !group.is_member(me)
+            || group.is_banned(me) || offer["expires"].as_i64().unwrap_or(0) <= crate::state::now_at().unwrap_or(i64::MAX) {
+            return Err("ownership offer expired".into());
+        }
+        (group.owner.clone(), offer["id"].as_str().ok_or("invalid offer")?.to_owned())
+    };
+    let body = format!("{TRANSFER_PREFIX}{id}");
+    let wire = format!("{GRPCTL_PREFIX}{}", serde_json::json!({ "gid": gid, "body": body }));
+    deliver_to_member(&app, &owner, &wire).await
+}
+
+async fn accept_ownership(app: AppHandle, gid: String, actor: String, id: String) {
+    let state: State<'_, StdMutex<AppState>> = app.state();
+    let mut group = {
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(group) = s.groups.get(&gid) else { return };
+        if group.kind != "community" || s.username.as_deref() != Some(group.owner.as_str()) { return; }
+        group.clone()
+    };
+    for member in &mut group.members {
+        if member.username == group.owner { member.role = "admin".into(); }
+        if member.username == actor { member.role = "owner".into(); }
+    }
+    group.owner.clone_from(&actor);
+    group.extra.remove("ownership_offer");
+    if let Err(e) = save_group_update(app.clone(), state, group, Some((&actor, &id))).await {
+        tracing::debug!(%e, "ownership transfer ignored");
+    }
+}
+
+#[tauri::command]
+pub fn link_discussion(app: AppHandle, state: State<'_, StdMutex<AppState>>, channel: String, discussion: Option<String>) -> Result<Group, String> {
+    let (me, snapshots) = {
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let me = s.username.clone().ok_or("not registered")?;
+        let mut post = s.groups.get(&channel).filter(|g| g.kind == "channel" && g.owner == me)
+            .cloned().ok_or("only the channel owner can link a discussion")?;
+        let previous = post.settings.extra.get("discussion_group").and_then(|v| v.as_str()).map(str::to_owned);
+        if previous == discussion { return Ok(post); }
+        let candidate = discussion.as_ref().map(|id| {
+            s.groups.get(id).filter(|g| matches!(g.kind.as_str(), "group" | "supergroup") && g.owner == me
+                && g.settings.extra.get("discussion_channel").and_then(|v| v.as_str()).is_none_or(|c| c == channel))
+                .cloned().ok_or("select a group you own which is available for linking")
+        }).transpose()?;
+        let mut snapshots = Vec::new();
+        let now = crate::state::msg_secs();
+        if let Some(previous) = previous {
+            let history = post.settings.extra.entry("discussion_history").or_insert_with(|| serde_json::json!([]));
+            if let Some(items) = history.as_array_mut() {
+                items.push(serde_json::json!({ "group": previous, "through": now }));
+            }
+            if let Some(mut group) = s.groups.get(&previous).filter(|g| g.owner == me).cloned() {
+                group.settings.extra.remove("discussion_channel");
+                group.version += 1;
+                snapshots.push(group);
+            }
+        }
+        post.settings.extra.remove("discussion_group");
+        if let Some(mut group) = candidate {
+            post.settings.extra.insert("discussion_group".into(), serde_json::json!(group.id));
+            group.settings.extra.insert("discussion_channel".into(), serde_json::json!(channel));
+            group.settings.extra.insert("comments".into(), serde_json::json!(true));
+            group.version += 1;
+            snapshots.push(group);
+        }
+        post.version += 1;
+        snapshots.push(post);
+        for group in &snapshots { s.groups.insert(group.id.clone(), group.clone()); }
+        save_groups(&s.data_dir, &s.groups);
+        (me, snapshots)
+    };
+    for group in &snapshots {
+        let wire = format!("{GRPINFO_PREFIX}{}", serde_json::to_string(group).map_err(|e| e.to_string())?);
+        let recipients = group.members.iter().filter(|m| m.username != me).map(|m| m.username.clone()).collect();
+        group_outbox(&app).send((recipients, wire)).map_err(|_| "the sending queue stopped".to_owned())?;
+    }
+    let _ = app.emit("aqua://groups_updated", ());
+    snapshots.into_iter().last().ok_or_else(|| "unknown channel".into())
 }
 
 /// Leave a group locally and drop its chat. (Other members keep it; they'll
@@ -3831,6 +4070,7 @@ pub async fn group_send(
     }
     let room_id = room.map(|r| r.id);
 
+    let post_id = format!("p-{}", crate::state::uuid_like());
     // Local echo.
     let out = {
         let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -3840,6 +4080,7 @@ pub async fn group_send(
             a["ok"] = serde_json::Value::Bool(true);
             meta.get_or_insert_with(Default::default).as_ = Some(a);
         }
+        meta.get_or_insert_with(Default::default).post_id = Some(post_id.clone());
         let msg = ChatMessage {
             meta,
             id: format!("m-{}", crate::state::uuid_like()),
@@ -3870,7 +4111,7 @@ pub async fn group_send(
     // `sil`: a silent post (the channel's 🔔 off) — no sound, no notification.
     // `as`: sent as a group / channel; older apps don't know the field and
     // show the real sender, which is safe.
-    let mut env = serde_json::json!({ "gid": gid, "author": me, "body": body, "room": room_id });
+    let mut env = serde_json::json!({ "gid": gid, "author": me, "body": body, "room": room_id, "post_id": post_id });
     if silent { env["sil"] = serde_json::Value::Bool(true); }
     if let Some(a) = as_of { env["as"] = a; }
     let wire = format!("{GRPMSG_PREFIX}{env}");
@@ -4089,7 +4330,10 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                 push_own_message(&mut s, &chat, text_msg_from_me(inner), inner);
                 None
             } else {
-                let (kind, meta) = crate::state::classify_full(inner, None);
+                let (kind, mut meta) = crate::state::classify_full(inner, None);
+                if let Some(key) = mention_key(&me, from, inner) {
+                    meta.get_or_insert_with(Default::default).unread_ping = Some(key);
+                }
                 let preview = preview_for(&kind);
                 let len = s.chats.get(&chat).map(|b| b.messages.len()).unwrap_or(0);
                 if let Some(book) = s.chats.get_mut(&chat) {
@@ -4167,12 +4411,13 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
             // "author" field can't impersonate someone else.
             let author = from.to_string();
             let inner = v.get("body").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let post_id = v["post_id"].as_str().filter(|id| post_id_ok(id));
             let silent = v.get("sil").and_then(|x| x.as_bool()) == Some(true);
             if gid.is_empty() { return true; }
             // The same post / comment can reach this device twice (the relay
             // and a copy synced from my other device, a resend after a
             // reconnect): it showed twice in the chat, the thread and Replies.
-            if group_repeat(&gid, &author, &inner) { return true; }
+            if post_id.is_none() && group_repeat(&gid, &author, &inner) { return true; }
             let time = hhmm_now();
             let (mine, preview) = {
                 let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -4188,6 +4433,16 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                 };
                 let is_comment = inner.starts_with(crate::state::COMMENT_PREFIX);
                 let (kind, mut meta) = crate::state::classify_full(&inner, room.map(|r| r.id));
+                if let Some(key) = s.username.as_deref().filter(|me| *me != author)
+                    .and_then(|me| mention_key(me, &author, &inner)) {
+                    meta.get_or_insert_with(Default::default).unread_ping = Some(key);
+                }
+                if let Some(id) = post_id {
+                    if s.chats.get(&gid).is_some_and(|book| book.messages.iter().any(|msg| {
+                        msg.from == author && msg.meta.as_ref().and_then(|m| m.post_id.as_deref()) == Some(id)
+                    })) { return true; }
+                    meta.get_or_insert_with(Default::default).post_id = Some(id.to_owned());
+                }
                 // "Sent as": this group itself only from one of its admins
                 // (checked here, `ok`); another group / channel is checked
                 // by the UI against its public @name's owner.
@@ -4329,7 +4584,11 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
         if !ok {
             return true;
         }
-        if let Some(b) = inner.strip_prefix(POLLVOTE_PREFIX) {
+        if let Some(id) = inner.strip_prefix(TRANSFER_PREFIX) {
+            if !id.is_empty() && id.len() <= 64 {
+                tauri::async_runtime::spawn(accept_ownership(app.clone(), gid.clone(), from.to_owned(), id.to_owned()));
+            }
+        } else if let Some(b) = inner.strip_prefix(POLLVOTE_PREFIX) {
             if let Ok(vote) = serde_json::from_str::<serde_json::Value>(b) {
                 let _ = app.emit("aqua://poll_vote", serde_json::json!({ "from": from, "vote": vote, "gid": gid }));
             }
@@ -4353,13 +4612,17 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
             }
         } else if let Some(b) = inner.strip_prefix(EDIT_PREFIX) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(b) {
-                let old = v.get("old").and_then(|x| x.as_str()).unwrap_or("");
-                let new = v.get("new").and_then(|x| x.as_str()).unwrap_or("");
-                if !old.is_empty() {
-                    if let Ok(mut s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { apply_edit_at(&mut s, &gid, from, old, new, v.get("at").and_then(|x| x.as_i64()), None); }
-                    let _ = app.emit("aqua://chats_updated", ());
-                    let _ = app.emit("aqua://incoming", IncomingEventPayload { preview: None, peer_id: gid.clone(), text: String::new(), time: hhmm_now(), is_new_chat: false });
-                }
+                let changed = {
+                    let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if s.groups.get(&gid).is_some_and(|g| g.kind == "channel") {
+                        receive_post_edit(&mut s, &gid, from, &v)
+                    } else {
+                        let old = v["old"].as_str().unwrap_or("");
+                        let new = v["new"].as_str().unwrap_or("");
+                        !old.is_empty() && apply_edit_at(&mut s, &gid, from, old, new, v["at"].as_i64(), None).is_some()
+                    }
+                };
+                if changed { let _ = app.emit("aqua://chats_updated", ()); }
             }
         } else if let Some(b) = inner.strip_prefix(DEL_PREFIX) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(b) {
@@ -4506,7 +4769,7 @@ async fn on_incoming_plaintext(app: &AppHandle, from: String, text: String) {
         is_new_chat = !s.chats.contains_key(&from);
         if is_new_chat {
             let (letter, gradient) = gradient_for(&from);
-            let summary = ChatSummary { preview_from: None, last_at: None,
+            let summary = ChatSummary { unread_mentions: 0, preview_from: None, last_at: None,
                 id: from.clone(),
                 name: from.clone(),
                 letter, gradient,
@@ -4735,6 +4998,7 @@ async fn on_incoming_envelope(
 /// rather than a message to show? Those must never become a bubble, even
 /// when one happens to open a new session (X3DH initial message).
 pub(crate) fn is_control_text(text: &str) -> bool {
+    if text.starts_with(TRANSFER_PREFIX) || text.starts_with(THREAD_READ_PREFIX) { return true; }
     text.starts_with(CALL_PREFIX)
         || [POLLVOTE_PREFIX, POLLCLOSE_PREFIX, SEEN_PREFIX, STATUS_PREFIX, LISTEN_PREFIX, REACT_PREFIX, TYPING_PREFIX,
             EDIT_PREFIX, DEL_PREFIX, REN_PREFIX, CTL_PREFIX, GCALL_PREFIX, GRPINFO_PREFIX, GRPSELF_PREFIX,
@@ -4784,7 +5048,7 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
             crate::history_sync::on_key(app, body);
             return;
         }
-        if let Some(body) = text.strip_prefix(READ_PREFIX) {
+        if let Some(body) = text.strip_prefix(READ_PREFIX).or_else(|| text.strip_prefix(THREAD_READ_PREFIX)) {
             on_read_elsewhere(app, body);
             return;
         }
@@ -5001,7 +5265,7 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
         if !s.chats.contains_key(&from) {
             is_new_chat = true;
             let (letter, gradient) = gradient_for(&from);
-            let summary = ChatSummary { preview_from: None, last_at: None,
+            let summary = ChatSummary { unread_mentions: 0, preview_from: None, last_at: None,
                 id: from.clone(),
                 name: from.clone(),
                 letter, gradient,
@@ -5220,9 +5484,108 @@ pub fn edit_message(
     id: Option<String>,
 ) -> Result<Option<i64>, String> {
     let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if s.groups.get(&peer_id).is_some_and(|g| g.kind == "channel") { return Err("use the channel post editor".into()); }
     // The edited message's time goes with the `[edit:v1]`, so the other
     // side changes that one too (see apply_edit_at).
     Ok(apply_edit_at(&mut s, &peer_id, "me", &old_text, &new_text, None, id.as_deref()).flatten())
+}
+
+fn post_id_ok(id: &str) -> bool {
+    id.strip_prefix("p-").is_some_and(|v| !v.is_empty() && v.len() <= 48 && v.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+fn editable_post(msg: &ChatMessage) -> Option<&str> {
+    if msg.meta.as_ref().is_some_and(|m| m.deleted) { return None; }
+    match &msg.kind {
+        MessageKind::Text { text } | MessageKind::Reply { text, .. } if !text.starts_with(crate::state::COMMENT_PREFIX) => Some(text),
+        _ => None,
+    }
+}
+
+fn legacy_text_key(author: &str, text: &str) -> String {
+    let mut digest = 0x811c9dc5_u32;
+    for char in "t:".encode_utf16().chain(text.encode_utf16()) {
+        digest = (digest ^ u32::from(char)).wrapping_mul(0x01000193);
+    }
+    let mut bytes = [b'0'; 7];
+    let mut digits = bytes.len();
+    loop {
+        digits -= 1;
+        bytes[digits] = b"0123456789abcdefghijklmnopqrstuvwxyz"[(digest % 36) as usize];
+        digest /= 36;
+        if digest == 0 { break; }
+    }
+    format!("{author}:{}", std::str::from_utf8(&bytes[digits..]).expect("ASCII digits"))
+}
+
+fn receive_post_edit(s: &mut AppState, gid: &str, editor: &str, edit: &serde_json::Value) -> bool {
+    let Some(group) = s.groups.get(gid).filter(|g| g.kind == "channel") else { return false; };
+    let Some(new) = edit["new"].as_str().filter(|v| !v.trim().is_empty() && v.len() <= 16 * 1024 && !is_control_text(v.trim_start())) else { return false; };
+    let target = edit["author"].as_str().unwrap_or(editor);
+    if !crate::state::can_edit_channel_post(group, editor, target) { return false; }
+    let audit = s.username.as_deref().is_some_and(|me| group.is_admin(me));
+    let signatures = group.settings.sign_messages;
+    let now = crate::state::msg_secs();
+    let edited = edit["edited_at"].as_i64().filter(|&t| t > 0 && t <= now.saturating_add(300)).unwrap_or(now).min(now);
+    let Some(book) = s.chats.get_mut(gid) else { return false; };
+    let mut matches = book.messages.iter_mut().filter(|m| {
+        if !author_is(&s.username, &m.from, target) { return false; }
+        let Some(old) = editable_post(m) else { return false; };
+        if let Some(id) = edit["post_id"].as_str() {
+            return post_id_ok(id) && m.meta.as_ref().and_then(|meta| meta.post_id.as_deref()) == Some(id);
+        }
+        editor == target && edit["old"].as_str() == Some(old) && edit["at"].as_i64().is_none_or(|t| m.at == Some(t))
+    });
+    let Some(msg) = matches.next() else { return false; };
+    if matches.next().is_some() { return false; }
+    let meta = msg.meta.get_or_insert_with(Default::default);
+    if meta.edited_at.is_some_and(|t| t > edited) { return false; }
+    if meta.post_legacy_key.is_none() {
+        if let MessageKind::Text { text } = &msg.kind { meta.post_legacy_key = Some(legacy_text_key(target, text)); }
+    }
+    let old = match &mut msg.kind {
+        MessageKind::Text { text } | MessageKind::Reply { text, .. } if text != new => std::mem::replace(text, new.into()),
+        _ => return false,
+    };
+    meta.edited_at = Some(edited);
+    if signatures && !meta.editor_signatures.iter().any(|name| name == editor) {
+        if meta.editor_signatures.len() == 32 { meta.editor_signatures.remove(0); }
+        meta.editor_signatures.push(editor.to_owned());
+    }
+    if audit && now.saturating_sub(edited) < 86_400 {
+        meta.edit_audit.retain(|audit| now.saturating_sub(audit.at) < 86_400);
+        meta.edit_audit.push(crate::state::PostEdit { editor: editor.to_owned(), at: edited, previous: old });
+    }
+    if let Some(last) = book.messages.last() { book.summary.preview = preview_for(&last.kind); }
+    crate::history::mark_dirty(s, gid);
+    true
+}
+
+#[tauri::command]
+pub fn edit_channel_post(app: AppHandle, state: State<'_, StdMutex<AppState>>, gid: String, id: String, text: String) -> Result<(), String> {
+    let (members, edit) = {
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let me = s.username.clone().ok_or("not registered")?;
+        let group = s.groups.get(&gid).ok_or("unknown channel")?;
+        let msg = s.chats.get(&gid).and_then(|b| b.messages.iter().find(|msg| msg.id == id)).ok_or("unknown post")?;
+        let author = if msg.from == "me" { me.clone() } else { msg.from.clone() };
+        if !crate::state::can_edit_channel_post(group, &me, &author) { return Err("this post cannot be edited by your account".into()); }
+        let old = editable_post(msg).ok_or("this type of post cannot be edited")?;
+        let post_id = msg.meta.as_ref().and_then(|m| m.post_id.as_deref());
+        if post_id.is_none() && author != me { return Err("this older post can only be edited by its author".into()); }
+        let mut edit = serde_json::json!({ "new": text, "author": author, "edited_at": crate::state::msg_secs(), "at": msg.at });
+        if let Some(post_id) = post_id { edit["post_id"] = serde_json::json!(post_id); }
+        // Only author edits have a representation understood by old clients.
+        if author == me { edit["old"] = serde_json::json!(old); }
+        let members = group.members.iter().filter(|m| m.username != me).map(|m| m.username.clone()).collect();
+        if !receive_post_edit(&mut s, &gid, &me, &edit) { return Err("post changed or is no longer available".into()); }
+        (members, edit)
+    };
+    let body = format!("{EDIT_PREFIX}{edit}");
+    let wire = format!("{GRPCTL_PREFIX}{}", serde_json::json!({ "gid": gid, "body": body }));
+    group_outbox(&app).send((members, wire)).map_err(|_| "the sending queue stopped".to_owned())?;
+    let _ = app.emit("aqua://chats_updated", ());
+    Ok(())
 }
 
 /// Delete one of my own messages locally. The frontend separately relays a
@@ -5304,13 +5667,15 @@ pub fn set_tz_offset(app: AppHandle, state: State<'_, StdMutex<AppState>>, minut
 /// the open chat back as "unread".
 #[tauri::command]
 pub fn mark_chat_read(app: AppHandle, state: State<'_, StdMutex<AppState>>, peer_id: String) -> Result<(), String> {
+    let through = crate::state::msg_secs();
     let (was_unread, t, me) = {
         let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let was = s.chats.get(&peer_id).map(|b| b.summary.unread > 0).unwrap_or(false);
         if let Some(book) = s.chats.get_mut(&peer_id) {
             book.summary.unread = 0;
         }
-        (was, s.transport.clone(), s.username.clone().unwrap_or_default())
+        let pings = clear_ping_markers(&mut s, &peer_id, "", through);
+        (was || pings, s.transport.clone(), s.username.clone().unwrap_or_default())
     };
     // Read here — read on my other devices too: they kept the counter and
     // rang for messages already read (READ_PREFIX, handled below).
@@ -5320,7 +5685,7 @@ pub fn mark_chat_read(app: AppHandle, state: State<'_, StdMutex<AppState>>, peer
         tauri::async_runtime::spawn_blocking(move || crate::bgnotify::clear_chat(&handle, &peer));
         let _ = app.emit("aqua://chats_updated", ());
         if let Some(t) = t {
-            let payload = format!("{READ_PREFIX}{}", serde_json::json!({ "peer": peer_id }));
+            let payload = format!("{READ_PREFIX}{}", serde_json::json!({ "peer": peer_id, "through": through }));
             tauri::async_runtime::spawn(async move { crate::multidev::to_my_devices(&app, &t, &me, &payload).await; });
         }
     }
@@ -5333,15 +5698,23 @@ pub const READ_PREFIX: &str = "[read:v1]";
 /// Another device of mine read a chat: no unread counter here either, and
 /// the UI drops its notifications for it.
 pub(crate) fn on_read_elsewhere(app: &AppHandle, body: &str) {
-    let Some(peer) = serde_json::from_str::<serde_json::Value>(body).ok()
-        .and_then(|v| v.get("peer").and_then(|x| x.as_str()).map(str::to_string)) else { return };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else { return; };
+    let Some(peer) = value["peer"].as_str() else { return; };
+    let through = value["through"].as_i64().unwrap_or_else(crate::state::msg_secs);
     let state: State<'_, StdMutex<AppState>> = app.state();
     {
         let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(book) = s.chats.get_mut(&peer) { book.summary.unread = 0; }
+        if let Some(thread) = value["thread"].as_str().filter(|x| !x.is_empty()) {
+            if !clear_ping_markers(&mut s, peer, thread, through) { return; }
+        } else {
+            if let Some(book) = s.chats.get_mut(peer) { book.summary.unread = 0; }
+            clear_ping_markers(&mut s, peer, "", through);
+        }
     }
-    crate::bgnotify::clear_chat(app, &peer);
-    let _ = app.emit("aqua://read_elsewhere", serde_json::json!({ "peer_id": peer }));
+    if value["thread"].is_null() {
+        crate::bgnotify::clear_chat(app, peer);
+        let _ = app.emit("aqua://read_elsewhere", serde_json::json!({ "peer_id": peer }));
+    }
     let _ = app.emit("aqua://chats_updated", ());
 }
 
@@ -5475,7 +5848,11 @@ fn push_peer_message(s: &mut AppState, peer_id: &str, text: String, time: &str) 
     if is_control_text(text.trim_start()) {
         return String::new();
     }
-    let (kind, meta) = crate::state::classify_full(&text, None);
+    let (kind, mut meta) = crate::state::classify_full(&text, None);
+    if let Some(key) = s.username.as_deref().filter(|_| !peer_id.starts_with("__"))
+        .and_then(|me| mention_key(me, peer_id, &text)) {
+        meta.get_or_insert_with(Default::default).unread_ping = Some(key);
+    }
     let preview = preview_for(&kind);
     if let Some(book) = s.chats.get_mut(peer_id) {
         book.messages.push(ChatMessage { meta,
@@ -5595,6 +5972,50 @@ fn reply_note(me: &str, author: &str, group: &str, inner: &str) -> Option<String
     })
 }
 
+fn mention_key(me: &str, author: &str, text: &str) -> Option<String> {
+    if reply_note(me, author, "", text).is_some() {
+        return Some(text.strip_prefix(crate::state::COMMENT_PREFIX)
+            .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+            .and_then(|v| v["to"].as_str().map(str::to_owned)).unwrap_or_default());
+    }
+    None
+}
+
+fn clear_ping_markers(s: &mut AppState, peer: &str, thread: &str, through: i64) -> bool {
+    let Some(book) = s.chats.get_mut(peer) else { return false; };
+    let mut changed = false;
+    for m in &mut book.messages {
+        if m.at.is_none_or(|at| at <= through) {
+            if let Some(meta) = &mut m.meta {
+                if meta.unread_ping.as_deref() == Some(thread) {
+                    meta.unread_ping = None;
+                    changed = true;
+                }
+            }
+        }
+    }
+    if changed { crate::history::mark_dirty(s, peer); }
+    changed
+}
+
+const THREAD_READ_PREFIX: &str = "[thread-pings-read:v1]";
+
+#[tauri::command]
+pub fn mark_thread_mentions(app: AppHandle, state: State<'_, StdMutex<AppState>>, peer_id: String, thread: String) {
+    if thread.is_empty() || thread.len() > 128 { return; }
+    let through = crate::state::msg_secs();
+    let (transport, me) = {
+        let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !clear_ping_markers(&mut s, &peer_id, &thread, through) { return; }
+        (s.transport.clone(), s.username.clone().unwrap_or_default())
+    };
+    let _ = app.emit("aqua://chats_updated", ());
+    if let Some(t) = transport {
+        let wire = format!("{THREAD_READ_PREFIX}{}", serde_json::json!({ "peer": peer_id, "thread": thread, "through": through }));
+        tauri::async_runtime::spawn(async move { crate::multidev::to_my_devices(&app, &t, &me, &wire).await; });
+    }
+}
+
 /// True when this (group, author, text) already arrived within the last
 /// minute — a second delivery of the same message, not a new one.
 fn group_repeat(gid: &str, author: &str, inner: &str) -> bool {
@@ -5619,7 +6040,7 @@ fn group_repeat(gid: &str, author: &str, inner: &str) -> bool {
 fn push_replies(s: &mut AppState, text: String, time: &str) {
     use crate::state::REPLIES_ID;
     if !s.chats.contains_key(REPLIES_ID) {
-        let summary = ChatSummary { preview_from: None, last_at: None,
+        let summary = ChatSummary { unread_mentions: 0, preview_from: None, last_at: None,
             id: REPLIES_ID.into(),
             name: "Replies".into(),
             letter: "↩".into(),
@@ -5645,6 +6066,20 @@ fn push_replies(s: &mut AppState, text: String, time: &str) {
 #[cfg(test)]
 mod replies_tests {
     use super::reply_note;
+    #[test]
+    fn unread_pings_include_explicit_replies_without_matching_username_prefixes() {
+        assert_eq!(super::mention_key("anna", "bob", "Привет, @anna!"), Some(String::new()));
+        assert_eq!(super::mention_key("anna", "bob", "Привет, @annabel!"), None);
+        assert_eq!(super::mention_key("anna", "bob", r#"[reply:v1]{"quoted_author":"anna","quoted_text":"a","text":"b"}"#), Some(String::new()));
+        assert_eq!(super::mention_key("anna", "bob", r#"[cmt:v1]{"to":"post-1","t":"b","re":{"a":"anna","t":"a"}}"#), Some("post-1".into()));
+    }
+
+    #[test]
+    fn mp4_only_waits_if_media_precedes_the_index() {
+        assert!(super::mp4_needs_full_file(&[0,0,0,8,b'f',b't',b'y',b'p',0,0,0,8,b'm',b'd',b'a',b't']));
+        assert!(!super::mp4_needs_full_file(&[0,0,0,8,b'm',b'o',b'o',b'v',0,0,0,8,b'm',b'd',b'a',b't']));
+    }
+
     #[test]
     fn file_names_stay_in_their_folder() {
         assert_eq!(super::sanitize_name("../../.bashrc"), "bashrc");

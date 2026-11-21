@@ -15,13 +15,15 @@
   import { api } from "../tauri";
   import { showToast } from "./Toast.svelte";
   import Select from "./Select.svelte";
+  import { processing, refreshProcessing } from "../paid";
+  import ProScenario, { type Scenario } from "./ProScenario.svelte";
   import { onBack } from "../back";
 
   interface Btn { text: string; goto: string; url: string }
   interface Reply { text: string; buttons: Btn[][] }
   interface Cmd { command: string; description: string; reply: Reply }
   interface Kw { words: string; reply: Reply }
-  interface Spec { about: string; start: Reply; commands: Cmd[]; keywords: Kw[]; fallback?: Reply | null }
+  interface Spec { about: string; start: Reply; commands: Cmd[]; keywords: Kw[]; fallback?: Reply | null; scenario?: Scenario | null }
 
   const empty = (text = ""): Reply => ({ text, buttons: [] });
   let spec = $state<Spec>({ about: "", start: empty(), commands: [], keywords: [] });
@@ -36,6 +38,7 @@
   $effect(() => {
     const bot = $botMakerFor;
     if (!bot) return;
+    void refreshProcessing(true);
     loading = true;
     on = false; loadFailed = false;
     spec = { about: "", start: empty(tr("Hi! I'm a bot.")), commands: [], keywords: [] };
@@ -44,7 +47,7 @@
       if ($botMakerFor !== bot || !v || typeof v !== "object") return;
       const s = v as Spec;
       const fix = (r?: Reply | null): Reply => ({ text: r?.text ?? "", buttons: (r?.buttons ?? []).map((row) => row.map((b) => ({ text: b.text ?? "", goto: b.goto ?? "", url: b.url ?? "" }))) });
-      spec = { about: s.about ?? "", start: fix(s.start), commands: (s.commands ?? []).map((c) => ({ command: c.command, description: c.description ?? "", reply: fix(c.reply) })), keywords: (s.keywords ?? []).map((k) => ({ words: k.words, reply: fix(k.reply) })) };
+      spec = { about: s.about ?? "", start: fix(s.start), commands: (s.commands ?? []).map((c) => ({ command: c.command, description: c.description ?? "", reply: fix(c.reply) })), keywords: (s.keywords ?? []).map((k) => ({ words: k.words, reply: fix(k.reply) })), scenario: s.scenario ?? null };
       hasFallback = !!s.fallback; fallback = fix(s.fallback);
       on = true;
     }).catch((e) => { loadFailed = true; showToast(String(e), 6000); }).finally(() => { loading = false; });
@@ -163,6 +166,9 @@
         <div class="bm-sec">{$t("Anything else")}</div>
         <label class="bm-check"><input type="checkbox" bind:checked={hasFallback} /> {$t("Answer messages it doesn't know")}</label>
         {#if hasFallback}{@render replyEd(fallback, "E.g. “I don't understand — try /start”")}{/if}
+        {#if $processing.pro_bots || spec.scenario}
+          <ProScenario bind:scenario={spec.scenario} enabled={!!$processing.pro_bots} />
+        {/if}
       </div>
       <div class="bm-foot">
         {#if on}<button class="bm-off" onclick={turnOff}>{$t("Turn off")}</button>{/if}

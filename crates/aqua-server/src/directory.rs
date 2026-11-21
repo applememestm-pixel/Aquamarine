@@ -2205,9 +2205,17 @@ impl Directory {
                 return Ok(false);
             }
             list.retain(|d| d.dh != hex);
-            self.put_devices(&username, &list)?;
-            let db = self.db.lock().unwrap();
-            db.execute("UPDATE users SET identity_dh=?2 WHERE username=?1", rusqlite::params![username, next.as_slice()])?;
+            let devices = serde_json::to_string(&list).map_err(|_| DirError::BadUsername)?;
+            let mut conn = self.db.lock().unwrap();
+            let db = conn.transaction()?;
+            let changed = db.execute(
+                "UPDATE users SET identity_dh=?2, devices=?3 WHERE username=?1 AND identity_dh=?4",
+                rusqlite::params![username, next.as_slice(), devices, primary.as_slice()],
+            )?;
+            if changed == 0 { return Ok(false); }
+            db.execute("UPDATE bot_keys SET owner_dh=?2 WHERE owner_dh=?1", rusqlite::params![primary.as_slice(), next.as_slice()])?;
+            db.execute("UPDATE users SET identity_dh=?2 WHERE is_bot=1 AND identity_dh=?1", rusqlite::params![primary.as_slice(), next.as_slice()])?;
+            db.commit()?;
             return Ok(true);
         }
         let before = list.len();
@@ -2697,6 +2705,13 @@ impl Directory {
             |r| r.get(0),
         )
         .ok()
+    }
+
+    /// A registered device manages bots under its account's primary identity.
+    pub fn bot_account_identity(&self, caller: &[u8; 32]) -> [u8; 32] {
+        self.username_for_identity(caller)
+            .and_then(|username| self.identity_for(&username))
+            .unwrap_or(*caller)
     }
 
     /// Change an account's @username (its primary device only). Everything

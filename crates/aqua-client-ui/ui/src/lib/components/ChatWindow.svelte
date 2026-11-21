@@ -49,7 +49,7 @@
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { icons } from "../icons";
   import { fromEdge } from "../tabSwipe";
-  import { activeChat, activeMessages, drafts, activeId, sendCurrent, loadActiveMessages, info, chats, silentChans } from "../stores";
+  import { activeChat, activeMessages, drafts, activeId, sendCurrent, loadActiveMessages, info, chats, silentChans, selectChat } from "../stores";
   import { meshStatus, meshSyncNow, nearbyVia } from "../mesh";
   import { noShare, setNoShare, startNoShare } from "../noShare";
   import { isLive, livePlay } from "../liveMotion";
@@ -73,6 +73,7 @@
   import { reactionPack, quickReactions, parseReaction, reactionUrl, loadReactionPack, REACTION_PACK, emojiPacks, reactionSource, loadEmojiPacks } from "../reactionPack";
   import { editAndSend } from "../panels/photoEditor";
   import { transcribe, sttProgress } from "../stt";
+  import { processing, refreshProcessing, translateSelected } from "../paid";
   import Snow, { lastOpened, markOpened, pileFor } from "./Snow.svelte";
   import Transcript from "./Transcript.svelte";
   import MediaPlayer from "./MediaPlayer.svelte";
@@ -1437,6 +1438,11 @@
       queueMicrotask(() => autoresize());
       if (t === et.old) return; // no change
       try {
+        if (isChannel && et.id) {
+          await api.editChannelPost(chat.id, et.id, t);
+          await loadActiveMessages();
+          return;
+        }
         const at = await api.editMessage(chat.id, et.old, t, et.id);
         if (chat.id !== "__saved__") {
           // `at`: which of several same-text messages (older apps ignore it).
@@ -1955,7 +1961,10 @@
     }
     showToast(tr("The original message isn't here any more"));
   }
-  let thread = $state<{ kind: "comments" | "replies"; root: Row } | null>(null);
+  let thread = $state<{
+    kind: "comments" | "replies"; root: Row;
+    linked?: { source: string; group: string; key: string; legacy: Cmt[]; author: string };
+  } | null>(null);
   // Only a different chat closes the thread: $activeChat is a new object on
   // every chat-list refresh (each sent comment), and the panel shut itself.
   const threadChatId = $derived($activeChat?.id);
@@ -1964,8 +1973,10 @@
     const th = thread;
     if (!th) return [];
     if (th.kind === "comments") {
-      const key = reactionKey(th.root);
-      return comments.filter((c) => c.to === key).map((c) => ({ id: c.id, author: c.from, time: c.time, text: c.t, outgoing: c.outgoing, re: c.re, depth: c.re ? 1 : 0, as: c.as ? { gid: c.as.gid, title: c.as.title } : null }));
+      const key = th.linked?.key ?? reactionKey(th.root);
+      const items = comments.filter(c => c.to === key);
+      if (th.linked) items.unshift(...th.linked.legacy.map(c => ({ ...c, id: "source:" + c.id })));
+      return items.map((c) => ({ id: c.id, author: c.from, time: c.time, text: c.t, outgoing: c.outgoing, re: c.re, depth: c.re ? 1 : 0, as: c.as ? { gid: c.as.gid, title: c.as.title } : null }));
     }
     // Replies, and replies to those (Telegram's "replies" view).
     const out: ThreadItem[] = [];
@@ -2036,16 +2047,61 @@
     return comments.filter((c) => c.to === key).slice(-30);
   });
   $effect(() => { if (cmtPeek) return onBack(() => (cmtPeek = null)); });
-  function openThread(row: Row, kind?: "comments" | "replies") {
+  async function openThread(row: Row, kind?: "comments" | "replies") {
     closeMenu();
     const k = kind ?? (activeGroup?.kind === "channel" ? "comments" : "replies");
+    if (k === "comments" && activeGroup?.kind === "channel") {
+      const source = activeGroup.id;
+      const previous = activeGroup.settings.discussion_history?.find(entry => (row.at ?? 0) <= entry.through);
+      const group = previous?.group || activeGroup.settings.discussion_group;
+      if (group) {
+        const discussion = $groupMap[group];
+        if (!discussion || !discussion.members.some(m => m.username === myUsername) || discussion.banned?.includes(myUsername)) {
+          if (discussion?.banned?.includes(myUsername)) {
+            showToast($t("Join the discussion group to see these comments"));
+          } else if (await askConfirm({ title: $t("Join the discussion group to see these comments"), text: $t("The group administrator will receive your request."), ok: $t("Send request") })) {
+            try {
+              await api.groupRequestJoin(group, discussion?.owner ?? activeGroup.owner, discussion?.title ?? activeGroup.title, "");
+              showToast($t("Request sent"));
+            } catch (e) { showToast(String(e)); }
+          }
+          return;
+        }
+        const old = reactionKey(row);
+        const key = row.meta?.post_id ?? old;
+        const legacy = comments.filter(comment => comment.to === old || comment.to === key);
+        const author = authorOf(row);
+        if (legacy.length) void api.markThreadMentions(source, old).catch(() => {});
+        await selectChat(group);
+        await tick();
+        if ($activeId !== group) return;
+        thread = { kind: "comments", root: row, linked: { source, group, key, legacy, author } };
+        return;
+      }
+    }
     thread = { kind: k, root: row };
   }
+
+  async function backToPost() {
+    const current = thread;
+    if (!current?.linked) return;
+    await selectChat(current.linked.source);
+    await tick();
+    window.dispatchEvent(new CustomEvent("aqua:jump", { detail: current.root.id }));
+  }
+
+  $effect(() => {
+    if (!thread || thread.kind !== "comments" || !$activeId || !$activeChat?.unread_mentions) return;
+    if (document.visibilityState === "visible" && !lockedNow) {
+      void api.markThreadMentions($activeId, thread.linked?.key ?? reactionKey(thread.root)).catch(() => {});
+    }
+  });
+
   async function sendThread(text: string, re: { a: string; t: string } | null) {
     const th = thread, chat = $activeChat;
     if (!th || !chat) return false;
     const body = th.kind === "comments"
-      ? "[cmt:v1]" + JSON.stringify({ to: reactionKey(th.root), t: text, ...(re ? { re } : {}) })
+      ? "[cmt:v1]" + JSON.stringify({ to: th.linked?.key ?? reactionKey(th.root), t: text, ...(re ? { re } : {}) })
       : "[reply:v1]" + JSON.stringify({ quoted_author: re?.a ?? authorOf(th.root), quoted_text: re ? re.t.slice(0, 180) : quoteOf(th.root), text });
     try {
       if (chat.id.startsWith("grp_")) await api.groupSend(chat.id, body, false, sendAsFor(chat.id));
@@ -3100,6 +3156,37 @@
     closeMenu();
     queueMicrotask(() => { autoresize(); composerEl?.focus(); });
   }
+  $effect(() => { if ($activeId) void refreshProcessing(); });
+
+  let translation = $state<string | null>(null);
+  $effect(() => { void $activeId; translation = null; });
+
+  async function translateRow(row: Row) {
+    const source = textOf(row);
+    const peer = $activeId;
+    closeMenu();
+    if (!source) return;
+    try {
+      const result = await translateSelected(source);
+      if (result != null && peer === $activeId) translation = result;
+    } catch (e) { showToast(tr("Translation failed: {e}", { e: String(e) })); }
+  }
+
+  function mayEditRow(row: Row): boolean {
+    if (row.meta?.deleted || !["text", "reply"].includes(row.kind.type)) return false;
+    if (!isChannel) return row.outgoing;
+    if (row.outgoing) return true;
+    return !!row.meta?.post_id && activeGroup?.settings.own_post_edits === false
+      && (activeGroup.owner === myUsername ||
+          activeGroup.members.some(m => m.username === myUsername && m.role === "admin" && m.rights?.edit_messages === true));
+  }
+
+  let audit = $state<ChatMessage["meta"] | null>(null);
+  $effect(() => { void $activeId; audit = null; });
+  const auditDate = (at: number) => new Intl.DateTimeFormat($lang, {
+    dateStyle: "medium", timeStyle: "short",
+  }).format(at * 1000);
+
   function cancelEdit() { editTarget = null; text = ""; queueMicrotask(() => autoresize()); }
 
   /** Deleted means deleted for everyone in the chat, every kind of message
@@ -3598,6 +3685,7 @@
   }
   /** `<authorUsername>:<hash>` — same on both sides for one message. */
   function reactionKey(m: Row): string {
+    if (m.meta?.post_legacy_key) return m.meta.post_legacy_key;
     const author = m.outgoing ? ($info?.username ?? "me") : (isGroup ? m.from : ($activeChat?.id ?? "peer"));
     return `${author}:${hashContent(reactionContent(m))}`;
   }
@@ -3909,7 +3997,7 @@
 {#snippet msgFlags(m: ChatMessage)}
   {#if m.meta?.via}<span class="mflag via" title={$t(m.meta.via === "bt" ? "Came over Bluetooth, without the internet" : "Came over the local network, without the internet")}>{m.meta.via === "bt" ? "BT" : "LAN"}</span>{/if}
   {#if m.meta?.deleted}<span class="mflag del" title={$t("Deleted by the sender — kept on this device")}>{$t("deleted")}</span>{/if}
-  {#if m.meta?.edits?.length}<span class="mflag pen" role="img" aria-label={$t("edited")} title={$t("Earlier versions:") + "\n" + m.meta.edits.join("\n— ")}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>{/if}
+  {#if !isChannel && m.meta?.edits?.length}<span class="mflag pen" role="img" aria-label={$t("edited")} title={$t("Earlier versions:") + "\n" + m.meta.edits.join("\n— ")}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>{/if}
 {/snippet}
 
 {#snippet statusTick(outgoing: boolean, id?: string, m?: Row)}
@@ -3919,7 +4007,24 @@
     {@const vk = reactionKey(m)}
     {@const nv = Math.max($viewCounts[$activeChat?.id ?? ""]?.[vk] ?? 0, $channelStats[$activeChat?.id ?? ""]?.[vk]?.n ?? 0)}
     <span class="pm-views"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>{nv}</span>
-    {#if activeGroup?.settings?.sign_messages && m.from}<span class="pm-sign">{$peerCards[m.from]?.display_name || m.from},</span>{/if}
+    {#if activeGroup?.settings.sign_messages && m.from}
+      <span class="pm-sign">
+        {#if activeGroup.settings.show_authors}
+          <button class="signature-link" onclick={() => openProfile(m.from === "me" ? myUsername : m.from)}>{$peerCards[m.from]?.display_name || (m.from === "me" ? myUsername : m.from)}</button>
+        {:else}{$peerCards[m.from]?.display_name || (m.from === "me" ? myUsername : m.from)}{/if}
+        {#if m.meta?.editor_signatures?.length}
+          · {$t("edited")}
+          {#each m.meta.editor_signatures as editor (editor)}
+            {#if activeGroup.settings.show_authors}<button class="signature-link" onclick={() => openProfile(editor)}>{$peerCards[editor]?.display_name || editor}</button>
+            {:else}<span>{$peerCards[editor]?.display_name || editor}</span>{/if}
+          {/each}
+        {/if}
+      </span>
+    {/if}
+    {#if m.meta?.edit_audit?.some(e => Date.now() - e.at * 1000 < 86_400_000)}
+      <button type="button" class="edit-audit" title={$t("Edit details")} aria-label={$t("Edit details")} onclick={() => audit = m.meta ?? null}>{$t("edited")}</button>
+
+    {/if}
   {/if}
   {#if outgoing}
     {@const rd = id !== undefined && (seenIds.has(id) || answeredIds.has(id))}
@@ -4233,12 +4338,14 @@
       {#key th.root.id}
       <ThreadPanel
         title={th.kind === "comments" ? $t("Comments") : $t("Thread")}
-        rootAuthor={th.root.outgoing ? $t("You") : (isGroup ? th.root.from : $activeChat.name)}
+        rootAuthor={th.linked?.author ?? (th.root.outgoing ? $t("You") : (isGroup ? th.root.from : $activeChat.name))}
         rootText={snippetOf(th.root)}
         rootTime={th.root.time}
         items={threadItems}
         canWrite={$activeChat.live && (th.kind === "replies" ? canPost : commentsAllowed)}
         onSend={sendThread}
+        startFull={!!th.linked}
+        onRootJump={th.linked ? backToPost : undefined}
         onClose={() => (thread = null)}
         onJump={th.kind === "replies" ? (id) => window.dispatchEvent(new CustomEvent("aqua:jump", { detail: id })) : undefined}
         asChoices={asChoices.map((g) => ({ id: g.id, title: g.title, gradient: g.gradient }))}
@@ -5116,9 +5223,12 @@
           {@const bp = row.kind.content.saved_at}
           {@render item(icons.bluetooth, $t("Send via Bluetooth"), () => { closeMenu(); btSheet.set([bp]); })}
         {/if}
+        {#if $processing.translation && !protectedChat && textOf(row)}
+          {@render item(icons.globe, $t("Translate on server"), () => translateRow(row))}
+        {/if}
         {#if canCopy}{@render item(icons.textSel, $t("Select text"), () => selectRowText(row))}{/if}
         {#if compact && canDel}{@render item(icons.trash, $t("Delete"), () => deleteRow(row), true)}{/if}
-        {#if row.outgoing && (row.kind.type === "text" || row.kind.type === "reply")}
+        {#if mayEditRow(row)}
           {@render item(icons.edit, $t("Edit"), () => startEdit(row))}
         {/if}
         {#if pinnedId($activeChat?.id ?? "") === row.id}
@@ -5127,6 +5237,13 @@
           {@render item(icons.pin, $t("Pin"), () => pinRow(row))}
         {/if}
         {@render item(icons.select, $t("Select"), () => { startSelection(row); closeMenu(); })}
+        {#if row.at || row.time}
+          <div class="ctx-meta"><span>{row.at ? auditDate(row.at) : row.time}</span>
+            {#if row.meta?.edit_audit?.some(e => Date.now() - e.at * 1000 < 86_400_000)}
+              <button class="edit-audit" onclick={() => { audit = row.meta ?? null; closeMenu(); }}>{$t("Edit details")}</button>
+            {/if}
+          </div>
+        {/if}
         </div>
         <!-- The everyday four as one row of icons (Telegram / AyuGram). -->
         {#if !compact}
@@ -5649,7 +5766,38 @@
   </form>
 </dialog>
 
+{#if (audit && audit.edit_audit?.length && isAdmin(activeGroup, myUsername)) || translation !== null}
+  <div class="audit-shade">
+    <button class="audit-dismiss" aria-label={$t("Close")} onclick={() => { audit = null; translation = null; }}></button>
+    <section class="audit-card" role="dialog" aria-modal="true" aria-label={$t(translation !== null ? "Translation" : "Edit details")} tabindex="-1"
+      onkeydown={e => { if (e.key === "Escape") { audit = null; translation = null; } }}>
+      <header><strong>{$t(translation !== null ? "Translation" : "Edit details")}</strong><button aria-label={$t("Close")} onclick={() => { audit = null; translation = null; }}>×</button></header>
+      {#if translation !== null}
+        <div class="audit-entry"><p>{translation}</p></div>
+      {:else}
+      {#each [...(audit?.edit_audit ?? [])].reverse().filter(e => Date.now() - e.at * 1000 < 86_400_000) as edit, i (i)}
+        <div class="audit-entry"><span>@{edit.editor} · {auditDate(edit.at)}</span><p>{edit.previous}</p></div>
+      {/each}
+      {/if}
+    </section>
+  </div>
+{/if}
+
 <style>
+  .ctx-meta { border-top: 1px solid var(--border); margin-top: 4px; padding: 7px 12px 3px; color: var(--fg-muted); font-size: 11px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; }
+
+  .signature-link, button.edit-audit { border: 0; background: transparent; padding: 0; color: inherit; font: inherit; cursor: pointer; }
+  .signature-link:hover, button.edit-audit:hover { text-decoration: underline; }
+  .edit-audit { color: var(--fg-muted); font-size: 11px; }
+  .audit-shade { position: fixed; inset: 0; display: grid; place-items: center; z-index: 400; padding: 16px; }
+  .audit-dismiss { position: absolute; inset: 0; background: #0007; border: 0; cursor: default; }
+  .audit-card { position: relative; background: var(--bg-surface); width: min(400px, 100%); max-height: min(68vh, 540px); overflow: auto; color: var(--fg); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow-lift); }
+  .audit-card header { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .audit-card header button { border: 0; background: transparent; color: inherit; font-size: 20px; cursor: pointer; }
+  .audit-entry { padding: 10px 16px; }
+  .audit-entry span { font-size: 12px; color: var(--fg-muted); }
+  .audit-entry p { margin: 4px 0; user-select: text; white-space: pre-wrap; overflow-wrap: anywhere; }
+
   .post-foot { display: flex; align-items: center; gap: 8px; margin-top: 3px; }
   .post-foot.out { align-self: flex-end; }
   .post-foot .thread-chip { margin-top: 0; }
