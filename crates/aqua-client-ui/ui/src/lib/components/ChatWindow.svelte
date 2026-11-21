@@ -4018,23 +4018,32 @@
     {@const vk = reactionKey(m)}
     {@const nv = Math.max($viewCounts[$activeChat?.id ?? ""]?.[vk] ?? 0, $channelStats[$activeChat?.id ?? ""]?.[vk]?.n ?? 0)}
     <span class="pm-views"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>{nv}</span>
-    {#if activeGroup?.settings.sign_messages && m.from}
+    {@const signed = activeGroup?.settings.sign_messages && m.from}
+    {@const editors = m.meta?.editor_signatures ?? []}
+    {@const details = isAdmin(activeGroup, myUsername) && m.meta?.edit_audit?.some(e => Date.now() - e.at * 1000 < 86_400_000)}
+    {#if signed || details}
       <span class="pm-sign">
-        {#if activeGroup.settings.show_authors}
-          <button class="signature-link" onclick={() => openProfile(m.from === "me" ? myUsername : m.from)}>{$peerCards[m.from]?.display_name || (m.from === "me" ? myUsername : m.from)}</button>
-        {:else}{$peerCards[m.from]?.display_name || (m.from === "me" ? myUsername : m.from)}{/if}
-        {#if m.meta?.editor_signatures?.length}
-          · {$t("edited")}
-          {#each m.meta.editor_signatures as editor (editor)}
-            {#if activeGroup.settings.show_authors}<button class="signature-link" onclick={() => openProfile(editor)}>{$peerCards[editor]?.display_name || editor}</button>
-            {:else}<span>{$peerCards[editor]?.display_name || editor}</span>{/if}
+        {#if signed}
+          {@const account = m.from === "me" ? myUsername : m.from}
+          {@const name = $peerCards[account]?.display_name || account}
+          {#if activeGroup?.settings.show_authors}
+            <button class="signature-link signature-name" title={name} onclick={() => openProfile(account)}>{name}</button>
+          {:else}<span class="signature-name" title={name}>{name}</span>{/if}
+          {#if editors.length || details}·{/if}
+        {/if}
+        {#if details}
+          <button type="button" class="edit-audit" title={$t("Edit details")} aria-label={$t("Edit details")} onclick={() => audit = m.meta ?? null}>{$t("edited")}</button>
+        {:else if signed && editors.length}
+          {$t("edited")}
+        {/if}
+        {#if signed}
+          {#each editors as editor (editor)}
+            {@const name = $peerCards[editor]?.display_name || editor}
+            {#if activeGroup?.settings.show_authors}<button class="signature-link signature-name" title={name} onclick={() => openProfile(editor)}>{name}</button>
+            {:else}<span class="signature-name" title={name}>{name}</span>{/if}
           {/each}
         {/if}
       </span>
-    {/if}
-    {#if m.meta?.edit_audit?.some(e => Date.now() - e.at * 1000 < 86_400_000)}
-      <button type="button" class="edit-audit" title={$t("Edit details")} aria-label={$t("Edit details")} onclick={() => audit = m.meta ?? null}>{$t("edited")}</button>
-
     {/if}
   {/if}
   {#if outgoing}
@@ -5250,7 +5259,7 @@
         {@render item(icons.select, $t("Select"), () => { startSelection(row); closeMenu(); })}
         {#if row.at || row.time}
           <div class="ctx-meta"><span>{row.at ? auditDate(row.at) : row.time}</span>
-            {#if row.meta?.edit_audit?.some(e => Date.now() - e.at * 1000 < 86_400_000)}
+            {#if isAdmin(activeGroup, myUsername) && row.meta?.edit_audit?.some(e => Date.now() - e.at * 1000 < 86_400_000)}
               <button class="edit-audit" onclick={() => { audit = row.meta ?? null; closeMenu(); }}>{$t("Edit details")}</button>
             {/if}
           </div>
@@ -5817,6 +5826,8 @@
   .post-foot .thread-chip { margin-top: 0; }
   .views-chip { font-size: 11.5px; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
   .pm-views, .pm-sign { order: -1; display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+  .pm-sign { min-width: 0; max-width: min(52vw, 240px); flex-wrap: wrap; }
+  .signature-name { max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pm-views { margin-right: 4px; }
   .pm-views svg { width: 13px; height: 13px; }
   .event-room { color: var(--accent); font-weight: 600; }
