@@ -241,7 +241,10 @@ async fn send_inner(app: &AppHandle, addr: &str, payload: &str, own: bool) -> Re
         };
         let (session, initial) = Session::start_as_initiator(&identity, &bundle, payload.as_bytes())
             .map_err(|e| format!("start_as_initiator: {e}"))?;
-        if !transport.map(|t| t.send_initial(addr, &initial).is_ok()).unwrap_or(false) {
+        let accepted = transport.map(|t| t.send_initial(addr, &initial).is_ok()).unwrap_or(false);
+        // A disconnected relay can accept the greeting into its resend queue.
+        // Nearby discovery also needs the greeting to open this QR session.
+        if !accepted || crate::mesh::relay_down() {
             crate::mesh::queue_initial(app, addr, &initial);
         }
         let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
