@@ -217,7 +217,9 @@ fn remember(username: &str, s: Option<u8>, at: Instant) {
 
 /// Files went by another way (disk short, an age limit, "clear"): count again on next use.
 pub fn invalidate() {
-    *USAGE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    let mut usage = USAGE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    usage.by_owner = None;
+    usage.generation = usage.generation.wrapping_add(1);
 }
 
 /// The caller: (quota key, level). Guests share `GUESTS`.
@@ -238,18 +240,42 @@ pub fn files_limit(q: &Quotas, key: &str, t: Tier) -> u64 {
 
 /// Bytes of chat files per owner, kept in step with uploads and rebuilt by
 /// the hourly pass.
-static USAGE: Mutex<Option<HashMap<String, u64>>> = Mutex::new(None);
+struct Usage {
+    by_owner: Option<HashMap<String, u64>>,
+    generation: u64,
+}
+static USAGE: Mutex<Usage> = Mutex::new(Usage { by_owner: None, generation: 0 });
 
 pub fn used(state: &AppState, key: &str) -> u64 {
-    let mut g = USAGE.lock().unwrap_or_else(|e| e.into_inner());
-    let m = g.get_or_insert_with(|| state.blobs.usage_by_owner());
-    m.get(key).copied().unwrap_or(0)
+    usage_snapshot(state, key).0
 }
 
-pub fn add(key: &str, bytes: u64) {
-    if let Some(m) = USAGE.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
-        *m.entry(key.to_string()).or_insert(0) += bytes;
+pub fn usage_snapshot(state: &AppState, key: &str) -> (u64, u64) {
+    let mut usage = USAGE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let used = usage.by_owner.get_or_insert_with(|| state.blobs.usage_by_owner()).get(key).copied().unwrap_or(0);
+    (used, usage.generation)
+}
+
+pub fn add(key: &str, bytes: u64, generation: u64) {
+    let mut usage = USAGE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if usage.generation == generation {
+        if let Some(by_owner) = &mut usage.by_owner {
+            let used = by_owner.entry(key.to_owned()).or_default();
+            *used = used.saturating_add(bytes);
+        }
+    } else {
+        // A rescan during the write may have already seen the new file.
+        usage.by_owner = None;
+        usage.generation = usage.generation.wrapping_add(1);
     }
+}
+
+pub fn lock_upload(owner: &str) -> std::sync::MutexGuard<'static, ()> {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    static LOCKS: [Mutex<()>; 64] = [const { Mutex::new(()) }; 64];
+    let mut hash = DefaultHasher::new();
+    owner.hash(&mut hash);
+    LOCKS[hash.finish() as usize % LOCKS.len()].lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 const OVER_FILE: &str = "aqua-quota-over.json";

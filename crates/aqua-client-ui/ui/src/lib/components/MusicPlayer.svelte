@@ -107,6 +107,7 @@
   import { onMount } from "svelte";
   import { fade, scale } from "svelte/transition";
   import { t } from "../i18n";
+  import { icons } from "../icons";
   import { queue, queueIndex, nextTrack, prevTrack, type Track } from "../player";
 
   interface Props {
@@ -125,6 +126,41 @@
   let muted = $state(false);
   let rate = $state(1);
   let loop = $state(false);
+
+  let vinylEl = $state<HTMLDivElement | null>(null);
+  let spin = $state<Animation | null>(null);
+
+  $effect(() => {
+    const vinyl = vinylEl;
+    if (!vinyl) return;
+    const motion = matchMedia("(prefers-reduced-motion: reduce)");
+    let animation: Animation | null = null;
+    const reset = () => {
+      animation?.cancel();
+      animation = motion.matches ? null : vinyl.animate(
+        [{ transform: "rotate(0turn)" }, { transform: "rotate(1turn)" }],
+        { duration: 5600, iterations: Infinity },
+      );
+      if (animation) {
+        animation.pause();
+        animation.currentTime = 0;
+      }
+      spin = animation;
+    };
+    reset();
+    motion.addEventListener("change", reset);
+    return () => {
+      motion.removeEventListener("change", reset);
+      animation?.cancel();
+      spin = null;
+    };
+  });
+  $effect(() => {
+    if (!spin) return;
+    spin.updatePlaybackRate(rate);
+    if (playing) spin.play();
+    else spin.pause();
+  });
 
   // Seek-slider drag: shows the drag time, commits on release.
   let dragging = $state(false);
@@ -350,7 +386,7 @@
     <div class="mp-cover" class:playing>
       <div class="mp-glow" aria-hidden="true"></div>
       <!-- A vinyl record: the cover is its label, it turns while playing. -->
-      <div class="vinyl" aria-hidden="true">
+      <div class="vinyl" bind:this={vinylEl} aria-hidden="true">
         <div class="vinyl-label">
           {#if showCover}
             <img src={track.cover} alt="" draggable="false" onerror={() => (coverFailedFor = track.cover ?? null)} />
@@ -428,11 +464,7 @@
       </button>
 
       <button class="mp-play" onclick={toggle} aria-label={playing ? $t("Pause") : $t("Play")}>
-        {#if playing}
-          <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1.2"/><rect x="14" y="5" width="4" height="14" rx="1.2"/></svg>
-        {:else}
-          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8.5 5.6v12.8a.9.9 0 0 0 1.4.8l10-6.4a.9.9 0 0 0 0-1.6l-10-6.4a.9.9 0 0 0-1.4.8z"/></svg>
-        {/if}
+        {@html playing ? icons.pause : icons.play}
       </button>
 
       <button class="mp-btn" onclick={() => skip(10)} title={$t("Forward 10 seconds")} aria-label={$t("Forward 10 seconds")}>
@@ -486,9 +518,7 @@
           <path d="M7 22l-3-3 3-3"/><path d="M20 13v2a4 4 0 0 1-4 4H4"/>
         </svg>
       </button>
-      <button class="mp-icon" onclick={onclose} title={$t("Close player")} aria-label={$t("Close player")}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
-      </button>
+      <button class="mp-icon" onclick={onclose} title={$t("Close player")} aria-label={$t("Close player")}>{@html icons.close}</button>
     </div>
 
     <div class="mp-speed">
@@ -699,11 +729,11 @@
     background: linear-gradient(135deg, var(--accent), var(--accent-2));
     color: #06070C;
     cursor: pointer;
-    box-shadow: 0 0 0 1px var(--accent-soft), 0 8px 28px -6px var(--accent-glow), 0 0 22px -4px var(--accent-glow);
+    box-shadow: 0 5px 16px color-mix(in srgb, var(--accent) 24%, transparent);
     transition: transform 0.12s ease, box-shadow 0.2s ease;
   }
-  .mp-play svg { width: 28px; height: 28px; }
-  .mp-play:hover { transform: scale(1.05); box-shadow: 0 0 0 1px var(--accent-soft), 0 10px 34px -6px var(--accent-glow), 0 0 30px -2px var(--accent-glow); }
+  .mp-play :global(svg) { width: 28px; height: 28px; }
+  .mp-play:hover { filter: brightness(1.12); }
   .mp-play:active { transform: scale(0.97); }
 
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -723,7 +753,7 @@
     border: 1px solid transparent; background: transparent;
     color: var(--fg-muted); cursor: pointer;
   }
-  .mp-icon svg { width: 17px; height: 17px; }
+  .mp-icon :global(svg) { width: 17px; height: 17px; }
   .mp-icon:hover { color: var(--fg); background: var(--bg-hover); }
   .mp-icon.on { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-soft); }
   .mp-vol {
@@ -804,9 +834,7 @@
       radial-gradient(circle, transparent 0 31%, color-mix(in srgb, var(--bg-void) 92%, var(--fg)) 31.5% 33%, transparent 33.5%),
       repeating-radial-gradient(circle, color-mix(in srgb, var(--bg-void) 88%, var(--fg)) 0 1.2px, var(--bg-void) 1.2px 3px);
     box-shadow: 0 18px 40px -16px rgba(0, 0, 0, 0.85), inset 0 0 0 2px color-mix(in srgb, var(--bg-void) 70%, var(--fg));
-    animation: mp-spin 4.5s linear infinite; animation-play-state: paused;
   }
-  .mp-cover.playing .vinyl { animation-play-state: running; }
   .vinyl-label { position: absolute; inset: 22%; border-radius: 50%; overflow: hidden; box-shadow: 0 0 0 3px color-mix(in srgb, var(--bg-void) 80%, var(--fg)); }
   .mp-cover .vinyl-label img { width: 100%; height: 100%; object-fit: cover; border: none; border-radius: 0; display: block; }
   .vinyl-blank { width: 100%; height: 100%; display: grid; place-items: center; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: var(--bg-void); }
@@ -815,5 +843,4 @@
   /* Light on the disc stays still while it turns. */
   .vinyl-sheen { position: absolute; inset: 0; border-radius: 50%; pointer-events: none;
     background: conic-gradient(from 30deg, transparent 0 8%, color-mix(in srgb, var(--fg) 10%, transparent) 12%, transparent 18% 55%, color-mix(in srgb, var(--fg) 7%, transparent) 61%, transparent 67%); }
-  @media (prefers-reduced-motion: reduce) { .vinyl { animation: none; } }
 </style>

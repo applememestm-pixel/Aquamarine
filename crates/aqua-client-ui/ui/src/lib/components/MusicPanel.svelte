@@ -192,10 +192,10 @@
   </div>
 {/snippet}
 
-<aside class="panel music">
+<section class="panel music" aria-label={$t("Music")}>
   <div class="head">
     {#if stack.length > 1}
-      <button class="ic-btn" onclick={back} aria-label={$t("Back")}><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
+      <button class="ic-btn" onclick={back} aria-label={$t("Back")}>{@html icons.back}</button>
     {/if}
     <h2>{$t("Music")}</h2>
     {#if $musicSources.length > 1}
@@ -219,7 +219,7 @@
 
   {#if !$musicOn}
     <div class="empty">
-      <div class="big">🎵</div>
+      <div class="big" aria-hidden="true">{@html icons.music}</div>
       <p>{$t("Music from Navidrome: listen, download, send tracks to chats and listen together.")}</p>
       <button class="primary" onclick={() => settings.update((s) => ({ ...s, navidrome: true }))}>{$t("Turn on")}</button>
     </div>
@@ -227,30 +227,30 @@
     {@render albumLoading()}
   {:else if !ready}
     <div class="empty">
-      <div class="big">🎵</div>
+      <div class="big" aria-hidden="true">{@html icons.music}</div>
       <p>{$t("No music here yet: this server has no Navidrome, and yours isn't connected.")}</p>
       <button class="primary" onclick={() => openSettings("music")}>{$t("Connect your Navidrome")}</button>
     </div>
   {:else}
     <div class="search">
-      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <span class="search-icon" aria-hidden="true">{@html icons.search}</span>
       <input bind:value={q} oninput={onQuery} placeholder={$t("Songs, albums, artists")} spellcheck="false" />
-      {#if q}<button class="x" onclick={() => { q = ""; onQuery(); }} aria-label={$t("Clear")}>×</button>{/if}
+      {#if q}<button class="ic-btn clear" onclick={() => { q = ""; onQuery(); }} aria-label={$t("Clear")} title={$t("Clear")}>{@html icons.close}</button>{/if}
     </div>
 
     {#if np}
       <div class="np">
         <button class="np-main" onclick={expandPlayer}>
-          {#if np.cover}<img src={np.cover} alt="" class="ok" />{:else}<span class="ph">♪</span>{/if}
+          {#if np.cover}<img src={np.cover} alt="" class="ok" />{:else}<span class="ph" aria-hidden="true">{@html icons.music}</span>{/if}
           <span class="np-t"><b>{np.title}</b><small>{np.nd?.artist ?? ""}</small></span>
         </button>
         <button class="ic-btn" class:on={$repeatAll} onclick={() => repeatAll.update((v) => !v)} title={$t("Repeat")} aria-label={$t("Repeat")}>
-          <svg viewBox="0 0 24 24"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 2l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3"/></svg>
         </button>
         {#if $following}
-          <button class="lt on" onclick={leaveListening}>👥 {$t("Leave")}</button>
+          <button class="ic-btn lt on" onclick={leaveListening} title={$t("Leave")} aria-label={$t("Leave")}>{@html icons.contacts}</button>
         {:else}
-          <button class="lt" class:on={!!$hosting} onclick={together} title={$t("Listen together")}>👥 {$hosting ? $t("Stop") : $t("Together")}</button>
+          <button class="ic-btn lt" class:on={!!$hosting} onclick={together} title={$t($hosting ? "Stop" : "Listen together")} aria-label={$t($hosting ? "Stop" : "Listen together")} aria-pressed={!!$hosting}>{@html icons.contacts}</button>
         {/if}
       </div>
       {#if $following}<div class="lt-note">{$t("Listening together with @{h}", { h: $following.host })}</div>{/if}
@@ -263,8 +263,8 @@
           <div class="hero-t"><h3>{head.title}</h3><small>{head.sub}</small>
             {#if songs.length}
               <div class="hero-acts">
-                <button class="primary" onclick={() => playSongs(songs, 0)}>▶ {$t("Play")}</button>
-                <button onclick={() => shuffleSongs(songs)}>⤮ {$t("Shuffle")}</button>
+                <button class="ic-btn action primary" title={$t("Play")} aria-label={$t("Play")} onclick={() => playSongs(songs, 0)}>{@html icons.play}</button>
+                <button class="ic-btn action" title={$t("Shuffle")} aria-label={$t("Shuffle")} onclick={() => shuffleSongs(songs)}>{@html icons.shuffle}</button>
               </div>
             {/if}
           </div>
@@ -280,8 +280,8 @@
 
       {#if view.kind === "home"}
         <div class="quick">
-          <button onclick={async () => { try { await shuffleSongs(await randomSongs(src, 60)); } catch (e) { showToast(String(e)); } }}>⤮ {$t("Random")}</button>
-          <button onclick={() => push({ kind: "starred" })}>★ {$t("Favourites")}</button>
+          <button class="ic-btn action" title={$t("Random")} aria-label={$t("Random")} onclick={async () => { try { await shuffleSongs(await randomSongs(src, 60)); } catch (e) { showToast(String(e)); } }}>{@html icons.shuffle}</button>
+          <button class="ic-btn action" title={$t("Favourites")} aria-label={$t("Favourites")} onclick={() => push({ kind: "starred" })}>{@html icons.star}</button>
         </div>
       {/if}
 
@@ -347,7 +347,7 @@
       {/if}
     </div>
   {/if}
-</aside>
+</section>
 
 {#snippet songRow(s: Song, i: number, list: Song[])}
   <div class="row song" class:playing={$nowPlaying?.nd?.id === s.id}>
@@ -357,10 +357,10 @@
       <span class="dur">{fmtDuration(s.duration)}</span>
     </button>
     <button class="ic-btn" class:accent={!!sendTo} onclick={() => send(s)} title={sendTo ? $t("Send") : $t("Send to the open chat")} aria-label={$t("Send")}>
-      <svg viewBox="0 0 24 24"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></svg>
+      {@html icons.send}
     </button>
     <button class="ic-btn" onclick={() => save(s)} title={$t("Download")} aria-label={$t("Download")}>
-      <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+      {@html icons.download}
     </button>
   </div>
 {/snippet}
@@ -378,7 +378,13 @@
     border-radius: calc(10px * var(--rk, 1)); cursor: pointer; }
   .ic-btn:hover { background: var(--bg-hover); color: var(--fg); }
   .ic-btn.on, .ic-btn.accent { color: var(--accent); }
-  .ic-btn :global(svg), .search svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+  .ic-btn :global(svg), .search-icon :global(svg), .ph :global(svg) { width: 18px; height: 18px; }
+  .search-icon { display: flex; flex: none; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .ic-btn.action { width: 44px; height: 44px; border-radius: 50%; background: var(--bg-input); border: 1px solid var(--border); color: var(--fg); }
+  .ic-btn.action :global(svg) { width: 20px; height: 20px; }
+  .ic-btn.action:hover { background: var(--bg-hover); }
+  .ic-btn.action.primary:hover { filter: brightness(1.12); }
   .srcs { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: calc(10px * var(--rk, 1)); }
   .srcs button { border: none; background: transparent; color: var(--fg-muted); font: inherit; font-size: 12px; font-weight: 600; padding: 4px 9px; border-radius: calc(8px * var(--rk, 1)); cursor: pointer; }
   .srcs button.on { background: var(--accent-soft); color: var(--accent); }
@@ -391,7 +397,7 @@
   .search { margin: 0 12px 8px; display: flex; align-items: center; gap: 8px; padding: 0 10px; height: 38px;
     background: var(--bg-input, var(--bg-hover)); border: 1px solid var(--border); border-radius: calc(12px * var(--rk, 1)); color: var(--fg-muted); }
   .search input { flex: 1; min-width: 0; border: none; background: transparent; color: var(--fg); font: inherit; font-size: 14px; outline: none; }
-  .search .x { border: none; background: none; color: var(--fg-muted); font-size: 18px; cursor: pointer; }
+  .search .clear { width: 28px; height: 28px; margin-right: -6px; }
 
   .np { margin: 0 12px 8px; display: flex; align-items: center; gap: 6px; padding: 6px; border: 1px solid var(--border);
     border-radius: calc(14px * var(--rk, 1)); background: var(--bg-elev, var(--bg-hover)); }
@@ -401,24 +407,20 @@
   .np-t { min-width: 0; display: flex; flex-direction: column; }
   .np-t b, .np-t small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .np-t b { font-size: 13.5px; } .np-t small { font-size: 12px; color: var(--fg-muted); }
-  .lt { flex: none; height: 32px; padding: 0 10px; border: 1px solid var(--border); background: transparent; color: var(--fg); font: inherit; font-size: 12.5px;
-    font-weight: 600; border-radius: calc(10px * var(--rk, 1)); cursor: pointer; }
+  .lt { border: 1px solid var(--border); }
   .lt.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
   .lt-note { margin: -4px 14px 8px; font-size: 12px; color: var(--accent); }
 
-  .body { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px calc(16px + var(--sab, env(safe-area-inset-bottom, 0px))); }
+  .body { flex: 1; min-height: 0; overflow: hidden auto; padding: 0 8px calc(16px + var(--sab, env(safe-area-inset-bottom, 0px))); }
   h4 { margin: 14px 8px 6px; font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--fg-muted); }
   .quick { display: flex; gap: 6px; padding: 4px 4px 0; }
-  .quick button, .hero-acts button { flex: 1; height: 36px; border: 1px solid var(--border); background: transparent; color: var(--fg); font: inherit; font-size: 13px;
-    font-weight: 600; border-radius: calc(11px * var(--rk, 1)); cursor: pointer; }
-  .quick button:hover, .hero-acts button:hover { background: var(--bg-hover); }
   .primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)) !important; color: #061015 !important; border: none !important; }
 
   .chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 4px; }
   .chip { border: 1px solid var(--border); background: transparent; color: var(--fg); font: inherit; font-size: 13px; padding: 6px 11px; border-radius: 999px; cursor: pointer; }
   .chip:hover { border-color: var(--accent); color: var(--accent); }
 
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 10px; padding: 0 4px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 136px), 1fr)); gap: 10px; padding: 0 4px; }
   .album-loading { padding: 14px 8px; }
   .album-placeholder { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
   .album-placeholder > * { background: var(--bg-hover); border-radius: calc(8px * var(--rk, 1)); animation: album-pulse 1s ease-in-out alternate infinite; }
@@ -449,16 +451,16 @@
   .row.song.playing .rt b { color: var(--accent); }
   .dur { font-size: 12px; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
 
-  .hero { display: flex; gap: 14px; align-items: flex-end; padding: 6px 6px 4px; }
-  .hero img { width: 110px; height: 110px; flex: none; border-radius: calc(14px * var(--rk, 1));
+  .hero { display: flex; gap: clamp(12px, 2.4vw, 28px); align-items: center; padding: 12px 6px 16px; }
+  .hero img { width: clamp(80px, 24%, 160px); height: auto; aspect-ratio: 1; flex: none; border-radius: calc(14px * var(--rk, 1));
     background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 35%, transparent), color-mix(in srgb, var(--accent-2) 35%, transparent)); opacity: 1; }
   .hero-t { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }
-  .hero-t h3 { margin: 0; font-size: 18px; line-height: 1.2; }
+  .hero-t h3 { margin: 0; font-size: clamp(18px, 3vw, 32px); line-height: 1.15; overflow-wrap: anywhere; }
   .hero-t small { color: var(--fg-muted); font-size: 12.5px; }
-  .hero-acts { display: flex; gap: 6px; margin-top: 6px; }
+  .hero-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 
   .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; color: var(--fg-muted); }
-  .empty .big { font-size: 44px; }
+  .empty .big :global(svg) { width: 38px; height: 38px; }
   .empty p { margin: 0; max-width: 300px; line-height: 1.45; font-size: 14px; }
   .empty button { height: 40px; padding: 0 18px; border-radius: calc(12px * var(--rk, 1)); font: inherit; font-weight: 700; cursor: pointer; }
   .loading { display: grid; place-items: center; padding: 20px; }
@@ -466,5 +468,13 @@
   @keyframes mp-spin { to { transform: rotate(360deg); } }
   .err { margin: 10px 8px; padding: 10px 12px; border-radius: calc(12px * var(--rk, 1)); background: color-mix(in srgb, var(--danger, #FF6B81) 14%, transparent);
     color: var(--danger, #FF6B81); font-size: 13px; word-break: break-word; }
+  @media (min-width: 721px) {
+    .panel { padding-inline: clamp(12px, calc((100% - 1120px) / 2), 28vw); }
+    .head { padding-top: 20px; }
+  }
+  @media (max-width: 720px) {
+    .body { padding-bottom: calc(82px + var(--sab, env(safe-area-inset-bottom, 0px))); }
+    .row.song > .ic-btn { width: 36px; height: 40px; }
+  }
   .none { padding: 24px; text-align: center; color: var(--fg-muted); font-size: 13.5px; }
 </style>

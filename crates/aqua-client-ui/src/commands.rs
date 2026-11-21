@@ -2151,7 +2151,6 @@ async fn attach_file_fwd(
     let mut saved_local: Option<(String, String)> = None;
     if peer_id == crate::state::SAVED_MESSAGES_ID {
         let fake_cid = format!("local-{}", crate::state::uuid_like());
-        let size = bytes.len() as u64;
         // Copy the attachment into <data_dir>/saved-media/ so it (a)
         // persists even if the user moves/deletes the original, and
         // (b) is always inside read_media_bytes' allowed scope so the
@@ -5530,7 +5529,7 @@ async fn faststart(state: &State<'_, StdMutex<AppState>>, path: &std::path::Path
     bytes
 }
 
-fn blob_kind(category: Option<&str>, mime: Option<&str>, name: &str) -> &'static str {
+pub(crate) fn blob_kind(category: Option<&str>, mime: Option<&str>, name: &str) -> &'static str {
     let lower = name.to_ascii_lowercase();
     match category {
         Some("sticker") => return "sticker",

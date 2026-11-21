@@ -33,7 +33,9 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::state::{AppState, ChatBook, ChatMessage, ChatSummary, Group, MessageKind};
+use crate::state::{AppState, ChatBook, ChatMessage, ChatSummary, Group, MessageKind, SAVED_MESSAGES_ID};
+
+mod saved_media;
 
 pub const HKEYREQ_PREFIX: &str = "[hkeyreq:v1]";
 pub const HKEY_PREFIX: &str = "[hkey:v1]";
@@ -131,7 +133,10 @@ fn key_of(m: &ChatMessage, me: &str) -> String {
     let what = match &m.kind {
         // An edited message: compare by what it first said.
         MessageKind::Text { text } => m.meta.as_ref().and_then(|x| x.edits.first()).cloned().unwrap_or_else(|| text.clone()),
-        MessageKind::File { cid, .. } => format!("file:{cid}"),
+        MessageKind::File { cid, .. } => {
+            let stable = saved_media::promoted(m).map_or(cid.as_str(), |(stable, _)| stable);
+            format!("file:{stable}")
+        }
         MessageKind::DateSeparator { label } => return format!("date:{label}"),
         other => serde_json::to_string(other).unwrap_or_default(),
     };
@@ -162,7 +167,15 @@ fn hash_of(m: &ChatMessage, me: &str) -> u64 {
 fn version(book: &ChatBook, me: &str) -> u64 {
     let last = book.messages.last().map(|m| key_of(m, me)).unwrap_or_default();
     let card = serde_json::to_string(&card_of(&book.summary)).unwrap_or_default();
-    h64(format!("{}\u{1}{last}\u{1}{card}", book.messages.len()).as_bytes())
+    let mut version = format!("{}\u{1}{last}\u{1}{card}", book.messages.len());
+    if book.summary.id == SAVED_MESSAGES_ID {
+        for m in &book.messages {
+            if let Some((_, cid)) = saved_media::promoted(m) {
+                version.push_str(cid);
+            }
+        }
+    }
+    h64(version.as_bytes())
 }
 
 fn card_of(s: &ChatSummary) -> Card {
@@ -382,6 +395,7 @@ pub(crate) fn merge(ours: &mut Vec<ChatMessage>, theirs: Vec<ChatMessage>, me: &
     let mut used: HashSet<usize> = HashSet::new();
     let mut inserts: Vec<(usize, ChatMessage)> = Vec::new(); // (insert before index, message)
     let mut cursor = 0usize; // ours[..cursor] is matched up
+    let mut upgraded = 0;
     for m in theirs {
         let k = key_of(&m, me);
         let hit = at.get(k.as_str()).and_then(|v| v.iter().copied().find(|&i| !used.contains(&i) && i >= cursor))
@@ -396,6 +410,7 @@ pub(crate) fn merge(ours: &mut Vec<ChatMessage>, theirs: Vec<ChatMessage>, me: &
             Some(i) => {
                 used.insert(i);
                 if i >= cursor { cursor = i + 1; }
+                upgraded += usize::from(saved_media::apply_upgrade(&mut ours[i], &m));
             }
             None => {
                 let mut m = m;
@@ -410,7 +425,7 @@ pub(crate) fn merge(ours: &mut Vec<ChatMessage>, theirs: Vec<ChatMessage>, me: &
     }
     let n = inserts.len();
     if n == 0 {
-        return 0;
+        return upgraded;
     }
     let mut out = Vec::with_capacity(ours.len() + n);
     let mut ins = inserts.into_iter().peekable();
@@ -422,7 +437,7 @@ pub(crate) fn merge(ours: &mut Vec<ChatMessage>, theirs: Vec<ChatMessage>, me: &
     }
     out.extend(ins.map(|(_, m)| m));
     *ours = out;
-    n
+    n + upgraded
 }
 
 
@@ -435,6 +450,7 @@ pub fn start(app: &AppHandle) {
     if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
+    saved_media::start(app.clone());
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let mut last_pull = std::time::Instant::now() - Duration::from_secs(3600);
@@ -692,6 +708,28 @@ mod tests {
         let again = ours.clone();
         assert_eq!(merge(&mut ours, again, "vlad"), 0);
         assert_eq!(ours.len(), 6);
+    }
+
+    #[test]
+    fn upgraded_saved_media_keeps_its_place_and_local_copy() {
+        let (envelope, _) = aqua_core::encrypt_file_with_category(b"old image", "photo.jpg", None, None).unwrap();
+        let mut old = msg("me", "10:00", "");
+        old.kind = crate::state::classify_full(&envelope.to_message_text(), None).0;
+        let MessageKind::File { cid, saved_at, .. } = &mut old.kind else { panic!("file expected") };
+        *cid = "local-a1b2c3".into();
+        *saved_at = Some("my-copy.jpg".into());
+        let mut promoted = old.clone();
+        promoted.kind = crate::state::classify_full(&envelope.to_message_text(), None).0;
+        promoted.meta = Some(crate::state::MsgMeta { saved_local_cid: Some("local-a1b2c3".into()), ..Default::default() });
+        let mut ours = vec![old.clone(), msg("me", "10:05", "later")];
+
+        assert_eq!(hash_of(&old, "vlad"), hash_of(&promoted, "vlad"));
+        assert_eq!(merge(&mut ours, vec![promoted], "vlad"), 1);
+        assert_eq!(ours.len(), 2);
+        assert_eq!(ours[0].id, old.id);
+        assert!(matches!(&ours[0].kind, MessageKind::File { cid, saved_at, .. }
+            if *cid == envelope.cid && saved_at.as_deref() == Some("my-copy.jpg")));
+        assert_eq!(merge(&mut ours, vec![old], "vlad"), 0);
     }
 
     #[test]

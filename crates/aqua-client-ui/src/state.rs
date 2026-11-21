@@ -96,6 +96,9 @@ pub struct MsgMeta {
     pub deleted: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub edits: Vec<String>,
+    /// Stable message identity when a local-only Saved Messages file was synced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved_local_cid: Option<String>,
     /// Supergroup room (Discord-style channel) the message belongs to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub room: Option<String>,

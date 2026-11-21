@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - "android/**"
+      - "crates/aqua-client-ui/src/**"
+      - "crates/aqua-client-ui/ui/src/**"
       - ".github/workflows/android-client-check.yml"
       - ".github/workflows/release.yml"
   workflow_dispatch:

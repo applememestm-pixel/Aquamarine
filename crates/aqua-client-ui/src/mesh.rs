@@ -1166,6 +1166,15 @@ mod platform {
 mod tests {
     use super::*;
 
+    fn test_stream_pair() -> (std::net::TcpStream, std::net::TcpStream) {
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let sender = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (receiver, _) = listener.accept().unwrap();
+        sender.set_nodelay(true).unwrap();
+        receiver.set_nodelay(true).unwrap();
+        (sender, receiver)
+    }
+
     #[tokio::test]
     async fn messages_from_a_mesh_session_are_tagged() {
         assert_eq!(via_now(), None);
@@ -1255,7 +1264,7 @@ mod tests {
     }
 
     fn run(a: &T, b: &T) -> (Result<SyncReport, String>, Result<SyncReport, String>) {
-        let (mut la, mut lb) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (mut la, mut lb) = test_stream_pair();
         std::thread::scope(|sc| {
             let hb = sc.spawn(|| { let mut r = SyncReport::default(); exchange(b, &mut lb, false, &mut r).map(|_| r) });
             let mut r = SyncReport::default();
@@ -1319,7 +1328,7 @@ mod tests {
         }
         let shower = Shower(&alice, RefCell::new(Vec::new()));
         let scanner = Scanner(&bob, pass);
-        let (mut la, mut lb) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (mut la, mut lb) = test_stream_pair();
         let r = std::thread::scope(|sc| {
             let h = sc.spawn(|| { let mut r = SyncReport::default(); exchange(&shower, &mut la, false, &mut r) });
             let mut r = SyncReport::default();
@@ -1379,7 +1388,7 @@ mod tests {
         }
         // Mallory's hello carries her own key → Alice doesn't know it.
         let liar = Liar(&mallory, &b);
-        let (mut la, mut lm) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (mut la, mut lm) = test_stream_pair();
         let (r1, r2) = std::thread::scope(|sc| {
             let h = sc.spawn(|| { let mut r = SyncReport::default(); exchange(&liar, &mut lm, true, &mut r) });
             let mut r = SyncReport::default();
@@ -1419,7 +1428,7 @@ mod tests {
         let has = Has(&a, blob.clone());
         // Bob wants this file and one nobody has.
         let wants = Wants(&b, vec![cid.clone(), "0".repeat(64)], RefCell::new(Vec::new()));
-        let (mut la, mut lb) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (mut la, mut lb) = test_stream_pair();
         let (ra, rb) = std::thread::scope(|sc| {
             let h = sc.spawn(|| { let mut r = SyncReport::default(); exchange(&wants, &mut lb, false, &mut r).map(|_| r) });
             let mut r = SyncReport::default();
