@@ -843,7 +843,8 @@
     }
   }
 
-  $effect(() => { if (pickedPreview) return onBack(closePickedPreview); });
+  const pickedPreviewOpen = $derived(!!pickedPreview);
+  $effect(() => { if (pickedPreviewOpen) return onBack(closePickedPreview); });
   $effect(() => {
     if (!attachMenuOpen) {
       closePickedPreview();
@@ -5547,8 +5548,9 @@
   {/if}
   {#if pickedPreview}
     {@const preview = pickedPreview}
-    <div class="picked-preview" role="dialog" aria-modal="true" aria-label={$t(preview.video ? "Video" : "Photo")} tabindex="-1">
-      <header><button data-x onclick={closePickedPreview} aria-label={$t("Back")}>←</button>
+    <div class="picked-preview" data-own-back role="dialog" aria-modal="true" aria-label={$t(preview.video ? "Video" : "Photo")} tabindex="-1"
+      onmousedown={(event) => event.stopPropagation()}>
+      <header><button data-x data-keep-x onclick={closePickedPreview} aria-label={$t("Back")}>←</button>
         <button onclick={() => galleryToggle(preview.uri)} aria-pressed={gallerySel.includes(preview.uri)}>{$t(gallerySel.includes(preview.uri) ? "Selected" : "Select")}</button></header>
       {#if preview.video && preview.url}
         <!-- svelte-ignore a11y_media_has_caption -->
