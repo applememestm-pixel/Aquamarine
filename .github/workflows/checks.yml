@@ -35,13 +35,17 @@ jobs:
       - name: cargo audit (relay, core, client-core)
         run: cargo audit
       - name: cargo audit (app)
+        if: always()
         run: cargo audit --file crates/aqua-client-ui/Cargo.lock
       - name: cargo audit (server app)
+        if: always()
         run: cargo audit --file crates/aqua-server-app/Cargo.lock
       - uses: actions/setup-node@v4
+        if: always()
         with:
           node-version: 22
       - name: npm audit (app UI)
+        if: always()
         working-directory: crates/aqua-client-ui/ui
         run: npm audit --omit=dev --audit-level=high
 

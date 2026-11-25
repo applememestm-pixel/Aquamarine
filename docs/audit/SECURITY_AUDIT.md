@@ -13,14 +13,16 @@
 | AQUA-SEC-005 | Aquamarine | P0 | OTP | подтверждённый баг | исправлено | PASS |
 | AQUA-SEC-006 | Aquamarine | P0 | OTP / magic link | подтверждённый баг | исправлено | NOT TESTED (интеграционный) |
 | CZ-SEC-001 | CeZeOs | P0 | Sessions | подтверждённый баг | исправлено | PASS |
-| AQUA-SEC-007 | Aquamarine | P1 | Prekeys | REPORTED | открыто | — |
-| AQUA-SEC-008 | Aquamarine | P1 | E2EE client | REPORTED | открыто | — |
-| AQUA-SEC-009 | Aquamarine | P1 | Federation trust | CONFIRMED (code) | открыто | — |
-| AQUA-SEC-010 | Aquamarine | P1 | Federation cursors | REPORTED | открыто | — |
-| AQUA-SEC-011 | Aquamarine | P1 | Queues / DoS | REPORTED | открыто | — |
+| AQUA-SEC-007 | Aquamarine | P1 | Prekeys | подтверждённый баг | исправлено | PASS |
+| AQUA-SEC-008 | Aquamarine | P1 | E2EE client | CONFIRMED (code) | исправлено | PASS (vault), клиент — CI |
+| AQUA-SEC-009 | Aquamarine | P1 | Federation trust | CONFIRMED (code) | частично (повтор подписи); ключи узлов — проект | PASS (replay) |
+| AQUA-SEC-010 | Aquamarine | P1 | Federation cursors | CONFIRMED (code) | частично | PASS (unit) |
+| AQUA-SEC-011 | Aquamarine | P1 | Queues / DoS | CONFIRMED (code) | частично | PASS |
 | AQUA-SEC-012 | Aquamarine | P1 | Updates | REPORTED | открыто | — |
 | AQUA-SEC-013 | Aquamarine | P1 | Android key storage | REPORTED | открыто | — |
-| AQUA-SEC-014 | Aquamarine | P1 | CI / supply chain | REPORTED | открыто | — |
+| AQUA-SEC-014 | Aquamarine | P1 | CI / supply chain | CONFIRMED | частично | аудит работает, нашёл 14 уязвимостей |
+| AQUA-SEC-016 | Aquamarine | P1 | Dependencies | CONFIRMED (cargo audit) | открыто — нужен доступ к crates.io | — |
+| AQUA-SEC-017 | Aquamarine | P0* | Federation version gate | регрессия моего изменения, найдена при ревью | исправлено до выпуска | PASS |
 | AQUA-SEC-015 | Aquamarine | P2 | Accounts | CONFIRMED (code) | открыто | — |
 | CZ-SEC-002 | CeZeOs | P1 | Wiki | REPORTED | открыто | — |
 | CZ-SEC-003 | CeZeOs | P1 | Rate limiting / uploads | REPORTED | открыто | — |
@@ -198,3 +200,96 @@
 - тело запроса (до 32 MiB) целиком буферизуется в памяти.
 
 Порядок исправления — в [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md).
+
+
+---
+
+## Исправления P1 (после P0)
+
+### AQUA-SEC-007 — одноразовые prekeys расходовались без входа
+- **Было:** `GET /v1/bundle/:user` без токена каждый раз снимал один OPK (`local_bundle` → `opks.pop_front()`). Любой мог опустошить запас OPK любого человека.
+- **Стало:**
+  - без токена — bundle без OPK и без поиска по сети;
+  - с токеном — до 30 OPK сразу, затем один в 10 с (`OPK_BURST`/`OPK_RATE`, корзина `BotLimits`);
+  - приложение отправляет токен при запросе bundle.
+- **Тесты:** `full_authenticated_e2e_conversation` (анонимный запрос → без OPK), `two_relays_act_as_one` (анонимный запрос через сеть → 404, с токеном → bundle), проверка OPK после «перезапуска».
+- **Остаточный риск:** зарегистрированный аккаунт может расходовать по одному OPK в 10 с на каждого человека. Ограничения по паре вызывающий→цель нет.
+
+### AQUA-SEC-008 — OPK сгорал до проверки первого сообщения; replay после перезапуска
+- **Было:**
+  - `take_one_time_prekey` удалял OPK до `Session::accept_initial`: подделанное или битое первое сообщение сжигало ключ.
+  - Набор уже расшифрованных первых сообщений жил только в памяти: после перезапуска то же первое сообщение снова открывало сессию.
+- **Стало:**
+  - `Vault::peek_one_time_prekey`, удаление — после успеха;
+  - хеши первых сообщений, открывших сессию (последние 2048), хранятся в vault (`seen-initials`, запись зашифрована).
+- **Тесты:** `vault::tests` (peek не удаляет). Код клиента локально не собирается (нет `ort`), его проверяет CI.
+
+### AQUA-SEC-009 (часть) — повтор федеративных запросов
+- **Было:** подпись `x-aqua-fed` действовала все ±5 минут сколько угодно раз.
+- **Стало:**
+  - приёмник принимает каждую подпись один раз (`first_use`);
+  - отправитель делает метку времени строго возрастающей: одинаковые запросы в одну миллисекунду раньше давали одинаковую подпись, и первая версия защиты от повтора уронила тест `changes_are_pushed_to_peers`.
+  - Совместимо в обе стороны.
+- **Тесты:** `cursor_tests::a_signature_is_taken_once`, все 5 тестов федерации.
+- **Не сделано:**
+  - собственные ключи узлов вместо общего секрета;
+  - получатель в подписи.
+  - Это смена модели доверия: кто авторитетен для аккаунта, как узлы узнают ключи друг друга. Без неё ключи узлов не отнимают у держателя секрета возможность переписать любой аккаунт. Нужен проект — в FEDERATION_SECURITY (будет создан) — и согласование с владельцем.
+
+### AQUA-SEC-010 (часть) — курсоры репликации
+- **Стало:**
+  - после полной страницы курсор встаёт на её последнюю метку минус 1: записи с той же меткой читаются повторно, применение идемпотентно;
+  - при отсутствии прогресса курсор идёт дальше;
+  - курсор истории и бэкапов не сдвигается за запись, которую не удалось получить;
+  - бэкапы читаются постранично (раньше только первые 200).
+- **Тест:** `cursor_tests::full_pages_restart_at_their_last_timestamp`.
+- **Открыто:**
+  - записи, полученные от третьего узла, сохраняют его метку и могут оказаться позади курсора соседа — нужны монотонные номера событий за флагом caps;
+  - курсоры живут только в памяти;
+  - нет tombstone удалений.
+
+### AQUA-SEC-011 (часть) — очереди
+- **Стало:**
+  - канал WebSocket ограничен (`WS_QUEUE` = 1024, `try_send`). Отстающее соединение ничего больше не получает, конверт уходит в дисковый inbox;
+  - не больше 4 соединений на адрес устройства: новое закрывает самое старое;
+  - inbox в памяти (запасной, при ошибке диска) ограничен 1000;
+  - `deliver_local` и `local_bundle` не создают запись для неизвестного имени;
+  - `BotLimits` чистится.
+- **Тест:** `connections_per_address_are_capped`.
+- **Открыто:**
+  - нет лимита на дисковый inbox на получателя (есть TTL 30 дней);
+  - `fedtunnel` queue/sides;
+  - `max_message_size` WebSocket — значение tungstenite по умолчанию (64 MiB), явно не уменьшено: не проверено, какие размеры конвертов шлют клиенты.
+
+### AQUA-SEC-014 (часть) — CI
+- **Стало:**
+  - `push` на main;
+  - `permissions: contents: read`;
+  - задача `dependency audit` (cargo audit ×3, npm audit), пока рекомендательная;
+  - `.github/dependabot.yml`.
+- **Не сделано:**
+  - закрепление actions по SHA — SHA из этой сессии не узнать, это сделают обновления dependabot;
+  - branch protection — настраивает владелец.
+
+### AQUA-SEC-016 — уязвимые зависимости (cargo audit, прогон CI 45614469363)
+Корневой `Cargo.lock` — 14 уязвимостей:
+
+| Пакет | Версия | Суть | Исправлено в |
+|---|---|---|---|
+| lettre | 0.11.23 | Внедрение SMTP-команд (нет dot-stuffing), подмена ответа STARTTLS (MITM), письмо уходит на другой адрес при quoted local part, паники и рост памяти (RUSTSEC-2026-0560…0565) | 0.11.24 |
+| rustls | 0.23.45 | Секреты TLS в `Debug`, понижение до классического обмена ключами, ECH, brotli 1 GiB (RUSTSEC-2026-0346…0349) | 0.23.46 |
+| rustls-webpki / webpki-roots | 0.103.15 / 1.0.9 | Приём недоверенных промежуточных сертификатов (RUSTSEC-2026-0381/0382) | 0.103.16 / 1.0.10 |
+| url | 2.5.8 | Переполнение стека в `Url::origin()` (RUSTSEC-2026-0592) | 2.5.9 |
+| libsqlite3-sys | 0.30.1 | CVE SQLite (RUSTSEC-2026-0459, 6.8) | 0.39 — нужно обновить rusqlite до новой мажорной версии |
+| tokio / rustix | 1.53.1 / 1.1.5 | unsound (RUSTSEC-2026-0386/0486) | 1.53.3 / 1.1.6 |
+
+- Всё, кроме libsqlite3-sys, закрывается обновлением lock-файла в пределах semver (`cargo update -p …`).
+- Отсюда это не сделать: crates.io закрыт, а контрольные суммы пакетов в lock-файле нельзя подставить вручную.
+- Это сделает dependabot после слияния `.github/dependabot.yml` в main, или владелец командой `cargo update -p lettre -p rustls -p rustls-webpki -p webpki-roots -p url -p tokio -p rustix`.
+- `Cargo.lock` клиента и панели аудит не дошёл проверить: шаг упал на первом файле. Нужно добавить `if: always()`.
+
+### AQUA-SEC-017 — моя регрессия: минимальная версия резала федерацию
+- **Найдено при ревью собственного диффа.** `MIN_VERSION` = 1.21.0-23 применялся и к серверам: `fed::modern`, `check_registry`, `fedtunnel`. Сеть перестала бы говорить с необновлёнными узлами, хотя в PR написано обратное.
+- **Исправление:** `MIN_RELAY` = 1.2.0 и `relay_version_ok` для серверов.
+- **Тест:** `versions_before_the_minimum_are_refused` проверяет обе функции.
+- До выпуска не доходило.
