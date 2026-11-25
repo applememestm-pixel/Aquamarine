@@ -5,13 +5,49 @@ name: checks
 on:
   pull_request:
     branches: [main]
+  # AQUA-SEC-014: also after a merge, so main itself is checked (a merge of
+  # two green PRs can still break it).
+  push:
+    branches: [main]
   workflow_dispatch:
+
+# Read-only token: these jobs only build and test.
+permissions:
+  contents: read
 
 concurrency:
   group: checks-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # Known vulnerabilities in dependencies (RustSec, npm) in all three
+  # Cargo.lock files and the UI. A failure fails the PR (REV2: no
+  # continue-on-error); "unmaintained" warnings don't fail cargo audit.
+  audit:
+    name: dependency audit
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: cargo audit (relay, core, client-core)
+        run: cargo audit
+      - name: cargo audit (app)
+        if: always()
+        run: cargo audit --file crates/aqua-client-ui/Cargo.lock
+      - name: cargo audit (server app)
+        if: always()
+        run: cargo audit --file crates/aqua-server-app/Cargo.lock
+      - uses: actions/setup-node@v4
+        if: always()
+        with:
+          node-version: 22
+      - name: npm audit (app UI)
+        if: always()
+        working-directory: crates/aqua-client-ui/ui
+        run: npm audit --omit=dev --audit-level=high
+
   rust:
     name: cargo test
     runs-on: ubuntu-22.04
@@ -84,6 +120,7 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npx svelte-check --threshold error
+          npm run test:unit
           npm run build
       # The built UI, for looking at it with a mocked Tauri (Playwright) from
       # a session where npm isn't reachable.

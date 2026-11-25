@@ -477,6 +477,66 @@ impl Vault {
 
     /// Look up and remove a one-time prekey by id. Removal is atomic;
     /// the same id cannot be handed out twice.
+    /// Read a one-time prekey without using it up: the caller deletes it
+    /// with [`Self::take_one_time_prekey`] only once the first message made
+    /// with it decrypted (AQUA-SEC-008: taken first, a forged or broken first
+    /// message burned it, and the real one then couldn't be read).
+    pub fn peek_one_time_prekey(&self, id: PreKeyId) -> Result<Option<OneTimePreKey>, VaultError> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT nonce, ciphertext FROM one_time_prekeys WHERE id = ?1",
+                params![id],
+                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            )
+            .optional()?;
+        match row {
+            None => Ok(None),
+            Some((nonce, ct)) => {
+                let pt = self.unseal(&opk_aad(id), &nonce, &ct)?;
+                Ok(Some(bincode::deserialize(&pt)?))
+            }
+        }
+    }
+
+    /// Whether a first message with this hash already opened a session
+    /// here ([`Self::commit_initial`] keeps the last 2048).
+    pub fn initial_seen(&self, hash: &[u8; 16]) -> bool {
+        self.get_record(INITIALS_KEY).ok().flatten().is_some_and(|b| b.chunks_exact(16).any(|c| c == hash))
+    }
+
+    /// Everything a first message changes, in one transaction (REV-004):
+    /// the new session, the one-time prekey it used up, and its hash in the
+    /// replay list. On any error nothing is changed — the OPK stays, the
+    /// message isn't marked, so a copy of it can still open the session.
+    /// `Ok(false)`: this first message was already taken (a parallel copy).
+    pub fn commit_initial(
+        &self,
+        peer_id: &str,
+        session: &Session,
+        used_opk: Option<PreKeyId>,
+        hash: &[u8; 16],
+    ) -> Result<bool, VaultError> {
+        let tx = self.conn.unchecked_transaction()?;
+        let mut seen = self.get_record(INITIALS_KEY)?.unwrap_or_default();
+        seen.truncate(seen.len() / 16 * 16);
+        if seen.chunks_exact(16).any(|c| c == hash) {
+            return Ok(false);
+        }
+        self.save_session(peer_id, session)?;
+        if let Some(id) = used_opk {
+            tx.execute("DELETE FROM one_time_prekeys WHERE id = ?1", params![id])?;
+        }
+        seen.extend_from_slice(hash);
+        let over = seen.len().saturating_sub(INITIALS_KEPT * 16);
+        if over > 0 {
+            seen.drain(..over);
+        }
+        self.put_record(INITIALS_KEY, &seen)?;
+        tx.commit()?;
+        Ok(true)
+    }
+
     pub fn take_one_time_prekey(
         &self,
         id: PreKeyId,
@@ -623,6 +683,12 @@ fn spk_aad(id: PreKeyId) -> Vec<u8> {
     out
 }
 
+/// Record with the hashes of first messages that opened a session (16
+/// bytes each, oldest first). Same key and format the app used in
+/// 1.21.0-23 before this moved here.
+const INITIALS_KEY: &str = "seen-initials";
+const INITIALS_KEPT: usize = 2048;
+
 fn opk_aad(id: PreKeyId) -> Vec<u8> {
     let mut out = Vec::with_capacity(4 + 4);
     out.extend_from_slice(b"opk:");
@@ -702,11 +768,47 @@ mod tests {
         vault.save_one_time_prekey(&opk).unwrap();
         assert_eq!(vault.opk_count().unwrap(), 1);
 
+        // Peeking leaves it there.
+        assert!(vault.peek_one_time_prekey(7).unwrap().is_some());
+        assert!(vault.peek_one_time_prekey(7).unwrap().is_some());
         let taken = vault.take_one_time_prekey(7).unwrap().unwrap();
         assert_eq!(taken.id, 7);
         assert_eq!(vault.opk_count().unwrap(), 0);
         // Second take returns None.
         assert!(vault.take_one_time_prekey(7).unwrap().is_none());
+    }
+
+    /// REV-004: a first message's session, used-up prekey and replay mark
+    /// are written together; a failure leaves all three as they were, and a
+    /// second commit of the same message is refused.
+    #[test]
+    fn commit_initial_is_all_or_nothing() {
+        let alice = IdentityKeyPair::generate();
+        let bob = IdentityKeyPair::generate();
+        let bob_spk = SignedPreKey::generate(1, &bob);
+        let bob_opk = OneTimePreKey::generate(3);
+        let vault = Vault::open_in_memory(fresh_key()).unwrap();
+        vault.save_one_time_prekey(&bob_opk).unwrap();
+        let bundle = PreKeyBundle { identity: bob.public(), signed_prekey: bob_spk.public(), one_time_prekey: Some(bob_opk.public()) };
+        let (_a, initial) = Session::start_as_initiator(&alice, &bundle, b"hi").unwrap();
+        let opk = vault.peek_one_time_prekey(3).unwrap();
+        let (sess, _) = Session::accept_initial(&bob, bob_spk, opk, &initial).unwrap();
+        let hash = [7u8; 16];
+
+        // A failing write (the sessions table is gone) changes nothing.
+        vault.conn.execute_batch("ALTER TABLE sessions RENAME TO sessions_x").unwrap();
+        assert!(vault.commit_initial("alice", &sess, Some(3), &hash).is_err());
+        vault.conn.execute_batch("ALTER TABLE sessions_x RENAME TO sessions").unwrap();
+        assert_eq!(vault.opk_count().unwrap(), 1, "the prekey stays");
+        assert!(!vault.initial_seen(&hash), "not marked");
+        assert!(vault.load_session("alice").unwrap().is_none());
+
+        // Then it goes through once.
+        assert!(vault.commit_initial("alice", &sess, Some(3), &hash).unwrap());
+        assert_eq!(vault.opk_count().unwrap(), 0);
+        assert!(vault.initial_seen(&hash));
+        assert!(vault.load_session("alice").unwrap().is_some());
+        assert!(!vault.commit_initial("alice", &sess, Some(3), &hash).unwrap(), "a second copy is refused");
     }
 
     #[test]

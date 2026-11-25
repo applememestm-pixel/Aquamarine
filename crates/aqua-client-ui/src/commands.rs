@@ -379,6 +379,15 @@ pub async fn connect_to_server(
     transport.upload_bundle(&bundle).await
         .map_err(|e| format!("upload_bundle: {e}"))?;
     let transport = Arc::new(transport);
+    // Seal the account as it is now (key, password, devices…), in the
+    // background: relays of the network then accept a change of those only
+    // with a device's seal (1.21.0-23). An older relay just says 404.
+    {
+        let t = transport.clone();
+        tokio::spawn(async move {
+            if let Err(e) = t.reseal().await { tracing::debug!(%e, "account seal"); }
+        });
+    }
     let mine = Arc::downgrade(&transport);
 
     // Publish state and persist the hints so a later launch auto-reconnects.
@@ -4914,16 +4923,26 @@ async fn on_incoming_initial(
         return;
     }
 
-    // Consume SPK + optional OPK from the vault under the lock.
+    // SPK + optional OPK from the vault under the lock. The OPK is only read
+    // here; it is used up together with saving the session (REV-004).
+    // Reserve this first message first (REV-005): copies from the relay and
+    // Bluetooth / Wi-Fi are handled at once, and both passed the check.
+    let hash = crate::multidev::envelope_hash(&message.ciphertext);
+    let Some(_reserved) = crate::multidev::InitialGuard::reserve(hash) else { return };
     let (identity_clone, spk, opk) = {
         let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // The same first message again after a restart (the in-memory set
+        // is empty then): taken again it would replace the session.
+        if s.vault.initial_seen(&hash) {
+            return;
+        }
         let identity = s.identity.clone();
         let spk = match s.vault.latest_signed_prekey() {
             Ok(Some((spk, _))) => spk,
             _ => { tracing::warn!("no SPK for incoming initial"); return }
         };
         let opk = message.used_opk_id
-            .and_then(|id| s.vault.take_one_time_prekey(id).ok().flatten());
+            .and_then(|id| s.vault.peek_one_time_prekey(id).ok().flatten());
         drop(s);
         (identity, spk, opk)
     };
@@ -4933,15 +4952,25 @@ async fn on_incoming_initial(
         Ok(x) => x,
         Err(e) => { tracing::warn!(?e, "accept_initial failed"); return }
     };
-    crate::multidev::note_decrypted(&message.ciphertext);
     let plain_text = String::from_utf8_lossy(&plain).to_string();
 
     // The session belongs to the sender's DEVICE; the chat to the account.
     {
         let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Err(e) = s.vault.save_session(&addr, &session) {
-            tracing::warn!(?e, "save_session on accept");
+        // Session + used-up prekey + replay mark in one transaction. If it
+        // fails, nothing changed: the message isn't taken (a copy of it can
+        // still open the session), and it isn't shown either.
+        match s.vault.commit_initial(&addr, &session, message.used_opk_id, &hash) {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(e) => {
+                tracing::warn!(?e, "commit_initial failed — first message not taken");
+                return;
+            }
         }
+        // Only now, when it's stored: marked earlier, a copy of a message
+        // whose commit failed would have been dropped as "already read".
+        crate::multidev::note_decrypted(&message.ciphertext);
         // Both sides opened a session at once: theirs arrives after ours was
         // already in use. Keep ours — what they sent with it still decrypts.
         if let Some(old) = s.sessions.insert(addr.clone(), session) {

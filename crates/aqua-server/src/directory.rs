@@ -117,9 +117,13 @@ pub struct Wipe {
 
 pub struct Directory {
     db: Mutex<Connection>,
-    /// AQUA_DEV_CODES: Some(true) forces dev mode even with SMTP, Some(false)
-    /// forbids it. None = dev mode exactly when no SMTP is configured.
+    /// AQUA_DEV_CODES=1: codes go back in API answers (tests, local
+    /// experiments). Anything else: never (AQUA-SEC-003).
     dev_forced: Option<bool>,
+    /// Key for the stored form of e-mail codes (AQUA-SEC-005): the table
+    /// keeps HMAC(key, email|code), never the code. Random per start, so a
+    /// restart voids outstanding codes (they last 10 minutes anyway).
+    otp_key: [u8; 32],
     /// When Some, verification codes are sent via real SMTP.
     smtp: std::sync::RwLock<Option<SmtpConfig>>,
     /// "env" | "file" | "none" — where the SMTP settings came from.
@@ -175,6 +179,44 @@ pub struct FedUser {
     /// Signed device list (JSON, `aqua_core::devlist`); older relays don't send it.
     #[serde(default)]
     pub devlist: String,
+    /// The account's seal (JSON [`Seal`]): a device of the account signed its
+    /// security fields. Older relays don't send it.
+    #[serde(default)]
+    pub seal: String,
+}
+
+/// "These are my account's key, password hash, two-step settings, devices,
+/// recovery check and device list": signed by a device of the account
+/// (Ed25519 over [`seal_message`]). Once an account has one, relays apply a
+/// change of those fields from another relay only with a seal over the new
+/// values by a device the account already had — so a relay of the network
+/// can't change someone's key, password or devices by itself (1.21.0-23).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Seal {
+    /// The signing device's identity DH key (hex).
+    pub signer: String,
+    /// Its Ed25519 key (hex).
+    pub sign: String,
+    /// The signature (hex).
+    pub sig: String,
+}
+
+/// The security fields of an account as kept here (seal checks).
+struct LocalSec {
+    identity_dh: String,
+    password: String,
+    security: String,
+    devices: String,
+    recovery: String,
+    devlist: String,
+    seal: String,
+}
+
+/// What a seal signs: the security fields of an account, in this order.
+pub fn seal_message(uid: &str, identity_dh_hex: &str, password: &str, security: &str, devices: &str, recovery: &str, devlist: &str) -> String {
+    use sha2::Digest;
+    let devlist_hash = hex::encode(sha2::Sha256::digest(devlist.as_bytes()));
+    format!("aqua-account-seal-v1\n{uid}\n{identity_dh_hex}\n{password}\n{security}\n{devices}\n{recovery}\n{devlist_hash}")
 }
 
 /// Sign-in protection of an account: two-step codes and "no new devices".
@@ -276,6 +318,9 @@ pub struct FedApplied {
     /// A local account lost its @name to an older account with the same
     /// name from the peer: (old name, the name it has now).
     pub displaced: Option<(String, String)>,
+    /// A sealed account's security fields came without a valid seal and
+    /// were kept as they are here.
+    pub refused_security: bool,
 }
 
 fn no_devices() -> String { "[]".into() }
@@ -355,6 +400,8 @@ pub enum DirError {
     KeyHasAccount(String),
     #[error("too many wrong attempts — try again in 15 minutes")]
     TooManyTries,
+    #[error("too many codes asked for this address — wait a little and try again")]
+    TooManyCodes,
     #[error("confirm the sign-in in Telegram")]
     NeedTelegram,
     #[error("that's not the Telegram account linked to this account")]
@@ -560,7 +607,25 @@ pub(crate) fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+fn random_key() -> [u8; 32] {
+    let mut k = [0u8; 32];
+    OsRng.fill_bytes(&mut k);
+    k
+}
+
+/// Wrong codes a code survives; the next wrong one voids it (AQUA-SEC-005).
+pub const CODE_MAX_FAILS: i64 = 5;
+/// Shortest wait between two codes for one address.
+pub const CODE_RESEND_SECS: u64 = 30;
+/// Most codes for one address per hour.
+pub const CODE_MAX_PER_HOUR: i64 = 10;
+
 impl Directory {
+    /// The stored form of an e-mail code: HMAC(otp_key, email | code), hex.
+    fn code_tag(&self, email: &str, code: &str) -> String {
+        hex::encode(aqua_core::crypto::hmac_sha256(&self.otp_key, format!("{email}|{}", code.trim()).as_bytes()))
+    }
+
     /// In-memory fallback used when the on-disk DB can't be opened.
     /// Non-persistent, but keeps the server functional.
     pub fn open_memory() -> Self {
@@ -569,6 +634,7 @@ impl Directory {
         Self {
             db: Mutex::new(db),
             dev_forced: Some(true),
+            otp_key: random_key(),
             smtp: std::sync::RwLock::new(None),
             smtp_source: std::sync::RwLock::new("none"),
             recent: Mutex::new(Default::default()),
@@ -722,6 +788,16 @@ impl Directory {
                 owner    TEXT NOT NULL,
                 at       INTEGER NOT NULL
             );
+            -- AQUA-SEC-001 (1.21.0-21): the Ed25519 key each X25519 identity
+            -- proved it belongs with at sign-in (auth.rs::verify). The first
+            -- proven pair is kept; any other signing key for the same
+            -- X25519 key is refused at sign-in, bundle upload and device
+            -- lists. A new table, so older databases just gain it.
+            CREATE TABLE IF NOT EXISTS identity_signs (
+                dh   BLOB PRIMARY KEY,
+                sign BLOB NOT NULL,
+                at   INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS bans (
                 uid  TEXT PRIMARY KEY,
                 dhs  TEXT NOT NULL DEFAULT '',
@@ -754,8 +830,15 @@ impl Directory {
             "ALTER TABLE users ADD COLUMN security TEXT NOT NULL DEFAULT '{}'",
             // The account's device list signed by its devices (1.2.0-5, JSON).
             "ALTER TABLE users ADD COLUMN devlist TEXT NOT NULL DEFAULT ''",
+            // The account's seal by one of its devices (JSON `Seal`, 1.21.0-23).
+            "ALTER TABLE users ADD COLUMN seal TEXT NOT NULL DEFAULT ''",
             // The ticket passed the two-step code (1) or the recovery key (2).
             "ALTER TABLE email_codes ADD COLUMN mfa INTEGER NOT NULL DEFAULT 0",
+            // Wrong e-mail codes for the current code (AQUA-SEC-005, 1.21.0-21).
+            "ALTER TABLE email_codes ADD COLUMN fails INTEGER NOT NULL DEFAULT 0",
+            // Codes sent in the current hour and when that hour began.
+            "ALTER TABLE email_codes ADD COLUMN sends INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE email_codes ADD COLUMN sends_at INTEGER NOT NULL DEFAULT 0",
             // Wrong two-step codes with this ticket.
             "ALTER TABLE email_codes ADD COLUMN mfa_fail INTEGER NOT NULL DEFAULT 0",
         ] {
@@ -869,14 +952,19 @@ impl Directory {
                 None => (None, "none"),
             },
         };
-        // Dev mode (code returned in API + logged) is on unless real
-        // SMTP is configured. AQUA_DEV_CODES=1 forces it on even then.
-        let dev_forced = std::env::var("AQUA_DEV_CODES").ok().map(|v| v != "0");
+        // Dev mode (code returned in the API answer) only with an explicit
+        // AQUA_DEV_CODES=1 (AQUA-SEC-003: before 1.21.0-21 it was on
+        // whenever no mail server was set, so anyone could get the code for
+        // any address — and reset that account's password). Without mail,
+        // codes still go to the server console and the admin panel for the
+        // operator to pass on.
+        let dev_forced = Some(std::env::var("AQUA_DEV_CODES").is_ok_and(|v| v.trim() == "1"));
         let dev_codes = dev_forced.unwrap_or(smtp.is_none());
         tracing::info!(%path, dev_codes, smtp = smtp.is_some(), "user directory opened");
         Ok(Self {
             db: Mutex::new(db),
             dev_forced,
+            otp_key: random_key(),
             smtp: std::sync::RwLock::new(smtp),
             smtp_source: std::sync::RwLock::new(source),
             recent: Mutex::new(Default::default()),
@@ -1012,16 +1100,43 @@ impl Directory {
         if !email.contains('@') || email.len() < 5 {
             return Err(DirError::BadCode);
         }
-        let mut n = [0u8; 4];
-        OsRng.fill_bytes(&mut n);
-        let code = format!("{:06}", u32::from_be_bytes(n) % 1_000_000);
+        // Uniform 6 digits (rejection sampling: `% 1_000_000` of a u32 is
+        // slightly biased toward low codes).
+        let code = loop {
+            let mut n = [0u8; 4];
+            OsRng.fill_bytes(&mut n);
+            let v = u32::from_be_bytes(n);
+            if v < 4_294_000_000 {
+                break format!("{:06}", v % 1_000_000);
+            }
+        };
+        let now = now_secs();
         {
-            let db = self.db.lock().unwrap();
+            let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+            // AQUA-SEC-005: a fresh code also resets the wrong-code count, so
+            // codes per address are limited — or guessing just asks again.
+            // In explicit dev mode the code goes back to whoever asks, so a
+            // limit would protect nothing (and tests ask many times).
+            if self.dev_codes() {
+            } else if let Ok((issued_at, sends, sends_at)) = db.query_row(
+                "SELECT issued_at, sends, sends_at FROM email_codes WHERE email=?1",
+                rusqlite::params![email],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)),
+            ) {
+                if now.saturating_sub(issued_at as u64) < CODE_RESEND_SECS {
+                    return Err(DirError::TooManyCodes);
+                }
+                if now.saturating_sub(sends_at as u64) < 3600 && sends >= CODE_MAX_PER_HOUR {
+                    return Err(DirError::TooManyCodes);
+                }
+            }
             db.execute(
-                "INSERT INTO email_codes (email, code, ticket, issued_at, verified_at)
-                 VALUES (?1, ?2, NULL, ?3, NULL)
-                 ON CONFLICT(email) DO UPDATE SET code=?2, ticket=NULL, issued_at=?3, verified_at=NULL, mfa=0, mfa_fail=0",
-                rusqlite::params![email, code, now_secs() as i64],
+                "INSERT INTO email_codes (email, code, ticket, issued_at, verified_at, fails, sends, sends_at)
+                 VALUES (?1, ?2, NULL, ?3, NULL, 0, 1, ?3)
+                 ON CONFLICT(email) DO UPDATE SET code=?2, ticket=NULL, issued_at=?3, verified_at=NULL, mfa=0, mfa_fail=0, fails=0,
+                   sends=CASE WHEN ?3 - sends_at < 3600 THEN sends + 1 ELSE 1 END,
+                   sends_at=CASE WHEN ?3 - sends_at < 3600 THEN sends_at ELSE ?3 END",
+                rusqlite::params![email, self.code_tag(&email, &code), now as i64],
             )?;
         }
         Ok((email, code))
@@ -1030,26 +1145,36 @@ impl Directory {
     /// Check a code; on success mint + store a one-time ticket.
     pub fn verify_code(&self, email: &str, code: &str) -> Result<String, DirError> {
         let email = email.trim().to_lowercase();
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let row = db
             .query_row(
-                "SELECT code, issued_at FROM email_codes WHERE email=?1",
+                "SELECT code, issued_at, fails FROM email_codes WHERE email=?1",
                 rusqlite::params![email],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)),
             )
             .map_err(|_| DirError::NoCode)?;
-        let (stored, issued_at) = row;
+        let (stored, issued_at, fails) = row;
+        // Used (emptied) or voided by too many wrong tries.
+        if stored.is_empty() {
+            return Err(DirError::BadCode);
+        }
+        if fails >= CODE_MAX_FAILS {
+            return Err(DirError::TooManyTries);
+        }
         if now_secs().saturating_sub(issued_at as u64) > CODE_TTL_SECS {
             return Err(DirError::BadCode);
         }
-        if stored != code.trim() {
+        let want = self.code_tag(&email, code);
+        if !subtle_eq(want.as_bytes(), stored.as_bytes()) {
+            db.execute("UPDATE email_codes SET fails = fails + 1 WHERE email=?1", rusqlite::params![email])?;
             return Err(DirError::BadCode);
         }
         let mut t = [0u8; 18];
         OsRng.fill_bytes(&mut t);
         let ticket = hex::encode(t);
+        // The code is used up: one code, one ticket (AQUA-SEC-005).
         db.execute(
-            "UPDATE email_codes SET ticket=?1, verified_at=?2, mfa=0, mfa_fail=0 WHERE email=?3",
+            "UPDATE email_codes SET code='', ticket=?1, verified_at=?2, mfa=0, mfa_fail=0, fails=0 WHERE email=?3",
             rusqlite::params![ticket, now_secs() as i64, email],
         )?;
         Ok(ticket)
@@ -1086,10 +1211,9 @@ impl Directory {
         self.recent.lock().map(|r| r.iter().filter(|c| now.saturating_sub(c.2) <= CODE_TTL_SECS).cloned().collect()).unwrap_or_default()
     }
 
-    /// True when codes are shown instead of mailed.
+    /// True when codes go back in the API answer (explicit dev mode only).
     pub fn dev_codes(&self) -> bool {
-        let has_smtp = self.smtp.read().map(|c| c.is_some()).unwrap_or(false);
-        self.dev_forced.unwrap_or(!has_smtp)
+        self.dev_forced.unwrap_or(false)
     }
 
     /// Current SMTP settings (password included — callers must not leak it)
@@ -1455,8 +1579,12 @@ impl Directory {
         }
         let uid = if uid.len() == 10 && uid.bytes().all(|b| b.is_ascii_digit()) { uid.to_string() } else { uid_for(identity_dh) };
         let db = self.db.lock().unwrap();
-        if let Ok((owner, their_uid)) = db.query_row("SELECT identity_dh, uid FROM users WHERE username=?1", rusqlite::params![username], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, String>(1)?))) {
-            if owner.as_slice() != identity_dh.as_slice() && their_uid != uid {
+        if let Ok(owner) = db.query_row("SELECT identity_dh FROM users WHERE username=?1", rusqlite::params![username], |r| r.get::<_, Vec<u8>>(0)) {
+            // AQUA-SEC-002: joining never replaces the key an account already
+            // has here (before 1.21.0-21 a matching ID was enough, so anyone
+            // with a pass wrote their key over the account's own and the
+            // change spread through the network).
+            if owner.as_slice() != identity_dh.as_slice() {
                 return Err(DirError::UsernameTaken);
             }
         }
@@ -1472,7 +1600,7 @@ impl Directory {
         db.execute(
             "INSERT INTO users (username, identity_dh, email, display_name, about, phone, is_bot, created_at, password, uid)
              VALUES (?1, ?2, NULL, ?3, '', '', 0, ?4, ?5, ?6)
-             ON CONFLICT(username) DO UPDATE SET identity_dh=?2, display_name=?3, password=CASE WHEN ?5 = '' THEN password ELSE ?5 END, uid=?6",
+             ON CONFLICT(username) DO UPDATE SET display_name=?3, password=CASE WHEN ?5 = '' THEN password ELSE ?5 END, uid=?6",
             rusqlite::params![username, identity_dh.as_slice(), display_name.trim(), now_secs() as i64, pw, uid],
         )?;
         tracing::info!(%username, %uid, "joined with an account of the network");
@@ -1647,14 +1775,24 @@ impl Directory {
     /// its own accounts (and, in a network, the network's — `home` "") and
     /// the names it learnt from other relays. Oldest change first.
     pub fn names_since(&self, since: i64, limit: usize) -> Vec<NameRow> {
-        let db = self.db.lock().unwrap();
+        self.names_after(since, None, limit)
+    }
+
+    /// Like [`Self::names_since`] from the cursor `(since, after)`: rows after
+    /// it in `(updated_at, username)` order (REV-001: with `updated_at` alone a
+    /// page boundary inside equal timestamps skipped rows). `after = None`
+    /// is the old `> since` (relays before 1.21.0-23 send no `after`).
+    pub fn names_after(&self, since: i64, after: Option<&str>, limit: usize) -> Vec<NameRow> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let Ok(mut st) = db.prepare(
-            "SELECT username, uid, '' AS home, created_at, updated_at FROM users WHERE is_bot=0 AND uid IS NOT NULL AND uid<>'' AND updated_at > ?1
-             UNION ALL
-             SELECT username, uid, home, created_at, updated_at FROM fed_names WHERE updated_at > ?1
-             ORDER BY 5 LIMIT ?2",
+            "SELECT username, uid, home, created_at, updated_at FROM (
+               SELECT username, uid, '' AS home, created_at, updated_at FROM users WHERE is_bot=0 AND uid IS NOT NULL AND uid<>''
+               UNION ALL
+               SELECT username, uid, home, created_at, updated_at FROM fed_names)
+             WHERE updated_at > ?1 OR (?3 IS NOT NULL AND updated_at = ?1 AND username > ?3)
+             ORDER BY updated_at, username LIMIT ?2",
         ) else { return Vec::new() };
-        st.query_map(rusqlite::params![since, limit as i64], |r| {
+        st.query_map(rusqlite::params![since, limit as i64, after], |r| {
             Ok(NameRow { username: r.get(0)?, uid: r.get(1)?, home: r.get(2)?, created_at: r.get(3)?, updated_at: r.get(4)? })
         })
         .map(|it| it.flatten().collect())
@@ -1710,6 +1848,31 @@ impl Directory {
             .filter(|s| !s.is_empty())
     }
 
+    /// Keep the Ed25519 key an X25519 identity proved at sign-in. `Ok(true)`
+    /// when it is the kept key (or the first one), `Ok(false)` when this
+    /// X25519 key is already bound to a different Ed25519 key.
+    pub fn bind_identity_sign(&self, dh: &[u8; 32], sign: &[u8; 32]) -> Result<bool, DirError> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.execute(
+            "INSERT INTO identity_signs (dh, sign, at) VALUES (?1, ?2, ?3) ON CONFLICT(dh) DO NOTHING",
+            rusqlite::params![dh.as_slice(), sign.as_slice(), now_secs() as i64],
+        )?;
+        let kept: Vec<u8> = db.query_row(
+            "SELECT sign FROM identity_signs WHERE dh=?1",
+            rusqlite::params![dh.as_slice()],
+            |r| r.get(0),
+        )?;
+        Ok(kept.as_slice() == sign.as_slice())
+    }
+
+    /// The Ed25519 key `dh` proved it belongs with, if it ever signed in here.
+    pub fn identity_sign(&self, dh: &[u8; 32]) -> Option<[u8; 32]> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.query_row("SELECT sign FROM identity_signs WHERE dh=?1", rusqlite::params![dh.as_slice()], |r| r.get::<_, Vec<u8>>(0))
+            .ok()
+            .and_then(|v| v.try_into().ok())
+    }
+
     /// Store a signed device list a device of the account published. The
     /// relay can't sign one; it only refuses obvious junk: a list for
     /// another account, a bad signature, a signer that isn't a device of the
@@ -1722,6 +1885,14 @@ impl Directory {
         list.verify_self().map_err(|e| DirError::BadProfile(e.to_string()))?;
         let signer: [u8; 32] = hex::decode(&list.signer.dh).ok().and_then(|b| b.try_into().ok()).ok_or(DirError::BadProfile("bad signer key".into()))?;
         if self.device_role(username, &signer).is_none() {
+            return Err(DirError::NotOwner);
+        }
+        // AQUA-SEC-001: the list is signed with the Ed25519 key it names
+        // itself, so that key must be the one the signer's X25519 key proved
+        // it belongs with at sign-in. Otherwise anyone holding a token for
+        // the account could sign a list with a key of their own.
+        let signer_sign = list.signer.sign_pub().ok_or(DirError::BadProfile("bad signer key".into()))?;
+        if self.identity_sign(&signer) != Some(*signer_sign.as_bytes()) {
             return Err(DirError::NotOwner);
         }
         if let Some(cur) = self.devlist(username).and_then(|j| serde_json::from_str::<aqua_core::devlist::SignedDeviceList>(&j).ok()) {
@@ -2024,6 +2195,8 @@ impl Directory {
             }
         }
         db.execute("UPDATE users SET password=?2 WHERE username=?1", rusqlite::params![username, hash_password(new_secret)])?;
+        // The same ticket then signs this device in once (`login_checked`
+        // uses it up) — the app's "reset, then sign in" flow.
         tracing::info!(%username, with_key = !stored.is_empty(), "password reset");
         Ok(username)
     }
@@ -2247,13 +2420,20 @@ impl Directory {
 
     /// User rows changed after `since` (ms), oldest first, at most 500.
     pub fn fed_users_since(&self, since: i64) -> Vec<FedUser> {
-        let db = self.db.lock().unwrap();
+        self.fed_users_after(since, None)
+    }
+
+    /// Accounts after the cursor `(since, after)` in `(updated_at, username)`
+    /// order, 500 at most (REV-001; `None` = the old `> since`).
+    pub fn fed_users_after(&self, since: i64, after: Option<&str>) -> Vec<FedUser> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let Ok(mut st) = db.prepare(
             "SELECT username, identity_dh, email, display_name, about, phone, is_bot, created_at,
-                    extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices, recovery, uid, security, devlist
-             FROM users WHERE updated_at > ?1 AND is_bot = 0 ORDER BY updated_at LIMIT 500",
+                    extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices, recovery, uid, security, devlist, seal
+             FROM users WHERE is_bot = 0 AND (updated_at > ?1 OR (?2 IS NOT NULL AND updated_at = ?1 AND username > ?2))
+             ORDER BY updated_at, username LIMIT 500",
         ) else { return Vec::new() };
-        st.query_map(rusqlite::params![since], |r| {
+        st.query_map(rusqlite::params![since, after], |r| {
             Ok(FedUser {
                 username: r.get(0)?,
                 identity_dh: hex::encode(r.get::<_, Vec<u8>>(1)?),
@@ -2275,10 +2455,65 @@ impl Directory {
                 uid: r.get(17)?,
                 security: r.get(18)?,
                 devlist: r.get(19)?,
+                seal: r.get(20)?,
             })
         })
         .map(|rows| rows.flatten().collect())
         .unwrap_or_default()
+    }
+
+    /// The seal message of `username` as it is stored here.
+    pub fn seal_message_of(&self, username: &str) -> Option<String> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.query_row(
+            "SELECT uid, identity_dh, password, security, devices, recovery, devlist FROM users WHERE username=?1 AND is_bot=0",
+            rusqlite::params![username],
+            |r| Ok(seal_message(&r.get::<_, String>(0)?, &hex::encode(r.get::<_, Vec<u8>>(1)?), &r.get::<_, String>(2)?, &r.get::<_, String>(3)?, &r.get::<_, String>(4)?, &r.get::<_, String>(5)?, &r.get::<_, String>(6)?)),
+        )
+        .ok()
+    }
+
+    /// Store a seal a device of `username` made (`signer_dh` signed in with
+    /// `signer_sign`). The signature must be over the account's current
+    /// security fields, and the signer one of its devices.
+    pub fn set_seal(&self, username: &str, signer_dh: &[u8; 32], signer_sign: &[u8; 32], sig_hex: &str) -> Result<(), DirError> {
+        let msg = self.seal_message_of(username).ok_or(DirError::NotOwner)?;
+        if self.device_role(username, signer_dh).is_none() {
+            return Err(DirError::NotOwner);
+        }
+        let sig: [u8; 64] = hex::decode(sig_hex.trim()).ok().and_then(|b| b.try_into().ok()).ok_or(DirError::BadProfile("bad signature".into()))?;
+        aqua_core::crypto::SignPublic::from_bytes(*signer_sign).verify(msg.as_bytes(), &sig).map_err(|_| DirError::BadProfile("the seal doesn't match the account".into()))?;
+        let seal = Seal { signer: hex::encode(signer_dh), sign: hex::encode(signer_sign), sig: hex::encode(sig) };
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.execute("UPDATE users SET seal=?2 WHERE username=?1", rusqlite::params![username, serde_json::to_string(&seal).unwrap_or_default()])?;
+        Ok(())
+    }
+
+    /// Does `incoming` carry a seal over its own security fields by a device
+    /// the account had here (its key, its devices; the Ed25519 key known
+    /// from the device list kept here, from a sign-in here, or the seal kept
+    /// here)?
+    fn seal_ok(&self, db: &Connection, local: &LocalSec, incoming: &FedUser, uid: &str) -> bool {
+        let Ok(seal) = serde_json::from_str::<Seal>(&incoming.seal) else { return false };
+        let msg = seal_message(uid, &incoming.identity_dh, &incoming.password, &incoming.security, &incoming.devices, &incoming.recovery, &incoming.devlist);
+        let (Some(sign), Some(sig)) = (hex::decode(&seal.sign).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()), hex::decode(&seal.sig).ok().and_then(|b| <[u8; 64]>::try_from(b).ok())) else { return false };
+        if aqua_core::crypto::SignPublic::from_bytes(sign).verify(msg.as_bytes(), &sig).is_err() {
+            return false;
+        }
+        // The signer: the account's key or one of its devices, as kept here.
+        let local_devices: Vec<Device> = serde_json::from_str(&local.devices).unwrap_or_default();
+        if seal.signer != local.identity_dh && !local_devices.iter().any(|d| d.dh == seal.signer) {
+            return false;
+        }
+        // …with the Ed25519 key it is known by here.
+        let in_list = serde_json::from_str::<aqua_core::devlist::SignedDeviceList>(&local.devlist)
+            .is_ok_and(|l| l.devices.iter().any(|k| k.dh == seal.signer && k.sign == seal.sign));
+        let in_seal = serde_json::from_str::<Seal>(&local.seal).is_ok_and(|s| s.signer == seal.signer && s.sign == seal.sign);
+        let signed_in = hex::decode(&seal.signer).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()).is_some_and(|dh| {
+            db.query_row("SELECT sign FROM identity_signs WHERE dh=?1", rusqlite::params![dh.as_slice()], |r| r.get::<_, Vec<u8>>(0))
+                .is_ok_and(|s| s.as_slice() == sign.as_slice())
+        });
+        in_list || in_seal || signed_in
     }
 
     /// Apply a peer's row if it is newer than ours.
@@ -2365,19 +2600,52 @@ impl Directory {
         if let Some(email) = &u.email {
             let _ = db.execute("UPDATE users SET email=NULL WHERE email=?1 AND username<>?2", rusqlite::params![email, name]);
         }
+        // A sealed account: its security fields change only with a seal by a
+        // device it already had (see `Seal`). Otherwise they stay as they are
+        // here and only the rest (profile, media versions) is applied.
+        let local: Option<LocalSec> = db.query_row(
+            "SELECT identity_dh, password, security, devices, recovery, devlist, seal FROM users WHERE uid=?1 AND is_bot=0",
+            rusqlite::params![uid],
+            |r| Ok(LocalSec { identity_dh: hex::encode(r.get::<_, Vec<u8>>(0)?), password: r.get(1)?, security: r.get(2)?, devices: r.get(3)?, recovery: r.get(4)?, devlist: r.get(5)?, seal: r.get(6)? }),
+        ).ok();
+        let mut u = u.clone();
+        let mut dh = dh;
+        if let Some(l) = local.as_ref().filter(|l| !l.seal.is_empty()) {
+            // Older relays send '' for fields they don't know: "keep ours".
+            let keep = |inc: &str, mine: &str| if inc.is_empty() { mine.to_string() } else { inc.to_string() };
+            u.recovery = keep(&u.recovery, &l.recovery);
+            u.security = keep(&u.security, &l.security);
+            u.devlist = keep(&u.devlist, &l.devlist);
+            let changed = u.identity_dh != l.identity_dh || u.password != l.password || u.security != l.security
+                || u.devices != l.devices || u.recovery != l.recovery || u.devlist != l.devlist;
+            if changed && !self.seal_ok(&db, l, &u, &uid) {
+                tracing::warn!(user = %u.username, "federation: a change of a sealed account's key / password / devices without its devices' seal — not applied");
+                u.identity_dh = l.identity_dh.clone();
+                u.password = l.password.clone();
+                u.security = l.security.clone();
+                u.devices = l.devices.clone();
+                u.recovery = l.recovery.clone();
+                u.devlist = l.devlist.clone();
+                u.seal = l.seal.clone();
+                dh = hex::decode(&l.identity_dh).unwrap_or(dh);
+                out.refused_security = true;
+            }
+        }
+        let u = &u;
         out.name = name.clone();
         out.applied = db.execute(
             "INSERT INTO users (username, identity_dh, email, display_name, about, phone, is_bot, created_at,
-                                extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices, recovery, uid, security, devlist)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, CASE WHEN ?19 = '' THEN '{}' ELSE ?19 END, ?20)
+                                extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices, recovery, uid, security, devlist, seal)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, CASE WHEN ?19 = '' THEN '{}' ELSE ?19 END, ?20, ?21)
              ON CONFLICT(username) DO UPDATE SET identity_dh=?2, email=?3, display_name=?4, about=?5, phone=?6,
                  is_bot=?7, created_at=?8, extra=?9, avatar_ver=?10, banner_ver=?11, media_acl=?12, password=?13,
                  music_ver=?14, updated_at=?15, devices=?16,
                  recovery=CASE WHEN ?17 = '' THEN recovery ELSE ?17 END, uid=?18,
                  security=CASE WHEN ?19 = '' THEN security ELSE ?19 END,
-                 devlist=CASE WHEN ?20 = '' THEN devlist ELSE ?20 END",
+                 devlist=CASE WHEN ?20 = '' THEN devlist ELSE ?20 END,
+                 seal=CASE WHEN ?21 = '' THEN seal ELSE ?21 END",
             rusqlite::params![name, dh, u.email, u.display_name, u.about, u.phone, u.is_bot as i64, u.created_at,
-                u.extra, u.avatar_ver, u.banner_ver, u.media_acl, u.password, u.music_ver, u.updated_at, u.devices, u.recovery, uid, u.security, u.devlist],
+                u.extra, u.avatar_ver, u.banner_ver, u.media_acl, u.password, u.music_ver, u.updated_at, u.devices, u.recovery, uid, u.security, u.devlist, u.seal],
         )
         .is_ok();
         out
@@ -2473,9 +2741,18 @@ impl Directory {
 
     /// Federation: (username, key, updated_at) changed after `since` (ms).
     pub fn fed_hist_since(&self, since: i64) -> Vec<(String, String, i64)> {
-        let db = self.db.lock().unwrap();
-        let Ok(mut st) = db.prepare("SELECT username, k, updated_at FROM hist_store WHERE updated_at > ?1 ORDER BY updated_at LIMIT 1000") else { return Vec::new() };
-        st.query_map(rusqlite::params![since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        self.fed_hist_after(since, None)
+    }
+
+    /// History records after the cursor `(since, "user/key")` (REV-001).
+    pub fn fed_hist_after(&self, since: i64, after: Option<&str>) -> Vec<(String, String, i64)> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let Ok(mut st) = db.prepare(
+            "SELECT username, k, updated_at FROM hist_store
+             WHERE updated_at > ?1 OR (?2 IS NOT NULL AND updated_at = ?1 AND (username || '/' || k) > ?2)
+             ORDER BY updated_at, username || '/' || k LIMIT 1000",
+        ) else { return Vec::new() };
+        st.query_map(rusqlite::params![since, after], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .map(|rows| rows.flatten().collect())
             .unwrap_or_default()
     }
@@ -2502,9 +2779,18 @@ impl Directory {
 
     /// (username, updated_at) of backups changed after `since` (seconds).
     pub fn fed_backups_since(&self, since: i64) -> Vec<(String, i64)> {
-        let db = self.db.lock().unwrap();
-        let Ok(mut st) = db.prepare("SELECT username, updated_at FROM backups WHERE updated_at > ?1 ORDER BY updated_at LIMIT 200") else { return Vec::new() };
-        st.query_map(rusqlite::params![since], |r| Ok((r.get(0)?, r.get(1)?)))
+        self.fed_backups_after(since, None)
+    }
+
+    /// Backups after the cursor `(since, username)` (REV-001).
+    pub fn fed_backups_after(&self, since: i64, after: Option<&str>) -> Vec<(String, i64)> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let Ok(mut st) = db.prepare(
+            "SELECT username, updated_at FROM backups
+             WHERE updated_at > ?1 OR (?2 IS NOT NULL AND updated_at = ?1 AND username > ?2)
+             ORDER BY updated_at, username LIMIT 200",
+        ) else { return Vec::new() };
+        st.query_map(rusqlite::params![since, after], |r| Ok((r.get(0)?, r.get(1)?)))
             .map(|rows| rows.flatten().collect())
             .unwrap_or_default()
     }
@@ -2584,9 +2870,41 @@ impl Directory {
 
     /// Returns the row id ([`Self::inbox_ack`] removes it).
     pub fn inbox_push(&self, user: &str, msg: &[u8]) -> Result<i64, DirError> {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         db.execute("INSERT INTO inbox (user, msg, at) VALUES (?1, ?2, ?3)", rusqlite::params![user, msg, now_secs() as i64])?;
-        Ok(db.last_insert_rowid())
+        let id = db.last_insert_rowid();
+        // AQUA-SEC-011 (owner, 25.11: the oldest go): at most INBOX_MAX_ROWS
+        // envelopes and INBOX_MAX_BYTES per address; past that the oldest
+        // are dropped, so one flooded inbox can't fill the relay's disk.
+        // Checked every 256 inserts per address to keep the hot path cheap.
+        if id % 256 == 0 {
+            let (n, bytes): (i64, i64) = db
+                .query_row("SELECT COUNT(*), COALESCE(SUM(length(msg)), 0) FROM inbox WHERE user=?1", rusqlite::params![user], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap_or((0, 0));
+            if n > Self::INBOX_MAX_ROWS || bytes > Self::INBOX_MAX_BYTES {
+                let keep_rows = Self::INBOX_MAX_ROWS.min(if bytes > Self::INBOX_MAX_BYTES && n > 0 { n * Self::INBOX_MAX_BYTES / bytes } else { n });
+                let dropped = db.execute(
+                    "DELETE FROM inbox WHERE user=?1 AND id NOT IN (SELECT id FROM inbox WHERE user=?1 ORDER BY id DESC LIMIT ?2)",
+                    rusqlite::params![user, keep_rows.max(1)],
+                ).unwrap_or(0);
+                if dropped > 0 {
+                    tracing::warn!(%user, dropped, "inbox full — the oldest envelopes were dropped");
+                    crate::journal::log(user, "inbox-full", &format!("{dropped}"));
+                }
+            }
+        }
+        Ok(id)
+    }
+
+    /// Most envelopes kept for one address.
+    pub const INBOX_MAX_ROWS: i64 = 20_000;
+    /// Most bytes kept for one address.
+    pub const INBOX_MAX_BYTES: i64 = 256 * 1024 * 1024;
+
+    /// Envelopes waiting for `user` (tests, panel).
+    pub fn inbox_len(&self, user: &str) -> i64 {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.query_row("SELECT COUNT(*) FROM inbox WHERE user=?1", rusqlite::params![user], |r| r.get(0)).unwrap_or(0)
     }
 
     /// Everything waiting for `user`, oldest first (rows stay until acked).
@@ -3529,6 +3847,62 @@ mod tests {
     use super::*;
 
     fn dir() -> Directory { Directory::open_memory() }
+
+    /// AQUA-SEC-011: a flooded inbox keeps the newest INBOX_MAX_ROWS.
+    #[test]
+    fn inbox_keeps_the_newest_when_full() {
+        let d = dir();
+        let total = Directory::INBOX_MAX_ROWS + 600;
+        let mut last = 0;
+        for i in 0..total {
+            last = d.inbox_push("flood", format!("m{i}").as_bytes()).unwrap();
+        }
+        let n = d.inbox_len("flood");
+        assert!(n <= Directory::INBOX_MAX_ROWS + 256, "{n}");
+        assert!(n >= Directory::INBOX_MAX_ROWS - 256, "{n}");
+        let rows = d.inbox_take("flood");
+        assert_eq!(rows.last().map(|r| r.0), Some(last), "the newest stays");
+        assert_eq!(rows.last().map(|r| r.1.clone()), Some(format!("m{}", total - 1).into_bytes()));
+        assert_eq!(d.inbox_len("other"), 0);
+    }
+
+    /// AQUA-SEC-005: with dev codes off (the default since 1.21.0-21) a code
+    /// is stored hashed, works once, dies after 5 wrong tries, and codes per
+    /// address are limited.
+    #[test]
+    fn email_codes_are_hashed_single_use_and_limited() {
+        let mut d = dir();
+        d.dev_forced = Some(false);
+        let (email, code) = d.issue_code("Otp@X.com").unwrap();
+        assert_eq!(email, "otp@x.com");
+        let stored: String = d.db.lock().unwrap().query_row("SELECT code FROM email_codes WHERE email=?1", [&email], |r| r.get(0)).unwrap();
+        assert_ne!(stored, code, "the code itself is never stored");
+        assert_eq!(stored.len(), 64);
+        // Resend too soon.
+        assert!(matches!(d.issue_code(&email), Err(DirError::TooManyCodes)));
+        // Right code once, then it's used up.
+        assert!(d.verify_code(&email, &code).is_ok());
+        assert!(matches!(d.verify_code(&email, &code), Err(DirError::BadCode)));
+
+        // A new code (after the resend pause) and 5 wrong tries void it,
+        // even for the right code.
+        d.db.lock().unwrap().execute("UPDATE email_codes SET issued_at = issued_at - 60 WHERE email=?1", [&email]).unwrap();
+        let (_, code2) = d.issue_code(&email).unwrap();
+        let wrong = if code2 == "000000" { "000001" } else { "000000" };
+        for _ in 0..CODE_MAX_FAILS {
+            assert!(matches!(d.verify_code(&email, wrong), Err(DirError::BadCode)));
+        }
+        assert!(matches!(d.verify_code(&email, &code2), Err(DirError::TooManyTries)));
+
+        // At most CODE_MAX_PER_HOUR codes an hour.
+        for _ in 2..CODE_MAX_PER_HOUR {
+            d.db.lock().unwrap().execute("UPDATE email_codes SET issued_at = issued_at - 60 WHERE email=?1", [&email]).unwrap();
+            d.issue_code(&email).unwrap();
+        }
+        d.db.lock().unwrap().execute("UPDATE email_codes SET issued_at = issued_at - 60 WHERE email=?1", [&email]).unwrap();
+        assert!(matches!(d.issue_code(&email), Err(DirError::TooManyCodes)));
+        assert!(!d.dev_codes());
+    }
 
     /// "Полина" is found by "Полина" and "полина", not only by "олина".
     #[test]

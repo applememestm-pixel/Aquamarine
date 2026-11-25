@@ -37,7 +37,7 @@ impl DeviceKey {
         Self { dh: hex::encode(id.dh_pub.as_bytes()), sign: hex::encode(id.sign_pub.as_bytes()) }
     }
 
-    fn sign_pub(&self) -> Option<SignPublic> {
+    pub fn sign_pub(&self) -> Option<SignPublic> {
         let b: [u8; 32] = hex::decode(&self.sign).ok()?.try_into().ok()?;
         Some(SignPublic::from_bytes(b))
     }

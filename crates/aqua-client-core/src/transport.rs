@@ -635,7 +635,13 @@ impl Transport {
 
     pub async fn fetch_bundle(&self, peer: &str) -> Result<PreKeyBundle, TransportError> {
         let url = format!("{}/v1/bundle/{}", self.server_url.trim_end_matches('/'), peer);
-        let r = self.http.get(&url).send().await?;
+        // Signed in: relays from 1.21.0-23 hand out a one-time prekey (and
+        // look in the rest of the network) only then (AQUA-SEC-007).
+        let mut req = self.http.get(&url);
+        if let Ok(t) = self.bearer().await {
+            req = req.bearer_auth(t);
+        }
+        let r = req.send().await?;
         if !r.status().is_success() {
             return Err(TransportError::Server {
                 status: r.status().as_u16(),
@@ -1556,6 +1562,30 @@ impl Transport {
 
     /// Sign-in protection of my account: `GET` (body `None`) or `PUT`/`POST`
     /// `/v1/me/<path>` with a JSON body → the JSON answer (`null` for 204).
+    /// Seal my account as the relay has it now (1.21.0-23): this device signs
+    /// its security fields (key, password hash, two-step settings, devices,
+    /// recovery check, device list), so other relays of the network accept a
+    /// change of them only when one of the account's devices signed it.
+    /// `Ok(false)`: a relay without seals, or the account doesn't list this
+    /// device (then it isn't signed).
+    pub async fn reseal(&self) -> Result<bool, TransportError> {
+        let v = match self.me_call("GET", "seal", None).await {
+            Ok(v) => v,
+            Err(TransportError::Server { status: 404, .. }) => return Ok(false),
+            Err(e) => return Err(e),
+        };
+        let Some(msg) = v["msg"].as_str() else { return Ok(false) };
+        // Only what concerns me: the message must name this device's key
+        // (as the account's key or one of its devices).
+        let mine = hex::encode(self.identity.public().dh_pub.as_bytes());
+        if !msg.starts_with("aqua-account-seal-v1\n") || !msg.contains(&mine) {
+            return Ok(false);
+        }
+        let sig = hex::encode(self.identity.sign.sign(msg.as_bytes()));
+        self.me_call("PUT", "seal", Some(serde_json::json!({ "sig": sig }))).await?;
+        Ok(true)
+    }
+
     pub async fn me_call(&self, method: &str, path: &str, body: Option<serde_json::Value>) -> Result<serde_json::Value, TransportError> {
         let url = format!("{}/v1/me/{}", self.server_url.trim_end_matches('/'), path.trim_start_matches('/'));
         let send = |token: String| {
@@ -1764,6 +1794,7 @@ async fn sign_in(
         .decode(&chal.nonce)
         .map_err(|e| TransportError::BadPayload(format!("bad nonce base64: {e}")))?;
     let sig = identity.sign.sign(&nonce_bytes);
+    let dh_proof = sign_in_proof(identity, &nonce_bytes, chal.server_eph.as_deref())?;
 
     // 3) Verify.
     let verify: VerifyResponse = json_of(http
@@ -1773,12 +1804,34 @@ async fn sign_in(
             identity: pub_id,
             nonce: chal.nonce,
             signature: URL_SAFE_NO_PAD.encode(sig),
+            dh_proof,
         })
         .send()
         .await?
         .error_for_status()?)
         .await?;
     Ok(verify.token)
+}
+
+/// Proof that we hold the identity's X25519 secret (relays from 1.21.0-21
+/// require it, AQUA-SEC-001). `None` only for an older relay that sends no
+/// one-off key; a key that gives an all-zero secret is refused.
+pub fn sign_in_proof(
+    identity: &IdentityKeyPair,
+    nonce: &[u8],
+    server_eph: Option<&str>,
+) -> Result<Option<String>, TransportError> {
+    let Some(eph) = server_eph else { return Ok(None) };
+    let eph: [u8; 32] = URL_SAFE_NO_PAD
+        .decode(eph)
+        .ok()
+        .and_then(|b| b.try_into().ok())
+        .ok_or_else(|| TransportError::BadPayload("bad server key in the challenge".into()))?;
+    let shared = identity.dh.dh(&aqua_core::crypto::DhPublic::from_bytes(eph));
+    let pub_id = identity.public();
+    let proof = aqua_core::wire::auth::dh_proof(shared.as_bytes(), nonce, pub_id.dh_pub.as_bytes(), pub_id.sign_pub.as_bytes())
+        .ok_or_else(|| TransportError::BadPayload("the server's challenge key is invalid".into()))?;
+    Ok(Some(URL_SAFE_NO_PAD.encode(proof)))
 }
 
 /// A relay's JSON answer — or, when something else answered in its place

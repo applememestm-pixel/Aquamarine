@@ -56,6 +56,8 @@ pub mod botmaker;
 pub mod quota;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
+/// Release signatures for the updaters (also the server app's).
+pub use aqua_core::release;
 pub use auth::{AuthState, Caller};
 pub use directory::Directory;
 
@@ -71,7 +73,11 @@ pub struct UserState {
     /// Envelopes queued while the user is offline.
     pub inbox: VecDeque<RelayMessage>,
     /// One entry per connected device.
-    pub tx: Vec<mpsc::UnboundedSender<RelayMessage>>,
+    /// Live connections of this address. Bounded (`WS_QUEUE`): a connection
+    /// that doesn't keep up gets nothing more, and what it would have got
+    /// waits in the on-disk inbox instead (AQUA-SEC-011: the channel was
+    /// unbounded, so a stalled reader grew the relay's memory without end).
+    pub tx: Vec<mpsc::Sender<RelayMessage>>,
 }
 
 /// One inbound message queued for a bot program to pick up via
@@ -110,8 +116,14 @@ pub struct BotLimits {
 
 impl BotLimits {
     /// Take one token from bucket `key` (capacity `cap`, `rate` per second).
-    fn take(&self, key: &str, cap: f64, rate: f64) -> bool {
+    pub(crate) fn take(&self, key: &str, cap: f64, rate: f64) -> bool {
         let now = std::time::Instant::now();
+        // AQUA-SEC-011: keys are per bot, per bot→recipient and per caller,
+        // so the map grew forever. Past a size, drop buckets idle for 10
+        // minutes (they'd be full again by then anyway at these rates).
+        if self.buckets.len() > 50_000 {
+            self.buckets.retain(|_, v| now.duration_since(v.1) < std::time::Duration::from_secs(600));
+        }
         let mut e = self.buckets.entry(key.to_string()).or_insert((cap, now));
         let (ref mut tokens, ref mut at) = *e;
         *tokens = (*tokens + now.duration_since(*at).as_secs_f64() * rate).min(cap);
@@ -297,13 +309,21 @@ impl AppState {
     }
 
     fn build(require_registration: bool) -> Self {
-        let directory = Directory::open()
-            .map(Arc::new)
-            .unwrap_or_else(|e| {
-                tracing::error!(error = %e, "failed to open user directory; continuing without persistence");
-                // Fall back to an in-memory DB so the server still boots.
+        // AQUA-SEC-004: never fall back to a database in memory on its own.
+        // It lost every account on the next restart while the relay said
+        // "saved", and it also turned on dev codes (codes in API answers).
+        // AQUA_ALLOW_MEMORY_DB=1 keeps the old behaviour for experiments.
+        let directory = match Directory::open() {
+            Ok(d) => Arc::new(d),
+            Err(e) if std::env::var("AQUA_ALLOW_MEMORY_DB").is_ok_and(|v| v == "1") => {
+                tracing::error!(error = %e, "failed to open user directory; AQUA_ALLOW_MEMORY_DB=1 — running WITHOUT persistence");
                 Arc::new(Directory::open_memory())
-            });
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "failed to open the user directory — refusing to start without it (AQUA_DIR_DB / data folder)");
+                panic!("aqua-server: the user directory can't be opened: {e}");
+            }
+        };
         Self {
             users: Arc::new(DashMap::new()),
             bindings: Arc::new(DashMap::new()),
@@ -453,6 +473,12 @@ async fn upload_bundle(
             format!("bundle identity {bundle_fp} does not match your token identity {token_fp}"),
         ));
     }
+    // AQUA-SEC-001: the bundle's Ed25519 key (which signs the prekey and
+    // that peers check) must be the one this X25519 key proved at sign-in.
+    if state.directory.identity_sign(&dh_pub) != Some(*body.identity.sign_pub.as_bytes()) {
+        tracing::warn!(user = %user, token = %token_fp, "upload_bundle REJECT: signing key ≠ the one proven at sign-in");
+        return Err((StatusCode::FORBIDDEN, "the bundle's signing key is not the one this identity signed in with".into()));
+    }
     // Claim the username on first upload or verify it's still ours.
     if let Err(e) = state.claim_or_check(&user, dh_pub) {
         let existing = state.bindings.get(&user).map(|r| short_hex(r.value()));
@@ -485,20 +511,44 @@ async fn upload_bundle(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// One-time prekeys a signed-in caller may take: a burst of 30, then one
+/// every 10 s (AQUA-SEC-007).
+const OPK_BURST: f64 = 30.0;
+const OPK_RATE: f64 = 0.1;
+
 async fn fetch_bundle(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Path(user): Path<UserId>,
 ) -> Result<Json<PreKeyBundle>, StatusCode> {
-    if let Some(b) = local_bundle(&state, &user).await {
+    // AQUA-SEC-007: every bundle fetch used up one of the person's one-time
+    // prekeys, with no sign-in — anyone could drain them all and leave new
+    // sessions without the extra forward secrecy they give. A one-time
+    // prekey now goes only to a signed-in caller, within a budget; anyone
+    // else gets the bundle without one (X3DH works without it).
+    let caller = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .and_then(|t| state.auth.verify_token(t.trim()).ok())
+        // A banned account keeps an old token for up to an hour: it gets
+        // no one-time prekeys (REV-003, as `Caller` and the WebSocket do).
+        .filter(|dh| !state.directory.is_banned_dh(dh));
+    let take_opk = caller.is_some_and(|dh| state.bot_limits.take(&format!("opk:{}", hex::encode(dh)), OPK_BURST, OPK_RATE));
+    if let Some(b) = local_bundle_ex(&state, &user, take_opk).await {
         return Ok(Json(b));
     }
     // An old @username: the account's keys under its new one.
     if let Some(new) = state.directory.renamed_to(&user) {
-        if let Some(b) = local_bundle(&state, &new).await {
+        if let Some(b) = local_bundle_ex(&state, &new, take_opk).await {
             return Ok(Json(b));
         }
     }
-    // Uploaded to another relay of the federation?
+    // Uploaded to another relay of the federation? Only for a signed-in
+    // caller: the peer hands out a one-time prekey and can't tell who asks.
+    if caller.is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
     if let Some(f) = fed::current(&state) {
         if let Some(v) = f.fetch_bundle(&user).await {
             if let Ok(b) = serde_json::from_value::<PreKeyBundle>(v) {
@@ -527,6 +577,17 @@ fn persist_prekeys(state: &AppState, user: &str, u: &UserState) {
 }
 
 pub(crate) async fn local_bundle(state: &AppState, user: &str) -> Option<PreKeyBundle> {
+    local_bundle_ex(state, user, true).await
+}
+
+/// The bundle `user` uploaded here; `take_opk` hands out (and uses up) one
+/// of its one-time prekeys.
+pub(crate) async fn local_bundle_ex(state: &AppState, user: &str, take_opk: bool) -> Option<PreKeyBundle> {
+    // Don't make an in-memory entry for every name anyone asks about
+    // (AQUA-SEC-011): only for someone who uploaded keys.
+    if !state.users.contains_key(user) && state.directory.prekeys_get(user).is_none() {
+        return None;
+    }
     let user_state = state.user(&user.to_string());
     let mut u = user_state.lock().await;
     if u.identity.is_none() {
@@ -538,7 +599,7 @@ pub(crate) async fn local_bundle(state: &AppState, user: &str) -> Option<PreKeyB
     }
     let identity = u.identity?;
     let signed_prekey = u.signed_prekey.clone()?;
-    let one_time_prekey = u.opks.pop_front();
+    let one_time_prekey = if take_opk { u.opks.pop_front() } else { None };
     if one_time_prekey.is_some() {
         persist_prekeys(state, user, &u);
     }
@@ -589,7 +650,13 @@ async fn ws_upgrade(
     let me = state.address_for(&q.user, &dh_pub);
     tracing::info!(user = %q.user, addr = %me, token = %token_fp, "WS OK: upgrading to WebSocket");
     let acks = q.ack == 1;
-    Ok(ws.on_upgrade(move |sock| ws_run(sock, state, me, acks)))
+    // REV/AQUA-SEC-011: one envelope can't be larger than WS_MAX_MESSAGE
+    // (the library default was 64 MiB per message; files travel as blobs,
+    // envelopes are text and key material).
+    Ok(ws
+        .max_message_size(WS_MAX_MESSAGE)
+        .max_frame_size(WS_MAX_MESSAGE)
+        .on_upgrade(move |sock| ws_run(sock, state, me, acks)))
 }
 
 /// A fresh delivery id (16 random bytes, hex).
@@ -625,7 +692,7 @@ async fn send_tracked(
 async fn ws_run(mut socket: WebSocket, state: AppState, me: UserId, acks: bool) {
     state.directory.touch_seen(base_user(&me));
     let user_state = state.user(&me);
-    let (tx, mut rx) = mpsc::unbounded_channel::<RelayMessage>();
+    let (tx, mut rx) = mpsc::channel::<RelayMessage>(WS_QUEUE);
     // With acks: delivery id → inbox rows waiting for the device's "got it".
     let mut pending: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
     if acks {
@@ -646,6 +713,12 @@ async fn ws_run(mut socket: WebSocket, state: AppState, me: UserId, acks: bool) 
         // now queues on `rx` and goes out after the backlog.
         let waiting: Vec<RelayMessage> = {
             let mut u = user_state.lock().await;
+            u.tx.retain(|t| !t.is_closed());
+            // At most WS_PER_ADDRESS live connections per device address:
+            // the oldest go (dropping its sender ends that connection's loop).
+            while u.tx.len() >= WS_PER_ADDRESS {
+                u.tx.remove(0);
+            }
             u.tx.push(tx);
             u.inbox.drain(..).collect()
         };
@@ -826,14 +899,23 @@ async fn deliver(state: &AppState, msg: RelayMessage) {
             }
             match row {
                 Some(_) => fed::queued_for_absent(&state),
-                None => state.user(&msg.to).lock().await.inbox.push_back(msg),
+                None => {
+                    let u = state.user(&msg.to);
+                    let mut u = u.lock().await;
+                    u.inbox.push_back(msg);
+                    while u.inbox.len() > MEM_INBOX { u.inbox.pop_front(); }
+                }
             }
         });
         return;
     }
     if row.is_none() {
+        // The disk inbox failed: memory, capped (AQUA-SEC-011).
+        tracing::warn!(to = %msg.to, "inbox write failed — keeping the envelope in memory");
         let recipient = state.user(&msg.to);
-        recipient.lock().await.inbox.push_back(msg);
+        let mut r = recipient.lock().await;
+        r.inbox.push_back(msg);
+        while r.inbox.len() > MEM_INBOX { r.inbox.pop_front(); }
     }
 }
 
@@ -881,17 +963,31 @@ pub(crate) async fn deliver_to_bot(state: &AppState, msg: &RelayMessage) -> bool
 
 /// Hand an envelope to the recipient's live connections on THIS relay.
 pub(crate) async fn deliver_local(state: &AppState, msg: &RelayMessage) -> bool {
-    let recipient = state.user(&msg.to);
+    // Nobody connected under this address: don't make an in-memory entry
+    // for it just to find that out (AQUA-SEC-011).
+    let Some(recipient) = state.users.get(&msg.to).map(|r| r.value().clone()) else { return false };
     let mut r = recipient.lock().await;
     let mut delivered = false;
     r.tx.retain(|t| !t.is_closed());
     for t in &r.tx {
-        if t.send(msg.clone()).is_ok() {
+        // Full = that connection is behind; "not delivered" sends the
+        // envelope to the on-disk inbox, where the next connection gets it.
+        if t.try_send(msg.clone()).is_ok() {
             delivered = true;
         }
     }
     delivered
 }
+
+/// Largest WebSocket message a device may send.
+pub const WS_MAX_MESSAGE: usize = 16 * 1024 * 1024;
+
+/// Envelopes waiting for one connection before it counts as "behind".
+pub const WS_QUEUE: usize = 1024;
+/// Live connections one device address may hold at once.
+pub const WS_PER_ADDRESS: usize = 4;
+/// Envelopes kept in memory for an address when the disk inbox failed.
+const MEM_INBOX: usize = 1000;
 
 // ---------- Blob storage (encrypted file bodies) ---------------------------
 
@@ -1043,16 +1139,43 @@ struct EmailRequestResp {
 }
 
 /// Where the "It's me" link in the e-mail points: the public address when the
-/// operator set one, else the address the app itself used to reach us.
-fn link_base(headers: &axum::http::HeaderMap) -> Option<String> {
+/// operator set one (AQUA_PUBLIC_URL, the network's public URL, or the one
+/// found by `public`), else the address the app used — but only when that
+/// is a private/loopback address (LAN relays). AQUA-SEC-006: the request's
+/// Host header was trusted as is, so anyone could have the real relay mail
+/// a victim a link to the attacker's site and then read the code from it.
+fn link_base(state: &AppState, headers: &axum::http::HeaderMap) -> Option<String> {
     if let Ok(u) = std::env::var("AQUA_PUBLIC_URL") {
         let u = u.trim();
         if u.starts_with("http") { return Some(u.trim_end_matches('/').to_string()); }
     }
-    let host = headers.get(header::HOST)?.to_str().ok()?.trim();
-    if host.is_empty() || host.contains(['/', ' ', '"', '<', '>']) { return None; }
-    let proto = headers.get("x-forwarded-proto").and_then(|v| v.to_str().ok()).filter(|p| *p == "https").unwrap_or("http");
-    Some(format!("{proto}://{host}"))
+    let configured = fed::registry(state).map(|f| f.cfg.public_url.clone()).filter(|u| u.starts_with("http"));
+    let found = Some(public::url()).filter(|u| u.starts_with("http"));
+    let host = headers.get(header::HOST)?.to_str().ok()?.trim().to_lowercase();
+    if host.is_empty() || host.contains(['/', ' ', '"', '<', '>', '@', '\\']) { return None; }
+    for known in [configured, found].into_iter().flatten() {
+        if host_of(&known) == host {
+            return Some(known.trim_end_matches('/').to_string());
+        }
+    }
+    // "[v6]:port", "[v6]", "v4:port", "v4".
+    let bare = match host.strip_prefix('[') {
+        Some(rest) => rest.split(']').next().unwrap_or(""),
+        None => host.split(':').next().unwrap_or(""),
+    };
+    let ip: std::net::IpAddr = bare.parse().ok()?;
+    let local = match ip {
+        std::net::IpAddr::V4(v) => v.is_private() || v.is_loopback() || v.is_link_local(),
+        std::net::IpAddr::V6(v) => v.is_loopback() || (v.segments()[0] & 0xfe00) == 0xfc00,
+    };
+    local.then(|| format!("http://{host}"))
+}
+
+fn code_err(e: directory::DirError) -> (StatusCode, String) {
+    match e {
+        directory::DirError::TooManyCodes => (StatusCode::TOO_MANY_REQUESTS, e.to_string()),
+        e => (StatusCode::BAD_REQUEST, e.to_string()),
+    }
 }
 
 async fn email_request(
@@ -1073,13 +1196,13 @@ async fn email_request(
         _ => {}
     }
     let nonce = (!body.nonce.is_empty()).then_some(body.nonce.as_str());
-    let base = nonce.and_then(|_| link_base(&headers));
+    let base = nonce.and_then(|_| link_base(&state, &headers));
     // No mail server here, but a relay of the network has one: it sends the
     // code (our SMTP-less relay never sees its password).
     if !state.directory.has_smtp() {
         if let Some(f) = fed::current(&state) {
             let (email, code, link) = state.directory.prepare_code(&body.email, nonce, base.as_deref())
-                .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+                .map_err(code_err)?;
             if f.send_mail(&email, &code, link.as_deref()).await {
                 return Ok(Json(EmailRequestResp { ok: true, dev_code: None, delivery_failed: false, error: None }));
             }
@@ -1089,7 +1212,7 @@ async fn email_request(
         }
     }
     let (email, code, link) = state.directory.prepare_code(&body.email, nonce, base.as_deref())
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+        .map_err(code_err)?;
     let d = state.directory.deliver_code(email.clone(), code.clone(), link.clone()).await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     // Our own mail server couldn't be reached (the provider blocks the
@@ -1158,6 +1281,7 @@ async fn email_verify(
 ) -> Result<Json<EmailVerifyResp>, (StatusCode, String)> {
     match state.directory.verify_code(&body.email, &body.code) {
         Ok(ticket) => Ok(Json(EmailVerifyResp { ok: true, ticket })),
+        Err(e @ directory::DirError::TooManyTries) => Err((StatusCode::TOO_MANY_REQUESTS, e.to_string())),
         Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
     }
 }
@@ -1173,7 +1297,7 @@ fn signups_per_ip() -> u32 {
 
 /// The caller's address: the connection's, or — behind a proxy on this
 /// machine (nginx, Caddy) — the one it passes on.
-fn client_ip(conn: Option<&axum::extract::ConnectInfo<std::net::SocketAddr>>, headers: &axum::http::HeaderMap) -> Option<std::net::IpAddr> {
+pub(crate) fn client_ip(conn: Option<&axum::extract::ConnectInfo<std::net::SocketAddr>>, headers: &axum::http::HeaderMap) -> Option<std::net::IpAddr> {
     let peer = conn.map(|c| c.0.ip())?;
     if peer.is_loopback() {
         let fwd = headers.get("x-real-ip").and_then(|v| v.to_str().ok()).map(str::to_string)
@@ -1871,7 +1995,71 @@ async fn admin_get_fed(State(state): State<AppState>, headers: axum::http::Heade
         "peers": c.peers,
         "public_url": c.public_url,
         "detected_url": crate::public::url(),
+        // Node keys (AQUA-SEC-009): ours, the peers' we know, revoked ids,
+        // and whether secret-only requests are refused already.
+        "node_id": fed::registry(&state).map(|f| f.node_id()),
+        "pins": c.pins.iter().map(|p| serde_json::json!({ "url": p.url, "id": p.id })).collect::<Vec<_>>(),
+        "revoked": c.revoked,
+        // REV2-004: relays that said hello without being admitted.
+        "pending_nodes": c.pending_nodes.iter().map(|p| serde_json::json!({ "url": p.url, "id": p.id })).collect::<Vec<_>>(),
+        "strict": fed::registry(&state).is_some_and(|f| f.strict()),
     })))
+}
+
+/// `GET /v1/me/seal` → `{msg}`: what a device of the account signs to seal
+/// its security fields (directory.rs `Seal`).
+async fn seal_get(State(state): State<AppState>, Caller(dh): Caller) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    let msg = state.directory.seal_message_of(&me).ok_or((StatusCode::NOT_FOUND, "no account".into()))?;
+    Ok(Json(serde_json::json!({ "msg": msg })))
+}
+
+#[derive(Deserialize)]
+struct SealPut { sig: String }
+
+/// `PUT /v1/me/seal {sig}` — this device seals the account as it is now.
+async fn seal_put(State(state): State<AppState>, Caller(dh): Caller, Json(b): Json<SealPut>) -> Result<StatusCode, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    let sign = state.directory.identity_sign(&dh).ok_or((StatusCode::FORBIDDEN, "sign in again".into()))?;
+    state.directory.set_seal(&me, &dh, &sign, &b.sig).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /v1/admin/fed/rotate` — a new node key, announced to the peers
+/// signed by the old one.
+async fn admin_fed_rotate(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    admin_authed(&state, &headers).map_err(|s| (s, String::new()))?;
+    let id = fed::rotate_key(&state).await.ok_or((StatusCode::CONFLICT, "not in a network".to_string()))?;
+    journal::log("admin", "fed-rotate", &id);
+    Ok(Json(serde_json::json!({ "node_id": id })))
+}
+
+#[derive(Deserialize)]
+struct FedRevoke { id: String }
+
+/// `POST /v1/admin/fed/admit {id}` — let a waiting relay into the network.
+async fn admin_fed_admit(State(state): State<AppState>, headers: axum::http::HeaderMap, Json(b): Json<FedRevoke>) -> Result<StatusCode, (StatusCode, String)> {
+    admin_authed(&state, &headers).map_err(|s| (s, String::new()))?;
+    let id = b.id.trim().to_lowercase();
+    if !fed::admit(&state, &id) {
+        return Err((StatusCode::NOT_FOUND, "no relay with this id is waiting".into()));
+    }
+    journal::log("admin", "fed-admit", &id);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /v1/admin/fed/revoke {id}` — never accept this relay's node key again.
+async fn admin_fed_revoke(State(state): State<AppState>, headers: axum::http::HeaderMap, Json(b): Json<FedRevoke>) -> Result<StatusCode, (StatusCode, String)> {
+    admin_authed(&state, &headers).map_err(|s| (s, String::new()))?;
+    let id = b.id.trim().to_lowercase();
+    if id.len() != 32 || !id.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err((StatusCode::BAD_REQUEST, "a node id is 32 hex digits".into()));
+    }
+    if !fed::revoke(&state, &id) {
+        return Err((StatusCode::CONFLICT, "not in a network".into()));
+    }
+    journal::log("admin", "fed-revoke", &id);
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
@@ -1917,7 +2105,7 @@ async fn admin_set_fed(
     if let Ok(mut g) = state.fed.write() { *g = next.clone(); }
     if let Some(f) = next {
         let st = state.clone();
-        tokio::spawn(async move { let new = f.hello_all().await; let _ = fed::add_peers(&st, &new); st.fed_kick.notify_one(); });
+        tokio::spawn(async move { let new = f.hello_all().await; fed::absorb_vouches(&st); let _ = fed::add_peers(&st, &new); st.fed_kick.notify_one(); });
     }
     Ok(Json(serde_json::json!({ "active": active, "mode": fed::FedConfig::load().effective_mode() })))
 }
@@ -1926,8 +2114,11 @@ async fn admin_set_fed(
 /// for the admin, to hand to another relay's admin).
 async fn admin_fed_invite(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Result<Json<serde_json::Value>, StatusCode> {
     admin_authed(&state, &headers)?;
+    // REV2-004: each invitation carries a one-time admission token, so the
+    // relay that joins with it is admitted even when every peer has a key.
+    let token = fed::new_admit_token(&state);
     let c = fed::FedConfig::load();
-    Ok(Json(serde_json::json!({ "invite": fed::invite(&c) })))
+    Ok(Json(serde_json::json!({ "invite": fed::invite_with(&c, token.as_deref()) })))
 }
 
 /// `GET /v1/admin/invites` — invitation codes of this invite-only relay.
@@ -1992,6 +2183,7 @@ async fn admin_fed_join(
     let (url, secret) = fed::parse_invite(&b.invite).ok_or((StatusCode::BAD_REQUEST, "that's not an invitation (aquafed:…)".into()))?;
     let mut c = fed::FedConfig::load();
     c.secret = secret;
+    c.join_token = fed::invite_token(&b.invite).unwrap_or_default();
     c.mode = if b.names_only { "solo".into() } else { "network".into() };
     if !c.peers.contains(&url) { c.peers.push(url.clone()); }
     // Not saved: a detected address can change (and may be re-detected).
@@ -2003,6 +2195,7 @@ async fn admin_fed_join(
         return Err((StatusCode::BAD_GATEWAY, format!("{url} doesn't answer or doesn't accept this secret")));
     }
     let new = if b.names_only { fed::names_hello(&f).await } else { f.hello_all().await };
+    fed::absorb_vouches(&state);
     fed::add_peers(&state, &new);
     state.fed_kick.notify_one();
     Ok(Json(serde_json::json!({ "ok": true, "peers": fed::FedConfig::load().peers })))
@@ -3346,9 +3539,11 @@ async fn admin_page(State(state): State<AppState>) -> impl IntoResponse {
 
 // ---------- Versions this relay still serves -------------------------------
 
-/// Apps and relays older than this are no longer served (1.2.0: two-step
-/// codes are required, and older apps and relays don't know them).
-pub const MIN_VERSION: &str = "1.2.0";
+/// Apps older than this are no longer served at the app doors (`app_door`).
+/// 1.2.0: two-step codes are required. 1.21.0-23 (owner's decision,
+/// AQUA-SEC-001): sign-in needs the proof of the X25519 key, which older
+/// apps don't send. Relays talk through `/v1/fed/*`, which isn't gated.
+pub const MIN_VERSION: &str = "1.21.0-23";
 
 /// `1.1.0-7` → (1, 1, 0, 7). Our pre-releases come AFTER their release
 /// (1.1.0-1 > 1.1.0), so the number after "-" just counts up.
@@ -3360,9 +3555,23 @@ fn version_key(v: &str) -> Option<(u32, u32, u32, u32)> {
     Some((it.next()??, it.next().flatten().unwrap_or(0), it.next().flatten().unwrap_or(0), pre.parse().unwrap_or(0)))
 }
 
-/// Is version `v` (of an app or a relay) still served?
+/// Is version `v` of an app still served?
 pub fn version_ok(v: &str) -> bool {
     match (version_key(v), version_key(MIN_VERSION)) {
+        (Some(have), Some(min)) => have >= min,
+        _ => false,
+    }
+}
+
+/// Relays older than this aren't talked to (federation, tunnels). Kept
+/// apart from [`MIN_VERSION`]: raising the app minimum for AQUA-SEC-001
+/// (1.21.0-23) must not cut the network off from relays that haven't
+/// updated yet — the relay protocol didn't change.
+pub const MIN_RELAY: &str = "1.2.0";
+
+/// Is version `v` of a relay still talked to?
+pub fn relay_version_ok(v: &str) -> bool {
+    match (version_key(v), version_key(MIN_RELAY)) {
         (Some(have), Some(min)) => have >= min,
         _ => false,
     }
@@ -3394,7 +3603,7 @@ fn app_door(path: &str) -> bool {
         | "/v1/auth/email/poll" | "/v1/users/register" | "/v1/users/signup" | "/v1/users/signin" | "/v1/auth/tg/start" | "/v1/auth/tg/poll" | "/v1/users/login" | "/v1/users/reset" | "/v1/backup/fetch" | "/v1/ws")
 }
 
-pub const TOO_OLD: &str = "this version of Aquamarine is no longer supported — update the app to 1.2.0 or newer";
+pub const TOO_OLD: &str = "this version of Aquamarine is no longer supported — update the app to 1.21.0-23 or newer";
 
 async fn version_gate(req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
     if app_door(req.uri().path()) {
@@ -3550,6 +3759,10 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/admin/fed/join", post(admin_fed_join))
         .route("/v1/admin/servers", get(admin_servers))
         .route("/v1/admin/federation", get(admin_get_fed).post(admin_set_fed))
+        .route("/v1/admin/fed/rotate", post(admin_fed_rotate))
+        .route("/v1/admin/fed/revoke", post(admin_fed_revoke))
+        .route("/v1/admin/fed/admit", post(admin_fed_admit))
+        .route("/v1/me/seal", get(seal_get).put(seal_put))
         .route("/v1/bundle/:user",   post(upload_bundle).get(fetch_bundle))
         .route("/v1/ws",             get(ws_upgrade))
         // Telegram Bot API: /bot<token>/<method> (see tgapi.rs).
@@ -3563,7 +3776,8 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/blob-upload/:cid", axum::routing::put(blob_upload::put)
             .layer(DefaultBodyLimit::max(aqua_core::file_transfer::UPLOAD_PART_SIZE)))
         // Everything else: the optional website (AQUA_SITE_DIR, see site.rs).
-        .merge(fed::routes())
+        // Answers to v2-signed federation requests are signed back (fed.rs).
+        .merge(fed::routes().layer(axum::middleware::from_fn_with_state(state.clone(), fed::sign_answers)))
         .fallback(site::fallback)
         .layer(axum::middleware::from_fn(version_gate))
         .with_state(state)
@@ -3609,12 +3823,19 @@ mod version_tests {
     use super::*;
 
     #[test]
-    fn versions_before_1_2_0_are_refused() {
-        for v in ["1.2.0", "1.2.0-3", "1.2.1", "1.2.11", "1.3.0", "2.0.0", "v1.2.0"] {
+    fn versions_before_the_minimum_are_refused() {
+        for v in ["1.21.0-23", "1.21.0-24", "1.21.1", "1.21.11", "1.22.0", "2.0.0", "v1.21.0-23"] {
             assert!(version_ok(v), "{v}");
         }
-        for v in ["1.1.0-7", "1.1.9", "1.0.62", "0.9.0", "", "garbage"] {
+        for v in ["1.21.0-22", "1.21.0", "1.2.0", "1.1.0-7", "1.1.9", "1.0.62", "0.9.0", "", "garbage"] {
             assert!(!version_ok(v), "{v}");
+        }
+        // Relays: the federation minimum stays 1.2.0.
+        for v in ["1.2.0", "1.21.0-22", "1.21.0-23"] {
+            assert!(relay_version_ok(v), "{v}");
+        }
+        for v in ["1.1.9", "", "garbage"] {
+            assert!(!relay_version_ok(v), "{v}");
         }
         let mut h = axum::http::HeaderMap::new();
         h.insert(header::USER_AGENT, "aqua-client-core/1.2.0".parse().unwrap());

@@ -6,7 +6,13 @@
 //!    returns 24 random bytes as a base64 nonce and remembers that this
 //!    nonce is pending for that identity's DH public.
 //! 2. Client signs the raw nonce bytes with its Ed25519 signing key and
-//!    POSTs `{ identity, nonce, signature }` to `/v1/auth/verify`.
+//!    POSTs `{ identity, nonce, signature, dh_proof }` to `/v1/auth/verify`.
+//!    `dh_proof` (see `aqua_core::wire::auth::dh_proof`) is an HMAC keyed by
+//!    DH(identity X25519 secret, the challenge's one-off server key): it
+//!    shows the caller owns the X25519 key the token gets bound to, and it
+//!    covers the Ed25519 key, which the relay then keeps for that X25519
+//!    key (AQUA-SEC-001: before 1.21.0-21 any Ed25519 key was accepted, so
+//!    anyone who knew a public X25519 key could get that account's token).
 //!    Server checks that (a) the nonce is one it issued for this
 //!    identity and hasn't been used yet, (b) the signature verifies
 //!    under the identity's signing key, and (c) the nonce is not
@@ -32,7 +38,7 @@ use std::{
 };
 
 use aqua_core::{
-    crypto::{hmac_sha256, ED25519_SIG_LEN, HMAC_TAG_LEN, X25519_LEN},
+    crypto::{hmac_sha256, DhPublic, DhSecret, ED25519_SIG_LEN, HMAC_TAG_LEN, X25519_LEN},
 };
 use axum::{
     async_trait,
@@ -64,34 +70,74 @@ pub const NONCE_TTL: Duration = Duration::from_secs(60);
 /// Tokens issued after a successful verify live this long.
 pub const TOKEN_TTL: Duration = Duration::from_secs(60 * 60);
 
+/// Most challenges waiting for an answer at once. The challenge endpoint
+/// needs no token, so without a cap a flood of requests grows the map
+/// without bound for a minute.
+pub const MAX_PENDING: usize = 50_000;
+
 // ---------- State ---------------------------------------------------------
 
 pub struct AuthState {
     pub server_key: [u8; 32],
     pending: DashMap<[u8; NONCE_LEN], Pending>,
+    max_pending: usize,
+    /// One permit per entry of `pending`, taken BEFORE the insert and held by
+    /// the entry: removing it (answer, expiry) gives the permit back, so the
+    /// cap counts everything in flight (REV2-002: a counter that `prune`
+    /// reset to `len()` forgot reservations not inserted yet, and a failed
+    /// first attempt leaked a slot).
+    slots: Arc<tokio::sync::Semaphore>,
 }
+
+/// Challenges one address may ask for: a burst, then a steady rate
+/// (REV-002: without it one client filled `pending` and every sign-in on
+/// the relay got 503 for a minute).
+pub const CHALLENGE_PER_IP: (f64, f64) = (20.0, 1.0);
+// No limit per identity key: anyone who knows your public key could then
+// keep you from signing in by asking for challenges in your name.
 
 struct Pending {
     identity_dh_pub: [u8; X25519_LEN],
     issued_at: SystemTime,
+    /// One-off X25519 secret for the proof of possession (see
+    /// [`aqua_core::wire::auth::dh_proof`]). Zeroized on drop.
+    eph: DhSecret,
+    /// Its place under `MAX_PENDING`; released with the entry.
+    _slot: tokio::sync::OwnedSemaphorePermit,
 }
 
 impl AuthState {
     pub fn new() -> Arc<Self> {
         let mut key = [0u8; 32];
         OsRng.fill_bytes(&mut key);
-        Arc::new(Self { server_key: key, pending: DashMap::new() })
+        Self::with_cap(key, MAX_PENDING)
     }
 
-    fn issue_nonce(&self, identity_dh_pub: [u8; X25519_LEN]) -> [u8; NONCE_LEN] {
+    fn with_cap(server_key: [u8; 32], max_pending: usize) -> Arc<Self> {
+        Arc::new(Self { server_key, pending: DashMap::new(), max_pending, slots: Arc::new(tokio::sync::Semaphore::new(max_pending)) })
+    }
+
+    fn issue_nonce(&self, identity_dh_pub: [u8; X25519_LEN]) -> Option<([u8; NONCE_LEN], DhPublic)> {
+        let slot = match self.slots.clone().try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                // Full: drop expired entries (their permits come back) and try once more.
+                self.prune();
+                self.slots.clone().try_acquire_owned().ok()?
+            }
+        };
         let mut nonce = [0u8; NONCE_LEN];
         OsRng.fill_bytes(&mut nonce);
+        let eph = DhSecret::generate();
+        let eph_pub = eph.public();
         self.pending.insert(
             nonce,
-            Pending { identity_dh_pub, issued_at: SystemTime::now() },
+            Pending { identity_dh_pub, issued_at: SystemTime::now(), eph, _slot: slot },
         );
-        self.prune();
-        nonce
+        if self.pending.len() % 1024 == 0 {
+            self.prune();
+        }
+        Some((nonce, eph_pub))
     }
 
     /// Look up and consume a pending challenge.
@@ -99,7 +145,7 @@ impl AuthState {
         &self,
         nonce: &[u8; NONCE_LEN],
         expected_identity: [u8; X25519_LEN],
-    ) -> Result<(), AuthError> {
+    ) -> Result<DhSecret, AuthError> {
         let entry = self
             .pending
             .remove(nonce)
@@ -116,15 +162,23 @@ impl AuthState {
         {
             return Err(AuthError::NonceExpired);
         }
-        Ok(())
+        Ok(entry.1.eph)
+    }
+
+    /// Challenges waiting for an answer (tests, panel).
+    pub fn pending_len(&self) -> usize {
+        self.pending.len()
     }
 
     fn prune(&self) {
         let now = SystemTime::now();
+        // An entry made after `now` was taken (a parallel insert) is not
+        // expired: `duration_since` fails for it, and it used to be dropped —
+        // with its permit, letting more through (found by the REV2-002 test).
         self.pending.retain(|_, p| {
             now.duration_since(p.issued_at)
                 .map(|d| d <= NONCE_TTL)
-                .unwrap_or(false)
+                .unwrap_or(true)
         });
     }
 
@@ -193,6 +247,14 @@ pub enum AuthError {
     NonceExpired,
     #[error("bad signature on challenge")]
     BadSignature,
+    #[error("no proof of the identity key: update Aquamarine")]
+    MissingProof,
+    #[error("the proof of the identity key does not match")]
+    BadProof,
+    #[error("this identity is bound to a different signing key")]
+    SigningKeyMismatch,
+    #[error("too many sign-ins in progress, try again in a minute")]
+    Busy,
     #[error("token is invalid or forged")]
     BadToken,
     #[error("token has expired")]
@@ -216,6 +278,9 @@ impl AuthError {
             AuthError::BadToken | AuthError::TokenExpired => StatusCode::UNAUTHORIZED,
             AuthError::WrongIdentityForUser | AuthError::UsernameTaken => StatusCode::FORBIDDEN,
             AuthError::NotRegistered => StatusCode::FORBIDDEN,
+            AuthError::BadProof | AuthError::MissingProof | AuthError::BadSignature => StatusCode::UNAUTHORIZED,
+            AuthError::SigningKeyMismatch => StatusCode::FORBIDDEN,
+            AuthError::Busy => StatusCode::SERVICE_UNAVAILABLE,
             _ => StatusCode::BAD_REQUEST,
         }
     }
@@ -225,6 +290,8 @@ impl AuthError {
 
 pub async fn challenge(
     State(state): State<AppState>,
+    conn: Option<axum::extract::ConnectInfo<std::net::SocketAddr>>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<ChallengeRequest>,
 ) -> Result<Json<ChallengeResponse>, (StatusCode, String)> {
     let raw = URL_SAFE_NO_PAD
@@ -235,8 +302,20 @@ pub async fn challenge(
         .try_into()
         .map_err(|_| (StatusCode::BAD_REQUEST, "expected 32-byte DH public".into()))?;
 
-    let nonce = state.auth.issue_nonce(dh_pub);
-    Ok(Json(ChallengeResponse { nonce: URL_SAFE_NO_PAD.encode(nonce) }))
+    let too_many = (StatusCode::TOO_MANY_REQUESTS, "too many sign-in attempts — wait a little".to_string());
+    if let Some(ip) = crate::client_ip(conn.as_ref(), &headers) {
+        if !state.bot_limits.take(&format!("chal-ip:{ip}"), CHALLENGE_PER_IP.0, CHALLENGE_PER_IP.1) {
+            return Err(too_many);
+        }
+    }
+    let (nonce, eph_pub) = state
+        .auth
+        .issue_nonce(dh_pub)
+        .ok_or((AuthError::Busy.status(), AuthError::Busy.to_string()))?;
+    Ok(Json(ChallengeResponse {
+        nonce: URL_SAFE_NO_PAD.encode(nonce),
+        server_eph: Some(URL_SAFE_NO_PAD.encode(eph_pub.as_bytes())),
+    }))
 }
 
 pub async fn verify(
@@ -269,9 +348,57 @@ pub async fn verify(
         return Err((AuthError::BadSignature.status(), AuthError::BadSignature.to_string()));
     }
 
-    if let Err(e) = state.auth.take_pending(&nonce_arr, dh_pub) {
-        tracing::warn!(identity = %fp, error = %e, "auth/verify REJECT: pending nonce check failed");
-        return Err((e.status(), e.to_string()));
+    // The proof travels with the request; refuse before touching state.
+    let proof: [u8; HMAC_TAG_LEN] = match body.dh_proof.as_deref() {
+        None => {
+            tracing::warn!(identity = %fp, "auth/verify REJECT: no proof of the X25519 key (old app)");
+            return Err((AuthError::MissingProof.status(), AuthError::MissingProof.to_string()));
+        }
+        Some(p) => URL_SAFE_NO_PAD
+            .decode(p.as_bytes())
+            .ok()
+            .and_then(|b| b.try_into().ok())
+            .ok_or((StatusCode::BAD_REQUEST, "bad proof".into()))?,
+    };
+
+    let eph = match state.auth.take_pending(&nonce_arr, dh_pub) {
+        Ok(eph) => eph,
+        Err(e) => {
+            tracing::warn!(identity = %fp, error = %e, "auth/verify REJECT: pending nonce check failed");
+            return Err((e.status(), e.to_string()));
+        }
+    };
+
+    // AQUA-SEC-001: the signature above only shows the caller holds *some*
+    // Ed25519 key. The token is bound to the X25519 key, so the caller must
+    // also show it holds that key's secret: only DH(identity, eph) gives the
+    // right proof, and the proof covers the Ed25519 key of this request.
+    let shared = eph.dh(&body.identity.dh_pub);
+    let expected = aqua_core::wire::auth::dh_proof(
+        shared.as_bytes(),
+        &nonce_arr,
+        &dh_pub,
+        body.identity.sign_pub.as_bytes(),
+    );
+    drop(eph);
+    let ok = expected.map(|e| e.ct_eq(&proof).unwrap_u8() == 1).unwrap_or(false);
+    if !ok {
+        tracing::warn!(identity = %fp, "auth/verify REJECT: bad proof of the X25519 key");
+        return Err((AuthError::BadProof.status(), AuthError::BadProof.to_string()));
+    }
+
+    // The X25519 and Ed25519 keys are now proven to belong together; the
+    // first proven pair is kept and any other Ed25519 key is refused.
+    match state.directory.bind_identity_sign(&dh_pub, body.identity.sign_pub.as_bytes()) {
+        Ok(true) => {}
+        Ok(false) => {
+            tracing::warn!(identity = %fp, "auth/verify REJECT: identity is bound to another signing key");
+            return Err((AuthError::SigningKeyMismatch.status(), AuthError::SigningKeyMismatch.to_string()));
+        }
+        Err(e) => {
+            tracing::error!(identity = %fp, error = %e, "auth/verify: binding store failed");
+            return Err((StatusCode::SERVICE_UNAVAILABLE, "storage error".into()));
+        }
     }
 
     // Banned on this server (panel -> People -> Accounts): no token.
@@ -374,7 +501,7 @@ mod tests {
     fn pending_nonce_flow() {
         let auth = AuthState::new();
         let dh_pub = [9u8; X25519_LEN];
-        let nonce = auth.issue_nonce(dh_pub);
+        let (nonce, _) = auth.issue_nonce(dh_pub).unwrap();
         auth.take_pending(&nonce, dh_pub).unwrap();
         // Second take fails (consumed).
         assert!(matches!(
@@ -386,10 +513,79 @@ mod tests {
     #[test]
     fn pending_nonce_rejects_wrong_identity() {
         let auth = AuthState::new();
-        let nonce = auth.issue_nonce([1u8; X25519_LEN]);
+        let (nonce, _) = auth.issue_nonce([1u8; X25519_LEN]).unwrap();
         assert!(matches!(
             auth.take_pending(&nonce, [2u8; X25519_LEN]),
             Err(AuthError::IdentityMismatch)
         ));
+    }
+
+    #[test]
+    fn dh_proof_matches_only_with_the_identity_secret() {
+        use aqua_core::wire::auth::dh_proof;
+        let id = aqua_core::IdentityKeyPair::generate();
+        let other = aqua_core::IdentityKeyPair::generate();
+        let auth = AuthState::new();
+        let dh = *id.public().dh_pub.as_bytes();
+        let (nonce, eph_pub) = auth.issue_nonce(dh).unwrap();
+        let eph = auth.take_pending(&nonce, dh).unwrap();
+        let server = dh_proof(eph.dh(&id.public().dh_pub).as_bytes(), &nonce, &dh, id.public().sign_pub.as_bytes()).unwrap();
+        let client = dh_proof(id.dh.dh(&eph_pub).as_bytes(), &nonce, &dh, id.public().sign_pub.as_bytes()).unwrap();
+        assert_eq!(server, client);
+        let forged = dh_proof(other.dh.dh(&eph_pub).as_bytes(), &nonce, &dh, id.public().sign_pub.as_bytes()).unwrap();
+        assert_ne!(server, forged);
+        // The proof covers the Ed25519 key: swapping it changes the proof.
+        let swapped = dh_proof(id.dh.dh(&eph_pub).as_bytes(), &nonce, &dh, other.public().sign_pub.as_bytes()).unwrap();
+        assert_ne!(server, swapped);
+        // A low-order key gives an all-zero secret: no proof at all.
+        assert!(dh_proof(&[0u8; 32], &nonce, &dh, id.public().sign_pub.as_bytes()).is_none());
+    }
+
+    #[test]
+    fn pending_is_capped() {
+        let auth = AuthState::with_cap([1u8; 32], 64);
+        for i in 0..64u64 {
+            let mut k = [0u8; X25519_LEN];
+            k[..8].copy_from_slice(&i.to_be_bytes());
+            assert!(auth.issue_nonce(k).is_some());
+        }
+        assert!(auth.issue_nonce([3u8; X25519_LEN]).is_none(), "the map stops growing");
+    }
+
+    /// REV2-002: under heavy parallel load the cap is never passed, also
+    /// while expired entries are pruned; answering a challenge frees a place.
+    #[test]
+    fn pending_cap_holds_under_concurrency() {
+        const CAP: usize = 64;
+        let auth = AuthState::with_cap([2u8; 32], CAP);
+        let ok = std::sync::atomic::AtomicUsize::new(0);
+        let max_seen = std::sync::atomic::AtomicUsize::new(0);
+        let taken = std::sync::Mutex::new(Vec::new());
+        std::thread::scope(|s| {
+            for t in 0..32u64 {
+                let (auth, ok, max_seen, taken) = (&auth, &ok, &max_seen, &taken);
+                s.spawn(move || {
+                    for i in 0..200u64 {
+                        let mut k = [0u8; X25519_LEN];
+                        k[..8].copy_from_slice(&(t * 1000 + i).to_be_bytes());
+                        if let Some((n, _)) = auth.issue_nonce(k) {
+                            ok.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            taken.lock().unwrap().push((n, k));
+                        }
+                        // prune runs too (it's what reset the old counter).
+                        if i % 7 == 0 { auth.prune(); }
+                        max_seen.fetch_max(auth.pending_len(), std::sync::atomic::Ordering::SeqCst);
+                    }
+                });
+            }
+        });
+        assert_eq!(ok.load(std::sync::atomic::Ordering::SeqCst), CAP, "exactly the cap was handed out (nothing expired)");
+        assert!(max_seen.load(std::sync::atomic::Ordering::SeqCst) <= CAP);
+        assert_eq!(auth.pending_len(), CAP);
+        // One answered: one place again.
+        let (n, k) = taken.lock().unwrap()[0];
+        assert!(auth.take_pending(&n, k).is_ok());
+        assert!(auth.issue_nonce([9u8; X25519_LEN]).is_some());
+        assert!(auth.issue_nonce([10u8; X25519_LEN]).is_none());
     }
 }

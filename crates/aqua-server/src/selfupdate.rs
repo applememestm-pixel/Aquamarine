@@ -170,7 +170,16 @@ async fn pick(c: &reqwest::Client, list: &serde_json::Value, tester: bool) -> Op
                         },
                         _ => None,
                     };
-                    sha = text.and_then(|t| sums_line(&t, name));
+                    // AQUA-SEC-012: signed by the built-in release key (once set).
+                    let sig = match (rel["sums_sig"].as_str(), by(aqua_core::release::SIG_ASSET).and_then(|a| a["browser_download_url"].as_str().map(str::to_string))) {
+                        (Some(t), _) => Some(t.to_string()),
+                        (None, Some(u)) => match c.get(u).timeout(std::time::Duration::from_secs(30)).send().await {
+                            Ok(r) => r.text().await.ok(),
+                            Err(_) => None,
+                        },
+                        _ => None,
+                    };
+                    sha = text.filter(|t| aqua_core::release::sums_trusted(t, sig.as_deref())).and_then(|t| sums_line(&t, name));
                 }
             }
             asset = Some((a["browser_download_url"].as_str().unwrap_or_default().to_string(), a["size"].as_u64().unwrap_or(0), sha));
@@ -183,6 +192,10 @@ const FEEDS: &[&str] = &["https://aquamarinemessenger.pw/updates.json", "https:/
 
 /// None: nothing newer. GitHub's API first, then the site's feed.
 async fn find(c: &reqwest::Client, tester: bool) -> Result<Option<Found>, String> {
+    // REV2-003 (fail-closed): a build without the release key installs no update.
+    if !aqua_core::release::signing_enabled() {
+        return Err(aqua_core::release::NO_KEY.into());
+    }
     let api = async {
         let r = c
             .get(format!("https://api.github.com/repos/{REPO}/releases?per_page=20"))

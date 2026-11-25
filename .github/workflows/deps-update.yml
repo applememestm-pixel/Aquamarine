@@ -1,0 +1,83 @@
+name: dependency update
+
+# AQUA-SEC-016: dependencies with known vulnerabilities (cargo audit) are
+# updated. crates.io isn't reachable from the sessions that write code, so
+# this runs here and commits the result to the branch:
+# by hand (workflow_dispatch: branch + packages; `name=version` pins one
+# with --precise). For PR #81 it ran four times on that branch from a
+# temporary push trigger (owner, 25.11), removed afterwards.
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to update (the open PR's)"
+        required: true
+      packages:
+        description: "cargo update -p … (space separated)"
+        required: true
+        default: "lettre rustls rustls-webpki webpki-roots url tokio rustix"
+      rusqlite:
+        description: "Also move rusqlite to the newest release (SQLite CVE fix in libsqlite3-sys)"
+        required: false
+        default: "true"
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-22.04
+    env:
+      BRANCH: ${{ inputs.branch || github.ref_name }}
+      PKGS: ${{ inputs.packages || 'lettre rustls rustls-webpki url tokio rustix' }}
+      RUSQLITE: ${{ inputs.rusqlite || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BRANCH }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: rusqlite to its newest release (libsqlite3-sys with the fixed SQLite)
+        if: env.RUSQLITE == 'true'
+        run: |
+          v=$(curl -fsS -A "aquamarine-ci (github actions)" https://crates.io/api/v1/crates/rusqlite | python3 -c 'import json,sys; print(json.load(sys.stdin)["crate"]["max_stable_version"])')
+          mm=$(echo "$v" | cut -d. -f1,2)
+          echo "rusqlite $v → \"$mm\""
+          sed -i -E 's/^(rusqlite +=.*version = ")[0-9.]+(")/\1'"$mm"'\2/' Cargo.toml crates/aqua-server/Cargo.toml
+          grep -n '^rusqlite' Cargo.toml crates/aqua-server/Cargo.toml
+      - name: cargo update in the three workspaces
+        run: |
+          for dir in . crates/aqua-client-ui crates/aqua-server-app; do
+            echo "== $dir"
+            (cd "$dir" && cargo update -p rusqlite -p libsqlite3-sys 2>&1) || echo "rusqlite: re-resolving $dir"
+            for p in $PKGS; do
+              case "$p" in
+                *=*) (cd "$dir" && cargo update -v -p "${p%%=*}" --precise "${p#*=}" 2>&1) || echo "skip $p in $dir" ;;
+                *) (cd "$dir" && cargo update -v -p "$p" 2>&1) || echo "skip $p in $dir" ;;
+              esac
+            done
+            # Why a package doesn't move (what holds it back).
+          done
+          git diff --stat
+      - name: cargo audit after the update
+        run: |
+          set +e
+          for f in Cargo.lock crates/aqua-client-ui/Cargo.lock crates/aqua-server-app/Cargo.lock; do
+            echo "== $f"; cargo audit --file "$f"
+          done
+          exit 0
+      # Informational: a major rusqlite step may need code changes; the
+      # update is committed either way and the PR's own checks decide.
+      - name: the relay and core still build
+        continue-on-error: true
+        run: cargo check -p aqua-server -p aqua-core -p aqua-client-core
+      - name: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml crates/aqua-server/Cargo.toml Cargo.lock crates/aqua-client-ui/Cargo.lock crates/aqua-server-app/Cargo.lock
+          if git diff --cached --quiet; then echo "nothing to update"; exit 0; fi
+          git commit -m "Dependencies: cargo update for RustSec advisories (${PKGS}; rusqlite: ${RUSQLITE}) — AQUA-SEC-016"
+          git push origin HEAD:"$BRANCH"

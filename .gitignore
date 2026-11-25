@@ -33,6 +33,11 @@ crates/aqua-client-ui/gen/
 aqua-admin.json
 # SMTP login + app password (admin panel)
 aqua-smtp.json
+# Federation secret and this relay's private node key (REV2-001: a test run
+# once wrote the key here and it was committed — never again)
+aqua-federation.json
+aqua-fed-node.key
+*.key
 # Who came online / signed in (admin panel journal)
 aqua-journal.log
 proxy.txt

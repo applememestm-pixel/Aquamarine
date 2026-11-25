@@ -136,6 +136,10 @@ fn parse_sums(text: &str, file: &str) -> Option<String> {
 /// checksums already read. github.com pages are the last resort.
 #[tauri::command]
 pub async fn update_check(channel: String) -> Result<UpdateInfo, String> {
+    // REV2-003 (fail-closed): a build without the release key installs no update.
+    if !aqua_core::release::signing_enabled() {
+        return Err(aqua_core::release::NO_KEY.into());
+    }
     let http = aqua_client_core::transport::http_client().map_err(|e| e.to_string())?;
     let api_err = match api_check(&http, &channel).await {
         Ok(i) => return Ok(i),
@@ -308,14 +312,30 @@ async fn release_info(http: &reqwest::Client, rel: &serde_json::Value, channel: 
             if let Some(sums) = find("SHA256SUMS.txt") {
                 // ISO 8601 in UTC: string order is time order.
                 if sums["updated_at"].as_str().unwrap_or_default() >= updated.as_str() {
-                    if let Some(t) = rel["sums"].as_str() {
-                        sha256 = parse_sums(t, want);
+                    let text = if let Some(t) = rel["sums"].as_str() {
+                        Some(t.to_string())
                     } else if let Some(u) = sums["browser_download_url"].as_str() {
-                        if let Ok(r) = http.get(u).timeout(std::time::Duration::from_secs(20)).send().await {
-                            if let Ok(t) = r.text().await {
-                                sha256 = parse_sums(&t, want);
-                            }
+                        match http.get(u).timeout(std::time::Duration::from_secs(20)).send().await {
+                            Ok(r) => r.text().await.ok(),
+                            Err(_) => None,
                         }
+                    } else {
+                        None
+                    };
+                    // AQUA-SEC-012: the sums count only when signed by the
+                    // release key built into the app (once it is set).
+                    let sig = match rel["sums_sig"].as_str() {
+                        Some(t) => Some(t.to_string()),
+                        None => match find(aqua_core::release::SIG_ASSET).and_then(|a| a["browser_download_url"].as_str().map(str::to_string)) {
+                            Some(u) => match http.get(u).timeout(std::time::Duration::from_secs(20)).send().await {
+                                Ok(r) => r.text().await.ok(),
+                                Err(_) => None,
+                            },
+                            None => None,
+                        },
+                    };
+                    if let Some(t) = text.filter(|t| aqua_core::release::sums_trusted(t, sig.as_deref())) {
+                        sha256 = parse_sums(&t, want);
                     }
                 }
             }
@@ -366,8 +386,13 @@ struct Progress {
 #[tauri::command]
 pub async fn update_download(app: AppHandle, asset: UpdateAsset) -> Result<String, String> {
     use std::io::Write;
-    let expected = asset.sha256.clone().ok_or("this build is still being uploaded — try again in a few minutes")?;
-    if !asset.url.starts_with("https://github.com/") || asset.name.contains(['/', '\\']) {
+    // No hash: the release's sums aren't there yet, or aren't signed by the
+    // release key (REV2-003) — either way nothing is installed.
+    let expected = asset.sha256.clone().ok_or("this release has no signed checksum yet (still uploading, or not signed by the Aquamarine release key) — the update wasn't installed")?;
+    // Only this repository's release files (AQUA-SEC-012: any github.com
+    // address passed, so a feed could point at another repository's file
+    // with a matching line in its own sums).
+    if !asset.url.starts_with(aqua_core::release::DOWNLOAD_PREFIX) || asset.name.contains(['/', '\\']) {
         return Err("unexpected update address".into());
     }
     let dir = updates_dir(&app)?;

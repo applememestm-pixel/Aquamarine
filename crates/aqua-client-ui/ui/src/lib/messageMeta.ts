@@ -1,7 +1,7 @@
 /**
  * Per-message UI metadata kept on this device (localStorage):
  *   - reactions: emoji reactions you've placed on a message
- *   - pins:      the pinned message per chat
+ *   - pins:      pinned messages per chat or room (this device)
  *
  * These are device-local for now (reactions don't sync because messages
  * don't yet carry a shared cross-peer id). Pins are inherently per-view.
@@ -91,22 +91,59 @@ export function applyPeerReaction(key: string, emoji: string, add: boolean) {
 }
 
 // ---- Pins ----
-type PinMap = Record<string, string>; // peerId -> pinned msgId
+// Scope → pinned message ids, newest first. The scope is the chat id, or
+// "<chat>#<room>" for a room of a group: each room has its own pins (before
+// 1.21.0-23 one slot per chat — pinning in room B silently replaced room A's
+// pin). Old entries ("<chat>": "<id>") load as a one-pin list for the chat.
+type PinMap = Record<string, string[]>;
 const P_KEY = "aqua-pins";
+/** Most pins kept per chat or room. */
+export const MAX_PINS = 10;
 
 function loadPins(): PinMap {
-  try { return JSON.parse(localStorage.getItem(P_KEY) ?? "{}") as PinMap; }
-  catch { return {}; }
+  try {
+    const raw = JSON.parse(localStorage.getItem(P_KEY) ?? "{}") as Record<string, unknown>;
+    const out: PinMap = {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (typeof v === "string" && v) out[k] = [v];
+      else if (Array.isArray(v)) out[k] = v.filter((x): x is string => typeof x === "string" && !!x).slice(0, MAX_PINS);
+    }
+    return out;
+  } catch { return {}; }
 }
 export const pins = writable<PinMap>(loadPins());
 pins.subscribe((p) => { try { localStorage.setItem(P_KEY, JSON.stringify(p)); } catch { /* ignore */ } });
 
-export function pinnedId(peer: string): string | null {
-  return get(pins)[peer] ?? null;
+/** Where pins of this chat (and room) live. */
+export function pinScope(chat: string, room?: string | null): string {
+  return room ? `${chat}#${room}` : chat;
 }
-export function pinMessage(peer: string, msgId: string) {
-  pins.update((p) => ({ ...p, [peer]: msgId }));
+/** Pinned ids of a scope, newest first. A room also sees the chat's old
+ *  one-slot pin (the caller shows only ids found among the room's rows). */
+export function pinnedIds(scope: string, map: PinMap = get(pins)): string[] {
+  const own = map[scope] ?? [];
+  const hash = scope.indexOf("#");
+  const legacy = hash > 0 ? (map[scope.slice(0, hash)] ?? []) : [];
+  return [...own, ...legacy.filter((id) => !own.includes(id))];
 }
-export function unpinMessage(peer: string) {
-  pins.update((p) => { const { [peer]: _drop, ...rest } = p; return rest; });
+export function pinnedId(scope: string): string | null {
+  return pinnedIds(scope)[0] ?? null;
+}
+export function isPinned(scope: string, msgId: string): boolean {
+  return pinnedIds(scope).includes(msgId);
+}
+export function pinMessage(scope: string, msgId: string) {
+  pins.update((p) => ({ ...p, [scope]: [msgId, ...(p[scope] ?? []).filter((x) => x !== msgId)].slice(0, MAX_PINS) }));
+}
+/** Unpin one message (from the scope and, for a room, the chat's old slot). */
+export function unpinMessage(scope: string, msgId: string) {
+  pins.update((p) => {
+    const next = { ...p };
+    const hash = scope.indexOf("#");
+    for (const k of hash > 0 ? [scope, scope.slice(0, hash)] : [scope]) {
+      const left = (next[k] ?? []).filter((x) => x !== msgId);
+      if (left.length) next[k] = left; else delete next[k];
+    }
+    return next;
+  });
 }

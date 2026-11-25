@@ -294,7 +294,7 @@ pub const RESET_BODY: &str = r#"{"t":"rst"}"#;
 /// reconnect) fails to decrypt — that's no broken session.
 static DECRYPTED: StdMutex<Option<(std::collections::HashSet<[u8; 16]>, std::collections::VecDeque<[u8; 16]>)>> = StdMutex::new(None);
 
-fn envelope_hash(ciphertext: &[u8]) -> [u8; 16] {
+pub fn envelope_hash(ciphertext: &[u8]) -> [u8; 16] {
     use sha2::Digest;
     let d = sha2::Sha256::digest(ciphertext);
     let mut out = [0u8; 16];
@@ -312,6 +312,29 @@ pub fn note_decrypted(ciphertext: &[u8]) {
             while order.len() > 4096 {
                 if let Some(o) = order.pop_front() { set.remove(&o); }
             }
+        }
+    }
+}
+
+/// First messages being opened right now (REV-005): a second copy that
+/// arrives meanwhile (relay + Bluetooth / Wi-Fi) waits out rather than
+/// opening the session a second time. Released when the guard drops.
+static INFLIGHT: StdMutex<Option<std::collections::HashSet<[u8; 16]>>> = StdMutex::new(None);
+
+pub struct InitialGuard([u8; 16]);
+
+impl InitialGuard {
+    /// `None` when another copy of this first message is being opened.
+    pub fn reserve(hash: [u8; 16]) -> Option<Self> {
+        let mut g = INFLIGHT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        g.get_or_insert_with(Default::default).insert(hash).then_some(Self(hash))
+    }
+}
+
+impl Drop for InitialGuard {
+    fn drop(&mut self) {
+        if let Some(set) = INFLIGHT.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_mut() {
+            set.remove(&self.0);
         }
     }
 }

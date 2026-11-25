@@ -49,6 +49,8 @@ async fn spawn_server() -> SocketAddr {
         let p = std::env::temp_dir().join(format!("aqua-e2e-{}.sqlite", std::process::id()));
         let _ = std::fs::remove_file(&p);
         std::env::set_var("AQUA_DIR_DB", p);
+        // Codes in API answers: tests have no mail server (explicit since 1.21.0-21).
+        std::env::set_var("AQUA_DEV_CODES", "1");
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -119,6 +121,7 @@ impl Client {
             identity: self.identity.public(),
             nonce: chal.nonce.clone(),
             signature: URL_SAFE_NO_PAD.encode(sig),
+            dh_proof: aqua_client_core::transport::sign_in_proof(&self.identity, &nonce_bytes, chal.server_eph.as_deref()).unwrap(),
         };
         let resp = http
             .post(format!("{base}/v1/auth/verify"))
@@ -177,21 +180,25 @@ async fn full_authenticated_e2e_conversation() {
 
     // ------- 3. Open WebSockets with tokens -------
     let (mut a_ws, _) = tokio_tungstenite::connect_async(format!(
-        "ws://{addr}/v1/ws?user=alice&token={}&v=1.2.0",
+        "ws://{addr}/v1/ws?user=alice&token={}&v=1.21.0-23",
         alice.token
     )).await.unwrap();
     let (mut b_ws, _) = tokio_tungstenite::connect_async(format!(
-        "ws://{addr}/v1/ws?user=bob&token={}&v=1.2.0",
+        "ws://{addr}/v1/ws?user=bob&token={}&v=1.21.0-23",
         bob.token
     )).await.unwrap();
 
     // WS with no token → refused.
-    let bad = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=alice&token=&v=1.2.0")).await;
+    let bad = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=alice&token=&v=1.21.0-23")).await;
     assert!(bad.is_err(), "empty token must be rejected");
 
-    // ------- 4. Alice fetches Bob's bundle (public, no token) -------
+    // ------- 4. Alice fetches Bob's bundle (public; a one-time prekey only
+    // for a signed-in caller, AQUA-SEC-007) -------
+    let anon: PreKeyBundle = http.get(format!("{base}/v1/bundle/bob")).send().await.unwrap().json().await.unwrap();
+    assert!(anon.one_time_prekey.is_none());
     let bob_bundle: PreKeyBundle = http
         .get(format!("{base}/v1/bundle/bob"))
+        .bearer_auth(&alice.token)
         .send().await.unwrap()
         .json().await.unwrap();
     assert!(bob_bundle.verify().is_ok());
@@ -301,9 +308,99 @@ async fn verify_rejects_wrong_signature() {
             identity: alice.public(),
             nonce: chal.nonce,
             signature: URL_SAFE_NO_PAD.encode(sig),
+            dh_proof: None,
         })
         .send().await.unwrap();
     assert!(r.status().is_client_error(), "must reject wrong signature");
+}
+
+/// Fresh challenge for `dh`: (nonce string, nonce bytes, server one-off key).
+async fn challenge_for(http: &reqwest::Client, base: &str, id: &IdentityKeyPair) -> (String, Vec<u8>, Option<String>) {
+    let chal: ChallengeResponse = http
+        .post(format!("{base}/v1/auth/challenge"))
+        .json(&ChallengeRequest { identity_dh_pub: URL_SAFE_NO_PAD.encode(id.public().dh_pub.as_bytes()) })
+        .send().await.unwrap()
+        .json().await.unwrap();
+    let bytes = URL_SAFE_NO_PAD.decode(&chal.nonce).unwrap();
+    (chal.nonce, bytes, chal.server_eph)
+}
+
+/// AQUA-SEC-001 regression: knowing a victim's public X25519 key (anyone can
+/// read it from /v1/bundle) must not be enough for a token. Before the fix
+/// the attacker's own Ed25519 key passed, with `identity = {attacker sign,
+/// victim dh}`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn token_forgery_with_foreign_signing_key_is_refused() {
+    let addr = spawn_server().await;
+    let base = format!("http://{addr}");
+    let http = test_http();
+    let victim = IdentityKeyPair::generate();
+    let attacker = IdentityKeyPair::generate();
+    let forged = aqua_core::IdentityPublic { sign_pub: attacker.public().sign_pub, dh_pub: victim.public().dh_pub };
+
+    // 1) The old attack: a valid signature by the attacker's key, no proof.
+    let (nonce, bytes, eph) = challenge_for(&http, &base, &victim).await;
+    assert!(eph.is_some(), "relay must hand out a one-off key");
+    let r = http.post(format!("{base}/v1/auth/verify"))
+        .json(&VerifyRequest { identity: forged.clone(), nonce, signature: URL_SAFE_NO_PAD.encode(attacker.sign.sign(&bytes)), dh_proof: None })
+        .send().await.unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::UNAUTHORIZED, "no proof → no token");
+
+    // 2) A proof made with the attacker's X25519 secret doesn't fit the victim's key.
+    let (nonce, bytes, eph) = challenge_for(&http, &base, &victim).await;
+    let proof = aqua_client_core::transport::sign_in_proof(&attacker, &bytes, eph.as_deref()).unwrap();
+    let r = http.post(format!("{base}/v1/auth/verify"))
+        .json(&VerifyRequest { identity: forged.clone(), nonce, signature: URL_SAFE_NO_PAD.encode(attacker.sign.sign(&bytes)), dh_proof: proof })
+        .send().await.unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::UNAUTHORIZED, "proof of another key → no token");
+
+    // 3) A random proof.
+    let (nonce, bytes, _) = challenge_for(&http, &base, &victim).await;
+    let r = http.post(format!("{base}/v1/auth/verify"))
+        .json(&VerifyRequest { identity: forged.clone(), nonce, signature: URL_SAFE_NO_PAD.encode(attacker.sign.sign(&bytes)), dh_proof: Some(URL_SAFE_NO_PAD.encode([7u8; 32])) })
+        .send().await.unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    // 4) The real owner still signs in, and the proven pair is then kept.
+    let mut owner = Client::new("victim");
+    owner.identity = victim;
+    owner.login(&http, &base).await;
+    assert!(!owner.token.is_empty());
+
+    // 5) A nonce answered once can't be answered again.
+    let (nonce, bytes, eph) = challenge_for(&http, &base, &owner.identity).await;
+    let proof = aqua_client_core::transport::sign_in_proof(&owner.identity, &bytes, eph.as_deref()).unwrap();
+    let req = VerifyRequest { identity: owner.identity.public(), nonce, signature: URL_SAFE_NO_PAD.encode(owner.identity.sign.sign(&bytes)), dh_proof: proof };
+    let r1 = http.post(format!("{base}/v1/auth/verify")).json(&req).send().await.unwrap();
+    assert!(r1.status().is_success());
+    let r2 = http.post(format!("{base}/v1/auth/verify")).json(&req).send().await.unwrap();
+    assert!(r2.status().is_client_error(), "replayed verify must fail");
+}
+
+/// AQUA-SEC-001: a token holder can't put a bundle whose Ed25519 key isn't
+/// the one proven at sign-in (peers would trust a prekey signed by it).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bundle_with_unproven_signing_key_is_refused() {
+    let addr = spawn_server().await;
+    let base = format!("http://{addr}");
+    let http = test_http();
+    let mut alice = Client::new("alice");
+    alice.login(&http, &base).await;
+    // Same X25519 key, someone else's Ed25519 key (and an SPK it signed).
+    let mixed = IdentityKeyPair {
+        sign: IdentityKeyPair::generate().sign,
+        dh: aqua_core::crypto::DhSecret::from_bytes(alice.identity.dh.to_bytes()),
+    };
+    let bundle = BundleUpload {
+        identity: mixed.public(),
+        signed_prekey: SignedPreKey::generate(9, &mixed).public(),
+        one_time_prekeys: Vec::new(),
+    };
+    let r = http.post(format!("{base}/v1/bundle/alice"))
+        .bearer_auth(&alice.token)
+        .json(&bundle)
+        .send().await.unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::FORBIDDEN);
 }
 
 async fn recv_relay(
@@ -654,13 +751,13 @@ async fn one_account_on_two_devices() {
     // A stranger's key can't use the account.
     let mut eve = Client::new("eve");
     eve.login(&http, &base).await;
-    assert!(tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=multi&token={}&v=1.2.0", eve.token)).await.is_err());
+    assert!(tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=multi&token={}&v=1.21.0-23", eve.token)).await.is_err());
 
-    let (mut a_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=multi&token={}&v=1.2.0", a.token)).await.unwrap();
-    let (mut b_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=multi&token={}&v=1.2.0", b.token)).await.unwrap();
+    let (mut a_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=multi&token={}&v=1.21.0-23", a.token)).await.unwrap();
+    let (mut b_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=multi&token={}&v=1.21.0-23", b.token)).await.unwrap();
     let mut peer = Client::new("mpeer");
     peer.login(&http, &base).await;
-    let (mut p_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=mpeer&token={}&v=1.2.0", peer.token)).await.unwrap();
+    let (mut p_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=mpeer&token={}&v=1.21.0-23", peer.token)).await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // The peer encrypts once per device.
@@ -786,7 +883,7 @@ async fn telegram_bot_api_compat() {
     // A user writes /start.
     let mut user = Client::new("tguser");
     user.login(&http, &base).await;
-    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=tguser&token={}&v=1.2.0", user.token)).await.unwrap();
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=tguser&token={}&v=1.21.0-23", user.token)).await.unwrap();
     let say = |text: &str| RelayMessage { from: String::new(), to: "tgcompat_bot".into(), payload: text.as_bytes().to_vec(), kind: PayloadKind::Plaintext, ts: None, id: None };
     ws.send(Message::Binary(serde_json::to_vec(&say("/start hello")).unwrap().into())).await.unwrap();
 
@@ -917,7 +1014,7 @@ async fn native_bot_api_extras() {
 
     let mut user = Client::new("xuser");
     user.login(&http, &base).await;
-    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=xuser&token={}&v=1.2.0", user.token)).await.unwrap();
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=xuser&token={}&v=1.21.0-23", user.token)).await.unwrap();
     let say = |text: &str| RelayMessage { from: String::new(), to: "extras_bot".into(), payload: text.as_bytes().to_vec(), kind: PayloadKind::Plaintext, ts: None, id: None };
     ws.send(Message::Binary(serde_json::to_vec(&say("/start")).unwrap().into())).await.unwrap();
     let _ = get("/v1/bot/updates?timeout=5").send().await.unwrap();
@@ -1101,7 +1198,7 @@ async fn telegram_mini_apps() {
     let query_id = pairs.iter().find(|(k, _)| k == "query_id").unwrap().1.clone();
 
     // sendData → web_app_data.
-    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=maker&token={}&v=1.2.0", user.token)).await.unwrap();
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=maker&token={}&v=1.21.0-23", user.token)).await.unwrap();
     let say = |text: &str| RelayMessage { from: String::new(), to: "shop_bot".into(), payload: text.as_bytes().to_vec(), kind: PayloadKind::Plaintext, ts: None, id: None };
     ws.send(Message::Binary(serde_json::to_vec(&say(r#"[wad:v1]{"t":"Order","d":"{\"item\":3}"}"#)).unwrap().into())).await.unwrap();
     let ups: serde_json::Value = http.post(format!("{api}/getUpdates")).json(&serde_json::json!({ "timeout": 5 })).send().await.unwrap().json().await.unwrap();
@@ -1224,7 +1321,7 @@ async fn acks_redeliver_until_confirmed() {
     a.login(&http, &base).await;
     let mut b = Client::new("ackb");
     b.login(&http, &base).await;
-    let url = |user: &str, token: &str| format!("ws://{addr}/v1/ws?user={user}&token={token}&ack=1&v=1.2.0");
+    let url = |user: &str, token: &str| format!("ws://{addr}/v1/ws?user={user}&token={token}&ack=1&v=1.21.0-23");
     let ack = |id: &str| Message::Binary(serde_json::to_vec(&RelayMessage::ack(Some(id.into()))).unwrap().into());
 
     // Both get the greeting that says the relay speaks acks.
@@ -1263,7 +1360,7 @@ async fn acks_redeliver_until_confirmed() {
     // Without acks (an older client) nothing changes: no greeting, no ack.
     let mut c = Client::new("ackc");
     c.login(&http, &base).await;
-    let (mut c_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=ackc&token={}&v=1.2.0", c.token)).await.unwrap();
+    let (mut c_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=ackc&token={}&v=1.21.0-23", c.token)).await.unwrap();
     let m = RelayMessage { from: String::new(), to: "acka".into(), payload: b"old".to_vec(), kind: PayloadKind::Envelope, ts: None, id: None };
     c_ws.send(Message::Binary(serde_json::to_vec(&m).unwrap().into())).await.unwrap();
     let got = recv_relay(&mut a_ws).await;
@@ -1339,15 +1436,15 @@ async fn plain_accounts_and_optional_two_step() {
     let r = http.post(format!("{base}/v1/me/2fa/disable")).bearer_auth(&a.token).json(&serde_json::json!({ "code": backup[1] })).send().await.unwrap();
     assert_eq!(r.status().as_u16(), 204, "{}", r.text().await.unwrap());
 
-    // An app older than 1.2.0 (or one that doesn't say) isn't served.
-    let old = reqwest::Client::builder().user_agent("aqua-client-core/1.1.0-7").build().unwrap();
+    // An app older than the minimum (1.21.0-23) (or one that doesn't say) isn't served.
+    let old = reqwest::Client::builder().user_agent("aqua-client-core/1.21.0-22").build().unwrap();
     let r = old.post(format!("{base}/v1/auth/challenge")).json(&serde_json::json!({ "identity_dh_pub": "x" })).send().await.unwrap();
     assert_eq!(r.status().as_u16(), 426);
     let r = reqwest::Client::new().post(format!("{base}/v1/users/signup")).json(&serde_json::json!({})).send().await.unwrap();
     assert_eq!(r.status().as_u16(), 426);
     let st: serde_json::Value = reqwest::get(format!("{base}/v1/stats")).await.unwrap().json().await.unwrap();
     assert_eq!(st["version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(st["min_client"], "1.2.0");
+    assert_eq!(st["min_client"], "1.21.0-23");
 }
 
 /// 1.2.0-4: Telegram as the second factor. An account signed up with a
@@ -1427,4 +1524,113 @@ async fn bots_talk_to_bots() {
     let r = http.post(format!("{base}/v1/bot/send")).header("Authorization", format!("Bot {}", toks[1]))
         .json(&serde_json::json!({ "to": "b2b_devbot", "text": "Tests passed!" })).send().await.unwrap();
     assert!(r.status().is_success());
+}
+
+/// AQUA-SEC-011: one device address holds at most `WS_PER_ADDRESS` live
+/// connections; a new one closes the oldest instead of piling up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connections_per_address_are_capped() {
+    let addr = spawn_server().await;
+    let base = format!("http://{addr}");
+    let http = test_http();
+    let mut c = Client::new("wscap");
+    c.login(&http, &base).await;
+    let url = format!("ws://{addr}/v1/ws?user=wscap&token={}&v=1.21.0-23", c.token);
+    let (mut first, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    let mut rest = Vec::new();
+    for _ in 0..aqua_server::WS_PER_ADDRESS {
+        rest.push(tokio_tungstenite::connect_async(&url).await.unwrap().0);
+    }
+    // The first connection's loop ends: the socket closes or the stream ends.
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            match first.next().await {
+                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => break true,
+                Some(Ok(_)) => continue,
+            }
+        }
+    }).await;
+    assert_eq!(ended, Ok(true), "the oldest connection must be closed");
+    // The newest is alive and served.
+    let last = rest.last_mut().unwrap();
+    last.send(Message::Ping(Vec::new().into())).await.unwrap();
+}
+
+/// REV-002: one address can't fill the relay's pending challenges for
+/// everyone — past its burst it gets 429, while other addresses still sign in.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn challenges_are_limited_per_address() {
+    spawn_server().await; // the shared test database
+    let state = aqua_server::AppState::new();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, aqua_server::app(state).into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap();
+    });
+    let base = format!("http://{addr}");
+    let http = test_http();
+    let ask = |ip: &'static str| {
+        let http = http.clone();
+        let base = base.clone();
+        async move {
+            let id = IdentityKeyPair::generate();
+            http.post(format!("{base}/v1/auth/challenge"))
+                .header("x-real-ip", ip)
+                .json(&ChallengeRequest { identity_dh_pub: URL_SAFE_NO_PAD.encode(id.public().dh_pub.as_bytes()) })
+                .send().await.unwrap().status().as_u16()
+        }
+    };
+    let mut codes = Vec::new();
+    for _ in 0..(aqua_server::auth::CHALLENGE_PER_IP.0 as usize + 5) {
+        codes.push(ask("203.0.113.7").await);
+    }
+    assert!(codes[..aqua_server::auth::CHALLENGE_PER_IP.0 as usize].iter().all(|c| *c == 200), "{codes:?}");
+    assert_eq!(*codes.last().unwrap(), 429, "the flooding address is slowed down");
+    assert_eq!(ask("198.51.100.9").await, 200, "another address still gets a challenge");
+}
+
+/// REV-003: a banned account's still-valid token gets no one-time prekeys.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn banned_token_gets_no_one_time_prekeys() {
+    let addr = spawn_server().await;
+    let base = format!("http://{addr}");
+    let http = test_http();
+    let mut owner = Client::new("opkowner");
+    owner.login(&http, &base).await;
+    let b = owner.fresh_bundle(5);
+    assert!(http.post(format!("{base}/v1/bundle/opkowner")).bearer_auth(&owner.token).json(&b).send().await.unwrap().status().is_success());
+    let mut bad = Client::new("opkbad");
+    bad.login(&http, &base).await;
+    let got: PreKeyBundle = http.get(format!("{base}/v1/bundle/opkowner")).bearer_auth(&bad.token).send().await.unwrap().json().await.unwrap();
+    assert!(got.one_time_prekey.is_some(), "before the ban");
+    let r = http.post(format!("{base}/v1/users/signup")).bearer_auth(&bad.token)
+        .json(&serde_json::json!({ "username": "opkbad", "password": "a long password 1" })).send().await.unwrap();
+    assert!(r.status().is_success(), "signup: {}", r.status());
+    assert!(aqua_server::directory::Directory::open().unwrap().ban("opkbad").is_some());
+    let got: PreKeyBundle = http.get(format!("{base}/v1/bundle/opkowner")).bearer_auth(&bad.token).send().await.unwrap().json().await.unwrap();
+    assert!(got.one_time_prekey.is_none(), "a banned token takes no one-time prekey");
+}
+
+/// AQUA-SEC-011: a WebSocket message over WS_MAX_MESSAGE closes the
+/// connection instead of being buffered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oversized_websocket_message_closes_the_connection() {
+    let addr = spawn_server().await;
+    let base = format!("http://{addr}");
+    let http = test_http();
+    let mut c = Client::new("wsbig");
+    c.login(&http, &base).await;
+    let url = format!("ws://{addr}/v1/ws?user=wsbig&token={}&v=1.21.0-23", c.token);
+    let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    let big = vec![b'x'; aqua_server::WS_MAX_MESSAGE + 1024];
+    let _ = ws.send(Message::Binary(big.into())).await;
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            match ws.next().await {
+                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => break true,
+                Some(Ok(_)) => continue,
+            }
+        }
+    }).await;
+    assert_eq!(ended, Ok(true));
 }

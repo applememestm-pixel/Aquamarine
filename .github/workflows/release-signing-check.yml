@@ -1,0 +1,87 @@
+name: release signing check
+
+# The release key without a release (owner, 25.11): UPDATE_PUBKEY must be
+# the public half of UPDATE_SIGNING_KEY; a SHA256SUMS.txt made like
+# release.yml's is signed with tools/release-sign.sh (the script release.yml
+# uses) and checked by aqua-core built with AQUA_UPDATE_PUBKEY — as the apps
+# are — including a swapped file, edited sums, a wrong signature and a
+# build without the key. Only the public key is printed; the private one
+# lives in a 0600 temp file outside the workspace while a step runs.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/release.yml"
+      - ".github/workflows/release-signing-check.yml"
+      - "tools/release-sign.sh"
+      - "crates/aqua-core/src/release.rs"
+      - "crates/aqua-core/tests/release_signing.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: release signing (real key)
+    runs-on: ubuntu-22.04
+    env:
+      UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+      AQUA_UPDATE_PUBKEY: ${{ vars.UPDATE_PUBKEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: the secret and the variable are set — do they belong together?
+        run: |
+          [ -n "$UPDATE_SIGNING_KEY" ] || { echo "::error::secret UPDATE_SIGNING_KEY is not available"; exit 1; }
+          [ -n "$AQUA_UPDATE_PUBKEY" ] || { echo "::error::variable UPDATE_PUBKEY is not set"; exit 1; }
+          # Public facts about the secret only: its type and its public half.
+          printf '%s\n' "$UPDATE_SIGNING_KEY" | openssl pkey -pubout -text_pub -noout 2>/dev/null | head -1 || echo "the secret isn't a PEM key openssl reads"
+          pub=$(bash tools/release-sign.sh pub)
+          want=$(echo "$AQUA_UPDATE_PUBKEY" | tr 'A-F' 'a-f' | tr -d ' \n')
+          echo "public half of the secret: $pub"
+          echo "UPDATE_PUBKEY:             $want (${#want} hex digits)"
+          echo "SECRET_PUB=$pub" >> "$GITHUB_ENV"
+          echo "VAR_PUB=$want" >> "$GITHUB_ENV"
+          if [ "$pub" = "$want" ]; then echo "match: yes"; echo "KEYS_MATCH=1" >> "$GITHUB_ENV"; else echo "::warning::match: NO — the rest runs with the secret's own public half to check the signing path; this job fails at the end"; echo "KEYS_MATCH=0" >> "$GITHUB_ENV"; fi
+      - name: a release-like SHA256SUMS.txt, signed like release.yml signs it
+        run: |
+          d="$RUNNER_TEMP/rel"; mkdir -p "$d"; cd "$d"
+          head -c 300000 /dev/urandom > Aquamarine_test_x64-setup.exe
+          head -c 200000 /dev/urandom > Aquamarine_test.apk
+          sha256sum -- * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          bash "$GITHUB_WORKSPACE/tools/release-sign.sh" sign SHA256SUMS.txt SHA256SUMS.txt.sig
+          # Independent check with openssl and the PUBLIC key only.
+          python3 -c "import sys;open('pub.der','wb').write(bytes.fromhex('302a300506032b6570032100'+sys.argv[1]))" "$SECRET_PUB"
+          python3 -c "import sys;open('sig.bin','wb').write(bytes.fromhex(open('SHA256SUMS.txt.sig').read().strip()))"
+          openssl pkeyutl -verify -pubin -keyform DER -inkey pub.der -rawin -in SHA256SUMS.txt -sigfile sig.bin
+          ls -la "$d"
+          # No private key material left anywhere we can see.
+          # The signing script's temp folder is gone, and only these files are here.
+          if ls -d "$RUNNER_TEMP"/aqsign.* 2>/dev/null; then echo "::error::the signing temp folder was left on disk"; exit 1; fi
+          [ "$(ls "$d" | sort | tr '\n' ' ')" = "Aquamarine_test.apk Aquamarine_test_x64-setup.exe SHA256SUMS.txt SHA256SUMS.txt.sig pub.der sig.bin " ] || { ls "$d"; echo "::error::unexpected files"; exit 1; }
+          if git -C "$GITHUB_WORKSPACE" status --porcelain | grep -q .; then git -C "$GITHUB_WORKSPACE" status --porcelain; echo "::error::files appeared in the checkout"; exit 1; fi
+          echo "RELEASE_SIGNING_DIR=$d" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: the apps' check (aqua-core built with the secret's public half) — good, swapped, edited, wrong, missing
+        env:
+          AQUA_UPDATE_PUBKEY: ${{ env.SECRET_PUB }}
+        run: cargo test -p aqua-core --test release_signing -- --nocapture
+      - name: an app built with UPDATE_PUBKEY as it is set now
+        env:
+          AQUA_UPDATE_PUBKEY: ${{ env.VAR_PUB }}
+          EXPECT_MATCH: ${{ env.KEYS_MATCH }}
+        run: cargo test -p aqua-core --test release_signing -- --nocapture
+      - name: the release module's own tests (incl. a build without a key)
+        env:
+          AQUA_UPDATE_PUBKEY: ""
+          RELEASE_SIGNING_DIR: ""
+        run: cargo test -p aqua-core release
+      - name: verdict
+        run: |
+          if [ "$KEYS_MATCH" != 1 ]; then
+            echo "::error::UPDATE_PUBKEY ($VAR_PUB) is not the public half of UPDATE_SIGNING_KEY ($SECRET_PUB): apps built with it would refuse every release signed with the secret, and release.yml stops before building."
+            exit 1
+          fi
+          echo "release signing is set up correctly"

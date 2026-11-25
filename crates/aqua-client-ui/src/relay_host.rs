@@ -50,6 +50,26 @@ pub mod android {
             .map_err(|e| e.to_string())
     }
 
+    /// AQUA-SEC-013: wrap the vault master key with a key that lives in the
+    /// Android Keystore (AquaRelay.kt → ksWrap; AES-GCM, the key never leaves
+    /// the Keystore). Returns the wrapped blob (base64).
+    pub fn ks_wrap(key_hex: &str) -> Result<String, String> {
+        let h = HANDLE.get().ok_or("keystore is not available")?;
+        h.run_mobile_plugin::<serde_json::Value>("ksWrap", serde_json::json!({ "key": key_hex }))
+            .map_err(|e| e.to_string())?
+            .get("blob").and_then(|v| v.as_str()).map(str::to_string)
+            .ok_or_else(|| "keystore gave no blob".to_string())
+    }
+
+    /// The master key (hex) out of a blob made by [`ks_wrap`].
+    pub fn ks_unwrap(blob: &str) -> Result<String, String> {
+        let h = HANDLE.get().ok_or("keystore is not available")?;
+        h.run_mobile_plugin::<serde_json::Value>("ksUnwrap", serde_json::json!({ "blob": blob }))
+            .map_err(|e| e.to_string())?
+            .get("key").and_then(|v| v.as_str()).map(str::to_string)
+            .ok_or_else(|| "keystore gave no key".to_string())
+    }
+
     /// A link in the browser or mail app (AquaRelay.kt → openUrl).
     pub fn open_url(url: &str) -> Result<(), String> {
         let h = HANDLE.get().ok_or("opening links is not available")?;
