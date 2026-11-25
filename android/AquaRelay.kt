@@ -79,7 +79,83 @@ class WidgetArgs {
 }
 
 @TauriPlugin
+/** ksWrap: the vault master key (hex) to wrap. */
+@InvokeArg
+class KsWrapArgs {
+  var key: String = ""
+}
+
+/** ksUnwrap: a blob made by ksWrap (base64). */
+@InvokeArg
+class KsUnwrapArgs {
+  var blob: String = ""
+}
+
+/** AQUA-SEC-013: the vault master key is kept wrapped by an AES-256-GCM key
+ *  that lives in the Android Keystore and never leaves it. A copy of the
+ *  app's folder without this device's Keystore can't open the vault. */
+object AquaKeystore {
+  private const val ALIAS = "aqua-vault-wrap"
+
+  private fun key(): javax.crypto.SecretKey {
+    val ks = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+    (ks.getKey(ALIAS, null) as? javax.crypto.SecretKey)?.let { return it }
+    val gen = javax.crypto.KeyGenerator.getInstance(android.security.keystore.KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+    gen.init(
+      android.security.keystore.KeyGenParameterSpec.Builder(
+        ALIAS,
+        android.security.keystore.KeyProperties.PURPOSE_ENCRYPT or android.security.keystore.KeyProperties.PURPOSE_DECRYPT
+      )
+        .setBlockModes(android.security.keystore.KeyProperties.BLOCK_MODE_GCM)
+        .setEncryptionPaddings(android.security.keystore.KeyProperties.ENCRYPTION_PADDING_NONE)
+        .setKeySize(256)
+        .build()
+    )
+    return gen.generateKey()
+  }
+
+  /** iv (12) || ciphertext+tag, base64. */
+  fun wrap(plain: ByteArray): String {
+    val c = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+    c.init(javax.crypto.Cipher.ENCRYPT_MODE, key())
+    val out = c.iv + c.doFinal(plain)
+    return Base64.encodeToString(out, Base64.NO_WRAP)
+  }
+
+  fun unwrap(blob: String): ByteArray {
+    val raw = Base64.decode(blob, Base64.NO_WRAP)
+    require(raw.size > 12 + 16) { "short blob" }
+    val c = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+    c.init(javax.crypto.Cipher.DECRYPT_MODE, key(), javax.crypto.spec.GCMParameterSpec(128, raw.copyOfRange(0, 12)))
+    return c.doFinal(raw.copyOfRange(12, raw.size))
+  }
+}
+
 class AquaRelayPlugin(private val activity: Activity) : Plugin(activity) {
+  /** Wrap the vault master key with the Keystore key (state.rs). */
+  @Command
+  fun ksWrap(invoke: Invoke) {
+    try {
+      val a = invoke.parseArgs(KsWrapArgs::class.java)
+      val bytes = a.key.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+      invoke.resolve(JSObject().put("blob", AquaKeystore.wrap(bytes)))
+    } catch (e: Exception) {
+      invoke.reject("keystore: " + e.message)
+    }
+  }
+
+  /** The vault master key (hex) from a ksWrap blob. */
+  @Command
+  fun ksUnwrap(invoke: Invoke) {
+    try {
+      val a = invoke.parseArgs(KsUnwrapArgs::class.java)
+      val key = AquaKeystore.unwrap(a.blob).joinToString("") { "%02x".format(it) }
+      invoke.resolve(JSObject().put("key", key))
+    } catch (e: Exception) {
+      invoke.reject("keystore: " + e.message)
+    }
+  }
+
   @Command
   fun start(invoke: Invoke) {
     val args = invoke.parseArgs(RelayArgs::class.java)

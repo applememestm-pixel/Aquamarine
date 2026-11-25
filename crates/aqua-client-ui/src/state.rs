@@ -1397,7 +1397,72 @@ mod keyring {
 const KEYRING_SERVICE: &str = "app.aquamarine.desktop";
 const KEYRING_USER:    &str = "vault-master-key";
 
+/// Android: the vault master key wrapped by a Keystore key
+/// (`master.key.ks`), never as plain bytes (AQUA-SEC-013: before 1.21.0-23
+/// it was a plain `master.key` in the app's folder).
+/// * `master.key.ks` there → it must unwrap; if the Keystore can't, stop
+///   with an error rather than make a new key (that would lose the vault).
+/// * only the old `master.key` → wrap it, check the round trip, then delete
+///   the plain file; any failure keeps the file (it still works).
+/// * neither → a new key, wrapped; the plain file only if wrapping fails.
+#[cfg(target_os = "android")]
+fn android_master_key(dir: &std::path::Path) -> Result<MasterKey> {
+    use aqua_client_core::MASTER_KEY_LEN;
+    use crate::relay_host::android::{ks_unwrap, ks_wrap};
+    let ks = dir.join("master.key.ks");
+    let plain = dir.join("master.key");
+    if ks.exists() {
+        let blob = std::fs::read_to_string(&ks)?;
+        let hex_key = ks_unwrap(blob.trim()).map_err(|e| anyhow!("the Android keystore didn't open this account's vault key ({e}) — restart the app"))?;
+        let arr = decode_key(&hex_key).ok_or_else(|| anyhow!("the keystore gave a malformed vault key"))?;
+        if plain.exists() {
+            let _ = std::fs::remove_file(&plain);
+        }
+        return Ok(MasterKey::from_bytes(arr));
+    }
+    let wrap_and_check = |arr: &[u8; MASTER_KEY_LEN]| -> bool {
+        let hex_key = hex::encode(arr);
+        match ks_wrap(&hex_key) {
+            Ok(blob) => {
+                let back = ks_unwrap(&blob).ok().and_then(|h| decode_key(&h));
+                if back.as_ref() == Some(arr) && crate::fsx::write_atomic(&ks, blob.as_bytes()).is_ok() {
+                    return true;
+                }
+                tracing::warn!("keystore round trip failed; keeping the plain key file");
+                false
+            }
+            Err(e) => { tracing::warn!(%e, "keystore unavailable; keeping the plain key file"); false }
+        }
+    };
+    if plain.exists() {
+        let arr: [u8; MASTER_KEY_LEN] = std::fs::read(&plain)?.try_into().map_err(|_| anyhow!("master.key has unexpected length"))?;
+        if wrap_and_check(&arr) {
+            if let Err(e) = std::fs::remove_file(&plain) {
+                tracing::warn!(?e, "vault key wrapped by the keystore, but the plain file couldn't be removed");
+            } else {
+                tracing::info!("vault master key moved into the Android keystore");
+            }
+        }
+        return Ok(MasterKey::from_bytes(arr));
+    }
+    std::fs::create_dir_all(dir)?;
+    let key = MasterKey::generate();
+    if !wrap_and_check(&key.0) {
+        std::fs::write(&plain, key.0)?;
+    }
+    Ok(key)
+}
+
 fn load_or_create_master_key(dir: &std::path::Path) -> Result<MasterKey> {
+    #[cfg(target_os = "android")]
+    let key = android_master_key(dir);
+    #[cfg(not(target_os = "android"))]
+    let key = keyring_master_key(dir);
+    key
+}
+
+#[cfg_attr(target_os = "android", allow(dead_code))]
+fn keyring_master_key(dir: &std::path::Path) -> Result<MasterKey> {
     use aqua_client_core::MASTER_KEY_LEN;
 
     let legacy_path = dir.join("master.key");
