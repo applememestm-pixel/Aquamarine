@@ -112,6 +112,12 @@ impl BotLimits {
     /// Take one token from bucket `key` (capacity `cap`, `rate` per second).
     fn take(&self, key: &str, cap: f64, rate: f64) -> bool {
         let now = std::time::Instant::now();
+        // AQUA-SEC-011: keys are per bot, per bot→recipient and per caller,
+        // so the map grew forever. Past a size, drop buckets idle for 10
+        // minutes (they'd be full again by then anyway at these rates).
+        if self.buckets.len() > 50_000 {
+            self.buckets.retain(|_, v| now.duration_since(v.1) < std::time::Duration::from_secs(600));
+        }
         let mut e = self.buckets.entry(key.to_string()).or_insert((cap, now));
         let (ref mut tokens, ref mut at) = *e;
         *tokens = (*tokens + now.duration_since(*at).as_secs_f64() * rate).min(cap);
@@ -499,20 +505,41 @@ async fn upload_bundle(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// One-time prekeys a signed-in caller may take: a burst of 30, then one
+/// every 10 s (AQUA-SEC-007).
+const OPK_BURST: f64 = 30.0;
+const OPK_RATE: f64 = 0.1;
+
 async fn fetch_bundle(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Path(user): Path<UserId>,
 ) -> Result<Json<PreKeyBundle>, StatusCode> {
-    if let Some(b) = local_bundle(&state, &user).await {
+    // AQUA-SEC-007: every bundle fetch used up one of the person's one-time
+    // prekeys, with no sign-in — anyone could drain them all and leave new
+    // sessions without the extra forward secrecy they give. A one-time
+    // prekey now goes only to a signed-in caller, within a budget; anyone
+    // else gets the bundle without one (X3DH works without it).
+    let caller = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .and_then(|t| state.auth.verify_token(t.trim()).ok());
+    let take_opk = caller.is_some_and(|dh| state.bot_limits.take(&format!("opk:{}", hex::encode(dh)), OPK_BURST, OPK_RATE));
+    if let Some(b) = local_bundle_ex(&state, &user, take_opk).await {
         return Ok(Json(b));
     }
     // An old @username: the account's keys under its new one.
     if let Some(new) = state.directory.renamed_to(&user) {
-        if let Some(b) = local_bundle(&state, &new).await {
+        if let Some(b) = local_bundle_ex(&state, &new, take_opk).await {
             return Ok(Json(b));
         }
     }
-    // Uploaded to another relay of the federation?
+    // Uploaded to another relay of the federation? Only for a signed-in
+    // caller: the peer hands out a one-time prekey and can't tell who asks.
+    if caller.is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
     if let Some(f) = fed::current(&state) {
         if let Some(v) = f.fetch_bundle(&user).await {
             if let Ok(b) = serde_json::from_value::<PreKeyBundle>(v) {
@@ -541,6 +568,17 @@ fn persist_prekeys(state: &AppState, user: &str, u: &UserState) {
 }
 
 pub(crate) async fn local_bundle(state: &AppState, user: &str) -> Option<PreKeyBundle> {
+    local_bundle_ex(state, user, true).await
+}
+
+/// The bundle `user` uploaded here; `take_opk` hands out (and uses up) one
+/// of its one-time prekeys.
+pub(crate) async fn local_bundle_ex(state: &AppState, user: &str, take_opk: bool) -> Option<PreKeyBundle> {
+    // Don't make an in-memory entry for every name anyone asks about
+    // (AQUA-SEC-011): only for someone who uploaded keys.
+    if !state.users.contains_key(user) && state.directory.prekeys_get(user).is_none() {
+        return None;
+    }
     let user_state = state.user(&user.to_string());
     let mut u = user_state.lock().await;
     if u.identity.is_none() {
@@ -552,7 +590,7 @@ pub(crate) async fn local_bundle(state: &AppState, user: &str) -> Option<PreKeyB
     }
     let identity = u.identity?;
     let signed_prekey = u.signed_prekey.clone()?;
-    let one_time_prekey = u.opks.pop_front();
+    let one_time_prekey = if take_opk { u.opks.pop_front() } else { None };
     if one_time_prekey.is_some() {
         persist_prekeys(state, user, &u);
     }

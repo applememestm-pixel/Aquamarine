@@ -114,11 +114,14 @@ async fn two_relays_act_as_one() {
     let spk = SignedPreKey::generate(1, &idb);
     let up = BundleUpload { identity: idb.public(), signed_prekey: spk.public(), one_time_prekeys: vec![OneTimePreKey::generate(1).public()] };
     assert!(http.post(format!("{ub}/v1/bundle/bob")).bearer_auth(&tb).json(&up).send().await.unwrap().status().is_success());
-    let bundle: PreKeyBundle = http.get(format!("{ua}/v1/bundle/bob")).send().await.unwrap().json().await.unwrap();
+    let ta = token(&http, &ua, &ida).await;
+    // AQUA-SEC-007: without signing in, A doesn't look in the network for
+    // a bundle (that would use up one of bob's one-time prekeys on B).
+    assert_eq!(http.get(format!("{ua}/v1/bundle/bob")).send().await.unwrap().status().as_u16(), 404);
+    let bundle: PreKeyBundle = http.get(format!("{ua}/v1/bundle/bob")).bearer_auth(&ta).send().await.unwrap().json().await.unwrap();
     assert_eq!(bundle.identity, idb.public());
 
     // Live routing: alice on A → bob on B.
-    let ta = token(&http, &ua, &ida).await;
     let mut wa = ws(&a, "alice", &ta).await;
     let mut wb = ws(&b, "bob", &tb).await;
     tokio::time::sleep(Duration::from_millis(150)).await;
@@ -215,12 +218,18 @@ async fn changes_are_pushed_to_peers() {
     let up = BundleUpload { identity: ida.public(), signed_prekey: spk.public(), one_time_prekeys: vec![OneTimePreKey::generate(7).public(), OneTimePreKey::generate(8).public()] };
     assert!(http.post(format!("{ua}/v1/bundle/dora")).bearer_auth(&ta).json(&up).send().await.unwrap().status().is_success());
     sa.users.clear();
-    let bundle: PreKeyBundle = http.get(format!("{ua}/v1/bundle/dora")).send().await.unwrap().json().await.unwrap();
+    // Not signed in: the bundle, but no one-time prekey (AQUA-SEC-007).
+    let anon: PreKeyBundle = http.get(format!("{ua}/v1/bundle/dora")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(anon.identity, ida.public());
+    assert!(anon.one_time_prekey.is_none(), "an anonymous fetch must not use up a one-time prekey");
+    sa.users.clear();
+    let bundle: PreKeyBundle = http.get(format!("{ua}/v1/bundle/dora")).bearer_auth(&ta).send().await.unwrap().json().await.unwrap();
     assert_eq!(bundle.identity, ida.public());
     assert!(bundle.one_time_prekey.is_some());
     // The used one-time key is gone after another "restart".
     sa.users.clear();
-    let b2: PreKeyBundle = http.get(format!("{ua}/v1/bundle/dora")).send().await.unwrap().json().await.unwrap();
+    let b2: PreKeyBundle = http.get(format!("{ua}/v1/bundle/dora")).bearer_auth(&ta).send().await.unwrap().json().await.unwrap();
+    assert!(b2.one_time_prekey.is_some(), "the second of two one-time prekeys");
     assert_ne!(serde_json::to_string(&b2.one_time_prekey).unwrap(), serde_json::to_string(&bundle.one_time_prekey).unwrap());
 }
 

@@ -192,9 +192,13 @@ async fn full_authenticated_e2e_conversation() {
     let bad = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=alice&token=&v=1.21.0-23")).await;
     assert!(bad.is_err(), "empty token must be rejected");
 
-    // ------- 4. Alice fetches Bob's bundle (public, no token) -------
+    // ------- 4. Alice fetches Bob's bundle (public; a one-time prekey only
+    // for a signed-in caller, AQUA-SEC-007) -------
+    let anon: PreKeyBundle = http.get(format!("{base}/v1/bundle/bob")).send().await.unwrap().json().await.unwrap();
+    assert!(anon.one_time_prekey.is_none());
     let bob_bundle: PreKeyBundle = http
         .get(format!("{base}/v1/bundle/bob"))
+        .bearer_auth(&alice.token)
         .send().await.unwrap()
         .json().await.unwrap();
     assert!(bob_bundle.verify().is_ok());

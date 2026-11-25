@@ -635,7 +635,13 @@ impl Transport {
 
     pub async fn fetch_bundle(&self, peer: &str) -> Result<PreKeyBundle, TransportError> {
         let url = format!("{}/v1/bundle/{}", self.server_url.trim_end_matches('/'), peer);
-        let r = self.http.get(&url).send().await?;
+        // Signed in: relays from 1.21.0-23 hand out a one-time prekey (and
+        // look in the rest of the network) only then (AQUA-SEC-007).
+        let mut req = self.http.get(&url);
+        if let Ok(t) = self.bearer().await {
+            req = req.bearer_auth(t);
+        }
+        let r = req.send().await?;
         if !r.status().is_success() {
             return Err(TransportError::Server {
                 status: r.status().as_u16(),
