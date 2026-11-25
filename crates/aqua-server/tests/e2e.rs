@@ -1610,3 +1610,27 @@ async fn banned_token_gets_no_one_time_prekeys() {
     let got: PreKeyBundle = http.get(format!("{base}/v1/bundle/opkowner")).bearer_auth(&bad.token).send().await.unwrap().json().await.unwrap();
     assert!(got.one_time_prekey.is_none(), "a banned token takes no one-time prekey");
 }
+
+/// AQUA-SEC-011: a WebSocket message over WS_MAX_MESSAGE closes the
+/// connection instead of being buffered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oversized_websocket_message_closes_the_connection() {
+    let addr = spawn_server().await;
+    let base = format!("http://{addr}");
+    let http = test_http();
+    let mut c = Client::new("wsbig");
+    c.login(&http, &base).await;
+    let url = format!("ws://{addr}/v1/ws?user=wsbig&token={}&v=1.21.0-23", c.token);
+    let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    let big = vec![b'x'; aqua_server::WS_MAX_MESSAGE + 1024];
+    let _ = ws.send(Message::Binary(big.into())).await;
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            match ws.next().await {
+                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => break true,
+                Some(Ok(_)) => continue,
+            }
+        }
+    }).await;
+    assert_eq!(ended, Ok(true));
+}

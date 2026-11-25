@@ -648,7 +648,13 @@ async fn ws_upgrade(
     let me = state.address_for(&q.user, &dh_pub);
     tracing::info!(user = %q.user, addr = %me, token = %token_fp, "WS OK: upgrading to WebSocket");
     let acks = q.ack == 1;
-    Ok(ws.on_upgrade(move |sock| ws_run(sock, state, me, acks)))
+    // REV/AQUA-SEC-011: one envelope can't be larger than WS_MAX_MESSAGE
+    // (the library default was 64 MiB per message; files travel as blobs,
+    // envelopes are text and key material).
+    Ok(ws
+        .max_message_size(WS_MAX_MESSAGE)
+        .max_frame_size(WS_MAX_MESSAGE)
+        .on_upgrade(move |sock| ws_run(sock, state, me, acks)))
 }
 
 /// A fresh delivery id (16 random bytes, hex).
@@ -970,6 +976,9 @@ pub(crate) async fn deliver_local(state: &AppState, msg: &RelayMessage) -> bool 
     }
     delivered
 }
+
+/// Largest WebSocket message a device may send.
+pub const WS_MAX_MESSAGE: usize = 16 * 1024 * 1024;
 
 /// Envelopes waiting for one connection before it counts as "behind".
 pub const WS_QUEUE: usize = 1024;

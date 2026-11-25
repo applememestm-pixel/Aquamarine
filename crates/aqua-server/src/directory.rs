@@ -2704,9 +2704,41 @@ impl Directory {
 
     /// Returns the row id ([`Self::inbox_ack`] removes it).
     pub fn inbox_push(&self, user: &str, msg: &[u8]) -> Result<i64, DirError> {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         db.execute("INSERT INTO inbox (user, msg, at) VALUES (?1, ?2, ?3)", rusqlite::params![user, msg, now_secs() as i64])?;
-        Ok(db.last_insert_rowid())
+        let id = db.last_insert_rowid();
+        // AQUA-SEC-011 (owner, 25.11: the oldest go): at most INBOX_MAX_ROWS
+        // envelopes and INBOX_MAX_BYTES per address; past that the oldest
+        // are dropped, so one flooded inbox can't fill the relay's disk.
+        // Checked every 256 inserts per address to keep the hot path cheap.
+        if id % 256 == 0 {
+            let (n, bytes): (i64, i64) = db
+                .query_row("SELECT COUNT(*), COALESCE(SUM(length(msg)), 0) FROM inbox WHERE user=?1", rusqlite::params![user], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap_or((0, 0));
+            if n > Self::INBOX_MAX_ROWS || bytes > Self::INBOX_MAX_BYTES {
+                let keep_rows = Self::INBOX_MAX_ROWS.min(if bytes > Self::INBOX_MAX_BYTES && n > 0 { n * Self::INBOX_MAX_BYTES / bytes } else { n });
+                let dropped = db.execute(
+                    "DELETE FROM inbox WHERE user=?1 AND id NOT IN (SELECT id FROM inbox WHERE user=?1 ORDER BY id DESC LIMIT ?2)",
+                    rusqlite::params![user, keep_rows.max(1)],
+                ).unwrap_or(0);
+                if dropped > 0 {
+                    tracing::warn!(%user, dropped, "inbox full — the oldest envelopes were dropped");
+                    crate::journal::log(user, "inbox-full", &format!("{dropped}"));
+                }
+            }
+        }
+        Ok(id)
+    }
+
+    /// Most envelopes kept for one address.
+    pub const INBOX_MAX_ROWS: i64 = 20_000;
+    /// Most bytes kept for one address.
+    pub const INBOX_MAX_BYTES: i64 = 256 * 1024 * 1024;
+
+    /// Envelopes waiting for `user` (tests, panel).
+    pub fn inbox_len(&self, user: &str) -> i64 {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.query_row("SELECT COUNT(*) FROM inbox WHERE user=?1", rusqlite::params![user], |r| r.get(0)).unwrap_or(0)
     }
 
     /// Everything waiting for `user`, oldest first (rows stay until acked).
@@ -3649,6 +3681,24 @@ mod tests {
     use super::*;
 
     fn dir() -> Directory { Directory::open_memory() }
+
+    /// AQUA-SEC-011: a flooded inbox keeps the newest INBOX_MAX_ROWS.
+    #[test]
+    fn inbox_keeps_the_newest_when_full() {
+        let d = dir();
+        let total = Directory::INBOX_MAX_ROWS + 600;
+        let mut last = 0;
+        for i in 0..total {
+            last = d.inbox_push("flood", format!("m{i}").as_bytes()).unwrap();
+        }
+        let n = d.inbox_len("flood");
+        assert!(n <= Directory::INBOX_MAX_ROWS + 256, "{n}");
+        assert!(n >= Directory::INBOX_MAX_ROWS - 256, "{n}");
+        let rows = d.inbox_take("flood");
+        assert_eq!(rows.last().map(|r| r.0), Some(last), "the newest stays");
+        assert_eq!(rows.last().map(|r| r.1.clone()), Some(format!("m{}", total - 1).into_bytes()));
+        assert_eq!(d.inbox_len("other"), 0);
+    }
 
     /// AQUA-SEC-005: with dev codes off (the default since 1.21.0-21) a code
     /// is stored hashed, works once, dies after 5 wrong tries, and codes per
