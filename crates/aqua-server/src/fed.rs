@@ -54,19 +54,26 @@ const FILE: &str = "aqua-federation.json";
 /// This relay's node key when the config file doesn't hold it.
 const NODE_KEY_FILE: &str = "aqua-fed-node.key";
 
-/// Write a file only its owner can read (the node key).
-fn write_private(path: &str, text: &str) {
+/// Node ids whose private key became public (REV2-001: a test run wrote one
+/// into the source tree and it was committed in 1.21.0-23's branch). Never
+/// accepted from anyone; a relay that has one makes itself a new key.
+pub const LEAKED_NODE_IDS: &[&str] = &["1271400a10f36e27afb42bf3277bc1b1"];
+
+/// Write a file only its owner can read (the node key, the federation
+/// config with its secret).
+fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        if let Ok(mut f) = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path) {
-            let _ = f.write_all(text.as_bytes());
-        }
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;
+        // `mode` applies only to a new file: an older one (0644) is fixed too.
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        f.write_all(text.as_bytes())
     }
     #[cfg(not(unix))]
     {
-        let _ = std::fs::write(path, text);
+        std::fs::write(path, text)
     }
 }
 const SKEW_MS: i64 = 5 * 60 * 1000;
@@ -96,9 +103,14 @@ pub struct FedConfig {
     /// Kept in memory only (tests): peers learnt later aren't written to disk.
     #[serde(skip)]
     pub ephemeral: bool,
-    /// This relay's Ed25519 node key (secret, hex). Made on first start.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    /// This relay's Ed25519 node key (secret, hex). Kept ONLY in its own
+    /// file (`NODE_KEY_FILE`, 0600), never written into this config
+    /// (REV2-001); read here once to move keys of an older build out.
+    #[serde(default, skip_serializing)]
     pub node_key: String,
+    /// The folder the config and key files are in ("" = the current one).
+    #[serde(skip)]
+    pub dir: std::path::PathBuf,
     /// Keys of peer relays, learnt from their signed hellos.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pins: Vec<Pin>,
@@ -122,6 +134,16 @@ pub struct Pin {
     pub key: String,
 }
 
+fn valid_key_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Is this secret key (hex) one of `leaked` (node ids)?
+fn key_is_leaked_in(hex_key: &str, leaked: &[&str]) -> bool {
+    hex::decode(hex_key).ok().and_then(|b| <[u8; 32]>::try_from(b).ok())
+        .is_some_and(|b| leaked.contains(&node_id_of(aqua_core::crypto::SignSecret::from_bytes(b).public().as_bytes()).as_str()))
+}
+
 /// A node id: the first 16 bytes of SHA-256 of the public key, hex.
 pub fn node_id_of(pubkey: &[u8; 32]) -> String {
     hex::encode(&Sha256::digest(pubkey)[..16])
@@ -129,7 +151,20 @@ pub fn node_id_of(pubkey: &[u8; 32]) -> String {
 
 impl FedConfig {
     pub fn load() -> Self {
-        let mut c: FedConfig = std::fs::read(FILE).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        Self::load_in(std::path::Path::new("."))
+    }
+
+    /// [`Self::load`] from a given folder (the data folder; tests).
+    pub fn load_in(dir: &std::path::Path) -> Self {
+        Self::load_in_with(dir, LEAKED_NODE_IDS)
+    }
+
+    /// [`Self::load_in`] with a given list of published node ids (tests).
+    pub fn load_in_with(dir: &std::path::Path, leaked: &[&str]) -> Self {
+        let file = dir.join(FILE);
+        let key_file = dir.join(NODE_KEY_FILE);
+        let mut c: FedConfig = std::fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        c.dir = dir.to_path_buf();
         if let Ok(s) = std::env::var("AQUA_FED_SECRET") {
             if !s.trim().is_empty() { c.secret = s.trim().to_string(); }
         }
@@ -141,21 +176,36 @@ impl FedConfig {
             if !u.trim().is_empty() { c.public_url = u.trim().trim_end_matches('/').to_string(); }
         }
         c.peers.retain(|p| !p.is_empty() && p.trim_end_matches('/') != c.public_url);
-        // The node key must outlive restarts even when the network is set by
-        // environment variables (no config file): a new key at every start
-        // would look like an impostor to peers that pinned the old one.
-        if c.node_key.is_empty() {
-            c.node_key = std::fs::read_to_string(NODE_KEY_FILE).ok().map(|s| s.trim().to_string()).filter(|s| s.len() == 64).unwrap_or_else(|| {
-                let k = hex::encode(aqua_core::crypto::SignSecret::generate().to_bytes());
-                write_private(NODE_KEY_FILE, &k);
-                k
-            });
+        // The node key lives in its own file and must outlive restarts (also
+        // when the network is set by environment variables: a new key at
+        // every start would look like an impostor to peers that pinned the
+        // old one). Only for a relay that is in a network or name registry:
+        // an unconfigured relay (tests, a fresh install) writes no key.
+        let from_json = std::mem::take(&mut c.node_key);
+        if c.active() || c.registry() {
+            let from_file = std::fs::read_to_string(&key_file).ok().map(|s| s.trim().to_string()).filter(|s| valid_key_hex(s));
+            let mut key = from_file.clone().or_else(|| Some(from_json.clone()).filter(|s| valid_key_hex(s)));
+            if key.as_deref().is_some_and(|k| key_is_leaked_in(k, leaked)) {
+                tracing::error!("federation: this relay's node key is a published one — making a new key (peers re-admit it)");
+                key = None;
+            }
+            let key = key.unwrap_or_else(|| hex::encode(aqua_core::crypto::SignSecret::generate().to_bytes()));
+            if from_file.as_deref() != Some(key.as_str()) {
+                if let Err(e) = write_private(&key_file, &key) {
+                    tracing::error!(error = %e, "federation: the node key can't be saved — it will change at the next start");
+                }
+            }
+            c.node_key = key;
+        }
+        // An older build kept the key in this file: drop it from there.
+        if !from_json.is_empty() && file.exists() {
+            let _ = c.save();
         }
         if c.node.is_empty() {
             let mut b = [0u8; 8];
             rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut b);
             c.node = hex::encode(b);
-            if std::path::Path::new(FILE).exists() {
+            if file.exists() {
                 let _ = c.save();
             }
         }
@@ -164,9 +214,10 @@ impl FedConfig {
     pub fn save(&self) -> std::io::Result<()> {
         // The node key (after a rotation) is kept where `load` reads it.
         if !self.node_key.is_empty() {
-            write_private(NODE_KEY_FILE, &self.node_key);
+            write_private(&self.dir.join(NODE_KEY_FILE), &self.node_key)?;
         }
-        std::fs::write(FILE, serde_json::to_vec_pretty(self).unwrap_or_default())
+        // The secret is in here: owner-only, like the key.
+        write_private(&self.dir.join(FILE), &String::from_utf8_lossy(&serde_json::to_vec_pretty(self).unwrap_or_default()))
     }
     /// In a network: a secret is set (peers may still be on their way —
     /// they say hello and get added by themselves).
@@ -340,6 +391,11 @@ impl Fed {
         hex::encode(self.key.public().as_bytes())
     }
 
+    /// Revoked here, or a published key (`LEAKED_NODE_IDS`).
+    pub fn is_revoked(&self, id: &str) -> bool {
+        self.cfg.revoked.iter().any(|r| r == id) || LEAKED_NODE_IDS.contains(&id)
+    }
+
     /// The key we keep for `peer` (by address), if any.
     pub fn pin_for(&self, peer: &str) -> Option<&Pin> {
         let peer = peer.trim_end_matches('/');
@@ -371,7 +427,7 @@ impl Fed {
         let mut it = h.splitn(5, '.');
         let (ts, nonce, from, to, sig) = (it.next()?, it.next()?, it.next()?, it.next()?, it.next()?);
         let ts: i64 = ts.parse().ok()?;
-        if (now_ms() - ts).abs() > SKEW_MS || to != self.node_id() || self.cfg.revoked.iter().any(|r| r == from) {
+        if (now_ms() - ts).abs() > SKEW_MS || to != self.node_id() || self.is_revoked(from) {
             return None;
         }
         let pin = self.cfg.pins.iter().find(|p| p.id == from)?;
@@ -435,7 +491,7 @@ impl Fed {
         // sender with a bad v2 signature is refused.
         if let Some(h2) = headers.get("x-aqua-fed2").and_then(|v| v.to_str().ok()) {
             let from = h2.split('.').nth(2).unwrap_or("");
-            if self.cfg.revoked.iter().any(|r| r == from) {
+            if self.is_revoked(from) {
                 return false;
             }
             if self.cfg.pins.iter().any(|p| p.id == from) {
@@ -1195,7 +1251,7 @@ fn pin_from_hello(fed: &Fed, h: &Hello) -> Option<Pin> {
     let pubk = aqua_core::crypto::SignPublic::from_bytes(key);
     pubk.verify(format!("aqua-fed-hello\n{url}\n{}", hex::encode(key)).as_bytes(), &sig).ok()?;
     let id = node_id_of(&key);
-    if fed.cfg.revoked.contains(&id) {
+    if fed.is_revoked(&id) {
         tracing::warn!(%url, %id, "federation: hello from a revoked node key — ignored");
         return None;
     }
@@ -1718,6 +1774,70 @@ mod cursor_tests {
         rc.revoked.push(a2.node_id());
         let b2 = super::Fed::new(rc).unwrap();
         assert!(super::pin_from_hello(&b2, &hello(&a2)).is_none());
+    }
+
+    fn net_json(extra: &str) -> String {
+        format!(r#"{{"secret":"a-long-shared-federation-secret","peers":["http://p"],"mode":"network"{extra}}}"#)
+    }
+
+    /// REV2-001: the node key lives only in its own owner-only file. A key
+    /// an older build wrote into aqua-federation.json moves there and leaves
+    /// the config; each relay makes its own key; a published key is replaced.
+    #[test]
+    fn node_key_is_private_unique_and_migrated() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        // An older config with the key inside.
+        let old = hex::encode(aqua_core::crypto::SignSecret::generate().to_bytes());
+        std::fs::write(a.path().join(super::FILE), net_json(&format!(r#","node_key":"{old}""#))).unwrap();
+        let c = super::FedConfig::load_in(a.path());
+        assert_eq!(c.node_key, old, "the existing key is kept");
+        let cfg_text = std::fs::read_to_string(a.path().join(super::FILE)).unwrap();
+        assert!(!cfg_text.contains(&old) && !cfg_text.contains("node_key"), "no key in the config any more");
+        assert_eq!(std::fs::read_to_string(a.path().join(super::NODE_KEY_FILE)).unwrap().trim(), old);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for f in [super::NODE_KEY_FILE, super::FILE] {
+                assert_eq!(std::fs::metadata(a.path().join(f)).unwrap().permissions().mode() & 0o777, 0o600, "{f}");
+            }
+        }
+        assert_eq!(super::FedConfig::load_in(a.path()).node_key, old, "stable across starts");
+        // Another relay: its own key.
+        std::fs::write(b.path().join(super::FILE), net_json("")).unwrap();
+        let other = super::FedConfig::load_in(b.path());
+        assert!(!other.node_key.is_empty());
+        assert_ne!(other.node_key, old);
+        // An unconfigured relay writes no key at all.
+        let none = tempfile::tempdir().unwrap();
+        assert!(super::FedConfig::load_in(none.path()).node_key.is_empty());
+        assert!(!none.path().join(super::NODE_KEY_FILE).exists());
+    }
+
+    #[test]
+    fn a_published_node_key_is_replaced_and_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(super::FILE), net_json("")).unwrap();
+        // A stand-in for a published key: put its id on the list for this test
+        // is not possible (a const), so check the real leaked id instead.
+        let f = fed("http://x");
+        assert!(f.is_revoked(super::LEAKED_NODE_IDS[0]));
+        let leaked_pin = super::Pin { url: "http://l".into(), id: super::LEAKED_NODE_IDS[0].into(), key: "00".repeat(32) };
+        let g = with_pins(&f, vec![leaked_pin], vec!["http://l".into()]);
+        let mut h = axum::http::HeaderMap::new();
+        h.insert("x-aqua-fed2", format!("{}.n.{}.{}.00", super::now_ms(), super::LEAKED_NODE_IDS[0], g.node_id()).parse().unwrap());
+        assert!(!g.verify(&h, "GET", "/v1/fed/users?since=0", b""), "a leaked id is never accepted");
+        // A relay whose key file holds a published key makes a new one at
+        // start (a fresh key stands in for the published one here).
+        let k = aqua_core::crypto::SignSecret::generate();
+        let id = super::node_id_of(k.public().as_bytes());
+        let hexk = hex::encode(k.to_bytes());
+        std::fs::write(dir.path().join(super::NODE_KEY_FILE), &hexk).unwrap();
+        let c = super::FedConfig::load_in_with(dir.path(), &[id.as_str()]);
+        assert_ne!(c.node_key, hexk, "replaced");
+        assert!(!super::key_is_leaked_in(&c.node_key, &[id.as_str()]));
+        assert_eq!(std::fs::read_to_string(dir.path().join(super::NODE_KEY_FILE)).unwrap().trim(), c.node_key);
+        // Not on the list: kept.
+        assert_eq!(super::FedConfig::load_in(dir.path()).node_key, c.node_key);
     }
 
     #[test]
