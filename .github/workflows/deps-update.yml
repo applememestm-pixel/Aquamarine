@@ -37,7 +37,9 @@ jobs:
       # Run 3: url stayed at 2.5.8 in the root lock — the resolver keeps
       # versions compatible with rust-version 1.75 there; `name=version`
       # pins one with --precise.
-      PKGS: ${{ inputs.packages || 'url=2.5.9' }}
+      # Run 4: rsa 0.10.0-rc.18 (Marvin, RUSTSEC-2023-0071) via russh in the
+      # server app — rsa and russh within their ranges.
+      PKGS: ${{ inputs.packages || 'russh rsa' }}
       RUSQLITE: ${{ inputs.rusqlite || 'false' }}
     steps:
       - uses: actions/checkout@v4
@@ -67,7 +69,7 @@ jobs:
               esac
             done
             # Why a package doesn't move (what holds it back).
-            (cd "$dir" && cargo tree -i url --depth 1 2>/dev/null | head -20) || true
+            (cd "$dir" && cargo tree -i rsa --depth 2 2>/dev/null | head -20) || true
           done
           git diff --stat
       - name: cargo audit after the update
