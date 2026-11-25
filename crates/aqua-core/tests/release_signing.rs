@@ -25,6 +25,13 @@ fn the_repository_key_signs_and_checks_releases() {
     assert!(signing_enabled(), "built with AQUA_UPDATE_PUBKEY (vars.UPDATE_PUBKEY)");
     let sums = std::fs::read_to_string(dir.join("SHA256SUMS.txt")).unwrap();
     let sig = std::fs::read_to_string(dir.join("SHA256SUMS.txt.sig")).unwrap();
+    // A build with a key that isn't the secret's (EXPECT_MATCH=0): it must
+    // refuse the release — what installed apps would do.
+    if std::env::var("EXPECT_MATCH").as_deref() == Ok("0") {
+        assert!(!sums_trusted(&sums, Some(&sig)), "a build with another key must refuse the release");
+        println!("a build with UPDATE_PUBKEY {} refuses this release (as it must)", UPDATE_PUBKEY.unwrap_or(""));
+        return;
+    }
 
     // 1. A correct release: signature good, every file matches its line.
     assert!(sums_trusted(&sums, Some(&sig)), "the secret's signature checks with the built-in public key");

@@ -30,17 +30,19 @@ jobs:
       AQUA_UPDATE_PUBKEY: ${{ vars.UPDATE_PUBKEY }}
     steps:
       - uses: actions/checkout@v4
-      - name: the secret and the variable are set and belong together
+      - name: the secret and the variable are set — do they belong together?
         run: |
           [ -n "$UPDATE_SIGNING_KEY" ] || { echo "::error::secret UPDATE_SIGNING_KEY is not available"; exit 1; }
           [ -n "$AQUA_UPDATE_PUBKEY" ] || { echo "::error::variable UPDATE_PUBKEY is not set"; exit 1; }
+          # Public facts about the secret only: its type and its public half.
+          printf '%s\n' "$UPDATE_SIGNING_KEY" | openssl pkey -pubout -text_pub -noout 2>/dev/null | head -1 || echo "the secret isn't a PEM key openssl reads"
           pub=$(bash tools/release-sign.sh pub)
           want=$(echo "$AQUA_UPDATE_PUBKEY" | tr 'A-F' 'a-f' | tr -d ' \n')
           echo "public half of the secret: $pub"
-          echo "UPDATE_PUBKEY:             $want"
-          [ "${#want}" -eq 64 ] || { echo "::error::UPDATE_PUBKEY must be 64 hex digits"; exit 1; }
-          [ "$pub" = "$want" ] || { echo "::error::they don't match"; exit 1; }
-          echo "match: yes"
+          echo "UPDATE_PUBKEY:             $want (${#want} hex digits)"
+          echo "SECRET_PUB=$pub" >> "$GITHUB_ENV"
+          echo "VAR_PUB=$want" >> "$GITHUB_ENV"
+          if [ "$pub" = "$want" ]; then echo "match: yes"; echo "KEYS_MATCH=1" >> "$GITHUB_ENV"; else echo "::warning::match: NO — the rest runs with the secret's own public half to check the signing path; this job fails at the end"; echo "KEYS_MATCH=0" >> "$GITHUB_ENV"; fi
       - name: a release-like SHA256SUMS.txt, signed like release.yml signs it
         run: |
           d="$RUNNER_TEMP/rel"; mkdir -p "$d"; cd "$d"
@@ -50,8 +52,7 @@ jobs:
           cat SHA256SUMS.txt
           bash "$GITHUB_WORKSPACE/tools/release-sign.sh" sign SHA256SUMS.txt SHA256SUMS.txt.sig
           # Independent check with openssl and the PUBLIC key only.
-          printf '302a300506032b6570032100%s' "$AQUA_UPDATE_PUBKEY" | xxd -r -p > pub.der 2>/dev/null || \
-            python3 -c "import sys;open('pub.der','wb').write(bytes.fromhex('302a300506032b6570032100'+sys.argv[1]))" "$AQUA_UPDATE_PUBKEY"
+          python3 -c "import sys;open('pub.der','wb').write(bytes.fromhex('302a300506032b6570032100'+sys.argv[1]))" "$SECRET_PUB"
           python3 -c "import sys;open('sig.bin','wb').write(bytes.fromhex(open('SHA256SUMS.txt.sig').read().strip()))"
           openssl pkeyutl -verify -pubin -keyform DER -inkey pub.der -rawin -in SHA256SUMS.txt -sigfile sig.bin
           ls -la "$d"
@@ -61,10 +62,24 @@ jobs:
           echo "RELEASE_SIGNING_DIR=$d" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: the apps' check (aqua-core built with the key) — good, swapped, edited, wrong, missing
+      - name: the apps' check (aqua-core built with the secret's public half) — good, swapped, edited, wrong, missing
+        env:
+          AQUA_UPDATE_PUBKEY: ${{ env.SECRET_PUB }}
+        run: cargo test -p aqua-core --test release_signing -- --nocapture
+      - name: an app built with UPDATE_PUBKEY as it is set now
+        env:
+          AQUA_UPDATE_PUBKEY: ${{ env.VAR_PUB }}
+          EXPECT_MATCH: ${{ env.KEYS_MATCH }}
         run: cargo test -p aqua-core --test release_signing -- --nocapture
       - name: the release module's own tests (incl. a build without a key)
         env:
           AQUA_UPDATE_PUBKEY: ""
           RELEASE_SIGNING_DIR: ""
         run: cargo test -p aqua-core release
+      - name: verdict
+        run: |
+          if [ "$KEYS_MATCH" != 1 ]; then
+            echo "::error::UPDATE_PUBKEY ($VAR_PUB) is not the public half of UPDATE_SIGNING_KEY ($SECRET_PUB): apps built with it would refuse every release signed with the secret, and release.yml stops before building."
+            exit 1
+          fi
+          echo "release signing is set up correctly"
