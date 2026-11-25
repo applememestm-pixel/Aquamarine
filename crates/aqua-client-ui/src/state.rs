@@ -1380,9 +1380,11 @@ fn clear_account_file(dir: &std::path::Path) {
 // delete the file to close the window where it was readable in two
 // places.
 
-// Phones have no `keyring` backend we can rely on; the app sandbox is
-// private to us, so the vault key lives in the `master.key` file there.
-#[cfg(any(target_os = "android", target_os = "ios", aqua_mobilecheck))]
+// Android has no `keyring` backend: the key is wrapped by the Android
+// Keystore instead (`android_master_key`). iOS uses keyring's Keychain
+// backend like the desktop (before 1.21.0-23 a plain `master.key` there;
+// the desktop path below moves such a file into the Keychain and deletes it).
+#[cfg(any(target_os = "android", aqua_mobilecheck))]
 mod keyring {
     #[derive(Debug)]
     pub enum Error { NoEntry, Unsupported }
