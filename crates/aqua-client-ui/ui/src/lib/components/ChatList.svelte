@@ -1426,6 +1426,7 @@
           {#if $avatars[c.id] && !lk}<img class="ava-img" src={$avatars[c.id]} alt="" loading="lazy" />{/if}
           {#if lk}<span class="lk-ic">{@html icons.lock}</span>{/if}
           {#if st}<span class="st-dot {st}" title={$t(st === "online" ? "Online" : st === "idle" ? "Idle" : st === "dnd" ? "Do not disturb" : "Offline")}></span>{/if}
+          {#if compact && c.unread_mentions}<span class="mention-badge compact-ping" aria-label={$t("Unread mentions")}>@</span>{/if}
           {#if compact && c.unread > 0 && c.id !== $activeId}<span class="cmp-badge" class:muted={c.channel || $mutedChats.has(c.id)}>{c.unread > 99 ? "99+" : c.unread}</span>{/if}
         </div>
         <div class="chat-body">
@@ -1466,6 +1467,7 @@
                 onpointerdown={(e) => e.stopPropagation()}
                 onclick={(e) => { e.stopPropagation(); openMiniApp({ bot: c.id, url: $botMenus[c.id].url, from: "menu" }); }}>{$botMenus[c.id].text || $t("Open")}</span>
             {/if}
+            {#if c.unread_mentions}<span class="mention-badge" title={$t("Unread mentions")} aria-label={$t("Unread mentions")}>@</span>{/if}
             {#if c.unread > 0 && c.id !== $activeId}
               {#key c.unread}<span class="chat-badge" class:muted={c.channel || $mutedChats.has(c.id)} in:scaleIn={{ start: 0.4, duration: motionMs(260), easing: backOut }}>{c.unread}</span>{/key}
             {:else if $markedUnread.has(c.id) && c.id !== $activeId}
@@ -1792,6 +1794,9 @@
 </aside>
 
 <style>
+  .mention-badge { flex: none; display: grid; place-items: center; width: 20px; height: 20px; font-size: 14px; font-weight: 750; color: var(--accent); }
+  .compact-ping { position: absolute; top: -4px; right: -4px; border-radius: 50%; background: var(--bg-list); }
+
   .rp-veil { position: fixed; inset: 0; z-index: 140; }
   .rp { position: fixed; z-index: 141; width: 260px; max-height: 70vh; overflow-y: auto; padding: 6px;
     background: color-mix(in srgb, var(--accent) 4%, var(--bg-shell)); border: 1px solid var(--border-strong);

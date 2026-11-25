@@ -283,6 +283,9 @@ export const api = {
   listGroups:         (): Promise<Group[]>                                             => invoke("list_groups"),
   createGroup:        (kind: string, title: string, description: string, members: string[]): Promise<Group> => invoke("create_group", { kind, title, description, members }),
   updateGroup:        (group: Group): Promise<Group>                                   => invoke("update_group", { group }),
+  communityOffer: (gid: string, to: string): Promise<Group> => invoke("community_offer", { gid, to }),
+  communityAccept: (gid: string): Promise<void> => invoke("community_accept", { gid }),
+  linkDiscussion: (channel: string, discussion: string | null): Promise<Group> => invoke("link_discussion", { channel, discussion }),
   leaveGroup:         (gid: string): Promise<void>                                     => invoke("leave_group", { gid }),
   setPhotoPrivacy:    (everybody: boolean, allow: string[], deny: string[]): Promise<void> => invoke("set_photo_privacy", { everybody, allow, deny }),
   setLocalPrefs:      (keepDeleted: boolean, keepEdits: boolean, blocked: string[]): Promise<void> => invoke("set_local_prefs", { keepDeleted, keepEdits, blocked }),
@@ -297,6 +300,8 @@ export const api = {
   // Edit / delete (local store mutation; relay the control separately)
   /** Resolves to the edited message's time (it goes along with `[edit:v1]`). */
   editMessage:        (peer_id: string, old_text: string, new_text: string, id?: string): Promise<number | null> => invoke("edit_message", { peerId: peer_id, oldText: old_text, newText: new_text, id: id ?? null }),
+  editChannelPost: (gid: string, id: string, text: string): Promise<void> => invoke("edit_channel_post", { gid, id, text }),
+  markThreadMentions: (peerId: string, thread: string): Promise<void> => invoke("mark_thread_mentions", { peerId, thread }),
   deleteMessage:      (peer_id: string, text: string): Promise<void>                    => invoke("delete_message", { peerId: peer_id, text }),
   deleteMessagesLocal: (peerId: string, ids: string[]): Promise<number> => invoke("delete_messages_local", { peerId, ids }),
   messageKeys: (peerId: string, ids: string[]): Promise<{ id: string; key: string; author: string; preview: string; at?: number | null }[]> => invoke("message_keys", { peerId, ids }),

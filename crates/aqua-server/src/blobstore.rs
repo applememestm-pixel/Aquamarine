@@ -246,6 +246,42 @@ impl BlobStore {
         std::fs::rename(tmp, p)
     }
 
+    pub(crate) fn upload_root(&self) -> PathBuf {
+        self.dir.join("partial-uploads")
+    }
+
+    pub(crate) fn open_blob(&self, cid: &str) -> Option<(std::fs::File, u64)> {
+        if !valid_cid(cid) { return None; }
+        let cid = cid.to_ascii_lowercase();
+        for shelf in [&self.dir, &self.keep, &self.stories] {
+            let path = shelf.join(&cid);
+            if let Ok(file) = std::fs::File::open(&path) {
+                let meta = file.metadata().ok()?;
+                if meta.is_file() {
+                    if shelf != &self.stories { touch(&path); }
+                    return Some((file, meta.len()));
+                }
+            }
+        }
+        None
+    }
+
+    pub(crate) fn commit_upload(&self, cid: &str, staged: &Path, owner: &str) -> std::io::Result<bool> {
+        let _file = lock_blob(cid);
+        let dest = self.path(cid).ok_or_else(|| std::io::Error::other("bad cid"))?;
+        if dest.is_file() {
+            touch(&dest);
+            return Ok(false);
+        }
+        let record = self.dir.join(format!(".o.{cid}"));
+        if !owner.is_empty() { std::fs::write(&record, owner)?; }
+        if let Err(e) = std::fs::rename(staged, &dest) {
+            let _ = std::fs::remove_file(record);
+            return Err(e);
+        }
+        Ok(true)
+    }
+
     pub fn get(&self, cid: &str) -> Option<Vec<u8>> {
         if let Some(p) = self.path(cid) {
             if let Ok(b) = std::fs::read(&p) {

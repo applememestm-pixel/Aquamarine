@@ -180,6 +180,22 @@ fn store(s: &mut AppState, done: Vec<(Job, Vec<u8>)>) -> usize {
 pub fn flush_unlocked(st: &std::sync::Mutex<AppState>) {
     let todo = {
         let mut s = st.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        static LAST_SWEEP: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+        use std::sync::atomic::Ordering::Relaxed;
+        let now = crate::state::msg_secs();
+        if LAST_SWEEP.fetch_update(Relaxed, Relaxed, |last| (now.saturating_sub(last) >= 60).then_some(now)).is_ok() {
+            let mut changed = Vec::new();
+            for (id, chat) in s.chats.iter_mut().filter(|(id, chat)| id.starts_with("grp_") && chat.summary.channel) {
+                let mut expired = false;
+                for meta in chat.messages.iter_mut().filter_map(|m| m.meta.as_mut()) {
+                    let previous = meta.edit_audit.len();
+                    meta.edit_audit.retain(|edit| now.saturating_sub(edit.at) < 86_400);
+                    expired |= previous != meta.edit_audit.len();
+                }
+                if expired { changed.push(id.clone()); }
+            }
+            for id in changed { mark_dirty(&mut s, &id); }
+        }
         jobs(&mut s)
     };
     let done: Vec<(Job, Vec<u8>)> = todo.into_iter().map(|j| { let c = compress(&j.json); (j, c) }).collect();

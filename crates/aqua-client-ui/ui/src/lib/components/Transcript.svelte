@@ -3,6 +3,8 @@
    *  transcript appears below it (made on this device — lib/stt.ts). */
   import { t, tr } from "../i18n";
   import { transcribe, cachedTranscript, sttProgress } from "../stt";
+  import { processing, refreshProcessing, consentToProcessing, processSpeech } from "../paid";
+  import { decode16k } from "../stt";
   import { showToast } from "./Toast.svelte";
 
   let { src, id, compact = false }: { src: string; id: string; compact?: boolean } = $props();
@@ -10,6 +12,21 @@
   let text = $state<string | null>(cachedTranscript(id));
   let open = $state(false);
   let busy = $state(false);
+
+  void refreshProcessing();
+
+  async function server() {
+    if (!(await consentToProcessing())) return;
+    busy = true;
+    try {
+      const response = await fetch(src);
+      if (!response.ok) throw new Error(String(response.status));
+      text = await processSpeech(await decode16k(await response.arrayBuffer(), 600));
+      open = true;
+    } catch (e) {
+      showToast(tr("Couldn't turn it into text: {e}", { e: String(e) }));
+    } finally { busy = false; }
+  }
 
   async function go() {
     if (text != null) { open = !open; return; }
@@ -33,6 +50,9 @@
       <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7V5h11v2M9.5 5v14M7 19h5M14 13v-1.5h7V13M17.5 11.5V19M16 19h3"/></svg>
     {/if}
   </button>
+  {#if $processing.speech}
+    <button type="button" class="tr-btn" onclick={server} disabled={busy}>{$t("Transcribe on server")}</button>
+  {/if}
   {#if open && text != null}
     <div class="tr-text" class:empty={!text}>{text || $t("No speech recognized.")}</div>
   {/if}

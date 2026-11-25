@@ -497,6 +497,18 @@ impl Fed {
         futures_util::future::join_all(tries).await.into_iter().flatten().flatten().collect()
     }
 
+    pub(crate) async fn blob_response(&self, peer: &str, cid: &str) -> Option<reqwest::Response> {
+        let path = format!("/v1/fed/blob/{cid}");
+        if self.modern(peer).await {
+            if let Ok(response) = self.http.get(format!("{peer}{path}"))
+                .header("x-aqua-fed", self.header("GET", &path, b""))
+                .timeout(Duration::from_secs(1200)).send().await {
+                return response.status().is_success().then_some(response);
+            }
+        }
+        self.get(peer, &path).await
+    }
+
     pub async fn fetch_bytes(&self, path: &str) -> Option<(String, Vec<u8>)> {
         for p in &self.cfg.peers {
             if let Some(r) = self.get(p, path).await {
@@ -769,7 +781,9 @@ pub async fn h_bundle(State(state): State<AppState>, headers: HeaderMap, Path(us
 pub async fn h_blob(State(state): State<AppState>, headers: HeaderMap, Path(cid): Path<String>) -> Result<impl IntoResponse, StatusCode> {
     check(&state, &headers, "GET", &format!("/v1/fed/blob/{cid}"), b"")?;
     let store = state.blobs.clone();
-    tokio::task::spawn_blocking(move || store.get(&cid)).await.ok().flatten().ok_or(StatusCode::NOT_FOUND)
+    let (file, len) = tokio::task::spawn_blocking(move || store.open_blob(&cid))
+        .await.ok().flatten().ok_or(StatusCode::NOT_FOUND)?;
+    Ok(crate::blob_upload::response(file, len))
 }
 
 #[derive(Deserialize)]

@@ -54,6 +54,8 @@ pub struct ChatSummary {
     /// Last visible message's unix timestamp, used to order and date the chat list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_at: Option<i64>,
+    #[serde(default)]
+    pub unread_mentions: u32,
     pub unread: u32,
     pub online: bool,
     pub verified: bool,
@@ -99,6 +101,19 @@ pub struct MsgMeta {
     /// Stable message identity when a local-only Saved Messages file was synced.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved_local_cid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_legacy_key: Option<String>,
+    /// Empty for a ping in the chat itself, otherwise the comment thread key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unread_ping: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edited_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub editor_signatures: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edit_audit: Vec<PostEdit>,
     /// Supergroup room (Discord-style channel) the message belongs to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub room: Option<String>,
@@ -475,6 +490,10 @@ pub fn accept_group_snapshot(cur: Option<&Group>, next: &Group, from: &str) -> b
                 // A plain member may only *add* members, when the group allows it.
                 return cur.settings.add_members == "all" && cur.is_member(from) && only_adds_members(cur, next);
             }
+            if from != cur.owner && ["discussion_group", "discussion_channel", "discussion_history", "own_post_edits"]
+                .iter().any(|key| cur.settings.extra.get(*key) != next.settings.extra.get(*key)) {
+                return false;
+            }
             if next.owner != cur.owner && from != cur.owner {
                 return false;
             }
@@ -526,6 +545,21 @@ fn only_adds_members(cur: &Group, next: &Group) -> bool {
     trimmed.members.retain(|m| cur.is_member(&m.username));
     trimmed.version = cur.version;
     serde_json::to_value(&trimmed).ok() == serde_json::to_value(cur).ok()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostEdit {
+    pub editor: String,
+    pub at: i64,
+    pub previous: String,
+}
+
+pub(crate) fn can_edit_channel_post(group: &Group, actor: &str, author: &str) -> bool {
+    if group.kind != "channel" || !group.is_member(actor) || group.is_banned(actor) { return false; }
+    if actor == author { return true; }
+    if group.settings.extra.get("own_post_edits").and_then(|v| v.as_bool()) != Some(false) { return false; }
+    group.owner == actor || group.members.iter().any(|m| m.username == actor && m.role == "admin"
+        && m.extra.get("rights").and_then(|r| r.get("edit_messages")).and_then(|v| v.as_bool()) == Some(true))
 }
 
 /// Is `author` allowed to post `body` into `g`? Mirrors the sender-side check
@@ -849,7 +883,7 @@ pub fn group_summary(g: &Group, preview: &str) -> ChatSummary {
     let letter = g.title.chars().next()
         .map(|c| c.to_uppercase().next().unwrap_or('#').to_string())
         .unwrap_or_else(|| "#".into());
-    ChatSummary { preview_from: None, last_at: None,
+    ChatSummary { unread_mentions: 0, preview_from: None, last_at: None,
         id: g.id.clone(),
         name: g.title.clone(),
         letter,
@@ -1028,7 +1062,7 @@ impl AppState {
                 .last()
                 .map(|m| (one_line_preview(&m.kind), m.time.clone()))
                 .unwrap_or_else(|| ("Note to self — only you see this".into(), "".into()));
-            let summary = ChatSummary { preview_from: None, last_at: None,
+            let summary = ChatSummary { unread_mentions: 0, preview_from: None, last_at: None,
                 id: SAVED_MESSAGES_ID.into(),
                 name: "Saved Messages".into(),
                 letter: "☁".into(),
@@ -1520,7 +1554,7 @@ pub fn hex_fingerprint_from(dh_pub: &[u8; 32]) -> String {
 
 pub fn summary_for(peer_id: &str, preview: &str, by_me: bool, typing: bool) -> ChatSummary {
     let (letter, gradient) = gradient_for(peer_id);
-    ChatSummary { preview_from: None, last_at: None,
+    ChatSummary { unread_mentions: 0, preview_from: None, last_at: None,
         id: peer_id.into(),
         name: peer_id.into(),
         letter,
@@ -1967,6 +2001,22 @@ mod group_rule_tests {
             members: vec![member("own", "owner"), member("adm", "admin"), member("bob", "member")],
             settings: GroupSettings::default(), created_at: String::new(), version: 5, extra: Default::default(),
         }
+    }
+
+    #[test]
+    fn channel_edit_policy_uses_the_account_instead_of_the_public_signature() {
+        let mut g = group();
+        g.kind = "channel".into();
+        g.settings.sign_messages = true;
+        g.members[1].extra.insert("rights".into(), serde_json::json!({ "edit_messages": true }));
+        assert!(can_edit_channel_post(&g, "adm", "adm"));
+        assert!(!can_edit_channel_post(&g, "own", "adm"));
+        assert!(!can_edit_channel_post(&g, "adm", "own"));
+        g.settings.extra.insert("own_post_edits".into(), serde_json::json!(false));
+        assert!(can_edit_channel_post(&g, "adm", "own"));
+        assert!(!can_edit_channel_post(&g, "bob", "own"));
+        g.members[1].extra.insert("rights".into(), serde_json::json!({ "edit_messages": false }));
+        assert!(!can_edit_channel_post(&g, "adm", "own"));
     }
 
     #[test]

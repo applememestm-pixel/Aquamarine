@@ -16,11 +16,7 @@
 //! 4. Recipient parses the offer, downloads the ciphertext by CID,
 //!    verifies its SHA-256, and decrypts.
 //!
-//! There's no chunking or resumable upload here — MVP handles files
-//! that fit in memory at both ends. The [`MAX_FILE_SIZE`] constant caps
-//! the client's willingness to encrypt or accept a single file. A
-//! chunked variant can layer on top of this by describing a file as a
-//! Merkle-style manifest whose leaves are individual `FileEnvelope`s.
+//! Large files use the same authenticated chunks and a resumable relay upload.
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rand_core::{OsRng, RngCore};
@@ -30,9 +26,12 @@ use thiserror::Error;
 
 use crate::crypto::{aead_decrypt, aead_encrypt, AEAD_KEY_LEN, AEAD_NONCE_LEN};
 
-/// Client-side sanity cap. Files larger than this are refused; a real
-/// deployment would swap the single-blob path for chunked upload.
-pub const MAX_FILE_SIZE: u64 = 200 * 1024 * 1024; // 200 MiB (phone videos)
+/// Limit of attachments that use the legacy in-memory path.
+pub const MAX_FILE_SIZE: u64 = 200 * 1024 * 1024;
+/// Hard limit for the disk-backed transfer protocol. A relay can set a lower limit.
+pub const MAX_RESUMABLE_FILE_SIZE: u64 = 2 * 1024 * 1024 * 1024;
+/// Size of each relay request, independent of the encryption chunk size.
+pub const UPLOAD_PART_SIZE: usize = 4 * 1024 * 1024;
 
 /// Magic prefix carried by every file-offer message. Lets the receiver
 /// distinguish a regular text message from a serialized envelope
@@ -43,8 +42,10 @@ pub const OFFER_PREFIX: &str = "AQUA-FILE:v1:";
 
 #[derive(Debug, Error)]
 pub enum FileError {
-    #[error("file exceeds the {MAX_FILE_SIZE}-byte cap")]
+    #[error("file exceeds the transfer limit")]
     TooLarge,
+    #[error("file I/O: {0}")]
+    Io(#[from] std::io::Error),
     #[error("crypto: {0}")]
     Crypto(#[from] crate::crypto::CryptoError),
     #[error("content id mismatch: expected {expected}, got {got}")]
@@ -172,7 +173,8 @@ impl FileEnvelope {
         if !valid_cid(&w.cid) {
             return Err(FileError::BadJson("bad cid".into()));
         }
-        if w.size > MAX_FILE_SIZE {
+        if w.size > MAX_RESUMABLE_FILE_SIZE ||
+            (w.size > MAX_FILE_SIZE && w.ch != Some(STREAM_CHUNK)) {
             return Err(FileError::TooLarge);
         }
         Ok(FileEnvelope {
@@ -292,31 +294,69 @@ pub fn encrypt_file_streaming(
     if plaintext.len() as u64 > MAX_FILE_SIZE {
         return Err(FileError::TooLarge);
     }
+    let mut ciphertext = Vec::with_capacity(plaintext.len() + chunk_count(plaintext.len() as u64, STREAM_CHUNK) as usize * CHUNK_TAG);
+    let env = encrypt_file_to(plaintext, &mut ciphertext, plaintext.len() as u64, filename, mime, category)?;
+    Ok((env, ciphertext))
+}
+
+/// Seal a file with bounded memory to any writer.
+pub fn encrypt_file_to(
+    mut input: impl std::io::Read,
+    mut output: impl std::io::Write,
+    size: u64,
+    filename: &str,
+    mime: Option<String>,
+    category: Option<String>,
+) -> Result<FileEnvelope, FileError> {
+    if size > MAX_RESUMABLE_FILE_SIZE {
+        return Err(FileError::TooLarge);
+    }
     let mut key = [0u8; AEAD_KEY_LEN];
     let mut nonce = [0u8; AEAD_NONCE_LEN];
     OsRng.fill_bytes(&mut key);
     OsRng.fill_bytes(&mut nonce);
-    let cs = STREAM_CHUNK as usize;
-    let n = chunk_count(plaintext.len() as u64, STREAM_CHUNK);
-    let mut ciphertext = Vec::with_capacity(plaintext.len() + n as usize * CHUNK_TAG);
-    for i in 0..n {
-        let a = (i as usize) * cs;
-        let b = (a + cs).min(plaintext.len());
-        let last = i + 1 == n;
-        let ct = aead_encrypt(&key, &chunk_nonce(&nonce, i), &chunk_aad(filename, i, last), &plaintext[a..b])?;
-        ciphertext.extend_from_slice(&ct);
+    let mut buffer = vec![0; STREAM_CHUNK as usize];
+    let mut digest = Sha256::new();
+    let count = chunk_count(size, STREAM_CHUNK);
+    for i in 0..count {
+        let len = (size - i * u64::from(STREAM_CHUNK)).min(u64::from(STREAM_CHUNK)) as usize;
+        input.read_exact(&mut buffer[..len])?;
+        let sealed = aead_encrypt(&key, &chunk_nonce(&nonce, i), &chunk_aad(filename, i, i + 1 == count), &buffer[..len])?;
+        digest.update(&sealed);
+        output.write_all(&sealed)?;
     }
-    let cid = hex_sha256(&ciphertext);
-    Ok((
-        FileEnvelope {
-            cid, key, nonce,
-            filename: filename.to_string(),
-            size: plaintext.len() as u64,
-            mime, category, pack: None, caption: None,
-            chunk: Some(STREAM_CHUNK),
-        },
-        ciphertext,
-    ))
+    if input.read(&mut buffer[..1])? != 0 {
+        return Err(FileError::BadLength);
+    }
+    Ok(FileEnvelope {
+        cid: format!("{:x}", digest.finalize()), key, nonce, filename: filename.to_owned(),
+        size, mime, category, pack: None, caption: None, chunk: Some(STREAM_CHUNK),
+    })
+}
+
+/// Open a sealed file into a temporary destination. Publish the destination only on success.
+pub fn decrypt_file_to(
+    envelope: &FileEnvelope,
+    mut input: impl std::io::Read,
+    mut output: impl std::io::Write,
+) -> Result<(), FileError> {
+    let chunk = envelope.chunk.filter(|c| (MIN_CHUNK..=MAX_CHUNK).contains(c)).ok_or(FileError::BadLength)?;
+    let mut buffer = vec![0; chunk as usize + CHUNK_TAG];
+    let mut digest = Sha256::new();
+    for i in 0..chunk_count(envelope.size, chunk) {
+        let len = (envelope.size - i * u64::from(chunk)).min(u64::from(chunk)) as usize + CHUNK_TAG;
+        input.read_exact(&mut buffer[..len])?;
+        digest.update(&buffer[..len]);
+        output.write_all(&decrypt_chunk(envelope, i, &buffer[..len])?)?;
+    }
+    if input.read(&mut buffer[..1])? != 0 {
+        return Err(FileError::BadLength);
+    }
+    let got = format!("{:x}", digest.finalize());
+    if got != envelope.cid {
+        return Err(FileError::CidMismatch { expected: envelope.cid.clone(), got });
+    }
+    Ok(())
 }
 
 /// Open piece `i` of a streamed file (its sealed bytes, `chunk + 16` long,
@@ -333,6 +373,7 @@ pub fn decrypt_file(
     envelope: &FileEnvelope,
     ciphertext: &[u8],
 ) -> Result<Vec<u8>, FileError> {
+    if envelope.size > MAX_FILE_SIZE { return Err(FileError::TooLarge); }
     let actual = hex_sha256(ciphertext);
     if actual != envelope.cid {
         return Err(FileError::CidMismatch {
@@ -382,6 +423,18 @@ pub fn hex_sha256(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn disk_transfer_opens_chunks_and_checks_the_digest() {
+        let source = vec![17; super::STREAM_CHUNK as usize + 31];
+        let mut wire = Vec::new();
+        let mut envelope = super::encrypt_file_to(source.as_slice(), &mut wire, source.len() as u64, "file.bin", None, None).unwrap();
+        let mut decoded = Vec::new();
+        super::decrypt_file_to(&envelope, wire.as_slice(), &mut decoded).unwrap();
+        assert_eq!(decoded, source);
+        envelope.cid = "f".repeat(64);
+        assert!(matches!(super::decrypt_file_to(&envelope, wire.as_slice(), std::io::sink()), Err(super::FileError::CidMismatch { .. })));
+    }
+
     #[test]
     fn streamed_round_trip_and_pieces() {
         let data: Vec<u8> = (0..(super::STREAM_CHUNK as usize * 2 + 1234)).map(|i| (i % 251) as u8).collect();
