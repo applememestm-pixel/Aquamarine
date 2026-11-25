@@ -9,33 +9,28 @@ import { playSound, soundFor } from "./sounds";
 import { tr, lang } from "./i18n";
 import { osNotify, appInFront, justResumed } from "./notify";
 import { IS_MOBILE } from "./platform";
+import { chatLocks, unlocked } from "./chatLocks";
+import { locked } from "./lock";
+
+function chatIsLocked(id: string): boolean {
+  return get(locked) || (!!get(chatLocks)[id] && !get(unlocked)[id]);
+}
 
 /** Play a short chime + optional desktop notification for an incoming
  *  message, honouring the user's notification settings. */
-function notifyIncoming(peerId: string, text: string) {
-  const s = get(settings);
-  if (s.notifySound) void playSound(soundFor(peerId));
-  // A banner only when the user isn't already reading that chat.
-  if (appInFront() && get(activeId) === peerId) return;
-  // A phone with the app open: the app's own sound has played — a system
-  // notification on top would add the system's sound (Telegram shows none).
-  if (IS_MOBILE && appInFront()) return;
-  // Phone, back from the background: these were announced by src/bgnotify.rs.
+function notifyIncoming(peerId: string, preview: string) {
   if (justResumed()) return;
-  // A chat with a password: nothing of it in the notification.
-  let lockedChat = false;
-  try { lockedChat = !!JSON.parse(localStorage.getItem("aqua.chatLocks.v1") ?? "{}")[peerId]; } catch { /* ignore */ }
-  if (lockedChat) { void osNotify("Aquamarine", tr("New message in a locked chat")); return; }
-  // The chat's name (a group's, not its "grp_…" id) and what the chat list
-  // shows ("📎 report.pdf", not the raw file record); in a group — who wrote.
+  const s = get(settings);
+  if (s.notifySound && (!IS_MOBILE || appInFront())) void playSound(soundFor(peerId));
+  // On mobile, background notifications are delivered by Rust.
+  if (IS_MOBILE) return;
   const c = get(chats).find((x) => x.id === peerId);
-  const title = displayName(peerId, c?.name || peerId);
-  // Settings → Notifications → "Notification shows".
-  if (s.notifyPreview === "none") { void osNotify("Aquamarine", tr("New message")); return; }
-  if (s.notifyPreview === "sender") { void osNotify(title, tr("New message")); return; }
-  let body = (c?.preview || "").trim() || (text.startsWith("[") ? "" : text);
-  if (c?.preview_from && !c.preview_by_me) body = `${displayName(c.preview_from, c.preview_from)}: ${body}`;
-  void osNotify(title, body.slice(0, 120) || tr("New message"));
+  const hidden = get(locked) || !!get(chatLocks)[peerId];
+  const title = hidden || s.notifyPreview === "none" ? "Aquamarine" : displayName(peerId, c?.name || peerId);
+  const body = hidden ? tr("New message in a locked chat")
+    : s.notifyPreview === "none" || s.notifyPreview === "sender" ? tr("New message")
+    : preview.trim() || tr("New message");
+  void osNotify(title, body, peerId);
 }
 
 /** Startup info from the backend. */
@@ -213,7 +208,7 @@ export async function bootstrap() {
     // you're actively looking at.
     // Archived + unmuted chats pop back out; muted chats stay silent.
     const prefs = await import("./chatPrefs");
-    prefs.onIncomingForArchive(p.peer_id);
+    if (p.preview !== undefined) prefs.onIncomingForArchive(p.peer_id);
     // Someone who may not write to me (privacy → "Who can write to me"):
     // the chat waits under "Message requests", without a notification.
     const { mayWriteMe } = await import("./privacy");
@@ -222,14 +217,10 @@ export async function bootstrap() {
     // "@me" in a muted chat still pings (Telegram's mentions).
     const me = get(info)?.username;
     const mentioned = !!me && new RegExp(`(^|[^\\w@])@${me.replace(/[.]/g, "\\.")}(?![\\w.])`, "i").test(p.text);
-    // The open chat in a hidden / minimised window is not being read: it
-    // notifies too (notifyIncoming skips only the chat in front of you).
-    // My own message coming back (synced from my phone after switching to the
-    // PC, a redelivery): the chat's last message is mine with this very text —
-    // no notification about what I wrote myself.
-    const c = get(chats).find((x) => x.id === p.peer_id);
-    const echo = !!c && c.preview_by_me && c.preview.trim() === p.text.trim();
-    if (p.text && !echo && (!isActive || !appInFront()) && (mentioned || !prefs.isMuted(p.peer_id)) && mayWriteMe(p.peer_id)) notifyIncoming(p.peer_id, p.text);
+    const reading = isActive && chatOnScreen() && !chatIsLocked(p.peer_id);
+    if (p.preview !== undefined && !reading && (mentioned || !prefs.isMuted(p.peer_id)) && mayWriteMe(p.peer_id)) {
+      notifyIncoming(p.peer_id, p.preview);
+    }
     // Refresh info (opk count, etc.)
     refreshInfoSoon();
   });
@@ -240,6 +231,17 @@ export async function bootstrap() {
     // anything else written without "incoming" showed only after leaving
     // the chat and opening it again.
     if (get(activeId)) refreshActiveSoon();
+  });
+  listen<string>("aqua://notification-read", async ({ payload }) => {
+    const { setMarkedUnread } = await import("./chatPrefs");
+    setMarkedUnread(payload, false);
+  });
+  listen<{ peer_id: string; draft?: string }>("aqua://notification-reply", async ({ payload }) => {
+    if (get(locked) || get(chatLocks)[payload.peer_id]) return;
+    activeTab.set("chats");
+    await selectChat(payload.peer_id);
+    if (get(activeId) !== payload.peer_id || chatIsLocked(payload.peer_id)) return;
+    window.dispatchEvent(new CustomEvent("aqua:focus-composer", { detail: payload.draft }));
   });
   // Auto-delete timers removed messages.
   listen<{ peer_id: string }>("aqua://expired", async (e) => {
@@ -428,7 +430,7 @@ export async function startChat(
  *  conversation (not the list) is showing. */
 function chatOnScreen(): boolean {
   try {
-    if (document.visibilityState !== "visible") return false;
+    if (document.visibilityState !== "visible" || (!IS_MOBILE && !appInFront()) || get(activeTab) !== "chats") return false;
     return !matchMedia("(max-width: 720px)").matches || document.body.classList.contains("chat-open");
   } catch { return true; }
 }
@@ -436,19 +438,23 @@ function chatOnScreen(): boolean {
  *  zeroed on the Rust side too, so a list refresh doesn't bring it back. */
 function readActive() {
   const id = get(activeId);
-  if (!id || !chatOnScreen()) return;
+  if (!id || !chatOnScreen() || chatIsLocked(id)) return;
   const c = get(chats).find((x) => x.id === id);
   if (!c || !c.unread) return;
   chats.update((cs) => cs.map((x) => (x.id === id ? { ...x, unread: 0 } : x)));
   void api.markChatRead(id).catch(() => {});
 }
 chats.subscribe(() => queueMicrotask(readActive));
-try { document.addEventListener("visibilitychange", readActive); } catch { /* no document */ }
+activeTab.subscribe(() => queueMicrotask(readActive));
+unlocked.subscribe(() => queueMicrotask(readActive));
+locked.subscribe(() => queueMicrotask(readActive));
+try {
+  document.addEventListener("visibilitychange", readActive);
+  window.addEventListener("focus", readActive);
+} catch { /* no document */ }
 
 export async function selectChat(id: string) {
   activeId.set(id);
-  chats.update((cs) => cs.map((c) => (c.id === id ? { ...c, unread: 0 } : c)));
-  void api.markChatRead(id).catch(() => {});
   // On a phone-width layout this switches the single column from the chat
   // list to the open conversation (see the <=720px rules in app.css).
   try {
@@ -461,6 +467,7 @@ export async function selectChat(id: string) {
     }
   } catch { /* ignore */ }
   await loadActiveMessages();
+  readActive();
 }
 
 let releaseChatBack: (() => void) | null = null;

@@ -32,6 +32,11 @@ if ! grep -q supportsPictureInPicture "$M"; then
   perl -0pi -e 's/<activity/<activity android:supportsPictureInPicture="true"/' "$M"
   echo '[patch] picture-in-picture allowed'
 fi
+for permission in ACCESS_NETWORK_STATE BLUETOOTH_ADVERTISE; do
+  if ! grep -q "android.permission.$permission" "$M"; then
+    AQ_PERM="$permission" perl -0pi -e 's|<application|<uses-permission android:name="android.permission.$ENV{AQ_PERM}" />\n    <application|' "$M"
+  fi
+done
 # 1c. MainActivity that asks for local-network access on Android 17+.
 MA="$(find "$APP/src/main/java" -name MainActivity.kt 2>/dev/null | head -1)"
 if [ -n "$MA" ]; then
@@ -47,6 +52,8 @@ fi
 # 1c''. Server on this device (crates/aqua-client-ui/src/relay_host.rs).
 if [ -n "$MA" ]; then
   cp -f "$HERE/AquaRelay.kt" "$(dirname "$MA")/AquaRelay.kt"
+  mkdir -p "$APP/src/main/res/drawable"
+  cp -f "$HERE/res/drawable/ic_stat_aquamarine.xml" "$APP/src/main/res/drawable/ic_stat_aquamarine.xml"
   echo '[patch] AquaRelay.kt (server on this device)'
 fi
 if ! grep -q AquaRelayService "$M"; then
@@ -68,7 +75,6 @@ if ! grep -q AquaScreenService "$M"; then
   AQ_SCR='<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     ' perl -0pi -e 's/<application/$ENV{AQ_SCR}<application/' "$M"
   AQ_SCS='<service android:name=".AquaScreenService" android:exported="false" android:foregroundServiceType="mediaProjection" />
     </application>' perl -0pi -e 's|</application>|$ENV{AQ_SCS}|' "$M"

@@ -58,13 +58,10 @@ pub fn log_out(state: State<'_, StdMutex<AppState>>) -> Result<InitInfo, String>
 // ---------- Chats & messages ----------------------------------------------
 
 #[tauri::command]
-pub fn list_chats(state: State<'_, StdMutex<AppState>>) -> Result<Vec<serde_json::Value>, String> {
+pub fn list_chats(state: State<'_, StdMutex<AppState>>) -> Result<Vec<ChatSummary>, String> {
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let me = s.username.clone().unwrap_or_default();
-    // Each chat with `last_at` (unix seconds of its last message): the list
-    // shows a weekday / date for older chats and goes newest first by it —
-    // the order kept by hand (`chat_order`) slipped, and only a time was shown.
-    let mut out: Vec<(Option<i64>, serde_json::Value)> = s.chat_order
+    let mut summaries: Vec<ChatSummary> = s.chat_order
         .iter()
         // "user~device" rows came from an older build: a device isn't a chat.
         // (A channel's direct messages, "dm~…", are.)
@@ -74,20 +71,27 @@ pub fn list_chats(state: State<'_, StdMutex<AppState>>) -> Result<Vec<serde_json
         .filter(|id| me.is_empty() || **id != me)
         .filter_map(|id| s.chats.get(id).map(|c| {
             let mut sum = c.summary.clone();
-            // Groups: who wrote the last message, from the history itself
-            // (deletes / timers recompute the preview without it).
-            if id.starts_with("grp_") && !sum.preview_by_me && !sum.preview_is_typing {
-                sum.preview_from = c.messages.last().map(|m| m.from.clone()).filter(|f| !f.is_empty() && f != "system" && *f != me);
+            let last = c.messages.iter().rev()
+                .filter(|m| !crate::state::stray_control(m)
+                    && !m.meta.as_ref().is_some_and(|meta| meta.deleted)
+                    && !matches!(&m.kind, MessageKind::Text { text } if id.starts_with("grp_") && text.starts_with(crate::state::COMMENT_PREFIX)))
+                .reduce(|newer, candidate| if candidate.at > newer.at { candidate } else { newer });
+            sum.last_at = last.and_then(|m| m.at);
+            if !sum.preview_is_typing {
+                if let Some(last) = last {
+                    sum.preview = preview_for(&last.kind);
+                    sum.preview_by_me = last.from == "me" || last.from == me;
+                    sum.time.clone_from(&last.time);
+                    sum.preview_from = (id.starts_with("grp_") && !sum.preview_by_me
+                        && !last.from.is_empty() && last.from != "system").then(|| last.from.clone());
+                }
             }
-            let last_at = c.messages.iter().rev().find_map(|m| m.at);
-            let mut v = serde_json::to_value(&sum).unwrap_or_default();
-            if let Some(o) = v.as_object_mut() { o.insert("last_at".into(), serde_json::json!(last_at)); }
-            (last_at, v)
+            sum
         }))
         .collect();
-    // Stable: equal times keep their old order; a chat with no message yet (just made) goes on top.
-    out.sort_by_key(|(at, _)| std::cmp::Reverse(at.unwrap_or(i64::MAX)));
-    Ok(out.into_iter().map(|(_, v)| v).collect())
+    // Keep the existing order for equal times and new chats at the top.
+    summaries.sort_by_key(|c| std::cmp::Reverse(c.last_at.unwrap_or(i64::MAX)));
+    Ok(summaries)
 }
 
 #[tauri::command]
@@ -1196,8 +1200,9 @@ pub async fn profile_media_path(
 /// picker, "Add to my GIFs" on a received message, …). Returns how many
 /// files were added.
 #[tauri::command]
-pub fn add_media_files(
+pub async fn add_media_files(
     state: State<'_, StdMutex<AppState>>,
+    app: AppHandle,
     target: String,
     pack: Option<String>,
     paths: Vec<String>,
@@ -1206,7 +1211,10 @@ pub fn add_media_files(
         let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         s.data_dir.clone()
     };
-    media::add_files(&data_dir, &target, pack.as_deref(), &paths)
+    tauri::async_runtime::spawn_blocking(move || {
+        let paths = paths.iter().map(|p| materialize_picked(&app, &data_dir, p)).collect::<Result<Vec<_>, _>>()?;
+        media::add_files(&data_dir, &target, pack.as_deref(), &paths)
+    }).await.map_err(|e| e.to_string())?
 }
 
 /// Delete one item from the library (only inside the stickers / gifs dirs).
@@ -1976,8 +1984,20 @@ fn materialize_picked(app: &AppHandle, data_dir: &std::path::Path, path: &str) -
     if !is_uri_pick(path) {
         return Ok(path.to_string());
     }
-    let bytes = read_picked_bytes(app, path)?;
-    let kind = infer::get(&bytes);
+    use std::io::{Read, Write};
+    use tauri_plugin_fs::FsExt;
+    let uri = tauri::Url::parse(path).map_err(|e| format!("bad file URI: {e}"))?;
+    let mut source = if let Ok(local) = uri.to_file_path() {
+        std::fs::File::open(local).map_err(|e| format!("open picked file: {e}"))?
+    } else {
+        let mut options = tauri_plugin_fs::OpenOptions::new();
+        options.read(true);
+        app.fs().open(tauri_plugin_fs::FilePath::Url(uri), options)
+            .map_err(|e| format!("open picked file: {e}"))?
+    };
+    let mut header = Vec::new();
+    (&mut source).take(8192).read_to_end(&mut header).map_err(|e| format!("read picked file: {e}"))?;
+    let kind = infer::get(&header);
     let ext = kind.map(|k| k.extension()).unwrap_or("bin");
     let stem = match kind.map(|k| k.matcher_type()) {
         Some(infer::MatcherType::Video) => "video",
@@ -1991,9 +2011,50 @@ fn materialize_picked(app: &AppHandle, data_dir: &std::path::Path, path: &str) -
         .unwrap_or(0);
     let dir = data_dir.join("picked");
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
-    let dest = pick_unique_path(&dir, &format!("{stem}-{secs}.{ext}"));
-    std::fs::write(&dest, &bytes).map_err(|e| format!("write: {e}"))?;
+    let name = format!("{stem}-{secs}.{ext}");
+    #[cfg(target_os = "android")]
+    let name = if path.starts_with("content://") {
+        crate::gallery::android::call("fileInfo", serde_json::json!({ "uri": path })).ok()
+            .and_then(|info| info["name"].as_str().filter(|n| !n.trim().is_empty()).map(sanitize_name))
+            .map(|mut filename| {
+                if ext != "bin" && std::path::Path::new(&filename).extension().is_none() {
+                    filename.push('.');
+                    filename.push_str(ext);
+                }
+                filename
+            })
+            .unwrap_or(name)
+    } else { name };
+    let mut retries = 0;
+    let (dest, mut file) = loop {
+        let dest = pick_unique_path(&dir, &name);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&dest) {
+            Ok(file) => break (dest, file),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && retries < 3 => retries += 1,
+            Err(e) => return Err(format!("open picked copy: {e}")),
+        }
+    };
+    if let Err(e) = file.write_all(&header).and_then(|()| std::io::copy(&mut source, &mut file)) {
+        drop(file);
+        let _ = std::fs::remove_file(&dest);
+        return Err(format!("write picked copy: {e}"));
+    }
     Ok(dest.display().to_string())
+}
+
+/// A local image/video path for previewing a file chosen in the phone gallery.
+#[tauri::command]
+pub async fn picked_media_path(state: State<'_, StdMutex<AppState>>, app: AppHandle, path: String) -> Result<String, String> {
+    let data_dir = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let local = materialize_picked(&app, &data_dir, &path)?;
+        let mime = mime_from_extension(std::path::Path::new(&local)).unwrap_or_default();
+        if !mime.starts_with("image/") && !mime.starts_with("video/") {
+            return Err("not an image or video file".into());
+        }
+        if !std::path::Path::new(&local).is_file() { return Err("file unavailable".into()); }
+        Ok(local)
+    }).await.map_err(|e| e.to_string())?
 }
 
 
@@ -2090,7 +2151,6 @@ async fn attach_file_fwd(
     let mut saved_local: Option<(String, String)> = None;
     if peer_id == crate::state::SAVED_MESSAGES_ID {
         let fake_cid = format!("local-{}", crate::state::uuid_like());
-        let size = bytes.len() as u64;
         // Copy the attachment into <data_dir>/saved-media/ so it (a)
         // persists even if the user moves/deletes the original, and
         // (b) is always inside read_media_bytes' allowed scope so the
@@ -2327,6 +2387,47 @@ pub fn copy_file_to(app: AppHandle, source: String, dest: String) -> Result<(), 
     }
     std::fs::copy(&source, &dest).map_err(|e| format!("copy: {e}"))?;
     Ok(())
+}
+
+/// Publish an explicitly saved attachment in Android's public Downloads.
+/// Automatic media downloads keep using the private application cache.
+#[tauri::command]
+pub async fn export_download(
+    state: State<'_, StdMutex<AppState>>,
+    peer_id: String,
+    message_id: String,
+) -> Result<bool, String> {
+    #[cfg(target_os = "android")]
+    {
+        let (data_dir, path) = {
+            let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let message = s.chats.get(&peer_id)
+                .and_then(|book| book.messages.iter().find(|message| message.id == message_id))
+                .ok_or("unknown message")?;
+            let MessageKind::File { saved_at: Some(path), category, .. } = &message.kind else {
+                return Err("the attachment has not been downloaded".into());
+            };
+            if category.as_deref() == Some("once") {
+                return Err("a view-once attachment cannot be exported".into());
+            }
+            (s.data_dir.clone(), path.clone())
+        };
+        let candidate = std::path::Path::new(&path);
+        if !media::path_is_within(&data_dir, candidate) {
+            // The user can export attachments from a custom directory through the picker.
+            return Ok(false);
+        }
+        let name = candidate.file_name().and_then(|n| n.to_str()).unwrap_or("attachment").to_string();
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            crate::gallery::android::call("saveDownload", serde_json::json!({ "source": path, "name": name }))
+        }).await.map_err(|e| e.to_string())??;
+        Ok(result["saved"].as_bool().unwrap_or_default())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (state, peer_id, message_id);
+        Ok(false)
+    }
 }
 
 /// Read an image/video file the user picked from anywhere on their
@@ -3973,7 +4074,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
         let v: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
         let (gid, user, inner) = (v["gid"].as_str().unwrap_or(""), v["user"].as_str().unwrap_or(""), v["body"].as_str().unwrap_or(""));
         if gid.is_empty() || user.is_empty() || inner.is_empty() || inner.len() > 16 * 1024 { return true; }
-        let (chat, time) = {
+        let (chat, time, preview) = {
             let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let me = s.username.clone().unwrap_or_default();
             let Some(g) = s.groups.get(gid).cloned() else { return true };
@@ -3984,14 +4085,16 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
             if !direct_on(&g) || !sender_ok || !mine_to_see { return true; }
             let chat = ensure_cdm_book(&mut s, &g, user);
             let time = hhmm_now();
-            if from == me {
+            let preview = if from == me {
                 push_own_message(&mut s, &chat, text_msg_from_me(inner), inner);
+                None
             } else {
                 let (kind, meta) = crate::state::classify_full(inner, None);
+                let preview = preview_for(&kind);
                 let len = s.chats.get(&chat).map(|b| b.messages.len()).unwrap_or(0);
                 if let Some(book) = s.chats.get_mut(&chat) {
                     book.messages.push(ChatMessage { meta, id: format!("d-{time}-{len}"), from: from.to_string(), time: time.clone(), at: crate::state::now_at(), kind });
-                    book.summary.preview = preview_for(&book.messages.last().unwrap().kind);
+                    book.summary.preview = preview.clone();
                     book.summary.preview_by_me = false;
                     book.summary.time = time.clone();
                     book.summary.unread += 1;
@@ -3999,12 +4102,15 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                 if let Some(pos) = s.chat_order.iter().position(|id| *id == chat) {
                     if pos > 0 { s.chat_order.remove(pos); s.chat_order.insert(0, chat.clone()); }
                 }
-            }
-            (chat, time)
+                Some(preview)
+            };
+            (chat, time, preview)
         };
-        if from != state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())).ok().and_then(|s| s.username.clone()).unwrap_or_default() {
-            crate::bgnotify::incoming(app, &chat);
-                let _ = app.emit("aqua://incoming", IncomingEventPayload { peer_id: chat, text: inner.to_string(), time, is_new_chat: false });
+        if let Some(preview) = preview {
+            crate::bgnotify::incoming(app, &chat, &preview);
+            let _ = app.emit("aqua://incoming", IncomingEventPayload { preview: Some(preview), peer_id: chat, text: inner.to_string(), time, is_new_chat: false });
+        } else {
+            let _ = app.emit("aqua://own_sent", serde_json::json!({ "peer_id": chat }));
         }
         let _ = app.emit("aqua://chats_updated", ());
         return true;
@@ -4068,7 +4174,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
             // reconnect): it showed twice in the chat, the thread and Replies.
             if group_repeat(&gid, &author, &inner) { return true; }
             let time = hhmm_now();
-            {
+            let (mine, preview) = {
                 let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 // Only accept messages for groups we know about, from members
                 // who are allowed to post this (in this room).
@@ -4104,6 +4210,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                 let preview = preview_for(&kind);
                 let len = s.chats.get(&gid).map(|b| b.messages.len()).unwrap_or(0);
                 let s_me = s.username.clone();
+                let mine = s_me.as_deref() == Some(author.as_str());
                 if let Some(book) = s.chats.get_mut(&gid) {
                     book.messages.push(ChatMessage {
                         meta,
@@ -4116,14 +4223,12 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                     // A comment under a channel post lives in its thread: it
                     // isn't the channel's last message, nor its unread.
                     if !is_comment {
-                        book.summary.preview = preview;
+                        book.summary.preview = preview.clone();
                         // Posted from another device of mine: it's my message.
-                        let mine = s_me.as_deref() == Some(author.as_str());
                         book.summary.preview_by_me = mine;
                         book.summary.preview_from = if mine { None } else { Some(author.clone()) };
                         book.summary.time = time.clone();
-                        let is_active = false; // UI decides unread via its own active id
-                        if !is_active && !mine { book.summary.unread += 1; }
+                        if !mine { book.summary.unread += 1; }
                     }
                 }
                 if let Some(pos) = s.chat_order.iter().position(|id| id == &gid).filter(|_| !is_comment) {
@@ -4134,16 +4239,21 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                     let gname = s.groups.get(&gid).map(|g| g.title.clone()).unwrap_or_default();
                     if let Some(note) = reply_note(&me, &author, &gname, &inner) {
                         push_replies(&mut s, note, &time);
-                        let _ = app.emit("aqua://incoming", IncomingEventPayload {
+                        let _ = app.emit("aqua://incoming", IncomingEventPayload { preview: None,
                             peer_id: crate::state::REPLIES_ID.into(), text: format!("@{author}: {}", reply_text(&inner)), time: time.clone(), is_new_chat: false,
                         });
                     }
                 }
+                (mine, (!silent).then(|| format!("@{author}: {preview}")))
+            };
+            if mine {
+                let _ = app.emit("aqua://chats_updated", ());
+                let _ = app.emit("aqua://own_sent", serde_json::json!({ "peer_id": gid }));
+                return true;
             }
-            // A silent post: in the chat and the list, but no sound / notification
-            // (an incoming without text doesn't ring — stores.ts).
-            if !silent { crate::bgnotify::incoming(&app, &gid); }
+            if let Some(preview) = &preview { crate::bgnotify::incoming(app, &gid, preview); }
             let _ = app.emit("aqua://incoming", IncomingEventPayload {
+                preview,
                 peer_id: gid,
                 text: if silent { String::new() } else { inner },
                 time,
@@ -4248,7 +4358,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                 if !old.is_empty() {
                     if let Ok(mut s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { apply_edit_at(&mut s, &gid, from, old, new, v.get("at").and_then(|x| x.as_i64()), None); }
                     let _ = app.emit("aqua://chats_updated", ());
-                    let _ = app.emit("aqua://incoming", IncomingEventPayload { peer_id: gid.clone(), text: String::new(), time: hhmm_now(), is_new_chat: false });
+                    let _ = app.emit("aqua://incoming", IncomingEventPayload { preview: None, peer_id: gid.clone(), text: String::new(), time: hhmm_now(), is_new_chat: false });
                 }
             }
         } else if let Some(b) = inner.strip_prefix(DEL_PREFIX) {
@@ -4270,7 +4380,7 @@ fn route_group_payload(app: &AppHandle, from: &str, text: &str) -> bool {
                         }
                     }
                     let _ = app.emit("aqua://chats_updated", ());
-                    let _ = app.emit("aqua://incoming", IncomingEventPayload { peer_id: gid.clone(), text: String::new(), time: hhmm_now(), is_new_chat: false });
+                    let _ = app.emit("aqua://incoming", IncomingEventPayload { preview: None, peer_id: gid.clone(), text: String::new(), time: hhmm_now(), is_new_chat: false });
                 }
             }
         }
@@ -4391,12 +4501,12 @@ async fn on_incoming_plaintext(app: &AppHandle, from: String, text: String) {
     }
     if is_control_text(text.trim_start()) { return; }
     let is_new_chat;
-    {
+    let preview = {
         let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         is_new_chat = !s.chats.contains_key(&from);
         if is_new_chat {
             let (letter, gradient) = gradient_for(&from);
-            let summary = ChatSummary { preview_from: None,
+            let summary = ChatSummary { preview_from: None, last_at: None,
                 id: from.clone(),
                 name: from.clone(),
                 letter, gradient,
@@ -4409,13 +4519,14 @@ async fn on_incoming_plaintext(app: &AppHandle, from: String, text: String) {
             s.chat_order.retain(|id| id != &from);
             s.chat_order.insert(0, from.clone());
         }
-        push_peer_message(&mut s, &from, text.clone(), &time);
+        let preview = push_peer_message(&mut s, &from, text.clone(), &time);
         if is_new_chat {
             if let Some(b) = s.chats.get_mut(&from) { b.summary.preview = crate::state::strip_bot_keyboard(&text); }
         }
-    }
-    crate::bgnotify::incoming(&app, &from);
-    let _ = app.emit("aqua://incoming", IncomingEventPayload {
+        preview
+    };
+    crate::bgnotify::incoming(&app, &from, &preview);
+    let _ = app.emit("aqua://incoming", IncomingEventPayload { preview: Some(preview),
         peer_id: from,
         text: crate::state::strip_bot_keyboard(&text),
         time,
@@ -4826,7 +4937,7 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
                 apply_edit_at(&mut s, &from, &from, old, new, v.get("at").and_then(|x| x.as_i64()), None);
             }
             let _ = app.emit("aqua://chats_updated", ());
-            let _ = app.emit("aqua://incoming", IncomingEventPayload {
+            let _ = app.emit("aqua://incoming", IncomingEventPayload { preview: None,
                 peer_id: from, text: String::new(), time: hhmm_now(), is_new_chat: false,
             });
         }
@@ -4851,7 +4962,7 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
                 }
             }
             let _ = app.emit("aqua://chats_updated", ());
-            let _ = app.emit("aqua://incoming", IncomingEventPayload {
+            let _ = app.emit("aqua://incoming", IncomingEventPayload { preview: None,
                 peer_id: from, text: String::new(), time: hhmm_now(), is_new_chat: false,
             });
         }
@@ -4865,7 +4976,7 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
             crate::autodelete::handle_control(&mut s, &from, body, &from);
         }
         let _ = app.emit("aqua://chats_updated", ());
-        let _ = app.emit("aqua://incoming", IncomingEventPayload {
+        let _ = app.emit("aqua://incoming", IncomingEventPayload { preview: None,
             peer_id: from, text: String::new(), time: hhmm_now(), is_new_chat: false,
         });
         return;
@@ -4882,7 +4993,7 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
     if is_control_text(text.trim_start()) { return; }
     let time = hhmm_now();
     let mut is_new_chat = false;
-    {
+    let preview = {
         let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         // No chat with them here (new, or deleted on this device): open
         // one — before, only a session's first message did, and later ones
@@ -4890,7 +5001,7 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
         if !s.chats.contains_key(&from) {
             is_new_chat = true;
             let (letter, gradient) = gradient_for(&from);
-            let summary = ChatSummary { preview_from: None,
+            let summary = ChatSummary { preview_from: None, last_at: None,
                 id: from.clone(),
                 name: from.clone(),
                 letter, gradient,
@@ -4905,14 +5016,15 @@ async fn on_incoming_text(app: &AppHandle, addr: &str, text: String) {
             s.chat_order.retain(|id| id != &from);
             s.chat_order.insert(0, from.clone());
         }
-        push_peer_message(&mut s, &from, text.clone(), &time);
+        let preview = push_peer_message(&mut s, &from, text.clone(), &time);
         // An encrypted message: the chat is an encrypted one.
         if let Some(b) = s.chats.get_mut(&from) { b.summary.has_lock = true; }
-    }
+        preview
+    };
     // Phones in the background: before, only a session's first message
     // was announced (bgnotify.rs) — the ordinary ones stayed silent.
-    crate::bgnotify::incoming(app, &from);
-    let _ = app.emit("aqua://incoming", IncomingEventPayload {
+    crate::bgnotify::incoming(app, &from, &preview);
+    let _ = app.emit("aqua://incoming", IncomingEventPayload { preview: Some(preview),
         peer_id: from,
         text,
         time,
@@ -5203,6 +5315,10 @@ pub fn mark_chat_read(app: AppHandle, state: State<'_, StdMutex<AppState>>, peer
     // Read here — read on my other devices too: they kept the counter and
     // rang for messages already read (READ_PREFIX, handled below).
     if was_unread {
+        let handle = app.clone();
+        let peer = peer_id.clone();
+        tauri::async_runtime::spawn_blocking(move || crate::bgnotify::clear_chat(&handle, &peer));
+        let _ = app.emit("aqua://chats_updated", ());
         if let Some(t) = t {
             let payload = format!("{READ_PREFIX}{}", serde_json::json!({ "peer": peer_id }));
             tauri::async_runtime::spawn(async move { crate::multidev::to_my_devices(&app, &t, &me, &payload).await; });
@@ -5224,6 +5340,7 @@ pub(crate) fn on_read_elsewhere(app: &AppHandle, body: &str) {
         let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(book) = s.chats.get_mut(&peer) { book.summary.unread = 0; }
     }
+    crate::bgnotify::clear_chat(app, &peer);
     let _ = app.emit("aqua://read_elsewhere", serde_json::json!({ "peer_id": peer }));
     let _ = app.emit("aqua://chats_updated", ());
 }
@@ -5352,11 +5469,11 @@ pub fn delete_chat(state: State<'_, StdMutex<AppState>>, peer_id: String) -> Res
     Ok(())
 }
 
-fn push_peer_message(s: &mut AppState, peer_id: &str, text: String, time: &str) {
+fn push_peer_message(s: &mut AppState, peer_id: &str, text: String, time: &str) -> String {
     // A service payload ("[keyok:v1]{…}", "[status:v1]…") is never a bubble,
     // whatever path it came by (repair, mesh, history from another device).
     if is_control_text(text.trim_start()) {
-        return;
+        return String::new();
     }
     let (kind, meta) = crate::state::classify_full(&text, None);
     let preview = preview_for(&kind);
@@ -5370,7 +5487,8 @@ fn push_peer_message(s: &mut AppState, peer_id: &str, text: String, time: &str) 
             at: crate::state::now_at(),
             kind,
         });
-        book.summary.preview = preview;
+        book.summary.preview = preview.clone();
+        book.summary.preview_from = None;
         book.summary.preview_by_me = false;
         book.summary.preview_is_typing = false;
         // The lock is the caller's: a bot's message (unencrypted) put it back
@@ -5384,6 +5502,7 @@ fn push_peer_message(s: &mut AppState, peer_id: &str, text: String, time: &str) 
             s.chat_order.insert(0, peer_id.to_string());
         }
     }
+    preview
 }
 
 /// What the relay's admin panel counts a file as (only this label leaves
@@ -5410,7 +5529,7 @@ async fn faststart(state: &State<'_, StdMutex<AppState>>, path: &std::path::Path
     bytes
 }
 
-fn blob_kind(category: Option<&str>, mime: Option<&str>, name: &str) -> &'static str {
+pub(crate) fn blob_kind(category: Option<&str>, mime: Option<&str>, name: &str) -> &'static str {
     let lower = name.to_ascii_lowercase();
     match category {
         Some("sticker") => return "sticker",
@@ -5500,7 +5619,7 @@ fn group_repeat(gid: &str, author: &str, inner: &str) -> bool {
 fn push_replies(s: &mut AppState, text: String, time: &str) {
     use crate::state::REPLIES_ID;
     if !s.chats.contains_key(REPLIES_ID) {
-        let summary = ChatSummary { preview_from: None,
+        let summary = ChatSummary { preview_from: None, last_at: None,
             id: REPLIES_ID.into(),
             name: "Replies".into(),
             letter: "↩".into(),

@@ -7,7 +7,7 @@
    * click to maximise; neon window buttons on the right, Discord-style.
    */
   import { onMount } from "svelte";
-  import { info, chats, activeChat } from "../stores";
+  import { info, chats, activeChat, activeTab } from "../stores";
   import { settings } from "../theme";
   import { forgetPopout } from "../popouts";
   import { mutedChats } from "../chatPrefs";
@@ -15,11 +15,11 @@
   // Settings → Advanced → Window title bar: the open chat, the account and
   // the unread count — on the bar and in the system's window title.
   const unread = $derived($chats.reduce((n, c) => n + (c.channel || $mutedChats.has(c.id) ? 0 : c.unread), 0));
-  const chatName = $derived($settings.titleChatName !== false && $activeChat ? $activeChat.name : "");
+  const sectionName = $derived($settings.titleChatName === false ? "" : $activeTab === "music" ? $t("Music") : $activeChat?.name ?? "");
   const account = $derived($settings.titleAccount && $info?.username ? "@" + $info.username : "");
   const showUnread = $derived($settings.titleUnread !== false && unread > 0);
   $effect(() => {
-    const title = ["Aquamarine" + (showUnread ? ` (${unread})` : ""), chatName, account].filter(Boolean).join(" — ");
+    const title = ["Aquamarine" + (showUnread ? ` (${unread})` : ""), sectionName, account].filter(Boolean).join(" — ");
     void getWin().then((w) => w.setTitle(title)).catch(() => {});
   });
 
@@ -51,7 +51,7 @@
     <span class="name" data-tauri-drag-region>{$t("Aquamarine")}</span>
     {#if $info?.connected}<span class="dot" data-tauri-drag-region title={$t("Connected")}></span>{/if}
     {#if showUnread}<span class="tb-unread" data-tauri-drag-region>{unread > 99 ? "99+" : unread}</span>{/if}
-    {#if chatName}<span class="tb-sub" data-tauri-drag-region>· {chatName}</span>{/if}
+    {#if sectionName}<span class="tb-sub" data-tauri-drag-region>· {sectionName}</span>{/if}
     {#if account}<span class="tb-sub dim" data-tauri-drag-region>{account}</span>{/if}
   </div>
   <div class="spacer" data-tauri-drag-region></div>

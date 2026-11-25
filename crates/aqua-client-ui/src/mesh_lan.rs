@@ -59,6 +59,10 @@ async fn dial(addr: SocketAddr) -> std::io::Result<tokio::net::TcpStream> {
 
 /// This device's IPv4 address on the local network (no packet is sent).
 fn local_ipv4() -> Option<Ipv4Addr> {
+    #[cfg(target_os = "android")]
+    if let Some(ip) = super::bt::wifi_ipv4() {
+        return Some(ip);
+    }
     let s = UdpSocket::bind("0.0.0.0:0").ok()?;
     // Android with mobile data as the default network: else this was the
     // mobile address, and the /24 swept was the operator's.
@@ -172,19 +176,29 @@ pub async fn listen(app: &AppHandle) -> Result<(), String> {
             let me = local_ipv4();
             while !STOP.load(Ordering::Relaxed) && GEN.load(Ordering::Relaxed) == epoch {
                 let Ok((n, from)) = udp.recv_from(&mut buf) else { continue };
-                if Some(from.ip()) == me.map(IpAddr::V4) {
+                let Some((is_answer, tcp)) = parse_beacon(&buf[..n]) else { continue };
+                #[cfg(target_os = "android")]
+                let actual_ip = if is_answer {
+                    super::bt::wifi_ipv4()
+                } else {
+                    super::bt::refresh_wifi();
+                    super::bt::wifi_ipv4()
+                }.or(me);
+                #[cfg(not(target_os = "android"))]
+                let actual_ip = me;
+                if Some(from.ip()) == actual_ip.map(IpAddr::V4) {
                     continue;
                 }
-                match parse_beacon(&buf[..n]) {
-                    Some((false, _)) => {
+                match is_answer {
+                    false => {
+                        on_wifi(&udp);
                         let _ = udp.send_to(format!("{MAGIC_A} {}", TCP_PORT.load(Ordering::Relaxed)).as_bytes(), from);
                     }
-                    Some((true, tcp)) => {
+                    true => {
                         if let Ok(mut h) = heard().lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
                             h.insert(SocketAddr::new(from.ip(), tcp), Instant::now());
                         }
                     }
-                    None => {}
                 }
             }
         });

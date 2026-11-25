@@ -1,6 +1,6 @@
 [package]
 name        = "aqua-client-ui"
-version     = "1.21.0-20"
+version     = "1.21.0-21"
 edition     = "2021"
 license     = "MIT OR Apache-2.0"
 description = "Aquamarine desktop shell — Tauri 2 + Svelte + TypeScript."
@@ -67,6 +67,7 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
   "Media_Control", "Foundation", "Foundation_Collections", "Win32_System_WinRT",
+  "Data_Xml_Dom", "UI_Notifications",
   # Nearby delivery over Bluetooth (mesh_windows.rs)
   "Devices_Bluetooth", "Devices_Bluetooth_Rfcomm", "Devices_Enumeration",
   "Networking", "Networking_Sockets", "Storage_Streams",

@@ -151,6 +151,7 @@
       class:mobile-only={item.mobileOnly}
       class:active={settingsActions ? item.id === "settings" : shownTab === item.tab}
       class:hover={dragX != null && lastIdx === i}
+      aria-label={$t(item.label)}
       data-label={$t(item.label)}
       onclick={(e) => { if (swallowClick) { e.preventDefault(); return; } activate(item); }}
     >

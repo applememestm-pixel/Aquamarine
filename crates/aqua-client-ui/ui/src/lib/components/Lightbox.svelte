@@ -626,7 +626,7 @@
     <!-- Bottom bar -->
     {#if isImage || total > 1}
     <footer class="lb-bottom">
-      {#if total > 1}
+      {#if total > 1 && !IS_MOBILE}
         <button class="gbtn" onclick={() => go(-1)} title={$t("Previous (←)")} aria-label={$t("Previous")}>
           {@render ico("M15 5l-7 7 7 7")}
         </button>
@@ -655,7 +655,7 @@
           </button>
         </div>
       {/if}
-      {#if total > 1}
+      {#if total > 1 && !IS_MOBILE}
         <button class="gbtn" onclick={() => go(1)} title={$t("Next (→)")} aria-label={$t("Next")}>
           {@render ico("M9 5l7 7-7 7")}
         </button>

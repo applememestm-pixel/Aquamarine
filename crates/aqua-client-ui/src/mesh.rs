@@ -524,6 +524,12 @@ pub async fn mesh_set_enabled(app: AppHandle, on: bool) -> Result<MeshStatus, St
     Ok(status_of(&app))
 }
 
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn mesh_prepare_bluetooth(app: AppHandle) -> Result<(), String> {
+    bt::prepare(&app).await
+}
+
 /// Look for contacts nearby right now and swap messages with them.
 #[tauri::command]
 pub async fn mesh_sync_now(app: AppHandle) -> Result<MeshStatus, String> {
@@ -1142,13 +1148,14 @@ mod platform {
     }
 
     pub async fn sync_round(app: &AppHandle, scan: bool) -> Result<(), String> {
-        let l = lan::sync_round(app, scan).await;
-        let b = if bt::SUPPORTED { bt::sync_round(app, scan).await } else { Err(String::new()) };
-        match (l, b) {
-            (Ok(n), Err(e)) if n > 0 && scan && !e.is_empty() => Err(format!("Bluetooth: {e}")),
-            (Ok(n), _) if n > 0 => Ok(()),
-            (_, Ok(())) => Ok(()),
-            (_, Err(e)) if scan && !e.is_empty() => Err(e),
+        let lan = lan::sync_round(app, scan).await;
+        if matches!(lan, Ok(n) if n > 0) {
+            return Ok(());
+        }
+        let bluetooth = if bt::SUPPORTED { bt::sync_round(app, scan).await } else { Err(String::new()) };
+        match bluetooth {
+            Ok(()) => Ok(()),
+            Err(error) if scan && !error.is_empty() => Err(error),
             _ if !scan => Ok(()),
             _ => Err("no contacts with Aquamarine nearby — same Wi-Fi, or Bluetooth on".into()),
         }
@@ -1158,6 +1165,15 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_stream_pair() -> (std::net::TcpStream, std::net::TcpStream) {
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let sender = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (receiver, _) = listener.accept().unwrap();
+        sender.set_nodelay(true).unwrap();
+        receiver.set_nodelay(true).unwrap();
+        (sender, receiver)
+    }
 
     #[tokio::test]
     async fn messages_from_a_mesh_session_are_tagged() {
@@ -1248,7 +1264,7 @@ mod tests {
     }
 
     fn run(a: &T, b: &T) -> (Result<SyncReport, String>, Result<SyncReport, String>) {
-        let (mut la, mut lb) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (mut la, mut lb) = test_stream_pair();
         std::thread::scope(|sc| {
             let hb = sc.spawn(|| { let mut r = SyncReport::default(); exchange(b, &mut lb, false, &mut r).map(|_| r) });
             let mut r = SyncReport::default();
@@ -1312,7 +1328,7 @@ mod tests {
         }
         let shower = Shower(&alice, RefCell::new(Vec::new()));
         let scanner = Scanner(&bob, pass);
-        let (mut la, mut lb) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (mut la, mut lb) = test_stream_pair();
         let r = std::thread::scope(|sc| {
             let h = sc.spawn(|| { let mut r = SyncReport::default(); exchange(&shower, &mut la, false, &mut r) });
             let mut r = SyncReport::default();
@@ -1372,7 +1388,7 @@ mod tests {
         }
         // Mallory's hello carries her own key → Alice doesn't know it.
         let liar = Liar(&mallory, &b);
-        let (mut la, mut lm) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (mut la, mut lm) = test_stream_pair();
         let (r1, r2) = std::thread::scope(|sc| {
             let h = sc.spawn(|| { let mut r = SyncReport::default(); exchange(&liar, &mut lm, true, &mut r) });
             let mut r = SyncReport::default();
@@ -1412,7 +1428,7 @@ mod tests {
         let has = Has(&a, blob.clone());
         // Bob wants this file and one nobody has.
         let wants = Wants(&b, vec![cid.clone(), "0".repeat(64)], RefCell::new(Vec::new()));
-        let (mut la, mut lb) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (mut la, mut lb) = test_stream_pair();
         let (ra, rb) = std::thread::scope(|sc| {
             let h = sc.spawn(|| { let mut r = SyncReport::default(); exchange(&wants, &mut lb, false, &mut r).map(|_| r) });
             let mut r = SyncReport::default();

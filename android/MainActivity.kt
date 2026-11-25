@@ -61,6 +61,43 @@ class MainActivity : TauriActivity() {
   // canvas whose captureStream() goes out as the call's screen track.
   private var screenAsk: ActivityResultLauncher<Intent>? = null
 
+  private var meshPermissionReply: ((Boolean) -> Unit)? = null
+  private var meshVisibleReply: ((Boolean) -> Unit)? = null
+
+  private val meshPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+    val reply = meshPermissionReply
+    meshPermissionReply = null
+    reply?.invoke(grants.isNotEmpty() && grants.values.all { it })
+  }
+
+  private val meshVisibility = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+    val reply = meshVisibleReply
+    meshVisibleReply = null
+    reply?.invoke(result.resultCode > 0)
+  }
+
+  fun requestMeshPermissions(permissions: Array<String>, reply: (Boolean) -> Unit) {
+    runOnUiThread {
+      if (meshPermissionReply != null) { reply(false); return@runOnUiThread }
+      meshPermissionReply = reply
+      try { meshPermissions.launch(permissions) } catch (_: Exception) {
+        meshPermissionReply = null
+        reply(false)
+      }
+    }
+  }
+
+  fun requestMeshVisibility(intent: Intent, reply: (Boolean) -> Unit) {
+    runOnUiThread {
+      if (meshVisibleReply != null) { reply(false); return@runOnUiThread }
+      meshVisibleReply = reply
+      try { meshVisibility.launch(intent) } catch (_: Exception) {
+        meshVisibleReply = null
+        reply(false)
+      }
+    }
+  }
+
   inner class ScreenBridge {
     @JavascriptInterface fun start(fps: Int, maxSide: Int): Boolean {
       val ask = screenAsk ?: return false
@@ -96,6 +133,18 @@ class MainActivity : TauriActivity() {
     if (json == insetsJson) return
     insetsJson = json
     v.post { v.evaluateJavascript("window.__aquaInsets&&window.__aquaInsets($json)", null) }
+  }
+
+  private external fun nativeSetNotificationForeground(front: Boolean)
+
+  override fun onResume() {
+    super.onResume()
+    nativeSetNotificationForeground(true)
+  }
+
+  override fun onPause() {
+    nativeSetNotificationForeground(false)
+    super.onPause()
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -205,7 +254,7 @@ class AquaScreenService : Service() {
     val note: Notification = if (Build.VERSION.SDK_INT >= 26) {
       nm.createNotificationChannel(NotificationChannel("aqua_screen", "Screen sharing", NotificationManager.IMPORTANCE_LOW))
       Notification.Builder(this, "aqua_screen")
-        .setSmallIcon(applicationInfo.icon)
+        .setSmallIcon(R.drawable.ic_stat_aquamarine)
         .setContentTitle("Aquamarine")
         .setContentText("Your screen is shared in a call")
         .setOngoing(true)
@@ -213,7 +262,7 @@ class AquaScreenService : Service() {
     } else {
       @Suppress("DEPRECATION")
       Notification.Builder(this)
-        .setSmallIcon(applicationInfo.icon)
+        .setSmallIcon(R.drawable.ic_stat_aquamarine)
         .setContentTitle("Aquamarine")
         .setContentText("Your screen is shared in a call")
         .setOngoing(true)

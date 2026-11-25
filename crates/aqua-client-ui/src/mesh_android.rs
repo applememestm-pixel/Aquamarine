@@ -19,6 +19,8 @@ use super::{book, run_session, SERVICE_UUID};
 pub const SUPPORTED: bool = true;
 
 static READY: AtomicBool = AtomicBool::new(false);
+static LISTEN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static ROUND_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static HANDLE: OnceLock<PluginHandle<Wry>> = OnceLock::new();
 
 pub fn ready() -> bool {
@@ -54,6 +56,7 @@ async fn call_async<T: serde::de::DeserializeOwned + Send + 'static>(cmd: &'stat
 
 #[derive(Deserialize)]
 struct State {
+    supported: bool,
     enabled: bool,
     permitted: bool,
 }
@@ -75,6 +78,8 @@ struct Dev {
     address: String,
     #[serde(default)]
     bonded: bool,
+    #[serde(default)]
+    discovered: bool,
 }
 
 #[derive(Deserialize)]
@@ -133,6 +138,7 @@ impl Drop for Link {
 /// (only when the user asked for a sync, never at app start).
 async fn ensure(ask: bool) -> Result<(), String> {
     let mut st: State = call_async("state", serde_json::json!({})).await?;
+    if !st.supported { return Err("Bluetooth is unavailable".into()); }
     if !st.permitted && ask {
         st = call_async("ask", serde_json::json!({})).await?;
     }
@@ -146,6 +152,7 @@ async fn ensure(ask: bool) -> Result<(), String> {
 }
 
 pub async fn listen(app: &AppHandle) -> Result<(), String> {
+    let _guard = LISTEN_LOCK.lock().await;
     if ready() {
         return Ok(());
     }
@@ -185,14 +192,19 @@ pub fn lan_lock(on: bool) {
 }
 
 /// The Wi-Fi network (AquaMesh.kt `wifiHandle`), 0 when there's none.
-static WIFI: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static WIFI: std::sync::Mutex<(u64, Option<std::net::Ipv4Addr>)> = std::sync::Mutex::new((0, None));
 
 /// Ask Android which network is Wi-Fi (it changes when Wi-Fi does).
 pub fn refresh_wifi() {
     #[derive(Deserialize)]
-    struct Handle { handle: u64 }
-    let h = call::<Handle>("wifiHandle", serde_json::json!({})).map(|h| h.handle).unwrap_or(0);
-    WIFI.store(h, Ordering::Relaxed);
+    struct Wifi { handle: u64, ipv4: Option<std::net::Ipv4Addr> }
+    let wifi = call::<Wifi>("wifiHandle", serde_json::json!({}))
+        .map(|wifi| (wifi.handle, wifi.ipv4)).unwrap_or_default();
+    *WIFI.lock().unwrap_or_else(|error| error.into_inner()) = wifi;
+}
+
+pub fn wifi_ipv4() -> Option<std::net::Ipv4Addr> {
+    WIFI.lock().unwrap_or_else(|error| error.into_inner()).1
 }
 
 #[link(name = "android")]
@@ -205,7 +217,7 @@ extern "C" {
 /// network is mobile data (Wi-Fi without internet): before, broadcasts and
 /// connections to neighbours left through mobile data and found nobody.
 pub fn on_wifi(fd: std::os::raw::c_int) {
-    let h = WIFI.load(Ordering::Relaxed);
+    let h = WIFI.lock().unwrap_or_else(|error| error.into_inner()).0;
     if h != 0 {
         // SAFETY: plain NDK call on a socket we own; a failure leaves it as it was.
         unsafe { android_setsocknetwork(h, fd); }
@@ -213,52 +225,81 @@ pub fn on_wifi(fd: std::os::raw::c_int) {
 }
 
 pub async fn stop(_app: &AppHandle) {
+    let _guard = LISTEN_LOCK.lock().await;
     READY.store(false, Ordering::Relaxed);
     let _ = call_async::<Empty>("stop", serde_json::json!({})).await;
 }
 
+pub async fn prepare(app: &AppHandle) -> Result<(), String> {
+    ensure(true).await?;
+    listen(app).await?;
+    let _: Empty = call_async("visible", serde_json::json!({})).await?;
+    Ok(())
+}
+
 pub async fn sync_round(app: &AppHandle, scan: bool) -> Result<(), String> {
+    let _guard = ROUND_LOCK.lock().await;
     ensure(scan).await?;
     listen(app).await?;
-    let devs: Devs = call_async("devices", serde_json::json!({ "scanSecs": if scan { 8 } else { 0 } })).await?;
-    let known: std::collections::HashMap<String, u64> = book(app).peers.iter().map(|(k, p)| (k.clone(), p.last)).collect();
-    // Addresses from QR codes (Briar-style): dialled directly, even if a
-    // scan didn't see them and nobody paired anything.
+    let known: std::collections::HashMap<String, u64> = book(app)
+        .peers.iter().map(|(address, peer)| (address.to_uppercase(), peer.last)).collect();
     let direct = super::direct_addrs(app);
-    let mut cands: Vec<(u64, String)> = devs
-        .devices
-        .into_iter()
-        .filter(|d| d.bonded || known.contains_key(&d.address) || direct.contains(&d.address.to_uppercase()) || scan)
-        .map(|d| (known.get(&d.address).copied().unwrap_or(0), d.address))
-        .collect();
-    for m in &direct {
-        if !cands.iter().any(|(_, a)| a.eq_ignore_ascii_case(m)) {
-            cands.push((u64::MAX, m.clone()));
-        }
-    }
-    cands.sort_by(|a, b| b.0.cmp(&a.0));
-    if cands.is_empty() {
-        return Err("no Bluetooth devices nearby".into());
-    }
+    let mut attempted = std::collections::HashSet::new();
     let mut met = 0;
-    for (_, address) in cands.into_iter().take(10) {
-        let conn: Result<Conn, String> =
-            call_async("connect", serde_json::json!({ "address": address, "uuid": SERVICE_UUID })).await;
-        let Ok(Conn { id: Some(id), .. }) = conn else { continue };
-        let app2 = app.clone();
-        let addr2 = address.clone();
-        let rep = tauri::async_runtime::spawn_blocking(move || {
-            let mut link = Link { id, buf: VecDeque::new() };
-            run_session(&app2, &mut link, true, &addr2)
-        })
-        .await
-        .map_err(|e| e.to_string())?;
-        if rep.error.is_none() {
-            met += 1;
+    let mut last_error = None;
+
+    // Try saved contact addresses before a full scan, then prefer devices seen in it.
+    for duration in [0, 18] {
+        if duration > 0 && (!scan || met > 0) { break; }
+        let mut candidates = Vec::new();
+        if duration == 0 {
+            candidates.extend(direct.iter().map(|address| (u64::MAX, address.to_uppercase())));
+            candidates.extend(known.iter().filter(|(address, _)| super::norm_mac(address).is_some())
+                .map(|(address, seen)| (*seen, address.clone())));
+        } else {
+            let devs: Devs = call_async("devices", serde_json::json!({ "scanSecs": duration })).await?;
+            candidates.extend(devs.devices.into_iter().map(|device| {
+                let rank = match (device.discovered, device.bonded) {
+                    (true, true) => 3,
+                    (true, false) => 2,
+                    (false, true) => 1,
+                    (false, false) => 0,
+                };
+                (rank, device.address.to_uppercase())
+            }));
+        }
+        candidates.sort_unstable_by(|a, b| b.cmp(a));
+        for (_, address) in candidates.into_iter().filter(|(_, address)| attempted.insert(address.clone())).take(10) {
+            let conn: Result<Conn, String> =
+                call_async("connect", serde_json::json!({ "address": address, "uuid": SERVICE_UUID })).await;
+            let id = match conn {
+                Ok(Conn { id: Some(id), .. }) => id,
+                Ok(_) => continue,
+                Err(error) => {
+                    if known.contains_key(&address) || direct.iter().any(|candidate| candidate.eq_ignore_ascii_case(&address)) {
+                        super::note_attempt(app, &address, &error);
+                        last_error = Some(error);
+                    }
+                    continue;
+                }
+            };
+            let app = app.clone();
+            let report = tauri::async_runtime::spawn_blocking(move || {
+                let mut link = Link { id, buf: VecDeque::new() };
+                run_session(&app, &mut link, true, &address)
+            }).await.map_err(|e| e.to_string())?;
+            if let Some(error) = report.error {
+                last_error = Some(error);
+            } else {
+                met += 1;
+            }
         }
     }
     if met == 0 && scan {
-        return Err("no contacts with Aquamarine answered nearby".into());
+        return Err(last_error.unwrap_or_else(|| {
+            if attempted.is_empty() { "no Bluetooth devices nearby".into() }
+            else { "no contacts with Aquamarine answered nearby".into() }
+        }));
     }
     Ok(())
 }

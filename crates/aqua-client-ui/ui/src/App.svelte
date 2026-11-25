@@ -353,7 +353,7 @@
 <div class="root">
   <TitleBar />
   <TopPlayer />
-  <div class="app">
+  <div class="app" class:music-active={$activeTab === "music"}>
     <NavRail />
     {#if $activeTab === "chats"}
       <ChatList />
@@ -462,6 +462,11 @@
     display: flex;
     min-width: 0;
     overflow: hidden;
+  }
+  .app.music-active > .main-pane { display: none; }
+  @media (min-width: 721px) {
+    .app.music-active { background: var(--bg-list); }
+    .app.music-active > :global(.music) { grid-column: 2 / -1; grid-row: 1; border-right: 0; }
   }
   .main-pane :global(.active-chat) {
     flex: 1 1 auto;

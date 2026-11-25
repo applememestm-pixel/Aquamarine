@@ -55,6 +55,15 @@ fn valid_cid(cid: &str) -> bool {
     cid.len() == 64 && cid.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+fn lock_blob(cid: &str) -> std::sync::MutexGuard<'static, ()> {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    use std::sync::Mutex;
+    static LOCKS: [Mutex<()>; 128] = [const { Mutex::new(()) }; 128];
+    let mut hash = DefaultHasher::new();
+    cid.to_ascii_lowercase().hash(&mut hash);
+    LOCKS[hash.finish() as usize % LOCKS.len()].lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 impl BlobStore {
     pub fn from_env() -> Self {
         let dir = std::env::var("AQUA_BLOB_DIR").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("aqua-blobs"));
@@ -94,10 +103,17 @@ impl BlobStore {
     }
 
     pub fn put(&self, cid: &str, data: &[u8]) -> std::io::Result<()> {
+        let _file = lock_blob(cid);
+        self.put_cached(cid, data)
+    }
+
+    fn put_cached(&self, cid: &str, data: &[u8]) -> std::io::Result<()> {
+        if self.has_cached(cid) { return self.put_in(&self.dir, cid, data); }
         // Short of room: make some first (checked at most once a minute).
         static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        if now.saturating_sub(LAST.swap(now, std::sync::atomic::Ordering::Relaxed)) >= 60 {
+        use std::sync::atomic::Ordering::Relaxed;
+        if LAST.fetch_update(Relaxed, Relaxed, |last| (now.saturating_sub(last) >= 60).then_some(now)).is_ok() {
             let n = self.fit(data.len() as u64);
             if n > 0 {
                 tracing::info!(removed = n, "low on room: the oldest files went");
@@ -110,10 +126,15 @@ impl BlobStore {
     /// is written only when the blob is new — whoever uploads the same file
     /// later isn't charged for it. Returns whether it was new.
     pub fn put_owned(&self, cid: &str, data: &[u8], owner: &str) -> std::io::Result<bool> {
-        let new = !self.dir.join(cid.to_ascii_lowercase()).is_file();
-        self.put(cid, data)?;
+        let _file = lock_blob(cid);
+        let new = !self.has_cached(cid);
+        self.put_cached(cid, data)?;
         if new {
-            let _ = std::fs::write(self.dir.join(format!(".o.{}", cid.to_ascii_lowercase())), owner);
+            let record = self.dir.join(format!(".o.{}", cid.to_ascii_lowercase()));
+            if let Err(error) = std::fs::write(&record, owner) {
+                self.remove_cached(cid);
+                return Err(error);
+            }
         }
         Ok(new)
     }
@@ -188,11 +209,13 @@ impl BlobStore {
         if data.len() > KEEP_LIMIT {
             return Err(std::io::Error::other("too large to keep"));
         }
+        let _file = lock_blob(cid);
         self.put_in(&self.keep, cid, data)
     }
 
     /// Store a story's file (see `stories`).
     pub fn put_story(&self, cid: &str, data: &[u8]) -> std::io::Result<()> {
+        let _file = lock_blob(cid);
         self.put_in(&self.stories, cid, data)
     }
 
@@ -416,6 +439,26 @@ fn sweep_dir(dir: &Path, ttl: Duration) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn simultaneous_identical_uploads_charge_one_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = BlobStore::new(dir.path().to_path_buf(), Duration::from_secs(60));
+        let cid = "a".repeat(64);
+        let start = std::sync::Barrier::new(2);
+        let charged = std::thread::scope(|scope| {
+            let first = scope.spawn(|| {
+                start.wait();
+                store.put_owned(&cid, &[9; 1024], "first").unwrap()
+            });
+            start.wait();
+            let second = store.put_owned(&cid, &[9; 1024], "second").unwrap();
+            usize::from(first.join().unwrap()) + usize::from(second)
+        });
+
+        assert_eq!(charged, 1);
+        assert_eq!(store.usage_by_owner().values().sum::<u64>(), 1024);
+    }
 
     #[test]
     fn shutdown_clears_the_cache_but_keeps_kept_blobs() {

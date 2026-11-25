@@ -2,7 +2,6 @@
 export interface ChatSummary {
   id: string;
   /** Unix seconds of the last message (list_chats); null — none yet. */
-  last_at?: number | null;
   name: string;
   letter: string;
   gradient: string;
@@ -13,6 +12,8 @@ export interface ChatSummary {
   preview_from?: string;
   has_lock: boolean;
   time: string;
+  /** Last visible message's unix timestamp, absent in older stored summaries. */
+  last_at?: number | null;
   unread: number;
   online: boolean;
   verified: boolean;

@@ -84,8 +84,19 @@ export async function setPasscode(pass: string, autoMin = 5, kind: "pin" | "pass
   const hash = await derive(pass, salt);
   await invoke("applock_set", { hash, salt, kind, autoMin });
   rustSalt = salt;
-  lockConf.set({ hash: "set", salt, autoMin, kind });
+  lockConf.set({ hash: "set", salt, autoMin, kind, bio: get(lockConf)?.bio });
   locked.set(false);
+}
+
+export async function removePasscode(pass: string): Promise<boolean> {
+  const c = get(lockConf);
+  if (!c?.hash || get(locked)) return false;
+  const ok = await invoke<boolean>("applock_clear", { hash: await derive(pass, rustSalt || c.salt) });
+  if (ok) {
+    rustSalt = "";
+    lockConf.set({ hash: "", salt: "", autoMin: 0, skipped: true });
+  }
+  return ok;
 }
 
 export function setAutoLock(min: number) {
