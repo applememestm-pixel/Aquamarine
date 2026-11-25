@@ -2000,6 +2000,8 @@ async fn admin_get_fed(State(state): State<AppState>, headers: axum::http::Heade
         "node_id": fed::registry(&state).map(|f| f.node_id()),
         "pins": c.pins.iter().map(|p| serde_json::json!({ "url": p.url, "id": p.id })).collect::<Vec<_>>(),
         "revoked": c.revoked,
+        // REV2-004: relays that said hello without being admitted.
+        "pending_nodes": c.pending_nodes.iter().map(|p| serde_json::json!({ "url": p.url, "id": p.id })).collect::<Vec<_>>(),
         "strict": fed::registry(&state).is_some_and(|f| f.strict()),
     })))
 }
@@ -2015,6 +2017,17 @@ async fn admin_fed_rotate(State(state): State<AppState>, headers: axum::http::He
 
 #[derive(Deserialize)]
 struct FedRevoke { id: String }
+
+/// `POST /v1/admin/fed/admit {id}` — let a waiting relay into the network.
+async fn admin_fed_admit(State(state): State<AppState>, headers: axum::http::HeaderMap, Json(b): Json<FedRevoke>) -> Result<StatusCode, (StatusCode, String)> {
+    admin_authed(&state, &headers).map_err(|s| (s, String::new()))?;
+    let id = b.id.trim().to_lowercase();
+    if !fed::admit(&state, &id) {
+        return Err((StatusCode::NOT_FOUND, "no relay with this id is waiting".into()));
+    }
+    journal::log("admin", "fed-admit", &id);
+    Ok(StatusCode::NO_CONTENT)
+}
 
 /// `POST /v1/admin/fed/revoke {id}` — never accept this relay's node key again.
 async fn admin_fed_revoke(State(state): State<AppState>, headers: axum::http::HeaderMap, Json(b): Json<FedRevoke>) -> Result<StatusCode, (StatusCode, String)> {
@@ -2073,7 +2086,7 @@ async fn admin_set_fed(
     if let Ok(mut g) = state.fed.write() { *g = next.clone(); }
     if let Some(f) = next {
         let st = state.clone();
-        tokio::spawn(async move { let new = f.hello_all().await; let _ = fed::add_peers(&st, &new); st.fed_kick.notify_one(); });
+        tokio::spawn(async move { let new = f.hello_all().await; fed::absorb_vouches(&st); let _ = fed::add_peers(&st, &new); st.fed_kick.notify_one(); });
     }
     Ok(Json(serde_json::json!({ "active": active, "mode": fed::FedConfig::load().effective_mode() })))
 }
@@ -2082,8 +2095,11 @@ async fn admin_set_fed(
 /// for the admin, to hand to another relay's admin).
 async fn admin_fed_invite(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Result<Json<serde_json::Value>, StatusCode> {
     admin_authed(&state, &headers)?;
+    // REV2-004: each invitation carries a one-time admission token, so the
+    // relay that joins with it is admitted even when every peer has a key.
+    let token = fed::new_admit_token(&state);
     let c = fed::FedConfig::load();
-    Ok(Json(serde_json::json!({ "invite": fed::invite(&c) })))
+    Ok(Json(serde_json::json!({ "invite": fed::invite_with(&c, token.as_deref()) })))
 }
 
 /// `GET /v1/admin/invites` — invitation codes of this invite-only relay.
@@ -2148,6 +2164,7 @@ async fn admin_fed_join(
     let (url, secret) = fed::parse_invite(&b.invite).ok_or((StatusCode::BAD_REQUEST, "that's not an invitation (aquafed:…)".into()))?;
     let mut c = fed::FedConfig::load();
     c.secret = secret;
+    c.join_token = fed::invite_token(&b.invite).unwrap_or_default();
     c.mode = if b.names_only { "solo".into() } else { "network".into() };
     if !c.peers.contains(&url) { c.peers.push(url.clone()); }
     // Not saved: a detected address can change (and may be re-detected).
@@ -2159,6 +2176,7 @@ async fn admin_fed_join(
         return Err((StatusCode::BAD_GATEWAY, format!("{url} doesn't answer or doesn't accept this secret")));
     }
     let new = if b.names_only { fed::names_hello(&f).await } else { f.hello_all().await };
+    fed::absorb_vouches(&state);
     fed::add_peers(&state, &new);
     state.fed_kick.notify_one();
     Ok(Json(serde_json::json!({ "ok": true, "peers": fed::FedConfig::load().peers })))
@@ -3724,6 +3742,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/admin/federation", get(admin_get_fed).post(admin_set_fed))
         .route("/v1/admin/fed/rotate", post(admin_fed_rotate))
         .route("/v1/admin/fed/revoke", post(admin_fed_revoke))
+        .route("/v1/admin/fed/admit", post(admin_fed_admit))
         .route("/v1/bundle/:user",   post(upload_bundle).get(fetch_bundle))
         .route("/v1/ws",             get(ws_upgrade))
         // Telegram Bot API: /bot<token>/<method> (see tgapi.rs).

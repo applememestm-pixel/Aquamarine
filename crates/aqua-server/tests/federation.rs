@@ -513,3 +513,121 @@ async fn node_keys_replace_the_shared_secret_once_known() {
     assert!(fed::revoke(&sb, &new));
     assert!(fed::current(&sa).unwrap().fetch_bundle("keyed").await.is_none(), "a revoked node is refused");
 }
+
+/// Three relays: A and B keyed and strict. Spin up the third with only the
+/// shared secret and see what it can do.
+async fn strict_pair() -> (AppState, AppState, String, String, tempfile::TempDir) {
+    let la = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let lb = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (ua, ub) = (format!("http://{}", la.local_addr().unwrap()), format!("http://{}", lb.local_addr().unwrap()));
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = |me: &str, peer: &str| FedConfig { secret: SECRET.into(), peers: vec![peer.into()], public_url: me.into(), mode: "network".into(), ..Default::default() };
+    let sa = AppState::isolated(tmp.path().join("a"), Some(cfg(&ua, &ub)));
+    let sb = AppState::isolated(tmp.path().join("b"), Some(cfg(&ub, &ua)));
+    { let s = sa.clone(); tokio::spawn(async move { axum::serve(la, app(s)).await.unwrap() }); }
+    { let s = sb.clone(); tokio::spawn(async move { axum::serve(lb, app(s)).await.unwrap() }); }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    fed::current(&sa).unwrap().hello_all().await;
+    for _ in 0..60 {
+        if fed::current(&sa).unwrap().strict() && fed::current(&sb).unwrap().strict() { break }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(fed::current(&sa).unwrap().strict() && fed::current(&sb).unwrap().strict());
+    (sa, sb, ua, ub, tmp)
+}
+
+async fn third(tmp: &tempfile::TempDir, name: &str, peer: &str, join_token: &str) -> (AppState, String) {
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let u = format!("http://{}", l.local_addr().unwrap());
+    let c = FedConfig { secret: SECRET.into(), peers: vec![peer.into()], public_url: u.clone(), mode: "network".into(), join_token: join_token.into(), ..Default::default() };
+    let s = AppState::isolated(tmp.path().join(name), Some(c));
+    { let s = s.clone(); tokio::spawn(async move { axum::serve(l, app(s)).await.unwrap() }); }
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    (s, u)
+}
+
+/// REV2-004: impersonation and admission. With only the shared secret a
+/// relay can't join a keyed network: it waits for the admin and reads
+/// nothing; can't change accounts there; a revoked relay can't come back;
+/// an invitation token admits once, and the admitted relay is vouched for
+/// to the rest of the network.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn admission_impersonation_and_rejoining() {
+    let (sa, sb, ua, ub, tmp) = strict_pair().await;
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    let id = IdentityKeyPair::generate();
+    let tb = register(&http, &ub, &id, "victim").await;
+    let up = BundleUpload { identity: id.public(), signed_prekey: SignedPreKey::generate(1, &id).public(), one_time_prekeys: vec![] };
+    assert!(http.post(format!("{ub}/v1/bundle/victim")).bearer_auth(&tb).json(&up).send().await.unwrap().status().is_success());
+    let victim_key = sb.directory.identity_for("victim");
+
+    // 1) Secret only, no token: waits, reads nothing, isn't added as a peer.
+    let (sx, ux) = third(&tmp, "x", &ub, "").await;
+    fed::current(&sx).unwrap().hello_all().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let b = fed::current(&sb).unwrap();
+    assert!(b.cfg.pending_nodes.iter().any(|p| p.url == ux), "X waits for the admin");
+    assert!(!b.cfg.peers.contains(&ux), "X isn't a peer");
+    assert!(b.strict(), "B stays strict");
+    assert!(fed::current(&sx).unwrap().fetch_bundle("victim").await.is_none(), "X reads nothing");
+    // X can't change the victim's account on B: B never pulls from it, and
+    // its pokes (secret only) are refused.
+    let r = http.post(format!("{ub}/v1/fed/poke")).body("{}").send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 401);
+    fed::sync_once(&sb, &mut Default::default()).await;
+    assert_eq!(sb.directory.identity_for("victim"), victim_key, "the account is unchanged");
+
+    // 2) An impostor claiming A's address, with the secret and its own key:
+    // B keeps A's key (no signature by it over the new one).
+    let a_id = fed::current(&sa).unwrap().node_id();
+    let imp = fed::Fed::new(FedConfig { secret: SECRET.into(), peers: vec![ub.clone()], public_url: ua.clone(), mode: "network".into(), ephemeral: true, ..Default::default() }).unwrap();
+    assert_ne!(imp.node_id(), a_id);
+    imp.hello_to(&ub).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(fed::current(&sb).unwrap().pin_for(&ua).map(|p| p.id.clone()), Some(a_id.clone()), "A's key is kept");
+    assert!(imp.fetch_bundle("victim").await.is_none(), "the impostor reads nothing");
+
+    // 3) An invitation token admits once; the admitted relay is vouched for.
+    let token = fed::new_admit_token(&sb).unwrap();
+    let (sn, un) = third(&tmp, "n", &ub, &token).await;
+    fed::current(&sn).unwrap().hello_all().await;
+    for _ in 0..40 { if fed::current(&sb).unwrap().pin_for(&un).is_some() { break } tokio::time::sleep(Duration::from_millis(50)).await; }
+    assert!(fed::current(&sb).unwrap().pin_for(&un).is_some(), "N joined with the token");
+    fed::absorb_vouches(&sn);
+    assert!(!fed::current(&sn).unwrap().cfg.vouches.is_empty(), "B vouched for N");
+    assert!(fed::current(&sn).unwrap().cfg.join_token.is_empty(), "the token is dropped once admitted");
+    // The same token again (another relay): refused.
+    let (sy, uy) = third(&tmp, "y", &ub, &token).await;
+    fed::current(&sy).unwrap().hello_all().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(fed::current(&sb).unwrap().pin_for(&uy).is_none(), "a token works once");
+    // N says hello to A with B's vouch: A admits it too.
+    let mut c = fed::current(&sn).unwrap().cfg.clone();
+    c.peers.push(ua.clone());
+    if let Ok(mut g) = sn.fed.write() { *g = fed::Fed::new(c); }
+    fed::current(&sn).unwrap().hello_all().await;
+    for _ in 0..40 { if fed::current(&sa).unwrap().pin_for(&un).is_some() { break } tokio::time::sleep(Duration::from_millis(50)).await; }
+    assert!(fed::current(&sa).unwrap().pin_for(&un).is_some(), "A admits N on B's vouch");
+
+    // 4) Re-joining: revoke N on B; its hellos are ignored; with a new key and
+    // no token it only waits.
+    let n_id = fed::current(&sn).unwrap().node_id();
+    assert!(fed::revoke(&sb, &n_id));
+    fed::current(&sn).unwrap().hello_to(&ub).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(fed::current(&sb).unwrap().pin_for(&un).is_none(), "a revoked relay isn't pinned again");
+    assert!(fed::current(&sn).unwrap().fetch_bundle("victim").await.is_none() || !fed::current(&sb).unwrap().cfg.peers.contains(&un));
+    let mut c = fed::current(&sn).unwrap().cfg.clone();
+    c.node_key = hex::encode(aqua_core::crypto::SignSecret::generate().to_bytes());
+    c.vouches.clear();
+    if let Ok(mut g) = sn.fed.write() { *g = fed::Fed::new(c); }
+    fed::current(&sn).unwrap().hello_to(&ub).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let b = fed::current(&sb).unwrap();
+    assert!(b.pin_for(&un).is_none(), "a new key after revocation isn't let in by itself");
+    assert!(b.cfg.pending_nodes.iter().any(|p| p.url == un), "…it waits for the admin");
+    // The admin admits it.
+    let pid = b.cfg.pending_nodes.iter().find(|p| p.url == un).unwrap().id.clone();
+    assert!(fed::admit(&sb, &pid));
+    assert!(fed::current(&sb).unwrap().pin_for(&un).is_some());
+}

@@ -121,6 +121,39 @@ pub struct FedConfig {
     /// with hellos so peers move their pin.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub rotated: String,
+    /// One-time admission tokens this relay handed out in invitations
+    /// (REV2-004): SHA-256 hex and expiry (unix seconds).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub admit_tokens: Vec<(String, u64)>,
+    /// Relays that said hello without being admitted, while every peer's key
+    /// is known: they wait for the admin (`/v1/admin/fed/admit`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_nodes: Vec<Pin>,
+    /// The admission token of the invitation this relay joined with, sent
+    /// with hellos until a relay of the network vouches for us.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub join_token: String,
+    /// Statements by relays of the network that they admitted us (shown to
+    /// the others, so they admit us too).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vouches: Vec<Vouch>,
+}
+
+/// "Relay `by` admitted node `id` at `url`": Ed25519 by `by`'s node key over
+/// `aqua-fed-admit\n{id}\n{url}`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Vouch {
+    pub by: String,
+    pub sig: String,
+}
+
+/// How long an admission token in an invitation is good for.
+pub const ADMIT_TTL_SECS: u64 = 7 * 24 * 3600;
+/// Most relays waiting for admission.
+const MAX_PENDING_NODES: usize = 64;
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 /// A peer relay's node key as we keep it.
@@ -247,6 +280,28 @@ pub fn invite(cfg: &FedConfig) -> Option<String> {
     Some(format!("aquafed:{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)))
 }
 
+/// An invitation with a one-time admission token `t` (REV2-004). Older
+/// relays read only `url` and `secret`.
+pub fn invite_with(cfg: &FedConfig, token: Option<&str>) -> Option<String> {
+    use base64::Engine;
+    let url = if cfg.public_url.is_empty() { crate::public::url() } else { cfg.public_url.clone() };
+    if cfg.secret.len() < 16 || url.is_empty() {
+        return None;
+    }
+    let mut v = serde_json::json!({ "url": url, "secret": cfg.secret });
+    if let Some(t) = token { v["t"] = serde_json::Value::String(t.to_string()); }
+    Some(format!("aquafed:{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(v.to_string())))
+}
+
+/// The admission token of an invitation, if it has one.
+pub fn invite_token(s: &str) -> Option<String> {
+    use base64::Engine;
+    let b = s.trim().strip_prefix("aquafed:")?;
+    let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(b.trim_end_matches('=')).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&raw).ok()?;
+    v["t"].as_str().map(str::to_string)
+}
+
 /// (relay address, secret) from an invitation.
 pub fn parse_invite(s: &str) -> Option<(String, String)> {
     use base64::Engine;
@@ -261,12 +316,21 @@ pub fn parse_invite(s: &str) -> Option<(String, String)> {
 /// Add relays to the peer list (saved, and the live config replaced).
 /// Returns the ones that were new.
 pub fn add_peers(state: &AppState, urls: &[String]) -> Vec<String> {
-    let mut c = current(state).map(|f| f.cfg.clone()).unwrap_or_else(FedConfig::load);
+    let cur = current(state);
+    // REV2-004: once every peer's key is known, only relays whose key we
+    // keep (admitted) join the list. Before, any address a hello named that
+    // answered our secret was added — an unkeyed peer that switched strict
+    // mode off again.
+    let strict = cur.as_ref().is_some_and(|f| f.strict());
+    let mut c = cur.map(|f| f.cfg.clone()).unwrap_or_else(FedConfig::load);
     let me = my_id(&c);
     let mut added = Vec::new();
     for u in urls {
         let u = u.trim().trim_end_matches('/').to_string();
         if !(u.starts_with("http") || u.starts_with("tunnel:")) || u == me || c.peers.contains(&u) || c.peers.len() >= 64 {
+            continue;
+        }
+        if strict && !c.pins.iter().any(|p| p.url == u) {
             continue;
         }
         c.peers.push(u.clone());
@@ -334,6 +398,8 @@ pub struct Fed {
     pub cfg: FedConfig,
     http: reqwest::Client,
     key: aqua_core::crypto::SignSecret,
+    /// Vouches peers sent back to our hellos, to be kept (`absorb_vouches`).
+    got_vouches: std::sync::Mutex<Vec<Vouch>>,
 }
 
 pub type FedSlot = Arc<std::sync::RwLock<Option<Arc<Fed>>>>;
@@ -375,7 +441,7 @@ impl Fed {
             .user_agent(concat!("aqua-server/", env!("CARGO_PKG_VERSION")))
             .build()
             .ok()?;
-        Some(Arc::new(Self { cfg, http, key }))
+        Some(Arc::new(Self { cfg, http, key, got_vouches: std::sync::Mutex::new(Vec::new()) }))
     }
 
     /// The `x-aqua-fed` header for a request (fedtunnel.rs signs its polls).
@@ -456,7 +522,23 @@ impl Fed {
         let url = my_id(&self.cfg);
         let key = self.node_pub();
         let sig = hex::encode(self.key.sign(format!("aqua-fed-hello\n{url}\n{key}").as_bytes()));
-        serde_json::json!({ "node_key": key, "node_sig": sig, "rotated": self.cfg.rotated })
+        serde_json::json!({ "node_key": key, "node_sig": sig, "rotated": self.cfg.rotated, "admit": self.cfg.join_token, "vouches": self.cfg.vouches })
+    }
+
+    /// A vouch by this relay for node `id` at `url`.
+    fn vouch_for(&self, id: &str, url: &str) -> Vouch {
+        Vouch { by: self.node_id(), sig: hex::encode(self.key.sign(format!("aqua-fed-admit\n{id}\n{url}").as_bytes())) }
+    }
+
+    /// A good vouch for `pin`: signed by a relay whose key we keep and that
+    /// isn't revoked.
+    fn vouched(&self, pin: &Pin, vouches: &[Vouch]) -> bool {
+        vouches.iter().any(|v| {
+            if self.is_revoked(&v.by) { return false; }
+            let Some(by) = self.cfg.pins.iter().find(|p| p.id == v.by) else { return false };
+            let (Some(k), Some(s)) = (hex::decode(&by.key).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()), hex::decode(&v.sig).ok().and_then(|b| <[u8; 64]>::try_from(b).ok())) else { return false };
+            aqua_core::crypto::SignPublic::from_bytes(k).verify(format!("aqua-fed-admit\n{}\n{}", pin.id, pin.url).as_bytes(), &s).is_ok()
+        })
     }
 
     /// Over the peer's reverse link, when that's the way to it: it has no
@@ -636,6 +718,7 @@ impl Fed {
             async move {
                 let r = self.post(p, "/v1/fed/hello", body).await?;
                 let v: serde_json::Value = r.json().await.ok()?;
+                self.note_vouch(&v);
                 let mut out: Vec<String> = v["peers"].as_array()?.iter().filter_map(|x| x.as_str().map(str::to_string)).collect();
                 if let Some(s) = v["self"].as_str() { out.push(s.to_string()); }
                 Some(out)
@@ -652,7 +735,18 @@ impl Fed {
     pub async fn hello_to(&self, peer: &str) {
         let mut hello = serde_json::json!({ "url": my_id(&self.cfg), "peers": self.cfg.peers });
         if let (Some(o), serde_json::Value::Object(k)) = (hello.as_object_mut(), self.hello_key_fields()) { o.extend(k); }
-        let _ = self.post(peer, "/v1/fed/hello", serde_json::to_vec(&hello).unwrap_or_default()).await;
+        if let Some(r) = self.post(peer, "/v1/fed/hello", serde_json::to_vec(&hello).unwrap_or_default()).await {
+            if let Ok(v) = r.json::<serde_json::Value>().await { self.note_vouch(&v); }
+        }
+    }
+
+    /// A hello answer may carry a vouch for us (we were admitted).
+    fn note_vouch(&self, v: &serde_json::Value) {
+        if let Ok(vouch) = serde_json::from_value::<Vouch>(v["vouch"].clone()) {
+            if !vouch.by.is_empty() {
+                if let Ok(mut g) = self.got_vouches.lock() { g.push(vouch); }
+            }
+        }
     }
 
     /// Is `url` a relay of this network (does it accept our signature)?
@@ -1188,6 +1282,10 @@ impl Fed {
 #[derive(Deserialize)]
 pub struct Hello {
     pub(crate) url: String,
+    /// An invitation's admission token (REV2-004).
+    #[serde(default)] admit: String,
+    /// Relays of the network that admitted the sender.
+    #[serde(default)] vouches: Vec<Vouch>,
     #[serde(default)] peers: Vec<String>,
     /// Its node key (hex), a signature by it over url and key, and after a
     /// key change the new key signed by the old one (1.21.0-23).
@@ -1213,17 +1311,46 @@ pub async fn h_hello(State(state): State<AppState>, headers: HeaderMap, body: By
     let fed = check(&state, &headers, "POST", "/v1/fed/hello", &body)?;
     let h: Hello = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
     crate::journal::visitor(h.url.trim_end_matches('/'), "relay");
-    if let Some(pin) = pin_from_hello(&fed, &h) {
-        let url = pin.url.clone();
-        if set_pin(&state, pin) {
-            // It now knows... not yet our key: tell it, so it can sign too.
-            if let Some(f) = current(&state) {
-                tokio::spawn(async move { f.hello_to(&url).await; });
+    // REV2-004: once every peer's key is known, a relay we don't know yet
+    // joins only with an invitation's admission token, or vouched for by a
+    // relay of the network — otherwise it waits for the admin.
+    let strict = fed.strict();
+    let mut vouch = None;
+    let new_pin = pin_from_hello(&fed, &h);
+    let known = fed.pin_for(&h.url).is_some();
+    let mut admitted = !strict || known;
+    if let Some(pin) = new_pin {
+        if !known && strict {
+            if take_admit_token(&state, &h.admit) {
+                tracing::info!(url = %pin.url, "federation: a relay joined with an invitation token");
+                admitted = true;
+            } else if fed.vouched(&pin, &h.vouches) {
+                tracing::info!(url = %pin.url, "federation: a relay joined, vouched for by a relay of the network");
+                admitted = true;
+            } else {
+                tracing::warn!(url = %pin.url, id = %pin.id, "federation: a relay that isn't admitted said hello — waiting for the admin");
+                add_pending(&state, pin.clone());
+            }
+        } else {
+            admitted = true;
+        }
+        if admitted {
+            if strict && !known { vouch = Some(fed.vouch_for(&pin.id, &pin.url)); }
+            let url = pin.url.clone();
+            if set_pin(&state, pin) {
+                // It now knows... not yet our key: tell it, so it can sign too.
+                if let Some(f) = current(&state) {
+                    tokio::spawn(async move { f.hello_to(&url).await; });
+                }
             }
         }
     }
+    if !admitted {
+        return Ok(Json(serde_json::json!({ "pending": true, "self": my_id(&fed.cfg) })));
+    }
     let mut urls = vec![h.url];
-    urls.extend(h.peers);
+    // Relays it names join only through their own hello once we're strict.
+    if !strict { urls.extend(h.peers); }
     let st = state.clone();
     // Peers it knows join too — but only those that answer our signature.
     tokio::spawn(async move {
@@ -1236,7 +1363,90 @@ pub async fn h_hello(State(state): State<AppState>, headers: HeaderMap, body: By
         }
         if !add_peers(&st, &ok).is_empty() { st.fed_kick.notify_one(); }
     });
-    Ok(Json(serde_json::json!({ "self": my_id(&fed.cfg), "peers": fed.cfg.peers })))
+    Ok(Json(serde_json::json!({ "self": my_id(&fed.cfg), "peers": fed.cfg.peers, "vouch": vouch })))
+}
+
+/// Keep vouches our hellos got back, and drop the invitation token once a
+/// relay of the network has admitted us (REV2-004).
+pub fn absorb_vouches(state: &AppState) {
+    let Some(cur) = registry(state) else { return };
+    let got: Vec<Vouch> = cur.got_vouches.lock().map(|mut g| std::mem::take(&mut *g)).unwrap_or_default();
+    if got.is_empty() { return; }
+    let mut c = cur.cfg.clone();
+    for v in got {
+        if !c.vouches.iter().any(|x| x.by == v.by) && c.vouches.len() < 64 { c.vouches.push(v); }
+    }
+    c.join_token.clear();
+    if c.ephemeral || c.save().is_ok() {
+        let next = Fed::new(c);
+        if let Ok(mut g) = state.fed.write() { *g = next; }
+    }
+}
+
+/// Use up an admission token (REV2-004). True when it was one of ours and
+/// still good.
+fn take_admit_token(state: &AppState, token: &str) -> bool {
+    let token = token.trim();
+    if token.len() < 32 { return false; }
+    let Some(cur) = registry(state) else { return false };
+    let h = hex::encode(Sha256::digest(token.as_bytes()));
+    let now = now_secs();
+    let mut c = cur.cfg.clone();
+    let before = c.admit_tokens.len();
+    let hit = c.admit_tokens.iter().any(|(t, exp)| subtle::ConstantTimeEq::ct_eq(t.as_bytes(), h.as_bytes()).into() && *exp > now);
+    c.admit_tokens.retain(|(t, exp)| *t != h && *exp > now);
+    if (hit || c.admit_tokens.len() != before) && (c.ephemeral || c.save().is_ok()) {
+        let next = Fed::new(c);
+        if let Ok(mut g) = state.fed.write() { *g = next; }
+    }
+    hit
+}
+
+/// A new one-time admission token for an invitation (kept as a hash).
+pub fn new_admit_token(state: &AppState) -> Option<String> {
+    let cur = registry(state)?;
+    let mut b = [0u8; 32];
+    rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut b);
+    let token = hex::encode(b);
+    let mut c = cur.cfg.clone();
+    let now = now_secs();
+    c.admit_tokens.retain(|(_, exp)| *exp > now);
+    c.admit_tokens.push((hex::encode(Sha256::digest(token.as_bytes())), now + ADMIT_TTL_SECS));
+    if !(c.ephemeral || c.save().is_ok()) { return None; }
+    let next = Fed::new(c);
+    if let Ok(mut g) = state.fed.write() { *g = next; }
+    Some(token)
+}
+
+fn add_pending(state: &AppState, pin: Pin) {
+    let Some(cur) = registry(state) else { return };
+    let mut c = cur.cfg.clone();
+    if c.pending_nodes.iter().any(|p| p.id == pin.id) || c.pending_nodes.len() >= MAX_PENDING_NODES { return; }
+    c.pending_nodes.push(pin);
+    if c.ephemeral || c.save().is_ok() {
+        let next = Fed::new(c);
+        if let Ok(mut g) = state.fed.write() { *g = next; }
+    }
+}
+
+/// Admin: admit a waiting relay by its node id. True when it was waiting.
+pub fn admit(state: &AppState, id: &str) -> bool {
+    let Some(cur) = registry(state) else { return false };
+    let mut c = cur.cfg.clone();
+    let Some(pos) = c.pending_nodes.iter().position(|p| p.id == id) else { return false };
+    let pin = c.pending_nodes.remove(pos);
+    c.revoked.retain(|r| r != id);
+    c.pins.retain(|p| p.url != pin.url);
+    if !c.peers.contains(&pin.url) && c.peers.len() < 64 { c.peers.push(pin.url.clone()); }
+    let url = pin.url.clone();
+    c.pins.push(pin);
+    if !(c.ephemeral || c.save().is_ok()) { return false; }
+    let next = Fed::new(c);
+    if let Ok(mut g) = state.fed.write() { *g = next.clone(); }
+    if let Some(f) = next {
+        tokio::spawn(async move { f.hello_to(&url).await; });
+    }
+    true
 }
 
 /// The key a hello brings, when it may be kept (pinned):
@@ -1405,6 +1615,7 @@ pub fn spawn_announcer(state: AppState) {
                 for u in fed.hello_all().await {
                     if fed.same_network(&u).await { new.push(u); }
                 }
+                absorb_vouches(&st);
                 if !add_peers(&st, &new).is_empty() { st.fed_kick.notify_one(); }
             } else if let Some(fed) = registry(&st) {
                 let new = names_hello(&fed).await;
