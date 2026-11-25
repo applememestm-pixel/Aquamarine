@@ -3,13 +3,10 @@ name: dependency update
 # AQUA-SEC-016: dependencies with known vulnerabilities (cargo audit) are
 # updated. crates.io isn't reachable from the sessions that write code, so
 # this runs here and commits the result to the branch:
-# * by hand (workflow_dispatch: branch + packages), or
-# * TEMPORARILY on a push of this file to the 1.21.0-23 PR branch (owner,
-#   25.11: a manual run works only from main) — removed after the update.
+# by hand (workflow_dispatch: branch + packages; `name=version` pins one
+# with --precise). For PR #81 it ran four times on that branch from a
+# temporary push trigger (owner, 25.11), removed afterwards.
 on:
-  push:
-    branches: [ccr-b9de7763-pujvr8]
-    paths: [".github/workflows/deps-update.yml"]
   workflow_dispatch:
     inputs:
       branch:
@@ -32,14 +29,7 @@ jobs:
     runs-on: ubuntu-22.04
     env:
       BRANCH: ${{ inputs.branch || github.ref_name }}
-      # Run 2 (25.11): webpki-roots is in two majors (spec needs @version);
-      # url didn't move in the root lock; cookie in the app's.
-      # Run 3: url stayed at 2.5.8 in the root lock — the resolver keeps
-      # versions compatible with rust-version 1.75 there; `name=version`
-      # pins one with --precise.
-      # Run 4: rsa 0.10.0-rc.18 (Marvin, RUSTSEC-2023-0071) via russh in the
-      # server app — rsa and russh within their ranges.
-      PKGS: ${{ inputs.packages || 'russh rsa' }}
+      PKGS: ${{ inputs.packages || 'lettre rustls rustls-webpki url tokio rustix' }}
       RUSQLITE: ${{ inputs.rusqlite || 'false' }}
     steps:
       - uses: actions/checkout@v4
@@ -69,7 +59,6 @@ jobs:
               esac
             done
             # Why a package doesn't move (what holds it back).
-            (cd "$dir" && cargo tree -i rsa --depth 2 2>/dev/null | head -20) || true
           done
           git diff --stat
       - name: cargo audit after the update
