@@ -722,6 +722,16 @@ impl Directory {
                 owner    TEXT NOT NULL,
                 at       INTEGER NOT NULL
             );
+            -- AQUA-SEC-001 (1.21.0-21): the Ed25519 key each X25519 identity
+            -- proved it belongs with at sign-in (auth.rs::verify). The first
+            -- proven pair is kept; any other signing key for the same
+            -- X25519 key is refused at sign-in, bundle upload and device
+            -- lists. A new table, so older databases just gain it.
+            CREATE TABLE IF NOT EXISTS identity_signs (
+                dh   BLOB PRIMARY KEY,
+                sign BLOB NOT NULL,
+                at   INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS bans (
                 uid  TEXT PRIMARY KEY,
                 dhs  TEXT NOT NULL DEFAULT '',
@@ -1455,8 +1465,12 @@ impl Directory {
         }
         let uid = if uid.len() == 10 && uid.bytes().all(|b| b.is_ascii_digit()) { uid.to_string() } else { uid_for(identity_dh) };
         let db = self.db.lock().unwrap();
-        if let Ok((owner, their_uid)) = db.query_row("SELECT identity_dh, uid FROM users WHERE username=?1", rusqlite::params![username], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, String>(1)?))) {
-            if owner.as_slice() != identity_dh.as_slice() && their_uid != uid {
+        if let Ok(owner) = db.query_row("SELECT identity_dh FROM users WHERE username=?1", rusqlite::params![username], |r| r.get::<_, Vec<u8>>(0)) {
+            // AQUA-SEC-002: joining never replaces the key an account already
+            // has here (before 1.21.0-21 a matching ID was enough, so anyone
+            // with a pass wrote their key over the account's own and the
+            // change spread through the network).
+            if owner.as_slice() != identity_dh.as_slice() {
                 return Err(DirError::UsernameTaken);
             }
         }
@@ -1472,7 +1486,7 @@ impl Directory {
         db.execute(
             "INSERT INTO users (username, identity_dh, email, display_name, about, phone, is_bot, created_at, password, uid)
              VALUES (?1, ?2, NULL, ?3, '', '', 0, ?4, ?5, ?6)
-             ON CONFLICT(username) DO UPDATE SET identity_dh=?2, display_name=?3, password=CASE WHEN ?5 = '' THEN password ELSE ?5 END, uid=?6",
+             ON CONFLICT(username) DO UPDATE SET display_name=?3, password=CASE WHEN ?5 = '' THEN password ELSE ?5 END, uid=?6",
             rusqlite::params![username, identity_dh.as_slice(), display_name.trim(), now_secs() as i64, pw, uid],
         )?;
         tracing::info!(%username, %uid, "joined with an account of the network");
@@ -1710,6 +1724,31 @@ impl Directory {
             .filter(|s| !s.is_empty())
     }
 
+    /// Keep the Ed25519 key an X25519 identity proved at sign-in. `Ok(true)`
+    /// when it is the kept key (or the first one), `Ok(false)` when this
+    /// X25519 key is already bound to a different Ed25519 key.
+    pub fn bind_identity_sign(&self, dh: &[u8; 32], sign: &[u8; 32]) -> Result<bool, DirError> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.execute(
+            "INSERT INTO identity_signs (dh, sign, at) VALUES (?1, ?2, ?3) ON CONFLICT(dh) DO NOTHING",
+            rusqlite::params![dh.as_slice(), sign.as_slice(), now_secs() as i64],
+        )?;
+        let kept: Vec<u8> = db.query_row(
+            "SELECT sign FROM identity_signs WHERE dh=?1",
+            rusqlite::params![dh.as_slice()],
+            |r| r.get(0),
+        )?;
+        Ok(kept.as_slice() == sign.as_slice())
+    }
+
+    /// The Ed25519 key `dh` proved it belongs with, if it ever signed in here.
+    pub fn identity_sign(&self, dh: &[u8; 32]) -> Option<[u8; 32]> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.query_row("SELECT sign FROM identity_signs WHERE dh=?1", rusqlite::params![dh.as_slice()], |r| r.get::<_, Vec<u8>>(0))
+            .ok()
+            .and_then(|v| v.try_into().ok())
+    }
+
     /// Store a signed device list a device of the account published. The
     /// relay can't sign one; it only refuses obvious junk: a list for
     /// another account, a bad signature, a signer that isn't a device of the
@@ -1722,6 +1761,14 @@ impl Directory {
         list.verify_self().map_err(|e| DirError::BadProfile(e.to_string()))?;
         let signer: [u8; 32] = hex::decode(&list.signer.dh).ok().and_then(|b| b.try_into().ok()).ok_or(DirError::BadProfile("bad signer key".into()))?;
         if self.device_role(username, &signer).is_none() {
+            return Err(DirError::NotOwner);
+        }
+        // AQUA-SEC-001: the list is signed with the Ed25519 key it names
+        // itself, so that key must be the one the signer's X25519 key proved
+        // it belongs with at sign-in. Otherwise anyone holding a token for
+        // the account could sign a list with a key of their own.
+        let signer_sign = list.signer.sign_pub().ok_or(DirError::BadProfile("bad signer key".into()))?;
+        if self.identity_sign(&signer) != Some(*signer_sign.as_bytes()) {
             return Err(DirError::NotOwner);
         }
         if let Some(cur) = self.devlist(username).and_then(|j| serde_json::from_str::<aqua_core::devlist::SignedDeviceList>(&j).ok()) {

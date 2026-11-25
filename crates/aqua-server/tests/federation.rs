@@ -24,7 +24,12 @@ async fn token(http: &reqwest::Client, base: &str, id: &IdentityKeyPair) -> Stri
         .send().await.unwrap().json().await.unwrap();
     let sig = id.sign.sign(&URL_SAFE_NO_PAD.decode(&chal.nonce).unwrap());
     let v: VerifyResponse = http.post(format!("{base}/v1/auth/verify"))
-        .json(&VerifyRequest { identity: id.public(), nonce: chal.nonce, signature: URL_SAFE_NO_PAD.encode(sig) })
+        .json(&VerifyRequest {
+            identity: id.public(),
+            dh_proof: aqua_client_core::transport::sign_in_proof(id, &URL_SAFE_NO_PAD.decode(&chal.nonce).unwrap(), chal.server_eph.as_deref()).unwrap(),
+            nonce: chal.nonce,
+            signature: URL_SAFE_NO_PAD.encode(sig),
+        })
         .send().await.unwrap().json().await.unwrap();
     v.token
 }
@@ -345,6 +350,19 @@ async fn solo_relay_shares_only_names() {
     fed::sync_once(&sa, &mut Default::default()).await;
     assert!(sa.directory.identity_for("bob").is_some());
     assert_eq!(sa.directory.username_by_uid(&sa.directory.uid_of("bob").unwrap()).as_deref(), Some("bob"));
+
+    // AQUA-SEC-002: a pass never writes a new key over an account a relay
+    // already holds — on A (where @bob lives) a pass + another key is refused
+    // and bob's own key stays.
+    let bob_key = sa.directory.identity_for("bob");
+    let r: serde_json::Value = http.post(format!("{ua}/v1/me/pass")).bearer_auth(&bob_tok).json(&serde_json::json!({})).send().await.unwrap().json().await.unwrap();
+    let pass3 = r["pass"].as_str().unwrap().to_string();
+    let intruder = IdentityKeyPair::generate();
+    let itok = token(&http, &ua, &intruder).await;
+    let r = http.post(format!("{ua}/v1/users/signup")).bearer_auth(&itok)
+        .json(&serde_json::json!({ "username": "", "password": "", "invite": pass3 })).send().await.unwrap();
+    assert!(r.status().is_client_error(), "joining over an existing account must fail: {}", r.status());
+    assert_eq!(sa.directory.identity_for("bob"), bob_key, "the account's key is unchanged");
 }
 
 /// Register once (1.2.0-5): a relay that joins the network later takes every

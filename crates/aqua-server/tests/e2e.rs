@@ -119,6 +119,7 @@ impl Client {
             identity: self.identity.public(),
             nonce: chal.nonce.clone(),
             signature: URL_SAFE_NO_PAD.encode(sig),
+            dh_proof: aqua_client_core::transport::sign_in_proof(&self.identity, &nonce_bytes, chal.server_eph.as_deref()).unwrap(),
         };
         let resp = http
             .post(format!("{base}/v1/auth/verify"))
@@ -301,9 +302,99 @@ async fn verify_rejects_wrong_signature() {
             identity: alice.public(),
             nonce: chal.nonce,
             signature: URL_SAFE_NO_PAD.encode(sig),
+            dh_proof: None,
         })
         .send().await.unwrap();
     assert!(r.status().is_client_error(), "must reject wrong signature");
+}
+
+/// Fresh challenge for `dh`: (nonce string, nonce bytes, server one-off key).
+async fn challenge_for(http: &reqwest::Client, base: &str, id: &IdentityKeyPair) -> (String, Vec<u8>, Option<String>) {
+    let chal: ChallengeResponse = http
+        .post(format!("{base}/v1/auth/challenge"))
+        .json(&ChallengeRequest { identity_dh_pub: URL_SAFE_NO_PAD.encode(id.public().dh_pub.as_bytes()) })
+        .send().await.unwrap()
+        .json().await.unwrap();
+    let bytes = URL_SAFE_NO_PAD.decode(&chal.nonce).unwrap();
+    (chal.nonce, bytes, chal.server_eph)
+}
+
+/// AQUA-SEC-001 regression: knowing a victim's public X25519 key (anyone can
+/// read it from /v1/bundle) must not be enough for a token. Before the fix
+/// the attacker's own Ed25519 key passed, with `identity = {attacker sign,
+/// victim dh}`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn token_forgery_with_foreign_signing_key_is_refused() {
+    let addr = spawn_server().await;
+    let base = format!("http://{addr}");
+    let http = test_http();
+    let victim = IdentityKeyPair::generate();
+    let attacker = IdentityKeyPair::generate();
+    let forged = aqua_core::IdentityPublic { sign_pub: attacker.public().sign_pub, dh_pub: victim.public().dh_pub };
+
+    // 1) The old attack: a valid signature by the attacker's key, no proof.
+    let (nonce, bytes, eph) = challenge_for(&http, &base, &victim).await;
+    assert!(eph.is_some(), "relay must hand out a one-off key");
+    let r = http.post(format!("{base}/v1/auth/verify"))
+        .json(&VerifyRequest { identity: forged.clone(), nonce, signature: URL_SAFE_NO_PAD.encode(attacker.sign.sign(&bytes)), dh_proof: None })
+        .send().await.unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::UNAUTHORIZED, "no proof → no token");
+
+    // 2) A proof made with the attacker's X25519 secret doesn't fit the victim's key.
+    let (nonce, bytes, eph) = challenge_for(&http, &base, &victim).await;
+    let proof = aqua_client_core::transport::sign_in_proof(&attacker, &bytes, eph.as_deref()).unwrap();
+    let r = http.post(format!("{base}/v1/auth/verify"))
+        .json(&VerifyRequest { identity: forged.clone(), nonce, signature: URL_SAFE_NO_PAD.encode(attacker.sign.sign(&bytes)), dh_proof: proof })
+        .send().await.unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::UNAUTHORIZED, "proof of another key → no token");
+
+    // 3) A random proof.
+    let (nonce, bytes, _) = challenge_for(&http, &base, &victim).await;
+    let r = http.post(format!("{base}/v1/auth/verify"))
+        .json(&VerifyRequest { identity: forged.clone(), nonce, signature: URL_SAFE_NO_PAD.encode(attacker.sign.sign(&bytes)), dh_proof: Some(URL_SAFE_NO_PAD.encode([7u8; 32])) })
+        .send().await.unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    // 4) The real owner still signs in, and the proven pair is then kept.
+    let mut owner = Client::new("victim");
+    owner.identity = victim;
+    owner.login(&http, &base).await;
+    assert!(!owner.token.is_empty());
+
+    // 5) A nonce answered once can't be answered again.
+    let (nonce, bytes, eph) = challenge_for(&http, &base, &owner.identity).await;
+    let proof = aqua_client_core::transport::sign_in_proof(&owner.identity, &bytes, eph.as_deref()).unwrap();
+    let req = VerifyRequest { identity: owner.identity.public(), nonce, signature: URL_SAFE_NO_PAD.encode(owner.identity.sign.sign(&bytes)), dh_proof: proof };
+    let r1 = http.post(format!("{base}/v1/auth/verify")).json(&req).send().await.unwrap();
+    assert!(r1.status().is_success());
+    let r2 = http.post(format!("{base}/v1/auth/verify")).json(&req).send().await.unwrap();
+    assert!(r2.status().is_client_error(), "replayed verify must fail");
+}
+
+/// AQUA-SEC-001: a token holder can't put a bundle whose Ed25519 key isn't
+/// the one proven at sign-in (peers would trust a prekey signed by it).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bundle_with_unproven_signing_key_is_refused() {
+    let addr = spawn_server().await;
+    let base = format!("http://{addr}");
+    let http = test_http();
+    let mut alice = Client::new("alice");
+    alice.login(&http, &base).await;
+    // Same X25519 key, someone else's Ed25519 key (and an SPK it signed).
+    let mixed = IdentityKeyPair {
+        sign: IdentityKeyPair::generate().sign,
+        dh: aqua_core::crypto::DhSecret::from_bytes(alice.identity.dh.to_bytes()),
+    };
+    let bundle = BundleUpload {
+        identity: mixed.public(),
+        signed_prekey: SignedPreKey::generate(9, &mixed).public(),
+        one_time_prekeys: Vec::new(),
+    };
+    let r = http.post(format!("{base}/v1/bundle/alice"))
+        .bearer_auth(&alice.token)
+        .json(&bundle)
+        .send().await.unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::FORBIDDEN);
 }
 
 async fn recv_relay(

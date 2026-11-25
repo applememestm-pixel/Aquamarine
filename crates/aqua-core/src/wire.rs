@@ -115,6 +115,12 @@ pub mod auth {
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct ChallengeResponse {
         pub nonce: String, // base64
+        /// The relay's one-off X25519 public for this challenge (base64).
+        /// The client proves it holds the identity's X25519 secret by
+        /// answering with [`dh_proof`] over DH(identity, this key).
+        /// Absent from relays older than 1.21.0-21.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub server_eph: Option<String>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,6 +128,39 @@ pub mod auth {
         pub identity: IdentityPublic,
         pub nonce: String,     // base64
         pub signature: String, // base64
+        /// [`dh_proof`] (base64). Relays from 1.21.0-21 refuse a verify
+        /// without it: the Ed25519 signature alone doesn't show that the
+        /// caller owns the X25519 key the token is bound to.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub dh_proof: Option<String>,
+    }
+
+    /// Domain separation for the proof key.
+    pub const DH_PROOF_INFO: &[u8] = b"aqua-auth-dh-proof-v1";
+
+    /// Proof of possession of the identity X25519 secret, binding the
+    /// Ed25519 key of the same request: HMAC-SHA256 keyed with
+    /// HKDF(DH(identity, server_eph)) over `nonce || dh_pub || sign_pub`.
+    /// `None` for a non-contributory (all-zero) shared secret — a
+    /// low-order `server_eph` must never yield a proof anyone can forge.
+    pub fn dh_proof(
+        shared: &[u8; crate::crypto::X25519_LEN],
+        nonce: &[u8],
+        dh_pub: &[u8; crate::crypto::X25519_LEN],
+        sign_pub: &[u8],
+    ) -> Option<[u8; crate::crypto::HMAC_TAG_LEN]> {
+        use subtle::ConstantTimeEq;
+        if shared.ct_eq(&[0u8; crate::crypto::X25519_LEN]).unwrap_u8() == 1 {
+            return None;
+        }
+        let mut key = crate::crypto::hkdf_sha256(b"aqua-auth", shared, DH_PROOF_INFO, 32).ok()?;
+        let mut msg = Vec::with_capacity(nonce.len() + 64);
+        msg.extend_from_slice(nonce);
+        msg.extend_from_slice(dh_pub);
+        msg.extend_from_slice(sign_pub);
+        let tag = crate::crypto::hmac_sha256(&key, &msg);
+        zeroize::Zeroize::zeroize(&mut key);
+        Some(tag)
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -451,6 +451,12 @@ async fn upload_bundle(
             format!("bundle identity {bundle_fp} does not match your token identity {token_fp}"),
         ));
     }
+    // AQUA-SEC-001: the bundle's Ed25519 key (which signs the prekey and
+    // that peers check) must be the one this X25519 key proved at sign-in.
+    if state.directory.identity_sign(&dh_pub) != Some(*body.identity.sign_pub.as_bytes()) {
+        tracing::warn!(user = %user, token = %token_fp, "upload_bundle REJECT: signing key ≠ the one proven at sign-in");
+        return Err((StatusCode::FORBIDDEN, "the bundle's signing key is not the one this identity signed in with".into()));
+    }
     // Claim the username on first upload or verify it's still ours.
     if let Err(e) = state.claim_or_check(&user, dh_pub) {
         let existing = state.bindings.get(&user).map(|r| short_hex(r.value()));

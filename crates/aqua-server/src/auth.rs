@@ -6,7 +6,13 @@
 //!    returns 24 random bytes as a base64 nonce and remembers that this
 //!    nonce is pending for that identity's DH public.
 //! 2. Client signs the raw nonce bytes with its Ed25519 signing key and
-//!    POSTs `{ identity, nonce, signature }` to `/v1/auth/verify`.
+//!    POSTs `{ identity, nonce, signature, dh_proof }` to `/v1/auth/verify`.
+//!    `dh_proof` (see `aqua_core::wire::auth::dh_proof`) is an HMAC keyed by
+//!    DH(identity X25519 secret, the challenge's one-off server key): it
+//!    shows the caller owns the X25519 key the token gets bound to, and it
+//!    covers the Ed25519 key, which the relay then keeps for that X25519
+//!    key (AQUA-SEC-001: before 1.21.0-21 any Ed25519 key was accepted, so
+//!    anyone who knew a public X25519 key could get that account's token).
 //!    Server checks that (a) the nonce is one it issued for this
 //!    identity and hasn't been used yet, (b) the signature verifies
 //!    under the identity's signing key, and (c) the nonce is not
@@ -32,7 +38,7 @@ use std::{
 };
 
 use aqua_core::{
-    crypto::{hmac_sha256, ED25519_SIG_LEN, HMAC_TAG_LEN, X25519_LEN},
+    crypto::{hmac_sha256, DhPublic, DhSecret, ED25519_SIG_LEN, HMAC_TAG_LEN, X25519_LEN},
 };
 use axum::{
     async_trait,
@@ -64,6 +70,11 @@ pub const NONCE_TTL: Duration = Duration::from_secs(60);
 /// Tokens issued after a successful verify live this long.
 pub const TOKEN_TTL: Duration = Duration::from_secs(60 * 60);
 
+/// Most challenges waiting for an answer at once. The challenge endpoint
+/// needs no token, so without a cap a flood of requests grows the map
+/// without bound for a minute.
+pub const MAX_PENDING: usize = 50_000;
+
 // ---------- State ---------------------------------------------------------
 
 pub struct AuthState {
@@ -74,6 +85,9 @@ pub struct AuthState {
 struct Pending {
     identity_dh_pub: [u8; X25519_LEN],
     issued_at: SystemTime,
+    /// One-off X25519 secret for the proof of possession (see
+    /// [`aqua_core::wire::auth::dh_proof`]). Zeroized on drop.
+    eph: DhSecret,
 }
 
 impl AuthState {
@@ -83,15 +97,25 @@ impl AuthState {
         Arc::new(Self { server_key: key, pending: DashMap::new() })
     }
 
-    fn issue_nonce(&self, identity_dh_pub: [u8; X25519_LEN]) -> [u8; NONCE_LEN] {
+    fn issue_nonce(&self, identity_dh_pub: [u8; X25519_LEN]) -> Option<([u8; NONCE_LEN], DhPublic)> {
+        if self.pending.len() >= MAX_PENDING {
+            self.prune();
+            if self.pending.len() >= MAX_PENDING {
+                return None;
+            }
+        }
         let mut nonce = [0u8; NONCE_LEN];
         OsRng.fill_bytes(&mut nonce);
+        let eph = DhSecret::generate();
+        let eph_pub = eph.public();
         self.pending.insert(
             nonce,
-            Pending { identity_dh_pub, issued_at: SystemTime::now() },
+            Pending { identity_dh_pub, issued_at: SystemTime::now(), eph },
         );
-        self.prune();
-        nonce
+        if self.pending.len() % 1024 == 0 {
+            self.prune();
+        }
+        Some((nonce, eph_pub))
     }
 
     /// Look up and consume a pending challenge.
@@ -99,7 +123,7 @@ impl AuthState {
         &self,
         nonce: &[u8; NONCE_LEN],
         expected_identity: [u8; X25519_LEN],
-    ) -> Result<(), AuthError> {
+    ) -> Result<DhSecret, AuthError> {
         let entry = self
             .pending
             .remove(nonce)
@@ -116,7 +140,12 @@ impl AuthState {
         {
             return Err(AuthError::NonceExpired);
         }
-        Ok(())
+        Ok(entry.1.eph)
+    }
+
+    /// Challenges waiting for an answer (tests, panel).
+    pub fn pending_len(&self) -> usize {
+        self.pending.len()
     }
 
     fn prune(&self) {
@@ -193,6 +222,14 @@ pub enum AuthError {
     NonceExpired,
     #[error("bad signature on challenge")]
     BadSignature,
+    #[error("no proof of the identity key: update Aquamarine")]
+    MissingProof,
+    #[error("the proof of the identity key does not match")]
+    BadProof,
+    #[error("this identity is bound to a different signing key")]
+    SigningKeyMismatch,
+    #[error("too many sign-ins in progress, try again in a minute")]
+    Busy,
     #[error("token is invalid or forged")]
     BadToken,
     #[error("token has expired")]
@@ -216,6 +253,9 @@ impl AuthError {
             AuthError::BadToken | AuthError::TokenExpired => StatusCode::UNAUTHORIZED,
             AuthError::WrongIdentityForUser | AuthError::UsernameTaken => StatusCode::FORBIDDEN,
             AuthError::NotRegistered => StatusCode::FORBIDDEN,
+            AuthError::BadProof | AuthError::MissingProof | AuthError::BadSignature => StatusCode::UNAUTHORIZED,
+            AuthError::SigningKeyMismatch => StatusCode::FORBIDDEN,
+            AuthError::Busy => StatusCode::SERVICE_UNAVAILABLE,
             _ => StatusCode::BAD_REQUEST,
         }
     }
@@ -235,8 +275,14 @@ pub async fn challenge(
         .try_into()
         .map_err(|_| (StatusCode::BAD_REQUEST, "expected 32-byte DH public".into()))?;
 
-    let nonce = state.auth.issue_nonce(dh_pub);
-    Ok(Json(ChallengeResponse { nonce: URL_SAFE_NO_PAD.encode(nonce) }))
+    let (nonce, eph_pub) = state
+        .auth
+        .issue_nonce(dh_pub)
+        .ok_or((AuthError::Busy.status(), AuthError::Busy.to_string()))?;
+    Ok(Json(ChallengeResponse {
+        nonce: URL_SAFE_NO_PAD.encode(nonce),
+        server_eph: Some(URL_SAFE_NO_PAD.encode(eph_pub.as_bytes())),
+    }))
 }
 
 pub async fn verify(
@@ -269,9 +315,57 @@ pub async fn verify(
         return Err((AuthError::BadSignature.status(), AuthError::BadSignature.to_string()));
     }
 
-    if let Err(e) = state.auth.take_pending(&nonce_arr, dh_pub) {
-        tracing::warn!(identity = %fp, error = %e, "auth/verify REJECT: pending nonce check failed");
-        return Err((e.status(), e.to_string()));
+    // The proof travels with the request; refuse before touching state.
+    let proof: [u8; HMAC_TAG_LEN] = match body.dh_proof.as_deref() {
+        None => {
+            tracing::warn!(identity = %fp, "auth/verify REJECT: no proof of the X25519 key (old app)");
+            return Err((AuthError::MissingProof.status(), AuthError::MissingProof.to_string()));
+        }
+        Some(p) => URL_SAFE_NO_PAD
+            .decode(p.as_bytes())
+            .ok()
+            .and_then(|b| b.try_into().ok())
+            .ok_or((StatusCode::BAD_REQUEST, "bad proof".into()))?,
+    };
+
+    let eph = match state.auth.take_pending(&nonce_arr, dh_pub) {
+        Ok(eph) => eph,
+        Err(e) => {
+            tracing::warn!(identity = %fp, error = %e, "auth/verify REJECT: pending nonce check failed");
+            return Err((e.status(), e.to_string()));
+        }
+    };
+
+    // AQUA-SEC-001: the signature above only shows the caller holds *some*
+    // Ed25519 key. The token is bound to the X25519 key, so the caller must
+    // also show it holds that key's secret: only DH(identity, eph) gives the
+    // right proof, and the proof covers the Ed25519 key of this request.
+    let shared = eph.dh(&body.identity.dh_pub);
+    let expected = aqua_core::wire::auth::dh_proof(
+        shared.as_bytes(),
+        &nonce_arr,
+        &dh_pub,
+        body.identity.sign_pub.as_bytes(),
+    );
+    drop(eph);
+    let ok = expected.map(|e| e.ct_eq(&proof).unwrap_u8() == 1).unwrap_or(false);
+    if !ok {
+        tracing::warn!(identity = %fp, "auth/verify REJECT: bad proof of the X25519 key");
+        return Err((AuthError::BadProof.status(), AuthError::BadProof.to_string()));
+    }
+
+    // The X25519 and Ed25519 keys are now proven to belong together; the
+    // first proven pair is kept and any other Ed25519 key is refused.
+    match state.directory.bind_identity_sign(&dh_pub, body.identity.sign_pub.as_bytes()) {
+        Ok(true) => {}
+        Ok(false) => {
+            tracing::warn!(identity = %fp, "auth/verify REJECT: identity is bound to another signing key");
+            return Err((AuthError::SigningKeyMismatch.status(), AuthError::SigningKeyMismatch.to_string()));
+        }
+        Err(e) => {
+            tracing::error!(identity = %fp, error = %e, "auth/verify: binding store failed");
+            return Err((StatusCode::SERVICE_UNAVAILABLE, "storage error".into()));
+        }
     }
 
     // Banned on this server (panel -> People -> Accounts): no token.

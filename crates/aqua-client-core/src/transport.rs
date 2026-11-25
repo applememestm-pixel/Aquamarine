@@ -1675,6 +1675,7 @@ async fn sign_in(
         .decode(&chal.nonce)
         .map_err(|e| TransportError::BadPayload(format!("bad nonce base64: {e}")))?;
     let sig = identity.sign.sign(&nonce_bytes);
+    let dh_proof = sign_in_proof(identity, &nonce_bytes, chal.server_eph.as_deref())?;
 
     // 3) Verify.
     let verify: VerifyResponse = json_of(http
@@ -1684,12 +1685,34 @@ async fn sign_in(
             identity: pub_id,
             nonce: chal.nonce,
             signature: URL_SAFE_NO_PAD.encode(sig),
+            dh_proof,
         })
         .send()
         .await?
         .error_for_status()?)
         .await?;
     Ok(verify.token)
+}
+
+/// Proof that we hold the identity's X25519 secret (relays from 1.21.0-21
+/// require it, AQUA-SEC-001). `None` only for an older relay that sends no
+/// one-off key; a key that gives an all-zero secret is refused.
+pub fn sign_in_proof(
+    identity: &IdentityKeyPair,
+    nonce: &[u8],
+    server_eph: Option<&str>,
+) -> Result<Option<String>, TransportError> {
+    let Some(eph) = server_eph else { return Ok(None) };
+    let eph: [u8; 32] = URL_SAFE_NO_PAD
+        .decode(eph)
+        .ok()
+        .and_then(|b| b.try_into().ok())
+        .ok_or_else(|| TransportError::BadPayload("bad server key in the challenge".into()))?;
+    let shared = identity.dh.dh(&aqua_core::crypto::DhPublic::from_bytes(eph));
+    let pub_id = identity.public();
+    let proof = aqua_core::wire::auth::dh_proof(shared.as_bytes(), nonce, pub_id.dh_pub.as_bytes(), pub_id.sign_pub.as_bytes())
+        .ok_or_else(|| TransportError::BadPayload("the server's challenge key is invalid".into()))?;
+    Ok(Some(URL_SAFE_NO_PAD.encode(proof)))
 }
 
 /// A relay's JSON answer — or, when something else answered in its place
