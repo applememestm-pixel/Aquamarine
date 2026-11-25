@@ -1,0 +1,58 @@
+name: dependency update
+
+# AQUA-SEC-016: dependencies with known vulnerabilities (cargo audit) are
+# updated within their semver ranges. crates.io isn't reachable from the
+# sessions that write code, so this runs here — by hand, on a branch you
+# choose (the open PR's), and commits Cargo.lock changes to it.
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to update (the open PR's)"
+        required: true
+      packages:
+        description: "cargo update -p … (space separated)"
+        required: true
+        default: "lettre rustls rustls-webpki webpki-roots url tokio rustix"
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: cargo update in the three workspaces
+        env:
+          PKGS: ${{ inputs.packages }}
+        run: |
+          args=""
+          for p in $PKGS; do args="$args -p $p"; done
+          for dir in . crates/aqua-client-ui crates/aqua-server-app; do
+            echo "== $dir"
+            # A package that isn't in this workspace's lock is skipped.
+            for p in $PKGS; do
+              (cd "$dir" && cargo update -p "$p" 2>&1) || echo "skip $p in $dir"
+            done
+          done
+          git diff --stat
+      - name: cargo audit after the update
+        run: |
+          cargo audit || true
+          cargo audit --file crates/aqua-client-ui/Cargo.lock || true
+          cargo audit --file crates/aqua-server-app/Cargo.lock || true
+      - name: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock crates/aqua-client-ui/Cargo.lock crates/aqua-server-app/Cargo.lock
+          if git diff --cached --quiet; then echo "nothing to update"; exit 0; fi
+          git commit -m "Dependencies: cargo update -p ${{ inputs.packages }} (AQUA-SEC-016)"
+          git push origin HEAD:${{ inputs.branch }}
