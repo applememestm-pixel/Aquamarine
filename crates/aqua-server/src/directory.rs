@@ -1732,14 +1732,24 @@ impl Directory {
     /// its own accounts (and, in a network, the network's — `home` "") and
     /// the names it learnt from other relays. Oldest change first.
     pub fn names_since(&self, since: i64, limit: usize) -> Vec<NameRow> {
-        let db = self.db.lock().unwrap();
+        self.names_after(since, None, limit)
+    }
+
+    /// Like [`Self::names_since`] from the cursor `(since, after)`: rows after
+    /// it in `(updated_at, username)` order (REV-001: with `updated_at` alone a
+    /// page boundary inside equal timestamps skipped rows). `after = None`
+    /// is the old `> since` (relays before 1.21.0-23 send no `after`).
+    pub fn names_after(&self, since: i64, after: Option<&str>, limit: usize) -> Vec<NameRow> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let Ok(mut st) = db.prepare(
-            "SELECT username, uid, '' AS home, created_at, updated_at FROM users WHERE is_bot=0 AND uid IS NOT NULL AND uid<>'' AND updated_at > ?1
-             UNION ALL
-             SELECT username, uid, home, created_at, updated_at FROM fed_names WHERE updated_at > ?1
-             ORDER BY 5 LIMIT ?2",
+            "SELECT username, uid, home, created_at, updated_at FROM (
+               SELECT username, uid, '' AS home, created_at, updated_at FROM users WHERE is_bot=0 AND uid IS NOT NULL AND uid<>''
+               UNION ALL
+               SELECT username, uid, home, created_at, updated_at FROM fed_names)
+             WHERE updated_at > ?1 OR (?3 IS NOT NULL AND updated_at = ?1 AND username > ?3)
+             ORDER BY updated_at, username LIMIT ?2",
         ) else { return Vec::new() };
-        st.query_map(rusqlite::params![since, limit as i64], |r| {
+        st.query_map(rusqlite::params![since, limit as i64, after], |r| {
             Ok(NameRow { username: r.get(0)?, uid: r.get(1)?, home: r.get(2)?, created_at: r.get(3)?, updated_at: r.get(4)? })
         })
         .map(|it| it.flatten().collect())
@@ -2367,13 +2377,20 @@ impl Directory {
 
     /// User rows changed after `since` (ms), oldest first, at most 500.
     pub fn fed_users_since(&self, since: i64) -> Vec<FedUser> {
-        let db = self.db.lock().unwrap();
+        self.fed_users_after(since, None)
+    }
+
+    /// Accounts after the cursor `(since, after)` in `(updated_at, username)`
+    /// order, 500 at most (REV-001; `None` = the old `> since`).
+    pub fn fed_users_after(&self, since: i64, after: Option<&str>) -> Vec<FedUser> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let Ok(mut st) = db.prepare(
             "SELECT username, identity_dh, email, display_name, about, phone, is_bot, created_at,
                     extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices, recovery, uid, security, devlist
-             FROM users WHERE updated_at > ?1 AND is_bot = 0 ORDER BY updated_at LIMIT 500",
+             FROM users WHERE is_bot = 0 AND (updated_at > ?1 OR (?2 IS NOT NULL AND updated_at = ?1 AND username > ?2))
+             ORDER BY updated_at, username LIMIT 500",
         ) else { return Vec::new() };
-        st.query_map(rusqlite::params![since], |r| {
+        st.query_map(rusqlite::params![since, after], |r| {
             Ok(FedUser {
                 username: r.get(0)?,
                 identity_dh: hex::encode(r.get::<_, Vec<u8>>(1)?),
@@ -2593,9 +2610,18 @@ impl Directory {
 
     /// Federation: (username, key, updated_at) changed after `since` (ms).
     pub fn fed_hist_since(&self, since: i64) -> Vec<(String, String, i64)> {
-        let db = self.db.lock().unwrap();
-        let Ok(mut st) = db.prepare("SELECT username, k, updated_at FROM hist_store WHERE updated_at > ?1 ORDER BY updated_at LIMIT 1000") else { return Vec::new() };
-        st.query_map(rusqlite::params![since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        self.fed_hist_after(since, None)
+    }
+
+    /// History records after the cursor `(since, "user/key")` (REV-001).
+    pub fn fed_hist_after(&self, since: i64, after: Option<&str>) -> Vec<(String, String, i64)> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let Ok(mut st) = db.prepare(
+            "SELECT username, k, updated_at FROM hist_store
+             WHERE updated_at > ?1 OR (?2 IS NOT NULL AND updated_at = ?1 AND (username || '/' || k) > ?2)
+             ORDER BY updated_at, username || '/' || k LIMIT 1000",
+        ) else { return Vec::new() };
+        st.query_map(rusqlite::params![since, after], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .map(|rows| rows.flatten().collect())
             .unwrap_or_default()
     }
@@ -2622,9 +2648,18 @@ impl Directory {
 
     /// (username, updated_at) of backups changed after `since` (seconds).
     pub fn fed_backups_since(&self, since: i64) -> Vec<(String, i64)> {
-        let db = self.db.lock().unwrap();
-        let Ok(mut st) = db.prepare("SELECT username, updated_at FROM backups WHERE updated_at > ?1 ORDER BY updated_at LIMIT 200") else { return Vec::new() };
-        st.query_map(rusqlite::params![since], |r| Ok((r.get(0)?, r.get(1)?)))
+        self.fed_backups_after(since, None)
+    }
+
+    /// Backups after the cursor `(since, username)` (REV-001).
+    pub fn fed_backups_after(&self, since: i64, after: Option<&str>) -> Vec<(String, i64)> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let Ok(mut st) = db.prepare(
+            "SELECT username, updated_at FROM backups
+             WHERE updated_at > ?1 OR (?2 IS NOT NULL AND updated_at = ?1 AND username > ?2)
+             ORDER BY updated_at, username LIMIT 200",
+        ) else { return Vec::new() };
+        st.query_map(rusqlite::params![since, after], |r| Ok((r.get(0)?, r.get(1)?)))
             .map(|rows| rows.flatten().collect())
             .unwrap_or_default()
     }

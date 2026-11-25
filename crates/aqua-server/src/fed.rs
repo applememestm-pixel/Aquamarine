@@ -577,11 +577,12 @@ fn my_url(cfg: &FedConfig) -> String {
 
 /// `GET /v1/fed/names?since=T` — the name registry (see
 /// [`crate::directory::Directory::names_since`]).
-pub async fn h_names(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<Since>) -> Result<impl IntoResponse, StatusCode> {
-    let fed = check_registry(&state, &headers, "GET", &format!("/v1/fed/names?since={}", q.since), b"")
+pub async fn h_names(State(state): State<AppState>, headers: HeaderMap, uri: axum::http::Uri, Query(q): Query<Since>) -> Result<impl IntoResponse, StatusCode> {
+    let fed = check_registry(&state, &headers, "GET", signed_path(&uri), b"")
+        .or_else(|_| check_registry(&state, &headers, "GET", &format!("/v1/fed/names?since={}", q.since), b""))
         .or_else(|_| check_registry(&state, &headers, "GET", "/v1/fed/names", b""))?;
     let dir = state.directory.clone();
-    let names = tokio::task::spawn_blocking(move || dir.names_since(q.since, 1000)).await.unwrap_or_default();
+    let names = tokio::task::spawn_blocking(move || dir.names_after(q.since, q.after.as_deref(), 1000)).await.unwrap_or_default();
     Ok(Json(serde_json::json!({ "home": my_url(&fed.cfg), "mode": if fed.cfg.active() { "network" } else { "solo" }, "names": names })))
 }
 
@@ -640,27 +641,42 @@ fn first_use(sig: &str, ts: i64) -> bool {
     seen.insert(sig.to_string(), ts).is_none()
 }
 
-/// The cursor after a page of rows sorted by `updated_at` (AQUA-SEC-010).
-/// A full page may end in the middle of rows that share its last
-/// timestamp — "> last" next time skipped the rest of them for good. So
-/// after a full page the next one starts at that timestamp again (rows are
-/// applied idempotently: "newer wins"), unless that makes no progress (a
-/// whole page of one timestamp), when it moves on as before.
-pub fn next_cursor(from: i64, last: i64, full_page: bool) -> i64 {
-    if full_page && last - 1 > from { last - 1 } else { last.max(from) }
+/// Where we are in a peer's rows: `(updated_at, key)` of the last row read
+/// (REV-001). The key breaks ties between equal timestamps, so a page that
+/// ends inside a run of them goes on right after its last row — no row is
+/// skipped or read twice. Relays before 1.21.0-23 ignore `after` and answer
+/// `updated_at > since`: with them it works as before.
+pub type Cursor = (i64, String);
+type CursorMap = std::collections::HashMap<String, Cursor>;
+
+/// `?since=T&after=KEY` (the key percent-encoded; empty key: no `after`).
+fn cursor_query(c: &Cursor) -> String {
+    if c.1.is_empty() {
+        return format!("since={}", c.0);
+    }
+    let mut key = String::new();
+    for b in c.1.bytes() {
+        if b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-' { key.push(b as char) } else { key.push_str(&format!("%{b:02X}")) }
+    }
+    format!("since={}&after={key}", c.0)
+}
+
+/// The signed path of a cursor request as it arrived (with its query).
+fn signed_path(uri: &axum::http::Uri) -> &str {
+    uri.path_and_query().map(|p| p.as_str()).unwrap_or(uri.path())
 }
 
 /// Pull the name registry from one relay (paged).
-async fn sync_names(state: &AppState, fed: &Fed, peer: &str, since: &mut std::collections::HashMap<String, i64>) {
+async fn sync_names(state: &AppState, fed: &Fed, peer: &str, since: &mut CursorMap) {
     for _ in 0..50 {
-        let from = *since.get(peer).unwrap_or(&0);
-        let Some(r) = fed.get(peer, &format!("/v1/fed/names?since={from}")).await else { return };
+        let from = since.get(peer).cloned().unwrap_or_default();
+        let Some(r) = fed.get(peer, &format!("/v1/fed/names?{}", cursor_query(&from))).await else { return };
         let Ok(v) = r.json::<serde_json::Value>().await else { return };
         let home = v["home"].as_str().unwrap_or(peer).trim_end_matches('/').to_string();
         let Ok(rows) = serde_json::from_value::<Vec<crate::directory::NameRow>>(v["names"].clone()) else { return };
         if rows.is_empty() { return; }
         let n = rows.len();
-        let last = next_cursor(from, rows.iter().map(|r| r.updated_at).max().unwrap_or(from), n >= 1000);
+        let last = rows.last().map(|r| (r.updated_at, r.username.clone())).unwrap_or(from);
         let dir = state.directory.clone();
         let moved = tokio::task::spawn_blocking(move || rows.iter().filter_map(|r| dir.fed_apply_name(r, &home)).collect::<Vec<_>>()).await.unwrap_or_default();
         for (old, new) in &moved {
@@ -827,16 +843,20 @@ pub async fn h_blob(State(state): State<AppState>, headers: HeaderMap, Path(cid)
 }
 
 #[derive(Deserialize)]
-pub struct Since { #[serde(default)] since: i64 }
-
-pub async fn h_users(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<Since>) -> Result<impl IntoResponse, StatusCode> {
-    check(&state, &headers, "GET", &format!("/v1/fed/users?since={}", q.since), b"")?;
-    Ok(Json(state.directory.fed_users_since(q.since)))
+pub struct Since {
+    #[serde(default)] since: i64,
+    /// The key of the last row read at `since` (REV-001); older relays send none.
+    #[serde(default)] after: Option<String>,
 }
 
-pub async fn h_backups(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<Since>) -> Result<impl IntoResponse, StatusCode> {
-    check(&state, &headers, "GET", &format!("/v1/fed/backups?since={}", q.since), b"")?;
-    Ok(Json(state.directory.fed_backups_since(q.since)))
+pub async fn h_users(State(state): State<AppState>, headers: HeaderMap, uri: axum::http::Uri, Query(q): Query<Since>) -> Result<impl IntoResponse, StatusCode> {
+    check(&state, &headers, "GET", signed_path(&uri), b"")?;
+    Ok(Json(state.directory.fed_users_after(q.since, q.after.as_deref())))
+}
+
+pub async fn h_backups(State(state): State<AppState>, headers: HeaderMap, uri: axum::http::Uri, Query(q): Query<Since>) -> Result<impl IntoResponse, StatusCode> {
+    check(&state, &headers, "GET", signed_path(&uri), b"")?;
+    Ok(Json(state.directory.fed_backups_after(q.since, q.after.as_deref())))
 }
 
 pub async fn h_backup(State(state): State<AppState>, headers: HeaderMap, Path(user): Path<String>) -> Result<impl IntoResponse, StatusCode> {
@@ -926,9 +946,9 @@ pub struct Hello { url: String, #[serde(default)] peers: Vec<String> }
 /// A relay of the network says hello: it's added to our peers if new, and
 /// gets the list of relays we know (that's how they find each other).
 /// History records changed after `since` (ms): `[[user, key, updated_at]]`.
-pub async fn h_hist_list(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<Since>) -> Result<impl IntoResponse, StatusCode> {
-    check(&state, &headers, "GET", &format!("/v1/fed/hist?since={}", q.since), b"")?;
-    Ok(Json(state.directory.fed_hist_since(q.since)))
+pub async fn h_hist_list(State(state): State<AppState>, headers: HeaderMap, uri: axum::http::Uri, Query(q): Query<Since>) -> Result<impl IntoResponse, StatusCode> {
+    check(&state, &headers, "GET", signed_path(&uri), b"")?;
+    Ok(Json(state.directory.fed_hist_after(q.since, q.after.as_deref())))
 }
 
 pub async fn h_hist_get(State(state): State<AppState>, headers: HeaderMap, Path((user, k)): Path<(String, String)>) -> Result<impl IntoResponse, StatusCode> {
@@ -1069,10 +1089,10 @@ pub fn spawn_announcer(state: AppState) {
 /// How far we've read from each peer.
 #[derive(Default)]
 pub struct Cursors {
-    users: std::collections::HashMap<String, i64>,
-    backups: std::collections::HashMap<String, i64>,
-    hist: std::collections::HashMap<String, i64>,
-    names: std::collections::HashMap<String, i64>,
+    users: CursorMap,
+    backups: CursorMap,
+    hist: CursorMap,
+    names: CursorMap,
 }
 
 pub async fn sync_once(state: &AppState, cursors: &mut Cursors) {
@@ -1098,36 +1118,34 @@ pub async fn sync_once(state: &AppState, cursors: &mut Cursors) {
 
 /// Encrypted chat history of accounts (client history_sync.rs): a device may
 /// talk to any relay of the network and still find it.
-async fn sync_hist(state: &AppState, fed: &Fed, peer: &str, since: &mut std::collections::HashMap<String, i64>) {
+async fn sync_hist(state: &AppState, fed: &Fed, peer: &str, since: &mut CursorMap) {
     loop {
-        let from = *since.get(peer).unwrap_or(&0);
-        let Some(r) = fed.get(peer, &format!("/v1/fed/hist?since={from}")).await else { return };
+        let from = since.get(peer).cloned().unwrap_or_default();
+        let Some(r) = fed.get(peer, &format!("/v1/fed/hist?{}", cursor_query(&from))).await else { return };
         let Ok(rows) = r.json::<Vec<(String, String, i64)>>().await else { return };
         if rows.is_empty() { return; }
-        let mut last = from;
-        // The oldest record we couldn't fetch: the cursor stays before it, so
-        // the next sync tries it again instead of skipping it (AQUA-SEC-010).
-        let mut failed: Option<i64> = None;
+        let n = rows.len();
+        // The cursor moves row by row, and stops before a record we couldn't
+        // fetch, so the next sync tries it again (AQUA-SEC-010).
+        let mut cur = from;
         for (user, k, at) in &rows {
-            last = last.max(*at);
-            if !crate::directory::Directory::valid_name(user) || k.len() > 64 { continue; }
-            let got = match fed.get(peer, &format!("/v1/fed/hist/{user}/{k}")).await {
-                Some(b) => match b.bytes().await {
-                    Ok(bytes) => { state.directory.fed_apply_hist(user, k, &bytes, *at); true }
-                    Err(_) => false,
-                },
-                None => false,
-            };
-            if !got { failed = Some(failed.map_or(*at, |f| f.min(*at))); }
+            if crate::directory::Directory::valid_name(user) && k.len() <= 64 {
+                let got = match fed.get(peer, &format!("/v1/fed/hist/{user}/{k}")).await {
+                    Some(b) => match b.bytes().await {
+                        Ok(bytes) => { state.directory.fed_apply_hist(user, k, &bytes, *at); true }
+                        Err(_) => false,
+                    },
+                    None => false,
+                };
+                if !got {
+                    since.insert(peer.to_string(), cur);
+                    return;
+                }
+            }
+            cur = (*at, format!("{user}/{k}"));
         }
-        let mut cursor = next_cursor(from, last, rows.len() >= 1000);
-        if let Some(f) = failed {
-            cursor = cursor.min(f - 1).max(from);
-            since.insert(peer.to_string(), cursor);
-            return;
-        }
-        since.insert(peer.to_string(), cursor);
-        if rows.len() < 1000 { return; }
+        since.insert(peer.to_string(), cur);
+        if n < 1000 { return; }
     }
 }
 
@@ -1135,13 +1153,13 @@ async fn sync_peer(
     state: &AppState,
     fed: &Fed,
     peer: &str,
-    since_users: &mut std::collections::HashMap<String, i64>,
-    since_backups: &mut std::collections::HashMap<String, i64>,
+    since_users: &mut CursorMap,
+    since_backups: &mut CursorMap,
 ) {
     // Accounts (paged: 500 per call).
     loop {
-        let since = *since_users.get(peer).unwrap_or(&0);
-        let Some(r) = fed.get(peer, &format!("/v1/fed/users?since={since}")).await else { return };
+        let since = since_users.get(peer).cloned().unwrap_or_default();
+        let Some(r) = fed.get(peer, &format!("/v1/fed/users?{}", cursor_query(&since))).await else { return };
         let Ok(rows) = r.json::<Vec<crate::directory::FedUser>>().await else { return };
         if rows.is_empty() {
             break;
@@ -1171,10 +1189,7 @@ async fn sync_peer(
                 }
             }
         }
-        let last = next_cursor(since, rows.iter().map(|u| u.updated_at).max().unwrap_or(since), rows.len() >= 500);
-        if last == since && rows.len() >= 500 {
-            break;
-        }
+        let last = rows.last().map(|u| (u.updated_at, u.username.clone())).unwrap_or(since);
         since_users.insert(peer.to_string(), last);
         if applied > 0 {
             tracing::info!(peer, applied, "federation: accounts updated");
@@ -1187,11 +1202,11 @@ async fn sync_peer(
     // Paged like the rest (200 per call: only the first page was read), and
     // the cursor moves only past backups we have (AQUA-SEC-010).
     for _ in 0..50 {
-        let since = *since_backups.get(peer).unwrap_or(&0);
-        let Some(r) = fed.get(peer, &format!("/v1/fed/backups?since={since}")).await else { return };
+        let since = since_backups.get(peer).cloned().unwrap_or_default();
+        let Some(r) = fed.get(peer, &format!("/v1/fed/backups?{}", cursor_query(&since))).await else { return };
         let Ok(list) = r.json::<Vec<(String, i64)>>().await else { return };
         let n = list.len();
-        let mut last = since;
+        let mut last = since.clone();
         for (user, at) in list {
             let have = state.directory.backup_meta(&user).is_some_and(|(_, ours)| ours >= at);
             let ok = have || match fed.get(peer, &format!("/v1/fed/backup/{user}")).await {
@@ -1202,14 +1217,14 @@ async fn sync_peer(
                 None => false,
             };
             if !ok {
-                since_backups.insert(peer.to_string(), (at - 1).max(since));
+                since_backups.insert(peer.to_string(), last);
                 return;
             }
-            last = last.max(at);
+            last = (at, user);
         }
-        let next = next_cursor(since, last, n >= 200);
-        since_backups.insert(peer.to_string(), next);
-        if n < 200 || next == since { return; }
+        let moved = last != since;
+        since_backups.insert(peer.to_string(), last);
+        if n < 200 || !moved { return; }
     }
 }
 
@@ -1336,26 +1351,11 @@ pub async fn remote_webapp_init(state: &AppState, bot: &str, user: &str, start_p
 
 #[cfg(test)]
 mod cursor_tests {
-    use super::next_cursor;
-
-    /// AQUA-SEC-010: a full page that ends in a run of equal timestamps is
-    /// read again from that timestamp; a last page or a stuck one moves on.
-    #[test]
-    fn a_signature_is_taken_once() {
-        let ts = super::now_ms();
-        assert!(super::first_use("sig-a", ts));
-        assert!(!super::first_use("sig-a", ts), "replayed");
-        assert!(super::first_use("sig-b", ts));
-    }
 
     #[test]
-    fn full_pages_restart_at_their_last_timestamp() {
-        assert_eq!(next_cursor(0, 500, true), 499);
-        assert_eq!(next_cursor(0, 500, false), 500);
-        // A whole page of one timestamp: no progress possible → move past it.
-        assert_eq!(next_cursor(499, 500, true), 500);
-        assert_eq!(next_cursor(500, 500, true), 500);
-        // Never backwards.
-        assert_eq!(next_cursor(700, 500, false), 700);
+    fn cursor_queries_encode_the_key() {
+        assert_eq!(super::cursor_query(&(5, String::new())), "since=5");
+        assert_eq!(super::cursor_query(&(5, "bob".into())), "since=5&after=bob");
+        assert_eq!(super::cursor_query(&(5, "bob/k 1".into())), "since=5&after=bob%2Fk%201");
     }
 }

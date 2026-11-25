@@ -412,3 +412,48 @@ async fn a_new_relay_knows_everyone_after_its_first_sync() {
     let w = tokio_tungstenite::connect_async(format!("ws://{b}/v1/ws?user=early7&token={tok}&v=1.21.0-23")).await;
     assert!(w.is_ok());
 }
+
+/// REV-001: pages of accounts that share one `updated_at` (1200 here, the
+/// page is 500) all reach the other relay — the cursor is
+/// `(updated_at, username)`, so a page boundary inside equal timestamps
+/// skips nothing; a second sync and a fresh start ("restart") add nothing
+/// and lose nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn equal_timestamps_across_pages_are_not_skipped() {
+    let la = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let lb = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (a, b) = (la.local_addr().unwrap().to_string(), lb.local_addr().unwrap().to_string());
+    let (ua, ub) = (format!("http://{a}"), format!("http://{b}"));
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = |me: &str, peer: &str| FedConfig { secret: SECRET.into(), peers: vec![peer.into()], public_url: me.into(), ..Default::default() };
+    let sa = AppState::isolated(tmp.path().join("a"), Some(cfg(&ua, &ub)));
+    let sb = AppState::isolated(tmp.path().join("b"), Some(cfg(&ub, &ua)));
+    { let s = sa.clone(); tokio::spawn(async move { axum::serve(la, app(s)).await.unwrap() }); }
+    { let s = sb.clone(); tokio::spawn(async move { axum::serve(lb, app(s)).await.unwrap() }); }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+
+    // One real account on A as a template, then 1200 more with one timestamp.
+    let id = IdentityKeyPair::generate();
+    register(&http, &ua, &id, "tmpl").await;
+    let tmpl = sa.directory.fed_users_since(0).into_iter().find(|u| u.username == "tmpl").unwrap();
+    const N: usize = 1200;
+    let t = 1_900_000_000_000i64;
+    for i in 0..N {
+        let mut u = tmpl.clone();
+        u.username = format!("same{i:04}");
+        u.uid = format!("{:010}", 4_000_000_000u64 + i as u64);
+        u.identity_dh = hex::encode(IdentityKeyPair::generate().public().dh_pub.as_bytes());
+        u.updated_at = t;
+        assert!(sa.directory.fed_apply_user(&u).applied, "{i}");
+    }
+    let on_b = |sb: &AppState| (0..N).filter(|i| sb.directory.identity_for(&format!("same{i:04}")).is_some()).count();
+
+    let mut cursors = Default::default();
+    fed::sync_once(&sb, &mut cursors).await;
+    assert_eq!(on_b(&sb), N, "every account with the shared timestamp arrived");
+    fed::sync_once(&sb, &mut cursors).await;
+    assert_eq!(on_b(&sb), N, "a second sync changes nothing");
+    fed::sync_once(&sb, &mut Default::default()).await;
+    assert_eq!(on_b(&sb), N, "a fresh start (restart) reads them again without loss");
+}
