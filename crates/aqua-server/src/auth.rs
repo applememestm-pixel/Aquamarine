@@ -80,6 +80,7 @@ pub const MAX_PENDING: usize = 50_000;
 pub struct AuthState {
     pub server_key: [u8; 32],
     pending: DashMap<[u8; NONCE_LEN], Pending>,
+    max_pending: usize,
 }
 
 struct Pending {
@@ -94,13 +95,13 @@ impl AuthState {
     pub fn new() -> Arc<Self> {
         let mut key = [0u8; 32];
         OsRng.fill_bytes(&mut key);
-        Arc::new(Self { server_key: key, pending: DashMap::new() })
+        Arc::new(Self { server_key: key, pending: DashMap::new(), max_pending: MAX_PENDING })
     }
 
     fn issue_nonce(&self, identity_dh_pub: [u8; X25519_LEN]) -> Option<([u8; NONCE_LEN], DhPublic)> {
-        if self.pending.len() >= MAX_PENDING {
+        if self.pending.len() >= self.max_pending {
             self.prune();
-            if self.pending.len() >= MAX_PENDING {
+            if self.pending.len() >= self.max_pending {
                 return None;
             }
         }
@@ -468,7 +469,7 @@ mod tests {
     fn pending_nonce_flow() {
         let auth = AuthState::new();
         let dh_pub = [9u8; X25519_LEN];
-        let nonce = auth.issue_nonce(dh_pub);
+        let (nonce, _) = auth.issue_nonce(dh_pub).unwrap();
         auth.take_pending(&nonce, dh_pub).unwrap();
         // Second take fails (consumed).
         assert!(matches!(
@@ -480,10 +481,42 @@ mod tests {
     #[test]
     fn pending_nonce_rejects_wrong_identity() {
         let auth = AuthState::new();
-        let nonce = auth.issue_nonce([1u8; X25519_LEN]);
+        let (nonce, _) = auth.issue_nonce([1u8; X25519_LEN]).unwrap();
         assert!(matches!(
             auth.take_pending(&nonce, [2u8; X25519_LEN]),
             Err(AuthError::IdentityMismatch)
         ));
+    }
+
+    #[test]
+    fn dh_proof_matches_only_with_the_identity_secret() {
+        use aqua_core::wire::auth::dh_proof;
+        let id = aqua_core::IdentityKeyPair::generate();
+        let other = aqua_core::IdentityKeyPair::generate();
+        let auth = AuthState::new();
+        let dh = *id.public().dh_pub.as_bytes();
+        let (nonce, eph_pub) = auth.issue_nonce(dh).unwrap();
+        let eph = auth.take_pending(&nonce, dh).unwrap();
+        let server = dh_proof(eph.dh(&id.public().dh_pub).as_bytes(), &nonce, &dh, id.public().sign_pub.as_bytes()).unwrap();
+        let client = dh_proof(id.dh.dh(&eph_pub).as_bytes(), &nonce, &dh, id.public().sign_pub.as_bytes()).unwrap();
+        assert_eq!(server, client);
+        let forged = dh_proof(other.dh.dh(&eph_pub).as_bytes(), &nonce, &dh, id.public().sign_pub.as_bytes()).unwrap();
+        assert_ne!(server, forged);
+        // The proof covers the Ed25519 key: swapping it changes the proof.
+        let swapped = dh_proof(id.dh.dh(&eph_pub).as_bytes(), &nonce, &dh, other.public().sign_pub.as_bytes()).unwrap();
+        assert_ne!(server, swapped);
+        // A low-order key gives an all-zero secret: no proof at all.
+        assert!(dh_proof(&[0u8; 32], &nonce, &dh, id.public().sign_pub.as_bytes()).is_none());
+    }
+
+    #[test]
+    fn pending_is_capped() {
+        let auth = Arc::new(AuthState { max_pending: 64, ..Arc::try_unwrap(AuthState::new()).ok().unwrap() });
+        for i in 0..64u64 {
+            let mut k = [0u8; X25519_LEN];
+            k[..8].copy_from_slice(&i.to_be_bytes());
+            assert!(auth.issue_nonce(k).is_some());
+        }
+        assert!(auth.issue_nonce([3u8; X25519_LEN]).is_none(), "the map stops growing");
     }
 }

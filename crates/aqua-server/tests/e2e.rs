@@ -49,6 +49,8 @@ async fn spawn_server() -> SocketAddr {
         let p = std::env::temp_dir().join(format!("aqua-e2e-{}.sqlite", std::process::id()));
         let _ = std::fs::remove_file(&p);
         std::env::set_var("AQUA_DIR_DB", p);
+        // Codes in API answers: tests have no mail server (explicit since 1.21.0-21).
+        std::env::set_var("AQUA_DEV_CODES", "1");
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

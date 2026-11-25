@@ -295,13 +295,21 @@ impl AppState {
     }
 
     fn build(require_registration: bool) -> Self {
-        let directory = Directory::open()
-            .map(Arc::new)
-            .unwrap_or_else(|e| {
-                tracing::error!(error = %e, "failed to open user directory; continuing without persistence");
-                // Fall back to an in-memory DB so the server still boots.
+        // AQUA-SEC-004: never fall back to a database in memory on its own.
+        // It lost every account on the next restart while the relay said
+        // "saved", and it also turned on dev codes (codes in API answers).
+        // AQUA_ALLOW_MEMORY_DB=1 keeps the old behaviour for experiments.
+        let directory = match Directory::open() {
+            Ok(d) => Arc::new(d),
+            Err(e) if std::env::var("AQUA_ALLOW_MEMORY_DB").is_ok_and(|v| v == "1") => {
+                tracing::error!(error = %e, "failed to open user directory; AQUA_ALLOW_MEMORY_DB=1 — running WITHOUT persistence");
                 Arc::new(Directory::open_memory())
-            });
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "failed to open the user directory — refusing to start without it (AQUA_DIR_DB / data folder)");
+                panic!("aqua-server: the user directory can't be opened: {e}");
+            }
+        };
         Self {
             users: Arc::new(DashMap::new()),
             bindings: Arc::new(DashMap::new()),
@@ -1045,16 +1053,43 @@ struct EmailRequestResp {
 }
 
 /// Where the "It's me" link in the e-mail points: the public address when the
-/// operator set one, else the address the app itself used to reach us.
-fn link_base(headers: &axum::http::HeaderMap) -> Option<String> {
+/// operator set one (AQUA_PUBLIC_URL, the network's public URL, or the one
+/// found by `public`), else the address the app used — but only when that
+/// is a private/loopback address (LAN relays). AQUA-SEC-006: the request's
+/// Host header was trusted as is, so anyone could have the real relay mail
+/// a victim a link to the attacker's site and then read the code from it.
+fn link_base(state: &AppState, headers: &axum::http::HeaderMap) -> Option<String> {
     if let Ok(u) = std::env::var("AQUA_PUBLIC_URL") {
         let u = u.trim();
         if u.starts_with("http") { return Some(u.trim_end_matches('/').to_string()); }
     }
-    let host = headers.get(header::HOST)?.to_str().ok()?.trim();
-    if host.is_empty() || host.contains(['/', ' ', '"', '<', '>']) { return None; }
-    let proto = headers.get("x-forwarded-proto").and_then(|v| v.to_str().ok()).filter(|p| *p == "https").unwrap_or("http");
-    Some(format!("{proto}://{host}"))
+    let configured = fed::registry(state).map(|f| f.cfg.public_url.clone()).filter(|u| u.starts_with("http"));
+    let found = Some(public::url()).filter(|u| u.starts_with("http"));
+    let host = headers.get(header::HOST)?.to_str().ok()?.trim().to_lowercase();
+    if host.is_empty() || host.contains(['/', ' ', '"', '<', '>', '@', '\\']) { return None; }
+    for known in [configured, found].into_iter().flatten() {
+        if host_of(&known) == host {
+            return Some(known.trim_end_matches('/').to_string());
+        }
+    }
+    // "[v6]:port", "[v6]", "v4:port", "v4".
+    let bare = match host.strip_prefix('[') {
+        Some(rest) => rest.split(']').next().unwrap_or(""),
+        None => host.split(':').next().unwrap_or(""),
+    };
+    let ip: std::net::IpAddr = bare.parse().ok()?;
+    let local = match ip {
+        std::net::IpAddr::V4(v) => v.is_private() || v.is_loopback() || v.is_link_local(),
+        std::net::IpAddr::V6(v) => v.is_loopback() || (v.segments()[0] & 0xfe00) == 0xfc00,
+    };
+    local.then(|| format!("http://{host}"))
+}
+
+fn code_err(e: directory::DirError) -> (StatusCode, String) {
+    match e {
+        directory::DirError::TooManyCodes => (StatusCode::TOO_MANY_REQUESTS, e.to_string()),
+        e => (StatusCode::BAD_REQUEST, e.to_string()),
+    }
 }
 
 async fn email_request(
@@ -1075,13 +1110,13 @@ async fn email_request(
         _ => {}
     }
     let nonce = (!body.nonce.is_empty()).then_some(body.nonce.as_str());
-    let base = nonce.and_then(|_| link_base(&headers));
+    let base = nonce.and_then(|_| link_base(&state, &headers));
     // No mail server here, but a relay of the network has one: it sends the
     // code (our SMTP-less relay never sees its password).
     if !state.directory.has_smtp() {
         if let Some(f) = fed::current(&state) {
             let (email, code, link) = state.directory.prepare_code(&body.email, nonce, base.as_deref())
-                .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+                .map_err(code_err)?;
             if f.send_mail(&email, &code, link.as_deref()).await {
                 return Ok(Json(EmailRequestResp { ok: true, dev_code: None, delivery_failed: false, error: None }));
             }
@@ -1091,7 +1126,7 @@ async fn email_request(
         }
     }
     let (email, code, link) = state.directory.prepare_code(&body.email, nonce, base.as_deref())
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+        .map_err(code_err)?;
     let d = state.directory.deliver_code(email.clone(), code.clone(), link.clone()).await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     // Our own mail server couldn't be reached (the provider blocks the
@@ -1160,6 +1195,7 @@ async fn email_verify(
 ) -> Result<Json<EmailVerifyResp>, (StatusCode, String)> {
     match state.directory.verify_code(&body.email, &body.code) {
         Ok(ticket) => Ok(Json(EmailVerifyResp { ok: true, ticket })),
+        Err(e @ directory::DirError::TooManyTries) => Err((StatusCode::TOO_MANY_REQUESTS, e.to_string())),
         Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
     }
 }

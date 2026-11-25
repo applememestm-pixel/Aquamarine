@@ -117,9 +117,13 @@ pub struct Wipe {
 
 pub struct Directory {
     db: Mutex<Connection>,
-    /// AQUA_DEV_CODES: Some(true) forces dev mode even with SMTP, Some(false)
-    /// forbids it. None = dev mode exactly when no SMTP is configured.
+    /// AQUA_DEV_CODES=1: codes go back in API answers (tests, local
+    /// experiments). Anything else: never (AQUA-SEC-003).
     dev_forced: Option<bool>,
+    /// Key for the stored form of e-mail codes (AQUA-SEC-005): the table
+    /// keeps HMAC(key, email|code), never the code. Random per start, so a
+    /// restart voids outstanding codes (they last 10 minutes anyway).
+    otp_key: [u8; 32],
     /// When Some, verification codes are sent via real SMTP.
     smtp: std::sync::RwLock<Option<SmtpConfig>>,
     /// "env" | "file" | "none" — where the SMTP settings came from.
@@ -355,6 +359,8 @@ pub enum DirError {
     KeyHasAccount(String),
     #[error("too many wrong attempts — try again in 15 minutes")]
     TooManyTries,
+    #[error("too many codes asked for this address — wait a little and try again")]
+    TooManyCodes,
     #[error("confirm the sign-in in Telegram")]
     NeedTelegram,
     #[error("that's not the Telegram account linked to this account")]
@@ -560,7 +566,25 @@ pub(crate) fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+fn random_key() -> [u8; 32] {
+    let mut k = [0u8; 32];
+    OsRng.fill_bytes(&mut k);
+    k
+}
+
+/// Wrong codes a code survives; the next wrong one voids it (AQUA-SEC-005).
+pub const CODE_MAX_FAILS: i64 = 5;
+/// Shortest wait between two codes for one address.
+pub const CODE_RESEND_SECS: u64 = 30;
+/// Most codes for one address per hour.
+pub const CODE_MAX_PER_HOUR: i64 = 10;
+
 impl Directory {
+    /// The stored form of an e-mail code: HMAC(otp_key, email | code), hex.
+    fn code_tag(&self, email: &str, code: &str) -> String {
+        hex::encode(aqua_core::crypto::hmac_sha256(&self.otp_key, format!("{email}|{}", code.trim()).as_bytes()))
+    }
+
     /// In-memory fallback used when the on-disk DB can't be opened.
     /// Non-persistent, but keeps the server functional.
     pub fn open_memory() -> Self {
@@ -569,6 +593,7 @@ impl Directory {
         Self {
             db: Mutex::new(db),
             dev_forced: Some(true),
+            otp_key: random_key(),
             smtp: std::sync::RwLock::new(None),
             smtp_source: std::sync::RwLock::new("none"),
             recent: Mutex::new(Default::default()),
@@ -766,6 +791,11 @@ impl Directory {
             "ALTER TABLE users ADD COLUMN devlist TEXT NOT NULL DEFAULT ''",
             // The ticket passed the two-step code (1) or the recovery key (2).
             "ALTER TABLE email_codes ADD COLUMN mfa INTEGER NOT NULL DEFAULT 0",
+            // Wrong e-mail codes for the current code (AQUA-SEC-005, 1.21.0-21).
+            "ALTER TABLE email_codes ADD COLUMN fails INTEGER NOT NULL DEFAULT 0",
+            // Codes sent in the current hour and when that hour began.
+            "ALTER TABLE email_codes ADD COLUMN sends INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE email_codes ADD COLUMN sends_at INTEGER NOT NULL DEFAULT 0",
             // Wrong two-step codes with this ticket.
             "ALTER TABLE email_codes ADD COLUMN mfa_fail INTEGER NOT NULL DEFAULT 0",
         ] {
@@ -879,14 +909,19 @@ impl Directory {
                 None => (None, "none"),
             },
         };
-        // Dev mode (code returned in API + logged) is on unless real
-        // SMTP is configured. AQUA_DEV_CODES=1 forces it on even then.
-        let dev_forced = std::env::var("AQUA_DEV_CODES").ok().map(|v| v != "0");
+        // Dev mode (code returned in the API answer) only with an explicit
+        // AQUA_DEV_CODES=1 (AQUA-SEC-003: before 1.21.0-21 it was on
+        // whenever no mail server was set, so anyone could get the code for
+        // any address — and reset that account's password). Without mail,
+        // codes still go to the server console and the admin panel for the
+        // operator to pass on.
+        let dev_forced = Some(std::env::var("AQUA_DEV_CODES").is_ok_and(|v| v.trim() == "1"));
         let dev_codes = dev_forced.unwrap_or(smtp.is_none());
         tracing::info!(%path, dev_codes, smtp = smtp.is_some(), "user directory opened");
         Ok(Self {
             db: Mutex::new(db),
             dev_forced,
+            otp_key: random_key(),
             smtp: std::sync::RwLock::new(smtp),
             smtp_source: std::sync::RwLock::new(source),
             recent: Mutex::new(Default::default()),
@@ -1022,16 +1057,43 @@ impl Directory {
         if !email.contains('@') || email.len() < 5 {
             return Err(DirError::BadCode);
         }
-        let mut n = [0u8; 4];
-        OsRng.fill_bytes(&mut n);
-        let code = format!("{:06}", u32::from_be_bytes(n) % 1_000_000);
+        // Uniform 6 digits (rejection sampling: `% 1_000_000` of a u32 is
+        // slightly biased toward low codes).
+        let code = loop {
+            let mut n = [0u8; 4];
+            OsRng.fill_bytes(&mut n);
+            let v = u32::from_be_bytes(n);
+            if v < 4_294_000_000 {
+                break format!("{:06}", v % 1_000_000);
+            }
+        };
+        let now = now_secs();
         {
-            let db = self.db.lock().unwrap();
+            let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+            // AQUA-SEC-005: a fresh code also resets the wrong-code count, so
+            // codes per address are limited — or guessing just asks again.
+            // In explicit dev mode the code goes back to whoever asks, so a
+            // limit would protect nothing (and tests ask many times).
+            if self.dev_codes() {
+            } else if let Ok((issued_at, sends, sends_at)) = db.query_row(
+                "SELECT issued_at, sends, sends_at FROM email_codes WHERE email=?1",
+                rusqlite::params![email],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)),
+            ) {
+                if now.saturating_sub(issued_at as u64) < CODE_RESEND_SECS {
+                    return Err(DirError::TooManyCodes);
+                }
+                if now.saturating_sub(sends_at as u64) < 3600 && sends >= CODE_MAX_PER_HOUR {
+                    return Err(DirError::TooManyCodes);
+                }
+            }
             db.execute(
-                "INSERT INTO email_codes (email, code, ticket, issued_at, verified_at)
-                 VALUES (?1, ?2, NULL, ?3, NULL)
-                 ON CONFLICT(email) DO UPDATE SET code=?2, ticket=NULL, issued_at=?3, verified_at=NULL, mfa=0, mfa_fail=0",
-                rusqlite::params![email, code, now_secs() as i64],
+                "INSERT INTO email_codes (email, code, ticket, issued_at, verified_at, fails, sends, sends_at)
+                 VALUES (?1, ?2, NULL, ?3, NULL, 0, 1, ?3)
+                 ON CONFLICT(email) DO UPDATE SET code=?2, ticket=NULL, issued_at=?3, verified_at=NULL, mfa=0, mfa_fail=0, fails=0,
+                   sends=CASE WHEN ?3 - sends_at < 3600 THEN sends + 1 ELSE 1 END,
+                   sends_at=CASE WHEN ?3 - sends_at < 3600 THEN sends_at ELSE ?3 END",
+                rusqlite::params![email, self.code_tag(&email, &code), now as i64],
             )?;
         }
         Ok((email, code))
@@ -1040,26 +1102,36 @@ impl Directory {
     /// Check a code; on success mint + store a one-time ticket.
     pub fn verify_code(&self, email: &str, code: &str) -> Result<String, DirError> {
         let email = email.trim().to_lowercase();
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let row = db
             .query_row(
-                "SELECT code, issued_at FROM email_codes WHERE email=?1",
+                "SELECT code, issued_at, fails FROM email_codes WHERE email=?1",
                 rusqlite::params![email],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)),
             )
             .map_err(|_| DirError::NoCode)?;
-        let (stored, issued_at) = row;
+        let (stored, issued_at, fails) = row;
+        // Used (emptied) or voided by too many wrong tries.
+        if stored.is_empty() {
+            return Err(DirError::BadCode);
+        }
+        if fails >= CODE_MAX_FAILS {
+            return Err(DirError::TooManyTries);
+        }
         if now_secs().saturating_sub(issued_at as u64) > CODE_TTL_SECS {
             return Err(DirError::BadCode);
         }
-        if stored != code.trim() {
+        let want = self.code_tag(&email, code);
+        if !subtle_eq(want.as_bytes(), stored.as_bytes()) {
+            db.execute("UPDATE email_codes SET fails = fails + 1 WHERE email=?1", rusqlite::params![email])?;
             return Err(DirError::BadCode);
         }
         let mut t = [0u8; 18];
         OsRng.fill_bytes(&mut t);
         let ticket = hex::encode(t);
+        // The code is used up: one code, one ticket (AQUA-SEC-005).
         db.execute(
-            "UPDATE email_codes SET ticket=?1, verified_at=?2, mfa=0, mfa_fail=0 WHERE email=?3",
+            "UPDATE email_codes SET code='', ticket=?1, verified_at=?2, mfa=0, mfa_fail=0, fails=0 WHERE email=?3",
             rusqlite::params![ticket, now_secs() as i64, email],
         )?;
         Ok(ticket)
@@ -1096,10 +1168,9 @@ impl Directory {
         self.recent.lock().map(|r| r.iter().filter(|c| now.saturating_sub(c.2) <= CODE_TTL_SECS).cloned().collect()).unwrap_or_default()
     }
 
-    /// True when codes are shown instead of mailed.
+    /// True when codes go back in the API answer (explicit dev mode only).
     pub fn dev_codes(&self) -> bool {
-        let has_smtp = self.smtp.read().map(|c| c.is_some()).unwrap_or(false);
-        self.dev_forced.unwrap_or(!has_smtp)
+        self.dev_forced.unwrap_or(false)
     }
 
     /// Current SMTP settings (password included — callers must not leak it)
@@ -2071,6 +2142,8 @@ impl Directory {
             }
         }
         db.execute("UPDATE users SET password=?2 WHERE username=?1", rusqlite::params![username, hash_password(new_secret)])?;
+        // The same ticket then signs this device in once (`login_checked`
+        // uses it up) — the app's "reset, then sign in" flow.
         tracing::info!(%username, with_key = !stored.is_empty(), "password reset");
         Ok(username)
     }
@@ -3548,6 +3621,44 @@ mod tests {
     use super::*;
 
     fn dir() -> Directory { Directory::open_memory() }
+
+    /// AQUA-SEC-005: with dev codes off (the default since 1.21.0-21) a code
+    /// is stored hashed, works once, dies after 5 wrong tries, and codes per
+    /// address are limited.
+    #[test]
+    fn email_codes_are_hashed_single_use_and_limited() {
+        let mut d = dir();
+        d.dev_forced = Some(false);
+        let (email, code) = d.issue_code("Otp@X.com").unwrap();
+        assert_eq!(email, "otp@x.com");
+        let stored: String = d.db.lock().unwrap().query_row("SELECT code FROM email_codes WHERE email=?1", [&email], |r| r.get(0)).unwrap();
+        assert_ne!(stored, code, "the code itself is never stored");
+        assert_eq!(stored.len(), 64);
+        // Resend too soon.
+        assert!(matches!(d.issue_code(&email), Err(DirError::TooManyCodes)));
+        // Right code once, then it's used up.
+        assert!(d.verify_code(&email, &code).is_ok());
+        assert!(matches!(d.verify_code(&email, &code), Err(DirError::BadCode)));
+
+        // A new code (after the resend pause) and 5 wrong tries void it,
+        // even for the right code.
+        d.db.lock().unwrap().execute("UPDATE email_codes SET issued_at = issued_at - 60 WHERE email=?1", [&email]).unwrap();
+        let (_, code2) = d.issue_code(&email).unwrap();
+        let wrong = if code2 == "000000" { "000001" } else { "000000" };
+        for _ in 0..CODE_MAX_FAILS {
+            assert!(matches!(d.verify_code(&email, wrong), Err(DirError::BadCode)));
+        }
+        assert!(matches!(d.verify_code(&email, &code2), Err(DirError::TooManyTries)));
+
+        // At most CODE_MAX_PER_HOUR codes an hour.
+        for _ in 2..CODE_MAX_PER_HOUR {
+            d.db.lock().unwrap().execute("UPDATE email_codes SET issued_at = issued_at - 60 WHERE email=?1", [&email]).unwrap();
+            d.issue_code(&email).unwrap();
+        }
+        d.db.lock().unwrap().execute("UPDATE email_codes SET issued_at = issued_at - 60 WHERE email=?1", [&email]).unwrap();
+        assert!(matches!(d.issue_code(&email), Err(DirError::TooManyCodes)));
+        assert!(!d.dev_codes());
+    }
 
     /// "Полина" is found by "Полина" and "полина", not only by "олина".
     #[test]
