@@ -1525,3 +1525,33 @@ async fn bots_talk_to_bots() {
         .json(&serde_json::json!({ "to": "b2b_devbot", "text": "Tests passed!" })).send().await.unwrap();
     assert!(r.status().is_success());
 }
+
+/// AQUA-SEC-011: one device address holds at most `WS_PER_ADDRESS` live
+/// connections; a new one closes the oldest instead of piling up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connections_per_address_are_capped() {
+    let addr = spawn_server().await;
+    let base = format!("http://{addr}");
+    let http = test_http();
+    let mut c = Client::new("wscap");
+    c.login(&http, &base).await;
+    let url = format!("ws://{addr}/v1/ws?user=wscap&token={}&v=1.21.0-23", c.token);
+    let (mut first, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    let mut rest = Vec::new();
+    for _ in 0..aqua_server::WS_PER_ADDRESS {
+        rest.push(tokio_tungstenite::connect_async(&url).await.unwrap().0);
+    }
+    // The first connection's loop ends: the socket closes or the stream ends.
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            match first.next().await {
+                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => break true,
+                Some(Ok(_)) => continue,
+            }
+        }
+    }).await;
+    assert_eq!(ended, Ok(true), "the oldest connection must be closed");
+    // The newest is alive and served.
+    let last = rest.last_mut().unwrap();
+    last.send(Message::Ping(Vec::new().into())).await.unwrap();
+}

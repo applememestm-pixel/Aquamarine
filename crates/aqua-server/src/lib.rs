@@ -71,7 +71,11 @@ pub struct UserState {
     /// Envelopes queued while the user is offline.
     pub inbox: VecDeque<RelayMessage>,
     /// One entry per connected device.
-    pub tx: Vec<mpsc::UnboundedSender<RelayMessage>>,
+    /// Live connections of this address. Bounded (`WS_QUEUE`): a connection
+    /// that doesn't keep up gets nothing more, and what it would have got
+    /// waits in the on-disk inbox instead (AQUA-SEC-011: the channel was
+    /// unbounded, so a stalled reader grew the relay's memory without end).
+    pub tx: Vec<mpsc::Sender<RelayMessage>>,
 }
 
 /// One inbound message queued for a bot program to pick up via
@@ -677,7 +681,7 @@ async fn send_tracked(
 async fn ws_run(mut socket: WebSocket, state: AppState, me: UserId, acks: bool) {
     state.directory.touch_seen(base_user(&me));
     let user_state = state.user(&me);
-    let (tx, mut rx) = mpsc::unbounded_channel::<RelayMessage>();
+    let (tx, mut rx) = mpsc::channel::<RelayMessage>(WS_QUEUE);
     // With acks: delivery id → inbox rows waiting for the device's "got it".
     let mut pending: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
     if acks {
@@ -698,6 +702,12 @@ async fn ws_run(mut socket: WebSocket, state: AppState, me: UserId, acks: bool) 
         // now queues on `rx` and goes out after the backlog.
         let waiting: Vec<RelayMessage> = {
             let mut u = user_state.lock().await;
+            u.tx.retain(|t| !t.is_closed());
+            // At most WS_PER_ADDRESS live connections per device address:
+            // the oldest go (dropping its sender ends that connection's loop).
+            while u.tx.len() >= WS_PER_ADDRESS {
+                u.tx.remove(0);
+            }
             u.tx.push(tx);
             u.inbox.drain(..).collect()
         };
@@ -878,14 +888,23 @@ async fn deliver(state: &AppState, msg: RelayMessage) {
             }
             match row {
                 Some(_) => fed::queued_for_absent(&state),
-                None => state.user(&msg.to).lock().await.inbox.push_back(msg),
+                None => {
+                    let u = state.user(&msg.to);
+                    let mut u = u.lock().await;
+                    u.inbox.push_back(msg);
+                    while u.inbox.len() > MEM_INBOX { u.inbox.pop_front(); }
+                }
             }
         });
         return;
     }
     if row.is_none() {
+        // The disk inbox failed: memory, capped (AQUA-SEC-011).
+        tracing::warn!(to = %msg.to, "inbox write failed — keeping the envelope in memory");
         let recipient = state.user(&msg.to);
-        recipient.lock().await.inbox.push_back(msg);
+        let mut r = recipient.lock().await;
+        r.inbox.push_back(msg);
+        while r.inbox.len() > MEM_INBOX { r.inbox.pop_front(); }
     }
 }
 
@@ -933,17 +952,28 @@ pub(crate) async fn deliver_to_bot(state: &AppState, msg: &RelayMessage) -> bool
 
 /// Hand an envelope to the recipient's live connections on THIS relay.
 pub(crate) async fn deliver_local(state: &AppState, msg: &RelayMessage) -> bool {
-    let recipient = state.user(&msg.to);
+    // Nobody connected under this address: don't make an in-memory entry
+    // for it just to find that out (AQUA-SEC-011).
+    let Some(recipient) = state.users.get(&msg.to).map(|r| r.value().clone()) else { return false };
     let mut r = recipient.lock().await;
     let mut delivered = false;
     r.tx.retain(|t| !t.is_closed());
     for t in &r.tx {
-        if t.send(msg.clone()).is_ok() {
+        // Full = that connection is behind; "not delivered" sends the
+        // envelope to the on-disk inbox, where the next connection gets it.
+        if t.try_send(msg.clone()).is_ok() {
             delivered = true;
         }
     }
     delivered
 }
+
+/// Envelopes waiting for one connection before it counts as "behind".
+pub const WS_QUEUE: usize = 1024;
+/// Live connections one device address may hold at once.
+pub const WS_PER_ADDRESS: usize = 4;
+/// Envelopes kept in memory for an address when the disk inbox failed.
+const MEM_INBOX: usize = 1000;
 
 // ---------- Blob storage (encrypted file bodies) ---------------------------
 
