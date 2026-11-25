@@ -20,13 +20,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Known vulnerabilities in dependencies (RustSec, npm). Advisory for now:
-  # the first runs list what is already there; once triaged, this job
-  # becomes required (docs/audit/SECURITY_AUDIT.md, AQUA-SEC-014).
+  # Known vulnerabilities in dependencies (RustSec, npm) in all three
+  # Cargo.lock files and the UI. A failure fails the PR (REV2: no
+  # continue-on-error); "unmaintained" warnings don't fail cargo audit.
   audit:
     name: dependency audit
     runs-on: ubuntu-22.04
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: taiki-e/install-action@v2
