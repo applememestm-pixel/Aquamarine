@@ -179,6 +179,44 @@ pub struct FedUser {
     /// Signed device list (JSON, `aqua_core::devlist`); older relays don't send it.
     #[serde(default)]
     pub devlist: String,
+    /// The account's seal (JSON [`Seal`]): a device of the account signed its
+    /// security fields. Older relays don't send it.
+    #[serde(default)]
+    pub seal: String,
+}
+
+/// "These are my account's key, password hash, two-step settings, devices,
+/// recovery check and device list": signed by a device of the account
+/// (Ed25519 over [`seal_message`]). Once an account has one, relays apply a
+/// change of those fields from another relay only with a seal over the new
+/// values by a device the account already had — so a relay of the network
+/// can't change someone's key, password or devices by itself (1.21.0-23).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Seal {
+    /// The signing device's identity DH key (hex).
+    pub signer: String,
+    /// Its Ed25519 key (hex).
+    pub sign: String,
+    /// The signature (hex).
+    pub sig: String,
+}
+
+/// The security fields of an account as kept here (seal checks).
+struct LocalSec {
+    identity_dh: String,
+    password: String,
+    security: String,
+    devices: String,
+    recovery: String,
+    devlist: String,
+    seal: String,
+}
+
+/// What a seal signs: the security fields of an account, in this order.
+pub fn seal_message(uid: &str, identity_dh_hex: &str, password: &str, security: &str, devices: &str, recovery: &str, devlist: &str) -> String {
+    use sha2::Digest;
+    let devlist_hash = hex::encode(sha2::Sha256::digest(devlist.as_bytes()));
+    format!("aqua-account-seal-v1\n{uid}\n{identity_dh_hex}\n{password}\n{security}\n{devices}\n{recovery}\n{devlist_hash}")
 }
 
 /// Sign-in protection of an account: two-step codes and "no new devices".
@@ -280,6 +318,9 @@ pub struct FedApplied {
     /// A local account lost its @name to an older account with the same
     /// name from the peer: (old name, the name it has now).
     pub displaced: Option<(String, String)>,
+    /// A sealed account's security fields came without a valid seal and
+    /// were kept as they are here.
+    pub refused_security: bool,
 }
 
 fn no_devices() -> String { "[]".into() }
@@ -789,6 +830,8 @@ impl Directory {
             "ALTER TABLE users ADD COLUMN security TEXT NOT NULL DEFAULT '{}'",
             // The account's device list signed by its devices (1.2.0-5, JSON).
             "ALTER TABLE users ADD COLUMN devlist TEXT NOT NULL DEFAULT ''",
+            // The account's seal by one of its devices (JSON `Seal`, 1.21.0-23).
+            "ALTER TABLE users ADD COLUMN seal TEXT NOT NULL DEFAULT ''",
             // The ticket passed the two-step code (1) or the recovery key (2).
             "ALTER TABLE email_codes ADD COLUMN mfa INTEGER NOT NULL DEFAULT 0",
             // Wrong e-mail codes for the current code (AQUA-SEC-005, 1.21.0-21).
@@ -2386,7 +2429,7 @@ impl Directory {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let Ok(mut st) = db.prepare(
             "SELECT username, identity_dh, email, display_name, about, phone, is_bot, created_at,
-                    extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices, recovery, uid, security, devlist
+                    extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices, recovery, uid, security, devlist, seal
              FROM users WHERE is_bot = 0 AND (updated_at > ?1 OR (?2 IS NOT NULL AND updated_at = ?1 AND username > ?2))
              ORDER BY updated_at, username LIMIT 500",
         ) else { return Vec::new() };
@@ -2412,10 +2455,65 @@ impl Directory {
                 uid: r.get(17)?,
                 security: r.get(18)?,
                 devlist: r.get(19)?,
+                seal: r.get(20)?,
             })
         })
         .map(|rows| rows.flatten().collect())
         .unwrap_or_default()
+    }
+
+    /// The seal message of `username` as it is stored here.
+    pub fn seal_message_of(&self, username: &str) -> Option<String> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.query_row(
+            "SELECT uid, identity_dh, password, security, devices, recovery, devlist FROM users WHERE username=?1 AND is_bot=0",
+            rusqlite::params![username],
+            |r| Ok(seal_message(&r.get::<_, String>(0)?, &hex::encode(r.get::<_, Vec<u8>>(1)?), &r.get::<_, String>(2)?, &r.get::<_, String>(3)?, &r.get::<_, String>(4)?, &r.get::<_, String>(5)?, &r.get::<_, String>(6)?)),
+        )
+        .ok()
+    }
+
+    /// Store a seal a device of `username` made (`signer_dh` signed in with
+    /// `signer_sign`). The signature must be over the account's current
+    /// security fields, and the signer one of its devices.
+    pub fn set_seal(&self, username: &str, signer_dh: &[u8; 32], signer_sign: &[u8; 32], sig_hex: &str) -> Result<(), DirError> {
+        let msg = self.seal_message_of(username).ok_or(DirError::NotOwner)?;
+        if self.device_role(username, signer_dh).is_none() {
+            return Err(DirError::NotOwner);
+        }
+        let sig: [u8; 64] = hex::decode(sig_hex.trim()).ok().and_then(|b| b.try_into().ok()).ok_or(DirError::BadProfile("bad signature".into()))?;
+        aqua_core::crypto::SignPublic::from_bytes(*signer_sign).verify(msg.as_bytes(), &sig).map_err(|_| DirError::BadProfile("the seal doesn't match the account".into()))?;
+        let seal = Seal { signer: hex::encode(signer_dh), sign: hex::encode(signer_sign), sig: hex::encode(sig) };
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.execute("UPDATE users SET seal=?2 WHERE username=?1", rusqlite::params![username, serde_json::to_string(&seal).unwrap_or_default()])?;
+        Ok(())
+    }
+
+    /// Does `incoming` carry a seal over its own security fields by a device
+    /// the account had here (its key, its devices; the Ed25519 key known
+    /// from the device list kept here, from a sign-in here, or the seal kept
+    /// here)?
+    fn seal_ok(&self, db: &Connection, local: &LocalSec, incoming: &FedUser, uid: &str) -> bool {
+        let Ok(seal) = serde_json::from_str::<Seal>(&incoming.seal) else { return false };
+        let msg = seal_message(uid, &incoming.identity_dh, &incoming.password, &incoming.security, &incoming.devices, &incoming.recovery, &incoming.devlist);
+        let (Some(sign), Some(sig)) = (hex::decode(&seal.sign).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()), hex::decode(&seal.sig).ok().and_then(|b| <[u8; 64]>::try_from(b).ok())) else { return false };
+        if aqua_core::crypto::SignPublic::from_bytes(sign).verify(msg.as_bytes(), &sig).is_err() {
+            return false;
+        }
+        // The signer: the account's key or one of its devices, as kept here.
+        let local_devices: Vec<Device> = serde_json::from_str(&local.devices).unwrap_or_default();
+        if seal.signer != local.identity_dh && !local_devices.iter().any(|d| d.dh == seal.signer) {
+            return false;
+        }
+        // …with the Ed25519 key it is known by here.
+        let in_list = serde_json::from_str::<aqua_core::devlist::SignedDeviceList>(&local.devlist)
+            .is_ok_and(|l| l.devices.iter().any(|k| k.dh == seal.signer && k.sign == seal.sign));
+        let in_seal = serde_json::from_str::<Seal>(&local.seal).is_ok_and(|s| s.signer == seal.signer && s.sign == seal.sign);
+        let signed_in = hex::decode(&seal.signer).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()).is_some_and(|dh| {
+            db.query_row("SELECT sign FROM identity_signs WHERE dh=?1", rusqlite::params![dh.as_slice()], |r| r.get::<_, Vec<u8>>(0))
+                .is_ok_and(|s| s.as_slice() == sign.as_slice())
+        });
+        in_list || in_seal || signed_in
     }
 
     /// Apply a peer's row if it is newer than ours.
@@ -2502,19 +2600,52 @@ impl Directory {
         if let Some(email) = &u.email {
             let _ = db.execute("UPDATE users SET email=NULL WHERE email=?1 AND username<>?2", rusqlite::params![email, name]);
         }
+        // A sealed account: its security fields change only with a seal by a
+        // device it already had (see `Seal`). Otherwise they stay as they are
+        // here and only the rest (profile, media versions) is applied.
+        let local: Option<LocalSec> = db.query_row(
+            "SELECT identity_dh, password, security, devices, recovery, devlist, seal FROM users WHERE uid=?1 AND is_bot=0",
+            rusqlite::params![uid],
+            |r| Ok(LocalSec { identity_dh: hex::encode(r.get::<_, Vec<u8>>(0)?), password: r.get(1)?, security: r.get(2)?, devices: r.get(3)?, recovery: r.get(4)?, devlist: r.get(5)?, seal: r.get(6)? }),
+        ).ok();
+        let mut u = u.clone();
+        let mut dh = dh;
+        if let Some(l) = local.as_ref().filter(|l| !l.seal.is_empty()) {
+            // Older relays send '' for fields they don't know: "keep ours".
+            let keep = |inc: &str, mine: &str| if inc.is_empty() { mine.to_string() } else { inc.to_string() };
+            u.recovery = keep(&u.recovery, &l.recovery);
+            u.security = keep(&u.security, &l.security);
+            u.devlist = keep(&u.devlist, &l.devlist);
+            let changed = u.identity_dh != l.identity_dh || u.password != l.password || u.security != l.security
+                || u.devices != l.devices || u.recovery != l.recovery || u.devlist != l.devlist;
+            if changed && !self.seal_ok(&db, l, &u, &uid) {
+                tracing::warn!(user = %u.username, "federation: a change of a sealed account's key / password / devices without its devices' seal — not applied");
+                u.identity_dh = l.identity_dh.clone();
+                u.password = l.password.clone();
+                u.security = l.security.clone();
+                u.devices = l.devices.clone();
+                u.recovery = l.recovery.clone();
+                u.devlist = l.devlist.clone();
+                u.seal = l.seal.clone();
+                dh = hex::decode(&l.identity_dh).unwrap_or(dh);
+                out.refused_security = true;
+            }
+        }
+        let u = &u;
         out.name = name.clone();
         out.applied = db.execute(
             "INSERT INTO users (username, identity_dh, email, display_name, about, phone, is_bot, created_at,
-                                extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices, recovery, uid, security, devlist)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, CASE WHEN ?19 = '' THEN '{}' ELSE ?19 END, ?20)
+                                extra, avatar_ver, banner_ver, media_acl, password, music_ver, updated_at, devices, recovery, uid, security, devlist, seal)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, CASE WHEN ?19 = '' THEN '{}' ELSE ?19 END, ?20, ?21)
              ON CONFLICT(username) DO UPDATE SET identity_dh=?2, email=?3, display_name=?4, about=?5, phone=?6,
                  is_bot=?7, created_at=?8, extra=?9, avatar_ver=?10, banner_ver=?11, media_acl=?12, password=?13,
                  music_ver=?14, updated_at=?15, devices=?16,
                  recovery=CASE WHEN ?17 = '' THEN recovery ELSE ?17 END, uid=?18,
                  security=CASE WHEN ?19 = '' THEN security ELSE ?19 END,
-                 devlist=CASE WHEN ?20 = '' THEN devlist ELSE ?20 END",
+                 devlist=CASE WHEN ?20 = '' THEN devlist ELSE ?20 END,
+                 seal=CASE WHEN ?21 = '' THEN seal ELSE ?21 END",
             rusqlite::params![name, dh, u.email, u.display_name, u.about, u.phone, u.is_bot as i64, u.created_at,
-                u.extra, u.avatar_ver, u.banner_ver, u.media_acl, u.password, u.music_ver, u.updated_at, u.devices, u.recovery, uid, u.security, u.devlist],
+                u.extra, u.avatar_ver, u.banner_ver, u.media_acl, u.password, u.music_ver, u.updated_at, u.devices, u.recovery, uid, u.security, u.devlist, u.seal],
         )
         .is_ok();
         out

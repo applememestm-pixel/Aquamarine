@@ -1562,6 +1562,30 @@ impl Transport {
 
     /// Sign-in protection of my account: `GET` (body `None`) or `PUT`/`POST`
     /// `/v1/me/<path>` with a JSON body → the JSON answer (`null` for 204).
+    /// Seal my account as the relay has it now (1.21.0-23): this device signs
+    /// its security fields (key, password hash, two-step settings, devices,
+    /// recovery check, device list), so other relays of the network accept a
+    /// change of them only when one of the account's devices signed it.
+    /// `Ok(false)`: a relay without seals, or the account doesn't list this
+    /// device (then it isn't signed).
+    pub async fn reseal(&self) -> Result<bool, TransportError> {
+        let v = match self.me_call("GET", "seal", None).await {
+            Ok(v) => v,
+            Err(TransportError::Server { status: 404, .. }) => return Ok(false),
+            Err(e) => return Err(e),
+        };
+        let Some(msg) = v["msg"].as_str() else { return Ok(false) };
+        // Only what concerns me: the message must name this device's key
+        // (as the account's key or one of its devices).
+        let mine = hex::encode(self.identity.public().dh_pub.as_bytes());
+        if !msg.starts_with("aqua-account-seal-v1\n") || !msg.contains(&mine) {
+            return Ok(false);
+        }
+        let sig = hex::encode(self.identity.sign.sign(msg.as_bytes()));
+        self.me_call("PUT", "seal", Some(serde_json::json!({ "sig": sig }))).await?;
+        Ok(true)
+    }
+
     pub async fn me_call(&self, method: &str, path: &str, body: Option<serde_json::Value>) -> Result<serde_json::Value, TransportError> {
         let url = format!("{}/v1/me/{}", self.server_url.trim_end_matches('/'), path.trim_start_matches('/'));
         let send = |token: String| {

@@ -17,7 +17,16 @@ async fn call(state: &State<'_, StdMutex<AppState>>, server_url: Option<String>,
         (s.transport.clone(), s.identity.clone(), s.server_url.clone())
     };
     match (t, server_url.filter(|u| !u.is_empty()).or(known)) {
-        (Some(t), _) => t.me_call(method, path, body).await.map_err(err),
+        (Some(t), _) => {
+            let r = t.me_call(method, path, body).await.map_err(err)?;
+            // A security change (password, two-step, devices, recovery…):
+            // seal the account again so the network takes it (1.21.0-23).
+            if method != "GET" && path != "seal" {
+                let t = t.clone();
+                tokio::spawn(async move { let _ = t.reseal().await; });
+            }
+            Ok(r)
+        }
         (None, Some(url)) => aqua_client_core::Transport::me_call_at(&url, &identity, method, path, body).await.map_err(err),
         (None, None) => Err("not connected".into()),
     }

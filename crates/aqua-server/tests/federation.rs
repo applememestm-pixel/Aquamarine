@@ -709,3 +709,82 @@ async fn tampered_sync_answers_are_refused() {
     fed::sync_once(&sb, &mut Default::default()).await;
     assert_eq!(sb.directory.identity_for("mitmvictim"), Some(*id.public().dh_pub.as_bytes()));
 }
+
+/// 1.21.0-23: account seals. Once a device sealed its account, another
+/// relay can't change the account's key, password or devices without a
+/// seal by one of its devices — profile fields still replicate; a change the
+/// device sealed is taken; an unsealed account replicates as before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sealed_accounts_change_only_with_a_device_seal() {
+    let la = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let lb = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (ua, ub) = (format!("http://{}", la.local_addr().unwrap()), format!("http://{}", lb.local_addr().unwrap()));
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = |me: &str, peer: &str| FedConfig { secret: SECRET.into(), peers: vec![peer.into()], public_url: me.into(), mode: "network".into(), ..Default::default() };
+    let sa = AppState::isolated(tmp.path().join("a"), Some(cfg(&ua, &ub)));
+    let sb = AppState::isolated(tmp.path().join("b"), Some(cfg(&ub, &ua)));
+    { let s = sa.clone(); tokio::spawn(async move { axum::serve(la, app(s)).await.unwrap() }); }
+    { let s = sb.clone(); tokio::spawn(async move { axum::serve(lb, app(s)).await.unwrap() }); }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    let id = IdentityKeyPair::generate();
+    register(&http, &ua, &id, "sealed").await;
+    let plain = IdentityKeyPair::generate();
+    register(&http, &ua, &plain, "unsealed").await;
+
+    // The device seals its account (what the app does after connecting).
+    let v = aqua_client_core::Transport::me_call_at(&ua, &id, "GET", "seal", None).await.unwrap();
+    let msg = v["msg"].as_str().unwrap().to_string();
+    assert!(msg.contains(&hex::encode(id.public().dh_pub.as_bytes())));
+    let sig = hex::encode(id.sign.sign(msg.as_bytes()));
+    aqua_client_core::Transport::me_call_at(&ua, &id, "PUT", "seal", Some(serde_json::json!({ "sig": sig }))).await.unwrap();
+    // A signature by another key is refused.
+    let other = IdentityKeyPair::generate();
+    let bad = hex::encode(other.sign.sign(msg.as_bytes()));
+    assert!(aqua_client_core::Transport::me_call_at(&ua, &id, "PUT", "seal", Some(serde_json::json!({ "sig": bad }))).await.is_err());
+
+    fed::sync_once(&sb, &mut Default::default()).await;
+    let row = |s: &AppState, n: &str| s.directory.fed_users_since(0).into_iter().find(|u| u.username == n).unwrap();
+    let on_b = row(&sb, "sealed");
+    assert!(!on_b.seal.is_empty(), "the seal travels with the account");
+
+    // A relay of the network (or anyone feeding B rows) swaps the key and
+    // password, and changes the display name.
+    let evil = IdentityKeyPair::generate();
+    let mut forged = on_b.clone();
+    forged.identity_dh = hex::encode(evil.public().dh_pub.as_bytes());
+    forged.password = "forged-hash".into();
+    forged.display_name = "New Name".into();
+    forged.updated_at += 10;
+    let res = sb.directory.fed_apply_user(&forged);
+    assert!(res.refused_security, "a key change without a device's seal is refused");
+    let now = row(&sb, "sealed");
+    assert_eq!(now.identity_dh, on_b.identity_dh, "the key stays");
+    assert_eq!(now.password, on_b.password, "the password stays");
+    assert_eq!(now.display_name, "New Name", "profile fields still replicate");
+
+    // The same with a seal by a key that isn't one of the account's devices.
+    let mut forged2 = forged.clone();
+    forged2.updated_at += 10;
+    let m2 = aqua_server::directory::seal_message(&forged2.uid, &forged2.identity_dh, &forged2.password, &forged2.security, &forged2.devices, &forged2.recovery, &forged2.devlist);
+    forged2.seal = serde_json::json!({ "signer": forged2.identity_dh, "sign": hex::encode(evil.public().sign_pub.as_bytes()), "sig": hex::encode(evil.sign.sign(m2.as_bytes())) }).to_string();
+    assert!(sb.directory.fed_apply_user(&forged2).refused_security, "a seal by a key the account didn't have is refused");
+    assert_eq!(row(&sb, "sealed").identity_dh, on_b.identity_dh);
+
+    // A change the account's own device sealed is taken.
+    let mut legit = row(&sb, "sealed");
+    legit.password = "new-password-hash".into();
+    legit.updated_at += 100;
+    let m3 = aqua_server::directory::seal_message(&legit.uid, &legit.identity_dh, &legit.password, &legit.security, &legit.devices, &legit.recovery, &legit.devlist);
+    legit.seal = serde_json::json!({ "signer": legit.identity_dh, "sign": hex::encode(id.public().sign_pub.as_bytes()), "sig": hex::encode(id.sign.sign(m3.as_bytes())) }).to_string();
+    let res = sb.directory.fed_apply_user(&legit);
+    assert!(res.applied && !res.refused_security);
+    assert_eq!(row(&sb, "sealed").password, "new-password-hash");
+
+    // An account without a seal: as before (transition).
+    let mut u = row(&sb, "unsealed");
+    u.password = "changed".into();
+    u.updated_at += 10;
+    assert!(!sb.directory.fed_apply_user(&u).refused_security);
+    assert_eq!(row(&sb, "unsealed").password, "changed");
+}

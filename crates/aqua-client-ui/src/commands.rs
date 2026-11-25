@@ -379,6 +379,15 @@ pub async fn connect_to_server(
     transport.upload_bundle(&bundle).await
         .map_err(|e| format!("upload_bundle: {e}"))?;
     let transport = Arc::new(transport);
+    // Seal the account as it is now (key, password, devices…), in the
+    // background: relays of the network then accept a change of those only
+    // with a device's seal (1.21.0-23). An older relay just says 404.
+    {
+        let t = transport.clone();
+        tokio::spawn(async move {
+            if let Err(e) = t.reseal().await { tracing::debug!(%e, "account seal"); }
+        });
+    }
     let mine = Arc::downgrade(&transport);
 
     // Publish state and persist the hints so a later launch auto-reconnects.

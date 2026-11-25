@@ -2006,6 +2006,25 @@ async fn admin_get_fed(State(state): State<AppState>, headers: axum::http::Heade
     })))
 }
 
+/// `GET /v1/me/seal` → `{msg}`: what a device of the account signs to seal
+/// its security fields (directory.rs `Seal`).
+async fn seal_get(State(state): State<AppState>, Caller(dh): Caller) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    let msg = state.directory.seal_message_of(&me).ok_or((StatusCode::NOT_FOUND, "no account".into()))?;
+    Ok(Json(serde_json::json!({ "msg": msg })))
+}
+
+#[derive(Deserialize)]
+struct SealPut { sig: String }
+
+/// `PUT /v1/me/seal {sig}` — this device seals the account as it is now.
+async fn seal_put(State(state): State<AppState>, Caller(dh): Caller, Json(b): Json<SealPut>) -> Result<StatusCode, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    let sign = state.directory.identity_sign(&dh).ok_or((StatusCode::FORBIDDEN, "sign in again".into()))?;
+    state.directory.set_seal(&me, &dh, &sign, &b.sig).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// `POST /v1/admin/fed/rotate` — a new node key, announced to the peers
 /// signed by the old one.
 async fn admin_fed_rotate(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
@@ -3743,6 +3762,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/admin/fed/rotate", post(admin_fed_rotate))
         .route("/v1/admin/fed/revoke", post(admin_fed_revoke))
         .route("/v1/admin/fed/admit", post(admin_fed_admit))
+        .route("/v1/me/seal", get(seal_get).put(seal_put))
         .route("/v1/bundle/:user",   post(upload_bundle).get(fetch_bundle))
         .route("/v1/ws",             get(ws_upgrade))
         // Telegram Bot API: /bot<token>/<method> (see tgapi.rs).
