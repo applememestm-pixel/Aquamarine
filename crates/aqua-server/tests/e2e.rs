@@ -180,16 +180,16 @@ async fn full_authenticated_e2e_conversation() {
 
     // ------- 3. Open WebSockets with tokens -------
     let (mut a_ws, _) = tokio_tungstenite::connect_async(format!(
-        "ws://{addr}/v1/ws?user=alice&token={}&v=1.2.0",
+        "ws://{addr}/v1/ws?user=alice&token={}&v=1.21.0-23",
         alice.token
     )).await.unwrap();
     let (mut b_ws, _) = tokio_tungstenite::connect_async(format!(
-        "ws://{addr}/v1/ws?user=bob&token={}&v=1.2.0",
+        "ws://{addr}/v1/ws?user=bob&token={}&v=1.21.0-23",
         bob.token
     )).await.unwrap();
 
     // WS with no token → refused.
-    let bad = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=alice&token=&v=1.2.0")).await;
+    let bad = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=alice&token=&v=1.21.0-23")).await;
     assert!(bad.is_err(), "empty token must be rejected");
 
     // ------- 4. Alice fetches Bob's bundle (public, no token) -------
@@ -747,13 +747,13 @@ async fn one_account_on_two_devices() {
     // A stranger's key can't use the account.
     let mut eve = Client::new("eve");
     eve.login(&http, &base).await;
-    assert!(tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=multi&token={}&v=1.2.0", eve.token)).await.is_err());
+    assert!(tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=multi&token={}&v=1.21.0-23", eve.token)).await.is_err());
 
-    let (mut a_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=multi&token={}&v=1.2.0", a.token)).await.unwrap();
-    let (mut b_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=multi&token={}&v=1.2.0", b.token)).await.unwrap();
+    let (mut a_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=multi&token={}&v=1.21.0-23", a.token)).await.unwrap();
+    let (mut b_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=multi&token={}&v=1.21.0-23", b.token)).await.unwrap();
     let mut peer = Client::new("mpeer");
     peer.login(&http, &base).await;
-    let (mut p_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=mpeer&token={}&v=1.2.0", peer.token)).await.unwrap();
+    let (mut p_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=mpeer&token={}&v=1.21.0-23", peer.token)).await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // The peer encrypts once per device.
@@ -879,7 +879,7 @@ async fn telegram_bot_api_compat() {
     // A user writes /start.
     let mut user = Client::new("tguser");
     user.login(&http, &base).await;
-    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=tguser&token={}&v=1.2.0", user.token)).await.unwrap();
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=tguser&token={}&v=1.21.0-23", user.token)).await.unwrap();
     let say = |text: &str| RelayMessage { from: String::new(), to: "tgcompat_bot".into(), payload: text.as_bytes().to_vec(), kind: PayloadKind::Plaintext, ts: None, id: None };
     ws.send(Message::Binary(serde_json::to_vec(&say("/start hello")).unwrap().into())).await.unwrap();
 
@@ -1010,7 +1010,7 @@ async fn native_bot_api_extras() {
 
     let mut user = Client::new("xuser");
     user.login(&http, &base).await;
-    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=xuser&token={}&v=1.2.0", user.token)).await.unwrap();
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=xuser&token={}&v=1.21.0-23", user.token)).await.unwrap();
     let say = |text: &str| RelayMessage { from: String::new(), to: "extras_bot".into(), payload: text.as_bytes().to_vec(), kind: PayloadKind::Plaintext, ts: None, id: None };
     ws.send(Message::Binary(serde_json::to_vec(&say("/start")).unwrap().into())).await.unwrap();
     let _ = get("/v1/bot/updates?timeout=5").send().await.unwrap();
@@ -1194,7 +1194,7 @@ async fn telegram_mini_apps() {
     let query_id = pairs.iter().find(|(k, _)| k == "query_id").unwrap().1.clone();
 
     // sendData → web_app_data.
-    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=maker&token={}&v=1.2.0", user.token)).await.unwrap();
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=maker&token={}&v=1.21.0-23", user.token)).await.unwrap();
     let say = |text: &str| RelayMessage { from: String::new(), to: "shop_bot".into(), payload: text.as_bytes().to_vec(), kind: PayloadKind::Plaintext, ts: None, id: None };
     ws.send(Message::Binary(serde_json::to_vec(&say(r#"[wad:v1]{"t":"Order","d":"{\"item\":3}"}"#)).unwrap().into())).await.unwrap();
     let ups: serde_json::Value = http.post(format!("{api}/getUpdates")).json(&serde_json::json!({ "timeout": 5 })).send().await.unwrap().json().await.unwrap();
@@ -1317,7 +1317,7 @@ async fn acks_redeliver_until_confirmed() {
     a.login(&http, &base).await;
     let mut b = Client::new("ackb");
     b.login(&http, &base).await;
-    let url = |user: &str, token: &str| format!("ws://{addr}/v1/ws?user={user}&token={token}&ack=1&v=1.2.0");
+    let url = |user: &str, token: &str| format!("ws://{addr}/v1/ws?user={user}&token={token}&ack=1&v=1.21.0-23");
     let ack = |id: &str| Message::Binary(serde_json::to_vec(&RelayMessage::ack(Some(id.into()))).unwrap().into());
 
     // Both get the greeting that says the relay speaks acks.
@@ -1356,7 +1356,7 @@ async fn acks_redeliver_until_confirmed() {
     // Without acks (an older client) nothing changes: no greeting, no ack.
     let mut c = Client::new("ackc");
     c.login(&http, &base).await;
-    let (mut c_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=ackc&token={}&v=1.2.0", c.token)).await.unwrap();
+    let (mut c_ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user=ackc&token={}&v=1.21.0-23", c.token)).await.unwrap();
     let m = RelayMessage { from: String::new(), to: "acka".into(), payload: b"old".to_vec(), kind: PayloadKind::Envelope, ts: None, id: None };
     c_ws.send(Message::Binary(serde_json::to_vec(&m).unwrap().into())).await.unwrap();
     let got = recv_relay(&mut a_ws).await;
@@ -1432,15 +1432,15 @@ async fn plain_accounts_and_optional_two_step() {
     let r = http.post(format!("{base}/v1/me/2fa/disable")).bearer_auth(&a.token).json(&serde_json::json!({ "code": backup[1] })).send().await.unwrap();
     assert_eq!(r.status().as_u16(), 204, "{}", r.text().await.unwrap());
 
-    // An app older than 1.2.0 (or one that doesn't say) isn't served.
-    let old = reqwest::Client::builder().user_agent("aqua-client-core/1.1.0-7").build().unwrap();
+    // An app older than the minimum (1.21.0-23) (or one that doesn't say) isn't served.
+    let old = reqwest::Client::builder().user_agent("aqua-client-core/1.21.0-22").build().unwrap();
     let r = old.post(format!("{base}/v1/auth/challenge")).json(&serde_json::json!({ "identity_dh_pub": "x" })).send().await.unwrap();
     assert_eq!(r.status().as_u16(), 426);
     let r = reqwest::Client::new().post(format!("{base}/v1/users/signup")).json(&serde_json::json!({})).send().await.unwrap();
     assert_eq!(r.status().as_u16(), 426);
     let st: serde_json::Value = reqwest::get(format!("{base}/v1/stats")).await.unwrap().json().await.unwrap();
     assert_eq!(st["version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(st["min_client"], "1.2.0");
+    assert_eq!(st["min_client"], "1.21.0-23");
 }
 
 /// 1.2.0-4: Telegram as the second factor. An account signed up with a

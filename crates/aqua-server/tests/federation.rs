@@ -49,7 +49,7 @@ async fn register(http: &reqwest::Client, base: &str, id: &IdentityKeyPair, user
 type Ws = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 async fn ws(addr: &str, user: &str, tok: &str) -> Ws {
-    tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user={user}&token={tok}&v=1.2.0")).await.unwrap().0
+    tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws?user={user}&token={tok}&v=1.21.0-23")).await.unwrap().0
 }
 
 async fn recv(ws: &mut Ws) -> RelayMessage {
@@ -400,6 +400,6 @@ async fn a_new_relay_knows_everyone_after_its_first_sync() {
     let tok = token(&http, &ub, &ids[7]).await;
     let me: serde_json::Value = http.get(format!("{ub}/v1/me")).bearer_auth(&tok).send().await.unwrap().json().await.unwrap();
     assert_eq!(me["username"], "early7");
-    let w = tokio_tungstenite::connect_async(format!("ws://{b}/v1/ws?user=early7&token={tok}&v=1.2.0")).await;
+    let w = tokio_tungstenite::connect_async(format!("ws://{b}/v1/ws?user=early7&token={tok}&v=1.21.0-23")).await;
     assert!(w.is_ok());
 }

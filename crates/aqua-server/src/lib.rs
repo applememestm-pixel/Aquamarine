@@ -3388,9 +3388,11 @@ async fn admin_page(State(state): State<AppState>) -> impl IntoResponse {
 
 // ---------- Versions this relay still serves -------------------------------
 
-/// Apps and relays older than this are no longer served (1.2.0: two-step
-/// codes are required, and older apps and relays don't know them).
-pub const MIN_VERSION: &str = "1.2.0";
+/// Apps older than this are no longer served at the app doors (`app_door`).
+/// 1.2.0: two-step codes are required. 1.21.0-23 (owner's decision,
+/// AQUA-SEC-001): sign-in needs the proof of the X25519 key, which older
+/// apps don't send. Relays talk through `/v1/fed/*`, which isn't gated.
+pub const MIN_VERSION: &str = "1.21.0-23";
 
 /// `1.1.0-7` → (1, 1, 0, 7). Our pre-releases come AFTER their release
 /// (1.1.0-1 > 1.1.0), so the number after "-" just counts up.
@@ -3436,7 +3438,7 @@ fn app_door(path: &str) -> bool {
         | "/v1/auth/email/poll" | "/v1/users/register" | "/v1/users/signup" | "/v1/users/signin" | "/v1/auth/tg/start" | "/v1/auth/tg/poll" | "/v1/users/login" | "/v1/users/reset" | "/v1/backup/fetch" | "/v1/ws")
 }
 
-pub const TOO_OLD: &str = "this version of Aquamarine is no longer supported — update the app to 1.2.0 or newer";
+pub const TOO_OLD: &str = "this version of Aquamarine is no longer supported — update the app to 1.21.0-23 or newer";
 
 async fn version_gate(req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
     if app_door(req.uri().path()) {
@@ -3651,11 +3653,11 @@ mod version_tests {
     use super::*;
 
     #[test]
-    fn versions_before_1_2_0_are_refused() {
-        for v in ["1.2.0", "1.2.0-3", "1.2.1", "1.2.11", "1.3.0", "2.0.0", "v1.2.0"] {
+    fn versions_before_the_minimum_are_refused() {
+        for v in ["1.21.0-23", "1.21.0-24", "1.21.1", "1.21.11", "1.22.0", "2.0.0", "v1.21.0-23"] {
             assert!(version_ok(v), "{v}");
         }
-        for v in ["1.1.0-7", "1.1.9", "1.0.62", "0.9.0", "", "garbage"] {
+        for v in ["1.21.0-22", "1.21.0", "1.2.0", "1.1.0-7", "1.1.9", "1.0.62", "0.9.0", "", "garbage"] {
             assert!(!version_ok(v), "{v}");
         }
         let mut h = axum::http::HeaderMap::new();
