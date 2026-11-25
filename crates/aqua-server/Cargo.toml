@@ -37,7 +37,7 @@ anyhow      = { workspace = true }
 nu-ansi-term = "0.50"   # coloured banner; turns on ANSI in the Windows console
 
 # Persistent user directory (usernames, profiles, email codes).
-rusqlite    = { version = "0.32", features = ["bundled", "functions"] }
+rusqlite    = { version = "0.43", features = ["bundled", "functions"] }
 
 # Optional real e-mail delivery for verification codes. When the
 # AQUA_SMTP_* env vars are set the server sends real mail; otherwise it
