@@ -58,13 +58,14 @@ cache = {}
 def trim(rel, body=True):
     if rel["id"] not in cache:
         sums = asset_text(rel, "SHA256SUMS.txt")
+        sums_sig = asset_text(rel, "SHA256SUMS.txt.sig")
         builds = asset_text(rel, "BUILDS.json")
         try:
             builds = json.loads(builds) if builds else None
         except ValueError:
             builds = None
-        cache[rel["id"]] = (sums, builds)
-    sums, builds = cache[rel["id"]]
+        cache[rel["id"]] = (sums, builds, sums_sig)
+    sums, builds, sums_sig = cache[rel["id"]]
     out = {
         "tag_name": rel["tag_name"],
         "name": rel.get("name") or rel["tag_name"],
@@ -76,6 +77,7 @@ def trim(rel, body=True):
             for a in rel.get("assets", [])
         ],
         "sums": sums,
+        "sums_sig": sums_sig,
         "builds": builds,
     }
     if body:

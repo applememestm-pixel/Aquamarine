@@ -56,6 +56,8 @@ pub mod botmaker;
 pub mod quota;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
+/// Release signatures for the updaters (also the server app's).
+pub use aqua_core::release;
 pub use auth::{AuthState, Caller};
 pub use directory::Directory;
 

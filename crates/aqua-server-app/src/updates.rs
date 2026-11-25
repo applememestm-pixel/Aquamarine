@@ -185,6 +185,12 @@ async fn find_web(c: &reqwest::Client) -> Result<Option<Found>, String> {
             Ok(r) if r.status().is_success() => r.text().await.unwrap_or_default(),
             _ => String::new(),
         };
+        let sig = match c.get(dl(aqua_server::release::SIG_ASSET)).timeout(std::time::Duration::from_secs(30)).send().await {
+            Ok(r) if r.status().is_success() => r.text().await.ok(),
+            _ => None,
+        };
+        // AQUA-SEC-012: unsigned sums don't count once the release key is set.
+        let sums = if aqua_server::release::sums_trusted(&sums, sig.as_deref()) { sums } else { String::new() };
         let sha = sums.lines().find_map(|l| {
             let mut it = l.split_whitespace();
             let h = it.next()?;
@@ -251,7 +257,16 @@ async fn pick(c: &reqwest::Client, list: &serde_json::Value) -> Result<Option<Fo
                         },
                         _ => None,
                     };
-                    if let Some(t) = text {
+                    // AQUA-SEC-012: signed by the built-in release key (once set).
+                    let sig = match (rel["sums_sig"].as_str(), by(aqua_server::release::SIG_ASSET).and_then(|a| a["browser_download_url"].as_str().map(str::to_string))) {
+                        (Some(t), _) => Some(t.to_string()),
+                        (None, Some(u)) => match c.get(u).timeout(std::time::Duration::from_secs(30)).send().await {
+                            Ok(r) => r.text().await.ok(),
+                            Err(_) => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some(t) = text.filter(|t| aqua_server::release::sums_trusted(t, sig.as_deref())) {
                         sha = t.lines().find_map(|l| {
                             let mut it = l.split_whitespace();
                             let h = it.next()?;

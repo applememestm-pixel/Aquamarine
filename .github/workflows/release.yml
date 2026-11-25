@@ -914,6 +914,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ env.REL_TAG }}
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
         run: |
           mkdir -p dl && cd dl
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*' --skip-existing
@@ -922,7 +923,7 @@ jobs:
           # builds) would claim the new commit for it: the in-app updater then
           # "updated" to the same old build. It reads this file instead.
           [ -f BUILDS.json ] && mv BUILDS.json ../BUILDS.prev.json || echo '{}' > ../BUILDS.prev.json
-          rm -f SHA256SUMS.txt
+          rm -f SHA256SUMS.txt SHA256SUMS.txt.sig
           started=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .run_started_at)
           gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq ".assets[] | select(.updated_at >= \"$started\") | .name" > ../fresh.txt || true
           python3 - "$GITHUB_SHA" <<'PY'
@@ -932,7 +933,7 @@ jobs:
           except Exception: builds = {}
           for name in open("../fresh.txt").read().split("\n"):
               name = name.strip()
-              if name and name not in ("SHA256SUMS.txt", "BUILDS.json"):
+              if name and name not in ("SHA256SUMS.txt", "SHA256SUMS.txt.sig", "BUILDS.json"):
                   builds[name] = sha
           json.dump(builds, open("../BUILDS.json", "w"), indent=1, sort_keys=True)
           print(json.dumps(builds, indent=1, sort_keys=True))
@@ -940,3 +941,16 @@ jobs:
           sha256sum -- * > ../SHA256SUMS.txt
           cat ../SHA256SUMS.txt
           gh release upload "$TAG" ../SHA256SUMS.txt ../BUILDS.json --repo "$GITHUB_REPOSITORY" --clobber
+          # AQUA-SEC-012: sign the exact sums text with the release key
+          # (secret UPDATE_SIGNING_KEY: an Ed25519 private key in PEM). The
+          # apps check it once aqua-core/src/release.rs has the public key.
+          if [ -n "$UPDATE_SIGNING_KEY" ]; then
+            umask 077
+            printf '%s\n' "$UPDATE_SIGNING_KEY" > ../release-key.pem
+            openssl pkeyutl -sign -inkey ../release-key.pem -rawin -in ../SHA256SUMS.txt -out ../SHA256SUMS.sig.bin
+            rm -f ../release-key.pem
+            od -An -v -tx1 ../SHA256SUMS.sig.bin | tr -d " \n" > ../SHA256SUMS.txt.sig
+            gh release upload "$TAG" ../SHA256SUMS.txt.sig --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            echo "UPDATE_SIGNING_KEY is not set: SHA256SUMS.txt is not signed"
+          fi
