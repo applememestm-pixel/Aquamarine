@@ -316,6 +316,28 @@ pub fn note_decrypted(ciphertext: &[u8]) {
     }
 }
 
+/// First messages that opened a session here, kept in the vault so a
+/// replay after a restart doesn't open it again (AQUA-SEC-008). The last
+/// `INITIALS_KEPT` of them.
+const INITIALS_KEY: &str = "seen-initials";
+const INITIALS_KEPT: usize = 2048;
+
+pub fn initial_seen(vault: &aqua_client_core::vault::Vault, ciphertext: &[u8]) -> bool {
+    let h = envelope_hash(ciphertext);
+    vault.get_record(INITIALS_KEY).ok().flatten().is_some_and(|b| b.chunks_exact(16).any(|c| c == h))
+}
+
+pub fn note_initial(vault: &aqua_client_core::vault::Vault, ciphertext: &[u8]) {
+    let h = envelope_hash(ciphertext);
+    let mut b = vault.get_record(INITIALS_KEY).ok().flatten().unwrap_or_default();
+    b.truncate(b.len() / 16 * 16);
+    if b.chunks_exact(16).any(|c| c == h) { return; }
+    b.extend_from_slice(&h);
+    let over = b.len().saturating_sub(INITIALS_KEPT * 16);
+    if over > 0 { b.drain(..over); }
+    let _ = vault.put_record(INITIALS_KEY, &b);
+}
+
 /// A copy of a message that already decrypted here?
 pub fn already_decrypted(ciphertext: &[u8]) -> bool {
     let h = envelope_hash(ciphertext);

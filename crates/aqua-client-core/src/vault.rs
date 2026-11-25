@@ -477,6 +477,28 @@ impl Vault {
 
     /// Look up and remove a one-time prekey by id. Removal is atomic;
     /// the same id cannot be handed out twice.
+    /// Read a one-time prekey without using it up: the caller deletes it
+    /// with [`Self::take_one_time_prekey`] only once the first message made
+    /// with it decrypted (AQUA-SEC-008: taken first, a forged or broken first
+    /// message burned it, and the real one then couldn't be read).
+    pub fn peek_one_time_prekey(&self, id: PreKeyId) -> Result<Option<OneTimePreKey>, VaultError> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT nonce, ciphertext FROM one_time_prekeys WHERE id = ?1",
+                params![id],
+                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            )
+            .optional()?;
+        match row {
+            None => Ok(None),
+            Some((nonce, ct)) => {
+                let pt = self.unseal(&opk_aad(id), &nonce, &ct)?;
+                Ok(Some(bincode::deserialize(&pt)?))
+            }
+        }
+    }
+
     pub fn take_one_time_prekey(
         &self,
         id: PreKeyId,
@@ -702,6 +724,9 @@ mod tests {
         vault.save_one_time_prekey(&opk).unwrap();
         assert_eq!(vault.opk_count().unwrap(), 1);
 
+        // Peeking leaves it there.
+        assert!(vault.peek_one_time_prekey(7).unwrap().is_some());
+        assert!(vault.peek_one_time_prekey(7).unwrap().is_some());
         let taken = vault.take_one_time_prekey(7).unwrap().unwrap();
         assert_eq!(taken.id, 7);
         assert_eq!(vault.opk_count().unwrap(), 0);

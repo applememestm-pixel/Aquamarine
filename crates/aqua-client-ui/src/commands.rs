@@ -4914,16 +4914,22 @@ async fn on_incoming_initial(
         return;
     }
 
-    // Consume SPK + optional OPK from the vault under the lock.
+    // SPK + optional OPK from the vault under the lock. The OPK is only
+    // read here and used up after the message decrypted (AQUA-SEC-008).
     let (identity_clone, spk, opk) = {
         let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // The same first message again after a restart (the in-memory set
+        // is empty then): taken again it would replace the session.
+        if crate::multidev::initial_seen(&s.vault, &message.ciphertext) {
+            return;
+        }
         let identity = s.identity.clone();
         let spk = match s.vault.latest_signed_prekey() {
             Ok(Some((spk, _))) => spk,
             _ => { tracing::warn!("no SPK for incoming initial"); return }
         };
         let opk = message.used_opk_id
-            .and_then(|id| s.vault.take_one_time_prekey(id).ok().flatten());
+            .and_then(|id| s.vault.peek_one_time_prekey(id).ok().flatten());
         drop(s);
         (identity, spk, opk)
     };
@@ -4933,6 +4939,13 @@ async fn on_incoming_initial(
         Ok(x) => x,
         Err(e) => { tracing::warn!(?e, "accept_initial failed"); return }
     };
+    {
+        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(id) = message.used_opk_id {
+            let _ = s.vault.take_one_time_prekey(id);
+        }
+        crate::multidev::note_initial(&s.vault, &message.ciphertext);
+    }
     crate::multidev::note_decrypted(&message.ciphertext);
     let plain_text = String::from_utf8_lossy(&plain).to_string();
 
