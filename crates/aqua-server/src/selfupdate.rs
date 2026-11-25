@@ -192,6 +192,10 @@ const FEEDS: &[&str] = &["https://aquamarinemessenger.pw/updates.json", "https:/
 
 /// None: nothing newer. GitHub's API first, then the site's feed.
 async fn find(c: &reqwest::Client, tester: bool) -> Result<Option<Found>, String> {
+    // REV2-003 (fail-closed): a build without the release key installs no update.
+    if !aqua_core::release::signing_enabled() {
+        return Err(aqua_core::release::NO_KEY.into());
+    }
     let api = async {
         let r = c
             .get(format!("https://api.github.com/repos/{REPO}/releases?per_page=20"))

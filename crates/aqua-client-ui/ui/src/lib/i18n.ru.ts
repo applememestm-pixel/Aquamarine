@@ -3260,4 +3260,7 @@ export const RU: Record<string, string> = {
   "Retry": "Повторить",
   "The video didn't load": "Видео не загрузилось",
   "Couldn't load the video: {e}": "Не удалось загрузить видео: {e}",
+  "updates are off in this build: it has no release signing key": "в этой сборке обновления выключены: в ней нет ключа подписи выпусков",
+  "this release isn't signed by the Aquamarine release key — the update wasn't installed": "выпуск не подписан ключом выпусков Aquamarine — обновление не установлено",
+  "this release has no signed checksum yet (still uploading, or not signed by the Aquamarine release key) — the update wasn't installed": "у выпуска ещё нет подписанной контрольной суммы (загружается или не подписан ключом выпусков Aquamarine) — обновление не установлено",
 };

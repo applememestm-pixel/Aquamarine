@@ -127,6 +127,10 @@ struct Found {
 /// CDN; pages.yml writes it after every release run, checksums included),
 /// and github.com's pages last.
 async fn find(c: &reqwest::Client) -> Result<Option<Found>, String> {
+    // REV2-003 (fail-closed): a build without the release key installs no update.
+    if !aqua_server::release::signing_enabled() {
+        return Err(aqua_server::release::NO_KEY.into());
+    }
     let e = match find_api(c).await {
         Ok(f) => return Ok(f),
         Err(e) => e,

@@ -86,7 +86,7 @@ export async function checkUpdates(manual = false): Promise<void> {
     else if (!ready) updateState.set(manual ? { s: "error", error: tr("The new build for this device isn't ready yet — try again in a few minutes."), info } : { s: "idle" });
     else { updateState.set({ s: "available", info, id }); autoInstall(manual); }
   } catch (e) {
-    updateState.set(manual ? { s: "error", error: String(e) } : { s: "idle" });
+    updateState.set(manual ? { s: "error", error: tr(String(e)) } : { s: "idle" });
   }
 }
 
@@ -127,7 +127,7 @@ export async function installUpdate(): Promise<void> {
     // this one (the system would only say "App not installed").
     else if (r === "signature") updateState.set({ s: "signature", info, id });
   } catch (e) {
-    updateState.set({ s: "error", error: String(e), info, id });
+    updateState.set({ s: "error", error: tr(String(e)), info, id });
   }
 }
 
