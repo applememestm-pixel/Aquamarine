@@ -57,7 +57,9 @@ jobs:
           openssl pkeyutl -verify -pubin -keyform DER -inkey pub.der -rawin -in SHA256SUMS.txt -sigfile sig.bin
           ls -la "$d"
           # No private key material left anywhere we can see.
-          if grep -rl "BEGIN PRIVATE KEY" "$d" "$RUNNER_TEMP" 2>/dev/null; then echo "::error::private key left on disk"; exit 1; fi
+          # The signing script's temp folder is gone, and only these files are here.
+          if ls -d "$RUNNER_TEMP"/aqsign.* 2>/dev/null; then echo "::error::the signing temp folder was left on disk"; exit 1; fi
+          [ "$(ls "$d" | sort | tr '\n' ' ')" = "Aquamarine_test.apk Aquamarine_test_x64-setup.exe SHA256SUMS.txt SHA256SUMS.txt.sig pub.der sig.bin " ] || { ls "$d"; echo "::error::unexpected files"; exit 1; }
           if git -C "$GITHUB_WORKSPACE" status --porcelain | grep -q .; then git -C "$GITHUB_WORKSPACE" status --porcelain; echo "::error::files appeared in the checkout"; exit 1; fi
           echo "RELEASE_SIGNING_DIR=$d" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
