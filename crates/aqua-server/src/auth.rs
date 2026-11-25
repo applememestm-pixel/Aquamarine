@@ -81,10 +81,12 @@ pub struct AuthState {
     pub server_key: [u8; 32],
     pending: DashMap<[u8; NONCE_LEN], Pending>,
     max_pending: usize,
-    /// Slots taken in `pending`, reserved before the insert (REV-002: a
-    /// `len()` check and the insert weren't atomic, so parallel requests
-    /// could go past the cap).
-    slots: std::sync::atomic::AtomicUsize,
+    /// One permit per entry of `pending`, taken BEFORE the insert and held by
+    /// the entry: removing it (answer, expiry) gives the permit back, so the
+    /// cap counts everything in flight (REV2-002: a counter that `prune`
+    /// reset to `len()` forgot reservations not inserted yet, and a failed
+    /// first attempt leaked a slot).
+    slots: Arc<tokio::sync::Semaphore>,
 }
 
 /// Challenges one address may ask for: a burst, then a steady rate
@@ -100,31 +102,37 @@ struct Pending {
     /// One-off X25519 secret for the proof of possession (see
     /// [`aqua_core::wire::auth::dh_proof`]). Zeroized on drop.
     eph: DhSecret,
+    /// Its place under `MAX_PENDING`; released with the entry.
+    _slot: tokio::sync::OwnedSemaphorePermit,
 }
 
 impl AuthState {
     pub fn new() -> Arc<Self> {
         let mut key = [0u8; 32];
         OsRng.fill_bytes(&mut key);
-        Arc::new(Self { server_key: key, pending: DashMap::new(), max_pending: MAX_PENDING, slots: std::sync::atomic::AtomicUsize::new(0) })
+        Self::with_cap(key, MAX_PENDING)
+    }
+
+    fn with_cap(server_key: [u8; 32], max_pending: usize) -> Arc<Self> {
+        Arc::new(Self { server_key, pending: DashMap::new(), max_pending, slots: Arc::new(tokio::sync::Semaphore::new(max_pending)) })
     }
 
     fn issue_nonce(&self, identity_dh_pub: [u8; X25519_LEN]) -> Option<([u8; NONCE_LEN], DhPublic)> {
-        use std::sync::atomic::Ordering::SeqCst;
-        if self.slots.fetch_add(1, SeqCst) >= self.max_pending {
-            self.prune();
-            if self.slots.fetch_add(1, SeqCst) >= self.max_pending {
-                self.slots.fetch_sub(1, SeqCst);
-                return None;
+        let slot = match self.slots.clone().try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                // Full: drop expired entries (their permits come back) and try once more.
+                self.prune();
+                self.slots.clone().try_acquire_owned().ok()?
             }
-        }
+        };
         let mut nonce = [0u8; NONCE_LEN];
         OsRng.fill_bytes(&mut nonce);
         let eph = DhSecret::generate();
         let eph_pub = eph.public();
         self.pending.insert(
             nonce,
-            Pending { identity_dh_pub, issued_at: SystemTime::now(), eph },
+            Pending { identity_dh_pub, issued_at: SystemTime::now(), eph, _slot: slot },
         );
         if self.pending.len() % 1024 == 0 {
             self.prune();
@@ -142,7 +150,6 @@ impl AuthState {
             .pending
             .remove(nonce)
             .ok_or(AuthError::UnknownNonce)?;
-        self.slots.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
         if entry.1.identity_dh_pub.ct_eq(&expected_identity).unwrap_u8() == 0 {
             return Err(AuthError::IdentityMismatch);
         }
@@ -165,12 +172,14 @@ impl AuthState {
 
     fn prune(&self) {
         let now = SystemTime::now();
+        // An entry made after `now` was taken (a parallel insert) is not
+        // expired: `duration_since` fails for it, and it used to be dropped —
+        // with its permit, letting more through (found by the REV2-002 test).
         self.pending.retain(|_, p| {
             now.duration_since(p.issued_at)
                 .map(|d| d <= NONCE_TTL)
-                .unwrap_or(false)
+                .unwrap_or(true)
         });
-        self.slots.store(self.pending.len(), std::sync::atomic::Ordering::SeqCst);
     }
 
     // ---- Token minting / verification ----
@@ -534,13 +543,49 @@ mod tests {
 
     #[test]
     fn pending_is_capped() {
-        let auth = Arc::new(AuthState { max_pending: 64, ..Arc::try_unwrap(AuthState::new()).ok().unwrap() });
-        // Taking one frees its slot.
+        let auth = AuthState::with_cap([1u8; 32], 64);
         for i in 0..64u64 {
             let mut k = [0u8; X25519_LEN];
             k[..8].copy_from_slice(&i.to_be_bytes());
             assert!(auth.issue_nonce(k).is_some());
         }
         assert!(auth.issue_nonce([3u8; X25519_LEN]).is_none(), "the map stops growing");
+    }
+
+    /// REV2-002: under heavy parallel load the cap is never passed, also
+    /// while expired entries are pruned; answering a challenge frees a place.
+    #[test]
+    fn pending_cap_holds_under_concurrency() {
+        const CAP: usize = 64;
+        let auth = AuthState::with_cap([2u8; 32], CAP);
+        let ok = std::sync::atomic::AtomicUsize::new(0);
+        let max_seen = std::sync::atomic::AtomicUsize::new(0);
+        let taken = std::sync::Mutex::new(Vec::new());
+        std::thread::scope(|s| {
+            for t in 0..32u64 {
+                let (auth, ok, max_seen, taken) = (&auth, &ok, &max_seen, &taken);
+                s.spawn(move || {
+                    for i in 0..200u64 {
+                        let mut k = [0u8; X25519_LEN];
+                        k[..8].copy_from_slice(&(t * 1000 + i).to_be_bytes());
+                        if let Some((n, _)) = auth.issue_nonce(k) {
+                            ok.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            taken.lock().unwrap().push((n, k));
+                        }
+                        // prune runs too (it's what reset the old counter).
+                        if i % 7 == 0 { auth.prune(); }
+                        max_seen.fetch_max(auth.pending_len(), std::sync::atomic::Ordering::SeqCst);
+                    }
+                });
+            }
+        });
+        assert_eq!(ok.load(std::sync::atomic::Ordering::SeqCst), CAP, "exactly the cap was handed out (nothing expired)");
+        assert!(max_seen.load(std::sync::atomic::Ordering::SeqCst) <= CAP);
+        assert_eq!(auth.pending_len(), CAP);
+        // One answered: one place again.
+        let (n, k) = taken.lock().unwrap()[0];
+        assert!(auth.take_pending(&n, k).is_ok());
+        assert!(auth.issue_nonce([9u8; X25519_LEN]).is_some());
+        assert!(auth.issue_nonce([10u8; X25519_LEN]).is_none());
     }
 }
