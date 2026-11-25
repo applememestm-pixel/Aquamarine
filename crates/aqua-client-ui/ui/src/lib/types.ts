@@ -15,6 +15,7 @@ export interface ChatSummary {
   /** Last visible message's unix timestamp, absent in older stored summaries. */
   last_at?: number | null;
   unread: number;
+  unread_mentions?: number;
   online: boolean;
   verified: boolean;
   channel: boolean;
@@ -31,7 +32,7 @@ export interface ChatMessage {
   at?: number | null;
   kind: MessageKind;
   /** Local history: deleted by the sender (kept), previous versions. */
-  meta?: { deleted?: boolean; edits?: string[]; room?: string; fwd?: { from?: string; name: string; at?: string; chat?: string }; via?: "bt" | "lan"; as?: { gid: string; title: string; kind?: string; name?: string; ok?: boolean } } | null;
+  meta?: { deleted?: boolean; edits?: string[]; post_id?: string; post_legacy_key?: string; edited_at?: number; editor_signatures?: string[]; edit_audit?: { editor: string; at: number; previous: string }[]; room?: string; fwd?: { from?: string; name: string; at?: string; chat?: string }; via?: "bt" | "lan"; as?: { gid: string; title: string; kind?: string; name?: string; ok?: boolean } } | null;
 }
 
 export type MessageKind =
@@ -270,6 +271,10 @@ export interface ClanTag {
 }
 
 export interface GroupSettings {
+  own_post_edits?: boolean;
+  discussion_group?: string;
+  discussion_channel?: string;
+  discussion_history?: { group: string; through: number }[];
   send_messages: Perm;
   send_media: Perm;
   send_stickers: Perm;
@@ -329,6 +334,7 @@ export interface GroupLogEntry { at: string; by: string; text: string }
 
 /** Mirrors `Group` in the Rust backend. */
 export interface Group {
+  ownership_offer?: { id: string; to: string; expires: number };
   id: string;
   kind: GroupKind;
   title: string;

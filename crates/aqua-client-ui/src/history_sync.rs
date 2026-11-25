@@ -129,6 +129,9 @@ fn h64(bytes: &[u8]) -> u64 {
 /// when (to the minute — devices may show seconds or not).
 fn key_of(m: &ChatMessage, me: &str) -> String {
     let who = if m.from == "me" || m.from == me { "me" } else { m.from.as_str() };
+    if let Some(id) = m.meta.as_ref().and_then(|meta| meta.post_id.as_deref()) {
+        return format!("{who}\u{1}\u{1}post:{id}");
+    }
     let when: String = m.time.chars().take(5).collect();
     let what = match &m.kind {
         // An edited message: compare by what it first said.
@@ -168,6 +171,14 @@ fn version(book: &ChatBook, me: &str) -> u64 {
     let last = book.messages.last().map(|m| key_of(m, me)).unwrap_or_default();
     let card = serde_json::to_string(&card_of(&book.summary)).unwrap_or_default();
     let mut version = format!("{}\u{1}{last}\u{1}{card}", book.messages.len());
+    if book.summary.channel && book.summary.id.starts_with("grp_") {
+        for m in &book.messages {
+            if let Some(meta) = m.meta.as_ref().filter(|meta| meta.edited_at.is_some()) {
+                use std::fmt::Write as _;
+                let _ = write!(version, "/{}:{}:{}", m.id, meta.edited_at.unwrap_or(0), meta.edit_audit.len());
+            }
+        }
+    }
     if book.summary.id == SAVED_MESSAGES_ID {
         for m in &book.messages {
             if let Some((_, cid)) = saved_media::promoted(m) {
@@ -370,6 +381,23 @@ pub fn tombstone(s: &AppState, chat: &str, msgs: &[ChatMessage]) {
     if let Ok(mut p) = PUSHED.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) { p.get_or_insert_with(HashMap::new).remove(chat); }
 }
 
+fn merge_post_edit(local: &mut ChatMessage, remote: &ChatMessage) -> bool {
+    let Some(remote_meta) = remote.meta.as_ref().filter(|m| m.edited_at.is_some()) else { return false; };
+    let Some(meta) = local.meta.as_mut() else { return false; };
+    if meta.post_id.is_none() || meta.post_id != remote_meta.post_id || meta.edited_at >= remote_meta.edited_at {
+        return false;
+    }
+    let (MessageKind::Text { text: old } | MessageKind::Reply { text: old, .. }) = &mut local.kind else { return false; };
+    let (MessageKind::Text { text } | MessageKind::Reply { text, .. }) = &remote.kind else { return false; };
+    old.clone_from(text);
+    meta.edited_at = remote_meta.edited_at;
+    meta.post_legacy_key.clone_from(&remote_meta.post_legacy_key);
+    meta.editor_signatures.clone_from(&remote_meta.editor_signatures);
+    let now = crate::state::msg_secs();
+    meta.edit_audit = remote_meta.edit_audit.iter().filter(|e| now.saturating_sub(e.at) < 86_400).cloned().collect();
+    true
+}
+
 /// Merge `theirs` into `ours`, keeping our order and putting each message we
 /// don't have right after the last one we both have. Identical messages are
 /// counted, so two "ok" at the same minute stay two. Returns how many came in.
@@ -410,7 +438,7 @@ pub(crate) fn merge(ours: &mut Vec<ChatMessage>, theirs: Vec<ChatMessage>, me: &
             Some(i) => {
                 used.insert(i);
                 if i >= cursor { cursor = i + 1; }
-                upgraded += usize::from(saved_media::apply_upgrade(&mut ours[i], &m));
+                upgraded += usize::from(saved_media::apply_upgrade(&mut ours[i], &m) || merge_post_edit(&mut ours[i], &m));
             }
             None => {
                 let mut m = m;

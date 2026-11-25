@@ -26,7 +26,7 @@
   const me = $derived($info?.username ?? "?");
   const CLOSE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>`;
 
-  let { title, rootAuthor, rootText, rootTime, items, canWrite = true, onSend, onClose, onJump, asChoices = [], asPick = "", onAs }: {
+  let { title, rootAuthor, rootText, rootTime, items, canWrite = true, onSend, onClose, onJump, onRootJump, startFull = false, asChoices = [], asPick = "", onAs }: {
     title: string;
     rootAuthor: string;
     rootText: string;
@@ -36,6 +36,8 @@
     onSend: (text: string, re: { a: string; t: string } | null) => Promise<boolean>;
     onClose: () => void;
     onJump?: (id: string) => void;
+    onRootJump?: () => void;
+    startFull?: boolean;
     /** "Send message as…": groups / channels I run, the current pick ("" = me). */
     asChoices?: { id: string; title: string; gradient: string }[];
     asPick?: string;
@@ -69,6 +71,7 @@
   }
   /** Phones: the comments as a chat of their own (the whole screen). */
   let full = $state(false);
+  $effect(() => { if (startFull) full = true; });
 </script>
 
 <!-- Phones: a small panel under the chat's header; "expand" (or a tap on the
@@ -94,6 +97,7 @@
       <div class="th-name">{rootAuthor}</div>
       <div class="th-text"><Markup src={rootText.slice(0, 2000)} compact /></div>
       <div class="th-time">{rootTime}</div>
+      {#if onRootJump}<button class="th-x" type="button" aria-label={$t("Go to channel post")} title={$t("Go to channel post")} onclick={onRootJump}>{@html icons.forward}</button>{/if}
     </div>{/if}
     {#if !IS_MOBILE || !items.length}<div class="th-sep"><span>{$t(items.length ? "Discussion started" : "No replies yet — start the discussion")}</span></div>{/if}
     {#each items as it (it.id)}

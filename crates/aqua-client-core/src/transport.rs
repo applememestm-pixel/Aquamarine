@@ -175,6 +175,8 @@ fn error_chain(e: &reqwest::Error) -> String {
 
 #[derive(Debug, Error)]
 pub enum TransportError {
+    #[error("file I/O: {0}")]
+    Io(#[from] std::io::Error),
     #[error("HTTP: {}", error_chain(.0))]
     Http(#[from] reqwest::Error),
     #[error("WebSocket: {0}")]
@@ -665,10 +667,21 @@ impl Transport {
     /// `story`: a story's file — the relay keeps it across restarts for
     /// the story's life (older relays ignore it; `keep` still applies there).
     pub async fn upload_blob_full(&self, cid: &str, bytes: Vec<u8>, keep: bool, story: bool, kind: Option<&str>) -> Result<(), TransportError> {
+        self.upload_blob_request(cid, bytes, keep, story, kind, None).await
+    }
+
+    pub async fn upload_attachment(&self, envelope: &aqua_core::FileEnvelope, bytes: Vec<u8>, kind: &str) -> Result<(), TransportError> {
+        self.upload_blob_request(&envelope.cid, bytes, false, false, Some(kind), Some(envelope.size)).await
+    }
+
+    async fn upload_blob_request(
+        &self, cid: &str, bytes: Vec<u8>, keep: bool, story: bool, kind: Option<&str>, plain_size: Option<u64>,
+    ) -> Result<(), TransportError> {
         let mut q = Vec::new();
         if keep { q.push("keep=1".to_string()); }
         if story { q.push("story=1".to_string()); }
         if let Some(k) = kind.filter(|k| k.bytes().all(|b| b.is_ascii_lowercase())) { q.push(format!("kind={k}")); }
+        if let Some(size) = plain_size { q.push(format!("plain_size={size}")); }
         let url = format!("{}/v1/blob/{}{}{}", self.server_url.trim_end_matches('/'), cid, if q.is_empty() { "" } else { "?" }, q.join("&"));
         let r = self.http.post(&url).bearer_auth(self.bearer().await?).body(bytes).send().await?;
         if !r.status().is_success() {
@@ -677,6 +690,82 @@ impl Transport {
                 body: r.text().await.unwrap_or_default(),
             });
         }
+        Ok(())
+    }
+
+    /// Resume a disk-backed encrypted upload from the relay's committed offset.
+    pub async fn upload_blob_resumable(
+        &self, envelope: &aqua_core::FileEnvelope, path: &std::path::Path, kind: &str,
+    ) -> Result<(), TransportError> {
+        use tokio::io::{AsyncReadExt, AsyncSeekExt};
+        #[derive(serde::Deserialize)]
+        struct Progress { offset: u64, complete: bool }
+        let url = format!("{}/v1/blob-upload/{}", self.server_url.trim_end_matches('/'), envelope.cid);
+        let mut file = tokio::fs::File::open(path).await?;
+        let len = file.metadata().await?.len();
+        let mut offset = 0;
+        let mut begin = true;
+        let mut attempts = 0;
+        loop {
+            let send_offset = offset;
+            let mut body = Vec::new();
+            if !begin && offset < len {
+                body.resize((len - offset).min(aqua_core::file_transfer::UPLOAD_PART_SIZE as u64) as usize, 0);
+                file.seek(std::io::SeekFrom::Start(offset)).await?;
+                file.read_exact(&mut body).await?;
+            }
+            let mut req = self.http.put(&url).bearer_auth(self.bearer().await?)
+                .query(&[("size", envelope.size.to_string()), ("offset", offset.to_string()), ("kind", kind.to_owned())]);
+            if !body.is_empty() {
+                req = req.query(&[("hash", aqua_core::hex_sha256(&body))]);
+            }
+            let r = match req.body(body).send().await {
+                Ok(r) if r.status().is_success() => r,
+                Ok(r) if !r.status().is_server_error() => return Err(TransportError::Server {
+                    status: r.status().as_u16(), body: r.text().await.unwrap_or_default(),
+                }),
+                failed => {
+                    attempts += 1;
+                    if attempts == 3 {
+                        return match failed {
+                            Err(e) => Err(e.into()),
+                            Ok(r) => Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() }),
+                        };
+                    }
+                    begin = true;
+                    tokio::time::sleep(std::time::Duration::from_secs(attempts)).await;
+                    continue;
+                }
+            };
+            let progress: Progress = r.json().await?;
+            if progress.offset > len || (progress.complete && progress.offset != len)
+                || (!begin && !progress.complete && progress.offset == send_offset) {
+                return Err(TransportError::BadPayload("invalid upload progress".into()));
+            }
+            if progress.complete { return Ok(()); }
+            if progress.offset > offset { attempts = 0; }
+            offset = progress.offset;
+            begin = false;
+        }
+    }
+
+    pub async fn download_blob_to(
+        &self, cid: &str, out: &mut tokio::fs::File, expected: u64,
+    ) -> Result<(), TransportError> {
+        use tokio::io::AsyncWriteExt;
+        let url = format!("{}/v1/blob/{}", self.server_url.trim_end_matches('/'), cid);
+        let mut r = self.http.get(url).timeout(std::time::Duration::from_secs(1200)).send().await?;
+        if !r.status().is_success() {
+            return Err(TransportError::Server { status: r.status().as_u16(), body: r.text().await.unwrap_or_default() });
+        }
+        let mut len = 0;
+        while let Some(piece) = r.chunk().await? {
+            len += piece.len() as u64;
+            if len > expected { return Err(TransportError::BadPayload("oversized encrypted file".into())); }
+            out.write_all(&piece).await?;
+        }
+        if len != expected { return Err(TransportError::BadPayload("incomplete encrypted file".into())); }
+        out.flush().await?;
         Ok(())
     }
 

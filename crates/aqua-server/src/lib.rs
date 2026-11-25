@@ -28,6 +28,8 @@ use tokio::sync::{mpsc, Mutex};
 pub mod auth;
 pub mod packs;
 pub mod blobstore;
+mod blob_upload;
+mod paid;
 pub mod fed;
 pub mod games;
 pub mod directory;
@@ -910,6 +912,8 @@ struct BlobQuery {
     /// A coarse label for the admin panel (see `blobstore::KINDS`).
     #[serde(default)]
     kind: Option<String>,
+    #[serde(default)]
+    plain_size: Option<u64>,
 }
 
 async fn upload_blob(
@@ -927,7 +931,21 @@ async fn upload_blob(
     let (owner, tier) = quota::caller(&state, &dh_pub).await;
     let limits = quota::quotas(&state);
     let lim = limits.of(tier);
-    if body.len() as u64 > lim.file_max {
+    use aqua_core::file_transfer::{chunk_count, CHUNK_TAG, STREAM_CHUNK};
+    let encrypted_len = body.len() as u64;
+    let plaintext = match q.plain_size {
+        Some(size) if size <= encrypted_len => {
+            let single = size + CHUNK_TAG as u64;
+            let streamed = size + chunk_count(size, STREAM_CHUNK) * CHUNK_TAG as u64;
+            if encrypted_len != single && encrypted_len != streamed {
+                return Err((StatusCode::BAD_REQUEST, "encrypted length doesn't match size".into()));
+            }
+            size
+        }
+        Some(_) => return Err((StatusCode::BAD_REQUEST, "invalid plaintext size".into())),
+        None => encrypted_len.saturating_sub(CHUNK_TAG as u64),
+    };
+    if plaintext > lim.file_max {
         return Err((StatusCode::PAYLOAD_TOO_LARGE, format!("quota: file_max {}", lim.file_max)));
     }
     let actual_cid = hex_sha256(&body);
@@ -957,7 +975,7 @@ async fn upload_blob(
                 // the HTTP client disconnects while the disk write is running.
                 let _upload = quota::lock_upload(&owner);
                 let (used, generation) = quota::usage_snapshot(&state, &owner);
-                if len > limit.saturating_sub(used) && !store.has_cached(&cid) {
+                if len > limit.saturating_sub(used).saturating_sub(blob_upload::reserved(&store, &owner)) && !store.has_cached(&cid) {
                     return Err((StatusCode::INSUFFICIENT_STORAGE, format!("quota: files {used} {limit}")));
                 }
                 if store.put_owned(&cid, &body, &owner).map_err(io_error)? {
@@ -985,25 +1003,13 @@ async fn fetch_blob(
     Path(cid): Path<String>,
 ) -> Result<impl IntoResponse, StatusCode> {
     let store = state.blobs.clone();
-    let local = { let (store, cid) = (store.clone(), cid.clone()); tokio::task::spawn_blocking(move || store.get(&cid)).await.ok().flatten() };
-    let bytes = match local {
-        Some(b) => b,
-        None => {
-            // Uploaded to another relay of the federation: fetch, check, keep.
-            let f = fed::current(&state).ok_or(StatusCode::NOT_FOUND)?;
-            let (_, b) = f.fetch_bytes(&format!("/v1/fed/blob/{cid}")).await.ok_or(StatusCode::NOT_FOUND)?;
-            if hex_sha256(&b) != cid {
-                return Err(StatusCode::NOT_FOUND);
-            }
-            let (s2, c2, b2) = (store.clone(), cid.clone(), b.clone());
-            let _ = tokio::task::spawn_blocking(move || s2.put(&c2, &b2)).await;
-            b
-        }
-    };
-    Ok((
-        [(header::CONTENT_TYPE, "application/octet-stream")],
-        bytes,
-    ))
+    let local = { let (store, cid) = (store.clone(), cid.clone()); tokio::task::spawn_blocking(move || store.open_blob(&cid)).await.ok().flatten() };
+    if let Some((file, len)) = local {
+        return Ok(blob_upload::response(file, len));
+    }
+    let f = fed::current(&state).ok_or(StatusCode::NOT_FOUND)?;
+    blob_upload::federated(&store, &f, &cid).await.ok_or(StatusCode::NOT_FOUND)
+
 }
 
 // ---------- User directory: email registration + search --------------------
@@ -2105,6 +2111,7 @@ async fn me_quota(State(state): State<AppState>, Caller(dh): Caller) -> Json<ser
     let guest = key == quota::GUESTS;
     let over = quota::over_since(&key);
     Json(serde_json::json!({
+        "resumable_uploads": true,
         "tier": tier,
         "limits": lim,
         "files_limit": quota::files_limit(&q, &key, tier),
@@ -2113,7 +2120,7 @@ async fn me_quota(State(state): State<AppState>, Caller(dh): Caller) -> Json<ser
             "files": quota::used(&state, &key),
             "hist": if guest { 0 } else { state.directory.hist_total(&key) },
             "backup": if guest { 0 } else { state.directory.backup_meta(&key).map(|b| b.0).unwrap_or(0) },
-            "bots": state.directory.list_bots_for_owner(&dh).len(),
+            "bots": state.directory.list_bots_for_owner(&state.directory.bot_account_identity(&dh)).len(),
         },
         "over_since": over,
         "free_at": over.map(|s| s + quota::GRACE),
@@ -2538,7 +2545,7 @@ async fn bot_register(
     };
     let token = state
         .directory
-        .register_bot_with_limit(&username, &dh_pub, &body.display_name, i64::from(max))
+        .register_bot_with_limit(&username, &state.directory.bot_account_identity(&dh_pub), &body.display_name, i64::from(max))
         .map_err(|error| match error {
             directory::DirError::TooManyBots => (StatusCode::FORBIDDEN, format!("quota: bots {max}")),
             other => (StatusCode::BAD_REQUEST, other.to_string()),
@@ -2580,7 +2587,7 @@ async fn bot_list(
     State(state): State<AppState>,
     Caller(dh_pub): Caller,
 ) -> Json<Vec<BotInfo>> {
-    let bots = state.directory.list_bots_for_owner(&dh_pub)
+    let bots = state.directory.list_bots_for_owner(&state.directory.bot_account_identity(&dh_pub))
         .into_iter()
         .map(|(username, hint)| {
             let display_name = state.directory.display_name_of(&username);
@@ -2656,7 +2663,7 @@ async fn bot_delete(
     Caller(dh_pub): Caller,
     Path(name): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    state.directory.delete_bot(&name, &dh_pub).map_err(|e| (dir_err_status(&e), e.to_string()))?;
+    state.directory.delete_bot(&name, &state.directory.bot_account_identity(&dh_pub)).map_err(|e| (dir_err_status(&e), e.to_string()))?;
     state.bot_queues.remove(&name.trim().to_lowercase());
     botmaker::forget(&name.trim().to_lowercase());
     Ok(StatusCode::NO_CONTENT)
@@ -3526,11 +3533,15 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/bot/profile",        get(botx::profile_get).post(botx::profile_set))
         .route("/v1/bot/stats",          get(botx::stats))
         .route("/v1/bot/:name",          axum::routing::delete(bot_delete))
+        .route("/v1/botmaker/owned/:name", get(botmaker::owner_get).put(botmaker::owner_put).delete(botmaker::owner_delete))
         .route("/v1/botmaker/spec",      get(botmaker::spec_get).put(botmaker::spec_put).delete(botmaker::spec_delete))
         .route("/v1/backup", axum::routing::put(backup_put).get(backup_meta).delete(backup_delete)
             .layer(DefaultBodyLimit::max(BACKUP_LIMIT + 1024)))
         .route("/v1/backup/fetch", post(backup_fetch))
         .route("/v1/me/hist",            get(hist_list))
+        .route("/v1/me/processing", get(paid::capabilities))
+        .route("/v1/me/translate", post(paid::translate))
+        .route("/v1/me/speech", post(paid::speech).layer(DefaultBodyLimit::max(paid::AUDIO_LIMIT)))
         .route("/v1/me/quota",           get(me_quota))
         .route("/v1/me/hist/:k",         get(hist_get).put(hist_put).layer(DefaultBodyLimit::max(HIST_RECORD_LIMIT + 1024)))
         .route("/v1/admin/fed/invite", get(admin_fed_invite))
@@ -3549,6 +3560,8 @@ pub fn app(state: AppState) -> Router {
             post(upload_blob).get(fetch_blob).head(has_blob)
                 .layer(DefaultBodyLimit::max(BLOB_LIMIT)),
         )
+        .route("/v1/blob-upload/:cid", axum::routing::put(blob_upload::put)
+            .layer(DefaultBodyLimit::max(aqua_core::file_transfer::UPLOAD_PART_SIZE)))
         // Everything else: the optional website (AQUA_SITE_DIR, see site.rs).
         .merge(fed::routes())
         .fallback(site::fallback)

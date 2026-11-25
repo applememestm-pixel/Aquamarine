@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
@@ -62,6 +62,90 @@ pub struct Keyword {
     pub reply: Reply,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Choice {
+    label: String,
+    next: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Step {
+    Message { text: String, next: String },
+    Buttons { text: String, choices: Vec<Choice> },
+    Wait { next: String },
+    Branch { equals: String, yes: String, no: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Scenario {
+    entry: String,
+    steps: std::collections::BTreeMap<String, Step>,
+}
+
+impl Scenario {
+    fn validate(&self) -> bool {
+        let target = |s: &str| s.is_empty() || self.steps.contains_key(s);
+        let text = |s: &str| s.len() <= TEXT_MAX && !s.trim().is_empty();
+        self.steps.len() <= 50 && self.steps.contains_key(&self.entry) && self.steps.iter().all(|(id, step)| {
+            if !valid_command(id) { return false; }
+            match step {
+                Step::Message { text: message, next } => text(message) && target(next),
+                Step::Buttons { text: message, choices } => text(message) && (1..=8).contains(&choices.len()) &&
+                    choices.iter().all(|b| !b.label.trim().is_empty() && b.label.len() <= 64 && target(&b.next)),
+                Step::Wait { next } => target(next),
+                Step::Branch { equals, yes, no } => equals.len() <= 200 && target(yes) && target(no),
+            }
+        })
+    }
+
+    fn advance(&self, cursor: &mut String, update: &BotUpdate, bot: &str) -> Vec<String> {
+        let reset = update.text.split_whitespace().next().is_some_and(|w|
+            w == "/start" || w.strip_prefix("/start@").is_some_and(|name| name.eq_ignore_ascii_case(bot))
+        );
+        let mut reply = Vec::new();
+        if reset || cursor.is_empty() {
+            if !reset && cursor.is_empty() && update.callback.is_some() { return reply; }
+            *cursor = self.entry.clone();
+        } else {
+            match self.steps.get(cursor.as_str()) {
+                Some(Step::Wait { next }) if update.callback.is_none() => cursor.clone_from(next),
+                Some(Step::Buttons { choices, .. }) => {
+                    let prefix = format!("pro:{cursor}:");
+                    let index = update.callback.as_deref().and_then(|v| v.strip_prefix(&prefix))
+                        .and_then(|v| v.parse::<usize>().ok());
+                    let Some(choice) = index.and_then(|i| choices.get(i)) else { return reply; };
+                    cursor.clone_from(&choice.next);
+                }
+                _ => return reply,
+            }
+        }
+        for _ in 0..16 {
+            match self.steps.get(cursor.as_str()) {
+                Some(Step::Message { text, next }) => {
+                    reply.push(text.clone());
+                    cursor.clone_from(next);
+                }
+                Some(Step::Buttons { text, choices }) => {
+                    let rows: Vec<_> = choices.iter().enumerate().map(|(i, b)|
+                        [json!({ "t": b.label, "cb": format!("pro:{cursor}:{i}") })]
+                    ).collect();
+                    let keyboard = json!({ "kind": "inline", "m": 0, "rows": rows });
+                    reply.push(format!("{}{keyboard}\\n{text}", crate::tgapi::KB_PREFIX));
+                    return reply;
+                }
+                Some(Step::Wait { .. }) => return reply,
+                Some(Step::Branch { equals, yes, no }) => {
+                    cursor.clone_from(if update.text.trim().to_lowercase() == equals.trim().to_lowercase() { yes } else { no });
+                }
+                None => { cursor.clear(); return reply; }
+            }
+        }
+        cursor.clear();
+        reply
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Spec {
     #[serde(default)]
@@ -76,6 +160,8 @@ pub struct Spec {
     /// Anything else (none: the bot stays silent).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fallback: Option<Reply>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scenario: Option<Scenario>,
 }
 
 fn specs() -> &'static RwLock<HashMap<String, Spec>> {
@@ -127,6 +213,9 @@ fn clean_text(t: &str) -> String {
 
 /// Checked and trimmed: what a client sends is never stored as it came.
 pub fn clean(mut s: Spec) -> Result<Spec, String> {
+    if s.scenario.as_ref().is_some_and(|scenario| !scenario.validate()) {
+        return Err("invalid scenario steps or links".into());
+    }
     s.about = s.about.trim().chars().take(512).collect();
     if s.commands.len() > COMMANDS_MAX {
         return Err(format!("at most {COMMANDS_MAX} commands"));
@@ -264,6 +353,8 @@ fn run(state: AppState, bot: String) {
     }
     tokio::spawn(async move {
         let _done = Done(bot.clone());
+        let mut current_scenario: Option<Scenario> = None;
+        let mut cursors: HashMap<String, String> = HashMap::new();
         loop {
             let Some(spec) = spec_of(&bot) else { break };
             if !state.directory.is_bot(&bot) {
@@ -282,9 +373,25 @@ fn run(state: AppState, bot: String) {
                     g.updates.drain(..).collect()
                 }
             };
+            if batch.is_empty() { continue; }
+            if current_scenario != spec.scenario {
+                current_scenario.clone_from(&spec.scenario);
+                cursors.clear();
+            }
+            let pro = if spec.scenario.is_some() { pro_enabled(&state, &bot).await } else { false };
             for u in batch {
                 // Bot to bot: no answer (two made bots would talk forever).
                 if u.from_bot {
+                    continue;
+                }
+                if let Some(scenario) = &spec.scenario {
+                    if pro {
+                        if cursors.len() >= 10_000 && !cursors.contains_key(&u.from) { cursors.clear(); }
+                        let cursor = cursors.entry(u.from.clone()).or_default();
+                        for text in scenario.advance(cursor, &u, &bot) {
+                            crate::bot_deliver_text(&state, &bot, &u.from, &text).await;
+                        }
+                    }
                     continue;
                 }
                 if let Some(r) = pick(&spec, &bot, &u) {
@@ -318,6 +425,21 @@ pub async fn spec_get(State(state): State<AppState>, headers: HeaderMap) -> Resu
 
 pub async fn spec_put(State(state): State<AppState>, headers: HeaderMap, Json(s): Json<Spec>) -> Result<StatusCode, Err> {
     let bot = crate::bot_auth(&state, &headers, "").await?;
+    if s.scenario.is_none() && spec_of(&bot).is_some_and(|spec| spec.scenario.is_some()) {
+        return Err((StatusCode::CONFLICT, "edit the Pro scenario from your account".into()));
+    }
+    put_spec(state, bot, s).await
+}
+
+async fn pro_enabled(state: &AppState, bot: &str) -> bool {
+    let Some(owner) = state.directory.bot_owner_name(bot) else { return false; };
+    crate::quota::paid(crate::quota::tier_of_user(state, &owner).await)
+}
+
+async fn put_spec(state: AppState, bot: String, s: Spec) -> Result<StatusCode, Err> {
+    if s.scenario.is_some() && !pro_enabled(&state, &bot).await {
+        return Err((StatusCode::FORBIDDEN, "Stars subscription required".into()));
+    }
     let s = clean(s).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     specs().write().unwrap_or_else(|e| e.into_inner()).insert(bot.clone(), s.clone());
     save();
@@ -329,6 +451,32 @@ pub async fn spec_put(State(state): State<AppState>, headers: HeaderMap, Json(s)
 /// Back to a bot run by its own program (or none): the relay stops answering.
 pub async fn spec_delete(State(state): State<AppState>, headers: HeaderMap) -> Result<StatusCode, Err> {
     let bot = crate::bot_auth(&state, &headers, "").await?;
+    forget(&bot);
+    state.tg.commands.remove(&bot);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn owned_bot(state: &AppState, dh: &[u8; 32], name: String) -> Result<String, Err> {
+    let name = name.to_ascii_lowercase();
+    let owner = state.directory.bot_account_identity(dh);
+    if state.directory.bot_owner(&name).as_deref() != Some(owner.as_slice()) {
+        return Err((StatusCode::NOT_FOUND, "bot not found".into()));
+    }
+    Ok(name)
+}
+
+pub async fn owner_get(State(state): State<AppState>, crate::Caller(dh): crate::Caller, Path(name): Path<String>) -> Result<Json<Value>, Err> {
+    let bot = owned_bot(&state, &dh, name)?;
+    Ok(Json(spec_of(&bot).map(|s| json!(s)).unwrap_or(Value::Null)))
+}
+
+pub async fn owner_put(State(state): State<AppState>, crate::Caller(dh): crate::Caller, Path(name): Path<String>, Json(spec): Json<Spec>) -> Result<StatusCode, Err> {
+    let bot = owned_bot(&state, &dh, name)?;
+    put_spec(state, bot, spec).await
+}
+
+pub async fn owner_delete(State(state): State<AppState>, crate::Caller(dh): crate::Caller, Path(name): Path<String>) -> Result<StatusCode, Err> {
+    let bot = owned_bot(&state, &dh, name)?;
     forget(&bot);
     state.tg.commands.remove(&bot);
     Ok(StatusCode::NO_CONTENT)
@@ -358,7 +506,27 @@ mod tests {
             commands: vec![Command { command: "prices".into(), description: "Prices".into(), reply: r("100") }],
             keywords: vec![Keyword { words: "hello, привет".into(), reply: r("Hey") }],
             fallback: Some(r("?")),
+            scenario: None,
         }
+    }
+
+    #[test]
+    fn scenario_waits_branches_and_resets_independently() {
+        let scenario: Scenario = serde_json::from_value(json!({
+            "entry": "ask", "steps": {
+                "ask": { "type": "message", "text": "Ready?", "next": "wait" },
+                "wait": { "type": "wait", "next": "branch" },
+                "branch": { "type": "branch", "equals": "yes", "yes": "done", "no": "ask" },
+                "done": { "type": "message", "text": "Done", "next": "" }
+            }
+        })).unwrap();
+        assert!(scenario.validate());
+        let (mut alice, mut bob) = (String::new(), String::new());
+        assert_eq!(scenario.advance(&mut alice, &upd("/start", None), "bot"), ["Ready?"]);
+        assert_eq!(scenario.advance(&mut bob, &upd("hello", None), "bot"), ["Ready?"]);
+        assert_eq!(scenario.advance(&mut alice, &upd(" YES ", None), "bot"), ["Done"]);
+        assert_eq!(scenario.advance(&mut bob, &upd("/start", None), "bot"), ["Ready?"]);
+        assert_eq!(bob, "wait");
     }
 
     #[test]

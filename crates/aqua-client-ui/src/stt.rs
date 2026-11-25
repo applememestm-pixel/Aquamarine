@@ -227,3 +227,38 @@ impl Write for HashW<'_> {
         Ok(())
     }
 }
+
+
+#[tauri::command]
+pub async fn server_processing(
+    state: State<'_, StdMutex<AppState>>,
+    operation: String,
+    text: Option<String>,
+    target: Option<String>,
+    pcm: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let transport = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        .transport.clone().ok_or("not connected")?;
+    let base = transport.server_url().trim_end_matches('/');
+    let request = match operation.as_str() {
+        "capabilities" => transport.http().get(format!("{base}/v1/me/processing")),
+        "translate" => transport.http().post(format!("{base}/v1/me/translate")).json(
+            &serde_json::json!({ "text": text.ok_or("missing text")?, "target": target.ok_or("missing language")? }),
+        ),
+        "speech" => {
+            use base64::Engine;
+            let encoded = pcm.ok_or("missing audio")?;
+            if encoded.len() > 25_600_000 { return Err("recording exceeds ten minutes".into()); }
+            let pcm = base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|e| e.to_string())?;
+            if pcm.len() > 16_000 * 2 * 600 { return Err("recording exceeds ten minutes".into()); }
+            transport.http().post(format!("{base}/v1/me/speech"))
+                .header("Content-Type", "application/octet-stream").body(pcm)
+                .timeout(std::time::Duration::from_secs(200))
+        }
+        _ => return Err("unsupported operation".into()),
+    };
+    let response = request.bearer_auth(transport.bearer().await.map_err(|e| e.to_string())?)
+        .send().await.map_err(|e| e.to_string())?;
+    if !response.status().is_success() { return Err(format!("HTTP {}", response.status())); }
+    response.json().await.map_err(|e| e.to_string())
+}
