@@ -81,7 +81,18 @@ pub struct AuthState {
     pub server_key: [u8; 32],
     pending: DashMap<[u8; NONCE_LEN], Pending>,
     max_pending: usize,
+    /// Slots taken in `pending`, reserved before the insert (REV-002: a
+    /// `len()` check and the insert weren't atomic, so parallel requests
+    /// could go past the cap).
+    slots: std::sync::atomic::AtomicUsize,
 }
+
+/// Challenges one address may ask for: a burst, then a steady rate
+/// (REV-002: without it one client filled `pending` and every sign-in on
+/// the relay got 503 for a minute).
+pub const CHALLENGE_PER_IP: (f64, f64) = (20.0, 1.0);
+// No limit per identity key: anyone who knows your public key could then
+// keep you from signing in by asking for challenges in your name.
 
 struct Pending {
     identity_dh_pub: [u8; X25519_LEN],
@@ -95,13 +106,15 @@ impl AuthState {
     pub fn new() -> Arc<Self> {
         let mut key = [0u8; 32];
         OsRng.fill_bytes(&mut key);
-        Arc::new(Self { server_key: key, pending: DashMap::new(), max_pending: MAX_PENDING })
+        Arc::new(Self { server_key: key, pending: DashMap::new(), max_pending: MAX_PENDING, slots: std::sync::atomic::AtomicUsize::new(0) })
     }
 
     fn issue_nonce(&self, identity_dh_pub: [u8; X25519_LEN]) -> Option<([u8; NONCE_LEN], DhPublic)> {
-        if self.pending.len() >= self.max_pending {
+        use std::sync::atomic::Ordering::SeqCst;
+        if self.slots.fetch_add(1, SeqCst) >= self.max_pending {
             self.prune();
-            if self.pending.len() >= self.max_pending {
+            if self.slots.fetch_add(1, SeqCst) >= self.max_pending {
+                self.slots.fetch_sub(1, SeqCst);
                 return None;
             }
         }
@@ -129,6 +142,7 @@ impl AuthState {
             .pending
             .remove(nonce)
             .ok_or(AuthError::UnknownNonce)?;
+        self.slots.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
         if entry.1.identity_dh_pub.ct_eq(&expected_identity).unwrap_u8() == 0 {
             return Err(AuthError::IdentityMismatch);
         }
@@ -156,6 +170,7 @@ impl AuthState {
                 .map(|d| d <= NONCE_TTL)
                 .unwrap_or(false)
         });
+        self.slots.store(self.pending.len(), std::sync::atomic::Ordering::SeqCst);
     }
 
     // ---- Token minting / verification ----
@@ -266,6 +281,8 @@ impl AuthError {
 
 pub async fn challenge(
     State(state): State<AppState>,
+    conn: Option<axum::extract::ConnectInfo<std::net::SocketAddr>>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<ChallengeRequest>,
 ) -> Result<Json<ChallengeResponse>, (StatusCode, String)> {
     let raw = URL_SAFE_NO_PAD
@@ -276,6 +293,12 @@ pub async fn challenge(
         .try_into()
         .map_err(|_| (StatusCode::BAD_REQUEST, "expected 32-byte DH public".into()))?;
 
+    let too_many = (StatusCode::TOO_MANY_REQUESTS, "too many sign-in attempts — wait a little".to_string());
+    if let Some(ip) = crate::client_ip(conn.as_ref(), &headers) {
+        if !state.bot_limits.take(&format!("chal-ip:{ip}"), CHALLENGE_PER_IP.0, CHALLENGE_PER_IP.1) {
+            return Err(too_many);
+        }
+    }
     let (nonce, eph_pub) = state
         .auth
         .issue_nonce(dh_pub)
@@ -512,6 +535,7 @@ mod tests {
     #[test]
     fn pending_is_capped() {
         let auth = Arc::new(AuthState { max_pending: 64, ..Arc::try_unwrap(AuthState::new()).ok().unwrap() });
+        // Taking one frees its slot.
         for i in 0..64u64 {
             let mut k = [0u8; X25519_LEN];
             k[..8].copy_from_slice(&i.to_be_bytes());

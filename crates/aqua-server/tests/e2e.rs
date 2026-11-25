@@ -1555,3 +1555,58 @@ async fn connections_per_address_are_capped() {
     let last = rest.last_mut().unwrap();
     last.send(Message::Ping(Vec::new().into())).await.unwrap();
 }
+
+/// REV-002: one address can't fill the relay's pending challenges for
+/// everyone — past its burst it gets 429, while other addresses still sign in.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn challenges_are_limited_per_address() {
+    spawn_server().await; // the shared test database
+    let state = aqua_server::AppState::new();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, aqua_server::app(state).into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap();
+    });
+    let base = format!("http://{addr}");
+    let http = test_http();
+    let ask = |ip: &'static str| {
+        let http = http.clone();
+        let base = base.clone();
+        async move {
+            let id = IdentityKeyPair::generate();
+            http.post(format!("{base}/v1/auth/challenge"))
+                .header("x-real-ip", ip)
+                .json(&ChallengeRequest { identity_dh_pub: URL_SAFE_NO_PAD.encode(id.public().dh_pub.as_bytes()) })
+                .send().await.unwrap().status().as_u16()
+        }
+    };
+    let mut codes = Vec::new();
+    for _ in 0..(aqua_server::auth::CHALLENGE_PER_IP.0 as usize + 5) {
+        codes.push(ask("203.0.113.7").await);
+    }
+    assert!(codes[..aqua_server::auth::CHALLENGE_PER_IP.0 as usize].iter().all(|c| *c == 200), "{codes:?}");
+    assert_eq!(*codes.last().unwrap(), 429, "the flooding address is slowed down");
+    assert_eq!(ask("198.51.100.9").await, 200, "another address still gets a challenge");
+}
+
+/// REV-003: a banned account's still-valid token gets no one-time prekeys.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn banned_token_gets_no_one_time_prekeys() {
+    let addr = spawn_server().await;
+    let base = format!("http://{addr}");
+    let http = test_http();
+    let mut owner = Client::new("opkowner");
+    owner.login(&http, &base).await;
+    let b = owner.fresh_bundle(5);
+    assert!(http.post(format!("{base}/v1/bundle/opkowner")).bearer_auth(&owner.token).json(&b).send().await.unwrap().status().is_success());
+    let mut bad = Client::new("opkbad");
+    bad.login(&http, &base).await;
+    let got: PreKeyBundle = http.get(format!("{base}/v1/bundle/opkowner")).bearer_auth(&bad.token).send().await.unwrap().json().await.unwrap();
+    assert!(got.one_time_prekey.is_some(), "before the ban");
+    let r = http.post(format!("{base}/v1/users/signup")).bearer_auth(&bad.token)
+        .json(&serde_json::json!({ "username": "opkbad", "password": "a long password 1" })).send().await.unwrap();
+    assert!(r.status().is_success(), "signup: {}", r.status());
+    assert!(aqua_server::directory::Directory::open().unwrap().ban("opkbad").is_some());
+    let got: PreKeyBundle = http.get(format!("{base}/v1/bundle/opkowner")).bearer_auth(&bad.token).send().await.unwrap().json().await.unwrap();
+    assert!(got.one_time_prekey.is_none(), "a banned token takes no one-time prekey");
+}

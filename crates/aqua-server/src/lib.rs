@@ -114,7 +114,7 @@ pub struct BotLimits {
 
 impl BotLimits {
     /// Take one token from bucket `key` (capacity `cap`, `rate` per second).
-    fn take(&self, key: &str, cap: f64, rate: f64) -> bool {
+    pub(crate) fn take(&self, key: &str, cap: f64, rate: f64) -> bool {
         let now = std::time::Instant::now();
         // AQUA-SEC-011: keys are per bot, per bot→recipient and per caller,
         // so the map grew forever. Past a size, drop buckets idle for 10
@@ -528,7 +528,10 @@ async fn fetch_bundle(
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
-        .and_then(|t| state.auth.verify_token(t.trim()).ok());
+        .and_then(|t| state.auth.verify_token(t.trim()).ok())
+        // A banned account keeps an old token for up to an hour: it gets
+        // no one-time prekeys (REV-003, as `Caller` and the WebSocket do).
+        .filter(|dh| !state.directory.is_banned_dh(dh));
     let take_opk = caller.is_some_and(|dh| state.bot_limits.take(&format!("opk:{}", hex::encode(dh)), OPK_BURST, OPK_RATE));
     if let Some(b) = local_bundle_ex(&state, &user, take_opk).await {
         return Ok(Json(b));
@@ -1283,7 +1286,7 @@ fn signups_per_ip() -> u32 {
 
 /// The caller's address: the connection's, or — behind a proxy on this
 /// machine (nginx, Caddy) — the one it passes on.
-fn client_ip(conn: Option<&axum::extract::ConnectInfo<std::net::SocketAddr>>, headers: &axum::http::HeaderMap) -> Option<std::net::IpAddr> {
+pub(crate) fn client_ip(conn: Option<&axum::extract::ConnectInfo<std::net::SocketAddr>>, headers: &axum::http::HeaderMap) -> Option<std::net::IpAddr> {
     let peer = conn.map(|c| c.0.ip())?;
     if peer.is_loopback() {
         let fwd = headers.get("x-real-ip").and_then(|v| v.to_str().ok()).map(str::to_string)
