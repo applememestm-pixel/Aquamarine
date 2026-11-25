@@ -667,6 +667,8 @@
         <div class="row mt">
           <button class="btn" onclick="saveFed()" data-t="Save">Save</button>
           <button class="btn ghost" onclick="genSecret()" data-t="Generate secret">Generate secret</button>
+          <button class="btn ghost" onclick="rotateNodeKey()" data-t="New node key">New node key</button>
+          <span class="muted" id="fNode"></span>
         </div>
         <div class="note" data-t="Saved in aqua-federation.json.">Saved in aqua-federation.json.</div>
         </details>
@@ -833,6 +835,7 @@
     "netText":"Вместе с другими ретрансляторами: аккаунты и резервные копии общие, люди на связи, даже когда один сервер выключен, а сервер с почтой отправляет коды за всех.",
     "soloState":"<b>Один</b> — сервер работает сам по себе","netState":"<b>В сети</b> · других серверов: ",
     "netNoPeers":"<b>В сети</b> — пока один: передайте приглашение админу другого сервера",
+    "nodeKeyLine":"Ключ узла: {id} · ключи знаем у {n} из {m} серверов", "nodeStrict":" · только по ключам", "New node key":"Новый ключ узла", "nodeRotated":"Новый ключ узла отправлен серверам сети.",
     "inNet":"в сети","otherNet":"другой сервер","lan":"локальная сеть","public":"публичный","peerDown":"не отвечает","revLink":"обратный канал","natPeer":"сервер за роутером",
     "noServers":"Других серверов не видно.","joined":"Готово — серверы добавили друг друга.",
     "mailVia":"Почта здесь не настроена — коды отправит сервер сети, у которого она есть. Пароль от почты никуда не передаётся.",
@@ -851,6 +854,7 @@
     copySecret:"Copy this secret to the other servers' panels too, then Save.",
     soloState:"<b>Alone</b> — this server works by itself", netState:"<b>In a network</b> · other servers: ",
     netNoPeers:"<b>In a network</b> — on its own so far: give the invitation to another relay's admin",
+    nodeKeyLine:"Node key: {id} · keys known for {n} of {m} servers", nodeStrict:" · keys only", nodeRotated:"The new node key was sent to the network's servers.",
     inNet:"in the network", otherNet:"separate server", lan:"local network", public:"public", peerDown:"not answering", revLink:"reverse link", natPeer:"server behind a router",
     noServers:"No other servers in sight.", joined:"Done — the relays added each other.",
     mailVia:"No mail here — a relay of the network that has mail sends the codes. The mail password never leaves it.",
@@ -1429,6 +1433,7 @@
     $("mailVia").textContent = net ? T(v.smtp ? "mailHere" : "mailVia") : "";
     $("fSelf").value = v.public_url || v.detected_url || location.origin;
     $("fPeers").value = (v.peers || []).join("\n");
+    $("fNode").textContent = v.node_id ? T("nodeKeyLine").replace("{id}", v.node_id.slice(0, 12)).replace("{n}", (v.pins || []).length).replace("{m}", (v.peers || []).length) + (v.strict ? T("nodeStrict") : "") : "";
     $("fSecret").placeholder = v.has_secret ? (RU ? "•••••••• сохранён — вставьте новый, чтобы заменить" : "•••••••• saved — paste a new one to replace") : T("paste or generate");
     // First open: choose how this relay works.
     $("modeModal").classList.toggle("hide", fedMode !== "");
@@ -1491,6 +1496,13 @@
     $("fSecret").type = "text";
     $("fSecret").value = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
     msg("fMsg", T("copySecret"));
+  }
+  async function rotateNodeKey(){
+    try {
+      await api("/v1/admin/fed/rotate", { method: "POST", body: "{}" });
+      toast(T("nodeRotated"));
+      loadFed();
+    } catch (e) { toast(String(e.message || e)); }
   }
   async function saveFed(){
     const body = { public_url: $("fSelf").value.trim(), peers: $("fPeers").value.split(/\s+/).filter(Boolean), secret: $("fSecret").value.trim() || null };

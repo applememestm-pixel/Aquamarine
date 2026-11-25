@@ -1993,7 +1993,39 @@ async fn admin_get_fed(State(state): State<AppState>, headers: axum::http::Heade
         "peers": c.peers,
         "public_url": c.public_url,
         "detected_url": crate::public::url(),
+        // Node keys (AQUA-SEC-009): ours, the peers' we know, revoked ids,
+        // and whether secret-only requests are refused already.
+        "node_id": fed::registry(&state).map(|f| f.node_id()),
+        "pins": c.pins.iter().map(|p| serde_json::json!({ "url": p.url, "id": p.id })).collect::<Vec<_>>(),
+        "revoked": c.revoked,
+        "strict": fed::registry(&state).is_some_and(|f| f.strict()),
     })))
+}
+
+/// `POST /v1/admin/fed/rotate` — a new node key, announced to the peers
+/// signed by the old one.
+async fn admin_fed_rotate(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    admin_authed(&state, &headers).map_err(|s| (s, String::new()))?;
+    let id = fed::rotate_key(&state).await.ok_or((StatusCode::CONFLICT, "not in a network".to_string()))?;
+    journal::log("admin", "fed-rotate", &id);
+    Ok(Json(serde_json::json!({ "node_id": id })))
+}
+
+#[derive(Deserialize)]
+struct FedRevoke { id: String }
+
+/// `POST /v1/admin/fed/revoke {id}` — never accept this relay's node key again.
+async fn admin_fed_revoke(State(state): State<AppState>, headers: axum::http::HeaderMap, Json(b): Json<FedRevoke>) -> Result<StatusCode, (StatusCode, String)> {
+    admin_authed(&state, &headers).map_err(|s| (s, String::new()))?;
+    let id = b.id.trim().to_lowercase();
+    if id.len() != 32 || !id.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err((StatusCode::BAD_REQUEST, "a node id is 32 hex digits".into()));
+    }
+    if !fed::revoke(&state, &id) {
+        return Err((StatusCode::CONFLICT, "not in a network".into()));
+    }
+    journal::log("admin", "fed-revoke", &id);
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
@@ -3688,6 +3720,8 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/admin/fed/join", post(admin_fed_join))
         .route("/v1/admin/servers", get(admin_servers))
         .route("/v1/admin/federation", get(admin_get_fed).post(admin_set_fed))
+        .route("/v1/admin/fed/rotate", post(admin_fed_rotate))
+        .route("/v1/admin/fed/revoke", post(admin_fed_revoke))
         .route("/v1/bundle/:user",   post(upload_bundle).get(fetch_bundle))
         .route("/v1/ws",             get(ws_upgrade))
         // Telegram Bot API: /bot<token>/<method> (see tgapi.rs).

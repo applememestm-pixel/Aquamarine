@@ -457,3 +457,59 @@ async fn equal_timestamps_across_pages_are_not_skipped() {
     fed::sync_once(&sb, &mut Default::default()).await;
     assert_eq!(on_b(&sb), N, "a fresh start (restart) reads them again without loss");
 }
+
+/// AQUA-SEC-009 end to end: after A and B say hello they know each other's
+/// node keys and talk with v2 signatures; a third party that knows only the
+/// shared secret can no longer read B's accounts. A key change on A moves
+/// B's pin; revoking A on B shuts A out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn node_keys_replace_the_shared_secret_once_known() {
+    let la = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let lb = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (a, b) = (la.local_addr().unwrap().to_string(), lb.local_addr().unwrap().to_string());
+    let (ua, ub) = (format!("http://{a}"), format!("http://{b}"));
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = |me: &str, peer: &str| FedConfig { secret: SECRET.into(), peers: vec![peer.into()], public_url: me.into(), mode: "network".into(), ..Default::default() };
+    let sa = AppState::isolated(tmp.path().join("a"), Some(cfg(&ua, &ub)));
+    let sb = AppState::isolated(tmp.path().join("b"), Some(cfg(&ub, &ua)));
+    { let s = sa.clone(); tokio::spawn(async move { axum::serve(la, app(s)).await.unwrap() }); }
+    { let s = sb.clone(); tokio::spawn(async move { axum::serve(lb, app(s)).await.unwrap() }); }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    let id = IdentityKeyPair::generate();
+    let tb = register(&http, &ub, &id, "keyed").await;
+    let spk = SignedPreKey::generate(1, &id);
+    let up = BundleUpload { identity: id.public(), signed_prekey: spk.public(), one_time_prekeys: vec![] };
+    assert!(http.post(format!("{ub}/v1/bundle/keyed")).bearer_auth(&tb).json(&up).send().await.unwrap().status().is_success());
+
+    // Hellos both ways: each pins the other.
+    fed::current(&sa).unwrap().hello_all().await;
+    for _ in 0..50 {
+        if fed::current(&sa).unwrap().strict() && fed::current(&sb).unwrap().strict() { break }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(fed::current(&sb).unwrap().strict(), "B knows A's key");
+    assert!(fed::current(&sa).unwrap().strict(), "A knows B's key (B said hello back)");
+    assert!(fed::current(&sa).unwrap().fetch_bundle("keyed").await.is_some(), "A reads through v2");
+
+    // Someone with only the secret (a relay of its own at another address).
+    let lx = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ux = format!("http://{}", lx.local_addr().unwrap());
+    let sx = AppState::isolated(tmp.path().join("x"), Some(cfg(&ux, &ub)));
+    { let s = sx.clone(); tokio::spawn(async move { axum::serve(lx, app(s)).await.unwrap() }); }
+    assert!(fed::current(&sx).unwrap().fetch_bundle("keyed").await.is_none(), "secret alone isn't enough any more");
+    assert!(sx.directory.identity_for("keyed").is_none());
+
+    // A changes its key: B moves its pin, A still gets through.
+    let old = fed::current(&sa).unwrap().node_id();
+    let new = fed::rotate_key(&sa).await.unwrap();
+    assert_ne!(old, new);
+    let pinned = |s: &AppState| fed::current(s).unwrap().pin_for(&ua).map(|p| p.id.clone());
+    for _ in 0..50 { if pinned(&sb).as_deref() == Some(new.as_str()) { break } tokio::time::sleep(Duration::from_millis(50)).await; }
+    assert_eq!(pinned(&sb).as_deref(), Some(new.as_str()), "B follows the signed key change");
+    assert!(fed::current(&sa).unwrap().fetch_bundle("keyed").await.is_some());
+
+    // B revokes A's node id: A is out.
+    assert!(fed::revoke(&sb, &new));
+    assert!(fed::current(&sa).unwrap().fetch_bundle("keyed").await.is_none(), "a revoked node is refused");
+}

@@ -7,6 +7,20 @@
 //! x-aqua-fed: <unix ms>.<hex HMAC-SHA256(secret, METHOD \n PATH \n ms \n SHA256(body))>
 //! ```
 //!
+//! Since 1.21.0-23 (AQUA-SEC-009) each relay also has its own Ed25519 node
+//! key. Relays learn each other's keys from signed hellos and keep them
+//! (`FedConfig::pins`); a request to a relay whose key we know carries
+//!
+//! ```text
+//! x-aqua-fed2: <unix ms>.<nonce hex>.<sender id>.<recipient id>.<hex Ed25519 sig>
+//!   over "aqua-fed-v2\nMETHOD\nPATH\nms\nnonce\nsender\nrecipient\nSHA256(body)"
+//! ```
+//!
+//! — bound to sender and recipient, taken once. Once every peer's key is
+//! known ("strict"), a request signed only with the shared secret is
+//! refused except for hello / ping / the name registry: knowing the secret
+//! no longer lets anyone speak as a relay of the network.
+//!
 //! What they do together:
 //! * accounts, public profiles, profile media and encrypted backups
 //!   replicate between all relays: a relay that changes something pokes
@@ -37,6 +51,24 @@ use sha2::{Digest, Sha256};
 use crate::{AppState, RelayMessage};
 
 const FILE: &str = "aqua-federation.json";
+/// This relay's node key when the config file doesn't hold it.
+const NODE_KEY_FILE: &str = "aqua-fed-node.key";
+
+/// Write a file only its owner can read (the node key).
+fn write_private(path: &str, text: &str) {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        if let Ok(mut f) = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path) {
+            let _ = f.write_all(text.as_bytes());
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = std::fs::write(path, text);
+    }
+}
 const SKEW_MS: i64 = 5 * 60 * 1000;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -64,6 +96,35 @@ pub struct FedConfig {
     /// Kept in memory only (tests): peers learnt later aren't written to disk.
     #[serde(skip)]
     pub ephemeral: bool,
+    /// This relay's Ed25519 node key (secret, hex). Made on first start.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub node_key: String,
+    /// Keys of peer relays, learnt from their signed hellos.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pins: Vec<Pin>,
+    /// Node ids the admin revoked: never accepted again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub revoked: Vec<String>,
+    /// After a key change: the new public key signed by the old one, sent
+    /// with hellos so peers move their pin.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub rotated: String,
+}
+
+/// A peer relay's node key as we keep it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Pin {
+    /// How we reach it (its address or `tunnel:<node>`).
+    pub url: String,
+    /// Its node id (`node_id_of(key)`).
+    pub id: String,
+    /// Its Ed25519 public key, hex.
+    pub key: String,
+}
+
+/// A node id: the first 16 bytes of SHA-256 of the public key, hex.
+pub fn node_id_of(pubkey: &[u8; 32]) -> String {
+    hex::encode(&Sha256::digest(pubkey)[..16])
 }
 
 impl FedConfig {
@@ -80,6 +141,16 @@ impl FedConfig {
             if !u.trim().is_empty() { c.public_url = u.trim().trim_end_matches('/').to_string(); }
         }
         c.peers.retain(|p| !p.is_empty() && p.trim_end_matches('/') != c.public_url);
+        // The node key must outlive restarts even when the network is set by
+        // environment variables (no config file): a new key at every start
+        // would look like an impostor to peers that pinned the old one.
+        if c.node_key.is_empty() {
+            c.node_key = std::fs::read_to_string(NODE_KEY_FILE).ok().map(|s| s.trim().to_string()).filter(|s| s.len() == 64).unwrap_or_else(|| {
+                let k = hex::encode(aqua_core::crypto::SignSecret::generate().to_bytes());
+                write_private(NODE_KEY_FILE, &k);
+                k
+            });
+        }
         if c.node.is_empty() {
             let mut b = [0u8; 8];
             rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut b);
@@ -91,6 +162,10 @@ impl FedConfig {
         c
     }
     pub fn save(&self) -> std::io::Result<()> {
+        // The node key (after a rotation) is kept where `load` reads it.
+        if !self.node_key.is_empty() {
+            write_private(NODE_KEY_FILE, &self.node_key);
+        }
         std::fs::write(FILE, serde_json::to_vec_pretty(self).unwrap_or_default())
     }
     /// In a network: a secret is set (peers may still be on their way —
@@ -207,6 +282,7 @@ fn is_down(peer: &str) -> bool {
 pub struct Fed {
     pub cfg: FedConfig,
     http: reqwest::Client,
+    key: aqua_core::crypto::SignSecret,
 }
 
 pub type FedSlot = Arc<std::sync::RwLock<Option<Arc<Fed>>>>;
@@ -219,27 +295,112 @@ fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
+fn v2_message(method: &str, path: &str, ts: i64, nonce: &str, from: &str, to: &str, body: &[u8]) -> String {
+    format!("aqua-fed-v2\n{method}\n{path}\n{ts}\n{nonce}\n{from}\n{to}\n{}", hex::encode(Sha256::digest(body)))
+}
+
 fn mac(secret: &str, method: &str, path: &str, ts: i64, body: &[u8]) -> String {
     let msg = format!("{method}\n{path}\n{ts}\n{}", hex::encode(Sha256::digest(body)));
     hex::encode(aqua_core::crypto::hmac_sha256(secret.as_bytes(), msg.as_bytes()))
 }
 
 impl Fed {
-    pub fn new(cfg: FedConfig) -> Option<Arc<Self>> {
+    pub fn new(mut cfg: FedConfig) -> Option<Arc<Self>> {
         if !cfg.active() && !cfg.registry() {
             return None;
         }
+        // A config made in memory (tests, the panel before saving): a key now.
+        let key = hex::decode(&cfg.node_key).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()).map(aqua_core::crypto::SignSecret::from_bytes);
+        let key = match key {
+            Some(k) => k,
+            None => {
+                let k = aqua_core::crypto::SignSecret::generate();
+                cfg.node_key = hex::encode(k.to_bytes());
+                k
+            }
+        };
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
             .user_agent(concat!("aqua-server/", env!("CARGO_PKG_VERSION")))
             .build()
             .ok()?;
-        Some(Arc::new(Self { cfg, http }))
+        Some(Arc::new(Self { cfg, http, key }))
     }
 
     /// The `x-aqua-fed` header for a request (fedtunnel.rs signs its polls).
     pub fn sign(&self, method: &str, path: &str, body: &[u8]) -> String {
         self.header(method, path, body)
+    }
+
+    /// This relay's node id and public key (hex).
+    pub fn node_id(&self) -> String {
+        node_id_of(self.key.public().as_bytes())
+    }
+    pub fn node_pub(&self) -> String {
+        hex::encode(self.key.public().as_bytes())
+    }
+
+    /// The key we keep for `peer` (by address), if any.
+    pub fn pin_for(&self, peer: &str) -> Option<&Pin> {
+        let peer = peer.trim_end_matches('/');
+        self.cfg.pins.iter().find(|p| p.url == peer)
+    }
+
+    /// Every configured peer's key is known: requests signed only with the
+    /// shared secret are refused (except hello / ping / names).
+    pub fn strict(&self) -> bool {
+        // Also after the last keyed peer was revoked (pins of others or the
+        // revocation list remain): a revoked relay can't step back to the secret.
+        (!self.cfg.pins.is_empty() || !self.cfg.revoked.is_empty()) && self.cfg.peers.iter().all(|p| self.pin_for(p).is_some())
+    }
+
+    /// The `x-aqua-fed2` header for a request to `peer`, when we know its key.
+    pub fn sign2(&self, peer: &str, method: &str, path: &str, body: &[u8]) -> Option<String> {
+        let to = self.pin_for(peer)?.id.clone();
+        let mut n = [0u8; 12];
+        rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut n);
+        let nonce = hex::encode(n);
+        let ts = now_ms();
+        let from = self.node_id();
+        let sig = self.key.sign(v2_message(method, path, ts, &nonce, &from, &to, body).as_bytes());
+        Some(format!("{ts}.{nonce}.{from}.{to}.{}", hex::encode(sig)))
+    }
+
+    /// Check an `x-aqua-fed2` header: `Some(sender id)` when it's good.
+    fn verify2(&self, h: &str, method: &str, path: &str, body: &[u8]) -> Option<String> {
+        let mut it = h.splitn(5, '.');
+        let (ts, nonce, from, to, sig) = (it.next()?, it.next()?, it.next()?, it.next()?, it.next()?);
+        let ts: i64 = ts.parse().ok()?;
+        if (now_ms() - ts).abs() > SKEW_MS || to != self.node_id() || self.cfg.revoked.iter().any(|r| r == from) {
+            return None;
+        }
+        let pin = self.cfg.pins.iter().find(|p| p.id == from)?;
+        let key: [u8; 32] = hex::decode(&pin.key).ok()?.try_into().ok()?;
+        let sig: [u8; 64] = hex::decode(sig).ok()?.try_into().ok()?;
+        aqua_core::crypto::SignPublic::from_bytes(key)
+            .verify(v2_message(method, path, ts, nonce, from, to, body).as_bytes(), &sig)
+            .ok()?;
+        first_use(&format!("v2:{from}:{nonce}"), ts).then(|| from.to_string())
+    }
+
+    /// Add both signatures to a request to `peer`.
+    fn signed(&self, rb: reqwest::RequestBuilder, peer: &str, method: &str, path: &str, body: &[u8]) -> reqwest::RequestBuilder {
+        let rb = rb.header("x-aqua-fed", self.header(method, path, body));
+        match self.sign2(peer, method, path, body) {
+            Some(s) => rb.header("x-aqua-fed2", s),
+            None => rb,
+        }
+    }
+
+    /// What a hello carries about this relay's key: its public key, a
+    /// signature by it over our address and key (so nobody passes off a key
+    /// they don't hold), and — after a key change — the new key signed by
+    /// the old one.
+    pub fn hello_key_fields(&self) -> serde_json::Value {
+        let url = my_id(&self.cfg);
+        let key = self.node_pub();
+        let sig = hex::encode(self.key.sign(format!("aqua-fed-hello\n{url}\n{key}").as_bytes()));
+        serde_json::json!({ "node_key": key, "node_sig": sig, "rotated": self.cfg.rotated })
     }
 
     /// Over the peer's reverse link, when that's the way to it: it has no
@@ -250,7 +411,8 @@ impl Fed {
             return None;
         }
         let sig = self.header(method, path, body);
-        let r = crate::fedtunnel::request(peer, method, path, body.to_vec(), sig, wait).await;
+        let sig2 = self.sign2(peer, method, path, body).unwrap_or_default();
+        let r = crate::fedtunnel::request(peer, method, path, body.to_vec(), sig, sig2, wait).await;
         Some(r.filter(|r| r.status().is_success()))
     }
 
@@ -267,6 +429,27 @@ impl Fed {
     }
 
     pub fn verify(&self, headers: &HeaderMap, method: &str, path: &str, body: &[u8]) -> bool {
+        // A relay whose key we know signs with it (AQUA-SEC-009).
+        // A sender we don't know yet (it learnt our key first) falls back to
+        // the shared secret below, like a relay without keys; a known
+        // sender with a bad v2 signature is refused.
+        if let Some(h2) = headers.get("x-aqua-fed2").and_then(|v| v.to_str().ok()) {
+            let from = h2.split('.').nth(2).unwrap_or("");
+            if self.cfg.revoked.iter().any(|r| r == from) {
+                return false;
+            }
+            if self.cfg.pins.iter().any(|p| p.id == from) {
+                return self.verify2(h2, method, path, body).is_some();
+            }
+        }
+        // Only the shared secret: fine while we don't know every peer's key
+        // (older relays), and always for introducing oneself.
+        let base = path.split('?').next().unwrap_or(path);
+        let intro = matches!(base, "/v1/fed/hello" | "/v1/fed/ping" | "/v1/fed/names" | "/v1/fed/names/hello");
+        if self.strict() && !intro {
+            tracing::warn!(%path, "federation: a request signed only with the shared secret — refused (every peer has a key)");
+            return false;
+        }
         let Some(h) = headers.get("x-aqua-fed").and_then(|v| v.to_str().ok()) else { return false };
         let Some((ts, sig)) = h.split_once('.') else { return false };
         let Ok(ts) = ts.parse::<i64>() else { return false };
@@ -318,7 +501,7 @@ impl Fed {
         if !self.modern(peer).await {
             return self.tunnel_fallback(peer, "GET", path, b"").await;
         }
-        match self.http.get(format!("{peer}{path}")).header("x-aqua-fed", self.header("GET", path, b"")).send().await {
+        match self.signed(self.http.get(format!("{peer}{path}")), peer, "GET", path, b"").send().await {
             Ok(r) => r.status().is_success().then_some(r),
             Err(_) => { mark_down(peer); self.tunnel_fallback(peer, "GET", path, b"").await }
         }
@@ -331,8 +514,7 @@ impl Fed {
         if !self.modern(peer).await {
             return self.tunnel_fallback(peer, "POST", path, &body).await;
         }
-        let sent = self.http.post(format!("{peer}{path}"))
-            .header("x-aqua-fed", self.header("POST", path, &body))
+        let sent = self.signed(self.http.post(format!("{peer}{path}")), peer, "POST", path, &body)
             .header("content-type", "application/json")
             .timeout(Duration::from_secs(4))
             .body(body.clone()).send().await;
@@ -345,8 +527,7 @@ impl Fed {
     /// A signed POST to one peer with its answer as is — status and text,
     /// errors included (stars.rs passes the star relay's own message on).
     pub async fn post_answer(&self, peer: &str, path: &str, body: Vec<u8>) -> Option<(u16, String)> {
-        let sent = self.http.post(format!("{peer}{path}"))
-            .header("x-aqua-fed", self.header("POST", path, &body))
+        let sent = self.signed(self.http.post(format!("{peer}{path}")), peer, "POST", path, &body)
             .header("content-type", "application/json")
             .timeout(Duration::from_secs(10))
             .body(body.clone()).send().await;
@@ -367,7 +548,8 @@ impl Fed {
         }
         mark_down(peer);
         let sig = self.header(method, path, body);
-        crate::fedtunnel::request(peer, method, path, body.to_vec(), sig, Duration::from_secs(30)).await.filter(|r| r.status().is_success())
+        let sig2 = self.sign2(peer, method, path, body).unwrap_or_default();
+        crate::fedtunnel::request(peer, method, path, body.to_vec(), sig, sig2, Duration::from_secs(30)).await.filter(|r| r.status().is_success())
     }
 
     /// Try to hand an envelope to whichever peer has the recipient online.
@@ -390,7 +572,9 @@ impl Fed {
     /// Returns relays that were new to us.
     pub async fn hello_all(&self) -> Vec<String> {
         let me = my_id(&self.cfg);
-        let body = serde_json::to_vec(&serde_json::json!({ "url": me, "peers": self.cfg.peers })).unwrap_or_default();
+        let mut hello = serde_json::json!({ "url": me, "peers": self.cfg.peers });
+        if let (Some(o), serde_json::Value::Object(k)) = (hello.as_object_mut(), self.hello_key_fields()) { o.extend(k); }
+        let body = serde_json::to_vec(&hello).unwrap_or_default();
         let tries = self.cfg.peers.iter().map(|p| {
             let body = body.clone();
             async move {
@@ -408,6 +592,13 @@ impl Fed {
         known
     }
 
+    /// Say hello to one relay (after learning its key: so it learns ours).
+    pub async fn hello_to(&self, peer: &str) {
+        let mut hello = serde_json::json!({ "url": my_id(&self.cfg), "peers": self.cfg.peers });
+        if let (Some(o), serde_json::Value::Object(k)) = (hello.as_object_mut(), self.hello_key_fields()) { o.extend(k); }
+        let _ = self.post(peer, "/v1/fed/hello", serde_json::to_vec(&hello).unwrap_or_default()).await;
+    }
+
     /// Is `url` a relay of this network (does it accept our signature)?
     pub async fn same_network(&self, url: &str) -> bool {
         self.get(url.trim_end_matches('/'), "/v1/fed/ping").await.is_some()
@@ -418,8 +609,7 @@ impl Fed {
     pub async fn send_mail(&self, to: &str, code: &str, link: Option<&str>) -> bool {
         let body = serde_json::to_vec(&serde_json::json!({ "to": to, "code": code, "link": link })).unwrap_or_default();
         for p in &self.cfg.peers {
-            let r = self.http.post(format!("{p}/v1/fed/mail"))
-                .header("x-aqua-fed", self.header("POST", "/v1/fed/mail", &body))
+            let r = self.signed(self.http.post(format!("{p}/v1/fed/mail")), p, "POST", "/v1/fed/mail", &body)
                 .header("content-type", "application/json")
                 .timeout(Duration::from_secs(50))
                 .body(body.clone()).send().await;
@@ -513,8 +703,7 @@ impl Fed {
     pub(crate) async fn blob_response(&self, peer: &str, cid: &str) -> Option<reqwest::Response> {
         let path = format!("/v1/fed/blob/{cid}");
         if self.modern(peer).await {
-            if let Ok(response) = self.http.get(format!("{peer}{path}"))
-                .header("x-aqua-fed", self.header("GET", &path, b""))
+            if let Ok(response) = self.signed(self.http.get(format!("{peer}{path}")), peer, "GET", &path, b"")
                 .timeout(Duration::from_secs(1200)).send().await {
                 return response.status().is_success().then_some(response);
             }
@@ -941,7 +1130,15 @@ impl Fed {
 }
 
 #[derive(Deserialize)]
-pub struct Hello { url: String, #[serde(default)] peers: Vec<String> }
+pub struct Hello {
+    pub(crate) url: String,
+    #[serde(default)] peers: Vec<String>,
+    /// Its node key (hex), a signature by it over url and key, and after a
+    /// key change the new key signed by the old one (1.21.0-23).
+    #[serde(default)] node_key: String,
+    #[serde(default)] node_sig: String,
+    #[serde(default)] rotated: String,
+}
 
 /// A relay of the network says hello: it's added to our peers if new, and
 /// gets the list of relays we know (that's how they find each other).
@@ -960,6 +1157,15 @@ pub async fn h_hello(State(state): State<AppState>, headers: HeaderMap, body: By
     let fed = check(&state, &headers, "POST", "/v1/fed/hello", &body)?;
     let h: Hello = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
     crate::journal::visitor(h.url.trim_end_matches('/'), "relay");
+    if let Some(pin) = pin_from_hello(&fed, &h) {
+        let url = pin.url.clone();
+        if set_pin(&state, pin) {
+            // It now knows... not yet our key: tell it, so it can sign too.
+            if let Some(f) = current(&state) {
+                tokio::spawn(async move { f.hello_to(&url).await; });
+            }
+        }
+    }
     let mut urls = vec![h.url];
     urls.extend(h.peers);
     let st = state.clone();
@@ -975,6 +1181,88 @@ pub async fn h_hello(State(state): State<AppState>, headers: HeaderMap, body: By
         if !add_peers(&st, &ok).is_empty() { st.fed_kick.notify_one(); }
     });
     Ok(Json(serde_json::json!({ "self": my_id(&fed.cfg), "peers": fed.cfg.peers })))
+}
+
+/// The key a hello brings, when it may be kept (pinned):
+/// * it must be signed by itself over the sender's address (possession);
+/// * a relay we know under another key moves only with that key's
+///   signature over the new one (`rotated`); otherwise it's refused;
+/// * revoked node ids never come back.
+fn pin_from_hello(fed: &Fed, h: &Hello) -> Option<Pin> {
+    let url = h.url.trim().trim_end_matches('/').to_string();
+    let key: [u8; 32] = hex::decode(h.node_key.trim()).ok()?.try_into().ok()?;
+    let sig: [u8; 64] = hex::decode(h.node_sig.trim()).ok()?.try_into().ok()?;
+    let pubk = aqua_core::crypto::SignPublic::from_bytes(key);
+    pubk.verify(format!("aqua-fed-hello\n{url}\n{}", hex::encode(key)).as_bytes(), &sig).ok()?;
+    let id = node_id_of(&key);
+    if fed.cfg.revoked.contains(&id) {
+        tracing::warn!(%url, %id, "federation: hello from a revoked node key — ignored");
+        return None;
+    }
+    let pin = Pin { url: url.clone(), id, key: hex::encode(key) };
+    match fed.pin_for(&url) {
+        None => Some(pin),
+        Some(old) if old.key == pin.key => None,
+        Some(old) => {
+            let ok = hex::decode(&old.key).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()).zip(hex::decode(h.rotated.trim()).ok().and_then(|b| <[u8; 64]>::try_from(b).ok()))
+                .is_some_and(|(ok, rs)| aqua_core::crypto::SignPublic::from_bytes(ok).verify(format!("aqua-fed-rotate\n{}", pin.key).as_bytes(), &rs).is_ok());
+            if ok {
+                tracing::info!(%url, "federation: a peer changed its node key (signed by the old one)");
+                Some(pin)
+            } else {
+                tracing::warn!(%url, "federation: a hello with ANOTHER node key and no signature by the known one — ignored");
+                None
+            }
+        }
+    }
+}
+
+/// Keep `pin` (replacing the one for its address). True when it changed.
+pub fn set_pin(state: &AppState, pin: Pin) -> bool {
+    let Some(cur) = registry(state) else { return false };
+    let mut c = cur.cfg.clone();
+    if c.pins.iter().any(|p| *p == pin) { return false; }
+    c.pins.retain(|p| p.url != pin.url);
+    c.pins.push(pin);
+    if c.ephemeral || c.save().is_ok() {
+        let next = Fed::new(c);
+        if let Ok(mut g) = state.fed.write() { *g = next; }
+        return true;
+    }
+    false
+}
+
+/// Admin: a new node key. The old one signs the new one; hellos carry that,
+/// so peers move their pins. Returns the new node id.
+pub async fn rotate_key(state: &AppState) -> Option<String> {
+    let cur = registry(state)?;
+    let new = aqua_core::crypto::SignSecret::generate();
+    let new_pub = hex::encode(new.public().as_bytes());
+    let mut c = cur.cfg.clone();
+    c.rotated = hex::encode(cur.key.sign(format!("aqua-fed-rotate\n{new_pub}").as_bytes()));
+    c.node_key = hex::encode(new.to_bytes());
+    if !(c.ephemeral || c.save().is_ok()) { return None; }
+    let next = Fed::new(c)?;
+    let id = next.node_id();
+    if let Ok(mut g) = state.fed.write() { *g = Some(next.clone()); }
+    for p in next.cfg.peers.clone() { next.hello_to(&p).await; }
+    Some(id)
+}
+
+/// Admin: never accept this node id again (and drop its pin and address).
+pub fn revoke(state: &AppState, id: &str) -> bool {
+    let Some(cur) = registry(state) else { return false };
+    let mut c = cur.cfg.clone();
+    let urls: Vec<String> = c.pins.iter().filter(|p| p.id == id).map(|p| p.url.clone()).collect();
+    c.pins.retain(|p| p.id != id);
+    c.peers.retain(|p| !urls.contains(p));
+    if !c.revoked.iter().any(|r| r == id) { c.revoked.push(id.to_string()); }
+    if c.ephemeral || c.save().is_ok() {
+        let next = Fed::new(c);
+        if let Ok(mut g) = state.fed.write() { *g = next; }
+        return true;
+    }
+    false
 }
 
 /// "Do you accept our signature?" — 204 for relays of the same network.
@@ -1351,6 +1639,94 @@ pub async fn remote_webapp_init(state: &AppState, bot: &str, user: &str, start_p
 
 #[cfg(test)]
 mod cursor_tests {
+
+    fn fed(url: &str) -> std::sync::Arc<super::Fed> {
+        super::Fed::new(super::FedConfig { secret: "a-long-shared-federation-secret".into(), peers: vec![], public_url: url.into(), mode: "network".into(), ephemeral: true, ..Default::default() }).unwrap()
+    }
+    fn with_pins(f: &super::Fed, pins: Vec<super::Pin>, peers: Vec<String>) -> std::sync::Arc<super::Fed> {
+        let mut c = f.cfg.clone();
+        c.pins = pins;
+        c.peers = peers;
+        super::Fed::new(c).unwrap()
+    }
+    fn pin_of(f: &super::Fed, url: &str) -> super::Pin {
+        super::Pin { url: url.into(), id: f.node_id(), key: f.node_pub() }
+    }
+
+    /// AQUA-SEC-009: a v2 signature is bound to its recipient and path and
+    /// is taken once; a relay that knows every peer's key refuses requests
+    /// signed only with the shared secret (except introductions).
+    #[test]
+    fn node_signatures_bind_recipient_and_refuse_secret_only() {
+        let (a, b, c) = (fed("http://a"), fed("http://b"), fed("http://c"));
+        let a = with_pins(&a, vec![pin_of(&b, "http://b"), pin_of(&c, "http://c")], vec!["http://b".into(), "http://c".into()]);
+        let b = with_pins(&b, vec![pin_of(&a, "http://a")], vec!["http://a".into()]);
+        let c = with_pins(&c, vec![pin_of(&a, "http://a")], vec!["http://a".into()]);
+        let mut h = axum::http::HeaderMap::new();
+        h.insert("x-aqua-fed2", a.sign2("http://b", "GET", "/v1/fed/users?since=0", b"").unwrap().parse().unwrap());
+        // The same signature at C (another recipient): refused.
+        assert!(!c.verify(&h, "GET", "/v1/fed/users?since=0", b""), "signed for B, not for C");
+        // At B, for another path: refused; for its path: once.
+        assert!(!b.verify(&h, "GET", "/v1/fed/backups?since=0", b""));
+        assert!(b.verify(&h, "GET", "/v1/fed/users?since=0", b""));
+        assert!(!b.verify(&h, "GET", "/v1/fed/users?since=0", b""), "replayed");
+        // Only the shared secret: B knows all its peers' keys → refused,
+        // except for hello / ping.
+        assert!(b.strict());
+        let mut s = axum::http::HeaderMap::new();
+        s.insert("x-aqua-fed", a.header("GET", "/v1/fed/users?since=0", b"").parse().unwrap());
+        assert!(!b.verify(&s, "GET", "/v1/fed/users?since=0", b""));
+        let mut p = axum::http::HeaderMap::new();
+        p.insert("x-aqua-fed", a.header("GET", "/v1/fed/ping", b"").parse().unwrap());
+        assert!(b.verify(&p, "GET", "/v1/fed/ping", b""));
+        // A known sender id with a forged signature: refused.
+        let forged = fed("http://evil");
+        let evil = with_pins(&forged, vec![super::Pin { url: "http://b".into(), id: b.node_id(), key: b.node_pub() }], vec![]);
+        let fake = evil.sign2("http://b", "GET", "/v1/fed/users?since=0", b"").unwrap().replacen(&evil.node_id(), &a.node_id(), 1);
+        let mut f2 = axum::http::HeaderMap::new();
+        f2.insert("x-aqua-fed2", fake.parse().unwrap());
+        assert!(!b.verify(&f2, "GET", "/v1/fed/users?since=0", b""), "a known id with another key's signature");
+    }
+
+    /// A hello pins a self-signed key; another key for the same address
+    /// moves the pin only with the old key's signature; revoked ids stay out.
+    #[test]
+    fn hello_pins_rotate_only_when_signed_by_the_old_key() {
+        let (a, b) = (fed("http://a"), fed("http://b"));
+        let hello = |f: &super::Fed| -> super::Hello {
+            let mut v = serde_json::json!({ "url": super::my_id(&f.cfg), "peers": [] });
+            if let (Some(o), serde_json::Value::Object(k)) = (v.as_object_mut(), f.hello_key_fields()) { o.extend(k); }
+            serde_json::from_value(v).unwrap()
+        };
+        let pin = super::pin_from_hello(&b, &hello(&a)).expect("first key is pinned");
+        assert_eq!(pin.id, a.node_id());
+        let b = with_pins(&b, vec![pin.clone()], vec!["http://a".into()]);
+        assert!(super::pin_from_hello(&b, &hello(&a)).is_none(), "same key: nothing to change");
+        // An impostor at A's address with its own key: refused.
+        let imp = fed("http://a");
+        assert!(super::pin_from_hello(&b, &hello(&imp)).is_none());
+        // A real rotation: the old key signs the new one.
+        let new = aqua_core::crypto::SignSecret::generate();
+        let mut c = a.cfg.clone();
+        c.rotated = hex::encode(a.key.sign(format!("aqua-fed-rotate\n{}", hex::encode(new.public().as_bytes())).as_bytes()));
+        c.node_key = hex::encode(new.to_bytes());
+        let a2 = super::Fed::new(c).unwrap();
+        let moved = super::pin_from_hello(&b, &hello(&a2)).expect("signed rotation is accepted");
+        assert_eq!(moved.id, a2.node_id());
+        // Revoked: never again.
+        let mut rc = b.cfg.clone();
+        rc.revoked.push(a2.node_id());
+        let b2 = super::Fed::new(rc).unwrap();
+        assert!(super::pin_from_hello(&b2, &hello(&a2)).is_none());
+    }
+
+    #[test]
+    fn a_signature_is_taken_once() {
+        let ts = super::now_ms();
+        assert!(super::first_use("sig-a", ts));
+        assert!(!super::first_use("sig-a", ts), "replayed");
+        assert!(super::first_use("sig-b", ts));
+    }
 
     #[test]
     fn cursor_queries_encode_the_key() {

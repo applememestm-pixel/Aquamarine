@@ -50,6 +50,9 @@ pub struct WireReq {
     pub body: String,
     /// The `x-aqua-fed` signature, made by the asking relay.
     pub sig: String,
+    /// The `x-aqua-fed2` signature (1.21.0-23), when it knows our key.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sig2: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -97,13 +100,13 @@ pub fn list() -> Vec<(String, String)> {
 }
 
 /// Send one signed request to `peer` over its reverse link.
-pub async fn request(peer: &str, method: &str, path: &str, body: Vec<u8>, sig: String, wait: Duration) -> Option<reqwest::Response> {
+pub async fn request(peer: &str, method: &str, path: &str, body: Vec<u8>, sig: String, sig2: String, wait: Duration) -> Option<reqwest::Response> {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let s = side(peer)?;
     let rid = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let (tx, rx) = oneshot::channel();
     s.waiters.lock().ok()?.insert(rid, tx);
-    s.queue.lock().ok()?.push_back(WireReq { rid, method: method.into(), path: path.into(), body: B64.encode(&body), sig });
+    s.queue.lock().ok()?.push_back(WireReq { rid, method: method.into(), path: path.into(), body: B64.encode(&body), sig, sig2 });
     s.notify.notify_waiters();
     let reply = match tokio::time::timeout(wait, rx).await {
         Ok(Ok(r)) => r,
@@ -237,8 +240,10 @@ async fn poll_loop(state: &AppState, peer: &str, router: axum::Router) {
             "addr": crate::public::unverified(),
             "v": env!("CARGO_PKG_VERSION"),
         })).unwrap_or_default();
-        let r = http.post(format!("{peer}/v1/fed/tunnel"))
-            .header("x-aqua-fed", fed.sign("POST", "/v1/fed/tunnel", &body))
+        let mut rb = http.post(format!("{peer}/v1/fed/tunnel"))
+            .header("x-aqua-fed", fed.sign("POST", "/v1/fed/tunnel", &body));
+        if let Some(s2) = fed.sign2(peer, "POST", "/v1/fed/tunnel", &body) { rb = rb.header("x-aqua-fed2", s2); }
+        let r = rb
             .header("content-type", "application/json")
             .timeout(Duration::from_secs(40))
             .body(body)
@@ -261,8 +266,10 @@ async fn poll_loop(state: &AppState, peer: &str, router: axum::Router) {
                 let reply = run_local(router, q).await;
                 let Some(fed) = crate::fed::current(&st) else { return };
                 let body = serde_json::to_vec(&[reply]).unwrap_or_default();
-                let _ = http.post(format!("{peer}/v1/fed/tunnel/reply"))
-                    .header("x-aqua-fed", fed.sign("POST", "/v1/fed/tunnel/reply", &body))
+                let mut rb = http.post(format!("{peer}/v1/fed/tunnel/reply"))
+                    .header("x-aqua-fed", fed.sign("POST", "/v1/fed/tunnel/reply", &body));
+                if let Some(s2) = fed.sign2(&peer, "POST", "/v1/fed/tunnel/reply", &body) { rb = rb.header("x-aqua-fed2", s2); }
+                let _ = rb
                     .header("content-type", "application/json")
                     .timeout(Duration::from_secs(60))
                     .body(body)
@@ -282,12 +289,15 @@ async fn run_local(router: axum::Router, q: WireReq) -> WireReply {
         return fail(403);
     }
     let Ok(body) = B64.decode(&q.body) else { return fail(400) };
-    let Ok(req) = axum::http::Request::builder()
+    let mut b = axum::http::Request::builder()
         .method(q.method.as_str())
         .uri(q.path.as_str())
         .header("x-aqua-fed", q.sig.as_str())
-        .header("content-type", "application/json")
-        .body(axum::body::Body::from(body))
+        .header("content-type", "application/json");
+    if !q.sig2.is_empty() {
+        b = b.header("x-aqua-fed2", q.sig2.as_str());
+    }
+    let Ok(req) = b.body(axum::body::Body::from(body))
     else {
         return fail(400);
     };
