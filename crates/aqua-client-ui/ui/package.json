@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.json"
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test:unit": "esbuild tests/pins.test.ts --bundle --platform=node --format=esm --outfile=tests/.out/pins.test.mjs --log-level=error && node tests/.out/pins.test.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

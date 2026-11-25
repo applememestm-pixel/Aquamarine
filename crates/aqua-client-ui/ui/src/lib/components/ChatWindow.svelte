@@ -149,7 +149,7 @@
   import { openArticleReader } from "../reader";
   import { shortcutsOpen } from "../shortcuts";
   import { openGroupPanel } from "../panels/groupPanel";
-  import { reactions, toggleMyReaction, applyPeerReaction, reactionChips, hashContent, pins, pinMessage, unpinMessage, pinnedId } from "../messageMeta";
+  import { reactions, toggleMyReaction, applyPeerReaction, reactionChips, hashContent, pins, pinMessage, unpinMessage, pinnedIds, pinScope } from "../messageMeta";
   import { openNewChatDialog } from "../newChat";
 
   import { contacts, getContact } from "../contacts";
@@ -3857,23 +3857,29 @@
   }
 
   // ---- Pins ----
+  // Pins of this chat — of the open room in a group with rooms.
+  let pinKey = $derived($activeChat?.id ? pinScope($activeChat.id, activeRoom?.id) : "");
+  /** Pinned rows shown here (newest first): ids found among this room's rows. */
+  let pinnedRows = $derived.by(() => {
+    if (!pinKey) return [] as Row[];
+    const ids = pinnedIds(pinKey, $pins);
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    return ids.map((id) => byId.get(id)).filter((r): r is Row => !!r);
+  });
+  /** Which pin the bar shows; a tap on it goes to the next one (older). */
+  let pinAt = $state(0);
+  $effect(() => { void pinKey; pinAt = 0; });
+  let pinned = $derived(pinnedRows.length ? pinnedRows[Math.min(pinAt, pinnedRows.length - 1)] : null);
+  let pinnedSet = $derived(new Set(pinnedRows.map((r) => r.id)));
   function pinRow(row: Row) {
-    const peer = $activeChat?.id;
-    if (peer) pinMessage(peer, row.id);
+    if (pinKey) pinMessage(pinKey, row.id);
+    pinAt = 0;
     closeMenu();
   }
-  function unpin() {
-    const peer = $activeChat?.id;
-    if (peer) unpinMessage(peer);
+  function unpin(row?: Row | null) {
+    const target = row ?? pinned;
+    if (pinKey && target) unpinMessage(pinKey, target.id);
   }
-  let pinned = $derived.by(() => {
-    const peer = $activeChat?.id;
-    if (!peer) return null;
-    void $pins;
-    const id = pinnedId(peer);
-    if (!id) return null;
-    return rows.find((r) => r.id === id) ?? null;
-  });
   // Jump to a message (calendar, search results elsewhere…).
   onMount(() => {
     const onJump = async (e: Event) => {
@@ -3899,6 +3905,8 @@
     void (el as HTMLElement | null)?.offsetWidth;
     el?.classList.add("flash");
     setTimeout(() => el?.classList.remove("flash"), 1400);
+    // Several pins: the next tap goes to the next (older) one.
+    if (pinnedRows.length > 1) pinAt = (pinAt + 1) % pinnedRows.length;
   }
 
   /** One readable line for a message: the pinned bar, quotes, previews.
@@ -4468,11 +4476,11 @@
           <svg class="pin-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14l-1.5-5V5a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7z"/></svg>
           {/if}
           <div class="pin-text">
-            <div class="pin-title">{$t("Pinned message")}</div>
+            <div class="pin-title">{$t("Pinned message")}{#if pinnedRows.length > 1}&nbsp;· {Math.min(pinAt, pinnedRows.length - 1) + 1}/{pinnedRows.length}{/if}</div>
             <div class="pin-preview">{pv}</div>
           </div>
         </button>
-        <button class="pin-x" onclick={unpin} title={$t("Unpin")}>×</button>
+        <button class="pin-x" onclick={() => unpin()} title={$t("Unpin")}>×</button>
       </div>
     {/if}
 
@@ -5251,8 +5259,8 @@
         {#if mayEditRow(row)}
           {@render item(icons.edit, $t("Edit"), () => startEdit(row))}
         {/if}
-        {#if pinnedId($activeChat?.id ?? "") === row.id}
-          {@render item(icons.pin, $t("Unpin"), () => { unpin(); closeMenu(); })}
+        {#if pinnedSet.has(row.id)}
+          {@render item(icons.pin, $t("Unpin"), () => { unpin(row); closeMenu(); })}
         {:else}
           {@render item(icons.pin, $t("Pin"), () => pinRow(row))}
         {/if}

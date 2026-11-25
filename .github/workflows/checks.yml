@@ -117,6 +117,7 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npx svelte-check --threshold error
+          npm run test:unit
           npm run build
       # The built UI, for looking at it with a mocked Tauri (Playwright) from
       # a session where npm isn't reachable.
