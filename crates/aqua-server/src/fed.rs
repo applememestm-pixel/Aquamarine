@@ -610,6 +610,16 @@ pub async fn names_hello(fed: &Fed) -> Vec<String> {
     known
 }
 
+/// The cursor after a page of rows sorted by `updated_at` (AQUA-SEC-010).
+/// A full page may end in the middle of rows that share its last
+/// timestamp — "> last" next time skipped the rest of them for good. So
+/// after a full page the next one starts at that timestamp again (rows are
+/// applied idempotently: "newer wins"), unless that makes no progress (a
+/// whole page of one timestamp), when it moves on as before.
+pub fn next_cursor(from: i64, last: i64, full_page: bool) -> i64 {
+    if full_page && last - 1 > from { last - 1 } else { last.max(from) }
+}
+
 /// Pull the name registry from one relay (paged).
 async fn sync_names(state: &AppState, fed: &Fed, peer: &str, since: &mut std::collections::HashMap<String, i64>) {
     for _ in 0..50 {
@@ -620,7 +630,7 @@ async fn sync_names(state: &AppState, fed: &Fed, peer: &str, since: &mut std::co
         let Ok(rows) = serde_json::from_value::<Vec<crate::directory::NameRow>>(v["names"].clone()) else { return };
         if rows.is_empty() { return; }
         let n = rows.len();
-        let last = rows.iter().map(|r| r.updated_at).max().unwrap_or(from);
+        let last = next_cursor(from, rows.iter().map(|r| r.updated_at).max().unwrap_or(from), n >= 1000);
         let dir = state.directory.clone();
         let moved = tokio::task::spawn_blocking(move || rows.iter().filter_map(|r| dir.fed_apply_name(r, &home)).collect::<Vec<_>>()).await.unwrap_or_default();
         for (old, new) in &moved {
@@ -1065,16 +1075,28 @@ async fn sync_hist(state: &AppState, fed: &Fed, peer: &str, since: &mut std::col
         let Ok(rows) = r.json::<Vec<(String, String, i64)>>().await else { return };
         if rows.is_empty() { return; }
         let mut last = from;
+        // The oldest record we couldn't fetch: the cursor stays before it, so
+        // the next sync tries it again instead of skipping it (AQUA-SEC-010).
+        let mut failed: Option<i64> = None;
         for (user, k, at) in &rows {
             last = last.max(*at);
             if !crate::directory::Directory::valid_name(user) || k.len() > 64 { continue; }
-            if let Some(b) = fed.get(peer, &format!("/v1/fed/hist/{user}/{k}")).await {
-                if let Ok(bytes) = b.bytes().await {
-                    state.directory.fed_apply_hist(user, k, &bytes, *at);
-                }
-            }
+            let got = match fed.get(peer, &format!("/v1/fed/hist/{user}/{k}")).await {
+                Some(b) => match b.bytes().await {
+                    Ok(bytes) => { state.directory.fed_apply_hist(user, k, &bytes, *at); true }
+                    Err(_) => false,
+                },
+                None => false,
+            };
+            if !got { failed = Some(failed.map_or(*at, |f| f.min(*at))); }
         }
-        since.insert(peer.to_string(), last);
+        let mut cursor = next_cursor(from, last, rows.len() >= 1000);
+        if let Some(f) = failed {
+            cursor = cursor.min(f - 1).max(from);
+            since.insert(peer.to_string(), cursor);
+            return;
+        }
+        since.insert(peer.to_string(), cursor);
         if rows.len() < 1000 { return; }
     }
 }
@@ -1119,7 +1141,10 @@ async fn sync_peer(
                 }
             }
         }
-        let last = rows.iter().map(|u| u.updated_at).max().unwrap_or(since);
+        let last = next_cursor(since, rows.iter().map(|u| u.updated_at).max().unwrap_or(since), rows.len() >= 500);
+        if last == since && rows.len() >= 500 {
+            break;
+        }
         since_users.insert(peer.to_string(), last);
         if applied > 0 {
             tracing::info!(peer, applied, "federation: accounts updated");
@@ -1129,21 +1154,32 @@ async fn sync_peer(
         }
     }
     // Encrypted backups.
-    let since = *since_backups.get(peer).unwrap_or(&0);
-    if let Some(r) = fed.get(peer, &format!("/v1/fed/backups?since={since}")).await {
-        if let Ok(list) = r.json::<Vec<(String, i64)>>().await {
-            for (user, at) in list {
-                if state.directory.backup_meta(&user).is_some_and(|(_, ours)| ours >= at) {
-                    continue;
-                }
-                if let Some(b) = fed.get(peer, &format!("/v1/fed/backup/{user}")).await {
-                    if let Ok(bytes) = b.bytes().await {
-                        state.directory.fed_apply_backup(&user, &bytes, at);
-                    }
-                }
-                since_backups.insert(peer.to_string(), at.max(*since_backups.get(peer).unwrap_or(&0)));
+    // Paged like the rest (200 per call: only the first page was read), and
+    // the cursor moves only past backups we have (AQUA-SEC-010).
+    for _ in 0..50 {
+        let since = *since_backups.get(peer).unwrap_or(&0);
+        let Some(r) = fed.get(peer, &format!("/v1/fed/backups?since={since}")).await else { return };
+        let Ok(list) = r.json::<Vec<(String, i64)>>().await else { return };
+        let n = list.len();
+        let mut last = since;
+        for (user, at) in list {
+            let have = state.directory.backup_meta(&user).is_some_and(|(_, ours)| ours >= at);
+            let ok = have || match fed.get(peer, &format!("/v1/fed/backup/{user}")).await {
+                Some(b) => match b.bytes().await {
+                    Ok(bytes) => { state.directory.fed_apply_backup(&user, &bytes, at); true }
+                    Err(_) => false,
+                },
+                None => false,
+            };
+            if !ok {
+                since_backups.insert(peer.to_string(), (at - 1).max(since));
+                return;
             }
+            last = last.max(at);
         }
+        let next = next_cursor(since, last, n >= 200);
+        since_backups.insert(peer.to_string(), next);
+        if n < 200 || next == since { return; }
     }
 }
 
@@ -1266,4 +1302,22 @@ pub async fn remote_webapp_init(state: &AppState, bot: &str, user: &str, start_p
         return None;
     }
     serde_json::from_str(&text).ok()
+}
+
+#[cfg(test)]
+mod cursor_tests {
+    use super::next_cursor;
+
+    /// AQUA-SEC-010: a full page that ends in a run of equal timestamps is
+    /// read again from that timestamp; a last page or a stuck one moves on.
+    #[test]
+    fn full_pages_restart_at_their_last_timestamp() {
+        assert_eq!(next_cursor(0, 500, true), 499);
+        assert_eq!(next_cursor(0, 500, false), 500);
+        // A whole page of one timestamp: no progress possible → move past it.
+        assert_eq!(next_cursor(499, 500, true), 500);
+        assert_eq!(next_cursor(500, 500, true), 500);
+        // Never backwards.
+        assert_eq!(next_cursor(700, 500, false), 700);
+    }
 }
