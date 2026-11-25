@@ -294,7 +294,7 @@ pub const RESET_BODY: &str = r#"{"t":"rst"}"#;
 /// reconnect) fails to decrypt — that's no broken session.
 static DECRYPTED: StdMutex<Option<(std::collections::HashSet<[u8; 16]>, std::collections::VecDeque<[u8; 16]>)>> = StdMutex::new(None);
 
-fn envelope_hash(ciphertext: &[u8]) -> [u8; 16] {
+pub fn envelope_hash(ciphertext: &[u8]) -> [u8; 16] {
     use sha2::Digest;
     let d = sha2::Sha256::digest(ciphertext);
     let mut out = [0u8; 16];
@@ -316,26 +316,27 @@ pub fn note_decrypted(ciphertext: &[u8]) {
     }
 }
 
-/// First messages that opened a session here, kept in the vault so a
-/// replay after a restart doesn't open it again (AQUA-SEC-008). The last
-/// `INITIALS_KEPT` of them.
-const INITIALS_KEY: &str = "seen-initials";
-const INITIALS_KEPT: usize = 2048;
+/// First messages being opened right now (REV-005): a second copy that
+/// arrives meanwhile (relay + Bluetooth / Wi-Fi) waits out rather than
+/// opening the session a second time. Released when the guard drops.
+static INFLIGHT: StdMutex<Option<std::collections::HashSet<[u8; 16]>>> = StdMutex::new(None);
 
-pub fn initial_seen(vault: &aqua_client_core::vault::Vault, ciphertext: &[u8]) -> bool {
-    let h = envelope_hash(ciphertext);
-    vault.get_record(INITIALS_KEY).ok().flatten().is_some_and(|b| b.chunks_exact(16).any(|c| c == h))
+pub struct InitialGuard([u8; 16]);
+
+impl InitialGuard {
+    /// `None` when another copy of this first message is being opened.
+    pub fn reserve(hash: [u8; 16]) -> Option<Self> {
+        let mut g = INFLIGHT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        g.get_or_insert_with(Default::default).insert(hash).then_some(Self(hash))
+    }
 }
 
-pub fn note_initial(vault: &aqua_client_core::vault::Vault, ciphertext: &[u8]) {
-    let h = envelope_hash(ciphertext);
-    let mut b = vault.get_record(INITIALS_KEY).ok().flatten().unwrap_or_default();
-    b.truncate(b.len() / 16 * 16);
-    if b.chunks_exact(16).any(|c| c == h) { return; }
-    b.extend_from_slice(&h);
-    let over = b.len().saturating_sub(INITIALS_KEPT * 16);
-    if over > 0 { b.drain(..over); }
-    let _ = vault.put_record(INITIALS_KEY, &b);
+impl Drop for InitialGuard {
+    fn drop(&mut self) {
+        if let Some(set) = INFLIGHT.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_mut() {
+            set.remove(&self.0);
+        }
+    }
 }
 
 /// A copy of a message that already decrypted here?

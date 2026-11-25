@@ -4914,13 +4914,17 @@ async fn on_incoming_initial(
         return;
     }
 
-    // SPK + optional OPK from the vault under the lock. The OPK is only
-    // read here and used up after the message decrypted (AQUA-SEC-008).
+    // SPK + optional OPK from the vault under the lock. The OPK is only read
+    // here; it is used up together with saving the session (REV-004).
+    // Reserve this first message first (REV-005): copies from the relay and
+    // Bluetooth / Wi-Fi are handled at once, and both passed the check.
+    let hash = crate::multidev::envelope_hash(&message.ciphertext);
+    let Some(_reserved) = crate::multidev::InitialGuard::reserve(hash) else { return };
     let (identity_clone, spk, opk) = {
         let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         // The same first message again after a restart (the in-memory set
         // is empty then): taken again it would replace the session.
-        if crate::multidev::initial_seen(&s.vault, &message.ciphertext) {
+        if s.vault.initial_seen(&hash) {
             return;
         }
         let identity = s.identity.clone();
@@ -4939,22 +4943,25 @@ async fn on_incoming_initial(
         Ok(x) => x,
         Err(e) => { tracing::warn!(?e, "accept_initial failed"); return }
     };
-    {
-        let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(id) = message.used_opk_id {
-            let _ = s.vault.take_one_time_prekey(id);
-        }
-        crate::multidev::note_initial(&s.vault, &message.ciphertext);
-    }
-    crate::multidev::note_decrypted(&message.ciphertext);
     let plain_text = String::from_utf8_lossy(&plain).to_string();
 
     // The session belongs to the sender's DEVICE; the chat to the account.
     {
         let mut s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Err(e) = s.vault.save_session(&addr, &session) {
-            tracing::warn!(?e, "save_session on accept");
+        // Session + used-up prekey + replay mark in one transaction. If it
+        // fails, nothing changed: the message isn't taken (a copy of it can
+        // still open the session), and it isn't shown either.
+        match s.vault.commit_initial(&addr, &session, message.used_opk_id, &hash) {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(e) => {
+                tracing::warn!(?e, "commit_initial failed — first message not taken");
+                return;
+            }
         }
+        // Only now, when it's stored: marked earlier, a copy of a message
+        // whose commit failed would have been dropped as "already read".
+        crate::multidev::note_decrypted(&message.ciphertext);
         // Both sides opened a session at once: theirs arrives after ours was
         // already in use. Keep ours — what they sent with it still decrypts.
         if let Some(old) = s.sessions.insert(addr.clone(), session) {
