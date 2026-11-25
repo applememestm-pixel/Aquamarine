@@ -1,0 +1,22 @@
+# AQUA-SEC-014: dependency updates as pull requests (security fixes first).
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+  - package-ecosystem: cargo
+    directory: /crates/aqua-client-ui
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+  - package-ecosystem: cargo
+    directory: /crates/aqua-server-app
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /crates/aqua-client-ui/ui
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }

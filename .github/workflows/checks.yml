@@ -5,13 +5,46 @@ name: checks
 on:
   pull_request:
     branches: [main]
+  # AQUA-SEC-014: also after a merge, so main itself is checked (a merge of
+  # two green PRs can still break it).
+  push:
+    branches: [main]
   workflow_dispatch:
+
+# Read-only token: these jobs only build and test.
+permissions:
+  contents: read
 
 concurrency:
   group: checks-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # Known vulnerabilities in dependencies (RustSec, npm). Advisory for now:
+  # the first runs list what is already there; once triaged, this job
+  # becomes required (docs/audit/SECURITY_AUDIT.md, AQUA-SEC-014).
+  audit:
+    name: dependency audit
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: cargo audit (relay, core, client-core)
+        run: cargo audit
+      - name: cargo audit (app)
+        run: cargo audit --file crates/aqua-client-ui/Cargo.lock
+      - name: cargo audit (server app)
+        run: cargo audit --file crates/aqua-server-app/Cargo.lock
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: npm audit (app UI)
+        working-directory: crates/aqua-client-ui/ui
+        run: npm audit --omit=dev --audit-level=high
+
   rust:
     name: cargo test
     runs-on: ubuntu-22.04
