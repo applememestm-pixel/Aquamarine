@@ -32,8 +32,10 @@ jobs:
     runs-on: ubuntu-22.04
     env:
       BRANCH: ${{ inputs.branch || github.ref_name }}
-      PKGS: ${{ inputs.packages || 'lettre rustls rustls-webpki webpki-roots url tokio rustix' }}
-      RUSQLITE: ${{ inputs.rusqlite || 'true' }}
+      # Run 2 (25.11): webpki-roots is in two majors (spec needs @version);
+      # url didn't move in the root lock; cookie in the app's.
+      PKGS: ${{ inputs.packages || 'webpki-roots@1.0.9 url cookie rustls-webpki' }}
+      RUSQLITE: ${{ inputs.rusqlite || 'false' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -56,8 +58,10 @@ jobs:
             echo "== $dir"
             (cd "$dir" && cargo update -p rusqlite -p libsqlite3-sys 2>&1) || echo "rusqlite: re-resolving $dir"
             for p in $PKGS; do
-              (cd "$dir" && cargo update -p "$p" 2>&1) || echo "skip $p in $dir"
+              (cd "$dir" && cargo update -v -p "$p" 2>&1) || echo "skip $p in $dir"
             done
+            # Why a package doesn't move (what holds it back).
+            (cd "$dir" && cargo tree -i url --depth 1 2>/dev/null | head -20) || true
           done
           git diff --stat
       - name: cargo audit after the update
