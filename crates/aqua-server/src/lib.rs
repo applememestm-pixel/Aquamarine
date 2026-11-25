@@ -3756,7 +3756,8 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/blob-upload/:cid", axum::routing::put(blob_upload::put)
             .layer(DefaultBodyLimit::max(aqua_core::file_transfer::UPLOAD_PART_SIZE)))
         // Everything else: the optional website (AQUA_SITE_DIR, see site.rs).
-        .merge(fed::routes())
+        // Answers to v2-signed federation requests are signed back (fed.rs).
+        .merge(fed::routes().layer(axum::middleware::from_fn_with_state(state.clone(), fed::sign_answers)))
         .fallback(site::fallback)
         .layer(axum::middleware::from_fn(version_gate))
         .with_state(state)

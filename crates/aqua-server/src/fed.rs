@@ -412,6 +412,29 @@ fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
+/// What a relay signs on its answer to a v2 request.
+fn resp_message(req_v2: &str, status: u16, body: &[u8]) -> String {
+    format!("aqua-fed-resp\n{req_v2}\n{status}\n{}", hex::encode(Sha256::digest(body)))
+}
+
+/// Middleware on `/v1/fed/*`: an answer to a v2-signed request is signed
+/// with this relay's node key (blobs aren't: they are named by their hash).
+pub async fn sign_answers(State(state): State<AppState>, req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
+    let h2 = req.headers().get("x-aqua-fed2").and_then(|v| v.to_str().ok()).map(str::to_string);
+    let blob = req.uri().path().starts_with("/v1/fed/blob/");
+    let resp = next.run(req).await;
+    let (Some(h2), false, Some(fed)) = (h2, blob, registry(&state)) else { return resp };
+    let (mut parts, body) = resp.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, 256 * 1024 * 1024).await else {
+        return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    let sig = fed.key.sign(resp_message(&h2, parts.status.as_u16(), &bytes).as_bytes());
+    if let Ok(v) = axum::http::HeaderValue::from_str(&hex::encode(sig)) {
+        parts.headers.insert("x-aqua-fed2-resp", v);
+    }
+    axum::response::Response::from_parts(parts, axum::body::Body::from(bytes))
+}
+
 fn v2_message(method: &str, path: &str, ts: i64, nonce: &str, from: &str, to: &str, body: &[u8]) -> String {
     format!("aqua-fed-v2\n{method}\n{path}\n{ts}\n{nonce}\n{from}\n{to}\n{}", hex::encode(Sha256::digest(body)))
 }
@@ -507,11 +530,39 @@ impl Fed {
 
     /// Add both signatures to a request to `peer`.
     fn signed(&self, rb: reqwest::RequestBuilder, peer: &str, method: &str, path: &str, body: &[u8]) -> reqwest::RequestBuilder {
+        self.signed2(rb, peer, method, path, body).0
+    }
+
+    /// [`Self::signed`], also giving the v2 header sent (its answer must be
+    /// signed back over it, see [`Self::checked`]).
+    fn signed2(&self, rb: reqwest::RequestBuilder, peer: &str, method: &str, path: &str, body: &[u8]) -> (reqwest::RequestBuilder, Option<String>) {
         let rb = rb.header("x-aqua-fed", self.header(method, path, body));
         match self.sign2(peer, method, path, body) {
-            Some(s) => rb.header("x-aqua-fed2", s),
-            None => rb,
+            Some(s) => (rb.header("x-aqua-fed2", s.clone()), Some(s)),
+            None => (rb, None),
         }
+    }
+
+    /// The answer of a relay whose key we keep must be signed by that key
+    /// over our request's v2 header, its status and its body (1.21.0-23):
+    /// a proxy or a man in the middle can't change what it pulls (accounts,
+    /// names, history). Answers of relays without keys pass as before.
+    async fn checked(&self, peer: &str, sent2: Option<String>, r: reqwest::Response) -> Option<reqwest::Response> {
+        let Some(h2) = sent2 else { return Some(r) };
+        let pin = self.pin_for(peer)?;
+        let key: [u8; 32] = hex::decode(&pin.key).ok()?.try_into().ok()?;
+        let status = r.status();
+        let ct = r.headers().get("content-type").cloned();
+        let sig = r.headers().get("x-aqua-fed2-resp").and_then(|v| v.to_str().ok()).and_then(|s| hex::decode(s).ok()).and_then(|b| <[u8; 64]>::try_from(b).ok());
+        let body = r.bytes().await.ok()?;
+        let ok = sig.is_some_and(|s| aqua_core::crypto::SignPublic::from_bytes(key).verify(resp_message(&h2, status.as_u16(), &body).as_bytes(), &s).is_ok());
+        if !ok {
+            tracing::warn!(%peer, "federation: an answer without a valid signature of the peer's node key — dropped");
+            return None;
+        }
+        let mut b = axum::http::Response::builder().status(status);
+        if let Some(ct) = ct { b = b.header("content-type", ct); }
+        b.body(body.to_vec()).ok().map(reqwest::Response::from)
     }
 
     /// What a hello carries about this relay's key: its public key, a
@@ -549,9 +600,12 @@ impl Fed {
             return None;
         }
         let sig = self.header(method, path, body);
-        let sig2 = self.sign2(peer, method, path, body).unwrap_or_default();
-        let r = crate::fedtunnel::request(peer, method, path, body.to_vec(), sig, sig2, wait).await;
-        Some(r.filter(|r| r.status().is_success()))
+        let sig2 = self.sign2(peer, method, path, body);
+        let r = crate::fedtunnel::request(peer, method, path, body.to_vec(), sig, sig2.clone().unwrap_or_default(), wait).await;
+        match r.filter(|r| r.status().is_success()) {
+            Some(r) => Some(self.checked(peer, sig2, r).await),
+            None => Some(None),
+        }
     }
 
     fn header(&self, method: &str, path: &str, body: &[u8]) -> String {
@@ -639,8 +693,10 @@ impl Fed {
         if !self.modern(peer).await {
             return self.tunnel_fallback(peer, "GET", path, b"").await;
         }
-        match self.signed(self.http.get(format!("{peer}{path}")), peer, "GET", path, b"").send().await {
-            Ok(r) => r.status().is_success().then_some(r),
+        let (rb, h2) = self.signed2(self.http.get(format!("{peer}{path}")), peer, "GET", path, b"");
+        match rb.send().await {
+            Ok(r) if r.status().is_success() => self.checked(peer, h2, r).await,
+            Ok(_) => None,
             Err(_) => { mark_down(peer); self.tunnel_fallback(peer, "GET", path, b"").await }
         }
     }
@@ -652,12 +708,14 @@ impl Fed {
         if !self.modern(peer).await {
             return self.tunnel_fallback(peer, "POST", path, &body).await;
         }
-        let sent = self.signed(self.http.post(format!("{peer}{path}")), peer, "POST", path, &body)
+        let (rb, h2) = self.signed2(self.http.post(format!("{peer}{path}")), peer, "POST", path, &body);
+        let sent = rb
             .header("content-type", "application/json")
             .timeout(Duration::from_secs(4))
             .body(body.clone()).send().await;
         match sent {
-            Ok(r) => r.status().is_success().then_some(r),
+            Ok(r) if r.status().is_success() => self.checked(peer, h2, r).await,
+            Ok(_) => None,
             Err(_) => { mark_down(peer); self.tunnel_fallback(peer, "POST", path, &body).await }
         }
     }
@@ -686,8 +744,9 @@ impl Fed {
         }
         mark_down(peer);
         let sig = self.header(method, path, body);
-        let sig2 = self.sign2(peer, method, path, body).unwrap_or_default();
-        crate::fedtunnel::request(peer, method, path, body.to_vec(), sig, sig2, Duration::from_secs(30)).await.filter(|r| r.status().is_success())
+        let sig2 = self.sign2(peer, method, path, body);
+        let r = crate::fedtunnel::request(peer, method, path, body.to_vec(), sig, sig2.clone().unwrap_or_default(), Duration::from_secs(30)).await.filter(|r| r.status().is_success())?;
+        self.checked(peer, sig2, r).await
     }
 
     /// Try to hand an envelope to whichever peer has the recipient online.

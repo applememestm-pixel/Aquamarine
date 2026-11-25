@@ -62,6 +62,9 @@ pub struct WireReply {
     #[serde(default)]
     pub ct: String,
     pub body: String,
+    /// `x-aqua-fed2-resp` of the answer (1.21.0-23).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sig2: String,
 }
 
 /// The public side of one peer's reverse link.
@@ -119,6 +122,9 @@ pub async fn request(peer: &str, method: &str, path: &str, body: Vec<u8>, sig: S
     let mut b = axum::http::Response::builder().status(reply.status);
     if !reply.ct.is_empty() {
         b = b.header("content-type", reply.ct);
+    }
+    if !reply.sig2.is_empty() {
+        b = b.header("x-aqua-fed2-resp", reply.sig2);
     }
     b.body(bytes).ok().map(reqwest::Response::from)
 }
@@ -284,7 +290,7 @@ async fn poll_loop(state: &AppState, peer: &str, router: axum::Router) {
 /// the signature it carries is checked there as usual).
 async fn run_local(router: axum::Router, q: WireReq) -> WireReply {
     use tower::ServiceExt;
-    let fail = |status: u16| WireReply { rid: q.rid, status, ct: String::new(), body: String::new() };
+    let fail = |status: u16| WireReply { rid: q.rid, status, ct: String::new(), body: String::new(), sig2: String::new() };
     if !q.path.starts_with("/v1/fed/") || q.path.starts_with("/v1/fed/tunnel") {
         return fail(403);
     }
@@ -304,8 +310,9 @@ async fn run_local(router: axum::Router, q: WireReq) -> WireReply {
     let resp = match router.oneshot(req).await { Ok(r) => r, Err(e) => match e {} };
     let status = resp.status().as_u16();
     let ct = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+    let sig2 = resp.headers().get("x-aqua-fed2-resp").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
     match axum::body::to_bytes(resp.into_body(), BODY_LIMIT).await {
-        Ok(b) => WireReply { rid: q.rid, status, ct, body: B64.encode(&b) },
+        Ok(b) => WireReply { rid: q.rid, status, ct, body: B64.encode(&b), sig2 },
         Err(_) => fail(502),
     }
 }

@@ -631,3 +631,81 @@ async fn admission_impersonation_and_rejoining() {
     assert!(fed::admit(&sb, &pid));
     assert!(fed::current(&sb).unwrap().pin_for(&un).is_some());
 }
+
+/// 1.21.0-23: what a relay pulls from a keyed peer is signed by that peer's
+/// node key over the request. A proxy in between that changes an account in
+/// a `/v1/fed/users` answer (a man in the middle on plain http) gets nothing
+/// applied; the same path without tampering works.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tampered_sync_answers_are_refused() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let la = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let lp = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let lb = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let real_a = format!("http://{}", la.local_addr().unwrap());
+    let (up, ub) = (format!("http://{}", lp.local_addr().unwrap()), format!("http://{}", lb.local_addr().unwrap()));
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = |me: &str, peer: &str| FedConfig { secret: SECRET.into(), peers: vec![peer.into()], public_url: me.into(), mode: "network".into(), ..Default::default() };
+    // A is known to B only through the proxy's address.
+    let sa = AppState::isolated(tmp.path().join("a"), Some(cfg(&up, &ub)));
+    let sb = AppState::isolated(tmp.path().join("b"), Some(cfg(&ub, &up)));
+    { let s = sa.clone(); tokio::spawn(async move { axum::serve(la, app(s)).await.unwrap() }); }
+    { let s = sb.clone(); tokio::spawn(async move { axum::serve(lb, app(s)).await.unwrap() }); }
+    let evil = IdentityKeyPair::generate();
+    let evil_hex = hex::encode(evil.public().dh_pub.as_bytes());
+    static TAMPER: AtomicBool = AtomicBool::new(false);
+    {
+        let real_a = real_a.clone();
+        let evil_hex = evil_hex.clone();
+        let client = reqwest::Client::new();
+        let proxy = axum::Router::new().fallback(move |req: axum::extract::Request| {
+            let (real_a, evil_hex, client) = (real_a.clone(), evil_hex.clone(), client.clone());
+            async move {
+                let (parts, body) = req.into_parts();
+                let body = axum::body::to_bytes(body, 64 << 20).await.unwrap();
+                let pq = parts.uri.path_and_query().map(|p| p.as_str().to_string()).unwrap_or_default();
+                let mut rb = client.request(parts.method.clone(), format!("{real_a}{pq}")).body(body.to_vec());
+                for (k, v) in parts.headers.iter() { if k != "host" { rb = rb.header(k, v); } }
+                let r = rb.send().await.unwrap();
+                let status = r.status();
+                let headers = r.headers().clone();
+                let mut bytes = r.bytes().await.unwrap().to_vec();
+                if TAMPER.load(Ordering::SeqCst) && pq.starts_with("/v1/fed/users") {
+                    let mut rows: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap_or_default();
+                    for row in rows.iter_mut() {
+                        if row["username"] == "mitmvictim" { row["identity_dh"] = serde_json::Value::String(evil_hex.clone()); }
+                    }
+                    bytes = serde_json::to_vec(&rows).unwrap();
+                }
+                let mut out = axum::http::Response::builder().status(status);
+                for (k, v) in headers.iter() { if k != "content-length" && k != "transfer-encoding" { out = out.header(k, v); } }
+                out.body(axum::body::Body::from(bytes)).unwrap()
+            }
+        });
+        tokio::spawn(async move { axum::serve(lp, proxy).await.unwrap() });
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+
+    // Keys known both ways (hellos go through the proxy untouched).
+    fed::current(&sa).unwrap().hello_all().await;
+    for _ in 0..60 {
+        if fed::current(&sa).unwrap().strict() && fed::current(&sb).unwrap().strict() { break }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(fed::current(&sb).unwrap().pin_for(&up).is_some(), "B knows A's key");
+
+    let id = IdentityKeyPair::generate();
+    register(&http, &real_a, &id, "mitmvictim").await;
+
+    // The proxy swaps the victim's key in the answer: B applies nothing.
+    TAMPER.store(true, Ordering::SeqCst);
+    fed::sync_once(&sb, &mut Default::default()).await;
+    assert_ne!(sb.directory.identity_for("mitmvictim"), Some(*evil.public().dh_pub.as_bytes()), "a tampered answer must not change the account");
+    assert!(sb.directory.identity_for("mitmvictim").is_none(), "the tampered page was dropped as a whole");
+
+    // Untouched: the real account arrives.
+    TAMPER.store(false, Ordering::SeqCst);
+    fed::sync_once(&sb, &mut Default::default()).await;
+    assert_eq!(sb.directory.identity_for("mitmvictim"), Some(*id.public().dh_pub.as_bytes()));
+}
