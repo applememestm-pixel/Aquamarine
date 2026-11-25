@@ -140,7 +140,7 @@ pub async fn h_poll(State(state): State<AppState>, headers: HeaderMap, body: Byt
     if !(id.starts_with("http") || id.starts_with("tunnel:")) || id.len() > 200 {
         return Err(StatusCode::BAD_REQUEST);
     }
-    if !p.v.is_empty() && !crate::version_ok(&p.v) {
+    if !p.v.is_empty() && !crate::relay_version_ok(&p.v) {
         return Err(StatusCode::UPGRADE_REQUIRED);
     }
     let s = {

@@ -255,7 +255,14 @@ impl Fed {
     }
 
     fn header(&self, method: &str, path: &str, body: &[u8]) -> String {
-        let ts = now_ms();
+        // Strictly increasing: two equal requests in one millisecond got the
+        // same signature, and receivers now take each signature once.
+        static LAST: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+        let now = now_ms();
+        let ts = match LAST.fetch_update(std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst, |l| Some(now.max(l + 1))) {
+            Ok(prev) => now.max(prev + 1),
+            Err(_) => now,
+        };
         format!("{ts}.{}", mac(&self.cfg.secret, method, path, ts, body))
     }
 
@@ -267,7 +274,13 @@ impl Fed {
             return false;
         }
         let want = mac(&self.cfg.secret, method, path, ts, body);
-        subtle::ConstantTimeEq::ct_eq(want.as_bytes(), sig.as_bytes()).into()
+        if !bool::from(subtle::ConstantTimeEq::ct_eq(want.as_bytes(), sig.as_bytes())) {
+            return false;
+        }
+        // AQUA-SEC-009: a signed request was good for its whole ±5-minute
+        // window, as many times as anyone sent it again. Each signature is
+        // now taken once (signatures cover the time, so a retry signs anew).
+        first_use(sig, ts)
     }
 
     /// Is `peer` a relay we still talk to (1.2.0 or newer)? Asked once in a
@@ -284,13 +297,13 @@ impl Fed {
         }
         let ok = match self.http.get(format!("{peer}/v1/stats")).timeout(Duration::from_secs(5)).send().await {
             Ok(r) => r.json::<serde_json::Value>().await.ok()
-                .and_then(|v| v["version"].as_str().map(crate::version_ok))
+                .and_then(|v| v["version"].as_str().map(crate::relay_version_ok))
                 .unwrap_or(false),
             // Unreachable now: don't decide for 10 minutes on that.
             Err(_) => { mark_down(peer); return false }
         };
         if !ok {
-            tracing::warn!(%peer, "federation: this relay is older than {} — not talking to it", crate::MIN_VERSION);
+            tracing::warn!(%peer, "federation: this relay is older than {} — not talking to it", crate::MIN_RELAY);
         }
         if let Ok(mut m) = SEEN.lock() {
             m.get_or_insert_with(std::collections::HashMap::new).insert(peer.to_string(), (std::time::Instant::now(), ok));
@@ -552,7 +565,7 @@ fn check_registry(state: &AppState, headers: &HeaderMap, method: &str, path: &st
     if !fed.verify(headers, method, path, body) {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    if !crate::caller_version(headers, None).as_deref().is_some_and(crate::version_ok) {
+    if !crate::caller_version(headers, None).as_deref().is_some_and(crate::relay_version_ok) {
         return Err(StatusCode::UPGRADE_REQUIRED);
     }
     Ok(fed)
@@ -610,6 +623,23 @@ pub async fn names_hello(fed: &Fed) -> Vec<String> {
     known
 }
 
+/// Signatures seen within the clock window: `true` the first time only.
+fn first_use(sig: &str, ts: i64) -> bool {
+    static SEEN: std::sync::Mutex<Option<std::collections::HashMap<String, i64>>> = std::sync::Mutex::new(None);
+    let Ok(mut g) = SEEN.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) else { return true };
+    let seen = g.get_or_insert_with(std::collections::HashMap::new);
+    let now = now_ms();
+    if seen.len() > 20_000 {
+        seen.retain(|_, t| (now - *t).abs() <= SKEW_MS);
+    }
+    if seen.len() > 200_000 {
+        // Flooded with valid signatures (only a holder of the secret can make
+        // them): stop remembering rather than grow without end.
+        seen.clear();
+    }
+    seen.insert(sig.to_string(), ts).is_none()
+}
+
 /// The cursor after a page of rows sorted by `updated_at` (AQUA-SEC-010).
 /// A full page may end in the middle of rows that share its last
 /// timestamp — "> last" next time skipped the rest of them for good. So
@@ -653,7 +683,7 @@ fn check(state: &AppState, headers: &HeaderMap, method: &str, path: &str, body: 
     }
     // Relays older than 1.2.0 don't know two-step codes: an account copied
     // there could be signed into without one. They're not served.
-    if !crate::caller_version(headers, None).as_deref().is_some_and(crate::version_ok) {
+    if !crate::caller_version(headers, None).as_deref().is_some_and(crate::relay_version_ok) {
         return Err(StatusCode::UPGRADE_REQUIRED);
     }
     Ok(fed)
@@ -1310,6 +1340,14 @@ mod cursor_tests {
 
     /// AQUA-SEC-010: a full page that ends in a run of equal timestamps is
     /// read again from that timestamp; a last page or a stuck one moves on.
+    #[test]
+    fn a_signature_is_taken_once() {
+        let ts = super::now_ms();
+        assert!(super::first_use("sig-a", ts));
+        assert!(!super::first_use("sig-a", ts), "replayed");
+        assert!(super::first_use("sig-b", ts));
+    }
+
     #[test]
     fn full_pages_restart_at_their_last_timestamp() {
         assert_eq!(next_cursor(0, 500, true), 499);

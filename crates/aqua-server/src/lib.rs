@@ -3472,9 +3472,23 @@ fn version_key(v: &str) -> Option<(u32, u32, u32, u32)> {
     Some((it.next()??, it.next().flatten().unwrap_or(0), it.next().flatten().unwrap_or(0), pre.parse().unwrap_or(0)))
 }
 
-/// Is version `v` (of an app or a relay) still served?
+/// Is version `v` of an app still served?
 pub fn version_ok(v: &str) -> bool {
     match (version_key(v), version_key(MIN_VERSION)) {
+        (Some(have), Some(min)) => have >= min,
+        _ => false,
+    }
+}
+
+/// Relays older than this aren't talked to (federation, tunnels). Kept
+/// apart from [`MIN_VERSION`]: raising the app minimum for AQUA-SEC-001
+/// (1.21.0-23) must not cut the network off from relays that haven't
+/// updated yet — the relay protocol didn't change.
+pub const MIN_RELAY: &str = "1.2.0";
+
+/// Is version `v` of a relay still talked to?
+pub fn relay_version_ok(v: &str) -> bool {
+    match (version_key(v), version_key(MIN_RELAY)) {
         (Some(have), Some(min)) => have >= min,
         _ => false,
     }
@@ -3727,6 +3741,13 @@ mod version_tests {
         }
         for v in ["1.21.0-22", "1.21.0", "1.2.0", "1.1.0-7", "1.1.9", "1.0.62", "0.9.0", "", "garbage"] {
             assert!(!version_ok(v), "{v}");
+        }
+        // Relays: the federation minimum stays 1.2.0.
+        for v in ["1.2.0", "1.21.0-22", "1.21.0-23"] {
+            assert!(relay_version_ok(v), "{v}");
+        }
+        for v in ["1.1.9", "", "garbage"] {
+            assert!(!relay_version_ok(v), "{v}");
         }
         let mut h = axum::http::HeaderMap::new();
         h.insert(header::USER_AGENT, "aqua-client-core/1.2.0".parse().unwrap());
