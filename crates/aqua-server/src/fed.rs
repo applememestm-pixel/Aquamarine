@@ -1411,12 +1411,40 @@ fn check_from(state: &AppState, headers: &HeaderMap, method: &str, path: &str, b
 
 /// A peer asks: is this user connected here? Deliver if so (never queue).
 pub async fn h_deliver(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Result<Json<serde_json::Value>, StatusCode> {
-    check(&state, &headers, "POST", "/v1/fed/deliver", &body)?;
+    let (_, sender) = check_from(&state, &headers, "POST", "/v1/fed/deliver", &body)?;
     let msg: RelayMessage = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    // A8: the sender must be an account of the network we know (not banned,
+    // not deleted, not a bot of another relay posing as a person), and a
+    // relay can hand over only so many a minute. This narrows what a relay
+    // can make up; it doesn't prove who wrote the envelope (that's the
+    // end-to-end encryption's job on the devices).
+    if !per_node_ok(&sender, "deliver", 6000) {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
+    let from = crate::base_user(&msg.from).to_string();
+    let known = { let d = state.directory.clone(); tokio::task::spawn_blocking(move || d.may_send_from_peer(&from)).await.unwrap_or(false) };
+    if !known {
+        tracing::warn!(from = %msg.from, "federation: an envelope from someone not known here — refused");
+        return Err(StatusCode::FORBIDDEN);
+    }
     crate::journal::visitor(crate::base_user(&msg.from), "user");
     // A bot of this relay: its queue (a user of another relay wrote to it).
     let delivered = crate::deliver_to_bot(&state, &msg).await || crate::deliver_local(&state, &msg).await;
     Ok(Json(serde_json::json!({ "delivered": delivered })))
+}
+
+/// At most `per_min` calls of `what` a minute from one sender (a node id;
+/// everyone with the secret only shares one count).
+fn per_node_ok(sender: &Sender, what: &str, per_min: u32) -> bool {
+    type Counts = std::collections::HashMap<String, (std::time::Instant, u32)>;
+    static C: std::sync::OnceLock<std::sync::Mutex<Counts>> = std::sync::OnceLock::new();
+    let key = match sender { Sender::Node(n) => format!("{what} {n}"), Sender::Secret => format!("{what} secret") };
+    let mut g = C.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    if g.len() > 4096 { g.retain(|_, (t, _)| t.elapsed() < Duration::from_secs(60)); }
+    let e = g.entry(key).or_insert((std::time::Instant::now(), 0));
+    if e.0.elapsed() >= Duration::from_secs(60) { *e = (std::time::Instant::now(), 0); }
+    e.1 += 1;
+    e.1 <= per_min
 }
 
 /// A peer changed something: pull from the peers now instead of in ≤ 30 s.
@@ -2394,6 +2422,10 @@ async fn sync_tombs(state: &AppState, fed: &Fed, peer: &str) {
 }
 
 async fn sync_peer(state: &AppState, fed: &Fed, peer: &str) {
+    // A8: accounts only from relays of the network (never a names-only pin).
+    if fed.pin_for(peer).is_some_and(Pin::names_only) {
+        return;
+    }
     // Accounts (paged: 500 per call).
     'pages: loop {
         let since = cursor(state, peer, "users");
@@ -2556,12 +2588,20 @@ pub async fn h_bot(State(state): State<AppState>, headers: HeaderMap, Path(name)
 /// this relay's bots, for a user of another relay of the network (that relay
 /// checked who they are; the request is signed for the network).
 pub async fn h_webapp_init(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Result<Json<serde_json::Value>, StatusCode> {
-    check(&state, &headers, "POST", "/v1/fed/webapp/init", &body)?;
+    let (_, sender) = check_from(&state, &headers, "POST", "/v1/fed/webapp/init", &body)?;
     let v: serde_json::Value = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
     let bot = v["bot"].as_str().unwrap_or("").trim().trim_start_matches('@').to_lowercase();
     let user = v["user"].as_str().unwrap_or("").trim().to_lowercase();
     if bot.is_empty() || user.is_empty() || !state.directory.is_bot(&bot) {
         return Err(StatusCode::NOT_FOUND);
+    }
+    // A8: initData only for an account of the network we know, a few a
+    // minute per relay (a relay named any user and got data signed for them).
+    if !per_node_ok(&sender, "webapp", 120) {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
+    if !state.directory.may_send_from_peer(crate::base_user(&user)) {
+        return Err(StatusCode::FORBIDDEN);
     }
     let sp = v["start_param"].as_str().unwrap_or("");
     let (init_data, signed) = crate::tgapi::init_data(&state, &bot, &user, Some(sp));

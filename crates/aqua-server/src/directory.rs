@@ -310,6 +310,12 @@ pub struct NameRow {
     pub updated_at: i64,
 }
 
+/// How far ahead of our clock a peer's change time may be (ms).
+pub const FED_SKEW_MS: i64 = 5 * 60 * 1000;
+/// Two relays gave the same @name within this many seconds: the older
+/// account keeps it (later, a claim can't move an account of ours).
+pub const NAME_RACE_SECS: i64 = 10 * 60;
+
 /// An account deleted on its relay (A7): signed by that relay's node key
 /// over `aqua-fed-tomb-v1\n{uid}\n{username}\n{created_at}\n{deleted_at}\n{origin}`.
 /// It covers that generation of the account (`created_at`): a copy of it from
@@ -915,16 +921,21 @@ impl Directory {
             db.execute("DROP TABLE bot_tokens", [])?;
         }
         // Federation: every change to a user row bumps updated_at, so peers
-        // can pull "everything since T". A row applied from a peer carries
+        // can pull "everything since T". Each change gets a time after every
+        // other row's (1.21.0-26): with "this second + random ms" a row made
+        // in the same second could land before a peer's cursor (kept on disk
+        // now) and never be pulled. A row applied from a peer carries
         // its own updated_at and is left alone (WHEN clause).
         db.execute_batch(
             r#"
-            CREATE TRIGGER IF NOT EXISTS users_touch_ins AFTER INSERT ON users
+            DROP TRIGGER IF EXISTS users_touch_ins;
+            DROP TRIGGER IF EXISTS users_touch_upd;
+            CREATE TRIGGER users_touch_ins AFTER INSERT ON users
             WHEN NEW.updated_at = 0
-            BEGIN UPDATE users SET updated_at = CAST(strftime('%s','now') AS INTEGER) * 1000 + (abs(random()) % 1000) WHERE username = NEW.username; END;
-            CREATE TRIGGER IF NOT EXISTS users_touch_upd AFTER UPDATE ON users
+            BEGIN UPDATE users SET updated_at = max(CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), (SELECT COALESCE(MAX(updated_at), 0) + 1 FROM users)) WHERE username = NEW.username; END;
+            CREATE TRIGGER users_touch_upd AFTER UPDATE ON users
             WHEN NEW.updated_at = OLD.updated_at
-            BEGIN UPDATE users SET updated_at = max(OLD.updated_at + 1, CAST(strftime('%s','now') AS INTEGER) * 1000) WHERE username = NEW.username; END;
+            BEGIN UPDATE users SET updated_at = max(OLD.updated_at + 1, CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), (SELECT COALESCE(MAX(updated_at), 0) + 1 FROM users)) WHERE username = NEW.username; END;
             CREATE INDEX IF NOT EXISTS idx_users_updated ON users(updated_at);
             CREATE INDEX IF NOT EXISTS idx_users_uid ON users(uid);
             "#,
@@ -1890,6 +1901,17 @@ impl Directory {
         if we_win {
             return None;
         }
+        // A8: a claim with an older creation time renamed our account. Any
+        // relay of the registry could make one up ("created at 0") for any
+        // name. A real older claim is known before a name is taken here
+        // (sign-up checks the registry), except when both were taken at
+        // nearly the same time on two relays: only then, within
+        // NAME_RACE_SECS of ours, does the older one win. Otherwise ours
+        // keeps the name and the claim is only on record.
+        if now_secs() as i64 - local_created > NAME_RACE_SECS {
+            tracing::warn!(%name, claim_uid = %n.uid, "name registry: an older claim on a name taken here long ago — ours keeps it");
+            return None;
+        }
         let to = Self::displaced_name(&db, &name, &local_uid);
         if Self::move_account(&mut db, &name, &to, false).is_err() {
             return None;
@@ -2588,10 +2610,21 @@ impl Directory {
     /// [`Self::fed_apply_user`] for a row pulled from the relay with node id
     /// `origin` ("" when not known by key).
     pub fn fed_apply_user_from(&self, u: &FedUser, origin: &str) -> FedApplied {
-        let _ = origin;
         let mut out = FedApplied::default();
         let Ok(dh) = hex::decode(&u.identity_dh) else { return out };
         if dh.len() != 32 || !Self::valid_username(&u.username) {
+            return out;
+        }
+        // A8: bots aren't accounts relays exchange (a peer could make one
+        // and take a name the bot rules keep); a row "changed in the future"
+        // would stay newer than every real change here (the update trigger
+        // only counts up from it) — both refused.
+        if u.is_bot {
+            tracing::warn!(user = %u.username, %origin, "federation: a bot account from a peer — refused");
+            return out;
+        }
+        if u.updated_at > crate::now_ms() + FED_SKEW_MS {
+            tracing::warn!(user = %u.username, %origin, "federation: an account changed in the future — refused");
             return out;
         }
         let uid = if u.uid.len() == 10 && u.uid.bytes().all(|b| b.is_ascii_digit()) { u.uid.clone() } else { uid_for(&dh) };
@@ -2667,9 +2700,21 @@ impl Directory {
         for old in renamed {
             let _ = db.execute("DELETE FROM users WHERE username=?1", rusqlite::params![old]);
         }
-        // An e-mail moving to another username elsewhere: drop it here first.
-        if let Some(email) = &u.email {
-            let _ = db.execute("UPDATE users SET email=NULL WHERE email=?1 AND username<>?2", rusqlite::params![email, name]);
+        // An e-mail moving to another username elsewhere (a rename of this
+        // same account): drop it from the old row first. A8: an e-mail that
+        // belongs to ANOTHER account here (another ID) stays with it — a row
+        // from a peer took it over before, and with it sign-in by code and
+        // password reset of that account. The incoming row goes without it.
+        let mut u = u.clone();
+        if let Some(email) = u.email.clone() {
+            let other: Option<String> = db.query_row("SELECT uid FROM users WHERE email=?1 AND username<>?2", rusqlite::params![email, name], |r| r.get(0)).ok();
+            match other {
+                Some(o) if o != uid && !o.is_empty() => {
+                    tracing::warn!(user = %u.username, %origin, "federation: a peer's account names an e-mail of another account here — not taken");
+                    u.email = None;
+                }
+                _ => { let _ = db.execute("UPDATE users SET email=NULL WHERE email=?1 AND username<>?2", rusqlite::params![email, name]); }
+            }
         }
         // A sealed account: its security fields change only with a seal by a
         // device it already had (see `Seal`). Otherwise they stay as they are
@@ -2679,7 +2724,6 @@ impl Directory {
             rusqlite::params![uid],
             |r| Ok(LocalSec { identity_dh: hex::encode(r.get::<_, Vec<u8>>(0)?), password: r.get(1)?, security: r.get(2)?, devices: r.get(3)?, recovery: r.get(4)?, devlist: r.get(5)?, seal: r.get(6)? }),
         ).ok();
-        let mut u = u.clone();
         let mut dh = dh;
         if let Some(l) = local.as_ref().filter(|l| !l.seal.is_empty()) {
             // Older relays send '' for fields they don't know: "keep ours".
@@ -3412,6 +3456,21 @@ impl Directory {
             .unwrap_or_default()
     }
 
+    /// Can `username` (a person of the network: an account row here, local
+    /// or copied) send through a peer? Not unknown, not banned, not a bot
+    /// (A8: a relay of the network named any sender it liked).
+    pub fn may_send_from_peer(&self, username: &str) -> bool {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let row: Option<(String, Vec<u8>, i64)> = db
+            .query_row("SELECT uid, identity_dh, is_bot FROM users WHERE username=?1", rusqlite::params![username], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .ok();
+        drop(db);
+        match row {
+            Some((uid, dh, 0)) => !self.is_banned_uid(&uid) && !self.is_banned_dh(&dh),
+            _ => false,
+        }
+    }
+
     /// Ban `username` (a person, not a bot): its ID and every identity key it
     /// has now. Returns the ID, or None when there's no such person.
     pub fn ban(&self, username: &str) -> Option<String> {
@@ -4094,6 +4153,88 @@ mod tests {
         assert!(d.fed_apply_user(&mine).applied);
         assert_eq!(d.fed_apply_name(&row, "http://old"), None);
         assert!(d.identity_for("taken").is_some());
+    }
+
+    /// Rows made here one after another get increasing change times: one
+    /// made in the same second used to get a random millisecond, could land
+    /// before a peer's cursor and was never pulled.
+    #[test]
+    fn local_changes_get_increasing_times() {
+        let d = dir();
+        let db = d.db.lock().unwrap();
+        let mut last = 0i64;
+        for i in 0..200 {
+            db.execute("INSERT INTO users (username, identity_dh, created_at) VALUES (?1, ?2, 1)", rusqlite::params![format!("n{i}"), vec![i as u8; 32]]).unwrap();
+            let t: i64 = db.query_row("SELECT updated_at FROM users WHERE username=?1", rusqlite::params![format!("n{i}")], |r| r.get(0)).unwrap();
+            assert!(t > last, "{i}: {t} after {last}");
+            last = t;
+        }
+        db.execute("UPDATE users SET display_name='x' WHERE username='n0'", []).unwrap();
+        let t: i64 = db.query_row("SELECT updated_at FROM users WHERE username='n0'", [], |r| r.get(0)).unwrap();
+        assert!(t > last, "an update of an old row comes after the rest too");
+    }
+
+    /// A8: a peer's row "changed in the future" is refused (it would stay
+    /// newer than every real change here).
+    #[test]
+    fn future_updated_at_is_refused() {
+        let d = dir();
+        let now = crate::now_ms();
+        let r = d.fed_apply_user(&peer_user("tomorrow", "3000000001", 1, now + 24 * 3600 * 1000));
+        assert!(!r.applied && !r.failed);
+        assert!(d.identity_for("tomorrow").is_none());
+        assert!(d.fed_apply_user(&peer_user("today", "3000000002", 1, now + 1000)).applied, "a little clock skew is fine");
+    }
+
+    /// A8: relays don't hand bots to each other as accounts.
+    #[test]
+    fn bot_rows_from_peers_are_refused() {
+        let d = dir();
+        let mut u = peer_user("fakebot", "3000000003", 1, crate::now_ms());
+        u.is_bot = true;
+        let r = d.fed_apply_user(&u);
+        assert!(!r.applied && !r.failed);
+        assert!(d.identity_for("fakebot").is_none());
+    }
+
+    /// A8: a peer's row can't take over the e-mail of another account here
+    /// (sign-in by code and password reset go by e-mail); a rename of the
+    /// same account still moves it.
+    #[test]
+    fn a_peer_row_cannot_take_another_accounts_email() {
+        let d = dir();
+        let mut mine = peer_user("owner", "3000000004", 1, crate::now_ms() - 10_000);
+        mine.email = Some("owner@x.com".into());
+        assert!(d.fed_apply_user(&mine).applied);
+        let mut thief = peer_user("thief", "3000000005", 1, crate::now_ms());
+        thief.email = Some("owner@x.com".into());
+        assert!(d.fed_apply_user(&thief).applied);
+        assert_eq!(d.email_of("owner").as_deref(), Some("owner@x.com"), "stays with its account");
+        assert_eq!(d.email_of("thief"), None);
+        // The same account renamed on its relay: the e-mail goes with it.
+        let mut renamed = mine.clone();
+        renamed.username = "owner2".into();
+        renamed.updated_at = crate::now_ms();
+        assert!(d.fed_apply_user(&renamed).applied);
+        assert_eq!(d.email_of("owner2").as_deref(), Some("owner@x.com"));
+    }
+
+    /// A8: a made-up registry claim with an old creation time doesn't rename
+    /// an account taken here long ago (only a near-simultaneous one).
+    #[test]
+    fn a_forged_old_name_claim_does_not_rename_ours() {
+        let d = dir();
+        let now = now_secs() as i64;
+        let mine = peer_user("longtime", "3000000006", now - 3600, crate::now_ms() - 1000);
+        assert!(d.fed_apply_user(&mine).applied);
+        let claim = NameRow { username: "longtime".into(), uid: "3000000007".into(), home: "http://evil".into(), created_at: 0, updated_at: 1 };
+        assert_eq!(d.fed_apply_name(&claim, "http://evil"), None);
+        assert!(d.identity_for("longtime").is_some(), "ours keeps it");
+        // Taken on two relays at about the same time: the older one wins, as before.
+        let fresh = peer_user("racename", "3000000008", now - 5, crate::now_ms() - 1000);
+        assert!(d.fed_apply_user(&fresh).applied);
+        let older = NameRow { username: "racename".into(), uid: "3000000009".into(), home: "http://b".into(), created_at: now - 30, updated_at: 1 };
+        assert!(d.fed_apply_name(&older, "http://b").is_some(), "near-simultaneous: the older wins");
     }
 
     /// A6: where sync is with a peer survives a restart (same file), moves

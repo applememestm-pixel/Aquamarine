@@ -438,7 +438,8 @@ async fn equal_timestamps_across_pages_are_not_skipped() {
     register(&http, &ua, &id, "tmpl").await;
     let tmpl = sa.directory.fed_users_since(0).into_iter().find(|u| u.username == "tmpl").unwrap();
     const N: usize = 1200;
-    let t = 1_900_000_000_000i64;
+    // One past moment (A8: a time in the future isn't taken from peers).
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64 - 60_000;
     for i in 0..N {
         let mut u = tmpl.clone();
         u.username = format!("same{i:04}");
