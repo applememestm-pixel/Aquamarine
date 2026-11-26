@@ -1134,3 +1134,70 @@ async fn cursor_survives_restart() {
     assert!(sb.directory.identity_for("first").is_some());
     let _ = sa;
 }
+
+/// A7 end to end: the admin of A deletes an account. B learns it from A's
+/// signed tombstone and deletes its copy; C, an "old" relay that never heard
+/// of it (it doesn't pull tombstones — simulated by never syncing from A),
+/// still has the account and offers it to B: B doesn't take it back. A
+/// tombstone made up by someone with only the secret isn't taken.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn signed_account_deletion_propagates_and_old_relay_cannot_resurrect() {
+    let (sa, sb, ua, ub, tmp) = strict_pair().await;
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    register(&http, &ua, &IdentityKeyPair::generate(), "leaving").await;
+    fed::sync_once(&sb).await;
+    assert!(sb.directory.identity_for("leaving").is_some());
+    // C: keyed, admitted on B with a token, holding its own copy of the account.
+    let token = fed::new_admit_token(&sb).unwrap();
+    let (sc, _uc) = serve(&tmp, "c", |u| FedConfig { secret: SECRET.into(), peers: vec![ub.clone()], public_url: u.into(), mode: "network".into(), join_token: token, ..Default::default() }).await;
+    let row = sb.directory.fed_users_since(0).into_iter().find(|u| u.username == "leaving").unwrap();
+    assert!(sc.directory.fed_apply_user(&row).applied);
+    for _ in 0..30 {
+        fed::current(&sc).unwrap().hello_all().await;
+        fed::absorb_vouches(&sc);
+        if fed::current(&sb).unwrap().cfg.peers.iter().any(|p| *p == _uc) && fed::current(&sb).unwrap().pin_for(&_uc).is_some() { break }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(fed::current(&sb).unwrap().pin_for(&_uc).is_some(), "C admitted on B");
+    // A's admin deletes it.
+    assert!(aqua_server::delete_account(&sa, "leaving").await);
+    assert!(sa.directory.identity_for("leaving").is_none());
+    fed::sync_once(&sb).await;
+    assert!(sb.directory.identity_for("leaving").is_none(), "B deleted its copy");
+    // C makes its copy "newer" and offers it.
+    let mut newer = row.clone();
+    newer.updated_at += 10_000;
+    newer.display_name = "back again".into();
+    assert!(sc.directory.fed_apply_user(&newer).applied);
+    fed::sync_once(&sb).await;
+    assert!(sb.directory.identity_for("leaving").is_none(), "an old relay doesn't bring it back");
+    // A forged tombstone (secret only, someone else's key): not taken.
+    register(&http, &ua, &IdentityKeyPair::generate(), "staying").await;
+    fed::sync_once(&sb).await;
+    let (uid, created) = sb.directory.account_generation("staying").unwrap();
+    let evil = fed::Fed::new(FedConfig { secret: SECRET.into(), peers: vec![], public_url: "http://evil.invalid".into(), mode: "network".into(), ephemeral: true, ..Default::default() }).unwrap();
+    let forged = evil.sign_tomb(&uid, "staying", created, 1);
+    assert!(!fed::current(&sb).unwrap().verify_tomb(&forged));
+    let claimed = aqua_server::directory::Tomb { origin: fed::current(&sa).unwrap().node_id(), ..forged };
+    assert!(!fed::current(&sb).unwrap().verify_tomb(&claimed), "A's id, another key's signature");
+    assert!(sb.directory.identity_for("staying").is_some());
+}
+
+/// A7: the deleted account's @name is free: someone signs up with it anew
+/// (another key and ID) and keeps it across the network.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn same_name_reregistered_after_deletion_keeps_it() {
+    let (sa, sb, ua, ub, _tmp) = strict_pair().await;
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    register(&http, &ua, &IdentityKeyPair::generate(), "phoenix").await;
+    fed::sync_once(&sb).await;
+    assert!(aqua_server::delete_account(&sa, "phoenix").await);
+    fed::sync_once(&sb).await;
+    assert!(sb.directory.identity_for("phoenix").is_none());
+    let id2 = IdentityKeyPair::generate();
+    register(&http, &ub, &id2, "phoenix").await;
+    fed::sync_once(&sa).await;
+    assert_eq!(sa.directory.identity_for("phoenix"), Some(*id2.public().dh_pub.as_bytes()), "the new one, on A too");
+    fed::sync_once(&sb).await;
+    assert_eq!(sb.directory.identity_for("phoenix"), Some(*id2.public().dh_pub.as_bytes()), "and kept on B");
+}

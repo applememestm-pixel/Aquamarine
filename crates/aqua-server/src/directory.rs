@@ -310,6 +310,31 @@ pub struct NameRow {
     pub updated_at: i64,
 }
 
+/// An account deleted on its relay (A7): signed by that relay's node key
+/// over `aqua-fed-tomb-v1\n{uid}\n{username}\n{created_at}\n{deleted_at}\n{origin}`.
+/// It covers that generation of the account (`created_at`): a copy of it from
+/// a relay that didn't hear of the deletion isn't taken again; someone who
+/// signs up anew (later `created_at`) is.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Tomb {
+    pub uid: String,
+    pub created_at: i64,
+    pub username: String,
+    pub deleted_at: i64,
+    /// Node id of the relay that deleted it ("" — not in a network then).
+    pub origin: String,
+    pub sig: String,
+    /// When it came here (ms): the order it is handed on in.
+    #[serde(default)]
+    pub got_at: i64,
+}
+
+impl Tomb {
+    pub fn message(&self) -> String {
+        format!("aqua-fed-tomb-v1\n{}\n{}\n{}\n{}\n{}", self.uid, self.username, self.created_at, self.deleted_at, self.origin)
+    }
+}
+
 /// What applying a peer's account row did here.
 #[derive(Debug, Default, PartialEq)]
 pub struct FedApplied {
@@ -668,6 +693,17 @@ impl Directory {
                 created_at     INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+            CREATE TABLE IF NOT EXISTS fed_tombstones (
+                uid        TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                username   TEXT NOT NULL,
+                deleted_at INTEGER NOT NULL,
+                origin     TEXT NOT NULL,
+                sig        TEXT NOT NULL,
+                got_at     INTEGER NOT NULL,
+                PRIMARY KEY (uid, created_at)
+            );
+            CREATE INDEX IF NOT EXISTS idx_fed_tombs_got ON fed_tombstones(got_at);
             CREATE TABLE IF NOT EXISTS fed_cursors (
                 peer   TEXT NOT NULL,
                 stream TEXT NOT NULL,
@@ -1830,6 +1866,11 @@ impl Directory {
         if db.query_row("SELECT 1 FROM users WHERE uid=?1", rusqlite::params![n.uid], |_| Ok(())).is_ok() {
             return None;
         }
+        // A deleted account's name (A7): not taken again, and it holds no
+        // claim on the name against anyone here.
+        if Self::tombed(&db, &n.uid, n.created_at) {
+            return None;
+        }
         let home = if n.home.is_empty() { home } else { n.home.as_str() };
         // Renamed there: its old name is free again.
         let _ = db.execute("DELETE FROM fed_names WHERE uid=?1 AND username<>?2", rusqlite::params![n.uid, name]);
@@ -2559,6 +2600,11 @@ impl Directory {
             return out;
         }
         let mut db = self.db.lock().unwrap();
+        // Deleted (a tombstone of this generation, A7): a relay that didn't
+        // hear of it doesn't bring it back. A later sign-up is another one.
+        if Self::tombed(&db, &uid, u.created_at) {
+            return out;
+        }
         // This account here, under whatever name.
         let mine: Option<(String, i64)> = db
             .query_row("SELECT username, updated_at FROM users WHERE uid=?1 AND is_bot=0", rusqlite::params![uid], |r| Ok((r.get(0)?, r.get(1)?)))
@@ -2784,6 +2830,76 @@ impl Directory {
     }
 
     /// Federation: a peer's record, if newer than ours (it gets a new local seq).
+    /// Is this generation of account `uid` (created at `created_at`) deleted?
+    fn tombed(db: &Connection, uid: &str, created_at: i64) -> bool {
+        db.query_row("SELECT 1 FROM fed_tombstones WHERE uid=?1 AND created_at>=?2 LIMIT 1", rusqlite::params![uid, created_at], |_| Ok(()))
+            .is_ok()
+    }
+
+    /// `(uid, created_at)` of a person's account here (for its tombstone).
+    pub fn account_generation(&self, username: &str) -> Option<(String, i64)> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.query_row("SELECT uid, created_at FROM users WHERE username=?1 AND is_bot=0", rusqlite::params![username], |r| Ok((r.get(0)?, r.get(1)?))).ok()
+    }
+
+    /// Keep a tombstone. Ok(true) when it is new here.
+    pub fn add_tomb(&self, t: &Tomb) -> rusqlite::Result<bool> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let n = db.execute(
+            "INSERT OR IGNORE INTO fed_tombstones (uid, created_at, username, deleted_at, origin, sig, got_at) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            rusqlite::params![t.uid, t.created_at, t.username, t.deleted_at, t.origin, t.sig, crate::now_ms()],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// A tombstone from the network (signature checked by the caller): kept,
+    /// and the generation it covers removed here — the account (if this one
+    /// is that generation or older) and its name in the registry. Returns
+    /// the @name removed here, if any. Taking it twice changes nothing.
+    pub fn apply_tomb(&self, t: &Tomb) -> rusqlite::Result<Option<String>> {
+        if !self.add_tomb(t)? {
+            return Ok(None);
+        }
+        let local: Option<String> = {
+            let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+            let _ = db.execute("DELETE FROM fed_names WHERE uid=?1 AND created_at<=?2", rusqlite::params![t.uid, t.created_at]);
+            db.query_row("SELECT username FROM users WHERE uid=?1 AND is_bot=0 AND created_at<=?2", rusqlite::params![t.uid, t.created_at], |r| r.get(0)).optional()?
+        };
+        Ok(local.filter(|n| self.delete_person(n)))
+    }
+
+    /// Tombstones after the cursor `(got_at, "uid:created_at")`, in the
+    /// order they came here — ours and those handed on to us.
+    pub fn tombs_after(&self, since: i64, after: Option<&str>, limit: usize) -> Vec<Tomb> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let Ok(mut st) = db.prepare(
+            "SELECT uid, created_at, username, deleted_at, origin, sig, got_at FROM fed_tombstones
+             WHERE sig <> '' AND (got_at > ?1 OR (?2 IS NOT NULL AND got_at = ?1 AND (uid || ':' || created_at) > ?2))
+             ORDER BY got_at, uid || ':' || created_at LIMIT ?3",
+        ) else { return Vec::new() };
+        st.query_map(rusqlite::params![since, after, limit as i64], |r| Ok(Tomb {
+            uid: r.get(0)?, created_at: r.get(1)?, username: r.get(2)?, deleted_at: r.get(3)?, origin: r.get(4)?, sig: r.get(5)?, got_at: r.get(6)?,
+        })).map(|it| it.filter_map(Result::ok).collect()).unwrap_or_default()
+    }
+
+    /// How many tombstones signed by `origin` came here since `since_ms`.
+    pub fn tombs_from_since(&self, origin: &str, since_ms: i64) -> usize {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.query_row("SELECT COUNT(*) FROM fed_tombstones WHERE origin=?1 AND got_at>?2", rusqlite::params![origin, since_ms], |r| r.get::<_, i64>(0))
+            .unwrap_or(0) as usize
+    }
+
+    /// Is the account with ID `uid` deleted, with no later sign-up of it
+    /// known (in the name registry)? A pass for it isn't taken.
+    pub fn uid_deleted(&self, uid: &str) -> bool {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let Ok(t) = db.query_row("SELECT MAX(created_at) FROM fed_tombstones WHERE uid=?1", rusqlite::params![uid], |r| r.get::<_, Option<i64>>(0)) else { return false };
+        let Some(t) = t else { return false };
+        let later = db.query_row("SELECT 1 FROM fed_names WHERE uid=?1 AND created_at>?2", rusqlite::params![uid, t], |_| Ok(())).is_ok()
+            || db.query_row("SELECT 1 FROM users WHERE uid=?1 AND created_at>?2", rusqlite::params![uid, t], |_| Ok(())).is_ok();
+        !later
+    }
+
     /// Where federation sync is in `peer`'s `stream` (users, backups, hist,
     /// names, tombs): `(since, after)`. Kept on disk, so a restart doesn't
     /// pull everything again from the start (A6).
@@ -3921,6 +4037,64 @@ mod tests {
     use super::*;
 
     fn dir() -> Directory { Directory::open_memory() }
+
+    fn peer_user(name: &str, uid: &str, created_at: i64, updated_at: i64) -> FedUser {
+        let dh = aqua_core::keys::IdentityKeyPair::generate();
+        FedUser {
+            username: name.into(), identity_dh: hex::encode(dh.public().dh_pub.as_bytes()), email: None, display_name: name.into(),
+            about: String::new(), phone: String::new(), is_bot: false, created_at, extra: String::new(), avatar_ver: 0, banner_ver: 0,
+            media_acl: String::new(), password: String::new(), music_ver: 0, updated_at, devices: "[]".into(), recovery: String::new(),
+            uid: uid.into(), security: String::new(), devlist: String::new(), seal: String::new(),
+        }
+    }
+    fn tomb(uid: &str, name: &str, created_at: i64) -> Tomb {
+        Tomb { uid: uid.into(), created_at, username: name.into(), deleted_at: created_at + 100, origin: "o".into(), sig: "s".into(), got_at: 0 }
+    }
+
+    /// A7: a tombstone covers the generation it names: a copy of that
+    /// account (or an older one) from a relay that didn't hear of the
+    /// deletion isn't taken again; a later sign-up with the same ID is.
+    #[test]
+    fn tombstone_blocks_old_generation_but_not_reregistration() {
+        let d = dir();
+        let u = peer_user("gone", "1000000001", 1000, 5000);
+        assert!(d.fed_apply_user(&u).applied);
+        assert_eq!(d.apply_tomb(&tomb("1000000001", "gone", 1000)).unwrap().as_deref(), Some("gone"), "deleted here");
+        assert!(d.identity_for("gone").is_none());
+        assert_eq!(d.apply_tomb(&tomb("1000000001", "gone", 1000)).unwrap(), None, "twice: nothing more");
+        // An old relay sends it again, even "changed later".
+        let again = FedUser { updated_at: 9_000, ..u.clone() };
+        let r = d.fed_apply_user(&again);
+        assert!(!r.applied && !r.failed, "not taken, and not an error (the cursor moves on)");
+        assert!(d.identity_for("gone").is_none());
+        // A new sign-up (same ID, later creation): taken.
+        let new = FedUser { created_at: 2000, updated_at: 9_500, ..peer_user("gone", "1000000001", 2000, 9_500) };
+        assert!(d.fed_apply_user(&new).applied);
+        assert!(d.identity_for("gone").is_some());
+        assert!(!d.uid_deleted("1000000001"), "signed up again: a pass for it works");
+        assert!(d.uid_deleted("1000000009") == false);
+        d.add_tomb(&tomb("1000000009", "x", 10)).unwrap();
+        assert!(d.uid_deleted("1000000009"));
+    }
+
+    /// A7: a deleted account's name from the registry isn't taken again and
+    /// claims nothing against a local account with that name.
+    #[test]
+    fn tombstone_blocks_name_registry_resurrection() {
+        let d = dir();
+        let row = NameRow { username: "taken".into(), uid: "2000000001".into(), home: "http://old".into(), created_at: 100, updated_at: 200 };
+        d.fed_apply_name(&row, "http://old");
+        assert!(d.names_after(0, None, 10).iter().any(|r| r.username == "taken"));
+        d.apply_tomb(&tomb("2000000001", "taken", 100)).unwrap();
+        assert!(!d.names_after(0, None, 10).iter().any(|r| r.uid == "2000000001"), "gone from the registry");
+        d.fed_apply_name(&row, "http://old");
+        assert!(!d.names_after(0, None, 10).iter().any(|r| r.uid == "2000000001"), "an old relay can't bring it back");
+        // Someone here takes the name later; the old (deleted, older) one doesn't move them.
+        let mine = peer_user("taken", "2000000002", 500, 600);
+        assert!(d.fed_apply_user(&mine).applied);
+        assert_eq!(d.fed_apply_name(&row, "http://old"), None);
+        assert!(d.identity_for("taken").is_some());
+    }
 
     /// A6: where sync is with a peer survives a restart (same file), moves
     /// with the peer's address and is dropped on request.

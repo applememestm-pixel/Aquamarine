@@ -664,6 +664,24 @@ impl Fed {
         hex::encode(self.key.public().as_bytes())
     }
 
+    /// A tombstone for an account deleted here, signed by our node key (A7).
+    pub fn sign_tomb(&self, uid: &str, username: &str, created_at: i64, deleted_at: i64) -> crate::directory::Tomb {
+        let mut t = crate::directory::Tomb { uid: uid.into(), created_at, username: username.into(), deleted_at, origin: self.node_id(), ..Default::default() };
+        t.sig = hex::encode(self.key.sign(t.message().as_bytes()));
+        t
+    }
+
+    /// Signed by the relay it names (`origin`), whose key we keep and which
+    /// isn't revoked.
+    pub fn verify_tomb(&self, t: &crate::directory::Tomb) -> bool {
+        if self.is_revoked(&t.origin) {
+            return false;
+        }
+        let Some(pin) = self.cfg.pins.iter().find(|p| p.id == t.origin && !p.names_only()) else { return false };
+        let (Some(k), Some(sig)) = (hex::decode(&pin.key).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()), hex::decode(&t.sig).ok().and_then(|b| <[u8; 64]>::try_from(b).ok())) else { return false };
+        aqua_core::crypto::SignPublic::from_bytes(k).verify(t.message().as_bytes(), &sig).is_ok()
+    }
+
     /// Revoked here, or a published key (`LEAKED_NODE_IDS`).
     pub fn is_revoked(&self, id: &str) -> bool {
         self.cfg.revoked.iter().any(|r| r == id) || self.cfg.retired.iter().any(|r| r == id) || LEAKED_NODE_IDS.contains(&id)
@@ -1649,6 +1667,13 @@ pub async fn h_hist_list(State(state): State<AppState>, headers: HeaderMap, uri:
     Ok(Json(state.directory.fed_hist_after(q.since, q.after.as_deref())))
 }
 
+/// `GET /v1/fed/tombs?since&after` — accounts deleted (A7): ours and those
+/// handed on to us, each signed by the relay that deleted it.
+pub async fn h_tombs(State(state): State<AppState>, headers: HeaderMap, uri: axum::http::Uri, Query(q): Query<Since>) -> Result<impl IntoResponse, StatusCode> {
+    check(&state, &headers, "GET", signed_path(&uri), b"")?;
+    Ok(Json(state.directory.tombs_after(q.since, q.after.as_deref(), 500)))
+}
+
 pub async fn h_hist_get(State(state): State<AppState>, headers: HeaderMap, Path((user, k)): Path<(String, String)>) -> Result<impl IntoResponse, StatusCode> {
     check(&state, &headers, "GET", &format!("/v1/fed/hist/{user}/{k}"), b"")?;
     state.directory.hist_get(&user, &k).ok_or(StatusCode::NOT_FOUND)
@@ -2271,6 +2296,8 @@ pub async fn sync_once(state: &AppState) {
         // Messages first: they're what people wait for.
         pull_for_connected(state, &fed).await;
         for peer in fed.cfg.peers.clone() {
+            // Deletions first: an account deleted there isn't taken again below.
+            sync_tombs(state, &fed, &peer).await;
             sync_peer(state, &fed, &peer).await;
             sync_hist(state, &fed, &peer).await;
         }
@@ -2316,6 +2343,53 @@ async fn sync_hist(state: &AppState, fed: &Fed, peer: &str) {
         }
         if !keep_cursor(state, peer, "hist", &cur) { return; }
         if n < 1000 { return; }
+    }
+}
+
+/// Most deletions signed by one relay taken in an hour by themselves; more
+/// wait (an admin deleting a lot at once is delayed, a relay that turned
+/// bad can't empty the network in one go).
+pub const TOMBS_PER_HOUR: usize = 20;
+
+/// Deleted accounts (A7), from `peer`: each signed by the relay that
+/// deleted it, whose key we keep.
+async fn sync_tombs(state: &AppState, fed: &Fed, peer: &str) {
+    for _ in 0..20 {
+        let from = cursor(state, peer, "tombs");
+        let Some(r) = fed.get(peer, &format!("/v1/fed/tombs?{}", cursor_query(&from))).await else { return };
+        // Relays before 1.21.0-26 don't have the route: nothing to read.
+        let Ok(rows) = r.json::<Vec<crate::directory::Tomb>>().await else { return };
+        if rows.is_empty() { return; }
+        let n = rows.len();
+        let mut cur = from.clone();
+        for t in &rows {
+            let key = (t.got_at, format!("{}:{}", t.uid, t.created_at));
+            let mine = t.origin == fed.node_id();
+            if !mine && fed.verify_tomb(t) {
+                if state.directory.tombs_from_since(&t.origin, now_ms() - 3_600_000) >= TOMBS_PER_HOUR {
+                    tracing::warn!(origin = %t.origin, "federation: many account deletions from one relay — the rest wait");
+                    if cur != from { keep_cursor(state, peer, "tombs", &cur); }
+                    return;
+                }
+                match state.directory.apply_tomb(t) {
+                    Ok(Some(name)) => {
+                        tracing::warn!(user = %name, origin = %t.origin, "federation: an account deleted on its relay — deleted here too");
+                        crate::journal::log(&name, "deleted", format!("by relay {}", t.origin));
+                        crate::drop_connections_pub(state, &name).await;
+                    }
+                    Ok(None) => {}
+                    Err(_) => {
+                        if cur != from { keep_cursor(state, peer, "tombs", &cur); }
+                        return;
+                    }
+                }
+            } else if !mine {
+                tracing::warn!(origin = %t.origin, "federation: a deletion not signed by a relay we keep a key for — not taken");
+            }
+            cur = key;
+        }
+        if !keep_cursor(state, peer, "tombs", &cur) { return; }
+        if n < 500 { return; }
     }
 }
 
@@ -2433,6 +2507,7 @@ pub fn routes() -> axum::Router<AppState> {
         .route("/v1/fed/names/hello", post(h_names_hello))
         .route("/v1/fed/hist", get(h_hist_list))
         .route("/v1/fed/hist/:user/:k", get(h_hist_get))
+        .route("/v1/fed/tombs", get(h_tombs))
         .route("/v1/fed/peers", get(h_peers))
         .route("/v1/fed/hello", post(h_hello))
         .route("/v1/fed/ping", get(h_ping))

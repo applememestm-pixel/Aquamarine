@@ -1505,6 +1505,10 @@ fn check_pass(state: &AppState, pass: &str) -> Option<PassInfo> {
     if exp < now || exp > now + PASS_SECS + 60 {
         return None;
     }
+    // A deleted account (A7) gets no new home through an old pass.
+    if v["i"].as_str().is_some_and(|uid| !uid.is_empty() && state.directory.uid_deleted(uid)) {
+        return None;
+    }
     let nonce = v["n"].as_str()?.to_string();
     let mut g = USED.lock().ok()?;
     let used = g.get_or_insert_with(std::collections::HashMap::new);
@@ -3289,6 +3293,39 @@ async fn admin_detail(
 
 /// Drop `name`'s connections (the account and its devices, `name~dev`):
 /// their senders go, so each socket's loop ends (`rx` closes).
+/// [`drop_connections`] for other modules (fed.rs: a deletion from the network).
+pub(crate) async fn drop_connections_pub(state: &AppState, name: &str) {
+    drop_connections(state, name).await
+}
+
+/// Delete a person's account here (the admin). In a network, a tombstone
+/// signed by this relay goes with it (A7), made before the account goes, so
+/// the other relays delete their copies and no copy brings it back.
+pub async fn delete_account(state: &AppState, name: &str) -> bool {
+    let dir = state.directory.clone();
+    let fed = fed::registry(state);
+    let n = name.to_string();
+    let ok = tokio::task::spawn_blocking(move || {
+        if let Some((uid, created_at)) = dir.account_generation(&n) {
+            let now = directory::now_secs() as i64;
+            let t = match &fed {
+                Some(f) => f.sign_tomb(&uid, &n, created_at, now),
+                None => directory::Tomb { uid, created_at, username: n.clone(), deleted_at: now, ..Default::default() },
+            };
+            if dir.add_tomb(&t).is_err() {
+                tracing::error!(user = %n, "the deletion can't be recorded for the network — not deleted");
+                return false;
+            }
+        }
+        dir.delete_person(&n)
+    }).await.unwrap_or(false);
+    if ok {
+        drop_connections(state, name).await;
+        state.fed_kick.notify_one();
+    }
+    ok
+}
+
 async fn drop_connections(state: &AppState, name: &str) {
     let dev = format!("{name}~");
     let mine = |k: &str| k == name || k.starts_with(&dev);
@@ -3353,13 +3390,9 @@ async fn admin_delete_user(
     if q.ban && state.directory.ban(&name).is_none() {
         return Err((StatusCode::NOT_FOUND, "no such account".into()));
     }
-    let dir = state.directory.clone();
-    let n = name.clone();
-    let ok = tokio::task::spawn_blocking(move || dir.delete_person(&n)).await.unwrap_or(false);
-    if !ok {
+    if !delete_account(&state, &name).await {
         return Err((StatusCode::NOT_FOUND, "no such account".into()));
     }
-    drop_connections(&state, &name).await;
     tracing::warn!(user = %name, ban = q.ban, "admin: account deleted");
     journal::log(&name, "deleted", if q.ban { "banned" } else { "" });
     Ok(Json(serde_json::json!({ "ok": true })))
