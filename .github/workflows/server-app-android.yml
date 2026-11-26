@@ -9,6 +9,7 @@ on:
       - "crates/aqua-server-app/**"
       - "crates/aqua-server/**"
       - ".github/workflows/server-app-android.yml"
+      - "android/backup/**"
   workflow_dispatch:
 
 concurrency:
@@ -57,7 +58,11 @@ jobs:
           mkdir -p gen/android/app/src/main/res/xml
           cp android/netsec.xml gen/android/app/src/main/res/xml/network_security_config.xml
           sed -i '0,/<application/s##<application android:networkSecurityConfig="@xml/network_security_config"#' "$m"
+          # Nothing of the app (admin token, keys) in Android's backup.
+          cp ../../android/backup/backup_rules.xml ../../android/backup/data_extraction_rules.xml gen/android/app/src/main/res/xml/
+          sed -i '0,/<application/s##<application android:allowBackup="false" android:fullBackupContent="@xml/backup_rules" android:dataExtractionRules="@xml/data_extraction_rules"#' "$m"
           grep -n 'AquaServerService\|FOREGROUND\|networkSecurityConfig' "$m"
+          grep -q 'android:allowBackup="false"' "$m"
 
       - name: Build APK
         working-directory: crates/aqua-server-app

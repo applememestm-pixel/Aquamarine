@@ -140,6 +140,14 @@ if ! grep -q networkSecurityConfig "$M"; then
   echo '[patch] network security config (loopback media server)'
 fi
 
+# 1f. Nothing of the app in Android's backup or phone-to-phone copy
+#     (keys, sessions, the vault).
+cp -f "$HERE/backup/backup_rules.xml" "$HERE/backup/data_extraction_rules.xml" "$APP/src/main/res/xml/"
+if ! grep -q dataExtractionRules "$M"; then
+  perl -0pi -e 's|<application|<application android:allowBackup="false" android:fullBackupContent="\@xml/backup_rules" android:dataExtractionRules="\@xml/data_extraction_rules"|' "$M"
+  echo '[patch] Android backup excluded'
+fi
+
 # 2. App icon.
 ICONS="$ROOT/crates/aqua-client-ui/icons/android"
 if [ -d "$ICONS" ]; then

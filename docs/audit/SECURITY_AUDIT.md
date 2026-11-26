@@ -19,7 +19,7 @@
 | AQUA-SEC-010 | Aquamarine | P1 | Federation cursors | CONFIRMED (code) | частично | PASS (unit) |
 | AQUA-SEC-011 | Aquamarine | P1 | Queues / DoS | CONFIRMED (code) | частично | PASS |
 | AQUA-SEC-012 | Aquamarine | P1 | Updates | CONFIRMED (code) | подпись сумм во всех трёх путях, привязана к версии выпуска; остатки — в разделе о 012 | тесты в CI; на выпуске не проверено |
-| AQUA-SEC-013 | Aquamarine | P1 | Android key storage | REPORTED | открыто: код есть, выключен с 1.21.0-24 (`KEYSTORE_WRAP`) | — |
+| AQUA-SEC-013 | Aquamarine | P0 | Android key storage + backup | CONFIRMED (code) | исправлено в 1.21.0-25 (подробности ниже); на телефонах не проверено | unit + эмулятор в CI |
 | AQUA-SEC-014 | Aquamarine | P1 | CI / supply chain | CONFIRMED | частично | аудит работает, нашёл 14 уязвимостей |
 | AQUA-SEC-016 | Aquamarine | P1 | Dependencies | CONFIRMED (cargo audit) | исправлено в 1.21.0-23 (раунд 2, `GPT_REVIEW_RESOLUTION.md`) | audit в CI |
 | AQUA-SEC-017 | Aquamarine | P0* | Federation version gate | регрессия моего изменения, найдена при ревью | исправлено до выпуска | PASS |
@@ -172,6 +172,11 @@
 | AQUA-SEC-015 | `lib.rs` `email_request` | 409 и 404 раскрывают, зарегистрирован ли адрес | CONFIRMED (code) |
 | CZ-SEC-002 | `server.mjs:506-522` | Wiki: любой участник правит любую статью, удаления и модерации нет | REPORTED |
 | CZ-SEC-003 | `server.mjs` | Rate limiting отсутствует (подробности ниже) | REPORTED |
+
+**AQUA-SEC-013 — ключ хранилища на Android (1.21.0-25):**
+- найдено сверх отчёта: ни одна сборка не отключала системный бэкап — в облако Google и на новый телефон уходили `vault.sqlite` вместе с открытым `master.key` и localStorage;
+- исправление: `android/backup/*.xml` + атрибуты манифеста во всех сборках (проверка `tools/check_android.py`); перенос ключа в Keystore и экран восстановления (`aqua-client-ui/src/vault_key.rs`, тесты там же; `tools/android_keystore_test.sh`);
+- остаётся: копии, сделанные Google до обновления, не удаляются; Keystore проверен только на эмуляторе (программный); пока перезагрузки не было, открытый `master.key` лежит на устройстве; `master.key.rk` открывается 24 словами, а сами слова лежат внутри хранилища; localStorage (токен бота мини-приложений, хэши замков чатов) не шифруется; экспорта аккаунта в файл нет; iOS не проверялся.
 
 **AQUA-SEC-009 — общий секрет федерации:**
 - в подписи нет nonce и получателя: запрос, подписанный для A, принимается узлом B;

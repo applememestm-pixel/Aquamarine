@@ -128,6 +128,7 @@ pub async fn backup_enable(state: State<'_, StdMutex<AppState>>, password: Strin
     let s = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     s.vault.put_record(KEYS, &serde_json::to_vec(&keys).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     s.vault.put_record(PHRASE, phrase.as_bytes()).map_err(|e| e.to_string())?;
+    crate::vault_key::keep_recovery(&s.data_dir, &s.vault);
     let _ = s.vault.delete_record(LAST);
     let _ = s.vault.delete_record(HASH);
     Ok(phrase)
@@ -167,6 +168,7 @@ pub async fn recovery_create(state: State<'_, StdMutex<AppState>>) -> Result<Str
                     let _ = s.vault.delete_record(LAST);
                 }
                 s.vault.put_record(PHRASE, p.as_bytes()).map_err(|e| e.to_string())?;
+                crate::vault_key::keep_recovery(&s.data_dir, &s.vault);
                 p
             }
         };
