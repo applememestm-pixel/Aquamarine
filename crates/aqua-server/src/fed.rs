@@ -717,7 +717,7 @@ impl Fed {
         aqua_core::crypto::SignPublic::from_bytes(key)
             .verify(v2_message(method, path, ts, nonce, from, to, body).as_bytes(), &sig)
             .ok()?;
-        self.replay.take(&format!("v2:{from}:{nonce}"), ts, now_ms()).then(|| from.to_string())
+        self.replay.take(from, &format!("v2:{from}:{nonce}"), ts, now_ms()).then(|| from.to_string())
     }
 
     /// Add both signatures to a request to `peer`.
@@ -846,7 +846,7 @@ impl Fed {
                 // the same request, with `x-aqua-fed2` cut off, passed again
                 // on the shared secret wherever that is still taken.
                 if let Some((ts, sig)) = self.secret_sig(headers, method, path, body) {
-                    if !self.replay.take(&sig, ts, now_ms()) {
+                    if !self.replay.take(&from, &sig, ts, now_ms()) {
                         return None;
                     }
                 }
@@ -866,7 +866,7 @@ impl Fed {
         // AQUA-SEC-009: a signed request was good for its whole ±5-minute
         // window, as many times as anyone sent it again. Each signature is
         // now taken once (signatures cover the time, so a retry signs anew).
-        self.replay.take(&sig, ts, now_ms()).then_some(Sender::Secret)
+        self.replay.take("secret", &sig, ts, now_ms()).then_some(Sender::Secret)
     }
 
     /// A good `x-aqua-fed` (shared-secret) signature of this request, fresh:

@@ -31,7 +31,7 @@ pub mod blobstore;
 mod blob_upload;
 mod paid;
 pub mod fed;
-mod replay;
+pub mod replay;
 pub mod games;
 pub mod directory;
 pub mod tgapi;
@@ -3842,7 +3842,10 @@ pub async fn serve_embedded(
     botmaker::spawn(state.clone());
     quota::spawn(state.clone());
     // Stopped: the files stay (blobstore.rs).
-    axum::serve(listener, app(state).into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(shutdown).await
+    let r = axum::serve(listener, app(state).into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(shutdown).await;
+    // Used signatures on disk, marked clean (replay.rs).
+    replay::Replay::shutdown_all();
+    r
 }
 
 #[cfg(test)]
