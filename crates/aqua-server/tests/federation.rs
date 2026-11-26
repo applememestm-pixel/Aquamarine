@@ -1202,3 +1202,64 @@ async fn same_name_reregistered_after_deletion_keeps_it() {
     fed::sync_once(&sb).await;
     assert_eq!(sb.directory.identity_for("phoenix"), Some(*id2.public().dh_pub.as_bytes()), "and kept on B");
 }
+
+/// A9: an `aqpass` v2 carries the home relay's node signature next to the
+/// HMAC. A relay of an older build reads only the HMAC (checked here the
+/// way it does) and takes it; a solo relay that requires keys takes it only
+/// with a good signature — a pass made with the secret alone is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn aqpass_v2_accepted_by_old_and_new_solo() {
+    use base64::Engine;
+    let tmp = tempfile::tempdir().unwrap();
+    let (sa, ua) = serve(&tmp, "a", |u| FedConfig { secret: SECRET.into(), peers: vec![], public_url: u.into(), mode: "network".into(), ..Default::default() }).await;
+    let admit = fed::new_admit_token(&sa).unwrap();
+    let (ss, us) = serve(&tmp, "s", |u| FedConfig { secret: SECRET.into(), peers: vec![ua.clone()], public_url: u.into(), mode: "solo".into(), join_token: admit, ..Default::default() }).await;
+    fed::names_hello(&fed::registry(&ss).unwrap()).await;
+    fed::absorb_vouches(&ss);
+    assert!(fed::registry(&ss).unwrap().pin_for(&ua).is_some());
+    assert!(fed::registry(&ss).unwrap().enforced(), "the solo relay knows its only peer's key: keys required");
+    {
+        let mut c = ss.admin.write().unwrap();
+        c.invite_only = true;
+        c.allow = vec![format!("*@{}", aqua_server::host_of(&ua))];
+    }
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    let bob = register(&http, &ua, &IdentityKeyPair::generate(), "passbob").await;
+    let new_pass = || async {
+        let r: serde_json::Value = http.post(format!("{ua}/v1/me/pass")).bearer_auth(&bob).json(&serde_json::json!({})).send().await.unwrap().json().await.unwrap();
+        r["pass"].as_str().unwrap().to_string()
+    };
+    let signup = |pass: String, user: &'static str| { let http = http.clone(); let us = us.clone(); async move {
+        let id = IdentityKeyPair::generate();
+        let tok = token(&http, &us, &id).await;
+        http.post(format!("{us}/v1/users/signup")).bearer_auth(&tok)
+            .json(&serde_json::json!({ "username": user, "password": "a-good-secret", "invite": pass })).send().await.unwrap().status().as_u16()
+    }};
+    // The old way of checking: HMAC over the payload with the secret.
+    let pass = new_pass().await;
+    let (payload, mac) = pass.strip_prefix("aqpass:").unwrap().split_once('.').unwrap();
+    let want = hex::encode(aqua_core::crypto::hmac_sha256(SECRET.as_bytes(), format!("aqpass|{payload}").as_bytes()));
+    assert_eq!(mac, want, "an older relay still takes it");
+    let v: serde_json::Value = serde_json::from_slice(&base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
+    assert_eq!(v["k"], fed::current(&sa).unwrap().node_id().as_str());
+    // The new solo relay: signed — taken, once.
+    assert_eq!(signup(pass.clone(), "passone").await, 204);
+    assert_eq!(signup(pass, "passtwo").await, 403, "a pass works once");
+    // Made with the secret only (no k / s): refused once keys are required.
+    let pass = new_pass().await;
+    let (payload, _) = pass.strip_prefix("aqpass:").unwrap().split_once('.').unwrap();
+    let mut v: serde_json::Value = serde_json::from_slice(&base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
+    v.as_object_mut().unwrap().remove("k");
+    v.as_object_mut().unwrap().remove("s");
+    let p2 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(v.to_string());
+    let forged = format!("aqpass:{p2}.{}", hex::encode(aqua_core::crypto::hmac_sha256(SECRET.as_bytes(), format!("aqpass|{p2}").as_bytes())));
+    assert_eq!(signup(forged, "passthree").await, 403);
+    // Another user's name in a signed pass: the signature doesn't match.
+    let pass = new_pass().await;
+    let (payload, _) = pass.strip_prefix("aqpass:").unwrap().split_once('.').unwrap();
+    let mut v: serde_json::Value = serde_json::from_slice(&base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
+    v["u"] = "someoneelse".into();
+    let p3 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(v.to_string());
+    let changed = format!("aqpass:{p3}.{}", hex::encode(aqua_core::crypto::hmac_sha256(SECRET.as_bytes(), format!("aqpass|{p3}").as_bytes())));
+    assert_eq!(signup(changed, "passfour").await, 403);
+}

@@ -664,6 +664,39 @@ impl Fed {
         hex::encode(self.key.public().as_bytes())
     }
 
+    /// An account pass (`aqpass` v2): the node key's signature over
+    /// `aqpass-v2\n{u}\n{i}\n{h}\n{x}\n{n}` — (node id, signature hex).
+    pub fn sign_pass(&self, msg: &str) -> (String, String) {
+        (self.node_id(), hex::encode(self.key.sign(msg.as_bytes())))
+    }
+
+    /// A pass's v2 signature: by `k`, a relay of the network we keep a key
+    /// for at the pass's home host `h`. None: no v2 fields, or `k` isn't a
+    /// relay we keep a key for.
+    pub fn pass_signed_by(&self, k: &str, sig: &str, msg: &str, host: &str) -> Option<bool> {
+        if k.is_empty() && sig.is_empty() {
+            return None;
+        }
+        if self.is_revoked(k) {
+            return Some(false);
+        }
+        // A relay whose key we don't keep (yet): can't be checked — the
+        // caller decides (taken on the HMAC only during the transition).
+        let pin = self.cfg.pins.iter().find(|p| p.id == k && !p.names_only())?;
+        if crate::host_of(&pin.url) != host {
+            return Some(false);
+        }
+        let (Some(key), Some(sig)) = (hex::decode(&pin.key).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()), hex::decode(sig).ok().and_then(|b| <[u8; 64]>::try_from(b).ok())) else { return Some(false) };
+        Some(aqua_core::crypto::SignPublic::from_bytes(key).verify(msg.as_bytes(), &sig).is_ok())
+    }
+
+    /// Use up `key` (a pass's nonce) for good: in the same table as signed
+    /// requests (on disk, survives a restart), kept until `until_ms` and a
+    /// clock window after.
+    pub fn take_once(&self, sender: &str, key: &str, until_ms: i64) -> bool {
+        self.replay.take(sender, key, until_ms, now_ms())
+    }
+
     /// A tombstone for an account deleted here, signed by our node key (A7).
     pub fn sign_tomb(&self, uid: &str, username: &str, created_at: i64, deleted_at: i64) -> crate::directory::Tomb {
         let mut t = crate::directory::Tomb { uid: uid.into(), created_at, username: username.into(), deleted_at, origin: self.node_id(), ..Default::default() };

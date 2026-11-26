@@ -1451,7 +1451,15 @@ async fn signup_user(
 // A relay of a network signs a short-lived pass for one of its accounts; a
 // solo relay that shares the name registry with that network (same secret)
 // checks it and lets the person sign up if its rules say `*@X` or
-// `@name@X`. `aqpass:` + base64url(JSON {u, h, x, n}) + "." + hex HMAC.
+// `@name@X`. `aqpass:` + base64url(JSON {u, i, h, x, n, k, s}) + "." + hex
+// HMAC. v2 (1.21.0-26): `k` the home relay's node id, `s` its node key's
+// signature over `aqpass-v2\n{u}\n{i}\n{h}\n{x}\n{n}` — the secret alone
+// no longer makes a pass once keys are required. Older relays read only the
+// HMAC and ignore `k` and `s`.
+
+fn pass_message(u: &str, i: &str, h: &str, x: i64, n: &str) -> String {
+    format!("aqpass-v2\n{u}\n{i}\n{h}\n{x}\n{n}")
+}
 
 const PASS_SECS: i64 = 10 * 60;
 
@@ -1477,7 +1485,9 @@ async fn pass_create(State(state): State<AppState>, Caller(dh): Caller) -> Resul
     rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut n);
     let exp = directory::now_secs() as i64 + PASS_SECS;
     let uid = state.directory.uid_of(&me).unwrap_or_default();
-    let json = serde_json::json!({ "u": me, "i": uid, "h": host_of(&home), "x": exp, "n": hex::encode(n) }).to_string();
+    let (h, n) = (host_of(&home), hex::encode(n));
+    let (k, sig) = fed.sign_pass(&pass_message(&me, &uid, &h, exp, &n));
+    let json = serde_json::json!({ "u": me, "i": uid, "h": h, "x": exp, "n": n, "k": k, "s": sig }).to_string();
     let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json);
     let pass = format!("aqpass:{payload}.{}", pass_mac(&fed.cfg.secret, &payload));
     journal::log(&me, "pass", "");
@@ -1491,7 +1501,6 @@ struct PassInfo { user: String, uid: String, host: String }
 /// Using it uses it up.
 fn check_pass(state: &AppState, pass: &str) -> Option<PassInfo> {
     use base64::Engine;
-    static USED: std::sync::Mutex<Option<std::collections::HashMap<String, i64>>> = std::sync::Mutex::new(None);
     let fed = fed::registry(state)?;
     let (payload, mac) = pass.trim().strip_prefix("aqpass:")?.split_once('.')?;
     let want = pass_mac(&fed.cfg.secret, payload);
@@ -1509,14 +1518,20 @@ fn check_pass(state: &AppState, pass: &str) -> Option<PassInfo> {
     if v["i"].as_str().is_some_and(|uid| !uid.is_empty() && state.directory.uid_deleted(uid)) {
         return None;
     }
-    let nonce = v["n"].as_str()?.to_string();
-    let mut g = USED.lock().ok()?;
-    let used = g.get_or_insert_with(std::collections::HashMap::new);
-    used.retain(|_, x| *x >= now);
-    if used.insert(nonce, exp).is_some() {
+    let (user, uid, host, nonce) = (v["u"].as_str()?, v["i"].as_str().unwrap_or(""), v["h"].as_str()?, v["n"].as_str()?);
+    // v2: signed by the home relay's node key. Once keys are required here,
+    // a pass without that (made with the secret alone) isn't taken.
+    let msg = pass_message(user, uid, host, exp, nonce);
+    match fed.pass_signed_by(v["k"].as_str().unwrap_or(""), v["s"].as_str().unwrap_or(""), &msg, host) {
+        Some(false) => return None,
+        None if fed.enforced() => return None,
+        _ => {}
+    }
+    // Once: on disk with the signed requests (a restart used to forget it).
+    if !fed.take_once("pass", &format!("pass:{nonce}"), exp * 1000) {
         return None;
     }
-    Some(PassInfo { user: v["u"].as_str()?.to_string(), uid: v["i"].as_str().unwrap_or("").to_string(), host: v["h"].as_str()?.to_string() })
+    Some(PassInfo { user: user.to_string(), uid: uid.to_string(), host: host.to_string() })
 }
 
 #[derive(Deserialize)]
