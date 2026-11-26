@@ -926,14 +926,20 @@ impl Directory {
         // in the same second could land before a peer's cursor (kept on disk
         // now) and never be pulled. A row applied from a peer carries
         // its own updated_at and is left alone (WHEN clause).
+        // Triggers of a build before 1.21.0-25 ("this second + random ms")
+        // are replaced once, in one transaction: two processes opening the
+        // same file at once (a restart, tests) collided between DROP and CREATE.
+        let old_trigger = db.query_row("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='users_touch_ins'", [], |r| r.get::<_, String>(0))
+            .map(|sql| !sql.contains("julianday")).unwrap_or(false);
+        if old_trigger {
+            db.execute_batch("BEGIN IMMEDIATE; DROP TRIGGER IF EXISTS users_touch_ins; DROP TRIGGER IF EXISTS users_touch_upd; COMMIT;")?;
+        }
         db.execute_batch(
             r#"
-            DROP TRIGGER IF EXISTS users_touch_ins;
-            DROP TRIGGER IF EXISTS users_touch_upd;
-            CREATE TRIGGER users_touch_ins AFTER INSERT ON users
+            CREATE TRIGGER IF NOT EXISTS users_touch_ins AFTER INSERT ON users
             WHEN NEW.updated_at = 0
             BEGIN UPDATE users SET updated_at = max(CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), (SELECT COALESCE(MAX(updated_at), 0) + 1 FROM users)) WHERE username = NEW.username; END;
-            CREATE TRIGGER users_touch_upd AFTER UPDATE ON users
+            CREATE TRIGGER IF NOT EXISTS users_touch_upd AFTER UPDATE ON users
             WHEN NEW.updated_at = OLD.updated_at
             BEGIN UPDATE users SET updated_at = max(OLD.updated_at + 1, CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), (SELECT COALESCE(MAX(updated_at), 0) + 1 FROM users)) WHERE username = NEW.username; END;
             CREATE INDEX IF NOT EXISTS idx_users_updated ON users(updated_at);
@@ -4156,6 +4162,31 @@ mod tests {
         assert!(d.fed_apply_user(&mine).applied);
         assert_eq!(d.fed_apply_name(&row, "http://old"), None);
         assert!(d.identity_for("taken").is_some());
+    }
+
+    /// Several processes open one database with the triggers of an older
+    /// build at once (a restart, the tests): each opens, the new triggers
+    /// end up in place (CI caught "trigger already exists").
+    #[test]
+    fn old_triggers_are_replaced_by_many_openers_at_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("d.sqlite").to_string_lossy().to_string();
+        drop(Directory::open_path(&path).unwrap());
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch("DROP TRIGGER users_touch_ins; DROP TRIGGER users_touch_upd;
+                CREATE TRIGGER users_touch_ins AFTER INSERT ON users WHEN NEW.updated_at = 0
+                BEGIN UPDATE users SET updated_at = CAST(strftime('%s','now') AS INTEGER) * 1000 + (abs(random()) % 1000) WHERE username = NEW.username; END;
+                CREATE TRIGGER users_touch_upd AFTER UPDATE ON users WHEN NEW.updated_at = OLD.updated_at
+                BEGIN UPDATE users SET updated_at = max(OLD.updated_at + 1, CAST(strftime('%s','now') AS INTEGER) * 1000) WHERE username = NEW.username; END;").unwrap();
+        }
+        let threads: Vec<_> = (0..8).map(|_| { let p = path.clone(); std::thread::spawn(move || Directory::open_path(&p).map(|_| ()).map_err(|e| e.to_string())) }).collect();
+        for t in threads { t.join().unwrap().unwrap(); }
+        let c = Connection::open(&path).unwrap();
+        for name in ["users_touch_ins", "users_touch_upd"] {
+            let sql: String = c.query_row("SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?1", [name], |r| r.get(0)).unwrap();
+            assert!(sql.contains("julianday"), "{name}: {sql}");
+        }
     }
 
     /// Rows made here one after another get increasing change times: one
