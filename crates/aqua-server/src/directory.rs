@@ -699,6 +699,14 @@ impl Directory {
                 created_at     INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+            CREATE TABLE IF NOT EXISTS push_endpoints (
+                user     TEXT NOT NULL,
+                device   TEXT NOT NULL,
+                kind     TEXT NOT NULL,
+                endpoint TEXT NOT NULL,
+                created  INTEGER NOT NULL,
+                PRIMARY KEY (user, device)
+            );
             CREATE TABLE IF NOT EXISTS fed_tombstones (
                 uid        TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
@@ -2877,6 +2885,30 @@ impl Directory {
     }
 
     /// Federation: a peer's record, if newer than ours (it gets a new local seq).
+    /// Where `user`'s device `device` (its key, hex) can be woken (push.rs).
+    /// One per device; replaces the one before.
+    pub fn push_register(&self, user: &str, device: &str, kind: &str, endpoint: &str) -> rusqlite::Result<()> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.execute(
+            "INSERT INTO push_endpoints (user, device, kind, endpoint, created) VALUES (?1,?2,?3,?4,?5)
+             ON CONFLICT(user, device) DO UPDATE SET kind=excluded.kind, endpoint=excluded.endpoint, created=excluded.created",
+            rusqlite::params![user, device, kind, endpoint, now_secs() as i64],
+        )?;
+        Ok(())
+    }
+
+    pub fn push_unregister(&self, user: &str, device: &str) {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = db.execute("DELETE FROM push_endpoints WHERE user=?1 AND device=?2", rusqlite::params![user, device]);
+    }
+
+    /// `(device, kind, endpoint)` of every device of `user` that can be woken.
+    pub fn push_endpoints(&self, user: &str) -> Vec<(String, String, String)> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let Ok(mut st) = db.prepare("SELECT device, kind, endpoint FROM push_endpoints WHERE user=?1 LIMIT 16") else { return Vec::new() };
+        st.query_map(rusqlite::params![user], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).map(|it| it.filter_map(Result::ok).collect()).unwrap_or_default()
+    }
+
     /// Is this generation of account `uid` (created at `created_at`) deleted?
     fn tombed(db: &Connection, uid: &str, created_at: i64) -> bool {
         db.query_row("SELECT 1 FROM fed_tombstones WHERE uid=?1 AND created_at>=?2 LIMIT 1", rusqlite::params![uid, created_at], |_| Ok(()))
@@ -3554,6 +3586,7 @@ impl Directory {
             "DELETE FROM bot_peers WHERE user=?1",
             "DELETE FROM fed_names WHERE username=?1",
             "DELETE FROM renames WHERE new_name=?1",
+            "DELETE FROM push_endpoints WHERE user=?1",
         ] {
             let _ = db.execute(sql, rusqlite::params![name]);
         }

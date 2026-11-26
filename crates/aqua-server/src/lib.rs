@@ -55,6 +55,7 @@ pub mod selfupdate;
 pub mod turnsrv;
 pub mod botmaker;
 pub mod quota;
+pub mod push;
 // Re-export the wire types so tests + external callers keep working.
 pub use aqua_core::wire::{BundleUpload, PayloadKind, RelayMessage};
 /// Release signatures for the updaters (also the server app's).
@@ -885,6 +886,10 @@ async fn deliver(state: &AppState, msg: RelayMessage) {
     // Kept on disk until the recipient connects (survives restarts; a peer
     // relay collects it if they connect there).
     let row = serde_json::to_vec(&msg).ok().and_then(|b| state.directory.inbox_push(&msg.to, &b).ok());
+    // Its devices may be asleep: an optional wake signal (push.rs), nothing in it.
+    if row.is_some() {
+        push::wake(state, base_user(&msg.to));
+    }
     // Federation: maybe they're connected to another relay. Asked in the
     // background: a slow or unreachable peer took up to ~40 s here, the
     // sender's connection waited for it (no reads, no confirmation), its app
@@ -2077,6 +2082,34 @@ async fn admin_fed_auth(State(state): State<AppState>, headers: axum::http::Head
     journal::log("admin", "fed-auth", note.clone());
     tracing::warn!(change = %note, "federation: the admin changed the node key requirement");
     Ok(Json(st))
+}
+
+#[derive(Deserialize)]
+struct PushSet { kind: String, endpoint: String }
+
+/// `POST /v1/me/push {kind: "unifiedpush" | "gateway", endpoint}` — where
+/// this device can be woken while it isn't connected (push.rs). Optional:
+/// without it the device gets its messages when it connects, as always.
+async fn push_set(State(state): State<AppState>, Caller(dh): Caller, Json(b): Json<PushSet>) -> Result<StatusCode, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    let endpoint = b.endpoint.trim().to_string();
+    match b.kind.as_str() {
+        "unifiedpush" if push::endpoint_ok(&endpoint) => {}
+        "unifiedpush" => return Err((StatusCode::BAD_REQUEST, "a UnifiedPush endpoint is an https address of a public host".into())),
+        "gateway" if push::gateway_url().is_none() => return Err((StatusCode::CONFLICT, "this server has no push gateway".into())),
+        "gateway" if endpoint.is_empty() || endpoint.len() > 4096 || !endpoint.bytes().all(|c| c.is_ascii_graphic()) => return Err((StatusCode::BAD_REQUEST, "bad token".into())),
+        "gateway" => {}
+        _ => return Err((StatusCode::BAD_REQUEST, "kind: unifiedpush or gateway".into())),
+    }
+    state.directory.push_register(&me, &hex::encode(dh), &b.kind, &endpoint).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `DELETE /v1/me/push` — stop waking this device.
+async fn push_unset(State(state): State<AppState>, Caller(dh): Caller) -> Result<StatusCode, (StatusCode, String)> {
+    let me = caller_username(&state, &dh)?;
+    state.directory.push_unregister(&me, &hex::encode(dh));
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
@@ -3804,6 +3837,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/me/2fa/backup",      post(totp_backup))
         .route("/v1/devices/:user",      get(get_devices))
         .route("/v1/me/devices",         get(my_devices))
+        .route("/v1/me/push",            post(push_set).delete(push_unset))
         .route("/v1/me/username",        post(change_username))
         .route("/v1/me",                 get(whoami))
         .route("/v1/users/by-id/:uid",   get(user_by_id))
