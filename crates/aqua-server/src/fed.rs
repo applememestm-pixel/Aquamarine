@@ -166,6 +166,11 @@ pub struct FedConfig {
     /// taken again, like revoked ones.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub retired: Vec<String>,
+    /// Keys of those retired ids and when we followed away from them
+    /// (`[id, key hex, unix secs]`): deletions a relay signed with its key
+    /// before it changed are still taken — none signed after that.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retired_keys: Vec<(String, String, u64)>,
 }
 
 /// One key change: `old` (public key, hex) signed
@@ -458,6 +463,22 @@ pub(crate) fn update_cfg(state: &AppState, f: impl FnOnce(&Fed, &mut FedConfig) 
     next
 }
 
+/// The admin's change of the federation settings (panel, invitation): like
+/// [`update_cfg`] under the same lock, but also when no network runs yet
+/// (the config is then read from disk). Returns what runs after it.
+pub fn admin_update(state: &AppState, f: impl FnOnce(&mut FedConfig)) -> std::io::Result<Option<Arc<Fed>>> {
+    let mut g = state.fed.write().unwrap_or_else(|e| e.into_inner());
+    let cur = g.clone();
+    let mut c = cur.as_ref().map(|x| x.cfg.clone()).unwrap_or_else(FedConfig::load);
+    f(&mut c);
+    if !c.ephemeral {
+        c.save()?;
+    }
+    let next = match &cur { Some(old) => Fed::new_after(c, old), None => Fed::new(c) };
+    *g = next.clone();
+    Ok(next)
+}
+
 /// Add relays to the peer list (saved, and the live config replaced).
 /// Returns the ones that were new.
 pub fn add_peers(state: &AppState, urls: &[String]) -> Vec<String> {
@@ -707,11 +728,19 @@ impl Fed {
     /// Signed by the relay it names (`origin`), whose key we keep and which
     /// isn't revoked.
     pub fn verify_tomb(&self, t: &crate::directory::Tomb) -> bool {
-        if self.is_revoked(&t.origin) {
+        if self.cfg.revoked.iter().any(|r| *r == t.origin) || LEAKED_NODE_IDS.contains(&t.origin.as_str()) {
             return false;
         }
-        let Some(pin) = self.cfg.pins.iter().find(|p| p.id == t.origin && !p.names_only()) else { return false };
-        let (Some(k), Some(sig)) = (hex::decode(&pin.key).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()), hex::decode(&t.sig).ok().and_then(|b| <[u8; 64]>::try_from(b).ok())) else { return false };
+        // The relay's current key; or a key it changed away from, for
+        // deletions made before we followed the change.
+        let key = match self.cfg.pins.iter().find(|p| p.id == t.origin && !p.names_only()) {
+            Some(pin) => pin.key.clone(),
+            None => match self.cfg.retired_keys.iter().find(|x| x.0 == t.origin) {
+                Some((_, k, at)) if t.deleted_at >= 0 && (t.deleted_at as u64) <= *at => k.clone(),
+                _ => return false,
+            },
+        };
+        let (Some(k), Some(sig)) = (hex::decode(&key).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()), hex::decode(&t.sig).ok().and_then(|b| <[u8; 64]>::try_from(b).ok())) else { return false };
         aqua_core::crypto::SignPublic::from_bytes(k).verify(t.message().as_bytes(), &sig).is_ok()
     }
 
@@ -1118,7 +1147,7 @@ impl Fed {
         // a signed change. Another key without a signature isn't taken here.
         let pin = match pin_change(self, &h) {
             Some(PinChange::New(p)) if self.cfg.peers.iter().any(|u| u == peer) => p,
-            Some(PinChange::Rotated(p, _)) => p,
+            Some(PinChange::Rotated(p, ..)) => p,
             _ => return,
         };
         if let Ok(mut g) = self.got_pins.lock() { g.push(pin); }
@@ -1803,7 +1832,7 @@ async fn decide_pin(state: &AppState, fed: &Fed, h: &Hello, names: bool) -> (boo
     };
     let token_ok = |st: &AppState| take_admit_token(st, &h.admit);
     match &ch {
-        PinChange::Rotated(p, _) => {
+        PinChange::Rotated(p, ..) => {
             let p = p.clone();
             let changed = apply_pin_change(state, &ch);
             (true, changed.then_some(p))
@@ -1831,7 +1860,8 @@ async fn decide_pin(state: &AppState, fed: &Fed, h: &Hello, names: bool) -> (boo
             let on_list = if names { fed.cfg.solo_peers.contains(&pin.url) || !enforced } else { fed.cfg.peers.contains(&pin.url) };
             let ok = if pin.url.starts_with("http") {
                 let by_us = !enforced && on_list;
-                (by_us || token_ok(state) || fed.vouched(pin, &h.vouches)) && fed.proves_address(&pin.url, pin).await
+                // The address first: a relay that can't prove it doesn't use up the token.
+                fed.proves_address(&pin.url, pin).await && (by_us || fed.vouched(pin, &h.vouches) || token_ok(state))
             } else {
                 token_ok(state) || fed.vouched(pin, &h.vouches)
             };
@@ -1946,8 +1976,8 @@ pub enum PinChange {
     /// A relay whose key (and address) we don't keep yet.
     New(Pin),
     /// A pinned relay changed its key, each step signed by the one before;
-    /// the ids it moved away from (to be retired).
-    Rotated(Pin, Vec<String>),
+    /// the ids it moved away from (to be retired) and their keys.
+    Rotated(Pin, Vec<String>, Vec<String>),
     /// A pinned key at a new address (to be checked there before moving).
     Moved { from: String, pin: Pin },
     /// Another key for an address we keep a key for, not signed by it: for
@@ -1976,9 +2006,9 @@ fn pin_change(fed: &Fed, h: &Hello) -> Option<PinChange> {
     match fed.pin_for(&url) {
         Some(old) if old.key == pin.key => None,
         Some(old) => match follow_rotations(&url, old, &pin.key, &h.rotations, &h.rotated) {
-            Some((seq, retired)) => {
+            Some((seq, retired, keys)) => {
                 tracing::info!(%url, seq, "federation: a peer changed its node key (signed by the old one)");
-                Some(PinChange::Rotated(Pin { role: old.role.clone(), rot_seq: seq, ..pin }, retired))
+                Some(PinChange::Rotated(Pin { role: old.role.clone(), rot_seq: seq, ..pin }, retired, keys))
             }
             None => {
                 tracing::warn!(%url, "federation: a hello with ANOTHER node key and no signature by the known one — for the admin");
@@ -1995,7 +2025,7 @@ fn pin_change(fed: &Fed, h: &Hello) -> Option<PinChange> {
 /// From the key we keep (`old`) to `new` along signed key changes: the
 /// last step's number and the ids passed through. Steps must go up from the
 /// number we followed last; a chain may be at most [`MAX_ROTATIONS`] long.
-fn follow_rotations(url: &str, old: &Pin, new: &str, steps: &[RotStep], legacy: &str) -> Option<(u64, Vec<String>)> {
+fn follow_rotations(url: &str, old: &Pin, new: &str, steps: &[RotStep], legacy: &str) -> Option<(u64, Vec<String>, Vec<String>)> {
     let verify = |by: &str, msg: &str, sig: &str| -> bool {
         let (Some(k), Some(s)) = (hex::decode(by).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()), hex::decode(sig.trim()).ok().and_then(|b| <[u8; 64]>::try_from(b).ok())) else { return false };
         aqua_core::crypto::SignPublic::from_bytes(k).verify(msg.as_bytes(), &s).is_ok()
@@ -2003,6 +2033,7 @@ fn follow_rotations(url: &str, old: &Pin, new: &str, steps: &[RotStep], legacy: 
     let mut at = old.key.clone();
     let mut seq = old.rot_seq;
     let mut passed = Vec::new();
+    let mut keys = Vec::new();
     for st in steps.iter().take(MAX_ROTATIONS) {
         if st.old != at || st.seq <= seq {
             continue;
@@ -2012,15 +2043,16 @@ fn follow_rotations(url: &str, old: &Pin, new: &str, steps: &[RotStep], legacy: 
             return None;
         }
         passed.push(old_id);
+        keys.push(at.clone());
         at = st.new.clone();
         seq = st.seq;
         if at == new {
-            return Some((seq, passed));
+            return Some((seq, passed, keys));
         }
     }
     // A relay of 1.21.0-23/24: one step, `aqua-fed-rotate\n{new}` by the old key.
     if old.rot_seq == 0 && steps.is_empty() && verify(&old.key, &format!("aqua-fed-rotate\n{new}"), legacy) {
-        return Some((0, vec![old.id.clone()]));
+        return Some((0, vec![old.id.clone()], vec![old.key.clone()]));
     }
     None
 }
@@ -2059,14 +2091,18 @@ impl Fed {
 fn apply_pin_change(state: &AppState, ch: &PinChange) -> bool {
     match ch {
         PinChange::New(p) | PinChange::Conflict(p) => set_pin(state, Pin { conflict: false, ..p.clone() }),
-        PinChange::Rotated(p, retired) => update_cfg(state, |_, c| {
+        PinChange::Rotated(p, retired, keys) => update_cfg(state, |_, c| {
             c.pins.retain(|x| x.url != p.url);
             c.pins.push(p.clone());
-            for r in retired {
+            let now = now_secs();
+            for (r, k) in retired.iter().zip(keys) {
                 if !c.retired.contains(r) { c.retired.push(r.clone()); }
+                if !c.retired_keys.iter().any(|x| x.0 == *r) { c.retired_keys.push((r.clone(), k.clone(), now)); }
             }
             let extra = c.retired.len().saturating_sub(256);
             c.retired.drain(..extra);
+            let extra = c.retired_keys.len().saturating_sub(256);
+            c.retired_keys.drain(..extra);
             true
         }).is_some(),
         PinChange::Moved { from, pin } => {
@@ -2767,7 +2803,7 @@ mod cursor_tests {
         c.rotated = hex::encode(a.key.sign(format!("aqua-fed-rotate\n{}", hex::encode(new.public().as_bytes())).as_bytes()));
         c.node_key = hex::encode(new.to_bytes());
         let a2 = super::Fed::new(c).unwrap();
-        let Some(super::PinChange::Rotated(moved, retired)) = super::pin_change(&b, &hello(&a2)) else { panic!("signed rotation is accepted") };
+        let Some(super::PinChange::Rotated(moved, retired, _)) = super::pin_change(&b, &hello(&a2)) else { panic!("signed rotation is accepted") };
         assert_eq!(retired, vec![a.node_id()]);
         assert_eq!(moved.id, a2.node_id());
         // Revoked: never again.
@@ -2984,9 +3020,10 @@ mod cursor_tests {
         let a1 = rotated(&a0);
         let a2 = rotated(&a1);
         assert_eq!(a2.cfg.rotations.len(), 2);
-        let Some(super::PinChange::Rotated(p, retired)) = super::pin_change(&b, &hello_of(&a2)) else { panic!("two steps followed") };
+        let Some(super::PinChange::Rotated(p, retired, keys)) = super::pin_change(&b, &hello_of(&a2)) else { panic!("two steps followed") };
         assert_eq!((p.id.as_str(), p.rot_seq), (a2.node_id().as_str(), 2));
         assert_eq!(retired, vec![a0.node_id(), a1.node_id()]);
+        assert_eq!(keys, vec![a0.node_pub(), a1.node_pub()]);
         // The one-step field alone (a relay of 1.21.0-24) isn't enough for two.
         let mut h = hello_of(&a2);
         h.rotations.clear();
@@ -3008,7 +3045,7 @@ mod cursor_tests {
         let (a0, b) = (fed("http://a"), fed("http://b"));
         let b = with_pins(&b, vec![pin_of(&a0, "http://a")], vec!["http://a".into()]);
         let a1 = rotated(&a0);
-        let Some(super::PinChange::Rotated(p, retired)) = super::pin_change(&b, &hello_of(&a1)) else { panic!() };
+        let Some(super::PinChange::Rotated(p, retired, _)) = super::pin_change(&b, &hello_of(&a1)) else { panic!() };
         let mut c = b.cfg.clone();
         c.pins = vec![p];
         c.retired = retired;
@@ -3022,6 +3059,27 @@ mod cursor_tests {
         let a0b = with_pins(&a0, vec![pin_of(&b, "http://b")], vec!["http://b".into()]);
         h.insert("x-aqua-fed2", a0b.sign2("http://b", "GET", "/v1/fed/users?since=0", b"").unwrap().parse().unwrap());
         assert!(!b.verify(&h, "GET", "/v1/fed/users?since=0", b""));
+    }
+
+    /// Review: deletions a relay signed before it changed its key are still
+    /// taken by a peer that followed the change; none signed after it.
+    #[test]
+    fn tombs_signed_with_a_retired_key_before_the_change() {
+        let (a0, b) = (fed("http://a"), fed("http://b"));
+        let b = with_pins(&b, vec![pin_of(&a0, "http://a")], vec!["http://a".into()]);
+        let before = a0.sign_tomb("1000000001", "gone", 1, super::now_secs() as i64 - 10);
+        let a1 = rotated(&a0);
+        let Some(super::PinChange::Rotated(p, retired, keys)) = super::pin_change(&b, &hello_of(&a1)) else { panic!() };
+        let mut c = b.cfg.clone();
+        c.pins = vec![p];
+        let now = super::now_secs();
+        c.retired_keys = retired.iter().zip(&keys).map(|(r, k)| (r.clone(), k.clone(), now)).collect();
+        c.retired = retired;
+        let b = super::Fed::new(c).unwrap();
+        assert!(b.verify_tomb(&before), "signed before the change");
+        let after = a0.sign_tomb("1000000002", "other", 1, now as i64 + 100);
+        assert!(!b.verify_tomb(&after), "the old key after the change: no");
+        assert!(b.verify_tomb(&a1.sign_tomb("1000000003", "x", 1, now as i64 + 100)), "the new key: yes");
     }
 
     #[test]

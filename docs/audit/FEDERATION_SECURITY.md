@@ -54,7 +54,8 @@
 
 ## Что принимается от соседей
 - Аккаунты — только от узлов роли `network`; строки ботов и строки «из будущего» (`updated_at` > сейчас + 5 мин) отклоняются; e-mail другого аккаунта (другой ID) не перехватывается.
-- Реестр имён: более «старая» заявка переименовывает наш аккаунт, только если наш занят не раньше чем за 10 минут до неё (одновременная регистрация). Выдуманный `created_at = 0` больше не отнимает давно занятые имена.
+- Реестр имён: более «старая» заявка переименовывает наш аккаунт, только если обе созданы в пределах 10 минут друг от друга и наш моложе 10 минут (одновременная регистрация). Отвергнутая заявка не записывается и не передаётся дальше. **Остаётся:** заявки в реестре не подписаны — узел реестра может выдумать «более старую» заявку на имя, которого у нас нет (только запись в чужом реестре), или отнять имя у аккаунта в первые 10 минут его жизни.
+- Надгробия, подписанные ключом узла до его смены, принимаются по сохранённому старому ключу (`retired_keys`), но только с `deleted_at` не позже момента, когда мы перешли на новый ключ.
 - `h_deliver` / `h_webapp_init`: отправитель (пользователь) должен быть известным, не забаненным человеком; лимит 6000 / 120 в минуту на узел. **Это смягчение, а не доказательство авторства**: узел сети по-прежнему может назвать любого известного отправителя. Подлинность сообщения обеспечивает сквозное шифрование на устройствах. Конверты, которые сервер забирает из чужих очередей (`inboxes2`), эту проверку не проходят.
 - Пропуск `aqpass` v2: подпись ключом домашнего узла (`pass_signed_by`, `fed.rs:676`); при обязательных ключах пропуск, сделанный одним секретом, не принимается.
 
@@ -79,9 +80,9 @@
 ## Тесты
 `crates/aqua-server/tests/federation.rs`: `tunnel_peer_with_pinned_key_syncs_both_ways`, `tunnel_poll_cannot_claim_another_node`, `forged_tunnel_id_does_not_downgrade`, `url_hijack_before_upgrade_is_refused`, `mixed_network_old_keyed_new` (старый узел имитирован запросами с одним секретом), `key_change_without_signature_goes_pending_conflict`, `admit_token_recovers_lost_key`, `cursor_survives_restart`, `signed_account_deletion_propagates_and_old_relay_cannot_resurrect`, `same_name_reregistered_after_deletion_keeps_it`, `solo_registry_requires_node_key_after_enforcement`, `aqpass_v2_accepted_by_old_and_new_solo`.
 
-`fed.rs`: `a_v2_request_uses_up_its_secret_signature_too`, `enforcement_is_a_ratchet`, `deadline_enforces_and_never_reverts`, `legacy_window_expires_by_itself`, `names_role_cannot_read_users`, `rotation_chain_two_steps_offline_peer`, `retired_id_cannot_rotate_again`.
+`fed.rs`: `tombs_signed_with_a_retired_key_before_the_change`, `a_v2_request_uses_up_its_secret_signature_too`, `enforcement_is_a_ratchet`, `deadline_enforces_and_never_reverts`, `legacy_window_expires_by_itself`, `names_role_cannot_read_users`, `rotation_chain_two_steps_offline_peer`, `retired_id_cannot_rotate_again`.
 
-`replay.rs`: `per_sender_quota_isolates_a_flood`, `pruning_is_amortized`, `crash_without_clean_mark_refuses_older_signatures`, `clean_restart_keeps_working`, `a_second_process_waits_for_the_first`.
+`replay.rs`: `a_future_stamped_entry_survives_a_restart`, `per_sender_quota_isolates_a_flood`, `pruning_is_amortized`, `crash_without_clean_mark_refuses_older_signatures`, `clean_restart_keeps_working`, `a_second_process_waits_for_the_first`.
 
 `directory.rs`: `cursors_persist_and_move_with_url`, `tombstone_blocks_old_generation_but_not_reregistration`, `tombstone_blocks_name_registry_resurrection`, `future_updated_at_is_refused`, `bot_rows_from_peers_are_refused`, `a_peer_row_cannot_take_another_accounts_email`, `a_forged_old_name_claim_does_not_rename_ours`, `local_changes_get_increasing_times`.
 

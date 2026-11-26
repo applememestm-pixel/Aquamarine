@@ -185,7 +185,9 @@ impl Inner {
                     let Ok(ts) = ts.parse::<i64>() else { continue };
                     // Lines of 1.21.0-24/25 name no sender.
                     let sender = it.next().unwrap_or("?").to_string();
-                    if (now - ts).abs() <= self.window && !sig.is_empty() {
+                    // Not expired yet. Entries stamped ahead (a pass's nonce
+                    // is kept until the pass expires) are kept too.
+                    if now - ts <= self.window && !sig.is_empty() {
                         self.insert(sender, sig.to_string(), ts);
                     }
                 }
@@ -334,6 +336,20 @@ mod tests {
 
     const WINDOW: i64 = 300_000;
     const NOW: i64 = 1_000_000_000;
+
+    /// An entry kept until a later time (a pass, until it expires) survives
+    /// a restart however far ahead it is (review: it was dropped on reload).
+    #[test]
+    fn a_future_stamped_entry_survives_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("seen.log");
+        let first = Replay::open(Some(file.clone()), WINDOW, 100, 100, NOW);
+        assert!(first.take("pass", "pass:n1", NOW + 600_000, NOW));
+        first.close_clean();
+        drop(first);
+        let again = Replay::open(Some(file), WINDOW, 100, 100, NOW + 10);
+        assert!(!again.take("pass", "pass:n1", NOW + 600_000, NOW + 10));
+    }
 
     /// A5: one sender filling its share doesn't keep the others out.
     #[test]

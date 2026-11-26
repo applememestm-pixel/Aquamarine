@@ -2148,28 +2148,27 @@ async fn admin_set_fed(
     Json(u): Json<FedUpdate>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     admin_authed(&state, &headers).map_err(|c| (c, String::new()))?;
-    let mut c = fed::FedConfig::load();
-    if let Some(sec) = u.secret.filter(|s| !s.trim().is_empty()) {
-        if sec.trim().len() < 16 {
-            return Err((StatusCode::BAD_REQUEST, "the shared secret must be at least 16 characters".into()));
-        }
-        c.secret = sec.trim().to_string();
+    let secret = u.secret.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    if secret.as_ref().is_some_and(|s| s.len() < 16) {
+        return Err((StatusCode::BAD_REQUEST, "the shared secret must be at least 16 characters".into()));
     }
-    c.peers = u.peers.into_iter().map(|p| p.trim().trim_end_matches('/').to_string()).filter(|p| p.starts_with("http") || p.starts_with("tunnel:")).collect();
-    c.public_url = u.public_url.trim().trim_end_matches('/').to_string();
-    if let Some(m) = u.mode.filter(|m| m == "solo" || m == "network") {
-        // Into a network: a secret is needed to sign with — make one.
-        if m == "network" && c.secret.len() < 16 {
-            let mut b = [0u8; 24];
-            rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut b);
-            c.secret = hex::encode(b);
+    // Under the federation lock (fed::admin_update): a key pinned meanwhile
+    // isn't written over by a copy read from disk before it.
+    let next = fed::admin_update(&state, |c| {
+        if let Some(sec) = secret { c.secret = sec; }
+        c.peers = u.peers.into_iter().map(|p| p.trim().trim_end_matches('/').to_string()).filter(|p| p.starts_with("http") || p.starts_with("tunnel:")).collect();
+        c.public_url = u.public_url.trim().trim_end_matches('/').to_string();
+        if let Some(m) = u.mode.filter(|m| m == "solo" || m == "network") {
+            // Into a network: a secret is needed to sign with — make one.
+            if m == "network" && c.secret.len() < 16 {
+                let mut b = [0u8; 24];
+                rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut b);
+                c.secret = hex::encode(b);
+            }
+            c.mode = m;
         }
-        c.mode = m;
-    }
-    c.save().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let next = fed::Fed::new(fed::FedConfig::load());
+    }).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let active = next.is_some();
-    if let Ok(mut g) = state.fed.write() { *g = next.clone(); }
     if let Some(f) = next {
         let st = state.clone();
         tokio::spawn(async move { let new = f.hello_all().await; fed::absorb_vouches(&st); let _ = fed::add_peers(&st, &new); st.fed_kick.notify_one(); });
@@ -2248,15 +2247,12 @@ async fn admin_fed_join(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     admin_authed(&state, &headers).map_err(|c| (c, String::new()))?;
     let (url, secret) = fed::parse_invite(&b.invite).ok_or((StatusCode::BAD_REQUEST, "that's not an invitation (aquafed:…)".into()))?;
-    let mut c = fed::FedConfig::load();
-    c.secret = secret;
-    c.join_token = fed::invite_token(&b.invite).unwrap_or_default();
-    c.mode = if b.names_only { "solo".into() } else { "network".into() };
-    if !c.peers.contains(&url) { c.peers.push(url.clone()); }
-    // Not saved: a detected address can change (and may be re-detected).
-    c.save().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let next = fed::Fed::new(fed::FedConfig::load());
-    if let Ok(mut g) = state.fed.write() { *g = next.clone(); }
+    let next = fed::admin_update(&state, |c| {
+        c.secret = secret;
+        c.join_token = fed::invite_token(&b.invite).unwrap_or_default();
+        c.mode = if b.names_only { "solo".into() } else { "network".into() };
+        if !c.peers.contains(&url) { c.peers.push(url.clone()); }
+    }).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let Some(f) = next else { return Err((StatusCode::BAD_REQUEST, "could not start federation".into())) };
     if !f.same_network(&url).await {
         return Err((StatusCode::BAD_GATEWAY, format!("{url} doesn't answer or doesn't accept this secret")));
@@ -3306,8 +3302,6 @@ async fn admin_detail(
     }))
 }
 
-/// Drop `name`'s connections (the account and its devices, `name~dev`):
-/// their senders go, so each socket's loop ends (`rx` closes).
 /// [`drop_connections`] for other modules (fed.rs: a deletion from the network).
 pub(crate) async fn drop_connections_pub(state: &AppState, name: &str) {
     drop_connections(state, name).await
@@ -3341,6 +3335,8 @@ pub async fn delete_account(state: &AppState, name: &str) -> bool {
     ok
 }
 
+/// Drop `name`'s connections (the account and its devices, `name~dev`):
+/// their senders go, so each socket's loop ends (`rx` closes).
 async fn drop_connections(state: &AppState, name: &str) {
     let dev = format!("{name}~");
     let mine = |k: &str| k == name || k.starts_with(&dev);

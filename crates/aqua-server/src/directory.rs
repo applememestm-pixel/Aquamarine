@@ -1883,6 +1883,27 @@ impl Directory {
             return None;
         }
         let home = if n.home.is_empty() { home } else { n.home.as_str() };
+        // A8: a claim on a name one of ours holds. An older claim renamed our
+        // account, and any relay of the registry could make one up ("created
+        // at 0"). A real older claim is known before a name is taken here
+        // (sign-up checks the registry), except when both were taken at
+        // nearly the same time on two relays: only then — both made within
+        // NAME_RACE_SECS of each other, ours not older than that — does the
+        // older one win. Otherwise ours keeps the name, and the claim isn't
+        // recorded (it would be handed on to the rest of the registry).
+        let holder: Option<(String, i64, i64)> = db
+            .query_row("SELECT uid, created_at, is_bot FROM users WHERE username=?1", rusqlite::params![name], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .ok();
+        if let Some((local_uid, local_created, bot)) = &holder {
+            let we_win = *bot != 0 || (*local_created, local_uid.as_str()) <= (n.created_at, n.uid.as_str());
+            let race = (local_created - n.created_at).abs() <= NAME_RACE_SECS && now_secs() as i64 - local_created <= NAME_RACE_SECS;
+            if we_win || !race {
+                if !we_win {
+                    tracing::warn!(%name, claim_uid = %n.uid, "name registry: an older claim on a name taken here — ours keeps it");
+                }
+                return None;
+            }
+        }
         // Renamed there: its old name is free again.
         let _ = db.execute("DELETE FROM fed_names WHERE uid=?1 AND username<>?2", rusqlite::params![n.uid, name]);
         let _ = db.execute(
@@ -1893,25 +1914,7 @@ impl Directory {
                 OR (excluded.created_at = fed_names.created_at AND excluded.uid < fed_names.uid)",
             rusqlite::params![name, n.uid, home, n.created_at, crate::now_ms()],
         );
-        let holder: Option<(String, i64, i64)> = db
-            .query_row("SELECT uid, created_at, is_bot FROM users WHERE username=?1", rusqlite::params![name], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-            .ok();
-        let (local_uid, local_created, bot) = holder?;
-        let we_win = bot != 0 || (local_created, local_uid.as_str()) <= (n.created_at, n.uid.as_str());
-        if we_win {
-            return None;
-        }
-        // A8: a claim with an older creation time renamed our account. Any
-        // relay of the registry could make one up ("created at 0") for any
-        // name. A real older claim is known before a name is taken here
-        // (sign-up checks the registry), except when both were taken at
-        // nearly the same time on two relays: only then, within
-        // NAME_RACE_SECS of ours, does the older one win. Otherwise ours
-        // keeps the name and the claim is only on record.
-        if now_secs() as i64 - local_created > NAME_RACE_SECS {
-            tracing::warn!(%name, claim_uid = %n.uid, "name registry: an older claim on a name taken here long ago — ours keeps it");
-            return None;
-        }
+        let (local_uid, _, _) = holder?;
         let to = Self::displaced_name(&db, &name, &local_uid);
         if Self::move_account(&mut db, &name, &to, false).is_err() {
             return None;
@@ -4235,6 +4238,12 @@ mod tests {
         assert!(d.fed_apply_user(&fresh).applied);
         let older = NameRow { username: "racename".into(), uid: "3000000009".into(), home: "http://b".into(), created_at: now - 30, updated_at: 1 };
         assert!(d.fed_apply_name(&older, "http://b").is_some(), "near-simultaneous: the older wins");
+        // A claim far older than a fresh account of ours isn't a race.
+        let fresh2 = peer_user("fresh2", "3000000010", now - 5, crate::now_ms() - 1000);
+        assert!(d.fed_apply_user(&fresh2).applied);
+        let forged = NameRow { username: "fresh2".into(), uid: "3000000011".into(), home: "http://evil".into(), created_at: 0, updated_at: 1 };
+        assert_eq!(d.fed_apply_name(&forged, "http://evil"), None);
+        assert!(!d.names_after(0, None, 100).iter().any(|r| r.uid == "3000000011"), "and not recorded to be handed on");
     }
 
     /// A6: where sync is with a peer survives a restart (same file), moves
