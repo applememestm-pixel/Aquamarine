@@ -6194,10 +6194,12 @@
      cards; the messages scroll on under the field. */
   @media (max-width: 720px) {
     .active-chat.phone .msg-stage { margin-bottom: calc(-1 * var(--below-h, 0px)); margin-top: calc(-1 * var(--above-h, 0px)); }
-    .active-chat.phone .messages { padding-bottom: calc(var(--below-h, 0px) + 10px); padding-top: calc(var(--above-h, 0px) + 10px); }
+    .active-chat.phone .messages { padding-bottom: calc(var(--below-h, 0px) + 10px); padding-top: calc(var(--above-h, 0px) + 10px);
+      scroll-padding: var(--above-h, 0px) 0 var(--below-h, 0px); }
     .active-chat.phone > :global([data-gf]) { position: relative; z-index: 3; }
-    /* Without glass, what floats over the messages must hide them. */
-    :global(html:not(.glass)) .active-chat.phone > :global(:is(.rec-bar, .room-tabs, .rkb, .channel-locked, .not-live-banner)[data-gf]) { background-color: var(--bg-list); }
+    /* Without glass (or without blur) what floats over the messages must
+       hide them. */
+    :global(html:is(:not(.glass), .wk-lowfx)) .active-chat.phone > :global(:is(.rec-bar, .room-tabs, .rkb, .channel-locked, .not-live-banner, .sb-reacts, .noshare-bar, .pin-bar, .mp)[data-gf]) { background-color: var(--bg-list); }
     :global(html.glass) .hm-drop {
       margin: 0 8px 6px; border: 1px solid color-mix(in srgb, var(--fg) 16%, transparent); border-radius: calc(18px * var(--rk, 1));
       background: var(--bg-surface, #12151d); box-shadow: 0 10px 30px -16px rgba(0,0,0,.7);
