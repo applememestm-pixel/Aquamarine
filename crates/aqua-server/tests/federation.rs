@@ -605,8 +605,11 @@ async fn admission_impersonation_and_rejoining() {
     let mut c = fed::current(&sn).unwrap().cfg.clone();
     c.peers.push(ua.clone());
     if let Ok(mut g) = sn.fed.write() { *g = fed::Fed::new(c); }
-    fed::current(&sn).unwrap().hello_all().await;
-    for _ in 0..40 { if fed::current(&sa).unwrap().pin_for(&un).is_some() { break } tokio::time::sleep(Duration::from_millis(50)).await; }
+    for _ in 0..20 {
+        fed::current(&sn).unwrap().hello_all().await;
+        if fed::current(&sa).unwrap().pin_for(&un).is_some() { break }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     assert!(fed::current(&sa).unwrap().pin_for(&un).is_some(), "A admits N on B's vouch");
 
     // 4) Re-joining: revoke N on B; its hellos are ignored; with a new key and
@@ -787,4 +790,108 @@ async fn sealed_accounts_change_only_with_a_device_seal() {
     u.updated_at += 10;
     assert!(!sb.directory.fed_apply_user(&u).refused_security);
     assert_eq!(row(&sb, "unsealed").password, "changed");
+}
+
+/// A relay behind a router (no address: `tunnel:<node>`) and a public one.
+/// The public relay can reach it only over the reverse link the private one
+/// keeps open. Both ways must work once both keys are pinned.
+async fn tunnel_pair(tmp: &tempfile::TempDir) -> (AppState, AppState, String, String, String) {
+    let la = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ua = format!("http://{}", la.local_addr().unwrap());
+    let cfg_a = FedConfig { secret: SECRET.into(), peers: vec![], public_url: ua.clone(), mode: "network".into(), ..Default::default() };
+    // B has no address; its peers know it as `tunnel:<node>`.
+    let cfg_b = FedConfig { secret: SECRET.into(), peers: vec![ua.clone()], public_url: String::new(), mode: "network".into(), ..Default::default() };
+    let sa = AppState::isolated(tmp.path().join("ta"), Some(cfg_a));
+    let sb = AppState::isolated(tmp.path().join("tb"), Some(cfg_b));
+    { let s = sa.clone(); tokio::spawn(async move { axum::serve(la, app(s)).await.unwrap() }); }
+    // B listens only for its own users (in a test, to register one); the
+    // network doesn't know this address.
+    let lb = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ub = format!("http://{}", lb.local_addr().unwrap());
+    { let s = sb.clone(); tokio::spawn(async move { axum::serve(lb, app(s)).await.unwrap() }); }
+    let tb_id = fed::my_id(&fed::current(&sb).unwrap().cfg);
+    assert!(tb_id.starts_with("tunnel:"), "{tb_id}");
+    aqua_server::fedtunnel::spawn(sb.clone());
+    (sa, sb, ua, tb_id, ub)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tunnel_peer_with_pinned_key_syncs_both_ways() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (sa, sb, ua, tb, ub) = tunnel_pair(&tmp).await;
+    // B says hello (it can reach A): A pins B under `tunnel:<node>`, B pins A.
+    for _ in 0..100 {
+        fed::current(&sb).unwrap().hello_all().await;
+        fed::absorb_vouches(&sb);
+        let a_ok = fed::current(&sa).is_some_and(|f| f.pin_for(&tb).is_some() && f.cfg.peers.contains(&tb));
+        let b_ok = fed::current(&sb).is_some_and(|f| f.pin_for(&ua).is_some());
+        if a_ok && b_ok { break }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(fed::current(&sa).unwrap().pin_for(&tb).is_some(), "A pinned B's key");
+    assert!(fed::current(&sb).unwrap().pin_for(&ua).is_some(), "B pinned A's key");
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    // An account on each side.
+    register(&http, &ua, &IdentityKeyPair::generate(), "pubside").await;
+    register(&http, &ub, &IdentityKeyPair::generate(), "behind").await;
+    // B → A: plain requests.
+    fed::sync_once(&sb, &mut Default::default()).await;
+    assert!(sb.directory.identity_for("pubside").is_some(), "B pulled A's account");
+    // A → B: only over the reverse link (B polls A).
+    let mut ok = false;
+    for _ in 0..60 {
+        fed::sync_once(&sa, &mut Default::default()).await;
+        if sa.directory.identity_for("behind").is_some() { ok = true; break }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert!(ok, "A pulled B's account over the reverse link");
+}
+
+/// Wait until A and B (`tunnel_pair`) have pinned each other.
+async fn pin_tunnel_pair(sa: &AppState, sb: &AppState, ua: &str, tb: &str) {
+    for _ in 0..100 {
+        fed::current(sb).unwrap().hello_all().await;
+        fed::absorb_vouches(sb);
+        let a_ok = fed::current(sa).is_some_and(|f| f.pin_for(tb).is_some() && f.cfg.peers.iter().any(|p| p == tb));
+        let b_ok = fed::current(sb).is_some_and(|f| f.pin_for(ua).is_some());
+        if a_ok && b_ok { return }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the pair didn't pin each other");
+}
+
+/// Someone with only the shared secret: a signed POST to a relay.
+async fn secret_post(url: &str, path: &str, body: serde_json::Value) -> u16 {
+    let me = fed::Fed::new(FedConfig { secret: SECRET.into(), peers: vec![url.into()], public_url: "http://x.invalid".into(), mode: "network".into(), ephemeral: true, ..Default::default() }).unwrap();
+    let body = serde_json::to_vec(&body).unwrap();
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-server/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    http.post(format!("{url}{path}")).header("x-aqua-fed", me.sign("POST", path, &body)).header("content-type", "application/json")
+        .timeout(Duration::from_secs(30)).body(body).send().await.unwrap().status().as_u16()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tunnel_poll_cannot_claim_another_node() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (sa, sb, ua, tb, ub) = tunnel_pair(&tmp).await;
+    pin_tunnel_pair(&sa, &sb, &ua, &tb).await;
+    // With the secret only: neither B's requests nor a reply for them.
+    let st = secret_post(&ua, "/v1/fed/tunnel", serde_json::json!({ "id": tb, "v": env!("CARGO_PKG_VERSION") })).await;
+    assert!(st == 401 || st == 403, "poll as B: {st}");
+    let st = secret_post(&ua, "/v1/fed/tunnel/reply", serde_json::json!([{ "rid": 1, "status": 200, "body": "" }])).await;
+    assert!(st == 401 || st == 403, "reply as B: {st}");
+    // A relay of the network can't drop B from A's list by naming it as its
+    // own "old address" either (only B's key may say so).
+    let before = fed::current(&sa).unwrap().cfg.peers.clone();
+    let _ = secret_post(&ua, "/v1/fed/tunnel", serde_json::json!({ "id": "tunnel:intruder", "addr": tb, "v": env!("CARGO_PKG_VERSION") })).await;
+    assert_eq!(fed::current(&sa).unwrap().cfg.peers, before);
+    // B's link still works.
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    register(&http, &ub, &IdentityKeyPair::generate(), "stillhere").await;
+    let mut ok = false;
+    for _ in 0..60 {
+        fed::sync_once(&sa, &mut Default::default()).await;
+        if sa.directory.identity_for("stillhere").is_some() { ok = true; break }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert!(ok);
 }

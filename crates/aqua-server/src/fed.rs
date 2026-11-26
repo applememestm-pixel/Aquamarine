@@ -358,10 +358,14 @@ pub fn my_id(cfg: &FedConfig) -> String {
 
 /// A peer polling us over a reverse link (fedtunnel.rs): keep it in the
 /// list under `id`, dropping `addr` — the address of it that never answered.
-pub fn adopt_peer(state: &AppState, id: &str, addr: &str) {
+/// The address is dropped only on the word of the relay whose key is pinned
+/// for it (`sender`): anyone else with the secret named addresses of other
+/// relays and took them out of the list.
+pub fn adopt_peer(state: &AppState, id: &str, addr: &str, sender: &Sender) {
     let Some(f) = current(state) else { return };
     let has = f.cfg.peers.iter().any(|p| p == id);
-    let stale = !addr.is_empty() && addr != id && f.cfg.peers.iter().any(|p| p == addr);
+    let owns_addr = f.pin_for(addr).is_some_and(|p| matches!(sender, Sender::Node(n) if *n == p.id));
+    let stale = !addr.is_empty() && addr != id && owns_addr && f.cfg.peers.iter().any(|p| p == addr);
     if has && !stale {
         return;
     }
@@ -396,12 +400,24 @@ fn is_down(peer: &str) -> bool {
     down().lock().ok().and_then(|d| d.get(peer).map(|t| t.elapsed() < Duration::from_secs(300))).unwrap_or(false)
 }
 
+/// Who signed a federation request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Sender {
+    /// A relay by its pinned node key (`x-aqua-fed2`): its node id.
+    Node(String),
+    /// Only the network's shared secret (`x-aqua-fed`): any holder of it.
+    Secret,
+}
+
 pub struct Fed {
     pub cfg: FedConfig,
     http: reqwest::Client,
     key: aqua_core::crypto::SignSecret,
     /// Vouches peers sent back to our hellos, to be kept (`absorb_vouches`).
     got_vouches: std::sync::Mutex<Vec<Vouch>>,
+    /// Keys of peers read from their hello answers, to be pinned
+    /// (`absorb_vouches`).
+    got_pins: std::sync::Mutex<Vec<Pin>>,
     /// Which signed requests we have already taken.
     replay: Arc<crate::replay::Replay>,
 }
@@ -472,7 +488,7 @@ impl Fed {
         let seen = (!cfg.ephemeral && !cfg.dir.as_os_str().is_empty())
             .then(|| std::env::current_dir().unwrap_or_default().join(&cfg.dir).join(SEEN_FILE));
         let replay = crate::replay::Replay::shared(seen, SKEW_MS, now_ms());
-        Some(Arc::new(Self { cfg, http, key, got_vouches: std::sync::Mutex::new(Vec::new()), replay }))
+        Some(Arc::new(Self { cfg, http, key, got_vouches: std::sync::Mutex::new(Vec::new()), got_pins: std::sync::Mutex::new(Vec::new()), replay }))
     }
 
     /// The `x-aqua-fed` header for a request (fedtunnel.rs signs its polls).
@@ -629,6 +645,12 @@ impl Fed {
     }
 
     pub fn verify(&self, headers: &HeaderMap, method: &str, path: &str, body: &[u8]) -> bool {
+        self.verify_from(headers, method, path, body).is_some()
+    }
+
+    /// [`Self::verify`], saying who signed: a relay by its pinned node key,
+    /// or anyone holding the shared secret.
+    pub fn verify_from(&self, headers: &HeaderMap, method: &str, path: &str, body: &[u8]) -> Option<Sender> {
         // A relay whose key we know signs with it (AQUA-SEC-009).
         // A sender we don't know yet (it learnt our key first) falls back to
         // the shared secret below, like a relay without keys; a known
@@ -636,10 +658,19 @@ impl Fed {
         if let Some(h2) = headers.get("x-aqua-fed2").and_then(|v| v.to_str().ok()) {
             let from = h2.split('.').nth(2).unwrap_or("");
             if self.is_revoked(from) {
-                return false;
+                return None;
             }
             if self.cfg.pins.iter().any(|p| p.id == from) {
-                return self.verify2(h2, method, path, body).is_some();
+                let from = self.verify2(h2, method, path, body)?;
+                // The `x-aqua-fed` sent next to it is used up too: otherwise
+                // the same request, with `x-aqua-fed2` cut off, passed again
+                // on the shared secret wherever that is still taken.
+                if let Some((ts, sig)) = self.secret_sig(headers, method, path, body) {
+                    if !self.replay.take(&sig, ts, now_ms()) {
+                        return None;
+                    }
+                }
+                return Some(Sender::Node(from));
             }
         }
         // Only the shared secret: fine while we don't know every peer's key
@@ -648,50 +679,73 @@ impl Fed {
         let intro = matches!(base, "/v1/fed/hello" | "/v1/fed/ping" | "/v1/fed/names" | "/v1/fed/names/hello");
         if self.strict() && !intro {
             tracing::warn!(%path, "federation: a request signed only with the shared secret — refused (every peer has a key)");
-            return false;
+            return None;
         }
-        let Some(h) = headers.get("x-aqua-fed").and_then(|v| v.to_str().ok()) else { return false };
-        let Some((ts, sig)) = h.split_once('.') else { return false };
-        let Ok(ts) = ts.parse::<i64>() else { return false };
-        if (now_ms() - ts).abs() > SKEW_MS {
-            return false;
-        }
-        let want = mac(&self.cfg.secret, method, path, ts, body);
-        if !bool::from(subtle::ConstantTimeEq::ct_eq(want.as_bytes(), sig.as_bytes())) {
-            return false;
-        }
+        let (ts, sig) = self.secret_sig(headers, method, path, body)?;
         // AQUA-SEC-009: a signed request was good for its whole ±5-minute
         // window, as many times as anyone sent it again. Each signature is
         // now taken once (signatures cover the time, so a retry signs anew).
-        self.replay.take(sig, ts, now_ms())
+        self.replay.take(&sig, ts, now_ms()).then_some(Sender::Secret)
+    }
+
+    /// A good `x-aqua-fed` (shared-secret) signature of this request, fresh:
+    /// its time and signature. Not used up here.
+    fn secret_sig(&self, headers: &HeaderMap, method: &str, path: &str, body: &[u8]) -> Option<(i64, String)> {
+        let h = headers.get("x-aqua-fed").and_then(|v| v.to_str().ok())?;
+        let (ts, sig) = h.split_once('.')?;
+        let ts = ts.parse::<i64>().ok()?;
+        if (now_ms() - ts).abs() > SKEW_MS {
+            return None;
+        }
+        let want = mac(&self.cfg.secret, method, path, ts, body);
+        bool::from(subtle::ConstantTimeEq::ct_eq(want.as_bytes(), sig.as_bytes())).then(|| (ts, sig.to_string()))
+    }
+
+    /// May `sender` speak for the relay known as `id` (its reverse link,
+    /// dropping its old address)? Only the relay whose key is pinned for
+    /// `id`; anyone with the secret only while no key is pinned there and
+    /// the network isn't on keys yet.
+    pub fn speaks_for(&self, sender: &Sender, id: &str) -> bool {
+        match self.pin_for(id) {
+            Some(p) => matches!(sender, Sender::Node(n) if *n == p.id),
+            None => !self.strict(),
+        }
     }
 
     /// Is `peer` a relay we still talk to (1.2.0 or newer)? Asked once in a
     /// while (`/v1/stats` says its version; older relays don't say).
     async fn modern(&self, peer: &str) -> bool {
+        self.peer_version(peer).await.is_some()
+    }
+
+    /// The version `peer` says it runs, when it is one we still talk to
+    /// (1.2.0 or newer). Asked once in a while (`/v1/stats`; older relays
+    /// don't say). A relay known only by its reverse link: None.
+    pub(crate) async fn peer_version(&self, peer: &str) -> Option<String> {
         if peer.starts_with("tunnel:") {
-            return false;
+            return None;
         }
-        static SEEN: std::sync::Mutex<Option<std::collections::HashMap<String, (std::time::Instant, bool)>>> = std::sync::Mutex::new(None);
-        if let Some((at, ok)) = SEEN.lock().ok().and_then(|m| m.as_ref().and_then(|m| m.get(peer).copied())) {
-            if at.elapsed() < Duration::from_secs(if ok { 600 } else { 120 }) {
-                return ok;
+        type Seen = std::collections::HashMap<String, (std::time::Instant, Option<String>)>;
+        static SEEN: std::sync::Mutex<Option<Seen>> = std::sync::Mutex::new(None);
+        if let Some((at, v)) = SEEN.lock().ok().and_then(|m| m.as_ref().and_then(|m| m.get(peer).cloned())) {
+            if at.elapsed() < Duration::from_secs(if v.is_some() { 600 } else { 120 }) {
+                return v;
             }
         }
-        let ok = match self.http.get(format!("{peer}/v1/stats")).timeout(Duration::from_secs(5)).send().await {
+        let v = match self.http.get(format!("{peer}/v1/stats")).timeout(Duration::from_secs(5)).send().await {
             Ok(r) => r.json::<serde_json::Value>().await.ok()
-                .and_then(|v| v["version"].as_str().map(crate::relay_version_ok))
-                .unwrap_or(false),
+                .and_then(|v| v["version"].as_str().map(str::to_string))
+                .filter(|v| crate::relay_version_ok(v)),
             // Unreachable now: don't decide for 10 minutes on that.
-            Err(_) => { mark_down(peer); return false }
+            Err(_) => { mark_down(peer); return None }
         };
-        if !ok {
+        if v.is_none() {
             tracing::warn!(%peer, "federation: this relay is older than {} — not talking to it", crate::MIN_RELAY);
         }
         if let Ok(mut m) = SEEN.lock() {
-            m.get_or_insert_with(std::collections::HashMap::new).insert(peer.to_string(), (std::time::Instant::now(), ok));
+            m.get_or_insert_with(std::collections::HashMap::new).insert(peer.to_string(), (std::time::Instant::now(), v.clone()));
         }
-        ok
+        v
     }
 
     async fn get(&self, peer: &str, path: &str) -> Option<reqwest::Response> {
@@ -786,6 +840,7 @@ impl Fed {
                 let r = self.post(p, "/v1/fed/hello", body).await?;
                 let v: serde_json::Value = r.json().await.ok()?;
                 self.note_vouch(&v);
+                self.note_answer_key(p, &v);
                 let mut out: Vec<String> = v["peers"].as_array()?.iter().filter_map(|x| x.as_str().map(str::to_string)).collect();
                 if let Some(s) = v["self"].as_str() { out.push(s.to_string()); }
                 Some(out)
@@ -803,7 +858,31 @@ impl Fed {
         let mut hello = serde_json::json!({ "url": my_id(&self.cfg), "peers": self.cfg.peers });
         if let (Some(o), serde_json::Value::Object(k)) = (hello.as_object_mut(), self.hello_key_fields()) { o.extend(k); }
         if let Some(r) = self.post(peer, "/v1/fed/hello", serde_json::to_vec(&hello).unwrap_or_default()).await {
-            if let Ok(v) = r.json::<serde_json::Value>().await { self.note_vouch(&v); }
+            if let Ok(v) = r.json::<serde_json::Value>().await { self.note_vouch(&v); self.note_answer_key(peer, &v); }
+        }
+    }
+
+    /// A hello answer carries the answering relay's key, signed by it over
+    /// its address. Kept when that address is the one we asked (we reached
+    /// it there ourselves) and the key may be pinned (`pin_from_hello`): a
+    /// relay behind a router learns the key of the public one it polls
+    /// without waiting for a hello back over its reverse link.
+    fn note_answer_key(&self, peer: &str, v: &serde_json::Value) {
+        let peer = peer.trim_end_matches('/');
+        if v["self"].as_str().map(|s| s.trim_end_matches('/')) != Some(peer) || !peer.starts_with("http") {
+            return;
+        }
+        let h = Hello {
+            url: peer.to_string(),
+            admit: String::new(),
+            vouches: Vec::new(),
+            peers: Vec::new(),
+            node_key: v["node_key"].as_str().unwrap_or("").to_string(),
+            node_sig: v["node_sig"].as_str().unwrap_or("").to_string(),
+            rotated: v["rotated"].as_str().unwrap_or("").to_string(),
+        };
+        if let Some(pin) = pin_from_hello(self, &h) {
+            if let Ok(mut g) = self.got_pins.lock() { g.push(pin); }
         }
     }
 
@@ -1076,22 +1155,27 @@ async fn sync_names(state: &AppState, fed: &Fed, peer: &str, since: &mut CursorM
     }
 }
 
-/// `check` for other modules (fedtunnel.rs).
-pub fn check_pub(state: &AppState, headers: &HeaderMap, method: &str, path: &str, body: &[u8]) -> Result<Arc<Fed>, StatusCode> {
-    check(state, headers, method, path, body)
+/// `check` for other modules (fedtunnel.rs), with who signed.
+pub fn check_pub(state: &AppState, headers: &HeaderMap, method: &str, path: &str, body: &[u8]) -> Result<(Arc<Fed>, Sender), StatusCode> {
+    check_from(state, headers, method, path, body)
 }
 
 fn check(state: &AppState, headers: &HeaderMap, method: &str, path: &str, body: &[u8]) -> Result<Arc<Fed>, StatusCode> {
+    check_from(state, headers, method, path, body).map(|(f, _)| f)
+}
+
+/// A request of a relay of this network: the network and who signed it.
+fn check_from(state: &AppState, headers: &HeaderMap, method: &str, path: &str, body: &[u8]) -> Result<(Arc<Fed>, Sender), StatusCode> {
     let fed = current(state).ok_or(StatusCode::NOT_FOUND)?;
-    if !fed.verify(headers, method, path, body) {
+    let Some(sender) = fed.verify_from(headers, method, path, body) else {
         return Err(StatusCode::UNAUTHORIZED);
-    }
+    };
     // Relays older than 1.2.0 don't know two-step codes: an account copied
     // there could be signed into without one. They're not served.
     if !crate::caller_version(headers, None).as_deref().is_some_and(crate::relay_version_ok) {
         return Err(StatusCode::UPGRADE_REQUIRED);
     }
-    Ok(fed)
+    Ok((fed, sender))
 }
 
 // ------------------------------------------------------------------ handlers
@@ -1413,15 +1497,25 @@ pub async fn h_hello(State(state): State<AppState>, headers: HeaderMap, body: By
         }
         if !add_peers(&st, &ok).is_empty() { st.fed_kick.notify_one(); }
     });
-    Ok(Json(serde_json::json!({ "self": my_id(&fed.cfg), "peers": fed.cfg.peers, "vouch": vouch })))
+    let k = fed.hello_key_fields();
+    Ok(Json(serde_json::json!({ "self": my_id(&fed.cfg), "peers": fed.cfg.peers, "vouch": vouch,
+        "node_key": k["node_key"], "node_sig": k["node_sig"], "rotated": k["rotated"] })))
 }
 
 /// Keep vouches our hellos got back, and drop the invitation token once a
 /// relay of the network has admitted us (REV2-004).
 pub fn absorb_vouches(state: &AppState) {
     let Some(cur) = registry(state) else { return };
+    // Both taken from this config before it is replaced below.
+    let pins: Vec<Pin> = cur.got_pins.lock().map(|mut g| std::mem::take(&mut *g)).unwrap_or_default();
     let got: Vec<Vouch> = cur.got_vouches.lock().map(|mut g| std::mem::take(&mut *g)).unwrap_or_default();
+    for pin in pins {
+        if set_pin(state, pin) {
+            tracing::info!("federation: a peer's key pinned from its hello answer");
+        }
+    }
     if got.is_empty() { return; }
+    let Some(cur) = registry(state) else { return };
     let mut c = cur.cfg.clone();
     for v in got {
         if !c.vouches.iter().any(|x| x.by == v.by) && c.vouches.len() < 64 { c.vouches.push(v); }
@@ -2099,6 +2193,35 @@ mod cursor_tests {
         assert_eq!(std::fs::read_to_string(dir.path().join(super::NODE_KEY_FILE)).unwrap().trim(), c.node_key);
         // Not on the list: kept.
         assert_eq!(super::FedConfig::load_in(dir.path()).node_key, c.node_key);
+    }
+
+    /// A2: a request carrying both signatures uses up both. The same
+    /// request with `x-aqua-fed2` cut off doesn't pass again on the secret
+    /// (where the secret is still taken).
+    #[test]
+    fn a_v2_request_uses_up_its_secret_signature_too() {
+        let (a, b) = (fed("http://a"), fed("http://b"));
+        // B knows A's key, but not every peer's: the secret alone still works there.
+        let b = with_pins(&b, vec![pin_of(&a, "http://a")], vec!["http://a".into(), "http://old".into()]);
+        let a = with_pins(&a, vec![pin_of(&b, "http://b")], vec!["http://b".into()]);
+        assert!(!b.strict());
+        let path = "/v1/fed/users?since=0";
+        let mut h = axum::http::HeaderMap::new();
+        h.insert("x-aqua-fed", a.header("GET", path, b"").parse().unwrap());
+        h.insert("x-aqua-fed2", a.sign2("http://b", "GET", path, b"").unwrap().parse().unwrap());
+        assert_eq!(b.verify_from(&h, "GET", path, b""), Some(super::Sender::Node(a.node_id())));
+        let mut stripped = h.clone();
+        stripped.remove("x-aqua-fed2");
+        assert!(!b.verify(&stripped, "GET", path, b""), "replayed without x-aqua-fed2");
+        // A fresh secret-only request is still fine here.
+        let mut s = axum::http::HeaderMap::new();
+        s.insert("x-aqua-fed", a.header("GET", path, b"").parse().unwrap());
+        assert_eq!(b.verify_from(&s, "GET", path, b""), Some(super::Sender::Secret));
+        // speaks_for: the pinned relay only, for its own address.
+        assert!(b.speaks_for(&super::Sender::Node(a.node_id()), "http://a"));
+        assert!(!b.speaks_for(&super::Sender::Secret, "http://a"));
+        assert!(!b.speaks_for(&super::Sender::Node("someone".into()), "http://a"));
+        assert!(b.speaks_for(&super::Sender::Secret, "http://old"), "unkeyed address, network not on keys");
     }
 
     #[test]
