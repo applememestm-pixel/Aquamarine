@@ -2379,7 +2379,7 @@
   let headerEl = $state<HTMLElement | null>(null);
   // Measured only for the voice view (a size binding here kept a
   // ResizeObserver busy on every repaint of the chat).
-  $effect(() => { if (fullVoice && headerEl) headerH = headerEl.offsetHeight; });
+  $effect(() => { if (fullVoice && headerEl) headerH = headerEl.offsetTop + headerEl.offsetHeight; });
   let inMyCall = $derived(!!activeGroup && $groupCall?.gid === activeGroup.id);
   let fullVoice = $derived(!!activeGroup && !!voiceView[activeGroup.id] && inMyCall);
   let voiceRoomName = $derived(activeGroup ? rooms.find((r) => r.id === voiceView[activeGroup.id])?.name ?? "" : "");
@@ -4226,7 +4226,7 @@
             {/if}
             <span class="group-name-btn" class:dim={!!activeRoom}>{$activeChat.name}</span>
           {:else}
-            {$activeChat.name}{#if $peerCards[$activeChat.id]?.verified}<OfficialMark size={17} />{/if}{#if $peerCards[$activeChat.id]?.star != null}<StarMark kind={$peerCards[$activeChat.id]?.star ?? 0} size={17} />{/if}<EmojiStatus token={emojiStatusOf($peerCards, $activeChat.id)} size={18} zoom />
+            <span class="pn-text">{$activeChat.name}</span>{#if $peerCards[$activeChat.id]?.verified}<OfficialMark size={17} />{/if}{#if $peerCards[$activeChat.id]?.star != null}<StarMark kind={$peerCards[$activeChat.id]?.star ?? 0} size={17} />{/if}<EmojiStatus token={emojiStatusOf($peerCards, $activeChat.id)} size={18} zoom />
             {#if $clans[$activeChat.id]}<span class="hdr-clan"><ClanTag tag={$clans[$activeChat.id]} /></span>{/if}
           {/if}
           {#if e2eePeer}
@@ -7511,6 +7511,11 @@
   .phone .back-btn { display: inline-flex; }
   .phone .chat-identity { display: flex; flex: 1; min-width: 0; align-items: center; gap: 8px; }
   .phone .chat-actions { gap: 0; flex-shrink: 0; }
+  /* A long name ends in "…" on one line — it used to wrap and grow the
+     header over the messages. */
+  .phone .peer-name { white-space: nowrap; overflow: hidden; }
+  .phone .peer-name :is(.pn-text, .group-name-btn, .room-switch) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .phone .peer-name > :global(:not(.pn-text):not(.group-name-btn):not(.room-switch)) { flex-shrink: 0; }
   .phone .chat-actions .icon-btn { width: 34px; height: 42px; }
   :global(html.glass) .phone .chat-header {
     background: transparent; padding: 0; border: 0; box-shadow: none;

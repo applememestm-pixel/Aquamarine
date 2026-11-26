@@ -76,7 +76,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "aqua-client-core"
-version = "1.21.0-23"
+version = "1.21.0-24"
 dependencies = [
  "anyhow",
  "aqua-core",
@@ -105,7 +105,7 @@ dependencies = [
 
 [[package]]
 name = "aqua-client-ui"
-version = "1.21.0-23"
+version = "1.21.0-24"
 dependencies = [
  "anyhow",
  "aqua-client-core",
@@ -150,7 +150,7 @@ dependencies = [
 
 [[package]]
 name = "aqua-core"
-version = "1.21.0-23"
+version = "1.21.0-24"
 dependencies = [
  "base64 0.22.1",
  "bincode",
@@ -172,14 +172,14 @@ dependencies = [
 
 [[package]]
 name = "aqua-nsfw"
-version = "1.21.0-23"
+version = "1.21.0-24"
 dependencies = [
  "image",
 ]
 
 [[package]]
 name = "aqua-stt"
-version = "1.21.0-23"
+version = "1.21.0-24"
 dependencies = [
  "ort",
 ]

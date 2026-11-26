@@ -480,6 +480,19 @@ export function backToList(_fromHistory = false) {
   r?.();
 }
 
+/** Deep equality of plain data from the backend. Stops at the first
+ *  difference and builds no strings: serialising every message twice on each
+ *  refresh was felt on phones with long chats. */
+function sameData(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const x = a as Record<string, unknown>, y = b as Record<string, unknown>;
+  const keys = Object.keys(x);
+  if (keys.length !== Object.keys(y).length) return false;
+  return keys.every((k) => Object.prototype.hasOwnProperty.call(y, k) && sameData(x[k], y[k]));
+}
+
 /** Keep the old object for every message that didn't change, so a
  *  refresh after one new message doesn't re-render the whole chat. */
 function reuseUnchanged(prev: ChatMessage[], next: ChatMessage[]): ChatMessage[] {
@@ -488,7 +501,7 @@ function reuseUnchanged(prev: ChatMessage[], next: ChatMessage[]): ChatMessage[]
   let same = prev.length === next.length;
   const out = next.map((m, i) => {
     const o = old.get(m.id);
-    const keep = o && JSON.stringify(o) === JSON.stringify(m) ? o : m;
+    const keep = o && sameData(o, m) ? o : m;
     if (keep !== prev[i]) same = false;
     return keep;
   });

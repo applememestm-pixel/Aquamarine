@@ -109,6 +109,8 @@ html.wk-lowfx .messages .bubble,
 html.wk-lowfx .messages .bubble.code {
   box-shadow: 0 1px 0 rgba(0,0,0,0.35) !important;
 }
+/* Without the blur, see-through panels would show the text behind them. */
+html.phone.wk-lowfx { --glass-a: 95% !important; }
 html.wk-lowfx *,
 html.wk-lowfx *::before,
 html.wk-lowfx *::after {
@@ -156,7 +158,8 @@ html.wk-lowfx .eq i:nth-child(3) { transform: scaleY(0.75); }
   .app { transition: grid-template-columns .22s cubic-bezier(.2,.8,.2,1); }
 }
 @media (max-width: 720px) {
-  .app { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr); }
+  /* minmax(0, …): one wide child must not push the whole app off the screen. */
+  .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
   .app > .main-pane { grid-column: 1 !important; grid-row: 1 !important; }
   /* Single column: show either the chat list or the open conversation. */
   body.chat-open .list { display: none; }
@@ -182,6 +185,14 @@ html.wk-lowfx .eq i:nth-child(3) { transform: scaleY(0.75); }
      conversation and the composer stay above it. */
   html.picker-docked body.chat-open .main-pane { padding-bottom: calc(var(--dock-h, 300px) + var(--sab, env(safe-area-inset-bottom, 0px)) + var(--dock-gap, 0px)); }
 }
+/* Phones: a minimised call (1:1 or group) is a 52px bar under the status
+   bar; the whole app moves down under it. */
+html.phone.call-strip body, html.phone.gcall-strip body {
+  box-sizing: border-box;
+  padding-top: calc(var(--sat, env(safe-area-inset-top, 0px)) + 52px);
+}
+/* Both at once (a call came in during a voice chat): two bars. */
+html.phone.call-strip.gcall-strip body { padding-top: calc(var(--sat, env(safe-area-inset-top, 0px)) + 104px); }
 /* Phones: the conversation slides in over the list, and back. */
 @media (max-width: 720px) and (prefers-reduced-motion: no-preference) {
   body.chat-open .main-pane { animation: aq-slide-in .28s var(--ease-out); }

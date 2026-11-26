@@ -21,6 +21,7 @@ import { isAdmin } from "./groupRules";
 import { callSettings, iceServersFor } from "./callSettings";
 import { showToast } from "./components/Toast.svelte";
 import { tr } from "./i18n";
+import { IS_MOBILE } from "./platform";
 
 export interface Peer {
   user: string;
@@ -63,6 +64,10 @@ let analysers = new Map<string, { an: AnalyserNode; buf: Uint8Array<ArrayBuffer>
 let audioCtx: AudioContext | null = null;
 let meterTimer: ReturnType<typeof setInterval> | null = null;
 let heartbeat: ReturnType<typeof setInterval> | null = null;
+const holdUntil = new Map<string, number>();
+/** The shared video is a real screen (phones that can't share one send the
+ *  camera from the same button). */
+let realScreen = false;
 
 const me = () => get(info)?.username ?? "";
 const sig = (o: Record<string, unknown>) => "[gcall:v1]" + JSON.stringify(o);
@@ -134,6 +139,26 @@ function attachLocal(user: string, pc: RTCPeerConnection) {
   }
 }
 
+/** Phones encode the video once per participant (full mesh), so with more
+ *  people each copy gets smaller — otherwise the phone heats up and the
+ *  picture stutters. A shared screen keeps its resolution (text). */
+async function tuneGroupVideo() {
+  if (!IS_MOBILE) return;
+  const n = videoSenders.size;
+  const screen = !!get(groupCall)?.screen && realScreen;
+  for (const snd of videoSenders.values()) {
+    if (!snd.track) continue;
+    try {
+      const p = snd.getParameters();
+      const e = p.encodings?.[0];
+      if (!e) continue; // not negotiated yet: tuned once connected
+      e.maxBitrate = (n >= 4 ? 350 : n >= 2 ? 700 : 1500) * 1000;
+      e.scaleResolutionDownBy = screen ? 1 : n >= 4 ? 3 : n >= 2 ? 2 : 1;
+      await snd.setParameters(p);
+    } catch { /* an older WebView: it sends as before */ }
+  }
+}
+
 function makePc(gid: string, callId: string, user: string, offerer: boolean): RTCPeerConnection {
   pcs.get(user)?.close();
   const pc = new RTCPeerConnection({ iceServers: iceServersFor(get(callSettings)) });
@@ -156,6 +181,7 @@ function makePc(gid: string, callId: string, user: string, offerer: boolean): RT
   };
   pc.onconnectionstatechange = () => {
     setPeer(user, { state: pc.connectionState });
+    if (pc.connectionState === "connected") void tuneGroupVideo();
     if (pc.connectionState === "failed" && offerer) void offer(gid, callId, user, pc, true);
   };
   setPeer(user, { state: "connecting" });
@@ -184,7 +210,10 @@ function watchLevel(user: string, stream: MediaStream) {
       an.getByteTimeDomainData(buf);
       let peak = 0;
       for (const v of buf) peak = Math.max(peak, Math.abs(v - 128));
-      const speaking = peak > 10;
+      // Held for a moment: syllable gaps used to flip it every 150 ms, and
+      // each flip redraws the whole call panel.
+      if (peak > 10) holdUntil.set(u, Date.now() + 350);
+      const speaking = Date.now() < (holdUntil.get(u) ?? 0);
       const cur = get(groupCall)?.peers[u]?.speaking ?? (u === me() ? undefined : false);
       if (u === me()) { const v = speaking && !get(groupCall)?.muted; if (get(groupCall)?.meSpeaking !== v) patch((s) => { s.meSpeaking = v; }); continue; }
       if (cur !== speaking) setPeer(u, { speaking });
@@ -235,7 +264,7 @@ export async function leaveGroupCall() {
   void broadcast(s.gid, { t: "leave", call: s.callId });
   tellOwn(s.gid, "leave", s.callId);
   for (const pc of pcs.values()) pc.close();
-  pcs.clear(); pendingIce.clear(); analysers.clear(); videoSenders.clear(); remoteStreams.clear();
+  pcs.clear(); pendingIce.clear(); analysers.clear(); videoSenders.clear(); remoteStreams.clear(); holdUntil.clear();
   spatialReset();
   s.local?.getTracks().forEach((t) => t.stop());
   if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
@@ -278,6 +307,7 @@ export async function toggleGroupCamera() {
     if (!stillIn(s)) { v.getTracks().forEach((t) => t.stop()); return; }
     await replaceVideo(v.getVideoTracks()[0]);
     patch((n) => { n.camera = true; });
+    void tuneGroupVideo();
   } catch (e) { showToast(tr("Camera unavailable: {e}", { e: String(e) })); }
 }
 
@@ -292,7 +322,9 @@ export async function toggleGroupScreen() {
     const tr0 = d.getVideoTracks()[0];
     tr0.onended = () => { if (get(groupCall)?.screen) void toggleGroupScreen(); };
     await replaceVideo(tr0);
+    realScreen = !camera;
     patch((n) => { n.screen = true; n.camera = false; });
+    void tuneGroupVideo();
   } catch { /* cancelled */ }
 }
 
@@ -360,7 +392,7 @@ async function onSignal(from: string, gid: string, m: Record<string, unknown>) {
       if (typeof m.muted === "boolean" && s.peers[from]) setPeer(from, { muted: m.muted });
       break;
     case "leave":
-      pcs.get(from)?.close(); pcs.delete(from); analysers.delete(from); videoSenders.delete(from); remoteStreams.delete(from); spatialDrop(from);
+      pcs.get(from)?.close(); pcs.delete(from); analysers.delete(from); videoSenders.delete(from); remoteStreams.delete(from); spatialDrop(from); void tuneGroupVideo();
       patch((n) => { delete n.peers[from]; });
       break;
   }

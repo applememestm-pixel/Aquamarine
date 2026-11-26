@@ -515,6 +515,9 @@
     pointer-events: none;
     position: absolute;
   }
+  /* Phones: a long hint ("Message Very long group name…") stays on one line. */
+  :global(html.phone) .rich.empty { position: relative; }
+  :global(html.phone) .rich.empty::before { max-width: calc(100% - 8px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .rich :global(.ce) {
     display: inline-block;
     width: 1.35em; height: 1.35em;

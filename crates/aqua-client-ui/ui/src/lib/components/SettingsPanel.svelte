@@ -2601,7 +2601,7 @@
         <div class="label">{$t("Lightweight mode")}</div>
         <div class="row">
           <span class="row-label">{$t("Lighter effects")}</span>
-          <Select class="sel" value={$settings.liteFx ?? "auto"} options={[{ value: "auto", label: $t("Auto (weak devices)") }, { value: "on", label: $t("On") }, { value: "off", label: $t("Off") }]}
+          <Select class="sel" value={$settings.liteFx ?? "auto"} options={[{ value: "auto", label: $t("Auto (phones and weak devices)") }, { value: "on", label: $t("On") }, { value: "off", label: $t("Off") }]}
             onchange={(v) => settings.update((x) => ({ ...x, liteFx: v as "auto" | "on" | "off" }))} />
         </div>
         <div class="foot-note">{$t("No glass blur, no moving glow, flat shadows, fewer looping animations — smoother on weaker phones and computers. Looks almost the same.")}</div>

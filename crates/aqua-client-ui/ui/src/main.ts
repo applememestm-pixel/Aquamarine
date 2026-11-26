@@ -186,15 +186,17 @@ if (IS_DESKTOP) {
 }
 
 // Lightweight mode (Settings → Power saving): the same light effects as on
-// Linux (class "wk-lowfx", see app.css) — automatically on weak devices
-// (≤ 4 cores or ≤ 4 GB of memory, or software rendering), or by hand.
+// Linux (class "wk-lowfx", see app.css) — automatically on phones (blur
+// under the header and the message field was repainted on every scroll
+// step), on weak devices (≤ 4 cores or ≤ 4 GB of memory, or software
+// rendering), or by hand.
 void import("./lib/theme").then(({ settings }) => {
   const root = document.documentElement;
   const nav = navigator as Navigator & { deviceMemory?: number };
   const weak = (nav.hardwareConcurrency ?? 8) <= 4 || (nav.deviceMemory ?? 8) <= 4 || root.classList.contains("soft-render");
   settings.subscribe((s) => {
     const m = s.liteFx ?? "auto";
-    const on = m === "on" || (m === "auto" && (weak || root.classList.contains("wk-linux")));
+    const on = m === "on" || (m === "auto" && (weak || root.classList.contains("wk-linux") || root.classList.contains("phone")));
     root.classList.toggle("wk-lowfx", on);
   });
 });

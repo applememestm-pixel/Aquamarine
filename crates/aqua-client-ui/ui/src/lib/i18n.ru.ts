@@ -2926,7 +2926,7 @@ export const RU: Record<string, string> = {
   "Could not load the story": "Не удалось загрузить историю",
   "Lightweight mode": "Лёгкий режим",
   "Lighter effects": "Облегчённые эффекты",
-  "Auto (weak devices)": "Авто (слабые устройства)",
+  "Auto (phones and weak devices)": "Авто (телефоны и слабые устройства)",
   "No glass blur, no moving glow, flat shadows, fewer looping animations — smoother on weaker phones and computers. Looks almost the same.": "Без размытия стекла, плавающего свечения и мягких теней, меньше повторяющихся анимаций — плавнее на слабых телефонах и компьютерах. Выглядит почти так же.",
   "Sensitive content": "Деликатный контент",
   "Blur explicit photos and stickers": "Размывать откровенные фото и стикеры",
