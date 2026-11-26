@@ -238,6 +238,13 @@ async fn web_check(http: &reqwest::Client, channel: &str) -> Result<UpdateInfo, 
         Ok(r) => r.text().await.unwrap_or_default(),
         Err(_) => String::new(),
     };
+    // AQUA-SEC-012: the same signature check as the other two ways. Without
+    // it the version is shown, but nothing is installed (no checksum).
+    let sig = match get(dl(aqua_core::release::SIG_ASSET)).await {
+        Ok(r) => r.text().await.ok(),
+        Err(_) => None,
+    };
+    let trusted = aqua_core::release::sums_trusted(&sums, sig.as_deref());
     let builds: Option<serde_json::Value> = match get(dl("BUILDS.json")).await {
         Ok(r) => r.json().await.ok(),
         Err(_) => None,
@@ -256,7 +263,7 @@ async fn web_check(http: &reqwest::Client, channel: &str) -> Result<UpdateInfo, 
             Err(_) => 0,
         };
         built_from = builds.as_ref().and_then(|b| b[*want].as_str()).map(|c| c.to_ascii_lowercase());
-        asset = Some(UpdateAsset { name: want.to_string(), url: dl(want), size, sha256: Some(sha) });
+        asset = Some(UpdateAsset { name: want.to_string(), url: dl(want), size, sha256: trusted.then_some(sha) });
         break;
     }
     Ok(UpdateInfo {

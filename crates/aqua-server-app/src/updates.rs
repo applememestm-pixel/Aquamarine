@@ -313,7 +313,7 @@ fn file_sha256(p: &std::path::Path) -> Option<String> {
 
 async fn download(app: &AppHandle, c: &reqwest::Client, name: &str, url: &str, size: u64, sha: &str) -> Result<PathBuf, String> {
     use std::io::Write;
-    if !url.starts_with("https://github.com/") || name.contains(['/', '\\']) {
+    if !url.starts_with(aqua_server::release::DOWNLOAD_PREFIX) || name.contains(['/', '\\']) {
         return Err("unexpected update address".into());
     }
     let d = dir(app)?;

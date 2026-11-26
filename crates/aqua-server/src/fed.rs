@@ -1026,15 +1026,22 @@ pub async fn names_hello(fed: &Fed) -> Vec<String> {
 fn first_use(sig: &str, ts: i64) -> bool {
     static SEEN: std::sync::Mutex<Option<std::collections::HashMap<String, i64>>> = std::sync::Mutex::new(None);
     let Ok(mut g) = SEEN.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) else { return true };
-    let seen = g.get_or_insert_with(std::collections::HashMap::new);
-    let now = now_ms();
-    if seen.len() > 20_000 {
+    remember(g.get_or_insert_with(std::collections::HashMap::new), sig, ts, now_ms(), SEEN_MAX)
+}
+
+/// How many signatures one clock window may hold.
+const SEEN_MAX: usize = 200_000;
+
+fn remember(seen: &mut std::collections::HashMap<String, i64>, sig: &str, ts: i64, now: i64, max: usize) -> bool {
+    if seen.len() > max / 10 {
         seen.retain(|_, t| (now - *t).abs() <= SKEW_MS);
     }
-    if seen.len() > 200_000 {
-        // Flooded with valid signatures (only a holder of the secret can make
-        // them): stop remembering rather than grow without end.
-        seen.clear();
+    // Full of live signatures (only a relay with a key or the secret can make
+    // that many): refuse new ones until old ones expire. Forgetting them, as
+    // before 1.21.0-24, let every one of them be sent again.
+    if seen.len() >= max && !seen.contains_key(sig) {
+        tracing::warn!("federation: too many signed requests in one clock window — refusing");
+        return false;
     }
     seen.insert(sig.to_string(), ts).is_none()
 }
@@ -2116,6 +2123,21 @@ mod cursor_tests {
         assert!(super::first_use("sig-a", ts));
         assert!(!super::first_use("sig-a", ts), "replayed");
         assert!(super::first_use("sig-b", ts));
+    }
+
+    /// A full table refuses new signatures and keeps the old ones, so none
+    /// of them can be replayed; expired ones make room again.
+    #[test]
+    fn a_full_replay_table_stays_closed() {
+        let mut seen = std::collections::HashMap::new();
+        let now = 1_000_000_000;
+        for i in 0..20 {
+            assert!(super::remember(&mut seen, &format!("s{i}"), now, now, 20));
+        }
+        assert!(!super::remember(&mut seen, "one-more", now, now, 20));
+        assert!(!super::remember(&mut seen, "s0", now, now, 20), "still remembered");
+        let later = now + super::SKEW_MS + 1;
+        assert!(super::remember(&mut seen, "one-more", later, later, 20));
     }
 
     #[test]
