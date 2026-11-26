@@ -48,6 +48,27 @@ pub fn sums_trusted_with(key: Option<&str>, sums: &str, sig_hex: Option<&str>) -
     SignPublic::from_bytes(key).verify(sums.as_bytes(), &sig).is_ok()
 }
 
+/// The release asset holding the version number, nothing else (release.yml).
+/// Its line in the signed sums says which release they belong to.
+pub const VERSION_ASSET: &str = "VERSION";
+
+/// `sums` list the [`VERSION_ASSET`] of `version`: an older release's signed
+/// sums can't be passed off under a newer number.
+pub fn sums_name_version(sums: &str, version: &str) -> bool {
+    let want = crate::hex_sha256(version.as_bytes());
+    sums.lines().any(|l| {
+        let mut it = l.split_whitespace();
+        let hash = it.next().unwrap_or_default();
+        it.next().map(|n| n.trim_start_matches('*')) == Some(VERSION_ASSET) && hash.eq_ignore_ascii_case(&want)
+    })
+}
+
+/// What every updater asks before it installs release `version`: its sums are
+/// signed by the release key and are the sums of that very release.
+pub fn sums_trusted_for(sums: &str, sig_hex: Option<&str>, version: &str) -> bool {
+    sums_trusted(sums, sig_hex) && sums_name_version(sums, version)
+}
+
 /// Release downloads come only from this repository's release pages.
 pub const DOWNLOAD_PREFIX: &str = "https://github.com/applememestm-pixel/Aquamarine/releases/download/";
 
@@ -69,5 +90,15 @@ mod tests {
         assert!(!sums_trusted_with(Some(&pk), "bbbb  app.exe\n", Some(&sig)), "changed text");
         let other = hex::encode(SignSecret::generate().sign(sums.as_bytes()));
         assert!(!sums_trusted_with(Some(&pk), sums, Some(&other)), "another key");
+    }
+
+    /// The line release.yml writes: `printf '%s' "$version" > VERSION`.
+    #[test]
+    fn sums_belong_to_one_release() {
+        let sums = "aaaa  app.exe\nf0f68f4c3ef6610fb7a9d1e167b6fc547a55ec3b676c6d6394fbf8d21e047af2  VERSION\n";
+        assert!(sums_name_version(sums, "1.21.0-25"));
+        assert!(!sums_name_version(sums, "1.21.0-26"), "an older release's sums under a newer number");
+        assert!(!sums_name_version("aaaa  app.exe\n", "1.21.0-25"), "no VERSION line");
+        assert!(!sums_name_version("f0f68f4c3ef6610fb7a9d1e167b6fc547a55ec3b676c6d6394fbf8d21e047af2  app.exe\n", "1.21.0-25"), "another file's line");
     }
 }

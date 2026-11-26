@@ -140,16 +140,49 @@ pub async fn update_check(channel: String) -> Result<UpdateInfo, String> {
     if !aqua_core::release::signing_enabled() {
         return Err(aqua_core::release::NO_KEY.into());
     }
+    let mut info = find_release(&channel).await?;
+    let next = offer(&mut info, env!("CARGO_PKG_VERSION"));
+    *lock(&OFFERED) = next;
+    Ok(info)
+}
+
+async fn find_release(channel: &str) -> Result<UpdateInfo, String> {
     let http = aqua_client_core::transport::http_client().map_err(|e| e.to_string())?;
-    let api_err = match api_check(&http, &channel).await {
+    let api_err = match api_check(&http, channel).await {
         Ok(i) => return Ok(i),
         Err(e) => e,
     };
-    let feed_err = match feed_check(&http, &channel).await {
+    let feed_err = match feed_check(&http, channel).await {
         Ok(i) => return Ok(i),
         Err(e) => e,
     };
-    web_check(&http, &channel).await.map_err(|e| format!("{api_err}; {feed_err}; {e}"))
+    web_check(&http, channel).await.map_err(|e| format!("{api_err}; {feed_err}; {e}"))
+}
+
+/// The file the last check offered. `update_download` fetches nothing else:
+/// the page names it, but its checksum and address are taken from here.
+static OFFERED: std::sync::Mutex<Option<UpdateAsset>> = std::sync::Mutex::new(None);
+/// The downloaded file and its checksum: the only thing `update_install` runs.
+static READY: std::sync::Mutex<Option<(PathBuf, String)>> = std::sync::Mutex::new(None);
+
+fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// What may be installed over build `current`: a file with a signed
+/// checksum, of a newer release. Anything else loses its checksum.
+fn offer(info: &mut UpdateInfo, current: &str) -> Option<UpdateAsset> {
+    let up = info.version.as_deref().is_some_and(|v| newer(v, current));
+    let asset = info.asset.as_mut()?;
+    if !up {
+        asset.sha256 = None;
+    }
+    asset.sha256.is_some().then(|| asset.clone())
+}
+
+/// The offered file the page asks for; its own copy of it counts for nothing.
+fn offered(asked: &UpdateAsset, offer: Option<&UpdateAsset>) -> Option<UpdateAsset> {
+    offer.filter(|o| o.url == asked.url && o.name == asked.name).cloned()
 }
 
 /// Where pages.yml puts the feed: the site's own domain, then the
@@ -244,7 +277,7 @@ async fn web_check(http: &reqwest::Client, channel: &str) -> Result<UpdateInfo, 
         Ok(r) => r.text().await.ok(),
         Err(_) => None,
     };
-    let trusted = aqua_core::release::sums_trusted(&sums, sig.as_deref());
+    let trusted = aqua_core::release::sums_trusted_for(&sums, sig.as_deref(), tag.trim_start_matches('v'));
     let builds: Option<serde_json::Value> = match get(dl("BUILDS.json")).await {
         Ok(r) => r.json().await.ok(),
         Err(_) => None,
@@ -341,7 +374,7 @@ async fn release_info(http: &reqwest::Client, rel: &serde_json::Value, channel: 
                             None => None,
                         },
                     };
-                    if let Some(t) = text.filter(|t| aqua_core::release::sums_trusted(t, sig.as_deref())) {
+                    if let Some(t) = text.filter(|t| aqua_core::release::sums_trusted_for(t, sig.as_deref(), tag.trim_start_matches('v'))) {
                         sha256 = parse_sums(&t, want);
                     }
                 }
@@ -393,6 +426,7 @@ struct Progress {
 #[tauri::command]
 pub async fn update_download(app: AppHandle, asset: UpdateAsset) -> Result<String, String> {
     use std::io::Write;
+    let asset = offered(&asset, lock(&OFFERED).as_ref()).ok_or("this update is no longer on offer — check for updates again")?;
     // No hash: the release's sums aren't there yet, or aren't signed by the
     // release key (REV2-003) — either way nothing is installed.
     let expected = asset.sha256.clone().ok_or("this release has no signed checksum yet (still uploading, or not signed by the Aquamarine release key) — the update wasn't installed")?;
@@ -409,6 +443,7 @@ pub async fn update_download(app: AppHandle, asset: UpdateAsset) -> Result<Strin
     // Already downloaded and intact: nothing to fetch.
     if let Some(h) = file_sha256(&path) {
         if h == expected {
+            *lock(&READY) = Some((path.clone(), expected));
             return Ok(path.display().to_string());
         }
     }
@@ -469,6 +504,7 @@ pub async fn update_download(app: AppHandle, asset: UpdateAsset) -> Result<Strin
     }
     let _ = std::fs::remove_file(&tag);
     std::fs::rename(&part, &path).map_err(|e| e.to_string())?;
+    *lock(&READY) = Some((path.clone(), expected));
     Ok(path.display().to_string())
 }
 
@@ -499,7 +535,10 @@ pub async fn update_install(app: AppHandle, path: String) -> Result<String, Stri
     crate::history::flush_app(&app);
     let p = PathBuf::from(&path);
     let dir = updates_dir(&app)?;
-    if p.parent() != Some(dir.as_path()) || !p.is_file() {
+    // Only the file just downloaded, and still the same bytes.
+    let ready = lock(&READY).clone();
+    let intact = ready.is_some_and(|(r, sha)| r == p && file_sha256(&p).is_some_and(|h| h == sha));
+    if p.parent() != Some(dir.as_path()) || !intact {
         return Err("not a downloaded update".into());
     }
     #[cfg(target_os = "android")]
@@ -601,6 +640,35 @@ mod web_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Nothing the page says is installed: only the file the check offered,
+    /// and only when its release is newer than this build.
+    #[test]
+    fn only_a_newer_offered_file() {
+        let info = |version: &str, sha: Option<&str>| UpdateInfo {
+            tag: format!("v{version}"),
+            name: String::new(),
+            commit: None,
+            version: Some(version.into()),
+            published_at: String::new(),
+            notes: String::new(),
+            html_url: String::new(),
+            asset: Some(UpdateAsset { name: "Aquamarine.apk".into(), url: "u".into(), size: 1, sha256: sha.map(Into::into) }),
+        };
+        let o = offer(&mut info("1.2.1", Some("good")), "1.2.0").unwrap();
+        let mut forged = o.clone();
+        forged.sha256 = Some("evil".into());
+        assert_eq!(offered(&forged, Some(&o)).unwrap().sha256.as_deref(), Some("good"));
+        forged.url = "elsewhere".into();
+        assert!(offered(&forged, Some(&o)).is_none());
+        assert!(offered(&o, None).is_none(), "nothing was offered");
+        for old in ["1.1.9", "1.2.0"] {
+            let mut i = info(old, Some("good"));
+            assert!(offer(&mut i, "1.2.0").is_none(), "{old} over 1.2.0");
+            assert!(i.asset.unwrap().sha256.is_none());
+        }
+        assert!(offer(&mut info("1.2.1", None), "1.2.0").is_none(), "unsigned");
+    }
 
     #[test]
     fn commit_from_name() {

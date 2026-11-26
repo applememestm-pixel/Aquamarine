@@ -137,6 +137,8 @@ struct Found {
     notes_url: String,
     /// url, size, sha256
     asset: Option<(String, u64, Option<String>)>,
+    /// The signed list the checksum came from: its text and signature.
+    proof: Option<(String, String)>,
 }
 
 async fn pick(c: &reqwest::Client, list: &serde_json::Value, tester: bool) -> Option<Found> {
@@ -151,11 +153,12 @@ async fn pick(c: &reqwest::Client, list: &serde_json::Value, tester: bool) -> Op
         .reduce(|a, b| if newer(&b.0, &a.0) { b } else { a });
     let (version, rel) = best?;
     if !newer(&version, VERSION) {
-        return Some(Found { version: String::new(), notes_url: String::new(), asset: None });
+        return Some(Found { version: String::new(), notes_url: String::new(), asset: None, proof: None });
     }
     let assets = rel["assets"].as_array().cloned().unwrap_or_default();
     let by = |n: &str| assets.iter().find(|a| a["name"].as_str() == Some(n)).cloned();
     let mut asset = None;
+    let mut proof = None;
     if let Some(name) = wanted() {
         if let Some(a) = by(name) {
             let mut sha = None;
@@ -179,13 +182,16 @@ async fn pick(c: &reqwest::Client, list: &serde_json::Value, tester: bool) -> Op
                         },
                         _ => None,
                     };
-                    sha = text.filter(|t| aqua_core::release::sums_trusted(t, sig.as_deref())).and_then(|t| sums_line(&t, name));
+                    if let Some(t) = text.filter(|t| aqua_core::release::sums_trusted_for(t, sig.as_deref(), &version)) {
+                        sha = sums_line(&t, name);
+                        proof = sig.map(|s| (t, s));
+                    }
                 }
             }
             asset = Some((a["browser_download_url"].as_str().unwrap_or_default().to_string(), a["size"].as_u64().unwrap_or(0), sha));
         }
     }
-    Some(Found { version, notes_url: rel["html_url"].as_str().unwrap_or_default().to_string(), asset })
+    Some(Found { version, notes_url: rel["html_url"].as_str().unwrap_or_default().to_string(), asset, proof })
 }
 
 const FEEDS: &[&str] = &["https://aquamarinemessenger.pw/updates.json", "https://applememestm-pixel.github.io/Aquamarine/updates.json"];
@@ -255,7 +261,7 @@ fn stage_dir() -> PathBuf {
 /// Download into `<data>/aqua-update/aqua-server(.exe).part`, check, rename.
 async fn download(c: &reqwest::Client, url: &str, size: u64, sha: &str) -> Result<PathBuf, String> {
     use std::io::Write;
-    if !url.starts_with("https://github.com/") {
+    if !url.starts_with(aqua_core::release::DOWNLOAD_PREFIX) {
         return Err("unexpected update address".into());
     }
     let d = stage_dir();
@@ -306,12 +312,12 @@ fn bin_name() -> &'static str {
 
 /// Put `new` (already checked) where the next start runs it. Returns the
 /// file to run.
-fn put_in_place(new: &Path, version: &str) -> Result<PathBuf, String> {
+fn put_in_place(new: &Path, version: &str, proof: (&str, &str)) -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let staged = stage_dir().join(bin_name());
     // Already running from the staged copy: that's the place.
     if exe.canonicalize().ok() == staged.canonicalize().ok() && new == staged {
-        let _ = std::fs::write(stage_dir().join("version"), version);
+        keep_staged(&stage_dir(), version, proof).map_err(|e| e.to_string())?;
         return Ok(staged);
     }
     // Over the running file: on Unix the old one stays open by inode; on
@@ -342,10 +348,28 @@ fn put_in_place(new: &Path, version: &str) -> Result<PathBuf, String> {
         Err(e) => {
             let _ = std::fs::remove_file(&tmp);
             tracing::info!(%e, exe = %exe.display(), "update: the binary can't be replaced — it runs from the data folder");
-            std::fs::write(stage_dir().join("version"), version).map_err(|e| e.to_string())?;
+            keep_staged(&stage_dir(), version, proof).map_err(|e| e.to_string())?;
             Ok(staged)
         }
     }
+}
+
+/// What `run_newest` needs to run the staged binary later: its version and
+/// the signed list that names it.
+fn keep_staged(d: &Path, version: &str, (sums, sig): (&str, &str)) -> std::io::Result<()> {
+    std::fs::write(d.join("SHA256SUMS.txt"), sums)?;
+    std::fs::write(d.join(aqua_core::release::SIG_ASSET), sig)?;
+    std::fs::write(d.join("version"), version)
+}
+
+/// The staged binary is the one release `version` lists in sums signed by
+/// `key` — checked again each time, the data folder can be written by others.
+fn staged_is_genuine(d: &Path, version: &str, key: Option<&str>) -> bool {
+    let read = |f: &str| std::fs::read_to_string(d.join(f)).ok();
+    let (Some(sums), Some(sig), Some(name)) = (read("SHA256SUMS.txt"), read(aqua_core::release::SIG_ASSET), wanted()) else { return false };
+    aqua_core::release::sums_trusted_with(key, &sums, Some(&sig))
+        && aqua_core::release::sums_name_version(&sums, version)
+        && sums_line(&sums, name).is_some_and(|h| sha256_of(&d.join(bin_name())) == Some(h))
 }
 
 /// At start (main.rs, after entering the data folder): when the data folder
@@ -373,6 +397,11 @@ pub fn run_newest() {
     }
     if !newer(&v, VERSION) {
         let _ = std::fs::remove_dir_all(&d);
+        return;
+    }
+    if !staged_is_genuine(&d, &v, aqua_core::release::UPDATE_PUBKEY) {
+        // Not run; the next update check downloads or confirms it again.
+        eprintln!("aqua-server {VERSION}: the staged {v} isn't confirmed by a signed release list — not started");
         return;
     }
     eprintln!("aqua-server {VERSION}: starting the newer {v} from {}", staged.display());
@@ -436,7 +465,7 @@ async fn pass() -> (std::time::Duration, Option<PathBuf>) {
         s.version = Some(f.version.clone());
         s.notes_url = Some(f.notes_url.clone());
     });
-    let Some((url, size, Some(sha))) = f.asset else {
+    let (Some((url, size, Some(sha))), Some((sums, sig))) = (f.asset, f.proof) else {
         set(|s| s.state = "waiting".into());
         return (SOON, None);
     };
@@ -449,7 +478,7 @@ async fn pass() -> (std::time::Duration, Option<PathBuf>) {
             Err(e) => return fail(e),
         }
     };
-    let bin = match put_in_place(&file, &f.version) {
+    let bin = match put_in_place(&file, &f.version, (&sums, &sig)) {
         Ok(b) => b,
         Err(e) => return fail(e),
     };
@@ -515,7 +544,28 @@ pub fn spawn(before_exit: impl Fn() + Send + Sync + 'static) {
 
 #[cfg(test)]
 mod tests {
-    use super::newer;
+    use super::{bin_name, keep_staged, newer, staged_is_genuine, wanted};
+
+    /// A binary in the data folder runs only while a signed release list
+    /// still names exactly it and its version.
+    #[test]
+    fn a_staged_binary_needs_its_signed_list() {
+        let Some(name) = wanted() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        let key = aqua_core::crypto::SignSecret::generate();
+        let pk = hex::encode(key.public().as_bytes());
+        std::fs::write(d.join(bin_name()), b"new server").unwrap();
+        assert!(!staged_is_genuine(d, "9.0.1", Some(&pk)), "no list");
+        let sums = format!("{}  {name}\n{}  VERSION\n", aqua_core::hex_sha256(b"new server"), aqua_core::hex_sha256(b"9.0.1"));
+        let sig = hex::encode(key.sign(sums.as_bytes()));
+        keep_staged(d, "9.0.1", (&sums, &sig)).unwrap();
+        assert!(staged_is_genuine(d, "9.0.1", Some(&pk)));
+        assert!(!staged_is_genuine(d, "9.0.2", Some(&pk)), "another version");
+        assert!(!staged_is_genuine(d, "9.0.1", None), "no key built in");
+        std::fs::write(d.join(bin_name()), b"swapped").unwrap();
+        assert!(!staged_is_genuine(d, "9.0.1", Some(&pk)), "changed file");
+    }
 
     #[test]
     fn numbering() {

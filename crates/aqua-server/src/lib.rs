@@ -31,6 +31,7 @@ pub mod blobstore;
 mod blob_upload;
 mod paid;
 pub mod fed;
+mod replay;
 pub mod games;
 pub mod directory;
 pub mod tgapi;
