@@ -106,6 +106,26 @@ if ($x -notmatch 'AquaScreenService') {
   [IO.File]::WriteAllText($m, $x)
   Write-Host '[patch] screen sharing service + nearby permissions added'
 }
+# Background messages, calls in the background, the reminder after a reboot
+# (AquaRelay.kt: AquaSyncService, AquaCallService, AquaBootReceiver).
+if ($x -notmatch 'AquaSyncService') {
+  $syp = '<uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />' + "`n    " +
+         '<uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />' + "`n    <application"
+  $x = ([regex]'<application').Replace($x, $syp, 1)
+  $x = $x.Replace('</application>', '<service android:name=".AquaSyncService" android:exported="false" android:foregroundServiceType="remoteMessaging" />' + "`n    </application>")
+  [IO.File]::WriteAllText($m, $x)
+  Write-Host '[patch] background connection service added'
+}
+if ($x -notmatch 'AquaCallService') {
+  $cap = '<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />' + "`n    " +
+         '<uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />' + "`n    " +
+         '<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />' + "`n    <application"
+  $x = ([regex]'<application').Replace($x, $cap, 1)
+  $x = $x.Replace('</application>', '<service android:name=".AquaCallService" android:exported="false" android:foregroundServiceType="microphone|camera" />' + "`n    " +
+         '<receiver android:name=".AquaBootReceiver" android:exported="false"><intent-filter><action android:name="android.intent.action.BOOT_COMPLETED" /><action android:name="android.intent.action.MY_PACKAGE_REPLACED" /></intent-filter></receiver>' + "`n    </application>")
+  [IO.File]::WriteAllText($m, $x)
+  Write-Host '[patch] call service and boot reminder added'
+}
 # In-app updates (crates/aqua-client-ui/src/updates.rs): installing the
 # downloaded APK needs this permission.
 if ($x -notmatch 'REQUEST_INSTALL_PACKAGES') {

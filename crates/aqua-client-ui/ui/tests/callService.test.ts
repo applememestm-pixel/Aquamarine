@@ -1,0 +1,37 @@
+import assert from "node:assert/strict";
+import { writable } from "svelte/store";
+import { callServiceWanted, watchCallService, watchRinging } from "../src/lib/callService";
+
+assert.equal(callServiceWanted("idle", false), false);
+assert.equal(callServiceWanted("incoming", false), false);
+assert.equal(callServiceWanted("ended", false), false);
+assert.equal(callServiceWanted("outgoing", false), true);
+assert.equal(callServiceWanted("connected", false), true);
+assert.equal(callServiceWanted("idle", true), true);
+
+const call = writable({ kind: "idle" });
+const group = writable<{ joined: boolean } | null>(null);
+const asked: boolean[] = [];
+const stop = watchCallService(call, group, async (on) => { asked.push(on); });
+call.set({ kind: "incoming" });
+assert.deepEqual(asked, []);
+call.set({ kind: "connected" });
+group.set({ joined: true });
+call.set({ kind: "ended" });
+assert.deepEqual(asked, [true], "one service for both calls");
+group.set(null);
+assert.deepEqual(asked, [true, false]);
+group.set({ joined: true });
+stop();
+assert.deepEqual(asked, [true, false, true, false], "stopped with the page");
+const ringing = writable<{ kind: string; peer?: string }>({ kind: "idle" });
+const rang: string[] = [];
+const quiet = watchRinging(ringing, async (peer, on) => { rang.push(`${peer}:${on}`); });
+ringing.set({ kind: "outgoing", peer: "ann" });
+ringing.set({ kind: "incoming", peer: "bob" });
+ringing.set({ kind: "incoming", peer: "bob" });
+ringing.set({ kind: "connected", peer: "bob" });
+ringing.set({ kind: "incoming", peer: "eve" });
+quiet();
+assert.deepEqual(rang, ["bob:true", "bob:false", "eve:true", "eve:false"]);
+console.log("call service: all ok");

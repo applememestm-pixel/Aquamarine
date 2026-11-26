@@ -469,6 +469,8 @@ export const RU: Record<string, string> = {
   "Don't want this window after updates? Turn it off in Settings → Updates.": "Не нужно это окно после обновлений? Отключите его в Настройках → Обновления.",
   "Outgoing call": "Исходящий звонок",
   "Incoming call": "Входящий звонок",
+  "Call in progress — tap to return": "Идёт звонок — нажмите, чтобы вернуться",
+  "Open the app to receive new messages again": "Откройте приложение, чтобы снова получать сообщения",
   "Missed call": "Пропущенный звонок",
   "Declined call": "Отклонённый звонок",
   "Cancelled call": "Отменённый звонок",

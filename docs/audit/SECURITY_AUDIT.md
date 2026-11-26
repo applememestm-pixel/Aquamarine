@@ -19,7 +19,7 @@
 | AQUA-SEC-010 | Aquamarine | P1 | Federation cursors | CONFIRMED (code) | частично | PASS (unit) |
 | AQUA-SEC-011 | Aquamarine | P1 | Queues / DoS | CONFIRMED (code) | частично | PASS |
 | AQUA-SEC-012 | Aquamarine | P1 | Updates | REPORTED | открыто | — |
-| AQUA-SEC-013 | Aquamarine | P1 | Android key storage | REPORTED | открыто | — |
+| AQUA-SEC-013 | Aquamarine | P1 | Android key storage | REPORTED | открыто: код есть, выключен с 1.21.0-24 (`KEYSTORE_WRAP`) | — |
 | AQUA-SEC-014 | Aquamarine | P1 | CI / supply chain | CONFIRMED | частично | аудит работает, нашёл 14 уязвимостей |
 | AQUA-SEC-016 | Aquamarine | P1 | Dependencies | CONFIRMED (cargo audit) | открыто — нужен доступ к crates.io | — |
 | AQUA-SEC-017 | Aquamarine | P0* | Federation version gate | регрессия моего изменения, найдена при ревью | исправлено до выпуска | PASS |

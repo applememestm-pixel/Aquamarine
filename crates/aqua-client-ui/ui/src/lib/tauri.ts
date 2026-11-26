@@ -339,6 +339,9 @@ export const api = {
   openBrowserWindow:  (url: string): Promise<void>                                 => invoke("open_browser_window", { url }),
   showInFolder:       (path: string): Promise<void>                                => invoke("show_in_folder", { path }),
   onceBurn:           (peerId: string, messageId: string): Promise<void>           => invoke("once_burn", { peerId, messageId }),
+  notifyCall:         (peer: string, ringing: boolean): Promise<void>              => invoke("notify_call", { peer, ringing }),
+  /** Android: the foreground service that keeps a call going in the background. */
+  callServiceSet:     (on: boolean): Promise<void>                                 => invoke("call_service_set", { on, text: tr("Call in progress — tap to return") }),
   /** No screenshots / screen recording (Android FLAG_SECURE, Windows / macOS). Resolves false where it can't. */
   screenSecure:       (on: boolean): Promise<boolean>                              => invoke("screen_secure", { on }),
   readUserFont:       (path: string): Promise<number[]>                            => invoke("read_user_font", { path }),

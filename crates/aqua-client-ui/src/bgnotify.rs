@@ -70,6 +70,9 @@ pub struct Prefs {
     pub widget_text: bool,
     #[serde(default)]
     pub widget_empty: String,
+    /// "Incoming call", in the UI language.
+    #[serde(default)]
+    pub call_text: String,
 }
 
 #[tauri::command]
@@ -303,6 +306,54 @@ pub async fn notify_permission(app: AppHandle, ask: bool) -> Result<bool, String
 pub async fn notify_message(app: AppHandle, peer: String, title: String, preview: String) {
     if let Some(p) = prefs() {
         show_message(&app, &p, &peer, Some(title), &preview);
+    }
+}
+
+/// Phones: a call started or stopped ringing. While the app is not on screen a
+/// ringtone alone can go unnoticed, so say it in a notification too. Whose
+/// calls may ring at all is decided by the page before it gets here.
+#[tauri::command]
+pub async fn notify_call(app: AppHandle, peer: String, ringing: bool) {
+    let key = format!("call~{peer}");
+    if !ringing {
+        remove_chats(&app, vec![key.as_str()]);
+        return;
+    }
+    if !cfg!(mobile) || in_front() {
+        return;
+    }
+    let Some(p) = prefs() else { return };
+    if !p.enabled {
+        return;
+    }
+    let (account, name) = {
+        let state = app.state::<Mutex<AppState>>();
+        let s = state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(account) = s.username.clone() else {
+            return;
+        };
+        let name = s.chats.get(&peer).map(|book| book.summary.name.clone());
+        (account, name.unwrap_or_else(|| peer.clone()))
+    };
+    let hidden = crate::applock::is_locked() || p.locked.contains(&peer);
+    let title = if hidden || p.preview == "none" {
+        "Aquamarine".into()
+    } else {
+        name
+    };
+    let note = app
+        .notification()
+        .builder()
+        .id(notification_id(&account, &key))
+        .title(title)
+        .body(p.call_text)
+        .auto_cancel();
+    #[cfg(target_os = "android")]
+    let note = note.icon("ic_stat_aquamarine");
+    if let Err(e) = note.show() {
+        tracing::debug!("show call notification: {e}");
     }
 }
 

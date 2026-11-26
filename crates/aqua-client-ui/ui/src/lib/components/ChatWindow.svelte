@@ -1412,6 +1412,8 @@
     if (!messagesEl) return;
     const dist = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
     scrolledUp = dist > messagesEl.clientHeight * 0.9;
+    clearTimeout(trimTimer);
+    if (dist <= 40 && shownCount > WINDOW_STEP + WINDOW_FIRST) trimTimer = setTimeout(() => void trimOlder(), 1500);
     // Not while it's still settling at the bottom: the first paint starts at
     // the top, and loading older messages there pulled the chat up.
     if (performance.now() >= stickUntil && messagesEl.scrollTop < 600) void showOlder();
@@ -2566,7 +2568,7 @@
   });
   $effect(() => {
     void $activeChat?.id;
-    untrack(() => { shownCount = WINDOW_FIRST; });
+    untrack(() => { clearTimeout(trimTimer); shownCount = WINDOW_FIRST; });
   });
   let growing = false;
   async function showOlder() {
@@ -2576,6 +2578,20 @@
     shownCount += WINDOW_STEP;
     await tick();
     if (messagesEl) messagesEl.scrollTop = top0 + (messagesEl.scrollHeight - h0);
+    growing = false;
+  }
+  /** Rows pile up while reading back. Once the person rests at the bottom
+   *  again, take the old ones out: a long history left in the page made every
+   *  layout slow on phones. Not while searching or selecting. */
+  let trimTimer: ReturnType<typeof setTimeout> | undefined;
+  async function trimOlder() {
+    const el = messagesEl;
+    if (growing || !el || searchOpen || selecting) return;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight > 40) return;
+    growing = true;
+    shownCount = WINDOW_STEP;
+    await tick();
+    el.scrollTop = el.scrollHeight;
     growing = false;
   }
   /** Make sure a row is rendered before scrolling to it. */

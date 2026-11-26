@@ -1399,6 +1399,14 @@ mod keyring {
 const KEYRING_SERVICE: &str = "app.aquamarine.desktop";
 const KEYRING_USER:    &str = "vault-master-key";
 
+/// Wrapping a key with the Keystore is off until it has been tried on a real
+/// phone: the release build never ran it (the plugin was cut out of it up to
+/// 1.21.0-23), and Android's own backup would carry `master.key.ks` to a new
+/// phone without the key that opens it — the app could never start again.
+/// Turning it on needs that backup excluded first.
+#[cfg(target_os = "android")]
+const KEYSTORE_WRAP: bool = false;
+
 /// Android: the vault master key wrapped by a Keystore key
 /// (`master.key.ks`), never as plain bytes (AQUA-SEC-013: before 1.21.0-23
 /// it was a plain `master.key` in the app's folder).
@@ -1438,7 +1446,7 @@ fn android_master_key(dir: &std::path::Path) -> Result<MasterKey> {
     };
     if plain.exists() {
         let arr: [u8; MASTER_KEY_LEN] = std::fs::read(&plain)?.try_into().map_err(|_| anyhow!("master.key has unexpected length"))?;
-        if wrap_and_check(&arr) {
+        if KEYSTORE_WRAP && wrap_and_check(&arr) {
             if let Err(e) = std::fs::remove_file(&plain) {
                 tracing::warn!(?e, "vault key wrapped by the keystore, but the plain file couldn't be removed");
             } else {
@@ -1449,7 +1457,7 @@ fn android_master_key(dir: &std::path::Path) -> Result<MasterKey> {
     }
     std::fs::create_dir_all(dir)?;
     let key = MasterKey::generate();
-    if !wrap_and_check(&key.0) {
+    if !(KEYSTORE_WRAP && wrap_and_check(&key.0)) {
         std::fs::write(&plain, key.0)?;
     }
     Ok(key)

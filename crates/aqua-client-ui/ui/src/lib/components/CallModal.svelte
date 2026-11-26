@@ -85,7 +85,9 @@
   import Select from "./Select.svelte";
   import { t, tr } from "../i18n";
   import { avatars } from "../people";
-  import { IS_MOBILE } from "../platform";
+  import { IS_ANDROID, IS_MOBILE } from "../platform";
+  import { watchCallService, watchRinging } from "../callService";
+  import { groupCall } from "../groupCall";
   import { displayName } from "../contacts";
   import { onMount } from "svelte";
   import { get } from "svelte/store";
@@ -209,6 +211,11 @@
   // ---------------------------------------------------------------------------
   // Lifecycle
   // ---------------------------------------------------------------------------
+  // Android: the microphone keeps working in the background during a call.
+  onMount(() => IS_ANDROID ? watchCallService(callState, groupCall, api.callServiceSet) : undefined);
+  // Phones: a ringing call also shows a notification when the app is away.
+  onMount(() => IS_MOBILE ? watchRinging(callState, api.notifyCall) : undefined);
+
   onMount(() => {
     const unsubSig = events.onCallSignal((e) => {
       const { from, signal } = e;
