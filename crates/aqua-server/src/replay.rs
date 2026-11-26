@@ -179,17 +179,35 @@ impl Inner {
         match std::fs::read(&path) {
             Ok(bytes) => {
                 found = true;
-                for line in String::from_utf8_lossy(&bytes).lines() {
+                let text = String::from_utf8_lossy(&bytes);
+                let lines: Vec<&str> = text.lines().collect();
+                let mut damaged = 0usize;
+                for (i, line) in lines.iter().enumerate() {
+                    if line.is_empty() { continue; }
+                    // A line that doesn't read is damage (a disk error, a
+                    // half-written block) — except the very last one, which a
+                    // crash may have cut short. Whatever it held may be lost.
+                    let ok_sig = |s: &str| !s.is_empty() && s.len() <= 300 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b':' || b == b'-' || b == b'_');
                     let mut it = line.splitn(3, ' ');
-                    let (Some(ts), Some(sig)) = (it.next(), it.next()) else { continue };
-                    let Ok(ts) = ts.parse::<i64>() else { continue };
-                    // Lines of 1.21.0-24/25 name no sender.
+                    let parsed = match (it.next(), it.next()) {
+                        (Some(ts), Some(sig)) if ok_sig(sig) => ts.parse::<i64>().ok().map(|ts| (ts, sig)),
+                        _ => None,
+                    };
+                    let Some((ts, sig)) = parsed else {
+                        if i + 1 < lines.len() { damaged += 1; }
+                        continue;
+                    };
+                    // Lines of 1.21.0-24 name no sender.
                     let sender = it.next().unwrap_or("?").to_string();
                     // Not expired yet. Entries stamped ahead (a pass's nonce
                     // is kept until the pass expires) are kept too.
-                    if now - ts <= self.window && !sig.is_empty() {
+                    if now - ts <= self.window {
                         self.insert(sender, sig.to_string(), ts);
                     }
+                }
+                if damaged > 0 {
+                    tracing::error!(damaged, "federation: the list of used signatures is damaged — signatures made before this start are refused");
+                    self.floor = now;
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -349,6 +367,57 @@ mod tests {
         drop(first);
         let again = Replay::open(Some(file), WINDOW, 100, 100, NOW + 10);
         assert!(!again.take("pass", "pass:n1", NOW + 600_000, NOW + 10));
+    }
+
+    /// A damaged line in the middle (not only a cut last one) may have held
+    /// a used signature: everything signed before the start is refused, even
+    /// after a clean stop.
+    #[test]
+    fn a_damaged_log_refuses_older_signatures() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("seen.log");
+        let first = Replay::open(Some(file.clone()), WINDOW, 100, 100, NOW);
+        assert!(first.take("s", "aa", NOW, NOW));
+        assert!(first.take("s", "bb", NOW, NOW));
+        first.close_clean();
+        drop(first);
+        // A block of the file went bad: "bb"'s line is garbage now.
+        let text = std::fs::read_to_string(&file).unwrap().replace(&format!("{NOW} bb"), "\u{fffd}\u{fffd}x b?");
+        std::fs::write(&file, text + &format!("{NOW} cc s\n")).unwrap();
+        let again = Replay::open(Some(file), WINDOW, 100, 100, NOW + 10);
+        assert!(!again.take("s", "bb", NOW, NOW + 10), "the lost entry can't be replayed");
+        assert!(!again.take("s", "zz", NOW + 5, NOW + 10), "nothing signed before the start");
+        assert!(again.take("s", "fresh", NOW + 10, NOW + 10));
+    }
+
+    /// The clock went back (NTP, a dead RTC battery): entries stamped "in the
+    /// future" stay until they really expire; a jump forward only makes old
+    /// signatures too old to pass the clock check before this table.
+    #[test]
+    fn a_clock_jump_back_keeps_entries() {
+        let r = Replay::open(None, WINDOW, 100, 100, NOW);
+        assert!(r.take("s", "a", NOW, NOW));
+        let back = NOW - 3_600_000;
+        assert!(!r.take("s", "a", NOW, back), "still remembered an hour \"earlier\"");
+        assert!(r.take("s", "b", back, back));
+    }
+
+    /// Load: how fast the table takes signatures with its file (printed, run
+    /// with --ignored --nocapture).
+    #[test]
+    #[ignore = "measurement"]
+    fn replay_throughput() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = Replay::open(Some(dir.path().join("seen.log")), WINDOW, super::MAX, super::MAX_PER, NOW);
+        let n = 200_000i64;
+        let t = std::time::Instant::now();
+        for i in 0..n {
+            let now = NOW + i * 6; // 200 000 requests over 20 minutes (~170/s): the window turns over
+            assert!(r.take(if i % 2 == 0 { "secret" } else { "node" }, &format!("{i:064x}"), now, now));
+        }
+        let el = t.elapsed();
+        let size = std::fs::metadata(dir.path().join("seen.log")).unwrap().len();
+        println!("replay: {n} takes in {el:?} ({:.0}/s, {:.1} µs each), file {} KiB, held {}", n as f64 / el.as_secs_f64(), el.as_micros() as f64 / n as f64, size / 1024, r.inner.lock().unwrap().seen.len());
     }
 
     /// A5: one sender filling its share doesn't keep the others out.

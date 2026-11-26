@@ -1263,3 +1263,78 @@ async fn aqpass_v2_accepted_by_old_and_new_solo() {
     let changed = format!("aqpass:{p3}.{}", hex::encode(aqua_core::crypto::hmac_sha256(SECRET.as_bytes(), format!("aqpass|{p3}").as_bytes())));
     assert_eq!(signup(changed, "passfour").await, 403);
 }
+
+/// Partial download: B pulls A's account while A's avatar can't be fetched
+/// (the proxy in between fails media requests). The account must not be
+/// marked as fully taken: once media answers again, the avatar arrives.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn media_failing_then_recovering_is_fetched_later() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static FAIL: AtomicBool = AtomicBool::new(true);
+    let la = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let lp = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let real_a = format!("http://{}", la.local_addr().unwrap());
+    let up = format!("http://{}", lp.local_addr().unwrap());
+    let tmp = tempfile::tempdir().unwrap();
+    let net = |me: &str, peers: Vec<String>| FedConfig { secret: SECRET.into(), peers, public_url: me.into(), mode: "network".into(), ..Default::default() };
+    let sa = AppState::isolated(tmp.path().join("a"), Some(net(&up, vec![])));
+    { let s = sa.clone(); tokio::spawn(async move { axum::serve(la, app(s)).await.unwrap() }); }
+    {
+        let client = reqwest::Client::new();
+        let real_a = real_a.clone();
+        let proxy = axum::Router::new().fallback(move |req: axum::extract::Request| {
+            let (real_a, client) = (real_a.clone(), client.clone());
+            async move {
+                let (parts, body) = req.into_parts();
+                let pq = parts.uri.path_and_query().map(|p| p.as_str().to_string()).unwrap_or_default();
+                if FAIL.load(Ordering::SeqCst) && pq.starts_with("/v1/fed/media/") {
+                    return axum::http::Response::builder().status(502).body(axum::body::Body::empty()).unwrap();
+                }
+                let body = axum::body::to_bytes(body, 64 << 20).await.unwrap();
+                let mut rb = client.request(parts.method.clone(), format!("{real_a}{pq}")).body(body.to_vec());
+                for (k, v) in parts.headers.iter() { if k != "host" { rb = rb.header(k, v); } }
+                let r = rb.send().await.unwrap();
+                let mut out = axum::http::Response::builder().status(r.status());
+                for (k, v) in r.headers().iter() { if k != "content-length" && k != "transfer-encoding" { out = out.header(k, v); } }
+                out.body(axum::body::Body::from(r.bytes().await.unwrap())).unwrap()
+            }
+        });
+        tokio::spawn(async move { axum::serve(lp, proxy).await.unwrap() });
+    }
+    let (sb, _ub) = serve(&tmp, "b", |u| net(u, vec![up.clone()])).await;
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    let id = IdentityKeyPair::generate();
+    register(&http, &real_a, &id, "pictured").await;
+    let png = include_bytes!("../../../site/assets/emoji/1f47b.webp").to_vec();
+    sa.directory.set_media("pictured", id.public().dh_pub.as_bytes(), aqua_server::directory::MediaKind::parse("avatar").unwrap(), "image/webp", &png).unwrap();
+    fed::sync_once(&sb).await;
+    assert!(sb.directory.identity_for("pictured").is_none(), "media failed: the row isn't taken without it (tried again later)");
+    FAIL.store(false, Ordering::SeqCst);
+    fed::sync_once(&sb).await;
+    assert!(sb.directory.identity_for("pictured").is_some());
+    assert_eq!(sb.directory.get_media("pictured", aqua_server::directory::MediaKind::parse("avatar").unwrap()).map(|m| m.1), Some(png), "the avatar came with it");
+}
+
+/// A relay was off while A deleted many accounts. When it's back, it takes
+/// the deletions — 20 per hour from one relay by themselves, the rest wait
+/// (they aren't skipped: the cursor stays before them).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tombstones_after_a_long_absence_and_the_hourly_limit() {
+    let (sa, sb, ua, _ub, _tmp) = strict_pair().await;
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    let names: Vec<String> = (0..25).map(|i| format!("gone{i:02}")).collect();
+    for n in &names { register(&http, &ua, &IdentityKeyPair::generate(), n).await; }
+    fed::sync_once(&sb).await;
+    assert!(names.iter().all(|n| sb.directory.identity_for(n).is_some()));
+    // B is "off" (doesn't sync) while A deletes them all.
+    for n in &names { assert!(aqua_server::delete_account(&sa, n).await); }
+    fed::sync_once(&sb).await;
+    let left = names.iter().filter(|n| sb.directory.identity_for(n).is_some()).count();
+    assert_eq!(left, 5, "20 applied by themselves, 5 wait");
+    fed::sync_once(&sb).await;
+    assert_eq!(names.iter().filter(|n| sb.directory.identity_for(n).is_some()).count(), 5, "still waiting within the hour");
+    // Waiting ones aren't lost: the cursor stays before them.
+    let cur = sb.directory.fed_cursor(&ua, "tombs").unwrap();
+    let pending = sa.directory.tombs_after(cur.0, Some(&cur.1).filter(|s| !s.is_empty()).map(|s| s.as_str()), 100);
+    assert_eq!(pending.len(), 5);
+}

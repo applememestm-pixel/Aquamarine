@@ -939,7 +939,7 @@ impl Fed {
         // Introductions only: a hello queues an unknown relay for the admin.
         let intro = matches!(base, "/v1/fed/hello" | "/v1/fed/ping" | "/v1/fed/names/hello");
         if self.enforced() && !intro {
-            tracing::warn!(%path, "federation: a request signed only with the shared secret — refused (every peer has a key)");
+            tracing::warn!(%path, "federation: a request signed only with the shared secret — refused (node keys are required)");
             return None;
         }
         let (ts, sig) = self.secret_sig(headers, method, path, body)?;
