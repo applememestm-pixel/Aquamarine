@@ -1,6 +1,6 @@
 # HTTP API ретранслятора
 
-> Часть [технической документации](README.md). Описание соответствует `aqua-server` 1.21.0-24 и версии протокола `v1`.
+> Часть [технической документации](README.md). Описание соответствует `aqua-server` 1.21.0-26 и версии протокола `v1`.
 
 Ретранслятор (`aqua-server`) предоставляет HTTP API и канал WebSocket. Клиент Aquamarine работает только через них, поэтому API позволяет написать совместимый клиент, бота или инструмент администрирования.
 
@@ -523,6 +523,8 @@
 | `GET`, `POST /v1/admin/federation` | `{"mode": "solo"\|"network", "secret", "peers": [адреса], "public_url"}`; секрет не короче 16 символов и в ответе не возвращается. `mode: "network"` без секрета создаёт его сам. В ответе GET также `smtp` — есть ли у узла своя почта |
 | `GET /v1/admin/fed/invite` | `{"invite"}` — код приглашения в сеть `aquafed:…` (адрес узла и секрет сети) |
 | `POST /v1/admin/fed/join` | `{"invite"}` — войти в сеть по коду: узел берёт секрет, добавляет пригласившего соседом и знакомится с остальными |
+| `POST /v1/admin/fed/auth` | Обязательные ключи узлов (1.21.0-26): `{"action": "enforce"}` — только по ключам сейчас; `{"action": "postpone", "days": 1..14}` — отложить конец переходного периода; `{"action": "legacy", "legacy_days": 1..7, "confirm": true}` — временно пустить серверы без ключа (закрывается само); `{"action": "legacy_end"}`. Ответ — как `auth` в `GET /v1/admin/federation`: `mode` (`transition`/`enforced`/`legacy`), `deadline`, `enforced_at`, `legacy_until`, `unpinned`, `conflicts`, `warn`. Пишется в журнал |
+| `POST /v1/admin/fed/resync` | `{"peer"?, "stream"?}` — прочитать заново с начала (`users`, `backups`, `hist`, `names`, `tombs`) |
 | `GET /v1/admin/servers` | Другие ретрансляторы: соседи, найденные в локальной сети (`/24`) и в публичном списке; для каждого `url`, `found`, `peer`, `ok`, `ms`, `users`, `online`, `same_network` |
 
 ---
@@ -537,6 +539,8 @@ x-aqua-fed: <unix_ms>.<hex HMAC-SHA256(secret, METHOD "\n" PATH "\n" unix_ms "\n
 
 Расхождение часов — не более ±5 минут. Запрос без верной подписи отклоняется.
 
+С 1.21.0-23 серверы подписывают запросы ещё и ключом узла (`x-aqua-fed2`), а ответы — `x-aqua-fed2-resp`; с 1.21.0-26 ключи обязательны после переходного периода, и общий секрет годится только для `hello`, `ping` и `names/hello` — см. [federation.md](federation.md#31-ключи-узлов-обязательны-с-1210-26).
+
 | Метод и путь | Назначение |
 |---|---|
 | `GET /v1/fed/peers` | Публичные адреса узлов сети (без подписи — для переключения клиентов) |
@@ -545,6 +549,7 @@ x-aqua-fed: <unix_ms>.<hex HMAC-SHA256(secret, METHOD "\n" PATH "\n" unix_ms "\n
 | `GET /v1/fed/hist/:user/:k` | Одна зашифрованная запись истории |
 | `GET /v1/fed/users?since=` | Строки учётных записей с `updated_at` больше курсора (страницами по 500) |
 | `GET /v1/fed/backups?since=` | Метаданные резервных копий |
+| `GET /v1/fed/tombs?since=&after=` | Удалённые аккаунты (1.21.0-26): `[{uid, created_at, username, deleted_at, origin, sig, got_at}]`, каждый подписан ключом удалившего сервера |
 | `GET /v1/fed/backup/:user` | Резервная копия |
 | `GET /v1/fed/media/:user/:kind` | Медиа профиля |
 | `POST /v1/stars-app/admin` · `/set {q, level, time}` · `/decide {uid, yes}` | Панель владельца в мини-приложении @stars (только владельцу): кто носит звезду и запросы Boosty, выдать/снять звезду, ответить на запрос |
@@ -646,6 +651,8 @@ x-aqua-fed: <unix_ms>.<hex HMAC-SHA256(secret, METHOD "\n" PATH "\n" unix_ms "\n
 | GET, POST | `/v1/admin/federation` | админ | 15 |
 | GET | `/v1/admin/fed/invite` | админ | 15 |
 | POST | `/v1/admin/fed/join` | админ | 15 |
+| POST | `/v1/admin/fed/auth` | админ | 15 |
+| POST | `/v1/admin/fed/resync` | админ | 15 |
 | GET | `/v1/admin/servers` | админ | 15 |
 | * | `/v1/fed/*` | федерация | 16 |
 
