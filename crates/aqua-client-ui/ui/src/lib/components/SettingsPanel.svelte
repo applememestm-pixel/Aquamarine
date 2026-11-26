@@ -84,7 +84,7 @@
   import { ghost, blocked, setBlocked } from "../ghost";
   import { lockConf, setAutoLock, lockNow, removePasscode, passcodeSetupOpen, biometricAvailable, setBiometric } from "../lock";
   import { t, lang, LANGS, tr } from "../i18n";
-  import { chats, activeId, loadActiveMessages } from "../stores";
+  import { chats, activeId, loadActiveMessages, forgetHistory } from "../stores";
   import { BUILTIN_SOUNDS, customSounds, refreshSounds, playSound, soundLabel, addSoundBytes } from "../sounds";
   import { exportThemeToFile, sendThemeToChat, pickAndApplyTheme } from "../themeShare";
   import { askConfirm } from "./Confirm.svelte";
@@ -2076,7 +2076,7 @@
             <span class="switch" class:on={$inAppBrowser}></span>
           </button>
         {/if}
-        <button class="toggle-row" onclick={() => { toggle("showSeconds"); void loadActiveMessages(); void api.listChats().then((c) => chats.set(c)).catch(() => {}); }}>
+        <button class="toggle-row" onclick={() => { toggle("showSeconds"); forgetHistory(); void loadActiveMessages(); void api.listChats().then((c) => chats.set(c)).catch(() => {}); }}>
           <div class="tr-text">
             <div class="tr-title">{$t("Seconds in message times")}</div>
             <div class="tr-sub">{$t("12:30:45 instead of 12:30 (for messages from this version on).")}</div>

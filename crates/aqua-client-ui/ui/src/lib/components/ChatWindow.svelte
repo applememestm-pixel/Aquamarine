@@ -1883,27 +1883,26 @@
     }
     return c;
   });
-  /** The message a reply quotes: the nearest one above with that text — its
-   *  author's when the name maps back. By the text alone every sticker
-   *  ("Sticker") or every "ок" counted the reply as its own. */
-  function quotedIndex(at: number, text: string, author: string): number {
-    const who = quoteUser(author);
-    let loose = -1;
-    for (let i = at - 1; i >= 0; i--) {
-      if (quoteOf(rows[i]) !== text) continue;
-      if (whoOf(rows[i]) === who) return i;
-      if (loose < 0) loose = i;
-    }
-    return loose;
-  }
-  /** Reply id → the id of the message it answers. */
+  /** Reply id → the id of the message it answers: the nearest one above with
+   *  the quoted text — its author's when the name maps back. By the text alone
+   *  every sticker ("Sticker") or every "ок" counted the reply as its own.
+   *  One pass: a look back from each reply was felt in long chats. */
   let replyTargets = $derived.by(() => {
     const m = new Map<string, string>();
-    rows.forEach((r, i) => {
-      if (r.kind.type !== "reply") return;
-      const j = quotedIndex(i, r.kind.content.quoted_text, r.kind.content.quoted_author);
-      if (j >= 0) m.set(r.id, rows[j].id);
-    });
+    if (!rows.some((r) => r.kind.type === "reply")) return m;
+    /** The latest message so far with a text, and with that text by an author. */
+    const byText = new Map<string, string>();
+    const byAuthor = new Map<string, string>();
+    for (const r of rows) {
+      if (r.kind.type === "reply") {
+        const q = r.kind.content.quoted_text;
+        const to = byAuthor.get(JSON.stringify([q, quoteUser(r.kind.content.quoted_author)])) ?? byText.get(q);
+        if (to !== undefined) m.set(r.id, to);
+      }
+      const q = quoteOf(r);
+      byText.set(q, r.id);
+      byAuthor.set(JSON.stringify([q, whoOf(r)]), r.id);
+    }
     return m;
   });
   /** Message id → how many replies it has. */
@@ -5428,8 +5427,8 @@
     {/if}
     <div class="composer" class:disabled={!liveChat} class:chan-bar={isChannel && liveChat && IS_MOBILE} bind:this={composerBox}>
       {#if isChannel && liveChat}
-        <!-- A channel on a phone (Telegram): one bar — who posts, stickers, the
-             text, 📎, the round button. The PC keeps its usual field (the
+        <!-- A channel on a phone (Telegram): one bar — who posts, 📎, the text,
+             stickers, the round button. The PC keeps its usual field (the
              owner's call), with only the 🔔 added. -->
         <!-- 🔔: subscribers get a sound / a notification; off — a silent post. -->
         <button class="cb-bell" class:off={!!$silentChans[$activeChat?.id ?? ""]} aria-pressed={!!$silentChans[$activeChat?.id ?? ""]}
@@ -5459,9 +5458,7 @@
       {/if}
       <!-- Attach popup (Media / Article / Poll) -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <!-- Phone, text typed: the clip floats over the send button (Telegram) —
-           under the thumb, and the field takes its place. -->
-      <div class="attach-wrap" class:float={IS_MOBILE && liveChat && text.trim().length > 0} onmousedown={(e) => e.stopPropagation()}>
+      <div class="attach-wrap" onmousedown={(e) => e.stopPropagation()}>
         {#if attachMenuOpen}
           {#if phoneUI}
             <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
@@ -6833,11 +6830,6 @@
 
   /* Attach popup (Media / Article / Poll) */
   .attach-wrap { position: relative; display: flex; }
-  .attach-wrap.float { position: absolute; right: 16px; bottom: calc(100% + 8px); z-index: 6; animation: att-float .16s ease-out; }
-  .attach-wrap.float .attach-btn { width: 44px; height: 44px; border-radius: 50%; background: var(--bg-surface-2, var(--bg-input)); box-shadow: 0 6px 18px -6px rgba(0,0,0,.55); }
-  /* Not the phone sheet: with "left: auto" it shrank to a strip on the right. */
-  .attach-wrap.float .attach-pop:not(.sheet) { left: auto; right: 0; }
-  @keyframes att-float { from { opacity: 0; transform: translateY(8px) scale(.9); } }
   .attach-btn.open { color: var(--accent); background: var(--accent-soft); }
   .attach-pop {
     position: absolute; bottom: calc(100% + 8px); left: 0;
@@ -7536,9 +7528,6 @@
   :global(html.glass.panels-square) .phone :is(.back-btn, .chat-identity, .chat-actions, .pin-bar) {
     border-radius: calc(8px * var(--rk, 1));
   }
-  .phone .composer:not(.chan-bar) .input-wrap > .emoji-in { order: -1; }
-  .phone .composer:not(.chan-bar) > .attach-wrap { order: 1; }
-  .phone .composer:not(.chan-bar) > .send-btn { order: 2; }
 
   /* Poll bubble */
   .bubble.poll-bubble { display: flex; flex-direction: column; gap: 4px; min-width: 240px; max-width: 360px; }
@@ -7640,7 +7629,7 @@
   }
   /* The blur lives on a pseudo-layer: a backdrop-filter on the bar itself would make it a
      "backdrop root", and popups inside it (attach menu, room list) couldn't blur the chat. */
-  /* A channel's bar (Telegram): one pill — my avatar, stickers, the text, 📎,
+  /* A channel's bar (Telegram): one pill — my avatar, 📎, the text, stickers,
      the round mic / send button; no separate boxes. */
   .composer.chan-bar { align-items: center; gap: 2px; margin: 6px 10px 8px; padding: 4px; border: 1px solid var(--border);
     border-radius: 999px; background: var(--bg-input); }
@@ -7685,9 +7674,8 @@
   @media (prefers-reduced-motion: reduce) { .as-dialog[open] { animation: none; } }
   .as-author { color: var(--accent); }
   .as-own { align-self: flex-end; font-size: 12.5px; font-weight: 600; color: var(--accent); margin: 0 4px 2px; }
-  .chan-bar .input-wrap { order: 1; background: transparent; border: none; box-shadow: none !important; padding-left: 4px; align-items: center; }
-  .chan-bar .input-wrap > .emoji-in { order: -1; }
-  .chan-bar .attach-wrap { order: 2; }
+  .chan-bar .input-wrap { order: 1; background: transparent; border: none; box-shadow: none !important; padding-left: 8px; align-items: center; }
+  .chan-bar .attach-wrap { order: 1; }
   .cb-bell { width: 38px; height: 38px; flex-shrink: 0; align-self: center; border: none; background: transparent; color: var(--fg-muted); border-radius: 50%; display: grid; place-items: center; cursor: pointer; }
   .cb-bell.off { color: var(--fg-dim); }
   .cb-bell :global(svg) { width: 21px; height: 21px; }

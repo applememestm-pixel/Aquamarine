@@ -17,6 +17,7 @@ pub mod media_server;
 pub mod personal;
 pub mod history;
 pub mod history_sync;
+mod history_delta;
 mod large_files;
 pub mod devtrust;
 pub mod security;
@@ -322,6 +323,7 @@ pub fn run() -> Result<()> {
             commands::log_out,
             commands::list_chats,
             commands::get_messages,
+            commands::get_messages_delta,
             commands::send_message,
             commands::verify_fingerprint,
             commands::session_fingerprint,

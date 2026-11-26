@@ -643,7 +643,7 @@
     suppressClick = true; setTimeout(() => (suppressClick = false), 600);
     try { navigator.vibrate?.(12); } catch { /* no vibration */ }
     let msgs: ChatMessage[] = [];
-    try { msgs = await api.getMessages(id); } catch { /* show the header anyway */ }
+    try { msgs = await api.getMessages(id, 40); } catch { /* show the header anyway */ }
     peekAt = Date.now();
     peek = { id, msgs: msgs.filter((m) => m.kind.type !== "date_separator").slice(-30) };
   }

@@ -2,6 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 import { writable, derived, get } from "svelte/store";
 import type { ChatMessage, ChatSummary, InitInfo } from "./types";
 import { api, events } from "./tauri";
+import { historyCache } from "./chatHistory";
 import { onBack } from "./back";
 import { contacts, contactMatches, displayName, saveContact } from "./contacts";
 import { settings } from "./theme";
@@ -508,11 +509,15 @@ function reuseUnchanged(prev: ChatMessage[], next: ChatMessage[]): ChatMessage[]
   return same ? prev : out;
 }
 
+const history = historyCache((id, since) => api.getMessagesDelta(id, since));
+/** The next read of any chat is a full one (how times are shown changed). */
+export const forgetHistory = () => history.forget();
+
 export async function loadActiveMessages() {
   const id = get(activeId);
   if (!id) { activeMessages.set([]); return; }
   try {
-    const msgs = await api.getMessages(id);
+    const msgs = await history.fetch(id);
     // Another chat was opened meanwhile: its own load fills the view (before,
     // a slow answer for the old chat could land in the new one).
     if (get(activeId) !== id) return;
@@ -549,7 +554,7 @@ export async function sendCurrent(text: string): Promise<string | null> {
     // A bot mentioned in it gets this one message (guest bots).
     void import("./botHelpers").then((m) => m.routeGuestMentions(id, text)).catch(() => {});
     // Refresh both messages and chat list (backend bumps chat to top).
-    const [msgs, updated] = await Promise.all([api.getMessages(id), api.listChats()]);
+    const [msgs, updated] = await Promise.all([history.fetch(id), api.listChats()]);
     // Switched chats while it was going out: don't show this chat's
     // messages in the other one.
     if (get(activeId) === id) activeMessages.set(reuseUnchanged(get(activeMessages), msgs));

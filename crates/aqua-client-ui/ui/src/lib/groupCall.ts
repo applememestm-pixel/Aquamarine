@@ -22,6 +22,7 @@ import { callSettings, iceServersFor } from "./callSettings";
 import { showToast } from "./components/Toast.svelte";
 import { tr } from "./i18n";
 import { IS_MOBILE } from "./platform";
+import { groupVideoLimits } from "./groupVideo";
 
 export interface Peer {
   user: string;
@@ -144,7 +145,6 @@ function attachLocal(user: string, pc: RTCPeerConnection) {
  *  picture stutters. A shared screen keeps its resolution (text). */
 async function tuneGroupVideo() {
   if (!IS_MOBILE) return;
-  const n = videoSenders.size;
   const screen = !!get(groupCall)?.screen && realScreen;
   for (const snd of videoSenders.values()) {
     if (!snd.track) continue;
@@ -152,8 +152,7 @@ async function tuneGroupVideo() {
       const p = snd.getParameters();
       const e = p.encodings?.[0];
       if (!e) continue; // not negotiated yet: tuned once connected
-      e.maxBitrate = (n >= 4 ? 350 : n >= 2 ? 700 : 1500) * 1000;
-      e.scaleResolutionDownBy = screen ? 1 : n >= 4 ? 3 : n >= 2 ? 2 : 1;
+      Object.assign(e, groupVideoLimits(videoSenders.size, screen));
       await snd.setParameters(p);
     } catch { /* an older WebView: it sends as before */ }
   }
@@ -392,7 +391,7 @@ async function onSignal(from: string, gid: string, m: Record<string, unknown>) {
       if (typeof m.muted === "boolean" && s.peers[from]) setPeer(from, { muted: m.muted });
       break;
     case "leave":
-      pcs.get(from)?.close(); pcs.delete(from); analysers.delete(from); videoSenders.delete(from); remoteStreams.delete(from); spatialDrop(from); void tuneGroupVideo();
+      pcs.get(from)?.close(); pcs.delete(from); analysers.delete(from); videoSenders.delete(from); remoteStreams.delete(from); holdUntil.delete(from); spatialDrop(from); void tuneGroupVideo();
       patch((n) => { delete n.peers[from]; });
       break;
   }

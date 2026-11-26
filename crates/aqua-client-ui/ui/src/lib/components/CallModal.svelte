@@ -904,8 +904,10 @@
   function closeWatch() { watch = false; zoom = { s: 1, x: 0, y: 0 }; }
   $effect(() => { if (watch) return onBack(closeWatch); });
   // Phones: "back" folds the full-screen call into the strip (Telegram).
-  $effect(() => { if (IS_MOBILE && expanded && ($callState.kind === "outgoing" || $callState.kind === "incoming" || $callState.kind === "connected")) return onBack(() => { expanded = false; }); });
-  $effect(() => { if (IS_MOBILE && watch) return onBack(() => closeWatch()); });
+  // (Derived: a change of state inside the call mustn't move this entry above
+  // a sheet opened later.)
+  let liveCall = $derived($callState.kind === "outgoing" || $callState.kind === "incoming" || $callState.kind === "connected");
+  $effect(() => { if (IS_MOBILE && expanded && liveCall) return onBack(() => { expanded = false; }); });
   $effect(() => { if (IS_MOBILE && (devOpen || goLiveOpen)) return onBack(() => closePops()); });
   function closePops() { goLiveOpen = false; volOpen = false; devOpen = false; }
   // Phones: a minimised call is a bar above the whole app (Telegram); the

@@ -2,6 +2,7 @@ import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { tr } from "./i18n";
 import { noteWrote } from "./wrote";
+import type { MessagesDelta } from "./chatHistory";
 
 /**
  * Turn a local file path into a URL the webview can load directly through
@@ -116,12 +117,16 @@ function shownTime(t: string): string {
   return secs ? t : t.slice(0, 5);
 }
 
+const shownMessage = (m: ChatMessage): ChatMessage => ({ ...m, time: shownTime(m.time) });
+
 export const api = {
   initApp:            (): Promise<InitInfo>                                        => invoke("init_app"),
   completeRegistration: (username: string, email: string | null): Promise<InitInfo> => invoke("complete_registration", { username, email }),
   logOut:             (): Promise<InitInfo>                                        => invoke("log_out"),
   listChats:          (): Promise<ChatSummary[]>                                   => invoke<ChatSummary[]>("list_chats").then((l) => l.map((c) => ({ ...c, time: shownTime(c.time), ...(c.id === "__replies__" ? { name: tr("Replies") } : {}), ...(c.id === "__saved__" ? { name: tr("Saved Messages"), preview: c.preview === "Note to self — only you see this" ? tr(c.preview) : c.preview } : {}) })).filter((c) => c.id !== "welcome")),
-  getMessages:        (peer_id: string): Promise<ChatMessage[]>                    => invoke<ChatMessage[]>("get_messages", { peerId: peer_id }).then((l) => l.map((m) => ({ ...m, time: shownTime(m.time) }))),
+  /** The whole history, or only its last `limit` messages. */
+  getMessages:        (peer_id: string, limit?: number): Promise<ChatMessage[]>    => invoke<ChatMessage[]>("get_messages", { peerId: peer_id, limit }).then((l) => l.map(shownMessage)),
+  getMessagesDelta:   (peer_id: string, since: number | null): Promise<MessagesDelta> => invoke<MessagesDelta>("get_messages_delta", { peerId: peer_id, since }).then((d) => ({ ...d, changed: d.changed.map(shownMessage) })),
   setTzOffset:        (minutes: number): Promise<void> => invoke("set_tz_offset", { minutes }),
   /** Stars (src/stars.rs): someone's statement → its kind if real; my own from my relay. */
   starVerify:         (uid: string, star: unknown): Promise<number | null>          => invoke("star_verify", { uid, star }),
