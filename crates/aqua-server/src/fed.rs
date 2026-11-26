@@ -157,6 +157,32 @@ pub struct FedConfig {
     /// (`/v1/admin/fed/auth`, at most [`LEGACY_MAX_DAYS`]); ends by itself.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub legacy_until: u64,
+    /// This relay's last key changes, each signed by the key before it
+    /// (newest last, at most [`MAX_ROTATIONS`]): a peer that was off for
+    /// two changes follows the chain.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rotations: Vec<RotStep>,
+    /// Node ids of peers we followed away from (their keys changed): never
+    /// taken again, like revoked ones.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retired: Vec<String>,
+}
+
+/// One key change: `old` (public key, hex) signed
+/// `aqua-fed-rotate-v2\n{url}\n{old_id}\n{new}\n{seq}`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RotStep {
+    pub old: String,
+    pub new: String,
+    pub seq: u64,
+    pub sig: String,
+}
+
+/// Key changes a relay keeps and sends in its hellos.
+pub const MAX_ROTATIONS: usize = 8;
+
+fn rot_message(url: &str, old_id: &str, new_pub: &str, seq: u64) -> String {
+    format!("aqua-fed-rotate-v2\n{url}\n{old_id}\n{new_pub}\n{seq}")
 }
 
 fn is_zero(v: &u64) -> bool { *v == 0 }
@@ -640,7 +666,7 @@ impl Fed {
 
     /// Revoked here, or a published key (`LEAKED_NODE_IDS`).
     pub fn is_revoked(&self, id: &str) -> bool {
-        self.cfg.revoked.iter().any(|r| r == id) || LEAKED_NODE_IDS.contains(&id)
+        self.cfg.revoked.iter().any(|r| r == id) || self.cfg.retired.iter().any(|r| r == id) || LEAKED_NODE_IDS.contains(&id)
     }
 
     /// The key we keep for `peer` (by address), if any.
@@ -743,7 +769,7 @@ impl Fed {
     pub fn hello_key_fields_at(&self, url: &str) -> serde_json::Value {
         let key = self.node_pub();
         let sig = hex::encode(self.key.sign(format!("aqua-fed-hello\n{url}\n{key}").as_bytes()));
-        serde_json::json!({ "node_key": key, "node_sig": sig, "rotated": self.cfg.rotated, "admit": self.cfg.join_token, "vouches": self.cfg.vouches })
+        serde_json::json!({ "node_key": key, "node_sig": sig, "rotated": self.cfg.rotated, "rotations": self.cfg.rotations, "admit": self.cfg.join_token, "vouches": self.cfg.vouches })
     }
 
     /// A vouch by this relay for node `id` at `url`.
@@ -1019,7 +1045,7 @@ impl Fed {
 
     /// A hello answer carries the answering relay's key, signed by it over
     /// its address. Kept when that address is the one we asked (we reached
-    /// it there ourselves) and the key may be pinned (`pin_from_hello`): a
+    /// it there ourselves) and the key may be pinned (`pin_change`): a
     /// relay behind a router learns the key of the public one it polls
     /// without waiting for a hello back over its reverse link.
     fn note_answer_key(&self, peer: &str, v: &serde_json::Value) {
@@ -1035,10 +1061,16 @@ impl Fed {
             node_key: v["node_key"].as_str().unwrap_or("").to_string(),
             node_sig: v["node_sig"].as_str().unwrap_or("").to_string(),
             rotated: v["rotated"].as_str().unwrap_or("").to_string(),
+            rotations: serde_json::from_value(v["rotations"].clone()).unwrap_or_default(),
         };
-        if let Some(pin) = pin_from_hello(self, &h) {
-            if let Ok(mut g) = self.got_pins.lock() { g.push(pin); }
-        }
+        // Only a peer on our own list, under a key we take: a first key or
+        // a signed change. Another key without a signature isn't taken here.
+        let pin = match pin_change(self, &h) {
+            Some(PinChange::New(p)) if self.cfg.peers.iter().any(|u| u == peer) => p,
+            Some(PinChange::Rotated(p, _)) => p,
+            _ => return,
+        };
+        if let Ok(mut g) = self.got_pins.lock() { g.push(pin); }
     }
 
     /// A hello answer may carry a vouch for us (we were admitted).
@@ -1234,31 +1266,19 @@ pub async fn h_names_hello(State(state): State<AppState>, headers: HeaderMap, bo
     let url = v["url"].as_str().unwrap_or("").trim().trim_end_matches('/').to_string();
     let k = fed.hello_key_fields();
     let answer = |fed: &Fed| Json(serde_json::json!({ "self": my_url(&fed.cfg), "peers": fed.cfg.peers,
-        "node_key": k["node_key"], "node_sig": k["node_sig"], "rotated": k["rotated"] }));
+        "node_key": k["node_key"], "node_sig": k["node_sig"], "rotated": k["rotated"], "rotations": k["rotations"] }));
     // A solo relay brings its node key (1.21.0-26): pinned as "names", like a
     // hello pins a relay of the network. Once keys are required, a solo
     // relay we don't know joins only with an invitation token or a vouch —
     // otherwise it waits for the admin; without a key it isn't taken at all.
     if fed.cfg.active() && url.starts_with("http") && url != my_url(&fed.cfg) {
         let h: Option<Hello> = serde_json::from_value(v.clone()).ok();
-        let known = fed.pin_for(&url).is_some();
-        match h.as_ref().and_then(|h| pin_from_hello(&fed, h)) {
-            Some(pin) => {
-                let pin = Pin { role: "names".into(), ..pin };
-                let enforced = fed.enforced();
-                let h = h.as_ref().map(|h| (h.admit.clone(), h.vouches.clone())).unwrap_or_default();
-                if !enforced || known || take_admit_token(&state, &h.0) || fed.vouched(&pin, &h.1) {
-                    set_pin(&state, pin);
-                } else {
-                    tracing::warn!(%url, "name registry: a solo relay that isn't admitted said hello — waiting for the admin");
-                    add_pending(&state, pin);
-                    return Ok(Json(serde_json::json!({ "pending": true, "self": my_url(&fed.cfg) })));
-                }
-            }
-            None if fed.enforced() && !known => {
-                return Ok(Json(serde_json::json!({ "pending": true, "self": my_url(&fed.cfg) })));
-            }
-            None => {}
+        let admitted = match &h {
+            Some(h) => decide_pin(&state, &fed, h, true).await.0,
+            None => !fed.enforced() || fed.pin_for(&url).is_some(),
+        };
+        if !admitted {
+            return Ok(Json(serde_json::json!({ "pending": true, "self": my_url(&fed.cfg) })));
         }
     }
     let joined = update_cfg(&state, |_, c| {
@@ -1618,6 +1638,8 @@ pub struct Hello {
     #[serde(default)] node_key: String,
     #[serde(default)] node_sig: String,
     #[serde(default)] rotated: String,
+    /// Its last key changes (1.21.0-26).
+    #[serde(default)] rotations: Vec<RotStep>,
 }
 
 /// A relay of the network says hello: it's added to our peers if new, and
@@ -1642,33 +1664,14 @@ pub async fn h_hello(State(state): State<AppState>, headers: HeaderMap, body: By
     // relay of the network — otherwise it waits for the admin.
     let strict = fed.enforced();
     let mut vouch = None;
-    let new_pin = pin_from_hello(&fed, &h);
     let known = fed.pin_for(&h.url).is_some();
-    let mut admitted = !strict || known;
-    if let Some(pin) = new_pin {
-        if !known && strict {
-            if take_admit_token(&state, &h.admit) {
-                tracing::info!(url = %pin.url, "federation: a relay joined with an invitation token");
-                admitted = true;
-            } else if fed.vouched(&pin, &h.vouches) {
-                tracing::info!(url = %pin.url, "federation: a relay joined, vouched for by a relay of the network");
-                admitted = true;
-            } else {
-                tracing::warn!(url = %pin.url, id = %pin.id, "federation: a relay that isn't admitted said hello — waiting for the admin");
-                add_pending(&state, pin.clone());
-            }
-        } else {
-            admitted = true;
-        }
-        if admitted {
-            if strict && !known { vouch = Some(fed.vouch_for(&pin.id, &pin.url)); }
+    let (admitted, pinned) = decide_pin(&state, &fed, &h, false).await;
+    if let Some(pin) = &pinned {
+        if strict && !known { vouch = Some(fed.vouch_for(&pin.id, &pin.url)); }
+        // It now knows... not yet our key: tell it, so it can sign too.
+        if let Some(f) = current(&state) {
             let url = pin.url.clone();
-            if set_pin(&state, pin) {
-                // It now knows... not yet our key: tell it, so it can sign too.
-                if let Some(f) = current(&state) {
-                    tokio::spawn(async move { f.hello_to(&url).await; });
-                }
-            }
+            tokio::spawn(async move { f.hello_to(&url).await; });
         }
     }
     if !admitted {
@@ -1691,7 +1694,74 @@ pub async fn h_hello(State(state): State<AppState>, headers: HeaderMap, body: By
     });
     let k = fed.hello_key_fields();
     Ok(Json(serde_json::json!({ "self": my_id(&fed.cfg), "peers": fed.cfg.peers, "vouch": vouch,
-        "node_key": k["node_key"], "node_sig": k["node_sig"], "rotated": k["rotated"] })))
+        "node_key": k["node_key"], "node_sig": k["node_sig"], "rotated": k["rotated"], "rotations": k["rotations"] })))
+}
+
+/// What to do with the key a hello (or names hello) brings. Returns whether
+/// the sender may go on (`false`: it waits for the admin) and the pin kept.
+///
+/// * a first key: an invitation token or a vouch admits it; without them,
+///   during the transition, only an address on our own list
+///   (`names`: always, as before keys) — `tunnel:` ones never by themselves;
+///   an `http` address must prove it holds the key (`proves_address`);
+/// * a signed key change is followed; another key without one waits for the
+///   admin as a conflict, unless it comes with a fresh invitation token (a
+///   relay that lost its key, re-invited);
+/// * a pinned key at a new address moves there once it proves it.
+async fn decide_pin(state: &AppState, fed: &Fed, h: &Hello, names: bool) -> (bool, Option<Pin>) {
+    let enforced = fed.enforced();
+    let known = fed.pin_for(&h.url).is_some();
+    let Some(ch) = pin_change(fed, h) else { return (!enforced || known, None) };
+    let ch = match ch {
+        PinChange::New(p) if names => PinChange::New(Pin { role: "names".into(), ..p }),
+        other => other,
+    };
+    let token_ok = |st: &AppState| take_admit_token(st, &h.admit);
+    match &ch {
+        PinChange::Rotated(p, _) => {
+            let p = p.clone();
+            let changed = apply_pin_change(state, &ch);
+            (true, changed.then_some(p))
+        }
+        PinChange::Moved { pin, .. } => {
+            if fed.proves_address(&pin.url, pin).await && apply_pin_change(state, &ch) {
+                (true, Some(pin.clone()))
+            } else {
+                (!enforced, None)
+            }
+        }
+        PinChange::Conflict(pin) => {
+            // A fresh invitation token stands for the admin: the relay lost
+            // its key and was invited again.
+            if (!pin.url.starts_with("http") || fed.proves_address(&pin.url, pin).await) && token_ok(state) {
+                tracing::warn!(url = %pin.url, "federation: a relay's key replaced with an invitation token (it lost the old one)");
+                apply_pin_change(state, &ch);
+                (true, Some(pin.clone()))
+            } else {
+                add_pending(state, pin.clone());
+                (false, None)
+            }
+        }
+        PinChange::New(pin) => {
+            let on_list = if names { fed.cfg.solo_peers.contains(&pin.url) || !enforced } else { fed.cfg.peers.contains(&pin.url) };
+            let ok = if pin.url.starts_with("http") {
+                let by_us = !enforced && on_list;
+                (by_us || token_ok(state) || fed.vouched(pin, &h.vouches)) && fed.proves_address(&pin.url, pin).await
+            } else {
+                token_ok(state) || fed.vouched(pin, &h.vouches)
+            };
+            if ok && apply_pin_change(state, &ch) {
+                tracing::info!(url = %pin.url, names, "federation: a relay's key pinned");
+                (true, Some(pin.clone()))
+            } else if enforced {
+                tracing::warn!(url = %pin.url, id = %pin.id, "federation: a relay that isn't admitted said hello — waiting for the admin");
+                add_pending(state, pin.clone());
+                (false, None)
+            } else {
+                (true, None)
+            }
+        }
+    }
 }
 
 /// Keep vouches our hellos got back, and drop the invitation token once a
@@ -1785,12 +1855,28 @@ pub fn admit(state: &AppState, id: &str) -> bool {
     }
 }
 
-/// The key a hello brings, when it may be kept (pinned):
+/// What a hello's key means for our pins.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PinChange {
+    /// A relay whose key (and address) we don't keep yet.
+    New(Pin),
+    /// A pinned relay changed its key, each step signed by the one before;
+    /// the ids it moved away from (to be retired).
+    Rotated(Pin, Vec<String>),
+    /// A pinned key at a new address (to be checked there before moving).
+    Moved { from: String, pin: Pin },
+    /// Another key for an address we keep a key for, not signed by it: for
+    /// the admin (or a fresh invitation token) to decide.
+    Conflict(Pin),
+}
+
+/// What the key a hello brings would change:
 /// * it must be signed by itself over the sender's address (possession);
-/// * a relay we know under another key moves only with that key's
-///   signature over the new one (`rotated`); otherwise it's refused;
-/// * revoked node ids never come back.
-fn pin_from_hello(fed: &Fed, h: &Hello) -> Option<Pin> {
+/// * a relay we know under another key moves only along key changes each
+///   signed by the key before (`rotations`; `rotated` of 1.21.0-23/24 for
+///   one step) — otherwise it's a conflict;
+/// * revoked and retired node ids never come back.
+fn pin_change(fed: &Fed, h: &Hello) -> Option<PinChange> {
     let url = h.url.trim().trim_end_matches('/').to_string();
     let key: [u8; 32] = hex::decode(h.node_key.trim()).ok()?.try_into().ok()?;
     let sig: [u8; 64] = hex::decode(h.node_sig.trim()).ok()?.try_into().ok()?;
@@ -1798,23 +1884,122 @@ fn pin_from_hello(fed: &Fed, h: &Hello) -> Option<Pin> {
     pubk.verify(format!("aqua-fed-hello\n{url}\n{}", hex::encode(key)).as_bytes(), &sig).ok()?;
     let id = node_id_of(&key);
     if fed.is_revoked(&id) {
-        tracing::warn!(%url, %id, "federation: hello from a revoked node key — ignored");
+        tracing::warn!(%url, %id, "federation: hello from a revoked or retired node key — ignored");
         return None;
     }
-    let pin = Pin { url: url.clone(), id, key: hex::encode(key), since: now_secs(), ..Default::default() };
+    let pin = Pin { url: url.clone(), id: id.clone(), key: hex::encode(key), since: now_secs(), ..Default::default() };
     match fed.pin_for(&url) {
-        None => Some(pin),
         Some(old) if old.key == pin.key => None,
-        Some(old) => {
-            let ok = hex::decode(&old.key).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()).zip(hex::decode(h.rotated.trim()).ok().and_then(|b| <[u8; 64]>::try_from(b).ok()))
-                .is_some_and(|(ok, rs)| aqua_core::crypto::SignPublic::from_bytes(ok).verify(format!("aqua-fed-rotate\n{}", pin.key).as_bytes(), &rs).is_ok());
-            if ok {
-                tracing::info!(%url, "federation: a peer changed its node key (signed by the old one)");
-                Some(pin)
-            } else {
-                tracing::warn!(%url, "federation: a hello with ANOTHER node key and no signature by the known one — ignored");
-                None
+        Some(old) => match follow_rotations(&url, old, &pin.key, &h.rotations, &h.rotated) {
+            Some((seq, retired)) => {
+                tracing::info!(%url, seq, "federation: a peer changed its node key (signed by the old one)");
+                Some(PinChange::Rotated(Pin { role: old.role.clone(), rot_seq: seq, ..pin }, retired))
             }
+            None => {
+                tracing::warn!(%url, "federation: a hello with ANOTHER node key and no signature by the known one — for the admin");
+                Some(PinChange::Conflict(Pin { role: old.role.clone(), conflict: true, ..pin }))
+            }
+        },
+        None => match fed.cfg.pins.iter().find(|p| p.id == id && p.url != url) {
+            Some(other) => Some(PinChange::Moved { from: other.url.clone(), pin: Pin { role: other.role.clone(), rot_seq: other.rot_seq, ..pin } }),
+            None => Some(PinChange::New(pin)),
+        },
+    }
+}
+
+/// From the key we keep (`old`) to `new` along signed key changes: the
+/// last step's number and the ids passed through. Steps must go up from the
+/// number we followed last; a chain may be at most [`MAX_ROTATIONS`] long.
+fn follow_rotations(url: &str, old: &Pin, new: &str, steps: &[RotStep], legacy: &str) -> Option<(u64, Vec<String>)> {
+    let verify = |by: &str, msg: &str, sig: &str| -> bool {
+        let (Some(k), Some(s)) = (hex::decode(by).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()), hex::decode(sig.trim()).ok().and_then(|b| <[u8; 64]>::try_from(b).ok())) else { return false };
+        aqua_core::crypto::SignPublic::from_bytes(k).verify(msg.as_bytes(), &s).is_ok()
+    };
+    let mut at = old.key.clone();
+    let mut seq = old.rot_seq;
+    let mut passed = Vec::new();
+    for st in steps.iter().take(MAX_ROTATIONS) {
+        if st.old != at || st.seq <= seq {
+            continue;
+        }
+        let Some(old_id) = hex::decode(&at).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()).map(|b| node_id_of(&b)) else { return None };
+        if !verify(&at, &rot_message(url, &old_id, &st.new, st.seq), &st.sig) {
+            return None;
+        }
+        passed.push(old_id);
+        at = st.new.clone();
+        seq = st.seq;
+        if at == new {
+            return Some((seq, passed));
+        }
+    }
+    // A relay of 1.21.0-23/24: one step, `aqua-fed-rotate\n{new}` by the old key.
+    if old.rot_seq == 0 && steps.is_empty() && verify(&old.key, &format!("aqua-fed-rotate\n{new}"), legacy) {
+        return Some((0, vec![old.id.clone()]));
+    }
+    None
+}
+
+impl Fed {
+    /// Does the relay at `url` hold `pin`'s key? A ping there, signed for
+    /// that node id; the answer must be signed by that key over our request
+    /// (`sign_answers`). Whoever only has the secret can't answer for an
+    /// address that isn't theirs.
+    pub(crate) async fn proves_address(&self, url: &str, pin: &Pin) -> bool {
+        if !url.starts_with("http") {
+            return false;
+        }
+        let Some(key) = hex::decode(&pin.key).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()) else { return false };
+        // A solo relay serves only the name registry.
+        let path = if pin.names_only() { "/v1/fed/names?since=0" } else { "/v1/fed/ping" };
+        let mut n = [0u8; 12];
+        rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut n);
+        let (nonce, ts, from) = (hex::encode(n), now_ms(), self.node_id());
+        let sig = self.key.sign(v2_message("GET", path, ts, &nonce, &from, &pin.id, b"").as_bytes());
+        let h2 = format!("{ts}.{nonce}.{from}.{}.{}", pin.id, hex::encode(sig));
+        let Ok(r) = self.http.get(format!("{url}{path}"))
+            .header("x-aqua-fed", self.header("GET", path, b""))
+            .header("x-aqua-fed2", h2.clone())
+            .timeout(Duration::from_secs(6))
+            .send().await else { return false };
+        let status = r.status();
+        let sig = r.headers().get("x-aqua-fed2-resp").and_then(|v| v.to_str().ok()).and_then(|s| hex::decode(s).ok()).and_then(|b| <[u8; 64]>::try_from(b).ok());
+        let Ok(body) = r.bytes().await else { return false };
+        status.is_success() && sig.is_some_and(|s| aqua_core::crypto::SignPublic::from_bytes(key).verify(resp_message(&h2, status.as_u16(), &body).as_bytes(), &s).is_ok())
+    }
+}
+
+/// Apply what a hello's key changes, once decided it may (`admit` paths in
+/// `h_hello` / `h_names_hello`). True when the pins changed.
+fn apply_pin_change(state: &AppState, ch: &PinChange) -> bool {
+    match ch {
+        PinChange::New(p) | PinChange::Conflict(p) => set_pin(state, Pin { conflict: false, ..p.clone() }),
+        PinChange::Rotated(p, retired) => update_cfg(state, |_, c| {
+            c.pins.retain(|x| x.url != p.url);
+            c.pins.push(p.clone());
+            for r in retired {
+                if !c.retired.contains(r) { c.retired.push(r.clone()); }
+            }
+            let extra = c.retired.len().saturating_sub(256);
+            c.retired.drain(..extra);
+            true
+        }).is_some(),
+        PinChange::Moved { from, pin } => {
+            let moved = update_cfg(state, |_, c| {
+                c.pins.retain(|x| x.url != *from && x.url != pin.url);
+                c.pins.push(pin.clone());
+                for list in [&mut c.peers, &mut c.solo_peers] {
+                    if let Some(i) = list.iter().position(|u| u == from) {
+                        if list.contains(&pin.url) { list.remove(i); } else { list[i] = pin.url.clone(); }
+                    }
+                }
+                true
+            }).is_some();
+            if moved {
+                tracing::info!(%from, to = %pin.url, "federation: a peer moved to a new address (same key, checked there)");
+                state.directory.fed_cursors_move(from, &pin.url);
+            }
+            moved
         }
     }
 }
@@ -1829,16 +2014,26 @@ pub fn set_pin(state: &AppState, pin: Pin) -> bool {
     }).is_some()
 }
 
+/// Put `new` in as the node key of `c` (now `cur`'s): the old key signs the
+/// change — for peers of 1.21.0-23/24 (`rotated`, one step) and as the next
+/// step of the chain for the rest.
+fn rotate_into(cur: &Fed, c: &mut FedConfig, new: &aqua_core::crypto::SignSecret) {
+    let new_pub = hex::encode(new.public().as_bytes());
+    c.rotated = hex::encode(cur.key.sign(format!("aqua-fed-rotate\n{new_pub}").as_bytes()));
+    let seq = c.rotations.last().map(|r| r.seq).unwrap_or(0) + 1;
+    let url = my_id(c);
+    let sig = hex::encode(cur.key.sign(rot_message(&url, &cur.node_id(), &new_pub, seq).as_bytes()));
+    c.rotations.push(RotStep { old: cur.node_pub(), new: new_pub, seq, sig });
+    let extra = c.rotations.len().saturating_sub(MAX_ROTATIONS);
+    c.rotations.drain(..extra);
+    c.node_key = hex::encode(new.to_bytes());
+}
+
 /// Admin: a new node key. The old one signs the new one; hellos carry that,
 /// so peers move their pins. Returns the new node id.
 pub async fn rotate_key(state: &AppState) -> Option<String> {
     let new = aqua_core::crypto::SignSecret::generate();
-    let new_pub = hex::encode(new.public().as_bytes());
-    let next = update_cfg(state, |cur, c| {
-        c.rotated = hex::encode(cur.key.sign(format!("aqua-fed-rotate\n{new_pub}").as_bytes()));
-        c.node_key = hex::encode(new.to_bytes());
-        true
-    })?;
+    let next = update_cfg(state, |cur, c| { rotate_into(cur, c, &new); true })?;
     let id = next.node_id();
     for p in next.cfg.peers.clone() { next.hello_to(&p).await; }
     Some(id)
@@ -2351,26 +2546,27 @@ mod cursor_tests {
             if let (Some(o), serde_json::Value::Object(k)) = (v.as_object_mut(), f.hello_key_fields()) { o.extend(k); }
             serde_json::from_value(v).unwrap()
         };
-        let pin = super::pin_from_hello(&b, &hello(&a)).expect("first key is pinned");
+        let Some(super::PinChange::New(pin)) = super::pin_change(&b, &hello(&a)) else { panic!("first key is new") };
         assert_eq!(pin.id, a.node_id());
         let b = with_pins(&b, vec![pin.clone()], vec!["http://a".into()]);
-        assert!(super::pin_from_hello(&b, &hello(&a)).is_none(), "same key: nothing to change");
+        assert!(super::pin_change(&b, &hello(&a)).is_none(), "same key: nothing to change");
         // An impostor at A's address with its own key: refused.
         let imp = fed("http://a");
-        assert!(super::pin_from_hello(&b, &hello(&imp)).is_none());
+        assert!(matches!(super::pin_change(&b, &hello(&imp)), Some(super::PinChange::Conflict(p)) if p.conflict), "another key without a signature: a conflict for the admin");
         // A real rotation: the old key signs the new one.
         let new = aqua_core::crypto::SignSecret::generate();
         let mut c = a.cfg.clone();
         c.rotated = hex::encode(a.key.sign(format!("aqua-fed-rotate\n{}", hex::encode(new.public().as_bytes())).as_bytes()));
         c.node_key = hex::encode(new.to_bytes());
         let a2 = super::Fed::new(c).unwrap();
-        let moved = super::pin_from_hello(&b, &hello(&a2)).expect("signed rotation is accepted");
+        let Some(super::PinChange::Rotated(moved, retired)) = super::pin_change(&b, &hello(&a2)) else { panic!("signed rotation is accepted") };
+        assert_eq!(retired, vec![a.node_id()]);
         assert_eq!(moved.id, a2.node_id());
         // Revoked: never again.
         let mut rc = b.cfg.clone();
         rc.revoked.push(a2.node_id());
         let b2 = super::Fed::new(rc).unwrap();
-        assert!(super::pin_from_hello(&b2, &hello(&a2)).is_none());
+        assert!(super::pin_change(&b2, &hello(&a2)).is_none());
     }
 
     fn net_json(extra: &str) -> String {
@@ -2558,6 +2754,66 @@ mod cursor_tests {
         c.peers = vec![];
         c.auth_mode.clear();
         assert!(!c.all_keys_known());
+    }
+
+    fn hello_of(f: &super::Fed) -> super::Hello {
+        let mut v = serde_json::json!({ "url": super::my_id(&f.cfg), "peers": [] });
+        if let (Some(o), serde_json::Value::Object(k)) = (v.as_object_mut(), f.hello_key_fields()) { o.extend(k); }
+        serde_json::from_value(v).unwrap()
+    }
+    fn rotated(f: &super::Fed) -> std::sync::Arc<super::Fed> {
+        let mut c = f.cfg.clone();
+        super::rotate_into(f, &mut c, &aqua_core::crypto::SignSecret::generate());
+        super::Fed::new(c).unwrap()
+    }
+
+    /// A4: a peer that was off while a relay changed its key twice follows
+    /// the whole chain; the ids it passed are retired.
+    #[test]
+    fn rotation_chain_two_steps_offline_peer() {
+        let (a0, b) = (fed("http://a"), fed("http://b"));
+        let b = with_pins(&b, vec![pin_of(&a0, "http://a")], vec!["http://a".into()]);
+        let a1 = rotated(&a0);
+        let a2 = rotated(&a1);
+        assert_eq!(a2.cfg.rotations.len(), 2);
+        let Some(super::PinChange::Rotated(p, retired)) = super::pin_change(&b, &hello_of(&a2)) else { panic!("two steps followed") };
+        assert_eq!((p.id.as_str(), p.rot_seq), (a2.node_id().as_str(), 2));
+        assert_eq!(retired, vec![a0.node_id(), a1.node_id()]);
+        // The one-step field alone (a relay of 1.21.0-24) isn't enough for two.
+        let mut h = hello_of(&a2);
+        h.rotations.clear();
+        assert!(matches!(super::pin_change(&b, &h), Some(super::PinChange::Conflict(_))));
+        // A forged step (signed by another key) breaks the chain.
+        let mut h = hello_of(&a2);
+        h.rotations[0].sig = hex::encode(fed("http://x").key.sign(b"x"));
+        assert!(matches!(super::pin_change(&b, &h), Some(super::PinChange::Conflict(_))));
+        // At most MAX_ROTATIONS kept.
+        let mut f = a2;
+        for _ in 0..10 { f = rotated(&f); }
+        assert_eq!(f.cfg.rotations.len(), super::MAX_ROTATIONS);
+    }
+
+    /// A4: once followed away from, an old key (or one of the chain) never
+    /// comes back — neither by a hello of its own nor by a new chain from it.
+    #[test]
+    fn retired_id_cannot_rotate_again() {
+        let (a0, b) = (fed("http://a"), fed("http://b"));
+        let b = with_pins(&b, vec![pin_of(&a0, "http://a")], vec!["http://a".into()]);
+        let a1 = rotated(&a0);
+        let Some(super::PinChange::Rotated(p, retired)) = super::pin_change(&b, &hello_of(&a1)) else { panic!() };
+        let mut c = b.cfg.clone();
+        c.pins = vec![p];
+        c.retired = retired;
+        let b = super::Fed::new(c).unwrap();
+        assert!(super::pin_change(&b, &hello_of(&a0)).is_none(), "the old key's own hello");
+        // Someone with the old key makes a chain from it to a key of theirs.
+        let evil = rotated(&a0);
+        assert!(!matches!(super::pin_change(&b, &hello_of(&evil)), Some(super::PinChange::Rotated(..))), "a chain from a retired key");
+        // And the old key can't sign requests.
+        let mut h = axum::http::HeaderMap::new();
+        let a0b = with_pins(&a0, vec![pin_of(&b, "http://b")], vec!["http://b".into()]);
+        h.insert("x-aqua-fed2", a0b.sign2("http://b", "GET", "/v1/fed/users?since=0", b"").unwrap().parse().unwrap());
+        assert!(!b.verify(&h, "GET", "/v1/fed/users?since=0", b""));
     }
 
     #[test]

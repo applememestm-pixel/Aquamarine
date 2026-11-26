@@ -664,6 +664,14 @@ impl Directory {
                 created_at     INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+            CREATE TABLE IF NOT EXISTS fed_cursors (
+                peer   TEXT NOT NULL,
+                stream TEXT NOT NULL,
+                since  INTEGER NOT NULL,
+                after  TEXT NOT NULL DEFAULT '',
+                at     INTEGER NOT NULL,
+                PRIMARY KEY (peer, stream)
+            );
             CREATE TABLE IF NOT EXISTS email_codes (
                 email      TEXT PRIMARY KEY,
                 code       TEXT NOT NULL,
@@ -2758,6 +2766,42 @@ impl Directory {
     }
 
     /// Federation: a peer's record, if newer than ours (it gets a new local seq).
+    /// Where federation sync is in `peer`'s `stream` (users, backups, hist,
+    /// names, tombs): `(since, after)`. Kept on disk, so a restart doesn't
+    /// pull everything again from the start (A6).
+    pub fn fed_cursor(&self, peer: &str, stream: &str) -> Option<(i64, String)> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.query_row("SELECT since, after FROM fed_cursors WHERE peer=?1 AND stream=?2", rusqlite::params![peer, stream], |r| Ok((r.get(0)?, r.get(1)?))).ok()
+    }
+
+    /// Keep where sync is in `peer`'s `stream`. False when it couldn't be
+    /// written (the caller doesn't go on as if it were).
+    pub fn set_fed_cursor(&self, peer: &str, stream: &str, since: i64, after: &str) -> bool {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.execute(
+            "INSERT INTO fed_cursors(peer, stream, since, after, at) VALUES(?1,?2,?3,?4,?5)
+             ON CONFLICT(peer, stream) DO UPDATE SET since=excluded.since, after=excluded.after, at=excluded.at",
+            rusqlite::params![peer, stream, since, after, now_secs() as i64],
+        ).is_ok()
+    }
+
+    /// A peer moved to a new address (same key): its cursors go with it.
+    pub fn fed_cursors_move(&self, from: &str, to: &str) {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = db.execute("DELETE FROM fed_cursors WHERE peer=?1", rusqlite::params![to]);
+        let _ = db.execute("UPDATE fed_cursors SET peer=?2 WHERE peer=?1", rusqlite::params![from, to]);
+    }
+
+    /// Forget where sync is with `peer` (revoked; or the admin's resync):
+    /// all of it, or one stream.
+    pub fn fed_cursors_drop(&self, peer: Option<&str>, stream: Option<&str>) {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = db.execute(
+            "DELETE FROM fed_cursors WHERE (?1 IS NULL OR peer=?1) AND (?2 IS NULL OR stream=?2)",
+            rusqlite::params![peer, stream],
+        );
+    }
+
     pub fn fed_apply_hist(&self, username: &str, k: &str, data: &[u8], updated_at: i64) -> bool {
         let db = self.db.lock().unwrap();
         let ours: Option<i64> = db

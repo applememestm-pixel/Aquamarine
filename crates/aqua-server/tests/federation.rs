@@ -799,9 +799,11 @@ async fn tunnel_pair(tmp: &tempfile::TempDir) -> (AppState, AppState, String, St
     let la = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let ua = format!("http://{}", la.local_addr().unwrap());
     let cfg_a = FedConfig { secret: SECRET.into(), peers: vec![], public_url: ua.clone(), mode: "network".into(), ..Default::default() };
-    // B has no address; its peers know it as `tunnel:<node>`.
-    let cfg_b = FedConfig { secret: SECRET.into(), peers: vec![ua.clone()], public_url: String::new(), mode: "network".into(), ..Default::default() };
     let sa = AppState::isolated(tmp.path().join("ta"), Some(cfg_a));
+    // B has no address; its peers know it as `tunnel:<node>`. Its key can't
+    // be checked at an address: it joins with an invitation token.
+    let token = fed::new_admit_token(&sa).unwrap();
+    let cfg_b = FedConfig { secret: SECRET.into(), peers: vec![ua.clone()], public_url: String::new(), mode: "network".into(), join_token: token, ..Default::default() };
     let sb = AppState::isolated(tmp.path().join("tb"), Some(cfg_b));
     { let s = sa.clone(); tokio::spawn(async move { axum::serve(la, app(s)).await.unwrap() }); }
     // B listens only for its own users (in a test, to register one); the
@@ -939,25 +941,29 @@ async fn solo_registry_requires_node_key_after_enforcement() {
     let (sa, _sb, ua, _ub, tmp) = strict_pair().await;
     let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
     register(&http, &ua, &IdentityKeyPair::generate(), "netname").await;
-    let solo = |name: &str, token: &str| {
-        let c = FedConfig { secret: SECRET.into(), peers: vec![ua.clone()], public_url: format!("http://{name}.invalid"), mode: "solo".into(), join_token: token.into(), ..Default::default() };
-        AppState::isolated(tmp.path().join(name), Some(c))
-    };
+    async fn solo(tmp: &tempfile::TempDir, ua: &str, name: &str, token: &str) -> (AppState, String) {
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let u = format!("http://{}", l.local_addr().unwrap());
+        let c = FedConfig { secret: SECRET.into(), peers: vec![ua.to_string()], public_url: u.clone(), mode: "solo".into(), join_token: token.into(), ..Default::default() };
+        let s = AppState::isolated(tmp.path().join(name), Some(c));
+        { let s = s.clone(); tokio::spawn(async move { axum::serve(l, app(s)).await.unwrap() }); }
+        (s, u)
+    }
     // Secret only: nothing.
-    let s1 = solo("s1", "");
+    let (s1, u1) = solo(&tmp, &ua, "s1", "").await;
     fed::sync_once(&s1, &mut Default::default()).await;
     assert!(s1.directory.names_after(0, None, 100).iter().all(|r| r.username != "netname"), "no names without a key");
     fed::names_hello(&fed::registry(&s1).unwrap()).await;
     let a = fed::current(&sa).unwrap();
-    assert!(a.cfg.pending_nodes.iter().any(|p| p.url == "http://s1.invalid" && p.role == "names"), "waits for the admin");
-    assert!(!a.cfg.solo_peers.iter().any(|p| p == "http://s1.invalid"));
+    assert!(a.cfg.pending_nodes.iter().any(|p| p.url == u1 && p.role == "names"), "waits for the admin");
+    assert!(!a.cfg.solo_peers.iter().any(|p| *p == u1));
     // With an invitation token: pinned as a relay of the name registry.
     let token = fed::new_admit_token(&sa).unwrap();
-    let s2 = solo("s2", &token);
+    let (s2, u2) = solo(&tmp, &ua, "s2", &token).await;
     fed::names_hello(&fed::registry(&s2).unwrap()).await;
     fed::absorb_vouches(&s2);
     let a = fed::current(&sa).unwrap();
-    assert_eq!(a.pin_for("http://s2.invalid").map(|p| p.role.clone()).as_deref(), Some("names"));
+    assert_eq!(a.pin_for(&u2).map(|p| p.role.clone()).as_deref(), Some("names"));
     assert!(fed::registry(&s2).unwrap().pin_for(&ua).is_some(), "the solo relay pinned A from its answer");
     fed::sync_once(&s2, &mut Default::default()).await;
     assert!(s2.directory.names_after(0, None, 100).iter().any(|r| r.username == "netname"), "names with the key");
@@ -970,4 +976,124 @@ async fn solo_registry_requires_node_key_after_enforcement() {
         .header("user-agent", concat!("aqua-server/", env!("CARGO_PKG_VERSION")))
         .send().await.unwrap();
     assert_eq!(r.status().as_u16(), 401, "a names relay can't read accounts");
+}
+
+/// Serve a relay at a fresh address.
+async fn serve(tmp: &tempfile::TempDir, name: &str, cfg: impl FnOnce(&str) -> FedConfig) -> (AppState, String) {
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let u = format!("http://{}", l.local_addr().unwrap());
+    let s = AppState::isolated(tmp.path().join(name), Some(cfg(&u)));
+    { let s = s.clone(); tokio::spawn(async move { axum::serve(l, app(s)).await.unwrap() }); }
+    (s, u)
+}
+
+/// A4: another key for an address we keep a key for, unsigned by the
+/// known key, waits for the admin as a conflict (it used to be dropped
+/// without a trace); the admin's admit takes the new key.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn key_change_without_signature_goes_pending_conflict() {
+    let (sa, sb, ua, ub, _tmp) = strict_pair().await;
+    let old = fed::current(&sa).unwrap().node_id();
+    // A lost its key (a new data folder): same address, a new key, no chain.
+    let mut c = fed::current(&sa).unwrap().cfg.clone();
+    c.node_key = hex::encode(aqua_core::crypto::SignSecret::generate().to_bytes());
+    c.rotations.clear();
+    c.rotated.clear();
+    if let Ok(mut g) = sa.fed.write() { *g = fed::Fed::new(c); }
+    let new = fed::current(&sa).unwrap().node_id();
+    fed::current(&sa).unwrap().hello_to(&ub).await;
+    let b = fed::current(&sb).unwrap();
+    assert_eq!(b.pin_for(&ua).map(|p| p.id.clone()), Some(old.clone()), "the known key stays");
+    let w = b.cfg.pending_nodes.iter().find(|p| p.id == new).expect("waits for the admin");
+    assert!(w.conflict && w.url == ua);
+    assert_eq!(fed::auth_status(&b)["conflicts"][0]["id"], new.as_str());
+    assert!(fed::admit(&sb, &new));
+    assert_eq!(fed::current(&sb).unwrap().pin_for(&ua).map(|p| p.id.clone()), Some(new));
+}
+
+/// A4: a relay that lost its key gets back in with a fresh invitation token
+/// (the admin of the other side made it — that stands for the admin's word).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn admit_token_recovers_lost_key() {
+    let (sa, sb, ua, ub, _tmp) = strict_pair().await;
+    let token = fed::new_admit_token(&sb).unwrap();
+    let mut c = fed::current(&sa).unwrap().cfg.clone();
+    c.node_key = hex::encode(aqua_core::crypto::SignSecret::generate().to_bytes());
+    c.rotations.clear();
+    c.rotated.clear();
+    c.join_token = token;
+    if let Ok(mut g) = sa.fed.write() { *g = fed::Fed::new(c); }
+    let new = fed::current(&sa).unwrap().node_id();
+    fed::current(&sa).unwrap().hello_to(&ub).await;
+    assert_eq!(fed::current(&sb).unwrap().pin_for(&ua).map(|p| p.id.clone()), Some(new), "the new key, with the token");
+    assert!(fed::current(&sb).unwrap().cfg.pending_nodes.is_empty());
+}
+
+/// A4: during the transition a relay with only the secret said hello in the
+/// name of another relay's address (one that hadn't brought its key yet) and
+/// got its own key pinned there. The address must prove it holds the key.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn url_hijack_before_upgrade_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let net = |me: &str, peers: Vec<String>| FedConfig { secret: SECRET.into(), peers, public_url: me.into(), mode: "network".into(), ..Default::default() };
+    // O: a relay of the network that hasn't said hello to B yet.
+    let (_so, uo) = serve(&tmp, "o", |u| net(u, vec![])).await;
+    let (sb, ub) = serve(&tmp, "b", |u| net(u, vec![uo.clone()])).await;
+    assert!(!fed::current(&sb).unwrap().enforced());
+    // X has the secret and its own key, and says it is O.
+    let mut cx = net(&uo, vec![ub.clone()]);
+    cx.ephemeral = true;
+    let x = fed::Fed::new(cx).unwrap();
+    x.hello_to(&ub).await;
+    assert!(fed::current(&sb).unwrap().pin_for(&uo).is_none(), "X's key isn't pinned for O's address");
+    // O itself: pinned.
+    let o = fed::current(&_so).unwrap();
+    let mut c = o.cfg.clone();
+    c.peers = vec![ub.clone()];
+    if let Ok(mut g) = _so.fed.write() { *g = fed::Fed::new(c); }
+    fed::current(&_so).unwrap().hello_to(&ub).await;
+    assert_eq!(fed::current(&sb).unwrap().pin_for(&uo).map(|p| p.id.clone()), Some(fed::current(&_so).unwrap().node_id()));
+}
+
+/// A mixed network during the transition: K is keyed, O is a relay of an
+/// older build (signs with the shared secret only — simulated here by plain
+/// secret-signed requests). B takes both until keys are required, then O
+/// only for hellos (it waits for the admin), K as before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mixed_network_old_keyed_new() {
+    let tmp = tempfile::tempdir().unwrap();
+    let net = |me: &str, peers: Vec<String>| FedConfig { secret: SECRET.into(), peers, public_url: me.into(), mode: "network".into(), ..Default::default() };
+    let old_url = "http://old.invalid".to_string();
+    let (sb, ub) = serve(&tmp, "b", |u| net(u, vec![old_url.clone()])).await;
+    let (sk, uk) = serve(&tmp, "k", |u| net(u, vec![ub.clone()])).await;
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    register(&http, &ub, &IdentityKeyPair::generate(), "mixed").await;
+    // K says hello; B has it on no list yet: it's added (secret), then pinned.
+    for _ in 0..30 {
+        fed::current(&sk).unwrap().hello_all().await;
+        fed::absorb_vouches(&sk);
+        if fed::current(&sb).unwrap().pin_for(&uk).is_some() && fed::current(&sk).unwrap().pin_for(&ub).is_some() { break }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(fed::current(&sb).unwrap().pin_for(&uk).is_some());
+    let b = fed::current(&sb).unwrap();
+    assert!(!b.enforced(), "O has no key: still the transition");
+    // The old relay reads (secret only), K reads (key).
+    let old_get = || async {
+        let me = fed::Fed::new(FedConfig { ephemeral: true, ..net("http://old.invalid", vec![ub.clone()]) }).unwrap();
+        let path = "/v1/fed/users?since=0";
+        http.get(format!("{ub}{path}")).header("x-aqua-fed", me.sign("GET", path, b"")).header("user-agent", "aqua-server/1.21.0-22").send().await.unwrap().status().as_u16()
+    };
+    assert_eq!(old_get().await, 200);
+    fed::sync_once(&sk, &mut Default::default()).await;
+    assert!(sk.directory.identity_for("mixed").is_some());
+    // The transition ends.
+    let mut c = b.cfg.clone();
+    c.auth_deadline = 1;
+    if let Ok(mut g) = sb.fed.write() { *g = fed::Fed::new(c); }
+    assert!(fed::current(&sb).unwrap().enforced());
+    assert_eq!(old_get().await, 401, "the old relay is out");
+    register(&http, &ub, &IdentityKeyPair::generate(), "mixed2").await;
+    fed::sync_once(&sk, &mut Default::default()).await;
+    assert!(sk.directory.identity_for("mixed2").is_some(), "the keyed one goes on");
 }
