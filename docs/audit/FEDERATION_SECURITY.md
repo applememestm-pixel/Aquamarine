@@ -1,6 +1,6 @@
 # FEDERATION_SECURITY — модель доверия федерации Aquamarine
 
-Состояние на 1.21.0-26 (ветка `claude/federation-identity`). Решение владельца от 26.11: обязательная криптографическая идентичность серверов, контролируемая миграция, без автоматического перехода в небезопасный режим.
+Состояние на 1.21.0-25 (ветка `claude/federation-identity`). Решение владельца от 26.11: обязательная криптографическая идентичность серверов, контролируемая миграция, без автоматического перехода в небезопасный режим.
 
 Что проверено: только тестами в CI и локально (`cargo test -p aqua-server`). На живой сети из нескольких серверов разных версий — **не проверено**.
 
@@ -14,7 +14,7 @@
 ## Режим ключей (`auth_mode`)
 | Состояние | Когда | Что принимается |
 |---|---|---|
-| `transition` | Первый запуск 1.21.0-26; срок `auth_deadline` = +14 дней | v2 от закреплённых; секрет — от остальных |
+| `transition` | Первый запуск 1.21.0-25; срок `auth_deadline` = +14 дней | v2 от закреплённых; секрет — от остальных |
 | `enforced` | Ключи всех соседей известны, срок вышел или кнопка админа | Только v2; секрет — только hello/ping/names-hello |
 | окно для старых (`legacy_until`) | Только админ, ≤ 7 дней, `confirm: true`, журнал | Как `transition`, пока не истечёт; `auth_mode` остаётся `enforced` |
 
@@ -75,7 +75,7 @@
 - Docker без тома `/data`: новый ключ при каждом перезапуске → конфликт ключа у соседей при каждом старте.
 - Сервер с базой, восстановленной из копии, должен сделать resync.
 - Лимит 20 удалений в час задержит массовое законное удаление.
-- Первый старт 1.21.0-26 после старой версии — «нечистый» для таблицы повторов: подписи последних 5 минут до обновления отклоняются, соседи подпишут заново.
+- Первый старт 1.21.0-25 после старой версии — «нечистый» для таблицы повторов: подписи последних 5 минут до обновления отклоняются, соседи подпишут заново.
 
 ## Тесты
 `crates/aqua-server/tests/federation.rs`: `tunnel_peer_with_pinned_key_syncs_both_ways`, `tunnel_poll_cannot_claim_another_node`, `forged_tunnel_id_does_not_downgrade`, `url_hijack_before_upgrade_is_refused`, `mixed_network_old_keyed_new` (старый узел имитирован запросами с одним секретом), `key_change_without_signature_goes_pending_conflict`, `admit_token_recovers_lost_key`, `cursor_survives_restart`, `signed_account_deletion_propagates_and_old_relay_cannot_resurrect`, `same_name_reregistered_after_deletion_keeps_it`, `solo_registry_requires_node_key_after_enforcement`, `aqpass_v2_accepted_by_old_and_new_solo`.

@@ -1095,7 +1095,7 @@ function genSecret() {
   $("fSecret").type = "text"; $("fSecret").value = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
   setMsg("fMsg2", t("copySecret"));
 }
-// Node keys required (1.21.0-26): the state, who has no key yet, conflicts,
+// Node keys required (1.21.0-25): the state, who has no key yet, conflicts,
 // and the admin's three choices. Redrawn only when it changes.
 function paintAuth(a) {
   const card = $("authCard"), box = $("authBox");

@@ -78,6 +78,19 @@ pub mod android {
             .ok_or_else(|| "keystore gave no key".to_string())
     }
 
+    /// How many times the phone has been started, if it says.
+    pub fn ks_boot_count() -> Option<i64> {
+        let v = HANDLE.get()?.run_mobile_plugin::<serde_json::Value>("ksBootCount", serde_json::json!({})).ok()?;
+        v.get("boot").and_then(|n| n.as_i64()).filter(|n| *n >= 0)
+    }
+
+    /// A stage of the key's move, in the system log.
+    pub fn ks_note(stage: &str) {
+        if let Some(h) = HANDLE.get() {
+            let _ = h.run_mobile_plugin::<serde_json::Value>("ksNote", serde_json::json!({ "stage": stage }));
+        }
+    }
+
     /// A link in the browser or mail app (AquaRelay.kt → openUrl).
     pub fn open_url(url: &str) -> Result<(), String> {
         let h = HANDLE.get().ok_or("opening links is not available")?;

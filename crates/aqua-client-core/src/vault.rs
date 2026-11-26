@@ -132,6 +132,16 @@ impl Vault {
         Ok(vault)
     }
 
+    /// This vault's key wrapped under the 24 recovery words.
+    pub fn recovery_wrap(&self, phrase: &str) -> Result<Vec<u8>, crate::backup::BackupError> {
+        crate::backup::wrap_local(phrase, &self.key.0)
+    }
+
+    /// Whether `blob` is this vault's key under these words.
+    pub fn recovery_matches(&self, phrase: &str, blob: &[u8]) -> bool {
+        crate::backup::unwrap_local(phrase, blob).is_ok_and(|k| k == self.key.0)
+    }
+
     fn migrate(&self) -> Result<(), VaultError> {
         self.conn.execute_batch(
             r#"

@@ -35,6 +35,7 @@ pub mod relay_host;
 pub mod gallery;
 pub mod accounts;
 pub mod fsx;
+pub mod vault_key;
 pub mod ice;
 pub mod updates;
 pub mod storage;
@@ -127,7 +128,16 @@ pub fn run() -> Result<()> {
             let _ = app.asset_protocol_scope().allow_directory(shared.join("stickers"), true);
             let _ = app.asset_protocol_scope().allow_directory(shared.join("gifs"), true);
             let _ = app.asset_protocol_scope().allow_directory(crate::storage::downloads_dir(&data_dir), true);
-            let state = state::AppState::boot(data_dir)?;
+            let state = match state::AppState::boot(data_dir.clone()) {
+                Ok(s) => s,
+                // The key of this account's data can't be had: nothing else
+                // is started, the window shows the recovery screen.
+                Err(e) if e.downcast_ref::<vault_key::Locked>().is_some() => {
+                    vault_key::enter_recovery(app, data_dir, format!("{e:#}"));
+                    return Ok(());
+                }
+                Err(e) => return Err(e.into()),
+            };
             // A passcode in the vault: start locked (applock.rs).
             if let Ok(s) = state.lock().or_else(|e| Ok::<_, ()>(e.into_inner())) {
                 applock::init(&s);
@@ -178,6 +188,9 @@ pub fn run() -> Result<()> {
             // While the app is locked (a passcode, applock.rs) its commands
             // answer "locked": a webview without the lock screen gets nothing.
             let inner: Box<dyn Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync> = Box::new(tauri::generate_handler![
+            vault_key::vault_boot_state,
+            vault_key::vault_unlock_phrase,
+            vault_key::vault_set_aside,
             applock::applock_state,
             applock::applock_set,
             applock::applock_options,
@@ -458,6 +471,10 @@ pub fn run() -> Result<()> {
             commands::picked_media_path,
         ]);
             move |invoke| {
+                if vault_key::failed() && !vault_key::allowed(invoke.message.command()) {
+                    invoke.resolver.reject("vault-locked");
+                    return true;
+                }
                 if applock::is_locked() && !applock::allowed(invoke.message.command()) {
                     invoke.resolver.reject("locked");
                     return true;
@@ -469,11 +486,7 @@ pub fn run() -> Result<()> {
         .map(|app| {
             app.run(|handle, ev| {
                 if let tauri::RunEvent::Exit = ev {
-                    let st = handle.state::<std::sync::Mutex<state::AppState>>();
-                    let guard = st.lock().or_else(|e| Ok::<_, ()>(e.into_inner()));
-                    if let Ok(mut s) = guard {
-                        history::flush(&mut s);
-                    }
+                    history::flush_app(handle);
                 }
             })
         })

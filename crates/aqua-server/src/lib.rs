@@ -1452,7 +1452,7 @@ async fn signup_user(
 // solo relay that shares the name registry with that network (same secret)
 // checks it and lets the person sign up if its rules say `*@X` or
 // `@name@X`. `aqpass:` + base64url(JSON {u, i, h, x, n, k, s}) + "." + hex
-// HMAC. v2 (1.21.0-26): `k` the home relay's node id, `s` its node key's
+// HMAC. v2 (1.21.0-25): `k` the home relay's node id, `s` its node key's
 // signature over `aqpass-v2\n{u}\n{i}\n{h}\n{x}\n{n}` — the secret alone
 // no longer makes a pass once keys are required. Older relays read only the
 // HMAC and ignore `k` and `s`.

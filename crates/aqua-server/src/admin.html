@@ -1526,7 +1526,7 @@
     $("fSecret").value = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
     msg("fMsg", T("copySecret"));
   }
-  // Node keys required (1.21.0-26): the state, who has no key yet, conflicts.
+  // Node keys required (1.21.0-25): the state, who has no key yet, conflicts.
   function showAuth(a){
     $("authCard").classList.toggle("hide", !a);
     if (!a) return;

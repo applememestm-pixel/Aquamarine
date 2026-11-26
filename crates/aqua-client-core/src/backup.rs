@@ -255,6 +255,34 @@ pub fn rewrap_recovery(keys: &mut Keys, phrase: &str) -> Result<(), BackupError>
     Ok(())
 }
 
+// ---------------------------------------------------------------- local key
+
+/// Its own label: the words' copy of a device's vault key opens nothing else.
+fn local_kek(phrase: &str) -> Result<[u8; 32], BackupError> {
+    let mut e = phrase_to_entropy(phrase)?;
+    let mut out = [0u8; 32];
+    Hkdf::<Sha256>::new(None, &e).expand(b"aquamarine local vault key v1", &mut out).expect("hkdf");
+    e.zeroize();
+    Ok(out)
+}
+
+/// A device's vault key wrapped under the 24 recovery words, kept next to
+/// the vault for the day the system keystore loses it.
+pub fn wrap_local(phrase: &str, key: &[u8; 32]) -> Result<Vec<u8>, BackupError> {
+    let mut kek = local_kek(phrase)?;
+    let w = wrap(&kek, key, b"local-vault-key");
+    kek.zeroize();
+    serde_json::to_vec(&w).map_err(|_| BackupError::Format)
+}
+
+pub fn unwrap_local(phrase: &str, blob: &[u8]) -> Result<[u8; 32], BackupError> {
+    let w: Wrap = serde_json::from_slice(blob).map_err(|_| BackupError::Format)?;
+    let mut kek = local_kek(phrase)?;
+    let key = unwrap(&kek, &w, b"local-vault-key");
+    kek.zeroize();
+    key?.try_into().map_err(|_| BackupError::Format)
+}
+
 // ---------------------------------------------------------------- blobs
 
 pub fn seal(keys: &Keys, payload: &[u8]) -> Vec<u8> {
@@ -341,6 +369,18 @@ mod tests {
         assert!(open_with_recovery(&blob, &p).is_err());
         assert_eq!(open_with_recovery(&blob, &p2).unwrap().0, b"x");
         assert_eq!(open_with_password(&blob, "pw").unwrap().0, b"x");
+    }
+
+    #[test]
+    fn local_key_under_the_recovery_words() {
+        let p = new_phrase();
+        let blob = wrap_local(&p, &[5u8; 32]).unwrap();
+        assert_eq!(unwrap_local(&p, &blob).unwrap(), [5u8; 32]);
+        assert!(unwrap_local(&new_phrase(), &blob).is_err());
+        assert!(unwrap_local(&p, &blob[..blob.len() - 2]).is_err());
+        // Not the key that opens a server backup.
+        let w: Wrap = serde_json::from_slice(&blob).unwrap();
+        assert!(unwrap(&recovery_kek(&phrase_to_entropy(&p).unwrap()), &w, b"local-vault-key").is_err());
     }
 
     #[test]

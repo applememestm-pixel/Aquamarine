@@ -3,7 +3,7 @@
 //! a flood nor a restart lets one be sent again. Whenever that can't be
 //! promised, the request is refused.
 //!
-//! 1.21.0-26 (A5):
+//! 1.21.0-25 (A5):
 //! * a quota per sender (a node id, or "secret" for everyone with only the
 //!   shared secret): one flooding sender fills its own share, not the table
 //!   the others need;

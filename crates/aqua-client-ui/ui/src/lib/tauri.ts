@@ -119,6 +119,9 @@ function shownTime(t: string): string {
 
 const shownMessage = (m: ChatMessage): ChatMessage => ({ ...m, time: shownTime(m.time) });
 
+/** This account's data can't be opened (vault_key.rs::BootInfo). */
+export interface VaultBoot { reason: string; has_recovery: boolean }
+
 export const api = {
   initApp:            (): Promise<InitInfo>                                        => invoke("init_app"),
   completeRegistration: (username: string, email: string | null): Promise<InitInfo> => invoke("complete_registration", { username, email }),
@@ -369,6 +372,10 @@ export const api = {
   accountBoot:        (owner: string | null, store: string): Promise<{ slot: string; store: string | null }> => invoke("account_boot", { owner, store }),
   accountForget:      (slot: string): Promise<void> => invoke("account_forget", { slot }),
   appRelaunch:        (): Promise<void> => invoke("app_relaunch"),
+  /** The recovery screen (vault_key.rs); null: the app started normally. */
+  vaultBootState:     (): Promise<VaultBoot | null> => invoke("vault_boot_state"),
+  vaultUnlockPhrase:  (phrase: string): Promise<void> => invoke("vault_unlock_phrase", { phrase }),
+  vaultSetAside:      (): Promise<void> => invoke("vault_set_aside"),
   historyFlush:       (): Promise<void> => invoke("history_flush"),
   setGpuMode:         (mode: "auto" | "on" | "off"): Promise<void>                     => invoke("set_gpu_mode", { mode }),
   fetchAttachment:    (media: ArticleMedia): Promise<string>                         => invoke("fetch_attachment", { media }),

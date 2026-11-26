@@ -241,7 +241,7 @@ pub struct Pin {
     /// Unix seconds: when it was pinned.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub since: u64,
-    /// The last key change of it we followed (`rotations`, 1.21.0-26).
+    /// The last key change of it we followed (`rotations`, 1.21.0-25).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub rot_seq: u64,
     /// Waiting for the admin: it came with another key for an address we
@@ -1347,7 +1347,7 @@ pub async fn h_names_hello(State(state): State<AppState>, headers: HeaderMap, bo
     let k = fed.hello_key_fields();
     let answer = |fed: &Fed| Json(serde_json::json!({ "self": my_url(&fed.cfg), "peers": fed.cfg.peers,
         "node_key": k["node_key"], "node_sig": k["node_sig"], "rotated": k["rotated"], "rotations": k["rotations"] }));
-    // A solo relay brings its node key (1.21.0-26): pinned as "names", like a
+    // A solo relay brings its node key (1.21.0-25): pinned as "names", like a
     // hello pins a relay of the network. Once keys are required, a solo
     // relay we don't know joins only with an invitation token or a vouch —
     // otherwise it waits for the admin; without a key it isn't taken at all.
@@ -1379,7 +1379,7 @@ pub async fn h_names_hello(State(state): State<AppState>, headers: HeaderMap, bo
 /// the relays it told us about that we didn't know.
 pub async fn names_hello(fed: &Fed) -> Vec<String> {
     let me = my_url(&fed.cfg);
-    // Its key too (1.21.0-26): the network pins it as a relay of the names
+    // Its key too (1.21.0-25): the network pins it as a relay of the names
     // registry, and it pins theirs from the answers.
     let mut hello = serde_json::json!({ "url": me });
     if let (Some(o), serde_json::Value::Object(k)) = (hello.as_object_mut(), fed.hello_key_fields_at(&me)) { o.extend(k); }
@@ -1745,7 +1745,7 @@ pub struct Hello {
     #[serde(default)] node_key: String,
     #[serde(default)] node_sig: String,
     #[serde(default)] rotated: String,
-    /// Its last key changes (1.21.0-26).
+    /// Its last key changes (1.21.0-25).
     #[serde(default)] rotations: Vec<RotStep>,
 }
 
@@ -2454,7 +2454,7 @@ async fn sync_tombs(state: &AppState, fed: &Fed, peer: &str) {
     for _ in 0..20 {
         let from = cursor(state, peer, "tombs");
         let Some(r) = fed.get(peer, &format!("/v1/fed/tombs?{}", cursor_query(&from))).await else { return };
-        // Relays before 1.21.0-26 don't have the route: nothing to read.
+        // Relays before 1.21.0-25 don't have the route: nothing to read.
         let Ok(rows) = r.json::<Vec<crate::directory::Tomb>>().await else { return };
         if rows.is_empty() { return; }
         let n = rows.len();

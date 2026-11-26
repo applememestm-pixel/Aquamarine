@@ -922,7 +922,7 @@ impl Directory {
         }
         // Federation: every change to a user row bumps updated_at, so peers
         // can pull "everything since T". Each change gets a time after every
-        // other row's (1.21.0-26): with "this second + random ms" a row made
+        // other row's (1.21.0-25): with "this second + random ms" a row made
         // in the same second could land before a peer's cursor (kept on disk
         // now) and never be pulled. A row applied from a peer carries
         // its own updated_at and is left alone (WHEN clause).

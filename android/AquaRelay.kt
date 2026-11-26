@@ -105,15 +105,26 @@ class KsUnwrapArgs {
   var blob: String = ""
 }
 
+/** ksNote: a stage of the key's move, for the system log. */
+@InvokeArg
+class KsNoteArgs {
+  var stage: String = ""
+}
+
 /** AQUA-SEC-013: the vault master key is kept wrapped by an AES-256-GCM key
  *  that lives in the Android Keystore and never leaves it. A copy of the
  *  app's folder without this device's Keystore can't open the vault. */
 object AquaKeystore {
   private const val ALIAS = "aqua-vault-wrap"
 
-  private fun key(): javax.crypto.SecretKey {
+  private fun existing(): javax.crypto.SecretKey? {
     val ks = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-    (ks.getKey(ALIAS, null) as? javax.crypto.SecretKey)?.let { return it }
+    return ks.getKey(ALIAS, null) as? javax.crypto.SecretKey
+  }
+
+  /** For wrapping only: opening a blob must never make a new key. */
+  private fun existingOrNew(): javax.crypto.SecretKey {
+    existing()?.let { return it }
     val gen = javax.crypto.KeyGenerator.getInstance(android.security.keystore.KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
     gen.init(
       android.security.keystore.KeyGenParameterSpec.Builder(
@@ -128,20 +139,39 @@ object AquaKeystore {
     return gen.generateKey()
   }
 
+  /** Some Keystores fail for a moment (right after a start of the phone):
+   *  three tries. A blob that doesn't match the key fails at once. */
+  private fun <T> retried(op: () -> T): T {
+    var tries = 0
+    while (true) {
+      try {
+        return op()
+      } catch (e: javax.crypto.AEADBadTagException) {
+        throw IllegalStateException("ks:badtag")
+      } catch (e: Exception) {
+        if (++tries >= 3) throw e
+        Thread.sleep(150L * tries)
+      }
+    }
+  }
+
   /** iv (12) || ciphertext+tag, base64. */
-  fun wrap(plain: ByteArray): String {
+  fun wrap(plain: ByteArray): String = retried {
     val c = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
-    c.init(javax.crypto.Cipher.ENCRYPT_MODE, key())
+    c.init(javax.crypto.Cipher.ENCRYPT_MODE, existingOrNew())
     val out = c.iv + c.doFinal(plain)
-    return Base64.encodeToString(out, Base64.NO_WRAP)
+    Base64.encodeToString(out, Base64.NO_WRAP)
   }
 
   fun unwrap(blob: String): ByteArray {
     val raw = Base64.decode(blob, Base64.NO_WRAP)
     require(raw.size > 12 + 16) { "short blob" }
-    val c = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
-    c.init(javax.crypto.Cipher.DECRYPT_MODE, key(), javax.crypto.spec.GCMParameterSpec(128, raw.copyOfRange(0, 12)))
-    return c.doFinal(raw.copyOfRange(12, raw.size))
+    return retried {
+      val key = existing() ?: throw IllegalStateException("ks:nokey")
+      val c = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+      c.init(javax.crypto.Cipher.DECRYPT_MODE, key, javax.crypto.spec.GCMParameterSpec(128, raw.copyOfRange(0, 12)))
+      c.doFinal(raw.copyOfRange(12, raw.size))
+    }
   }
 }
 
@@ -171,6 +201,21 @@ class AquaRelayPlugin(private val activity: Activity) : Plugin(activity) {
     } catch (e: Exception) {
       invoke.reject("keystore: " + e.message)
     }
+  }
+
+  /** How many times this phone has been started (-1: it doesn't say). */
+  @Command
+  fun ksBootCount(invoke: Invoke) {
+    val n = Settings.Global.getInt(activity.contentResolver, Settings.Global.BOOT_COUNT, -1)
+    invoke.resolve(JSObject().put("boot", n))
+  }
+
+  /** Where the key's move into the Keystore stands (no key material). */
+  @Command
+  fun ksNote(invoke: Invoke) {
+    val a = invoke.parseArgs(KsNoteArgs::class.java)
+    android.util.Log.i("AquaKeystore", a.stage)
+    invoke.resolve(JSObject().put("ok", true))
   }
 
   @Command

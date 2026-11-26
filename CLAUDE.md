@@ -50,6 +50,9 @@
 - Обновления обязательны (владелец): выпуски ставятся сами везде, «Позже»/выключатель не возвращать; пре-выпуски — только «Тестер». Ночных сборок нет; канал тестера — наибольший номер тега, не `published_at`. Консольный сервер — `selfupdate.rs` (имена файлов выпуска `aqua-server-<os>-<arch>` не менять).
 - Панель Aquamarine Server ходит в сервер только через `admin(…, target)`; удалённый — SSH-туннель (`remote.rs`, порт/токен из `panel.json`, `host::write_panel_file`).
 
+- Ключ хранилища на Android — только через `vault_key::resolve`: открытый `master.key` удаляется после перезагрузки телефона, не раньше; Kotlin при расшифровке ключ не создаёт; новый файл аккаунта в папке данных → `vault_key::ACCOUNT_FILES`. Данные приложения в бэкап Android не включать (`android/backup/`).
+
 ## Открыто
+- Keystore (1.21.0-25): проверяется только на эмуляторе (`android-keystore-check.yml`), на телефонах не проверялся. Экспорта аккаунта в файл ещё нет.
 - Не проверено на устройствах: биометрия, сканер QR, список устройств, автообновление, Navidrome (живого сервера в CI нет), показ экрана с Android (MediaProjection), файлы по Wi-Fi/Bluetooth. При правках Android CI собирает проверочный APK с Kotlin (`android-client-check.yml`).
 - Конструктор ботов (`aqua-server/src/botmaker.rs`, `BotMaker.svelte`): схемы в `aqua-bot-specs.json`, бот со схемой забирает свою очередь — его программа (getUpdates) тогда ничего не получит. Android с Wi-Fi без интернета: сокеты LAN привязываются к Wi-Fi (`mesh_lan.rs::on_wifi` → `android_setsocknetwork`, сеть из `AquaMesh.kt::wifiHandle`), не весь процесс — на устройстве не проверено. FLAG_SECURE (`screen_secure`) не проверен на устройстве.
