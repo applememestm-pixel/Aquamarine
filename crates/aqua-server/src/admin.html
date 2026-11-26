@@ -657,6 +657,17 @@
         <div id="servers"><div class="empty" data-t="Looking for servers…">Looking for servers…</div></div>
         <div class="note" data-th="serversNote">Your network's relays, relays on this local network and the public list. <b>In the network</b> — shares the secret with this relay; the others are separate servers (send them an invitation to join).</div>
       </div>
+      <div class="card rv hide" id="authCard">
+        <h2 data-t="Node keys">Node keys</h2>
+        <div class="note" id="authState"></div>
+        <div class="note" id="authList"></div>
+        <div class="row mt">
+          <button class="btn" id="authNow" onclick="authAct('enforce')" data-t="Require keys now">Require keys now</button>
+          <button class="btn ghost" id="authLater" onclick="authAct('postpone')" data-t="Postpone 7 days">Postpone 7 days</button>
+          <button class="btn ghost" id="authLegacy" onclick="authAct('legacy')" data-t="Let old servers in for 1 day">Let old servers in for 1 day</button>
+          <button class="btn ghost" id="authEnd" onclick="authAct('legacy_end')" data-t="End the window">End the window</button>
+        </div>
+      </div>
       <div class="card rv">
         <details class="adv"><summary data-t="By hand">By hand</summary>
         <div class="fields">
@@ -836,6 +847,15 @@
     "netText":"Вместе с другими ретрансляторами: аккаунты и резервные копии общие, люди на связи, даже когда один сервер выключен, а сервер с почтой отправляет коды за всех.",
     "soloState":"<b>Один</b> — сервер работает сам по себе","netState":"<b>В сети</b> · других серверов: ",
     "netNoPeers":"<b>В сети</b> — пока один: передайте приглашение админу другого сервера",
+    "Node keys":"Ключи узлов","Require keys now":"Только по ключам — сейчас","Postpone 7 days":"Отложить на 7 дней",
+    "Let old servers in for 1 day":"Пустить старые серверы на 1 день","End the window":"Закрыть окно",
+    "authTransition":"Переходный период: серверы без ключа узла ещё пускаются — до {d}. Потом только по ключам, обратно само не вернётся.",
+    "authEnforced":"Только по ключам с {d}: запросы, подписанные одним общим секретом, отклоняются.",
+    "authLegacy":"Старые серверы временно пускаются — до {d}, потом снова только по ключам (само).",
+    "authEnv":" Задано AQUA_FED_AUTH=enforced.",
+    "authWarn":"Осталось меньше 3 дней. ","authUnpinned":"Ещё без ключа: {list}. ",
+    "authConflicts":"Другой ключ без подписи прежнего (подтвердите кнопкой «Допустить сервер», если это он): {list}.",
+    "legacyAsk":"На 1 день серверы без ключа снова пускаются: подписанные одним общим секретом, ими может назваться любой, у кого он есть. Продолжить?",
     "nodeKeyLine":"Ключ узла: {id} · ключи знаем у {n} из {m} серверов", "nodeStrict":" · только по ключам", "New node key":"Новый ключ узла", "nodeRotated":"Новый ключ узла отправлен серверам сети.", "nodePending":" · ждут допуска: {n}", "Admit a server":"Допустить сервер", "admitAsk":"id сервера, который ждёт допуска:",
     "inNet":"в сети","otherNet":"другой сервер","lan":"локальная сеть","public":"публичный","peerDown":"не отвечает","revLink":"обратный канал","natPeer":"сервер за роутером",
     "noServers":"Других серверов не видно.","joined":"Готово — серверы добавили друг друга.",
@@ -855,6 +875,13 @@
     copySecret:"Copy this secret to the other servers' panels too, then Save.",
     soloState:"<b>Alone</b> — this server works by itself", netState:"<b>In a network</b> · other servers: ",
     netNoPeers:"<b>In a network</b> — on its own so far: give the invitation to another relay's admin",
+    authTransition:"Transition: servers without a node key are still let in — until {d}. After that keys only; it doesn't go back by itself.",
+    authEnforced:"Keys only since {d}: requests signed only with the shared secret are refused.",
+    authLegacy:"Old servers let in for now — until {d}, then keys only again (by itself).",
+    authEnv:" AQUA_FED_AUTH=enforced is set.",
+    authWarn:"Less than 3 days left. ", authUnpinned:"No key yet: {list}. ",
+    authConflicts:"Another key without the old one's signature (confirm with “Admit a server” if it's them): {list}.",
+    legacyAsk:"For 1 day, servers without a key are let in again: signed only with the shared secret, anyone who has it can pose as them. Continue?",
     nodeKeyLine:"Node key: {id} · keys known for {n} of {m} servers", nodeStrict:" · keys only", nodeRotated:"The new node key was sent to the network's servers.", nodePending:" · waiting for admission: {n}", admitAsk:"The id of the server waiting for admission:",
     inNet:"in the network", otherNet:"separate server", lan:"local network", public:"public", peerDown:"not answering", revLink:"reverse link", natPeer:"server behind a router",
     noServers:"No other servers in sight.", joined:"Done — the relays added each other.",
@@ -1435,6 +1462,7 @@
     $("fSelf").value = v.public_url || v.detected_url || location.origin;
     $("fPeers").value = (v.peers || []).join("\n");
     $("fNode").textContent = v.node_id ? T("nodeKeyLine").replace("{id}", v.node_id.slice(0, 12)).replace("{n}", (v.pins || []).length).replace("{m}", (v.peers || []).length) + (v.strict ? T("nodeStrict") : "") + ((v.pending_nodes || []).length ? T("nodePending").replace("{n}", v.pending_nodes.map((p) => p.id.slice(0, 12) + " (" + p.url + ")").join(", ")) : "") : "";
+    showAuth(net ? v.auth : null);
     $("fSecret").placeholder = v.has_secret ? (RU ? "•••••••• сохранён — вставьте новый, чтобы заменить" : "•••••••• saved — paste a new one to replace") : T("paste or generate");
     // First open: choose how this relay works.
     $("modeModal").classList.toggle("hide", fedMode !== "");
@@ -1497,6 +1525,32 @@
     $("fSecret").type = "text";
     $("fSecret").value = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
     msg("fMsg", T("copySecret"));
+  }
+  // Node keys required (1.21.0-26): the state, who has no key yet, conflicts.
+  function showAuth(a){
+    $("authCard").classList.toggle("hide", !a);
+    if (!a) return;
+    const when = (sec) => sec ? new Date(sec * 1000).toLocaleString() : "—";
+    const st = a.mode === "enforced" ? T("authEnforced").replace("{d}", when(a.enforced_at))
+      : a.mode === "legacy" ? T("authLegacy").replace("{d}", when(a.legacy_until))
+      : T("authTransition").replace("{d}", when(a.deadline));
+    $("authState").textContent = st + (a.env_enforced ? T("authEnv") : "");
+    const un = (a.unpinned || []).join(", ");
+    const cf = (a.conflicts || []).map((c) => c.id.slice(0, 12) + " (" + c.url + ")").join(", ");
+    const box = $("authList");
+    box.textContent = (un ? T("authUnpinned").replace("{list}", un) : "") + (cf ? T("authConflicts").replace("{list}", cf) : "");
+    if (a.warn) { const w = document.createElement("b"); w.textContent = T("authWarn"); box.prepend(w); }
+    $("authNow").classList.toggle("hide", a.mode !== "transition");
+    $("authLater").classList.toggle("hide", a.mode !== "transition");
+    $("authLegacy").classList.toggle("hide", a.mode !== "enforced" || !!a.env_enforced);
+    $("authEnd").classList.toggle("hide", a.mode !== "legacy");
+  }
+  async function authAct(action){
+    const body = { action };
+    if (action === "postpone") body.days = 7;
+    if (action === "legacy") { if (!confirm(T("legacyAsk"))) return; body.legacy_days = 1; body.confirm = true; }
+    try { await api("/v1/admin/fed/auth", { method: "POST", body: JSON.stringify(body) }); loadFed(); }
+    catch (e) { toast(String(e.message || e)); }
   }
   async function admitNode(){
     const id = (prompt(T("admitAsk")) || "").trim();

@@ -409,7 +409,10 @@ const RU_DICT = {
   "Create": "Создать", "Invitation": "Приглашение", "No invitations yet.": "Приглашений пока нет.", "left {n}": "осталось {n}", "until {d}": "до {d}",
   "Delete": "Удалить",
   "How this server works": "Как работает сервер",
-  "soloState": "Сервер работает сам по себе.", "netState": "В сети, других серверов: {n}.", "netNoPeers": "В сети — пока один. Передайте приглашение админу другого сервера.", "nodeKeyLine": "Ключ узла: {id} · ключи знаем у {n} из {m} серверов", "nodeStrict": " · только по ключам", "New node key": "Новый ключ узла", "nodeRotated": "Новый ключ узла отправлен серверам сети.", "nodePending": " · ждут допуска: {list}", "Admit a server": "Допустить сервер", "admitAsk": "id сервера, который ждёт допуска:",
+  "soloState": "Сервер работает сам по себе.", "netState": "В сети, других серверов: {n}.", "netNoPeers": "В сети — пока один. Передайте приглашение админу другого сервера.", "Node keys": "Ключи узлов", "Require keys now": "Только по ключам — сейчас", "Postpone 7 days": "Отложить на 7 дней", "Let old servers in for 1 day": "Пустить старые серверы на 1 день", "End the window": "Закрыть окно",
+  "authTransition": "Переходный период: серверы без ключа узла ещё пускаются — до {d}. Потом только по ключам, обратно само не вернётся.", "authEnforced": "Только по ключам с {d}: запросы, подписанные одним общим секретом, отклоняются.", "authLegacy": "Старые серверы временно пускаются — до {d}, потом снова только по ключам (само).", "authEnv": " Задано AQUA_FED_AUTH=enforced.",
+  "authWarn": "Осталось меньше 3 дней. ", "authUnpinned": "Ещё без ключа: {list}. ", "authConflicts": "Другой ключ без подписи прежнего (подтвердите кнопкой «Допустить сервер», если это он): {list}.", "legacyAsk": "На 1 день серверы без ключа снова пускаются: подписанные одним общим секретом, ими может назваться любой, у кого он есть. Продолжить?",
+  "nodeKeyLine": "Ключ узла: {id} · ключи знаем у {n} из {m} серверов", "nodeStrict": " · только по ключам", "New node key": "Новый ключ узла", "nodeRotated": "Новый ключ узла отправлен серверам сети.", "nodePending": " · ждут допуска: {list}", "Admit a server": "Допустить сервер", "admitAsk": "id сервера, который ждёт допуска:",
   "Reserve names in a network": "Резервировать имена в сети",
   "soloNamesNote": "Сервер остаётся один, но делится с сетью только ID аккаунтов и @именами — чтобы одно @имя везде было у одного человека. И так можно пускать людей с серверов этой сети (*@сервер в «Доступе»).",
   "paste a network invitation": "вставьте приглашение сети", "Join for names": "Вступить ради имён",
@@ -523,7 +526,9 @@ const EN = {
   accessRules: "<b>@name</b> — this person; <b>*@server</b> — anyone with a pass from that server of your network; <b>@name@server</b> — this person from that server. Plus everyone with an invitation.",
   accessNote: "This list only decides who may create an account. Encryption doesn't change.",
   invHint: "A code (or its QR) lets someone sign up here: they scan it in the app. Each code works the number of times you set.",
-  soloState: "This server works by itself.", netState: "In a network, other servers: {n}.", netNoPeers: "In a network — on its own so far. Give the invitation to another server's admin.", nodeKeyLine: "Node key: {id} · keys known for {n} of {m} servers", nodeStrict: " · keys only", nodeRotated: "The new node key was sent to the network's servers.", nodePending: " · waiting for admission: {list}", admitAsk: "The id of the server waiting for admission:",
+  soloState: "This server works by itself.", netState: "In a network, other servers: {n}.", netNoPeers: "In a network — on its own so far. Give the invitation to another server's admin.", authTransition: "Transition: servers without a node key are still let in — until {d}. After that keys only; it doesn't go back by itself.", authEnforced: "Keys only since {d}: requests signed only with the shared secret are refused.", authLegacy: "Old servers let in for now — until {d}, then keys only again (by itself).", authEnv: " AQUA_FED_AUTH=enforced is set.",
+  authWarn: "Less than 3 days left. ", authUnpinned: "No key yet: {list}. ", authConflicts: "Another key without the old one's signature (confirm with “Admit a server” if it's them): {list}.", legacyAsk: "For 1 day, servers without a key are let in again: signed only with the shared secret, anyone who has it can pose as them. Continue?",
+  nodeKeyLine: "Node key: {id} · keys known for {n} of {m} servers", nodeStrict: " · keys only", nodeRotated: "The new node key was sent to the network's servers.", nodePending: " · waiting for admission: {list}", admitAsk: "The id of the server waiting for admission:",
   soloNamesNote: "The server stays alone but shares only account IDs and @names with a network, so one @name means one person everywhere. It also lets people from that network in (*@server in Access).",
   regOn: "Names are reserved in the network, servers: {n}.",
   inviteNote: "Give it to another server's admin: they paste it on their side and the servers add each other. It holds the network's secret — send it privately.",
@@ -1017,6 +1022,7 @@ function pageNetwork(el) {
     </div>
     <div class="card"><h2><span class="grow">${t("Servers around")}</span><button class="mini" id="srvRe" onclick="loadServers(true)">${IC.refresh}${t("Search again")}</button></h2>
       <div class="list" id="servers"><div class="empty">${t("Looking for servers…")}</div></div></div>
+    <div class="card" id="authCard" hidden><h2>${t("Node keys")}</h2><div id="authBox"></div><span class="msg" id="authMsg"></span></div>
     <div class="card"><details><summary>${t("By hand")}</summary>
       <div style="display:flex;flex-direction:column;gap:10px">
         <label class="f">${t("This server's public address")}<input type="text" id="fSelf"></label>
@@ -1037,6 +1043,7 @@ function paintFed(fill) {
   $("mailVia").textContent = net ? t(fed.smtp ? "mailHere" : "mailVia") : "";
   $("regState").textContent = fed.mode === "solo" && fed.registry ? t("regOn", { n: (fed.peers || []).length }) : "";
   if ($("fNode")) $("fNode").textContent = fed.node_id ? t("nodeKeyLine", { id: fed.node_id.slice(0, 12), n: (fed.pins || []).length, m: (fed.peers || []).length }) + (fed.strict ? t("nodeStrict") : "") + ((fed.pending_nodes || []).length ? t("nodePending", { list: fed.pending_nodes.map((p) => p.id.slice(0, 12) + " (" + p.url + ")").join(", ") }) : "") : "";
+  paintAuth(net ? fed.auth : null);
   if (fill) {
     $("fSelf").value = fed.public_url || fed.detected_url || st.public_url || "";
     $("fPeers").value = (fed.peers || []).join("\n");
@@ -1088,6 +1095,34 @@ function genSecret() {
   $("fSecret").type = "text"; $("fSecret").value = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
   setMsg("fMsg2", t("copySecret"));
 }
+// Node keys required (1.21.0-26): the state, who has no key yet, conflicts,
+// and the admin's three choices. Redrawn only when it changes.
+function paintAuth(a) {
+  const card = $("authCard"), box = $("authBox");
+  if (!card || !box) return;
+  card.hidden = !a;
+  if (!a) return;
+  const when = (sec) => sec ? new Date(sec * 1000).toLocaleString() : "—";
+  const state = a.mode === "enforced" ? t("authEnforced", { d: when(a.enforced_at) })
+    : a.mode === "legacy" ? t("authLegacy", { d: when(a.legacy_until) })
+    : t("authTransition", { d: when(a.deadline) });
+  const un = (a.unpinned || []).join(", ");
+  const cf = (a.conflicts || []).map((c) => c.id.slice(0, 12) + " (" + c.url + ")").join(", ");
+  const btn = (act, label, primary) => `<button class="${primary ? "primary" : "mini"}" onclick="authAct('${act}')">${t(label)}</button>`;
+  const h = `<div class="msg">${esc(state + (a.env_enforced ? t("authEnv") : ""))}</div>`
+    + (a.warn || un || cf ? `<div class="msg">${a.warn ? "<b>" + esc(t("authWarn")) + "</b>" : ""}${un ? esc(t("authUnpinned", { list: un })) : ""}${cf ? esc(t("authConflicts", { list: cf })) : ""}</div>` : "")
+    + `<div class="row">${a.mode === "transition" ? btn("enforce", "Require keys now", true) + btn("postpone", "Postpone 7 days") : ""}`
+    + `${a.mode === "enforced" && !a.env_enforced ? btn("legacy", "Let old servers in for 1 day") : ""}${a.mode === "legacy" ? btn("legacy_end", "End the window") : ""}</div>`;
+  if (box.dataset.h !== h) { box.dataset.h = h; box.innerHTML = h; armAll(box); }
+}
+async function authAct(action) {
+  const body = { action };
+  if (action === "postpone") body.days = 7;
+  if (action === "legacy") { if (!confirm(t("legacyAsk"))) return; body.legacy_days = 1; body.confirm = true; }
+  try { await api("/v1/admin/fed/auth", "POST", body); await loadFed(); paintFed(false); setMsg("authMsg", t("Saved."), "ok"); }
+  catch (e) { setMsg("authMsg", t("Failed: ") + esc(errText(e)), "err"); }
+}
+
 async function admitNode() {
   const id = (prompt(t("admitAsk")) || "").trim();
   if (!id) return;
