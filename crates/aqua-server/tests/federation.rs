@@ -485,11 +485,11 @@ async fn node_keys_replace_the_shared_secret_once_known() {
     // Hellos both ways: each pins the other.
     fed::current(&sa).unwrap().hello_all().await;
     for _ in 0..50 {
-        if fed::current(&sa).unwrap().strict() && fed::current(&sb).unwrap().strict() { break }
+        if fed::current(&sa).unwrap().enforced() && fed::current(&sb).unwrap().enforced() { break }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    assert!(fed::current(&sb).unwrap().strict(), "B knows A's key");
-    assert!(fed::current(&sa).unwrap().strict(), "A knows B's key (B said hello back)");
+    assert!(fed::current(&sb).unwrap().enforced(), "B knows A's key");
+    assert!(fed::current(&sa).unwrap().enforced(), "A knows B's key (B said hello back)");
     assert!(fed::current(&sa).unwrap().fetch_bundle("keyed").await.is_some(), "A reads through v2");
 
     // Someone with only the secret (a relay of its own at another address).
@@ -529,10 +529,10 @@ async fn strict_pair() -> (AppState, AppState, String, String, tempfile::TempDir
     tokio::time::sleep(Duration::from_millis(100)).await;
     fed::current(&sa).unwrap().hello_all().await;
     for _ in 0..60 {
-        if fed::current(&sa).unwrap().strict() && fed::current(&sb).unwrap().strict() { break }
+        if fed::current(&sa).unwrap().enforced() && fed::current(&sb).unwrap().enforced() { break }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    assert!(fed::current(&sa).unwrap().strict() && fed::current(&sb).unwrap().strict());
+    assert!(fed::current(&sa).unwrap().enforced() && fed::current(&sb).unwrap().enforced());
     (sa, sb, ua, ub, tmp)
 }
 
@@ -568,7 +568,7 @@ async fn admission_impersonation_and_rejoining() {
     let b = fed::current(&sb).unwrap();
     assert!(b.cfg.pending_nodes.iter().any(|p| p.url == ux), "X waits for the admin");
     assert!(!b.cfg.peers.contains(&ux), "X isn't a peer");
-    assert!(b.strict(), "B stays strict");
+    assert!(b.enforced(), "B stays strict");
     assert!(fed::current(&sx).unwrap().fetch_bundle("victim").await.is_none(), "X reads nothing");
     // X can't change the victim's account on B: B never pulls from it, and
     // its pokes (secret only) are refused.
@@ -693,7 +693,7 @@ async fn tampered_sync_answers_are_refused() {
     // Keys known both ways (hellos go through the proxy untouched).
     fed::current(&sa).unwrap().hello_all().await;
     for _ in 0..60 {
-        if fed::current(&sa).unwrap().strict() && fed::current(&sb).unwrap().strict() { break }
+        if fed::current(&sa).unwrap().enforced() && fed::current(&sb).unwrap().enforced() { break }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert!(fed::current(&sb).unwrap().pin_for(&up).is_some(), "B knows A's key");
@@ -894,4 +894,80 @@ async fn tunnel_poll_cannot_claim_another_node() {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     assert!(ok);
+}
+
+/// A signed request with the secret only, not waiting for the answer.
+async fn secret_post_nowait(url: &str, path: &str, body: serde_json::Value) -> Option<u16> {
+    let me = fed::Fed::new(FedConfig { secret: SECRET.into(), peers: vec![url.into()], public_url: "http://x.invalid".into(), mode: "network".into(), ephemeral: true, ..Default::default() }).unwrap();
+    let body = serde_json::to_vec(&body).unwrap();
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-server/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    http.post(format!("{url}{path}")).header("x-aqua-fed", me.sign("POST", path, &body)).header("content-type", "application/json")
+        .timeout(Duration::from_millis(1500)).body(body).send().await.ok().map(|r| r.status().as_u16())
+}
+
+/// A3: anyone with the shared secret could make up `tunnel:<anything>`,
+/// poll under it, get it on the peer list — and with one unkeyed peer on the
+/// list the relay went back to taking the secret alone. Now it's refused,
+/// and even a peer put on the list while the admin's window is open doesn't
+/// lower the requirement once the window is closed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forged_tunnel_id_does_not_downgrade() {
+    let (_sa, sb, _ua, ub, _tmp) = strict_pair().await;
+    let before = fed::current(&sb).unwrap().cfg.peers.clone();
+    let st = secret_post_nowait(&ub, "/v1/fed/tunnel", serde_json::json!({ "id": "tunnel:forged", "v": env!("CARGO_PKG_VERSION") })).await;
+    assert_eq!(st, Some(401));
+    assert_eq!(fed::current(&sb).unwrap().cfg.peers, before);
+    assert!(fed::current(&sb).unwrap().enforced());
+    // The admin lets relays without keys in for a day (must confirm).
+    assert!(fed::set_auth(&sb, "legacy", 1, false).is_err(), "needs confirm");
+    assert!(fed::set_auth(&sb, "legacy", 30, true).is_err(), "at most 7 days");
+    fed::set_auth(&sb, "legacy", 1, true).unwrap();
+    assert!(!fed::current(&sb).unwrap().enforced());
+    let _ = secret_post_nowait(&ub, "/v1/fed/tunnel", serde_json::json!({ "id": "tunnel:forged", "v": env!("CARGO_PKG_VERSION") })).await;
+    assert!(fed::current(&sb).unwrap().cfg.peers.iter().any(|p| p == "tunnel:forged"), "taken during the window");
+    fed::set_auth(&sb, "legacy_end", 0, false).unwrap();
+    assert!(fed::current(&sb).unwrap().enforced(), "an unkeyed peer on the list doesn't lower it");
+    assert_eq!(secret_post_nowait(&ub, "/v1/fed/tunnel", serde_json::json!({ "id": "tunnel:forged" })).await, Some(401));
+}
+
+/// A3: once keys are required, the name registry is read only with a node
+/// key. A solo relay brings its key in its names hello: without an
+/// invitation token it waits for the admin; with one it's pinned as
+/// "names" — it reads names, and nothing else.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn solo_registry_requires_node_key_after_enforcement() {
+    let (sa, _sb, ua, _ub, tmp) = strict_pair().await;
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    register(&http, &ua, &IdentityKeyPair::generate(), "netname").await;
+    let solo = |name: &str, token: &str| {
+        let c = FedConfig { secret: SECRET.into(), peers: vec![ua.clone()], public_url: format!("http://{name}.invalid"), mode: "solo".into(), join_token: token.into(), ..Default::default() };
+        AppState::isolated(tmp.path().join(name), Some(c))
+    };
+    // Secret only: nothing.
+    let s1 = solo("s1", "");
+    fed::sync_once(&s1, &mut Default::default()).await;
+    assert!(s1.directory.names_after(0, None, 100).iter().all(|r| r.username != "netname"), "no names without a key");
+    fed::names_hello(&fed::registry(&s1).unwrap()).await;
+    let a = fed::current(&sa).unwrap();
+    assert!(a.cfg.pending_nodes.iter().any(|p| p.url == "http://s1.invalid" && p.role == "names"), "waits for the admin");
+    assert!(!a.cfg.solo_peers.iter().any(|p| p == "http://s1.invalid"));
+    // With an invitation token: pinned as a relay of the name registry.
+    let token = fed::new_admit_token(&sa).unwrap();
+    let s2 = solo("s2", &token);
+    fed::names_hello(&fed::registry(&s2).unwrap()).await;
+    fed::absorb_vouches(&s2);
+    let a = fed::current(&sa).unwrap();
+    assert_eq!(a.pin_for("http://s2.invalid").map(|p| p.role.clone()).as_deref(), Some("names"));
+    assert!(fed::registry(&s2).unwrap().pin_for(&ua).is_some(), "the solo relay pinned A from its answer");
+    fed::sync_once(&s2, &mut Default::default()).await;
+    assert!(s2.directory.names_after(0, None, 100).iter().any(|r| r.username == "netname"), "names with the key");
+    // ...and nothing but names.
+    let s2f = fed::registry(&s2).unwrap();
+    let path = "/v1/fed/users?since=0";
+    let r = http.get(format!("{ua}{path}"))
+        .header("x-aqua-fed", s2f.sign("GET", path, b""))
+        .header("x-aqua-fed2", s2f.sign2(&ua, "GET", path, b"").unwrap())
+        .header("user-agent", concat!("aqua-server/", env!("CARGO_PKG_VERSION")))
+        .send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 401, "a names relay can't read accounts");
 }

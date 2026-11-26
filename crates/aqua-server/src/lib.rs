@@ -2003,7 +2003,8 @@ async fn admin_get_fed(State(state): State<AppState>, headers: axum::http::Heade
         "revoked": c.revoked,
         // REV2-004: relays that said hello without being admitted.
         "pending_nodes": c.pending_nodes.iter().map(|p| serde_json::json!({ "url": p.url, "id": p.id })).collect::<Vec<_>>(),
-        "strict": fed::registry(&state).is_some_and(|f| f.strict()),
+        "strict": fed::registry(&state).is_some_and(|f| f.enforced()),
+        "auth": fed::registry(&state).map(|f| fed::auth_status(&f)),
     })))
 }
 
@@ -2033,6 +2034,30 @@ async fn admin_fed_rotate(State(state): State<AppState>, headers: axum::http::He
     let id = fed::rotate_key(&state).await.ok_or((StatusCode::CONFLICT, "not in a network".to_string()))?;
     journal::log("admin", "fed-rotate", &id);
     Ok(Json(serde_json::json!({ "node_id": id })))
+}
+
+#[derive(Deserialize)]
+struct FedAuth {
+    action: String,
+    #[serde(default)]
+    days: u64,
+    #[serde(default)]
+    legacy_days: u64,
+    #[serde(default)]
+    confirm: bool,
+}
+
+/// `POST /v1/admin/fed/auth {action: enforce | postpone {days} | legacy
+/// {legacy_days ≤ 7, confirm: true} | legacy_end}` — the key requirement of
+/// the network (fed.rs `set_auth`). Every change goes to the journal.
+async fn admin_fed_auth(State(state): State<AppState>, headers: axum::http::HeaderMap, Json(b): Json<FedAuth>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    admin_authed(&state, &headers).map_err(|s| (s, String::new()))?;
+    let days = if b.action == "legacy" { b.legacy_days.max(b.days) } else { b.days };
+    let st = fed::set_auth(&state, &b.action, days, b.confirm).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let note = if days > 0 { format!("{} {days}d", b.action) } else { b.action.clone() };
+    journal::log("admin", "fed-auth", note.clone());
+    tracing::warn!(change = %note, "federation: the admin changed the node key requirement");
+    Ok(Json(st))
 }
 
 #[derive(Deserialize)]
@@ -3763,6 +3788,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/admin/fed/rotate", post(admin_fed_rotate))
         .route("/v1/admin/fed/revoke", post(admin_fed_revoke))
         .route("/v1/admin/fed/admit", post(admin_fed_admit))
+        .route("/v1/admin/fed/auth", post(admin_fed_auth))
         .route("/v1/me/seal", get(seal_get).put(seal_put))
         .route("/v1/bundle/:user",   post(upload_bundle).get(fetch_bundle))
         .route("/v1/ws",             get(ws_upgrade))
