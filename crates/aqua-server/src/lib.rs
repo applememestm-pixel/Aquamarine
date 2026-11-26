@@ -2061,6 +2061,28 @@ async fn admin_fed_auth(State(state): State<AppState>, headers: axum::http::Head
 }
 
 #[derive(Deserialize)]
+struct FedResync {
+    #[serde(default)]
+    peer: Option<String>,
+    #[serde(default)]
+    stream: Option<String>,
+}
+
+/// `POST /v1/admin/fed/resync {peer?, stream?}` — read a peer's streams (or
+/// every peer's) from the start again, e.g. after restoring the database.
+async fn admin_fed_resync(State(state): State<AppState>, headers: axum::http::HeaderMap, Json(b): Json<FedResync>) -> Result<StatusCode, (StatusCode, String)> {
+    admin_authed(&state, &headers).map_err(|s| (s, String::new()))?;
+    let stream = b.stream.filter(|s| !s.is_empty());
+    if stream.as_deref().is_some_and(|s| !matches!(s, "users" | "backups" | "hist" | "names" | "tombs")) {
+        return Err((StatusCode::BAD_REQUEST, "stream: users, backups, hist, names or tombs".into()));
+    }
+    let peer = b.peer.map(|p| p.trim().trim_end_matches('/').to_string()).filter(|p| !p.is_empty());
+    fed::resync(&state, peer.as_deref(), stream.as_deref());
+    journal::log("admin", "fed-resync", format!("{} {}", peer.as_deref().unwrap_or("*"), stream.as_deref().unwrap_or("*")));
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
 struct FedRevoke { id: String }
 
 /// `POST /v1/admin/fed/admit {id}` — let a waiting relay into the network.
@@ -3789,6 +3811,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/admin/fed/revoke", post(admin_fed_revoke))
         .route("/v1/admin/fed/admit", post(admin_fed_admit))
         .route("/v1/admin/fed/auth", post(admin_fed_auth))
+        .route("/v1/admin/fed/resync", post(admin_fed_resync))
         .route("/v1/me/seal", get(seal_get).put(seal_put))
         .route("/v1/bundle/:user",   post(upload_bundle).get(fetch_bundle))
         .route("/v1/ws",             get(ws_upgrade))

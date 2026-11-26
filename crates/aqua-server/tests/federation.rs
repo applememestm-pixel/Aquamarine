@@ -104,8 +104,8 @@ async fn two_relays_act_as_one() {
     register(&http, &ub, &idc, "carol").await;
 
     // Replication: each relay now knows the others' accounts.
-    fed::sync_once(&sa, &mut Default::default()).await;
-    fed::sync_once(&sb, &mut Default::default()).await;
+    fed::sync_once(&sa).await;
+    fed::sync_once(&sb).await;
     assert_eq!(sa.directory.identity_for("bob"), Some(*idb.public().dh_pub.as_bytes()));
     assert_eq!(sb.directory.identity_for("alice"), Some(*ida.public().dh_pub.as_bytes()));
 
@@ -159,7 +159,7 @@ async fn two_relays_act_as_one() {
     // Backups replicate too.
     turn_on_2fa(&ua, &ida).await;
     assert!(http.put(format!("{ua}/v1/backup")).bearer_auth(&ta).body(b"AQBK1 sealed".to_vec()).send().await.unwrap().status().is_success());
-    fed::sync_once(&sb, &mut Default::default()).await;
+    fed::sync_once(&sb).await;
     assert_eq!(sb.directory.get_backup("alice").unwrap(), b"AQBK1 sealed");
 }
 
@@ -310,7 +310,7 @@ async fn solo_relay_shares_only_names() {
     // @bob in the network; the solo relay learns only the name.
     let (st, bob_tok) = signup(&http, &ua, "bob", "").await;
     assert_eq!(st, 204);
-    fed::sync_once(&ss, &mut Default::default()).await;
+    fed::sync_once(&ss).await;
     assert_eq!(signup(&http, &us, "bob", "").await.0, 409, "taken in the network");
     assert!(ss.directory.identity_for("bob").is_none(), "no account copied to the solo relay");
     assert_eq!(search(us.clone(), "bob").await, 0);
@@ -319,7 +319,7 @@ async fn solo_relay_shares_only_names() {
     assert_eq!(signup(&http, &us, "zed", "").await.0, 204);
     let reg = fed::registry(&ss).unwrap();
     fed::names_hello(&reg).await;
-    fed::sync_once(&sa, &mut Default::default()).await;
+    fed::sync_once(&sa).await;
     assert_eq!(signup(&http, &ua, "zed", "").await.0, 409, "taken on the solo relay");
     assert!(sa.directory.identity_for("zed").is_none());
     assert_eq!(search(ua.clone(), "zed").await, 0);
@@ -356,7 +356,7 @@ async fn solo_relay_shares_only_names() {
     assert_eq!(me["username"], "bob");
     // The network sees it as its own @bob, not a clash.
     fed::names_hello(&fed::registry(&ss).unwrap()).await;
-    fed::sync_once(&sa, &mut Default::default()).await;
+    fed::sync_once(&sa).await;
     assert!(sa.directory.identity_for("bob").is_some());
     assert_eq!(sa.directory.username_by_uid(&sa.directory.uid_of("bob").unwrap()).as_deref(), Some("bob"));
 
@@ -401,7 +401,7 @@ async fn a_new_relay_knows_everyone_after_its_first_sync() {
     let sb = AppState::isolated(tmp.path().join("b"), Some(FedConfig { secret: SECRET.into(), peers: vec![ua.clone()], public_url: ub.clone(), mode: "network".into(), ..Default::default() }));
     { let s = sb.clone(); tokio::spawn(async move { axum::serve(lb, app(s)).await.unwrap() }); }
     tokio::time::sleep(Duration::from_millis(100)).await;
-    fed::sync_once(&sb, &mut Default::default()).await;
+    fed::sync_once(&sb).await;
     for n in 0..30 {
         assert!(sb.directory.identity_for(&format!("early{n}")).is_some(), "early{n} reached B");
     }
@@ -449,13 +449,13 @@ async fn equal_timestamps_across_pages_are_not_skipped() {
     }
     let on_b = |sb: &AppState| (0..N).filter(|i| sb.directory.identity_for(&format!("same{i:04}")).is_some()).count();
 
-    let mut cursors = Default::default();
-    fed::sync_once(&sb, &mut cursors).await;
+    fed::sync_once(&sb).await;
     assert_eq!(on_b(&sb), N, "every account with the shared timestamp arrived");
-    fed::sync_once(&sb, &mut cursors).await;
+    fed::sync_once(&sb).await;
     assert_eq!(on_b(&sb), N, "a second sync changes nothing");
-    fed::sync_once(&sb, &mut Default::default()).await;
-    assert_eq!(on_b(&sb), N, "a fresh start (restart) reads them again without loss");
+    fed::resync(&sb, None, None);
+    fed::sync_once(&sb).await;
+    assert_eq!(on_b(&sb), N, "read again from the start (the admin's resync): no loss");
 }
 
 /// AQUA-SEC-009 end to end: after A and B say hello they know each other's
@@ -574,7 +574,7 @@ async fn admission_impersonation_and_rejoining() {
     // its pokes (secret only) are refused.
     let r = http.post(format!("{ub}/v1/fed/poke")).body("{}").send().await.unwrap();
     assert_eq!(r.status().as_u16(), 401);
-    fed::sync_once(&sb, &mut Default::default()).await;
+    fed::sync_once(&sb).await;
     assert_eq!(sb.directory.identity_for("victim"), victim_key, "the account is unchanged");
 
     // 2) An impostor claiming A's address, with the secret and its own key:
@@ -703,13 +703,13 @@ async fn tampered_sync_answers_are_refused() {
 
     // The proxy swaps the victim's key in the answer: B applies nothing.
     TAMPER.store(true, Ordering::SeqCst);
-    fed::sync_once(&sb, &mut Default::default()).await;
+    fed::sync_once(&sb).await;
     assert_ne!(sb.directory.identity_for("mitmvictim"), Some(*evil.public().dh_pub.as_bytes()), "a tampered answer must not change the account");
     assert!(sb.directory.identity_for("mitmvictim").is_none(), "the tampered page was dropped as a whole");
 
     // Untouched: the real account arrives.
     TAMPER.store(false, Ordering::SeqCst);
-    fed::sync_once(&sb, &mut Default::default()).await;
+    fed::sync_once(&sb).await;
     assert_eq!(sb.directory.identity_for("mitmvictim"), Some(*id.public().dh_pub.as_bytes()));
 }
 
@@ -746,7 +746,7 @@ async fn sealed_accounts_change_only_with_a_device_seal() {
     let bad = hex::encode(other.sign.sign(msg.as_bytes()));
     assert!(aqua_client_core::Transport::me_call_at(&ua, &id, "PUT", "seal", Some(serde_json::json!({ "sig": bad }))).await.is_err());
 
-    fed::sync_once(&sb, &mut Default::default()).await;
+    fed::sync_once(&sb).await;
     let row = |s: &AppState, n: &str| s.directory.fed_users_since(0).into_iter().find(|u| u.username == n).unwrap();
     let on_b = row(&sb, "sealed");
     assert!(!on_b.seal.is_empty(), "the seal travels with the account");
@@ -837,12 +837,12 @@ async fn tunnel_peer_with_pinned_key_syncs_both_ways() {
     register(&http, &ua, &IdentityKeyPair::generate(), "pubside").await;
     register(&http, &ub, &IdentityKeyPair::generate(), "behind").await;
     // B → A: plain requests.
-    fed::sync_once(&sb, &mut Default::default()).await;
+    fed::sync_once(&sb).await;
     assert!(sb.directory.identity_for("pubside").is_some(), "B pulled A's account");
     // A → B: only over the reverse link (B polls A).
     let mut ok = false;
     for _ in 0..60 {
-        fed::sync_once(&sa, &mut Default::default()).await;
+        fed::sync_once(&sa).await;
         if sa.directory.identity_for("behind").is_some() { ok = true; break }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
@@ -891,7 +891,7 @@ async fn tunnel_poll_cannot_claim_another_node() {
     register(&http, &ub, &IdentityKeyPair::generate(), "stillhere").await;
     let mut ok = false;
     for _ in 0..60 {
-        fed::sync_once(&sa, &mut Default::default()).await;
+        fed::sync_once(&sa).await;
         if sa.directory.identity_for("stillhere").is_some() { ok = true; break }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
@@ -951,7 +951,7 @@ async fn solo_registry_requires_node_key_after_enforcement() {
     }
     // Secret only: nothing.
     let (s1, u1) = solo(&tmp, &ua, "s1", "").await;
-    fed::sync_once(&s1, &mut Default::default()).await;
+    fed::sync_once(&s1).await;
     assert!(s1.directory.names_after(0, None, 100).iter().all(|r| r.username != "netname"), "no names without a key");
     fed::names_hello(&fed::registry(&s1).unwrap()).await;
     let a = fed::current(&sa).unwrap();
@@ -965,7 +965,7 @@ async fn solo_registry_requires_node_key_after_enforcement() {
     let a = fed::current(&sa).unwrap();
     assert_eq!(a.pin_for(&u2).map(|p| p.role.clone()).as_deref(), Some("names"));
     assert!(fed::registry(&s2).unwrap().pin_for(&ua).is_some(), "the solo relay pinned A from its answer");
-    fed::sync_once(&s2, &mut Default::default()).await;
+    fed::sync_once(&s2).await;
     assert!(s2.directory.names_after(0, None, 100).iter().any(|r| r.username == "netname"), "names with the key");
     // ...and nothing but names.
     let s2f = fed::registry(&s2).unwrap();
@@ -1085,7 +1085,7 @@ async fn mixed_network_old_keyed_new() {
         http.get(format!("{ub}{path}")).header("x-aqua-fed", me.sign("GET", path, b"")).header("user-agent", "aqua-server/1.21.0-22").send().await.unwrap().status().as_u16()
     };
     assert_eq!(old_get().await, 200);
-    fed::sync_once(&sk, &mut Default::default()).await;
+    fed::sync_once(&sk).await;
     assert!(sk.directory.identity_for("mixed").is_some());
     // The transition ends.
     let mut c = b.cfg.clone();
@@ -1094,6 +1094,43 @@ async fn mixed_network_old_keyed_new() {
     assert!(fed::current(&sb).unwrap().enforced());
     assert_eq!(old_get().await, 401, "the old relay is out");
     register(&http, &ub, &IdentityKeyPair::generate(), "mixed2").await;
-    fed::sync_once(&sk, &mut Default::default()).await;
+    fed::sync_once(&sk).await;
     assert!(sk.directory.identity_for("mixed2").is_some(), "the keyed one goes on");
+}
+
+/// A6: B keeps where it is in A's accounts on disk. After a restart (the
+/// same database file) it goes on from there: an account it had and lost
+/// meanwhile isn't read again, a new one is.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cursor_survives_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+    let net = |me: &str, peers: Vec<String>| FedConfig { secret: SECRET.into(), peers, public_url: me.into(), mode: "network".into(), ..Default::default() };
+    let (sa, ua) = serve(&tmp, "a", |u| net(u, vec![])).await;
+    let http = reqwest::Client::builder().user_agent(concat!("aqua-client-core/", env!("CARGO_PKG_VERSION"))).build().unwrap();
+    register(&http, &ua, &IdentityKeyPair::generate(), "first").await;
+    let db = tmp.path().join("b.sqlite").to_string_lossy().to_string();
+    let b_state = |name: &str| {
+        let mut s = AppState::isolated(tmp.path().join(name), Some(net("http://b.invalid", vec![ua.clone()])));
+        s.directory = std::sync::Arc::new(aqua_server::directory::Directory::open_path(&db).unwrap());
+        s
+    };
+    let sb = b_state("b1");
+    fed::sync_once(&sb).await;
+    assert!(sb.directory.identity_for("first").is_some());
+    let at = sb.directory.fed_cursor(&ua, "users").expect("kept");
+    assert_eq!(at.1, "first");
+    drop(sb);
+    // Restart. Meanwhile "first" was lost here (say, a bad restore of one row).
+    let sb = b_state("b2");
+    assert_eq!(sb.directory.fed_cursor(&ua, "users"), Some(at));
+    assert!(sb.directory.delete_person("first"));
+    register(&http, &ua, &IdentityKeyPair::generate(), "second").await;
+    fed::sync_once(&sb).await;
+    assert!(sb.directory.identity_for("second").is_some(), "the new one comes");
+    assert!(sb.directory.identity_for("first").is_none(), "nothing read again from the start");
+    // The admin's resync reads everything again.
+    fed::resync(&sb, Some(&ua), None);
+    fed::sync_once(&sb).await;
+    assert!(sb.directory.identity_for("first").is_some());
+    let _ = sa;
 }

@@ -1327,7 +1327,6 @@ pub async fn names_hello(fed: &Fed) -> Vec<String> {
 /// skipped or read twice. Relays before 1.21.0-23 ignore `after` and answer
 /// `updated_at > since`: with them it works as before.
 pub type Cursor = (i64, String);
-type CursorMap = std::collections::HashMap<String, Cursor>;
 
 /// `?since=T&after=KEY` (the key percent-encoded; empty key: no `after`).
 fn cursor_query(c: &Cursor) -> String {
@@ -1347,9 +1346,9 @@ fn signed_path(uri: &axum::http::Uri) -> &str {
 }
 
 /// Pull the name registry from one relay (paged).
-async fn sync_names(state: &AppState, fed: &Fed, peer: &str, since: &mut CursorMap) {
+async fn sync_names(state: &AppState, fed: &Fed, peer: &str) {
     for _ in 0..50 {
-        let from = since.get(peer).cloned().unwrap_or_default();
+        let from = cursor(state, peer, "names");
         let Some(r) = fed.get(peer, &format!("/v1/fed/names?{}", cursor_query(&from))).await else { return };
         let Ok(v) = r.json::<serde_json::Value>().await else { return };
         let home = v["home"].as_str().unwrap_or(peer).trim_end_matches('/').to_string();
@@ -1358,11 +1357,11 @@ async fn sync_names(state: &AppState, fed: &Fed, peer: &str, since: &mut CursorM
         let n = rows.len();
         let last = rows.last().map(|r| (r.updated_at, r.username.clone())).unwrap_or(from);
         let dir = state.directory.clone();
-        let moved = tokio::task::spawn_blocking(move || rows.iter().filter_map(|r| dir.fed_apply_name(r, &home)).collect::<Vec<_>>()).await.unwrap_or_default();
+        let Ok(moved) = tokio::task::spawn_blocking(move || rows.iter().filter_map(|r| dir.fed_apply_name(r, &home)).collect::<Vec<_>>()).await else { return };
         for (old, new) in &moved {
             crate::move_live(state, old, new);
         }
-        since.insert(peer.to_string(), last);
+        if !keep_cursor(state, peer, "names", &last) { return; }
         if n < 1000 { return; }
     }
 }
@@ -2100,15 +2099,21 @@ pub fn set_auth(state: &AppState, action: &str, days: u64, confirm: bool) -> Res
 
 /// Admin: never accept this node id again (and drop its pin and address).
 pub fn revoke(state: &AppState, id: &str) -> bool {
-    update_cfg(state, |_, c| {
-        let urls: Vec<String> = c.pins.iter().filter(|p| p.id == id).map(|p| p.url.clone()).collect();
+    let mut urls: Vec<String> = Vec::new();
+    let done = update_cfg(state, |_, c| {
+        urls = c.pins.iter().filter(|p| p.id == id).map(|p| p.url.clone()).collect();
         c.pins.retain(|p| p.id != id);
         c.peers.retain(|p| !urls.contains(p));
         c.solo_peers.retain(|p| !urls.contains(p));
         c.pending_nodes.retain(|p| p.id != id);
         if !c.revoked.iter().any(|r| r == id) { c.revoked.push(id.to_string()); }
         true
-    }).is_some()
+    }).is_some();
+    // Where sync was with it is of no use any more.
+    for u in &urls {
+        state.directory.fed_cursors_drop(Some(u), None);
+    }
+    done
 }
 
 /// "Do you accept our signature?" — 204 for relays of the same network.
@@ -2167,9 +2172,8 @@ pub async fn h_peers(State(state): State<AppState>) -> Json<serde_json::Value> {
 pub fn spawn_sync(state: AppState) {
     let st = state.clone();
     tokio::spawn(async move {
-        let mut cursors = Cursors::default();
         loop {
-            sync_once(&st, &mut cursors).await;
+            sync_once(&st).await;
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_secs(30)) => {}
                 _ = st.fed_kick.notified() => {
@@ -2222,123 +2226,179 @@ pub fn spawn_announcer(state: AppState) {
     });
 }
 
-/// How far we've read from each peer.
-#[derive(Default)]
-pub struct Cursors {
-    users: CursorMap,
-    backups: CursorMap,
-    hist: CursorMap,
-    names: CursorMap,
+/// Where sync is in each peer's streams: kept in the database
+/// (`fed_cursors`, A6), so a restart goes on where it was instead of pulling
+/// everything again. A cursor moves only past rows that were taken in full
+/// (written, their media fetched); on any error it stays, and the row comes
+/// again next time.
+fn cursor(state: &AppState, peer: &str, stream: &str) -> Cursor {
+    state.directory.fed_cursor(peer, stream).unwrap_or_default()
 }
 
-pub async fn sync_once(state: &AppState, cursors: &mut Cursors) {
+/// Keep a cursor. False when it couldn't be written: the caller stops (it
+/// would go on from a place not on record).
+fn keep_cursor(state: &AppState, peer: &str, stream: &str, c: &Cursor) -> bool {
+    let ok = state.directory.set_fed_cursor(peer, stream, c.0, &c.1);
+    if !ok {
+        tracing::error!(%peer, %stream, "federation: where sync is can't be saved — stopping this round");
+    }
+    ok
+}
+
+/// Admin (`POST /v1/admin/fed/resync`): read a peer's streams (or all) from
+/// the start again — after restoring the database from a backup, say.
+pub fn resync(state: &AppState, peer: Option<&str>, stream: Option<&str>) {
+    state.directory.fed_cursors_drop(peer, stream);
+    state.fed_kick.notify_one();
+}
+
+/// Media of one account that failed to come this many times in a row is
+/// skipped (it may be gone on the peer), so one row can't stop sync for good.
+const MEDIA_TRIES: u32 = 3;
+
+fn media_failed(key: &str) -> u32 {
+    static F: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, u32>>> = std::sync::OnceLock::new();
+    let mut g = F.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    if g.len() > 10_000 { g.clear(); }
+    let n = g.entry(key.to_string()).or_default();
+    *n += 1;
+    *n
+}
+
+pub async fn sync_once(state: &AppState) {
     let Some(fed) = registry(state) else { return };
     if fed.cfg.active() {
         // Messages first: they're what people wait for.
         pull_for_connected(state, &fed).await;
         for peer in fed.cfg.peers.clone() {
-            sync_peer(state, &fed, &peer, &mut cursors.users, &mut cursors.backups).await;
-            sync_hist(state, &fed, &peer, &mut cursors.hist).await;
+            sync_peer(state, &fed, &peer).await;
+            sync_hist(state, &fed, &peer).await;
         }
         // Solo relays: only their names.
         for peer in fed.cfg.solo_peers.clone() {
-            sync_names(state, &fed, &peer, &mut cursors.names).await;
+            sync_names(state, &fed, &peer).await;
         }
     } else {
         // A solo relay in the name registry: the network's names, nothing else.
         for peer in fed.cfg.peers.clone() {
-            sync_names(state, &fed, &peer, &mut cursors.names).await;
+            sync_names(state, &fed, &peer).await;
         }
     }
 }
 
 /// Encrypted chat history of accounts (client history_sync.rs): a device may
 /// talk to any relay of the network and still find it.
-async fn sync_hist(state: &AppState, fed: &Fed, peer: &str, since: &mut CursorMap) {
+async fn sync_hist(state: &AppState, fed: &Fed, peer: &str) {
     loop {
-        let from = since.get(peer).cloned().unwrap_or_default();
+        let from = cursor(state, peer, "hist");
         let Some(r) = fed.get(peer, &format!("/v1/fed/hist?{}", cursor_query(&from))).await else { return };
         let Ok(rows) = r.json::<Vec<(String, String, i64)>>().await else { return };
         if rows.is_empty() { return; }
         let n = rows.len();
         // The cursor moves row by row, and stops before a record we couldn't
-        // fetch, so the next sync tries it again (AQUA-SEC-010).
-        let mut cur = from;
+        // fetch or write, so the next sync tries it again (AQUA-SEC-010).
+        let mut cur = from.clone();
         for (user, k, at) in &rows {
             if crate::directory::Directory::valid_name(user) && k.len() <= 64 {
                 let got = match fed.get(peer, &format!("/v1/fed/hist/{user}/{k}")).await {
                     Some(b) => match b.bytes().await {
-                        Ok(bytes) => { state.directory.fed_apply_hist(user, k, &bytes, *at); true }
+                        Ok(bytes) => state.directory.fed_apply_hist(user, k, &bytes, *at).is_ok(),
                         Err(_) => false,
                     },
                     None => false,
                 };
                 if !got {
-                    since.insert(peer.to_string(), cur);
+                    if cur != from { keep_cursor(state, peer, "hist", &cur); }
                     return;
                 }
             }
             cur = (*at, format!("{user}/{k}"));
         }
-        since.insert(peer.to_string(), cur);
+        if !keep_cursor(state, peer, "hist", &cur) { return; }
         if n < 1000 { return; }
     }
 }
 
-async fn sync_peer(
-    state: &AppState,
-    fed: &Fed,
-    peer: &str,
-    since_users: &mut CursorMap,
-    since_backups: &mut CursorMap,
-) {
+async fn sync_peer(state: &AppState, fed: &Fed, peer: &str) {
     // Accounts (paged: 500 per call).
-    loop {
-        let since = since_users.get(peer).cloned().unwrap_or_default();
+    'pages: loop {
+        let since = cursor(state, peer, "users");
         let Some(r) = fed.get(peer, &format!("/v1/fed/users?{}", cursor_query(&since))).await else { return };
         let Ok(rows) = r.json::<Vec<crate::directory::FedUser>>().await else { return };
         if rows.is_empty() {
             break;
         }
         let mut applied = 0;
+        let mut cur = since.clone();
+        let mut stopped = false;
         for u in &rows {
+            // Profile media travels with the account, so it is here even if
+            // the other relay goes away. Fetched before the account is
+            // written: written first, a failed fetch would never be retried
+            // (the row would be ours already, the versions equal).
             let before = state.directory.media_versions(&u.username).unwrap_or((0, 0, 0));
-            let res = state.directory.fed_apply_user(u);
+            let mut media = Vec::new();
+            let mut media_ok = true;
+            for (kind, old, new) in [("avatar", before.0, u.avatar_ver), ("banner", before.1, u.banner_ver), ("music", before.2, u.music_ver)] {
+                if new == old || new == 0 {
+                    continue;
+                }
+                let Some(k) = crate::directory::MediaKind::parse(kind) else { continue };
+                let got = match fed.get(peer, &format!("/v1/fed/media/{}/{kind}", u.username)).await {
+                    Some(r) => {
+                        let mime = r.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("application/octet-stream").to_string();
+                        r.bytes().await.ok().map(|b| (k, mime, b))
+                    }
+                    None => None,
+                };
+                match got {
+                    Some(m) => media.push(m),
+                    // Gone on the peer, maybe: after a few tries, without it.
+                    None if media_failed(&format!("{peer} {} {kind} {new}", u.username)) >= MEDIA_TRIES => {}
+                    None => media_ok = false,
+                }
+            }
+            if !media_ok {
+                stopped = true;
+                break;
+            }
+            let res = state.directory.fed_apply_user_from(u, fed.pin_for(peer).map(|p| p.id.as_str()).unwrap_or(""));
+            if res.failed {
+                // Not written here: the cursor stays before it.
+                tracing::warn!(%peer, user = %u.username, "federation: an account couldn't be written — will try again");
+                stopped = true;
+                break;
+            }
             if let Some((old, new)) = &res.displaced {
                 crate::move_live(state, old, new);
             }
             if res.applied {
                 applied += 1;
-                // Profile media travels with the account, so it is here
-                // even if the other relay goes away.
-                for (kind, old, new) in [("avatar", before.0, u.avatar_ver), ("banner", before.1, u.banner_ver), ("music", before.2, u.music_ver)] {
-                    if new == old || new == 0 {
-                        continue;
-                    }
-                    let Some(k) = crate::directory::MediaKind::parse(kind) else { continue };
-                    if let Some(r) = fed.get(peer, &format!("/v1/fed/media/{}/{kind}", u.username)).await {
-                        let mime = r.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("application/octet-stream").to_string();
-                        if let Ok(b) = r.bytes().await {
-                            state.directory.fed_store_media(&res.name, k, &mime, &b);
-                        }
-                    }
+                if !media.iter().all(|(k, mime, b)| state.directory.fed_store_media(&res.name, *k, mime, b)) {
+                    // The row is in, its media not: read the row again next
+                    // round with our media versions put back.
+                    state.directory.fed_media_unset(&res.name, before);
+                    stopped = true;
+                    break;
                 }
             }
+            cur = (u.updated_at, u.username.clone());
         }
-        let last = rows.last().map(|u| (u.updated_at, u.username.clone())).unwrap_or(since);
-        since_users.insert(peer.to_string(), last);
+        if cur != since && !keep_cursor(state, peer, "users", &cur) {
+            return;
+        }
         if applied > 0 {
             tracing::info!(peer, applied, "federation: accounts updated");
         }
-        if rows.len() < 500 {
-            break;
+        if stopped || rows.len() < 500 {
+            break 'pages;
         }
     }
     // Encrypted backups.
     // Paged like the rest (200 per call: only the first page was read), and
     // the cursor moves only past backups we have (AQUA-SEC-010).
     for _ in 0..50 {
-        let since = since_backups.get(peer).cloned().unwrap_or_default();
+        let since = cursor(state, peer, "backups");
         let Some(r) = fed.get(peer, &format!("/v1/fed/backups?{}", cursor_query(&since))).await else { return };
         let Ok(list) = r.json::<Vec<(String, i64)>>().await else { return };
         let n = list.len();
@@ -2347,19 +2407,19 @@ async fn sync_peer(
             let have = state.directory.backup_meta(&user).is_some_and(|(_, ours)| ours >= at);
             let ok = have || match fed.get(peer, &format!("/v1/fed/backup/{user}")).await {
                 Some(b) => match b.bytes().await {
-                    Ok(bytes) => { state.directory.fed_apply_backup(&user, &bytes, at); true }
+                    Ok(bytes) => state.directory.fed_apply_backup(&user, &bytes, at).is_ok(),
                     Err(_) => false,
                 },
                 None => false,
             };
             if !ok {
-                since_backups.insert(peer.to_string(), last);
+                if last != since { keep_cursor(state, peer, "backups", &last); }
                 return;
             }
             last = (at, user);
         }
         let moved = last != since;
-        since_backups.insert(peer.to_string(), last);
+        if moved && !keep_cursor(state, peer, "backups", &last) { return; }
         if n < 200 || !moved { return; }
     }
 }

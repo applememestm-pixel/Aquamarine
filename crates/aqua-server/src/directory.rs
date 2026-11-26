@@ -35,6 +35,7 @@ use std::{
 };
 
 use rand_core::{OsRng, RngCore};
+use rusqlite::OptionalExtension;
 use rusqlite::Connection;
 
 /// A code is valid for this long after it is issued.
@@ -321,6 +322,9 @@ pub struct FedApplied {
     /// A sealed account's security fields came without a valid seal and
     /// were kept as they are here.
     pub refused_security: bool,
+    /// It couldn't be written (a database error, not a decision): the sync
+    /// cursor must not move past it.
+    pub failed: bool,
 }
 
 fn no_devices() -> String { "[]".into() }
@@ -942,7 +946,12 @@ impl Directory {
 
     pub fn open() -> anyhow::Result<Self> {
         let path = std::env::var("AQUA_DIR_DB").unwrap_or_else(|_| "aqua-directory.sqlite".into());
-        let db = Connection::open(&path)?;
+        Self::open_path(&path)
+    }
+
+    /// [`Self::open`] of a given file (tests: a restart with the same data).
+    pub fn open_path(path: &str) -> anyhow::Result<Self> {
+        let db = Connection::open(path)?;
         // Every message passes through the inbox table (stored, then deleted
         // on the device's "got it"), behind one lock shared by every request.
         // The default rollback journal syncs the disk several times per
@@ -2532,6 +2541,13 @@ impl Directory {
     /// both accounts stay: the older one keeps the name, the newer one gets
     /// `name_1234` on every relay and its owner picks a new name.
     pub fn fed_apply_user(&self, u: &FedUser) -> FedApplied {
+        self.fed_apply_user_from(u, "")
+    }
+
+    /// [`Self::fed_apply_user`] for a row pulled from the relay with node id
+    /// `origin` ("" when not known by key).
+    pub fn fed_apply_user_from(&self, u: &FedUser, origin: &str) -> FedApplied {
+        let _ = origin;
         let mut out = FedApplied::default();
         let Ok(dh) = hex::decode(&u.identity_dh) else { return out };
         if dh.len() != 32 || !Self::valid_username(&u.username) {
@@ -2573,6 +2589,7 @@ impl Directory {
                 // Ours must move: rename it everywhere it's stored here.
                 let to = Self::displaced_name(&db, &u.username, &their_uid);
                 if Self::move_account(&mut db, &u.username, &to, false).is_err() {
+                    out.failed = true;
                     return out;
                 }
                 tracing::warn!(user = %u.username, %to, "federation: an older account from a peer has this name — ours is renamed");
@@ -2595,7 +2612,7 @@ impl Directory {
         let renamed: Vec<String> = {
             let mut st = match db.prepare("SELECT username FROM users WHERE identity_dh=?1 AND username<>?2 AND is_bot=0 AND uid=?3") {
                 Ok(st) => st,
-                Err(_) => return out,
+                Err(_) => { out.failed = true; return out }
             };
             st.query_map(rusqlite::params![dh, name, uid], |r| r.get::<_, String>(0))
                 .map(|rows| rows.flatten().collect())
@@ -2656,6 +2673,7 @@ impl Directory {
                 u.extra, u.avatar_ver, u.banner_ver, u.media_acl, u.password, u.music_ver, u.updated_at, u.devices, u.recovery, uid, u.security, u.devlist, u.seal],
         )
         .is_ok();
+        out.failed = !out.applied;
         out
     }
 
@@ -2802,23 +2820,23 @@ impl Directory {
         );
     }
 
-    pub fn fed_apply_hist(&self, username: &str, k: &str, data: &[u8], updated_at: i64) -> bool {
+    /// Ok(true): taken; Ok(false): ours is as new; Err: couldn't be written.
+    pub fn fed_apply_hist(&self, username: &str, k: &str, data: &[u8], updated_at: i64) -> rusqlite::Result<bool> {
         let db = self.db.lock().unwrap();
         let ours: Option<i64> = db
             .query_row("SELECT updated_at FROM hist_store WHERE username=?1 AND k=?2", rusqlite::params![username, k], |r| r.get(0))
-            .ok();
+            .optional()?;
         if ours.is_some_and(|t| t >= updated_at) {
-            return false;
+            return Ok(false);
         }
         let seq: i64 = db
-            .query_row("SELECT COALESCE(MAX(seq), 0) + 1 FROM hist_store WHERE username=?1", rusqlite::params![username], |r| r.get(0))
-            .unwrap_or(1);
+            .query_row("SELECT COALESCE(MAX(seq), 0) + 1 FROM hist_store WHERE username=?1", rusqlite::params![username], |r| r.get(0))?;
         db.execute(
             "INSERT INTO hist_store (username, k, seq, data, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(username, k) DO UPDATE SET seq=?3, data=?4, updated_at=?5",
             rusqlite::params![username, k, seq, data, updated_at],
-        )
-        .is_ok()
+        )?;
+        Ok(true)
     }
 
     /// (username, updated_at) of backups changed after `since` (seconds).
@@ -2840,20 +2858,21 @@ impl Directory {
     }
 
     /// Store a peer's backup if it is newer than ours.
-    pub fn fed_apply_backup(&self, username: &str, data: &[u8], updated_at: i64) -> bool {
+    /// Ok(true): taken; Ok(false): ours is as new; Err: couldn't be written.
+    pub fn fed_apply_backup(&self, username: &str, data: &[u8], updated_at: i64) -> rusqlite::Result<bool> {
         let db = self.db.lock().unwrap();
         let ours: Option<i64> = db
             .query_row("SELECT updated_at FROM backups WHERE username=?1", rusqlite::params![username], |r| r.get(0))
-            .ok();
+            .optional()?;
         if ours.is_some_and(|t| t >= updated_at) {
-            return false;
+            return Ok(false);
         }
         db.execute(
             "INSERT INTO backups (username, data, updated_at) VALUES (?1, ?2, ?3)
              ON CONFLICT(username) DO UPDATE SET data=?2, updated_at=?3",
             rusqlite::params![username, data, updated_at],
-        )
-        .is_ok()
+        )?;
+        Ok(true)
     }
 
     /// Something to compare: (newest account change, newest backup). When
@@ -2898,12 +2917,23 @@ impl Directory {
     }
 
     /// Store a profile image / track fetched from a peer.
-    pub fn fed_store_media(&self, username: &str, kind: MediaKind, mime: &str, data: &[u8]) {
+    pub fn fed_store_media(&self, username: &str, kind: MediaKind, mime: &str, data: &[u8]) -> bool {
         let db = self.db.lock().unwrap();
-        let _ = db.execute(
+        db.execute(
             "INSERT INTO profile_media (username, kind, mime, data) VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(username, kind) DO UPDATE SET mime=?3, data=?4",
             rusqlite::params![username, kind.as_str(), mime, data],
+        ).is_ok()
+    }
+
+    /// An account from a peer is in, its media couldn't be written: put our
+    /// media versions back and make the row a moment older, so the next
+    /// round takes the row — and fetches the media — again.
+    pub fn fed_media_unset(&self, username: &str, versions: (i64, i64, i64)) {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = db.execute(
+            "UPDATE users SET avatar_ver=?2, banner_ver=?3, music_ver=?4, updated_at=updated_at-1 WHERE username=?1",
+            rusqlite::params![username, versions.0, versions.1, versions.2],
         );
     }
 
@@ -3892,6 +3922,31 @@ mod tests {
 
     fn dir() -> Directory { Directory::open_memory() }
 
+    /// A6: where sync is with a peer survives a restart (same file), moves
+    /// with the peer's address and is dropped on request.
+    #[test]
+    fn cursors_persist_and_move_with_url() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("d.sqlite").to_string_lossy().to_string();
+        {
+            let d = Directory::open_path(&path).unwrap();
+            assert!(d.fed_cursor("http://a", "users").is_none());
+            assert!(d.set_fed_cursor("http://a", "users", 5, "bob"));
+            assert!(d.set_fed_cursor("http://a", "hist", 7, "bob/k"));
+            assert!(d.set_fed_cursor("http://a", "users", 9, "carol"));
+        }
+        let d = Directory::open_path(&path).unwrap();
+        assert_eq!(d.fed_cursor("http://a", "users"), Some((9, "carol".into())), "after a restart");
+        d.fed_cursors_move("http://a", "http://a2");
+        assert!(d.fed_cursor("http://a", "users").is_none());
+        assert_eq!(d.fed_cursor("http://a2", "hist"), Some((7, "bob/k".into())));
+        d.fed_cursors_drop(Some("http://a2"), Some("hist"));
+        assert!(d.fed_cursor("http://a2", "hist").is_none());
+        assert!(d.fed_cursor("http://a2", "users").is_some());
+        d.fed_cursors_drop(None, None);
+        assert!(d.fed_cursor("http://a2", "users").is_none());
+    }
+
     /// AQUA-SEC-011: a flooded inbox keeps the newest INBOX_MAX_ROWS.
     #[test]
     fn inbox_keeps_the_newest_when_full() {
@@ -4084,8 +4139,8 @@ mod tests {
         assert_eq!(d.hist_get("vlad", "a1").as_deref(), Some(&b"page v2"[..]));
         assert!(d.hist_list("ann", 0, 100).is_empty(), "per account");
         // Federation: a newer copy comes in with a fresh local seq.
-        assert!(d.fed_apply_hist("vlad", "b2", b"meta v2", crate::now_ms() + 1000));
-        assert!(!d.fed_apply_hist("vlad", "b2", b"old", 1));
+        assert!(d.fed_apply_hist("vlad", "b2", b"meta v2", crate::now_ms() + 1000).unwrap());
+        assert!(!d.fed_apply_hist("vlad", "b2", b"old", 1).unwrap());
         assert_eq!(d.hist_list("vlad", 4, 100)[0].0, "b2");
     }
 
