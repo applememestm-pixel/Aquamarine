@@ -1993,13 +1993,14 @@
     }
     return out;
   });
-  // ---- Glass panels (phones, Settings → Appearance): the chat runs on
-  // under the message field, which floats over it. What sits under the
-  // messages (reply bar, field, keyboard…) is measured, and the message list
-  // reaches that far down with as much padding, so nothing hides behind. ----
+  // ---- Phones: the chat (and its wallpaper) runs on under the header and
+  // the message field, whose pieces float over it (Telegram); "glass" only
+  // makes them see-through. What sits above and under the messages (header,
+  // reply bar, field…) is measured, and the message list reaches that far
+  // with as much padding, so nothing hides behind. ----
   $effect(() => {
     const root = chatRoot;
-    if (!root || !phoneUI || !($settings.glass ?? true)) { root?.style.removeProperty("--below-h"); root?.style.removeProperty("--above-h"); return; }
+    if (!root || !phoneUI) { root?.style.removeProperty("--below-h"); root?.style.removeProperty("--above-h"); return; }
     let raf = 0;
     const measure = () => {
       cancelAnimationFrame(raf);
@@ -2258,6 +2259,8 @@
     const c = $activeChat;
     if (!c) return [];
     const out: HdrItem[] = [];
+    // Phones: search lives here, so the name gets the header's width.
+    if (phoneUI) out.push({ id: "search", label: tr("Search in chat"), icon: icons.search, on: searchOpen, run: () => (searchOpen ? closeSearch() : openSearch()) });
     out.push({ id: "theme", label: tr("Chat theme"), sub: tr("Colours and background of this chat"), icon: IC.palette, on: !!$chatThemes[c.id], run: () => (themeFor = c.id) });
     if (c.id !== "__saved__" && !isBotChat) out.push({ id: "cal", label: tr("Calendar"), sub: tr("Events and reminders of this chat"), icon: IC.cal, on: $calendarFor === c.id, run: () => calendarFor.set($calendarFor === c.id ? null : c.id) });
     if (ttlEditable || chatTtl) out.push({ id: "ttl", label: tr("Auto-delete & read receipts"), sub: chatTtl ? tr("Auto-delete: {t}", { t: ttlLabel(chatTtl) }) : tr("Off"), icon: IC.ttl, on: chatTtl > 0, run: () => (ttlMenu = true) });
@@ -4318,7 +4321,9 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{#if feedView}<path d="M4 6h10M4 12h16M4 18h12"/>{:else}<rect x="3" y="3" width="18" height="8" rx="2"/><rect x="3" y="13" width="18" height="8" rx="2"/>{/if}</svg>
           </button>
         {/if}
-        <button class="icon-btn" class:active={searchOpen} title={$t("Search in chat")} onclick={() => (searchOpen ? closeSearch() : openSearch())}>{@html icons.search}</button>
+        {#if !phoneUI}
+          <button class="icon-btn" class:active={searchOpen} title={$t("Search in chat")} onclick={() => (searchOpen ? closeSearch() : openSearch())}>{@html icons.search}</button>
+        {/if}
         {#if callChoices.length}
           <div class="ttl-wrap hdr-menu">
             <button class="icon-btn call-btn" class:active={callMenu} class:live={callChoices.some((c) => c.on)} title={$t("Call")} aria-haspopup="menu" aria-expanded={callMenu}
@@ -6188,9 +6193,11 @@
   /* Glass panels on phones: header and field are floating see-through
      cards; the messages scroll on under the field. */
   @media (max-width: 720px) {
-    :global(html.glass) .msg-stage { margin-bottom: calc(-1 * var(--below-h, 0px)); margin-top: calc(-1 * var(--above-h, 0px)); }
-    :global(html.glass) .messages { padding-bottom: calc(var(--below-h, 0px) + 10px); padding-top: calc(var(--above-h, 0px) + 10px); }
-    :global(html.glass) .active-chat > :global([data-gf]) { position: relative; z-index: 3; }
+    .active-chat.phone .msg-stage { margin-bottom: calc(-1 * var(--below-h, 0px)); margin-top: calc(-1 * var(--above-h, 0px)); }
+    .active-chat.phone .messages { padding-bottom: calc(var(--below-h, 0px) + 10px); padding-top: calc(var(--above-h, 0px) + 10px); }
+    .active-chat.phone > :global([data-gf]) { position: relative; z-index: 3; }
+    /* Without glass, what floats over the messages must hide them. */
+    :global(html:not(.glass)) .active-chat.phone > :global(:is(.rec-bar, .room-tabs, .rkb, .channel-locked, .not-live-banner)[data-gf]) { background-color: var(--bg-list); }
     :global(html.glass) .hm-drop {
       margin: 0 8px 6px; border: 1px solid color-mix(in srgb, var(--fg) 16%, transparent); border-radius: calc(18px * var(--rk, 1));
       background: var(--bg-surface, #12151d); box-shadow: 0 10px 30px -16px rgba(0,0,0,.7);
@@ -7508,26 +7515,72 @@
   .phone .peer-name { white-space: nowrap; overflow: hidden; }
   .phone .peer-name :is(.pn-text, .group-name-btn, .room-switch) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .phone .peer-name > :global(:not(.pn-text):not(.group-name-btn):not(.room-switch)) { flex-shrink: 0; }
-  .phone .chat-actions .icon-btn { width: 34px; height: 42px; }
-  :global(html.glass) .phone .chat-header {
-    background: transparent; padding: 0; border: 0; box-shadow: none;
+  /* Phones: the header is three separate pieces, like the bottom bar — back,
+     the name, the actions: round, or square with "Panel shape → square".
+     Always the same height: the name and one line of status. */
+  .active-chat.phone .chat-header { margin: 6px 0 0; padding: 0 8px; gap: 6px; background: transparent; border: 0; box-shadow: none; border-radius: 0; }
+  .active-chat.phone .chat-header::before { display: none; }
+  .active-chat.phone .chat-header.clickable:hover { background: transparent; }
+  .active-chat.phone .chat-header.clickable:hover .peer-name { color: var(--fg); }
+  .active-chat.phone .chat-header :is(.back-btn, .chat-identity, .chat-actions) {
+    box-sizing: border-box; height: 46px; border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
+    background: var(--bg-surface); border-radius: calc(23px * var(--rk, 1));
   }
-  :global(html.glass) .phone .chat-header::before { content: none; }
-  :global(html.glass) .phone .back-btn,
-  :global(html.glass) .phone .chat-identity,
-  :global(html.glass) .phone .chat-actions,
+  .active-chat.phone .chat-header .back-btn { width: 46px; }
+  .active-chat.phone .chat-header .chat-identity { padding: 0 10px 0 2px; overflow: hidden; }
+  .active-chat.phone .chat-header .chat-actions { padding: 0 3px; align-items: center; }
+  .active-chat.phone .chat-header .chat-actions .icon-btn { width: 40px; height: 40px; border-radius: calc(20px * var(--rk, 1)); }
+  .active-chat.phone .peer-info > :is(.now-playing, .peer-custom-status, .peer-status) {
+    margin-top: 1px; max-width: 100%; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .active-chat.phone .peer-info > .now-playing { display: flex; }
+  .active-chat.phone .peer-status .activity-ind { min-width: 0; }
+  /* One status line only: "typing" wins, then music, then the person's status. */
+  .active-chat.phone .peer-info:has(.typing-ind) > :is(.now-playing, .peer-custom-status) { display: none; }
+  .active-chat.phone .peer-info:has(> .now-playing) > .peer-custom-status { display: none; }
+  .active-chat.phone .peer-info:not(:has(.typing-ind)):has(> :is(.now-playing, .peer-custom-status)) > .peer-status { display: none; }
   :global(html.glass) .phone .pin-bar {
     border: 1px solid var(--border);
     background: color-mix(in srgb, var(--bg-surface) 84%, transparent);
     border-radius: calc(14px * var(--rk, 1));
   }
-  :global(html.glass) .phone .back-btn { width: 42px; height: 48px; }
-  :global(html.glass) .phone .chat-identity { padding: 3px 6px; min-height: 48px; box-sizing: border-box; }
-  :global(html.glass) .phone .chat-actions { padding: 2px; }
   :global(html.glass) .phone .pin-bar { margin: 0 8px 6px; padding: 5px 8px; }
-  :global(html.glass.panels-square) .phone :is(.back-btn, .chat-identity, .chat-actions, .pin-bar) {
+  :global(html.glass.panels-square) .phone .pin-bar { border-radius: calc(8px * var(--rk, 1)); }
+  :global(html.panels-square) .active-chat.phone .chat-header :is(.back-btn, .chat-identity, .chat-actions, .chat-actions .icon-btn) {
     border-radius: calc(8px * var(--rk, 1));
   }
+
+  /* Phones: not one solid bar — 📎, the field and the voice / send button
+     each stand on their own: circles, or squares with "Panel shape → square"
+     (the owner's layout). */
+  .active-chat.phone .composer { background: transparent; border: none; box-shadow: none; border-radius: 0;
+    margin: 0 0 6px; padding: 4px 8px; gap: 6px; align-items: flex-end; }
+  .active-chat.phone .composer::before { display: none; }
+  .active-chat.phone .composer :is(.attach-btn, .input-wrap, .input-wrap:focus-within, .cb-bell) {
+    background: var(--bg-surface);
+    border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
+    box-shadow: none;
+  }
+  .active-chat.phone .composer :is(.attach-btn, .send-btn, .cb-bell) { box-sizing: border-box; width: 46px; height: 46px;
+    flex-shrink: 0; border-radius: calc(23px * var(--rk, 1)); }
+  /* A growing message: the field grows upwards, the buttons inside and
+     beside it stay on the last line (Telegram). */
+  .active-chat.phone .composer :is(.input-wrap, .input-wrap:focus-within) { box-sizing: border-box; min-height: 46px; align-items: flex-end;
+    padding: 6px 6px 6px 12px; border-radius: calc(23px * var(--rk, 1)); }
+  .active-chat.phone .composer .emoji-in { margin-bottom: 0; }
+  .active-chat.phone .composer .compose-expand { right: 8px; }
+  .active-chat.phone .composer .input-wrap:has(> .compose-expand):has(> .emoji-in) :global(.rich) { padding-right: 4px; }
+  :global(html.panels-square) .active-chat.phone .composer :is(.attach-btn, .input-wrap, .send-btn, .cb-bell) {
+    border-radius: calc(8px * var(--rk, 1)); }
+
+  /* "Glass": the separate pieces are see-through and blur what runs under
+     them — only where blur is on (without it the text would show through). */
+  :global(html.glass:not(.wk-lowfx)) .active-chat.phone :is(.chat-header :is(.back-btn, .chat-identity, .chat-actions), .composer :is(.attach-btn, .input-wrap, .input-wrap:focus-within, .cb-bell)) {
+    background: color-mix(in srgb, var(--bg-surface) var(--glass-a, 55%), transparent);
+    backdrop-filter: blur(var(--glass-blur, 12px)) saturate(1.5); -webkit-backdrop-filter: blur(var(--glass-blur, 12px)) saturate(1.5);
+  }
+  /* The "to the bottom" button sits above everything that floats below. */
+  .active-chat.phone .jump-btn { bottom: calc(var(--below-h, 0px) + 10px) !important; }
 
   /* Poll bubble */
   .bubble.poll-bubble { display: flex; flex-direction: column; gap: 4px; min-width: 240px; max-width: 360px; }
